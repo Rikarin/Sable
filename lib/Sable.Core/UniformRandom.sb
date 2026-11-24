@@ -1,0 +1,21 @@
+module Sable.Core
+
+/// A type with random values in a range, each as likely as every other:
+/// every built-in integer and float. What generic code drawing from a range
+/// asks for, as Sable.Math's UniformDistribution does.
+///
+/// ```sable
+/// var generator = SeededRandomNumberGenerator(seed: 1)
+/// let x = Int.random(in: 0..<10, using: &generator)
+/// let y = F32.random(in: 0.0...1.0, using: &generator)
+/// assert(x < 10 && y <= 1.0)
+/// ```
+public protocol UniformRandom: Comparable {
+    /// A random value from the range, its upper bound left out, drawn from
+    /// the generator. An empty range traps.
+    static fn random<G: RandomNumberGenerator>(in range: Range<Self>, using generator: inout G) -> Self
+
+    /// A random value from the range, both ends included, drawn from the
+    /// generator.
+    static fn random<G: RandomNumberGenerator>(in range: ClosedRange<Self>, using generator: inout G) -> Self
+}

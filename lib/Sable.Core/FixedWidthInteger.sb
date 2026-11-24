@@ -26,7 +26,7 @@ module Sable.Core
 /// let (low, overflowed) = x.overflowingAdd(10)
 /// assert(low == 4 && overflowed)
 /// ```
-public protocol FixedWidthInteger: BinaryInteger {
+public protocol FixedWidthInteger: BinaryInteger, UniformRandom {
     /// The unsigned integer of the type's width, which holds the distance
     /// from zero of every value: U8 for an I8, a U8 itself.
     associatedtype Magnitude: UnsignedInteger

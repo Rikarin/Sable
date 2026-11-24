@@ -3,6 +3,7 @@ module CollectionRandomTests
 // Choosing and shuffling at random (Collection+Random.sb, Sable.Core).
 
 import Sable.Testing
+import RandomStatistics
 
 @test
 fn randomElementChoosesEachInTime() {
@@ -81,4 +82,104 @@ fn shuffledGivesANewArrayOfAnySequence() {
     assert(shuffled.sorted() == (1...20).toArray())
     let fixed: Int[4] = [1, 2, 3, 4]
     assertEqual(fixed.shuffled().count, 4)
+}
+
+@test
+fn everyOrderIsAsLikely() {
+    var generator = SeededRandomNumberGenerator(seed: 35)
+    var counts = zeroCounts(64)
+    for _ in 0..<12000 {
+        let xs = (0..<4).shuffled(using: &generator)
+        counts[xs[0] * 16 + xs[1] * 4 + xs[2]] += 1
+    }
+    let seen = counts.filter({ $0 > 0 })
+    assertEqual(seen.count, 24)
+    assertEven(seen)
+}
+
+@test
+fn aRandomElementIsAsLikelyAsAnother() {
+    var generator = SeededRandomNumberGenerator(seed: 36)
+    var counts = zeroCounts(7)
+    for _ in 0..<7000 {
+        counts[(0..<7).randomElement(using: &generator)!] += 1
+    }
+    assertEven(counts)
+}
+
+// Every ordered pair of different positions, as often as every other.
+fn assertPairsAsLikely(_ draw: (inout SeededRandomNumberGenerator) -> Int[>..], of count: Int, seed: U64) {
+    var generator = SeededRandomNumberGenerator(seed: seed)
+    var counts = zeroCounts(count * count)
+    let pairs = count * (count - 1)
+    for _ in 0..<(200 * pairs) {
+        let sample = draw(&generator)
+        assertEqual(sample.count, 2)
+        counts[sample[0] * count + sample[1]] += 1
+    }
+    let seen = counts.filter({ $0 > 0 })
+    assertEqual(seen.count, pairs)
+    assertEven(seen)
+}
+
+@test
+fn everySampleOfACollectionIsAsLikely() {
+    // A large part of one, which is copied, and a small one, which is not.
+    assertPairsAsLikely({ (0..<5).sample(count: 2, using: &$0) }, of: 5, seed: 37)
+    assertPairsAsLikely({ (0..<12).sample(count: 2, using: &$0) }, of: 12, seed: 38)
+}
+
+@test
+fn everySampleOfASequenceIsAsLikely() {
+    assertPairsAsLikely({ (0..<7).lazy.map({ $0 }).sample(count: 2, using: &$0) }, of: 7, seed: 39)
+}
+
+@test
+fn aSmallSampleIsTheStartOfALargeOne() {
+    // The two ways make the same draws.
+    var a = SeededRandomNumberGenerator(seed: 40)
+    var b = SeededRandomNumberGenerator(seed: 40)
+    let small = (0..<100).sample(count: 25, using: &a)
+    let large = (0..<100).sample(count: 26, using: &b)
+    assert(small == large[0..<25].toArray())
+    assertEqual(distinctCount(small), 25)
+}
+
+// How many different values there are.
+fn distinctCount(_ values: Int[:]) -> Int {
+    var seen: [Int: Bool] = [:]
+    for value in values {
+        seen[value] = true
+    }
+    return seen.count
+}
+
+@test
+fn aSampleOfAHugeRangeIsNotSlow() {
+    var generator = SeededRandomNumberGenerator(seed: 41)
+    let sample = (0..<1000000000000).sample(count: 1000, using: &generator)
+    assertEqual(distinctCount(sample), 1000)
+}
+
+@test
+fn aSampleOfAsManyOrMoreIsAllOfThem() {
+    var generator = SeededRandomNumberGenerator(seed: 42)
+    let xs: Int[>..] = [5, 6, 7]
+    assert(xs.sample(count: 3, using: &generator).sorted() == [5, 6, 7])
+    assert(xs.sample(count: 9, using: &generator).sorted() == [5, 6, 7])
+    assert(xs.lazy.map({ $0 + 1 }).sample(count: 9, using: &generator).sorted() == [6, 7, 8])
+}
+
+@test
+fn aSampleOfNoneIsEmpty() {
+    let xs: Int[>..] = [5, 6, 7]
+    let nothing: Int[>..] = []
+    assert(xs.sample(count: 0).isEmpty)
+    assert(nothing.sample(count: 2).isEmpty)
+    assert(xs.lazy.map({ $0 }).sample(count: 0).isEmpty)
+}
+
+@test(traps: "count")
+fn aNegativeSampleTraps() {
+    let _ = [1, 2].sample(count: -1)
 }

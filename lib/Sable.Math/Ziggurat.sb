@@ -1,0 +1,88 @@
+module Sable.Math
+
+// The ziggurat method (Marsaglia and Tsang, 2000), with the layers of
+// ZigguratTables.sb: a layer is chosen, a point across it, and nearly always
+// the point lies under the density whatever its height, so it is the draw.
+// Only at a layer's end is the density computed.
+//
+// One 64-bit draw gives the layer by its low 8 bits, the side by the next
+// and the point by its top 53, no bit used twice: Doornik (2005) found the
+// correlation that sharing them makes.
+
+// e to the power x, for an x from -16.0 to 0.0, within 2 ulps. Not libm's,
+// whose last bit differs between platforms: this is sums and products alone,
+// which do not, so the same points are accepted everywhere.
+fn densityExp(_ x: F64) -> F64 {
+    // x = k ln 2 + r, with |r| at most ln 2 / 2. ln 2 is in two parts, the
+    // first with its low bits zero, so that k times it is exact.
+    let k = (x * 1.4426950408889634 - 0.5).truncated()
+    let r = x - k * 0.6931471803691238 - k * 1.9082149292705877e-10
+
+    // The Taylor polynomial, its first term left out under 2^-57 at that r.
+    var sum = 1.0
+    var n = 13.0
+    while n > 0.0 {
+        sum = 1.0 + sum * r / n
+        n -= 1.0
+    }
+    return sum.scaled(byPowerOfTwo: Int.fromWideValue(k))
+}
+
+// The top 53 bits as a fraction in [0, 1).
+fn fraction(_ bits: U64) -> F64 => F64.converting(bits >> 11) * 1.1102230246251565e-16
+
+// A draw of the normal distribution of mean 0 and standard deviation 1.
+fn standardNormal<G: RandomNumberGenerator>(_ generator: inout G) -> F64 {
+    while true {
+        let bits = generator.next()
+        let layer = Int(U8.truncating(bits))
+        let x = fraction(bits) * normalWidths[layer]
+        let negative = ((bits >> 8) & 1) == 1
+        if x < normalWidths[layer + 1] {
+            return negative ? -x : x
+        }
+        if layer == 0 {
+            let y = normalTail(&generator)
+            return negative ? -y : y
+        }
+        let height = normalHeights[layer] + (normalHeights[layer + 1] - normalHeights[layer]) * fraction(generator.next())
+        if height < densityExp(-0.5 * x * x) {
+            return negative ? -x : x
+        }
+    }
+}
+
+// A draw of the normal distribution beyond the base layer (Marsaglia, 1964):
+// its density there is an exponential's, cut down by another's.
+fn normalTail<G: RandomNumberGenerator>(_ generator: inout G) -> F64 {
+    let edge = normalWidths[1]
+    while true {
+        let beyond = standardExponential(&generator) / edge
+        let y = standardExponential(&generator)
+        if y + y > beyond * beyond {
+            return edge + beyond
+        }
+    }
+}
+
+// A draw of the exponential distribution of mean 1.
+fn standardExponential<G: RandomNumberGenerator>(_ generator: inout G) -> F64 {
+    var from = 0.0
+    while true {
+        let bits = generator.next()
+        let layer = Int(U8.truncating(bits))
+        let x = fraction(bits) * exponentialWidths[layer]
+        if x < exponentialWidths[layer + 1] {
+            return from + x
+        }
+        if layer == 0 {
+            // Beyond the base the distribution is itself again, moved along.
+            from += exponentialWidths[1]
+            continue
+        }
+        let height = exponentialHeights[layer] + (exponentialHeights[layer + 1] - exponentialHeights[layer]) * fraction(generator.next())
+        if height < densityExp(-x) {
+            return from + x
+        }
+    }
+}

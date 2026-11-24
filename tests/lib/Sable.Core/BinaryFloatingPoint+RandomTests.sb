@@ -4,6 +4,7 @@ module BinaryFloatingPointRandomTests
 // Sable.Core).
 
 import Sable.Testing
+import RandomStatistics
 
 // Gives the values it was made with, in turn, then zeros.
 struct Scripted: RandomNumberGenerator {
@@ -70,7 +71,7 @@ fn anInfiniteRangeTraps() {
 
 @test(traps: "a random value of a range that is not finite")
 fn anInfiniteClosedRangeTraps() {
-    let _ = F64.random(in: -F64.greatestFiniteMagnitude...F64.greatestFiniteMagnitude)
+    let _ = F32.random(in: -F32.infinity...0.0)
 }
 
 @test(traps: "a random value of an empty range")
@@ -78,20 +79,154 @@ fn anUpsideDownClosedRangeTraps() {
     let _ = F64.random(in: ClosedRange(lowerBound: 2.0, upperBound: 1.0))
 }
 
-@test
-fn aDrawThatRoundsUpToTheUpperBoundIsDrawnAgain() {
-    // The greatest fraction, times a width of one ulp, rounds up to the
-    // upper bound, which a half-open range leaves out: the next draw, zero,
-    // gives the lower bound.
-    var generator = Scripted { values: [U64.max], drawn: 0 }
-    assertEqual(F64.random(in: 1.0..<(1.0).nextUp, using: &generator), 1.0)
-    assertEqual(generator.drawn, 2)
+// The least and the greatest of many draws, of a range of few values.
+fn extremes<T: BinaryFloatingPoint>(_ range: Range<T>) -> (T, T) {
+    var generator = SeededRandomNumberGenerator(seed: 23)
+    var least = range.upperBound
+    var greatest = range.lowerBound
+    for _ in 0..<2000 {
+        let x = T.random(in: range, using: &generator)
+        assert(x >= range.lowerBound && x < range.upperBound)
+        least = x < least ? x : least
+        greatest = x > greatest ? x : greatest
+    }
+    return (least, greatest)
+}
+
+fn extremes<T: BinaryFloatingPoint>(closed range: ClosedRange<T>) -> (T, T) {
+    var generator = SeededRandomNumberGenerator(seed: 24)
+    var least = range.upperBound
+    var greatest = range.lowerBound
+    for _ in 0..<2000 {
+        let x = T.random(in: range, using: &generator)
+        assert(x >= range.lowerBound && x <= range.upperBound)
+        least = x < least ? x : least
+        greatest = x > greatest ? x : greatest
+    }
+    return (least, greatest)
 }
 
 @test
-fn aClosedRangeNeverGoesPastItsUpperBound() {
-    // A fraction of exactly one: the lower bound plus the width rounds past
-    // the upper bound here, and is held to it.
-    var generator = Scripted { values: [9007199254740992], drawn: 0 }
-    assertEqual(F64.random(in: -489861948521.1566...(-7.312715117751976e-16), using: &generator), -7.312715117751976e-16)
+fn aHalfOpenRangeReachesItsLowerBoundAndTheValueBelowItsUpper() {
+    let x = 1.0
+    let up = x.nextUp.nextUp.nextUp
+    let (least, greatest) = extremes(x..<up)
+    assertEqual(least, x)
+    assertEqual(greatest, x.nextUp.nextUp)
+    let (low, high) = extremes(-up..<(-x))
+    assertEqual(low, -up)
+    assertEqual(high, (-x).nextDown)
+}
+
+@test
+fn aClosedRangeReachesBothItsBounds() {
+    let x = 1.0
+    let up = x.nextUp.nextUp.nextUp
+    let (least, greatest) = extremes(closed: x...up)
+    assertEqual(least, x)
+    assertEqual(greatest, up)
+    let (low, high) = extremes(closed: -up...(-x))
+    assertEqual(low, -up)
+    assertEqual(high, -x)
+
+    // A bound that is no multiple of the spacing is reached all the same.
+    let tiny = F64.leastNonzeroMagnitude
+    let (first, second) = extremes(closed: tiny...(tiny + tiny))
+    assertEqual(first, tiny)
+    assertEqual(second, tiny + tiny)
+}
+
+@test
+fn theLastStepOfAClosedRangeIsExactlyItsBound() {
+    // Scaling a fraction gives the lower bound plus the width, which rounds
+    // short of or past an upper bound as far below it as these.
+    var top = Scripted { values: [U64.max, 0], drawn: 0 }
+    assertEqual(F64.random(in: -489861948521.1566...(-7.312715117751976e-16), using: &top), -7.312715117751976e-16)
+    var bottom = Scripted { values: [0x8000000000000000, 0], drawn: 0 }
+    let x = F64.random(in: -489861948521.1566...(-7.312715117751976e-16), using: &bottom)
+    assert(x < -2e11 && x > -3e11)
+}
+
+@test
+fn theValuesOfANarrowRangeAreAsLikelyAsEachOther() {
+    // Rounding to the nearest would give the ends half the share of the rest.
+    var generator = SeededRandomNumberGenerator(seed: 25)
+    var halfOpen = zeroCounts(5)
+    var closed = zeroCounts(6)
+    let x = 1.0
+    let ulp = x.ulp
+    let upper = x + 5.0 * ulp
+    for _ in 0..<10000 {
+        halfOpen[Int.fromWideValue((F64.random(in: x..<upper, using: &generator) - x) / ulp)] += 1
+        closed[Int.fromWideValue((F64.random(in: x...upper, using: &generator) - x) / ulp)] += 1
+    }
+    assertEven(halfOpen)
+    assertEven(closed)
+}
+
+@test
+fn everyStepOfAUnitRangeIsAsLikely() {
+    // F16's are the multiples of 2^-11, 2048 of them, and BF16's of 2^-8.
+    var generator = SeededRandomNumberGenerator(seed: 26)
+    var halves = zeroCounts(2048)
+    var brains = zeroCounts(256)
+    var signed = zeroCounts(4096)
+    for _ in 0..<100000 {
+        let h = F16.random(in: 0.0..<1.0, using: &generator).wideValue * 2048.0
+        assertEqual(h, h.floor())
+        halves[Int.fromWideValue(h)] += 1
+        let b = BF16.random(in: 0.0..<1.0, using: &generator).wideValue * 256.0
+        assertEqual(b, b.floor())
+        brains[Int.fromWideValue(b)] += 1
+        signed[Int.fromWideValue(F16.random(in: -1.0..<1.0, using: &generator).wideValue * 2048.0) + 2048] += 1
+    }
+    assertEven(halves)
+    assertEven(brains)
+    assertEven(signed)
+}
+
+@test
+fn anF64OfTheUnitRangeIsAMultipleOfTwoToTheMinus53() {
+    var generator = SeededRandomNumberGenerator(seed: 27)
+    var counts = zeroCounts(256)
+    var lowBits = zeroCounts(256)
+    for _ in 0..<50000 {
+        let scaled = F64.random(in: 0.0..<1.0, using: &generator) * 9007199254740992.0
+        assertEqual(scaled, scaled.floor())
+        let k = U64.fromWideValue(scaled)
+        counts[Int(k >> 45)] += 1
+        lowBits[Int(k & 255)] += 1
+    }
+    assertEven(counts)
+    assertEven(lowBits)
+}
+
+@test
+fn aRangeAsWideAsTheTypeIsEven() {
+    // Its width overflows, its values and their spacing do not.
+    var generator = SeededRandomNumberGenerator(seed: 28)
+    let greatest = F64.greatestFiniteMagnitude
+    var counts = zeroCounts(16)
+    var narrow = zeroCounts(16)
+    for _ in 0..<8000 {
+        let x = F64.random(in: -greatest...greatest, using: &generator)
+        assert(x.isFinite)
+        counts[Int.fromWideValue((x / greatest + 1.0) * 7.999999)] += 1
+        let h = F16.random(in: -F16.greatestFiniteMagnitude..<F16.greatestFiniteMagnitude, using: &generator)
+        assert(h.isFinite)
+        narrow[Int.fromWideValue((h.wideValue / 65504.0 + 1.0) * 7.999999)] += 1
+    }
+    assertEven(counts)
+    assertEven(narrow)
+}
+
+@test
+fn aRangeOfSubnormalsIsEven() {
+    var generator = SeededRandomNumberGenerator(seed: 29)
+    let tiny = F64.leastNonzeroMagnitude
+    var counts = zeroCounts(10)
+    for _ in 0..<5000 {
+        counts[Int.fromWideValue(F64.random(in: 0.0..<(10.0 * tiny), using: &generator) / tiny)] += 1
+    }
+    assertEven(counts)
 }

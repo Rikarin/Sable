@@ -1,0 +1,79 @@
+module NormalDistributionTests
+
+// NormalDistribution (Sable.Math). The pinned draws are those of an
+// independent implementation, in Python with its own exp.
+
+import Sable.Math
+import Sable.Testing
+import DistributionAssertions
+
+@test
+fn aSeedGivesTheSameDrawsEverywhere() {
+    var generator = SeededRandomNumberGenerator(seed: 77)
+    let draws = NormalDistribution().samples(count: 200000, using: &generator)
+    assertEqual(draws[0], 1.1567283708146316)
+    assertEqual(draws[1], 0.5185171004956622)
+    assertEqual(draws[2], -1.2856299354940448)
+    assertEqual(draws[3], 2.1335893740268284)
+    assertEqual(draws[4], -0.47783344259739247)
+    assert(folded(draws) == 0x885CA1DB04B64BD4)
+}
+
+@test
+fn drawsFollowTheDistribution() {
+    var xoshiro = SeededRandomNumberGenerator(seed: 1)
+    assertFollows(NormalDistribution().samples(count: 100000, using: &xoshiro), { normalCumulative($0) })
+    var pcg = Pcg64(seed: 2)
+    assertFollows(NormalDistribution(mean: 3.0, standardDeviation: 0.5).samples(count: 100000, using: &pcg), { normalCumulative(($0 - 3.0) / 0.5) })
+}
+
+@test
+fn theMomentsAreTheDistributions() {
+    var generator = ChaCha(seed: 3)
+    let draws = NormalDistribution().samples(count: 200000, using: &generator)
+    let squares = draws.map({ $0 * $0 })
+    // Each within 5 of its standard error.
+    assert(mean(draws).abs() < 0.0112)
+    assert((mean(squares) - 1.0).abs() < 0.0159)
+    assert(mean(draws.map({ $0 * $0 * $0 })).abs() < 0.0434)
+    assert((mean(squares.map({ $0 * $0 })) - 3.0).abs() < 0.11)
+}
+
+// Beyond the base layer, which is drawn another way.
+@test
+fn theTailFollowsTheDistribution() {
+    var generator = SeededRandomNumberGenerator(seed: 4)
+    let edge = 3.654152885361009
+    let normal = NormalDistribution()
+    var beyond: F64[>..] = []
+    var negative = 0
+    for _ in 0..<2000000 {
+        let x = normal.sample(using: &generator)
+        if x.abs() > edge {
+            beyond.append(x.abs())
+            negative += x < 0.0 ? 1 : 0
+        }
+    }
+    // 516 of them expected, as many on each side.
+    let share = 2.0 * normalCumulative(-edge)
+    let expected = 2000000.0 * share
+    assert((F64(beyond.count) - expected).abs() < 5.0 * expected.squareRoot())
+    assert((F64(negative) - F64(beyond.count) / 2.0).abs() < 2.5 * F64(beyond.count).squareRoot())
+    assertFollows(beyond, { 1.0 - 2.0 * normalCumulative(-$0) / share })
+}
+
+@test
+fn aDeviationOfZeroIsTheMean() {
+    var generator = SeededRandomNumberGenerator(seed: 5)
+    assertEqual(NormalDistribution(mean: 4.0, standardDeviation: 0.0).sample(using: &generator), 4.0)
+}
+
+@test(traps: "the standard deviation must be finite and not negative")
+fn aNegativeDeviationTraps() {
+    let _ = NormalDistribution(mean: 0.0, standardDeviation: -1.0)
+}
+
+@test(traps: "the mean must be finite")
+fn aMeanThatIsNoNumberTraps() {
+    let _ = NormalDistribution(mean: F64.nan)
+}

@@ -2,12 +2,16 @@ module Sable.Core
 
 /// A source of uniformly random bits, 64 at a time: what the 'random'
 /// functions draw from. Swift's `RandomNumberGenerator`; Rust's `RngCore`.
-/// Two ship with the library: `SystemRandomNumberGenerator`, seeded
-/// differently each time, which every 'random' function without a
-/// generator uses, and `SeededRandomNumberGenerator`, whose sequence a seed
-/// fixes, for tests and simulations that must repeat.
+/// `SystemRandomNumberGenerator` is the operating system's, different each
+/// time, which every 'random' function without a generator uses. The rest
+/// give the sequence their seed fixes, for tests and simulations that must
+/// repeat: `SeededRandomNumberGenerator` (xoshiro256**), the one to use
+/// without a reason for another; `Pcg64`, which can move any distance at
+/// once; `ChaCha`, whose output cannot be predicted without its key; and
+/// `SplitMix64`, for seeding.
 ///
-/// A type conforms by giving 'next()'; everything else is built on it.
+/// A type conforms by giving 'next()'; everything else is built on it, and
+/// draws the same values from the same bits on every platform.
 ///
 /// ```sable
 /// var generator = SeededRandomNumberGenerator(seed: 42)
@@ -17,6 +21,17 @@ module Sable.Core
 public protocol RandomNumberGenerator {
     /// The next 64 random bits, each as likely to be set as not.
     mutating fn next() -> U64
+
+    /// Fills every byte with random bits: each call of 'next()' gives eight
+    /// bytes, its lowest first, the last as many as are left to fill.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 42)
+    /// var salt: U8[4] = [0, 0, 0, 0]
+    /// generator.fill(bytes: &salt)
+    /// assert(salt != [0, 0, 0, 0])
+    /// ```
+    mutating fn fill(bytes: inout U8[:])
 }
 
 extension RandomNumberGenerator {
@@ -32,29 +47,51 @@ extension RandomNumberGenerator {
     /// ```
     public mutating fn next<T: FixedWidthInteger>(upperBound: T) -> T {
         precondition(upperBound > T.zero, "the upper bound must be positive")
-        if T.bitWidth <= 64 {
-            // 2^64 % bound values at the bottom would come up once more
-            // than the rest: below them, the draw is made again.
+        // Lemire's method: the draw times the bound, whose high half is the
+        // value. A value comes from one draw more than another only where
+        // the low half is under 2^64 % bound, and those are drawn again; the
+        // division is made only when the low half is under the bound, as it
+        // seldom is.
+        if T.bitWidth <= 64 || upperBound.wideBitPattern <= U128(U64.max) {
             let bound = U64.truncating(upperBound)
-            let threshold = U64.zero.wrappingSub(bound) % bound
-            while true {
-                let bits = next()
-                if bits >= threshold {
-                    return T.truncating(bits % bound)
+            var product = next().multipliedFullWidth(by: bound)
+            if product.1 < bound {
+                let threshold = U64.zero.wrappingSub(bound) % bound
+                while product.1 < threshold {
+                    product = next().multipliedFullWidth(by: bound)
                 }
             }
+            return T.truncating(product.0)
         }
         let bound = U128.truncating(upperBound)
-        let threshold = U128.zero.wrappingSub(bound) % bound
-        while true {
-            let bits = nextWide()
-            if bits >= threshold {
-                return T.truncating(bits % bound)
+        var product = nextWide().multipliedFullWidth(by: bound)
+        if product.1 < bound {
+            let threshold = U128.zero.wrappingSub(bound) % bound
+            while product.1 < threshold {
+                product = nextWide().multipliedFullWidth(by: bound)
+            }
+        }
+        return T.truncating(product.0)
+    }
+
+    public mutating fn fill(bytes: inout U8[:]) {
+        let count = bytes.count
+        var i = 0
+        while i + 8 <= count {
+            bytes.writeU64(next(), at: i, endian: .Little)
+            i += 8
+        }
+        if i < count {
+            var bits = next()
+            while i < count {
+                bytes[i] = U8.truncating(bits)
+                bits = bits >> 8
+                i += 1
             }
         }
     }
 
-    /// 128 random bits: two draws.
+    /// 128 random bits: two draws, the first the high half.
     mutating fn nextWide() -> U128 {
         return (U128(next()) << 64) | U128(next())
     }

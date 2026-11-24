@@ -3,6 +3,7 @@ module FixedWidthIntegerRandomTests
 // Random integers in a range (FixedWidthInteger+Random.sb, Sable.Core).
 
 import Sable.Testing
+import RandomStatistics
 
 @test
 fn aHalfOpenRangeLeavesOutItsUpperBound() {
@@ -101,4 +102,58 @@ fn anEmptyHalfOpenRangeTraps() {
 fn anUpsideDownClosedRangeTraps() {
     var generator = SeededRandomNumberGenerator(seed: 1)
     let _ = Int.random(in: ClosedRange(lowerBound: 3, upperBound: 2), using: &generator)
+}
+
+// Every value of the range as often as every other.
+fn assertRangeEven<T: FixedWidthInteger>(_ range: ClosedRange<T>, _ count: Int, seed: U64) {
+    var generator = SeededRandomNumberGenerator(seed: seed)
+    var counts = zeroCounts(count)
+    for _ in 0..<(500 * count) {
+        let n = T.random(in: range, using: &generator)
+        counts[Int.fromWideBitPattern(n.wideBitPattern.wrappingSub(range.lowerBound.wideBitPattern))] += 1
+    }
+    assertEven(counts)
+}
+
+@test
+fn rangesAreEvenWhateverTheirSigns() {
+    assertRangeEven(I8.min...I8.max, 256, seed: 40)
+    assertRangeEven(U8.min...U8.max, 256, seed: 41)
+    assertRangeEven(I8.min...(I8.max - 1), 255, seed: 42)
+    assertRangeEven((-100 as I8)...100, 201, seed: 43)
+    assertRangeEven(I64.min...(I64.min + 6), 7, seed: 44)
+    assertRangeEven((I64.max - 6)...I64.max, 7, seed: 45)
+    assertRangeEven((U64.max - 6)...U64.max, 7, seed: 46)
+    assertRangeEven((-3 as I128)...3, 7, seed: 47)
+    assertRangeEven((U128.max - 6)...U128.max, 7, seed: 48)
+}
+
+// The top bits of a range as wide as its type, or one value short of it.
+@test
+fn rangesAsWideAsTheirTypeAreEven() {
+    var generator = SeededRandomNumberGenerator(seed: 50)
+    var whole = zeroCounts(64)
+    var short = zeroCounts(64)
+    var wide = zeroCounts(64)
+    var wideShort = zeroCounts(64)
+    for _ in 0..<20000 {
+        whole[Int((I64.random(in: I64.min...I64.max, using: &generator) >> 58) + 32)] += 1
+        short[Int((I64.random(in: I64.min..<I64.max, using: &generator) >> 58) + 32)] += 1
+        wide[Int.fromWideBitPattern(U128.random(in: U128.min...U128.max, using: &generator) >> 122)] += 1
+        wideShort[Int((I128.random(in: I128.min..<I128.max, using: &generator) >> 122) + 32)] += 1
+    }
+    assertEven(whole)
+    assertEven(short)
+    assertEven(wide)
+    assertEven(wideShort)
+}
+
+@test
+fn aRangeOfA64BitTypeTakesOneDraw() {
+    var generator = Pcg64(seed: 1)
+    var ahead = generator
+    ahead.advance(by: 2)
+    let _ = I64.random(in: I64.min...I64.max, using: &generator)
+    let _ = U64.random(in: 0...9, using: &generator)
+    assertEqual(generator.next(), ahead.next())
 }

@@ -1,13 +1,13 @@
 module Sable.Core
 
-// Choosing and shuffling at random: an element of a collection, every
-// array shuffled in place, and any sequence's elements in a shuffled
+// Choosing and shuffling at random: an element of a collection, a sample
+// of one, every array shuffled in place, and any sequence's elements in a shuffled
 // array. Each takes a generator, or draws from the system's.
 
 extension Collection {
     /// An element chosen at random, each as likely, drawn from the
     /// generator; none for an empty collection. Reaching it steps through
-    /// the positions before it, unless the collection jumps.
+    /// the positions before it, unless the collection is random-access.
     ///
     /// ```sable
     /// var generator = SeededRandomNumberGenerator(seed: 9)
@@ -19,13 +19,7 @@ extension Collection {
         if isEmpty {
             return none
         }
-        var position = startIndex
-        var steps = generator.next(upperBound: count)
-        while steps > 0 {
-            position = index(after: position)
-            steps -= 1
-        }
-        return self[position]
+        return self[index(startIndex, offsetBy: generator.next(upperBound: count))]
     }
 
     /// An element chosen at random, drawn from the system's generator;
@@ -82,5 +76,99 @@ extension Sequence where Failure == Never {
     public fn shuffled() -> Element[>..] {
         var system = SystemRandomNumberGenerator()
         return self.shuffled(using: &system)
+    }
+}
+
+extension RandomAccessCollection {
+    /// As many elements as 'count', at different positions, chosen at
+    /// random and in a random order: every such choice, and order, as likely
+    /// as every other. All of them, shuffled, when there are no more. Its
+    /// time grows with the sample, not the collection.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 49)
+    /// let draw = (1...49).sample(count: 6, using: &generator)
+    /// assert(draw.count == 6 && draw.allSatisfy({ $0 >= 1 && $0 <= 49 }))
+    /// ```
+    public fn sample<G: RandomNumberGenerator>(count: Int, using generator: inout G) -> Element[>..] {
+        precondition(nonNegative: count, "count")
+        let total = self.count
+        let wanted = count < total ? count : total
+
+        // The first steps of a Fisher-Yates shuffle, forwards. A large part
+        // of the collection is shuffled in a copy of it; for a small one no
+        // copy is made, only the positions it would differ at kept. Both
+        // make the same draws, and the same sample.
+        if wanted > total / 4 {
+            var elements = self.toArray()
+            var i = 0
+            while i < wanted {
+                elements.swapAt(i, i + generator.next(upperBound: total - i))
+                i += 1
+            }
+            elements.removeLast(total - wanted)
+            return elements
+        }
+        var moved: [Int: Int] = [:]
+        var chosen: Element[>..] = []
+        chosen.reserveCapacity(wanted)
+        var i = 0
+        while i < wanted {
+            let j = i + generator.next(upperBound: total - i)
+            chosen.append(self[index(startIndex, offsetBy: moved[j] ?? j)])
+            moved[j] = moved[i] ?? i
+            i += 1
+        }
+        return chosen
+    }
+
+    /// As many elements as 'count', at different positions, chosen at random
+    /// and in a random order, drawn from the system's generator.
+    public fn sample(count: Int) -> Element[>..] {
+        var system = SystemRandomNumberGenerator()
+        return self.sample(count: count, using: &system)
+    }
+}
+
+extension Sequence where Failure == Never {
+    /// As many elements as 'count', chosen at random and in a random order:
+    /// every choice, and order, as likely as every other. All of them,
+    /// shuffled, when there are no more. The sequence is gone through once,
+    /// and only the sample is kept.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 3)
+    /// let odd = (1...9).lazy.filter({ $0 % 2 == 1 }).sample(count: 2, using: &generator)
+    /// assert(odd.count == 2 && odd[0] != odd[1])
+    /// ```
+    public fn sample<G: RandomNumberGenerator>(count: Int, using generator: inout G) -> Element[>..] {
+        precondition(nonNegative: count, "count")
+        // A reservoir (Waterman's algorithm R): the n-th element takes a
+        // place in it with probability count / n.
+        var chosen: Element[>..] = []
+        if count == 0 {
+            return chosen
+        }
+        var seen = 0
+        for element in self {
+            seen += 1
+            if chosen.count < count {
+                chosen.append(element)
+                continue
+            }
+            let place = generator.next(upperBound: seen)
+            if place < count {
+                chosen[place] = element
+            }
+        }
+        chosen.shuffle(using: &generator)
+        return chosen
+    }
+
+    /// As many elements as 'count', chosen at random and in a random order,
+    /// drawn from the system's generator.
+    public fn sample(count: Int) -> Element[>..] {
+        var system = SystemRandomNumberGenerator()
+        return self.sample(count: count, using: &system)
     }
 }

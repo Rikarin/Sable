@@ -1,0 +1,49 @@
+module Sable.Math
+
+/// True with some probability, false otherwise: a coin, weighted.
+///
+/// ```sable
+/// var generator = SeededRandomNumberGenerator(seed: 8)
+/// let rain = BernoulliDistribution(probability: 0.3)
+/// let wet = rain.samples(count: 1000, using: &generator).filter({ $0 }).count
+/// assert(wet > 200 && wet < 400)
+/// ```
+public struct BernoulliDistribution: Distribution {
+    // True for a draw below 'numerator' of one below 'denominator', where a
+    // denominator of zero stands for 2^64.
+    let numerator: U64
+    let denominator: U64
+
+    /// True with the probability given, from 0.0 (never) to 1.0 (always),
+    /// rounded down to a multiple of 2^-64; any other, NaN too, traps.
+    public init(probability: F64) {
+        precondition(probability >= 0.0 && probability <= 1.0, "a probability must be from 0 to 1")
+        if probability == 1.0 {
+            numerator = 1
+            denominator = 1
+        } else {
+            numerator = U64.fromWideValue(probability.scaled(byPowerOfTwo: 64))
+            denominator = 0
+        }
+    }
+
+    /// True 'times' out of 'outOf' times, exactly: 1 out of 3, which no
+    /// float is. 'times' must be no more than 'outOf', and that positive, or
+    /// it traps.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 8)
+    /// assert(BernoulliDistribution(times: 3, outOf: 3).sample(using: &generator))
+    /// ```
+    public init(times: U64, outOf: U64) {
+        precondition(outOf > 0 && times <= outOf, "a probability must be from 0 to 1")
+        numerator = times
+        denominator = outOf
+    }
+
+    /// True or false.
+    public fn sample<G: RandomNumberGenerator>(using generator: inout G) -> Bool {
+        let draw = denominator == 0 ? generator.next() : generator.next(upperBound: denominator)
+        return draw < numerator
+    }
+}

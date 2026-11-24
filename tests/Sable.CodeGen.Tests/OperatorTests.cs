@@ -32,6 +32,107 @@ public sealed class OperatorTests {
             """
         );
 
+    /// <summary>
+    ///     A compound assignment evaluates its target once, for the read and
+    ///     the store: indices, dictionary keys, subscripts' arguments and the
+    ///     object a call gives, before the right side.
+    /// </summary>
+    [Fact]
+    public void ACompoundAssignmentEvaluatesItsTargetOnce() =>
+        Prints(
+            """
+            1 [10, 21, 30]
+            2 [10, 21, 35]
+            3 2
+            4 7
+            5 [0, 4]
+            6 [[1, 2], [3, 14]]
+            7 9
+            9 [10, 21, 30, 1]
+            10 [1, 102, 3] 2
+            caught 11 2
+            12 13
+
+            """,
+            """
+            class Calls { var count = 0; init() { } }
+            class Counter {
+                var n: Int
+                var items: Int[>..] = [0, 0]
+                init(n: Int) { self.n = n }
+            }
+            struct Pair { var a: Int; var b: Int }
+            struct Grid {
+                var cells: Int[>..]
+                subscript(at: Int) -> Int {
+                    get { return cells[at] }
+                    set { cells[at] = newValue }
+                }
+            }
+            enum Failure: Error { Failed }
+
+            fn index(_ calls: Calls, _ i: Int) -> Int {
+                calls.count += 1
+                return i
+            }
+            fn key(_ calls: Calls, _ text: String) -> String {
+                calls.count += 1
+                return text + "!"
+            }
+            fn made(_ calls: Calls, _ counter: Counter) -> Counter {
+                calls.count += 1
+                return counter
+            }
+            fn fails() throws -> Int { throw Failure.Failed }
+            fn bump(_ i: inout Int) -> Int {
+                i += 1
+                return 100
+            }
+            fn addFailing(_ d: inout [String: Int], _ calls: Calls) throws {
+                d[key(calls, "a"), default: 1] += try fails()
+            }
+            """,
+            """
+                let calls = Calls()
+                var xs: Int[>..] = [10, 20, 30]
+                xs[index(calls, 1)] += 1
+                print("\(calls.count) \(xs)")
+                xs[index(calls, 2)] += 5
+                print("\(calls.count) \(xs)")
+                xs[2] = 30
+                var words: [String: Int] = ["a!": 1]
+                words[key(calls, "a"), default: 0] += 1
+                print("\(calls.count) \(words["a!"]!)")
+                let counter = Counter(n: 3)
+                made(calls, counter).n += 4
+                print("\(calls.count) \(counter.n)")
+                made(calls, counter).items[1] += 4
+                print("\(calls.count) \(counter.items)")
+                var nested: Int[>..][>..] = [[1, 2], [3, 4]]
+                nested[index(calls, 1)][1] += 10
+                print("\(calls.count) \(nested)")
+                var pairs: Pair[>..] = [Pair { a: 1, b: 2 }, Pair { a: 3, b: 4 }]
+                pairs[index(calls, 1)].b += 5
+                print("\(calls.count) \(pairs[1].b)")
+                var grid = Grid { cells: [10, 21, 30, 0] }
+                grid[index(calls, index(calls, 3))] += 1
+                print("\(calls.count) \(grid.cells)")
+                var i = 1
+                var ys: Int[>..] = [1, 2, 3]
+                ys[i] += bump(&i)
+                let _ = index(calls, 0)
+                print("\(calls.count) \(ys) \(i)")
+                do {
+                    try addFailing(&words, calls)
+                } catch {
+                    print("caught \(calls.count) \(words["a!"]!)")
+                }
+                var optional: Int?[>..] = [none, 4]
+                optional[index(calls, 0)] ??= 13
+                print("\(calls.count) \(optional[0]!)")
+            """
+        );
+
     [Fact]
     public void OperatorsATypeDeclaresOrDerives() =>
         Prints(

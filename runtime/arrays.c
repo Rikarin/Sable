@@ -74,6 +74,23 @@ static void element_copy(const SableMetadata *type, void *destination, const voi
     }
 }
 
+// A run of elements copied to room that holds none: at once where they are
+// plain bytes.
+static void elements_copy(const SableMetadata *type, char *destination, const char *source, int64_t count) {
+    int64_t size = type->element_size;
+    if (type->copy_element == NULL) {
+        if (count > 0 && size > 0) {
+            memcpy(destination, source, (size_t)(count * size));
+        }
+
+        return;
+    }
+
+    for (int64_t i = 0; i < count; i++) {
+        element_copy(type, destination + i * size, source + i * size);
+    }
+}
+
 static void element_destroy(const SableMetadata *type, void *element) {
     if (type->destroy_element == witnessed_element_destroy) {
         const SableTypeMetadata *of = witnessed_element(type);
@@ -292,10 +309,7 @@ static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t 
         int64_t size = type->element_size;
         copy->capacity = array->count + room;
         copy->elements = buffer_alloc(copy->capacity * size);
-        for (int64_t i = 0; i < array->count; i++) {
-            element_copy(type, copy->elements + i * size, array->elements + i * size);
-        }
-
+        elements_copy(type, copy->elements, array->elements, array->count);
         copy->count = array->count;
         sable_release(array);
     }
@@ -588,11 +602,7 @@ void sable_slice_make_unique(SableSlice *slice, const SableMetadata *type) {
     copy->capacity = slice->count;
     copy->count = slice->count;
     copy->elements = buffer_alloc(copy->capacity * size);
-    for (int64_t i = 0; i < copy->count; i++) {
-        const char *source = buffer->elements + (slice->start + i) * size;
-        element_copy(type, copy->elements + i * size, source);
-    }
-
+    elements_copy(type, copy->elements, buffer->elements + slice->start * size, copy->count);
     sable_release(buffer);
     slice->buffer = copy;
     slice->start = 0;
@@ -616,11 +626,7 @@ SableArray *sable_array_of_slice(SableArray *buffer, int64_t start, int64_t coun
     copy->capacity = count;
     copy->count = count;
     copy->elements = buffer_alloc(count * size);
-    for (int64_t i = 0; i < count; i++) {
-        const char *source = buffer->elements + (start + i) * size;
-        element_copy(type, copy->elements + i * size, source);
-    }
-
+    elements_copy(type, copy->elements, buffer->elements + start * size, count);
     return copy;
 }
 
@@ -652,6 +658,14 @@ void sable_slice_rotate(SableSlice *slice, const SableMetadata *type, int64_t fr
 // only reference to it, so the two runs are not one buffer's.
 static void store_run(char *destination, const SableMetadata *type, const SableArray *buffer, int64_t start, int64_t count) {
     int64_t size = type->element_size;
+    if (type->copy_element == NULL && type->destroy_element == NULL) {
+        if (count > 0 && size > 0) {
+            memmove(destination, buffer->elements + start * size, (size_t)(count * size));
+        }
+
+        return;
+    }
+
     for (int64_t i = 0; i < count; i++) {
         char *element = destination + i * size;
         element_destroy(type, element);

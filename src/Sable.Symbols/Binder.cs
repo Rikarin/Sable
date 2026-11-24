@@ -6507,6 +6507,15 @@ public sealed partial class Binder {
             }
 
             cost += Conversions.Cost(conversion.Value);
+
+            // '[1, 2]' is an array of Int before it is one of F64, as '1' is
+            // an Int: one of its own elements costs less.
+            if (conversion == ConversionKind.LiteralTyping
+                && arguments[i].Type is ArrayTypeSymbol { ElementType: var written } && wanted is ArrayTypeSymbol { ElementType: var given }
+                && !written.Equals(given)) {
+                cost++;
+            }
+
             if (arguments[i] is BoundUnboundClosure waiting && IsMisshapen(waiting.Syntax as ExpressionSyntax, wanted)) {
                 cost += MisshapenArgumentCost;
             }

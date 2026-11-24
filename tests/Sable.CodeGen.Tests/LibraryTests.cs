@@ -12,7 +12,7 @@ public sealed class LibraryTests {
     [Fact]
     public void MathIsWrittenInSable() =>
         Assert.Equal(
-            "7\na\n10\n21\n12\n1099511627776\ntrue\nfalse\n1.4142135623730951\n-3.0 3.0 3.0 -3.0\n1546998764402558742 1 true\ntrue\n",
+            "7\na\n10\n21\n12\n1099511627776\ntrue\nfalse\n1.4142135623730951\n-3.0 3.0 3.0 -3.0\n1546998764402558742 3 true\ntrue\n",
             AssertAgree("""
 module P
 import Sable.Math
@@ -35,6 +35,51 @@ fn main() {
 }
 """).Stdout
         );
+
+    /// <summary>
+    ///     A seed's numbers are the same natively and interpreted, and what is
+    ///     made of them too: integers, floats and the distributions' draws.
+    /// </summary>
+    [Fact]
+    public void ASeedsRandomNumbersAreTheSameEverywhere() {
+        var lines = AssertAgree("""
+            module P
+            import Sable.Math
+            fn fold<G: RandomNumberGenerator>(_ generator: inout G) -> U64 {
+                var all: U64 = 0
+                for _ in 0..<60 {
+                    all = (all ^ generator.next()).rotatedLeft(by: 1)
+                    all = (all ^ U64.truncating(I128.random(in: I128.min..<I128.max, using: &generator))).rotatedLeft(by: 1)
+                    all = (all ^ U64.truncating(Int.random(in: -1000...1000, using: &generator))).rotatedLeft(by: 1)
+                    all = (all ^ F64.random(in: -0.1..<3.0, using: &generator).bits).rotatedLeft(by: 1)
+                    all = (all ^ U64(F32.random(in: 0.0...1.0, using: &generator).bits)).rotatedLeft(by: 1)
+                    all = (all ^ NormalDistribution().sample(using: &generator).bits).rotatedLeft(by: 1)
+                    all = (all ^ ExponentialDistribution().sample(using: &generator).bits).rotatedLeft(by: 1)
+                }
+                var bytes: U8[11] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+                generator.fill(bytes: &bytes)
+                for byte in bytes {
+                    all = (all ^ U64(byte)).rotatedLeft(by: 8)
+                }
+                for element in (0..<40).sample(count: 5, using: &generator) {
+                    all = (all ^ U64(element)).rotatedLeft(by: 8)
+                }
+                return all
+            }
+            @main
+            fn main() {
+                var xoshiro = SeededRandomNumberGenerator(seed: 1)
+                print(fold(&xoshiro))
+                var pcg = Pcg64(seed: 1)
+                print(fold(&pcg))
+                var chacha = ChaCha(seed: 1)
+                print(fold(&chacha))
+                var mixer = SplitMix64(seed: 1)
+                print(fold(&mixer))
+            }
+            """).Stdout;
+        Assert.Equal("13732879774282323638\n1799493008009188309\n6990171861299115690\n13823354213084543606\n", lines);
+    }
 
     /// <summary>
     ///     The primitives' members are Sable.Core's, in Sable: builtins applied

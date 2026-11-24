@@ -1,0 +1,13 @@
+module RandomFloatBench
+
+// Random floats in [0, 1): twenty million, their mean in tenths.
+
+@main
+fn main() {
+    var generator = SeededRandomNumberGenerator(seed: 1)
+    var total = 0.0
+    for _ in 0..<20000000 {
+        total += F64.random(in: 0.0..<1.0, using: &generator)
+    }
+    print((total / 2000000.0).rounded())
+}

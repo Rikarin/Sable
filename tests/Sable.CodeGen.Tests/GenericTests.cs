@@ -980,4 +980,52 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     A protocol's requirements overloaded by a parameter's type alone are
+    ///     each met by the member that takes it: the type's own, or the default
+    ///     a protocol refining it gives.
+    /// </summary>
+    [Fact]
+    public void ARequirementOverloadedByTypeIsMetByTheMemberThatTakesIt() =>
+        Assert.Equal(
+            "open 3 closed 5\nopen 7 closed 9\nown open 1 own closed 2\nown open 1 own closed 2\n",
+            AssertAgree(
+                Program(
+                    """
+                    protocol Spanned: Comparable {
+                        static fn span(_ range: Range<Self>) -> String
+                        static fn span(_ range: ClosedRange<Self>) -> String
+                    }
+                    protocol Whole: Spanned {
+                        var shown: Int { get }
+                    }
+                    extension Whole {
+                        static fn span(_ range: Range<Self>) -> String { return "open \(range.upperBound.shown)" }
+                        static fn span(_ range: ClosedRange<Self>) -> String { return "closed \(range.upperBound.shown)" }
+                    }
+                    extension Int: Whole {
+                        var shown: Int => self
+                    }
+                    struct Own: Spanned {
+                        var n: Int
+                        operator == (a: Own, b: Own) -> Bool { return a.n == b.n }
+                        operator < (a: Own, b: Own) -> Bool { return a.n < b.n }
+                        static fn span(_ range: ClosedRange<Own>) -> String { return "own closed \(range.upperBound.n)" }
+                        static fn span(_ range: Range<Own>) -> String { return "own open \(range.upperBound.n)" }
+                    }
+                    fn both<T: Spanned>(_ range: Range<T>, _ closed: ClosedRange<T>) -> String {
+                        return "\(T.span(range)) \(T.span(closed))"
+                    }
+                    """,
+                    """
+                        print("\(Int.span(0..<3)) \(Int.span(0...5))")
+                        print(both(0..<7, 0...9))
+                        let (a, b, c) = (Own { n: 0 }, Own { n: 1 }, Own { n: 2 })
+                        print("\(Own.span(a..<b)) \(Own.span(a...c))")
+                        print(both(a..<b, a...c))
+                    """
+                )
+            ).Stdout
+        );
 }

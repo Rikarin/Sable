@@ -1,0 +1,41 @@
+module RandomStatistics
+
+// What the random numbers' tests count by: Pearson's chi-squared, as the
+// standard deviations its statistic is from its mean. The seeds are fixed,
+// so a test gives the same answer every time; the thresholds are far wider
+// than a fair source's answers are, and far narrower than a bias that
+// matters.
+
+/// How far the counts are from all alike, in the statistic's standard
+/// deviations: about 0 for a fair source, and over 5 once in millions.
+public fn chiSquaredDeviation(_ counts: Int[:]) -> F64 {
+    var total = 0
+    for count in counts {
+        total += count
+    }
+    let expected = F64(total) / F64(counts.count)
+    var statistic = 0.0
+    for count in counts {
+        let off = F64(count) - expected
+        statistic += off * off / expected
+    }
+    let degrees = F64(counts.count - 1)
+    return (statistic - degrees) / (2.0 * degrees).squareRoot()
+}
+
+/// Fails unless the counts are as alike as a fair source's: neither too
+/// uneven nor too even.
+public fn assertEven(_ counts: Int[:], file: String = #file, line: Int = #line) {
+    let deviation = chiSquaredDeviation(counts)
+    assert(deviation < 5.0 && deviation > -5.0, "chi-squared is \(deviation) deviations off at line \(line)")
+}
+
+/// So many counts of zero.
+public fn zeroCounts(_ count: Int) -> Int[>..] {
+    var counts: Int[>..] = []
+    counts.reserveCapacity(count)
+    while counts.count < count {
+        counts.append(0)
+    }
+    return counts
+}

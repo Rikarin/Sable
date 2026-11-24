@@ -11,7 +11,7 @@ module Sable.Core
 /// assert(precision(F64.self) == 53)
 /// assert(precision(F16.self) == 11)
 /// ```
-public protocol BinaryFloatingPoint: FloatingPoint {
+public protocol BinaryFloatingPoint: FloatingPoint, UniformRandom {
     /// How many bits the significand has, after the leading one a normal
     /// value has without storing it: 52 for an F64.
     static var significandBitCount: Int { get }

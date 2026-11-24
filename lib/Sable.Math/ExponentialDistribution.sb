@@ -1,0 +1,28 @@
+module Sable.Math
+
+/// The exponential distribution: the time to the next of events that come at
+/// a steady rate, each independent of the last. Drawn by the ziggurat
+/// method, as the normal is.
+///
+/// ```sable
+/// var generator = SeededRandomNumberGenerator(seed: 12)
+/// let arrivals = ExponentialDistribution(rate: 4.0)
+/// let waits = arrivals.samples(count: 1000, using: &generator)
+/// assert((mean(waits) - 0.25).abs() < 0.05)
+/// ```
+public struct ExponentialDistribution: Distribution {
+    /// How many events there are in a unit of time: one over the mean.
+    public let rate: F64
+
+    /// The exponential distribution of a rate, which must be positive and
+    /// finite, or it traps.
+    public init(rate: F64 = 1.0) {
+        precondition(rate > 0.0 && rate.isFinite, "the rate must be positive and finite")
+        self.rate = rate
+    }
+
+    /// A value drawn from the distribution, zero or above.
+    public fn sample<G: RandomNumberGenerator>(using generator: inout G) -> F64 {
+        return standardExponential(&generator) / rate
+    }
+}

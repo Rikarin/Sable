@@ -1,0 +1,310 @@
+module Sable.Serialize
+
+import Sable.Text
+
+/// Where a Serializable value reads itself from: a value of a parsed
+/// document, at a path (`$.items[3].name`) that every error names. A field
+/// that is not there is a decoder too, a missing one: reading a value from
+/// it throws MissingField, and an Optional reads none.
+///
+/// ```sable
+/// let root = try! Decoder.json("{\"items\":[{\"name\":\"a\"},{}]}")
+/// let items = try! root.field("items").elements()
+/// assert(try! items[0].field("name").decodeString() == "a")
+/// assert(items[1].field("name").isMissing)
+/// do {
+///     let _ = try items[1].field("name").decodeString()
+/// } catch {
+///     assert(error.description() == "$.items[1].name: missing")
+/// }
+/// ```
+public final class Decoder {
+    let document: JsonDocument
+    // The node, or -1 for a field that is not there.
+    let node: Int
+    // The decoder this one's value is in, none at the root, and the step
+    // from there: a member's key, or else an element's index (-1 for none).
+    // The path is made from them only when it is asked for: an error's.
+    let parent: Decoder?
+    let key: String?
+    let index: Int
+
+    init(_ document: JsonDocument, _ node: Int, parent: Decoder?, key: String?, index: Int) {
+        self.document = document
+        self.node = node
+        self.parent = parent
+        self.key = key
+        self.index = index
+    }
+
+    /// Where the value is, from the document's root.
+    public var path: String {
+        get {
+            if let parent = parent {
+                if let key = key {
+                    return parent.path + jsonPathKey(key)
+                }
+                return index >= 0 ? parent.path + "[\(index)]" : parent.path
+            }
+            return "$"
+        }
+    }
+
+    /// A decoder of the JSON document the text is; SerializeError.Syntax
+    /// when it is not one.
+    public static fn json(_ text: String) throws(SerializeError) -> Decoder {
+        var bytes: U8[>..] = []
+        bytes.append(utf8: text)
+        return try Decoder.json(bytes: bytes)
+    }
+
+    /// A decoder of the JSON document the UTF-8 bytes are.
+    public static fn json(bytes: U8[>..]) throws(SerializeError) -> Decoder {
+        let document = try JsonDocument.parse(bytes)
+        return Decoder(document, 0, parent: none, key: none, index: -1)
+    }
+
+    // ---- What it holds -------------------------------------------------------
+
+    /// Whether there is no value here: a field the object does not have.
+    public var isMissing: Bool => node < 0
+
+    /// Whether the value here is null.
+    public var isNull: Bool => node >= 0 && document.kinds[node] == jsonNull
+
+    /// What the value is, as an error says it: "an object", "a string", …;
+    /// "nothing" for a missing one.
+    public var kindName: String {
+        get {
+            if node < 0 {
+                return "nothing"
+            }
+            return match document.kinds[node] {
+                case 0 => "null"
+                case 1 => "a Bool"
+                case 2 => "a Bool"
+                case 3 => "a number"
+                case 4 => "a string"
+                case 5 => "an array"
+                case _ => "an object"
+            }
+        }
+    }
+
+    /// The error for a value of another kind than 'expected' here.
+    public fn mismatch(_ expected: String) -> SerializeError {
+        if node < 0 {
+            return SerializeError.MissingField(path: path)
+        }
+        return SerializeError.TypeMismatch(path: path, expected: expected, found: kindName)
+    }
+
+    /// The error for a value here the type does not take.
+    public fn invalid(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: path, reason: reason)
+    }
+
+    fn expect(_ kind: Int, _ expected: String) throws(SerializeError) {
+        if node < 0 || document.kinds[node] != kind {
+            throw mismatch(expected)
+        }
+    }
+
+    // ---- Values --------------------------------------------------------------
+
+    public fn decodeBool() throws(SerializeError) -> Bool {
+        if node >= 0 && document.kinds[node] == jsonFalse {
+            return false
+        }
+        try expect(jsonTrue, "a Bool")
+        return true
+    }
+
+    /// An integer: a number with no fraction or exponent that fits.
+    public fn decodeInt() throws(SerializeError) -> Int {
+        try expect(jsonNumber, "an integer")
+        let start = document.starts[node]
+        let end = document.ends[node]
+        var negative = false
+        var i = start
+        if document.bytes[i] == 0x2D {
+            negative = true
+            i += 1
+        }
+        // Accumulated negatively, so that Int.min fits.
+        var value = 0
+        while i < end {
+            let byte = Int(document.bytes[i])
+            if byte < 0x30 || byte > 0x39 {
+                throw invalid("\(document.text(node)) is not an integer")
+            }
+            let digit = byte - 0x30
+            if value < (Int.min + digit) / 10 {
+                throw invalid("\(document.text(node)) does not fit an Int")
+            }
+            value = value * 10 - digit
+            i += 1
+        }
+        if !negative {
+            if value == Int.min {
+                throw invalid("\(document.text(node)) does not fit an Int")
+            }
+            return -value
+        }
+        return value
+    }
+
+    /// An unsigned integer, up to U64.max.
+    public fn decodeUInt() throws(SerializeError) -> U64 {
+        try expect(jsonNumber, "an unsigned integer")
+        var value: U64 = 0
+        var i = document.starts[node]
+        let end = document.ends[node]
+        while i < end {
+            let byte = Int(document.bytes[i])
+            if byte < 0x30 || byte > 0x39 {
+                throw invalid("\(document.text(node)) is not an unsigned integer")
+            }
+            let digit = U64(byte - 0x30)
+            if value > (U64.max - digit) / 10 {
+                throw invalid("\(document.text(node)) does not fit a U64")
+            }
+            value = value * 10 + digit
+            i += 1
+        }
+        return value
+    }
+
+    /// A number, finite.
+    public fn decodeFloat() throws(SerializeError) -> F64 {
+        try expect(jsonNumber, "a number")
+        guard let value = try? F64.parse(document.text(node)) else {
+            throw invalid("\(document.text(node)) is not a number")
+        }
+        if !value.isFinite {
+            throw invalid("\(document.text(node)) is out of range")
+        }
+        return value
+    }
+
+    public fn decodeString() throws(SerializeError) -> String {
+        try expect(jsonString, "a string")
+        return document.string(node)
+    }
+
+    // ---- Objects -------------------------------------------------------------
+
+    /// Throws unless the value here is an object: what a struct's decoding
+    /// asks first, naming the type it wants.
+    public fn expectObject(_ typeName: String) throws(SerializeError) {
+        try expect(jsonObject, "an object (\(typeName))")
+    }
+
+    /// The member's value, or a missing decoder when the object has no
+    /// member of that name (or this is not an object).
+    public fn field(_ key: String) -> Decoder {
+        if node < 0 || document.kinds[node] != jsonObject {
+            return Decoder(document, -1, parent: self, key: key, index: -1)
+        }
+        var child = document.firsts[node]
+        while child >= 0 {
+            if document.keyEquals(child, key) {
+                return Decoder(document, document.nexts[child], parent: self, key: key, index: -1)
+            }
+            child = document.nexts[document.nexts[child]]
+        }
+        return Decoder(document, -1, parent: self, key: key, index: -1)
+    }
+
+    /// Whether the object has a member of that name (null counts).
+    public fn hasField(_ key: String) -> Bool {
+        return !field(key).isMissing
+    }
+
+    /// The object's members, in order.
+    public fn members() throws(SerializeError) -> DecodedMember[>..] {
+        try expect(jsonObject, "an object")
+        var all: DecodedMember[>..] = []
+        var child = document.firsts[node]
+        while child >= 0 {
+            let key = document.string(child)
+            let value = document.nexts[child]
+            all.append(DecodedMember { key: key, value: Decoder(document, value, parent: self, key: key, index: -1) })
+            child = document.nexts[value]
+        }
+        return all
+    }
+
+    // ---- Arrays --------------------------------------------------------------
+
+    /// The array's elements, in order.
+    public fn elements() throws(SerializeError) -> Decoder[>..] {
+        try expect(jsonArray, "an array")
+        var all: Decoder[>..] = []
+        var child = document.firsts[node]
+        var i = 0
+        while child >= 0 {
+            all.append(Decoder(document, child, parent: self, key: none, index: i))
+            child = document.nexts[child]
+            i += 1
+        }
+        return all
+    }
+
+    /// The element at the position, or a missing decoder past the end (or
+    /// when this is not an array): a tuple-like payload's parts.
+    public fn element(_ index: Int) -> Decoder {
+        if node < 0 || document.kinds[node] != jsonArray {
+            return Decoder(document, -1, parent: self, key: none, index: index)
+        }
+        var child = document.firsts[node]
+        var i = 0
+        while child >= 0 && i < index {
+            child = document.nexts[child]
+            i += 1
+        }
+        return Decoder(document, child, parent: self, key: none, index: index)
+    }
+
+    // ---- Unions and enums ----------------------------------------------------
+
+    /// An externally tagged case's name: a string for a case that carries
+    /// nothing, or the one key of an object whose value is its payload.
+    public fn variantTag() throws(SerializeError) -> String {
+        if node >= 0 && document.kinds[node] == jsonString {
+            return document.string(node)
+        }
+        if node >= 0 && document.kinds[node] == jsonObject && document.counts[node] == 1 {
+            return document.string(document.firsts[node])
+        }
+        throw mismatch("a case's name, or an object of one member")
+    }
+
+    /// An externally tagged case's payload: the value of its object's one
+    /// member; missing for a case written as a string.
+    public fn variantPayload() -> Decoder {
+        if node >= 0 && document.kinds[node] == jsonObject && document.counts[node] == 1 {
+            let key = document.firsts[node]
+            return Decoder(document, document.nexts[key], parent: self, key: document.string(key), index: -1)
+        }
+        return Decoder(document, -1, parent: self, key: none, index: -1)
+    }
+
+    /// The error for a case the type has none of.
+    public fn unknownCase(_ name: String) -> SerializeError {
+        return SerializeError.UnknownCase(path: path, name: name)
+    }
+
+    /// How many elements or members the value has; 0 for any other.
+    public var count: Int => node < 0 ? 0 : document.counts[node]
+}
+
+// A key as JSONPath writes it: '.name' for a plain name, ['…'] otherwise.
+fn jsonPathKey(_ key: String) -> String {
+    var plain = !key.isEmpty
+    for c in key {
+        let ok = c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
+        plain = plain && ok
+    }
+    return plain ? "." + key : "['" + key.replacing("'", with: "\\'") + "']"
+}

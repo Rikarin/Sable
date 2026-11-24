@@ -1,0 +1,577 @@
+module Sable.Net
+
+import Sable.Text
+
+// The WHATWG URL standard's basic URL parser, state by state, over the
+// input's code points: c is the code point at the pointer, or -1 past the
+// end. With a state override, it is what a setter runs on an existing URL.
+
+enum ParserState {
+    SchemeStart
+    Scheme
+    NoScheme
+    SpecialRelativeOrAuthority
+    PathOrAuthority
+    Relative
+    RelativeSlash
+    SpecialAuthoritySlashes
+    SpecialAuthorityIgnoreSlashes
+    Authority
+    Host
+    Hostname
+    Port
+    File
+    FileSlash
+    FileHost
+    PathStart
+    Path
+    OpaquePath
+    Query
+    Fragment
+}
+
+struct UrlParser {
+    var input: Int[>..]
+    let base: Url?
+    // Why it failed, when it did.
+    var failure: String = ""
+
+    init(_ text: String, _ base: Url?) {
+        self.base = base
+        var codes = text.unicodeScalarValues()
+        // Leading and trailing C0 controls and spaces gone, and every tab
+        // and newline anywhere.
+        var start = 0
+        var end = codes.count
+        while start < end && codes[start] <= 0x20 {
+            start += 1
+        }
+        while end > start && codes[end - 1] <= 0x20 {
+            end -= 1
+        }
+        var kept: Int[>..] = []
+        var i = start
+        while i < end {
+            let c = codes[i]
+            if c != 0x09 && c != 0x0A && c != 0x0D {
+                kept.append(c)
+            }
+            i += 1
+        }
+        self.input = kept
+    }
+
+    mutating fn run() -> Url? {
+        var url = Url(scheme: "")
+        if parse(&url, .SchemeStart, false) {
+            return url
+        }
+        return none
+    }
+
+    /// The setter's parse of the input into the URL from the state; whether
+    /// it changed the URL (the URL is left as it was otherwise).
+    mutating fn override(_ url: inout Url, _ state: ParserState) -> Bool {
+        var copy = url
+        if parse(&copy, state, true) {
+            url = copy
+            return true
+        }
+        return false
+    }
+
+    mutating fn fail(_ reason: String) -> Bool {
+        failure = reason
+        return false
+    }
+
+    // Whether the input from the pointer on starts with the code point.
+    fn remainingStarts(_ p: Int, _ code: Int) -> Bool {
+        return codeAt(input, p + 1) == code
+    }
+
+    // Whether the input from 'p' starts with a Windows drive letter: a
+    // letter and ':' or '|', then the end, '/', '\', '?' or '#'.
+    fn startsWithDriveLetter(_ p: Int) -> Bool {
+        if p + 1 >= input.count || !isAsciiAlpha(input[p]) || input[p + 1] != 0x3A && input[p + 1] != 0x7C {
+            return false
+        }
+        if p + 2 == input.count {
+            return true
+        }
+        let third = input[p + 2]
+        return third == 0x2F || third == 0x5C || third == 0x3F || third == 0x23
+    }
+
+    mutating fn parse(_ url: inout Url, _ initial: ParserState, _ overriding: Bool) -> Bool {
+        var state = initial
+        var buffer: Int[>..] = []
+        var atSignSeen = false
+        var insideBrackets = false
+        var passwordTokenSeen = false
+        var p = 0
+        while true {
+            let c = codeAt(input, p)
+            if state == .SchemeStart {
+                if isAsciiAlpha(c) {
+                    buffer.append(asciiLower(c))
+                    state = .Scheme
+                } else if !overriding {
+                    state = .NoScheme
+                    p -= 1
+                } else {
+                    return fail("a scheme must start with a letter")
+                }
+            } else if state == .Scheme {
+                if isAsciiAlpha(c) || c >= 0x30 && c <= 0x39 || c == 0x2B || c == 0x2D || c == 0x2E {
+                    buffer.append(asciiLower(c))
+                } else if c == 0x3A {
+                    let scheme = stringOf(buffer)
+                    if overriding {
+                        if Url.isSpecialScheme(url.scheme) != Url.isSpecialScheme(scheme) {
+                            return false
+                        }
+                        if (!url.username.isEmpty || !url.password.isEmpty || url.port != none) && scheme == "file" {
+                            return false
+                        }
+                        if url.scheme == "file" && url.host == .Empty {
+                            return false
+                        }
+                    }
+                    url.scheme = scheme
+                    if overriding {
+                        if url.port == Url.defaultPort(scheme) {
+                            url.port = none
+                        }
+                        return true
+                    }
+                    buffer = []
+                    if scheme == "file" {
+                        state = .File
+                    } else if url.isSpecial && base != none && base!.scheme == scheme {
+                        state = .SpecialRelativeOrAuthority
+                    } else if url.isSpecial {
+                        state = .SpecialAuthoritySlashes
+                    } else if remainingStarts(p, 0x2F) {
+                        state = .PathOrAuthority
+                        p += 1
+                    } else {
+                        url.opaquePath = ""
+                        state = .OpaquePath
+                    }
+                } else if !overriding {
+                    buffer = []
+                    state = .NoScheme
+                    p = -1
+                } else {
+                    return fail("an invalid scheme")
+                }
+            } else if state == .NoScheme {
+                guard let b = base else {
+                    return fail("a relative URL with no base")
+                }
+                if b.opaquePath != none && c != 0x23 {
+                    return fail("a relative URL against a base with an opaque path")
+                }
+                if b.opaquePath != none && c == 0x23 {
+                    url.scheme = b.scheme
+                    url.opaquePath = b.opaquePath
+                    url.query = b.query
+                    url.fragment = ""
+                    state = .Fragment
+                } else if b.scheme != "file" {
+                    state = .Relative
+                    p -= 1
+                } else {
+                    state = .File
+                    p -= 1
+                }
+            } else if state == .SpecialRelativeOrAuthority {
+                if c == 0x2F && remainingStarts(p, 0x2F) {
+                    state = .SpecialAuthorityIgnoreSlashes
+                    p += 1
+                } else {
+                    state = .Relative
+                    p -= 1
+                }
+            } else if state == .PathOrAuthority {
+                if c == 0x2F {
+                    state = .Authority
+                } else {
+                    state = .Path
+                    p -= 1
+                }
+            } else if state == .Relative {
+                let b = base!
+                url.scheme = b.scheme
+                if c == 0x2F {
+                    state = .RelativeSlash
+                } else if url.isSpecial && c == 0x5C {
+                    state = .RelativeSlash
+                } else {
+                    url.username = b.username
+                    url.password = b.password
+                    url.host = b.host
+                    url.port = b.port
+                    url.segments = b.segments
+                    url.query = b.query
+                    if c == 0x3F {
+                        url.query = ""
+                        state = .Query
+                    } else if c == 0x23 {
+                        url.fragment = ""
+                        state = .Fragment
+                    } else if c != -1 {
+                        url.query = none
+                        shortenPath(&url)
+                        state = .Path
+                        p -= 1
+                    }
+                }
+            } else if state == .RelativeSlash {
+                if url.isSpecial && (c == 0x2F || c == 0x5C) {
+                    state = .SpecialAuthorityIgnoreSlashes
+                } else if c == 0x2F {
+                    state = .Authority
+                } else {
+                    let b = base!
+                    url.username = b.username
+                    url.password = b.password
+                    url.host = b.host
+                    url.port = b.port
+                    state = .Path
+                    p -= 1
+                }
+            } else if state == .SpecialAuthoritySlashes {
+                if c == 0x2F && remainingStarts(p, 0x2F) {
+                    state = .SpecialAuthorityIgnoreSlashes
+                    p += 1
+                } else {
+                    state = .SpecialAuthorityIgnoreSlashes
+                    p -= 1
+                }
+            } else if state == .SpecialAuthorityIgnoreSlashes {
+                if c != 0x2F && c != 0x5C {
+                    state = .Authority
+                    p -= 1
+                }
+            } else if state == .Authority {
+                if c == 0x40 {
+                    if atSignSeen {
+                        var marked: Int[>..] = [0x25, 0x34, 0x30]
+                        for code in buffer {
+                            marked.append(code)
+                        }
+                        buffer = marked
+                    }
+                    atSignSeen = true
+                    var user: U8[>..] = []
+                    var pass: U8[>..] = []
+                    for code in buffer {
+                        if code == 0x3A && !passwordTokenSeen {
+                            passwordTokenSeen = true
+                            continue
+                        }
+                        if passwordTokenSeen {
+                            PercentEncoding.append(code, .Userinfo, false, &pass)
+                        } else {
+                            PercentEncoding.append(code, .Userinfo, false, &user)
+                        }
+                    }
+                    unsafe {
+                        url.username = url.username + String.fromUtf8Unchecked(user)
+                        url.password = url.password + String.fromUtf8Unchecked(pass)
+                    }
+                    buffer = []
+                } else if c == -1 || c == 0x2F || c == 0x3F || c == 0x23 || url.isSpecial && c == 0x5C {
+                    if atSignSeen && buffer.isEmpty {
+                        return fail("credentials with no host after them")
+                    }
+                    p -= buffer.count + 1
+                    buffer = []
+                    state = .Host
+                } else {
+                    buffer.append(c)
+                }
+            } else if state == .Host || state == .Hostname {
+                if overriding && url.scheme == "file" {
+                    p -= 1
+                    state = .FileHost
+                } else if c == 0x3A && !insideBrackets {
+                    if buffer.isEmpty {
+                        return fail("a port with no host")
+                    }
+                    if overriding && state == .Hostname {
+                        return false
+                    }
+                    guard let host = Host.parse(stringOf(buffer), special: url.isSpecial) else {
+                        return fail("an invalid host")
+                    }
+                    url.host = host
+                    buffer = []
+                    state = .Port
+                } else if c == -1 || c == 0x2F || c == 0x3F || c == 0x23 || url.isSpecial && c == 0x5C {
+                    p -= 1
+                    if url.isSpecial && buffer.isEmpty {
+                        return fail("a special URL with no host")
+                    }
+                    if overriding && buffer.isEmpty && (!url.username.isEmpty || !url.password.isEmpty || url.port != none) {
+                        return false
+                    }
+                    guard let host = Host.parse(stringOf(buffer), special: url.isSpecial) else {
+                        return fail("an invalid host")
+                    }
+                    url.host = host
+                    buffer = []
+                    state = .PathStart
+                    if overriding {
+                        return true
+                    }
+                } else {
+                    if c == 0x5B {
+                        insideBrackets = true
+                    }
+                    if c == 0x5D {
+                        insideBrackets = false
+                    }
+                    buffer.append(c)
+                }
+            } else if state == .Port {
+                if c >= 0x30 && c <= 0x39 {
+                    buffer.append(c)
+                } else if c == -1 || c == 0x2F || c == 0x3F || c == 0x23 || url.isSpecial && c == 0x5C || overriding {
+                    if !buffer.isEmpty {
+                        var port = 0
+                        for digit in buffer {
+                            port = port * 10 + digit - 0x30
+                            if port > 65535 {
+                                return fail("a port past 65535")
+                            }
+                        }
+                        url.port = port == Url.defaultPort(url.scheme) ? none : port
+                        buffer = []
+                        if overriding {
+                            return true
+                        }
+                    }
+                    if overriding {
+                        return false
+                    }
+                    state = .PathStart
+                    p -= 1
+                } else {
+                    return fail("a port that is not a number")
+                }
+            } else if state == .File {
+                url.scheme = "file"
+                url.host = .Empty
+                if c == 0x2F || c == 0x5C {
+                    state = .FileSlash
+                } else if base != none && base!.scheme == "file" {
+                    let b = base!
+                    url.host = b.host
+                    url.segments = b.segments
+                    url.query = b.query
+                    if c == 0x3F {
+                        url.query = ""
+                        state = .Query
+                    } else if c == 0x23 {
+                        url.fragment = ""
+                        state = .Fragment
+                    } else if c != -1 {
+                        url.query = none
+                        if !startsWithDriveLetter(p) {
+                            shortenPath(&url)
+                        } else {
+                            url.segments = []
+                        }
+                        state = .Path
+                        p -= 1
+                    }
+                } else {
+                    state = .Path
+                    p -= 1
+                }
+            } else if state == .FileSlash {
+                if c == 0x2F || c == 0x5C {
+                    state = .FileHost
+                } else {
+                    if base != none && base!.scheme == "file" {
+                        let b = base!
+                        url.host = b.host
+                        if !startsWithDriveLetter(p) && !b.segments.isEmpty && isNormalizedDriveLetter(b.segments[0]) {
+                            url.segments.append(b.segments[0])
+                        }
+                    }
+                    state = .Path
+                    p -= 1
+                }
+            } else if state == .FileHost {
+                if c == -1 || c == 0x2F || c == 0x5C || c == 0x3F || c == 0x23 {
+                    p -= 1
+                    if !overriding && buffer.count == 2 && isAsciiAlpha(buffer[0]) && (buffer[1] == 0x3A || buffer[1] == 0x7C) {
+                        // The Windows drive letter quirk: the buffer is the
+                        // path's first segment, which the path state takes.
+                        state = .Path
+                    } else if buffer.isEmpty {
+                        url.host = .Empty
+                        if overriding {
+                            return true
+                        }
+                        state = .PathStart
+                    } else {
+                        guard var host = Host.parse(stringOf(buffer), special: url.isSpecial) else {
+                            return fail("an invalid host")
+                        }
+                        if host == .Domain("localhost") {
+                            host = .Empty
+                        }
+                        url.host = host
+                        if overriding {
+                            return true
+                        }
+                        buffer = []
+                        state = .PathStart
+                    }
+                } else {
+                    buffer.append(c)
+                }
+            } else if state == .PathStart {
+                if url.isSpecial {
+                    state = .Path
+                    if c != 0x2F && c != 0x5C {
+                        p -= 1
+                    }
+                } else if !overriding && c == 0x3F {
+                    url.query = ""
+                    state = .Query
+                } else if !overriding && c == 0x23 {
+                    url.fragment = ""
+                    state = .Fragment
+                } else if c != -1 {
+                    state = .Path
+                    if c != 0x2F {
+                        p -= 1
+                    }
+                } else if overriding && url.host == none {
+                    url.segments.append("")
+                }
+            } else if state == .Path {
+                let slash = c == 0x2F || url.isSpecial && c == 0x5C
+                if c == -1 || slash || !overriding && (c == 0x3F || c == 0x23) {
+                    let segment = stringOf(buffer)
+                    if isDoubleDot(segment) {
+                        shortenPath(&url)
+                        if !slash {
+                            url.segments.append("")
+                        }
+                    } else if isSingleDot(segment) && !slash {
+                        url.segments.append("")
+                    } else if !isSingleDot(segment) {
+                        var kept = segment
+                        if url.scheme == "file" && url.segments.isEmpty && buffer.count == 2 && isAsciiAlpha(buffer[0]) && (buffer[1] == 0x3A || buffer[1] == 0x7C) {
+                            kept = stringOf([buffer[0], 0x3A])
+                        }
+                        url.segments.append(kept)
+                    }
+                    buffer = []
+                    if c == 0x3F {
+                        url.query = ""
+                        state = .Query
+                    }
+                    if c == 0x23 {
+                        url.fragment = ""
+                        state = .Fragment
+                    }
+                } else {
+                    var encoded: U8[>..] = []
+                    PercentEncoding.append(c, .Path, false, &encoded)
+                    for byte in encoded {
+                        buffer.append(Int(byte))
+                    }
+                }
+            } else if state == .OpaquePath {
+                if c == 0x3F {
+                    url.query = ""
+                    state = .Query
+                } else if c == 0x23 {
+                    url.fragment = ""
+                    state = .Fragment
+                } else if c == 0x20 {
+                    let next = codeAt(input, p + 1)
+                    url.opaquePath = url.opaquePath! + (next == 0x3F || next == 0x23 ? "%20" : " ")
+                } else if c != -1 {
+                    var encoded: U8[>..] = []
+                    PercentEncoding.append(c, .C0Control, false, &encoded)
+                    unsafe {
+                        url.opaquePath = url.opaquePath! + String.fromUtf8Unchecked(encoded)
+                    }
+                }
+            } else if state == .Query {
+                if !overriding && c == 0x23 || c == -1 {
+                    let encodeSet: PercentEncodeSet = url.isSpecial ? .SpecialQuery : .Query
+                    var encoded: U8[>..] = []
+                    for code in buffer {
+                        PercentEncoding.append(code, encodeSet, false, &encoded)
+                    }
+                    unsafe {
+                        url.query = (url.query ?? "") + String.fromUtf8Unchecked(encoded)
+                    }
+                    buffer = []
+                    if c == 0x23 {
+                        url.fragment = ""
+                        state = .Fragment
+                    }
+                } else if c != -1 {
+                    buffer.append(c)
+                }
+            } else if state == .Fragment {
+                if c != -1 {
+                    var encoded: U8[>..] = []
+                    PercentEncoding.append(c, .Fragment, false, &encoded)
+                    unsafe {
+                        url.fragment = (url.fragment ?? "") + String.fromUtf8Unchecked(encoded)
+                    }
+                }
+            }
+            // Done once a run leaves the pointer at the end; a state that
+            // stepped it back runs again first.
+            if p >= input.count {
+                return true
+            }
+            p += 1
+        }
+    }
+
+    // The last segment gone — but a file URL's lone drive letter stays.
+    fn shortenPath(_ url: inout Url) {
+        if url.scheme == "file" && url.segments.count == 1 && isNormalizedDriveLetter(url.segments[0]) {
+            return
+        }
+        if !url.segments.isEmpty {
+            url.segments.removeLast()
+        }
+    }
+}
+
+fn isAsciiAlpha(_ c: Int) -> Bool {
+    return c >= 0x41 && c <= 0x5A || c >= 0x61 && c <= 0x7A
+}
+
+fn asciiLower(_ c: Int) -> Int {
+    return c >= 0x41 && c <= 0x5A ? c + 0x20 : c
+}
+
+fn isNormalizedDriveLetter(_ segment: String) -> Bool {
+    let codes = segment.unicodeScalarValues()
+    return codes.count == 2 && isAsciiAlpha(codes[0]) && codes[1] == 0x3A
+}
+
+fn isSingleDot(_ segment: String) -> Bool {
+    return segment == "." || segment.lowercased() == "%2e"
+}
+
+fn isDoubleDot(_ segment: String) -> Bool {
+    let lower = segment.lowercased()
+    return lower == ".." || lower == ".%2e" || lower == "%2e." || lower == "%2e%2e"
+}

@@ -1,0 +1,7 @@
+module Sable.Serialize
+
+/// An object's member, as `Decoder.members()` gives it.
+public struct DecodedMember {
+    public let key: String
+    public let value: Decoder
+}

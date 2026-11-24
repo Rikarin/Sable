@@ -1,0 +1,118 @@
+module Sable.Process
+
+import Sable.IO
+
+/// A program started (`Command.spawn`), and running until it ends by itself
+/// or is ended: Rust's `Child`, .NET's `Process`. Letting go of it neither
+/// ends nor waits for it; the runtime hears of its end either way, so it
+/// never stays a zombie. Deeply immutable, so Sendable: one task may wait
+/// for it and another end it, and any number wait at once.
+///
+/// ```sable
+/// fn firstLine() async throws -> String? {
+///     let child = try Command("sort").stdin(.Piped).stdout(.Piped).spawn()
+///     try await child.stdin!.write("b\na\n")
+///     child.stdin!.close()
+///     var lines = child.stdout!.lines().makeAsyncIterator()
+///     let first = try await lines.next()
+///     let status = try await child.wait()
+///     assert(status.success)
+///     return first
+/// }
+/// ```
+@immutable
+public final class Child {
+    let handle: Int
+
+    /// Its identifier, the system's. Another process's, perhaps, once this
+    /// one has ended: signal it by `kill` and `signal`, which know.
+    public let id: Int
+
+    /// Its standard input, when piped. Not closed by waiting: close it once
+    /// all is written, or a child that reads to its end waits for more.
+    public let stdin: ChildInput?
+
+    /// Its standard output, when piped.
+    public let stdout: ChildOutput?
+
+    /// Its standard error, when piped.
+    public let stderr: ChildOutput?
+
+    init(handle: Int) {
+        self.handle = handle
+        id = Runtime.childId(handle)
+        let input = Runtime.childPipe(handle, 0)
+        stdin = input == 0 ? none : ChildInput(handle: input)
+        let output = Runtime.childPipe(handle, 1)
+        stdout = output == 0 ? none : ChildOutput(handle: output)
+        let errors = Runtime.childPipe(handle, 2)
+        stderr = errors == 0 ? none : ChildOutput(handle: errors)
+    }
+
+    deinit {
+        Runtime.releaseChild(handle)
+    }
+
+    /// How it ended, waiting until it has. A task cancelled while it waits
+    /// throws Cancelled, and the child runs on; so the limit of a wait is
+    /// Sable.Concurrency's `withTimeout`: `try? await withTimeout(limit) {
+    /// try await child.wait() }` is none for one still running then, to be
+    /// waited for again or killed.
+    public fn wait() async throws(ProcessError) -> ExitStatus {
+        while true {
+            if let status = tryWait() {
+                return status
+            }
+            if Task.isCancelled {
+                throw ProcessError.Cancelled
+            }
+            let event = ExitEvent(handle: Runtime.childExitEvent(handle))
+            if event.handle != 0 {
+                await Runtime.waitForSocket(event.handle, writable: false)
+            }
+        }
+    }
+
+    /// How it ended, if it has.
+    public fn tryWait() -> ExitStatus? {
+        if !Runtime.childEnded(handle) {
+            return none
+        }
+        return ExitStatus.of(code: Runtime.childExit(handle, signal: false), signal: Runtime.childExit(handle, signal: true))
+    }
+
+    /// Ended at once, whatever it is doing (SIGKILL; TerminateProcess on
+    /// Windows): whether there was a child to end. `wait` then says how.
+    /// With 'tree', everything it started too, and what they did: the
+    /// processes of the job it was put in on Windows; elsewhere those whose
+    /// parents lead to it, which one whose parent has ended does not.
+    @discardable
+    public fn kill(tree: Bool = false) -> Bool {
+        return Runtime.signalChild(handle, tree ? -1 : Signal.Kill.number) == 0
+    }
+
+    /// The signal sent to it: false when it has ended. Windows has only
+    /// `.Kill` and `.Terminate`, which both end it at once, and throws
+    /// Unsupported for the rest.
+    @discardable
+    public fn signal(_ signal: Signal) throws(ProcessError) -> Bool {
+        let result = signal.number > 0 ? Runtime.signalChild(handle, signal.number) : 2
+        if result == 2 {
+            throw ProcessError.Unsupported
+        }
+        return result == 0
+    }
+}
+
+/// What a wait for a child waits for, let go with the wait.
+final class ExitEvent {
+    let handle: Int
+
+    init(handle: Int) {
+        self.handle = handle
+    }
+
+    deinit {
+        Runtime.closeSocket(handle)
+    }
+}

@@ -1,0 +1,310 @@
+module CommandTests
+
+// Command and Stdio (Sable.Process), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Process
+
+import Sable.Concurrency
+import Sable.IO
+import Sable.Process
+import Sable.Testing
+import Sable.Time
+
+fn sh(_ script: String) -> Command {
+    return Command("sh").arguments(["-c", script])
+}
+
+// A file of its own for the test, which removes it.
+fn scratch(_ name: String) -> String {
+    return "\(Environment.temporaryDirectory)/sable-process-\(Process.id())-\(name)"
+}
+
+fn failure(_ command: Command) -> ProcessError? {
+    do {
+        let _ = try command.spawn()
+        return none
+    } catch {
+        return error
+    }
+}
+
+// ---- What it is given -------------------------------------------------------
+
+@test
+fn aCommandIsAValue() {
+    let one = Command("echo").argument("a")
+    let two = one.arguments(["b", "c"])
+    assertEqual(one.program, "echo")
+    assert(one.argumentList == ["a"])
+    assert(two.argumentList == ["a", "b", "c"])
+}
+
+@test
+fn argumentsReachTheProgramAsTheyAre() async {
+    let odd: String[>..] = ["two words", "", "\"quoted\"", "it's", "*", "$HOME", "a;b", "back\\slash\\", "\\\"", "ünï", "new\nline"]
+    var expected = ""
+    for argument in odd {
+        expected += "<" + argument + ">"
+    }
+    let done = try! await Command("printf").argument("<%s>").arguments(odd).output()
+    assertEqual(done.output, expected)
+}
+
+@test
+fn theEnvironmentIsThisProgramsAndWhatIsSet() async {
+    unsafe {
+        Environment.set("SABLE_COMMAND_INHERITED", "yes")
+        Environment.set("SABLE_COMMAND_REPLACED", "old")
+        Environment.set("SABLE_COMMAND_REMOVED", "old")
+    }
+    let done = try! await sh("echo $SABLE_COMMAND_INHERITED $SABLE_COMMAND_REPLACED $SABLE_COMMAND_ADDED ${SABLE_COMMAND_REMOVED-unset}")
+        .environment("SABLE_COMMAND_REPLACED", "new").environment("SABLE_COMMAND_ADDED", "a=b").removeEnvironment("SABLE_COMMAND_REMOVED").output()
+    assertEqual(done.output, "yes new a=b unset\n")
+    // And this program's own is as it was.
+    assert(Environment.variable("SABLE_COMMAND_REPLACED") == "old")
+    assert(Environment.variable("SABLE_COMMAND_ADDED") == none)
+}
+
+@test
+fn aClearedEnvironmentHasOnlyWhatIsSetAfter() async {
+    let done = try! await Command("env").environment("BEFORE", "1").clearEnvironment().environment("ONLY", "this").output()
+    assertEqual(done.output, "ONLY=this\n")
+    let nothing = try! await Command("env").clearEnvironment().output()
+    assertEqual(nothing.output, "")
+}
+
+@test
+fn aVariableRemovedAndSetAgainIsSet() async {
+    let done = try! await sh("echo $SABLE_COMMAND_AGAIN").removeEnvironment("SABLE_COMMAND_AGAIN").environment("SABLE_COMMAND_AGAIN", "set").output()
+    assertEqual(done.output, "set\n")
+}
+
+@test
+fn itStartsInItsDirectory() async {
+    let done = try! await Command("pwd").workingDirectory("/").output()
+    assertEqual(done.output, "/\n")
+}
+
+@test
+fn aPathIsFoundFromThisProgramsDirectory() async {
+    let name = "sable-process-\(Process.id())-here"
+    var options = OpenOptions.writing
+    options.permissions = 0o755
+    let file = try! File.open(name, options: options)
+    try! file.write("#!/bin/sh\npwd\n".utf8.toArray())
+    file.close()
+    let done = try! await Command("./" + name).workingDirectory("/").output()
+    try! File.remove(name)
+    assertEqual(done.output, "/\n")
+}
+
+@test
+fn itHasNoneOfThisProgramsFiles() async {
+    let before = try! await Command("ls").argument("/dev/fd").output()
+    let path = scratch("open")
+    let file = try! File.open(path, options: .writing)
+    let listener = try! TcpListener.bind(host: "127.0.0.1", port: 0)
+    let other = try! Command("cat").stdin(.Piped).stdout(.Piped).spawn()
+    let after = try! await Command("ls").argument("/dev/fd").output()
+    other.kill()
+    let _ = try! await other.wait()
+    file.close()
+    listener.close()
+    try! File.remove(path)
+    // Its three streams, and what 'ls' opened to look.
+    assert(after.output.contains("2\n") && !after.output.contains("5"), after.output)
+    assertEqual(after.output, before.output)
+}
+
+@test
+fn itsBrokenPipesAreItsOwn() async {
+    // 'yes' ends by SIGPIPE, which it must not have been given ignored.
+    let done = try! await sh("yes | head -n 1").output()
+    assertEqual(done.output, "y\n")
+}
+
+// ---- Its streams --------------------------------------------------------------
+
+@test
+fn nothingIsReadUnlessSaid() async {
+    let done = try! await Command("cat").output()
+    assert(done.succeeded && done.output == "")
+}
+
+@test
+fn aStreamCanBeAFile() async {
+    let input = scratch("in")
+    let output = scratch("out")
+    try! File.writeBytes(input, "from a file".utf8.toArray())
+    let status = try! await Command("cat").stdin(.File(path: input)).stdout(.File(path: output)).status()
+    assert(status.success)
+    assert(try! File.readBytes(output) == "from a file".utf8.toArray())
+    // Emptied as it is opened.
+    let again = try! await sh("printf x").stdout(.File(path: output)).status()
+    assert(again.success)
+    assert(try! File.readBytes(output) == [0x78])
+    try! File.remove(input)
+    try! File.remove(output)
+}
+
+@test
+fn outputAndErrorsToOneFileAreInOrder() async {
+    let path = scratch("both")
+    let status = try! await sh("echo one; echo two >&2; echo three").stdout(.File(path: path)).stderr(.File(path: path)).status()
+    assert(status.success)
+    assert(try! File.readBytes(path) == "one\ntwo\nthree\n".utf8.toArray())
+    try! File.remove(path)
+}
+
+@test
+fn nothingIsKeptOfAStreamThatIsNothing() async {
+    let done = try! await sh("echo out; echo err >&2").stderr(.Null).output()
+    assertEqual(done.output, "out\n")
+    assertEqual(done.errors, "")
+}
+
+@test
+fn aStreamPipedToNoOneIsNothing() async {
+    // Nothing reads them: piped, it would wait for ever.
+    let status = try! await sh("head -c 1000000 /dev/zero").stdin(.Piped).stdout(.Piped).stderr(.Piped).status()
+    assert(status.success)
+}
+
+@test
+fn moreThanAPipeHoldsToBothDoesNotWait() async {
+    let done = try! await sh("head -c 3000000 /dev/zero; head -c 3000000 /dev/zero >&2; head -c 1000 /dev/zero").output()
+    assertEqual(done.outputBytes.count, 3001000)
+    assertEqual(done.errorBytes.count, 3000000)
+}
+
+@test
+fn moreThanAPipeHoldsBothWaysDoesNotWait() async {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < 2_000_000 {
+        bytes.append(U8.truncating(i * 31))
+        i += 1
+    }
+    let done = try! await Command("cat").output(input: bytes)
+    assert(done.outputBytes == bytes)
+}
+
+@test
+fn manyAtOnceAllEnd() async {
+    let running = (0..<20).map { (i: Int) in
+        Task.spawn { try! await sh("echo \(i); head -c 100000 /dev/zero >&2").output() }
+    }
+    var i = 0
+    for task in running {
+        let done = await task.value
+        assertEqual(done.output, "\(i)\n")
+        assertEqual(done.errorBytes.count, 100000)
+        i += 1
+    }
+}
+
+// ---- Why it did not start -------------------------------------------------------
+
+@test
+fn whatIsNotThereIsNotFound() {
+    if let error = failure(Command("surely-not-a-program")) {
+        assertEqual(error.description(), ProcessError.NotFound(program: "surely-not-a-program").description())
+    } else {
+        assert(false)
+    }
+    assertEqual(failure(Command("/surely/not/here"))!.description(), ProcessError.NotFound(program: "/surely/not/here").description())
+    assertEqual(failure(Command(""))!.description(), ProcessError.NotFound(program: "").description())
+}
+
+@test
+fn whatMayNotBeRunIsDenied() {
+    let path = scratch("plain")
+    try! File.writeBytes(path, "#!/bin/sh\n".utf8.toArray())
+    let error = failure(Command(path))
+    try! File.remove(path)
+    assertEqual(error!.description(), ProcessError.PermissionDenied(program: path).description())
+    assertEqual(failure(Command("/"))!.description(), ProcessError.PermissionDenied(program: "/").description())
+}
+
+@test
+fn whatIsNoProgramIsNotExecutable() {
+    // No shell is asked to make something of it.
+    let path = scratch("text")
+    var options = OpenOptions.writing
+    options.permissions = 0o755
+    let file = try! File.open(path, options: options)
+    try! file.write("echo no\n".utf8.toArray())
+    file.close()
+    let error = failure(Command(path))
+    try! File.remove(path)
+    assertEqual(error!.description(), ProcessError.NotExecutable(program: path).description())
+}
+
+@test
+fn aDirectoryThatIsNotThereIsSaidToBe() {
+    assertEqual(failure(Command("true").workingDirectory("/surely/not/here"))!.description(), ProcessError.NoDirectory(path: "/surely/not/here").description())
+}
+
+@test
+fn aFileThatCannotBeOpenedIsSaid() {
+    let read = failure(Command("true").stdin(.File(path: "/surely/not/here")))
+    assertEqual(read!.description(), ProcessError.File(path: "/surely/not/here").description())
+    let written = failure(Command("true").stderr(.File(path: "/surely/not/there")))
+    assertEqual(written!.description(), ProcessError.File(path: "/surely/not/there").description())
+}
+
+@test
+fn whatCannotBeGivenIsRefused() {
+    assertEqual(failure(Command("true").argument("\u{0}"))!.description(), ProcessError.InvalidArgument(text: "\u{0}").description())
+    assertEqual(failure(Command("true").environment("", "x"))!.description(), ProcessError.InvalidArgument(text: "").description())
+    assertEqual(failure(Command("true").environment("A=B", "x"))!.description(), ProcessError.InvalidArgument(text: "A=B").description())
+}
+
+// ---- Cancelled -----------------------------------------------------------------
+
+@test
+fn oneCancelledIsKilled() async {
+    let path = scratch("pid")
+    let running = Task.spawn {
+        do {
+            let _ = try await sh("echo $$ > \(path); exec sleep 60").output()
+            return "ended"
+        } catch {
+            return error.description()
+        }
+    }
+    var id = ""
+    while !id.contains('\n') {
+        try? await Task.sleep(for: Duration.milliseconds(5))
+        id = (try? File.read(path)) ?? ""
+    }
+    running.cancel()
+    assertEqual(await running.value, ProcessError.Cancelled.description())
+    try! File.remove(path)
+    assert(await isGone(id.trimmed()))
+}
+
+@test
+fn aStatusWaitedForTooLongIsKilled() async {
+    do {
+        let _ = try await withTimeout(Duration.milliseconds(50)) { try await Command("sleep").argument("60").status() }
+        assert(false)
+    } catch let error as TimeoutError {
+        assert(error.duration == Duration.milliseconds(50))
+    } catch {
+        assert(false)
+    }
+}
+
+// Whether the process has ended, and been reaped, soon enough.
+fn isGone(_ id: String) async -> Bool {
+    var tries = 0
+    while tries < 400 {
+        let asked = try! await sh("kill -0 \(id)").stderr(.Null).status()
+        if !asked.success {
+            return true
+        }
+        try? await Task.sleep(for: Duration.milliseconds(10))
+        tries += 1
+    }
+    return false
+}

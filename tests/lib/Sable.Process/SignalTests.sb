@@ -1,0 +1,27 @@
+module SignalTests
+
+// Signal (Sable.Process), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Process
+
+import Sable.Process
+import Sable.Testing
+
+@test
+fn everySignalIsTheOneOfItsNumber() {
+    let all: Signal[>..] = [.Hangup, .Interrupt, .Quit, .Abort, .Kill, .SegmentationFault, .Pipe, .Alarm, .Terminate, .User1, .User2, .Child, .Continue, .Stop, .WindowChange]
+    var names: String[>..] = []
+    for signal in all {
+        assert(Signal.of(number: signal.number) == signal)
+        names.append(Signal.of(number: signal.number).name)
+    }
+    assert(names == ["HUP", "INT", "QUIT", "ABRT", "KILL", "SEGV", "PIPE", "ALRM", "TERM", "USR1", "USR2", "CHLD", "CONT", "STOP", "WINCH"])
+}
+
+@test
+fn aNumberNoNameIsForIsItsOwn() {
+    let signal = Signal.of(number: 61)
+    assertEqual(signal.number, 61)
+    assertEqual(signal.name, "61")
+    assert(signal == Signal.Other(number: 61))
+    assert(signal != Signal.Interrupt)
+}

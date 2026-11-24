@@ -1,0 +1,98 @@
+module Sable.Process
+
+/// The signals sent to this program: .NET's `PosixSignalRegistration`,
+/// Tokio's `signal`. A signal listened for no longer does what it did — an
+/// interrupt no longer ends the program — until no one listens.
+///
+/// On Windows, the console's events are read as `.Interrupt` (Ctrl+C),
+/// `.Quit` (Ctrl+Break), `.Hangup` (the window closed) and `.Terminate` (the
+/// system shut down); after the last two the program has a few seconds.
+///
+/// ```sable
+/// // A server that stops when it is asked to.
+/// fn work() async {
+///     while !Task.isCancelled {
+///         await Task.yield()
+///     }
+/// }
+///
+/// fn serve() async throws(ProcessError) {
+///     let stop = try Signals.on([.Interrupt, .Terminate])
+///     let serving = Task.spawn { await work() }
+///     for await signal in stop {
+///         print("stopping: \(signal.name)")
+///         break
+///     }
+///     serving.cancel()
+///     await serving.value
+/// }
+/// ```
+public struct Signals {
+    /// The signal, each time it comes from now on. One sent many times
+    /// before it is taken may come once.
+    ///
+    /// ```sable
+    /// let interrupts = try! Signals.on(.Interrupt)
+    /// assert(Signals.raise(.Interrupt))
+    /// var signals = interrupts.makeAsyncIterator()
+    /// let first = await signals.next()
+    /// assert(first! == Signal.Interrupt)
+    /// ```
+    public static fn on(_ signal: Signal) throws(ProcessError) -> SignalSequence {
+        return try Signals.on([signal])
+    }
+
+    /// The signals, each as it comes from now on. Throws Unsupported for one
+    /// that cannot be caught: `.Kill`, `.Stop`, one that says the program is
+    /// at fault, one the system does not have.
+    public static fn on(_ signals: Signal[>..]) throws(ProcessError) -> SignalSequence {
+        var wanted = 0
+        for signal in signals {
+            if signal.number < 1 || signal.number > 62 {
+                throw ProcessError.Unsupported
+            }
+            wanted = wanted | (1 << signal.number)
+        }
+        let watch = Runtime.watchSignals(wanted)
+        if watch == 0 {
+            throw ProcessError.Unsupported
+        }
+        return SignalSequence(watch: watch)
+    }
+
+    /// The body run, in a task of its own, each time the signal comes, until
+    /// the registration is cancelled or let go.
+    public static fn handle(_ signal: Signal, _ body: @Sendable async (Signal) -> Void) throws(ProcessError) -> SignalRegistration {
+        let signals = try Signals.on(signal)
+        return SignalRegistration(task: Task.detached {
+            for await signal in signals {
+                await body(signal)
+            }
+        })
+    }
+
+    /// The signal sent to this program itself: whether it could be.
+    @discardable
+    public static fn raise(_ signal: Signal) -> Bool {
+        return signal.number > 0 && Runtime.raiseSignal(signal.number)
+    }
+}
+
+/// A signal's handler, registered until it is cancelled or let go
+/// (`Signals.handle`).
+public final class SignalRegistration {
+    let task: Task<Void>
+
+    init(task: Task<Void>) {
+        self.task = task
+    }
+
+    deinit {
+        task.cancel()
+    }
+
+    /// The handler is not run again.
+    public fn cancel() {
+        task.cancel()
+    }
+}

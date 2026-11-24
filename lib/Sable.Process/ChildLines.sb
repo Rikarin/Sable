@@ -1,0 +1,81 @@
+module Sable.Process
+
+import Sable.IO
+import Sable.Text
+
+/// The lines a child writes, as it writes them, for 'for try await'
+/// (`ChildOutput.lines()`): each without its '\n' or '\r\n'.
+public struct ChildLines: AsyncSequence {
+    public alias Element = String
+    public alias Failure = IoError
+    public alias Iter = ChildLinesIterator
+
+    let output: ChildOutput
+
+    init(output: ChildOutput) {
+        self.output = output
+    }
+
+    /// What goes through them.
+    public fn makeAsyncIterator() -> ChildLinesIterator {
+        return ChildLinesIterator(output: output)
+    }
+}
+
+/// What goes through a child's lines.
+public struct ChildLinesIterator: AsyncIterator {
+    public alias Element = String
+    public alias Failure = IoError
+
+    let output: ChildOutput
+    // Read and not given: 'from' on.
+    var buffered: U8[>..]
+    var from: Int
+    var ended: Bool
+
+    init(output: ChildOutput) {
+        self.output = output
+        self.buffered = []
+        self.from = 0
+        self.ended = false
+    }
+
+    /// The next line, waiting for it; none after the last.
+    public mutating fn next() async throws(IoError) -> String? {
+        var looked = from
+        while true {
+            if let at = buffered[looked...].firstIndex(of: 10) {
+                let end = looked + at
+                let line = text(to: end)
+                from = end + 1
+                return line
+            }
+            if ended {
+                let last: String? = from < buffered.count ? text(to: buffered.count) : none
+                from = buffered.count
+                return last
+            }
+            let bytes = try await output.read(upTo: 65536)
+            if bytes.isEmpty {
+                ended = true
+            } else if from == buffered.count {
+                buffered = bytes
+                from = 0
+                looked = 0
+            } else {
+                // What was given goes as more comes; what was looked through
+                // is not looked through again.
+                looked = buffered.count - from
+                var rest = buffered[from...].toArray()
+                rest.append(contentsOf: bytes)
+                buffered = rest
+                from = 0
+            }
+        }
+    }
+
+    fn text(to end: Int) -> String {
+        let cut = end > from && buffered[end - 1] == 13 ? end - 1 : end
+        return String.fromUtf8Lossy(buffered[from..<cut])
+    }
+}

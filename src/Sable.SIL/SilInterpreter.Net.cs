@@ -42,12 +42,13 @@ public sealed partial class SilInterpreter {
     long Failed(SocketException e) => _netStatus = e.SocketErrorCode is SocketError.WouldBlock or SocketError.InProgress or SocketError.TryAgain ? 1 : 2;
 
     object? Net(string name, object?[] operands) {
-        if (Sandbox is not null) {
-            throw new SilTrap("a build script may not use the network");
+        // A pipe to a child, or what is not a socket at all (SilInterpreter.Processes.cs).
+        if (SourceCall(name, operands, out var answer)) {
+            return answer;
         }
 
-        if (name == "net_status") {
-            return _netStatus;
+        if (Sandbox is not null) {
+            throw new SilTrap("a build script may not use the network");
         }
 
         _netStatus = 0;
@@ -174,6 +175,10 @@ public sealed partial class SilInterpreter {
     ///     way: not when it is, nor when it is closed.
     /// </summary>
     bool IoWait(object? handle, bool writable) {
+        if (SourceWait((long)handle!, writable, out var waits)) {
+            return waits;
+        }
+
         if (SocketOf(handle) is not { } source || Ready(source, writable)) {
             return false;
         }
@@ -211,7 +216,7 @@ public sealed partial class SilInterpreter {
 
     /// <summary>A task cancelled, or dropped, while it waits for a socket: woken, or forgotten.</summary>
     void IoCancel(InterpretedTask task, bool resume) {
-        var removed = _ioWaiters.RemoveAll(w => ReferenceEquals(w.Task, task));
+        var removed = _ioWaiters.RemoveAll(w => ReferenceEquals(w.Task, task)) + _sourceWaiters.RemoveAll(w => ReferenceEquals(w.Task, task));
         if (removed > 0 && resume) {
             Enqueue(task);
         }

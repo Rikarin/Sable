@@ -1,0 +1,51 @@
+module Sable.Process
+
+/// Signals as they come, for 'for await' (`Signals.on`): without end, until
+/// the task going through it is cancelled. Listening lasts as long as it
+/// does. One task at a time may wait for the next. Waiting for a signal
+/// keeps no program going once its main has returned.
+@immutable
+public final class SignalSequence: AsyncSequence {
+    public alias Element = Signal
+    public alias Iter = SignalIterator
+
+    let watch: Int
+
+    init(watch: Int) {
+        self.watch = watch
+    }
+
+    deinit {
+        Runtime.unwatchSignals(watch)
+    }
+
+    /// What goes through them: those that came and were not yet taken first.
+    public fn makeAsyncIterator() -> SignalIterator {
+        return SignalIterator(signals: self)
+    }
+}
+
+/// What goes through the signals as they come.
+public struct SignalIterator: AsyncIterator {
+    public alias Element = Signal
+
+    let signals: SignalSequence
+
+    init(signals: SignalSequence) {
+        self.signals = signals
+    }
+
+    /// The next signal, waiting for it; none once the task is cancelled.
+    public mutating fn next() async -> Signal? {
+        while true {
+            let number = Runtime.takeSignal(signals.watch)
+            if number != 0 {
+                return Signal.of(number: number)
+            }
+            if Task.isCancelled {
+                return none
+            }
+            await Runtime.waitForSocket(Runtime.signalEvent(signals.watch), writable: false)
+        }
+    }
+}

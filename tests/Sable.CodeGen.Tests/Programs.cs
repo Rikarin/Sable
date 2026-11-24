@@ -89,11 +89,19 @@ internal static class Programs {
         var (output, errors, trap) = Interpret(source, stepLimit, input, arguments ?? []);
         afterEach?.Invoke("interpreter");
         if (!CanBuild || !NativeMode.Wanted) {
-            return new(output, errors + trap?.Report, trap is null ? 0 : 134);
+            return new(output, errors + trap?.Report, trap is { Exits: true } ? trap.ExitStatus : trap is null ? 0 : 134);
         }
 
         var native = BuildAndRun(source, input: input, arguments: arguments, environment: environment);
         afterEach?.Invoke("native");
+        if (trap is { Exits: true }) {
+            // It ended itself, which is no trap.
+            Assert.Equal(trap.ExitStatus, native.ExitCode);
+            Assert.Equal(output, native.Stdout);
+            Assert.Equal(errors, native.Stderr);
+            return native;
+        }
+
         Assert.True(
             (trap is null) == (native.ExitCode == 0),
             $"the interpreter {(trap is null ? "ran to the end" : $"trapped: {trap.Message}")}, "

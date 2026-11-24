@@ -520,6 +520,24 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_process_run(ptr, ptr, ptr)
                                 declare i64 @sable_process_status()
                                 declare ptr @sable_process_error_output()
+                                declare i64 @sable_process_status_signal()
+                                declare i64 @sable_process_error()
+                                declare i64 @sable_process_error_code()
+                                declare i64 @sable_process_spawn(ptr, ptr, ptr, i64, ptr, ptr)
+                                declare i64 @sable_process_pipe(i64, i64)
+                                declare i64 @sable_process_child_id(i64)
+                                declare zeroext i1 @sable_process_ended(i64)
+                                declare i64 @sable_process_exit_code(i64, i1 zeroext)
+                                declare i64 @sable_process_exit_event(i64)
+                                declare i64 @sable_process_signal(i64, i64)
+                                declare void @sable_process_release(i64)
+                                declare void @sable_process_exit(i64)
+                                declare void @sable_process_abort()
+                                declare i64 @sable_signal_watch(i64)
+                                declare i64 @sable_signal_event(i64)
+                                declare i64 @sable_signal_take(i64)
+                                declare void @sable_signal_unwatch(i64)
+                                declare zeroext i1 @sable_signal_raise(i64)
                                 declare ptr @sable_process_current_directory()
                                 declare ptr @sable_process_executable_path()
                                 declare zeroext i1 @sable_process_change_directory(ptr)
@@ -4644,7 +4662,35 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call ptr @sable_process_run(ptr {operands[0]}, ptr {operands[1]}, ptr {operands[2]})");
                     return;
 
-                case "process_status" or "process_id" or "memory_allocations":
+                case "process_spawn":
+                    Line($"{Result()} = call i64 @sable_process_spawn(ptr {operands[0]}, ptr {operands[1]}, ptr {operands[2]}, i64 {operands[3]}, ptr {operands[4]}, ptr {operands[5]})");
+                    return;
+
+                case "process_pipe" or "process_signal":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(i64 {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                case "process_exit_code":
+                    Line($"{Result()} = call i64 @sable_process_exit_code(i64 {operands[0]}, i1 zeroext {operands[1]})");
+                    return;
+
+                case "process_child_id" or "process_exit_event" or "signal_watch" or "signal_event" or "signal_take":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(i64 {operands[0]})");
+                    return;
+
+                case "process_ended" or "signal_raise":
+                    Line($"{Result()} = call zeroext i1 @sable_{builtin.Name}(i64 {operands[0]})");
+                    return;
+
+                case "process_release" or "process_exit" or "signal_unwatch":
+                    Line($"call void @sable_{builtin.Name}(i64 {operands[0]})");
+                    return;
+
+                case "process_abort":
+                    Line("call void @sable_process_abort()");
+                    return;
+
+                case "process_status" or "process_status_signal" or "process_error" or "process_error_code" or "process_id" or "memory_allocations":
                     Line($"{Result()} = call i64 @sable_{builtin.Name}()");
                     return;
 

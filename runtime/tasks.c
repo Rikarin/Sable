@@ -134,6 +134,7 @@ typedef struct SableTask {
     void *pending_on;                // what it waits for
     int32_t pending;                 // PENDING_*
     int32_t io_direction;            // PENDING_IO: 0 to read, 1 to write
+    bool io_background;              // and what it waits for is a background event
     void *io_source;                 // the socket it waits on, or NULL; under the source's lock
     void (*blocking_run)(void *context); // PENDING_BLOCKING: the work, and what it is given
     void *blocking_context;
@@ -396,6 +397,8 @@ static int32_t polling;
 // Tasks waiting for a socket, and tasks whose blocking work is on the
 // blocking pool: neither is queued or asleep, but each will go on.
 static int64_t io_waiting, blocking_running;
+// Waiting for a background event, which alone keeps no program going.
+static int64_t background_waiting;
 
 // The blocking pool's queue (below).
 static PlatformMutex blocking_lock;
@@ -860,9 +863,19 @@ static void wake_sleepers(void) {
 // the old socket finds a source that is still memory, where at worst it
 // marks the new socket ready for nothing — whose call then finds it would
 // block, and waits.
+//
+// A source may be a pipe (a child's stream) rather than a socket; or an
+// event, which the reactor does not watch: reactor_ready says when it
+// happens (a child ended, a signal came). A background event is one that
+// may never happen, and the program need not wait for: one the main task
+// waits for is waited for, but a program whose main has returned ends,
+// whatever other tasks still wait for one.
+enum { SOURCE_SOCKET, SOURCE_PIPE, SOURCE_EVENT, SOURCE_BACKGROUND };
+
 typedef struct IoSource {
     SpinLock lock;
-    PlatformSocket socket;      // -1 once closed
+    PlatformSocket socket;      // or the pipe; -1 once closed
+    uint8_t kind;               // SOURCE_*
     int32_t port;               // a listener's, as bound
     uint16_t generation;
     uint8_t ready;              // REACTOR_* reported and not yet used up
@@ -912,13 +925,21 @@ static void io_source_free(IoSource *source) {
     spin_unlock(&sources_lock);
 }
 
+static void source_close(PlatformSocket socket, uint8_t kind) {
+    if (kind == SOURCE_SOCKET) {
+        socket_close(socket);
+    } else if (kind == SOURCE_PIPE) {
+        pipe_close(socket);
+    }
+}
+
 // The socket watched from now on: its handle, or 0 — the socket closed —
 // when the reactor will not take it. 'ready' is what it is taken to be
 // ready for until the reactor says more: both, to be tried first; for a
 // connection still being made, not writing.
-static int64_t io_source_open(PlatformSocket socket, uint8_t ready) {
+static int64_t io_source_open(PlatformSocket socket, uint8_t kind, uint8_t ready) {
     if (!reactor_start()) {
-        socket_close(socket);
+        source_close(socket, kind);
         return 0;
     }
 
@@ -938,17 +959,19 @@ static int64_t io_source_open(PlatformSocket socket, uint8_t ready) {
 
     spin_lock(&source->lock);
     __atomic_store_n(&source->socket, socket, __ATOMIC_RELEASE);
+    source->kind = kind;
     source->port = 0;
     source->ready = ready;
     source->waiter[0] = source->waiter[1] = NULL;
     int64_t handle = source_handle(source);
     spin_unlock(&source->lock);
-    if (!reactor_add(socket, source)) {
+    bool watched = kind == SOURCE_SOCKET ? reactor_add(socket, source) : kind == SOURCE_PIPE ? pipe_watch(socket, source) : true;
+    if (!watched) {
         spin_lock(&source->lock);
         __atomic_store_n(&source->socket, -1, __ATOMIC_RELEASE);
         __atomic_store_n(&source->generation, (uint16_t)(source->generation + 1), __ATOMIC_RELEASE);
         spin_unlock(&source->lock);
-        socket_close(socket);
+        source_close(socket, kind);
         io_source_free(source);
         return 0;
     }
@@ -960,7 +983,7 @@ static int64_t io_source_open(PlatformSocket socket, uint8_t ready) {
 // waiting, so the program never looks finished between.
 static void io_resume(SableTask *task) {
     __atomic_fetch_add(&active, 1, __ATOMIC_SEQ_CST);
-    __atomic_fetch_sub(&io_waiting, 1, __ATOMIC_SEQ_CST);
+    __atomic_fetch_sub(task->io_background ? &background_waiting : &io_waiting, 1, __ATOMIC_SEQ_CST);
     schedule(task);
     active_done();
 }
@@ -991,13 +1014,19 @@ static void io_source_close(int64_t handle) {
     }
 
     PlatformSocket socket = source->socket;
+    uint8_t kind = source->kind;
     __atomic_store_n(&source->socket, -1, __ATOMIC_RELEASE);
     __atomic_store_n(&source->generation, (uint16_t)(source->generation + 1), __ATOMIC_RELEASE);
     SableTask *reader = io_take_waiter(source, 0);
     SableTask *writer = io_take_waiter(source, 1);
     spin_unlock(&source->lock);
-    reactor_remove(socket);
-    socket_close(socket);
+    if (kind == SOURCE_SOCKET) {
+        reactor_remove(socket);
+    } else if (kind == SOURCE_PIPE) {
+        pipe_unwatch(socket);
+    }
+
+    source_close(socket, kind);
     if (reader != NULL) {
         io_resume(reader);
     }
@@ -1048,6 +1077,34 @@ static void io_ready(IoSource *source, int events) {
         if (woken[direction] != NULL) {
             io_resume(woken[direction]);
         }
+    }
+}
+
+static void reactor_ready(void *key, int events) {
+    io_ready(key, events);
+}
+
+// An event that has not happened: its handle, or 0. No reactor watches it,
+// but waiting for one is as waiting for a socket is, and the thread it
+// happens on may be any: io_event says it has.
+static int64_t io_event_open(bool background) {
+    return io_source_open(0, background ? SOURCE_BACKGROUND : SOURCE_EVENT, 0);
+}
+
+static void io_event(int64_t handle) {
+    IoSource *source = source_of(handle);
+    if (source != NULL) {
+        reactor_ready(source, REACTOR_READABLE);
+    }
+}
+
+// The event is to happen again before a task waiting for it goes on.
+static void io_event_reset(int64_t handle) {
+    IoSource *source = source_of(handle);
+    if (source != NULL) {
+        spin_lock(&source->lock);
+        source->ready = 0;
+        spin_unlock(&source->lock);
     }
 }
 
@@ -1111,8 +1168,9 @@ bool sable_task_io_wait(int64_t handle, bool writable) {
 // the socket became ready, or closed, or the task was cancelled, meanwhile.
 static void io_wait_after_suspend(SableTask *task, IoSource *source) {
     int direction = task->io_direction;
-    __atomic_fetch_add(&io_waiting, 1, __ATOMIC_SEQ_CST);
     spin_lock(&source->lock);
+    task->io_background = source->kind == SOURCE_BACKGROUND;
+    __atomic_fetch_add(task->io_background ? &background_waiting : &io_waiting, 1, __ATOMIC_SEQ_CST);
     bool go_on = (source->ready & (direction == 0 ? REACTOR_READABLE : REACTOR_WRITABLE)) != 0 || source->socket == -1
                  || __atomic_load_n(&task->cancelled, __ATOMIC_ACQUIRE);
     if (!go_on) {
@@ -1152,7 +1210,7 @@ static void io_cancel(SableTask *task, bool resume) {
     if (taken && resume) {
         io_resume(task);
     } else if (taken) {
-        __atomic_fetch_sub(&io_waiting, 1, __ATOMIC_SEQ_CST);
+        __atomic_fetch_sub(task->io_background ? &background_waiting : &io_waiting, 1, __ATOMIC_SEQ_CST);
     }
 }
 
@@ -2212,7 +2270,7 @@ static void main_loop(SableTask *until) {
         mutex_lock(&park_lock);
         __atomic_store_n(&main_waiting, 1, __ATOMIC_SEQ_CST);
         bool idle = worker_count <= 0 ? __atomic_load_n(&queued, __ATOMIC_SEQ_CST) == 0 : __atomic_load_n(&main_head, __ATOMIC_SEQ_CST) == NULL;
-        if (idle && quiescent()) {
+        if (idle && quiescent() && (until == NULL || __atomic_load_n(&background_waiting, __ATOMIC_SEQ_CST) == 0)) {
             __atomic_store_n(&main_waiting, 0, __ATOMIC_SEQ_CST);
             mutex_unlock(&park_lock);
             if (until != NULL) {
@@ -2275,6 +2333,8 @@ static void drop_task(SableTask *task) {
     spin_unlock(&tree_lock);
 }
 
+static void signals_stop(void);
+
 // As the entry point returns: every task still to run, run, the sleepers
 // too; then every task still waiting, which nothing will ever wake, dropped.
 void sable_tasks_drain(void) {
@@ -2282,6 +2342,11 @@ void sable_tasks_drain(void) {
         return;
     }
 
+    main_loop(NULL);
+
+    // A signal may have come as the last task stopped: no more are told of,
+    // and what the last woke runs, before any task waiting is dropped.
+    signals_stop();
     main_loop(NULL);
 
     spin_lock(&tree_lock);

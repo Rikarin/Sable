@@ -375,6 +375,9 @@ static int64_t thread_sum(size_t offset) {
     return sum;
 }
 
+// The program ended by Process.exit: what it left alive is no leak.
+static bool process_exiting;
+
 static int64_t live_object_count(void) {
     return thread_sum(offsetof(SableThread, live_objects));
 }
@@ -408,7 +411,7 @@ SABLE_AT_EXIT(sable_report) {
     forget_immortal_reach();
 
     int64_t live_objects = live_object_count();
-    if (live_objects != 0 && getenv("SABLE_CHECK_LEAKS") != NULL) {
+    if (live_objects != 0 && !process_exiting && getenv("SABLE_CHECK_LEAKS") != NULL) {
         fflush(stdout);
         fprintf(stderr, "sable: %lld object(s) leaked\n", (long long)live_objects);
         if (tracking) {

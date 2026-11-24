@@ -3,6 +3,9 @@
 
 // ---- Sockets -----------------------------------------------------------------
 
+// A child's streams (process.c) are read, written and closed by the same
+// calls: pipes, watched by the reactor as sockets are.
+//
 // Every socket is nonblocking and watched by the reactor (tasks.c's
 // IoSource), named by the source's handle. A call that would block gives
 // what says so — net_status 1 — and the library waits for the socket to
@@ -46,7 +49,7 @@ int64_t sable_net_listen(const SableString *host, int64_t port) {
         return 0;
     }
 
-    int64_t handle = io_source_open(socket, REACTOR_READABLE | REACTOR_WRITABLE);
+    int64_t handle = io_source_open(socket, SOURCE_SOCKET, REACTOR_READABLE | REACTOR_WRITABLE);
     net_last_status = handle == 0 ? NET_FAILED : NET_DONE;
     if (handle != 0) {
         IoSource *source = source_of(handle);
@@ -83,7 +86,7 @@ int64_t sable_net_accept(int64_t handle) {
         return 0;
     }
 
-    int64_t accepted = io_source_open(socket, REACTOR_READABLE | REACTOR_WRITABLE);
+    int64_t accepted = io_source_open(socket, SOURCE_SOCKET, REACTOR_READABLE | REACTOR_WRITABLE);
     net_last_status = accepted == 0 ? NET_FAILED : NET_DONE;
     return accepted;
 }
@@ -100,7 +103,7 @@ int64_t sable_net_connect(const SableString *host, int64_t port) {
     }
 
     // Not writable until the connection is made: the reactor says when.
-    int64_t handle = io_source_open(socket, REACTOR_READABLE);
+    int64_t handle = io_source_open(socket, SOURCE_SOCKET, REACTOR_READABLE);
     net_last_status = handle == 0 ? NET_FAILED : NET_DONE;
     return handle;
 }
@@ -126,7 +129,8 @@ SableArray *sable_net_read(int64_t handle, int64_t most, const SableMetadata *ty
     }
 
     uint64_t ticks = io_ticks(source, 0);
-    int64_t got = socket_read(__atomic_load_n(&source->socket, __ATOMIC_ACQUIRE), buffer, most);
+    PlatformSocket from = __atomic_load_n(&source->socket, __ATOMIC_ACQUIRE);
+    int64_t got = source->kind == SOURCE_PIPE ? pipe_read(from, buffer, most) : socket_read(from, buffer, most);
     if (got == IO_WOULD_BLOCK) {
         io_would_block(source, 0, ticks);
     }
@@ -158,7 +162,9 @@ int64_t sable_net_write(int64_t handle, const SableArray *buffer, int64_t start,
     }
 
     uint64_t ticks = io_ticks(source, 1);
-    int64_t sent = socket_write(__atomic_load_n(&source->socket, __ATOMIC_ACQUIRE), slice_bytes(buffer, start), count);
+    PlatformSocket to = __atomic_load_n(&source->socket, __ATOMIC_ACQUIRE);
+    const void *bytes = slice_bytes(buffer, start);
+    int64_t sent = source->kind == SOURCE_PIPE ? pipe_write(to, bytes, count) : socket_write(to, bytes, count);
     if (sent == IO_WOULD_BLOCK) {
         io_would_block(source, 1, ticks);
     }

@@ -4114,6 +4114,40 @@ public sealed partial class Binder {
     /// <summary>Added to a read-only subscript's cost where it is stored through, so that any that fits and can store wins.</summary>
     const int ReadOnlySubscriptCost = 1 << 20;
 
+    /// <summary>What an argument whose shape alone the parameter's type cannot be costs: more than any conversion, so another overload that takes it wins.</summary>
+    const int MisshapenArgumentCost = 1 << 16;
+
+    /// <summary>
+    ///     True for an argument that waits for its parameter's type and could
+    ///     not be bound to it whatever is in it: an array literal where a
+    ///     struct, a class or a union is wanted, a leading dot where an array
+    ///     is. <c>on([.Interrupt, .Quit])</c> means the <c>on</c> that takes
+    ///     an array, and <c>on(.Interrupt)</c> the other.
+    /// </summary>
+    static bool IsMisshapen(ExpressionSyntax? argument, TypeSymbol wanted) {
+        while (argument is ParenthesizedExpressionSyntax parenthesized) {
+            argument = parenthesized.Expression;
+        }
+
+        var type = Expand(wanted);
+        while (type is OptionalTypeSymbol optional) {
+            // '.Some(x)' and '.None' are any optional's.
+            if (argument is not ArrayExpressionSyntax
+                && (argument is InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax called } ? called : argument)
+                is ImplicitMemberAccessExpressionSyntax { Name: IdentifierNameSyntax { Identifier.Text: "Some" or "None" } }) {
+                return false;
+            }
+
+            type = Expand(optional.UnderlyingType);
+        }
+
+        return argument switch {
+            ArrayExpressionSyntax => type is NamedTypeSymbol { IsFlags: false, TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Union or TypeKind.Enum },
+            ImplicitMemberAccessExpressionSyntax or InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax } => type is ArrayTypeSymbol,
+            _ => false,
+        };
+    }
+
     /// <summary>Of two subscripts, the one with no setter, when the other has one; null when both or neither do.</summary>
     static FunctionSymbol? ReadOnlyOfTwo(FunctionSymbol first, FunctionSymbol second) =>
         (BoundIndexAccess.HasSetter(first), BoundIndexAccess.HasSetter(second)) switch {
@@ -5348,7 +5382,13 @@ public sealed partial class Binder {
 
                 var expected = slots[i] < resolved.Parameters.Length
                     ? substitution.Apply(resolved.Parameters[slots[i]].Type)
-                    : null;
+                    : resolved.Parameters is [.., { IsVariadic: true } rest] ? substitution.Apply(rest.Type) : null;
+
+                // Each of a variadic parameter's arguments is one of its elements.
+                if (expected is ArrayTypeSymbol elements && (slots[i] >= resolved.Parameters.Length || resolved.Parameters[slots[i]].IsVariadic)) {
+                    expected = elements.ElementType;
+                }
+
                 rebound[i] = slots[i] < resolved.Parameters.Length && resolved.Parameters[slots[i]].IsAutoclosure
                              && expected is FunctionTypeSymbol { ParameterTypes.IsEmpty: true } lazyType
                     ? BindAutoclosure(syntaxes[i], lazyType)
@@ -6468,6 +6508,9 @@ public sealed partial class Binder {
             }
 
             cost += Conversions.Cost(conversion.Value);
+            if (arguments[i] is BoundUnboundClosure unbound && IsMisshapen(unbound.Syntax as ExpressionSyntax, wanted)) {
+                cost += MisshapenArgumentCost;
+            }
         }
 
         // A candidate whose constraints the inferred arguments do not meet is
@@ -7043,6 +7086,11 @@ public sealed partial class Binder {
         // '[.Read, .Write]' where a '@flags' enum is wanted: the flags, together.
         if (Expand(expectedType) is NamedTypeSymbol { IsFlags: true } flags) {
             return BindFlags(syntax, flags);
+        }
+
+        // An optional array's literal is the array's, then wrapped.
+        if (expectedType is OptionalTypeSymbol { UnderlyingType: ArrayTypeSymbol wrapped }) {
+            expectedType = wrapped;
         }
 
         expectedType = TheCaseOf(expectedType, static t => t is ArrayTypeSymbol);

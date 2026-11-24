@@ -1,0 +1,59 @@
+module Sable.Process
+
+/// How a program ended: Rust's `ExitStatus`.
+///
+/// ```sable
+/// let status = ExitStatus(code: 3)
+/// assert(status.code == 3 && status.signal == none && !status.success)
+/// assert(status.description() == "exit status 3")
+/// ```
+public struct ExitStatus: Equatable {
+    /// The status it ended with; none when a signal ended it.
+    public let code: Int?
+    /// The signal that ended it; none when it ended by itself, and always
+    /// on Windows, where a program killed ends with status 1.
+    public let signal: Signal?
+
+    /// Ended by itself, with the status.
+    public init(code: Int) {
+        self.code = code
+        self.signal = none
+    }
+
+    /// Ended by the signal.
+    public init(signal: Signal) {
+        self.code = none
+        self.signal = signal
+    }
+
+    // As the runtime has it: 128 and the signal for one a signal ended.
+    static fn of(code: Int, signal: Int) -> ExitStatus {
+        return signal == 0 ? ExitStatus(code: code) : ExitStatus(signal: Signal.of(number: signal))
+    }
+
+    /// Whether it ended by itself with status 0.
+    public var success: Bool => code == 0
+
+    /// The status as a shell gives it: 128 and the signal, when one ended it.
+    public var shellStatus: Int {
+        get {
+            if let signal = signal {
+                return 128 + signal.number
+            }
+            return code ?? 0
+        }
+    }
+
+    /// "exit status 3", or "signal TERM".
+    public fn description() -> String {
+        if let signal = signal {
+            return "signal \(signal.name)"
+        }
+        return "exit status \(shellStatus)"
+    }
+
+    /// Ended the same way.
+    public operator == (left: ExitStatus, right: ExitStatus) -> Bool {
+        return left.code == right.code && left.shellStatus == right.shellStatus
+    }
+}

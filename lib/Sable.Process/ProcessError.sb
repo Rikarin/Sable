@@ -1,14 +1,76 @@
 module Sable.Process
 
+import Sable.IO
+
 /// Why a program could not be run: an Error, so a bare 'throws' can throw it.
 public union ProcessError: Error {
     /// Nothing by that name could be started: not a path, and not on PATH.
     NotFound(program: String),
 
-    /// What could not be run.
+    /// The system does not let this user run it.
+    PermissionDenied(program: String),
+
+    /// It is there, and not a program the system can run: a script without
+    /// a '#!' line, or a batch file, which only a shell runs — give the
+    /// shell as the program.
+    NotExecutable(program: String),
+
+    /// The directory it was to start in is not there.
+    NoDirectory(path: String),
+
+    /// The file one of its streams was to be could not be opened.
+    File(path: String),
+
+    /// An argument, or a variable's name or value, the system cannot give a
+    /// program: it has a NUL in it, or a name has '='.
+    InvalidArgument(text: String),
+
+    /// Not on this system: programs under WASI, a signal Windows has not.
+    Unsupported,
+
+    /// The task was cancelled while it waited.
+    Cancelled,
+
+    /// Its streams could not be read or written.
+    Io(error: IoError),
+
+    /// Any other failure the system reports, with its own code: errno on
+    /// POSIX, GetLastError on Windows.
+    Os(program: String, code: Int),
+
+    /// What could not be run, or done.
     public fn description() -> String {
         return match self {
-            case .NotFound(let program) => "no program '\(program)' could be started"
+            case .NotFound(let program)         => "no program '\(program)' could be started"
+            case .PermissionDenied(let program) => "'\(program)' may not be run"
+            case .NotExecutable(let program)    => "'\(program)' is not a program the system can run"
+            case .NoDirectory(let path)         => "no directory '\(path)' to start a program in"
+            case .File(let path)                => "'\(path)' could not be opened for a program's stream"
+            case .InvalidArgument(let text)     => "'\(text)' cannot be given to a program"
+            case .Unsupported                   => "this system cannot do that"
+            case .Cancelled                     => "the task was cancelled"
+            case .Io(let error)                 => error.description()
+            case .Os(let program, let code)     => "'\(program)' could not be started: the system's error \(code)"
+        }
+    }
+
+    // Why the runtime's last start failed.
+    static fn last(program: String, directory: String, files: String[>..]) -> ProcessError {
+        return match Runtime.processError() {
+            case 1 => ProcessError.NotFound(program: program)
+            case 2 => ProcessError.PermissionDenied(program: program)
+            case 3 => ProcessError.NoDirectory(path: directory)
+            case 4 => ProcessError.NotExecutable(program: program)
+            case 5 => ProcessError.File(path: files[Runtime.processErrorCode()])
+            case 6 => ProcessError.Unsupported
+            case _ => ProcessError.Os(program: program, code: Runtime.processErrorCode())
+        }
+    }
+
+    // A NUL would cut what it is in short: refused, rather than run with less.
+    static fn check(_ text: String) throws(ProcessError) {
+        if text.contains('\u{0}') {
+            throw ProcessError.InvalidArgument(text: text)
         }
     }
 }

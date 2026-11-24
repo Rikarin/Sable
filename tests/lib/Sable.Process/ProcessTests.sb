@@ -1,0 +1,82 @@
+module ProcessTests
+
+// Process (Sable.Process), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Process
+
+import Sable.Process
+import Sable.Testing
+
+@test
+fn aProgramRunGivesWhatItWroteAndHowItEnded() {
+    let done = try! Process.run("sh", ["-c", "echo out; echo err >&2; exit 3"])
+    assertEqual(done.output, "out\n")
+    assertEqual(done.errors, "err\n")
+    assertEqual(done.outputBytes.count, 4)
+    assertEqual(done.errorBytes.count, 4)
+    assert(done.status.code == 3)
+    assert(!done.succeeded)
+}
+
+@test
+fn aProgramRunReadsItsInput() {
+    assertEqual(try! Process.run("cat", [], input: "héllo").output, "héllo")
+}
+
+@test
+fn inputAndOutputLargerThanAPipeDoNotWaitForEachOther() {
+    // Read as it is written, or 'cat' stops reading: its output is full.
+    var text = ""
+    while text.utf8Count < 2_000_000 {
+        text += "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\n"
+    }
+    assert(try! Process.run("cat", [], input: text).output == text)
+}
+
+@test
+fn aProgramThatReadsNoInputIsNoTrouble() {
+    var text = ""
+    while text.utf8Count < 1_000_000 {
+        text += "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\n"
+    }
+    assert(try! Process.run("true", [], input: text).succeeded)
+}
+
+@test
+fn aProgramASignalEndedSaysWhich() {
+    let done = try! Process.run("sh", ["-c", "kill -TERM $$"])
+    assert(done.status == ExitStatus(signal: .Terminate))
+}
+
+@test
+fn whatIsNoProgramIsNotFound() {
+    do {
+        let _ = try Process.run("surely-not-a-program-here", [])
+        assert(false)
+    } catch .NotFound(let program) {
+        assertEqual(program, "surely-not-a-program-here")
+    } catch {
+        assert(false)
+    }
+}
+
+@test
+fn aNulInAnArgumentIsRefused() {
+    do {
+        let _ = try Process.run("echo", ["a\u{0}b"])
+        assert(false)
+    } catch .InvalidArgument(let text) {
+        assertEqual(text.count, 3)
+    } catch {
+        assert(false)
+    }
+}
+
+@test
+fn theDirectoryCanBeChanged() {
+    let start = Process.currentDirectory()
+    assert(Process.changeDirectory("/"))
+    assertEqual(Process.currentDirectory(), "/")
+    assert(!Process.changeDirectory("/surely/not/here"))
+    assert(Process.changeDirectory(start))
+    assert(Process.id() > 0)
+}

@@ -1067,8 +1067,8 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   `poll` (so neither side blocks on a full pipe), giving `Completed`
   (status — 128 plus the signal when one ended it — output, errors);
   `ProcessError.NotFound` when nothing by that name starts. Also the
-  current directory and the process id. Not yet: pipelines, streaming a
-  running child's output, signals, and `exit`.
+  current directory and the process id. (Since, `Command`, `Child`,
+  `Signals` and `Process.exit`, #70: docs/06 §6.4, "Processes and signals".)
 - `Sable.Serialize`: JSON, which is Phase 2's 2,000-line exit program made a
   module. It has the `JsonValue` model, a strict parser (with opt-in comments,
   trailing commas and duplicate-key checks) that reports errors by line and
@@ -1698,7 +1698,9 @@ spawns and awaits cannot win back.
   (`connect`, `read(upTo:)`, `readAll`, `write`, `finishWriting`), both
   `@immutable` and so Sendable: a connection accepted in one task is
   served in another. The interpreter has them too, over .NET's sockets,
-  its executor waiting in `Socket.Select` when nothing else can run.
+  its executor waiting in `Socket.Select` when nothing else can run. A
+  source may also be a child's pipe, or an event no reactor watches — a
+  child ended, a signal came — which the thread it happens on reports.
 - *The blocking pool.* `Task.blocking { … }` (Tokio's `spawn_blocking`)
   suspends the task and runs the body on a thread kept for work that
   blocks, made as work comes and none is free, up to 512

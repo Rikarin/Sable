@@ -2107,8 +2107,7 @@ public sealed partial class SilGen {
         if (symbol is NamedTypeSymbol named) {
             type.Conformances.AddRange(DeclaredProtocols(named.OriginalDefinition));
             type.ConditionalConformances.AddRange(ConditionalProtocols(named.OriginalDefinition).Where(c => !type.Conformances.Contains(c.Protocol)));
-            _module.MeetConditionalConformances(type);
-        }
+            _module.MeetConditionalConformances(type);        }
 
         return _module.AddType(type);
     }
@@ -10150,7 +10149,7 @@ public sealed partial class SilGen {
 
             // Generic code given an existential for a type parameter: the existential opened (SilGen.Opening.cs).
             if (!ReferenceEquals(_openingCall, call) && OpensExistential(call) is { } opening) {
-                return OpenedExistentialCall(call, opening.Parameter, opening.Argument);
+                return OpenedExistentialCall(call, opening);
             }
 
             var callee = call.Function;
@@ -10349,10 +10348,13 @@ public sealed partial class SilGen {
             // opened as a type known by its metadata.
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && call.Receiver is { } existentialReceiver
                 && Sub(existentialReceiver.Type) is ExistentialTypeSymbol) {
-                return IsRequirementOf(existentialReceiver, SlotName(callee))
+                return IsRequirementOf(existentialReceiver, SlotName(callee)) && !OpensForResult(callee, callee.ReturnType, callee.ThrownType)
                     ? ExistentialCall(existentialReceiver, SlotName(callee), call.Arguments, call)
                     : OpenedExistential(existentialReceiver, callee, callee.IsMutating, call,
-                        (self, opened) => new BoundCall(call.Syntax, self, callee, call.Arguments, call.Type) { Substitution = Opening(call.Substitution, opened) });
+                        (self, opened) => {
+                            var opening = Opening(call.Substitution, opened);
+                            return new BoundCall(call.Syntax, self, callee, call.Arguments, opening.Apply(callee.ReturnType)) { Substitution = opening };
+                        }, call.Type);
             }
 
             // 'C()' for C: RangeReplaceableCollection, C an array: '[]'.
@@ -10634,7 +10636,7 @@ public sealed partial class SilGen {
             if (genericShape is not null) {
                 if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && !callee.ReturnType.Equals(Core.Void)) {
                     var returned = Substitute(WithAssociatedTypes(callee, bound), callee.ReturnType);
-                    if (returned is TypeParameterSymbol { OpenedFrom: not null } openedResult && type.Parameters[arguments.Count] is AddressType && MetadataOf(openedResult) is { } resultMetadata) {
+                    if (IsOpenedHere(returned) && type.Parameters[arguments.Count] is AddressType && MetadataOf(returned) is { } resultMetadata) {
                         // Of a type a Type was opened as: a buffer its metadata sizes, let go if the call throws.
                         var buffer = Emit(new BuiltinInst("opaque_alloc", type.Parameters[arguments.Count], resultMetadata));
                         openedBuffer = buffer;
@@ -11682,9 +11684,10 @@ public sealed partial class SilGen {
             }
 
             if (Sub(receiver.Type) is ExistentialTypeSymbol) {
-                return IsRequirementOf(receiver, GetterSlot(access.Field))
+                return IsRequirementOf(receiver, GetterSlot(access.Field)) && !OpensForResult(access.Field, access.Field.Type, null)
                     ? ExistentialCall(receiver, GetterSlot(access.Field), [], access)
-                    : OpenedExistential(receiver, access.Field, false, access, (self, _) => new BoundFieldAccess(access.Syntax, self, access.Field, access.Type));
+                    : OpenedExistential(receiver, access.Field, false, access,
+                        (self, opened) => new BoundFieldAccess(access.Syntax, self, access.Field, OpenedMember(access.Field, access.Field.Type, opened, access.Type)), access.Type);
             }
 
             // A computed property of the program's own: a call to its getter.

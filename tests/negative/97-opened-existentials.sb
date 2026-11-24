@@ -1,0 +1,62 @@
+module Negative.OpenedExistentials
+
+// A requirement called through 'any P' opens the existential (#299,
+// SE-0352): a result of Self comes back as 'any P', one of an associated
+// type as the existential of its protocols. A parameter that mentions Self
+// or an associated type, a result made of one, and an associated type with
+// nothing to be erased to stay out of reach.
+
+protocol Named {
+    fn name() -> String
+}
+
+protocol Shape {
+    associatedtype Unit: Named
+    associatedtype Raw
+    associatedtype Failure: Error
+    fn doubled() -> Self
+    fn unit() -> Unit
+    fn raw() -> Raw
+    fn same(_ other: Self) -> Bool
+    fn maybe() -> Self?
+    fn all() -> Self[]
+    fn check() throws(Failure) -> Int
+    var me: Self { get set }
+}
+
+fn doubled(_ s: any Shape) -> any Shape {
+    return s.doubled()
+}
+
+fn unit(_ s: any Shape) -> any Named {
+    return s.unit()
+}
+
+fn notTheType(_ s: any Shape) -> any Shape {
+    let u: any Shape = s.unit() //! S3004 expected 'any Shape' but found 'any Named'
+    return u
+}
+
+fn raw(_ s: any Shape) {
+    let r = s.raw() //! S3165 'raw' gives back or throws an associated type of 'Shape'
+}
+
+fn same(_ a: any Shape, _ b: any Shape) -> Bool {
+    return a.same(b) //! S3161 'same' takes or gives 'Self' or an associated type of 'Shape'
+}
+
+fn maybe(_ s: any Shape) {
+    let m = s.maybe() //! S3161 'maybe' takes or gives 'Self'
+}
+
+fn all(_ s: any Shape) {
+    let m = s.all() //! S3161 'all' takes or gives 'Self'
+}
+
+fn check(_ s: any Shape) {
+    let n = try? s.check() //! S3165 'check' gives back or throws an associated type of 'Shape'
+}
+
+fn settable(_ s: any Shape) {
+    let m = s.me //! S3161 'me' takes or gives 'Self'
+}

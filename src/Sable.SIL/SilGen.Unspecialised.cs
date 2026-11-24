@@ -1717,9 +1717,7 @@ public sealed partial class SilGen {
     internal FunctionType? GenericEntryType(NamedTypeSymbol protocol, FunctionSymbol requirement) {
         var arguments = TypeSubstitution.For(protocol);
         protocol = protocol.OriginalDefinition;
-        // An async one would keep the caller's storage across a suspension: not yet.
-        if (protocol.SelfTypeParameter is not { } self || !requirement.TypeParameters.IsEmpty || requirement.IsRethrows || !requirement.OpaqueTypeParameters.IsEmpty
-            || requirement.IsAsync) {
+        if (protocol.SelfTypeParameter is not { } self || !requirement.TypeParameters.IsEmpty || requirement.IsRethrows || !requirement.OpaqueTypeParameters.IsEmpty) {
             return null;
         }
 
@@ -1776,8 +1774,18 @@ public sealed partial class SilGen {
             }
         }
 
+        // An async one is awaited through its entry as any async call is.
+        // Only self may be held by address — in the existential's box, or
+        // the caller's frame, which outlives the call — not yet a value of
+        // Self or of an associated type in the caller's storage, which a
+        // suspension would have to keep.
+        if (requirement.IsAsync && (parameters.Skip(HasSelf(requirement) ? 1 : 0).Any(static p => SilType.MentionsOpaque(p))
+                || SilType.MentionsOpaque(result) || thrown is not null && SilType.MentionsOpaque(thrown))) {
+            return null;
+        }
+
         parameters.Add(SilType.Metadata);
-        return new FunctionType(parameters.ToImmutable(), result, thrown);
+        return new FunctionType(parameters.ToImmutable(), result, thrown, isAsync: requirement.IsAsync);
     }
 
     /// <summary>
@@ -2616,6 +2624,12 @@ public sealed partial class SilGen {
                 return given;
             }
 
+            // An associated type of the type an existential was opened as: from the table of its conformance, here.
+            if (type is DependentMemberTypeSymbol { BaseType: var on, Associated: { ContainingSymbol: NamedTypeSymbol declaring } associated } && IsOpenedHere(type)) {
+                var index = declaring.OriginalDefinition.AssociatedTypes.IndexOf(associated);
+                return Emit(new BuiltinInst($"witness_associated:{index}", SilType.Metadata, TableFor(on, declaring)));
+            }
+
             // An associated type's: found where the function starts, from the table of its base's conformance.
             if (_genericMetadata.Count > 0 && IsAssociatedOf(type, [.._genericMetadata.Keys])) {
                 return generator.Canonical(type) is var canonical && !canonical.Equals(type) ? MetadataOf(canonical)
@@ -2730,8 +2744,17 @@ public sealed partial class SilGen {
 
             // Where the result goes, when there is a place for it before the error's and the metadata.
             var errorOut = type.Thrown as AddressType;
-            var result = arguments.Count < type.Parameters.Length - 1 - (errorOut is null ? 0 : 1) ? GenericOut(type.Parameters[arguments.Count], Sub(call.Type)) : null;
-            if (result is { } into) {
+            var hasOut = arguments.Count < type.Parameters.Length - 1 - (errorOut is null ? 0 : 1);
+            (SilValue Passed, AllocStackInst Slot)? result = null;
+            SilValue? openedBuffer = null;
+            if (hasOut && IsOpenedHere(Sub(call.Type)) && type.Parameters[arguments.Count] is AddressType && MetadataOf(Sub(call.Type)) is { } resultMetadata) {
+                // Of the type an existential was opened as, or one of its associated types: a buffer its metadata sizes, which the erasure takes, let go if the call throws.
+                var buffer = Emit(new BuiltinInst("opaque_alloc", type.Parameters[arguments.Count], resultMetadata));
+                openedBuffer = buffer;
+                arguments.Add(buffer);
+                borrows.Add(new OnError(() => Emit(new BuiltinInst("opaque_free", SilType.Unit, buffer))));
+            } else if (hasOut && GenericOut(type.Parameters[arguments.Count], Sub(call.Type)) is { } into) {
+                result = into;
                 arguments.Add(into.Passed);
             }
 
@@ -2749,8 +2772,25 @@ public sealed partial class SilGen {
 
             arguments.Add(metadata);
             var invoked = Invoke(code, type, arguments, borrows, call.Syntax, cannotThrow: error is { CannotThrow: true }, errorSlot: error?.Slot);
+            if (openedBuffer is not null) {
+                return invoked is null || _current is null ? invoked : openedBuffer;
+            }
+
             return result is { } written ? TakeOut(invoked, written.Slot) : invoked;
         }
+
+        /// <summary>
+        ///     Whether a type is one an existential was opened as in the code
+        ///     being lowered — not a type parameter of the function's own — or
+        ///     an associated type read through one: a value of it lives in a
+        ///     buffer its metadata sizes, as nothing here can copy it.
+        /// </summary>
+        static bool IsOpenedHere(TypeSymbol type) =>
+            type switch {
+                TypeParameterSymbol { OpenedFrom: not null } => true,
+                DependentMemberTypeSymbol member => IsOpenedHere(member.BaseType),
+                _ => false,
+            };
 
         /// <summary>The type parameter of this function a property requirement is read on, or null for any other read.</summary>
         internal TypeSymbol? GenericPropertyOf(BoundFieldAccess access) {
@@ -2788,13 +2828,22 @@ public sealed partial class SilGen {
                 borrows.Add(self);
             }
 
-            var result = GenericOut(type.Parameters[arguments.Count], Sub(access.Type));
-            if (result is { } into) {
+            (SilValue Passed, AllocStackInst Slot)? result = null;
+            SilValue? openedBuffer = null;
+            if (IsOpenedHere(Sub(access.Type)) && type.Parameters[arguments.Count] is AddressType && MetadataOf(Sub(access.Type)) is { } resultMetadata) {
+                // Of the type an existential was opened as, or one of its associated types: a buffer its metadata sizes, which the erasure takes.
+                openedBuffer = Emit(new BuiltinInst("opaque_alloc", type.Parameters[arguments.Count], resultMetadata));
+                arguments.Add(openedBuffer);
+            } else if ((result = GenericOut(type.Parameters[arguments.Count], Sub(access.Type))) is { } into) {
                 arguments.Add(into.Passed);
             }
 
             arguments.Add(MetadataOf(parameter)!);
             var invoked = Invoke(code, type, arguments, borrows, access.Syntax);
+            if (openedBuffer is not null) {
+                return invoked is null || _current is null ? invoked : openedBuffer;
+            }
+
             return result is { } written ? TakeOut(invoked, written.Slot) : invoked;
         }
 

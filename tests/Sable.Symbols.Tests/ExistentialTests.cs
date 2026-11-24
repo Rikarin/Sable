@@ -73,4 +73,52 @@ public sealed class ExistentialTests {
     [Fact]
     public void ThroughAGenericParameterItIs() =>
         AssertClean("fn f<T: Same>(_ a: T, _ b: T) -> Bool { return a.same(b) }");
+
+    const string Opening = """
+                           protocol Named {
+                               fn name() -> String
+                           }
+                           protocol Grows {
+                               associatedtype Unit: Named
+                               associatedtype Pair: Named & Shape
+                               associatedtype Raw
+                               fn doubled() -> Self
+                               fn unit() -> Unit
+                               fn pair() -> Pair
+                               fn raw() -> Raw
+                               var me: Self { get }
+                               var settable: Self { get set }
+                               fn more() async -> Self
+                           }
+                           """;
+
+    /// <summary>
+    ///     What a call through <c>any P</c> gives back once the existential is
+    ///     opened (#299, SE-0352): Self as the existential itself, an
+    ///     associated type as the existential of the protocols it is
+    ///     constrained to, a composition for several.
+    /// </summary>
+    [Theory]
+    [InlineData("g.doubled()", "any Grows")]
+    [InlineData("g.me", "any Grows")]
+    [InlineData("g.doubled().doubled()", "any Grows")]
+    [InlineData("g.unit()", "any Named")]
+    [InlineData("g.pair()", "any Named & Shape")]
+    [InlineData("both.doubled()", "any Grows & Shape")]
+    public void AResultOfSelfOrAnAssociatedTypeIsErasedThroughAnExistential(string expression, string type) {
+        AssertClean($"{Opening}\nfn f(_ g: any Grows, _ both: any Grows & Shape) -> {type} {{\n    return {expression}\n}}\n");
+
+        // As that existential, and not as something narrower.
+        Assert.Contains(
+            ErrorsIn($"{Opening}\nfn f(_ g: any Grows, _ both: any Grows & Shape) -> Square {{\n    return {expression}\n}}\n"),
+            static e => e.Code == ErrorCode.ERR_TypeMismatch
+        );
+    }
+
+    [Theory]
+    [InlineData("g.raw()", ErrorCode.ERR_ExistentialResultNotErasable)]
+    [InlineData("g.settable", ErrorCode.ERR_SelfRequirementOnExistential)]
+    [InlineData("g.more()", ErrorCode.ERR_SelfRequirementOnExistential)]
+    public void WhatCannotBeErasedStaysOutOfReach(string expression, ErrorCode code) =>
+        Assert.Contains(ErrorsIn($"{Opening}\nfn f(_ g: any Grows) async {{\n    let x = await {expression}\n}}\n"), e => e.Code == code);
 }

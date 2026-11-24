@@ -1310,6 +1310,54 @@ fn arrayOf<T>(_ type: T.Type) -> Type { return T[].self }
 let rows = arrayOf(t)                // [Zoo.Row] when t holds Zoo.Row
 ```
 
+### Opening an existential
+
+An `any P` is opened the same way, implicitly (SE-0352), in two places.
+
+**A requirement called through it.** The call runs on the value as a type
+known only at run time, and what comes back is erased again: a result of
+`Self` as the existential itself, a result of one of `P`'s associated types
+as the existential of the protocols that associated type is constrained to.
+
+```sable
+protocol Shape {
+    associatedtype Unit: Named
+    fn doubled() -> Self
+    fn unit() -> Unit
+    fn measure() async -> F64
+}
+
+let s: any Shape = Square(side: 2)
+let d = s.doubled()                  // an 'any Shape', holding a Square
+let u = s.unit()                     // an 'any Named'
+let m = await s.measure()
+```
+
+So are a get-only property of `Self` and a member of an extension of `P`
+that gives `Self` back. A requirement stays out of reach through `any P`
+when a parameter mentions `Self` or an associated type (`fn same(_ other:
+Self)`, since two existentials may hold two types), when its result is made
+of one (`Self?`, `Self[]`, S3161), when an associated type it gives back or
+throws has no existential to be erased to — constrained to no protocol, to a
+generic one, or to `Error` (S3165) — and when it is async and gives back
+`Self` or an associated type (S3161).
+
+**Generic code given it.** A call of a generic function that gives an
+existential for a type parameter opens it, and runs the callee compiled
+once with the value: `twice(shape)` for `fn twice<T: Shape>(_ x: T)` can
+call requirements that take `Self` on `x`. Each type parameter is opened
+from its own argument — `pair(a, b)` for `fn pair<A: P, B: Q>(_ a: A, _ b:
+B)` opens both — when it is constrained to protocols that are not generic,
+exactly one parameter names it, as exactly `T` and taken by value, and the
+result, if it names it at all, is `T`, which is erased to the existential
+again. Not opened (the callee's copy for the existential runs, so a
+requirement that takes `Self` is unreachable in it): a type parameter two
+parameters name, since the two existentials may hold different types; one
+a parameter names inside another type (`T?`, `T[]`, `(T) -> Int`) or takes
+`inout`; one a result or an error names inside another type (`T?`, `T[]`,
+`throws(T)`), which cannot be erased; one a `where` clause ties to another
+type.
+
 The registry knows the conformances of the types a program declares; a
 call that opens a Type makes their tables, and how to box them, for every
 such type that conforms to `T`'s protocols. A generic type made only at

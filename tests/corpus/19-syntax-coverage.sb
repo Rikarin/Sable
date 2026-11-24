@@ -68,3 +68,7 @@ fn main() {
     print("\(size) \(total) \(classify(2)) \(describe(1)) \(first(4)) \(forced + 1) \(sign(-3))")
     print("\(Reflection.typeName(kind)) \(Reflection.typeName(list)) \(Reflection.typeName(optional))")
 }
+
+fn required(_ n: Int?) throws(String) -> Int {
+    return n ?? throw "none given"
+}

@@ -66,3 +66,32 @@ fn finishingEmptiesTheEncoderToBeginAgain() {
     assertEqual(encoder.encode("foo".utf8Bytes()), "Zm9v")
     assertEqual(encoder.finish(), "")
 }
+
+@test
+fn chunksEncodeIntoABufferAsTheWhole() {
+    let bytes = sample(23)
+    let paddings: Bool[>..] = [true, false]
+    for padding in paddings {
+        var first = 0
+        while first <= bytes.count {
+            var buffer = ByteBuffer()
+            buffer.writeU8(0x21)
+            var encoder = Base64Encoder(padding: padding)
+            encoder.encode(bytes[..<first], into: &buffer)
+            var i = first
+            while i < bytes.count {
+                encoder.encode(bytes[i..<i + 1], into: &buffer)
+                i += 1
+            }
+            encoder.finish(into: &buffer)
+            var expected = ByteBuffer()
+            expected.writeU8(0x21)
+            Base64.encode(bytes, into: &expected, padding: padding)
+            assert(buffer.bytes == expected.bytes)
+            // Empty again.
+            encoder.finish(into: &buffer)
+            assertEqual(buffer.count, expected.count)
+            first += 1
+        }
+    }
+}

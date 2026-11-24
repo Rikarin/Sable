@@ -6508,7 +6508,7 @@ public sealed partial class Binder {
             }
 
             cost += Conversions.Cost(conversion.Value);
-            if (arguments[i] is BoundUnboundClosure unbound && IsMisshapen(unbound.Syntax as ExpressionSyntax, wanted)) {
+            if (arguments[i] is BoundUnboundClosure waiting && IsMisshapen(waiting.Syntax as ExpressionSyntax, wanted)) {
                 cost += MisshapenArgumentCost;
             }
         }

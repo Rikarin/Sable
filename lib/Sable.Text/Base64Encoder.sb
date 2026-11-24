@@ -64,4 +64,50 @@ public struct Base64Encoder {
         pending.removeAll(keepingCapacity: true)
         return asciiText(text)
     }
+
+    /// The digits of the whole groups the chunk completes, written at the
+    /// end of the buffer as ASCII bytes, with no String made.
+    ///
+    /// ```sable
+    /// var buffer = ByteBuffer()
+    /// var encoder = Base64Encoder()
+    /// let bytes: U8[>..] = [0x4D, 0x61, 0x6E, 0x4D]
+    /// encoder.encode(bytes, into: &buffer)
+    /// encoder.finish(into: &buffer)
+    /// assert(buffer.count == 8 && buffer.bytes[7] == 0x3D)
+    /// ```
+    public mutating fn encode(_ chunk: U8[:], into buffer: inout ByteBuffer) {
+        let length = (pending.count + chunk.count) / 3 * 4
+        buffer.write(reserving: length) { text, start in
+            var at = start
+            var taken = 0
+            if pending.count > 0 {
+                while pending.count < 3 && taken < chunk.count {
+                    pending.append(chunk[taken])
+                    taken += 1
+                }
+                if pending.count < 3 {
+                    return 0
+                }
+                Base64.writeEncoded(pending, to: &text, at: at, digits: digits, padding: padding)
+                pending.removeAll(keepingCapacity: true)
+                at += 4
+            }
+            let end = chunk.count - (chunk.count - taken) % 3
+            Base64.writeEncoded(chunk[taken..<end], to: &text, at: at, digits: digits, padding: padding)
+            pending.append(contentsOf: chunk[end...])
+            return length
+        }
+    }
+
+    /// The end of the bytes, as `finish()` gives it, written at the end of
+    /// the buffer. The encoder is then empty, to begin again.
+    public mutating fn finish(into buffer: inout ByteBuffer) {
+        let length = Base64.encodedLength(pending.count, padding: padding)
+        buffer.write(reserving: length) { text, start in
+            Base64.writeEncoded(pending, to: &text, at: start, digits: digits, padding: padding)
+            pending.removeAll(keepingCapacity: true)
+            return length
+        }
+    }
 }

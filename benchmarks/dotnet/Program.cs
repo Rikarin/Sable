@@ -29,6 +29,8 @@ var benchmarks = new Dictionary<string, Func<string>> {
     ["concurrent-queue"] = ConcurrentQueueBench,
     ["sorted-dictionary"] = SortedDictionaryBench,
     ["text-builder"] = TextBuilding,
+    ["base64"] = Base64Bench,
+    ["hex"] = HexBench,
 };
 
 if (args.Length == 0 || !benchmarks.TryGetValue(args[0], out var run)) {
@@ -528,5 +530,58 @@ static string Utf8Validate() {
         }
 
         return $"{valid} {asciiBytes.Length} {mixedBytes.Length}";
+    }
+}
+
+// A megabyte of bytes the Sable side makes the same way.
+static byte[] CodecSample() {
+    checked {
+        var bytes = new byte[1048576];
+        long state = 1;
+        for (var i = 0; i < bytes.Length; i++) {
+            state = (state * 75 + 74) % 65537;
+            bytes[i] = (byte)(state & 0xFF);
+        }
+
+        return bytes;
+    }
+}
+
+static string Base64Bench() {
+    checked {
+        var bytes = CodecSample();
+        long digits = 0;
+        long check = 0;
+        for (var round = 0; round < 40; round++) {
+            var text = Convert.ToBase64String(bytes);
+            digits += text.Length;
+            var decoded = Convert.FromBase64String(text);
+            check += decoded[round * 7919 % decoded.Length];
+
+            var buffer = new byte[System.Buffers.Text.Base64.GetMaxEncodedToUtf8Length(bytes.Length)];
+            System.Buffers.Text.Base64.EncodeToUtf8(bytes, buffer, out _, out var written);
+            digits += written;
+            var raw = new byte[System.Buffers.Text.Base64.GetMaxDecodedFromUtf8Length(written)];
+            System.Buffers.Text.Base64.DecodeFromUtf8(buffer.AsSpan(0, written), raw, out _, out var length);
+            check += raw[round * 104729 % length];
+        }
+
+        return $"{digits} {check}";
+    }
+}
+
+static string HexBench() {
+    checked {
+        var bytes = CodecSample();
+        long digits = 0;
+        long check = 0;
+        for (var round = 0; round < 40; round++) {
+            var text = Convert.ToHexString(bytes);
+            digits += text.Length;
+            var decoded = Convert.FromHexString(text);
+            check += decoded[round * 7919 % decoded.Length];
+        }
+
+        return $"{digits} {check}";
     }
 }

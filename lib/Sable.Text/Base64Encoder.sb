@@ -1,0 +1,67 @@
+module Sable.Text
+
+/// Base64 encoded a chunk at a time, as bytes come from a file or a socket:
+/// the one or two bytes a chunk ends with that make no whole group wait for
+/// the next, so the text is what encoding all the bytes at once would give.
+/// `finish()` writes the last group, padded as the encoder says.
+///
+/// ```sable
+/// var encoder = Base64Encoder()
+/// let first: U8[>..] = [0x48, 0x65, 0x6C, 0x6C]
+/// let second: U8[>..] = [0x6F]
+/// var text = encoder.encode(first)
+/// text = text + encoder.encode(second) + encoder.finish()
+/// assert(text == "SGVsbG8=")
+/// ```
+public struct Base64Encoder {
+    // The bytes of a group the last chunk ended partway through.
+    var pending: U8[>..]
+    let digits: U8[:]
+
+    /// Whether the last group is padded with '='.
+    public let padding: Bool
+
+    /// An encoder to that alphabet, padding the last group or not.
+    public init(alphabet: Base64.Alphabet = .Standard, padding: Bool = true) {
+        self.pending = []
+        self.digits = Base64.digits(alphabet)
+        self.padding = padding
+    }
+
+    /// The digits of the whole groups the chunk completes.
+    ///
+    /// ```sable
+    /// var encoder = Base64Encoder(alphabet: .UrlSafe, padding: false)
+    /// let bytes: U8[>..] = [0xFB, 0xFF, 0xBF, 0xFF]
+    /// assert(encoder.encode(bytes) == "-_-_")
+    /// assert(encoder.finish() == "_w")
+    /// ```
+    public mutating fn encode(_ chunk: U8[:]) -> String {
+        var text: U8[>..] = []
+        var start = 0
+        if pending.count > 0 {
+            while pending.count < 3 && start < chunk.count {
+                pending.append(chunk[start])
+                start += 1
+            }
+            if pending.count < 3 {
+                return ""
+            }
+            Base64.appendEncoded(pending, to: &text, digits: digits, padding: padding)
+            pending.removeAll(keepingCapacity: true)
+        }
+        let end = chunk.count - (chunk.count - start) % 3
+        Base64.appendEncoded(chunk[start..<end], to: &text, digits: digits, padding: padding)
+        pending.append(contentsOf: chunk[end...])
+        return asciiText(text)
+    }
+
+    /// The end of the bytes: the digits of the group left, padded or not,
+    /// or nothing when none is. The encoder is then empty, to begin again.
+    public mutating fn finish() -> String {
+        var text: U8[>..] = []
+        Base64.appendEncoded(pending, to: &text, digits: digits, padding: padding)
+        pending.removeAll(keepingCapacity: true)
+        return asciiText(text)
+    }
+}

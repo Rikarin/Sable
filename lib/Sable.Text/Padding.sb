@@ -1,0 +1,22 @@
+module Sable.Text
+
+/// Whether Base64 and Base32 text being decoded must end its last group
+/// with '=' padding to a whole group: RFC 4648 §3.2. Encoders write it or
+/// not as their `padding` says; a decoder takes either unless told.
+///
+/// ```sable
+/// assert(try! Base64.decode("QQ", padding: .Either) == [0x41])
+/// assert((try? Base64.decode("QQ", padding: .Required)) == none)
+/// assert((try? Base64.decode("QQ==", padding: .Forbidden)) == none)
+/// ```
+@derive(Equatable, Debug)
+public enum Padding {
+    /// The last group must be padded: "QQ==", not "QQ".
+    Required
+
+    /// Padded or not, but if padded, by exactly the right amount.
+    Either
+
+    /// No padding: "QQ", not "QQ==" — Base64Url as JWTs use it.
+    Forbidden
+}

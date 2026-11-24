@@ -1,0 +1,39 @@
+module Base64Bench
+
+// Base64 against .NET's: a megabyte of bytes encoded to a String and
+// decoded back (Convert.ToBase64String, Convert.FromBase64String), and
+// encoded to ASCII bytes and decoded from them (System.Buffers.Text.Base64's
+// EncodeToUtf8 and DecodeFromUtf8), forty times each.
+
+import Sable.Text
+
+@main
+fn main() {
+    var bytes: U8[>..] = []
+    var state = 1
+    var i = 0
+    while i < 1_048_576 {
+        state = (state * 75 + 74) % 65537
+        bytes.append(U8(state & 0xFF))
+        i = i + 1
+    }
+
+    var digits = 0
+    var check = 0
+    var round = 0
+    while round < 40 {
+        let text = Base64.encode(bytes)
+        digits = digits + text.utf8Count
+        let decoded = try! Base64.decode(text)
+        check = check + Int(decoded[round * 7919 % decoded.count])
+
+        var buffer = ByteBuffer()
+        Base64.encode(bytes, into: &buffer)
+        digits = digits + buffer.count
+        let raw = try! Base64.decode(bytes: buffer.bytes)
+        check = check + Int(raw[round * 104729 % raw.count])
+        round = round + 1
+    }
+
+    print("\(digits) \(check)")
+}

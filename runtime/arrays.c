@@ -403,6 +403,32 @@ void sable_array_append_utf8(SableArray **slot, const SableMetadata *type, const
     array->count += length;
 }
 
+// 'count' copies of the byte added at the end of a byte array at once, by
+// memset: the array made the only reference to its buffer, grown as
+// appending them one at a time grows it.
+void sable_array_append_repeating(SableArray **slot, const SableMetadata *type, uint8_t byte, int64_t count) {
+    if (count < 0) {
+        trap_here("cannot append a negative number of bytes");
+    }
+
+    if (count == 0) {
+        return;
+    }
+
+    SableArray *array = unique(slot, type, count);
+    if (array->count + count > array->capacity) {
+        int64_t old = array->capacity;
+        int64_t wanted = array->capacity + array->capacity / 2;
+        wanted = wanted < array->count + count ? array->count + count : wanted;
+        wanted = wanted < 16 ? 16 : wanted;
+        array->capacity = wanted;
+        array->elements = resize_elements(array, old, wanted);
+    }
+
+    memset(array->elements + array->count, byte, (size_t)count);
+    array->count += count;
+}
+
 // The 'length' elements at 'base' rotated left by 'by' (0 < by < length):
 // the shorter side kept aside, the longer moved over in one go, and the
 // shorter put back after it. A permutation of the bytes, so no element is

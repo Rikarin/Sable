@@ -56,6 +56,82 @@ public sealed class BinaryDataTests {
         Assert.Contains("array index out of range", execution.Stderr, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    ///     A byte repeated onto the end of a byte array at once (runtime
+    ///     memset, a list's AddRange interpreted): growing an empty array, a
+    ///     shared one, which is copied first, and one with room; a count of
+    ///     zero changes nothing, and a negative one traps.
+    /// </summary>
+    [Fact]
+    public void BytesAppendedRepeatingAgreeBothWays() =>
+        Assert.Equal(
+            "3 7 7\n1 2 9 9 9 0 0\n1 2\n20 20\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        var bytes: U8[>..] = []
+                        bytes.append(repeating: 7, count: 3)
+                        print("\(bytes.count) \(bytes[0]) \(bytes[2])")
+                        var grown: U8[>..] = [1, 2]
+                        let shared = grown
+                        grown.append(repeating: 9, count: 3)
+                        grown.append(repeating: 0, count: 2)
+                        grown.append(repeating: 5, count: 0)
+                        var text = ""
+                        for b in grown {
+                            text = text + "\(b) "
+                        }
+                        print(text.trimmed())
+                        print("\(shared[0]) \(shared[1])")
+                        var roomy: U8[>..] = []
+                        roomy.reserveCapacity(64)
+                        roomy.append(repeating: 1, count: 20)
+                        print("\(roomy.count) \(roomy.reduce(0) { $0 + Int($1) })")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void AppendingANegativeNumberOfBytesTraps() {
+        var execution = AssertAgree(Program("", "var b: U8[>..] = []\nb.append(repeating: 0, count: -1)"));
+        Assert.Contains("cannot append a negative number of bytes", execution.Stderr, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     Sable.Text's Base64, Base32 and hexadecimal, which encode and
+    ///     decode in place into bytes made room for that way, and read six
+    ///     bytes at a time from one unaligned load: the same natively and
+    ///     interpreted, at every length around their groups.
+    /// </summary>
+    [Fact]
+    public void BinaryToTextEncodingsAgreeBothWays() =>
+        Assert.Equal(
+            "Zm9vYmFy MZXW6YTBOI====== 666f6f626172\n41 true\n",
+            AssertAgree(
+                Program(
+                    "import Sable.Text",
+                    """
+                        let foobar = "foobar".utf8Bytes()
+                        print("\(Base64.encode(foobar)) \(Base32.encode(foobar)) \(Hex.encode(foobar))")
+                        var bytes: U8[>..] = []
+                        var same = true
+                        var count = 0
+                        while count <= 40 {
+                            let text = Base64.encode(bytes, alphabet: .UrlSafe, padding: count % 2 == 0)
+                            same = same && (try! Base64.decode(text, alphabet: .UrlSafe)) == bytes
+                            same = same && (try! Base32.decode(Base32.encode(bytes))) == bytes
+                            same = same && (try! Hex.decode(Hex.encode(bytes))) == bytes
+                            bytes.append(U8(count * 37 % 256))
+                            count += 1
+                        }
+                        print("\(count) \(same)")
+                    """
+                )
+            ).Stdout
+        );
+
     [Fact]
     public void AReadIsOneUnalignedLoadAndAWriteOneStore() {
         var result = Pipeline.Compile(

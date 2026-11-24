@@ -1,0 +1,93 @@
+module Sable.Text
+
+// What Base64, Base32 and Hex share: their alphabets as tables, made while
+// compiling, and text read as the bytes it is.
+//
+// An alphabet is two tables: its digits in order, which encoding indexes by
+// a digit's value, and the inverse, 256 bytes indexed by a byte, holding
+// that byte's value as a digit or 0xFF when it is none. A decoder ORs the
+// values of a group together and checks once whether any was 0xFF.
+
+const base64StandardDigits = digitTable("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+const base64UrlSafeDigits = digitTable("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+const base64StandardValues = valueTable(base64StandardDigits, foldingCase: false)
+const base64UrlSafeValues = valueTable(base64UrlSafeDigits, foldingCase: false)
+
+const base32StandardDigits = digitTable("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+const base32HexDigits = digitTable("0123456789ABCDEFGHIJKLMNOPQRSTUV")
+const base32StandardValues = valueTable(base32StandardDigits, foldingCase: true)
+const base32HexValues = valueTable(base32HexDigits, foldingCase: true)
+
+const hexLowerDigits = digitTable("0123456789abcdef")
+const hexUpperDigits = digitTable("0123456789ABCDEF")
+const hexValues = valueTable(hexUpperDigits, foldingCase: true)
+
+// '=', the padding RFC 4648 ends a short last group with.
+const paddingByte: U8 = 0x3D
+
+// The marker in a value table for a byte that is no digit.
+const notADigit: U8 = 0xFF
+
+const fn digitTable(_ digits: String) -> U8[>..] {
+    var table: U8[>..] = []
+    table.append(utf8: digits)
+    return table
+}
+
+// The inverse of a digit table; with 'foldingCase', a lower-case letter is
+// the digit its upper case is.
+const fn valueTable(_ digits: U8[:], foldingCase: Bool) -> U8[>..] {
+    var table: U8[>..] = []
+    var byte = 0
+    while byte < 256 {
+        table.append(notADigit)
+        byte += 1
+    }
+    var value = 0
+    while value < digits.count {
+        let digit = digits[value]
+        table[Int(digit)] = U8(value)
+        if foldingCase && digit >= 0x41 && digit <= 0x5A {
+            table[Int(digit) + 32] = U8(value)
+        }
+        value += 1
+    }
+    return table
+}
+
+// The text's UTF-8 bytes, copied out at once.
+fn textBytes<S: StringProtocol>(_ text: S) -> U8[>..] {
+    let piece = text.asSubstring
+    var bytes: U8[>..] = []
+    bytes.append(utf8: piece.base, from: piece.startIndex.utf8Offset, to: piece.endIndex.utf8Offset)
+    return bytes
+}
+
+// The bytes as a String; they are ASCII digits and padding, made by an
+// encoder, so they need no check.
+fn asciiText(_ bytes: U8[:]) -> String {
+    unsafe {
+        return String.fromUtf8Unchecked(bytes)
+    }
+}
+
+// The error for the byte at 'at', which is no digit: padding out of place,
+// in an encoding that has it, or a character that is not in the alphabet.
+fn notADigitError(_ bytes: U8[:], _ at: Int, padded: Bool = true) -> DecodeError {
+    let byte = bytes[at]
+    if padded && byte == paddingByte {
+        return .InvalidPadding(at: at)
+    }
+    return .InvalidCharacter(at: at, byte: byte)
+}
+
+// The first of 'count' bytes from 'from' that is no digit, as an error; a
+// decoder's slow path, once a group's values ORed together said one is, so
+// that if none before the last is, the last is.
+fn firstNotADigit(_ bytes: U8[:], _ values: U8[:], from: Int, count: Int, padded: Bool = true) -> DecodeError {
+    var at = from
+    while at < from + count - 1 && values[Int(bytes[at])] != notADigit {
+        at += 1
+    }
+    return notADigitError(bytes, at, padded: padded)
+}

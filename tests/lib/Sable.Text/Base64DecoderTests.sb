@@ -1,0 +1,107 @@
+module Base64DecoderTests
+
+// Base64Decoder (Sable.Text), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.Testing
+import Sable.Text
+
+// The bytes are the ones expected; when not, both are shown in hexadecimal.
+fn assertBytes(_ actual: U8[:], _ expected: U8[:]) {
+    assert(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
+}
+
+fn sample(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var state = 0x3C3C
+    var i = 0
+    while i < count {
+        state = (state * 75 + 74) % 65537
+        bytes.append(U8(state & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+// The text decoded in two chunks, cut at a byte offset.
+fn decodeInTwo(_ text: U8[:], cut: Int, padding: Padding = .Either) throws(DecodeError) -> U8[>..] {
+    var decoder = Base64Decoder(alphabet: .Standard, padding: padding)
+    var bytes = try decoder.decode(bytes: text[..<cut])
+    bytes.append(contentsOf: try decoder.decode(bytes: text[cut...]))
+    bytes.append(contentsOf: try decoder.finish())
+    return bytes
+}
+
+fn errorInTwo(_ text: String, cut: Int, padding: Padding = .Either) -> DecodeError? {
+    do {
+        let _ = try decodeInTwo(text.utf8Bytes(), cut: cut, padding: padding)
+    } catch {
+        return error
+    }
+    return none
+}
+
+@test
+fn twoChunksSplitAnywhereDecodeAsTheWhole() {
+    var count = 0
+    while count <= 14 {
+        let bytes = sample(count)
+        let texts: U8[>..][>..] = [Base64.encode(bytes).utf8Bytes(), Base64.encode(bytes, padding: false).utf8Bytes()]
+        for text in texts {
+            var cut = 0
+            while cut <= text.count {
+                assertBytes(try! decodeInTwo(text, cut: cut), bytes)
+                cut += 1
+            }
+        }
+        count += 1
+    }
+}
+
+@test
+fn oneDigitAtATimeDecodesAsTheWhole() {
+    let bytes = sample(31)
+    let text = Base64.encode(bytes)
+    var decoder = Base64Decoder()
+    var decoded: U8[>..] = []
+    for scalar in text {
+        decoded.append(contentsOf: try! decoder.decode(String.fromChar(scalar)))
+    }
+    decoded.append(contentsOf: try! decoder.finish())
+    assertBytes(decoded, bytes)
+}
+
+@test
+fn theLastGroupIsHeldUntilTheEnd() {
+    var decoder = Base64Decoder(alphabet: .UrlSafe, padding: .Forbidden)
+    assertBytes(try! decoder.decode("Zm9v"), [])
+    assertBytes(try! decoder.decode("Zm9v"), "foo".utf8Bytes())
+    assertBytes(try! decoder.decode("_w"), "foo".utf8Bytes())
+    assertBytes(try! decoder.finish(), [0xFF])
+    assert(decoder.padding == .Forbidden, "the rule it was given")
+}
+
+@test
+fn errorsCountFromTheStartOfTheStream() {
+    assertEqual(errorInTwo("Zm9vZm*v", cut: 5), .InvalidCharacter(at: 6, byte: 0x2A))
+    assertEqual(errorInTwo("Zm9vZm9v*m9v", cut: 9), .InvalidCharacter(at: 8, byte: 0x2A))
+    assertEqual(errorInTwo("Zm9vZm9vZm9", cut: 8), .TrailingBits(at: 10))
+    assertEqual(errorInTwo("Zm9vZg", cut: 2, padding: .Required), .InvalidPadding(at: 6))
+}
+
+@test
+fn paddingBeforeTheEndIsRejected() {
+    assertEqual(errorInTwo("Zg==Zg==", cut: 4), .InvalidPadding(at: 2))
+    assertEqual(errorInTwo("Zg==Zg==", cut: 6), .InvalidPadding(at: 2))
+    assertEqual(errorInTwo("Zm9vZg==Zm9v", cut: 8), .InvalidPadding(at: 6))
+}
+
+@test
+fn finishingEmptiesTheDecoderToBeginAgain() {
+    var decoder = Base64Decoder()
+    assertBytes(try! decoder.decode("Zm9vZg"), "foo".utf8Bytes())
+    assertBytes(try! decoder.finish(), "f".utf8Bytes())
+    assertBytes(try! decoder.finish(), [])
+    assertBytes(try! decoder.decode("Zm8="), [])
+    assertBytes(try! decoder.finish(), "fo".utf8Bytes())
+}

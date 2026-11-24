@@ -84,12 +84,7 @@ public struct ByteBuffer {
     public mutating fn write(reserving count: Int, _ fill: (inout U8[>..], Int) -> Int) {
         precondition(count >= 0, "cannot reserve \(count) bytes")
         let start = storage.count
-        storage.reserveCapacity(start + count)
-        var i = 0
-        while i < count {
-            storage.append(0)
-            i += 1
-        }
+        storage.append(repeating: 0, count: count)
         let used = fill(&storage, start)
         precondition(used >= 0 && used <= count && storage.count == start + count,
             "a fill of \(count) reserved bytes used \(used), and must leave the buffer's length alone")

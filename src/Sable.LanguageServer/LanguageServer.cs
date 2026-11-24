@@ -1,3 +1,4 @@
+using Sable.Symbols;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -196,9 +197,32 @@ public sealed partial class LanguageServer {
     Analysis BuildAnalysisNow(WorkspaceSnapshot snapshot, string key) {
         var project = snapshot.Layout.Projects.FirstOrDefault(p => p.Directory == key);
         var dependencies = project is null ? [] : _dependencies.For(project, snapshot, Log);
+        dependencies = [..dependencies, ..WorkspaceLibrary(snapshot, key).Except(dependencies)];
         return Analysis.Build(
             snapshot, key, dependencies, _options.LibraryFor, project?.Generate is { } generate ? (trees, others) => Generated(generate, trees, others) : null, project?.Lints);
     }
+
+    /// <summary>
+    ///     The standard library's files, when the workspace holds its package
+    ///     (the compiler's repository, whose <c>lib/</c> has a manifest): the
+    ///     other packages and the loose files are compiled with those, as they
+    ///     are in the editor, in place of the embedded ones.
+    /// </summary>
+    static IReadOnlyList<SyntaxTree> WorkspaceLibrary(WorkspaceSnapshot snapshot, string key) {
+        if (snapshot.Layout.Projects.FirstOrDefault(static p => p.Name == LibraryPackage) is not { } library || library.Directory == key) {
+            return [];
+        }
+
+        return [
+            ..snapshot.Documents.Values
+                .Where(d => snapshot.KeyOf(d) == library.Directory && CoreLibrary.IsStandardLibrary(CoreLibrary.ModuleOf(d.Tree)))
+                .Select(static d => d.Tree)
+                .OrderBy(static t => t.Text.FileName, StringComparer.Ordinal),
+        ];
+    }
+
+    /// <summary>The name <c>lib/package.sb</c> gives the standard library.</summary>
+    const string LibraryPackage = "sable";
 
     /// <summary>The generators' output; a generator program that fails outright is logged, and leaves the package without it.</summary>
     GeneratedTrees Generated(Func<IReadOnlyList<SyntaxTree>, IReadOnlyList<SyntaxTree>, GeneratedTrees> generate, IReadOnlyList<SyntaxTree> trees, IReadOnlyList<SyntaxTree> others) {

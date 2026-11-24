@@ -24,3 +24,6 @@ coverage/
 
 # Unicode Character Database files tools/unicode-tables.py reads (downloaded by hand; see there)
 tools/unicode/*.txt
+
+# lib/package.sb is for the editor; nothing locks it.
+/lib/sable.lock

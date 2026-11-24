@@ -242,16 +242,24 @@ public static class ManifestFiles {
     public const string WorkspaceFile = "workspace.sb";
     public const string TomlFile = "sable.toml";
 
+    /// <summary>
+    ///     Whether the directory has the file under exactly that name: where
+    ///     names ignore case, a source file <c>Package.sb</c> is no manifest.
+    /// </summary>
+    static bool Has(string directory, string name) =>
+        File.Exists(Path.Combine(directory, name))
+        && Directory.EnumerateFiles(directory, name).Any(f => Path.GetFileName(f) == name);
+
     /// <summary>Whether the directory has a manifest of either kind.</summary>
     public static bool Exists(string directory) =>
-        File.Exists(Path.Combine(directory, PackageFile))
-        || File.Exists(Path.Combine(directory, WorkspaceFile))
-        || File.Exists(Path.Combine(directory, TomlFile));
+        Has(directory, PackageFile)
+        || Has(directory, WorkspaceFile)
+        || Has(directory, TomlFile);
 
     /// <summary>The file a person edits: <c>package.sb</c>, else <c>workspace.sb</c>, else <c>sable.toml</c>.</summary>
     public static string PathIn(string directory) {
         foreach (var name in (string[])[PackageFile, WorkspaceFile]) {
-            if (File.Exists(Path.Combine(directory, name))) {
+            if (Has(directory, name)) {
                 return Path.Combine(directory, name);
             }
         }
@@ -297,12 +305,12 @@ public static class ManifestFiles {
         var package = Path.Combine(directory, PackageFile);
         var workspace = Path.Combine(directory, WorkspaceFile);
         var toml = Path.Combine(directory, TomlFile);
-        var hasSable = File.Exists(package) || File.Exists(workspace);
+        var hasSable = Has(directory, PackageFile) || Has(directory, WorkspaceFile);
 
-        if (hasSable && File.Exists(toml)) {
+        if (hasSable && Has(directory, TomlFile)) {
             throw new ManifestException([
                 new(toml, 1, "manifest",
-                    $"'{directory}' has both {(File.Exists(package) ? PackageFile : WorkspaceFile)} and {TomlFile}; a package has one manifest, so delete one"),
+                    $"'{directory}' has both {(Has(directory, PackageFile) ? PackageFile : WorkspaceFile)} and {TomlFile}; a package has one manifest, so delete one"),
             ]);
         }
 
@@ -313,11 +321,11 @@ public static class ManifestFiles {
 
         // A package and its workspace in one directory: one manifest of both.
         var text = new StringBuilder();
-        if (File.Exists(package)) {
+        if (Has(directory, PackageFile)) {
             text.Append(ManifestEvaluator.Evaluate(package));
         }
 
-        if (File.Exists(workspace)) {
+        if (Has(directory, WorkspaceFile)) {
             text.Append('\n').Append(ManifestEvaluator.Evaluate(workspace));
         }
 

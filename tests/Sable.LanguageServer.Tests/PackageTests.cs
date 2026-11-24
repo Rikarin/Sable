@@ -67,6 +67,49 @@ public sealed class PackageTests : IDisposable {
         return new TestClient(projects: root => LanguageProjects.For(root, environment));
     }
 
+    /// <summary>
+    ///     The compiler's repository: <c>lib/</c> is a package, apart from the
+    ///     loose files, which are compiled with its files as they are in the
+    ///     editor; its modules see one another's internals no differently.
+    /// </summary>
+    [Fact]
+    public async Task TheStandardLibrarysPackageIsApartAndIsWhatOthersCompileWith() {
+        var repository = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(repository, "lib", "package.sb")) || !File.Exists(Path.Combine(repository, "Sable.slnx"))) {
+            repository = Path.GetDirectoryName(repository) ?? throw new InvalidOperationException("no lib/ above the tests");
+        }
+
+        foreach (var file in Directory.GetFiles(Path.Combine(repository, "lib"), "*.sb", SearchOption.AllDirectories)) {
+            Write("root/lib/" + Path.GetRelativePath(Path.Combine(repository, "lib"), file), File.ReadAllText(file));
+        }
+
+        // Only the copy on disk has this member.
+        Write("root/lib/Sable.Text/EditorOnly.sb", "module Sable.Text\n\npublic fn onlyInTheEditor() -> Int {\n    return 1\n}\n");
+        const string source = "module App\n\nimport Sable.Text\n\nfn f() -> Int {\n    return onlyInTheEditor()\n}\n";
+        const string wrong = "module Wrong\n\nfn hold(@escaping _ n: Int) -> Int {\n    return n\n}\n";
+        var main = Sable.LanguageServer.Workspace.UriOf(Write("root/main.sb", source));
+        var bad = Sable.LanguageServer.Workspace.UriOf(Write("root/wrong.sb", wrong));
+        await using var client = Client();
+        await client.InitializeAsync(Root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(main, source);
+        await client.OpenAsync(bad, wrong);
+        Assert.Contains("S3093", (await client.DiagnosticsAsync(bad, static d => d.GetArrayLength() > 0)).GetRawText(), StringComparison.Ordinal);
+        Assert.Equal("[]", (await client.DiagnosticsAsync(main)).GetRawText());
+
+        var errors = new List<string>();
+        foreach (var module in Directory.GetDirectories(Path.Combine(Root, "lib"))) {
+            foreach (var path in Directory.GetFiles(module, "*.sb").Order(StringComparer.Ordinal).Take(1)) {
+                var uri = Sable.LanguageServer.Workspace.UriOf(path);
+                await client.OpenAsync(uri, File.ReadAllText(path));
+                errors.AddRange((await client.DiagnosticsAsync(uri)).EnumerateArray().Where(static d => d.GetInt("severity") == 1).Select(d => $"{path}: {d.GetRawText()}"));
+            }
+        }
+
+        Assert.Empty(errors);
+        Assert.Contains("package sable in", client.Logged, StringComparison.Ordinal);
+    }
+
     void WritePackages() {
         // A path dependency outside the folder, in sable.toml.
         Write("util/sable.toml", "[package]\nname = \"util\"\nversion = \"1.0.0\"\n");

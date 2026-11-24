@@ -1,0 +1,10 @@
+import Sable.Build
+
+// The standard library as a package, for the editor: its files are compiled
+// together and apart from the tests and examples beside them. Programs do not
+// depend on it; the toolchain embeds the modules (this file is not one).
+let manifest = Package {
+    name: "sable",
+    version: "0.1.0",
+    publish: false,
+}

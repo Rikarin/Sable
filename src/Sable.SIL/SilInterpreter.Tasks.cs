@@ -215,7 +215,13 @@ public sealed partial class SilInterpreter {
         while (true) {
             WakeSleepers();
             PollSockets(0);
+            PollSources();
             if (!TryDequeue(out var task)) {
+                // A pipe, a child's end or a signal, with whatever else is waited for.
+                if (WaitForSources(draining: until is null)) {
+                    continue;
+                }
+
                 // Waiting for a socket, until the earliest sleeper at the latest.
                 if (_ioWaiters.Count > 0) {
                     PollSockets(AnySleeping() && _sleepers.TryPeek(out _, out var earliest) ? earliest.Deadline : -1);

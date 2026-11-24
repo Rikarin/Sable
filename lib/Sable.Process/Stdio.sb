@@ -1,0 +1,35 @@
+module Sable.Process
+
+/// What one of a child's standard streams is: Rust's `Stdio`.
+public union Stdio {
+    /// This program's own.
+    Inherit
+    /// Nothing: at its end to read, and taking all that is written.
+    Null
+    /// A pipe to this program: the Child's `stdin`, `stdout` or `stderr`.
+    Piped
+    /// The file: read from its start, or made and emptied to be written.
+    /// Output and errors to one file are written to it in order.
+    File(path: String)
+
+    // platform.h's STDIO_ kinds.
+    var kind: Int {
+        get {
+            return match self {
+                case .Inherit => 0
+                case .Null    => 1
+                case .Piped   => 2
+                case .File(_) => 3
+            }
+        }
+    }
+
+    var path: String {
+        get {
+            return match self {
+                case .File(let path) => path
+                case _               => ""
+            }
+        }
+    }
+}

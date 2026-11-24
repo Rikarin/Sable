@@ -322,8 +322,88 @@ public struct Runtime {
     @builtin("process_status")
     public static fn lastExitStatus() -> Int
 
+    /// The signal that ended the program 'run' ran, or 0.
+    @builtin("process_status_signal")
+    public static fn lastExitSignal() -> Int
+
     @builtin("process_error_output")
     public static fn lastErrorOutput() -> String
+
+    /// Why the last 'run' or 'spawn' could not start its program: 1 not
+    /// found, 2 permission denied, 3 its directory, 4 not a program the
+    /// system runs, 5 a stream's file, 6 not on this system, 7 anything
+    /// else; and the system's own code, or which stream.
+    @builtin("process_error")
+    public static fn processError() -> Int
+
+    @builtin("process_error_code")
+    public static fn processErrorCode() -> Int
+
+    /// The program started and left running: a child's handle, to be given
+    /// back by 'releaseChild', or 0. In 'flags' two bits for each standard
+    /// stream — 0 this program's own, 1 nothing, 2 a pipe, 3 the file of
+    /// that position in 'files' — and 64 when the environment is all the
+    /// child is to have, "NAME=value" each. An empty directory is this
+    /// program's.
+    @builtin("process_spawn")
+    public static fn spawn(_ program: String, _ arguments: String[>..], _ environment: String[>..], _ flags: Int, _ directory: String, _ files: String[>..]) -> Int
+
+    /// This program's end of a child's stream (0 to 2), read, written,
+    /// waited for and closed as a socket is; 0 when it is no pipe.
+    @builtin("process_pipe")
+    public static fn childPipe(_ child: Int, _ which: Int) -> Int
+
+    @builtin("process_child_id")
+    public static fn childId(_ child: Int) -> Int
+
+    @builtin("process_ended")
+    public static fn childEnded(_ child: Int) -> Bool
+
+    /// How a child that has ended did: its exit code, or the signal that
+    /// ended it (0 for none).
+    @builtin("process_exit_code")
+    public static fn childExit(_ child: Int, signal: Bool) -> Int
+
+    /// What 'waitForSocket' waits for, for the child to have ended, and
+    /// 'closeSocket' closes: 0 when it has.
+    @builtin("process_exit_event")
+    public static fn childExitEvent(_ child: Int) -> Int
+
+    /// The signal sent to the child, or (-1) it and all it started killed:
+    /// 0 done, 1 it has ended, 2 it could not be.
+    @builtin("process_signal")
+    public static fn signalChild(_ child: Int, _ signal: Int) -> Int
+
+    @builtin("process_release")
+    public static fn releaseChild(_ child: Int)
+
+    /// The program ended here, with the status.
+    @builtin("process_exit")
+    public static fn exit(_ status: Int) -> Never
+
+    /// The program ended here, as a trap ends it, with nothing said.
+    @builtin("process_abort")
+    public static fn abort() -> Never
+
+    /// Listening for the signals, a bit each by number: a handle, to be
+    /// given back by 'unwatchSignals'; 0 when one cannot be caught.
+    @builtin("signal_watch")
+    public static fn watchSignals(_ signals: Int) -> Int
+
+    /// What 'waitForSocket' waits for, for a signal to have come.
+    @builtin("signal_event")
+    public static fn signalEvent(_ watch: Int) -> Int
+
+    /// A signal that came, taken; 0 for none.
+    @builtin("signal_take")
+    public static fn takeSignal(_ watch: Int) -> Int
+
+    @builtin("signal_unwatch")
+    public static fn unwatchSignals(_ watch: Int)
+
+    /// The signal sent to this program.
+    @builtin("signal_raise")
+    public static fn raiseSignal(_ signal: Int) -> Bool
 
     @builtin("process_current_directory")
     public static fn currentDirectory() -> String

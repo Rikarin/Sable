@@ -1,0 +1,115 @@
+module Sable.Process
+
+/// A signal, as POSIX has them; Windows has the few its console's events
+/// are read as (see `Signals`).
+public union Signal: Equatable {
+    /// The terminal went (SIGHUP); on Windows, the console's window closed.
+    Hangup
+    /// Ctrl+C (SIGINT).
+    Interrupt
+    /// Ctrl+\, or Ctrl+Break on Windows (SIGQUIT).
+    Quit
+    /// SIGABRT: how a trap ends a program.
+    Abort
+    /// SIGKILL, which no program can catch.
+    Kill
+    /// SIGSEGV.
+    SegmentationFault
+    /// A pipe no one reads was written (SIGPIPE).
+    Pipe
+    /// SIGALRM.
+    Alarm
+    /// To end, being asked to (SIGTERM); on Windows, the system shutting down.
+    Terminate
+    /// A program's own (SIGUSR1).
+    User1
+    /// A program's own (SIGUSR2).
+    User2
+    /// A child ended or stopped (SIGCHLD).
+    Child
+    /// Going on after being stopped (SIGCONT).
+    Continue
+    /// SIGSTOP, which no program can catch.
+    Stop
+    /// The terminal's size changed (SIGWINCH).
+    WindowChange
+    /// Any other, by the system's number.
+    Other(number: Int)
+
+    /// The signal of the system's number.
+    ///
+    /// ```sable
+    /// assert(Signal.of(number: 15) == Signal.Terminate)
+    /// assert(Signal.of(number: 15).name == "TERM")
+    /// ```
+    public static fn of(number: Int) -> Signal {
+        let named: Signal[>..] = [.Hangup, .Interrupt, .Quit, .Abort, .Kill, .SegmentationFault, .Pipe, .Alarm, .Terminate, .User1, .User2, .Child, .Continue, .Stop, .WindowChange]
+        for signal in named {
+            if signal.number == number {
+                return signal
+            }
+        }
+        return Signal.Other(number: number)
+    }
+
+    /// Its number: the system's, which differs between systems for some.
+    public var number: Int {
+        get {
+            return match self {
+                case .Hangup            => 1
+                case .Interrupt         => 2
+                case .Quit              => 3
+                case .Abort             => 6
+                case .Kill              => 9
+                case .SegmentationFault => 11
+                case .Pipe              => 13
+                case .Alarm             => 14
+                case .Terminate         => 15
+                case .User1             => Signal.pick(mac: 30, other: 10)
+                case .User2             => Signal.pick(mac: 31, other: 12)
+                case .Child             => Signal.pick(mac: 20, other: 17)
+                case .Continue          => Signal.pick(mac: 19, other: 18)
+                case .Stop              => Signal.pick(mac: 17, other: 19)
+                case .WindowChange      => 28
+                case .Other(let number) => number
+            }
+        }
+    }
+
+    static fn pick(mac: Int, other: Int) -> Int {
+        #if os(macos)
+        return mac
+        #else
+        return other
+        #endif
+    }
+
+    /// Its name, as `kill -l` writes it: "INT", "TERM".
+    public var name: String {
+        get {
+            return match self {
+                case .Hangup            => "HUP"
+                case .Interrupt         => "INT"
+                case .Quit              => "QUIT"
+                case .Abort             => "ABRT"
+                case .Kill              => "KILL"
+                case .SegmentationFault => "SEGV"
+                case .Pipe              => "PIPE"
+                case .Alarm             => "ALRM"
+                case .Terminate         => "TERM"
+                case .User1             => "USR1"
+                case .User2             => "USR2"
+                case .Child             => "CHLD"
+                case .Continue          => "CONT"
+                case .Stop              => "STOP"
+                case .WindowChange      => "WINCH"
+                case .Other(let number) => "\(number)"
+            }
+        }
+    }
+
+    /// The same signal: the same number.
+    public operator == (left: Signal, right: Signal) -> Bool {
+        return left.number == right.number
+    }
+}

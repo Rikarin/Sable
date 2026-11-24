@@ -222,7 +222,7 @@ public static class BuildScripts {
         var interpreter = new SilInterpreter(module, StepLimit) { Sandbox = sandbox };
         try {
             interpreter.Run(module.EntryPoint);
-        } catch (SilTrap trap) {
+        } catch (SilTrap trap) when (trap is not { Exits: true, ExitStatus: 0 }) {
             var said = interpreter.ErrorOutput.Length > 0 ? $"\nIt wrote to standard error:\n{interpreter.ErrorOutput.ToString().TrimEnd()}" : "";
             var reason = trap.Message.Contains("step limit", StringComparison.Ordinal)
                 ? $"it ran for more than {StepLimit:N0} steps"

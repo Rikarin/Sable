@@ -1,0 +1,293 @@
+module Sable.Process
+
+import Sable.IO
+
+/// A program to run, and how: Rust's `Command`, .NET's `ProcessStartInfo`.
+/// A value: each call gives a command that is this one with more said.
+///
+/// The program is found on this program's PATH, unless it is a path, and is
+/// run itself: no shell reads its arguments, so nothing in them — a space,
+/// a quote, '*', ';' — means anything. (Windows hands a program one line of
+/// text, which is quoted as the C runtime reads it back; a batch file, run
+/// by a shell whatever is asked, is refused.) It is given its three
+/// streams, and none of this program's other files.
+///
+/// ```sable
+/// let command = Command("cc").arguments(["-c", "main.c"]).environment("LANG", "C").workingDirectory("src")
+/// assert(command.program == "cc")
+/// assert(command.argumentList == ["-c", "main.c"])
+/// ```
+public struct Command {
+    /// The program's name, or its path.
+    public let program: String
+    /// The arguments it is given, after its own name.
+    public var argumentList: String[>..]
+    // What is set, and what removed, over this program's variables — or
+    // over none, 'cleared'.
+    var variables: Dictionary<String, String>
+    var removed: String[>..]
+    var cleared: Bool
+    var directory: String
+    var streams: Stdio?[>..]
+
+    /// The program run with no arguments, as this program is run: its
+    /// directory, its variables, its streams.
+    public init(_ program: String) {
+        self.program = program
+        argumentList = []
+        variables = Dictionary<String, String>()
+        removed = []
+        cleared = false
+        directory = ""
+        streams = [none, none, none]
+    }
+
+    /// Given one argument more.
+    public fn argument(_ argument: String) -> Command {
+        var command = self
+        command.argumentList.append(argument)
+        return command
+    }
+
+    /// Given the arguments, after those it has.
+    public fn arguments(_ arguments: String[>..]) -> Command {
+        var command = self
+        command.argumentList.append(contentsOf: arguments)
+        return command
+    }
+
+    /// Given the environment variable.
+    public fn environment(_ name: String, _ value: String) -> Command {
+        var command = self
+        command.variables[name] = value
+        return command
+    }
+
+    /// Not given the environment variable, though this program has it.
+    public fn removeEnvironment(_ name: String) -> Command {
+        var command = self
+        command.variables[name] = none
+        command.removed.append(name)
+        return command
+    }
+
+    /// Given none of this program's variables, nor those set so far. (Many a
+    /// Windows program needs SystemRoot.)
+    public fn clearEnvironment() -> Command {
+        var command = self
+        command.variables = Dictionary<String, String>()
+        command.cleared = true
+        return command
+    }
+
+    /// Started in the directory. The program, when it is a path, is still
+    /// found from this program's.
+    public fn workingDirectory(_ path: String) -> Command {
+        var command = self
+        command.directory = path
+        return command
+    }
+
+    /// What its standard input is: this program's own otherwise, or nothing
+    /// for `output`.
+    public fn stdin(_ stream: Stdio) -> Command {
+        return with(stream: 0, stream)
+    }
+
+    /// What its standard output is: this program's own otherwise, or kept
+    /// by `output`.
+    public fn stdout(_ stream: Stdio) -> Command {
+        return with(stream: 1, stream)
+    }
+
+    /// What its standard error is: this program's own otherwise, or kept
+    /// by `output`.
+    public fn stderr(_ stream: Stdio) -> Command {
+        return with(stream: 2, stream)
+    }
+
+    fn with(stream which: Int, _ stream: Stdio) -> Command {
+        var command = self
+        command.streams[which] = stream
+        return command
+    }
+
+    // ---- Running it --------------------------------------------------------
+
+    /// Started, and running as this program goes on.
+    ///
+    /// ```sable
+    /// do {
+    ///     let _ = try Command("surely-no-such-program").spawn()
+    ///     assert(false)
+    /// } catch .NotFound(let program) {
+    ///     assert(program == "surely-no-such-program")
+    /// } catch {
+    ///     assert(false)
+    /// }
+    /// ```
+    public fn spawn() throws(ProcessError) -> Child {
+        try ProcessError.check(program)
+        for argument in argumentList {
+            try ProcessError.check(argument)
+        }
+        try ProcessError.check(directory)
+        var flags = 0
+        var files: String[>..] = []
+        var i = 0
+        for stream in streams {
+            let chosen = stream ?? Stdio.Inherit
+            try ProcessError.check(chosen.path)
+            flags = flags | (chosen.kind << (2 * i))
+            files.append(chosen.path)
+            i += 1
+        }
+        var entries: String[>..] = []
+        if cleared || !variables.isEmpty || !removed.isEmpty {
+            flags = flags | 64
+            entries = try environmentEntries()
+        }
+        let handle = Runtime.spawn(program, argumentList, entries, flags, directory, files)
+        if handle == 0 {
+            throw ProcessError.last(program: program, directory: directory, files: files)
+        }
+        return Child(handle: handle)
+    }
+
+    /// Run to its end, and how it ended. A stream said to be piped, which no
+    /// one could read, is nothing. A task cancelled while it waits kills it,
+    /// and throws Cancelled.
+    public fn status() async throws(ProcessError) -> ExitStatus {
+        var command = self
+        var i = 0
+        while i < 3 {
+            if let stream = streams[i] {
+                if stream.kind == Stdio.Piped.kind {
+                    command.streams[i] = Stdio.Null
+                }
+            }
+            i += 1
+        }
+        let child = try command.spawn()
+        return try await Command.finish(child)
+    }
+
+    /// Run to its end, with nothing to read: how it ended, and what it
+    /// wrote to the streams not said to be anything else. Both are read as
+    /// they come, so that however much it writes to either, it does not
+    /// wait. A task cancelled while it waits kills it, and throws Cancelled.
+    ///
+    /// ```sable
+    /// fn version() async throws -> String {
+    ///     let done = try await Command("cc").argument("--version").output()
+    ///     assert(done.succeeded)
+    ///     return done.output
+    /// }
+    /// ```
+    public fn output() async throws(ProcessError) -> Completed {
+        return try await capture([], stdin: streams[0] ?? Stdio.Null)
+    }
+
+    /// Run to its end, with the text to read, as UTF-8.
+    public fn output(input: String) async throws(ProcessError) -> Completed {
+        return try await capture(input.utf8.toArray(), stdin: Stdio.Piped)
+    }
+
+    /// Run to its end, with the bytes to read.
+    public fn output(input: U8[>..]) async throws(ProcessError) -> Completed {
+        return try await capture(input, stdin: Stdio.Piped)
+    }
+
+    fn capture(_ input: U8[>..], stdin: Stdio) async throws(ProcessError) -> Completed {
+        var command = self
+        command.streams = [stdin, streams[1] ?? Stdio.Piped, streams[2] ?? Stdio.Piped]
+        let child = try command.spawn()
+        let writing = Task.spawn { await Command.give(input, to: child.stdin) }
+        let output = Task.spawn { await Command.gather(child.stdout) }
+        let errors = Task.spawn { await Command.gather(child.stderr) }
+        await writing.value
+        let gathered = await output.value
+        let complained = await errors.value
+        let status = try await Command.finish(child)
+        return Completed { status: status, outputBytes: gathered ?? [], errorBytes: complained ?? [] }
+    }
+
+    static fn finish(_ child: Child) async throws(ProcessError) -> ExitStatus {
+        do {
+            return try await child.wait()
+        } catch let error {
+            child.kill()
+            throw error
+        }
+    }
+
+    // All of it, or until the child stops reading, which is all it wanted.
+    static fn give(_ input: U8[>..], to stdin: ChildInput?) async {
+        if let stdin = stdin {
+            let _ = try? await stdin.write(input)
+            stdin.close()
+        }
+    }
+
+    // None for a task cancelled, whose wait for the child throws.
+    static fn gather(_ stream: ChildOutput?) async -> U8[>..]? {
+        if let stream = stream {
+            return try? await stream.readAll()
+        }
+        let nothing: U8[>..] = []
+        return nothing
+    }
+
+    // ---- The environment -----------------------------------------------------
+
+    // All the child is to have: "NAME=value" each.
+    fn environmentEntries() throws(ProcessError) -> String[>..] {
+        var entries: String[>..] = []
+        if !cleared {
+            for entry in Runtime.environmentEntries() {
+                if !isReplaced(Command.name(of: entry)) {
+                    entries.append(entry)
+                }
+            }
+        }
+        for (name, value) in variables {
+            if name.isEmpty || name.contains('=') {
+                throw ProcessError.InvalidArgument(text: name)
+            }
+            try ProcessError.check(name)
+            try ProcessError.check(value)
+            entries.append("\(name)=\(value)")
+        }
+        return entries
+    }
+
+    fn isReplaced(_ name: String) -> Bool {
+        for (other, _) in variables {
+            if Command.isSame(name, other) {
+                return true
+            }
+        }
+        for other in removed {
+            if Command.isSame(name, other) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // Windows's names are the same whatever their case.
+    static fn isSame(_ left: String, _ right: String) -> Bool {
+        #if os(windows)
+        return left.lowercased() == right.lowercased()
+        #else
+        return left == right
+        #endif
+    }
+
+    static fn name(of entry: String) -> String {
+        if let equals = entry.firstIndex(of: '=') {
+            return entry[..<equals].toString()
+        }
+        return entry
+    }
+}

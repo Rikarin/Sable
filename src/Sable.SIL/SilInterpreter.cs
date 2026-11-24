@@ -22,6 +22,9 @@ public sealed class SilTrap(string message, bool located = true) : Exception(mes
     /// <summary>The status the program ends with: 134, as an abort is reported, or 1 for an error main threw.</summary>
     public int ExitStatus { get; internal init; } = 134;
 
+    /// <summary>Not a trap: the program ended itself (Process.exit), and there is nothing to say.</summary>
+    public bool Exits { get; internal init; }
+
     /// <summary>Whether the program's panic hook said it, in place of the report.</summary>
     public bool Hooked { get; internal set; }
 
@@ -34,7 +37,7 @@ public sealed class SilTrap(string message, bool located = true) : Exception(mes
     ///     said it instead. A trap in the hook adds its own after.
     /// </summary>
     public string Report =>
-        Hooked ? ""
+        Hooked || Exits ? ""
         : HookTrap is { } inner ? Plain + $"fatal error: the panic hook trapped: {inner.Message}\n" + (inner.Site is null ? "" : $"  at {inner.Site}\n")
         : Plain;
 
@@ -901,7 +904,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     ///     trap it was given, and then its own.
     /// </summary>
     void RunTrapHook(SilTrap trap) {
-        if (_trapHook is not { } hook) {
+        if (_trapHook is not { } hook || trap.Exits) {
             return;
         }
 
@@ -1858,69 +1861,6 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return Allocate(new HeapString(value ?? ""));
             }
 
-            case "process_run": {
-                var start = new System.Diagnostics.ProcessStartInfo(Sandbox?.CheckProgram(Text(operands[0]).Value) ?? Text(operands[0]).Value) {
-                    RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
-                    // Text goes to and from the program as UTF-8, as the native
-                    // runtime passes it, and not in the console's code page,
-                    // which is what Windows would use.
-                    StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                    StandardOutputEncoding = Encoding.UTF8,
-                    StandardErrorEncoding = Encoding.UTF8,
-                };
-                if (Sandbox is { } confined) {
-                    start.WorkingDirectory = confined.CurrentDirectory;
-                    foreach (var (variable, setting) in confined.ProgramEnvironment) {
-                        start.Environment[variable] = setting;
-                    }
-                }
-
-                // What the program set in its own environment, as a child of
-                // a native one would inherit it.
-                foreach (var (variable, setting) in _environment) {
-                    if (setting is null) {
-                        start.Environment.Remove(variable);
-                    } else {
-                        start.Environment[variable] = setting;
-                    }
-                }
-
-                if (operands[1] is HeapArray given) {
-                    foreach (var argument in Alive(given).Elements) {
-                        start.ArgumentList.Add(Text(argument).Value);
-                    }
-                }
-
-                System.Diagnostics.Process? process;
-                try {
-                    process = System.Diagnostics.Process.Start(start);
-                } catch (System.ComponentModel.Win32Exception) {
-                    process = null;
-                }
-
-                if (process is null) {
-                    _ioFailed = true;
-                    return Allocate(new HeapString(""));
-                }
-
-                using (process) {
-                    var output = process.StandardOutput.ReadToEndAsync();
-                    var errors = process.StandardError.ReadToEndAsync();
-                    try {
-                        process.StandardInput.Write(Text(operands[2]).Value);
-                        process.StandardInput.Close();
-                    } catch (IOException) {
-                        // It stopped reading: what it was given is all it wanted.
-                    }
-
-                    process.WaitForExit();
-                    _lastStatus = process.ExitCode;
-                    _lastErrorOutput = errors.Result;
-                    _ioFailed = false;
-                    return Allocate(new HeapString(output.Result));
-                }
-            }
-
             case "process_status":
                 return _lastStatus;
 
@@ -2353,6 +2293,14 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
         if (builtin.Name.StartsWith("net_", StringComparison.Ordinal)) {
             return Net(builtin.Name, operands);
+        }
+
+        if (builtin.Name.StartsWith("process_", StringComparison.Ordinal)) {
+            return Processes(builtin.Name, operands);
+        }
+
+        if (builtin.Name.StartsWith("signal_", StringComparison.Ordinal)) {
+            return Signals(builtin.Name, operands);
         }
 
         if (builtin.Name.StartsWith("file_", StringComparison.Ordinal)) {

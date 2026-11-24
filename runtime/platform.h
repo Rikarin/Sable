@@ -334,11 +334,98 @@ static void file_map_advise(void *base, int64_t length, int advice);
 
 // ---- Processes -----------------------------------------------------------
 
-// Runs argv[0], found on PATH as the system finds a program, with the
-// arguments after it, to its end: 'input' written to it, what it writes to
-// standard output and error added to the buffers, and how it ended put in
-// 'status'. False when there is no such program, or it cannot be started.
-static bool run_program(char **argv, const char *input, int64_t input_length, Buffer *output, Buffer *errors, int64_t *status);
+// Starting another program (process.c): platform_process_posix.c gives
+// this for macOS and Linux, platform_process_win32.c for Windows; WASI has
+// no processes.
+
+// What each of a child's standard streams is: this program's own, nothing,
+// a pipe to this program, or a file.
+enum { STDIO_INHERIT = 0, STDIO_NULL = 1, STDIO_PIPED = 2, STDIO_FILE = 3 };
+
+// Why a program could not be started, by number: Sable.Process's
+// ProcessError.
+enum {
+    PROCESS_ERROR_NONE = 0,
+    PROCESS_ERROR_NOT_FOUND = 1,
+    PROCESS_ERROR_PERMISSION = 2,
+    PROCESS_ERROR_DIRECTORY = 3,
+    PROCESS_ERROR_NOT_EXECUTABLE = 4,
+    PROCESS_ERROR_FILE = 5, // a stream's file; 'code' is which stream, 0 to 2
+    PROCESS_ERROR_UNSUPPORTED = 6,
+    PROCESS_ERROR_OTHER = 7,
+};
+
+typedef struct ProcessError {
+    int kind;
+    int64_t code; // the system's own: errno, or GetLastError
+} ProcessError;
+
+// What to start, and how.
+typedef struct ProcessSpec {
+    char **argv;           // the program, found on this program's PATH, and its arguments
+    char **environment;    // "NAME=value" each, all the child has; NULL: this program's
+    const char *directory; // where it starts; NULL: where this program is
+    int stdio[3];
+    const char *files[3];  // for STDIO_FILE: read (0), or made and emptied (1, 2)
+} ProcessSpec;
+
+typedef struct PlatformProcess {
+    int64_t id;
+#ifdef _WIN32
+    HANDLE process;
+    HANDLE job; // the child and what it starts; NULL if it could not be put in one
+#endif
+} PlatformProcess;
+
+// An end of a pipe, this program's: nonblocking, and no child's to inherit.
+// PIPE_NONE for none.
+typedef intptr_t PlatformPipe;
+#define PIPE_NONE ((PlatformPipe)-1)
+
+// The program started, this program's ends of its piped streams in 'pipes'
+// (PIPE_NONE for one not piped). Of this program's descriptors it has its
+// three streams and no others; its signals are as a program's start out.
+static bool process_start(const ProcessSpec *spec, PlatformProcess *process, PlatformPipe pipes[3], ProcessError *error);
+// Waits for the process to end, and leaves it unreaped: its identifier
+// stays its own until process_reap.
+static void process_wait(const PlatformProcess *process);
+// How the ended process ended — its exit code, and the signal that ended
+// it, or 0 — and the system's record of it let go. Once.
+static void process_reap(PlatformProcess *process, int64_t *code, int64_t *signal);
+// A process not yet reaped sent a signal: whether it could be.
+static bool process_signal(const PlatformProcess *process, int signal);
+// A process not yet reaped killed, with every process it started and they did.
+static bool process_kill_tree(const PlatformProcess *process);
+
+// Bytes read (0 at the end) or written; or IO_WOULD_BLOCK, IO_FAILED. A
+// write to a pipe no one reads fails, and raises no signal. A write that
+// would block is tried again with the same bytes.
+static int64_t pipe_read(PlatformPipe pipe, void *bytes, int64_t size);
+static int64_t pipe_write(PlatformPipe pipe, const void *bytes, int64_t size);
+static void pipe_close(PlatformPipe pipe);
+// Readiness reported by the reactor with 'key' until unwatched, before it
+// is closed.
+static bool pipe_watch(PlatformPipe pipe, void *key);
+static void pipe_unwatch(PlatformPipe pipe);
+// Waits until one of the pipes, none of them watched, may be ready: the
+// first to write, the other two to read; each PIPE_NONE for none.
+static void pipes_wait(const PlatformPipe pipes[3]);
+
+// What is ready, said by another thread than the one in reactor_wait: a
+// pipe of Windows's. tasks.c gives it.
+static void reactor_ready(void *key, int events);
+
+// ---- Signals ---------------------------------------------------------------
+
+// The signal caught from now on, process.c's signal_arrived called with it
+// on a thread of the runtime's own — never in a handler; or left to do what
+// it did before. False where the system will not (SIGKILL) or the runtime
+// may not (SIGSEGV, which it watches).
+static bool signal_catch(int signal);
+static void signal_let_go(int signal);
+static void signal_arrived(int signal);
+// The signal sent to this process.
+static bool signal_raise(int signal);
 
 static char *current_directory(void);
 static bool change_directory(const char *name);

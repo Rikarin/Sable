@@ -1,20 +1,34 @@
 module Sable.Process
 
-// Running other programs, and this one's place in the system (docs/04 §4.3),
-// written in Sable over the runtime's calls (Sable.Core's Runtime).
+import Sable.IO
 
+// This program's own process, and others run in one call, written in Sable
+// over the runtime's calls (Sable.Core's Runtime).
+
+/// This program's process; and another program run to its end while this
+/// one waits, for a program or a build script that does one thing at a
+/// time. `Command` says more of how it is run, and does not block.
 public struct Process {
-    /// Runs the program, found on PATH unless the name is a path, to its end.
+    /// Runs the program, found on PATH unless the name is a path, to its
+    /// end, with nothing to read. No shell reads the arguments.
     public static fn run(_ program: String, _ arguments: String[>..]) throws(ProcessError) -> Completed {
         return try Process.run(program, arguments, input: "")
     }
 
     /// Runs the program with the input given to it.
     public static fn run(_ program: String, _ arguments: String[>..], input: String) throws(ProcessError) -> Completed {
-        if let output = Runtime.run(program, arguments, input) {
-            return Completed { status: Runtime.lastExitStatus(), output: output, errors: Runtime.lastErrorOutput() }
+        try ProcessError.check(program)
+        for argument in arguments {
+            try ProcessError.check(argument)
         }
-        throw ProcessError.NotFound(program: program)
+        if let output = Runtime.run(program, arguments, input) {
+            return Completed {
+                status: ExitStatus.of(code: Runtime.lastExitStatus(), signal: Runtime.lastExitSignal()),
+                outputBytes: output.utf8.toArray(),
+                errorBytes: Runtime.lastErrorOutput().utf8.toArray()
+            }
+        }
+        throw ProcessError.last(program: program, directory: "", files: [])
     }
 
     public static fn currentDirectory() -> String {
@@ -29,5 +43,18 @@ public struct Process {
     /// This process's identifier.
     public static fn id() -> Int {
         return Runtime.processId()
+    }
+
+    /// The program ended here, with the status (0 to 255 everywhere): what
+    /// it printed is written out, and nothing else it was doing is finished.
+    /// No deinit runs, and no 'defer'.
+    public static fn exit(_ code: Int) -> Never {
+        Runtime.exit(code)
+    }
+
+    /// The program ended here as a trap ends it (SIGABRT, status 134), with
+    /// nothing said or written out.
+    public static fn abort() -> Never {
+        Runtime.abort()
     }
 }

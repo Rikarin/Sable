@@ -1,11 +1,23 @@
 module Sable.Process
 
-/// How a program ended, and what it wrote.
-public struct Completed {
-    /// Its exit status; 128 and the signal when a signal ended it.
-    public var status: Int
-    public var output: String
-    public var errors: String
+import Sable.Text
 
-    public var succeeded: Bool => status == 0
+/// How a program run to its end ended, and what it wrote.
+public struct Completed {
+    /// How it ended.
+    public let status: ExitStatus
+    /// What it wrote to standard output.
+    public let outputBytes: U8[>..]
+    /// What it wrote to standard error.
+    public let errorBytes: U8[>..]
+
+    /// Whether it ended with status 0.
+    public var succeeded: Bool => status.success
+
+    /// What it wrote to standard output, as text; bytes that are not UTF-8
+    /// are U+FFFD.
+    public var output: String => String.fromUtf8Lossy(outputBytes)
+
+    /// What it wrote to standard error, as text.
+    public var errors: String => String.fromUtf8Lossy(errorBytes)
 }

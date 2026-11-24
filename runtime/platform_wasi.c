@@ -317,17 +317,6 @@ static char *environment_variable(const char *name) {
 
 // ---- Processes (Sable.Process's floor) ----------------------------------
 
-// A WASI module cannot start a program: there is no such program.
-static bool run_program(char **argv, const char *input, int64_t input_length, Buffer *output, Buffer *errors, int64_t *status) {
-    (void)argv;
-    (void)input;
-    (void)input_length;
-    (void)output;
-    (void)errors;
-    (void)status;
-    return false;
-}
-
 static char *current_directory(void) {
     char path[4096];
     return getcwd(path, sizeof path) == NULL ? NULL : strdup(path);
@@ -355,3 +344,82 @@ static bool random_bytes(void *buffer, size_t length) {
 // ---- File handles ---------------------------------------------------------
 
 #include "platform_files_posix.c"
+
+// ---- Starting programs, and signals ----------------------------------------
+
+// A WASI module cannot start a program, has no pipes, and is sent no signal.
+static bool process_start(const ProcessSpec *spec, PlatformProcess *process, PlatformPipe pipes[3], ProcessError *error) {
+    (void)spec;
+    (void)process;
+    pipes[0] = pipes[1] = pipes[2] = PIPE_NONE;
+    error->kind = PROCESS_ERROR_UNSUPPORTED;
+    error->code = 0;
+    return false;
+}
+
+static void process_wait(const PlatformProcess *process) {
+    (void)process;
+}
+
+static void process_reap(PlatformProcess *process, int64_t *code, int64_t *signal) {
+    (void)process;
+    *code = -1;
+    *signal = 0;
+}
+
+static bool process_signal(const PlatformProcess *process, int signal) {
+    (void)process;
+    (void)signal;
+    return false;
+}
+
+static bool process_kill_tree(const PlatformProcess *process) {
+    (void)process;
+    return false;
+}
+
+static int64_t pipe_read(PlatformPipe pipe, void *bytes, int64_t size) {
+    (void)pipe;
+    (void)bytes;
+    (void)size;
+    return IO_FAILED;
+}
+
+static int64_t pipe_write(PlatformPipe pipe, const void *bytes, int64_t size) {
+    (void)pipe;
+    (void)bytes;
+    (void)size;
+    return IO_FAILED;
+}
+
+static void pipe_close(PlatformPipe pipe) {
+    (void)pipe;
+}
+
+static bool pipe_watch(PlatformPipe pipe, void *key) {
+    (void)pipe;
+    (void)key;
+    return false;
+}
+
+static void pipe_unwatch(PlatformPipe pipe) {
+    (void)pipe;
+}
+
+static void pipes_wait(const PlatformPipe pipes[3]) {
+    (void)pipes;
+}
+
+static bool signal_catch(int signal) {
+    (void)signal;
+    return false;
+}
+
+static void signal_let_go(int signal) {
+    (void)signal;
+}
+
+static bool signal_raise(int signal) {
+    (void)signal;
+    return false;
+}

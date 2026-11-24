@@ -3,6 +3,7 @@ module ProcessErrorTests
 // ProcessError (Sable.Process), tested with '@test': run with
 //     tools/stdlib-coverage.sh Sable.Process
 
+import Sable.IO
 import Sable.Process
 import Sable.Testing
 
@@ -16,7 +17,15 @@ fn aProcessErrorIsAnError() {
 }
 
 @test
-fn aProcessErrorSaysWhatCouldNotBeStarted() {
-    let error = ProcessError.NotFound(program: "nothing-by-this-name")
-    assertEqual(error.description(), "no program 'nothing-by-this-name' could be started")
+fn aProcessErrorSaysWhatCouldNotBeDone() {
+    assertEqual(ProcessError.NotFound(program: "nothing-by-this-name").description(), "no program 'nothing-by-this-name' could be started")
+    assertEqual(ProcessError.PermissionDenied(program: "x").description(), "'x' may not be run")
+    assertEqual(ProcessError.NotExecutable(program: "x").description(), "'x' is not a program the system can run")
+    assertEqual(ProcessError.NoDirectory(path: "x").description(), "no directory 'x' to start a program in")
+    assertEqual(ProcessError.File(path: "x").description(), "'x' could not be opened for a program's stream")
+    assertEqual(ProcessError.InvalidArgument(text: "x").description(), "'x' cannot be given to a program")
+    assertEqual(ProcessError.Unsupported.description(), "this system cannot do that")
+    assertEqual(ProcessError.Cancelled.description(), "the task was cancelled")
+    assertEqual(ProcessError.Io(error: IoError.Disconnected).description(), IoError.Disconnected.description())
+    assertEqual(ProcessError.Os(program: "x", code: 11).description(), "'x' could not be started: the system's error 11")
 }

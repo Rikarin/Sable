@@ -839,7 +839,10 @@ Sable.Time          Instant Duration Clock, UtcDateTime (the moment),
                     .NET custom/standard patterns, RFC 3339, RFC 2822,
                     ISO 8601, RFC 9557
 Sable.Net           Socket Tcp Udp Tls Http1 Http2 Uri
-Sable.Process       spawn, pipes, environment, signals
+Sable.Process       Command (arguments, environment, directory, streams;
+                    spawn, output, status), Child (piped streams, wait,
+                    tryWait, kill, kill(tree:), signal), ExitStatus, Signal,
+                    Signals (on, handle, raise), Process (run, exit, abort)
 Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
 Sable.Testing       @test @bench, assertions, snapshot testing, property testing
 Sable.Interop       C FFI helpers, CString, CVarArg, callback shims
@@ -1057,6 +1060,44 @@ Every type is `Parsable` as ISO 8601 (calendar, ordinal and week dates,
 basic and extended, reduced times with a fraction on the last part,
 24:00), and `ZonedDateTime` as RFC 9557 (`...+01:00[Europe/Prague]`).
 
+### Processes and signals
+
+`Sable.Process` starts programs through the runtime's `process_spawn`
+(`runtime/process.c`, over `platform_process_posix.c` and
+`platform_process_win32.c`; under WASI it throws `Unsupported`), and
+`Process.run`, the blocking call, is the same start with its pipes pumped in
+place.
+
+- **Starting.** The program is found by the parent, on its own PATH, and run
+  by its path: no shell, and nothing looked up again in the child's
+  environment or directory. Linux forks and execs, the child making only
+  async-signal-safe calls, its failure (no such directory, not a program)
+  sent back through a pipe the exec closes; macOS uses `posix_spawn`, whose
+  errors come back as they are; Windows `CreateProcessW`, its arguments
+  quoted as `CommandLineToArgvW` reads them. A batch file is refused: cmd
+  would read its arguments as commands, whatever the quoting.
+- **What a child has.** Its three streams and no other descriptor
+  (`POSIX_SPAWN_CLOEXEC_DEFAULT`, `close_range`, a handle list), everything
+  the runtime opens being closed on exec besides; no signal blocked, none
+  handled, SIGPIPE as a program expects it.
+- **Streams.** This program's end of a pipe is nonblocking and an I/O source
+  as a socket is, so a task reading or writing one suspends (§6.7); Windows'
+  are overlapped named pipes whose events the thread pool hears. Both of a
+  child's outputs are read at once by `output`, so neither fills. A write to
+  a child that has stopped reading throws, and raises no SIGPIPE here.
+- **Ending.** A thread per child waits for it without reaping it, then reaps
+  it under the child's lock, the lock a signal is sent under: a signal never
+  goes to an identifier that may be another process's. A child is reaped
+  whether or not it is waited for. `kill(tree: true)` ends the job a child
+  was put in before it ran on Windows; elsewhere it stops each process, then
+  ends its children and it, which does not reach one whose parent has ended.
+- **Signals.** The handler notes the signal and writes to a pipe; a thread
+  reads it and wakes the tasks listening. What the signal did before is put
+  back when the last of them goes. A task waiting for a signal does not keep
+  a program going once main has returned, as one waiting for a socket does.
+- **Cancellation.** `wait` throws `Cancelled`, and the child runs on:
+  `withTimeout` limits a wait. `output` and `status` kill theirs.
+
 ### Source layout
 
 Each module is a directory of `lib/` (`lib/Sable.Collections/`), its files
@@ -1182,7 +1223,7 @@ recover at the task boundary.
   docs/04, "Async, as implemented".)
 - An I/O reactor — kqueue, epoll, or an I/O completion port — which the
   parked worker waits in until the earliest timer: a task waiting for a
-  socket suspends, and no worker blocks. Work that must block runs on a
+  socket, a child's pipe, its end or a signal suspends, and no worker blocks. Work that must block runs on a
   blocking pool (`Task.blocking`). (See docs/04, "Async, as implemented".)
 - Tasks are heap-allocated with a growable stack segment chain; `async`
   functions are compiled to state machines so a suspended task costs only its

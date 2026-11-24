@@ -763,7 +763,7 @@ fn main() {
                     let counted = try! {{count}}
                     print(counted.output.trimmed())
                     let failing = try! {{fail}}
-                    print(failing.status)
+                    print(failing.status.code!)
                     print(failing.errors.trimmed())
                     print(failing.output.count)
                     do {
@@ -771,6 +771,8 @@ fn main() {
                         print("ran")
                     } catch .NotFound(let name) {
                         print("not found: " + name)
+                    } catch {
+                        print(error.description())
                     }
                     let start = Process.currentDirectory()
                     print(Process.changeDirectory("/"))

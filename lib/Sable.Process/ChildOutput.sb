@@ -1,0 +1,64 @@
+module Sable.Process
+
+import Sable.IO
+import Sable.Text
+
+/// A child's standard output or error: what the child writes, read as it
+/// comes. A read suspends the task while there is nothing, not its thread.
+/// A child that writes more than is read waits: read both its output and
+/// its errors, each in a task of its own, when both are piped. Deeply
+/// immutable, so Sendable; one task at a time may read it.
+@immutable
+public final class ChildOutput: AsyncReader {
+    let handle: Int
+
+    init(handle: Int) {
+        self.handle = handle
+    }
+
+    deinit {
+        Runtime.closeSocket(handle)
+    }
+
+    /// Up to 'count' bytes, as soon as any have come; none at the end, once
+    /// the child — and whatever it started that has its stream — has closed
+    /// it or ended.
+    public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        while true {
+            let bytes = Runtime.readSocket(handle, count)
+            if Runtime.socketStatus() == 0 {
+                return bytes
+            }
+            try await waitForPipe(handle, writable: false)
+        }
+    }
+
+    /// Every byte to the end.
+    public fn readAll() async throws(IoError) -> U8[>..] {
+        var all: U8[>..] = []
+        while true {
+            let bytes = try await self.read(upTo: 65536)
+            if bytes.isEmpty {
+                return all
+            }
+            all.append(contentsOf: bytes)
+        }
+    }
+
+    /// All it writes to the end, as text; bytes that are not UTF-8 are
+    /// U+FFFD.
+    public fn readText() async throws(IoError) -> String {
+        let bytes = try await readAll()
+        return String.fromUtf8Lossy(bytes)
+    }
+
+    /// Its lines as they come, each without its end of line.
+    public fn lines() -> ChildLines {
+        return ChildLines(output: self)
+    }
+
+    /// Not read any more: a child that writes on is told no one reads it.
+    public fn close() {
+        Runtime.closeSocket(handle)
+    }
+}

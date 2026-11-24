@@ -1,0 +1,139 @@
+module ConcurrentQueueTests
+
+// ConcurrentQueue (Sable.Concurrency): against a model one operation at a
+// time, and under producers and consumers running at once, where a
+// linearizable FIFO queue gives every value exactly once and each
+// consumer sees each producer's values in the order they were enqueued.
+
+import Sable.Concurrency
+import Sable.Testing
+
+/// A random walk of numbers: xorshift.
+struct Walk {
+    var state: U64
+
+    mutating fn next(_ below: Int) -> Int {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return Int(state % U64(below))
+    }
+}
+
+@test
+fn aQueueGivesBackInTheOrderItWasGiven() {
+    let queue = ConcurrentQueue<String>()
+    assert(queue.isEmpty)
+    assert(queue.dequeue() == none)
+    assert(queue.peek() == none)
+    queue.enqueue("a")
+    queue.enqueue("b")
+    assertEqual(queue.count, 2)
+    assert(!queue.isEmpty)
+    assertEqual(queue.peek() ?? "-", "a")
+    assertEqual(queue.dequeue() ?? "-", "a")
+    assertEqual(queue.dequeue() ?? "-", "b")
+    assert(queue.dequeue() == none)
+    assertEqual(queue.count, 0)
+}
+
+@test
+fn randomOperationsAgreeWithAnArray() {
+    let queue = ConcurrentQueue<Int>()
+    var model: Int[>..] = []
+    var front = 0
+    var walk = Walk { state: 0x9E3779B97F4A7C15 }
+    var step = 0
+    while step < 20000 {
+        if walk.next(3) < 2 {
+            queue.enqueue(step)
+            model.append(step)
+        } else {
+            let expected: Int? = front < model.count ? model[front] : none
+            if expected != none {
+                front = front + 1
+            }
+            assert(queue.dequeue() == expected, "dequeue at step \(step)")
+        }
+        assertEqual(queue.count, model.count - front)
+        step = step + 1
+    }
+}
+
+@test
+fn valuesLeftInAQueueAreFreedWithIt() {
+    var made = 0
+    while made < 3 {
+        let queue = ConcurrentQueue<String[>..]>()
+        queue.enqueue(["x", "y"])
+        queue.enqueue(["z"])
+        made = made + 1
+    }
+    assertEqual(made, 3)
+}
+
+@test
+fn producersAndConsumersAtOnceLoseAndReorderNothing() async {
+    let queue = ConcurrentQueue<Int>()
+    let producers = 2
+    let perProducer = 20000
+    let taken = Atomic<Int>(0)
+    let seen = await withTaskGroup(of: Int[>..].self) { group -> Int[>..][>..] in
+        var p = 0
+        while p < producers {
+            let producer = p
+            group.spawn {
+                var i = 0
+                while i < perProducer {
+                    queue.enqueue(producer * 1000000 + i)
+                    i += 1
+                    if i % 1000 == 0 {
+                        await yieldNow()
+                    }
+                }
+                return []
+            }
+            p += 1
+        }
+        var c = 0
+        while c < 2 {
+            group.spawn {
+                var got: Int[>..] = []
+                while taken.load() < producers * perProducer {
+                    if let value = queue.dequeue() {
+                        got.append(value)
+                        taken.add(1)
+                    } else {
+                        await yieldNow()
+                    }
+                }
+                return got
+            }
+            c += 1
+        }
+        var all: Int[>..][>..] = []
+        for await got in group {
+            all.append(got)
+        }
+        return all
+    }
+
+    var counts = [0, 0]
+    var total = 0
+    for got in seen {
+        // Each producer's values, as one consumer took them, rise.
+        var last = [-1, -1]
+        for value in got {
+            let producer = value / 1000000
+            let index = value % 1000000
+            assert(index > last[producer], "producer \(producer)'s values out of order")
+            last[producer] = index
+            counts[producer] += 1
+            total += 1
+        }
+    }
+    assertEqual(total, producers * perProducer)
+    assertEqual(counts[0], perProducer)
+    assertEqual(counts[1], perProducer)
+    assert(queue.isEmpty)
+}

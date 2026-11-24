@@ -25,6 +25,8 @@ var benchmarks = new Dictionary<string, Func<string>> {
     ["utf8-validate"] = Utf8Validate,
     ["linq"] = Linq,
     ["mutex"] = Mutex,
+    ["concurrent-dictionary"] = ConcurrentDictionaryBench,
+    ["concurrent-queue"] = ConcurrentQueueBench,
 };
 
 if (args.Length == 0 || !benchmarks.TryGetValue(args[0], out var run)) {
@@ -70,6 +72,82 @@ static string Mutex() {
     }
 
     return count.ToString();
+}
+
+// Four threads each counting a quarter of a million keys of 4096 with
+// AddOrUpdate and reading one back with GetOrAdd.
+static string ConcurrentDictionaryBench() {
+    checked {
+        var counts = new System.Collections.Concurrent.ConcurrentDictionary<long, long>();
+        var threads = new Thread[4];
+        for (var t = 0; t < threads.Length; t++) {
+            var seed = t;
+            threads[t] = new Thread(() => {
+                long x = seed * 7919 + 1;
+                for (var i = 0; i < 250000; i++) {
+                    x = (x * 1103515245 + 12345) % 2147483648;
+                    var key = x % 4096;
+                    counts.AddOrUpdate(key, 1, static (_, v) => v + 1);
+                    counts.GetOrAdd(key + 4096, static _ => 1);
+                }
+            });
+            threads[t].Start();
+        }
+
+        foreach (var thread in threads) {
+            thread.Join();
+        }
+
+        long total = 0;
+        foreach (var entry in counts) {
+            total += entry.Value;
+        }
+
+        return $"{counts.Count} {total}";
+    }
+}
+
+// Two threads enqueue half a million numbers each while two dequeue them
+// all and add them up.
+static string ConcurrentQueueBench() {
+    checked {
+        var queue = new System.Collections.Concurrent.ConcurrentQueue<long>();
+        long taken = 0;
+        var sums = new long[2];
+        var threads = new List<Thread>();
+        for (var p = 0; p < 2; p++) {
+            threads.Add(new Thread(() => {
+                for (long i = 0; i < 500000; i++) {
+                    queue.Enqueue(i);
+                }
+            }));
+        }
+
+        for (var c = 0; c < 2; c++) {
+            var consumer = c;
+            threads.Add(new Thread(() => {
+                long total = 0;
+                while (Interlocked.Read(ref taken) < 1000000) {
+                    if (queue.TryDequeue(out var value)) {
+                        total += value;
+                        Interlocked.Increment(ref taken);
+                    }
+                }
+
+                sums[consumer] = total;
+            }));
+        }
+
+        foreach (var thread in threads) {
+            thread.Start();
+        }
+
+        foreach (var thread in threads) {
+            thread.Join();
+        }
+
+        return (sums[0] + sums[1]).ToString();
+    }
 }
 
 static string MapInt() {

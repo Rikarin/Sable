@@ -746,7 +746,8 @@ Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
                     zero-copy @inline_layout path
 Sable.Concurrency   Channel, Mutex RwLock Condition Semaphore Barrier
                     CountdownLatch Once Lazy, AsyncMutex AsyncSemaphore,
-                    AsyncStream
+                    AsyncStream, ConcurrentDictionary (sharded)
+                    ConcurrentQueue (two-lock) ConcurrentStack
                     (Task, TaskGroup, AsyncSequence, Atomic<T> and OnceCell
                     are Sable.Core's: an Atomic's cell is Core's raw memory)
 Sable.Time          Instant Duration Clock Calendar TimeZone

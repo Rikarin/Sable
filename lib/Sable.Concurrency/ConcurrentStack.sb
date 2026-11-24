@@ -1,0 +1,76 @@
+module Sable.Concurrency
+
+// A last-in, first-out stack for many threads at once. Every operation is
+// at the one end, so there is nothing to spread over locks as the queue
+// and the dictionary do: an array behind a Mutex, its lock held for a push
+// or a pop and no longer.
+
+/// A last-in, first-out stack that many threads push to and pop from at
+/// once: .NET's `ConcurrentStack`. Each operation is atomic. Its values
+/// cross from thread to thread, so they are Sendable.
+///
+/// ```sable
+/// let undo = ConcurrentStack<String>()
+/// undo.push("type")
+/// undo.push("delete")
+/// assert(undo.pop() == "delete")
+/// assert(undo.peek() == "type")
+/// assert(undo.count == 1)
+/// ```
+@immutable
+public final class ConcurrentStack<Element: Sendable> {
+    let items: Mutex<Element[>..]>
+
+    /// An empty stack.
+    public init() {
+        items = Mutex<Element[>..]>([])
+    }
+
+    /// Puts the value on top.
+    public fn push(_ value: Element) {
+        items.withLock { $0.append(value) }
+    }
+
+    /// Puts each of the values on top, in order, as one step: no other
+    /// thread's value comes between them.
+    public fn push(contentsOf values: Element[:]) {
+        items.withLock { stack in
+            for value in values {
+                stack.append(value)
+            }
+        }
+    }
+
+    /// Takes the value on top; none when the stack is empty.
+    public fn pop() -> Element? {
+        return items.withLock { $0.isEmpty ? none : $0.removeLast() }
+    }
+
+    /// Takes up to 'count' values from the top, the top one first, as one
+    /// step.
+    public fn pop(upTo count: Int) -> Element[>..] {
+        return items.withLock { stack in
+            var taken: Element[>..] = []
+            while taken.count < count && !stack.isEmpty {
+                taken.append(stack.removeLast())
+            }
+            return taken
+        }
+    }
+
+    /// The value on top, left there; none when the stack is empty.
+    public fn peek() -> Element? {
+        return items.withLock { $0.last }
+    }
+
+    /// How many values the stack holds.
+    public var count: Int => items.withLock { $0.count }
+
+    /// Whether the stack is empty.
+    public var isEmpty: Bool => items.withLock { $0.isEmpty }
+
+    /// Removes every value.
+    public fn removeAll() {
+        items.withLock { $0.removeAll() }
+    }
+}

@@ -5276,6 +5276,15 @@ public sealed partial class SilGen {
                 case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var parameter) && parameter.Type is not AddressType:
                     return parameter;
 
+                // A value a closure captured by value, borrowed where its
+                // context holds it: the context outlives the closure's code
+                // and nothing changes it there, so a use needs no copy. A
+                // task's captured object, shared with every other thread,
+                // is then not counted up and down on each use.
+                case BoundLocalAccess access when closure is not null && closure.Captures.TryGetValue(access.Local, out var byValue) && !byValue.Boxed
+                    && byValue.Kind is CaptureKind.Default or CaptureKind.ByValue && LowerType(access.Type) is { IsTrivial: false } and not AddressType:
+                    return Hold(Emit(new LoadBorrowInst(Emit(new RefElementAddrInst(_context!, byValue.Field)))));
+
                 case BoundSelfAccess when _selfValue is not null:
                     return _selfValue;
 

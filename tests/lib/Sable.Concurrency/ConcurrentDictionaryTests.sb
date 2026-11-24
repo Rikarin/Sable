@@ -1,0 +1,174 @@
+module ConcurrentDictionaryTests
+
+// ConcurrentDictionary (Sable.Concurrency): against a Dictionary one
+// operation at a time, and under many tasks at once: each operation on a
+// key atomic, getOrInsert's closure run once per key, and iteration during
+// writes giving each entry that is there throughout exactly once.
+
+import Sable.Concurrency
+import Sable.Testing
+
+/// A random walk of numbers: xorshift.
+struct Walk {
+    var state: U64
+
+    mutating fn next(_ below: Int) -> Int {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return Int(state % U64(below))
+    }
+}
+
+@test
+fn eachOperationByExample() {
+    let dictionary = ConcurrentDictionary<String, Int>(shards: 5)
+    assert(dictionary.isEmpty)
+    assert(dictionary["a"] == none)
+    assert(dictionary.updateValue(1, forKey: "a") == none)
+    assert(dictionary.updateValue(2, forKey: "a") == 1)
+    assert(!dictionary.insert(3, forKey: "a"))
+    assert(dictionary.insert(4, forKey: "b"))
+    assert(dictionary.contains("b"))
+    assertEqual(dictionary.count, 2)
+    assert(dictionary.update("a") { $0 *= 10 })
+    assert(!dictionary.update("zz") { $0 *= 10 })
+    dictionary.update("c", default: 7) { $0 += 1 }
+    assertEqual(dictionary["a"] ?? 0, 20)
+    assertEqual(dictionary["c"] ?? 0, 8)
+    assertEqual(dictionary.getOrInsert("d", with: { 9 }), 9)
+    assertEqual(dictionary.getOrInsert("d", with: { 10 }), 9)
+    assert(dictionary.remove("d") == 9)
+    assert(dictionary.remove("d") == none)
+    let copy = dictionary.snapshot()
+    assertEqual(copy.count, 3)
+    assertEqual(copy["b"] ?? 0, 4)
+    var keys = 0
+    for entry in dictionary {
+        keys += entry.value > 0 ? 1 : 0
+    }
+    assertEqual(keys, 3)
+    dictionary.removeAll()
+    assert(dictionary.isEmpty)
+    assertEqual(dictionary.count, 0)
+}
+
+@test
+fn randomOperationsAgreeWithADictionary() {
+    let dictionary = ConcurrentDictionary<Int, Int>()
+    var model: [Int: Int] = [:]
+    var walk = Walk { state: 0xD1B54A32D192ED03 }
+    var step = 0
+    while step < 20000 {
+        let key = walk.next(200)
+        let choice = walk.next(5)
+        if choice == 0 {
+            assert(dictionary.updateValue(step, forKey: key) == model.updateValue(step, forKey: key))
+        } else if choice == 1 {
+            assert(dictionary.remove(key) == model.remove(key))
+        } else if choice == 2 {
+            assertEqual(dictionary.getOrInsert(key, with: { step }), model.orInsertWith(key, { step }))
+        } else if choice == 3 {
+            dictionary.update(key, default: 0) { $0 += 1 }
+            model.modify(key, default: 0) { $0 += 1 }
+        } else {
+            assert(dictionary[key] == model[key])
+        }
+        step = step + 1
+    }
+    assertEqual(dictionary.count, model.count)
+    for entry in dictionary {
+        assert(model[entry.key] == entry.value)
+    }
+}
+
+@test
+fn manyTasksUpdatingAtOnceLoseNoUpdate() async {
+    let counts = ConcurrentDictionary<Int, Int>()
+    let made = Atomic<Int>(0)
+    await withTaskGroup(of: Int.self) { group in
+        var task = 0
+        while task < 4 {
+            group.spawn {
+                var i = 0
+                while i < 20000 {
+                    counts.update(i % 64, default: 0) { $0 += 1 }
+                    let value = counts.getOrInsert(1000 + i % 32, with: {
+                        made.add(1)
+                        return i % 32
+                    })
+                    assert(value == i % 32)
+                    i += 1
+                }
+                return 0
+            }
+            task += 1
+        }
+        await group.waitForAll()
+    }
+    var total = 0
+    var key = 0
+    while key < 64 {
+        total += counts[key] ?? 0
+        key += 1
+    }
+    assertEqual(total, 4 * 20000)
+    assertEqual(made.load(), 32)
+    assertEqual(counts.count, 64 + 32)
+}
+
+@test
+fn iteratingWhileOthersWriteGivesEachLastingEntryOnce() async {
+    let dictionary = ConcurrentDictionary<Int, Int>()
+    var key = 0
+    while key < 500 {
+        dictionary.insert(key, forKey: key)
+        key += 1
+    }
+    let done = Atomic<Bool>(false)
+    let seenRight = await withTaskGroup(of: Bool.self) { group -> Bool in
+        group.spawn {
+            var i = 0
+            while !done.load() {
+                // Keys of 10000 and above come and go; 0 to 499 stay.
+                dictionary.updateValue(i, forKey: 10000 + i % 300)
+                dictionary.remove(10000 + (i + 150) % 300)
+                i += 1
+                if i % 100 == 0 {
+                    await yieldNow()
+                }
+            }
+            return true
+        }
+        group.spawn {
+            var right = true
+            var round = 0
+            while round < 20 {
+                var times: Int[>..] = []
+                var k = 0
+                while k < 500 {
+                    times.append(0)
+                    k += 1
+                }
+                for entry in dictionary {
+                    if entry.key < 500 {
+                        times[entry.key] += 1
+                    }
+                }
+                for count in times {
+                    right = right && count == 1
+                }
+                round += 1
+                await yieldNow()
+            }
+            done.store(true)
+            return right
+        }
+        var all = true
+        for await right in group {
+            all = all && right
+        }
+        return all
+    }
+    assert(seenRight, "a lasting entry was missed or given twice")
+}

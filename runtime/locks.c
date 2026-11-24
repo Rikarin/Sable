@@ -7,20 +7,52 @@
 // suspension, as .NET's Monitor and Rust's Mutex block. A task that must not
 // hold a worker while it waits uses an actor (AsyncMutex, AsyncSemaphore).
 
+// Each lock on cache lines of its own: locks made one after another (a
+// sharded collection's) would otherwise share a line, and threads taking
+// different locks would still pass it between their cores.
+enum { LOCK_ALIGNMENT = 128 };
+
 void *sable_lock_new(void) {
-    PlatformMutex *mutex = malloc(sizeof *mutex);
-    if (mutex == NULL) {
-        sable_trap("out of memory");
-    }
+    int64_t size = ((int64_t)sizeof(PlatformMutex) + LOCK_ALIGNMENT - 1) / LOCK_ALIGNMENT * LOCK_ALIGNMENT;
+    PlatformMutex *mutex = sable_raw_alloc(size, LOCK_ALIGNMENT);
     mutex_init(mutex);
     return mutex;
 }
 
 void sable_lock_free(void *mutex) {
-    free(mutex);
+    sable_raw_free(mutex);
 }
 
+// A pause in a spin: the processor's hint that this is a wait loop.
+static inline void spin_pause(void) {
+#if defined(__aarch64__)
+    __asm__ __volatile__("yield");
+#elif defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#endif
+}
+
+// A lock held by another thread is usually let go within a few hundred
+// nanoseconds — a collection's shard, a queue's end — so a thread tries
+// again a few times before it asks the system to put it to sleep, which
+// costs the sleeper and the thread that wakes it each a call into the kernel.
+enum { LOCK_SPINS = 40 };
+
 void sable_lock_acquire(void *mutex) {
+    if (mutex_try_lock(mutex)) {
+        return;
+    }
+
+    for (int spin = 0; spin < LOCK_SPINS; spin++) {
+        for (int pause = 0; pause < 8; pause++) {
+            spin_pause();
+        }
+
+        if (mutex_try_lock(mutex)) {
+            return;
+        }
+    }
+
     mutex_lock(mutex);
 }
 

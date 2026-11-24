@@ -1,0 +1,162 @@
+module Sable.Concurrency
+
+// A first-in, first-out queue for many producers and many consumers at
+// once: Michael and Scott's two-lock queue ("Simple, Fast, and Practical
+// Non-Blocking and Blocking Concurrent Queue Algorithms", 1996). It is a
+// list of nodes that starts with a dummy; producers append under one lock,
+// consumers take the node after the dummy under another, so a producer and
+// a consumer never wait for each other. The one place they meet is the last
+// node's link, which a producer sets with a release and a consumer reads
+// with an acquire, so the value it links is seen whole.
+//
+// A node is raw memory: the next node's address (0 for none), the address
+// of the cell its value is in, and, for a value aligned to no more than a
+// word, that cell itself, so that a value costs one allocation. Nothing in
+// it is an object, so only the lock holders reach it, and freeing one is
+// never in a race.
+//
+// 'counted' goes up before a value is linked and down after it is taken,
+// so while it is zero no value is linked that has not been taken: a
+// consumer that finds it zero answers that the queue is empty without
+// taking the lock, as one waiting for values does again and again.
+
+// The orderings the atomic builtins take by number (MemoryOrdering's codes).
+const acquiring = 1
+const releasing = 2
+
+/// A first-in, first-out queue that many threads add to and take from at
+/// once: .NET's `ConcurrentQueue`. Each operation is atomic, and values
+/// come out in the order they went in. Its values cross from thread to
+/// thread, so they are Sendable.
+///
+/// ```sable
+/// let jobs = ConcurrentQueue<String>()
+/// jobs.enqueue("first")
+/// jobs.enqueue("second")
+/// assert(jobs.dequeue() == "first")
+/// assert(jobs.peek() == "second")
+/// assert(jobs.count == 1)
+/// ```
+@immutable
+public final class ConcurrentQueue<Element: Sendable> {
+    let headLock: Int
+    let tailLock: Int
+    // Node addresses: head the dummy before the first value, tail the last.
+    let head: Atomic<Int>
+    let tail: Atomic<Int>
+    let counted: Atomic<Int>
+    // Words of a node after its two links: the value's, or none when the
+    // value needs an alignment of more than a word and a cell of its own.
+    let valueWords: Int
+
+    /// An empty queue.
+    public init() {
+        headLock = Runtime.lockNew()
+        tailLock = Runtime.lockNew()
+        valueWords = MemoryLayout<Element>.alignment <= 8 ? (MemoryLayout<Element>.stride + 7) / 8 : 0
+        let dummy = ConcurrentQueue.node(words: 0)
+        head = Atomic<Int>(dummy)
+        tail = Atomic<Int>(dummy)
+        counted = Atomic<Int>(0)
+    }
+
+    deinit {
+        while dequeue() != none { }
+        unsafe {
+            RawPtr<Int>(address: head.load(ordering: .Relaxed)).deallocate()
+        }
+        Runtime.lockFree(headLock)
+        Runtime.lockFree(tailLock)
+    }
+
+    /// A node of no next node, with room for a value of 'words' words
+    /// after its links; its cell is that room, or none yet.
+    static fn node(words: Int) -> Int {
+        unsafe {
+            let made = RawPtr<Int>.allocate(count: 2 + words)
+            made.initialize(to: 0, at: 0)
+            made.initialize(to: words > 0 ? made.address + 16 : 0, at: 1)
+            return made.address
+        }
+    }
+
+    /// Adds the value at the back.
+    public fn enqueue(_ value: Element) {
+        Runtime.share(value)
+        let node = ConcurrentQueue.node(words: valueWords)
+        unsafe {
+            let links = RawPtr<Int>(address: node)
+            if valueWords == 0 {
+                links.store(RawPtr<Element>.allocate(count: 1).address, at: 1)
+            }
+            RawPtr<Element>(address: links.load(at: 1)).initialize(to: value)
+        }
+        counted.add(1, ordering: .Relaxed)
+        Runtime.lockAcquire(tailLock)
+        let last = tail.load(ordering: .Relaxed)
+        Int.atomicStore(last, node, releasing)
+        tail.store(node, ordering: .Relaxed)
+        Runtime.lockRelease(tailLock)
+    }
+
+    /// Takes the value at the front; none when the queue is empty.
+    public fn dequeue() -> Element? {
+        if counted.load(ordering: .Acquire) == 0 {
+            return none
+        }
+        Runtime.lockAcquire(headLock)
+        let dummy = head.load(ordering: .Relaxed)
+        let first = Int.atomicLoad(dummy, acquiring)
+        if first == 0 {
+            Runtime.lockRelease(headLock)
+            return none
+        }
+        // The first node becomes the dummy: its value is taken out, and the
+        // old dummy, which no producer reaches now, is freed.
+        var value: Element? = none
+        unsafe {
+            let node = RawPtr<Int>(address: first)
+            let cell = RawPtr<Element>(address: node.load(at: 1))
+            value = cell.move()
+            if valueWords == 0 {
+                cell.deallocate()
+                node.store(0, at: 1)
+            }
+        }
+        head.store(first, ordering: .Relaxed)
+        counted.subtract(1, ordering: .Relaxed)
+        Runtime.lockRelease(headLock)
+        unsafe {
+            RawPtr<Int>(address: dummy).deallocate()
+        }
+        return value
+    }
+
+    /// The value at the front, left there; none when the queue is empty.
+    public fn peek() -> Element? {
+        Runtime.lockAcquire(headLock)
+        let first = Int.atomicLoad(head.load(ordering: .Relaxed), acquiring)
+        var value: Element? = none
+        if first != 0 {
+            unsafe {
+                value = RawPtr<Element>(address: RawPtr<Int>(address: first).load(at: 1)).load()
+            }
+        }
+        Runtime.lockRelease(headLock)
+        return value
+    }
+
+    /// How many values are in the queue: exact when no other thread is
+    /// adding or taking, and otherwise one the queue had a moment ago.
+    public var count: Int => counted.load(ordering: .Relaxed)
+
+    /// Whether the queue has no value now.
+    public var isEmpty: Bool {
+        get {
+            Runtime.lockAcquire(headLock)
+            let empty = Int.atomicLoad(head.load(ordering: .Relaxed), acquiring) == 0
+            Runtime.lockRelease(headLock)
+            return empty
+        }
+    }
+}

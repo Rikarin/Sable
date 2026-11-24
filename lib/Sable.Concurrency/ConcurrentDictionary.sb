@@ -1,0 +1,234 @@
+module Sable.Concurrency
+
+// A dictionary many threads use at once, as .NET's ConcurrentDictionary:
+// its entries are spread over shards by their keys' hashes, each shard a
+// Dictionary behind a lock of its own, so that threads working on keys of
+// different shards never wait for each other. The shards are raw memory,
+// each lock and each Dictionary on cache lines of its own, rather than an
+// array of Mutex objects: reaching an object would retain and release it,
+// and every thread counting the same objects up and down would pass their
+// cache lines from core to core on every operation. Each operation on one key is
+// atomic: it holds that key's shard for its whole length, the closure of
+// getOrInsert and update included. What spans shards (count, iteration) sees
+// each shard as it is when it gets to it, not all of them at one moment.
+
+/// A dictionary for many threads at once, each operation on a key atomic:
+/// .NET's `ConcurrentDictionary`. Its keys and values cross from thread to
+/// thread, so they are Sendable.
+///
+/// ```sable
+/// let hits = ConcurrentDictionary<String, Int>()
+/// hits.update("home", default: 0) { $0 += 1 }
+/// hits.update("home", default: 0) { $0 += 1 }
+/// assert(hits["home"] == 2)
+/// assert(hits.getOrInsert("about", with: { 10 }) == 10)
+/// assert(hits.getOrInsert("about", with: { 20 }) == 10)
+/// assert(hits.count == 2)
+/// ```
+@immutable
+public final class ConcurrentDictionary<Key: Hashable & Sendable, Value: Sendable>: Sequence {
+    public alias Element = (key: Key, value: Value)
+    public alias Iter = ConcurrentDictionaryIterator<Key, Value>
+
+    // Shard i's lock is locks[i]; its Dictionary is cells[i * spacing].
+    let locks: RawPtr<Int>
+    let cells: RawPtr<[Key: Value]>
+    let spacing: Int
+    let mask: Int
+
+    /// An empty dictionary, with as many shards as threads that may use it
+    /// at once without waiting for each other: 32 unless given, rounded up
+    /// to a power of two.
+    public init(shards count: Int = 32) {
+        var size = 1
+        while size < count {
+            size = size * 2
+        }
+        mask = size - 1
+        let stride = MemoryLayout<[Key: Value]>.stride
+        spacing = stride >= 128 ? 1 : (128 + stride - 1) / stride
+        unsafe {
+            locks = RawPtr<Int>.allocate(count: size)
+            cells = RawPtr<[Key: Value]>.allocate(count: size * spacing)
+            var i = 0
+            while i < size {
+                locks.initialize(to: Runtime.lockNew(), at: i)
+                let empty: [Key: Value] = [:]
+                Runtime.share(empty)
+                cells.initialize(to: empty, at: i * spacing)
+                i = i + 1
+            }
+        }
+    }
+
+    deinit {
+        unsafe {
+            var i = 0
+            while i <= mask {
+                cells.advanced(by: i * spacing).deinitialize()
+                Runtime.lockFree(locks.load(at: i))
+                i = i + 1
+            }
+            cells.deallocate()
+            locks.deallocate()
+        }
+    }
+
+    /// The closure's result for shard i's Dictionary, its lock held.
+    fn withShard<R>(_ i: Int, _ body: (inout [Key: Value]) -> R) -> R {
+        unsafe {
+            let lock = locks.load(at: i)
+            Runtime.lockAcquire(lock)
+            var entries = cells.move(at: i * spacing)
+            let result = body(&entries)
+            Runtime.share(entries)
+            cells.initialize(to: entries, at: i * spacing)
+            Runtime.lockRelease(lock)
+            return result
+        }
+    }
+
+    /// The closure's result for the Dictionary of the key's shard, its lock
+    /// held. The shard is chosen by the hash's high bits, as the shard's
+    /// own Dictionary places its keys by the low ones.
+    fn withShard<R>(of key: Key, _ body: (inout [Key: Value]) -> R) -> R {
+        return withShard((key.hashValue >> 40) & mask, body)
+    }
+
+    /// The key's value, or none.
+    public subscript(key: Key) -> Value? {
+        get => withShard(of: key) { $0[key] }
+    }
+
+    /// Whether the key has a value.
+    public fn contains(_ key: Key) -> Bool {
+        return withShard(of: key) { $0.contains(key) }
+    }
+
+    /// Sets the key's value, and gives the value it replaced, if any.
+    public fn updateValue(_ value: Value, forKey key: Key) -> Value? {
+        Runtime.share(key)
+        Runtime.share(value)
+        return withShard(of: key) { $0.updateValue(value, forKey: key) }
+    }
+
+    /// Sets the key's value if it has none: whether it did (.NET's TryAdd).
+    public fn insert(_ value: Value, forKey key: Key) -> Bool {
+        Runtime.share(key)
+        Runtime.share(value)
+        return withShard(of: key) { $0.insert(value, forKey: key) }
+    }
+
+    /// Removes the key, and gives the value it had, if any.
+    public fn remove(_ key: Key) -> Value? {
+        return withShard(of: key) { $0.remove(key) }
+    }
+
+    /// The key's value, made by the closure and kept if it has none (.NET's
+    /// GetOrAdd). The closure runs at most once, holding the key's shard:
+    /// two threads that ask for the same key at once get the one value.
+    public fn getOrInsert(_ key: Key, with make: () -> Value) -> Value {
+        Runtime.share(key)
+        return withShard(of: key) { $0.orInsertWith(key, make) }
+    }
+
+    /// Changes the key's value in place, holding its shard: whether it had
+    /// one to change.
+    public fn update(_ key: Key, _ change: (inout Value) -> Void) -> Bool {
+        return withShard(of: key) { $0.modify(key, change) }
+    }
+
+    /// Changes the key's value in place, starting from the default when it
+    /// has none, holding its shard (.NET's AddOrUpdate).
+    public fn update(_ key: Key, default fallback: Value, _ change: (inout Value) -> Void) {
+        Runtime.share(key)
+        Runtime.share(fallback)
+        withShard(of: key) { $0.modify(key, default: fallback, change) }
+    }
+
+    /// Removes every entry, one shard after another.
+    public fn removeAll() {
+        var i = 0
+        while i <= mask {
+            withShard(i) { $0.removeAll() }
+            i = i + 1
+        }
+    }
+
+    /// How many entries there are, counted a shard at a time.
+    public var count: Int {
+        get {
+            var total = 0
+            var i = 0
+            while i <= mask {
+                total = total + withShard(i) { $0.count }
+                i = i + 1
+            }
+            return total
+        }
+    }
+
+    /// Whether there are no entries, looked at a shard at a time.
+    public var isEmpty: Bool {
+        get {
+            var i = 0
+            while i <= mask {
+                if !withShard(i, { $0.isEmpty }) {
+                    return false
+                }
+                i = i + 1
+            }
+            return true
+        }
+    }
+
+    /// The entries as an ordinary Dictionary, copied a shard at a time.
+    public fn snapshot() -> [Key: Value] {
+        var all: [Key: Value] = [:]
+        var i = 0
+        while i <= mask {
+            withShard(i) { entries in
+                for (key, value) in entries {
+                    all[key] = value
+                }
+            }
+            i = i + 1
+        }
+        return all
+    }
+
+    /// The entries, a shard at a time: each shard as it is when the
+    /// iterator reaches it, so that writes on other threads go on meanwhile,
+    /// and an entry that is there throughout is given exactly once.
+    public fn makeIterator() -> ConcurrentDictionaryIterator<Key, Value> {
+        return ConcurrentDictionaryIterator { dictionary: self, next: 0, entries: [], position: 0 }
+    }
+}
+
+/// Gives a ConcurrentDictionary's entries, a shard's copy at a time.
+public struct ConcurrentDictionaryIterator<Key: Hashable & Sendable, Value: Sendable>: Iterator {
+    let dictionary: ConcurrentDictionary<Key, Value>
+    var next: Int
+    var entries: (key: Key, value: Value)[>..]
+    var position: Int
+
+    public mutating fn next() -> (key: Key, value: Value)? {
+        while position >= entries.count {
+            if next > dictionary.mask {
+                return none
+            }
+            entries = dictionary.withShard(next) { shard in
+                var copied: (key: Key, value: Value)[>..] = []
+                for (key, value) in shard {
+                    copied.append((key: key, value: value))
+                }
+                return copied
+            }
+            position = 0
+            next = next + 1
+        }
+        let entry = entries[position]
+        position = position + 1
+        return entry
+    }
+}

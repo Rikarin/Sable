@@ -23,16 +23,10 @@ async fn validOptionsAreGivenBack() {
 
 @test
 async fn optionsThatAreNotValidSayWhichTheyAre() {
-    do {
+    let server = require(await expectThrows(ValidationError.self) {
         _ = try await validatedOptions(ServerOptions(port: 0, names: ["", "a"]), named: "server", by: ServerOptionsValidator())
-        assert(false)
-    } catch {
-        assertEqual(error.result.failures.map(\.path), ["server.port", "server.names[0]"])
-    }
-    do {
-        _ = try await validatedOptions(Place(city: "", country: none))
-        assert(false)
-    } catch {
-        assertEqual(error.result.failures.map(\.path), ["city"])
-    }
+    })
+    assertEqual(server.result.failures.map(\.path), ["server.port", "server.names[0]"])
+    let place = require(await expectThrows(ValidationError.self) { _ = try await validatedOptions(Place(city: "", country: none)) })
+    assertEqual(place.result.failures.map(\.path), ["city"])
 }

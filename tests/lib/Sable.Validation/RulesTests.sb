@@ -112,12 +112,7 @@ async fn aGroupsConditionMayWait() {
 fn aGroupWhoseConditionWaitsIsRefusedWithoutWaiting() {
     var rules = Rules<TestCustomer>()
     rules.when({ (c: TestCustomer) in await isUnique(c.email) }) { $0.field(\.age).lessThan(18) }
-    do {
-        _ = try rules.check(ada())
-        assert(false)
-    } catch {
-        assertEqual(error.path, "")
-    }
+    expectThrows(AsyncRuleError(path: "")) { _ = try rules.check(ada()) }
 }
 
 @test
@@ -148,12 +143,7 @@ async fn aChecksConditionMayWait() {
     rules.field(\.age).lessThan(1).when { (c: TestCustomer) in await isUnique(c.email) }
     rules.field(\.age).lessThan(2).unless { (c: TestCustomer) in await isUnique(c.email) }
     assertEqual((await rules.validate(ada())).failures.count, 1)
-    do {
-        _ = try rules.check(ada())
-        assert(false)
-    } catch {
-        assertEqual(error.path, "age")
-    }
+    expectThrows(AsyncRuleError(path: "age")) { _ = try rules.check(ada()) }
 }
 
 // ---- Rule sets -----------------------------------------------------------
@@ -168,14 +158,18 @@ fn inSets(_ sets: String[>..]) -> String[>..] {
     }
 }
 
-@test
-fn onlyTheRuleSetsAskedForAreRun() {
-    assertEqual(inSets([]), ["total plain"])
-    assertEqual(inSets(["Create"]), ["total create"])
-    assertEqual(inSets(["DELETE"]), ["total change"])
-    assertEqual(inSets(["default", "Update"]), ["total plain", "total change"])
-    assertEqual(inSets(["*"]), ["total plain", "total create", "total change"])
-    assertEqual(inSets(["none such"]), [])
+let ruleSets: (String[>..], String[>..])[>..] = [
+    ([], ["total plain"]),
+    (["Create"], ["total create"]),
+    (["DELETE"], ["total change"]),
+    (["default", "Update"], ["total plain", "total change"]),
+    (["*"], ["total plain", "total create", "total change"]),
+    (["none such"], []),
+]
+
+@test(arguments: ruleSets)
+fn onlyTheRuleSetsAskedForAreRun(_ sets: String[>..], _ failures: String[>..]) {
+    expect(inSets(sets) == failures)
 }
 
 @test

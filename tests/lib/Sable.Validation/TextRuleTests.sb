@@ -16,56 +16,47 @@ fn aPatternMatchesSomewhereUnlessAnchored() {
     assertEqual(failure.placeholders["RegularExpression"] ?? "", "a+")
 }
 
+@test(arguments: [
+    ("https://example.org", true), ("http://[::1]:8080/a?b#c", true), ("ftp://h/x", true), ("mailto:a@b.c", true),
+    ("urn:isbn:0451450523", true), ("https://münchen.de/", true), ("", false), ("example.org", false), ("/path", false),
+    ("http://", false), ("https://exa mple.org", false), ("http://[::1", false), ("http://a:99999/", false),
+])
+fn aUrlIsAnAbsoluteOneTheParserReads(_ text: String, _ isOne: Bool) {
+    expect(passes(text) { $0.url() } == isOne)
+}
+
 @test
-fn aUrlIsAnAbsoluteOneTheParserReads() {
-    for text in ["https://example.org", "http://[::1]:8080/a?b#c", "ftp://h/x", "mailto:a@b.c", "urn:isbn:0451450523", "https://münchen.de/"] {
-        require(passes(text) { $0.url() })
-    }
-    for text in ["", "example.org", "/path", "http://", "https://exa mple.org", "http://[::1", "http://a:99999/"] {
-        require(!passes(text) { $0.url() })
-    }
+fn aUrlMayBeOfTheSchemesGivenAlone() {
     expect(passes("HTTPS://x.org") { $0.url(schemes: ["http", "https"]) })
     expect(!passes("ftp://x.org") { $0.url(schemes: ["http", "https"]) })
     expect(!passes("nothing") { $0.url(schemes: ["http"]) })
     assertEqual(message("x") { $0.url() }, "'It' is not a valid URL.")
 }
 
-@test
-fn aUuidIsInAFormItsParserReads() {
-    // RFC 9562's examples, and its forms.
-    for text in ["f81d4fae-7dec-11d0-a765-00a0c91e6bf6", "F81D4FAE-7DEC-11D0-A765-00A0C91E6BF6", "urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
-        "00000000-0000-0000-0000-000000000000", "017F22E2-79B0-7CC3-98C4-DC0C0C07398F", "{f81d4fae-7dec-11d0-a765-00a0c91e6bf6}", "f81d4fae7dec11d0a76500a0c91e6bf6"] {
-        assert(passes(text) { $0.uuid() })
-    }
-    for text in ["", "f81d4fae-7dec-11d0-a765-00a0c91e6bf", "g81d4fae-7dec-11d0-a765-00a0c91e6bf6", "f81d4fae7-dec-11d0-a765-00a0c91e6bf6"] {
-        require(!passes(text) { $0.uuid() })
-    }
-    assertEqual(message("x") { $0.uuid() }, "'It' is not a valid UUID.")
+// RFC 9562's examples, and its forms.
+@test(arguments: [
+    ("f81d4fae-7dec-11d0-a765-00a0c91e6bf6", true), ("F81D4FAE-7DEC-11D0-A765-00A0C91E6BF6", true),
+    ("urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6", true), ("00000000-0000-0000-0000-000000000000", true),
+    ("017F22E2-79B0-7CC3-98C4-DC0C0C07398F", true), ("{f81d4fae-7dec-11d0-a765-00a0c91e6bf6}", true),
+    ("f81d4fae7dec11d0a76500a0c91e6bf6", true), ("", false), ("f81d4fae-7dec-11d0-a765-00a0c91e6bf", false),
+    ("g81d4fae-7dec-11d0-a765-00a0c91e6bf6", false), ("f81d4fae7-dec-11d0-a765-00a0c91e6bf6", false),
+])
+fn aUuidIsInAFormItsParserReads(_ text: String, _ isOne: Bool) {
+    expect(passes(text) { $0.uuid() } == isOne)
 }
 
-@test
-fn aCardNumberHasLuhnsSum() {
-    // The numbers payment networks publish for tests, FluentValidation's own,
-    // and ISO/IEC 7812-1's check digit.
-    for text in ["4111111111111111", "5555555555554444", "378282246310005", "6011111111111117", "3530111333300000", "30569309025904",
-        "4408041234567893", "4408-0412-3456-7893", "4408 0412 3456 7893", "0000000000000000", "6304000000000000000"] {
-        assertEqual(passes(text) { $0.creditCard() }, text != "6304000000000000000" || luhn(text))
-    }
-    for text in ["", "4111111111111112", "4408041234567890", "4408 0412 3456 789x", "4408041234567891", "0000000", "00000000000000000000", "\u{0664}111111111111111"] {
-        require(!passes(text) { $0.creditCard() })
-    }
-    assertEqual(message("1") { $0.creditCard() }, "'It' is not a valid credit card number.")
-}
-
-/// Luhn's sum, by the definition: every second digit from the right doubled.
-fn luhn(_ text: String) -> Bool {
-    var sum = 0
-    let digits = text.utf8
-    for i in 0..<digits.count {
-        let d = Int(digits[digits.count - 1 - i]) - 48
-        sum += i % 2 == 0 ? d : (d * 2) / 10 + (d * 2) % 10
-    }
-    return sum % 10 == 0
+// The numbers payment networks publish for tests, FluentValidation's own,
+// and ISO/IEC 7812-1's check digit.
+@test(arguments: [
+    ("4111111111111111", true), ("5555555555554444", true), ("378282246310005", true), ("6011111111111117", true),
+    ("3530111333300000", true), ("30569309025904", true), ("4408041234567893", true), ("4408-0412-3456-7893", true),
+    ("4408 0412 3456 7893", true), ("0000000000000000", true), ("6304000000000000000", true), ("", false),
+    ("4111111111111112", false), ("4408041234567890", false), ("4408 0412 3456 789x", false),
+    ("4408041234567891", false), ("0000000", false), ("00000000000000000000", false),
+    ("\u{0664}111111111111111", false),
+])
+fn aCardNumberHasLuhnsSum(_ text: String, _ isOne: Bool) {
+    expect(passes(text) { $0.creditCard() } == isOne)
 }
 
 @test
@@ -83,15 +74,17 @@ fn everyWrongDigitOfACardNumberIsFound() {
     }
 }
 
+// FluentValidation's ScalePrecision cases.
+@test(arguments: [
+    ("12.34", true), ("2.34", true), ("-2.34", true), ("0.34", true), ("12", true), ("0", true), ("123.456", false),
+    ("12.341", false), ("123.4", false), ("-123.4", false), ("0.003", false), ("1.234", false),
+])
+fn aPrecisionIsOfDigitsBeforeAndAfterThePoint(_ text: String, _ isOne: Bool) {
+    expect(passes(try! Decimal.parse(text)) { $0.precisionScale(4, 2) } == isOne)
+}
+
 @test
-fn aPrecisionIsOfDigitsBeforeAndAfterThePoint() {
-    // FluentValidation's ScalePrecision cases.
-    for text in ["12.34", "2.34", "-2.34", "0.34", "12", "0"] {
-        require(passes(try! Decimal.parse(text)) { $0.precisionScale(4, 2) })
-    }
-    for text in ["123.456", "12.341", "123.4", "-123.4", "0.003", "1.234"] {
-        require(!passes(try! Decimal.parse(text)) { $0.precisionScale(4, 2) })
-    }
+fn zerosAtAPrecisionsEndMayBeIgnored() {
     expect(!passes(try! Decimal.parse("1.2300")) { $0.precisionScale(4, 2) })
     expect(passes(try! Decimal.parse("1.2300")) { $0.precisionScale(4, 2, ignoringTrailingZeros: true) })
     assertEqual(message(try! Decimal.parse("123.456")) { $0.precisionScale(4, 2) },
@@ -104,4 +97,10 @@ fn aDecimalIsWhatItsParserReads() {
     expect(!passes("12,50") { $0.decimal() })
     expect(!passes("abc") { $0.precisionScale(4, 2) })
     assertEqual(message("abc") { $0.decimal() }, "'It' is not a number.")
+}
+
+@test
+fn whatIsInNoFormIsSaidToBeNone() {
+    assertEqual(message("x") { $0.uuid() }, "'It' is not a valid UUID.")
+    assertEqual(message("1") { $0.creditCard() }, "'It' is not a valid credit card number.")
 }

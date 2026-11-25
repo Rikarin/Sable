@@ -6,7 +6,7 @@ import Sable.Validation
 @test
 fn aLengthIsWithinBothBounds() {
     for (text, good) in [("a", false), ("ab", true), ("abc", true), ("abcd", false)] {
-        assertEqual(passes(text) { $0.length(2...3) }, good)
+        expect(passes(text) { $0.length(2...3) } == good, text)
     }
     assertEqual(message("a") { $0.length(2...3) }, "'It' must be between 2 and 3 long. It is 1 long.")
     assertEqual(message("a") { $0.length(2) }, "'It' must be 2 long. It is 1 long.")

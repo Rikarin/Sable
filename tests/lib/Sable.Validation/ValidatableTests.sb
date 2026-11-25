@@ -64,12 +64,8 @@ async fn attributesAreTheRules() {
 @test
 async fn validatedGivesTheValueOrThrows() {
     expect((try! await signup().validated()) == signup())
-    do {
-        _ = try await Place(city: "", country: "SK").validated()
-        assert(false)
-    } catch {
-        assertEqual(error.result.failures[0].path, "city")
-    }
+    let error = require(await expectThrows(ValidationError.self) { _ = try await Place(city: "", country: "SK").validated() })
+    assertEqual(error.result.failures[0].path, "city")
 }
 
 @derive(Validatable)

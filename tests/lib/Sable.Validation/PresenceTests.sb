@@ -8,8 +8,8 @@ import Sable.Validation
 @test
 fn notEmptyRefusesWhatSaysNothing() {
     for text in ["", " ", "\t\n", "\u{2003}"] {
-        require(!passes(text) { $0.notEmpty() })
-        require(passes(text) { $0.empty() })
+        expect(!passes(text) { $0.notEmpty() }, "\(text:?)")
+        expect(passes(text) { $0.empty() }, "\(text:?)")
     }
     expect(passes(" a ") { $0.notEmpty() })
     expect(!passes(Substring("  ")) { $0.notEmpty() })

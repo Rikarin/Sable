@@ -81,15 +81,11 @@ fn checkingWithoutWaitingRunsRulesThatDoNotWait() {
 
 @test
 fn checkingWithoutWaitingRefusesRulesThatWait() {
-    do {
-        _ = try CustomerValidator().check(ada())
-        assert(false)
-    } catch {
-        assertEqual(error.path, "")
-        expect(error.description().contains("asynchronous"))
-        expect(error == AsyncRuleError(path: ""))
-        expect(error != AsyncRuleError(path: "x"))
-    }
+    let error = require(expectThrows(AsyncRuleError.self) { _ = try CustomerValidator().check(ada()) })
+    expect(error.path == "")
+    expect(error.description().contains("asynchronous"))
+    expect(error == AsyncRuleError(path: ""))
+    expect(error != AsyncRuleError(path: "x"))
 }
 
 @test

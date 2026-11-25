@@ -114,6 +114,7 @@ public final class WaitList {
     /// ```sable
     /// let list = WaitList()
     /// let first = Task.spawn { await list.park() }
+    /// await Task.settle()
     /// let second = Task.spawn { await list.park() }
     /// await Task.settle()
     /// list.wakeOne()

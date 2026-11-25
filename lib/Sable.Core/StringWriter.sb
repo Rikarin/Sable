@@ -146,7 +146,6 @@ public struct StringWriter {
             code |= (byte & 0x3F) << shift
             shift += 6
         }
-        return none
     }
 
     /// What has been appended, as a string: the writer is done with.

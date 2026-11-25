@@ -827,6 +827,18 @@ public static class AsyncLowering {
         ///     — the frame's, or a caller's — and not a copy of what it holds.
         /// </summary>
         static void Reborrow(SilFunction function) {
+            // One seen as a callee's type parameter is seen as it again there, as only the callee has that type's metadata.
+            foreach (var seen in function.Blocks.SelectMany(static b => b.Instructions).OfType<BuiltinInst>()
+                         .Where(static b => b.Name == "opaque_borrow_as" && SilType.IsIndirect(b.Type) && SilType.IsIndirect(b.Operands[0].Type)).Reverse().ToList()) {
+                foreach (var user in function.Blocks.SelectMany(static b => b.Instructions).Where(i => i.Operands.Any(o => ReferenceEquals(o, seen))).ToList()) {
+                    var again = new BuiltinInst(seen.Name, seen.Type, seen.Operands[0]) { Location = user.Location };
+                    Insert(user.Block, user.Block.Instructions.IndexOf(user), again);
+                    Substitute(user, seen, again);
+                }
+
+                seen.Block.Instructions.Remove(seen);
+            }
+
             foreach (var borrow in function.Blocks.SelectMany(static b => b.Instructions).OfType<LoadBorrowInst>().Where(static b => SilType.IsIndirect(b.Type)).ToList()) {
                 var users = function.Blocks.SelectMany(static b => b.Instructions).Where(i => i.Operands.Any(o => ReferenceEquals(o, borrow))).ToList();
                 foreach (var user in users) {

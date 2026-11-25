@@ -7387,6 +7387,12 @@ public sealed partial class SilGen {
                     when Sub(opaqueCast.Type) is not OptionalTypeSymbol && IsOpaqueHere(opaqueCast.Operand.Type) && IsOpaqueHere(opaqueCast.Type):
                     return OpaqueForcedCast(opaqueCast);
 
+                // 'elements as? Element[>..]' there, of a value only its metadata knows.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } heldCast
+                    when IsOpaqueHere(heldCast.Operand.Type) && CastTo(heldCast) is ArrayTypeSymbol or OptionalTypeSymbol or TupleTypeSymbol or NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Struct or TypeKind.Union }
+                         && Mentions(CastTo(heldCast), [.._genericMetadata.Keys]):
+                    return OpaqueHeldCast(heldCast);
+
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } conversion:
                     return NumericConversion(conversion);
 

@@ -610,6 +610,8 @@ public sealed partial class SilGen {
             OptionalTypeSymbol optional => IsHeld(optional.UnderlyingType, parameters) && optional.UnderlyingType is not MetatypeTypeSymbol,
             TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => Mentions(e, parameters))
                                      && tuple.ElementTypes.All(e => !Mentions(e, parameters) || IsHeld(e, parameters) && e is not MetatypeTypeSymbol),
+            // Named without its arguments, inside it: with its own.
+            NamedTypeSymbol { IsGenericDefinition: true } definition => IsPlainGeneric(definition) && definition.TypeParameters.All(parameters.Contains),
             NamedTypeSymbol { IsConstructed: true } generic => IsPlainGeneric(generic.OriginalDefinition) && generic.TypeArguments.Any(a => Mentions(a, parameters))
                                                              && generic.TypeArguments.All(a => !Mentions(a, parameters) || IsHeld(a, parameters) && a is not MetatypeTypeSymbol),
             _ => false,
@@ -902,7 +904,7 @@ public sealed partial class SilGen {
     GenericShape? SignatureShape(FunctionSymbol symbol, out string? refused) {
         refused = null;
         var all = TypeParametersOf(symbol).ToList();
-        if (all.Count == 0 || !_declarations.ContainsKey(symbol)) {
+        if (all.Count == 0 || !_declarations.TryGetValue(symbol, out var declaration) || IsRequirement(symbol, declaration.Syntax)) {
             return null;
         }
 
@@ -1034,7 +1036,7 @@ public sealed partial class SilGen {
 
             // 'using generator: inout G' is the address of the caller's storage, as any inout parameter is.
             // So is an array of them: the buffer's reference, the same whatever they are.
-            var inoutOwn = parameter.Modifier == ParameterModifier.InOut && (parameterType is TypeParameterSymbol changed && own.Contains(changed) || IsArrayOf(parameterType, own));
+            var inoutOwn = parameter.Modifier == ParameterModifier.InOut && IsHeld(parameterType, own) && parameterType is not MetatypeTypeSymbol;
             if (!Passable(parameterType) && !IsGenericFunction(parameterType, own)
                 || Mentions(parameterType, own) && !inoutOwn && (parameter.IsVariadic || parameter.IsByReference || parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In))) {
                 refused = $"the parameter '{parameter.Name}: {parameter.Type.ToDisplayString()}'";
@@ -1051,6 +1053,10 @@ public sealed partial class SilGen {
 
         return new([..own], [..requirements]);
     }
+
+    /// <summary>A protocol's requirement, which has no body to compile either way.</summary>
+    static bool IsRequirement(FunctionSymbol symbol, SyntaxNode syntax) =>
+        RequirementProtocol(symbol) is not null && !symbol.HasBody;
 
     /// <summary>
     ///     A static member of a generic class, struct or union — a method or
@@ -1526,14 +1532,14 @@ public sealed partial class SilGen {
                 BoundConversion { ConversionKind: ConversionKind.OptionalWrap } wrap => Simple(wrap.Operand.Type),
                 BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol { UnderlyingType: var unwrapped } } force => unwrapped.Equals(force.Type),
                 // 'lowerBound as! C.Index': the value, when its metadata is the other's.
-                BoundConversion { ConversionKind: ConversionKind.Explicit } cast when IsOpaqueCast(cast) || IsOpenedCast(cast) => true,
+                BoundConversion { ConversionKind: ConversionKind.Explicit } cast when IsOpaqueCast(cast) || IsOpenedCast(cast) || IsHeldCast(cast) => true,
                 // A range of them, a generic struct.
                 BoundRange range => Simple(range.Type),
                 BoundLiteral { Value: null, Type: OptionalTypeSymbol } => true,
                 BoundBinaryOperator { OperatorKind: BinaryOperatorKind.Coalesce } => true,
                 BoundTuple or BoundTupleElementAccess or BoundMatch or BoundIfExpression => true,
                 // A generic struct or union of them, made where the metadata says.
-                BoundRecordExpression or BoundUnionCaseConstruction => true,
+                BoundRecordExpression or BoundUnionCaseConstruction or BoundUnionCaseGroup => true,
                 BoundDictionary => true,
                 _ => false,
             };
@@ -1563,7 +1569,7 @@ public sealed partial class SilGen {
                 BoundConditionBinding binding => ReferenceEquals(child, binding.Source),
                 BoundConversion { ConversionKind: ConversionKind.OptionalWrap } => true,
                 BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol } => true,
-                BoundConversion { ConversionKind: ConversionKind.Explicit } cast => IsOpaqueCast(cast) || IsErasure(cast),
+                BoundConversion { ConversionKind: ConversionKind.Explicit } cast => IsOpaqueCast(cast) || IsErasure(cast) || IsHeldCast(cast),
                 BoundConversion { ConversionKind: ConversionKind.Existential } erasure => IsErasure(erasure),
                 BoundTypeTest test => IsOwn(test.Operand.Type) && IsTestable(test.TestedType),
                 BoundRange => true,
@@ -1624,6 +1630,20 @@ public sealed partial class SilGen {
             && !constraint.Equals(generator.Core.Error) && !Mentions(constraint)
             && (cast.Type is OptionalTypeSymbol { UnderlyingType: var wrapped } ? wrapped : cast.Type) is var target and not (ExistentialTypeSymbol or OptionalTypeSymbol or MetatypeTypeSymbol)
             && IsHeld(V(target), _own);
+
+        /// <summary>
+        ///     An 'as?' or 'as!' from one of the function's opaque types to an
+        ///     array, an optional, a tuple or a generic value type made of them
+        ///     (<see cref="FunctionLowering.OpaqueHeldCast" />): the value, when
+        ///     its metadata is that type's.
+        /// </summary>
+        bool IsHeldCast(BoundConversion cast) =>
+            cast is { Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } && IsOwn(cast.Operand.Type)
+            && CastTarget(cast) is var target && !IsOwn(target) && target is ArrayTypeSymbol or OptionalTypeSymbol or TupleTypeSymbol or NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Union }
+            && Mentions(target) && IsHeld(V(target), _own);
+
+        /// <summary>The type a cast asks for: 'as? T' gives a T?.</summary>
+        static TypeSymbol CastTarget(BoundConversion cast) => cast.Type is OptionalTypeSymbol { UnderlyingType: var wrapped } ? wrapped : cast.Type;
 
         /// <summary>An 'as!' from one of the function's opaque types to another (<see cref="FunctionLowering.OpaqueForcedCast" />).</summary>
         bool IsOpaqueCast(BoundConversion cast) =>
@@ -1736,7 +1756,7 @@ public sealed partial class SilGen {
             var calleeOwner = calleeSelf is null ? OwnerOf(callee)?.OriginalDefinition : null;
             var ownerBound = calleeOwner is null ? null : OwnerBindings(calleeOwner, call.Receiver is null ? (Owner(checkedSymbol) is null ? null : SelfType(checkedSymbol, TypeSubstitution.Empty)) : receiverType);
             if (call.Receiver is { } onValue && Mentions(onValue.Type) && (calleeSelf is null || receiverType is null || !IsOwn(receiverType))
-                && (ownerBound is null || !Simple(onValue.Type))) {
+                && (ownerBound is null && calleeSelf is null || receiverType is null || !Simple(onValue.Type))) {
                 return No();
             }
 
@@ -1745,7 +1765,7 @@ public sealed partial class SilGen {
             }
 
             // One that changes self changes a local, or this function's own self.
-            if (calleeSelf is not null && callee.IsMutating && receiverType is not null && IsOwn(receiverType) && call.Receiver is not (null or BoundSelfAccess) && !IsPlace(call.Receiver)
+            if (calleeSelf is not null && callee.IsMutating && receiverType is not null && Mentions(receiverType) && call.Receiver is not (null or BoundSelfAccess) && !IsPlace(call.Receiver)
                 || callee.IsMutating && call.Receiver is null or BoundSelfAccess && !OwnMutating) {
                 return No();
             }
@@ -1768,7 +1788,7 @@ public sealed partial class SilGen {
                 // parameter's values, its metadata made at run time —
                 // polymorphic recursion — for a callee that asks nothing of it;
                 // or a generic type's instance, whose conformances have templates.
-                if (bound is not TypeParameterSymbol && IsHeld(V(bound), _own) && bound is not MetatypeTypeSymbol) {
+                if (!IsOwn(bound) && IsHeld(bound, _own) && bound is not MetatypeTypeSymbol) {
                     if (!calleeShape.ProtocolsOf(parameter).All(p => generator.HasTemplate(bound, p))) {
                         return No();
                     }
@@ -1857,7 +1877,11 @@ public sealed partial class SilGen {
                         if (!own.ProtocolsOf(parameter).All(needed => has.Any(p => ReferenceEquals(p, needed)))) {
                             return No();
                         }
-                    } else if (Mentions(bound) || bound is not (NamedTypeSymbol or ArrayTypeSymbol) || generator.Lower(bound) is not { } lowered || lowered is NominalType { IsNoncopyable: true } || bound.Equals(generator.Core.Never)
+                    } else if (Mentions(bound)) {
+                        if (!IsHeld(bound, _own) || bound is MetatypeTypeSymbol || !own.ProtocolsOf(parameter).All(needed => generator.HasTemplate(bound, needed))) {
+                            return No();
+                        }
+                    } else if (bound is not (NamedTypeSymbol or ArrayTypeSymbol) || generator.Lower(bound) is not { } lowered || lowered is NominalType { IsNoncopyable: true } || bound.Equals(generator.Core.Never)
                                || !own.ProtocolsOf(parameter).All(needed => bound.Satisfies(needed))) {
                         return No();
                     }
@@ -3356,7 +3380,7 @@ public sealed partial class SilGen {
             if (ownShape is not null) {
                 var ownBound = new TypeSubstitution(ownShape.Parameters.ToDictionary(static p => p, p => Sub(call.Substitution.Lookup(p)!)));
                 foreach (var (ownParameter, ownProtocol) in ownShape.Requirements) {
-                    if (ownBound.Lookup(ownParameter) is { } given && !IsOpaqueHere(given)) {
+                    if (ownBound.Lookup(ownParameter) is { } given && !Mentions(given, [.._genericMetadata.Keys])) {
                         generator.GenericTable(given, ownProtocol, call.Syntax, true, true);
                     }
                 }
@@ -3573,6 +3597,42 @@ public sealed partial class SilGen {
             Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, same)), $"cast to '{conversion.Type.ToDisplayString()}' failed"));
             var owned = Owned(value);
             return owned.Type == target ? owned : Emit(new BuiltinInst("opaque_take_as", target, owned));
+        }
+
+        /// <summary>
+        ///     <c>elements as? Element[&gt;..]</c> of a value of a type only its
+        ///     metadata knows: the same value, seen as the array it is when its
+        ///     metadata is the array's, else none (or a trap, for <c>as!</c>).
+        /// </summary>
+        SilValue? OpaqueHeldCast(BoundConversion conversion) {
+            var target = CastTo(conversion);
+            if (MetadataOf(conversion.Operand.Type) is not { } from || MetadataOf(target) is not { } to || LowerType(target) is not { } wanted
+                || Expression(conversion.Operand) is not { } value) {
+                return Missing(conversion, $"the cast to '{target.ToDisplayString()}'");
+            }
+
+            // Held where its own type says, whichever way it goes.
+            var slot = NewSlot(value.Type);
+            Emit(new StoreInst(Owned(value), slot, StoreKind.Init));
+            var same = Emit(new BuiltinInst("metadata_equal", SilType.Bool, from, to));
+            var seen = Emit(new BuiltinInst("opaque_cast", SilType.Address(wanted), slot));
+            if (Sub(conversion.Type) is not OptionalTypeSymbol || LowerType(conversion.Type) is not EnumType optional) {
+                Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, same)), $"cast to '{target.ToDisplayString()}' failed"));
+                return Emit(new LoadInst(seen, wanted.IsTrivial ? LoadKind.Trivial : LoadKind.Take));
+            }
+
+            var yes = function.AddBlock();
+            var no = function.AddBlock();
+            var after = function.AddBlock();
+            var made = after.AddArgument(optional);
+            Jump(new CondBranchInst(same, yes, [], no, []));
+            _current = yes;
+            Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("Some"), Emit(new LoadInst(seen, wanted.IsTrivial ? LoadKind.Trivial : LoadKind.Take)))));
+            _current = no;
+            Emit(new DestroyAddrInst(slot));
+            Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("None"), null)));
+            _current = after;
+            return made;
         }
 
         /// <summary>

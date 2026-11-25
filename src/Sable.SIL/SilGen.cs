@@ -1098,6 +1098,7 @@ public sealed partial class SilGen {
             SourceFile = source.FileName,
             Line = source.GetLinePosition(syntax.Span.Start).Line,
             Inline = InlineOf(symbol),
+            Vectorised = symbol.GetAttribute("vectorised") is not null,
         };
 
         if (HasSelf(symbol)) {

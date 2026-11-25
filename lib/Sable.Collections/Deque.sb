@@ -1,14 +1,17 @@
 module Sable.Collections
 
 /// A double-ended queue: adding and removing at either end in constant
-/// time, and reading by position. A ring buffer — the elements run from
-/// 'head' round the end of the slots and back to the start — whose slots
-/// are optional, so that a removed element is released when it is removed
-/// rather than when its slot is next written.
+/// time, and reading by position. A ring buffer of a power of two of slots:
+/// the elements are in those numbered from 'head' up to 'tail', which only
+/// go up as elements go through it, and a slot's place is the low bits of
+/// its number. Each end changes its own number alone, so that neither waits
+/// for the other's. The slots with no element are holes (Array.sb): a
+/// removed element is moved out of its slot, so that it is let go of when it
+/// is removed rather than when the slot is next written.
 public class Deque<Element> {
-    var slots: Element?[>..] = []
+    var slots: Element[>..] = []
     var head: Int = 0
-    var used: Int = 0
+    var tail: Int = 0
 
     public init() { }
 
@@ -18,24 +21,36 @@ public class Deque<Element> {
         for try value in values {
             slots.append(value)
         }
-        used = slots.count
+        tail = slots.count
+        slots.append(holes: Deque.size(for: tail) - tail)
     }
+
+    var used: Int => tail &- head
 
     public var count: Int => used
     public var isEmpty: Bool => used == 0
 
-    /// The slot of the element at 'index' from the front.
-    fn slot(_ index: Int) -> Int {
-        let at = head + index
-        return at < slots.count ? at : at - slots.count
+    // The slots for so many elements: a power of two, or none.
+    static fn size(for count: Int) -> Int {
+        if count == 0 {
+            return 0
+        }
+        var size = 8
+        while size < count {
+            size = size * 2
+        }
+        return size
     }
+
+    /// The slot of the element at 'index' from the front.
+    fn slot(_ index: Int) -> Int => (head &+ index) & (slots.count &- 1)
 
     /// Twice the slots, the elements moved to the start of them in order. A
     /// call, as it is hardly ever made: 'append' is then short enough to be
     /// part of what calls it.
     @inline(never)
     fn grow() {
-        resize(slots.count < 4 ? 8 : slots.count * 2)
+        resize(slots.count + 1)
     }
 
     /// Adds the value at the back.
@@ -43,8 +58,9 @@ public class Deque<Element> {
         if used == slots.count {
             grow()
         }
-        slots[slot(used)] = value
-        used = used + 1
+        let at = tail
+        slots[at & (slots.count &- 1)] = value
+        tail = at &+ 1
     }
 
     /// Adds the value at the front.
@@ -52,21 +68,18 @@ public class Deque<Element> {
         if used == slots.count {
             grow()
         }
-        head = head == 0 ? slots.count - 1 : head - 1
-        slots[head] = value
-        used = used + 1
+        head = head &- 1
+        slots[slot(0)] = value
     }
 
     /// Removes the front element and gives it back, or none when empty.
     public fn removeFirst() -> Element? {
-        if used == 0 {
+        let at = head
+        if at == tail {
             return none
         }
-        let value = slots[head]
-        slots[head] = none
-        head = head + 1 == slots.count ? 0 : head + 1
-        used = used - 1
-        return value
+        head = at &+ 1
+        return slots.take(at: at & (slots.count &- 1))
     }
 
     /// Removes the back element and gives it back, or none when empty.
@@ -74,11 +87,8 @@ public class Deque<Element> {
         if used == 0 {
             return none
         }
-        let at = slot(used - 1)
-        let value = slots[at]
-        slots[at] = none
-        used = used - 1
-        return value
+        tail = tail &- 1
+        return slots.take(at: tail & (slots.count &- 1))
     }
 
     /// The front element, or none.
@@ -87,7 +97,7 @@ public class Deque<Element> {
             if used == 0 {
                 return none
             }
-            return slots[head]
+            return slots[slot(0)]
         }
     }
 
@@ -122,7 +132,7 @@ public class Deque<Element> {
     /// ```
     public subscript(position: Int) -> Element {
         get {
-            return slots[checked(position)]!
+            return slots[checked(position)]
         }
         set {
             slots[checked(position)] = newValue
@@ -151,7 +161,7 @@ public class Deque<Element> {
             var elements: Element[>..] = []
             elements.reserveCapacity(positions.upperBound - positions.lowerBound)
             for position in positions.lowerBound..<positions.upperBound {
-                elements.append(slots[slot(position)]!)
+                elements.append(slots[slot(position)])
             }
             return elements
         }
@@ -161,7 +171,7 @@ public class Deque<Element> {
     public fn removeAll() {
         slots = []
         head = 0
-        used = 0
+        tail = 0
     }
 
     /// How many elements it has room for before it must grow.
@@ -176,28 +186,25 @@ public class Deque<Element> {
     }
 
     /// The elements moved to the front of the storage, in order, with room
-    /// for 'size' in all.
-    fn resize(_ size: Int) {
-        // The run from the front, then what wrapped round, then the rest.
-        let end = head + used
-        var moved: Element?[>..] = []
-        moved.reserveCapacity(size)
-        if end <= slots.count {
-            moved.append(contentsOf: slots[head..<end])
-        } else {
-            moved.append(contentsOf: slots[head..<slots.count])
-            moved.append(contentsOf: slots[0..<end - slots.count])
-        }
-        moved.append(repeating: none, count: size - used)
-        slots = moved
+    /// for 'count' in all.
+    fn resize(_ count: Int) {
+        straighten()
+        slots.append(holes: Deque.size(for: count) - slots.count)
+    }
+
+    // The elements moved to the start of the slots.
+    fn straighten() {
+        let count = used
+        slots.rotate(from: 0, to: slots.count, left: slot(0))
         head = 0
+        tail = count
     }
 
     /// The elements laid out in one run from the start of the storage, as
     /// Rust's 'make_contiguous': what 'asSlices' then gives as one.
     public fn makeContiguous() {
-        if head + used > slots.count {
-            resize(slots.count)
+        if slot(0) + used > slots.count {
+            straighten()
         }
     }
 
@@ -217,11 +224,11 @@ public class Deque<Element> {
         var back: Element[>..] = []
         var i = 0
         while i < used {
-            let at = head + i
+            let at = slot(0) + i
             if at < slots.count {
-                front.append(slots[at]!)
+                front.append(slots[at])
             } else {
-                back.append(slots[at - slots.count]!)
+                back.append(slots[at - slots.count])
             }
             i += 1
         }
@@ -255,21 +262,22 @@ public class Deque<Element> {
         }
         if position < used - position {
             // The front moves back a place.
-            head = head == 0 ? slots.count - 1 : head - 1
+            head = head &- 1
+            tail = tail &- 1
             var i = 0
             while i < position {
-                slots[slot(i)] = slots[slot(i + 1)]
+                slots[slot(i)] = slots.take(at: slot(i + 1))
                 i += 1
             }
         } else {
             var i = used
             while i > position {
-                slots[slot(i)] = slots[slot(i - 1)]
+                slots[slot(i)] = slots.take(at: slot(i - 1))
                 i -= 1
             }
         }
         slots[slot(position)] = value
-        used += 1
+        tail = tail &+ 1
     }
 
     /// The element at the position, taken out, those on the shorter side
@@ -281,24 +289,23 @@ public class Deque<Element> {
     /// assert(deque.toArray() == [1, 3])
     /// ```
     public fn remove(at position: Int) -> Element {
-        let removed = slots[checked(position)]!
+        let removed = slots.take(at: checked(position))
         if position < used - 1 - position {
             var i = position
             while i > 0 {
-                slots[slot(i)] = slots[slot(i - 1)]
+                slots[slot(i)] = slots.take(at: slot(i - 1))
                 i -= 1
             }
-            slots[head] = none
-            head = head + 1 == slots.count ? 0 : head + 1
+            head = head &+ 1
+            tail = tail &+ 1
         } else {
             var i = position
             while i < used - 1 {
-                slots[slot(i)] = slots[slot(i + 1)]
+                slots[slot(i)] = slots.take(at: slot(i + 1))
                 i += 1
             }
-            slots[slot(used - 1)] = none
         }
-        used -= 1
+        tail = tail &- 1
         return removed
     }
 
@@ -344,7 +351,7 @@ public class Deque<Element> {
 extension Deque: RandomAccessCollection, MutableCollection, FromSequence<Element> {
     /// An iterator over the elements, front to back.
     public fn makeIterator() -> DequeIterator<Element> {
-        return DequeIterator<Element> { slots: slots, position: head, remaining: used }
+        return DequeIterator<Element> { slots: slots, position: head, end: tail }
     }
 
     /// The front element's position: 0.
@@ -370,18 +377,17 @@ extension Deque: RandomAccessCollection, MutableCollection, FromSequence<Element
 /// they were when it was made, sharing them until either changes, so a
 /// change to the deque after is not seen.
 public struct DequeIterator<Element>: Iterator {
-    let slots: Element?[>..]
+    let slots: Element[>..]
     var position: Int
-    var remaining: Int
+    let end: Int
 
     /// The next element, or none past the back.
     public mutating fn next() -> Element? {
-        if remaining == 0 {
+        if position == end {
             return none
         }
-        let element = slots[position]
-        position = position + 1 == slots.count ? 0 : position + 1
-        remaining -= 1
+        let element = slots[position & (slots.count &- 1)]
+        position = position &+ 1
         return element
     }
 }

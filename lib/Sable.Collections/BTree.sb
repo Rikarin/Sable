@@ -7,12 +7,14 @@ module Sable.Collections
 // is about log_t n: with t = 8, a million keys are five levels deep, and a
 // node's keys are a few cache lines searched in a row.
 //
-// The nodes are kept in an array and named by their places in it, a node
-// given up going on a list to be used again; a copy of the tree shares
-// the array until either changes it, as any array is shared. Each node also
-// knows how many keys its subtree holds, so that a key's rank, and the key
-// of a rank, are found in one walk down: what the collections' positions
-// are.
+// The nodes are numbered, a node given up going on a list to be used again,
+// and what they hold is in arrays of every node's: node n's keys are the
+// slots from 15n on, its values those of the same places, its children the
+// sixteen from 16n, the first of them -1 in a leaf. A slot with no key is a
+// hole (Array.sb). A copy of the tree shares the arrays until either changes
+// it, as any array is shared. Each node also knows how many keys its subtree
+// holds, so that a key's rank, and the key of a rank, are found in one walk
+// down: what the collections' positions are.
 //
 // Insertion splits a full node on the way down (Cormen et al., 18.2), and
 // removal makes sure on the way down that each node it goes into has a key
@@ -22,77 +24,129 @@ module Sable.Collections
 /// Keys at least, past the root: t - 1; at most 2t - 1.
 const bTreeDegree = 8
 const bTreeMostKeys = 2 * bTreeDegree - 1
-
-/// The item put at place i, those from i on moved one along.
-fn insertAt<T>(_ items: inout T[>..], _ item: T, _ i: Int) {
-    items.append(item)
-    items.rotate(from: i, to: items.count, left: -1)
-}
-
-/// The item at place i taken out, those after it moved one back.
-@discardable
-fn removeAt<T>(_ items: inout T[>..], _ i: Int) -> T {
-    items.rotate(from: i, to: items.count, left: 1)
-    return items.removeLast()
-}
-
-struct BTreeNode<Key, Value> {
-    var keys: Key[>..]
-    var values: Value[>..]
-    // The children's places; none for a leaf.
-    var children: Int[>..]
-    // Keys in this node and every node below it.
-    var size: Int
-}
+const bTreeMostChildren = 2 * bTreeDegree
 
 struct BTree<Key: Comparable, Value> {
-    var nodes: BTreeNode<Key, Value>[>..] = []
+    var keys: Key[>..] = []
+    var values: Value[>..] = []
+    var children: I32[>..] = []
+    // Each node's keys, and the keys in it and every node below it.
+    var counts: I32[>..] = []
+    var sizes: Int[>..] = []
     var unused: Int[>..] = []
     var root: Int = -1
 
-    var count: Int => root < 0 ? 0 : nodes[root].size
+    var count: Int => root < 0 ? 0 : sizes[root]
 
     // ---- Nodes ----------------------------------------------------------
 
-    mutating fn node(_ keys: Key[>..], _ values: Value[>..], _ children: Int[>..], size: Int) -> Int {
-        let made = BTreeNode<Key, Value> { keys: keys, values: values, children: children, size: size }
+    /// A leaf with no key.
+    mutating fn makeNode() -> Int {
         if !unused.isEmpty {
-            let place = unused.removeLast()
-            nodes[place] = made
-            return place
+            return unused.removeLast()
         }
-        nodes.append(made)
-        return nodes.count - 1
+        let n = counts.count
+        if n == 0x7FFF_FFFF {
+            fatalError("a B-tree has at most 2147483647 nodes")
+        }
+        keys.append(holes: bTreeMostKeys)
+        values.append(holes: bTreeMostKeys)
+        children.append(repeating: -1, count: bTreeMostChildren)
+        counts.append(0)
+        sizes.append(0)
+        return n
     }
 
-    mutating fn giveUp(_ place: Int) {
-        nodes[place] = BTreeNode<Key, Value> { keys: [], values: [], children: [], size: 0 }
-        unused.append(place)
+    /// The node, whose keys and children are gone already, to be used again.
+    mutating fn giveUp(_ n: Int) {
+        children[n * bTreeMostChildren] = -1
+        counts[n] = 0
+        sizes[n] = 0
+        unused.append(n)
     }
 
-    fn isLeaf(_ n: Int) -> Bool {
-        return nodes[n].children.isEmpty
-    }
+    @inline(always)
+    fn isLeaf(_ n: Int) -> Bool => children[n &* bTreeMostChildren] < 0
 
-    fn sizeOf(_ n: Int) -> Int {
-        return nodes[n].size
-    }
+    @inline(always)
+    fn child(_ n: Int, _ i: Int) -> Int => Int(children[n &* bTreeMostChildren &+ i])
+
+    @inline(always)
+    fn keyCount(_ n: Int) -> Int => Int(counts[n])
+
+    /// Where key i of the node is, and its value.
+    @inline(always)
+    fn place(_ n: Int, _ i: Int) -> Int => n &* bTreeMostKeys &+ i
+
+    fn isFull(_ n: Int) -> Bool => keyCount(n) == bTreeMostKeys
+
+    /// Whether a value is anything to move: a set's is not.
+    static var hasValues: Bool => (Value.self as Type).stride > 0
 
     /// The first of the node's keys not below the key, and whether it is
     /// the key.
+    @inline(always)
     fn locate(_ key: Key, _ n: Int) -> (Int, Bool) {
         // The run of keys halved, stepping over its lower half or not with
         // no branch on which: as many steps whatever the key, so that there
         // is none for the machine to guess wrong.
-        let keys = nodes[n].keys
-        var low = 0
-        var size = keys.count
+        let start = place(n, 0)
+        var low = start
+        var size = keyCount(n)
+        let end = start &+ size
         while size > 0 {
-            let half = (size + 1) >> 1
-            low = (keys[low + half - 1] < key).selecting(low + half, low)
-            size = size - half
+            let half = (size &+ 1) >> 1
+            low = (keys[low &+ half &- 1] < key).selecting(low &+ half, low)
+            size = size &- half
         }
-        return (low, low < keys.count && !(key < keys[low]))
+        return (low &- start, low < end && !(key < keys[low]))
+    }
+
+    /// The key and its value put in the node as its ith, those from there
+    /// on moved one along: there is room.
+    mutating fn insertKey(_ n: Int, _ i: Int, _ key: Key, _ value: Value) {
+        let at = place(n, i)
+        let end = place(n, keyCount(n))
+        if at < end {
+            keys.rotate(from: at, to: end + 1, left: -1)
+            if BTree.hasValues {
+                values.rotate(from: at, to: end + 1, left: -1)
+            }
+        }
+        keys[at] = key
+        values[at] = value
+        counts[n] = counts[n] + 1
+    }
+
+    /// Key i of the node and its value, taken out.
+    mutating fn takeKey(_ n: Int, _ i: Int) -> (Key, Value) {
+        let at = place(n, i)
+        let end = place(n, keyCount(n))
+        let key = keys.take(at: at)
+        let value = values.take(at: at)
+        if at + 1 < end {
+            keys.rotate(from: at, to: end, left: 1)
+            if BTree.hasValues {
+                values.rotate(from: at, to: end, left: 1)
+            }
+        }
+        counts[n] = counts[n] - 1
+        return (key, value)
+    }
+
+    /// The child put before child i of the node, which has as many children
+    /// as it is given ('had'), before its count of keys was changed.
+    mutating fn insertChild(_ n: Int, _ i: Int, _ child: Int, had: Int) {
+        let start = n * bTreeMostChildren
+        children.rotate(from: start + i, to: start + had + 1, left: -1)
+        children[start + i] = I32(child)
+    }
+
+    mutating fn takeChild(_ n: Int, _ i: Int, had: Int) -> Int {
+        let start = n * bTreeMostChildren
+        let child = Int(children[start + i])
+        children.rotate(from: start + i, to: start + had, left: 1)
+        return child
     }
 
     // ---- Reading --------------------------------------------------------
@@ -104,10 +158,7 @@ struct BTree<Key: Comparable, Value> {
             if found {
                 return true
             }
-            if isLeaf(n) {
-                return false
-            }
-            n = nodes[n].children[i]
+            n = child(n, isLeaf(n) ? 0 : i)
         }
         return false
     }
@@ -117,12 +168,9 @@ struct BTree<Key: Comparable, Value> {
         while n >= 0 {
             let (i, found) = locate(key, n)
             if found {
-                return nodes[n].values[i]
+                return values[place(n, i)]
             }
-            if isLeaf(n) {
-                return none
-            }
-            n = nodes[n].children[i]
+            n = child(n, isLeaf(n) ? 0 : i)
         }
         return none
     }
@@ -133,17 +181,20 @@ struct BTree<Key: Comparable, Value> {
         var r = rank
         while true {
             if isLeaf(n) {
-                return (nodes[n].keys[r], nodes[n].values[r])
+                // One out of range is past the leaf's keys: a trap, as it
+                // would be of an array of them.
+                precondition(index: r, inBounds: keyCount(n))
+                return (keys[place(n, r)], values[place(n, r)])
             }
             var j = 0
             while true {
-                let below = sizeOf(nodes[n].children[j])
+                let below = sizes[child(n, j)]
                 if r < below {
-                    n = nodes[n].children[j]
+                    n = child(n, j)
                     break
                 }
                 if r == below {
-                    return (nodes[n].keys[j], nodes[n].values[j])
+                    return (keys[place(n, j)], values[place(n, j)])
                 }
                 r = r - below - 1
                 j = j + 1
@@ -163,16 +214,16 @@ struct BTree<Key: Comparable, Value> {
             }
             var j = 0
             while j < i {
-                r = r + sizeOf(nodes[n].children[j]) + 1
+                r = r + sizes[child(n, j)] + 1
                 j = j + 1
             }
             if found && !orEqual {
-                return r + sizeOf(nodes[n].children[i])
+                return r + sizes[child(n, i)]
             }
             if found {
                 return r
             }
-            n = nodes[n].children[i]
+            n = child(n, i)
         }
         return r
     }
@@ -184,87 +235,101 @@ struct BTree<Key: Comparable, Value> {
     @discardable
     mutating fn insert(_ key: Key, _ value: Value) -> Value? {
         if root < 0 {
-            root = node([key], [value], [], size: 1)
-            return none
+            root = makeNode()
         }
-        // A key there already keeps its place: only its value changes.
+        // A key there already keeps its place: only its value changes. The
+        // way down is kept, four bits a level: with at least eight children
+        // to a node there is no memory for a tree of more levels than sixteen.
         var n = root
+        var path = 0
+        var depth = 0
         while true {
             let (i, found) = locate(key, n)
             if found {
-                let old = nodes[n].values[i]
-                nodes[n].values[i] = value
+                let at = place(n, i)
+                let old = values.take(at: at)
+                values[at] = value
                 return old
             }
+            path = path << 4 | i
             if isLeaf(n) {
                 break
             }
-            n = nodes[n].children[i]
+            n = child(n, i)
+            depth += 4
         }
 
-        if nodes[root].keys.count == bTreeMostKeys {
-            let above = node([], [], [root], size: sizeOf(root))
+        if !isFull(n) {
+            // Into the leaf, each node on the way one key the larger.
+            let leaf = n
+            n = root
+            while depth > 0 {
+                sizes[n] = sizes[n] &+ 1
+                n = child(n, path >> depth & 15)
+                depth -= 4
+            }
+            sizes[leaf] = sizes[leaf] &+ 1
+            insertKey(leaf, path & 15, key, value)
+            return none
+        }
+
+        if isFull(root) {
+            let above = makeNode()
+            children[above * bTreeMostChildren] = I32(root)
+            sizes[above] = sizes[root]
             root = above
             split(above, 0)
         }
         n = root
         while true {
-            nodes[n].size += 1
+            sizes[n] = sizes[n] + 1
             let (at, _) = locate(key, n)
             var i = at
             if isLeaf(n) {
-                insertAt(&nodes[n].keys, key, i)
-                insertAt(&nodes[n].values, value, i)
+                insertKey(n, i, key, value)
                 return none
             }
-            if nodes[nodes[n].children[i]].keys.count == bTreeMostKeys {
+            if isFull(child(n, i)) {
                 split(n, i)
-                if nodes[n].keys[i] < key {
+                if keys[place(n, i)] < key {
                     i = i + 1
                 }
             }
-            n = nodes[n].children[i]
+            n = child(n, i)
         }
     }
 
     /// The full child i of the node split in two about its middle key,
     /// which moves up into the node.
     mutating fn split(_ parent: Int, _ i: Int) {
-        let full = nodes[parent].children[i]
+        let full = child(parent, i)
         let t = bTreeDegree
-        var keys: Key[>..] = []
-        var values: Value[>..] = []
-        var children: Int[>..] = []
+        let leaf = isLeaf(full)
+        let right = makeNode()
         var j = t
         while j < bTreeMostKeys {
-            keys.append(nodes[full].keys[j])
-            values.append(nodes[full].values[j])
+            keys[place(right, j - t)] = keys.take(at: place(full, j))
+            values[place(right, j - t)] = values.take(at: place(full, j))
             j = j + 1
         }
         var size = t - 1
-        if !isLeaf(full) {
+        if !leaf {
             j = t
-            while j <= bTreeMostKeys {
-                let child = nodes[full].children[j]
-                children.append(child)
-                size = size + sizeOf(child)
+            while j < bTreeMostChildren {
+                let moved = children[full * bTreeMostChildren + j]
+                children[right * bTreeMostChildren + j - t] = moved
+                size = size + sizes[Int(moved)]
                 j = j + 1
             }
         }
-        let right = node(keys, values, children, size: size)
-        let middleKey = nodes[full].keys[t - 1]
-        let middleValue = nodes[full].values[t - 1]
-        while nodes[full].keys.count > t - 1 {
-            nodes[full].keys.removeLast()
-            nodes[full].values.removeLast()
-        }
-        while nodes[full].children.count > t {
-            nodes[full].children.removeLast()
-        }
-        nodes[full].size = nodes[full].size - size - 1
-        insertAt(&nodes[parent].keys, middleKey, i)
-        insertAt(&nodes[parent].values, middleValue, i)
-        insertAt(&nodes[parent].children, right, i + 1)
+        counts[right] = I32(t - 1)
+        sizes[right] = size
+        let middleKey = keys.take(at: place(full, t - 1))
+        let middleValue = values.take(at: place(full, t - 1))
+        counts[full] = I32(t - 1)
+        sizes[full] = sizes[full] - size - 1
+        insertChild(parent, i + 1, right, had: keyCount(parent) + 1)
+        insertKey(parent, i, middleKey, middleValue)
     }
 
     // ---- Removal --------------------------------------------------------
@@ -294,9 +359,9 @@ struct BTree<Key: Comparable, Value> {
     /// A root left with no key gives way to its one child, or the tree is
     /// empty.
     mutating fn shrink() {
-        if root >= 0 && nodes[root].keys.isEmpty {
+        if root >= 0 && keyCount(root) == 0 {
             let old = root
-            root = isLeaf(old) ? -1 : nodes[old].children[0]
+            root = child(old, 0)
             giveUp(old)
         }
     }
@@ -304,131 +369,121 @@ struct BTree<Key: Comparable, Value> {
     // The key, which is in the subtree of n, taken out of it; n has a key
     // to spare, or is the root.
     mutating fn removeIn(_ n: Int, _ key: Key) -> Value {
-        nodes[n].size -= 1
+        sizes[n] = sizes[n] - 1
         let (i, found) = locate(key, n)
         if isLeaf(n) {
-            let old = removeAt(&nodes[n].values, i)
-            removeAt(&nodes[n].keys, i)
-            return old
+            return takeKey(n, i).1
         }
         if found {
-            let left = nodes[n].children[i]
-            let right = nodes[n].children[i + 1]
-            if nodes[left].keys.count >= bTreeDegree {
+            let left = child(n, i)
+            let right = child(n, i + 1)
+            if keyCount(left) >= bTreeDegree {
                 // Replaced by the greatest key before it.
-                let (k, v) = removeEnd(left, true)
-                let old = nodes[n].values[i]
-                nodes[n].keys[i] = k
-                nodes[n].values[i] = v
-                return old
+                return replace(n, i, removeEnd(left, true)).1
             }
-            if nodes[right].keys.count >= bTreeDegree {
-                let (k, v) = removeEnd(right, false)
-                let old = nodes[n].values[i]
-                nodes[n].keys[i] = k
-                nodes[n].values[i] = v
-                return old
+            if keyCount(right) >= bTreeDegree {
+                return replace(n, i, removeEnd(right, false)).1
             }
             // Both at their least: merged about the key, which goes down.
             merge(n, i)
             return removeIn(left, key)
         }
-        let child = spare(n, i)
-        return removeIn(child, key)
+        let into = spare(n, i)
+        return removeIn(into, key)
+    }
+
+    // Key i of n and its value, with another put in their place.
+    mutating fn replace(_ n: Int, _ i: Int, _ entry: (Key, Value)) -> (Key, Value) {
+        let at = place(n, i)
+        let key = keys.take(at: at)
+        let value = values.take(at: at)
+        keys[at] = entry.0
+        values[at] = entry.1
+        return (key, value)
     }
 
     // The least or greatest key of the subtree of n, taken out.
     mutating fn removeEnd(_ n: Int, _ greatest: Bool) -> (Key, Value) {
-        nodes[n].size -= 1
+        sizes[n] = sizes[n] - 1
         if isLeaf(n) {
-            if greatest {
-                return (nodes[n].keys.removeLast(), nodes[n].values.removeLast())
-            }
-            let key = removeAt(&nodes[n].keys, 0)
-            let value = removeAt(&nodes[n].values, 0)
-            return (key, value)
+            return takeKey(n, greatest ? keyCount(n) - 1 : 0)
         }
-        let child = spare(n, greatest ? nodes[n].children.count - 1 : 0)
-        return removeEnd(child, greatest)
+        let into = spare(n, greatest ? keyCount(n) : 0)
+        return removeEnd(into, greatest)
     }
 
     /// Child i of n made to hold a key to spare before removal goes into
     /// it: by a key from a sibling that has one, or merged with a sibling.
     /// The child to go into.
     mutating fn spare(_ n: Int, _ i: Int) -> Int {
-        let child = nodes[n].children[i]
-        if nodes[child].keys.count >= bTreeDegree {
-            return child
+        let into = child(n, i)
+        let count = keyCount(into)
+        if count >= bTreeDegree {
+            return into
         }
-        if i > 0 && nodes[nodes[n].children[i - 1]].keys.count >= bTreeDegree {
+        if i > 0 && keyCount(child(n, i - 1)) >= bTreeDegree {
             // The left sibling's last key goes up, the parent's comes down.
-            let left = nodes[n].children[i - 1]
-            let downKey = nodes[n].keys[i - 1]
-            let downValue = nodes[n].values[i - 1]
-            insertAt(&nodes[child].keys, downKey, 0)
-            insertAt(&nodes[child].values, downValue, 0)
-            let upKey = nodes[left].keys.removeLast()
-            let upValue = nodes[left].values.removeLast()
-            nodes[n].keys[i - 1] = upKey
-            nodes[n].values[i - 1] = upValue
+            let left = child(n, i - 1)
+            let last = keyCount(left)
+            let down = replace(n, i - 1, takeKey(left, last - 1))
+            insertKey(into, 0, down.0, down.1)
             var moved = 1
             if !isLeaf(left) {
-                let grandchild = nodes[left].children.removeLast()
-                insertAt(&nodes[child].children, grandchild, 0)
-                moved = moved + sizeOf(grandchild)
+                let grandchild = takeChild(left, last, had: last + 1)
+                insertChild(into, 0, grandchild, had: count + 1)
+                moved = moved + sizes[grandchild]
             }
-            nodes[child].size += moved
-            nodes[left].size -= moved
-            return child
+            sizes[into] = sizes[into] + moved
+            sizes[left] = sizes[left] - moved
+            return into
         }
-        if i + 1 < nodes[n].children.count && nodes[nodes[n].children[i + 1]].keys.count >= bTreeDegree {
-            let right = nodes[n].children[i + 1]
-            let downKey = nodes[n].keys[i]
-            let downValue = nodes[n].values[i]
-            nodes[child].keys.append(downKey)
-            nodes[child].values.append(downValue)
-            let upKey = removeAt(&nodes[right].keys, 0)
-            let upValue = removeAt(&nodes[right].values, 0)
-            nodes[n].keys[i] = upKey
-            nodes[n].values[i] = upValue
+        if i < keyCount(n) && keyCount(child(n, i + 1)) >= bTreeDegree {
+            let right = child(n, i + 1)
+            let had = keyCount(right) + 1
+            let down = replace(n, i, takeKey(right, 0))
+            insertKey(into, count, down.0, down.1)
             var moved = 1
             if !isLeaf(right) {
-                let grandchild = removeAt(&nodes[right].children, 0)
-                nodes[child].children.append(grandchild)
-                moved = moved + sizeOf(grandchild)
+                let grandchild = takeChild(right, 0, had: had)
+                insertChild(into, count + 1, grandchild, had: count + 1)
+                moved = moved + sizes[grandchild]
             }
-            nodes[child].size += moved
-            nodes[right].size -= moved
-            return child
+            sizes[into] = sizes[into] + moved
+            sizes[right] = sizes[right] - moved
+            return into
         }
-        if i + 1 < nodes[n].children.count {
+        if i < keyCount(n) {
             merge(n, i)
-            return child
+            return into
         }
         merge(n, i - 1)
-        return nodes[n].children[i - 1]
+        return child(n, i - 1)
     }
 
     /// Children i and i + 1 of n made one, about key i of n.
     mutating fn merge(_ n: Int, _ i: Int) {
-        let left = nodes[n].children[i]
-        let right = nodes[n].children[i + 1]
-        let middleKey = removeAt(&nodes[n].keys, i)
-        let middleValue = removeAt(&nodes[n].values, i)
-        nodes[left].keys.append(middleKey)
-        nodes[left].values.append(middleValue)
-        removeAt(&nodes[n].children, i + 1)
-        let moved = nodes[right]
-        for key in moved.keys {
-            nodes[left].keys.append(key)
+        let left = child(n, i)
+        let right = takeChild(n, i + 1, had: keyCount(n) + 1)
+        let middle = takeKey(n, i)
+        var count = keyCount(left)
+        insertKey(left, count, middle.0, middle.1)
+        count = count + 1
+        let moved = keyCount(right)
+        var j = 0
+        while j < moved {
+            keys[place(left, count + j)] = keys.take(at: place(right, j))
+            values[place(left, count + j)] = values.take(at: place(right, j))
+            j = j + 1
         }
-        for value in moved.values {
-            nodes[left].values.append(value)
+        if !isLeaf(right) {
+            j = 0
+            while j <= moved {
+                children[left * bTreeMostChildren + count + j] = children[right * bTreeMostChildren + j]
+                j = j + 1
+            }
         }
-        for child in moved.children {
-            nodes[left].children.append(child)
-        }
-        nodes[left].size += 1 + moved.size
+        counts[left] = I32(count + moved)
+        sizes[left] = sizes[left] + 1 + sizes[right]
         giveUp(right)
     }
 
@@ -461,18 +516,19 @@ struct BTree<Key: Comparable, Value> {
         return most - 1
     }
 
-    mutating fn buildNode(_ keys: Key[:], _ values: Value[:], _ low: Int, _ high: Int, _ height: Int) -> Int {
+    mutating fn buildNode(_ allKeys: Key[:], _ allValues: Value[:], _ low: Int, _ high: Int, _ height: Int) -> Int {
         let n = high - low
+        let made = makeNode()
+        sizes[made] = n
         if height == 0 {
-            var ownKeys: Key[>..] = []
-            var ownValues: Value[>..] = []
-            var i = low
-            while i < high {
-                ownKeys.append(keys[i])
-                ownValues.append(values[i])
+            var i = 0
+            while i < n {
+                keys[place(made, i)] = allKeys[low + i]
+                values[place(made, i)] = allValues[low + i]
                 i = i + 1
             }
-            return node(ownKeys, ownValues, [], size: n)
+            counts[made] = I32(n)
+            return made
         }
         // As few children as hold them all, the keys shared out evenly.
         let below = BTree.capacity(height - 1)
@@ -481,23 +537,22 @@ struct BTree<Key: Comparable, Value> {
             parts = 2
         }
         let shared = n - (parts - 1)
-        var ownKeys: Key[>..] = []
-        var ownValues: Value[>..] = []
-        var children: Int[>..] = []
         var start = low
         var part = 0
         while part < parts {
             let take = shared / parts + (part < shared % parts ? 1 : 0)
-            children.append(buildNode(keys, values, start, start + take, height - 1))
+            let built = buildNode(allKeys, allValues, start, start + take, height - 1)
+            children[made * bTreeMostChildren + part] = I32(built)
             start = start + take
             if part < parts - 1 {
-                ownKeys.append(keys[start])
-                ownValues.append(values[start])
+                keys[place(made, part)] = allKeys[start]
+                values[place(made, part)] = allValues[start]
                 start = start + 1
             }
             part = part + 1
         }
-        return node(ownKeys, ownValues, children, size: n)
+        counts[made] = I32(parts - 1)
+        return made
     }
 }
 
@@ -535,7 +590,7 @@ struct BTreeCursor<Key: Comparable, Value> {
             if tree.isLeaf(n) {
                 return
             }
-            n = tree.nodes[n].children[i]
+            n = tree.child(n, i)
         }
     }
 
@@ -548,7 +603,7 @@ struct BTreeCursor<Key: Comparable, Value> {
             if tree.isLeaf(n) {
                 return
             }
-            n = tree.nodes[n].children[0]
+            n = tree.child(n, 0)
         }
     }
 
@@ -556,8 +611,8 @@ struct BTreeCursor<Key: Comparable, Value> {
         while !path.isEmpty {
             let n = path[path.count - 1]
             let i = slots[slots.count - 1]
-            if i < tree.nodes[n].keys.count {
-                let key = tree.nodes[n].keys[i]
+            if i < tree.keyCount(n) {
+                let key = tree.keys[tree.place(n, i)]
                 if let bound = upper {
                     if bound < key || !upperIncluded && !(key < bound) {
                         path = []
@@ -566,9 +621,9 @@ struct BTreeCursor<Key: Comparable, Value> {
                 }
                 slots[slots.count - 1] = i + 1
                 if !tree.isLeaf(n) {
-                    lowerFrom(tree.nodes[n].children[i + 1])
+                    lowerFrom(tree.child(n, i + 1))
                 }
-                return (key, tree.nodes[n].values[i])
+                return (key, tree.values[tree.place(n, i)])
             }
             path.removeLast()
             slots.removeLast()

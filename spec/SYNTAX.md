@@ -1960,6 +1960,7 @@ an optimised one; never both. A package's profile may choose with
 |---|---|---|
 | `@inline(always)` / `@inline(never)` | fn | Inlined at every call, or at none: SIL's inliner and LLVM's (`alwaysinline`, `noinline`); always does not inline a function into itself, nor one that throws |
 | `@inlinable` | fn | A library's generic function compiled once whose body its interface carries, so that an optimised program built against the library specialises it for the types it knows, whatever its size; without it, only small ones and `@inline(always)` ones are (docs/06 §6.2) |
+| `@vectorised` | fn | Compiled for the wider vectors a processor may have as well as the target's own — for AVX2 on x86-64 — and whichever the program is running on can run called: the same results, sooner. For a loop over `SIMD` vectors, or one that LLVM makes one of. Not inlined where it is called, and compiled once, as any function is, if it gives a vector to a function that is not inlined in it |
 | `@inline_layout` | struct, union | Contiguous pointer-free layout |
 | `@noncopy` | struct, union | Move-only |
 | `@reflectable` | type | Emit full reflection metadata |

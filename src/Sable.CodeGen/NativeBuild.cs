@@ -854,16 +854,31 @@ public static class NativeBuild {
     /// <summary>Every function the IR defines, given the host's attributes through one attribute group.</summary>
     public static string WithHostAttributes(string llvmIr, string attributes) {
         const string group = "#9000";
+        const string wideGroup = "#9001";
+        var wide = false;
         var lines = llvmIr.Split('\n');
         for (var i = 0; i < lines.Length; i++) {
             if (!lines[i].StartsWith("define ", StringComparison.Ordinal) || ParametersEnd(lines[i]) is not (> 0 and var end)) {
                 continue;
             }
 
+            // A function for wider vectors has features of its own, added to
+            // the target's: one 'target-features' would be in place of the other.
+            if (lines[i].Contains(LlvmEmitter.WideAttributes, StringComparison.Ordinal)) {
+                lines[i] = lines[i][..(end + 1)] + " " + wideGroup + lines[i][(end + 1)..].Replace(LlvmEmitter.WideAttributes, "noinline", StringComparison.Ordinal);
+                wide = true;
+                continue;
+            }
+
             lines[i] = lines[i][..(end + 1)] + " " + group + lines[i][(end + 1)..];
         }
 
-        return string.Join('\n', lines) + $"\nattributes {group} = {{ {attributes} }}\n";
+        var text = string.Join('\n', lines) + $"\nattributes {group} = {{ {attributes} }}\n";
+        const string features = "\"target-features\"=\"";
+        return !wide ? text
+            : text + $"attributes {wideGroup} = {{ " + (attributes.Contains(features, StringComparison.Ordinal)
+                ? attributes.Replace(features, features + LlvmEmitter.WideFeatures + ",", StringComparison.Ordinal)
+                : $"{attributes} {features}{LlvmEmitter.WideFeatures}\"") + " }\n";
 
         // The ')' closing the parameter list: after the name, which may be quoted.
         static int ParametersEnd(string line) {

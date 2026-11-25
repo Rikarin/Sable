@@ -467,7 +467,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
 
     /// The bits of a slot that are its entry's position: entries are at most
     /// half as many as the slots.
-    var indexMask: Int => (slots.count - 1) >> 1
+    var indexMask: Int => (slots.count &- 1) >> 1
 
     /// The position of the entry in the slot, which holds one.
     fn position(_ at: Int) -> Int {
@@ -489,7 +489,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
         if live == 0 {
             return -1
         }
-        let mask = slots.count - 1
+        let mask = slots.count &- 1
         let tagMask = -1 ^ indexMask
         let tag = Dictionary.tagOf(hash) & tagMask
         var at = hash & mask
@@ -502,7 +502,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
             if (slot & tagMask) == tag && entries[slot & indexMask]!.key == key {
                 return at
             }
-            at = (at + 1) & mask
+            at = (at &+ 1) & mask
         }
     }
 
@@ -514,7 +514,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
         if (entries.count + 1) * 2 > slots.count {
             grow()
         }
-        let mask = slots.count - 1
+        let mask = slots.count &- 1
         let tagMask = -1 ^ indexMask
         let tag = Dictionary.tagOf(hash) & tagMask
         var at = hash & mask
@@ -531,7 +531,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
             } else if reuse < 0 {
                 reuse = at
             }
-            at = (at + 1) & mask
+            at = (at &+ 1) & mask
         }
     }
 
@@ -601,14 +601,14 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
             fatalError("a Dictionary holds at most 2147483648 keys")
         }
         var fresh = I32[>..](repeating: -1, count: size)
-        let mask = size - 1
+        let mask = size &- 1
         let tagMask = -1 ^ (mask >> 1)
         var index = 0
         for entry in entries {
             let hash = entry!.hash
             var at = hash & mask
             while fresh[at] != -1 {
-                at = (at + 1) & mask
+                at = (at &+ 1) & mask
             }
             fresh[at] = ((Dictionary.tagOf(hash) & tagMask) | index) unchecked as I32
             index = index + 1

@@ -12,6 +12,7 @@ module Sable.Math
 // fraction: it is then in the low bits of the sum.
 
 /// e to each lane, none of them above 0: 0 past the least subnormal.
+@inline(always)
 fn exponential<N: Int>(_ lanes: SIMD<F32, N>) -> SIMD<F32, N> {
     let least = SIMD<F32, N>(repeating: -104.0)
     let x = SIMD<F32, N>.select(lanes.lanesLess(than: least), least, lanes)
@@ -33,6 +34,7 @@ fn exponential<N: Int>(_ lanes: SIMD<F32, N>) -> SIMD<F32, N> {
 }
 
 /// e to each lane, none of them above 0: 0 past the least subnormal.
+@inline(always)
 fn exponential<N: Int>(_ lanes: SIMD<F64, N>) -> SIMD<F64, N> {
     let least = SIMD<F64, N>(repeating: -746.0)
     let x = SIMD<F64, N>.select(lanes.lanesLess(than: least), least, lanes)

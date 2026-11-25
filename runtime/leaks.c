@@ -94,21 +94,17 @@ __attribute__((noinline)) static void track(SableObject *object, bool born) {
     spin_unlock(&tracked_lock);
 }
 
-// An object is alive: counted, and kept in the set when leaks are checked.
-static inline void object_born_on(SableThread *thread, SableObject *object) {
-    thread_count(&thread->live_objects, 1);
+// An object made in a frame, which no allocation counts, is alive: counted, and kept in the set when leaks are checked.
+static void object_born(SableObject *object) {
+    thread_count(&current_thread()->gone_objects, -1);
     if (tracking) {
         track(object, true);
     }
 }
 
-static void object_born(SableObject *object) {
-    object_born_on(current_thread(), object);
-}
-
 // An object's memory is no longer the program's.
 static inline void object_gone_on(SableThread *thread, SableObject *object) {
-    thread_count(&thread->live_objects, -1);
+    thread_count(&thread->gone_objects, 1);
     if (tracking) {
         track(object, false);
     }
@@ -577,7 +573,7 @@ static void reach_from_immortal(void *pointer) {
     }
 
     track_remove(object);
-    thread_count(&current_thread()->live_objects, -1);
+    thread_count(&current_thread()->gone_objects, 1);
     if (reached_count == reached_capacity) {
         reached_capacity = reached_capacity < 64 ? 64 : reached_capacity * 2;
         reached = realloc(reached, (size_t)reached_capacity * sizeof(SableObject *));

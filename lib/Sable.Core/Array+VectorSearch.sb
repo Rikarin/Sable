@@ -43,17 +43,7 @@ extension<Element: SIMDScalar> Element[:] {
     /// assert(xs.count(of: 1) == 2)
     /// ```
     public fn count(of element: Element) -> Int {
-        let width = Element.preferredVectorWidth
-        if width == 16 {
-            return countEqual(self, element, SIMD<Element, 32>(repeating: element), SIMD<U8, 32>(repeating: 1))
-        }
-        if width == 8 {
-            return countEqual(self, element, SIMD<Element, 16>(repeating: element), SIMD<U16, 16>(repeating: 1))
-        }
-        if width == 4 {
-            return countEqual(self, element, SIMD<Element, 8>(repeating: element), SIMD<U32, 8>(repeating: 1))
-        }
-        return countEqual(self, element, SIMD<Element, 4>(repeating: element), SIMD<U64, 4>(repeating: 1))
+        return countEqual(self, element)
     }
 
     /// Where the first element equal to any of the candidates is, or none
@@ -71,6 +61,7 @@ extension<Element: SIMDScalar> Element[:] {
 }
 
 // Where the first element equal to the value is, or -1.
+@vectorised
 fn firstEqual<T: SIMDScalar>(_ xs: T[:], _ value: T) -> Int {
     let width = T.preferredVectorWidth
     if width == 16 {
@@ -89,6 +80,7 @@ fn firstEqual<T: SIMDScalar>(_ xs: T[:], _ value: T) -> Int {
     return firstEqual(xs, value, SIMD<T, 4>(repeating: value))
 }
 
+@inline(always)
 fn firstEqual<T: SIMDScalar, N: Int>(_ xs: T[:], _ value: T, _ wanted: SIMD<T, N>) -> Int {
     let count = xs.count
     var i = 0
@@ -114,6 +106,7 @@ fn firstEqual<T: SIMDScalar, N: Int>(_ xs: T[:], _ value: T, _ wanted: SIMD<T, N
 }
 
 // Where the last element equal to the value is, or -1.
+@vectorised
 fn lastEqual<T: SIMDScalar>(_ xs: T[:], _ value: T) -> Int {
     let width = T.preferredVectorWidth
     if width == 16 {
@@ -132,6 +125,7 @@ fn lastEqual<T: SIMDScalar>(_ xs: T[:], _ value: T) -> Int {
     return lastEqual(xs, value, SIMD<T, 4>(repeating: value))
 }
 
+@inline(always)
 fn lastEqual<T: SIMDScalar, N: Int>(_ xs: T[:], _ value: T, _ wanted: SIMD<T, N>) -> Int {
     var end = xs.count
     if end < N {
@@ -154,8 +148,25 @@ fn lastEqual<T: SIMDScalar, N: Int>(_ xs: T[:], _ value: T, _ wanted: SIMD<T, N>
     return found.anyTrue ? found.lastTrue : -1
 }
 
+// How many elements are equal to the value.
+@vectorised
+fn countEqual<T: SIMDScalar>(_ xs: T[:], _ value: T) -> Int {
+    let width = T.preferredVectorWidth
+    if width == 16 {
+        return countEqual(xs, value, SIMD<T, 32>(repeating: value), SIMD<U8, 32>(repeating: 1))
+    }
+    if width == 8 {
+        return countEqual(xs, value, SIMD<T, 16>(repeating: value), SIMD<U16, 16>(repeating: 1))
+    }
+    if width == 4 {
+        return countEqual(xs, value, SIMD<T, 8>(repeating: value), SIMD<U32, 8>(repeating: 1))
+    }
+    return countEqual(xs, value, SIMD<T, 4>(repeating: value), SIMD<U64, 4>(repeating: 1))
+}
+
 // Each lane counts its own matches, in an unsigned integer of the element's
 // size, for as many steps as it can before it is gathered.
+@inline(always)
 fn countEqual<T: SIMDScalar, C: SIMDScalar & FixedWidthInteger, N: Int>(_ xs: T[:], _ value: T, _ wanted: SIMD<T, N>, _ one: SIMD<C, N>) -> Int {
     let count = xs.count
     let whole = count - count % N
@@ -181,6 +192,7 @@ fn countEqual<T: SIMDScalar, C: SIMDScalar & FixedWidthInteger, N: Int>(_ xs: T[
 }
 
 // Where the first element equal to any of the candidates is, or -1.
+@vectorised
 fn firstEqualToAny<T: SIMDScalar>(_ xs: T[:], _ candidates: T[:]) -> Int {
     let width = T.preferredVectorWidth
     if candidates.count == 0 || candidates.count > 5 || xs.count < width {
@@ -209,6 +221,7 @@ fn firstEqualToAny<T: SIMDScalar>(_ xs: T[:], _ candidates: T[:]) -> Int {
 
 // Of one to five candidates in at least a step's elements: the fifth, or
 // whichever there are, compared again in place of those there are not.
+@inline(always)
 fn firstEqualToAny<T: SIMDScalar, N: Int>(_ xs: T[:], _ candidates: T[:], _ zero: SIMD<T, N>) -> Int {
     let most = candidates.count - 1
     let a = SIMD<T, N>(repeating: candidates[0])

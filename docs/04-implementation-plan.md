@@ -779,7 +779,8 @@ whose body branches, and a local function's context, allocate nothing.
       timed beside it. Closing that gap was code generation, not ARC:
       inout and `T&` parameters are LLVM `noalias` (exclusivity guarantees
       it) and dereferenceable, as a lent object is; array headers, reference
-      counts, numbers and references carry distinct TBAA tags, an object just
+      counts, numbers and references carry distinct TBAA tags, a range of an
+      array is checked by one comparison (`IndexTraps`), an object just
       made has its fields initialised with no test of sharing (`InitFields`),
       a `let` field and an array viewed whole are borrowed for as long as
       what holds them lasts (`BorrowHeld`), `a[i].x = v` stores the field

@@ -47,7 +47,7 @@ extension Dictionary where Key == String {
         var hasher = Hasher()
         piece.hash(into: &hasher)
         let hash = hasher.finalize()
-        let mask = slots.count - 1
+        let mask = slots.count &- 1
         let tagMask = -1 ^ indexMask
         let tag = Dictionary.tagOf(hash) & tagMask
         var at = hash & mask
@@ -59,7 +59,7 @@ extension Dictionary where Key == String {
             if (slot & tagMask) == tag && piece == entries[slot & indexMask]!.key {
                 return at
             }
-            at = (at + 1) & mask
+            at = (at &+ 1) & mask
         }
     }
 }

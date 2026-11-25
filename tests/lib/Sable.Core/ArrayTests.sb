@@ -241,3 +241,23 @@ fn genericCodeAppendsWhatItIsGiven() {
     assertEqual(pairs.count, 3)
     assertEqual(pairs[2].1, "z")
 }
+
+struct Nothing { }
+
+@test
+fn anArrayOfElementsOfNoSizeGrowsAsAnyDoes() {
+    var nothings: Nothing[>..] = []
+    for _ in 0..<1000 {
+        nothings.append(Nothing { })
+    }
+    nothings.reserveCapacity(5000)
+    nothings.append(repeating: Nothing { }, count: 24)
+    assertEqual(nothings.count, 1024)
+    nothings.removeLast(24)
+    let _ = nothings.removeLast()
+    assertEqual(nothings.count, 999)
+    var copy = nothings
+    copy.rotate(left: 3)
+    copy.append(contentsOf: nothings)
+    assertEqual(copy.count, 1998)
+}

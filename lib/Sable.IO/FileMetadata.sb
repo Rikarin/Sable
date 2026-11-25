@@ -37,6 +37,16 @@ public struct FileMetadata {
         created = parts[9] != 0 ? UtcDateTime { secondsSinceEpoch: parts[7], nanosecond: parts[8] } : none
     }
 
+    // What kind of thing is at the path, or at what a link there leads to:
+    // none where there is nothing, or none that can be looked at.
+    static fn kind(of path: FilePath) -> FileKind? {
+        if let given = try? path.given() {
+            let parts = Runtime.pathMetadata(given, true)
+            return parts.isEmpty ? none : FileKind.of(parts[1])
+        }
+        return none
+    }
+
     // What is at the path, or what a link there leads to.
     static fn of(_ path: FilePath, followLinks: Bool) throws(IoError) -> FileMetadata {
         let parts = Runtime.pathMetadata(try path.given(), followLinks)

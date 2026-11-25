@@ -21,6 +21,10 @@ fn aFrozenSetIsTheSetOfItsValues() {
         expect((a == b) == (x == y))
         expect(a == FrozenSet<U8>(a.reversed()) && a.hashValue == FrozenSet<U8>(a.reversed()).hashValue)
     }
+}
+
+@test
+fn soIsOneOfTexts() {
     forAll(cases: 60) { (first: String[>..], others: String[>..]) in
         let a = FrozenSet<String>(first)
         let x = Set<String>(first)
@@ -59,11 +63,15 @@ fn byExample() {
     expect(members.index(0, offsetBy: 2) == 2 && members.distance(from: 0, to: 3) == 3)
     assertEqual("\(members)", "FrozenSet([3, 1, 2])")
     expect(FrozenSet<Int>().isEmpty && !FrozenSet<Int>().contains(0))
+    let collected: FrozenSet<String> = ["x", "y", "x"].collect()
+    assertEqual(collected.count, 2)
+    expect(collected != FrozenSet<String>(["x"]) && collected != FrozenSet<String>(["x", "z"]))
+}
+
+@test
+fn theCaseOfLettersIgnored() {
     let verbs = FrozenSet<String>(ignoringAsciiCase: ["GET", "PUT", "POST", "get", "HEAD", "PATCH"])
     expect(verbs.count == 5 && verbs.contains("get") && verbs.contains("Post") && !verbs.contains("pos"))
     expect(verbs.member(equalTo: "Put") == "PUT" && verbs.member(equalTo: "x") == none)
     assertEqual(verbs.hashValue, FrozenSet<String>(ignoringAsciiCase: ["put", "get", "head", "patch", "post"]).hashValue)
-    let collected: FrozenSet<String> = ["x", "y", "x"].collect()
-    assertEqual(collected.count, 2)
-    expect(collected != FrozenSet<String>(["x"]) && collected != FrozenSet<String>(["x", "z"]))
 }

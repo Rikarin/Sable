@@ -5,6 +5,7 @@ module ImmutableListTests
 
 import Sable.Collections
 import Sable.Testing
+import CollectionsSupport
 
 @derive(Debug, Arbitrary)
 union ListStep {
@@ -37,7 +38,7 @@ fn replaced(_ model: Int[>..], _ range: Range<Int>, with values: Int[>..]) -> In
 }
 
 fn expectSame(_ list: ImmutableList<Int>, _ model: Int[>..]) {
-    expect(list.structuralFault() == none, list.structuralFault() ?? "")
+    expect(list.structuralFault() == none)
     expect(list.count == model.count)
     expect(list.toArray() == model)
 }
@@ -130,24 +131,22 @@ fn alsoALongOne() {
     }
 }
 
-@test
-fn itIsReadByIndexAndInOrder() {
-    for count in [0, 1, 31, 32, 33, 64, 65, 1023, 1024, 1025, 1056, 1057, 33000, 70000] {
-        let list = ImmutableList<Int>(0..<count)
-        require(list.structuralFault() == none)
-        assertEqual(list.count, count)
-        var expected = 0
-        for element in list {
-            assertEqual(element, expected)
-            expected += 1
-        }
-        assertEqual(expected, count)
-        for index in stride(from: 0, to: count, by: 37) {
-            assertEqual(list[index], index)
-        }
-        assertEqual(list.first, count == 0 ? none : 0)
-        assertEqual(list.last, count == 0 ? none : count - 1)
+@test(arguments: [0, 1, 31, 32, 33, 64, 65, 1023, 1024, 1025, 1056, 1057, 33000, 70000])
+fn itIsReadByIndexAndInOrder(_ count: Int) {
+    let list = ImmutableList<Int>(0..<count)
+    expect(list.structuralFault() == none)
+    assertEqual(list.count, count)
+    var expected = 0
+    for element in list {
+        assertEqual(element, expected)
+        expected += 1
     }
+    assertEqual(expected, count)
+    for index in stride(from: 0, to: count, by: 37) {
+        assertEqual(list[index], index)
+    }
+    assertEqual(list.first, count == 0 ? none : 0)
+    assertEqual(list.last, count == 0 ? none : count - 1)
 }
 
 @test
@@ -156,7 +155,7 @@ fn takenApartFromTheEndItIsEmptied() {
     for expected in stride(from: 39999, through: 0, by: -1) {
         assertEqual(list.removeLast(), expected)
         if expected % 997 == 0 {
-            assert(list.structuralFault() == none)
+            assertEqual(list.structuralFault(), none)
         }
     }
     expect(list.isEmpty && list.popLast() == none && list.structuralFault() == none)
@@ -172,7 +171,8 @@ fn removedFromEitherEndAndTheMiddle() {
         assertEqual(list.remove(at: at), model[at])
         model = replaced(model, at..<at + 1, with: [])
         if model.count % 97 == 0 {
-            assert(list.structuralFault() == none && list.toArray() == model)
+            assertEqual(list.structuralFault(), none)
+            assertEqual(list.toArray(), model)
         }
     }
     expect(list.structuralFault() == none)
@@ -217,13 +217,6 @@ fn changedCopiesLeaveTheirOriginal() {
     expect(list.inserting(9, at: 0).toArray() == [9, 1, 2, 3])
     expect(list.removing(at: 2).toArray() == [1, 2])
     expect(list.toArray() == [1, 2, 3])
-}
-
-// How many objects the body leaves that were not there.
-fn objectsMade(_ body: () -> Void) -> Int {
-    let before = MemoryStatistics.current().allocations
-    body()
-    return MemoryStatistics.current().allocations - before
 }
 
 @test
@@ -293,19 +286,6 @@ fn outOfRangeTraps() {
     expectPanic("out of range") { _ = list.inserting(1, at: 101) }
     expectPanic("not within") { _ = list[90..<101] }
     expectPanic() { _ = ImmutableList<Int>()[0] }
-}
-
-final class Counted {
-    let alive: Alive
-    init(_ alive: Alive) {
-        self.alive = alive
-        alive.count += 1
-    }
-    deinit { alive.count -= 1 }
-}
-
-final class Alive {
-    var count = 0
 }
 
 @test

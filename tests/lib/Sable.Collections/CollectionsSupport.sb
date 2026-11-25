@@ -8,3 +8,47 @@ import Sable.Testing
 public fn many<T>(_ element: Gen<T>, upTo limit: Int) -> Gen<T[>..]> {
     return Gen.number(in: 0...limit).flatMap { count in element.array(count: count...count) }
 }
+
+/// A key whose hash is one of few, so that most keys' are equal.
+@derive(Debug)
+public struct Hostile: Hashable {
+    public let value: Int
+    public let hashes: Int
+
+    public init(_ value: Int, hashes: Int) {
+        self.value = value
+        self.hashes = hashes
+    }
+
+    public operator == (lhs: Hostile, rhs: Hostile) -> Bool => lhs.value == rhs.value
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(value % hashes)
+    }
+}
+
+/// How many Counted there are.
+public final class Alive {
+    public var count = 0
+
+    public init() { }
+}
+
+/// Counted among those there are, for as long as it is.
+public final class Counted {
+    public let alive: Alive
+
+    public init(_ alive: Alive) {
+        self.alive = alive
+        alive.count += 1
+    }
+
+    deinit { alive.count -= 1 }
+}
+
+/// How many objects the body makes.
+public fn objectsMade(_ body: () -> Void) -> Int {
+    let before = MemoryStatistics.current().allocations
+    body()
+    return MemoryStatistics.current().allocations - before
+}

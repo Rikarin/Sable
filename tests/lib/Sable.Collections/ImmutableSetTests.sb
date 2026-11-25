@@ -4,22 +4,10 @@ module ImmutableSetTests
 
 import Sable.Collections
 import Sable.Testing
-
-/// A member whose hash is one of few, so that most members' are equal.
-@derive(Debug)
-struct Hostile: Hashable {
-    let value: Int
-    let hashes: Int
-
-    operator == (lhs: Hostile, rhs: Hostile) -> Bool => lhs.value == rhs.value
-
-    fn hash(into hasher: inout Hasher) {
-        hasher.combine(value % hashes)
-    }
-}
+import CollectionsSupport
 
 fn expectSame<E: Hashable & Debug>(_ members: ImmutableSet<E>, _ model: Set<E>) {
-    expect(members.structuralFault() == none, members.structuralFault() ?? "")
+    expect(members.structuralFault() == none)
     expect(members.count == model.count)
     for member in model {
         expect(members.contains(member))
@@ -92,13 +80,10 @@ fn soDoSetsOfManyMembers() {
     combines(first, second, false, (i: Int) => "member \(i)")
 }
 
-@test
-fn soDoSetsOfEqualHashes() {
+@test(arguments: [(3, 500), (1, 60)])
+fn soDoSetsOfEqualHashes(_ hashes: Int, _ members: Int) {
     forAll(cases: 60) { (first: U16[>..], second: U16[>..], shared: Bool) in
-        combines(first, second, shared, (i: Int) => Hostile { value: i, hashes: 3 })
-    }
-    forAll(cases: 60) { (first: U16[>..], second: U16[>..], shared: Bool) in
-        combines(first, second, shared, (i: Int) => Hostile { value: i % 60, hashes: 1 })
+        combines(first, second, shared, (i: Int) => Hostile(i % members, hashes: hashes))
     }
 }
 
@@ -135,12 +120,6 @@ fn itsPositionsAreInTheOrderItIsGoneThrough() {
     expect(position == members.endIndex)
     expect(members.index(members.startIndex, offsetBy: 300) == members.endIndex)
     expectPanic() { _ = members[members.endIndex] }
-}
-
-fn objectsMade(_ body: () -> Void) -> Int {
-    let before = MemoryStatistics.current().allocations
-    body()
-    return MemoryStatistics.current().allocations - before
 }
 
 // Two sets alike but for a member are told apart by the nodes they do not

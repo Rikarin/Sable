@@ -1,0 +1,93 @@
+module Sable.Concurrency
+
+// The values a channel holds, in the order they came: a ring in raw memory,
+// which doubles as it fills. Its head is four words of raw memory too, so
+// that a channel, which is shared, changes it in place under its lock: where
+// the values are, how many there is room for less one (a power of two less
+// one, or -1), the place of the first, and how many there are.
+struct ChannelRing<Element> {
+    let words: RawPtr<Int>
+
+    // Its words in the middle of cache lines of their own: the two ends of
+    // a channel each change one ring, on different threads.
+    static unsafe fn make() -> ChannelRing<Element> {
+        let room = RawPtr<Int>.allocate(count: 36)
+        let words = room.advanced(by: ringPadding)
+        words.initialize(to: 0, at: ringValues)
+        words.initialize(to: -1, at: ringMask)
+        words.initialize(to: 0, at: ringFirst)
+        words.initialize(to: 0, at: ringCount)
+        return ChannelRing<Element> { words: words }
+    }
+
+    unsafe fn destroy() {
+        while count() > 0 {
+            let _ = removeFirst()
+        }
+        if words.load(at: ringMask) >= 0 {
+            RawPtr<Element>(address: words.load(at: ringValues)).deallocate()
+        }
+        words.advanced(by: -ringPadding).deallocate()
+    }
+
+    unsafe fn count() -> Int {
+        return words.load(at: ringCount)
+    }
+
+    unsafe fn append(_ value: Element) {
+        let count = words.load(at: ringCount)
+        if count > words.load(at: ringMask) {
+            grow()
+        }
+        let at = (words.load(at: ringFirst) + count) & words.load(at: ringMask)
+        RawPtr<Element>(address: words.load(at: ringValues)).initialize(to: value, at: at)
+        words.store(count + 1, at: ringCount)
+    }
+
+    unsafe fn removeFirst() -> Element {
+        let first = words.load(at: ringFirst)
+        words.store((first + 1) & words.load(at: ringMask), at: ringFirst)
+        words.store(words.load(at: ringCount) - 1, at: ringCount)
+        return RawPtr<Element>(address: words.load(at: ringValues)).move(at: first)
+    }
+
+    unsafe fn removeLast() -> Element {
+        let count = words.load(at: ringCount) - 1
+        words.store(count, at: ringCount)
+        let at = (words.load(at: ringFirst) + count) & words.load(at: ringMask)
+        return RawPtr<Element>(address: words.load(at: ringValues)).move(at: at)
+    }
+
+    // Room for twice as many, the values at the start of it.
+    unsafe fn grow() {
+        let mask = words.load(at: ringMask)
+        let room = mask < 0 ? 16 : (mask + 1) * 2
+        let grown = RawPtr<Element>.allocate(count: room)
+        if mask >= 0 {
+            let values = RawPtr<Element>(address: words.load(at: ringValues))
+            let first = words.load(at: ringFirst)
+            let before = mask + 1 - first
+            grown.moveInitialize(from: values.advanced(by: first), count: before)
+            grown.advanced(by: before).moveInitialize(from: values, count: first)
+            values.deallocate()
+        }
+        words.store(grown.address, at: ringValues)
+        words.store(room - 1, at: ringMask)
+        words.store(0, at: ringFirst)
+    }
+
+    unsafe fn swap(with other: ChannelRing<Element>) {
+        for i in 0..<4 {
+            let mine = words.load(at: i)
+            words.store(other.words.load(at: i), at: i)
+            other.words.store(mine, at: i)
+        }
+    }
+}
+
+// A ring's words, after its padding.
+const ringValues = 0
+const ringMask = 1
+const ringFirst = 2
+const ringCount = 3
+const ringPadding = 16

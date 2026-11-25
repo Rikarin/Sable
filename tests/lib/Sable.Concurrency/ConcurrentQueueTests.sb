@@ -137,3 +137,41 @@ fn producersAndConsumersAtOnceLoseAndReorderNothing() async {
     assertEqual(counts[1], perProducer)
     assert(queue.isEmpty)
 }
+
+@test
+fn aQueueOfManySegmentsKeepsItsOrderAndLetsGoOfWhatIsLeft() {
+    let live = Atomic<Int>(0)
+    if true {
+        let queue = ConcurrentQueue<Kept>()
+        var next = 0
+        for round in 0..<3 {
+            for i in 0..<4000 {
+                queue.enqueue(Kept(round * 4000 + i, live))
+            }
+            for _ in 0..<3000 {
+                assertEqual(queue.peek()!.number, next)
+                assertEqual(queue.dequeue()!.number, next)
+                next += 1
+            }
+        }
+        assertEqual(queue.count, 3000)
+        assertEqual(live.load(), 3000)
+    }
+    assertEqual(live.load(), 0)
+}
+
+@immutable
+final class Kept {
+    let number: Int
+    let live: Atomic<Int>
+
+    init(_ number: Int, _ live: Atomic<Int>) {
+        self.number = number
+        self.live = live
+        live.add(1)
+    }
+
+    deinit {
+        live.subtract(1)
+    }
+}

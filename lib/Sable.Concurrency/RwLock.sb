@@ -13,19 +13,10 @@ module Sable.Concurrency
 @immutable
 public final class RwLock<Value> {
     let lock: Int
-    let changed: Condition
     let cell: RawPtr<Value>
-    // Under the lock: readers reading, whether one writes, writers waiting.
-    let readers: Atomic<Int>
-    let writing: Atomic<Bool>
-    let writersWaiting: Atomic<Int>
 
     public init(_ value: Value) {
-        lock = Runtime.lockNew()
-        changed = Condition()
-        readers = Atomic<Int>(0)
-        writing = Atomic<Bool>(false)
-        writersWaiting = Atomic<Int>(0)
+        lock = Runtime.rwLockNew()
         Runtime.share(value)
         unsafe {
             cell = RawPtr<Value>.allocate(count: 1)
@@ -38,24 +29,19 @@ public final class RwLock<Value> {
             cell.deinitialize()
             cell.deallocate()
         }
-        Runtime.lockFree(lock)
+        Runtime.rwLockFree(lock)
     }
 
     /// What the closure makes of the value, read alongside any other
     /// readers, while no one writes.
     public fn read<R, E: Error>(_ body: (Value) throws(E) -> R) throws(E) -> R {
-        Runtime.lockAcquire(lock)
-        while writing.load(ordering: .Relaxed) || writersWaiting.load(ordering: .Relaxed) > 0 {
-            Runtime.conditionWait(changed.handle, lock, until: -1)
-        }
-        readers.add(1, ordering: .Relaxed)
-        Runtime.lockRelease(lock)
+        let counted = Runtime.rwLockRead(lock)
         do {
             let result = try body(peek())
-            doneReading()
+            Runtime.rwLockReadDone(lock, counted)
             return result
         } catch {
-            doneReading()
+            Runtime.rwLockReadDone(lock, counted)
             throw error
         }
     }
@@ -63,44 +49,18 @@ public final class RwLock<Value> {
     /// What the closure makes of the value, read and changed alone: no one
     /// else reads or writes until it is done.
     public fn write<R, E: Error>(_ body: (inout Value) throws(E) -> R) throws(E) -> R {
-        Runtime.lockAcquire(lock)
-        writersWaiting.add(1, ordering: .Relaxed)
-        while writing.load(ordering: .Relaxed) || readers.load(ordering: .Relaxed) > 0 {
-            Runtime.conditionWait(changed.handle, lock, until: -1)
-        }
-        writersWaiting.subtract(1, ordering: .Relaxed)
-        writing.store(true, ordering: .Relaxed)
-        Runtime.lockRelease(lock)
+        Runtime.rwLockWrite(lock)
         var value = take()
         do {
             let result = try body(&value)
-            doneWriting(value)
+            put(move value)
+            Runtime.rwLockWriteDone(lock)
             return result
         } catch {
-            doneWriting(value)
+            put(move value)
+            Runtime.rwLockWriteDone(lock)
             throw error
         }
-    }
-
-    // A reader gone: the last wakes a writer waiting.
-    fn doneReading() {
-        Runtime.lockAcquire(lock)
-        if readers.subtract(1, ordering: .Relaxed) == 1 {
-            changed.notifyAll()
-        }
-        Runtime.lockRelease(lock)
-    }
-
-    // The writer's value put back, and the readers and writers waiting woken.
-    fn doneWriting(_ value: Value) {
-        Runtime.share(value)
-        unsafe {
-            cell.initialize(to: value)
-        }
-        Runtime.lockAcquire(lock)
-        writing.store(false, ordering: .Relaxed)
-        changed.notifyAll()
-        Runtime.lockRelease(lock)
     }
 }
 
@@ -114,6 +74,13 @@ extension RwLock {
     fn take() -> Value {
         unsafe {
             return cell.move()
+        }
+    }
+
+    fn put(_ value: Value) {
+        Runtime.share(value)
+        unsafe {
+            cell.initialize(to: value)
         }
     }
 }

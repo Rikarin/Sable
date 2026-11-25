@@ -172,3 +172,28 @@ fn iteratingWhileOthersWriteGivesEachLastingEntryOnce() async {
     }
     assert(seenRight, "a lasting entry was missed or given twice")
 }
+
+@test
+fn arraysAsValuesGrowOnEveryThread() async {
+    let lists = ConcurrentDictionary<String, Int[>..]>()
+    await withTaskGroup(of: Int.self) { group in
+        for task in 0..<4 {
+            group.spawn {
+                var seen = 0
+                for i in 0..<2000 {
+                    lists.update("k\(i % 100)", default: []) { $0.append(i) }
+                    seen += lists.getOrInsert("z\(i % 10)", with: { [task] }).count
+                    seen += lists["k\(i % 90)"]?.count ?? 0
+                }
+                return seen
+            }
+        }
+        await group.waitForAll()
+    }
+    var total = 0
+    for i in 0..<100 {
+        total += lists["k\(i)"]!.count
+    }
+    assertEqual(total, 8000)
+    assertEqual(lists.count, 110)
+}

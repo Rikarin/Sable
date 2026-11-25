@@ -298,6 +298,26 @@ void *sable_array_element(const SableArray *array, int64_t index) {
     return array->elements + index * array->header.type->element_size;
 }
 
+// A buffer reachable from more than one thread holds only what is counted
+// atomically (SABLE_SHARED): what is put into one is shared first. Compiled
+// code shares the element it stores (LlvmEmitter's ShareIntoArray); these
+// are the elements copied in here.
+static void share_run(const SableMetadata *type, char *elements, int64_t count);
+
+static inline void share_stored(const SableArray *array, const SableMetadata *type, char *elements, int64_t count) {
+    if ((object_flags(&array->header) & SABLE_SHARED) != 0 && type->visit != NULL) {
+        share_run(type, elements, count);
+    }
+}
+
+// A copy of a buffer that takes its place: shared if it was, as what it is
+// held by may be. What it holds is shared already.
+static void share_copy(SableArray *copy, const SableArray *array) {
+    if ((object_flags(&array->header) & SABLE_SHARED) != 0) {
+        flags_set(&copy->header, SABLE_SHARED);
+    }
+}
+
 // The array at '*slot', made the only reference to its buffer, so that it
 // can be changed: a fresh one for the empty array, a copy of a shared one.
 static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t room) {
@@ -314,6 +334,7 @@ static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t 
         elements_copy(type, copy->elements, array->elements, array->count);
 
         copy->count = array->count;
+        share_copy(copy, array);
         sable_release(array);
     }
 
@@ -448,7 +469,9 @@ void sable_array_append_all(SableArray **slot, const SableMetadata *type, const 
 
     const char *source = buffer->elements + start * type->element_size;
     SableArray *array = with_room(slot, type, count);
-    elements_copy(type, array->elements + array->count * type->element_size, source, count);
+    char *added = array->elements + array->count * type->element_size;
+    elements_copy(type, added, source, count);
+    share_stored(array, type, added, count);
     array->count += count;
 }
 
@@ -480,6 +503,8 @@ void sable_array_append_repeating(SableArray **slot, const SableMetadata *type, 
         for (int64_t i = 0; i < count; i++) {
             element_copy(type, start + i * size, value);
         }
+
+        share_stored(array, type, start, 1);
     } else if (size > 0) {
         const unsigned char *bytes = value;
         bool same = true;
@@ -631,6 +656,7 @@ void sable_slice_make_unique(SableSlice *slice, const SableMetadata *type) {
     copy->elements = buffer_alloc(copy->capacity * size);
     elements_copy(type, copy->elements, buffer->elements + slice->start * size, copy->count);
 
+    share_copy(copy, buffer);
     sable_release(buffer);
     slice->buffer = copy;
     slice->start = 0;
@@ -727,7 +753,9 @@ void sable_array_store_slice(SableArray **slot, const SableMetadata *type, int64
     }
 
     SableArray *array = unique(slot, type, 0);
-    store_run(array->elements + from * type->element_size, type, buffer, start, count);
+    char *stored = array->elements + from * type->element_size;
+    store_run(stored, type, buffer, start, count);
+    share_stored(array, type, stored, count);
 }
 
 // The same, over elements [from, to) of the slice at '*slice'.
@@ -738,7 +766,9 @@ void sable_slice_store_slice(SableSlice *slice, const SableMetadata *type, int64
     }
 
     sable_slice_make_unique(slice, type);
-    store_run(slice->buffer->elements + (slice->start + from) * type->element_size, type, buffer, start, count);
+    char *stored = slice->buffer->elements + (slice->start + from) * type->element_size;
+    store_run(stored, type, buffer, start, count);
+    share_stored(slice->buffer, type, stored, count);
 }
 
 static void copy_string_element(void *destination, const void *source) {

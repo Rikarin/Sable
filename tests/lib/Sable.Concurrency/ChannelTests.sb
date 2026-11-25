@@ -426,3 +426,100 @@ fn aLongLivedChannelKeepsItsOrder() async {
     }
     assertEqual(next, 500)
 }
+
+@test
+fn manySendersAndReceiversOfEveryChannelLoseNothing() async {
+    for capacity in [0, 1, 7] {
+        let channel = capacity == 0 ? Channel<String>() : Channel<String>(capacity: capacity)
+        var receivers: Task<Int>[>..] = []
+        for r in 0..<4 {
+            receivers.append(Task.spawn {
+                var total = 0
+                while let value = await channel.receive() {
+                    total += try! Int.parse(value)
+                    if r == 0 {
+                        await Task.yield()
+                    }
+                }
+                return total
+            })
+        }
+        // A receiver cancelled again and again keeps what it took.
+        let taken = Atomic(0)
+        let cancelled = Task.spawn {
+            for _ in 0..<20 {
+                let one = Task.spawn {
+                    if let value = await channel.receive() {
+                        taken.add(try! Int.parse(value))
+                    }
+                }
+                await Task.yield()
+                one.cancel()
+                await one.value
+            }
+        }
+        var senders: Task<Int>[>..] = []
+        for s in 0..<4 {
+            senders.append(Task.spawn {
+                var sent = 0
+                for i in 0..<300 {
+                    if await channel.send("\(s * 300 + i)") == .Sent {
+                        sent += 1
+                    }
+                }
+                return sent
+            })
+        }
+        var sent = 0
+        for sender in senders {
+            sent += await sender.value
+        }
+        assertEqual(sent, 1200)
+        await cancelled.value
+        channel.close()
+        var total = taken.load()
+        for receiver in receivers {
+            total += await receiver.value
+        }
+        assertEqual(total, 719400)
+        assert(channel.isEmpty && channel.isClosed)
+    }
+}
+
+@immutable
+final class Tracked {
+    let live: Atomic<Int>
+
+    init(_ live: Atomic<Int>) {
+        self.live = live
+        live.add(1)
+    }
+
+    deinit {
+        live.subtract(1)
+    }
+}
+
+@test
+fn aChannelLetsGoOfWhatItHoldsAndWhatItDrops() async {
+    let live = Atomic(0)
+    if true {
+        let channel = Channel<Tracked>()
+        for _ in 0..<100 {
+            channel.trySend(Tracked(live))
+        }
+        // Some on the receivers' side, some on the senders'.
+        assert(channel.tryReceive() != none)
+        for _ in 0..<50 {
+            channel.trySend(Tracked(live))
+        }
+        assertEqual(channel.count, 149)
+        assertEqual(live.load(), 149)
+        let bounded = Channel<Tracked>(capacity: 2, fullMode: .DropOldest)
+        for _ in 0..<5 {
+            assert(await bounded.send(Tracked(live)) == .Sent)
+        }
+        assertEqual(live.load(), 151)
+    }
+    assertEqual(live.load(), 0)
+}

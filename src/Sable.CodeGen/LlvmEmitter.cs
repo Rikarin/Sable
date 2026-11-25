@@ -345,6 +345,23 @@ public sealed partial class LlvmEmitter {
                   ret void
                 {"}"}
 
+                define internal void @sable.share(ptr %object) alwaysinline nounwind {"{"}
+                entry:
+                  %none = icmp eq ptr %object, null
+                  br i1 %none, label %done, label %present
+                present:
+                  %flagsField = getelementptr inbounds {"{"} ptr, i32, i32 {"}"}, ptr %object, i32 0, i32 2
+                  %flags = load atomic i32, ptr %flagsField monotonic, align 4
+                  %special = and i32 %flags, 513
+                  %ordinary = icmp eq i32 %special, 0
+                  br i1 %ordinary, label %local, label %done
+                local:
+                  call void @sable_share(ptr %object)
+                  br label %done
+                done:
+                  ret void
+                {"}"}
+
                 define internal void @sable.release(ptr %object) alwaysinline nounwind {"{"}
                 entry:
                   %none = icmp eq ptr %object, null
@@ -675,6 +692,12 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_lock_acquire(ptr)
                                 declare zeroext i1 @sable_lock_try_acquire(ptr)
                                 declare void @sable_lock_release(ptr)
+                                declare ptr @sable_rwlock_new()
+                                declare void @sable_rwlock_free(ptr)
+                                declare ptr @sable_rwlock_read(ptr)
+                                declare void @sable_rwlock_read_done(ptr, ptr)
+                                declare void @sable_rwlock_write(ptr)
+                                declare void @sable_rwlock_write_done(ptr)
                                 declare ptr @sable_condition_new()
                                 declare void @sable_condition_free(ptr)
                                 declare void @sable_condition_wait(ptr, ptr, i64)
@@ -1107,7 +1130,7 @@ public sealed partial class LlvmEmitter {
                 Witnessing.Copy => "sable.retain",
                 Witnessing.Destroy => "sable.release",
                 Witnessing.Immortal => "sable_make_immortal",
-                Witnessing.Share => "sable_share",
+                Witnessing.Share => "sable.share",
                 _ => "sable_heap_visit",
             };
             output.Append(indent).Append($"call void @{call}(ptr {value}){dbg}\n");
@@ -2882,6 +2905,10 @@ public sealed partial class LlvmEmitter {
                 }
 
                 case StoreInst { Value.Type: var opaqueStore } store when SilType.IsIndirect(opaqueStore): {
+                    if (Holder(store.Address) is BuiltinInst) {
+                        ShareAt(store.Address, opaqueStore, () => Name(store.Value));
+                    }
+
                     if (store.Kind == StoreKind.Assign && store.Address is not AllocStackInst { Unmanaged: true }) {
                         OpaqueWitness(opaqueStore, AssignWithTakeWitness, Name(store.Address), Name(store.Value));
                     } else {
@@ -2908,6 +2935,12 @@ public sealed partial class LlvmEmitter {
                 }
 
                 case StoreInst store: {
+                    // Into an array's element; a class's field has its own
+                    // share_into (AsyncLowering), unless it is in a struct's.
+                    if (store.Address is not RefElementAddrInst) {
+                        ShareAt(store.Address, store.Value.Type, () => Name(store.Value));
+                    }
+
                     // Assigning destroys what was there, after the new value is in.
                     string? old = null;
                     if (store.Kind == StoreKind.Assign && !store.Value.Type.IsTrivial && store.Address is not AllocStackInst { Unmanaged: true }) {
@@ -3560,6 +3593,93 @@ public sealed partial class LlvmEmitter {
             module.Ownership(_out, "  ", Witnessing.Share, type, value, _dbg);
         }
 
+        /// <summary>
+        ///     Shares a value about to be stored where the object that will hold
+        ///     it is reachable from more than one thread already: what a shared
+        ///     object reaches is shared (runtime/tasks.c's sable_share), and its
+        ///     walk stops at one that is. Null owns nothing.
+        /// </summary>
+        void ShareInto(string owner, SilType type, string value) {
+            if (type.IsTrivial) {
+                return;
+            }
+
+            var isNull = Fresh();
+            var at = Fresh();
+            var flags = Fresh();
+            var bit = Fresh();
+            var shared = Fresh();
+            var look = NewLabel("owner");
+            var share = NewLabel("share");
+            var after = NewLabel("stored");
+            Line($"{isNull} = icmp eq ptr {owner}, null");
+            Line($"br i1 {isNull}, label %{after}, label %{look}");
+            Continue(look);
+            Line($"{at} = getelementptr inbounds i8, ptr {owner}, i64 12");
+            Line($"{flags} = load atomic i32, ptr {at} monotonic, align 4");
+            Line($"{bit} = and i32 {flags}, 512");
+            Line($"{shared} = icmp ne i32 {bit}, 0");
+            Line($"br i1 {shared}, label %{share}, label %{after}, !prof !{{!\"branch_weights\", i32 1, i32 1000}}");
+            Continue(share);
+            Share(type, value);
+            Line($"br label %{after}");
+            Continue(after);
+        }
+
+        /// <summary>As <see cref="ShareInto"/>, into the buffer of the array, or the slice, in a slot.</summary>
+        void ShareIntoArray(string slot, SilType element, string value) {
+            if (element.IsTrivial) {
+                return;
+            }
+
+            var buffer = Fresh();
+            Line($"{buffer} = load ptr, ptr {slot}");
+            ShareInto(buffer, element, value);
+        }
+
+        /// <summary>
+        ///     The object an address is inside, where the code says so — an
+        ///     element of an array, or a field of it, or a class's field — as
+        ///     the instruction that gives it: the element's or the field's address.
+        /// </summary>
+        static SilValue? Holder(SilValue address) => address switch {
+            StructElementAddrInst field => Holder(field.Address),
+            TupleElementAddrInst element => Holder(element.Address),
+            BuiltinInst { Name: "array_element_addr" } => address,
+            RefElementAddrInst { Reference.Type: ClassType { IsCoroutineFrame: false } } => address,
+            _ => null,
+        };
+
+        /// <summary>Shares what is at an address inside an object, the object being shared: an array's buffer just made there.</summary>
+        void ShareAt(SilValue address, SilType type, Func<string> value) {
+            if (type.IsTrivial) {
+                return;
+            }
+
+            switch (Holder(address)) {
+                case BuiltinInst element:
+                    var buffer = Fresh();
+                    Line($"{buffer} = load ptr, ptr {Name(element.Operands[0])}");
+                    ShareInto(buffer, type, value());
+                    return;
+
+                case RefElementAddrInst field:
+                    ShareInto(Name(field.Reference), type, value());
+                    return;
+            }
+        }
+
+        /// <summary>As <see cref="ShareAt"/>, the array at the address: its buffer may be a new one.</summary>
+        void ShareBufferAt(SilValue address, ArrayType array) {
+            if (Holder(address) is null) {
+                return;
+            }
+
+            var buffer = Fresh();
+            Line($"{buffer} = load ptr, ptr {Name(address)}");
+            ShareAt(address, array, () => buffer);
+        }
+
         /// <summary>A struct or a tuple made in a buffer of its own, each field moved or stored where the metadata says.</summary>
         void IndirectFields(SilInstruction made, IReadOnlyList<SilType> parts) {
             var metadata = OpaqueMetadata(made.Type);
@@ -4130,19 +4250,31 @@ public sealed partial class LlvmEmitter {
                 }
 
                 // Locks and conditions, by handle (runtime/locks.c).
-                case "lock_new" or "condition_new": {
+                case "lock_new" or "rwlock_new" or "condition_new": {
                     var made = Fresh();
                     Line($"{made} = call ptr @sable_{builtin.Name}()");
                     Line($"{Result()} = ptrtoint ptr {made} to i64");
                     return;
                 }
 
-                case "lock_free" or "lock_acquire" or "lock_release" or "condition_free" or "condition_signal" or "condition_broadcast":
+                case "lock_free" or "lock_acquire" or "lock_release" or "condition_free" or "condition_signal" or "condition_broadcast"
+                    or "rwlock_free" or "rwlock_write" or "rwlock_write_done":
                     Line($"call void @sable_{builtin.Name}(ptr {RawAddress(operands[0])})");
                     return;
 
                 case "lock_try_acquire":
                     Line($"{Result()} = call zeroext i1 @sable_lock_try_acquire(ptr {RawAddress(operands[0])})");
+                    return;
+
+                case "rwlock_read": {
+                    var counted = Fresh();
+                    Line($"{counted} = call ptr @sable_rwlock_read(ptr {RawAddress(operands[0])})");
+                    Line($"{Result()} = ptrtoint ptr {counted} to i64");
+                    return;
+                }
+
+                case "rwlock_read_done":
+                    Line($"call void @sable_rwlock_read_done(ptr {RawAddress(operands[0])}, ptr {RawAddress(operands[1])})");
                     return;
 
                 case "condition_wait":
@@ -5145,7 +5277,9 @@ public sealed partial class LlvmEmitter {
                 case "array_append": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var element = AppendSlot(operands[0], arrayType);
+                    ShareIntoArray(operands[0], arrayType.Element, operands[1]);
                     StoreElement(arrayType.Element, operands[1], element);
+                    ShareBufferAt(builtin.Operands[0], arrayType);
                     return;
                 }
 
@@ -5163,6 +5297,7 @@ public sealed partial class LlvmEmitter {
                     var slice = Fresh();
                     Line($"{slice} = load {Type(unique)}, ptr {operands[0]}");
                     var element = SliceElement(slice, operands[1], unique, check: !builtin.InBounds);
+                    ShareIntoArray(operands[0], unique.Element, operands[2]);
                     if (SilType.IsIndirect(unique.Element)) {
                         OpaqueWitness(unique.Element, AssignWithTakeWitness, element, operands[2]);
                         return;
@@ -5178,6 +5313,7 @@ public sealed partial class LlvmEmitter {
                 case "array_set" or "array_set_unique" when builtin.Operands[0].Type is AddressType { Pointee: SliceType written }: {
                     var elementType = Type(written.Element);
                     var element = SliceMutableElement(operands[0], operands[1], written);
+                    ShareIntoArray(operands[0], written.Element, operands[2]);
                     if (SilType.IsIndirect(written.Element)) {
                         OpaqueWitness(written.Element, AssignWithTakeWitness, element, operands[2]);
                         return;
@@ -5239,6 +5375,7 @@ public sealed partial class LlvmEmitter {
                     var array = Fresh();
                     Line($"{array} = load ptr, ptr {operands[0]}");
                     var element = InlineElement(array, operands[1], arrayType.Element, check: !builtin.InBounds);
+                    ShareIntoArray(operands[0], arrayType.Element, operands[2]);
                     if (arrayType.Element is var replacedUnique && SilType.IsIndirect(replacedUnique)) {
                         OpaqueWitness(replacedUnique, AssignWithTakeWitness, element, operands[2]);
                         return;
@@ -5255,6 +5392,7 @@ public sealed partial class LlvmEmitter {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var elementType = Type(arrayType.Element);
                     var element = MutableElement(operands[0], operands[1], arrayType);
+                    ShareIntoArray(operands[0], arrayType.Element, operands[2]);
                     if (arrayType.Element is var replaced && SilType.IsIndirect(replaced)) {
                         OpaqueWitness(replaced, AssignWithTakeWitness, element, operands[2]);
                         return;
@@ -5336,6 +5474,7 @@ public sealed partial class LlvmEmitter {
                     var source = (SliceType)builtin.Operands[1].Type;
                     var (buffer, start, count) = (SlicePart(operands[1], source, 0), SlicePart(operands[1], source, 1), SlicePart(operands[1], source, 2));
                     Line($"call void @sable_array_append_all(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {buffer}, i64 {start}, i64 {count})");
+                    ShareBufferAt(builtin.Operands[0], arrayType);
                     return;
                 }
 
@@ -5350,18 +5489,21 @@ public sealed partial class LlvmEmitter {
 
                     SiteForRuntime();
                     Line($"call void @sable_array_append_repeating(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {value}, i64 {operands[2]})");
+                    ShareBufferAt(builtin.Operands[0], arrayType);
                     return;
                 }
 
                 case "array_append_utf8": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     Line($"call void @sable_array_append_utf8(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {operands[1]}, i64 {operands[2]}, i64 {operands[3]})");
+                    ShareBufferAt(builtin.Operands[0], arrayType);
                     return;
                 }
 
                 case "array_reserve": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     Line($"call void @sable_array_reserve(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, i64 {operands[1]})");
+                    ShareBufferAt(builtin.Operands[0], arrayType);
                     return;
                 }
 

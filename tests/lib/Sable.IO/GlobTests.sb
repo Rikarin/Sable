@@ -73,7 +73,10 @@ fn aBackslashMakesACharacterItself() throws {
     try check("\\*", ["*"], ["a"])
     try check("a\\{b\\}", ["a{b}"], ["ab"])
     try check("\\[a]", ["[a]"], ["a"])
+    #if !os(windows)
+    // Where a backslash separates, no name has one.
     try check("\\?\\\\", ["?\\"], ["a\\"])
+    #endif
 }
 
 @test

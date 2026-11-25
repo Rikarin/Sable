@@ -1,36 +1,17 @@
 module LinkedListTests
 
 // LinkedList (Sable.Collections): against an array as a model, with
-// inserts, removals and moves at handles chosen at random; handles kept
+// inserts, removals and moves at arbitrary handles; handles kept
 // across changes and refused once removed; order labels renumbered under
 // inserts that crowd one spot; and the list as a value and a collection.
 
+import CollectionsSupport
 import Sable.Collections
 import Sable.Testing
-
-/// A random walk of numbers: xorshift.
-struct Walk {
-    var state: U64
-
-    mutating fn next(_ below: Int) -> Int {
-        state = state ^ (state << 13)
-        state = state ^ (state >> 7)
-        state = state ^ (state << 17)
-        return Int(state % U64(below))
-    }
-}
 
 fn shown(_ list: LinkedList<Int>) -> String {
     var parts: String[>..] = []
     for x in list {
-        parts.append("\(x)")
-    }
-    return parts.joined(separator: ",")
-}
-
-fn shownModel(_ model: List<Int>) -> String {
-    var parts: String[>..] = []
-    for x in model {
         parts.append("\(x)")
     }
     return parts.joined(separator: ",")
@@ -59,66 +40,89 @@ fn positions(_ list: LinkedList<Int>) -> LinkedListIndex[>..] {
     return all
 }
 
+// Places are taken modulo how many there are when a step comes.
+@derive(Debug)
+union ListStep {
+    Insert(before: Int)
+    InsertAfter(Int)
+    Remove(Int)
+    Move(Int, before: Int)
+    Negate(Int)
+}
+
 @test
 fn randomChangesAgreeWithAnArray() {
-    var walk = Walk { state: 0x9E3779B97F4A7C15 }
-    var list = LinkedList<Int>()
-    var model = List<Int>()
-    var removed: LinkedListIndex[>..] = []
-    var next = 0
-    var step = 0
-    while step < 4000 {
-        let all = positions(list)
-        assertEqual(all.count, model.count)
-        let choice = walk.next(10)
-        if model.isEmpty || choice < 4 {
-            // Insert before or after a random node, or at an end.
-            let value = next
-            next += 1
-            let spot = model.isEmpty ? 0 : walk.next(model.count + 1)
-            let at = spot == model.count ? list.endIndex : all[spot]
-            if walk.next(2) == 0 || spot == model.count {
-                let made = list.insert(value, before: at)
-                model.insert(value, at: spot)
-                assertEqual(list[made], value)
-            } else {
-                let made = list.insert(value, after: at)
-                model.insert(value, at: spot + 1)
-                assertEqual(list[made], value)
+    let place = Gen.number(in: 0...5000)
+    let step = Gen.weighted([
+        (2, place.map { ListStep.Insert(before: $0) }),
+        (2, place.map { ListStep.InsertAfter($0) }),
+        (3, place.map { ListStep.Remove($0) }),
+        (2, place.zip(place).map { ListStep.Move($0.0, before: $0.1) }),
+        (1, place.map { ListStep.Negate($0) }),
+    ])
+    forAll(many(step, upTo: 1000), cases: 10) { (steps: ListStep[>..]) in
+        var list = LinkedList<Int>()
+        var model = List<Int>()
+        var removed: LinkedListIndex[>..] = []
+        var next = 0
+        for step in steps {
+            let all = positions(list)
+            require(all.count == model.count)
+            match step {
+                // Before a node, or, before none, at the back.
+                case .Insert(let place) => {
+                    let spot = place % (model.count + 1)
+                    let made = list.insert(next, before: spot == model.count ? list.endIndex : all[spot])
+                    model.insert(next, at: spot)
+                    expect(list[made] == next)
+                    next += 1
+                }
+                case .InsertAfter(let place) => {
+                    if !model.isEmpty {
+                        let spot = place % model.count
+                        let made = list.insert(next, after: all[spot])
+                        model.insert(next, at: spot + 1)
+                        expect(list[made] == next)
+                        next += 1
+                    }
+                }
+                case .Remove(let place) => {
+                    if !model.isEmpty {
+                        let spot = place % model.count
+                        expect(list.remove(at: all[spot]) == model.remove(at: spot))
+                        removed.append(all[spot])
+                    }
+                }
+                // A node before another, or to the back.
+                case .Move(let moving, let place) => {
+                    if !model.isEmpty {
+                        let from = moving % model.count
+                        let to = place % (model.count + 1)
+                        let value = model[from]
+                        let moved = list.move(all[from], before: to == model.count ? list.endIndex : all[to])
+                        expect(list[moved] == value)
+                        if from != to {
+                            _ = model.remove(at: from)
+                            model.insert(value, at: to > from ? to - 1 : to)
+                        }
+                    }
+                }
+                // Replaced through a handle.
+                case .Negate(let place) => {
+                    if !model.isEmpty {
+                        let spot = place % model.count
+                        list[all[spot]] = -model[spot]
+                        model[spot] = -model[spot]
+                    }
+                }
             }
-        } else if choice < 7 {
-            let spot = walk.next(model.count)
-            let gone = all[spot]
-            assertEqual(list.remove(at: gone), model[spot])
-            _ = model.remove(at: spot)
-            removed.append(gone)
-        } else if choice < 9 {
-            // Move a random node before another, or to the back.
-            let from = walk.next(model.count)
-            let to = walk.next(model.count + 1)
-            let target = to == model.count ? list.endIndex : all[to]
-            let value = model[from]
-            let moved = list.move(all[from], before: target)
-            assertEqual(list[moved], value)
-            if from != to {
-                _ = model.remove(at: from)
-                model.insert(value, at: to > from ? to - 1 : to)
-            }
-        } else {
-            // Replace through a handle.
-            let spot = walk.next(model.count)
-            list[all[spot]] = -model[spot]
-            model[spot] = -model[spot]
+            require(list.count == model.count)
         }
-        assertEqual(list.count, model.count)
-        step += 1
+        expect(list.toArray() == model.toArray())
+        // Every removed handle is refused, even where its slot was reused.
+        expect(!removed.contains(where: { list.isValid($0) }))
+        expect(list.isValid(list.endIndex))
     }
-    assertEqual(shown(list), shownModel(model))
-    // Every removed handle is refused, even spot its slot was reused.
-    for gone in removed {
-        assert(!list.isValid(gone))
-    }
-    expect(list.isValid(list.endIndex))
 }
 
 @test

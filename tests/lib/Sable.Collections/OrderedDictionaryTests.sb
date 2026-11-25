@@ -3,6 +3,7 @@ module OrderedDictionaryTests
 // OrderedDictionary (Sable.Collections), tested with '@test': run with
 //     tools/stdlib-coverage.sh Sable.Collections
 
+import CollectionsSupport
 import Sable.Collections
 import Sable.Testing
 
@@ -200,66 +201,90 @@ struct Entry {
     let text: String
 }
 
+// Of the key of an id, or of places modulo how many there are.
+@derive(Debug)
+union OrderedStep {
+    Set(Int)
+    Remove(Int)
+    Insert(Int, at: Int)
+    Swap(Int, Int)
+    Sort
+    RemoveMiddle
+}
+
 @test
 fn anOrderedDictionaryAgreesWithAnArrayUnderRandomChanges() {
-    var generator = SeededRandomNumberGenerator(seed: 42)
-    let ordered = OrderedDictionary<Crowded, String>()
-    var model = List<Entry>()
-    for step in 0..<3000 {
-        let id = Int(generator.next() % 60)
-        let at = model.firstIndex(where: { $0.id == id })
-        match generator.next() % 6 {
-            case 0, 1 => {
-                ordered.set(Crowded { id: id }, "v\(step)")
-                if let at = at {
-                    model[at] = Entry { id: id, text: "v\(step)" }
-                } else {
-                    model.append(Entry { id: id, text: "v\(step)" })
+    let ids = Gen.number(in: 0...59)
+    let places = Gen.number(in: 0...999)
+    let step = Gen.weighted([
+        (20, ids.map { OrderedStep.Set($0) }),
+        (10, ids.map { OrderedStep.Remove($0) }),
+        (10, ids.zip(places).map { OrderedStep.Insert($0.0, at: $0.1) }),
+        (10, places.zip(places).map { OrderedStep.Swap($0.0, $0.1) }),
+        (1, Gen.always(OrderedStep.Sort)),
+        (9, Gen.always(OrderedStep.RemoveMiddle)),
+    ])
+    forAll(many(step, upTo: 700), cases: 12) { (steps: OrderedStep[>..]) in
+        let ordered = OrderedDictionary<Crowded, String>()
+        var model = List<Entry>()
+        var number = 0
+        for step in steps {
+            number += 1
+            match step {
+                case .Set(let id) => {
+                    ordered.set(Crowded { id: id }, "v\(number)")
+                    if let at = model.firstIndex(where: { $0.id == id }) {
+                        model[at] = Entry { id: id, text: "v\(number)" }
+                    } else {
+                        model.append(Entry { id: id, text: "v\(number)" })
+                    }
                 }
-            }
-            case 2 => {
-                let removed = ordered.remove(Crowded { id: id })
-                if let at = at {
-                    assertEqual(removed ?? "", model[at].text)
-                    _ = model.remove(at: at)
-                } else {
-                    assert(removed == none)
+                case .Remove(let id) => {
+                    let removed = ordered.remove(Crowded { id: id })
+                    if let at = model.firstIndex(where: { $0.id == id }) {
+                        expect(removed == model.remove(at: at).text)
+                    } else {
+                        expect(removed == none)
+                    }
+                    expect(!ordered.contains(Crowded { id: id }))
                 }
-            }
-            case 3 => {
-                let place = Int(generator.next() % U64(model.count + 1))
-                let added = ordered.insert("i\(step)", forKey: Crowded { id: id }, at: place)
-                assertEqual(added, at == none)
-                if added {
-                    model.insert(Entry { id: id, text: "i\(step)" }, at: place)
+                case .Insert(let id, let at) => {
+                    let place = at % (model.count + 1)
+                    let isNew = model.firstIndex(where: { $0.id == id }) == none
+                    expect(ordered.insert("i\(number)", forKey: Crowded { id: id }, at: place) == isNew)
+                    if isNew {
+                        model.insert(Entry { id: id, text: "i\(number)" }, at: place)
+                    }
+                    expect(ordered.contains(Crowded { id: id }))
                 }
-            }
-            case 4 => {
-                if model.count > 1 {
-                    let i = Int(generator.next() % U64(model.count))
-                    let j = Int(generator.next() % U64(model.count))
-                    ordered.swapAt(i, j)
-                    let held = model[i]
-                    model[i] = model[j]
-                    model[j] = held
+                case .Swap(let first, let second) => {
+                    if model.count > 1 {
+                        let i = first % model.count
+                        let j = second % model.count
+                        ordered.swapAt(i, j)
+                        model.swapAt(i, j)
+                    }
                 }
-            }
-            default => {
-                if step % 10 == 0 {
+                case .Sort => {
                     ordered.sort(by: { $0.0.id < $1.0.id })
                     model.sort(by: { $0.id < $1.id })
-                } else if model.count > 0 {
-                    let (key, value) = ordered.remove(at: model.count / 2)
-                    let wanted = model.remove(at: model.count / 2)
-                    assert(key.id == wanted.id && value == wanted.text)
+                }
+                case .RemoveMiddle => {
+                    if !model.isEmpty {
+                        let (key, value) = ordered.remove(at: model.count / 2)
+                        let wanted = model.remove(at: model.count / 2)
+                        expect(key.id == wanted.id && value == wanted.text)
+                    }
+                }
+            }
+            require(ordered.count == model.count)
+            for i in 0..<model.count {
+                let key = ordered.key(at: i)
+                if key.id != model[i].id || ordered.value(at: i) != model[i].text || ordered.index(of: key) != i {
+                    recordFailure("after step \(number), at \(i): \(key.id): \(ordered.value(at: i)) rather than \(model[i].id): \(model[i].text)")
+                    return
                 }
             }
         }
-        assertEqual(ordered.count, model.count)
-        for i in 0..<model.count {
-            assert(ordered.key(at: i).id == model[i].id && ordered.value(at: i) == model[i].text)
-            assertEqual(ordered.index(of: Crowded { id: model[i].id }) ?? -1, i)
-        }
-        assertEqual(ordered.contains(Crowded { id: id }), (model.firstIndex(where: { $0.id == id }) != none))
     }
 }

@@ -3,6 +3,7 @@ module PriorityQueueTests
 // PriorityQueue (Sable.Collections), tested with '@test': run with
 //     tools/stdlib-coverage.sh Sable.Collections
 
+import CollectionsSupport
 import Sable.Collections
 import Sable.Testing
 
@@ -51,7 +52,7 @@ fn anOrderGivenGoesFirst() {
     assertEqual(queue.peek() ?? -1, 49)
     var previous = 50
     while let v = queue.pop() {
-        assert(v < previous)
+        expect(v < previous)
         previous = v
     }
     assertEqual(previous, 0)
@@ -109,36 +110,52 @@ fn aPriorityQueueIsMadeAtOnceAndChangedInPlace() {
     assertEqual(largest.pop(), 5)
 }
 
+@derive(Debug)
+union QueueStep {
+    Push(Int)
+    Pop
+    PushPop(Int)
+    // One of those there, by its place among them.
+    Update(Int, to: Int)
+}
+
 @test
 fn aPriorityQueueAgreesWithSortingUnderRandomChanges() {
-    let queue = PriorityQueue<Int>()
-    var model = List<Int>()
-    var seed = 99
-    var step = 0
-    while step < 1500 {
-        seed = (seed * 1103515245 + 12345) % 2147483648
-        let value = seed / 16 % 1000
-        let choice = seed % 5
-        if choice <= 1 {
-            queue.push(value)
-            model.append(value)
-        } else if choice == 2 && !model.isEmpty {
+    let values = Gen.number(in: 0...999)
+    let step = Gen.weighted([
+        (2, values.map { QueueStep.Push($0) }),
+        (1, Gen.always(QueueStep.Pop)),
+        (1, values.map { QueueStep.PushPop($0) }),
+        (1, values.zip(values).map { QueueStep.Update($0.0, to: $0.1) }),
+    ])
+    forAll(many(step, upTo: 400), cases: 10) { (steps: QueueStep[>..]) in
+        let queue = PriorityQueue<Int>()
+        var model = List<Int>()
+        for step in steps {
+            match step {
+                case .Push(let value) => {
+                    queue.push(value)
+                    model.append(value)
+                }
+                case .Pop => expect(queue.pop() == (model.isEmpty ? none : model.remove(at: 0)))
+                case .PushPop(let value) => {
+                    let top = queue.pushPop(value)
+                    model.append(value)
+                    model.sort()
+                    expect(top == model.remove(at: 0))
+                }
+                case .Update(let place, let value) => {
+                    if !model.isEmpty {
+                        let target = model[place % model.count]
+                        expect(queue.update(where: { $0 == target }, to: value))
+                        model[model.firstIndex(of: target)!] = value
+                    }
+                }
+            }
             model.sort()
-            assertEqual(queue.pop(), model.remove(at: 0))
-        } else if choice == 3 {
-            let top = queue.pushPop(value)
-            model.append(value)
-            model.sort()
-            assertEqual(top, model.remove(at: 0))
-        } else if !model.isEmpty {
-            let target = model[seed / 3 % model.count]
-            assert(queue.update(where: { $0 == target }, to: value))
-            model[model.firstIndex(of: target)!] = value
         }
-        step += 1
+        expect(queue.drainSorted() == model.toArray())
     }
-    model.sort()
-    expect(queue.drainSorted() == model.toArray())
 }
 
 @test
@@ -155,27 +172,21 @@ fn anElementGoesByItsPriority() {
 fn theNaturalOrderIsTheClosuresOrder() {
     // '<' compiled in, and called through a closure: what either gives out,
     // in order, is the same.
-    var seed = 11
-    for size in 0..<70 {
+    forAll(many(Gen.number(in: 0...19), upTo: 70)) { (values: Int[>..]) in
         let natural = PriorityQueue<Int>()
         let called = PriorityQueue<Int>(by: (a: Int, b: Int) => a < b)
-        var values: Int[>..] = []
-        for _ in 0..<size {
-            seed = (seed * 1103515245 + 12345) % 2147483648
-            let value = seed / 7 % 20
-            values.append(value)
+        for value in values {
             natural.push(value)
             called.push(value)
         }
         let heapified = PriorityQueue<Int>(values)
-        values.sort()
-        for value in values {
-            assertEqual(natural.peek(), value)
-            assertEqual(natural.pop(), value)
-            assertEqual(called.pop(), value)
-            assertEqual(heapified.pop(), value)
+        for value in values.sorted() {
+            expect(natural.peek() == value)
+            expect(natural.pop() == value)
+            expect(called.pop() == value)
+            expect(heapified.pop() == value)
         }
-        assert(natural.isEmpty && called.pop() == none)
+        expect(natural.isEmpty && called.pop() == none)
     }
 }
 
@@ -187,7 +198,7 @@ fn aQueueOfStringsSinksAndRises() {
     }
     var last = ""
     while let word = words.pop() {
-        assert(!(word < last))
+        expect(word >= last)
         last = word
     }
 }

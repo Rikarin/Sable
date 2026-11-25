@@ -133,22 +133,24 @@ fn aBitSetKnowsItsLeastGreatestAndARange() {
     expect(bits.members(in: 64..<128) == [70])
 }
 
-@test
-fn setsOfDifferentLengthsCombine() {
-    for (short, long) in [(0, 100), (64, 65), (5, 1000), (200, 200)] {
-        let a = BitSet((0..<short).filter { $0 % 3 == 0 })
-        let b = BitSet((0..<long).filter { $0 % 5 == 0 })
-        for (x, y) in [(a, b), (b, a)] {
-            let both = (0..<1000).filter({ x.contains($0) || y.contains($0) }).toArray()
-            assert(x.union(y).toArray() == both && x.union(y).count == both.count)
-            let common = (0..<1000).filter({ x.contains($0) && y.contains($0) }).toArray()
-            assert(x.intersection(y).toArray() == common && x.intersection(y).count == common.count)
-            let left = (0..<1000).filter({ x.contains($0) && !y.contains($0) }).toArray()
-            assert(x.subtracting(y).toArray() == left && x.subtracting(y).count == left.count)
-            let either = (0..<1000).filter({ x.contains($0) != y.contains($0) }).toArray()
-            assert(x.symmetricDifference(y).toArray() == either && x.symmetricDifference(y).count == either.count)
-        }
+@test(arguments: [(0, 100), (64, 65), (5, 1000), (200, 200)])
+fn setsOfDifferentLengthsCombine(_ short: Int, _ long: Int) {
+    let a = BitSet((0..<short).filter { $0 % 3 == 0 })
+    let b = BitSet((0..<long).filter { $0 % 5 == 0 })
+    for (x, y) in [(a, b), (b, a)] {
+        let both = (0..<1000).filter({ x.contains($0) || y.contains($0) }).toArray()
+        expect(x.union(y).toArray() == both && x.union(y).count == both.count)
+        let common = (0..<1000).filter({ x.contains($0) && y.contains($0) }).toArray()
+        expect(x.intersection(y).toArray() == common && x.intersection(y).count == common.count)
+        let left = (0..<1000).filter({ x.contains($0) && !y.contains($0) }).toArray()
+        expect(x.subtracting(y).toArray() == left && x.subtracting(y).count == left.count)
+        let either = (0..<1000).filter({ x.contains($0) != y.contains($0) }).toArray()
+        expect(x.symmetricDifference(y).toArray() == either && x.symmetricDifference(y).count == either.count)
     }
+}
+
+@test
+fn aBitSetGrowsToWhatIsInserted() {
     let bits = BitSet()
     expect(bits.insert(640) && !bits.insert(640) && bits.insert(0))
     expect(bits.toArray() == [0, 640])

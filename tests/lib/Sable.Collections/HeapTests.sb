@@ -3,6 +3,7 @@ module HeapTests
 // Heap (Sable.Collections): a min-max heap, its least and greatest each a
 // step away.
 
+import CollectionsSupport
 import Sable.Collections
 import Sable.Testing
 
@@ -23,33 +24,36 @@ fn theLeastAndTheGreatestComeOut() {
     assertEqual("\(words)", "Heap([\"fig\"])")
 }
 
+@derive(Debug)
+union HeapStep {
+    Insert(Int)
+    PopMin
+    PopMax
+}
+
 @test
 fn aHeapAgreesWithASortedArrayUnderRandomChanges() {
-    let heap = Heap<Int>()
-    var model = List<Int>()
-    var seed = 7
-    var step = 0
-    while step < 3000 {
-        seed = (seed * 1103515245 + 12345) % 2147483648
-        let value = seed / 16 % 500
-        // The high bits: the low ones of such a generator hardly vary.
-        let choice = seed / 65536 % 4
-        if choice <= 1 || model.isEmpty {
-            heap.insert(value)
-            model.append(value)
-        } else if choice == 2 {
-            model.sort()
-            assertEqual(heap.popMin(), model.remove(at: 0))
-        } else {
-            model.sort()
-            assertEqual(heap.popMax(), model.removeLast())
+    let step = Gen.weighted([
+        (2, Gen.number(in: 0...499).map { HeapStep.Insert($0) }),
+        (1, Gen.always(HeapStep.PopMin)),
+        (1, Gen.always(HeapStep.PopMax)),
+    ])
+    forAll(many(step, upTo: 400), cases: 20) { (steps: HeapStep[>..]) in
+        let heap = Heap<Int>()
+        var model = List<Int>()
+        for step in steps {
+            match step {
+                case .Insert(let value) => {
+                    heap.insert(value)
+                    model.append(value)
+                    model.sort()
+                }
+                case .PopMin => expect(heap.popMin() == (model.isEmpty ? none : model.remove(at: 0)))
+                case .PopMax => expect(heap.popMax() == model.popLast())
+            }
+            expect(heap.min == model.first && heap.max == model.last)
+            expect(heap.count == model.count)
         }
-        if !model.isEmpty {
-            assertEqual(heap.min, model.min()!)
-            assertEqual(heap.max, model.max()!)
-        }
-        assertEqual(heap.count, model.count)
-        step += 1
     }
 }
 

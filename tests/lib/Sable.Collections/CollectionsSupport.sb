@@ -1,0 +1,10 @@
+module CollectionsSupport
+
+import Sable.Testing
+
+/// Arrays of as many as a number up to the limit says, each as likely. (What
+/// 'array(count:)' makes is mostly short, and never shorter than its least
+/// when a failing case is made simpler.)
+public fn many<T>(_ element: Gen<T>, upTo limit: Int) -> Gen<T[>..]> {
+    return Gen.number(in: 0...limit).flatMap { count in element.array(count: count...count) }
+}

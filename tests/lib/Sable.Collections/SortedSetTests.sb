@@ -1,27 +1,11 @@
 module SortedSetTests
 
 // SortedSet (Sable.Collections): against a Set and a sorted array as the
-// model, under random operations and set algebra, and by example.
+// model, under arbitrary operations and set algebra, and by example.
 
+import CollectionsSupport
 import Sable.Collections
 import Sable.Testing
-
-/// Arrays compared by what they print, as assertEqual needs Equatable.
-fn assertSame(_ got: Int[>..], _ expected: Int[>..]) {
-    assertEqual("\(got)", "\(expected)")
-}
-
-/// A random walk of numbers: xorshift.
-struct Walk {
-    var state: U64
-
-    mutating fn next(_ below: Int) -> Int {
-        state = state ^ (state << 13)
-        state = state ^ (state >> 7)
-        state = state ^ (state << 17)
-        return Int(state % U64(below))
-    }
-}
 
 fn elements<S: Sequence>(_ values: S) -> Int[>..] where S.Element == Int, S.Failure == Never {
     var all: Int[>..] = []
@@ -39,7 +23,7 @@ fn eachOperationByExample() {
     expect(!s.insert(5))
     s.insert(1)
     s.insert(9)
-    assertSame(s.toArray(), [1, 5, 9])
+    expect(s.toArray() == [1, 5, 9])
     expect(s.contains(9) && !s.contains(2))
     assertEqual(s.first ?? 0, 1)
     assertEqual(s.last ?? 0, 9)
@@ -69,37 +53,37 @@ fn positionsRangesSplitAndAppend() {
     assertEqual(s[s.index(s.startIndex, offsetBy: 3)], 7)
     assertEqual(s.index(of: 5)!.rank, 2)
     expect(s.index(of: 4) == none)
-    assertSame(elements(s.range(3..<7)), [3, 5])
-    assertSame(elements(s.range(3...7)), [3, 5, 7])
-    assertSame(elements(s.range(6...)), [7, 9])
-    assertSame(elements(s.range(..<5)), [1, 3])
-    assertSame(elements(s.range(...5)), [1, 3, 5])
+    expect(elements(s.range(3..<7)) == [3, 5])
+    expect(elements(s.range(3...7)) == [3, 5, 7])
+    expect(elements(s.range(6...)) == [7, 9])
+    expect(elements(s.range(..<5)) == [1, 3])
+    expect(elements(s.range(...5)) == [1, 3, 5])
     let high = s.split(at: 5)
-    assertSame(s.toArray(), [1, 3])
-    assertSame(high.toArray(), [5, 7, 9])
+    expect(s.toArray() == [1, 3])
+    expect(high.toArray() == [5, 7, 9])
     s.append(contentsOf: [10, 11, 12])
-    assertSame(s.toArray(), [1, 3, 10, 11, 12])
+    expect(s.toArray() == [1, 3, 10, 11, 12])
     s.append(contentsOf: [2, 2, 0])
-    assertSame(s.toArray(), [0, 1, 2, 3, 10, 11, 12])
+    expect(s.toArray() == [0, 1, 2, 3, 10, 11, 12])
 }
 
 @test
 fn setAlgebra() {
     let a = SortedSet<Int>([1, 2, 3, 4])
     let b = SortedSet<Int>([3, 4, 5])
-    assertSame(a.union(b).toArray(), [1, 2, 3, 4, 5])
-    assertSame(a.intersection(b).toArray(), [3, 4])
-    assertSame(a.subtracting(b).toArray(), [1, 2])
-    assertSame(a.symmetricDifference(b).toArray(), [1, 2, 5])
+    expect(a.union(b).toArray() == [1, 2, 3, 4, 5])
+    expect(a.intersection(b).toArray() == [3, 4])
+    expect(a.subtracting(b).toArray() == [1, 2])
+    expect(a.symmetricDifference(b).toArray() == [1, 2, 5])
     var c = a
     c.formUnion(b)
     assertEqual(c.count, 5)
     c.subtract(SortedSet<Int>([1]))
-    assertSame(c.toArray(), [2, 3, 4, 5])
+    expect(c.toArray() == [2, 3, 4, 5])
     c.formIntersection(a)
-    assertSame(c.toArray(), [2, 3, 4])
+    expect(c.toArray() == [2, 3, 4])
     c.formSymmetricDifference(b)
-    assertSame(c.toArray(), [2, 5])
+    expect(c.toArray() == [2, 5])
     expect(SortedSet<Int>([3, 4]).isSubset(of: a))
     expect(SortedSet<Int>([3, 4]).isStrictSubset(of: a))
     expect(!a.isStrictSubset(of: a) && a.isSubset(of: a))
@@ -112,60 +96,52 @@ fn setAlgebra() {
     expect(a != b)
 }
 
+@derive(Debug)
+union SetStep {
+    Insert(Int)
+    Remove(Int)
+    Contains(Int)
+}
+
 @test
 fn randomOperationsAgreeWithAModel() {
-    var s = SortedSet<Int>()
-    var model = Set<Int>()
-    var walk = Walk { state: 0xD1B54A32D192ED03 }
-    var step = 0
-    while step < 30000 {
-        let value = walk.next(1000)
-        let op = walk.next(4)
-        if op < 2 {
-            assertEqual(s.insert(value), model.insert(value))
-        } else if op == 2 {
-            assertEqual(s.remove(value), model.remove(value))
-        } else {
-            assertEqual(s.contains(value), model.contains(value))
+    let values = Gen.number(in: 0...999)
+    let step = Gen.weighted([
+        (2, values.map { SetStep.Insert($0) }),
+        (1, values.map { SetStep.Remove($0) }),
+        (1, values.map { SetStep.Contains($0) }),
+    ])
+    forAll(many(step, upTo: 5000), cases: 15) { (steps: SetStep[>..]) in
+        var s = SortedSet<Int>()
+        var model = Set<Int>()
+        for step in steps {
+            let agrees = match step {
+                case .Insert(let value)   => s.insert(value) == model.insert(value)
+                case .Remove(let value)   => s.remove(value) == model.remove(value)
+                case .Contains(let value) => s.contains(value) == model.contains(value)
+            }
+            if !agrees || s.count != model.count {
+                recordFailure("\(step:?) does not agree: \(s.count) values, the model's \(model.count)")
+                return
+            }
         }
-        assertEqual(s.count, model.count)
-        step += 1
+        expect(s.toArray() == model.toArray().sorted())
     }
-    var sorted = model.toArray()
-    sorted.sort()
-    assertSame(s.toArray(), sorted)
+}
 
-    // Set algebra against the model, for sets of many sizes.
-    var round = 0
-    while round < 40 {
-        var x = Set<Int>()
-        var y = Set<Int>()
-        var i = 0
-        while i < walk.next(300) {
-            x.insert(walk.next(400))
-            i += 1
-        }
-        i = 0
-        while i < walk.next(300) {
-            y.insert(walk.next(400))
-            i += 1
-        }
-        let sx = SortedSet<Int>(x.toArray())
-        let sy = SortedSet<Int>(y.toArray())
-        var joined = x.union(y).toArray()
-        joined.sort()
-        var both = x.intersection(y).toArray()
-        both.sort()
-        var only = x.subtracting(y).toArray()
-        only.sort()
-        var either = x.symmetricDifference(y).toArray()
-        either.sort()
-        assertSame(sx.union(sy).toArray(), joined)
-        assertSame(sx.intersection(sy).toArray(), both)
-        assertSame(sx.subtracting(sy).toArray(), only)
-        assertSame(sx.symmetricDifference(sy).toArray(), either)
-        assertEqual(sx.isSubset(of: sy), x.isSubset(of: y))
-        assertEqual(sx.isDisjoint(with: sy), x.isDisjoint(with: y))
-        round += 1
+@test
+fn setAlgebraAgreesWithThatOfSets() {
+    let values = many(Gen.number(in: 0...399), upTo: 300)
+    forAll(values, values, cases: 40) { (left: Int[>..], right: Int[>..]) in
+        let x = Set<Int>(left)
+        let y = Set<Int>(right)
+        let sx = SortedSet<Int>(left)
+        let sy = SortedSet<Int>(right)
+        expect(sx.union(sy).toArray() == x.union(y).toArray().sorted())
+        expect(sx.intersection(sy).toArray() == x.intersection(y).toArray().sorted())
+        expect(sx.subtracting(sy).toArray() == x.subtracting(y).toArray().sorted())
+        expect(sx.symmetricDifference(sy).toArray() == x.symmetricDifference(y).toArray().sorted())
+        expect(sx.isSubset(of: sy) == x.isSubset(of: y))
+        expect(sx.isDisjoint(with: sy) == x.isDisjoint(with: y))
     }
 }

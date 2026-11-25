@@ -3,6 +3,7 @@ module DequeTests
 // Deque (Sable.Collections), tested with '@test': run with
 //     tools/stdlib-coverage.sh Sable.Collections
 
+import CollectionsSupport
 import Sable.Collections
 import Sable.Testing
 
@@ -216,57 +217,22 @@ fn aDequeInsertsRemovesAndRotates() {
     expect(deque.toArray() == [2, 3, 0])
 }
 
+// Grown to hundreds, as often as not by what is put at its end.
 @test
 fn aDequeAgreesWithAnArrayUnderRandomChanges() {
-    let deque = Deque<Int>()
-    var model = List<Int>()
-    var seed = 12345
-    var step = 0
-    while step < 2000 {
-        seed = (seed * 1103515245 + 12345) % 2147483648
-        let choice = seed % 6
-        let at = model.isEmpty ? 0 : seed / 7 % (model.count + 1)
-        if choice == 0 {
-            deque.append(step)
-            model.append(step)
-        } else if choice == 1 {
-            deque.prepend(step)
-            model.insert(step, at: 0)
-        } else if choice == 2 {
-            deque.insert(step, at: at)
-            model.insert(step, at: at)
-        } else if choice == 3 && !model.isEmpty {
-            let position = at % model.count
-            assertEqual(deque.remove(at: position), model.remove(at: position))
-        } else if choice == 4 && !model.isEmpty {
-            assertEqual(deque.removeFirst(), model.remove(at: 0))
-        } else {
-            deque.rotate(by: seed % 5 - 2)
-            if !model.isEmpty {
-                var left = (seed % 5 - 2) % model.count
-                if left < 0 {
-                    left += model.count
-                }
-                var i = 0
-                while i < left {
-                    model.append(model.removeFirst())
-                    i += 1
-                }
-            }
-        }
-        step += 1
+    let step = Gen.oneOf([Gen.arbitrary(DequeStep.self), Gen.arbitrary(U8.self).map { DequeStep.Append($0) }])
+    forAll(many(step, upTo: 800), cases: 8) { (steps: DequeStep[>..]) in
+        let (deque, expected) = dequeAndModel(steps)
+        var (front, back) = deque.asSlices()
+        front.append(contentsOf: back)
+        expect(front == expected)
+        deque.makeContiguous()
+        let (whole, rest) = deque.asSlices()
+        expect(whole == expected && rest.isEmpty)
+        deque.reserveCapacity(5000)
+        expect(deque.capacity >= 5000)
+        expect(deque.toArray() == expected)
     }
-    let expected = model.toArray()
-    expect(deque.toArray() == expected)
-    var (front, back) = deque.asSlices()
-    front.append(contentsOf: back)
-    expect(front == expected)
-    deque.makeContiguous()
-    let (whole, rest) = deque.asSlices()
-    expect(whole == expected && rest.isEmpty)
-    deque.reserveCapacity(5000)
-    expect(deque.capacity >= 5000)
-    expect(deque.toArray() == expected)
 }
 
 class Counter {
@@ -369,7 +335,7 @@ fn passesThrough<T>(_ make: (Int) -> T, _ isRight: (T, Int) -> Bool) {
         let copy = deque.makeIterator()
         for _ in 0..<(round % 5) {
             if let value = deque.removeFirst() {
-                assert(isRight(value, first))
+                assert(isRight(value, first), "at \(first)")
                 first += 1
             }
         }
@@ -378,7 +344,7 @@ fn passesThrough<T>(_ make: (Int) -> T, _ isRight: (T, Int) -> Bool) {
     }
     deque.makeContiguous()
     for value in deque {
-        assert(isRight(value, first))
+        assert(isRight(value, first), "at \(first)")
         first += 1
     }
     assertEqual(first, next)
@@ -419,54 +385,60 @@ fn replacing(_ model: U8[>..], _ range: Range<Int>, with values: U8[>..]) -> U8[
     return all
 }
 
+// A deque, and an array, after the same steps, alike at each.
+fn dequeAndModel(_ steps: DequeStep[>..]) -> (Deque<U8>, U8[>..]) {
+    let deque = Deque<U8>()
+    var model: U8[>..] = []
+    for step in steps {
+        match step {
+            case .Append(let value) => {
+                deque.append(value)
+                model.append(value)
+            }
+            case .Prepend(let value) => {
+                deque.prepend(value)
+                model = replacing(model, 0..<0, with: [value])
+            }
+            case .RemoveFirst => {
+                let first = model.first
+                expect(deque.removeFirst() == first)
+                model = replacing(model, 0..<(first == none ? 0 : 1), with: [])
+            }
+            case .RemoveLast => {
+                let last = model.last
+                expect(deque.removeLast() == last)
+                model = replacing(model, (last == none ? 0 : model.count - 1)..<model.count, with: [])
+            }
+            case .Rotate(let places) => {
+                deque.rotate(by: Int(places))
+                if !model.isEmpty {
+                    let by = (Int(places) % model.count + model.count) % model.count
+                    model = replacing(model[by...].toArray(), model.count - by..<model.count - by, with: model[..<by].toArray())
+                }
+            }
+            case .Insert(let value, let at) => {
+                let place = Int(at) % (model.count + 1)
+                deque.insert(value, at: place)
+                model = replacing(model, place..<place, with: [value])
+            }
+            case .Remove(let at) => {
+                if !model.isEmpty {
+                    let place = Int(at) % model.count
+                    expect(deque.remove(at: place) == model[place])
+                    model = replacing(model, place..<place + 1, with: [])
+                }
+            }
+            case .MakeContiguous => deque.makeContiguous()
+        }
+        require(deque.toArray() == model)
+    }
+    return (deque, model)
+}
+
 // A deque is what an array the same is done to would be, whatever is done.
 @test
 fn aDequeIsWhatAnArrayWouldBe() {
     forAll(cases: 300) { (steps: DequeStep[>..]) in
-        let deque = Deque<U8>()
-        var model: U8[>..] = []
-        for step in steps {
-            match step {
-                case .Append(let value) => {
-                    deque.append(value)
-                    model.append(value)
-                }
-                case .Prepend(let value) => {
-                    deque.prepend(value)
-                    model = replacing(model, 0..<0, with: [value])
-                }
-                case .RemoveFirst => {
-                    let first = model.first
-                    expect(deque.removeFirst() == first)
-                    model = replacing(model, 0..<(first == none ? 0 : 1), with: [])
-                }
-                case .RemoveLast => {
-                    let last = model.last
-                    expect(deque.removeLast() == last)
-                    model = replacing(model, (last == none ? 0 : model.count - 1)..<model.count, with: [])
-                }
-                case .Rotate(let places) => {
-                    deque.rotate(by: Int(places))
-                    if !model.isEmpty {
-                        let by = (Int(places) % model.count + model.count) % model.count
-                        model = replacing(model[by...].toArray(), model.count - by..<model.count - by, with: model[..<by].toArray())
-                    }
-                }
-                case .Insert(let value, let at) => {
-                    let place = Int(at) % (model.count + 1)
-                    deque.insert(value, at: place)
-                    model = replacing(model, place..<place, with: [value])
-                }
-                case .Remove(let at) => {
-                    if !model.isEmpty {
-                        let place = Int(at) % model.count
-                        expect(deque.remove(at: place) == model[place])
-                        model = replacing(model, place..<place + 1, with: [])
-                    }
-                }
-                case .MakeContiguous => deque.makeContiguous()
-            }
-            require(deque.toArray() == model)
-        }
+        _ = dequeAndModel(steps)
     }
 }

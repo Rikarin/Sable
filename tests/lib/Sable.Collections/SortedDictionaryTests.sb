@@ -1,28 +1,12 @@
 module SortedDictionaryTests
 
 // SortedDictionary (Sable.Collections): against a model — a Dictionary for
-// the entries, and its keys sorted for the order — under random inserts,
+// the entries, and its keys sorted for the order — under arbitrary inserts,
 // removals and queries, and by example.
 
+import CollectionsSupport
 import Sable.Collections
 import Sable.Testing
-
-/// Arrays compared by what they print, as assertEqual needs Equatable.
-fn assertSame(_ got: Int[>..], _ expected: Int[>..]) {
-    assertEqual("\(got)", "\(expected)")
-}
-
-/// A random walk of numbers: xorshift.
-struct Walk {
-    var state: U64
-
-    mutating fn next(_ below: Int) -> Int {
-        state = state ^ (state << 13)
-        state = state ^ (state >> 7)
-        state = state ^ (state << 17)
-        return Int(state % U64(below))
-    }
-}
 
 fn keysOf<S: Sequence>(_ entries: S) -> Int[>..] where S.Element == (key: Int, value: Int), S.Failure == Never {
     var keys: Int[>..] = []
@@ -160,72 +144,90 @@ fn splitAndAppend() {
     assertEqual(unordered[3] ?? 0, 9)
 }
 
+@derive(Debug)
+union SortedStep {
+    Update(Int)
+    Remove(Int)
+    FloorAndCeiling(Int)
+    Range(from: Int, count: Int)
+    PopFirst
+    PopLast
+}
+
 @test
 fn randomOperationsAgreeWithAModel() {
-    var d = SortedDictionary<Int, Int>()
-    var model: [Int: Int] = [:]
-    var walk = Walk { state: 0x9E3779B97F4A7C15 }
-    var step = 0
-    while step < 30000 {
-        let key = walk.next(800)
-        let op = walk.next(10)
-        if op < 4 {
-            assert(d.updateValue(step, forKey: key) == model.updateValue(step, forKey: key), "insert")
-        } else if op < 7 {
-            assert(d.remove(key) == model.remove(key), "remove")
-        } else if op == 7 {
-            // floor and ceiling against the sorted keys.
-            let keys = sortedKeys(model)
-            var below: Int? = none
-            var above: Int? = none
-            for k in keys {
-                if k <= key {
-                    below = k
+    let keys = Gen.number(in: 0...799)
+    let step = Gen.weighted([
+        (8, keys.map { SortedStep.Update($0) }),
+        (6, keys.map { SortedStep.Remove($0) }),
+        (2, keys.map { SortedStep.FloorAndCeiling($0) }),
+        (2, keys.zip(Gen.number(in: 0...99)).map { SortedStep.Range(from: $0.0, count: $0.1) }),
+        (1, Gen.always(SortedStep.PopFirst)),
+        (1, Gen.always(SortedStep.PopLast)),
+    ])
+    forAll(many(step, upTo: 4000), cases: 18) { (steps: SortedStep[>..]) in
+        var d = SortedDictionary<Int, Int>()
+        var model: [Int: Int] = [:]
+        var number = 0
+        for step in steps {
+            number += 1
+            var agrees = true
+            match step {
+                case .Update(let key) => {
+                    agrees = d.updateValue(number, forKey: key) == model.updateValue(number, forKey: key)
                 }
-                if above == none && k >= key {
-                    above = k
+                case .Remove(let key) => {
+                    agrees = d.remove(key) == model.remove(key)
+                }
+                case .FloorAndCeiling(let key) => {
+                    var below: Int? = none
+                    var above: Int? = none
+                    for (k, _) in model {
+                        if k <= key && k >= (below ?? k) {
+                            below = k
+                        }
+                        if k >= key && k <= (above ?? k) {
+                            above = k
+                        }
+                    }
+                    agrees = d.floor(key)?.key == below && d.ceiling(key)?.key == above
+                }
+                case .Range(let key, let count) => {
+                    let upper = key + count
+                    var expected = 0
+                    for (k, _) in model {
+                        if k >= key && k < upper {
+                            expected += 1
+                        }
+                    }
+                    agrees = keysOf(d.range(key..<upper)).count == expected
+                }
+                case .PopFirst => {
+                    let first = sortedKeys(model).first
+                    agrees = d.popFirst()?.key == first
+                    if let first = first {
+                        model.remove(first)
+                    }
+                }
+                case .PopLast => {
+                    let last = sortedKeys(model).last
+                    agrees = d.popLast()?.key == last
+                    if let last = last {
+                        model.remove(last)
+                    }
                 }
             }
-            assert(d.floor(key)?.key == below, "floor")
-            assert(d.ceiling(key)?.key == above, "ceiling")
-        } else if op == 8 {
-            let upper = key + walk.next(100)
-            var expected = 0
-            for (k, _) in model {
-                if k >= key && k < upper {
-                    expected += 1
-                }
-            }
-            assertEqual(keysOf(d.range(key..<upper)).count, expected)
-        } else {
-            if walk.next(2) == 0 {
-                let first = d.popFirst()
-                let keys = sortedKeys(model)
-                if keys.isEmpty {
-                    assert(first == none)
-                } else {
-                    assertEqual(first!.key, keys[0])
-                    model.remove(keys[0])
-                }
-            } else {
-                let last = d.popLast()
-                let keys = sortedKeys(model)
-                if keys.isEmpty {
-                    assert(last == none)
-                } else {
-                    assertEqual(last!.key, keys[keys.count - 1])
-                    model.remove(keys[keys.count - 1])
-                }
+            if !agrees || d.count != model.count {
+                recordFailure("step \(number), \(step:?), does not agree: \(d.count) entries, the model's \(model.count)")
+                return
             }
         }
-        assertEqual(d.count, model.count)
-        step += 1
-    }
-    let keys = sortedKeys(model)
-    assertSame(keysOf(d), keys)
-    var rank = 0
-    while rank < keys.count {
-        assertEqual(d[SortedIndex { rank: rank }].key, keys[rank])
-        rank += 37
+        let keys = sortedKeys(model)
+        expect(keysOf(d) == keys)
+        var rank = 0
+        while rank < keys.count {
+            expect(d[SortedIndex { rank: rank }].key == keys[rank])
+            rank += 37
+        }
     }
 }

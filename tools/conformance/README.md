@@ -7,6 +7,7 @@ its own, and give that directory to the suite's script, from a built tree
 
 ```bash
 python3 -I tools/conformance/crypto/run.py data/
+python3 -I tools/conformance/ciphers/run.py data/
 python3 -I tools/conformance/toml/run.py data/toml-test
 python3 -I tools/conformance/yaml/run.py data/yaml-test-suite
 python3 -I tools/conformance/net/run.py data/iana
@@ -43,6 +44,23 @@ Messages, keys and outputs that are not of whole bytes are skipped: the library
 takes bytes. So are SHA-224, SHA3-224 and SHA-512/t, which it has not.
 ChaCha20-Poly1305's vectors test the ChaCha generator's keystream. Neither
 source has vectors for BLAKE2b, BLAKE3, Argon2id, scrypt or MD5.
+
+## ciphers: NIST's CAVP and ACVP, and Wycheproof
+
+As for crypto, and in the same directories or others. Of CAVP, unzipped each
+in a directory of its own: `mac/gcmtestvectors.zip` (SHA-256 `f9fc479e…26a023`),
+`mac/ccmtestvectors.zip` (`0e3c9676…aa673aa`), `mac/kwtestvectors.zip`
+(`04a4a82e…80dfdf3`), `aes/KAT_AES.zip` (`a203b16c…098eb60`),
+`aes/aesmmt.zip` (`12d1616f…cbaf0`) and `aes/aesmct.zip` (`6a2a72c0…571426b`).
+Of ACVP, at the same commit, ACVP-AES-{GCM,CCM,CBC,CTR,ECB,CFB8,CFB128,KW,KWP}-1.0.
+Of Wycheproof, AES-GCM, GMAC, CCM, CBC, key wrap with padding and without,
+ChaCha20-Poly1305 and XChaCha20-Poly1305.
+
+Skipped are what the library has not: GCM's tags of fewer than 12 bytes, key
+wrap by the inverse cipher, CFB1 and OFB, counters that are not a sequence, and
+what is not of whole bytes. Every vector is sealed and opened into another
+array and in place, and what does not open must leave nothing but zeros. With
+`SABLE_CRYPTO_PORTABLE=1` the same is asked of the portable code.
 
 ## toml: toml-test
 

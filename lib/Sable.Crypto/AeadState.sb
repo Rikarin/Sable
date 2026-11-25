@@ -121,7 +121,9 @@ final class AeadState {
         try checkTag(tag.count)
         unsafe {
             let work = NativeMemory.allocate(byteCount: AeadState.workBytes).address
-            defer { AeadState.release(work) }
+            defer {
+                AeadState.release(work)
+            }
             let key = start(work, nonce, text: plaintext.count, associated: !associatedData.isEmpty)
             sealing.run(key, work, associatedData: associatedData, plaintext, to: &ciphertext)
             PortableModes.unload(work &+ 16, to: &tag, 0, count: tagByteCount)
@@ -133,7 +135,9 @@ final class AeadState {
         try checkTag(tag.count)
         unsafe {
             let work = NativeMemory.allocate(byteCount: AeadState.workBytes).address
-            defer { AeadState.release(work) }
+            defer {
+                AeadState.release(work)
+            }
             let key = start(work, nonce, text: text.count, associated: !associatedData.isEmpty)
             sealing.run(key, work, associatedData: associatedData, inPlace: &text)
             PortableModes.unload(work &+ 16, to: &tag, 0, count: tagByteCount)
@@ -152,7 +156,9 @@ final class AeadState {
         if tag.count == tagByteCount {
             unsafe {
                 let work = NativeMemory.allocate(byteCount: AeadState.workBytes).address
-                defer { AeadState.release(work) }
+                defer {
+                    AeadState.release(work)
+                }
                 let key = start(work, nonce, text: ciphertext.count, associated: !associatedData.isEmpty)
                 opening.run(key, work, associatedData: associatedData, ciphertext, to: &plaintext)
                 right = AeadState.isSame(tag, as: work &+ 16)
@@ -170,7 +176,9 @@ final class AeadState {
         if tag.count == tagByteCount {
             unsafe {
                 let work = NativeMemory.allocate(byteCount: AeadState.workBytes).address
-                defer { AeadState.release(work) }
+                defer {
+                    AeadState.release(work)
+                }
                 let key = start(work, nonce, text: text.count, associated: !associatedData.isEmpty)
                 opening.run(key, work, associatedData: associatedData, inPlace: &text)
                 right = AeadState.isSame(tag, as: work &+ 16)

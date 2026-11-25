@@ -17,6 +17,9 @@ public sealed class CryptoTests {
     /// <summary>The AVX2 kernels, where the processor has AVX-512 too.</summary>
     static readonly IReadOnlyDictionary<string, string> Narrow = new Dictionary<string, string> { ["SABLE_CRYPTO_NARROW"] = "1" };
 
+    /// <summary>And for the ciphers not those of AVX2 either.</summary>
+    static readonly IReadOnlyDictionary<string, string> Narrower = new Dictionary<string, string> { ["SABLE_CRYPTO_NARROW"] = "2" };
+
     const string Message = """
                            fn message(_ count: Int) -> U8[>..] {
                                var bytes: U8[>..] = []
@@ -166,6 +169,137 @@ public sealed class CryptoTests {
                 """
             )
         );
+
+    [Fact]
+    public void CiphersGiveWhatDotNetDoes() {
+        int[] lengths = [0, 1, 15, 16, 17, 64, 127, 128, 129, 191, 192, 193, 256, 300];
+        var expected = new StringBuilder();
+        foreach (var length in lengths) {
+            var (text, data, nonce) = (Bytes(length), Bytes(length % 37), Bytes(12));
+            var (made, tag) = (new byte[length], new byte[16]);
+            using var gcm = new AesGcm(Bytes(32), 16);
+            gcm.Encrypt(nonce, text, made, tag, data);
+            expected.Append(Hex([..nonce, ..made, ..tag])).Append('\n');
+            if (ChaCha20Poly1305.IsSupported) {
+                using var chaCha = new ChaCha20Poly1305(Bytes(32));
+                chaCha.Encrypt(nonce, text, made, tag, data);
+                expected.Append(Hex([..nonce, ..made, ..tag])).Append('\n');
+            }
+
+            using var aes = Aes.Create();
+            aes.Key = Bytes(24);
+            expected.Append(Hex(aes.EncryptCbc(text, Bytes(16)))).Append('\n').Append(Hex(aes.EncryptEcb(text, PaddingMode.PKCS7))).Append('\n');
+            aes.Key = Bytes(16);
+            expected.Append(Hex(aes.EncryptCfb(text, Bytes(16), PaddingMode.None, 8))).Append('\n');
+        }
+
+        Prints(
+            expected.ToString(),
+            Program(
+                $$"""
+                      let gcm = try! AesGcm(key: SymmetricKey(message(32)))
+                      let chaCha = try! ChaCha20Poly1305(key: SymmetricKey(message(32)))
+                      let cbc = try! Hazmat.AesCbc(key: SymmetricKey(message(24)))
+                      let ecb = try! Hazmat.AesEcb(key: SymmetricKey(message(24)))
+                      let cfb = try! Hazmat.AesCfb(key: SymmetricKey(message(16)), feedback: .Byte)
+                      for length in [{{string.Join(", ", lengths)}}] {
+                          let text = message(length)
+                          let box = try! gcm.seal(text, nonce: message(12), associatedData: message(length % 37))
+                          assert((try! gcm.open(box, associatedData: message(length % 37))) == text)
+                          print("\(Digest(box.combined))")
+                          let other = try! chaCha.seal(text, nonce: message(12), associatedData: message(length % 37))
+                          assert((try! chaCha.open(other, associatedData: message(length % 37))) == text)
+                          {{(ChaCha20Poly1305.IsSupported ? "print(\"\\(Digest(other.combined))\")" : "")}}
+                          print("\(Digest(try! cbc.encrypt(text, iv: message(16))))")
+                          print("\(Digest(try! ecb.encrypt(text, padding: .Pkcs7)))")
+                          print("\(Digest(try! cfb.encrypt(text, iv: message(16))))")
+                          assert((try! cfb.decrypt(try! cfb.encrypt(text, iv: message(16)), iv: message(16))) == text)
+                          assert((try! cbc.decrypt(try! cbc.encrypt(text, iv: message(16)), iv: message(16))) == text)
+                      }
+                  """
+            )
+        );
+    }
+
+    /// <summary>
+    ///     Every cipher on random messages, of every length to past the widest
+    ///     kernel's stride and some long ones, in every width of kernel the
+    ///     processor has and in the portable code: what each made, hashed.
+    /// </summary>
+    [Fact]
+    public void EveryKernelDoesWhatThePortableCodeDoes() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var source = Program(
+            """
+                  var random = SeededRandomNumberGenerator(seed: 68)
+                  fn bytes(_ count: Int, _ random: inout SeededRandomNumberGenerator) -> U8[>..] {
+                      var made = U8[>..](repeating: 0, count: count)
+                      random.fill(bytes: &made)
+                      return made
+                  }
+                  var all = Sha256()
+                  var length = 0
+                  while length < 200_000 {
+                      let key = SymmetricKey(bytes(length % 3 * 8 + 16, &random))
+                      let long = SymmetricKey(bytes(32, &random))
+                      let text = bytes(length, &random)
+                      let data = bytes(Int.random(in: 0...600, using: &random), &random)
+                      let block = bytes(16, &random)
+                      let gcm = try! AesGcm(key: key)
+                      let other = try! AesGcm(key: key, nonceByteCount: 16)
+                      let ccm = try! AesCcm(key: key)
+                      let chaCha = try! ChaCha20Poly1305(key: long)
+                      let xChaCha = try! XChaCha20Poly1305(key: long)
+                      let boxes = [
+                          try! gcm.seal(text, nonce: block[..<12], associatedData: data),
+                          try! other.seal(text, nonce: block, associatedData: data),
+                          try! ccm.seal(text, nonce: block[..<12], associatedData: data),
+                          try! chaCha.seal(text, nonce: block[..<12], associatedData: data),
+                          try! xChaCha.seal(text, nonce: data.count < 24 ? U8[>..](repeating: 1, count: 24) : data[..<24].toArray(), associatedData: data),
+                      ]
+                      for box in boxes {
+                          all.update(box.combined)
+                      }
+                      assert((try! gcm.open(boxes[0], associatedData: data)) == text)
+                      assert((try! other.open(boxes[1], associatedData: data)) == text)
+                      assert((try! ccm.open(boxes[2], associatedData: data)) == text)
+                      assert((try! chaCha.open(boxes[3], associatedData: data)) == text)
+                      assert((try! xChaCha.open(boxes[4], associatedData: data)) == text)
+                      let cbc = try! Hazmat.AesCbc(key: key)
+                      let ecb = try! Hazmat.AesEcb(key: key)
+                      let cfb = try! Hazmat.AesCfb(key: key)
+                      let ctr = try! Hazmat.AesCtr(key: key)
+                      let chained = try! cbc.encrypt(text, iv: block)
+                      let apart = try! ecb.encrypt(text, padding: .Pkcs7)
+                      let fed = try! cfb.encrypt(text, iv: block)
+                      all.update(chained)
+                      all.update(apart)
+                      all.update(fed)
+                      all.update(try! ctr.apply(text, counterBlock: block))
+                      all.update(try! ecb.decrypt(chained))
+                      assert((try! cbc.decrypt(chained, iv: block)) == text)
+                      assert((try! ecb.decrypt(apart, padding: .Pkcs7)) == text)
+                      assert((try! cfb.decrypt(fed, iv: block)) == text)
+                      if length < 1200 {
+                          let byte = try! Hazmat.AesCfb(key: key, feedback: .Byte)
+                          all.update(try! byte.encrypt(text, iv: block))
+                          all.update(try! byte.decrypt(text, iv: block))
+                          all.update(try! (try! AesKeyWrap(key: key)).wrapPadded(SymmetricKey(block[..<(length % 16 + 1)])))
+                      }
+                      length += length < 600 ? 1 : length < 1100 ? 7 : 41_235
+                  }
+                  print("\(all.finalize())")
+              """
+        );
+        var portable = BuildAndRun(source, environment: Portable).Stdout;
+        Assert.Equal(65, portable.Length);
+        Assert.Equal(portable, BuildAndRun(source).Stdout);
+        Assert.Equal(portable, BuildAndRun(source, environment: Narrow).Stdout);
+        Assert.Equal(portable, BuildAndRun(source, environment: Narrower).Stdout);
+    }
 
     /// <summary>A secret zeroed as the last thing done with it: the call is there in what LLVM optimises, and opaque to it.</summary>
     [Fact]

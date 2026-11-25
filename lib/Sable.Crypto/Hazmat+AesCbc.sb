@@ -44,7 +44,10 @@ extension Hazmat {
             try Hazmat.checkWhole(bytes.count)
             let block = try Hazmat.block(iv)
             unsafe {
-                Cipher.CbcEncrypt.run(aes.address, block.address, inPlace: &bytes)
+                defer {
+                    Hazmat.free(block)
+                }
+                Cipher.CbcEncrypt.run(aes.address, block, inPlace: &bytes)
             }
         }
 
@@ -53,7 +56,10 @@ extension Hazmat {
             try Hazmat.checkWhole(bytes.count)
             let block = try Hazmat.block(iv)
             unsafe {
-                Cipher.CbcDecrypt.run(aes.address, block.address, inPlace: &bytes)
+                defer {
+                    Hazmat.free(block)
+                }
+                Cipher.CbcDecrypt.run(aes.address, block, inPlace: &bytes)
             }
         }
     }

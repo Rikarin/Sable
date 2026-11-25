@@ -28,7 +28,7 @@ public struct AesGcm: AuthenticatedCipher {
     let state: AeadState
 
     /// The cipher under a key of 16, 24 or 32 bytes. Tags of 16 bytes may be
-    /// cut to 12 or more. Nonces are of 12 bytes; another length, up to 128,
+    /// cut to 12 or more. Nonces are of 12 bytes; another length
     /// is for what was sealed with it elsewhere, and is hashed to a counter,
     /// which two of them might share.
     ///
@@ -39,8 +39,8 @@ public struct AesGcm: AuthenticatedCipher {
         if tagByteCount < 12 || tagByteCount > 16 {
             throw CryptoError.InvalidParameter(reason: "an AES-GCM tag has 12 to 16 bytes, not \(tagByteCount)")
         }
-        if nonceByteCount < 1 || nonceByteCount > 128 {
-            throw CryptoError.InvalidParameter(reason: "an AES-GCM nonce has 1 to 128 bytes, not \(nonceByteCount)")
+        if nonceByteCount < 1 {
+            throw CryptoError.InvalidParameter(reason: "an AES-GCM nonce has 1 byte or more, not \(nonceByteCount)")
         }
         let aes = try AesKey(key, hashing: true)
         state = AeadState(sealing: .GcmSeal, opening: .GcmOpen, aes: aes, secret: none, nonceByteCount: nonceByteCount, tagByteCount: tagByteCount)

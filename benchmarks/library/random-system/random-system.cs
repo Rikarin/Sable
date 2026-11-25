@@ -1,4 +1,6 @@
-// Port of random-system.sb.
+// Port of random-system.sb. On Linux this is OpenSSL's generator (AES-256 in
+// counter mode, in the process, seeded by the kernel), which is secure but
+// keeps its state from call to call, as the kernel's getrandom does not.
 [Benchmark("library/random-system")]
 static class LibraryRandomSystem {
     public static string Run() {

@@ -262,39 +262,56 @@ SABLE_TARGET_AES static Block aes_one(const uint8_t *keys, int rounds, Block b) 
     return b;
 }
 
-SABLE_TARGET_AES static void aes_ecb(const AesKey *key, bool decrypt, const uint8_t *in, uint8_t *out, int64_t count) {
+// Eight blocks, or the first of them when only so many are wanted.
+SABLE_TARGET_AES static void aes_some(const AesKey *key, bool decrypt, Block *b, int count) {
     int rounds = (int)key->rounds;
-    const uint8_t *keys = decrypt ? key->decrypt : key->encrypt;
+    if (decrypt) {
+        if (count == 1) {
+            aes_decrypt(key->decrypt, rounds, b, 1);
+        } else if (count <= 4) {
+            aes_decrypt(key->decrypt, rounds, b, 4);
+        } else {
+            aes_decrypt(key->decrypt, rounds, b, 8);
+        }
+    } else if (count == 1) {
+        aes_encrypt(key->encrypt, rounds, b, 1);
+    } else if (count <= 4) {
+        aes_encrypt(key->encrypt, rounds, b, 4);
+    } else {
+        aes_encrypt(key->encrypt, rounds, b, 8);
+    }
+}
+
+SABLE_TARGET_AES static void aes_ecb(const AesKey *key, bool decrypt, const uint8_t *in, uint8_t *out, int64_t count) {
     Block b[8];
-    while (count >= 128) {
+    for (; count >= 128; in += 128, out += 128, count -= 128) {
         SABLE_UNROLL
         for (int i = 0; i < 8; i++) {
             b[i] = block_load(in + 16 * i);
         }
 
         if (decrypt) {
-            aes_decrypt(keys, rounds, b, 8);
+            aes_decrypt(key->decrypt, (int)key->rounds, b, 8);
         } else {
-            aes_encrypt(keys, rounds, b, 8);
+            aes_encrypt(key->encrypt, (int)key->rounds, b, 8);
         }
 
         SABLE_UNROLL
         for (int i = 0; i < 8; i++) {
             block_store(out + 16 * i, b[i]);
         }
-
-        in += 128, out += 128, count -= 128;
     }
 
-    for (; count >= 16; in += 16, out += 16, count -= 16) {
-        b[0] = block_load(in);
-        if (decrypt) {
-            aes_decrypt(keys, rounds, b, 1);
-        } else {
-            aes_encrypt(keys, rounds, b, 1);
+    if (count >= 16) {
+        int n = (int)(count / 16);
+        for (int i = 0; i < 8; i++) {
+            b[i] = i < n ? block_load(in + 16 * i) : block_zero();
         }
 
-        block_store(out, b[0]);
+        aes_some(key, decrypt, b, n);
+        for (int i = 0; i < n; i++) {
+            block_store(out + 16 * i, b[i]);
+        }
     }
 }
 
@@ -313,66 +330,46 @@ SABLE_TARGET_AES static void aes_cbc_encrypt(const AesKey *key, uint8_t *work, c
 // CBC's and CFB's decryption: the blocks before are the ciphertext's, so that
 // many are done at once.
 SABLE_TARGET_AES SABLE_INLINE void aes_chained(const AesKey *key, bool feedback, uint8_t *work, const uint8_t *in, uint8_t *out, int64_t count) {
-    int rounds = (int)key->rounds;
-    Block b[8], text[8], before = block_load(work);
-    for (; count >= 16; ) {
-        int n = count >= 128 ? 8 : 1;
+    // The block before, and then those there are, kept as they were.
+    Block b[8], text[9];
+    text[0] = block_load(work);
+    for (; count >= 128; in += 128, out += 128, count -= 128) {
         SABLE_UNROLL
         for (int i = 0; i < 8; i++) {
-            if (i < n) {
-                text[i] = block_load(in + 16 * i);
-            }
+            text[i + 1] = block_load(in + 16 * i);
+            b[i] = text[feedback ? i : i + 1];
         }
 
         if (feedback) {
-            b[0] = before;
-            SABLE_UNROLL
-            for (int i = 1; i < 8; i++) {
-                if (i < n) {
-                    b[i] = text[i - 1];
-                }
-            }
-
-            if (n == 8) {
-                aes_encrypt(key->encrypt, rounds, b, 8);
-            } else {
-                aes_encrypt(key->encrypt, rounds, b, 1);
-            }
-
-            SABLE_UNROLL
-            for (int i = 0; i < 8; i++) {
-                if (i < n) {
-                    block_store(out + 16 * i, block_xor(b[i], text[i]));
-                }
-            }
+            aes_encrypt(key->encrypt, (int)key->rounds, b, 8);
         } else {
-            SABLE_UNROLL
-            for (int i = 0; i < 8; i++) {
-                if (i < n) {
-                    b[i] = text[i];
-                }
-            }
-
-            if (n == 8) {
-                aes_decrypt(key->decrypt, rounds, b, 8);
-            } else {
-                aes_decrypt(key->decrypt, rounds, b, 1);
-            }
-
-            block_store(out, block_xor(b[0], before));
-            SABLE_UNROLL
-            for (int i = 1; i < 8; i++) {
-                if (i < n) {
-                    block_store(out + 16 * i, block_xor(b[i], text[i - 1]));
-                }
-            }
+            aes_decrypt(key->decrypt, (int)key->rounds, b, 8);
         }
 
-        before = text[n - 1];
-        in += 16 * n, out += 16 * n, count -= 16 * n;
+        SABLE_UNROLL
+        for (int i = 0; i < 8; i++) {
+            block_store(out + 16 * i, block_xor(b[i], text[feedback ? i + 1 : i]));
+        }
+
+        text[0] = text[8];
     }
 
-    block_store(work, before);
+    if (count >= 16) {
+        int n = (int)(count / 16);
+        for (int i = 0; i < 8; i++) {
+            text[i + 1] = i < n ? block_load(in + 16 * i) : block_zero();
+            b[i] = text[feedback ? i : i + 1];
+        }
+
+        aes_some(key, !feedback, b, n);
+        for (int i = 0; i < n; i++) {
+            block_store(out + 16 * i, block_xor(b[i], text[feedback ? i + 1 : i]));
+        }
+
+        text[0] = text[n];
+    }
+
+    block_store(work, text[0]);
 }
 
 SABLE_TARGET_AES static void aes_cbc_decrypt(const AesKey *key, uint8_t *work, const uint8_t *in, uint8_t *out, int64_t count) {

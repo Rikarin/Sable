@@ -11,5 +11,7 @@ fn anErrorSaysWhatIsWrong() {
     assertEqual(CryptoError.InvalidParameter(reason: "a").description(), "a")
     assertEqual(CryptoError.LimitExceeded(reason: "b").description(), "b")
     assertEqual(CryptoError.InvalidEncoding(reason: "c").description(), "c")
+    assertEqual(CryptoError.AuthenticationFailed.description(), "what was to be opened is not what was sealed with this key, nonce and associated data")
+    assertEqual(CryptoError.InvalidPadding.description(), "the message does not end in the padding it should")
     assert(CryptoError.InvalidEncoding(reason: "c") != CryptoError.LimitExceeded(reason: "c"))
 }

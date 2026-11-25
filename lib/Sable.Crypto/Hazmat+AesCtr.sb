@@ -41,13 +41,16 @@ extension Hazmat {
         public fn apply(inPlace bytes: inout U8[:], counterBlock: U8[:], skippingBlocks: U64 = 0) throws(CryptoError) {
             let block = try Hazmat.block(counterBlock)
             unsafe {
-                let low = load64(block.address &+ 8).byteSwapped
+                defer {
+                    Hazmat.free(block)
+                }
+                let low = load64(block &+ 8).byteSwapped
                 let sum = low &+ skippingBlocks
                 if sum < low {
-                    store64((load64(block.address).byteSwapped &+ 1).byteSwapped, block.address)
+                    store64((load64(block).byteSwapped &+ 1).byteSwapped, block)
                 }
-                store64(sum.byteSwapped, block.address &+ 8)
-                Cipher.Ctr.run(aes.address, block.address, inPlace: &bytes)
+                store64(sum.byteSwapped, block &+ 8)
+                Cipher.Ctr.run(aes.address, block, inPlace: &bytes)
             }
         }
     }

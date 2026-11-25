@@ -1,0 +1,247 @@
+module HazmatTests
+
+// Hazmat's AesEcb, AesCbc, AesCtr and AesCfb (Sable.Crypto): SP 800-38A's
+// examples, each made of AesEcb, and misuse. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn bytes(_ text: String) -> U8[>..] {
+    var made: U8[>..] = []
+    var high = -1
+    for byte in text.utf8 {
+        let digit = byte <= 0x39 ? Int(byte) - 0x30 : Int(byte) - 0x57
+        if high < 0 {
+            high = digit
+        } else {
+            made.append(U8(high * 16 + digit))
+            high = -1
+        }
+    }
+    return made
+}
+
+fn hex(_ bytes: U8[:]) -> String {
+    return "\(Digest(bytes))"
+}
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+let key: SymmetricKey = SymmetricKey(bytes("2b7e151628aed2a6abf7158809cf4f3c"))
+let key24: SymmetricKey = SymmetricKey(bytes("8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b"))
+let key32: SymmetricKey = SymmetricKey(bytes("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4"))
+let iv: U8[>..] = bytes("000102030405060708090a0b0c0d0e0f")
+let text: U8[>..] = bytes("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710")
+
+// SP 800-38A, F.1 to F.5.
+@test
+fn theModesAreAsPublished() {
+    let ecb = [
+        "3ad77bb40d7a3660a89ecaf32466ef97f5d3d58503b9699de785895a96fdbaaf43b1cd7f598ece23881b00e3ed0306887b0c785e27e8ad3f8223207104725dd4",
+        "bd334f1d6e45f25ff712a214571fa5cc974104846d0ad3ad7734ecb3ecee4eefef7afd2270e2e60adce0ba2face6444e9a4b41ba738d6c72fb16691603c18e0e",
+        "f3eed1bdb5d2a03c064b5a7e3db181f8591ccb10d410ed26dc5ba74a31362870b6ed21b99ca6f4f9f153e7b1beafed1d23304b7a39f9f3ff067d8d8f9e24ecc7",
+    ]
+    let cbc = [
+        "7649abac8119b246cee98e9b12e9197d5086cb9b507219ee95db113a917678b273bed6b8e3c1743b7116e69e222295163ff1caa1681fac09120eca307586e1a7",
+        "4f021db243bc633d7178183a9fa071e8b4d9ada9ad7dedf4e5e738763f69145a571b242012fb7ae07fa9baac3df102e008b0e27988598881d920a9e64f5615cd",
+        "f58c4c04d6e5f1ba779eabfb5f7bfbd69cfc4e967edb808d679f777bc6702c7d39f23369a9d9bacfa530e26304231461b2eb05e2c39be9fcda6c19078c6a9d1b",
+    ]
+    let cfb = [
+        "3b3fd92eb72dad20333449f8e83cfb4ac8a64537a0b3a93fcde3cdad9f1ce58b26751f67a3cbb140b1808cf187a4f4dfc04b05357c5d1c0eeac4c66f9ff7f2e6",
+        "cdc80d6fddf18cab34c25909c99a417467ce7f7f81173621961a2b70171d3d7a2e1e8a1dd59b88b1c8e60fed1efac4c9c05f9f9ca9834fa042ae8fba584b09ff",
+        "dc7e84bfda79164b7ecd8486985d386039ffed143b28b1c832113c6331e5407bdf10132415e54b92a13ed0a8267ae2f975a385741ab9cef82031623d55b1e471",
+    ]
+    let ctr = [
+        "874d6191b620e3261bef6864990db6ce9806f66b7970fdff8617187bb9fffdff5ae4df3edbd5d35e5b4f09020db03eab1e031dda2fbe03d1792170a0f3009cee",
+        "1abc932417521ca24f2b0459fe7e6e0b090339ec0aa6faefd5ccc2c6f4ce8e941e36b26bd1ebc670d1bd1d665620abf74f78a7f6d29809585a97daec58c6b050",
+        "601ec313775789a5b7a7f504bbf3d228f443e3ca4d62b59aca84e990cacaf5c52b0930daa23de94ce87017ba2d84988ddfc9c58db67aada613c2dd08457941a6",
+    ]
+    let keys = [key, key24, key32]
+    for i in 0..<3 {
+        let e = try! Hazmat.AesEcb(key: keys[i])
+        assertEqual(hex(try! e.encrypt(text)), ecb[i])
+        assert((try! e.decrypt(bytes(ecb[i]))) == text)
+        let c = try! Hazmat.AesCbc(key: keys[i])
+        assertEqual(hex(try! c.encrypt(text, iv: iv, padding: .None)), cbc[i])
+        assert((try! c.decrypt(bytes(cbc[i]), iv: iv, padding: .None)) == text)
+        let f = try! Hazmat.AesCfb(key: keys[i])
+        assertEqual(hex(try! f.encrypt(text, iv: iv)), cfb[i])
+        assert((try! f.decrypt(bytes(cfb[i]), iv: iv)) == text)
+        let t = try! Hazmat.AesCtr(key: keys[i])
+        let counter = bytes("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
+        assertEqual(hex(try! t.apply(text, counterBlock: counter)), ctr[i])
+        assert((try! t.apply(bytes(ctr[i]), counterBlock: counter)) == text)
+    }
+    let byte = try! Hazmat.AesCfb(key: key, feedback: .Byte)
+    assertEqual(hex(try! byte.encrypt(text[..<18], iv: iv)), "3b79424c9c0dd436bace9e0ed4586a4f32b9")
+    assert((try! byte.decrypt(bytes("3b79424c9c0dd436bace9e0ed4586a4f32b9"), iv: iv)) == text[..<18].toArray())
+}
+
+// Each mode in single blocks of AesEcb, at every length around the kernels' strides.
+@test
+fn everyLengthIsMadeOfItsBlocks() {
+    let block = try! Hazmat.AesEcb(key: key32)
+    let cbc = try! Hazmat.AesCbc(key: key32)
+    let cfb = try! Hazmat.AesCfb(key: key32)
+    let cfb8 = try! Hazmat.AesCfb(key: key32, feedback: .Byte)
+    let ctr = try! Hazmat.AesCtr(key: key32)
+    let start = bytes("ffffffffffffffffffffffffffffffef")
+    for count in 0..<300 {
+        let plain = message(count)
+        var chained: U8[>..] = []
+        var fed: U8[>..] = []
+        var counted: U8[>..] = []
+        var last = iv
+        var before = iv
+        var counter = start
+        var at = 0
+        while at < count {
+            let end = at + 16 < count ? at + 16 : count
+            let stream = try! block.encrypt(before)
+            let key = try! block.encrypt(counter)
+            var cipher: U8[>..] = []
+            for i in at..<end {
+                cipher.append(stream[i - at] ^ plain[i])
+                counted.append(key[i - at] ^ plain[i])
+            }
+            fed.append(contentsOf: cipher)
+            before = cipher
+            if end - at == 16 {
+                for i in 0..<16 {
+                    last[i] = last[i] ^ plain[at + i]
+                }
+                last = try! block.encrypt(last)
+                chained.append(contentsOf: last)
+            }
+            var i = 15
+            while true {
+                counter[i] = counter[i] &+ 1
+                if counter[i] != 0 || i == 0 {
+                    break
+                }
+                i -= 1
+            }
+            at = end
+        }
+        let whole = count / 16 * 16
+        assert((try! cbc.encrypt(plain[..<whole], iv: iv, padding: .None)) == chained)
+        assert((try! cbc.decrypt(chained, iv: iv, padding: .None)) == plain[..<whole].toArray())
+        assert((try! cbc.decrypt(try! cbc.encrypt(plain, iv: iv), iv: iv)) == plain)
+        assert((try! block.decrypt(try! block.encrypt(plain[..<whole]))) == plain[..<whole].toArray())
+        assert((try! block.decrypt(try! block.encrypt(plain, padding: .Pkcs7), padding: .Pkcs7)) == plain)
+        assert((try! cfb.encrypt(plain, iv: iv)) == fed)
+        assert((try! cfb.decrypt(fed, iv: iv)) == plain)
+        assert((try! cfb8.decrypt(try! cfb8.encrypt(plain, iv: iv), iv: iv)) == plain)
+        assert((try! ctr.apply(plain, counterBlock: start)) == counted)
+        if count >= 32 {
+            assert((try! ctr.apply(plain[32...], counterBlock: start, skippingBlocks: 2)) == counted[32...].toArray())
+        }
+    }
+}
+
+// Past the counter's last four bytes, its last eight, and all of them.
+@test
+fn theCounterIsAllOfItsBlock() {
+    let ctr = try! Hazmat.AesCtr(key: key)
+    let plain = message(2000)
+    for start in ["000000000000000000000000fffffff0", "0000000000000000fffffffffffffff0", "fffffffffffffffffffffffffffffff0", "0102030405060708090a0bffffffffff"] {
+        let whole = try! ctr.apply(plain, counterBlock: bytes(start))
+        for blocks in [1, 15, 16, 17, 40] {
+            assert((try! ctr.apply(plain[(16 * blocks)...], counterBlock: bytes(start), skippingBlocks: U64(blocks))) == whole[(16 * blocks)...].toArray())
+        }
+        let block = try! Hazmat.AesEcb(key: key)
+        let after = start == "fffffffffffffffffffffffffffffff0" ? "00000000000000000000000000000000" : ""
+        if after != "" {
+            let stream = try! block.encrypt(bytes(after))
+            assert(whole[256] == (stream[0] ^ plain[256]))
+        }
+    }
+    let far = try! ctr.apply(plain, counterBlock: bytes("00000000000000000000000000000001"), skippingBlocks: U64.max)
+    assert(far == (try! ctr.apply(plain, counterBlock: bytes("00000000000000010000000000000000"))))
+}
+
+fn wrong(_ body: () throws(CryptoError) -> Void) -> String {
+    do {
+        try body()
+        return ""
+    } catch {
+        return error.description()
+    }
+}
+
+@test
+fn wrongLengthsAreErrors() {
+    let cbc = try! Hazmat.AesCbc(key: key)
+    let ecb = try! Hazmat.AesEcb(key: key)
+    let vector = "an initialisation vector of AES has 16 bytes, not 15"
+    assertEqual(wrong { _ = try cbc.encrypt(message(16), iv: message(15)) }, vector)
+    assertEqual(wrong { _ = try cbc.decrypt(message(16), iv: message(15)) }, vector)
+    assertEqual(wrong { _ = try (try Hazmat.AesCtr(key: key)).apply(message(16), counterBlock: message(15)) }, vector)
+    assertEqual(wrong { _ = try (try Hazmat.AesCfb(key: key)).encrypt(message(16), iv: message(15)) }, vector)
+    assertEqual(wrong { _ = try (try Hazmat.AesCfb(key: key)).decrypt(message(16), iv: message(15)) }, vector)
+    let whole = "without padding, this cipher takes whole blocks of 16 bytes, not 17 bytes"
+    assertEqual(wrong { _ = try cbc.encrypt(message(17), iv: iv, padding: .None) }, whole)
+    assertEqual(wrong { _ = try ecb.encrypt(message(17)) }, whole)
+    assertEqual(wrong { _ = try ecb.decrypt(message(17)) }, "a ciphertext of this cipher is whole blocks of 16 bytes, not 17 bytes")
+    assertEqual(wrong { _ = try cbc.decrypt(message(17), iv: iv) }, "a ciphertext of this cipher is whole blocks of 16 bytes, one at least, not 17 bytes")
+    assertEqual(wrong { _ = try cbc.decrypt([], iv: iv) }, "a ciphertext of this cipher is whole blocks of 16 bytes, one at least, not 0 bytes")
+    assertEqual(wrong { _ = try Hazmat.AesEcb(key: SymmetricKey(message(5))) }, "an AES key has 16, 24 or 32 bytes, not 5")
+    var place = message(17)
+    do {
+        try cbc.encrypt(inPlace: &place, iv: iv)
+        assert(false)
+    } catch {
+        assertEqual(error.description(), whole)
+        assert(place == message(17))
+    }
+}
+
+// Every last byte there is, with the bytes before it as they should be or not.
+@test
+fn wrongPaddingIsAnError() {
+    let cipher = try! Hazmat.AesEcb(key: key)
+    for last in 0..<256 {
+        var plain = message(32)
+        for i in 0..<(last < 32 ? last : 32) {
+            plain[31 - i] = U8(last)
+        }
+        plain[31] = U8(last)
+        let sealedText = try! cipher.encrypt(plain)
+        if last >= 1 && last <= 16 {
+            assert((try! cipher.decrypt(sealedText, padding: .Pkcs7)) == plain[..<32 - last].toArray())
+            for i in 1..<last {
+                var other = plain
+                other[31 - i] = other[31 - i] ^ 0x80
+                let changed = try! cipher.encrypt(other)
+                assertEqual(wrong { _ = try cipher.decrypt(changed, padding: .Pkcs7) }, "the message does not end in the padding it should")
+            }
+        } else {
+            assertEqual(wrong { _ = try cipher.decrypt(sealedText, padding: .Pkcs7) }, "the message does not end in the padding it should")
+        }
+    }
+}
+
+@test
+fn aLongMessageIsTheSameBothWays() {
+    let plain = message(100_000)
+    let cbc = try! Hazmat.AesCbc(key: key24)
+    let cfb = try! Hazmat.AesCfb(key: key24)
+    let made = try! cbc.encrypt(plain, iv: iv)
+    assert(made.count == 100_016)
+    assert((try! cbc.decrypt(made, iv: iv)) == plain)
+    assert((try! cfb.decrypt(try! cfb.encrypt(plain, iv: iv), iv: iv)) == plain)
+    var place = plain
+    try! cbc.encrypt(inPlace: &place, iv: iv)
+    assert(place == made[..<100_000].toArray())
+    try! cbc.decrypt(inPlace: &place, iv: iv)
+    assert(place == plain)
+}

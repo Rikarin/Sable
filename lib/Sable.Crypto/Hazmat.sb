@@ -25,12 +25,22 @@ public struct Hazmat {
         Pkcs7
     }
 
-    /// An initialisation vector, or a counter block, in memory of its own.
-    static fn block(_ iv: U8[:]) throws(CryptoError) -> SecretMemory {
+    /// An initialisation vector, or a counter block, in memory of its own,
+    /// which is the caller's to free. It is no secret, nor is what a cipher
+    /// leaves there.
+    static fn block(_ iv: U8[:]) throws(CryptoError) -> Int {
         if iv.count != 16 {
             throw CryptoError.InvalidParameter(reason: "an initialisation vector of AES has 16 bytes, not \(iv.count)")
         }
-        return SecretMemory(iv)
+        unsafe {
+            let address = NativeMemory.allocate(byteCount: 16).address
+            store(iv, at: address)
+            return address
+        }
+    }
+
+    unsafe static fn free(_ block: Int) {
+        NativeMemory.deallocate(RawPtr<U8>(address: block))
     }
 
     static fn checkWhole(_ count: Int) throws(CryptoError) {

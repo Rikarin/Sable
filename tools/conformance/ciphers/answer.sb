@@ -1,0 +1,203 @@
+// Answers what run.py asks of Sable.Crypto's ciphers: a request a line, its
+// words apart by spaces, bytes in hexadecimal and "-" for none of them.
+
+module CipherConformance
+
+import Sable.Crypto
+import Sable.IO
+
+fn bytes(_ word: String) -> U8[>..] {
+    var made: U8[>..] = []
+    if word == "-" {
+        return made
+    }
+    var high = -1
+    for byte in word.utf8 {
+        let digit = byte <= 0x39 ? Int(byte) - 0x30 : (Int(byte) | 0x20) - 0x57
+        if high < 0 {
+            high = digit
+        } else {
+            made.append(U8(high * 16 + digit))
+            high = -1
+        }
+    }
+    return made
+}
+
+fn hex(_ bytes: U8[:]) -> String {
+    return bytes.count == 0 ? "-" : "\(Digest(bytes))"
+}
+
+fn number(_ word: String) -> Int {
+    return try! Int.parse(word)
+}
+
+// seal <cipher> <key> <nonce> <associated data> <plaintext> <tag's length>
+fn sealing<C: AuthenticatedCipher>(_ cipher: C, _ words: String[>..]) throws(CryptoError) -> String {
+    let nonce = bytes(words[3])
+    let data = bytes(words[4])
+    let text = bytes(words[5])
+    let box = try cipher.seal(text, nonce: nonce, associatedData: data)
+    var inPlace = text
+    var tag = U8[>..](repeating: 0, count: cipher.tagByteCount)
+    try cipher.seal(inPlace: &inPlace, nonce: nonce, associatedData: data, tag: &tag)
+    if inPlace != box.ciphertext || tag != box.tag {
+        return "in place it is another"
+    }
+    if try cipher.open(box, associatedData: data) != text {
+        return "it opens as another"
+    }
+    return hex(box.ciphertext) + " " + hex(box.tag)
+}
+
+// open <cipher> <key> <nonce> <associated data> <ciphertext> <tag>
+fn opening<C: AuthenticatedCipher>(_ cipher: C, _ words: String[>..]) throws(CryptoError) -> String {
+    let nonce = bytes(words[3])
+    let data = bytes(words[4])
+    let text = bytes(words[5])
+    let tag = bytes(words[6])
+    var inPlace = text
+    var into = U8[>..](repeating: 0xAA, count: text.count)
+    var inPlaceOpened = true
+    var intoOpened = true
+    do {
+        try cipher.open(inPlace: &inPlace, nonce: nonce, associatedData: data, tag: tag)
+    } catch {
+        inPlaceOpened = false
+    }
+    do {
+        try cipher.open(text, into: &into, nonce: nonce, associatedData: data, tag: tag)
+    } catch {
+        intoOpened = false
+        if error != .AuthenticationFailed {
+            throw error
+        }
+    }
+    if inPlaceOpened != intoOpened {
+        return "in place it is another"
+    }
+    if !intoOpened {
+        let given = !constantTimeEquals(inPlace, repeating: 0) || !constantTimeEquals(into, repeating: 0)
+        return given ? "gave some of it" : "error"
+    }
+    return into == inPlace ? hex(into) : "in place it is another"
+}
+
+fn aead<C: AuthenticatedCipher>(_ cipher: C, _ words: String[>..]) throws(CryptoError) -> String {
+    return words[0] == "seal" ? try sealing(cipher, words) : try opening(cipher, words)
+}
+
+// mode <mode> <encrypt or decrypt> <key> <iv> <text>
+fn mode(_ name: String, _ encrypt: Bool, _ key: SymmetricKey, _ iv: U8[>..], _ text: U8[>..]) throws(CryptoError) -> U8[>..] {
+    match name {
+        case "ECB" => {
+            let cipher = try Hazmat.AesEcb(key: key)
+            return encrypt ? try cipher.encrypt(text) : try cipher.decrypt(text)
+        }
+        case "CBC" => {
+            let cipher = try Hazmat.AesCbc(key: key)
+            return encrypt ? try cipher.encrypt(text, iv: iv, padding: .None) : try cipher.decrypt(text, iv: iv, padding: .None)
+        }
+        case "PKCS7" => {
+            let cipher = try Hazmat.AesCbc(key: key)
+            return encrypt ? try cipher.encrypt(text, iv: iv) : try cipher.decrypt(text, iv: iv)
+        }
+        case "CTR" => {
+            return try (try Hazmat.AesCtr(key: key)).apply(text, counterBlock: iv)
+        }
+        case "CFB128" => {
+            let cipher = try Hazmat.AesCfb(key: key)
+            return encrypt ? try cipher.encrypt(text, iv: iv) : try cipher.decrypt(text, iv: iv)
+        }
+        case _ => {
+            let cipher = try Hazmat.AesCfb(key: key, feedback: .Byte)
+            return encrypt ? try cipher.encrypt(text, iv: iv) : try cipher.decrypt(text, iv: iv)
+        }
+    }
+}
+
+// AESAVS' Monte Carlo test, one of its hundred rounds: a thousand, each of
+// what came of the ones before it. Its words are 'mode's.
+fn monteCarlo(_ words: String[>..]) throws(CryptoError) -> String {
+    let name = words[1]
+    let encrypt = words[2] == "encrypt"
+    let key = SymmetricKey(bytes(words[3]))
+    var iv = bytes(words[4])
+    var text = bytes(words[5])
+    if name == "ECB" {
+        for _ in 0..<1000 {
+            text = try mode(name, encrypt, key, iv, text)
+        }
+        return hex(text)
+    }
+
+    // Every byte there was before the next text: the vector's, then what came out.
+    var history = iv
+    var made = text
+    for _ in 0..<1000 {
+        made = try mode(name, encrypt, key, iv, text)
+        iv.append(contentsOf: encrypt ? made : text)
+        iv = iv[(iv.count - 16)...].toArray()
+        let size = text.count
+        text = history[..<size].toArray()
+        history = history[size...].toArray()
+        history.append(contentsOf: made)
+    }
+    return hex(made)
+}
+
+fn answer(_ words: String[>..]) -> String {
+    do {
+        let key = words[0] == "mode" || words[0] == "monte" ? SymmetricKey([]) : SymmetricKey(bytes(words[2]))
+        match words[0] {
+            case "mode" => {
+                return hex(try mode(words[1], words[2] == "encrypt", SymmetricKey(bytes(words[3])), bytes(words[4]), bytes(words[5])))
+            }
+            case "monte" => {
+                return try monteCarlo(words)
+            }
+            case "wrap" => {
+                let wrapping = try AesKeyWrap(key: key)
+                let text = SymmetricKey(bytes(words[3]))
+                return hex(words[1] == "KW" ? try wrapping.wrap(text) : try wrapping.wrapPadded(text))
+            }
+            case "unwrap" => {
+                let wrapping = try AesKeyWrap(key: key)
+                let text = bytes(words[3])
+                let unwrapped = words[1] == "KW" ? try wrapping.unwrap(text) : try wrapping.unwrapPadded(text)
+                return hex(unwrapped.bytes())
+            }
+            case _ => {
+                let nonce = words[3] == "-" ? 0 : words[3].utf8.count / 2
+                let tag = words[0] == "seal" ? number(words[6]) : words[6] == "-" ? 0 : words[6].utf8.count / 2
+                match words[1] {
+                    case "GCM" => {
+                        return try aead(try AesGcm(key: key, tagByteCount: tag, nonceByteCount: nonce), words)
+                    }
+                    case "CCM" => {
+                        return try aead(try AesCcm(key: key, tagByteCount: tag, nonceByteCount: nonce), words)
+                    }
+                    case "CHACHA" => {
+                        return try aead(try ChaCha20Poly1305(key: key), words)
+                    }
+                    case _ => {
+                        return try aead(try XChaCha20Poly1305(key: key), words)
+                    }
+                }
+            }
+        }
+    } catch {
+        return "error"
+    }
+}
+
+fn main() {
+    var input = BufferedReader(Console.standardInput)
+    let written = BufferedWriter(Console.standardOutput)
+    while let line = try! input.readLine() {
+        var text: U8[>..] = []
+        text.append(utf8: answer(line.split(separator: ' ')) + "\n")
+        try! written.write(text)
+    }
+    try! written.flush()
+}

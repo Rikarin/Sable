@@ -984,7 +984,10 @@ Sable.Hosting       ApplicationBuilder and Host (services started in order,
                     intervals, overlap policies), Systemd (sd_notify)
 Sable.Crypto        HashFunction and Digest: SHA-2, SHA-3, BLAKE2b, BLAKE3,
                     Insecure.Md5 and Sha1; SHAKE; Hmac, KMAC; Hkdf, Pbkdf2,
-                    Scrypt, Argon2id; PasswordHash (PHC strings);
+                    Scrypt, Argon2id; PasswordHash (PHC strings); AesGcm,
+                    AesCcm, ChaCha20Poly1305, XChaCha20Poly1305
+                    (AuthenticatedCipher, SealedBox); AesKeyWrap;
+                    Hazmat.AesCbc, AesCtr, AesCfb and AesEcb;
                     SymmetricKey, SecureRandom, constantTimeEquals,
                     secureZero
 Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
@@ -1460,8 +1463,22 @@ twice as fast there. Which the processor has is asked once (sysctl,
 getauxval, IsProcessorFeaturePresent, cpuid); a kernel is asked for whole
 blocks (`crypto_blocks`) and says whether it did them, and where it did not
 the portable loop does. For tests, `SABLE_CRYPTO_PORTABLE=1` says the
-processor has none, and `SABLE_CRYPTO_NARROW=1` that it has no AVX-512.
-Everything else is portable only: MD5, BLAKE2b, BLAKE3, Argon2id, scrypt.
+processor has none, `SABLE_CRYPTO_NARROW=1` that it has no AVX-512, and
+`SABLE_CRYPTO_NARROW=2` that the ciphers have no AVX2 either.
+Of the rest, MD5, BLAKE2b, BLAKE3, Argon2id and scrypt are portable only.
+
+The ciphers' kernels (`runtime/ciphers.c`) are asked for whole messages
+(`crypto_cipher`), from one slice to another or in place. AES is by AES-NI or
+ARMv8's instructions, eight registers side by side, of one block, or with
+VAES of two or four; GCM's GHASH is worked in by PCLMULQDQ, VPCLMULQDQ or
+PMULL as they come out, eight registers' products added up before they are
+reduced. ChaCha20 is by whatever vectors there are (SSE2, AVX2, AVX-512,
+NEON) in 4, 8 or 16 blocks, Poly1305 in vectors of limbs of 26 bits, or for
+short messages in three words. `cipher_blocks.h`, `cipher_chacha.h` and
+`cipher_poly.h` are the loops, each included once for every width. The
+portable code is bitsliced AES of four blocks (`BitslicedAes`), GHASH by
+multiplications with room for their carries (`PortableGhash`), and Poly1305
+by limbs: no table is indexed by a secret anywhere.
 
 - **State** — a hash's, an HMAC's, a key's — is raw memory of its own
   (`SecretMemory`), zeroed by its owner's deinit, where no copy of it is
@@ -1476,6 +1493,17 @@ Everything else is portable only: MD5, BLAKE2b, BLAKE3, Argon2id, scrypt.
   cannot find the loop to be one it may leave early.
 - **`secureZero`** is a call of the runtime's whose memset is kept by an
   assembly barrier, in the link's optimiser too.
+- **Authenticated ciphers** open in one pass: the plaintext is written as its
+  tag is worked out, and zeroed, in place too, when the tag is wrong, before
+  the error is thrown; a tag of another length is refused unread. Every
+  failure is the one `AuthenticationFailed`. A random nonce is counted in the
+  cipher's state, which its copies share, and refused when n bits of nonce
+  have had 2^((n - 32) / 2); the lengths the ciphers' counters end at are
+  errors; that a nonce of the caller's is new, and how many bytes a key has
+  enciphered in all, are not known and only documented. Nonces of GCM are of
+  12 bytes unless the cipher is made for others. CBC, CTR, CFB and ECB are
+  under `Hazmat`, where `InvalidPadding` is an oracle for whoever does not
+  authenticate first; the padding itself is checked without branches.
 - **Randomness** is one source, `random_bytes` of the platform layer, for
   `SecureRandom`, `SystemRandomNumberGenerator` and UUIDs: arc4random_buf on
   Apple's systems, getrandom on Linux (again on EINTR), BCryptGenRandom, or
@@ -1488,8 +1516,9 @@ Everything else is portable only: MD5, BLAKE2b, BLAKE3, Argon2id, scrypt.
   their order, a salt of at least 8 bytes and a hash of at least 16 — and
   refuses one that asks for more memory or work than the caller's limits.
 
-SHA-1, SHA-256, SHA-512, SHA3-256, MD5, HMAC, PBKDF2 and the random source
-are timed against .NET by the benchmarks of those names. Symmetric ciphers and signatures are not here yet.
+SHA-1, SHA-256, SHA-512, SHA3-256, MD5, HMAC, PBKDF2, AES-GCM,
+ChaCha20-Poly1305, AES-CBC and the random source are timed against .NET by
+the benchmarks of those names. Signatures are not here yet.
 
 **Sockets.** `Sable.Net`'s sockets are nonblocking and handles of the
 runtime's (`runtime/net.c`), read, written, accepted from and connected over

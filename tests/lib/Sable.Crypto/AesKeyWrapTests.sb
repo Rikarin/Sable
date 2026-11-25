@@ -1,0 +1,168 @@
+module AesKeyWrapTests
+
+// AesKeyWrap (Sable.Crypto): the RFCs' cases, every length, and misuse. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn bytes(_ text: String) -> U8[>..] {
+    var made: U8[>..] = []
+    var high = -1
+    for byte in text.utf8 {
+        let digit = byte <= 0x39 ? Int(byte) - 0x30 : Int(byte) - 0x57
+        if high < 0 {
+            high = digit
+        } else {
+            made.append(U8(high * 16 + digit))
+            high = -1
+        }
+    }
+    return made
+}
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+fn published(_ wrapping: String, _ key: String, _ wrapped: String, padded: Bool) {
+    let cipher = try! AesKeyWrap(key: SymmetricKey(bytes(wrapping)))
+    let secret = SymmetricKey(bytes(key))
+    if padded {
+        assertEqual("\(Digest(try! cipher.wrapPadded(secret)))", wrapped)
+        assert((try! cipher.unwrapPadded(bytes(wrapped))) == secret)
+    } else {
+        assertEqual("\(Digest(try! cipher.wrap(secret)))", wrapped)
+        assert((try! cipher.unwrap(bytes(wrapped))) == secret)
+    }
+}
+
+// RFC 3394, §4.1 to 4.6.
+@test
+fn wrappingIsAsPublished() {
+    let whole = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    let key = "00112233445566778899aabbccddeeff0001020304050607"
+    published("000102030405060708090a0b0c0d0e0f", "00112233445566778899aabbccddeeff", "1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5", padded: false)
+    published("000102030405060708090a0b0c0d0e0f1011121314151617", "00112233445566778899aabbccddeeff", "96778b25ae6ca435f92b5b97c050aed2468ab8a17ad84e5d", padded: false)
+    published(whole, "00112233445566778899aabbccddeeff", "64e8c3f9ce0f5ba263e9777905818a2a93c8191e7d6e8ae7", padded: false)
+    published("000102030405060708090a0b0c0d0e0f1011121314151617", key, "031d33264e15d33268f24ec260743edce1c6c7ddee725a936ba814915c6762d2", padded: false)
+    published(whole, key, "a8f9bc1612c68b3ff6e6f4fbe30e71e4769c8b80a32cb8958cd5d17d6b254da1", padded: false)
+    published(whole, key + "08090a0b0c0d0e0f", "28c9f404c4b810f4cbccb35cfb87f8263f5786e2d80ed326cbc7f0e71a99f43bfb988b9b7a02dd21", padded: false)
+}
+
+// RFC 5649, §6.
+@test
+fn paddedWrappingIsAsPublished() {
+    let key = "5840df6e29b02af1ab493b705bf16ea1ae8338f4dcc176a8"
+    published(key, "c37b7e6492584340bed12207808941155068f738", "138bdeaa9b8fa7fc61f97742e72248ee5ae6ae5360d1ae6a5f54f373fa543b6a", padded: true)
+    published(key, "466f7250617369", "afbeb0f07dfbf5419200f2ccb50bb24f", padded: true)
+}
+
+@test
+fn everyLengthIsUnwrapped() {
+    let cipher = try! AesKeyWrap(key: SymmetricKey(message(32)))
+    for count in 1..<80 {
+        let key = SymmetricKey(message(count))
+        let padded = try! cipher.wrapPadded(key)
+        assert(padded.count == (count + 7) / 8 * 8 + 8)
+        assert((try! cipher.unwrapPadded(padded)) == key)
+        if count >= 16 && count % 8 == 0 {
+            let wrapped = try! cipher.wrap(key)
+            assert(wrapped.count == count + 8 && wrapped != padded)
+            assert((try! cipher.unwrap(wrapped)) == key)
+            refused(cipher, wrapped, padded: true)
+            refused(cipher, padded, padded: false)
+        } else {
+            do {
+                _ = try cipher.wrap(key)
+                assert(false)
+            } catch {
+                assertEqual(error.description(), "a key to wrap without padding has a multiple of 8 bytes, and 16 at least, not \(count)")
+            }
+        }
+    }
+    do {
+        _ = try cipher.wrapPadded(SymmetricKey([]))
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "a key to wrap has 1 to 4294967295 bytes, not 0")
+    }
+}
+
+fn refused(_ cipher: AesKeyWrap, _ wrapped: U8[:], padded: Bool) {
+    do {
+        _ = padded ? try cipher.unwrapPadded(wrapped) : try cipher.unwrap(wrapped)
+        assert(false, "it was unwrapped")
+    } catch {
+        assertEqual(error, .AuthenticationFailed)
+    }
+}
+
+@test
+fn whatIsChangedIsRefused() {
+    let cipher = try! AesKeyWrap(key: SymmetricKey(message(16)))
+    let wrapped = try! cipher.wrap(SymmetricKey(message(32)))
+    let padded = try! cipher.wrapPadded(SymmetricKey(message(29)))
+    let short = try! cipher.wrapPadded(SymmetricKey(message(5)))
+    for bit in 0..<8 * wrapped.count {
+        var other = wrapped
+        other[bit / 8] = other[bit / 8] ^ (1 << U8(bit % 8))
+        refused(cipher, other, padded: false)
+    }
+    for bit in 0..<8 * padded.count {
+        var other = padded
+        other[bit / 8] = other[bit / 8] ^ (1 << U8(bit % 8))
+        refused(cipher, other, padded: true)
+    }
+    for bit in 0..<8 * short.count {
+        var other = short
+        other[bit / 8] = other[bit / 8] ^ (1 << U8(bit % 8))
+        refused(cipher, other, padded: true)
+    }
+    for count in 0..<wrapped.count {
+        refused(cipher, wrapped[..<count], padded: false)
+        refused(cipher, padded[..<(count < padded.count ? count : 0)], padded: true)
+    }
+    refused(try! AesKeyWrap(key: SymmetricKey(message(17)[1...])), wrapped, padded: false)
+    refused(try! AesKeyWrap(key: SymmetricKey(message(17)[1...])), padded, padded: true)
+}
+
+// The right constant, and a length or padding that is not: made of the block
+// cipher, as the shortest wrapped key is one block.
+@test
+fn wrongPaddingIsRefused() {
+    let key = SymmetricKey(message(16))
+    let cipher = try! AesKeyWrap(key: key)
+    let block = try! Hazmat.AesEcb(key: key)
+    for length in 0..<20 {
+        var plain = bytes("a65959a6")
+        plain.append(contentsOf: [0, 0, 0, U8(length)])
+        plain.append(contentsOf: [1, 2, 3, 4, 5, 6, 7, 0])
+        let wrapped = try! block.encrypt(plain)
+        if length == 7 || length == 8 {
+            assert((try! cipher.unwrapPadded(wrapped)) == SymmetricKey(plain[8..<8 + length]))
+        } else {
+            refused(cipher, wrapped, padded: true)
+        }
+    }
+    refused(cipher, try! block.encrypt(bytes("a65959a6ffffffff0102030405060708")), padded: true)
+    refused(cipher, try! block.encrypt(bytes("a65959a7000000080102030405060708")), padded: true)
+    refused(cipher, try! block.encrypt(bytes("a65959a6000000050102030405000100")), padded: true)
+    refused(cipher, try! block.encrypt(bytes("a65959a6000000050102030405800000")), padded: true)
+}
+
+@test
+fn theWrappingKeyHasItsLength() {
+    do {
+        _ = try AesKeyWrap(key: SymmetricKey(message(20)))
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "an AES key has 16, 24 or 32 bytes, not 20")
+    }
+}

@@ -3048,6 +3048,7 @@ public static class SilBuiltins {
         Add("lock_new", SilType.Int);
         Add("lock_free", SilType.Unit, SilType.Int);
         Add("lock_acquire", SilType.Unit, SilType.Int);
+        Add("lock_acquire_later", SilType.Unit, SilType.Int);
         Add("lock_try_acquire", SilType.Bool, SilType.Int);
         Add("lock_release", SilType.Unit, SilType.Int);
         // A reader/writer lock: what reading it gives, its end takes.

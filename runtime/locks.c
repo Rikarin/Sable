@@ -79,6 +79,21 @@ void sable_lock_acquire(void *mutex) {
     }
 }
 
+// For a thread that takes the lock to have many things at once of those the
+// threads it meets there add one at a time: if it is held, one of them is at
+// it now, and a wait of a microsecond or so, away from its cache line, finds
+// many more. Back at once, the thread would find a few and soon be back
+// again, and each of the two would wait for the line at each.
+void sable_lock_acquire_later(void *mutex) {
+    if (mutex_try_lock(mutex)) {
+        return;
+    }
+
+    spin_turn();
+    spin_turn();
+    sable_lock_acquire(mutex);
+}
+
 bool sable_lock_try_acquire(void *mutex) {
     return mutex_try_lock(mutex);
 }

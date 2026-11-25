@@ -755,6 +755,7 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_lock_new()
                                 declare void @sable_lock_free(ptr)
                                 declare void @sable_lock_acquire(ptr)
+                                declare void @sable_lock_acquire_later(ptr)
                                 declare zeroext i1 @sable_lock_try_acquire(ptr)
                                 declare void @sable_lock_release(ptr)
                                 declare ptr @sable_rwlock_new()
@@ -4511,7 +4512,7 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case "lock_free" or "lock_acquire" or "lock_release" or "condition_free" or "condition_signal" or "condition_broadcast"
+                case "lock_free" or "lock_acquire" or "lock_acquire_later" or "lock_release" or "condition_free" or "condition_signal" or "condition_broadcast"
                     or "rwlock_free" or "rwlock_write" or "rwlock_write_done":
                     Line($"call void @sable_{builtin.Name}(ptr {RawAddress(operands[0])})");
                     return;

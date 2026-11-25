@@ -263,7 +263,7 @@ public final class ThrowingChannel<Element: Sendable, Failure: Error>: AsyncSequ
         Runtime.lockAcquire(receiveLock)
         unsafe {
             if front.count() == 0 {
-                Runtime.lockAcquire(sendLock)
+                Runtime.lockAcquireLater(sendLock)
                 front.swap(with: back)
                 if front.count() == 0 {
                     let found = nothing(waiting)

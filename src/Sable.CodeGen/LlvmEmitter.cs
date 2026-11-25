@@ -5859,7 +5859,6 @@ public sealed partial class LlvmEmitter {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     SiteForRuntime();
                     Line($"call void @sable_array_append_holes(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, i64 {operands[1]})");
-                    ShareBufferAt(builtin.Operands[0], arrayType);
                     return;
                 }
 

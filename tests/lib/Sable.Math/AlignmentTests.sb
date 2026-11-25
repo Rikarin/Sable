@@ -1,0 +1,77 @@
+module AlignmentTests
+
+// Rounding to a multiple (Sable.Math/Alignment.sb). Run with
+//     tools/stdlib-coverage.sh Sable.Math
+
+import Sable.Math
+import Sable.Testing
+
+@test(arguments: [(0, 8, 0, 0), (1, 8, 8, 0), (13, 8, 16, 8), (16, 8, 16, 16), (-13, 8, -8, -16), (-16, 8, -16, -16), (-1, 8, 0, -8), (7, 3, 9, 6), (7, 1, 7, 7), (100, 48, 144, 96)])
+fn alignmentGoesToTheNextMultipleEitherWay(_ value: Int, _ alignment: Int, _ up: Int, _ down: Int) {
+    assertEqual(alignUp(value, to: alignment), up)
+    assertEqual(alignDown(value, to: alignment), down)
+    expect(alignUp(value, to: alignment).isMultiple(of: alignment))
+}
+
+@test
+fn alignmentOfEveryByteIsWhatDivisionSays() {
+    for value in 0..<200 {
+        for alignment in 1..<50 {
+            assertEqual(alignUp(U8(value), to: U8(alignment)), U8((value + alignment - 1) / alignment * alignment))
+            assertEqual(alignDown(U8(value), to: U8(alignment)), U8(value / alignment * alignment))
+        }
+    }
+}
+
+@test
+fn alignmentReachesTheEndsOfTheType() {
+    assertEqual(alignUp(255 as U8, to: 255), 255)
+    assertEqual(alignDown(255 as U8, to: 128), 128)
+    assertEqual(alignUp(127 as I8, to: 127), 127)
+    assertEqual(alignDown(I8.min, to: 64), -128)
+    assertEqual(alignUp(I8.min, to: 127), -127)
+    assertEqual(alignUp(U64.max - 10, to: 1), U64.max - 10)
+}
+
+@test(traps: "integer overflow")
+fn alignUpTrapsWhereTheMultipleDoesNotFit() {
+    _ = alignUp(250 as U8, to: 8)
+}
+
+@test(traps: "integer overflow")
+fn alignDownTrapsWhereTheMultipleDoesNotFit() {
+    _ = alignDown(I8.min, to: 127)
+}
+
+@test(traps: "the multiple must be positive, not 0")
+fn anAlignmentOfZeroTraps() {
+    _ = alignUp(3, to: 0)
+}
+
+@test(traps: "the multiple must be positive, not -4")
+fn aNegativeMultipleTraps() {
+    _ = roundToMultiple(3, of: -4)
+}
+
+@test(arguments: [(0, 5, 0), (12, 5, 10), (13, 5, 15), (15, 5, 15), (6, 4, 8), (-6, 4, -8), (-5, 4, -4), (-7, 4, -8), (5, 1, 5)])
+fn anIntegerIsRoundedToTheNearestMultiple(_ value: Int, _ multiple: Int, _ rounded: Int) {
+    assertEqual(roundToMultiple(value, of: multiple), rounded)
+    assertEqual(roundToMultiple(I8(value), of: I8(multiple)), I8(rounded))
+}
+
+@test(traps: "integer overflow")
+fn roundToMultipleTrapsWhereTheMultipleDoesNotFit() {
+    _ = roundToMultiple(255 as U8, of: 2)
+}
+
+@test(arguments: [(0.8, 0.25, 0.75), (0.375, 0.25, 0.5), (-0.375, 0.25, -0.5), (7.0, 2.5, 7.5), (0.0, 3.0, 0.0)])
+fn aFloatIsRoundedToTheNearestMultiple(_ value: F64, _ multiple: F64, _ rounded: F64) {
+    assertEqual(roundToMultiple(value, of: multiple), rounded)
+    assertEqual(roundToMultiple(F32(value), of: F32(multiple)), F32(rounded))
+    assertEqual(roundToMultiple(F16(value), of: F16(multiple)), F16(rounded))
+}
+
+@test
+fn aMultipleOfZeroIsNotANumber() {
+    expect(roundToMultiple(3.0, of: 0.0).isNaN)
+}

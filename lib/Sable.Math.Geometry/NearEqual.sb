@@ -51,8 +51,5 @@ public fn nearEqual(_ left: F64, _ right: F64, tolerance: F64 = 0.000000000001) 
 /// Whether the number is within a millionth of zero.
 fn isNearZero(_ value: F32) -> Bool => value.abs() < zeroTolerance
 
-/// The number held within 0...1.
-fn saturated(_ value: F32) -> F32 => value < 0 ? 0 : value > 1 ? 1 : value
-
 /// One over the number, or zero where it is near zero.
 fn safeReciprocal(_ value: F32) -> F32 => isNearZero(value) ? 0 : 1 / value

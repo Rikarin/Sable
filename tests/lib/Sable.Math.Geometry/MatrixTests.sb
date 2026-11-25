@@ -138,19 +138,19 @@ fn eachGreatestComponentIsFoundInAMatrix(_ q: Quaternion) {
 @test
 fn slerpGoesTheShortWayRound() {
     let to = Quaternion(axis: Vector3.unitZ, angle: 350 * pi / 180)
-    let halfway = Quaternion.identity.slerp(to: to, 0.5).transform(Vector3.unitX)
+    let halfway = Quaternion.identity.slerp(to: to, by: 0.5).transform(Vector3.unitX)
     expect(halfway.nearEqual(Quaternion(axis: Vector3.unitZ, angle: -5 * pi / 180).transform(Vector3.unitX), tolerance: tolerance))
-    let nearly = Quaternion.identity.nlerp(to: to, 0.5).transform(Vector3.unitX)
+    let nearly = Quaternion.identity.nlerp(to: to, by: 0.5).transform(Vector3.unitX)
     expect(nearly.nearEqual(halfway, tolerance: tolerance))
 }
 
 @test
 fn slerpOfNearlyTheSameRotationsIsOne() {
     let from = Quaternion(axis: Vector3.unitY, angle: 1)
-    let result = from.slerp(to: Quaternion(axis: Vector3.unitY, angle: 1.0000001), 0.5)
+    let result = from.slerp(to: Quaternion(axis: Vector3.unitY, angle: 1.0000001), by: 0.5)
     expect(nearEqual(result.length, 1))
-    expect(nearEqual(from.slerp(to: -from, 0.5).length, 1))
-    assertEqual(from.slerp(to: from, 7).sameRotation(as: from), true)
+    expect(nearEqual(from.slerp(to: -from, by: 0.5).length, 1))
+    assertEqual(from.slerp(to: from, by: 7).sameRotation(as: from), true)
 }
 
 @test
@@ -161,7 +161,7 @@ fn slerpIsAsTheSinesAreAcrossTheWholeArc() {
         for step in 0...8 {
             let t = F32(step) / 8
             let expected = Quaternion(axis: Vector3(1, -2, 0.5), angle: angle * t)
-            let actual = Quaternion.identity.slerp(to: to, t)
+            let actual = Quaternion.identity.slerp(to: to, by: t)
             assert(actual.nearEqual(expected, tolerance: 0.000002) || degrees == 180, "\(degrees) degrees at \(t): \(actual), not \(expected)")
         }
     }
@@ -172,7 +172,7 @@ fn quaternionsAreAddedScaledAndCompared() {
     let q = Quaternion(1, 2, 3, 4)
     assertEqual(q + q, q * 2)
     assertEqual(q - q, Quaternion(0, 0, 0, 0))
-    assertEqual(q.lerp(to: q * 3, 0.5), q * 2)
+    assertEqual(q.lerp(to: q * 3, by: 0.5), q * 2)
     assertEqual(Quaternion(Vector3(1, 2, 3), 4), q)
     assertEqual(Quaternion(q.components), q)
     assertEqual(q.xyz, Vector3(1, 2, 3))
@@ -310,8 +310,8 @@ fn matrix3x2MovesPointsOfThePlane() {
 @test
 fn transformsAreBlendedInvertedAndAdded() {
     let a = Transform(translation: Vector3(1, 2, 3), rotation: Quaternion(axis: Vector3.up, angle: 1), scale: Vector3(2, 3, 4))
-    assertEqual(a.lerp(to: Transform.identity, 2).scale, Vector3.one)
-    assertEqual(a.lerp(to: Transform.identity, -1).translation, a.translation)
+    assertEqual(a.lerp(to: Transform.identity, by: 2).scale, Vector3.one)
+    assertEqual(a.lerp(to: Transform.identity, by: -1).translation, a.translation)
     assertEqual(Transform(scale: Vector3.zero).inverted().scale, Vector3.zero)
     assertEqual(Transform.identity * Transform.identity, Transform.identity)
     expect(a.nearEqual(a) && !a.nearEqual(Transform.identity))

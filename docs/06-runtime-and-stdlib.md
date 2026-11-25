@@ -1031,7 +1031,11 @@ Sable.Globalization Locale (BCP 47; current, invariant), numbers, money,
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; Complex<T> with
                     them all (Kahan's branch cuts, signed zeros, one point
-                    at infinity); integer math; the
+                    at infinity); integer math; interpolation
+                    (saturate, inverseLerp, remap, smoothStep,
+                    smootherStep; lerp is the floats' method), wrap,
+                    pingPong, wrapAngle, deltaAngle, moveTowards, and
+                    alignUp, alignDown, roundToMultiple; the
                     vector kernels over F32[:] and F64[:] (sum, dot,
                     cosineSimilarity, softmax, …: TensorPrimitives');
                     Decimal (.NET's layout and rounding, below);

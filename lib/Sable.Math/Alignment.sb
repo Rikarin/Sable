@@ -1,0 +1,68 @@
+module Sable.Math
+
+// Rounding to a multiple: an offset's alignment, a grid's lines. The next
+// power of two is the integers' own method, 'nextPowerOfTwo()', and whether a
+// number is a multiple is 'isMultiple(of:)'.
+
+/// The least multiple of the alignment not below the value. The alignment may
+/// be any positive number, a power of two or not; one that is not positive
+/// traps, and so does a multiple that does not fit the type.
+///
+/// ```sable
+/// assert(alignUp(13, to: 8) == 16)
+/// assert(alignUp(16, to: 8) == 16)
+/// assert(alignUp(-13, to: 8) == -8)
+/// ```
+public fn alignUp<T: FixedWidthInteger>(_ value: T, to alignment: T) -> T {
+    let past = pastMultiple(value, alignment)
+    return past == T.zero ? value : value + (alignment - past)
+}
+
+/// The greatest multiple of the alignment not above the value. The alignment
+/// may be any positive number; one that is not positive traps, and so does a
+/// multiple that does not fit the type.
+///
+/// ```sable
+/// assert(alignDown(13, to: 8) == 8)
+/// assert(alignDown(-13, to: 8) == -16)
+/// ```
+public fn alignDown<T: FixedWidthInteger>(_ value: T, to alignment: T) -> T {
+    return value - pastMultiple(value, alignment)
+}
+
+/// The multiple nearest the value, of two as near the one further from zero,
+/// as `round` has it. A multiple that is not positive traps, and so does a
+/// result that does not fit the type.
+///
+/// ```sable
+/// assert(roundToMultiple(13, of: 5) == 15)
+/// assert(roundToMultiple(12, of: 5) == 10)
+/// assert(roundToMultiple(-6, of: 4) == -8)
+/// ```
+public fn roundToMultiple<T: FixedWidthInteger>(_ value: T, of multiple: T) -> T {
+    let past = pastMultiple(value, multiple)
+    let short = multiple - past
+    if past < short || past == short && value < T.zero {
+        return value - past
+    }
+    return value + short
+}
+
+/// The multiple nearest the value, of two as near the one further from zero,
+/// as `round` has it: NaN for a multiple of zero.
+///
+/// ```sable
+/// assert(roundToMultiple(0.8, of: 0.25) == 0.75)
+/// assert(roundToMultiple(-0.375, of: 0.25) == -0.5)
+/// ```
+public fn roundToMultiple<T: FloatingPoint>(_ value: T, of multiple: T) -> T {
+    return (value / multiple).rounded() * multiple
+}
+
+/// How far the value is past the multiple at or below it.
+fn pastMultiple<T: FixedWidthInteger>(_ value: T, _ multiple: T) -> T {
+    if multiple <= T.zero {
+        preconditionFailure("the multiple must be positive, not \(multiple)")
+    }
+    return value.remEuclid(multiple)
+}

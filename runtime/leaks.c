@@ -79,6 +79,7 @@ static void track_remove(SableObject *object) {
 
 static void leaks_start(void) {
     tracking = getenv("SABLE_CHECK_LEAKS") != NULL;
+    checking_shared = getenv("SABLE_CHECK_SHARED") != NULL;
 }
 
 // Into the set, or out of it: apart, as hardly any program runs with it.
@@ -147,10 +148,24 @@ static int64_t leaked_index(const void *object) {
     return -1;
 }
 
+// With SABLE_CHECK_SHARED set, whether what an object reachable from more than
+// one thread holds is counted atomically too, looked at as the object goes: a
+// store that should have shared it did not, and its counts may be wrong.
+static void expect_shared(void *pointer) {
+    if (pointer != NULL && !(object_flags(pointer) & (SABLE_IMMORTAL | SABLE_SHARED | SABLE_DEINITED))) {
+        static _Thread_local char message[256];
+        snprintf(message, sizeof message, "an object reachable from more than one thread held %s counted by one",
+            ((SableObject *)pointer)->type->name);
+        sable_trap(message);
+    }
+}
+
 // A strong reference the object being visited holds: what its visitor,
 // the compiler's, calls for each. Only references between leaked objects
 // are kept; the rest of the heap is gone by now.
 static _Thread_local void (*visit_hook)(void *pointer);
+
+static void share_unowned(void *pointer);
 
 void sable_heap_visit(void *pointer) {
     if (visit_hook != NULL) {
@@ -177,7 +192,27 @@ void sable_heap_visit(void *pointer) {
     edge_count++;
 }
 
+// An unowned reference the object being visited holds, which keeps nothing
+// alive, but through which another thread may retain the object it names: for
+// a walk that shares what it reaches (tasks.c), or makes it every thread's.
+void sable_heap_visit_unowned(void *pointer) {
+    if (visit_hook == expect_shared) {
+        expect_shared(pointer);
+    } else if (visit_hook != NULL) {
+        share_unowned(pointer);
+    }
+}
+
 void sable_array_destroy(void *pointer);
+
+static void visit_object(SableObject *object);
+
+static void check_shared(SableObject *object) {
+    void (*saved)(void *) = visit_hook;
+    visit_hook = expect_shared;
+    visit_object(object);
+    visit_hook = saved;
+}
 
 // Each strong reference the object holds: a class's fields, an array's elements.
 static void visit_object(SableObject *object) {

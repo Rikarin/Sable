@@ -131,6 +131,7 @@ typedef struct SableTask {
     int64_t serial;                  // how many were spawned before it
     SableGroup *group;               // the group it was spawned in, until taken from it
     struct SableTask *next_done;     // among its group's finished children
+    SableAccesses accesses;          // those in progress as it waits (exclusivity.c)
     SableHandler *handlers;          // its cancellation handlers, the latest first
     void *actor;                     // where it runs: NULL (anywhere), MAIN_ACTOR, or an actor's executor
     void *held;                      // the actor's executor it holds, or NULL
@@ -307,6 +308,58 @@ SABLE_SLOW void sable_share(void *pointer) {
 
 static void share_one(void *pointer) {
     sable_share(pointer);
+}
+
+// Every thread reaches the globals: what they hold is shared as the first
+// thread but the main one is started, and what is put in them after that as
+// it is put there (compiled code tests sable_threaded before it stores to a
+// global). Until then there is one thread, and nothing is counted atomically
+// for being in a global. Each image registers a function that shares what
+// its globals hold, before its code runs.
+bool sable_threaded;
+
+typedef struct SableGlobals {
+    void (*share)(void);
+    struct SableGlobals *next;
+} SableGlobals;
+
+static SableGlobals *all_globals;
+static SpinLock globals_lock;
+
+void sable_register_globals(void (*share)(void)) {
+    SableGlobals *globals = malloc(sizeof *globals);
+    if (globals == NULL) {
+        sable_trap("out of memory");
+    }
+
+    globals->share = share;
+    spin_lock(&globals_lock);
+    globals->next = all_globals;
+    all_globals = globals;
+    spin_unlock(&globals_lock);
+}
+
+// Before a thread that runs the program's code is started, by the only one
+// that does; or by a library as it is loaded, whose callers' threads it does
+// not know.
+void sable_threads_begin(void) {
+    if (__atomic_exchange_n(&sable_threaded, true, __ATOMIC_RELAXED)) {
+        return;
+    }
+
+    for (SableGlobals *globals = all_globals; globals != NULL; globals = globals->next) {
+        globals->share();
+    }
+}
+
+// What an unowned reference names, for a walk that comes to one: with the
+// rest, if the walk shares.
+static void share_unowned(void *pointer) {
+    if (visit_hook == share_push) {
+        share_push(pointer);
+    } else {
+        sable_share(pointer);
+    }
 }
 
 // Shares each object so many elements of an array of the type hold.
@@ -1617,6 +1670,10 @@ static void blocking_submit(SableTask *task) {
 
     condition_signal(&blocking_condition);
     mutex_unlock(&blocking_lock);
+    if (more) {
+        sable_threads_begin();
+    }
+
     if (more && !thread_start(blocking_main, NULL)) {
         sable_trap("cannot start a thread for blocking work");
     }
@@ -1783,6 +1840,7 @@ static void free_task(SableTask *task) {
 
     spin_unlock(&list->lock);
     slab_destroy(&task->frames);
+    free(task->accesses.list);
     free(task);
     if (sable_counting) {
         __atomic_fetch_sub(&tasks_alive, 1, __ATOMIC_RELAXED);
@@ -2015,7 +2073,18 @@ static void step(SableTask *task) {
         task->frame = task->start(task->context);
     }
 
+    // The task's accesses in progress are the thread's while it runs; with
+    // none on either side, as nearly always, there are none to swap.
+    bool apart = sable_access_count > 0 || task->accesses.count > 0;
+    if (apart) {
+        accesses_swap(&task->accesses);
+    }
+
     bool finished = task->resume(task->frame) & 1;
+    if (apart || sable_access_count > 0) {
+        accesses_swap(&task->accesses);
+    }
+
     if (finished) {
         // Its body is done, and its frames go; it is done once its children are.
         slab_pop(&task->frames, task->frame);
@@ -2224,6 +2293,7 @@ static void pool_start(void) {
     }
 
     if (count > 0) {
+        sable_threads_begin();
         workers = calloc((size_t)count, sizeof(Worker));
         if (workers == NULL) {
             sable_trap("out of memory");

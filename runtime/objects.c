@@ -458,7 +458,8 @@ static void report_frames(void);
 static void report_tasks(void);
 static void forget_immortal_reach(void);
 static void trap_hook_forget(void);
-static bool tracking;
+static bool tracking, checking_shared;
+static void check_shared(SableObject *object);
 
 // What ARC did: the counts the benchmarks track, and what the ARC passes are
 // measured by. Retains and releases count only those that touch a count —

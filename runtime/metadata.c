@@ -487,7 +487,7 @@ void *sable_opaque_box(void *buffer, const SableTypeMetadata *type) {
 void *sable_box_unique(void **slot, const SableTypeMetadata *type) {
     SableObject *box = *slot;
     int64_t offset = type->alignment > (int64_t)sizeof(SableObject) ? type->alignment : (int64_t)sizeof(SableObject);
-    if (box->strong == 1 && !(object_flags(box) & SABLE_IMMORTAL)) {
+    if (strong_count(box) == 1 && !(object_flags(box) & SABLE_IMMORTAL)) {
         return (char *)box + offset;
     }
 

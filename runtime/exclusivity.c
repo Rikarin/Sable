@@ -21,10 +21,28 @@ typedef struct SableAccess {
     int32_t modify;
 } SableAccess;
 
-// Per thread: a task's accesses are its own, and run on its thread.
+// Those of what the thread runs now: a task's are its own, and go with it as
+// it waits with one in progress — an async function's inout argument — and
+// another thread goes on with it (tasks.c's step).
 static _Thread_local SableAccess *accesses;
 _Thread_local int64_t sable_access_count;
 static _Thread_local int64_t access_capacity;
+
+// A task's accesses, while it does not run; and a thread's own, while it
+// runs a task. Empty for most.
+typedef struct SableAccesses {
+    SableAccess *list;
+    int64_t count, capacity;
+} SableAccesses;
+
+// The thread's accesses swapped for others.
+static inline void accesses_swap(SableAccesses *other) {
+    SableAccesses here = { accesses, sable_access_count, access_capacity };
+    accesses = other->list;
+    sable_access_count = other->count;
+    access_capacity = other->capacity;
+    *other = here;
+}
 
 // A storage of no bytes still has a place: one byte of it.
 static bool overlaps(const SableAccess *access, const char *storage, int64_t size) {

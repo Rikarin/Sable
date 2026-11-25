@@ -377,7 +377,8 @@ public sealed class PromoteToStack : ISilPass {
         pending.Push(value);
         while (pending.Count > 0) {
             var current = pending.Pop();
-            if (!seen.Add(current) || current.Type.IsTrivial && current is not AllocStackInst) {
+            // An address is followed for what it holds: a slot's, an inout parameter's.
+            if (!seen.Add(current) || current.Type.IsTrivial && current.Type is not AddressType { Pointee.IsTrivial: false }) {
                 continue;
             }
 
@@ -409,8 +410,20 @@ public sealed class PromoteToStack : ISilPass {
 
             // A local slot: what is loaded from it is followed; anything else
             // given the slot's address may keep what it holds.
-            case LoadInst load when value is AllocStackInst:
+            // An inout parameter's is the same, in the callee.
+            case LoadInst load when value.Type is AddressType:
                 pending.Push(load);
+                return false;
+
+            case StructElementAddrInst or TupleElementAddrInst when value.Type is AddressType:
+                pending.Push(user);
+                return false;
+
+            // What an array's elements hold is not the array.
+            case BuiltinInst { Name: "array_element_addr" } when value is not AllocStackInst && value.Type is AddressType:
+                return false;
+
+            case BuiltinInst marker when SharedStorage.IsMarker(marker.Name):
                 return false;
 
             case StoreInst store when ReferenceEquals(store.Value, value):
@@ -421,7 +434,7 @@ public sealed class PromoteToStack : ISilPass {
 
                 return true;
 
-            case StoreInst when value is AllocStackInst:
+            case StoreInst when value.Type is AddressType:
                 return false;
 
             case BranchInst branch:
@@ -514,7 +527,7 @@ public sealed class PromoteToStack : ISilPass {
         && (builtin.Name is "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve"
                 or "array_rotate" or "array_store_slice" or "array_append_utf8" or "array_append_repeating" or "array_append_all"
             || builtin.Name.StartsWith("bytes_store_array_", StringComparison.Ordinal))
-        && value is AllocStackInst
+        && value.Type is AddressType
         && ReferenceEquals(builtin.Operands[0], value)
         && !builtin.Operands.Skip(1).Any(o => ReferenceEquals(o, value));
 

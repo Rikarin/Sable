@@ -2096,6 +2096,22 @@ public static class SilBuiltins {
             return operands is [var shared] ? new([shared], SilType.Unit) : null;
         }
 
+        // A value about to be put in an object, or an array's or a box's in
+        // the slot at an address, or what the storage inside it holds now:
+        // shared if the object is. And into a global: if threads were started
+        // (ShareStores). What a box holds is of the type its metadata says.
+        if (name == "share_into_at" && operands is [AddressType boxed, AddressType held, var described] && described == SilType.Metadata) {
+            return new([boxed, held, described], SilType.Unit);
+        }
+
+        if (name is "share_into" or "share_into_at") {
+            return operands is [ClassType or AddressType, var into] && (name == "share_into" || into is AddressType) ? new([operands[0], into], SilType.Unit) : null;
+        }
+
+        if (name is "share_global" or "share_global_at") {
+            return operands is [var global] && (name == "share_global" || global is AddressType) ? new([global], SilType.Unit) : null;
+        }
+
         // An object whose initialiser threw, on its way out: it was never
         // made, so no deinit of its runs when it goes, though the fields
         // set so far are destroyed as ever.

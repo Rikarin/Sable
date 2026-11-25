@@ -1,0 +1,430 @@
+module SharedStorageTests
+
+import Sable.Concurrency
+import Sable.Testing
+
+// What a global, an '@immortal' object, a generator's frame, a captured
+// variable or an unowned reference gives several threads is counted atomically.
+
+@immutable
+final class Held {
+    let live: Atomic<Int>
+    let n: Int
+
+    init(_ live: Atomic<Int>, _ n: Int = 0) {
+        self.live = live
+        self.n = n
+        live.add(1)
+    }
+
+    deinit {
+        live.subtract(1)
+    }
+}
+
+var globalOne: Held? = none
+var globalList: Held[>..] = []
+var globalTable: [Int: Held] = [:]
+let counter: Atomic<Int> = Atomic<Int>(0)
+let fixed: Held = Held(counter, 5)
+let fixedList: Held[>..] = [Held(counter, 1), Held(counter, 2)]
+
+final class Holder {
+    var one: Held? = none
+    var list: Held[>..] = []
+    init() { }
+}
+
+struct Statics {
+    @immortal
+    static let holder: Holder = Holder()
+    static let names: String[>..] = ["a" + "b", "c" + "d"]
+}
+
+struct Back {
+    unowned let target: Held
+}
+
+final class Owner {
+    var held: Held
+    var backs: Back[>..] = []
+    weak var weakly: Holder? = none
+    unowned var direct: Held
+    unowned(unsafe) let fast: Held
+    let keep: Holder = Holder()
+    init(_ held: Held) {
+        self.held = held
+        direct = held
+        fast = held
+        backs.append(Back { target: held })
+        weakly = keep
+        keep.one = held
+    }
+}
+
+final class Boxes {
+    var owner: Owner? = none
+    var backs: Back[>..] = []
+    var kept: Held[>..] = []
+    var make: (() -> Held?)? = none
+    var set: ((Held) -> Void)? = none
+    init() { }
+}
+
+@inline(never)
+fn assign(_ slot: inout Held?, _ held: Held) { slot = held }
+
+@inline(never)
+fn append(_ slot: inout Held[>..], _ held: Held) {
+    if slot.count > 20 {
+        slot = []
+    }
+    slot.append(held)
+}
+
+@inline(never)
+fn insert(_ slot: inout [Int: Held], _ i: Int, _ held: Held) { slot[i % 10] = held }
+
+@inline(never)
+fn setDirect(_ owner: inout Owner?, _ held: Held) {
+    if let o = owner {
+        o.held = held
+        o.direct = held
+    }
+}
+
+async fn hammer(_ live: Atomic<Int>, _ lock: Mutex<Boxes>, _ store: (Boxes, Held, Int) -> Void, _ load: (Boxes) -> Held?) {
+    await withTaskGroup(of: Int.self) { group in
+        for task in 0..<4 {
+            unsafe {
+                group.spawn {
+                    var kept: Held[>..] = []
+                    for i in 0..<800 {
+                        if i % 5 == 0 {
+                            lock.withLock { store($0, Held(live, i), i) }
+                        }
+                        if let held = lock.withLock({ load($0) }) {
+                            for _ in 0..<8 {
+                                kept.append(held)
+                            }
+                        }
+                        if kept.count > 50 {
+                            kept = []
+                        }
+                    }
+                    return kept.count + task
+                }
+            }
+        }
+        await group.waitForAll()
+    }
+}
+
+// An async function's inout, over a wait.
+@inline(never)
+async fn assignLater(_ slot: inout Held?, _ held: Held) {
+    await Task.yield()
+    slot = held
+    await Task.yield()
+}
+
+@inline(never)
+async fn failLater(_ slot: inout Held?, _ held: Held) throws(Failure) {
+    await Task.yield()
+    slot = held
+    throw Failure()
+}
+
+struct Failure: Error {
+    fn debugDescription() -> String { return "Failure" }
+}
+
+fn numbers(_ live: Atomic<Int>) -> some Iterator<Held> {
+    var held = Held(live, 1)
+    for i in 0..<1000000 {
+        yield held
+        assignHeld(&held, Held(live, i))
+    }
+}
+
+@inline(never)
+fn assignHeld(_ slot: inout Held, _ held: Held) { slot = held }
+
+final class Async {
+    var one: Held? = none
+    init() { }
+}
+
+actor Keeper {
+    var one: Held? = none
+    var thrown: Boom? = none
+    var list: Held[>..] = []
+    let inner: Async = Async()
+    init() { }
+    async fn go(_ held: Held) {
+        await assignLater(&inner.one, held)
+    }
+    async fn fail(_ held: Held) {
+        do {
+            try await failLater(&inner.one, held)
+        } catch { }
+    }
+    fn get() -> Held? { return inner.one }
+    fn boom(_ held: Held) throws(Boom) {
+        let b = Boom(held)
+        thrown = b
+        throw b
+    }
+    fn lastBoom() -> Boom? { return thrown }
+}
+
+@immutable
+final class Boom: Error {
+    let held: Held
+    init(_ held: Held) { self.held = held }
+    fn debugDescription() -> String { return "Boom" }
+}
+
+async fn hammerKeeper(_ live: Atomic<Int>) {
+    let keeper = Keeper()
+    let turn = AsyncMutex()
+    await withTaskGroup(of: Int.self) { group in
+        for task in 0..<4 {
+            group.spawn {
+                var kept: Held[>..] = []
+                var booms: Boom[>..] = []
+                for i in 0..<200 {
+                    if i % 5 == 0 {
+                        await turn.lock()
+                        await keeper.go(Held(live, i))
+                        turn.unlock()
+                        await turn.lock()
+                        await keeper.fail(Held(live, i))
+                        turn.unlock()
+                        do {
+                            try await keeper.boom(Held(live, i))
+                        } catch {
+                            booms.append(error)
+                            booms.append(error)
+                        }
+                    }
+                    await turn.lock()
+                    let got = await keeper.get()
+                    turn.unlock()
+                    if let held = got {
+                        for _ in 0..<8 {
+                            kept.append(held)
+                        }
+                    }
+                    if let b = await keeper.lastBoom() {
+                        booms.append(b)
+                        booms.append(b)
+                    }
+                    if kept.count > 50 {
+                        kept = []
+                        booms = []
+                    }
+                }
+                return kept.count + task
+            }
+        }
+        await group.waitForAll()
+    }
+}
+
+async fn store(_ which: Int) {
+    let live = Atomic<Int>(0)
+    if true {
+        let box = Mutex(Boxes())
+        if which == 0 {
+            await hammer(live, box, { b, h, i in assign(&globalOne, h) }, { b in globalOne })
+        }
+        if which == 1 {
+            await hammer(live, box, { b, h, i in globalOne = h }, { b in globalOne })
+        }
+        if which == 2 {
+            await hammer(live, box, { b, h, i in append(&globalList, h) }, { b in globalList.first })
+        }
+        if which == 3 {
+            await hammer(live, box, { b, h, i in insert(&globalTable, i, h) }, { b in globalTable[0] })
+        }
+        if which == 4 {
+            await hammer(live, box, { b, h, i in
+                let _ = Statics.names
+            }, { b in Statics.names.count > 3 ? none : fixedList[0] })
+        }
+        if which == 5 {
+            await hammer(live, box, { b, h, i in assign(&Statics.holder.one, h) }, { b in Statics.holder.one })
+        }
+        if which == 6 {
+            await hammer(live, box, { b, h, i in append(&Statics.holder.list, h) }, { b in Statics.holder.list.first })
+        }
+        if which == 7 {
+            await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
+                if let o = b.owner {
+                    return o.backs[0].target
+                }
+                return none
+            })
+        }
+        if which == 8 {
+            await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
+                if let o = b.owner {
+                    return o.direct
+                }
+                return none
+            })
+        }
+        if which == 9 {
+            await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
+                if let o = b.owner {
+                    return o.weakly?.one
+                }
+                return none
+            })
+        }
+        if which == 10 {
+            await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
+                if let o = b.owner {
+                    return o.fast
+                }
+                return none
+            })
+        }
+        if which == 11 {
+            await hammer(live, box, { b, h, i in
+                if b.owner == none {
+                    b.owner = Owner(h)
+                }
+                setDirect(&b.owner, h)
+            }, { b -> Held? in
+                if let o = b.owner {
+                    return o.direct
+                }
+                return none
+            })
+        }
+        if which == 12 {
+            await hammer(live, box, { b, h, i in
+                var captured: Held? = none
+                b.make = { captured }
+                b.set = { captured = $0 }
+                if let put = b.set {
+                    put(h)
+                }
+            }, { b -> Held? in
+                if let make = b.make {
+                    return make()
+                }
+                return none
+            })
+        }
+        if which == 13 { await hammerKeeper(live) }
+        if which == 14 {
+            await hammer(live, box, { b, h, i in
+                if b.make == none {
+                    var it = numbers(live)
+                    b.make = { it.next() }
+                }
+            }, { b -> Held? in
+                if let make = b.make {
+                    return make()
+                }
+                return none
+            })
+        }
+        if which == 15 {
+            await hammer(live, box, { b, h, i in
+                b.kept = [h]
+                let back = Back { target: h }
+                b.backs = []
+                b.backs.append(back)
+            }, { b -> Held? in b.backs.count > 0 ? b.backs[0].target : none })
+        }
+        if which == 16 {
+            await hammer(live, box, { b, h, i in
+                let _ = h
+            }, { b in fixed })
+        }
+        globalOne = none
+        globalList = []
+        globalTable = [:]
+        Statics.holder.one = none
+        Statics.holder.list = []
+    }
+    assertEqual(live.load(), 0)
+}
+
+@test
+fn whatGlobalsAndFramesHoldIsCountedOnEveryThread() async {
+    for i in 0..<17 {
+        await store(i)
+    }
+}
+
+final class Parent {
+    let n: Int
+    init(_ n: Int) { self.n = n }
+}
+
+struct BackTo {
+    unowned let parent: Parent
+}
+
+final class Child {
+    unowned let parent: Parent
+    unowned(unsafe) let fast: Parent
+    let backs: BackTo[>..]
+    init(_ parent: Parent) {
+        self.parent = parent
+        fast = parent
+        backs = [BackTo { parent: parent }]
+    }
+}
+
+@inline(never)
+fn use(_ parent: Parent) -> Int { return parent.n }
+
+@inline(never)
+fn spin(_ read: () -> Parent) -> Int {
+    var kept: Parent[>..] = []
+    var total = 0
+    for i in 0..<20000 {
+        kept.append(read())
+        total = total + use(kept[0])
+        if kept.count > 20 {
+            kept = []
+        }
+    }
+    return total
+}
+
+@test
+fn whatAnUnownedReferenceNamesIsCountedOnEveryThread() async {
+    for k in 0..<3 {
+        await readUnowned(k)
+    }
+}
+
+async fn readUnowned(_ k: Int) {
+    let parent = Parent(k)
+    let child = Child(parent)
+    await withTaskGroup(of: Int.self) { group in
+        for _ in 0..<3 {
+            unsafe {
+                group.spawn {
+                    let c = child
+                    if k == 0 {
+                        return spin { c.parent }
+                    }
+                    if k == 1 {
+                        return spin { c.fast }
+                    }
+                    return spin { c.backs[0].parent }
+                }
+            }
+        }
+        let _ = spin { parent }
+        await group.waitForAll()
+    }
+}

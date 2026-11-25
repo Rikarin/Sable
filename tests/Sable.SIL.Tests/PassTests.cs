@@ -1094,4 +1094,49 @@ public sealed class PassTests {
         Assert.DoesNotContain("array_set_unique", builtins);
         Assert.Equal(231L, new SilInterpreter(module).Run("M.run"));
     }
+
+    /// <summary>
+    ///     A field lent to a call is looked at once the call is done, whichever
+    ///     way it ends; a store whose owner is in sight shares the value first;
+    ///     and a global's is tested for.
+    /// </summary>
+    [Fact]
+    public void WhatACallLeavesInAnObjectsFieldIsShared() {
+        var module = Lowered(
+            """
+            final class Node { }
+            final class Box {
+                var node: Node? = none
+                var nodes: Node[>..] = []
+            }
+            struct Failure: Error {
+                fn debugDescription() -> String { return "" }
+            }
+            var global: Node? = none
+            @inline(never)
+            fn put(_ slot: inout Node?) { slot = Node() }
+            @inline(never)
+            fn tryPut(_ slot: inout Node?) throws(Failure) { throw Failure() }
+            fn lent(_ box: Box) { put(&box.node) }
+            fn thrown(_ box: Box) { do { try tryPut(&box.node) } catch { } }
+            fn stored(_ box: Box, _ node: Node) { box.node = node }
+            fn element(_ box: Box, _ nodes: inout Node?[>..]) { put(&nodes[0]) }
+            fn toGlobal(_ node: Node) { global = node }
+            fn globalLent() { put(&global) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        AsyncLowering.Run(module);
+        Assert.Empty(SilVerifier.Verify(module));
+
+        int Shares(string function, string name) =>
+            module.Find($"M.{function}")!.Blocks.SelectMany(static b => b.Instructions).Count(i => i is BuiltinInst builtin && builtin.Name == name);
+
+        Assert.Equal(1, Shares("lent", "share_into_at"));
+        Assert.Equal(2, Shares("thrown", "share_into_at"));
+        Assert.Equal(1, Shares("stored", "share_into"));
+        Assert.Equal(1, Shares("element", "share_into_at"));
+        Assert.Equal(1, Shares("toGlobal", "share_global"));
+        Assert.Equal(1, Shares("globalLent", "share_global_at"));
+    }
 }

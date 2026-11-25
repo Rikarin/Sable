@@ -80,28 +80,8 @@ public static class AsyncLowering {
         }
 
         module.AsyncLowered = true;
-        ShareStores(module);
+        ShareStores.Run(module);
         new Lowering(module).Run();
-    }
-
-    /// <summary>
-    ///     A value stored into an object's field may be reached from every
-    ///     thread the object is: each store of one that holds references
-    ///     into a class's field is preceded by <c>share_into</c>, which shares
-    ///     the value — counts it atomically, and what it reaches — when the
-    ///     object is shared already (runtime/tasks.c's sable_share), and is a
-    ///     test of a bit otherwise. A frame's fields are its task's alone, and
-    ///     so are those of an object just made (<see cref="InitFields" />).
-    /// </summary>
-    static void ShareStores(SilModule module) {
-        foreach (var block in module.Functions.SelectMany(static f => f.Blocks)) {
-            for (var i = 0; i < block.Instructions.Count; i++) {
-                if (block.Instructions[i] is StoreInst { IntoFresh: false, Value: var value, Address: RefElementAddrInst { Reference: { Type: ClassType { IsCoroutineFrame: false } } owner } } store
-                    && !value.Type.IsTrivial && value.Type is not AddressType) {
-                    block.Instructions.Insert(i++, new BuiltinInst("share_into", SilType.Unit, owner, value) { Block = block, Location = store.Location });
-                }
-            }
-        }
     }
 
     /// <summary>The name of an async function's resume function.</summary>

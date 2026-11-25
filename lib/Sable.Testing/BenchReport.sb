@@ -1,0 +1,302 @@
+module Sable.Testing
+
+import Sable.Math
+import Sable.Text
+
+// What is written of benchmarks' results: a line each, a table as Markdown
+// or CSV, all of it as JSON, a baseline to compare with, and a history's rows.
+
+/// A result's line, after its name: '12.40 µs ± 0.10 µs (median 12.38 µs,
+/// 15 × 800 iterations, 1 outlier), allocations 3 (96 B), retains 4, releases 5'.
+fn benchLine(_ result: BenchResult) -> String {
+    let s = result.statistics
+    let m = result.measurement
+    let memory = m.memoryPerOperation
+    var line = "\(formatNanoseconds(s.mean)) ± \(formatNanoseconds(s.margin)) (median \(formatNanoseconds(s.median)), \(s.count) × \(iterationsOf(m)) iterations"
+    if s.removed > 0 {
+        line += ", \(s.removed) outlier\(plural(s.removed))"
+    }
+    line += "), allocations \(formatCount(memory.allocations)) (\(formatBytes(memory.bytes))), retains \(formatCount(memory.retains)), releases \(formatCount(memory.releases))"
+    if let counters = m.counters {
+        if counters.instructions >= 0.0 {
+            line += ", instructions \(formatCount(counters.instructions / F64(m.operations)))"
+        }
+        if counters.cycles >= 0.0 {
+            line += ", cycles \(formatCount(counters.cycles / F64(m.operations)))"
+        }
+    }
+    let throughput = throughputOf(result)
+    return throughput.isEmpty ? line : line + ", " + throughput
+}
+
+// A sample's iterations; the first's, when they differ from launch to launch.
+fn iterationsOf(_ m: BenchMeasurement) -> Int {
+    return m.samples.isEmpty ? 0 : m.samples[0].iterations
+}
+
+// '1.20 GB/s' or '3.40 M items/s', or both: of the median, an iteration's
+// bytes and items being those of all its operations.
+fn throughputOf(_ result: BenchResult) -> String {
+    let m = result.measurement
+    let seconds = result.statistics.median * F64(m.operations) / 1e9
+    if seconds <= 0.0 {
+        return ""
+    }
+    var parts: String[>..] = []
+    if m.bytes > 0 {
+        parts.append("\(formatScaled(F64(m.bytes) / seconds))B/s")
+    }
+    if m.items > 0 {
+        parts.append("\(formatScaled(F64(m.items) / seconds))items/s")
+    }
+    return parts.joined(separator: ", ")
+}
+
+/// A number and its thousands: '1.20 G', '3.40 M', '5.60 k', '7.80 '.
+fn formatScaled(_ value: F64) -> String {
+    for (scale, letter) in [(1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "k")] {
+        if value >= scale {
+            return "\(value / scale:.2f) \(letter)"
+        }
+    }
+    return "\(value:.2f) "
+}
+
+/// Bytes: '96 B', '1.50 KiB', '2.00 MiB'.
+fn formatBytes(_ bytes: F64) -> String {
+    for (scale, unit) in [(1073741824.0, "GiB"), (1048576.0, "MiB"), (1024.0, "KiB")] {
+        if bytes >= scale {
+            return "\(bytes / scale:.2f) \(unit)"
+        }
+    }
+    return "\(formatCount(bytes)) B"
+}
+
+/// A count an operation: a whole number as one, else to a hundredth.
+fn formatCount(_ value: F64) -> String {
+    let whole = value.rounded(.ToNearestOrEven)
+    if (whole - value).abs() < 0.005 && whole.abs() < 1e15 {
+        return "\(Int(whole))"
+    }
+    return "\(value:.2f)"
+}
+
+/// A table of the results: a row a benchmark (and job), its mean, its 99.9 %
+/// margin, deviation and median, throughput, what an operation allocates,
+/// and the comparison where there is one.
+public fn benchMarkdown(_ results: BenchResult[>..]) -> String {
+    let compares = results.contains(where: { $0.comparison != none })
+    let hasJobs = results.contains(where: { !$0.job.isEmpty })
+    let table = TextBuilder()
+    table.append("| benchmark |\(hasJobs ? " job |" : "") mean | ± 99.9 % | deviation | median | throughput | allocations | allocated | retains | releases |")
+    table.appendLine(compares ? " change | p | verdict |" : "")
+    table.append("|:--|\(hasJobs ? ":--|" : "")--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+    table.appendLine(compares ? "--:|--:|:--|" : "")
+    for r in results {
+        let s = r.statistics
+        let memory = r.measurement.memoryPerOperation
+        var cells: String[>..] = ["`\(r.measurement.name)`"]
+        if hasJobs {
+            cells.append(r.job)
+        }
+        cells.append(formatNanoseconds(s.mean))
+        cells.append(formatNanoseconds(s.margin))
+        cells.append(formatNanoseconds(s.deviation))
+        cells.append(formatNanoseconds(s.median))
+        cells.append(throughputOf(r))
+        cells.append(formatCount(memory.allocations))
+        cells.append(formatBytes(memory.bytes))
+        cells.append(formatCount(memory.retains))
+        cells.append(formatCount(memory.releases))
+        if compares {
+            if let c = r.comparison {
+                cells.append("\((c.ratio - 1.0) * 100.0:+.2f)%")
+                cells.append("\(c.probability:.4f)")
+                cells.append(c.verdict.text)
+            } else {
+                cells.append("")
+                cells.append("")
+                cells.append("")
+            }
+        }
+        table.appendLine("| " + cells.joined(separator: " | ") + " |")
+    }
+    return table.build()
+}
+
+/// The same as comma-separated values, with a row of names first: times in
+/// nanoseconds an operation, throughputs a second, all of them plain numbers.
+public fn benchCsv(_ results: BenchResult[>..]) -> String {
+    let rows = TextBuilder()
+    rows.appendLine(
+        "benchmark,job,mean_ns,margin_ns,deviation_ns,median_ns,minimum_ns,maximum_ns,samples,outliers,iterations,"
+            + "bytes_per_second,items_per_second,allocations,allocated_bytes,retains,releases,instructions,cycles,change,p,verdict"
+    )
+    for r in results {
+        let s = r.statistics
+        let m = r.measurement
+        let memory = m.memoryPerOperation
+        let seconds = s.median * F64(m.operations) / 1e9
+        var cells: String[>..] = [quoted(m.name), quoted(r.job)]
+        for number in [s.mean, s.margin, s.deviation, s.median, s.minimum, s.maximum] {
+            cells.append("\(number:.3f)")
+        }
+        for number in [s.count, s.removed, iterationsOf(m)] {
+            cells.append("\(number)")
+        }
+        for amount in [m.bytes, m.items] {
+            cells.append(amount > 0 && seconds > 0.0 ? "\(F64(amount) / seconds:.0f)" : "")
+        }
+        for number in [memory.allocations, memory.bytes, memory.retains, memory.releases] {
+            cells.append("\(number:.3f)")
+        }
+        for number in [m.counters?.instructions ?? -1.0, m.counters?.cycles ?? -1.0] {
+            cells.append(number >= 0.0 ? "\(number / F64(m.operations):.1f)" : "")
+        }
+        if let c = r.comparison {
+            cells.append("\(c.ratio - 1.0:.4f)")
+            cells.append("\(c.probability:.6f)")
+            cells.append(c.verdict.text)
+        } else {
+            cells.append(",,")
+        }
+        rows.appendLine(cells.joined(separator: ","))
+    }
+    return rows.build()
+}
+
+// A field in quotes when it has a comma, a quote or a line's end.
+fn quoted(_ field: String) -> String {
+    if field.contains(",") || field.contains("\"") || field.contains("\n") {
+        return "\"" + field.replacing("\"", with: "\"\"") + "\""
+    }
+    return field
+}
+
+extension BenchVerdict {
+    /// As the reports have it.
+    var text: String {
+        get {
+            match self {
+                case .Improved => { return "improved" }
+                case .WithinNoise => { return "within noise" }
+                case .Regressed => { return "REGRESSED" }
+            }
+        }
+    }
+}
+
+/// All of the results: of each, its statistics, its samples as they are
+/// ('wall' and 'processor', nanoseconds an operation, overhead taken out),
+/// its memory, counters, throughput's amounts, its check, and the comparison.
+public fn benchJson(_ results: BenchResult[>..], processor: Bool) -> String {
+    let text = TextBuilder()
+    text.append("{\n  \"format\": 1,\n  \"metric\": \"\(processor ? "processor" : "wall")\",\n  \"benchmarks\": [")
+    var first = true
+    for r in results {
+        text.append(first ? "\n" : ",\n")
+        first = false
+        let s = r.statistics
+        let m = r.measurement
+        let memory = m.memoryPerOperation
+        text.append("    {\n      \"name\": \(jsonText(m.name)), \"job\": \(jsonText(r.job)), \"location\": \(jsonText(r.location)),\n")
+        text.append("      \"check\": \(jsonText(m.check)), \"operations\": \(m.operations), \"bytes\": \(m.bytes), \"items\": \(m.items),\n")
+        text.append("      \"mean\": \(s.mean), \"margin\": \(s.margin), \"deviation\": \(s.deviation), \"median\": \(s.median),\n")
+        text.append("      \"minimum\": \(s.minimum), \"maximum\": \(s.maximum), \"samples\": \(s.count), \"outliers\": \(s.removed),\n")
+        text.append("      \"iterations\": [\(m.samples.map({ "\($0.iterations)" }).joined(separator: ", "))],\n")
+        text.append("      \"wall\": [\(numbers(m.nanoseconds(processor: false)))],\n")
+        text.append("      \"processor\": [\(numbers(m.nanoseconds(processor: true)))],\n")
+        text.append("      \"allocations\": \(memory.allocations), \"allocatedBytes\": \(memory.bytes), \"retains\": \(memory.retains), \"releases\": \(memory.releases)")
+        if let counters = m.counters {
+            let operations = F64(m.operations)
+            text.append(",\n      \"instructions\": \(counters.instructions < 0.0 ? "null" : "\(counters.instructions / operations)"), \"cycles\": \(counters.cycles < 0.0 ? "null" : "\(counters.cycles / operations)")")
+        }
+        if let c = r.comparison {
+            text.append(",\n      \"ratio\": \(c.ratio), \"p\": \(c.probability), \"verdict\": \(jsonText(c.verdict.text))")
+        }
+        text.append("\n    }")
+    }
+    text.append("\n  ]\n}\n")
+    return text.build()
+}
+
+fn numbers(_ values: F64[>..]) -> String {
+    return values.map({ "\($0)" }).joined(separator: ", ")
+}
+
+// A text as JSON has it.
+fn jsonText(_ value: String) -> String {
+    let text = TextBuilder()
+    text.append("\"")
+    for c in value {
+        if c == '"' || c == '\\' {
+            text.append("\\")
+            text.append(String.fromChar(c))
+        } else if c < ' ' {
+            text.append("\\u\(c.codePoint:04x)")
+        } else {
+            text.append(String.fromChar(c))
+        }
+    }
+    text.append("\"")
+    return text.build()
+}
+
+/// A baseline: a line a benchmark, its name and its samples, as iterations,
+/// wall and processor nanoseconds of all of them, tabs between; the loop's
+/// overhead is out of them already, and each is of one operation.
+public fn formatBaseline(_ results: BenchResult[>..]) -> String {
+    let lines = TextBuilder()
+    lines.appendLine("# sable bench baseline 2: name, then each sample's wall and processor nanoseconds an operation")
+    for r in results {
+        lines.append(r.measurement.name)
+        let wall = r.measurement.nanoseconds(processor: false)
+        let processor = r.measurement.nanoseconds(processor: true)
+        for i in 0..<wall.count {
+            lines.append("\t\(wall[i]:.3f) \(processor[i]:.3f)")
+        }
+        lines.appendLine("")
+    }
+    return lines.build()
+}
+
+/// What 'formatBaseline' wrote.
+public fn parseBaseline(_ text: String) -> BenchMeasurement[>..] {
+    var results: BenchMeasurement[>..] = []
+    // Lines and fields are pieces of the text, the numbers read where they
+    // lie: only a result's name is copied out.
+    for line in text.asSubstring.lines() {
+        if line.hasPrefix("#") {
+            continue
+        }
+        let fields = line.split('\t')
+        var samples: BenchSample[>..] = []
+        for field in fields[1...] {
+            let pair = field.split(' ')
+            if pair.count == 2 {
+                if let wall = try? F64.parse(pair[0].toString()), let processor = try? F64.parse(pair[1].toString()) {
+                    samples.append(BenchSample(iterations: 1, wall: wall, processor: processor))
+                }
+            }
+        }
+        if !samples.isEmpty {
+            results.append(BenchMeasurement(name: fields[0].toString(), samples: samples))
+        }
+    }
+    return results
+}
+
+/// What a history begins with (benchmarks/history.tsv).
+let benchHistoryHeader: String = "date\tcommit\tbenchmark\tms\tallocations\tretains\treleases\n"
+
+/// A row a benchmark: the stamp, its name, the median in milliseconds an
+/// operation and what an operation allocates and counts.
+fn benchHistory(_ results: BenchResult[>..], _ stamp: String) -> String {
+    let rows = TextBuilder()
+    for r in results {
+        let memory = r.measurement.memoryPerOperation
+        let name = r.job.isEmpty ? r.measurement.name : "\(r.measurement.name)[\(r.job)]"
+        rows.appendLine("\(stamp)\t\(name)\t\(r.statistics.median / 1e6:.6f)\t\(formatCount(memory.allocations))\t\(formatCount(memory.retains))\t\(formatCount(memory.releases))")
+    }
+    return rows.build()
+}

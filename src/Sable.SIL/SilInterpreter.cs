@@ -2062,6 +2062,18 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     _ => 0L,
                 };
 
+            // Nothing is counted but what the machine itself does, and its
+            // time is this process's.
+            case "memory_counting":
+                return null;
+
+            case "measurement":
+                return (long)operands[0]! switch {
+                    0 => (long)Environment.CpuUsage.TotalTime.TotalNanoseconds,
+                    1 => 0L,
+                    _ => -1L,
+                };
+
             case "memory_statistic":
                 return (long)operands[0]! switch {
                     0 => Allocations,

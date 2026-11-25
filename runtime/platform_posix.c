@@ -29,10 +29,13 @@
 
 #if defined(__linux__)
 #include <link.h>
+#include <linux/perf_event.h>
 #include <netpacket/packet.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/syscall.h>
 #else
+#include <libproc.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <net/if_dl.h>
@@ -571,6 +574,59 @@ static int64_t peak_memory(void) {
     return (int64_t)usage.ru_maxrss; // bytes
 #else
     return (int64_t)usage.ru_maxrss * 1024; // kilobytes
+#endif
+}
+
+// The children's is in microseconds, as getrusage has it; the process's own
+// from its clock, which is finer.
+static int64_t processor_time(bool children) {
+    if (!children) {
+        struct timespec now;
+        return clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now) == 0 ? (int64_t)now.tv_sec * 1000000000 + now.tv_nsec : -1;
+    }
+
+    struct rusage usage;
+    if (getrusage(RUSAGE_CHILDREN, &usage) != 0) {
+        return -1;
+    }
+
+    return ((int64_t)usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000000000
+        + ((int64_t)usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) * 1000;
+}
+
+// macOS counts for every process, and says so to the process itself. Linux
+// counts what is asked for, from then on, with perf_event_open: user mode
+// only, which perf_event_paranoid allows up to 2 (a container, or a virtual
+// machine whose host does not pass the counters on, has none).
+static int64_t hardware_counter(bool cycles) {
+#if defined(__APPLE__)
+    struct rusage_info_v4 usage;
+    if (proc_pid_rusage(getpid(), RUSAGE_INFO_V4, (rusage_info_t *)&usage) != 0) {
+        return -1;
+    }
+
+    int64_t count = (int64_t)(cycles ? usage.ri_cycles : usage.ri_instructions);
+    return count > 0 ? count : -1;
+#elif defined(__linux__)
+    static int counters[2] = { -2, -2 };
+    int *counter = &counters[cycles];
+    if (*counter == -2) {
+        struct perf_event_attr attributes;
+        memset(&attributes, 0, sizeof attributes);
+        attributes.type = PERF_TYPE_HARDWARE;
+        attributes.size = sizeof attributes;
+        attributes.config = cycles ? PERF_COUNT_HW_CPU_CYCLES : PERF_COUNT_HW_INSTRUCTIONS;
+        attributes.exclude_kernel = 1;
+        attributes.exclude_hv = 1;
+        attributes.inherit = 1;
+        *counter = (int)syscall(SYS_perf_event_open, &attributes, 0, -1, -1, PERF_FLAG_FD_CLOEXEC);
+    }
+
+    uint64_t count;
+    return *counter >= 0 && read(*counter, &count, sizeof count) == sizeof count ? (int64_t)count : -1;
+#else
+    (void)cycles;
+    return -1;
 #endif
 }
 

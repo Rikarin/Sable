@@ -36,10 +36,16 @@ public struct TestFilter {
 
     /// Whether the test is one of those the filter selects.
     public fn matches(_ test: TestCase) -> Bool {
+        return matches(name: test.name, location: test.location, tags: test.tags)
+    }
+
+    /// Whether one of that name, place ('file:line') and tags is selected:
+    /// a test, or a benchmark.
+    public fn matches(name: String, location: String, tags: String[>..]) -> Bool {
         var stack: Bool[>..] = []
         for step in steps {
             match step {
-                case .Term(let kind, let text) => stack.append(TestFilter.matches(test, kind, text))
+                case .Term(let kind, let text) => stack.append(TestFilter.matches(name, location, tags, kind, text))
                 case .Not => {
                     let operand = stack.removeLast()
                     stack.append(!operand)
@@ -59,10 +65,10 @@ public struct TestFilter {
         return stack[0]
     }
 
-    static fn matches(_ test: TestCase, _ kind: String, _ text: String) -> Bool {
+    static fn matches(_ name: String, _ location: String, _ tags: String[>..], _ kind: String, _ text: String) -> Bool {
         match kind {
             case "tag" => {
-                for tag in test.tags {
+                for tag in tags {
                     if text.contains('*') ? glob(text, tag) : tag == text {
                         return true
                     }
@@ -70,12 +76,12 @@ public struct TestFilter {
                 return false
             }
             case "file" => {
-                let colon = test.location.lastIndex(of: ':') ?? test.location.endIndex
-                let file = test.location[..<colon].toString()
+                let colon = location.lastIndex(of: ':') ?? location.endIndex
+                let file = location[..<colon].toString()
                 return text.contains('*') ? glob(text, file) : file.contains(text)
             }
             default => {
-                return text.contains('*') ? glob(text, test.name) : test.name.contains(text)
+                return text.contains('*') ? glob(text, name) : name.contains(text)
             }
         }
     }

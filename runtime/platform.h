@@ -90,6 +90,12 @@ static void unmap_slab(void *slab, size_t size);
 // counts it (its peak resident set); 0 where the system does not say.
 static int64_t peak_memory(void);
 
+// The processor time this process has used, or those it has waited for, in
+// nanoseconds; and the instructions it has run or the cycles it took, by the
+// processor's own counters. -1 where the system does not say.
+static int64_t processor_time(bool children);
+static int64_t hardware_counter(bool cycles);
+
 // ---- Time ----------------------------------------------------------------
 
 // Nanoseconds from some fixed point, never going back; the same, but not

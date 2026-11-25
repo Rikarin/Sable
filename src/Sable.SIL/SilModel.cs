@@ -2893,6 +2893,8 @@ public static class SilBuiltins {
         Add("system_text", SilType.String, SilType.Int);
         Add("system_number", SilType.Int, SilType.Int);
         Add("memory_statistic", SilType.Int, SilType.Int);
+        Add("memory_counting", SilType.Unit, SilType.Bool);
+        Add("measurement", SilType.Int, SilType.Int);
         Add("io_succeeded", SilType.Bool);
         // Files by handle (runtime/io.c, "File handles"): a call that fails
         // gives -1, nothing or false, and 'file_error' says why by IoError's

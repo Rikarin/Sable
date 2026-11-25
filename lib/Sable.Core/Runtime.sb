@@ -123,6 +123,18 @@ public struct Runtime {
     @builtin("memory_statistic")
     public static fn memoryStatistic(_ which: Int) -> Int
 
+    /// Counts retains, releases and bytes allocated from now on, or no
+    /// longer, as SABLE_STATS does for a whole run (Sable.Testing's Bencher).
+    @builtin("memory_counting")
+    public static fn countMemory(_ on: Bool)
+
+    /// What a benchmark measures by besides the clock: 0 this process's
+    /// processor time in nanoseconds, 1 that of the processes it waited
+    /// for, 2 the instructions it has run, 3 the cycles it took; -1 where
+    /// the system does not say.
+    @builtin("measurement")
+    public static fn measurement(_ which: Int) -> Int
+
     // ---- Time ------------------------------------------------------------
     // A monotonic clock for measuring, the wall clock for dates, both in
     // nanoseconds; and sleeping, for at least as long as asked.

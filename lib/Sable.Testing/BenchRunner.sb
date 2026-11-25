@@ -1,0 +1,514 @@
+module Sable.Testing
+
+import Sable.Math
+import Sable.Text
+
+// The harness 'sable bench' builds: which benchmarks to run, each in a
+// process of its own (the harness again, with '--run-bench <name>'), for
+// each job, and what is reported of them.
+
+/// What a benchmark is run as: a harness, and the variables set for it.
+/// 'sable bench --job' and '--compare' make one for each way to build or run it.
+struct BenchJob {
+    var name: String
+    var program: String
+    var variables: (name: String, value: String)[>..]
+}
+
+/// What was measured of a benchmark as one job, and what it came to.
+public struct BenchResult {
+    public var job: String
+    public var location: String
+    public var measurement: BenchMeasurement
+    public var statistics: BenchStatistics
+    /// With what it was held against: the first job, or a baseline.
+    public var comparison: BenchComparison?
+}
+
+struct BenchOptions {
+    var filters: String[>..] = []
+    var expression: TestFilter? = none
+    var exact: Bool = false
+    var list: Bool = false
+    var describe: Bool = false
+    var inProcess: Bool = false
+    var only: String? = none
+    var saveBaseline: String? = none
+    var baseline: String? = none
+    var directory: String = "target/bench"
+    var launches: Int? = none
+    var threshold: F64 = 0.05
+    var failOnRegression: Bool = false
+    var jobs: BenchJob[>..] = []
+    var markdown: String? = none
+    var csv: String? = none
+    var json: String? = none
+    var history: String? = none
+    /// The date and the commit of a history's row, a tab between.
+    var stamp: String = "-\t-"
+    var settings: BenchSettings = BenchSettings()
+    // The settings' arguments, for the processes started.
+    var passed: String[>..] = []
+
+    static let usage: String = """
+        usage: <harness> [filter...] [--filter <expression>] [--exact] [--list] [--quick] [--samples <n>] [--sample-ms <n>]
+                         [--warm-up-ms <n>] [--budget-ms <n>] [--metric wall|processor] [--outliers remove-upper|remove-all|keep]
+                         [--launches <n>] [--counters] [--in-process] [--save-baseline <name>] [--baseline <name or file>]
+                         [--baseline-dir <path>] [--threshold <percent>] [--fail-on-regression] [--markdown <path>] [--csv <path>]
+                         [--json <path>] [--history <path>]
+
+        """
+
+    /// From the arguments: none, having said why, when they are not understood.
+    static fn parse() -> BenchOptions? {
+        var options = BenchOptions()
+        let count = Runtime.argumentCount()
+        var i = 0
+        while i < count {
+            let argument = Runtime.argument(i)
+            i += 1
+            if !argument.hasPrefix("--") {
+                options.filters.append(argument)
+                continue
+            }
+            var value = ""
+            if BenchOptions.takesValue(argument) {
+                if i == count {
+                    Runtime.writeError("'\(argument)' takes a value\n\(usage)")
+                    return none
+                }
+                value = Runtime.argument(i)
+                i += 1
+            }
+            if !options.read(argument, value) {
+                return none
+            }
+        }
+        return options
+    }
+
+    static fn takesValue(_ option: String) -> Bool {
+        return [
+            "--filter", "--run-bench", "--samples", "--sample-ms", "--warm-up-ms", "--budget-ms", "--metric", "--outliers", "--launches",
+            "--save-baseline", "--baseline", "--baseline-dir", "--threshold", "--markdown", "--csv", "--json", "--history", "--stamp", "--job",
+        ].contains(option)
+    }
+
+    mutating fn read(_ option: String, _ value: String) -> Bool {
+        let number = (try? F64.parse(value)) ?? -1.0
+        var understood = true
+        match option {
+            case "--list" => { list = true }
+            case "--describe" => { describe = true }
+            case "--exact" => { exact = true }
+            case "--in-process" => { inProcess = true }
+            case "--run-bench" => { only = value }
+            case "--save-baseline" => { saveBaseline = value }
+            case "--baseline" => { baseline = value }
+            case "--baseline-dir" => { directory = value }
+            case "--fail-on-regression" => { failOnRegression = true }
+            case "--markdown" => { markdown = value }
+            case "--csv" => { csv = value }
+            case "--json" => { json = value }
+            case "--history" => { history = value }
+            case "--stamp" => { stamp = value }
+            case "--launches" where number >= 1.0 => { launches = Int(number) }
+            case "--threshold" where number >= 0.0 => { threshold = number / 100.0 }
+            case "--job" => { understood = readJob(value) }
+            case "--filter" => {
+                do {
+                    expression = try TestFilter(value)
+                } catch {
+                    Runtime.writeError("'--filter \(value)': \(error.message)\n")
+                    return false
+                }
+            }
+            default => { return readSetting(option, value, number) }
+        }
+        if !understood {
+            Runtime.writeError("'\(option) \(value)' is not understood\n\(BenchOptions.usage)")
+        }
+        return understood
+    }
+
+    // What a benchmark's own process is given too.
+    mutating fn readSetting(_ option: String, _ value: String, _ number: F64) -> Bool {
+        match option {
+            case "--quick" => { settings = BenchSettings.quick }
+            case "--counters" => { settings.countsInstructions = true }
+            case "--samples" where number >= 1.0 => { settings.samples = Int(number) }
+            case "--sample-ms" where number > 0.0 => { settings.sampleNanoseconds = Int(number * 1e6) }
+            case "--warm-up-ms" where number >= 0.0 => { settings.warmUpNanoseconds = Int(number * 1e6) }
+            case "--budget-ms" where number > 0.0 => { settings.budgetNanoseconds = Int(number * 1e6) }
+            case "--metric" where value == "wall" || value == "processor" => { settings.usesProcessorTime = value == "processor" }
+            case "--outliers" where value == "keep" => { settings.outliers = .Keep }
+            case "--outliers" where value == "remove-upper" => { settings.outliers = .RemoveUpper }
+            case "--outliers" where value == "remove-all" => { settings.outliers = .RemoveAll }
+            default => {
+                Runtime.writeError("unknown option '\(value.isEmpty ? option : option + " " + value)'\n\(BenchOptions.usage)")
+                return false
+            }
+        }
+        passed.append(option)
+        if !value.isEmpty {
+            passed.append(value)
+        }
+        return true
+    }
+
+    // 'name', its harness, and 'VARIABLE=value's, tabs between.
+    mutating fn readJob(_ text: String) -> Bool {
+        let fields = text.split('\t')
+        if fields.count < 2 {
+            return false
+        }
+        var job = BenchJob { name: fields[0], program: fields[1], variables: [] }
+        for field in fields[2...] {
+            let parts = field.split('=')
+            if parts.count < 2 {
+                return false
+            }
+            job.variables.append((name: parts[0], value: parts[1...].joined(separator: "=")))
+        }
+        jobs.append(job)
+        return true
+    }
+
+    fn selects(_ bench: BenchCase) -> Bool {
+        if let expression {
+            if !expression.matches(name: bench.name, location: bench.location, tags: bench.tags) {
+                return false
+            }
+        }
+        for filter in filters {
+            if exact ? bench.name == filter || bench.name.hasPrefix(filter + "(") : bench.name.contains(filter) {
+                return true
+            }
+        }
+        return filters.isEmpty
+    }
+}
+
+/// The entry point of a bench build: runs the benchmarks the arguments
+/// select, each in a process of its own, and reports what each one's
+/// operation takes and allocates; keeps the results where the options say,
+/// and compares them with a baseline or a job. Gives the exit code: 0; 1
+/// when a benchmark failed, or one computed something else in another
+/// process, or (with '--fail-on-regression') one is slower; 2 for arguments
+/// it does not understand, or a file it cannot read or write.
+public async fn runBenchmarks(_ benches: BenchCase[>..]) -> Int {
+    guard let options = BenchOptions.parse() else {
+        return 2
+    }
+
+    // One benchmark, in this process, for the harness that started it.
+    if let name = options.only {
+        for bench in benches {
+            if name != bench.name && !name.hasPrefix(bench.name + "(") {
+                continue
+            }
+            for one in bench.expanded() {
+                if one.name == name {
+                    let bencher = Bencher(name, options.settings)
+                    await one.run(bencher)
+                    if let measurement = bencher.measurement {
+                        print("\n" + measurement.encoded())
+                    }
+                    return 0
+                }
+            }
+        }
+        Runtime.writeError("no benchmark named '\(name)'\n")
+        return 3
+    }
+
+    var chosen: BenchCase[>..] = []
+    var filteredOut = 0
+    for bench in benches {
+        for one in bench.expanded() {
+            if options.selects(one) {
+                chosen.append(one)
+            } else {
+                filteredOut += 1
+            }
+        }
+    }
+    if options.list {
+        for bench in chosen {
+            print("\(bench.name): bench (\(bench.location))")
+        }
+        print("\(chosen.count) benchmark\(plural(chosen.count))")
+        return 0
+    }
+    // As 'sable test' has it of its tests: a line each, and how many were left out.
+    if options.describe {
+        for bench in chosen {
+            print("\(bench.name)\t\(bench.location)\t-\t0\t\(bench.tags.joined(separator: ","))")
+        }
+        print("filtered out\t\(filteredOut)")
+        return 0
+    }
+    return await BenchRun(options).run(chosen)
+}
+
+/// The run of the benchmarks chosen.
+class BenchRun {
+    let options: BenchOptions
+    let jobs: BenchJob[>..]
+    var results: BenchResult[>..] = []
+    var regressions: Int = 0
+    var failures: Int = 0
+    // What to compare with: a baseline by the benchmarks' names, and what
+    // it is called.
+    var against: BenchMeasurement[>..] = []
+    var againstName: String = ""
+
+    init(_ options: BenchOptions) {
+        self.options = options
+        let program = Runtime.executablePath()
+        self.jobs = options.jobs.isEmpty ? [BenchJob { name: "", program: options.inProcess ? "" : program, variables: [] }] : options.jobs
+    }
+
+    async fn run(_ chosen: BenchCase[>..]) -> Int {
+        if !readBaseline() {
+            return 2
+        }
+        let compared = againstName.isEmpty ? "" : " against baseline '\(againstName)'"
+        print("running \(chosen.count) benchmark\(plural(chosen.count))\(compared)")
+        for bench in chosen {
+            await measure(bench)
+        }
+        print("")
+        var summary = "bench result: \(results.count) measured"
+        if failures > 0 {
+            summary += "; \(failures) failed"
+        }
+        if !againstName.isEmpty || jobs.count > 1 {
+            summary += "; \(regressions) regressed"
+        }
+        print(summary)
+        if !write() {
+            return 2
+        }
+        return failures > 0 || (options.failOnRegression && regressions > 0) ? 1 : 0
+    }
+
+    // The baseline named, else the default one if there is one.
+    fn readBaseline() -> Bool {
+        if jobs.count > 1 {
+            return true
+        }
+        let name = options.baseline ?? "default"
+        let path = name.contains("/") || name.hasSuffix(".txt") ? name : options.directory + "/" + name + ".txt"
+        if let text = Runtime.readFile(path) {
+            against = parseBaseline(text)
+            againstName = name
+        } else if options.baseline != none {
+            Runtime.writeError("no baseline '\(name)' at \(path)\n")
+            return false
+        }
+        return true
+    }
+
+    // The benchmark as each job, one launch of each and then the next: what
+    // the machine does meanwhile is then done to all of them.
+    async fn measure(_ bench: BenchCase) {
+        var measured = BenchMeasurement?[>..](repeating: none, count: jobs.count)
+        var failed = Bool[>..](repeating: false, count: jobs.count)
+        for _ in 0..<(options.launches ?? (jobs.count > 1 ? 3 : 1)) {
+            for j in 0..<jobs.count {
+                if failed[j] {
+                    continue
+                }
+                guard let one = await launch(bench, jobs[j]) else {
+                    failed[j] = true
+                    continue
+                }
+                guard var all = measured[j] else {
+                    measured[j] = one
+                    continue
+                }
+                if all.check != one.check {
+                    differs(bench, all.check, one.check)
+                }
+                all.add(one)
+                measured[j] = all
+            }
+        }
+
+        var first: BenchMeasurement? = none
+        for j in 0..<jobs.count {
+            guard let one = measured[j] else {
+                continue
+            }
+            if let before = first {
+                if before.check != one.check {
+                    differs(bench, before.check, one.check)
+                }
+            }
+            report(bench, one, jobs[j].name, first)
+            if first == none {
+                first = one
+            }
+        }
+    }
+
+    fn report(_ bench: BenchCase, _ measurement: BenchMeasurement, _ job: String, _ first: BenchMeasurement?) {
+        let settings = options.settings
+        let times = measurement.nanoseconds(processor: settings.usesProcessorTime)
+        var result = BenchResult {
+            job: job, location: bench.location, measurement: measurement,
+            statistics: BenchStatistics(times, outliers: settings.outliers), comparison: none
+        }
+        var line = "bench \(bench.name)\(job.isEmpty ? "" : " [\(job)]") ... \(benchLine(result))"
+        var earlier = first
+        if earlier == none {
+            earlier = against.first(where: { $0.name == bench.name })
+        }
+        if let before = earlier {
+            let comparison = BenchComparison(before.nanoseconds(processor: settings.usesProcessorTime), times, threshold: options.threshold)
+            result.comparison = comparison
+            line += "; " + comparison.description(of: first != none ? jobs[0].name : "baseline")
+            if comparison.verdict == .Regressed {
+                regressions += 1
+            }
+        } else if !againstName.isEmpty {
+            line += "; new"
+        }
+        results.append(result)
+        print(line)
+    }
+
+    fn differs(_ bench: BenchCase, _ one: String, _ another: String) {
+        failures += 1
+        print("bench \(bench.name) ... computed '\(one)', and then '\(another)'")
+    }
+
+    // The benchmark once, in a process of its own, or here: none when it
+    // failed, or measured nothing, which has been said.
+    async fn launch(_ bench: BenchCase, _ job: BenchJob) -> BenchMeasurement? {
+        if job.program.isEmpty {
+            let bencher = Bencher(bench.name, options.settings)
+            await bench.run(bencher)
+            if let measurement = bencher.measurement {
+                return measurement
+            }
+            print("bench \(bench.name) ... did not call 'iterate'")
+            return none
+        }
+        var kept: (name: String, value: String?)[>..] = []
+        for variable in job.variables {
+            kept.append((name: variable.name, value: Runtime.environment(variable.name)))
+            // Nothing else of this process reads or sets them: it has no other task.
+            unsafe { _ = Runtime.setEnvironment(variable.name, variable.value) }
+        }
+        var arguments: String[>..] = ["--run-bench", bench.name]
+        arguments.append(contentsOf: options.passed)
+        let output = Runtime.run(job.program, arguments, "")
+        let status = output == none ? -1 : Runtime.lastExitStatus()
+        let errors = output == none ? "its process could not be started" : Runtime.lastErrorOutput()
+        for variable in kept {
+            unsafe {
+                if let value = variable.value {
+                    _ = Runtime.setEnvironment(variable.name, value)
+                } else {
+                    _ = Runtime.removeEnvironment(variable.name)
+                }
+            }
+        }
+        let name = "bench \(bench.name)\(job.name.isEmpty ? "" : " [\(job.name)]")"
+        if status == 3 {
+            print("\(name) ... not there")
+            return none
+        }
+        if status != 0 {
+            failures += 1
+            print("\(name) ... FAILED (exit status \(status))\n\(indented(errors))")
+            return none
+        }
+        if let measurement = BenchMeasurement.decoded(bench.name, output ?? "") {
+            return measurement
+        }
+        print("\(name) ... did not call 'iterate'")
+        return none
+    }
+
+    // The files asked for.
+    fn write() -> Bool {
+        var ok = true
+        if let name = options.saveBaseline {
+            let path = options.directory + "/" + name + ".txt"
+            if makeDirectories(options.directory) && Runtime.writeFile(path, formatBaseline(results), false) {
+                print("saved baseline '\(name)' to \(path)")
+            } else {
+                Runtime.writeError("cannot write the baseline to \(path)\n")
+                ok = false
+            }
+        }
+        let files: (String?, String)[>..] = [
+            (options.markdown, benchMarkdown(results)), (options.csv, benchCsv(results)),
+            (options.json, benchJson(results, processor: options.settings.usesProcessorTime)),
+        ]
+        for (path, text) in files {
+            if let path {
+                ok = ok && save(path, text, false)
+            }
+        }
+        if let path = options.history {
+            let isNew = !Runtime.fileExists(path)
+            ok = ok && save(path, (isNew ? benchHistoryHeader : "") + benchHistory(results, options.stamp), true)
+        }
+        return ok
+    }
+
+    fn save(_ path: String, _ text: String, _ append: Bool) -> Bool {
+        if Runtime.writeFile(path, text, append) {
+            return true
+        }
+        Runtime.writeError("cannot write \(path)\n")
+        return false
+    }
+}
+
+extension BenchMeasurement {
+    // Another launch's samples, with these.
+    mutating fn add(_ other: BenchMeasurement) {
+        // Each launch has its own overhead: taken out of its samples here.
+        samples = samples.map { $0.less(wallOverhead, processorOverhead) }
+        samples.append(contentsOf: other.samples.map { $0.less(other.wallOverhead, other.processorOverhead) })
+        wallOverhead = 0.0
+        processorOverhead = 0.0
+        memory = other.memory
+        if other.counters != none {
+            counters = other.counters
+        }
+    }
+}
+
+extension BenchSample {
+    fn less(_ wallOverhead: F64, _ processorOverhead: F64) -> BenchSample {
+        return BenchSample(
+            iterations: iterations, wall: max(0.0, wall - wallOverhead * F64(iterations)),
+            processor: max(0.0, processor - processorOverhead * F64(iterations))
+        )
+    }
+}
+
+/// Makes the directory and those above it that are missing; whether it is there now.
+fn makeDirectories(_ path: String) -> Bool {
+    if Runtime.isDirectory(path) {
+        return true
+    }
+    let parts = path.split('/')
+    var built = path.hasPrefix("/") ? "/" : ""
+    for part in parts {
+        if part.count == 0 {
+            continue
+        }
+        built = built.count == 0 || built == "/" ? built + part : built + "/" + part
+        if !Runtime.isDirectory(built) && !Runtime.makeDirectory(built) {
+            return false
+        }
+    }
+    return Runtime.isDirectory(path)
+}

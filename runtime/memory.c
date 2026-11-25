@@ -338,6 +338,10 @@ static void keep_spare(void *buffer, int64_t size) {
 // An array's elements: 'size' bytes, uninitialised.
 static void *buffer_alloc(int64_t size) {
     unsigned class = small_class(size);
+    if (__builtin_expect(sable_counting, 0)) {
+        count_allocated(class != 0 ? small_sizes[class] : size);
+    }
+
     if (class != 0) {
         return small_alloc(current_thread(), class);
     }
@@ -373,6 +377,10 @@ static void buffer_free(void *buffer, int64_t size) {
 static void *buffer_resize(void *buffer, int64_t old, int64_t size) {
     unsigned from = buffer == NULL ? 0 : small_class(old), to = small_class(size);
     if (buffer != NULL && from == 0 && to == 0) {
+        if (__builtin_expect(sable_counting, 0)) {
+            count_allocated(size);
+        }
+
         // Into the spare, when it fits: its pages are already the program's.
         void *spare = size >= LARGE_BUFFER ? take_spare(size) : NULL;
         if (spare != NULL) {
@@ -421,14 +429,26 @@ static inline void object_free(SableThread *thread, SableObject *object) {
     }
 }
 
+// What is asked of an allocation but the memory: leaks' list, and the bytes
+// (a large object's counted by its maker, who knows its size).
+__attribute__((noinline)) static void observe_born(SableObject *object, unsigned class) {
+    if (tracking) {
+        track(object, true);
+    }
+
+    if (sable_counting && class != 0) {
+        count_allocated(small_sizes[class]);
+    }
+}
+
 // A new object's header, the rest being as it is: counted, and alive.
 static inline void *object_begin(SableThread *thread, SableObject *object, const SableMetadata *type, unsigned class) {
     object->type = type;
     object->strong = 1;
     object->flags = class << SABLE_CLASS_SHIFT;
     thread_count(&thread->allocations, 1);
-    if (__builtin_expect(tracking, 0)) {
-        track(object, true);
+    if (__builtin_expect(observing, 0)) {
+        observe_born(object, class);
     }
 
     return object;
@@ -439,6 +459,10 @@ __attribute__((noinline)) static void *large_object(const SableMetadata *type, i
     SableObject *object = zero ? calloc(1, (size_t)size) : malloc((size_t)size);
     if (object == NULL) {
         sable_trap("out of memory");
+    }
+
+    if (__builtin_expect(sable_counting, 0)) {
+        count_allocated(size);
     }
 
     return object_begin(current_thread(), object, type, 0);

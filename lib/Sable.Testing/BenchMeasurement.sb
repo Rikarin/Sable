@@ -1,0 +1,181 @@
+module Sable.Testing
+
+import Sable.Math
+import Sable.Text
+
+/// What an iteration allocated, and what ARC did in it: objects (arrays
+/// among them), the bytes of them and of their buffers, as the allocator
+/// rounds them, and retains and releases of what is counted. Of every
+/// thread; what else the program did meanwhile is in it.
+@derive(Equatable, Debug)
+public struct BenchMemory {
+    public var allocations: F64 = 0.0
+    public var bytes: F64 = 0.0
+    public var retains: F64 = 0.0
+    public var releases: F64 = 0.0
+
+    public init() { }
+
+    public init(allocations: F64, bytes: F64, retains: F64, releases: F64) {
+        self.allocations = allocations
+        self.bytes = bytes
+        self.retains = retains
+        self.releases = releases
+    }
+
+    // The runtime's counts, so far.
+    static var now: BenchMemory {
+        get => BenchMemory(
+            allocations: F64(Runtime.memoryStatistic(0)), bytes: F64(Runtime.memoryStatistic(7)),
+            retains: F64(Runtime.memoryStatistic(2)), releases: F64(Runtime.memoryStatistic(3))
+        )
+    }
+
+    fn adding(_ other: BenchMemory, less: BenchMemory) -> BenchMemory {
+        return BenchMemory(
+            allocations: allocations + other.allocations - less.allocations, bytes: bytes + other.bytes - less.bytes,
+            retains: retains + other.retains - less.retains, releases: releases + other.releases - less.releases
+        )
+    }
+
+    fn divided(by count: F64) -> BenchMemory {
+        return BenchMemory(allocations: allocations / count, bytes: bytes / count, retains: retains / count, releases: releases / count)
+    }
+}
+
+/// What the processor counted of an iteration, -1 for what it does not say.
+@derive(Equatable, Debug)
+public struct BenchCounters {
+    public var instructions: F64
+    public var cycles: F64
+
+    public init(instructions: F64, cycles: F64) {
+        self.instructions = instructions
+        self.cycles = cycles
+    }
+}
+
+/// All that was measured of a benchmark, in one process or more.
+@derive(Equatable, Debug)
+public struct BenchMeasurement {
+    public var name: String
+    public var samples: BenchSample[>..]
+    /// What the loop costs an iteration, in nanoseconds.
+    public var wallOverhead: F64
+    public var processorOverhead: F64
+    /// An iteration's.
+    public var memory: BenchMemory
+    public var counters: BenchCounters?
+    /// 'Bencher.check'.
+    public var check: String
+    public var operations: Int
+    public var bytes: Int
+    public var items: Int
+
+    public init(
+        name: String, samples: BenchSample[>..], wallOverhead: F64 = 0.0, processorOverhead: F64 = 0.0, memory: BenchMemory = BenchMemory(),
+        counters: BenchCounters? = none, check: String = "", operations: Int = 1, bytes: Int = 0, items: Int = 0
+    ) {
+        self.name = name
+        self.samples = samples
+        self.wallOverhead = wallOverhead
+        self.processorOverhead = processorOverhead
+        self.memory = memory
+        self.counters = counters
+        self.check = check
+        self.operations = operations
+        self.bytes = bytes
+        self.items = items
+    }
+
+    /// The samples, as nanoseconds an operation, by the clock or of processor time.
+    public fn nanoseconds(processor: Bool) -> F64[>..] {
+        let loop = processor ? processorOverhead : wallOverhead
+        return samples.map { max(0.0, (processor ? $0.processor : $0.wall) / F64($0.iterations) - loop) / F64(operations) }
+    }
+
+    /// An operation's memory.
+    public var memoryPerOperation: BenchMemory {
+        get => memory.divided(by: F64(operations))
+    }
+
+    /// As lines, each a kind and its fields with tabs between, for the
+    /// harness that started the process that measured it.
+    public fn encoded() -> String {
+        let lines = TextBuilder()
+        let mark = BenchMeasurement.mark
+        for sample in samples {
+            lines.appendLine("\(mark)sample\t\(sample.iterations)\t\(sample.wall)\t\(sample.processor)")
+        }
+        lines.appendLine("\(mark)overhead\t\(wallOverhead)\t\(processorOverhead)")
+        lines.appendLine("\(mark)memory\t\(memory.allocations)\t\(memory.bytes)\t\(memory.retains)\t\(memory.releases)")
+        if let counters {
+            lines.appendLine("\(mark)counters\t\(counters.instructions)\t\(counters.cycles)")
+        }
+        lines.appendLine("\(mark)per\t\(operations)\t\(bytes)\t\(items)")
+        lines.appendLine("\(mark)check\t\(check.replacing("\\", with: "\\\\").replacing("\n", with: "\\n").replacing("\t", with: "\\t"))")
+        return lines.build()
+    }
+
+    /// What 'encoded' wrote, among whatever else the benchmark printed: none
+    /// when it is not all there.
+    public static fn decoded(_ name: String, _ text: String) -> BenchMeasurement? {
+        var measurement = BenchMeasurement(name: name, samples: [])
+        var ended = false
+        for line in text.lines() {
+            guard line.hasPrefix(mark) else {
+                continue
+            }
+            let fields = line.slice(from: mark.count, to: line.count).split('\t')
+            var numbers: F64[>..] = []
+            for field in fields[1...] {
+                numbers.append((try? F64.parse(field)) ?? 0.0)
+            }
+            match fields[0] {
+                case "sample" where numbers.count == 3 => {
+                    measurement.samples.append(BenchSample(iterations: Int(numbers[0]), wall: numbers[1], processor: numbers[2]))
+                }
+                case "overhead" where numbers.count == 2 => {
+                    measurement.wallOverhead = numbers[0]
+                    measurement.processorOverhead = numbers[1]
+                }
+                case "memory" where numbers.count == 4 => {
+                    measurement.memory = BenchMemory(allocations: numbers[0], bytes: numbers[1], retains: numbers[2], releases: numbers[3])
+                }
+                case "counters" where numbers.count == 2 => {
+                    measurement.counters = BenchCounters(instructions: numbers[0], cycles: numbers[1])
+                }
+                case "per" where numbers.count == 3 => {
+                    measurement.operations = Int(numbers[0])
+                    measurement.bytes = Int(numbers[1])
+                    measurement.items = Int(numbers[2])
+                }
+                case "check" where fields.count == 2 => {
+                    measurement.check = unescaped(fields[1])
+                    ended = true
+                }
+                default => { }
+            }
+        }
+        return ended && !measurement.samples.isEmpty ? measurement : none
+    }
+
+    // What begins a line of 'encoded', which nothing else a benchmark prints does.
+    static let mark: String = "\u{1}bench\t"
+
+    static fn unescaped(_ escaped: String) -> String {
+        let text = TextBuilder()
+        var escaping = false
+        for c in escaped {
+            if escaping {
+                text.append(c == 'n' ? "\n" : c == 't' ? "\t" : String.fromChar(c))
+                escaping = false
+            } else if c == '\\' {
+                escaping = true
+            } else {
+                text.append(String.fromChar(c))
+            }
+        }
+        return text.build()
+    }
+}

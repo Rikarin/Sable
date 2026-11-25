@@ -75,6 +75,16 @@ static int64_t peak_memory(void) {
     return (int64_t)__builtin_wasm_memory_size(0) * 65536;
 }
 
+static int64_t processor_time(bool children) {
+    (void)children;
+    return -1;
+}
+
+static int64_t hardware_counter(bool cycles) {
+    (void)cycles;
+    return -1;
+}
+
 // ---- Time (Sable.Time's floor) ------------------------------------------
 
 int64_t sable_time_monotonic(void) {

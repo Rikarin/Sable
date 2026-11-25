@@ -215,6 +215,27 @@ static int64_t peak_memory(void) {
     return (int64_t)counters.PeakWorkingSetSize;
 }
 
+// Windows keeps no sum of the processes waited for.
+static int64_t processor_time(bool children) {
+    FILETIME created, exited, kernel, user;
+    if (children) {
+        return 0;
+    }
+
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+        return -1;
+    }
+
+    return (int64_t)((((uint64_t)kernel.dwHighDateTime << 32) | kernel.dwLowDateTime)
+        + (((uint64_t)user.dwHighDateTime << 32) | user.dwLowDateTime)) * 100;
+}
+
+// Cycles are counted for every process; instructions only with privileges.
+static int64_t hardware_counter(bool cycles) {
+    ULONG64 count = 0;
+    return cycles && QueryProcessCycleTime(GetCurrentProcess(), &count) ? (int64_t)count : -1;
+}
+
 // ---- Time (Sable.Time's floor) ------------------------------------------
 
 int64_t sable_time_monotonic(void) {

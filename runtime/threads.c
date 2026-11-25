@@ -172,11 +172,17 @@ static inline void thread_count(int64_t *count, int64_t by) {
 // add, so that a program that does not ask shares no counter between cores.
 bool sable_counting;
 int64_t sable_retains, sable_releases;
+// Counted while sable_counting: the bytes asked for, objects' and buffers'.
+static int64_t bytes_allocated;
 
 static inline void count_retain(void) {
     if (sable_counting) {
         __atomic_fetch_add(&sable_retains, 1, __ATOMIC_RELAXED);
     }
+}
+
+__attribute__((noinline)) static void count_allocated(int64_t size) {
+    __atomic_fetch_add(&bytes_allocated, size, __ATOMIC_RELAXED);
 }
 
 static inline void count_release(void) {

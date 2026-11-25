@@ -1,0 +1,54 @@
+module Sable.IO
+
+/// The machine's file system, as a `FileSystem`: each member is `File`'s or
+/// `Directory`'s.
+///
+/// ```sable
+/// let temp = try! Temp.directory()
+/// let files: any FileSystem = DiskFileSystem()
+/// try! files.write(temp.path.appending("a.txt"), "a")
+/// assert(try! files.read(temp.path.appending("a.txt")) == "a")
+/// ```
+public struct DiskFileSystem: FileSystem {
+    public init() { }
+
+    public fn readBytes(_ path: FilePath) throws(IoError) -> U8[>..] {
+        return try File.readBytes(path)
+    }
+
+    public fn writeBytes(_ path: FilePath, _ bytes: U8[:]) throws(IoError) {
+        try File.writeBytes(path, bytes)
+    }
+
+    public fn appendBytes(_ path: FilePath, _ bytes: U8[:]) throws(IoError) {
+        try File.appendBytes(path, bytes)
+    }
+
+    public fn metadata(_ path: FilePath) throws(IoError) -> FileMetadata {
+        return try File.metadata(path)
+    }
+
+    public fn createDirectory(_ path: FilePath, recursive: Bool) throws(IoError) {
+        try Directory.create(path, recursive: recursive)
+    }
+
+    public fn list(_ path: FilePath) throws(IoError) -> String[>..] {
+        return try Directory.list(path)
+    }
+
+    public fn removeFile(_ path: FilePath) throws(IoError) {
+        try File.remove(path)
+    }
+
+    public fn removeDirectory(_ path: FilePath, recursive: Bool) throws(IoError) {
+        try Directory.remove(path, recursive: recursive)
+    }
+
+    public fn rename(from source: FilePath, to target: FilePath, overwrite: Bool) throws(IoError) {
+        try File.rename(from: source, to: target, overwrite: overwrite)
+    }
+
+    public fn copy(from source: FilePath, to target: FilePath, overwrite: Bool) throws(IoError) {
+        try File.copy(from: source, to: target, overwrite: overwrite)
+    }
+}

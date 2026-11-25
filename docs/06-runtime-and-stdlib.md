@@ -1060,7 +1060,8 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     permissions and times), Directory (create, list, lazy
                     entries, walk, glob, copy, remove, recursively too),
                     Glob, Temp (files and directories removed as they are
-                    let go), FileWatcher (below), PathLike (a String or a
+                    let go), FileSystem (DiskFileSystem, InMemoryFileSystem
+                    for tests), FileWatcher (below), PathLike (a String or a
                     FilePath), FilePath (platform bytes, POSIX and Windows rules:
                     drives, UNC, verbatim; components, lexical
                     normalization, relative paths, canonical) and Path
@@ -1337,6 +1338,15 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
   `attach`. What a test prints is kept apart from any other's, and shown when it
   fails. (Nothing overrides the locale or the clock for a test: what depends on
   one takes a `Locale` or a `Clock`, and is given `Locale("tr")` or a `TestClock`.)
+- Fakes, for what the code under test is given: `TestClock` (Sable.Concurrency);
+  `InMemoryFileSystem` (Sable.IO), a `FileSystem` in memory where code takes
+  one in place of `DiskFileSystem`, with the disk's errors; `FakeLogger`, a
+  `Logger` that keeps its lines and reads them back as `LogRecord`s (level,
+  name, message, fields; what `logger.with(...)` makes keeps none, and every
+  line is written to standard error as well); `FakeRandom`, a
+  `RandomNumberGenerator` of the run's seed (`--seed` makes it again), another,
+  or a script, that keeps what it drew. There is no fake HTTP handler: the
+  library has no HttpClient yet.
 - `expectPanic("text") { … }` and `expectExit(status) { … }` run their body in
   a process of its own, the test run again as far as there, and give how it
   ended. Where none can be started — `--in-process`, the interpreter, WASI —

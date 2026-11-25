@@ -1,0 +1,59 @@
+module Sable.Testing
+
+import Sable.Concurrency
+
+/// A random number generator for a test: the bits a seed gives, the run's
+/// unless another is given — so that `sable test --seed` makes them again,
+/// as it does a property's cases — or those a script says, one after
+/// another. It keeps what it gave. A class: the test and the code it gives
+/// it to draw from one sequence.
+///
+/// ```sable
+/// let scripted = FakeRandom(returning: [3, 9])
+/// var generator = scripted
+/// assert(generator.next() == 3 && generator.next() == 9 && generator.next() == 3)
+/// assert(scripted.drawn == [3, 9, 3])
+/// let seeded = FakeRandom(seed: 7)
+/// var same = SeededRandomNumberGenerator(seed: 7)
+/// var each = seeded
+/// assert(each.next() == same.next())
+/// ```
+@immutable
+public final class FakeRandom: RandomNumberGenerator {
+    let state: Mutex<FakeRandomState>
+
+    /// The bits of the seed's sequence: SeededRandomNumberGenerator's.
+    public init(seed: U64 = TestState.seed) {
+        state = Mutex(FakeRandomState(generator: SeededRandomNumberGenerator(seed: seed), script: []))
+    }
+
+    /// The values given, in turn, and then again from the first.
+    public init(returning values: U64[:]) {
+        precondition(!values.isEmpty, "a script needs a value")
+        state = Mutex(FakeRandomState(generator: SeededRandomNumberGenerator(seed: 0), script: values.toArray()))
+    }
+
+    public fn next() -> U64 {
+        return state.withLock { $0.next() }
+    }
+
+    /// What it has given, in order.
+    public var drawn: U64[>..] => state.withLock { $0.drawn }
+}
+
+struct FakeRandomState {
+    var generator: SeededRandomNumberGenerator
+    let script: U64[>..]
+    var drawn: U64[>..] = []
+
+    init(generator: SeededRandomNumberGenerator, script: U64[>..]) {
+        self.generator = generator
+        self.script = script
+    }
+
+    mutating fn next() -> U64 {
+        let value = script.isEmpty ? generator.next() : script[drawn.count % script.count]
+        drawn.append(value)
+        return value
+    }
+}

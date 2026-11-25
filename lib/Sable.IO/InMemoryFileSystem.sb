@@ -1,0 +1,360 @@
+module Sable.IO
+
+import Sable.Concurrency
+import Sable.Time
+
+/// A file system in memory: what a test gives code that takes a
+/// `FileSystem`, so that it reads and writes no disk, and its files are
+/// what the test says. .NET's `MockFileSystem`.
+///
+/// Paths are `/`-separated whatever the machine; a relative one is from
+/// the root, and `.` and `..` are taken as they read. Errors are those the
+/// disk's would be: `NotFound`, `AlreadyExists`, `IsDirectory`,
+/// `NotADirectory`, `DirectoryNotEmpty`. A file is written when the clock
+/// given says; by default all are at the Unix epoch. It may be used from
+/// any thread.
+///
+/// ```sable
+/// let files = InMemoryFileSystem(["config/app.toml": "port = 80"])
+/// assert(try! files.read("config/app.toml") == "port = 80")
+/// assert(files.directoryExists("config") && !files.exists("config/other.toml"))
+/// try! files.append("config/app.toml", "\n")
+/// assert(files.paths == ["/config", "/config/app.toml"])
+/// ```
+@immutable
+public final class InMemoryFileSystem: FileSystem {
+    let entries: Mutex<[String: MemoryEntry]>
+    let now: () -> UtcDateTime
+
+    /// One holding the files given, by path, each with its directories.
+    public init(_ files: [String: String] = [:], now: @escaping () -> UtcDateTime = { UtcDateTime.unixEpoch }) {
+        self.now = now
+        entries = Mutex(["": MemoryEntry(directory: true, bytes: [], modified: now())])
+        var paths: String[>..] = []
+        for (path, _) in files {
+            paths.append(path)
+        }
+        paths.sort()
+        for path in paths {
+            let file = FilePath(path)
+            if let parent = InMemoryFileSystem.parent(InMemoryFileSystem.key(file)) {
+                try! createDirectory(FilePath("/" + parent), recursive: true)
+            }
+            try! writeBytes(file, files[path]!.utf8Bytes())
+        }
+    }
+
+    /// Every file and directory there is, from the root, sorted: the root
+    /// itself left out.
+    public var paths: String[>..] {
+        get {
+            var all: String[>..] = []
+            for (key, _) in entries.withLock({ $0 }) {
+                if !key.isEmpty {
+                    all.append("/" + key)
+                }
+            }
+            all.sort()
+            return all
+        }
+    }
+
+    // The path's names from the root, '/' between them: "" for the root.
+    static fn key(_ path: FilePath) -> String {
+        var names: String[>..] = []
+        for component in FilePath(path.string ?? String.fromUtf8Lossy(path.bytes), style: .Posix).components {
+            match component.kind {
+                case .Normal => { names.append(component.string ?? String.fromUtf8Lossy(component.bytes)) }
+                case .ParentDirectory => {
+                    if !names.isEmpty {
+                        names.removeLast()
+                    }
+                }
+                case _ => { }
+            }
+        }
+        return names.joined(separator: "/")
+    }
+
+    // The directory the key is in; none for the root.
+    static fn parent(_ key: String) -> String? {
+        if key.isEmpty {
+            return none
+        }
+        if let (before, _) = key.splitLastOnce("/") {
+            return before
+        }
+        return ""
+    }
+
+    static fn shown(_ key: String) -> String {
+        return "/" + key
+    }
+
+    // That the key's directory is there, as one.
+    static fn checkParent(_ all: [String: MemoryEntry], _ key: String) throws(IoError) {
+        guard let parent = parent(key) else {
+            throw IoError.InvalidInput(path: "/")
+        }
+        guard let entry = all[parent] else {
+            throw IoError.NotFound(path: shown(parent))
+        }
+        if !entry.directory {
+            throw IoError.NotADirectory(path: shown(parent))
+        }
+    }
+
+    public fn readBytes(_ path: FilePath) throws(IoError) -> U8[>..] {
+        let key = InMemoryFileSystem.key(path)
+        guard let entry = entries.withLock({ $0[key] }) else {
+            throw IoError.NotFound(path: InMemoryFileSystem.shown(key))
+        }
+        if entry.directory {
+            throw IoError.IsDirectory(path: InMemoryFileSystem.shown(key))
+        }
+        return entry.bytes
+    }
+
+    public fn writeBytes(_ path: FilePath, _ bytes: U8[:]) throws(IoError) {
+        try store(path, bytes, appending: false)
+    }
+
+    public fn appendBytes(_ path: FilePath, _ bytes: U8[:]) throws(IoError) {
+        try store(path, bytes, appending: true)
+    }
+
+    fn store(_ path: FilePath, _ bytes: U8[:], appending: Bool) throws(IoError) {
+        let key = InMemoryFileSystem.key(path)
+        let time = now()
+        try entries.withLock { (all: inout [String: MemoryEntry]) throws(IoError) in
+            try InMemoryFileSystem.checkParent(all, key)
+            var made = bytes.toArray()
+            if let entry = all[key] {
+                if entry.directory {
+                    throw IoError.IsDirectory(path: InMemoryFileSystem.shown(key))
+                }
+                if appending {
+                    made = entry.bytes
+                    made.append(contentsOf: bytes)
+                }
+            }
+            all[key] = MemoryEntry(directory: false, bytes: made, modified: time)
+        }
+    }
+
+    public fn metadata(_ path: FilePath) throws(IoError) -> FileMetadata {
+        let key = InMemoryFileSystem.key(path)
+        guard let entry = entries.withLock({ $0[key] }) else {
+            throw IoError.NotFound(path: InMemoryFileSystem.shown(key))
+        }
+        let time = entry.modified
+        // As the runtime gives them (FileMetadata.init(parts:)): a directory
+        // is kind 1, a file 0.
+        return FileMetadata(parts: [
+            entry.bytes.count, entry.directory ? 1 : 0, entry.directory ? 0o755 : 0o644,
+            time.secondsSinceEpoch, time.nanosecond, time.secondsSinceEpoch, time.nanosecond, 0, 0, 0,
+        ])
+    }
+
+    public fn createDirectory(_ path: FilePath, recursive: Bool) throws(IoError) {
+        let key = InMemoryFileSystem.key(path)
+        let time = now()
+        try entries.withLock { (all: inout [String: MemoryEntry]) throws(IoError) in
+            if !recursive {
+                if all[key] != none {
+                    throw IoError.AlreadyExists(path: InMemoryFileSystem.shown(key))
+                }
+                try InMemoryFileSystem.checkParent(all, key)
+                all[key] = MemoryEntry(directory: true, bytes: [], modified: time)
+                return
+            }
+            var made = ""
+            for name in key.split(separator: '/') {
+                made = made.isEmpty ? name : made + "/" + name
+                if let entry = all[made] {
+                    if !entry.directory {
+                        throw IoError.NotADirectory(path: InMemoryFileSystem.shown(made))
+                    }
+                } else {
+                    all[made] = MemoryEntry(directory: true, bytes: [], modified: time)
+                }
+            }
+        }
+    }
+
+    public fn list(_ path: FilePath) throws(IoError) -> String[>..] {
+        let key = InMemoryFileSystem.key(path)
+        let all = entries.withLock { $0 }
+        guard let entry = all[key] else {
+            throw IoError.NotFound(path: InMemoryFileSystem.shown(key))
+        }
+        if !entry.directory {
+            throw IoError.NotADirectory(path: InMemoryFileSystem.shown(key))
+        }
+        var names: String[>..] = []
+        for (other, _) in all {
+            if !other.isEmpty && InMemoryFileSystem.parent(other) == key {
+                names.append(other.splitLastOnce("/")?.1 ?? other)
+            }
+        }
+        names.sort()
+        return names
+    }
+
+    public fn removeFile(_ path: FilePath) throws(IoError) {
+        let key = InMemoryFileSystem.key(path)
+        try entries.withLock { (all: inout [String: MemoryEntry]) throws(IoError) in
+            guard let entry = all[key] else {
+                throw IoError.NotFound(path: InMemoryFileSystem.shown(key))
+            }
+            if entry.directory {
+                throw IoError.IsDirectory(path: InMemoryFileSystem.shown(key))
+            }
+            all[key] = none
+        }
+    }
+
+    public fn removeDirectory(_ path: FilePath, recursive: Bool) throws(IoError) {
+        let key = InMemoryFileSystem.key(path)
+        try entries.withLock { (all: inout [String: MemoryEntry]) throws(IoError) in
+            if key.isEmpty {
+                throw IoError.InvalidInput(path: "/")
+            }
+            guard let entry = all[key] else {
+                throw IoError.NotFound(path: InMemoryFileSystem.shown(key))
+            }
+            if !entry.directory {
+                throw IoError.NotADirectory(path: InMemoryFileSystem.shown(key))
+            }
+            let inside = InMemoryFileSystem.within(all, key)
+            if !inside.isEmpty && !recursive {
+                throw IoError.DirectoryNotEmpty(path: InMemoryFileSystem.shown(key))
+            }
+            for other in inside {
+                all[other] = none
+            }
+            all[key] = none
+        }
+    }
+
+    // The keys of what is in the directory, at any depth.
+    static fn within(_ all: [String: MemoryEntry], _ key: String) -> String[>..] {
+        var found: String[>..] = []
+        for (other, _) in all {
+            if other.hasPrefix(key + "/") {
+                found.append(other)
+            }
+        }
+        return found
+    }
+
+    public fn rename(from source: FilePath, to target: FilePath, overwrite: Bool) throws(IoError) {
+        let from = InMemoryFileSystem.key(source)
+        let to = InMemoryFileSystem.key(target)
+        if from == to {
+            return
+        }
+        try entries.withLock { (all: inout [String: MemoryEntry]) throws(IoError) in
+            guard let entry = all[from] else {
+                throw IoError.NotFound(path: InMemoryFileSystem.shown(from))
+            }
+            if from.isEmpty || to.hasPrefix(from + "/") {
+                throw IoError.InvalidInput(path: InMemoryFileSystem.shown(to))
+            }
+            try InMemoryFileSystem.checkParent(all, to)
+            if let there = all[to] {
+                if !overwrite {
+                    throw IoError.AlreadyExists(path: InMemoryFileSystem.shown(to))
+                }
+                if there.directory != entry.directory {
+                    throw there.directory ? IoError.IsDirectory(path: InMemoryFileSystem.shown(to)) : IoError.NotADirectory(path: InMemoryFileSystem.shown(to))
+                }
+                if there.directory && !InMemoryFileSystem.within(all, to).isEmpty {
+                    throw IoError.DirectoryNotEmpty(path: InMemoryFileSystem.shown(to))
+                }
+            }
+            let inside = InMemoryFileSystem.within(all, from)
+            all[from] = none
+            all[to] = entry
+            for other in inside {
+                let moved = all[other]!
+                all[other] = none
+                all[to + other.slice(from: from.count, to: other.count)] = moved
+            }
+        }
+    }
+
+    public fn copy(from source: FilePath, to target: FilePath, overwrite: Bool) throws(IoError) {
+        let from = InMemoryFileSystem.key(source)
+        let to = InMemoryFileSystem.key(target)
+        let time = now()
+        try entries.withLock { (all: inout [String: MemoryEntry]) throws(IoError) in
+            guard let entry = all[from] else {
+                throw IoError.NotFound(path: InMemoryFileSystem.shown(from))
+            }
+            if entry.directory {
+                throw IoError.IsDirectory(path: InMemoryFileSystem.shown(from))
+            }
+            if from == to {
+                throw IoError.InvalidInput(path: InMemoryFileSystem.shown(to))
+            }
+            try InMemoryFileSystem.checkParent(all, to)
+            if let there = all[to] {
+                if there.directory {
+                    throw IoError.IsDirectory(path: InMemoryFileSystem.shown(to))
+                }
+                if !overwrite {
+                    throw IoError.AlreadyExists(path: InMemoryFileSystem.shown(to))
+                }
+            }
+            all[to] = MemoryEntry(directory: false, bytes: entry.bytes, modified: time)
+        }
+    }
+}
+
+// What FileSystem's extension gives, which the class's own members of the
+// same names would hide.
+extension InMemoryFileSystem {
+    public fn readBytes(_ path: String) throws(IoError) -> U8[>..] {
+        return try readBytes(FilePath(path))
+    }
+
+    public fn writeBytes(_ path: String, _ bytes: U8[:]) throws(IoError) {
+        try writeBytes(FilePath(path), bytes)
+    }
+
+    public fn metadata(_ path: String) throws(IoError) -> FileMetadata {
+        return try metadata(FilePath(path))
+    }
+
+    public fn createDirectory(_ path: String, recursive: Bool = false) throws(IoError) {
+        try createDirectory(FilePath(path), recursive: recursive)
+    }
+
+    public fn list(_ path: String) throws(IoError) -> String[>..] {
+        return try list(FilePath(path))
+    }
+
+    public fn removeFile(_ path: String) throws(IoError) {
+        try removeFile(FilePath(path))
+    }
+
+    public fn removeDirectory(_ path: String, recursive: Bool = false) throws(IoError) {
+        try removeDirectory(FilePath(path), recursive: recursive)
+    }
+
+    public fn rename(from source: String, to target: String, overwrite: Bool = true) throws(IoError) {
+        try rename(from: FilePath(source), to: FilePath(target), overwrite: overwrite)
+    }
+
+    public fn copy(from source: String, to target: String, overwrite: Bool = true) throws(IoError) {
+        try copy(from: FilePath(source), to: FilePath(target), overwrite: overwrite)
+    }
+}
+
+// A file, or a directory, of an InMemoryFileSystem.
+struct MemoryEntry {
+    let directory: Bool
+    let bytes: U8[>..]
+    let modified: UtcDateTime
+}

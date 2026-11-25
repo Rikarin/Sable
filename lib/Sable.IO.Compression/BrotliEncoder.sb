@@ -89,7 +89,7 @@ public final class BrotliEncoder: Compressor {
         hasBegun = false
         isFinished = false
         unsafe {
-            store64(0, end)
+            clearAfter(end)
         }
     }
 
@@ -108,7 +108,7 @@ public final class BrotliEncoder: Compressor {
             unsafe {
                 NativeMemory.copy(from: source[at..<at + taken], to: RawPtr<U8>(address: end))
                 end = end + taken
-                store64(0, end)
+                clearAfter(end)
             }
             at += taken
         }
@@ -175,7 +175,7 @@ public final class BrotliEncoder: Compressor {
         let moved = from - window.address
         if moved > 0 {
             unsafe {
-                copyBytes(from: from, to: window.address, end - from + 8)
+                copyBytes(from: from, to: window.address, end - from + 32)
             }
             low = window.address
             next -= moved

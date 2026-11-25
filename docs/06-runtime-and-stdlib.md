@@ -1238,6 +1238,25 @@ runs the codecs in `CompressionTests`.
 - CRC-32 is the processor's where it has the instructions
   (`runtime/checksums.c`: ARM's, or PCLMULQDQ), eight bytes by tables else.
 
+Against .NET 11's, which are zlib-ng, zstd 1.5.7 and brotli, all C, on an
+Apple M1 Max that was busy (the best of three runs; MB/s, and the ratio):
+
+| | Sable packs | .NET packs | Sable unpacks | .NET unpacks |
+|:--|--:|--:|--:|--:|
+| dickens, gzip 6 | 58, 2.631 | 69, 2.616 | 619 | 370 |
+| mozilla, gzip 6 | 90, 2.720 | 85, 2.638 | 541 | 452 |
+| dickens, zstd 1 | 277, 2.381 | 349, 2.392 | 827 | 1136 |
+| dickens, zstd 3 | 180, 2.771 | 186, 2.773 | 722 | 864 |
+| mozilla, zstd 3 | 311, 2.772 | 295, 2.786 | 840 | 1132 |
+| dickens, brotli 5 | 45, 3.086 | 44, 3.014 | 391 | 438 |
+| mozilla, brotli 5 | 56, 3.029 | 53, 3.109 | 294 | 415 |
+
+Of the rest: zstd's levels 5 to 12 are at two thirds of its speed for the same
+ratios, 14 to 19 at about its own, within 1.5 % of its ratio; gzip 9 is 4.6 %
+smaller than .NET's and a third as fast; brotli 11 is 2.6 % (dickens) and
+6.5 % (xml) larger than the reference's, and slower. Dictionaries trained are
+as good as `zstd --train`'s.
+
 ### Archives
 
 `Sable.IO.Archives` reads and writes zip and tar.

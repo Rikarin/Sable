@@ -1,0 +1,36 @@
+module ZipBench
+
+// A zip archive against .NET's ZipArchive: two thousand small entries, deflated
+// at level 1, written to memory and read again, five times.
+
+import Sable.IO
+import Sable.IO.Archives
+
+@main
+fn main() {
+    var text: U8[>..] = []
+    var state = 1
+    while text.count < 2000 {
+        state = (state * 75 + 74) % 65537
+        text.append(U8(0x61 + state % 7))
+    }
+    var options = ZipOptions()
+    options.level = 1
+    var total = 0
+    var round = 0
+    while round < 5 {
+        let writer = ZipWriter(MemoryStream())
+        var i = 0
+        while i < 2000 {
+            try! writer.add("directory/entry \(i).txt", text[..<(i % 2000)], options: options)
+            i += 1
+        }
+        try! writer.finish()
+        let archive = try! ZipArchive(writer.inner.bytes)
+        for entry in archive.entries {
+            total += (try! archive.read(entry)).count
+        }
+        round += 1
+    }
+    print("\(total)")
+}

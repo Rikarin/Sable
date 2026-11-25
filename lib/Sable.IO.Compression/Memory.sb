@@ -81,6 +81,15 @@ unsafe fn copy16(from source: Int, to target: Int) {
     store64(high, target &+ 8)
 }
 
+/// Thirty-two zeros at an address, for what reads past the bytes before it.
+@inline(always)
+unsafe fn clearAfter(_ address: Int) {
+    store64(0, address)
+    store64(0, address &+ 8)
+    store64(0, address &+ 16)
+    store64(0, address &+ 24)
+}
+
 /// So many bytes, which may overlap.
 unsafe fn copyBytes(from source: Int, to target: Int, _ count: Int) {
     NativeMemory.copy(from: RawPtr<U8>(address: source), to: RawPtr<U8>(address: target), byteCount: count)

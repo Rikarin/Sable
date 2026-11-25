@@ -9,18 +9,19 @@ module Sable.IO.Compression
 public struct Zstd {
     /// The bytes compressed to a frame, at a level from 1 to 22, the smallest,
     /// or below 0, faster the lower; with a checksum, or not; with a dictionary
-    /// that the decoder is given too, if with one.
-    public static fn compress(_ source: U8[:], level: Int = 3, checksum: Bool = true, dictionary: ZstdDictionary? = none) -> U8[>..] {
+    /// that the decoder is given too, if with one; with a window of 2 to a
+    /// power from 10 to 27 bytes at most, or the level's own.
+    public static fn compress(_ source: U8[:], level: Int = 3, checksum: Bool = true, dictionary: ZstdDictionary? = none, windowLog: Int? = none) -> U8[>..] {
         var output = ByteBuffer()
-        compress(source, into: &output, level: level, checksum: checksum, dictionary: dictionary)
+        compress(source, into: &output, level: level, checksum: checksum, dictionary: dictionary, windowLog: windowLog)
         return output.takeBytes()
     }
 
     /// The bytes compressed at the buffer's end: to how many.
     @discardable
-    public static fn compress(_ source: U8[:], into output: inout ByteBuffer, level: Int = 3, checksum: Bool = true, dictionary: ZstdDictionary? = none) -> Int {
+    public static fn compress(_ source: U8[:], into output: inout ByteBuffer, level: Int = 3, checksum: Bool = true, dictionary: ZstdDictionary? = none, windowLog: Int? = none) -> Int {
         let before = output.count
-        let encoder = ZstdEncoder(level: level, checksum: checksum, dictionary: dictionary, contentSize: source.count)
+        let encoder = ZstdEncoder(level: level, checksum: checksum, dictionary: dictionary, windowLog: windowLog, contentSize: source.count)
         encoder.compress(source, into: &output)
         encoder.finish(into: &output)
         return output.count - before

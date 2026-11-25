@@ -13,7 +13,7 @@ struct ZstdSequences {
     var offset2: Int
     var offset3: Int
 
-    /// A match added, after so many literals from 'from' on, up to 47 bytes
+    /// A match added, after so many literals from 'from' on, up to 31 bytes
     /// past which may be read. Its offset is written as one of the last three
     /// where it is one.
     @inline(always)

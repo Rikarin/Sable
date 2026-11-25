@@ -17,6 +17,7 @@ struct InputBuffer {
         unsafe {
             store64(0, block.address)
             store64(0, block.address &+ 8)
+            clearAfter(end)
         }
     }
 
@@ -39,10 +40,7 @@ struct InputBuffer {
         unsafe {
             NativeMemory.copy(from: source[index..<index + taken], to: RawPtr<U8>(address: end))
             end = end + taken
-            store64(0, end)
-            store64(0, end &+ 8)
-            store64(0, end &+ 16)
-            store64(0, end &+ 24)
+            clearAfter(end)
         }
         return taken
     }

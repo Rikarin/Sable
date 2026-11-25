@@ -169,9 +169,9 @@ extension Zstd {
             if count < 8 {
                 continue
             }
-            let encoder = ZstdEncoder(level: 3, checksum: false, dictionary: known, contentSize: count)
+            let encoder = ZstdEncoder(level: 3, checksum: false, dictionary: known, windowLog: none, contentSize: count)
             NativeMemory.copy(from: sample[..<count], to: RawPtr<U8>(address: encoder.end))
-            store64(0, encoder.end + count)
+            clearAfter(encoder.end + count)
             var made = ZstdSequences(
                 sequences: room.address,
                 literals: room.address + 16 * (ZstdBlocks.maxBlock / 3 + 2),

@@ -13,6 +13,8 @@ module Sable.IO.Compression
 public final class ZstdEncoder: Compressor {
     let level: Int
     let parameters: ZstdLevel
+    /// How many bytes a block has at most: no more than the window.
+    let blockSize: Int
     let hasChecksum: Bool
     let dictionary: ZstdDictionary?
     /// How many bytes there are to be in all, or -1.
@@ -37,17 +39,18 @@ public final class ZstdEncoder: Compressor {
 
     /// At level 3, with a checksum.
     public convenience init() {
-        self.init(level: 3, checksum: true, dictionary: none, contentSize: -1)
+        self.init(level: 3, checksum: true, dictionary: none, windowLog: none, contentSize: -1)
     }
 
     /// At a level from 1 to 22, the smallest, or below 0, faster the lower;
     /// with a checksum, or not; with a dictionary that the decoder is given
-    /// too, if with one.
-    public convenience init(level: Int, checksum: Bool = true, dictionary: ZstdDictionary? = none) {
-        self.init(level: level, checksum: checksum, dictionary: dictionary, contentSize: -1)
+    /// too, if with one; with a window of 2 to a power from 10 to 27 bytes, or
+    /// the level's own.
+    public convenience init(level: Int, checksum: Bool = true, dictionary: ZstdDictionary? = none, windowLog: Int? = none) {
+        self.init(level: level, checksum: checksum, dictionary: dictionary, windowLog: windowLog, contentSize: -1)
     }
 
-    init(level: Int, checksum: Bool, dictionary: ZstdDictionary?, contentSize: Int) {
+    init(level: Int, checksum: Bool, dictionary: ZstdDictionary?, windowLog: Int?, contentSize: Int) {
         precondition(level >= -100 && level <= ZstdLevel.most && level != 0, "a zstd level of \(level)")
         self.level = level
         self.contentSize = contentSize
@@ -55,7 +58,11 @@ public final class ZstdEncoder: Compressor {
         hasChecksum = checksum
         let known = dictionary == none ? 0 : dictionary!.content.count
         var made = ZstdLevel(level: level, expecting: contentSize < 0 ? Int.max : contentSize + known)
-        if contentSize < 0 && known > 1 << made.windowLog {
+        if let log = windowLog {
+            precondition(log >= 10 && log <= 27, "a zstd window of 2 to the \(log) bytes")
+            made.windowLog = contentSize < 0 || log < made.windowLog ? log : made.windowLog
+            made.reach = 1 << made.windowLog
+        } else if contentSize < 0 && known > 1 << made.windowLog {
             // The whole dictionary in reach of the first bytes at least.
             while made.windowLog < 27 && 1 << made.windowLog < known {
                 made.windowLog += 1
@@ -63,6 +70,7 @@ public final class ZstdEncoder: Compressor {
             made.reach = 1 << made.windowLog
         }
         parameters = made
+        blockSize = made.reach < ZstdBlocks.maxBlock ? made.reach : ZstdBlocks.maxBlock
         let reach = 1 << made.windowLog
         let spare = contentSize >= 0 && contentSize + known <= reach ? contentSize : (reach > 524288 ? reach : 524288)
         window = Block(count: (known > reach ? known : reach) + spare + ZstdBlocks.maxBlock + 64)
@@ -83,14 +91,14 @@ public final class ZstdEncoder: Compressor {
         isFinished = false
         length = 0
         unsafe {
-            store64(0, end)
+            clearAfter(end)
         }
         if let given = dictionary {
             unsafe {
                 NativeMemory.copy(from: given.content, to: RawPtr<U8>(address: end))
                 end = end + known
                 next = end
-                store64(0, end)
+                clearAfter(end)
                 parser.insert(from: low, to: end, base: base)
                 writer.use(given)
             }
@@ -108,14 +116,14 @@ public final class ZstdEncoder: Compressor {
         while at < source.count {
             // A whole block is compressed when there is more than it, so that
             // the last one is never empty but of nothing.
-            if end - next == ZstdBlocks.maxBlock {
+            if end - next == blockSize {
                 self.begin(into: &output)
                 self.writeBlock(isLast: false, into: &output)
             }
             if end == limit {
                 self.slide()
             }
-            let room = least(limit - end, ZstdBlocks.maxBlock - (end - next))
+            let room = least(limit - end, blockSize - (end - next))
             let taken = least(source.count - at, room)
             unsafe {
                 NativeMemory.copy(from: source[at..<at + taken], to: RawPtr<U8>(address: end))
@@ -123,7 +131,7 @@ public final class ZstdEncoder: Compressor {
                     hash.update(at: end, count: taken)
                 }
                 end = end + taken
-                store64(0, end)
+                clearAfter(end)
             }
             at += taken
             length += taken
@@ -195,7 +203,7 @@ public final class ZstdEncoder: Compressor {
         let moved = from - window.address
         if moved > 0 {
             unsafe {
-                copyBytes(from: from, to: window.address, end - from + 8)
+                copyBytes(from: from, to: window.address, end - from + 32)
             }
             low = window.address
             next -= moved

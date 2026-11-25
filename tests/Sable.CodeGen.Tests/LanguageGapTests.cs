@@ -279,4 +279,52 @@ public sealed class LanguageGapTests {
             """, optimise).Stdout);
         }
     }
+
+    /// <summary>A constrained extension's initialiser makes the type its 'where' clause says (#330).</summary>
+    [Fact]
+    public void AConstrainedExtensionsInitialiserSaysWhatItMakes() =>
+        Assert.Equal(
+            """
+            4 5!
+            true 7
+            8 class 9
+            9
+
+            """,
+            Programs.AssertAgree("""
+            module C330
+
+            import Sable.IO
+
+            struct Cell<T> { var value: T }
+            extension Cell where T == String {
+                init(number: Int) { self.value = "\(number)" }
+                init(value: Int, loud: Bool) { self.init(number: value); self.value = self.value + "!" }
+            }
+            extension Cell where T == Bool {
+                init(value: Int) { self.value = value > 0 }
+            }
+            struct Two<A, B> { var a: A; var b: B }
+            extension Two where B == A[>..] {
+                init(each a: A) { self.a = a; self.b = [a, a] }
+            }
+            class Held<T> {
+                let value: T
+                init(value: T) { self.value = value }
+            }
+            extension Held where T == String {
+                convenience init(number: Int) { self.init(value: "class \(number)") }
+            }
+            alias Cells<T> = Cell<T>
+
+            @main
+            fn main() {
+                print("\(Cell(number: 4).value) \(Cell(value: 5, loud: true).value)")
+                let b: Cell<Bool> = Cell(value: 3)
+                print("\(b.value) \(Cell<Int>(value: 7).value)")
+                print("\(Two(each: 8).b[1]) \(Held(number: 9).value)")
+                print("\(Cells(number: 9).value)")
+            }
+            """).Stdout
+        );
 }

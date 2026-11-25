@@ -1,0 +1,81 @@
+module Negative.ConstrainedInitialisers
+
+// An initialiser of a constrained extension is there where the requirements
+// hold, and says what they say of the type it makes (#330).
+
+struct Cell<T> {
+    var value: T
+}
+
+struct Opaque {}
+
+extension Cell where T == String {
+    init(number: Int) {
+        self.value = "\(number)"
+    }
+}
+
+extension Cell where T: Hashable {
+    init(hash: T) {
+        self.value = hash
+    }
+
+    init(made: () -> T) {
+        self.value = made()
+    }
+}
+
+extension Cell where T: Comparable {
+    static fn larger(_ a: T, _ b: T) -> Cell<T> {
+        return Cell<T>(value: a > b ? a : b)
+    }
+}
+
+extension Cell where T == Bool {
+    static fn yes() -> Cell<T> {
+        return Cell<T>(value: true)
+    }
+}
+
+extension Cell {
+    static fn of(_ all: T[>..]) -> Int {
+        return all.count
+    }
+
+    // In the type itself T is a type like any other, and asked as one is.
+    fn own(_ other: T) -> Int {
+        let a: Cell<Bool> = Cell.yes()
+        let b: Cell<Int> = Cell.larger(1, 2)
+        let c = Cell.larger(other, value) //! S3007 it is there only where 'T: Comparable'
+        return b.value
+    }
+}
+
+alias Cells<T> = Cell<T>
+
+fn made() {
+    let a = Cell<Int>(number: 4) //! S3007 'init(number: Int)': it is there only where 'T == String'
+    let b: Cell<Int> = Cell(number: 4) //! S3007 'init(number: Int)': it is there only where 'T == String'
+    let c = Cell<Opaque>(hash: Opaque()) //! S3007 'init(hash: T)': it is there only where 'T: Hashable'
+    let d = Cell(hash: Opaque()) //! S3007 'init(hash: T)': it is there only where 'T: Hashable'
+    let e = Cell(made: { Opaque() }) //! S3023 'Cell' has this initialiser only where 'T: Hashable'
+    let f = Cell.larger(Opaque(), Opaque()) //! S3007 it is there only where 'T: Comparable'
+    let g = Cell<Opaque>.larger(Opaque(), Opaque()) //! S3023 only where 'T: Comparable'
+    let h = Cell<Int>.yes() //! S3023 only where 'T == Bool'
+    let i = Cell.of([]) //! S3022 cannot infer 'T' of 'of'
+}
+
+// Where they hold, they say what T is.
+fn held() {
+    let a: Cell<String> = Cell(number: 4)
+    let b = Cell(number: 4).value.count
+    let c: String = Cells(number: 4).value
+    let d: Int = Cell(hash: 3).value
+    let e: Int = Cell(made: { 3 }).value
+    let f: U8 = Cell(value: 3 as U8).value
+    let g: Cell<U32> = Cell<U32>.larger(3, 4)
+    let h: Cell<Int> = Cell.larger(3, 4)
+    let i: Cell<Bool> = Cell.yes()
+    let j: Bool = Cell.yes().value
+    let k: Cell<U8> = Cell.larger(3, 4)
+}

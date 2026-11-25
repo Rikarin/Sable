@@ -3904,7 +3904,11 @@ public sealed partial class Binder {
 
             // A type parameter reaches the static members of its constraints,
             // so the lookup is the same one a value uses.
-            if (LookupMemberOfKind(typeExpression.ReferencedType, name, instance: false) is { } onType) {
+            _unmetRequirement = null;
+            _namedType = typeExpression.ReferencedType;
+            var onNamed = LookupMemberOfKind(typeExpression.ReferencedType, name, instance: false);
+            _namedType = null;
+            if (onNamed is { } onType) {
                 var statics = onType.Members.Where(IsStaticMember).ToList();
 
                 if (statics.Count > 0) {
@@ -3924,9 +3928,11 @@ public sealed partial class Binder {
             }
 
             _diagnostics.Error(
-                ErrorCode.ERR_NameNotFound,
+                _unmetRequirement is null ? ErrorCode.ERR_NameNotFound : ErrorCode.ERR_DoesNotConform,
                 syntax.Name.Span,
-                $"'{typeExpression.ReferencedType.ToDisplayString()}' has no member named '{name}'"
+                _unmetRequirement is { } unmetOnType
+                    ? $"'{typeExpression.ReferencedType.ToDisplayString()}' has '{name}' only where {unmetOnType}"
+                    : $"'{typeExpression.ReferencedType.ToDisplayString()}' has no member named '{name}'"
             );
             return new BoundError(syntax, receiver);
         }
@@ -4451,6 +4457,9 @@ public sealed partial class Binder {
     /// </summary>
     string? _unmetRequirement;
 
+    /// <summary>The type a static member is being looked up through by name.</summary>
+    TypeSymbol? _namedType;
+
     /// <summary>What a member lookup found, and what it has to be read through.</summary>
     private readonly record struct MemberLookup(
         IReadOnlyList<Symbol> Members,
@@ -4770,7 +4779,10 @@ public sealed partial class Binder {
                     string? unmet = null;
                     var available = new List<Symbol>(members.Count);
                     foreach (var member in members) {
+                        // A static function through the type named bare, whose
+                        // parameters the call infers, is held to them there.
                         if (member.ContainingSymbol is ExtensionSymbol { IsConstrained: true } extension
+                            && !(member is FunctionSymbol { IsStatic: true } && ReferenceEquals(named, _namedType) && named is { TypeArguments.IsEmpty: true, TypeParameters.IsEmpty: false })
                             && extension.Unmet(substitution, _conversions.Equivalence) is { } missing) {
                             unmet ??= missing;
                             continue;
@@ -5262,10 +5274,17 @@ public sealed partial class Binder {
                         }
                     }
 
-                    foreach (var initializer in initializers.Where(i => i.Parameters.Length == arguments.Length)) {
-                        for (var i = 0; i < arguments.Length; i++) {
-                            if (arguments[i] is not BoundUnboundClosure) {
-                                TypeSubstitution.Unify(initializer.Parameters[i].Type, arguments[i].Type, namedType.TypeParameters, map);
+                    // Only of an initialiser these labels could call, and not
+                    // where one of them is a constrained extension's, whose
+                    // 'where T == String' says what T is: each is then
+                    // inferred for as it is chosen.
+                    var fitting = initializers.Where(i => i.Parameters.Length == arguments.Length && LabelsFit(i, labels)).ToList();
+                    if (!fitting.Exists(static i => i.ContainingSymbol is ExtensionSymbol { SameTypeRequirements.IsEmpty: false })) {
+                        foreach (var initializer in fitting) {
+                            for (var i = 0; i < arguments.Length; i++) {
+                                if (arguments[i] is not BoundUnboundClosure) {
+                                    TypeSubstitution.Unify(initializer.Parameters[i].Type, arguments[i].Type, namedType.TypeParameters, map);
+                                }
                             }
                         }
                     }
@@ -5557,9 +5576,22 @@ public sealed partial class Binder {
 
         foreach (var initializer in initializers.Where(i => i.Parameters.Length >= arguments.Length)) {
             var slots = Align(initializer, labels, arguments.Length);
+            if (slots.Where((slot, i) => slot < initializer.Parameters.Length && i < labels.Length && !LabelFits(initializer.Parameters[slot], labels[i])).Any()) {
+                continue;
+            }
+
             for (var i = 0; i < arguments.Length; i++) {
                 if (slots[i] < initializer.Parameters.Length && arguments[i] is not BoundUnboundClosure) {
                     TypeSubstitution.Unify(outer.Apply(initializer.Parameters[slots[i]].Type), arguments[i].Type, alias.TypeParameters, map);
+                }
+            }
+        }
+
+        // What a constrained extension's initialiser says the type is.
+        foreach (var initializer in initializers.Where(i => i.Parameters.Length == arguments.Length && LabelsFit(i, labels))) {
+            if (initializer.ContainingSymbol is ExtensionSymbol extension) {
+                foreach (var (left, right) in extension.SameTypeRequirements) {
+                    TypeSubstitution.Unify(outer.Apply(left), outer.Apply(right), alias.TypeParameters, map);
                 }
             }
         }
@@ -5864,10 +5896,13 @@ public sealed partial class Binder {
             );
 
             // A bare generic type's, where its initialiser's parameters
-            // mention it: 'Box([])'.
-            var ofOwner = resolved.FunctionKind == FunctionKind.Initializer
-                ? _ownerTypeParameters.Where(p => resolved.Parameters.Any(parameter => TypeSubstitution.Mentions(parameter.Type, p)))
-                : [];
+            // mention it: 'Box([])'. And where a static function's do, or its
+            // extension's requirements, which what T is has to meet.
+            var ofOwner = _ownerTypeParameters.Where(p =>
+                (resolved.FunctionKind == FunctionKind.Initializer || !IsInScope(p))
+                && (resolved.Parameters.Any(parameter => TypeSubstitution.Mentions(parameter.Type, p))
+                    || resolved.ContainingSymbol is ExtensionSymbol { IsConstrained: true } extension
+                    && (extension.ConformanceRequirements.Any(r => TypeSubstitution.Mentions(r.Subject, p)) || extension.SameTypeRequirements.Any(r => TypeSubstitution.Mentions(r.Left, p)))));
             foreach (var typeParameter in resolved.TypeParameters.Concat(ofOwner)) {
                 if (substitution.Lookup(typeParameter) is not null) {
                     continue;
@@ -5910,6 +5945,11 @@ public sealed partial class Binder {
             return TypeSubstitution.Mentions(resolved.ReturnType, typeParameter)
                 ? ": give the call a type to produce, as in 'let x: Int = ...'"
                 : "";
+        }
+
+        // What only a closure said was not known as the overload was chosen.
+        if (!uninferred && UnmetByOwner(resolved, substitution, settled: true) is { } unmet) {
+            _diagnostics.Error(ErrorCode.ERR_DoesNotConform, syntax.Span, $"'{resolved.ContainingSymbol!.Name}' has {(resolved.FunctionKind == FunctionKind.Initializer ? "this initialiser" : $"'{resolved.Name}'")} only where {unmet}");
         }
 
         // A type parameter is Copyable unless it says '~Copyable': a move-only
@@ -6363,6 +6403,12 @@ public sealed partial class Binder {
             TypeSubstitution.Unify(wanted, argument.Type, inferrable, map);
         }
 
+        // What only a literal settled says the rest: 'init(each a: A) where
+        // B == A[>..]' of 'Two(each: 8)'.
+        if (literals.Count > 0 && inferrable.Any(p => !map.ContainsKey(p))) {
+            InferFromSameTypeRequirements(function, outer, inferrable, map);
+        }
+
         // 'apply { 7 }' for 'apply<T, E>(_ f: () throws(E) -> T)': a closure
         // that cannot throw throws nothing, so E is Never.
         for (var i = 0; i < arguments.Length && i < slots.Length; i++) {
@@ -6377,6 +6423,31 @@ public sealed partial class Binder {
 
         return new(map);
     }
+
+    /// <summary>Whether an argument written with a label, or with none, can be a parameter's.</summary>
+    static bool LabelFits(ParameterSymbol parameter, string? label) =>
+        label switch {
+            TrailingClosureLabel => true,
+            null => parameter.Label is null or "_" || parameter.Label == parameter.Name,
+            _ => string.Equals(parameter.Label ?? parameter.Name, label, StringComparison.Ordinal),
+        };
+
+    /// <summary>Whether a call's labels are those of a function's parameters, one for one.</summary>
+    static bool LabelsFit(FunctionSymbol function, ImmutableArray<string?> labels) =>
+        function.Parameters.Zip(labels).All(static p => LabelFits(p.First, p.Second));
+
+    /// <summary>
+    ///     What a constrained extension's initialiser, or static function
+    ///     called through the type named bare, asks of the type that it does
+    ///     not meet, or null where it meets it all or is not known yet. What
+    ///     another member's extension asks was checked where it was looked up.
+    /// </summary>
+    string? UnmetByOwner(FunctionSymbol function, TypeSubstitution substitution, bool settled = false) =>
+        function is { ContainingSymbol: ExtensionSymbol { IsConstrained: true } extension }
+        && (function.FunctionKind == FunctionKind.Initializer || function.IsStatic && !_ownerTypeParameters.IsEmpty)
+        && !_ownerTypeParameters.Any(p => substitution.Lookup(p) is null or { IsError: true } && !(settled && IsInScope(p)))
+            ? extension.Unmet(substitution, _conversions.Equivalence)
+            : null;
 
     /// <summary>How many of a call's arguments leave out a label their parameter has.</summary>
     static int LabelsLeftOut(FunctionSymbol function, ImmutableArray<string?> labels) =>
@@ -6605,9 +6676,11 @@ public sealed partial class Binder {
     ) {
         // An initialiser of a constrained extension says as much of the type
         // it makes: 'Stopwatch()', of 'extension Stopwatch where C ==
-        // MonotonicClock', is a Stopwatch<MonotonicClock>.
+        // MonotonicClock', is a Stopwatch<MonotonicClock>. So does a static
+        // function called through the type named bare.
         var requirements = function.SameTypeRequirements;
-        if (function is { FunctionKind: FunctionKind.Initializer, ContainingSymbol: ExtensionSymbol { SameTypeRequirements.IsEmpty: false } extension }) {
+        if (function is { ContainingSymbol: ExtensionSymbol { SameTypeRequirements.IsEmpty: false } extension }
+            && (function.FunctionKind == FunctionKind.Initializer || function.IsStatic)) {
             requirements = requirements.AddRange(extension.SameTypeRequirements);
         }
 
@@ -6621,9 +6694,9 @@ public sealed partial class Binder {
             foreach (var (left, right) in requirements) {
                 var known = Combine(outer, new(new Dictionary<TypeParameterSymbol, TypeSymbol>(map)));
                 var (l, r) = (known.Apply(left), known.Apply(right));
-                if (l is TypeParameterSymbol lp && inferrable.Contains(lp) && !map.ContainsKey(lp)) {
+                if (l is TypeParameterSymbol lp && inferrable.Contains(lp) && !map.ContainsKey(lp) && !Open(r)) {
                     TypeSubstitution.Unify(l, r, inferrable, map);
-                } else if (r is TypeParameterSymbol rp && inferrable.Contains(rp) && !map.ContainsKey(rp)) {
+                } else if (r is TypeParameterSymbol rp && inferrable.Contains(rp) && !map.ContainsKey(rp) && !Open(l)) {
                     TypeSubstitution.Unify(r, l, inferrable, map);
                 } else if (Open(r) && !Open(l)) {
                     // 'where S.Element == (Key, Value)': the known side's
@@ -6969,6 +7042,10 @@ public sealed partial class Binder {
             if (parameters[p] is { HasDefaultValue: false, IsVariadic: false } && Array.IndexOf(slots, p) < 0) {
                 return Reject($"'{parameters[p].Name}' has no default, and this passes nothing for it");
             }
+        }
+
+        if (UnmetByOwner(candidate, substitution) is { } unmet) {
+            return Reject($"it is there only where {unmet}");
         }
 
         var cost = 0;

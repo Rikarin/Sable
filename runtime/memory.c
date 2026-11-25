@@ -32,6 +32,20 @@
 // Classes up to a kilobyte: an array of a hundred numbers is as common as a
 // small object. Each step is at most half again the one before, so no more
 // than a third of a block is ever wasted.
+// Built with AddressSanitizer ('sable fuzz'), every block is malloc's: ASan
+// knows nothing of the blocks of a slab, and would see neither a read past
+// one's end nor one after it was freed.
+#if defined(__SANITIZE_ADDRESS__)
+#define SABLE_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define SABLE_ASAN 1
+#endif
+#endif
+#ifndef SABLE_ASAN
+#define SABLE_ASAN 0
+#endif
+
 enum { SMALL_TABLED = 256, SMALL_LARGEST = 1024 };
 
 // How many free blocks of a class a thread keeps before giving a batch back.
@@ -72,7 +86,7 @@ _Noreturn void sable_trap(const char *message);
 
 // The class for 'size' bytes, or zero: too large, or nothing at all.
 static inline unsigned small_class(int64_t size) {
-    if (size <= 0 || size > SMALL_LARGEST) {
+    if (SABLE_ASAN || size <= 0 || size > SMALL_LARGEST) {
         return 0;
     }
 
@@ -303,7 +317,8 @@ static void cache_flush(SableThread *thread) {
 // same memory afresh each time, which costs more than filling it. A
 // collected heap keeps its memory the same way. Its size is what its last
 // owner asked for: the block may be larger, never smaller.
-enum { LARGE_BUFFER = 1 << 20 };
+// Not with AddressSanitizer, which would not see it freed.
+enum { LARGE_BUFFER = SABLE_ASAN ? 0x7fffffff : 1 << 20 };
 static void *large_spare;
 static int64_t large_spare_size;
 static SpinLock spare_lock;

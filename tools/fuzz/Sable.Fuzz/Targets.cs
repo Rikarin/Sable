@@ -33,6 +33,12 @@ public abstract class Target {
     /// <summary>Tokens a mutation inserts whole, for libFuzzer's -dict and the in-process loop alike.</summary>
     public abstract IEnumerable<string> Dictionary();
 
+    /// <summary>For a target that reads Sable source: what edits whole nodes of it, beside the loop's edits of bytes.</summary>
+    public virtual SyntaxMutator? Mutator(string root) => null;
+
+    /// <summary>The mutator a target that reads Sable source has, its fragments the target's seeds'.</summary>
+    protected SyntaxMutator SourceMutator(string root) => new(Seeds(root).Select(static s => Encoding.UTF8.GetString(s.Data)));
+
     public static readonly IReadOnlyList<Target> All = [new ParserTarget(), new EditorTarget(), new FrontEndTarget(), new SilTarget(), new ResolverTarget(), new PackageFilesTarget(), new InterfaceTarget()];
 
     public static Target? Named(string name) => All.FirstOrDefault(t => t.Name == name);
@@ -54,26 +60,8 @@ public abstract class Target {
         }
     }
 
-    /// <summary>
-    ///     Sable's tokens, from the lexer's own tables — every keyword and
-    ///     every fixed-text token, so that one added to the language is in the
-    ///     dictionary without anyone remembering — and the shapes the tables
-    ///     cannot give: literals, comments, interpolation, directives.
-    /// </summary>
-    protected static IEnumerable<string> SableTokens() =>
-        SyntaxFacts.KeywordTexts
-            .Concat(Enum.GetValues<SyntaxKind>().Select(SyntaxFacts.GetText).OfType<string>())
-            .Concat([
-                "1", "0", "42", "0x1F", "0b101", "0o17", "1_000", "1.5", "1e10", "2.0e-3", "'c'", "'\\n'", "'\\u{1F600}'",
-                "\"s\"", "\"\"", "\"\\(x)\"", "\"a\\(b)c\\(d)\"", "\"\\n\\t\\\\\"", "\"\"\"\n", "#\"raw\"#",
-                "//", "// c\n", "/*", "*/", "/* /* */ */", "///", "/// doc\n",
-                "#if", "#elseif", "#else", "#endif", "os(linux)", "arch(arm64)",
-                "\n", "\r\n", "\t", "    ", "a", "x", "T", "Self", "self", "Int", "String", "List", "U8[>..]", "I32", "F64", "Bool",
-                "module M\n", "import Sable.IO\n", "@main\n", "@inline_layout\n", "@export(\"c\", \"f\")\n",
-                "fn f() {}", "struct S {}", "&<u32>", "$0", ".self", "..<", "...",
-            ])
-            .Where(static text => text.Length > 0)
-            .Distinct(StringComparer.Ordinal);
+    /// <summary>Sable's tokens, from the lexer's own tables.</summary>
+    protected static IEnumerable<string> SableTokens() => TokenDictionary.Tokens;
 }
 
 /// <summary>
@@ -278,6 +266,8 @@ public sealed class ParserTarget : Target {
         SourcesUnder(root, "tests/corpus", "tests/programs", "tests/negative", "examples", "lib");
 
     public override IEnumerable<string> Dictionary() => SableTokens().Append("\0");
+
+    public override SyntaxMutator Mutator(string root) => SourceMutator(root);
 }
 
 /// <summary>The whole front end, held to <see cref="FrontEndCheck" />: what the mutation fuzzer of the SIL tests holds it to.</summary>
@@ -285,6 +275,8 @@ public sealed class FrontEndTarget : Target {
     public override string Name => "frontend";
 
     public override void Run(ReadOnlySpan<byte> data) => FrontEndCheck.Compile(Text(data));
+
+    public override SyntaxMutator Mutator(string root) => SourceMutator(root);
 
     public override IEnumerable<(string, byte[])> Seeds(string root) =>
         SourcesUnder(root, "tests/corpus", "tests/programs", "tests/negative", "examples", "lib");

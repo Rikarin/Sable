@@ -456,7 +456,8 @@ public static class NativeBuild {
     ///     public symbols) leaves out: there they are kept external. Nothing
     ///     else links with the program, so no name can clash.
     /// </param>
-    public static string ForTarget(string llvmIr, NativeTarget target, bool inlinesRuntime = false, bool namesFrames = false) {
+    /// <param name="extraAttributes">More attributes for every function.</param>
+    public static string ForTarget(string llvmIr, NativeTarget target, bool inlinesRuntime = false, bool namesFrames = false, string? extraAttributes = null) {
         if (namesFrames && target.Platform is NativePlatform.Linux or NativePlatform.Windows) {
             llvmIr = llvmIr.Replace("\ndefine internal ", "\ndefine ", StringComparison.Ordinal);
         }
@@ -468,6 +469,10 @@ public static class NativeBuild {
 
         if (PlatformAttributesFor(target) is { } platform) {
             attributes.Add(platform);
+        }
+
+        if (extraAttributes is not null) {
+            attributes.Add(extraAttributes);
         }
 
         var ir = attributes.Count > 0 ? WithHostAttributes(llvmIr, string.Join(' ', attributes)) : llvmIr;

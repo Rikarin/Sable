@@ -63,7 +63,9 @@
 # where the last left off. The seeds are the repository's .sb files
 # (tests/corpus, tests/programs, tests/negative, examples, lib), the package
 # tests' manifests, and hand-written registries and records; the
-# dictionaries come from the lexer's own tables.
+# dictionaries come from the lexer's own tables. The parser and the front
+# end are also given mutants made by editing whole syntax nodes
+# (src/Sable.Syntax/SyntaxMutator.cs), for a third of the time.
 #
 # A target's engine stops at a hang (and libFuzzer at any failure); the
 # script starts it again, from the corpus, until the deadline. The deadline
@@ -295,6 +297,7 @@ fuzz() {
         "$bin/Sable.Fuzz" "$name" dict "$dir/dict" > "$setup" 2>&1 || { setup_failed "$name" "$setup" $?; return; }
     fi
 
+    local main_engine=$engine
     if [ "$engine" = none ]; then
         # No libFuzzer here: the seeds under the sanitizers, as a check that the harness works.
         if ASAN_OPTIONS=detect_leaks=0 "$out/frombytes/replay" "$dir/seeds"/* > "$dir/run-0.log" 2>&1; then
@@ -309,6 +312,18 @@ fuzz() {
 
     while [ "$(date +%s)" -lt "$deadline" ] && ! stopped; do
         local left=$(( deadline - $(date +%s) ))
+        # libFuzzer cannot call the grammar-aware mutator (SyntaxMutator),
+        # which is in the .NET process on the other side of a pipe. The
+        # targets that read Sable source have it first, for a third of the
+        # time, in the in-process loop; libFuzzer goes on from that corpus.
+        engine=$main_engine
+        case "$name" in
+            parser|frontend)
+                if [ "$round" -eq 0 ] && [ "$engine" = libfuzzer ]; then
+                    engine=in-process
+                    left=$(( left / 3 + 1 ))
+                fi ;;
+        esac
         local log="$dir/run-$round.log"
         local before status ran
         before=$(ls "$crashes")

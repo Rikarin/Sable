@@ -19,7 +19,7 @@ public enum TestKind {
 /// </param>
 /// <param name="Throws">Whether it is declared to throw: an error it throws fails the test.</param>
 /// <param name="TakesBencher">A benchmark that takes the <c>Bencher</c> and calls <c>iterate</c> itself.</param>
-public sealed record TestFunction(
+public sealed partial record TestFunction(
     FunctionSymbol Symbol,
     FunctionDeclarationSyntax Syntax,
     SyntaxTree Tree,
@@ -75,8 +75,9 @@ public sealed record TestFunction(
 ///         benchmark is not async. A test may be async, and is awaited.
 ///     </para>
 ///     <para>
-///         A fuzz target takes one <c>U8[:]</c>, the fuzzer's input, and gives
-///         nothing back; it fails by trapping — a failed assertion, an index
+///         A fuzz target takes one <c>U8[:]</c>, the fuzzer's input, or values
+///         made of it, of types that conform to <c>Sable.Testing.Arbitrary</c>
+///         (<see cref="CheckFuzzTarget" />), and gives nothing back; it fails by trapping — a failed assertion, an index
 ///         out of range, a <c>fatalError</c> — or by throwing. It is called
 ///         from C, once an input, so it is not async; like the others it is a
 ///         function of a module or a static method of a type that is not
@@ -168,8 +169,14 @@ public sealed partial class Compilation {
         }
 
         var options = new TestOptions();
+        string? mutator = null;
         foreach (var attribute in attributes.Where(static a => a.ArgumentList is not null)) {
-            if (attribute.Name.ToString().Trim() is BenchAttribute or FuzzAttribute) {
+            if (attribute.Name.ToString().Trim() == FuzzAttribute) {
+                mutator = FuzzMutator(attribute, tree);
+                if (mutator is null) {
+                    Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, MutatorExpected);
+                }
+            } else if (attribute.Name.ToString().Trim() == BenchAttribute) {
                 Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, $"'@{attribute.Name.ToString().Trim()}' takes no arguments");
             } else if (options.Read(attribute) is { } bad) {
                 Report(ErrorCode.ERR_TestAttributeArguments, bad.Span,
@@ -199,13 +206,7 @@ public sealed partial class Compilation {
                 Report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test takes no parameters: the harness has nothing to pass it, unless '@test(arguments: [...])' says what");
             }
         } else if (kind == TestKind.Fuzz) {
-            if (function.Parameters is not [{ Type: ArrayTypeSymbol { ArrayKind: ArrayKind.Slice, ElementType: var element } }] || !ReferenceEquals(element, Core.U8)) {
-                Report(ErrorCode.ERR_FuzzSignature, declaration.Parameters.Span, "a fuzz target takes one 'U8[:]': the bytes the fuzzer chose");
-            }
-
-            if (function.IsAsync) {
-                Report(ErrorCode.ERR_FuzzSignature, declaration.Identifier.Span, "a fuzz target is not async: C calls it once an input, and waits for nothing");
-            }
+            CheckFuzzTarget(function, declaration, Report);
         } else if (function.Parameters.Length == 1 && IsBencher(function.Parameters[0].Type)) {
             takesBencher = true;
         } else if (function.Parameters.Length > 0) {
@@ -255,7 +256,7 @@ public sealed partial class Compilation {
 
         return ok
             ? new(function, declaration, tree, kind, GetFileScope(tree).Module.Name, callPath, function.ThrownType is not null, takesBencher) {
-                ExpectedTrap = options.Trap, Tags = options.Tags, Timeout = options.Timeout, Arguments = options.Arguments,
+                ExpectedTrap = options.Trap, Tags = options.Tags, Timeout = options.Timeout, Arguments = options.Arguments, Mutator = mutator,
             }
             : null;
     }

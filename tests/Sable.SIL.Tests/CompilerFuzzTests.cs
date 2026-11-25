@@ -187,13 +187,20 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
     }
 
     /// <summary>
-    ///     One edit, sometimes a few, at token boundaries: trade a token for
+    ///     One edit, sometimes a few. Half the time of whole nodes of the
+    ///     tree (<see cref="SyntaxMutator" />), which leaves most mutants free
+    ///     of syntax errors; otherwise at token boundaries: trade a token for
     ///     another of its kind (a literal for another literal, a name for
     ///     another name — the edit most likely to leave a program that still
     ///     type-checks), delete a run, duplicate a run, splice in a run from
     ///     another program, or swap two tokens.
     /// </summary>
     static List<Piece> Mutate(Random random, List<Piece> parent, List<List<Piece>> pool, Dictionary<SyntaxKind, Piece[]> vocabulary) {
+        if (random.Next(2) == 0) {
+            var mutant = Mutator.Value.Mutate(string.Concat(parent.Select(static p => p.Text)), (ulong)random.NextInt64());
+            return Pieces(mutant) is { Count: > 0 } pieces ? pieces : parent;
+        }
+
         var tokens = new List<Piece>(parent);
         var edits = random.Next(4) == 0 ? random.Next(2, 5) : 1;
         for (; edits > 0; edits--) {
@@ -239,6 +246,8 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
         return tokens;
     }
 
+    static readonly Lazy<SyntaxMutator> Mutator = new(static () => new SyntaxMutator(Seeds()));
+
     /// <summary>A program as its tokens, each with its trivia, so that putting them back together gives the text.</summary>
     static List<Piece> Pieces(string source) =>
         [..SyntaxTree.Parse(new SourceText(source)).Root.DescendantTokens()
@@ -278,6 +287,27 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
             .ToList();
 
         Assert.True(missing.Count == 0, "no seed program uses: " + string.Join(", ", missing));
+    }
+
+    /// <summary>
+    ///     And every keyword and operator, and the forms no kind of node is
+    ///     for: a key path from a context's type and from a named one, and a
+    ///     value discarded.
+    /// </summary>
+    [Fact]
+    public void EveryKindOfTokenIsInASeed() {
+        var seeds = Seeds().Select(static source => SyntaxTree.Parse(source)).ToList();
+        var seen = seeds.SelectMany(static tree => tree.Root.DescendantTokens()).Select(static token => token.Kind).ToHashSet();
+        var missing = Enum.GetValues<SyntaxKind>()
+            .Where(kind => SyntaxFacts.GetText(kind) is { Length: > 0 } && !seen.Contains(kind))
+            .Select(static kind => $"{kind} '{SyntaxFacts.GetText(kind)}'")
+            .ToList();
+        Assert.True(missing.Count == 0, "no seed program uses: " + string.Join(", ", missing));
+
+        var paths = seeds.SelectMany(static tree => tree.Root.DescendantNodes().OfType<KeyPathExpressionSyntax>()).Select(static path => path.ToString()).ToList();
+        Assert.Contains(paths, static path => path.StartsWith("\\.", StringComparison.Ordinal));
+        Assert.Contains(paths, static path => path.Length > 1 && char.IsAsciiLetterUpper(path[1]));
+        Assert.Contains(seeds, static tree => tree.Root.DescendantNodes().OfType<DiscardExpressionSyntax>().Any());
     }
 
     static string Reproduce(string source) =>

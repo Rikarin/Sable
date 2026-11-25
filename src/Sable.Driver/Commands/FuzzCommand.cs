@@ -4,25 +4,35 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Sable.CodeGen;
 using Sable.Symbols;
+using Sable.Syntax;
 
 namespace Sable.Driver.Commands;
 
 /// <summary>What <c>sable fuzz</c> was asked for (<see cref="FuzzCommand.ParseArguments" />).</summary>
 /// <param name="Files">Source files named, to build as one program; none for the package here.</param>
 /// <param name="Target">The word that selects targets by name; null for all of them.</param>
-/// <param name="Time">How long to fuzz; null until stopped.</param>
+/// <param name="Duration">How long to fuzz each target; null until stopped.</param>
+/// <param name="Runs">How many inputs to try, in one process that stops at the first failure; null to fuzz until the time is up.</param>
 /// <param name="Inputs">With <paramref name="Replay" />, the inputs to run; none for every saved one.</param>
 /// <param name="Minimise">The input to minimise, if that is what was asked.</param>
 /// <param name="EngineArguments">What follows <c>--</c>: libFuzzer's own options, passed on as they are.</param>
 public sealed record FuzzOptions(
     IReadOnlyList<string> Files,
     string? Target,
-    TimeSpan? Time,
+    TimeSpan? Duration,
     bool List,
     bool Replay,
     IReadOnlyList<string> Inputs,
     string? Minimise,
-    IReadOnlyList<string> EngineArguments);
+    IReadOnlyList<string> EngineArguments) {
+    public long? Runs { get; init; }
+
+    /// <summary>Directories whose files start the corpus, beside the target's own.</summary>
+    public IReadOnlyList<string> Seeds { get; init; } = [];
+
+    /// <summary>A libFuzzer dictionary, or <c>sable</c> for the language's own tokens; null for the target's own, if it has one.</summary>
+    public string? Dictionary { get; init; }
+}
 
 /// <summary>
 ///     Where one fuzz target keeps what fuzzing finds, under the program's
@@ -66,7 +76,7 @@ public sealed record FuzzLayout(string Root, string Target) {
 ///     The program is built as a library (<see cref="TestHarness" />), whose
 ///     exported functions the shim C calls once an input
 ///     (<see cref="FuzzBuild" />). libFuzzer runs in fork mode, so that one
-///     failure does not end the run: each is saved, and fuzzing goes on until
+///     failure does not end the run (<c>--runs</c> stops at the first): each is saved, and fuzzing goes on until
 ///     the time is up or Ctrl-C, after which the command replays what failed,
 ///     minimises it and writes the summary. It exits 1 when a saved input
 ///     still fails.
@@ -76,22 +86,28 @@ public sealed partial class FuzzCommand : HarnessCommand {
     public override string Summary => "fuzz the @fuzz functions with libFuzzer";
 
     public override string Usage => """
-        usage: sable fuzz [<file.sb>...] [<target>] [--time <duration>] [-j <n>] [--list] [--replay [<input>...]] [--minimise <input>] [-- <libFuzzer option>...]
+        usage: sable fuzz [<file.sb>...] [<target>] [--duration <time>] [--runs <n>] [-j <n>] [--seeds <dir>] [--dict <file>] [--list] [--replay [<input>...]] [--minimise <input>] [-- <libFuzzer option>...]
 
         Without a file, fuzzes the package in this directory or the nearest above it: its library with
         the files under tests/ and benches/. A target is a @fuzz function, Module.function; a word
-        selects those whose names contain it. Fuzzing and minimising take one target.
+        selects those whose names contain it. Several are fuzzed one after another, each for the
+        whole duration; minimising takes one.
 
-          --time <duration>      fuzz this long (90s, 30m, 8h), then stop and sum up; Ctrl-C stops sooner
+          --duration <time>      fuzz this long (90s, 30m, 8h), then stop and sum up; Ctrl-C stops sooner
+          --runs <n>             try n inputs, in one process that stops at the first failure
           -j <n>                 fuzz in n processes at once (libFuzzer's -fork)
+          --seeds <dir>          start from the files under a directory too; may be given more than once
+          --dict <file>          tokens to put into inputs whole: a libFuzzer dictionary, or 'sable' for
+                                 the Sable language's own, for a target that reads its source
           --list                 list the fuzz targets
           --replay [<input>...]  run the target's saved inputs (or those given) once each, and say what fails
           --minimise <input>     the smallest input that fails as this one does, written as <input>.min
-          -- <option>...         passed to libFuzzer: -max_len=4096, -dict=<file>, -timeout=<s>
+          -- <option>...         passed to libFuzzer: -max_len=4096, -timeout=<s>
 
         What fuzzing finds is kept under target/fuzz/<target>/: corpus/, the inputs that reached new
         code, and crashes/, those that failed, each minimised, with summary.txt. Inputs in the
-        package's fuzz/<target>/ start the corpus. Fuzzing needs a clang with libFuzzer's runtime
+        package's fuzz/<target>/ start the corpus, and fuzz/<target>.dict is its dictionary; 'sable
+        test' runs every input kept once. Fuzzing needs a clang with libFuzzer's runtime
         (CC, or clang): Linux's has it; Apple's does not, and there --replay is what runs.
         """;
 
@@ -105,6 +121,9 @@ public sealed partial class FuzzCommand : HarnessCommand {
     /// <summary>How long minimising one failing input may take.</summary>
     const int MinimiseSeconds = 60;
 
+    /// <summary>The same after <c>--runs</c>, which is a quick look.</summary>
+    const int QuickMinimiseSeconds = 5;
+
     /// <summary>The command line, or null with the reason.</summary>
     public static FuzzOptions? ParseArguments(IReadOnlyList<string> arguments, out string? error) {
         error = null;
@@ -112,6 +131,9 @@ public sealed partial class FuzzCommand : HarnessCommand {
         var inputs = new List<string>();
         string? target = null, minimise = null;
         TimeSpan? time = null;
+        long? runs = null;
+        var seeds = new List<string>();
+        string? dictionary = null;
         bool list = false, replay = false;
         IReadOnlyList<string> engine = [];
         for (var i = 0; i < arguments.Count; i++) {
@@ -127,7 +149,7 @@ public sealed partial class FuzzCommand : HarnessCommand {
                 case "--replay":
                     replay = true;
                     continue;
-                case "--time" or "--minimise":
+                case "--duration" or "--runs" or "--seeds" or "--dict" or "--minimise":
                     if (i + 1 >= arguments.Count) {
                         error = $"{argument} needs a value";
                         return null;
@@ -136,10 +158,21 @@ public sealed partial class FuzzCommand : HarnessCommand {
                     var value = arguments[++i];
                     if (argument == "--minimise") {
                         minimise = value;
+                    } else if (argument == "--seeds") {
+                        seeds.Add(value);
+                    } else if (argument == "--dict") {
+                        dictionary = value;
+                    } else if (argument == "--runs") {
+                        if (!long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count == 0) {
+                            error = $"--runs takes a number of inputs, not '{value}'";
+                            return null;
+                        }
+
+                        runs = count;
                     } else if (ParseDuration(value) is { } duration) {
                         time = duration;
                     } else {
-                        error = $"--time takes a duration such as 90s, 30m or 8h, not '{value}'";
+                        error = $"--duration takes a time such as 90s, 30m or 8h, not '{value}'";
                         return null;
                     }
 
@@ -168,12 +201,12 @@ public sealed partial class FuzzCommand : HarnessCommand {
             return null;
         }
 
-        if (time is not null && (list || replay || minimise is not null)) {
-            error = "--time is how long to fuzz, so it goes with fuzzing alone";
+        if ((time is not null || runs is not null || seeds.Count > 0 || dictionary is not null) && (list || replay || minimise is not null)) {
+            error = "--duration, --runs, --seeds and --dict say how to fuzz, so they go with fuzzing alone";
             return null;
         }
 
-        return new(files, target, time, list, replay, inputs, minimise, engine);
+        return new(files, target, time, list, replay, inputs, minimise, engine) { Runs = runs, Seeds = seeds, Dictionary = dictionary };
     }
 
     /// <summary>A duration: a whole number with <c>ms</c>, <c>s</c>, <c>m</c> or <c>h</c>, or none for seconds.</summary>
@@ -198,14 +231,16 @@ public sealed partial class FuzzCommand : HarnessCommand {
     ///     What libFuzzer is run with to fuzz: the corpus first, where it
     ///     writes what it keeps, then the seed directories; where failures go;
     ///     fork mode with <paramref name="jobs" /> processes, which outlives a
-    ///     failure; the time limit; and what the user passed on.
+    ///     failure, unless it is to try so many <paramref name="runs" />; the
+    ///     time limit; the dictionary; and what the user passed on.
     /// </summary>
-    public static IReadOnlyList<string> EngineArguments(FuzzLayout layout, IReadOnlyList<string> seeds, TimeSpan? time, int jobs, IReadOnlyList<string> extra) => [
+    public static IReadOnlyList<string> EngineArguments(FuzzLayout layout, IReadOnlyList<string> seeds, TimeSpan? time, int jobs, IReadOnlyList<string> extra, long? runs = null, string? dictionary = null) => [
         layout.Corpus, ..seeds,
         $"-artifact_prefix={layout.Crashes}{Path.DirectorySeparatorChar}",
-        $"-fork={jobs}", "-ignore_crashes=1", "-ignore_timeouts=1", "-ignore_ooms=1",
+        ..(runs is { } count ? [$"-runs={count.ToString(CultureInfo.InvariantCulture)}"] : new[] { $"-fork={jobs}", "-ignore_crashes=1", "-ignore_timeouts=1", "-ignore_ooms=1" }),
         ..(extra.Any(static a => a.StartsWith("-timeout=", StringComparison.Ordinal)) ? [] : new[] { $"-timeout={InputSeconds}" }),
         "-print_final_stats=1",
+        ..(dictionary is not null ? [$"-dict={dictionary}"] : Array.Empty<string>()),
         ..(time is { } t ? [$"-max_total_time={(long)Math.Ceiling(t.TotalSeconds)}"] : Array.Empty<string>()),
         ..extra,
     ];
@@ -275,8 +310,8 @@ public sealed partial class FuzzCommand : HarnessCommand {
             return 1;
         }
 
-        if (!options.Replay && chosen.Count > 1) {
-            Console.Error.WriteLine($"sable fuzz: fuzzing takes one target, and {(options.Target is null ? "there are" : $"'{options.Target}' names")} {chosen.Count}: {string.Join(", ", chosen.Select(static t => t.Target.QualifiedName))}");
+        if (!options.Replay && chosen.Count > 1 && (options.Minimise is not null || (options.Duration is null && options.Runs is null))) {
+            Console.Error.WriteLine($"sable fuzz: {(options.Minimise is null ? "fuzzing with no --duration" : "minimising")} takes one target, and {(options.Target is null ? "there are" : $"'{options.Target}' names")} {chosen.Count}: {string.Join(", ", chosen.Select(static t => t.Target.QualifiedName))}");
             return 1;
         }
 
@@ -292,8 +327,8 @@ public sealed partial class FuzzCommand : HarnessCommand {
         if (options.Replay) {
             var failed = false;
             foreach (var (target, index) in chosen) {
-                var layout = FuzzLayout.For(program.TargetDirectory, target.QualifiedName);
-                IReadOnlyList<string> inputs = options.Inputs.Count > 0 ? options.Inputs : [..layout.SavedCrashes(), ..layout.SavedCorpus()];
+                var (crashes, corpus) = SavedInputs(program.Directory, program.TargetDirectory, target.QualifiedName);
+                IReadOnlyList<string> inputs = options.Inputs.Count > 0 ? options.Inputs : [..crashes, ..corpus];
                 var outcomes = Replay(binary, index, inputs);
                 var failures = outcomes.Where(static o => o.Report is not null).ToList();
                 Console.WriteLine($"{target.QualifiedName}: {inputs.Count} input{(inputs.Count == 1 ? "" : "s")} run, {failures.Count} fail{(failures.Count == 1 ? "s" : "")}");
@@ -307,31 +342,62 @@ public sealed partial class FuzzCommand : HarnessCommand {
             return failed ? 1 : 0;
         }
 
-        var (only, number) = chosen[0];
-        var fuzzed = FuzzLayout.For(program.TargetDirectory, only.QualifiedName);
         if (options.Minimise is { } minimised) {
-            var code = RunEngine(binary, MinimiseArguments(minimised, MinimiseSeconds), Environment(number));
+            var code = RunEngine(binary, MinimiseArguments(minimised, MinimiseSeconds), Environment(chosen[0].Index));
             Console.WriteLine(File.Exists(minimised + ".min") ? $"{minimised}: minimised to {new FileInfo(minimised + ".min").Length} bytes, in {minimised}.min" : $"{minimised}: not minimised");
             return code == 0 ? 0 : 1;
         }
 
-        Directory.CreateDirectory(fuzzed.Corpus);
-        Directory.CreateDirectory(fuzzed.Crashes);
-        var seeds = Path.Combine(program.Directory, "fuzz", only.QualifiedName);
-        var jobs = GlobalOptions.Current.Jobs ?? 1;
-        var before = fuzzed.SavedCrashes().ToHashSet(StringComparer.Ordinal);
-
         // Ctrl-C reaches libFuzzer too, which stops and prints its numbers;
-        // this waits for it, and sums up.
-        ConsoleCancelEventHandler stay = static (_, e) => e.Cancel = true;
+        // this waits for it, sums up, and starts no other target.
+        var stopped = false;
+        ConsoleCancelEventHandler stay = (_, e) => {
+            e.Cancel = true;
+            stopped = true;
+        };
         Console.CancelKeyPress += stay;
         try {
-            RunEngine(binary, EngineArguments(fuzzed, Directory.Exists(seeds) ? [seeds] : [], options.Time, jobs, options.EngineArguments), Environment(number));
+            var worst = 0;
+            foreach (var (target, index) in chosen.TakeWhile(_ => !stopped)) {
+                worst = Math.Max(worst, Fuzz(binary, FuzzLayout.For(program.TargetDirectory, target.QualifiedName), index, program.Directory, options));
+            }
+
+            return worst;
         } finally {
             Console.CancelKeyPress -= stay;
         }
+    }
 
-        return Summarise(fuzzed, binary, number, before);
+    /// <summary>Fuzzes one target, and sums up what it found.</summary>
+    static int Fuzz(string binary, FuzzLayout layout, int target, string directory, FuzzOptions options) {
+        Directory.CreateDirectory(layout.Corpus);
+        Directory.CreateDirectory(layout.Crashes);
+        var dictionary = options.Dictionary ?? (Path.Combine(directory, "fuzz", layout.Target + ".dict") is var own && File.Exists(own) ? own : null);
+        if (dictionary == "sable") {
+            dictionary = Path.Combine(layout.Directory, "sable.dict");
+            File.WriteAllText(dictionary, TokenDictionary.LibFuzzer(TokenDictionary.Tokens));
+        }
+
+        var before = layout.SavedCrashes().ToHashSet(StringComparer.Ordinal);
+        Console.WriteLine($"fuzzing {layout.Target}");
+        var code = RunEngine(binary, EngineArguments(layout, [..Seeds(directory, layout.Target), ..options.Seeds], options.Duration, GlobalOptions.Current.Jobs ?? 1, options.EngineArguments, options.Runs, dictionary), Environment(target));
+        var summary = Summarise(layout, binary, target, before, options.Runs is null ? MinimiseSeconds : QuickMinimiseSeconds);
+        if (code != 0 && summary == 0 && layout.SavedCrashes().All(before.Contains)) {
+            Console.Error.WriteLine($"sable fuzz: the fuzzer of {layout.Target} ended with exit code {code}, and no input to show for it");
+            return 1;
+        }
+
+        return summary;
+    }
+
+    /// <summary>Where a target's own seeds are, in the program's directory: one directory, or none.</summary>
+    static IReadOnlyList<string> Seeds(string directory, string target) =>
+        Path.Combine(directory, "fuzz", target) is var seeds && Directory.Exists(seeds) ? [seeds] : [];
+
+    /// <summary>A target's saved inputs: what failed, then the corpus, and the seeds it starts from.</summary>
+    internal static (IReadOnlyList<string> Crashes, IReadOnlyList<string> Corpus) SavedInputs(string directory, string targetDirectory, string target) {
+        var layout = FuzzLayout.For(targetDirectory, target);
+        return (layout.SavedCrashes(), [..Seeds(directory, target).SelectMany(static s => Directory.GetFiles(s).Order(StringComparer.Ordinal)), ..layout.SavedCorpus()]);
     }
 
     /// <summary>The environment the fuzz build runs a target in: its number, and ASan without its leak check (the runtime has its own) unless asked otherwise.</summary>
@@ -349,7 +415,7 @@ public sealed partial class FuzzCommand : HarnessCommand {
     ///     not been, and grouped by what it says; the groups go to the console
     ///     and to <c>summary.txt</c>. 1 when any still fails.
     /// </summary>
-    static int Summarise(FuzzLayout layout, string fuzzer, int target, IReadOnlySet<string> before) {
+    static int Summarise(FuzzLayout layout, string fuzzer, int target, IReadOnlySet<string> before, int minimiseSeconds) {
         var crashes = layout.SavedCrashes();
         var outcomes = Replay(fuzzer, target, crashes);
         var text = new StringBuilder();
@@ -372,7 +438,7 @@ public sealed partial class FuzzCommand : HarnessCommand {
             foreach (var (input, report) in group) {
                 var name = Path.GetFileName(input);
                 if (input == minimise) {
-                    RunEngine(fuzzer, MinimiseArguments(input, MinimiseSeconds), Environment(target), quiet: true);
+                    RunEngine(fuzzer, MinimiseArguments(input, minimiseSeconds), Environment(target), quiet: true);
                 }
 
                 File.WriteAllText(input + ".txt", report);

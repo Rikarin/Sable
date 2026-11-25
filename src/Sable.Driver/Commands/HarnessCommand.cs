@@ -40,6 +40,9 @@ public abstract class HarnessCommand : Command {
     /// <summary>The directory of what is built: the workspace's root, or the first file's.</summary>
     protected string ProgramDirectory { get; private set; } = ".";
 
+    /// <summary>Where what is built of it goes: its <c>target/</c>.</summary>
+    protected string TargetDirectory { get; private set; } = "target";
+
     /// <summary>'--bless': what is compared with a file is written to it instead.</summary>
     protected bool Bless { get; private set; }
 
@@ -141,6 +144,7 @@ public abstract class HarnessCommand : Command {
         // written there and kept, for a debugger to start.
         var executable = options.Output ?? Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}{NativeTarget.Host.ExecutableSuffix}");
         ProgramDirectory = program.Directory;
+        TargetDirectory = program.TargetDirectory;
         Bless = options.Bless;
         try {
             var code = Build(program.Trees, program.Directory, options, executable, program.Cache, program.Link, program.LinkInputs)

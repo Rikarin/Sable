@@ -743,6 +743,50 @@ public sealed partial class SilGen {
         _module.Add(thunk);
     }
 
+    /// <summary>
+    ///     A generic class's deinit for an instance whose arguments are known,
+    ///     in an unoptimised build that compiles generics once: a call of the
+    ///     one compiled once, with their metadata and tables. False when there is none.
+    /// </summary>
+    bool DeinitThunk(FunctionSymbol symbol, string name, FunctionType type, TypeSubstitution substitution) {
+        if (_generics != GenericsMode.Unspecialised || AmbientOptimised.Value || !IsClassDeinit(symbol) || UnspecialisedShape(symbol) is not { } shape
+            || symbol.DeclaringSyntax.FirstOrDefault() is not { } at) {
+            return false;
+        }
+
+        var hidden = new List<SilType>();
+        foreach (var parameter in shape.Parameters) {
+            if (substitution.Lookup(parameter) is not { } given || Lower(given) is not { } lowered || lowered is NominalType { IsNoncopyable: true }
+                || !shape.ProtocolsOf(parameter).All(p => GenericTable(given, p, at, DescribesValues(symbol), DebugDescribesValues(symbol)))) {
+                return false;
+            }
+
+            hidden.Add(lowered);
+        }
+
+        if (UnspecialisedInstance(symbol, shape, at) is not var (generic, genericType)) {
+            return false;
+        }
+
+        var thunk = new SilFunction(name, type);
+        var entry = thunk.AddBlock();
+        SilValue self = entry.AddArgument(type.Parameters[0]);
+        if (self.Type != genericType.Parameters[0]) {
+            self = entry.Append(new BuiltinInst("opaque_borrow_as", genericType.Parameters[0], self));
+        }
+
+        var arguments = new List<SilValue> { self };
+        arguments.AddRange(hidden.Select(h => entry.Append(new MetadataInst(h))));
+        foreach (var (parameter, protocol) in shape.Requirements) {
+            arguments.Add(entry.Append(new BuiltinInst($"witness_table_known:{QualifiedName(protocol)}", SilType.WitnessTable, entry.Append(new MetadataInst(hidden[shape.Parameters.IndexOf(parameter)])))));
+        }
+
+        entry.Append(new ApplyInst(entry.Append(new FunctionRefInst(generic, genericType)), SilType.Unit, [..arguments]));
+        entry.Append(new ReturnInst(null));
+        _module.Add(thunk);
+        return true;
+    }
+
     /// <summary>A type that mentions type parameters only behind a reference: an array or a slice of held values, or a plain generic class of them.</summary>
     static bool ByReference(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> parameters) =>
         IsArrayOf(type, parameters)

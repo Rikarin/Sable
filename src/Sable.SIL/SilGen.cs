@@ -987,6 +987,8 @@ public sealed partial class SilGen {
                     AbstractStub(symbol, name, type);
                 } else if (_localGenerics.TryGetValue(symbol, out var local)) {
                     LowerLocalFunction(symbol, local.Body, name, type, local.Source, substitution, _localGenericClosures.GetValueOrDefault(name));
+                } else if (!_unspecialised.ContainsKey(name) && DeinitThunk(symbol, name, type, substitution)) {
+                    // An instance's deinit is the one compiled once.
                 } else {
                     var (syntax, model) = _declarations[symbol];
                     _loweringInstance = name;

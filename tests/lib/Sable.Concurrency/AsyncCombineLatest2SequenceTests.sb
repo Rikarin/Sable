@@ -1,0 +1,184 @@
+module AsyncCombineLatest2SequenceTests
+
+// combineLatest(_:_:), merge(_:_:_:) and switchToLatest() (Sable.Concurrency),
+// tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Concurrency
+//
+// What the tasks do is waited for with Task.settle(), so the order things
+// happen in is the test's, not the scheduler's.
+
+import ConcurrencySupport
+import Sable.Concurrency
+import Sable.Testing
+
+@immutable
+final class Pairs {
+    let seen: Mutex<String[>..]>
+    let ended: Atomic<Bool>
+    let failed: Atomic<Bool>
+
+    init() {
+        seen = Mutex([])
+        ended = Atomic(false)
+        failed = Atomic(false)
+    }
+
+    var all: String[>..] => seen.withLock { $0 }
+}
+
+fn pairs(_ first: ThrowingChannel<Int, Broken>, _ second: ThrowingChannel<String, Broken>) -> Pairs {
+    let pairs = Pairs()
+    _ = Task.spawn {
+        do {
+            for try await (number, text) in combineLatest(first, second) {
+                pairs.seen.withLock { $0.append("\(number)\(text)") }
+            }
+            pairs.ended.store(true)
+        } catch {
+            pairs.failed.store(true)
+        }
+    }
+    return pairs
+}
+
+@test
+fn aPairIsGivenOnceEachHasGivenOne() async {
+    let numbers = ThrowingChannel<Int, Broken>()
+    let texts = ThrowingChannel<String, Broken>()
+    let combined = pairs(numbers, texts)
+    await numbers.send(1)
+    await numbers.send(2)
+    await Task.settle()
+    expect(combined.all == [])
+    await texts.send("a")
+    await Task.settle()
+    expect(combined.all == ["2a"])
+}
+
+@test
+fn eitherChangingGivesAPairWithTheOthersLatest() async {
+    let numbers = ThrowingChannel<Int, Broken>()
+    let texts = ThrowingChannel<String, Broken>()
+    let combined = pairs(numbers, texts)
+    await numbers.send(1)
+    await Task.settle()
+    await texts.send("a")
+    await Task.settle()
+    await texts.send("b")
+    await Task.settle()
+    await numbers.send(2)
+    await Task.settle()
+    expect(combined.all == ["1a", "1b", "2b"])
+    await numbers.close()
+    await Task.settle()
+    // One has ended: the other's changes still pair with its last.
+    await texts.send("c")
+    await Task.settle()
+    expect(combined.all == ["1a", "1b", "2b", "2c"])
+    await texts.close()
+    await Task.settle()
+    expect(combined.ended.load())
+}
+
+@test
+fn oneEndingWithoutAnElementEndsIt() async {
+    let numbers = ThrowingChannel<Int, Broken>()
+    let texts = ThrowingChannel<String, Broken>()
+    let combined = pairs(numbers, texts)
+    await texts.send("a")
+    await numbers.close()
+    await Task.settle()
+    expect(combined.ended.load() && combined.all == [])
+}
+
+@test
+fn eitherThrowingEndsItWithTheError() async {
+    let numbers = ThrowingChannel<Int, Broken>()
+    let texts = ThrowingChannel<String, Broken>()
+    let combined = pairs(numbers, texts)
+    await numbers.send(1)
+    await texts.close(error: .Down)
+    await Task.settle()
+    expect(combined.failed.load())
+}
+
+@test
+fn mergeOfThreeGivesEveryElement() async {
+    let a = Channel<Int>()
+    let b = Channel<Int>()
+    let c = Channel<Int>()
+    for i in 0..<3 {
+        await a.send(i)
+        await b.send(10 + i)
+        await c.send(20 + i)
+    }
+    await a.close()
+    await b.close()
+    await c.close()
+    var all = await merge(a, b, c).collect()
+    all.sort()
+    expect(all == [0, 1, 2, 10, 11, 12, 20, 21, 22])
+}
+
+@test
+fn mergeOfThreeEndsWithTheFirstError() async {
+    let a = ThrowingChannel<Int, Broken>()
+    let b = ThrowingChannel<Int, Broken>()
+    let c = ThrowingChannel<Int, Broken>()
+    await b.close(error: .Down)
+    var iterator = merge(a, b, c).makeAsyncIterator()
+    await expectThrows(Broken.Down) { _ = try await iterator.next() }
+}
+
+// ---- switchToLatest ---------------------------------------------------------
+
+@test
+fn switchToLatestGivesTheLatestSequencesElements() async {
+    let outer = Channel<Channel<Int>>()
+    let first = Channel<Int>()
+    let second = Channel<Int>()
+    let seen = Mutex<Int[>..]>([])
+    let ended = Atomic(false)
+    _ = Task.spawn {
+        for await value in outer.switchToLatest() {
+            seen.withLock { $0.append(value) }
+        }
+        ended.store(true)
+    }
+    await outer.send(first)
+    await Task.settle()
+    await first.send(1)
+    await Task.settle()
+    await outer.send(second)
+    await Task.settle()
+    // The first is let go: what it gives now is dropped.
+    await first.send(2)
+    await second.send(3)
+    await Task.settle()
+    expect(seen.withLock { $0 } == [1, 3])
+    await outer.close()
+    await Task.settle()
+    expect(!ended.load())
+    await second.close()
+    await Task.settle()
+    expect(ended.load())
+}
+
+@test
+fn switchToLatestOfNoSequencesIsEmpty() async {
+    let outer = Channel<Channel<Int>>()
+    await outer.close()
+    expect(await outer.switchToLatest().collect() == [])
+}
+
+@test
+fn switchToLatestPassesTheLatestsErrorOn() async {
+    let outer = ThrowingChannel<ThrowingChannel<Int, Broken>, Broken>()
+    let inner = ThrowingChannel<Int, Broken>()
+    await outer.send(inner)
+    await inner.send(1)
+    await inner.close(error: .Down)
+    var iterator = outer.switchToLatest().makeAsyncIterator()
+    expect(try! await iterator.next() == 1)
+    await expectThrows(Broken.Down) { _ = try await iterator.next() }
+}

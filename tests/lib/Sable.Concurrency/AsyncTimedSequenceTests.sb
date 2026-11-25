@@ -1,48 +1,102 @@
 module AsyncTimedSequenceTests
 
-// debounce(for:) and throttle(for:latest:) (AsyncDebounceSequence.sb and
-// AsyncThrottleSequence.sb in Sable.Concurrency), tested with '@test': run
-// with
+// The time-based operators — debounce, throttle, timeout, chunked(maxCount:
+// orEvery:) and sample (Sable.Concurrency) — tested with '@test' on a
+// TestClock: time passes only when the test advances it, and what the
+// tasks do meanwhile is waited for with Task.settle(), so nothing depends
+// on the machine's speed or its scheduling. Run with
 //     tools/stdlib-coverage.sh Sable.Concurrency
-//
-// The intervals are either long — nothing times out while the test runs —
-// or short against long pauses, so that a loaded machine does not change
-// what the test sees.
 
 import ConcurrencySupport
 import Sable.Concurrency
 import Sable.Testing
 import Sable.Time
 
+/// What a sequence gives, as it gives it: a task goes through it, keeping
+/// each element and how it ended.
+final class Gathered<T: Sendable> {
+    let elements: Mutex<T[>..]>
+    let ended: Atomic<Bool>
+    let failed: Atomic<Bool>
+    let timedOut: Atomic<Bool>
+    var task: Task<Void>? = none
+
+    init() {
+        elements = Mutex([])
+        ended = Atomic(false)
+        failed = Atomic(false)
+        timedOut = Atomic(false)
+    }
+
+    var all: T[>..] => elements.withLock { $0 }
+}
+
+fn gather<S: AsyncSequence>(_ sequence: S) -> Gathered<S.Element> where S: Sendable, S.Element: Sendable {
+    let gathered = Gathered<S.Element>()
+    let elements = gathered.elements
+    let ended = gathered.ended
+    let failed = gathered.failed
+    let timedOut = gathered.timedOut
+    gathered.task = Task.spawn {
+        do {
+            for try await element in sequence {
+                elements.withLock { $0.append(element) }
+            }
+            ended.store(true)
+        } catch {
+            let thrown: any Error = error
+            if thrown is TimeoutError {
+                timedOut.store(true)
+            } else {
+                failed.store(true)
+            }
+        }
+    }
+    return gathered
+}
+
+// ---- debounce --------------------------------------------------------------
+
 @test
-fn debounceGivesTheLastOfABurst() async {
+fn debounceGivesTheLastOfABurstOnceItIsQuiet() async {
+    let clock = TestClock()
     let input = Channel<Int>()
+    let seen = gather(input.debounce(for: Duration.seconds(1), clock: clock))
     for i in 1...5 {
         await input.send(i)
     }
-    await input.close()
-    expect(await input.debounce(for: Duration.seconds(60)).collect() == [5])
+    await Task.settle()
+    expect(seen.all == [])
+    await clock.advance(by: Duration.milliseconds(999))
+    expect(seen.all == [])
+    await clock.advance(by: Duration.milliseconds(1))
+    expect(seen.all == [5])
 }
 
 @test
-fn debounceGivesAnElementOnceTheSequenceIsQuiet() async {
+fn debounceStartsTheIntervalAgainForEachElement() async {
+    let clock = TestClock()
     let input = Channel<Int>()
-    var iterator = input.debounce(for: Duration.milliseconds(200)).makeAsyncIterator()
+    let seen = gather(input.debounce(for: Duration.seconds(1), clock: clock))
     await input.send(1)
+    await clock.advance(by: Duration.milliseconds(600))
     await input.send(2)
-    // Nothing more comes: the interval passes, and 2 is given.
-    expect(await iterator.next() == 2)
+    await clock.advance(by: Duration.milliseconds(600))
+    expect(seen.all == [])
+    await clock.advance(by: Duration.milliseconds(400))
+    expect(seen.all == [2])
     await input.send(3)
     await input.close()
-    expect(await iterator.next() == 3)
-    expect(await iterator.next() == none)
+    await Task.settle()
+    // The last is given as the sequence ends, without waiting.
+    expect(seen.all == [2, 3] && seen.ended.load())
 }
 
 @test
 fn debounceOfAnEmptySequenceIsEmpty() async {
     let input = Channel<Int>()
     await input.close()
-    expect(await input.debounce(for: Duration.milliseconds(1)).collect() == [])
+    expect(await input.debounce(for: Duration.milliseconds(1), clock: TestClock()).collect() == [])
 }
 
 @test
@@ -51,7 +105,7 @@ fn debouncePassesTheErrorOn() async {
     await input.send(1)
     await input.close(error: .Down)
     var got: Int[>..] = []
-    var iterator = input.debounce(for: Duration.seconds(60)).makeAsyncIterator()
+    var iterator = input.debounce(for: Duration.seconds(60), clock: TestClock()).makeAsyncIterator()
     await expectThrows(Broken.Down) {
         while let value = try await iterator.next() {
             got.append(value)
@@ -61,63 +115,205 @@ fn debouncePassesTheErrorOn() async {
 }
 
 @test
-fn throttleGivesTheFirstAtOnceAndTheNewestAfter() async {
+fn aCancelledConsumerStopsTheTimedSequence() async {
     let input = Channel<Int>()
-    for i in 1...5 {
-        await input.send(i)
+    let consumer = Task.spawn {
+        var seen = 0
+        for await _ in input.debounce(for: Duration.seconds(60), clock: TestClock()) {
+            seen += 1
+        }
+        return seen
     }
+    await input.send(1)
+    await Task.settle()
+    consumer.cancel()
+    assertEqual(await consumer.value, 0)
+}
+
+// ---- throttle --------------------------------------------------------------
+
+@test
+fn throttleGivesTheFirstAtOnceAndTheNewestAtTheIntervalsEnd() async {
+    let clock = TestClock()
+    let input = Channel<Int>()
+    let seen = gather(input.throttle(for: Duration.seconds(1), clock: clock))
+    await input.send(1)
+    await Task.settle()
+    expect(seen.all == [1])
+    await input.send(2)
+    await input.send(3)
+    await Task.settle()
+    expect(seen.all == [1])
+    await clock.advance(by: Duration.seconds(1))
+    expect(seen.all == [1, 3])
+    // The interval has passed since: the next goes through at once.
+    await clock.advance(by: Duration.seconds(5))
+    await input.send(4)
+    await Task.settle()
+    expect(seen.all == [1, 3, 4])
     await input.close()
-    expect(await input.throttle(for: Duration.seconds(60)).collect() == [1, 5])
+    await Task.settle()
+    expect(seen.ended.load())
 }
 
 @test
 fn throttleCanKeepTheFirstOfAnInterval() async {
+    let clock = TestClock()
+    let input = Channel<Int>()
+    let seen = gather(input.throttle(for: Duration.seconds(1), latest: false, clock: clock))
+    for i in 1...5 {
+        await input.send(i)
+    }
+    await Task.settle()
+    await clock.advance(by: Duration.seconds(1))
+    expect(seen.all == [1, 2])
+}
+
+@test
+fn throttleGivesTheOneWaitingAsTheSequenceEnds() async {
     let input = Channel<Int>()
     for i in 1...5 {
         await input.send(i)
     }
     await input.close()
-    expect(await input.throttle(for: Duration.seconds(60), latest: false).collect() == [1, 2])
-}
-
-@test(tags: ["slow"], timeout: .seconds(60))
-fn throttleGivesTheWaitingElementAtTheIntervalsEnd() async {
-    let input = Channel<Int>()
-    var iterator = input.throttle(for: Duration.milliseconds(200)).makeAsyncIterator()
-    await input.send(1)
-    expect(await iterator.next() == 1)
-    await input.send(2)
-    await input.send(3)
-    // The timer to the interval's end lets the newest through.
-    expect(await iterator.next() == 3)
-    try? await Task.sleep(for: Duration.milliseconds(300))
-    // The interval has passed: the next goes through at once.
-    await input.send(4)
-    expect(await iterator.next() == 4)
-    await input.close()
-    expect(await iterator.next() == none)
+    expect(await input.throttle(for: Duration.seconds(60), clock: TestClock()).collect() == [1, 5])
 }
 
 @test
 fn throttlePassesTheErrorOn() async {
     let input = ThrowingChannel<Int, Broken>()
     await input.close(error: .Down)
-    var iterator = input.throttle(for: Duration.seconds(1)).makeAsyncIterator()
+    var iterator = input.throttle(for: Duration.seconds(1), clock: TestClock()).makeAsyncIterator()
     await expectThrows(Broken.Down) { _ = try await iterator.next() }
 }
 
+// ---- timeout ---------------------------------------------------------------
+
 @test
-fn aCancelledConsumerStopsTheTimedSequence() async {
+fn timeoutPassesElementsThatComeInTime() async {
+    let clock = TestClock()
     let input = Channel<Int>()
-    let consumer = Task.spawn {
-        var seen = 0
-        for await _ in input.debounce(for: Duration.seconds(60)) {
-            seen += 1
-        }
-        return seen
-    }
+    let seen = gather(input.timeout(after: Duration.seconds(5), clock: clock))
     await input.send(1)
-    await settle()
-    consumer.cancel()
-    assertEqual(await consumer.value, 0)
+    await clock.advance(by: Duration.seconds(4))
+    await input.send(2)
+    await clock.advance(by: Duration.seconds(4))
+    await input.send(3)
+    await input.close()
+    await Task.settle()
+    expect(seen.all == [1, 2, 3] && seen.ended.load() && !seen.timedOut.load())
+}
+
+@test
+fn timeoutEndsTheSequenceWhenAnElementIsLate() async {
+    let clock = TestClock()
+    let input = Channel<Int>()
+    let seen = gather(input.timeout(after: Duration.seconds(5), clock: clock))
+    await input.send(1)
+    await clock.advance(by: Duration.milliseconds(4999))
+    expect(!seen.timedOut.load())
+    await clock.advance(by: Duration.milliseconds(1))
+    expect(seen.timedOut.load())
+    expect(seen.all == [1])
+}
+
+@test
+fn timeoutPassesTheErrorOn() async {
+    let input = ThrowingChannel<Int, Broken>()
+    await input.send(1)
+    await input.close(error: .Down)
+    var iterator = input.timeout(after: Duration.seconds(1), clock: TestClock()).makeAsyncIterator()
+    expect(try! await iterator.next() == 1)
+    await expectThrows(Broken.Down) { _ = try await iterator.next() }
+    expect(try! await iterator.next() == none)
+}
+
+// ---- chunked(maxCount:orEvery:) ---------------------------------------------
+
+@test
+fn aFullChunkIsGivenAtOnce() async {
+    let clock = TestClock()
+    let input = Channel<Int>()
+    let seen = gather(input.chunked(maxCount: 3, orEvery: Duration.seconds(10), clock: clock))
+    for i in 1...7 {
+        await input.send(i)
+    }
+    await Task.settle()
+    expect(seen.all == [[1, 2, 3], [4, 5, 6]])
+    await input.close()
+    await Task.settle()
+    // What is left, as the sequence ends.
+    expect(seen.all == [[1, 2, 3], [4, 5, 6], [7]] && seen.ended.load())
+}
+
+@test
+fn aChunkIsGivenTheIntervalAfterItsFirstElement() async {
+    let clock = TestClock()
+    let input = Channel<Int>()
+    let seen = gather(input.chunked(maxCount: 100, orEvery: Duration.seconds(10), clock: clock))
+    await input.send(1)
+    await clock.advance(by: Duration.seconds(4))
+    await input.send(2)
+    await clock.advance(by: Duration.seconds(5))
+    expect(seen.all == [])
+    await clock.advance(by: Duration.seconds(1))
+    expect(seen.all == [[1, 2]])
+    // No element, no chunk: an empty one is never given.
+    await clock.advance(by: Duration.seconds(60))
+    expect(seen.all == [[1, 2]])
+    await input.send(3)
+    await clock.advance(by: Duration.seconds(10))
+    expect(seen.all == [[1, 2], [3]])
+}
+
+@test
+fn chunkedThrowsTheErrorAfterTheChunkBeforeIt() async {
+    let input = ThrowingChannel<Int, Broken>()
+    await input.send(1)
+    await input.send(2)
+    await input.close(error: .Down)
+    var iterator = input.chunked(maxCount: 5, orEvery: Duration.seconds(1), clock: TestClock()).makeAsyncIterator()
+    expect(try! await iterator.next() == [1, 2])
+    await expectThrows(Broken.Down) { _ = try await iterator.next() }
+    expect(try! await iterator.next() == none)
+}
+
+// ---- sample(every:) ---------------------------------------------------------
+
+@test
+fn sampleGivesTheNewestElementAtEachTick() async {
+    let clock = TestClock()
+    let input = Channel<Int>()
+    let seen = gather(input.sample(every: Duration.seconds(1), clock: clock))
+    await input.send(1)
+    await input.send(2)
+    await Task.settle()
+    await clock.advance(by: Duration.seconds(1))
+    expect(seen.all == [2])
+    // Nothing new by the next tick: nothing given.
+    await clock.advance(by: Duration.seconds(1))
+    expect(seen.all == [2])
+    await input.send(3)
+    await Task.settle()
+    await clock.advance(by: Duration.seconds(1))
+    expect(seen.all == [2, 3])
+}
+
+@test
+fn sampleGivesTheOneWaitingAsTheSequenceEnds() async {
+    let clock = TestClock()
+    let input = Channel<Int>()
+    let seen = gather(input.sample(every: Duration.seconds(1), clock: clock))
+    await input.send(7)
+    await input.close()
+    await Task.settle()
+    expect(seen.all == [7] && seen.ended.load())
+}
+
+@test
+fn samplePassesTheErrorOn() async {
+    let input = ThrowingChannel<Int, Broken>()
+    await input.close(error: .Down)
+    var iterator = input.sample(every: Duration.seconds(1), clock: TestClock()).makeAsyncIterator()
+    await expectThrows(Broken.Down) { _ = try await iterator.next() }
 }

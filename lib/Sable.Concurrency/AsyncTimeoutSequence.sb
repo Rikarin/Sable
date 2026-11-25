@@ -1,0 +1,345 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+// The timed operators that wait for an element or a deadline, whichever
+// comes first ('timeout', 'chunked(maxCount:orEvery:)'): a task goes
+// through the sequence and sends each element, with the instant it came,
+// to a channel of one, and a timer task armed by the iterator sends a tick
+// to the same channel at the deadline. The iterator takes what comes from
+// the channel alone, so nothing is taken and lost when the deadline wins,
+// and the sequence waits — backpressure — while the iterator is not asked.
+
+extension AsyncSequence where Self: Sendable, Element: Sendable {
+    /// The elements, each within the interval of being asked for: one that
+    /// takes longer ends the sequence with `TimeoutError` — tokio-stream's
+    /// `timeout`, Rx's `Timeout`.
+    ///
+    /// ```sable
+    /// fn heartbeats(_ beats: Channel<Int>) async -> Int {
+    ///     var seen = 0
+    ///     do {
+    ///         for try await _ in beats.timeout(after: Duration.seconds(30)) {
+    ///             seen += 1
+    ///         }
+    ///     } catch {
+    ///         // No beat for thirty seconds.
+    ///     }
+    ///     return seen
+    /// }
+    /// ```
+    public fn timeout(after interval: Duration) -> AsyncTimeoutSequence<Self, MonotonicClock> {
+        return timeout(after: interval, clock: MonotonicClock())
+    }
+
+    /// As `timeout(after:)`, the interval measured on the clock.
+    ///
+    /// ```sable
+    /// let clock = TestClock()
+    /// let quiet = Channel<Int>()
+    /// let waiting = Task.spawn {
+    ///     do {
+    ///         for try await _ in quiet.timeout(after: Duration.seconds(5), clock: clock) { }
+    ///         return false
+    ///     } catch let error as TimeoutError {
+    ///         return true
+    ///     } catch { return false }
+    /// }
+    /// await clock.advance(by: Duration.seconds(5))
+    /// assert(await waiting.value)
+    /// ```
+    public fn timeout<C: Clock>(after interval: Duration, clock: C) -> AsyncTimeoutSequence<Self, C> {
+        precondition(interval > Duration.zero, "a timeout of \(interval)")
+        return AsyncTimeoutSequence<Self, C> { base: self, interval: interval, clock: clock }
+    }
+
+    /// The elements in arrays of at most so many, each given once it is
+    /// full or the interval has passed since its first element came,
+    /// whichever is first; never an empty one. What is left is given as the
+    /// sequence ends — tokio-stream's `chunks_timeout`, Rx's
+    /// `Buffer(timeSpan, count)`.
+    ///
+    /// ```sable
+    /// fn batches(_ events: Channel<String>) async -> Int {
+    ///     var inserts = 0
+    ///     for try await batch in events.chunked(maxCount: 100, orEvery: Duration.seconds(1)) {
+    ///         inserts += 1   // one insert of up to 100 rows, at most a second late
+    ///         _ = batch
+    ///     }
+    ///     return inserts
+    /// }
+    /// ```
+    public fn chunked(maxCount: Int, orEvery interval: Duration) -> AsyncTimedChunksSequence<Self, MonotonicClock> {
+        return chunked(maxCount: maxCount, orEvery: interval, clock: MonotonicClock())
+    }
+
+    /// As `chunked(maxCount:orEvery:)`, the interval measured on the clock.
+    public fn chunked<C: Clock>(maxCount: Int, orEvery interval: Duration, clock: C) -> AsyncTimedChunksSequence<Self, C> {
+        precondition(maxCount > 0, "chunks of \(maxCount) elements")
+        precondition(interval > Duration.zero, "chunks every \(interval)")
+        return AsyncTimedChunksSequence<Self, C> { base: self, maxCount: maxCount, interval: interval, clock: clock }
+    }
+}
+
+/// What `timeout(after:clock:)` makes: the elements, each within the
+/// interval.
+public struct AsyncTimeoutSequence<Base: AsyncSequence, C: Clock>: AsyncSequence where Base: Sendable, Base.Element: Sendable {
+    let base: Base
+    let interval: Duration
+    let clock: C
+
+    /// An iterator of the elements from now on: the task that goes through
+    /// the sequence is started.
+    public fn makeAsyncIterator() -> AsyncTimeoutIterator<Base.Element, Base.Failure, C> {
+        return AsyncTimeoutIterator<Base.Element, Base.Failure, C> { events: TimedEvents<Base.Element, Base.Failure, C>(base, clock), interval: interval, done: false }
+    }
+}
+
+/// Gives the elements of a sequence with a timeout.
+public struct AsyncTimeoutIterator<Value: Sendable, Failure: Error, C: Clock>: AsyncIterator {
+    public alias Element = Value
+
+    var events: TimedEvents<Value, Failure, C>
+    let interval: Duration
+    var done: Bool
+
+    /// The next element; none once the sequence has ended, or the task is
+    /// cancelled. Throws `TimeoutError` if it does not come within the
+    /// interval, and what the sequence throws; either ends it.
+    public mutating fn next() async throws -> Value? {
+        if done {
+            return none
+        }
+        let deadline = events.clock.now().saturatingAdding(interval)
+        do {
+            match try await events.next(until: deadline) {
+                case .Value(let value, _) => {
+                    return value
+                }
+                case .Late => {
+                    done = true
+                    events.stop()
+                    throw TimeoutError(interval)
+                }
+                case .Ended => {
+                    done = true
+                    return none
+                }
+            }
+        } catch {
+            done = true
+            events.stop()
+            throw error
+        }
+    }
+}
+
+/// What `chunked(maxCount:orEvery:clock:)` makes: the elements in arrays,
+/// each full or due.
+public struct AsyncTimedChunksSequence<Base: AsyncSequence, C: Clock>: AsyncSequence where Base: Sendable, Base.Element: Sendable {
+    let base: Base
+    let maxCount: Int
+    let interval: Duration
+    let clock: C
+
+    /// An iterator of the chunks from now on: the task that goes through
+    /// the sequence is started.
+    public fn makeAsyncIterator() -> AsyncTimedChunksIterator<Base.Element, Base.Failure, C> {
+        return AsyncTimedChunksIterator<Base.Element, Base.Failure, C> {
+            events: TimedEvents<Base.Element, Base.Failure, C>(base, clock), maxCount: maxCount, interval: interval,
+            waiting: none, failure: none, done: false
+        }
+    }
+}
+
+/// Gives a sequence's elements in arrays, each full or due.
+public struct AsyncTimedChunksIterator<Value: Sendable, Failure: Error, C: Clock>: AsyncIterator {
+    public alias Element = Value[>..]
+
+    var events: TimedEvents<Value, Failure, C>
+    let maxCount: Int
+    let interval: Duration
+    // An element that came after its chunk was due: the next chunk's first.
+    var waiting: TimedElement<Value, C.Instant>?
+    // What the sequence threw, thrown once its chunk has been given.
+    var failure: (any Error)?
+    var done: Bool
+
+    /// The next chunk: as soon as it is full, or the interval after its
+    /// first element came; what is left as the sequence ends; none after.
+    /// What the sequence throws is thrown after the chunk before it.
+    public mutating fn next() async throws -> Value[>..]? {
+        if let error = failure {
+            failure = none
+            done = true
+            throw error
+        }
+        if done {
+            return none
+        }
+        var chunk: Value[>..] = []
+        var deadline: C.Instant? = none
+        if let first = waiting {
+            waiting = none
+            chunk.append(first.value)
+            deadline = first.at.saturatingAdding(interval)
+        }
+        while chunk.count < maxCount {
+            var event: TimedEvent<Value, C.Instant> = .Ended
+            do {
+                if let due = deadline {
+                    event = try await events.next(until: due)
+                } else {
+                    event = try await events.next()
+                }
+            } catch {
+                events.stop()
+                if chunk.isEmpty {
+                    done = true
+                    throw error
+                }
+                failure = error
+                return chunk
+            }
+            match event {
+                case .Value(let value, let at) => {
+                    if let due = deadline {
+                        if at >= due {
+                            // It came once the chunk was due: it begins the next.
+                            waiting = TimedElement<Value, C.Instant> { value: value, at: at }
+                            return chunk
+                        }
+                    } else {
+                        deadline = at.saturatingAdding(interval)
+                    }
+                    chunk.append(value)
+                }
+                case .Late => {
+                    return chunk
+                }
+                case .Ended => {
+                    done = true
+                    return chunk.isEmpty ? none : chunk
+                }
+            }
+        }
+        return chunk
+    }
+}
+
+// An element and the instant it came.
+struct TimedElement<E, I> {
+    let value: E
+    let at: I
+}
+
+// What a timed operator's iterator takes from its channel.
+union TimedMessage<E, I> {
+    Element(E, I)
+    Tick(Int)
+}
+
+// What waiting for the next element came to.
+union TimedEvent<E, I> {
+    Value(E, I)
+    Late
+    Ended
+}
+
+// The channel a timed operator's elements and ticks come by, the task that
+// sends the elements, and the timer armed now.
+struct TimedEvents<Value: Sendable, Failure: Error, C: Clock> {
+    let channel: ThrowingChannel<TimedMessage<Value, C.Instant>, Failure>
+    let clock: C
+    let pump: TaskCanceller
+    var timer: Task<Void>? = none
+    var armed: Int = 0
+
+    init<S: AsyncSequence>(_ base: S, _ clock: C) where S: Sendable, S.Element == Value, S.Failure == Failure {
+        let channel = ThrowingChannel<TimedMessage<Value, C.Instant>, Failure>(capacity: 1)
+        self.channel = channel
+        self.clock = clock
+        let task = Task.detached {
+            var iterator = base.makeAsyncIterator()
+            do {
+                while let value = try await iterator.next() {
+                    if await channel.send(.Element(value, clock.now())) != .Sent {
+                        return
+                    }
+                }
+            } catch {
+                await channel.close(error: error)
+                return
+            }
+            await channel.close()
+        }
+        pump = TaskCanceller([task])
+    }
+
+    // The next element, however long it takes.
+    mutating fn next() async throws(Failure) -> TimedEvent<Value, C.Instant> {
+        while true {
+            guard let message = try await channel.receive() else {
+                return .Ended
+            }
+            match message {
+                case .Element(let value, let at) => {
+                    return .Value(value, at)
+                }
+                case .Tick(_) => { }
+            }
+        }
+    }
+
+    // The next element, or Late if none has come by the deadline.
+    mutating fn next(until deadline: C.Instant) async throws(Failure) -> TimedEvent<Value, C.Instant> {
+        if let message = channel.tryReceive() {
+            match message {
+                case .Element(let value, let at) => {
+                    return .Value(value, at)
+                }
+                case .Tick(_) => { }
+            }
+        }
+        if clock.now() >= deadline {
+            return .Late
+        }
+        armed += 1
+        let tick = armed
+        let channel = self.channel
+        let clock = self.clock
+        timer = Task.detached {
+            if (try? await clock.sleep(until: deadline)) != none {
+                _ = await channel.send(.Tick(tick))
+            }
+        }
+        defer {
+            if let running = timer {
+                running.cancel()
+                timer = none
+            }
+        }
+        while true {
+            guard let message = try await channel.receive() else {
+                return .Ended
+            }
+            match message {
+                case .Element(let value, let at) => {
+                    return .Value(value, at)
+                }
+                case .Tick(let which) => {
+                    if which == tick {
+                        return .Late
+                    }
+                }
+            }
+        }
+    }
+
+    // The task going through the sequence cancelled: the iterator is done.
+    fn stop() {
+        for task in pump.tasks {
+            task.cancel()
+        }
+    }
+}

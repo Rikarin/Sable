@@ -1,0 +1,136 @@
+module Sable.Concurrency
+
+// A task goes through the sequence of sequences; for each, it cancels the
+// task going through the one before and starts one for it, numbered. The
+// tasks send their elements, numbered, to a channel of one, and the
+// iterator lets through only those of the latest.
+
+extension AsyncSequence where Self: Sendable, Element: AsyncSequence, Element: Sendable, Element.Element: Sendable, Element.Failure == Failure {
+    /// The elements of the latest of the sequences this one gives: each
+    /// new sequence replaces the one before, which is cancelled, and what
+    /// it had not yet given is dropped — Rx's `Switch`, Combine's
+    /// `switchToLatest`. It ends once this sequence and the latest have
+    /// ended; what either throws ends it.
+    ///
+    /// ```sable
+    /// fn results(_ queries: Channel<String>, _ search: @escaping @Sendable (String) -> Channel<String>) async -> String[>..] {
+    ///     // Each query's results, until the next query is typed.
+    ///     return await queries.map { search($0) }.switchToLatest().collect()
+    /// }
+    /// ```
+    public fn switchToLatest() -> AsyncSwitchToLatestSequence<Self> {
+        return AsyncSwitchToLatestSequence<Self> { base: self }
+    }
+}
+
+/// What `switchToLatest()` makes: the latest sequence's elements.
+public struct AsyncSwitchToLatestSequence<Base: AsyncSequence>: AsyncSequence
+    where Base: Sendable, Base.Element: AsyncSequence, Base.Element: Sendable, Base.Element.Element: Sendable, Base.Element.Failure == Base.Failure {
+    let base: Base
+
+    /// An iterator of the elements from now on: the task that goes through
+    /// the sequences is started.
+    public fn makeAsyncIterator() -> AsyncSwitchToLatestIterator<Base.Element.Element, Base.Failure> {
+        let events = ThrowingChannel<SwitchEvent<Base.Element.Element>, Base.Failure>(capacity: 1)
+        let current = Atomic(0)
+        let base = self.base
+        let outer = Task.detached {
+            var iterator = base.makeAsyncIterator()
+            var inner: Task<Void>? = none
+            var generation = 0
+            do {
+                while let sequence = try await iterator.next() {
+                    generation += 1
+                    current.store(generation)
+                    if let running = inner {
+                        running.cancel()
+                    }
+                    let mine = generation
+                    inner = Task.spawn {
+                        var elements = sequence.makeAsyncIterator()
+                        do {
+                            while let value = try await elements.next() {
+                                if current.load() != mine {
+                                    return
+                                }
+                                if await events.send(.Value(mine, value)) != .Sent {
+                                    return
+                                }
+                            }
+                        } catch {
+                            if current.load() == mine {
+                                await events.close(error: error)
+                            }
+                            return
+                        }
+                        _ = await events.send(.InnerEnded(mine))
+                    }
+                }
+            } catch {
+                if let running = inner {
+                    running.cancel()
+                }
+                await events.close(error: error)
+                return
+            }
+            _ = await events.send(.OuterEnded(generation))
+        }
+        return AsyncSwitchToLatestIterator<Base.Element.Element, Base.Failure> {
+            events: events, current: current, pump: TaskCanceller([outer]), innerEnded: 0, outerEnded: -1, done: false
+        }
+    }
+}
+
+/// Gives the latest sequence's elements.
+public struct AsyncSwitchToLatestIterator<Value: Sendable, Failure: Error>: AsyncIterator {
+    public alias Element = Value
+
+    let events: ThrowingChannel<SwitchEvent<Value>, Failure>
+    let current: Atomic<Int>
+    let pump: TaskCanceller
+    // The latest sequence that has ended, and how many the outer one gave
+    // once it ended (-1 before).
+    var innerEnded: Int
+    var outerEnded: Int
+    var done: Bool
+
+    /// The next element of the latest sequence; none once it and the
+    /// sequence of sequences have ended, or if the task is cancelled while
+    /// it waits.
+    public mutating fn next() async throws(Failure) -> Value? {
+        while !done {
+            let received: SwitchEvent<Value>? = try await events.receive()
+            guard let event = received else {
+                done = true
+                return none
+            }
+            match event {
+                case .Value(let generation, let value) => {
+                    if generation == current.load() {
+                        return value
+                    }
+                }
+                case .InnerEnded(let generation) => {
+                    if generation > innerEnded {
+                        innerEnded = generation
+                    }
+                }
+                case .OuterEnded(let count) => {
+                    outerEnded = count
+                }
+            }
+            if outerEnded >= 0 && innerEnded >= outerEnded {
+                done = true
+            }
+        }
+        return none
+    }
+}
+
+// What the tasks of a switch send: an element of a numbered sequence, or
+// the end of one, or of the sequence of them (how many it gave).
+union SwitchEvent<V> {
+    Value(Int, V)
+    InnerEnded(Int)
+    OuterEnded(Int)
+}

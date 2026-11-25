@@ -1,0 +1,304 @@
+module Sable.Concurrency
+
+// A task goes through the sequence, and for each element takes a permit —
+// a place in a bounded channel, of so many — and starts a child task that
+// transforms it and sends the outcome, numbered, to the iterator. The
+// iterator gives the outcomes in order, or as they come, and gives a
+// permit back for each it gives: at most so many elements are being
+// transformed or waiting to be taken, which bounds both the work at once
+// and what is held for a slow consumer.
+
+extension AsyncSequence where Self: Sendable, Element: Sendable {
+    /// The elements transformed by at most so many tasks at once: in the
+    /// sequence's order, by default, or as each is done — Rust's
+    /// `buffered` and `buffer_unordered`, .NET's `Parallel.ForEachAsync`
+    /// with results. What the transform throws ends the sequence, in its
+    /// place in the order, and cancels the rest.
+    ///
+    /// ```sable
+    /// let sizes = try! await ["a", "bb", "ccc"].async.mapConcurrent(maxParallel: 2) { text in
+    ///     await Task.yield()
+    ///     return text.count
+    /// }.collect()
+    /// assert(sizes == [1, 2, 3])
+    /// ```
+    public fn mapConcurrent<T: Sendable>(maxParallel: Int, ordered: Bool = true, _ transform: @escaping @Sendable async (Element) throws -> T) -> AsyncMapConcurrentSequence<Self, T> {
+        precondition(maxParallel > 0, "at most \(maxParallel) at once")
+        return AsyncMapConcurrentSequence<Self, T> { base: self, maxParallel: maxParallel, ordered: ordered, transform: ConcurrentTransform<Element, T>(transform) }
+    }
+
+    /// The elements of the sequences the transform makes of the elements,
+    /// at most so many of them gone through at once, interleaved as their
+    /// elements come — Rust's `flat_map_unordered`, Rx's `SelectMany` with
+    /// a limit. What any throws ends it.
+    ///
+    /// ```sable
+    /// let all = try! await [1, 2, 3].async.flatMapConcurrent(maxParallel: 2) { n in
+    ///     [n, n * 10].async
+    /// }.collect()
+    /// assert(all.count == 6)
+    /// ```
+    public fn flatMapConcurrent<S: AsyncSequence>(maxParallel: Int, _ transform: @escaping @Sendable async (Element) -> S) -> AsyncFlatMapConcurrentSequence<Self, S>
+        where S: Sendable, S.Element: Sendable {
+        precondition(maxParallel > 0, "at most \(maxParallel) at once")
+        return AsyncFlatMapConcurrentSequence<Self, S> { base: self, maxParallel: maxParallel, transform: ConcurrentTransform<Element, S>(transform) }
+    }
+}
+
+/// What `mapConcurrent(maxParallel:ordered:_:)` makes: the elements,
+/// transformed concurrently.
+public struct AsyncMapConcurrentSequence<Base: AsyncSequence, T: Sendable>: AsyncSequence where Base: Sendable, Base.Element: Sendable {
+    let base: Base
+    let maxParallel: Int
+    let ordered: Bool
+    let transform: ConcurrentTransform<Base.Element, T>
+
+    /// An iterator of the results from now on: the task that goes through
+    /// the sequence is started.
+    public fn makeAsyncIterator() -> AsyncMapConcurrentIterator<T> {
+        let events = Channel<ConcurrentEvent<T>>()
+        let permits = Channel<Bool>(capacity: maxParallel)
+        let base = self.base
+        let transform = self.transform
+        let pump = Task.detached {
+            var iterator = base.makeAsyncIterator()
+            var index = 0
+            do {
+                while let element = try await iterator.next() {
+                    if await permits.send(true) != .Sent {
+                        return
+                    }
+                    let at = index
+                    index += 1
+                    _ = Task.spawn {
+                        let done = await outcome(of: { try await transform.call(element) })
+                        _ = await events.send(.Done(at, done))
+                    }
+                }
+            } catch {
+                _ = await events.send(.Failed(index, error))
+                return
+            }
+            _ = await events.send(.Ended(index))
+        }
+        return AsyncMapConcurrentIterator<T> {
+            events: events, permits: permits, pump: TaskCanceller([pump]), ordered: ordered,
+            waiting: [:], given: 0, total: -1, failedAt: -1, failure: none, done: false
+        }
+    }
+}
+
+/// Gives the transformed elements, in order or as each is done.
+public struct AsyncMapConcurrentIterator<T: Sendable>: AsyncIterator {
+    public alias Element = T
+
+    let events: Channel<ConcurrentEvent<T>>
+    let permits: Channel<Bool>
+    let pump: TaskCanceller
+    let ordered: Bool
+    // Done ahead of their turn, by position.
+    var waiting: [Int: Outcome<T, any Error>]
+    var given: Int
+    // How many elements the sequence had (-1 until it ends), and where it
+    // threw, and what.
+    var total: Int
+    var failedAt: Int
+    var failure: (any Error)?
+    var done: Bool
+
+    /// The next element transformed; none once all have been given, or if
+    /// the task is cancelled while it waits.
+    public mutating fn next() async throws -> T? {
+        while !done {
+            if ordered {
+                if let ready = waiting.remove(given) {
+                    return try give(ready)
+                }
+            }
+            if given == total {
+                done = true
+                return none
+            }
+            if given == failedAt {
+                done = true
+                stop()
+                if let error = failure {
+                    throw error
+                }
+            }
+            guard let event = await events.receive() else {
+                done = true
+                stop()
+                return none
+            }
+            match event {
+                case .Done(let at, let result) => {
+                    if !ordered {
+                        return try give(result)
+                    }
+                    waiting[at] = result
+                }
+                case .Ended(let count) => {
+                    total = count
+                }
+                case .Failed(let at, let error) => {
+                    failedAt = at
+                    failure = error
+                }
+            }
+        }
+        return none
+    }
+
+    mutating fn give(_ result: Outcome<T, any Error>) throws -> T {
+        _ = permits.tryReceive()
+        given += 1
+        do {
+            return try result.get()
+        } catch {
+            done = true
+            stop()
+            throw error
+        }
+    }
+
+    fn stop() {
+        for task in pump.tasks {
+            task.cancel()
+        }
+    }
+}
+
+/// What `flatMapConcurrent(maxParallel:_:)` makes: the elements of the
+/// sequences made of the elements, interleaved.
+public struct AsyncFlatMapConcurrentSequence<Base: AsyncSequence, S: AsyncSequence>: AsyncSequence
+    where Base: Sendable, Base.Element: Sendable, S: Sendable, S.Element: Sendable {
+    let base: Base
+    let maxParallel: Int
+    let transform: ConcurrentTransform<Base.Element, S>
+
+    /// An iterator of the elements from now on: the task that goes through
+    /// the sequence is started.
+    public fn makeAsyncIterator() -> AsyncFlatMapConcurrentIterator<S.Element> {
+        let events = Channel<FlatEvent<S.Element>>(capacity: 1)
+        let permits = Channel<Bool>(capacity: maxParallel)
+        let base = self.base
+        let transform = self.transform
+        let pump = Task.detached {
+            var iterator = base.makeAsyncIterator()
+            var count = 0
+            do {
+                while let element = try await iterator.next() {
+                    if await permits.send(true) != .Sent {
+                        return
+                    }
+                    count += 1
+                    _ = Task.spawn {
+                        let inner = try! await transform.call(element)
+                        var elements = inner.makeAsyncIterator()
+                        do {
+                            while let value = try await elements.next() {
+                                if await events.send(.Value(value)) != .Sent {
+                                    return
+                                }
+                            }
+                        } catch {
+                            _ = await events.send(.InnerFailed(error))
+                            return
+                        }
+                        _ = await events.send(.InnerEnded)
+                    }
+                }
+            } catch {
+                _ = await events.send(.BaseFailed(error))
+                return
+            }
+            _ = await events.send(.BaseEnded(count))
+        }
+        return AsyncFlatMapConcurrentIterator<S.Element> { events: events, permits: permits, pump: TaskCanceller([pump]), ended: 0, total: -1, done: false }
+    }
+}
+
+/// Gives the elements of sequences gone through concurrently.
+public struct AsyncFlatMapConcurrentIterator<Value: Sendable>: AsyncIterator {
+    public alias Element = Value
+
+    let events: Channel<FlatEvent<Value>>
+    let permits: Channel<Bool>
+    let pump: TaskCanceller
+    var ended: Int
+    var total: Int
+    var done: Bool
+
+    /// The next element of any of the sequences; none once all have ended,
+    /// or if the task is cancelled while it waits.
+    public mutating fn next() async throws -> Value? {
+        while !done {
+            if ended == total {
+                done = true
+                return none
+            }
+            guard let event = await events.receive() else {
+                done = true
+                stop()
+                return none
+            }
+            match event {
+                case .Value(let value) => {
+                    return value
+                }
+                case .InnerEnded => {
+                    _ = permits.tryReceive()
+                    ended += 1
+                }
+                case .BaseEnded(let count) => {
+                    total = count
+                }
+                case .InnerFailed(let error) => {
+                    done = true
+                    stop()
+                    throw error
+                }
+                case .BaseFailed(let error) => {
+                    done = true
+                    stop()
+                    throw error
+                }
+            }
+        }
+        return none
+    }
+
+    fn stop() {
+        for task in pump.tasks {
+            task.cancel()
+        }
+    }
+}
+
+// A transform the tasks of a concurrent map share.
+@immutable
+final class ConcurrentTransform<A, B> {
+    let call: async (A) throws -> B
+
+    init(_ call: @escaping @Sendable async (A) throws -> B) {
+        self.call = call
+    }
+}
+
+// What a concurrent map's tasks send: an element's outcome, by position;
+// or that the sequence ended, after so many, or threw there.
+union ConcurrentEvent<T> {
+    Done(Int, Outcome<T, any Error>)
+    Ended(Int)
+    Failed(Int, any Error)
+}
+
+// What a concurrent flat map's tasks send.
+union FlatEvent<V> {
+    Value(V)
+    InnerEnded
+    InnerFailed(any Error)
+    BaseEnded(Int)
+    BaseFailed(any Error)
+}

@@ -991,15 +991,17 @@ compiler knows only by name: `[K: V]` binds to it (its key checked for
 `init(dictionaryLiteral:)`, `d[k]` its subscript, and `for (k, v) in d` goes
 through its `Sequence` conformance like any other type's. There is one hashed
 map; `Sable.Collections.HashMap` is gone, and `Set` (a value, with union,
-intersection and the subset tests) is a dictionary to `Bool` underneath.
+intersection and the subset tests, which use the hashes it keeps) is a
+dictionary to nothing underneath.
 `InlineArray<T, N>` is the built-in `T[N]` by that name, and `SmallVec<T, N>`
 keeps `N` elements inline in a `T[..N]` before it moves to the heap.
 
 - **Layout.** An array of entries (key, value, the key's full hash) in the
   order keys were added, none where one was removed, and beside it an index:
-  a power of two of `Int` slots, at most half of them used, each empty (-1),
-  left by a removal (-2), or the entry's position with the top 31 bits of its
-  hash above it. A probe starts where the hash's bottom bits say and moves
+  a power of two of `I32` slots, at most half of them used, each empty (-1),
+  left by a removal (-2), or the entry's position with bits of its hash above
+  it, as many as the position leaves of 31: four bytes a slot, so that the
+  index of a large dictionary is in cache twice as often. A probe starts where the hash's bottom bits say and moves
   one slot at a time, comparing the stored hash bits before any key —
   SwissTable's metadata filter, without its SIMD groups: at most half full,
   a probe looks at a slot and a half on average. Growing drops removed entries and rebuilds the index from

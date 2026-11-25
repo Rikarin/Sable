@@ -195,3 +195,28 @@ fn everyKindOfArrayCanBeSearched() {
     assertEqual(shrink.lastIndex(where: isEven) ?? -1, 1)
     assertEqual(fixed[1...].firstIndex(of: 7) ?? -1, 1)
 }
+
+@test
+fn halvingFindsWhatLookingAtEachDoes() {
+    // Every size, with runs of equal elements: where 'binarySearch' says one
+    // is, it is, and where it says one could go keeps the array sorted.
+    for size in 0..<50 {
+        var xs: Int[>..] = []
+        for i in 0..<size {
+            xs.append(i * 2 / 3 * 2)
+        }
+        for wanted in -1..<size * 2 + 2 {
+            match xs.binarySearch(for: wanted) {
+                case .Ok(let at) => assertEqual(xs[at], wanted)
+                case .Err(let at) => {
+                    assert(!xs.contains(element: wanted))
+                    assert(at == 0 || xs[at - 1] < wanted)
+                    assert(at == size || wanted < xs[at])
+                }
+                default => fail("neither found nor a place for it")
+            }
+            let below = xs.firstIndex(where: (x: Int) => !(x < wanted)) ?? size
+            assertEqual(xs.partitionPoint(where: (x: Int) => x < wanted), below)
+        }
+    }
+}

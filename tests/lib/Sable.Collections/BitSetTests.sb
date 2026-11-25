@@ -132,3 +132,29 @@ fn aBitSetKnowsItsLeastGreatestAndARange() {
     assert(bits.members(in: -5..<1000) == [3, 9, 70, 128])
     assert(bits.members(in: 64..<128) == [70])
 }
+
+@test
+fn setsOfDifferentLengthsCombine() {
+    for (short, long) in [(0, 100), (64, 65), (5, 1000), (200, 200)] {
+        let a = BitSet((0..<short).filter { $0 % 3 == 0 })
+        let b = BitSet((0..<long).filter { $0 % 5 == 0 })
+        for (x, y) in [(a, b), (b, a)] {
+            let both = (0..<1000).filter({ x.contains($0) || y.contains($0) }).toArray()
+            assert(x.union(y).toArray() == both && x.union(y).count == both.count)
+            let common = (0..<1000).filter({ x.contains($0) && y.contains($0) }).toArray()
+            assert(x.intersection(y).toArray() == common && x.intersection(y).count == common.count)
+            let left = (0..<1000).filter({ x.contains($0) && !y.contains($0) }).toArray()
+            assert(x.subtracting(y).toArray() == left && x.subtracting(y).count == left.count)
+            let either = (0..<1000).filter({ x.contains($0) != y.contains($0) }).toArray()
+            assert(x.symmetricDifference(y).toArray() == either && x.symmetricDifference(y).count == either.count)
+        }
+    }
+    let bits = BitSet()
+    assert(bits.insert(640) && !bits.insert(640) && bits.insert(0))
+    assert(bits.toArray() == [0, 640])
+}
+
+@test(traps: "array index out of range")
+fn aNegativeValueIsNotInserted() {
+    let _ = BitSet().insert(-1)
+}

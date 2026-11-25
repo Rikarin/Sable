@@ -188,7 +188,7 @@ public class Deque<Element> {
             moved.append(contentsOf: slots[head..<slots.count])
             moved.append(contentsOf: slots[0..<end - slots.count])
         }
-        moved.append(contentsOf: Element?[>..](repeating: none, count: size - used))
+        moved.append(repeating: none, count: size - used)
         slots = moved
         head = 0
     }

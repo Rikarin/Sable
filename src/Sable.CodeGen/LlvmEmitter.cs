@@ -261,22 +261,6 @@ public sealed partial class LlvmEmitter {
             output.Append(ExternalDeclarations(unit, output));
         }
 
-        // Type-based alias information (docs/04 §3.8): an array's header —
-        // its count, its buffer — is never a value, and an object's count of
-        // references is neither, so a store to an element or a field, or a
-        // retain, leaves them where LLVM last read them; and a number is
-        // never a reference, so a store of one leaves the array or the object
-        // a variable holds.
-        output.Append($"\n{Unpredictable} = !{{}}\n{TbaaRoot} = !{{!\"Sable TBAA\"}}\n")
-            .Append($"{TbaaHeaderType} = !{{!\"array header\", {TbaaRoot}, i64 0}}\n")
-            .Append($"{TbaaCountType} = !{{!\"reference count\", {TbaaRoot}, i64 0}}\n")
-            .Append($"{TbaaValueType} = !{{!\"value\", {TbaaRoot}, i64 0}}\n")
-            .Append($"{TbaaScalarType} = !{{!\"number\", {TbaaValueType}, i64 0}}\n")
-            .Append($"{TbaaReferenceType} = !{{!\"reference\", {TbaaValueType}, i64 0}}\n");
-        foreach (var (tag, type) in new[] { (TbaaHeader, TbaaHeaderType), (TbaaCount, TbaaCountType), (TbaaValue, TbaaValueType), (TbaaScalar, TbaaScalarType), (TbaaReference, TbaaReferenceType) }) {
-            output.Append($"{tag} = !{{{type}, {type}, i64 0}}\n");
-        }
-
         foreach (var name in _comdatNames.Distinct(StringComparer.Ordinal)) {
             output.Append('$').Append(name[1..]).Append(" = comdat any\n");
         }
@@ -309,8 +293,30 @@ public sealed partial class LlvmEmitter {
     /// </summary>
     public static string RetainAndRelease(bool checkArc) => checkArc ? CheckedCounting : Counting;
 
-    static readonly string Counting = BuildCounting(false);
-    static readonly string CheckedCounting = BuildCounting(true);
+    /// <summary>
+    ///     Type-based alias information (docs/04 §3.8): an array's header —
+    ///     its count, its buffer — is never a value, and an object's count of
+    ///     references is neither, so a store to an element or a field, or a
+    ///     retain, leaves them where LLVM last read them; and a number is
+    ///     never a reference, so a store of one leaves the array or the object
+    ///     a variable holds. With the counting, which every module has.
+    /// </summary>
+    static string AliasTypes() {
+        var text = new StringBuilder($"\n{Unpredictable} = !{{}}\n{TbaaRoot} = !{{!\"Sable TBAA\"}}\n")
+            .Append($"{TbaaHeaderType} = !{{!\"array header\", {TbaaRoot}, i64 0}}\n")
+            .Append($"{TbaaCountType} = !{{!\"reference count\", {TbaaRoot}, i64 0}}\n")
+            .Append($"{TbaaValueType} = !{{!\"value\", {TbaaRoot}, i64 0}}\n")
+            .Append($"{TbaaScalarType} = !{{!\"number\", {TbaaValueType}, i64 0}}\n")
+            .Append($"{TbaaReferenceType} = !{{!\"reference\", {TbaaValueType}, i64 0}}\n");
+        foreach (var (tag, type) in new[] { (TbaaHeader, TbaaHeaderType), (TbaaCount, TbaaCountType), (TbaaValue, TbaaValueType), (TbaaScalar, TbaaScalarType), (TbaaReference, TbaaReferenceType) }) {
+            text.Append($"{tag} = !{{{type}, {type}, i64 0}}\n");
+        }
+
+        return text.ToString();
+    }
+
+    static readonly string Counting = BuildCounting(false) + AliasTypes();
+    static readonly string CheckedCounting = BuildCounting(true) + AliasTypes();
 
     static string BuildCounting(bool check) {
         string Dead(int operation) => check
@@ -3183,8 +3189,8 @@ public sealed partial class LlvmEmitter {
                     // follow to them and drops what they make pointless.
                     Line($"{name} = call ptr @sable_alloc_uninitialised(ptr {module.ClassMetadata(alloc.ClassType)}, i64 {size})");
                     var fields = Fresh();
-                    Line($"{fields} = getelementptr inbounds i8, ptr {name}, i64 16");
-                    Line($"call void @llvm.memset.p0.i64(ptr align 16 {fields}, i8 0, i64 sub (i64 {size}, i64 16), i1 false)");
+                    Line($"{fields} = getelementptr inbounds i8, ptr {name}, i64 {TypeLayout.ObjectHeaderSize}");
+                    Line($"call void @llvm.memset.p0.i64(ptr align {TypeLayout.PointerBytes} {fields}, i8 0, i64 sub (i64 {size}, i64 {TypeLayout.ObjectHeaderSize}), i1 false)");
                     return;
                 }
 

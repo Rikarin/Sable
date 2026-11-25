@@ -830,4 +830,144 @@ public sealed class PassTests {
         Assert.DoesNotContain(Instructions(function), static i => i is LoadInst { Kind: LoadKind.Copy });
         Assert.Equal(3L, new SilInterpreter(module).Run("f"));
     }
+
+    /// <summary>
+    ///     An object's fields are initialised where its allocation is in
+    ///     view, with nothing to destroy there and nothing to share it into;
+    ///     a field stored again is assigned, and so is one stored once the
+    ///     object has been given away.
+    /// </summary>
+    [Fact]
+    public void AnObjectJustMadeHasItsFieldsInitialised() {
+        var module = Lowered(
+            """
+            class Node {
+                var name: String
+                var next: Node?
+                init(_ name: String, _ next: Node?) {
+                    self.name = name
+                    self.next = next
+                }
+            }
+            fn keep(_ node: Node) -> Int { return node.name.count }
+            fn make(_ next: Node?) -> Node {
+                let node = Node("a", next)
+                node.name = "bc"
+                return node
+            }
+            fn run() -> Int { return keep(make(make(none))) }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var stores = Instructions(module.Find("M.make")!).OfType<StoreInst>().Where(static s => s.Address is RefElementAddrInst).ToList();
+        Assert.Equal([StoreKind.Init, StoreKind.Init], stores.Where(static s => s.IntoFresh).Take(2).Select(static s => s.Kind));
+        Assert.Contains(stores, static s => s.Kind == StoreKind.Assign);
+        Assert.Equal(2L, new SilInterpreter(module).Run("M.run"));
+    }
+
+    /// <summary>
+    ///     A <c>let</c> field of an object a caller lends is borrowed across a
+    ///     call; a <c>var</c> field, which the call could change, is copied,
+    ///     and so is one of an object that goes before the copy does.
+    /// </summary>
+    [Fact]
+    public void ALetFieldIsBorrowedAcrossACall() {
+        var module = Lowered(
+            """
+            class Item { var n: Int = 1 }
+            class Box {
+                let fixed: Item
+                var changing: Item
+                init() {
+                    fixed = Item()
+                    changing = Item()
+                }
+            }
+            fn touch(_ box: Box) -> Int {
+                box.changing = Item()
+                return 1
+            }
+            fn ofLet(_ box: Box) -> Int {
+                let item = box.fixed
+                let n = touch(box)
+                return item.n + n
+            }
+            fn ofVar(_ box: Box) -> Int {
+                let item = box.changing
+                let n = touch(box)
+                return item.n + n
+            }
+            fn outliving() -> Item {
+                return Box().fixed
+            }
+            fn run() -> Int { return ofLet(Box()) * 10 + ofVar(Box()) + outliving().n }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Default);
+        bool Copies(string name) => Instructions(module.Find(name)!).Any(static i => i is LoadInst { Kind: LoadKind.Copy } or CopyValueInst);
+        Assert.False(Copies("M.ofLet"), SilPrinter.Print(module.Find("M.ofLet")!));
+        Assert.True(Copies("M.ofVar"));
+        Assert.True(Copies("M.outliving"));
+        Assert.Equal(23L, new SilInterpreter(module).Run("M.run"));
+    }
+
+    /// <summary>
+    ///     An array viewed whole for a member of <c>Element[:]</c> is not
+    ///     retained while what holds it lasts.
+    /// </summary>
+    [Fact]
+    public void AnArrayViewedWholeIsBorrowed() {
+        var module = Lowered(
+            """
+            fn empty(_ xs: Int[>..]) -> Bool { return xs.isEmpty }
+            fn run() -> Int { return empty([1]) ? 1 : 2 }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var builtins = Instructions(module.Find("M.empty")!).OfType<BuiltinInst>().Select(static b => b.Name).ToList();
+        Assert.DoesNotContain("slice_of", builtins);
+        Assert.Equal(2L, new SilInterpreter(module).Run("M.run"));
+    }
+
+    /// <summary>
+    ///     <c>a[i].x = v</c> stores the field where it is: the element is not
+    ///     read out and written back, and in a loop the array is made unique
+    ///     once. A copy made before keeps what it had.
+    /// </summary>
+    [Fact]
+    public void AnElementsFieldIsStoredWhereItIs() {
+        var module = Lowered(
+            """
+            struct Point {
+                var x: Int
+                var name: String
+            }
+            fn bump(_ points: Point[>..]) -> Point[>..] {
+                var moved = points
+                var i = 0
+                while i < moved.count {
+                    moved[i].x = moved[i].x + i
+                    i = i + 1
+                }
+                return moved
+            }
+            fn run() -> Int {
+                let points: Point[>..] = [Point { x: 1, name: "a" }, Point { x: 2, name: "b" }]
+                let moved = bump(points)
+                return points[1].x * 100 + moved[1].x * 10 + moved[0].name.count
+            }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Default);
+        var builtins = Instructions(module.Find("M.bump")!).OfType<BuiltinInst>().Select(static b => b.Name).ToList();
+        Assert.Contains("array_element_addr_unique", builtins);
+        Assert.Contains("array_make_unique", builtins);
+        Assert.DoesNotContain("array_set", builtins);
+        Assert.DoesNotContain("array_set_unique", builtins);
+        Assert.Equal(231L, new SilInterpreter(module).Run("M.run"));
+    }
 }

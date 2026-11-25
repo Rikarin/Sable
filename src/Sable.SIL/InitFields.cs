@@ -54,7 +54,11 @@ public sealed class InitFields : ISilPass {
                 case StoreInst store when addresses.TryGetValue(store.Address, out var field) && !objects.Contains(store.Value):
                     var kind = written.Add(field) ? StoreKind.Init : store.Kind;
                     block.Instructions[i] = new StoreInst(store.Value, store.Address, kind) { Block = block, Location = store.Location, IntoFresh = true };
+                    break;
 
+                // No access is in progress to an object nothing else has.
+                case BuiltinInst { Name: "access_check_read" or "access_check_modify" } check when addresses.ContainsKey(check.Operands[0]):
+                    block.Instructions.RemoveAt(i--);
                     break;
 
                 case LoadInst { Kind: not LoadKind.Take } load when addresses.ContainsKey(load.Address):

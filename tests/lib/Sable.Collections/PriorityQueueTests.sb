@@ -150,3 +150,44 @@ fn anElementGoesByItsPriority() {
     assertEqual(jobs.pop()!.element, "ship")
     assertEqual(jobs.pop()!.priority, 2)
 }
+
+@test
+fn theNaturalOrderIsTheClosuresOrder() {
+    // '<' compiled in, and called through a closure: what either gives out,
+    // in order, is the same.
+    var seed = 11
+    for size in 0..<70 {
+        let natural = PriorityQueue<Int>()
+        let called = PriorityQueue<Int>(by: (a: Int, b: Int) => a < b)
+        var values: Int[>..] = []
+        for _ in 0..<size {
+            seed = (seed * 1103515245 + 12345) % 2147483648
+            let value = seed / 7 % 20
+            values.append(value)
+            natural.push(value)
+            called.push(value)
+        }
+        let heapified = PriorityQueue<Int>(values)
+        values.sort()
+        for value in values {
+            assertEqual(natural.peek(), value)
+            assertEqual(natural.pop(), value)
+            assertEqual(called.pop(), value)
+            assertEqual(heapified.pop(), value)
+        }
+        assert(natural.isEmpty && called.pop() == none)
+    }
+}
+
+@test
+fn aQueueOfStringsSinksAndRises() {
+    let words = PriorityQueue<String>()
+    for i in 0..<200 {
+        words.push("w\(i * 37 % 101)")
+    }
+    var last = ""
+    while let word = words.pop() {
+        assert(!(word < last))
+        last = word
+    }
+}

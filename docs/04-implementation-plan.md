@@ -778,7 +778,12 @@ whose body branches, and a local function's context, allocate nothing.
       ports in `benchmarks/programs` — same allocations, checks and output — are
       timed beside it. Closing that gap was code generation, not ARC:
       inout and `T&` parameters are LLVM `noalias` (exclusivity guarantees
-      it), array headers and elements carry distinct TBAA tags, array
+      it) and dereferenceable, as a lent object is; array headers, reference
+      counts, numbers and references carry distinct TBAA tags, an object just
+      made has its fields initialised with no test of sharing (`InitFields`),
+      a `let` field and an array viewed whole are borrowed for as long as
+      what holds them lasts (`BorrowHeld`), `a[i].x = v` stores the field
+      where it is, array
       count, element access and append are emitted inline, a loop that only
       reads an array and writes its elements makes it unique once before
       the loop (`HoistUniqueness`), an array passed to a mutating member of

@@ -154,6 +154,7 @@ A | B | C           // structural union
 some P              // opaque type conforming to P
 any P               // existential box conforming to P
 any Any             // a value of any type; 'any Any.Type' is a 'Type'
+any P.Type          // a type that conforms to P
 (any P)[]           // an array of them: 'some' and 'any' take the whole
                     // type after them, so the array suffix needs parentheses
 P & Q               // protocol composition
@@ -1320,6 +1321,18 @@ if t.isSubtype(of: (any Zero).self) {
 }
 ```
 
+A type known to conform is an `any P.Type`, for a protocol `P` that is not
+generic: what a `T.Type` of a conforming `T` converts to, and what a `Type` is
+cast to (`as?`, `as!`, `is`), the registry asked. It converts to `Type`, and to
+an `any Q.Type` of a protocol `P` refines, and is opened as a `Type` is, when
+the conformance is there to be found.
+
+```sable
+if let zero = t as? any Zero.Type {
+    let made = make(zero)              // never a trap
+}
+```
+
 What the call gives back is what code that does not know `T` can hold: a
 result of `T` is erased to the existential of `T`'s protocols (`any Zero`,
 `any Zero & Named`, and `any Any` when it has none), a `T?` to an optional of
@@ -1345,6 +1358,22 @@ time:
 ```sable
 fn arrayOf<T>(_ type: T.Type) -> Type { return T[].self }
 let rows = arrayOf(t)                // [Zoo.Row] when t holds Zoo.Row
+```
+
+### Generic types as values
+
+A generic type's name without its type arguments, `Stack.self`, is a value of
+`GenericType`: the generic type itself. Given type arguments it makes the type
+of them, or gives none where there are not as many as it takes or one does
+not meet its constraints; and it gives a type's arguments back. A generic
+protocol's stands for `any Source<…>`, whose arguments it knows, and which it
+does not make.
+
+```sable
+let pair = Pair.self
+let made = pair.instantiate([Int.self, String.self])!  // Pair<Int, String>
+let parts = pair.arguments(of: made)!                  // Int and String
+let items = Source.self.arguments(of: (any Source<Int>).self)!
 ```
 
 ### Opening an existential

@@ -1050,7 +1050,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         // A struct with no fields is whole before anything is stored: an initialiser's self.
                         var loaded = load.Type is StructType { Fields.Count: 0 }
                             ? address.Peek() ?? Array.Empty<object?>()
-                            : load.Type is ArrayType or OpaqueType || address is Field { Instance.Type.IsCoroutineFrame: true } or FrameTail ? address.Peek() : address.Get();
+                            : load.Type is ArrayType or OpaqueType || load.Type == SilType.Unit || address is Field { Instance.Type.IsCoroutineFrame: true } or FrameTail ? address.Peek() : address.Get();
                         switch (load.Kind) {
                             case LoadKind.Copy:
                                 Retain(load.Type, loaded);

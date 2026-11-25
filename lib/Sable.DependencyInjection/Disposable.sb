@@ -1,0 +1,9 @@
+module Sable.DependencyInjection
+
+/// A service with something to give up: .NET's `IDisposable`. The scope that
+/// made it, or the provider for a singleton, disposes it as it ends, after
+/// everything made since.
+public protocol Disposable {
+    /// Gives up what the service holds. Called once.
+    fn dispose()
+}

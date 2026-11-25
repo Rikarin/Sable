@@ -986,6 +986,7 @@ Sable.Net          Url, sockets, Dns; Http client to come
 Sable.Time         Instant, Duration, Clock, Calendar
 Sable.Process      spawn, environment, signals
 Sable.Hosting      host, lifetime, services, cron jobs
+Sable.DependencyInjection  services, scopes, open generics
 Sable.Diagnostics  Logger, tracing, metrics
 Sable.Testing      the test harness `sable test` drives
 ```
@@ -2640,10 +2641,16 @@ read of a type is kept per process. Verified with macOS's lldb alone: not with
 Linux's, whose older ones may not take a formatter's type name
 (`get_type_name`) or have the frame's description (`GetDescriptionWithFormat`).
 
-Not yet, for such values: the labels of a union case's fields, where the type
-was made at run time (the metadata has none); an indirect capture seen from
+A union made at run time shows its cases' labels, which its shape has
+(`part_labels`) and its metadata's descriptors of its cases write out with
+their payloads' types. Types are looked up in the executable and in each Sable
+shared library it has loaded.
+
+Not yet, for such values: an indirect capture seen from
 outside the closure, which is shown as the one-element array that holds it;
-and a Sable shared library's types, looked up in the executable alone.
+and, on Linux arm64 (clang 18), the locals of `Gen.later` in
+`UnspecialisedFramesAreNamedAndShowWhatTheyHold`, shown as invalid strings,
+whose cause is not found (the DWARF a newer clang makes of the same IR is right).
 
 Not yet: an `@inline_layout` value's variable-size fields (bounded and
 grow-only arrays, whose offsets are only found by walking the bytes); the

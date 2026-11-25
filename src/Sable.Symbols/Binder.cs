@@ -3747,6 +3747,11 @@ public sealed partial class Binder {
         // does: 't.zero()' with 't: T.Type'. Its one value is the type, so
         // reading it has nothing to keep but what evaluating it does, which
         // a name or 'X.self' does not.
+        // An 'any P.Type' is a Type to whatever asks it what a Type is asked.
+        if (receiver.Type is ExistentialTypeSymbol { MetatypeOf: not null } && name != "self") {
+            receiver = Convert(receiver, Core.Type, syntax.Expression);
+        }
+
         // A name the type has no static member of, but a 'Type' has, is the
         // Type's: 'Int.self.name', 'T.self.size' (SYNTAX.md "Metatypes").
         if (receiver.Type is MetatypeTypeSymbol { InstanceType: var instanceType } && name != "self") {
@@ -3761,6 +3766,12 @@ public sealed partial class Binder {
         // 'T.self' is the type itself, as a value of type 'T.Type'.
         if (receiver is BoundTypeExpression typeExpression) {
             if (name == "self") {
+                // 'Stack.self': the generic type itself, its type arguments left open.
+                if (typeExpression.ReferencedType is NamedTypeSymbol { IsConstructed: false, TypeParameters.IsEmpty: false } definition
+                    && _compilation.GetModule("Sable.Core")?.GetType("GenericType") is { } genericType) {
+                    return new BoundGenericType(syntax, definition, genericType);
+                }
+
                 return new BoundMetatype(syntax, typeExpression.ReferencedType);
             }
 
@@ -5767,7 +5778,7 @@ public sealed partial class Binder {
     ///     place instead, as Swift has it: that is how <c>precondition</c>
     ///     and <c>fatalError</c> say where they were called from.
     /// </remarks>
-    BoundExpression? DefaultArgument(SyntaxNode call, ParameterSymbol parameter, TypeSubstitution substitution) {
+    internal BoundExpression? DefaultArgument(SyntaxNode call, ParameterSymbol parameter, TypeSubstitution substitution) {
         if (MemberwiseField(parameter) is { } field) {
             return FieldDefault(call, field, substitution.Apply(parameter.Type), substitution);
         }
@@ -6032,7 +6043,8 @@ public sealed partial class Binder {
             if (slots[i] < function.Parameters.Length
                 && outer.Apply(function.Parameters[slots[i]].Type) is MetatypeTypeSymbol { InstanceType: TypeParameterSymbol opening }
                 && function.TypeParameters.Contains(opening) && !map.ContainsKey(opening)
-                && Decayed(function.Parameters[slots[i]].Type, arguments[i].Type).Equals(Core.Type)) {
+                && Decayed(function.Parameters[slots[i]].Type, arguments[i].Type) is var held
+                && (held.Equals(Core.Type) || held is ExistentialTypeSymbol { MetatypeOf: not null })) {
                 map[opening] = OpenedType(arguments[i], opening);
             }
         }
@@ -7297,6 +7309,12 @@ public sealed partial class Binder {
                 syntax.Span,
                 $"'{bounded.ToDisplayString()}' holds at most {capacity} elements, and this literal has {elements.Length}"
             );
+        }
+
+        // '[Int.self, String.self]': types of several, so Types.
+        if (expectedElement is null && elements.Length > 1 && elements.Any(e => !e.Type.Equals(elements[0].Type))
+            && elements.All(e => e.Type is MetatypeTypeSymbol || e.Type.Equals(Core.Type))) {
+            expectedElement = Core.Type;
         }
 
         TypeSymbol elementType;
@@ -9752,7 +9770,7 @@ public sealed partial class Binder {
             && target is ArrayTypeSymbol wantedArray
             && !literalArray.ElementType.Equals(wantedArray.ElementType)
             && !arrayLiteral.Elements.IsEmpty
-            && arrayLiteral.Elements.All(static e => Written(e) is BoundLiteral)) {
+            && (arrayLiteral.Elements.All(static e => Written(e) is BoundLiteral) || literalArray.ElementType is MetatypeTypeSymbol && wantedArray.ElementType.Equals(Core.Type))) {
             expression = new BoundArray(
                 arrayLiteral.Syntax,
                 new ArrayTypeSymbol(wantedArray.ElementType, literalArray.ArrayKind),

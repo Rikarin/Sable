@@ -11,6 +11,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../library/**/*.cs;../../programs/**/*.cs" />
+    <!-- Microsoft.Extensions.DependencyInjection, which the SDK has with ASP.NET. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <!-- TensorPrimitives, for tensor-primitives: a NuGet package, not in the box. -->
     <PackageReference Include="System.Numerics.Tensors" Version="9.0.0" />
   </ItemGroup>

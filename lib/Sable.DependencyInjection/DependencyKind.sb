@@ -1,0 +1,14 @@
+module Sable.DependencyInjection
+
+/// What a dependency is to whoever has it.
+@derive(Equatable, Debug)
+public enum DependencyKind: Sendable {
+    /// It must be registered.
+    Required
+    /// None, or a default, stands for one that is not registered.
+    Optional
+    /// Every registration there is.
+    All
+    /// Asked for after its owner has been made, so it may lead back to it.
+    Deferred
+}

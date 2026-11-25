@@ -43,21 +43,7 @@ public sealed partial class SilGen {
             for (var i = 0; i < _runtimeInstances.Count; i++) {
                 var (symbol, type) = _runtimeInstances[i];
                 var wanted = ProtocolClosure(AskedProtocols()).Select(QualifiedName).ToHashSet(StringComparer.Ordinal);
-                var definition = symbol.OriginalDefinition;
-                var protocols = ProtocolSymbols(definition);
-                var conformances = type.ConditionalConformances
-                    .Concat(type.Conformances.Distinct(StringComparer.Ordinal).Where(p => !type.ConditionalConformances.Exists(c => c.Protocol == p))
-                        .Select(static p => (Protocol: p, Requirements: ImmutableArray<(int, string)>.Empty)))
-                    .Where(c => wanted.Contains(c.Protocol))
-                    .ToList();
-                // A protocol refined is tabled before the ones that refine it, whose tables point at its.
-                foreach (var (name, requirements) in conformances.OrderBy(c => protocols.TryGetValue(c.Protocol, out var p) ? ProtocolClosure([p]).Count : 0)) {
-                    if (_templated.Add((QualifiedName(definition), name)) && protocols.TryGetValue(name, out var protocol)
-                        && requirements.All(r => r.Item1 < definition.TypeParameters.Length && protocols.ContainsKey(r.Item2))) {
-                        changed = true;
-                        TemplateTable(definition, type, protocol, [..requirements.Select(r => (definition.TypeParameters[r.Item1], protocols[r.Item2]))]);
-                    }
-                }
+                changed |= Templates(symbol.OriginalDefinition, type, wanted);
             }
 
             // A box the program names the class of — 'as? Box<Meters>' asks for it — is what a value made at run time is boxed in too.
@@ -98,6 +84,63 @@ public sealed partial class SilGen {
                 LowerReached();
             }
         }
+    }
+
+    /// <summary>Makes the template tables of a generic type's conformances to the protocols named that it has not been asked for yet: true when there was one.</summary>
+    bool Templates(NamedTypeSymbol definition, NominalType type, HashSet<string> wanted) {
+        var made = false;
+        var protocols = ProtocolSymbols(definition);
+        var conformances = type.ConditionalConformances
+            .Concat(type.Conformances.Distinct(StringComparer.Ordinal).Where(p => !type.ConditionalConformances.Exists(c => c.Protocol == p))
+                .Select(static p => (Protocol: p, Requirements: ImmutableArray<(int, string)>.Empty)))
+            .Where(c => wanted.Contains(c.Protocol))
+            .ToList();
+        // A protocol refined is tabled before the ones that refine it, whose tables point at its.
+        foreach (var (name, requirements) in conformances.OrderBy(c => protocols.TryGetValue(c.Protocol, out var p) ? ProtocolClosure([p]).Count : 0)) {
+            if (_templated.Add((QualifiedName(definition), name)) && protocols.TryGetValue(name, out var protocol)
+                && requirements.All(r => r.Item1 < definition.TypeParameters.Length && protocols.ContainsKey(r.Item2))) {
+                made = true;
+                TemplateTable(definition, type, protocol, [..requirements.Select(r => (definition.TypeParameters[r.Item1], protocols[r.Item2]))]);
+            }
+        }
+
+        return made;
+    }
+
+    readonly Dictionary<(NamedTypeSymbol, NamedTypeSymbol), bool> _templatesAsked = [];
+
+    /// <summary>
+    ///     Whether a type made of type parameters, <c>Pair&lt;T&gt;</c>, has a
+    ///     template table of a conformance, which code compiled once finds in
+    ///     the registry by the metadata it makes: made now, when its generic
+    ///     type's conformance can have one.
+    /// </summary>
+    internal bool HasTemplate(TypeSymbol type, NamedTypeSymbol protocol) {
+        if (type is not NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Union, OriginalDefinition: var definition }
+            || definition is not { ExtendedOptional: null, ExtendedArray: null } || !IsPlainGeneric(definition) || definition.TypeParameters.Any(static p => p.IsValue || p.AllowsNoncopyable)) {
+            return false;
+        }
+
+        protocol = protocol.OriginalDefinition;
+        if (_templatesAsked.TryGetValue((definition, protocol), out var has)) {
+            return has;
+        }
+
+        // Asked again while it is made, from a witness of its own: not.
+        _templatesAsked[(definition, protocol)] = false;
+        NominalType? instance;
+        using (Opaque(new GenericShape(definition.TypeParameters, [])))
+        using (_diagnostics.Suppress()) {
+            instance = Lower(definition.Construct([..definition.TypeParameters.Cast<TypeSymbol>()])) as NominalType;
+        }
+
+        if (instance is null) {
+            return false;
+        }
+
+        var closure = ProtocolClosure([protocol]).ToList();
+        Templates(definition, instance, closure.Select(QualifiedName).ToHashSet(StringComparer.Ordinal));
+        return _templatesAsked[(definition, protocol)] = closure.TrueForAll(p => _module.FindWitnessTable(instance, QualifiedName(p)) is { IsTemplate: true });
     }
 
     /// <summary>The protocols the registry may be asked about: those a call opens a type as, those cast to, and what a template's associated types conform to.</summary>

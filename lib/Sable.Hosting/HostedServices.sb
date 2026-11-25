@@ -1,12 +1,13 @@
 module Sable.Hosting
 
 import Sable.Concurrency
+import Sable.DependencyInjection
 import Sable.Time
 
 /// The services a host is to run, in the order they start; they stop in the
-/// reverse. No container: each is made by a closure, typed, when the host is
-/// built, from a `HostContext` and whatever the closure captures. What two
-/// services share is made before them, and captured by both.
+/// reverse. Each is made when the host is built: by a closure, from a
+/// `HostContext` and whatever the closure captures, or from its own
+/// dependencies, which the builder's container gives.
 ///
 /// ```sable
 /// let builder = ApplicationBuilder()
@@ -33,6 +34,27 @@ public final class HostedServices {
     /// A service already made.
     public fn add(_ name: String, _ service: any HostedService, onFailure: ServiceFailurePolicy? = none) {
         add(name, onFailure: onFailure, make: { _cancellation in service })
+    }
+
+    /// A service made from its own dependencies, by the builder's container.
+    ///
+    /// ```sable
+    /// @immutable
+    /// @derive(Injectable)
+    /// final class Greeter: HostedService {
+    ///     let environment: HostEnvironment
+    ///     init(environment: HostEnvironment) { self.environment = environment }
+    ///     async fn run(cancellation: CancellationToken) throws {
+    ///         print("in \(environment.name)")
+    ///     }
+    /// }
+    ///
+    /// let builder = ApplicationBuilder()
+    /// builder.services.add("greeter", Greeter.self)
+    /// _ = try! builder.build()
+    /// ```
+    public fn add<T: HostedService & Injectable>(_ name: String, _ type: T.Type, onFailure: ServiceFailurePolicy? = none) {
+        add(name, onFailure: onFailure, make: { context in try context.container.make(type) })
     }
 
     /// A service that is a closure, run until its token is cancelled.

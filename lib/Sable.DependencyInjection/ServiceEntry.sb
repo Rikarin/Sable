@@ -1,0 +1,113 @@
+module Sable.DependencyInjection
+
+import Sable.Concurrency
+
+// A registration as a provider has it. A service is kept as an 'any Any',
+// and given as the type it is asked for, which may be one that only the
+// running program knows: a generic type's, closed as it is asked for.
+@immutable
+final class ServiceEntry {
+    let key: ServiceKey
+    let lifetime: ServiceLifetime
+    let dependencies: ServiceDependency[>..]
+    // Where a scope keeps its own, for a scoped one.
+    let slot: Int
+    // Where its links start, of the provider's, and how many places it has there.
+    let firstLink: Int
+    let linkCount: Int
+    // Whether what it makes is the provider's to dispose.
+    let owned: Bool
+    let make: (ServiceScope) throws -> any Any
+    // A singleton's, once made.
+    let cell: OnceCell<any Any>
+    let making: Mutex<Bool>
+    // The type of what it made first, when there is nothing to dispose of one.
+    let plain: OnceCell<Type>
+
+    init(key: ServiceKey, lifetime: ServiceLifetime, dependencies: ServiceDependency[>..], slot: Int, firstLink: Int, owned: Bool, make: @escaping (ServiceScope) throws -> any Any) {
+        self.key = key
+        self.lifetime = lifetime
+        self.dependencies = dependencies
+        self.slot = slot
+        self.firstLink = firstLink
+        linkCount = firstLink < 0 ? 0 : dependencies.count
+        self.owned = owned
+        self.make = make
+        cell = OnceCell<any Any>()
+        making = Mutex(false)
+        plain = OnceCell<Type>()
+    }
+
+    fn value(in scope: ServiceScope) throws(ServiceError) -> any Any {
+        match lifetime {
+            case .Singleton => {
+                if let made = cell.get() {
+                    return made
+                }
+                return try single(scope)
+            }
+            case .Scoped => {
+                if scope.isRoot {
+                    throw scope.scopedFromRoot(self)
+                }
+                if slot < scope.kept.count {
+                    if let held = scope.kept[slot] {
+                        return held
+                    }
+                }
+                let made = try build(scope)
+                scope.keep(made, at: slot)
+                return made
+            }
+            case .Transient => {
+                return try build(scope)
+            }
+        }
+    }
+
+    // Made once, whoever asks: the others wait. What it is made from is the
+    // provider's, not the scope's that asked first.
+    fn single(_ scope: ServiceScope) throws(ServiceError) -> any Any {
+        // Being made by whom this one is made for: to wait would be for ever.
+        if scope.isMaking(self) {
+            throw ServiceError.Circular(path: scope.path(to: key))
+        }
+        let root = ServiceScope(root: scope)
+        return try making.withLock { (_done: inout Bool) throws(ServiceError) -> any Any in
+            if let made = cell.get() {
+                return made
+            }
+            let made = try build(root)
+            return cell.getOrInit { made }
+        }
+    }
+
+    fn isPlain(_ made: any Any) -> Bool {
+        let type = type(of: made)
+        if let known = plain.get() {
+            if known == type {
+                return true
+            }
+        }
+        if type.isSubtype(of: (any Disposable).self) || type.isSubtype(of: (any AsyncDisposable).self) {
+            return false
+        }
+        _ = plain.getOrInit { type }
+        return true
+    }
+
+    fn build(_ scope: ServiceScope) throws(ServiceError) -> any Any {
+        try scope.begin(self)
+        do {
+            let made = try make(scope)
+            scope.end()
+            if owned && !isPlain(made) {
+                scope.note(made)
+            }
+            return made
+        } catch {
+            scope.end()
+            throw error as? ServiceError ?? ServiceError.Failed(service: key, error: error)
+        }
+    }
+}

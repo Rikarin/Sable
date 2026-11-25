@@ -98,6 +98,31 @@ public sealed class ExampleProgramTests {
         );
 
     [Fact]
+    public void TheShopIsPutTogetherByItsContainer() =>
+        Assert.Equal(
+            """
+            2 ordered
+            1 ordered
+              Examples.Shop.Transaction: begun
+              Examples.Shop.MemoryRepository<Examples.Shop.Order>: 1 kept
+              Examples.Shop.MemoryRepository<Examples.Shop.Receipt>: 1 kept
+              Examples.Shop.Checkout: tea for 85 kr
+              Examples.Shop.MemoryRepository<Examples.Shop.Order>: 2 kept
+              Examples.Shop.MemoryRepository<Examples.Shop.Receipt>: 2 kept
+              Examples.Shop.Checkout: cups for 85 kr
+              Examples.Shop.Transaction: committed, 4 changed
+              Examples.Shop.Transaction: begun
+              Examples.Shop.MemoryRepository<Examples.Shop.Order>: 1 kept
+              Examples.Shop.MemoryRepository<Examples.Shop.Receipt>: 1 kept
+              Examples.Shop.Checkout: a kettle for 85 kr
+              Examples.Shop.Transaction: committed, 2 changed
+            nothing provides Examples.Shop.Transaction: Examples.Shop.Checkout -> any Examples.Shop.Repository<Examples.Shop.Order> -> Examples.Shop.Transaction
+
+            """,
+            Run("06-shop.sb")
+        );
+
+    [Fact]
     public void TheEchoServerTalksToItself() =>
         Assert.Equal("hello\n100 of 100 heard themselves\nechoed 995 bytes\n", Run("05-echo-server.sb"));
 

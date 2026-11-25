@@ -1,0 +1,108 @@
+module Sable.DependencyInjection
+
+// Goes through what each service says it is made from, as 'build' does.
+struct ServiceValidation {
+    let provider: ServiceProvider
+    var problems: ServiceError[>..] = []
+    // What has been gone through, by its slot, twice: held by a singleton,
+    // when nothing scoped may be under it, and not.
+    var done: [Int: Bool] = [:]
+    var path: ServiceEntry[>..] = []
+    // What is asked for only after its owner is made, gone through by itself.
+    var later: Later[>..] = []
+
+    init(_ provider: ServiceProvider) {
+        self.provider = provider
+    }
+
+    mutating fn check(_ key: ServiceKey) {
+        for entry in found(key) ?? [] {
+            check(entry, none)
+        }
+        while !later.isEmpty {
+            let next = later.removeLast()
+            check(next.entry, next.holder)
+        }
+    }
+
+    // None where there is something wrong with it, said already.
+    mutating fn found(_ key: ServiceKey) -> ServiceEntry[>..]? {
+        do {
+            return try provider.entries(key)
+        } catch {
+            problems.append(error)
+            return none
+        }
+    }
+
+    mutating fn check(_ entry: ServiceEntry, _ above: ServiceEntry?) {
+        let holder = entry.lifetime == .Singleton ? entry : above
+        let mark = entry.slot * 2 + (holder == none ? 0 : 1)
+        if done[mark] != none {
+            return
+        }
+        done[mark] = true
+        path.append(entry)
+        for dependency in entry.dependencies {
+            guard let all = found(dependency.key) else {
+                continue
+            }
+            if all.isEmpty {
+                let needed = dependency.kind == .Required || dependency.kind == .Deferred
+                if needed && !ServiceValidation.isBuiltIn(dependency.key) {
+                    problems.append(ServiceError.NotRegistered(service: dependency.key, path: path.map { $0.key }.toArray()))
+                }
+                continue
+            }
+            if dependency.kind == .All {
+                for next in all {
+                    follow(next, holder, dependency.kind)
+                }
+            } else {
+                // One asked for is the last registered.
+                follow(all[all.count - 1], holder, dependency.kind)
+            }
+        }
+        _ = path.removeLast()
+    }
+
+    mutating fn follow(_ next: ServiceEntry, _ holder: ServiceEntry?, _ kind: DependencyKind) {
+        if next.lifetime == .Scoped {
+            if let by = holder {
+                problems.append(ServiceError.Captive(path: keys(from: by, to: next)))
+                return
+            }
+        }
+        if kind == .Deferred {
+            later.append(Later { entry: next, holder: holder })
+        } else if path.contains(where: { $0 === next }) {
+            problems.append(ServiceError.Circular(path: keys(from: next, to: next)))
+        } else {
+            check(next, holder)
+        }
+    }
+
+    // The path from the one, if it is on it, to the other.
+    fn keys(from first: ServiceEntry, to last: ServiceEntry) -> ServiceKey[>..] {
+        var keys: ServiceKey[>..] = []
+        for each in path {
+            if each === first || !keys.isEmpty {
+                keys.append(each.key)
+            }
+        }
+        if keys.isEmpty {
+            keys.append(first.key)
+        }
+        keys.append(last.key)
+        return keys
+    }
+
+    static fn isBuiltIn(_ key: ServiceKey) -> Bool {
+        return key.key == none && (key.type == ServiceScope.self || key.type == ServiceProvider.self)
+    }
+}
+
+struct Later {
+    let entry: ServiceEntry
+    let holder: ServiceEntry?
+}

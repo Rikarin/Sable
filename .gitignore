@@ -27,3 +27,6 @@ tools/unicode/*.txt
 
 # lib/package.sb is for the editor; nothing locks it.
 /lib/sable.lock
+
+# Python
+__pycache__/

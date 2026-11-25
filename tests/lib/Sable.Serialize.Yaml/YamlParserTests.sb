@@ -531,8 +531,11 @@ fn chomping() {
     doc("- |+\n   \n", "+SEQ / =VAL |\\n / -SEQ")
     doc("- |+\n   ", "+SEQ / =VAL |\\n / -SEQ")
     doc("- |+", "+SEQ / =VAL | / -SEQ")
-    doc("a: |\n b", "+MAP / =VAL :a / =VAL |b / -MAP")
-    doc("a: |+\n b", "+MAP / =VAL :a / =VAL |b / -MAP")
+    doc("a: |\n b", "+MAP / =VAL :a / =VAL |b\\n / -MAP")
+    doc("a: |+\n b", "+MAP / =VAL :a / =VAL |b\\n / -MAP")
+    doc("a: |-\n b", "+MAP / =VAL :a / =VAL |b / -MAP")
+    // yaml-test-suite L24T/01.
+    doc("foo: |\n  x\n   ", "+MAP / =VAL :foo / =VAL |x\\n \\n / -MAP")
     doc("|-\n a\n \n \n", "=VAL |a")
     doc("a: |+\n b\n\n# c\nd: e\n", "+MAP / =VAL :a / =VAL |b\\n\\n / =VAL :d / =VAL :e / -MAP")
 }

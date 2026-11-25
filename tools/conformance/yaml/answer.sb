@@ -1,0 +1,112 @@
+module YamlConformance
+
+// Answers what run.py asks of Sable.Serialize.Yaml: a request a line, what is
+// wanted and the path of a YAML file. Events are apart by tabs; an answer
+// that starts with "error" says why there is none.
+
+import Sable.IO
+import Sable.Serialize.Yaml
+
+fn events(of parser: YamlParser) throws(YamlError) -> YamlEvent[>..] {
+    var all: YamlEvent[>..] = []
+    while let event = try parser.next() {
+        all.append(event)
+    }
+    return all
+}
+
+fn written(_ events: YamlEvent[>..]) -> String {
+    return events.map({ $0.description() }).joined(separator: "\t")
+}
+
+fn quoted(_ text: String) -> String {
+    let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+    var made: U8[>..] = [0x22]
+    for byte in text.utf8 {
+        if byte < 0x20 || byte == 0x22 || byte == 0x5C || byte == 0x7F {
+            made.append(utf8: "\\u00")
+            made.append(utf8: digits[Int(byte >> 4)])
+            made.append(utf8: digits[Int(byte & 15)])
+        } else {
+            made.append(byte)
+        }
+    }
+    made.append(0x22)
+    unsafe {
+        return String.fromUtf8Unchecked(made)
+    }
+}
+
+// The node as the suite's JSON has it: a key that is not a string is the
+// text of one.
+fn json(_ node: YamlNode) -> String {
+    let node = node.resolved
+    return match node.kind {
+        case .Sequence => "[" + node.items.map({ json($0) }).joined(separator: ",") + "]"
+        case .Mapping  => "{" + node.entries.map({ key($0.key) + ":" + json($0.value) }).joined(separator: ",") + "}"
+        case _         => scalar(node)
+    }
+}
+
+fn key(_ node: YamlNode) -> String {
+    return quoted(node.resolved.isNull ? "" : node.resolved.value)
+}
+
+fn scalar(_ node: YamlNode) -> String {
+    if node.isNull {
+        return "null"
+    }
+    if let value = node.bool {
+        return "\(value)"
+    }
+    if let value = node.int {
+        return "\(value)"
+    }
+    if let value = node.float {
+        return "\(value)"
+    }
+    return quoted(node.value)
+}
+
+fn answer(_ kind: String, _ path: String) -> String {
+    let bytes = try! File.readBytes(path)
+    do {
+        let read = try events(of: try YamlParser(bytes: bytes))
+        if kind == "events" {
+            return written(read)
+        }
+        // The events written, and read again.
+        if kind == "emitted" {
+            return written(try Yaml.events(try Yaml.print(events: read)))
+        }
+        let text = try! String.fromUtf8(bytes)
+        // The nodes written, and read again.
+        if kind == "printed" {
+            return written(try Yaml.events(try Yaml.printAll(try Yaml.parseAll(text))))
+        }
+        if kind == "stream" {
+            return try YamlStream(text).text() == text ? "same" : "another text"
+        }
+        // Every document through Serializable, as a YamlNode, and back.
+        if kind == "encoded" {
+            let values = try! Yaml.decodeAll(YamlNode.self, from: text)
+            let written = try! Yaml.encodeAll(values)
+            return "[" + (try Yaml.parseAll(written)).map({ json($0) }).joined(separator: ",") + "]"
+        }
+        return "[" + (try Yaml.parseAll(text)).map({ json($0) }).joined(separator: ",") + "]"
+    } catch {
+        return "error " + error.description()
+    }
+}
+
+fn main() {
+    var input = BufferedReader(Console.standardInput)
+    let output = BufferedWriter(Console.standardOutput)
+    while let line = try! input.readLine() {
+        let words = line.split(separator: ' ')
+        var text: U8[>..] = []
+        text.append(utf8: answer(words[0], words[1]) + "\n")
+        try! output.write(text)
+    }
+    try! output.flush()
+}

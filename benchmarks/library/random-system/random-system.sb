@@ -1,0 +1,18 @@
+module RandomSystemBench
+
+// Arrays filled with the system's random bytes: 64 KiB, a thousand times, the
+// mean of the first bytes of the last in eighths of 256.
+
+@main
+fn main() {
+    var generator = SystemRandomNumberGenerator()
+    var bytes = U8[>..](repeating: 0, count: 65536)
+    for _ in 0..<1000 {
+        generator.fill(bytes: &bytes)
+    }
+    var total = 0
+    for byte in bytes {
+        total += Int(byte)
+    }
+    print((total / 65536 + 16) / 32)
+}

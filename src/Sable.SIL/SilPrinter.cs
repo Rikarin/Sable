@@ -334,6 +334,10 @@ public static class SilPrinter {
             builder.Append(" inline(").Append(function.Inline == SilInline.Always ? "always" : "never").Append(')');
         }
 
+        if (function.Vectorised) {
+            builder.Append(" vectorised");
+        }
+
         foreach (var associated in function.AssociatedMetadata) {
             builder.Append(" associated(").Append(Quote(associated.Name)).Append(", ").Append(Quote(associated.Base)).Append(", ")
                 .Append(Quote(associated.Protocol)).Append(", ").Append(associated.Index);

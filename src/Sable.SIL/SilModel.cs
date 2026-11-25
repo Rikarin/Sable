@@ -1578,6 +1578,14 @@ public sealed class SilFunction(string name, FunctionType type) {
     /// </summary>
     public SilInline Inline { get; set; }
 
+    /// <summary>
+    ///     What its source's <c>@vectorised</c> asks: compiled once more for
+    ///     the wider vectors a processor may have, and whichever it has called
+    ///     (LlvmEmitter.Vectorised.cs). Not inlined in SIL, as its callers are
+    ///     not. Printed as <c>vectorised</c>.
+    /// </summary>
+    public bool Vectorised { get; set; }
+
     public FunctionType Type { get; internal set; } = type;
     public List<SilBlock> Blocks { get; } = [];
 

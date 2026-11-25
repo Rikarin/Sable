@@ -28,7 +28,9 @@ typedef struct BlockCache {
 typedef struct SableThread {
     BlockCache blocks[SMALL_CLASSES];
     // Counted by this thread alone; another may have made what it frees.
-    int64_t live_objects, allocations;
+    // Objects allocated, and objects gone less those made in frames: what is
+    // alive is the one less the other, added up over the threads.
+    int64_t allocations, gone_objects;
     int64_t frames_made, frame_chunks; // async frames (frames.c)
     struct SableThread *next; // every thread's, the latest first
     int32_t index;            // how many were made before it

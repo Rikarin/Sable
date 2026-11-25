@@ -993,6 +993,7 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 SourceFile = _generic.SourceFile,
                 Line = _generic.Line,
                 Inline = _generic.Inline,
+                Vectorised = _generic.Vectorised,
             };
             _copy.Scopes.AddRange(_generic.Scopes);
             _copy.Decisions.AddRange(_generic.Decisions);

@@ -157,7 +157,7 @@ public sealed partial class LlvmEmitter {
         _reachable = module.Unit is null ? SilPassManager.Reachable(module) : null;
         var functions = new StringBuilder();
         foreach (var function in module.Functions.Where(f => _reachable?.Contains(f.Name) ?? true)) {
-            functions.Append(new FunctionEmitter(this, function).Emit()).Append('\n');
+            Function(function, functions);
         }
 
         if (module.EntryPoint is { } entry && module.Find(entry) is { } main) {
@@ -643,6 +643,7 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_crypto_blocks(i64, ptr, ptr, i64, i64)
                                 declare zeroext i1 @sable_crypto_blocks_raw(i64, ptr, ptr, i64)
                                 declare zeroext i1 @sable_vector_available()
+                                @sable_processor_known = external global i32
                                 declare float @sable_vector_reduce_F32(i64, ptr, i64, i64, ptr, i64)
                                 declare double @sable_vector_reduce_F64(i64, ptr, i64, i64, ptr, i64)
                                 declare void @sable_vector_map_F32(ptr, i64, ptr, i64, i64, ptr, i64)
@@ -1745,7 +1746,7 @@ public sealed partial class LlvmEmitter {
 
     // =======================================================================
 
-    sealed partial class FunctionEmitter(LlvmEmitter module, SilFunction function) {
+    sealed partial class FunctionEmitter(LlvmEmitter module, SilFunction function, string suffix = "") {
         /// <summary>What each SIL value is called, or its constant text.</summary>
         readonly Dictionary<SilValue, string> _names = [];
 
@@ -2498,14 +2499,21 @@ public sealed partial class LlvmEmitter {
             // Sable has no unwinding: an error is a returned value and a trap
             // ends the program. Said, LLVM needs no unwind paths for calls.
             var linkage = module.Linkage(function.Name);
-            text.Append("define ").Append(linkage).Append(ReturnType(function.Type)).Append(" @").Append(Global(function.Name))
+            if (suffix.Length > 0 && linkage.Length == 0) {
+                linkage = "internal ";
+            }
+
+            var symbol = Global(function.Name + suffix);
+            text.Append("define ").Append(linkage).Append(ReturnType(function.Type)).Append(" @").Append(symbol)
                 .Append('(').Append(string.Join(", ", parameters)).Append(") nounwind")
-                .Append(function.Inline switch {
-                    SilInline.Always => " alwaysinline",
-                    SilInline.Never => " noinline",
-                    _ => "",
-                })
-                .Append(module.Comdat("@" + Global(function.Name), linkage) is { Length: > 0 } ? " comdat" : "");
+                .Append(suffix == BaselineSuffix ? " alwaysinline"
+                    : suffix == WideSuffix ? " " + WideAttributes
+                    : function.Inline switch {
+                        SilInline.Always => " alwaysinline",
+                        SilInline.Never => " noinline",
+                        _ => "",
+                    })
+                .Append(module.Comdat("@" + symbol, linkage) is { Length: > 0 } ? " comdat" : "");
             if (_scope is not null) {
                 text.Append(" !dbg ").Append(_scope);
             }

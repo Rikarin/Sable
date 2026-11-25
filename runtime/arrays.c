@@ -803,11 +803,38 @@ int64_t sable_utf8_validate(const SableArray *buffer, int64_t start, int64_t cou
 
 // ---- Comparing elements by their bits
 
+#if defined(SABLE_X64)
+SABLE_TARGET_AVX2 static inline __m256i differing_avx2(const uint8_t *a, const uint8_t *b) {
+    return _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)a), _mm256_loadu_si256((const __m256i *)b));
+}
+
+// How many of the bytes, a multiple of 128, are in blocks equal in both.
+SABLE_TARGET_AVX2 static int64_t equal_blocks_avx2(const uint8_t *a, const uint8_t *b, int64_t length) {
+    int64_t i = 0;
+    for (; i + 128 <= length; i += 128) {
+        __m256i low = _mm256_or_si256(differing_avx2(a + i, b + i), differing_avx2(a + i + 32, b + i + 32));
+        __m256i high = _mm256_or_si256(differing_avx2(a + i + 64, b + i + 64), differing_avx2(a + i + 96, b + i + 96));
+        __m256i differs = _mm256_or_si256(low, high);
+        if (!_mm256_testz_si256(differs, differs)) {
+            break;
+        }
+    }
+
+    return i;
+}
+#endif
+
 // Where the two runs of bytes first differ, or their length: sixty-four and
 // then sixteen at a time, the last sixteen over again in place of a scalar
 // tail, so that only a run of fewer is walked by eight and by one.
 static int64_t first_difference(const uint8_t *a, const uint8_t *b, int64_t length) {
     int64_t i = 0;
+#if defined(SABLE_X64)
+    if (length >= 256 && processor_has_avx2()) {
+        i = equal_blocks_avx2(a, b, length);
+    }
+#endif
+
     while (i + 64 <= length) {
         const char *x = (const char *)a + i, *y = (const char *)b + i;
         if (any16((sable_mask16)((load16(x) ^ load16(y)) | (load16(x + 16) ^ load16(y + 16)) | (load16(x + 32) ^ load16(y + 32)) | (load16(x + 48) ^ load16(y + 48))))) {

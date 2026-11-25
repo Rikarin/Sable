@@ -648,6 +648,8 @@ public sealed class SilParser {
             Expect(")");
         }
 
+        _function.Vectorised = Accept("vectorised");
+
         // How unspecialised code finds an associated type's metadata.
         while (Accept("associated")) {
             Expect("(");

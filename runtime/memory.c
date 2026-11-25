@@ -167,12 +167,12 @@ static void slab_retire(Slab *slab) {
     }
 }
 
-// A block back to its slab; its class's lock held.
-static void slab_give(void *block, unsigned class) {
-    Slab *slab = slab_of(block);
-    *(void **)block = slab->free;
-    slab->free = block;
-    slab->live--;
+// Blocks back to their slab, linked from the first to the last: its class's
+// lock held.
+static void slab_give(Slab *slab, void *first, void *last, uint32_t count, unsigned class) {
+    *(void **)last = slab->free;
+    slab->free = first;
+    slab->live -= count;
     if (!slab->listed) {
         slab_list(slab, class);
     } else if (slab->live == 0 && (slab->next != NULL || slab->previous != NULL)) {
@@ -195,22 +195,33 @@ __attribute__((noinline)) static void cache_fill(BlockCache *cache, unsigned cla
         }
 
         // What this slab has: those given back, then those never handed out.
+        // Each in the order it is in, a run at a time.
         int before = wanted;
         void *free_blocks = slab->free;
-        while (wanted > 0 && free_blocks != NULL) {
-            void *block = free_blocks;
-            free_blocks = *(void **)block;
-            *(void **)block = head;
-            head = block;
-            wanted--;
+        if (free_blocks != NULL) {
+            void *last = free_blocks;
+            for (wanted--; wanted > 0 && *(void **)last != NULL; wanted--) {
+                last = *(void **)last;
+            }
+
+            void *rest = *(void **)last;
+            *(void **)last = head;
+            head = free_blocks;
+            free_blocks = rest;
         }
 
         char *carved = slab->carved, *end = (char *)slab + SLAB_SIZE;
-        while (wanted > 0 && end - carved >= size) {
-            *(void **)carved = head;
-            head = carved;
-            carved += size;
-            wanted--;
+        if (wanted > 0 && end - carved >= size) {
+            void *first = carved, *last;
+            do {
+                last = carved;
+                carved += size;
+                *(void **)last = carved;
+                wanted--;
+            } while (wanted > 0 && end - carved >= size);
+
+            *(void **)last = head;
+            head = first;
         }
 
         slab->free = free_blocks;
@@ -229,13 +240,27 @@ __attribute__((noinline)) static void cache_fill(BlockCache *cache, unsigned cla
 // The thread holds too many blocks of the class: a batch back to the slabs.
 __attribute__((noinline)) static void cache_drain(BlockCache *cache, unsigned class, int count) {
     spin_lock(&class_locks[class]);
-    for (int i = 0; i < count && cache->head != NULL; i++) {
-        void *block = cache->head;
-        cache->head = *(void **)block;
-        cache->count--;
-        slab_give(block, class);
+    // Those one after another that are one slab's go back to it at once: what
+    // was freed together was, mostly, allocated together.
+    void *block = cache->head;
+    int given = 0;
+    while (given < count && block != NULL) {
+        Slab *slab = slab_of(block);
+        void *first = block, *last = block;
+        uint32_t run = 1;
+        block = *(void **)block;
+        while (given + (int)run < count && block != NULL && slab_of(block) == slab) {
+            last = block;
+            block = *(void **)block;
+            run++;
+        }
+
+        slab_give(slab, first, last, run, class);
+        given += (int)run;
     }
 
+    cache->head = block;
+    cache->count -= given;
     spin_unlock(&class_locks[class]);
 }
 
@@ -392,41 +417,69 @@ static inline void object_free(SableThread *thread, SableObject *object) {
     }
 }
 
-// A new object, its count one; the rest zero when 'zero' is set, and
-// otherwise whatever was there, for the caller to write.
-static void *alloc_object(const SableMetadata *type, int64_t size, bool zero) {
-    unsigned class = small_class(size);
-    SableThread *thread = current_thread();
-    SableObject *object;
-    if (class != 0) {
-        object = small_alloc(thread, class);
-        if (zero) {
-            // A block's size is a multiple of sixteen. Most objects are a few
-            // words, cleared here rather than by a call.
-            if (size <= 64) {
-                uint64_t *words = (uint64_t *)(void *)object;
-                for (int64_t i = 0; i < (size + 7) / 8; i++) {
-                    words[i] = 0;
-                }
-            } else {
-                memset(object, 0, (size_t)size);
-            }
-        }
-
-        object->flags = class << SABLE_CLASS_SHIFT;
-    } else {
-        object = zero ? calloc(1, (size_t)size) : malloc((size_t)size);
-        if (object == NULL) {
-            sable_trap("out of memory");
-        }
-
-        object->flags = 0;
-    }
-
+// A new object's header, the rest being as it is: counted, and alive.
+static inline void *object_begin(SableThread *thread, SableObject *object, const SableMetadata *type, unsigned class) {
     object->type = type;
     object->strong = 1;
-    object_born_on(thread, object);
+    object->flags = class << SABLE_CLASS_SHIFT;
     thread_count(&thread->allocations, 1);
+    if (__builtin_expect(tracking, 0)) {
+        track(object, true);
+    }
+
+    return object;
+}
+
+// From malloc: an object too large for a class.
+__attribute__((noinline)) static void *large_object(const SableMetadata *type, int64_t size, bool zero) {
+    SableObject *object = zero ? calloc(1, (size_t)size) : malloc((size_t)size);
+    if (object == NULL) {
+        sable_trap("out of memory");
+    }
+
+    return object_begin(current_thread(), object, type, 0);
+}
+
+// The thread has no block of the class, or no state yet.
+__attribute__((noinline)) static void *small_object_filling(const SableMetadata *type, unsigned class) {
+    SableThread *thread = current_thread();
+    return object_begin(thread, small_alloc(thread, class), type, class);
+}
+
+// A new object from a size class, its count one. With none of a call's frame
+// where the thread has a block of it.
+static void *small_object(const SableMetadata *type, unsigned class) {
+    SableThread *thread = this_thread_get();
+    if (__builtin_expect(thread == NULL || thread->blocks[class].head == NULL, 0)) {
+        return small_object_filling(type, class);
+    }
+
+    return object_begin(thread, small_alloc(thread, class), type, class);
+}
+
+// A new object, its count one; the rest zero when 'zero' is set, and
+// otherwise whatever was there, for the caller to write. Part of its caller,
+// where the size is as often as not a constant and the class then one too.
+__attribute__((always_inline)) static inline void *alloc_object(const SableMetadata *type, int64_t size, bool zero) {
+    unsigned class = small_class(size);
+    if (class == 0) {
+        return large_object(type, size, zero);
+    }
+
+    SableObject *object = small_object(type, class);
+    if (zero) {
+        // A block's size is a multiple of sixteen. Most objects are a few
+        // words, cleared here rather than by a call.
+        if (size <= 64) {
+            uint64_t *words = (uint64_t *)(void *)object;
+            for (int64_t i = (int64_t)sizeof(SableObject) / 8; i < (size + 7) / 8; i++) {
+                words[i] = 0;
+            }
+        } else {
+            memset(object + 1, 0, (size_t)size - sizeof(SableObject));
+        }
+    }
+
     return object;
 }
 
@@ -562,6 +615,25 @@ void sable_object_unmade(void *pointer) {
     flags_set(pointer, SABLE_UNMADE);
 }
 
+// The end of a deinited object there is more to than giving its block back.
+__attribute__((noinline)) static void release_rest(SableObject *object) {
+    // Unowned references hold the memory, not the object, until they go;
+    // the last of them, on another thread, frees it once it sees it deinited.
+    uint32_t flags = __atomic_load_n(&object->flags, __ATOMIC_ACQUIRE);
+    if ((flags >> SABLE_UNOWNED_SHIFT) > 0 || (flags & SABLE_HAS_SIDE)) {
+        flags = __atomic_fetch_or(&object->flags, SABLE_DEINITED, __ATOMIC_ACQ_REL);
+        if ((flags >> SABLE_UNOWNED_SHIFT) > 0) {
+            return;
+        }
+    }
+
+    SableThread *thread = current_thread();
+    object_gone_on(thread, object);
+    if (!(flags & SABLE_STACK)) {
+        object_free(thread, object);
+    }
+}
+
 // The last strong reference gone: its count is zero, and it is counted.
 // The deinit runs, the fields are destroyed, and the memory goes when no
 // unowned reference holds it. No other thread can reach it now but through
@@ -576,31 +648,31 @@ void sable_release_last(void *pointer) {
     object->strong = 1;
     if (object->type->destroy != NULL) {
         object->type->destroy(object);
-    }
-
-    if (object->strong != 1) {
-        sable_trap("an object outlived its deinit");
-    }
-
-    object->strong = 0;
-    // Unowned references hold the memory, not the object, until they go;
-    // the last of them, on another thread, frees it once it sees it deinited.
-    // With none now, and no weak ones, nothing has the object and nothing can
-    // come to: that it is deinited need not be said, which is most objects'
-    // end and would be an atomic operation each.
-    uint32_t flags = __atomic_load_n(&object->flags, __ATOMIC_ACQUIRE);
-    if ((flags >> SABLE_UNOWNED_SHIFT) > 0 || (flags & SABLE_HAS_SIDE)) {
-        flags = __atomic_fetch_or(&object->flags, SABLE_DEINITED, __ATOMIC_ACQ_REL);
-        if ((flags >> SABLE_UNOWNED_SHIFT) > 0) {
-            return;
+        if (__builtin_expect(object->strong != 1, 0)) {
+            sable_trap("an object outlived its deinit");
         }
     }
 
-    SableThread *thread = current_thread();
-    object_gone_on(thread, object);
-    if (!(flags & SABLE_STACK)) {
-        object_free(thread, object);
+    object->strong = 0;
+    // Most objects' end: nothing has the object and nothing can come to, so
+    // that it is deinited need not be said, which would be an atomic
+    // operation each, and its block goes back to the thread's. What is
+    // tested with it is what only some objects have.
+    uint32_t flags = __atomic_load_n(&object->flags, __ATOMIC_ACQUIRE);
+    unsigned class = (flags & SABLE_CLASS_MASK) >> SABLE_CLASS_SHIFT;
+    SableThread *thread = this_thread_get();
+    bool plain = flags < SABLE_UNOWNED_ONE && (flags & (SABLE_HAS_SIDE | SABLE_STACK)) == 0 && class != 0;
+    if (__builtin_expect(!plain || thread == NULL || tracking, 0)) {
+        release_rest(object);
+        return;
     }
+
+    if (object->type == &sable_string_metadata) {
+        forget_string(object);
+    }
+
+    thread_count(&thread->gone_objects, 1);
+    small_release(thread, object, class);
 }
 
 // ---- Raw memory ----------------------------------------------------------

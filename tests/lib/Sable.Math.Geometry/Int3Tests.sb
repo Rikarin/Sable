@@ -1,0 +1,78 @@
+module Int3Tests
+
+import Sable.Math.Geometry
+import Sable.Serialize
+import Sable.Testing
+
+let a: Int3 = Int3(7, -3, 2)
+let b: Int3 = Int3(2, 2, -2)
+
+@test
+fn itsLayoutIsItsComponentsInOrder() {
+    assertEqual(MemoryLayout<Int3>.size, 12)
+    assertEqual(MemoryLayout<Int3>.alignment, 4)
+}
+
+@test
+fn itsComponentsAreReadAndWrittenByIndex() {
+    var v = a
+    for i in 0..<3 {
+        assertEqual(v[i], a[i])
+        v[i] = b[i]
+    }
+    assertEqual(v, b)
+    expectPanic("has no component 3") {
+        _ = a[3]
+    }
+    expectPanic("has no component -1") {
+        var v = a
+        v[-1] = 0
+    }
+}
+
+@test
+fn arithmeticIsIntegersAndDividesTowardZero() {
+    assertEqual(a + b, Int3(9, -1, 0))
+    assertEqual(a - b, Int3(5, -5, 4))
+    assertEqual(a * b, Int3(14, -6, -4))
+    assertEqual(a / b, Int3(3, -1, -1))
+    assertEqual(a * 2, Int3(14, -6, 4))
+    assertEqual(2 * a, Int3(14, -6, 4))
+    assertEqual(a / 2, Int3(3, -1, 1))
+    assertEqual(-a, Int3(-7, 3, -2))
+    assertEqual(a.min(b), Int3(2, -3, -2))
+    assertEqual(a.max(b), Int3(7, 2, 2))
+    assertEqual(a.abs(), Int3(7, 3, 2))
+    assertEqual(a.clamped(lower: Int3.zero, upper: Int3(repeating: 5)), Int3(5, 0, 2))
+    expectPanic("overflow") {
+        _ = Int3(repeating: I32.max) + Int3.one
+    }
+}
+
+@test
+fn itIsMadeOfFloatsTowardZero() {
+    assertEqual(Int3(truncating: Vector3(1.9, -1.9, 3)), Int3(1, -1, 3))
+    assertEqual(Int3(repeating: 3), Int3.one * 3)
+    assertEqual(Int3.unitX + Int3.unitY + Int3.unitZ, Int3.one)
+    assertEqual(a.simd[2], 2)
+}
+
+@test
+fn itIsEqualHashedWrittenAndSerialised() {
+    assertEqual(a.hashValue, Int3(7, -3, 2).hashValue)
+    for i in 0..<3 {
+        var other = a
+        other[i] += 1
+        assert(a != other)
+    }
+    assertEqual("\(a)", "(7, -3, 2)")
+    assertEqual(a.debugDescription(), "Int3(7, -3, 2)")
+    assertEqual("\(a:?)", "Int3(7, -3, 2)")
+    assertEqual(try! Json.decode(Int3.self, from: try! Json.encode(a)), a)
+}
+
+@test
+fn itsVolumeIsWideAndItHoldsAShorterOne() {
+    assertEqual(Int3(2000, 3000, 7000).volume, 42000000000)
+    assertEqual(a.xy, Int2(7, -3))
+}

@@ -1,7 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Serialize
-
 /// Where a ray begins and which way it goes: for picking, lines of sight and
 /// casts. Distances along it are in units of the direction, which `init`
 /// makes 1. 24 bytes.
@@ -11,7 +9,6 @@ import Sable.Serialize
 /// assert(down.intersection(with: Plane(Vector3.up, 0)) == 5)
 /// assert(down.point(at: 2) == Vector3(0, 3, 0))
 /// ```
-@derive(Serializable)
 public struct Ray: Hashable, Sendable {
     /// Where it begins.
     public var origin: Vector3

@@ -13,16 +13,51 @@ module Sable.Math.Geometry
 public protocol FloatComponents {
     /// How many `F32`s a value is.
     static var componentCount: Int { get }
+
+    /// The components, in an array of their own: a copy, where an array of
+    /// values has views (`withComponents`).
+    fn toArray() -> F32[>..]
 }
 
-extension Vector2: FloatComponents { }
-extension Vector3: FloatComponents { }
-extension Vector4: FloatComponents { }
-extension Quaternion: FloatComponents { }
-extension Plane: FloatComponents { }
-extension Matrix3x2: FloatComponents { }
-extension Matrix3x3: FloatComponents { }
-extension Matrix4x4: FloatComponents { }
+extension Vector2: FloatComponents {
+    /// The components, in an array of their own.
+    public fn toArray() -> F32[>..] => [x, y]
+}
+
+extension Vector3: FloatComponents {
+    /// The components, in an array of their own.
+    public fn toArray() -> F32[>..] => [x, y, z]
+}
+
+extension Vector4: FloatComponents {
+    /// The components, in an array of their own.
+    public fn toArray() -> F32[>..] => [x, y, z, w]
+}
+
+extension Quaternion: FloatComponents {
+    /// The components, in an array of their own.
+    public fn toArray() -> F32[>..] => [x, y, z, w]
+}
+
+extension Plane: FloatComponents {
+    /// The components, in an array of their own.
+    public fn toArray() -> F32[>..] => [normal.x, normal.y, normal.z, d]
+}
+
+extension Matrix3x2: FloatComponents {
+    /// The components, in an array of their own.
+    public fn toArray() -> F32[>..] => [m11, m12, m21, m22, m31, m32]
+}
+
+extension Matrix3x3: FloatComponents {
+    /// The components, in an array of their own.
+    public fn toArray() -> F32[>..] => [m11, m12, m13, m21, m22, m23, m31, m32, m33]
+}
+
+extension Matrix4x4: FloatComponents {
+    /// The components, in an array of their own.
+    public fn toArray() -> F32[>..] => [m11, m12, m13, m14, m21, m22, m23, m24, m31, m32, m33, m34, m41, m42, m43, m44]
+}
 
 /// Traps unless the type is as large as its components.
 fn checkLayout<T: FloatComponents>(_ type: T.Type) {
@@ -84,12 +119,5 @@ extension<Element: FloatComponents> Element[:] {
                 return try body(UnsafeBuffer<F32>.viewing(start.cast(to: F32.self), count: total))
             }
         }
-    }
-}
-
-extension FloatComponents {
-    /// The value's components, in an array of their own.
-    public fn toArray() -> F32[>..] {
-        return [self].withComponents { $0.toArray() }
     }
 }

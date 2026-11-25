@@ -1,7 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Serialize
-
 /// The plane of the points where `normal · p + d` is 0. The side the normal
 /// points to is the front. 16 bytes, as the `Vector4` of its coefficients.
 ///
@@ -14,7 +12,6 @@ import Sable.Serialize
 /// assert(floor.dotCoordinate(Vector3(5, 7, 5)) == 5)
 /// assert(floor.side(of: Vector3.zero) == .Back)
 /// ```
-@derive(Serializable)
 public struct Plane: Hashable, Sendable {
     /// The normal: of length 1 for distances to be distances.
     public var normal: Vector3

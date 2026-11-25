@@ -1,8 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Math
-import Sable.Serialize
-
 /// Two `F32`s: a point on a screen, a texture coordinate, a size. 8 bytes,
 /// aligned to 4, its components in order.
 ///
@@ -10,7 +7,6 @@ import Sable.Serialize
 /// let v = Vector2(3, 4) * 2
 /// assert(v.length == 2 * 5 && v[0] == v.x)
 /// ```
-@derive(Serializable)
 public struct Vector2: Hashable, AdditiveArithmetic, Sendable {
     /// The x component.
     public var x: F32

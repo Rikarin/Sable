@@ -1,7 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Serialize
-
 /// A scale, then a rotation, then a translation: where something is in its
 /// parent, or a bone in a pose. Unlike a matrix it can be interpolated, and
 /// its parts read. 40 bytes.
@@ -16,7 +14,6 @@ import Sable.Serialize
 /// assert((local * parent).translation == Vector3(2, 5, 0))
 /// assert((local * parent).transformPosition(Vector3.zero) == Vector3(2, 5, 0))
 /// ```
-@derive(Serializable)
 public struct Transform: Hashable, Sendable {
     /// Where it is.
     public var translation: Vector3

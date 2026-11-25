@@ -1,7 +1,6 @@
 module Sable.Math.Geometry
 
 import Sable.Math
-import Sable.Serialize
 
 /// A rotation, as the four `F32`s of a quaternion: x, y, z, and last the
 /// scalar part w. 16 bytes, aligned to 4, as a `Vector4`.
@@ -17,7 +16,6 @@ import Sable.Serialize
 /// let half = quarter * quarter
 /// assert(half.transform(Vector3.unitX).nearEqual(-Vector3.unitX))
 /// ```
-@derive(Serializable)
 public struct Quaternion: Hashable, Sendable {
     /// The x of the vector part.
     public var x: F32

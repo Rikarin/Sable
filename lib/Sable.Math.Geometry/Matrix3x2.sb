@@ -1,7 +1,6 @@
 module Sable.Math.Geometry
 
 import Sable.Math
-import Sable.Serialize
 
 /// An affine transform of the plane: six `F32`s by rows, of row vectors, the
 /// translation the last row. 24 bytes, aligned to 4. A positive angle turns
@@ -11,7 +10,6 @@ import Sable.Serialize
 /// let m = Matrix3x2(scale: Vector2(2, 2)) * Matrix3x2(translation: Vector2(10, 0))
 /// assert(m.transformPosition(Vector2(1, 1)) == Vector2(12, 2))
 /// ```
-@derive(Serializable)
 public struct Matrix3x2: Hashable, Sendable {
     /// Row 1, column 1.
     public var m11: F32

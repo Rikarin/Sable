@@ -1,7 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Serialize
-
 /// What a camera sees, as the six planes around it, facing inward: a point
 /// is inside where it is in front of them all. 96 bytes.
 ///
@@ -17,7 +15,6 @@ import Sable.Serialize
 /// assert(!frustum.contains(Vector3(0, 0, 50)))
 /// assert(frustum.intersects(BoundingSphere(Vector3(0, 0, -100), 5)))
 /// ```
-@derive(Serializable)
 public struct BoundingFrustum: Hashable, Sendable {
     /// The plane nearest the camera, facing away from it.
     public var near: Plane

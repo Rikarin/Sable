@@ -1,7 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Serialize
-
 /// A box along the axes, as its least and its greatest corner: 24 bytes.
 ///
 /// The empty box has its least corner above its greatest, and merging
@@ -14,7 +12,6 @@ import Sable.Serialize
 /// }
 /// assert(bounds == BoundingBox(Vector3(-1, 0, 3), Vector3(1, 2, 5)))
 /// ```
-@derive(Serializable)
 public struct BoundingBox: Hashable, Sendable {
     /// The corner of least coordinates.
     public var minimum: Vector3

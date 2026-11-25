@@ -1,8 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Math
-import Sable.Serialize
-
 /// Three `F64`s: a position in a world too large for `F32`s, whose steps
 /// grow to a millimetre sixteen kilometres out. What is drawn or simulated near some origin is
 /// made `F32`s by `relative(to:)`, which subtracts before it rounds; rotations,
@@ -13,7 +10,6 @@ import Sable.Serialize
 /// assert(v == Vector3D(3, 2, 3))
 /// assert(Vector3D.unitX.cross(Vector3D.unitY) == Vector3D.unitZ)
 /// ```
-@derive(Serializable)
 public struct Vector3D: Hashable, AdditiveArithmetic, Sendable {
     /// The x component.
     public var x: F64

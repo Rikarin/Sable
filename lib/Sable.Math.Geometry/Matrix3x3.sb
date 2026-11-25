@@ -1,7 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Serialize
-
 /// A linear transform: nine `F32`s by rows, of row vectors, as the first
 /// three rows and columns of a `Matrix4x4`. 36 bytes, aligned to 4; a GLSL
 /// `mat3` in a buffer pads each of its three to 16 bytes, so a buffer wants
@@ -12,7 +10,6 @@ import Sable.Serialize
 /// assert(Vector3.one * m == Vector3(1, 2, 3))
 /// assert(m.determinant == 6)
 /// ```
-@derive(Serializable)
 public struct Matrix3x3: Hashable, Sendable {
     /// Row 1, column 1.
     public var m11: F32

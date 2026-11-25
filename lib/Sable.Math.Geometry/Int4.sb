@@ -1,7 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Serialize
-
 /// Four `I32`s: bone indices, an index with three more. 16 bytes, aligned to 4, as
 /// C's `int32_t[4]` and GLSL's `ivec4`. Arithmetic traps where a component
 /// overflows, as `I32`'s does, and division truncates toward zero.
@@ -10,7 +8,6 @@ import Sable.Serialize
 /// let v = Int4(repeating: 7) / 2
 /// assert(v == Int4(repeating: 3) && v.x == v[0])
 /// ```
-@derive(Serializable)
 public struct Int4: Hashable, AdditiveArithmetic, Sendable {
     /// The x component.
     public var x: I32

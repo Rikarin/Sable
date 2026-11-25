@@ -1,8 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Math
-import Sable.Serialize
-
 /// Three `F32`s: a position, a direction, a scale, and whatever else a
 /// world measures in three dimensions (Conventions.sb: right-handed, up is
 /// +Y, forward is -Z). 12 bytes, aligned to 4, its components in order, as
@@ -17,7 +14,6 @@ import Sable.Serialize
 /// assert(v == Vector3(3, 2, 3) && v.xy == Vector2(3, 2))
 /// assert(Vector3.unitX.cross(Vector3.unitY) == Vector3.unitZ)
 /// ```
-@derive(Serializable)
 public struct Vector3: Hashable, AdditiveArithmetic, Sendable {
     /// The x component.
     public var x: F32

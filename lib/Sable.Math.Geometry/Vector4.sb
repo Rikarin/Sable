@@ -1,8 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Math
-import Sable.Serialize
-
 /// Four `F32`s: a homogeneous point (w is 1) or direction (w is 0), a
 /// tangent with its handedness, a row of a matrix. 16 bytes, aligned to 4:
 /// an array of them is tightly packed, and `simd` makes a register of one.
@@ -11,7 +8,6 @@ import Sable.Serialize
 /// let v = Vector4(1, 2, 4, 10) * 2
 /// assert(v.length == 2 * 11 && v[0] == v.x)
 /// ```
-@derive(Serializable)
 public struct Vector4: Hashable, AdditiveArithmetic, Sendable {
     /// The x component.
     public var x: F32

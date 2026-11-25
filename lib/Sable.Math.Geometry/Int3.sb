@@ -1,7 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Serialize
-
 /// Three `I32`s: a volume's extent, a voxel, a compute shader's groups. 12 bytes, aligned to 4, as
 /// C's `int32_t[3]` and GLSL's `ivec3`. Arithmetic traps where a component
 /// overflows, as `I32`'s does, and division truncates toward zero.
@@ -10,7 +8,6 @@ import Sable.Serialize
 /// let v = Int3(repeating: 7) / 2
 /// assert(v == Int3(repeating: 3) && v.x == v[0])
 /// ```
-@derive(Serializable)
 public struct Int3: Hashable, AdditiveArithmetic, Sendable {
     /// The x component.
     public var x: I32

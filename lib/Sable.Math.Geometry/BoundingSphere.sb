@@ -1,7 +1,5 @@
 module Sable.Math.Geometry
 
-import Sable.Serialize
-
 /// A sphere around something: the cheapest bound to test, the same however
 /// it is turned. 16 bytes. The empty sphere's radius is below 0; nothing is
 /// in it and it meets nothing.
@@ -10,7 +8,6 @@ import Sable.Serialize
 /// let sphere = BoundingSphere(containing: [Vector3(-1, 0, 0), Vector3(1, 0, 0)])
 /// assert(sphere.center == Vector3.zero && sphere.contains(Vector3(1, 0, 0)))
 /// ```
-@derive(Serializable)
 public struct BoundingSphere: Hashable, Sendable {
     /// The middle.
     public var center: Vector3

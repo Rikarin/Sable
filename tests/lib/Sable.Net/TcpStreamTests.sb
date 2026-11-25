@@ -3,6 +3,7 @@ module TcpStreamTests
 // TcpStream (Sable.Net), tested with '@test': run with
 //     tools/stdlib-coverage.sh Sable.Net
 
+import Sable.Concurrency
 import Sable.IO
 import Sable.Net
 import Sable.Testing
@@ -283,6 +284,26 @@ fn aCancelledReadLosesNoByte() async {
             right = right && Int(got[i]) == i % 251
         }
         assert(right, "\(got.count) bytes")
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+/// A read or an accept given up is begun again, and nothing is lost by it.
+@test
+fn aReadAnAcceptAndAWriteTimeOut() async {
+    do {
+        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+        assert((try? await withTimeout(Duration.milliseconds(20)) { try await listener.accept() }) == none)
+        let client = try await TcpStream.connect(listener.localAddress)
+        let server = try await listener.accept()
+        assert((try? await withTimeout(Duration.milliseconds(20)) { try await server.read(upTo: 9) }) == none)
+        // A write that no one reads, too.
+        let block = U8[>..](repeating: 7, count: 32 << 20)
+        assert((try? await withTimeout(Duration.milliseconds(50)) { try await server.write(block) }) == none)
+        assertEqual((try await client.read(upTo: 4)).count, 4)
+        try await client.write([1, 2])
+        assertEqual(try await server.read(upTo: 9), [1, 2])
     } catch {
         assert(false, error.description())
     }

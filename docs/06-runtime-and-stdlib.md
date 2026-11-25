@@ -1337,7 +1337,9 @@ imports nothing and reads its zones through `Sable.Core`'s `Runtime`.
   is loaded when first used, inotify on Linux, its descriptor an I/O source
   of the reactor's (§6.7), and `ReadDirectoryChangesW` on Windows, heard by
   the thread pool. FSEvents says only where something happened, so the paths
-  there are remembered to say what. A task waiting does not keep a program
+  there are remembered to say what. A file is watched by the directory it is
+  in, so that one that takes its place is watched too. What the system drops,
+  or 16384 events not taken, is one `.Rescan`. A task waiting does not keep a program
   going once main has returned.
 - **The interpreter** makes the same calls on POSIX, through the C library;
   on Windows it makes .NET's, whose recursive removal follows no reparse

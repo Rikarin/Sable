@@ -21,9 +21,9 @@ typedef struct FileWatch {
     PlatformMutex reading;
 } FileWatch;
 
-// So many not taken are kept; then all are dropped for one that says to
-// look again.
-enum { WATCH_MOST = 65536 };
+// So many not taken are kept, as many as inotify does unless told; then all
+// are dropped for one that says to look again.
+enum { WATCH_MOST = 16384 };
 
 static SpinLock watches_lock;
 static bool watches_stopped;

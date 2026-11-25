@@ -1,0 +1,302 @@
+module Sable.DependencyInjection
+
+import Sable.Concurrency
+
+/// A part of a program's life with services of its own: a request, a job.
+/// Each scoped service is made once in it, and disposed as it ends, the last
+/// made first, then everything transient that was made in it alike.
+///
+/// A scope is used by one task at a time, so it is not Sendable: what is
+/// scoped need not be. Got by `ServiceProvider.withScope`, or as what a
+/// factory is given.
+///
+/// ```sable
+/// let services = ServiceCollection()
+/// services.addScoped(Int[>..].self) { _scope in [1] }
+/// let provider = try! services.build()
+/// provider.withScope { scope in
+///     assert(try! scope.resolve(Int[>..].self) == [1])
+/// }
+/// ```
+public final class ServiceScope {
+    /// Whose scope it is.
+    public let provider: ServiceProvider
+    // Where singletons, and what is asked of the provider itself, are made.
+    let isRoot: Bool
+    var kept: (any Any)?[>..] = []
+    // In the order kept: released the last first.
+    var order: Int[>..] = []
+    var disposals: Disposals = Disposals()
+    // What is being made now, outermost first.
+    var making: Making[>..] = []
+    var isDisposed: Bool = false
+
+    init(_ provider: ServiceProvider, isRoot: Bool) {
+        self.provider = provider
+        self.isRoot = isRoot
+    }
+
+    // Where a singleton is made for the one that asked.
+    init(root asking: ServiceScope) {
+        provider = asking.provider
+        isRoot = true
+        making = asking.making
+    }
+
+    deinit {
+        dispose()
+    }
+
+    /// The service of this type, and this key.
+    public fn resolve<T>(_ type: T.Type, key: String? = none) throws(ServiceError) -> T {
+        if key == none {
+            let at = linked(type)
+            if at >= 0 {
+                return try give(type, provider.links[at].entry)
+            }
+        }
+        let wanted = ServiceKey(type, key: key)
+        guard let entry = try provider.entry(wanted) else {
+            if let own = builtIn(type) {
+                return own
+            }
+            throw missing(wanted)
+        }
+        return try give(type, entry)
+    }
+
+    /// The service of this type and this key; none when it is not registered.
+    public fn find<T>(_ type: T.Type, key: String? = none) throws(ServiceError) -> T? {
+        if key == none {
+            let at = linked(type)
+            if at >= 0 {
+                return try give(type, provider.links[at].entry)
+            }
+        }
+        guard let entry = try provider.entry(ServiceKey(type, key: key)) else {
+            return builtIn(type)
+        }
+        return try give(type, entry)
+    }
+
+    /// The service of this type and this key; what the closure gives when it
+    /// is not registered.
+    public fn resolve<T>(_ type: T.Type, key: String? = none, otherwise fallback: () -> T) throws(ServiceError) -> T {
+        return try find(type, key: key) ?? fallback()
+    }
+
+    /// Every registration of the type and the key, in the order they were
+    /// added; none, if there are none.
+    public fn resolveAll<T>(_ type: T.Type, key: String? = none) throws(ServiceError) -> T[>..] {
+        var all: T[>..] = []
+        for entry in try provider.entries(ServiceKey(type, key: key)) {
+            all.append(try give(type, entry))
+        }
+        return all
+    }
+
+    /// One of a type that is not registered, made from its own dependencies:
+    /// .NET's `ActivatorUtilities.CreateInstance`. Whoever asked disposes it.
+    ///
+    /// ```sable
+    /// @derive(Injectable)
+    /// class Report {
+    ///     let title: String
+    ///     init(title: String) { self.title = title }
+    /// }
+    ///
+    /// let services = ServiceCollection()
+    /// services.addSingleton(String.self, value: "March")
+    /// (try! services.build()).withScope { scope in
+    ///     assert((try! scope.make(Report.self)).title == "March")
+    /// }
+    /// ```
+    public fn make<T: Injectable>(_ type: T.Type) throws(ServiceError) -> T {
+        do {
+            return try T.create(from: self)
+        } catch {
+            throw error as? ServiceError ?? ServiceError.Failed(service: ServiceKey(type), error: error)
+        }
+    }
+
+    /// The service of a type known only as the program runs.
+    ///
+    /// ```sable
+    /// let services = ServiceCollection()
+    /// services.addSingleton(Int.self, value: 7)
+    /// let wanted: Type = Int.self
+    /// (try! services.build()).withScope { scope in
+    ///     assert(try! scope.resolve(dynamic: wanted) as? Int == 7)
+    /// }
+    /// ```
+    public fn resolve(dynamic type: Type, key: String? = none) throws(ServiceError) -> any Any {
+        let wanted = ServiceKey(type, key: key)
+        guard let entry = try provider.entry(wanted) else {
+            throw missing(wanted)
+        }
+        try check(entry)
+        return try entry.value(in: self)
+    }
+
+    /// A closure that gives the service each time it is called, which traps
+    /// where `resolve` throws: what a parameter of type `() -> T` is given.
+    public fn factory<T>(_ type: T.Type, key: String? = none) -> () -> T {
+        if !isRoot {
+            // Until the scope ends, when it lets go of what holds this.
+            return { self.demand(type, key) }
+        }
+        // Not kept: the provider holds its singletons, and one may hold this.
+        let provider = self.provider
+        return [weak provider] () => {
+            guard let provider = provider else {
+                fatalError("\(ServiceKey(type, key: key)) was asked for after its provider had gone")
+            }
+            return ServiceScope(provider, isRoot: true).demand(type, key)
+        }
+    }
+
+    /// The service, made when the Lazy's value is first read: what a
+    /// parameter of type `Lazy<T>` is given.
+    public fn lazily<T>(_ type: T.Type, key: String? = none) -> Lazy<T> {
+        return Lazy(factory(type, key: key))
+    }
+
+    fn demand<T>(_ type: T.Type, _ key: String?) -> T {
+        do {
+            return try resolve(type, key: key)
+        } catch {
+            fatalError(error.description())
+        }
+    }
+
+    // Where the link is to what is being made says it is made from next, if
+    // it is this; else -1.
+    fn linked(_ type: Type) -> Int {
+        let top = making.count - 1
+        if top < 0 {
+            return -1
+        }
+        let at = making[top].next
+        if at < making[top].end {
+            if provider.links[at].type == type {
+                making[top].next = at + 1
+                return at
+            }
+        }
+        return -1
+    }
+
+    fn give<T>(_ type: T.Type, _ entry: ServiceEntry) throws(ServiceError) -> T {
+        try check(entry)
+        let given = try entry.value(in: self)
+        if let value = given as? T {
+            return value
+        }
+        throw ServiceError.WrongType(service: entry.key, implementation: Sable.Core.type(of: given))
+    }
+
+    fn check(_ entry: ServiceEntry) throws(ServiceError) {
+        if isDisposed || isRoot && provider.isDisposed {
+            throw ServiceError.Disposed(service: entry.key)
+        }
+    }
+
+    fn builtIn<T>(_ type: T.Type) -> T? {
+        let own: any Any = self
+        let its: any Any = provider
+        if let scope = own as? T {
+            return scope
+        }
+        return its as? T
+    }
+
+    fn missing(_ wanted: ServiceKey) -> ServiceError {
+        return ServiceError.NotRegistered(service: wanted, path: making.map { $0.entry.key }.toArray())
+    }
+
+    fn scopedFromRoot(_ entry: ServiceEntry) -> ServiceError {
+        if making.isEmpty {
+            return ServiceError.ScopedFromRoot(service: entry.key)
+        }
+        return ServiceError.Captive(path: path(to: entry.key))
+    }
+
+    fn path(to key: ServiceKey) -> ServiceKey[>..] {
+        var path = making.map { $0.entry.key }.toArray()
+        path.append(key)
+        return path
+    }
+
+    fn isMaking(_ entry: ServiceEntry) -> Bool {
+        for each in making {
+            if each.entry === entry {
+                return true
+            }
+        }
+        return false
+    }
+
+    // The first round of one that leads back to itself.
+    fn round(_ entry: ServiceEntry) -> ServiceKey[>..] {
+        var all: ServiceEntry[>..] = making.map { $0.entry }.toArray()
+        all.append(entry)
+        for (i, first) in all.enumerated() {
+            var path: ServiceKey[>..] = [first.key]
+            for next in all[(i + 1)...] {
+                path.append(next.key)
+                if next === first {
+                    return path
+                }
+            }
+        }
+        return path(to: entry.key)
+    }
+
+    fn begin(_ entry: ServiceEntry) throws(ServiceError) {
+        // So deep, it may be going round: what leads back to itself gets here.
+        if making.count % 16 == 15 && isMaking(entry) {
+            throw ServiceError.Circular(path: round(entry))
+        }
+        making.append(Making { entry: entry, next: entry.firstLink, end: entry.firstLink + entry.linkCount })
+    }
+
+    fn end() {
+        _ = making.removeLast()
+    }
+
+    fn keep(_ instance: any Any, at slot: Int) {
+        while kept.count <= slot {
+            kept.append(none)
+        }
+        kept[slot] = instance
+        order.append(slot)
+    }
+
+    fn note(_ value: any Any) {
+        if isRoot {
+            provider.note(value)
+        } else {
+            disposals.note(value)
+        }
+    }
+
+    // Ends the scope: what is to be disposed is, and what it held let go,
+    // each the last made first.
+    fn dispose() {
+        isDisposed = true
+        disposals.disposeAll()
+        release()
+    }
+
+    async fn disposeAsync() {
+        isDisposed = true
+        await disposals.disposeAllAsync()
+        release()
+    }
+
+    fn release() {
+        while !order.isEmpty {
+            kept[order.removeLast()] = none
+        }
+    }
+}

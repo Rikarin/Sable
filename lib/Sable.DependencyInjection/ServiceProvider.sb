@@ -1,0 +1,193 @@
+module Sable.DependencyInjection
+
+import Sable.Concurrency
+
+/// Gives services: what `ServiceCollection.build` makes. Any thread may ask
+/// it; each singleton is made once, the first time it is wanted.
+///
+/// ```sable
+/// let services = ServiceCollection()
+/// services.addSingleton(String.self, value: "hello")
+/// let provider = try! services.build()
+/// assert(try! provider.resolve(String.self) == "hello")
+/// ```
+@immutable
+public final class ServiceProvider {
+    let entries: [ServiceKey: ServiceEntry[>..]]
+    let links: ServiceLink[>..]
+    let generics: OpenService[>..]
+    let state: Mutex<ProviderState>
+    let disposed: Atomic<Bool>
+
+    init(entries: [ServiceKey: ServiceEntry[>..]], links: ServiceLink[>..], generics: OpenService[>..], slots: Int) {
+        self.entries = entries
+        self.links = links
+        self.generics = generics
+        state = Mutex(ProviderState { slots: slots })
+        disposed = Atomic(false)
+    }
+
+    deinit {
+        dispose()
+    }
+
+    /// The service of this type, and this key. A scoped one is a scope's to
+    /// give (`withScope`): here it is ServiceError.ScopedFromRoot.
+    public fn resolve<T>(_ type: T.Type, key: String? = none) throws(ServiceError) -> T {
+        return try ServiceScope(self, isRoot: true).resolve(type, key: key)
+    }
+
+    /// The service of this type and this key; none when it is not registered.
+    public fn find<T>(_ type: T.Type, key: String? = none) throws(ServiceError) -> T? {
+        return try ServiceScope(self, isRoot: true).find(type, key: key)
+    }
+
+    /// Every registration of the type and the key, in the order they were
+    /// added; none, if there are none.
+    public fn resolveAll<T>(_ type: T.Type, key: String? = none) throws(ServiceError) -> T[>..] {
+        return try ServiceScope(self, isRoot: true).resolveAll(type, key: key)
+    }
+
+    /// One of a type that is not registered, made from its own dependencies.
+    /// Whoever asked disposes it.
+    public fn make<T: Injectable>(_ type: T.Type) throws(ServiceError) -> T {
+        return try ServiceScope(self, isRoot: true).make(type)
+    }
+
+    /// The service of a type known only as the program runs.
+    public fn resolve(dynamic type: Type, key: String? = none) throws(ServiceError) -> any Any {
+        return try ServiceScope(self, isRoot: true).resolve(dynamic: type, key: key)
+    }
+
+    /// Whether the service is registered.
+    public fn contains(_ type: Type, key: String? = none) -> Bool {
+        let found = (try? entries(ServiceKey(type, key: key))) ?? []
+        return !found.isEmpty
+    }
+
+    /// What the closure makes of a new scope, which ends as it does.
+    ///
+    /// ```sable
+    /// class Connection: Disposable {
+    ///     fn dispose() { print("closed") }
+    /// }
+    ///
+    /// let services = ServiceCollection()
+    /// services.addScoped(Connection.self) { _scope in Connection() }
+    /// (try! services.build()).withScope { scope in
+    ///     let connection = try! scope.resolve(Connection.self)
+    ///     assert(connection === (try! scope.resolve(Connection.self)))
+    /// }
+    /// ```
+    public fn withScope<R, E: Error>(_ body: (ServiceScope) throws(E) -> R) throws(E) -> R {
+        let scope = ServiceScope(self, isRoot: false)
+        do {
+            let result = try body(scope)
+            scope.dispose()
+            return result
+        } catch {
+            scope.dispose()
+            throw error
+        }
+    }
+
+    /// What the closure makes of a new scope, which ends as it does, waiting
+    /// for each AsyncDisposable it made.
+    public async fn withAsyncScope<R, E: Error>(_ body: async (ServiceScope) throws(E) -> R) throws(E) -> R {
+        let scope = ServiceScope(self, isRoot: false)
+        do {
+            let result = try await body(scope)
+            await scope.disposeAsync()
+            return result
+        } catch {
+            await scope.disposeAsync()
+            throw error
+        }
+    }
+
+    /// Disposes the singletons, and what was made of the provider itself, the
+    /// last made first. The provider gives nothing after. Again, nothing; not
+    /// called, it is as the provider goes.
+    public fn dispose() {
+        if !disposed.exchange(true) {
+            var disposals = takeDisposals()
+            disposals.disposeAll()
+        }
+    }
+
+    /// Disposes as `dispose` does, waiting for each AsyncDisposable.
+    public async fn disposeAsync() {
+        if !disposed.exchange(true) {
+            var disposals = takeDisposals()
+            await disposals.disposeAllAsync()
+        }
+    }
+
+    /// Whether it has been disposed.
+    public var isDisposed: Bool => disposed.load()
+
+    fn takeDisposals() -> Disposals {
+        return state.withLock { (held: inout ProviderState) -> Disposals in
+            let all = held.disposals
+            held.disposals = Disposals()
+            return all
+        }
+    }
+
+    fn note(_ value: any Any) {
+        state.withLock { (held: inout ProviderState) -> Void in
+            held.disposals.note(value)
+        }
+    }
+
+    // The one a service is: the last registered.
+    fn entry(_ key: ServiceKey) throws(ServiceError) -> ServiceEntry? {
+        if let found = entries[key] {
+            return found[found.count - 1]
+        }
+        if generics.isEmpty {
+            return none
+        }
+        let closed = try closed(key)
+        return closed.isEmpty ? none : closed[closed.count - 1]
+    }
+
+    fn entries(_ key: ServiceKey) throws(ServiceError) -> ServiceEntry[>..] {
+        if let found = entries[key] {
+            return found
+        }
+        return generics.isEmpty ? [] : try closed(key)
+    }
+
+    // The open generics' entries for a service, made the first time.
+    fn closed(_ key: ServiceKey) throws(ServiceError) -> ServiceEntry[>..] {
+        if let found = state.withLock({ (held: inout ProviderState) -> ServiceEntry[>..]? in held.closed[key] }) {
+            return found
+        }
+        var made: ServiceEntry[>..] = []
+        for each in generics {
+            let slot = state.withLock { (held: inout ProviderState) -> Int in
+                held.slots += 1
+                return held.slots - 1
+            }
+            if let entry = try each.entry(key, slot: slot) {
+                made.append(entry)
+            }
+        }
+        // Another thread's, if it was first.
+        return state.withLock { (held: inout ProviderState) -> ServiceEntry[>..] in
+            if let found = held.closed[key] {
+                return found
+            }
+            held.closed[key] = made
+            return made
+        }
+    }
+}
+
+struct ProviderState {
+    var disposals: Disposals = Disposals()
+    // The open generics' entries asked for so far.
+    var closed: [ServiceKey: ServiceEntry[>..]] = [:]
+    var slots: Int = 0
+}

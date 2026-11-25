@@ -208,6 +208,14 @@ public sealed partial class LlvmEmitter {
         var written = TrapMessage(DeclaredName(type));
         _globals.Append($"{names} = {SharedLinkage} constant [{parts.Count} x ptr] [{listed}]{Comdat(names, SharedLinkage)}\n");
 
+        // The labels of a union's cases' payloads, for a debugger to show.
+        var labels = "null";
+        if (type is EnumType { PayloadLabels.Count: > 0 } labelled) {
+            labels = $"@\"sable.shape.labels.{Mangled(type)}\"";
+            var each = labelled.Cases.Select(c => labelled.PayloadLabels.TryGetValue(c.Name, out var of) ? $"ptr {TrapMessage(string.Join(", ", of))}" : "ptr null").ToList();
+            _globals.Append($"{labels} = {SharedLinkage} constant [{each.Count} x ptr] [{string.Join(", ", each)}]{Comdat(labels, SharedLinkage)}\n");
+        }
+
         // Those that always hold, then the conditional ones.
         var conditional = type.ConditionalConformances;
         var always = type.Conformances.Where(p => !conditional.Exists(c => c.Protocol == p)).Select(p => (Protocol: p, Requirements: ImmutableArray<(int Argument, string Protocol)>.Empty));
@@ -229,8 +237,8 @@ public sealed partial class LlvmEmitter {
             _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {{ ptr, i64, ptr }}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
         }
 
-        _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64, i64, ptr }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
-            .Append($"ptr {written}, i64 {type.TypeArguments.Length}, i64 {records.Count}, ptr {conformances} }}{Comdat(name, SharedLinkage)}\n");
+        _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64, i64, ptr, ptr }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
+            .Append($"ptr {written}, i64 {type.TypeArguments.Length}, i64 {records.Count}, ptr {conformances}, ptr {labels} }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 
@@ -363,6 +371,26 @@ public sealed partial class LlvmEmitter {
 
         _helpers.Append(body.Append("  ret void\n}\n\n"));
         return "@\"sable.boxers.register\"";
+    }
+
+    /// <summary>
+    ///     A constructor that hands the runtime each caster the module made,
+    ///     with its existential's metadata (<c>sable_register_caster</c>): what
+    ///     <c>sable_existential_cast</c> asks of a box. Null for none reached.
+    /// </summary>
+    string? CasterRegistration(SilModule module) {
+        var casters = module.Casters.Values.Where(d => _reachable?.Contains(d.Function) != false && module.Find(d.Function) is not null).ToList();
+        if (casters.Count == 0) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.casters.register\"() {\nentry:\n");
+        foreach (var (type, function) in casters) {
+            body.Append($"  call void @sable_register_caster(ptr {TypeMetadataGlobal(type)}, ptr @{Global(function)})\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.casters.register\"";
     }
 
     /// <summary>
@@ -534,6 +562,8 @@ public sealed partial class LlvmEmitter {
                                         declare void @sable_register_error_eraser(ptr, ptr)
                                         declare ptr @sable_opaque_alloc(ptr)
                                         declare ptr @sable_opaque_box(ptr, ptr)
+                                        declare zeroext i1 @sable_existential_cast(ptr, ptr, ptr)
+                                        declare void @sable_register_caster(ptr, ptr)
                                         declare ptr @sable_box_unique(ptr, ptr)
                                         declare void @sable_opaque_free(ptr)
                                         declare void @sable_register_boxer(ptr, ptr)
@@ -771,6 +801,9 @@ public sealed partial class LlvmEmitter {
                 case "opaque_box":
                     SiteForRuntime();
                     Line($"{Result()} = call ptr @sable_opaque_box(ptr {operands[0]}, ptr {operands[1]})");
+                    return true;
+                case "existential_cast":
+                    Line($"{Result()} = call zeroext i1 @sable_existential_cast(ptr {operands[0]}, ptr {operands[1]}, ptr {operands[2]})");
                     return true;
                 case "opaque_free":
                     Line($"call void @sable_opaque_free(ptr {operands[0]})");

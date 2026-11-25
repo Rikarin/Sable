@@ -349,6 +349,13 @@ public sealed partial class SilGen {
         ImmutableArray<TypeParameterSymbol> Parameters,
         ImmutableArray<(TypeParameterSymbol Parameter, NamedTypeSymbol Protocol)> Requirements
     ) {
+        /// <summary>
+        ///     The tables, in order. Not one of Sendable's, which asks nothing
+        ///     of a type at run time, and is met by what one is made of: no
+        ///     record says which types do.
+        /// </summary>
+        public ImmutableArray<(TypeParameterSymbol Parameter, NamedTypeSymbol Protocol)> Requirements { get; init; } = [..Requirements.Where(static r => !IsMarker(r.Protocol))];
+
         public IEnumerable<NamedTypeSymbol> ProtocolsOf(TypeParameterSymbol parameter) =>
             Requirements.Where(r => ReferenceEquals(r.Parameter, parameter)).Select(static r => r.Protocol);
     }
@@ -503,6 +510,9 @@ public sealed partial class SilGen {
         && ProtocolClosure([protocol]).All(static p => p.TypeParameters.IsEmpty)
         && Bases(protocol).All(static b => !b.IsConstructed);
 
+    /// <summary>Sendable, which has no witnesses.</summary>
+    static bool IsMarker(NamedTypeSymbol protocol) => protocol is { Name: "Sendable", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } };
+
     static IEnumerable<NamedTypeSymbol> Bases(NamedTypeSymbol protocol) =>
         protocol.OriginalDefinition.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol);
 
@@ -605,13 +615,30 @@ public sealed partial class SilGen {
     ///     such class — so that unspecialised code reaches its fields where
     ///     code that knows the type does, and holds the reference as it is.
     /// </summary>
-    static bool IsPlainGenericClass(NamedTypeSymbol definition) =>
+    static bool IsPlainGenericClass(NamedTypeSymbol definition) {
+        // A class asked about already, from one its fields refer to: 'Log<Repo<T>>', in Repo<T>.
+        _plainClassesAsked ??= new(ReferenceEqualityComparer.Instance);
+        if (!_plainClassesAsked.Add(definition)) {
+            return true;
+        }
+
+        try {
+            return HasPlainFields(definition);
+        } finally {
+            _plainClassesAsked.Remove(definition);
+        }
+    }
+
+    [ThreadStatic] static HashSet<NamedTypeSymbol>? _plainClassesAsked;
+
+    static bool HasPlainFields(NamedTypeSymbol definition) =>
         definition is { TypeKind: TypeKind.Class, IsNoncopyable: false, TypeParameters.IsEmpty: false }
         // A task is the runtime's, laid out for its result (TaskClass).
         && definition is not { Name: "Task", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }
         && !definition.TypeParameters.Any(static p => p.IsValue || p.AllowsNoncopyable)
         && definition.BaseTypes.OfType<NamedTypeSymbol>().All(static b => b.TypeKind != TypeKind.Class)
-        && StoredFields(definition).All(f => f.ReferenceKind == default && !MentionsDefinition(f.Type, definition)
+        && StoredFields(definition).All(f => f.ReferenceKind == default
+                                             && (!MentionsDefinition(f.Type, definition) || f.Type is NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Class } other && !ReferenceEquals(other.OriginalDefinition, definition))
                                              && (IsStoredFunction(f.Type, definition) || !Mentions(f.Type, definition.TypeParameters) || ByReference(f.Type, definition.TypeParameters)
                                                  // One held by value: the object laid out at run time, from its arguments' metadata.
                                                  || IsHeld(f.Type, definition.TypeParameters) && f.Type is not MetatypeTypeSymbol));
@@ -834,7 +861,7 @@ public sealed partial class SilGen {
             : symbol.ForeignName is not null ? "foreign"
             : symbol.OpaqueTypeParameters.Any(static p => !p.OpaqueParameter!.Arguments.IsEmpty) ? "a 'some P<…>' parameter"
             : _compilation.GetGenerator(symbol) is not null ? "a generator"
-            : _compilation.GetDerivedBody(symbol) is not null || _compilation.GetLazyBody(symbol) is not null
+            : _compilation.GetLazyBody(symbol) is not null
               || _compilation.GetInheritedInitializerBody(symbol) is not null ? "a body the compiler writes"
             : null;
         if (refused is not null) {
@@ -846,7 +873,7 @@ public sealed partial class SilGen {
         var owner = Owner(symbol)?.OriginalDefinition;
         // One whose body names them ('static fn kind() => "box of \(T.kind())"') is generic over them, given their metadata by its callers.
         var independent = owner is not null && IsIndependentStatic(symbol, owner)
-            && !(_declarations.TryGetValue(symbol, out var declaredStatic) && BodyModel(declaredStatic.Model, declaredStatic.Syntax).GetBoundNode(declaredStatic.Syntax) is BoundBlock staticBody
+            && !(_declarations.TryGetValue(symbol, out var declaredStatic) && BodyOf(symbol, declaredStatic.Syntax, declaredStatic.Model) is { } staticBody
                 && (NamesOwnerParameters(staticBody, owner) || NamesOwnerParameterAsType(staticBody, owner)));
         if (independent) {
             // A static member of a generic type that names none of its type
@@ -1061,9 +1088,13 @@ public sealed partial class SilGen {
                && call.Arguments.Length > 0 && call.Arguments.All(static a => a is BoundParameterAccess);
     }
 
+    /// <summary>A function's body, bound: as it is written, or the one <c>@derive</c> made.</summary>
+    BoundBlock? BodyOf(FunctionSymbol symbol, SyntaxNode syntax, SemanticModel model) =>
+        _compilation.GetDerivedBody(symbol) ?? BodyModel(model, syntax).GetBoundNode(syntax) as BoundBlock;
+
     bool BodyAllows(FunctionSymbol symbol, GenericShape shape) {
         var (syntax, model) = _declarations[symbol];
-        if (BodyModel(model, syntax).GetBoundNode(syntax) is not BoundBlock body) {
+        if (BodyOf(symbol, syntax, model) is not { } body) {
             return false;
         }
 
@@ -1197,7 +1228,7 @@ public sealed partial class SilGen {
         ///     and is not inside another.
         /// </summary>
         bool ClosureAllowed(BoundClosure closure) {
-            if (_closureDepth > 0 || closure.IsAutoclosure || generator._compilation.GetGenerator(closure.Symbol) is not null
+            if (closure.IsAutoclosure || generator._compilation.GetGenerator(closure.Symbol) is not null
                 || Mentions(closure.Type) && !IsGenericFunction(V(closure.Type), _own)
                 || closure.Type is FunctionTypeSymbol { ThrownType: { } closureThrown } && Mentions(Canonical(closureThrown))) {
                 return false;
@@ -1211,10 +1242,47 @@ public sealed partial class SilGen {
             }
 
             return captures.All(c => !Mentions(c.Type) || c is { Boxed: false, Kind: CaptureKind.Default or CaptureKind.ByValue, Key: LocalSymbol or ParameterSymbol }
-                && (IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol || IsGenericFunction(V(c.Type), _own)));
+                && (IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol || IsGenericFunction(V(c.Type), _own))
+                // A 'var' it shares, in a box laid out at run time.
+                || c is { Boxed: true, Kind: CaptureKind.Default, Key: LocalSymbol } && IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol
+                // Its self: an object, or a copy of a value.
+                || c is { Boxed: false, Kind: CaptureKind.Default or CaptureKind.ByValue, Key: SelfKey } && IsHeld(V(c.Type), _own));
+        }
+
+        /// <summary>
+        ///     What a node reached through an optional, <c>x?.member</c>, is
+        ///     reached from, and what it is of the value the optional wraps: as
+        ///     lowering takes it apart (<see cref="FunctionLowering.OptionalChain" />).
+        ///     Null for any other node.
+        /// </summary>
+        (BoundExpression From, BoundExpression Through)? Chained(BoundNode node) {
+            bool Reached(BoundExpression receiver, Symbol member) =>
+                receiver.Type is OptionalTypeSymbol && !(member.ContainingSymbol is NamedTypeSymbol owner && ReferenceEquals(owner.OriginalDefinition, generator.Core.Optional))
+                && member.ContainingSymbol is not ExtensionSymbol { ExtendedType.ExtendedOptional: not null };
+
+            BoundExpression Wrapped(BoundExpression receiver) {
+                var type = ((OptionalTypeSymbol)receiver.Type).UnderlyingType;
+                return new BoundParameterAccess(receiver.Syntax, ParameterSymbol.Synthetic("$chained", generator.Core.Module, type));
+            }
+
+            switch (node) {
+                case BoundFieldAccess { Receiver: { } from, Type: OptionalTypeSymbol reached } access when Reached(from, access.Field):
+                    return (from, new BoundFieldAccess(access.Syntax, Wrapped(from), access.Field, access.FlattensChain ? reached : reached.UnderlyingType));
+                case BoundConversion { ConversionKind: ConversionKind.OptionalWrap, Operand: BoundCall { Receiver: { } from } call } when Reached(from, call.Function):
+                    return (from, new BoundCall(call.Syntax, Wrapped(from), call.Function, call.Arguments, call.Type) { Substitution = call.Substitution });
+                case BoundCall { Receiver: { } from, Type: OptionalTypeSymbol } call
+                    when Reached(from, call.Function) && call.Syntax is InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { OperatorToken.Kind: SyntaxKind.QuestionDotToken } }:
+                    return (from, new BoundCall(call.Syntax, Wrapped(from), call.Function, call.Arguments, call.Type) { Substitution = call.Substitution });
+                default:
+                    return null;
+            }
         }
 
         bool AllowsHere(BoundNode node, bool inClosure) {
+            if (Chained(node) is var (from, through) && (Mentions(from.Type) || node is BoundExpression { Type: var chainedType } && Mentions(chainedType))) {
+                return !inClosure && Simple(from.Type) && Simple(((BoundExpression)node).Type) && (!Mentions(from.Type) || Produces(from)) && Allows(from, false) && Allows(through, false);
+            }
+
             if (node is BoundClosure compiled && !inClosure && ClosureAllowed(compiled)) {
                 _closureDepth++;
                 try {
@@ -1247,7 +1315,7 @@ public sealed partial class SilGen {
                 case BoundPatternDeclaration pattern when Descendants(pattern).Any(n => n is BoundBindingPattern binding && Mentions(binding.Local.Type) && (inClosure || !Simple(binding.Local.Type))):
                 case BoundBindingPattern binding when Mentions(binding.Local.Type) && (inClosure || !Simple(binding.Local.Type)):
                 case BoundConditionBinding { Local: { } bound } when Mentions(bound.Type) && (inClosure || !Simple(bound.Type)):
-                case BoundTypeTest test when Mentions(test.TestedType):
+                case BoundTypeTest test when Mentions(test.TestedType) || Mentions(test.Operand.Type) && (inClosure || !IsTestable(test.TestedType) || !IsOwn(test.Operand.Type)):
                 case BoundForEach { Element: { } element } loop when Mentions(element.Type)
                                                                     && (inClosure || !IsOwnArray(loop.Sequence.Type) || !Simple(element.Type) || loop.Sequence is not (BoundLocalAccess or BoundParameterAccess or BoundSelfAccess or BoundFieldAccess { Receiver: BoundSelfAccess or BoundLocalAccess or BoundParameterAccess })):
                     return false;
@@ -1268,7 +1336,7 @@ public sealed partial class SilGen {
                     return !inClosure && Simple(tested.Type) && Produces(tested) && Allows(tested, false);
                 case BoundBinaryOperator binary when (Mentions(binary.Left.Type) || Mentions(binary.Right.Type)) && (inClosure || !BinaryAllowed(binary)):
                     return false;
-                case BoundUnaryOperator { OperatorKind: not UnaryOperatorKind.Await } unary when Mentions(unary.Operand.Type)
+                case BoundUnaryOperator { OperatorKind: not (UnaryOperatorKind.Await or UnaryOperatorKind.Move) } unary when Mentions(unary.Operand.Type)
                                                    && (inClosure || unary.Method is not { } method || !OperatorAllowed(method, unary.Operand, [unary.Operand], unary)):
                     return false;
                 case BoundFieldAccess access when access.Receiver is { } receiver && Mentions(receiver.Type) && (inClosure || !PropertyAllowed(access)):
@@ -1373,6 +1441,8 @@ public sealed partial class SilGen {
                 // A call of a function of them, in the generic convention.
                 BoundIndirectCall { Callee.Type: var calleeType } => IsGenericFunction(V(calleeType), _own),
                 BoundBinaryOperator { Method: not null } or BoundUnaryOperator { Method: not null } => true,
+                // 'move x': a local's value, taken.
+                BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Move, Operand: BoundLocalAccess or BoundParameterAccess } => true,
                 // An await of a call: the call, which the task may suspend in.
                 BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Await, Operand: var awaited } => Produces(awaited),
                 BoundFieldAccess access => PropertyAllowed(access),
@@ -1388,7 +1458,7 @@ public sealed partial class SilGen {
                 BoundConversion { ConversionKind: ConversionKind.OptionalWrap } wrap => Simple(wrap.Operand.Type),
                 BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol { UnderlyingType: var unwrapped } } force => unwrapped.Equals(force.Type),
                 // 'lowerBound as! C.Index': the value, when its metadata is the other's.
-                BoundConversion { ConversionKind: ConversionKind.Explicit } cast when IsOpaqueCast(cast) => true,
+                BoundConversion { ConversionKind: ConversionKind.Explicit } cast when IsOpaqueCast(cast) || IsOpenedCast(cast) => true,
                 // A range of them, a generic struct.
                 BoundRange range => Simple(range.Type),
                 BoundLiteral { Value: null, Type: OptionalTypeSymbol } => true,
@@ -1427,7 +1497,9 @@ public sealed partial class SilGen {
                 BoundConditionBinding binding => ReferenceEquals(child, binding.Source),
                 BoundConversion { ConversionKind: ConversionKind.OptionalWrap } => true,
                 BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol } => true,
-                BoundConversion { ConversionKind: ConversionKind.Explicit } cast => IsOpaqueCast(cast),
+                BoundConversion { ConversionKind: ConversionKind.Explicit } cast => IsOpaqueCast(cast) || IsErasure(cast),
+                BoundConversion { ConversionKind: ConversionKind.Existential } erasure => IsErasure(erasure),
+                BoundTypeTest test => IsOwn(test.Operand.Type) && IsTestable(test.TestedType),
                 BoundRange => true,
                 BoundIndexAccess { Subscript: not null } => true,
                 BoundIndexAccess index => ReferenceEquals(child, index.Receiver),
@@ -1448,6 +1520,50 @@ public sealed partial class SilGen {
             || array is BoundSelfAccess && OwnMutating;
 
         bool DescribesSelf => checkedSymbol is { Name: "debugDescription" } && OwnerOf(checkedSymbol) is { TypeKind: TypeKind.Protocol };
+
+        /// <summary>A type known here that a value's dynamic type can be asked about: a class, a struct, a protocol that is not generic.</summary>
+        bool IsTestable(TypeSymbol type) =>
+            !Mentions(type) && type switch {
+                NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol => protocol is { IsConstructed: false, TypeParameters.IsEmpty: true } && !IsMarker(protocol) && !protocol.Equals(generator.Core.Error),
+                NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Struct or TypeKind.Enum or TypeKind.Union or TypeKind.Builtin } named => !named.IsNoncopyable && !named.Equals(generator.Core.Never),
+                ExistentialTypeSymbol { MetatypeOf: null, Constraint: var constraint } => CompositionTypeSymbol.PartsOf(constraint).All(IsTestable),
+                _ => false,
+            };
+
+        /// <summary>
+        ///     A value of one of the function's opaque types as an existential
+        ///     — of nothing, or of protocols it is known to conform to — or a
+        ///     cast of one to an existential of any that are not generic
+        ///     (<see cref="FunctionLowering.OpaqueAsExistential" />).
+        /// </summary>
+        bool IsErasure(BoundConversion erasure) {
+            if (!IsOwn(erasure.Operand.Type) || _closureDepth > 0) {
+                return false;
+            }
+
+            var target = erasure is { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } }
+                ? erasure.Type is OptionalTypeSymbol { UnderlyingType: var wrapped } ? wrapped : erasure.Type
+                : erasure.ConversionKind == ConversionKind.Existential ? erasure.Type : null;
+            // 'x as? Dog': asked of the box it is put in.
+            if (erasure.ConversionKind == ConversionKind.Explicit && target is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } && IsTestable(target)) {
+                return true;
+            }
+
+            if (target is not ExistentialTypeSymbol { MetatypeOf: null, Constraint: var constraint } || constraint.Equals(generator.Core.Error) || Mentions(constraint)) {
+                return false;
+            }
+
+            var parts = CompositionTypeSymbol.PartsOf(constraint);
+            return parts.All(static p => p is NamedTypeSymbol { TypeKind: TypeKind.Protocol, TypeParameters.IsEmpty: true })
+                   && (erasure.ConversionKind == ConversionKind.Explicit || parts.All(p => Known(erasure.Operand.Type).Any(k => ReferenceEquals(k, p))));
+        }
+
+        /// <summary>An 'as?' or 'as!' of an existential to one of the function's opaque types, or a type made of them (<see cref="FunctionLowering.OpaqueDowncast" />).</summary>
+        bool IsOpenedCast(BoundConversion cast) =>
+            cast is { Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false }, Operand.Type: ExistentialTypeSymbol { Constraint: var constraint } }
+            && !constraint.Equals(generator.Core.Error) && !Mentions(constraint)
+            && (cast.Type is OptionalTypeSymbol { UnderlyingType: var wrapped } ? wrapped : cast.Type) is var target and not (ExistentialTypeSymbol or OptionalTypeSymbol or MetatypeTypeSymbol)
+            && IsHeld(V(target), _own);
 
         /// <summary>An 'as!' from one of the function's opaque types to another (<see cref="FunctionLowering.OpaqueForcedCast" />).</summary>
         bool IsOpaqueCast(BoundConversion cast) =>
@@ -1502,6 +1618,12 @@ public sealed partial class SilGen {
 
             if (callee.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }) {
                 return RequirementAllowed(call);
+            }
+
+            // Raw memory's values, and one shared between tasks: copied, moved and shared by its value witnesses.
+            if (IsIntrinsic(callee) && callee.ContainingSymbol is NamedTypeSymbol { Name: "RawMemory" or "Runtime", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } } intrinsic
+                && (intrinsic.Name == "RawMemory" || callee.Name == "share")) {
+                return Simple(call.Type) && call.Arguments.All(a => Simple(a.Type));
             }
 
             // An array's own builtins, on an array of a type parameter's values held in a local.
@@ -1582,9 +1704,10 @@ public sealed partial class SilGen {
 
                 // An array, an optional or a tuple of this function's type
                 // parameter's values, its metadata made at run time —
-                // polymorphic recursion — for a callee that asks nothing of it.
+                // polymorphic recursion — for a callee that asks nothing of it;
+                // or a generic type's instance, whose conformances have templates.
                 if (bound is not TypeParameterSymbol && IsHeld(V(bound), _own) && bound is not MetatypeTypeSymbol) {
-                    if (calleeShape.ProtocolsOf(parameter).Any()) {
+                    if (!calleeShape.ProtocolsOf(parameter).All(p => generator.HasTemplate(bound, p))) {
                         return false;
                     }
 
@@ -2092,7 +2215,8 @@ public sealed partial class SilGen {
                 declared.UnionWith(_module.PrimitiveConformances.GetValueOrDefault(value.ToString()) ?? []);
             }
 
-            if (!closure.TrueForAll(p => declared.Contains(QualifiedName(p)))) {
+            // Never declares nothing: the tables of an error that is none have nothing to call.
+            if (!concrete.Equals(Core.Never) && !closure.TrueForAll(p => declared.Contains(QualifiedName(p)))) {
                 return false;
             }
         } else if (!CompilesOnce || value is not ArrayType) {
@@ -2110,7 +2234,7 @@ public sealed partial class SilGen {
         }
 
         // An error of the type, which unspecialised code may throw on as 'any Error'.
-        if (CompilesOnce && closure.Exists(p => ReferenceEquals(p, Core.Error.OriginalDefinition))) {
+        if (CompilesOnce && !concrete.Equals(Core.Never) && closure.Exists(p => ReferenceEquals(p, Core.Error.OriginalDefinition))) {
             ErrorEraser(value);
         }
 
@@ -3299,15 +3423,15 @@ public sealed partial class SilGen {
 
                 // An array, an optional or a tuple of this function's type parameter's values: its metadata made at run time.
                 if (given is not TypeParameterSymbol and not MetatypeTypeSymbol && IsHeld(given, [.._genericMetadata.Keys])) {
-                    if (found.ProtocolsOf(parameter).Any()) {
+                    if (!found.ProtocolsOf(parameter).All(p => generator.HasTemplate(given, p))) {
                         return false;
                     }
 
                     continue;
                 }
 
-                if (Mentions(given, [.._genericMetadata.Keys]) || LowerType(given) is not { } lowered || lowered == SilType.Unit
-                    || lowered is NominalType { IsNoncopyable: true } || given.Equals(Core.Never)) {
+                if (Mentions(given, [.._genericMetadata.Keys]) || LowerType(given) is not { } lowered
+                    || lowered is NominalType { IsNoncopyable: true }) {
                     return false;
                 }
 
@@ -3388,6 +3512,94 @@ public sealed partial class SilGen {
             Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, same)), $"cast to '{conversion.Type.ToDisplayString()}' failed"));
             var owned = Owned(value);
             return owned.Type == target ? owned : Emit(new BuiltinInst("opaque_take_as", target, owned));
+        }
+
+        /// <summary>
+        ///     A value of a type only its metadata knows as an existential
+        ///     (<c>x as any P</c>, <c>x as? any Q</c>): moved to a buffer of its
+        ///     own and boxed by its type's boxer, or, of one that is an
+        ///     existential already, the box it holds.
+        /// </summary>
+        SilValue? OpaqueAsExistential(BoundConversion conversion) {
+            var type = Sub(conversion.Operand.Type);
+            if (MetadataOf(type) is not { } metadata || Expression(conversion.Operand) is not { } value || value.Type is not OpaqueType opaque) {
+                return Missing(conversion, $"the conversion to '{conversion.Type.ToDisplayString()}'");
+            }
+
+            generator.ErasesAny();
+            var held = Emit(new BuiltinInst("opaque_type", SilType.Metadata, value, metadata));
+            var buffer = Emit(new BuiltinInst("opaque_alloc", SilType.Address(opaque), metadata));
+            Emit(new StoreInst(Owned(value), buffer, StoreKind.Init));
+            var box = Emit(new BuiltinInst("opaque_box", generator.ExistentialBoxRoot(), buffer, metadata));
+            if (conversion.ConversionKind == ConversionKind.Existential) {
+                if (LowerType(conversion.Type) is not StructType layout || generator.TabledProtocols(layout) is not { } protocols) {
+                    return Missing(conversion, $"the conversion to '{conversion.Type.ToDisplayString()}'");
+                }
+
+                var tables = protocols.Select(p => TableFor(CanonicalHere(type), p)).ToList();
+                return Emit(new StructInst(layout, [box, held, ..tables]));
+            }
+
+            var target = CastTo(conversion);
+            if (generator.ExistentialCast(target, conversion.Syntax) is not var (name, cast) || cast.Result is not EnumType optional) {
+                return Missing(conversion, $"the cast to '{target.ToDisplayString()}'");
+            }
+
+            var result = Emit(new ApplyInst(Emit(new FunctionRefInst(name, cast)), optional, [box]));
+            Destroy(box);
+            if (Sub(conversion.Type) is OptionalTypeSymbol) {
+                return result;
+            }
+
+            var present = function.AddBlock();
+            var payload = Payload(present, optional.Cases[optional.CaseIndex("Some")].Payload);
+            var absent = function.AddBlock();
+            Jump(new SwitchEnumInst(result, [(optional.CaseIndex("Some"), present)], absent));
+            _current = absent;
+            Emit(new CondFailInst(Emit(new IntegerLiteralInst(SilType.Bool, 1)), $"cast to '{target.ToDisplayString()}' failed"));
+            Jump(new UnreachableInst());
+            _current = present;
+            var forced = Owned(payload);
+            Destroy(result);
+            return forced;
+        }
+
+        /// <summary>
+        ///     <c>e as? T</c> and <c>e as! T</c> of an existential to a type
+        ///     only its metadata knows: the runtime asked whether the box holds
+        ///     one, which it copies to a slot of the type's.
+        /// </summary>
+        SilValue? OpaqueDowncast(BoundConversion conversion) {
+            var target = CastTo(conversion);
+            if (MetadataOf(target) is not { } metadata || LowerType(target) is not { } wanted || LowerType(new OptionalTypeSymbol(target)) is not EnumType optional
+                || Borrow(conversion.Operand) is not { } existential) {
+                return Missing(conversion, $"the cast to '{target.ToDisplayString()}'");
+            }
+
+            var slot = NewSlot(wanted);
+            var isOne = Emit(new BuiltinInst("existential_cast", SilType.Bool, Emit(new StructExtractInst(existential, 0)), metadata, slot));
+            End(existential);
+            if (Sub(conversion.Type) is not OptionalTypeSymbol) {
+                Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, isOne)), $"cast to '{target.ToDisplayString()}' failed"));
+                return Emit(new LoadInst(slot, LoadKind.Take));
+            }
+
+            var result = NewSlot(optional);
+            var yes = function.AddBlock();
+            var no = function.AddBlock();
+            var after = function.AddBlock();
+            Jump(new CondBranchInst(isOne, yes, [], no, []));
+
+            _current = yes;
+            Emit(new StoreInst(Emit(new EnumInst(optional, optional.CaseIndex("Some"), Emit(new LoadInst(slot, LoadKind.Take)))), result, StoreKind.Init));
+            Branch(after);
+
+            _current = no;
+            Emit(new StoreInst(Emit(new EnumInst(optional, optional.CaseIndex("None"), null)), result, StoreKind.Init));
+            Branch(after);
+
+            _current = after;
+            return Emit(new LoadInst(result, LoadKind.Take));
         }
 
         /// <summary>
@@ -3635,6 +3847,9 @@ public sealed partial class SilGen {
                     case ParameterSymbol parameter:
                         _spilled[parameter] = slot;
                         break;
+                    case SelfKey:
+                        _selfAddress = slot;
+                        break;
                 }
             }
         }
@@ -3749,6 +3964,11 @@ public sealed partial class SilGen {
 
                 if (!IsOpaqueHere(given) && LowerType(given) is { } lowered && !SilType.MentionsOpaque(lowered) && (callee is null || generator.DescribesValues(callee))) {
                     generator.Describer(given, lowered, at, callee is null || generator.DebugDescribesValues(callee));
+                }
+
+                // An existential a callee is given the type of, 'resolve((any P).self)', may be cast to there.
+                if (callee is not null && given is ExistentialTypeSymbol && callee.Parameters.Any(p => p.Type is MetatypeTypeSymbol { InstanceType: var instance } && ReferenceEquals(instance, parameter))) {
+                    generator.Caster(given, at);
                 }
 
                 hidden.Add(metadata);

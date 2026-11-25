@@ -225,6 +225,16 @@ public sealed class BoundMetatype(SyntaxNode syntax, TypeSymbol instanceType)
     public override IEnumerable<BoundNode> Children => [];
 }
 
+/// <summary>
+///     <c>Stack.self</c> of <c>Stack&lt;T&gt;</c>: a generic type without its
+///     type arguments, as a value of Sable.Core's <c>GenericType</c>.
+/// </summary>
+public sealed class BoundGenericType(SyntaxNode syntax, NamedTypeSymbol definition, TypeSymbol type) : BoundExpression(syntax, type) {
+    public NamedTypeSymbol Definition { get; } = definition;
+
+    public override IEnumerable<BoundNode> Children => [];
+}
+
 public sealed class BoundCall(
     SyntaxNode syntax,
     BoundExpression? receiver,

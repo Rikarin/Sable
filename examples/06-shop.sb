@@ -1,0 +1,178 @@
+module Examples.Shop
+
+import Sable.Concurrency
+import Sable.DependencyInjection
+
+// ---------------------------------------------------------------------------
+// A shop put together by a container: each type says what it is made from,
+// and the collection says which type stands for which, and for how long.
+// ---------------------------------------------------------------------------
+
+/// What a request says as it goes.
+@immutable
+@derive(Injectable)
+final class Journal {
+    let lines: Mutex<String[>..]>
+
+    init() {
+        lines = Mutex([])
+    }
+
+    fn note(_ line: String) {
+        lines.withLock { $0.append(line) }
+    }
+
+    fn report() {
+        for line in lines.withLock({ $0 }) {
+            print("  \(line)")
+        }
+    }
+}
+
+/// A logger for each type that logs: an open generic.
+@immutable
+@derive(Injectable)
+final class Logger<Category> {
+    let journal: Journal
+
+    init(journal: Journal) {
+        self.journal = journal
+    }
+
+    fn info(_ text: String) {
+        journal.note("\(Category.self): \(text)")
+    }
+}
+
+/// Where things are kept.
+protocol Repository<Item> {
+    fn add(_ item: Item)
+    fn count() -> Int
+}
+
+/// A transaction: begun with the request, committed as its scope ends.
+@derive(Injectable)
+final class Transaction: Disposable {
+    let log: Logger<Transaction>
+    var changes: Int = 0
+
+    init(log: Logger<Transaction>) {
+        self.log = log
+        log.info("begun")
+    }
+
+    fn dispose() {
+        log.info("committed, \(changes) changed")
+    }
+}
+
+@derive(Injectable)
+final class MemoryRepository<Item>: Repository<Item> {
+    let transaction: Transaction
+    let log: Logger<MemoryRepository<Item>>
+    var items: Item[>..] = []
+
+    init(transaction: Transaction, log: Logger<MemoryRepository<Item>>) {
+        self.transaction = transaction
+        self.log = log
+    }
+
+    fn add(_ item: Item) {
+        items.append(item)
+        transaction.changes += 1
+        log.info("\(items.count) kept")
+    }
+
+    fn count() -> Int { return items.count }
+}
+
+struct Order {
+    let item: String
+}
+
+struct Receipt {
+    let total: Int
+}
+
+/// What is taken off a price.
+protocol Discount {
+    fn off(_ price: Int) -> Int
+}
+
+@derive(Injectable)
+struct Regular: Discount {
+    fn off(_ price: Int) -> Int { return price / 10 }
+}
+
+@derive(Injectable)
+struct Seasonal: Discount {
+    @Keyed("season")
+    let amount: Int
+    fn off(_ price: Int) -> Int { return amount }
+}
+
+@derive(Injectable)
+final class Checkout {
+    let orders: any Repository<Order>
+    let receipts: any Repository<Receipt>
+    let discounts: (any Discount)[]
+    let log: Logger<Checkout>
+    let currency: String
+
+    init(orders: any Repository<Order>, receipts: any Repository<Receipt>, discounts: (any Discount)[], log: Logger<Checkout>, currency: String = "kr") {
+        self.orders = orders
+        self.receipts = receipts
+        self.discounts = discounts
+        self.log = log
+        self.currency = currency
+    }
+
+    fn buy(_ item: String, price: Int) {
+        var total = price
+        for discount in discounts {
+            total -= discount.off(price)
+        }
+        orders.add(Order { item: item })
+        receipts.add(Receipt { total: total })
+        log.info("\(item) for \(total) \(currency)")
+    }
+}
+
+@main
+fn main() {
+    let services = ServiceCollection()
+    services.addSingleton(Journal.self)
+    services.addSingleton(open: Logger.self, Logger.self)
+    services.addScoped(Transaction.self)
+    services.addScoped(open: Repository.self, MemoryRepository.self)
+    services.addTransient((any Discount).self, Regular.self)
+    services.addTransient((any Discount).self, Seasonal.self)
+    services.addSingleton(Int.self, key: "season", value: 5)
+    services.addScoped(Checkout.self)
+
+    let provider = try! services.build()
+    for items in [["tea", "cups"], ["a kettle"]] {
+        provider.withScope { scope in
+            let checkout = try! scope.resolve(Checkout.self)
+            for item in items {
+                checkout.buy(item, price: 100)
+            }
+            // The same repository the checkout was given, in this scope.
+            let orders = try! scope.resolve((any Repository<Order>).self)
+            print("\(orders.count()) ordered")
+        }
+    }
+    try! provider.resolve(Journal.self).report()
+
+    // What a collection lacks is said before anything is made.
+    let incomplete = ServiceCollection()
+    incomplete.addScoped(Checkout.self)
+    incomplete.addScoped(open: Repository.self, MemoryRepository.self)
+    do {
+        _ = try incomplete.build()
+    } catch {
+        if case .Invalid(let problems) = error {
+            print(problems[0].description())
+        }
+    }
+}

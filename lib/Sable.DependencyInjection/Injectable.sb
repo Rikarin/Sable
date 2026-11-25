@@ -1,0 +1,43 @@
+module Sable.DependencyInjection
+
+/// A type that a container can make: it says what it is made from, and how.
+/// `@derive(Injectable)` writes both from the type's initialiser.
+///
+/// ```sable
+/// @immutable
+/// @derive(Injectable)
+/// final class Greeter {
+///     let name: String
+///     init(name: String) { self.name = name }
+/// }
+///
+/// let services = ServiceCollection()
+/// services.addSingleton(String.self, value: "Ada")
+/// services.addSingleton(Greeter.self)
+/// let provider = try! services.build()
+/// assert(try! provider.resolve(Greeter.self).name == "Ada")
+/// ```
+///
+/// What each of the initialiser's parameters is given:
+///
+/// | Parameter | Given |
+/// |---|---|
+/// | `T` | the service |
+/// | `T?` | the service, or none when it is not registered |
+/// | `T[]`, `T[>..]` | every registration of it, in order |
+/// | `() -> T` | a closure that gives the service: a new one each call, if it is transient |
+/// | `Lazy<T>` | the service, the first time its value is read |
+/// | `@Keyed("k") x: T` | the one registered with that key |
+/// | `x: T = value` | the service, or the default when it is not registered |
+public protocol Injectable {
+    /// One, made from what the scope gives.
+    static fn create(from services: ServiceScope) throws -> Self
+
+    /// What `create` asks the scope for: what a provider is checked by as it
+    /// is built. None, if it does not say.
+    static fn dependencies() -> ServiceDependency[>..]
+}
+
+extension Injectable {
+    public static fn dependencies() -> ServiceDependency[>..] { return [] }
+}

@@ -1,0 +1,12 @@
+module Sable.DependencyInjection
+
+/// How long a service lives, and who shares it.
+@derive(Equatable, Debug)
+public enum ServiceLifetime: Sendable {
+    /// One for the provider, made the first time it is asked for.
+    Singleton
+    /// One for each scope.
+    Scoped
+    /// A new one each time.
+    Transient
+}

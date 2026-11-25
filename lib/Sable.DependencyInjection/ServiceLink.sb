@@ -1,0 +1,15 @@
+module Sable.DependencyInjection
+
+// What an entry's making asks for in turn, found as the provider is built: a
+// factory asks for what it says it is made from, in the order it says it.
+struct ServiceLink: Sendable {
+    let type: Type
+    let entry: ServiceEntry
+}
+
+// An entry being made, and where its links are.
+struct Making {
+    let entry: ServiceEntry
+    var next: Int
+    let end: Int
+}

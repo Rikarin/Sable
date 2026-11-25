@@ -1,0 +1,29 @@
+module Sable.DependencyInjection
+
+/// What a service is asked for by: its type, and for a keyed one, its key.
+@derive(Equatable, Hashable)
+public struct ServiceKey: Sendable, Formattable, Debug {
+    /// The type.
+    public let type: Type
+    /// The key, if there is one.
+    public let key: String?
+
+    public init(_ type: Type, key: String? = none) {
+        self.type = type
+        self.key = key
+    }
+
+    /// The type's name, and the key.
+    public fn description() -> String {
+        if let key = key {
+            return "\(type.name) (\"\(key)\")"
+        }
+        return type.name
+    }
+
+    /// The description, padded to the spec's width.
+    public fn format(_ spec: FormatSpec) -> String { return spec.padded(description()) }
+
+    /// The description.
+    public fn debugDescription() -> String { return description() }
+}

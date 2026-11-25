@@ -114,8 +114,13 @@ public sealed class OpenedTypeLoweringTests {
             }
 
             fn debug<T: Zero>(_ type: T.Type) -> String {
-                let made: T? = T.zero()
-                return made?.name() ?? "none"
+                return Holder(T.zero()).get().name()
+            }
+
+            open class Holder<T> {
+                let item: T
+                init(_ item: T) { self.item = item }
+                open fn get() -> T { return item }
             }
 
             fn main() {

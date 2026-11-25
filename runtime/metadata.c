@@ -265,6 +265,12 @@ const SableTypeMetadata *sable_opaque_type(const void *value, const SableTypeMet
         }
     }
 
+    // What an existential holds, as its metadata says.
+    if (type->kind == SABLE_KIND_EXISTENTIAL) {
+        const SableTypeMetadata *held = *(const SableTypeMetadata *const *)((const char *)value + sizeof(void *));
+        return held == NULL ? type : sable_box_value_metadata(*(const void *const *)value);
+    }
+
     return type;
 }
 
@@ -397,11 +403,42 @@ void *sable_opaque_erase_error(void *value, const SableTypeMetadata *type) {
 
 // ---- Opening a Type (#297 stage 6) -------------------------------------------
 
+// Never's table of its conformance to Error, and to what Error refines: it
+// has no values to call anything on, and no record. Its metadata is '()'s.
+static const struct SableNothingTable {
+    const SableProtocol *protocol;
+    int64_t associated_type_count;
+    const SableTypeMetadata *const *associated_types;
+    int64_t associated_conformance_count;
+    const SableAssociatedConformance *associated_conformances;
+    int64_t base_count;
+    const SableWitnessTable *const *bases;
+    int64_t requirement_count;
+    void *const requirements[8];
+} nothing_table;
+
+static const SableWitnessTable *const nothing_bases[8] = {
+    (const SableWitnessTable *)&nothing_table, (const SableWitnessTable *)&nothing_table, (const SableWitnessTable *)&nothing_table,
+    (const SableWitnessTable *)&nothing_table, (const SableWitnessTable *)&nothing_table, (const SableWitnessTable *)&nothing_table,
+    (const SableWitnessTable *)&nothing_table, (const SableWitnessTable *)&nothing_table,
+};
+
+static const struct SableNothingTable nothing_table = {NULL, 0, NULL, 0, NULL, 8, nothing_bases, 8, {NULL}};
+
+static bool is_nothing(const SableTypeMetadata *type, const SableProtocol *protocol) {
+    return type->size == 0 && type->name != NULL && strcmp(type->name, "()") == 0 && protocol->name != NULL
+           && (strcmp(protocol->name, "Sable.Core.Error") == 0 || strcmp(protocol->name, "Sable.Core.Debug") == 0);
+}
+
 // A call that opens a Type runs generic code compiled once with the type's
 // metadata, and asks the registry for the tables of its conformances: a
 // type that does not conform is a trap, naming both.
 const SableWitnessTable *sable_witness_table_required(const SableTypeMetadata *type, const SableProtocol *protocol) {
     const SableWitnessTable *table = sable_witness_table(type, protocol);
+    if (table == NULL && is_nothing(type, protocol)) {
+        return (const SableWitnessTable *)&nothing_table;
+    }
+
     if (table == NULL) {
         char message[512];
         snprintf(message, sizeof message, "'%s' does not conform to '%s'", type->name == NULL ? "?" : type->name,
@@ -458,6 +495,13 @@ void sable_register_boxer(const SableTypeMetadata *type, SableBoxer box) {
 static void *box_made(void *value, const SableTypeMetadata *type);
 
 void *sable_opaque_box(void *buffer, const SableTypeMetadata *type) {
+    // An existential's value is in a box already: that one, taken.
+    if (type->kind == SABLE_KIND_EXISTENTIAL) {
+        void *held = *(void **)buffer;
+        free(buffer);
+        return held;
+    }
+
     SableBoxer box = NULL;
     for (int64_t i = 0; i < boxer_count && box == NULL; i++) {
         if (boxers[i].type == type) {
@@ -476,6 +520,102 @@ void *sable_opaque_box(void *buffer, const SableTypeMetadata *type) {
     type->witnesses->destroy(buffer, type);
     free(buffer);
     return boxed;
+}
+
+// 'e as? T' in code that knows T only by its metadata (#297): an existential
+// is asked of the caster the image made where the type was known, registered
+// as boxers are, or, with none, of the registry; any other type is the one
+// the box holds, or for a class one it derives from. The value is copied to
+// 'into' when the box holds one.
+typedef bool (*SableCaster)(void *box, void *into);
+
+static struct {
+    const SableTypeMetadata *type;
+    SableCaster cast;
+} *casters;
+static int64_t caster_count, caster_capacity;
+
+void sable_register_caster(const SableTypeMetadata *type, SableCaster cast) {
+    if (caster_count == caster_capacity) {
+        caster_capacity = caster_capacity == 0 ? 16 : caster_capacity * 2;
+        casters = realloc(casters, (size_t)caster_capacity * sizeof *casters);
+        if (casters == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    casters[caster_count].type = type;
+    casters[caster_count].cast = cast;
+    caster_count++;
+}
+
+// The existential of a box's value, its protocols named by the type ('any
+// M.Shape & M.Named'): the box, shared, the value's metadata and its tables.
+static bool existential_made(void *box, const SableTypeMetadata *held, const SableTypeMetadata *to, void **into) {
+    const char *parts = to->name + 4;
+    if (strchr(parts, '<') != NULL || strchr(parts, '$') != NULL) {
+        return false;
+    }
+
+    const void *tables[16];
+    int count = 0;
+    if (strcmp(parts, "Any") != 0) {
+        for (;;) {
+            const char *end = strstr(parts, " & ");
+            size_t length = end == NULL ? strlen(parts) : (size_t)(end - parts);
+            char name[256];
+            if (length >= sizeof name || count == 16) {
+                return false;
+            }
+
+            memcpy(name, parts, length);
+            name[length] = 0;
+            SableProtocol protocol = {name};
+            tables[count] = sable_witness_table(held, &protocol);
+            if (tables[count++] == NULL) {
+                return false;
+            }
+
+            if (end == NULL) {
+                break;
+            }
+
+            parts = end + 3;
+        }
+    }
+
+    sable_retain(box);
+    into[0] = box;
+    memcpy((char *)into + sizeof(void *), &held, sizeof held);
+    memcpy(into + 2, tables, (size_t)count * sizeof tables[0]);
+    return true;
+}
+
+bool sable_existential_cast(void *box, const SableTypeMetadata *to, void *into) {
+    const SableTypeMetadata *held = sable_box_value_metadata(box);
+    if (to->kind == SABLE_KIND_EXISTENTIAL && to->name != NULL && strncmp(to->name, "any ", 4) == 0) {
+        for (int64_t i = 0; i < caster_count; i++) {
+            if (casters[i].type == to) {
+                return casters[i].cast(box, into);
+            }
+        }
+
+        for (int64_t i = 0; i < caster_count; i++) {
+            if (sable_metadata_equal(casters[i].type, to)) {
+                return casters[i].cast(box, into);
+            }
+        }
+
+        return existential_made(box, held, to, into);
+    }
+
+    if (!sable_metadata_is_subtype(held, to)) {
+        return false;
+    }
+
+    int64_t offset = to->alignment > (int64_t)sizeof(SableObject) ? to->alignment : (int64_t)sizeof(SableObject);
+    to->witnesses->initialize_with_copy(into, (char *)box + offset, to);
+    return true;
 }
 
 // The box at *slot made an existential's own before a witness changes the
@@ -576,6 +716,7 @@ typedef struct SableAggregateShape {
     int64_t argument_count;        // its type arguments, whose metadata follows the parts'
     int64_t conformance_count;     // what its declaration conforms it to
     const SableShapeConformance *conformances;
+    const char *const *part_labels; // each case's payload's labels, 'width, height', or null; null for a type with none
 } SableAggregateShape;
 
 // The conformance records of an instance of a generic type made at run time
@@ -783,6 +924,54 @@ static const char *name_of(const SableTypeMetadata *type) {
     return type == NULL || type->name == NULL ? "" : type->name;
 }
 
+// What a case's payload is, its labels written: '(width: Int, height: M.Label)'
+// for 'width, height' and what they label: a tuple of them, or the one.
+static char *labelled_name(const char *labels, const SableTypeMetadata *payload) {
+    int64_t count = 1;
+    for (const char *at = labels; *at != 0; at++) {
+        count += *at == ',';
+    }
+
+    if (count > 1 && payload->argument_count != count) {
+        return NULL;
+    }
+
+    size_t length = strlen(labels) + 3;
+    for (int64_t i = 0; i < count; i++) {
+        length += 2 + name_length(count == 1 ? payload : payload->arguments[i]);
+    }
+
+    char *name = malloc(length);
+    if (name == NULL) {
+        sable_trap("out of memory");
+    }
+
+    char *to = name;
+    *to++ = '(';
+    const char *label = labels;
+    for (int64_t i = 0; i < count; i++) {
+        const char *end = strchr(label, ',');
+        size_t label_length = end == NULL ? strlen(label) : (size_t)(end - label);
+        const char *type = name_of(count == 1 ? payload : payload->arguments[i]);
+        if (i > 0) {
+            *to++ = ',';
+            *to++ = ' ';
+        }
+
+        memcpy(to, label, label_length);
+        to += label_length;
+        *to++ = ':';
+        *to++ = ' ';
+        memcpy(to, type, strlen(type));
+        to += strlen(type);
+        label = end == NULL ? label : end + 2;
+    }
+
+    *to++ = ')';
+    *to = 0;
+    return name;
+}
+
 // The parts' names joined, between an opening and a closing text.
 static char *joined_name(const char *before, int64_t count, const SableTypeMetadata *const *parts, const char *after) {
     size_t length = strlen(before) + strlen(after) + 1;
@@ -975,6 +1164,10 @@ static SableAggregateInstance *aggregate_make(const SableAggregateShape *shape, 
         fields[i].kind = parts[i] == NULL || (parts[i]->flags & SABLE_TYPE_TRIVIAL) != 0 ? SABLE_FIELD_DATA : SABLE_FIELD_AGGREGATE;
         if (enumeration) {
             fields[i].offset = made->payload_offset;
+            if (shape != NULL && shape->part_labels != NULL && shape->part_labels[i] != NULL && parts[i] != NULL) {
+                const char *labelled = labelled_name(shape->part_labels[i], parts[i]);
+                fields[i].type_name = labelled == NULL ? fields[i].type_name : labelled;
+            }
         }
 
         if (shape != NULL) {
@@ -1270,7 +1463,7 @@ const SableTypeMetadata *sable_class_type(void **cache, const SableAggregateShap
 // the type, so that what it holds is found as any box's is.
 static void *box_made(void *value, const SableTypeMetadata *type) {
     static const char *const names[] = {"value"};
-    static const SableAggregateShape shape = {SABLE_KIND_CLASS, 1, names, "any$box$of", 1, 0, NULL};
+    static const SableAggregateShape shape = {SABLE_KIND_CLASS, 1, names, "any$box$of", 1, 0, NULL, NULL};
     void *cache = NULL;
     const SableTypeMetadata *parts[] = {type, type};
     const SableTypeMetadata *made = sable_class_type(&cache, &shape, parts);

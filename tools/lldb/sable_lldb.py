@@ -166,14 +166,20 @@ def _types(target):
     which in some lldbs asks every language's type system, Swift's included,
     at some cost.
     """
+    count = target.GetNumModules()
     key = (target.GetProcess().GetUniqueID(), target.GetExecutable().fullpath)
-    if key in _type_cache:
-        return _type_cache[key]
+    known = _type_cache.get(key)
+    if known is not None and known[0] == count:
+        return known[1]
     types = {}
-    # Looked for in the program alone: asked of the whole target, lldb also
-    # searches the system's Swift libraries, and tries to load Swift for them.
-    module = target.FindModule(target.GetExecutable())
-    if module.IsValid():
+    # Looked for in the program and the Sable libraries it has loaded alone:
+    # asked of the whole target, lldb also searches the system's Swift
+    # libraries, and tries to load Swift for them.
+    executable = target.FindModule(target.GetExecutable())
+    modules = [executable] + [m for m in (target.GetModuleAtIndex(i) for i in range(count)) if m != executable and _is_sable(m)]
+    for module in modules:
+        if not module.IsValid():
+            continue
         holders = module.FindGlobalVariables(target, "sable.debug.types", 256)
         for i in range(holders.GetSize()):
             sbtype = holders.GetValueAtIndex(i).GetType()
@@ -181,8 +187,16 @@ def _types(target):
                 field = sbtype.GetFieldAtIndex(j)
                 if field.GetName() not in types:
                     types[field.GetName()] = field.GetType().GetPointeeType()
-    _type_cache[key] = types
+    _type_cache[key] = (count, types)
     return types
+
+
+def _is_sable(module):
+    """Whether a loaded library is a Sable one, by the start its symbol table has."""
+    path = module.GetFileSpec().fullpath or ""
+    if path.startswith(("/usr/lib/", "/System/", "/lib/", "/lib64/")):
+        return False
+    return module.FindSymbol("sable.library.start").IsValid()
 
 
 def _find_type(target, name):
@@ -282,6 +296,23 @@ class TypeInfo(object):
             return some
         empties = [i for i in range(len(self.fields())) if i != some]
         return empties[value - spare] if value - spare < len(empties) else value
+
+
+def _labels(type_name):
+    """The labels of a case's payload, from its type's name: '(width: Int, height: M.Label)'; none for one without."""
+    if not type_name.startswith("(") or not type_name.endswith(")"):
+        return []
+    labels, depth, start = [], 0, 1
+    for i, ch in enumerate(type_name):
+        if ch in "([<":
+            depth += 1
+        elif ch in ")]" or ch == ">" and type_name[i - 1] != "-":
+            depth -= 1
+        elif ch == ":" and depth == 1:
+            labels.append(type_name[start:i].split(", ")[-1])
+        elif ch == "," and depth == 1:
+            start = i + 1
+    return [label.strip() for label in labels if label.strip()]
 
 
 _info_cache = {}
@@ -1141,6 +1172,14 @@ class DynamicView(object):
             self.children = _children(self.payload)
         elif self.payload is None:
             self.text = self.case
+        elif len(_labels(fields[index][1])) > 1:
+            labels = _labels(fields[index][1])
+            address = self.address + layout[1]
+            self.children = [
+                _value_at(self.valobj, label, address + field[2], _type_info(process, field[3]))
+                for label, field in zip(labels, held.fields()) if field[3]]
+            self.children = [c for c in self.children if c is not None]
+            self.text = "%s(%s)" % (self.case, ", ".join("%s: %s" % (c.GetName(), _describe(c)) for c in self.children))
         else:
             described = _describe(self.payload)
             tuple_held = _is_tuple(self.payload)

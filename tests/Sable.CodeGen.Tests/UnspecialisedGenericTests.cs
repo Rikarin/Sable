@@ -9,7 +9,7 @@ namespace Sable.CodeGen.Tests;
 ///     in the interpreter, leak-checked; all four must print the same.
 /// </summary>
 [Native]
-public sealed class UnspecialisedGenericTests {
+public sealed partial class UnspecialisedGenericTests {
     static void Prints(string expected, string declarations, string body) {
         var program = Program(declarations, body);
         string unspecialised;

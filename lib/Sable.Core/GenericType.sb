@@ -1,0 +1,70 @@
+module Sable.Core
+
+/// A generic type without its type arguments, as a value: `Stack.self`, of
+/// `Stack<T>`. Given type arguments known only as the program runs, it makes
+/// the type of them, as C#'s `MakeGenericType` does. A generic protocol's,
+/// `Source.self`, stands for `any Source<…>`, which it knows but does not make.
+///
+/// ```sable
+/// struct Pair<A, B> {
+///     let a: A
+///     let b: B
+/// }
+///
+/// let pair = Pair.self
+/// let made = pair.instantiate([Int.self, String.self])!
+/// assert(made == Pair<Int, String>.self)
+/// assert(pair.arguments(of: made)! == [Int.self, String.self])
+/// ```
+public struct GenericType: Sendable {
+    /// Its name, as a type of it is named before the type arguments.
+    public let name: String
+    /// How many type arguments it takes.
+    public let parameterCount: Int
+    let maker: GenericTypeMaker
+
+    /// The type of these type arguments; none where there are not as many as
+    /// it takes, one does not meet its constraints, or it is a protocol's.
+    public fn instantiate(_ arguments: Type[>..]) -> Type? {
+        return arguments.count == parameterCount ? maker.make(arguments) : none
+    }
+
+    /// The type arguments of a type of it; none for any other type.
+    public fn arguments(of type: Type) -> Type[>..]? {
+        let whole = type.name
+        if type.argumentCount != parameterCount || !whole.hasPrefix(name + "<") || !whole.hasSuffix(">") {
+            return none
+        }
+        var all: Type[>..] = []
+        for i in 0..<parameterCount {
+            all.append(type.argument(at: i))
+        }
+        return all
+    }
+}
+
+// What makes a type of a generic type: the compiler writes it (src/Sable.SIL/SilGen.GenericTypes.cs).
+@immutable
+final class GenericTypeMaker {
+    let make: (Type[>..]) -> Type?
+
+    init(_ make: @escaping (Type[>..]) -> Type?) {
+        self.make = make
+    }
+}
+
+extension GenericType: Hashable, Formattable, Debug {
+    /// Whether the two are one generic type.
+    public operator == (lhs: GenericType, rhs: GenericType) -> Bool { return lhs.name == rhs.name && lhs.parameterCount == rhs.parameterCount }
+
+    /// Feeds its name to the hasher.
+    public fn hash(into hasher: inout Hasher) {
+        name.hash(into: &hasher)
+    }
+
+    /// Its name, padded to the spec's width as text is.
+    public fn format(_ spec: FormatSpec) -> String { return spec.padded(name) }
+
+    /// Its name.
+    public fn debugDescription() -> String { return name }
+}

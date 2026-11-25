@@ -1447,6 +1447,19 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 return;
 
             // Its dynamic type: what the metadata says, but for an object, whose class may be a subclass.
+            // And for an existential, what its box holds.
+            case "opaque_type" when specialiser.KnownMetadata(operands[1]) is ClassType known && Value(builtin.Operands[0]).Type == known:
+                Map(builtin, Emit(new BuiltinInst("object_metadata", SilType.Metadata, Value(builtin.Operands[0])), builtin));
+                return;
+
+            case "opaque_type" when specialiser.KnownMetadata(operands[1]) is { } known && TypeMetadata.IsExistential(known):
+                if (Value(builtin.Operands[0]).Type != known) {
+                    throw new Refused($"{name} of an existential elsewhere");
+                }
+
+                Map(builtin, Emit(new BuiltinInst("box_metadata", SilType.Metadata, Emit(new StructExtractInst(Value(builtin.Operands[0]), 0), builtin)), builtin));
+                return;
+
             case "opaque_type" when specialiser.KnownMetadata(operands[1]) is { } and not ClassType:
                 Map(builtin, operands[1]);
                 return;

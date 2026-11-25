@@ -1,6 +1,7 @@
 module Sable.Hosting
 
 import Sable.Concurrency
+import Sable.DependencyInjection
 import Sable.Diagnostics
 import Sable.Process
 import Sable.Time
@@ -141,6 +142,7 @@ public final class Host {
             failure.set(HostError.ShutdownTimedOut(services: late))
             log(Level.Error, "not stopped in time", [field("services", late.joined(separator: ", "))])
         }
+        await context.container.disposeAsync()
         log(Level.Info, "stopped", [])
         lifetime.stoppedSource.cancel()
         return failure.value

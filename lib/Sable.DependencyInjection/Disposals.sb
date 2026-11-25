@@ -1,0 +1,51 @@
+module Sable.DependencyInjection
+
+// What a scope, or the provider, is to dispose, in the order it was made.
+struct Disposals {
+    var made: Disposal[>..] = []
+
+    mutating fn note(_ value: any Any) {
+        if let waits = value as? any AsyncDisposable {
+            made.append(Disposal.Waits(service: waits))
+        } else if let ends = value as? any Disposable {
+            made.append(Disposal.Ends(service: ends))
+        }
+    }
+
+    // The last made first. Taken out one at a time, since one may be released
+    // by being disposed, and what it held before anything made earlier is.
+    mutating fn disposeAll() {
+        while !made.isEmpty {
+            match made.removeLast() {
+                case .Ends(let service) => {
+                    service.dispose()
+                }
+                case .Waits(let service) => {
+                    if let ends = service as? any Disposable {
+                        ends.dispose()
+                    } else {
+                        fatalError("\(type(of: service).name) is only AsyncDisposable: its scope must be a withAsyncScope's, or its provider's disposeAsync be awaited")
+                    }
+                }
+            }
+        }
+    }
+
+    mutating async fn disposeAllAsync() {
+        while !made.isEmpty {
+            match made.removeLast() {
+                case .Ends(let service) => {
+                    service.dispose()
+                }
+                case .Waits(let service) => {
+                    await service.disposeAsync()
+                }
+            }
+        }
+    }
+}
+
+union Disposal {
+    Ends(service: any Disposable)
+    Waits(service: any AsyncDisposable)
+}

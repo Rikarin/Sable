@@ -73,7 +73,8 @@ public sealed partial class SilGen {
         _filling.Add(table);
         foreach (var (key, member) in GenericRequirements(conformance)) {
             string? witness = null;
-            var type = GenericEntryType(conformance, member);
+            // There is no value of Never to call one on.
+            var type = concrete.Equals(Core.Never) ? null : GenericEntryType(conformance, member);
             if (type is not null) {
                 using (_diagnostics.Suppress()) {
                     witness = GenericWitness(concrete, value, conformance, key, member, type, at);
@@ -190,15 +191,16 @@ public sealed partial class SilGen {
             CastTarget(protocol, at);
         }
 
-        var none = cast.AddBlock();
-        none.Append(new BranchInst(joined, [none.Append(new EnumInst(optional, optional.CaseIndex("None"), null))]));
+        // Every value is an 'any Any'.
+        var none = protocols.Count == 0 ? null : cast.AddBlock();
+        none?.Append(new BranchInst(joined, [none.Append(new EnumInst(optional, optional.CaseIndex("None"), null))]));
         var metadata = entry.Append(new BuiltinInst("box_metadata", SilType.Metadata, box));
         var block = entry;
         var tables = new List<SilValue>();
         foreach (var protocol in protocols) {
             var table = block.Append(new BuiltinInst($"witness_table:{QualifiedName(protocol)}", SilType.WitnessTable, metadata));
             var found = cast.AddBlock();
-            block.Append(new CondBranchInst(block.Append(new BuiltinInst("witness_table_exists", SilType.Bool, table)), found, [], none, []));
+            block.Append(new CondBranchInst(block.Append(new BuiltinInst("witness_table_exists", SilType.Bool, table)), found, [], none!, []));
             tables.Add(table);
             block = found;
         }

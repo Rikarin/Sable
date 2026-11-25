@@ -118,8 +118,45 @@ public sealed partial class SilGen {
         _module.Boxers[value.ToString()] = (value, name);
     }
 
+    /// <summary>
+    ///     Casts to an existential in code that knows it only by its metadata
+    ///     (<c>existential_cast</c>): a function given a box and where to put
+    ///     what it holds, as the existential, if it is one. Made where the
+    ///     type is known and handed to code compiled once, as a cast written
+    ///     there is (<see cref="ExistentialCast" />), and registered with the
+    ///     runtime as a describer is.
+    /// </summary>
+    internal void Caster(TypeSymbol target, SyntaxNode at) {
+        if (target is not ExistentialTypeSymbol { Constraint: var constraint } || constraint.Equals(Core.Error) || Lower(target) is not StructType layout
+            || SilType.MentionsOpaque(layout) || !_layoutProtocols.ContainsKey(layout) || _module.Casters.ContainsKey(layout.ToString())
+            || ExistentialCast(target, at) is not var (name, type) || type.Result is not EnumType optional) {
+            return;
+        }
+
+        var function = new SilFunction($"$caster${Sanitise(layout.ToString())}", new FunctionType([type.Parameters[0], SilType.Address(layout)], SilType.Bool));
+        function.ParameterNames.AddRange(["$box", "$into"]);
+        var entry = function.AddBlock();
+        var box = entry.AddArgument(type.Parameters[0]);
+        var into = entry.AddArgument(SilType.Address(layout));
+        var cast = entry.Append(new ApplyInst(entry.Append(new FunctionRefInst(name, type)), optional, [box]));
+        var some = function.AddBlock();
+        var none = function.AddBlock();
+        var payload = some.AddArgument(layout, true);
+        entry.Append(new SwitchEnumInst(cast, [(optional.CaseIndex("Some"), some)], none));
+        some.Append(new StoreInst(some.Append(new CopyValueInst(payload)), into, StoreKind.Init));
+        some.Append(new DestroyValueInst(cast));
+        some.Append(new ReturnInst(some.Append(new IntegerLiteralInst(SilType.Bool, 1))));
+        none.Append(new DestroyValueInst(cast));
+        none.Append(new ReturnInst(none.Append(new IntegerLiteralInst(SilType.Bool, 0))));
+        _module.Add(function);
+        _module.Casters[layout.ToString()] = (layout, function.Name);
+    }
+
     /// <summary>Whether a value of a type known only at run time is erased to 'any Any', whose conformers are every type: each the program boxes has its boxer.</summary>
     bool _erasesAny;
+
+    /// <summary>A value of a type known only at run time is boxed as an existential: in the box the program names the class of, where it does.</summary>
+    internal void ErasesAny() => _erasesAny = true;
 
     /// <summary>The module's optional of an opaque type named for a helper's own parameter.</summary>
     EnumType OpaqueOptional(OpaqueType of) {

@@ -48,6 +48,9 @@ internal static class Sendability {
                     ? null
                     : $"'{parameter.Name}' is not constrained to be Sendable";
 
+            case ExistentialTypeSymbol { MetatypeOf: not null }:
+                return null;
+
             case ExistentialTypeSymbol or OpaqueTypeSymbol: {
                 var constraint = type is ExistentialTypeSymbol existential ? existential.Constraint : ((OpaqueTypeSymbol)type).Constraint;
                 return Refines(constraint, []) ? null : $"'{constraint.ToDisplayString()}' does not refine Sendable";

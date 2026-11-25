@@ -65,10 +65,23 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.MetatypeErasure;
         }
 
+        // 'any P.Type': a type that conforms to P as one, and as a 'Type' any.
+        if (target is ExistentialTypeSymbol { MetatypeOf: { } conformed }) {
+            return source switch {
+                MetatypeTypeSymbol { InstanceType: not ExistentialTypeSymbol and var known } when Satisfies(known, conformed) => ConversionKind.MetatypeErasure,
+                ExistentialTypeSymbol { MetatypeOf: { } held } when Satisfies(held, conformed) => ConversionKind.MetatypeErasure,
+                _ => null,
+            };
+        }
+
+        if (source is ExistentialTypeSymbol { MetatypeOf: not null } && target.Equals(core.Type)) {
+            return ConversionKind.MetatypeErasure;
+        }
+
         // A 'Type' given for a generic callee's 'T.Type', which inference
         // bound to the type it holds at run time: opened (SYNTAX.md "Opening
         // a type").
-        if (source.Equals(core.Type) && target is MetatypeTypeSymbol { InstanceType: TypeParameterSymbol { OpenedFrom: not null } }) {
+        if ((source.Equals(core.Type) || source is ExistentialTypeSymbol { MetatypeOf: not null }) && target is MetatypeTypeSymbol { InstanceType: TypeParameterSymbol { OpenedFrom: not null } }) {
             return ConversionKind.Open;
         }
 
@@ -96,7 +109,9 @@ internal sealed class Conversions(CoreTypes core) {
             && source is ArrayTypeSymbol sourceArray
             && target is ArrayTypeSymbol targetArray
             && (sourceArray.ElementType.Equals(targetArray.ElementType)
-                || IsLiteralCompatible(sourceArray.ElementType, targetArray.ElementType))) {
+                || IsLiteralCompatible(sourceArray.ElementType, targetArray.ElementType)
+                // '[Int.self]' where Types are wanted.
+                || sourceArray.ElementType is MetatypeTypeSymbol && targetArray.ElementType.Equals(core.Type))) {
             return ConversionKind.LiteralTyping;
         }
 

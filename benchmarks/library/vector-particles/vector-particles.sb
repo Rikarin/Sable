@@ -1,6 +1,7 @@
 module VectorParticlesBench
 
 import Sable.Math.Geometry
+import Sable.Testing
 
 // 4,096 particles pulled to a point, moved and bounced off the ground, two
 // thousand steps.
@@ -27,8 +28,7 @@ fn step(_ particles: inout Particle[:], _ dt: F32) {
     }
 }
 
-@main
-fn main() {
+fn run() -> String {
     var particles: Particle[>..] = []
     for i in 0..<4096 {
         particles.append(Particle { position: Vector3(F32(i % 64) - 32, F32(i % 10), F32(i / 64) - 32), velocity: Vector3.zero })
@@ -40,5 +40,10 @@ fn main() {
     for p in particles {
         sum += F64(p.position.length)
     }
-    print("\(sum / 4096:.1)")
+    return "\(sum / 4096:.1)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

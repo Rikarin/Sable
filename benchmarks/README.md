@@ -91,7 +91,9 @@ Make `library/<name>/<name>.sb`, a module with a `@bench` function that takes a
 milliseconds and returns a line that depends on all its work, which `check` is
 given. Sizes are `@bench(arguments:)`, not copies. A body that does the same to
 the same input many times over puts a `blackBox` in its loop, or the optimiser
-may do it once. Modules are built as one program: a name of the folder's own.
+may do it once. Each folder is built as a program of its own: what the optimiser
+inlines depends on what else there is. So that several can be built as one all
+the same (`sable bench benchmarks/library`), a module has a name of its own.
 
 Then its ports, named the same. They compute the same line, keep the checks
 (integer overflow and bounds), and use nothing outside their language's
@@ -107,3 +109,30 @@ write, they write in the directory they are run in, and remove.
   with `bench_printf`.
 
 A port run without arguments does its work once and prints the line.
+
+### From the old format
+
+A library benchmark used to be a program: `@main`, and a line printed. `compare.py`
+leaves such a folder out and says so. To convert one:
+
+1. `import Sable.Testing`; rename `main` to `fn run() -> String`, and return the
+   line in place of printing it. (`async`, `throws` stay.)
+2. Add, below it,
+
+   ```sable
+   @bench
+   fn measure(_ b: Bencher) {
+       b.check(b.iterate { run() })
+   }
+   ```
+
+   or, for an async one, `async fn measure` and
+   `b.check(await b.iterateAsync { await run() })`; `try!` for one that throws.
+3. Where making the input takes a share worth speaking of, move that into
+   `measure` and give it to `run`; in .NET, `Run()` becomes `Setup()`, which
+   makes it and returns `() => Run(input)`.
+4. The .NET class is named after the folder, `LibraryMapInt`. A `Run()` of the
+   whole needs no other change.
+5. Rust: the module of `support/rust/bench.rs`, and `bench::run(|| { ... })`
+   whose last expression is `format!(...)`. C: `main` becomes `static void run(void)`,
+   `printf` becomes `bench_printf`, and `BENCH_MAIN(run)` ends the file.

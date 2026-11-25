@@ -9,9 +9,9 @@ ports there are of it: <name>.cs, <name>.rs and <name>.c. The sets are
 'library', the standard library's types and functions, each ported where a
 language's own standard library has an equal, and 'programs', the language.
 
-Sable's numbers are 'sable bench's: every .sb file's @bench functions, built
-as one harness, whose JSON is read; a @bench(arguments:) function is a
-benchmark for each of its cases, and a port is asked for each by the same
+Sable's numbers are 'sable bench's: each folder's @bench functions, built as
+a harness, whose JSON is read; a @bench(arguments:) function is a benchmark
+for each of its cases, and a port is asked for each by the same
 name. The ports measure themselves the same way (benchmarks/README.md): in a
 process of its own, warmed up, as many iterations to a sample as it takes to
 last --sample-ms, and --samples of them, or as many as --budget-ms allows
@@ -23,6 +23,9 @@ collector's and its JIT's threads' in it, as they are its cost.)
 
 A program's whole process is a table of its own: its start-up (programs/startup,
 which does nothing), and each of 'programs' run once, start to end, cold.
+
+A folder that does not build, or is in the old format, is left out and
+reported as a failure, and the rest go on.
 
 A benchmark without a port in a language is a dash in its column: one of
 'library' may have none, its time there to be seen. Ports must compute what
@@ -39,6 +42,7 @@ the tables to a file, as for $GITHUB_STEP_SUMMARY.
 """
 
 import argparse
+import concurrent.futures
 import json
 import math
 import os
@@ -79,9 +83,9 @@ class Failure(Exception):
 class Benchmark:
     """One Sable benchmark, or a case of one, and the ports there are of it."""
 
-    def __init__(self, folder, case, harness_name):
+    def __init__(self, folder, case="", harness_name="", harness=None):
         self.group, self.folder, self.case = folder.parent.name, folder, case
-        self.harness_name = harness_name
+        self.harness_name, self.harness = harness_name, harness
         # 'aes-gcm(64, 100000)', as the harness names a case.
         self.name = folder.name + case
         self.ports = {}
@@ -118,24 +122,16 @@ def machine():
     return f"{name}, {os.cpu_count()} cores, {platform.system()} {platform.machine()}"
 
 
-def build_harness(sable, scratch, folders):
-    """One harness of the folders; and where its benchmarks' locations are from."""
-    harness = scratch / "harness"
-    run_command([sable, "bench", *folders, "--harness-out", harness], cwd=ROOT)
-    first = min((path for folder in folders[:1] for path in folder.rglob("*.sb")), key=str)
-    return harness, first.parent
-
-
-def discover(harness, base):
-    """Each of the harness's benchmarks, by what it describes of them."""
+def build_harness(sable, scratch, folder):
+    """The folder's harness, and the benchmarks it describes: a program of its own, as what the optimiser makes of one depends on what else it has in it."""
+    harness = scratch / f"{folder.parent.name}-{folder.name}-harness"
+    run_command([sable, "bench", folder, "--harness-out", harness], cwd=ROOT)
     benchmarks = []
     for line in run_command([harness, "--describe"]).stdout.splitlines():
-        name, location = line.split("\t")[:2]
-        if name == "filtered out":
-            continue
-        folder = (base / location.rsplit(":", 1)[0]).resolve().parent
-        paren = name.find("(")
-        benchmarks.append((folder, name[paren:] if paren >= 0 else "", name))
+        name = line.split("\t")[0]
+        if name != "filtered out":
+            paren = name.find("(")
+            benchmarks.append(Benchmark(folder, name[paren:] if paren >= 0 else "", name, harness))
     return benchmarks
 
 
@@ -145,12 +141,11 @@ class Runner:
         self.options = [
             "--samples", arguments.samples, "--warm-up-ms", arguments.warm_up_ms, "--sample-ms", arguments.sample_ms, "--budget-ms", arguments.budget_ms,
         ]
-        self.harness = None
         self.built = {}
 
     def sable(self, benchmark):
         out = self.scratch / "sable.json"
-        run_command([self.harness, "--exact", benchmark.harness_name, "--json", out, "--metric", "processor", *self.options], cwd=self.scratch)
+        run_command([benchmark.harness, "--exact", benchmark.harness_name, "--json", out, "--metric", "processor", *self.options], cwd=self.scratch)
         (result,) = json.loads(out.read_text())["benchmarks"]
         return result["processor"], result["allocatedBytes"], result["check"]
 
@@ -305,6 +300,7 @@ def main():
     parser.add_argument("--warm-up-ms", type=int, default=1000, help="of each benchmark: .NET's JIT needs most of it")
     parser.add_argument("--sample-ms", type=int, default=20)
     parser.add_argument("--budget-ms", type=int, default=1000)
+    parser.add_argument("--jobs", type=int, default=min(4, os.cpu_count() or 1), help="how many harnesses to build at once")
     parser.add_argument("--markdown", type=pathlib.Path, metavar="FILE")
     parser.add_argument("--require", default="", metavar="LANGUAGES")
     parser.add_argument("names", nargs="*")
@@ -344,27 +340,30 @@ def main():
 
         runner = Runner(tools, scratch, arguments)
         measured = [f for f in folders if "@bench" in (f / f"{f.name}.sb").read_text()]
+        # What has no @bench is a program measured whole; in the library, one
+        # from before there was a harness, whose main prints what it computed.
+        unmeasured = [f for f in folders if f not in measured]
+        old = [f for f in unmeasured if f.parent.name == "library"]
+        broken = [(f, "old format: 'main' in place of '@bench' (benchmarks/README.md, \"From the old format\")") for f in old]
+        for folder, why in broken:
+            print(f"library/{folder.name}: {why}; left out", file=sys.stderr)
         benchmarks = []
-        if measured:
-            print("building the harness", file=sys.stderr, flush=True)
-            try:
-                runner.harness, base = build_harness(tools["sable"], scratch, measured)
-            except subprocess.CalledProcessError as error:
-                # One build of all: which of them it is has been said.
-                print(f"{error.stdout or ''}{error.stderr or ''}", file=sys.stderr)
-                print("the harness does not build", file=sys.stderr)
-                if arguments.markdown:
-                    with arguments.markdown.open("a") as out:
-                        out.write("## Sable against .NET, Rust and C\n\nThe harness does not build; see the job's log.\n")
-                return 1
-            benchmarks = [Benchmark(*each) for each in discover(runner.harness, base)]
-            benchmarks.sort(key=lambda b: b.group)
+        # The harnesses first, several at once; then nothing is built while anything is measured.
+        print(f"building {len(measured)} harnesses", file=sys.stderr, flush=True)
+        with concurrent.futures.ThreadPoolExecutor(arguments.jobs) as pool:
+            for folder, building in [(f, pool.submit(build_harness, tools["sable"], scratch, f)) for f in measured]:
+                try:
+                    benchmarks += building.result()
+                except subprocess.CalledProcessError as error:
+                    print(f"{folder.parent.name}/{folder.name}, sable: does not build; left out\n{error.stdout or ''}{error.stderr or ''}", file=sys.stderr)
+                    broken.append((folder, "does not build"))
+        benchmarks.sort(key=lambda b: b.group)
 
         for benchmark in benchmarks:
             print(benchmark.key, file=sys.stderr, flush=True)
             runner.measure(benchmark)
         programs = [b for b in benchmarks if b.group == "programs" and any(b.ports.values())]
-        startup = [Benchmark(f, "", "") for f in folders if f not in measured]
+        startup = [Benchmark(f) for f in unmeasured if f not in old]
         for benchmark in [*startup, *programs]:
             print(f"{benchmark.key}, whole", file=sys.stderr, flush=True)
             runner.whole(benchmark)
@@ -400,6 +399,10 @@ def main():
         print(f"\nWhole processes\n{note}\n{text(rows)}")
         page += ["", "### Whole processes", "", note, "", markdown(rows, best)]
 
+    for folder, why in broken:
+        left_out = Benchmark(folder)
+        left_out.errors["sable"] = why
+        benchmarks.append(left_out)
     failures = [(b, language, what) for b in [*benchmarks, *startup] for language, what in b.errors.items()]
     if failures:
         page += ["", "### Failures", ""]

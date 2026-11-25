@@ -1,6 +1,7 @@
 module QuaternionBlendBench
 
 import Sable.Math.Geometry
+import Sable.Testing
 
 // Two poses of 128 bones blended, by nlerp and by slerp, and composed down
 // the skeleton, ten thousand times over.
@@ -20,8 +21,7 @@ fn steady(_ from: Quaternion[:], _ to: Quaternion[:], _ amount: F32, _ pose: ino
     }
 }
 
-@main
-fn main() {
+fn run() -> String {
     let count = 128
     var from: Quaternion[>..] = []
     var to: Quaternion[>..] = []
@@ -38,5 +38,10 @@ fn main() {
         steady(from, to, amount, &pose)
         sum += F64(pose[127].w.abs())
     }
-    print("\(sum / 20000:.2)")
+    return "\(sum / 20000:.2)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

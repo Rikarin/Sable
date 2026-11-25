@@ -1,0 +1,31 @@
+module Sable.Interop
+
+import Sable.IO
+
+#if !os(windows)
+extension FileHandle {
+    /// The file's descriptor, taken out of it: the file is closed as if by
+    /// `close()`, and the descriptor is what is left of it. POSIX alone has
+    /// it.
+    ///
+    /// ```sable
+    /// let file = try! File.open("/dev/null", options: .reading)
+    /// let descriptor = try! file.takeDescriptor()
+    /// assert(descriptor.isValid && !file.isOpen)
+    /// ```
+    public fn takeDescriptor() throws(IoError) -> OwnedFd {
+        unsafe {
+            return OwnedFd.taking(CInt(try releaseHandle()))
+        }
+    }
+
+    /// The file of a descriptor, which is given to it; the path is what
+    /// errors say. POSIX alone has it.
+    public static fn owning(_ descriptor: consuming OwnedFd, path: String) -> FileHandle {
+        var taken = descriptor
+        unsafe {
+            return FileHandle.owning(handle: Int(taken.release()), path: path)
+        }
+    }
+}
+#endif

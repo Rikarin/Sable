@@ -1,0 +1,81 @@
+module Sable.Core
+
+// Arrays' elements where they lie, for C and for raw-memory code.
+
+extension<Element> Element[:] {
+    /// Where the elements lie, one after another, for as long as 'body'
+    /// runs: they may be read there, and not written. Null when there are
+    /// none.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     assert([10, 20, 30].withPointer { $0.load(at: 2) } == 30)
+    /// }
+    /// ```
+    public fn withPointer<R, E: Error>(_ body: (RawPtr<Element>) throws(E) -> R) throws(E) -> R {
+        unsafe {
+            let start = RawPtr<Element>(address: RawMemory.sliceAddress(self))
+            defer {
+                unsafe {
+                    RawMemory.sliceEnd(self)
+                }
+            }
+            return try body(start)
+        }
+    }
+
+    /// Where the elements lie, one after another, for as long as 'body'
+    /// runs, to be read and written there: the array is the only reference
+    /// to them by then. There are 'count' of them, and no more; null when
+    /// there are none.
+    ///
+    /// ```sable
+    /// var numbers = [1, 2, 3]
+    /// let before = numbers
+    /// numbers.withMutablePointer { start in
+    ///     unsafe { start.store(9, at: 1) }
+    /// }
+    /// assert(numbers == [1, 9, 3] && before == [1, 2, 3])
+    /// ```
+    public mutating fn withMutablePointer<R, E: Error>(_ body: (RawPtr<Element>) throws(E) -> R) throws(E) -> R {
+        unsafe {
+            let start = RawPtr<Element>(address: RawMemory.arrayAddress(&self))
+            defer {
+                unsafe {
+                    RawMemory.addressEnd(&self)
+                }
+            }
+            return try body(start)
+        }
+    }
+}
+
+extension String {
+    /// The text's UTF-8 copied to where there is room for it, 'utf8Count'
+    /// bytes; with no NUL after it.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     let room = RawPtr<U8>.allocate(count: 3)
+    ///     defer { room.deallocate() }
+    ///     "añ".copyUtf8(to: room)
+    ///     assert(room.copied(count: 3) == [0x61, 0xC3, 0xB1])
+    /// }
+    /// ```
+    public unsafe fn copyUtf8(to place: RawPtr<U8>) {
+        StringBuffer.copy(place.address, self, 0, utf8Count)
+    }
+}
+
+extension RawPtr<Element> {
+    /// The first 'count' values, copied into an array.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     assert([1, 2, 3].withPointer { $0.copied(count: 2) } == [1, 2])
+    /// }
+    /// ```
+    public unsafe fn copied(count: Int) -> Element[>..] {
+        return UnsafeBuffer<Element>.viewing(self, count: count).toArray()
+    }
+}

@@ -925,9 +925,11 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     resize), Pipe with PipeReader PipeWriter (pooled
                     segments, ByteSequence views, consumed/examined,
                     backpressure), the standard streams as handles,
-                    Environment (variables listed, set and removed under
-                    'unsafe', arguments as text and bytes, home, temporary
-                    and known folders by XDG, Apple and Windows rules)
+                    OsString and OsStr (the system's own text, whether or
+                    not it is UTF-8), Environment (variables and arguments
+                    as text and as OsString, set and removed under
+                    'unsafe', home, temporary and known folders by XDG,
+                    Apple and Windows rules)
 Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
                     urltestdata.json passes whole; resolution, setters,
                     origin, query items), Host (domain, IPv4, IPv6,
@@ -1049,7 +1051,11 @@ Sable.Testing       @test @bench; assert, assertEqual and the like; expect and
                     require, which show their expression's parts; expectThrows;
                     expectPanic and expectExit (death tests); assertSnapshot;
                     forAll, Arbitrary and Gen (property tests); Bencher
-Sable.Interop       C FFI helpers, CString, CVarArg, callback shims
+Sable.Interop       C's types by name (CInt, CLong, CChar, CSize, CWChar),
+                    CStr, CString, withCString, withWideCString,
+                    withCStrings, CFunction and cFunction, CCallback,
+                    withCallback, DynamicLibrary (open, symbol, function,
+                    variable), OwnedFd, OwnedHandle (Windows)
 Sable.Reflect       the reflection surface described above
 ```
 
@@ -1863,6 +1869,129 @@ mathematics; only which roots are trusted is the system's (`TrustStore.system`).
   asked for (runtime/trust.c), so no program links with them. Elsewhere, and in
   the interpreter, the distribution's bundle is read. SSL_CERT_FILE and
   SSL_CERT_DIR, where they are set, are read instead on every system.
+
+### Calling C
+
+`Sable.Interop` (#74) is the library's half of §24 of the syntax: the compiler
+passes integers, floats, pointers and structs as C does, and the rest is here.
+
+A binding, whole — `sable bindgen zlib.h` writes the declarations, and more:
+
+```sable
+module Zlib
+
+import Sable.Interop
+
+public union ZlibError: Error {
+    Failed(code: Int)
+
+    public fn description() -> String {
+        return match self {
+            case .Failed(let code) => "zlib failed with \(code)"
+        }
+    }
+}
+
+// What zlib.h declares. 'unsafe': it is given pointers.
+@extern("c", "compressBound")
+fn bound(_ length: CUnsignedLong) -> CUnsignedLong
+
+@extern("c", "compress")
+unsafe fn deflate(_ into: RawPtr<U8>, _ intoLength: RawPtr<CUnsignedLong>, _ from: RawPtr<U8>, _ length: CUnsignedLong) -> CInt
+
+@extern("c", "uncompress")
+unsafe fn inflate(_ into: RawPtr<U8>, _ intoLength: RawPtr<CUnsignedLong>, _ from: RawPtr<U8>, _ length: CUnsignedLong) -> CInt
+
+@extern("c", "zlibVersion")
+fn version() -> CStr
+
+/// The bytes as zlib packs them.
+public fn compressed(_ bytes: U8[:]) throws(ZlibError) -> U8[>..] {
+    return try filled(Int(bound(CUnsignedLong(bytes.count)))) { (into: RawPtr<U8>, length: RawPtr<CUnsignedLong>) -> CInt in
+        return bytes.withPointer { (from: RawPtr<U8>) -> CInt in
+            unsafe {
+                return deflate(into, length, from, CUnsignedLong(bytes.count))
+            }
+        }
+    }
+}
+
+/// The bytes zlib packed, 'length' of them at most.
+public fn decompressed(_ bytes: U8[:], upTo length: Int) throws(ZlibError) -> U8[>..] {
+    return try filled(length) { (into: RawPtr<U8>, length: RawPtr<CUnsignedLong>) -> CInt in
+        return bytes.withPointer { (from: RawPtr<U8>) -> CInt in
+            unsafe {
+                return inflate(into, length, from, CUnsignedLong(bytes.count))
+            }
+        }
+    }
+}
+
+// Room for a C function to fill, which says how much of it it filled.
+fn filled(_ room: Int, _ fill: (RawPtr<U8>, RawPtr<CUnsignedLong>) -> CInt) throws(ZlibError) -> U8[>..] {
+    var bytes = U8[>..](repeating: 0, count: room)
+    var length = CUnsignedLong(room)
+    let code = bytes.withMutablePointer { (into: RawPtr<U8>) -> CInt in
+        return Memory.withPointer(to: &length) { (place: RawPtr<CUnsignedLong>) -> CInt in fill(into, place) }
+    }
+    if code != 0 {
+        throw ZlibError.Failed(code: Int(code))
+    }
+    bytes.removeLast(room - Int(length))
+    return bytes
+}
+
+fn main() {
+    let text = "the same words, and the same words again, and the same words".utf8Bytes()
+    let packed = try! compressed(text)
+    print("zlib \(version().string): \(text.count) bytes in \(packed.count)")
+    print(String.fromUtf8Lossy(try! decompressed(packed, upTo: text.count)))
+}
+```
+
+The package's build script prints `sable:link-lib=z` (docs/05 §5.6); or there is
+no library at the link, and `DynamicLibrary.open("libz.so.1")` looks the
+functions up. `InteropTests` builds and runs the example as it stands here.
+
+What holds it together:
+
+- **Pointers are lent.** `withCString`, `withPointer`, `withMutablePointer` and
+  `Memory.withPointer` give a closure where something is, for as long as it
+  runs; what C keeps is a `CString`, in memory of its own, or the program's
+  `RawPtr`. Making a pointer is safe and using it is `unsafe`, and giving one
+  to C is using it (S3225).
+- **A function value is C's function and back.** `cFunction(f)` is the address
+  of an entry of C's convention over `f`, which captures nothing (S3226).
+  `CFunction.function()` is a closure over an address, its code compiled for
+  the type: calling it costs a C call through a pointer. `CSignature`, which
+  bounds both, is met by the function types C has and by nothing else.
+- **A closure goes with a context.** One entry serves every closure of a type,
+  and finds which by the context: an index and a generation in the runtime's
+  table (`runtime/foreign.c`), never an address. So C calling a closure that
+  was let go of — its place another's by then, or not — stops the program with
+  a message, and runs nothing. `withCallback` lends one for a call, with
+  anything captured, to this thread alone, which is checked; `CCallback` holds
+  one whose captures are Sendable (S3236), callable from any thread until it
+  goes. A call in progress as it goes keeps the closure until it returns.
+- **A thread the runtime did not make** is taken up the first time it enters
+  Sable, by an exported function or a callback: it gets an allocator's state
+  and a task of its own (so that it is not the main task's, and what it spawns
+  has a parent), kept for the next such thread once it ends. What it can reach
+  was shared before C was given the function — a `CCallback`'s captures, and
+  the globals, whose counts are atomic from the first time anything is given
+  to C to be called on any thread (docs/02 §2.7).
+- **A library stays open while anything of it is held**: a `DynamicLibrary`,
+  a function value (which holds it in its context) or a `LibraryVariable`.
+- **Owners close once.** `OwnedFd` and `OwnedHandle` are `@noncopy`.
+
+`OsString` (Sable.IO) is the system's own text: POSIX's bytes, or Windows'
+UTF-16 as WTF-8, which the runtime converts both ways without loss
+(`runtime/wide.h`). Paths, arguments and variables are given and taken as it,
+and `Command` passes them on as they are.
+
+Not here: C functions with `va_list`; unions, bit-fields and arrays inside
+structs passed by value; blocks; `long double`. The interpreter calls no C
+(S7000 at compile time, a trap when run).
 
 ### Source layout
 

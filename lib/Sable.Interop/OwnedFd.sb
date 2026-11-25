@@ -1,0 +1,87 @@
+module Sable.Interop
+
+import Sable.IO
+
+/// A file descriptor of the system's, this program's to close, which is done
+/// as it goes: Rust's `OwnedFd`. It is moved, never copied, so it is closed
+/// once. (On Windows, one of the C library's descriptors; the system's own
+/// handles are `OwnedHandle`s.)
+///
+/// ```sable
+/// #if !os(windows)
+/// unsafe {
+///     let read: (CInt, RawPtr<U8>, CSize) -> CSignedSize = try! DynamicLibrary.program.function("read")
+///     let zeros = try! File.open("/dev/zero", options: .reading).takeDescriptor()
+///     let descriptor = zeros.descriptor
+///     var bytes: U8[>..] = [1, 2, 3]
+///     assert(bytes.withMutablePointer { read(descriptor, $0, 3) } == 3)
+///     assert(bytes == [0, 0, 0])
+/// }   // closed here
+/// #endif
+/// ```
+@noncopy
+public struct OwnedFd {
+    // -1 once given away.
+    var held: CInt
+
+    /// The descriptor, which the caller vouches is open and is no one else's
+    /// to close.
+    public unsafe static fn taking(_ descriptor: CInt) -> OwnedFd {
+        return OwnedFd(held: descriptor)
+    }
+
+    init(held: CInt) {
+        self.held = held
+    }
+
+    deinit {
+        if held >= 0 {
+            _ = closeDescriptor(held)
+        }
+    }
+
+    /// The descriptor, to be used while this is here; -1 for none.
+    public var descriptor: CInt => held
+
+    /// Whether it has a descriptor: what C gave was not -1, and it has not
+    /// been given away.
+    public var isValid: Bool => held >= 0
+
+    /// The descriptor given away: whoever takes it closes it.
+    public mutating fn release() -> CInt {
+        let given = held
+        held = -1
+        return given
+    }
+
+    /// Closed now; what that fails with is thrown, as a file's last write
+    /// may. The descriptor is gone either way.
+    public mutating fn close() throws(IoError) {
+        let given = release()
+        if given >= 0 && !closeDescriptor(given) {
+            throw descriptorError(given)
+        }
+    }
+
+    /// Another descriptor of the same open file, not given to programs run
+    /// after.
+    public fn duplicate() throws(IoError) -> OwnedFd {
+        let made = duplicateDescriptor(held)
+        if made < 0 {
+            throw descriptorError(held)
+        }
+        unsafe {
+            return OwnedFd.taking(made)
+        }
+    }
+}
+
+fn descriptorError(_ descriptor: CInt) -> IoError {
+    return .Os(path: "descriptor \(descriptor)", code: Runtime.fileErrorCode())
+}
+
+@extern("c", "sable_fd_close")
+fn closeDescriptor(_ descriptor: CInt) -> Bool
+
+@extern("c", "sable_fd_duplicate")
+fn duplicateDescriptor(_ descriptor: CInt) -> CInt

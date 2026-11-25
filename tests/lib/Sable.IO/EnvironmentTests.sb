@@ -51,11 +51,11 @@ fn aVariableSetIsAChildsToo() {
 @test
 fn argumentsAsTextAndAsBytes() {
     let text = Environment.arguments()
-    let bytes = Environment.argumentBytes()
+    let bytes = Environment.osArguments()
     assertEqual(text.count, bytes.count)
     var i = 0
     while i < text.count {
-        assertEqual(text[i].utf8Count, bytes[i].count)
+        assertEqual(text[i].utf8Count, bytes[i].bytes.count)
         i += 1
     }
 }

@@ -115,7 +115,7 @@ public sealed class DocExampleTests {
         Assert.NotEmpty(found);
     }
 
-    static string RepositoryRoot {
+    internal static string RepositoryRoot {
         get {
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
             while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Sable.slnx"))) {

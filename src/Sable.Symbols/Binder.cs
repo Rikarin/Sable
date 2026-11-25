@@ -1588,6 +1588,11 @@ public sealed partial class Binder {
             return Record(statement, new BoundBlock(statement, [], []));
         }
 
+        foreach (var attribute in declaration.Attributes.Where(static a => a.Name.ToString().Trim() is "extern" or "export")) {
+            _diagnostics.Error(ErrorCode.ERR_MalformedForeign, attribute.Span,
+                $"an '@{attribute.Name.ToString().Trim()}' function is one of the module's: C has no local functions");
+        }
+
         var function = _compilation.DeclareLocalFunction(declaration, _containingSymbol, _scope);
 
         // Declared before the body is bound, so the function can call itself.
@@ -3220,7 +3225,7 @@ public sealed partial class Binder {
             case BoundError:
                 return;
 
-            case var other when other.Type is FunctionTypeSymbol or OptionalTypeSymbol { UnderlyingType: FunctionTypeSymbol }:
+            case var other when other.Type is FunctionTypeSymbol or TypeParameterSymbol or OptionalTypeSymbol { UnderlyingType: FunctionTypeSymbol }:
                 _diagnostics.Error(
                     ErrorCode.ERR_TaskCaptureNotSendable,
                     argument.Syntax.Span,
@@ -5502,6 +5507,7 @@ public sealed partial class Binder {
 
         // Now that a signature is chosen, the closures have parameter types.
         if (arguments.Any(static a => a is BoundUnboundClosure)) {
+            var settled = substitution;
             var saved = _openTypeParameters;
             _openTypeParameters = [
                 ..inferrable.Where(p => substitution.Lookup(p) is null)
@@ -5526,14 +5532,37 @@ public sealed partial class Binder {
                              && expected is FunctionTypeSymbol { ParameterTypes.IsEmpty: true } lazyType
                     ? BindAutoclosure(syntaxes[i], lazyType)
                     : BindExpression(syntaxes[i], expected);
+
+                // A closure for a parameter of type 'F', all that says what F
+                // is, says it for the closures after it too.
+                if (expected is TypeParameterSymbol open && slots[i] < resolved.Parameters.Length && inferrable.Contains(open)) {
+                    substitution = Combine(outer, Infer(resolved, rebound.ToImmutable(), labels, outer, expectedType));
+                    _openTypeParameters = [..inferrable.Where(p => substitution.Lookup(p) is null)];
+                }
             }
 
             _openTypeParameters = saved;
             arguments = rebound.ToImmutable();
 
             // A closure's return type can settle a type parameter nothing else
-            // mentions, so inference runs again with them bound.
+            // mentions, so inference runs again with them bound. What a closure
+            // alone settled is held to its constraints here: the overload was
+            // chosen before it was known (Score).
             substitution = Combine(outer, Infer(resolved, arguments, labels, outer, expectedType));
+            foreach (var typeParameter in resolved.TypeParameters) {
+                if (settled.Lookup(typeParameter) is not null || substitution.Lookup(typeParameter) is not { } became
+                    || TypeSubstitution.ContainsError(became) || ContainsUninferred(became, resolved)) {
+                    continue;
+                }
+
+                foreach (var constraint in typeParameter.Constraints.Select(substitution.Apply)) {
+                    if (!ContainsUninferred(constraint, resolved) && !Conversions.Satisfies(became, constraint, _conversions.Equivalence)) {
+                        _diagnostics.Error(ErrorCode.ERR_NoMatchingOverload, syntax.Span,
+                            $"'{resolved.Name}' cannot be called with these arguments: '{typeParameter.Name}' would be '{became.ToDisplayString()}', "
+                            + $"which is not '{constraint.ToDisplayString()}'");
+                    }
+                }
+            }
         }
 
         var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
@@ -6411,6 +6440,11 @@ public sealed partial class Binder {
             if (fitting.Count == 1) {
                 return Apply(fitting[0].FunctionType, group.Substitution ?? TypeSubstitution.Empty);
             }
+        }
+
+        // 'keep(compare)' for 'keep<F>(_ f: F)': the one function named says what F is.
+        if (parameter is TypeParameterSymbol && argument is BoundFunctionGroup { Candidates: [{ TypeParameters.IsEmpty: true } named] } only) {
+            return Apply(named.FunctionType, only.Substitution ?? TypeSubstitution.Empty);
         }
 
         return Decayed(parameter, argument.Type);

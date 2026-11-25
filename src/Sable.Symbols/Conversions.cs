@@ -286,6 +286,12 @@ internal sealed class Conversions(CoreTypes core) {
                 && AssociatedTypes.ConstraintsOf(source, context).Any(c => Satisfies(c, constraint, context));
         }
 
+        // CSignature is met by a function type C can have, by what it takes
+        // and gives (Compilation.Interop.cs).
+        if (source is FunctionTypeSymbol && Compilation.IsCSignatureProtocol(constraint)) {
+            return Compilation.WhyNotCSignature(source) is null;
+        }
+
         // A type parameter satisfies only what it was constrained to: an
         // unconstrained one conforms to nothing.
         if (source is TypeParameterSymbol or DependentMemberTypeSymbol) {

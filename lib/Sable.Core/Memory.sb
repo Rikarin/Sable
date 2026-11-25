@@ -35,4 +35,25 @@ public struct Memory {
         target = none
         return old
     }
+
+    /// Where the place is, for as long as 'body' runs, to be read and
+    /// written there: C's '&x', for the C function that puts a result where
+    /// it is told to.
+    ///
+    /// ```sable
+    /// var n = 1
+    /// Memory.withPointer(to: &n) { place in
+    ///     unsafe { place.store(place.load() + 41) }
+    /// }
+    /// assert(n == 42)
+    /// ```
+    public static fn withPointer<T, R, E: Error>(to place: inout T, _ body: (RawPtr<T>) throws(E) -> R) throws(E) -> R {
+        unsafe {
+            let at = RawPtr<T>(address: RawMemory.addressOf(&place))
+            defer {
+                RawMemory.addressEnd(&place)
+            }
+            return try body(at)
+        }
+    }
 }

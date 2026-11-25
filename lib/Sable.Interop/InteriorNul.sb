@@ -1,0 +1,12 @@
+module Sable.Interop
+
+/// Text meant for C with a NUL in it, which C would take to be its end.
+@derive(Equatable, Debug)
+public struct InteriorNul: Error {
+    /// Which byte it is.
+    public let position: Int
+
+    public fn description() -> String {
+        return "a C string cannot have a NUL in it, and byte \(position) is one"
+    }
+}

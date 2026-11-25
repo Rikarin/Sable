@@ -224,6 +224,25 @@ public final class FileHandle: Reader, Writer, Seekable {
         return FileMetadata(parts: parts)
     }
 
+    /// The system's handle — a descriptor on POSIX, a HANDLE on Windows —
+    /// given away, and this closed as if by `close()`: whoever takes it closes
+    /// it. Sable.Interop's `takeDescriptor()` gives it to an owner.
+    public fn releaseHandle() throws(IoError) -> Int {
+        let given = try live()
+        if !owned {
+            throw IoError.InvalidInput(path: path)
+        }
+        handle = -1
+        return given
+    }
+
+    /// The file of a system's handle, closed with it. The caller vouches that
+    /// the handle is an open file's, and no one else's to close; the path is
+    /// what errors say.
+    public unsafe static fn owning(handle: Int, path: String) -> FileHandle {
+        return FileHandle(handle: handle, path: path, owned: true)
+    }
+
     /// Closed now: reading or writing it after throws `.InvalidInput`.
     /// Closing it again does nothing.
     public fn close() {

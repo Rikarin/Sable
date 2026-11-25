@@ -1,0 +1,101 @@
+module Sable.Interop
+
+// C's own types, by the names C has for them: each the Sable type of the same
+// width and sign on the platform the program is built for. The types of
+// stdint.h need no names here: an 'int32_t' is an I32 everywhere.
+
+/// C's `char`, which is signed but on Linux's arm64.
+#if os(linux)
+#if arch(arm64)
+public alias CChar = U8
+#else
+public alias CChar = I8
+#endif
+#else
+public alias CChar = I8
+#endif
+
+/// C's `signed char`.
+public alias CSignedChar = I8
+
+/// C's `unsigned char`.
+public alias CUnsignedChar = U8
+
+/// C's `short`.
+public alias CShort = I16
+
+/// C's `unsigned short`.
+public alias CUnsignedShort = U16
+
+/// C's `int`.
+public alias CInt = I32
+
+/// C's `unsigned int`.
+public alias CUnsignedInt = U32
+
+/// C's `long`: 64 bits, but 32 on Windows and WebAssembly. Code for every
+/// platform says `CLong(n)` and `Int(value)` to change one for an Int.
+///
+/// ```sable
+/// let length: CLong = 70_000
+/// assert(Int(length) == 70_000)
+/// ```
+#if os(windows)
+public alias CLong = I32
+#elseif arch(wasm32)
+public alias CLong = I32
+#else
+public alias CLong = Int
+#endif
+
+/// C's `unsigned long`: as wide as `CLong`.
+#if os(windows)
+public alias CUnsignedLong = U32
+#elseif arch(wasm32)
+public alias CUnsignedLong = U32
+#else
+public alias CUnsignedLong = UInt
+#endif
+
+/// C's `long long`.
+public alias CLongLong = I64
+
+/// C's `unsigned long long`.
+public alias CUnsignedLongLong = U64
+
+/// C's `float`.
+public alias CFloat = F32
+
+/// C's `double`.
+public alias CDouble = F64
+
+/// C's `_Bool`.
+public alias CBool = Bool
+
+/// C's `size_t`: an address's width.
+#if arch(wasm32)
+public alias CSize = U32
+#else
+public alias CSize = UInt
+#endif
+
+/// POSIX's `ssize_t`, and C's `ptrdiff_t`: an address's width, signed.
+#if arch(wasm32)
+public alias CSignedSize = I32
+#else
+public alias CSignedSize = Int
+#endif
+
+/// C's `wchar_t`: UTF-16's unit on Windows, a Unicode scalar's 32 bits
+/// elsewhere, which Linux's arm64 has unsigned.
+#if os(windows)
+public alias CWChar = U16
+#elseif os(linux)
+#if arch(arm64)
+public alias CWChar = U32
+#else
+public alias CWChar = I32
+#endif
+#else
+public alias CWChar = I32
+#endif

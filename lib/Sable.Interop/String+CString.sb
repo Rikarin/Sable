@@ -1,0 +1,136 @@
+module Sable.Interop
+
+extension String {
+    /// The text as a C string, its UTF-8 and a NUL, for as long as 'body'
+    /// runs. Text with a NUL in it, which C would take to end there, traps;
+    /// `CString` asks first.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     // '@extern("c", "atoi") unsafe fn parseInteger(_ text: CStr) -> CInt'
+    ///     let parseInteger: (CStr) -> CInt = try! DynamicLibrary.program.function("atoi")
+    ///     assert("42".withCString { parseInteger($0) } == 42)
+    /// }
+    /// ```
+    public fn withCString<R, E: Error>(_ body: (CStr) throws(E) -> R) throws(E) -> R {
+        let count = utf8Count
+        // Text as short as names and options are is lent on the stack.
+        if count < 128 {
+            var room = ShortText()
+            return try Memory.withPointer(to: &room) { (place: RawPtr<ShortText>) throws(E) -> R in
+                unsafe {
+                    return try body(written(self, at: place.cast(to: U8.self), count))
+                }
+            }
+        }
+        unsafe {
+            let place = RawPtr<U8>.allocate(count: count + 1)
+            defer {
+                place.deallocate()
+            }
+            return try body(written(self, at: place, count))
+        }
+    }
+
+    /// The text as a wide C string, of `wchar_t`s and one of 0, for as long
+    /// as 'body' runs: UTF-16 on Windows, whose functions take it, and the
+    /// scalars elsewhere.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     let wideLength: (RawPtr<CWChar>) -> CSize = try! DynamicLibrary.program.function("wcslen")
+    ///     assert("añb".withWideCString { wideLength($0) } == 3)
+    /// }
+    /// ```
+    public fn withWideCString<R, E: Error>(_ body: (RawPtr<CWChar>) throws(E) -> R) throws(E) -> R {
+        precondition(!contains('\u{0}'), "a C string cannot have a NUL in it")
+        var units: CWChar[>..] = []
+        for char in self {
+            let scalar = char.codePoint
+            #if os(windows)
+            if scalar >= 0x10000 {
+                units.append(U16(0xD800 + ((scalar - 0x10000) >> 10)))
+                units.append(U16(0xDC00 + ((scalar - 0x10000) & 0x3FF)))
+            } else {
+                units.append(U16(scalar))
+            }
+            #else
+            units.append(CWChar(scalar))
+            #endif
+        }
+        units.append(0)
+        return try units.withPointer(body)
+    }
+}
+
+extension String[:] {
+    /// The texts as C's `char **` — a pointer to each, and a null one after
+    /// the last — for as long as 'body' runs: `argv`, as `execv` takes it.
+    ///
+    /// ```sable
+    /// ["ls", "-l"].withCStrings { arguments in
+    ///     unsafe {
+    ///         assert(CStr.viewing(arguments.load(at: 1)).string == "-l")
+    ///         assert(arguments.load(at: 2).isNull)
+    ///     }
+    /// }
+    /// ```
+    public fn withCStrings<R, E: Error>(_ body: (RawPtr<RawPtr<CChar>>) throws(E) -> R) throws(E) -> R {
+        var pointers: RawPtr<CChar>[>..] = []
+        defer {
+            for pointer in pointers {
+                unsafe {
+                    pointer.deallocate()
+                }
+            }
+        }
+        for text in self {
+            let bytes = text.utf8Bytes()
+            precondition(!bytes.contains(0), "a C string cannot have a NUL in it")
+            unsafe {
+                pointers.append(nulTerminated(bytes))
+            }
+        }
+        pointers.append(RawPtr<CChar>.null)
+        return try pointers.withPointer(body)
+    }
+}
+
+// Room on the stack for 127 bytes and a NUL.
+struct ShortText {
+    var a: (U64, U64, U64, U64) = (0, 0, 0, 0)
+    var b: (U64, U64, U64, U64) = (0, 0, 0, 0)
+    var c: (U64, U64, U64, U64) = (0, 0, 0, 0)
+    var d: (U64, U64, U64, U64) = (0, 0, 0, 0)
+}
+
+// The text's bytes and a NUL written there, as a C string.
+unsafe fn written(_ text: String, at place: RawPtr<U8>, _ count: Int) -> CStr {
+    text.copyUtf8(to: place)
+    place.initialize(to: 0, at: count)
+    let made = CStr.viewing(place.cast(to: CChar.self))
+    precondition(made.count == count, "a C string cannot have a NUL in it")
+    return made
+}
+
+// The bytes and a NUL, in memory to be deallocated.
+unsafe fn nulTerminated(_ bytes: U8[:]) -> RawPtr<CChar> {
+    let made = RawPtr<U8>.allocate(count: bytes.count + 1)
+    bytes.withPointer { from in
+        unsafe {
+            NativeMemory.copy(from: from, to: made, byteCount: bytes.count)
+        }
+    }
+    made.initialize(to: 0, at: bytes.count)
+    return made.cast(to: CChar.self)
+}
+
+fn withNulTerminated<R, E: Error>(_ bytes: U8[:], _ body: (CStr) throws(E) -> R) throws(E) -> R {
+    unsafe {
+        let text = nulTerminated(bytes)
+        defer {
+            text.deallocate()
+        }
+        return try body(CStr.viewing(text))
+    }
+}

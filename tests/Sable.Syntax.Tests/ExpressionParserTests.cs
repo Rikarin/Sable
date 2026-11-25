@@ -286,6 +286,26 @@ public sealed class ExpressionParserTests {
     public void ArrayKindsInsideTypeArgumentsStayGeneric(string source) =>
         Assert.StartsWith("(Invocation (GenericName Map (TypeArgumentList <", Parse(source), StringComparison.Ordinal);
 
+    [Theory]
+    [InlineData("Box<(Int) -> Bool>.empty")]
+    [InlineData("Box<(Int, Pair<Int, String>) -> (Int) -> Bool>(f)")]
+    [InlineData("Box<() -> ()>(f)")]
+    public void AFunctionTypeIsATypeArgument(string source) =>
+        Assert.Contains("(GenericName Box (TypeArgumentList < (FunctionType", Parse(source), StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData("f { (p: RawPtr<U64[16]>) in p }")]
+    [InlineData("f { (p: U8[..4], q: Buf<Int, 4>) -> U8[2] in p }")]
+    public void AClosuresParameterMayBeOfALength(string source) =>
+        Assert.Contains("(ClosureHeader", Parse(source), StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData("a < (b)")]
+    [InlineData("f(a < (b), c > (d))")]
+    [InlineData("a < (b + 1) && c > d")]
+    public void AParenthesisAfterLessThanIsAnOperand(string source) =>
+        Assert.DoesNotContain("TypeArgumentList", Parse(source), StringComparison.Ordinal);
+
     [Fact]
     public void LessThanIsComparisonWhenItIsNotATypeArgumentList() =>
         Assert.Equal(

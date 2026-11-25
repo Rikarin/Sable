@@ -1,0 +1,147 @@
+module Sable.IO
+
+import Sable.Text
+
+// The system's own text (Rust's OsString): what a path, an argument or an
+// environment variable is, kept as the system has it whether or not it is
+// text. On POSIX it is any bytes but NUL. On Windows it is UTF-16 that need
+// not be well formed, kept as WTF-8: UTF-8, and a surrogate without its other
+// half as the three bytes UTF-8 would have for it. The runtime passes the
+// bytes to the system, and what the system gives comes back, unchanged.
+
+/// Text as the operating system has it, UTF-8 where it is text: an argument
+/// or an environment variable's value, or a path (a `FilePath` is one, read
+/// by a style's rules). Nothing is lost between the system and a program that
+/// keeps what it is given as one of these.
+///
+/// ```sable
+/// let name = OsString("naïve.txt")
+/// assert(name.string == "naïve.txt")
+/// assert(FilePath(name).pathExtension == "txt")
+/// let odd = OsString(bytes: [0x66, 0xFF])
+/// assert(odd.string == none)
+/// assert("\(odd)" == "f\u{FFFD}")
+/// ```
+public struct OsString: Sendable {
+    /// Its bytes: the system's own, or on Windows its UTF-16 as WTF-8.
+    public let bytes: U8[>..]
+
+    /// The text's.
+    public init(_ text: String) {
+        bytes = text.utf8Bytes()
+    }
+
+    /// The bytes', UTF-8 or not.
+    public init(bytes: U8[:]) {
+        self.bytes = bytes.toArray()
+    }
+
+    /// Windows' wide text, well-formed UTF-16 or not: as it came, given back
+    /// by `wide`.
+    ///
+    /// ```sable
+    /// let half = OsString(wide: [0x61, 0xD800])
+    /// assert(half.string == none)
+    /// assert(half.wide == [0x61, 0xD800])
+    /// ```
+    public init(wide units: U16[:]) {
+        var made: U8[>..] = []
+        var i = 0
+        while i < units.count {
+            var scalar = units[i] as U32
+            i += 1
+            if scalar >= 0xD800 && scalar < 0xDC00 && i < units.count && units[i] >= 0xDC00 && units[i] < 0xE000 {
+                scalar = 0x10000 + ((scalar - 0xD800) << 10) + (units[i] as U32 - 0xDC00)
+                i += 1
+            }
+            if scalar < 0x80 {
+                made.append(scalar as U8)
+                continue
+            }
+            if scalar < 0x800 {
+                made.append((0xC0 | (scalar >> 6)) as U8)
+            } else {
+                if scalar < 0x10000 {
+                    made.append((0xE0 | (scalar >> 12)) as U8)
+                } else {
+                    made.append((0xF0 | (scalar >> 18)) as U8)
+                    made.append((0x80 | ((scalar >> 12) & 0x3F)) as U8)
+                }
+                made.append((0x80 | ((scalar >> 6) & 0x3F)) as U8)
+            }
+            made.append((0x80 | (scalar & 0x3F)) as U8)
+        }
+        bytes = made
+    }
+
+    /// The text, when it is UTF-8. With what is not replaced, it is written
+    /// out: `"\(name)"`.
+    public var string: String? => try? String.fromUtf8(bytes)
+
+    /// Whether there is nothing in it.
+    public var isEmpty: Bool => bytes.isEmpty
+
+    /// It, looked at where it is.
+    public var view: OsStr => OsStr(bytes: bytes)
+
+    /// Windows' wide text for it, with no 0 at the end: a surrogate it was
+    /// made of alone as it was, and a byte that is no part of UTF-8 as
+    /// U+FFFD.
+    public var wide: U16[>..] => view.wide
+
+    // The bytes as the String the runtime's calls take, UTF-8 or not.
+    var systemString: String {
+        get {
+            unsafe {
+                return String.fromUtf8Unchecked(bytes)
+            }
+        }
+    }
+}
+
+extension OsString: Hashable {
+    /// The same bytes.
+    public operator == (lhs: OsString, rhs: OsString) -> Bool {
+        return lhs.bytes == rhs.bytes
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(bytes)
+    }
+}
+
+extension OsString: Comparable {
+    /// By their bytes.
+    public operator < (lhs: OsString, rhs: OsString) -> Bool {
+        return compareBytes(lhs.bytes, rhs.bytes) < 0
+    }
+}
+
+extension OsString: Formattable {
+    /// As text, each ill-formed sequence made U+FFFD.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(String.fromUtf8Lossy(bytes))
+    }
+}
+
+extension OsString: Debug {
+    /// The text in quotes.
+    public fn debugDescription() -> String {
+        return String.fromUtf8Lossy(bytes).debugDescription()
+    }
+}
+
+extension OsString: PathLike {
+    /// The path it is, by the system's rules.
+    public var filePath: FilePath => FilePath(self)
+}
+
+extension FilePath {
+    /// The path the system's text is, read by the style's rules.
+    public init(_ text: OsString, style: PathStyle = .native) {
+        self.init(bytes: text.bytes, style: style)
+    }
+
+    /// The path as the system's text: the same bytes.
+    public var osString: OsString => OsString(bytes: bytes)
+}

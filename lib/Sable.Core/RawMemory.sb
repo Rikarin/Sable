@@ -45,4 +45,27 @@ struct RawMemory {
     /// The value moved to the address, aligned or not, which holds none.
     @intrinsic
     unsafe static fn initializeUnaligned<T>(_ address: Int, _ value: T)
+
+    /// Where the place is, until 'addressEnd' of it; nothing else uses the
+    /// place meanwhile.
+    @intrinsic
+    unsafe static fn addressOf<T>(_ place: inout T) -> Int
+
+    /// The end of what is done at a place's address, or an array's elements':
+    /// it may hold anything of its type by now.
+    @intrinsic
+    unsafe static fn addressEnd<T>(_ place: inout T)
+
+    /// Where the array's elements are, to write, until 'addressEnd'; 0 for
+    /// none. The array is made the only reference to them.
+    @intrinsic
+    unsafe static fn arrayAddress<T>(_ array: inout T[:]) -> Int
+
+    /// Where the elements are, to read, until 'sliceEnd'; 0 for none.
+    @intrinsic
+    unsafe static fn sliceAddress<T>(_ slice: T[:]) -> Int
+
+    /// The end of what is done at the elements: they are there till then.
+    @intrinsic
+    unsafe static fn sliceEnd<T>(_ slice: T[:])
 }

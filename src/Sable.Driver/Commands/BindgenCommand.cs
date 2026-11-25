@@ -12,8 +12,9 @@ public sealed class BindgenCommand : Command {
           --module <name>    the module they are in (default: from the header's name: my_lib.h is MyLib)
           what follows '--' is passed to clang as it reads the header: -I <dir>, -D <name>=<value>
 
-        Functions that take or return pointers, arrays or unions, and variadic ones, are listed
-        in a comment and left out until Sable.Interop has pointers and C strings.
+        C's types are Sable.Interop's: CInt, CLong, RawPtr, CFunction. A function that takes a
+        pointer is 'unsafe'. What takes or returns a union, or a struct with an array or a
+        bit-field in it, is listed in a comment and left out.
         """;
 
     public override int Run(IReadOnlyList<string> arguments) {

@@ -20,11 +20,12 @@ import Sable.IO
 public struct Command {
     /// The program's name, or its path.
     public let program: String
-    /// The arguments it is given, after its own name.
-    public var argumentList: String[>..]
+    // The arguments it is given, after its own name, and as the runtime's
+    // calls take them: each its bytes, text or not.
+    var given: OsString[>..]
     // What is set, and what removed, over this program's variables — or
     // over none, 'cleared'.
-    var variables: Dictionary<String, String>
+    var variables: Dictionary<String, OsString>
     var removed: String[>..]
     var cleared: Bool
     var directory: String
@@ -34,30 +35,52 @@ public struct Command {
     /// directory, its variables, its streams.
     public init(_ program: String) {
         self.program = program
-        argumentList = []
-        variables = Dictionary<String, String>()
+        given = []
+        variables = Dictionary<String, OsString>()
         removed = []
         cleared = false
         directory = ""
         streams = [none, none, none]
     }
 
+    /// The arguments it is given, after its own name, as text: what in one
+    /// is not made U+FFFD.
+    public var argumentList: String[>..] => given.map { "\($0)" }
+
     /// Given one argument more.
     public fn argument(_ argument: String) -> Command {
+        return self.argument(OsString(argument))
+    }
+
+    /// Given one argument more, text or not: a file's name, say, as the
+    /// system has it.
+    ///
+    /// ```sable
+    /// let command = Command("cat").argument(FilePath("notes.txt").osString)
+    /// assert(command.argumentList == ["notes.txt"])
+    /// ```
+    public fn argument(_ argument: OsString) -> Command {
         var command = self
-        command.argumentList.append(argument)
+        command.given.append(argument)
         return command
     }
 
     /// Given the arguments, after those it has.
     public fn arguments(_ arguments: String[>..]) -> Command {
         var command = self
-        command.argumentList.append(contentsOf: arguments)
+        for argument in arguments {
+            command.given.append(OsString(argument))
+        }
         return command
     }
 
     /// Given the environment variable.
     public fn environment(_ name: String, _ value: String) -> Command {
+        return environment(name, OsString(value))
+    }
+
+    /// Given the environment variable, its value text or not.
+    public fn environment(_ name: String, _ value: OsString) -> Command {
         var command = self
         command.variables[name] = value
         return command
@@ -75,7 +98,7 @@ public struct Command {
     /// Windows program needs SystemRoot.)
     public fn clearEnvironment() -> Command {
         var command = self
-        command.variables = Dictionary<String, String>()
+        command.variables = Dictionary<String, OsString>()
         command.cleared = true
         return command
     }
@@ -128,7 +151,7 @@ public struct Command {
     /// ```
     public fn spawn() throws(ProcessError) -> Child {
         try ProcessError.check(program)
-        for argument in argumentList {
+        for argument in given {
             try ProcessError.check(argument)
         }
         try ProcessError.check(directory)
@@ -147,7 +170,7 @@ public struct Command {
             flags = flags | 64
             entries = try environmentEntries()
         }
-        let handle = Runtime.spawn(program, argumentList, entries, flags, directory, files)
+        let handle = Runtime.spawn(program, given.map { Command.system($0) }, entries, flags, directory, files)
         if handle == 0 {
             throw ProcessError.last(program: program, directory: directory, files: files)
         }
@@ -244,10 +267,16 @@ public struct Command {
     fn environmentEntries() throws(ProcessError) -> String[>..] {
         var entries: String[>..] = []
         if !cleared {
-            for entry in Runtime.environmentEntries() {
-                if !isReplaced(Command.name(of: entry)) {
-                    entries.append(entry)
+            // As the system has them: "NAME=value" and a NUL each.
+            let bytes = Runtime.environmentBytes()
+            var start = 0
+            while let end = bytes[start...].firstIndex(of: 0) {
+                let entry = bytes[start..<(start + end)]
+                let name = entry.firstIndex(of: 0x3D) ?? entry.count
+                if !isReplaced(String.fromUtf8Lossy(entry[..<name])) {
+                    entries.append(Command.system(OsString(bytes: entry)))
                 }
+                start += end + 1
             }
         }
         for (name, value) in variables {
@@ -256,7 +285,7 @@ public struct Command {
             }
             try ProcessError.check(name)
             try ProcessError.check(value)
-            entries.append("\(name)=\(value)")
+            entries.append("\(name)=\(Command.system(value))")
         }
         return entries
     }
@@ -284,10 +313,11 @@ public struct Command {
         #endif
     }
 
-    static fn name(of entry: String) -> String {
-        if let equals = entry.firstIndex(of: '=') {
-            return entry[..<equals].toString()
+    // The bytes as the String the runtime's calls take, text or not: it
+    // hands them to the system as they are.
+    static fn system(_ text: OsString) -> String {
+        unsafe {
+            return String.fromUtf8Unchecked(text.bytes)
         }
-        return entry
     }
 }

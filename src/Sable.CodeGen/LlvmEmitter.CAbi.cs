@@ -43,6 +43,11 @@ namespace Sable.CodeGen;
 ///         struct whose eightbytes no longer all fit in the registers left
 ///         goes whole on the stack too, as C passes it (<see cref="CArguments" />).
 ///     </para>
+///     <para>
+///         A pointer — <c>RawPtr</c>, or a struct of one — is passed as a
+///         <c>ptr</c>: on every 64-bit target what its one 64-bit field is, on
+///         WebAssembly C's 32 bits, its address's lower half.
+///     </para>
 /// </remarks>
 public sealed partial class LlvmEmitter {
     enum CPassing {
@@ -128,6 +133,10 @@ public sealed partial class LlvmEmitter {
             return new(CPassing.Direct, Type(type), Extension(type));
         }
 
+        if (IsPointer(structure)) {
+            return Pointer;
+        }
+
         var size = Size(structure);
         if (IsWin64) {
             return size is 1 or 2 or 4 or 8 ? new(CPassing.Direct, $"i{size * 8}", "") : new(CPassing.Indirect, "ptr", "noundef");
@@ -162,6 +171,10 @@ public sealed partial class LlvmEmitter {
             return new(CPassing.Direct, Type(type), Extension(type));
         }
 
+        if (IsPointer(structure)) {
+            return Pointer;
+        }
+
         var size = Size(structure);
         if (IsWin64) {
             return size is 1 or 2 or 4 or 8 ? new(CPassing.Direct, $"i{size * 8}", "") : null;
@@ -182,6 +195,18 @@ public sealed partial class LlvmEmitter {
 
         return new(CPassing.Direct, EightBytes(structure), "");
     }
+
+    static readonly CType Pointer = new(CPassing.Direct, "ptr", "");
+
+    /// <summary>A C pointer: a <c>RawPtr</c>, or a struct of one field that is one.</summary>
+    static bool IsPointer(StructType structure) =>
+        SilGen.IsRawPointer(structure) || structure is { IsInline: false, Fields: [(_, StructType inner)] } && IsPointer(inner);
+
+    /// <summary>The functions whose C entry is taken the address of.</summary>
+    readonly SortedSet<string> _cEntries = new(StringComparer.Ordinal);
+
+    /// <summary>The LLVM symbol of a function's C entry: the module's own.</summary>
+    static string CEntry(string name) => Global("c_entry." + name);
 
     /// <summary>The widening C expects of a narrow integer: by its sign; a Bool's by zeros.</summary>
     static string Extension(SilType type) =>
@@ -280,11 +305,15 @@ public sealed partial class LlvmEmitter {
         foreach (var (name, (symbol, type)) in module.Foreign) {
             var result = CResult(type.Result);
 
+            // One called through its address, the thunk's first parameter.
+            var indirect = symbol == SilGen.IndirectSymbol;
+            var codeParameters = indirect ? 1 : 0;
+
             // A variadic function is C's with its fixed parameters and '...',
             // whatever this call passes after them.
-            var fixedCount = module.ForeignVariadic.TryGetValue(name, out var count) ? count : type.Parameters.Length;
-            var variadic = fixedCount < type.Parameters.Length || module.ForeignVariadic.ContainsKey(name);
-            var arguments = CArguments([..type.Parameters.Take(fixedCount)], indirectResult: result is null);
+            var fixedCount = module.ForeignVariadic.TryGetValue(name, out var count) ? count : type.Parameters.Length - codeParameters;
+            var variadic = !indirect && fixedCount < type.Parameters.Length || module.ForeignVariadic.ContainsKey(name);
+            var arguments = CArguments([..type.Parameters.Skip(codeParameters).Take(fixedCount)], indirectResult: result is null);
             var cParameters = new List<string>();
             if (result is null) {
                 cParameters.Add($"ptr sret({Type(type.Result)}) align {MemoryAlign(type.Result)}");
@@ -299,13 +328,16 @@ public sealed partial class LlvmEmitter {
 
             // The runtime's own functions are declared already, one the module
             // exports is defined here, and a C symbol is declared once.
-            if (!Declarations.Contains($"@{symbol}(", StringComparison.Ordinal) && !MathDeclarations.Contains($"@{symbol}(", StringComparison.Ordinal) && !module.Exports.ContainsValue(symbol) && declared.Add(symbol)) {
+            if (!indirect && !Declarations.Contains($"@{symbol}(", StringComparison.Ordinal) && !MathDeclarations.Contains($"@{symbol}(", StringComparison.Ordinal) && !module.Exports.ContainsValue(symbol) && declared.Add(symbol)) {
                 text.Append($"declare {cResult} @\"{symbol}\"({string.Join(", ", cParameters)})\n");
             }
 
             text.Append($"define internal {Type(type.Result)} @{Global(name)}(")
-                .Append(string.Join(", ", type.Parameters.Select(static (p, i) => $"{Type(p)} %a{i}")))
+                .Append(string.Join(", ", type.Parameters.Select((p, i) => $"{Type(p)} {(i < codeParameters ? "%code" : $"%a{i - codeParameters}")}")))
                 .Append(") alwaysinline {\nentry:\n");
+            if (indirect) {
+                text.Append("  %target = inttoptr i64 %code to ptr\n");
+            }
 
             var passed = new List<string>();
             if (result is null) {
@@ -315,7 +347,7 @@ public sealed partial class LlvmEmitter {
 
             for (var i = 0; i < arguments.Count; i++) {
                 var argument = arguments[i];
-                var parameter = type.Parameters[i];
+                var parameter = type.Parameters[i + codeParameters];
                 switch (argument.Passing) {
                     case CPassing.Direct when parameter is StructType:
                         text.Append(Spill($"%s{i}", parameter, $"%a{i}"));
@@ -334,14 +366,14 @@ public sealed partial class LlvmEmitter {
 
             // After the fixed arguments, C's default promotions: an integer
             // narrower than an int, and Bool, as an int; a float as a double.
-            for (var i = fixedCount; i < type.Parameters.Length; i++) {
+            for (var i = fixedCount; i < type.Parameters.Length - codeParameters; i++) {
                 passed.Add(Promoted(text, type.Parameters[i], $"%a{i}", $"%v{i}"));
             }
 
             // A variadic callee is called by its type, '...' and all.
             var callee = variadic
                 ? $"{result?.Coerced ?? "void"} ({string.Join(", ", (result is null ? new[] { "ptr" } : []).Concat(arguments.Select(static a => a.Coerced)).Append("..."))}) @\"{symbol}\""
-                : $"{cResult} @\"{symbol}\"";
+                : indirect ? $"{cResult} %target" : $"{cResult} @\"{symbol}\"";
             var call = $"call {callee}({string.Join(", ", passed)})";
             if (result is null) {
                 text.Append($"  {call}\n  %r = load {Type(type.Result)}, ptr %out\n  ret {Type(type.Result)} %r\n}}\n\n");
@@ -386,6 +418,12 @@ public sealed partial class LlvmEmitter {
             return $"double {promoted}";
         }
 
+        if (type is StructType structure && IsPointer(structure)) {
+            text.Append(Spill(promoted + ".s", type, value));
+            text.Append($"  {promoted} = load ptr, ptr {promoted}.s\n");
+            return $"ptr {promoted}";
+        }
+
         return $"{Type(type)} {value}";
     }
 
@@ -396,57 +434,64 @@ public sealed partial class LlvmEmitter {
     string ExportedFunctions(SilModule module) {
         var text = new StringBuilder();
         foreach (var (name, symbol) in module.Exports) {
-            if (module.Find(name) is not { } function || !(_reachable?.Contains(name) ?? true)) {
-                continue;
+            if (module.Find(name) is { } function && (_reachable?.Contains(name) ?? true)) {
+                // A Windows DLL exports only what is marked so.
+                ExportedFunction(text, name, function.Type, (_windows && module.IsLibrary ? "dllexport " : ""), $"\"{symbol}\"");
             }
+        }
 
-            var type = function.Type;
-            var result = CResult(type.Result);
-            var arguments = CArguments(type.Parameters, indirectResult: result is null);
-            var cParameters = new List<string>();
-            if (result is null) {
-                cParameters.Add($"ptr sret({Type(type.Result)}) align {MemoryAlign(type.Result)} %out");
-            }
-
-            cParameters.AddRange(arguments.Select(static (a, i) => $"{a.Coerced}{(a.Attributes.Length > 0 ? " " + a.Attributes : "")} %c{i}"));
-            var cResult = result is null ? "void" : $"{(result.Attributes.Length > 0 ? result.Attributes + " " : "")}{result.Coerced}";
-            // A Windows DLL exports only what is marked so.
-            var export = _windows && module.IsLibrary ? "dllexport " : "";
-            text.Append($"define {export}{cResult} @\"{symbol}\"({string.Join(", ", cParameters)}) {{\nentry:\n");
-
-            var passed = new List<string>();
-            for (var i = 0; i < arguments.Count; i++) {
-                var parameter = type.Parameters[i];
-                switch (arguments[i].Passing) {
-                    case CPassing.Direct when parameter is StructType:
-                        text.Append(Spill($"%s{i}", parameter, $"%c{i}", arguments[i].Coerced));
-                        text.Append($"  %a{i} = load {Type(parameter)}, ptr %s{i}\n");
-                        break;
-                    case CPassing.Direct:
-                        passed.Add($"{Type(parameter)} %c{i}");
-                        continue;
-                    default:
-                        text.Append($"  %a{i} = load {Type(parameter)}, ptr %c{i}\n");
-                        break;
-                }
-
-                passed.Add($"{Type(parameter)} %a{i}");
-            }
-
-            var call = $"call {Type(type.Result)} @{Global(name)}({string.Join(", ", passed)})";
-            if (type.Result == SilType.Unit) {
-                text.Append($"  {call}\n  ret void\n}}\n\n");
-            } else if (result is null) {
-                text.Append($"  %r = {call}\n  store {Type(type.Result)} %r, ptr %out\n  ret void\n}}\n\n");
-            } else if (type.Result is StructType) {
-                text.Append($"  %r = {call}\n").Append(Spill("%r.s", type.Result, "%r"))
-                    .Append($"  %c = load {result.Coerced}, ptr %r.s\n  ret {result.Coerced} %c\n}}\n\n");
-            } else {
-                text.Append($"  %r = {call}\n  ret {Type(type.Result)} %r\n}}\n\n");
+        // Those given to C by their addresses, which C may call on any thread too.
+        foreach (var name in _cEntries) {
+            if ((module.Find(name)?.Type ?? (module.Unit?.External.TryGetValue(name, out var external) == true ? external : null)) is { } type) {
+                ExportedFunction(text, name, type, "internal ", CEntry(name));
             }
         }
 
         return text.ToString();
+    }
+
+    void ExportedFunction(StringBuilder text, string name, FunctionType type, string linkage, string symbol) {
+        var result = CResult(type.Result);
+        var arguments = CArguments(type.Parameters, indirectResult: result is null);
+        var cParameters = new List<string>();
+        if (result is null) {
+            cParameters.Add($"ptr sret({Type(type.Result)}) align {MemoryAlign(type.Result)} %out");
+        }
+
+        cParameters.AddRange(arguments.Select(static (a, i) => $"{a.Coerced}{(a.Attributes.Length > 0 ? " " + a.Attributes : "")} %c{i}"));
+        var cResult = result is null ? "void" : $"{(result.Attributes.Length > 0 ? result.Attributes + " " : "")}{result.Coerced}";
+        text.Append($"define {linkage}{cResult} @{symbol}({string.Join(", ", cParameters)}) {{\nentry:\n  call void @sable_foreign_enter()\n");
+
+        var passed = new List<string>();
+        for (var i = 0; i < arguments.Count; i++) {
+            var parameter = type.Parameters[i];
+            switch (arguments[i].Passing) {
+                case CPassing.Direct when parameter is StructType:
+                    text.Append(Spill($"%s{i}", parameter, $"%c{i}", arguments[i].Coerced));
+                    text.Append($"  %a{i} = load {Type(parameter)}, ptr %s{i}\n");
+                    break;
+                case CPassing.Direct:
+                    passed.Add($"{Type(parameter)} %c{i}");
+                    continue;
+                default:
+                    text.Append($"  %a{i} = load {Type(parameter)}, ptr %c{i}\n");
+                    break;
+            }
+
+            passed.Add($"{Type(parameter)} %a{i}");
+        }
+
+        var call = $"call {Type(type.Result)} @{Global(name)}({string.Join(", ", passed)})";
+        if (type.Result == SilType.Unit) {
+            text.Append($"  {call}\n  ret void\n}}\n\n");
+        } else if (result is null) {
+            text.Append($"  %r = {call}\n  store {Type(type.Result)} %r, ptr %out\n  ret void\n}}\n\n");
+        } else if (type.Result is StructType) {
+            text.Append($"  %r = {call}\n").Append(Spill("%r.s", type.Result, "%r"))
+                .Append($"  %c = load {result.Coerced}, ptr %r.s\n  ret {result.Coerced} %c\n}}\n\n");
+        } else {
+            text.Append($"  %r = {call}\n  ret {Type(type.Result)} %r\n}}\n\n");
+        }
     }
 
     /// <summary>
@@ -457,6 +502,8 @@ public sealed partial class LlvmEmitter {
     static string Spill(string slot, SilType type, string value, string? storedAs = null) {
         var bytes = Math.Max(Size(type), 16);
         var align = Math.Max(Align(type), 16);
-        return $"  {slot} = alloca [{bytes} x i8], align {align}\n  store {storedAs ?? Type(type)} {value}, ptr {slot}\n";
+        // A pointer may be narrower than the address it becomes.
+        var cleared = storedAs == "ptr" ? $"  store i64 0, ptr {slot}\n" : "";
+        return $"  {slot} = alloca [{bytes} x i8], align {align}\n{cleared}  store {storedAs ?? Type(type)} {value}, ptr {slot}\n";
     }
 }

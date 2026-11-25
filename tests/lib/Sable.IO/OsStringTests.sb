@@ -1,0 +1,126 @@
+module OsStringTests
+
+// OsString and OsStr (Sable.IO), and the paths, arguments and environment
+// variables they are of. Run with
+//     tools/stdlib-coverage.sh Sable.IO
+
+import Sable.IO
+import Sable.Testing
+
+@test
+fn textIsItsUtf8() {
+    let text = OsString("héllo")
+    assertEqual(text.bytes, [0x68, 0xC3, 0xA9, 0x6C, 0x6C, 0x6F])
+    assertEqual(text.string, "héllo")
+    assert(!text.isEmpty)
+    assert(OsString("").isEmpty)
+    assertEqual("\(text)", "héllo")
+    assertEqual(text.debugDescription(), "\"héllo\"")
+}
+
+@test
+fn whatIsNotTextIsKept() {
+    let odd = OsString(bytes: [0x61, 0xFF, 0x62])
+    assertEqual(odd.string, none)
+    assertEqual("\(odd)", "a\u{FFFD}b")
+    assertEqual(odd.bytes, [0x61, 0xFF, 0x62])
+    assertEqual(odd.view.string, none)
+    assertEqual("\(odd.view)", "a\u{FFFD}b")
+    assertEqual(odd.view.debugDescription(), "\"a\u{FFFD}b\"")
+}
+
+@test
+fn equalAndOrderedByBytes() {
+    assertEqual(OsString("a"), OsString(bytes: [0x61]))
+    assert(OsString("a") != OsString("b"))
+    assert(OsString("a") < OsString("ab"))
+    assert(OsString(bytes: [0xFF]) > OsString("z"))
+    assert(OsString("a").view == OsString("a").view)
+    var counts: [OsString: Int] = [:]
+    counts[OsString("x")] = 1
+    counts[OsString(bytes: [0x78])] = 2
+    assertEqual(counts.count, 1)
+    var views: [OsStr: Int] = [:]
+    views[OsString("x").view] = 1
+    assertEqual(views[OsStr(bytes: [0x78])], 1)
+}
+
+@test
+fn wideTextComesBackAsItWas() {
+    for units in [[], [0x41], [0xE9, 0x20AC], [0xD83D, 0xDE00], [0xD800], [0xDC00, 0xD800], [0x61, 0xD83D, 0x62], [0xD83D, 0xD83D, 0xDE00]] as U16[>..][>..] {
+        assertEqual(OsString(wide: units).wide, units)
+    }
+    assertEqual(OsString(wide: [0xD83D, 0xDE00]).string, "😀")
+    assertEqual(OsString("a😀é").wide, [0x61, 0xD83D, 0xDE00, 0xE9])
+}
+
+@test
+fn bytesThatAreNotUtf8AreReplacedInWideText() {
+    for bytes in [[0x80], [0xC0], [0xC1], [0xF5], [0xE2], [0xFF]] as U8[>..][>..] {
+        assertEqual(OsString(bytes: bytes).wide, [0xFFFD])
+    }
+    assertEqual(OsString(bytes: [0xC3, 0x28]).wide, [0xFFFD, 0x28])
+    assertEqual(OsString(bytes: [0xE0, 0x80, 0x80]).wide, [0xFFFD, 0xFFFD, 0xFFFD])
+    assertEqual(OsString(bytes: [0xF4, 0x90, 0x80, 0x80]).wide.count, 4)
+}
+
+@test
+fn aViewIsTakenApart() {
+    let whole = OsString(bytes: [0x2D, 0x2D, 0x6F, 0x3D, 0xFF])
+    let (name, value) = whole.view.split(once: 0x3D)!
+    assertEqual(name.string, "--o")
+    assertEqual(value.toOsString().bytes, [0xFF])
+    assert(whole.view.hasPrefix("--"))
+    assert(!whole.view.hasPrefix("--out"))
+    assert(OsString("x").view.split(once: 0x3D) == none)
+    assert(OsStr(bytes: []).isEmpty)
+}
+
+@test
+fn aPathIsTheSystemsText() {
+    let path = FilePath(OsString(bytes: [0x61, 0x2F, 0xFF, 0x2E, 0x62]), style: .Posix)
+    assertEqual(path.pathExtension, "b")
+    assertEqual(path.osString.bytes, [0x61, 0x2F, 0xFF, 0x2E, 0x62])
+    assertEqual(OsString("a/b").filePath, FilePath("a/b"))
+    assert(!File.exists(OsString("surely-no-such-file")))
+}
+
+@test
+fn anEnvironmentVariableKeepsItsBytes() {
+    #if !os(windows)
+    let name = OsString("SABLE_OS_STRING")
+    let value = OsString(bytes: [0x78, 0xFF, 0x79])
+    unsafe {
+        Environment.set(name, value)
+    }
+    assertEqual(Environment.variable(name), value)
+    assertEqual(Environment.variable("SABLE_OS_STRING"), "x\u{FFFD}y")
+    assertEqual(Environment.osVariables()[name], value)
+    unsafe {
+        Environment.remove("SABLE_OS_STRING")
+    }
+    assertEqual(Environment.variable(name), none)
+    #endif
+}
+
+@test
+fn anEmptyVariableIsThere() {
+    unsafe {
+        Environment.set(OsString("SABLE_OS_EMPTY"), OsString("a=b"))
+    }
+    assertEqual(Environment.variable(OsString("SABLE_OS_EMPTY")), OsString("a=b"))
+    unsafe {
+        Environment.remove("SABLE_OS_EMPTY")
+    }
+}
+
+@test
+fn theArgumentsAreTheSystemsText() {
+    let all = Environment.osArguments()
+    assertEqual(all.count, Environment.arguments().count)
+    var i = 0
+    while i < all.count {
+        assertEqual("\(all[i])", Environment.arguments()[i])
+        i += 1
+    }
+}

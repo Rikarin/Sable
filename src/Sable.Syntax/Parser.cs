@@ -1914,6 +1914,12 @@ internal sealed class Parser {
         // 'String[>..]' — and close nothing.
         var brackets = 0;
 
+        // Parentheses are a function type's, 'Box<(Int) -> Bool>': with no
+        // arrow after one, 'a < (b) > (c)' compares.
+        var parens = 0;
+        var parenthesised = false;
+        var arrow = false;
+
         try {
             while (true) {
                 var kind = LexedTokenAt(_index).Kind;
@@ -1943,7 +1949,7 @@ internal sealed class Parser {
                     case SyntaxKind.GreaterToken:
                         depth--;
                         if (depth == 0) {
-                            return IsAfterTypeArgumentList(Peek(1).Kind);
+                            return parens == 0 && arrow == parenthesised && IsAfterTypeArgumentList(Peek(1).Kind);
                         }
 
                         break;
@@ -1951,9 +1957,25 @@ internal sealed class Parser {
                     case SyntaxKind.GreaterGreaterToken:
                         depth -= 2;
                         if (depth <= 0) {
-                            return IsAfterTypeArgumentList(Peek(1).Kind);
+                            return parens == 0 && arrow == parenthesised && IsAfterTypeArgumentList(Peek(1).Kind);
                         }
 
+                        break;
+
+                    case SyntaxKind.OpenParenToken:
+                        parens++;
+                        parenthesised = true;
+                        break;
+
+                    case SyntaxKind.CloseParenToken:
+                        if (--parens < 0) {
+                            return false;
+                        }
+
+                        break;
+
+                    case SyntaxKind.ArrowToken when Peek(-1).Kind is SyntaxKind.CloseParenToken:
+                        arrow = true;
                         break;
 
                     // 'Buf<Int, 4>': a value given to a value generic parameter.
@@ -2252,6 +2274,8 @@ internal sealed class Parser {
                 case SyntaxKind.CapitalSelfKeyword:
                 case SyntaxKind.ThrowsKeyword:
                 case SyntaxKind.RethrowsKeyword:
+                // An array's length, 'U8[16]', or a value argument, 'Buf<Int, 4>'.
+                case SyntaxKind.IntegerLiteralToken when Peek(offset - 1).Kind is SyntaxKind.OpenBracketToken or SyntaxKind.DotDotToken or SyntaxKind.CommaToken:
                     continue;
 
                 default:

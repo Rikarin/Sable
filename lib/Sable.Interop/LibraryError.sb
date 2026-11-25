@@ -1,0 +1,19 @@
+module Sable.Interop
+
+/// A library, or something in one, that was not there.
+@derive(Equatable, Debug)
+public union LibraryError: Error {
+    /// The library could not be loaded, and why, as the system says.
+    NotLoaded(library: String, reason: String)
+
+    /// The library has no such symbol.
+    NoSymbol(name: String, library: String)
+
+    /// What was not there.
+    public fn description() -> String {
+        return match self {
+            case .NotLoaded(let library, let reason) => "'\(library)' could not be loaded: \(reason)"
+            case .NoSymbol(let name, let library)    => "'\(library)' has no '\(name)'"
+        }
+    }
+}

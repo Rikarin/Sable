@@ -602,6 +602,7 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_env_set(ptr, ptr)
                                 declare zeroext i1 @sable_env_remove(ptr)
                                 declare ptr @sable_env_all()
+                                declare ptr @sable_env_bytes(ptr)
                                 declare ptr @sable_system_text(i64)
                                 declare i64 @sable_system_number(i64)
                                 declare i64 @sable_memory_statistic(i64)
@@ -752,6 +753,8 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_share(ptr) cold
                                 declare void @sable_register_globals(ptr)
                                 declare void @sable_threads_begin()
+                                declare void @sable_foreign_enter()
+                                declare ptr @sable_buffer_elements(ptr)
                                 declare void @sable_object_unmade(ptr)
                                 declare void @sable_task_spawn_cancelled()
                                 declare void @sable_task_timed_begin()
@@ -4509,6 +4512,46 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = ptrtoint ptr {operands[0]} to i64");
                     return;
 
+                // Where a value, an array's elements or a slice's are, for C,
+                // and the end of it: for the passes, not for the machine.
+                case "address_begin":
+                    Line($"{Result()} = ptrtoint ptr {operands[0]} to i64");
+                    return;
+
+                case "address_end" or "slice_end" or "forget":
+                    return;
+
+                case "array_address": {
+                    var addressed = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    Line($"call void @sable_slice_make_unique(ptr {operands[0]}, ptr {ArrayMetadataOf(new ArrayType(addressed.Element))})");
+                    var slice = Fresh();
+                    var elements = Fresh();
+                    var first = Fresh();
+                    Line($"{slice} = load {Type(addressed)}, ptr {operands[0]}");
+                    Line($"{elements} = call ptr @sable_buffer_elements(ptr {SlicePart(slice, addressed, 0)})");
+                    Line($"{first} = {ElementAt(addressed.Element, elements, SlicePart(slice, addressed, 1))}");
+                    Line($"{Result()} = ptrtoint ptr {first} to i64");
+                    return;
+                }
+
+                case "slice_address": {
+                    var addressed = (SliceType)builtin.Operands[0].Type;
+                    var elements = Fresh();
+                    var first = Fresh();
+                    Line($"{elements} = call ptr @sable_buffer_elements(ptr {SlicePart(operands[0], addressed, 0)})");
+                    Line($"{first} = {ElementAt(addressed.Element, elements, SlicePart(operands[0], addressed, 1))}");
+                    Line($"{Result()} = ptrtoint ptr {first} to i64");
+                    return;
+                }
+
+                // A function's C entry: emitted with the exported functions'.
+                case "c_address": {
+                    var entry = ((FunctionRefInst)builtin.Operands[0]).Function;
+                    module._cEntries.Add(entry);
+                    Line($"{Result()} = ptrtoint ptr @{CEntry(entry)} to i64");
+                    return;
+                }
+
                 case "task_actor_current": {
                     var actor = Fresh();
                     Line($"{actor} = call ptr @sable_actor_current()");
@@ -5559,6 +5602,10 @@ public sealed partial class LlvmEmitter {
 
                 case "env_remove":
                     Line($"{Result()} = call zeroext i1 @sable_env_remove(ptr {operands[0]})");
+                    return;
+
+                case "env_bytes":
+                    Line($"{Result()} = call ptr @sable_env_bytes(ptr {module.ArrayMetadata(new ArrayType(SilType.U8))})");
                     return;
 
                 case "env_all":

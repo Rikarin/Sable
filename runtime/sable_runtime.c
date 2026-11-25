@@ -56,6 +56,7 @@
 #include "watch.c"
 #include "process.c"
 #include "locks.c"
+#include "foreign.c"
 
 // ---- Start-up --------------------------------------------------------------
 

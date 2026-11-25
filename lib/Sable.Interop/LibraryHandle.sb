@@ -1,0 +1,31 @@
+module Sable.Interop
+
+// A library loaded, until nothing uses it: the library's own value, and each
+// function and variable of it, hold this.
+@immutable
+final class LibraryHandle: Sendable {
+    let handle: RawPtr<Opaque>
+
+    init(_ handle: RawPtr<Opaque>) {
+        self.handle = handle
+    }
+
+    deinit {
+        unsafe {
+            closeLibrary(handle)
+        }
+    }
+}
+
+// The runtime's (runtime/foreign.c).
+@extern("c", "sable_library_open")
+unsafe fn openLibrary(_ path: RawPtr<CChar>, _ flags: CInt) -> RawPtr<Opaque>
+
+@extern("c", "sable_library_symbol")
+unsafe fn librarySymbol(_ library: RawPtr<Opaque>, _ name: CStr, _ address: RawPtr<RawPtr<Opaque>>) -> Bool
+
+@extern("c", "sable_library_close")
+unsafe fn closeLibrary(_ library: RawPtr<Opaque>)
+
+@extern("c", "sable_library_error")
+fn libraryError() -> CStr

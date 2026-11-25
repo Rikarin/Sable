@@ -1468,6 +1468,13 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 Alive((HeapObject)operands[0]!).Unmade = true;
                 return null;
 
+            // The interpreter's storage has no addresses, nor its functions C entries.
+            case "address_begin" or "array_address" or "slice_address" or "c_address":
+                throw new SilTrap("a C pointer to a value or a function, which the interpreter has none of; build the program to run it");
+
+            case "address_end" or "slice_end" or "forget":
+                return null;
+
             // An actor's identity: the interpreter's hops never wait, so need none.
             case "address_to_int":
                 return 0L;
@@ -2003,7 +2010,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return true;
             }
 
-            case "env_all": {
+            case "env_all" or "env_bytes": {
                 var all = new SortedDictionary<string, string>(StringComparer.Ordinal);
                 if (Sandbox is { } within) {
                     foreach (var name in within.EnvironmentNames) {
@@ -2023,6 +2030,11 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     } else {
                         all[name] = value;
                     }
+                }
+
+                if (builtin.Name == "env_bytes") {
+                    return Allocate(new HeapArray(new ArrayType(SilType.U8),
+                        [..all.SelectMany(static e => Encoding.UTF8.GetBytes(e.Key + "=" + e.Value + "\0")).Select(static b => (object?)(long)b)]));
                 }
 
                 return Allocate(new HeapArray(new ArrayType(SilType.String), [..all.Select(e => (object?)Allocate(new HeapString(e.Key + "=" + e.Value)))]));

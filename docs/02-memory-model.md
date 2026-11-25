@@ -520,6 +520,10 @@ so nothing is stored later):
   which runs on one thread at a time, handed over with a release and an
   acquire; its fields are not looked at. A generator's, a closure's context and
   a captured variable's box are objects like any other.
+- *C*, which may call Sable on a thread of its own: what it is given to call
+  there — a `CCallback`'s captures, and the globals — is shared as it is given
+  (docs/06, "Calling C"). A closure lent to it for a call is called on the
+  lender's thread alone, which is checked.
 - *An object just made* that nothing else has seen (`InitFields`) is not
   shared, whatever is stored in it.
 

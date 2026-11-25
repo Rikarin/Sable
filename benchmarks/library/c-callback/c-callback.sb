@@ -1,0 +1,47 @@
+module CCallbackBench
+
+// C calling Sable: qsort with a comparison that captures nothing (cFunction),
+// and bsearch's shape, a function given a context, called a million times
+// through its pointer with a closure's (withCallback).
+
+import Sable.Interop
+
+@extern("c", "qsort")
+unsafe fn cSort(_ base: RawPtr<CInt>, _ count: CSize, _ size: CSize, _ compare: CFunction<(RawPtr<CInt>, RawPtr<CInt>) -> CInt>)
+
+fn byValue(_ a: RawPtr<CInt>, _ b: RawPtr<CInt>) -> CInt {
+    unsafe {
+        let (x, y) = (a.load(), b.load())
+        return x < y ? -1 as CInt : x > y ? 1 as CInt : 0 as CInt
+    }
+}
+
+fn main() {
+    var numbers: CInt[>..] = []
+    var seed: U32 = 12345
+    var i = 0
+    while i < 300_000 {
+        seed = seed &* 1664525 &+ 1013904223
+        numbers.append((seed >> 1) as CInt)
+        i += 1
+    }
+    numbers.withMutablePointer { start in
+        unsafe {
+            cSort(start, 300_000, 4, cFunction(byValue))
+        }
+    }
+    var total = 0
+    withCallback({ (n: CInt, context: RawPtr<Opaque>) -> CInt in
+        total += Int(n)
+        return n + 1
+    }) { (function: CFunction<(CInt, RawPtr<Opaque>) -> CInt>, context: RawPtr<Opaque>) in
+        unsafe {
+            let call = function.function()
+            var k: CInt = 0
+            while k < 1_000_000 {
+                k = call(k, context)
+            }
+        }
+    }
+    print("\(numbers[0]) \(numbers[150_000]) \(numbers[299_999]) \(total)")
+}

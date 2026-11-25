@@ -1,0 +1,8 @@
+module Sable.Interop
+
+/// A function type C has: one whose parameters are passed by value and are
+/// what C has the same way — integers, F32, F64, Bool, RawPtr and structs of
+/// those — whose result is one of them or nothing, and which neither throws
+/// nor waits. `(RawPtr<Opaque>, CInt) -> CInt` is one; `(String) -> Int` is
+/// not. The compiler knows which are: nothing is declared to conform.
+public protocol CSignature { }

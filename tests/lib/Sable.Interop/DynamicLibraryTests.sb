@@ -1,0 +1,166 @@
+module DynamicLibraryTests
+
+// DynamicLibrary and LibraryVariable (Sable.Interop): the C library's own
+// functions looked up, and zlib's, loaded. Run with
+//     tools/stdlib-coverage.sh Sable.Interop
+
+import Sable.Interop
+import Sable.IO
+import Sable.Testing
+
+// zlib, where the system has it: every macOS, and what .NET runs on.
+fn zlib() -> DynamicLibrary? {
+    #if os(macos)
+    let name = "libz.1.dylib"
+    #elseif os(linux)
+    let name = "libz.so.1"
+    #else
+    let name = "zlib1.dll"
+    #endif
+    unsafe {
+        return try? DynamicLibrary.open(name)
+    }
+}
+
+@test
+fn theProgramsOwnSymbolsAreFound() {
+    let program = DynamicLibrary.program
+    unsafe {
+        let length: (CStr) -> CSize = try! program.function("strlen")
+        assertEqual("sable".withCString { Int(length($0)) }, 5)
+        let absolute: ((CInt) -> CInt)? = program.symbol("abs")
+        assertEqual(absolute!(-3), 3)
+    }
+    assert(program.contains("malloc"))
+    assert(!program.contains("surely_no_such_symbol"))
+    assert(!program.contains("str\u{0}len"))
+    assert(program.path.isEmpty)
+}
+
+@test
+fn aSymbolThatIsNotThereIsAnError() {
+    unsafe {
+        let nothing: (() -> ())? = DynamicLibrary.program.symbol("surely_no_such_symbol")
+        assert(nothing == none)
+        assert(DynamicLibrary.program.variable("surely_no_such_symbol", as: CInt.self) == none)
+        do {
+            let _: () -> () = try DynamicLibrary.program.function("surely_no_such_symbol")
+            assert(false)
+        } catch {
+            assertEqual(error, LibraryError.NoSymbol(name: "surely_no_such_symbol", library: ""))
+            assertEqual(error.description(), "'' has no 'surely_no_such_symbol'")
+        }
+    }
+}
+
+@test
+fn aLibraryThatIsNotThereIsAnError() {
+    for name in ["surely-no-such-library", "./surely/no/such/library.so"] {
+        do {
+            unsafe {
+                _ = try DynamicLibrary.open(name)
+            }
+            assert(false)
+        } catch .NotLoaded(let library, let reason) {
+            assertEqual(library, name)
+            assert(!reason.isEmpty)
+        } catch {
+            assert(false)
+        }
+    }
+}
+
+@test
+fn aLibrarysNameIsChecked() {
+    for (name, reason) in [("", "it has no name"), ("a\u{0}b", "its name has a NUL in it")] {
+        do {
+            unsafe {
+                _ = try DynamicLibrary.open(name)
+            }
+            assert(false)
+        } catch {
+            assertEqual(error, LibraryError.NotLoaded(library: name, reason: reason))
+            assert(error.description().hasPrefix("'\(name)' could not be loaded: "))
+        }
+    }
+}
+
+@test
+fn zlibIsLoadedAndCalled() {
+    let library = zlib()
+    if library == none {
+        return
+    }
+    unsafe {
+        let version: () -> CStr = try! library.function("zlibVersion")
+        assert(version().string.hasPrefix("1."))
+
+        let crc32: (CUnsignedLong, RawPtr<U8>, CUnsignedInt) -> CUnsignedLong = try! library.function("crc32")
+        let check = "123456789".utf8Bytes().withPointer { bytes in crc32(0, bytes, 9) }
+        assertEqual(check, 0xCBF43926)
+
+        let bound: (CUnsignedLong) -> CUnsignedLong = try! library.function("compressBound")
+        let compress: (RawPtr<U8>, RawPtr<CUnsignedLong>, RawPtr<U8>, CUnsignedLong) -> CInt = try! library.function("compress")
+        let uncompress: (RawPtr<U8>, RawPtr<CUnsignedLong>, RawPtr<U8>, CUnsignedLong) -> CInt = try! library.function("uncompress")
+        let text = "a line, and again, ".repeated(100).utf8Bytes()
+        var packed = U8[>..](repeating: 0, count: Int(bound(CUnsignedLong(text.count))))
+        var size = CUnsignedLong(packed.count)
+        let deflated = packed.withMutablePointer { (into: RawPtr<U8>) -> CInt in
+            return Memory.withPointer(to: &size) { (length: RawPtr<CUnsignedLong>) -> CInt in
+                return text.withPointer { (from: RawPtr<U8>) -> CInt in compress(into, length, from, CUnsignedLong(text.count)) }
+            }
+        }
+        assertEqual(deflated, 0)
+        assert(Int(size) < text.count / 10)
+        var restored = U8[>..](repeating: 0, count: text.count)
+        var restoredSize = CUnsignedLong(restored.count)
+        let inflated = restored.withMutablePointer { (into: RawPtr<U8>) -> CInt in
+            return Memory.withPointer(to: &restoredSize) { (length: RawPtr<CUnsignedLong>) -> CInt in
+                return packed.withPointer { (from: RawPtr<U8>) -> CInt in uncompress(into, length, from, size) }
+            }
+        }
+        assertEqual(inflated, 0)
+        assertEqual(restored, text)
+    }
+}
+
+// The function keeps its library open after the library's own value is gone.
+@test
+fn aFunctionKeepsItsLibraryOpen() {
+    var version: (() -> CStr)? = none
+    do {
+        if let library = zlib() {
+            unsafe {
+                version = library.symbol("zlibVersion")
+            }
+        }
+    }
+    if let version {
+        assert(version().string.hasPrefix("1."))
+    }
+}
+
+@test
+fn aLibraryIsOpenedByItsPathAndKnowsIt() {
+    if let library = zlib() {
+        assert(!library.path.isEmpty)
+        assert(library.contains("adler32"))
+        unsafe {
+            assert((try? DynamicLibrary.open(library.path, global: true)) != none)
+        }
+    }
+}
+
+@test
+fn aVariableIsReadAndWritten() {
+    #if !os(windows)
+    unsafe {
+        let index = DynamicLibrary.program.variable("opterr", as: CInt.self)!
+        let before = index.load()
+        index.store(before + 5)
+        assertEqual(index.load(), before + 5)
+        assertEqual(index.pointer.load(), before + 5)
+        index.store(before)
+    }
+    #endif
+}

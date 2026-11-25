@@ -1,0 +1,102 @@
+module Sable.Interop
+
+/// A C function pointer, of functions of the type `F`: what C declares
+/// `int (*compare)(const void *, const void *)` and Sable
+/// `CFunction<(RawPtr<Opaque>, RawPtr<Opaque>) -> CInt>`. It crosses to C as
+/// the pointer, so an `@extern` function takes one. It may be null.
+///
+/// `cFunction` makes one of a Sable function. A function has no context, so it must
+/// capture nothing: what captures goes as a `CCallback`.
+///
+/// ```sable
+/// fn byValue(_ a: RawPtr<CInt>, _ b: RawPtr<CInt>) -> CInt {
+///     unsafe {
+///         return a.load() - b.load()
+///     }
+/// }
+///
+/// var numbers: CInt[>..] = [3, 1, 2]
+/// unsafe {
+///     // As '@extern("c", "qsort") unsafe fn' declares it too.
+///     let sort: (RawPtr<CInt>, CSize, CSize, CFunction<(RawPtr<CInt>, RawPtr<CInt>) -> CInt>) -> () =
+///         try! DynamicLibrary.program.function("qsort")
+///     numbers.withMutablePointer { sort($0, 3, 4, cFunction(byValue)) }
+/// }
+/// assert(numbers == [1, 2, 3])
+/// ```
+public struct CFunction<F: CSignature>: Equatable, Debug {
+    /// Where the function's code is.
+    public let pointer: RawPtr<Opaque>
+
+    /// The function at an address C gave. Making one is safe; calling what it
+    /// is of is not.
+    public init(pointer: RawPtr<Opaque>) {
+        self.pointer = pointer
+    }
+
+    /// The null function pointer.
+    public static var null: CFunction<F> => CFunction<F>(pointer: RawPtr<Opaque>.null)
+
+    /// Whether this is the null pointer.
+    public var isNull: Bool => pointer.isNull
+
+    /// The function as a function value: calling it calls C. The caller
+    /// vouches that the pointer is not null and is of a function of this
+    /// type, there for as long as the value is called.
+    ///
+    /// ```sable
+    /// let pointer = cFunction { (n: CInt) -> CInt in n + 1 }
+    /// unsafe {
+    ///     let call = pointer.function()
+    ///     assert(call(41) == 42)
+    /// }
+    /// ```
+    public unsafe fn function() -> F {
+        precondition(!isNull, "a null C function pointer called")
+        return CFunction<F>.closure(ForeignTarget(address: pointer.address, library: none))
+    }
+
+    // The function value that calls the target's address.
+    @intrinsic
+    static fn closure(_ target: ForeignTarget) -> F
+
+    // The C function that calls the closure the context it is given, first
+    // among its parameters or last, names; null where that is no pointer.
+    @intrinsic
+    static fn contextFirst() -> CFunction<F>
+
+    @intrinsic
+    static fn contextLast() -> CFunction<F>
+
+    static fn withContext(_ position: ContextPosition) -> CFunction<F> {
+        let entry = match position {
+            case .First => CFunction<F>.contextFirst()
+            case .Last  => CFunction<F>.contextLast()
+        }
+        precondition(!entry.isNull, "a callback's context is a 'RawPtr<Opaque>' among its parameters, which there is none of in its place")
+        return entry
+    }
+
+    public operator == (lhs: CFunction<F>, rhs: CFunction<F>) -> Bool {
+        return lhs.pointer == rhs.pointer
+    }
+
+    /// The address in hexadecimal.
+    public fn debugDescription() -> String {
+        return pointer.debugDescription()
+    }
+}
+
+/// The C function pointer of a function named here, or of a closure written
+/// here, which captures nothing (S3226). C may call it on any thread, for as
+/// long as the program runs.
+///
+/// ```sable
+/// fn twice(n: CInt) -> CInt => n * 2
+///
+/// unsafe {
+///     assert(cFunction(twice).function()(21) == 42)
+/// }
+/// ```
+@intrinsic
+public fn cFunction<F: CSignature>(@Sendable _ function: F) -> CFunction<F>

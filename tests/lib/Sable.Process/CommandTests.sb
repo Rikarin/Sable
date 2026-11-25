@@ -314,4 +314,27 @@ fn isGone(_ id: String) async -> Bool {
     return false
 }
 
+@test
+fn argumentsAndVariablesNeedNotBeText() async {
+    unsafe {
+        Environment.set(OsString("SABLE_COMMAND_ODD"), OsString(bytes: [0x61, 0xFF]))
+    }
+    let odd = OsString(bytes: [0xFE, 0x62])
+    let script = "printf '%s %s %s' \"$SABLE_COMMAND_ODD\" \"$SABLE_COMMAND_SET\" \"$0\""
+    let command = sh(script).argument(odd).environment("SABLE_COMMAND_SET", odd)
+    assertEqual(command.argumentList[2], "\u{FFFD}b")
+    assertEqual(try! await command.output().outputBytes, [0x61, 0xFF, 0x20, 0xFE, 0x62, 0x20, 0xFE, 0x62])
+    unsafe {
+        Environment.remove("SABLE_COMMAND_ODD")
+    }
+}
+
+@test
+fn anArgumentWithANulIsRefused() {
+    match failure(Command("true").argument(OsString(bytes: [0x61, 0]))) {
+        case .Some(.InvalidArgument(let text)) => assertEqual(text, "a\u{0}")
+        case _                                 => assert(false)
+    }
+}
+
 #endif

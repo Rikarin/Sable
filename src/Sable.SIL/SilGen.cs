@@ -3780,8 +3780,8 @@ public sealed partial class SilGen {
                 .FirstOrDefault();
             // One of other labels is another method where the protocol has a
             // default of the requirement's own: F64's 'scaled(places:)' is not
-            // FloatingPoint's 'scaled(byPowerOfTwo:)'.
-            if (found is not null && (SameLabels(found, requirement) || !HasLabelledDefault(required, requirement))) {
+            // FloatingPoint's 'scaled(byPowerOfTwo:)'. (An operator's operands have no labels.)
+            if (found is not null && (found.FunctionKind == FunctionKind.Operator || SameLabels(found, requirement) || !HasLabelledDefault(required, requirement))) {
                 return found;
             }
         }

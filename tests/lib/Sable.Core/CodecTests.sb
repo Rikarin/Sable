@@ -1,0 +1,47 @@
+module CodecTests
+
+// Codec, and the runtime's kernels arrays are written by (Sable.Core): as
+// many whole blocks as the processor has instructions for, which may be none.
+
+import Sable.Testing
+
+@test
+fn wholeBlocksAreWrittenOrNone() {
+    let bytes = U8[>..](repeating: 0xAB, count: 96)
+    var digits = U8[>..](repeating: 0, count: 256)
+    let done = digits.write(.HexEncode, of: bytes, at: 0)
+    assert(done >= 0 && done <= 96)
+    var i = 0
+    while i < done {
+        assertEqual(digits[i * 2], 0x61)
+        assertEqual(digits[i * 2 + 1], 0x62)
+        i += 1
+    }
+    assertEqual(digits[done * 2], 0)
+}
+
+@test
+fn aStringsDigitsAreDecodedUpToTheFirstThatIsNone() {
+    let text = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeffzz"
+    var bytes = U8[>..](repeating: 7, count: 64)
+    let done = bytes.write(.HexDecode, of: text, from: 0, to: text.utf8Count, at: 0)
+    assert(done >= 0 && done <= 64)
+    if done >= 4 {
+        assertEqual(bytes[0], 0)
+        assertEqual(bytes[1], 0x11)
+    }
+}
+
+@test
+fn unitsAndBytesAreEachOther() {
+    let units = U16[>..](repeating: 0x68, count: 40)
+    var bytes = U8[>..](repeating: 0, count: 200)
+    let made = bytes.writeUtf8(of: units, at: 0)
+    assertEqual(made >> 32, made & 0xFFFF_FFFF)
+    let source = U8[>..](repeating: 0x68, count: 40)
+    var back = U16[>..](repeating: 0, count: 64)
+    unsafe {
+        let count = back.writeUtf16(ofValid: source, at: 0)
+        assert(count == 0 || count == 40 && back[39] == 0x68)
+    }
+}

@@ -186,3 +186,122 @@ fn asciiCaseIsTheSameAtEveryLength() {
         assertEqual(("ß" + lower).uppercased(), "SS" + upper)
     }
 }
+
+@test(traps: "string index out of range")
+fn aByteReadPastTheRoomStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        let _ = buffer.load(at: 8)
+    }
+}
+
+@test(traps: "string index out of range")
+fn aByteReadBeforeTheStartStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        let _ = buffer.load(at: -1)
+    }
+}
+
+@test(traps: "string index out of range")
+fn finishingPastTheRoomStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        let _ = buffer.finish(count: 9)
+    }
+}
+
+@test(traps: "string index out of range")
+fn finishingAsciiPastTheRoomStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        let _ = buffer.finish(asciiCount: 9)
+    }
+}
+
+@test(traps: "string index out of range")
+fn finishingANegativeCountStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        let _ = buffer.finish(count: -1)
+    }
+}
+
+@test(traps: "string index out of range")
+fn finishingIfValidPastTheRoomStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        let _ = buffer.finishIfValid(count: 9)
+    }
+}
+
+@test(traps: "string index out of range")
+fn growingFromMoreThanThereIsStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        let _ = buffer.growing(used: 9, capacity: 20)
+    }
+}
+
+@test(traps: "string index out of range")
+fn growingToLessThanIsUsedStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        let _ = buffer.growing(used: 4, capacity: 2)
+    }
+}
+
+@test(traps: "string index out of range")
+fn aByteBeforeTheStartStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        buffer.store(byte: 1, at: -1)
+    }
+}
+
+@test(traps: "string index out of range")
+fn aWordBeforeTheStartStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        buffer.store(word: 1, at: -1)
+    }
+}
+
+@test(traps: "string index out of range")
+fn encodingPastTheRoomStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        let _ = buffer.encode(.HexEncode, [1], at: 9)
+    }
+}
+
+@test(traps: "string index out of range")
+fn aTextBackwardsStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        buffer.store(utf8: "abc", from: 2, to: 1, at: 0)
+    }
+}
+
+@test(traps: "string index out of range")
+fn aTextPastTheRoomStops() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        buffer.store(utf8: "abcdefghijkl", from: 0, to: 12, at: 0)
+    }
+}
+
+@test
+fn aBufferGrowsByHalfAtLeast() {
+    unsafe {
+        let buffer = StringBuffer.allocate(capacity: 8)
+        buffer.store(utf8: "abcdefgh", from: 0, to: 8, at: 0)
+        let little = buffer.growing(used: 8, capacity: 9)
+        assertEqual(little.capacity, 12)
+        let lots = little.growing(used: 8, capacity: 100)
+        assertEqual(lots.capacity, 100)
+        let encoded = lots.encode(.HexEncode, U8[>..](repeating: 1, count: 40), at: 8)
+        assert(encoded >= 0 && encoded <= 40)
+        assertEqual(lots.finish(asciiCount: 8), "abcdefgh")
+    }
+}

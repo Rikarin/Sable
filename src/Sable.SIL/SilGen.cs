@@ -72,9 +72,49 @@ public sealed partial class SilGen {
                 _module.PrimitiveConformances[lowered.ToString()] = [..DeclaredProtocols(primitive)];
             }
         }
+
+        // And what every array, slice and optional does.
+        void Structural(MetadataKind kind, string protocol, ImmutableArray<string> requirements) {
+            if (!_module.StructuralConformances.Exists(c => c.Kind == kind && c.Protocol == protocol && c.Requirements.SequenceEqual(requirements))) {
+                _module.StructuralConformances.Add((kind, protocol, requirements));
+            }
+        }
+
+        foreach (var (protocol, carrier) in ArrayProtocols()) {
+            var requirements = carrier.TypeParameters[0].Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c)).OfType<NamedTypeSymbol>().Select(QualifiedName).ToImmutableArray();
+            Structural(MetadataKind.Array, QualifiedName(protocol), requirements);
+            if (carrier.ExtendedArray!.ArrayKind == ArrayKind.Slice) {
+                Structural(MetadataKind.Slice, QualifiedName(protocol), requirements);
+            }
+        }
+
+        foreach (var (protocol, requirements) in ConditionalProtocols(Core.Optional)) {
+            Structural(MetadataKind.Optional, protocol, [..requirements.Select(static r => r.Protocol)]);
+        }
     }
 
     CoreTypes Core => _compilation.Core;
+
+    /// <summary>
+    ///     The protocols array extensions make arrays conform to, with the
+    ///     extension: those of every array whose element meets what the
+    ///     extension asks, <c>extension&lt;E: Hashable&gt; E[:]: Hashable</c>.
+    /// </summary>
+    IEnumerable<(NamedTypeSymbol Protocol, NamedTypeSymbol Carrier)> ArrayProtocols() {
+        foreach (var carrier in _compilation.ArrayCarriers) {
+            if (carrier is not { ExtendedArray.ElementType: TypeParameterSymbol element, TypeParameters: [var only] } || !ReferenceEquals(element, only)
+                || only.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c)).Any(static c => c is not NamedTypeSymbol { TypeKind: TypeKind.Protocol, IsConstructed: false })) {
+                continue;
+            }
+
+            foreach (var protocol in ProtocolClosure(carrier.Extensions.Where(static e => !e.IsConstrained).SelectMany(static e => e.Conformances).Concat(carrier.BaseTypes).OfType<NamedTypeSymbol>()
+                         .Where(static p => p.TypeKind == TypeKind.Protocol))) {
+                if (protocol.TypeParameters.IsEmpty) {
+                    yield return (protocol, carrier);
+                }
+            }
+        }
+    }
 
     public IReadOnlyList<Diagnostic> Diagnostics => [.._diagnostics];
 
@@ -11308,6 +11348,7 @@ public sealed partial class SilGen {
                     }
 
                     borrows.Add(array);
+                    array = AsSliceReceiver(array, arrayParameter, borrows);
                     arguments.Add(array.Type == arrayParameter ? array : Emit(new BuiltinInst("opaque_borrow_as", arrayParameter, array)));
                     continue;
                 }
@@ -11373,8 +11414,9 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                arguments.Add(value);
+                // A parameter of Self, met for an array by a slice's extension: the array viewed as one.
                 borrows.Add(value);
+                arguments.Add(arguments.Count < type.Parameters.Length ? AsSliceReceiver(value, type.Parameters[arguments.Count], borrows) : value);
             }
 
             foreach (var handed in owned) {

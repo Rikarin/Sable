@@ -2326,9 +2326,9 @@ public sealed partial class SilGen {
     ///     opaque copied out of its caller's storage first, and a result of
     ///     <c>Self</c> written where the caller says. Null when it cannot be made.
     /// </summary>
-    string? GenericWitness(TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, string key, Symbol member, FunctionType type, SyntaxNode at, (string Name, GenericShape Shape)? template = null) {
+    string? GenericWitness(TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, string key, Symbol member, FunctionType type, SyntaxNode at, (string Name, GenericShape Shape)? template = null, NamedTypeSymbol? definition = null) {
         if (member is FieldSymbol field) {
-            return GenericGetter(concrete, value, protocol, field, type, at, template);
+            return GenericGetter(concrete, value, protocol, field, type, at, template, definition);
         }
 
         var requirement = (FunctionSymbol)member;
@@ -2422,7 +2422,7 @@ public sealed partial class SilGen {
         }
 
         function.RemoveUnreachableBlocks();
-        TemplateRecipes(function, concrete, template);
+        TemplateRecipes(function, concrete, template, definition);
         if ((ownShape ?? (requirement.TypeParameters.IsEmpty ? null : template?.Shape)) is { } generic) {
             AssociatedRecipes(function, requirement, generic);
         }
@@ -2433,9 +2433,9 @@ public sealed partial class SilGen {
     }
 
     /// <summary>How a template's witness, compiled once for the generic type, finds the metadata of what it reads through its type parameters.</summary>
-    void TemplateRecipes(SilFunction function, TypeSymbol concrete, (string Name, GenericShape Shape)? template) {
+    void TemplateRecipes(SilFunction function, TypeSymbol concrete, (string Name, GenericShape Shape)? template, NamedTypeSymbol? definition) {
         if (template is { } compiledOnce) {
-            AssociatedRecipes(function, ((NamedTypeSymbol)concrete).OriginalDefinition, compiledOnce.Shape);
+            AssociatedRecipes(function, definition ?? ((NamedTypeSymbol)concrete).OriginalDefinition, compiledOnce.Shape);
         }
     }
 
@@ -2467,7 +2467,7 @@ public sealed partial class SilGen {
     ///     read the property of its one parameter — the value, taken out of
     ///     the value it is given — or, for a static one, of the type.
     /// </summary>
-    string? GenericGetter(TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, FieldSymbol field, FunctionType type, SyntaxNode at, (string Name, GenericShape Shape)? template = null) {
+    string? GenericGetter(TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, FieldSymbol field, FunctionType type, SyntaxNode at, (string Name, GenericShape Shape)? template = null, NamedTypeSymbol? definition = null) {
         var index = GenericRequirements(protocol).FindIndex(r => ReferenceEquals(r.Member, field));
         var name = template?.Name ?? $"$generic$witness${Sanitise(value.ToString())}${Sanitise(TableName(concrete, protocol))}${index}${field.Name}";
         if (_module.Find(name) is not null) {
@@ -2501,7 +2501,7 @@ public sealed partial class SilGen {
         }
 
         function.RemoveUnreachableBlocks();
-        TemplateRecipes(function, concrete, template);
+        TemplateRecipes(function, concrete, template, definition);
         AsTrampoline(function);
         _module.Add(function);
         return name;

@@ -205,6 +205,19 @@ static const SableWitnessTable *registered_table(const SableTypeMetadata *type, 
     return NULL;
 }
 
+bool sable_metadata_equal(const SableTypeMetadata *a, const SableTypeMetadata *b);
+
+// The table registered for a type the program names, for the same type made as it runs.
+static const SableWitnessTable *registered_for_equal(const SableTypeMetadata *type, const SableProtocol *protocol) {
+    for (int64_t i = 0; i < registered_count; i++) {
+        if (same_protocol(registered_tables[i].table->protocol, protocol) && sable_metadata_equal(registered_tables[i].type, type)) {
+            return registered_tables[i].table;
+        }
+    }
+
+    return NULL;
+}
+
 // The template tables of generic types' conformances (#297, #299): one for
 // every instance whose type arguments are known only at run time, by the
 // generic type's name, registered by each image as it starts. Its entries
@@ -286,11 +299,80 @@ static const SableWitnessTable *template_instance(const SableTypeMetadata *type,
     return table;
 }
 
+// Whether a template's name is the type's: an array's is "[]", a slice's "[:]", an optional's "?".
+static bool is_instance_of(const SableTypeMetadata *type, const char *name, size_t length) {
+    switch (type->kind) {
+    case SABLE_KIND_ARRAY:
+        return strcmp(name, "[]") == 0;
+    case SABLE_KIND_SLICE:
+        return strcmp(name, "[:]") == 0;
+    case SABLE_KIND_OPTIONAL:
+        return strcmp(name, "?") == 0;
+    default:
+        return strncmp(type->name, name, length) == 0 && type->name[length] == '<';
+    }
+}
+
 static const SableWitnessTable *template_table(const SableTypeMetadata *type, const SableProtocol *protocol) {
     for (int64_t i = 0; i < template_count; i++) {
-        if (same_protocol(templates[i].table->protocol, protocol) && strncmp(type->name, templates[i].name, templates[i].length) == 0
-            && type->name[templates[i].length] == '<') {
+        if (same_protocol(templates[i].table->protocol, protocol) && is_instance_of(type, templates[i].name, templates[i].length)) {
             return templates[i].associated == NULL ? templates[i].table : template_instance(type, templates[i].table, templates[i].associated);
+        }
+    }
+
+    return NULL;
+}
+
+// What every array, slice and optional conforms to, by its kind: where the
+// type it is of meets what is asked. Their metadata, the same in every unit
+// and made as the program runs, carries no records; each image that asks the
+// registry gives it the list of what it sees declared.
+typedef struct SableStructuralConformance {
+    SableConformance record; // its witnesses null: a table registered, or a template's
+    int64_t kind;
+    int64_t requirement_count; // of the one type argument
+    const SableProtocol *const *requirements;
+} SableStructuralConformance;
+
+static struct {
+    const SableStructuralConformance *list;
+    int64_t count;
+} *structural;
+static int64_t structural_count;
+
+void sable_register_structural(const SableStructuralConformance *list, int64_t count) {
+    structural = realloc(structural, (size_t)(structural_count + 1) * sizeof *structural);
+    if (structural == NULL) {
+        sable_trap("out of memory");
+    }
+
+    structural[structural_count].list = list;
+    structural[structural_count].count = count;
+    structural_count++;
+}
+
+const SableConformance *sable_type_conformance(const SableTypeMetadata *type, const SableProtocol *protocol);
+
+static const SableConformance *structural_conformance(const SableTypeMetadata *type, const SableProtocol *protocol) {
+    if ((type->kind != SABLE_KIND_ARRAY && type->kind != SABLE_KIND_SLICE && type->kind != SABLE_KIND_OPTIONAL) || type->argument_count < 1) {
+        return NULL;
+    }
+
+    for (int64_t i = 0; i < structural_count; i++) {
+        for (int64_t j = 0; j < structural[i].count; j++) {
+            const SableStructuralConformance *each = &structural[i].list[j];
+            if (each->kind != type->kind || !same_protocol(each->record.protocol, protocol)) {
+                continue;
+            }
+
+            bool holds = true;
+            for (int64_t k = 0; k < each->requirement_count && holds; k++) {
+                holds = sable_type_conformance(type->arguments[0], each->requirements[k]) != NULL;
+            }
+
+            if (holds) {
+                return &each->record;
+            }
         }
     }
 
@@ -309,6 +391,11 @@ const SableConformance *sable_type_conformance(const SableTypeMetadata *type, co
             if (same_protocol(type->conformances[i].protocol, protocol)) {
                 return &type->conformances[i];
             }
+        }
+
+        const SableConformance *shared = structural_conformance(type, protocol);
+        if (shared != NULL) {
+            return shared;
         }
     }
 
@@ -336,9 +423,13 @@ const SableWitnessTable *sable_witness_table(const SableTypeMetadata *type, cons
             }
         }
 
+        conforms = conforms || structural_conformance(type, protocol) != NULL;
         const SableWitnessTable *table = registered_table(type, protocol);
         if (table == NULL && conforms && type->argument_count > 0 && type->name != NULL) {
             table = template_table(type, protocol);
+            if (table == NULL) {
+                table = registered_for_equal(type, protocol);
+            }
         }
 
         if (table != NULL) {

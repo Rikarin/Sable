@@ -22,7 +22,7 @@ public sealed partial class SilGen {
     readonly Dictionary<StructType, List<NamedTypeSymbol>> _layoutProtocols = [];
 
     /// <summary>The types boxed in an existential so far, by what they lower to: each may be cast to any protocol it conforms to.</summary>
-    readonly Dictionary<SilType, NamedTypeSymbol> _boxed = [];
+    readonly Dictionary<SilType, TypeSymbol> _boxed = [];
 
     /// <summary>The protocols cast to so far (<c>as? any Q</c>, <c>is any Q</c>): each boxed type that conforms has a table for each.</summary>
     readonly List<NamedTypeSymbol> _castTargets = [];
@@ -174,7 +174,7 @@ public sealed partial class SilGen {
             WitnessTable(concrete, value, protocol, at);
         }
 
-        if (concrete is NamedTypeSymbol named && _boxed.TryAdd(value, named)) {
+        if (concrete is NamedTypeSymbol or ArrayTypeSymbol or OptionalTypeSymbol && concrete is var named && _boxed.TryAdd(value, named)) {
             foreach (var target in _castTargets.Where(named.Satisfies)) {
                 WitnessTable(named, value, target, at);
             }

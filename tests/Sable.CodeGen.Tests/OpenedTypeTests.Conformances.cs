@@ -382,4 +382,233 @@ public sealed partial class OpenedTypeTests {
             }
         """
     );
+
+    /// <summary>Arrays, slices and optionals, named and made as the program runs, conform as their declarations say, and are opened as that.</summary>
+    [Fact]
+    public void ArraysSlicesAndOptionalsConformAsTheyAreMade() => Prints(
+        """
+        Int: true true true true
+        String: true true true true
+        Test.Suit: false false false false
+        Test.Plain: false false false false
+        [Int]: true true true true
+        [Test.Plain]: false false false false
+        Int?: true true true true
+        Test.Plain?: false false false false
+        [Int:]: true true true true
+        Test.Crate<Int>: true true false false
+        Test.Crate<Test.Plain>: false false false false
+        (Int, Int): false false false false
+        [[Int]]: true true true true
+        [Int]: true true true true
+        [Test.Plain]: false false false false
+        Int?: true true true true
+        Test.Crate<Int>: true true false false
+        (Int, Int): false false false false
+        [String]: true true true true
+        [String]
+        [String]
+        [String]
+        [String]
+        [String]: true true true true
+        [String]
+        [String]
+        [String]
+        [String]
+        [String:]: true true true true
+        [String:]
+        [String:]
+        [String:]
+        [String:]
+        String?: true true true true
+        String?
+        String?
+        String?
+        String?
+        Test.Crate<String>: true true false false
+        Test.Crate<String>
+        Test.Crate<String>
+        Test.Cell<String>: true false false false
+        Test.Cell<String>
+        (String, Int): false false false false
+        [Test.Crate<String>]: true true false false
+        [Test.Crate<String>]
+        [Test.Crate<String>]
+        Test.Crate<[String]>: true true false false
+        Test.Crate<[String]>
+        Test.Crate<[String]>
+        [String]?: true true true true
+        [String]?
+        [String]?
+        [String]?
+        [String]?
+        [String?]: true true true true
+        [String?]
+        [String?]
+        [String?]
+        [String?]
+        [Test.Plain]: false false false false
+        [Test.Plain]: false false false false
+        [Test.Plain:]: false false false false
+        Test.Plain?: false false false false
+        Test.Crate<Test.Plain>: false false false false
+        Test.Cell<Test.Plain>: false false false false
+        (Test.Plain, Int): false false false false
+        [Test.Crate<Test.Plain>]: false false false false
+        Test.Crate<[Test.Plain]>: false false false false
+        [Test.Plain]?: false false false false
+        [Test.Plain?]: false false false false
+        [Sable.Core.Range<Int>]: true false false true
+        [Sable.Core.Range<Int>]
+        [Sable.Core.Range<Int>]
+        [Sable.Core.Range<Int>]: true false false true
+        [Sable.Core.Range<Int>]
+        [Sable.Core.Range<Int>]
+        [Sable.Core.Range<Int>:]: true false false true
+        [Sable.Core.Range<Int>:]
+        [Sable.Core.Range<Int>:]
+        Sable.Core.Range<Int>?: true false false true
+        Sable.Core.Range<Int>?
+        Sable.Core.Range<Int>?
+        Test.Crate<Sable.Core.Range<Int>>: true false false false
+        Test.Crate<Sable.Core.Range<Int>>
+        Test.Cell<Sable.Core.Range<Int>>: true false false false
+        Test.Cell<Sable.Core.Range<Int>>
+        (Sable.Core.Range<Int>, Int): false false false false
+        [Test.Crate<Sable.Core.Range<Int>>]: true false false false
+        [Test.Crate<Sable.Core.Range<Int>>]
+        Test.Crate<[Sable.Core.Range<Int>]>: true false false false
+        Test.Crate<[Sable.Core.Range<Int>]>
+        [Sable.Core.Range<Int>]?: true false false true
+        [Sable.Core.Range<Int>]?
+        [Sable.Core.Range<Int>]?
+        [Sable.Core.Range<Int>?]: true false false true
+        [Sable.Core.Range<Int>?]
+        [Sable.Core.Range<Int>?]
+
+        """,
+        """
+        struct Plain { }
+        struct Crate<T> { let item: T }
+        extension Crate: Equatable where T: Equatable {
+            static operator ==(a: Self, b: Self) -> Bool => a.item == b.item
+        }
+        extension Crate: Hashable where T: Hashable {
+            fn hash(into hasher: inout Hasher) { item.hash(into: &hasher) }
+        }
+        enum Suit { Hearts, Spades }
+        union Either<A, B> { First(a: A), Second(b: B) }
+        final class Cell<T> {
+            let item: T
+            init(_ t: T) { item = t }
+        }
+        extension Cell: Equatable where T: Equatable {
+            static operator ==(a: Cell<T>, b: Cell<T>) -> Bool => a.item == b.item
+        }
+
+        fn subtypes(_ t: Type) -> String =>
+            "\(t): \(t.isSubtype(of: (any Equatable).self)) \(t.isSubtype(of: (any Hashable).self)) \(t.isSubtype(of: (any Comparable).self)) \(t.isSubtype(of: (any Debug).self))"
+        fn casts(_ x: any Any) -> String =>
+            "\(type(of: x)): \(x is any Equatable) \(x is any Hashable) \(x is any Comparable) \((x as? any Debug) != none)"
+        fn equatable<T: Equatable>(_ type: T.Type) -> String => "\(type)"
+        fn hashable<T: Hashable>(_ type: T.Type) -> String => "\(type)"
+        fn comparable<T: Comparable>(_ type: T.Type) -> String => "\(type)"
+        fn debug<T: Debug>(_ type: T.Type) -> String => "\(type)"
+
+        fn arrayOf<T>(_ t: T.Type) -> Type => T[].self
+        fn growable<T>(_ t: T.Type) -> Type => T[>..].self
+        fn sliceOf<T>(_ t: T.Type) -> Type => T[:].self
+        fn optionalOf<T>(_ t: T.Type) -> Type => Optional<T>.self
+        fn crateOf<T>(_ t: T.Type) -> Type => Crate<T>.self
+        fn cellOf<T>(_ t: T.Type) -> Type => Cell<T>.self
+        fn pairOf<T>(_ t: T.Type) -> Type => (T, Int).self
+        """,
+        """
+            let types: Type[>..] = [Int.self, String.self, Suit.self, Plain.self, Int[].self, Plain[].self, Int?.self, Plain?.self, Int[:].self, Crate<Int>.self, Crate<Plain>.self, (Int, Int).self, Int[][].self]
+            for t in types { print(subtypes(t)) }
+            print(casts([1, 2]))
+            print(casts([Plain()]))
+            let o: Int? = 3
+            print(casts(o as any Any))
+            print(casts(Crate<Int> { item: 4 }))
+            print(casts((1, 2)))
+            let s: Type = String.self
+            let p: Type = Plain.self
+            let r: Type = Range<Int>.self
+            for t in [s, p, r] {
+                for u in [arrayOf(t), growable(t), sliceOf(t), optionalOf(t), crateOf(t), cellOf(t), pairOf(t), arrayOf(crateOf(t)), crateOf(arrayOf(t)), optionalOf(arrayOf(t)), arrayOf(optionalOf(t))] {
+                    print(subtypes(u))
+                    if u.isSubtype(of: (any Equatable).self) { print(equatable(u)) }
+                    if u.isSubtype(of: (any Hashable).self) { print(hashable(u)) }
+                    if u.isSubtype(of: (any Comparable).self) { print(comparable(u)) }
+                    if u.isSubtype(of: (any Debug).self) { print(debug(u)) }
+                }
+            }
+        """
+    );
+
+    /// <summary>And what they conform by is called: the library's, and a program's own.</summary>
+    [Fact]
+    public void WhatArraysAndOptionalsConformByIsCalled() => Prints(
+        """
+        false true [<a>, <b>]
+        run of Test.Label true 0
+        true [<a>, <a>] true
+        <a> maybe Test.Label true
+        false
+
+        """,
+        """
+        protocol Counted {
+            fn counted() -> Int
+            static fn empty() -> Self
+        }
+        extension<E> E[>..]: Counted {
+            fn counted() -> Int => count
+            static fn empty() -> E[>..] => []
+        }
+        protocol Sized {
+            static fn title() -> String
+            fn same(_ other: Self) -> Bool
+        }
+        extension<E: Equatable> E[:]: Sized {
+            static fn title() -> String => "run of \(E.self)"
+            fn same(_ other: E[:]) -> Bool => self == other
+        }
+        protocol Holds {
+            associatedtype Item: Debug
+            fn pick() -> Item
+        }
+        extension Optional: Sized where Wrapped: Equatable {
+            static fn title() -> String => "maybe \(Wrapped.self)"
+            fn same(_ other: Wrapped?) -> Bool => self == other
+        }
+        struct Label: Equatable, Debug {
+            let text: String
+            static operator ==(a: Label, b: Label) -> Bool => a.text == b.text
+            fn debugDescription() -> String => "<\(text)>"
+        }
+
+        fn equal<T: Equatable>(_ type: T.Type, _ x: any Any, _ y: any Any) -> Bool => (x as! T) == (y as! T)
+        fn debug<T: Debug>(_ type: T.Type, _ x: any Any) -> String => (x as! T).debugDescription()
+        fn title<T: Sized>(_ type: T.Type, _ x: any Any) -> String => "\(T.title()) \((x as! T).same(x as! T))"
+        fn counted<T: Counted>(_ type: T.Type) -> Int => T.empty().counted()
+        fn arrayOf<T>(_ t: T.Type) -> Type => T[>..].self
+        fn optionalOf<T>(_ t: T.Type) -> Type => Optional<T>.self
+        """,
+        """
+            let t: Type = Label.self
+            let l = Label { text: "a" }
+            let xs: any Any = [l, Label { text: "b" }]
+            let ys: any Any = [l, Label { text: "c" }]
+            print("\(equal(arrayOf(t), xs, ys)) \(equal(arrayOf(t), xs, xs)) \(debug(arrayOf(t), xs))")
+            print("\(title(arrayOf(t), xs)) \(counted(arrayOf(t)))")
+            let o: Label? = l
+            let made = [l, l]
+            print("\(made as any Any is any Equatable) \((made as any Any as? any Debug)?.debugDescription() ?? "none") \((made as any Any as? any Sized) != none)")
+            print("\((o as any Any as? any Debug)?.debugDescription() ?? "none") \(title(optionalOf(t), o as any Any))")
+            let range: Type = Range<Int>.self
+            print("\(equal(arrayOf(range), [1..<2, 3..<4] as any Any, [1..<2] as any Any))")
+        """
+    );
 }

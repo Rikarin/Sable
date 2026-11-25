@@ -46,6 +46,8 @@ public sealed partial class SilGen {
                 changed |= Templates(symbol.OriginalDefinition, type, wanted);
             }
 
+            changed |= StructuralTemplates();
+
             // A box the program names the class of — 'as? Box<Meters>' asks for it — is what a value made at run time is boxed in too.
             // In a unit, an instance's box is one another unit may open a call to make.
             if (_erasesAny || _openedProtocols.Any(static o => o.Boxes) || _unit is { CompilesGenerics: false } || _module.Unit is not null && CompilesOnce) {
@@ -80,7 +82,12 @@ public sealed partial class SilGen {
                     var at = ((symbol as NamedTypeSymbol)?.OriginalDefinition ?? protocol).DeclaringSyntax.FirstOrDefault() ?? protocol.DeclaringSyntax.FirstOrDefault();
                     if (at is not null && _templated.Add((value.ToString(), QualifiedName(protocol)))) {
                         changed = true;
-                        GenericTable(symbol, protocol, at, describe: _openedProtocols.Any(static o => o.Describes));
+                        if (symbol is NamedTypeSymbol) {
+                            GenericTable(symbol, protocol, at, describe: _openedProtocols.Any(static o => o.Describes));
+                        } else {
+                            WitnessTable(symbol, value, protocol, at);
+                        }
+
                         if (_openedProtocols.Any(static o => o.Boxes)) {
                             Boxer(value);
                         }
@@ -124,8 +131,59 @@ public sealed partial class SilGen {
                 && requirements.All(r => r.Item1 < definition.TypeParameters.Length && protocols.ContainsKey(r.Item2))) {
                 made = true;
                 _templatesMade.Add((definition, protocol));
-                TemplateTable(definition, type, protocol, [..requirements.Select(r => (definition.TypeParameters[r.Item1], protocols[r.Item2]))]);
+                TemplateTable(definition, definition.Construct([..definition.TypeParameters.Cast<TypeSymbol>()]), type, protocol, [..requirements.Select(r => (definition.TypeParameters[r.Item1], protocols[r.Item2]))]);
                 _templatesMade.Remove((definition, protocol));
+            }
+        }
+
+        return made;
+    }
+
+    /// <summary>
+    ///     The template tables of arrays, slices and optionals, for each
+    ///     protocol the registry is asked about that they conform to: an
+    ///     instance may be made as the program runs, or be another unit's.
+    ///     True when it made one.
+    /// </summary>
+    bool StructuralTemplates() {
+        if (_openedProtocols.Count == 0 && _runtimeInstances.Count == 0) {
+            return false;
+        }
+
+        var made = false;
+        var asked = ProtocolClosure(AskedProtocols()).ToHashSet<NamedTypeSymbol>(ReferenceEqualityComparer.Instance);
+        void Make(string kind, NamedTypeSymbol definition, TypeSymbol concrete, NamedTypeSymbol protocol, ImmutableArray<(TypeParameterSymbol, NamedTypeSymbol)> required) {
+            if (!asked.Contains(protocol) || !_templated.Add((kind, QualifiedName(protocol)))) {
+                return;
+            }
+
+            made = true;
+            Opening();
+            SilType? instance;
+            using (Opaque(new GenericShape(definition.TypeParameters, [])))
+            using (_diagnostics.Suppress()) {
+                instance = Lower(concrete);
+            }
+
+            if (instance is not null) {
+                TemplateTable(definition, concrete, instance, protocol, required);
+            }
+        }
+
+        // A protocol refined before those that refine it, whose tables point at its.
+        foreach (var (protocol, carrier) in ArrayProtocols().OrderBy(static p => ProtocolClosure([p.Protocol]).Count).ToList()) {
+            var kind = carrier.ExtendedArray!.ArrayKind;
+            Make("[]", carrier, new ArrayTypeSymbol(carrier.TypeParameters[0], kind == ArrayKind.Slice ? ArrayKind.Grow : kind), protocol, []);
+            if (kind == ArrayKind.Slice) {
+                Make("[:]", carrier, carrier.ExtendedArray, protocol, []);
+            }
+        }
+
+        var optional = Core.Optional;
+        var protocols = ProtocolSymbols(optional);
+        foreach (var (name, requirements) in ConditionalProtocols(optional).OrderBy(c => protocols.TryGetValue(c.Protocol, out var p) ? ProtocolClosure([p]).Count : 0).ToList()) {
+            if (protocols.TryGetValue(name, out var protocol) && requirements.All(r => protocols.ContainsKey(r.Protocol))) {
+                Make("?", optional, new OptionalTypeSymbol(optional.TypeParameters[0]), protocol, [..requirements.Select(r => (optional.TypeParameters[r.Argument], protocols[r.Protocol]))]);
             }
         }
 
@@ -246,8 +304,8 @@ public sealed partial class SilGen {
     }
 
     /// <summary>The template table of a generic type's conformance to a protocol, for its instance made at run time; none when an entry cannot be made.</summary>
-    void TemplateTable(NamedTypeSymbol definition, NominalType instance, NamedTypeSymbol protocol, ImmutableArray<(TypeParameterSymbol, NamedTypeSymbol)> required) {
-        if (!IsTabledProtocol(protocol) || !protocol.TypeParameters.IsEmpty || definition.ExtendedOptional is not null || definition.ExtendedArray is not null
+    void TemplateTable(NamedTypeSymbol definition, TypeSymbol concrete, SilType instance, NamedTypeSymbol protocol, ImmutableArray<(TypeParameterSymbol, NamedTypeSymbol)> required) {
+        if (!IsTabledProtocol(protocol) || !protocol.TypeParameters.IsEmpty
             || Bases(protocol).Any(b => _module.FindWitnessTable(instance, QualifiedName(b)) is null)
             || (definition.DeclaringSyntax.FirstOrDefault() ?? protocol.DeclaringSyntax.FirstOrDefault()) is not { } at) {
             return;
@@ -287,7 +345,7 @@ public sealed partial class SilGen {
         var table = new SilWitnessTable(instance, QualifiedName(protocol)) { IsTemplate = true };
         table.Bases.AddRange(Bases(protocol).Select(QualifiedName));
         for (var i = 0; i < protocol.OriginalDefinition.AssociatedTypes.Length; i++) {
-            if (!TemplateAssociated(definition, table, protocol, i, shape, at)) {
+            if (!TemplateAssociated(definition, concrete, table, protocol, i, shape, at)) {
                 Refused(protocol.OriginalDefinition.AssociatedTypes[i].Name);
                 return;
             }
@@ -301,7 +359,7 @@ public sealed partial class SilGen {
 
             string? witness;
             using (_diagnostics.Suppress()) {
-                witness = TemplateWitness(definition, protocol, table.Entries.Count, member, key, type, shape, at);
+                witness = TemplateWitness(definition, concrete, instance, protocol, table.Entries.Count, member, key, type, shape, at);
             }
 
             if (witness is null) {
@@ -321,12 +379,12 @@ public sealed partial class SilGen {
     ///     Self's — which reads the type arguments there, as an entry does.
     ///     False when its metadata, or what it conforms to, cannot be found so.
     /// </summary>
-    bool TemplateAssociated(NamedTypeSymbol definition, SilWitnessTable table, NamedTypeSymbol protocol, int index, GenericShape shape, SyntaxNode at) {
+    bool TemplateAssociated(NamedTypeSymbol definition, TypeSymbol concrete, SilWitnessTable table, NamedTypeSymbol protocol, int index, GenericShape shape, SyntaxNode at) {
         var associated = protocol.OriginalDefinition.AssociatedTypes[index];
-        var concrete = definition.Construct([..definition.TypeParameters.Cast<TypeSymbol>()]);
         using (Opaque(shape))
         using (AssociatedContext(definition)) {
-            var read = _compilation.AssociatedTypeOf(concrete, associated) is { } declared ? TypeSubstitution.For(concrete).Apply(declared) : null;
+            var read = concrete is not NamedTypeSymbol named ? AssociatedBinding(concrete, associated)
+                : _compilation.AssociatedTypeOf(named, associated) is { } declared ? TypeSubstitution.For(named).Apply(declared) : null;
             if (read is null) {
                 return false;
             }
@@ -336,7 +394,7 @@ public sealed partial class SilGen {
                 return false;
             }
 
-            var stem = $"$template$associated${Sanitise(QualifiedName(definition))}${Sanitise(QualifiedName(protocol))}${index}";
+            var stem = $"$template$associated${Sanitise(concrete is NamedTypeSymbol ? QualifiedName(definition) : table.Conformer.ToString())}${Sanitise(QualifiedName(protocol))}${index}";
             var hidden = shape.Parameters.Select(static _ => SilType.Metadata).Concat(shape.Requirements.Select(static _ => SilType.WitnessTable));
             var body = new SilFunction(stem + "$body", new FunctionType([..hidden], SilType.Metadata));
             body.ParameterNames.AddRange(shape.Parameters.Select(static p => $"$metadata.{ParameterName(p)}"));
@@ -423,9 +481,9 @@ public sealed partial class SilGen {
     ///     type with them. Null when the witness cannot be made.
     /// </summary>
     string? TemplateWitness(
-        NamedTypeSymbol definition, NamedTypeSymbol protocol, int index, Symbol member, string key, FunctionType type, GenericShape shape, SyntaxNode at
+        NamedTypeSymbol definition, TypeSymbol concrete, SilType instance, NamedTypeSymbol protocol, int index, Symbol member, string key, FunctionType type, GenericShape shape, SyntaxNode at
     ) {
-        var stem = $"$template$witness${Sanitise(QualifiedName(definition))}${Sanitise(QualifiedName(protocol))}${index}${(member.Name.All(char.IsLetterOrDigit) ? member.Name : "op")}";
+        var stem = $"$template$witness${Sanitise(concrete is NamedTypeSymbol ? QualifiedName(definition) : instance.ToString())}${Sanitise(QualifiedName(protocol))}${index}${(member.Name.All(char.IsLetterOrDigit) ? member.Name : "op")}";
         if (_module.Find(stem) is not null) {
             return stem;
         }
@@ -461,8 +519,7 @@ public sealed partial class SilGen {
         }
 
         using (Opaque(shape)) {
-            var concrete = definition.Construct([..definition.TypeParameters.Cast<TypeSymbol>()]);
-            inner = Lower(concrete) is { } value ? GenericWitness(concrete, value, protocol, key, member, innerType, at, ($"{stem}$body", shape)) : null;
+            inner = Lower(concrete) is { } value ? GenericWitness(concrete, value, protocol, key, member, innerType, at, ($"{stem}$body", shape), definition) : null;
         }
 
         if (inner is null) {

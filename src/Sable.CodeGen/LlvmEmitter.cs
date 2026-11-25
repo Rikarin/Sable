@@ -178,6 +178,10 @@ public sealed partial class LlvmEmitter {
             constructors.Add(templates);
         }
 
+        if (StructuralRegistration(module) is { } structural) {
+            constructors.Add(structural);
+        }
+
         if (GenericDeinitRegistration(module) is { } genericDeinits) {
             constructors.Add(genericDeinits);
         }

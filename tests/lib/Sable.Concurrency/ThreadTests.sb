@@ -1,0 +1,302 @@
+module ThreadTests
+
+// Thread, JoinHandle and ThreadPriority (Sable.Concurrency).
+
+import Sable.Concurrency
+import Sable.Testing
+import Sable.Time
+
+struct Refused: Error {
+    let code: Int
+}
+
+final class Counted {
+    let gone: Atomic<Int>
+    init(_ gone: Atomic<Int>) { self.gone = gone }
+    deinit { gone.add(1) }
+}
+
+@test
+fn aThreadGivesWhatItsBodyGives() {
+    let words = ["a", "b", "c"]
+    let joined = Thread.spawn { words.joined(separator: "-") }
+    assertEqual(joined.join(), "a-b-c")
+    // Any number of times.
+    assertEqual(joined.join(), "a-b-c")
+    assert(joined.isFinished)
+}
+
+@test
+fn aThreadsErrorIsThrownWhereItIsJoined() throws {
+    let refused = Thread.spawn { () throws(Refused) -> Int in
+        throw Refused { code: 7 }
+    }
+    let error = thrown { _ = try refused.join() } as? Refused
+    assertEqual(error?.code, 7)
+    let typed: JoinHandle<Int, Refused> = refused
+    do {
+        _ = try typed.join()
+        fail("it threw")
+    } catch {
+        assertEqual(error.code, 7)
+    }
+}
+
+@test
+fn aThreadsOutcomeMayBeAwaited() async throws {
+    let parked = Thread.spawn {
+        Thread.park()
+        return 42
+    }
+    let waiting = Task.spawn { await parked.value() }
+    await Task.yield()
+    parked.thread.unpark()
+    assertEqual(await waiting.value, 42)
+    assertEqual(await parked.value(), 42)
+    let refused = Thread.spawn { () throws(Refused) -> Int in
+        throw Refused { code: 1 }
+    }
+    do {
+        _ = try await refused.value()
+        fail("it threw")
+    } catch {
+        assertEqual(error.code, 1)
+    }
+}
+
+@test
+fn manyTasksMayAwaitOneThread() async {
+    let thread = Thread.spawn {
+        Thread.sleep(Duration.milliseconds(2))
+        return 3
+    }
+    let total = await withTaskGroup(of: Int.self) { group in
+        for _ in 0..<50 {
+            group.spawn { await thread.value() }
+        }
+        var sum = 0
+        for await one in group {
+            sum += one
+        }
+        return sum
+    }
+    assertEqual(total, 150)
+}
+
+@test
+fn aJoinWithALimitGivesUpWhenItIsReached() {
+    let parked = Thread.spawn {
+        Thread.park()
+        return 1
+    }
+    assert(parked.join(atMost: Duration.milliseconds(2)) == none)
+    assert(!parked.isFinished)
+    parked.thread.unpark()
+    assertEqual(parked.join(atMost: Duration.seconds(60)), 1)
+}
+
+@test
+fn aThreadLetGoOfEndsAllTheSame() {
+    let done = Atomic(false)
+    let latch = CountdownLatch(count: 1)
+    Thread.spawn {
+        done.store(true)
+        latch.countDown()
+    }.detach()
+    latch.wait()
+    assert(done.load())
+}
+
+@test
+fn whatAThreadCapturesAndGivesIsLetGoOf() {
+    let gone = Atomic(0)
+    let made = Thread.spawn {
+        let one = Counted(gone)
+        return one.gone === gone
+    }
+    assert(made.join())
+    assertEqual(gone.load(), 1)
+    let text = "captured \(gone.load())"
+    let count = Thread.spawn { [text, text, text] }
+    assertEqual(count.join().map { $0.count }, [10, 10, 10])
+}
+
+@test
+fn eachThreadHasANumberAndItsName() {
+    let here = Thread.current
+    assert(here == Thread.current && here.id == Thread.current.id)
+    let named = Thread.spawn(name: "a name longer than fifteen bytes: ünïcode") { Thread.current }
+    let itself = named.join()
+    assert(itself == named.thread && itself != here)
+    assertEqual(itself.name, "a name longer than fifteen bytes: ünïcode")
+    assertNotEqual(itself.id, here.id)
+    assert(Thread.spawn { Thread.current.name }.join() == none)
+}
+
+@test
+async fn aWorkerIsNamedForItsNumber() {
+    let name = await Task.spawn { Thread.current.name }.value
+    assert(name == "main" || name!.hasPrefix("sable-worker-"))
+}
+
+@test
+fn aThreadHasTheStackItIsGiven() {
+    fn depth(_ n: Int) -> Int {
+        return n == 0 ? 0 : 1 + depth(n - 1)
+    }
+    // Some of 64 MiB, which eight would not hold.
+    assertEqual(Thread.spawn(stackSize: 64 * 1024 * 1024) { depth(100_000) }.join(), 100_000)
+    // The least there is, for a size too small.
+    assertEqual(Thread.spawn(stackSize: 1) { depth(100) }.join(), 100)
+}
+
+@test
+fn aThreadRunsAtWhatPriorityTheSystemAllows() {
+    // Not the lowest, which may not run while the machine is busy.
+    assert(ThreadPriority.Low != ThreadPriority.High)
+    assert(ThreadPriority.Lowest.debugDescription().hasSuffix("Lowest"))
+    for priority in [ThreadPriority.Low, ThreadPriority.Normal, ThreadPriority.High, ThreadPriority.Highest] {
+        assertEqual(Thread.spawn(priority: priority) { 5 }.join(), 5)
+    }
+}
+
+@test
+fn aTokenIsTakenOnceAndKeptUntilItIs() {
+    let thread = Thread.current
+    assert(!Thread.park(atMost: Duration.milliseconds(1)))
+    thread.unpark()
+    thread.unpark()
+    Thread.park()
+    assert(!Thread.park(atMost: Duration.milliseconds(1)))
+}
+
+@test
+fn twoThreadsTakeTurnsByTheirTokens() {
+    let turns = Atomic(0)
+    let first = Thread.current
+    let other = Thread.spawn {
+        for _ in 0..<100 {
+            Thread.park()
+            turns.add(1)
+            first.unpark()
+        }
+    }
+    for i in 0..<100 {
+        other.thread.unpark()
+        while turns.load() != i + 1 {
+            Thread.park()
+        }
+    }
+    other.join()
+    assertEqual(turns.load(), 100)
+}
+
+@test
+fn aSleepTakesAtLeastItsTime() {
+    let before = Runtime.monotonicNanoseconds()
+    Thread.sleep(Duration.milliseconds(3))
+    Thread.sleep(Duration.zero)
+    Thread.sleep(Duration.milliseconds(-1))
+    assert(Runtime.monotonicNanoseconds() - before >= 3_000_000)
+    Thread.`yield`()
+}
+
+@test
+fn aThreadSpawnsTasksAndBlocksOnThem() async {
+    let sum = Thread.spawn {
+        let tasks = (0..<20).map { n in
+            Task.spawn { n }
+        }
+        return Thread.blockOn {
+            var sum = 0
+            for task in tasks {
+                sum += await task.value
+            }
+            return sum
+        }
+    }
+    // Awaited: with SABLE_WORKERS=0 the main thread runs the tasks.
+    assertEqual(await sum.value(), 190)
+}
+
+@test
+fn theMainThreadBlocksOnATask() throws {
+    assertEqual(Thread.blockOn { await Task.spawn { 6 * 7 }.value }, 42)
+    let slept = Thread.blockOn { () -> Int in
+        try? await Task.sleep(nanoseconds: 1_000_000)
+        return 8
+    }
+    assertEqual(slept, 8)
+    let error = thrown {
+        _ = try Thread.blockOn { () throws(Refused) -> Int in
+        throw Refused { code: 2 }
+    }
+    } as? Refused
+    assertEqual(error?.code, 2)
+}
+
+@test
+fn theMainThreadRunsTheMainActorsTasksWhileItBlocks() {
+    let here = Thread.current
+    let there = Thread.blockOn { () -> Bool in
+        await Task.spawn { await onTheMainActor(here) }.value
+    }
+    assert(there)
+}
+
+@MainActor
+fn onTheMainActor(_ thread: Thread) -> Bool {
+    return Thread.current == thread
+}
+
+@test
+async fn aTaskSpawnedByAThreadOutlivesIt() {
+    let opened = AsyncSemaphore(permits: 0)
+    let result = Atomic(0)
+    let task = Thread.spawn {
+        Task.spawn {
+        await opened.acquire()
+        result.store(5)
+    }
+    }
+    let spawned = await task.value()
+    await opened.release()
+    await spawned.value
+    assertEqual(result.load(), 5)
+}
+
+@test
+fn manyThreadsMayRunAtOnce() {
+    let total = Atomic(0)
+    for _ in 0..<5 {
+        let threads = (0..<20).map { n in
+            Thread.spawn {
+                total.add(n)
+                return "\(n)"
+            }
+        }
+        var texts: String[>..] = []
+        for thread in threads {
+            texts.append(thread.join())
+        }
+        assertEqual(texts, (0..<20).map { "\($0)" })
+    }
+    assertEqual(total.load(), 950)
+}
+
+@test
+fn thereIsAtLeastOneProcessor() {
+    assert(Thread.availableParallelism >= 1)
+}
+
+// What the body throws; an error of no other, if it throws nothing.
+struct Nothing: Error { }
+
+fn thrown(_ body: () throws -> Void) -> any Error {
+    do {
+        try body()
+        return Nothing()
+    } catch {
+        return error
+    }
+}

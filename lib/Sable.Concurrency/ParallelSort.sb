@@ -1,0 +1,196 @@
+module Sable.Concurrency
+
+// A merge sort by several threads: the array cut into runs, each sorted by a
+// thread, and the runs merged pairwise, back and forth between the array and
+// a scratch one. A merge is cut into pieces that threads make apart: where a
+// piece begins in each of the two runs is found by a binary search (a merge
+// path), before any element is moved.
+
+// The order elements are put in: the types' own, or one given.
+protocol ParallelOrder {
+    associatedtype Element: Sendable
+
+    fn before(_ a: Element, _ b: Element) -> Bool
+
+    fn sort(_ elements: inout Element[>..])
+}
+
+struct NaturalOrder<Element: Sendable & Comparable>: ParallelOrder {
+    fn before(_ a: Element, _ b: Element) -> Bool {
+        return a < b
+    }
+
+    fn sort(_ elements: inout Element[>..]) {
+        elements.sort()
+    }
+}
+
+struct GivenOrder<Element: Sendable>: ParallelOrder {
+    let body: (Element, Element) -> Bool
+
+    fn before(_ a: Element, _ b: Element) -> Bool {
+        return body(a, b)
+    }
+
+    fn sort(_ elements: inout Element[>..]) {
+        elements.sort(by: body)
+    }
+}
+
+// Two runs end to end, to be merged: where they are, and the pieces their
+// merge is cut into.
+struct ParallelMerge {
+    let low: Int
+    let middle: Int
+    let high: Int
+    let pieces: Int
+}
+
+// How many runs: a power of two, more than there are threads; 1 where there
+// is not enough to sort to be worth one.
+fn parallelRuns(_ count: Int, _ degree: Int) -> Int {
+    let threads = degree == 0 ? Runtime.workerCount() : degree
+    if threads < 2 {
+        return 1
+    }
+    var runs = 1
+    while runs < threads * 2 && count / (runs * 2) >= 2048 {
+        runs *= 2
+    }
+    return runs
+}
+
+fn parallelSorted<Order: ParallelOrder>(_ elements: inout Order.Element[:], _ degree: Int, _ order: Order) {
+    let count = elements.count
+    let runs = parallelRuns(count, degree)
+    elements.withMutablePointer { (own: RawPtr<Order.Element>) in
+        // What two elements hold may be one object, which two threads count.
+        if runs > 1 {
+            var i = 0
+            while i < count {
+                unsafe {
+                    Runtime.share(own.load(at: i))
+                }
+                i += 1
+            }
+        }
+
+        // Each run taken out, sorted and put back.
+        unsafe {
+            parallelFor(0..<runs, degree: degree) { (run: Int) in
+                unsafe {
+                    let low = count * run / runs
+                    let high = count * (run + 1) / runs
+                    var part: Order.Element[>..] = []
+                    part.reserveCapacity(high - low)
+                    var i = low
+                    while i < high {
+                        part.append(own.move(at: i))
+                        i += 1
+                    }
+                    order.sort(&part)
+                    i = high
+                    while i > low {
+                        i -= 1
+                        own.initialize(to: part.removeLast(), at: i)
+                    }
+                }
+            }
+        }
+        if runs == 1 {
+            return
+        }
+
+        unsafe {
+            let scratch = RawPtr<Order.Element>.allocate(count: count)
+            defer {
+                unsafe {
+                    scratch.deallocate()
+                }
+            }
+            var width = 1
+            var inScratch = false
+            while width < runs {
+                let from = inScratch ? scratch : own
+                let to = inScratch ? own : scratch
+                mergeRuns(from, to, count, runs, width, degree, order)
+                inScratch = !inScratch
+                width *= 2
+            }
+            if inScratch {
+                own.moveInitialize(from: scratch, count: count)
+            }
+        }
+    }
+}
+
+// Each pair of runs of so many of the first runs each, merged from one place
+// to the other.
+unsafe fn mergeRuns<Order: ParallelOrder>(_ from: RawPtr<Order.Element>, _ to: RawPtr<Order.Element>, _ count: Int, _ runs: Int, _ width: Int, _ degree: Int, _ order: Order) {
+    // As many pieces as there are runs; the part of the left run before each.
+    let pieces = width * 2
+    var lefts: Int[>..] = []
+    lefts.reserveCapacity(runs)
+    for piece in 0..<runs {
+        let merge = mergeOf(piece / pieces, count, runs, width)
+        lefts.append(leftPart(from, merge, (merge.high - merge.low) * (piece % pieces) / pieces, order))
+    }
+    let left = lefts
+    parallelFor(0..<runs, degree: degree) { (piece: Int) in
+        unsafe {
+            let merge = mergeOf(piece / pieces, count, runs, width)
+            let within = piece % pieces
+            let length = merge.high - merge.low
+            var k = length * within / pieces
+            let end = length * (within + 1) / pieces
+            var x = merge.low + left[piece]
+            var y = merge.middle + k - left[piece]
+            let lastX = within + 1 == pieces ? merge.middle : merge.low + left[piece + 1]
+            let lastY = within + 1 == pieces ? merge.high : merge.middle + end - left[piece + 1]
+            k += merge.low
+            while x < lastX && y < lastY {
+                // The left one, where neither is before the other.
+                let takesRight = order.before(from.load(at: y), from.load(at: x))
+                to.initialize(to: from.move(at: takesRight ? y : x), at: k)
+                let step = takesRight ? 1 : 0
+                y += step
+                x += 1 - step
+                k += 1
+            }
+            while x < lastX {
+                to.initialize(to: from.move(at: x), at: k)
+                x += 1
+                k += 1
+            }
+            while y < lastY {
+                to.initialize(to: from.move(at: y), at: k)
+                y += 1
+                k += 1
+            }
+        }
+    }
+}
+
+fn mergeOf(_ pair: Int, _ count: Int, _ runs: Int, _ width: Int) -> ParallelMerge {
+    let first = pair * width * 2
+    return ParallelMerge { low: count * first / runs, middle: count * (first + width) / runs, high: count * (first + width * 2) / runs, pieces: width * 2 }
+}
+
+// How many of the first 'k' elements of a merge are the left run's.
+unsafe fn leftPart<Order: ParallelOrder>(_ from: RawPtr<Order.Element>, _ merge: ParallelMerge, _ k: Int, _ order: Order) -> Int {
+    let left = merge.middle - merge.low
+    let right = merge.high - merge.middle
+    var low = k > right ? k - right : 0
+    var high = k < left ? k : left
+    while low < high {
+        let i = (low + high) / 2
+        // The element of the left run there goes before the last of the
+        // right's that this many would take: more of the left.
+        if k - i > 0 && !order.before(from.load(at: merge.middle + k - i - 1), from.load(at: merge.low + i)) {
+            low = i + 1
+        } else {
+            high = i
+        }
+    }
+    return low
+}

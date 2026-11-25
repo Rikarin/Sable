@@ -1,19 +1,13 @@
 module Linq
 
+import Sable.Testing
+
 // A lazy filter, map and sum against LINQ's Where, Select and Sum: ten
 // million integers, through the chain five times, each round with its own
 // filter; then the same sum by a hand-written loop, which the chain should
 // match. The output is both sums.
 
-@main
-fn main() {
-    var values: Int[>..] = []
-    var i = 0
-    while i < 10000000 {
-        values.append(i)
-        i = i + 1
-    }
-
+fn run(_ values: Int[>..]) -> String {
     var chained = 0
     var round = 0
     while round < 5 {
@@ -34,5 +28,16 @@ fn main() {
         round = round + 1
     }
 
-    print("\(chained) \(looped)")
+    return "\(chained) \(looped)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    var values: Int[>..] = []
+    var i = 0
+    while i < 10000000 {
+        values.append(i)
+        i = i + 1
+    }
+    b.check(b.iterate { run(values) })
 }

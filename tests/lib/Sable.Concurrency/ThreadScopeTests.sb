@@ -1,0 +1,193 @@
+module ThreadScopeTests
+
+// Thread.scope and ThreadScope (Sable.Concurrency).
+
+import Sable.Concurrency
+import Sable.Testing
+import Sable.Time
+
+struct Stopped: Error { }
+
+@test
+fn aScopesThreadsChangeTheVariablesAroundIt() {
+    let numbers = (0..<1000).toArray()
+    var sum = 0
+    var texts: String[>..] = ["before"]
+    Thread.scope { s in
+        s.spawn {
+            for n in numbers {
+                sum += n
+            }
+        }
+        s.spawn { texts.append("after \(numbers.count)") }
+    }
+    assertEqual(sum, 499_500)
+    assertEqual(texts, ["before", "after 1000"])
+    texts.append("again")
+    sum += 1
+    assertEqual(texts.count + sum, 499_504)
+}
+
+@test
+fn aScopeGivesWhatItsBodyGives() {
+    let total = Thread.scope { s in
+        let first = s.spawn { 20 }
+        let second = s.spawn(name: "second", stackSize: 300_000, priority: .High) { 22 }
+        return first.join() + second.join()
+    }
+    assertEqual(total, 42)
+}
+
+@test
+fn everyThreadHasEndedWhenAScopeThrows() {
+    let ended = Atomic(false)
+    var changed = 0
+    do {
+        try Thread.scope { (s: ThreadScope) throws -> Void in
+            s.spawn {
+                Thread.sleep(Duration.milliseconds(3))
+                changed = 5
+                ended.store(true)
+            }
+            throw Stopped()
+        }
+        fail("it threw")
+    } catch {
+        assert(ended.load())
+    }
+    assertEqual(changed, 5)
+}
+
+@test
+fn anErrorNoOneJoinsIsDropped() {
+    let result = Thread.scope { s in
+        s.spawn { () throws -> Void in
+            throw Stopped()
+        }
+        return 3
+    }
+    assertEqual(result, 3)
+}
+
+@test
+fn anErrorJoinedIsThrown() {
+    assert(thrown {
+        try Thread.scope { (s: ThreadScope) throws -> Void in
+        let thread = s.spawn { () throws -> Int in
+            throw Stopped()
+        }
+        _ = try thread.join()
+    }
+    } is Stopped)
+}
+
+@test
+fn manyThreadsShareWhatNoOneChanges() {
+    let words = (0..<100).map { "word \($0)" }
+    let counted = Atomic(0)
+    Thread.scope { s in
+        for n in 0..<8 {
+            s.spawn {
+                var count = 0
+                for word in words {
+                    count += word.count
+                }
+                counted.add(count + n)
+            }
+        }
+    }
+    assertEqual(counted.load(), 690 * 8 + 28)
+}
+
+@test
+fn aValueMayBeCaptured() {
+    var n = 1
+    let seen = Atomic(0)
+    Thread.scope { s in
+        let copy = n
+        s.spawn { seen.add(copy) }
+        s.spawn { seen.add(copy) }
+        n = 2
+    }
+    assertEqual(seen.load() + n, 4)
+}
+
+fn doubled(_ values: inout Int[>..]) {
+    Thread.scope { s in
+        s.spawn {
+            for i in 0..<values.count {
+                values[i] *= 2
+            }
+        }
+    }
+}
+
+@test
+fn anInoutParameterMayBeChanged() {
+    var values: Int[>..] = [1, 2, 3]
+    doubled(&values)
+    assertEqual(values, [2, 4, 6])
+}
+
+@test
+fn scopesNest() {
+    var inner = 0
+    var outer = 0
+    Thread.scope { s in
+        s.spawn {
+            var here = 0
+            Thread.scope { t in
+                t.spawn { here = 3 }
+            }
+            outer = here * 2
+        }
+    }
+    Thread.scope { s in
+        s.spawn { inner = 1 }
+    }
+    assertEqual(outer + inner, 7)
+}
+
+@test
+async fn aTaskMayHaveAScope() {
+    var found = 0
+    Thread.scope { s in
+        s.spawn { found = 9 }
+    }
+    await Task.yield()
+    assertEqual(found, 9)
+}
+
+// What a thread makes and stores is the function's after: counted as what
+// threads share is.
+@test
+fn whatAThreadMadeIsUsedAfter() {
+    var table: [String: String[>..]] = ["kept": ["a"]]
+    let kept = table["kept"]!
+    Thread.scope { s in
+        s.spawn {
+            for i in 0..<50 {
+                table["key \(i)"] = ["\(i)", "\(i + 1)"]
+            }
+            var more = kept
+            more.append("b")
+            table["kept"] = more
+        }
+    }
+    assertEqual(table.count, 51)
+    assertEqual(table["key 49"]!, ["49", "50"])
+    assertEqual(table["kept"]!, ["a", "b"])
+    assertEqual(kept, ["a"])
+}
+
+// What the body throws; an error of no other, if it throws nothing.
+struct Nothing: Error { }
+
+fn thrown(_ body: () throws -> Void) -> any Error {
+    do {
+        try body()
+        return Nothing()
+    } catch {
+        return error
+    }
+}

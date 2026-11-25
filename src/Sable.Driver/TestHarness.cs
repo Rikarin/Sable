@@ -34,7 +34,7 @@ namespace Sable.Driver;
 ///         whole is compiled again, starting at the harness.
 ///     </para>
 /// </remarks>
-public static class TestHarness {
+public static partial class TestHarness {
     /// <summary>The module the entry point is written in.</summary>
     public const string HarnessModule = "SableHarness";
 
@@ -66,15 +66,19 @@ public static class TestHarness {
         string? debugDirectory = null,
         bool checkExclusivity = true,
         Func<string, bool>? coverage = null,
-        Func<string, bool>? coverLibrary = null
+        Func<string, bool>? coverLibrary = null,
+        string? optLevel = null,
+        bool apart = false
     ) {
         var warnings = new List<string>();
         CoverageMap? map = null;
         var result = Compile(trees, kind, out tests, docExamples, debugDirectory, checkExclusivity, warnings,
-            coverage is null && coverLibrary is null ? null : (coverage ?? (static _ => false), coverLibrary, m => map = m));
+            coverage is null && coverLibrary is null ? null : (coverage ?? (static _ => false), coverLibrary, m => map = m), optLevel, apart);
         return result with { Warnings = warnings, Coverage = map };
     }
 
+    /// <param name="optLevel">The level whose SIL passes are run; every one of them when null.</param>
+    /// <param name="apart">Keep each test a function of its own, inlined nowhere: to look at what it became.</param>
     /// <param name="warnings">Filled with the program's warnings, once it has been checked.</param>
     static CompileResult Compile(
         IReadOnlyList<SyntaxTree> trees,
@@ -84,7 +88,9 @@ public static class TestHarness {
         string? debugDirectory,
         bool checkExclusivity,
         List<string> warnings,
-        (Func<string, bool> Measured, Func<string, bool>? Library, Action<CoverageMap> Made)? coverage = null
+        (Func<string, bool> Measured, Func<string, bool>? Library, Action<CoverageMap> Made)? coverage = null,
+        string? optLevel = null,
+        bool apart = false
     ) {
         tests = [];
         var program = trees.ToList();
@@ -121,7 +127,8 @@ public static class TestHarness {
         }
 
         tests = checkedAlone.GetTestFunctions(kind);
-        var harness = Write(tests, kind, options);
+        // A test build replays the fuzz targets' saved inputs too.
+        var harness = Write(tests, kind, options, kind == TestKind.Test ? checkedAlone.GetTestFunctions(TestKind.Fuzz) : []);
         var compilation = Compilation.Create([..program, ..harness, ..LibraryFor([..program, ..harness])]);
         var check = wholeLibrary || kind == TestKind.Fuzz ? null : Library.CheckFor(compilation, [..program, ..harness]);
         var standard = check?.Skipped;
@@ -143,12 +150,19 @@ public static class TestHarness {
 
         module.CheckExclusivity = checkExclusivity;
         if (lowering.Count > 0) {
-            return new(module, null, [..lowering.Select(d => Format(d, primary.Text))]);
+            return new(module, null, [..lowering.Select(d => d.Anchor is { } anchor && compilation.TreeOf(anchor) is { } file ? d.Format(file.Text) : Format(d, primary.Text))]);
         }
 
         var problems = SilVerifier.Verify(module);
         if (problems.Count > 0) {
             return new(module, null, [..problems.Select(static p => $"internal error: SIL verification failed: {p}")]);
+        }
+
+        if (apart) {
+            var names = tests.Select(static t => t.QualifiedName).ToHashSet(StringComparer.Ordinal);
+            foreach (var function in module.Functions.Where(f => names.Contains(f.Name))) {
+                function.Inline = SilInline.Never;
+            }
         }
 
         // Counted where the program's own code is, before any pass: the
@@ -163,17 +177,17 @@ public static class TestHarness {
             made(map with { Counters = [..map.Counters, ..NeverLowered(compilation, Measured, map)] });
         }
 
-        if (debugDirectory is null) {
+        if (debugDirectory is null || optLevel is not (null or "0")) {
             try {
                 // Over what the harness can reach, as a build's (Pipeline.Compile).
                 SilPassManager.RemoveUnreachable(module);
-                SilPassManager.Run(module, SilPassManager.Default);
+                SilPassManager.Run(module, optLevel is null ? SilPassManager.Default : SilPassManager.ForLevel(optLevel));
             } catch (SilPassException failure) {
                 return new(module, null, [$"internal error: {failure.Message}"]);
             }
         }
 
-        var ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory, sources: Pipeline.EmbeddedSources(compilation.SyntaxTrees, program));
+        var ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory, optimised: optLevel is not (null or "0"), sources: Pipeline.EmbeddedSources(compilation.SyntaxTrees, program));
         if (standard is null) {
             check?.Passed();
         }
@@ -280,7 +294,7 @@ public static class TestHarness {
     ///     The harness's files: one per module with tests, then the entry
     ///     point's. Public so that a test can see what the compiler writes.
     /// </summary>
-    public static IReadOnlyList<SyntaxTree> Write(IReadOnlyList<TestFunction> tests, TestKind kind, ParseOptions? options = null) {
+    public static IReadOnlyList<SyntaxTree> Write(IReadOnlyList<TestFunction> tests, TestKind kind, ParseOptions? options = null, IReadOnlyList<TestFunction>? replayed = null) {
         options ??= ParseOptions.Default;
         if (kind == TestKind.Fuzz) {
             return WriteFuzz(tests, options);
@@ -334,6 +348,8 @@ public static class TestHarness {
             WriteMaking(making, isSuite: tests.Any(t => t.Suite?.Type == making.Type), written, files, options);
         }
 
+        var (replayImports, replays) = WriteReplays(replayed ?? [], files, options);
+        main.Append(replayImports);
         var (caseType, run) = kind == TestKind.Test ? ("TestCase", "runTests") : ("BenchCase", "runBenchmarks");
         // The entry point is async: 'runTests' and 'runBenchmarks' await each one.
         main.Append(CultureInfo.InvariantCulture, $"\n@main\nasync fn {EntryName}() -> Int {{\n    var all: {caseType}[>..] = []\n");
@@ -344,13 +360,15 @@ public static class TestHarness {
                 if (kind == TestKind.Test) {
                     main.Append(CultureInfo.InvariantCulture, $"    if wantsTest({Quote(test.QualifiedName)}) {{\n        all.append(TestCase({Case(test, test.Fixtures.Count > 0 && test.Arguments.Count == 0 ? RunName + Suffix(m, i) : $"list{m}[{i}]", Suffix(m, i))}))\n    }}\n");
                 } else {
-                    main.Append(CultureInfo.InvariantCulture, $"    all.append({caseType} {{ name: {Quote(test.QualifiedName)}, location: {Quote(test.Location)}, run: list{m}[{i}] }})\n");
+                    var cases = test.Arguments.Count > 0 ? CasesName + Suffix(m, i) : "none";
+                    main.Append(CultureInfo.InvariantCulture, $"    all.append({caseType} {{ name: {Quote(test.QualifiedName)}, location: {Quote(test.Location)}, run: list{m}[{i}], tags: [{string.Join(", ", test.Tags.Select(Quote))}], cases: {cases} }})\n");
                 }
 
                 i++;
             }
         }
 
+        main.Append(replays);
         main.Append(CultureInfo.InvariantCulture, $"    return await {run}(all)\n}}\n");
         files.Add(SyntaxTree.Parse(new SourceText(main.ToString(), "<harness>"), options));
         return files;
@@ -362,7 +380,7 @@ public static class TestHarness {
 
     static bool HasCondition(TestFunction test) => test.Skips.Any(static s => s.Condition is not null);
 
-    static bool NeedsFile(TestFunction test) => test.Kind == TestKind.Test && (test.Arguments.Count > 0 || test.Fixtures.Count > 0 || HasCondition(test) || test.Suite is { Parameters.Count: > 0 });
+    static bool NeedsFile(TestFunction test) => test.Arguments.Count > 0 || test.Kind == TestKind.Test && (test.Fixtures.Count > 0 || HasCondition(test) || test.Suite is { Parameters.Count: > 0 });
 
     /// <summary>A test as the entry point lists it: what it is, and what it says of itself where it says anything.</summary>
     static string Case(TestFunction test, string run, string suffix) {
@@ -475,7 +493,7 @@ public static class TestHarness {
         var type = test.CallPath.LastIndexOf('.') is var dot and >= 0 ? test.CallPath[..dot] : null;
         var functions = new List<(string Signature, string Name, string Pass, string Body)>();
         if (test.Arguments.Count > 0) {
-            functions.Add(("fn {0}() -> TestArguments[>..]", CasesName, "()", WriteCases(test)));
+            functions.Add(($"fn {{0}}() -> {(test.Kind == TestKind.Bench ? "BenchArguments" : "TestArguments")}[>..]", CasesName, "()", WriteCases(test)));
         }
 
         if (test.Fixtures.Count > 0 && test.Arguments.Count == 0) {
@@ -497,7 +515,9 @@ public static class TestHarness {
         }
 
         var text = new StringBuilder();
-        text.Append(Header(test.Module, test.Tree)).Append("import Sable.Testing.{ TestArguments, describeArgument, FixtureScope, FixtureLifetime, Fixture }\n\n// Written by the compiler for 'sable test'.\n");
+        text.Append(Header(test.Module, test.Tree)).Append(test.Kind == TestKind.Bench
+            ? "import Sable.Testing.{ BenchArguments, Bencher, describeArgument }\n\n// Written by the compiler for 'sable bench'.\n"
+            : "import Sable.Testing.{ TestArguments, describeArgument, FixtureScope, FixtureLifetime, Fixture }\n\n// Written by the compiler for 'sable test'.\n");
         foreach (var (signature, name, pass, body) in functions) {
             var function = string.Format(CultureInfo.InvariantCulture, signature, name + suffix);
             if (type is null) {
@@ -513,13 +533,14 @@ public static class TestHarness {
 
     /// <summary>The body that gives a <c>@test(arguments:)</c> test's cases.</summary>
     static string WriteCases(TestFunction test) {
-        var parameters = test.GivenParameters;
-        var types = test.Syntax.Parameters.Parameters.Take(parameters.Length).Select(static p => p.Type.ToString().Trim()).ToList();
+        var parameters = test.ArgumentParameters;
+        var type = test.Kind == TestKind.Bench ? "BenchArguments" : "TestArguments";
+        var types = test.Syntax.Parameters.Parameters.Skip(test.TakesBencher ? 1 : 0).Take(parameters.Count).Select(static p => p.Type.ToString().Trim()).ToList();
         var arrays = test.Arguments.Select(static a => a.ToString().Trim()).ToList();
-        var values = Enumerable.Range(0, parameters.Length).Select(static i => string.Create(CultureInfo.InvariantCulture, $"sableValue{i}")).ToList();
+        var values = Enumerable.Range(0, parameters.Count).Select(static i => string.Create(CultureInfo.InvariantCulture, $"sableValue{i}")).ToList();
         var body = new StringBuilder();
-        body.Append("    var sableCases: TestArguments[>..] = []\n");
-        if (arrays.Count == 1 && parameters.Length > 1) {
+        body.Append(CultureInfo.InvariantCulture, $"    var sableCases: {type}[>..] = []\n");
+        if (arrays.Count == 1 && parameters.Count > 1) {
             body.Append(CultureInfo.InvariantCulture, $"    let sableValues: ({string.Join(", ", types)})[>..] = {arrays[0]}\n    for ({string.Join(", ", values)}) in sableValues {{\n");
         } else {
             for (var i = 0; i < arrays.Count; i++) {
@@ -533,7 +554,7 @@ public static class TestHarness {
 
         var call = string.Join(", ", parameters.Select((p, i) => p.Label == "_" ? values[i] : $"{p.Label ?? p.Name}: {values[i]}").Append(Passed(test.Fixtures)).Where(static a => a.Length > 0));
         var described = string.Join(", ", values.Select(static v => $"\\(describeArgument({v}))"));
-        body.Append(CultureInfo.InvariantCulture, $"        sableCases.append(TestArguments(\"{described}\", (scope: FixtureScope) => {{ {Call(test, call)} }}))\n");
+        body.Append(CultureInfo.InvariantCulture, $"        sableCases.append({type}(\"{described}\", {(test.Kind == TestKind.Bench ? BenchThunk(test, call) : $"(scope: FixtureScope) => {{ {Call(test, call)} }}")}))\n");
         return body.Append(string.Concat(Enumerable.Repeat("    }\n", arrays.Count))).Append("    return sableCases\n").ToString();
     }
 
@@ -554,69 +575,21 @@ public static class TestHarness {
         // One whose fixtures are given in a file that can name them.
         { Kind: TestKind.Test, Fixtures.Count: > 0 } => "(scope: FixtureScope) => { }",
         { Kind: TestKind.Test } => $"(scope: FixtureScope) => {{ {Call(test, "")} }}",
-        { Kind: TestKind.Bench, TakesBencher: true } => $"(b: Bencher) => {{ {Await(test)}{test.CallPath}(b) }}",
-        { Kind: TestKind.Bench, IsAsync: true } => $"(b: Bencher) => {{ await b.iterateAsync(() => {{ await {test.CallPath}() }}) }}",
-        _ => $"(b: Bencher) => {{ b.iterate(() => {test.CallPath}()) }}",
+        { Arguments.Count: > 0 } => "(b: Bencher) => { }",
+        _ => BenchThunk(test, ""),
     };
 
+    /// <summary>The closure that measures one benchmark.</summary>
+    static string BenchThunk(TestFunction test, string arguments) => test switch {
+        { TakesBencher: true } => $"(sableBencher: Bencher) => {{ {Await(test)}{test.CallPath}({BencherArgument(test)}{(arguments.Length > 0 ? ", " : "")}{arguments}) }}",
+        { IsAsync: true } => $"(b: Bencher) => {{ await b.iterateAsync(() => {{ await {test.CallPath}({arguments}) }}) }}",
+        _ => $"(b: Bencher) => {{ b.iterate(() => {test.CallPath}({arguments})) }}",
+    };
+
+    static string BencherArgument(TestFunction test) =>
+        test.Symbol.Parameters[0] is { Label: not "_" } named ? $"{named.Label ?? named.Name}: sableBencher" : "sableBencher";
+
     static string Await(TestFunction test) => test.IsAsync ? "await " : "";
-
-    /// <summary>
-    ///     A fuzz build's harness: in each module with targets, a function
-    ///     listing a closure per target, as a test build's; then what C calls
-    ///     (<see cref="FuzzBuild.Shim" />) — <c>sable_harness_fuzz_begin</c>, then
-    ///     <c>sable_harness_fuzz_push</c> for each byte of an input, since only
-    ///     integers cross to C, then <c>sable_harness_fuzz_run</c> with the number of
-    ///     the target, in <paramref name="targets" />' order, to run on it.
-    /// </summary>
-    static IReadOnlyList<SyntaxTree> WriteFuzz(IReadOnlyList<TestFunction> targets, ParseOptions options) {
-        var files = new List<SyntaxTree>();
-        var main = new StringBuilder();
-        main.Append(CultureInfo.InvariantCulture, $"module {HarnessModule}\n\n");
-        var run = new StringBuilder();
-        var index = 0;
-        var modules = targets.GroupBy(static t => t.Module).ToList();
-        for (var m = 0; m < modules.Count; m++) {
-            var list = $"sableHarnessList{m}";
-            var thunks = new StringBuilder();
-            thunks.Append(CultureInfo.InvariantCulture, $"module {modules[m].Key}\n\n// Written by the compiler for 'sable fuzz'.\npublic fn {list}() -> ((U8[:]) -> Void)[>..] {{\n    return [\n");
-            var i = 0;
-            foreach (var target in modules[m]) {
-                // What a target throws fails it, as a trap does.
-                var call = target.Throws
-                    ? $"(data: U8[:]) => {{\n            do {{ try {target.CallPath}(data) }} catch {{ fatalError(\"{Escape(target.QualifiedName)} threw: \\(error)\") }}\n        }}"
-                    : $"(data: U8[:]) => {{ {target.CallPath}(data) }}";
-                thunks.Append("        ").Append(call).Append(",\n");
-                run.Append(CultureInfo.InvariantCulture, $"    if target == {index++} {{\n        {list}()[{i++}](sableFuzzInput)\n        return\n    }}\n");
-            }
-
-            thunks.Append("    ]\n}\n");
-            files.Add(SyntaxTree.Parse(new SourceText(thunks.ToString(), $"<harness:{modules[m].Key}>"), options));
-            main.Append(CultureInfo.InvariantCulture, $"import {modules[m].Key}.{{ {list} }}\n");
-        }
-
-        main.Append("""
-
-            // Written by the compiler for 'sable fuzz': the input, a byte at a time, and the target to run on it.
-            var sableFuzzInput: U8[>..] = []
-
-            @export("c", "sable_harness_fuzz_begin")
-            fn sableFuzzBegin() {
-                sableFuzzInput = []
-            }
-
-            @export("c", "sable_harness_fuzz_push")
-            fn sableFuzzPush(_ byte: U8) {
-                sableFuzzInput.append(byte)
-            }
-
-            @export("c", "sable_harness_fuzz_run")
-            fn sableFuzzRun(_ target: Int) {
-
-            """).Append(run).Append("}\n");
-        files.Add(SyntaxTree.Parse(new SourceText(main.ToString(), "<harness>"), options));
-        return files;
-    }
 
     /// <summary>Text for inside a string literal: its quotes and backslashes escaped.</summary>
     static string Escape(string text) => Quote(text)[1..^1];

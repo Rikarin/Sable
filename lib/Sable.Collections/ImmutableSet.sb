@@ -1,0 +1,268 @@
+module Sable.Collections
+
+/// Distinct values, by hash, kept so that copies of it stay cheap as they
+/// change: .NET's ImmutableHashSet, Rust's `im::HashSet`. A copy shares all
+/// of the set it was made from, and a change to either copies only the few
+/// nodes on the way to the value. Combining two sets shares what it can of
+/// both, and passes over what they share already.
+///
+/// A value, as Set is, and changed by the same methods, in place where
+/// nothing else holds it: a `var` is its own builder. `inserting` and
+/// `removing` give a changed copy. The order it is gone through in is as
+/// ImmutableDictionary's.
+///
+/// ```sable
+/// let odd = ImmutableSet<Int>([1, 3, 5])
+/// let more = odd.inserting(7)
+/// assert(odd.count == 3 && more.count == 4 && more.contains(7))
+/// assert(more.subtracting(odd) == ImmutableSet<Int>([7]))
+/// assert(odd.isStrictSubset(of: more))
+/// ```
+public struct ImmutableSet<Element: Hashable> {
+    var root: HashTrieNode<Element, SetMember> = HashTrieNode<Element, SetMember>()
+
+    /// An empty set.
+    public init() { }
+
+    /// The distinct values among the sequence's. What going through them
+    /// throws, it throws.
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        for try element in elements {
+            insert(element)
+        }
+    }
+
+    static fn of(_ root: HashTrieNode<Element, SetMember>) -> ImmutableSet<Element> {
+        var made = ImmutableSet<Element>()
+        made.root = root
+        return made
+    }
+
+    /// How many values it holds.
+    public var count: Int => root.size
+
+    /// Whether it holds no values.
+    public var isEmpty: Bool => root.size == 0
+
+    // ---- Members -----------------------------------------------------------
+
+    /// Whether the value is in the set.
+    public fn contains(_ value: Element) -> Bool {
+        return root.contains(value, HashTrieNode<Element, SetMember>.hash(of: value), 0)
+    }
+
+    /// Adds the value; true if it was not there before.
+    @discardable
+    public mutating fn insert(_ value: Element) -> Bool {
+        let hash = HashTrieNode<Element, SetMember>.hash(of: value)
+        // Looked for first, so that nothing is copied for one already there.
+        if root.contains(value, hash, 0) {
+            return false
+        }
+        _ = root.put(HashTrieEntry<Element, SetMember> { key: value, value: SetMember { }, hash: hash }, 0)
+        return true
+    }
+
+    /// Takes the value out; true if it was there.
+    @discardable
+    public mutating fn remove(_ value: Element) -> Bool {
+        let hash = HashTrieNode<Element, SetMember>.hash(of: value)
+        if !root.contains(value, hash, 0) {
+            return false
+        }
+        _ = root.remove(value, hash, 0)
+        return true
+    }
+
+    /// Takes out every value.
+    public mutating fn removeAll() {
+        root = HashTrieNode<Element, SetMember>()
+    }
+
+    /// This set with the value: the rest shared with this one.
+    public fn inserting(_ value: Element) -> ImmutableSet<Element> {
+        var changed = self
+        changed.insert(value)
+        return changed
+    }
+
+    /// This set without the value: the rest shared with this one.
+    public fn removing(_ value: Element) -> ImmutableSet<Element> {
+        var changed = self
+        changed.remove(value)
+        return changed
+    }
+
+    /// The values that pass the test, as a set of their own: parts it keeps
+    /// all of are shared with this one.
+    public fn filter(_ isIncluded: (Element) -> Bool) -> ImmutableSet<Element> {
+        return ImmutableSet.of(root.filter(0, (member: Element, kept: SetMember) => isIncluded(member)))
+    }
+
+    /// The members in a grow-only array, in the order they are gone through.
+    public fn toArray() -> Element[>..] {
+        var members: Element[>..] = []
+        members.reserveCapacity(count)
+        for member in self {
+            members.append(member)
+        }
+        return members
+    }
+
+    // ---- Combining ---------------------------------------------------------
+
+    /// Every value in this set or the other.
+    public fn union(_ other: ImmutableSet<Element>) -> ImmutableSet<Element> {
+        var result = self
+        result.formUnion(other)
+        return result
+    }
+
+    /// The values in both sets.
+    public fn intersection(_ other: ImmutableSet<Element>) -> ImmutableSet<Element> {
+        return ImmutableSet.of(root.select(keysIn: other.root, present: true, 0))
+    }
+
+    /// The values of this set that are not in the other.
+    public fn subtracting(_ other: ImmutableSet<Element>) -> ImmutableSet<Element> {
+        return ImmutableSet.of(root.select(keysIn: other.root, present: false, 0))
+    }
+
+    /// The values in one set but not both: with an older set, what changed
+    /// since, found in time by how much did.
+    public fn symmetricDifference(_ other: ImmutableSet<Element>) -> ImmutableSet<Element> {
+        var result = self.subtracting(other)
+        result.formUnion(other.subtracting(self))
+        return result
+    }
+
+    /// Adds every value of the other set.
+    public mutating fn formUnion(_ other: ImmutableSet<Element>) {
+        root.merge(other.root, 0, keeping: true, (mine: SetMember, theirs: SetMember) => mine)
+    }
+
+    /// Keeps only the values that are also in the other set.
+    public mutating fn formIntersection(_ other: ImmutableSet<Element>) {
+        root = root.select(keysIn: other.root, present: true, 0)
+    }
+
+    /// Takes out every value that is in the other set.
+    public mutating fn subtract(_ other: ImmutableSet<Element>) {
+        root = root.select(keysIn: other.root, present: false, 0)
+    }
+
+    /// Keeps the values in one set but not both.
+    public mutating fn formSymmetricDifference(_ other: ImmutableSet<Element>) {
+        self = self.symmetricDifference(other)
+    }
+
+    // ---- Comparing ---------------------------------------------------------
+
+    /// Whether every value of this set is in the other.
+    public fn isSubset(of other: ImmutableSet<Element>) -> Bool {
+        return !root.hasKey(in: other.root, present: false, 0)
+    }
+
+    /// Whether every value of the other set is in this one.
+    public fn isSuperset(of other: ImmutableSet<Element>) -> Bool {
+        return other.isSubset(of: self)
+    }
+
+    /// Whether this set is a subset of the other, and smaller.
+    public fn isStrictSubset(of other: ImmutableSet<Element>) -> Bool {
+        return count < other.count && self.isSubset(of: other)
+    }
+
+    /// Whether this set is a superset of the other, and larger.
+    public fn isStrictSuperset(of other: ImmutableSet<Element>) -> Bool {
+        return other.isStrictSubset(of: self)
+    }
+
+    /// Whether the two sets have no value in common.
+    public fn isDisjoint(with other: ImmutableSet<Element>) -> Bool {
+        return !root.hasKey(in: other.root, present: true, 0)
+    }
+
+    /// Whether the two are one tree, all of it shared: copies of one another,
+    /// neither changed since. Constant time; two that are equal need not be
+    /// identical.
+    public fn isIdentical(to other: ImmutableSet<Element>) -> Bool => root.isSame(as: other.root)
+
+    /// What is wrong with its tree, or none: what the library's own tests ask.
+    public fn structuralFault() -> String? => root.fault(0)
+}
+
+extension ImmutableSet: Collection, FromSequence<Element> {
+    /// The members, in the order of their hashes.
+    public fn makeIterator() -> ImmutableSetIterator<Element> {
+        return ImmutableSetIterator<Element> { entries: HashTrieIterator<Element, SetMember>(root) }
+    }
+
+    public var startIndex: ImmutableDictionaryIndex => ImmutableDictionaryIndex { offset: 0 }
+
+    public var endIndex: ImmutableDictionaryIndex => ImmutableDictionaryIndex { offset: root.size }
+
+    public fn index(after position: ImmutableDictionaryIndex) -> ImmutableDictionaryIndex {
+        return ImmutableDictionaryIndex { offset: position.offset + 1 }
+    }
+
+    public fn index(_ position: ImmutableDictionaryIndex, offsetBy distance: Int) -> ImmutableDictionaryIndex {
+        return ImmutableDictionaryIndex { offset: position.offset + distance }
+    }
+
+    /// The member at a position, found in O(log n); one not a member's traps.
+    public subscript(position: ImmutableDictionaryIndex) -> Element {
+        get {
+            precondition(index: position.offset, inBounds: root.size)
+            return root.entry(rank: position.offset).key
+        }
+    }
+}
+
+/// Gives an ImmutableSet's members.
+public struct ImmutableSetIterator<Element: Hashable>: Iterator {
+    var entries: HashTrieIterator<Element, SetMember>
+
+    /// The next member, or none past the last.
+    public mutating fn next() -> Element? {
+        guard let entry = entries.next() else {
+            return none
+        }
+        return entry.key
+    }
+}
+
+extension ImmutableSet where Element == String {
+    /// Whether the string the piece spells is a member: found by the piece's
+    /// bytes, with no String made of them.
+    public fn contains(_ value: Substring) -> Bool {
+        return root.find(piece: value, value.hashValue, 0) != none
+    }
+}
+
+extension ImmutableSet: Debug where Element: Debug {
+    /// `ImmutableSet([1])`, in the order it is gone through.
+    public fn debugDescription() -> String {
+        return described("ImmutableSet", descriptions(self))
+    }
+}
+
+extension ImmutableSet: Equatable {
+    /// Whether the two sets hold the same values: parts they share are not
+    /// compared.
+    public operator == (lhs: ImmutableSet<Element>, rhs: ImmutableSet<Element>) -> Bool {
+        return lhs.root.isEqual(to: rhs.root, 0, (a: SetMember, b: SetMember) => true)
+    }
+}
+
+extension ImmutableSet: Hashable {
+    /// Feeds the members to the hasher, in no order: equal sets hash equal.
+    public fn hash(into hasher: inout Hasher) {
+        var sum = 0
+        for member in self {
+            sum = sum &+ member.hashValue
+        }
+        hasher.combine(root.size)
+        hasher.combine(sum)
+    }
+}

@@ -1,0 +1,9 @@
+module Startup
+
+// A program that prints a line: what a process costs, its start and its end.
+// Measured whole, and not by the harness.
+
+@main
+fn main() {
+    print("started")
+}

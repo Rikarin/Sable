@@ -1,0 +1,130 @@
+module Sable.Testing
+
+import Sable.Math.Geometry
+
+// Arbitrary for Sable.Math.Geometry's types: vectors of any components at
+// all, infinities and NaN too; a rotation of length 1; and transforms, planes,
+// rays and bounds that are such, of moderate numbers, and with no scale near
+// zero, as what is nearly singular tests the rounding and nothing else. A
+// matrix is the matrix of such a transform.
+
+// A number of -100...100, zero the simplest.
+fn moderate(_ choices: Choices) -> F32 {
+    let steps = F32(choices.draw(upTo: 100_000)) / 1000
+    return choices.draw(upTo: 1) == 1 ? -steps : steps
+}
+
+fn moderateVector(_ choices: Choices) -> Vector3 => Vector3(moderate(choices), moderate(choices), moderate(choices))
+
+// A number of 0.25...4, one the simplest.
+fn scaleFactor(_ choices: Choices) -> F32 {
+    let steps = F32(choices.draw(upTo: 3000)) / 1000
+    return choices.draw(upTo: 1) == 1 ? 1 / (1 + steps) : 1 + steps
+}
+
+extension Vector2: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Vector2 {
+        return Vector2(F32.arbitrary(from: choices), F32.arbitrary(from: choices))
+    }
+}
+
+extension Vector3: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Vector3 {
+        return Vector3(Vector2.arbitrary(from: choices), F32.arbitrary(from: choices))
+    }
+}
+
+extension Vector4: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Vector4 {
+        return Vector4(Vector3.arbitrary(from: choices), F32.arbitrary(from: choices))
+    }
+}
+
+extension Vector3D: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Vector3D {
+        return Vector3D(F64.arbitrary(from: choices), F64.arbitrary(from: choices), F64.arbitrary(from: choices))
+    }
+}
+
+extension Int2: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Int2 {
+        return Int2(I32.arbitrary(from: choices), I32.arbitrary(from: choices))
+    }
+}
+
+extension Int3: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Int3 {
+        return Int3(I32.arbitrary(from: choices), I32.arbitrary(from: choices), I32.arbitrary(from: choices))
+    }
+}
+
+extension Int4: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Int4 {
+        return Int4(I32.arbitrary(from: choices), I32.arbitrary(from: choices), I32.arbitrary(from: choices), I32.arbitrary(from: choices))
+    }
+}
+
+extension Quaternion: Arbitrary {
+    /// A rotation of length 1.
+    public static fn arbitrary(from choices: Choices) -> Quaternion {
+        return Quaternion(moderateVector(choices), moderate(choices)).normalized()
+    }
+}
+
+extension Transform: Arbitrary {
+    /// A transform with an inverse: each scale is in 0.25...4.
+    public static fn arbitrary(from choices: Choices) -> Transform {
+        let scale = Vector3(scaleFactor(choices), scaleFactor(choices), scaleFactor(choices))
+        return Transform(translation: moderateVector(choices), rotation: Quaternion.arbitrary(from: choices), scale: scale)
+    }
+}
+
+extension Matrix4x4: Arbitrary {
+    /// The matrix of an arbitrary `Transform`.
+    public static fn arbitrary(from choices: Choices) -> Matrix4x4 => Transform.arbitrary(from: choices).matrix
+}
+
+extension Matrix3x3: Arbitrary {
+    /// The linear part of an arbitrary `Transform`.
+    public static fn arbitrary(from choices: Choices) -> Matrix3x3 => Transform.arbitrary(from: choices).matrix.linear
+}
+
+extension Matrix3x2: Arbitrary {
+    /// A scale, a rotation and a translation of the plane.
+    public static fn arbitrary(from choices: Choices) -> Matrix3x2 {
+        let scale = Matrix3x2(scale: Vector2(scaleFactor(choices), scaleFactor(choices)))
+        return scale * Matrix3x2(rotation: moderate(choices)) * Matrix3x2(translation: Vector2(moderate(choices), moderate(choices)))
+    }
+}
+
+extension Plane: Arbitrary {
+    /// A plane whose normal is of length 1.
+    public static fn arbitrary(from choices: Choices) -> Plane {
+        let normal = moderateVector(choices).normalized()
+        return Plane(normal.isZero ? Vector3.up : normal, moderate(choices))
+    }
+}
+
+extension Ray: Arbitrary {
+    /// A ray whose direction is of length 1.
+    public static fn arbitrary(from choices: Choices) -> Ray {
+        let direction = moderateVector(choices).normalized()
+        return Ray(moderateVector(choices), direction.isZero ? Vector3.forward : direction)
+    }
+}
+
+extension BoundingBox: Arbitrary {
+    /// A box that is not empty.
+    public static fn arbitrary(from choices: Choices) -> BoundingBox {
+        let one = moderateVector(choices)
+        let other = moderateVector(choices)
+        return BoundingBox(one.min(other), one.max(other))
+    }
+}
+
+extension BoundingSphere: Arbitrary {
+    /// A sphere that is not empty.
+    public static fn arbitrary(from choices: Choices) -> BoundingSphere {
+        return BoundingSphere(moderateVector(choices), moderate(choices).abs())
+    }
+}

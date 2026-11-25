@@ -1,9 +1,23 @@
 module ParseFloatBench
 
+import Sable.Testing
+
 // F64.parse: 200,000 numbers as text of up to fifteen digits, parsed five times.
 
-@main
-fn main() {
+fn run(_ texts: String[>..]) -> String {
+    var total = 0.0
+    for _ in 0..<5 {
+        // Each round reads the input anew: nothing is kept from the last.
+        _ = blackBox(total)
+        for text in texts {
+            total += try! F64.parse(text)
+        }
+    }
+    return "\(total:.3f)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
     var texts: String[>..] = []
     var x = 12345
     for _ in 0..<200000 {
@@ -12,11 +26,5 @@ fn main() {
         x = (x * 1103515245 + 12345) % 2147483648
         texts.append("\(whole % 100000).\(x)")
     }
-    var total = 0.0
-    for _ in 0..<5 {
-        for text in texts {
-            total += try! F64.parse(text)
-        }
-    }
-    print("\(total:.3f)")
+    b.check(b.iterate { run(texts) })
 }

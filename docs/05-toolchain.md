@@ -14,8 +14,8 @@ sable init                         scaffold in the current directory
 sable build [--release] [--target] compile
 sable run [-- args...]             build and execute
 sable test [filter] [--filter expr] [--doc] [-j n] [--timeout s] [--coverage]  run @test functions and doc examples
-sable bench [filter]               run @bench functions, compare to baseline
-sable fuzz [target] [--time 8h]    fuzz a @fuzz function with libFuzzer; --replay, --minimise
+sable bench [filter] [--filter expr] [--compare ref] [--job how] [--json f]  run @bench functions; compare with a baseline, a commit or another build
+sable fuzz [target] [--duration 8h] fuzz a @fuzz function with libFuzzer; --replay, --minimise
 sable check                        type-check only, no codegen (fast)
 sable fix [--check]                apply the fixes the lints suggest
 sable fmt [--check]                format; no options, ever
@@ -144,28 +144,133 @@ file under it, built as one program — so the library's tests are run as
 `sable test --cover lib/Sable.Collections tests/lib/Sable.Collections/`
 (what `tools/stdlib-coverage.sh` does, CONTRIBUTING.md).
 
+`sable bench` builds the `@bench` functions, at `-O2` as `sable build` does
+(`-O0` to `-Oz` for another level), and runs each in a process of its own.
+They are selected and discovered as tests are: names, `--filter` with
+`TestFilter`'s expressions, `@bench(tags:)`, `--list`, and `--describe`'s lines
+for a tool. How a benchmark is measured (`Sable.Testing.BenchSchedule`; docs/06
+has the API):
+
+1. *Pilot.* The body is run once, then twice, four times ..., until that takes
+   an eighth of a sample's time (`--sample-ms`, 10 ms): how many iterations
+   make a sample.
+2. *Warm-up*, for `--warm-up-ms` (100 ms), and on until two runs have been no
+   faster than the one before, for at most three times that.
+3. *Overhead.* An empty body is run as often, five times, when an iteration
+   takes under a microsecond; the median is taken from every sample.
+4. *Samples.* 15 at least and 100 at most, until half the mean's 99.9 %
+   confidence interval is within 2 % of it, or `--budget-ms` (3 s) is up;
+   `--samples n` asks for a number.
+5. *Memory.* A run with allocations, bytes, retains and releases counted.
+6. *Counters* (`--counters`): a run with the processor's instructions and
+   cycles read either side. macOS gives them to any process, of itself; Linux
+   through `perf_event_open`, where `perf_event_paranoid` is 2 or less and the
+   machine has them — a container or a CI's virtual machine seldom has;
+   Windows gives cycles alone without privileges; WASI none, nor processor
+   time.
+
+The report is the mean and half its confidence interval (Student's t), the
+median, the samples that count and their iterations, and what an operation
+allocates. Samples above Tukey's upper fence (the third quartile and one and a
+half interquartile ranges; quartiles interpolated, R's type 7) are left out;
+`--outliers` says otherwise. `--metric processor` is processor time, of every
+thread and of the processes waited for, in place of the clock's.
+
+`--save-baseline <name>` keeps the samples, and `--baseline` compares with
+them. `--compare <git ref>` builds the benchmarks as they were at a commit
+(`git archive`, so nothing of the working tree is touched) with this compiler,
+and `--job <name>=<words>` builds or runs them another way: a level,
+`-generics=unspecialised`, `--exclusivity=...`, `SABLE_WORKERS=1`, `ref=...`,
+or `sable=<path>` for another compiler. Jobs are run in turn, launch by launch
+(three of each), so that what the machine does is done to all of them, and
+each is compared with the first. The test is **Mann-Whitney's**, on all the
+samples, rather than Welch's t: a benchmark's samples have a floor and a tail
+of interruptions, so they are not normal, and one far sample moves a mean and
+hardly a rank. A benchmark *regressed* when p < 0.001 — exactly for up to 20
+samples each without ties, else by the normal approximation — and its median
+is slower by more than `--threshold` (5 %): where the linker puts code moves a
+time by a few per cent, and samples of one process share that, so a small
+difference may be certain and mean nothing. Only `--fail-on-regression` makes
+the command exit 1 for one. What a benchmark computed (`Bencher.check`) must be
+the same in every process and job; if not, the run fails.
+
+`--markdown`, `--csv` and `--json` write the results; `--history <path>` adds
+a row for each to a tab-separated file: the date, the commit (with `+` for
+uncommitted changes), the benchmark, its median in milliseconds an operation,
+and its allocations, retains and releases. `--sil` and `--asm` print what the
+benchmarks were compiled to, each and its closures as functions of their own
+(what is inlined into them with them), in place of a run.
+
 `sable fuzz` fuzzes a `@fuzz` function — one that takes the fuzzer's bytes,
-`U8[:]`, and fails by trapping or throwing (S3104 says what else it may not
-be) — of the package (its library, `tests/` and `benches/`) or of the files
-named. The program is built as a library: the compiler writes a harness whose
-`@export` functions take an input a byte at a time and run the target on it,
-and a C shim is libFuzzer's entry point. clang compiles the IR, the runtime
-and the shim with `-fsanitize=fuzzer,address,undefined`: SanitizerCoverage
-counts every edge of the Sable code with no rewriting, and AddressSanitizer
-and UBSan watch the C runtime and what crosses to C. libFuzzer runs in fork
-mode (`-j n` processes), so a failure does not end the run: until `--time`
-is up or Ctrl-C, it keeps the inputs that reach new code in
+`U8[:]`, or up to four values made of them, and fails by trapping or throwing
+(S3104 says what else it may not be) — of the package (its library, `tests/`
+and `benches/`) or of the files named (a directory is those in it). The program
+is built as a library: the compiler writes a harness whose `@export` functions
+take an input a byte at a time and run the target on it, and a C shim is
+libFuzzer's entry point. clang compiles the IR, the runtime and the shim with
+`-fsanitize=fuzzer,address,undefined`: SanitizerCoverage counts every edge of
+the Sable code with no rewriting. libFuzzer runs in fork mode (`-j n`
+processes), so a failure does not end the run: until `--duration` is up or
+Ctrl-C, it keeps the inputs that reach new code in
 `target/fuzz/<Module.function>/corpus/` (seeded from the package's
-`fuzz/<Module.function>/`, if there is one) and those that fail in
-`crashes/`. Then each failure is replayed, minimised (`.min`), its report kept
-(`.txt`), and the failures grouped by what they say — a trap's message and
-place, a sanitizer's summary, a hang — into `summary.txt`; the command exits
-1 while a saved input still fails. `--replay [input...]` runs the saved inputs
-(or those given) once each, and `--minimise <input>` shrinks one; `--list`
-lists the targets; what follows `--` goes to libFuzzer. libFuzzer's runtime
-comes with LLVM's clang; Apple's has none, so on macOS fuzzing says so (and
-how to get an LLVM clang) before it builds anything, and `--replay` — built
-with its own `main` and the sanitizers — is what runs there.
+`fuzz/<Module.function>/`, if there is one, and each `--seeds` directory) and
+those that fail in `crashes/`. Then each failure is replayed, minimised
+(`.min`), its report kept (`.txt`), and the failures grouped by what they say —
+a trap's message and place, a sanitizer's summary, a hang — into
+`summary.txt`; the command exits 1 while a saved input still fails. Several
+targets are fuzzed one after another, each for the whole duration; `--runs n`
+tries so many inputs in one process that stops at the first failure.
+`--replay [input...]` runs the saved inputs (or those given) once each, and
+`--minimise <input>` shrinks one; `--list` lists the targets; what follows
+`--` goes to libFuzzer. libFuzzer's runtime comes with LLVM's clang; Apple's
+has none, so on macOS fuzzing says so (and how to get an LLVM clang) before it
+builds anything, and `--replay` — built with its own `main` and the
+sanitizers — is what runs there.
+
+*Values.* A target may take parameters of any types that conform to
+`Sable.Testing.Arbitrary`, `@derive(Arbitrary)`'s among them. They are made of
+the input by `Choices(bytes:)`, the choices property tests make values of:
+each choice reads as many bytes as its limit needs, so that an input is still
+bytes, as is every entry of the corpus, and a change of a byte is a change of
+a choice. A trap says what the target was called with.
+
+*Dictionaries and mutators.* `fuzz/<Module.function>.dict`, or `--dict`, is a
+libFuzzer dictionary of tokens put into inputs whole; `--dict sable` is the
+language's own, from the lexer's tables (`TokenDictionary`), for a target that
+reads its source. `@fuzz(mutator: f)` names a function of the module,
+`f(_ input: U8[:], _ seed: U64) -> U8[>..]`, that makes another input of one:
+three inputs in four are its, the others libFuzzer's own. The mutator for Sable
+source edits whole nodes of the syntax tree — replaces one by another that can
+stand there, deletes, copies, trades, wraps or unwraps it — and is written in
+C# (`SyntaxMutator`), where the compiler is: a function of an input and a seed
+and nothing else, so that the compiler written in Sable has it as a
+`@fuzz(mutator:)` function. Until then the compiler's C# fuzzers use it
+(CONTRIBUTING.md).
+
+*Sanitizers.* AddressSanitizer instruments the Sable code as well as the C:
+each function of the program's IR is marked `sanitize_address`, and the
+runtime takes every block from malloc, not from its slabs, where ASan would
+see neither a read past a block's end nor one after it was freed. UBSan is
+made by clang's C front end, from C's types, and has nothing to add to IR: it
+covers the runtime and the shim, and Sable's own checks trap on what it would
+look for. Nothing is suppressed: no function is left out and no report
+ignored. (The leak check is the runtime's, not ASan's.)
+
+*Saved inputs are tests.* `sable test` runs every input `sable fuzz` kept, and
+the seeds, once: each failure of a target is a test, `Module.target(crash-…)`,
+and its corpus one more, `Module.target(corpus)`, the smallest first and no
+longer than 20 seconds (2,000 inputs, 4 MB). A target with none has no test.
+They are tagged `fuzz`, and `--coverage` counts what they run.
+
+*One instrumentation or two.* `sable test --coverage` counts in SIL, before
+any pass: lines and the outcomes of decisions, by the names the source has for
+them, in the interpreter as in native code, on every platform, for generics
+once however often they are specialised. libFuzzer's edges are counted in LLVM
+IR, after passes have merged and split blocks, by a pass and a runtime only
+clang has; no edge says which outcome of which `if` it is. Each is the wrong
+counter for the other's job, so they stay two, and what is shared is the
+corpus: `sable test --coverage` reports the lines and branches that the inputs
+fuzzing found reach.
 
 `sable bindgen` writes Sable source, not `.sbi` (which waits on the
 interface file format of §5.4): a module of `@extern("c")` functions,

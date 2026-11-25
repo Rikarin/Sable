@@ -79,6 +79,16 @@ static int64_t peak_memory(void) {
     return (int64_t)__builtin_wasm_memory_size(0) * 65536;
 }
 
+static int64_t processor_time(bool children) {
+    (void)children;
+    return -1;
+}
+
+static int64_t hardware_counter(bool cycles) {
+    (void)cycles;
+    return -1;
+}
+
 // ---- Time (Sable.Time's floor) ------------------------------------------
 
 int64_t sable_time_monotonic(void) {
@@ -167,6 +177,19 @@ static bool thread_start(void (*run)(void *argument), void *argument) {
     (void)run;
     (void)argument;
     return false;
+}
+
+static bool thread_start_sized(void (*run)(void *argument), void *argument, size_t stack) {
+    (void)stack;
+    return thread_start(run, argument);
+}
+
+static void thread_set_name(const char *name) {
+    (void)name;
+}
+
+static void thread_set_priority(int priority) {
+    (void)priority;
 }
 
 static int processor_count(void) {

@@ -1,7 +1,8 @@
 // Port of list.sb.
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
-int main(void) {
+static void run(void) {
     int64_t total = 0;
     for (int64_t round = 0; round < 3; round++) {
         Ints values = {0};
@@ -15,6 +16,7 @@ int main(void) {
         total = add_i(total, values.count);
         free(values.elements);
     }
-    printf("%lld\n", (long long)total);
-    return 0;
+    bench_printf("%lld\n", (long long)total);
 }
+
+BENCH_MAIN(run)

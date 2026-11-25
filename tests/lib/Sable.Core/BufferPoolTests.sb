@@ -75,3 +75,15 @@ fn aByteBufferWritesIntoAPooledBuffer() {
     pool.giveBack(move bytes)
     assertEqual(pool.count, 1)
 }
+
+// What 'assert' is given is a closure's body, which shares 'bytes' until the
+// assertion is made: moved after it, the buffer is the pool's alone (#305).
+@test
+fn aBufferAssertedOfAndMovedKeepsItsRoom() {
+    let pool = BufferPool()
+    var bytes = pool.rent(minimumCapacity: 1000)
+    assert(bytes.isEmpty && bytes.capacity >= 1000)
+    bytes.append(42)
+    pool.giveBack(move bytes)
+    assert(pool.rent(minimumCapacity: 1000).capacity >= 1000)
+}

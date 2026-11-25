@@ -87,7 +87,7 @@ public sealed partial class SilGen {
     readonly Dictionary<Diagnostic, SyntaxTree> _files = new(ReferenceEqualityComparer.Instance);
 
     IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> PlacedDiagnostics =>
-        [.._diagnostics.Select(d => (d, _files.GetValueOrDefault(d)))];
+        [.._diagnostics.Select(d => (d, _files.GetValueOrDefault(d) ?? (d.Anchor is { } anchor ? _compilation.TreeOf(anchor) : null)))];
 
     /// <summary>Gives the diagnostics reported since <paramref name="before" /> the file they were reported in, unless they have one.</summary>
     void Place(int before, SyntaxTree tree) {
@@ -1088,6 +1088,11 @@ public sealed partial class SilGen {
         foreach (var (field, _, model) in ordered) {
             if (model.GetFieldInitializer(field) is { } initial) {
                 var target = new BoundFieldAccess(initial.Syntax, null, field);
+                // A constant, computed already, reads as what it came to.
+                if (IsWrittenConstant(field)) {
+                    initial = target;
+                }
+
                 statements.Add(new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, target, initial)));
             }
         }
@@ -1115,7 +1120,9 @@ public sealed partial class SilGen {
         var source = _globalFields[0].Model.SyntaxTree.Text;
         var syntax = _globalFields[0].Field.DeclaringSyntax[0];
         var init = new SilFunction(GlobalsInit, unit);
+        _writingGlobals = true;
         new FunctionLowering(this, initSymbol, init, source, TypeSubstitution.Empty).Lower(new BoundBlock(syntax, [], [..statements]));
+        _writingGlobals = false;
         init.RemoveUnreachableBlocks();
         MakeImmortal(init, ordered.Select(static g => g.Field));
         _module.Add(init);
@@ -1454,7 +1461,7 @@ public sealed partial class SilGen {
             }
 
             if (substitution.Lookup(parameter) is not { } argument || Lower(argument) is not { } lowered) {
-                Unsupported<object>(at, $"'{symbol.Name}' with its type arguments unknown here");
+                Unsupported<object>(at, $"'{NameOf(symbol)}' with its type arguments unknown here");
                 return null;
             }
 
@@ -1487,6 +1494,7 @@ public sealed partial class SilGen {
 
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, substitution, _loweringInstance);
+        _requests[name] = at;
         _pending.Enqueue((symbol, name, type, substitution));
         return (name, type);
     }
@@ -1620,6 +1628,7 @@ public sealed partial class SilGen {
 
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, substitution, _loweringInstance);
+        _requests[name] = at;
         _polymorphic[name] = (symbol, substitution);
         _pending.Enqueue((symbol, name, type, substitution));
         return (name, type);
@@ -4552,7 +4561,8 @@ public sealed partial class SilGen {
     }
 
     T? Unsupported<T>(SyntaxNode at, string what) where T : class {
-        _diagnostics.Error(ErrorCode.ERR_NotLoweredYet, at.Span, $"SIL lowering does not handle {what} yet");        return null;
+        ReportNotLowered(at, what);
+        return null;
     }
 
     // =======================================================================
@@ -5317,6 +5327,12 @@ public sealed partial class SilGen {
                 case BoundLocalAccess access when closure is not null && closure.Captures.TryGetValue(access.Local, out var byValue) && !byValue.Boxed
                     && byValue.Kind is CaptureKind.Default or CaptureKind.ByValue && LowerType(access.Type) is { IsTrivial: false } and not AddressType:
                     return Hold(Emit(new LoadBorrowInst(Emit(new RefElementAddrInst(_context!, byValue.Field)))));
+
+                // A parameter it captured, likewise: a closure several threads
+                // call, above all, which each would count on every call.
+                case BoundParameterAccess access when closure is not null && closure.Captures.TryGetValue(access.Parameter, out var parameterByValue) && !parameterByValue.Boxed
+                    && parameterByValue.Kind is CaptureKind.Default or CaptureKind.ByValue && LowerType(access.Type) is { IsTrivial: false } and not AddressType:
+                    return Hold(Emit(new LoadBorrowInst(Emit(new RefElementAddrInst(_context!, parameterByValue.Field)))));
 
                 case BoundSelfAccess when _selfValue is not null:
                     return _selfValue;
@@ -10984,6 +11000,14 @@ public sealed partial class SilGen {
                     return UnitValue.Instance;
                 }
 
+                // What runs a closure somewhere else, or later (SilGen.Tasks.cs).
+                if (owner is { Name: "Runtime", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }
+                    && callee.Name is "startThread" or "runLoop" or "setThreadLocal" or "pushTaskLocal") {
+                    return HandOver(call, callee.Name switch {
+                        "startThread" => "thread_start", "runLoop" => "thread_loop", "setThreadLocal" => "thread_local_set", _ => "task_local_push",
+                    });
+                }
+
                 // 'Runtime.share(value)': its objects counted atomically from now on.
                 if (owner is { Name: "Runtime", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } } && callee.Name == "share") {
                     return RawMemoryIntrinsic(call, "share");
@@ -12465,14 +12489,20 @@ public sealed partial class SilGen {
             }
 
             if (call.Arguments.Length == 1) {
-                return LowerType(call.Type) is { } type ? Emit(new BuiltinInst(builtin, type, address)) : Missing(call, $"the type '{call.Type.ToDisplayString()}' in raw memory");
+                // A Void, or a Never, is nothing in memory.
+                return LowerType(call.Type) is not { } type ? Missing(call, $"the type '{call.Type.ToDisplayString()}' in raw memory")
+                    : type == SilType.Unit ? UnitValue.Instance
+                    : Emit(new BuiltinInst(builtin, type, address));
             }
 
             if (Expression(call.Arguments[1]) is not { } value) {
                 return null;
             }
 
-            Emit(new BuiltinInst(builtin, SilType.Unit, address, Owned(value)));
+            if (value.Type != SilType.Unit) {
+                Emit(new BuiltinInst(builtin, SilType.Unit, address, Owned(value)));
+            }
+
             return UnitValue.Instance;
         }
 

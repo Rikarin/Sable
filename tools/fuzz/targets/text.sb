@@ -1,0 +1,109 @@
+module FuzzText
+
+// Sable.Text and numbers as text.
+
+import Sable.Testing
+import Sable.Text
+
+/// UTF-8 in and out: bytes that decode encode back as themselves, and a lossy
+/// decoding of any bytes is text that encodes and decodes as itself.
+@fuzz
+fn utf8(_ data: U8[:]) {
+    if let text = try? String.fromUtf8(data) {
+        let again = text.utf8Bytes()
+        assert(again.count == data.count, "decoded UTF-8 encodes to another length")
+        for i in 0..<data.count {
+            assert(again[i] == data[i], "decoded UTF-8 encodes to other bytes")
+        }
+    }
+    let lossy = String.fromUtf8Lossy(data)
+    let bytes = lossy.utf8Bytes()
+    if let back = try? String.fromUtf8(bytes) {
+        assert(back == lossy, "a lossy decoding does not read back as itself")
+    } else {
+        fatalError("a lossy decoding is not UTF-8")
+    }
+}
+
+/// Integers as text: what parses prints as text that parses as the same
+/// number; and any text is parsed in any base, or refused, without a trap.
+@fuzz
+fn integers(_ data: U8[:]) {
+    let text = String.fromUtf8Lossy(data)
+    if let n = try? Int.parse(text) {
+        assert((try? Int.parse("\(n)")) == n, "a parsed integer does not print as itself")
+    }
+    for radix in [2, 8, 16, 36] {
+        _ = try? Int.parse(text, radix: radix)
+    }
+}
+
+/// A float prints as text that parses as it, bit for bit.
+@fuzz
+fn floats(_ value: F64, _ data: U8[>..]) {
+    if value == value {
+        let back = try! F64.parse("\(value)")
+        assert(back.bits == value.bits, "a float does not parse as it prints")
+    }
+    _ = try? F64.parse(String.fromUtf8Lossy(data))
+}
+
+/// Base64, base32 and hex: bytes there and back, and any text refused or
+/// decoded.
+@fuzz
+fn binaryText(_ data: U8[:]) throws {
+    let bytes = data.toArray()
+    assert(try Base64.decode(Base64.encode(data)) == bytes, "base64")
+    assert(try Base64.decode(Base64.encode(data, alphabet: .UrlSafe, padding: false), alphabet: .UrlSafe) == bytes, "base64url")
+    assert(try Base32.decode(Base32.encode(data)) == bytes, "base32")
+    assert(try Hex.decode(Hex.encode(data)) == bytes, "hex")
+    if let decoded = try? Base64.decode(bytes: data) {
+        assert(try Base64.decode(Base64.encode(decoded)) == decoded, "base64 of what was decoded")
+    }
+    _ = try? Base32.decode(bytes: data)
+    if let decoded = try? Hex.decode(bytes: data) {
+        assert(decoded.count == data.count / 2, "hex decodes to half as many")
+    }
+}
+
+/// A pattern, its first line, on the text after it: compiled or refused, and
+/// every match within the text, one after another.
+@fuzz
+fn regex(_ data: U8[:]) {
+    let input = String.fromUtf8Lossy(data[..<(data.count < 600 ? data.count : 600)])
+    var pattern = input
+    var text = input
+    if let line = input.firstIndex(of: '\n') {
+        pattern = input[..<line].toString()
+        text = input[line...].toString()
+    }
+    guard let regex = try? Regex(pattern) else {
+        return
+    }
+    let found = regex.isMatch(text)
+    let first = regex.firstMatch(in: text)
+    assert(found == (first != none), "whether there is a match, and the first one, disagree")
+    var count = 0
+    for _ in regex.matches(in: text) {
+        count += 1
+        if count > 1000 {
+            break
+        }
+    }
+    assert(found == (count > 0), "whether there is a match, and all of them, disagree")
+    let literal = try! Regex(Regex.escape(pattern))
+    assert(literal.isMatch("<" + pattern + ">"), "an escaped pattern does not match itself")
+}
+
+/// Normalisation, again, is what it was; and composing what was decomposed is
+/// composing it.
+@fuzz
+fn normalised(_ data: U8[:]) {
+    let text = String.fromUtf8Lossy(data)
+    for form in [NormalizationForm.NFC, NormalizationForm.NFD, NormalizationForm.NFKC, NormalizationForm.NFKD] {
+        let once = text.normalized(form)
+        assert(once.normalized(form) == once, "normalised text is not normalised")
+        assert(once.isNormalized(form), "normalised text is said not to be")
+    }
+    assert(text.normalized(.NFD).normalized(.NFC) == text.normalized(.NFC), "composed, it is not what it was decomposed from")
+}

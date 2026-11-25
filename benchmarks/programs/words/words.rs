@@ -1,5 +1,8 @@
 // Port of words.sb.
 
+#[path = "../../support/rust/bench.rs"]
+mod bench;
+
 use std::collections::HashMap;
 
 fn corpus(lines: usize) -> Vec<String> {
@@ -33,27 +36,31 @@ fn ranked(items: &[Count], before: impl Fn(&Count, &Count) -> bool) -> Vec<Count
 }
 
 fn main() {
-    let mut counts: HashMap<String, i64> = HashMap::new();
-    let mut seen: Vec<String> = Vec::new();
-    for _ in 0..20 {
-        for line in corpus(5000) {
-            for word in line.split(' ') {
-                if let Some(count) = counts.get_mut(word) {
-                    *count += 1;
-                } else {
-                    seen.push(word.to_string());
-                    counts.insert(word.to_string(), 1);
+    bench::run(|| {
+        let mut counts: HashMap<String, i64> = HashMap::new();
+        let mut seen: Vec<String> = Vec::new();
+        for _ in 0..20 {
+            for line in corpus(5000) {
+                for word in line.split(' ') {
+                    if let Some(count) = counts.get_mut(word) {
+                        *count += 1;
+                    } else {
+                        seen.push(word.to_string());
+                        counts.insert(word.to_string(), 1);
+                    }
                 }
             }
         }
-    }
 
-    let mut items = Vec::new();
-    for word in seen {
-        let count = counts.get(&word).copied().unwrap_or(0);
-        items.push(Count { word, count });
-    }
-    for item in ranked(&items, |a, b| a.count > b.count) {
-        println!("{} {}", item.word, item.count);
-    }
+        let mut items = Vec::new();
+        for word in seen {
+            let count = counts.get(&word).copied().unwrap_or(0);
+            items.push(Count { word, count });
+        }
+        let mut lines = Vec::new();
+        for item in ranked(&items, |a, b| a.count > b.count) {
+            lines.push(format!("{} {}", item.word, item.count));
+        }
+        lines.join("\n")
+    });
 }

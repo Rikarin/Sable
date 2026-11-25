@@ -1,23 +1,13 @@
 module DirectoryWalkBench
 
 import Sable.IO
+import Sable.Testing
 
-// A tree of two thousand empty files in a hundred directories: made,
-// walked twenty times, each entry's kind and path looked at, and removed.
+// A tree of two thousand empty files in a hundred directories, walked
+// twenty times, each entry's kind and path looked at.
 // The paths are absolute, as resolving a relative one is costly in .NET.
 
-@main
-fn main() throws(IoError) {
-    let root = FilePath("directory-walk-sable").absolute().string!
-    for i in 0..<10 {
-        for j in 0..<10 {
-            let directory = "\(root)/branch \(i)/leaf \(j)"
-            try Directory.create(directory, recursive: true)
-            for k in 0..<20 {
-                try File.writeBytes("\(directory)/file \(k).txt", [])
-            }
-        }
-    }
+fn run(_ root: String) throws(IoError) -> String {
     var files = 0
     var directories = 0
     var characters = 0
@@ -31,6 +21,21 @@ fn main() throws(IoError) {
             characters += entry.path.string!.utf8.count - root.utf8.count
         }
     }
-    try Directory.remove(root, recursive: true)
-    print("\(files) \(directories) \(characters)")
+    return "\(files) \(directories) \(characters)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let root = FilePath("directory-walk-sable").absolute().string!
+    for i in 0..<10 {
+        for j in 0..<10 {
+            let directory = "\(root)/branch \(i)/leaf \(j)"
+            try! Directory.create(directory, recursive: true)
+            for k in 0..<20 {
+                try! File.writeBytes("\(directory)/file \(k).txt", [])
+            }
+        }
+    }
+    b.check(b.iterate { try! run(root) })
+    try! Directory.remove(root, recursive: true)
 }

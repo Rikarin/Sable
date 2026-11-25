@@ -1,0 +1,378 @@
+module ImmutableDictionaryTests
+
+// ImmutableDictionary (Sable.Collections): against a dictionary as the
+// model, its tree's shape checked after each step, its old versions
+// unchanged, and with keys whose hashes are made to be equal.
+
+import Sable.Collections
+import Sable.Testing
+
+/// A key whose hash is one of few, so that most keys' are equal.
+@derive(Debug)
+struct Hostile: Hashable {
+    let value: Int
+    let hashes: Int
+
+    operator == (lhs: Hostile, rhs: Hostile) -> Bool => lhs.value == rhs.value
+
+    fn hash(into hasher: inout Hasher) {
+        hasher.combine(value % hashes)
+    }
+}
+
+@derive(Debug, Arbitrary)
+union MapStep {
+    Set(U8, U16)
+    SetMany(U16)
+    Remove(U8)
+    RemoveMany(U16)
+    Modify(U8)
+    ModifyDefault(U8)
+    Insert(U8)
+    Filter(U8)
+    MergeKept
+    Keep
+    BackToKept
+}
+
+fn expectSame<K: Hashable & Debug>(_ map: ImmutableDictionary<K, Int>, _ model: [K: Int]) {
+    expect(map.structuralFault() == none, map.structuralFault() ?? "")
+    expect(map.count == model.count)
+    for (key, value) in model {
+        expect(map[key] == value)
+        expect(map.contains(key))
+    }
+    var seen = 0
+    for (key, value) in map {
+        expect(model[key] == value)
+        seen += 1
+    }
+    expect(seen == model.count)
+}
+
+// A dictionary is what a [K: Int] the same is done to would be; each version
+// kept is still what it was; and one made afresh of the same entries is equal.
+fn follows<K: Hashable & Debug>(_ steps: MapStep[>..], _ key: (Int) -> K) {
+    var map = ImmutableDictionary<K, Int>()
+    var model: [K: Int] = [:]
+    var kept: (ImmutableDictionary<K, Int>, [K: Int])[>..] = []
+    for step in steps {
+        match step {
+            case .Set(let k, let value) => {
+                expect(map.updateValue(Int(value), forKey: key(Int(k))) == model.updateValue(Int(value), forKey: key(Int(k))))
+            }
+            case .SetMany(let from) => {
+                for i in 0..<100 {
+                    map[key(Int(from) + i)] = i
+                    model[key(Int(from) + i)] = i
+                }
+            }
+            case .Remove(let k) => {
+                expect(map.remove(key(Int(k))) == model.remove(key(Int(k))))
+            }
+            case .RemoveMany(let from) => {
+                for i in 0..<80 {
+                    map[key(Int(from) + i)] = none
+                    model[key(Int(from) + i)] = none
+                }
+            }
+            case .Modify(let k) => {
+                expect(map.modify(key(Int(k))) { $0 += 1 } == model.modify(key(Int(k))) { $0 += 1 })
+            }
+            case .ModifyDefault(let k) => {
+                map.modify(key(Int(k)), default: 5) { $0 += 1 }
+                model.modify(key(Int(k)), default: 5) { $0 += 1 }
+            }
+            case .Insert(let k) => {
+                expect(map.insert(7, forKey: key(Int(k))) == model.insert(7, forKey: key(Int(k))))
+            }
+            case .Filter(let part) => {
+                map = map.filter { $1 % 8 != Int(part) % 8 }
+                model = model.filter { $1 % 8 != Int(part) % 8 }
+            }
+            case .MergeKept => {
+                if let (other, otherModel) = kept.last {
+                    map.merge(other) { $0 * 3 + $1 }
+                    model.merge(otherModel) { $0 * 3 + $1 }
+                }
+            }
+            case .Keep => kept.append((map, model))
+            case .BackToKept => {
+                if let (other, otherModel) = kept.last {
+                    map = other
+                    model = otherModel
+                }
+            }
+        }
+        expectSame(map, model)
+    }
+    for (version, was) in kept {
+        expectSame(version, was)
+        let changes = map.changes(from: version)
+        var brought = version
+        for change in changes {
+            expect(version[change.key] == change.old && map[change.key] == change.new && change.old != change.new)
+            brought[change.key] = change.new
+        }
+        expect(brought == map)
+    }
+    var pairs: (K, Int)[>..] = []
+    for (key, value) in model {
+        pairs.append((key, value))
+    }
+    let same = ImmutableDictionary<K, Int>(pairs.reversed())
+    expect(same == map && same.hashValue == map.hashValue)
+}
+
+@test
+fn aDictionaryIsWhatAMutableOneWouldBe() {
+    forAll(cases: 150) { (steps: MapStep[>..]) in
+        follows(steps, (i: Int) => i)
+    }
+}
+
+@test
+fn withKeysOfFewHashes() {
+    forAll(cases: 60) { (steps: MapStep[>..]) in
+        follows(steps, (i: Int) => Hostile { value: i, hashes: 7 })
+    }
+}
+
+@test
+fn withKeysOfOneHash() {
+    forAll(cases: 20) { (steps: MapStep[>..]) in
+        follows(steps, (i: Int) => Hostile { value: i % 300, hashes: 1 })
+    }
+}
+
+@test
+fn withStringKeys() {
+    forAll(cases: 60) { (steps: MapStep[>..]) in
+        follows(steps, (i: Int) => "key \(i)")
+    }
+}
+
+@test
+fn equalHashesAreToldApartAndUndone() {
+    var map = ImmutableDictionary<Hostile, Int>()
+    for i in 0..<50 {
+        map[Hostile { value: i, hashes: 1 }] = i
+    }
+    expect(map.structuralFault() == none)
+    for i in 0..<50 {
+        assertEqual(map[Hostile { value: i, hashes: 1 }], i)
+    }
+    expect(map[Hostile { value: 50, hashes: 1 }] == none)
+    let all = map
+    for i in 0..<49 {
+        assertEqual(map.remove(Hostile { value: i, hashes: 1 }), i)
+        assert(map.structuralFault() == none)
+    }
+    assertEqual(map.count, 1)
+    expect(map == ImmutableDictionary<Hostile, Int>([(Hostile { value: 49, hashes: 1 }, 49)]))
+    assertEqual(all.count, 50)
+}
+
+@test
+fn theShapeIsTheKeysAlone() {
+    var forward = ImmutableDictionary<Int, Int>()
+    for i in 0..<3000 {
+        forward[i] = i
+    }
+    var backward = ImmutableDictionary<Int, Int>()
+    for i in stride(from: 5999, through: 0, by: -1) {
+        backward[i] = i
+    }
+    for i in 3000..<6000 {
+        backward.remove(i)
+    }
+    expect(forward == backward)
+    expect(forward.keys == backward.keys && forward.values == backward.values)
+    assertEqual(forward.hashValue, backward.hashValue)
+    backward[17] = 0
+    expect(forward != backward)
+}
+
+@test
+fn aCopyIsUnchangedByWhatIsDoneToTheOther() {
+    let before = ImmutableDictionary<String, String[>..]>((0..<1000).map { ("\($0)", ["\($0)"] as String[>..]) })
+    var after = before
+    after.modify("5") { $0.append("x") }
+    after["6"] = none
+    after["new"] = ["n"]
+    assertEqual(before["5"]!.count, 1)
+    assertEqual(before["6"]!.count, 1)
+    expect(before["new"] == none && before.count == 1000)
+    assertEqual(after["5"]!.count, 2)
+    expect(after["6"] == none && after.count == 1000)
+}
+
+fn objectsMade(_ body: () -> Void) -> Int {
+    let before = MemoryStatistics.current().allocations
+    body()
+    return MemoryStatistics.current().allocations - before
+}
+
+@test
+fn aChangeToACopyCopiesThePathAlone() {
+    let before = ImmutableDictionary<Int, Int>((0..<100000).map { ($0, $0) })
+    var after = before
+    expect(objectsMade { after[500] = 1 } < 12)
+    expect(objectsMade { after[500] = 2 } == 0)
+    assertEqual(before[500], 500)
+    // Nothing is copied for what changes nothing.
+    var same = before
+    assert(objectsMade {
+        _ = same.remove(-1)
+        _ = same.insert(0, forKey: 500)
+        _ = same.modify(-1) { $0 += 1 }
+    } == 0)
+    expect(same.isIdentical(to: before) && !after.isIdentical(to: before))
+}
+
+@test
+fn aDictionaryHeldOnceIsChangedInPlace() {
+    var map = ImmutableDictionary<Int, Int>((0..<10000).map { ($0, $0) })
+    assertNoAllocations {
+        for i in 0..<10000 {
+            map[i] = i + 1
+            map.modify(i) { $0 += 1 }
+        }
+    }
+    assertEqual(map[9999], 10001)
+}
+
+@test
+fn wholeDictionaries() {
+    let map = ImmutableDictionary<String, Int>([("a", 1), ("b", 2), ("c", 3), ("a", 9)])
+    assertEqual(map.count, 3)
+    assertEqual(map["a"], 9)
+    assertEqual(map["z", default: 4], 4)
+    assertEqual(map.mapValues { $0 * 2 }["b"], 4)
+    assertEqual(map.mapValues { "\($0)" }["c"], "3")
+    let odd = map.compactMapValues { $0 % 2 == 1 ? "odd" : none }
+    expect(odd.count == 2 && odd["a"] == "odd" && odd["b"] == none && odd.structuralFault() == none)
+    expect(map.filter { $1 > 0 }.isIdentical(to: map))
+    assertEqual(map.filter { $1 > 100 }.count, 0)
+    var counts = ImmutableDictionary<String, Int>()
+    for word in ["x", "y", "x"] {
+        counts[word, default: 0] += 1
+    }
+    expect(counts["x"] == 2 && counts["y"] == 1)
+    counts.removeAll()
+    expect(counts.isEmpty && counts.remove("x") == none)
+    let merged = map.merging(ImmutableDictionary<String, Int>([("c", 10), ("d", 20)])) { $0 + $1 }
+    expect(merged["c"] == 13 && merged["d"] == 20 && merged.count == 4)
+    expect(ImmutableDictionary<String, Int>().merging(map) { $0 + $1 }.isIdentical(to: map))
+    assertEqual("\(ImmutableDictionary<String, Int>([("k", 1)]))", "ImmutableDictionary([\"k\": 1])")
+    assertEqual("\(ImmutableDictionary<String, Int>())", "ImmutableDictionary([:])")
+    let collected: ImmutableDictionary<Int, Int> = [(1, 2), (3, 4)].collect()
+    assertEqual(collected[3], 4)
+}
+
+@test
+fn itsPositionsAreInTheOrderItIsGoneThrough() {
+    let map = ImmutableDictionary<Int, Int>((0..<500).map { ($0, -$0) })
+    var position = map.startIndex
+    for (key, value) in map {
+        assert(map[position].0 == key && map[position].1 == value)
+        position = map.index(after: position)
+    }
+    expect(position == map.endIndex && map.startIndex < position)
+    assertEqual(map[map.index(map.startIndex, offsetBy: 499)].0, map.keys[499])
+    expectPanic() { _ = map[map.endIndex] }
+}
+
+@test
+fn aPieceOfATextIsLookedUpWithNoCopy() {
+    var map = ImmutableDictionary<String, Int>()
+    for i in 0..<200 {
+        map["word\(i)"] = i
+    }
+    let line = "word17 word18 other"
+    let pieces = Substring(line).split(" ")
+    var found = 0
+    assertNoAllocations {
+        found = (map[pieces[0]] ?? 0) + (map[pieces[1]] ?? 0)
+        found += map.contains(pieces[2]) ? 1000 : 0
+    }
+    assertEqual(found, 35)
+}
+
+@test
+fn changesPassOverWhatIsShared() {
+    let old = ImmutableDictionary<Int, Int>((0..<50000).map { ($0, $0) })
+    var new = old
+    new[7] = 0
+    new[60000] = 1
+    new.remove(8)
+    var changes = new.changes(from: old)
+    changes.sort(by: { $0.key < $1.key })
+    assertEqual(changes.count, 3)
+    expect(changes[0].key == 7 && changes[0].old == 7 && changes[0].new == 0)
+    expect(changes[1].key == 8 && changes[1].old == 8 && changes[1].new == none)
+    expect(changes[2].key == 60000 && changes[2].old == none && changes[2].new == 1)
+    expect(old.changes(from: old).isEmpty)
+    assertEqual(new.changes(from: ImmutableDictionary<Int, Int>()).count, new.count)
+}
+
+final class Alive {
+    var count = 0
+}
+
+final class Counted {
+    let alive: Alive
+    init(_ alive: Alive) {
+        self.alive = alive
+        alive.count += 1
+    }
+    deinit { alive.count -= 1 }
+}
+
+@test
+fn whatADictionaryHeldIsLetGoOf() {
+    let alive = Alive()
+    do {
+        var map = ImmutableDictionary<Int, Counted>()
+        for i in 0..<2000 {
+            map[i] = Counted(alive)
+        }
+        let older = map
+        for i in 0..<1000 {
+            map.remove(i)
+            map[i + 1000] = Counted(alive)
+        }
+        assertEqual(alive.count, 3000)
+        map = map.merging(older) { $1 }
+        assertEqual(alive.count, 2000)
+        assertEqual(older.count, 2000)
+    }
+    assertEqual(alive.count, 0)
+}
+
+@test
+async fn versionsAreChangedByManyTasks() {
+    let base = ImmutableDictionary<String, String>((0..<3000).map { ("\($0)", "\($0)") })
+    let total = await withTaskGroup(of: ImmutableDictionary<String, String>.self) { group in
+        for task in 0..<8 {
+            group.spawn {
+                var mine = base
+                for i in 0..<400 {
+                    mine["\(i * 7)"] = "task \(task)"
+                    mine.remove("\(i * 7 + 1)")
+                    mine["task \(task) \(i)"] = "new"
+                }
+                return mine
+            }
+        }
+        var all = ImmutableDictionary<String, String>()
+        for await each in group {
+            assert(each.structuralFault() == none)
+            all.merge(each) { $1 }
+        }
+        return all
+    }
+    assertEqual(base["7"], "7")
+    assertEqual(base.count, 3000)
+    assertEqual(total.count, 2600 + 3200)
+}

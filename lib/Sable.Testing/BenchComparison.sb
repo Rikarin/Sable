@@ -1,0 +1,62 @@
+module Sable.Testing
+
+/// How a benchmark's samples compare with those it is held against: the
+/// change in the median, and whether the two lots differ.
+///
+/// They differ when the Mann-Whitney test says that samples of one
+/// distribution would differ so in fewer than one case in a thousand, and
+/// the medians differ by more than 'threshold': a difference may be certain
+/// and too small to matter, and where code is put in memory moves a time by
+/// a few per cent without any change of it.
+///
+/// ```sable
+/// var before: F64[>..] = []
+/// var after: F64[>..] = []
+/// for i in 0..<20 {
+///     before.append(100.0 + F64(i) / 10.0)
+///     after.append(120.0 + F64(i) / 10.0)
+/// }
+/// assertEqual(BenchComparison(before, after).verdict, .Regressed)
+/// assertEqual(BenchComparison(after, before).verdict, .Improved)
+/// assertEqual(BenchComparison(before, after, threshold: 0.25).verdict, .WithinNoise)
+/// ```
+public struct BenchComparison {
+    /// The new median over the old.
+    public var ratio: F64
+    /// Mann-Whitney's: how likely as great a difference is of no change.
+    public var probability: F64
+    public var verdict: BenchVerdict
+
+    public init(_ old: F64[:], _ new: F64[:], threshold: F64 = 0.05) {
+        let before = BenchStatistics(old, outliers: .Keep).median
+        let after = BenchStatistics(new, outliers: .Keep).median
+        ratio = before > 0.0 ? after / before : 1.0
+        probability = MannWhitney(old, new).probability
+        verdict = .WithinNoise
+        if probability < 0.001 && before > 0.0 {
+            if ratio > 1.0 + threshold {
+                verdict = .Regressed
+            } else if ratio < 1.0 - threshold {
+                verdict = .Improved
+            }
+        }
+    }
+
+    /// '+10.00% vs main (REGRESSED, p = 0.0001)'.
+    public fn description(of what: String) -> String {
+        let said = match verdict {
+            case .Regressed   => "REGRESSED"
+            case .Improved    => "improved"
+            case .WithinNoise => "within noise"
+        }
+        return "\((ratio - 1.0) * 100.0:+.2f)% vs \(what) (\(said), p = \(probability:.4f))"
+    }
+}
+
+/// What a comparison comes to.
+@derive(Equatable, Debug)
+public union BenchVerdict {
+    Improved
+    WithinNoise
+    Regressed
+}

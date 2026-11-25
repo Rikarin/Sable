@@ -3,9 +3,13 @@ using System.IO.Compression;
 
 [Benchmark("library/gzip-decompress")]
 static class LibraryGzipDecompress {
-    public static string Run() {
+    public static Func<string> Setup() {
         var text = CompressionSample.Text();
         var packed = CompressionSample.Compressed(text, static packed => new GZipStream(packed, new ZLibCompressionOptions { CompressionLevel = 6 }, true));
+        return () => Run(text, packed);
+    }
+
+    static string Run(byte[] text, byte[] packed) {
         var into = new byte[text.Length + 1];
         long total = 0;
         for (var round = 0; round < 20; round++) {

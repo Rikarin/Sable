@@ -646,7 +646,8 @@ SableArray *sable_env_bytes(const SableMetadata *type) {
 
 // The memory manager's counts (0 objects allocated by every thread, 1 alive
 // now, 2 retains and 3 releases — counted only under SABLE_STATS — 4 slabs
-// held, 5 the most held at once, 6 given back to the system).
+// held, 5 the most held at once, 6 given back to the system, 7 bytes allocated,
+// objects' and buffers', counted as retains are).
 int64_t sable_memory_statistic(int64_t which) {
     switch (which) {
         case 0:
@@ -663,7 +664,24 @@ int64_t sable_memory_statistic(int64_t which) {
             return __atomic_load_n(&slabs_most, __ATOMIC_RELAXED);
         case 6:
             return __atomic_load_n(&slabs_returned, __ATOMIC_RELAXED);
+        case 7:
+            return __atomic_load_n(&bytes_allocated, __ATOMIC_RELAXED);
         default:
             return 0;
     }
+}
+
+// Counting retains, releases and bytes from now on, or not: what SABLE_STATS
+// asks for a whole run, for a part of one (a benchmark's memory pass).
+void sable_memory_counting(bool on) {
+    sable_counting = on;
+    observing = tracking || on;
+}
+
+// What a benchmark measures by besides the clock: 0 this process's processor
+// time in nanoseconds, 1 that of the processes it has waited for, 2 the
+// instructions it has run and 3 the processor's cycles it took; -1 where the
+// system does not say.
+int64_t sable_measurement(int64_t which) {
+    return which == 0 || which == 1 ? processor_time(which == 1) : which == 2 || which == 3 ? hardware_counter(which == 3) : -1;
 }

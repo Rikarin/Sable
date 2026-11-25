@@ -1,10 +1,11 @@
 module ByteOrderBench
 
+import Sable.Testing
+
 // Reading and writing integers of a byte order: a megabyte of big-endian
 // U32s and little-endian U64s, fifty times.
 
-@main
-fn main() {
+fn run() -> String {
     var bytes: U8[>..] = []
     for _ in 0..<1048576 {
         bytes.append(0)
@@ -23,5 +24,10 @@ fn main() {
             at += 16
         }
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

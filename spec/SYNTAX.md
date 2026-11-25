@@ -1946,6 +1946,10 @@ awaited as the scope ends.
   (S3236). A closure parameter run as a task is declared `@Sendable`, and
   takes a closure written there, a named function, or another `@Sendable`
   parameter. In an `unsafe` block the programmer vouches for what is shared.
+  A thread's closure (`Thread.spawn`) and a parallel loop's are the same; one
+  spawned on a `Thread.scope`'s scope may name a `var` of the function around
+  it, if it is that thread's alone for the length of the scope. An `inout`
+  parameter, and `self` in a `mutating` member, are a `var` too.
 - `@MainActor` pins a declaration to the main executor: the main thread,
   which runs the program's entry.
 - `for await x in stream { }` iterates an `AsyncSequence`; `for try await`
@@ -2002,17 +2006,18 @@ fn sizeTable<T>() -> Int => MemoryLayout<T>.size
 ```
 
 `const` declares a compile-time constant on its own (`const Pi = 3.14`) and
-modifies a function in `const fn`. Functions and types may also be declared
+modifies a function in `const fn`, and an initialiser in `const init`. Functions and types may also be declared
 inside a function body, where they are ordinary statements.
 
 `const fn` bodies run in the compiler's interpreter. They may allocate, loop,
 and call other `const fn`s; they may not do I/O or touch `unsafe`.
 
 A `const` is computed while the program is compiled and written, as a
-literal, wherever it is read; its type may be left out when its value is a
+literal, wherever it is read — an array of a great many elements once, in a
+global read there, and an object in a global set as the program starts; its type may be left out when its value is a
 literal, another constant, a call, or arithmetic on those. What a constant's
-value, a `const fn` or a `comptime` block calls must be a `const fn`,
-something the compiler wrote (a memberwise initialiser), or a member of
+value, a `const fn` or a `comptime` block calls must be a `const fn` or a
+`const init`, something the compiler wrote (a memberwise initialiser), or a member of
 `Sable.Core` that neither reads, writes nor waits (S3220). A trap while
 computing one — overflow, division by zero, a loop past the step limit — is
 an error at compile time (S3201 for arithmetic, S3221 otherwise), and so is reaching `compileError("...")`
@@ -2050,7 +2055,7 @@ an optimised one; never both. A package's profile may choose with
 | `@export("name")` | fn, var | Foreign export |
 | `@packed` / `@align(16)` | struct | Layout control |
 | `@test` / `@bench` | fn | Collected by `sable test` / `sable bench`; `@test` may say `arguments: [...]`, `tags: [...]`, `timeout: .seconds(5)` and `traps` (docs/05 §5.1) |
-| `@fuzz` | fn taking `U8[:]` | A fuzz target, run by `sable fuzz` under libFuzzer: it fails by trapping or throwing |
+| `@fuzz` | fn taking `U8[:]`, or one to four `Arbitrary` values | A fuzz target, run by `sable fuzz` under libFuzzer: it fails by trapping or throwing. `@fuzz(mutator: f)`: `f`, a function of the module taking an input and a `U64` seed, makes other inputs of one |
 | `@main` | fn | Program entry point: a module-level fn taking nothing and returning nothing or an `Int` exit status, one per module (S3514) |
 | `@generator("name", members: [...], always: true)` | fn in `generators/` | A source generator, run for declarations marked `@name`; `members` are the attributes it reads on fields, cases and parameters; `always` runs a package generator for every package (docs/08) |
 | `@discardable` | fn | Result may be ignored without `_ =` |

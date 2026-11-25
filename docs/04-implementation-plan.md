@@ -199,7 +199,8 @@ Copy Roslyn's **red/green tree** design exactly:
       fuzzers exist and run nightly (`.github/workflows/fuzz.yml`, a new
       seed each night, `SABLE_FUZZ_SEED`/`SABLE_FUZZ_SCALE` to reproduce):
       the parser's random-input round trips; `CompilerFuzzTests`, which
-      mutates the repository's programs at token boundaries (a token for
+      mutates the repository's programs, half by whole syntax nodes
+      (`SyntaxMutator`) and half at token boundaries (a token for
       another of its kind, runs deleted, duplicated, spliced, swapped)
       through parsing, binding, the semantic model, constant evaluation,
       lowering, the SIL verifier and the passes, the printed SIL read back,
@@ -217,9 +218,9 @@ Copy Roslyn's **red/green tree** design exactly:
       a full one), the language server's documents (edits by line and
       column equal to a full parse), the front end (as `CompilerFuzzTests`
       holds it), SIL as text (read, printed and read back, verified, through
-      the passes), the resolver and the package files, and `fromBytes` under libFuzzer with
-      ASan and UBSan, from the repository's sources and a dictionary from
-      the lexer's tables, nightly for 90 minutes a target with the corpus kept from
+      the passes), the resolver, the package files and library interfaces,
+      from the repository's sources and a dictionary from
+      the lexer's tables, nightly for an hour a target with the corpus kept from
       night to night. No fuzzer has yet run for 24 hours on end. Found and
       fixed so far: an extension nested in an extension threw while
       attaching; a self-dependency hung the resolver and crashed its
@@ -1986,7 +1987,7 @@ Full design in [05-toolchain.md](05-toolchain.md).
   the first failure stops the run. Harness options: filters (substring of
   `Module.function`, any of several), `--exact`, `--list`, `--show-output`.
   Exit code 0 when all selected pass, 1 when one fails, 2 for bad usage.
-- **Benchmarks** warm up (doubling a batch until 50 ms have passed), size a
+- **Benchmarks** (as first built; #129 below) warm up (doubling a batch until 50 ms have passed), size a
   sample from that to last ≥ 5 ms, take 20 samples, and report mean, median
   and standard deviation per iteration. `--save-baseline <name>` writes
   `target/bench/<name>.txt` (or `--baseline-dir`): one tab-separated line per
@@ -2098,8 +2099,18 @@ Full design in [05-toolchain.md](05-toolchain.md).
   the task, and ends the process after a grace unless a debugger is attached.
   `sable test` keeps its own limit a little longer, for a process that cannot
   say so itself, and stops what it started with it.
-- **Deferred:** `@bench(arguments:)` and one filter for both commands (#129:
-  `TestFilter`, which takes a name, a place and tags, is in Sable.Testing for it).
+- **The benchmark harness (#129).** `BenchRunner.sb` starts the harness again
+  for each benchmark (`--run-bench`), whose measurement it reads from lines
+  that start with a control character (`BenchMeasurement.encoded`).
+  `BenchSchedule` is the phases as a state machine fed times, so that tests
+  feed it any; `Bencher` reads the clocks. Jobs are other harnesses, built by
+  the driver in processes of their own (`BenchCommand`) and named to the first
+  with `--job`; a git ref's is built from `git archive`. A harness is optimised
+  by the passes `sable build` runs at its level (it had been built with those
+  of `-O0` and clang's `-O2`). Bytes are counted only while asked to be
+  (`sable_memory_counting`, what SABLE_STATS sets for a whole run), the
+  processor's counters and time are the builtin `measurement`.
+  `--asm` marks the benchmarks `noinline` in the IR and reads clang's `-S`.
 
 ### Packages, as implemented
 
@@ -2979,18 +2990,29 @@ them in production.
 `sable fuzz` (docs/05 §5.1, #252) is the toolchain's own fuzzing, ready
 before the port starts, so that each stage is fuzzed as it lands rather than
 when the C# fuzzers (tools/fuzz, `CompilerFuzzTests`, `ResolverFuzzTests`)
-retire. A `@fuzz` function takes the fuzzer's bytes (`U8[:]`); the program is
-built as a library whose exports C calls once an input, with LLVM's
-SanitizerCoverage, AddressSanitizer and UBSan, linked with libFuzzer; the
-corpus and what fails (minimised, summed up by distinct failure) are kept
-under `target/fuzz/<target>/`, and `--replay` runs them again with any clang.
-The nightly workflow fuzzes the repository's `@fuzz` targets
-(`tools/fuzz/stdlib.sb`, `fromBytes` in `tools/fuzz/inline_layout.sb`).
-**Deferred:** `sable test` replaying every saved input; `@derive(Arbitrary)`
-and a grammar-aware mutator built on the syntax tree; a dictionary from the
-lexer's tables; differential targets (self-hosted against C#, the
-interpreter against native code, `-O0` against `-O3`); and coverage from the
-same counters for `sable test --coverage`.
+retire. A `@fuzz` function takes the fuzzer's bytes (`U8[:]`) or arbitrary
+values made of them; the program is built as a library whose exports C calls
+once an input, with LLVM's SanitizerCoverage, AddressSanitizer (over the Sable
+code as well as the runtime) and UBSan, linked with libFuzzer; the corpus and
+what fails (minimised, summed up by distinct failure) are kept under
+`target/fuzz/<target>/`, `--replay` runs them again with any clang, and `sable
+test` runs each once. The nightly workflow fuzzes the repository's `@fuzz`
+targets: the library's readers (`tools/fuzz/targets`: JSON, TOML, YAML, CBOR,
+MessagePack, ASN.1, certificates, keys, the decompressors, zip and tar, URLs,
+names and addresses, regular expressions, numbers and text) and `fromBytes`
+(`tools/fuzz/inline_layout.sb`).
+
+Two things are ready here and wait for a compiler that is a native program:
+the grammar-aware mutator (`src/Sable.Syntax/SyntaxMutator.cs`), which the C#
+fuzzers use now and the Sable compiler's targets will have as
+`@fuzz(mutator:)`, with `--dict sable` and `--seeds tests/corpus`; and the
+differential checks (`DifferentialFuzzTests`, and `differential` in
+`tools/fuzz/coverage.sh`): generated programs interpreted against native,
+`-O0` against `-O3`, separate against whole-program, specialised against
+unspecialised, and the library's interface against its source. The self-hosted
+compiler against this one is the pair to add when there are both. The C# fuzz
+jobs (parser, compiler, differential, resolver, coverage-guided) go when the
+compiler they fuzz does.
 
 ### Exit criteria
 - [ ] Stage 6 fixed point reached

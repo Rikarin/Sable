@@ -1,15 +1,20 @@
 // Port of text-search.sb, with memmem; the pieces
 // of a split are pointers into the text.
 #define _GNU_SOURCE
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
-int main(void) {
-    static const char sentence[] = "lorem ipsum dolor sit amet, consectetur adipiscing elit, ";
-    const size_t piece = sizeof sentence - 1, length = 20000 * piece + 6;
-    char *buffer = xrealloc(NULL, length);
+static const char sentence[] = "lorem ipsum dolor sit amet, consectetur adipiscing elit, ";
+static const size_t piece = sizeof sentence - 1, length = 20000 * (sizeof sentence - 1) + 6;
+static char *buffer;
+
+static void setup(void) {
+    buffer = xrealloc(NULL, length);
     for (size_t i = 0; i < 20000; i++) memcpy(buffer + i * piece, sentence, piece);
     memcpy(buffer + 20000 * piece, "needle", 6);
+}
 
+static void run(void) {
     int64_t found = 0, pieces = 0;
     for (int round = 0; round < 200; round++) {
         const char *text = opaque(buffer);
@@ -28,7 +33,7 @@ int main(void) {
         pieces = add_i(pieces, starts.count);
         free(starts.elements);
     }
-    printf("%lld %lld\n", (long long)found, (long long)pieces);
-    free(buffer);
-    return 0;
+    bench_printf("%lld %lld\n", (long long)found, (long long)pieces);
 }
+
+BENCH_MAIN_WITH(run, setup)

@@ -39,8 +39,8 @@ public struct TestFilter {
         return matches(name: test.name, location: test.location, tags: test.tags)
     }
 
-    /// Whether what is so named, declared there ('file:line') and tagged is
-    /// one of those the filter selects.
+    /// Whether one of that name, place ('file:line') and tags is selected:
+    /// a test, or a benchmark.
     public fn matches(name: String, location: String, tags: String[>..]) -> Bool {
         var stack: Bool[>..] = []
         for step in steps {

@@ -143,6 +143,10 @@ fn fillingAndDrainingAnArrayVec(_ b: Bencher) {
             v.append(i)
             i += 1
         }
-        while let _ = v.popLast() { }
+        var total = 0
+        while let x = v.popLast() {
+            total += blackBox(x)
+        }
+        return total
     })
 }

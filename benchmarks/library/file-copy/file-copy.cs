@@ -7,13 +7,24 @@ static class LibraryFileCopy {
         return bytes;
     }
 
-    public static string Run() {
+    static readonly string Small = Path.GetFullPath("file-copy-dotnet-small.bin");
+    static readonly string Large = Path.GetFullPath("file-copy-dotnet-large.bin");
+    static readonly string Copy = Path.GetFullPath("file-copy-dotnet-copy.bin");
+
+    public static Func<string> Setup() {
+        File.WriteAllBytes(Small, Filled(7, 4000));
+        File.WriteAllBytes(Large, Filled(9, 4000000));
+        return () => Run(Small, Large, Copy);
+    }
+
+    public static void Cleanup() {
+        File.Delete(Small);
+        File.Delete(Large);
+        File.Delete(Copy);
+    }
+
+    static string Run(string small, string large, string copy) {
         checked {
-            var small = Path.GetFullPath("file-copy-dotnet-small.bin");
-            var large = Path.GetFullPath("file-copy-dotnet-large.bin");
-            var copy = Path.GetFullPath("file-copy-dotnet-copy.bin");
-            File.WriteAllBytes(small, Filled(7, 4000));
-            File.WriteAllBytes(large, Filled(9, 4000000));
             long total = 0;
             for (var i = 0; i < 1000; i++) {
                 File.Copy(small, copy, overwrite: true);
@@ -26,9 +37,6 @@ static class LibraryFileCopy {
             }
 
             var last = File.ReadAllBytes(copy);
-            File.Delete(small);
-            File.Delete(large);
-            File.Delete(copy);
             return $"{total} {last.Length} {last[^1]}";
         }
     }

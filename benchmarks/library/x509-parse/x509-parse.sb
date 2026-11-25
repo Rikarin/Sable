@@ -5,6 +5,7 @@ module X509ParseBench
 
 import Sable.Crypto
 import Sable.Crypto.X509
+import Sable.Testing
 
 let pem: String = """
 -----BEGIN CERTIFICATE-----
@@ -26,9 +27,7 @@ vZBm/LVl76Od66qgavZ2WI1kkQ9l0kxp
 -----END CERTIFICATE-----
 """
 
-@main
-fn main() {
-    let der = try! PemBlock.parse(pem)[0].bytes
+fn run(_ der: U8[>..]) -> String {
     var count = 0
     var round = 0
     while round < 5000 {
@@ -36,5 +35,11 @@ fn main() {
         count += "\(certificate.subject)".utf8.count + certificate.notAfter.year
         round += 1
     }
-    print("\(count)")
+    return "\(count)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let der = try! PemBlock.parse(pem)[0].bytes
+    b.check(b.iterate { run(der) })
 }

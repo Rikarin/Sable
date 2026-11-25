@@ -1,7 +1,7 @@
-module Bench
+module FanOutHttp
 
 import Sable.Net
-import Sable.Time
+import Sable.Testing
 
 // A fan-out HTTP-like workload over loopback: a server task accepts each
 // connection and serves it in a task of its own — a request line read, a
@@ -40,17 +40,12 @@ fn ask(_ port: Int) async -> Int {
     }
 }
 
-@main
-fn main() async {
-    let clients = 50
-    let rounds = 40
-    let bound = try? TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-    guard let listener = bound else {
-        print("cannot listen")
-        return
-    }
+let clients = 50
+let rounds = 40
+
+fn run() async -> String {
+    let listener = try! TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
     let server = Task.spawn { await serve(listener) }
-    let start = Instant.now()
     var bytes = 0
     var failed = 0
     for _ in 0..<rounds {
@@ -65,8 +60,14 @@ fn main() async {
             failed += got == 0 ? 1 : 0
         }
     }
-    let micros = start.elapsed.totalNanoseconds / 1000
     server.cancel()
     await server.value
-    print("fan-out over loopback: \(micros / (clients * rounds)) us per request, \(bytes / (clients * rounds)) bytes each, \(failed) failed")
+    return "\(bytes / (clients * rounds)) bytes each, \(failed) failed"
+}
+
+// A request's time.
+@bench
+fn measure(_ b: Bencher) async {
+    b.operationsPerIteration = clients * rounds
+    b.check(await b.iterateAsync { await run() })
 }

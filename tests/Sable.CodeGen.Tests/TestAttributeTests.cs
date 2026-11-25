@@ -50,6 +50,14 @@ public sealed class TestAttributeTests {
     }
 
     [Fact]
+    public void ABenchmarksArguments() {
+        Assert.Empty(ErrorsOf(Program("@bench(arguments: [1, 2], tags: [\"fast\"])\nfn b(_ x: Bencher, _ n: Int) { x.iterate(() => { }) }\n@bench(arguments: [(1, \"a\")])\nfn c(_ n: Int, _ s: String) { }")));
+        Rejects("S3100", "@bench(arguments: [1])\nfn b() { }", "takes a parameter for them");
+        Rejects("S3100", "@bench(arguments: [1], [2], [3])\nfn b(_ x: Bencher, _ n: Int, _ m: Int) { }", "tuples of the 2 values");
+        Assert.NotEmpty(ErrorsOf(Program("@bench(arguments: [\"a\"])\nfn b(_ x: Bencher, _ n: Int) { x.iterate(() => { }) }")));
+    }
+
+    [Fact]
     public void NotBoth() =>
         Rejects("S3106", "@test @bench\nfn t() { }", "one of a test, a benchmark and a fuzz target");
 
@@ -57,7 +65,9 @@ public sealed class TestAttributeTests {
     public void TheAttributesTakeOnlyWhatTheyTake() {
         Rejects("S3107", "@test(\"slow\")\nfn t() { }", "'@test' takes nothing, or 'traps'");
         Rejects("S3107", "@test(traps: 1)\nfn t() { }", "'@test' takes nothing, or 'traps'");
-        Rejects("S3107", "@bench(traps)\nfn b() { }", "'@bench' takes no arguments");
+        Rejects("S3107", "@bench(traps)\nfn b() { }", "'@bench' takes nothing, or 'arguments: [...]'");
+        Rejects("S3107", "@bench(timeout: .seconds(1))\nfn b() { }", "'@bench' takes nothing, or 'arguments: [...]'");
+        Rejects("S3107", "@fuzz(1)\nfn f(_ data: U8[:]) { }", "'@fuzz' takes nothing, or 'mutator: f'");
     }
 
     [Fact]
@@ -71,9 +81,10 @@ public sealed class TestAttributeTests {
     }
 
     [Fact]
-    public void AFuzzTargetTakesOneByteSlice() {
+    public void AFuzzTargetTakesTheBytesOrValues() {
         Rejects("S3104", "@fuzz\nfn f() { }", "one 'U8[:]'");
-        Rejects("S3104", "@fuzz\nfn f(_ data: U8[>..]) { }", "one 'U8[:]'");
+        Rejects("S3104", "@fuzz\nfn f(_ a: Int, _ b: Int, _ c: Int, _ d: Int, _ e: Int) { }", "4 at most");
+        Rejects("S3104", "@fuzz\nfn f(_ n: inout Int) { }", "plain ones");
         Rejects("S3104", "@fuzz\nfn f(_ data: I8[:]) { }", "one 'U8[:]'");
         Rejects("S3104", "@fuzz\nfn f(_ data: U8[:], _ n: Int) { }", "one 'U8[:]'");
         Rejects("S3104", "@fuzz\nasync fn f(_ data: U8[:]) { }", "not async");
@@ -85,7 +96,7 @@ public sealed class TestAttributeTests {
         Rejects("S3102", "@fuzz\nfn f(_ data: U8[:]) -> Int { return 1 }", "a fuzz target returns nothing");
         Rejects("S3103", "struct S {\n    @fuzz\n    fn f(_ data: U8[:]) { }\n}", "'@fuzz' marks an instance method");
         Rejects("S3106", "@test @fuzz\nfn f() { }", "one of a test, a benchmark and a fuzz target");
-        Rejects("S3107", "@fuzz(slow)\nfn f(_ data: U8[:]) { }", "'@fuzz' takes no arguments");
+        Rejects("S3107", "@fuzz(slow)\nfn f(_ data: U8[:]) { }", "'@fuzz' takes nothing, or 'mutator: f'");
         Rejects("S3108", "fn outer() {\n    @fuzz\n    fn inner(_ data: U8[:]) { }\n}", "declared inside a body");
     }
 
@@ -95,6 +106,11 @@ public sealed class TestAttributeTests {
             union E { A }
             @fuzz
             fn plain(_ data: U8[:]) { }
+            @fuzz
+            fn values(_ data: U8[>..], by name: String) { }
+            @fuzz(mutator: longer)
+            fn mutated(_ data: U8[:]) { }
+            fn longer(_ input: U8[:], _ seed: U64) -> U8[>..] { return input.toArray() }
             @fuzz
             fn throwing(_ bytes: U8[:]) throws(E) { }
             @fuzz

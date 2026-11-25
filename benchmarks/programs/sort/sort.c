@@ -9,6 +9,7 @@
 // labels' strings, which are freed once, at exit. Int arithmetic and array
 // indexing are checked.
 
+#include "../../support/c/bench.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -170,7 +171,7 @@ DEFINE_SORT(StringArray, String *)
 static bool int_before(int64_t a, int64_t b) { return a < b; }
 static bool string_before(String *a, String *b) { return a->count < b->count; }
 
-int main(void) {
+static void program(void) {
     IntArray *numbers = NULL;
     int64_t seed = 42;
     int64_t i = 0;
@@ -196,14 +197,14 @@ int main(void) {
     StringArray *byLabel = StringArray_sorted(labelSlice, string_before);
     StringArray_free(labelSlice);
 
-    printf("%lld\n", (long long)IntArray_get(ascending, 0));
-    printf("%lld\n", (long long)IntArray_get(ascending, 199999));
+    bench_printf("%lld\n", (long long)IntArray_get(ascending, 0));
+    bench_printf("%lld\n", (long long)IntArray_get(ascending, 199999));
     String *first = StringArray_get(byLabel, 0);
     String *last = StringArray_get(byLabel, 19999);
-    fwrite(first->bytes, 1, (size_t)first->length, stdout);
-    fputc('\n', stdout);
-    fwrite(last->bytes, 1, (size_t)last->length, stdout);
-    fputc('\n', stdout);
+    bench_write(first->bytes, (size_t)first->length);
+    bench_write("\n", 1);
+    bench_write(last->bytes, (size_t)last->length);
+    bench_write("\n", 1);
 
     IntArray_free(numbers);
     IntArray_free(ascending);
@@ -212,5 +213,6 @@ int main(void) {
         free(labels->elements[k]);
     }
     StringArray_free(labels);
-    return 0;
 }
+
+BENCH_MAIN(program)

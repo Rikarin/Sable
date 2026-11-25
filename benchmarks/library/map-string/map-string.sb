@@ -1,21 +1,15 @@
 module MapString
 
+import Sable.Testing
+
 // [String: Int] against .NET's Dictionary<string, long>: 200,000
 // distinct keys made by interpolation, inserted, looked up five times over,
 // half removed, and counted again.
 
-@main
-fn main() {
-    let n = 200000
-    var keys: String[>..] = []
-    var i = 0
-    while i < n {
-        keys.append("key-\(i * 7919 % 1000003)")
-        i = i + 1
-    }
-
+fn run(_ keys: String[>..]) -> String {
+    let n = keys.count
     var map: [String: Int] = [:]
-    i = 0
+    var i = 0
     while i < n {
         map[keys[i]] = i
         i = i + 1
@@ -43,5 +37,17 @@ fn main() {
         }
     }
 
-    print("\(map.count) \(sum) \(hits)")
+    return "\(map.count) \(sum) \(hits)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let n = 200000
+    var keys: String[>..] = []
+    var i = 0
+    while i < n {
+        keys.append("key-\(i * 7919 % 1000003)")
+        i = i + 1
+    }
+    b.check(b.iterate { run(keys) })
 }

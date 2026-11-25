@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Sable.Syntax;
 
 namespace Sable.Symbols;
@@ -19,7 +20,7 @@ public enum TestKind {
 /// </param>
 /// <param name="Throws">Whether it is declared to throw: an error it throws fails the test.</param>
 /// <param name="TakesBencher">A benchmark that takes the <c>Bencher</c> and calls <c>iterate</c> itself.</param>
-public sealed record TestFunction(
+public sealed partial record TestFunction(
     FunctionSymbol Symbol,
     FunctionDeclarationSyntax Syntax,
     SyntaxTree Tree,
@@ -57,8 +58,8 @@ public sealed record TestFunction(
     /// <summary>The fixtures it takes, after its case's arguments.</summary>
     public IReadOnlyList<TestFixture> Fixtures { get; init; } = [];
 
-    /// <summary>The parameters that are its case's arguments.</summary>
-    public System.Collections.Immutable.ImmutableArray<ParameterSymbol> GivenParameters => [..Symbol.Parameters.Take(Symbol.Parameters.Length - Fixtures.Count)];
+    /// <summary>The parameters <c>arguments:</c> gives values for: all but a benchmark's <c>Bencher</c>, which comes first, and a test's fixtures, which come last.</summary>
+    public IReadOnlyList<ParameterSymbol> ArgumentParameters => [..Symbol.Parameters.Skip(TakesBencher ? 1 : 0).SkipLast(Fixtures.Count)];
 
     /// <summary>The suite's attribute's options and its own, which win.</summary>
     internal IReadOnlyList<TestOptions> Options { get; init; } = [];
@@ -120,14 +121,16 @@ public sealed record TestMaking(NamedTypeSymbol Type, string Module, string Path
 ///         error it throws fails it. One given <c>arguments:</c>, arrays, takes
 ///         parameters, and is a test for each value. A benchmark takes nothing, and its whole
 ///         body is timed, or takes a <c>Sable.Testing.Bencher</c>, and times
-///         what it hands the bencher's <c>iterate</c>. Either is a function of
+///         what it hands the bencher's <c>iterate</c>; given <c>arguments:</c>,
+///         it takes parameters for them after that. Either is a function of
 ///         a module or a static method of a type that is not generic, so that
-///         the harness has one thing to call; neither is generic, and a
-///         benchmark is not async. A test may be async, and is awaited.
+///         the harness has one thing to call, and is not generic; either may
+///         be async, and is awaited.
 ///     </para>
 ///     <para>
-///         A fuzz target takes one <c>U8[:]</c>, the fuzzer's input, and gives
-///         nothing back; it fails by trapping — a failed assertion, an index
+///         A fuzz target takes one <c>U8[:]</c>, the fuzzer's input, or values
+///         made of it, of types that conform to <c>Sable.Testing.Arbitrary</c>
+///         (<see cref="CheckFuzzTarget" />), and gives nothing back; it fails by trapping — a failed assertion, an index
 ///         out of range, a <c>fatalError</c> — or by throwing. It is called
 ///         from C, once an input, so it is not async; like the others it is a
 ///         function of a module or a static method of a type that is not
@@ -146,6 +149,7 @@ public sealed record TestMaking(NamedTypeSymbol Type, string Module, string Path
 ///     </para>
 /// </remarks>
 public sealed partial class Compilation {
+    const string BenchTakes = "'@bench' takes nothing, or 'arguments: [...]', the values it is run with, and 'tags: [\"text\"]'";
     const string TestAttribute = "test", BenchAttribute = "bench", FuzzAttribute = "fuzz", SuiteAttribute = "suite";
 
     /// <summary>Every well-formed <c>@test</c> (or <c>@bench</c>) function, in file and source order.</summary>
@@ -188,9 +192,9 @@ public sealed partial class Compilation {
             }
 
             if (test.Arguments.Count > 0) {
-                var parameters = test.GivenParameters;
+                var parameters = test.ArgumentParameters;
                 for (var i = 0; i < test.Arguments.Count; i++) {
-                    var element = test.Arguments.Count == 1 && parameters.Length > 1
+                    var element = test.Arguments.Count == 1 && parameters.Count > 1
                         ? new TupleTypeSymbol([..parameters.Select(static p => p.Type)], [..parameters.Select(static _ => (string?)null)])
                         : parameters[i].Type;
                     arguments.Add((test.Arguments[i], new ArrayTypeSymbol(element, ArrayKind.Grow), test.Symbol.ContainingSymbol!));
@@ -235,9 +239,19 @@ public sealed partial class Compilation {
         }
 
         var options = new TestOptions();
+        string? mutator = null;
         foreach (var attribute in attributes.Where(static a => a.ArgumentList is not null)) {
-            if (attribute.Name.ToString().Trim() is BenchAttribute or FuzzAttribute) {
-                Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, $"'@{attribute.Name.ToString().Trim()}' takes no arguments");
+            if (attribute.Name.ToString().Trim() == FuzzAttribute) {
+                mutator = FuzzMutator(attribute, tree);
+                if (mutator is null) {
+                    Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, MutatorExpected);
+                }
+            } else if (attribute.Name.ToString().Trim() is BenchAttribute) {
+                if (options.Read(attribute) is { } wrong) {
+                    Report(ErrorCode.ERR_TestAttributeArguments, wrong.Span, BenchTakes);
+                } else if (options.Trap is not null || options.Timeout is not null || options.IsTestOnly) {
+                    Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, BenchTakes);
+                }
             } else if (options.Read(attribute) is { } bad) {
                 Report(ErrorCode.ERR_TestAttributeArguments, bad.Span,
                     "'@test' takes nothing, or 'traps' for a test that must trap, or 'traps: \"text\"' for one whose trap must say that; "
@@ -274,23 +288,20 @@ public sealed partial class Compilation {
             if (problem is not null) {
                 Report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, problem);
             }
+        } else if (kind == TestKind.Bench && options.Arguments.Count > 0) {
+            takesBencher = function.Parameters.Length > 0 && IsBencher(function.Parameters[0].Type);
+            CheckTestArguments(takesBencher ? function.Parameters.RemoveAt(0) : function.Parameters, declaration, options.Arguments, Report);
         } else if (kind == TestKind.Test) {
             fixtures = FixturesOf(function.Parameters, declaration.Parameters.Parameters.Select(static p => p.Type.ToString().Trim()), new(), out var problem);
             if (problem is not null) {
                 Report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, $"{problem}: a test is passed fixtures (a type that is a 'Sable.Testing.Fixture'), or what '@test(arguments: [...])' says");
             }
         } else if (kind == TestKind.Fuzz) {
-            if (function.Parameters is not [{ Type: ArrayTypeSymbol { ArrayKind: ArrayKind.Slice, ElementType: var element } }] || !ReferenceEquals(element, Core.U8)) {
-                Report(ErrorCode.ERR_FuzzSignature, declaration.Parameters.Span, "a fuzz target takes one 'U8[:]': the bytes the fuzzer chose");
-            }
-
-            if (function.IsAsync) {
-                Report(ErrorCode.ERR_FuzzSignature, declaration.Identifier.Span, "a fuzz target is not async: C calls it once an input, and waits for nothing");
-            }
+            CheckFuzzTarget(function, declaration, Report);
         } else if (function.Parameters.Length == 1 && IsBencher(function.Parameters[0].Type)) {
             takesBencher = true;
         } else if (function.Parameters.Length > 0) {
-            Report(ErrorCode.ERR_BenchParameters, declaration.Parameters.Span, "a benchmark takes nothing, or one 'Bencher' (from Sable.Testing) to call 'iterate' on");
+            Report(ErrorCode.ERR_BenchParameters, declaration.Parameters.Span, "a benchmark takes nothing, or one 'Bencher' (from Sable.Testing) to call 'iterate' on, unless '@bench(arguments: [...])' says what more");
         }
 
         if (kind == TestKind.Bench && function.ThrownType is not null) {
@@ -357,6 +368,7 @@ public sealed partial class Compilation {
                 Suite = suiteMaking,
                 Fixtures = fixtures,
                 Options = suiteOptions is null ? [options] : [options, suiteOptions],
+                Mutator = mutator,
             }
             : null;
     }
@@ -473,9 +485,9 @@ public sealed partial class Compilation {
     ///     each. Whether they are of what it takes is found as the file's
     ///     semantic model binds them, where the test is declared.
     /// </summary>
-    static void CheckTestArguments(System.Collections.Immutable.ImmutableArray<ParameterSymbol> parameters, FunctionDeclarationSyntax declaration, IReadOnlyList<ExpressionSyntax> arguments, Action<ErrorCode, TextSpan, string> report) {
+    static void CheckTestArguments(ImmutableArray<ParameterSymbol> parameters, FunctionDeclarationSyntax declaration, IReadOnlyList<ExpressionSyntax> arguments, Action<ErrorCode, TextSpan, string> report) {
         if (parameters.Any(static p => p.Modifier is not ParameterModifier.None || p.IsVariadic || p.IsAutoclosure || p.IsByReference)) {
-            report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test's parameters are plain ones, each given a value of '@test(arguments: [...])'");
+            report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "its parameters are plain ones, each given a value of 'arguments: [...]'");
             return;
         }
 
@@ -484,8 +496,8 @@ public sealed partial class Compilation {
                 ErrorCode.ERR_TestTakesParameters,
                 declaration.Parameters.Span,
                 parameters.IsEmpty
-                    ? "a test given 'arguments:' takes a parameter for them"
-                    : $"'arguments:' is one array, of {(parameters.Length == 1 ? "what the test takes" : $"tuples of the {parameters.Length} values the test takes")}"
+                    ? "what is given 'arguments:' takes a parameter for them"
+                    : $"'arguments:' is one array, of {(parameters.Length == 1 ? "what it takes" : $"tuples of the {parameters.Length} values it takes")}"
                       + $"{(parameters.Length == 1 ? "" : $", or {parameters.Length} arrays, one for each")}; here are {arguments.Count}"
             );
         }

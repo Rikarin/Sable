@@ -1,16 +1,11 @@
 module JsonDomBench
 
 import Sable.Serialize
+import Sable.Testing
 
 // JSON as a tree: three megabytes parsed without a type, and walked.
 
-@main
-fn main() throws(ParseError) {
-    var parts: String[>..] = []
-    for i in 0..<30000 {
-        parts.append("{\"id\": \(i), \"name\": \"item \(i)\", \"price\": \(i % 1000).25, \"tags\": [\"a\", \"b\\n\", true, null]}")
-    }
-    let text = "[" + parts.joined(separator: ", ") + "]"
+fn run(_ text: String) throws(ParseError) -> String {
     var total = 0.0
     var count = 0
     for _ in 0..<3 {
@@ -20,5 +15,15 @@ fn main() throws(ParseError) {
             count += countOf(field(item, "tags")!) + asText(field(item, "name")!)!.count
         }
     }
-    print("\(count) \(total:.2f)")
+    return "\(count) \(total:.2f)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    var parts: String[>..] = []
+    for i in 0..<30000 {
+        parts.append("{\"id\": \(i), \"name\": \"item \(i)\", \"price\": \(i % 1000).25, \"tags\": [\"a\", \"b\\n\", true, null]}")
+    }
+    let text = "[" + parts.joined(separator: ", ") + "]"
+    b.check(b.iterate { try! run(text) })
 }

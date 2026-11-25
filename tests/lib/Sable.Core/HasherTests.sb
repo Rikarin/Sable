@@ -129,5 +129,6 @@ fn hashingIntegers(_ b: Bencher) {
             hasher.combine(i)
             i = i + 1
         }
+        return hasher.finalize()
     })
 }

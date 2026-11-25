@@ -1,0 +1,298 @@
+module VolumeTests
+
+// Plane, Ray, BoundingBox, BoundingSphere and BoundingFrustum. The frustum's
+// tests carry the most weight: with depths reversed, the inequality that
+// bounds the near plane is the far one's, and the wrong way about it culls
+// all that is close. Ports of the Vixen engine's, and what they leave out.
+
+import Sable.Collections
+import Sable.Math.Geometry
+import Sable.Serialize
+import Sable.Testing
+
+const tolerance: F32 = 0.001
+
+fn cube(_ half: F32) -> BoundingBox => BoundingBox(Vector3(repeating: -half), Vector3(repeating: half))
+
+fn camera(_ depth: DepthMapping) -> Matrix4x4 {
+    let view = Matrix4x4.lookAt(eye: Vector3.zero, target: -Vector3.unitZ, up: Vector3.up)
+    return view * Matrix4x4.perspectiveFieldOfView(1.5707964, aspectRatio: 1, near: 1, far: 100, depth: depth)
+}
+
+@test
+fn aPlaneSaysHowFarAndOnWhichSide() {
+    let floor = Plane(point: Vector3.zero, normal: Vector3.up)
+    assertEqual(floor.dotCoordinate(Vector3(0, 5, 0)), 5)
+    assertEqual(floor.dotCoordinate(Vector3(0, -5, 0)), -5)
+    assertEqual(floor.side(of: Vector3(3, 1, 2)), .Front)
+    assertEqual(floor.side(of: Vector3(3, -1, 2)), .Back)
+    assertEqual(floor.side(of: Vector3(3, 0, 2)), .Intersecting)
+    assertEqual(floor.dot(Vector4(0, 3, 0, 1)), 3)
+    assertEqual(Plane.componentCount, 4)
+}
+
+@test
+fn aPlaneThroughThreePointsFacesTheirWinding() {
+    let plane = Plane(through: Vector3.zero, Vector3(1, 0, 0), Vector3(0, 0, -1))
+    assertEqual(plane.normal, Vector3.up)
+    assertEqual(Plane(through: Vector3.zero, Vector3(0, 0, -1), Vector3(1, 0, 0)).normal, Vector3.down)
+    let line = Plane(through: Vector3.zero, Vector3.one, Vector3.one * 2)
+    assertEqual(line.normal, Vector3.zero)
+    assertEqual(line.normalized(), line)
+}
+
+@test
+fn aPlaneMovedByAnUnevenScaleKeepsItsPoints() {
+    let plane = Plane(point: Vector3.zero, normal: Vector3(1, 1, 0))
+    let squash = Matrix4x4(scale: Vector3(1, 4, 1))
+    let moved = plane.transformed(by: squash)
+    assert(nearEqual(moved.dotCoordinate(squash.transformPosition(Vector3(1, -1, 0))), 0, tolerance: tolerance))
+    assertEqual(plane.transformed(by: Matrix4x4(scale: Vector3.zero)), plane)
+}
+
+@test
+fn anEmptyBoxIsTheIdentityOfMerging() {
+    let box = cube(1)
+    assert(BoundingBox.empty.isEmpty)
+    assertEqual(BoundingBox.empty.merged(with: box), box)
+    assertEqual(box.merged(with: BoundingBox.empty), box)
+    assert(BoundingBox(containing: [] as Vector3[:]).isEmpty)
+    assert(BoundingBox(containing: BoundingSphere.empty).isEmpty)
+    assert(BoundingBox.empty.transformed(by: Matrix4x4(rotationY: 1)).isEmpty)
+    assert(!BoundingBox.empty.intersects(box) && !BoundingBox.empty.intersects(BoundingSphere(Vector3.zero, 100)))
+    assert(!BoundingBox.empty.contains(Vector3.zero))
+}
+
+@test
+fn aBoxFitsThePointsItWasMadeOf() {
+    let points = [Vector3(1, 2, 3), Vector3(-4, 0, 5), Vector3(0, -6, -7)]
+    let box = BoundingBox(containing: points)
+    assertEqual(box, BoundingBox(Vector3(-4, -6, -7), Vector3(1, 2, 5)))
+    assertEqual(box.size, Vector3(5, 8, 12))
+    assertEqual(box.extent, Vector3(2.5, 4, 6))
+    assertEqual(box.center, Vector3(-1.5, -2, -1))
+    assertEqual(box.corners.count, 8)
+    assertEqual(BoundingBox(containing: box.corners), box)
+    assertEqual(box.corner(6), Vector3(1, 2, -7))
+    expectPanic("a box has 8 corners") {
+        _ = cube(1).corner(8)
+    }
+}
+
+@test
+fn aBoxTellsInsideFromAcross() {
+    let outer = cube(10)
+    assertEqual(outer.contains(cube(1)), .Contains)
+    assertEqual(outer.contains(BoundingBox(Vector3(repeating: 5), Vector3(repeating: 15))), .Intersects)
+    assertEqual(outer.contains(BoundingBox(Vector3(repeating: 20), Vector3(repeating: 30))), .Disjoint)
+    assertEqual(outer.contains(BoundingSphere(Vector3.zero, 2)), .Contains)
+    assertEqual(outer.contains(BoundingSphere(Vector3(9, 0, 0), 2)), .Intersects)
+    assertEqual(outer.contains(BoundingSphere(Vector3(20, 0, 0), 2)), .Disjoint)
+    assertEqual(BoundingBox(containing: BoundingSphere(Vector3.one, 2)), BoundingBox(Vector3(repeating: -1), Vector3(repeating: 3)))
+}
+
+@test
+fn aTurnedBoxGrowsToStayAlongTheAxes() {
+    let turned = cube(0.5).transformed(by: Matrix4x4(rotationY: 0.7853982))
+    assert(nearEqual(turned.maximum.x, 0.70710677, tolerance: tolerance))
+    assert(nearEqual(turned.maximum.y, 0.5, tolerance: tolerance))
+}
+
+@test
+fn mergedSpheresAreNoLargerThanTheyNeedBe() {
+    let inner = BoundingSphere(Vector3.zero, 1)
+    let outer = BoundingSphere(Vector3.zero, 5)
+    assertEqual(inner.merged(with: outer), outer)
+    assertEqual(outer.merged(with: inner), outer)
+    let apart = BoundingSphere(Vector3(-2, 0, 0), 1).merged(with: BoundingSphere(Vector3(2, 0, 0), 1))
+    assert(apart.nearEqual(BoundingSphere(Vector3.zero, 3), tolerance: tolerance))
+    assertEqual(BoundingSphere.empty.merged(with: inner), inner)
+    assertEqual(inner.merged(with: BoundingSphere.empty), inner)
+}
+
+@test
+fn anEmptySphereHoldsAndMeetsNothing() {
+    let empty = BoundingSphere.empty
+    assert(empty.isEmpty)
+    assert(!empty.contains(Vector3.zero))
+    assert(!empty.intersects(BoundingSphere(Vector3.zero, 5)) && !cube(1).intersects(empty))
+    assertEqual(empty.contains(BoundingSphere(Vector3.zero, 5)), .Disjoint)
+    assertEqual(BoundingSphere(Vector3.zero, 5).contains(empty), .Disjoint)
+    assertEqual(Ray(Vector3.zero, Vector3.unitX).intersection(with: empty), none)
+    assert(empty.transformed(by: Matrix4x4(scale: Vector3(repeating: 4))).isEmpty)
+    assert(BoundingSphere(containing: BoundingBox.empty).isEmpty)
+    assert(BoundingSphere(containing: [] as Vector3[:]).isEmpty)
+}
+
+@test
+fn aSphereTellsInsideFromAcross() {
+    let sphere = BoundingSphere(Vector3.zero, 5)
+    assertEqual(sphere.contains(BoundingSphere(Vector3.unitX, 1)), .Contains)
+    assertEqual(sphere.contains(BoundingSphere(Vector3(5, 0, 0), 1)), .Intersects)
+    assertEqual(sphere.contains(BoundingSphere(Vector3(9, 0, 0), 1)), .Disjoint)
+    assertEqual(sphere.contains(cube(1)), .Contains)
+    assertEqual(sphere.contains(cube(4)), .Intersects)
+    assertEqual(sphere.contains(BoundingBox(Vector3(repeating: 9), Vector3(repeating: 10))), .Disjoint)
+    assert(sphere.intersects(cube(1)) && sphere.intersects(BoundingSphere(Vector3(6, 0, 0), 1)))
+    assert(nearEqual(BoundingSphere(containing: cube(1)).radius, 1.7320508))
+    assertEqual(sphere.transformed(by: Matrix4x4(scale: Vector3(1, 3, 2))), BoundingSphere(Vector3.zero, 15))
+}
+
+@test
+fn aRayMeetsABoxFromOutsideAndFromWithin() {
+    let box = cube(1)
+    assertEqual(Ray(Vector3(0, 0, -5), Vector3.unitZ).intersection(with: box), 4)
+    assertEqual(Ray(Vector3.zero, Vector3.unitX).intersection(with: box), 0)
+    assertEqual(Ray(Vector3(0, 0, -5), -Vector3.unitZ).intersection(with: box), none)
+    assertEqual(Ray(Vector3(0, 5, -5), Vector3.unitZ).intersection(with: box), none)
+    assertEqual(Ray(Vector3(0, -5, 5), Vector3(0.1, 0.1, -1)).intersection(with: box), none)
+}
+
+@test
+fn aRayAlongAFaceMeetsTheBox() {
+    // Dividing by the direction would make 0 × ∞ of it.
+    assertEqual(Ray(Vector3(1, 0, -5), Vector3.unitZ).intersection(with: cube(1)), 4)
+    assertEqual(Ray(Vector3(-1, 1, -5), Vector3.unitZ).intersection(with: cube(1)), 4)
+}
+
+@test
+fn aRayMeetsASphereAPlaneAndATriangle() {
+    let ahead = Ray(Vector3(0, 0, -5), Vector3.unitZ * 7)
+    assertEqual(ahead.direction, Vector3.unitZ)
+    assertEqual(ahead.intersection(with: BoundingSphere(Vector3.zero, 1)), 4)
+    assertEqual(ahead.intersection(with: BoundingSphere(Vector3(0, 0, -5), 1)), 0)
+    assertEqual(ahead.intersection(with: BoundingSphere(Vector3(0, 0, -9), 1)), none)
+    assertEqual(ahead.intersection(with: BoundingSphere(Vector3(0, 3, 0), 1)), none)
+    let floor = Plane(point: Vector3.zero, normal: Vector3.up)
+    assertEqual(Ray(Vector3(0, 5, 0), Vector3.down).intersection(with: floor), 5)
+    assertEqual(Ray(Vector3(0, 5, 0), Vector3.unitX).intersection(with: floor), none)
+    assertEqual(Ray(Vector3(0, 5, 0), Vector3.up).intersection(with: floor), none)
+}
+
+@test
+fn aRayMeetsATriangleFromEitherSide() {
+    let a = Vector3.zero
+    let b = Vector3(0, 0, -1)
+    let c = Vector3(1, 0, 0)
+    assertEqual(Ray(Vector3(0.25, 5, -0.25), Vector3.down).intersection(withTriangle: a, b, c), 5)
+    assertEqual(Ray(Vector3(0.25, -5, -0.25), Vector3.up).intersection(withTriangle: a, b, c), 5)
+    assertEqual(Ray(Vector3(5, 5, 5), Vector3.down).intersection(withTriangle: a, b, c), none)
+    assertEqual(Ray(Vector3(0.75, 5, -0.75), Vector3.down).intersection(withTriangle: a, b, c), none)
+    assertEqual(Ray(Vector3(0.25, 5, -0.25), Vector3.up).intersection(withTriangle: a, b, c), none)
+    assertEqual(Ray(Vector3(0.25, 5, -0.25), Vector3.unitX).intersection(withTriangle: a, b, c), none)
+    assertEqual(Ray(Vector3(0.5, 5, 0.5), Vector3.down).intersection(withTriangle: a, b, c), none)
+}
+
+@test
+fn aRayIsMovedWithItsDirectionUnit() {
+    let moved = Ray(Vector3.zero, Vector3.unitX).transformed(by: Matrix4x4(scale: Vector3(repeating: 3), rotation: Quaternion.identity, translation: Vector3.one))
+    assert(moved.nearEqual(Ray(Vector3.one, Vector3.unitX)))
+}
+
+@test
+fn theFrustumsNearAndFarAreTheReversedWayRound() {
+    for depth in [DepthMapping.Reversed, DepthMapping.Forward] {
+        let frustum = BoundingFrustum(camera(depth), depth: depth)
+        assert(frustum.near.nearEqual(Plane(Vector3(0, 0, -1), -1), tolerance: tolerance))
+        assert(frustum.far.nearEqual(Plane(Vector3.unitZ, 100), tolerance: 0.01))
+    }
+}
+
+@test
+fn theFrustumHoldsWhatTheCameraSeesAndNothingElse() {
+    let frustum = BoundingFrustum(camera(.Reversed))
+    assert(frustum.contains(Vector3(0, 0, -50)))
+    assert(!frustum.contains(Vector3(0, 0, -0.5)))
+    assert(!frustum.contains(Vector3(0, 0, -200)))
+    assert(!frustum.contains(Vector3(0, 0, 10)))
+    assert(!frustum.contains(Vector3(100, 0, -50)))
+    let infinite = BoundingFrustum(Matrix4x4.perspectiveFieldOfView(1, aspectRatio: 1, near: 1, far: F32.infinity))
+    assert(infinite.contains(Vector3(0, 0, -1000000)) && !infinite.contains(Vector3(0, 0, 1)))
+    assert(infinite.intersects(BoundingSphere(Vector3(0, 0, -1000000), 1)))
+}
+
+@test
+fn theFrustumTellsInsideFromAcross() {
+    let frustum = BoundingFrustum(camera(.Reversed))
+    assertEqual(frustum.contains(BoundingSphere(Vector3(0, 0, -50), 1)), .Contains)
+    assertEqual(frustum.contains(BoundingSphere(Vector3(0, 0, -1), 5)), .Intersects)
+    assertEqual(frustum.contains(BoundingSphere(Vector3(0, 0, 50), 1)), .Disjoint)
+    assertEqual(frustum.contains(BoundingBox(Vector3(-1, -1, -51), Vector3(1, 1, -49))), .Contains)
+    assertEqual(frustum.contains(BoundingBox(Vector3(-1, -1, -5), Vector3(1, 1, 5))), .Intersects)
+    assertEqual(frustum.contains(BoundingBox(Vector3(-1, -1, 49), Vector3(1, 1, 51))), .Disjoint)
+    assert(!frustum.intersects(BoundingBox(Vector3(-1, -1, 49), Vector3(1, 1, 51))))
+    assert(!frustum.intersects(BoundingSphere(Vector3(0, 0, 50), 1)))
+}
+
+@test
+fn theFrustumsCornersAreWhereItsPlanesMeet() {
+    let corners = BoundingFrustum(camera(.Reversed)).corners
+    assert(corners[0].nearEqual(Vector3(-1, -1, -1), tolerance: 0.01))
+    assert(corners[2].nearEqual(Vector3(1, 1, -1), tolerance: 0.01))
+    assert(corners[4].nearEqual(Vector3(-100, -100, -100), tolerance: 0.01))
+    assert(corners[6].nearEqual(Vector3(100, 100, -100), tolerance: 0.01))
+    let plane = Plane(Vector3.up, 0)
+    assertEqual(BoundingFrustum.intersection(plane, plane, Plane(Vector3.unitX, 0)), Vector3.zero)
+}
+
+@test
+fn aBoxThatTouchesAFrustumsPlaneIsNotCulled() {
+    let frustum = BoundingFrustum(camera(.Reversed))
+    let box = BoundingBox(Vector3(-48, -20.993805, -32), Vector3(-32, -4.993805, -16))
+    assertEqual(box.side(of: frustum.left), .Intersecting)
+    assert(frustum.contains(box) != .Disjoint)
+    let sphere = BoundingSphere(box.center, box.extent.x * 1.4142135)
+    assertEqual(sphere.side(of: frustum.left), .Intersecting)
+    assert(frustum.contains(sphere) != .Disjoint)
+}
+
+@test
+fn aBoxThatTouchesAPlaneIsAcrossItAtEveryScale() {
+    for scale in [1, 10, 100, 1000, 10000, 100000] as F32[>..] {
+        let box = BoundingBox(Vector3(scale, -2 * scale, 0.5 * scale), Vector3(3 * scale, scale, 2.5 * scale))
+        let plane = Plane(point: box.minimum, normal: Vector3.one)
+        assertEqual(box.side(of: plane), .Intersecting)
+    }
+}
+
+@test
+fn theMarginTakesUpRoundingAndNotGeometry() {
+    let floor = Plane(point: Vector3.zero, normal: Vector3.up)
+    for scale in [1, 100, 1000, 10000, 100000] as F32[>..] {
+        assertEqual(BoundingBox(Vector3(scale, -2 * scale - 1, scale), Vector3(2 * scale, -1, 2 * scale)).side(of: floor), .Back)
+        assertEqual(BoundingBox(Vector3(scale, 1, scale), Vector3(2 * scale, 2 * scale + 1, 2 * scale)).side(of: floor), .Front)
+        assertEqual(BoundingSphere(Vector3(scale, -scale - 1, scale), scale).side(of: floor), .Back)
+        assertEqual(BoundingSphere(Vector3(scale, scale + 1, scale), scale).side(of: floor), .Front)
+    }
+}
+
+@test
+fn volumesAreEqualHashedWrittenAndSerialised() {
+    let plane = Plane(Vector3.up, -2)
+    let ray = Ray(Vector3.one, Vector3.unitX)
+    let box = cube(2)
+    let sphere = BoundingSphere(Vector3.one, 2)
+    let frustum = BoundingFrustum(camera(.Reversed))
+    assertEqual(Set([plane, plane, Plane(Vector3.up, 2)]).count, 2)
+    assertEqual(Set([ray, ray, Ray(Vector3.zero, Vector3.unitX), Ray(Vector3.one, Vector3.unitY)]).count, 3)
+    assertEqual(Set([box, box, cube(3)]).count, 2)
+    assertEqual(Set([sphere, BoundingSphere(Vector3.one, 2), BoundingSphere(Vector3.one, 3)]).count, 2)
+    assertEqual(Set([frustum, frustum, BoundingFrustum(camera(.Forward))]).count, 2)
+    assert(plane.nearEqual(plane) && !plane.nearEqual(Plane(Vector3.up, 2)) && ray.nearEqual(ray) && box.nearEqual(box) && sphere.nearEqual(sphere) && frustum.nearEqual(frustum))
+    assert(!frustum.nearEqual(BoundingFrustum(camera(.Forward))) && !sphere.nearEqual(BoundingSphere(Vector3.one, 3)) && !box.nearEqual(cube(3)))
+    assertEqual(try! Json.decode(Plane.self, from: try! Json.encode(plane)), plane)
+    assertEqual(try! Json.decode(Ray.self, from: try! Json.encode(ray)), ray)
+    assertEqual(try! Json.decode(BoundingBox.self, from: try! Json.encode(box)), box)
+    assertEqual(try! Json.decode(BoundingSphere.self, from: try! Json.encode(sphere)), sphere)
+    assertEqual(try! Json.decode(BoundingFrustum.self, from: try! Json.encode(frustum)), frustum)
+    assertEqual("\(plane)", "(0.0, 1.0, 0.0, -2.0)")
+    assertEqual("\(ray:.0)", "((1, 1, 1), (1, 0, 0))")
+    assertEqual("\(box:.0)", "((-2, -2, -2), (2, 2, 2))")
+    assertEqual("\(sphere:.0)", "(1, 1, 1, 2)")
+    assert("\(frustum)".starts(with: "(("))
+    assertEqual(plane.debugDescription(), "Plane(Vector3(0.0, 1.0, 0.0), -2.0)")
+    assertEqual(ray.debugDescription(), "Ray(Vector3(1.0, 1.0, 1.0), Vector3(1.0, 0.0, 0.0))")
+    assertEqual(box.debugDescription(), "BoundingBox(Vector3(-2.0, -2.0, -2.0), Vector3(2.0, 2.0, 2.0))")
+    assertEqual(sphere.debugDescription(), "BoundingSphere(Vector3(1.0, 1.0, 1.0), 2.0)")
+    assert(frustum.debugDescription().starts(with: "BoundingFrustum(near: Plane("))
+}

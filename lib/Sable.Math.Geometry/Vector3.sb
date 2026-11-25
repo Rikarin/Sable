@@ -1,0 +1,316 @@
+module Sable.Math.Geometry
+
+/// Three `F32`s: a position, a direction, a scale, and whatever else a
+/// world measures in three dimensions (Conventions.sb: right-handed, up is
+/// +Y, forward is -Z). 12 bytes, aligned to 4, its components in order, as
+/// C's `struct { float x, y, z; }` and a vertex buffer have it; std140 and
+/// std430 align a `vec3` to 16, which is a padding the buffer's layout adds.
+///
+/// Arithmetic is component by component, each a single IEEE operation and
+/// never fused, so the same on every processor.
+///
+/// ```sable
+/// let v = Vector3(1, 2, 3) + Vector3.unitX * 2
+/// assert(v == Vector3(3, 2, 3) && v.xy == Vector2(3, 2))
+/// assert(Vector3.unitX.cross(Vector3.unitY) == Vector3.unitZ)
+/// ```
+public struct Vector3: Hashable, AdditiveArithmetic, Sendable {
+    /// The x component.
+    public var x: F32
+
+    /// The y component.
+    public var y: F32
+
+    /// The z component.
+    public var z: F32
+
+    /// The vector of the components.
+    public init(_ x: F32, _ y: F32, _ z: F32) {
+        self.x = x
+        self.y = y
+        self.z = z
+    }
+
+    /// Every component the value.
+    public init(repeating value: F32) {
+        x = value
+        y = value
+        z = value
+    }
+
+    /// The two components of the shorter vector, and z.
+    public init(_ xy: Vector2, _ z: F32) {
+        x = xy.x
+        y = xy.y
+        self.z = z
+    }
+
+    /// The integers, each the nearest `F32`.
+    public init(_ integers: Int3) {
+        x = F32(integers.x)
+        y = F32(integers.y)
+        z = F32(integers.z)
+    }
+
+    /// The lanes, in order.
+    public init(_ lanes: SIMD<F32, 3>) {
+        x = lanes[0]
+        y = lanes[1]
+        z = lanes[2]
+    }
+
+    /// The three floats of the slice from the offset on. Traps unless they are all in it.
+    public init(from components: F32[:], at offset: Int = 0) {
+        x = components[offset]
+        y = components[offset + 1]
+        z = components[offset + 2]
+    }
+
+    /// Every component zero.
+    public static var zero: Vector3 => Vector3(0, 0, 0)
+
+    /// Every component one.
+    public static var one: Vector3 => Vector3(1, 1, 1)
+
+    /// The x axis.
+    public static var unitX: Vector3 => Vector3(1, 0, 0)
+
+    /// The y axis.
+    public static var unitY: Vector3 => Vector3(0, 1, 0)
+
+    /// The z axis.
+    public static var unitZ: Vector3 => Vector3(0, 0, 1)
+
+    /// +Y.
+    public static var up: Vector3 => Vector3(0, 1, 0)
+
+    /// -Y.
+    public static var down: Vector3 => Vector3(0, -1, 0)
+
+    /// -X.
+    public static var left: Vector3 => Vector3(-1, 0, 0)
+
+    /// +X.
+    public static var right: Vector3 => Vector3(1, 0, 0)
+
+    /// -Z: the way a camera looks, right-handed.
+    public static var forward: Vector3 => Vector3(0, 0, -1)
+
+    /// +Z.
+    public static var backward: Vector3 => Vector3(0, 0, 1)
+
+    /// How many components there are: 3.
+    public static var componentCount: Int => 3
+
+    /// x and y.
+    public var xy: Vector2 => Vector2(x, y)
+
+    /// The components as lanes of a vector register.
+    public var simd: SIMD<F32, 3> {
+        get {
+            var lanes = SIMD<F32, 3>()
+            lanes[0] = x
+            lanes[1] = y
+            lanes[2] = z
+            return lanes
+        }
+    }
+
+    /// The component at the index, x first; outside 0..<3 traps.
+    public subscript(index: Int) -> F32 {
+        get {
+            switch index {
+                case 0: return x
+                case 1: return y
+                case 2: return z
+                default: preconditionFailure("a Vector3 has no component \(index)")
+            }
+        }
+        set {
+            switch index {
+                case 0: x = newValue
+                case 1: y = newValue
+                case 2: z = newValue
+                default: preconditionFailure("a Vector3 has no component \(index)")
+            }
+        }
+    }
+
+    /// Writes the components to the slice from the offset on. Traps unless
+    /// there is room for all three, and then writes none.
+    public fn copy(to destination: inout F32[:], at offset: Int = 0) {
+        destination[offset + 2] = z
+        destination[offset + 1] = y
+        destination[offset] = x
+    }
+
+    /// The length, √(x² + y² + z²).
+    ///
+    /// ```sable
+    /// assert(Vector3(3, 4, 12).length == 13)
+    /// ```
+    public var length: F32 => (x * x + y * y + z * z).squareRoot()
+
+    /// The square of the length, with no square root: what to compare by.
+    public var lengthSquared: F32 => x * x + y * y + z * z
+
+    /// Whether every component is zero, of either sign.
+    public var isZero: Bool => x == 0 && y == 0 && z == 0
+
+    /// Whether any component is NaN.
+    public var isNaN: Bool => x.isNaN || y.isNaN || z.isNaN
+
+    /// Whether every component is finite.
+    public var isFinite: Bool => x.isFinite && y.isFinite && z.isFinite
+
+    /// The components added together.
+    public var sum: F32 => x + y + z
+
+    /// The least component; NaN if any is.
+    public var minComponent: F32 => x.minimum(y).minimum(z)
+
+    /// The greatest component; NaN if any is.
+    public var maxComponent: F32 => x.maximum(y).maximum(z)
+
+    /// The vector of length 1 the same way; a vector shorter than a
+    /// millionth has none, and gives `zero` rather than NaNs (.NET gives NaNs).
+    ///
+    /// ```sable
+    /// assert((Vector3.unitY * 8).normalized() == Vector3.unitY)
+    /// assert(Vector3.zero.normalized() == Vector3.zero)
+    /// ```
+    public fn normalized() -> Vector3 {
+        let squared = lengthSquared
+        if squared < 1e-12 {
+            return Vector3.zero
+        }
+        return self * (1 / squared.squareRoot())
+    }
+
+    /// The dot product: the product of the lengths and the cosine between.
+    public fn dot(_ other: Vector3) -> F32 => x * other.x + y * other.y + z * other.z
+
+    /// The cross product, right-handed: X × Y is Z.
+    public fn cross(_ other: Vector3) -> Vector3 {
+        return Vector3(y * other.z - z * other.y, z * other.x - x * other.z, x * other.y - y * other.x)
+    }
+
+    /// How far apart two points are.
+    public fn distance(to other: Vector3) -> F32 => (self - other).length
+
+    /// The square of how far apart two points are.
+    public fn distanceSquared(to other: Vector3) -> F32 => (self - other).lengthSquared
+
+    /// `self + (other - self) * amount`: exactly this at 0, and at 1 the other
+    /// but for rounding. The amount is not clamped.
+    ///
+    /// ```sable
+    /// assert(Vector3.zero.lerp(to: Vector3.one, 0.25) == Vector3(repeating: 0.25))
+    /// ```
+    public fn lerp(to other: Vector3, _ amount: F32) -> Vector3 => self + (other - self) * amount
+
+    /// The smaller of each pair of components: NaN if either is, and -0 below +0.
+    public fn min(_ other: Vector3) -> Vector3 => Vector3(x.minimum(other.x), y.minimum(other.y), z.minimum(other.z))
+
+    /// The larger of each pair of components: NaN if either is, and +0 above -0.
+    public fn max(_ other: Vector3) -> Vector3 => Vector3(x.maximum(other.x), y.maximum(other.y), z.maximum(other.z))
+
+    /// Each component held within the bounds': `max(lower).min(upper)`.
+    public fn clamped(lower: Vector3, upper: Vector3) -> Vector3 => self.max(lower).min(upper)
+
+    /// Each component's magnitude.
+    public fn abs() -> Vector3 => Vector3(x.abs(), y.abs(), z.abs())
+
+    /// Each component's square root.
+    public fn squareRoot() -> Vector3 => Vector3(x.squareRoot(), y.squareRoot(), z.squareRoot())
+
+    /// Each component rounded down.
+    public fn floor() -> Vector3 => Vector3(x.rounded(.Down), y.rounded(.Down), z.rounded(.Down))
+
+    /// Each component rounded up.
+    public fn ceil() -> Vector3 => Vector3(x.rounded(.Up), y.rounded(.Up), z.rounded(.Up))
+
+    /// Each component rounded toward zero.
+    public fn truncated() -> Vector3 => Vector3(x.rounded(.TowardZero), y.rounded(.TowardZero), z.rounded(.TowardZero))
+
+    /// Each component rounded to the nearest integer, a half to even.
+    public fn rounded() -> Vector3 => Vector3(x.rounded(.ToNearestOrEven), y.rounded(.ToNearestOrEven), z.rounded(.ToNearestOrEven))
+
+    /// What the function makes of each component: `v.map { sin($0) }`.
+    public fn map<E: Error>(_ body: (F32) throws(E) -> F32) throws(E) -> Vector3 {
+        return Vector3(try body(x), try body(y), try body(z))
+    }
+
+    /// The direction reflected by a surface of the (unit) normal.
+    ///
+    /// ```sable
+    /// assert(Vector3.unitY.reflected(normal: Vector3.unitY) == -Vector3.unitY)
+    /// ```
+    public fn reflected(normal: Vector3) -> Vector3 => self - normal * (2 * self.dot(normal))
+
+    /// The part of the vector along another; `zero` along one too short to
+    /// have a direction.
+    public fn projected(onto other: Vector3) -> Vector3 {
+        let squared = other.lengthSquared
+        if squared < 1e-12 {
+            return Vector3.zero
+        }
+        return other * (self.dot(other) / squared)
+    }
+
+    /// Whether each component is near the other's: see the function
+    /// `nearEqual`. `==` is exact.
+    public fn nearEqual(_ other: Vector3, tolerance: F32 = 1e-6) -> Bool {
+        return Sable.Math.Geometry.nearEqual(x, other.x, tolerance: tolerance) && Sable.Math.Geometry.nearEqual(y, other.y, tolerance: tolerance) && Sable.Math.Geometry.nearEqual(z, other.z, tolerance: tolerance)
+    }
+
+    /// The sum, component by component.
+    public operator + (lhs: Vector3, rhs: Vector3) -> Vector3 => Vector3(lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z)
+
+    /// The difference, component by component.
+    public operator - (lhs: Vector3, rhs: Vector3) -> Vector3 => Vector3(lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z)
+
+    /// The product, component by component.
+    public operator * (lhs: Vector3, rhs: Vector3) -> Vector3 => Vector3(lhs.x * rhs.x, lhs.y * rhs.y, lhs.z * rhs.z)
+
+    /// The quotient, component by component.
+    public operator / (lhs: Vector3, rhs: Vector3) -> Vector3 => Vector3(lhs.x / rhs.x, lhs.y / rhs.y, lhs.z / rhs.z)
+
+    /// Every component negated.
+    public prefix operator - (operand: Vector3) -> Vector3 => Vector3(-operand.x, -operand.y, -operand.z)
+
+    /// Every component times the number.
+    public operator * (lhs: Vector3, rhs: F32) -> Vector3 => Vector3(lhs.x * rhs, lhs.y * rhs, lhs.z * rhs)
+
+    /// Every component times the number.
+    public operator * (lhs: F32, rhs: Vector3) -> Vector3 => rhs * lhs
+
+    /// Every component divided by the number, each quotient correctly rounded.
+    public operator / (lhs: Vector3, rhs: F32) -> Vector3 => Vector3(lhs.x / rhs, lhs.y / rhs, lhs.z / rhs)
+
+    /// Whether the components are exactly equal, as IEEE has it: -0 is 0, and
+    /// a NaN equals nothing, itself included.
+    public operator == (lhs: Vector3, rhs: Vector3) -> Bool => lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z
+
+    /// The components' hashes: vectors that are equal hash alike, zeros of either sign too.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(x)
+        hasher.combine(y)
+        hasher.combine(z)
+    }
+}
+
+extension Vector3: Formattable {
+    /// The components in parentheses, each written as the spec says, the
+    /// whole padded to the width.
+    ///
+    /// ```sable
+    /// assert("\(Vector3.unitX:.1)" == "(1.0, 0.0, 0.0)")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([x, y, z], spec, named: "Vector3")
+}
+
+extension Vector3: Debug {
+    /// As source writes it: `Vector3(1.0, 1.0, 1.0)`.
+    public fn debugDescription() -> String => "Vector3(\(x.debugDescription()), \(y.debugDescription()), \(z.debugDescription()))"
+}

@@ -1,0 +1,69 @@
+module FrozenSetTests
+
+// FrozenSet (Sable.Collections): against a Set as the model.
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn aFrozenSetIsTheSetOfItsValues() {
+    forAll(cases: 100) { (first: U8[>..], second: U8[>..]) in
+        let a = FrozenSet<U8>(first)
+        let b = FrozenSet<U8>(second)
+        let x = Set<U8>(first)
+        let y = Set<U8>(second)
+        expect(a.toArray() == x.toArray() && a.count == x.count && a.isEmpty == x.isEmpty)
+        for value in second {
+            expect(a.contains(value) == x.contains(value))
+        }
+        expect(a.isSubset(of: b) == x.isSubset(of: y) && a.isSuperset(of: b) == x.isSuperset(of: y))
+        expect(a.isDisjoint(with: b) == x.isDisjoint(with: y))
+        expect((a == b) == (x == y))
+        expect(a == FrozenSet<U8>(a.reversed()) && a.hashValue == FrozenSet<U8>(a.reversed()).hashValue)
+    }
+    forAll(cases: 60) { (first: String[>..], others: String[>..]) in
+        let a = FrozenSet<String>(first)
+        let x = Set<String>(first)
+        expect(a.toArray() == x.toArray())
+        for value in others {
+            expect(a.contains(value) == x.contains(value) && a.contains(Substring(value)) == x.contains(value))
+        }
+        expect(a.hashValue == FrozenSet<String>(a.reversed()).hashValue)
+    }
+}
+
+const Reserved = FrozenSet<String>(["con", "prn", "aux", "nul", "clock$"])
+const Primes = FrozenSet<Int>([2, 3, 5, 7, 11, 13, 1000003])
+const Vowels = FrozenSet<Char>(['a', 'e', 'i', 'o', 'u', 'ü'])
+
+struct Table {
+    static let words = FrozenSet<String>(["if", "else", "while"])
+}
+
+@test
+fn oneMadeAsTheProgramIsCompiled() {
+    expect(Reserved.contains("aux") && !Reserved.contains("lpt"))
+    expect(Primes.contains(1000003) && !Primes.contains(9))
+    expect(Vowels.contains('ü') && !Vowels.contains('y'))
+    expect(Table.words.contains("else") && !Table.words.contains("els"))
+    assertEqual(Reserved.count, 5)
+}
+
+@test
+fn byExample() {
+    let members = FrozenSet<Int>([3, 1, 2, 3])
+    assertEqual(members.count, 3)
+    assertEqual(members[1], 1)
+    expect(members.map { $0 * 2 } == [6, 2, 4])
+    expect(members.startIndex == 0 && members.endIndex == 3 && members.index(after: 0) == 1 && members.index(before: 1) == 0)
+    expect(members.index(0, offsetBy: 2) == 2 && members.distance(from: 0, to: 3) == 3)
+    assertEqual("\(members)", "FrozenSet([3, 1, 2])")
+    expect(FrozenSet<Int>().isEmpty && !FrozenSet<Int>().contains(0))
+    let verbs = FrozenSet<String>(ignoringAsciiCase: ["GET", "PUT", "POST", "get", "HEAD", "PATCH"])
+    expect(verbs.count == 5 && verbs.contains("get") && verbs.contains("Post") && !verbs.contains("pos"))
+    expect(verbs.member(equalTo: "Put") == "PUT" && verbs.member(equalTo: "x") == none)
+    assertEqual(verbs.hashValue, FrozenSet<String>(ignoringAsciiCase: ["put", "get", "head", "patch", "post"]).hashValue)
+    let collected: FrozenSet<String> = ["x", "y", "x"].collect()
+    assertEqual(collected.count, 2)
+    expect(collected != FrozenSet<String>(["x"]) && collected != FrozenSet<String>(["x", "z"]))
+}

@@ -1988,15 +1988,26 @@ public sealed class SilModule {
 /// </remarks>
 public static class SilBuiltins {
     /// <summary>
-    ///     An <c>array_literal</c> of numbers, Bools or Chars, every one written
-    ///     as a literal: natively a constant in read-only memory, made once
-    ///     and never counted (#265).
+    ///     An <c>array_literal</c> of numbers, Bools, Chars and strings, and of
+    ///     structs and tuples of them, every one written as a literal:
+    ///     natively a constant in read-only memory, made once and never
+    ///     counted (#265).
     /// </summary>
     public static bool IsConstantArray(BuiltinInst literal) =>
-        literal is { Name: "array_literal", Type: ArrayType array }
-        && (array.Element == SilType.Int || array.Element == SilType.Bool || array.Element == SilType.Char || array.Element == SilType.F64
-            || array.Element == SilType.F32 || SilType.IntegerInfo(array.Element) is not null)
-        && literal.Operands.All(static o => o is IntegerLiteralInst or FloatLiteralInst);
+        literal is { Name: "array_literal", Type: ArrayType array } && IsConstantElement(array.Element) && literal.Operands.All(IsConstant);
+
+    /// <summary>A type whose values a constant array may hold: one known all through, with nothing to run when it goes.</summary>
+    public static bool IsConstantElement(SilType type) =>
+        type switch {
+            StructType { Deinit: null, IsNoncopyable: false } structType => structType.Fields.Count > 0 && structType.Fields.All(static f => IsConstantElement(f.Type)),
+            TupleType tuple => tuple.Elements.Length > 0 && tuple.Elements.All(IsConstantElement),
+            _ => type == SilType.Int || type == SilType.Bool || type == SilType.Char || type == SilType.F64 || type == SilType.F32 || type == SilType.String
+                || SilType.IntegerInfo(type) is not null,
+        };
+
+    static bool IsConstant(SilValue value) =>
+        value is IntegerLiteralInst or FloatLiteralInst or StringLiteralInst
+        || value is StructInst or TupleInst && ((SilInstruction)value).Operands.All(IsConstant);
 
     public sealed record Signature(ImmutableArray<SilType> Operands, SilType Result) {
         /// <summary>The operands the builtin takes ownership of.</summary>
@@ -2012,7 +2023,7 @@ public static class SilBuiltins {
     ///     count work on an array alone.
     /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_element_addr_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "slice_of_borrowed", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_holes", "array_take", "array_append_all", "array_mismatch", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_element_addr_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "slice_of_borrowed", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_holes", "array_take", "array_append_all", "array_mismatch", "array_shares", "region_alloc"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
@@ -2072,6 +2083,12 @@ public static class SilBuiltins {
             // Work run on the blocking pool while the task waits: a function and the object it is given, borrowed.
             case "task_blocking" when operands is [FunctionType, ClassType]:
                 return new([..operands], SilType.Unit);
+            // A thread, or a loop several share, given its work; a value of a
+            // thread's or a task's given what destroys it: a function and the
+            // object it is given, which the runtime then holds, and integers.
+            case "thread_start" or "thread_loop" when operands is [FunctionType, ClassType, var number] && number == SilType.Int:
+            case "thread_local_set" or "task_local_push" when operands is [FunctionType, ClassType, var key, var cell] && key == SilType.Int && cell == SilType.Int:
+                return new([..operands], SilType.Unit) { Consumed = [1] };
             case "task_wait" or "task_release" or "task_cancel" when operands is [var handle] && handle == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
             // Off the run queue for at least this many nanoseconds, while the other tasks run.
@@ -2310,6 +2327,10 @@ public static class SilBuiltins {
             case "array_mismatch" when Element(0, false) is { } compared && operands.Count == 2 && Element(1, false) == compared:
                 return new([operands[0], operands[1]], SilType.Int);
 
+            // Whether two arrays, or slices, are the same elements of one buffer.
+            case "array_shares" when Element(0, false) is { } shared && operands.Count == 2 && Element(1, false) == shared:
+                return new([operands[0], operands[1]], SilType.Bool);
+
             // The elements [from, to) of an array or a slice rotated left by
             // the third operand, in place: moved, not copied, so no element
             // is retained or released. The range is checked, as a slice's.
@@ -2360,7 +2381,16 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", "no_context", "object_unmade", Coverage.Builtin]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", "thread_start", "thread_loop", "thread_local_set", "task_local_push", "no_context", "object_unmade", Coverage.Builtin]);
+
+    /// <summary>
+    ///     True of a builtin that runs code of the program's — a loop's work, a
+    ///     thread-local's deinit — or waits for another thread that has: what
+    ///     that code changes is anything it could reach.
+    /// </summary>
+    public static bool RunsWork(string name) =>
+        name is "thread_start" or "thread_loop" or "thread_join" or "thread_park" or "thread_block_wait" or "thread_local_set" or "thread_local_free"
+            or "task_local_push" or "task_local_pop";
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 
@@ -2522,6 +2552,9 @@ public static class SilBuiltins {
                 return new([viewed], result!);
             case "opaque_take_as" when operands is [var taken] && result is not null && result != taken && SilType.SameErasingOpaque(taken, result, opaqueOnly: true):
                 return new([taken], result!) { Consumed = [0] };
+            // A value only its metadata knows, which is of the type: a copy of it.
+            case "opaque_copy_as" when operands is [OpaqueType known] && result is not null && !SilType.MentionsOpaque(result):
+                return new([known], result);
             case "metadata_array" or "metadata_slice" when operands is [var element] && element == metadata:
                 return new([metadata], metadata);
             case "opaque_type" when operands is [OpaqueType value, var m] && m == metadata:
@@ -2745,6 +2778,7 @@ public static class SilBuiltins {
         Add("string_utf8_count", SilType.Int, SilType.String);
         Add("string_utf8_at", SilType.U8, SilType.String, SilType.Int);
         Add("string_utf8_load_U64", SilType.U64, SilType.String, SilType.Int);
+        Add("string_utf8_last_U64", SilType.U64, SilType.String);
         Add("string_index_scalar", SilType.Char, SilType.String, SilType.Int);
         Add("string_index_after", SilType.Int, SilType.String, SilType.Int);
         Add("string_index_before", SilType.Int, SilType.String, SilType.Int);
@@ -2896,6 +2930,8 @@ public static class SilBuiltins {
         Add("system_text", SilType.String, SilType.Int);
         Add("system_number", SilType.Int, SilType.Int);
         Add("memory_statistic", SilType.Int, SilType.Int);
+        Add("memory_counting", SilType.Unit, SilType.Bool);
+        Add("measurement", SilType.Int, SilType.Int);
         Add("io_succeeded", SilType.Bool);
         // Files by handle (runtime/io.c, "File handles"): a call that fails
         // gives -1, nothing or false, and 'file_error' says why by IoError's
@@ -3124,6 +3160,32 @@ public static class SilBuiltins {
         Add("condition_wait", SilType.Unit, SilType.Int, SilType.Int, SilType.Int);
         Add("condition_signal", SilType.Unit, SilType.Int);
         Add("condition_broadcast", SilType.Unit, SilType.Int);
+
+        // Threads (runtime/parallel.c), by handle — made with a name, a stack's
+        // size and a priority, named, joined, parked — blocking on a task;
+        // thread-locals and task-locals, by key: where a value is, 0 for none.
+        // What runs a closure is below (RunsWork).
+        Add("thread_new", SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("thread_release", SilType.Unit, SilType.Int);
+        Add("thread_current", SilType.Int);
+        Add("thread_id", SilType.Int, SilType.Int);
+        Add("thread_name", SilType.String, SilType.Int);
+        Add("thread_join", SilType.Bool, SilType.Int, SilType.Int);
+        Add("thread_ended", SilType.Bool, SilType.Int);
+        Add("thread_park", SilType.Bool, SilType.Int);
+        Add("thread_unpark", SilType.Unit, SilType.Int);
+        Add("thread_yield", SilType.Unit);
+        Add("thread_workers", SilType.Int);
+        Add("thread_loop_more", SilType.Unit);
+        Add("thread_block_new", SilType.Int);
+        Add("thread_block_done", SilType.Unit, SilType.Int);
+        Add("thread_block_wait", SilType.Unit, SilType.Int);
+        Add("thread_local_key", SilType.Int);
+        Add("thread_local_free", SilType.Unit, SilType.Int);
+        Add("thread_local_find", SilType.Int, SilType.Int);
+        Add("task_local_key", SilType.Int);
+        Add("task_local_pop", SilType.Unit);
+        Add("task_local_find", SilType.Int, SilType.Int);
 
         // Emptying a region, all of it or back to a mark: what a 'region frame = pool' block took.
         Add("region_reset", SilType.Unit, SilType.Region);

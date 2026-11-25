@@ -36,6 +36,6 @@ fn summingKeptFromTheOptimiser(_ b: Bencher) {
         for i in 0..<100 {
             total = total + blackBox(i)
         }
-        let kept = blackBox(total)
+        return total
     })
 }

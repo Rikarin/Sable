@@ -17,6 +17,9 @@ internal sealed class TestOptions {
     /// <summary>Whether it is a <c>@suite</c>'s, which takes neither arguments nor a trap.</summary>
     public bool OnSuite { get; init; }
 
+    /// <summary>Whether it says what only a test's or a suite's may.</summary>
+    public bool IsTestOnly => Retries is not null || Collection is not null || IsSerialized || IsExplicit || Skip is not null;
+
     /// <summary>What both attributes take, for a message.</summary>
     public const string Common =
         "'tags: [\"text\"]', 'timeout: .seconds(5)', 'retry: 3', 'skip: \"why\"' or 'skip(if: condition, \"why\")', 'collection: \"name\"', 'serialized' and 'explicit'";

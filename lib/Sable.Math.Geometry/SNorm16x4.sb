@@ -1,0 +1,43 @@
+module Sable.Math.Geometry
+
+/// Four numbers of -1...1 in four `I16`s, as a vertex has a normal, a quaternion:
+/// 8 bytes. Vulkan's conversions: what is outside is held to the ends (NaN
+/// to -1), and rounded to the nearest, and the least integer is -1 too.
+///
+/// ```sable
+/// assert(SNorm16x4(Vector4(1, -1, 1, -1)).vector == Vector4(1, -1, 1, -1))
+/// assert(MemoryLayout<SNorm16x4>.size == 8)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct SNorm16x4: Sendable {
+    /// The x component, in 32767ths.
+    public var x: I16
+
+    /// The y component, in 32767ths.
+    public var y: I16
+
+    /// The z component, in 32767ths.
+    public var z: I16
+
+    /// The w component, in 32767ths.
+    public var w: I16
+
+    /// The integers as they are stored.
+    public init(_ x: I16, _ y: I16, _ z: I16, _ w: I16) {
+        self.x = x
+        self.y = y
+        self.z = z
+        self.w = w
+    }
+
+    /// Each component rounded to the nearest there is.
+    public init(_ value: Vector4) {
+        x = I16((value.x.maximumNumber(-1).minimum(1) * 32767).rounded(.ToNearestOrEven))
+        y = I16((value.y.maximumNumber(-1).minimum(1) * 32767).rounded(.ToNearestOrEven))
+        z = I16((value.z.maximumNumber(-1).minimum(1) * 32767).rounded(.ToNearestOrEven))
+        w = I16((value.w.maximumNumber(-1).minimum(1) * 32767).rounded(.ToNearestOrEven))
+    }
+
+    /// The numbers they are.
+    public var vector: Vector4 => Vector4((F32(x) / 32767).maximum(-1), (F32(y) / 32767).maximum(-1), (F32(z) / 32767).maximum(-1), (F32(w) / 32767).maximum(-1))
+}

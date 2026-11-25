@@ -1,6 +1,7 @@
 // Port of atomic.sb: four threads.
 #include <pthread.h>
 #include <stdatomic.h>
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
 static _Atomic int64_t count;
@@ -16,12 +17,14 @@ static void *work(void *unused) {
     return NULL;
 }
 
-int main(void) {
+static void run(void) {
+    atomic_store(&count, 0);
     pthread_t threads[4];
     for (intptr_t t = 0; t < 4; t++) {
         if (pthread_create(&threads[t], NULL, work, (void *)t) != 0) trap("pthread_create");
     }
     for (int t = 0; t < 4; t++) pthread_join(threads[t], NULL);
-    printf("%lld\n", (long long)atomic_load(&count));
-    return 0;
+    bench_printf("%lld\n", (long long)atomic_load(&count));
 }
+
+BENCH_MAIN(run)

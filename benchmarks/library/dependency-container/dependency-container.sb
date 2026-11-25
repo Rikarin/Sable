@@ -1,6 +1,7 @@
 module DependencyContainerBench
 
 import Sable.DependencyInjection
+import Sable.Testing
 
 // A graph of fifty services resolved in a scope of its own, as a request's
 // is: twelve transient ones over thirteen scoped ones over twenty-five
@@ -458,11 +459,16 @@ final class N49 {
 @container
 struct Nodes { }
 
-fn main() {
-    let provider = Nodes.build()
+fn run(_ provider: NodesProvider) -> String {
     var total = 0
     for _ in 0..<20000 {
         total += provider.withScope { scope in scope.resolve(N0.self).total() }
     }
-    print("\(total)")
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let provider = Nodes.build()
+    b.check(b.iterate { run(provider) })
 }

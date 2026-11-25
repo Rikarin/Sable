@@ -30,5 +30,7 @@
          shared so that the two kinds of fuzzer cannot drift apart. -->
     <Compile Include="../../../tests/Sable.SIL.Tests/FrontEndCheck.cs" Link="Shared/FrontEndCheck.cs" />
     <Compile Include="../../../tests/Sable.CodeGen.Tests/ResolverCheck.cs" Link="Shared/ResolverCheck.cs" />
+    <Compile Include="../../../tests/Sable.CodeGen.Tests/ProgramGenerator.cs" Link="Shared/ProgramGenerator.cs" />
+    <Compile Include="../../../tests/Sable.CodeGen.Tests/DifferentialCheck.cs" Link="Shared/DifferentialCheck.cs" />
   </ItemGroup>
 </Project>

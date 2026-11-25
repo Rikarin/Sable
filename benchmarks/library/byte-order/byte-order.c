@@ -1,7 +1,8 @@
 // Port of byte-order.sb, for a little-endian machine.
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
-int main(void) {
+static void run(void) {
     enum { COUNT = 1048576 };
     unsigned char *bytes = xrealloc(NULL, COUNT);
     uint64_t total = 0;
@@ -20,7 +21,8 @@ int main(void) {
             total = (total + __builtin_bswap32(first) + second) % 1000000007;
         }
     }
-    printf("%llu\n", (unsigned long long)total);
+    bench_printf("%llu\n", (unsigned long long)total);
     free(bytes);
-    return 0;
 }
+
+BENCH_MAIN(run)

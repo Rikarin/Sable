@@ -4,6 +4,7 @@
 // tree is freed when the Sable program lets it go (right after check), the
 // long-lived one at exit. Int arithmetic is checked, as Sable's is.
 
+#include "../../support/c/bench.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,7 +66,7 @@ static int64_t check(const Node *node) {
     return total;
 }
 
-int main(void) {
+static void program(void) {
     const int64_t maxDepth = 16;
     Node *longLived = build(maxDepth);
 
@@ -80,11 +81,12 @@ int main(void) {
             node_free(tree);
             i = add_i(i, 1);
         }
-        printf("%lld trees of depth %lld: %lld\n", (long long)iterations, (long long)depth, (long long)sum);
+        bench_printf("%lld trees of depth %lld: %lld\n", (long long)iterations, (long long)depth, (long long)sum);
         depth = add_i(depth, 2);
     }
 
-    printf("long lived tree of depth %lld: %lld\n", (long long)maxDepth, (long long)check(longLived));
+    bench_printf("long lived tree of depth %lld: %lld\n", (long long)maxDepth, (long long)check(longLived));
     node_free(longLived);
-    return 0;
 }
+
+BENCH_MAIN(program)

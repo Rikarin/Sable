@@ -33,17 +33,22 @@
 #                against trying every assignment; and the version parsers
 #     packages   a manifest, a lock file and a registry's index: refused
 #                only with their own errors, and written back as they read
-#     frombytes  tools/fuzz/inline_layout.sb's fromBytes under libFuzzer,
-#                AddressSanitizer and UBSan (tools/fuzz/from_bytes.c)
+#     interface  a library's interface: read or refused, and what reads
+#                writes back as it
+#     differential
+#                a small program the bytes choose, interpreted as it is
+#                lowered, unspecialised, optimised and against the library's
+#                interface: all must print and trap the same
+#
+# fromBytes is a target of 'sable fuzz', as the library's readers are
+# (tools/fuzz/targets).
 #
 # The engine is libFuzzer where there is one. For the .NET targets that is
 # libfuzzer-dotnet, which runs the target in a process of its own: set
 # LIBFUZZER_DOTNET to its path (the nightly workflow builds it with clang
 # -fsanitize=fuzzer; .github/workflows/fuzz.yml). Without it, the targets run
 # under Sable.Fuzz's own loop (CoverageLoop.cs), the same coverage map read
-# in-process. frombytes needs a clang with libFuzzer's runtime: Linux's has
-# it, Apple's does not, and there frombytes only checks that its seeds run
-# clean under the sanitizers.
+# in-process.
 #
 # Results go to artifacts/fuzz/<start time>/, as overnight.sh's do
 # (tools/fuzz/common.sh):
@@ -56,14 +61,16 @@
 #
 # A failure reproduces with its input: Sable.Fuzz <target> replay <file>,
 # from <run>/bin (the instrumented build), or the minimised input pasted into
-# a test. For frombytes, <run>/frombytes/replay <file>.
+# a test.
 #
 # The corpus — the inputs that found new coverage — persists between runs in
 # artifacts/fuzz-corpus/<target> (FUZZ_CORPUS moves it), so each run starts
 # where the last left off. The seeds are the repository's .sb files
 # (tests/corpus, tests/programs, tests/negative, examples, lib), the package
 # tests' manifests, and hand-written registries and records; the
-# dictionaries come from the lexer's own tables.
+# dictionaries come from the lexer's own tables. The parser and the front
+# end are also given mutants made by editing whole syntax nodes
+# (src/Sable.Syntax/SyntaxMutator.cs), for a third of the time.
 #
 # A target's engine stops at a hang (and libFuzzer at any failure); the
 # script starts it again, from the corpus, until the deadline. The deadline
@@ -93,11 +100,11 @@ fi
 duration=${1:-1h}
 [ $# -gt 0 ] && shift
 targets=("$@")
-[ ${#targets[@]} -eq 0 ] && targets=(parser editor frontend sil resolver packages interface frombytes)
+[ ${#targets[@]} -eq 0 ] && targets=(parser editor frontend sil resolver packages interface differential)
 for target in "${targets[@]}"; do
     case "$target" in
-        parser|editor|frontend|sil|resolver|packages|interface|frombytes) ;;
-        *) echo "error: no target '$target'; the targets are parser, editor, frontend, sil, resolver, packages, interface and frombytes" >&2; exit 2 ;;
+        parser|editor|frontend|sil|resolver|packages|interface|differential) ;;
+        *) echo "error: no target '$target'; the targets are parser, editor, frontend, sil, resolver, packages, interface and differential" >&2; exit 2 ;;
     esac
 done
 deadline=$(( $(date +%s) + $(seconds_of "$duration") ))
@@ -116,69 +123,29 @@ echo "Ctrl-C (or 'kill $$') stops early and summarises; 'tools/fuzz/coverage.sh 
 
 # ---- Building ---------------------------------------------------------------
 
-needs_dotnet=0
-for target in "${targets[@]}"; do
-    [ "$target" != frombytes ] && needs_dotnet=1
-done
-
-if [ "$needs_dotnet" -eq 1 ]; then
-    if ! dotnet publish tools/fuzz/Sable.Fuzz -c Release -o "$bin" -v quiet -nologo > "$out/build.log" 2>&1; then
-        echo "error: tools/fuzz/Sable.Fuzz does not build; see $out/build.log" >&2
-        exit 1
-    fi
-
-    # SharpFuzz's command-line tool rewrites the Sable assemblies — not the
-    # fuzzer's own, the tests' or .NET's — so that each branch they take is
-    # counted in the coverage map. It targets an older .NET, hence the roll forward.
-    sharpfuzz=${SHARPFUZZ:-}
-    if [ -z "$sharpfuzz" ]; then
-        sharpfuzz="$root/artifacts/fuzz-tools/sharpfuzz"
-        if [ ! -x "$sharpfuzz" ] && ! dotnet tool install SharpFuzz.CommandLine --version 2.3.0 --tool-path "$root/artifacts/fuzz-tools" >> "$out/build.log" 2>&1; then
-            echo "error: cannot install SharpFuzz.CommandLine; see $out/build.log" >&2
-            exit 1
-        fi
-    fi
-    # The language server for the editor target: its documents and their edits.
-    for assembly in Sable.Syntax Sable.Symbols Sable.SIL Sable.LanguageServer; do
-        DOTNET_ROLL_FORWARD=Major "$sharpfuzz" "$bin/$assembly.dll" >> "$out/build.log" 2>&1 || { echo "error: cannot instrument $assembly; see $out/build.log" >&2; exit 1; }
-    done
-    # Of the driver, only the package code: the rest is the command line.
-    DOTNET_ROLL_FORWARD=Major "$sharpfuzz" "$bin/sable.dll" Sable.Driver.Packages >> "$out/build.log" 2>&1 \
-        || { echo "error: cannot instrument the package code; see $out/build.log" >&2; exit 1; }
+if ! dotnet publish tools/fuzz/Sable.Fuzz -c Release -o "$bin" -v quiet -nologo > "$out/build.log" 2>&1; then
+    echo "error: tools/fuzz/Sable.Fuzz does not build; see $out/build.log" >&2
+    exit 1
 fi
 
-# libFuzzer's runtime: whether this clang links -fsanitize=fuzzer.
-has_libfuzzer() {
-    local probe="$out/frombytes/probe"
-    printf 'int LLVMFuzzerTestOneInput(const unsigned char *d, unsigned long n) { return 0; }\n' > "$probe.c"
-    ${CC:-clang} -fsanitize=fuzzer "$probe.c" -o "$probe" > /dev/null 2>&1
-}
-
-fuzzer_engine=none
-for target in "${targets[@]}"; do
-    [ "$target" = frombytes ] || continue
-    mkdir -p "$out/frombytes"
-    # The compiler, as tools/fuzz/run.sh builds it, uninstrumented.
-    if ! dotnet build src/Sable.Driver -c Release -o "$out/compiler" -v quiet -nologo >> "$out/build.log" 2>&1 \
-        || ! "$out/compiler/sable" build tools/fuzz/inline_layout.sb --emit llvm-ir > "$out/frombytes/program.ll" 2>> "$out/build.log"; then
-        echo "error: cannot compile tools/fuzz/inline_layout.sb; see $out/build.log" >&2
+# SharpFuzz's command-line tool rewrites the Sable assemblies — not the
+# fuzzer's own, the tests' or .NET's — so that each branch they take is
+# counted in the coverage map. It targets an older .NET, hence the roll forward.
+sharpfuzz=${SHARPFUZZ:-}
+if [ -z "$sharpfuzz" ]; then
+    sharpfuzz="$root/artifacts/fuzz-tools/sharpfuzz"
+    if [ ! -x "$sharpfuzz" ] && ! dotnet tool install SharpFuzz.CommandLine --version 2.3.0 --tool-path "$root/artifacts/fuzz-tools" >> "$out/build.log" 2>&1; then
+        echo "error: cannot install SharpFuzz.CommandLine; see $out/build.log" >&2
         exit 1
     fi
-    # libFuzzer brings its own main, and from_bytes.c its own replay one, so
-    # the program's is renamed out of the way: what C calls is the @export functions.
-    sed 's/^define i32 @main(/define i32 @sable_fuzz_program_main(/' "$out/frombytes/program.ll" > "$out/frombytes/harness.ll"
-    flags=(-O1 -g -fno-omit-frame-pointer -fno-sanitize-recover=all -Wno-override-module)
-    sources=("$out/frombytes/harness.ll" runtime/sable_runtime.c tools/fuzz/from_bytes.c)
-    if ! ${CC:-clang} "${flags[@]}" -fsanitize=address,undefined -DSABLE_FUZZ_STANDALONE "${sources[@]}" -o "$out/frombytes/replay" >> "$out/build.log" 2>&1; then
-        echo "error: cannot build the fromBytes harness; see $out/build.log" >&2
-        exit 1
-    fi
-    if has_libfuzzer; then
-        ${CC:-clang} "${flags[@]}" -fsanitize=fuzzer,address,undefined "${sources[@]}" -o "$out/frombytes/fuzzer" >> "$out/build.log" 2>&1 \
-            || { echo "error: cannot build the fromBytes fuzzer; see $out/build.log" >&2; exit 1; }
-        fuzzer_engine=libfuzzer
-    fi
+fi
+# The language server for the editor target: its documents and their edits.
+for assembly in Sable.Syntax Sable.Symbols Sable.SIL Sable.LanguageServer; do
+    DOTNET_ROLL_FORWARD=Major "$sharpfuzz" "$bin/$assembly.dll" >> "$out/build.log" 2>&1 || { echo "error: cannot instrument $assembly; see $out/build.log" >&2; exit 1; }
 done
+# Of the driver, only the package code: the rest is the command line.
+DOTNET_ROLL_FORWARD=Major "$sharpfuzz" "$bin/sable.dll" Sable.Driver.Packages >> "$out/build.log" 2>&1 \
+    || { echo "error: cannot instrument the package code; see $out/build.log" >&2; exit 1; }
 
 # ---- Fuzzing ----------------------------------------------------------------
 
@@ -208,15 +175,6 @@ triage() {
         # No time left: recorded, with the engine's notes beside it, not replayed.
         status=-1
         what="not replayed, out of time"
-    elif [ "$name" = frombytes ]; then
-        ASAN_OPTIONS=detect_leaks=0 timeout "$(at_least_one "$(within 60)")" "$out/frombytes/replay" "$file" > "$replay" 2>&1
-        status=$?
-        what=$(signature "$replay")
-        budget=$(within 300)
-        if [ "$fuzzer_engine" = libfuzzer ] && [ "$status" -ne 0 ] && [ "$status" -ne 124 ] && [ "$budget" -gt 0 ]; then
-            ASAN_OPTIONS=detect_leaks=0 timeout "$budget" "$out/frombytes/fuzzer" -minimize_crash=1 -max_total_time=120 \
-                -exact_artifact_path="$file.min" "$file" > "$file.min.log" 2>&1
-        fi
     else
         timeout "$(at_least_one "$(within 600)")" "$bin/Sable.Fuzz" "$name" replay "$file" > "$replay" 2>&1
         status=$?
@@ -281,34 +239,28 @@ fuzz() {
     # written, the harness dying as it starts — fuzzed nothing: a failure,
     # said and summarised, not a quiet zero rounds.
     local setup="$dir/setup.log" length limit
-    if [ "$name" = frombytes ]; then
-        engine=$fuzzer_engine
-        length=4096 limit=10
-        mkdir -p "$dir/seeds"
-        "$out/frombytes/replay" seeds "$dir/seeds" > "$setup" 2>&1 || { setup_failed "$name" "$setup" $?; return; }
-    else
-        engine=${LIBFUZZER_DOTNET:+libfuzzer}
-        engine=${engine:-in-process}
-        read -r length limit < <("$bin/Sable.Fuzz" "$name" info 2> "$setup")
-        [ -n "${limit:-}" ] || { setup_failed "$name" "$setup" "no limits from 'info'"; return; }
-        "$bin/Sable.Fuzz" "$name" seeds "$dir/seeds" > "$setup" 2>&1 || { setup_failed "$name" "$setup" $?; return; }
-        "$bin/Sable.Fuzz" "$name" dict "$dir/dict" > "$setup" 2>&1 || { setup_failed "$name" "$setup" $?; return; }
-    fi
+    engine=${LIBFUZZER_DOTNET:+libfuzzer}
+    engine=${engine:-in-process}
+    read -r length limit < <("$bin/Sable.Fuzz" "$name" info 2> "$setup")
+    [ -n "${limit:-}" ] || { setup_failed "$name" "$setup" "no limits from 'info'"; return; }
+    "$bin/Sable.Fuzz" "$name" seeds "$dir/seeds" > "$setup" 2>&1 || { setup_failed "$name" "$setup" $?; return; }
+    "$bin/Sable.Fuzz" "$name" dict "$dir/dict" > "$setup" 2>&1 || { setup_failed "$name" "$setup" $?; return; }
 
-    if [ "$engine" = none ]; then
-        # No libFuzzer here: the seeds under the sanitizers, as a check that the harness works.
-        if ASAN_OPTIONS=detect_leaks=0 "$out/frombytes/replay" "$dir/seeds"/* > "$dir/run-0.log" 2>&1; then
-            echo "not fuzzed: ${CC:-clang} has no libFuzzer runtime (Apple's has none); its $(find "$dir/seeds" -type f | wc -l | tr -d ' ') seeds run clean under ASan and UBSan" > "$dir/about"
-        else
-            echo "not fuzzed: no libFuzzer runtime; and its seeds fail under the sanitizers: see run-0.log" > "$dir/about"
-            echo "$name	$dir/run-0.log	$(signature "$dir/run-0.log")" >> "$out/failures.tsv"
-        fi
-        echo "$(date +%H:%M) $name: $(cat "$dir/about")"
-        return
-    fi
-
+    local main_engine=$engine
     while [ "$(date +%s)" -lt "$deadline" ] && ! stopped; do
         local left=$(( deadline - $(date +%s) ))
+        # libFuzzer cannot call the grammar-aware mutator (SyntaxMutator),
+        # which is in the .NET process on the other side of a pipe. The
+        # targets that read Sable source have it first, for a third of the
+        # time, in the in-process loop; libFuzzer goes on from that corpus.
+        engine=$main_engine
+        case "$name" in
+            parser|frontend)
+                if [ "$round" -eq 0 ] && [ "$engine" = libfuzzer ]; then
+                    engine=in-process
+                    left=$(( left / 3 + 1 ))
+                fi ;;
+        esac
         local log="$dir/run-$round.log"
         local before status ran
         before=$(ls "$crashes")
@@ -318,12 +270,7 @@ fuzz() {
         local hard=(timeout -k 10 $(( left + grace )))
         case "$engine" in
             libfuzzer)
-                local command=()
-                if [ "$name" = frombytes ]; then
-                    command=(env ASAN_OPTIONS=detect_leaks=0 "$out/frombytes/fuzzer")
-                else
-                    command=(env SABLE_FUZZ_CURRENT="$crashes/.current" "$LIBFUZZER_DOTNET" --target_path="$bin/Sable.Fuzz" --target_arg="$name" -dict="$dir/dict")
-                fi
+                local command=(env SABLE_FUZZ_CURRENT="$crashes/.current" "$LIBFUZZER_DOTNET" --target_path="$bin/Sable.Fuzz" --target_arg="$name" -dict="$dir/dict")
                 "${hard[@]}" "${command[@]}" -max_len="$length" -timeout="$limit" -rss_limit_mb=0 -max_total_time="$left" \
                     -artifact_prefix="$crashes/" -print_final_stats=1 "$corpus" "$dir/seeds" > "$log" 2>&1
                 status=$?

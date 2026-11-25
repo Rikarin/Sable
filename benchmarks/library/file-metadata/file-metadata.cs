@@ -1,9 +1,11 @@
 // Port of file-metadata.sb.
 [Benchmark("library/file-metadata")]
 static class LibraryFileMetadata {
-    public static string Run() {
+    static string Root => Path.GetFullPath("file-metadata-dotnet");
+
+    public static Func<string> Setup() {
         checked {
-            var root = Path.GetFullPath("file-metadata-dotnet");
+            var root = Root;
             Directory.CreateDirectory(root);
             var paths = new List<string>();
             for (var i = 0; i < 200; i++) {
@@ -15,6 +17,14 @@ static class LibraryFileMetadata {
                 paths.Add(path);
             }
 
+            return () => Run(paths);
+        }
+    }
+
+    public static void Cleanup() => Directory.Delete(Root, recursive: true);
+
+    static string Run(List<string> paths) {
+        checked {
             long size = 0;
             long seconds = 0;
             long files = 0;
@@ -33,7 +43,6 @@ static class LibraryFileMetadata {
                 }
             }
 
-            Directory.Delete(root, recursive: true);
             return $"{size} {seconds} {files}";
         }
     }

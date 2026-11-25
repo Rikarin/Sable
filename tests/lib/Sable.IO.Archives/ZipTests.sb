@@ -337,12 +337,12 @@ fn directoriesAreArchivedAndExtracted(temp: TemporaryFiles) throws {
 fn nothingIsWrittenOutside(_ name: String) throws {
     let temp = try Temp.directory()
     // Written with another name, and then changed, as the writer refuses
-    // some of them.
+    // some of them: in the local header, and in the central one. What else is
+    // in a header, the time, may be the same byte.
     let raw = name.utf8Bytes()
     var made = archive { writer throws(IoError) in try writer.add("\u{7E}".repeated(raw.count), [1]) }
     for i in 0...made.count - raw.count {
-        // The whole of it: a byte of the time it was written may be the same.
-        if made[i..<i + raw.count].allSatisfy({ $0 == 0x7E }) {
+        if i == 30 || i >= 46 && made[i - 46] == 0x50 && made[i - 45] == 0x4B && made[i - 44] == 1 && made[i - 43] == 2 {
             for j in 0..<raw.count {
                 made[i + j] = raw[j]
             }
@@ -388,7 +388,9 @@ fn anArchiveCutMeanwhileIsAnError(temp: TemporaryFiles) throws {
     let read = try ZipArchive.open(path)
     var reader = try read.reader(for: read.entries[0])
     expect(reader.entry.name == "a" && (try reader.read(upTo: 0)).isEmpty && (try reader.read(upTo: 10)).count == 10)
-    let file = try File.open(path, options: .appending)
+    var cut = OpenOptions()
+    cut.write = true
+    let file = try File.open(path, options: cut)
     try file.setLength(5000)
     expectThrows(saying: "the stream ended before what was needed") { _ = try reader.readToEnd() }
 }
@@ -427,6 +429,14 @@ fn linksAreNoWayOut(temp: TemporaryFiles) throws {
     try ZipArchive(same).extract(to: there, options: options)
     expect((try File.metadata(there.appending("link"), followLinks: false)).isFile)
     expect((try Directory.list(temp.path.appending("secret"))).isEmpty)
+    #if !os(windows)
+    // Permissions that a new file should not have.
+    var bold = ZipOptions()
+    bold.mode = 0o6777
+    let setuid = archive { writer throws(IoError) in try writer.add("setuid", [1], options: bold) }
+    try ZipArchive(setuid).extract(to: there)
+    expect(((try File.metadata(there.appending("setuid"))).permissions.mode & 0o7777) == 0o777)
+    #endif
 }
 
 @test

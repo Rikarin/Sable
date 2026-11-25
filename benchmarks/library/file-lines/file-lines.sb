@@ -1,15 +1,11 @@
 module FileLinesBench
 
 import Sable.IO
+import Sable.Testing
 
 // Files: 300,000 lines written as one text, then read back a line at a time.
 
-@main
-fn main() throws(IoError) {
-    var lines: String[>..] = []
-    for i in 0..<300000 {
-        lines.append("line \(i) of the file, with some more text after it\n")
-    }
+fn run(_ lines: String[>..]) throws(IoError) -> String {
     try File.write("file-lines-sable.txt", lines.joined())
     var count = 0
     var characters = 0
@@ -18,5 +14,14 @@ fn main() throws(IoError) {
         characters += line.count
     }
     try File.remove("file-lines-sable.txt")
-    print("\(count) \(characters)")
+    return "\(count) \(characters)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    var lines: String[>..] = []
+    for i in 0..<300000 {
+        lines.append("line \(i) of the file, with some more text after it\n")
+    }
+    b.check(b.iterate { try! run(lines) })
 }

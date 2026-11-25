@@ -320,7 +320,7 @@ fn formattingIntegers(_ b: Bencher) {
     b.iterate(() => {
         var i = 0
         while i < 16 {
-            let text = "\(i * 1000003:>12,) \(i:#06x)"
+            _ = blackBox("\(i * 1000003:>12,) \(i:#06x)")
             i = i + 1
         }
     })
@@ -331,7 +331,7 @@ fn formattingFloatsWithAPrecision(_ b: Bencher) {
     b.iterate(() => {
         var x = 0.001
         while x < 1e6 {
-            let text = "\(x:.3) \(x:.2e)"
+            _ = blackBox("\(x:.3) \(x:.2e)")
             x = x * 7.3
         }
     })

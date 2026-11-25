@@ -1,24 +1,15 @@
 module FileMetadataBench
 
 import Sable.IO
+import Sable.Testing
 import Sable.Time
 
 // File.metadata: the size, time and kind of each of two hundred files,
-// their times set first, two hundred times over, and as often whether a
+// their times set before, two hundred times over, and as often whether a
 // file that is not there exists.
 // The paths are absolute, as resolving a relative one is costly in .NET.
 
-@main
-fn main() throws(IoError) {
-    let root = FilePath("file-metadata-sable").absolute().string!
-    try Directory.create(root)
-    var paths: String[>..] = []
-    for i in 0..<200 {
-        let path = "\(root)/file \(i).txt"
-        try File.writeBytes(path, U8[>..](repeating: 1, count: i))
-        try File.setModified(path, UtcDateTime.fromUnix(1700000000 + i))
-        paths.append(path)
-    }
+fn run(_ paths: String[>..]) throws(IoError) -> String {
     var size = 0
     var seconds = 0
     var files = 0
@@ -35,6 +26,20 @@ fn main() throws(IoError) {
             }
         }
     }
-    try Directory.remove(root, recursive: true)
-    print("\(size) \(seconds) \(files)")
+    return "\(size) \(seconds) \(files)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let root = FilePath("file-metadata-sable").absolute().string!
+    try! Directory.create(root, recursive: true)
+    var paths: String[>..] = []
+    for i in 0..<200 {
+        let path = "\(root)/file \(i).txt"
+        try! File.writeBytes(path, U8[>..](repeating: 1, count: i))
+        try! File.setModified(path, UtcDateTime.fromUnix(1700000000 + i))
+        paths.append(path)
+    }
+    b.check(b.iterate { try! run(paths) })
+    try! Directory.remove(root, recursive: true)
 }

@@ -4,17 +4,22 @@ module EcdhP256Bench
 // agreements.
 
 import Sable.Crypto
+import Sable.Testing
 
-@main
-fn main() {
-    let mine = EcdhPrivateKey<P256>.generate()
-    let yours = EcdhPrivateKey<P256>.generate()
-    let theirs = yours.publicKey
+fn run(_ mine: EcdhPrivateKey<P256>, _ theirs: EcdhPublicKey<P256>) -> String {
     var count = 0
     var round = 0
     while round < 1000 {
         count += mine.sharedSecret(with: theirs).byteCount
         round += 1
     }
-    print("\(count)")
+    return "\(count)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let mine = EcdhPrivateKey<P256>.generate()
+    let yours = EcdhPrivateKey<P256>.generate()
+    let theirs = yours.publicKey
+    b.check(b.iterate { run(mine, theirs) })
 }

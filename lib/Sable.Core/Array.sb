@@ -48,6 +48,12 @@ extension<Element> Element[:] {
     // type is known as it is compiled, or by its metadata.
     @builtin("array_mismatch")
     fn mismatch(_ other: Element[:]) -> Int
+
+    // Whether the two are the same elements of the same buffer, and so equal
+    // without being compared: what one copied from the other is until
+    // either changes.
+    @builtin("array_shares")
+    package fn sharesElements(with other: Element[:]) -> Bool
 }
 
 extension<Element: Equatable> Element[:] {

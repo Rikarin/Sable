@@ -1,0 +1,164 @@
+module ImmutableSetTests
+
+// ImmutableSet (Sable.Collections): against a Set as the model.
+
+import Sable.Collections
+import Sable.Testing
+
+/// A member whose hash is one of few, so that most members' are equal.
+@derive(Debug)
+struct Hostile: Hashable {
+    let value: Int
+    let hashes: Int
+
+    operator == (lhs: Hostile, rhs: Hostile) -> Bool => lhs.value == rhs.value
+
+    fn hash(into hasher: inout Hasher) {
+        hasher.combine(value % hashes)
+    }
+}
+
+fn expectSame<E: Hashable & Debug>(_ members: ImmutableSet<E>, _ model: Set<E>) {
+    expect(members.structuralFault() == none, members.structuralFault() ?? "")
+    expect(members.count == model.count)
+    for member in model {
+        expect(members.contains(member))
+    }
+    for member in members {
+        expect(model.contains(member))
+    }
+}
+
+// Two sets of the values, the second sharing some of the first's nodes,
+// combined and compared as two Sets are.
+fn combines<E: Hashable & Debug>(_ first: U16[>..], _ second: U16[>..], _ shared: Bool, _ make: (Int) -> E) {
+    var a = ImmutableSet<E>()
+    var modelA = Set<E>()
+    for value in first {
+        expect(a.insert(make(Int(value) % 500)) == modelA.insert(make(Int(value) % 500)))
+    }
+    var b = shared ? a : ImmutableSet<E>()
+    var modelB = shared ? modelA : Set<E>()
+    for value in second {
+        if value % 3 == 0 {
+            expect(b.remove(make(Int(value) % 500)) == modelB.remove(make(Int(value) % 500)))
+        } else {
+            expect(b.insert(make(Int(value) % 500)) == modelB.insert(make(Int(value) % 500)))
+        }
+    }
+    expectSame(a, modelA)
+    expectSame(b, modelB)
+    expectSame(a.union(b), modelA.union(modelB))
+    expectSame(a.intersection(b), modelA.intersection(modelB))
+    expectSame(a.subtracting(b), modelA.subtracting(modelB))
+    expectSame(b.subtracting(a), modelB.subtracting(modelA))
+    expectSame(a.symmetricDifference(b), modelA.symmetricDifference(modelB))
+    expect(a.isSubset(of: b) == modelA.isSubset(of: modelB))
+    expect(a.isSuperset(of: b) == modelA.isSuperset(of: modelB))
+    expect(a.isStrictSubset(of: b) == modelA.isStrictSubset(of: modelB))
+    expect(a.isStrictSuperset(of: b) == modelA.isStrictSuperset(of: modelB))
+    expect(a.isDisjoint(with: b) == modelA.isDisjoint(with: modelB))
+    expect((a == b) == (modelA == modelB))
+    expect(a.intersection(b).isSubset(of: a) && a.isSubset(of: a.union(b)))
+    expect(a.union(b) == b.union(a) && a.union(b).hashValue == b.union(a).hashValue)
+    expect(a.subtracting(b).isDisjoint(with: b))
+    var c = a
+    c.formUnion(b)
+    c.formIntersection(b)
+    expect(c == b)
+    c.subtract(a)
+    expectSame(c, modelB.subtracting(modelA))
+    c.formSymmetricDifference(a)
+    expect(c == a.union(b))
+    expectSame(a, modelA)
+}
+
+@test
+fn setsCombineAsSetsDo() {
+    forAll(cases: 150) { (first: U16[>..], second: U16[>..], shared: Bool) in
+        combines(first, second, shared, (i: Int) => i)
+    }
+}
+
+@test
+fn soDoSetsOfManyMembers() {
+    var first: U16[>..] = []
+    var second: U16[>..] = []
+    for i in 0..<400 {
+        first.append(U16(i * 7 % 65000))
+        second.append(U16(i * 11 % 65000))
+    }
+    combines(first, second, true, (i: Int) => i)
+    combines(first, second, false, (i: Int) => "member \(i)")
+}
+
+@test
+fn soDoSetsOfEqualHashes() {
+    forAll(cases: 60) { (first: U16[>..], second: U16[>..], shared: Bool) in
+        combines(first, second, shared, (i: Int) => Hostile { value: i, hashes: 3 })
+    }
+    forAll(cases: 60) { (first: U16[>..], second: U16[>..], shared: Bool) in
+        combines(first, second, shared, (i: Int) => Hostile { value: i % 60, hashes: 1 })
+    }
+}
+
+@test
+fn membersByExample() {
+    let members = ImmutableSet<Int>([3, 1, 3])
+    assertEqual(members.count, 2)
+    expect(members.inserting(2).contains(2) && !members.contains(2))
+    expect(!members.removing(3).contains(3) && members.contains(3))
+    expect(members.inserting(3).isIdentical(to: members) && members.removing(9).isIdentical(to: members))
+    expect(members.filter { $0 > 1 } == ImmutableSet<Int>([3]))
+    var sorted = members.toArray()
+    sorted.sort()
+    expect(sorted == [1, 3])
+    var emptied = members
+    emptied.removeAll()
+    expect(emptied.isEmpty && !members.isEmpty && emptied.isSubset(of: members) && emptied.isDisjoint(with: emptied))
+    assertEqual("\(ImmutableSet<Int>([5]))", "ImmutableSet([5])")
+    let collected: ImmutableSet<String> = ["a", "b", "a"].collect()
+    assertEqual(collected.count, 2)
+    let text = "a,c"
+    let pieces = Substring(text).split(",")
+    expect(collected.contains(pieces[0]) && !collected.contains(pieces[1]))
+}
+
+@test
+fn itsPositionsAreInTheOrderItIsGoneThrough() {
+    let members = ImmutableSet<Int>(0..<300)
+    var position = members.startIndex
+    for member in members {
+        assertEqual(members[position], member)
+        position = members.index(after: position)
+    }
+    expect(position == members.endIndex)
+    expect(members.index(members.startIndex, offsetBy: 300) == members.endIndex)
+    expectPanic() { _ = members[members.endIndex] }
+}
+
+fn objectsMade(_ body: () -> Void) -> Int {
+    let before = MemoryStatistics.current().allocations
+    body()
+    return MemoryStatistics.current().allocations - before
+}
+
+// Two sets alike but for a member are told apart by the nodes they do not
+// share, and what they make is made of the ones they do.
+@test
+fn combiningSharesTheNodes() {
+    let old = ImmutableSet<Int>(0..<100000)
+    let new = old.inserting(200000).removing(50)
+    var result = ImmutableSet<Int>()
+    expect(objectsMade { result = old.union(new) } < 40)
+    assertEqual(result.count, 100001)
+    expect(objectsMade { result = old.intersection(new) } < 60)
+    assertEqual(result.count, 99999)
+    expect(objectsMade { result = new.subtracting(old) } < 20)
+    expect(result == ImmutableSet<Int>([200000]))
+    expect(objectsMade { result = old.symmetricDifference(new) } < 40)
+    expect(result == ImmutableSet<Int>([50, 200000]))
+    expect(old.union(old).isIdentical(to: old) && old.intersection(old).isIdentical(to: old))
+    expect(old.union(ImmutableSet<Int>()).isIdentical(to: old) && ImmutableSet<Int>().union(old).isIdentical(to: old))
+    expect(old.subtracting(old).isEmpty)
+}

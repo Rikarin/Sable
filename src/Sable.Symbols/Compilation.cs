@@ -1584,7 +1584,8 @@ public sealed partial class Compilation {
             AccessibilityOf(declaration.Modifiers, container),
             FunctionKind.Initializer
         ) {
-            IsAsync = declaration.Modifiers.Any(SyntaxKind.AsyncKeyword)
+            IsAsync = declaration.Modifiers.Any(SyntaxKind.AsyncKeyword),
+            IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword)
         };
 
         // 'init<S: Sequence>(contentsOf s: S) where S.Element == T': an
@@ -1743,7 +1744,10 @@ public sealed partial class Compilation {
         // file's deferred work runs; the deferral only makes sure they do.
         if (declaration.BaseTypes is { } constraints) {
             parameter.ConstraintsResolver = () => [
-                ..constraints.Types.SelectMany(syntax => CompositionTypeSymbol.PartsOf(TypeBinder.BindType(syntax, protocol, scope)))
+                ..constraints.Types.SelectMany(syntax =>
+                    CompositionTypeSymbol.PartsOf(TypeBinder.BindType(syntax, protocol, scope))
+                        .Where(part => !TypeBinder.IsCircular(parameter, part, protocol, syntax))
+                )
             ];
         }
 

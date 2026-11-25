@@ -32,7 +32,7 @@ public sealed class CliTests {
     [Fact]
     public void TestAndBenchSayAFileIsOptional() {
         Assert.Contains("usage: sable test [<file.sb>|<directory>...]", new TestCommand().Usage, StringComparison.Ordinal);
-        Assert.Contains("usage: sable bench [<file.sb>...]", new BenchCommand().Usage, StringComparison.Ordinal);
+        Assert.Contains("usage: sable bench [<file.sb>|<directory>...]", new BenchCommand().Usage, StringComparison.Ordinal);
     }
 
     [Fact]

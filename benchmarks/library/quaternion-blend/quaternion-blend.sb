@@ -1,0 +1,47 @@
+module QuaternionBlendBench
+
+import Sable.Math.Geometry
+import Sable.Testing
+
+// Two poses of 128 bones blended, by nlerp and by slerp, and composed down
+// the skeleton, ten thousand times over.
+
+fn blend(_ from: Quaternion[:], _ to: Quaternion[:], _ amount: F32, _ pose: inout Quaternion[:]) {
+    for i in 0..<from.count {
+        pose[i] = from[i].nlerp(to: to[i], amount)
+    }
+    for i in 1..<from.count {
+        pose[i] = pose[i] * pose[i / 2]
+    }
+}
+
+fn steady(_ from: Quaternion[:], _ to: Quaternion[:], _ amount: F32, _ pose: inout Quaternion[:]) {
+    for i in 0..<from.count {
+        pose[i] = from[i].slerp(to: to[i], amount)
+    }
+}
+
+fn run() -> String {
+    let count = 128
+    var from: Quaternion[>..] = []
+    var to: Quaternion[>..] = []
+    for i in 0..<count {
+        from.append(Quaternion(axis: Vector3(1, 2, F32(i % 3)), angle: F32(i % 20) * 0.1))
+        to.append(Quaternion(axis: Vector3(F32(i % 3), 2, 1), angle: F32(i % 30) * 0.1))
+    }
+    var pose = from
+    var sum: F64 = 0
+    for round in 0..<10000 {
+        let amount = F32(round % 16) / 16
+        blend(from, to, amount, &pose)
+        sum += F64(pose[127].w.abs())
+        steady(from, to, amount, &pose)
+        sum += F64(pose[127].w.abs())
+    }
+    return "\(sum / 20000:.2)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
+}

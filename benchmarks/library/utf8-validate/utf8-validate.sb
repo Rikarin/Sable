@@ -3,10 +3,29 @@ module Utf8Validate
 // Validating UTF-8 against .NET's Utf8.IsValid: a megabyte of ASCII, and a
 // megabyte of text mixing ASCII with two-, three- and four-byte scalars.
 
+import Sable.Testing
 import Sable.Text
 
-@main
-fn main() {
+fn run(_ asciiBytes: U8[>..], _ mixedBytes: U8[>..]) -> String {
+    var valid = 0
+    var round = 0
+    while round < 400 {
+        // Each round reads the input anew: nothing is kept from the last.
+        _ = blackBox(round)
+        if Utf8.isValid(asciiBytes) {
+            valid = valid + 1
+        }
+        if Utf8.isValid(mixedBytes) {
+            valid = valid + 1
+        }
+        round = round + 1
+    }
+
+    return "\(valid) \(asciiBytes.count) \(mixedBytes.count)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
     var ascii: String[>..] = []
     var mixed: String[>..] = []
     var i = 0
@@ -17,18 +36,5 @@ fn main() {
     }
     let asciiBytes = ascii.joined().utf8Bytes()
     let mixedBytes = mixed.joined().utf8Bytes()
-
-    var valid = 0
-    var round = 0
-    while round < 400 {
-        if Utf8.isValid(asciiBytes) {
-            valid = valid + 1
-        }
-        if Utf8.isValid(mixedBytes) {
-            valid = valid + 1
-        }
-        round = round + 1
-    }
-
-    print("\(valid) \(asciiBytes.count) \(mixedBytes.count)")
+    b.check(b.iterate { run(asciiBytes, mixedBytes) })
 }

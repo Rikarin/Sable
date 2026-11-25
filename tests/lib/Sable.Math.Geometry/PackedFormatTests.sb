@@ -1,0 +1,74 @@
+module PackedFormatTests
+
+// The packed formats of vertices (Half2, Half4, UNorm8x4, SNorm8x4,
+// UNorm16x2, SNorm16x4) and PackedQuaternion.
+
+import Sable.Math.Geometry
+import Sable.Testing
+
+@test
+fn theirSizesAreTheVertexFormats() {
+    assertEqual(MemoryLayout<Half2>.size, 4)
+    assertEqual(MemoryLayout<Half4>.size, 8)
+    assertEqual(MemoryLayout<UNorm8x4>.size, 4)
+    assertEqual(MemoryLayout<SNorm8x4>.size, 4)
+    assertEqual(MemoryLayout<UNorm16x2>.size, 4)
+    assertEqual(MemoryLayout<SNorm16x4>.size, 8)
+    assertEqual(MemoryLayout<PackedQuaternion>.size, 8)
+}
+
+@test
+fn halvesRoundAndOverflowToInfinity() {
+    assertEqual(Half2(Vector2(1.5, -0.25)).vector, Vector2(1.5, -0.25))
+    assertEqual(Half4(Vector4(1, 2, 70000, -70000)).vector, Vector4(1, 2, F32.infinity, -F32.infinity))
+    assertEqual(Half2(1.5, 2).vector, Vector2(1.5, 2))
+    assertEqual(Half4(1, 2, 3, 4).vector, Vector4(1, 2, 3, 4))
+    assert(Half2(Vector2(F32.nan, 0)).vector.isNaN)
+    assert(nearEqual(Half2(Vector2(0.1, 0)).vector.x, 0.1, tolerance: 0.0001))
+    assertEqual(Half2(Vector2.one), Half2(1, 1))
+}
+
+@test
+fn normalisedIntegersAreHeldToTheirEnds() {
+    assertEqual(UNorm8x4(Vector4(-1, 0.5, 1, 7)), UNorm8x4(0, 128, 255, 255))
+    assertEqual(UNorm8x4(0, 255, 51, 0).vector, Vector4(0, 1, 0.2, 0))
+    assertEqual(SNorm8x4(Vector4(-2, -1, 0.5, 2)), SNorm8x4(-127, -127, 64, 127))
+    assertEqual(SNorm8x4(-128, -127, 0, 127).vector, Vector4(-1, -1, 0, 1))
+    assertEqual(UNorm16x2(Vector2(0.5, 2)), UNorm16x2(32768, 65535))
+    assertEqual(UNorm16x2(0, 65535).vector, Vector2(0, 1))
+    assertEqual(SNorm16x4(Vector4(-2, -1, 0, 2)), SNorm16x4(-32767, -32767, 0, 32767))
+    assertEqual(SNorm16x4(-32768, -32767, 0, 32767).vector, Vector4(-1, -1, 0, 1))
+    assertEqual(UNorm8x4(Vector4(repeating: F32.nan)), UNorm8x4(0, 0, 0, 0))
+    assertEqual(SNorm8x4(Vector4(repeating: F32.nan)), SNorm8x4(-127, -127, -127, -127))
+}
+
+@test
+fn everyIntegerOfAFormatIsPackedBack() {
+    for i in 0..<256 {
+        let u = UNorm8x4(U8(i), 0, 0, 255)
+        assertEqual(UNorm8x4(u.vector), u)
+        if i > 0 {
+            let s = SNorm8x4(I8(i - 128), 0, 0, 127)
+            assertEqual(SNorm8x4(s.vector), s)
+        }
+    }
+    for i in 0..<655 {
+        let u = UNorm16x2(U16(i * 100), 65535)
+        assertEqual(UNorm16x2(u.vector), u)
+        let s = SNorm16x4(I16(i * 100 - 32767), 0, 1, -1)
+        assertEqual(SNorm16x4(s.vector), s)
+    }
+}
+
+@test
+fn aPackedRotationTurnsAlike() {
+    assert(PackedQuaternion(Quaternion.identity).quaternion.isIdentity)
+    for i in 0..<200 {
+        let q = Quaternion(axis: Vector3(F32(i % 7) - 3, F32(i % 5) - 2, F32(i % 3) - 1.5), angle: F32(i) * 0.17 - 17)
+        let packed = PackedQuaternion(q)
+        assert(packed.quaternion.sameRotation(as: q), "\(q)")
+        assert(nearEqual(packed.quaternion.length, 1))
+        assertEqual(PackedQuaternion(bits: packed.bits), packed)
+        assertEqual(PackedQuaternion(-q), packed)
+    }
+}

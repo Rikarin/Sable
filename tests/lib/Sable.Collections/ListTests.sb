@@ -403,6 +403,7 @@ fn listInsertsAtTheFront() {
         list.insert(i, at: 0)
         i = i + 1
     }
+    _ = blackBox(list)
 }
 
 @test

@@ -1,12 +1,12 @@
 module SemaphoreBench
 
 import Sable.Concurrency
+import Sable.Testing
 
 // AsyncSemaphore of two permits: eight tasks, each taking one and giving it
 // back ten thousand times.
 
-@main
-fn main() async {
+fn run() async -> String {
     let semaphore = AsyncSemaphore(permits: 2)
     let inside = Atomic<Int>(0)
     let total = await withTaskGroup(of: Int.self) { group -> Int in
@@ -29,5 +29,10 @@ fn main() async {
         }
         return all
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { await run() })
 }

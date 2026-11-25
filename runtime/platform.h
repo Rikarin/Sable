@@ -96,6 +96,12 @@ static void unmap_slab(void *slab, size_t size);
 // counts it (its peak resident set); 0 where the system does not say.
 static int64_t peak_memory(void);
 
+// The processor time this process has used, or those it has waited for, in
+// nanoseconds; and the instructions it has run or the cycles it took, by the
+// processor's own counters. -1 where the system does not say.
+static int64_t processor_time(bool children);
+static int64_t hardware_counter(bool cycles);
+
 // ---- Time ----------------------------------------------------------------
 
 // Nanoseconds from some fixed point, never going back; the same, but not
@@ -143,10 +149,19 @@ static void condition_broadcast(PlatformCondition *condition);
 // as large as the main thread's and watched for overflow as it is; false
 // when the system will not make one.
 static bool thread_start(void (*run)(void *argument), void *argument);
+// The same, with a stack of about so many bytes: no fewer than the system's
+// least.
+static bool thread_start_sized(void (*run)(void *argument), void *argument, size_t stack);
+enum { THREAD_STACK = 8 * 1024 * 1024 };
+// The calling thread's, for a debugger to show, as much of it as there is room
+// for; and how soon it runs, from -2 to 2, where the system allows it.
+static void thread_set_name(const char *name);
+static void thread_set_priority(int priority);
 // Has the calling thread, one the runtime did not start, give 'value' to
 // foreign_thread_end (foreign.c) as it ends.
 static void platform_at_thread_exit(void *value);
-// The processors the program may run on, at least one.
+// The processors the program may run on, at least one: no more than it is
+// bound to, or, on Linux, than its control group may have the time of.
 static int processor_count(void);
 // Lets another thread run: a spin that has waited long enough.
 static void thread_yield(void);

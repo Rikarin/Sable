@@ -1,0 +1,432 @@
+module Sable.Serialize
+
+import Sable.Math.Geometry
+
+// Sable.Math.Geometry's values: each a struct of its fields by name, as
+// '@derive(Serializable)' would write it. They are here, as Sable.Time's are,
+// so that a program of vectors that serialises nothing has none of this module.
+
+extension Vector2: Serializable {
+    /// A struct of `x`, `y`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Vector2", count: 2)
+        try encoder.encodeField("x")
+        try x.encode(to: encoder)
+        try encoder.encodeField("y")
+        try y.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Vector2 {
+        try decoder.beginStruct("Vector2")
+        let x = try F32.decode(from: decoder.field("x"))
+        let y = try F32.decode(from: decoder.field("y"))
+        return Vector2(x, y)
+    }
+}
+
+extension Vector3: Serializable {
+    /// A struct of `x`, `y`, `z`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Vector3", count: 3)
+        try encoder.encodeField("x")
+        try x.encode(to: encoder)
+        try encoder.encodeField("y")
+        try y.encode(to: encoder)
+        try encoder.encodeField("z")
+        try z.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Vector3 {
+        try decoder.beginStruct("Vector3")
+        let x = try F32.decode(from: decoder.field("x"))
+        let y = try F32.decode(from: decoder.field("y"))
+        let z = try F32.decode(from: decoder.field("z"))
+        return Vector3(x, y, z)
+    }
+}
+
+extension Vector4: Serializable {
+    /// A struct of `x`, `y`, `z`, `w`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Vector4", count: 4)
+        try encoder.encodeField("x")
+        try x.encode(to: encoder)
+        try encoder.encodeField("y")
+        try y.encode(to: encoder)
+        try encoder.encodeField("z")
+        try z.encode(to: encoder)
+        try encoder.encodeField("w")
+        try w.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Vector4 {
+        try decoder.beginStruct("Vector4")
+        let x = try F32.decode(from: decoder.field("x"))
+        let y = try F32.decode(from: decoder.field("y"))
+        let z = try F32.decode(from: decoder.field("z"))
+        let w = try F32.decode(from: decoder.field("w"))
+        return Vector4(x, y, z, w)
+    }
+}
+
+extension Vector3D: Serializable {
+    /// A struct of `x`, `y`, `z`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Vector3D", count: 3)
+        try encoder.encodeField("x")
+        try x.encode(to: encoder)
+        try encoder.encodeField("y")
+        try y.encode(to: encoder)
+        try encoder.encodeField("z")
+        try z.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Vector3D {
+        try decoder.beginStruct("Vector3D")
+        let x = try F64.decode(from: decoder.field("x"))
+        let y = try F64.decode(from: decoder.field("y"))
+        let z = try F64.decode(from: decoder.field("z"))
+        return Vector3D(x, y, z)
+    }
+}
+
+extension Int2: Serializable {
+    /// A struct of `x`, `y`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Int2", count: 2)
+        try encoder.encodeField("x")
+        try x.encode(to: encoder)
+        try encoder.encodeField("y")
+        try y.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Int2 {
+        try decoder.beginStruct("Int2")
+        let x = try I32.decode(from: decoder.field("x"))
+        let y = try I32.decode(from: decoder.field("y"))
+        return Int2(x, y)
+    }
+}
+
+extension Int3: Serializable {
+    /// A struct of `x`, `y`, `z`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Int3", count: 3)
+        try encoder.encodeField("x")
+        try x.encode(to: encoder)
+        try encoder.encodeField("y")
+        try y.encode(to: encoder)
+        try encoder.encodeField("z")
+        try z.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Int3 {
+        try decoder.beginStruct("Int3")
+        let x = try I32.decode(from: decoder.field("x"))
+        let y = try I32.decode(from: decoder.field("y"))
+        let z = try I32.decode(from: decoder.field("z"))
+        return Int3(x, y, z)
+    }
+}
+
+extension Int4: Serializable {
+    /// A struct of `x`, `y`, `z`, `w`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Int4", count: 4)
+        try encoder.encodeField("x")
+        try x.encode(to: encoder)
+        try encoder.encodeField("y")
+        try y.encode(to: encoder)
+        try encoder.encodeField("z")
+        try z.encode(to: encoder)
+        try encoder.encodeField("w")
+        try w.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Int4 {
+        try decoder.beginStruct("Int4")
+        let x = try I32.decode(from: decoder.field("x"))
+        let y = try I32.decode(from: decoder.field("y"))
+        let z = try I32.decode(from: decoder.field("z"))
+        let w = try I32.decode(from: decoder.field("w"))
+        return Int4(x, y, z, w)
+    }
+}
+
+extension Quaternion: Serializable {
+    /// A struct of `x`, `y`, `z`, `w`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Quaternion", count: 4)
+        try encoder.encodeField("x")
+        try x.encode(to: encoder)
+        try encoder.encodeField("y")
+        try y.encode(to: encoder)
+        try encoder.encodeField("z")
+        try z.encode(to: encoder)
+        try encoder.encodeField("w")
+        try w.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Quaternion {
+        try decoder.beginStruct("Quaternion")
+        let x = try F32.decode(from: decoder.field("x"))
+        let y = try F32.decode(from: decoder.field("y"))
+        let z = try F32.decode(from: decoder.field("z"))
+        let w = try F32.decode(from: decoder.field("w"))
+        return Quaternion(x, y, z, w)
+    }
+}
+
+extension Matrix3x2: Serializable {
+    /// A struct of `m11`, `m12`, `m21`, `m22`, `m31`, `m32`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Matrix3x2", count: 6)
+        try encoder.encodeField("m11")
+        try m11.encode(to: encoder)
+        try encoder.encodeField("m12")
+        try m12.encode(to: encoder)
+        try encoder.encodeField("m21")
+        try m21.encode(to: encoder)
+        try encoder.encodeField("m22")
+        try m22.encode(to: encoder)
+        try encoder.encodeField("m31")
+        try m31.encode(to: encoder)
+        try encoder.encodeField("m32")
+        try m32.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Matrix3x2 {
+        try decoder.beginStruct("Matrix3x2")
+        let m11 = try F32.decode(from: decoder.field("m11"))
+        let m12 = try F32.decode(from: decoder.field("m12"))
+        let m21 = try F32.decode(from: decoder.field("m21"))
+        let m22 = try F32.decode(from: decoder.field("m22"))
+        let m31 = try F32.decode(from: decoder.field("m31"))
+        let m32 = try F32.decode(from: decoder.field("m32"))
+        return Matrix3x2(m11, m12, m21, m22, m31, m32)
+    }
+}
+
+extension Matrix3x3: Serializable {
+    /// A struct of `m11` to `m33`, row by row.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Matrix3x3", count: 9)
+        try encoder.encodeField("m11")
+        try m11.encode(to: encoder)
+        try encoder.encodeField("m12")
+        try m12.encode(to: encoder)
+        try encoder.encodeField("m13")
+        try m13.encode(to: encoder)
+        try encoder.encodeField("m21")
+        try m21.encode(to: encoder)
+        try encoder.encodeField("m22")
+        try m22.encode(to: encoder)
+        try encoder.encodeField("m23")
+        try m23.encode(to: encoder)
+        try encoder.encodeField("m31")
+        try m31.encode(to: encoder)
+        try encoder.encodeField("m32")
+        try m32.encode(to: encoder)
+        try encoder.encodeField("m33")
+        try m33.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Matrix3x3 {
+        try decoder.beginStruct("Matrix3x3")
+        let m11 = try F32.decode(from: decoder.field("m11"))
+        let m12 = try F32.decode(from: decoder.field("m12"))
+        let m13 = try F32.decode(from: decoder.field("m13"))
+        let m21 = try F32.decode(from: decoder.field("m21"))
+        let m22 = try F32.decode(from: decoder.field("m22"))
+        let m23 = try F32.decode(from: decoder.field("m23"))
+        let m31 = try F32.decode(from: decoder.field("m31"))
+        let m32 = try F32.decode(from: decoder.field("m32"))
+        let m33 = try F32.decode(from: decoder.field("m33"))
+        return Matrix3x3(m11, m12, m13, m21, m22, m23, m31, m32, m33)
+    }
+}
+
+extension Matrix4x4: Serializable {
+    /// A struct of `m11` to `m44`, row by row.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Matrix4x4", count: 16)
+        try encoder.encodeField("m11")
+        try m11.encode(to: encoder)
+        try encoder.encodeField("m12")
+        try m12.encode(to: encoder)
+        try encoder.encodeField("m13")
+        try m13.encode(to: encoder)
+        try encoder.encodeField("m14")
+        try m14.encode(to: encoder)
+        try encoder.encodeField("m21")
+        try m21.encode(to: encoder)
+        try encoder.encodeField("m22")
+        try m22.encode(to: encoder)
+        try encoder.encodeField("m23")
+        try m23.encode(to: encoder)
+        try encoder.encodeField("m24")
+        try m24.encode(to: encoder)
+        try encoder.encodeField("m31")
+        try m31.encode(to: encoder)
+        try encoder.encodeField("m32")
+        try m32.encode(to: encoder)
+        try encoder.encodeField("m33")
+        try m33.encode(to: encoder)
+        try encoder.encodeField("m34")
+        try m34.encode(to: encoder)
+        try encoder.encodeField("m41")
+        try m41.encode(to: encoder)
+        try encoder.encodeField("m42")
+        try m42.encode(to: encoder)
+        try encoder.encodeField("m43")
+        try m43.encode(to: encoder)
+        try encoder.encodeField("m44")
+        try m44.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Matrix4x4 {
+        try decoder.beginStruct("Matrix4x4")
+        let m11 = try F32.decode(from: decoder.field("m11"))
+        let m12 = try F32.decode(from: decoder.field("m12"))
+        let m13 = try F32.decode(from: decoder.field("m13"))
+        let m14 = try F32.decode(from: decoder.field("m14"))
+        let m21 = try F32.decode(from: decoder.field("m21"))
+        let m22 = try F32.decode(from: decoder.field("m22"))
+        let m23 = try F32.decode(from: decoder.field("m23"))
+        let m24 = try F32.decode(from: decoder.field("m24"))
+        let m31 = try F32.decode(from: decoder.field("m31"))
+        let m32 = try F32.decode(from: decoder.field("m32"))
+        let m33 = try F32.decode(from: decoder.field("m33"))
+        let m34 = try F32.decode(from: decoder.field("m34"))
+        let m41 = try F32.decode(from: decoder.field("m41"))
+        let m42 = try F32.decode(from: decoder.field("m42"))
+        let m43 = try F32.decode(from: decoder.field("m43"))
+        let m44 = try F32.decode(from: decoder.field("m44"))
+        return Matrix4x4(m11, m12, m13, m14, m21, m22, m23, m24, m31, m32, m33, m34, m41, m42, m43, m44)
+    }
+}
+
+extension Plane: Serializable {
+    /// A struct of `normal`, `d`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Plane", count: 2)
+        try encoder.encodeField("normal")
+        try normal.encode(to: encoder)
+        try encoder.encodeField("d")
+        try d.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Plane {
+        try decoder.beginStruct("Plane")
+        let normal = try Vector3.decode(from: decoder.field("normal"))
+        let d = try F32.decode(from: decoder.field("d"))
+        return Plane(normal, d)
+    }
+}
+
+extension Transform: Serializable {
+    /// A struct of `translation`, `rotation`, `scale`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Transform", count: 3)
+        try encoder.encodeField("translation")
+        try translation.encode(to: encoder)
+        try encoder.encodeField("rotation")
+        try rotation.encode(to: encoder)
+        try encoder.encodeField("scale")
+        try scale.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Transform {
+        try decoder.beginStruct("Transform")
+        let translation = try Vector3.decode(from: decoder.field("translation"))
+        let rotation = try Quaternion.decode(from: decoder.field("rotation"))
+        let scale = try Vector3.decode(from: decoder.field("scale"))
+        return Transform(translation: translation, rotation: rotation, scale: scale)
+    }
+}
+
+extension Ray: Serializable {
+    /// A struct of `origin`, `direction`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("Ray", count: 2)
+        try encoder.encodeField("origin")
+        try origin.encode(to: encoder)
+        try encoder.encodeField("direction")
+        try direction.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Ray {
+        try decoder.beginStruct("Ray")
+        var value = Ray(Vector3.zero, Vector3.zero)
+        value.origin = try Vector3.decode(from: decoder.field("origin"))
+        value.direction = try Vector3.decode(from: decoder.field("direction"))
+        return value
+    }
+}
+
+extension BoundingBox: Serializable {
+    /// A struct of `minimum`, `maximum`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("BoundingBox", count: 2)
+        try encoder.encodeField("minimum")
+        try minimum.encode(to: encoder)
+        try encoder.encodeField("maximum")
+        try maximum.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> BoundingBox {
+        try decoder.beginStruct("BoundingBox")
+        let minimum = try Vector3.decode(from: decoder.field("minimum"))
+        let maximum = try Vector3.decode(from: decoder.field("maximum"))
+        return BoundingBox(minimum, maximum)
+    }
+}
+
+extension BoundingSphere: Serializable {
+    /// A struct of `center`, `radius`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("BoundingSphere", count: 2)
+        try encoder.encodeField("center")
+        try center.encode(to: encoder)
+        try encoder.encodeField("radius")
+        try radius.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> BoundingSphere {
+        try decoder.beginStruct("BoundingSphere")
+        let center = try Vector3.decode(from: decoder.field("center"))
+        let radius = try F32.decode(from: decoder.field("radius"))
+        return BoundingSphere(center, radius)
+    }
+}
+
+extension BoundingFrustum: Serializable {
+    /// A struct of `near`, `far`, `left`, `right`, `top`, `bottom`.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("BoundingFrustum", count: 6)
+        try encoder.encodeField("near")
+        try near.encode(to: encoder)
+        try encoder.encodeField("far")
+        try far.encode(to: encoder)
+        try encoder.encodeField("left")
+        try left.encode(to: encoder)
+        try encoder.encodeField("right")
+        try right.encode(to: encoder)
+        try encoder.encodeField("top")
+        try top.encode(to: encoder)
+        try encoder.encodeField("bottom")
+        try bottom.encode(to: encoder)
+        try encoder.endStruct()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> BoundingFrustum {
+        try decoder.beginStruct("BoundingFrustum")
+        var value = BoundingFrustum(Matrix4x4.identity)
+        value.near = try Plane.decode(from: decoder.field("near"))
+        value.far = try Plane.decode(from: decoder.field("far"))
+        value.left = try Plane.decode(from: decoder.field("left"))
+        value.right = try Plane.decode(from: decoder.field("right"))
+        value.top = try Plane.decode(from: decoder.field("top"))
+        value.bottom = try Plane.decode(from: decoder.field("bottom"))
+        return value
+    }
+}

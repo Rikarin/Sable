@@ -220,9 +220,7 @@ fn findingAStringInLongText(_ b: Bencher) {
     }
     parts.append("needle")
     let text = parts.joined()
-    b.iterate(() => {
-        _ = text.firstIndex(of: "needle")
-    })
+    b.iterate { text.firstIndex(of: "needle") }
 }
 
 @bench
@@ -234,7 +232,5 @@ fn splittingLongText(_ b: Bencher) {
         i = i + 1
     }
     let text = parts.joined()
-    b.iterate(() => {
-        _ = text.split(",")
-    })
+    b.iterate { text.split(",") }
 }

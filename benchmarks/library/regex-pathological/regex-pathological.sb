@@ -2,27 +2,27 @@ module RegexPathological
 
 // Regex against .NET 11's System.Text.RegularExpressions: (a|aa)+ on lines
 // of twenty 'a's and a '!', which no line matches — time exponential in a
-// line's length for a backtracker, .NET's RegexOptions.Compiled among them
-// (regex-pathological), and linear for an automaton, as Sable's is and as
-// .NET's NonBacktracking is (regex-pathological/nonbacktracking).
+// line's length for a backtracker, .NET's RegexOptions.Compiled among them,
+// and linear for an automaton, as Sable's is and as .NET's NonBacktracking
+// is. A thousand such lines, ten times.
 
+import Sable.Testing
 import Sable.Text
 
-@main
-fn main() {
-    var lines: String[>..] = []
-    var i = 0
-    while i < 100 {
-        lines.append("aaaaaaaaaaaaaaaaaaaa!\n")
-        i = i + 1
-    }
-    let text = lines.joined()
-    let regex = try! Regex("(?m)^(a|aa)+$")
+fn run(_ regex: Regex, _ text: String) -> String {
     var count = 0
-    var round = 0
-    while round < 10 {
-        count = count + regex.count(in: text)
-        round = round + 1
+    for _ in 0..<10 {
+        // Each round reads the input anew: nothing is kept from the last.
+        _ = blackBox(count)
+        count += regex.count(in: text)
     }
-    print("\(count) \(text.utf8Count)")
+    return "\(count) \(text.utf8Count)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let text = "aaaaaaaaaaaaaaaaaaaa!\n".repeated(1000)
+    let regex = try! Regex("(?m)^(a|aa)+$")
+    b.bytesPerIteration = text.utf8Count * 10
+    b.check(b.iterate { run(regex, text) })
 }

@@ -20,6 +20,7 @@
 // checks them. The layout code is written for these two record types
 // rather than driven by layout descriptors.
 
+#include "../../support/c/bench.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -397,7 +398,7 @@ static uint64_t roundTrip(int64_t i) {
     return result;
 }
 
-int main(void) {
+static void program(void) {
     uint64_t sum = 0;
     for (int64_t i = 0; i < 1000000; i = add_i(i, 1)) {
         sum = add_u64(sum, priced(i));
@@ -405,6 +406,7 @@ int main(void) {
             sum = add_u64(sum, roundTrip(i));
         }
     }
-    printf("%llu\n", (unsigned long long)sum);
-    return 0;
+    bench_printf("%llu\n", (unsigned long long)sum);
 }
+
+BENCH_MAIN(program)

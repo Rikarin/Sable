@@ -1,24 +1,16 @@
 module MapInt
 
+import Sable.Testing
+
 // [Int: Int] against .NET's Dictionary<long, long>: a million
 // pseudo-random keys inserted, looked up three times over, missed, half
 // removed and looked up again. The .NET port does the same, step for
 // step, and prints the same line.
 
-@main
-fn main() {
-    let n = 1000000
-    var keys: Int[>..] = []
-    var x = 12345
-    var i = 0
-    while i < n {
-        x = (x * 1103515245 + 12345) % 2147483648
-        keys.append(x)
-        i = i + 1
-    }
-
+fn run(_ keys: Int[>..]) -> String {
+    let n = keys.count
     var map: [Int: Int] = [:]
-    i = 0
+    var i = 0
     while i < n {
         map[keys[i]] = i
         i = i + 1
@@ -55,5 +47,19 @@ fn main() {
         }
     }
 
-    print("\(map.count) \(sum) \(misses) \(hits)")
+    return "\(map.count) \(sum) \(misses) \(hits)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let n = 1000000
+    var keys: Int[>..] = []
+    var x = 12345
+    var i = 0
+    while i < n {
+        x = (x * 1103515245 + 12345) % 2147483648
+        keys.append(x)
+        i = i + 1
+    }
+    b.check(b.iterate { run(keys) })
 }

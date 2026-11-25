@@ -1,0 +1,142 @@
+module Sable.Math.Geometry
+
+/// Two `I32`s: a size in pixels, a tile. 8 bytes, aligned to 4, as
+/// C's `int32_t[2]` and GLSL's `ivec2`. Arithmetic traps where a component
+/// overflows, as `I32`'s does, and division truncates toward zero.
+///
+/// ```sable
+/// let v = Int2(repeating: 7) / 2
+/// assert(v == Int2(repeating: 3) && v.x == v[0])
+/// ```
+public struct Int2: Hashable, AdditiveArithmetic, Sendable {
+    /// The x component.
+    public var x: I32
+
+    /// The y component.
+    public var y: I32
+
+    /// The vector of the components.
+    public init(_ x: I32, _ y: I32) {
+        self.x = x
+        self.y = y
+    }
+
+    /// Every component the value.
+    public init(repeating value: I32) {
+        x = value
+        y = value
+    }
+
+    /// Each component toward zero to an integer. Traps where one is NaN or out of range.
+    public init(truncating value: Vector2) {
+        x = I32(value.x)
+        y = I32(value.y)
+    }
+
+    /// Every component zero.
+    public static var zero: Int2 => Int2(0, 0)
+
+    /// Every component one.
+    public static var one: Int2 => Int2(1, 1)
+
+    /// The x axis.
+    public static var unitX: Int2 => Int2(1, 0)
+
+    /// The y axis.
+    public static var unitY: Int2 => Int2(0, 1)
+
+    /// The components as lanes of a vector register.
+    public var simd: SIMD<I32, 2> {
+        get {
+            var lanes = SIMD<I32, 2>()
+            lanes[0] = x
+            lanes[1] = y
+            return lanes
+        }
+    }
+
+    /// The product of the components, which cannot overflow.
+    ///
+    /// ```sable
+    /// assert(Int2(100000, 100000).area == 10000000000)
+    /// ```
+    public var area: I64 => I64(x) * I64(y)
+
+    /// The component at the index, x first; outside 0..<2 traps.
+    public subscript(index: Int) -> I32 {
+        get {
+            switch index {
+                case 0: return x
+                case 1: return y
+                default: preconditionFailure("an Int2 has no component \(index)")
+            }
+        }
+        set {
+            switch index {
+                case 0: x = newValue
+                case 1: y = newValue
+                default: preconditionFailure("an Int2 has no component \(index)")
+            }
+        }
+    }
+
+    /// The smaller of each pair of components.
+    public fn min(_ other: Int2) -> Int2 => Int2((x < other.x ? x : other.x), (y < other.y ? y : other.y))
+
+    /// The larger of each pair of components.
+    public fn max(_ other: Int2) -> Int2 => Int2((x > other.x ? x : other.x), (y > other.y ? y : other.y))
+
+    /// Each component held within the bounds'.
+    public fn clamped(lower: Int2, upper: Int2) -> Int2 => self.max(lower).min(upper)
+
+    /// Each component's magnitude; traps on the least I32.
+    public fn abs() -> Int2 => Int2((x < 0 ? -x : x), (y < 0 ? -y : y))
+
+    /// The sum, component by component.
+    public operator + (lhs: Int2, rhs: Int2) -> Int2 => Int2(lhs.x + rhs.x, lhs.y + rhs.y)
+
+    /// The difference, component by component.
+    public operator - (lhs: Int2, rhs: Int2) -> Int2 => Int2(lhs.x - rhs.x, lhs.y - rhs.y)
+
+    /// The product, component by component.
+    public operator * (lhs: Int2, rhs: Int2) -> Int2 => Int2(lhs.x * rhs.x, lhs.y * rhs.y)
+
+    /// The quotient, component by component, toward zero.
+    public operator / (lhs: Int2, rhs: Int2) -> Int2 => Int2(lhs.x / rhs.x, lhs.y / rhs.y)
+
+    /// Every component negated.
+    public prefix operator - (operand: Int2) -> Int2 => Int2(-operand.x, -operand.y)
+
+    /// Every component times the number.
+    public operator * (lhs: Int2, rhs: I32) -> Int2 => Int2(lhs.x * rhs, lhs.y * rhs)
+
+    /// Every component times the number.
+    public operator * (lhs: I32, rhs: Int2) -> Int2 => rhs * lhs
+
+    /// Every component divided by the number, toward zero.
+    public operator / (lhs: Int2, rhs: I32) -> Int2 => Int2(lhs.x / rhs, lhs.y / rhs)
+
+    /// Whether the components are equal.
+    public operator == (lhs: Int2, rhs: Int2) -> Bool => lhs.x == rhs.x && lhs.y == rhs.y
+
+    /// The components' hashes.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(x)
+        hasher.combine(y)
+    }
+}
+
+extension Int2: Formattable {
+    /// The components in parentheses, each written as the spec says, the
+    /// whole padded to the width.
+    ///
+    /// ```sable
+    /// assert("\(Int2.unitX:.1)" == "(1, 0)")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([x, y], spec, named: "Int2")
+}
+
+extension Int2: Debug {
+    /// As source writes it: `Int2(1, 1)`.
+    public fn debugDescription() -> String => "Int2(\(x.debugDescription()), \(y.debugDescription()))"
+}

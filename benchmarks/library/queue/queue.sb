@@ -1,12 +1,12 @@
 module QueueBench
 
 import Sable.Collections
+import Sable.Testing
 
 // Queue<Int>: five million numbers through a queue that stays a thousand
 // long, then through one that grows to a million.
 
-@main
-fn main() {
+fn run() -> String {
     let queue = Queue<Int>()
     var total = 0
     for i in 0..<1000 {
@@ -22,5 +22,10 @@ fn main() {
     while let value = queue.dequeue() {
         total += value
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

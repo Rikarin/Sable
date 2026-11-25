@@ -32,6 +32,32 @@ public class ModuleQualificationTests {
     public void AGenericTypeIsReachedWithItsArguments() =>
         Assert.Empty(Errors("module App\nimport Lib.Shapes as S\nfn f() -> Int { let b: S.Box<Int> = Lib.Shapes.Box<Int> { item: 2 }\nreturn b.item }"));
 
+    const string Overloads = """
+        module Lib.Calls
+        public fn call<A: Equatable>(_ f: @escaping (A) -> Void) -> Int { return 1 }
+        public fn call<A: Equatable, B: Equatable>(_ f: @escaping (A, B) throws -> Void) -> Int { return 2 }
+        fn call() -> Int { return 3 }
+        """;
+
+    static IReadOnlyList<Diagnostic> OverloadErrors(string app) =>
+        [..Compilation.Create(Overloads, app).GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error)];
+
+    /// <summary>A name imported by itself is every overload of it that can be seen.</summary>
+    [Fact]
+    public void AnImportedNameIsEveryOverload() {
+        const string uses = "fn one(_ a: Int) {}\nfn two(_ a: Int, by b: String) {}\nfn f() -> Int { return call(one) + call(two) }";
+        Assert.Empty(OverloadErrors($"module App\nimport Lib.Calls.{{ call }}\n{uses}"));
+        Assert.Empty(OverloadErrors($"module App\nimport Lib.Calls.{{ call as ring }}\n{uses.Replace("call(", "ring(", StringComparison.Ordinal)}"));
+        Assert.Single(OverloadErrors("module App\nimport Lib.Calls.{ call }\nfn f() -> Int { return call() }"));
+    }
+
+    /// <summary>A function passed by its name is for the overload that takes as many arguments as it has.</summary>
+    [Fact]
+    public void AFunctionsNameChoosesAnOverloadByItsArguments() {
+        var errors = OverloadErrors("module App\nimport Lib.Calls\nfn three(_ a: Int, _ b: Int, _ c: Int) {}\nfn f() -> Int { return call(three) }");
+        Assert.Contains("takes 3 arguments", Assert.Single(errors).Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ALocalHidesAModuleOfTheSameName() =>
         Assert.Empty(Errors("module App\nimport Lib.Shapes as S\nstruct T { let area: Int }\nfn f(_ S: T) -> Int { return S.area }"));

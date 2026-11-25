@@ -118,6 +118,70 @@ public sealed class ArcTests {
         Assert.Contains("icmp eq ptr", result.LlvmIr!, StringComparison.Ordinal);
     }
 
+    /// <summary>An element of an array a parameter lends is read in place across a call, which cannot change what is lent.</summary>
+    [Fact]
+    public void AnElementALentArrayHoldsIsLentAcrossACall() {
+        var source = Program(
+            """
+            final class Leaf {
+                let n: Int
+                init(_ n: Int) { self.n = n }
+                deinit { print("gone \(n)") }
+            }
+
+            struct Node {
+                var leaves: Leaf[>..] = []
+                var children: Node[>..] = []
+
+                fn find(_ depth: Int) -> Int {
+                    return depth == 0 ? leaves[0].n : children[0].find(depth - 1)
+                }
+            }
+
+            final class Holder {
+                var node: Node
+                var leaves: Leaf[>..] = [Leaf(1), Leaf(2)]
+                init(_ node: Node) { self.node = node }
+            }
+
+            var shared: Leaf[>..] = []
+
+            @inline(never)
+            fn use(_ leaf: Leaf, _ holder: Holder) -> Int {
+                holder.leaves[0] = Leaf(5)
+                shared[0] = Leaf(50)
+                holder.node.children[0].leaves[0] = Leaf(7)
+                return leaf.n
+            }
+
+            @inline(never)
+            fn first(_ leaves: Leaf[>..], _ holder: Holder) -> Int { return use(leaves[0], holder) }
+
+            @inline(never)
+            fn nested(_ node: Node, _ holder: Holder) -> Int { return use(node.children[0].leaves[0], holder) }
+            """,
+            """
+                shared = [Leaf(10)]
+                var node = Node()
+                node.children = [Node()]
+                node.children[0].leaves = [Leaf(3)]
+                let holder = Holder(node)
+                node = Node()
+                print("\(first(holder.leaves, holder))")
+                print("\(first(shared, holder))")
+                print("\(nested(holder.node, holder))")
+                print("\(holder.node.find(1)) \(holder.leaves[0].n) \(shared[0].n)")
+            """
+        );
+        Assert.Equal(
+            "gone 10 gone 3 gone 1 1 gone 5 gone 7 gone 50 50 gone 5 gone 50 gone 7 7 7 5 50 gone 5 gone 2 gone 7 gone 50 ",
+            AssertAgree(source).Stdout.Replace('\n', ' ')
+        );
+        var find = SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb"), optimised: true).Sil!).Split("sil @Test.Node.find")[1].Split("\n}")[0];
+        Assert.Contains("builtin \"array_get_borrowed\"", find, StringComparison.Ordinal);
+        Assert.DoesNotContain("destroy_value", find, StringComparison.Ordinal);
+    }
+
     /// <summary>A loop's writes, checked for sharing once before it: a copy made then, as each write would have.</summary>
     [Fact]
     public void AnArraySharedBeforeALoopIsCopiedNotWrittenThrough() {

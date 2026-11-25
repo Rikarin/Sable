@@ -1,12 +1,12 @@
 module ProcessSpawnBench
 
 import Sable.Process
+import Sable.Testing
 
 // Command: a hundred runs of /bin/echo, what each printed read.
 // The time is the children's too.
 
-@main
-fn main() async throws {
+fn run() async throws -> String {
     var total = 0
     for i in 0..<100 {
         let done = try await Command("/bin/echo").argument("\(i)").output()
@@ -14,5 +14,10 @@ fn main() async throws {
             total += try Int.parse(done.output.trimmed())
         }
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { try! await run() })
 }

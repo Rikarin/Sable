@@ -1,0 +1,19 @@
+module Sable.Math.Geometry
+
+/// The components as '(1.0, 2.0)', each as the spec says but for the width,
+/// which is the whole's; for '?', as source writes the value.
+fn formatComponents<T: Formattable>(_ components: T[:], _ spec: FormatSpec, named name: String) -> String {
+    var part = spec
+    part.width = 0
+    part.fill = ' '
+    part.alignment = .Automatic
+    part.zeroPadded = false
+    var text = spec.kind == .Debug ? name + "(" : "("
+    for i in 0..<components.count {
+        if i > 0 {
+            text += ", "
+        }
+        text += components[i].format(part)
+    }
+    return spec.padded(text + ")")
+}

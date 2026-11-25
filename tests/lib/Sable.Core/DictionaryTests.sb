@@ -532,6 +532,7 @@ fn insertingIntegers(_ b: Bencher) {
             d[i * 7] = i
             i = i + 1
         }
+        return d
     })
 }
 
@@ -550,6 +551,7 @@ fn lookingUpStrings(_ b: Bencher) {
             sum = sum + (d["key\(j)"] ?? 0)
             j = j + 1
         }
+        return sum
     })
 }
 

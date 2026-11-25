@@ -50,16 +50,16 @@ public sealed class FuzzCommandTests {
 
     [Fact]
     public void TheCommandLine() {
-        var fuzz = Parse("parses", "--time", "30m", "--", "-max_len=64", "-dict=x.dict");
+        var fuzz = Parse("parses", "--duration", "30m", "--", "-max_len=64", "-dict=x.dict");
         Assert.Equal("parses", fuzz.Target);
-        Assert.Equal(TimeSpan.FromMinutes(30), fuzz.Time);
+        Assert.Equal(TimeSpan.FromMinutes(30), fuzz.Duration);
         Assert.Equal(["-max_len=64", "-dict=x.dict"], fuzz.EngineArguments);
         Assert.False(fuzz.Replay || fuzz.List);
 
         var files = Parse("a.sb", "b.sb", "M.parses");
         Assert.Equal(["a.sb", "b.sb"], files.Files);
         Assert.Equal("M.parses", files.Target);
-        Assert.Null(files.Time);
+        Assert.Null(files.Duration);
 
         var replay = Parse("--replay", "M.parses", "crash-1", "crash-2");
         Assert.True(replay.Replay);
@@ -68,17 +68,24 @@ public sealed class FuzzCommandTests {
 
         Assert.Equal("crash-1", Parse("M.parses", "--minimise", "crash-1").Minimise);
         Assert.True(Parse("--list").List);
+
+        var bounded = Parse("M.parses", "--runs", "5000", "--seeds", "a", "--seeds", "b", "--dict", "sable");
+        Assert.Equal(5000, bounded.Runs);
+        Assert.Equal(["a", "b"], bounded.Seeds);
+        Assert.Equal("sable", bounded.Dictionary);
         Assert.Null(Parse().Target);
     }
 
     [Fact]
     public void WhatTheCommandLineRefuses() {
-        Assert.Contains("unknown option '--duration'", Refused("--duration", "8h"), StringComparison.Ordinal);
-        Assert.Contains("not 'soon'", Refused("--time", "soon"), StringComparison.Ordinal);
-        Assert.Contains("needs a value", Refused("--time"), StringComparison.Ordinal);
+        Assert.Contains("unknown option '--time'", Refused("--time", "8h"), StringComparison.Ordinal);
+        Assert.Contains("not 'soon'", Refused("--duration", "soon"), StringComparison.Ordinal);
+        Assert.Contains("needs a value", Refused("--duration"), StringComparison.Ordinal);
         Assert.Contains("one target at a time", Refused("a", "b"), StringComparison.Ordinal);
         Assert.Contains("a command of their own", Refused("--list", "--replay"), StringComparison.Ordinal);
-        Assert.Contains("fuzzing alone", Refused("--replay", "--time", "1m"), StringComparison.Ordinal);
+        Assert.Contains("fuzzing alone", Refused("--replay", "--duration", "1m"), StringComparison.Ordinal);
+        Assert.Contains("fuzzing alone", Refused("--list", "--dict", "sable"), StringComparison.Ordinal);
+        Assert.Contains("a number of inputs", Refused("--runs", "-3"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -149,6 +156,12 @@ public sealed class FuzzCommandTests {
         Assert.Equal(["-timeout=3"], open.Where(static a => a.StartsWith("-timeout=", StringComparison.Ordinal)));
         Assert.Contains("-fork=1", open);
 
+        // So many runs: one process, which stops at the first failure.
+        var runs = FuzzCommand.EngineArguments(layout, [], null, 4, [], 5000, "t.dict");
+        Assert.Contains("-runs=5000", runs);
+        Assert.Contains("-dict=t.dict", runs);
+        Assert.DoesNotContain(runs, static a => a.StartsWith("-fork", StringComparison.Ordinal) || a.StartsWith("-ignore", StringComparison.Ordinal));
+
         Assert.Equal(["-minimize_crash=1", "-max_total_time=60", "-timeout=20", "-exact_artifact_path=c.min", "c"], FuzzCommand.MinimiseArguments("c", 60));
     }
 
@@ -164,6 +177,13 @@ public sealed class FuzzCommandTests {
         var replay = FuzzBuild.Flags(FuzzEngine.Replay);
         Assert.Contains("-fsanitize=address,undefined", replay);
         Assert.Contains("-DSABLE_FUZZ_REPLAY", replay);
+        Assert.Contains("-DSABLE_FUZZ_MUTATOR", FuzzBuild.Flags(FuzzEngine.LibFuzzer, mutates: true));
+        Assert.DoesNotContain("-DSABLE_FUZZ_MUTATOR", fuzzer);
+
+        // The program's own code is checked by ASan too: every function asks for it.
+        var ir = NativeBuild.ForTarget("define i64 @\"M.f\"(i64 %a) nounwind {\n}\n", NativeTarget.Host, extraAttributes: FuzzBuild.ProgramAttributes);
+        Assert.Contains("define i64 @\"M.f\"(i64 %a) #9000 nounwind {", ir, StringComparison.Ordinal);
+        Assert.Matches("attributes #9000 = \\{ .*sanitize_address optforfuzzing \\}", ir);
         Assert.DoesNotContain(replay, static f => f.Contains("fuzzer", StringComparison.Ordinal));
 
         var host = NativeTarget.Host;
@@ -188,6 +208,190 @@ public sealed class FuzzCommandTests {
         Assert.Equal(["sable_harness_fuzz_begin", "sable_harness_fuzz_push", "sable_harness_fuzz_run"], result.Sil.Exports.Values.Order(StringComparer.Ordinal));
         Assert.Contains("@\"sable_harness_fuzz_run\"", result.LlvmIr!, StringComparison.Ordinal);
         Assert.DoesNotContain("define i32 @main(", result.LlvmIr!, StringComparison.Ordinal);
+    }
+
+    const string Arbitrary = """
+        module Shop
+
+        import Sable.Testing
+
+        @derive(Arbitrary, Debug)
+        struct Order { var id: Int; var lines: String[>..] }
+
+        @fuzz
+        fn orders(_ order: Order, discount percent: U8) throws {
+            if order.lines.count == 2 && percent == 9 {
+                fatalError("two lines")
+            }
+        }
+
+        struct Suite {
+            @fuzz(mutator: longer)
+            static fn bytes(_ data: U8[:]) {
+            }
+        }
+
+        fn longer(_ input: U8[:], _ seed: U64) -> U8[>..] {
+            var more = input.toArray()
+            more.append(U8.truncating(seed))
+            return more
+        }
+
+        @test
+        fn passes() {
+        }
+        """;
+
+    /// <summary>A target of values is called with what its bytes choose; a mutator is exported when there is one.</summary>
+    [Fact]
+    public void ATargetTakesArbitraryValuesAndAMutator() {
+        var result = Compile(Arbitrary, TestKind.Fuzz);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        Assert.Equal(["sable_harness_fuzz_begin", "sable_harness_fuzz_mutate", "sable_harness_fuzz_mutated", "sable_harness_fuzz_push", "sable_harness_fuzz_run"],
+            result.Sil!.Exports.Values.Order(StringComparer.Ordinal));
+        if (!CanBuild || !FuzzBuild.HasSanitizers || NativeTarget.Host.Platform is not (NativePlatform.Linux or NativePlatform.MacOS)) {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-fuzz-values-").FullName;
+        try {
+            var replay = Path.Combine(directory, "replay");
+            var build = FuzzBuild.Build(result.LlvmIr!, replay, FuzzEngine.Replay);
+            Assert.True(build.Succeeded, build.Output);
+
+            // id 0; two empty lines, each after a 1; the end; 9: a length of 4 bits, then they.
+            var fails = Path.Combine(directory, "fails");
+            File.WriteAllBytes(fails, [0, 0, 1, 0, 1, 0, 0, 4, 9]);
+            var passes = Path.Combine(directory, "passes");
+            File.WriteAllBytes(passes, []);
+            var outcomes = FuzzCommand.Replay(replay, 0, [passes, fails]);
+            Assert.Null(outcomes[0].Report);
+            Assert.Equal("fatal error: two lines at test.sb:11:9", FuzzCommand.Signature(outcomes[1].Report!));
+            Assert.Contains("called with Order(id: 0, lines: [\"\", \"\"]), 9", outcomes[1].Report!, StringComparison.Ordinal);
+        } finally {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    /// <summary>AddressSanitizer sees what Sable code itself does with memory, where nothing of C's is called.</summary>
+    [Fact]
+    public void TheProgramsOwnCodeIsUnderAddressSanitizer() {
+        if (!CanBuild || !FuzzBuild.HasSanitizers || NativeTarget.Host.Platform is not (NativePlatform.Linux or NativePlatform.MacOS)) {
+            return;
+        }
+
+        var result = Compile("""
+            module Raw
+
+            @fuzz
+            fn pastTheEnd(_ data: U8[:]) {
+                unsafe {
+                    let p = RawPtr<Int>.allocate(count: 2)
+                    p.store(1, at: 0)
+                    p.store(2, at: 1)
+                    let read = p.load(at: 1 + data.count)
+                    p.deallocate()
+                    if read == 77 { fatalError("unlikely") }
+                }
+            }
+
+            @fuzz
+            fn afterwards(_ data: U8[:]) {
+                unsafe {
+                    let p = RawPtr<Int>.allocate(count: 1)
+                    p.store(data.count, at: 0)
+                    if data.count == 1 { p.deallocate() }
+                    let read = p.load(at: 0)
+                    if data.count != 1 { p.deallocate() }
+                    if read == 77 { fatalError("unlikely") }
+                }
+            }
+            """, TestKind.Fuzz);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        var directory = Directory.CreateTempSubdirectory("sable-fuzz-asan-").FullName;
+        try {
+            var replay = Path.Combine(directory, "replay");
+            var build = FuzzBuild.Build(result.LlvmIr!, replay, FuzzEngine.Replay);
+            Assert.True(build.Succeeded, build.Output);
+            var fine = Path.Combine(directory, "fine");
+            File.WriteAllBytes(fine, []);
+            var fails = Path.Combine(directory, "fails");
+            File.WriteAllBytes(fails, [1]);
+            foreach (var (target, kind) in new[] { (0, "heap-buffer-overflow"), (1, "heap-use-after-free") }) {
+                var outcomes = FuzzCommand.Replay(replay, target, [fine, fails]);
+                Assert.Null(outcomes[0].Report);
+                Assert.StartsWith($"SUMMARY: AddressSanitizer: {kind}", FuzzCommand.Signature(outcomes[1].Report!), StringComparison.Ordinal);
+            }
+        } finally {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    /// <summary>A type with no arbitrary values is refused by name.</summary>
+    [Fact]
+    public void AValueOfATypeThatIsNotArbitraryIsRefused() {
+        var result = Compile("""
+            module Shop
+
+            import Sable.Testing
+
+            struct Order { var id: Int }
+
+            @fuzz
+            fn orders(_ n: Int, _ order: Order) {
+            }
+            """, TestKind.Fuzz);
+        Assert.Contains("S3104", Assert.Single(result.Errors), StringComparison.Ordinal);
+        Assert.Contains("'Order' is not ('@derive(Arbitrary)'", result.Errors[0], StringComparison.Ordinal);
+    }
+
+    /// <summary>'sable test' runs what 'sable fuzz' kept: each failure a test, the corpus and the seeds one more.</summary>
+    [Fact]
+    public void SavedInputsAreRunBySableTest() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-fuzz-tests-").FullName;
+        var console = Console.Out;
+        try {
+            var file = Path.Combine(directory, "t.sb");
+            File.WriteAllText(file, Targets + "\n@test\nfn passes() {\n}\n");
+            var layout = FuzzLayout.For(Path.Combine(directory, "target"), "Bytes.findsFuzz");
+            Directory.CreateDirectory(layout.Crashes);
+            Directory.CreateDirectory(layout.Corpus);
+            Directory.CreateDirectory(Path.Combine(directory, "fuzz", "Bytes.throwsOnOne"));
+            File.WriteAllText(Path.Combine(layout.Crashes, "crash-1"), "FUZZ");
+            File.WriteAllText(Path.Combine(layout.Crashes, "crash-2"), "fixed");
+            File.WriteAllText(Path.Combine(layout.Corpus, "a"), "abc");
+            File.WriteAllText(Path.Combine(directory, "fuzz", "Bytes.throwsOnOne", "seed"), "xy");
+
+            var captured = new StringWriter();
+            Console.SetOut(captured);
+            var code = Command.Find("test")!.Run([file]);
+            Console.SetOut(console);
+            var text = captured.ToString();
+            Assert.Equal(1, code);
+            Assert.Contains("test Bytes.findsFuzz(crash-1) ... FAILED", text, StringComparison.Ordinal);
+            Assert.Contains("found it", text, StringComparison.Ordinal);
+            Assert.Contains("crash-1", text, StringComparison.Ordinal);
+            Assert.Contains("test Bytes.findsFuzz(crash-2) ... ok", text, StringComparison.Ordinal);
+            Assert.Contains("test Bytes.findsFuzz(corpus) ... ok", text, StringComparison.Ordinal);
+            Assert.Contains("test Bytes.throwsOnOne(corpus) ... ok", text, StringComparison.Ordinal);
+            Assert.Contains("4 passed; 1 failed", text, StringComparison.Ordinal);
+
+            // With nothing kept, the targets have no tests.
+            Directory.Delete(Path.Combine(directory, "target"), true);
+            Directory.Delete(Path.Combine(directory, "fuzz"), true);
+            captured = new StringWriter();
+            Console.SetOut(captured);
+            Assert.Equal(0, Command.Find("test")!.Run([file]));
+            Console.SetOut(console);
+            Assert.Contains("1 passed; 0 failed", captured.ToString(), StringComparison.Ordinal);
+        } finally {
+            Console.SetOut(console);
+            Directory.Delete(directory, true);
+        }
     }
 
     [Fact]
@@ -274,7 +478,7 @@ public sealed class FuzzCommandTests {
             File.WriteAllText(file, Targets);
             var captured = new StringWriter();
             Console.SetError(captured);
-            var code = Command.Find("fuzz")!.Run([file, "findsFuzz", "--time", "1s"]);
+            var code = Command.Find("fuzz")!.Run([file, "findsFuzz", "--duration", "1s"]);
             Assert.Equal(1, code);
             Assert.Contains("has no libFuzzer runtime", captured.ToString(), StringComparison.Ordinal);
             Assert.False(Directory.Exists(Path.Combine(directory, "target")));
@@ -287,6 +491,6 @@ public sealed class FuzzCommandTests {
     [Fact]
     public void TheCommandIsListed() {
         Assert.NotNull(Command.Find("fuzz"));
-        Assert.Contains("usage: sable fuzz [<file.sb>...] [<target>] [--time <duration>]", new FuzzCommand().Usage, StringComparison.Ordinal);
+        Assert.Contains("usage: sable fuzz [<file.sb>|<directory>...] [<target>] [--duration <time>]", new FuzzCommand().Usage, StringComparison.Ordinal);
     }
 }

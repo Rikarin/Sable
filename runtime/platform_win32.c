@@ -49,6 +49,39 @@ static wchar_t *to_wide(const char *bytes) {
     return wide;
 }
 
+// A path as the system's functions take it. One of more than 260 units, or of
+// a directory of more than 248, they take only as written ('\\\\?\\'), where '/',
+// '.' and '..' are names like any others: so it is made whole first.
+static wchar_t *to_wide_path(const char *bytes) {
+    wchar_t *wide = to_wide(bytes);
+    if (wcslen(wide) < 240 || wcsncmp(wide, L"\\\\?\\", 4) == 0 || wcsncmp(wide, L"\\\\.\\", 4) == 0) {
+        return wide;
+    }
+
+    DWORD room = GetFullPathNameW(wide, 0, NULL, NULL);
+    wchar_t *whole = room == 0 ? NULL : malloc(((size_t)room + 8) * sizeof(wchar_t));
+    if (whole == NULL) {
+        return wide;
+    }
+
+    // Room for the longer of the two prefixes before it.
+    wchar_t *full = whole + 8;
+    DWORD length = GetFullPathNameW(wide, room, full, NULL);
+    if (length == 0 || length >= room) {
+        free(whole);
+        return wide;
+    }
+
+    free(wide);
+    bool share = wcsncmp(full, L"\\\\", 2) == 0;
+    const wchar_t *prefix = share ? L"\\\\?\\UNC\\" : L"\\\\?\\";
+    const wchar_t *rest = share ? full + 2 : full;
+    size_t before = wcslen(prefix);
+    memmove(whole + before, rest, (wcslen(rest) + 1) * sizeof(wchar_t));
+    memcpy(whole, prefix, before * sizeof(wchar_t));
+    return whole;
+}
+
 static char *from_wide(const wchar_t *wide) {
     char *bytes = malloc(wide_to_wtf8((const uint16_t *)wide, NULL));
     if (bytes == NULL) {
@@ -297,6 +330,27 @@ static int64_t peak_memory(void) {
     return (int64_t)counters.PeakWorkingSetSize;
 }
 
+// Windows keeps no sum of the processes waited for.
+static int64_t processor_time(bool children) {
+    FILETIME created, exited, kernel, user;
+    if (children) {
+        return 0;
+    }
+
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+        return -1;
+    }
+
+    return (int64_t)((((uint64_t)kernel.dwHighDateTime << 32) | kernel.dwLowDateTime)
+        + (((uint64_t)user.dwHighDateTime << 32) | user.dwLowDateTime)) * 100;
+}
+
+// Cycles are counted for every process; instructions only with privileges.
+static int64_t hardware_counter(bool cycles) {
+    ULONG64 count = 0;
+    return cycles && QueryProcessCycleTime(GetCurrentProcess(), &count) ? (int64_t)count : -1;
+}
+
 // ---- Time (Sable.Time's floor) ------------------------------------------
 
 int64_t sable_time_monotonic(void) {
@@ -396,7 +450,7 @@ static DWORD WINAPI thread_main(void *pointer) {
     return 0;
 }
 
-static bool thread_start(void (*run)(void *argument), void *argument) {
+static bool thread_start_sized(void (*run)(void *argument), void *argument, size_t stack) {
     ThreadStart *start = malloc(sizeof *start);
     if (start == NULL) {
         return false;
@@ -404,8 +458,9 @@ static bool thread_start(void (*run)(void *argument), void *argument) {
 
     start->run = run;
     start->argument = argument;
-    // 8 MiB, as the main thread is linked with (PlatformLinkFlags).
-    HANDLE thread = CreateThread(NULL, 8 * 1024 * 1024, thread_main, start, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+    // Room for a handler's frames, and the guarantee (watch_stack), at least.
+    enum { LEAST = 256 * 1024 };
+    HANDLE thread = CreateThread(NULL, stack < LEAST ? LEAST : stack, thread_main, start, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
     if (thread == NULL) {
         free(start);
         return false;
@@ -415,8 +470,37 @@ static bool thread_start(void (*run)(void *argument), void *argument) {
     return true;
 }
 
+// 8 MiB, as the main thread is linked with (PlatformLinkFlags).
+static bool thread_start(void (*run)(void *argument), void *argument) {
+    return thread_start_sized(run, argument, THREAD_STACK);
+}
+
+// SetThreadDescription is Windows 10's, from 1607 on: asked for, not linked.
+static void thread_set_name(const char *name) {
+    typedef HRESULT(WINAPI * Describe)(HANDLE, PCWSTR);
+    HMODULE kernel = GetModuleHandleW(L"kernelbase.dll");
+    Describe describe = kernel != NULL ? (Describe)(void *)GetProcAddress(kernel, "SetThreadDescription") : NULL;
+    wchar_t wide[256];
+    if (describe != NULL && MultiByteToWideChar(CP_UTF8, 0, name, -1, wide, 256) > 0) {
+        describe(GetCurrentThread(), wide);
+    }
+}
+
+static void thread_set_priority(int priority) {
+    SetThreadPriority(GetCurrentThread(), priority);
+}
+
+// Those the process is bound to, where it is of one group of processors.
 static int processor_count(void) {
     DWORD count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    DWORD_PTR mine = 0, all = 0;
+    if (count <= 64 && GetProcessAffinityMask(GetCurrentProcess(), &mine, &all) && mine != 0) {
+        count = 0;
+        for (; mine != 0; mine &= mine - 1) {
+            count++;
+        }
+    }
+
     return count > 0 ? (int)count : 1;
 }
 
@@ -1318,7 +1402,7 @@ static char **platform_arguments(int argc, char **argv, int *count) {
 }
 
 static FILE *open_file(const char *name, const char *mode) {
-    wchar_t *wide_name = to_wide(name);
+    wchar_t *wide_name = to_wide_path(name);
     wchar_t *wide_mode = to_wide(mode);
     FILE *file = _wfopen(wide_name, wide_mode);
     free(wide_name);
@@ -1327,7 +1411,7 @@ static FILE *open_file(const char *name, const char *mode) {
 }
 
 static bool append_file(const char *name, const char *bytes, size_t length) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     // With FILE_APPEND_DATA and no FILE_WRITE_DATA, every write goes at the
     // end of the file as it is then, however many processes write at once.
     HANDLE file = CreateFileW(wide, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1343,7 +1427,7 @@ static bool append_file(const char *name, const char *bytes, size_t length) {
 }
 
 static DWORD attributes_of(const char *name) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     DWORD attributes = GetFileAttributesW(wide);
     free(wide);
     return attributes;
@@ -1359,14 +1443,14 @@ static bool is_directory(const char *name) {
 }
 
 static bool remove_file(const char *name) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     bool removed = DeleteFileW(wide) || RemoveDirectoryW(wide);
     free(wide);
     return removed;
 }
 
 static bool make_directory(const char *name) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     bool made = CreateDirectoryW(wide, NULL) != FALSE;
     free(wide);
     return made;
@@ -1386,7 +1470,7 @@ static char **list_directory(const char *name, size_t *count) {
 
     pattern[length++] = '*';
     pattern[length] = '\0';
-    wchar_t *wide = to_wide(pattern);
+    wchar_t *wide = to_wide_path(pattern);
     free(pattern);
     WIN32_FIND_DATAW found;
     HANDLE search = FindFirstFileW(wide, &found);
@@ -1575,7 +1659,7 @@ static PlatformFile file_open(const char *name, int flags, int permissions, File
         disposition = TRUNCATE_EXISTING;
     }
 
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     HANDLE file = CreateFileW(wide, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disposition,
                               FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) {
@@ -1710,7 +1794,7 @@ static PlatformFile file_standard(int which) {
 }
 
 static char *file_canonical(const char *name, FileError *error) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     // Opened for nothing but its name, a directory too (backup semantics).
     HANDLE handle = CreateFileW(wide, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
                                 OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);

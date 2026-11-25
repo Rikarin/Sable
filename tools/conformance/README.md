@@ -24,6 +24,12 @@ how many cases of each part passed, failed and were skipped, and why; it exits
 with 1 if any failed. Each suite's directory has only what this says of it, and
 nothing in it is run but PractRand.
 
+## geometry: System.Numerics
+
+No data to download: `geometry/reference.cs` prints what .NET's System.Numerics
+makes of some inputs, as the table that `tests/lib/Sable.Math.Geometry/DotNetTests.sb`
+compares with, which is in the repository. Its head says how to make it again.
+
 ## crypto: NIST's CAVP and ACVP, and Wycheproof
 
 `data/cavp/`, unzipped: the byte-oriented vectors of

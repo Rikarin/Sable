@@ -191,4 +191,57 @@ public sealed class InterpolationTests {
         Assert.Contains("\"\\(x:>8) \\(y:+.2) \\(z: d)\"", formatted, StringComparison.Ordinal);
         Assert.Equal(formatted, SyntaxFormatter.Format(formatted));
     }
+
+    /// <summary>
+    ///     Text between two holes that means nothing has no value, and is in
+    ///     the tree all the same.
+    /// </summary>
+    [Theory]
+    [InlineData("\"\\(a)\\u{75807f}\\(b)\"")]
+    [InlineData("\"\\(a)\\u{75807f}\\(")]
+    [InlineData("\"\\(a)\\u{41\\(")]
+    [InlineData("\"\\(a)\\u{41\\(b)\"")]
+    [InlineData("\"\\(a)\\u{41}\\(")]
+    [InlineData("\"\\u{75807f}\\(")]
+    [InlineData("\"\\(a)\\u\\(b)\"")]
+    [InlineData("\"\\(a)\\u{}\\(b)\"")]
+    [InlineData("\"\\(a)\\u{d800}\\(b)\"")]
+    [InlineData("\"\\(a)\\u{75807f}")]
+    [InlineData("\"\\(a)\\")]
+    [InlineData("\"\\(())\\u{75807f\\(")]
+    [InlineData("\"\"\"\n\\(a)\\u{75807f}\\(b)\n\"\"\"")]
+    [InlineData("\"\"\"\n\\(a)\\\n\\(b)\n\"\"\"")]
+    [InlineData("\"\"\"\n\\(a)\\u{41\\(")]
+    public void TextWithNoValueBetweenHolesIsKept(string literal) {
+        foreach (var source in (string[])[$"fn f() {{ let x = {literal}", $"fn f() {{ let x = {literal}\n}}\n", "fn{" + literal]) {
+            Assert.Equal(source, SyntaxTree.Parse(source).ToFullString());
+
+            // As typed: what was lexed before the edit is spliced back in.
+            for (var at = 0; at < source.Length; at++) {
+                var before = SyntaxTree.Parse(source.Remove(at, 1));
+                var incremental = before.WithChange(new(new(at, 0), source[at..(at + 1)]));
+                Assert.Equal(source, incremental.ToFullString());
+                Assert.Equal(TreeDump.Dump(SyntaxTree.Parse(source).Root), TreeDump.Dump(incremental.Root));
+            }
+        }
+    }
+
+    /// <summary>The fuzzer's: an edit that inserts the text.</summary>
+    [Theory]
+    [InlineData("\"}\\(d(t]))\\u{32767f}\\(")]
+    [InlineData("\"\\(())\\u{75807f\\(")]
+    public void AnEditThatInsertsTextWithNoValue(string inserted) {
+        const string source = "module M\nfn f() { let x = 1 }\nfn g() { }\n";
+        var tree = SyntaxTree.Parse(source);
+        for (var at = 0; at <= source.Length; at++) {
+            Assert.Equal(source.Insert(at, inserted), tree.WithChange(new(new(at, 0), inserted)).ToFullString());
+        }
+    }
+
+    [Fact]
+    public void AJoinedLineBetweenHolesHasNoValue() {
+        var node = Parse("\"\"\"\n    \\(a)\\\n    \\(b)\n    \"\"\"");
+        Assert.Equal(2, Holes(node).Count);
+        Assert.Equal("", string.Concat(node.Contents.OfType<InterpolatedTextSyntax>().Select(static t => t.TextToken.Value)));
+    }
 }

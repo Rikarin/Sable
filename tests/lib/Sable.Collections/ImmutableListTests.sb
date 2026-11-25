@@ -1,0 +1,357 @@
+module ImmutableListTests
+
+// ImmutableList (Sable.Collections): against an array as the model, its
+// tree's shape checked after each step and its old versions unchanged.
+
+import Sable.Collections
+import Sable.Testing
+
+@derive(Debug, Arbitrary)
+union ListStep {
+    Append(U8)
+    AppendMany(U8, U8)
+    Insert(at: U16, U8)
+    Remove(at: U16)
+    RemoveLast
+    Replace(at: U16, U8)
+    Cut(U16, U16)
+    JoinSelf
+    JoinPiece(U16, U16)
+    Splice(U16, U16, U8)
+    Keep
+}
+
+fn place(_ raw: U16, _ count: Int) -> Int => count == 0 ? 0 : Int(raw) % count
+
+fn bounds(_ a: U16, _ b: U16, _ count: Int) -> Range<Int> {
+    let x = place(a, count + 1)
+    let y = place(b, count + 1)
+    return x < y ? x..<y : y..<x
+}
+
+fn replaced(_ model: Int[>..], _ range: Range<Int>, with values: Int[>..]) -> Int[>..] {
+    var all = model[..<range.lowerBound].toArray()
+    all.append(contentsOf: values)
+    all.append(contentsOf: model[range.upperBound...].toArray())
+    return all
+}
+
+fn expectSame(_ list: ImmutableList<Int>, _ model: Int[>..]) {
+    expect(list.structuralFault() == none, list.structuralFault() ?? "")
+    expect(list.count == model.count)
+    expect(list.toArray() == model)
+}
+
+// A list is what an array the same is done to would be, and each version
+// kept is still what it was.
+fn follows(_ steps: ListStep[>..], from start: Int[>..]) {
+    var list = ImmutableList<Int>(start)
+    var model = start
+    var kept: (ImmutableList<Int>, Int[>..])[>..] = []
+    for step in steps {
+        match step {
+            case .Append(let value) => {
+                list.append(Int(value))
+                model.append(Int(value))
+            }
+            case .AppendMany(let value, let count) => {
+                let many = Int[>..](repeating: Int(value), count: Int(count))
+                list.append(contentsOf: many)
+                model.append(contentsOf: many)
+            }
+            case .Insert(let at, let value) => {
+                let index = place(at, model.count + 1)
+                list.insert(Int(value), at: index)
+                model = replaced(model, index..<index, with: [Int(value)])
+            }
+            case .Remove(let at) => {
+                if !model.isEmpty {
+                    let index = place(at, model.count)
+                    expect(list.remove(at: index) == model[index])
+                    model = replaced(model, index..<index + 1, with: [])
+                }
+            }
+            case .RemoveLast => {
+                expect(list.popLast() == model.last)
+                if !model.isEmpty {
+                    _ = model.removeLast()
+                }
+            }
+            case .Replace(let at, let value) => {
+                if !model.isEmpty {
+                    let index = place(at, model.count)
+                    list[index] = Int(value)
+                    model[index] = Int(value)
+                }
+            }
+            case .Cut(let a, let b) => {
+                let range = bounds(a, b, model.count)
+                list = list[range]
+                model = model[range].toArray()
+            }
+            case .JoinSelf => {
+                if model.count < 20000 {
+                    list = list + list
+                    model.append(contentsOf: model[0..<model.count].toArray())
+                }
+            }
+            case .JoinPiece(let a, let b) => {
+                let range = bounds(a, b, model.count)
+                if model.count < 20000 {
+                    list = list[range] + list
+                    model = replaced(model, 0..<0, with: model[range].toArray())
+                }
+            }
+            case .Splice(let a, let b, let value) => {
+                let range = bounds(a, b, model.count)
+                list[range] = ImmutableList<Int>([Int(value), Int(value) + 1])
+                model = replaced(model, range, with: [Int(value), Int(value) + 1])
+            }
+            case .Keep => kept.append((list, model))
+        }
+        expectSame(list, model)
+    }
+    for (version, was) in kept {
+        expectSame(version, was)
+    }
+}
+
+@test
+fn aListIsWhatAnArrayWouldBe() {
+    forAll(cases: 200) { (steps: ListStep[>..]) in
+        follows(steps, from: [])
+    }
+}
+
+@test
+fn alsoALongOne() {
+    forAll(cases: 60) { (steps: ListStep[>..]) in
+        follows(steps, from: (0..<40000).toArray())
+    }
+}
+
+@test
+fn itIsReadByIndexAndInOrder() {
+    for count in [0, 1, 31, 32, 33, 64, 65, 1023, 1024, 1025, 1056, 1057, 33000, 70000] {
+        let list = ImmutableList<Int>(0..<count)
+        require(list.structuralFault() == none)
+        assertEqual(list.count, count)
+        var expected = 0
+        for element in list {
+            assertEqual(element, expected)
+            expected += 1
+        }
+        assertEqual(expected, count)
+        for index in stride(from: 0, to: count, by: 37) {
+            assertEqual(list[index], index)
+        }
+        assertEqual(list.first, count == 0 ? none : 0)
+        assertEqual(list.last, count == 0 ? none : count - 1)
+    }
+}
+
+@test
+fn takenApartFromTheEndItIsEmptied() {
+    var list = ImmutableList<Int>(0..<40000)
+    for expected in stride(from: 39999, through: 0, by: -1) {
+        assertEqual(list.removeLast(), expected)
+        if expected % 997 == 0 {
+            assert(list.structuralFault() == none)
+        }
+    }
+    expect(list.isEmpty && list.popLast() == none && list.structuralFault() == none)
+}
+
+@test
+fn removedFromEitherEndAndTheMiddle() {
+    var list = ImmutableList<Int>(0..<5000)
+    var model = (0..<5000).toArray()
+    var at = 0
+    while !list.isEmpty {
+        at = (at * 31 + 17) % model.count
+        assertEqual(list.remove(at: at), model[at])
+        model = replaced(model, at..<at + 1, with: [])
+        if model.count % 97 == 0 {
+            assert(list.structuralFault() == none && list.toArray() == model)
+        }
+    }
+    expect(list.structuralFault() == none)
+}
+
+@test
+fn insertedAtTheFrontItStaysBalanced() {
+    var list = ImmutableList<Int>()
+    for i in 0..<20000 {
+        list.insert(i, at: 0)
+    }
+    expect(list.structuralFault() == none)
+    for i in 0..<20000 {
+        assertEqual(list[i], 19999 - i)
+    }
+}
+
+@test
+fn aCopyIsUnchangedByWhatIsDoneToTheOther() {
+    let before = ImmutableList<String>((0..<2000).map { "\($0)" })
+    var after = before
+    after[1000] = "changed"
+    after.modify(at: 0) { $0 = $0 + "!" }
+    after.modify(at: 1999) { $0 = $0 + "!" }
+    after.append("more")
+    assertEqual(before[1000], "1000")
+    assertEqual(before[0], "0")
+    assertEqual(before[1999], "1999")
+    assertEqual(before.count, 2000)
+    assertEqual(after[1000], "changed")
+    assertEqual(after[0], "0!")
+    assertEqual(after[1999], "1999!")
+    expect(!after.isIdentical(to: before) && before.isIdentical(to: before))
+}
+
+@test
+fn changedCopiesLeaveTheirOriginal() {
+    let list = ImmutableList<Int>([1, 2, 3])
+    expect(list.appending(4).toArray() == [1, 2, 3, 4])
+    expect(list.appending(contentsOf: list).toArray() == [1, 2, 3, 1, 2, 3])
+    expect(list.replacing(at: 1, with: 9).toArray() == [1, 9, 3])
+    expect(list.inserting(9, at: 0).toArray() == [9, 1, 2, 3])
+    expect(list.removing(at: 2).toArray() == [1, 2])
+    expect(list.toArray() == [1, 2, 3])
+}
+
+// How many objects the body leaves that were not there.
+fn objectsMade(_ body: () -> Void) -> Int {
+    let before = MemoryStatistics.current().allocations
+    body()
+    return MemoryStatistics.current().allocations - before
+}
+
+@test
+fn joiningAndCuttingShareTheNodes() {
+    let list = ImmutableList<Int>(0..<100000)
+    var joined = ImmutableList<Int>()
+    expect(objectsMade { joined = list + list } < 60)
+    assertEqual(joined.count, 200000)
+    expect(joined.structuralFault() == none && joined[150000] == 50000)
+    var piece = ImmutableList<Int>()
+    expect(objectsMade { piece = list[1000..<99000] } < 60)
+    expect(piece.structuralFault() == none && piece[0] == 1000 && piece.last == 98999)
+    expect(objectsMade { piece[50000] = 1 } < 20)
+    assertEqual(list[51000], 51000)
+}
+
+@test
+fn aListHeldOnceIsChangedInPlace() {
+    var list = ImmutableList<Int>(0..<10000)
+    assertNoAllocations {
+        for i in 0..<10000 {
+            list[i] = i + 1
+        }
+    }
+    assertEqual(list[9999], 10000)
+}
+
+@test
+fn equalityHashAndDebug() {
+    let a = ImmutableList<Int>(0..<5000)
+    var b = ImmutableList<Int>()
+    for i in stride(from: 4999, through: 0, by: -1) {
+        b.insert(i, at: 0)
+    }
+    expect(a == b && a.hashValue == b.hashValue)
+    b[4321] = 0
+    expect(a != b)
+    expect(a != a.removing(at: 0))
+    expect(a == a.appending(1).removing(at: 5000))
+    assertEqual("\(ImmutableList<Int>([1, 2]))", "ImmutableList([1, 2])")
+    assertEqual([1, 2].hashValue, ImmutableList<Int>([1, 2]).hashValue)
+}
+
+@test
+fn asACollection() {
+    var list: ImmutableList<Int> = [3, 1, 2].collect()
+    list.replaceSubrange(1..<2, with: [8, 9])
+    expect(list.toArray() == [3, 8, 9, 2])
+    expect(list[^2...].toArray() == [9, 2])
+    list.insert(contentsOf: ImmutableList<Int>([5, 6]), at: 1)
+    expect(list.toArray() == [3, 5, 6, 8, 9, 2])
+    list.removeSubrange(1..<3)
+    expect(list.toArray() == [3, 8, 9, 2])
+    assertEqual(list.firstIndex(of: 9), 2)
+    expect(list.reversed().toArray() == [2, 9, 8, 3])
+    assertEqual(list.distance(from: 1, to: list.index(1, offsetBy: 2)), 2)
+    list.clear()
+    expect(list.isEmpty && list.startIndex == list.endIndex)
+}
+
+@test
+fn outOfRangeTraps() {
+    let list = ImmutableList<Int>(0..<100)
+    expectPanic("out of range") { _ = list[100] }
+    expectPanic("out of range") { _ = list[-1] }
+    expectPanic("out of range") { _ = list.removing(at: 100) }
+    expectPanic("out of range") { _ = list.inserting(1, at: 101) }
+    expectPanic("not within") { _ = list[90..<101] }
+    expectPanic() { _ = ImmutableList<Int>()[0] }
+}
+
+final class Counted {
+    let alive: Alive
+    init(_ alive: Alive) {
+        self.alive = alive
+        alive.count += 1
+    }
+    deinit { alive.count -= 1 }
+}
+
+final class Alive {
+    var count = 0
+}
+
+@test
+fn whatAListHeldIsLetGoOf() {
+    let alive = Alive()
+    do {
+        var list = ImmutableList<Counted>()
+        for _ in 0..<3000 {
+            list.append(Counted(alive))
+        }
+        let older = list
+        list = list[500..<2500] + list
+        list.insert(Counted(alive), at: 700)
+        _ = list.remove(at: 10)
+        list.removeSubrange(5..<4000)
+        expect(alive.count >= 3000 && alive.count <= 3001)
+        assertEqual(older.count, 3000)
+    }
+    assertEqual(alive.count, 0)
+}
+
+@test
+async fn versionsAreReadByManyTasks() {
+    let base = ImmutableList<String>((0..<5000).map { "\($0)" })
+    let total = await withTaskGroup(of: Int.self) { group in
+        for task in 0..<8 {
+            group.spawn {
+                var mine = base
+                for i in 0..<500 {
+                    mine[i * 7 % 5000] = "task \(task)"
+                    mine.append("x")
+                    _ = mine.remove(at: i)
+                }
+                var same = 0
+                for i in 4000..<4400 {
+                    same += base[i] == "\(i)" ? 1 : 0
+                }
+                return same + mine.count
+            }
+        }
+        var sum = 0
+        for await each in group {
+            sum += each
+        }
+        return sum
+    }
+    assertEqual(total, 8 * 5400)
+    assertEqual(base[7], "7")
+}

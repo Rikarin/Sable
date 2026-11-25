@@ -1,5 +1,7 @@
 module Words
 
+import Sable.Testing
+
 // Text work: building a corpus with interpolation, splitting it into words,
 // counting them in a dictionary, and ranking them with a sort that takes a
 // closure. Strings, dictionaries, arrays and closures, each copied and
@@ -40,8 +42,8 @@ fn ranked(_ items: Count[>..], _ before: (Count, Count) -> Bool) -> Count[>..] {
     return sorted
 }
 
-@main
-fn main() {
+fn run() -> String {
+    var lines: String[>..] = []
     var counts: [String: Int] = [:]
     var seen: String[>..] = []
     var round = 0
@@ -63,6 +65,17 @@ fn main() {
     }
 
     for item in ranked(items, (a: Count, b: Count) => a.count > b.count) {
-        print("\(item.word) \(item.count)")
+        lines.append("\(item.word) \(item.count)")
     }
+    return lines.joined(separator: "\n")
+}
+
+@main
+fn main() {
+    print(run())
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

@@ -299,7 +299,8 @@ fn fillingASmallVecWithinItsRoom(_ b: Bencher) {
         }
         var total = 0
         for x in v {
-            total += x
+            total += blackBox(x)
         }
+        return total
     })
 }

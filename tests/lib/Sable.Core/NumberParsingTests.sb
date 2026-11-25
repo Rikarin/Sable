@@ -337,8 +337,9 @@ fn parsingIntegers(_ b: Bencher) {
     b.iterate(() => {
         var total = 0
         for text in ["0", "42", "-9223372036854775808", "123456789", "-17"] {
-            total = total + (try! Int.parse(text)) % 7
+            total = total + (try! Int.parse(blackBox(text))) % 7
         }
+        return total
     })
 }
 
@@ -347,8 +348,9 @@ fn parsingFloats(_ b: Bencher) {
     b.iterate(() => {
         var total = 0.0
         for text in ["0.1", "-2.5e-3", "1234.5678", "1e300", "7"] {
-            total = total + (try! F64.parse(text))
+            total = total + (try! F64.parse(blackBox(text)))
         }
+        return total
     })
 }
 

@@ -1,5 +1,7 @@
 module NBody
 
+import Sable.Testing
+
 // The control: floating-point arithmetic on structs and an array of them,
 // with no references at all in the inner loop. ARC should cost nothing here.
 
@@ -73,8 +75,8 @@ fn advance(_ bodies: inout Body[>..], _ dt: F64) {
     }
 }
 
-@main
-fn main() {
+fn run() -> String {
+    var lines: String[>..] = []
     var bodies: Body[>..] = [
         Body { x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 39.47 },
         Body { x: 4.84, y: -1.16, z: -0.10, vx: 0.60, vy: 2.81, vz: -0.02, mass: 0.037 },
@@ -82,11 +84,22 @@ fn main() {
         Body { x: 12.89, y: -15.11, z: -0.22, vx: 1.08, vy: 0.86, vz: -0.01, mass: 0.0017 },
         Body { x: 15.37, y: -25.91, z: 0.17, vx: 0.97, vy: 0.59, vz: -0.03, mass: 0.002 }
     ]
-    print(energy(bodies))
+    lines.append("\(energy(bodies))")
     var step = 0
     while step < 200000 {
         advance(&bodies, 0.01)
         step = step + 1
     }
-    print(energy(bodies))
+    lines.append("\(energy(bodies))")
+    return lines.joined(separator: "\n")
+}
+
+@main
+fn main() {
+    print(run())
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

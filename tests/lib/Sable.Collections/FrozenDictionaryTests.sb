@@ -1,0 +1,343 @@
+module FrozenDictionaryTests
+
+// FrozenDictionary (Sable.Collections): against a dictionary as the model,
+// with keys of every type and shape its strategies are chosen by, looked up
+// by others like them, and made as the program is compiled.
+
+import Sable.Collections
+import Sable.Testing
+
+/// A key whose hash is one of few, so that most keys' are equal.
+@derive(Debug)
+struct Hostile: Hashable {
+    let value: Int
+    let hashes: Int
+
+    operator == (lhs: Hostile, rhs: Hostile) -> Bool => lhs.value == rhs.value
+
+    fn hash(into hasher: inout Hasher) {
+        hasher.combine(value % hashes)
+    }
+}
+
+@derive(Debug, Hashable)
+struct Point {
+    let x: Int
+    let name: String
+}
+
+// A frozen dictionary of the keys, each given its place among them, and some
+// given twice, is the dictionary of them; and finds none of the others.
+fn agrees<K: Hashable & Debug>(_ keys: K[>..], _ others: K[>..]) {
+    var model: [K: Int] = [:]
+    var pairs: (K, Int)[>..] = []
+    for (i, key) in keys.enumerated() {
+        pairs.append((key, i))
+        model[key] = i
+    }
+    let frozen = FrozenDictionary<K, Int>(pairs)
+    expect(frozen.count == model.count && frozen.isEmpty == model.isEmpty)
+    for (key, value) in model {
+        expect(frozen[key] == value)
+        expect(frozen.contains(key))
+        expect(frozen[key, default: -1] == value)
+    }
+    for key in others {
+        expect(frozen[key] == model[key])
+        expect(frozen.contains(key) == model.contains(key))
+    }
+    // In the order the keys were first given.
+    var position = frozen.startIndex
+    for (key, value) in model {
+        expect(frozen[position].0 == key && frozen[position].1 == value)
+        position = frozen.index(after: position)
+    }
+    expect(position == frozen.endIndex)
+    var went: (K, Int)[>..] = []
+    for entry in frozen {
+        went.append(entry)
+    }
+    expect(went.count == model.count)
+    let again = FrozenDictionary<K, Int>(went.reversed())
+    expect(again == frozen)
+}
+
+fn texts(_ count: Int, _ text: (Int) -> String) -> String[>..] {
+    return (0..<count).map(text)
+}
+
+fn joined(_ a: String[>..], _ b: String[>..]) -> String[>..] {
+    var all = a
+    all.append(contentsOf: b)
+    return all
+}
+
+@test
+fn integersHoweverSpread() {
+    forAll(cases: 100) { (keys: Int[>..], others: Int[>..]) in
+        agrees(keys, others)
+    }
+    forAll(cases: 60) { (keys: I8[>..], others: I8[>..]) in
+        agrees(keys, others)
+    }
+    forAll(cases: 40) { (keys: U16[>..], others: U16[>..]) in
+        agrees(keys, others)
+    }
+    forAll(cases: 40) { (keys: I32[>..], others: I32[>..]) in
+        agrees(keys, others)
+    }
+    forAll(cases: 40) { (keys: U32[>..], others: U8[>..]) in
+        agrees(keys, others.map { U32($0) })
+    }
+    forAll(cases: 40) { (keys: U64[>..], others: U64[>..]) in
+        agrees(keys, others)
+    }
+    forAll(cases: 40) { (keys: I16[>..], others: I16[>..]) in
+        agrees(keys, others)
+    }
+    forAll(cases: 40) { (keys: I64[>..], others: U8[>..]) in
+        agrees(keys, others.map { I64($0) })
+    }
+    forAll(cases: 40) { (keys: Char[>..], others: Char[>..]) in
+        agrees(keys, others)
+    }
+}
+
+@test
+fn integersOfEachStrategy() {
+    for count in [0, 1, 3, 4, 5, 60, 1000] {
+        // A run; a run out of order; close together; far apart; at the ends of what there is.
+        agrees((0..<count).map { $0 + 7 }, [-1, 0, 6, 7 + count, Int.max, Int.min])
+        agrees((0..<count).map { count - $0 }, [0, count + 1, Int.min])
+        agrees((0..<count).map { $0 * 5 - 30 }, (0..<200).toArray())
+        agrees((0..<count).map { $0 * 7919 * 104729 }, (0..<count).map { $0 * 7919 * 104729 + 1 })
+        agrees((0..<count).map { ($0 &- 2) << 50 }, (0..<count).map { ($0 &- 2) << 49 })
+    }
+    agrees([Int.min, Int.max], [0, -1])
+    agrees([Int.min, 0, Int.max, 5, -5, 99], [1, Int.max - 1, Int.min + 1])
+    agrees([5, 5, 5], [4])
+}
+
+@test
+fn stringsHoweverSpread() {
+    forAll(cases: 100) { (keys: String[>..], others: String[>..]) in
+        agrees(keys, others)
+    }
+    forAll(Gen.string(of: Gen.element(of: ['a', 'b'])).array(count: 0...80), Gen.string(of: Gen.element(of: ['a', 'b'])).array(count: 0...40), cases: 60) {
+            (keys: String[>..], others: String[>..]) in
+            agrees(keys, others)
+        }
+}
+
+@test
+fn stringsOfEachStrategy() {
+    for count in [1, 4, 5, 40, 700] {
+        agrees(texts(count) { "key\($0)" }, joined(texts(count) { "kex\($0)" }, ["", "k", "key"]))
+        agrees(texts(count) { "\($0) is a long text whose start tells it apart" }, texts(count) { "\($0) is a long text whose start tells it apart!" })
+        agrees(texts(count) { "a long text whose end tells it apart \($0)" }, texts(count) { "b long text whose end tells it apart \($0)" })
+        agrees(texts(count) { "a text told by its middle \($0 + 1000) and no other part" }, texts(count) { "a text told by its middle \($0 + 2000) and no other part" })
+        agrees(texts(count) { "x".repeated($0) }, texts(count) { "y".repeated($0) })
+        agrees(texts(count) { "\($0 % 7)-the same middle of every one of them, whatever it is-\($0 / 7)" }, ["", "0-the same middle of every one of them, whatever it is-999"])
+        agrees(texts(count) { "ключ\($0)" }, texts(count) { "ключ\($0 + count)" })
+    }
+    // Only all of it tells these apart: a byte among seventy that are the same, at any of them.
+    agrees(texts(70) { "x".repeated($0) + "y" + "x".repeated(69 - $0) }, ["x".repeated(70), "", "y"])
+    agrees(texts(200) { "x".repeated($0 % 100) + "\($0 / 100)" + "x".repeated(99 - $0 % 100) + "." }, ["x".repeated(101)])
+    agrees(["", "a", "b", "ab", "ba", "a\u{0}"], ["\u{0}", "a\u{0}\u{0}", "c"])
+    agrees(["", "\u{0}", "\u{0}\u{0}", "\u{0}\u{0}\u{0}", "a", "\u{0}a"], ["a\u{0}"])
+}
+
+@test
+fn keysOfOtherTypes() {
+    forAll(cases: 60) { (keys: U16[>..], others: U16[>..]) in
+        agrees(keys.map { Point { x: Int($0) % 50, name: "\($0)" } }, others.map { Point { x: Int($0) % 50, name: "\($0)" } })
+        agrees(keys.map { Hostile { value: Int($0), hashes: 3 } }, others.map { Hostile { value: Int($0), hashes: 3 } })
+        agrees(keys.map { Hostile { value: Int($0), hashes: 1 } }, others.map { Hostile { value: Int($0), hashes: 1 } })
+    }
+    agrees((0..<2000).map { Point { x: $0, name: "n" } }, (1990..<2010).map { Point { x: $0, name: "n" } })
+    agrees([1.5, -0.0, 2.5, 3.5, 4.5, 0.0], [0.0, 1.0])
+    agrees([true, false, true], [true])
+}
+
+@test
+fn repeatedKeysKeepTheirPlaceAndTheLastValue() {
+    let frozen = FrozenDictionary<String, Int>([("b", 1), ("a", 2), ("b", 3), ("c", 4), ("d", 5), ("e", 6), ("a", 7)])
+    expect(frozen.keys == ["b", "a", "c", "d", "e"])
+    expect(frozen.values == [3, 7, 4, 5, 6])
+    let numbers = FrozenDictionary<Int, String>([(9, "x"), (9, "y")])
+    expect(numbers.count == 1 && numbers[9] == "y")
+}
+
+@test
+fn aPieceOfATextIsLookedUpWithNoCopy() {
+    let line = "GET key17 a-much-longer-key-18 nothing here K"
+    let pieces = Substring(line).split(" ")
+    let keys = joined(joined(texts(40) { "key\($0)" }, texts(40) { "a-much-longer-key-\($0)" }), ["GET"])
+    let frozen = FrozenDictionary<String, Int>(keys.enumerated().map { ($0.1, $0.0) })
+    let few = FrozenDictionary<String, Int>([("GET", 1), ("PUT", 2)])
+    let byLength = FrozenDictionary<String, Int>([("K", 1), ("xx", 2), ("GET", 3), ("here", 4), ("a-much-longer-key-18", 5)])
+    var found: Int[>..] = []
+    found.reserveCapacity(30)
+    assertNoAllocations {
+        for piece in pieces {
+            found.append(frozen[piece] ?? -1)
+            found.append(few[piece] ?? -1)
+            found.append(byLength[piece, default: -1])
+        }
+    }
+    expect(found == [80, 1, 3, 17, -1, -1, 58, -1, 5, -1, -1, -1, -1, -1, 4, -1, -1, 1])
+    expect(frozen.contains(pieces[1]) && !frozen.contains(pieces[3]) && few.contains(pieces[0]))
+    // A piece is its own bytes, whatever is after them.
+    let long = Substring("key1234567890")
+    expect(frozen[long[..<long.index(long.startIndex, offsetBy: 4)]] == 1 && frozen[long] == none)
+}
+
+@test
+fn theCaseOfLettersIgnored() {
+    let names = ["Content-Type", "Accept", "Host", "Date", "Content-Length", "X-Forwarded-For", "x-forwarded-proto", "ETag"]
+    for count in [2, 4, 5, 8] {
+        let headers = FrozenDictionary<String, Int>(ignoringAsciiCase: names[0..<count].enumerated().map { ($0.1, $0.0) })
+        for (i, name) in names.enumerated() {
+            let expected: Int? = i < count ? i : none
+            assertEqual(headers[name], expected)
+            assertEqual(headers[name.uppercased()], expected)
+            assertEqual(headers[name.lowercased()], expected)
+            assertEqual(headers[Substring(name.uppercased())], expected)
+        }
+        require(headers["Hos"] == none && headers["Hosts"] == none && headers["C-ntent-Type"] == none)
+        require(headers.keys == names[0..<count].toArray())
+    }
+    // Only ASCII's letters, and none of what differs from one by the same bit.
+    let odd = FrozenDictionary<String, Int>(ignoringAsciiCase: [("[É@", 1), ("{É`", 2), ("[é@", 3), ("z[", 4), ("Z{", 5), ("Z[", 6)])
+    expect(odd["[É@"] == 1 && odd["{É`"] == 2 && odd["[é@"] == 3 && odd["Z["] == 6 && odd["z{"] == 5 && odd.count == 5)
+    let many = FrozenDictionary<String, Int>(ignoringAsciiCase: texts(300) { "Header-With-Number-\($0)" }.enumerated().map { ($0.1, $0.0) })
+    for i in 0..<300 {
+        assertEqual(many["header-WITH-number-\(i)"], i)
+    }
+    expect(many["header-with-number-300"] == none)
+    let whole = FrozenDictionary<String, Int>(ignoringAsciiCase: texts(70) { "x".repeated($0) + "Y" + "x".repeated(69 - $0) }.enumerated().map { ($0.1, $0.0) })
+    expect(whole["x".repeated(30) + "y" + "X".repeated(39)] == 30 && whole["X".repeated(70)] == none)
+    let ends = FrozenDictionary<String, Int>(ignoringAsciiCase: texts(60) { "\($0 % 8)A-the same middle of every one of them-\($0 / 8)B" }.enumerated().map { ($0.1, $0.0) })
+    expect(ends["3a-THE same middle of every one of them-5b"] == 43)
+}
+
+const Ports = FrozenDictionary<String, Int>([("http", 80), ("https", 443), ("ssh", 22), ("ftp", 21), ("smtp", 25), ("imap", 143)])
+const Squares = FrozenDictionary<Int, Int>([(10, 100), (200, 40000), (3000, 9000000), (40000, 1600000000), (5, 25)])
+const Names = FrozenDictionary<Int, Point>([(1, Point { x: 1, name: "one" }), (2, Point { x: 2, name: "two" })])
+const Headers = FrozenDictionary<String, Int>(ignoringAsciiCase: [("Accept", 1), ("Host", 2), ("Date", 3), ("ETag", 4), ("Range", 5)])
+const Big = FrozenDictionary<Int, Int>(bigPairs())
+
+const fn bigPairs() -> (Int, Int)[>..] {
+    var pairs: (Int, Int)[>..] = []
+    var i = 0
+    while i < 300 {
+        pairs.append((i * 104729, i))
+        i += 1
+    }
+    return pairs
+}
+
+@test
+fn oneMadeAsTheProgramIsCompiled() {
+    expect(Ports["https"] == 443 && Ports["imap"] == 143 && Ports["pop3"] == none && Ports.count == 6)
+    expect(Squares[3000] == 9000000 && Squares[4] == none)
+    assertEqual(Names[2]!.name, "two")
+    expect(Headers["HOST"] == 2 && Headers["range"] == 5 && Headers["rang"] == none)
+    expect(Big.count == 300 && Big[104729 * 299] == 299 && Big[1] == none)
+    expect(Ports == FrozenDictionary<String, Int>([("imap", 143), ("http", 80), ("https", 443), ("ssh", 22), ("ftp", 21), ("smtp", 25)]))
+    var copy = Ports.mapValues { $0 + 1 }
+    expect(copy["ssh"] == 23 && Ports["ssh"] == 22)
+    copy = Ports
+    expect(copy.keys == ["http", "https", "ssh", "ftp", "smtp", "imap"])
+    assertNoAllocations {
+        expect(Ports["smtp"] == 25 && Squares[200] == 40000)
+    }
+}
+
+@test
+fn equalityDebugAndCollecting() {
+    let a = FrozenDictionary<String, Int>([("x", 1), ("y", 2)])
+    expect(a == FrozenDictionary<String, Int>([("y", 2), ("x", 1)]))
+    expect(a != FrozenDictionary<String, Int>([("y", 3), ("x", 1)]))
+    expect(a != FrozenDictionary<String, Int>([("z", 2), ("x", 1)]))
+    expect(a != FrozenDictionary<String, Int>([("x", 1)]))
+    assertEqual(a.hashValue, FrozenDictionary<String, Int>([("y", 2), ("x", 1)]).hashValue)
+    assertEqual("\(a)", "FrozenDictionary([\"x\": 1, \"y\": 2])")
+    assertEqual("\(FrozenDictionary<String, Int>())", "FrozenDictionary([:])")
+    let made: FrozenDictionary<Int, Int> = ["a": 1, "b": 2].map { ($0.1, $0.0.utf8Count) }.collect()
+    expect(made[2] == 1)
+    let dictionary: [Int: Int] = [4: 5]
+    assertEqual(FrozenDictionary<Int, Int>(dictionary)[4], 5)
+    expect(a[a.index(a.startIndex, offsetBy: 1)].0 == "y" && a.startIndex < a.endIndex)
+    expectPanic() { _ = a[a.endIndex] }
+}
+
+final class Alive {
+    var count = 0
+}
+
+final class Counted {
+    let alive: Alive
+    init(_ alive: Alive) {
+        self.alive = alive
+        alive.count += 1
+    }
+    deinit { alive.count -= 1 }
+}
+
+@test
+fn whatItHeldIsLetGoOf() {
+    let alive = Alive()
+    do {
+        let frozen = FrozenDictionary<Int, Counted>((0..<100).map { ($0 % 60, Counted(alive)) })
+        assertEqual(alive.count, 60)
+        let mapped = frozen.mapValues { $0.alive.count }
+        assertEqual(mapped[3], 60)
+    }
+    assertEqual(alive.count, 0)
+}
+
+@test
+async fn oneIsReadByManyTasks() {
+    let frozen = FrozenDictionary<String, String>((0..<500).map { ("key \($0)", "value \($0)") })
+    let total = await withTaskGroup(of: Int.self) { group in
+        for task in 0..<8 {
+            group.spawn {
+                var found = 0
+                for i in 0..<2000 {
+                    if let value = frozen["key \((i * 7 + task) % 600)"] {
+                        found += value.hasPrefix("value") ? 1 : 0
+                    }
+                }
+                return found
+            }
+        }
+        var sum = 0
+        for await each in group {
+            sum += each
+        }
+        return sum
+    }
+    expect(total > 8 * 1500)
+}
+
+@test
+fn toldApartByAHashing() {
+    let hashing = Hashing<String>.by { $0.lowercased() }
+    let frozen = FrozenHashingDictionary<String, Int>([("Über", 1), ("ÜBER", 2), ("a", 3), ("b", 4), ("c", 5), ("d", 6)], hashing: hashing)
+    expect(frozen["über"] == 2 && frozen["D"] == 6 && frozen["e"] == none && frozen.contains("C") && !frozen.contains("x"))
+    expect(frozen.keys == ["Über", "a", "b", "c", "d"] && frozen.values == [2, 3, 4, 5, 6] && frozen.count == 5 && !frozen.isEmpty)
+    var went: String[>..] = []
+    for (key, value) in frozen {
+        went.append("\(key)\(value)")
+    }
+    expect(went == ["Über2", "a3", "b4", "c5", "d6"])
+    expect(frozen.hashing.areSame("x", "X"))
+    assertEqual("\(FrozenHashingDictionary<Int, Int>([(1, 2)], hashing: .by { $0 % 10 }))", "FrozenHashingDictionary([1: 2])")
+    let nothing: (Int, Int)[>..] = []
+    assertEqual("\(FrozenHashingDictionary<Int, Int>(nothing, hashing: .by { $0 % 10 }))", "FrozenHashingDictionary([:])")
+    let members = FrozenHashingSet<Int>([1, 11, 2, 3, 4, 5, 6], hashing: .by { $0 % 10 })
+    expect(members.toArray() == [1, 2, 3, 4, 5, 6] && members.contains(26) && !members.contains(7) && members.count == 6 && !members.isEmpty)
+    expect(members.map { $0 * 2 } == [2, 4, 6, 8, 10, 12] && members.hashing.areSame(1, 21))
+    assertEqual("\(members)", "FrozenHashingSet([1, 2, 3, 4, 5, 6])")
+}

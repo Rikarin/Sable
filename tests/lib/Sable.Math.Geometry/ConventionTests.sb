@@ -64,25 +64,25 @@ fn compositionReadsLeftToRight() {
 
 @test
 fn positiveAnglesAreCounterClockwiseDownTheAxis() {
-    assert((Vector4(1, 0, 0, 1) * Matrix4x4(rotationZ: quarter)).nearEqual(Vector4(0, 1, 0, 1), tolerance: tolerance))
-    assert((Vector4(0, 1, 0, 1) * Matrix4x4(rotationX: quarter)).nearEqual(Vector4(0, 0, 1, 1), tolerance: tolerance))
-    assert((Vector4(0, 0, 1, 1) * Matrix4x4(rotationY: quarter)).nearEqual(Vector4(1, 0, 0, 1), tolerance: tolerance))
+    expect((Vector4(1, 0, 0, 1) * Matrix4x4(rotationZ: quarter)).nearEqual(Vector4(0, 1, 0, 1), tolerance: tolerance))
+    expect((Vector4(0, 1, 0, 1) * Matrix4x4(rotationX: quarter)).nearEqual(Vector4(0, 0, 1, 1), tolerance: tolerance))
+    expect((Vector4(0, 0, 1, 1) * Matrix4x4(rotationY: quarter)).nearEqual(Vector4(1, 0, 0, 1), tolerance: tolerance))
 }
 
 @test
 fn quaternionsTurnAsTheMatricesDo() {
-    assert(Matrix4x4(rotation: Quaternion(axis: Vector3.unitX, angle: quarter)).nearEqual(Matrix4x4(rotationX: quarter), tolerance: tolerance))
-    assert(Matrix4x4(rotation: Quaternion(axis: Vector3.unitY, angle: quarter)).nearEqual(Matrix4x4(rotationY: quarter), tolerance: tolerance))
-    assert(Matrix4x4(rotation: Quaternion(axis: Vector3.unitZ, angle: quarter)).nearEqual(Matrix4x4(rotationZ: quarter), tolerance: tolerance))
+    expect(Matrix4x4(rotation: Quaternion(axis: Vector3.unitX, angle: quarter)).nearEqual(Matrix4x4(rotationX: quarter), tolerance: tolerance))
+    expect(Matrix4x4(rotation: Quaternion(axis: Vector3.unitY, angle: quarter)).nearEqual(Matrix4x4(rotationY: quarter), tolerance: tolerance))
+    expect(Matrix4x4(rotation: Quaternion(axis: Vector3.unitZ, angle: quarter)).nearEqual(Matrix4x4(rotationZ: quarter), tolerance: tolerance))
 }
 
 @test
 fn quaternionsComposeLeftToRightAsTheMatricesDo() {
     let first = Quaternion(axis: Vector3.unitY, angle: 0.7)
     let second = Quaternion(axis: Vector3.unitX, angle: -1.1)
-    assert(Matrix4x4(rotation: first * second).nearEqual(Matrix4x4(rotation: first) * Matrix4x4(rotation: second), tolerance: tolerance))
+    expect(Matrix4x4(rotation: first * second).nearEqual(Matrix4x4(rotation: first) * Matrix4x4(rotation: second), tolerance: tolerance))
     let point = Vector3(1, 2, 3)
-    assert((first * second).transform(point).nearEqual(second.transform(first.transform(point)), tolerance: tolerance))
+    expect((first * second).transform(point).nearEqual(second.transform(first.transform(point)), tolerance: tolerance))
 }
 
 @test
@@ -96,7 +96,7 @@ fn aQuaternionsComponentsAreXYZThenW() {
 fn turningByAQuaternionIsTurningByItsMatrix() {
     let rotation = Quaternion(yaw: 0.3, pitch: -0.8, roll: 1.4)
     let point = Vector3(1, -2, 3)
-    assert(rotation.transform(point).nearEqual(Matrix4x4(rotation: rotation).transformDirection(point), tolerance: tolerance))
+    expect(rotation.transform(point).nearEqual(Matrix4x4(rotation: rotation).transformDirection(point), tolerance: tolerance))
 }
 
 @test
@@ -104,31 +104,31 @@ fn eulerAnglesAreYawThenPitchThenRollOfTheBody() {
     // Pitching a camera that has turned keeps its horizon level, which about
     // the world's axes it would not.
     let turned = Quaternion(yaw: 2.25, pitch: -0.38, roll: 0)
-    assert(nearEqual(turned.transform(Vector3.unitX).y, 0, tolerance: tolerance))
+    expect(nearEqual(turned.transform(Vector3.unitX).y, 0, tolerance: tolerance))
     // A positive pitch looks up, and a positive yaw to the left.
-    assert(Quaternion(yaw: 0, pitch: 0.5, roll: 0).transform(Vector3.forward).y > 0)
-    assert(Quaternion(yaw: 0.5, pitch: 0, roll: 0).transform(Vector3.forward).x < 0)
+    expect(Quaternion(yaw: 0, pitch: 0.5, roll: 0).transform(Vector3.forward).y > 0)
+    expect(Quaternion(yaw: 0.5, pitch: 0, roll: 0).transform(Vector3.forward).x < 0)
 }
 
 @test
 fn perspectiveDepthIsReversedOverZeroToOne() {
     let projection = Matrix4x4.perspectiveFieldOfView(quarter, aspectRatio: 16.0 / 9.0, near: 0.1, far: 1000)
-    assert(nearEqual(projection.transformPosition(Vector3(0, 0, -0.1)).z, 1, tolerance: 0.0001))
-    assert(nearEqual(projection.transformPosition(Vector3(0, 0, -1000)).z, 0, tolerance: 0.0001))
+    expect(nearEqual(projection.transformPosition(Vector3(0, 0, -0.1)).z, 1, tolerance: 0.0001))
+    expect(nearEqual(projection.transformPosition(Vector3(0, 0, -1000)).z, 0, tolerance: 0.0001))
 }
 
 @test
 fn infinitePerspectiveKeepsTheNearPlaneAtOneAndApproachesZero() {
     let projection = Matrix4x4.perspectiveFieldOfView(quarter, aspectRatio: 16.0 / 9.0, near: 0.1, far: F32.infinity)
     assertEqual(projection.transformPosition(Vector3(0, 0, -0.1)).z, 1)
-    assert(nearEqual(projection.transformPosition(Vector3(0, 0, -100000)).z, 0, tolerance: 0.0001))
+    expect(nearEqual(projection.transformPosition(Vector3(0, 0, -100000)).z, 0, tolerance: 0.0001))
 }
 
 @test
 fn orthographicDepthIsReversedOverZeroToOne() {
     let projection = Matrix4x4.orthographic(width: 20, height: 20, near: 1, far: 100)
-    assert(nearEqual(projection.transformPosition(Vector3(0, 0, -1)).z, 1, tolerance: 0.0001))
-    assert(nearEqual(projection.transformPosition(Vector3(0, 0, -100)).z, 0, tolerance: 0.0001))
+    expect(nearEqual(projection.transformPosition(Vector3(0, 0, -1)).z, 1, tolerance: 0.0001))
+    expect(nearEqual(projection.transformPosition(Vector3(0, 0, -100)).z, 0, tolerance: 0.0001))
 }
 
 @test
@@ -153,8 +153,8 @@ fn texturesAndPixelsBeginTopLeft() {
 @test
 fn equalityIsIeeeAndHashingIsNot() {
     let nan = Vector3(F32.nan, 0, 0)
-    assert(nan != nan)
-    assert(Vector3(-0.0, 0, 0) == Vector3.zero)
+    expect(nan != nan)
+    expect(Vector3(-0.0, 0, 0) == Vector3.zero)
     assertEqual(Vector3(-0.0, -0.0, -0.0).hashValue, Vector3.zero.hashValue)
     assertEqual(nan.hashValue, Vector3(F32.nan, 0, 0).hashValue)
 }

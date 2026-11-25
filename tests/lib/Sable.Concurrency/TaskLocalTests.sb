@@ -24,13 +24,13 @@ final class Tracked {
 @test
 fn aValueIsBoundForAsLongAsTheBodyRuns() {
     let local = TaskLocal(0)
-    assert(!local.isBound && local.value == 0)
+    expect(!local.isBound && local.value == 0)
     let inside = local.withValue(1) {
-        assert(local.isBound)
+        expect(local.isBound)
         return local.value + local.withValue(10) { local.value }
     }
     assertEqual(inside, 11)
-    assert(!local.isBound && local.value == 0)
+    expect(!local.isBound && local.value == 0)
 }
 
 @test
@@ -112,7 +112,7 @@ async fn aChildKeepsItsValueOnceTheBindingHasEnded() {
     }
     }
     assertEqual(gone.load(), 0)
-    assert(local.value == none)
+    expect(local.value == none)
     await opened.release()
     assertEqual(await child.value, "kept")
     // The child's was the last.

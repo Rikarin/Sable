@@ -17,7 +17,7 @@ fn valuesOfGeometryAreStructsOfTheirFields() {
     assertEqual(try! Json.encode(Vector3(1, 2, 3)), "{\"x\":1.0,\"y\":2.0,\"z\":3.0}")
     assertEqual(try! Json.encode(Int2(1, -2)), "{\"x\":1,\"y\":-2}")
     assertEqual(try! Json.encode(Plane(Vector3.up, 2)), "{\"normal\":{\"x\":0.0,\"y\":1.0,\"z\":0.0},\"d\":2.0}")
-    assert(try! Json.encode(Matrix4x4.identity).starts(with: "{\"m11\":1.0,\"m12\":0.0,"))
+    expect(try! Json.encode(Matrix4x4.identity).starts(with: "{\"m11\":1.0,\"m12\":0.0,"))
 }
 
 @test

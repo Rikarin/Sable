@@ -23,8 +23,8 @@ fn halvesRoundAndOverflowToInfinity() {
     assertEqual(Half4(Vector4(1, 2, 70000, -70000)).vector, Vector4(1, 2, F32.infinity, -F32.infinity))
     assertEqual(Half2(1.5, 2).vector, Vector2(1.5, 2))
     assertEqual(Half4(1, 2, 3, 4).vector, Vector4(1, 2, 3, 4))
-    assert(Half2(Vector2(F32.nan, 0)).vector.isNaN)
-    assert(nearEqual(Half2(Vector2(0.1, 0)).vector.x, 0.1, tolerance: 0.0001))
+    expect(Half2(Vector2(F32.nan, 0)).vector.isNaN)
+    expect(nearEqual(Half2(Vector2(0.1, 0)).vector.x, 0.1, tolerance: 0.0001))
     assertEqual(Half2(Vector2.one), Half2(1, 1))
 }
 
@@ -62,7 +62,7 @@ fn everyIntegerOfAFormatIsPackedBack() {
 
 @test
 fn aPackedRotationTurnsAlike() {
-    assert(PackedQuaternion(Quaternion.identity).quaternion.isIdentity)
+    expect(PackedQuaternion(Quaternion.identity).quaternion.isIdentity)
     for i in 0..<200 {
         let q = Quaternion(axis: Vector3(F32(i % 7) - 3, F32(i % 5) - 2, F32(i % 3) - 1.5), angle: F32(i) * 0.17 - 17)
         let packed = PackedQuaternion(q)

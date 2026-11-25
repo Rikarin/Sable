@@ -65,13 +65,13 @@ fn aValueGivenUpOnIsNotTried() {
 // The lists 'sable test' makes, in a directory of their own.
 fn listing(_ name: String, _ text: String, _ body: () -> Void) {
     let directory = TemporaryDirectory.path
-    assert(Runtime.writeFile("\(directory)/\(name).inputs", text, false))
+    expect(Runtime.writeFile("\(directory)/\(name).inputs", text, false))
     unsafe {
-        assert(Runtime.setEnvironment("SABLE_FUZZ_INPUTS", directory))
+        expect(Runtime.setEnvironment("SABLE_FUZZ_INPUTS", directory))
     }
     body()
     unsafe {
-        assert(Runtime.removeEnvironment("SABLE_FUZZ_INPUTS"))
+        expect(Runtime.removeEnvironment("SABLE_FUZZ_INPUTS"))
     }
     _ = Runtime.removeFile("\(directory)/\(name).inputs")
 }

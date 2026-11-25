@@ -53,7 +53,7 @@ fn everyThreadHasEndedWhenAScopeThrows() {
         }
         fail("it threw")
     } catch {
-        assert(ended.load())
+        expect(ended.load())
     }
     assertEqual(changed, 5)
 }

@@ -31,13 +31,13 @@ fn theDegreeAndTheGrainAreKeptTo() {
         parallelForChunks(0..<200, degree: degree, grain: 7) { chunk in
             let now = running.add(1) + 1
             most.max(now)
-            assert(chunk.count >= 7 || chunk.upperBound == 200)
+            require(chunk.count >= 7 || chunk.upperBound == 200)
             Thread.`yield`()
             total.add(chunk.count)
             running.subtract(1)
         }
         assertEqual(total.load(), 200)
-        assert(most.load() <= degree, "\(most.load()) ran at once")
+        require(most.load() <= degree, "\(most.load()) ran at once")
     }
 }
 
@@ -62,7 +62,7 @@ fn anErrorStopsTheLoop() {
     }
     } as? Bad
     assertEqual(error?.number, 100)
-    assert(done.load() < 1_000_000)
+    expect(done.load() < 1_000_000)
 }
 
 @test
@@ -72,7 +72,7 @@ fn oneOfSeveralErrorsIsThrown() {
         throw Bad { number: i }
     }
     } as? Bad
-    assert(error != none)
+    expect(error != none)
 }
 
 @test
@@ -140,8 +140,8 @@ async fn aLoopIsCancelledWithItsTask() {
     } else {
         task.cancel()
     }
-    assert(await task.value)
-    assert(done.load() < 10_000_000)
+    expect(await task.value)
+    expect(done.load() < 10_000_000)
 }
 
 @test
@@ -159,11 +159,11 @@ fn aBodyMaySpawnTasks() async {
 @test
 fn twoThreeAndFourAreInvoked() {
     let two = parallelInvoke({ 1 }, { "two" })
-    assert(two.0 == 1 && two.1 == "two")
+    expect(two.0 == 1 && two.1 == "two")
     let three = parallelInvoke({ 1 }, { "two" }, { [3] })
-    assert(three.0 == 1 && three.1 == "two" && three.2 == [3])
+    expect(three.0 == 1 && three.1 == "two" && three.2 == [3])
     let four = parallelInvoke({ 1 }, { 2 }, { 3 }, { 4 })
-    assert(four.0 + four.1 + four.2 + four.3 == 10)
+    expect(four.0 + four.1 + four.2 + four.3 == 10)
 }
 
 @test
@@ -201,7 +201,7 @@ async fn eachElementIsAwaitedByNoMoreThanTheDegree() throws {
         running.subtract(1)
     }
     assertEqual(total.load(), 465)
-    assert(most.load() <= 3)
+    expect(most.load() <= 3)
 }
 
 @test
@@ -247,7 +247,7 @@ async fn anAsyncLoopIsCancelledWithItsTask() {
     }
     await begun.acquire()
     task.cancel()
-    assert(await task.value)
+    expect(await task.value)
 }
 
 @test

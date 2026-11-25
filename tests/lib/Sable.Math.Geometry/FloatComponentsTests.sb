@@ -58,12 +58,12 @@ fn aTypeThatIsNotWhatItSaysIsRefused() {
 
 @test
 fn nearEqualIsAbsoluteNearZeroAndRelativeFurtherOut() {
-    assert(nearEqual(0 as F32, 0.0000005 as F32))
-    assert(!nearEqual(0 as F32, 0.000002 as F32))
-    assert(nearEqual(1_000_000 as F32, 1_000_000.5 as F32))
-    assert(!nearEqual(1_000_000 as F32, 1_000_002 as F32))
-    assert(nearEqual(F32.infinity, F32.infinity) && !nearEqual(F32.infinity, -F32.infinity) && !nearEqual(F32.infinity, 1 as F32))
-    assert(!nearEqual(F32.nan, F32.nan))
-    assert(nearEqual(1 as F64, 1.0000000000005 as F64) && !nearEqual(1 as F64, 1.00001 as F64))
-    assert(nearEqual(F64.infinity, F64.infinity) && !nearEqual(F64.infinity, 1 as F64) && !nearEqual(F64.nan, F64.nan))
+    expect(nearEqual(0 as F32, 0.0000005 as F32))
+    expect(!nearEqual(0 as F32, 0.000002 as F32))
+    expect(nearEqual(1_000_000 as F32, 1_000_000.5 as F32))
+    expect(!nearEqual(1_000_000 as F32, 1_000_002 as F32))
+    expect(nearEqual(F32.infinity, F32.infinity) && !nearEqual(F32.infinity, -F32.infinity) && !nearEqual(F32.infinity, 1 as F32))
+    expect(!nearEqual(F32.nan, F32.nan))
+    expect(nearEqual(1 as F64, 1.0000000000005 as F64) && !nearEqual(1 as F64, 1.00001 as F64))
+    expect(nearEqual(F64.infinity, F64.infinity) && !nearEqual(F64.infinity, 1 as F64) && !nearEqual(F64.nan, F64.nan))
 }

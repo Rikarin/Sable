@@ -65,10 +65,10 @@ fn lengthsAndDistancesAgreeWithTheirSquares() {
 
 @test
 fn aVectorIsMadeUnitAndAVanishingOneZero() {
-    assert(nearEqual(a.normalized().length, 1))
+    expect(nearEqual(a.normalized().length, 1))
     assertEqual(Vector3D.zero.normalized(), Vector3D.zero)
     assertEqual((a * 1e-15).normalized(), Vector3D.zero)
-    assert(!Vector3D.zero.normalized().isNaN)
+    expect(!Vector3D.zero.normalized().isNaN)
 }
 
 @test
@@ -80,9 +80,9 @@ fn theLeastTheGreatestAndTheBoundsAreByComponent() {
     assertEqual(a.minComponent, -3)
     assertEqual(a.maxComponent, 5)
     let nan = Vector3D(repeating: F64.nan)
-    assert(a.min(nan).isNaN && a.max(nan).isNaN && nan.minComponent.isNaN)
-    assert(Vector3D.zero.min(-Vector3D.zero).x.isSignMinus)
-    assert(!(-Vector3D.zero).max(Vector3D.zero).x.isSignMinus)
+    expect(a.min(nan).isNaN && a.max(nan).isNaN && nan.minComponent.isNaN)
+    expect(Vector3D.zero.min(-Vector3D.zero).x.isSignMinus)
+    expect(!(-Vector3D.zero).max(Vector3D.zero).x.isSignMinus)
 }
 
 @test
@@ -116,22 +116,22 @@ fn equalityIsExactAndNearEqualIsNot() {
     let almost = Vector3D.one
     var nudged = almost
     nudged.x = 1.0000000000005
-    assert(almost != nudged)
-    assert(almost.nearEqual(nudged))
+    expect(almost != nudged)
+    expect(almost.nearEqual(nudged))
     for i in 0..<3 {
         var other = almost
         other[i] = 1.5
-        assert(almost != other)
-        assert(!almost.nearEqual(other))
-        assert(almost.nearEqual(other, tolerance: 0.5))
+        require(almost != other)
+        require(!almost.nearEqual(other))
+        require(almost.nearEqual(other, tolerance: 0.5))
     }
     let nan = Vector3D(repeating: F64.nan)
-    assert(nan != nan && nan.isNaN && !nan.isFinite)
-    assert(-Vector3D.zero == Vector3D.zero)
+    expect(nan != nan && nan.isNaN && !nan.isFinite)
+    expect(-Vector3D.zero == Vector3D.zero)
     assertEqual((-Vector3D.zero).hashValue, Vector3D.zero.hashValue)
     assertEqual(a.hashValue, Vector3D(1, 5, -3).hashValue)
-    assert(Vector3D.zero.isZero && !a.isZero && !a.isNaN && a.isFinite)
-    assert(!Vector3D(repeating: F64.infinity).isFinite)
+    expect(Vector3D.zero.isZero && !a.isZero && !a.isNaN && a.isFinite)
+    expect(!Vector3D(repeating: F64.infinity).isFinite)
 }
 
 @test
@@ -148,7 +148,7 @@ fn itIsWrittenAsItsComponents() {
 fn itIsSerialisedByName() {
     let v = Vector3D(1.5, -2.25, 0)
     assertEqual(try! Json.decode(Vector3D.self, from: try! Json.encode(v)), v)
-    assert(try! Json.encode(v).contains("\"y\":-2.25"))
+    expect(try! Json.encode(v).contains("\"y\":-2.25"))
 }
 
 @test

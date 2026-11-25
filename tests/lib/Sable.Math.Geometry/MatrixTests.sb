@@ -73,9 +73,9 @@ fn theRowsAndTheColumnsAreRead() {
 @test
 fn theAxesOfATransformAreItsRows() {
     let turned = Matrix4x4(rotationY: pi / 2)
-    assert(turned.right.nearEqual(Vector3(0, 0, -1), tolerance: tolerance))
-    assert(turned.up.nearEqual(Vector3.up, tolerance: tolerance))
-    assert(turned.forward.nearEqual(Vector3(-1, 0, 0), tolerance: tolerance))
+    expect(turned.right.nearEqual(Vector3(0, 0, -1), tolerance: tolerance))
+    expect(turned.up.nearEqual(Vector3.up, tolerance: tolerance))
+    expect(turned.forward.nearEqual(Vector3(-1, 0, 0), tolerance: tolerance))
 }
 
 @test
@@ -83,17 +83,17 @@ fn aMirroredTransformDecomposesWithANegativeX() {
     let mirrored = Matrix4x4(scale: Vector3(1, -1, 1))
     let parts = mirrored.decomposed()!
     assertEqual(parts.scale, Vector3(-1, 1, 1))
-    assert(parts.matrix.nearEqual(mirrored, tolerance: tolerance))
+    expect(parts.matrix.nearEqual(mirrored, tolerance: tolerance))
 }
 
 @test
 fn aFlattenedTransformHasNoPartsAndNoInverse() {
-    assert(Matrix4x4(scale: Vector3(1, 0, 1)).decomposed() == none)
-    assert(Matrix4x4(scale: Vector3(0, 1, 1)).decomposed() == none)
-    assert(Matrix4x4(scale: Vector3(1, 1, 0)).decomposed() == none)
-    assert(Matrix4x4(scale: Vector3(1, 0, 1)).inverted() == none)
-    assert(Matrix3x3(scale: Vector3(0, 1, 1)).inverted() == none)
-    assert(Matrix3x2(scale: Vector2(0, 1)).inverted() == none)
+    expect(Matrix4x4(scale: Vector3(1, 0, 1)).decomposed() == none)
+    expect(Matrix4x4(scale: Vector3(0, 1, 1)).decomposed() == none)
+    expect(Matrix4x4(scale: Vector3(1, 1, 0)).decomposed() == none)
+    expect(Matrix4x4(scale: Vector3(1, 0, 1)).inverted() == none)
+    expect(Matrix3x3(scale: Vector3(0, 1, 1)).inverted() == none)
+    expect(Matrix3x2(scale: Vector2(0, 1)).inverted() == none)
     let flat = Matrix4x4(scale: Vector3(1, 0, 1))
     assertEqual(flat.normalMatrix, flat.linear)
 }
@@ -107,18 +107,18 @@ fn theNormalMatrixIsTheInverseTranspose() {
 @test
 fn aRotationFromOneDirectionToAnotherTakesItThere() {
     let turn = Quaternion(from: Vector3.unitX, to: Vector3.unitY)
-    assert(turn.transform(Vector3.unitX).nearEqual(Vector3.unitY, tolerance: tolerance))
+    expect(turn.transform(Vector3.unitX).nearEqual(Vector3.unitY, tolerance: tolerance))
     assertEqual(Quaternion(from: Vector3.unitX, to: Vector3.unitX * 3), Quaternion.identity)
     for direction in [Vector3.unitX, Vector3.unitY, Vector3.unitZ, Vector3.one.normalized()] {
-        assert(Quaternion(from: direction, to: -direction).transform(direction).nearEqual(-direction, tolerance: tolerance))
+        require(Quaternion(from: direction, to: -direction).transform(direction).nearEqual(-direction, tolerance: tolerance))
     }
 }
 
 @test
 fn theAxisAndTheAngleComeBackOutOfARotation() {
     let turn = Quaternion(axis: Vector3.unitY * 4, angle: pi / 2)
-    assert(nearEqual(turn.angle, pi / 2, tolerance: tolerance))
-    assert(turn.axis.nearEqual(Vector3.unitY, tolerance: tolerance))
+    expect(nearEqual(turn.angle, pi / 2, tolerance: tolerance))
+    expect(turn.axis.nearEqual(Vector3.unitY, tolerance: tolerance))
     assertEqual(Quaternion.identity.angle, 0)
     assertEqual(Quaternion.identity.axis, Vector3.unitY)
     assertEqual(Quaternion(axis: Vector3.zero, angle: 1), Quaternion.identity)
@@ -130,7 +130,7 @@ fn theAxisAndTheAngleComeBackOutOfARotation() {
 fn eachGreatestComponentIsFoundInAMatrix() {
     for q in [Quaternion(0.9, 0.1, 0.2, 0.1), Quaternion(0.1, 0.9, 0.2, 0.1), Quaternion(0.1, 0.2, 0.9, 0.1), Quaternion(0.1, 0.2, 0.1, 0.9)] {
         let unit = q.normalized()
-        assert(Quaternion(rotation: Matrix4x4(rotation: unit)).sameRotation(as: unit, tolerance: tolerance))
+        require(Quaternion(rotation: Matrix4x4(rotation: unit)).sameRotation(as: unit, tolerance: tolerance))
         assertEqual(Matrix3x3(rotation: unit), Matrix4x4(rotation: unit).linear)
     }
 }
@@ -139,17 +139,17 @@ fn eachGreatestComponentIsFoundInAMatrix() {
 fn slerpGoesTheShortWayRound() {
     let to = Quaternion(axis: Vector3.unitZ, angle: 350 * pi / 180)
     let halfway = Quaternion.identity.slerp(to: to, 0.5).transform(Vector3.unitX)
-    assert(halfway.nearEqual(Quaternion(axis: Vector3.unitZ, angle: -5 * pi / 180).transform(Vector3.unitX), tolerance: tolerance))
+    expect(halfway.nearEqual(Quaternion(axis: Vector3.unitZ, angle: -5 * pi / 180).transform(Vector3.unitX), tolerance: tolerance))
     let nearly = Quaternion.identity.nlerp(to: to, 0.5).transform(Vector3.unitX)
-    assert(nearly.nearEqual(halfway, tolerance: tolerance))
+    expect(nearly.nearEqual(halfway, tolerance: tolerance))
 }
 
 @test
 fn slerpOfNearlyTheSameRotationsIsOne() {
     let from = Quaternion(axis: Vector3.unitY, angle: 1)
     let result = from.slerp(to: Quaternion(axis: Vector3.unitY, angle: 1.0000001), 0.5)
-    assert(nearEqual(result.length, 1))
-    assert(nearEqual(from.slerp(to: -from, 0.5).length, 1))
+    expect(nearEqual(result.length, 1))
+    expect(nearEqual(from.slerp(to: -from, 0.5).length, 1))
     assertEqual(from.slerp(to: from, 7).sameRotation(as: from), true)
 }
 
@@ -177,12 +177,12 @@ fn quaternionsAreAddedScaledAndCompared() {
     assertEqual(Quaternion(q.components), q)
     assertEqual(q.xyz, Vector3(1, 2, 3))
     assertEqual(q.lengthSquared, 30)
-    assert(q.sameRotation(as: -q) && !q.nearEqual(-q) && !Quaternion(1, 0, 0, 0).sameRotation(as: Quaternion.identity))
-    assert(Quaternion.identity.isIdentity && !q.isIdentity)
+    expect(q.sameRotation(as: -q) && !q.nearEqual(-q) && !Quaternion(1, 0, 0, 0).sameRotation(as: Quaternion.identity))
+    expect(Quaternion.identity.isIdentity && !q.isIdentity)
     for i in 0..<4 {
         var other = q.components
         other[i] += 1
-        assert(q != Quaternion(other))
+        require(q != Quaternion(other))
     }
     assertEqual(Set([q, q, -q]).count, 2)
     assertEqual(Quaternion.componentCount, 4)
@@ -216,13 +216,13 @@ fn projectionsRejectWhatIsNoCamera() {
 @test
 fn anOffCenterProjectionMapsItsRectangleToTheSquare() {
     let flat = Matrix4x4.orthographicOffCenter(left: 0, right: 100, bottom: 0, top: 50, near: 0, far: 10)
-    assert(flat.transformPosition(Vector3.zero).nearEqual(Vector3(-1, -1, 1), tolerance: tolerance))
-    assert(flat.transformPosition(Vector3(100, 50, -10)).nearEqual(Vector3(1, 1, 0), tolerance: tolerance))
+    expect(flat.transformPosition(Vector3.zero).nearEqual(Vector3(-1, -1, 1), tolerance: tolerance))
+    expect(flat.transformPosition(Vector3(100, 50, -10)).nearEqual(Vector3(1, 1, 0), tolerance: tolerance))
     let deep = Matrix4x4.perspectiveOffCenter(left: -1, right: 3, bottom: -2, top: 1, near: 2, far: 10)
-    assert(deep.transformPosition(Vector3(-1, -2, -2)).nearEqual(Vector3(-1, -1, 1), tolerance: tolerance))
-    assert(deep.transformPosition(Vector3(15, 5, -10)).nearEqual(Vector3(1, 1, 0), tolerance: tolerance))
+    expect(deep.transformPosition(Vector3(-1, -2, -2)).nearEqual(Vector3(-1, -1, 1), tolerance: tolerance))
+    expect(deep.transformPosition(Vector3(15, 5, -10)).nearEqual(Vector3(1, 1, 0), tolerance: tolerance))
     let centered = Matrix4x4.perspective(width: 2, height: 2, near: 1, far: 10)
-    assert(centered.nearEqual(Matrix4x4.perspectiveFieldOfView(pi / 2, aspectRatio: 1, near: 1, far: 10)))
+    expect(centered.nearEqual(Matrix4x4.perspectiveFieldOfView(pi / 2, aspectRatio: 1, near: 1, far: 10)))
 }
 
 @test
@@ -233,9 +233,9 @@ fn aJitterOffsetsEveryDepthAlike() {
     for point in [Vector3(0, 0, 0), Vector3(-3, 1, -5), Vector3(1, 1, 1)] {
         let plain = (view * projection).transformPosition(point)
         let moved = (view * projection).jittered(by: offset).transformPosition(point)
-        assert((moved - plain).nearEqual(Vector3(offset, 0), tolerance: tolerance))
+        require((moved - plain).nearEqual(Vector3(offset, 0), tolerance: tolerance))
     }
-    assert((view * projection.jittered(by: offset)).nearEqual((view * projection).jittered(by: offset), tolerance: tolerance))
+    expect((view * projection.jittered(by: offset)).nearEqual((view * projection).jittered(by: offset), tolerance: tolerance))
 }
 
 @test
@@ -243,9 +243,9 @@ fn aPositionIsDividedByItsW() {
     let projection = Matrix4x4.perspectiveFieldOfView(pi / 2, aspectRatio: 1, near: 0.1, far: 100)
     let near = projection.transformPosition(Vector3(1, 0, -1))
     let far = projection.transformPosition(Vector3(1, 0, -2))
-    assert(nearEqual(far.x, near.x / 2, tolerance: tolerance))
+    expect(nearEqual(far.x, near.x / 2, tolerance: tolerance))
     // Nothing to divide by at the camera itself.
-    assert(projection.transformPosition(Vector3.one * 0).isFinite)
+    expect(projection.transformPosition(Vector3.one * 0).isFinite)
 }
 
 @test
@@ -280,18 +280,18 @@ fn matrix3x3ComposesAndMovesAsItsLargerOneDoes() {
     let small = Matrix3x3(rotation: turn)
     let large = Matrix4x4(rotation: turn)
     assertEqual(small.transform(Vector3.unitX), large.transformDirection(Vector3.unitX))
-    assert((small * small).nearEqual((large * large).linear))
+    expect((small * small).nearEqual((large * large).linear))
     assertEqual(small.row1, large.right)
     assertEqual(Matrix3x3.componentCount, 9)
     assertEqual(Set([small, small, Matrix3x3.identity]).count, 2)
-    assert(!small.nearEqual(Matrix3x3.identity))
+    expect(!small.nearEqual(Matrix3x3.identity))
 }
 
 @test
 fn matrix3x2MovesPointsOfThePlane() {
     let m = Matrix3x2(rotation: pi / 2, about: Vector2(1, 1))
-    assert(m.transformPosition(Vector2(2, 1)).nearEqual(Vector2(1, 2)))
-    assert(m.transformDirection(Vector2.unitX).nearEqual(Vector2.unitY))
+    expect(m.transformPosition(Vector2(2, 1)).nearEqual(Vector2(1, 2)))
+    expect(m.transformDirection(Vector2.unitX).nearEqual(Vector2.unitY))
     var moved = [Vector2.zero, Vector2.zero]
     Matrix3x2(translation: Vector2(1, 2)).transformPositions([Vector2.one, Vector2.zero], into: &moved)
     assertEqual(moved, [Vector2(2, 3), Vector2(1, 2)])
@@ -303,7 +303,7 @@ fn matrix3x2MovesPointsOfThePlane() {
     assertEqual(a + a, a * 2)
     assertEqual(-a + a, a - a)
     assertEqual(a.translation, Vector2(5, 6))
-    assert((a * a.inverted()!).isIdentity && Matrix3x2.identity.isIdentity && !a.isIdentity)
+    expect((a * a.inverted()!).isIdentity && Matrix3x2.identity.isIdentity && !a.isIdentity)
     assertEqual(Matrix4x4(a).transformPosition(Vector3(1, 1, 0)).xy, a.transformPosition(Vector2.one))
     assertEqual(Set([a, a, Matrix3x2.identity]).count, 2)
     assertEqual(Matrix3x2.componentCount, 6)
@@ -316,12 +316,12 @@ fn transformsAreBlendedInvertedAndAdded() {
     assertEqual(a.lerp(to: Transform.identity, -1).translation, a.translation)
     assertEqual(Transform(scale: Vector3.zero).inverted().scale, Vector3.zero)
     assertEqual(Transform.identity * Transform.identity, Transform.identity)
-    assert(a.nearEqual(a) && !a.nearEqual(Transform.identity))
+    expect(a.nearEqual(a) && !a.nearEqual(Transform.identity))
     assertEqual(Set([a, a, Transform.identity]).count, 2)
     assertEqual(try! Json.decode(Transform.self, from: try! Json.encode(a)), a)
     assertEqual("\(Transform.identity:.0)", "((0, 0, 0), (0, 0, 0, 1), (1, 1, 1))")
     assertEqual("\(Transform.identity:>60.0)".count, 60)
-    assert(a.debugDescription().starts(with: "Transform(translation: Vector3(1.0, 2.0, 3.0), rotation: Quaternion("))
+    expect(a.debugDescription().starts(with: "Transform(translation: Vector3(1.0, 2.0, 3.0), rotation: Quaternion("))
 }
 
 @test
@@ -329,10 +329,10 @@ fn matricesAreEqualHashedWrittenAndSerialised() {
     for i in 1...4 {
         var other = counted
         other[i, i] += 1
-        assert(other != counted && !other.nearEqual(counted))
+        require(other != counted && !other.nearEqual(counted))
     }
     assertEqual(Set([counted, counted, Matrix4x4.identity]).count, 2)
-    assert(Matrix4x4.identity.isIdentity && !counted.isIdentity)
+    expect(Matrix4x4.identity.isIdentity && !counted.isIdentity)
     assertEqual(Matrix4x4.componentCount, 16)
     assertEqual(try! Json.decode(Matrix4x4.self, from: try! Json.encode(counted)), counted)
     assertEqual(try! Json.decode(Matrix3x3.self, from: try! Json.encode(counted.linear)), counted.linear)
@@ -342,8 +342,8 @@ fn matricesAreEqualHashedWrittenAndSerialised() {
     assertEqual("\(Matrix3x3.identity:.0)", "(1, 0, 0, 0, 1, 0, 0, 0, 1)")
     assertEqual("\(Matrix3x2.identity:.0)", "(1, 0, 0, 1, 0, 0)")
     assertEqual("\(Quaternion.identity:?)", "Quaternion(0.0, 0.0, 0.0, 1.0)")
-    assert(counted.debugDescription().starts(with: "Matrix4x4(Vector4(1.0, 2.0, 3.0, 4.0), "))
-    assert(Matrix3x3.identity.debugDescription().starts(with: "Matrix3x3(Vector3("))
+    expect(counted.debugDescription().starts(with: "Matrix4x4(Vector4(1.0, 2.0, 3.0, 4.0), "))
+    expect(Matrix3x3.identity.debugDescription().starts(with: "Matrix3x3(Vector3("))
     assertEqual(Matrix3x2.identity.debugDescription(), "Matrix3x2(Vector2(1.0, 0.0), Vector2(0.0, 1.0), Vector2(0.0, 0.0))")
     assertEqual(Quaternion.identity.debugDescription(), "Quaternion(0.0, 0.0, 0.0, 1.0)")
 }

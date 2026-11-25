@@ -11,27 +11,27 @@ import Sable.Testing
 fn listsAndSetsAreSequences() throws {
     let list = ImmutableList<Int>(0..<100)
     assertEqual(try Json.encode(list[0..<3]), "[0,1,2]")
-    assert(try Json.decode(ImmutableList<Int>.self, from: Json.encode(list)) == list)
+    expect(try Json.decode(ImmutableList<Int>.self, from: Json.encode(list)) == list)
     let members = ImmutableSet<String>(["a", "b"])
-    assert(try Json.decode(ImmutableSet<String>.self, from: "[\"b\",\"a\",\"b\"]") == members)
-    assert(try Json.decode(ImmutableSet<String>.self, from: Json.encode(members)) == members)
+    expect(try Json.decode(ImmutableSet<String>.self, from: "[\"b\",\"a\",\"b\"]") == members)
+    expect(try Json.decode(ImmutableSet<String>.self, from: Json.encode(members)) == members)
     let sorted = ImmutableSortedSet<Int>([3, 1, 2])
     assertEqual(try Json.encode(sorted), "[1,2,3]")
-    assert(try Json.decode(ImmutableSortedSet<Int>.self, from: "[2,3,1]") == sorted)
+    expect(try Json.decode(ImmutableSortedSet<Int>.self, from: "[2,3,1]") == sorted)
     let frozen = FrozenSet<Int>([3, 1, 2])
     assertEqual(try Json.encode(frozen), "[3,1,2]")
-    assert(try Json.decode(FrozenSet<Int>.self, from: "[1,2,3,3]") == frozen)
+    expect(try Json.decode(FrozenSet<Int>.self, from: "[1,2,3,3]") == frozen)
 }
 
 @test
 fn dictionariesAreMaps() throws {
     let map = ImmutableDictionary<String, Int>([("a", 1), ("b", 2)])
-    assert(try Json.decode(ImmutableDictionary<String, Int>.self, from: Json.encode(map)) == map)
+    expect(try Json.decode(ImmutableDictionary<String, Int>.self, from: Json.encode(map)) == map)
     assertEqual(try Json.encode(map.removing("b")), "{\"a\":1}")
     let sorted = ImmutableSortedDictionary<String, Int>([("b", 2), ("a", 1)])
     assertEqual(try Json.encode(sorted), "{\"a\":1,\"b\":2}")
-    assert(try Json.decode(ImmutableSortedDictionary<String, Int>.self, from: Json.encode(sorted)) == sorted)
+    expect(try Json.decode(ImmutableSortedDictionary<String, Int>.self, from: Json.encode(sorted)) == sorted)
     let frozen = FrozenDictionary<String, Int>([("b", 2), ("a", 1)])
     assertEqual(try Json.encode(frozen), "{\"b\":2,\"a\":1}")
-    assert(try Json.decode(FrozenDictionary<String, Int>.self, from: Json.encode(frozen)) == frozen)
+    expect(try Json.decode(FrozenDictionary<String, Int>.self, from: Json.encode(frozen)) == frozen)
 }

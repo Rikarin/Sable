@@ -44,12 +44,12 @@ fn eachThreadHasAValueOfItsOwn() {
 fn aValueIsMadeWhenItIsFirstAskedFor() {
     let made = Atomic(0)
     let local = ThreadLocal { made.add(1) }
-    assert(!local.isMade && made.load() == 0)
+    expect(!local.isMade && made.load() == 0)
     assertEqual(local.value, 0)
     assertEqual(local.value, 0)
-    assert(local.isMade)
+    expect(local.isMade)
     Thread.spawn {
-        assert(!local.isMade)
+        expect(!local.isMade)
         assertEqual(local.value, 1)
     }.join()
     assertEqual(made.load(), 2)
@@ -194,7 +194,7 @@ async fn aWorkersValuesAreThere() {
         return greatest
     }
     // However many workers ran them.
-    assert(total >= 1 && total <= 200)
+    expect(total >= 1 && total <= 200)
 }
 
 // What the body throws; an error of no other, if it throws nothing.
@@ -242,6 +242,6 @@ fn aThreadOfCsDestroysItsValues() {
     }
     assertEqual(log.withLock { $0 }, ["c", "c", "c"])
     let seen = ids.withLock { $0 }
-    assert(seen[0] != seen[1] && seen[1] != seen[2] && seen[0] != seen[2])
+    expect(seen[0] != seen[1] && seen[1] != seen[2] && seen[0] != seen[2])
 }
 #endif

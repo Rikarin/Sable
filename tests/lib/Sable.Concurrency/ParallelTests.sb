@@ -76,8 +76,8 @@ fn unorderedResultsAreAllThere() {
     let found = xs.parallel.unordered.filter { $0 % 7 == 0 }
     assertEqual(found.sorted(), xs.filter { $0 % 7 == 0 }.sorted())
     let first = xs.parallel.unordered.first { $0 % 7 == 0 }
-    assert(first! % 7 == 0)
-    assert(xs.parallel.unordered.firstIndex { $0 > 20_000 } == none)
+    expect(first! % 7 == 0)
+    expect(xs.parallel.unordered.firstIndex { $0 > 20_000 } == none)
 }
 
 @test
@@ -101,7 +101,7 @@ fn theFirstIsFoundWithoutTheRest() {
         return n == 1000
     }
     assertEqual(found, 1000)
-    assert(looked.load() < 10_000_000)
+    expect(looked.load() < 10_000_000)
     for target in [0, 1, 777, 29_999] {
         assertEqual((0..<30_000).parallel.firstIndex { $0 >= target }, target)
     }
@@ -110,8 +110,8 @@ fn theFirstIsFoundWithoutTheRest() {
         checked.add(1)
         return n % 1000 == 999
     })
-    assert(checked.load() < 10_000_000)
-    assert(!(0..<10_000_000).parallel.allSatisfy { $0 < 10 })
+    expect(checked.load() < 10_000_000)
+    expect(!(0..<10_000_000).parallel.allSatisfy { $0 < 10 })
 }
 
 @test
@@ -167,15 +167,15 @@ fn noOtherHoldersArrayIsChanged() {
     let kept = xs
     xs.parallelModify { $0 = -1 }
     assertEqual(kept, numbers(1000))
-    assert(xs.allSatisfy { $0 == -1 })
+    expect(xs.allSatisfy { $0 == -1 })
 }
 
 @test
 fn anArrayIsChangedAChunkAtATime() {
     var xs = (0..<100).toArray()
     xs.parallelModifyChunks(of: 8) { chunk in
-        assert(chunk.startIndex % 8 == 0)
-        assert(chunk.count == 8 || (chunk.startIndex == 96 && chunk.count == 4))
+        expect(chunk.startIndex % 8 == 0)
+        expect(chunk.count == 8 || (chunk.startIndex == 96 && chunk.count == 4))
         chunk.swapAt(0, chunk.count - 1)
         chunk[1] = chunk[1] * 10
         chunk.swapAt(2, 2)
@@ -189,7 +189,7 @@ fn anArrayIsChangedAChunkAtATime() {
     whole.parallelModifyChunks(of: 0, degree: 3, grain: 10) { chunk in
         chunk.modifyEach { $0 = chunk.startIndex }
     }
-    assert(whole.isSorted())
+    expect(whole.isSorted())
 }
 
 @test
@@ -223,7 +223,7 @@ fn anErrorLeavesEveryElementThere() {
     }
     } as? Bad
     assertEqual(error?.number, 1500)
-    assert(texts.enumerated().allSatisfy { $0.1 == "text \($0.0)" || $0.1 == "text \($0.0)." })
+    expect(texts.enumerated().allSatisfy { $0.1 == "text \($0.0)" || $0.1 == "text \($0.0)." })
 }
 
 @test
@@ -241,10 +241,10 @@ fn anArrayIsSortedByHoweverManyThreads() {
     }
     var ordered = (0..<50_000).toArray()
     ordered.parallelSort(degree: 4)
-    assert(ordered.isSorted())
+    expect(ordered.isSorted())
     var reversed = (0..<50_000).map { 50_000 - $0 }
     reversed.parallelSort(degree: 4)
-    assert(reversed.isSorted())
+    expect(reversed.isSorted())
     var texts = numbers(20_000).map { "\($0)" }
     let expected = texts.sorted()
     texts.parallelSort(degree: 4)

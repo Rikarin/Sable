@@ -63,7 +63,7 @@ fn itIsEqualHashedWrittenAndSerialised() {
     for i in 0..<2 {
         var other = a
         other[i] += 1
-        assert(a != other)
+        require(a != other)
     }
     assertEqual("\(a)", "(7, -3)")
     assertEqual(a.debugDescription(), "Int2(7, -3)")

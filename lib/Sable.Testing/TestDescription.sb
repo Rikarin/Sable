@@ -46,20 +46,3 @@ extension TestCase {
         return line.build()
     }
 }
-
-// The text as JSON writes it.
-fn jsonText(_ text: String) -> String {
-    let json = TextBuilder()
-    json.append("\"")
-    for c in text {
-        if c == '"' || c == '\\' {
-            json.append("\\\(c)")
-        } else if c < ' ' {
-            json.append("\\u\(c.codePoint:04x)")
-        } else {
-            json.append("\(c)")
-        }
-    }
-    json.append("\"")
-    return json.build()
-}

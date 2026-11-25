@@ -23,7 +23,7 @@ fn aThreadGivesWhatItsBodyGives() {
     assertEqual(joined.join(), "a-b-c")
     // Any number of times.
     assertEqual(joined.join(), "a-b-c")
-    assert(joined.isFinished)
+    expect(joined.isFinished)
 }
 
 @test
@@ -89,8 +89,8 @@ fn aJoinWithALimitGivesUpWhenItIsReached() {
         Thread.park()
         return 1
     }
-    assert(parked.join(atMost: Duration.milliseconds(2)) == none)
-    assert(!parked.isFinished)
+    expect(parked.join(atMost: Duration.milliseconds(2)) == none)
+    expect(!parked.isFinished)
     parked.thread.unpark()
     assertEqual(parked.join(atMost: Duration.seconds(60)), 1)
 }
@@ -104,7 +104,7 @@ fn aThreadLetGoOfEndsAllTheSame() {
         latch.countDown()
     }.detach()
     latch.wait()
-    assert(done.load())
+    expect(done.load())
 }
 
 @test
@@ -114,7 +114,7 @@ fn whatAThreadCapturesAndGivesIsLetGoOf() {
         let one = Counted(gone)
         return one.gone === gone
     }
-    assert(made.join())
+    expect(made.join())
     assertEqual(gone.load(), 1)
     let text = "captured \(gone.load())"
     let count = Thread.spawn { [text, text, text] }
@@ -124,19 +124,19 @@ fn whatAThreadCapturesAndGivesIsLetGoOf() {
 @test
 fn eachThreadHasANumberAndItsName() {
     let here = Thread.current
-    assert(here == Thread.current && here.id == Thread.current.id)
+    expect(here == Thread.current && here.id == Thread.current.id)
     let named = Thread.spawn(name: "a name longer than fifteen bytes: ünïcode") { Thread.current }
     let itself = named.join()
-    assert(itself == named.thread && itself != here)
+    expect(itself == named.thread && itself != here)
     assertEqual(itself.name, "a name longer than fifteen bytes: ünïcode")
     assertNotEqual(itself.id, here.id)
-    assert(Thread.spawn { Thread.current.name }.join() == none)
+    expect(Thread.spawn { Thread.current.name }.join() == none)
 }
 
 @test
 async fn aWorkerIsNamedForItsNumber() {
     let name = await Task.spawn { Thread.current.name }.value
-    assert(name == "main" || name!.hasPrefix("sable-worker-"))
+    expect(name == "main" || name!.hasPrefix("sable-worker-"))
 }
 
 @test
@@ -153,8 +153,8 @@ fn aThreadHasTheStackItIsGiven() {
 @test
 fn aThreadRunsAtWhatPriorityTheSystemAllows() {
     // Not the lowest, which may not run while the machine is busy.
-    assert(ThreadPriority.Low != ThreadPriority.High)
-    assert(ThreadPriority.Lowest.debugDescription().hasSuffix("Lowest"))
+    expect(ThreadPriority.Low != ThreadPriority.High)
+    expect(ThreadPriority.Lowest.debugDescription().hasSuffix("Lowest"))
     for priority in [ThreadPriority.Low, ThreadPriority.Normal, ThreadPriority.High, ThreadPriority.Highest] {
         assertEqual(Thread.spawn(priority: priority) { 5 }.join(), 5)
     }
@@ -163,11 +163,11 @@ fn aThreadRunsAtWhatPriorityTheSystemAllows() {
 @test
 fn aTokenIsTakenOnceAndKeptUntilItIs() {
     let thread = Thread.current
-    assert(!Thread.park(atMost: Duration.milliseconds(1)))
+    expect(!Thread.park(atMost: Duration.milliseconds(1)))
     thread.unpark()
     thread.unpark()
     Thread.park()
-    assert(!Thread.park(atMost: Duration.milliseconds(1)))
+    expect(!Thread.park(atMost: Duration.milliseconds(1)))
 }
 
 @test
@@ -197,7 +197,7 @@ fn aSleepTakesAtLeastItsTime() {
     Thread.sleep(Duration.milliseconds(3))
     Thread.sleep(Duration.zero)
     Thread.sleep(Duration.milliseconds(-1))
-    assert(Runtime.monotonicNanoseconds() - before >= 3_000_000)
+    expect(Runtime.monotonicNanoseconds() - before >= 3_000_000)
     Thread.`yield`()
 }
 
@@ -241,7 +241,7 @@ fn theMainThreadRunsTheMainActorsTasksWhileItBlocks() {
     let there = Thread.blockOn { () -> Bool in
         await Task.spawn { await onTheMainActor(here) }.value
     }
-    assert(there)
+    expect(there)
 }
 
 @MainActor
@@ -286,7 +286,7 @@ fn manyThreadsMayRunAtOnce() {
 
 @test
 fn thereIsAtLeastOneProcessor() {
-    assert(Thread.availableParallelism >= 1)
+    expect(Thread.availableParallelism >= 1)
 }
 
 // What the body throws; an error of no other, if it throws nothing.

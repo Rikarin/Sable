@@ -302,6 +302,9 @@ public sealed class TestFeatureTests {
         const string program = "@test\nfn p() { forAll { (xs: I32[>..]) in expect(xs.count < 8) } }";
         static string Cases(Run run) => run.Stdout.Split('\n').Single(static l => l.Contains("made simpler from", StringComparison.Ordinal));
         Assert.Equal(Cases(Runs(program, "--seed", "42")), Cases(Runs(program, "--seed", "42")));
+        // With none, they are the same each run; 'random' chooses one.
+        Assert.Equal(Cases(Runs(program)), Cases(Runs(program)));
+        Assert.Contains("of seed ", Runs(program, "--seed", "random").Stdout, StringComparison.Ordinal);
         Assert.Contains("of seed 42: 'sable test --seed 42' runs it again", Runs(program, "--seed", "42").Stdout, StringComparison.Ordinal);
     }
 
@@ -448,4 +451,146 @@ public sealed class TestFeatureTests {
             }
         }
         """);
+
+    /// <summary>Suites, fixtures of each lifetime, skips, tries and the rest (#107), as the run and its reports tell of them.</summary>
+    const string Structured = """
+        module M
+        import Sable.Testing
+
+        final class Shared: Fixture {
+            static var lifetime: FixtureLifetime => .PerSuite
+            let pack: Pack
+            init(pack: Pack) { self.pack = pack }
+            async fn tearDown() throws { print("shared down") }
+        }
+
+        final class Pack: Fixture {
+            static var lifetime: FixtureLifetime => .PerPackage
+            async fn tearDown() throws { print("pack down") }
+        }
+
+        @suite(tags: ["slow"], retry: 1)
+        final class Orders {
+            let shared: Shared
+            init(shared: Shared) { self.shared = shared }
+
+            @test
+            fn places() { expect(TestContext.current.tags == ["slow"]) }
+
+            @test
+            fn traps() { print([1][3]) }
+
+            @test
+            fn again() { expect(TestContext.current.attempt == 2) }
+
+            @test(skip: "no <db>")
+            fn skipped() { }
+
+            @test
+            fn found() throws { try skip("no network") }
+        }
+
+        @test(explicit)
+        fn asked() { TestContext.current.attach("kept", named: "k.txt") }
+        """;
+
+    [Fact]
+    public void SuitesAndTheirFixturesAreRunAndReported() {
+        if (!CanBuild) {
+            return;
+        }
+
+        // The harness on its own, and 'sable test', go the same way.
+        var own = Native(Structured);
+        var directory = Directory.CreateTempSubdirectory("sable-suites-");
+        try {
+            var file = Path.Combine(directory.FullName, "t.sb");
+            File.WriteAllText(file, Structured);
+            var json = Path.Combine(directory.FullName, "t.json");
+            var junit = Path.Combine(directory.FullName, "t.xml");
+            var trx = Path.Combine(directory.FullName, "t.trx");
+            var (code, text) = Sable(file, "--json", json, "--junit", junit, "--trx", trx);
+            Assert.Equal((1, 1), (own.ExitCode, code));
+            foreach (var run in new[] { own.Stdout, text }) {
+                Assert.Contains("test M.Orders.places ... ok (", run, StringComparison.Ordinal);
+                Assert.Contains("test M.Orders.traps ... FAILED (", run, StringComparison.Ordinal);
+                Assert.Matches(@"test M\.Orders\.again \.\.\. ok \(.*\), on try 2\n", run);
+                Assert.Contains("test M.Orders.skipped ... skipped: no <db>\n", run, StringComparison.Ordinal);
+                Assert.Contains("test M.Orders.found ... skipped: no network\n", run, StringComparison.Ordinal);
+                Assert.Contains("test M.asked ... skipped: it is run only when asked for\n", run, StringComparison.Ordinal);
+                Assert.Contains("---- M.Orders.traps (t", run, StringComparison.Ordinal);
+                Assert.Contains("    shared down\n    pack down\n", run, StringComparison.Ordinal);
+                Assert.Contains("2 passed; 1 failed; 3 skipped; 0 filtered out", run, StringComparison.Ordinal);
+            }
+
+            var events = File.ReadAllLines(json).Select(static l => System.Text.Json.JsonDocument.Parse(l).RootElement).ToList();
+            Assert.Equal(["run", ..Enumerable.Repeat("finished", 6), "ended"], events.Select(static e => e.GetProperty("event").GetString()!));
+            Assert.Equal("no <db>", events.Single(static e => e.TryGetProperty("name", out var n) && n.GetString() == "M.Orders.skipped").GetProperty("reason").GetString());
+
+            var suites = XDocument.Load(junit).Root!;
+            Assert.Equal(("6", "1", "3"), ((string)suites.Attribute("tests")!, (string)suites.Attribute("failures")!, (string)suites.Attribute("skipped")!));
+            Assert.Equal(["no <db>", "no network", "it is run only when asked for"], suites.Descendants("skipped").Select(static s => (string)s.Attribute("message")!));
+            XNamespace space = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+            Assert.Equal("3", (string)XDocument.Load(trx).Descendants(space + "Counters").Single().Attribute("notExecuted")!);
+
+            // Asked for, what it kept is named.
+            var kept = Path.Combine(directory.FullName, "kept");
+            (code, text) = Sable(file, "--exact", "M.asked", "--json", "-", "--attachments", kept);
+            Assert.Equal(0, code);
+            var attached = text.Split('\n').Where(static l => l.Contains("\"finished\"", StringComparison.Ordinal)).Select(static l => System.Text.Json.JsonDocument.Parse(l).RootElement).Single()
+                .GetProperty("attachments")[0].GetString()!;
+            Assert.StartsWith(kept, attached, StringComparison.Ordinal);
+            Assert.Equal("kept", File.ReadAllText(attached));
+
+            (code, text) = Sable(file, "--list", "--json", "-", "--filter", "tag:slow & name:places");
+            Assert.Equal(0, code);
+            Assert.StartsWith("{\"name\":\"M.Orders.places\",\"file\":\"t.sb\",\"line\":22,\"suite\":\"M.Orders\",\"tags\":[\"slow\"],\"retries\":1,\"group\":\"package\"}", text, StringComparison.Ordinal);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    [Fact]
+    public void CoverageIsWrittenAsCobertura() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-cobertura-");
+        try {
+            var file = Path.Combine(directory.FullName, "t.sb");
+            File.WriteAllText(file, "module M\nimport Sable.Testing\nfn sign(_ n: Int) -> Int {\n    if n < 0 {\n        return -1\n    }\n    return 1\n}\n@test\nfn positive() { assertEqual(sign(3), 1) }\n");
+            var xml = Path.Combine(directory.FullName, "c.xml");
+            Assert.Equal(0, Sable(file, "--cobertura", xml).Code);
+            var settings = new System.Xml.XmlReaderSettings { DtdProcessing = System.Xml.DtdProcessing.Ignore };
+            using var reader = System.Xml.XmlReader.Create(xml, settings);
+            var root = XDocument.Load(reader).Root!;
+            var line = root.Descendants("line").Single(static l => (string)l.Attribute("number")! == "4");
+            Assert.Equal(("1", "true", "50% (1/2)"), ((string)line.Attribute("hits")!, (string)line.Attribute("branch")!, (string)line.Attribute("condition-coverage")!));
+            Assert.Equal("0", (string)root.Descendants("line").Single(static l => (string)l.Attribute("number")! == "5").Attribute("hits")!);
+            Assert.Equal("t.sb", (string)root.Descendants("class").Single().Attribute("filename")!);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    [Theory]
+    [InlineData("S3114", "@suite\nstruct S { let n: Int\n@test fn t() { } }")]
+    [InlineData("S3114", "final class A: Fixture { init(a: A) { } }\n@suite\nstruct S { let a: A\n@test fn t() { } }")]
+    [InlineData("S3114", "@suite\nfinal class S { init() { }\ninit(f: F) { }\n@test fn t() { } }")]
+    [InlineData("S3109", "@suite\nstruct S<T> { @test fn t() { } }")]
+    [InlineData("S3093", "@suite\nenum S { A }")]
+    [InlineData("S3107", "@suite(traps)\nstruct S { @test fn t() { } }")]
+    [InlineData("S3107", "@suite(arguments: [1])\nstruct S { @test fn t() { } }")]
+    [InlineData("S3107", "@test(retry: 0)\nfn t() { }")]
+    [InlineData("S3107", "@test(skip: 1)\nfn t() { }")]
+    [InlineData("S3107", "@test(skip(if: true, 1))\nfn t() { }")]
+    [InlineData("S3107", "@test(serialized, serialized)\nfn t() { }")]
+    [InlineData("S3004", "@test(skip(if: 1, \"why\"))\nfn t() { }")]
+    [InlineData("S3004", "@suite(skip(if: 1, \"why\"))\nstruct S { @test fn t() { } }")]
+    [InlineData("S3100", "@test\nfn t(f: inout F) { }")]
+    public void ASuiteIsOneTheHarnessCanMake(string code, string declarations) {
+        var errors = ErrorsOf($"module M\nimport Sable.Testing\nfinal class F: Fixture {{ }}\n{declarations}\n@main fn main() {{ }}\n");
+        Assert.True(errors.Any(e => e.Contains($"[{code}]", StringComparison.Ordinal)), string.Join("\n", errors));
+    }
 }

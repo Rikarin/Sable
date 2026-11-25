@@ -131,12 +131,14 @@ fn nextDeathTest() -> Int {
 
 fn enterDeathTest() {
     // The hook a property, or the program, set is not the body's to call.
-    _ = Runtime.takeTrapHook(otherwise: { message, site, frames in })
+    TestState.unhookTraps()
+    TestState.hookTraps()
     Runtime.writeError(deathTestBegun)
 }
 
 fn leaveDeathTest() -> Never {
     Runtime.writeError(deathTestReturned)
+    TestState.tearDownTrapped()
     Runtime.exit(0)
 }
 

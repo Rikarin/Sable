@@ -64,6 +64,7 @@ public sealed partial class Compilation {
         ["packed"] = (AttributeTargets.Struct, "a struct"),
         ["align"] = (AttributeTargets.Struct, "a struct"),
         ["test"] = (AttributeTargets.Function, "a function"),
+        ["suite"] = (AttributeTargets.Struct | AttributeTargets.Class, "a struct or a class"),
         ["bench"] = (AttributeTargets.Function, "a function"),
         ["fuzz"] = (AttributeTargets.Function, "a function"),
         ["main"] = (AttributeTargets.Function, "a function"),

@@ -32,9 +32,11 @@
 #include <netpacket/packet.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/syscall.h>
 #else
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <mach/mach.h>
 #include <net/if_dl.h>
 #include <sys/event.h>
 #include <sys/sysctl.h>
@@ -429,6 +431,126 @@ bool sable_debugger_attached(void) {
     fclose(status);
     return tracer != 0;
 #endif
+}
+
+// ---- Every thread's frames ---------------------------------------------------
+
+// Each thread is sent SIGURG, which says what it is in and goes on: a signal
+// that does nothing by default, and which a program does not use (Go asks
+// its threads to stop by it). One at a time, each given a while to answer.
+static void *told_frames[BACKTRACE_DEPTH + 2];
+static void *told_at; // where it was: a function with no frame of its own is in no walk of them
+static int told_count;
+static int told_state; // 0 unasked, 1 asked, 2 answered
+
+static void tell_frames(int number, siginfo_t *info, void *pointer) {
+    (void)number;
+    (void)info;
+    const ucontext_t *context = pointer;
+    int error = errno;
+    if (__atomic_load_n(&told_state, __ATOMIC_ACQUIRE) == 1) {
+        told_count = backtrace(told_frames, BACKTRACE_DEPTH + 2);
+#if defined(__APPLE__) && defined(__aarch64__)
+        told_at = (void *)__darwin_arm_thread_state64_get_pc(context->uc_mcontext->__ss);
+#elif defined(__APPLE__) && defined(__x86_64__)
+        told_at = (void *)context->uc_mcontext->__ss.__rip;
+#elif defined(__linux__) && defined(__aarch64__)
+        told_at = (void *)context->uc_mcontext.pc;
+#elif defined(__linux__) && defined(__x86_64__)
+        told_at = (void *)context->uc_mcontext.gregs[REG_RIP];
+#else
+        (void)context;
+        told_at = NULL;
+#endif
+        __atomic_store_n(&told_state, 2, __ATOMIC_RELEASE);
+    }
+
+    errno = error;
+}
+
+// What the thread asked answers, told on: where it was in place of the
+// handler's own frame and the one the system calls a handler by, unless it
+// follows those by itself. (A frame is an address after a call: name_frame
+// looks a byte back.)
+static void tell_thread(void (*told)(void **frames, int count)) {
+    for (int tries = 0; tries < 200; tries++) {
+        if (__atomic_load_n(&told_state, __ATOMIC_ACQUIRE) == 2) {
+            void **frames = told_frames + 2;
+            int count = told_count > 2 ? told_count - 2 : 0;
+            if (told_at != NULL && (count == 0 || *frames != told_at)) {
+                frames--;
+                count = count < BACKTRACE_DEPTH ? count + 1 : count;
+            }
+
+            if (told_at != NULL) {
+                *frames = (char *)told_at + 1;
+            }
+
+            if (count > 0) {
+                told(frames, count);
+            }
+
+            break;
+        }
+
+        sable_time_sleep(1000000);
+    }
+
+    __atomic_store_n(&told_state, 0, __ATOMIC_RELEASE);
+}
+
+static void each_thread_frames(void (*told)(void **frames, int count)) {
+    struct sigaction action, before;
+    memset(&action, 0, sizeof action);
+    action.sa_sigaction = tell_frames;
+    action.sa_flags = SA_RESTART | SA_SIGINFO;
+    sigemptyset(&action.sa_mask);
+    // What backtrace loads as it is first called is not for a handler to.
+    void *first[1];
+    (void)backtrace(first, 1);
+    if (sigaction(SIGURG, &action, &before) != 0) {
+        return;
+    }
+
+#if defined(__APPLE__)
+    thread_act_array_t threads;
+    mach_msg_type_number_t count = 0;
+    if (task_threads(mach_task_self(), &threads, &count) == KERN_SUCCESS) {
+        for (mach_msg_type_number_t i = 0; i < count; i++) {
+            pthread_t thread = pthread_from_mach_thread_np(threads[i]);
+            if (thread != NULL && !pthread_equal(thread, pthread_self())) {
+                __atomic_store_n(&told_state, 1, __ATOMIC_RELEASE);
+                if (pthread_kill(thread, SIGURG) == 0) {
+                    tell_thread(told);
+                }
+            }
+
+            mach_port_deallocate(mach_task_self(), threads[i]);
+        }
+
+        vm_deallocate(mach_task_self(), (vm_address_t)threads, count * sizeof *threads);
+    }
+#else
+    DIR *threads = opendir("/proc/self/task");
+    if (threads != NULL) {
+        long own = syscall(SYS_gettid);
+        struct dirent *entry;
+        while ((entry = readdir(threads)) != NULL) {
+            long id = strtol(entry->d_name, NULL, 10);
+            if (id > 0 && id != own) {
+                __atomic_store_n(&told_state, 1, __ATOMIC_RELEASE);
+                if (syscall(SYS_tgkill, (long)getpid(), id, (long)SIGURG) == 0) {
+                    tell_thread(told);
+                }
+            }
+        }
+
+        closedir(threads);
+    }
+#endif
+
+    // Not put back: one that answers late is not to find another handler.
+    __atomic_store_n(&told_state, 0, __ATOMIC_RELEASE);
 }
 
 // ---- Stack overflow ------------------------------------------------------

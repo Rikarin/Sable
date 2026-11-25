@@ -22,49 +22,48 @@ let failureMarker = "assertion failed: "
 let expectationMarker = "expectation failed: "
 
 /// Ends the test, failed, saying why.
-public fn fail(_ message: String) {
-    Runtime.writeError(failureMarker + message + "\n")
+public fn fail(_ message: String, file: String = #file, line: Int = #line) {
+    var first = message
+    var rest = ""
+    if let end = message.firstIndex(of: '\n') {
+        first = message[..<end].toString()
+        rest = message[end...].toString()
+    }
+    Runtime.writeError("\(failureMarker)\(first) (\(file):\(line))\(rest)\n")
     try! stopTest()
 }
 
-/// Fails the test, saying why, unless the condition holds.
-public fn assert(_ condition: Bool, _ message: String) {
+/// Fails the test and ends it, saying why, unless the condition holds. What
+/// the condition was, and its parts, 'expect' and 'require' say too.
+public fn assert(_ condition: Bool, _ message: String = "the condition was false", file: String = #file, line: Int = #line) {
     if !condition {
-        fail(message)
-    }
-}
-
-/// Fails the test unless the condition holds.
-public fn assert(_ condition: Bool) {
-    if !condition {
-        fail("the condition was false")
+        fail(message, file: file, line: line)
     }
 }
 
 /// Fails the test unless the two are equal, showing both as source would
 /// write them and where they first differ.
-public fn assertEqual<T>(_ left: T, _ right: T) where T: Equatable, T: Debug {
+public fn assertEqual<T>(_ left: T, _ right: T, file: String = #file, line: Int = #line) where T: Equatable, T: Debug {
     if left == right {
         return
     }
-    fail(differenceReport(left.debugDescription(), right.debugDescription()))
+    fail(differenceReport(left.debugDescription(), right.debugDescription()), file: file, line: line)
 }
 
 /// Fails the test unless the two strings are equal: a line by line diff
 /// when either has more than one line, both quoted and the first
 /// difference marked otherwise.
-public fn assertEqualText(_ left: String, _ right: String) {
+public fn assertEqualText(_ left: String, _ right: String, file: String = #file, line: Int = #line) {
     if left == right {
         return
     }
     if !left.contains('\n') && !right.contains('\n') {
-        fail(differenceReport(left.debugDescription(), right.debugDescription()))
+        fail(differenceReport(left.debugDescription(), right.debugDescription()), file: file, line: line)
         return
     }
-    fail(lineDiff(left.lines(), right.lines()))
+    fail(lineDiff(left.lines(), right.lines()), file: file, line: line)
 }
 
-/// Fails the test unless the two differ.
 /// How many objects the body allocated, arrays' buffers among them, on the
 /// running thread: what a test that code allocates nothing compares.
 ///
@@ -80,17 +79,18 @@ public fn allocations(during body: () -> Void) -> Int {
     return Runtime.allocationCount() - before
 }
 
-/// Fails unless the body allocates nothing on the running thread.
-public fn assertNoAllocations(_ body: () -> Void) {
+/// Fails the test unless the body allocates nothing on the running thread.
+public fn assertNoAllocations(file: String = #file, line: Int = #line, _ body: () -> Void) {
     let made = allocations(during: body)
-    assert(made == 0, "expected no allocations, got \(made)")
+    assert(made == 0, "expected no allocations, got \(made)", file: file, line: line)
 }
 
-public fn assertNotEqual<T>(_ left: T, _ right: T) where T: Equatable, T: Debug {
+/// Fails the test unless the two differ.
+public fn assertNotEqual<T>(_ left: T, _ right: T, file: String = #file, line: Int = #line) where T: Equatable, T: Debug {
     if left != right {
         return
     }
-    fail("both are \(left.debugDescription())")
+    fail("both are \(left.debugDescription())", file: file, line: line)
 }
 
 /// The two descriptions, one above the other, with a caret under the first

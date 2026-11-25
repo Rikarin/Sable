@@ -32,12 +32,17 @@ public sealed class TestCommand : HarnessCommand {
           --release          build optimised (tests build without the optimiser by default)
           -g                 build with debug information
           --exclusivity=...  keep or drop the dynamic exclusivity checks (kept by default)
-          -j, --jobs <n>     run n tests at once (default: one per processor)
+          --explicit         run the tests marked explicit too (a test named with --exact is run anyway)
+          -j, --jobs <n>     run n tests at once (default: one per processor); --max-parallel is the same
           --timeout <secs>   stop a test that runs longer, and fail it (default: none; one running
                              over 60 s is said to be); a test's own @test(timeout:) wins
-          --seed <n>         make the property tests' cases from this seed, as a failure's report gives it
+          --seed <n>         make the property tests' cases from this seed, as a failure's report gives it,
+                             or from one chosen, with 'random' (default: the same each run)
           --junit <path>     write the results there too, as JUnit's XML
           --trx <path>       write the results there too, as Visual Studio's TRX
+          --json <path>      write the results there too, a JSON object a line; with '-', print the run
+                             so as it goes, in place of its text (and with --list, the tests)
+          --attachments <d>  keep the files tests attach in d (default: target/test-attachments)
           --in-process       run the tests one after another in one process, the first failure ending it
           --harness-out <p>  build the harness to p, with '-g' to debug it ('<p> --run-test <name>'), and run nothing
           --coverage         count the lines and branches of the package's code the tests run: a
@@ -46,6 +51,7 @@ public sealed class TestCommand : HarnessCommand {
                              a name (Sable.Collections), its directory (lib/Sable.Collections) or one
                              file of it (lib/Sable.Collections/Stack.sb); may be given more than once
           --lcov <path>      write the LCOV file there instead
+          --cobertura <path> write Cobertura's XML there too
         """;
 
     int _jobs;
@@ -53,6 +59,9 @@ public sealed class TestCommand : HarnessCommand {
     bool _coverage;
     List<string> _covered = [];
     string? _lcov;
+    string? _cobertura;
+    string? _attachments;
+    bool _events;
     List<TestReport> _reports = [];
 
     protected override bool MeasureCoverage => _coverage;
@@ -67,11 +76,14 @@ public sealed class TestCommand : HarnessCommand {
         _coverage = false;
         _covered = [];
         _lcov = null;
+        _cobertura = null;
+        _attachments = null;
+        _events = false;
         _reports = [];
         var rest = new List<string>();
         for (var i = 0; i < arguments.Count; i++) {
             switch (arguments[i]) {
-                case "-j" or "--jobs" when i + 1 < arguments.Count && int.TryParse(arguments[i + 1], CultureInfo.InvariantCulture, out var jobs) && jobs > 0:
+                case "-j" or "--jobs" or "--max-parallel" when i + 1 < arguments.Count && int.TryParse(arguments[i + 1], CultureInfo.InvariantCulture, out var jobs) && jobs > 0:
                     _jobs = jobs;
                     i++;
                     break;
@@ -93,13 +105,28 @@ public sealed class TestCommand : HarnessCommand {
                 case "--lcov" when i + 1 < arguments.Count:
                     _lcov = Path.GetFullPath(arguments[++i]);
                     break;
+                case "--cobertura" when i + 1 < arguments.Count:
+                    _cobertura = Path.GetFullPath(arguments[++i]);
+                    _coverage = true;
+                    break;
+                case "--attachments" when i + 1 < arguments.Count:
+                    _attachments = Path.GetFullPath(arguments[++i]);
+                    break;
+                case "--json" when i + 1 < arguments.Count:
+                    if (arguments[++i] == "-") {
+                        _events = true;
+                    } else {
+                        _reports.Add(new(TestReportFormat.Json, Path.GetFullPath(arguments[i])));
+                    }
+
+                    break;
                 case "--junit" when i + 1 < arguments.Count:
                     _reports.Add(new(TestReportFormat.Junit, Path.GetFullPath(arguments[++i])));
                     break;
                 case "--trx" when i + 1 < arguments.Count:
                     _reports.Add(new(TestReportFormat.Trx, Path.GetFullPath(arguments[++i])));
                     break;
-                case "-j" or "--jobs" or "--timeout" or "--cover" or "--lcov" or "--junit" or "--trx":
+                case "-j" or "--jobs" or "--max-parallel" or "--timeout" or "--cover" or "--lcov" or "--cobertura" or "--attachments" or "--junit" or "--trx" or "--json":
                     return BadUsage();
                 case "--":
                     rest.AddRange(arguments.Skip(i));
@@ -144,7 +171,10 @@ public sealed class TestCommand : HarnessCommand {
     /// </summary>
     protected override int Execute(string executable, IReadOnlyList<string> arguments) {
         // Where a snapshot's file is: beside the test's, whose name is from there.
-        var environment = new Dictionary<string, string> { ["SABLE_TEST_ROOT"] = ProgramDirectory };
+        var environment = new Dictionary<string, string> {
+            ["SABLE_TEST_ROOT"] = ProgramDirectory,
+            ["SABLE_TEST_ATTACHMENTS"] = _attachments ?? Path.Combine(ProgramDirectory, "target", "test-attachments"),
+        };
         if (Bless) {
             environment["SABLE_UPDATE_SNAPSHOTS"] = "1";
         }
@@ -172,7 +202,8 @@ public sealed class TestCommand : HarnessCommand {
 
     int Run(string executable, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string>? environment = null) =>
         TestRunner.Handles(arguments)
-            ? TestRunner.Run(executable, arguments, _jobs, _timeout, Console.Out, Console.Error, environment, _reports)
+            ? TestRunner.Run(executable, arguments, new TestRunner.Settings(_jobs, _timeout) { Environment = environment, Reports = _reports, Events = _events }, Console.Out, Console.Error)
+            : _events && arguments.Contains("--list") ? TestRunner.List(executable, arguments, Console.Out, Console.Error)
             : Execute(executable, arguments, environment);
 
     /// <summary>
@@ -187,13 +218,21 @@ public sealed class TestCommand : HarnessCommand {
         var lcov = _lcov ?? Path.Combine(ProgramDirectory, "target", "coverage", "lcov.info");
         Directory.CreateDirectory(Path.GetDirectoryName(lcov)!);
         File.WriteAllText(lcov, Coverage.Lcov(files, branches));
+        if (_cobertura is { } cobertura) {
+            Directory.CreateDirectory(Path.GetDirectoryName(cobertura)!);
+            using var xml = File.Create(cobertura);
+            CoberturaReport.Write(xml, ProgramDirectory, files, branches);
+        }
+
+        // A run printed as JSON holds nothing else.
+        var summary = _events ? Console.Error : Console.Out;
 
         var total = files.Values.Sum(static f => f.Count);
         var hit = files.Values.Sum(static f => f.Values.Count(static c => c > 0));
         var outcomes = branches.Values.Sum(static f => f.Sum(static d => d.Outcomes.Count));
         var happened = branches.Values.Sum(static f => f.Sum(static d => d.Outcomes.Count(static o => o.Count > 0)));
-        Console.Out.WriteLine();
-        Console.Out.WriteLine(string.Create(CultureInfo.InvariantCulture,
+        summary.WriteLine();
+        summary.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"coverage: {Percent(hit, total)} of lines ({hit} of {total}), {Percent(happened, outcomes)} of branches ({happened} of {outcomes}); {Path.GetRelativePath(Directory.GetCurrentDirectory(), lcov)}"));
         foreach (var (file, lines) in files) {
             var ran = lines.Values.Count(static c => c > 0);
@@ -202,13 +241,13 @@ public sealed class TestCommand : HarnessCommand {
             var fileOutcomes = decisions.Sum(static d => d.Outcomes.Count);
             var fileHappened = decisions.Sum(static d => d.Outcomes.Count(static o => o.Count > 0));
             var name = Path.IsPathRooted(file) ? Path.GetRelativePath(ProgramDirectory, file) : file;
-            Console.Out.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            summary.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"  {name}: {Percent(ran, lines.Count)} ({ran} of {lines.Count}){(missed.Length > 0 ? $", not run: {missed}" : "")}; branches {Percent(fileHappened, fileOutcomes)} ({fileHappened} of {fileOutcomes})"));
 
             // A decision made but not every way: the line ran, yet some of
             // it did not. One never made is on a line not run, said above.
             foreach (var decision in decisions.Where(static d => d.Reached && d.Missed.Any())) {
-                Console.Out.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                summary.WriteLine(string.Create(CultureInfo.InvariantCulture,
                     $"    {decision.Line}:{decision.Column} '{decision.Kind}' never: {string.Join(", ", decision.Missed)}"));
             }
         }
@@ -240,6 +279,7 @@ public sealed class TestCommand : HarnessCommand {
         ["--exact"] = false,
         ["--show-output"] = false,
         ["--in-process"] = false,
+        ["--explicit"] = false,
         ["--filter"] = true,
         ["--seed"] = true,
     };

@@ -1,7 +1,6 @@
 module Sable.Testing
 
 import Sable.Text
-import Sable.Math
 import Sable.Collections
 
 // '@test' and '@bench' (docs/05 §5.1): the assertions a test is written
@@ -10,10 +9,10 @@ import Sable.Collections
 // marked functions handed to 'runTests' or 'runBenchmarks' — and the rest is
 // here, in Sable.
 //
-// A failed assertion ends its test with a trap. The test harness runs each
-// test in a process of its own (the harness binary again, with
-// '--run-test <name>'), so a trap — an assertion's, or an index out of
-// range — fails that test and no other.
+// A failed assertion ends its test with a trap. The test harness runs tests
+// in processes of their own (the harness binary again, 'TestHarness.sb'), so
+// a trap — an assertion's, or an index out of range — fails that test and
+// no other.
 
 /// One '@test' function, as the compiler's entry point lists it; or one
 /// case of a '@test(arguments:)' function, which it makes a test each of.
@@ -22,13 +21,13 @@ public struct TestCase {
     public var name: String
     /// Where it is declared, 'file:line'.
     public var location: String
-    /// Runs it, awaiting it if it is async: none when it returned, and what
-    /// it threw, described, when it threw — which fails it.
-    public var run: async () -> String?
+    /// Runs it, awaiting it if it is async; what it throws fails it, but for
+    /// a TestSkip, which skips it.
+    public var run: async (FixtureScope) throws -> Void
     /// '@test(traps)': none for a test that must not trap; for one that
     /// must, what the trap's message must contain ("" for any trap).
     public var traps: String?
-    /// '@test(tags:)': what a filter may ask for it by.
+    /// '@test(tags:)' and its suite's: what a filter may ask for it by.
     public var tags: String[>..]
     /// '@test(timeout:)': how long it may run, in nanoseconds; 0 for as
     /// long as it takes.
@@ -36,15 +35,50 @@ public struct TestCase {
     /// '@test(arguments:)': its cases, worked out when asked; none for a
     /// test that is one.
     public var cases: (() -> TestArguments[>..])?
+    /// The type it is a test of, or its module: what shares a PerSuite fixture.
+    public var suite: String
+    /// '@suite(collection:)' or '@test(collection:)': tests of one are not
+    /// run at once. Empty for none.
+    public var collection: String
+    /// '@suite(serialized)': not run while another test of the suite so
+    /// marked is.
+    public var isSerialized: Bool
+    /// '@test(explicit)': run only when it is asked for.
+    public var isExplicit: Bool
+    /// '@test(retry:)': how many more times it is tried while it fails.
+    public var retries: Int
+    /// '@test(skip:)': why it is not to be run, or none when it is.
+    public var skips: (() -> String?)?
+    /// How long each fixture it is made with lives, worked out when asked.
+    public var fixtures: (() -> FixtureLifetime[>..])?
+
+    public init(name: String, location: String, run: @escaping async (FixtureScope) throws -> Void, traps: String? = none, tags: String[>..] = [], timeLimit: Int = 0,
+        cases: (() -> TestArguments[>..])? = none, suite: String = "", collection: String = "", isSerialized: Bool = false, isExplicit: Bool = false, retries: Int = 0,
+        skips: (() -> String?)? = none, fixtures: (() -> FixtureLifetime[>..])? = none) {
+        self.name = name
+        self.location = location
+        self.run = run
+        self.traps = traps
+        self.tags = tags
+        self.timeLimit = timeLimit
+        self.cases = cases
+        self.suite = suite
+        self.collection = collection
+        self.isSerialized = isSerialized
+        self.isExplicit = isExplicit
+        self.retries = retries
+        self.skips = skips
+        self.fixtures = fixtures
+    }
 }
 
 /// One case of a '@test(arguments:)' test: the arguments, written out, and
 /// the test run with them.
 public struct TestArguments {
     public var description: String
-    public var run: async () -> String?
+    public var run: async (FixtureScope) throws -> Void
 
-    public init(_ description: String, _ run: @escaping async () -> String?) {
+    public init(_ description: String, _ run: @escaping async (FixtureScope) throws -> Void) {
         self.description = description
         self.run = run
     }
@@ -62,11 +96,11 @@ extension TestCase {
     ///
     /// ```sable
     /// let cases: () -> TestArguments[>..] = () => [
-    ///     TestArguments("1", () => { return none }),
-    ///     TestArguments("1", () => { return none }),
-    ///     TestArguments("a\nb", () => { return none }),
+    ///     TestArguments("1", { scope in }),
+    ///     TestArguments("1", { scope in }),
+    ///     TestArguments("a\nb", { scope in }),
     /// ]
-    /// let test = TestCase { name: "S.t", location: "s.sb:1", run: () => { return none }, traps: none, tags: [], timeLimit: 0, cases: cases }
+    /// let test = TestCase(name: "S.t", location: "s.sb:1", run: { scope in }, cases: cases)
     /// assert(test.expanded().map({ $0.name }) == ["S.t(1)", "S.t(1)#2", "S.t(a b)"])
     /// ```
     public fn expanded() -> TestCase[>..] {
@@ -105,6 +139,51 @@ extension TestCase {
             return name
         }
     }
+
+    /// The tests it is run in one process with, one after another: those it
+    /// shares a fixture with, and a function's cases, which are many and
+    /// short. None for a test that has a process to itself, as one that
+    /// must trap has to.
+    ///
+    /// ```sable
+    /// let test = TestCase(name: "S.t", location: "s.sb:1", run: { scope in }, suite: "S", fixtures: { [.PerTest, .PerSuite] })
+    /// assert(test.group == "suite S")
+    /// ```
+    public var group: String? {
+        get {
+            if traps != none {
+                return none
+            }
+            var longest = FixtureLifetime.PerTest
+            if let fixtures = fixtures {
+                for lifetime in fixtures() {
+                    if lifetime.outlives(longest) {
+                        longest = lifetime
+                    }
+                }
+            }
+            return match longest {
+                case .PerPackage    => "package"
+                case .PerCollection => "collection \(fixtureCollection)"
+                case .PerSuite      => "suite \(suite)"
+                case .PerTest       => name == function ? none : "cases \(function)"
+            }
+        }
+    }
+
+    /// The tests it is not run at the same time as: none for a test run
+    /// whenever there is room.
+    public var serial: String? {
+        get {
+            if !collection.isEmpty {
+                return "collection \(collection)"
+            }
+            return isSerialized ? "suite \(suite)" : none
+        }
+    }
+
+    // What shares its PerCollection fixtures: its suite, in no collection.
+    var fixtureCollection: String => collection.isEmpty ? suite : collection
 }
 
 // A name on one line, and not a long one: an argument's description is its
@@ -121,370 +200,4 @@ fn nameable(_ description: String) -> String {
         count += 1
     }
     return name.build()
-}
-
-/// Runs the test, failing it if it throws, and saying what it threw; or if
-/// an expectation of it failed, which has said so.
-async fn runOne(_ test: TestCase) {
-    TestState.begin(test.name)
-    if let thrown = await test.run() {
-        fail("the test threw an error: \(thrown)")
-    }
-    if TestState.failed.load() > 0 {
-        endFailedTest()
-    }
-}
-
-/// What the harness was asked to do.
-struct TestOptions {
-    var filters: String[>..]
-    var expression: TestFilter?
-    var list: Bool
-    var describe: Bool
-    var inProcess: Bool
-    var only: String?
-    var showOutput: Bool
-    var exact: Bool
-}
-
-fn parseTestOptions() -> TestOptions? {
-    var options = TestOptions { filters: [], expression: none, list: false, describe: false, inProcess: false, only: none, showOutput: false, exact: false }
-    var i = 0
-    let count = Runtime.argumentCount()
-    while i < count {
-        let argument = Runtime.argument(i)
-        if argument == "--list" {
-            options.list = true
-        } else if argument == "--describe" {
-            options.describe = true
-        } else if argument == "--in-process" {
-            options.inProcess = true
-        } else if argument == "--show-output" {
-            options.showOutput = true
-        } else if argument == "--exact" {
-            options.exact = true
-        } else if argument == "--run-test" && i + 1 < count {
-            options.only = Runtime.argument(i + 1)
-            i = i + 1
-        } else if argument == "--role" && i + 1 < count {
-            TestState.role = Runtime.argument(i + 1)
-            i = i + 1
-        } else if argument == "--seed" && i + 1 < count {
-            guard let seed = try? U64.parse(Runtime.argument(i + 1)) else {
-                Runtime.writeError("'--seed' wants a number, not '\(Runtime.argument(i + 1))'\n")
-                return none
-            }
-            TestState.seed = seed
-            i = i + 1
-        } else if argument == "--filter" && i + 1 < count {
-            do {
-                options.expression = try TestFilter(Runtime.argument(i + 1))
-            } catch {
-                Runtime.writeError("'--filter \(Runtime.argument(i + 1))': \(error.message)\n")
-                return none
-            }
-            i = i + 1
-        } else if argument.hasPrefix("--") {
-            Runtime.writeError("unknown option '\(argument)'\nusage: <harness> [filter...] [--filter <expression>] [--list] [--exact] [--show-output] [--in-process] [--seed <n>] [--run-test <name>]\n")
-            return none
-        } else {
-            options.filters.append(argument)
-        }
-        i = i + 1
-    }
-    return options
-}
-
-/// Whether the test is selected: by the filter, and by any of the names, as
-/// a part of its own (or all of it, or of its function's, with '--exact');
-/// every test is, with none.
-fn selected(_ test: TestCase, _ options: TestOptions) -> Bool {
-    if let filter = options.expression {
-        if !filter.matches(test) {
-            return false
-        }
-    }
-    if options.filters.count == 0 {
-        return true
-    }
-    for filter in options.filters {
-        if options.exact ? test.name == filter || test.function == filter : test.name.contains(filter) {
-            return true
-        }
-    }
-    return false
-}
-
-/// Whether the tests of a function may be selected: not, when '--exact'
-/// names other ones, and then its cases are not worked out.
-fn mayBeSelected(_ test: TestCase, _ options: TestOptions) -> Bool {
-    if !options.exact || options.filters.isEmpty {
-        return true
-    }
-    for filter in options.filters {
-        if filter == test.name || filter.hasPrefix(test.name + "(") {
-            return true
-        }
-    }
-    return false
-}
-
-/// The entry point of a test build: runs the tests the arguments select,
-/// each in a process of its own, and reports on each and on them all.
-/// Gives the exit code: 0 when every test selected passed, 1 when one
-/// failed, 2 for arguments it does not understand.
-/// ('sable test' itself runs the processes, several at once and with a
-/// time limit, from what '--describe' says; this is the harness run on its
-/// own, one test after another.)
-public async fn runTests(_ tests: TestCase[>..]) -> Int {
-    guard let options = parseTestOptions() else {
-        return 2
-    }
-
-    // One test, in this process, for the harness that started it.
-    if let name = options.only {
-        for test in tests {
-            if test.name == name && test.cases == none {
-                await runOne(test)
-                return 0
-            }
-            if test.cases != none && name.hasPrefix(test.name + "(") {
-                for one in test.expanded() {
-                    if one.name == name {
-                        await runOne(one)
-                        return 0
-                    }
-                }
-            }
-        }
-        Runtime.writeError("no test named '\(name)'\n")
-        return 2
-    }
-
-    var chosen: TestCase[>..] = []
-    var filteredOut = 0
-    for test in tests {
-        if !mayBeSelected(test, options) {
-            filteredOut += 1
-            continue
-        }
-        for one in test.expanded() {
-            if selected(one, options) {
-                chosen.append(one)
-            } else {
-                filteredOut += 1
-            }
-        }
-    }
-
-    if options.list {
-        for test in chosen {
-            print("\(test.name): test (\(test.location))")
-        }
-        print("\(chosen.count) test\(plural(chosen.count))")
-        return 0
-    }
-
-    // For 'sable test': a line a test, its name, place, expected trap ('-'
-    // for a test that must not trap), time limit and tags, separated by
-    // tabs; and last how many were left out.
-    if options.describe {
-        for test in chosen {
-            let traps = test.traps ?? "-"
-            print("\(test.name)\t\(test.location)\t\(traps)\t\(test.timeLimit)\t\(test.tags.joined(separator: ","))")
-        }
-        print("filtered out\t\(filteredOut)")
-        return 0
-    }
-
-    print("running \(chosen.count) test\(plural(chosen.count))")
-
-    // Without process isolation, as asked or where there is no executable
-    // to start again (the interpreter): a failure stops the run, and no
-    // times are shown, so that two runs print the same. A test that must
-    // trap cannot run here: its trap would end the run.
-    let program = Runtime.executablePath()
-    if options.inProcess || program.count == 0 {
-        var ignored = 0
-        for test in chosen {
-            TestState.isAlone = false
-            if test.traps != none {
-                ignored = ignored + 1
-                print("test \(test.name) ... ignored (it must trap, which only a process of its own can)")
-                continue
-            }
-            await runOne(test)
-            print("test \(test.name) ... ok")
-        }
-        print("")
-        print("test result: ok. \(chosen.count - ignored) passed; 0 failed; \(ignoredCount(ignored))\(filteredOut) filtered out")
-        return 0
-    }
-
-    let started = Runtime.monotonicNanoseconds()
-    var passed = 0
-    var failures: String[>..] = []
-    var reports: String[>..] = []
-    for test in chosen {
-        let begun = Runtime.monotonicNanoseconds()
-        let output = Runtime.run(program, ["--run-test", test.name, "--seed", "\(TestState.seed)"], "")
-        let took = Runtime.monotonicNanoseconds() - begun
-        let status = output == none ? -1 : Runtime.lastExitStatus()
-        let errors = output == none ? "" : Runtime.lastErrorOutput()
-        let written = output ?? ""
-        if let why = verdict(test, status, errors) {
-            print("test \(test.name) ... FAILED (\(formatDuration(took)))")
-            failures.append(test.name)
-            reports.append(failureReport(test, status, written, errors, why))
-        } else {
-            passed = passed + 1
-            print("test \(test.name) ... ok (\(formatDuration(took)))")
-            if options.showOutput && written.count > 0 {
-                print(indented(written))
-            }
-        }
-    }
-    let total = Runtime.monotonicNanoseconds() - started
-
-    if failures.count > 0 {
-        print("")
-        print("failures:")
-        for report in reports {
-            print("")
-            print(report)
-        }
-        print("")
-        print("failed:")
-        for name in failures {
-            print("    \(name)")
-        }
-    }
-    print("")
-    let outcome = failures.count == 0 ? "ok" : "FAILED"
-    print("test result: \(outcome). \(passed) passed; \(failures.count) failed; \(filteredOut) filtered out; finished in \(formatDuration(total))")
-    return failures.count == 0 ? 0 : 1
-}
-
-fn ignoredCount(_ ignored: Int) -> String {
-    return ignored == 0 ? "" : "\(ignored) ignored; "
-}
-
-/// Whether a test's process ended as it should have: none when it did;
-/// otherwise why not, for its report ("" when what it wrote says it all).
-/// A test that must trap passes by trapping — not by failing an
-/// assertion, which is the test failing — with the message it names.
-public fn verdict(_ test: TestCase, _ status: Int, _ errors: String) -> String? {
-    guard let expected = test.traps else {
-        return status == 0 ? none : ""
-    }
-    if status == 0 {
-        return "the test was to trap\(trapWanted(expected)), and it returned"
-    }
-    if status < 0 || hasFailed(errors) {
-        return ""
-    }
-    if expected.count > 0 && !errors.contains(expected) {
-        return "the test trapped, but not with '\(expected)'"
-    }
-    return none
-}
-
-/// Whether the errors hold a failed assertion's report, or a failed
-/// expectation's: a line that starts with its marker. Sable.Core's 'assert'
-/// says the same after 'fatal error: '.
-fn hasFailed(_ errors: String) -> Bool {
-    let lines = "\n" + errors
-    return lines.contains("\n" + failureMarker) || lines.contains("\n" + expectationMarker)
-}
-
-fn trapWanted(_ expected: String) -> String {
-    return expected.count == 0 ? "" : " with '\(expected)'"
-}
-
-/// What a failed test's process said, and how it ended.
-fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: String, _ why: String) -> String {
-    let report = TextBuilder()
-    report.append("---- \(test.name) (\(test.location)) ----")
-    if status < 0 {
-        report.append("\nthe test's process could not be started")
-        return report.build()
-    }
-    if output.count > 0 {
-        report.append("\nstdout:\n" + indented(output))
-    }
-    // An assertion's own trap says nothing its report has not.
-    let reported = hasFailed(errors)
-    let shown = reported ? withoutAssertionTrap(errors) : errors
-    if shown.count > 0 {
-        report.append("\n" + indented(shown))
-    }
-    if why.count > 0 {
-        report.append("\n    \(why)")
-    }
-    if !reported {
-        report.append("\n    (exit status \(status))")
-    }
-    return report.build()
-}
-
-/// The errors without the trap a failed assertion ends with: its line, and
-/// the line after it that says where it was — inside this harness.
-fn withoutAssertionTrap(_ errors: String) -> String {
-    let kept = TextBuilder()
-    var afterTrap = false
-    for line in errors.lines() {
-        if line == "fatal error: 'try!' caught an error" {
-            afterTrap = true
-            continue
-        }
-        if afterTrap && line.hasPrefix("  at ") {
-            afterTrap = false
-            continue
-        }
-        afterTrap = false
-        kept.append(line + "\n")
-    }
-    return kept.build()
-}
-
-fn indented(_ text: String) -> String {
-    let report = TextBuilder()
-    var first = true
-    for line in text.lines() {
-        if !first {
-            report.append("\n")
-        }
-        report.append("    " + line)
-        first = false
-    }
-    return report.build()
-}
-
-fn plural(_ count: Int) -> String {
-    return count == 1 ? "" : "s"
-}
-
-/// Nanoseconds, in the unit that reads best: '850 ns', '12.40 µs', '3.05 ms', '1.20 s'.
-public fn formatDuration(_ nanoseconds: Int) -> String {
-    return formatNanoseconds(F64(nanoseconds))
-}
-
-/// A time in nanoseconds, fractional, in the unit that reads best.
-public fn formatNanoseconds(_ ns: F64) -> String {
-    if ns < 10.0 {
-        return "\(ns:.2f) ns"
-    }
-    if ns < 100.0 {
-        return "\(ns:.1f) ns"
-    }
-    if ns < 1000.0 {
-        return "\(ns:.0f) ns"
-    }
-    if ns < 1000000.0 {
-        return "\(ns / 1000.0:.2f) µs"
-    }
-    if ns < 1000000000.0 {
-        return "\(ns / 1000000.0:.2f) ms"
-    }
-    return "\(ns / 1000000000.0:.2f) s"
 }

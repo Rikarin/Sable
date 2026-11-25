@@ -6,12 +6,10 @@ module TestCaseTests
 
 import Sable.Testing
 
-async fn returns() -> String? {
-    return none
-}
+async fn returns(_ scope: FixtureScope) throws { }
 
 fn testCase(traps: String?) -> TestCase {
-    return TestCase { name: "Suite.example", location: "example.sb:1", run: returns, traps: traps, tags: [], timeLimit: 0, cases: none }
+    return TestCase(name: "Suite.example", location: "example.sb:1", run: returns, traps: traps)
 }
 
 @test
@@ -51,7 +49,7 @@ fn aTestCaseRunsWhatItWasGiven() async {
     let test = testCase(traps: none)
     assertEqual(test.name, "Suite.example")
     assertEqual(test.location, "example.sb:1")
-    assert(await test.run() == none)
+    await expectNoThrow { try await test.run(FixtureScope()) }
 }
 
 @test

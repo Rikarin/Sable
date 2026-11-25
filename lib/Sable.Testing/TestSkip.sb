@@ -1,0 +1,48 @@
+module Sable.Testing
+
+/// What a test throws to be skipped: neither passed nor failed, with why said.
+///
+/// ```sable
+/// let error = TestSkip("needs a network")
+/// assert(error.description() == "skipped: needs a network")
+/// ```
+@derive(Equatable)
+public struct TestSkip: Error {
+    public let reason: String
+
+    public init(_ reason: String) {
+        self.reason = reason
+    }
+
+    public fn description() -> String {
+        return "skipped: \(reason)"
+    }
+}
+
+/// Ends the test, which is skipped, saying why: what it needs is found, as it
+/// runs, not to be there. What is known before is `@test(skip(if: …))`'s.
+///
+/// ```sable
+/// fn reads() throws {
+///     guard let path = Runtime.environment("TEST_DATA") else {
+///         try skip("TEST_DATA names no directory")
+///     }
+///     expect(Runtime.isDirectory(path))
+/// }
+/// ```
+public fn skip(_ reason: String) throws(TestSkip) -> Never {
+    throw TestSkip(reason)
+}
+
+/// Ends the test, which is skipped, saying why, if the condition holds.
+///
+/// ```sable
+/// fn connects(port: Int?) throws {
+///     try skip(if: port == none, "nothing listens here")
+/// }
+/// ```
+public fn skip(if condition: Bool, _ reason: String) throws(TestSkip) {
+    if condition {
+        throw TestSkip(reason)
+    }
+}

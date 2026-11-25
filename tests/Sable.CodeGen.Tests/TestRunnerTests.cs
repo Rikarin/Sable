@@ -101,7 +101,7 @@ public sealed class TestRunnerTests {
             ---- Suite.wrongAnswer (test.sb:16) ----
             stdout:
                 this output is shown, as the test failed
-                assertion failed: the values differ
+                assertion failed: the values differ (test.sb:18)
                    left: 4
                   right: 5
                          ^ first difference at character 0
@@ -175,7 +175,7 @@ public sealed class TestRunnerTests {
         Assert.Equal(0, Native(Suite, arguments: ["--run-test", "Suite.doubling"]).ExitCode);
         var failed = Native(Suite, arguments: ["--run-test", "Suite.wrongAnswer"]);
         Assert.Equal(134, failed.ExitCode);
-        Assert.StartsWith("assertion failed: the values differ\n", failed.Stderr, StringComparison.Ordinal);
+        Assert.StartsWith("assertion failed: the values differ (test.sb:18)\n", failed.Stderr, StringComparison.Ordinal);
         Assert.Equal(2, Native(Suite, arguments: ["--run-test", "Suite.nope"]).ExitCode);
     }
 
@@ -197,7 +197,7 @@ public sealed class TestRunnerTests {
         Assert.Equal(1, run.ExitCode);
         Assert.Contains(
             """
-                assertion failed: the text differs (-left +right)
+                assertion failed: the text differs (-left +right) (test.sb:6)
                   title
                   alpha
                 - beta
@@ -241,7 +241,7 @@ public sealed class TestRunnerTests {
         var (failedOutput, failedErrors, failedTrap) = Interpret(Suite, ["doubling", "wrong"]);
         Assert.Equal("running 2 tests\ntest Suite.doubling ... ok\nthis output is shown, as the test failed\n", failedOutput);
         Assert.Equal("'try!' caught an error", failedTrap?.Message);
-        Assert.StartsWith("assertion failed: the values differ\n", failedErrors, StringComparison.Ordinal);
+        Assert.StartsWith("assertion failed: the values differ (test.sb:18)\n", failedErrors, StringComparison.Ordinal);
 
         if (!CanBuild) {
             return;
@@ -329,12 +329,12 @@ public sealed class TestRunnerTests {
         Assert.Equal(2, files.Count);
         var list = files[0].Text.Text;
         Assert.StartsWith("module Suite\n", list, StringComparison.Ordinal);
-        Assert.Contains("() => { Checks.inAType(); return none }", list, StringComparison.Ordinal);
-        Assert.Contains("do { try throwing() } catch { return \"\\(error)\" }", list, StringComparison.Ordinal);
+        Assert.Contains("(scope: FixtureScope) => { Checks.inAType() }", list, StringComparison.Ordinal);
+        Assert.Contains("(scope: FixtureScope) => { try throwing() }", list, StringComparison.Ordinal);
         var main = files[1].Text.Text;
         Assert.Contains($"module {TestHarness.HarnessModule}\n", main, StringComparison.Ordinal);
         Assert.Contains("import Suite.{ sableHarnessList0 }", main, StringComparison.Ordinal);
-        Assert.Contains("all.append(TestCase { name: \"Suite.doubling\", location: \"test.sb:10\", run: list0[0], traps: none, tags: [], timeLimit: 0, cases: none })", main, StringComparison.Ordinal);
+        Assert.Contains("all.append(TestCase(name: \"Suite.doubling\", location: \"test.sb:10\", run: list0[0], suite: \"Suite\"))", main, StringComparison.Ordinal);
         Assert.Contains("async fn sableHarnessMain() -> Int", main, StringComparison.Ordinal);
     }
 

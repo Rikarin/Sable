@@ -39,6 +39,10 @@ bool sable_debugger_attached(void) {
     return false;
 }
 
+static void each_thread_frames(void (*told)(void **frames, int count)) {
+    (void)told;
+}
+
 // A trap ends the module with an 'unreachable', as abort() does: the
 // engine stops it, and wasmtime exits as POSIX reports an abort, status
 // 134 (3 on Windows), after the trap's own report. An exit with that

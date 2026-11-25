@@ -1060,7 +1060,8 @@ Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
 Sable.Testing       @test @bench; assert, assertEqual and the like; expect and
                     require, which show their expression's parts; expectThrows;
                     expectPanic and expectExit (death tests); assertSnapshot;
-                    forAll, Arbitrary and Gen (property tests); Bencher
+                    forAll, Arbitrary and Gen (property tests); Fixture and
+                    FixtureLifetime, TestContext, skip; Bencher
 Sable.Interop       C's types by name (CInt, CLong, CChar, CSize, CWChar),
                     CStr, CString, withCString, withWideCString,
                     withCStrings, CFunction and cFunction, CCallback,
@@ -1091,7 +1092,31 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
   That is a parameter's doing whose default is `#expression` (SYNTAX.md §18):
   the argument is worked out once, as it would be, and may throw and await.
 - `expectThrows(E.self) { … }` gives the error thrown, `expectThrows(error)`
-  wants that very one, `expectNoThrow` none; each has an async form.
+  wants that very one, `expectThrows(saying: "text")` one that says that,
+  `expectThrows { … }` any, `expectNoThrow` none; each has an async form.
+- A `Fixture` is what tests are run with: `setUp` and `tearDown`, which may wait
+  and throw, and how long one lives — `.PerTest`, unless it says `.PerSuite`,
+  `.PerCollection` or `.PerPackage`. A `@suite`'s initialiser asks for the
+  fixtures it needs as parameters, a `@test` function as its own, and a fixture
+  those it is made from, which must live as long. (No container is asked: a
+  fixture is made by its one initialiser, and one that wants Sable.DependencyInjection
+  builds a provider in `setUp`.) A suite that is a Fixture has its own around each test.
+
+  A shared fixture is an object in memory, so the tests that share it run in one
+  process, one after another, for as long as it lives: nothing is kept alive
+  between processes, and nothing needs to be. Each is torn down after the last
+  test that shares it, the last made first; a test that failed, threw, was
+  skipped or was cancelled for its time makes no difference, and what a teardown
+  throws fails the last of them. A trap cannot be unwound: it — a failed
+  `assert` among them — has the fixtures torn down on another thread while the
+  trapped one waits, five seconds at most, and the rest of the tests run in
+  another process with fixtures of their own. A process that is killed, or past
+  its time and deaf to being cancelled, tears nothing down.
+- `TestContext.current` is the running test's: its name, tags and which try it
+  is, the time it has left, a `cancellation` token for what takes one, `log` and
+  `attach`. What a test prints is kept apart from any other's, and shown when it
+  fails. (Nothing overrides the locale or the clock for a test: what depends on
+  one takes a `Locale` or a `Clock`, and is given `Locale("tr")` or a `TestClock`.)
 - `expectPanic("text") { … }` and `expectExit(status) { … }` run their body in
   a process of its own, the test run again as far as there, and give how it
   ended. Where none can be started — `--in-process`, the interpreter, WASI —
@@ -1101,8 +1126,8 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
   SABLE_UPDATE_SNAPSHOTS=1 (`sable test --bless`) writes it; one that is not
   there is a failure.
 - `forAll { (xs: Int[>..]) in … }` tries a body with a hundred arbitrary values,
-  small to large, and shows the simplest it does not hold of, with the seed
-  that makes it again. A value is made from `Choices`, numbers drawn at random
+  small to large, the same each run unless a seed is given (docs/05 §5.1), and
+  shows the simplest it does not hold of, with the seed that makes it again. A value is made from `Choices`, numbers drawn at random
   and kept; a failing one is shrunk by its choices rather than its value (as
   Hypothesis does), so `Arbitrary` is one function, no `shrink` beside it, and
   what `map`, `flatMap` and `filter` make shrinks too. `@derive(Arbitrary)`

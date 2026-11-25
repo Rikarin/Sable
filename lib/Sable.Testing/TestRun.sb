@@ -1,0 +1,154 @@
+module Sable.Testing
+
+import Sable.Text
+
+// A test run in this process: what it comes to, said for the runner that
+// started the process ('TestHarness.sb', or 'sable test').
+
+// What a process that runs tests says of them: before each, on both of its
+// streams, so that what a test wrote to either is told from the next's; and
+// after each on standard error, with how it ended and the nanoseconds it
+// took. A test with no end said is one its process ended in. Each is on a
+// line of its own, whose break before it is its own too: what a test writes
+// need not end with one, and may show the mark of another process in a line.
+let begunMark = "\n\u{1}test begun "
+let endedMark = "\n\u{1}test ended "
+let timedOutMark = "\n\u{1}test timed out\n"
+let attachmentMark = "\n\u{1}attachment "
+
+// Whether a debugger is attached to the process: time passes while it stops it.
+@builtin("debugger_attached")
+fn isDebuggerAttached() -> Bool
+
+/// What came of a test.
+@derive(Equatable, Debug)
+union TestOutcome {
+    Passed
+    Failed
+    Skipped(String)
+}
+
+/// Runs the test, and gives what came of it: that it threw, or an
+/// expectation of it failed, has been said. A failed assertion does not
+/// return. The fixtures it shared with no test to come are torn down.
+async fn runOne(_ test: TestCase, before next: TestCase? = none) -> TestOutcome {
+    TestState.begin(test)
+    let context = TestState.context
+    let limit = context.deadline == 0 ? 0 : context.deadline - Runtime.monotonicNanoseconds()
+    if limit > 0 {
+        Runtime.watchdog(limit, grace: TestState.grace, timedOutMark)
+    }
+    var outcome = TestOutcome.Passed
+    var thrown: String? = none
+    do {
+        try await test.run(TestState.scope)
+    } catch {
+        if let skipped = error as? TestSkip {
+            outcome = .Skipped(skipped.reason)
+        } else {
+            thrown = "\(error)"
+        }
+    }
+    // Its teardown is not to be stopped for the time the test took.
+    context.end()
+    let late = limit > 0 && !isDebuggerAttached() && Runtime.monotonicNanoseconds() >= context.deadline
+    if let error = thrown {
+        _ = TestState.failed.add(1)
+        // What its being cancelled at its limit threw is said as that.
+        if !late || error != "CancellationError()" {
+            Runtime.writeError("\(failureMarker)the test threw an error: \(error)\n")
+        }
+    }
+    if limit > 0 {
+        Runtime.watchdog(late ? TestState.grace : limit, grace: TestState.grace, timedOutMark)
+    }
+    await TestState.scope.tearDown(.PerTest)
+    await TestState.scope.end(before: next)
+    if limit > 0 {
+        Runtime.watchdog(0, grace: 0, "")
+    }
+    TestState.unhookTraps()
+    TestState.hookTraps()
+    if late {
+        Runtime.writeError(timedOutMark)
+        return .Failed
+    }
+    return TestState.failed.load() > 0 ? .Failed : outcome
+}
+
+/// The tests named on standard input, one after another, each said as it
+/// begins and ends.
+async fn runNamed(_ tests: TestCase[>..]) -> Int {
+    var chosen: TestCase[>..] = []
+    var expanded = ""
+    var cases: TestCase[>..] = []
+    while let name = Runtime.readLine() {
+        let function = functionName(name)
+        for test in tests {
+            if test.name != function {
+                continue
+            }
+            if expanded != function || cases.isEmpty {
+                cases = test.expanded()
+                expanded = function
+            }
+            for one in cases {
+                if one.name == name {
+                    chosen.append(one)
+                }
+            }
+        }
+    }
+    for (i, test) in chosen.enumerated() {
+        let mark = "\(begunMark)\(test.name)\n"
+        Runtime.write(mark)
+        Runtime.writeError(mark)
+        let begun = Runtime.monotonicNanoseconds()
+        let outcome = await runOne(test, before: i + 1 < chosen.count ? chosen[i + 1] : none)
+        let took = Runtime.monotonicNanoseconds() - begun
+        match outcome {
+            case .Passed              => Runtime.writeError("\(endedMark)passed \(took)\n")
+            case .Failed              => Runtime.writeError("\(endedMark)failed \(took)\n")
+            case .Skipped(let reason) => Runtime.writeError("\(endedMark)skipped \(took) \(nameable(reason))\n")
+        }
+    }
+    return 0
+}
+
+// A test's name without its case's arguments.
+fn functionName(_ name: String) -> String {
+    if let parenthesis = name.firstIndex(of: '(') {
+        return name[..<parenthesis].toString()
+    }
+    return name
+}
+
+/// One test alone in this process, as a debugger is given it and a death
+/// test starts it: none when there is no test of the name.
+async fn runAlone(_ name: String, _ tests: TestCase[>..], _ options: TestOptions) -> Int {
+    let function = functionName(name)
+    for test in tests {
+        if test.name != function {
+            continue
+        }
+        for one in test.expanded() {
+            if one.name != name {
+                continue
+            }
+            if let skips = one.skips {
+                if let reason = skips() {
+                    Runtime.writeError("\(endedMark)skipped 0 \(nameable(reason))\n")
+                    return 0
+                }
+            }
+            match await runOne(one) {
+                case .Passed              => { }
+                case .Failed              => endFailedTest()
+                case .Skipped(let reason) => Runtime.writeError("\(endedMark)skipped 0 \(nameable(reason))\n")
+            }
+            return 0
+        }
+    }
+    Runtime.writeError("no test named '\(name)'\n")
+    return 2
+}

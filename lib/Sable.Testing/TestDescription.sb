@@ -1,0 +1,65 @@
+module Sable.Testing
+
+import Sable.Text
+
+// What '--describe' says of a test, for a runner, an editor: a line each, a
+// JSON object, so that a reader of one version takes what it knows of
+// another's. 'sable test --list --json' prints it as it is.
+
+extension TestCase {
+    /// The test as a line of JSON.
+    ///
+    /// ```sable
+    /// let test = TestCase(name: "S.t", location: "dir/s.sb:12", run: { scope in }, tags: ["fast"], suite: "S")
+    /// assert(test.description(skipped: none) == "{\"name\":\"S.t\",\"file\":\"dir/s.sb\",\"line\":12,\"suite\":\"S\",\"tags\":[\"fast\"]}")
+    /// ```
+    public fn description(skipped: String?) -> String {
+        let line = TextBuilder()
+        let colon = location.lastIndex(of: ':') ?? location.endIndex
+        line.append("{\"name\":\(jsonText(name)),\"file\":\(jsonText(location[..<colon].toString())),\"line\":\((try? Int.parse(location[colon...].toString().trimmingPrefix(":"))) ?? 0)")
+        line.append(",\"suite\":\(jsonText(suite)),\"tags\":[\(tags.map({ jsonText($0) }).joined(separator: ","))]")
+        if !collection.isEmpty {
+            line.append(",\"collection\":\(jsonText(collection))")
+        }
+        if let traps = traps {
+            line.append(",\"traps\":\(jsonText(traps))")
+        }
+        if timeLimit > 0 {
+            line.append(",\"timeout\":\(timeLimit)")
+        }
+        if retries > 0 {
+            line.append(",\"retries\":\(retries)")
+        }
+        if isExplicit {
+            line.append(",\"explicit\":true")
+        }
+        if let reason = skipped {
+            line.append(",\"skip\":\(jsonText(reason))")
+        }
+        if let group = group {
+            line.append(",\"group\":\(jsonText(group))")
+        }
+        if let serial = serial {
+            line.append(",\"serial\":\(jsonText(serial))")
+        }
+        line.append("}")
+        return line.build()
+    }
+}
+
+// The text as JSON writes it.
+fn jsonText(_ text: String) -> String {
+    let json = TextBuilder()
+    json.append("\"")
+    for c in text {
+        if c == '"' || c == '\\' {
+            json.append("\\\(c)")
+        } else if c < ' ' {
+            json.append("\\u\(c.codePoint:04x)")
+        } else {
+            json.append("\(c)")
+        }
+    }
+    json.append("\"")
+    return json.build()
+}

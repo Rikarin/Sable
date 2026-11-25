@@ -113,6 +113,12 @@ class MarkdownString {
   }
 }
 
+class TestTag {
+  constructor(id) {
+    this.id = id;
+  }
+}
+
 class TestMessage {
   constructor(message) {
     this.message = message;
@@ -205,7 +211,7 @@ function createTestController(id, label) {
     },
     createTestRun(request) {
       const run = { request, events: [], output: "", ended: false, coverage: [] };
-      for (const event of ["started", "passed", "failed", "errored", "skipped"]) {
+      for (const event of ["enqueued", "started", "passed", "failed", "errored", "skipped"]) {
         run[event] = (item, ...rest) => run.events.push({ event, id: item.id, rest });
       }
 
@@ -329,6 +335,7 @@ function create(world = {}) {
     CodeActionKind,
     MarkdownString,
     TestMessage,
+    TestTag,
     TestCoverageCount,
     FileCoverage,
     StatementCoverage,

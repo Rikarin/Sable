@@ -1,0 +1,220 @@
+module Sable.Testing
+
+import Sable.Text
+
+/// How a test a process was started for ended, and what it wrote.
+struct TestReport {
+    let test: TestCase
+    // Negative when its process could not be started.
+    let status: Int
+    let output: String
+    let errors: String
+    let took: Int
+    // What it said it came to; none when its process ended in it.
+    let outcome: TestOutcome?
+    let timedOut: Bool
+
+    // Why the test failed ("" when what it wrote says it all); none when it passed.
+    var whyFailed: String? {
+        get {
+            if timedOut {
+                return "the test did not finish within \(limit), and was stopped"
+            }
+            if let outcome = outcome {
+                if outcome == .Failed {
+                    return ""
+                }
+            }
+            return verdict(test, status, errors)
+        }
+    }
+
+    var limit: String => formatDuration(test.timeLimit > 0 ? test.timeLimit : TestState.timeLimit)
+
+    var reasonSkipped: String? {
+        get {
+            guard let outcome = outcome else {
+                return none
+            }
+            return match outcome {
+                case .Skipped(let reason) => reason
+                case .Passed              => none
+                case .Failed              => none
+            }
+        }
+    }
+
+    /// What a process started for the tests said of them, as far as it got:
+    /// at least the first.
+    static fn read(_ tests: TestCase[:], _ status: Int, _ output: String, _ errors: String, took: Int) -> TestReport[>..] {
+        let outputs = TestReport.sections(output)
+        let said = TestReport.sections(errors)
+        var reports: TestReport[>..] = []
+        for (i, test) in tests.enumerated() {
+            if i > 0 && i >= said.count {
+                break
+            }
+            let isLast = i + 1 >= said.count || i + 1 == tests.count
+            var outcome: TestOutcome? = none
+            var time = took
+            var timedOut = false
+            var kept = i < said.count ? said[i] : errors
+            if let end = kept.firstRange(of: endedMark) {
+                let after = kept[end.upperBound...]
+                let close = after.firstIndex(of: '\n') ?? after.endIndex
+                let parts = after[..<close].toString().split(' ')
+                time = (try? Int.parse(parts[1])) ?? took
+                outcome = match parts[0] {
+                    case "passed" => TestOutcome.Passed
+                    case "failed" => TestOutcome.Failed
+                    default       => TestOutcome.Skipped(after[..<close].toString().slice(from: parts[0].count + parts[1].count + 2, to: after[..<close].count))
+                }
+                kept = kept[..<end.lowerBound].toString() + after[close...].toString().trimmingPrefix("\n").toString()
+            }
+            if kept.contains(timedOutMark) {
+                timedOut = true
+                kept = kept.replacing(timedOutMark, with: "")
+            }
+            reports.append(TestReport {
+                test: test, status: isLast ? status : 0, output: i < outputs.count ? outputs[i] : "", errors: kept, took: time, outcome: outcome, timedOut: timedOut
+            })
+        }
+        return reports
+    }
+
+    // What was written in each test, in order: what came before the first is the first's.
+    static fn sections(_ text: String) -> String[>..] {
+        var sections: String[>..] = []
+        var lead = ""
+        for (i, part) in text.split(begunMark).enumerated() {
+            if i == 0 {
+                lead = part
+                continue
+            }
+            let end = part.firstIndex(of: '\n') ?? part.endIndex
+            let own = part[end...].toString().trimmingPrefix("\n")
+            sections.append(i == 1 ? lead + own : own)
+        }
+        return sections
+    }
+}
+
+/// Whether a test's process ended as it should have: none when it did;
+/// otherwise why not, for its report ("" when what it wrote says it all).
+/// A test that must trap passes by trapping — not by failing an
+/// assertion, which is the test failing — with the message it names.
+public fn verdict(_ test: TestCase, _ status: Int, _ errors: String) -> String? {
+    guard let expected = test.traps else {
+        return status == 0 ? none : ""
+    }
+    if status == 0 {
+        return "the test was to trap\(trapWanted(expected)), and it returned"
+    }
+    if status < 0 || hasFailed(errors) {
+        return ""
+    }
+    if expected.count > 0 && !errors.contains(expected) {
+        return "the test trapped, but not with '\(expected)'"
+    }
+    return none
+}
+
+/// Whether the errors hold a failed assertion's report, or a failed
+/// expectation's: a line that starts with its marker. Sable.Core's 'assert'
+/// says the same after 'fatal error: '.
+fn hasFailed(_ errors: String) -> Bool {
+    let lines = "\n" + errors
+    return lines.contains("\n" + failureMarker) || lines.contains("\n" + expectationMarker)
+}
+
+fn trapWanted(_ expected: String) -> String {
+    return expected.count == 0 ? "" : " with '\(expected)'"
+}
+
+/// What a failed test's process said, and how it ended.
+fn failureReport(_ failed: TestReport, _ why: String) -> String {
+    let report = TextBuilder()
+    report.append("---- \(failed.test.name) (\(failed.test.location)) ----")
+    if failed.status < 0 {
+        report.append("\nthe test's process could not be started")
+        return report.build()
+    }
+    if failed.output.count > 0 {
+        report.append("\nstdout:\n" + indented(failed.output))
+    }
+    // An assertion's own trap says nothing its report has not.
+    let reported = hasFailed(failed.errors)
+    let shown = reported ? withoutAssertionTrap(failed.errors) : failed.errors
+    if shown.count > 0 {
+        report.append("\n" + indented(shown))
+    }
+    if why.count > 0 {
+        report.append("\n    \(why)")
+    }
+    if !reported && !failed.timedOut {
+        report.append("\n    (exit status \(failed.status))")
+    }
+    return report.build()
+}
+
+/// The errors without the trap a failed assertion ends with: its line, and
+/// the line after it that says where it was — inside this harness.
+fn withoutAssertionTrap(_ errors: String) -> String {
+    let kept = TextBuilder()
+    var afterTrap = false
+    for line in errors.lines() {
+        if line == "fatal error: 'try!' caught an error" {
+            afterTrap = true
+            continue
+        }
+        if afterTrap && line.hasPrefix("  at ") {
+            afterTrap = false
+            continue
+        }
+        afterTrap = false
+        kept.append(line + "\n")
+    }
+    return kept.build()
+}
+
+fn indented(_ text: String) -> String {
+    let report = TextBuilder()
+    var first = true
+    for line in text.lines() {
+        if !first {
+            report.append("\n")
+        }
+        report.append("    " + line)
+        first = false
+    }
+    return report.build()
+}
+
+fn plural(_ count: Int) -> String {
+    return count == 1 ? "" : "s"
+}
+
+/// Nanoseconds, in the unit that reads best: '850 ns', '12.40 µs', '3.05 ms', '1.20 s'.
+public fn formatDuration(_ nanoseconds: Int) -> String {
+    return formatNanoseconds(F64(nanoseconds))
+}
+
+/// A time in nanoseconds, fractional, in the unit that reads best.
+public fn formatNanoseconds(_ ns: F64) -> String {
+    if ns < 10.0 {
+        return "\(ns:.2f) ns"
+    }
+    if ns < 100.0 {
+        return "\(ns:.1f) ns"
+    }
+    if ns < 1000.0 {
+        return "\(ns:.0f) ns"
+    }
+    if ns < 1000000.0 {
+        return "\(ns / 1000.0:.2f) µs"
+    }
+    if ns < 1000000000.0 {
+        return "\(ns / 1000000.0:.2f) ms"
+    }
+    return "\(ns / 1000000000.0:.2f) s"
+}

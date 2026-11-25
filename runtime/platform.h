@@ -78,6 +78,12 @@ _Noreturn static void stop_trapped(void);
 // what Debugger.break() asks before it stops for one.
 bool sable_debugger_attached(void);
 
+// Has 'told' given the return addresses of the calls each thread of the
+// program but the calling one is in, the innermost first, a thread at a time,
+// while the others run on; nothing where a system does not let a thread look
+// at another (WASI). 'told' is not called with a thread stopped.
+static void each_thread_frames(void (*told)(void **frames, int count));
+
 // ---- Memory --------------------------------------------------------------
 
 // 'size' bytes of zeroed memory straight from the system, starting at a

@@ -1,0 +1,41 @@
+module Sable.Testing
+
+/// How long a `Fixture` lives: which tests have the same one.
+///
+/// Tests run in processes of their own, but those that share a fixture in
+/// one, one after another, for as long as it lives. A test that traps ends
+/// its process: the rest go on in another, with the fixture made again.
+///
+/// ```sable
+/// assert(FixtureLifetime.PerTest.outlives(.PerTest))
+/// assert(!FixtureLifetime.PerTest.outlives(.PerSuite))
+/// ```
+@derive(Equatable, Debug)
+public enum FixtureLifetime: Sendable {
+    /// One for each test.
+    PerTest
+    /// One for all the tests of a suite: a `@suite` type, or a module's functions.
+    PerSuite
+    /// One for all the tests of a collection (`@suite(collection: "name")`);
+    /// of the suite, for one in none.
+    PerCollection
+    /// One for every test.
+    PerPackage
+
+    /// Whether one of this lifetime lives at least as long as one of the
+    /// other, which may then hold it.
+    public fn outlives(_ other: FixtureLifetime) -> Bool {
+        return rank >= other.rank
+    }
+
+    var rank: Int {
+        get {
+            return match self {
+                case .PerTest       => 0
+                case .PerSuite      => 1
+                case .PerCollection => 2
+                case .PerPackage    => 3
+            }
+        }
+    }
+}

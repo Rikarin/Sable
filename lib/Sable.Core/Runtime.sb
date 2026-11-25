@@ -652,6 +652,16 @@ public struct Runtime {
     @builtin("trap_uncaught")
     public static fn stopUncaught(message: String, site: String) -> Never
 
+    /// Ends the program, with status 124, once so many nanoseconds have
+    /// passed and then the grace: after the first the message, and where
+    /// every thread and task is, go to standard error, and the running task
+    /// is cancelled. 0 for no limit, the one before forgotten, and the task
+    /// no longer cancelled if it was for that one. The task asks for both
+    /// before it ends. It does not hold while a debugger is attached,
+    /// nor where there are no threads (WebAssembly, the interpreter).
+    @builtin("watchdog")
+    public static fn watchdog(_ nanoseconds: Int, grace: Int, _ message: String)
+
     /// Has every trap from now on said by the hook, in place of the
     /// report: given the message, the place ('file:line:column', or empty)
     /// and the frames, a line each. What Sable.Diagnostics' Panic.setHook

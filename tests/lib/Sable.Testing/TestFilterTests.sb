@@ -6,7 +6,7 @@ module TestFilterTests
 import Sable.Testing
 
 fn test(_ name: String, _ tags: String[>..]) -> TestCase {
-    return TestCase { name: name, location: "src/Parser.sb:12", run: () => { return none }, traps: none, tags: tags, timeLimit: 0, cases: none }
+    return TestCase(name: name, location: "src/Parser.sb:12", run: { scope in }, tags: tags)
 }
 
 @test(arguments: [

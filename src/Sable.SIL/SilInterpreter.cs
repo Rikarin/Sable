@@ -1828,6 +1828,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "debugger_break":
                 return null;
 
+            // An interpreted program is not stopped at a time limit: its caller may be.
+            case "watchdog":
+                return null;
+
             case "io_succeeded":
                 return !_ioFailed;
 

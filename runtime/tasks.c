@@ -3495,6 +3495,28 @@ static void name_async_frame(void *frame, char *text, size_t size) {
     }
 }
 
+// The calls of a task, the innermost first, numbered from 'index': the next
+// number. A running task's innermost is where it is; the others are at the
+// await they were last suspended at.
+static int print_async_calls(void **frames, int count, int index, bool running) {
+    for (int i = count - 1; i >= 0; i--) {
+        char text[600];
+        name_async_frame(frames[i], text, sizeof text);
+        int64_t state = *(int64_t *)((char *)frames[i] + sizeof(SableObject) + 2 * sizeof(void *));
+        if (strstr(text, "$task.run") != NULL) {
+            snprintf(text, sizeof text, "(the task's body)");
+        }
+
+        if ((running && i == count - 1) || state <= 0) {
+            fprintf(stderr, "  %2d  %s\n", index++, text);
+        } else {
+            fprintf(stderr, "  %2d  %s, at await %lld\n", index++, text, (long long)state);
+        }
+    }
+
+    return index;
+}
+
 static void print_task_backtrace(void) {
     SableTask *task = current_task;
     int index = 0;
@@ -3509,23 +3531,7 @@ static void print_task_backtrace(void) {
             fprintf(stderr, "  in the task that spawned it, waiting:\n");
         }
 
-        for (int i = count - 1; i >= 0; i--) {
-            char text[600];
-            name_async_frame(frames[i], text, sizeof text);
-            int64_t state = *(int64_t *)((char *)frames[i] + sizeof(SableObject) + 2 * sizeof(void *));
-            // The running task's innermost frame is where the trap is; the
-            // others are at the await they were last suspended at.
-            if (strstr(text, "$task.run") != NULL) {
-                snprintf(text, sizeof text, "(the task's body)");
-            }
-
-            if ((depth == 0 && i == count - 1) || state <= 0) {
-                fprintf(stderr, "  %2d  %s\n", index++, text);
-            } else {
-                fprintf(stderr, "  %2d  %s, at await %lld\n", index++, text, (long long)state);
-            }
-        }
-
+        index = print_async_calls(frames, count, index, depth == 0);
         task = task->parent;
     }
 }

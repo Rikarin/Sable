@@ -177,6 +177,7 @@ public enum ErrorCode {
     ERR_BackedPropertyNeedsInitializer = 3111,
     ERR_MissingBody = 3112,
     ERR_LazyProperty = 3113,
+    ERR_SuiteInit = 3114,
     ERR_IfValueNeedsElse = 3130,
     ERR_PropertyObservers = 3140,
     ERR_ConvenienceMustDelegate = 3141,

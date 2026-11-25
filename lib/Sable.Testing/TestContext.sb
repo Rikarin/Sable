@@ -1,0 +1,136 @@
+module Sable.Testing
+
+import Sable.Concurrency
+import Sable.Time
+
+/// The running test: its name and tags, the time it has left, and where what
+/// it has to show goes.
+///
+/// ```sable
+/// let context = TestContext.current
+/// context.log("tried \(context.attempt) time")
+/// expect(!context.cancellation.isCancellationRequested)
+/// ```
+public final class TestContext {
+    /// The running test's; outside a test, one with no name and no limit.
+    public static var current: TestContext => TestState.context
+
+    /// Qualified: 'Module.function', with a case's arguments.
+    public let name: String
+    /// Where it is declared, 'file:line'.
+    public let location: String
+    public let tags: String[>..]
+    /// Which try this is, from 1: more, for a test that is tried again.
+    public let attempt: Int
+    /// When its time is up, in `Runtime.monotonicNanoseconds()`; 0 for never.
+    let deadline: Int
+    var source: CancellationTokenSource?
+    // What cancels it, waiting for the deadline: not to be waited for once the test has ended.
+    var timer: Task<Void>?
+    var attached: Int
+
+    init(_ name: String, _ location: String, _ tags: String[>..], attempt: Int, deadline: Int) {
+        self.name = name
+        self.location = location
+        self.tags = tags
+        self.attempt = attempt
+        self.deadline = deadline
+        source = none
+        timer = none
+        attached = 0
+    }
+
+    /// Cancelled once the test's time is up, or it has ended: for what it calls that takes a
+    /// token, or waits for long. (An async test's own task is cancelled too.)
+    public var cancellation: CancellationToken {
+        get {
+            if deadline == 0 {
+                return .never
+            }
+            if let source = source {
+                return source.token
+            }
+            let made = CancellationTokenSource()
+            source = made
+            let left = deadline - Runtime.monotonicNanoseconds()
+            if left <= 0 {
+                made.cancel()
+            } else {
+                timer = Task.detached {
+                    try? await Task.sleep(nanoseconds: left)
+                    made.cancel()
+                }
+            }
+            return made.token
+        }
+    }
+
+    // The test has ended: what it left running is cancelled.
+    fn end() {
+        source?.cancel()
+        timer?.cancel()
+        timer = none
+    }
+
+    /// The time the test has left; none when it has no limit.
+    public var timeLeft: Duration? {
+        get {
+            if deadline == 0 {
+                return none
+            }
+            let left = deadline - Runtime.monotonicNanoseconds()
+            return Duration.nanoseconds(left < 0 ? 0 : left)
+        }
+    }
+
+    /// Writes a line to the test's output, which is shown when it fails, with
+    /// '--show-output', and in the reports.
+    public fn log(_ line: String) {
+        print(line)
+    }
+
+    /// Keeps the text as a file of the test's, which the reports name.
+    ///
+    /// ```sable ignore
+    /// TestContext.current.attach(response.body, named: "response.json")
+    /// ```
+    public fn attach(_ text: String, named name: String) {
+        attach(bytes: text.utf8.toArray(), named: name)
+    }
+
+    /// Keeps the bytes as a file of the test's, which the reports name.
+    public fn attach(bytes: U8[>..], named name: String) {
+        attached += 1
+        let root = Runtime.environment("SABLE_TEST_ATTACHMENTS") ?? "target/test-attachments"
+        let path = "\(root)/\(fileName(self.name))/\(attached)-\(attachmentName(name))"
+        _ = makeDirectories(directoryOf(path))
+        // Written anew: 2 to write, 8 made if it is not there, 32 emptied if it is.
+        let file = Runtime.fileOpen(path, 2 | 8 | 32, 0o644)
+        if file < 0 {
+            recordFailure("the attachment '\(name)' could not be written to \(path)")
+            return
+        }
+        var written = 0
+        while written < bytes.count {
+            let count = Runtime.fileWrite(file, bytes[written...], -1)
+            if count <= 0 {
+                break
+            }
+            written += count
+        }
+        if !Runtime.fileClose(file) || written < bytes.count {
+            recordFailure("the attachment '\(name)' could not be written to \(path)")
+            return
+        }
+        Runtime.writeError("\(attachmentMark)\(path)\n")
+    }
+}
+
+// A file's name that has no directory in it, its extension kept.
+fn attachmentName(_ name: String) -> String {
+    var made = ""
+    for c in name {
+        made += String.fromChar(c == '/' || c == '\\' || c == ':' || c < ' ' ? '-' : c)
+    }
+    return made
+}

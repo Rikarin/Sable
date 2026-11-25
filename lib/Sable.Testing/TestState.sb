@@ -1,8 +1,7 @@
 module Sable.Testing
 
-/// What the test running in this process has come to so far. A test is a
-/// process's only one, but for a run in one process, which starts it afresh
-/// for each.
+/// What the test running in this process has come to so far. A process runs
+/// one test at a time.
 struct TestState {
     // How many expectations failed: any task of the test's may fail one.
     static let failed: Atomic<Int> = Atomic(0)
@@ -13,6 +12,8 @@ struct TestState {
     // The test's name, and the '@test(arguments:)' case's with it, for
     // running it again; empty outside a test.
     static var name: String = ""
+    static var context: TestContext = TestContext("", "", [], attempt: 1, deadline: 0)
+    static var scope: FixtureScope = FixtureScope()
     // How many snapshots it has kept under each name.
     static var snapshots: String[>..] = []
     // What this process is, beside a test's: the death test, or the case of
@@ -21,8 +22,15 @@ struct TestState {
     // What every property's cases are made from: the run's, shown when one
     // fails, so that '--seed' or SABLE_TEST_SEED makes them again.
     static var seed: U64 = TestState.chosenSeed()
-    // Whether the test has the process to itself, and so can be run again
-    // in another: not in a run of them all in one.
+    // How long a test that does not say may run, in nanoseconds: 0 for as
+    // long as it takes; and how much longer one that is told its time is up
+    // has to end, before its process is ended.
+    static var timeLimit: Int = 0
+    static var grace: Int = 1_000_000_000
+    // Which try of its test this process is.
+    static var attempt: Int = 1
+    // Whether a process started for the test is it alone, and so it can be
+    // run again in another: not in a run of them all in one.
     static var isAlone: Bool = true
     // Whether a failure is counted and not said: while a property tries
     // out cases to find the simplest that fails.
@@ -30,13 +38,22 @@ struct TestState {
 
     static fn chosenSeed() -> U64 {
         if let text = Runtime.environment("SABLE_TEST_SEED") {
-            if let seed = try? U64.parse(text) {
+            if let seed = TestState.seed(of: text) {
                 return seed
             }
-            Runtime.writeError("SABLE_TEST_SEED is '\(text)', which is not a number: a seed is chosen\n")
+            Runtime.writeError("SABLE_TEST_SEED is '\(text)', which is neither a number nor 'random': it is not used\n")
         }
-        // Not so long that it is tedious to type.
-        return U64.truncating(Runtime.randomBits()) >> 24
+        // The same cases each run, so that a run fails for what was changed.
+        return 1
+    }
+
+    // The seed the text says; one chosen, for 'random'.
+    static fn seed(of text: String) -> U64? {
+        if text == "random" {
+            // Not so long that it is tedious to type.
+            return U64.truncating(Runtime.randomBits()) >> 24
+        }
+        return try? U64.parse(text)
     }
 
     /// The test run again in a process of its own, for the part of it the
@@ -53,11 +70,73 @@ struct TestState {
         return (status: Runtime.lastExitStatus(), output: output, errors: Runtime.lastErrorOutput())
     }
 
-    static fn begin(_ test: String) {
-        name = test
+    static fn begin(_ test: TestCase) {
+        let limit = test.timeLimit > 0 ? test.timeLimit : timeLimit
+        name = test.name
+        context = TestContext(test.name, test.location, test.tags, attempt: attempt, deadline: limit > 0 ? Runtime.monotonicNanoseconds() + limit : 0)
+        scope.suite = test.suite
+        scope.collection = test.fixtureCollection
         failed.store(0)
         deathTests.store(0)
         properties.store(0)
         snapshots = []
+        quiet = false
+    }
+
+    // ---- Traps ---------------------------------------------------------------
+
+    /// Has a trap tear down the fixtures there are, as far as it can, before
+    /// it ends the process.
+    static fn hookTraps() {
+        if scope.made.isEmpty {
+            return
+        }
+        Runtime.setTrapHook({ message, site, frames in
+            TestState.report(message, site, frames)
+            TestState.tearDownTrapped()
+        })
+    }
+
+    static fn unhookTraps() {
+        _ = Runtime.takeTrapHook(otherwise: { message, site, frames in })
+    }
+
+    // What a trap with no hook says.
+    static fn report(_ message: String, _ site: String, _ frames: String[>..]) {
+        Runtime.writeError("fatal error: \(message)\n\(site.isEmpty ? "" : "  at \(site)\n")")
+        let wanted = Runtime.environment("SABLE_BACKTRACE") ?? "0"
+        if wanted == "0" {
+            return
+        }
+        Runtime.writeError("backtrace:\n")
+        for (i, frame) in frames.enumerated() {
+            Runtime.writeError("  \(i:2)  \(frame)\n")
+        }
+    }
+
+    // How long the fixtures of a test that trapped are given to be torn down.
+    static let trapGrace = 5_000_000_000
+
+    /// Tears the fixtures down on another thread, as this one cannot go on:
+    /// what it trapped in the middle of may never end, so that it is waited
+    /// for only so long.
+    static fn tearDownTrapped() {
+        if scope.made.isEmpty || scope.isTearingDown {
+            return
+        }
+        scope.isTearingDown = true
+        let done = Atomic(0)
+        Runtime.share(scope)
+        _ = Task<Void>.detached {
+            await TestState.scope.tearDown(.PerPackage)
+            done.store(1)
+        }
+        let until = Runtime.monotonicNanoseconds() + trapGrace
+        while done.load() == 0 && Runtime.monotonicNanoseconds() < until {
+            Runtime.sleep(nanoseconds: 200_000)
+        }
+        if done.load() == 0 {
+            Runtime.writeError("the test's fixtures were not torn down: what it trapped in holds them\n")
+        }
     }
 }

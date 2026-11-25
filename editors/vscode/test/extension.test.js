@@ -39,8 +39,10 @@ function fakeSable(directory) {
   const script = path.join(directory, "fake-sable");
   fs.writeFileSync(script, `#!/bin/sh
 if [ "$1" = "test" ] && [ "$2" = "--list" ]; then
-  echo "Demo.adds: test (src/main.sb:3)"
-  echo "Demo.fails: test (src/main.sb:7)"
+  printf '%s\\n' '{"name":"Demo.adds","file":"src/main.sb","line":3,"suite":"Demo","tags":["fast"]}'
+  printf '%s\\n' '{"name":"Demo.fails","file":"src/main.sb","line":7,"suite":"Demo","tags":[]}'
+  printf '%s\\n' '{"name":"Demo.Orders.places","file":"src/main.sb","line":9,"suite":"Demo.Orders","tags":[],"skip":"no database"}'
+  printf '%s\\n' '{"filteredOut":0}'
   exit 0
 fi
 if [ "$1" = "test" ] && [ "$2" = "-g" ] && [ "$3" = "--harness-out" ]; then
@@ -52,19 +54,13 @@ if [ "$1" = "test" ]; then
     *" --coverage "*) coverage=1 ;;
     *) coverage= ;;
   esac
-  echo "running 2 tests"
-  echo "test Demo.adds ... ok (1.5 ms)"
-  echo "test Demo.fails ... FAILED (2 µs)"
-  echo ""
-  echo "---- Demo.fails (src/main.sb:7) ----"
-  echo "  assertion failed: values differ"
-  echo "    left: 3"
-  echo "    right: 4"
-  echo ""
-  echo "failed:"
-  echo "    Demo.fails"
-  echo ""
-  echo "test result: FAILED. 1 passed; 1 failed"
+  printf '%s\\n' '{"event":"run","count":3}'
+  printf '%s\\n' '{"event":"finished","name":"Demo.Orders.places","outcome":"skipped","duration":0,"reason":"no database"}'
+  printf '%s\\n' '{"event":"started","name":"Demo.adds"}'
+  printf '%s\\n' '{"event":"finished","name":"Demo.adds","outcome":"passed","duration":0.0015,"output":"two lines\\nof it","attempts":2,"attachments":["/t/log.txt"]}'
+  printf '%s\\n' '{"event":"started","name":"Demo.fails"}'
+  printf '%s\\n' '{"event":"finished","name":"Demo.fails","outcome":"failed","duration":0.000002,"message":"  expectation failed: a == b (main.sb:8)\\n    the values differ\\n      left: 3\\n     right: 4"}'
+  printf '%s\\n' '{"event":"ended","passed":1,"failed":1,"skipped":1,"filteredOut":0,"duration":0.1}'
   if [ -n "$coverage" ]; then
     mkdir -p target/coverage
     printf 'SF:src/main.sb\nDA:3,2\nDA:4,2\nDA:7,0\nLF:3\nLH:2\nBRDA:3,0,0,2\nBRDA:3,0,1,0\nBRF:2\nBRH:1\nend_of_record\n' > target/coverage/lcov.info
@@ -372,20 +368,26 @@ test("the Test Explorer lists a package's tests and reports a run", { skip: !pos
   const packages = [];
   controller.items.forEach((item) => packages.push(item));
   assert.deepEqual(packages.map((p) => p.label), ["demo"]);
+  const suites = [];
+  packages[0].children.forEach((item) => suites.push(item));
+  assert.deepEqual(suites.map((s) => s.label), ["Demo", "Demo.Orders"]);
   const tests = [];
-  packages[0].children.forEach((item) => tests.push(item));
+  suites.forEach((suite) => suite.children.forEach((item) => tests.push(item)));
   assert.deepEqual(tests.map((t) => [t.label, t.description, t.range.start.line, t.uri.fsPath]), [
-    ["adds", "Demo", 2, path.join(root, "src", "main.sb")],
-    ["fails", "Demo", 6, path.join(root, "src", "main.sb")],
+    ["adds", undefined, 2, path.join(root, "src", "main.sb")],
+    ["fails", undefined, 6, path.join(root, "src", "main.sb")],
+    ["places", "skipped: no database", 8, path.join(root, "src", "main.sb")],
   ]);
+  assert.deepEqual(tests[0].tags.map((t) => t.id), ["fast"]);
 
   const profile = controller.profiles.find((p) => p.isDefault);
   await profile.handler({ include: undefined, exclude: [] }, { isCancellationRequested: false, onCancellationRequested: () => {} });
   const run = controller.runs[0];
   assert.ok(run.ended);
-  const outcome = (id) => run.events.filter((e) => e.id === `${root}::${id}` && e.event !== "started").map((e) => e.event);
+  const outcome = (id) => run.events.filter((e) => e.id === `${root}::${id}` && !["enqueued", "started"].includes(e.event)).map((e) => e.event);
   assert.deepEqual(outcome("Demo.adds"), ["passed"]);
   assert.deepEqual(outcome("Demo.fails"), ["failed"]);
+  assert.deepEqual(outcome("Demo.Orders.places"), ["skipped"]);
 
   const passed = run.events.find((e) => e.event === "passed");
   assert.equal(passed.rest[0], 1.5);
@@ -394,9 +396,12 @@ test("the Test Explorer lists a package's tests and reports a run", { skip: !pos
   assert.equal(duration, 0.002);
   assert.equal(message.expectedOutput, "4");
   assert.equal(message.actualOutput, "3");
-  assert.match(message.message, /assertion failed/);
-  assert.equal(message.location.range.start.line, 6);
+  assert.match(message.message, /expectation failed/);
+  // Where the expectation is, not where the test is.
+  assert.equal(message.location.range.start.line, 7);
   assert.match(run.output, /test result: FAILED/);
+  assert.match(run.output, /Demo\.adds \.\.\. passed, on try 2\r\ntwo lines\r\nof it\r\nattached \/t\/log\.txt/);
+  assert.match(run.output, /Demo\.Orders\.places \.\.\. skipped: no database/);
 });
 
 test("a test's cases are items under it, run and debugged one by one", { skip: !posix && "needs a shell script for sable" }, async () => {
@@ -404,19 +409,14 @@ test("a test's cases are items under it, run and debugged one by one", { skip: !
   const script = path.join(root, "cases-sable");
   fs.writeFileSync(script, `#!/bin/sh
 if [ "$2" = "--list" ]; then
-  echo 'Demo.adds: test (src/main.sb:3)'
-  echo 'Demo.S.parses("a.b (c)", 1.5): test (src/main.sb:7)'
-  echo 'Demo.S.parses("", 0): test (src/main.sb:7)'
+  printf '%s\\n' '{"name":"Demo.adds","file":"src/main.sb","line":3,"suite":"Demo","tags":[]}'
+  printf '%s\\n' '{"name":"Demo.S.parses(\\"a.b (c)\\", 1.5)","file":"src/main.sb","line":7,"suite":"Demo.S","tags":[]}'
+  printf '%s\\n' '{"name":"Demo.S.parses(\\"\\", 0)","file":"src/main.sb","line":7,"suite":"Demo.S","tags":[]}'
   exit 0
 fi
 printf '%s\\n' "$@" > '${root}/arguments'
-echo 'test Demo.S.parses("a.b (c)", 1.5) ... FAILED (2 µs)'
-echo 'test Demo.S.parses("", 0) ... ok (1 ms)'
-echo ''
-echo '---- Demo.S.parses("a.b (c)", 1.5) (src/main.sb:7) ----'
-echo '    expectation failed: x == 1 (src/main.sb:8)'
-echo ''
-echo 'test result: FAILED.'
+printf '%s\\n' '{"event":"finished","name":"Demo.S.parses(\\"a.b (c)\\", 1.5)","outcome":"failed","duration":0.000002,"message":"    expectation failed: x == 1 (src/main.sb:8)"}'
+printf '%s\\n' '{"event":"finished","name":"Demo.S.parses(\\"\\", 0)","outcome":"passed","duration":0.001}'
 exit 1
 `, { mode: 0o755 });
   const { modules, recorded } = load({ folders: [root], settings: { "sable.path": script } });
@@ -431,16 +431,18 @@ exit 1
   };
   const packages = [];
   controller.items.forEach((item) => packages.push(item));
-  const [adds, parses] = list(packages[0]);
-  assert.deepEqual([adds.label, parses.label, parses.description], ["adds", "parses", "Demo.S"]);
+  const [demo, s] = list(packages[0]);
+  const [adds] = list(demo);
+  const [parses] = list(s);
+  assert.deepEqual([adds.label, parses.label, s.label], ["adds", "parses", "Demo.S"]);
   assert.deepEqual(list(parses).map((t) => t.label), ['("a.b (c)", 1.5)', '("", 0)']);
 
   const profile = controller.profiles.find((p) => p.isDefault);
   const token = { isCancellationRequested: false, onCancellationRequested: () => {} };
   await profile.handler({ include: [parses], exclude: [] }, token);
-  assert.deepEqual(fs.readFileSync(path.join(root, "arguments"), "utf8").trim().split("\n"), ["test", 'Demo.S.parses("a.b (c)", 1.5)', 'Demo.S.parses("", 0)', "--exact"]);
+  assert.deepEqual(fs.readFileSync(path.join(root, "arguments"), "utf8").trim().split("\n"), ["test", 'Demo.S.parses("a.b (c)", 1.5)', 'Demo.S.parses("", 0)', "--exact", "--json", "-"]);
   const run = controller.runs[0];
-  const outcome = (id) => run.events.filter((e) => e.id === `${root}::${id}` && e.event !== "started").map((e) => e.event);
+  const outcome = (id) => run.events.filter((e) => e.id === `${root}::${id}` && !["enqueued", "started"].includes(e.event)).map((e) => e.event);
   assert.deepEqual(outcome('Demo.S.parses("a.b (c)", 1.5)'), ["failed"]);
   assert.deepEqual(outcome('Demo.S.parses("", 0)'), ["passed"]);
   assert.match(run.events.find((e) => e.event === "failed").rest[0].message, /expectation failed: x == 1/);
@@ -459,7 +461,7 @@ test("the Test Explorer debugs a test in a harness built with debug information"
   const packageItem = [];
   controller.items.forEach((item) => packageItem.push(item));
   const tests = [];
-  packageItem[0].children.forEach((item) => tests.push(item));
+  packageItem[0].children.forEach((suite) => suite.children.forEach((item) => tests.push(item)));
   const fails = tests.find((t) => t.label === "fails");
   await debug.handler({ include: [fails], exclude: [] }, { isCancellationRequested: false, onCancellationRequested: () => {} });
 
@@ -556,12 +558,12 @@ test("the Coverage profile runs the selected tests with --coverage and reports e
   const packageItem = [];
   controller.items.forEach((item) => packageItem.push(item));
   const tests = [];
-  packageItem[0].children.forEach((item) => tests.push(item));
+  packageItem[0].children.forEach((suite) => suite.children.forEach((item) => tests.push(item)));
   await profile.handler({ include: [tests.find((t) => t.label === "adds")], exclude: [] }, { isCancellationRequested: false, onCancellationRequested: () => {} });
 
   const run = controller.runs[0];
   assert.ok(run.ended);
-  assert.deepEqual(run.events.filter((e) => e.event !== "started").map((e) => e.event), ["passed"]);
+  assert.deepEqual(run.events.filter((e) => !["enqueued", "started"].includes(e.event)).map((e) => e.event), ["passed"]);
   assert.equal(run.coverage.length, 1);
   const [file] = run.coverage;
   assert.equal(file.uri.fsPath, path.join(root, "src", "main.sb"));

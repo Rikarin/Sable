@@ -149,7 +149,7 @@ internal sealed class UnusedPrivateLint : Lint {
     public override LintLevel DefaultLevel => LintLevel.Warn;
     public override string Description => "a private function or type that nothing outside its own declaration uses";
 
-    static readonly HashSet<string> CalledFromOutside = new(StringComparer.Ordinal) { "test", "bench", "fuzz", "export", "extern" };
+    static readonly HashSet<string> CalledFromOutside = new(StringComparer.Ordinal) { "test", "suite", "bench", "fuzz", "export", "extern" };
 
     public override void Check(LintContext context) {
         var trees = context.Compilation.SyntaxTrees.Where(static t => !CoreLibrary.Contains(t) && t.Root is CompilationUnitSyntax).ToList();

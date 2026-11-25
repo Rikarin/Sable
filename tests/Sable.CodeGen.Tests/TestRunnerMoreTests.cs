@@ -89,7 +89,7 @@ public sealed class TestRunnerMoreTests {
         Assert.Contains("---- Suite.awaitsAndThrows (test.sb:16) ----\n    assertion failed: the test threw an error: worse\n", output, StringComparison.Ordinal);
         Assert.Contains("    fatal error: array index out of range\n      at test.sb:38:11\n    the test trapped, but not with 'overflow'\n    (exit status 134)\n", output, StringComparison.Ordinal);
         Assert.Contains("---- Suite.returns (test.sb:42) ----\n    the test was to trap, and it returned\n    (exit status 0)\n", output, StringComparison.Ordinal);
-        Assert.Contains("---- Suite.anAssertionIsNotTheTrap (test.sb:47) ----\n    assertion failed: the values differ\n", output, StringComparison.Ordinal);
+        Assert.Contains("---- Suite.anAssertionIsNotTheTrap (test.sb:47) ----\n    assertion failed: the values differ (test.sb:48)\n", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -130,8 +130,16 @@ public sealed class TestRunnerMoreTests {
 
         var run = Native(Suite, arguments: ["--describe", "outOfRange"]);
         Assert.Equal(0, run.ExitCode);
-        Assert.Equal("Suite.outOfRange\ttest.sb:24\t\t0\t\nSuite.outOfRangeSaid\ttest.sb:30\tout of range\t0\t\nfiltered out\t5\n", run.Stdout);
-        var (tests, filteredOut) = Sable.Driver.TestRunner.Parse(run.Stdout + "Suite.awaits\ttest.sb:10\t-\t1500000000\tslow,net\n");
+        Assert.Equal(
+            """
+            {"name":"Suite.outOfRange","file":"test.sb","line":24,"suite":"Suite","tags":[],"traps":""}
+            {"name":"Suite.outOfRangeSaid","file":"test.sb","line":30,"suite":"Suite","tags":[],"traps":"out of range"}
+            {"filteredOut":5}
+
+            """,
+            run.Stdout);
+        // A reader takes what it knows of what is said.
+        var (tests, filteredOut) = Sable.Driver.TestRunner.Parse(run.Stdout + """{"name":"Suite.awaits","file":"test.sb","line":10,"suite":"Suite","later":[1],"tags":["slow","net"],"timeout":1500000000}""");
         Assert.Equal(5, filteredOut);
         Assert.Equal(
             [("Suite.outOfRange", "test.sb:24", "", null, ""), ("Suite.outOfRangeSaid", "test.sb:30", "out of range", null, ""), ("Suite.awaits", "test.sb:10", null, TimeSpan.FromSeconds(1.5), "slow net")],
@@ -167,7 +175,10 @@ public sealed class TestRunnerMoreTests {
         Assert.StartsWith("running 8 tests\n", text, StringComparison.Ordinal);
         AssertTheSuitesVerdicts(text);
         Assert.Contains("test Suite.hangs ... FAILED (", text, StringComparison.Ordinal);
-        Assert.True(text.Contains("---- Suite.hangs (test.sb:51) ----\n    the test did not finish within 3", StringComparison.Ordinal), text);
+        Assert.True(text.Contains("---- Suite.hangs (test.sb:51) ----\n", StringComparison.Ordinal), text);
+        Assert.Contains("    the test did not finish within 3 s, and was stopped", text, StringComparison.Ordinal);
+        // Where it was: the function it loops in.
+        Assert.Contains("sable.Suite.hangs", text, StringComparison.Ordinal);
         Assert.Contains("test result: FAILED. 3 passed; 5 failed; 0 filtered out; finished in ", text, StringComparison.Ordinal);
 
         // Failures are reported in the order the tests are declared, whatever order they finished in.

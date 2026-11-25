@@ -24,7 +24,7 @@ public sealed class TestAttributeTests {
 
     [Fact]
     public void ATestTakesNoParameters() =>
-        Rejects("S3100", "@test\nfn t(_ n: Int) { }", "a test takes no parameters");
+        Rejects("S3100", "@test\nfn t(_ n: Int) { }", "'Int' is not a fixture: a test is passed fixtures");
 
     [Fact]
     public void ATestIsNotGeneric() =>

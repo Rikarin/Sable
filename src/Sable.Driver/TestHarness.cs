@@ -296,10 +296,13 @@ public static class TestHarness {
             var list = $"sableHarnessList{m}";
             var thunks = new StringBuilder();
             thunks.Append(CultureInfo.InvariantCulture, $"module {module.Key}\n\n");
-            // A test's closure is async, so an async test can be awaited:
-            // none when it returned, what it threw when it threw.
-            var closure = "async () -> String?";
+            // A test's closure is async, so an async test can be awaited, and
+            // is given the fixtures there are.
+            thunks.Append("import Sable.Testing.{ FixtureScope }\n\n");
+            var closure = "async (FixtureScope) throws -> Void";
             if (kind == TestKind.Bench) {
+                thunks.Clear();
+                thunks.Append(CultureInfo.InvariantCulture, $"module {module.Key}\n\n");
                 // Each is run with a Bencher: given it, if it takes one, or
                 // timed whole by it, if not; awaited, as an async one may be.
                 thunks.Append("import Sable.Testing\n\n");
@@ -315,12 +318,20 @@ public static class TestHarness {
             files.Add(SyntaxTree.Parse(new SourceText(thunks.ToString(), $"<harness:{module.Key}>"), options));
             main.Append(CultureInfo.InvariantCulture, $"import {module.Key}.{{ {list} }}\n");
 
-            // The cases of each test that has any: a file of its own for each.
-            foreach (var (test, i) in module.Select(static (t, i) => (t, i)).Where(static t => t.t.Arguments.Count > 0)) {
-                var cases = CasesName(m, i);
-                files.Add(SyntaxTree.Parse(new SourceText(WriteCases(test, cases), $"<harness:{test.QualifiedName}>"), options));
-                main.Append(CultureInfo.InvariantCulture, $"import {module.Key}.{{ {cases} }}\n");
+            // What is written with a test's own names — its cases, the fixtures
+            // it takes, when it is skipped — is in a file with its imports.
+            foreach (var (test, i) in module.Select(static (t, i) => (t, i)).Where(static t => NeedsFile(t.t))) {
+                files.Add(SyntaxTree.Parse(new SourceText(WriteTest(test, Suffix(m, i)), $"<harness:{test.QualifiedName}>"), options));
+                foreach (var name in new[] { (test.Arguments.Count > 0, CasesName), (test.Fixtures.Count > 0, RunName), (test.Fixtures.Count > 0 || test.Suite is { Parameters.Count: > 0 }, LifetimesName), (HasCondition(test), SkipsName) }.Where(static n => n.Item1)) {
+                    main.Append(CultureInfo.InvariantCulture, $"import {module.Key}.{{ {name.Item2}{Suffix(m, i)} }}\n");
+                }
             }
+        }
+
+        // How each suite is made, and each fixture that is made from others.
+        var written = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var making in kind == TestKind.Test ? tests.SelectMany(static t => t.Fixtures.Select(static f => f.Making).Concat(t.Suite is { } suite ? [suite] : [])).ToList() : []) {
+            WriteMaking(making, isSuite: tests.Any(t => t.Suite?.Type == making.Type), written, files, options);
         }
 
         var (caseType, run) = kind == TestKind.Test ? ("TestCase", "runTests") : ("BenchCase", "runBenchmarks");
@@ -330,12 +341,13 @@ public static class TestHarness {
             main.Append(CultureInfo.InvariantCulture, $"    let list{m} = sableHarnessList{m}()\n");
             var i = 0;
             foreach (var test in modules[m]) {
-                var more = kind != TestKind.Test ? ""
-                    : string.Create(
-                        CultureInfo.InvariantCulture,
-                        $", traps: {(test.ExpectedTrap is { } trap ? Quote(trap) : "none")}, tags: [{string.Join(", ", test.Tags.Select(Quote))}], timeLimit: {(test.Timeout ?? TimeSpan.Zero).Ticks * 100}, cases: {(test.Arguments.Count > 0 ? CasesName(m, i) : "none")}"
-                    );
-                main.Append(CultureInfo.InvariantCulture, $"    all.append({caseType} {{ name: {Quote(test.QualifiedName)}, location: {Quote(test.Location)}, run: list{m}[{i++}]{more} }})\n");
+                if (kind == TestKind.Test) {
+                    main.Append(CultureInfo.InvariantCulture, $"    all.append(TestCase({Case(test, test.Fixtures.Count > 0 ? RunName + Suffix(m, i) : $"list{m}[{i}]", Suffix(m, i))}))\n");
+                } else {
+                    main.Append(CultureInfo.InvariantCulture, $"    all.append({caseType} {{ name: {Quote(test.QualifiedName)}, location: {Quote(test.Location)}, run: list{m}[{i}] }})\n");
+                }
+
+                i++;
             }
         }
 
@@ -344,15 +356,163 @@ public static class TestHarness {
         return files;
     }
 
-    static string CasesName(int module, int test) => string.Create(CultureInfo.InvariantCulture, $"sableHarnessCases{module}_{test}");
+    const string CasesName = "sableHarnessCases", RunName = "sableHarnessRun", LifetimesName = "sableHarnessLifetimes", SkipsName = "sableHarnessSkips", MakeName = "sableHarnessMake";
+
+    static string Suffix(int module, int test) => string.Create(CultureInfo.InvariantCulture, $"{module}_{test}");
+
+    static bool HasCondition(TestFunction test) => test.Skips.Any(static s => s.Condition is not null);
+
+    static bool NeedsFile(TestFunction test) => test.Kind == TestKind.Test && (test.Arguments.Count > 0 || test.Fixtures.Count > 0 || HasCondition(test) || test.Suite is { Parameters.Count: > 0 });
+
+    /// <summary>A test as the entry point lists it: what it is, and what it says of itself where it says anything.</summary>
+    static string Case(TestFunction test, string run, string suffix) {
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture, $"name: {Quote(test.QualifiedName)}, location: {Quote(test.Location)}, run: {run}");
+        if (test.ExpectedTrap is { } trap) {
+            text.Append(CultureInfo.InvariantCulture, $", traps: {Quote(trap)}");
+        }
+
+        if (test.Tags.Count > 0) {
+            text.Append(CultureInfo.InvariantCulture, $", tags: [{string.Join(", ", test.Tags.Select(Quote))}]");
+        }
+
+        if (test.Timeout is { } timeout) {
+            text.Append(CultureInfo.InvariantCulture, $", timeLimit: {timeout.Ticks * 100}");
+        }
+
+        if (test.Arguments.Count > 0) {
+            text.Append(CultureInfo.InvariantCulture, $", cases: {CasesName}{suffix}");
+        }
+
+        text.Append(CultureInfo.InvariantCulture, $", suite: {Quote(test.SuiteName)}");
+        if (test.Collection.Length > 0) {
+            text.Append(CultureInfo.InvariantCulture, $", collection: {Quote(test.Collection)}");
+        }
+
+        text.Append(test.IsSerialized ? ", isSerialized: true" : "").Append(test.IsExplicit ? ", isExplicit: true" : "");
+        if (test.Retries > 0) {
+            text.Append(CultureInfo.InvariantCulture, $", retries: {test.Retries}");
+        }
+
+        if (test.Skips.Count > 0) {
+            text.Append(", skips: ").Append(test.Skips.Any(static s => s.Condition is not null) ? SkipsName + suffix : $"{{ {Quote(test.Skips[0].Reason)} }}");
+        }
+
+        if (test.Fixtures.Count > 0 || test.Suite is { Parameters.Count: > 0 }) {
+            text.Append(CultureInfo.InvariantCulture, $", fixtures: {LifetimesName}{suffix}");
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>The expression that gives a fixture, in a file that may name its type as it is written there.</summary>
+    static string Give(TestFixture fixture) =>
+        fixture.Making.Parameters.Count > 0
+            ? $"try await {fixture.Written}.{MakeName}(scope)"
+            : $"try await scope.fixture({fixture.Written}.self, named: {Quote(fixture.Making.QualifiedName)}, {{ (scope: FixtureScope) in {Make(fixture.Making, fixture.Written)} }})";
+
+    /// <summary>A call of the initialiser, with its fixtures given.</summary>
+    static string Make(TestMaking making, string type) =>
+        $"{(making.Throws || making.Parameters.Count > 0 ? "try " : "")}{(making.IsAsync || making.Parameters.Count > 0 ? "await " : "")}{type}({Passed(making.Parameters)})";
+
+    static string Passed(IReadOnlyList<TestFixture> fixtures) =>
+        string.Join(", ", fixtures.Select(static f => $"{(f.Label is { } label ? $"{label}: " : "")}{Give(f)}"));
+
+    /// <summary>A body that says how long each of the fixtures lives, with those they are made from.</summary>
+    /// <param name="own">What it starts with, an array of its own, if anything.</param>
+    static string Lifetimes(string? own, IReadOnlyList<TestFixture> fixtures) {
+        var body = new StringBuilder(string.Create(CultureInfo.InvariantCulture, $"    var all: FixtureLifetime[>..] = {own ?? "[]"}\n"));
+        foreach (var fixture in fixtures) {
+            body.Append(
+                fixture.Making.Parameters.Count > 0
+                    ? $"    all.append(contentsOf: {fixture.Written}.{LifetimesName}())\n"
+                    : $"    all.append({fixture.Written}.lifetime)\n"
+            );
+        }
+
+        return body.Append("    return all\n").ToString();
+    }
+
+    /// <summary>The file that makes a suite, or a fixture, from the fixtures its initialiser takes: an extension of it, with its file's imports.</summary>
+    static void WriteMaking(TestMaking making, bool isSuite, HashSet<string> written, List<SyntaxTree> files, ParseOptions options) {
+        foreach (var parameter in making.Parameters) {
+            WriteMaking(parameter.Making, false, written, files, options);
+        }
+
+        if (making.Tree is null || (!isSuite && making.Parameters.Count == 0) || !written.Add(making.QualifiedName)) {
+            return;
+        }
+
+        var access = making.IsPublic ? "public " : "";
+        var made = isSuite ? Make(making, making.Path) : $"try await scope.fixture({making.Path}.self, named: {Quote(making.QualifiedName)}, {{ (scope: FixtureScope) in {Make(making, making.Path)} }})";
+        var members = $$"""
+                {{access}}static async fn {{MakeName}}(_ scope: FixtureScope) throws -> {{making.Path}} {
+                    return {{made}}
+                }
+
+                {{access}}static fn {{LifetimesName}}() -> FixtureLifetime[>..] {
+                {{Lifetimes(isSuite ? null : $"[{making.Path}.lifetime]", making.Parameters)}}
+                }
+
+            """;
+        files.Add(SyntaxTree.Parse(new SourceText($"{Header(making.Module, making.Tree)}import Sable.Testing.{{ FixtureScope, FixtureLifetime, Fixture }}\n\nextension {making.Path} {{\n{members}}}\n", $"<harness:{making.QualifiedName}>"), options));
+    }
+
+    /// <summary>The module, and the imports of the file.</summary>
+    static string Header(string module, SyntaxTree tree) {
+        var imports = ((CompilationUnitSyntax)tree.Root).Imports.Select(i => tree.Text.Text.Substring(i.Span.Start, i.Span.Length).Trim());
+        return $"module {module}\n\n{string.Join('\n', imports)}\n";
+    }
 
     /// <summary>
-    ///     The file that gives a <c>@test(arguments:)</c> test's cases: its
-    ///     arrays, as they are written, in a file with the imports of the one
-    ///     they are in — and, for a static method's, in an extension of its
-    ///     type — and a closure calling the test for each of what they hold.
+    ///     What is written with a test's own names, in a file with the
+    ///     imports of the one it is in — and, for a method's, in an extension
+    ///     of its type: the cases of a <c>@test(arguments:)</c> test, a closure
+    ///     calling the test for each of what its arrays hold; the fixtures a
+    ///     function takes, given to it; and when it is skipped.
     /// </summary>
-    static string WriteCases(TestFunction test, string name) {
+    static string WriteTest(TestFunction test, string suffix) {
+        var type = test.CallPath.LastIndexOf('.') is var dot and >= 0 ? test.CallPath[..dot] : null;
+        var functions = new List<(string Signature, string Name, string Pass, string Body)>();
+        if (test.Arguments.Count > 0) {
+            functions.Add(("fn {0}() -> TestArguments[>..]", CasesName, "()", WriteCases(test)));
+        }
+
+        if (test.Fixtures.Count > 0) {
+            functions.Add(("async fn {0}(_ scope: FixtureScope) throws", RunName, "(scope)", $"    {Call(test, Passed(test.Fixtures))}\n"));
+        }
+
+        if (test.Fixtures.Count > 0 || test.Suite is { Parameters.Count: > 0 }) {
+            var own = test.Suite is { Parameters.Count: > 0 } suite ? $"{suite.Path}.{LifetimesName}()" : null;
+            functions.Add(("fn {0}() -> FixtureLifetime[>..]", LifetimesName, "()", Lifetimes(own, test.Fixtures)));
+        }
+
+        if (test.Skips.Any(static s => s.Condition is not null)) {
+            var body = new StringBuilder();
+            foreach (var skip in test.Skips) {
+                body.Append(CultureInfo.InvariantCulture, $"    if {skip.Condition?.ToString().Trim() ?? "true"} {{\n        return {Quote(skip.Reason)}\n    }}\n");
+            }
+
+            functions.Add(("fn {0}() -> String?", SkipsName, "()", body.Append("    return none\n").ToString()));
+        }
+
+        var text = new StringBuilder();
+        text.Append(Header(test.Module, test.Tree)).Append("import Sable.Testing.{ TestArguments, describeArgument, FixtureScope, FixtureLifetime, Fixture }\n\n// Written by the compiler for 'sable test'.\n");
+        foreach (var (signature, name, pass, body) in functions) {
+            var function = string.Format(CultureInfo.InvariantCulture, signature, name + suffix);
+            if (type is null) {
+                text.Append(CultureInfo.InvariantCulture, $"public {function} {{\n{body}}}\n");
+            } else {
+                var waits = signature.StartsWith("async", StringComparison.Ordinal) ? "try await " : signature.Contains("->", StringComparison.Ordinal) ? "return " : "";
+                text.Append(CultureInfo.InvariantCulture, $"public {function} {{\n    {waits}{type}.{name}{suffix}{pass}\n}}\n\nextension {type} {{\n    static {function} {{\n{body}    }}\n}}\n");
+            }
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>The body that gives a <c>@test(arguments:)</c> test's cases.</summary>
+    static string WriteCases(TestFunction test) {
         var parameters = test.Symbol.Parameters;
         var types = test.Syntax.Parameters.Parameters.Select(static p => p.Type.ToString().Trim()).ToList();
         var arrays = test.Arguments.Select(static a => a.ToString().Trim()).ToList();
@@ -373,25 +533,27 @@ public static class TestHarness {
 
         var call = string.Join(", ", parameters.Select((p, i) => p.Label == "_" ? values[i] : $"{p.Label ?? p.Name}: {values[i]}"));
         var described = string.Join(", ", values.Select(static v => $"\\(describeArgument({v}))"));
-        body.Append(CultureInfo.InvariantCulture, $"        sableCases.append(TestArguments(\"{described}\", {Thunk(test, call)}))\n");
-        body.Append(string.Concat(Enumerable.Repeat("    }\n", arrays.Count))).Append("    return sableCases\n");
+        body.Append(CultureInfo.InvariantCulture, $"        sableCases.append(TestArguments(\"{described}\", (scope: FixtureScope) => {{ {Call(test, call)} }}))\n");
+        return body.Append(string.Concat(Enumerable.Repeat("    }\n", arrays.Count))).Append("    return sableCases\n").ToString();
+    }
 
-        var unit = (CompilationUnitSyntax)test.Tree.Root;
-        var imports = unit.Imports.Select(i => test.Tree.Text.Text.Substring(i.Span.Start, i.Span.Length).Trim());
-        var type = test.CallPath.LastIndexOf('.') is var dot and >= 0 ? test.CallPath[..dot] : null;
-        var code = type is null
-            ? $"public fn {name}() -> TestArguments[>..] {{\n{body}}}\n"
-            : $"public fn {name}() -> TestArguments[>..] {{\n    return {type}.{name}()\n}}\n\nextension {type} {{\n    static fn {name}() -> TestArguments[>..] {{\n{body}    }}\n}}\n";
-        return $"module {test.Module}\n\n{string.Join('\n', imports)}\nimport Sable.Testing.{{ TestArguments, describeArgument }}\n\n// Written by the compiler for 'sable test'.\n{code}";
+    /// <summary>The test called: of a suite made for it, for a method of one.</summary>
+    static string Call(TestFunction test, string arguments) {
+        var call = $"{(test.Throws ? "try " : "")}{Await(test)}";
+        if (test.Suite is not { } suite) {
+            return $"{call}{test.CallPath}({arguments})";
+        }
+
+        return $"var sableSuite = try await scope.suite(try await {suite.Path}.{MakeName}(scope)); {call}sableSuite.{test.Symbol.Name}({arguments})";
     }
 
     /// <summary>The closure that runs one test from inside its module.</summary>
-    /// <remarks>What a test throws is described as interpolation describes it, for its failure's report.</remarks>
-    static string Thunk(TestFunction test, string arguments = "") => test switch {
+    static string Thunk(TestFunction test) => test switch {
         // One whose cases are run instead.
-        { Kind: TestKind.Test, Arguments.Count: > 0 } when arguments.Length == 0 => "() => { return none }",
-        { Kind: TestKind.Test, Throws: false } => $"() => {{ {Await(test)}{test.CallPath}({arguments}); return none }}",
-        { Kind: TestKind.Test, Throws: true } => $"() => {{\n            do {{ try {Await(test)}{test.CallPath}({arguments}) }} catch {{ return \"\\(error)\" }}\n            return none\n        }}",
+        { Kind: TestKind.Test, Arguments.Count: > 0 } => "(scope: FixtureScope) => { }",
+        // One whose fixtures are given in a file that can name them.
+        { Kind: TestKind.Test, Fixtures.Count: > 0 } => "(scope: FixtureScope) => { }",
+        { Kind: TestKind.Test } => $"(scope: FixtureScope) => {{ {Call(test, "")} }}",
         { Kind: TestKind.Bench, TakesBencher: true } => $"(b: Bencher) => {{ {Await(test)}{test.CallPath}(b) }}",
         { Kind: TestKind.Bench, IsAsync: true } => $"(b: Bencher) => {{ await b.iterateAsync(() => {{ await {test.CallPath}() }}) }}",
         _ => $"(b: Bencher) => {{ b.iterate(() => {test.CallPath}()) }}",

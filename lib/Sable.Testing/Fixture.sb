@@ -1,0 +1,53 @@
+module Sable.Testing
+
+/// What a test is run with: made before it, and torn down after. A `@suite`
+/// type asks for the fixtures it needs as its initialiser's parameters, and a
+/// `@test` function as its own; a fixture may ask for others the same way.
+/// `sable test` makes them, waits for `setUp`, and waits for `tearDown` once
+/// the last test that shares the fixture has ended, the last made first.
+///
+/// A fixture is a class, which those that share it share, or a struct that
+/// holds one. A suite may be a Fixture itself: its `setUp` and `tearDown` are
+/// then around each of its tests.
+///
+/// ```sable ignore
+/// final class Database: Fixture {
+///     static var lifetime: FixtureLifetime => .PerSuite
+///     var rows: String[>..] = []
+///
+///     init() { }
+///     async fn setUp() throws { rows.append("Ada") }
+///     async fn tearDown() throws { rows = [] }
+/// }
+///
+/// @suite
+/// struct Queries {
+///     let database: Database
+///     init(database: Database) { self.database = database }
+///
+///     @test
+///     fn finds() { expect(database.rows.contains("Ada")) }
+/// }
+/// ```
+public protocol Fixture {
+    /// How long one lives, and so which tests share it: as long as its test,
+    /// when it does not say.
+    static var lifetime: FixtureLifetime { get }
+
+    /// Readies it, once its initialiser has made it. What it throws fails
+    /// the test it was made for, and it is torn down.
+    async fn setUp() throws
+
+    /// Ends it, whatever came of the tests: they passed, failed, threw, ran
+    /// past their time or, as far as that can be, trapped. What it throws
+    /// fails the last of them.
+    async fn tearDown() throws
+}
+
+extension Fixture {
+    public static var lifetime: FixtureLifetime => .PerTest
+
+    public async fn setUp() throws { }
+
+    public async fn tearDown() throws { }
+}

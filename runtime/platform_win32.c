@@ -11,6 +11,7 @@
 #include <iphlpapi.h>
 #include <bcrypt.h>
 #include <dbghelp.h>
+#include <tlhelp32.h>
 #include <fcntl.h>
 #include <io.h>
 #include <shellapi.h>
@@ -134,6 +135,87 @@ static void name_frame(void *frame, char *text, size_t size) {
 // Whether a debugger is attached to the process now (Debugger.isAttached).
 bool sable_debugger_attached(void) {
     return IsDebuggerPresent() != FALSE;
+}
+
+// ---- Every thread's frames ---------------------------------------------------
+
+// The thread is stopped for as long as its stack is walked, by the unwind
+// tables every function has. Nothing is asked of the heap meanwhile, as the
+// thread may hold the heap's lock.
+static int stopped_frames(HANDLE thread, void **frames, int capacity) {
+    CONTEXT context;
+    memset(&context, 0, sizeof context);
+    context.ContextFlags = CONTEXT_FULL;
+    if (SuspendThread(thread) == (DWORD)-1) {
+        return 0;
+    }
+
+    int count = 0;
+    if (GetThreadContext(thread, &context)) {
+        while (count < capacity) {
+#if defined(_M_ARM64) || defined(__aarch64__)
+            DWORD64 at = context.Pc;
+#else
+            DWORD64 at = context.Rip;
+#endif
+            if (at == 0) {
+                break;
+            }
+
+            frames[count++] = (void *)(uintptr_t)at;
+            DWORD64 image = 0;
+            PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(at, &image, NULL);
+            if (function == NULL) {
+                // A leaf, which keeps nothing: its return address is where a
+                // call leaves it.
+#if defined(_M_ARM64) || defined(__aarch64__)
+                if (context.Pc == context.Lr) {
+                    break;
+                }
+
+                context.Pc = context.Lr;
+#else
+                context.Rip = *(DWORD64 *)(uintptr_t)context.Rsp;
+                context.Rsp += 8;
+#endif
+                continue;
+            }
+
+            void *handler = NULL;
+            DWORD64 establisher = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, at, function, &context, &handler, &establisher, NULL);
+        }
+    }
+
+    ResumeThread(thread);
+    return count;
+}
+
+static void each_thread_frames(void (*told)(void **frames, int count)) {
+    HANDLE threads = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (threads == INVALID_HANDLE_VALUE) {
+        return;
+    }
+
+    THREADENTRY32 entry;
+    entry.dwSize = sizeof entry;
+    for (BOOL more = Thread32First(threads, &entry); more; more = Thread32Next(threads, &entry)) {
+        if (entry.th32OwnerProcessID != GetCurrentProcessId() || entry.th32ThreadID == GetCurrentThreadId()) {
+            continue;
+        }
+
+        HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, entry.th32ThreadID);
+        if (thread != NULL) {
+            void *frames[BACKTRACE_DEPTH];
+            int count = stopped_frames(thread, frames, BACKTRACE_DEPTH);
+            CloseHandle(thread);
+            if (count > 0) {
+                told(frames, count);
+            }
+        }
+    }
+
+    CloseHandle(threads);
 }
 
 // abort() would end the program with status 3, after offering it to

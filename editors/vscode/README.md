@@ -14,8 +14,9 @@ through `sable` too.
 - **Formatting** (`Format Document`, or format on save): `sable fmt`'s one style. A file with a
   syntax error is left alone.
 - **Run and Debug** above a program's `main`, and in the editor title; `Cmd/Ctrl+F5` runs.
-- **The Test Explorer**: each package's `@test` functions, listed by `sable test --list` and run
-  from the gutter, with failures (and the values that differ) shown where the test is; or debugged,
+- **The Test Explorer**: each package's tests under their suites, each case of one with arguments
+  under it, with their tags and why one is skipped, as `sable test --list --json -` lists them; run
+  from the gutter, as the run goes (`sable test --json -`), with failures (and the values that differ) shown where the test is; or debugged,
   in a harness built with debug information (the Debug profile).
 - **Test coverage** (the Coverage profile, in VS Code 1.88 or later): the selected tests run with
   `sable test --coverage`, and each file of the package shows which lines they ran, and which

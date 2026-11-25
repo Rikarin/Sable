@@ -525,6 +525,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_trap_hook_set(ptr, ptr)
                                 declare void @sable_trap_hook_take(ptr, ptr, ptr)
                                 declare zeroext i1 @sable_debugger_attached()
+                                declare void @sable_watchdog(i64, i64, ptr)
                                 declare void @llvm.debugtrap()
                                 @sable_trap_site = external thread_local global ptr
                                 declare ptr @sable_alloc(ptr, i64)
@@ -5415,6 +5416,10 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = load {{ ptr, ptr }}, ptr {slot}");
                     return;
                 }
+
+                case "watchdog":
+                    Line($"call void @sable_watchdog(i64 {operands[0]}, i64 {operands[1]}, ptr {operands[2]})");
+                    return;
 
                 case "debugger_attached":
                     Line($"{Result()} = call zeroext i1 @sable_debugger_attached()");

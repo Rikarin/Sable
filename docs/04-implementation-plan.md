@@ -2078,11 +2078,28 @@ Full design in [05-toolchain.md](05-toolchain.md).
   body run and no other. A property's case in a process of its own is `--role
   property:<n>:<size>`, its choices on standard input; the trap hook starts
   those, as the process that trapped ends. `TestReport.cs` writes JUnit and TRX.
-- **Deferred:** a time limit inside the harness's own runner (`--in-process`,
-  or the harness run directly rather than by `sable test`); fixtures,
-  lifecycle, serial groups, retries and skipping (#107); `@bench(arguments:)`
-  and one filter for both commands (#129: `TestFilter` is in Sable.Testing for
-  it).
+- **Suites, fixtures and the run (#107).** A process is started with
+  `--run-tests`, and the tests it is to run named on its standard input; it says
+  of each on standard error when it begins (`\n\u{1}test begun <name>`, and on
+  standard output, which is how what each wrote is told apart) and how it ended
+  (`test ended passed|failed|skipped <ns> [why]`). One with no end said is one
+  the process ended in, by a trap or its time, and those after it get another
+  process. `--describe` gives a JSON object a line, with the `group` a test
+  shares a process with (a `TestCase`'s, from its fixtures' lifetimes) and the
+  `serial` key it holds while it runs. `TestRunner.cs` schedules the batches;
+  `TestHarness.sb` runs them one after another. How a suite and each fixture
+  with parameters is made is an extension of it the harness writes, in a file
+  with its own file's imports (`sableHarnessMake`, `sableHarnessLifetimes`);
+  `Compilation.Testing.cs` finds the initialiser and the fixtures it takes
+  (`TestMaking`), and reports what cannot be made (S3114). `FixtureScope` holds
+  what is made. A time limit is the runtime's (`runtime/watchdog.c`): a thread of
+  its own that, past it, prints every thread's frames (a signal to each on POSIX,
+  a stopped thread's stack walked on Windows) and every suspended task's, cancels
+  the task, and ends the process after a grace unless a debugger is attached.
+  `sable test` keeps its own limit a little longer, for a process that cannot
+  say so itself, and stops what it started with it.
+- **Deferred:** `@bench(arguments:)` and one filter for both commands (#129:
+  `TestFilter`, which takes a name, a place and tags, is in Sable.Testing for it).
 
 ### Packages, as implemented
 

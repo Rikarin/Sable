@@ -1,0 +1,141 @@
+module Sable.Testing
+
+/// The fixtures made so far in the process tests run in: what the harness
+/// `sable test` writes makes a test's fixtures with.
+///
+/// ```sable
+/// class Numbers: Fixture {
+///     var all: Int[>..] = [1]
+///     fn tearDown() { all = [] }
+/// }
+/// let scope = FixtureScope()
+/// let first = try! await scope.fixture(Numbers.self, named: "Numbers") { scope in Numbers() }
+/// let again = try! await scope.fixture(Numbers.self, named: "Numbers") { scope in Numbers() }
+/// assert(first === again)
+/// await scope.tearDown(.PerTest)
+/// assert(first.all.isEmpty)
+/// ```
+public final class FixtureScope {
+    // In the order they were made, so that what one is made from comes before it.
+    var made: MadeFixture[>..]
+    // Those being made now, each from within the one before.
+    var making: (name: String, lifetime: FixtureLifetime)[>..]
+    // Whose the shared ones are: the running test's suite and collection.
+    var suite: String
+    var collection: String
+    // Whether a trap is having them torn down.
+    var isTearingDown: Bool
+
+    public init() {
+        made = []
+        making = []
+        suite = ""
+        collection = ""
+        isTearingDown = false
+    }
+
+    /// The fixture of the type that the running test shares, made if there is
+    /// none yet. The name tells one type's from another's.
+    public async fn fixture<T: Fixture>(_ type: T.Type, named name: String, _ make: async (FixtureScope) throws -> T) throws -> T {
+        let lifetime = T.lifetime
+        let owner = self.owner(of: lifetime)
+        for one in made {
+            if one.name == name && one.owner == owner {
+                return one.fixture as! T
+            }
+        }
+        for outer in making {
+            if outer.name == name {
+                throw FixtureError(message: "the fixture '\(name)' is made from itself")
+            }
+        }
+        if let outer = making.last {
+            if !lifetime.outlives(outer.lifetime) {
+                throw FixtureError(message: "the fixture '\(outer.name)' is \(outer.lifetime:?), and cannot be made from '\(name)', which is \(lifetime:?)")
+            }
+        }
+        making.append((name: name, lifetime: lifetime))
+        defer {
+            _ = making.removeLast()
+        }
+        let fixture = try await make(self)
+        try await keep(fixture, named: name, lifetime, owner)
+        return fixture
+    }
+
+    /// A suite made for the running test: set up, if it is a fixture, and
+    /// torn down after the test.
+    public async fn suite<T>(_ suite: T) throws -> T {
+        if let fixture = suite as? any Fixture {
+            try await keep(fixture, named: self.suite, .PerTest, owner(of: .PerTest))
+        }
+        return suite
+    }
+
+    async fn keep(_ fixture: any Fixture, named name: String, _ lifetime: FixtureLifetime, _ owner: String) throws {
+        made.append(MadeFixture { name: name, owner: owner, lifetime: lifetime, fixture: fixture })
+        TestState.hookTraps()
+        do {
+            try await fixture.setUp()
+        } catch {
+            // A test that shares it is given another try.
+            await tearDownLast()
+            throw error
+        }
+    }
+
+    fn owner(of lifetime: FixtureLifetime) -> String {
+        return match lifetime {
+            case .PerTest       => "test"
+            case .PerSuite      => "suite \(suite)"
+            case .PerCollection => "collection \(collection)"
+            case .PerPackage    => "package"
+        }
+    }
+
+    /// Tears down the fixtures of the lifetime, and of those it outlives, the
+    /// last made first: each, whatever comes of another.
+    public async fn tearDown(_ lifetime: FixtureLifetime) {
+        var kept: MadeFixture[>..] = []
+        while let one = made.last {
+            if lifetime.outlives(one.lifetime) {
+                await tearDownLast()
+            } else {
+                kept.append(made.removeLast())
+            }
+        }
+        while !kept.isEmpty {
+            made.append(kept.removeLast())
+        }
+    }
+
+    async fn tearDownLast() {
+        let one = made.removeLast()
+        do {
+            try await one.fixture.tearDown()
+        } catch {
+            say("the fixture '\(one.name)' threw as it was torn down: \(error)")
+        }
+    }
+
+    /// Ends the fixtures that the tests after this one do not share: every
+    /// one, when there is no next.
+    async fn end(before next: TestCase?) {
+        guard let next = next else {
+            await tearDown(.PerPackage)
+            return
+        }
+        if next.fixtureCollection != collection {
+            await tearDown(.PerCollection)
+        } else if next.suite != suite {
+            await tearDown(.PerSuite)
+        }
+    }
+}
+
+struct MadeFixture {
+    let name: String
+    let owner: String
+    let lifetime: FixtureLifetime
+    let fixture: any Fixture
+}

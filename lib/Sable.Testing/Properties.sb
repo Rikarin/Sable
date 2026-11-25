@@ -4,8 +4,8 @@ import Sable.Text
 
 // Property tests: a body that should hold of every value is tried with many
 // arbitrary ones, small to large, and a failing one is made as simple as it
-// can be before it is shown. A run's cases are its seed's: '--seed', or
-// SABLE_TEST_SEED, makes them again.
+// can be before it is shown. A run's cases are its seed's, the same each run
+// unless '--seed' or SABLE_TEST_SEED gives another: a number, or 'random'.
 //
 // A body fails by an expectation it does not meet, by throwing, or by
 // trapping. A trap ends the process: the test run again, in a process for
@@ -282,7 +282,8 @@ final class PropertyRun {
             return
         }
         TestState.quiet = false
-        _ = Runtime.takeTrapHook(otherwise: { message, site, frames in })
+        TestState.unhookTraps()
+        TestState.hookTraps()
     }
 
     fn drawn(_ choices: Choices) -> Drawn {
@@ -309,6 +310,11 @@ final class PropertyRun {
 
     // The case running trapped, and the process is about to end.
     fn trapped(_ message: String, _ site: String) {
+        sayTrapped(message, site)
+        TestState.tearDownTrapped()
+    }
+
+    fn sayTrapped(_ message: String, _ site: String) {
         let place = site.isEmpty ? "" : "\n  at \(site)"
         // What is said when there is no case to shrink.
         let said = "fatal error: \(message)\(place)\n"

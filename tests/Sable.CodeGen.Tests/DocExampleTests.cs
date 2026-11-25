@@ -84,7 +84,7 @@ public sealed class DocExampleTests {
         Assert.Equal(1, run.ExitCode);
         Assert.Contains("test Maths.doc_add_1 ... ok", run.Stdout, StringComparison.Ordinal);
         Assert.Contains("test Maths.doc_padding_1 ... ok", run.Stdout, StringComparison.Ordinal);
-        Assert.Contains("---- Maths.doc_add_2 (maths.sb:15) ----\n    assertion failed: the values differ\n       left: 4\n      right: 5\n", run.Stdout, StringComparison.Ordinal);
+        Assert.Contains("---- Maths.doc_add_2 (maths.sb:15) ----\n    assertion failed: the values differ (maths.sb:16)\n       left: 4\n      right: 5\n", run.Stdout, StringComparison.Ordinal);
         Assert.Contains("3 passed; 1 failed", run.Stdout, StringComparison.Ordinal);
     }
 

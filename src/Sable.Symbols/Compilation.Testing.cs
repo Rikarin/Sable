@@ -51,11 +51,59 @@ public sealed record TestFunction(
     /// </summary>
     public IReadOnlyList<ExpressionSyntax> Arguments { get; init; } = [];
 
+    /// <summary>How the suite an instance method is a test of is made, one for each test; null for a function or a static method.</summary>
+    public TestMaking? Suite { get; init; }
+
+    /// <summary>The fixtures a function that is not given arguments takes.</summary>
+    public IReadOnlyList<TestFixture> Fixtures { get; init; } = [];
+
+    /// <summary>The suite's attribute's options and its own, which win.</summary>
+    internal IReadOnlyList<TestOptions> Options { get; init; } = [];
+
+    /// <summary><c>@test(retry: 3)</c>: how many more times it is tried while it fails.</summary>
+    public int Retries => Options.Select(static o => o.Retries).FirstOrDefault(static r => r is not null) ?? 0;
+
+    /// <summary><c>collection: "database"</c>: tests of one are not run at once; empty for none.</summary>
+    public string Collection => Options.Select(static o => o.Collection).FirstOrDefault(static c => c is not null) ?? "";
+
+    /// <summary><c>serialized</c>: not run while another of its suite so marked is.</summary>
+    public bool IsSerialized => Options.Any(static o => o.IsSerialized);
+
+    /// <summary><c>explicit</c>: run only when asked for.</summary>
+    public bool IsExplicit => Options.Any(static o => o.IsExplicit);
+
+    /// <summary>Why it is not to be run, and when: the suite's reasons after its own.</summary>
+    public IReadOnlyList<TestSkip> Skips => [..Options.Select(static o => o.Skip).OfType<TestSkip>()];
+
+    /// <summary>The suite's name: its type's path in its module, or the module alone.</summary>
+    public string SuiteName =>
+        CallPath.LastIndexOf('.') is var dot and >= 0 ? QualifiedName[..(QualifiedName.Length - CallPath.Length + dot)] : Module;
+
     /// <summary>As the harness lists and filters it: <c>Module.function</c>, or <c>Module.Type.function</c>.</summary>
     public string QualifiedName => Module.Length == 0 ? CallPath : $"{Module}.{CallPath}";
 
     /// <summary>Where it is declared: <c>file:line</c>.</summary>
     public string Location => $"{Tree.Text.FileName}:{Tree.Text.GetLinePosition(Syntax.Identifier.Span.Start).Line}";
+}
+
+/// <summary><c>skip: "why"</c>, or <c>skip(if: condition, "why")</c>.</summary>
+/// <param name="Condition">As it is written, in the file of what it is written on; null for always.</param>
+/// <param name="OnSuite">Whether the suite says it, rather than the test.</param>
+public sealed record TestSkip(ExpressionSyntax? Condition, string Reason, bool OnSuite);
+
+/// <summary>A parameter that a fixture (<c>Sable.Testing.Fixture</c>) is passed for.</summary>
+/// <param name="Written">Its type, as it is written there.</param>
+/// <param name="Making">How one is made.</param>
+public sealed record TestFixture(string? Label, string Written, TestMaking Making);
+
+/// <summary>How a suite or a fixture is made: by its initialiser, given fixtures.</summary>
+/// <param name="Path">What names the type from a file of its module.</param>
+/// <param name="Tree">The file it is declared in; null for the standard library's, whose initialiser takes nothing.</param>
+public sealed record TestMaking(NamedTypeSymbol Type, string Module, string Path, SyntaxTree? Tree, IReadOnlyList<TestFixture> Parameters, bool IsAsync, bool Throws) {
+    public string QualifiedName => Module.Length == 0 ? Path : $"{Module}.{Path}";
+
+    /// <summary>Whether a file of any other module may name it.</summary>
+    public bool IsPublic => Type.DeclaredAccessibility == Accessibility.Public;
 }
 
 /// <summary>
@@ -95,7 +143,7 @@ public sealed record TestFunction(
 ///     </para>
 /// </remarks>
 public sealed partial class Compilation {
-    const string TestAttribute = "test", BenchAttribute = "bench", FuzzAttribute = "fuzz";
+    const string TestAttribute = "test", BenchAttribute = "bench", FuzzAttribute = "fuzz", SuiteAttribute = "suite";
 
     /// <summary>Every well-formed <c>@test</c> (or <c>@bench</c>) function, in file and source order.</summary>
     public IReadOnlyList<TestFunction> GetTestFunctions(TestKind kind) {
@@ -116,11 +164,27 @@ public sealed partial class Compilation {
     }
 
     /// <summary>What is wrong with the file's <c>@test</c>, <c>@bench</c> and <c>@fuzz</c> functions; its semantic model reports these.</summary>
-    /// <param name="arguments">Filled with the arrays of the tests' <c>arguments:</c>, each with its type and where it is bound, for the model to bind.</param>
+    /// <param name="arguments">Filled with the arrays of the tests' <c>arguments:</c>, and the conditions they are skipped on, each with its type and where it is bound, for the model to bind.</param>
     internal IReadOnlyList<Diagnostic> CheckTestFunctions(SyntaxTree tree, List<(ExpressionSyntax Array, TypeSymbol Type, Symbol Owner)> arguments) {
         var diagnostics = new List<Diagnostic>();
+        foreach (var declaration in tree.Root.DescendantNodes().Where(static n => n is StructDeclarationSyntax or ClassDeclarationSyntax)) {
+            if (SuiteOptions(declaration, diagnostics) is { Skip.Condition: { } condition } && GetDeclaredSymbol(declaration) is { } suite) {
+                arguments.Add((condition, Core.Bool, suite));
+            }
+        }
+
         foreach (var declaration in tree.Root.DescendantNodes().OfType<FunctionDeclarationSyntax>()) {
-            if (KindOf(declaration) is not null && Examine(declaration, tree, diagnostics) is { Arguments.Count: > 0 } test) {
+            if (KindOf(declaration) is null || Examine(declaration, tree, diagnostics) is not { } test) {
+                continue;
+            }
+
+            foreach (var skip in test.Skips) {
+                if (!skip.OnSuite && skip.Condition is { } condition) {
+                    arguments.Add((condition, Core.Bool, test.Symbol.ContainingSymbol!));
+                }
+            }
+
+            if (test.Arguments.Count > 0) {
                 var parameters = test.Symbol.Parameters;
                 for (var i = 0; i < test.Arguments.Count; i++) {
                     var element = test.Arguments.Count == 1 && parameters.Length > 1
@@ -174,7 +238,7 @@ public sealed partial class Compilation {
             } else if (options.Read(attribute) is { } bad) {
                 Report(ErrorCode.ERR_TestAttributeArguments, bad.Span,
                     "'@test' takes nothing, or 'traps' for a test that must trap, or 'traps: \"text\"' for one whose trap must say that; "
-                    + "'arguments: [...]', the values it is run with; 'tags: [\"text\"]'; and 'timeout: .seconds(5)'");
+                    + $"'arguments: [...]', the values it is run with; and {TestOptions.Common}");
             }
         }
 
@@ -192,11 +256,15 @@ public sealed partial class Compilation {
         }
 
         var takesBencher = false;
+        IReadOnlyList<TestFixture> fixtures = [];
+        TestMaking? suiteMaking = null;
+        TestOptions? suiteOptions = null;
         if (kind == TestKind.Test && options.Arguments.Count > 0) {
             CheckTestArguments(function, declaration, options.Arguments, Report);
         } else if (kind == TestKind.Test) {
-            if (function.Parameters.Length > 0) {
-                Report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test takes no parameters: the harness has nothing to pass it, unless '@test(arguments: [...])' says what");
+            fixtures = FixturesOf(function.Parameters, declaration.Parameters.Parameters.Select(static p => p.Type.ToString().Trim()), new(), out var problem);
+            if (problem is not null) {
+                Report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, $"{problem}: a test is passed fixtures (a type that is a 'Sable.Testing.Fixture'), or what '@test(arguments: [...])' says");
             }
         } else if (kind == TestKind.Fuzz) {
             if (function.Parameters is not [{ Type: ArrayTypeSymbol { ArrayKind: ArrayKind.Slice, ElementType: var element } }] || !ReferenceEquals(element, Core.U8)) {
@@ -224,12 +292,18 @@ public sealed partial class Compilation {
                 callPath = function.Name;
                 break;
 
-            case NamedTypeSymbol or ExtensionSymbol when !function.IsStatic:
-                Report(ErrorCode.ERR_TestIsInstanceMethod, declaration.Identifier.Span, $"{marker} marks an instance method, which needs a value to call it on; make it 'static', or a function of the module");
-                return null;
-
             case NamedTypeSymbol or ExtensionSymbol: {
                 var type = function.ContainingSymbol as NamedTypeSymbol ?? ((ExtensionSymbol)function.ContainingSymbol).ExtendedType;
+                suiteOptions = type.DeclaringSyntax.Select(d => SuiteOptions(d, null)).FirstOrDefault(static o => o is not null);
+                if (!function.IsStatic && (kind != TestKind.Test || suiteOptions is null)) {
+                    Report(
+                        ErrorCode.ERR_TestIsInstanceMethod,
+                        declaration.Identifier.Span,
+                        $"{marker} marks an instance method, which needs a value to call it on; make it 'static', or a function of the module{(kind == TestKind.Test ? $", or '{type.Name}' a '@suite'" : "")}"
+                    );
+                    return null;
+                }
+
                 if (TypePath(type) is not { } path) {
                     Report(ErrorCode.ERR_TestNotReachable, declaration.Identifier.Span, $"{marker} marks a method of a generic type, which the harness has no type arguments for");
                     return null;
@@ -238,6 +312,14 @@ public sealed partial class Compilation {
                 if (function.DeclaredAccessibility == Accessibility.Private) {
                     Report(ErrorCode.ERR_TestNotReachable, declaration.Identifier.Span, $"{marker} marks a private method, which the harness cannot call from outside its type; make it internal");
                     return null;
+                }
+
+                if (!function.IsStatic) {
+                    suiteMaking = MakingOf(type, new(), out var problem);
+                    if (suiteMaking is null) {
+                        Report(ErrorCode.ERR_SuiteInit, declaration.Identifier.Span, $"the suite '{type.Name}' cannot be made for its tests: {problem}");
+                        return null;
+                    }
                 }
 
                 callPath = $"{path}.{function.Name}";
@@ -255,9 +337,121 @@ public sealed partial class Compilation {
 
         return ok
             ? new(function, declaration, tree, kind, GetFileScope(tree).Module.Name, callPath, function.ThrownType is not null, takesBencher) {
-                ExpectedTrap = options.Trap, Tags = options.Tags, Timeout = options.Timeout, Arguments = options.Arguments,
+                ExpectedTrap = options.Trap,
+                Tags = [..options.Tags.Concat(suiteOptions?.Tags ?? []).Distinct()],
+                Timeout = options.Timeout ?? suiteOptions?.Timeout,
+                Arguments = options.Arguments,
+                Suite = suiteMaking,
+                Fixtures = fixtures,
+                Options = suiteOptions is null ? [options] : [options, suiteOptions],
             }
             : null;
+    }
+
+    /// <summary>What <c>@suite(…)</c> says of a type; null for one that is none.</summary>
+    static TestOptions? SuiteOptions(SyntaxNode declaration, List<Diagnostic>? diagnostics) {
+        if (AttributesOf(declaration).FirstOrDefault(static a => AttributeName(a) == SuiteAttribute) is not { } attribute) {
+            return null;
+        }
+
+        var options = new TestOptions { OnSuite = true };
+        if (attribute.ArgumentList is not null && options.Read(attribute) is { } bad) {
+            diagnostics?.Add(Diagnostic.Error(ErrorCode.ERR_TestAttributeArguments, bad.Span, $"'@suite' takes nothing, or {TestOptions.Common}"));
+        }
+
+        return options;
+    }
+
+    /// <summary>The fixtures passed for the parameters, with their types as they are written; why not, when they are not all fixtures.</summary>
+    /// <param name="within">What is being made, each within the one before: none of them is made from itself.</param>
+    IReadOnlyList<TestFixture> FixturesOf(IEnumerable<ParameterSymbol> parameters, IEnumerable<string> written, List<NamedTypeSymbol> within, out string? problem) {
+        problem = null;
+        var fixtures = new List<TestFixture>();
+        foreach (var (parameter, type) in parameters.Zip(written)) {
+            if (parameter.Modifier is not ParameterModifier.None || parameter.IsVariadic || parameter.IsAutoclosure || parameter.IsByReference) {
+                problem = $"'{parameter.Name}' is not a plain parameter";
+                return [];
+            }
+
+            if (FixtureOf(parameter.Type, parameter.Label == "_" ? null : parameter.Label ?? parameter.Name, type, within, out problem) is not { } fixture) {
+                return [];
+            }
+
+            fixtures.Add(fixture);
+        }
+
+        return fixtures;
+    }
+
+    TestFixture? FixtureOf(TypeSymbol type, string? label, string written, List<NamedTypeSymbol> within, out string? problem) {
+        problem = null;
+        if (type is not NamedTypeSymbol named || GetModule("Sable.Testing")?.GetType("Fixture") is not { } protocol || !Conversions.Satisfies(named, protocol)) {
+            problem = $"'{type.ToDisplayString()}' is not a fixture";
+            return null;
+        }
+
+        return MakingOf(named, within, out problem) is { } making ? new(label, written, making) : null;
+    }
+
+    /// <summary>How the harness makes one of the type; null, with why not.</summary>
+    TestMaking? MakingOf(NamedTypeSymbol type, List<NamedTypeSymbol> within, out string? problem) {
+        problem = null;
+        if (within.Contains(type)) {
+            problem = $"'{type.Name}' is made from itself";
+            return null;
+        }
+
+        if (TypePath(type) is not { } path || type.TypeKind is not (TypeKind.Class or TypeKind.Struct) || type.ContainingModule is not { } module) {
+            problem = $"'{type.Name}' is not a struct or a class that is not generic";
+            return null;
+        }
+
+        if (type.DeclaringSyntax.FirstOrDefault() is not { } declared || FileScopeOf(declared) is not { } scope) {
+            // The library's, taken from its interface.
+            return new(type, module.Name, path, null, [], false, false);
+        }
+
+        within.Add(type);
+        try {
+            var made = new List<TestMaking>();
+            var initializers = type.GetMembers("init").OfType<FunctionSymbol>().Where(static f => f.DeclaringSyntax is [InitDeclarationSyntax]).ToList();
+            foreach (var initializer in initializers) {
+                var syntax = (InitDeclarationSyntax)initializer.DeclaringSyntax[0];
+                var parameters = FixturesOf(initializer.Parameters, syntax.Parameters.Parameters.Select(static p => p.Type.ToString().Trim()), within, out var why);
+                problem ??= why;
+                if (why is null) {
+                    made.Add(new(type, module.Name, path, scope.Tree, parameters, initializer.IsAsync, initializer.ThrownType is not null));
+                }
+            }
+
+            if (initializers.Count == 0) {
+                // The memberwise initialiser of a struct, or a class's own.
+                var parameters = new List<TestFixture>();
+                foreach (var field in declared.ChildNodes().OfType<FieldDeclarationSyntax>()) {
+                    if (field.Accessors is not null || field.Declarator.Initializer is not null || GetDeclaredSymbol(field) is not FieldSymbol { IsStatic: false } symbol || field.Declarator.TypeAnnotation?.Type is not { } written) {
+                        continue;
+                    }
+
+                    if (FixtureOf(symbol.Type, symbol.Name, written.ToString().Trim(), within, out problem) is not { } fixture) {
+                        return null;
+                    }
+
+                    parameters.Add(fixture);
+                }
+
+                return new(type, module.Name, path, scope.Tree, parameters, false, false);
+            }
+
+            if (made.Count == 1) {
+                problem = null;
+                return made[0];
+            }
+
+            problem = made.Count == 0 ? problem : $"'{type.Name}' has several initialisers that fixtures can be passed to";
+            return null;
+        } finally {
+            within.Remove(type);
+        }
     }
 
     /// <summary>
@@ -285,91 +479,6 @@ public sealed partial class Compilation {
         }
     }
 
-    /// <summary>What <c>@test(…)</c> says of a test.</summary>
-    sealed class TestOptions {
-        public string? Trap { get; private set; }
-        public List<string> Tags { get; } = [];
-        public TimeSpan? Timeout { get; private set; }
-        public List<ExpressionSyntax> Arguments { get; } = [];
-
-        /// <summary>Reads the attribute's arguments; gives the one that is not one '@test' takes, or null.</summary>
-        public SyntaxNode? Read(AttributeSyntax attribute) {
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            var inArguments = false;
-            if (attribute.ArgumentList!.Arguments.Count == 0) {
-                return attribute.ArgumentList;
-            }
-
-            foreach (var argument in attribute.ArgumentList.Arguments) {
-                var name = argument.NameToken.IsNone ? "" : argument.NameToken.Text;
-                if (name.Length == 0) {
-                    // 'traps' alone, as a name; or another array of arguments.
-                    if (argument.Expression.ToString().Trim() == "traps" && seen.Add("traps")) {
-                        Trap = "";
-                        inArguments = false;
-                    } else if (inArguments) {
-                        Arguments.Add(argument.Expression);
-                    } else {
-                        return argument;
-                    }
-
-                    continue;
-                }
-
-                inArguments = name == "arguments";
-                if (!seen.Add(name)) {
-                    return argument;
-                }
-
-                switch (name) {
-                    case "traps" when Text(argument.Expression) is { } text:
-                        Trap = text;
-                        break;
-                    case "tags" when argument.Expression is ArrayExpressionSyntax array && array.Elements.All(static e => Text(e) is { } tag && IsTag(tag)):
-                        Tags.AddRange(array.Elements.Select(static e => Text(e)!));
-                        break;
-                    case "timeout" when Duration(argument.Expression) is { } timeout:
-                        Timeout = timeout;
-                        break;
-                    case "arguments":
-                        Arguments.Add(argument.Expression);
-                        break;
-                    default:
-                        return argument;
-                }
-            }
-
-            return null;
-        }
-
-        /// <summary>A plain string: no interpolation, nothing to evaluate.</summary>
-        static string? Text(ExpressionSyntax expression) =>
-            expression is LiteralExpressionSyntax { Token.Kind: SyntaxKind.StringLiteralToken } literal
-            && literal.Token.Parts.All(static p => p.Kind == StringPartKind.Literal)
-                ? literal.Token.Value as string
-                : null;
-
-        /// <summary>A tag a filter can be written with: no space, nor what a filter is put together with.</summary>
-        static bool IsTag(string tag) => tag.Length > 0 && tag.All(static c => !char.IsWhiteSpace(c) && !char.IsControl(c) && !"&|!()*,\"".Contains(c));
-
-        /// <summary><c>.seconds(5)</c>, <c>.milliseconds(200)</c> or <c>.minutes(2)</c>, as Sable.Time's Duration has them, of a literal.</summary>
-        static TimeSpan? Duration(ExpressionSyntax expression) {
-            var parts = expression.ToString().Trim().TrimEnd(')').Split('(');
-            if (parts is not [var unit, var number] || !double.TryParse(number.Replace("_", "", StringComparison.Ordinal), System.Globalization.NumberStyles.AllowDecimalPoint,
-                    System.Globalization.CultureInfo.InvariantCulture, out var value) || value <= 0) {
-                return null;
-            }
-
-            double? seconds = unit switch {
-                ".seconds" => value,
-                ".milliseconds" => value / 1000,
-                ".minutes" => value * 60,
-                _ => null,
-            };
-            return seconds is { } length and < 1e9 ? TimeSpan.FromSeconds(length) : null;
-        }
-    }
-
     static string Noun(TestKind kind) => kind switch {
         TestKind.Test => "test",
         TestKind.Bench => "benchmark",
@@ -378,7 +487,6 @@ public sealed partial class Compilation {
 
     static bool IsBencher(TypeSymbol type) =>
         type is NamedTypeSymbol { Name: "Bencher" } named && named.ContainingModule?.Name == "Sable.Testing";
-
     /// <summary>The type's name from inside its module, through the types it is nested in; null for a generic one.</summary>
     static string? TypePath(NamedTypeSymbol type) {
         var parts = new List<string>();

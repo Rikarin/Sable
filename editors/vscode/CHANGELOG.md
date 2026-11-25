@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The Test Explorer shows tests under their suites, with their tags (`@sable:slow` filters) and why
+  one is skipped; follows a run as it goes (`sable test --json -`); and marks a failure where its
+  expectation is.
 - Prefix `^`, counting from the end (`xs[^1]`, `xs[1..<^1]`), highlighted apart from exclusive or.
 - In the Sable repository, a warning when the `sable` the server runs was built before `lib/` or
   `src/` last changed, and `sable.rebuildServer` to rebuild it and restart the server.

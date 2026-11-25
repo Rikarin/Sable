@@ -153,7 +153,7 @@ fn timesRun() -> Int {
     ("property later", "expectation failed: the property does not hold of 99"),
     ("property of three", "expectation failed: the property does not hold of 7, false, \"aa\""),
     ("property", "of seed 42: 'sable test --seed 42' runs it again"),
-    ("seeded", "SABLE_TEST_SEED is 'none', which is not a number"),
+    ("seeded", "SABLE_TEST_SEED is 'none', which is neither a number nor 'random'"),
     ("filtered out", "expectation failed: too few values were let through"),
     ("flaky", "it held when it was run again"),
     ("snapshot", "there is no snapshot '__snapshots__/HarnessTests.missing.snap'"),
@@ -216,11 +216,13 @@ fn aSnapshotIsOfItsCase(_ text: String) {
 @test
 fn aCaseIsNamedForItsArguments() {
     let cases: () -> TestArguments[>..] = () => [
-        TestArguments("1, \"x\"", () => { return none }),
-        TestArguments("1, \"x\"", () => { return "thrown" }),
-        TestArguments("é".repeated(130), () => { return none }),
+        TestArguments("1, \"x\"", { scope in }),
+        TestArguments("1, \"x\"", { scope in
+            throw "thrown"
+        }),
+        TestArguments("é".repeated(130), { scope in }),
     ]
-    let test = TestCase { name: "S.t", location: "s.sb:1", run: () => { return none }, traps: "x", tags: ["t"], timeLimit: 5, cases: cases }
+    let test = TestCase(name: "S.t", location: "s.sb:1", run: { scope in }, traps: "x", tags: ["t"], timeLimit: 5, cases: cases)
     let all = test.expanded()
     expect(all.map({ $0.name }) == ["S.t(1, \"x\")", "S.t(1, \"x\")#2", "S.t(\("é".repeated(120))…)"])
     expect(all[0].traps == "x" && all[0].tags == ["t"] && all[0].timeLimit == 5 && all[0].cases == none)

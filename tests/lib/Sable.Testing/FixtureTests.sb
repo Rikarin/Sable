@@ -1,0 +1,356 @@
+module FixtureTests
+
+// Suites, fixtures and what they live through (Sable.Testing). The tests
+// marked explicit end badly, and are run by those that see how. Run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Testing
+
+// How many of each were made in this process.
+let packagesMade: Atomic<Int> = Atomic(0)
+let collectionsMade: Atomic<Int> = Atomic(0)
+let suitesMade: Atomic<Int> = Atomic(0)
+
+final class Package: Fixture {
+    static var lifetime: FixtureLifetime => .PerPackage
+    init() { _ = packagesMade.add(1) }
+
+    async fn tearDown() throws { print("package down") }
+}
+
+final class Store: Fixture {
+    static var lifetime: FixtureLifetime => .PerCollection
+    let pack: Package
+
+    init(pack: Package) throws {
+        self.pack = pack
+        _ = collectionsMade.add(1)
+    }
+
+    async fn tearDown() throws { print("collection down") }
+}
+
+final class Database: Fixture {
+    static var lifetime: FixtureLifetime => .PerSuite
+    let store: Store
+    var rows: String[>..] = []
+
+    async init(_ store: Store) {
+        await Task.yield()
+        self.store = store
+        _ = suitesMade.add(1)
+    }
+
+    async fn setUp() throws {
+        await Task.yield()
+        rows.append("set up")
+    }
+
+    async fn tearDown() throws {
+        // A task that was cancelled for the time it took can still wait here.
+        try await Task.sleep(nanoseconds: 1000)
+        print("database down")
+    }
+}
+
+final class Scratch: Fixture {
+    var used: Int = 0
+
+    fn tearDown() { print("scratch down after \(used)") }
+}
+
+@suite(tags: ["fixtures"], collection: "stores")
+final class StoreTests: Fixture {
+    let database: Database
+    let scratch: Scratch
+
+    init(database: Database, scratch: Scratch) {
+        self.database = database
+        self.scratch = scratch
+    }
+
+    async fn setUp() throws { scratch.used += 1 }
+
+    async fn tearDown() throws { print("suite down") }
+
+    @test
+    fn aFixtureIsSetUpBeforeItsTest() {
+        expect(database.rows == ["set up"])
+        expect(scratch.used == 1)
+    }
+
+    @test(arguments: [1, 2], tags: ["cases"])
+    async fn eachCaseHasASuiteOfItsOwn(_ n: Int) {
+        await Task.yield()
+        expect(scratch.used == 1)
+        expect(TestContext.current.tags == ["cases", "fixtures"])
+    }
+
+    @test
+    fn whatIsSharedIsMadeOnce() {
+        expect(packagesMade.load() == 1)
+        expect(collectionsMade.load() == 1)
+        expect(suitesMade.load() == 1)
+    }
+
+    @test(explicit)
+    fn expects() { expect(scratch.used == 2) }
+
+    @test(explicit)
+    fn throws() throws {
+        throw "thrown"
+    }
+
+    @test(explicit)
+    fn traps() { print([1][scratch.used]) }
+
+    @test(explicit)
+    fn asserts() { assertEqual(scratch.used, 2) }
+
+    @test(explicit, timeout: .milliseconds(200))
+    async fn waits() throws { try await Task.sleep(nanoseconds: 60_000_000_000) }
+
+    @test(explicit, timeout: .milliseconds(200))
+    fn spins() {
+        var n = 0
+        while true {
+            n = n &+ 1
+        }
+    }
+
+    @test(explicit)
+    fn propertyTraps() {
+        forAll(Gen.number(in: 1...4)) { (n: Int) in print([1][n]) }
+    }
+
+    @test(explicit)
+    fn dies() {
+        expectPanic("out of range") { print([1][self.scratch.used]) }
+        expectExit(3) { Runtime.exit(3) }
+        expectPanic { print("returned") }
+    }
+}
+
+// One of the collection, of no suite of its own.
+@test(collection: "stores")
+fn aFunctionTakesFixtures(_ store: Store, scratch: Scratch) {
+    expect(packagesMade.load() == 1)
+    expect(scratch.used == 0)
+}
+
+@suite
+struct Memberwise {
+    let scratch: Scratch
+    let limit: Int = 3
+
+    @test
+    fn aStructIsMadeOfItsFixtures() {
+        scratch.used = limit
+        expect(scratch.used == 3)
+    }
+
+    @test
+    static fn aStaticMethodNeedsNone() { expect(TestContext.current.name == "FixtureTests.Memberwise.aStaticMethodNeedsNone") }
+}
+
+// ---- What becomes of fixtures when a test ends badly -------------------------
+
+// The tests of StoreTests named, run in a process together: what it wrote to
+// each stream, its marks left out of the first.
+fn run(_ names: String[>..]) -> (output: String, errors: String)? {
+    let program = Runtime.executablePath()
+    if program.isEmpty {
+        return none
+    }
+    let input = names.map({ "FixtureTests.StoreTests.\($0)\n" }).joined(separator: "")
+    let output = require(Runtime.run(program, ["--run-tests"], input))
+    let kept = output.lines().filter({ !$0.isEmpty && !$0.contains("test begun") }).joined(separator: "\n")
+    return (output: kept, errors: Runtime.lastErrorOutput())
+}
+
+let everyTeardown = "suite down\nscratch down after 1\ndatabase down\ncollection down\npackage down"
+
+@test(arguments: [
+    ("expects", "expectation failed: scratch.used == 2", "test ended failed"),
+    ("throws", "assertion failed: the test threw an error: \"thrown\"", "test ended failed"),
+    ("traps", "fatal error: array index out of range", ""),
+    ("asserts", "assertion failed: the values differ", ""),
+    ("waits", "test timed out", "test ended failed"),
+    ("propertyTraps", "the property does not hold of 1", ""),
+])
+fn fixturesAreTornDownInOrder(_ test: String, _ said: String, _ ended: String) {
+    guard let ran = run([test]) else {
+        return
+    }
+    expect(ran.output == everyTeardown)
+    expect(ran.errors.contains(said))
+    expect(ran.errors.contains(ended) && ran.errors.contains("test ended") == !ended.isEmpty)
+}
+
+@test
+fn aTestThatEndsBadlyLeavesWhatTheNextSharesAlone() {
+    guard let ran = run(["expects", "throws", "aFixtureIsSetUpBeforeItsTest", "whatIsSharedIsMadeOnce"]) else {
+        return
+    }
+    expect(ran.output == "suite down\nscratch down after 1\n".repeated(3) + everyTeardown)
+    expect(ran.errors.contains("test ended passed"))
+}
+
+@test
+fn aTestPastItsTimeIsShownAndEnded() {
+    guard let ran = run(["spins"]) else {
+        return
+    }
+    expect(Runtime.lastExitStatus() == 124)
+    expect(ran.errors.contains("sable.FixtureTests.StoreTests.spins"))
+    expect(!ran.errors.contains("test ended"))
+}
+
+@test
+fn aDeathTestsProcessTearsDownToo() {
+    guard let ran = run(["dies"]) else {
+        return
+    }
+    expect(ran.errors.contains("the body was to trap, and it returned"))
+    expect(ran.output == everyTeardown)
+}
+
+final class Circular: Fixture {
+    let name: String
+
+    init(name: String) { self.name = name }
+
+    async fn setUp() throws {
+        throw "\(name) is not up"
+    }
+
+    async fn tearDown() throws {
+        throw "\(name) is not down"
+    }
+}
+
+@test
+async fn aFixtureThatCannotBeMadeIsSaid() async {
+    let scope = FixtureScope()
+    let itself = await expectThrows(FixtureError.self) {
+        _ = try await scope.fixture(Scratch.self, named: "A") { scope in
+        _ = try await scope.fixture(Scratch.self, named: "A") { inner in Scratch() }
+        return Scratch()
+    }
+    }
+    expect(itself?.description() == "the fixture 'A' is made from itself")
+    let shorter = await expectThrows(FixtureError.self) {
+        _ = try await scope.fixture(Package.self, named: "P") { scope in
+        _ = try await scope.fixture(Scratch.self, named: "S") { inner in Scratch() }
+        return Package()
+    }
+    }
+    expect(shorter?.message == "the fixture 'P' is FixtureLifetime.PerPackage, and cannot be made from 'S', which is FixtureLifetime.PerTest")
+}
+
+@test(arguments: [
+    (FixtureLifetime.PerTest, FixtureLifetime.PerSuite, false),
+    (.PerSuite, .PerSuite, true),
+    (.PerCollection, .PerSuite, true),
+    (.PerPackage, .PerCollection, true),
+    (.PerCollection, .PerPackage, false),
+])
+fn aLongerLifetimeOutlivesAShorter(_ one: FixtureLifetime, _ other: FixtureLifetime, _ outlives: Bool) {
+    expect(one.outlives(other) == outlives)
+}
+
+// ---- What a test says of itself ------------------------------------------------
+
+fn described(_ test: String) -> String? {
+    let program = Runtime.executablePath()
+    if program.isEmpty {
+        return none
+    }
+    return require(Runtime.run(program, ["--describe", "--exact", test], "")).lines().first
+}
+
+@test(arguments: [
+    ("StoreTests.eachCaseHasASuiteOfItsOwn",
+        "\"suite\":\"FixtureTests.StoreTests\",\"tags\":[\"cases\",\"fixtures\"],\"collection\":\"stores\",\"group\":\"package\",\"serial\":\"collection stores\"}"),
+    ("StoreTests.waits", "\"timeout\":200000000,\"explicit\":true,\"group\":\"package\""),
+    ("Memberwise.aStructIsMadeOfItsFixtures", "\"suite\":\"FixtureTests.Memberwise\",\"tags\":[]}"),
+    ("skipped", "\"skip\":\"not now\""),
+    ("skippedIf", "\"skip\":\"two is two\""),
+    ("skippedUnless", "\"tags\":[]}"),
+    ("triedAgain", "\"retries\":2}"),
+    ("oneAtATime", "\"serial\":\"suite FixtureTests\"}"),
+])
+fn aTestIsDescribed(_ test: String, _ said: String) {
+    if let line = described("FixtureTests.\(test)") {
+        expect(line.hasPrefix("{\"name\":\"FixtureTests.\(test)"))
+        expect(line.contains(said))
+    }
+}
+
+@test(skip: "not now")
+fn skipped() { fail("it is skipped") }
+
+@test(skip(if: 1 + 1 == 2, "two is two"))
+fn skippedIf() { fail("it is skipped") }
+
+@test(skip(if: 1 + 1 == 3, "two is three"))
+fn skippedUnless() { }
+
+@test
+fn skippedAsItRuns() throws {
+    try skip(if: packagesMade.load() == 1, "not said")
+    try skip("what it needs is not here")
+}
+
+@test(retry: 2)
+fn triedAgain() { expect(TestContext.current.attempt > 1) }
+
+@test(serialized)
+fn oneAtATime() { }
+
+// ---- The running test -------------------------------------------------------
+
+@test(timeout: .seconds(30))
+fn aTestKnowsItsTime() {
+    let context = TestContext.current
+    expect(context.name == "FixtureTests.aTestKnowsItsTime")
+    expect(context.location.contains("FixtureTests.sb:"))
+    let left = require(context.timeLeft)
+    expect(left.totalSeconds >= 1 && left.totalSeconds <= 30)
+    expect(!context.cancellation.isCancellationRequested)
+    expect(context.cancellation.canBeCancelled)
+}
+
+@test
+fn aTestWithNoLimitHasNoTime() throws {
+    try skip(if: TestContext.current.timeLeft != none, "this run has a limit for all")
+    expect(!TestContext.current.cancellation.canBeCancelled)
+}
+
+@test
+fn whatATestKeepsIsAFile() {
+    let program = Runtime.executablePath()
+    if program.isEmpty {
+        return
+    }
+    let directory = "\(Runtime.currentDirectory())/target/sable-testing-attachments"
+    unsafe {
+        _ = Runtime.setEnvironment("SABLE_TEST_ATTACHMENTS", directory)
+    }
+    defer {
+        _ = Runtime.removeTree(directory)
+    }
+    let output = require(Runtime.run(program, ["--run-tests"], "FixtureTests.attaches\n"))
+    expect(output.contains("a line\n"))
+    let marked = require(Runtime.lastErrorOutput().lines().filter({ $0.hasPrefix("\u{1}attachment ") }).first)
+    let path = marked.slice(from: "\u{1}attachment ".count, to: marked.count)
+    expect(path.hasPrefix(directory) && path.hasSuffix("/1-a-b.txt"))
+    expect(Runtime.readFile(path) == "kept")
+}
+
+@test(explicit)
+fn attaches() {
+    TestContext.current.log("a line")
+    TestContext.current.attach("kept", named: "a/b.txt")
+    TestContext.current.attach(bytes: [], named: "empty")
+}

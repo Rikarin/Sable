@@ -49,8 +49,11 @@ object a line on standard output — `severity`, `code`, `message`, `file`,
 `--offline`; and `sable -V` prints the version. None of them changes what a
 build produces.
 
-`sable test` runs each test in a process of its own, as many at once as there
-are processors (`-j`). What `@test` may say of one:
+`sable test` runs tests in processes of their own, as many at once as there
+are processors (`-j`, or `--max-parallel`): a process for each, but one for
+those that share a fixture (docs/06 §6.4) and for a function's cases, up to 64
+of them, one after another. A test that traps ends its process; those after it
+in the process are run in another. What `@test` may say of one:
 
 ```sable
 @test(arguments: [("1", 1), ("-7", -7)], tags: ["fast"], timeout: .seconds(5))
@@ -64,20 +67,55 @@ fn parses(_ text: String, _ value: Int) throws { expect(try Int.parse(text) == v
   listed; a case is named for its arguments as Debug writes them, a second one
   of the same name with `#2` after it.)
 - `tags:` are what `--filter` may ask for it by, and what the reports carry.
-- `timeout:` stops it when it runs longer, and fails it, whatever `--timeout`
-  says of the rest: `.milliseconds`, `.seconds` or `.minutes` of a literal.
+- `timeout:` ends it when it runs longer, and fails it, whatever `--timeout`
+  says of the rest: `.milliseconds`, `.seconds` or `.minutes` of a literal. Its
+  report shows where every thread and task was. The test's task is cancelled
+  first, so that one that heeds that has its fixtures torn down as usual; its
+  process is ended a little later if it does not. The limit is the test
+  process's own (`Runtime.watchdog`), so it holds when the harness is run by
+  itself too — and not while a debugger is attached.
 - `traps`, or `traps: "text"`: it passes by trapping.
+- `retry: 3`: tried again while it fails, so many times more, in a process of
+  its own each time; what is said is how the last went.
+- `skip: "why"`, or `skip(if: condition, "why")`, an expression of where the
+  test is: it is not run, and said not to be. What is only found as a test
+  runs, `skip("why")` and `skip(if:)` of Sable.Testing say, which throw.
+- `explicit`: run only when it is asked for, by `--exact` or with `--explicit`.
+- `serialized`: not run at the same time as another so marked of its suite (its
+  type, or its module). `collection: "database"`: not at the same time as
+  another of the collection, whatever its suite.
 
+`@suite`, with the same but for `arguments` and `traps`, marks a struct or a
+class whose instance methods are tests: it is made anew for each, by the
+initialiser whose parameters are all fixtures. What it says is its tests', and
+its tags are added to theirs; what a test says itself wins. (The options are
+arguments of the two attributes rather than attributes of their own: `@test`
+took `tags:` and `timeout:` already, and one spelling is enough.)
 A name, or part of one, selects tests (`--exact` all of it; a function's name
 is then all its cases). `--filter` takes an expression: `tag:`, `name:` and
 `file:` terms — a bare word is a name's — put together with `&`, `|`, `!` and
 parentheses, `*` standing for any text: `--filter 'tag:fast & !name:*Slow*'`.
 
 `--junit <path>` and `--trx <path>` write the results as JUnit's XML and as
-Visual Studio's TRX, for a CI to show. `--seed <n>` makes the property tests'
-cases from a seed, as a failure gives it (SABLE_TEST_SEED does too). `--bless`,
+Visual Studio's TRX, for a CI to show; `--json <path>` as JSON, an object a line
+(`event` is `run`, `started`, `finished` or `ended`; a `finished` has `name`,
+`location`, `outcome`, `duration` in seconds, and `message`, `output`, `errors`,
+`reason`, `attempts` and `attachments` where there is any). `--json -` prints
+that as the run goes, in place of its text, and with `--list` the tests there
+are, a JSON object each: `name`, `file`, `line`, `suite` and `tags`, and
+`collection`, `traps`, `timeout` (nanoseconds), `retries`, `explicit`, `skip`,
+`group` (what it shares a process with) and `serial` (what it is not run at
+the same time as) where it has them. That is what an editor runs tests by; a
+reader passes over what it does not know. What a test attaches
+(`TestContext.attach`) is kept in `target/test-attachments`, or in
+`--attachments <dir>`, and named in every report.
+
+A run's property tests have the same cases each time, so that it fails for what
+was changed and not by chance. `--seed <n>`, or SABLE_TEST_SEED, makes them of
+another seed, as a failure gives it; `random` chooses one. `--bless`,
 or SABLE_UPDATE_SNAPSHOTS=1, writes the snapshots the tests compare with. The
-editor's Test Explorer shows each case under its function. What a test is
+editor's Test Explorer shows each suite, its tests, and each case under its
+function, with their tags and why one is skipped. What a test is
 written with is Sable.Testing's (docs/06 §6.4).
 
 `sable test --coverage` counts what of the package's own code (not
@@ -100,7 +138,7 @@ statements are reported as lines not run (their branches are not counted).
 package: `Sable.Collections`, `lib/Sable.Collections` or one file,
 `lib/Sable.Collections/Stack.sb`, named in the report and the LCOV as the
 library embeds them (`lib/<Module>/<File>.sb`). `--lcov <path>` writes the
-LCOV elsewhere, and a directory given in place of a file is every `.sb`
+LCOV elsewhere, `--cobertura <path>` writes Cobertura's XML too, and a directory given in place of a file is every `.sb`
 file under it, built as one program — so the library's tests are run as
 `sable test --cover lib/Sable.Collections tests/lib/Sable.Collections/`
 (what `tools/stdlib-coverage.sh` does, CONTRIBUTING.md).

@@ -1,0 +1,231 @@
+module Sable.Testing
+
+import Sable.Text
+
+/// The entry point of a test build: runs the tests the arguments select, in
+/// processes of their own, and reports on each and on them all. Gives the
+/// exit code: 0 when every test selected passed or was skipped, 1 when one
+/// failed, 2 for arguments it does not understand.
+/// ('sable test' itself runs the processes, several at once, from what
+/// '--describe' says; this is the harness run on its own, one process after
+/// another.)
+public async fn runTests(_ tests: TestCase[>..]) -> Int {
+    guard let options = TestOptions.parse() else {
+        return 2
+    }
+
+    // In this process, for the harness that started it.
+    if let name = options.only {
+        return await runAlone(name, tests, options)
+    }
+    if options.several {
+        return await runNamed(tests)
+    }
+
+    var chosen: TestCase[>..] = []
+    var filteredOut = 0
+    for test in tests {
+        if !options.maySelect(test) {
+            filteredOut += 1
+            continue
+        }
+        for one in test.expanded() {
+            if options.selects(one) {
+                chosen.append(one)
+            } else {
+                filteredOut += 1
+            }
+        }
+    }
+
+    if options.list {
+        for test in chosen {
+            print("\(test.name): test (\(test.location))")
+        }
+        print("\(chosen.count) test\(plural(chosen.count))")
+        return 0
+    }
+    if options.describe {
+        for test in chosen {
+            print(test.description(skipped: options.reasonToSkip(test)))
+        }
+        print("{\"filteredOut\":\(filteredOut)}")
+        return 0
+    }
+
+    print("running \(chosen.count) test\(plural(chosen.count))")
+    if options.inProcess || Runtime.executablePath().isEmpty {
+        await runHere(chosen, options, filteredOut)
+        return 0
+    }
+
+    let started = Runtime.monotonicNanoseconds()
+    var run = HarnessRun(options)
+    for batch in batches(chosen) {
+        run.run(batch)
+    }
+    return run.summary(filteredOut, Runtime.monotonicNanoseconds() - started)
+}
+
+// Without process isolation, as asked or where there is no executable to
+// start again (the interpreter): a failure stops the run, and no times are
+// shown, so that two runs print the same. A test that must trap cannot run
+// here: its trap would end the run.
+async fn runHere(_ tests: TestCase[>..], _ options: TestOptions, _ filteredOut: Int) {
+    var passed = 0
+    var ignored = 0
+    for (i, test) in tests.enumerated() {
+        TestState.isAlone = false
+        if test.traps != none {
+            ignored += 1
+            print("test \(test.name) ... ignored (it must trap, which only a process of its own can)")
+            continue
+        }
+        if let reason = options.reasonToSkip(test) {
+            ignored += 1
+            print("test \(test.name) ... skipped: \(reason)")
+            continue
+        }
+        match await runOne(test, before: i + 1 < tests.count ? tests[i + 1] : none) {
+            case .Failed => endFailedTest()
+            case .Skipped(let reason) => {
+                ignored += 1
+                print("test \(test.name) ... skipped: \(reason)")
+            }
+            case .Passed => {
+                passed += 1
+                print("test \(test.name) ... ok")
+            }
+        }
+    }
+    await TestState.scope.tearDown(.PerPackage)
+    TestState.unhookTraps()
+    print("")
+    print("test result: ok. \(passed) passed; 0 failed; \(ignored == 0 ? "" : "\(ignored) ignored; ")\(filteredOut) filtered out")
+}
+
+// How many of a function's cases a process is given.
+let casesInAProcess = 64
+
+/// The tests of each process: those of a group together, where the first of
+/// it comes, its suites apart.
+fn batches(_ tests: TestCase[>..]) -> TestCase[>..][>..] {
+    var batches: TestCase[>..][>..] = []
+    var groups = Dictionary<String, Int>()
+    for test in tests {
+        guard let group = test.group else {
+            batches.append([test])
+            continue
+        }
+        if let at = groups[group] {
+            if !group.hasPrefix("cases ") || batches[at].count < casesInAProcess {
+                batches[at].append(test)
+                continue
+            }
+        }
+        groups[group] = batches.count
+        batches.append([test])
+    }
+    // A suite's together, so that what it shares is made once.
+    return batches.map({ (batch) in
+        batch.sorted(by: { (a, b) in a.suite < b.suite })
+    })
+}
+
+/// A run of the harness on its own, as it goes.
+struct HarnessRun {
+    let options: TestOptions
+    var passed: Int
+    var skipped: Int
+    var failures: String[>..]
+    var reports: String[>..]
+
+    init(_ options: TestOptions) {
+        self.options = options
+        passed = 0
+        skipped = 0
+        failures = []
+        reports = []
+    }
+
+    mutating fn run(_ batch: TestCase[>..]) {
+        var left: TestCase[>..] = []
+        for test in batch {
+            if let reason = options.reasonToSkip(test) {
+                skip(test, reason)
+            } else {
+                left.append(test)
+            }
+        }
+        while !left.isEmpty {
+            let ended = start(left, attempt: 1)
+            for report in ended {
+                var report = report
+                var attempt = 1
+                while report.whyFailed != none && attempt <= report.test.retries {
+                    attempt += 1
+                    report = start([report.test], attempt: attempt)[0]
+                }
+                note(report, attempt)
+            }
+            left = left[ended.count...].toArray()
+        }
+    }
+
+    // A process for the tests: what it said of as many as it ran.
+    fn start(_ tests: TestCase[>..], attempt: Int) -> TestReport[>..] {
+        let begun = Runtime.monotonicNanoseconds()
+        var arguments: String[>..] = ["--run-tests", "--seed", "\(TestState.seed)", "--attempt", "\(attempt)"]
+        if TestState.timeLimit > 0 {
+            arguments.append("--timeout")
+            arguments.append("\(F64(TestState.timeLimit) / 1e9)")
+        }
+        let output = Runtime.run(Runtime.executablePath(), arguments, tests.map({ $0.name + "\n" }).joined(separator: ""))
+        let took = Runtime.monotonicNanoseconds() - begun
+        let status = output == none ? -1 : Runtime.lastExitStatus()
+        return TestReport.read(tests, status, output ?? "", output == none ? "" : Runtime.lastErrorOutput(), took: took)
+    }
+
+    mutating fn skip(_ test: TestCase, _ reason: String) {
+        skipped += 1
+        print("test \(test.name) ... skipped: \(reason)")
+    }
+
+    mutating fn note(_ report: TestReport, _ attempt: Int) {
+        let name = report.test.name
+        if let why = report.whyFailed {
+            print("test \(name) ... FAILED (\(formatDuration(report.took)))")
+            failures.append(name)
+            reports.append(failureReport(report, why))
+        } else if let reason = report.reasonSkipped {
+            skip(report.test, reason)
+        } else {
+            passed += 1
+            print("test \(name) ... ok (\(formatDuration(report.took)))\(attempt > 1 ? ", on try \(attempt)" : "")")
+            if options.showOutput && report.output.count > 0 {
+                print(indented(report.output))
+            }
+        }
+    }
+
+    fn summary(_ filteredOut: Int, _ total: Int) -> Int {
+        if failures.count > 0 {
+            print("")
+            print("failures:")
+            for report in reports {
+                print("")
+                print(report)
+            }
+            print("")
+            print("failed:")
+            for name in failures {
+                print("    \(name)")
+            }
+        }
+        print("")
+        let outcome = failures.count == 0 ? "ok" : "FAILED"
+        print(
+            "test result: \(outcome). \(passed) passed; \(failures.count) failed; \(skipped == 0 ? "" : "\(skipped) skipped; ")\(filteredOut) filtered out; finished in \(formatDuration(total))")
+        return failures.count == 0 ? 0 : 1
+    }
+}

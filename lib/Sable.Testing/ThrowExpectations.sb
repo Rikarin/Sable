@@ -56,6 +56,55 @@ public async fn expectThrows<E: Equatable>(_ expected: E, _ message: String = ""
     }
 }
 
+/// Fails the test unless the body throws, and gives what it threw. The test
+/// goes on.
+///
+/// ```sable
+/// let error = expectThrows { _ = try Int.parse("12x") }
+/// expect(error?.description() == "not a digit at 2")
+/// ```
+@discardable
+public fn expectThrows(_ message: String = "", file: String = #file, line: Int = #line, _ body: () throws -> Void) -> (any Error)? {
+    do {
+        try body()
+    } catch {
+        return error
+    }
+    recordFailure("nothing was thrown\(said(message))", file: file, line: line)
+    return none
+}
+
+/// The same of a body that waits.
+@discardable
+public async fn expectThrows(_ message: String = "", file: String = #file, line: Int = #line, _ body: async () throws -> Void) -> (any Error)? {
+    do {
+        try await body()
+    } catch {
+        return error
+    }
+    recordFailure("nothing was thrown\(said(message))", file: file, line: line)
+    return none
+}
+
+/// Fails the test unless the body throws an error that says this: its
+/// description. The test goes on.
+///
+/// ```sable
+/// expectThrows(saying: "not a digit at 2") { _ = try Int.parse("12x") }
+/// ```
+public fn expectThrows(saying text: String, _ message: String = "", file: String = #file, line: Int = #line, _ body: () throws -> Void) {
+    if let error = expectThrows(message.isEmpty ? "'\(text)' was to be" : message, file: file, line: line, body) {
+        says(error, text, message, file, line)
+    }
+}
+
+/// The same of a body that waits.
+public async fn expectThrows(saying text: String, _ message: String = "", file: String = #file, line: Int = #line, _ body: async () throws -> Void) {
+    if let error = await expectThrows(message.isEmpty ? "'\(text)' was to be" : message, file: file, line: line, body) {
+        says(error, text, message, file, line)
+    }
+}
+
 /// Fails the test unless the body ends without throwing, and gives what it
 /// made. The test goes on.
 ///
@@ -94,6 +143,13 @@ fn thrown<E>(_ error: any Error, _ message: String, _ file: String, _ line: Int)
     }
     recordFailure("another error was thrown: \(error)\(said(message))", file: file, line: line)
     return none
+}
+
+fn says(_ error: any Error, _ text: String, _ message: String, _ file: String, _ line: Int) {
+    let description = error.description()
+    if description != text {
+        recordFailure("what was thrown says something else\(said(message))\n\(indented(differenceReport(description.debugDescription(), text.debugDescription())))", file: file, line: line)
+    }
 }
 
 fn isExpected<E: Equatable>(_ error: any Error, _ expected: E, _ message: String, _ file: String, _ line: Int) {

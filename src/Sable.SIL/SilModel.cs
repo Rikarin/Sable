@@ -2874,6 +2874,9 @@ public static class SilBuiltins {
         // Whether a debugger is attached; and stopping for it, if one is.
         Add("debugger_attached", SilType.Bool);
         Add("debugger_break", SilType.Unit);
+        // A time limit on the program, kept by a thread of its own (runtime/watchdog.c):
+        // nanoseconds (0 for none), how much longer it has once the message is written.
+        Add("watchdog", SilType.Unit, SilType.Int, SilType.Int, SilType.String);
         Add("io_read_line", SilType.String);
         Add("io_read_file", SilType.String, SilType.String);
         Add("io_write_file", SilType.Bool, SilType.String, SilType.String, SilType.Bool);

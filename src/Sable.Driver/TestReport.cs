@@ -12,6 +12,9 @@ internal enum TestReportFormat {
 
     /// <summary>Visual Studio's test results (TRX), as <c>dotnet test --logger trx</c> writes them.</summary>
     Trx,
+
+    /// <summary>A JSON object a line, as <see cref="TestEvents" /> has them.</summary>
+    Json,
 }
 
 /// <summary>A file of a run's results: <c>sable test --junit out.xml --trx out.trx</c>.</summary>
@@ -37,6 +40,20 @@ internal sealed record TestReport(TestReportFormat Format, string Path) {
     }
 
     internal void Write(Stream stream, IReadOnlyList<TestRunner.Outcome> outcomes, DateTimeOffset begun, TimeSpan took) {
+        if (Format == TestReportFormat.Json) {
+            using var lines = new StreamWriter(stream, new UTF8Encoding(false)) { NewLine = "\n" };
+            var events = new TestEvents(lines);
+            events.Begin([..outcomes.Select(static o => o.Test)]);
+            foreach (var outcome in outcomes) {
+                events.Finished(outcome);
+            }
+
+            var failed = outcomes.Count(static o => TestRunner.Verdict(o) is not null);
+            var skipped = outcomes.Count(static o => o.Skipped is not null);
+            events.End(outcomes.Count - failed - skipped, failed, skipped, 0, took);
+            return;
+        }
+
         using var writer = XmlWriter.Create(stream, new XmlWriterSettings { Indent = true, Encoding = new UTF8Encoding(false), NewLineChars = "\n" });
         writer.WriteStartDocument();
         if (Format == TestReportFormat.Junit) {
@@ -78,6 +95,12 @@ internal sealed record TestReport(TestReportFormat Format, string Path) {
                     writer.WriteEndElement();
                 }
 
+                if (test.Skipped is { } reason) {
+                    writer.WriteStartElement("skipped");
+                    writer.WriteAttributeString("message", Clean(reason));
+                    writer.WriteEndElement();
+                }
+
                 if (TestRunner.Verdict(test) is not null) {
                     writer.WriteStartElement("failure");
                     writer.WriteAttributeString("message", Message(test));
@@ -86,7 +109,8 @@ internal sealed record TestReport(TestReportFormat Format, string Path) {
                     writer.WriteEndElement();
                 }
 
-                Output(writer, "system-out", test.Output);
+                // An attachment is a line of its output, as Jenkins reads one.
+                Output(writer, "system-out", test.Output + string.Concat(test.Attachments.Select(static a => $"[[ATTACHMENT|{System.IO.Path.GetFullPath(a)}]]\n")));
                 Output(writer, "system-err", TestRunner.Said(test));
                 writer.WriteEndElement();
             }
@@ -101,7 +125,7 @@ internal sealed record TestReport(TestReportFormat Format, string Path) {
         writer.WriteAttributeString("tests", tests.Count.ToString(CultureInfo.InvariantCulture));
         writer.WriteAttributeString("failures", tests.Count(static t => TestRunner.Verdict(t) is not null).ToString(CultureInfo.InvariantCulture));
         writer.WriteAttributeString("errors", "0");
-        writer.WriteAttributeString("skipped", "0");
+        writer.WriteAttributeString("skipped", tests.Count(static t => t.Skipped is not null).ToString(CultureInfo.InvariantCulture));
         writer.WriteAttributeString("time", Seconds(took));
     }
 
@@ -142,11 +166,11 @@ internal sealed record TestReport(TestReportFormat Format, string Path) {
             writer.WriteAttributeString("computerName", Environment.MachineName);
             writer.WriteAttributeString("duration", test.Took.ToString("c", CultureInfo.InvariantCulture));
             writer.WriteAttributeString("testType", UnitTestType);
-            writer.WriteAttributeString("outcome", TestRunner.Verdict(test) is null ? "Passed" : "Failed");
+            writer.WriteAttributeString("outcome", test.Skipped is not null ? "NotExecuted" : TestRunner.Verdict(test) is null ? "Passed" : "Failed");
             writer.WriteAttributeString("testListId", ResultsNotInAList);
             var failed = TestRunner.Verdict(test) is not null;
             var errors = TestRunner.Said(test);
-            if (failed || test.Output.Length > 0 || errors.Length > 0) {
+            if (failed || test.Output.Length > 0 || errors.Length > 0 || test.Skipped is not null) {
                 writer.WriteStartElement("Output", space);
                 if (test.Output.Length > 0) {
                     writer.WriteElementString("StdOut", space, Clean(test.Output));
@@ -156,10 +180,27 @@ internal sealed record TestReport(TestReportFormat Format, string Path) {
                     writer.WriteElementString("StdErr", space, Clean(errors));
                 }
 
+                if (test.Skipped is { } reason) {
+                    writer.WriteStartElement("ErrorInfo", space);
+                    writer.WriteElementString("Message", space, Clean(reason));
+                    writer.WriteEndElement();
+                }
+
                 if (failed) {
                     writer.WriteStartElement("ErrorInfo", space);
                     writer.WriteElementString("Message", space, Clean(TestRunner.Details(test).Trim('\n')));
                     writer.WriteElementString("StackTrace", space, $"at {test.Test.Name} in {Place(test.Test.Location).File}:line {Place(test.Test.Location).Line}");
+                    writer.WriteEndElement();
+                }
+
+                writer.WriteEndElement();
+            }
+
+            if (test.Attachments.Count > 0) {
+                writer.WriteStartElement("ResultFiles", space);
+                foreach (var attachment in test.Attachments) {
+                    writer.WriteStartElement("ResultFile", space);
+                    writer.WriteAttributeString("path", System.IO.Path.GetFullPath(attachment));
                     writer.WriteEndElement();
                 }
 
@@ -221,13 +262,14 @@ internal sealed record TestReport(TestReportFormat Format, string Path) {
         writer.WriteEndElement();
 
         var failures = outcomes.Count(static o => TestRunner.Verdict(o) is not null);
+        var skips = outcomes.Count(static o => o.Skipped is not null);
         writer.WriteStartElement("ResultSummary", space);
         writer.WriteAttributeString("outcome", failures == 0 ? "Completed" : "Failed");
         writer.WriteStartElement("Counters", space);
         foreach (var (name, count) in new[] {
-                     ("total", outcomes.Count), ("executed", outcomes.Count), ("passed", outcomes.Count - failures), ("failed", failures),
+                     ("total", outcomes.Count), ("executed", outcomes.Count - skips), ("passed", outcomes.Count - failures - skips), ("failed", failures),
                      ("error", 0), ("timeout", 0), ("aborted", 0), ("inconclusive", 0), ("passedButRunAborted", 0), ("notRunnable", 0),
-                     ("notExecuted", 0), ("disconnected", 0), ("warning", 0), ("completed", 0), ("inProgress", 0), ("pending", 0),
+                     ("notExecuted", skips), ("disconnected", 0), ("warning", 0), ("completed", 0), ("inProgress", 0), ("pending", 0),
                  }) {
             writer.WriteAttributeString(name, count.ToString(CultureInfo.InvariantCulture));
         }

@@ -1,0 +1,132 @@
+module Sable.Testing
+
+/// What the harness was asked to do.
+struct TestOptions {
+    var filters: String[>..] = []
+    var expression: TestFilter? = none
+    var list: Bool = false
+    var describe: Bool = false
+    var inProcess: Bool = false
+    var showOutput: Bool = false
+    var exact: Bool = false
+    var explicit: Bool = false
+    // One test run here, or those named on standard input.
+    var only: String? = none
+    var several: Bool = false
+
+    // What the program's arguments ask; none, having said why, when they
+    // ask for what it has not.
+    static fn parse() -> TestOptions? {
+        var options = TestOptions()
+        var i = 0
+        let count = Runtime.argumentCount()
+        while i < count {
+            let argument = Runtime.argument(i)
+            i += 1
+            switch argument {
+                case "--list": options.list = true
+                case "--describe": options.describe = true
+                case "--in-process": options.inProcess = true
+                case "--show-output": options.showOutput = true
+                case "--exact": options.exact = true
+                case "--explicit": options.explicit = true
+                case "--run-tests": options.several = true
+                case "--run-test", "--role", "--seed", "--filter", "--timeout", "--attempt", "--grace":
+                    if i == count {
+                        return usage("'\(argument)' wants a value")
+                    }
+                    if !options.take(argument, Runtime.argument(i)) {
+                        return none
+                    }
+                    i += 1
+                default:
+                    if argument.hasPrefix("--") {
+                        return usage("unknown option '\(argument)'")
+                    }
+                    options.filters.append(argument)
+            }
+        }
+        return options
+    }
+
+    static fn usage(_ message: String) -> TestOptions? {
+        Runtime.writeError(
+            "\(message)\nusage: <harness> [filter...] [--filter <expression>] [--list] [--exact] [--explicit] [--show-output] [--in-process] [--timeout <seconds>] [--seed <n>|random] [--run-test <name>]\n")
+        return none
+    }
+
+    // An option that takes a value: false, having said why, for one it cannot be.
+    mutating fn take(_ option: String, _ value: String) -> Bool {
+        switch option {
+            case "--run-test": only = value
+            case "--role": TestState.role = value
+            case "--seed":
+                guard let seed = TestState.seed(of: value) else {
+                    Runtime.writeError("'--seed' wants a number, or 'random', not '\(value)'\n")
+                    return false
+                }
+                TestState.seed = seed
+            case "--timeout":
+                guard let seconds = try? F64.parse(value) else {
+                    Runtime.writeError("'--timeout' wants a number of seconds, not '\(value)'\n")
+                    return false
+                }
+                TestState.timeLimit = Int(seconds * 1e9)
+            case "--grace": TestState.grace = (try? Int.parse(value)) ?? TestState.grace
+            case "--attempt": TestState.attempt = (try? Int.parse(value)) ?? 1
+            default:
+                do {
+                    expression = try TestFilter(value)
+                } catch {
+                    Runtime.writeError("'--filter \(value)': \(error.message)\n")
+                    return false
+                }
+        }
+        return true
+    }
+
+    /// Whether the test is selected: by the filter, and by any of the names,
+    /// as a part of its own (or all of it, or of its function's, with
+    /// '--exact'); every test is, with none.
+    fn selects(_ test: TestCase) -> Bool {
+        if let filter = expression {
+            if !filter.matches(test) {
+                return false
+            }
+        }
+        if filters.isEmpty {
+            return true
+        }
+        for filter in filters {
+            if exact ? test.name == filter || test.function == filter : test.name.contains(filter) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Whether the tests of a function may be selected: not, when '--exact'
+    /// names other ones, and then its cases are not worked out.
+    fn maySelect(_ test: TestCase) -> Bool {
+        if !exact || filters.isEmpty {
+            return true
+        }
+        for filter in filters {
+            if filter == test.name || filter.hasPrefix(test.name + "(") {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Why a test that is selected is not run; none when it is.
+    fn reasonToSkip(_ test: TestCase) -> String? {
+        if test.isExplicit && !explicit && !exact {
+            return "it is run only when asked for"
+        }
+        if let skips = test.skips {
+            return skips()
+        }
+        return none
+    }
+}

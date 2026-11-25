@@ -1,0 +1,20 @@
+module Sable.Testing
+
+/// Why a fixture could not be made.
+///
+/// ```sable
+/// let error = FixtureError(message: "'A' is made from itself")
+/// assert(error.description() == "'A' is made from itself")
+/// ```
+@derive(Equatable)
+public struct FixtureError: Error {
+    public let message: String
+
+    public init(message: String) {
+        self.message = message
+    }
+
+    public fn description() -> String {
+        return message
+    }
+}

@@ -3142,6 +3142,16 @@ public static class SilBuiltins {
         Add("signal_take", SilType.Int, SilType.Int);
         Add("signal_unwatch", SilType.Unit, SilType.Int);
         Add("signal_raise", SilType.Bool, SilType.Int);
+        Add("terminal_is", SilType.Bool, SilType.Int);
+        Add("terminal_styles", SilType.Bool, SilType.Int);
+        Add("terminal_size", SilType.Int, SilType.Int);
+        Add("terminal_mode", SilType.Int, SilType.Int);
+        Add("terminal_show", SilType.Unit, SilType.Int);
+        Add("terminal_read", SilType.Int, SilType.Int);
+        Add("pty_open", SilType.Int);
+        Add("pty_name", SilType.String, SilType.Int);
+        Add("pty_call", SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        Add("pty_attach", SilType.Bool, SilType.String, SilType.Bool);
         Add("process_current_directory", SilType.String);
         Add("process_change_directory", SilType.Bool, SilType.String);
         Add("process_id", SilType.Int);

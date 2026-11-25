@@ -475,6 +475,7 @@ _Noreturn void sable_process_exit(int64_t status) {
 
 // And as a trap ends it, with nothing said and nothing done at exit.
 _Noreturn void sable_process_abort(void) {
+    terminal_restore();
     stop_trapped();
 }
 

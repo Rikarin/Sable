@@ -1,0 +1,153 @@
+module TerminalSupport
+
+// What the tests of Console that need a terminal share: a test run again in
+// a process of its own, its streams a pseudoterminal the runtime made, which
+// this process types at and reads, as a person at a terminal would.
+
+import Sable.IO
+import Sable.Process
+import Sable.Testing
+import Sable.Time
+
+/// Whether a test that needs a terminal cannot have one here: a
+/// pseudoterminal the runtime can make, and a process to run it in.
+public fn noTerminal() -> Bool {
+    if Runtime.executablePath().isEmpty {
+        return true
+    }
+    let pty = Runtime.ptyOpen()
+    if pty == 0 {
+        return true
+    }
+    _ = Runtime.ptyCall(pty, 0, 0)
+    return false
+}
+
+/// Whether this process is a test run again under a terminal: its streams
+/// made the terminal's, now, if so.
+public fn isUnderTerminal() -> Bool {
+    guard let name = Runtime.environment("SABLE_TEST_TERMINAL") else {
+        return false
+    }
+    let controlling = Runtime.environment("SABLE_TEST_CONTROLLING") == "1"
+    if !Runtime.ptyAttach(name, controlling) {
+        fatalError("the test could not be put under the terminal \(name)")
+    }
+    return true
+}
+
+/// A test run again under a pseudoterminal.
+public final class TerminalRun {
+    let pty: Int
+    let child: Child
+    var bytes: U8[>..] = []
+
+    init(pty: Int, child: Child) {
+        self.pty = pty
+        self.child = child
+    }
+
+    deinit {
+        _ = child.kill()
+        _ = Runtime.ptyCall(pty, 0, 0)
+    }
+
+    /// What the test wrote to the terminal so far, escape sequences and all.
+    public var output: String => String.fromUtf8Lossy(bytes)
+
+    /// Reads what the test writes until it has written the text: whether it
+    /// did within ten seconds.
+    public fn waitFor(_ text: String) -> Bool {
+        let until = Runtime.monotonicNanoseconds() + 10_000_000_000
+        while Runtime.monotonicNanoseconds() < until {
+            if output.contains(text) {
+                return true
+            }
+            let byte = Runtime.ptyCall(pty, 1, 100)
+            if byte >= 0 {
+                bytes.append(U8(byte))
+            } else if byte == -1 {
+                return output.contains(text)
+            }
+        }
+        return output.contains(text)
+    }
+
+    /// The bytes typed at the terminal.
+    public fn type(_ typed: U8[>..]) {
+        for byte in typed {
+            _ = Runtime.ptyCall(pty, 2, Int(byte))
+        }
+    }
+
+    public fn type(_ text: String) {
+        type(text.utf8.toArray())
+    }
+
+    /// The terminal's size set, as a window resized.
+    public fn resize(columns: Int, rows: Int) {
+        _ = Runtime.ptyCall(pty, 3, (columns << 32) | rows)
+    }
+
+    /// The terminal's mode: 1 a line at a time, 2 echoed, 4 its interrupt's
+    /// keys signals.
+    public var mode: Int => Runtime.ptyCall(pty, 4, 0)
+
+    /// Whether the terminal is as a shell leaves it: a line at a time,
+    /// echoed, its interrupt's keys signals.
+    public var isCooked: Bool => Runtime.ptyCall(pty, 4, 0) == 7
+
+    /// Whether it is in raw mode: neither of the first two.
+    public var isRaw: Bool => (Runtime.ptyCall(pty, 4, 0) & 3) == 0
+
+    /// The test waited for, what it wrote read to its end: how it ended.
+    public fn finish() async -> ExitStatus {
+        let until = Runtime.monotonicNanoseconds() + 20_000_000_000
+        var status = child.tryWait()
+        while status == none && Runtime.monotonicNanoseconds() < until {
+            let byte = Runtime.ptyCall(pty, 1, 20)
+            if byte >= 0 {
+                bytes.append(U8(byte))
+            }
+            status = child.tryWait()
+        }
+        while true {
+            let byte = Runtime.ptyCall(pty, 1, 50)
+            if byte < 0 {
+                break
+            }
+            bytes.append(U8(byte))
+        }
+        if let ended = status {
+            return ended
+        }
+        _ = child.kill()
+        return (try? await child.wait()) ?? ExitStatus(code: -1)
+    }
+}
+
+/// The test of the name run again, alone, under a pseudoterminal of 80
+/// columns and 24 rows, with the variables; the terminal its own, to signal
+/// it as Ctrl+C does, if 'controlling'.
+public fn runUnderTerminal(_ test: String, controlling: Bool = false, environment: [String: String] = [:]) throws -> TerminalRun {
+    let pty = Runtime.ptyOpen()
+    if pty == 0 {
+        try skip("no pseudoterminal")
+    }
+    _ = Runtime.ptyCall(pty, 3, (80 << 32) | 24)
+    var command = Command(Runtime.executablePath()).arguments(["--run-test", test])
+        .environment("SABLE_TEST_TERMINAL", Runtime.ptyName(pty))
+        .environment("SABLE_TEST_CONTROLLING", controlling ? "1" : "0")
+        .environment("TERM", "xterm-256color")
+        .removeEnvironment("NO_COLOR")
+        .removeEnvironment("CLICOLOR_FORCE")
+        .removeEnvironment("COLORTERM")
+        .stdin(.Null)
+        .stdout(.Null)
+        .stderr(.Null)
+    for (name, value) in environment {
+        command = command.environment(name, value)
+    }
+    let child = try command.spawn()
+    return TerminalRun(pty: pty, child: child)
+}

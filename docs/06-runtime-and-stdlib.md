@@ -1073,7 +1073,10 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     not it is UTF-8), Environment (variables and arguments
                     as text and as OsString, set and removed under
                     'unsafe', home, temporary and known folders by XDG,
-                    Apple and Windows rules)
+                    Apple and Windows rules), Console (whether a stream is
+                    a terminal, size, Style TerminalColor ColorSupport,
+                    cursor, clear, alternate screen, withRawMode, readKey
+                    KeyEvent Key KeyModifiers; below)
 Sable.IO.Compression Deflate Zlib Gzip Zstd Brotli (below), all at once, as they come
                     (Compressor, Decompressor) and as readers and writers
                     that compress, async ones too, with limits on what is
@@ -1951,6 +1954,35 @@ place.
   a program going once main has returned, as one waiting for a socket does.
 - **Cancellation.** `wait` throws `Cancelled`, and the child runs on:
   `withTimeout` limits a wait. `output` and `status` kill theirs.
+
+### The terminal
+
+`Sable.IO`'s `Console` asks the runtime (`runtime/terminal.c`, over
+`platform_terminal_posix.c` and `platform_terminal_win32.c`; WASI has no
+terminal) whether a stream is one, its size, and to put standard input in raw
+mode; the rest — styles, the cursor, the alternate screen, `cursorPosition` —
+is escape sequences, written only where standard output shows them
+(`ColorSupport`: NO_COLOR, CLICOLOR_FORCE, TERM, COLORTERM). Windows' console
+is asked to read them (virtual terminal processing) and to send keys as a
+terminal does (virtual terminal input); its keys are read as events, UTF-16
+made UTF-8. `KeyEvent.decode` reads what terminals send, xterm's, the Linux
+console's and the kitty protocol's.
+
+- **Raw mode** leaves output as it was (a line feed still starts a line) and
+  the interrupt's keys signals unless asked for as keys.
+- **Undone however the program ends.** The runtime notes the mode it found,
+  the alternate screen and a hidden cursor; it puts them back as the
+  closure that asked returns or throws, at exit, before a trap's report
+  (which is then on the main screen), on a fault, and in a handler it sets
+  for each signal that ends a program and has no handler of the program's
+  (`Signals` keep theirs; one let go gets the runtime's again): the handler
+  undoes, and sends the signal again to do what it did. SIGTSTP undoes, stops,
+  and on going on puts raw mode back. On Windows the console handler does it
+  for Ctrl+C and Ctrl+Break the program does not catch.
+- **Ctrl+C** is `Signal.Interrupt` (`Console.interrupts`, in Sable.Process).
+- **Tests** run a test again under a pseudoterminal the runtime makes
+  (`Runtime.ptyOpen`, `ptyAttach`), type at it and read it; Windows' ConPTY
+  has no file a program's streams can be, so there they are skipped.
 
 ### Dependency injection
 

@@ -597,6 +597,95 @@ static bool signal_raise(int signal) {
     return false;
 }
 
+// ---- The terminal ----------------------------------------------------------
+
+// A module is not told whether its streams are a terminal's, and can change
+// nothing of one.
+static bool terminal_is(int stream) {
+    (void)stream;
+    return false;
+}
+
+static bool terminal_styles(int stream) {
+    (void)stream;
+    return false;
+}
+
+static bool terminal_size(int stream, int *columns, int *rows) {
+    (void)stream;
+    (void)columns;
+    (void)rows;
+    return false;
+}
+
+static int terminal_mode(int mode) {
+    (void)mode;
+    return -1;
+}
+
+static void terminal_show(int shown) {
+    (void)shown;
+}
+
+static void terminal_restore(void) {
+}
+
+__attribute__((unused)) static void terminal_watch(void) {
+}
+
+static int terminal_read(int64_t milliseconds) {
+    (void)milliseconds;
+    return TERMINAL_ENDED;
+}
+
+// Nor has it pseudoterminals.
+struct Pty {
+    int unused;
+};
+
+static Pty *pty_open(void) {
+    return NULL;
+}
+
+static const char *pty_name(const Pty *pty) {
+    (void)pty;
+    return "";
+}
+
+static void pty_close(Pty *pty) {
+    (void)pty;
+}
+
+static int pty_read(Pty *pty, int64_t milliseconds) {
+    (void)pty;
+    (void)milliseconds;
+    return TERMINAL_ENDED;
+}
+
+static bool pty_write(Pty *pty, int byte) {
+    (void)pty;
+    (void)byte;
+    return false;
+}
+
+static bool pty_resize(Pty *pty, int columns, int rows) {
+    (void)pty;
+    (void)columns;
+    (void)rows;
+    return false;
+}
+
+static int pty_mode(const Pty *pty) {
+    (void)pty;
+    return -1;
+}
+
+static bool pty_attach(const char *name, bool controlling) {
+    (void)name;
+    (void)controlling;
+    return false;
+}
+
 // ---- Watching files ----------------------------------------------------------
 
 static void *watch_open(void *watch, const char *name, bool recursive, FileError *error) {

@@ -644,6 +644,16 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_signal_take(i64)
                                 declare void @sable_signal_unwatch(i64)
                                 declare zeroext i1 @sable_signal_raise(i64)
+                                declare zeroext i1 @sable_terminal_is(i64)
+                                declare zeroext i1 @sable_terminal_styles(i64)
+                                declare i64 @sable_terminal_size(i64)
+                                declare i64 @sable_terminal_mode(i64)
+                                declare void @sable_terminal_show(i64)
+                                declare i64 @sable_terminal_read(i64)
+                                declare i64 @sable_pty_open()
+                                declare ptr @sable_pty_name(i64)
+                                declare i64 @sable_pty_call(i64, i64, i64)
+                                declare zeroext i1 @sable_pty_attach(ptr, i1 zeroext)
                                 declare ptr @sable_process_current_directory()
                                 declare ptr @sable_process_executable_path()
                                 declare zeroext i1 @sable_process_change_directory(ptr)
@@ -5727,16 +5737,33 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call i64 @sable_process_exit_code(i64 {operands[0]}, i1 zeroext {operands[1]})");
                     return;
 
-                case "process_child_id" or "process_exit_event" or "signal_watch" or "signal_event" or "signal_take":
+                case "process_child_id" or "process_exit_event" or "signal_watch" or "signal_event" or "signal_take"
+                    or "terminal_size" or "terminal_mode" or "terminal_read":
                     Line($"{Result()} = call i64 @sable_{builtin.Name}(i64 {operands[0]})");
                     return;
 
-                case "process_ended" or "signal_raise":
+                case "process_ended" or "signal_raise" or "terminal_is" or "terminal_styles":
                     Line($"{Result()} = call zeroext i1 @sable_{builtin.Name}(i64 {operands[0]})");
                     return;
 
-                case "process_release" or "process_exit" or "signal_unwatch":
+                case "process_release" or "process_exit" or "signal_unwatch" or "terminal_show":
                     Line($"call void @sable_{builtin.Name}(i64 {operands[0]})");
+                    return;
+
+                case "pty_open":
+                    Line($"{Result()} = call i64 @sable_pty_open()");
+                    return;
+
+                case "pty_name":
+                    Line($"{Result()} = call ptr @sable_pty_name(i64 {operands[0]})");
+                    return;
+
+                case "pty_call":
+                    Line($"{Result()} = call i64 @sable_pty_call(i64 {operands[0]}, i64 {operands[1]}, i64 {operands[2]})");
+                    return;
+
+                case "pty_attach":
+                    Line($"{Result()} = call zeroext i1 @sable_pty_attach(ptr {operands[0]}, i1 zeroext {operands[1]})");
                     return;
 
                 case "process_abort":

@@ -112,6 +112,7 @@ __attribute__((noinline)) _Noreturn static void trap_report(const char *message,
         }
     }
 
+    terminal_restore();
     trap_reporting = true;
     first_message = message;
     first_length = message_length;

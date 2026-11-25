@@ -657,6 +657,8 @@ static bool signal_handling;
 static BOOL WINAPI on_console_event(DWORD event) {
     int number = event == CTRL_C_EVENT ? WIN_SIGINT : event == CTRL_BREAK_EVENT ? WIN_SIGQUIT : event == CTRL_CLOSE_EVENT ? WIN_SIGHUP : WIN_SIGTERM;
     if (!InterlockedCompareExchange(&signal_caught[number], 0, 0)) {
+        // It ends the program.
+        terminal_restore();
         return FALSE;
     }
 
@@ -670,17 +672,22 @@ static BOOL WINAPI on_console_event(DWORD event) {
     return TRUE;
 }
 
+// The handler set, once: it is told of each event, caught or not.
+static bool console_events(void) {
+    if (!signal_handling) {
+        signal_handling = SetConsoleCtrlHandler(on_console_event, TRUE) != FALSE;
+    }
+
+    return signal_handling;
+}
+
 static bool signal_catch(int number) {
     if (number != WIN_SIGHUP && number != WIN_SIGINT && number != WIN_SIGQUIT && number != WIN_SIGTERM) {
         return false;
     }
 
-    if (!signal_handling) {
-        if (!SetConsoleCtrlHandler(on_console_event, TRUE)) {
-            return false;
-        }
-
-        signal_handling = true;
+    if (!console_events()) {
+        return false;
     }
 
     InterlockedExchange(&signal_caught[number], 1);
@@ -704,6 +711,7 @@ static bool signal_raise(int number) {
     if (number == WIN_SIGHUP || number == WIN_SIGINT || number == WIN_SIGQUIT || number == WIN_SIGTERM || number == 9) {
         fflush(stdout);
         fflush(stderr);
+        terminal_restore();
         ExitProcess(128 + (UINT)number);
     }
 

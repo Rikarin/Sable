@@ -1,0 +1,29 @@
+module AsnErrorTests
+
+import Sable.Serialize.Asn1
+import Sable.Testing
+
+@test
+fn eachErrorSaysWhereAndWhat() {
+    let errors: (AsnError, Int?, String)[>..] = [
+        (.UnexpectedEnd(at: 1), 1, "byte 1: the bytes end inside a value"),
+        (.Malformed(at: 2, reason: "bad"), 2, "byte 2: bad"),
+        (.NotCanonical(at: 3, reason: "long"), 3, "byte 3: long"),
+        (.TrailingData(at: 5), 5, "byte 5: more after the last value"),
+        (.TooDeep(at: 6, limit: 9), 6, "byte 6: nested more than 9 deep"),
+        (.OutOfRange(at: 7, reason: "large"), 7, "byte 7: large"),
+        (.Invalid(reason: "asked"), none, "asked"),
+    ]
+    for (error, offset, text) in errors {
+        assertEqual(error.offset, offset)
+        assertEqual(error.description(), text)
+    }
+    var reader = AsnReader([0x01, 0x01, 0xFF], rules: .Der)
+    do {
+        _ = try reader.readNull()
+        assert(false)
+    } catch {
+        assertEqual(error.offset, 0)
+        assert(error.description().hasPrefix("byte 0: expected "))
+    }
+}

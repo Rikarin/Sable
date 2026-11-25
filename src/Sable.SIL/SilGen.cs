@@ -87,7 +87,7 @@ public sealed partial class SilGen {
     readonly Dictionary<Diagnostic, SyntaxTree> _files = new(ReferenceEqualityComparer.Instance);
 
     IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> PlacedDiagnostics =>
-        [.._diagnostics.Select(d => (d, _files.GetValueOrDefault(d)))];
+        [.._diagnostics.Select(d => (d, _files.GetValueOrDefault(d) ?? (d.Anchor is { } anchor ? _compilation.TreeOf(anchor) : null)))];
 
     /// <summary>Gives the diagnostics reported since <paramref name="before" /> the file they were reported in, unless they have one.</summary>
     void Place(int before, SyntaxTree tree) {
@@ -1454,7 +1454,7 @@ public sealed partial class SilGen {
             }
 
             if (substitution.Lookup(parameter) is not { } argument || Lower(argument) is not { } lowered) {
-                Unsupported<object>(at, $"'{symbol.Name}' with its type arguments unknown here");
+                Unsupported<object>(at, $"'{NameOf(symbol)}' with its type arguments unknown here");
                 return null;
             }
 
@@ -1487,6 +1487,7 @@ public sealed partial class SilGen {
 
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, substitution, _loweringInstance);
+        _requests[name] = at;
         _pending.Enqueue((symbol, name, type, substitution));
         return (name, type);
     }
@@ -1620,6 +1621,7 @@ public sealed partial class SilGen {
 
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, substitution, _loweringInstance);
+        _requests[name] = at;
         _polymorphic[name] = (symbol, substitution);
         _pending.Enqueue((symbol, name, type, substitution));
         return (name, type);
@@ -4552,7 +4554,8 @@ public sealed partial class SilGen {
     }
 
     T? Unsupported<T>(SyntaxNode at, string what) where T : class {
-        _diagnostics.Error(ErrorCode.ERR_NotLoweredYet, at.Span, $"SIL lowering does not handle {what} yet");        return null;
+        ReportNotLowered(at, what);
+        return null;
     }
 
     // =======================================================================

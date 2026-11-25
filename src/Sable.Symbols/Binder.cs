@@ -1662,10 +1662,11 @@ public sealed partial class Binder {
                 binding.Identifier.Span,
                 $"'{binding.Identifier.Text}' needs either a type annotation or an initialiser"
             );
-        } else if (declaredType is null && initializer is not null && IsNone(initializer)
-                   && initializer.Type is OptionalTypeSymbol { UnderlyingType.IsError: true }) {
+        } else if (declaredType is null && initializer is not null
+                   && (IsNone(initializer) && initializer.Type is OptionalTypeSymbol { UnderlyingType.IsError: true } || GivesNone(initializer))) {
             // 'none' is no particular optional, so it cannot give the binding
-            // a type; left alone, the binding's type would be '??'.
+            // a type, nor can a closure that gives one; left alone, the
+            // binding's type would be '??'.
             _diagnostics.Error(
                 ErrorCode.ERR_CannotInferType,
                 binding.Identifier.Span,
@@ -2028,6 +2029,11 @@ public sealed partial class Binder {
             BoundConversion conversion => BindingOf(conversion.Operand),
             _ => null,
         };
+
+    /// <summary>A closure whose result is a 'none' of nothing that is known.</summary>
+    static bool GivesNone(BoundExpression expression) =>
+        expression is BoundClosure { Type: FunctionTypeSymbol { ReturnType: OptionalTypeSymbol { UnderlyingType.IsError: true } } } closure
+        && closure.Syntax.DescendantTokens().Any(static t => t.Kind == SyntaxKind.NoneKeyword);
 
     static bool IsNone(BoundExpression expression) =>
         expression switch {
@@ -5321,6 +5327,10 @@ public sealed partial class Binder {
         type is ExistentialTypeSymbol existential
         && CompositionTypeSymbol.PartsOf(existential.Constraint).OfType<NamedTypeSymbol>().Any(static p => p.Members.Any(static m => m.ContainingSymbol is NamedTypeSymbol));
 
+    /// <summary>Of what <see cref="IsClosure" /> says waits for its parameter, what is a function: a closure, or a key path.</summary>
+    static bool IsFunctionSyntax(ExpressionSyntax expression) =>
+        Unparenthesised(expression) is ClosureExpressionSyntax or BraceClosureExpressionSyntax or KeyPathExpressionSyntax;
+
     static bool IsClosure(ExpressionSyntax expression) =>
         expression switch {
             ClosureExpressionSyntax or BraceClosureExpressionSyntax => true,
@@ -5557,6 +5567,10 @@ public sealed partial class Binder {
             arguments = realised.ToImmutable();
         }
 
+        // The arguments that are a literal with nothing to say what it is of,
+        // '[]' and 'none', and reported no error of their own.
+        var untold = new HashSet<BoundExpression>(ReferenceEqualityComparer.Instance);
+
         // Now that a signature is chosen, the closures have parameter types.
         if (arguments.Any(static a => a is BoundUnboundClosure)) {
             var settled = substitution;
@@ -5580,10 +5594,21 @@ public sealed partial class Binder {
                     expected = elements.ElementType;
                 }
 
+                // A literal is bound to what is known of its type: what is
+                // not is not a type for its elements to be held to.
+                var isLiteral = !IsFunctionSyntax(syntaxes[i]);
+                if (isLiteral && expected is not null and not FunctionTypeSymbol) {
+                    expected = Said(expected, inferrable);
+                }
+
+                var reported = _diagnostics.Count + _diagnostics.SuppressedErrors;
                 rebound[i] = slots[i] < resolved.Parameters.Length && resolved.Parameters[slots[i]].IsAutoclosure
                              && expected is FunctionTypeSymbol { ParameterTypes.IsEmpty: true } lazyType
                     ? BindAutoclosure(syntaxes[i], lazyType)
                     : BindExpression(syntaxes[i], expected);
+                if (_diagnostics.Count + _diagnostics.SuppressedErrors == reported && (isLiteral || GivesNone(rebound[i]))) {
+                    untold.Add(rebound[i]);
+                }
 
                 // A closure for a parameter of type 'F', all that says what F
                 // is, says it for the closures after it too.
@@ -5659,7 +5684,7 @@ public sealed partial class Binder {
 
             // A parameter type inference could not settle is reported below,
             // once, rather than again as every argument that does not fit it.
-            if (ContainsUninferred(wanted, resolved)) {
+            if (ContainsUninferred(wanted, resolved) || _ownerTypeParameters.Any(p => substitution.Lookup(p) is null && TypeSubstitution.Mentions(wanted, p))) {
                 converted.Add(arguments[i]);
                 continue;
             }
@@ -5729,11 +5754,17 @@ public sealed partial class Binder {
         // parameter nothing mentions stays open: 'Task.yield()' says nothing
         // of Task's Success, and needs nothing.
         var uninferred = false;
-        if (!resolved.TypeParameters.IsEmpty) {
-            var argumentError = arguments.Any(static a =>
-                a is not BoundUnboundClosure && TypeSubstitution.ContainsError(a.Type) && !IsNone(a)
+        if (!inferrable.IsEmpty) {
+            var argumentError = group.Receiver is { } of && TypeSubstitution.ContainsError(of.Type) || arguments.Any(a =>
+                a is not BoundUnboundClosure && TypeSubstitution.ContainsError(a.Type) && !IsNone(a) && !untold.Contains(a)
             );
-            foreach (var typeParameter in resolved.TypeParameters) {
+
+            // A bare generic type's, where its initialiser's parameters
+            // mention it: 'Box([])'.
+            var ofOwner = resolved.FunctionKind == FunctionKind.Initializer
+                ? _ownerTypeParameters.Where(p => resolved.Parameters.Any(parameter => TypeSubstitution.Mentions(parameter.Type, p)))
+                : [];
+            foreach (var typeParameter in resolved.TypeParameters.Concat(ofOwner)) {
                 if (substitution.Lookup(typeParameter) is not null) {
                     continue;
                 }
@@ -5743,15 +5774,38 @@ public sealed partial class Binder {
                     continue;
                 }
 
+                var called = resolved.FunctionKind == FunctionKind.Initializer ? resolved.ContainingSymbol!.Name : resolved.Name;
                 _diagnostics.Error(
                     ErrorCode.ERR_CannotInferTypeArgument,
                     syntax.Span,
-                    arguments.Any(IsNone)
-                        ? $"cannot infer '{typeParameter.Name}' from these arguments: 'none' alone does not say "
-                        + "what it is optional of, so give the call a type to produce, as in 'let x: Int? = ...'"
-                        : $"cannot infer '{typeParameter.Name}' from these arguments"
+                    $"cannot infer '{typeParameter.Name}' of '{called}' from these arguments{WhyNotInferred(typeParameter)}"
                 );
             }
+        }
+
+        // What about the arguments leaves a parameter open, and what to write.
+        string WhyNotInferred(TypeParameterSymbol typeParameter) {
+            for (var i = 0; i < arguments.Length; i++) {
+                if (ParameterFor(resolved, slots, i) is not { } parameter || !TypeSubstitution.Mentions(outer.Apply(parameter.Type), typeParameter)) {
+                    continue;
+                }
+
+                if (IsNone(arguments[i])) {
+                    return ": 'none' alone does not say what it is optional of, so give it a type, as in 'let x: Int? = none'";
+                }
+
+                if (i < syntaxes.Length && Unparenthesised(syntaxes[i]) is ClosureExpressionSyntax or BraceClosureExpressionSyntax) {
+                    return ": the closure does not say what it is, so write its type, as in '{ (x: Int) -> Int? in ... }'";
+                }
+
+                if (untold.Contains(arguments[i])) {
+                    return $": '{syntaxes[i].ToString().Trim()}' alone does not say what its elements are, so give it a type, as in 'let xs: Int[>..] = []'";
+                }
+            }
+
+            return TypeSubstitution.Mentions(resolved.ReturnType, typeParameter)
+                ? ": give the call a type to produce, as in 'let x: Int = ...'"
+                : "";
         }
 
         // A type parameter is Copyable unless it says '~Copyable': a move-only
@@ -6171,7 +6225,7 @@ public sealed partial class Binder {
                 continue;
             }
 
-            TypeSubstitution.Unify(wanted, AdaptForInference(wanted, arguments[i]), inferrable, map);
+            TypeSubstitution.Unify(wanted, Said(AdaptForInference(wanted, arguments[i]), inferrable), inferrable, map);
         }
 
         // A 'Type' given for a 'T.Type' that nothing else settles opens it:
@@ -6218,6 +6272,37 @@ public sealed partial class Binder {
         }
 
         return new(map);
+    }
+
+    /// <summary>
+    ///     What a type says where <paramref name="inferrable" /> are to be
+    ///     inferred: an argument bound for a parameter still open — <c>[]</c>
+    ///     for a <c>T[:]</c>, <c>{ none }</c> for a <c>() -> T?</c> — has the
+    ///     open parameter for its type, which says nothing of it, as an error
+    ///     does not. In the function's own body its parameters are types like
+    ///     any other, and a call of itself can be given them.
+    /// </summary>
+    TypeSymbol Said(TypeSymbol type, ImmutableArray<TypeParameterSymbol> inferrable) {
+        Dictionary<TypeParameterSymbol, TypeSymbol>? unsaid = null;
+        foreach (var parameter in inferrable) {
+            if (TypeSubstitution.Mentions(type, parameter) && !IsInScope(parameter)) {
+                (unsaid ??= [])[parameter] = ErrorTypeSymbol.Instance;
+            }
+        }
+
+        return unsaid is null ? type : new TypeSubstitution(unsaid).Apply(type);
+    }
+
+    /// <summary>Whether the code being bound is in the declaration a type parameter is of.</summary>
+    bool IsInScope(TypeParameterSymbol parameter) {
+        for (Symbol? symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
+            if (ReferenceEquals(symbol, parameter.ContainingSymbol)
+                || symbol is ExtensionSymbol extension && ReferenceEquals(extension.ExtendedType.OriginalDefinition, parameter.ContainingSymbol)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -6,18 +6,15 @@ module Negative.ArrayIterators
 // array, or another construction of the conformer (#310).
 
 extension<Element> Element[:] {
-    public fn makeIterator() -> ChainIterator<ReversedIterator<Element[>..]>, ArrayIterator<Element>> {
-    } //! S6004
+    public fn makeIterator() -> ChainIterator<ReversedIterator<Element[>..]>, ArrayIterator<Element>> { } //! S6004
 }
 
 extension<Element> Element[>..] {
-    public fn makeIterator() -> OfSequence<Element[:]> {
-    } //! S6004
+    public fn makeIterator() -> OfSequence<Element[:]> { } //! S6004
 }
 
 extension<Element> Element[..] {
-    public fn makeIterator() -> OfSequence<Element[..][>..]> {
-    } //! S6004
+    public fn makeIterator() -> OfSequence<Element[..][>..]> { } //! S6004
 }
 
 public struct OfSequence<S: Sequence>: Iterator {

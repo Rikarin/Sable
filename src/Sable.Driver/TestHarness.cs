@@ -143,7 +143,7 @@ public static class TestHarness {
 
         module.CheckExclusivity = checkExclusivity;
         if (lowering.Count > 0) {
-            return new(module, null, [..lowering.Select(d => Format(d, primary.Text))]);
+            return new(module, null, [..lowering.Select(d => d.Anchor is { } anchor && compilation.TreeOf(anchor) is { } file ? d.Format(file.Text) : Format(d, primary.Text))]);
         }
 
         var problems = SilVerifier.Verify(module);

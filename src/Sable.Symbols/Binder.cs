@@ -5452,6 +5452,7 @@ public sealed partial class Binder {
 
         // Now that a signature is chosen, the closures have parameter types.
         if (arguments.Any(static a => a is BoundUnboundClosure)) {
+            var settled = substitution;
             var saved = _openTypeParameters;
             _openTypeParameters = [
                 ..inferrable.Where(p => substitution.Lookup(p) is null)
@@ -5489,8 +5490,24 @@ public sealed partial class Binder {
             arguments = rebound.ToImmutable();
 
             // A closure's return type can settle a type parameter nothing else
-            // mentions, so inference runs again with them bound.
+            // mentions, so inference runs again with them bound. What a closure
+            // alone settled is held to its constraints here: the overload was
+            // chosen before it was known (Score).
             substitution = Combine(outer, Infer(resolved, arguments, labels, outer, expectedType));
+            foreach (var typeParameter in resolved.TypeParameters) {
+                if (settled.Lookup(typeParameter) is not null || substitution.Lookup(typeParameter) is not { } became
+                    || TypeSubstitution.ContainsError(became) || ContainsUninferred(became, resolved)) {
+                    continue;
+                }
+
+                foreach (var constraint in typeParameter.Constraints.Select(substitution.Apply)) {
+                    if (!ContainsUninferred(constraint, resolved) && !Conversions.Satisfies(became, constraint, _conversions.Equivalence)) {
+                        _diagnostics.Error(ErrorCode.ERR_NoMatchingOverload, syntax.Span,
+                            $"'{resolved.Name}' cannot be called with these arguments: '{typeParameter.Name}' would be '{became.ToDisplayString()}', "
+                            + $"which is not '{constraint.ToDisplayString()}'");
+                    }
+                }
+            }
         }
 
         var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);

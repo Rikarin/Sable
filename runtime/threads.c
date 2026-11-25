@@ -35,6 +35,7 @@ typedef struct SableThread {
     int64_t tasks_spawned;
     struct SableThread *next; // every thread's, the latest first
     int32_t index;            // how many were made before it
+    bool attached;            // its thread is one C may call into: foreign.c
 } SableThread;
 
 static SableThread *all_threads;

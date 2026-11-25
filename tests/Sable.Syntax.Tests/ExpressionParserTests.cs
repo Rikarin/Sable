@@ -293,6 +293,12 @@ public sealed class ExpressionParserTests {
         Assert.Contains("(GenericName Box (TypeArgumentList < (FunctionType", Parse(source), StringComparison.Ordinal);
 
     [Theory]
+    [InlineData("f { (p: RawPtr<U64[16]>) in p }")]
+    [InlineData("f { (p: U8[..4], q: Buf<Int, 4>) -> U8[2] in p }")]
+    public void AClosuresParameterMayBeOfALength(string source) =>
+        Assert.Contains("(ClosureHeader", Parse(source), StringComparison.Ordinal);
+
+    [Theory]
     [InlineData("a < (b)")]
     [InlineData("f(a < (b), c > (d))")]
     [InlineData("a < (b + 1) && c > d")]

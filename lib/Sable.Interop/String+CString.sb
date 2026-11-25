@@ -13,9 +13,23 @@ extension String {
     /// }
     /// ```
     public fn withCString<R, E: Error>(_ body: (CStr) throws(E) -> R) throws(E) -> R {
-        let bytes = utf8Bytes()
-        precondition(!bytes.contains(0), "a C string cannot have a NUL in it")
-        return try withNulTerminated(bytes, body)
+        let count = utf8Count
+        // Text as short as names and options are is lent on the stack.
+        if count < 128 {
+            var room = ShortText()
+            return try Memory.withPointer(to: &room) { (place: RawPtr<ShortText>) throws(E) -> R in
+                unsafe {
+                    return try body(written(self, at: place.cast(to: U8.self), count))
+                }
+            }
+        }
+        unsafe {
+            let place = RawPtr<U8>.allocate(count: count + 1)
+            defer {
+                place.deallocate()
+            }
+            return try body(written(self, at: place, count))
+        }
     }
 
     /// The text as a wide C string, of `wchar_t`s and one of 0, for as long
@@ -80,6 +94,23 @@ extension String[:] {
         pointers.append(RawPtr<CChar>.null)
         return try pointers.withPointer(body)
     }
+}
+
+// Room on the stack for 127 bytes and a NUL.
+struct ShortText {
+    var a: (U64, U64, U64, U64) = (0, 0, 0, 0)
+    var b: (U64, U64, U64, U64) = (0, 0, 0, 0)
+    var c: (U64, U64, U64, U64) = (0, 0, 0, 0)
+    var d: (U64, U64, U64, U64) = (0, 0, 0, 0)
+}
+
+// The text's bytes and a NUL written there, as a C string.
+unsafe fn written(_ text: String, at place: RawPtr<U8>, _ count: Int) -> CStr {
+    text.copyUtf8(to: place)
+    place.initialize(to: 0, at: count)
+    let made = CStr.viewing(place.cast(to: CChar.self))
+    precondition(made.count == count, "a C string cannot have a NUL in it")
+    return made
 }
 
 // The bytes and a NUL, in memory to be deallocated.

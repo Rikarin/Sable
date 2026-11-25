@@ -1472,7 +1472,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "address_begin" or "array_address" or "slice_address" or "c_address":
                 throw new SilTrap("a C pointer to a value or a function, which the interpreter has none of; build the program to run it");
 
-            case "address_end" or "slice_end":
+            case "address_end" or "slice_end" or "forget":
                 return null;
 
             // An actor's identity: the interpreter's hops never wait, so need none.

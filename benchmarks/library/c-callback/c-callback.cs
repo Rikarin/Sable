@@ -1,7 +1,9 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-public static unsafe class CCallbackBench {
+// Port of c-callback.sb.
+[Benchmark("library/c-callback")]
+static unsafe class CCallbackBench {
     [DllImport("libc", EntryPoint = "qsort")]
     static extern void Sort(int* start, nuint count, nuint size, delegate* unmanaged[Cdecl]<int*, int*, int> compare);
 
@@ -11,7 +13,6 @@ public static unsafe class CCallbackBench {
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     delegate int Step(int n, nint context);
 
-    [Benchmark("library/c-callback")]
     public static string Run() {
         var numbers = new int[300_000];
         var seed = 12345u;

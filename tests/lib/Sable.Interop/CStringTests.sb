@@ -140,14 +140,34 @@ union Oops: Error { Bad }
 fn whatTheBodyThrowsIsThrown() {
     var caught = 0
     do {
-        try "x".withCString { (text: CStr) throws(Oops) in throw Oops.Bad }
+        try "x".withCString { (text: CStr) throws(Oops) in
+            throw Oops.Bad
+        }
     } catch {
         caught += 1
     }
     do {
-        try ["x"].withCStrings { (texts: RawPtr<RawPtr<CChar>>) throws(Oops) in throw Oops.Bad }
+        try ["x"].withCStrings { (texts: RawPtr<RawPtr<CChar>>) throws(Oops) in
+            throw Oops.Bad
+        }
     } catch {
         caught += 1
     }
     assertEqual(caught, 2)
+}
+
+@test
+fn textOfAnyLengthIsLent() {
+    for count in [1, 126, 127, 128, 129, 5000] {
+        let text = "x".repeated(count)
+        text.withCString { lent in
+            assertEqual(lent.count, count)
+            assertEqual(lent.string, text)
+        }
+    }
+}
+
+@test(traps: "a C string cannot have a NUL in it")
+fn aNulInLongLentTextTraps() {
+    ("x".repeated(200) + "\u{0}y").withCString { text in }
 }

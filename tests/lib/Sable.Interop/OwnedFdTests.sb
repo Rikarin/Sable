@@ -110,8 +110,7 @@ fn whatFailsIsThrown() {
         do {
             try odd.close()
             assert(false)
-        } catch {
-        }
+        } catch { }
     }
 }
 

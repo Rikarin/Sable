@@ -675,11 +675,11 @@ public sealed class InteropTests {
                               import Sable.Interop
 
                               fn pass<F: CSignature>(_ f: F) {
-                                  _ = CCallback(f)
+                                  _ = cFunction(f)
                               }
 
                               fn main() {
-                                  pass { (context: RawPtr<Opaque>) in }
+                                  pass { (n: CInt) in }
                               }
                               """;
         var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(source, "test.sb"))], null, false);

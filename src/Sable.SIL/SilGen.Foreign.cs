@@ -50,9 +50,11 @@ public sealed partial class SilGen {
         var arguments = signature.Parameters.Select(p => (SilValue)block.AddArgument(p)).ToArray();
         var context = path.Aggregate(arguments[first ? 0 : ^1], (value, _) => block.Append(new StructExtractInst(value, 0)));
         var closureAt = block.Append(new ApplyInst(block.Append(RuntimeFunction("sable_callback_enter", new([SilType.Int], SilType.Int))), SilType.Int, context));
-        var closure = block.Append(new BuiltinInst("raw_load", thick, closureAt));
+        // The table's, not counted: read as if moved out, and given back as if
+        // moved to where nothing is destroyed.
+        var closure = block.Append(new BuiltinInst("raw_take", thick, closureAt));
         var result = block.Append(new ApplyInst(closure, signature.Result, arguments));
-        block.Append(new DestroyValueInst(closure));
+        block.Append(new BuiltinInst("forget", SilType.Unit, closure));
         block.Append(new ApplyInst(block.Append(RuntimeFunction("sable_callback_leave", new([SilType.Int], SilType.Unit))), SilType.Unit, context));
         block.Append(new ReturnInst(signature.Result == SilType.Unit ? null : result));
         _module.Add(entry);

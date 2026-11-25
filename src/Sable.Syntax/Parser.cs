@@ -2247,6 +2247,8 @@ internal sealed class Parser {
                 case SyntaxKind.CapitalSelfKeyword:
                 case SyntaxKind.ThrowsKeyword:
                 case SyntaxKind.RethrowsKeyword:
+                // An array's length, 'U8[16]', or a value argument, 'Buf<Int, 4>'.
+                case SyntaxKind.IntegerLiteralToken when Peek(offset - 1).Kind is SyntaxKind.OpenBracketToken or SyntaxKind.DotDotToken or SyntaxKind.CommaToken:
                     continue;
 
                 default:

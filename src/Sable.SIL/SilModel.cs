@@ -2163,6 +2163,12 @@ public static class SilBuiltins {
             return operands is [SliceType] ? new([operands[0]], name == "slice_end" ? SilType.Unit : SilType.Int) : null;
         }
 
+        // A value's ownership ended with nothing released: what it is of is
+        // another's to release (SilGen.Foreign.cs).
+        if (name == "forget") {
+            return operands is [var forgotten] ? new([forgotten], SilType.Unit) { Consumed = [0] } : null;
+        }
+
         if (name == "c_address") {
             return operands is [FunctionType] ? new([operands[0]], SilType.Int) : null;
         }

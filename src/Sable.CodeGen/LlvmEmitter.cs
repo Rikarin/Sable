@@ -4499,7 +4499,7 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = ptrtoint ptr {operands[0]} to i64");
                     return;
 
-                case "address_end" or "slice_end":
+                case "address_end" or "slice_end" or "forget":
                     return;
 
                 case "array_address": {

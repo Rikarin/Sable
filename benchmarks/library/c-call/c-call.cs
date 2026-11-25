@@ -1,13 +1,14 @@
 using System.Runtime.InteropServices;
 
-public static unsafe class CCallBench {
+// Port of c-call.sb.
+[Benchmark("library/c-call")]
+static unsafe class CCallBench {
     [DllImport("libc", EntryPoint = "labs"), SuppressGCTransition]
     static extern nint Labs(nint n);
 
     [DllImport("libc", EntryPoint = "strlen", CharSet = CharSet.Ansi), SuppressGCTransition]
     static extern nuint Length(byte* text);
 
-    [Benchmark("library/c-call")]
     public static string Run() {
         nint total = 0;
         for (nint i = 0; i < 20_000_000; i++) {

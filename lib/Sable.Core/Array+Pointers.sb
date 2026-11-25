@@ -50,6 +50,23 @@ extension<Element> Element[:] {
     }
 }
 
+extension String {
+    /// The text's UTF-8 copied to where there is room for it, 'utf8Count'
+    /// bytes; with no NUL after it.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     let room = RawPtr<U8>.allocate(count: 3)
+    ///     defer { room.deallocate() }
+    ///     "añ".copyUtf8(to: room)
+    ///     assert(room.copied(count: 3) == [0x61, 0xC3, 0xB1])
+    /// }
+    /// ```
+    public unsafe fn copyUtf8(to place: RawPtr<U8>) {
+        StringBuffer.copy(place.address, self, 0, utf8Count)
+    }
+}
+
 extension RawPtr<Element> {
     /// The first 'count' values, copied into an array.
     ///

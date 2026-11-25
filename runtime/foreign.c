@@ -41,6 +41,7 @@ static void foreign_thread_end(void *pointer) {
     current_task = &main_task;
     current_frames = NULL;
     if (this_thread_get() == thread->state) {
+        thread->state->attached = false;
         this_thread_set(NULL);
     }
 
@@ -82,10 +83,19 @@ SABLE_SLOW static void foreign_thread_begin(void) {
     platform_at_thread_exit(thread);
 }
 
+SABLE_SLOW static void foreign_first_enter(void) {
+    if (current_task == &main_task && !on_main_thread) {
+        foreign_thread_begin();
+    }
+
+    current_thread()->attached = true;
+}
+
 // First in every function C calls by its address or its name.
 void sable_foreign_enter(void) {
-    if (__builtin_expect(current_task == &main_task && !on_main_thread, 0)) {
-        foreign_thread_begin();
+    SableThread *thread = this_thread_get();
+    if (__builtin_expect(thread == NULL || !thread->attached, 0)) {
+        foreign_first_enter();
     }
 }
 
@@ -107,14 +117,13 @@ enum { CALLBACK_CHUNK = 256, CALLBACK_CHUNKS = 4096, CONTEXT_INDEX_BITS = sizeof
 typedef struct CallbackCell {
     uint64_t state;
     void *closure[2];  // a function value: its code, and what it captured, counted
-    const void *thread; // the only one to call it on, or NULL
+    const SableThread *thread; // the only one to call it on, or NULL
     uint32_t next_free;
 } CallbackCell;
 
 static CallbackCell *callback_chunks[CALLBACK_CHUNKS];
 static uint32_t callback_count, callback_free; // under the lock; a place is its index and one, 0 none
 static SpinLock callback_lock;
-static _Thread_local char this_thread_mark; // its address is the thread's own
 
 static uint64_t generation_mask(void) {
     return (UINT64_C(1) << (sizeof(void *) * 8 - CONTEXT_INDEX_BITS)) - 1;
@@ -154,7 +163,7 @@ int64_t sable_callback_begin(int64_t closure, bool confined) {
     spin_unlock(&callback_lock);
     CallbackCell *cell = callback_cell(place);
     memcpy(cell->closure, (const void *)(intptr_t)closure, sizeof cell->closure);
-    cell->thread = confined ? &this_thread_mark : NULL;
+    cell->thread = confined ? current_thread() : NULL;
     uint64_t generation = ((__atomic_load_n(&cell->state, __ATOMIC_RELAXED) >> 32) + 1) & generation_mask();
     generation = generation == 0 ? 1 : generation;
     __atomic_store_n(&cell->state, generation << 32, __ATOMIC_RELEASE);
@@ -178,7 +187,8 @@ static void callback_done(CallbackCell *cell, uint32_t place) {
     sable_release(captured);
 }
 
-// C calls the closure: where its function value is, to be copied and called.
+// C calls the closure: where its function value is, to be called, and kept
+// by the call's being in the cell.
 int64_t sable_callback_enter(int64_t context) {
     sable_foreign_enter();
     uint64_t generation;
@@ -192,11 +202,17 @@ int64_t sable_callback_enter(int64_t context) {
         if (state >> 32 != generation || (state & CALLBACK_GONE) != 0) {
             sable_trap("C called a closure that was let go of");
         }
-    } while (!__atomic_compare_exchange_n(&cell->state, &state, state + 1, true, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
 
-    if (cell->thread != NULL && cell->thread != &this_thread_mark) {
-        sable_trap("C called a closure on another thread than the one that lent it: one called on any thread is a CCallback");
-    }
+        // One lent is this thread's alone: there is no one to race with.
+        if (cell->thread != NULL) {
+            if (cell->thread != this_thread_get()) {
+                sable_trap("C called a closure on another thread than the one that lent it: one called on any thread is a CCallback");
+            }
+
+            __atomic_store_n(&cell->state, state + 1, __ATOMIC_RELAXED);
+            break;
+        }
+    } while (!__atomic_compare_exchange_n(&cell->state, &state, state + 1, true, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
 
     return (int64_t)(intptr_t)cell->closure;
 }
@@ -204,6 +220,11 @@ int64_t sable_callback_enter(int64_t context) {
 void sable_callback_leave(int64_t context) {
     uint64_t generation;
     CallbackCell *cell = callback_of(context, &generation);
+    if (cell->thread != NULL && cell->state != (generation << 32 | CALLBACK_GONE) + 1) {
+        __atomic_store_n(&cell->state, cell->state - 1, __ATOMIC_RELAXED);
+        return;
+    }
+
     if (__atomic_sub_fetch(&cell->state, 1, __ATOMIC_ACQ_REL) == (generation << 32 | CALLBACK_GONE)) {
         callback_done(cell, (uint32_t)((uint64_t)context & ((UINT64_C(1) << CONTEXT_INDEX_BITS) - 1)));
     }

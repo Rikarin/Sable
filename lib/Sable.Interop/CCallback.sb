@@ -57,7 +57,7 @@ public final class CCallback<F: CSignature>: Sendable {
 /// assert(seen == [7])
 /// ```
 public fn withCallback<F: CSignature, R, E: Error>(_ closure: F, context position: ContextPosition = .Last,
-        _ body: (CFunction<F>, RawPtr<Opaque>) throws(E) -> R) throws(E) -> R {
+    _ body: (CFunction<F>, RawPtr<Opaque>) throws(E) -> R) throws(E) -> R {
     let function = CFunction<F>.withContext(position)
     let context = beginCallback(closure, confined: true)
     defer {

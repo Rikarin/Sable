@@ -120,17 +120,23 @@ fn whatTheBodyThrowsIsThrown() {
     var caught = 0
     var numbers = [1]
     do {
-        try numbers.withPointer { (start: RawPtr<Int>) throws(Oops) in throw Oops.Bad }
+        try numbers.withPointer { (start: RawPtr<Int>) throws(Oops) in
+            throw Oops.Bad
+        }
     } catch {
         caught += 1
     }
     do {
-        try numbers.withMutablePointer { (start: RawPtr<Int>) throws(Oops) in throw Oops.Bad }
+        try numbers.withMutablePointer { (start: RawPtr<Int>) throws(Oops) in
+            throw Oops.Bad
+        }
     } catch {
         caught += 1
     }
     do {
-        try Memory.withPointer(to: &caught) { (place: RawPtr<Int>) throws(Oops) in throw Oops.Bad }
+        try Memory.withPointer(to: &caught) { (place: RawPtr<Int>) throws(Oops) in
+            throw Oops.Bad
+        }
     } catch {
         caught += 1
     }
@@ -145,4 +151,16 @@ fn valuesAreCopiedFromWhereTheyLie() {
         }
     }
     assertEqual(copy, ["a", "b"])
+}
+
+@test
+fn textIsCopiedWhereThereIsRoom() {
+    unsafe {
+        let room = RawPtr<U8>.allocate(count: 4)
+        room.initialize(repeating: 9, count: 4)
+        "€".copyUtf8(to: room)
+        "".copyUtf8(to: room)
+        assertEqual(room.copied(count: 4), [0xE2, 0x82, 0xAC, 9])
+        room.deallocate()
+    }
 }

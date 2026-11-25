@@ -1604,7 +1604,7 @@ fn filled(_ room: Int, _ fill: (RawPtr<U8>, RawPtr<CUnsignedLong>) -> CInt) thro
     if code != 0 {
         throw ZlibError.Failed(code: Int(code))
     }
-    bytes.truncate(Int(length))
+    bytes.removeLast(room - Int(length))
     return bytes
 }
 

@@ -101,3 +101,9 @@ fn aNullFunctionIsNotCalled() {
         _ = CFunction<() -> ()>.null.function()
     }
 }
+
+@test
+fn aContextIsFirstOrLast() {
+    assert(ContextPosition.First != ContextPosition.Last)
+    assert(ContextPosition.Last.debugDescription().hasSuffix("Last"))
+}

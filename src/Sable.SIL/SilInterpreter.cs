@@ -1535,6 +1535,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return HashSeed;
 
             // The library's portable code is what the interpreter runs.
+            case "codec_bytes_bytes" or "codec_string_bytes" or "codec_bytes_raw" or "utf8_to_utf16" or "utf16_to_utf8":
+                return 0L;
+
             case "crypto_blocks" or "crypto_blocks_raw" or "vector_available":
                 return false;
 
@@ -1615,6 +1618,14 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 var bytes = Text(operands[0]).Utf8;
                 var at = (long)operands[1]!;
                 return at >= 0 && at < bytes.Length ? (long)bytes[at] : throw new SilTrap("string index out of range");
+            }
+
+            case "string_utf8_load_U64": {
+                var bytes = Text(operands[0]).Utf8;
+                var at = (long)operands[1]!;
+                return at >= 0 && at <= bytes.Length - 8
+                    ? System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan((int)at))
+                    : throw new SilTrap("string index out of range");
             }
 
             case "string_index_scalar":
@@ -1699,6 +1710,18 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             case "string_from_utf8_unchecked":
                 return Allocate(new HeapString(Encoding.UTF8.GetString(BytesOf(operands[0]))));
+
+            case "string_buffer_make" or "string_buffer_grow" or "string_buffer_copy" or "string_buffer_valid" or "string_buffer_take":
+                return StringBufferBuiltin(builtin, operands);
+
+            case "string_from_ascii_words": {
+                var bytes = new byte[40];
+                for (var word = 0; word < 5; word++) {
+                    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(8 * word), (ulong)operands[word]!);
+                }
+
+                return Allocate(new HeapString(Encoding.ASCII.GetString(bytes, 0, (int)(long)operands[5]!)));
+            }
 
             case "string_trimmed": {
                 var scalars = Text(operands[0]).Scalars;

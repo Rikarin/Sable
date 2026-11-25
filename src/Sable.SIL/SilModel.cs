@@ -2659,6 +2659,7 @@ public static class SilBuiltins {
         // these trap on one out of range or inside a scalar's bytes.
         Add("string_utf8_count", SilType.Int, SilType.String);
         Add("string_utf8_at", SilType.U8, SilType.String, SilType.Int);
+        Add("string_utf8_load_U64", SilType.U64, SilType.String, SilType.Int);
         Add("string_index_scalar", SilType.Char, SilType.String, SilType.Int);
         Add("string_index_after", SilType.Int, SilType.String, SilType.Int);
         Add("string_index_before", SilType.Int, SilType.String, SilType.Int);
@@ -2686,6 +2687,18 @@ public static class SilBuiltins {
         Add("bytes_find_any", SilType.Int, new SliceType(SilType.U8), new SliceType(SilType.U8));
         Add("bytes_count", SilType.Int, new SliceType(SilType.U8), SilType.U8);
         Add("string_from_utf8_unchecked", SilType.String, new SliceType(SilType.U8));
+        // A string being written (StringBuffer), by the address of its
+        // bytes: made with room for so many, moved to more room, given a
+        // run of a text's bytes, and taken as the string of the first so many,
+        // which are so many scalars, or -1 for them to be counted.
+        Add("string_buffer_make", SilType.Int, SilType.Int);
+        Add("string_buffer_grow", SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        Add("string_buffer_copy", SilType.Unit, SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("string_buffer_valid", SilType.Bool, SilType.Int, SilType.Int);
+        Add("string_buffer_take", SilType.String, SilType.Int, SilType.Int, SilType.Int);
+        // The first 'n' bytes of five words, each little-endian, which are
+        // ASCII and at most forty: short text made in registers.
+        Add("string_from_ascii_words", SilType.String, SilType.U64, SilType.U64, SilType.U64, SilType.U64, SilType.U64, SilType.Int);
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
         // A string's bytes hashed under a key (folded multiplies), and the key every
@@ -2704,6 +2717,13 @@ public static class SilBuiltins {
         Add("bytes_secure_zero", SilType.Unit, SilType.Address(new SliceType(SilType.U8)));
         Add("raw_random", SilType.Unit, SilType.Int, SilType.Int);
         Add("raw_secure_zero", SilType.Unit, SilType.Int, SilType.Int);
+        // Blocks of Base64 or Hex (where they go, the codec, the source), by
+        // the processor's own instructions: how much of the source was done.
+        Add("codec_bytes_bytes", SilType.Int, SilType.Address(new SliceType(SilType.U8)), SilType.Int, new SliceType(SilType.U8), SilType.Int);
+        Add("codec_string_bytes", SilType.Int, SilType.Address(new SliceType(SilType.U8)), SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.Int);
+        Add("utf8_to_utf16", SilType.Int, SilType.Address(new SliceType(SilType.U16)), new SliceType(SilType.U8), SilType.Int);
+        Add("utf16_to_utf8", SilType.Int, SilType.Address(new SliceType(SilType.U8)), new SliceType(SilType.U16), SilType.Int);
+        Add("codec_bytes_raw", SilType.Int, SilType.Int, new SliceType(SilType.U8), SilType.Int, SilType.Int);
         Add("crypto_blocks", SilType.Bool, SilType.Int, SilType.Int, new SliceType(SilType.U8));
         Add("crypto_blocks_raw", SilType.Bool, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
         // Sable.Math's kernels over arrays of floats, where the processor has

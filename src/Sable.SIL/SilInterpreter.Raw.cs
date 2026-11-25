@@ -170,6 +170,54 @@ public sealed partial class SilInterpreter {
         return null;
     }
 
+    /// <summary>A string being written: a block of raw memory until it is taken as the string, and gone after.</summary>
+    object? StringBufferBuiltin(BuiltinInst builtin, object?[] operands) {
+        long Make(long size) {
+            var start = (_rawNext + 15) / 16 * 16;
+            _rawNext = start + Math.Max(size, 1) + 16;
+            _rawBlocks.Add(start, new RawBlock(start, (int)size));
+            return start;
+        }
+
+        if (builtin.Name == "string_buffer_make") {
+            return Make((long)operands[0]!);
+        }
+
+        if (builtin.Name == "string_buffer_copy") {
+            var count = (int)(long)operands[3]!;
+            if (count > 0) {
+                var (block, at) = RawRange((long)operands[0]!, count);
+                Text(operands[1]).Utf8.AsSpan((int)(long)operands[2]!, count).CopyTo(block.Bytes.AsSpan(at));
+                Array.Fill(block.Written, true, at, count);
+            }
+
+            return null;
+        }
+
+        var address = (long)operands[0]!;
+        if (builtin.Name == "string_buffer_valid") {
+            return System.Text.Unicode.Utf8.IsValid(_rawBlocks[address].Bytes.AsSpan(0, (int)(long)operands[1]!));
+        }
+
+        if (!_rawBlocks.Remove(address, out var buffer)) {
+            throw new SilTrap("a string buffer used after it was finished");
+        }
+
+        var used = (int)(long)operands[1]!;
+        if (builtin.Name == "string_buffer_grow") {
+            var moved = Make((long)operands[2]!);
+            buffer.Bytes.AsSpan(0, used).CopyTo(_rawBlocks[moved].Bytes);
+            buffer.Written.AsSpan(0, used).CopyTo(_rawBlocks[moved].Written);
+            return moved;
+        }
+
+        if (buffer.Written.AsSpan(0, used).Contains(false)) {
+            throw new SilTrap("a string buffer finished with bytes no one wrote");
+        }
+
+        return Allocate(new HeapString(Encoding.UTF8.GetString(buffer.Bytes, 0, used)));
+    }
+
     /// <summary>
     ///     An atomic operation on the value at an address: one thread runs
     ///     every task here, so each is the plain read, write or both it is

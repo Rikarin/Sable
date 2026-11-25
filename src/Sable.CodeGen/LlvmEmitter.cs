@@ -588,6 +588,10 @@ public sealed partial class LlvmEmitter {
                                 declare double @sable_vector_reduce_F64(i64, ptr, i64, i64, ptr, i64)
                                 declare void @sable_vector_map_F32(ptr, i64, ptr, i64, i64, ptr, i64)
                                 declare void @sable_vector_map_F64(ptr, i64, ptr, i64, i64, ptr, i64)
+                                declare i64 @sable_codec_bytes(i64, ptr, i64, i64, ptr, i64)
+                                declare i64 @sable_codec_string(i64, ptr, i64, i64, ptr, i64)
+                                declare i64 @sable_utf8_to_utf16(ptr, i64, i64, ptr, i64)
+                                declare i64 @sable_utf16_to_utf8(ptr, i64, i64, ptr, i64)
                                 declare ptr @sable_string_join(ptr, ptr)
                                 declare i64 @sable_string_compare(ptr, ptr)
                                 declare i64 @sable_string_find(ptr, ptr, i64)
@@ -817,6 +821,11 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_bytes_find_any(ptr, i64, i64, ptr, i64, i64)
                                 declare i64 @sable_bytes_count(ptr, i64, i64, i8)
                                 declare ptr @sable_string_from_utf8_unchecked(ptr, i64, i64)
+                                declare ptr @sable_string_from_ascii_words(i64, i64, i64, i64, i64, i64)
+                                declare ptr @sable_string_buffer_make(i64)
+                                declare ptr @sable_string_buffer_grow(ptr, i64, i64)
+                                declare ptr @sable_string_buffer_take(ptr, i64, i64)
+                                declare zeroext i1 @sable_string_buffer_valid(ptr, i64)
                                 declare void @llvm.dbg.declare(metadata, metadata, metadata)
                                 declare void @llvm.dbg.value(metadata, metadata, metadata)
 
@@ -2676,6 +2685,52 @@ public sealed partial class LlvmEmitter {
             var negative = Fresh();
             Line($"{negative} = icmp slt i64 {offset}, 0");
             TrapIf(negative, "array index out of range");
+        }
+
+        /// <summary>
+        ///     The scalar at a byte of a string, or where the next starts: an
+        ///     ASCII byte's read in place, any other's a call — which is also
+        ///     where an offset not known to be in range traps.
+        /// </summary>
+        void AsciiOrCall(BuiltinInst builtin, string[] operands, Func<string> Result, bool inRange) {
+            var (call, done) = (NewLabel("wide"), NewLabel("scalar"));
+            if (!inRange) {
+                var field = Fresh();
+                var length = Fresh();
+                var inside = Fresh();
+                var read = NewLabel("inside");
+                Line($"{field} = getelementptr inbounds %SableStringHeader, ptr {operands[0]}, i32 0, i32 1");
+                Line($"{length} = load i64, ptr {field}, !tbaa {TbaaHeader}");
+                Line($"{inside} = icmp ult i64 {operands[1]}, {length}");
+                Line($"br i1 {inside}, label %{read}, label %{call}");
+                Continue(read);
+            }
+
+            var bytes = Fresh();
+            var at = Fresh();
+            var value = Fresh();
+            var ascii = Fresh();
+            var fast = Fresh();
+            var slow = Fresh();
+            var narrow = NewLabel("ascii");
+            Line($"{bytes} = getelementptr inbounds %SableStringHeader, ptr {operands[0]}, i64 1");
+            Line($"{at} = getelementptr inbounds i8, ptr {bytes}, i64 {operands[1]}");
+            Line($"{value} = load i8, ptr {at}");
+            Line($"{ascii} = icmp sgt i8 {value}, -1");
+            Line($"br i1 {ascii}, label %{narrow}, label %{call}");
+            Continue(narrow);
+            var scalar = builtin.Name.EndsWith("_scalar", StringComparison.Ordinal);
+            Line(scalar ? $"{fast} = zext i8 {value} to i32" : $"{fast} = add i64 {operands[1]}, 1");
+            Line($"br label %{done}");
+            Continue(call);
+            if (!inRange) {
+                SiteForRuntime();
+            }
+
+            Line($"{slow} = call {(scalar ? "i32" : "i64")} @sable_{builtin.Name}(ptr {operands[0]}, i64 {operands[1]})");
+            Line($"br label %{done}");
+            Continue(done);
+            Line($"{Result()} = phi {(scalar ? "i32" : "i64")} [ {fast}, %{narrow} ], [ {slow}, %{call} ]");
         }
 
         void TrapIf(string condition, string message) {
@@ -4563,6 +4618,60 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
+                // Blocks of Base64 or Hex, from a slice of bytes or a range of a
+                // string's, to a slice from an index on, made the only reference
+                // to its run, or to a string being written: how many bytes of
+                // the source were done.
+                case "codec_bytes_bytes" or "codec_string_bytes": {
+                    var fromString = builtin.Name == "codec_string_bytes";
+                    var index = operands[^1];
+                    var type = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var first = SliceMutableElement(operands[0], index, type);
+                    var slice = Fresh();
+                    var room = Fresh();
+                    Line($"{slice} = load {Type(type)}, ptr {operands[0]}");
+                    var count = SlicePart(slice, type, 2);
+                    Line($"{room} = sub i64 {count}, {index}");
+                    if (fromString) {
+                        Line($"{Result()} = call i64 @sable_codec_string(i64 {operands[1]}, ptr {operands[2]}, i64 {operands[3]}, i64 {operands[4]}, ptr {first}, i64 {room})");
+                    } else {
+                        var sourceType = (SliceType)builtin.Operands[2].Type;
+                        var buffer = SlicePart(operands[2], sourceType, 0);
+                        var start = SlicePart(operands[2], sourceType, 1);
+                        var length = SlicePart(operands[2], sourceType, 2);
+                        Line($"{Result()} = call i64 @sable_codec_bytes(i64 {operands[1]}, ptr {buffer}, i64 {start}, i64 {length}, ptr {first}, i64 {room})");
+                    }
+
+                    return;
+                }
+
+                // UTF-8 as UTF-16 or the other way, from a slice to another from
+                // an index on, made the only reference to its run.
+                case "utf8_to_utf16" or "utf16_to_utf8": {
+                    var type = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var first = SliceMutableElement(operands[0], operands[2], type);
+                    var slice = Fresh();
+                    var room = Fresh();
+                    Line($"{slice} = load {Type(type)}, ptr {operands[0]}");
+                    var count = SlicePart(slice, type, 2);
+                    Line($"{room} = sub i64 {count}, {operands[2]}");
+                    var sourceType = (SliceType)builtin.Operands[1].Type;
+                    var buffer = SlicePart(operands[1], sourceType, 0);
+                    var start = SlicePart(operands[1], sourceType, 1);
+                    var length = SlicePart(operands[1], sourceType, 2);
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {buffer}, i64 {start}, i64 {length}, ptr {first}, i64 {room})");
+                    return;
+                }
+
+                case "codec_bytes_raw": {
+                    var sourceType = (SliceType)builtin.Operands[1].Type;
+                    var buffer = SlicePart(operands[1], sourceType, 0);
+                    var start = SlicePart(operands[1], sourceType, 1);
+                    var length = SlicePart(operands[1], sourceType, 2);
+                    Line($"{Result()} = call i64 @sable_codec_bytes(i64 {operands[0]}, ptr {buffer}, i64 {start}, i64 {length}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");
+                    return;
+                }
+
                 case "crypto_blocks_raw":
                     Line($"{Result()} = call zeroext i1 @sable_crypto_blocks_raw(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");
                     return;
@@ -4645,12 +4754,8 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call i64 @sable_string_cursor_end(ptr {operands[0]})");
                     return;
 
-                case "string_cursor_scalar":
-                    Line($"{Result()} = call i32 @sable_string_cursor_scalar(ptr {operands[0]}, i64 {operands[1]})");
-                    return;
-
-                case "string_cursor_next":
-                    Line($"{Result()} = call i64 @sable_string_cursor_next(ptr {operands[0]}, i64 {operands[1]})");
+                case "string_cursor_scalar" or "string_cursor_next":
+                    AsciiOrCall(builtin, operands, Result, inRange: true);
                     return;
 
                 case "string_cursor_previous":
@@ -4684,12 +4789,66 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case "string_index_scalar":
-                    SiteForRuntime();
-                    Line($"{Result()} = call i32 @sable_string_index_scalar(ptr {operands[0]}, i64 {operands[1]})");
+                case "string_index_scalar" or "string_index_after":
+                    AsciiOrCall(builtin, operands, Result, inRange: false);
                     return;
 
-                case "string_index_after" or "string_index_before":
+                // Eight bytes of the text as one number, the first the lowest.
+                case "string_utf8_load_U64": {
+                    var field = Fresh();
+                    var length = Fresh();
+                    var negative = Fresh();
+                    var end = Fresh();
+                    var past = Fresh();
+                    var outside = Fresh();
+                    var bytes = Fresh();
+                    var at = Fresh();
+                    Line($"{field} = getelementptr inbounds %SableStringHeader, ptr {operands[0]}, i32 0, i32 1");
+                    Line($"{length} = load i64, ptr {field}, !tbaa {TbaaHeader}");
+                    Line($"{end} = add i64 {operands[1]}, 8");
+                    Line($"{negative} = icmp slt i64 {operands[1]}, 0");
+                    Line($"{past} = icmp ugt i64 {end}, {length}");
+                    Line($"{outside} = or i1 {negative}, {past}");
+                    TrapIf(outside, "string index out of range");
+                    Line($"{bytes} = getelementptr inbounds %SableStringHeader, ptr {operands[0]}, i64 1");
+                    Line($"{at} = getelementptr inbounds i8, ptr {bytes}, i64 {operands[1]}");
+                    Line($"{Result()} = load i64, ptr {at}, align 1");
+                    return;
+                }
+
+                // A string written in place, by the address of its bytes.
+                case "string_buffer_make" or "string_buffer_grow": {
+                    var made = Fresh();
+                    var arguments = builtin.Name == "string_buffer_make" ? $"i64 {operands[0]}" : $"ptr {RawAddress(operands[0])}, i64 {operands[1]}, i64 {operands[2]}";
+                    Line($"{made} = call ptr @sable_{builtin.Name}({arguments})");
+                    Line($"{Result()} = ptrtoint ptr {made} to i64");
+                    return;
+                }
+
+                case "string_buffer_copy": {
+                    var bytes = Fresh();
+                    var from = Fresh();
+                    Line($"{bytes} = getelementptr inbounds %SableStringHeader, ptr {operands[1]}, i64 1");
+                    Line($"{from} = getelementptr inbounds i8, ptr {bytes}, i64 {operands[2]}");
+                    Line($"call void @llvm.memmove.p0.p0.i64(ptr {RawAddress(operands[0])}, ptr {from}, i64 {operands[3]}, i1 false)");
+                    return;
+                }
+
+                case "string_buffer_valid":
+                    Line($"{Result()} = call zeroext i1 @sable_string_buffer_valid(ptr {RawAddress(operands[0])}, i64 {operands[1]})");
+                    return;
+
+                case "string_buffer_take":
+                    Line($"{Result()} = call ptr @sable_string_buffer_take(ptr {RawAddress(operands[0])}, i64 {operands[1]}, i64 {operands[2]})");
+                    return;
+
+                // The first bytes of five words as a string, in one call that
+                // makes nothing else.
+                case "string_from_ascii_words":
+                    Line($"{Result()} = call ptr @sable_string_from_ascii_words(i64 {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, i64 {operands[3]}, i64 {operands[4]}, i64 {operands[5]})");
+                    return;
+
+                case "string_index_before":
                     SiteForRuntime();
                     Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {operands[0]}, i64 {operands[1]})");
                     return;

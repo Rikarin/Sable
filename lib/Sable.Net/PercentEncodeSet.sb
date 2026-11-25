@@ -26,24 +26,50 @@ public enum PercentEncodeSet {
 
     /// Whether the set holds the byte (or ASCII code point).
     public fn contains(_ code: Int) -> Bool {
-        if code < 0x20 || code > 0x7E {
-            return true
+        return code < 0 || code > 0x7F || self.bytes.contains(U8(code))
+    }
+
+    /// The bytes the set holds.
+    var bytes: ByteSet {
+        get {
+            return match self {
+                case .C0Control      => ByteSet(low: 0x0000_0000_FFFF_FFFF, high: 0x8000_0000_0000_0000)
+                case .Fragment       => ByteSet(low: 0x5000_0005_FFFF_FFFF, high: 0x8000_0001_0000_0000)
+                case .Query          => ByteSet(low: 0x5000_000D_FFFF_FFFF, high: 0x8000_0000_0000_0000)
+                case .SpecialQuery   => ByteSet(low: 0x5000_008D_FFFF_FFFF, high: 0x8000_0000_0000_0000)
+                case .Path           => ByteSet(low: 0xD000_000D_FFFF_FFFF, high: 0xA800_0001_4000_0000)
+                case .Userinfo       => ByteSet(low: 0xFC00_800D_FFFF_FFFF, high: 0xB800_0001_7800_0001)
+                case .Component      => ByteSet(low: 0xFC00_987D_FFFF_FFFF, high: 0xB800_0001_7800_0001)
+                case .FormUrlencoded => ByteSet(low: 0xFC00_9BFF_FFFF_FFFF, high: 0xF800_0001_7800_0001)
+            }
         }
-        let fragment = code == 0x20 || code == 0x22 || code == 0x3C || code == 0x3E
-        let query = code == 0x20 || code == 0x22 || code == 0x23 || code == 0x3C || code == 0x3E
-        let path = query || code == 0x3F || code == 0x5E || code == 0x60 || code == 0x7B || code == 0x7D
-        let userinfo = path || code == 0x2F || code == 0x3A || code == 0x3B || code == 0x3D || code == 0x40
-            || code >= 0x5B && code <= 0x5E || code == 0x7C
-        let component = userinfo || code >= 0x24 && code <= 0x26 || code == 0x2B || code == 0x2C
-        return match self {
-            case .C0Control      => false
-            case .Fragment       => fragment || code == 0x60
-            case .Query          => query
-            case .SpecialQuery   => query || code == 0x27
-            case .Path           => path
-            case .Userinfo       => userinfo
-            case .Component      => component
-            case .FormUrlencoded => component || code == 0x21 || code >= 0x27 && code <= 0x29 || code == 0x7E
-        }
+    }
+}
+
+/// Some of the ASCII bytes, a bit each, and every byte above them.
+struct ByteSet {
+    let low: U64
+    let high: U64
+
+    init(low: U64, high: U64) {
+        self.low = low
+        self.high = high
+    }
+
+    @inline(always)
+    fn contains(_ byte: U8) -> Bool {
+        return byte >= 0x80 || ((byte < 0x40 ? low : high) >> U64(byte & 0x3F) & 1) != 0
+    }
+
+    /// The set with an ASCII byte too.
+    fn with(_ byte: U8) -> ByteSet {
+        let bit: U64 = 1 << U64(byte & 0x3F)
+        return byte < 0x40 ? ByteSet(low: low | bit, high: high) : ByteSet(low: low, high: high | bit)
+    }
+
+    /// The set without an ASCII byte.
+    fn without(_ byte: U8) -> ByteSet {
+        let bit: U64 = 1 << U64(byte & 0x3F)
+        return byte < 0x40 ? ByteSet(low: low & ~bit, high: high) : ByteSet(low: low, high: high & ~bit)
     }
 }

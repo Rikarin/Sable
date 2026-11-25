@@ -501,6 +501,13 @@ public sealed class BorrowLoads : ISilPass {
 ///             <c>destroy_value</c> later in the block: <c>%c</c> is <c>%v</c>,
 ///             which now lives as long as the copy did.
 ///         </item>
+///         <item>
+///             <b>A struct only read.</b> <c>%s = struct (%a, %b)</c> whose
+///             fields are read and which is then destroyed — a view of
+///             something, such as a string's <c>utf8</c>: its fields are the
+///             values it was made of, each destroyed where it was, and a
+///             copy made to put in it is then one of the two above.
+///         </item>
 ///     </list>
 /// </remarks>
 public sealed class ForwardCopies : ISilPass {

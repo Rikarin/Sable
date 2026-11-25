@@ -4,7 +4,9 @@ module Sable.Core
 // generates and describes: fixed-width records of base-32 digits, '0' for 0
 // to 'O' for 31, a dozen to a line. Each lookup is a binary search on the
 // code point a record starts with — a dozen steps for the largest table —
-// and Char's members answer ASCII without one.
+// and Char's members answer ASCII without one. The case mappings, which
+// whole texts are put through, are in two stages, of base 64: a lookup is
+// three reads.
 
 /// The number the digits from byte 'at' of the table write.
 fn unicodeNumber(_ table: String, _ at: Int, _ width: Int) -> Int {
@@ -44,22 +46,53 @@ fn unicodeHas(_ table: String, count: Int, _ code: Int) -> Bool {
     return unicodeSearch(table, count: count, width: 5, code) % 2 == 0
 }
 
-/// The code a simple mapping, as runs of (first, length, offset, stride),
-/// maps the code to: itself when no run covers it.
-fn unicodeMapped(_ table: String, count: Int, _ code: Int) -> Int {
-    let record = unicodeSearch(table, count: count, width: 14, code)
-    if record < 0 {
-        return code
+/// Where the records of a block of sixty-four codes start, in a staged table
+/// of 'limit' blocks: the first block's, which are zero, past them.
+@inline(always)
+fn unicodeStagedLine(_ index: String, limit: Int, _ block: Int) -> Int {
+    if block >= limit {
+        return 0
     }
-    let at = unicodeRecord(record, 14)
-    let start = unicodeNumber(table, at, 5)
-    let length = unicodeNumber(table, at + 5, 3)
-    let stride = unicodeNumber(table, at + 13, 1)
-    let step = code - start
-    if step >= length * stride || step % stride != 0 {
-        return code
-    }
-    return code + unicodeNumber(table, at + 8, 5) - 1048576
+    let at = block * 2 + (block >> 6)
+    return (Int(index.utf8Byte(at)) + Int(index.utf8Byte(at + 1)) * 64 - 48 * 65) * 193
+}
+
+/// The code's record of three digits among those of its block.
+@inline(always)
+fn unicodeStagedRecord(_ blocks: String, _ line: Int, _ code: Int) -> Int {
+    let digits = blocks.utf8Word(line + (code & 63) * 3) &- 0x303030
+    return Int(digits & 0x3F | digits >> 2 & 0xFC0 | digits >> 4 & 0x3F000)
+}
+
+/// The value a staged table of 'limit' blocks of sixty-four records, three
+/// digits each, has for the code.
+@inline(always)
+fn unicodeStaged(_ index: String, _ blocks: String, limit: Int, _ code: Int) -> Int {
+    return unicodeStagedRecord(blocks, unicodeStagedLine(index, limit: limit, code >> 6), code)
+}
+
+/// In a case table's value, a scalar with a special mapping too.
+const caseSpecial = 0x10000
+
+/// The code moved by a case table's value for it: its simple mapping.
+@inline(always)
+fn caseMoved(_ code: Int, _ value: Int) -> Int {
+    return code & ~0xFFFF | (code + value) & 0xFFFF
+}
+
+/// The simple upper-case mapping of the code.
+fn upperCased(_ code: Int) -> Int {
+    return caseMoved(code, unicodeStaged(upperCaseIndex, upperCaseBlocks, limit: upperCaseLimit, code))
+}
+
+/// The simple lower-case mapping of the code.
+fn lowerCased(_ code: Int) -> Int {
+    return caseMoved(code, unicodeStaged(lowerCaseIndex, lowerCaseBlocks, limit: lowerCaseLimit, code))
+}
+
+/// The simple case folding of the code.
+fn foldedCase(_ code: Int) -> Int {
+    return caseMoved(code, unicodeStaged(foldingCaseIndex, foldingCaseBlocks, limit: foldingCaseLimit, code))
 }
 
 /// The scalars a mapping to more than one, as records of (code, three

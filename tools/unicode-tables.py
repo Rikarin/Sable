@@ -47,11 +47,14 @@ The tables:
   Case_Ignorable): where the property turns on and off, alternately, from
   off below the first. A record is a code point (5 digits); a scalar has the
   property when the number of records at or below it is odd.
-- upperMappingTable, lowerMappingTable, foldingTable: the simple (one
-  scalar to one) case mappings and case folding (C + S), as runs. A record is
-  the first code point (5), the run's length (3), the offset to add (5,
-  biased by 2^20) and the stride (1): 1 when every scalar of the run maps,
-  2 when every other does (Latin Extended's alternating pairs).
+- upperCase, lowerCase, foldingCase: the simple (one scalar to one) case
+  mappings and case folding (C + S), staged (below): what is added to the
+  code point modulo 2^16, a mapping never leaving its plane, plus 2^16 when
+  the scalar is also in the special table beside it. <name>Pairs is the same
+  for the scalars of two bytes of UTF-8, U+0080 to U+07FF, as the bits of the
+  first byte and of the second that the mapping changes, a digit of base 64
+  each; 32 and 0 for one that is special, whose mapping is not two bytes, or
+  (in lowerCase) that is a capital sigma, which may be a final one.
 - upperSpecialTable, lowerSpecialTable: the unconditional mappings to more
   than one scalar from SpecialCasing.txt ('ß' to "SS"). A record is the
   code point (5) and three code points of the mapping (5 each), 0 for none.
@@ -60,28 +63,38 @@ The tables:
 - fullFoldingTable: the case foldings to more than one scalar (status F of
   CaseFolding.txt, 'ß' to "ss"), as the two above: String.caseFolded()'s.
 
-The text tables (Sable.Text), TEXT_RECORDS_PER_LINE records to a line:
+The text tables (Sable.Text):
 
-- <name>Index and <name>Blocks, a property of every code point in two
-  stages: the code point's block of 128 (code >> 7) indexes <name>Index, two
-  digits, which names a block of <name>Blocks; the value is the (code & 127)th
-  record of that block. Blocks alike are kept once. They are:
-  graphemeBreak (Grapheme_Cluster_Break, plus 16 for Extended_Pictographic,
+- graphemeBreak (Grapheme_Cluster_Break, plus 16 for Extended_Pictographic,
   plus 32 times Indic_Conjunct_Break), wordBreak (Word_Break, plus 32 for
-  Extended_Pictographic), sentenceBreak (Sentence_Break), lineBreak
+  Extended_Pictographic), sentenceBreak (Sentence_Break) and lineBreak
   (Line_Break as rule LB1 resolves it, QU split by its general category, plus
   64 for East_Asian_Width F, W or H, plus 128 for an Extended_Pictographic
-  code point not yet assigned) and combiningClass (Canonical_Combining_Class).
-  Each value's number is a constant written beside them.
-- canonicalDecompositionTable, compatibilityDecompositionTable: each code
-  point's full decomposition, canonical, or canonical and compatibility both,
-  applied until nothing more decomposes (Hangul syllables are computed, not
-  listed). A record is the code point (5), where its scalars start in the
-  table's pool (4) and how many there are (1); the pool, <name>Pool, is the
-  scalars, 5 digits each, one after another.
-- compositionTable: each primary composite, by the pair it composes from: a
-  record is the first scalar (5), the second (5) and the composite (5),
-  sorted by the pair, Full_Composition_Exclusion left out.
+  code point not yet assigned), staged. Each value's number is a constant
+  written beside them.
+- normalization, staged: Canonical_Combining_Class in the low 8 bits; then,
+  for a code point with a full canonical decomposition (applied until nothing
+  more decomposes; Hangul syllables are computed, not listed), where its
+  scalars start in decompositionPool (13 bits) and how many there are (3);
+  then a bit (24) for one that NFC changes, and a bit (25) for one that may
+  compose with, or be reordered before, what comes before it, and so does
+  not begin a piece of text that normalizes alone.
+- compatibility, staged: the same for the code points whose compatibility
+  decomposition is not their canonical one: where its scalars start (14
+  bits), how many (5), and the bit (19) as normalization's 25.
+- compositionFirst, staged: for the first scalar of primary composites, where
+  its pairs start in compositionPairs (10 bits) and how many there are. A
+  pair is the second scalar and the composite, 3 digits of base 64 each, in
+  the order of the second; Full_Composition_Exclusion is left out.
+
+A staged table, <name>Index and <name>Blocks, is a value for every code point
+in two stages. Its digits are of base 64, '0' (0) to 'o' (63), the lowest
+first, so that a value is one load, a mask and shifts. The code point without
+its low <name>Shift bits indexes <name>Index, two digits, sixty-four to a
+line, which names a block of <name>Blocks, a line of its own; the value is
+the block's record for those bits. Blocks alike are kept once, code points
+past the last block that is not all zero have none (<name>Limit), and the
+blocks end in a line of padding, so that eight bytes can always be read.
 """
 
 import os
@@ -89,7 +102,6 @@ import sys
 
 UCD_VERSION = "16.0.0"
 RECORDS_PER_LINE = 12
-TEXT_RECORDS_PER_LINE = 48
 TEXT_OUTPUT = "lib/Sable.Text/UnicodeTextTables.sb"
 DIGITS = "".join(chr(0x30 + i) for i in range(32))  # '0'..'O'
 OUTPUT = "lib/Sable.Core/UnicodeTables.sb"
@@ -211,23 +223,66 @@ def category_runs(category):
     return runs
 
 
-def mapping_runs(mapping):
-    """Runs of (start, length, delta, stride) covering every mapped scalar."""
-    runs = []
-    for code in sorted(mapping):
-        delta = mapping[code] - code
-        if runs:
-            start, length, run_delta, stride = runs[-1]
-            last = start + (length - 1) * stride
-            if run_delta == delta:
-                if length == 1 and code - last in (1, 2):
-                    runs[-1] = (start, 2, delta, code - last)
-                    continue
-                if code - last == stride:
-                    runs[-1] = (start, length + 1, delta, stride)
-                    continue
-        runs.append((code, 1, delta, 1))
-    return runs
+def digits64(value, width):
+    """The value's digits of base 64, the lowest first."""
+    assert 0 <= value < 64 ** width, (value, width)
+    return "".join(chr(0x30 + (value >> 6 * i & 63)) for i in range(width))
+
+
+def lines_literal(lines):
+    return '"""\n' + "\n".join("    " + line.replace("\\", "\\\\") for line in lines) + '\n    """'
+
+
+def staged_table(name, values, comment, shifts=(4, 5, 6, 7, 8)):
+    """A table of every code point's value in two stages, in the shape that is smallest."""
+    width = next(w for w in range(1, 6) if max(values) < 64 ** w)
+    best = None
+    for shift in shifts:
+        blocks, index = {}, []
+        size = 1 << shift
+        for start in range(0, 0x110000, size):
+            block = tuple(values[start:start + size])
+            index.append(blocks.setdefault(block, len(blocks)))
+        zero = blocks.get((0,) * size)
+        while index and index[-1] == zero:
+            index.pop()
+        cost = len(index) * 2 + len(blocks) * size * width
+        if best is None or cost < best[0]:
+            best = cost, shift, index, list(blocks)
+    cost, shift, index, blocks = best
+    entries = [digits64(i, 2) for i in index]
+    index_lines = ["".join(entries[i:i + 64]) for i in range(0, len(entries), 64)]
+    block_lines = ["".join(digits64(v, width) for v in block) for block in blocks] + ["0" * 8]
+    return (
+        f"// {comment}\n"
+        f"// {len(index)} blocks of {1 << shift} named in {name}Index, "
+        f"{len(blocks)} distinct ones in {name}Blocks, {width} digit(s) a value.\n"
+        f"const {name}Shift = {shift}\n"
+        f"const {name}Limit = {len(index)}\n"
+        f"const {name}Index = {lines_literal(index_lines)}\n"
+        f"const {name}Blocks = {lines_literal(block_lines)}\n"
+    )
+
+
+def case_table(name, mapping, special, what):
+    values = [0] * 0x110000
+    for code, mapped in mapping.items():
+        assert code >> 16 == mapped >> 16, code
+        values[code] = (mapped - code) & 0xFFFF
+    for code in special:
+        values[code] |= 0x10000
+    pairs = []
+    for code in range(0x80, 0x800):
+        mapped = mapping.get(code, code)
+        if code in special or not 0x80 <= mapped < 0x800 or name == "lowerCase" and code == 0x3A3:
+            pairs.append(digits64(0x20, 1) + "0")
+        else:
+            pairs.append(digits64((code ^ mapped) >> 6, 1) + digits64((code ^ mapped) & 63, 1))
+    # One shape for the three, so that one loop reads whichever it is given.
+    return staged_table(name, values, f"{what}: what is added, modulo 2^16, + 2^16 for a special one.", shifts=(6,)) + (
+        "// The same for U+0080 to U+07FF, as the bits of the two bytes that change.\n"
+        f"const {name}Pairs = {lines_literal([''.join(pairs) + '0' * 8])}\n"
+    )
 
 
 def literal(records):
@@ -263,12 +318,6 @@ LINE_BREAK = ["AL", "BK", "CR", "LF", "NL", "CM", "ZWJ", "WJ", "ZW", "GL", "SP",
               "CB", "CL", "CP", "EX", "IN", "NS", "OP", "QU", "QU_Pi", "QU_Pf", "IS", "NU", "PO", "PR",
               "SY", "EB", "EM", "H2", "H3", "HL", "ID", "JL", "JV", "JT", "RI", "AK", "AP", "AS", "VF",
               "VI"]
-STAGE_SHIFT = 7
-
-
-def text_digits(value, width):
-    assert 0 <= value < 32 ** width, (value, width)
-    return digits(value, width)
 
 
 def ranged(ucd, file, default, field=1, where=None):
@@ -283,51 +332,8 @@ def ranged(ucd, file, default, field=1, where=None):
     return values
 
 
-def staged(values):
-    """The two stages of a table of every code point's value: an index of
-    blocks and the distinct blocks, and the digits a value takes."""
-    width = 1 if max(values) < 32 else 2
-    blocks, index = {}, []
-    size = 1 << STAGE_SHIFT
-    for start in range(0, 0x110000, size):
-        block = tuple(values[start:start + size])
-        if block not in blocks:
-            blocks[block] = len(blocks)
-        index.append(blocks[block])
-    flat = [v for block in sorted(blocks, key=blocks.get) for v in block]
-    return [text_digits(i, 2) for i in index], [text_digits(v, width) for v in flat], width
-
-
-def text_literal(records):
-    lines = []
-    for i in range(0, len(records), TEXT_RECORDS_PER_LINE):
-        lines.append("    " + "".join(records[i:i + TEXT_RECORDS_PER_LINE]))
-    return '"""\n' + "\n".join(lines) + '\n    """'
-
-
-def text_table(name, records, width, comment):
-    assert all(len(r) == width for r in records)
-    return (
-        f"// {comment}\n"
-        f"// {len(records)} records of {width} digits.\n"
-        f"const {name}Count = {len(records)}\n"
-        f"const {name} = {text_literal(records)}\n"
-    )
-
-
-def staged_table(name, values, comment, names=None, prefix=None):
-    index, blocks, width = staged(values)
-    parts = [
-        f"// {comment}\n"
-        f"// Two stages: {len(index)} blocks of 128 named in {name}Index, "
-        f"{len(blocks) // 128} distinct ones in {name}Blocks, {width} digit(s) a value.\n"
-        f"const {name}Width = {width}\n"
-        f"const {name}Index = {text_literal(index)}\n"
-        f"const {name}Blocks = {text_literal(blocks)}\n"
-    ]
-    if names:
-        parts.append("".join(f"const {prefix}{n.replace('_', '')} = {i}\n" for i, n in enumerate(names)))
-    return "".join(parts)
+def named(prefix, names):
+    return "".join(f"const {prefix}{n.replace('_', '')} = {i}\n" for i, n in enumerate(names))
 
 
 def unicode_data(ucd):
@@ -362,17 +368,67 @@ def decompositions(rows, exclusions):
     return full_canonical, full_compatible, compositions
 
 
-def decomposition_table(name, mapping, comment):
-    records, pool = [], []
-    for code in sorted(mapping):
-        scalars = mapping[code]
-        records.append(digits(code, 5) + text_digits(len(pool), 4) + text_digits(len(scalars), 1))
+HANGUL_VOWELS = range(0x1161, 0x1176)
+HANGUL_TRAILING = range(0x11A8, 0x11C3)
+
+
+def recomposed(scalars, combining, pairs):
+    """Canonical composition of ordered scalars (Unicode 3.11, D117)."""
+    kept, starter = [], -1
+    for scalar in scalars:
+        if starter >= 0:
+            last = -1 if len(kept) - 1 == starter else combining[kept[-1]]
+            if last == -1 or last != 0 and last < combining[scalar]:
+                composite = pairs.get((kept[starter], scalar))
+                if composite is not None:
+                    kept[starter] = composite
+                    continue
+        if combining[scalar] == 0:
+            starter = len(kept)
+        kept.append(scalar)
+    return kept
+
+
+def normalization_tables(combining, canonical, compatible, compositions):
+    pairs = {(a, b): c for a, b, c in compositions}
+    seconds = {b for _, b, _ in compositions} | set(HANGUL_VOWELS) | set(HANGUL_TRAILING)
+    joins = lambda c: combining[c] != 0 or c in seconds
+    pool, values = [], list(combining)
+    for code, scalars in canonical.items():
+        values[code] |= len(pool) << 8 | len(scalars) << 21
+        assert len(pool) < 1 << 13 and len(scalars) < 8
         pool.extend(scalars)
-    return (
-        text_table(name, records, 10, comment)
-        + text_table(name.replace("Table", "Pool"), [digits(s, 5) for s in pool], 5,
-                     f"The scalars {name}'s records point into.")
-    )
+        if recomposed(scalars, combining, pairs) != [code]:
+            values[code] |= 1 << 24
+    for code in range(0x110000):
+        if joins(code) or code in canonical and joins(canonical[code][0]):
+            values[code] |= 1 << 25
+    compat = [0] * 0x110000
+    for code, scalars in compatible.items():
+        if scalars != canonical.get(code):
+            assert len(pool) < 1 << 14 and len(scalars) < 32
+            compat[code] = len(pool) | len(scalars) << 14 | int(joins(scalars[0])) << 19
+            pool.extend(scalars)
+    firsts, records = [0] * 0x110000, []
+    for a, b, c in compositions:
+        if firsts[a] == 0:
+            firsts[a] = len(records)
+        firsts[a] += 1 << 10
+        records.append(digits64(b, 3) + digits64(c, 3))
+    assert len(records) < 1 << 10
+    per_line = 16
+    lines = lambda rs: ["".join(rs[i:i + per_line]) for i in range(0, len(rs), per_line)] + ["0" * 8]
+    return [
+        staged_table("normalization", values,
+                     "Canonical_Combining_Class and full canonical decompositions, as the script describes."),
+        staged_table("compatibility", compat,
+                     "Full compatibility decompositions where they are not the canonical ones, as the script describes."),
+        f"// The scalars decompositions point into, {per_line} to a line, 3 digits of base 64 each.\n"
+        f"const decompositionPool = {lines_literal(lines([digits64(s, 3) for s in pool]))}\n",
+        staged_table("compositionFirst", firsts, "Where a first scalar's composites are, + 2^10 times how many."),
+        f"// Primary composites: (second, composite), {per_line} to a line.\n"
+        f"const compositionPairs = {lines_literal(lines(records))}\n",
+    ]
 
 
 def text_tables(ucd):
@@ -424,25 +480,20 @@ def text_tables(ucd):
     parts = [
         staged_table("graphemeBreak", grapheme_values,
                      "Grapheme_Cluster_Break (GraphemeBreakProperty.txt), + 16 for Extended_Pictographic "
-                     "(emoji-data.txt), + 32 x Indic_Conjunct_Break (DerivedCoreProperties.txt).",
-                     GRAPHEME_BREAK, "graphemeBreak"),
+                     "(emoji-data.txt), + 32 x Indic_Conjunct_Break (DerivedCoreProperties.txt)."),
+        named("graphemeBreak", GRAPHEME_BREAK),
         "".join(f"const indicConjunct{n} = {i}\n" for i, n in enumerate(INCB)),
         staged_table("wordBreak", word_values,
-                     "Word_Break (WordBreakProperty.txt), + 32 for Extended_Pictographic.",
-                     WORD_BREAK, "wordBreak"),
+                     "Word_Break (WordBreakProperty.txt), + 32 for Extended_Pictographic."),
+        named("wordBreak", WORD_BREAK),
         staged_table("sentenceBreak", sentence_values,
-                     "Sentence_Break (SentenceBreakProperty.txt).", SENTENCE_BREAK, "sentenceBreak"),
+                     "Sentence_Break (SentenceBreakProperty.txt)."),
+        named("sentenceBreak", SENTENCE_BREAK),
         staged_table("lineBreak", line_values,
                      "Line_Break (LineBreak.txt) as LB1 resolves it, QU split by general category, "
-                     "+ 64 for East_Asian_Width F, W or H, + 128 for an unassigned Extended_Pictographic.",
-                     LINE_BREAK, "lineBreak"),
-        staged_table("combiningClass", combining, "Canonical_Combining_Class (UnicodeData.txt)."),
-        decomposition_table("canonicalDecompositionTable", full_canonical,
-                            "Full canonical decompositions: (code point, start in the pool, count)."),
-        decomposition_table("compatibilityDecompositionTable", full_compatible,
-                            "Full compatibility decompositions: (code point, start in the pool, count)."),
-        text_table("compositionTable", [digits(a, 5) + digits(b, 5) + digits(c, 5) for a, b, c in compositions],
-                   15, "Primary composites: (first, second, composite), sorted by the pair."),
+                     "+ 64 for East_Asian_Width F, W or H, + 128 for an unassigned Extended_Pictographic."),
+        named("lineBreak", LINE_BREAK),
+        *normalization_tables(combining, full_canonical, full_compatible, compositions),
     ]
 
     header = (
@@ -451,8 +502,6 @@ def text_tables(ucd):
         f"// {UCD_VERSION}; do not edit. To regenerate, or to move to another Unicode\n"
         "// version, see that script: it says where the files come from and how\n"
         "// these tables are laid out. UnicodeLookup.sb reads them.\n\n"
-        f"// Records per line of each table: record r starts at byte r * width + r / {TEXT_RECORDS_PER_LINE}.\n"
-        f"const textRecordsPerLine = {TEXT_RECORDS_PER_LINE}\n\n"
     )
     with open(TEXT_OUTPUT, "w", encoding="utf-8", newline="\n") as f:
         f.write(header + "\n".join(parts))
@@ -485,21 +534,17 @@ def main():
         parts.append(table(name, [digits(p, 5) for p in points], 5,
                            f"{prop} ({file}): where it turns on and off."))
 
-    for name, mapping, what in [
-        ("upperMappingTable", upper, "Simple_Uppercase_Mapping (UnicodeData.txt)"),
-        ("lowerMappingTable", lower, "Simple_Lowercase_Mapping (UnicodeData.txt)"),
-        ("foldingTable", fold, "Simple case folding, statuses C and S (CaseFolding.txt)"),
-    ]:
-        records = [
-            digits(start, 5) + digits(length, 3) + digits(delta + (1 << 20), 5) + digits(stride, 1)
-            for start, length, delta, stride in mapping_runs(mapping)
-        ]
-        parts.append(table(name, records, 14, f"{what}: runs of (first, length, offset + 2^20, stride)."))
-
     full_folding = {}
     for fields in data_lines(os.path.join(ucd, "CaseFolding.txt")):
         if fields[1] == "F":
             full_folding[int(fields[0], 16)] = [int(c, 16) for c in fields[2].split()]
+
+    for name, mapping, special, what in [
+        ("upperCase", upper, special_upper, "Simple_Uppercase_Mapping (UnicodeData.txt)"),
+        ("lowerCase", lower, special_lower, "Simple_Lowercase_Mapping (UnicodeData.txt)"),
+        ("foldingCase", fold, full_folding, "Simple case folding, statuses C and S (CaseFolding.txt)"),
+    ]:
+        parts.append(case_table(name, mapping, special, what))
 
     for name, mapping, what in [
         ("upperSpecialTable", special_upper, "Uppercase"),

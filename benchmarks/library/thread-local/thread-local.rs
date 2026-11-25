@@ -1,4 +1,7 @@
 // Port of thread-local.sb: thread_local!.
+#[path = "../../support/rust/bench.rs"]
+mod bench;
+
 use std::cell::Cell;
 
 thread_local! {
@@ -6,8 +9,12 @@ thread_local! {
 }
 
 fn main() {
-    for i in 0..10_000_000i64 {
-        COUNT.with(|count| count.set(count.get() + (i & 3)));
-    }
-    println!("{}", COUNT.with(|count| count.get()));
+    bench::run(|| {
+        COUNT.with(|count| count.set(0));
+        for i in 0..10_000_000i64 {
+            COUNT.with(|count| count.set(count.get() + (i & 3)));
+        }
+        let total = COUNT.with(|count| count.get());
+        format!("{total}")
+    });
 }

@@ -1,14 +1,19 @@
 module ParallelSum
 
 import Sable.Concurrency
+import Sable.Testing
 
 // A sum of what is made of each of thirty million numbers, divided between
 // the pool's threads: PLINQ's Sum over a range, partitioned. Processor time
 // is the same however many threads there are; the time it takes is what
 // scales (SABLE_WORKERS=1, 2, 4 …).
 
-@main
-fn main() {
+fn run() -> String {
     let total = (0..<30_000_000).parallel.sum { n in (n &* n) & 1023 }
-    print("\(total)")
+    return "\(total)"
+}
+
+@bench(tags: ["wall"])
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

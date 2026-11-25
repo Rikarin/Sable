@@ -83,7 +83,7 @@ class Failure(Exception):
 class Benchmark:
     """One Sable benchmark, or a case of one, and the ports there are of it."""
 
-    def __init__(self, folder, case="", harness_name="", harness=None):
+    def __init__(self, folder, case="", harness_name="", harness=None, has_wall=False):
         self.group, self.folder, self.case = folder.parent.name, folder, case
         self.harness_name, self.harness = harness_name, harness
         # 'aes-gcm(64, 100000)', as the harness names a case.
@@ -93,6 +93,8 @@ class Benchmark:
             port = folder / f"{folder.name}.{extension}"
             self.ports[language] = port if port.exists() else None
         self.ns = {}  # language -> processor nanoseconds an operation
+        self.has_wall = has_wall  # tagged "wall": the time it takes is of interest too
+        self.wall = {}  # language -> nanoseconds an operation by the clock
         self.bytes = {}  # language -> bytes an operation allocates
         self.whole = {}  # language -> processor milliseconds of the whole process
         self.errors = {}  # language -> what went wrong
@@ -128,10 +130,10 @@ def build_harness(sable, scratch, folder):
     run_command([sable, "bench", folder, "--harness-out", harness], cwd=ROOT)
     benchmarks = []
     for line in run_command([harness, "--describe"]).stdout.splitlines():
-        name = line.split("\t")[0]
+        name, *_, tags = line.split("\t")
         if name != "filtered out":
             paren = name.find("(")
-            benchmarks.append(Benchmark(folder, name[paren:] if paren >= 0 else "", name, harness))
+            benchmarks.append(Benchmark(folder, name[paren:] if paren >= 0 else "", name, harness, "wall" in tags.split(",")))
     return benchmarks
 
 
@@ -147,7 +149,7 @@ class Runner:
         out = self.scratch / "sable.json"
         run_command([benchmark.harness, "--exact", benchmark.harness_name, "--json", out, "--metric", "processor", *self.options], cwd=self.scratch)
         (result,) = json.loads(out.read_text())["benchmarks"]
-        return result["processor"], result["allocatedBytes"], result["check"]
+        return result["processor"], result["wall"], result["allocatedBytes"], result["check"]
 
     def executable(self, benchmark, language):
         """The port's command: built the first time, as every case of it is one executable."""
@@ -167,11 +169,12 @@ class Runner:
 
     def port(self, benchmark, language):
         output = run_command([*self.executable(benchmark, language), "--measure", *self.options], cwd=self.scratch).stdout
-        samples, allocated, check = [], None, None
+        samples, walls, allocated, check = [], [], None, None
         for line in output.splitlines():
             kind, *fields = line.split("\t")
             if kind == "sample":
-                iterations, _, processor = map(float, fields)
+                iterations, wall, processor = map(float, fields)
+                walls.append(wall / iterations)
                 samples.append(processor / iterations)
             elif kind == "allocated":
                 allocated = float(fields[0])
@@ -179,7 +182,7 @@ class Runner:
                 check = fields[0].replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
         if not samples or check is None:
             raise Failure("measured nothing")
-        return samples, allocated, check
+        return samples, walls, allocated, check
 
     def measure(self, benchmark):
         expected = None
@@ -187,7 +190,7 @@ class Runner:
             if language not in self.tools or (language != "sable" and benchmark.ports[language] is None):
                 continue
             try:
-                samples, allocated, check = self.sable(benchmark) if language == "sable" else self.port(benchmark, language)
+                samples, walls, allocated, check = self.sable(benchmark) if language == "sable" else self.port(benchmark, language)
                 if language == "sable":
                     expected = check
                 elif check.split() != expected.split():
@@ -203,6 +206,8 @@ class Runner:
                 benchmark.errors[language] = str(failure)
                 continue
             benchmark.ns[language] = statistics.median(samples)
+            if benchmark.has_wall:
+                benchmark.wall[language] = statistics.median(walls)
             if allocated is not None:
                 benchmark.bytes[language] = allocated
 
@@ -393,6 +398,11 @@ def main():
             rows, best = table(chosen, languages, lambda b: b.ns, duration, "", extra)
             print(f"\n{title}\n{text(rows)}")
             page += ["", f"### {title}", "", markdown(rows, best)]
+    if walled := [b for b in benchmarks if b.wall]:
+        rows, best = table(walled, languages, lambda b: b.wall, duration, "")
+        note = f"The time an operation takes by the clock, of the benchmarks tagged 'wall', whose point is to take less of it by {os.cpu_count()} processors."
+        print(f"\nElapsed\n{note}\n{text(rows)}")
+        page += ["", "### Elapsed", "", note, "", markdown(rows, best)]
     if whole := [*startup, *programs]:
         rows, best = table(whole, languages, lambda b: b.whole, lambda ms: f"{ms:.1f}", " ms")
         note = f"Processor time of the process from its start to its end, cold, the median of {WHOLE_RUNS} runs; 'startup' prints a line."

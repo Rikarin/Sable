@@ -1,15 +1,20 @@
 module ThreadLocals
 
 import Sable.Concurrency
+import Sable.Testing
 
 // A thread-local changed ten million times: .NET's ThreadLocal<T>, Rust's
 // thread_local!.
 
-@main
-fn main() {
+fn run() -> String {
     let count = ThreadLocal { 0 }
     for i in 0..<10_000_000 {
         count.value += i & 3
     }
-    print("\(count.value)")
+    return "\(count.value)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

@@ -79,6 +79,10 @@ which do what the harness does and print their samples for `compare.py`.
 | vs .NET, vs Rust, vs C | Sable's time over the other's |
 | Sable allocated, .NET allocated | bytes an operation, with their unit |
 
+`### Elapsed` has the time by the clock, in the same columns, of the benchmarks
+tagged `wall` (`@bench(tags: ["wall"])`): the parallel ones, whose processor time
+is much the same however many threads share it.
+
 The last row is the geometric mean of each ratio, and of how many. `### Whole
 processes` has the same columns in milliseconds, without the last two; and
 `### Failures`, when there are any, says what did not build, run or agree,

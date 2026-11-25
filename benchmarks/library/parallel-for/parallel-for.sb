@@ -1,13 +1,13 @@
 module ParallelFor
 
 import Sable.Concurrency
+import Sable.Testing
 
 // A thousand loops of a thousand small rounds each, and one of ten million:
 // what it costs to begin a parallel loop, and to call a body that does next
 // to nothing. .NET's Parallel.For.
 
-@main
-fn main() {
+fn run() -> String {
     var cells: Int[>..] = []
     cells.append(repeating: 0, count: 1000)
     for round in 0..<1000 {
@@ -27,5 +27,10 @@ fn main() {
             calls.add(1)
         }
     }
-    print("\(cells.sum()) \(total.load()) \(calls.load())")
+    return "\(cells.sum()) \(total.load()) \(calls.load())"
+}
+
+@bench(tags: ["wall"])
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

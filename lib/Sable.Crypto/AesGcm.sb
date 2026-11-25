@@ -12,9 +12,9 @@ module Sable.Crypto
 ///   values is counted in each. For more than that take counters, another
 ///   key, or `XChaCha20Poly1305`.
 /// - a message has at most 2^36 - 32 bytes, which is enforced; and all of
-///   them together should have no more than 2^43, for messages of up to
-///   16 KiB about 2^29 of them, as each block makes what the cipher gives a
-///   little less like random bytes. That is not counted.
+///   them together should have no more than 2^38 or so (RFC 8446 has 2^24.5
+///   records of 16 KiB), as each block makes what the cipher gives a little
+///   less like random bytes. That is not counted.
 /// - a short tag is as easy to forge as it is short.
 ///
 /// .NET's `AesGcm`; CryptoKit's `AES.GCM`.
@@ -28,9 +28,9 @@ public struct AesGcm: AuthenticatedCipher {
     let state: AeadState
 
     /// The cipher under a key of 16, 24 or 32 bytes. Tags of 16 bytes may be
-    /// cut to 12 or more. Nonces are of 12 bytes; another length
-    /// is for what was sealed with it elsewhere, and is hashed to a counter,
-    /// which two of them might share.
+    /// cut to 12 or more. Nonces are of 12 bytes; another length is for what
+    /// was sealed with it elsewhere, and is hashed to a counter, which two of
+    /// them might share.
     ///
     /// ```sable
     /// assert((try! AesGcm(key: SymmetricKey.random(byteCount: 16))).tagByteCount == 16)

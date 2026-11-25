@@ -218,7 +218,7 @@ def wycheproof(root):
                     title = f"{case['tcId']} {case.get('comment', '')}"
                     valid = case["result"] != "invalid"
                     if kind == "CHACHA":
-                        # Only the cipher: the library has no Poly1305.
+                        # Only the generator: ciphers/run.py has the cipher.
                         if not valid or len(case["iv"]) != 24:
                             tally.skip(part, "about the tag, or of another nonce's length")
                             continue

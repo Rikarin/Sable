@@ -37,8 +37,6 @@ public alias CUnsignedInt = U32
 /// platform says `CLong(n)` and `Int(value)` to change one for an Int.
 ///
 /// ```sable
-/// import Sable.Interop
-///
 /// let length: CLong = 70_000
 /// assert(Int(length) == 70_000)
 /// ```

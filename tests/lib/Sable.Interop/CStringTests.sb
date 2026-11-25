@@ -1,0 +1,153 @@
+module CStringTests
+
+// CString, CStr and withCString (Sable.Interop). Run with
+//     tools/stdlib-coverage.sh Sable.Interop
+
+import Sable.Interop
+import Sable.Testing
+
+@extern("c", "atoi")
+unsafe fn parseInteger(_ text: CStr) -> CInt
+
+@extern("c", "strchr")
+unsafe fn find(_ text: CStr, _ character: CInt) -> RawPtr<CChar>
+
+@extern("c", "wcslen")
+unsafe fn wideLength(_ text: RawPtr<CWChar>) -> CSize
+
+@test
+fn cReadsText() {
+    let n = "1234".withCString { (text: CStr) -> CInt in
+        unsafe {
+            return parseInteger(text)
+        }
+    }
+    assertEqual(n, 1234)
+}
+
+@test
+fn aCStringCGivesIsRead() {
+    "key=välue".withCString { text in
+        unsafe {
+            let value = CStr.viewing(find(text, 0x3D).advanced(by: 1))
+            assertEqual(value.string, "välue")
+            assertEqual(value.count, 6)
+            assertEqual(value.validated, "välue")
+            assertEqual(value.bytes[1], 0xC3)
+            assertEqual(value.debugDescription(), "\"välue\"")
+            assert(!value.isEmpty)
+            assert(find(text, 0x21).isNull)
+        }
+    }
+}
+
+@test
+fn bytesThatAreNotTextAreReplacedInText() {
+    let odd = try! CString(bytes: [0x61, 0xFF])
+    assertEqual(odd.string, "a\u{FFFD}")
+    assertEqual(odd.cStr.validated, none)
+    assertEqual(odd.cStr.bytes, [0x61, 0xFF])
+    assertEqual(odd.count, 2)
+}
+
+@test
+fn theEmptyStringIsItsNul() {
+    let empty = try! CString("")
+    assert(empty.cStr.isEmpty)
+    assertEqual(empty.count, 0)
+    assertEqual(empty.string, "")
+    "".withCString { text in
+        assert(text.isEmpty)
+    }
+}
+
+@test
+fn aCStringStaysWhereItIs() {
+    var held: CString[>..] = []
+    var i = 0
+    while i < 100 {
+        held.append(try! CString("text \(i)"))
+        i += 1
+    }
+    i = 0
+    while i < 100 {
+        assertEqual(held[i].cStr.string, "text \(i)")
+        i += 1
+    }
+}
+
+@test
+fn aNulInsideIsAnError() {
+    do {
+        _ = try CString("ab\u{0}c")
+        assert(false)
+    } catch {
+        assertEqual(error, InteriorNul(position: 2))
+        assertEqual(error.description(), "a C string cannot have a NUL in it, and byte 2 is one")
+    }
+}
+
+@test(traps: "a C string cannot have a NUL in it")
+fn aNulInALentStringTraps() {
+    "a\u{0}b".withCString { text in }
+}
+
+@test(traps: "a C string cannot have a NUL in it")
+fn aNulInALentWideStringTraps() {
+    "a\u{0}b".withWideCString { text in }
+}
+
+@test(traps: "a C string cannot have a NUL in it")
+fn aNulInOneOfSeveralTraps() {
+    ["a", "b\u{0}"].withCStrings { texts in }
+}
+
+@test
+fn wideTextIsWcharTs() {
+    let length = "a€😀".withWideCString { (text: RawPtr<CWChar>) -> CSize in
+        unsafe {
+            return wideLength(text)
+        }
+    }
+    #if os(windows)
+    assertEqual(Int(length), 4)
+    #else
+    assertEqual(Int(length), 3)
+    #endif
+}
+
+@test
+fn severalTextsAreAnArgv() {
+    ["ls", "", "ö"].withCStrings { texts in
+        unsafe {
+            assertEqual(CStr.viewing(texts.load(at: 0)).string, "ls")
+            assert(CStr.viewing(texts.load(at: 1)).isEmpty)
+            assertEqual(CStr.viewing(texts.load(at: 2)).string, "ö")
+            assert(texts.load(at: 3).isNull)
+        }
+    }
+    let nothing: String[>..] = []
+    nothing.withCStrings { texts in
+        unsafe {
+            assert(texts.load().isNull)
+        }
+    }
+}
+
+union Oops: Error { Bad }
+
+@test
+fn whatTheBodyThrowsIsThrown() {
+    var caught = 0
+    do {
+        try "x".withCString { (text: CStr) throws(Oops) in throw Oops.Bad }
+    } catch {
+        caught += 1
+    }
+    do {
+        try ["x"].withCStrings { (texts: RawPtr<RawPtr<CChar>>) throws(Oops) in throw Oops.Bad }
+    } catch {
+        caught += 1
+    }
+    assertEqual(caught, 2)
+}

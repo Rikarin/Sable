@@ -6,15 +6,11 @@ extension String {
     /// `CString` asks first.
     ///
     /// ```sable
-    /// import Sable.Interop
-    ///
-    /// @extern("c", "atoi")
-    /// unsafe fn parseInteger(_ text: CStr) -> CInt
-    ///
-    /// let n = "42".withCString { text in
-    ///     unsafe { parseInteger(text) }
+    /// unsafe {
+    ///     // '@extern("c", "atoi") unsafe fn parseInteger(_ text: CStr) -> CInt'
+    ///     let parseInteger: (CStr) -> CInt = try! DynamicLibrary.program.function("atoi")
+    ///     assert("42".withCString { parseInteger($0) } == 42)
     /// }
-    /// assert(n == 42)
     /// ```
     public fn withCString<R, E: Error>(_ body: (CStr) throws(E) -> R) throws(E) -> R {
         let bytes = utf8Bytes()
@@ -27,12 +23,10 @@ extension String {
     /// scalars elsewhere.
     ///
     /// ```sable
-    /// import Sable.Interop
-    ///
-    /// @extern("c", "wcslen")
-    /// unsafe fn wideLength(_ text: RawPtr<CWChar>) -> CSize
-    ///
-    /// assert("añb".withWideCString { text in unsafe { wideLength(text) } } == 3)
+    /// unsafe {
+    ///     let wideLength: (RawPtr<CWChar>) -> CSize = try! DynamicLibrary.program.function("wcslen")
+    ///     assert("añb".withWideCString { wideLength($0) } == 3)
+    /// }
     /// ```
     public fn withWideCString<R, E: Error>(_ body: (RawPtr<CWChar>) throws(E) -> R) throws(E) -> R {
         precondition(!contains('\u{0}'), "a C string cannot have a NUL in it")
@@ -60,8 +54,6 @@ extension String[:] {
     /// the last — for as long as 'body' runs: `argv`, as `execv` takes it.
     ///
     /// ```sable
-    /// import Sable.Interop
-    ///
     /// ["ls", "-l"].withCStrings { arguments in
     ///     unsafe {
     ///         assert(CStr.viewing(arguments.load(at: 1)).string == "-l")

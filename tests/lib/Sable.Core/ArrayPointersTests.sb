@@ -1,0 +1,148 @@
+module ArrayPointersTests
+
+// Arrays' elements and values in place, by their addresses (Sable.Core). Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn anArraysElementsAreReadInPlace() {
+    let numbers = [10, 20, 30]
+    let total = numbers.withPointer { (start: RawPtr<Int>) -> Int in
+        unsafe {
+            return start.load() + start.load(at: 2)
+        }
+    }
+    assertEqual(total, 40)
+}
+
+@test
+fn aSlicesAreFromItsFirst() {
+    let numbers = [10, 20, 30, 40]
+    let second = numbers[1..<3].withPointer { (start: RawPtr<Int>) -> Int in
+        unsafe {
+            return start.load(at: 1)
+        }
+    }
+    assertEqual(second, 30)
+}
+
+@test
+fn theEmptyArraysAreNowhere() {
+    var empty: Int[>..] = []
+    assert(empty.withPointer { $0.isNull })
+    assert(empty.withMutablePointer { $0.isNull })
+    let sliced = [1, 2][1..<1]
+    assertEqual(sliced.count, 0)
+    sliced.withPointer { start in }
+}
+
+@test
+fn elementsWrittenInPlaceAreTheArraysAlone() {
+    var mine = [1, 2, 3]
+    let before = mine
+    mine.withMutablePointer { start in
+        unsafe {
+            start.store(20, at: 1)
+        }
+    }
+    assertEqual(mine, [1, 20, 3])
+    assertEqual(before, [1, 2, 3])
+    mine[0] = 5
+    mine.withMutablePointer { start in
+        unsafe {
+            assertEqual(start.load(), 5)
+            start.store(6)
+        }
+    }
+    assertEqual(mine[0] + mine[1], 26)
+}
+
+@test
+fn elementsThatAreCountedAreReplaced() {
+    var words = ["a", "b\(1)"]
+    words.withMutablePointer { start in
+        unsafe {
+            start.store("c\(2)", at: 1)
+            assertEqual(start.load(at: 1), "c2")
+        }
+    }
+    assertEqual(words, ["a", "c2"])
+}
+
+@test
+fn aValueIsWrittenInPlace() {
+    var n = 1
+    var text = "x"
+    Memory.withPointer(to: &n) { place in
+        unsafe {
+            place.store(place.load() + 1)
+        }
+    }
+    n += 10
+    Memory.withPointer(to: &text) { place in
+        unsafe {
+            place.store("y\(n)")
+        }
+    }
+    assertEqual(n, 12)
+    assertEqual(text, "y12")
+}
+
+struct Holder {
+    var items: Int[>..]
+    var count: Int
+}
+
+@test
+fn aFieldIsWrittenInPlace() {
+    var holder = Holder(items: [1], count: 1)
+    let copy = holder
+    Memory.withPointer(to: &holder.count) { place in
+        unsafe {
+            place.store(9)
+        }
+    }
+    holder.items.withMutablePointer { start in
+        unsafe {
+            start.store(7)
+        }
+    }
+    assertEqual(holder.count, 9)
+    assertEqual(holder.items, [7])
+    assertEqual(copy.items, [1])
+}
+
+union Oops: Error { Bad }
+
+@test
+fn whatTheBodyThrowsIsThrown() {
+    var caught = 0
+    var numbers = [1]
+    do {
+        try numbers.withPointer { (start: RawPtr<Int>) throws(Oops) in throw Oops.Bad }
+    } catch {
+        caught += 1
+    }
+    do {
+        try numbers.withMutablePointer { (start: RawPtr<Int>) throws(Oops) in throw Oops.Bad }
+    } catch {
+        caught += 1
+    }
+    do {
+        try Memory.withPointer(to: &caught) { (place: RawPtr<Int>) throws(Oops) in throw Oops.Bad }
+    } catch {
+        caught += 1
+    }
+    assertEqual(caught, 3)
+}
+
+@test
+fn valuesAreCopiedFromWhereTheyLie() {
+    let copy = ["a", "b", "c"].withPointer { (start: RawPtr<String>) -> String[>..] in
+        unsafe {
+            return start.copied(count: 2)
+        }
+    }
+    assertEqual(copy, ["a", "b"])
+}

@@ -8,21 +8,16 @@ import Sable.IO
 /// handles are `OwnedHandle`s.)
 ///
 /// ```sable
-/// import Sable.Interop
-///
-/// @extern("c", "open")
-/// unsafe fn cOpen(_ path: CStr, _ flags: CInt, _ rest: CVarArg...) -> CInt
-///
-/// @extern("c", "read")
-/// unsafe fn cRead(_ fd: CInt, _ into: RawPtr<U8>, _ count: CSize) -> CSignedSize
-///
+/// #if !os(windows)
 /// unsafe {
-///     let zeros = OwnedFd.taking("/dev/zero".withCString { path in unsafe { cOpen(path, 0) } })
-///     var bytes: U8[>..] = [1, 2, 3]
+///     let read: (CInt, RawPtr<U8>, CSize) -> CSignedSize = try! DynamicLibrary.program.function("read")
+///     let zeros = try! File.open("/dev/zero", options: .reading).takeDescriptor()
 ///     let descriptor = zeros.descriptor
-///     let got = bytes.withMutablePointer { into in unsafe { cRead(descriptor, into, 3) } }
-///     assert(got == 3 && bytes == [0, 0, 0])
+///     var bytes: U8[>..] = [1, 2, 3]
+///     assert(bytes.withMutablePointer { read(descriptor, $0, 3) } == 3)
+///     assert(bytes == [0, 0, 0])
 /// }   // closed here
+/// #endif
 /// ```
 @noncopy
 public struct OwnedFd {

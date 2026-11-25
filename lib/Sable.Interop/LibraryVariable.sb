@@ -4,8 +4,6 @@ module Sable.Interop
 /// stays open while there is one.
 ///
 /// ```sable
-/// import Sable.Interop
-///
 /// unsafe {
 ///     if let index = DynamicLibrary.program.variable("optind", as: CInt.self) {
 ///         assert(index.load() == 1)

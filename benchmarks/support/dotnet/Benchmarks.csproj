@@ -2,6 +2,7 @@
   <!-- The .NET ports of the benchmarks; not part of Sable.slnx. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Optimize>true</Optimize>
     <!-- With ICU, for normalisation. -->
     <InvariantGlobalization>false</InvariantGlobalization>

@@ -2090,33 +2090,48 @@ packages that may is not built yet.
 ### C
 
 ```sable
+import Sable.Interop
+
 @extern("c", "printf")
-fn c_printf(_ fmt: RawPtr<U8>, _ args: CVarArg...) -> I32
+unsafe fn cPrint(_ format: CStr, _ args: CVarArg...) -> CInt
 
 @extern("c")
-fn sqlite3_open(_ path: CString, _ db: out RawPtr<Opaque>) -> I32
+unsafe fn sqlite3_open(_ path: CStr, _ db: RawPtr<RawPtr<Opaque>>) -> CInt
 
 @export("c", "sable_entry")
-public fn entry(argc: I32, argv: RawPtr<CString>) -> I32 { }
+public fn entry(_ argc: CInt, _ argv: RawPtr<RawPtr<CChar>>) -> CInt { return 0 }
 ```
 
 `@extern("c")` alone takes the C name to be the function's, and
 `@export("name")` alone takes the language to be C. Either is a function of
 the module, not generic, not `async`, not throwing; an `@extern` one has no
 body (S3223). What crosses is passed by value and must be something C has the
-same way — an integer type, `F32`, `F64`, `Bool`, or a struct of those, which
-is passed as the platform's C passes the struct of the same fields (S3224).
+same way — an integer type, `F32`, `F64`, `Bool`, a `RawPtr`, or a struct of
+those, which is passed as the platform's C passes the struct of the same
+fields (S3224). A struct whose one field is a pointer (`NonNull`, Sable.Interop's
+`CStr` and `CFunction`) is passed as the pointer. An `@extern` function given
+a pointer is declared `unsafe fn` (S3225): what C does with it, the caller
+vouches for. (On WebAssembly C's addresses are 32 bits: a pointer is passed as
+C's, and a struct that holds one beside other fields does not cross by value.)
 `@export("name") var count: Int = 0` names a stored variable of the module for
 C, which reads and writes its storage by that name; it holds its initial value
 once the program has started.
-A variadic C function takes `CVarArg...` (Sable.Core: the integers, the floats
-and `Bool`) after at least one fixed parameter, and an `@extern` alone may: each
+A variadic C function takes `CVarArg...` (Sable.Core: the integers, the floats,
+`Bool` and `RawPtr`) after at least one fixed parameter, and an `@extern` alone may: each
 call passes its values with C's default promotions (an integer narrower than
-32 bits and `Bool` as an `int`, `F32` as a `double`). Pointers, C strings and
-callbacks are `Sable.Interop`'s.
+32 bits and `Bool` as an `int`, `F32` as a `double`), where the platform's C
+passes variable arguments — on arm64 macOS the stack, whatever registers are
+left.
 
-Header import (`sable bindgen`) generates `.sbi` interface files from C headers
-and is the recommended path for anything larger than a few functions.
+C's own types by name (`CInt`, `CLong`, `CChar`), C strings, function pointers,
+callbacks and libraries loaded as the program runs are `Sable.Interop`'s
+(docs/06, "Calling C"). A C function pointer is a `CFunction<F>`, whose `F` is a
+function type C has (`CSignature`, which the compiler knows by what the type
+takes and gives); `cFunction(f)` makes one of a function named there, or of a
+closure written there, that captures nothing (S3226).
+
+`sable bindgen` writes these declarations from a C header (docs/05 §5.1), and
+is the recommended path for anything larger than a few functions.
 
 ### C++ and Objective-C
 

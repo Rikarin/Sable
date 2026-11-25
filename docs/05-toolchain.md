@@ -99,9 +99,13 @@ with its own `main` and the sanitizers — is what runs there.
 
 `sable bindgen` writes Sable source, not `.sbi` (which waits on the
 interface file format of §5.4): a module of `@extern("c")` functions,
-structs and integer constants, read from the header by clang itself. What
-cannot cross to C yet — pointers, arrays, unions, variadic functions — is
-listed in a comment, until `Sable.Interop` (#74). `sable toolchain` installs
+structs and integer constants, read from the header by clang itself. C's types
+are `Sable.Interop`'s (`CInt`, `CLong`, `CSize`), so the module is the same on
+every platform; a pointer is a `RawPtr` — of an empty enum, where C only names
+the struct — a function pointer a `CFunction`, `...` is `CVarArg...`, and a
+function given a pointer is `unsafe` (docs/06, "Calling C", has an example). What
+cannot cross — a union, a struct with an array or a bit-field in it, by value;
+`va_list` — is listed in a comment. `sable toolchain` installs
 toolchains side by side in `$SABLE_HOME/toolchains/<version>` from a build
 (`--from <directory or archive>`; there is no release server yet), and `pin`
 writes `sable-toolchain` at the workspace root, after which the `sable` on

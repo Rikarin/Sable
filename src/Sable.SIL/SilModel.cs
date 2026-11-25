@@ -2156,7 +2156,7 @@ public static class SilBuiltins {
         }
 
         if (name == "array_address") {
-            return operands is [AddressType { Pointee: ArrayType }] ? new([operands[0]], SilType.Int) : null;
+            return operands is [AddressType { Pointee: SliceType }] ? new([operands[0]], SilType.Int) : null;
         }
 
         if (name is "slice_address" or "slice_end") {

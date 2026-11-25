@@ -11,8 +11,6 @@ module Sable.Interop
 /// so: the context is not an address, and is never another closure's.
 ///
 /// ```sable
-/// import Sable.Interop
-///
 /// let total = Atomic<Int>(0)
 /// let callback = CCallback { (n: CInt, context: RawPtr<Opaque>) in
 ///     total.add(Int(n))
@@ -49,8 +47,6 @@ public final class CCallback<F: CSignature>: Sendable {
 /// later, stops the program.
 ///
 /// ```sable
-/// import Sable.Interop
-///
 /// var seen: Int[>..] = []
 /// withCallback({ (n: CInt, context: RawPtr<Opaque>) in seen.append(Int(n)) }) { function, context in
 ///     // What a C function given the two would do:

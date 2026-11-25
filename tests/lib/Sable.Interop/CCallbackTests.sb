@@ -1,0 +1,304 @@
+module CCallbackTests
+
+// CCallback and withCallback (Sable.Interop): closures with what they capture,
+// called by C — on this thread, on threads of C's own, and too late. Run with
+//     tools/stdlib-coverage.sh Sable.Interop
+
+import Sable.Concurrency
+import Sable.Interop
+import Sable.Testing
+
+fn call<F: CSignature>(_ function: CFunction<F>) -> F {
+    unsafe {
+        return function.function()
+    }
+}
+
+@test
+fn aClosureIsCalledByItsContext() {
+    var seen: Int[>..] = []
+    let result = withCallback({ (n: CInt, context: RawPtr<Opaque>) -> CInt in
+        seen.append(Int(n))
+        return n * 2
+    }) { function, context in
+        return call(function)(21, context)
+    }
+    assertEqual(result, 42)
+    assertEqual(seen, [21])
+}
+
+@test
+fn theContextMayComeFirst() {
+    var total = 0
+    withCallback({ (context: RawPtr<Opaque>, a: CInt, b: F64) in total += Int(a) + Int(b) }, context: .First) { function, context in
+        call(function)(context, 3, 4.0)
+    }
+    assertEqual(total, 7)
+}
+
+@test
+fn twoClosuresOfOneTypeAreTwo() {
+    var log = ""
+    withCallback({ (context: RawPtr<Opaque>) in log += "a" }) { first, firstContext in
+        withCallback({ (context: RawPtr<Opaque>) in log += "b" }) { second, secondContext in
+            assert(first == second)
+            assert(firstContext != secondContext)
+            call(first)(secondContext)
+            call(first)(firstContext)
+        }
+    }
+    assertEqual(log, "ba")
+}
+
+@test
+fn aClosureMayCallItselfThroughC() {
+    var depth = 0
+    var again: ((CInt, RawPtr<Opaque>) -> ())? = none
+    withCallback({ (n: CInt, context: RawPtr<Opaque>) in
+        depth += 1
+        if n > 0 {
+            again!(n - 1, context)
+        }
+    }) { function, context in
+        again = call(function)
+        again!(5, context)
+    }
+    assertEqual(depth, 6)
+}
+
+union Oops: Error { Bad }
+
+@test
+fn whatTheBodyThrowsIsThrown() {
+    do {
+        try withCallback({ (context: RawPtr<Opaque>) in }) { (function: CFunction<(RawPtr<Opaque>) -> ()>, context: RawPtr<Opaque>) throws(Oops) in
+            throw Oops.Bad
+        }
+        assert(false)
+    } catch {
+    }
+}
+
+@test
+fn manyAreHeldAtOnceAndTheirPlacesUsedAgain() {
+    let total = Atomic<Int>(0)
+    var held: CCallback<(CInt, RawPtr<Opaque>) -> ()>[>..] = []
+    var round = 0
+    while round < 3 {
+        var i = 0
+        while i < 600 {
+            held.append(CCallback { (n: CInt, context: RawPtr<Opaque>) in
+                _ = total.add(Int(n))
+            })
+            i += 1
+        }
+        for callback in held {
+            call(callback.function)(1, callback.context)
+        }
+        held = []
+        round += 1
+    }
+    assertEqual(total.load(), 1800)
+}
+
+@immutable
+final class Counted: Sendable {
+    let gone: Atomic<Int>
+    init(_ gone: Atomic<Int>) {
+        self.gone = gone
+    }
+
+    deinit {
+        gone.add(1)
+    }
+}
+
+@test
+fn whatItCapturedGoesWithIt() {
+    let gone = Atomic<Int>(0)
+    do {
+        let counted = Counted(gone)
+        let callback = CCallback { (context: RawPtr<Opaque>) in
+            _ = blackBox(counted)
+        }
+        call(callback.function)(callback.context)
+        assertEqual(gone.load(), 0)
+    }
+    assertEqual(gone.load(), 1)
+}
+
+// Let go of from inside its own call, it goes as the call returns.
+@test
+fn aClosureMayLetGoOfItself() {
+    let gone = Atomic<Int>(0)
+    let held = Mutex<CCallback<(RawPtr<Opaque>) -> ()>?>(none)
+    let counted = Counted(gone)
+    let callback = CCallback { (context: RawPtr<Opaque>) in
+        held.withLock { it in it = none }
+        _ = blackBox(counted)
+    }
+    let (function, context) = (callback.function, callback.context)
+    held.withLock { it in it = callback }
+    call(function)(context)
+    assertEqual(gone.load(), 0)
+}
+
+@test(traps: "C called a closure that was let go of")
+fn callingOneLetGoOfStops() {
+    var kept = RawPtr<Opaque>.null
+    var function = CFunction<(RawPtr<Opaque>) -> ()>.null
+    do {
+        let callback = CCallback { (context: RawPtr<Opaque>) in }
+        kept = callback.context
+        function = callback.function
+    }
+    call(function)(kept)
+}
+
+// Its place taken by another, it is still found to be gone.
+@test(traps: "C called a closure that was let go of")
+fn callingOneWhosePlaceIsAnothersStops() {
+    var kept = RawPtr<Opaque>.null
+    withCallback({ (context: RawPtr<Opaque>) in }) { function, context in
+        kept = context
+    }
+    withCallback({ (context: RawPtr<Opaque>) in }) { function, context in
+        call(function)(kept)
+    }
+}
+
+@test(traps: "C called a closure with a context that is none")
+fn aContextThatIsNoneStops() {
+    withCallback({ (context: RawPtr<Opaque>) in }) { function, context in
+        call(function)(RawPtr<Opaque>.null)
+    }
+}
+
+@test(traps: "a callback's context is a 'RawPtr<Opaque>' among its parameters")
+fn aFunctionWithNoContextIsRefused() {
+    withCallback({ (n: CInt) in }) { function, context in }
+}
+
+// ---- Threads the runtime did not make ----------------------------------------
+
+#if !os(windows)
+@extern("c", "pthread_create")
+unsafe fn threadCreate(_ thread: RawPtr<UInt>, _ attributes: RawPtr<Opaque>, _ start: CFunction<(RawPtr<Opaque>) -> RawPtr<Opaque>>, _ context: RawPtr<Opaque>) -> CInt
+
+@extern("c", "pthread_join")
+unsafe fn threadJoin(_ thread: UInt, _ result: RawPtr<RawPtr<Opaque>>) -> CInt
+
+fn onThreads(_ count: Int, _ function: CFunction<(RawPtr<Opaque>) -> RawPtr<Opaque>>, _ context: RawPtr<Opaque>) {
+    var threads: UInt[>..] = []
+    var i = 0
+    while i < count {
+        var thread: UInt = 0
+        let made = Memory.withPointer(to: &thread) { (place: RawPtr<UInt>) -> CInt in
+            unsafe {
+                return threadCreate(place, RawPtr<Opaque>.null, function, context)
+            }
+        }
+        assertEqual(made, 0)
+        threads.append(thread)
+        i += 1
+    }
+    for thread in threads {
+        unsafe {
+            _ = threadJoin(thread, RawPtr<RawPtr<Opaque>>.null)
+        }
+    }
+}
+
+@test
+fn cCallsItOnThreadsOfItsOwn() {
+    let words = Mutex<String[>..]>([])
+    let callback = CCallback { (context: RawPtr<Opaque>) -> RawPtr<Opaque> in
+        var i = 0
+        while i < 500 {
+            words.withLock { all in all.append("word \(i)") }
+            i += 1
+        }
+        return context
+    }
+    var round = 0
+    while round < 4 {
+        onThreads(6, callback.function, callback.context)
+        round += 1
+    }
+    assertEqual(words.withLock { all in all.count }, 12_000)
+}
+
+var shared: String[>..] = ["first"]
+
+// What the globals hold is counted for every thread once C may call in.
+@test
+fn aThreadOfCsReadsTheGlobals() {
+    let lengths = Atomic<Int>(0)
+    shared = ["one", "two \(shared.count)"]
+    let callback = CCallback { (context: RawPtr<Opaque>) -> RawPtr<Opaque> in
+        var i = 0
+        while i < 2000 {
+            let mine = shared
+            lengths.add(mine[1].count)
+            i += 1
+        }
+        return context
+    }
+    onThreads(4, callback.function, callback.context)
+    assertEqual(lengths.load(), 4 * 2000 * 5)
+}
+
+@test
+async fn aThreadOfCsStartsTasks() {
+    let done = Channel<Int>(capacity: 64)
+    let callback = CCallback { (context: RawPtr<Opaque>) -> RawPtr<Opaque> in
+        _ = Task.spawn {
+            await done.send(1)
+        }
+        return context
+    }
+    onThreads(8, callback.function, callback.context)
+    var total = 0
+    while total < 8 {
+        if let one = await done.receive() {
+            total += one
+        }
+    }
+    assertEqual(total, 8)
+}
+
+// A task asks of itself on C's thread, not of the program's.
+@test
+fn aThreadOfCsIsNoOnesTask() {
+    let cancelled = Atomic<Int>(0)
+    let callback = CCallback { (context: RawPtr<Opaque>) -> RawPtr<Opaque> in
+        if Task.isCancelled {
+            cancelled.add(1)
+        }
+        return context
+    }
+    onThreads(2, callback.function, callback.context)
+    assertEqual(cancelled.load(), 0)
+}
+
+@test
+fn aFunctionPointerIsCalledOnThreadsOfCsToo() {
+    onThreads(4, cFunction { (context: RawPtr<Opaque>) -> RawPtr<Opaque> in
+        var text = ""
+        var i = 0
+        while i < 100 {
+            text += "\(i)"
+            i += 1
+        }
+        precondition(text.count == 190)
+        return context
+    }, RawPtr<Opaque>.null)
+}
+
+@test(traps: "C called a closure on another thread than the one that lent it")
+fn oneLentIsNotCalledOnAnotherThread() {
+    withCallback({ (context: RawPtr<Opaque>) -> RawPtr<Opaque> in context }) { function, context in
+        onThreads(1, function, context)
+    }
+}
+#endif

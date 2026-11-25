@@ -4503,13 +4503,15 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "array_address": {
-                    var addressed = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
-                    MakeUnique(operands[0], addressed);
-                    var array = Fresh();
-                    Line($"{array} = load ptr, ptr {operands[0]}, !tbaa {TbaaReference}");
+                    var addressed = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    Line($"call void @sable_slice_make_unique(ptr {operands[0]}, ptr {ArrayMetadataOf(new ArrayType(addressed.Element))})");
+                    var slice = Fresh();
                     var elements = Fresh();
-                    Line($"{elements} = call ptr @sable_buffer_elements(ptr {array})");
-                    Line($"{Result()} = ptrtoint ptr {elements} to i64");
+                    var first = Fresh();
+                    Line($"{slice} = load {Type(addressed)}, ptr {operands[0]}");
+                    Line($"{elements} = call ptr @sable_buffer_elements(ptr {SlicePart(slice, addressed, 0)})");
+                    Line($"{first} = {ElementAt(addressed.Element, elements, SlicePart(slice, addressed, 1))}");
+                    Line($"{Result()} = ptrtoint ptr {first} to i64");
                     return;
                 }
 

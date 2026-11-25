@@ -1,0 +1,72 @@
+module CTypesTests
+
+// C's types by name (Sable.Interop), and the C library called with them. Run with
+//     tools/stdlib-coverage.sh Sable.Interop
+
+import Sable.Interop
+import Sable.Testing
+
+@extern("c", "labs")
+fn cLabs(_ n: CLong) -> CLong
+
+@extern("c", "toupper")
+fn cUpper(_ n: CInt) -> CInt
+
+@extern("c", "snprintf")
+unsafe fn cFormat(_ into: RawPtr<CChar>, _ size: CSize, _ format: CStr, _ rest: CVarArg...) -> CInt
+
+@test
+fn eachIsAsWideAsCs() {
+    assertEqual(MemoryLayout<CChar>.size, 1)
+    assertEqual(MemoryLayout<CShort>.size, 2)
+    assertEqual(MemoryLayout<CInt>.size, 4)
+    assertEqual(MemoryLayout<CLongLong>.size, 8)
+    assertEqual(MemoryLayout<CSize>.size, 8)
+    assertEqual(MemoryLayout<CSignedSize>.size, 8)
+    #if os(windows)
+    assertEqual(MemoryLayout<CLong>.size, 4)
+    assertEqual(MemoryLayout<CWChar>.size, 2)
+    #else
+    assertEqual(MemoryLayout<CLong>.size, 8)
+    assertEqual(MemoryLayout<CWChar>.size, 4)
+    #endif
+    assertEqual(MemoryLayout<CUnsignedLong>.size, MemoryLayout<CLong>.size)
+}
+
+@test
+fn charHasThePlatformsSign() {
+    #if os(linux)
+    #if arch(arm64)
+    assertEqual(CChar.min, 0)
+    #else
+    assertEqual(CChar.min, -128)
+    #endif
+    #else
+    assertEqual(CChar.min, -128)
+    #endif
+}
+
+@test
+fn theCLibraryTakesThem() {
+    assertEqual(cLabs(-70_000), 70_000)
+    assertEqual(cUpper(0x61), 0x41)
+}
+
+@test
+fn aVariadicFunctionTakesPointersAndNumbers() {
+    var text: U8[>..] = []
+    text.append(contentsOf: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] as U8[>..])
+    let small: I8 = -3
+    let half: F32 = 0.5
+    let n = text.withMutablePointer { (into: RawPtr<U8>) -> CInt in
+        return "%s %d %.1f %lld %s".withCString { (format: CStr) -> CInt in
+            return "ab".withCString { (word: CStr) -> CInt in
+                unsafe {
+                    return cFormat(into.cast(to: CChar.self), 24, format, word.pointer, small, half, 1 << 40, word.pointer)
+                }
+            }
+        }
+    }
+    assertEqual(Int(n), 26)
+    assertEqual(String.fromUtf8Lossy(text[..<23]), "ab -3 0.5 1099511627776")
+}

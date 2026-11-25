@@ -8,10 +8,9 @@ extension<Element> Element[:] {
     /// none.
     ///
     /// ```sable
-    /// let third = [10, 20, 30].withPointer { start in
-    ///     unsafe { start.load(at: 2) }
+    /// unsafe {
+    ///     assert([10, 20, 30].withPointer { $0.load(at: 2) } == 30)
     /// }
-    /// assert(third == 30)
     /// ```
     public fn withPointer<R, E: Error>(_ body: (RawPtr<Element>) throws(E) -> R) throws(E) -> R {
         unsafe {
@@ -24,9 +23,7 @@ extension<Element> Element[:] {
             return try body(start)
         }
     }
-}
 
-extension<Element> Element[>..] {
     /// Where the elements lie, one after another, for as long as 'body'
     /// runs, to be read and written there: the array is the only reference
     /// to them by then. There are 'count' of them, and no more; null when
@@ -57,10 +54,9 @@ extension RawPtr<Element> {
     /// The first 'count' values, copied into an array.
     ///
     /// ```sable
-    /// let copy = [1, 2, 3].withPointer { start in
-    ///     unsafe { start.copied(count: 2) }
+    /// unsafe {
+    ///     assert([1, 2, 3].withPointer { $0.copied(count: 2) } == [1, 2])
     /// }
-    /// assert(copy == [1, 2])
     /// ```
     public unsafe fn copied(count: Int) -> Element[>..] {
         return UnsafeBuffer<Element>.viewing(self, count: count).toArray()

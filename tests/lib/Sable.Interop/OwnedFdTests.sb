@@ -1,0 +1,132 @@
+module OwnedFdTests
+
+// OwnedFd (Sable.Interop): a descriptor closed once, whoever has it. Run with
+//     tools/stdlib-coverage.sh Sable.Interop
+
+import Sable.Interop
+import Sable.IO
+import Sable.Testing
+
+#if !os(windows)
+@extern("c", "pipe")
+unsafe fn cPipe(_ ends: RawPtr<CInt>) -> CInt
+
+@extern("c", "write")
+unsafe fn cWrite(_ fd: CInt, _ from: RawPtr<U8>, _ count: CSize) -> CSignedSize
+
+@extern("c", "read")
+unsafe fn cRead(_ fd: CInt, _ into: RawPtr<U8>, _ count: CSize) -> CSignedSize
+
+fn pipe() -> (CInt, CInt) {
+    var ends: CInt[>..] = [-1, -1]
+    let made = ends.withMutablePointer { (place: RawPtr<CInt>) -> CInt in
+        unsafe {
+            return cPipe(place)
+        }
+    }
+    assertEqual(made, 0)
+    return (ends[0], ends[1])
+}
+
+fn read(_ fd: CInt) -> Int {
+    var bytes: U8[>..] = [0, 0, 0, 0]
+    return bytes.withMutablePointer { (into: RawPtr<U8>) -> Int in
+        unsafe {
+            return Int(cRead(fd, into, 4))
+        }
+    }
+}
+
+fn write(_ fd: CInt) -> Int {
+    return ([1, 2, 3] as U8[>..]).withPointer { (from: RawPtr<U8>) -> Int in
+        unsafe {
+            return Int(cWrite(fd, from, 3))
+        }
+    }
+}
+
+@test
+fn itIsClosedAsItGoes() {
+    let (from, to) = pipe()
+    unsafe {
+        do {
+            let writer = OwnedFd.taking(to)
+            assert(writer.isValid)
+            assertEqual(write(writer.descriptor), 3)
+        }
+        let reader = OwnedFd.taking(from)
+        assertEqual(read(reader.descriptor), 3)
+        // Nothing writes to it any more: its end.
+        assertEqual(read(reader.descriptor), 0)
+    }
+}
+
+@test
+fn anotherDescriptorKeepsItOpen() {
+    let (from, to) = pipe()
+    unsafe {
+        let reader = OwnedFd.taking(from)
+        var writer = OwnedFd.taking(to)
+        let again = try! writer.duplicate()
+        try! writer.close()
+        assert(!writer.isValid)
+        assertEqual(write(again.descriptor), 3)
+        assertEqual(read(reader.descriptor), 3)
+    }
+}
+
+@test
+fn oneGivenAwayIsNotClosed() {
+    let (from, to) = pipe()
+    var given: CInt = -1
+    unsafe {
+        do {
+            var writer = OwnedFd.taking(to)
+            given = writer.release()
+            assertEqual(writer.descriptor, -1)
+            try! writer.close()
+        }
+        assertEqual(write(given), 3)
+        let closer = OwnedFd.taking(given)
+        let reader = OwnedFd.taking(from)
+        assertEqual(read(reader.descriptor), 3)
+        assert(closer.isValid)
+    }
+}
+
+@test
+fn whatFailsIsThrown() {
+    unsafe {
+        var nothing = OwnedFd.taking(-1)
+        assert(!nothing.isValid)
+        do {
+            _ = try nothing.duplicate()
+            assert(false)
+        } catch {
+            assertEqual(error.description().hasPrefix("'descriptor -1' failed"), true)
+        }
+        try! nothing.close()
+        var odd = OwnedFd.taking(999_999)
+        do {
+            try odd.close()
+            assert(false)
+        } catch {
+        }
+    }
+}
+
+@test
+fn itMovesIntoAndOutOfAFile() {
+    let path = FilePath("\(Environment.temporaryDirectory)/sable-owned-fd-\(Runtime.processId())")
+    try! File.write(path, "hello")
+    let file = try! File.open(path, options: .reading)
+    let owned = try! file.takeDescriptor()
+    assert(!file.isOpen)
+    assertEqual(read(owned.descriptor), 4)
+    unsafe {
+        let back = FileHandle.owning(owned, path: "again")
+        assertEqual(try! back.read(upTo: 10), [0x6F])
+    }
+    try! File.remove(path)
+}
+#endif

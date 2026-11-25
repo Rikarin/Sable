@@ -505,6 +505,187 @@ public sealed class InteropTests {
         Assert.Equal("39\n16 true\n85\n", BuildWithC(source, c));
     }
 
+    const string PointerC = """
+                            #include <stdint.h>
+                            #include <stdlib.h>
+                            typedef struct { double x, y; } DPair;
+                            typedef struct { int64_t a, b, c; int8_t d; } Big;
+                            typedef struct Node { struct Node *next; int32_t value; } Node;
+                            typedef DPair (*scale)(DPair, float, void *);
+                            typedef Big (*grow)(Big, int8_t, void *);
+                            double c_scale(scale f, void *context) { DPair p = { 1.5, 2.5 }; DPair r = f(p, 2.0f, context); return r.x * 100 + r.y; }
+                            int64_t c_grow(grow f, void *context) { Big b = { 1, 2, 3, 4 }; Big r = f(b, -1, context); return r.a * 1000 + r.b * 100 + r.c * 10 + r.d; }
+                            int32_t c_total(const Node *node) { int32_t t = 0; for (; node; node = node->next) t += node->value; return t; }
+                            Node c_second(Node first) { return *first.next; }
+                            void *c_same(void *p) { return p; }
+                            static int32_t twice(int32_t n) { return n * 2; }
+                            int32_t (*c_twice(void))(int32_t) { return twice; }
+                            int32_t c_call(int32_t (*f)(int32_t)) { return f ? f(20) : -1; }
+                            """;
+
+    const string PointerProgram = """
+                                  module Main
+
+                                  import Sable.Interop
+
+                                  struct DPair {
+                                      x: F64
+                                      y: F64
+                                  }
+
+                                  struct Big {
+                                      a: Int
+                                      b: Int
+                                      c: Int
+                                      d: I8
+                                  }
+
+                                  struct Node {
+                                      next: RawPtr<Node>
+                                      value: CInt
+                                  }
+
+                                  @extern("c")
+                                  unsafe fn c_scale(_ f: CFunction<(DPair, F32, RawPtr<Opaque>) -> DPair>, _ context: RawPtr<Opaque>) -> F64
+
+                                  @extern("c")
+                                  unsafe fn c_grow(_ f: CFunction<(Big, I8, RawPtr<Opaque>) -> Big>, _ context: RawPtr<Opaque>) -> Int
+
+                                  @extern("c")
+                                  unsafe fn c_total(_ node: RawPtr<Node>) -> CInt
+
+                                  @extern("c")
+                                  unsafe fn c_second(_ first: Node) -> Node
+
+                                  @extern("c")
+                                  unsafe fn c_same(_ p: RawPtr<Opaque>) -> RawPtr<Opaque>
+
+                                  @extern("c")
+                                  fn c_twice() -> CFunction<(CInt) -> CInt>
+
+                                  @extern("c")
+                                  unsafe fn c_call(_ f: CFunction<(CInt) -> CInt>) -> CInt
+
+                                  fn main() {
+                                      var calls = 0
+                                      let scaled = withCallback({ (p: DPair, by: F32, context: RawPtr<Opaque>) -> DPair in
+                                          calls += 1
+                                          return DPair(x: p.x * F64(by), y: p.y + F64(by))
+                                      }) { (f: CFunction<(DPair, F32, RawPtr<Opaque>) -> DPair>, context: RawPtr<Opaque>) -> F64 in
+                                          unsafe { return c_scale(f, context) }
+                                      }
+                                      print(scaled)
+                                      let grown = withCallback({ (b: Big, by: I8, context: RawPtr<Opaque>) -> Big in
+                                          calls += 1
+                                          return Big(a: b.a + 1, b: b.b + 1, c: b.c + 1, d: b.d + by)
+                                      }) { (f: CFunction<(Big, I8, RawPtr<Opaque>) -> Big>, context: RawPtr<Opaque>) -> Int in
+                                          unsafe { return c_grow(f, context) }
+                                      }
+                                      print("\(grown) \(calls)")
+                                      unsafe {
+                                          let nodes = RawPtr<Node>.allocate(count: 2)
+                                          defer { nodes.deallocate() }
+                                          nodes.initialize(to: Node(next: RawPtr<Node>.null, value: 40), at: 1)
+                                          nodes.initialize(to: Node(next: nodes.advanced(by: 1), value: 2))
+                                          print(c_total(nodes))
+                                          print(c_second(nodes.load()).value)
+                                          print(c_same(nodes.cast(to: Opaque.self)) == nodes.cast(to: Opaque.self))
+                                          print(c_twice().function()(21))
+                                          print(c_call(c_twice()))
+                                          print(c_call(cFunction { (n: CInt) -> CInt in n + 1 }))
+                                          print(c_call(CFunction<(CInt) -> CInt>.null))
+                                      }
+                                  }
+                                  """;
+
+    /// <summary>
+    ///     Pointers, functions and closures with a context cross both ways, and
+    ///     a callback is passed structs and floats as C's own function is
+    ///     (Sable.Interop): C's compiler on the other side.
+    /// </summary>
+    [Fact]
+    public void PointersAndCallbacksCrossAsCs() {
+        if (!Programs.CanBuild) {
+            return;
+        }
+
+        const string output = "304.5\n2343 2\n42\n40\ntrue\n42\n40\n21\n-1\n";
+        Assert.Equal(output, BuildWithC(PointerProgram, PointerC));
+        if (NativeTarget.Host.Arch != "x86_64" && OperatingSystem.IsMacOS() && Rosetta()) {
+            Assert.Equal(output, BuildWithC(PointerProgram, PointerC, NativeTarget.Of("x86_64-apple-darwin")));
+        }
+    }
+
+    /// <summary>A pointer is C's pointer on every target, WebAssembly's 32 bits among them.</summary>
+    [Theory]
+    [InlineData("x86_64-unknown-linux-gnu")]
+    [InlineData("aarch64-apple-darwin")]
+    [InlineData("wasm32-wasi")]
+    public void APointerIsDeclaredAsCs(string triple) {
+        const string source = """
+                              module Main
+
+                              @extern("c")
+                              unsafe fn c_point(_ p: RawPtr<U8>, _ n: I32, _ rest: CVarArg...) -> NonNull<U8>
+
+                              fn main() {
+                                  unsafe {
+                                      print(c_point(RawPtr<U8>.null, 1, RawPtr<U8>.null).pointer.address)
+                                  }
+                              }
+                              """;
+        var target = NativeTarget.Of(triple);
+        var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(source, "test.sb"), Pipeline.ParseOptionsFor(true, target))], target: target);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        Assert.Contains("declare ptr @\"c_point\"(ptr, i32, ...)\n", result.LlvmIr!, StringComparison.Ordinal);
+    }
+
+    /// <summary>The worked binding of docs/06 ("Calling C"), as it stands there, linked with zlib and run.</summary>
+    [Fact]
+    public void TheDocumentedBindingOfZlibRuns() {
+        if (!Programs.CanBuild || OperatingSystem.IsWindows()) {
+            return;
+        }
+
+        var document = File.ReadAllText(Path.Combine(DocExampleTests.RepositoryRoot, "docs", "06-runtime-and-stdlib.md"));
+        var start = document.IndexOf("module Zlib\n", StringComparison.Ordinal);
+        Assert.True(start > 0);
+        var source = document[start..document.IndexOf("\n```", start, StringComparison.Ordinal)] + "\n";
+        var output = BuildWithC(source, "int sable_interop_unused;\n", null, "-lz");
+        Assert.Matches(@"^zlib 1\.[\d.]+\S*: 60 bytes in \d\d\nthe same words, and the same words again, and the same words\n$", output);
+    }
+
+    /// <summary>What may be given to C as a function: by its type, and by what it captures.</summary>
+    [Theory]
+    [InlineData("    let n: CInt = 3\n    _ = cFunction { (m: CInt) -> CInt in m + n }", "S3226")]
+    [InlineData("    _ = cFunction { (text: String) -> Int in 0 }", "CSignature")]
+    [InlineData("    let counter = Counter()\n    _ = CCallback { (context: RawPtr<Opaque>) in\n        counter.count += 1\n    }", "S3236")]
+    public void WhatCannotBeACFunctionIsReported(string body, string expected) {
+        var source = $"module Main\n\nimport Sable.Interop\n\nfinal class Counter {{\n    var count = 0\n}}\n\nfn main() {{\n{body}\n}}\n";
+        var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(source, "test.sb"))], null, false);
+        Assert.Contains(expected, string.Join("\n", result.Errors), StringComparison.Ordinal);
+    }
+
+    /// <summary>A generic function cannot vouch for what a closure it is given captures.</summary>
+    [Fact]
+    public void AClosureOfAParameterTypeIsNotKnownToBeSendable() {
+        const string source = """
+                              module Main
+
+                              import Sable.Interop
+
+                              fn pass<F: CSignature>(_ f: F) {
+                                  _ = CCallback(f)
+                              }
+
+                              fn main() {
+                                  pass { (context: RawPtr<Opaque>) in }
+                              }
+                              """;
+        var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(source, "test.sb"))], null, false);
+        Assert.Contains("S3236", string.Join("\n", result.Errors), StringComparison.Ordinal);
+    }
+
     static bool Rosetta() {
         try {
             using var process = Process.Start(new ProcessStartInfo("/usr/bin/arch", ["-x86_64", "/usr/bin/true"]) { RedirectStandardError = true })!;
@@ -517,7 +698,7 @@ public sealed class InteropTests {
     }
 
     /// <summary>The program, with the C beside it, built for the target (this machine's by default) and run: what it prints.</summary>
-    static string BuildWithC(string source, string c, NativeTarget? target = null) {
+    static string BuildWithC(string source, string c, NativeTarget? target = null, params string[] libraries) {
         var tree = SyntaxTree.Parse(new SourceText(source, "test.sb"), Pipeline.ParseOptionsFor(true, target ?? NativeTarget.Host));
         var result = Pipeline.Compile([tree], target: target);
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
@@ -540,7 +721,7 @@ public sealed class InteropTests {
             Assert.True(NativeObjects.CompileRuntime(runtime, options).Succeeded);
             var executable = Platform.Executable(Path.Combine(directory.FullName, "program"));
             // C's maths is in libm on POSIX, in the C runtime itself on Windows.
-            var linked = NativeObjects.Link([program, runtime, cObject, ..OperatingSystem.IsWindows() ? [] : new[] { "-lm" }], executable, options);
+            var linked = NativeObjects.Link([program, runtime, cObject, ..libraries, ..OperatingSystem.IsWindows() ? [] : new[] { "-lm" }], executable, options);
             Assert.True(linked.Succeeded, linked.Output);
 
             // Another architecture this Mac runs through Rosetta.

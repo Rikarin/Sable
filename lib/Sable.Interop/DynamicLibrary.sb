@@ -8,8 +8,6 @@ import Sable.IO
 /// is ever used after its code has gone.
 ///
 /// ```sable
-/// import Sable.Interop
-///
 /// let program = DynamicLibrary.program
 /// unsafe {
 ///     let length: ((RawPtr<CChar>) -> CSize)? = program.symbol("strlen")
@@ -48,8 +46,6 @@ public struct DynamicLibrary: Sendable {
     /// thing). Under WASI there is none to open.
     ///
     /// ```sable
-    /// import Sable.Interop
-    ///
     /// do {
     ///     unsafe {
     ///         _ = try DynamicLibrary.open("no-such-library")
@@ -94,16 +90,14 @@ public struct DynamicLibrary: Sendable {
     /// it is not there.
     ///
     /// ```sable
-    /// import Sable.Interop
-    ///
     /// fn processIdentifier() throws(LibraryError) -> CInt {
     ///     unsafe {
     ///         #if os(windows)
-    ///         let get: () -> CInt = try DynamicLibrary.program.function("_getpid")
+    ///         let identifier: () -> CInt = try DynamicLibrary.program.function("_getpid")
     ///         #else
-    ///         let get: () -> CInt = try DynamicLibrary.program.function("getpid")
+    ///         let identifier: () -> CInt = try DynamicLibrary.program.function("getpid")
     ///         #endif
-    ///         return get()
+    ///         return identifier()
     ///     }
     /// }
     /// assert(try! processIdentifier() > 0)

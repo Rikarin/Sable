@@ -2202,6 +2202,17 @@ public sealed partial class SilGen {
             ? Instance(deinit, substitution, at)?.Name
             : null;
 
+    /// <summary>
+    ///     A move-only struct's deinit by the name it has, known from the
+    ///     type itself: its body may be lowered only once something is found
+    ///     to use the type, and how the type is laid out — with a flag for
+    ///     whether it still holds its value — must be known before.
+    /// </summary>
+    string? PlainDeinit(NamedTypeSymbol named) =>
+        named.OriginalDefinition.IsNoncopyable && DeinitOf(named.OriginalDefinition) is { } deinit && !IsGeneric(deinit)
+            ? _names.GetValueOrDefault(deinit)
+            : null;
+
     T Begin<T>(TypeSymbol symbol, T type) where T : NominalType {
         if (symbol is NamedTypeSymbol { IsConstructed: true } constructed) {
             type.DisplayName = $"{QualifiedName(constructed)}<{string.Join(", ", constructed.TypeArguments.Select(static a => a.ToDisplayString()))}>";
@@ -2442,7 +2453,7 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                structType.Deinit ??= GenericDeinit(named);
+                structType.Deinit ??= GenericDeinit(named) ?? PlainDeinit(named);
                 return structType;
             }
 

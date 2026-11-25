@@ -59,7 +59,7 @@ struct RawMemory {
     /// Where the array's elements are, to write, until 'addressEnd'; 0 for
     /// none. The array is made the only reference to them.
     @intrinsic
-    unsafe static fn arrayAddress<T>(_ array: inout T[>..]) -> Int
+    unsafe static fn arrayAddress<T>(_ array: inout T[:]) -> Int
 
     /// Where the elements are, to read, until 'sliceEnd'; 0 for none.
     @intrinsic

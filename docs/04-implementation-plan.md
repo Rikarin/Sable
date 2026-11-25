@@ -2879,10 +2879,9 @@ generates, compiles the case with the output, and compares both with
 ### Not built in Phase 5
 
 Every command of docs/05 §5.1 exists (with `debug`, `lint`, `yank` and
-`completions` beside them). `sable bindgen` binds what the compiler's half of
-the foreign-function interface passes — integers, floats, `Bool` and structs
-of them — and lists the rest; pointers and C strings wait for the library
-half (`Sable.Interop`, #74). `sable toolchain` installs from a build, as
+`completions` beside them). `sable bindgen` binds what the foreign-function
+interface passes — integers, floats, `Bool`, pointers, C functions and structs
+of them, by `Sable.Interop`'s names — and lists the rest. `sable toolchain` installs from a build, as
 there are no released toolchains to download. Build scripts (§5.6) run in
 the interpreter's sandbox; the network registry has a reference server, not
 a deployment.

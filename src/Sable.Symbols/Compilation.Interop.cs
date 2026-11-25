@@ -178,13 +178,13 @@ public sealed partial class Compilation {
             if (parameter.Modifier != ParameterModifier.None) {
                 yield return Diagnostic.Error(ErrorCode.ERR_NotACType, syntax.Span,
                     $"an '{attribute}' function's parameter is passed by value, as C passes it; '{parameter.Name}' is not");
-            } else if (WhyNotC(parameter.Type, []) is { } why) {
+            } else if ((WhyNotC(parameter.Type, []) ?? WhyNotWasm(parameter.Type)) is { } why) {
                 yield return Diagnostic.Error(ErrorCode.ERR_NotACType, syntax.Span,
                     $"'{parameter.Name}' cannot cross to C: {why}");
             }
         }
 
-        if (!ReferenceEquals(function.ReturnType, Core.Void) && WhyNotC(function.ReturnType, []) is { } result) {
+        if (!ReferenceEquals(function.ReturnType, Core.Void) && (WhyNotC(function.ReturnType, []) ?? WhyNotWasm(function.ReturnType)) is { } result) {
             yield return Diagnostic.Error(ErrorCode.ERR_NotACType,
                 declaration.ReturnClause?.Span ?? declaration.Identifier.Span, $"the result cannot cross to C: {result}");
         }
@@ -194,6 +194,15 @@ public sealed partial class Compilation {
     bool IsCVarArgs(TypeSymbol type) =>
         type is ArrayTypeSymbol { ElementType: NamedTypeSymbol { TypeKind: TypeKind.Protocol, Name: "CVarArg" } protocol }
         && ReferenceEquals(protocol.ContainingSymbol, Core.Module);
+
+    /// <summary>
+    ///     On WebAssembly C's addresses are 32 bits and Sable's 64: a pointer
+    ///     is passed as C's, but a struct holding one is not laid out as C's.
+    /// </summary>
+    string? WhyNotWasm(TypeSymbol type) =>
+        SyntaxTrees is [{ Options.TargetArch: "wasm32" }, ..] && !IsCPointer(type) && HasCPointer(type)
+            ? $"'{type.ToDisplayString()}' holds an address, which is 64 bits and C's on WebAssembly 32; pass a pointer to C's own struct"
+            : null;
 
     /// <summary>
     ///     A C pointer: Sable.Core's <c>RawPtr</c>, or a struct whose one

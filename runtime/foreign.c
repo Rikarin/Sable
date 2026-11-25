@@ -155,7 +155,7 @@ int64_t sable_callback_begin(int64_t closure, bool confined) {
     CallbackCell *cell = callback_cell(place);
     memcpy(cell->closure, (const void *)(intptr_t)closure, sizeof cell->closure);
     cell->thread = confined ? &this_thread_mark : NULL;
-    uint64_t generation = (__atomic_load_n(&cell->state, __ATOMIC_RELAXED) >> 32) + 1 & generation_mask();
+    uint64_t generation = ((__atomic_load_n(&cell->state, __ATOMIC_RELAXED) >> 32) + 1) & generation_mask();
     generation = generation == 0 ? 1 : generation;
     __atomic_store_n(&cell->state, generation << 32, __ATOMIC_RELEASE);
     return (int64_t)(generation << CONTEXT_INDEX_BITS | place);

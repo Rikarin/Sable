@@ -5,8 +5,6 @@ module Sable.Interop
 /// `withCString` is enough; this is for what C keeps.
 ///
 /// ```sable
-/// import Sable.Interop
-///
 /// let name = try! CString("config")
 /// assert(name.cStr.count == 6)
 /// assert(name.string == "config")

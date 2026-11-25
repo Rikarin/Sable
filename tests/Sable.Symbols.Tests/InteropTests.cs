@@ -75,6 +75,67 @@ public sealed class InteropTests {
         Assert.Contains("has a body", ErrorsIn("@export(\"c\", \"e\")\nfn e() -> I32").First(static e => e.Code == ErrorCode.ERR_MalformedForeign).Message,
             StringComparison.Ordinal);
 
+    [Fact]
+    public void PointersCross() =>
+        AssertClean(
+            """
+            struct Handle {
+                at: RawPtr<Opaque>
+            }
+            struct Node {
+                next: RawPtr<Node>
+                value: I32
+            }
+            @extern("c")
+            unsafe fn take(_ p: RawPtr<U8>, _ q: NonNull<Int>, _ h: Handle, _ n: Node, _ rest: CVarArg...) -> RawPtr<RawPtr<Opaque>>
+            @extern("c")
+            fn give() -> RawPtr<String>
+            @export("seen")
+            fn seen(_ p: RawPtr<Int>) -> Bool => p.isNull
+            """
+        );
+
+    [Theory]
+    [InlineData("@extern(\"c\")\nfn f(_ p: RawPtr<U8>)", "'p'")]
+    [InlineData("@extern(\"c\")\nfn f(_ n: Int, _ p: NonNull<U8>)", "'p'")]
+    [InlineData("struct S {\n    a: Int\n    b: RawPtr<U8>\n}\n@extern(\"c\")\nfn f(_ s: S)", "'s'")]
+    public void AnExternGivenAPointerIsUnsafe(string source, string names) =>
+        Assert.Contains(names, AssertReports(ErrorCode.ERR_ForeignPointerNotUnsafe, source).Message, StringComparison.Ordinal);
+
+    [Fact]
+    public void AStructWithAPointerDoesNotCrossOnWebAssembly() {
+        const string source = "module M\nstruct S {\n    a: Int\n    b: RawPtr<U8>\n}\n@extern(\"c\")\nunsafe fn f(_ s: S, _ p: RawPtr<S>) -> RawPtr<U8>";
+        Diagnostic[] Errors(ParseOptions options) =>
+            [..Compilation.Create([SyntaxTree.Parse(new SourceText(source, "m.sb"), options)]).GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error)];
+        Assert.Empty(Errors(ParseOptions.Default));
+        Assert.Contains("32", Assert.Single(Errors(ParseOptions.Default.ForTarget("wasi", "wasm32"))).Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALocalFunctionIsNotExtern() =>
+        Assert.Contains("local", AssertReports(ErrorCode.ERR_MalformedForeign, "fn f() {\n    @extern(\"c\")\n    fn abs(_ n: I32) -> I32\n}").Message, StringComparison.Ordinal);
+
+    [Fact]
+    public void AClosuresTypeSettlesTheOnesAfterIt() =>
+        AssertClean(
+            """
+            fn both<F, R>(_ f: F, _ g: (F) -> R) -> R { return g(f) }
+            fn f() -> Int {
+                return both({ (n: Int) in n + 1 }) { h in h(2) }
+            }
+            """
+        );
+
+    [Fact]
+    public void ANamedFunctionSettlesAParameterOfAnyType() =>
+        AssertClean(
+            """
+            fn keep<F>(_ f: F) -> F { return f }
+            fn twice(_ n: Int) -> Int { return n * 2 }
+            fn f() -> Int { return keep(twice)(4) }
+            """
+        );
+
     [Theory]
     [InlineData("@extern(\"c\", \"puts\")\nfn puts(_ text: String) -> I32", "'String' is not a C type")]
     [InlineData("@extern(\"c\")\nfn f(_ x: Int?) -> I32", "not a C type")]

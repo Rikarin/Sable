@@ -1588,6 +1588,11 @@ public sealed partial class Binder {
             return Record(statement, new BoundBlock(statement, [], []));
         }
 
+        foreach (var attribute in declaration.Attributes.Where(static a => a.Name.ToString().Trim() is "extern" or "export")) {
+            _diagnostics.Error(ErrorCode.ERR_MalformedForeign, attribute.Span,
+                $"an '@{attribute.Name.ToString().Trim()}' function is one of the module's: C has no local functions");
+        }
+
         var function = _compilation.DeclareLocalFunction(declaration, _containingSymbol, _scope);
 
         // Declared before the body is bound, so the function can call itself.

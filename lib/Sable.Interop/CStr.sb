@@ -9,8 +9,6 @@ module Sable.Interop
 /// how long that is; `string` and `bytes` are copies.
 ///
 /// ```sable
-/// import Sable.Interop
-///
 /// "naïve".withCString { text in
 ///     assert(text.count == 6)
 ///     assert(text.string == "naïve")

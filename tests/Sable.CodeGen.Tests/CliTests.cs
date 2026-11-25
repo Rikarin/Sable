@@ -225,6 +225,20 @@ public sealed class CliTests {
                           int hold(Holder h);
                           _Bool is_red(enum Colour c);
                           int match(int in);
+                          struct sealed;
+                          typedef struct Size Extent;
+                          double wide(Extent e);
+                          void (*(*finder)(int))(void);
+                          void *find(void (*(*finder)(int))(void));
+                          struct Bits { int low : 4; };
+                          typedef struct Node { struct Node *next; long value; } Node;
+                          typedef int visit(void *context, const Node *node);
+                          struct sealed *open_sealed(const char *path, unsigned long flags);
+                          int walk(const Node *first, visit *each, void *context);
+                          void each(int (*call)(int, void *), void *context);
+                          void blank(struct Bits *bits);
+                          union Either { int i; float f; };
+                          int either(union Either e);
                           static inline int helper(int x) { return x; }
                           """;
 
@@ -239,6 +253,17 @@ public sealed class CliTests {
                                   int hold(Holder h) { return 0; }
                                   _Bool is_red(enum Colour c) { return c == RED; }
                                   int match(int in) { return in * 2; }
+                                  struct sealed *open_sealed(const char *path, unsigned long flags) { return 0; }
+                                  int walk(const Node *first, visit *each, void *context) {
+                                      int total = 0;
+                                      for (; first; first = first->next) { total += each(context, first); }
+                                      return total;
+                                  }
+                                  void each(int (*call)(int, void *), void *context) { call(1, context); call(2, context); }
+                                  double wide(Extent e) { return e.w; }
+                                  void *find(void (*(*finder)(int))(void)) { return 0; }
+                                  void blank(struct Bits *bits) { }
+                                  int either(union Either e) { return e.i; }
                                   """;
 
     [Fact]
@@ -254,19 +279,30 @@ public sealed class CliTests {
         Assert.Contains("module Shapes", bound, StringComparison.Ordinal);
         Assert.Contains("public struct Point {\n    public var x: I32\n    public var y: I32\n}", bound, StringComparison.Ordinal);
         Assert.Contains("public struct Size {", bound, StringComparison.Ordinal);
-        Assert.Contains("public let GREEN: I32 = 5\npublic let BLUE: I32 = 6", bound, StringComparison.Ordinal);
+        Assert.Contains("public let GREEN: CInt = 5\npublic let BLUE: CInt = 6", bound, StringComparison.Ordinal);
         Assert.Contains("public let SCALE: Int = 3", bound, StringComparison.Ordinal);
         Assert.Contains("public let MASK: Int = 16", bound, StringComparison.Ordinal);
-        Assert.Contains("@extern(\"c\")\npublic fn add(_ a: I32, _ b: I32) -> I32", bound, StringComparison.Ordinal);
+        Assert.Contains("@extern(\"c\")\npublic fn add(_ a: CInt, _ b: CInt) -> CInt", bound, StringComparison.Ordinal);
         Assert.Contains("public fn scale_point(_ p: Point, _ by: I64) -> Point", bound, StringComparison.Ordinal);
-        Assert.Contains("public fn length() -> UInt", bound, StringComparison.Ordinal);
-        Assert.Contains("public fn is_red(_ c: I32) -> Bool", bound, StringComparison.Ordinal);
+        Assert.Contains("public fn length() -> CSize", bound, StringComparison.Ordinal);
+        Assert.Contains("public fn is_red(_ c: CInt) -> Bool", bound, StringComparison.Ordinal);
         // A Sable keyword as a C name is renamed, and the C name kept.
-        Assert.Contains("@extern(\"c\", \"match\")\npublic fn match_(_ in_: I32) -> I32", bound, StringComparison.Ordinal);
-        Assert.Contains("fn name: it returns a pointer", bound, StringComparison.Ordinal);
-        Assert.Contains("fn sum: it takes variable arguments", bound, StringComparison.Ordinal);
-        Assert.Contains("struct Holder: its field 'items' is a pointer", bound, StringComparison.Ordinal);
-        Assert.Contains("fn hold: its parameter 'h' is struct Holder, which is not bound", bound, StringComparison.Ordinal);
+        Assert.Contains("@extern(\"c\", \"match\")\npublic fn match_(_ in_: CInt) -> CInt", bound, StringComparison.Ordinal);
+        Assert.Contains("import Sable.Interop", bound, StringComparison.Ordinal);
+        Assert.Contains("public fn name(_ id: CInt) -> RawPtr<CChar>", bound, StringComparison.Ordinal);
+        Assert.Contains("public unsafe fn sum(_ count: CInt, _ rest: CVarArg...) -> CInt", bound, StringComparison.Ordinal);
+        Assert.Contains("public struct Holder {\n    public var items: RawPtr<CInt>\n}", bound, StringComparison.Ordinal);
+        Assert.Contains("public unsafe fn hold(_ h: Holder) -> CInt", bound, StringComparison.Ordinal);
+        Assert.Contains("public struct Node {\n    public var next: RawPtr<Node>\n    public var value: CLong\n}", bound, StringComparison.Ordinal);
+        Assert.Contains("public enum sealed_ { }", bound, StringComparison.Ordinal);
+        Assert.Contains("public unsafe fn open_sealed(_ path: RawPtr<CChar>, _ flags: CUnsignedLong) -> RawPtr<sealed_>", bound, StringComparison.Ordinal);
+        Assert.Contains("public unsafe fn walk(_ first: RawPtr<Node>, _ each: CFunction<(RawPtr<Opaque>, RawPtr<Node>) -> CInt>, _ context: RawPtr<Opaque>) -> CInt", bound, StringComparison.Ordinal);
+        Assert.Contains("public unsafe fn each(_ call: CFunction<(CInt, RawPtr<Opaque>) -> CInt>, _ context: RawPtr<Opaque>)", bound, StringComparison.Ordinal);
+        Assert.Contains("public alias Extent = Size", bound, StringComparison.Ordinal);
+        Assert.Contains("public unsafe fn find(_ finder: RawPtr<Opaque>) -> RawPtr<Opaque>", bound, StringComparison.Ordinal);
+        Assert.Contains("public enum Bits { }", bound, StringComparison.Ordinal);
+        Assert.Contains("struct Bits: its field 'low' is a bit-field", bound, StringComparison.Ordinal);
+        Assert.Contains("fn either: its parameter 'e' is a union", bound, StringComparison.Ordinal);
         Assert.DoesNotContain("helper", bound, StringComparison.Ordinal);
         Assert.DoesNotContain("int8_t", bound, StringComparison.Ordinal);
 
@@ -275,6 +311,7 @@ public sealed class CliTests {
         var program = $$"""
                         module Main
 
+                        import Sable.Interop
                         import Shapes
 
                         fn main() {
@@ -285,6 +322,26 @@ public sealed class CliTests {
                             print(length())
                             print(is_red(RED))
                             print(match_(21))
+                            unsafe {
+                                print(CStr.viewing(name(1)).string)
+                                var seen = 0
+                                withCallback({ (n: CInt, context: RawPtr<Opaque>) -> CInt in
+                                    seen += Int(n)
+                                    return n
+                                }) { call, context in
+                                    unsafe { each(call, context) }
+                                }
+                                print(seen)
+                                var node = Node(next: RawPtr<Node>.null, value: 5)
+                                let walked = Memory.withPointer(to: &node) { (first: RawPtr<Node>) -> CInt in
+                                    unsafe {
+                                        return walk(first, cFunction { (context: RawPtr<Opaque>, node: RawPtr<Node>) -> CInt in
+                                            unsafe { return CInt(node.load().value * 2) }
+                                        }, RawPtr<Opaque>.null)
+                                    }
+                                }
+                                print(walked)
+                            }
                         }
                         """;
         var result = Pipeline.Compile(
@@ -306,7 +363,7 @@ public sealed class CliTests {
         var executable = Path.Combine(directory, "main");
         var linked = NativeObjects.Link([objectFile, runtime, cObject], executable);
         Assert.True(linked.Succeeded, linked.Output);
-        Assert.Equal("5\n9.0\n6 -9\n7\ntrue\n42\n", PackageFixture.Execute(executable).Output);
+        Assert.Equal("5\n9.0\n6 -9\n7\ntrue\n42\nx\n3\n10\n", PackageFixture.Execute(executable).Output);
     }
 
     [Fact]
@@ -322,7 +379,7 @@ public sealed class CliTests {
         Assert.True(result.ExitCode == 0, result.Errors);
         var bound = File.ReadAllText(Path.Combine(fixture.Root, "app.sb"));
         Assert.Contains("module AppC", bound, StringComparison.Ordinal);
-        Assert.Contains("public fn twice(_ x: I32) -> I32", bound, StringComparison.Ordinal);
+        Assert.Contains("public fn twice(_ x: CInt) -> CInt", bound, StringComparison.Ordinal);
         // The included header's declarations are its own to bind.
         Assert.DoesNotContain("top", bound, StringComparison.Ordinal);
 

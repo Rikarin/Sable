@@ -1,0 +1,18 @@
+module Negative.CFunctions
+
+// What crosses to C, and how (SYNTAX.md §24, #74).
+
+@extern("c")
+fn lengthOf(_ text: RawPtr<I8>) -> UInt  //! S3225 declare it 'unsafe fn'
+
+@extern("c")
+unsafe fn copyOf(_ text: RawPtr<I8>) -> RawPtr<I8>
+
+fn lengths(_ text: RawPtr<I8>) -> RawPtr<I8> {
+    return copyOf(text)  //! S3470
+}
+
+fn outer() {
+    @extern("c")  //! S3223 no local functions
+    fn abs(_ n: I32) -> I32
+}

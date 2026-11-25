@@ -1,0 +1,103 @@
+module CFunctionTests
+
+// CFunction (Sable.Interop): Sable functions C calls, C functions Sable calls
+// by their addresses. Run with
+//     tools/stdlib-coverage.sh Sable.Interop
+
+import Sable.Interop
+import Sable.Testing
+
+alias Compare = (RawPtr<Opaque>, RawPtr<Opaque>) -> CInt
+
+@extern("c", "qsort")
+unsafe fn cSort(_ base: RawPtr<Opaque>, _ count: CSize, _ size: CSize, _ compare: CFunction<(RawPtr<Opaque>, RawPtr<Opaque>) -> CInt>)
+
+@extern("c", "abs")
+fn cAbs(_ n: CInt) -> CInt
+
+@extern("c", "fabs")
+fn cFabs(_ x: F64) -> F64
+
+struct Pair {
+    var x: F64
+    var n: CInt
+}
+
+fn byValue(_ a: RawPtr<Opaque>, _ b: RawPtr<Opaque>) -> CInt {
+    unsafe {
+        return a.cast(to: CInt.self).load() - b.cast(to: CInt.self).load()
+    }
+}
+
+fn swapped(_ pair: Pair, _ by: U8, _ flag: Bool) -> Pair {
+    return Pair(x: F64(pair.n) + F64(by), n: flag ? 7 as CInt : 8 as CInt)
+}
+
+@test
+fn cCallsANamedFunction() {
+    var numbers: CInt[>..] = [5, -2, 9, 0]
+    numbers.withMutablePointer { start in
+        unsafe {
+            cSort(start.cast(to: Opaque.self), 4, 4, cFunction(byValue))
+        }
+    }
+    assertEqual(numbers, [-2, 0, 5, 9])
+}
+
+@test
+fn cCallsAClosureThatCapturesNothing() {
+    var numbers: CInt[>..] = [5, -2, 9, 0]
+    numbers.withMutablePointer { start in
+        unsafe {
+            cSort(start.cast(to: Opaque.self), 4, 4, cFunction { (a: RawPtr<Opaque>, b: RawPtr<Opaque>) -> CInt in byValue(b, a) })
+        }
+    }
+    assertEqual(numbers, [9, 5, 0, -2])
+}
+
+@test
+fn aCFunctionIsAFunctionValue() {
+    unsafe {
+        let absolute = cFunction(cAbs).function()
+        assertEqual(absolute(-5), 5)
+        assertEqual(([-1, 2, -3] as CInt[>..]).map(absolute), [1, 2, 3] as CInt[>..])
+        assertEqual(cFunction(cFabs).function()(-2.5), 2.5)
+    }
+}
+
+@test
+fn structsFloatsAndSmallIntegersCrossBothWays() {
+    unsafe {
+        let call = cFunction(swapped).function()
+        let made = call(Pair(x: 1.5, n: -4), 200, true)
+        assertEqual(made.x, 196.0)
+        assertEqual(made.n, 7)
+        assertEqual(call(Pair(x: 0, n: 0), 0, false).n, 8)
+    }
+}
+
+@test
+fn aFunctionOfNothingIsCalled() {
+    unsafe {
+        cFunction { () in }.function()()
+        assertEqual(cFunction { () -> Bool in true }.function()(), true)
+    }
+}
+
+@test
+fn pointersCompareAndPrint() {
+    let one = cFunction(byValue)
+    assert(one == cFunction(byValue))
+    assert(one != CFunction<(RawPtr<Opaque>, RawPtr<Opaque>) -> CInt>.null)
+    assert(!one.isNull)
+    assert(CFunction<() -> ()>.null.isNull)
+    assertEqual(CFunction<() -> ()>.null.debugDescription(), "null")
+    assert(CFunction<(RawPtr<Opaque>, RawPtr<Opaque>) -> CInt>(pointer: one.pointer) == one)
+}
+
+@test(traps: "a null C function pointer called")
+fn aNullFunctionIsNotCalled() {
+    unsafe {
+        _ = CFunction<() -> ()>.null.function()
+    }
+}

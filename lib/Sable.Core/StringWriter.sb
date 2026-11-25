@@ -29,14 +29,15 @@ public struct StringWriter {
     @inline(always)
     mutating fn makeRoom(_ more: Int) {
         if count + more > buffer.capacity - 8 {
-            self.grow(more)
+            buffer = StringWriter.grown(buffer, count, more)
         }
     }
 
+    // Out of line and by value, so that a writer stays in registers.
     @inline(never)
-    mutating fn grow(_ more: Int) {
+    static fn grown(_ buffer: StringBuffer, _ count: Int, _ more: Int) -> StringBuffer {
         unsafe {
-            buffer = buffer.growing(used: count, capacity: count + more + 8)
+            return buffer.growing(used: count, capacity: count + more + 8)
         }
     }
 
@@ -51,8 +52,10 @@ public struct StringWriter {
     /// The word's lowest 'length' bytes, at most eight, the lowest first.
     @inline(always)
     public mutating fn append(word: U64, length: Int) {
-        precondition(length >= 0 && length <= 8, "a word has eight bytes")
-        self.makeRoom(8)
+        if !(length >= 0 && length <= 8) {
+            stringIndexOutOfRange()
+        }
+        self.makeRoom(length)
         buffer.store(word, at: count)
         count += length
     }
@@ -60,7 +63,7 @@ public struct StringWriter {
     /// The UTF-8 of a code point, which must be a scalar's.
     @inline(always)
     public mutating fn append(codePoint code: Int) {
-        self.makeRoom(8)
+        self.makeRoom(4)
         if code < 0x80 {
             buffer.store(code unchecked as U64, at: count)
             count += 1
@@ -88,6 +91,25 @@ public struct StringWriter {
             buffer.store(utf8: text, from: start, to: end, at: count)
         }
         count += length
+    }
+
+    /// A byte that has been appended.
+    public fn byte(at offset: Int) -> U8 {
+        if !(offset >= 0 && offset < count) {
+            stringIndexOutOfRange()
+        }
+        unsafe {
+            return buffer.load(at: offset)
+        }
+    }
+
+    /// What was appended after the first 'length' bytes taken back; they
+    /// must end between scalars.
+    public mutating fn truncate(to length: Int) {
+        if !(length >= 0 && length <= count) {
+            stringIndexOutOfRange()
+        }
+        count = length
     }
 
     /// The last scalar appended, taken back: its code point, or none when
@@ -120,6 +142,12 @@ public struct StringWriter {
     /// What has been appended, as a string: the writer is done with.
     public unsafe fn finish() -> String {
         return buffer.finish(count: count)
+    }
+
+    /// What has been appended, as a string, if it is well-formed UTF-8, or
+    /// none: the writer is done with either way.
+    public unsafe fn finishIfValid() -> String? {
+        return buffer.finishIfValid(count: count)
     }
 
     /// The room given back, nothing made of it: the writer is done with.

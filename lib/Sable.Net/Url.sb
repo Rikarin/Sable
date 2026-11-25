@@ -25,9 +25,9 @@ public struct Url {
     public internal(set) var host: Host? = none
     /// The port: none when it is the scheme's own (80 for http).
     public internal(set) var port: Int? = none
-    // The path: its segments; or, for a URL whose path is opaque
-    // ("mailto:a@b"), that text alone.
-    var segments: String[>..] = []
+    // The path as it is written, a '/' before each segment; or, for a URL
+    // whose path is opaque ("mailto:a@b"), that text alone.
+    var hierarchicalPath: String = ""
     var opaquePath: String? = none
     /// The query, without its '?': none when there is no '?'.
     public internal(set) var query: String? = none
@@ -44,8 +44,9 @@ public struct Url {
     /// relative; UrlError when it is not one.
     public static fn parse(_ input: String, relativeTo base: Url? = none) throws(UrlError) -> Url {
         var parser = UrlParser(input, base)
-        if let url = parser.run() {
-            return url
+        var url = Url(scheme: "")
+        if parser.parse(&url, .SchemeStart, false) {
+            return move url
         }
         throw UrlError.Invalid(input: input, reason: parser.failure)
     }
@@ -53,7 +54,8 @@ public struct Url {
     /// Whether the text is a URL (relative to the base, if given).
     public static fn canParse(_ input: String, relativeTo base: Url? = none) -> Bool {
         var parser = UrlParser(input, base)
-        return parser.run() != none
+        var url = Url(scheme: "")
+        return parser.parse(&url, .SchemeStart, false)
     }
 
     /// The URL the reference resolves to against this one: RFC 3986's
@@ -77,16 +79,22 @@ public struct Url {
             if let opaque = opaquePath {
                 return opaque
             }
-            var written = ""
-            for segment in segments {
-                written = written + "/" + segment
-            }
-            return written
+            return hierarchicalPath
         }
     }
 
     /// The path's segments; none for an opaque path.
-    public var pathSegments: String[>..]? => if opaquePath != none { none } else { segments }
+    public var pathSegments: String[>..]? {
+        get {
+            if opaquePath != none {
+                return none
+            }
+            if hierarchicalPath.isEmpty {
+                return []
+            }
+            return textOf(hierarchicalPath, 1, hierarchicalPath.utf8Count).split('/')
+        }
+    }
 
     /// The whole URL, written as the standard serializes it.
     public var href: String => serialize(excludingFragment: false)
@@ -171,7 +179,7 @@ public struct Url {
                 written = written + ":\(port)"
             }
         }
-        if host == none && opaquePath == none && segments.count > 1 && segments[0].isEmpty {
+        if host == none && opaquePath == none && hierarchicalPath.hasPrefix("//") {
             written = written + "/."
         }
         written = written + path
@@ -252,7 +260,7 @@ public struct Url {
         if opaquePath != none {
             return false
         }
-        segments = []
+        hierarchicalPath = ""
         var parser = UrlParser(value, none)
         return parser.override(&self, .PathStart)
     }
@@ -298,19 +306,24 @@ public struct Url {
     // ---- Schemes -------------------------------------------------------------
 
     static fn isSpecialScheme(_ scheme: String) -> Bool {
-        return scheme == "http" || scheme == "https" || scheme == "ws" || scheme == "wss" || scheme == "ftp" || scheme == "file"
+        return match scheme.utf8Count {
+            case 2 => scheme == "ws"
+            case 3 => scheme == "wss" || scheme == "ftp"
+            case 4 => scheme == "http" || scheme == "file"
+            case 5 => scheme == "https"
+            case _ => false
+        }
     }
 
     /// The scheme's own port: 80 for http and ws, 443 for https and wss,
     /// 21 for ftp; none for any other.
     public static fn defaultPort(_ scheme: String) -> Int? {
-        return match scheme {
-            case "http"  => 80
-            case "https" => 443
-            case "ws"    => 80
-            case "wss"   => 443
-            case "ftp"   => 21
-            case _       => none
+        return match scheme.utf8Count {
+            case 2 => scheme == "ws" ? 80 : none
+            case 3 => scheme == "wss" ? 443 : scheme == "ftp" ? 21 : none
+            case 4 => scheme == "http" ? 80 : none
+            case 5 => scheme == "https" ? 443 : none
+            case _ => none
         }
     }
 }

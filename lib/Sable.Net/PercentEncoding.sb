@@ -15,30 +15,44 @@ public struct PercentEncoding {
     /// The text with every code point the set holds percent-encoded; a
     /// space as '+' rather than %20 when asked, as forms write it.
     public static fn encode(_ text: String, _ encodeSet: PercentEncodeSet, spaceAsPlus: Bool = false) -> String {
-        var written: U8[>..] = []
-        for c in text {
-            PercentEncoding.append(c.codePoint, encodeSet, spaceAsPlus, &written)
+        return PercentEncoding.encode(text, from: 0, to: text.utf8Count, encodeSet, spaceAsPlus: spaceAsPlus)
+    }
+
+    /// The same of the text's bytes from one offset up to another.
+    static fn encode(_ text: String, from start: Int, to end: Int, _ encodeSet: PercentEncodeSet, spaceAsPlus: Bool = false) -> String {
+        let first = firstByte(text, start, end, among: spaceAsPlus ? encodeSet.bytes.with(0x20) : encodeSet.bytes)
+        if first == end {
+            return textOf(text, start, end)
         }
+        let encoded = spaceAsPlus ? encodeSet.bytes.without(0x20) : encodeSet.bytes
+        let bytes = text.utf8
+        var count = 0
+        for i in first..<end {
+            count += encoded.contains(bytes[i]) ? 1 : 0
+        }
+        let space: U8 = spaceAsPlus ? 0x2B : 0x20
         unsafe {
-            return String.fromUtf8Unchecked(written)
+            let buffer = StringBuffer.allocate(capacity: end - start + 2 * count + 8)
+            var j = 0
+            for i in start..<end {
+                // Which a byte is is not branched on: text may alternate.
+                let byte = bytes[i]
+                let isEncoded = encoded.contains(byte)
+                buffer.store(isEncoded ? percentEncoded(byte) : U64(byte == 0x20 ? space : byte), at: j)
+                j += isEncoded ? 3 : 1
+            }
+            return buffer.finish(count: j)
         }
     }
 
-    static fn append(_ code: Int, _ encodeSet: PercentEncodeSet, _ spaceAsPlus: Bool, _ written: inout U8[>..]) {
-        if spaceAsPlus && code == 0x20 {
-            written.append(0x2B)
-            return
-        }
-        var bytes: U8[>..] = []
-        Char.fromCodePoint(value: code)!.encodeUtf8(into: &bytes)
-        for byte in bytes {
-            if encodeSet.contains(Int(byte)) {
-                written.append(0x25)
-                written.append(hexDigit(Int(byte) >> 4))
-                written.append(hexDigit(Int(byte) & 15))
-            } else {
-                written.append(byte)
-            }
+    /// The text's bytes from one offset up to another, those the set holds
+    /// encoded, at the writer's end.
+    static fn append(_ text: String, from start: Int, to end: Int, _ encoded: ByteSet, into writer: inout StringWriter) {
+        let bytes = text.utf8
+        for i in start..<end {
+            let byte = bytes[i]
+            let isEncoded = encoded.contains(byte)
+            writer.append(word: isEncoded ? percentEncoded(byte) : U64(byte), length: isEncoded ? 3 : 1)
         }
     }
 
@@ -53,30 +67,124 @@ public struct PercentEncoding {
     /// The bytes' percent-encoding decoded: '%' and two hexadecimal digits
     /// as the byte they write, every other byte as it is.
     public static fn decodeBytes(_ bytes: U8[:]) -> U8[>..] {
-        var written: U8[>..] = []
-        var i = 0
-        while i < bytes.count {
-            let byte = bytes[i]
-            if byte == 0x25 && i + 2 < bytes.count && hexValueOf(Int(bytes[i + 1])) >= 0 && hexValueOf(Int(bytes[i + 2])) >= 0 {
-                written.append(U8.truncating(hexValueOf(Int(bytes[i + 1])) * 16 + hexValueOf(Int(bytes[i + 2]))))
-                i += 3
-            } else {
-                written.append(byte)
-                i += 1
-            }
-        }
+        var written = bytes.toArray()
+        let count = PercentEncoding.decodeInPlace(&written)
+        written.removeLast(written.count - count)
         return written
+    }
+
+    /// The bytes decoded where they are: how many that leaves, from the first.
+    static fn decodeInPlace(_ bytes: inout U8[:]) -> Int {
+        let count = bytes.count
+        var i = 0
+        var j = 0
+        while i < count {
+            var byte = bytes[i]
+            i += 1
+            if byte == 0x25 && i + 1 < count {
+                let high = hexValueOf(Int(bytes[i]))
+                let low = hexValueOf(Int(bytes[i + 1]))
+                if (high | low) >= 0 {
+                    byte = (high << 4 | low) unchecked as U8
+                    i += 2
+                }
+            }
+            bytes[j] = byte
+            j += 1
+        }
+        return j
     }
 
     /// The text's percent-encoding decoded, as UTF-8 text: a byte that is
     /// not UTF-8 read as U+FFFD.
     public static fn decodeText(_ text: String) -> String {
-        return String.fromUtf8Lossy(PercentEncoding.decode(text))
+        return PercentEncoding.decodeText(text, from: 0, to: text.utf8Count)
+    }
+
+    /// The same of the text's bytes from one offset up to another.
+    static fn decodeText(_ text: String, from start: Int, to end: Int) -> String {
+        if firstByte(text, start, end, equalTo: 0x25) == end {
+            return textOf(text, start, end)
+        }
+        unsafe {
+            let buffer = StringBuffer.allocate(capacity: end - start)
+            let bytes = text.utf8
+            var i = start
+            var j = 0
+            while i < end {
+                let byte = bytes[i]
+                i += 1
+                if byte == 0x25 && end - i > 1 {
+                    let high = hexDigitValue(bytes[i])
+                    let low = hexDigitValue(bytes[i + 1])
+                    if (high | low) < 0x10 {
+                        buffer.store(high << 4 | low, at: j)
+                        i += 2
+                        j += 1
+                        continue
+                    }
+                }
+                buffer.store(byte, at: j)
+                j += 1
+            }
+            if let decoded = buffer.finishIfValid(count: j) {
+                return decoded
+            }
+        }
+        var bytes: U8[>..] = []
+        bytes.append(utf8: text, from: start, to: end)
+        let count = PercentEncoding.decodeInPlace(&bytes)
+        return String.fromUtf8Lossy(bytes[..<count])
     }
 }
 
-fn hexDigit(_ value: Int) -> U8 {
-    return U8.truncating(value < 10 ? 0x30 + value : 0x41 + value - 10)
+/// What a hexadecimal digit, in either case, is worth; 0xFF for any other byte.
+@inline(always)
+fn hexDigitValue(_ byte: U8) -> U8 {
+    let digit = byte &- 0x30
+    let letter = (byte | 0x20) &- 0x61
+    return digit < 10 ? digit : letter < 6 ? letter &+ 10 : 0xFF
+}
+
+/// The first of the text's bytes from one offset up to another that the set
+/// holds, or the end.
+fn firstByte(_ text: String, _ start: Int, _ end: Int, among stops: ByteSet) -> Int {
+    let bytes = text.utf8
+    var i = start
+    while i < end && !stops.contains(bytes[i]) {
+        i += 1
+    }
+    return i
+}
+
+/// The first of the text's bytes from one offset up to another that is the
+/// one given, or the end.
+fn firstByte(_ text: String, _ start: Int, _ end: Int, equalTo byte: U8) -> Int {
+    let bytes = text.utf8
+    var i = start
+    while i < end && bytes[i] != byte {
+        i += 1
+    }
+    return i
+}
+
+/// The text's bytes from one offset up to another, which are between
+/// scalars: the text itself, when they are all of it.
+fn textOf(_ text: String, _ start: Int, _ end: Int) -> String {
+    if start == 0 && end == text.utf8Count {
+        return text
+    }
+    return text.piece(String.Index(utf8Offset: start)..<String.Index(utf8Offset: end))
+}
+
+/// The byte as '%' and two upper-case hexadecimal digits, the first lowest.
+@inline(always)
+fn percentEncoded(_ byte: U8) -> U64 {
+    let value = U64(byte)
+    let nibbles = value >> 4 | (value & 0x0F) << 8
+    // A byte of one where the nibble is ten or more: 'A' is 7 past '9' + 1.
+    let tens = (nibbles + 0x0606) >> 4 & 0x0101
+    return (nibbles + 0x3030 + tens * 7) << 8 | 0x25
 }
 
 fn hexValueOf(_ code: Int) -> Int {

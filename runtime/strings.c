@@ -903,6 +903,10 @@ static int64_t first_invalid_utf8(const uint8_t *bytes, int64_t length) {
     return -1;
 }
 
+bool sable_string_buffer_valid(const char *bytes, int64_t length) {
+    return first_invalid_utf8((const uint8_t *)bytes, length) < 0;
+}
+
 int64_t sable_string_index_of(const SableString *s, int32_t scalar) {
     int64_t index = 0;
     for (int64_t i = 0; i < s->length; index++) {

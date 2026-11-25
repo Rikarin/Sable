@@ -500,6 +500,13 @@ public sealed class BorrowLoads : ISilPass {
 ///             <c>destroy_value</c> later in the block: <c>%c</c> is <c>%v</c>,
 ///             which now lives as long as the copy did.
 ///         </item>
+///         <item>
+///             <b>A struct only read.</b> <c>%s = struct (%a, %b)</c> whose
+///             fields are read and which is then destroyed — a view of
+///             something, such as a string's <c>utf8</c>: its fields are the
+///             values it was made of, each destroyed where it was, and a
+///             copy made to put in it is then one of the two above.
+///         </item>
 ///     </list>
 /// </remarks>
 public sealed class ForwardCopies : ISilPass {
@@ -526,6 +533,11 @@ public sealed class ForwardCopies : ISilPass {
                         continue;
                     }
 
+                    if (block.Instructions[i] is StructInst made && TryScalarStruct(made, uses)) {
+                        changed = true;
+                        break;
+                    }
+
                     if (block.Instructions[i] is not CopyValueInst copy) {
                         continue;
                     }
@@ -542,6 +554,38 @@ public sealed class ForwardCopies : ISilPass {
                 }
             }
         } while (changed);
+    }
+
+    static bool TryScalarStruct(StructInst made, Uses uses) {
+        if (made.Type.IsTrivial || made.StructType.Deinit is not null || made.StructType.IsInline || !made.Operands.OfType<CopyValueInst>().Any()
+            || uses.Of(made).Any(static u => u is not (StructExtractInst or DestroyValueInst { Uncounted: false }))) {
+            return false;
+        }
+
+        foreach (var use in uses.Of(made).ToList()) {
+            var instructions = use.Block.Instructions;
+            if (use is StructExtractInst extract) {
+                foreach (var reader in uses.Of(extract)) {
+                    for (var i = 0; i < reader.Operands.Count; i++) {
+                        if (ReferenceEquals(reader.Operands[i], extract)) {
+                            reader.SetOperand(i, made.Operands[extract.Field]);
+                        }
+                    }
+                }
+
+                instructions.Remove(extract);
+                continue;
+            }
+
+            var at = instructions.IndexOf(use);
+            instructions.RemoveAt(at);
+            foreach (var field in made.Operands.Where(static o => !o.Type.IsTrivial)) {
+                instructions.Insert(at++, new DestroyValueInst(field) { Block = use.Block, Location = use.Location });
+            }
+        }
+
+        made.Block.Instructions.Remove(made);
+        return true;
     }
 
     static bool TryBorrowedCopy(SilFunction function, SilBlock block, int index, CopyValueInst copy, Uses uses) {

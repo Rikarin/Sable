@@ -1694,7 +1694,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "string_from_utf8_unchecked":
                 return Allocate(new HeapString(Encoding.UTF8.GetString(BytesOf(operands[0]))));
 
-            case "string_buffer_make" or "string_buffer_grow" or "string_buffer_copy" or "string_buffer_take":
+            case "string_buffer_make" or "string_buffer_grow" or "string_buffer_copy" or "string_buffer_valid" or "string_buffer_take":
                 return StringBufferBuiltin(builtin, operands);
 
             case "string_from_ascii_words": {

@@ -2691,6 +2691,7 @@ public static class SilBuiltins {
         Add("string_buffer_make", SilType.Int, SilType.Int);
         Add("string_buffer_grow", SilType.Int, SilType.Int, SilType.Int, SilType.Int);
         Add("string_buffer_copy", SilType.Unit, SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("string_buffer_valid", SilType.Bool, SilType.Int, SilType.Int);
         Add("string_buffer_take", SilType.String, SilType.Int, SilType.Int);
         // The first 'n' bytes of five words, each little-endian, which are
         // ASCII and at most forty: short text made in registers.

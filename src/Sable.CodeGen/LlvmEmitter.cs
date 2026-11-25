@@ -815,6 +815,7 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_string_buffer_make(i64)
                                 declare ptr @sable_string_buffer_grow(ptr, i64, i64)
                                 declare ptr @sable_string_buffer_take(ptr, i64)
+                                declare zeroext i1 @sable_string_buffer_valid(ptr, i64)
                                 declare void @llvm.dbg.declare(metadata, metadata, metadata)
                                 declare void @llvm.dbg.value(metadata, metadata, metadata)
 
@@ -4718,6 +4719,10 @@ public sealed partial class LlvmEmitter {
                     Line($"call void @llvm.memmove.p0.p0.i64(ptr {RawAddress(operands[0])}, ptr {from}, i64 {operands[3]}, i1 false)");
                     return;
                 }
+
+                case "string_buffer_valid":
+                    Line($"{Result()} = call zeroext i1 @sable_string_buffer_valid(ptr {RawAddress(operands[0])}, i64 {operands[1]})");
+                    return;
 
                 case "string_buffer_take":
                     Line($"{Result()} = call ptr @sable_string_buffer_take(ptr {RawAddress(operands[0])}, i64 {operands[1]})");

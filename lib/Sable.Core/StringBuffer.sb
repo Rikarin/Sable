@@ -35,7 +35,9 @@ public struct StringBuffer {
     /// The byte at an offset set.
     @inline(always)
     public fn store(_ byte: U8, at offset: Int) {
-        precondition(offset >= 0 && offset < capacity, "string index out of range")
+        if !(offset >= 0 && offset < capacity) {
+            stringIndexOutOfRange()
+        }
         unsafe {
             RawMemory.initialize(address + offset, byte)
         }
@@ -45,7 +47,9 @@ public struct StringBuffer {
     /// must be room for all of them, though fewer may be what is wanted.
     @inline(always)
     public fn store(_ word: U64, at offset: Int) {
-        precondition(offset >= 0 && offset <= capacity - 8, "string index out of range")
+        if !(offset >= 0 && offset <= capacity - 8) {
+            stringIndexOutOfRange()
+        }
         unsafe {
             RawMemory.initializeUnaligned(address + offset, word)
         }
@@ -53,20 +57,26 @@ public struct StringBuffer {
 
     /// The byte at an offset, which must have been written.
     public unsafe fn load(at offset: Int) -> U8 {
-        precondition(offset >= 0 && offset < capacity, "string index out of range")
+        if !(offset >= 0 && offset < capacity) {
+            stringIndexOutOfRange()
+        }
         return RawMemory.load(address + offset)
     }
 
     /// A text's bytes from one offset up to another copied in from an offset.
     public fn store(utf8 text: String, from start: Int, to end: Int, at offset: Int) {
-        precondition(start >= 0 && start <= end && end <= text.utf8Count && offset >= 0 && offset <= capacity - (end - start), "string index out of range")
+        if !(start >= 0 && start <= end && end <= text.utf8Count && offset >= 0 && offset <= capacity - (end - start)) {
+            stringIndexOutOfRange()
+        }
         StringBuffer.copy(address + offset, text, start, end - start)
     }
 
     /// A buffer with room for at least 'capacity' bytes, its first 'used'
     /// the buffer's own, which is then done with.
     public unsafe fn growing(used: Int, capacity wanted: Int) -> StringBuffer {
-        precondition(used >= 0 && used <= capacity && wanted >= used, "string index out of range")
+        if !(used >= 0 && used <= capacity && wanted >= used) {
+            stringIndexOutOfRange()
+        }
         // Half as much again at least, so that growing a little at a time
         // copies each byte a bounded number of times.
         let half = capacity + capacity / 2
@@ -76,7 +86,22 @@ public struct StringBuffer {
 
     /// The first 'count' bytes as a string: the buffer is done with.
     public unsafe fn finish(count: Int) -> String {
-        precondition(count >= 0 && count <= capacity, "string index out of range")
+        if !(count >= 0 && count <= capacity) {
+            stringIndexOutOfRange()
+        }
+        return StringBuffer.take(address, count)
+    }
+
+    /// The first 'count' bytes as a string, if they are well-formed UTF-8, or
+    /// none: the buffer is done with either way.
+    public unsafe fn finishIfValid(count: Int) -> String? {
+        if !(count >= 0 && count <= capacity) {
+            stringIndexOutOfRange()
+        }
+        if !StringBuffer.isValid(address, count) {
+            self.discard()
+            return none
+        }
         return StringBuffer.take(address, count)
     }
 
@@ -94,6 +119,15 @@ public struct StringBuffer {
     @builtin("string_buffer_copy")
     static fn copy(_ address: Int, _ text: String, _ from: Int, _ count: Int)
 
+    @builtin("string_buffer_valid")
+    static fn isValid(_ address: Int, _ count: Int) -> Bool
+
     @builtin("string_buffer_take")
     static fn take(_ address: Int, _ count: Int) -> String
+}
+
+// Out of line, so that a check is a comparison and a branch never taken.
+@inline(never)
+fn stringIndexOutOfRange() -> Never {
+    fatalError("string index out of range")
 }

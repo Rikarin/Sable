@@ -195,6 +195,10 @@ public sealed partial class SilInterpreter {
         }
 
         var address = (long)operands[0]!;
+        if (builtin.Name == "string_buffer_valid") {
+            return System.Text.Unicode.Utf8.IsValid(_rawBlocks[address].Bytes.AsSpan(0, (int)(long)operands[1]!));
+        }
+
         if (!_rawBlocks.Remove(address, out var buffer)) {
             throw new SilTrap("a string buffer used after it was finished");
         }

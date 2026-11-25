@@ -103,6 +103,34 @@ public union Host {
     /// The host the text writes — a domain, an address or, when the URL is
     /// not special, an opaque host — or none when it is not one.
     public static fn parse(_ input: String, special: Bool) -> Host? {
+        return Host.parse(input, from: 0, to: input.utf8Count, special: special)
+    }
+
+    /// The host the text's bytes from one offset up to another write.
+    static fn parse(_ text: String, from start: Int, to end: Int, special: Bool) -> Host? {
+        if special && start < end {
+            // A name in plain ASCII, the usual host; its last label is no
+            // number, nor then is the name an address, unless it starts with a digit.
+            let notPlain = Host.notPlainDomain
+            let bytes = text.utf8
+            var last = start
+            var upper = false
+            var i = start
+            while i < end {
+                let byte = bytes[i]
+                if notPlain.contains(byte) {
+                    break
+                }
+                i += 1
+                last = byte == 0x2E ? i : last
+                upper = upper || byte &- 0x41 < 26
+            }
+            if i == end && last < end && bytes[last] &- 0x30 >= 10 {
+                let name = textOf(text, start, end)
+                return .Domain(upper ? name.asciiLowercased() : name)
+            }
+        }
+        let input = textOf(text, start, end)
         let codes = input.unicodeScalarValues()
         if !codes.isEmpty && codes[0] == 0x5B {
             if codes[codes.count - 1] != 0x5D {
@@ -146,17 +174,17 @@ public union Host {
     }
 
     static fn parseOpaque(_ codes: Int[:]) -> Host? {
-        var written: U8[>..] = []
         for code in codes {
             if Host.isForbiddenHost(code) {
                 return none
             }
-            PercentEncoding.append(code, .C0Control, false, &written)
         }
-        unsafe {
-            return .Opaque(String.fromUtf8Unchecked(written))
-        }
+        return .Opaque(PercentEncoding.encode(stringOf(codes), .C0Control))
     }
+
+    // The bytes a name in plain ASCII has none of: those forbidden in a
+    // domain, '%' among them, and any above ASCII.
+    static var notPlainDomain: ByteSet => ByteSet(low: 0xD400_8029_FFFF_FFFF, high: 0x9000_0000_7800_0001)
 
     // The WHATWG's "domain to ASCII", beStrict false: a domain that is
     // ASCII already is lower-cased, its "xn--" labels not decoded to check —

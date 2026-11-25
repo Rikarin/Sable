@@ -87,13 +87,13 @@ TARGET static int64_t NAME(poly1305)(Poly1305 *poly, const uint8_t *data, int64_
     const LANES mask = 0x3FFFFFF - (LANES){0};
     const LANES one = 0x1000000 - (LANES){0};
     const LANES none[5] = {{0}};
-    FACTOR a[5], near[5], near5[5], far[5], far5[5];
+    FACTOR a[5], first[5], first5[5], second[5], second5[5];
     LANES sum[5] = {{0}}, d[5];
     for (int i = 0; i < 5; i++) {
-        near[i] = FACTOR_ALL(poly->power[L - 1][i]);
-        near5[i] = FACTOR_ALL(5 * poly->power[L - 1][i]);
-        far[i] = FACTOR_ALL(poly->power[2 * L - 1][i]);
-        far5[i] = FACTOR_ALL(5 * poly->power[2 * L - 1][i]);
+        first[i] = FACTOR_ALL(poly->power[L - 1][i]);
+        first5[i] = FACTOR_ALL(5 * poly->power[L - 1][i]);
+        second[i] = FACTOR_ALL(poly->power[2 * L - 1][i]);
+        second5[i] = FACTOR_ALL(5 * poly->power[2 * L - 1][i]);
     }
 
     // What has been summed already goes on with the first block.
@@ -106,9 +106,9 @@ TARGET static int64_t NAME(poly1305)(Poly1305 *poly, const uint8_t *data, int64_
     int64_t left = whole;
     for (; left > 32 * L; left -= 32 * L, data += 32 * L) {
         TAKE(a, sum, data);
-        PRODUCT(d, FIRST_PRODUCT, a, far, far5);
+        PRODUCT(d, FIRST_PRODUCT, a, second, second5);
         TAKE(a, none, data + 16 * L);
-        PRODUCT(d, MULTIPLY_ADD, a, near, near5);
+        PRODUCT(d, MULTIPLY_ADD, a, first, first5);
         CARRY(d);
         SABLE_UNROLL
         for (int i = 0; i < 5; i++) {
@@ -118,7 +118,7 @@ TARGET static int64_t NAME(poly1305)(Poly1305 *poly, const uint8_t *data, int64_
 
     // The last stride, its second half by the power each lane is short of.
     TAKE(a, sum, data);
-    PRODUCT(d, FIRST_PRODUCT, a, near, near5);
+    PRODUCT(d, FIRST_PRODUCT, a, first, first5);
     CARRY(d);
     TAKE(a, d, data + 16 * L);
     for (int i = 0; i < 5; i++) {
@@ -127,11 +127,11 @@ TARGET static int64_t NAME(poly1305)(Poly1305 *poly, const uint8_t *data, int64_
             power[lane] = poly->power[L - 1 - order[lane]][i];
         }
 
-        near[i] = FACTOR_OF(power);
-        near5[i] = FACTOR_OF(power + (power << 2));
+        first[i] = FACTOR_OF(power);
+        first5[i] = FACTOR_OF(power + (power << 2));
     }
 
-    PRODUCT(d, FIRST_PRODUCT, a, near, near5);
+    PRODUCT(d, FIRST_PRODUCT, a, first, first5);
     CARRY(d);
     uint64_t total[5];
     for (int i = 0; i < 5; i++) {

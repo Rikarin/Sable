@@ -1,0 +1,31 @@
+module TimeoutBench
+
+import Sable.Concurrency
+import Sable.Time
+
+// withTimeout that is never reached: a hundred tasks, each doing four
+// hundred things with ten seconds to do each, the timer set and cancelled.
+
+@main
+fn main() async {
+    let total = await withTaskGroup(of: Int.self) { group -> Int in
+        for _ in 0..<100 {
+            group.spawn {
+                var sum = 0
+                for i in 0..<400 {
+                    sum += try! await withTimeout(Duration.seconds(10)) {
+                        await yieldNow()
+                        return i
+                    }
+                }
+                return sum
+            }
+        }
+        var all = 0
+        for await part in group {
+            all += part
+        }
+        return all
+    }
+    print(total)
+}

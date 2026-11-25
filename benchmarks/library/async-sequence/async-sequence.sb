@@ -1,0 +1,22 @@
+module AsyncSequenceBench
+
+// The async sequences' operators over two million numbers that are there at
+// once: filter, map, prefix, chunked and zip.
+
+@main
+fn main() async {
+    let squares = await (0..<1000000).async
+        .filter { $0 % 3 != 0 }
+        .map { $0 * 2 + 1 }
+        .prefix(600000)
+        .reduce(0) { $0 + $1 }
+    var chunks = 0
+    for await chunk in (0..<500000).async.chunked(16) {
+        chunks += chunk.count * chunk[0]
+    }
+    var zipped = 0
+    for await (a, b) in zip((0..<500000).async, (0..<500000).async.map { $0 + 1 }) {
+        zipped += a ^ b
+    }
+    print("\(squares) \(chunks) \(zipped)")
+}

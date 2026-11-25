@@ -1,0 +1,31 @@
+module FileCopyBench
+
+import Sable.IO
+
+// File.copy: a thousand copies of a file of four thousand bytes and ten of
+// one of four million, each over the copy before, which is then asked its
+// size.
+// The paths are absolute, as resolving a relative one is costly in .NET.
+
+@main
+fn main() throws(IoError) {
+    let small = FilePath("file-copy-sable-small.bin").absolute()
+    let large = FilePath("file-copy-sable-large.bin").absolute()
+    let copy = FilePath("file-copy-sable-copy.bin").absolute()
+    try File.writeBytes(small, U8[>..](repeating: 7, count: 4000))
+    try File.writeBytes(large, U8[>..](repeating: 9, count: 4000000))
+    var total = 0
+    for _ in 0..<1000 {
+        try File.copy(from: small, to: copy)
+        total += (try File.metadata(copy)).size
+    }
+    for _ in 0..<10 {
+        try File.copy(from: large, to: copy)
+        total += (try File.metadata(copy)).size
+    }
+    let last = try File.readBytes(copy)
+    try File.remove(small)
+    try File.remove(large)
+    try File.remove(copy)
+    print("\(total) \(last.count) \(last[last.count - 1])")
+}

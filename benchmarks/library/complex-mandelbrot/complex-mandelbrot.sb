@@ -1,0 +1,31 @@
+module ComplexMandelbrotBench
+
+import Sable.Math
+
+// Complex<F64>'s +, * and /: the Mandelbrot set over a grid of 640 by 480,
+// up to two hundred rounds a point, then a continued fraction of half a
+// million quotients.
+
+@main
+fn main() {
+    var rounds = 0
+    for row in 0..<480 {
+        for column in 0..<640 {
+            let c = Complex(F64(column) / 256.0 - 2.0, F64(row) / 192.0 - 1.25)
+            var z = Complex<F64>.zero
+            var count = 0
+            while count < 200 && z.magnitudeSquared <= 4.0 {
+                z = z * z + c
+                count += 1
+            }
+            rounds += count
+        }
+    }
+    var w = Complex(1.0, 0.0)
+    var total = Complex<F64>.zero
+    for i in 0..<500000 {
+        w = Complex(1.0, 0.5) / (w + Complex(2.0, F64(i % 16) / 16.0))
+        total = total + w
+    }
+    print("\(rounds) \(total.real:.3f) \(total.imaginary:.3f)")
+}

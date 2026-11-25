@@ -10,12 +10,14 @@
 // milliseconds, on standard error: processor time (user and system) in the
 // steady state, which is the hardest .NET time to match. Processor time
 // rather than wall time, as tools/bench/compare.py measures Sable, so that
-// a busy machine skews both sides less. Integer arithmetic is checked, as
+// a busy machine skews both sides less, and that of the processes it waited
+// for, as compare.py counts Sable's. Integer arithmetic is checked, as
 // Sable's is.
 
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 
 var benchmarks = new SortedDictionary<string, Func<string>>(StringComparer.Ordinal);
 foreach (var type in Assembly.GetExecutingAssembly().GetTypes()) {
@@ -45,9 +47,9 @@ do {
 
 for (var i = 0; i < runs; i++) {
     // Not Process.TotalProcessorTime, which on Linux counts ticks of 10 ms.
-    var before = Environment.CpuUsage.TotalTime;
+    var before = Environment.CpuUsage.TotalTime + ChildUsage.TotalTime;
     output = run();
-    times.Add((Environment.CpuUsage.TotalTime - before).TotalMilliseconds);
+    times.Add((Environment.CpuUsage.TotalTime + ChildUsage.TotalTime - before).TotalMilliseconds);
 }
 
 Console.WriteLine(output);
@@ -58,4 +60,36 @@ return 0;
 [AttributeUsage(AttributeTargets.Class)]
 sealed class BenchmarkAttribute(string name) : Attribute {
     public string Name { get; } = name;
+}
+
+/// <summary>The processor time of this process's children that have ended and been waited for.</summary>
+static class ChildUsage {
+    // struct rusage of 64-bit Linux and macOS: two timevals, whose
+    // microseconds are a long in one and an int and padding in the other,
+    // then fourteen longs.
+    [StructLayout(LayoutKind.Sequential, Size = 144)]
+    struct Usage {
+        public long UserSeconds;
+        public int UserMicroseconds;
+        int userPadding;
+        public long SystemSeconds;
+        public int SystemMicroseconds;
+        int systemPadding;
+    }
+
+    const int Children = -1;
+
+    [DllImport("libc", EntryPoint = "getrusage")]
+    static extern int GetUsage(int who, out Usage usage);
+
+    public static TimeSpan TotalTime {
+        get {
+            if (OperatingSystem.IsWindows() || GetUsage(Children, out var usage) != 0) {
+                return TimeSpan.Zero;
+            }
+
+            return TimeSpan.FromSeconds(usage.UserSeconds + usage.SystemSeconds)
+                + TimeSpan.FromMicroseconds((long)usage.UserMicroseconds + usage.SystemMicroseconds);
+        }
+    }
 }

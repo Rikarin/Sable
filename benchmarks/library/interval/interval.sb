@@ -1,0 +1,28 @@
+module IntervalBench
+
+import Sable.Concurrency
+import Sable.Time
+
+// Interval: a thousand tasks, each hearing fifty ticks five milliseconds
+// apart, so the work is that of fifty thousand timers and not the waiting.
+
+@main
+fn main() async {
+    let total = await withTaskGroup(of: Int.self) { group -> Int in
+        for _ in 0..<1000 {
+            group.spawn {
+                var ticks = 0
+                for await _ in Interval(every: Duration.milliseconds(5)).prefix(50) {
+                    ticks += 1
+                }
+                return ticks
+            }
+        }
+        var all = 0
+        for await part in group {
+            all += part
+        }
+        return all
+    }
+    print(total)
+}

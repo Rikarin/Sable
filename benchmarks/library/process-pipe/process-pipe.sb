@@ -1,0 +1,35 @@
+module ProcessPipeBench
+
+import Sable.Process
+
+// A child's pipes: sixty-four million bytes written to cat's input by one
+// task and read back from its output by another. The time is the child's
+// too.
+
+@main
+fn main() async throws {
+    let child = try Command("cat").stdin(Stdio.Piped).stdout(Stdio.Piped).spawn()
+    let input = child.stdin!
+    let writing = Task.spawn {
+        let bytes = U8[>..](repeating: 42, count: 64000)
+        for _ in 0..<1000 {
+            try! await input.write(bytes)
+        }
+        input.close()
+    }
+    let output = child.stdout!
+    var count = 0
+    var total = 0
+    while true {
+        let bytes = try await output.read(upTo: 65536)
+        if bytes.isEmpty {
+            break
+        }
+        count += bytes.count
+        // One byte of the page: the bytes are there, and nothing else is timed.
+        total += Int(bytes[bytes.count / 2] - 42)
+    }
+    await writing.value
+    let status = try await child.wait()
+    print("\(count) \(total) \(status.success)")
+}

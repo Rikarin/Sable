@@ -1,0 +1,41 @@
+module PipeBench
+
+import Sable.IO
+
+// Pipe: one task writes forty million bytes, a thousand at a time, and
+// another reads them, counting the lines.
+
+@main
+fn main() async throws {
+    let pipe = Pipe()
+    let writing = Task.spawn {
+        var bytes = U8[>..](repeating: 120, count: 1000)
+        bytes[499] = 10
+        bytes[999] = 10
+        for _ in 0..<40000 {
+            try! await pipe.writer.write(bytes)
+        }
+        await pipe.writer.complete()
+    }
+    var count = 0
+    var lines = 0
+    while true {
+        let result = await pipe.reader.read()
+        let buffer = result.buffer
+        count += buffer.count
+        for i in 0..<buffer.segmentCount {
+            var rest = buffer.segment(i)
+            while let at = rest.firstIndex(of: 10) {
+                lines += 1
+                rest = rest[at + 1..<rest.count]
+            }
+        }
+        await pipe.reader.advance(consumed: buffer.count)
+        if result.isCompleted {
+            break
+        }
+    }
+    await pipe.reader.complete()
+    await writing.value
+    print("\(count) \(lines)")
+}

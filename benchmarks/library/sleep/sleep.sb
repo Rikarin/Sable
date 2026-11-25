@@ -1,0 +1,25 @@
+module SleepBench
+
+import Sable.Concurrency
+import Sable.Time
+
+// Task.sleep: twenty thousand tasks at once, each sleeping one to twenty
+// milliseconds, twice.
+
+@main
+fn main() async {
+    var tasks: Task<Int>[>..] = []
+    for i in 0..<20000 {
+        tasks.append(
+            Task.spawn {
+                try? await Task.sleep(for: Duration.milliseconds(i % 20 + 1))
+                try? await Task.sleep(for: Duration.milliseconds(i % 7 + 1))
+                return i
+            })
+    }
+    var total = 0
+    for task in tasks {
+        total += await task.value
+    }
+    print(total)
+}

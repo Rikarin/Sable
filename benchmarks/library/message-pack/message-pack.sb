@@ -1,0 +1,46 @@
+module MessagePackBench
+
+import Sable.Serialize
+
+// MessagePack: ten thousand orders of three items each, derived both ways,
+// encoded and read back, four times over. Sable only.
+
+@derive(Serializable)
+struct Item {
+    var sku: String
+    var quantity: Int
+    var price: F64
+}
+
+@derive(Serializable)
+struct Order {
+    var id: Int
+    var customer: String
+    var paid: Bool
+    var note: String?
+    var items: Item[>..]
+}
+
+@main
+fn main() throws(SerializeError) {
+    var orders: Order[>..] = []
+    for i in 0..<10000 {
+        var items: Item[>..] = []
+        for k in 0..<3 {
+            items.append(Item(sku: "SKU-\(i % 977)-\(k)", quantity: (i + k) % 7 + 1, price: F64((i * 3 + k) % 1000) + 0.25))
+        }
+        orders.append(Order(id: i, customer: "customer \(i % 5003)", paid: i % 3 == 0, note: i % 4 == 0 ? "leave at the door" : none, items: items))
+    }
+    var size = 0
+    var quantity = 0
+    for _ in 0..<4 {
+        let bytes = try MessagePack.encode(orders)
+        size += bytes.count
+        for order in try MessagePack.decode(Order[>..].self, from: bytes) {
+            for item in order.items {
+                quantity += item.quantity
+            }
+        }
+    }
+    print("\(size) \(quantity)")
+}

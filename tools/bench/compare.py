@@ -8,7 +8,8 @@ ports there are of it: <name>.cs, <name>.rs and <name>.c. The sets are
 'library', the standard library's types and functions, each ported where a
 language's own standard library has an equal, and 'programs', the language.
 
-A benchmark without a port in a language is a dash in its column. Ports must
+A benchmark without a port in a language is a dash in its column: one of
+'library' may have none, its time there to be seen. Ports must
 print what the Sable program does; one that prints something else, or does
 not build or run, is reported in the tables and fails the script, after the
 rest have run. Being slower never does.
@@ -220,7 +221,7 @@ def main():
             tools["dotnet"] = build(DOTNET, scratch / "dotnet", "Benchmarks")
 
         benchmarks = [Benchmark(path.parent) for group in SETS for path in sorted((BENCHMARKS / group).glob("*/*.sb"))]
-        benchmarks = [b for b in benchmarks if any(b.ports.values())]
+        benchmarks = [b for b in benchmarks if b.group == "library" or any(b.ports.values())]
         if arguments.names:
             for name in arguments.names:
                 if not any(name in (b.name, f"{b.group}/{b.name}") for b in benchmarks):

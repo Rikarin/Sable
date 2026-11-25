@@ -401,6 +401,8 @@ static int32_t polling;
 static int64_t io_waiting, blocking_running;
 // Waiting for a background event, which alone keeps no program going.
 static int64_t background_waiting;
+// How many times a task has begun, or ended, such a wait.
+static int64_t background_changes;
 
 // Tasks that wait until no other can go on (Task.settle()), the first to
 // wait first: woken one at a time, each as 'active' comes to nothing. While
@@ -1065,6 +1067,10 @@ static int64_t io_source_open(PlatformSocket socket, uint8_t kind, uint8_t ready
 // waiting, so the program never looks finished between.
 static void io_resume(SableTask *task) {
     __atomic_fetch_add(&active, 1, __ATOMIC_SEQ_CST);
+    if (task->io_background) {
+        __atomic_fetch_add(&background_changes, 1, __ATOMIC_SEQ_CST);
+    }
+
     __atomic_fetch_sub(task->io_background ? &background_waiting : &io_waiting, 1, __ATOMIC_SEQ_CST);
     schedule(task);
     active_done();
@@ -1297,6 +1303,10 @@ static void io_wait_after_suspend(SableTask *task, IoSource *source) {
     int direction = task->io_direction;
     spin_lock(&source->lock);
     task->io_background = source->kind == SOURCE_BACKGROUND || source->kind == SOURCE_WATCH;
+    if (task->io_background) {
+        __atomic_fetch_add(&background_changes, 1, __ATOMIC_SEQ_CST);
+    }
+
     __atomic_fetch_add(task->io_background ? &background_waiting : &io_waiting, 1, __ATOMIC_SEQ_CST);
     bool go_on = (source->ready & (direction == 0 ? REACTOR_READABLE : REACTOR_WRITABLE)) != 0 || source->socket == -1
                  || source_handle(source) != task->io_handle;
@@ -2425,15 +2435,30 @@ static void main_loop(SableTask *until) {
 
         mutex_lock(&park_lock);
         __atomic_store_n(&main_waiting, 1, __ATOMIC_SEQ_CST);
+        int64_t changes = __atomic_load_n(&background_changes, __ATOMIC_SEQ_CST);
+        bool background = __atomic_load_n(&background_waiting, __ATOMIC_SEQ_CST) != 0;
         bool idle = worker_count <= 0 ? __atomic_load_n(&queued, __ATOMIC_SEQ_CST) == 0 : __atomic_load_n(&main_head, __ATOMIC_SEQ_CST) == NULL;
-        if (idle && quiescent() && (until == NULL || __atomic_load_n(&background_waiting, __ATOMIC_SEQ_CST) == 0)) {
-            __atomic_store_n(&main_waiting, 0, __ATOMIC_SEQ_CST);
-            mutex_unlock(&park_lock);
-            if (until != NULL) {
-                sable_trap("every task is waiting: the program cannot go on");
+        if (idle && quiescent()) {
+            if (until == NULL) {
+                __atomic_store_n(&main_waiting, 0, __ATOMIC_SEQ_CST);
+                mutex_unlock(&park_lock);
+                return;
             }
 
-            return;
+            // None runs, and none waits for what may yet come — a signal, a
+            // file's change: so it was throughout, if no such wait began or
+            // ended as it was asked. One that did is asked about again.
+            if (!background || __atomic_load_n(&background_waiting, __ATOMIC_SEQ_CST) == 0) {
+                bool still = !background && __atomic_load_n(&background_waiting, __ATOMIC_SEQ_CST) == 0
+                             && __atomic_load_n(&background_changes, __ATOMIC_SEQ_CST) == changes;
+                __atomic_store_n(&main_waiting, 0, __ATOMIC_SEQ_CST);
+                mutex_unlock(&park_lock);
+                if (still) {
+                    sable_trap("every task is waiting: the program cannot go on");
+                }
+
+                continue;
+            }
         }
 
         if (idle && worker_count <= 0 && __atomic_load_n(&reactor_on, __ATOMIC_ACQUIRE)) {

@@ -168,15 +168,20 @@ final class TestClockState<I: ClockInstant> {
                 return 0
             }
             s.lastId += 1
-            s.add(TestSleeper<I> { id: s.lastId, deadline: deadline, woken: woken })
             return s.lastId
         }
         if id == 0 {
             await Task.yield()
             return
         }
-        changed.wakeAll()
+        // It is among the sleepers only once a cancel would take it out.
         await withTaskCancellationHandler(operation: {
+            self.sleepers.withLock { (s: inout TestSleepers<I>) -> Void in
+                if s.now < deadline {
+                    s.add(TestSleeper<I> { id: id, deadline: deadline, woken: woken })
+                }
+            }
+            self.changed.wakeAll()
             while true {
                 let ticket = woken.ticket
                 if !self.isAsleep(id) || Task.isCancelled {

@@ -371,4 +371,279 @@ public sealed class LanguageGapTests {
             }
             """).Stdout
         );
+
+    /// <summary>A type test, a cast or a pattern of an optional is of what it holds (#335).</summary>
+    [Fact]
+    public void AnOptionalIsTestedAndCastByWhatItHolds() =>
+        Assert.Equal(
+            """
+            true
+            false
+            true
+            bad
+            bad false
+            false
+            true
+            not
+            other
+            else
+            false
+            false
+            not
+            none
+            else
+            true
+            4
+            false
+            0
+            true
+            true
+            false
+            false
+            false
+            false
+
+            """,
+            Programs.AssertAgree("""
+            module C335a
+
+            import Sable.IO
+
+            enum Bad: Error {
+                A
+                B
+            }
+
+            struct Other: Error {}
+
+            protocol Shape {
+                fn area() -> Int
+            }
+
+            struct Sq: Shape {
+                let n: Int
+                fn area() -> Int {
+                    return n
+                }
+            }
+
+            class Base {}
+            class Derived: Base {}
+
+            fn test(_ e: (any Error)?) {
+                print(e is Bad)
+                print(e is Other)
+                if let b = e as? Bad {
+                    print(b == Bad.A)
+                } else {
+                    print("not")
+                }
+                match e {
+                    case is Bad => print("bad")
+                    case is Other => print("other")
+                    case none => print("none")
+                    default => print("else")
+                }
+                match e {
+                    case let b as Bad => print("bad \(b == Bad.B)")
+                    default => print("else")
+                }
+            }
+
+            fn shape(_ s: (any Shape)?) {
+                print(s is Sq)
+                print((s as? Sq)?.n ?? 0)
+            }
+
+            fn cls(_ s: Base?) {
+                print(s is Derived)
+                print((s as? Derived) != none)
+            }
+
+            fn gen<T>(_ s: T?) {
+                print(s is Int)
+            }
+
+            @main
+            fn main() {
+                test(Bad.A)
+                test(Other())
+                test(none)
+                shape(Sq(n: 4))
+                shape(none)
+                cls(Derived())
+                cls(Base())
+                cls(none)
+            }
+            """).Stdout
+        );
+
+    /// <summary>Of a class, a generic type and nested optionals too.</summary>
+    [Fact]
+    public void OptionalsOfEveryKindAreTestedAndCast() =>
+        Assert.Equal(
+            """
+            made
+            true
+            made
+            false
+            made
+            true
+            bad
+            derived
+            sq
+            d
+            4
+            x
+            true
+            true
+            3
+            int 4
+            string
+            other
+            other
+            true
+            false
+            int 3
+            none
+            true
+            q
+            false
+            made
+            false
+
+            """,
+            Programs.AssertAgree("""
+            module C335b
+
+            import Sable.IO
+
+            enum Bad: Error {
+                A
+                B
+            }
+
+            protocol Named {
+                fn name() -> String
+            }
+
+            struct Sq: Named {
+                let n: Int
+                fn name() -> String {
+                    return "sq\(n)"
+                }
+            }
+
+            class Base {}
+            class Derived: Base, Named {
+                let text: String
+                init(_ text: String) {
+                    self.text = text
+                }
+                fn name() -> String {
+                    return text
+                }
+            }
+
+            fn generic<T>(_ value: T?) -> String {
+                if let n = value as? Int {
+                    return "int \(n)"
+                }
+                return value is String ? "string" : "other"
+            }
+
+            fn made(_ n: Int) -> (any Error)? {
+                print("made")
+                return n > 0 ? Bad.A : none
+            }
+
+            fn narrowed(_ e: (any Error)?, _ b: Base?, _ s: (any Named)?) {
+                if e is Bad {
+                    print("bad")
+                }
+                if b is Derived {
+                    print("derived")
+                }
+                if s is Sq {
+                    print("sq")
+                }
+                if case let d as Derived = b {
+                    print(d.text)
+                }
+                guard let q = s as? Sq else {
+                    return
+                }
+                print(q.n)
+            }
+
+            fn nested(_ e: (any Error)??) -> Bool {
+                return e is Bad
+            }
+
+            fn number(_ n: Int?) -> String {
+                return match n {
+                    case let x as Int => "int \(x)"
+                    default => "none"
+                }
+            }
+
+            @main
+            fn main() {
+                print(made(1) is Bad)
+                print(made(0) is Bad)
+                print((made(1) as! Bad) == Bad.A)
+                narrowed(Bad.B, Derived("d"), Sq(n: 4))
+                narrowed(none, Base(), none)
+                let b: Base? = Derived("x")
+                print((b as? any Named)?.name() ?? "no")
+                print(b is any Named)
+                let n: Int? = 3
+                print(n is Int)
+                print((n as? Int) ?? 0)
+                print(generic(4 as Int?))
+                print(generic("s" as String?))
+                print(generic(2.5 as F64?))
+                let nothing: Int? = none
+                print(generic(nothing))
+                print(nested(Bad.A))
+                print(nested(none))
+                print(number(3))
+                print(number(none))
+                let all: [String: any Named] = ["a": Sq(n: 1), "b": Derived("q")]
+                print(all["a"] is Sq)
+                print((all["b"] as? Derived)?.text ?? "")
+                print(all["c"] is Sq)
+                print(made(0) is Bad)
+            }
+            """).Stdout
+        );
+
+    /// <summary>'as!' of none, and of a value that is something else, traps saying which.</summary>
+    [Fact]
+    public void AForcedCastOfAnOptionalSaysWhatFailed() {
+        foreach (var (value, message) in ((string, string)[])[("none", "unwrapped a none"), ("2", "cast to 'Bad' failed")]) {
+            var ran = Programs.AssertAgree($$"""
+            module C335c
+
+            import Sable.IO
+
+            protocol P { }
+            struct Bad: P { let n: Int }
+            struct Other: P { }
+            fn made(_ n: Int) -> (any P)? {
+                if n == 0 { return none }
+                if n == 1 { return Bad(n: 4) }
+                return Other()
+            }
+
+            @main
+            fn main() {
+                print((made(1) as! Bad).n == 4)
+                _ = made({{(value == "none" ? "0" : value)}}) as! Bad
+            }
+            """);
+            Assert.Equal("true\n", ran.Stdout);
+            Assert.Contains(message, ran.Stderr);
+        }
+    }
 }

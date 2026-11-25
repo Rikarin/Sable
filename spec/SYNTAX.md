@@ -1510,6 +1510,9 @@ x is Drawable         // conformance/type test, narrows in the true branch
 x unchecked as I32    // explicit wrapping/truncating conversion
 ```
 
+Of an optional, `is`, `as?`, `as!` and the patterns `is T` and `let x as T` ask
+of the value it holds: `none` is no `T`, and `as!` of it traps.
+
 `xs as Int[]` gives an array that grew (`Int[>..]`, `Int[>..<]`) as one that is
 done, and back: the same elements, shared until either is changed.
 

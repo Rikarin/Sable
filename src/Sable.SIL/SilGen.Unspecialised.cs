@@ -1496,7 +1496,7 @@ public sealed partial class SilGen {
                 BoundMatch match => ReferenceEquals(child, match.Subject),
                 BoundConditionBinding binding => ReferenceEquals(child, binding.Source),
                 BoundConversion { ConversionKind: ConversionKind.OptionalWrap } => true,
-                BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol } => true,
+                BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol } unwrap => !FunctionLowering.IsOptionalCast(unwrap),
                 BoundConversion { ConversionKind: ConversionKind.Explicit } cast => IsOpaqueCast(cast) || IsErasure(cast),
                 BoundConversion { ConversionKind: ConversionKind.Existential } erasure => IsErasure(erasure),
                 BoundTypeTest test => IsOwn(test.Operand.Type) && IsTestable(test.TestedType),

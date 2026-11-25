@@ -10583,6 +10583,21 @@ public sealed partial class Binder {
         return bound;
     }
 
+    /// <summary>
+    ///     <c>is IoError</c> or <c>let e as IoError</c>: of an optional, asked
+    ///     of the value it holds.
+    /// </summary>
+    static BoundPattern TypeTestPattern(PatternSyntax syntax, TypeSymbol inputType, TypeSymbol tested, LocalSymbol? local) {
+        if (inputType is not OptionalTypeSymbol optional || tested is OptionalTypeSymbol || tested.IsError) {
+            return new BoundTypeTestPattern(syntax, inputType, tested, local);
+        }
+
+        // 'let n as Int' of an 'Int?': the value, whatever it is.
+        return new BoundSomePattern(syntax, optional, !optional.UnderlyingType.Equals(tested)
+            ? TypeTestPattern(syntax, optional.UnderlyingType, tested, local)
+            : local is null ? new BoundWildcardPattern(syntax, tested) : new BoundBindingPattern(syntax, tested, local));
+    }
+
     BoundPattern BindPatternCore(PatternSyntax pattern, TypeSymbol inputType) {
         switch (pattern) {
             case WildcardPatternSyntax wildcard:
@@ -10627,7 +10642,7 @@ public sealed partial class Binder {
 
             case TypeTestPatternSyntax test: {
                 var tested = Sub(_compilation.TypeBinder.BindType(test.Type, _containingSymbol, _scope));
-                return new BoundTypeTestPattern(test, inputType, tested, null);
+                return TypeTestPattern(test, inputType, tested, null);
             }
 
             case BindingTypeTestPatternSyntax test: {
@@ -10641,7 +10656,7 @@ public sealed partial class Binder {
                 ) { TypeResolver = () => tested };
 
                 Declare(local.Name, local);
-                return new BoundTypeTestPattern(test, inputType, tested, local);
+                return TypeTestPattern(test, inputType, tested, local);
             }
 
             case OrPatternSyntax or: {

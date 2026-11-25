@@ -7038,6 +7038,19 @@ public sealed partial class SilGen {
                     return;
                 }
 
+                // ... and on an object: itself, if it is of the class or a subclass.
+                case BoundTypeTestPattern test when value.Type is ClassType from && LowerType(test.TestedType) is ClassType to && to.IsSubclassOf(from): {
+                    var target = function.AddBlock();
+                    Jump(new CondBranchInst(Emit(new BuiltinInst($"class_is:{to.Name}", SilType.Bool, value)), target, [], failed, []));
+                    _current = target;
+                    if (test.Local is { } local) {
+                        BindLocal(local, Emit(new CopyValueInst(Emit(new UncheckedRefCastInst(value, to)))), test.Syntax);
+                    }
+
+                    Branch(matched);
+                    return;
+                }
+
                 // ... and on 'any P': the value, if the existential's box holds one.
                 case BoundTypeTestPattern test when generator.IsExistentialLayout(value.Type): {
                     var target = CastTarget(test.TestedType);
@@ -7387,6 +7400,10 @@ public sealed partial class SilGen {
                     return upcast;
                 }
 
+                // 'e as? IoError' of an optional: asked of what it holds.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol } ofHeld when IsOptionalCast(ofHeld):
+                    return OptionalCast(ofHeld);
+
                 // 'x!': the value, or a trap.
                 case BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol } conversion:
                     return Unwrap(conversion);
@@ -7427,6 +7444,9 @@ public sealed partial class SilGen {
                 // 'animal as? any Named', of a box made for the object.
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } opened when IsExistential(opened.Operand.Type) || IsObjectToProtocol(opened):
                     return ExistentialDowncast(opened);
+
+                case BoundTypeTest { Operand.Type: OptionalTypeSymbol, TestedType: not OptionalTypeSymbol } ofHeld:
+                    return OptionalTest(ofHeld);
 
                 case BoundTypeTest test:
                     return TypeTest(test);

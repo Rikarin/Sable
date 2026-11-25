@@ -30,6 +30,7 @@ typedef struct SableThread {
     // Counted by this thread alone; another may have made what it frees.
     int64_t live_objects, allocations;
     int64_t frames_made, frame_chunks; // async frames (frames.c)
+    int64_t tasks_spawned;
     struct SableThread *next; // every thread's, the latest first
     int32_t index;            // how many were made before it
 } SableThread;

@@ -92,8 +92,10 @@ public final class Pipe {
     // the lock once, unless the flush must wait.
     fn flushed(_ bytes: U8[:]) async -> FlushResult {
         let (wakes, ended) = state.withLock { (state: inout PipeState) -> (Bool, FlushResult?) in
-            state.copyIn(bytes)
-            let wakes = state.publish() && state.readerWaits
+            let onto = state.copyOn(bytes)
+            state.copyIn(bytes[onto..<bytes.count])
+            let published = state.publish()
+            let wakes = (published || onto > 0) && state.readerWaits
             if wakes {
                 state.readerWaits = false
             }
@@ -176,6 +178,10 @@ public final class Pipe {
     }
 }
 
+// How many segments a pipe keeps to fill again: more than the bytes a writer
+// may be ahead by take, of writes that fill a good part of one each.
+const segmentsKept = 64
+
 // What a pipe holds.
 struct PipeState {
     let segmentSize: Int
@@ -186,6 +192,10 @@ struct PipeState {
     var first: Int
     var head: Int
     var buffered: Int
+    // How many segments there were when the reader was last given them: it
+    // holds those until it advances, and the ones after are the writer's to
+    // go on filling.
+    var held: Int
     // How many of the buffered bytes the reader has looked at: a read waits
     // for more than these.
     var examined: Int
@@ -203,11 +213,12 @@ struct PipeState {
 
     init(_ segmentSize: Int) {
         self.segmentSize = segmentSize
-        pool = BufferPool()
+        pool = BufferPool(maximumPerSize: segmentsKept)
         segments = []
         first = 0
         head = 0
         buffered = 0
+        held = 0
         examined = 0
         unflushed = []
         tail = []
@@ -229,6 +240,22 @@ struct PipeState {
         let canceled = flushCanceled
         flushCanceled = false
         return FlushResult { isCompleted: readerCompleted, isCanceled: canceled }
+    }
+
+    // As many of the bytes as the last segment flushed has room for, if the
+    // reader does not hold it: flushed with it. How many.
+    mutating fn copyOn(_ bytes: U8[:]) -> Int {
+        let last = segments.count - 1
+        if last < first || last < held || readerCompleted || !tail.isEmpty || !unflushed.isEmpty {
+            return 0
+        }
+        let room = segments[last].capacity - segments[last].count
+        let take = bytes.count < room ? bytes.count : room
+        if take > 0 {
+            segments[last].append(contentsOf: bytes[0..<take])
+            buffered += take
+        }
+        return take
     }
 
     mutating fn copyIn(_ bytes: U8[:]) {
@@ -295,11 +322,13 @@ struct PipeState {
         }
         let canceled = readCanceled
         readCanceled = false
+        held = segments.count
         return ReadResult { buffer: current(), isCompleted: writerCompleted, isCanceled: canceled }
     }
 
     mutating fn advance(_ consumed: Int, _ seen: Int) {
         precondition(consumed >= 0 && consumed <= seen && seen <= buffered, "a pipe advanced by \(consumed) consumed and \(seen) examined of \(buffered)")
+        held = 0
         var left = consumed
         while left > 0 {
             let inFirst = segments[first].count - head
@@ -339,6 +368,7 @@ struct PipeState {
         first = 0
         head = 0
         buffered = 0
+        held = 0
         examined = 0
     }
 }

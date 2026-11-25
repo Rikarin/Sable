@@ -166,7 +166,7 @@ typedef struct SableTask {
     int64_t deadline;                // asleep until this monotonic time
     int64_t sleeper;                 // its place among the sleepers, or -1
     bool timed;                      // it sleeps until its deadline or a child's word (sable_task_timed_end), and
-    bool timed_woken;                // has had it; both under timer_lock
+    bool timed_woken;                // has had it: set under timer_lock
     int64_t base_priority;           // as given: Task.currentPriority
     int64_t priority;                // as escalated: its band
     int64_t live;                    // its children not yet finished, and its body
@@ -258,14 +258,13 @@ static struct {
     // The task tree (above).
     _Alignas(128) SpinLock tree_lock;
 
-    // Tasks in a run queue of any kind; tasks queued or running.
-    _Alignas(128) int64_t queued;
-    _Alignas(128) int64_t active;
-
-    // Tasks made ready off the workers, by band, in order.
+    // Tasks made ready off the workers, by band, in order, and how many in
+    // all; and what goes on, or will (active_begin).
     _Alignas(128) SpinLock inject_lock;
     SableTask *inject_head[BANDS], *inject_tail[BANDS];
     int64_t inject_count[BANDS];
+    int64_t injected;
+    uint64_t active;
 
     // Tasks for the main thread: the main task, and those on the main
     // actor; and whether it waits on its condition: only then is it signalled.
@@ -278,10 +277,11 @@ static struct {
     _Alignas(128) SpinLock idle_lock;
     struct Worker *idle_head;
     int32_t parked, searching, polling, watched;
+    int32_t quick; // how many workers are (left_to_others)
     struct Worker *timekeeper;
 
-    // How many tasks were spawned.
-    _Alignas(128) int64_t tasks_spawned;
+    // The number of the next tasks spawned (task_serial).
+    _Alignas(128) int64_t next_serial;
 } hot;
 
 // Every task not yet freed, for what is left as the program ends: in lists,
@@ -492,8 +492,7 @@ static SableTask *deque_take(Deque *deque) {
     int64_t top = __atomic_load_n(&deque->top, __ATOMIC_ACQUIRE);
     // Most are empty, and need no fence to say so: 'top' only grows, so one
     // that looks empty was, at some moment since 'top' was read; and a task
-    // pushed since is counted in 'queued', which a worker looks at, fenced,
-    // before it parks.
+    // pushed since is seen by the worker's last look, fenced, before it parks.
     if (top >= __atomic_load_n(&deque->bottom, __ATOMIC_RELAXED)) {
         return NULL;
     }
@@ -522,6 +521,9 @@ typedef struct Worker {
     // worker contends with no other.
     PlatformMutex lock;
     PlatformCondition condition;
+    uint32_t ran;             // tasks, since it last found none, and
+    int64_t since;            // when it had run the last eight,
+    bool quick;               // in little time (left_to_others)
     uint32_t searches;        // how often it has looked for work,
     uint32_t polls;           // and, having found it, at the reactor
     bool notified;
@@ -700,23 +702,92 @@ static void notify(Worker *worker) {
     condition_signal(&worker->condition);
 }
 
-// The only task there is to run, made ready by a task that is running: its
-// worker will take it, as a rule at once, so no other is woken for it while
-// one watches — sleeps for a moment, and then looks, and takes it if it is
-// there still (worker_main). Whether one does.
-static bool watched(void) {
-    return __atomic_load_n(&hot.queued, __ATOMIC_SEQ_CST) == 1 && __atomic_load_n(&hot.watched, __ATOMIC_SEQ_CST) != 0;
+// How many tasks are in a worker's queues, as of a moment ago; exactly
+// whether any, for the worker itself, which alone adds to them.
+static int64_t own_queued(Worker *worker) {
+    int64_t count = 0;
+    for (int band = 0; band < BANDS; band++) {
+        count += deque_count(&worker->queues[band]);
+    }
+
+    return count;
+}
+
+// Whether a task is queued that a worker may take. Whoever queues one says
+// so after in a way that a full fence orders (wake_worker): looked at after
+// a worker has said it parks, and another fence, none is missed.
+static bool any_queued(void) {
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&hot.injected, __ATOMIC_RELAXED) > 0) {
+        return true;
+    }
+
+    for (int i = 0; i < worker_count; i++) {
+        if (own_queued(&workers[i]) > 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Tasks that are left to the workers that run, while one watches — sleeps for
+// a moment, and then looks, and takes what is there still (worker_main). So
+// no other is woken for the only task a worker sees, made ready by the one it
+// runs: it will take it as a rule at once. Nor for a few, by a worker or by a
+// thread that is none ('self' NULL), while a worker is quick: it has run so
+// many tasks in so short a time that it will be at them sooner than another
+// would wake, and a wake costs the two more than the tasks. Looked at after
+// the task was queued, and a fence: whoever watches says it no longer does
+// before it looks.
+enum { QUICK_TASKS = 8, QUICK_LEFT = 4 };
+
+// What a task takes, at most, on the whole, of those a quick worker ran last.
+static const int64_t QUICK = 4000;
+
+static bool left_to_others(Worker *self) {
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&hot.watched, __ATOMIC_RELAXED) == 0) {
+        return false;
+    }
+
+    int64_t queued = __atomic_load_n(&hot.injected, __ATOMIC_RELAXED) + (self != NULL ? own_queued(self) : 0);
+    return (queued <= 1 && self != NULL) || (queued <= QUICK_LEFT && __atomic_load_n(&hot.quick, __ATOMIC_RELAXED) > 0);
+}
+
+// A worker has found a task: whether it is quick, from now on.
+static void note_task(Worker *self) {
+    if ((++self->ran & (QUICK_TASKS - 1)) != 0) {
+        return;
+    }
+
+    int64_t now = sable_time_monotonic();
+    bool quick = now - self->since < QUICK_TASKS * QUICK;
+    self->since = now;
+    if (quick != self->quick) {
+        self->quick = quick;
+        __atomic_fetch_add(&hot.quick, quick ? 1 : -1, __ATOMIC_RELAXED);
+    }
+}
+
+// It has found none.
+static void note_none(Worker *self) {
+    self->ran = 0;
+    if (self->quick) {
+        self->quick = false;
+        __atomic_fetch_sub(&hot.quick, 1, __ATOMIC_RELAXED);
+    }
 }
 
 // A worker to look for work, if one is parked and none is looking; with no
 // pool, the main thread.
-static void wake_worker(void) {
+// Looked at after the task is queued, and a fence.
+static void wake_worker_fenced(void) {
     if (worker_count <= 0) {
         wake_main();
         return;
     }
 
-    __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (__atomic_load_n(&hot.searching, __ATOMIC_SEQ_CST) != 0) {
         return;
     }
@@ -728,6 +799,11 @@ static void wake_worker(void) {
         // The one parked may be waiting in the reactor.
         wake_reactor();
     }
+}
+
+static void wake_worker(void) {
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    wake_worker_fenced();
 }
 
 // The workers that wait for the earliest sleeper — the parked one that keeps
@@ -782,6 +858,7 @@ static void inject_unlink(SableTask *task) {
     }
 
     hot.inject_count[band]--;
+    __atomic_store_n(&hot.injected, hot.injected - 1, __ATOMIC_RELAXED);
     task->inject_band = -1;
 }
 
@@ -805,6 +882,7 @@ static bool inject_push(SableTask *task) {
 
     hot.inject_tail[band] = task;
     hot.inject_count[band]++;
+    __atomic_store_n(&hot.injected, hot.injected + 1, __ATOMIC_RELAXED);
     task->inject_band = band;
     spin_unlock(&hot.inject_lock);
     return added;
@@ -812,7 +890,8 @@ static bool inject_push(SableTask *task) {
 
 // The oldest injected; and, for a worker, its share of the others, as many
 // as each would have, to the back of its own queue, where any worker may
-// take them: it need not come back, past the lock, for each.
+// take them: it need not come back, past the lock, for each. A quick one
+// takes a few even when that is more.
 enum { INJECT_SHARE = 32 };
 
 static SableTask *inject_take(int band, Worker *self) {
@@ -826,6 +905,10 @@ static SableTask *inject_take(int band, Worker *self) {
     SableTask *task = hot.inject_head[band];
     if (task != NULL) {
         int64_t most = self != NULL ? hot.inject_count[band] / worker_count : 0;
+        if (self != NULL && self->quick && most < QUICK_LEFT) {
+            most = QUICK_LEFT;
+        }
+
         if (most > INJECT_SHARE) {
             most = INJECT_SHARE;
         }
@@ -839,12 +922,18 @@ static SableTask *inject_take(int band, Worker *self) {
 
         __atomic_store_n(&hot.inject_head[band], rest, __ATOMIC_RELAXED);
         hot.inject_count[band] -= count + 1;
+        __atomic_store_n(&hot.injected, hot.injected - count - 1, __ATOMIC_RELAXED);
         if (rest == NULL) {
             hot.inject_tail[band] = NULL;
         }
     }
 
     spin_unlock(&hot.inject_lock);
+    if (self != NULL && task != NULL) {
+        // The worker goes on in their place.
+        __atomic_fetch_sub(&hot.active, (uint64_t)(count + 1), __ATOMIC_SEQ_CST);
+    }
+
     for (int64_t i = 0; i < count; i++) {
         deque_push(&self->queues[band], share[i]);
     }
@@ -865,20 +954,31 @@ static void task_release(SableTask *task) {
 
 // Its entry is the one it had in the injection queue already, which an
 // escalation left there: no longer one beside another.
-static void inject(SableTask *task) {
-    if (inject_push(task)) {
-        __atomic_fetch_add(&hot.queued, 1, __ATOMIC_SEQ_CST);
-    } else {
+static void active_begin(void);
+static void active_done(void);
+
+static void inject(SableTask *task, bool counted) {
+    // Before it is there: a worker may take it at once.
+    if (!counted) {
+        active_begin();
+    }
+
+    if (!inject_push(task)) {
+        active_done();
         task_release(task);
     }
 }
 
-static void main_push(SableTask *task) {
+static void main_push(SableTask *task, bool counted) {
     // With no pool the main thread runs everything in one order.
     if (worker_count <= 0) {
-        inject(task);
+        inject(task, counted);
         wake_main();
         return;
+    }
+
+    if (!counted) {
+        active_begin();
     }
 
     task->next = NULL;
@@ -913,42 +1013,30 @@ static SableTask *main_take(void) {
     return task;
 }
 
-// Runnable: queued where a thread that may run it will find it. It counts
-// as active until it has run and waits, or finishes.
+// Runnable: queued where a thread that may run it will find it.
 // 'behind' puts it behind every task queued in its band, as Task.yield()
 // asks: in the injection queue, which every worker takes from.
-// 'schedule_counted' is of a task counted active already.
-static void schedule_counted(SableTask *task, bool behind) {
+// 'counted' is of one counted active already (hold_active).
+static void schedule_at(SableTask *task, bool behind, bool counted) {
     __atomic_store_n(&task->runnable, 1, __ATOMIC_RELEASE);
     if (main_bound(task)) {
-        main_push(task);
+        main_push(task, counted);
         return;
     }
 
     if (current_worker != NULL && !behind) {
-        // Counted first: a worker may take it at once.
-        __atomic_fetch_add(&hot.queued, 1, __ATOMIC_SEQ_CST);
         deque_push(&current_worker->queues[band_of(__atomic_load_n(&task->priority, __ATOMIC_RELAXED))], task);
     } else {
-        inject(task);
-        if (current_worker == NULL) {
-            wake_worker();
-            return;
-        }
+        inject(task, counted);
     }
 
-    if (!watched()) {
-        wake_worker();
+    if (!left_to_others(current_worker)) {
+        wake_worker_fenced();
     }
-}
-
-static void schedule_at(SableTask *task, bool behind) {
-    __atomic_fetch_add(&hot.active, 1, __ATOMIC_SEQ_CST);
-    schedule_counted(task, behind);
 }
 
 static void schedule(SableTask *task) {
-    schedule_at(task, false);
+    schedule_at(task, false, false);
 }
 
 // A task queued, and since escalated: queued again in its new band, in
@@ -961,16 +1049,37 @@ static void requeue(SableTask *task) {
     }
 
     __atomic_fetch_add(&task->references, 1, __ATOMIC_RELAXED);
-    inject(task);
+    inject(task, false);
     wake_worker();
 }
 
+// What goes on, or will: each worker that is not parked — it is among them
+// before it looks for work, and until it has found none, its own queues
+// empty, which it alone adds to — and each task in the injection queue or
+// the main thread's, until a worker, which is one of them, takes it, or the
+// main thread has run it. So with none of them no task is queued or runs,
+// and a worker that makes tasks ready and runs them changes no count that
+// others do. In the high half, how many were begun, ever.
+enum { ACTIVE_BITS = 32 };
+
+static const uint64_t ACTIVE_ONE = (UINT64_C(1) << ACTIVE_BITS) + 1;
+
+static void active_begin(void) {
+    __atomic_fetch_add(&hot.active, ACTIVE_ONE, __ATOMIC_SEQ_CST);
+}
+
+static bool none_active(uint64_t active) {
+    return (uint32_t)active == 0;
+}
+
 // Nothing queued, running, asleep, waiting for a socket or blocking:
-// nothing more will happen.
+// nothing more will happen. Looked at twice, as a task may go from one of
+// those to another meanwhile: whatever wakes one is active first.
 static bool quiescent(void) {
-    return __atomic_load_n(&hot.active, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&sleeper_count, __ATOMIC_SEQ_CST) == 0
+    uint64_t active = __atomic_load_n(&hot.active, __ATOMIC_SEQ_CST);
+    return none_active(active) && __atomic_load_n(&sleeper_count, __ATOMIC_SEQ_CST) == 0
            && __atomic_load_n(&io_waiting, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&blocking_running, __ATOMIC_SEQ_CST) == 0
-           && __atomic_load_n(&settling, __ATOMIC_SEQ_CST) == 0;
+           && __atomic_load_n(&settling, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&hot.active, __ATOMIC_SEQ_CST) == active;
 }
 
 // Nothing may be queued or running any more: if so, the first of the tasks
@@ -983,29 +1092,48 @@ static void wake_settler(void) {
 
     spin_lock(&settle_lock);
     SableTask *task = settle_head;
-    if (task != NULL && __atomic_load_n(&hot.active, __ATOMIC_SEQ_CST) == 0 && !__atomic_load_n(&main_running, __ATOMIC_SEQ_CST)) {
+    if (task != NULL && none_active(__atomic_load_n(&hot.active, __ATOMIC_SEQ_CST)) && !__atomic_load_n(&main_running, __ATOMIC_SEQ_CST)) {
         settle_head = task->next_waiter;
         if (settle_head == NULL) {
             settle_tail = NULL;
         }
 
-        // Active first, so that the program never looks finished between.
-        schedule(task);
+        // Active first, so that the program never looks finished between:
+        // injected, and so counted, as the worker this may be is parking.
+        schedule_at(task, true, false);
         __atomic_fetch_sub(&settling, 1, __ATOMIC_SEQ_CST);
     }
 
     spin_unlock(&settle_lock);
 }
 
-// A task has run and waits, or finished: one that waits for that goes on,
-// or else the main thread hears when it leaves nothing to do.
+// One that went on does no more: a task that waits for that goes on, or
+// else the main thread hears when it leaves nothing to do.
 static void active_done(void) {
-    if (__atomic_sub_fetch(&hot.active, 1, __ATOMIC_SEQ_CST) == 0) {
+    if (none_active(__atomic_sub_fetch(&hot.active, 1, __ATOMIC_SEQ_CST))) {
         wake_settler();
         if (quiescent()) {
             wake_main();
         }
     }
+}
+
+// Around a wake of a task counted as waiting for something else: what wakes
+// it is active before it is no longer counted there. A worker is already.
+static void hold_active(void) {
+    if (current_worker == NULL) {
+        active_begin();
+    }
+}
+
+// The task so woken, queued: counted from before.
+static void schedule_held(SableTask *task) {
+    if (current_worker == NULL) {
+        schedule_at(task, false, true);
+        return;
+    }
+
+    schedule_at(task, false, false);
 }
 
 // The highest band's oldest task: a worker's own, then the injected, then
@@ -1020,13 +1148,6 @@ static void active_done(void) {
 // a while takes it, as that worker must be busy.
 static SableTask *find_work(Worker *self, bool patient) {
     bool injected_first = self != NULL && (++self->searches & 15) == 0;
-    // A task is counted before it is queued, and the worker's own were by
-    // this thread: with none counted none is missed that parking would not
-    // look for again.
-    if (__atomic_load_n(&hot.queued, __ATOMIC_RELAXED) <= 0) {
-        return NULL;
-    }
-
     for (int band = 0; band < BANDS; band++) {
         SableTask *task = injected_first ? inject_take(band, self) : NULL;
         if (task == NULL && self != NULL) {
@@ -1045,7 +1166,6 @@ static SableTask *find_work(Worker *self, bool patient) {
         }
 
         if (task != NULL) {
-            __atomic_fetch_sub(&hot.queued, 1, __ATOMIC_SEQ_CST);
             int32_t was = 1;
             if (__atomic_compare_exchange_n(&task->runnable, &was, 0, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
                 if (self == NULL || !main_bound(task)) {
@@ -1058,6 +1178,10 @@ static SableTask *find_work(Worker *self, bool patient) {
 
             // Run already, by an entry an escalation added: this one is passed over.
             task_release(task);
+            if (self == NULL) {
+                active_done();
+            }
+
             band--;
         }
     }
@@ -1195,7 +1319,7 @@ static void wake_sleepers(void) {
         int64_t now = sable_time_monotonic();
         while (count < 64 && sleeper_count > 0 && sleepers[0].deadline <= now) {
             SableTask *task = sleepers[0].task;
-            __atomic_fetch_add(&hot.active, 1, __ATOMIC_SEQ_CST);
+            hold_active();
             sleepers_remove(task);
             due[count++] = task;
         }
@@ -1208,7 +1332,7 @@ static void wake_sleepers(void) {
 
         spin_unlock(&timer_lock);
         for (int i = 0; i < count; i++) {
-            schedule_counted(due[i], false);
+            schedule_held(due[i]);
         }
     } while (count == 64);
 
@@ -1394,13 +1518,13 @@ static int64_t io_source_open(PlatformSocket socket, uint8_t kind, uint8_t ready
 // A task taken from a source's waiters, queued: active before it stops
 // waiting, so the program never looks finished between.
 static void io_resume(SableTask *task) {
-    __atomic_fetch_add(&hot.active, 1, __ATOMIC_SEQ_CST);
+    hold_active();
     if (task->io_background) {
         __atomic_fetch_add(&background_changes, 1, __ATOMIC_SEQ_CST);
     }
 
     __atomic_fetch_sub(task->io_background ? &background_waiting : &io_waiting, 1, __ATOMIC_SEQ_CST);
-    schedule_counted(task, false);
+    schedule_held(task);
 }
 
 // Under the source's lock: the tasks waiting in that direction, taken.
@@ -1581,7 +1705,11 @@ static bool poll_reactor(bool block) {
 
     // Looked at after 'polling' is set: a task queued after this sees it
     // set, and wakes the reactor.
-    if (block && __atomic_load_n(&hot.queued, __ATOMIC_SEQ_CST) > 0) {
+    if (block && any_queued()) {
+        if (current_worker != NULL) {
+            active_begin();
+        }
+
         __atomic_store_n(&hot.polling, POLLING_NONE, __ATOMIC_SEQ_CST);
         return true;
     }
@@ -1589,6 +1717,11 @@ static bool poll_reactor(bool block) {
     ReactorEvent events[64];
     int64_t earliest = __atomic_load_n(&earliest_deadline, __ATOMIC_SEQ_CST);
     int n = reactor_wait(events, 64, !block ? 0 : earliest == INT64_MAX ? -1 : earliest);
+    if (block && current_worker != NULL) {
+        // Parked until now, and no longer: it wakes tasks.
+        active_begin();
+    }
+
     __atomic_store_n(&hot.polling, POLLING_NONE, __ATOMIC_SEQ_CST);
     for (int i = 0; i < n; i++) {
         io_ready(events[i].key, events[i].events);
@@ -1692,9 +1825,9 @@ static void blocking_work(SableTask *task) {
     task->blocking_run(task->blocking_context);
     switch_to(previous);
 
-    __atomic_fetch_add(&hot.active, 1, __ATOMIC_SEQ_CST);
+    hold_active();
     __atomic_fetch_sub(&blocking_running, 1, __ATOMIC_SEQ_CST);
-    schedule_counted(task, false);
+    schedule_held(task);
 }
 
 static void blocking_main(void *argument) {
@@ -2162,7 +2295,7 @@ static void after_suspend(SableTask *task) {
 
         case PENDING_SLEEP: {
             spin_lock(&timer_lock);
-            bool cancelled = __atomic_load_n(&task->cancelled, __ATOMIC_ACQUIRE) || (__atomic_load_n(&task->timed, __ATOMIC_RELAXED) && task->timed_woken);
+            bool cancelled = __atomic_load_n(&task->cancelled, __ATOMIC_ACQUIRE) || (__atomic_load_n(&task->timed, __ATOMIC_RELAXED) && __atomic_load_n(&task->timed_woken, __ATOMIC_RELAXED));
             bool earlier = !cancelled && sleepers_add(task);
             spin_unlock(&timer_lock);
             if (cancelled) {
@@ -2230,7 +2363,9 @@ static void after_suspend(SableTask *task) {
         }
 
         case PENDING_YIELD:
-            schedule_at(task, true);
+            // Behind its worker's own tasks is behind all that wait for this
+            // worker, when none is injected.
+            schedule_at(task, current_worker == NULL || __atomic_load_n(&hot.injected, __ATOMIC_RELAXED) > 0, false);
             break;
 
         case PENDING_IO:
@@ -2304,11 +2439,9 @@ static void step(SableTask *task) {
 
 // A task taken from a queue: on its actor, if it has one, then resumed —
 // or, if another holds the actor, left in its inbox to be handed it.
-// Whether it ran; it is no longer active either way.
 static void run_task(SableTask *task) {
     if (task->actor != NULL && task->actor != MAIN_ACTOR && task->held != task->actor) {
         if (!executor_take_or_wait(executor_of(task->actor), task)) {
-            active_done();
             return;
         }
 
@@ -2316,7 +2449,6 @@ static void run_task(SableTask *task) {
     }
 
     step(task);
-    active_done();
 }
 
 // ---- Workers -----------------------------------------------------------------
@@ -2328,7 +2460,8 @@ static const int64_t WATCH = 100000;
 // the time, the earliest sleeper due; or, watching, for a moment.
 // On the idle list first, then a last look at the queues: a task queued
 // after that finds the worker there and notifies it. Whether it was taken
-// off the list to look for work: it is searching.
+// off the list to look for work: it is searching. It is not active
+// meanwhile, and is when this returns.
 static bool park(Worker *self, bool watches) {
     // One parked worker waits in the reactor instead, for sockets and timers.
     if (!watches && poll_reactor(true)) {
@@ -2349,7 +2482,7 @@ static bool park(Worker *self, bool watches) {
 
     spin_unlock(&hot.idle_lock);
 
-    if (__atomic_load_n(&hot.queued, __ATOMIC_SEQ_CST) == 0) {
+    if (!any_queued()) {
         int64_t until = watches ? sable_time_monotonic() + WATCH : INT64_MAX;
         if (keeps_time) {
             // Read once it is the timekeeper: an earlier one since notifies it.
@@ -2363,6 +2496,8 @@ static bool park(Worker *self, bool watches) {
             }
         }
     }
+
+    active_begin();
 
     // Off the idle list, unless a waker took it off.
     spin_lock(&hot.idle_lock);
@@ -2395,26 +2530,30 @@ static SableTask *search(Worker *self) {
     if (__atomic_load_n(&hot.searching, __ATOMIC_RELAXED) <= 1) {
         for (int turn = 0; turn < SPIN_TURNS; turn++) {
             spin_turn();
-            if (__atomic_load_n(&hot.queued, __ATOMIC_RELAXED) > 0) {
-                SableTask *task = find_work(self, false);
-                if (task != NULL) {
-                    return task;
-                }
+            SableTask *task = find_work(self, false);
+            if (task != NULL) {
+                return task;
             }
         }
+
+        thread_yield();
     }
 
-    thread_yield();
     return find_work(self, true);
 }
 
 static void worker_main(void *argument) {
     Worker *self = argument;
     current_worker = self;
+    active_begin();
     bool searches = false; // counted in 'searching'
     bool watches = false;  // it is the one 'watched' says
     for (;;) {
-        wake_sleepers();
+        // A quick worker asks the time only now and then (note_task).
+        if (!self->quick || (self->ran & (QUICK_TASKS - 1)) == 0) {
+            wake_sleepers();
+        }
+
         SableTask *task = find_work(self, false);
         if (task == NULL) {
             if (!searches) {
@@ -2425,16 +2564,24 @@ static void worker_main(void *argument) {
             task = search(self);
         }
 
+        bool searched = searches;
         if (searches) {
             searches = false;
             __atomic_fetch_sub(&hot.searching, 1, __ATOMIC_SEQ_CST);
         }
 
         if (task == NULL) {
+            note_none(self);
+            // It may have lost one of its own to another, and have more.
+            if (own_queued(self) > 0) {
+                continue;
+            }
+
+            active_done();
             // While tasks run, one worker watches; while none does, all park.
             // Not one that must be told first of a socket.
             int32_t unwatched = 0;
-            watches = worker_count > 1 && __atomic_load_n(&hot.active, __ATOMIC_SEQ_CST) > 0
+            watches = worker_count > 1 && !none_active(__atomic_load_n(&hot.active, __ATOMIC_SEQ_CST))
                       && (__atomic_load_n(&hot.polling, __ATOMIC_SEQ_CST) != POLLING_NONE
                           || (__atomic_load_n(&io_waiting, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&background_waiting, __ATOMIC_SEQ_CST) == 0))
                       && __atomic_compare_exchange_n(&hot.watched, &unwatched, 1, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED);
@@ -2444,6 +2591,7 @@ static void worker_main(void *argument) {
             }
 
             searches = park(self, watches);
+            self->since = sable_time_monotonic();
             if (watches) {
                 count_executor(&worker_watches);
                 // Then it looks: a task queued and left to it is seen.
@@ -2453,11 +2601,13 @@ static void worker_main(void *argument) {
             continue;
         }
 
+        note_task(self);
+
         // More is queued: another worker to take it, if none is looking.
-        // Looked at after this one stopped: a task queued while it was
-        // still looking woke no one.
-        if (__atomic_load_n(&hot.queued, __ATOMIC_SEQ_CST) > 0 && !watched()) {
-            wake_worker();
+        // One that was looking asks of every queue, after it stopped: a task
+        // queued while it looked woke no one.
+        if ((searched ? any_queued() : own_queued(self) > 0 || __atomic_load_n(&hot.injected, __ATOMIC_RELAXED) > 0) && !left_to_others(self)) {
+            wake_worker_fenced();
         }
 
         // A worker kept busy looks at the reactor now and then, so
@@ -2517,6 +2667,20 @@ void sable_task_spawn_cancelled(void) {
     spawn_cancelled = true;
 }
 
+// How many were spawned before a task, for the order those left are dropped
+// in: exact among a thread's, which takes some numbers at a time, so that
+// threads that spawn need not each pass the count around.
+static int64_t task_serial(void) {
+    enum { SERIALS = 32 };
+    static _Thread_local int64_t next, end;
+    if (next == end) {
+        next = __atomic_fetch_add(&hot.next_serial, SERIALS, __ATOMIC_RELAXED);
+        end = next + SERIALS;
+    }
+
+    return next++;
+}
+
 // A new task, queued: 'start(context)' makes its root frame when it first
 // runs, 'resume' runs it, and 'drop' destroys it should it never finish. A
 // child of the running task unless detached; its priority its parent's (or
@@ -2559,7 +2723,8 @@ void *sable_task_spawn(void *(*start)(void *), uint8_t (*resume)(void *), void (
     spawn_cancelled = false;
     task->live = 1; // its body
     task->references = parent != NULL ? 3 : 2; // the program's, the executor's, and its parent's list's
-    task->serial = __atomic_fetch_add(&hot.tasks_spawned, 1, __ATOMIC_RELAXED);
+    task->serial = task_serial();
+    thread_count(&current_thread()->tasks_spawned, 1);
     task->alive_list = (uint8_t)(current_thread()->index % ALIVE_LISTS);
     AliveList *list = &alive_lists[task->alive_list];
     spin_lock(&list->lock);
@@ -2603,9 +2768,12 @@ bool sable_task_wait(void *handle) {
 // 'await Task.yield()': whether the running task must let others run — if
 // so, it is queued behind every task queued now. With none queued, it goes on.
 bool sable_task_yield(void) {
-    wake_sleepers();
-    if (__atomic_load_n(&hot.queued, __ATOMIC_SEQ_CST) == 0 && !(on_main_thread && __atomic_load_n(&hot.main_head, __ATOMIC_SEQ_CST) != NULL)) {
-        return false;
+    // A worker with a task of its own to run next sees to the sleepers then.
+    if (current_worker == NULL || own_queued(current_worker) == 0) {
+        wake_sleepers();
+        if (!any_queued() && !(on_main_thread && __atomic_load_n(&hot.main_head, __ATOMIC_SEQ_CST) != NULL)) {
+            return false;
+        }
     }
 
     current_task->pending = PENDING_YIELD;
@@ -2640,16 +2808,11 @@ bool sable_task_sleep(int64_t nanoseconds) {
 // which ends the sleep, or keeps it from beginning; and the task asks whether
 // it did. The task has no other such child at the time.
 void sable_task_timed_begin(void) {
-    spin_lock(&timer_lock);
-    current_task->timed_woken = false;
-    spin_unlock(&timer_lock);
+    __atomic_store_n(&current_task->timed_woken, false, __ATOMIC_RELAXED);
 }
 
 bool sable_task_timed_woken(void) {
-    spin_lock(&timer_lock);
-    bool woken = current_task->timed_woken;
-    spin_unlock(&timer_lock);
-    return woken;
+    return __atomic_load_n(&current_task->timed_woken, __ATOMIC_ACQUIRE);
 }
 
 void sable_task_timed_end(void) {
@@ -2660,17 +2823,17 @@ void sable_task_timed_end(void) {
     }
 
     spin_lock(&timer_lock);
-    parent->timed_woken = true;
+    __atomic_store_n(&parent->timed_woken, true, __ATOMIC_RELEASE);
     bool wakes = __atomic_load_n(&parent->timed, __ATOMIC_RELAXED) && parent->sleeper >= 0;
     if (wakes) {
         // Active before it stops sleeping, as the sleepers due are.
-        __atomic_fetch_add(&hot.active, 1, __ATOMIC_SEQ_CST);
+        hold_active();
         sleepers_remove(parent);
     }
 
     spin_unlock(&timer_lock);
     if (wakes) {
-        schedule_counted(parent, false);
+        schedule_held(parent);
     }
 }
 
@@ -2751,13 +2914,17 @@ static void cancel(SableTask *task, HandlerList *handlers) {
     }
 
     spin_lock(&timer_lock);
-    if (task->sleeper >= 0) {
-        __atomic_fetch_add(&hot.active, 1, __ATOMIC_SEQ_CST);
+    bool slept = task->sleeper >= 0;
+    if (slept) {
+        hold_active();
         sleepers_remove(task);
-        schedule_counted(task, false);
     }
 
     spin_unlock(&timer_lock);
+    if (slept) {
+        schedule_held(task);
+    }
+
     io_cancel(task, true);
     if (unpark(task)) {
         schedule(task);
@@ -3054,6 +3221,7 @@ static void main_loop(SableTask *until) {
             }
 
             run_task(task);
+            active_done();
             continue;
         }
 
@@ -3065,7 +3233,7 @@ static void main_loop(SableTask *until) {
         __atomic_store_n(&hot.main_waiting, 1, __ATOMIC_SEQ_CST);
         int64_t changes = __atomic_load_n(&background_changes, __ATOMIC_SEQ_CST);
         bool background = __atomic_load_n(&background_waiting, __ATOMIC_SEQ_CST) != 0;
-        bool idle = worker_count <= 0 ? __atomic_load_n(&hot.queued, __ATOMIC_SEQ_CST) == 0 : __atomic_load_n(&hot.main_head, __ATOMIC_SEQ_CST) == NULL;
+        bool idle = worker_count <= 0 ? !any_queued() : __atomic_load_n(&hot.main_head, __ATOMIC_SEQ_CST) == NULL;
         if (idle && quiescent()) {
             if (until == NULL) {
                 __atomic_store_n(&hot.main_waiting, 0, __ATOMIC_SEQ_CST);
@@ -3292,7 +3460,7 @@ static void print_task_backtrace(void) {
 
 static void report_tasks(void) {
     fprintf(stderr, "sable: tasks %lld, %lld at most at once, %lld dropped, %lld bytes each, %d workers, %lld actor holders escalated\n",
-        (long long)hot.tasks_spawned, (long long)tasks_most, (long long)tasks_dropped, (long long)sizeof(SableTask),
+        (long long)thread_sum(offsetof(SableThread, tasks_spawned)), (long long)tasks_most, (long long)tasks_dropped, (long long)sizeof(SableTask),
         worker_count < 0 ? 0 : worker_count, (long long)actor_escalations);
     fprintf(stderr, "sable: wakes %lld of workers, %lld of the reactor, %lld of the main thread; %lld watches\n",
         (long long)worker_wakes, (long long)reactor_wakes, (long long)main_wakes, (long long)worker_watches);

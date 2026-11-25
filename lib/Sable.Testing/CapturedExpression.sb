@@ -133,6 +133,12 @@ public final class CapturedExpression {
             compared = [(texts[left], leftValue), (texts[right], rightValue)]
             if leftValue != rightValue {
                 report.append(indented(differenceReport(leftValue, rightValue)) + "\n")
+                let differences = Differences("left", "right")
+                differences.compare("", DescribedValue.of(leftValue), DescribedValue.of(rightValue))
+                // Not where all there is to say is that they differ.
+                if !differences.found.isEmpty && !differences.found[0].hasPrefix("the value: ") {
+                    report.append(differences.report("    ") + "\n")
+                }
             }
         }
         for (part, value) in parts {

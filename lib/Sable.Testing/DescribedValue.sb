@@ -1,0 +1,223 @@
+module Sable.Testing
+
+/// What a value's debug description says it is made of, as source would
+/// write it: a case or type with its parts, an array, a dictionary, or
+/// something said as a whole. Text no source would be is said as a whole.
+final class DescribedValue {
+    enum Kind {
+        Whole
+        Parts
+        Elements
+        Entries
+    }
+
+    /// What the description says of it.
+    let text: String
+    let kind: Kind
+    /// The type's or the case's name; "" for a tuple, an array, a dictionary.
+    let name: String
+    /// Each part's label ("" for none), or each entry's key.
+    let labels: String[>..]
+    let values: DescribedValue[>..]
+
+    init(_ text: String, _ kind: Kind = .Whole, name: String = "", labels: String[>..] = [], values: DescribedValue[>..] = []) {
+        self.text = text
+        self.kind = kind
+        self.name = name
+        self.labels = labels
+        self.values = values
+    }
+
+    static fn of(_ description: String) -> DescribedValue {
+        let bytes = description.utf8.toArray()
+        return DescribedValue.read(bytes, 0, bytes.count)
+    }
+
+    /// Whether its elements are in no order: 'Set([1, 2])'.
+    var isUnordered: Bool => kind == .Parts && name == "Set" && values.count == 1 && labels[0].isEmpty && values[0].kind == .Elements
+
+    static fn slice(_ bytes: U8[>..], _ from: Int, _ to: Int) -> String {
+        return String.fromUtf8Lossy(bytes[from..<to])
+    }
+
+    static fn read(_ bytes: U8[>..], _ from: Int, _ to: Int) -> DescribedValue {
+        let text = slice(bytes, from, to)
+        guard let bracket = opening(bytes, from, to) else {
+            return DescribedValue(text)
+        }
+        let isArray = bytes[bracket] == ASCII.bracket
+        // '[:]'
+        if isArray && to - from == 3 && bytes[from + 1] == ASCII.colon {
+            return DescribedValue(text, .Entries)
+        }
+        guard let parts = items(bytes, bracket + 1, to - 1) else {
+            return DescribedValue(text)
+        }
+        var labels: String[>..] = []
+        var values: DescribedValue[>..] = []
+        var labelled = 0
+        for (start, end) in parts {
+            var begins = start
+            var label = ""
+            if let colon = separator(bytes, start, end) {
+                if isArray || isName(bytes, start, colon) {
+                    label = slice(bytes, start, colon)
+                    begins = colon + 2
+                    labelled += 1
+                }
+            }
+            labels.append(label)
+            values.append(read(bytes, begins, end))
+        }
+        if isArray {
+            if labelled == 0 {
+                return DescribedValue(text, .Elements, labels: labels, values: values)
+            }
+            return labelled == values.count ? DescribedValue(text, .Entries, labels: labels, values: values) : DescribedValue(text)
+        }
+        return DescribedValue(text, .Parts, name: slice(bytes, from, bracket), labels: labels, values: values)
+    }
+
+    // Where the bracket is that the last character closes, when all that is
+    // before it is a name: an array's has none.
+    static fn opening(_ bytes: U8[>..], _ from: Int, _ to: Int) -> Int? {
+        if to - from < 2 {
+            return none
+        }
+        if bytes[from] == ASCII.bracket {
+            return bytes[to - 1] == ASCII.closingBracket && after(bytes, from, to) == to ? from : none
+        }
+        if bytes[to - 1] != ASCII.closingParenthesis {
+            return none
+        }
+        var at = from
+        var angles = 0
+        while at < to {
+            let byte = bytes[at]
+            if byte == ASCII.parenthesis && angles == 0 {
+                return after(bytes, at, to) == to ? at : none
+            }
+            if byte == ASCII.less && at > from {
+                angles += 1
+            } else if byte == ASCII.greater && angles > 0 {
+                angles -= 1
+            } else if angles == 0 && !isNameByte(byte) && byte != ASCII.dot {
+                return none
+            }
+            at += 1
+        }
+        return none
+    }
+
+    // Where each item begins and ends; none where brackets or quotes do not
+    // close.
+    static fn items(_ bytes: U8[>..], _ from: Int, _ to: Int) -> (Int, Int)[>..]? {
+        var found: (Int, Int)[>..] = []
+        if from == to {
+            return found
+        }
+        var start = from
+        var at = from
+        while at < to {
+            if bytes[at] == ASCII.comma && at + 1 < to && bytes[at + 1] == ASCII.space {
+                if at == start {
+                    return none
+                }
+                found.append((start, at))
+                start = at + 2
+                at = start
+            } else {
+                guard let next = after(bytes, at, to) else {
+                    return none
+                }
+                at = next
+            }
+        }
+        if start >= to {
+            return none
+        }
+        found.append((start, to))
+        return found
+    }
+
+    // The place after what begins at 'at': a quoted text, all that is in
+    // brackets, or a byte. None where it does not end.
+    static fn after(_ bytes: U8[>..], _ at: Int, _ to: Int) -> Int? {
+        let byte = bytes[at]
+        if byte == ASCII.quote || byte == ASCII.apostrophe {
+            var i = at + 1
+            while i < to {
+                if bytes[i] == ASCII.backslash {
+                    i += 2
+                } else if bytes[i] == byte {
+                    return i + 1
+                } else {
+                    i += 1
+                }
+            }
+            return none
+        }
+        if byte == ASCII.closingBracket || byte == ASCII.closingParenthesis {
+            return none
+        }
+        if byte != ASCII.bracket && byte != ASCII.parenthesis {
+            return at + 1
+        }
+        let closing = byte == ASCII.bracket ? ASCII.closingBracket : ASCII.closingParenthesis
+        var i = at + 1
+        while i < to {
+            if bytes[i] == closing {
+                return i + 1
+            }
+            guard let next = after(bytes, i, to) else {
+                return none
+            }
+            i = next
+        }
+        return none
+    }
+
+    // Where the item's ': ' is, when it has one outside of brackets and quotes.
+    static fn separator(_ bytes: U8[>..], _ from: Int, _ to: Int) -> Int? {
+        var at = from
+        while at < to {
+            if bytes[at] == ASCII.colon && at + 1 < to && bytes[at + 1] == ASCII.space && at > from {
+                return at
+            }
+            at = after(bytes, at, to) ?? to
+        }
+        return none
+    }
+
+    static fn isName(_ bytes: U8[>..], _ from: Int, _ to: Int) -> Bool {
+        var at = from
+        while at < to {
+            if !isNameByte(bytes[at]) {
+                return false
+            }
+            at += 1
+        }
+        return from < to
+    }
+
+    static fn isNameByte(_ byte: U8) -> Bool {
+        return (byte >= 0x61 && byte <= 0x7A) || (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x30 && byte <= 0x39) || byte == 0x5F || byte >= 0x80
+    }
+}
+
+// The bytes a description is read by.
+struct ASCII {
+    static let space: U8 = 0x20
+    static let quote: U8 = 0x22
+    static let apostrophe: U8 = 0x27
+    static let parenthesis: U8 = 0x28
+    static let closingParenthesis: U8 = 0x29
+    static let comma: U8 = 0x2C
+    static let dot: U8 = 0x2E
+    static let colon: U8 = 0x3A
+    static let less: U8 = 0x3C
+    static let greater: U8 = 0x3E
+    static let bracket: U8 = 0x5B
+    static let backslash: U8 = 0x5C
+    static let closingBracket: U8 = 0x5D
+}

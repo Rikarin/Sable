@@ -1,0 +1,104 @@
+module Sable.Testing
+
+// What a test says should hold of values, where more can be said of why it
+// does not than the values of an expression's parts.
+
+/// Fails the test unless the two values say the same of themselves, part by
+/// part, and reports each part that differs by its path:
+/// `orders[2].lines[0].price: got 12, expected 10`. The test goes on.
+///
+/// They are compared by their debug descriptions, so they need not be
+/// `Equatable`, and a class's object is compared by what it holds. A set's
+/// elements are in no order. What is left out, and whether arrays' order
+/// counts, the closure says (`Equivalence`).
+///
+/// ```sable
+/// @derive(Debug)
+/// struct Line {
+///     var id: Int
+///     var price: Int
+/// }
+/// let got = [Line(id: 8, price: 10), Line(id: 9, price: 12)]
+/// expectEquivalent(got, [Line(id: 0, price: 12), Line(id: 0, price: 10)]) {
+///     $0.exclude("[*].id")
+///     $0.ignoresOrder = true
+/// }
+/// ```
+public fn expectEquivalent<T: Debug>(_ got: T, _ expected: T, _ message: @autoclosure () -> String = "", file: String = #file, line: Int = #line, _ options: (inout Equivalence<T>) -> Void = { _ in }) {
+    var chosen = Equivalence<T>()
+    options(&chosen)
+    let differences = Differences("got", "expected", excluding: chosen.excluded, ignoresOrder: chosen.ignoresOrder)
+    differences.compare("", DescribedValue.of(got.debugDescription()), DescribedValue.of(expected.debugDescription()))
+    if !differences.found.isEmpty {
+        recordFailure("the values are not equivalent\(said(message()))\n\(differences.report("    "))", file: file, line: line)
+    }
+    for path in differences.unmet {
+        recordFailure("no part of the values is at '\(path)', which was to be left out\(said(message()))", file: file, line: line)
+    }
+}
+
+/// Fails the test unless the predicate holds of every element, and reports
+/// those it does not hold of. The test goes on.
+///
+/// ```sable
+/// expectAll([2, 4, 6]) { $0 % 2 == 0 }
+/// ```
+public fn expectAll<S: Sequence>(_ values: S, _ message: @autoclosure () -> String = "", file: String = #file, line: Int = #line, _ predicate: (S.Element) -> Bool) where S.Failure == Never {
+    var wrong: String[>..] = []
+    var count = 0
+    var index = 0
+    for value in values {
+        if !predicate(value) {
+            count += 1
+            if count <= 10 {
+                wrong.append("    [\(index)]: \(value:?)")
+            }
+        }
+        index += 1
+    }
+    if count > 10 {
+        wrong.append("    and \(count - 10) more")
+    }
+    if count > 0 {
+        recordFailure("\(count) of \(index) elements are not as they were to be\(said(message()))\n\(wrong.joined(separator: "\n"))", file: file, line: line)
+    }
+}
+
+/// Fails the test unless the elements are among the values in that order,
+/// whatever is between them, and reports the first that is not. The test
+/// goes on.
+///
+/// ```sable
+/// expect(["connect", "login", "ping", "close"], containsInOrder: ["connect", "close"])
+/// ```
+public fn expect<S: Sequence>(_ values: S, containsInOrder wanted: S.Element[:], _ message: @autoclosure () -> String = "", file: String = #file, line: Int = #line) where S.Element: Equatable, S.Failure == Never {
+    var at = 0
+    var seen: String[>..] = []
+    for value in values {
+        if at < wanted.count && value == wanted[at] {
+            at += 1
+        }
+        seen.append("\(value:?)")
+    }
+    if at < wanted.count {
+        let place = at == 0 ? "is not there" : "is not there after \(wanted[at - 1]:?)"
+        recordFailure("\(wanted[at]:?) \(place)\(said(message()))\n    in: [\(seen.joined(separator: ", "))]", file: file, line: line)
+    }
+}
+
+/// Fails the test unless the two are at most so far apart, and reports how
+/// far they are. The test goes on.
+///
+/// ```sable
+/// expectClose(0.1 + 0.2, 0.3, within: 1e-9)
+/// ```
+public fn expectClose<T: BinaryFloatingPoint>(_ got: T, _ expected: T, within tolerance: T, _ message: @autoclosure () -> String = "", file: String = #file, line: Int = #line) {
+    // Equal infinities are no distance apart that can be worked out.
+    if got == expected {
+        return
+    }
+    let distance = got > expected ? got - expected : expected - got
+    if !(distance <= tolerance) {
+        recordFailure("\(got:?) is \(distance:?) from \(expected:?), and was to be within \(tolerance:?)\(said(message()))", file: file, line: line)
+    }
+}

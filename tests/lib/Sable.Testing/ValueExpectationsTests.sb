@@ -1,0 +1,174 @@
+module ValueExpectationsTests
+
+// What expectations of values say when they are not met (Sable.Testing):
+// each case of 'fails' is run in a process of its own, and what it writes
+// is compared with its snapshot, in __snapshots__. Run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Collections
+import Sable.Concurrency
+import Sable.Testing
+import Sable.Time
+
+@derive(Debug, Equatable)
+struct Line {
+    var id: Int
+    var price: Int
+    var sku: String
+}
+
+@derive(Debug)
+struct Order {
+    var id: Int
+    var lines: Line[>..]
+    var tags: [String: Int]
+    var codes: Set<String>
+}
+
+@derive(Debug)
+union Shape {
+    Circle(radius: Int)
+    Square(Int)
+}
+
+fn order(_ id: Int, _ price: Int, _ sku: String, _ tags: [String: Int]) -> Order {
+    return Order(id: id, lines: [Line(id: 1, price: price, sku: "a, b"), Line(id: 2, price: 3, sku: sku)], tags: tags, codes: Set(["x", "y"]))
+}
+
+// A message that counts how often it was worked out.
+final class Message {
+    var made: Int = 0
+
+    fn text() -> String {
+        made += 1
+        return "made"
+    }
+}
+
+@test
+fn whatIsEquivalentPasses() {
+    expectEquivalent(order(1, 10, "c", ["x": 1]), order(1, 10, "c", ["x": 1]))
+    expectEquivalent(order(1, 10, "c", ["x": 1]), order(2, 10, "c", ["x": 1])) { $0.exclude(\.id) }
+    expectEquivalent(order(1, 10, "c", ["x": 1]), order(1, 12, "d", ["x": 1])) {
+        $0.exclude("lines[*].price")
+        $0.exclude("**.sku")
+    }
+    expectEquivalent([[3, 1], [2]], [[2], [1, 3]]) { $0.ignoresOrder = true }
+    expectEquivalent(["a": [1], "b": [2]], ["b": [2], "a": [1]])
+    expectEquivalent([Shape.Circle(radius: 2), Shape.Square(1)], [Shape.Circle(radius: 2), Shape.Square(1)])
+    expectEquivalent("text (with) [brackets], \"quoted\"", "text (with) [brackets], \"quoted\"")
+}
+
+@test
+fn whatHoldsPasses() {
+    expectAll([2, 4, 6]) { $0 % 2 == 0 }
+    expectAll([] as Int[>..]) { $0 > 0 }
+    expect(["connect", "login", "ping", "close"], containsInOrder: ["connect", "ping", "close"])
+    expect([1, 2], containsInOrder: [])
+    expectClose(0.1 + 0.2, 0.3, within: 1e-9)
+    expectClose(F32.infinity, F32.infinity, within: 0)
+    let sum = expect(within: Duration.hours(1)) { (1...100).reduce(0, { $0 + $1 }) }
+    expect(sum == 5050)
+    requireAll("nothing") {
+        expect(sum > 0)
+    }
+}
+
+@test
+async fn whatWaitsIsTimedByTheClockGiven() {
+    let clock = TestClock()
+    let made = await expect(within: Duration.seconds(5), clock: clock) {
+        await clock.advance(by: Duration.seconds(5))
+        return 3
+    }
+    expect(made == 3)
+    await requireAll {
+        await Task.yield()
+        expect(made == 3)
+    }
+}
+
+@test
+fn aMessageIsWorkedOutOnlyWhereTheExpectationIsNotMet() {
+    let message = Message()
+    for n in 0..<100 {
+        expect(n >= 0, message.text())
+        require(n >= 0, "\(message.text()) of \(n)")
+        _ = require((n as Int?), message.text())
+        expectEquivalent(n, n, message.text())
+        expectClose(1.0, 1.0, within: 0, message.text())
+        expectAll([n]) { $0 >= 0 }
+        expect([n], containsInOrder: [n], message.text())
+        requireAll(message.text()) { }
+    }
+    expect(message.made == 0)
+}
+
+// A test that fails as it is asked to by a variable, and passes when it is
+// not asked: run by 'whatAFailureSays', in a process of its own.
+@test
+async fn fails() {
+    let got = order(1, 10, "c", ["x": 1, "z": 0])
+    let expected = order(2, 12, "c(", ["x": 2, "y": 3, "z": 0])
+    match Runtime.environment("SABLE_TESTING_FAILS") ?? "" {
+        case "equal" => expect(got.lines == expected.lines)
+        case "equal text" => expect("one" == "two")
+        case "equivalent" => expectEquivalent(got, expected)
+        case "equivalent but" => expectEquivalent(got, expected, "as ordered") {
+            $0.exclude(\.id)
+            $0.exclude("**.price")
+            $0.exclude("tags[*]")
+            $0.exclude("nothing")
+        }
+        case "in any order" => expectEquivalent([1, 2, 3, 3], [3, 4, 2, 1]) { $0.ignoresOrder = true }
+        case "longer" => expectEquivalent([1, 2], [1, 2, 3])
+        case "cases" => expectEquivalent([Shape.Circle(radius: 2), Shape.Square(1)], [Shape.Circle(radius: 3), Shape.Circle(radius: 1)])
+        case "sets" => expectEquivalent(Set([1, 2]), Set([2, 3]))
+        case "many" => expectEquivalent((0..<20).toArray(), (1...20).toArray())
+        case "all" => expectAll([1, 2, 3, 4], "even") { $0 % 2 == 0 }
+        case "in order" => expect(["a", "b", "c"], containsInOrder: ["a", "c", "b"])
+        case "first in order" => expect(["a", "b"], containsInOrder: ["z"])
+        case "close" => expectClose(0.25, 0.5, within: 0.125, "halves")
+        case "within" => {
+            let clock = TestClock()
+            _ = await expect(within: Duration.seconds(1), "a second", clock: clock) {
+                await clock.advance(by: Duration.seconds(3))
+            }
+        }
+        case "require all" => {
+            requireAll("the order") {
+                expect(got.id == 1)
+                expect(got.id == 2, "two")
+                expect(got.lines.count == 3)
+            }
+            print("not reached")
+        }
+        case "require all throws" => requireAll { throw "no" }
+        case _ => { }
+    }
+}
+
+@test(arguments: [
+    "equal", "equal text", "equivalent", "equivalent but", "in any order", "longer", "cases", "sets", "many", "all", "in order", "first in order",
+    "close", "within", "require all", "require all throws",
+])
+fn whatAFailureSays(_ which: String) {
+    let program = Runtime.executablePath()
+    if program.isEmpty {
+        return
+    }
+    unsafe {
+        _ = Runtime.setEnvironment("SABLE_TESTING_FAILS", which)
+    }
+    _ = require(Runtime.run(program, ["--run-test", "ValueExpectationsTests.fails"], ""))
+    let errors = Runtime.lastErrorOutput()
+    expect(Runtime.lastExitStatus() == 134, errors)
+    // What it says, without where the test's file is.
+    var said: String[>..] = []
+    for line in errors.lines() {
+        if line.hasPrefix("    ") || line.hasPrefix("expectation failed: ") {
+            said.append(line.replacing(#file, with: "<file>"))
+        }
+    }
+    assertSnapshot(said.joined(separator: "\n"))
+}

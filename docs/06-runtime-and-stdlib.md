@@ -1206,7 +1206,10 @@ Sable.Crypto.X509   Certificate, CertificateVerifier (RFC 5280 paths, name
                     (the system's), CertificateBuilder, CertificateRequest
 Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
 Sable.Testing       @test @bench; assert, assertEqual and the like; expect and
-                    require, which show their expression's parts; expectThrows;
+                    require, which show their expression's parts; requireAll;
+                    expectEquivalent (deep, by path), expectAll,
+                    expect(_:containsInOrder:), expectClose,
+                    expect(within:); expectThrows; @mockable and its matchers;
                     expectPanic and expectExit (death tests); assertSnapshot;
                     forAll, Arbitrary and Gen (property tests); Fixture and
                     FixtureLifetime, TestContext, skip; Bencher,
@@ -1269,6 +1272,27 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
 
   That is a parameter's doing whose default is `#expression` (SYNTAX.md §18):
   the argument is worked out once, as it would be, and may throw and await.
+  Where the sides are made of parts, the parts that differ are said by their
+  paths too (`[0].price: left 10, right 12`). A message is an `@autoclosure`,
+  worked out only where the expectation is not met. There is one way to say
+  each thing: the condition is ordinary code (`==`, `<`, `contains`,
+  `isEmpty`, a regex's `isMatch`), so there are no matchers beside it — no
+  `toEqual`, `toBeGreaterThan` — and what follows says more than a
+  condition's parts could:
+  - `expectEquivalent(got, expected) { $0.exclude(\.id); $0.ignoresOrder = true }`
+    compares two `Debug` values part by part, by their debug descriptions read
+    back (a case and its payload, a struct's fields, arrays, dictionaries by
+    key, a set's elements in no order), and says each part that differs by its
+    path: `orders[2].lines[0].price: got 12, expected 10`. A path to leave out
+    is a key path or text, `lines[*].id` or `**.id`; one that names no part is
+    itself a failure. Text that no source would write is compared whole.
+  - `expectAll(values) { predicate }` says which elements it does not hold of;
+    `expect(values, containsInOrder: [...])` which is missing after which;
+    `expectClose(a, b, within:)` how far apart they are.
+  - `expect(within: duration, clock:) { … }` fails when the body takes longer,
+    by the clock given (a `TestClock` makes it no matter of the machine).
+  - `requireAll("name") { … }` is soft assertions: every expectation in the body
+    is looked at, and then the test ends if any was not met.
 - `expectThrows(E.self) { … }` gives the error thrown, `expectThrows(error)`
   wants that very one, `expectThrows(saying: "text")` one that says that,
   `expectThrows { … }` any, `expectNoThrow` none; each has an async form.

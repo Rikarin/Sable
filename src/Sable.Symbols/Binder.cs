@@ -7343,11 +7343,13 @@ public sealed partial class Binder {
                 // Swift's forward scan: a parameter with a default that could
                 // not take a closure is passed over, 'scale: Int = 2' in
                 // 'f(3) { … }' of 'f(_ x: Int, scale: Int = 2, by: (Int) -> Int)'.
+                // An '@autoclosure' one takes the value its closure gives,
+                // never a closure written as one.
                 while (next < parameters.Length - 1
                        && !parameters[next].IsVariadic
                        && (parameters[next] is { HasDefaultValue: true, IsDeclared: true }
                            || MemberwiseField(parameters[next]) is not null)
-                       && !ResemblesFunction(parameters[next].Type)) {
+                       && (parameters[next].IsAutoclosure || !ResemblesFunction(parameters[next].Type))) {
                     next++;
                 }
             } else if (i < labels.Length && labels[i] is { } label) {

@@ -1,0 +1,14 @@
+expectation failed: got.id == 2: two (<file>:141)
+    the values differ
+       left: 1
+      right: 2
+             ^ first difference at character 0
+    got: Order(id: 1, lines: [Line(id: 1, price: 10, sku: "a, b"), Line(id: 2, price: 3, sku: "c")], tags: ["x": 1, "z": 0], codes: Set(["x", "y"]))
+expectation failed: got.lines.count == 3 (<file>:142)
+    the values differ
+       left: 2
+      right: 3
+             ^ first difference at character 0
+    got: Order(id: 1, lines: [Line(id: 1, price: 10, sku: "a, b"), Line(id: 2, price: 3, sku: "c")], tags: ["x": 1, "z": 0], codes: Set(["x", "y"]))
+    got.lines: [Line(id: 1, price: 10, sku: "a, b"), Line(id: 2, price: 3, sku: "c")]
+expectation failed: 2 expectations of the order were not met (<file>:139)

@@ -96,6 +96,9 @@ public sealed class CoreTypes {
     /// <summary><c>Attribute</c>: what a user-defined attribute's struct conforms to (<c>Attribute.sb</c>).</summary>
     public NamedTypeSymbol? Attribute => Declared("Attribute", TypeKind.Protocol);
 
+    /// <summary><c>KeyPath&lt;Root, Value&gt;</c>: what <c>\.name</c> is (<c>KeyPath.sb</c>).</summary>
+    public NamedTypeSymbol? KeyPath => Declared("KeyPath", TypeKind.Struct);
+
     /// <summary><c>InlineLayout</c>: what every <c>@inline_layout</c> struct conforms to (<c>InlineLayout.sb</c>).</summary>
     public NamedTypeSymbol? InlineLayout => Declared("InlineLayout", TypeKind.Protocol);
 

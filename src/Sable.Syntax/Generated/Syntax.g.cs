@@ -1531,6 +1531,45 @@ public sealed class ImplicitParameterExpressionSyntax : ExpressionSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitImplicitParameterExpression(this);
 }
 
+/// <summary>`\.address.city`: how to get from a value to a part of it; its body's innermost expression is the root.</summary>
+public sealed class KeyPathExpressionSyntax : ExpressionSyntax
+{
+    private ExpressionSyntax? _body;
+
+    internal KeyPathExpressionSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public ExpressionSyntax Body => GetRed(ref _body, 0);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        0 => Body,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitKeyPathExpression(this);
+}
+
+/// <summary>`\` or `\Customer`: the value a key path starts from.</summary>
+public sealed class KeyPathRootExpressionSyntax : ExpressionSyntax
+{
+    private TypeSyntax? _type;
+
+    internal KeyPathRootExpressionSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken BackslashToken => GetToken(0);
+    public TypeSyntax? Type => GetRedOptional(ref _type, 1);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        1 => Type,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitKeyPathRootExpression(this);
+}
+
 /// <summary>`match e { case p =&gt; v ... }`. In statement position it is wrapped in an expression statement.</summary>
 public sealed class MatchExpressionSyntax : ExpressionSyntax
 {
@@ -3687,6 +3726,8 @@ public abstract class SyntaxVisitor
     public virtual void VisitInterpolatedText(InterpolatedTextSyntax node) => DefaultVisit(node);
     public virtual void VisitInterpolation(InterpolationSyntax node) => DefaultVisit(node);
     public virtual void VisitImplicitParameterExpression(ImplicitParameterExpressionSyntax node) => DefaultVisit(node);
+    public virtual void VisitKeyPathExpression(KeyPathExpressionSyntax node) => DefaultVisit(node);
+    public virtual void VisitKeyPathRootExpression(KeyPathRootExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitMatchExpression(MatchExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitMatchArm(MatchArmSyntax node) => DefaultVisit(node);
     public virtual void VisitMatchCaseBlock(MatchCaseBlockSyntax node) => DefaultVisit(node);

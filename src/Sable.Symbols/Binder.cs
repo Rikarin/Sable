@@ -2837,6 +2837,8 @@ public sealed partial class Binder {
             BraceClosureExpressionSyntax brace => BindBraceClosure(brace, expectedType),
             ImplicitParameterExpressionSyntax implicitParameter =>
                 BindImplicitParameter(implicitParameter),
+            KeyPathExpressionSyntax keyPath => BindKeyPath(keyPath, expectedType),
+            KeyPathRootExpressionSyntax root => BindKeyPathRoot(root),
             TryExpressionSyntax tryExpression => BindTry(tryExpression, expectedType),
             _ => Unsupported(expression),
         };
@@ -3600,6 +3602,14 @@ public sealed partial class Binder {
                 receiver = captured;
             }
 
+            // In a closure, 'helper(x)' is 'self.helper(x)', and captures it.
+            if (receiver is null && containingType is not null
+                && _containingSymbol is FunctionSymbol closure && IsClosureSymbol(closure)
+                && functions.All(static f => f is { IsStatic: false, FunctionKind: FunctionKind.Ordinary })
+                && OutermostFunction(closure) is { IsStatic: false, FunctionKind: not FunctionKind.Operator }) {
+                receiver = ImplicitSelf(syntax, containingType);
+            }
+
             return new BoundFunctionGroup(syntax, receiver, functions) { Substitution = substitution };
         }
 
@@ -3620,12 +3630,7 @@ public sealed partial class Binder {
                 }
 
                 if (receiver is null && !field.IsStatic && containingType is not null) {
-                    // An array extension's member, reached from another's: self is this one's array.
-                    // A protocol's, reached from one refining it: self is the refining one's Self.
-                    var self = (containingType.ExtendedArray is not null || containingType.TypeKind == TypeKind.Protocol) && EnclosingType() is { } enclosing
-                        ? SelfTypeOf(enclosing)
-                        : SelfTypeOf(containingType);
-                    receiver = new BoundSelfAccess(syntax, self, SelfIsMutable(containingType));
+                    receiver = ImplicitSelf(syntax, containingType);
                 }
 
                 // A lazy property of a value is computed by its first read,
@@ -3691,6 +3696,25 @@ public sealed partial class Binder {
                 );
                 return new BoundError(syntax);
         }
+    }
+
+    /// <summary>The member a closure is written in, through any closures and local functions around it.</summary>
+    static FunctionSymbol OutermostFunction(FunctionSymbol function) {
+        while (function.ContainingSymbol is FunctionSymbol outer) {
+            function = outer;
+        }
+
+        return function;
+    }
+
+    /// <summary>The <c>self</c> a member of a type is reached through, its name written alone.</summary>
+    BoundSelfAccess ImplicitSelf(SyntaxNode syntax, NamedTypeSymbol containingType) {
+        // An array extension's member, reached from another's: self is this one's array.
+        // A protocol's, reached from one refining it: self is the refining one's Self.
+        var self = (containingType.ExtendedArray is not null || containingType.TypeKind == TypeKind.Protocol) && EnclosingType() is { } enclosing
+            ? SelfTypeOf(enclosing)
+            : SelfTypeOf(containingType);
+        return new BoundSelfAccess(syntax, self, SelfIsMutable(containingType));
     }
 
     /// <summary>True for an expression that names storage: something a reference can refer to.</summary>
@@ -4897,16 +4921,21 @@ public sealed partial class Binder {
     ///     or mark kept: it is bound again where it belongs.
     /// </summary>
     BoundExpression Speculate(ExpressionSyntax syntax) {
+        var bound = Speculate(syntax, null);
+        _speculated.Add(syntax);
+        return bound;
+    }
+
+    BoundExpression Speculate(ExpressionSyntax syntax, TypeSymbol? expectedType) {
         var effects = SaveEffects();
         var (thrown, threwOwn, closureThrows) = (_thrownInBody, _threwOwnError, _closureThrows);
         BoundExpression bound;
         using (_diagnostics.Suppress()) {
-            bound = BindExpression(syntax);
+            bound = BindExpression(syntax, expectedType);
         }
 
         RestoreEffects(effects);
         (_thrownInBody, _threwOwnError, _closureThrows) = (thrown, threwOwn, closureThrows);
-        _speculated.Add(syntax);
         return bound;
     }
 
@@ -5248,6 +5277,9 @@ public sealed partial class Binder {
             ImplicitMemberAccessExpressionSyntax or InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax }
                 when target is FunctionTypeSymbol =>
                 "an implicit member, which no function type has",
+            KeyPathExpressionSyntax
+                when target is NamedTypeSymbol { TypeKind: not TypeKind.Protocol, Name: not "KeyPath" } or TupleTypeSymbol or ArrayTypeSymbol =>
+                "a key path",
             _ => null,
         };
     }
@@ -5255,6 +5287,7 @@ public sealed partial class Binder {
     static bool IsClosure(ExpressionSyntax expression) =>
         expression switch {
             ClosureExpressionSyntax or BraceClosureExpressionSyntax => true,
+            KeyPathExpressionSyntax => true,
             ImplicitMemberAccessExpressionSyntax => true,
 
             // '.Full(value: 1)' as an argument: the dot still needs the parameter.
@@ -6042,6 +6075,7 @@ public sealed partial class Binder {
         }
 
         InferFromSameTypeRequirements(function, outer, inferrable, map);
+        InferFromConformances(function, outer, inferrable, map);
 
         foreach (var (wanted, argument) in literals) {
             // A float literal where an integer one decided: both are floats.
@@ -6068,6 +6102,37 @@ public sealed partial class Binder {
         }
 
         return new(map);
+    }
+
+    /// <summary>
+    ///     What an argument's conformance says: <c>Rules(validator)</c>, its
+    ///     initialiser <c>init&lt;V: Validator&lt;T&gt;&gt;(_ v: V)</c>, makes the
+    ///     rules of the <c>T</c> its <c>V</c> conforms for.
+    /// </summary>
+    static void InferFromConformances(
+        FunctionSymbol function,
+        TypeSubstitution outer,
+        ImmutableArray<TypeParameterSymbol> inferrable,
+        Dictionary<TypeParameterSymbol, TypeSymbol> map
+    ) {
+        foreach (var parameter in function.TypeParameters) {
+            if (!map.TryGetValue(parameter, out var argument) || argument is not NamedTypeSymbol named) {
+                continue;
+            }
+
+            foreach (var constraint in parameter.Constraints) {
+                if (constraint is not NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Protocol } protocol) {
+                    continue;
+                }
+
+                var substitution = TypeSubstitution.For(named);
+                foreach (var conformance in named.OriginalDefinition.BaseTypes.OfType<NamedTypeSymbol>()) {
+                    if (ReferenceEquals(conformance.OriginalDefinition, protocol.OriginalDefinition)) {
+                        TypeSubstitution.Unify(outer.Apply(protocol), substitution.Apply(conformance), inferrable, map);
+                    }
+                }
+            }
+        }
     }
 
     /// <summary>The types calls open their <c>Type</c> arguments as, one for each argument and type parameter.</summary>
@@ -6620,6 +6685,27 @@ public sealed partial class Binder {
             if (arguments[i] is BoundUnboundClosure { Syntax: ExpressionSyntax unbound }
                 && ShapeMismatch(unbound, wanted) is { } mismatch) {
                 return Reject($"argument {i + 1} is {mismatch}, and '{parameter.Name}' takes '{wanted.ToDisplayString()}'");
+            }
+
+            // Nor is a key path a value of a type parameter in scope, which
+            // whoever is generic over it chooses.
+            if (arguments[i] is BoundUnboundClosure { Syntax: KeyPathExpressionSyntax } && wanted is TypeParameterSymbol && !ContainsUninferred(wanted, candidate)) {
+                return Reject($"argument {i + 1} is a key path, and '{parameter.Name}' takes '{wanted.ToDisplayString()}'");
+            }
+
+            // A key path not bound yet leads somewhere, which a 'KeyPath<T, V?>'
+            // takes only where that is optional, and better than a
+            // 'KeyPath<T, V>' does.
+            if (arguments[i] is BoundUnboundClosure { Syntax: KeyPathExpressionSyntax path }
+                && KeyPathArguments(wanted) is var (from, to)
+                && KeyPathValue(path, from, candidate) is { } led) {
+                if (to is OptionalTypeSymbol && led is not OptionalTypeSymbol && ContainsUninferred(to, candidate)) {
+                    return Reject($"argument {i + 1} is a key path to '{led.ToDisplayString()}', and '{parameter.Name}' takes '{wanted.ToDisplayString()}'");
+                }
+
+                if (to is OptionalTypeSymbol != led is OptionalTypeSymbol) {
+                    cost++;
+                }
             }
 
             var conversion = KeepsItsElements(arguments[i], wanted)

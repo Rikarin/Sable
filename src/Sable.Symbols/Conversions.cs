@@ -253,6 +253,15 @@ internal sealed class Conversions(CoreTypes core) {
             return true;
         }
 
+        // In a generic protocol's own extension, Self is 'Validator', which
+        // is the 'Validator<T>' of the T in scope there.
+        if (source is NamedTypeSymbol { IsGenericDefinition: true, TypeKind: TypeKind.Protocol } definition
+            && constraint is NamedTypeSymbol { IsConstructed: true } own
+            && ReferenceEquals(own.OriginalDefinition, definition)
+            && own.TypeArguments.SequenceEqual(definition.TypeParameters)) {
+            return true;
+        }
+
         // Sendable is met by what a type is made of, not by declaring it.
         // A type parameter is Sendable too where the code around requires it
         // to be: 'extension AsyncSequence where Self: Sendable'.

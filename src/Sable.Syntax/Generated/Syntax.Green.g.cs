@@ -2269,6 +2269,58 @@ internal sealed class ImplicitParameterExpressionGreen : GreenNode
         new ImplicitParameterExpressionSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="KeyPathExpressionSyntax"/>.</summary>
+internal sealed class KeyPathExpressionGreen : GreenNode
+{
+    private readonly GreenNode? _body;
+
+    public KeyPathExpressionGreen(GreenNode? body)
+        : base(SyntaxKind.KeyPathExpression, 0)
+    {
+        _body = body;
+        FullWidth = (body?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _body,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new KeyPathExpressionSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="KeyPathRootExpressionSyntax"/>.</summary>
+internal sealed class KeyPathRootExpressionGreen : GreenNode
+{
+    private readonly GreenToken? _backslashToken;
+    private readonly GreenNode? _type;
+
+    public KeyPathRootExpressionGreen(GreenToken? backslashToken, GreenNode? type)
+        : base(SyntaxKind.KeyPathRootExpression, 0)
+    {
+        _backslashToken = backslashToken;
+        _type = type;
+        FullWidth = (backslashToken?.FullWidth ?? 0)
+                    + (type?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _backslashToken,
+        1 => _type,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new KeyPathRootExpressionSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="MatchExpressionSyntax"/>.</summary>
 internal sealed class MatchExpressionGreen : GreenNode
 {

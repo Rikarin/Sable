@@ -983,7 +983,9 @@ public sealed partial class SilGen {
         do {
             while (_pending.Count > 0) {
                 var (symbol, name, type, substitution) = _pending.Dequeue();
-                if (_localGenerics.TryGetValue(symbol, out var local)) {
+                if (symbol is { IsAbstract: true, FunctionKind: FunctionKind.Ordinary }) {
+                    AbstractStub(symbol, name, type);
+                } else if (_localGenerics.TryGetValue(symbol, out var local)) {
                     LowerLocalFunction(symbol, local.Body, name, type, local.Source, substitution, _localGenericClosures.GetValueOrDefault(name));
                 } else {
                     var (syntax, model) = _declarations[symbol];
@@ -1714,6 +1716,17 @@ public sealed partial class SilGen {
         _inherited.Contains(type.OriginalDefinition)
         || _unit is not null && type.OriginalDefinition is { IsOpen: true, IsFinal: false, IsSealed: false };
 
+    /// <summary>Whether a type is written with an array, whose kinds are one type here.</summary>
+    static bool MentionsArray(TypeSymbol type) =>
+        type switch {
+            ArrayTypeSymbol => true,
+            OptionalTypeSymbol optional => MentionsArray(optional.UnderlyingType),
+            NamedTypeSymbol named => named.TypeArguments.Any(MentionsArray),
+            TupleTypeSymbol tuple => tuple.ElementTypes.Any(MentionsArray),
+            FunctionTypeSymbol function => function.ParameterTypes.Any(MentionsArray) || MentionsArray(function.ReturnType),
+            _ => false,
+        };
+
     /// <summary>The language class each SIL class was lowered from, for building its vtable.</summary>
     readonly Dictionary<ClassType, NamedTypeSymbol> _classes = [];
 
@@ -1755,6 +1768,13 @@ public sealed partial class SilGen {
         var built = _builtVTables;
         void Build(ClassType type) {
             if (!built.Add(type) || !_classes.TryGetValue(type, out var symbol)) {
+                return;
+            }
+
+            // A class of a type parameter's own, 'Rule<V>', was lowered to ask
+            // what a closure may capture: no object is one, and its methods
+            // have no instances.
+            if (symbol.TypeArguments.Any(a => a is not ValueTypeArgumentSymbol && !a.Equals(Core.Never) && Lower(a) is null)) {
                 return;
             }
 
@@ -1824,6 +1844,12 @@ public sealed partial class SilGen {
             return;
         }
 
+        AbstractStub(method, name, type);
+        _names[method] = name;
+    }
+
+    /// <summary>The stub of that name: a generic class's abstract method has one for each of its instances.</summary>
+    void AbstractStub(FunctionSymbol method, string name, FunctionType type) {
         var stub = new SilFunction(name, type);
         var entry = stub.AddBlock();
         foreach (var parameter in type.Parameters) {
@@ -1833,7 +1859,6 @@ public sealed partial class SilGen {
         entry.Append(new CondFailInst(entry.Append(new IntegerLiteralInst(SilType.Bool, 1)), $"abstract method '{method.Name}' called"));
         entry.Append(new UnreachableInst());
         _module.Add(stub);
-        _names[method] = name;
     }
 
     /// <summary>
@@ -1917,7 +1942,7 @@ public sealed partial class SilGen {
     // contains, as an accessor is contained: what it uses of 'self' it captures.
     static bool HasSelf(FunctionSymbol symbol) =>
         Owner(symbol) is not null && !symbol.IsStatic && symbol.FunctionKind is not (FunctionKind.Initializer or FunctionKind.Operator)
-        && symbol is not { Name.Length: 0, ContainingSymbol: FieldSymbol, DeclaringSyntax: [ClosureExpressionSyntax or BraceClosureExpressionSyntax] };
+        && symbol is not { Name.Length: 0, ContainingSymbol: FieldSymbol, DeclaringSyntax: [ClosureExpressionSyntax or BraceClosureExpressionSyntax or KeyPathExpressionSyntax] };
 
     FunctionType? SignatureOf(FunctionSymbol symbol, SyntaxNode at, TypeSubstitution substitution) {
         SilType? Lower(TypeSymbol type) => this.Lower(Substitute(substitution, type));
@@ -2452,7 +2477,17 @@ public sealed partial class SilGen {
             // An actor is a class whose calls are serialised by its executor:
             // a call from outside it hops onto it first (SilGen.Actors.cs).
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Class or TypeKind.Actor } named when !named.OriginalDefinition.Equals(Core.Task): {
-                var classType = Begin(named, new ClassType(TypeName(named)));
+                // 'Box<Int[]>' and 'Box<Int[>..]>' are one class here, as their
+                // arguments are one type: its methods have one set of instances.
+                var className = TypeName(named);
+                if (named.TypeArguments.Any(static a => MentionsArray(a)) && named.TypeArguments.All(a => Lower(a) is not null)
+                    && _classes.FirstOrDefault(c => c.Key.Name == className && ReferenceEquals(c.Value.OriginalDefinition, named.OriginalDefinition)).Key is { } same
+                    && _types.ContainsValue(same)) {
+                    _types[named] = same;
+                    return same;
+                }
+
+                var classType = Begin(named, new ClassType(className));
                 _classes[classType] = named;
 
                 // A superclass's fields come first, where they are in it.

@@ -1,0 +1,50 @@
+module Sable.Core
+
+/// How to get from a value to a part of it, as a value itself: what
+/// `\.address.city` is where a `KeyPath<Customer, String>` is wanted, and
+/// `\Customer.address.city` anywhere. It knows its members' names too, so
+/// what reads through it can say where.
+///
+/// Swift's KeyPath, read only, and .NET's `Expression<Func<T, V>>` for a
+/// chain of members.
+///
+/// ```sable
+/// struct Address { var city: String }
+/// struct Customer { var name: String, var address: Address }
+///
+/// let city: KeyPath<Customer, String> = \.address.city
+/// assert(city.path == "address.city")
+/// assert(city.value(of: Customer(name: "Ada", address: Address(city: "London"))) == "London")
+/// ```
+public struct KeyPath<Root, Value> {
+    /// The members' names, from the root on, with dots between them.
+    public let path: String
+    let read: (Root) -> Value
+
+    /// A key path of that text, read by the closure: what a key path written
+    /// in the program is made of, and one no members make.
+    public init(path: String, read: @escaping (Root) -> Value) {
+        self.path = path
+        self.read = read
+    }
+
+    /// What the path leads to from that value.
+    public fn value(of root: Root) -> Value {
+        return read(root)
+    }
+
+    /// This path, and then the other.
+    ///
+    /// ```sable
+    /// struct Address { var city: String }
+    /// struct Customer { var address: Address }
+    ///
+    /// let path = (\Customer.address).appending(\.city.count)
+    /// assert(path.path == "address.city.count")
+    /// ```
+    public fn appending<Next>(_ next: KeyPath<Value, Next>) -> KeyPath<Root, Next> {
+        let first = self.read
+        let rest = next.read
+        return KeyPath<Root, Next>(path: "\(path).\(next.path)", read: (root: Root) => rest(first(root)))
+    }
+}

@@ -303,6 +303,8 @@ public enum SyntaxKind : ushort {
     IfExpression = 1161,
     ThrowExpression = 1162,
     DiscardExpression = 1163,
+    KeyPathExpression = 1164,
+    KeyPathRootExpression = 1165,
 
     // ---- Pattern nodes (1200-1299) ----------------------------------------
     WildcardPattern = 1200,

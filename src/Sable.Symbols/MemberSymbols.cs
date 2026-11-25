@@ -9,7 +9,7 @@ namespace Sable.Symbols;
 ///     about one declaration without binding the whole program, which is what the
 ///     language server needs.
 /// </remarks>
-public abstract class TypedSymbol : Symbol {
+public abstract class TypedSymbol(SyntaxNode? declaration) : Symbol(declaration) {
     TypeSymbol? _type;
 
     internal Func<TypeSymbol>? TypeResolver { get; set; }
@@ -96,10 +96,9 @@ public sealed class FunctionSymbol : Symbol {
         SyntaxNode? declaration,
         Accessibility accessibility,
         FunctionKind functionKind
-    ) {
+    ) : base(declaration) {
         Name = name;
         ContainingSymbol = container;
-        DeclaringSyntax = declaration is null ? [] : [declaration];
         DeclaredAccessibility = accessibility;
         FunctionKind = functionKind;
     }
@@ -115,7 +114,6 @@ public sealed class FunctionSymbol : Symbol {
     public override SymbolKind Kind => SymbolKind.Function;
     public override string Name { get; }
     public override Symbol? ContainingSymbol { get; }
-    public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; }
     public override Accessibility DeclaredAccessibility { get; }
 
     public FunctionKind FunctionKind { get; }
@@ -252,6 +250,34 @@ public sealed class FunctionSymbol : Symbol {
     /// </summary>
     public string? Builtin { get; internal set; }
 
+    bool? _isGenerator;
+
+    /// <summary>A function whose body yields, making what its result says: its call runs nothing, so it neither waits nor throws.</summary>
+    internal bool IsGenerator {
+        get => _isGenerator ??= Binder.Yields(this);
+        set => _isGenerator = value;
+    }
+
+    bool? _hasSetter;
+
+    /// <summary>For a subscript, whether it declares a <c>set</c>.</summary>
+    public bool HasSetter {
+        get => _hasSetter ?? (DeclaringSyntax.FirstOrDefault() is SubscriptDeclarationSyntax { Accessors: { } accessors }
+            && accessors.Accessors.Any(static a => a.Keyword.Kind == SyntaxKind.SetKeyword));
+        internal set => _hasSetter = value;
+    }
+
+    bool? _isExpressionBodied;
+
+    /// <summary>For a subscript, whether it is written <c>=&gt; e</c>: its own getter.</summary>
+    public bool IsExpressionBodied {
+        get => _isExpressionBodied ?? DeclaringSyntax.FirstOrDefault() is SubscriptDeclarationSyntax { ExpressionBody: not null };
+        internal set => _isExpressionBodied = value;
+    }
+
+    /// <summary>For a subscript read from a library's interface, its accessors, which its file's model gives as its own.</summary>
+    internal ImmutableArray<FunctionSymbol> InterfaceAccessors { get; set; } = [];
+
     bool? _hasBody;
 
     /// <summary>
@@ -262,7 +288,7 @@ public sealed class FunctionSymbol : Symbol {
     ///     lazy or inherited one the compilation keeps).
     /// </summary>
     public bool HasBody {
-        get => _hasBody ?? (!DeclaringSyntax.IsEmpty && HasBodyIn(DeclaringSyntax[0]));
+        get => _hasBody ?? (IsDeclared && HasBodyIn(DeclaringSyntax[0]));
         internal set => _hasBody = value;
     }
 
@@ -392,13 +418,10 @@ public sealed class ParameterSymbol(
     string? label,
     Symbol container,
     SyntaxNode? declaration,
-    int ordinal) : TypedSymbol {
+    int ordinal) : TypedSymbol(declaration) {
     public override SymbolKind Kind => SymbolKind.Parameter;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
-
-    public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
-        declaration is null ? [] : [declaration];
 
     /// <summary>The external label, when it differs from the name.</summary>
     public string? Label { get; } = label;
@@ -478,13 +501,10 @@ public sealed class FieldSymbol(
     Symbol container,
     SyntaxNode? declaration,
     Accessibility accessibility,
-    bool isMutable) : TypedSymbol {
+    bool isMutable) : TypedSymbol(declaration) {
     public override SymbolKind Kind => SymbolKind.Field;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
-
-    public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
-        declaration is null ? [] : [declaration];
 
     /// <summary>A <c>const</c>.</summary>
     public bool IsConstant { get; internal init; }
@@ -493,6 +513,12 @@ public sealed class FieldSymbol(
     internal long? KnownValue { get; init; }
 
     internal Func<System.Numerics.BigInteger?>? ValueResolver { get; set; }
+
+    /// <summary>For a constant read from a library's interface, whether its initial value is a literal, which needs no computing.</summary>
+    public bool IsKnownLiteral { get; internal set; }
+
+    /// <summary>For a property read from a library's interface, its accessors, which its file's model gives as its own.</summary>
+    internal ImmutableArray<FunctionSymbol> InterfaceAccessors { get; set; } = [];
 
     /// <summary>A constant's value when it is a whole number known while types are read (docs/03), else null.</summary>
     public long? IntegerValue =>
@@ -579,13 +605,10 @@ public sealed class AliasSymbol(
     string name,
     Symbol container,
     SyntaxNode? declaration,
-    Accessibility accessibility) : TypedSymbol {
+    Accessibility accessibility) : TypedSymbol(declaration) {
     public override SymbolKind Kind => SymbolKind.Alias;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
-
-    public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
-        declaration is null ? [] : [declaration];
 
     public override Accessibility DeclaredAccessibility { get; } = accessibility;
 
@@ -599,13 +622,10 @@ public sealed class AliasSymbol(
 public sealed class UnionCaseSymbol(
     string name,
     NamedTypeSymbol container,
-    SyntaxNode? declaration) : Symbol {
+    SyntaxNode? declaration) : Symbol(declaration) {
     public override SymbolKind Kind => SymbolKind.UnionCase;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
-
-    public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
-        declaration is null ? [] : [declaration];
 
     public override Accessibility DeclaredAccessibility => container.DeclaredAccessibility;
 
@@ -618,13 +638,10 @@ public sealed class UnionCaseSymbol(
 public sealed class EnumCaseSymbol(
     string name,
     NamedTypeSymbol container,
-    SyntaxNode? declaration) : Symbol {
+    SyntaxNode? declaration) : Symbol(declaration) {
     public override SymbolKind Kind => SymbolKind.EnumCase;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
-
-    public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
-        declaration is null ? [] : [declaration];
 
     public override Accessibility DeclaredAccessibility => container.DeclaredAccessibility;
 
@@ -640,13 +657,10 @@ public sealed class LocalSymbol(
     string name,
     Symbol container,
     SyntaxNode? declaration,
-    bool isMutable) : TypedSymbol {
+    bool isMutable) : TypedSymbol(declaration) {
     public override SymbolKind Kind => SymbolKind.Local;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
-
-    public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
-        declaration is null ? [] : [declaration];
 
     /// <summary><c>async let</c>: its value comes from a child task, so reading it awaits.</summary>
     public bool IsAsyncLet { get; internal set; }

@@ -58,8 +58,10 @@ public sealed class CoreTypes {
 
         // What may cross an isolation boundary (SYNTAX.md §19, docs/02 §2.7):
         // a marker, which a type meets by what it is made of, not by saying so.
-        Sendable = new("Sendable", TypeKind.Protocol, Module, accessibility: Accessibility.Public);
-        Module.AddMember(Sendable);
+        Sendable = Known("Sendable") ?? new("Sendable", TypeKind.Protocol, Module, accessibility: Accessibility.Public);
+        if (Known("Sendable") is null) {
+            Module.AddMember(Sendable);
+        }
 
         // 'extension AppError: From<IoError>' lets a 'try' in a function that
         // throws AppError propagate an IoError, converted (docs/03 §3.6).
@@ -69,7 +71,7 @@ public sealed class CoreTypes {
         // Its members, though, are lib/Sable.Core/Optional.sb's, on 'T?' itself.
         // ('[K: V]' desugars to Dictionary, which is Sable: see Dictionary below.)
         Optional = DeclareGeneric("Optional", TypeKind.Union, "Wrapped");
-        Optional.ExtendedOptional = new OptionalTypeSymbol(Optional.TypeParameters[0]);
+        Optional.ExtendedOptional ??= new OptionalTypeSymbol(Optional.TypeParameters[0]);
 
         Integers = [I8, I16, I32, I64, I128, Int, U8, U16, U32, U64, U128, UInt];
         Floats = [F16, BF16, F32, F64];
@@ -348,7 +350,14 @@ public sealed class CoreTypes {
         return index < 6 ? (-(one << (width - 1)), (one << (width - 1)) - 1) : (0, (one << width) - 1);
     }
 
+    /// <summary>A type the module has already, its symbols read from its interface.</summary>
+    NamedTypeSymbol? Known(string name) => Module.GetType(name);
+
     NamedTypeSymbol Primitive(string name) {
+        if (Known(name) is { } known) {
+            return known;
+        }
+
         var type = new NamedTypeSymbol(name, TypeKind.Builtin, Module, accessibility: Accessibility.Public);
         Module.AddMember(type);
         return type;
@@ -359,6 +368,10 @@ public sealed class CoreTypes {
         TypeKind typeKind,
         params string[] typeParameterNames
     ) {
+        if (Known(name) is { } known) {
+            return known;
+        }
+
         var type = new NamedTypeSymbol(name, typeKind, Module, accessibility: Accessibility.Public);
 
         type.TypeParameters = [

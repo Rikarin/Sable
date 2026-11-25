@@ -37,7 +37,7 @@ internal static class EscapeChecker {
     static bool IsNonEscapingClosure(ParameterSymbol parameter) =>
         parameter is { IsEscaping: false, IsCallersStorage: false }
         && parameter.Type is FunctionTypeSymbol
-        && !parameter.DeclaringSyntax.IsEmpty;
+        && parameter.IsDeclared;
 
     static bool IsByAddress(ParameterSymbol parameter) => parameter.IsCallersStorage;
 
@@ -78,7 +78,7 @@ internal static class EscapeChecker {
                             SelfWritten(call.Arguments[i]);
                         }
 
-                        if (parameter.IsVariadic || parameter.IsEscaping || parameter.Type is not FunctionTypeSymbol || parameter.DeclaringSyntax.IsEmpty) {
+                        if (parameter.IsVariadic || parameter.IsEscaping || parameter.Type is not FunctionTypeSymbol || !parameter.IsDeclared) {
                             continue;
                         }
 

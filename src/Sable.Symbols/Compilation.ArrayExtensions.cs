@@ -195,12 +195,15 @@ public sealed partial class Compilation {
         // A requirement may be met by what any array extension declares, as
         // 'count' is by the slice's. What the conformance asks is checked
         // once every signature is bound, as a named type's is.
+        FindArrayMembers(carrier);
+        TypeBinder.DeferConformanceCheck(carrier);
+    }
+
+    void FindArrayMembers(NamedTypeSymbol carrier) =>
         carrier.ArrayMembersNamed = name =>
             carrier.ExtendedArray is { } extended && LookupArrayMember(extended, name) is { Owner: not null } found
                 ? found.Members
                 : [];
-        TypeBinder.DeferConformanceCheck(carrier);
-    }
 
     /// <summary>
     ///     The array extension that conforms this array to the protocol, and

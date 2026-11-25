@@ -753,7 +753,7 @@ public sealed partial class SilGen {
             root = parent;
         }
 
-        if (_compilation.SyntaxTrees.FirstOrDefault(t => ReferenceEquals(t.Root, root)) is not { } tree) {
+        if (_compilation.TreeOf(declaration) is not { } tree) {
             return null;
         }
 

@@ -328,7 +328,11 @@ public static class IncrementalBuild {
             timings?.Count("files parsed from interfaces", sources.FromInterfaces);
         }
 
-        var library = Library.For(sources.Program);
+        IReadOnlyList<SyntaxTree> library;
+        using (BuildTimings.Of(timings, "library source")) {
+            library = Library.For(sources.Program);
+            CoreLibrary.TreesFor(sources.Trees[0][0].Options);
+        }
 
         var outcome = settings.Separate
             ? Separately(sources, known, fileHashes, library, settings, settingsKey, executable, cacheDirectory, cache, timings, log)
@@ -530,7 +534,12 @@ public static class IncrementalBuild {
         var interfaces = Path.Combine(cacheDirectory, "interfaces");
         var interfaceFiles = new string[own.Count];
         using (BuildTimings.Of(timings, "interface")) {
-            var concrete = InterfaceFingerprint.ConcreteTypeNames(units.SelectMany(static u => u.Trees));
+            // Only the names the program's extensions extend are asked about: a
+            // file of the standard library that has none of them is not read.
+            var extendedNames = own.SelectMany(static u => u.Trees).SelectMany(InterfaceFingerprint.ExtendedNames).ToHashSet(StringComparer.Ordinal);
+            var naming = standard.Trees.Where(t => extendedNames.Any(name => t.Text.Text.Contains(name, StringComparison.Ordinal))).ToList();
+            SyntaxTree.ParseAll(naming);
+            var concrete = InterfaceFingerprint.ConcreteTypeNames([..own.SelectMany(static u => u.Trees), ..naming]);
             var read = 0;
             Parallel.For(0, own.Count, GlobalOptions.Current.ParallelOptions, i => {
                 var unit = own[i];
@@ -658,8 +667,14 @@ public static class IncrementalBuild {
             Compilation compilation;
             List<string> errors;
             using (BuildTimings.Of(timings, "bind")) {
-                compilation = Compilation.Create([..program, ..library]);
-                compilation.GetDiagnostics();
+                using (BuildTimings.Of(timings, "bind: declare")) {
+                    compilation = Compilation.Create([..program, ..library], library: SymbolsOf(standard));
+                }
+
+                using (BuildTimings.Of(timings, "bind: signatures")) {
+                    compilation.GetDiagnostics();
+                }
+
                 var checking = stale.SelectMany(static u => u.Trees).ToHashSet();
                 errors = Diagnostics(compilation, program, checking, DiagnosticSeverity.Error);
 
@@ -716,7 +731,7 @@ public static class IncrementalBuild {
                     compiled[unit] = built;
                 }
 
-                var face = built?.Write();
+                var face = InterfaceFiles(unit.Library, built, ReferenceEquals(unit, standard) ? library : null, program[0].Options);
                 compiling.Add((unit, Task.Run(async () => {
                     await throttle.WaitAsync();
                     try {
@@ -724,7 +739,7 @@ public static class IncrementalBuild {
                         NativeBuildResult result;
                         if (unit.Library is { } library) {
                             result = library.Write(abi, temporary => NativeObjects.CompileIr(ir, temporary, settings.ForLibrary.Native), settings.Native.TargetOrHost,
-                                face is null ? null : path => File.WriteAllBytes(path, face));
+                                face);
                         } else {
                             File.WriteAllText(unit.AbiPath, abi);
                             result = NativeObjects.CompileIr(ir, unit.ObjectPath, settings.Native);
@@ -778,6 +793,7 @@ public static class IncrementalBuild {
             return FallBack($"the units did not link ({FirstError(link.Output)})", link.Output);
         }
 
+        timings?.Count("library files parsed", standard.Trees.Count(static t => t.IsParsed));
         using (BuildTimings.Of(timings, "cache upkeep")) {
             Collect(objects, units);
             CollectInterfaces(interfaces, interfaceFiles);
@@ -903,6 +919,37 @@ public static class IncrementalBuild {
 
         var names = unit.Trees.Select(static t => t.Text.FileName).ToHashSet(StringComparer.Ordinal);
         return names.SetEquals(face.Sources.Select(static s => s.File)) ? face : null;
+    }
+
+    /// <summary>
+    ///     What a program's declarations of the standard library are taken from
+    ///     (<see cref="LibrarySymbols" />), when its unit is kept: the symbols
+    ///     its entry has. Null when it is compiled now, or has none.
+    /// </summary>
+    static LibrarySymbols? SymbolsOf(Unit standard) =>
+        LibrarySymbols.Mode != LibrarySymbolsMode.Source && standard is { Cached: true, Library.Symbols: var path } && File.Exists(path)
+            ? LibrarySymbols.Read(File.ReadAllBytes(path), standard.Trees)
+            : null;
+
+    /// <summary>
+    ///     What writes a library unit's interface in its entry, given the path
+    ///     of its <c>.sbi</c> there; with the standard library's, its symbols.
+    ///     Worked out here, before the unit's object is compiled on another thread.
+    /// </summary>
+    /// <param name="library">For the standard library's unit, the modules that come with the core.</param>
+    static Action<string>? InterfaceFiles(LibraryUnit? unit, LibraryInterface? built, IReadOnlyList<SyntaxTree>? library, ParseOptions options) {
+        if (unit is null || built is null) {
+            return null;
+        }
+
+        var face = built.Write();
+        var symbols = library is null ? null : LibrarySymbols.Of(library, options)?.Write();
+        return path => {
+            File.WriteAllBytes(path, face);
+            if (symbols is not null) {
+                File.WriteAllBytes(Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileName(unit.Symbols)), symbols);
+            }
+        };
     }
 
     /// <summary>
@@ -1067,9 +1114,8 @@ public static class IncrementalBuild {
             return BuildOutcome.Failed(lowered.Errors);
         }
 
-        var face = InterfaceOf(compilation, "std", trees, lowered, settings, program.Options)?.Write();
-        var written = unit.Write(lowered.Abi, temporary => NativeObjects.CompileIr(lowered.Ir!, temporary, settings.ForLibrary.Native), target,
-            face is null ? null : path => File.WriteAllBytes(path, face));
+        var face = InterfaceFiles(unit, InterfaceOf(compilation, "std", trees, lowered, settings, program.Options), library, program.Options);
+        var written = unit.Write(lowered.Abi, temporary => NativeObjects.CompileIr(lowered.Ir!, temporary, settings.ForLibrary.Native), target, face);
         if (!written.Succeeded) {
             return BuildOutcome.Failed([$"internal error: compiling the standard library failed:\n{written.Output}"]);
         }
@@ -1156,7 +1202,7 @@ public static class IncrementalBuild {
         var order = program.Select(static (tree, index) => (tree, index)).ToDictionary(static p => p.tree, static p => p.index);
         var all = new List<(Diagnostic Diagnostic, SyntaxTree? Tree)>();
         var parse = new HashSet<Diagnostic>(ReferenceEqualityComparer.Instance);
-        foreach (var tree in compilation.SyntaxTrees.Where(t => severity == DiagnosticSeverity.Error || checking.Contains(t))) {
+        foreach (var tree in compilation.SyntaxTrees.Where(t => (severity == DiagnosticSeverity.Error || checking.Contains(t)) && !compilation.IsFromInterface(t))) {
             all.AddRange(tree.Diagnostics.Select(d => (d, (SyntaxTree?)tree)));
             parse.UnionWith(tree.Diagnostics);
         }

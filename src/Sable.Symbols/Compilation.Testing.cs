@@ -86,7 +86,7 @@ public sealed partial class Compilation {
     public IReadOnlyList<TestFunction> GetTestFunctions(TestKind kind) {
         var found = new List<TestFunction>();
         foreach (var tree in SyntaxTrees) {
-            if (!_fileScopes.ContainsKey(tree)) {
+            if (!HasFileScope(tree)) {
                 continue;
             }
 
@@ -231,7 +231,7 @@ public sealed partial class Compilation {
         }
 
         return ok
-            ? new(function, declaration, tree, kind, _fileScopes[tree].Module.Name, callPath, function.ThrownType is not null, takesBencher) { ExpectedTrap = expectedTrap }
+            ? new(function, declaration, tree, kind, GetFileScope(tree).Module.Name, callPath, function.ThrownType is not null, takesBencher) { ExpectedTrap = expectedTrap }
             : null;
     }
 

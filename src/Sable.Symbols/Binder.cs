@@ -6735,7 +6735,7 @@ public sealed partial class Binder {
                 // 'f(3) { … }' of 'f(_ x: Int, scale: Int = 2, by: (Int) -> Int)'.
                 while (next < parameters.Length - 1
                        && !parameters[next].IsVariadic
-                       && (parameters[next].DeclaringSyntax is [ParameterSyntax { DefaultValue: not null }]
+                       && (parameters[next] is { HasDefaultValue: true, IsDeclared: true }
                            || MemberwiseField(parameters[next]) is not null)
                        && !ResemblesFunction(parameters[next].Type)) {
                     next++;
@@ -6743,7 +6743,7 @@ public sealed partial class Binder {
             } else if (i < labels.Length && labels[i] is { } label) {
                 var reach = next;
                 while (reach < parameters.Length
-                       && (parameters[reach].DeclaringSyntax is [ParameterSyntax { DefaultValue: not null, EllipsisToken.IsNone: true }]
+                       && (parameters[reach] is { HasDefaultValue: true, IsVariadic: false, IsDeclared: true }
                            || MemberwiseField(parameters[reach]) is not null)
                        && !Names(parameters[reach], label)) {
                     reach++;

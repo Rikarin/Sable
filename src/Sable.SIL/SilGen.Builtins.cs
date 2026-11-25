@@ -41,43 +41,83 @@ public sealed partial class SilGen {
     /// <summary>Checks every <c>@builtin</c> declaration against the builtin it names.</summary>
     void CheckBuiltins() {
         foreach (var tree in _compilation.SyntaxTrees) {
+            if (TakesInterface(tree)) {
+                foreach (var declared in _compilation.InterfaceDeclarations(tree)) {
+                    CheckFromInterface(declared);
+                }
+
+                continue;
+            }
+
             foreach (var declaration in Declarations(tree)) {
                 switch (declaration) {
                     case FunctionDeclarationSyntax function
                         when _compilation.GetDeclaredSymbol(function) is FunctionSymbol { Builtin: { } name } symbol && Compilation.IsBuiltinFamily(name):
-                        CheckFamily(symbol, name, function.Attributes, Operands(symbol), symbol.ReturnType, symbol.ThrownType is not null, symbol.IsMutating);
+                        CheckFamily(symbol, name, BuiltinAt(function.Attributes), Operands(symbol), symbol.ReturnType, symbol.ThrownType is not null, symbol.IsMutating);
                         break;
 
                     case OperatorDeclarationSyntax operatorDeclaration
                         when _compilation.GetDeclaredSymbol(operatorDeclaration) is FunctionSymbol { Builtin: { } name } symbol && Compilation.IsBuiltinFamily(name):
-                        CheckFamily(symbol, name, operatorDeclaration.Attributes, Operands(symbol), symbol.ReturnType, false, false);
+                        CheckFamily(symbol, name, BuiltinAt(operatorDeclaration.Attributes), Operands(symbol), symbol.ReturnType, false, false);
                         break;
 
                     case FieldDeclarationSyntax field
                         when _compilation.GetDeclaredSymbol(field) is FieldSymbol { Builtin: { } name } symbol && Compilation.IsBuiltinFamily(name):
-                        CheckFamily(symbol, name, field.Attributes, OwnerOfField(symbol) is { } protocol ? [SelfOf(protocol)] : [], symbol.Type, false, false);
+                        CheckFamily(symbol, name, BuiltinAt(field.Attributes), OwnerOfField(symbol) is { } protocol ? [SelfOf(protocol)] : [], symbol.Type, false, false);
                         break;
 
                     case FunctionDeclarationSyntax function
                         when _compilation.GetDeclaredSymbol(function) is FunctionSymbol { Builtin: { } name } symbol:
-                        CheckBuiltin(symbol, name, function.Attributes, Operands(symbol), symbol.ReturnType, symbol.ThrownType is not null,
+                        CheckBuiltin(symbol, name, BuiltinAt(function.Attributes), Operands(symbol), symbol.ReturnType, symbol.ThrownType is not null,
                             Representative(Owner(symbol)), symbol.IsMutating);
                         break;
 
                     case OperatorDeclarationSyntax operatorDeclaration
                         when _compilation.GetDeclaredSymbol(operatorDeclaration) is FunctionSymbol { Builtin: { } name } symbol:
-                        CheckBuiltin(symbol, name, operatorDeclaration.Attributes, Operands(symbol), symbol.ReturnType, false, TypeSubstitution.Empty, false);
+                        CheckBuiltin(symbol, name, BuiltinAt(operatorDeclaration.Attributes), Operands(symbol), symbol.ReturnType, false, TypeSubstitution.Empty, false);
                         break;
 
                     case FieldDeclarationSyntax field
                         when _compilation.GetDeclaredSymbol(field) is FieldSymbol { Builtin: { } name } symbol:
-                        CheckBuiltin(symbol, name, field.Attributes, OwnerOfField(symbol) is { } owner ? [SelfOf(owner)] : [], symbol.Type, false,
+                        CheckBuiltin(symbol, name, BuiltinAt(field.Attributes), OwnerOfField(symbol) is { } owner ? [SelfOf(owner)] : [], symbol.Type, false,
                             Representative(OwnerOfField(symbol)), false);
                         break;
                 }
             }
         }
     }
+
+    /// <summary>The same check, of a declaration of a library taken from its interface.</summary>
+    void CheckFromInterface(Symbol declared) {
+        TextSpan At() => declared.Location ?? default;
+        switch (declared) {
+            case FunctionSymbol { FunctionKind: FunctionKind.Ordinary or FunctionKind.Operator, Builtin: { } name } symbol: {
+                var isOperator = symbol.FunctionKind == FunctionKind.Operator;
+                if (Compilation.IsBuiltinFamily(name)) {
+                    CheckFamily(symbol, name, At, Operands(symbol), symbol.ReturnType, !isOperator && symbol.ThrownType is not null, symbol.IsMutating);
+                } else {
+                    CheckBuiltin(symbol, name, At, Operands(symbol), symbol.ReturnType, !isOperator && symbol.ThrownType is not null,
+                        isOperator ? TypeSubstitution.Empty : Representative(Owner(symbol)), symbol.IsMutating);
+                }
+
+                break;
+            }
+
+            case FieldSymbol { Builtin: { } name } symbol: {
+                List<TypeSymbol> operands = OwnerOfField(symbol) is { } owner ? [SelfOf(owner)] : [];
+                if (Compilation.IsBuiltinFamily(name)) {
+                    CheckFamily(symbol, name, At, operands, symbol.Type, false, false);
+                } else {
+                    CheckBuiltin(symbol, name, At, operands, symbol.Type, false, Representative(OwnerOfField(symbol)), false);
+                }
+
+                break;
+            }
+        }
+    }
+
+    static Func<TextSpan> BuiltinAt(SyntaxList<AttributeSyntax> attributes) =>
+        () => attributes.First(static a => a.Name.ToString().Trim() == "builtin").Span;
 
     /// <summary>What a builtin function is applied to: its receiver, if it has one, and its parameters.</summary>
     static List<TypeSymbol> Operands(FunctionSymbol function) {
@@ -116,10 +156,8 @@ public sealed partial class SilGen {
             _ => null,
         };
 
-    void CheckBuiltin(Symbol symbol, string name, SyntaxList<AttributeSyntax> attributes, List<TypeSymbol> operands, TypeSymbol result, bool throws,
+    void CheckBuiltin(Symbol symbol, string name, Func<TextSpan> at, List<TypeSymbol> operands, TypeSymbol result, bool throws,
         TypeSubstitution representative, bool mutating) {
-        var at = attributes.First(static a => a.Name.ToString().Trim() == "builtin").Span;
-
         // A SIMD builtin's signature follows the vectors it is given, which
         // are known only where it is used: checked there (ApplyBuiltin).
         if (SimdBuiltins.Is(name)) {
@@ -162,7 +200,7 @@ public sealed partial class SilGen {
         }
 
         if (signature is null) {
-            Report(ErrorCode.ERR_UnknownBuiltin, at,
+            Report(ErrorCode.ERR_UnknownBuiltin, at(),
                 $"there is no builtin '{name}' with a fixed signature: '@builtin' names one of SilBuiltins' table");
             return;
         }
@@ -173,7 +211,7 @@ public sealed partial class SilGen {
             || mutating != (signature.Operands is [AddressType, ..])) {
             var declared = $"({string.Join(", ", operands.Select(static o => o.ToDisplayString()))}) -> {result.ToDisplayString()}";
             var expected = $"({string.Join(", ", signature.Operands)}) -> {signature.Result}";
-            Report(ErrorCode.ERR_BuiltinSignatureMismatch, at,
+            Report(ErrorCode.ERR_BuiltinSignatureMismatch, at(),
                 $"'{name}' is {expected}, receiver first, but this declaration is {declared}"
                 + (modified ? ", with a parameter passed other than by value" : "")
                 + (throws ? ", and throws" : ""));
@@ -190,8 +228,7 @@ public sealed partial class SilGen {
     ///     with that type's builtin, as any <c>@builtin</c> must with its one.
     ///     A family is a requirement's default, so it must meet one.
     /// </summary>
-    void CheckFamily(Symbol symbol, string name, SyntaxList<AttributeSyntax> attributes, List<TypeSymbol> operands, TypeSymbol result, bool throws, bool mutating) {
-        var at = attributes.First(static a => a.Name.ToString().Trim() == "builtin").Span;
+    void CheckFamily(Symbol symbol, string name, Func<TextSpan> at, List<TypeSymbol> operands, TypeSymbol result, bool throws, bool mutating) {
         var protocol = symbol switch {
             FunctionSymbol function => Owner(function),
             FieldSymbol field => OwnerOfField(field),
@@ -199,7 +236,7 @@ public sealed partial class SilGen {
         };
 
         if (protocol is not { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self } || IsExtensionOnly(symbol)) {
-            Report(ErrorCode.ERR_MalformedBuiltin, at,
+            Report(ErrorCode.ERR_MalformedBuiltin, at(),
                 $"a builtin family is the built-in types' default for one of the protocol's requirements, and '{symbol.Name}' meets none: declare the requirement in the protocol");
             return;
         }
@@ -215,7 +252,7 @@ public sealed partial class SilGen {
             var concrete = new TypeSubstitution(new() { [self] = type });
             TypeSymbol AsType(TypeSymbol t) => ReferenceEquals((t as NamedTypeSymbol)?.OriginalDefinition, protocol.OriginalDefinition) ? type : concrete.Apply(t);
             var before = _diagnostics.Count;
-            CheckBuiltin(symbol, FamilyMember(name, lowered), attributes, [..operands.Select(AsType)], AsType(result), throws, TypeSubstitution.Empty, mutating);
+            CheckBuiltin(symbol, FamilyMember(name, lowered), at, [..operands.Select(AsType)], AsType(result), throws, TypeSubstitution.Empty, mutating);
             if (_soundBuiltins.Remove(symbol)) {
                 verified.Add(lowered);
             }

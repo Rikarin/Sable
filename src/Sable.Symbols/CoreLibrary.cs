@@ -49,7 +49,7 @@ public static class CoreLibrary {
         options.IsDefined("DEBUG") ? "DEBUG" : options.IsDefined("RELEASE") ? "RELEASE" : "";
 
     /// <summary>
-    ///     Library source parsed for a profile: a file that never names it
+    ///     Library source parsed, when first asked for, for a profile: a file that never names it
     ///     reads the same under every profile, so it is the tree parsed
     ///     without one, shared; only a file that says <c>DEBUG</c> or
     ///     <c>RELEASE</c> is parsed again. A second profile costs a few
@@ -58,7 +58,7 @@ public static class CoreLibrary {
     public static SyntaxTree ParseForProfile(string text, string fileName, ParseOptions plain, string profile, Func<SyntaxTree>? shared) =>
         profile.Length > 0 && shared is not null && !text.Contains("DEBUG", StringComparison.Ordinal) && !text.Contains("RELEASE", StringComparison.Ordinal)
             ? shared()
-            : SyntaxTree.Parse(new SourceText(text, fileName), profile.Length > 0 ? plain.WithSymbols(profile) : plain);
+            : SyntaxTree.Deferred(new SourceText(text, fileName), profile.Length > 0 ? plain.WithSymbols(profile) : plain);
 
     static IReadOnlyList<SyntaxTree> Load(string os, string arch, string profile) {
         var assembly = typeof(CoreLibrary).Assembly;
@@ -93,8 +93,7 @@ public static class CoreLibrary {
         module is not null && (module == ModuleName || module.StartsWith("Sable.", StringComparison.Ordinal));
 
     /// <summary>The module a file declares (<c>module A.B</c>), or null when it declares none.</summary>
-    public static string? ModuleOf(SyntaxTree tree) =>
-        tree.Root is CompilationUnitSyntax { Module: { } declaration } ? declaration.Name.ToString().Trim() : null;
+    public static string? ModuleOf(SyntaxTree tree) => tree.Header.Module;
 
     /// <summary>
     ///     The files of the standard library a program brings of its own, by

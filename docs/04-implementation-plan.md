@@ -999,8 +999,13 @@ shared build cache, an archive and its interface (`.sbi`, #182; docs/05
 §5.4): its bound symbols and its SIL.
 A program compiled against Sable.Core's interface (`Pipeline.CompileAgainst`)
 does not bind or check the core's bodies or lower its code again — 1.8 s of
-the 2.0 s a fresh process spends on a small program; it still declares the core from
-its source, which holds the generic bodies the program instantiates. A
+the 2.0 s a fresh process spends on a small program — and a build against
+the cache does not declare it either: the standard library's declarations are
+read from its entry (`LibrarySymbols`), and a file of its source is parsed only
+for a body, a default argument or a place in it that the program asks for. A
+three-line program's warm build parses none (docs/05 §5.4, "Declarations from
+the interface"). A program that extends the library's types or brings a file
+of it is compiled against its source, as are `sable check` and the language server. A
 library whose unit is in the cache is known to check cleanly, so a fresh
 process — a build, `sable check`, the language server's SIL checks — binds
 none of its bodies and lowers only what the program reaches.

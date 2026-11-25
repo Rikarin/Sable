@@ -1519,6 +1519,12 @@ A tuple literal passed for a tuple parameter has its numbers take the types of
 the parameter's elements, as `let p: (F32, F32) = (0, 1)` does: `remap(x, from:
 (0, 1), to: (4, 0))` of `(T, T)`s, where the other arguments decide T.
 
+A leading dot is for the overload whose parameter's type has a member of that
+name, a built-in one's too: `grid[.All]` is the subscript of a union with an
+`All`, not one of an Int. Of two members of extensions of one type that fit
+alike, the one whose extension says what a type parameter is (`where T == F32`)
+is chosen over one that says what it conforms to (`where T: Numeric`).
+
 Of an optional, `is`, `as?`, `as!` and the patterns `is T` and `let x as T` ask
 of the value it holds: `none` is no `T`, and `as!` of it traps.
 

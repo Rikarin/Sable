@@ -4238,8 +4238,18 @@ public sealed partial class Binder {
                 _ => null,
             };
 
-        if (OwnerOf(first) is not { } a || OwnerOf(second) is not { } b || ReferenceEquals(a, b)) {
+        if (OwnerOf(first) is not { } a || OwnerOf(second) is not { } b) {
             return null;
+        }
+
+        // Of two extensions of one type, the one that says what a type
+        // parameter is over one that only says what it conforms to:
+        // 'extension Tensor where T == F32' over 'where T: Numeric', as
+        // the one for F32 is the one written for it.
+        if (ReferenceEquals(a, b)) {
+            var aPins = first.ContainingSymbol is ExtensionSymbol { SameTypeRequirements.IsEmpty: false };
+            var bPins = second.ContainingSymbol is ExtensionSymbol { SameTypeRequirements.IsEmpty: false };
+            return aPins == bPins ? null : aPins ? first : second;
         }
 
         // Of two array extensions of the same kind, the one for an element
@@ -4345,7 +4355,7 @@ public sealed partial class Binder {
 
         bool LacksMember(ImplicitMemberAccessExpressionSyntax member) =>
             type is ArrayTypeSymbol
-            || (type is NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Union or TypeKind.Enum } named
+            || (type is NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Union or TypeKind.Enum or TypeKind.Builtin } named
                 && CalleeName(member.Name) is { Length: > 0 } name
                 && !HasMember(named, name)
                 && LookupMemberOfKind(named, name, instance: false) is null);

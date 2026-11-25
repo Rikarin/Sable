@@ -825,4 +825,88 @@ public sealed class LanguageGapTests {
                 print(mixed((7, "x")))
             }
             """).Stdout);
+
+    /// <summary>A leading dot is for the overload whose parameter has a member of its name: an Int has no '.All'.</summary>
+    [Fact]
+    public void ALeadingDotIsForTheOverloadWhoseTypeHasTheMember() =>
+        Assert.Equal(
+            """
+            index 2
+            pick 1
+            pick 2
+
+            """,
+            Programs.AssertAgree("""
+            module LeadingDots
+
+            import Sable.IO
+
+            enum Pick {
+                All
+                First
+            }
+
+            struct Grid {
+                subscript(i: Int) -> String {
+                    get => "index \(i)"
+                }
+
+                subscript(_ pick: Pick) -> String {
+                    get => "pick 1"
+                }
+
+                subscript(_ pick: Pick, _ other: Pick) -> String {
+                    get => "pick 2"
+                }
+
+                subscript(i: Int, j: Int) -> String {
+                    get => "index \(i + j)"
+                }
+            }
+
+            @main
+            fn main() {
+                let grid = Grid()
+                print(grid[2])
+                print(grid[.All])
+                print(grid[.All, .First])
+            }
+            """).Stdout);
+
+    /// <summary>Of two members of extensions of one type, the one whose extension says what a type parameter is wins over the one that says what it conforms to.</summary>
+    [Fact]
+    public void AnExtensionForOneTypeArgumentIsMoreSpecific() =>
+        Assert.Equal(
+            """
+            F32
+            any
+            F32
+
+            """,
+            Programs.AssertAgree("""
+            module Pinned
+
+            import Sable.IO
+
+            struct Box<T> {
+                let value: T
+            }
+
+            extension Box where T: Numeric {
+                static fn kind(_ box: Box<T>) -> String => "any"
+                fn kind() -> String => "any"
+            }
+
+            extension Box where T == F32 {
+                static fn kind(_ box: Box<F32>) -> String => "F32"
+                fn kind() -> String => "F32"
+            }
+
+            @main
+            fn main() {
+                print(Box.kind(Box<F32>(value: 1)))
+                print(Box.kind(Box<Int>(value: 1)))
+                print(Box<F32>(value: 2).kind())
+            }
+            """).Stdout);
 }

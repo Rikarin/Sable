@@ -57,6 +57,7 @@ lib/Sable.Testing/TestCase.sb                     45  40   # raise me
 lib/Sable.Crypto/Sha256Blocks.sb                   0   0   # run only where the processor has no SHA-256 of its own; CryptoTests runs it everywhere
 lib/Sable.Crypto/Sha512Blocks.sb                   0   0   # run only where the processor has no SHA-512 of its own; CryptoTests runs it everywhere
 lib/Sable.Crypto/KeccakPermutation.sb               0   0   # run only where the processor has no Keccak of its own; CryptoTests runs it everywhere
+lib/Sable.Core/Dictionary+Order.sb                 0   0   # package: what OrderedDictionary is made of, and Sable.Collections' OrderedDictionaryTests run it
 lib/Sable.Math/VectorKernels.sb                    50  40   # run only where the processor has no AVX2; SABLE_PORTABLE and Sable.CodeGen.Tests run it everywhere
 lib/Sable.Text/TranscodingKernels.sb              50  50   # run only where the runtime has no kernel; Sable.CodeGen.Tests run it interpreted
 lib/Sable.Net/UdpSocket.sb                        85  60   # the system's buffers cannot be made to fill, nor a socket have no address

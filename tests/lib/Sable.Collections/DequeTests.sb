@@ -344,8 +344,8 @@ fn held(_ counter: Counter, _ i: Int) -> Held => i % 2 == 0 ? Held.Text("\(i)") 
 
 fn holds(_ held: Held, _ i: Int) -> Bool {
     match held {
-        case .Nothing => { return false }
-        case .Text(let text) => { return text == "\(i)" }
+        case .Nothing           => { return false }
+        case .Text(let text)    => { return text == "\(i)" }
         case .Both(let item, _) => { return item.value == i }
     }
 }

@@ -5556,6 +5556,12 @@ public sealed partial class Binder {
                 }
 
                 foreach (var constraint in typeParameter.Constraints.Select(substitution.Apply)) {
+                    // What a closure throws, 'A | B', is an error as each of them is.
+                    if (constraint.Equals(Core.Error) && became is StructuralUnionTypeSymbol thrown
+                        && thrown.Cases.All(c => Conversions.Satisfies(c, constraint, _conversions.Equivalence))) {
+                        continue;
+                    }
+
                     if (!ContainsUninferred(constraint, resolved) && !Conversions.Satisfies(became, constraint, _conversions.Equivalence)) {
                         _diagnostics.Error(ErrorCode.ERR_NoMatchingOverload, syntax.Span,
                             $"'{resolved.Name}' cannot be called with these arguments: '{typeParameter.Name}' would be '{became.ToDisplayString()}', "

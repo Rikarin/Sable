@@ -1729,6 +1729,13 @@ public sealed class SilModule {
     public List<(string Name, SilType Type)> Globals { get; } = [];
 
     /// <summary>
+    ///     The globals that are 'let's: set as the program starts, destroyed
+    ///     as it ends, and never written in between, so that a value read out
+    ///     of one may be borrowed across any call (<see cref="BorrowLoads" />).
+    /// </summary>
+    public HashSet<string> ConstantGlobals { get; } = [];
+
+    /// <summary>
     ///     The C functions the module calls (<c>@extern</c>, SYNTAX.md §24),
     ///     by the name the module calls each by, with its C symbol and its
     ///     signature: <c>sil_extern @M.c_abs : $(I32) -> I32 = "abs"</c>. A

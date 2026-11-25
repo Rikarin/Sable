@@ -347,6 +347,7 @@ public sealed class ClosureTests {
                             fn scaled(_ r: Int, scale: Int = 2, by f: (Int) -> Int) -> Int { return f(r) * scale }
                             fn maybe(_ r: Int, with f: ((Int) -> Int)? = none) -> Int { return f?(r) ?? r }
                             fn later<T>(_ make: () -> T) -> T { return make() }
+                            fn spanned<R>(_ name: String, tags: @autoclosure () -> Int[>..] = [], _ body: (Int) -> R) -> R { return body(tags().count) }
                             """;
 
     [Theory]
@@ -356,6 +357,8 @@ public sealed class ClosureTests {
     [InlineData("let v = scaled(3, scale: 4) { $0 + 1 }", "Int")]
     [InlineData("let v = maybe(3) { $0 + 1 }", "Int")]
     [InlineData("let v = later { 1.5 }", "F64")]
+    [InlineData("let v = spanned(\"a\") { $0 > 0 }", "Bool")]
+    [InlineData("let v = spanned(\"a\", tags: [1]) { $0 }", "Int")]
     public void ATrailingClosureGoesToTheNextParameterThatTakesOneLabelledOrNot(string body, string expected) =>
         Assert.Equal(expected, TypeOfLast(body, Labelled));
 

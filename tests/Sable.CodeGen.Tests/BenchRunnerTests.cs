@@ -36,7 +36,7 @@ public sealed class BenchRunnerTests {
 
         @bench
         fn timedWhole() {
-            let total = work(10)
+            _ = blackBox(work(10))
         }
 
         struct Grouped {

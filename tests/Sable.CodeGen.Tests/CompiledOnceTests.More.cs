@@ -890,4 +890,97 @@ public sealed partial class CompiledOnceTests {
         """,
         "Test.spawned", "Test.grouped", "Test.orNone"
     );
+
+    /// <summary>Out and consuming parameters, closures given back, patterns and casts of an error to a type parameter, and comparisons of arrays and optionals.</summary>
+    [Fact]
+    public void ParametersResultsAndPatternsOfEveryKindAreCompiledOnce() => Prints(
+        "1 2\nx\n9\nbad 4\nother\nbad 4\nno\ntrue false true\n12\n(1, 2)\n",
+        """
+            module Test
+
+            struct Bad: Error { var n: Int }
+            struct Worse: Error { }
+
+            fn split<A, B>(_ pair: (A, B), _ a: out A, _ b: out B) {
+                a = pair.0
+                b = pair.1
+            }
+
+            fn taken<T>(_ t: consuming T) -> T => t
+
+            fn constant<T>(_ t: T) -> () -> T => { t }
+
+            fn caught<E: Error>(_ e: E.Type, _ error: any Error) -> E? {
+                if let e = error as? E {
+                    return e
+                }
+
+                return none
+            }
+
+            fn expects<E: Error>(_ e: E.Type, _ body: () throws -> Void) -> E? {
+                do {
+                    try body()
+                    return none
+                } catch let e as E {
+                    return e
+                } catch {
+                    return none
+                }
+            }
+
+            fn same<T: Equatable>(_ a: T[>..], _ b: T[>..]) -> Bool => a == b
+
+            fn differs<T: Equatable>(_ a: T?, _ b: T?) -> Bool => a != b
+
+            union Action<T> {
+                Map((T) -> T)
+                Keep
+            }
+
+            fn run<T>(_ action: Action<T>, _ t: T) -> T => match action {
+                case .Map(let f) => f(t)
+                case .Keep       => t
+            }
+
+            fn unwrapped<T>(_ t: T?, _ other: T) -> T {
+                if t != none {
+                    return t
+                }
+
+                return other
+            }
+
+            fn swapped<A, B>(_ a: A, _ b: B) -> (A, B) => (a, b)
+
+            @main
+            fn main() {
+                let empty: Int[>..] = []
+                var a = 0
+                var b = ""
+                split((1, "2" + ""), &a, &b)
+                print("\(a) \(b)")
+                print(taken("x" + ""))
+                let nine = constant(9)
+                print("\(nine())")
+                if let bad = caught(Bad.self, Bad { n: 4 }) {
+                    print("bad \(bad.n)")
+                }
+
+                if caught(Bad.self, Worse { }) == none {
+                    print("other")
+                }
+
+                if let bad = expects(Bad.self, { throw Bad { n: 4 } }) {
+                    print("bad \(bad.n)")
+                }
+
+                print(expects(Bad.self, { throw Worse { } }) == none ? "no" : "yes")
+                print("\(same([1, 2], [1, 2])) \(same(["a"], ["b"])) \(differs(1 as Int?, 2))")
+                print("\(run(Action<Int>.Map({ $0 * 2 }), 6))")
+                print("\(swapped(unwrapped(1 as Int?, 2), unwrapped(empty.first, 2)))")
+            }
+        """,
+        "Test.split", "Test.taken", "Test.constant", "Test.caught", "Test.expects", "Test.same", "Test.differs", "Test.run", "Test.unwrapped"
+    );
 }

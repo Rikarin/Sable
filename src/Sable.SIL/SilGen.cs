@@ -7660,6 +7660,12 @@ public sealed partial class SilGen {
                 case BoundBinaryOperator { OperatorKind: BinaryOperatorKind.Coalesce } coalesce:
                     return Coalesce(coalesce);
 
+                // Two arrays or optionals of a type parameter's values in unspecialised code, neither the literal none.
+                case BoundBinaryOperator { Method: null, OperatorKind: BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual } held
+                    when _genericMetadata.Count > 0 && held.Left is not BoundLiteral { Value: null } && held.Right is not BoundLiteral { Value: null }
+                         && Sub(held.Left.Type) is ArrayTypeSymbol or OptionalTypeSymbol && Mentions(Sub(held.Left.Type), [.._genericMetadata.Keys]) && !IsNoneLiteral(held.Left) && !IsNoneLiteral(held.Right):
+                    return HeldEquality(held);
+
                 case BoundBinaryOperator binary when binary.Method is null:
                     return Binary(binary);
 
@@ -11496,11 +11502,18 @@ public sealed partial class SilGen {
             }
 
             if (variadicAt >= 0) {
-                if (Gather(type.Parameters[^1], call.Arguments.Skip(variadicAt)) is not { } gathered) {
+                // To unspecialised code, gathered as the type they are here, and seen as the callee's.
+                var taken = type.Parameters[arguments.Count];
+                var gatheredAs = genericShape is not null && SilType.MentionsOpaque(taken) ? LowerType(Substitute(WithAssociatedTypes(callee, bound), callee.Parameters[^1].Type)) : taken;
+                if (gatheredAs is null || Gather(gatheredAs, call.Arguments.Skip(variadicAt)) is not { } gathered) {
                     return Missing(call, "the variadic arguments of this call");
                 }
 
-                if (type.IsOwned(arguments.Count)) {
+                if (gatheredAs != taken) {
+                    Hold(gathered);
+                    borrows.Add(gathered);
+                    arguments.Add(Emit(new BuiltinInst("opaque_borrow_as", taken, gathered)));
+                } else if (type.IsOwned(arguments.Count)) {
                     arguments.Add(gathered);
                 } else {
                     arguments.Add(Hold(gathered));
@@ -11700,6 +11713,13 @@ public sealed partial class SilGen {
         ///     failing both, what they stand for here — a call from inside the
         ///     same generic type.
         /// </summary>
+        static bool IsNoneLiteral(BoundExpression expression) =>
+            expression switch {
+                BoundLiteral { Value: null } => true,
+                BoundConversion conversion => IsNoneLiteral(conversion.Operand),
+                _ => false,
+            };
+
         /// <summary>An object as a class it is of, or inherits from — seen as the one code compiled once for its arguments takes.</summary>
         SilValue AsClass(SilValue value, ClassType from, ClassType to) {
             if (SilType.SameErasingOpaque(from, to, opaqueOnly: true)) {

@@ -1024,6 +1024,9 @@ public sealed partial class SilGen {
         return new TypeSubstitution(map).Apply(declared);
     }
 
+    /// <summary>Sable.Core's Equatable.</summary>
+    internal NamedTypeSymbol? EquatableProtocol() => Core.Module.GetMembers("Equatable").OfType<NamedTypeSymbol>().FirstOrDefault(static p => p.TypeKind == TypeKind.Protocol);
+
     /// <summary>Whether a requirement's type made of Self is the type given, with Self the type parameter it is called on.</summary>
     static bool SameHeld(TypeSymbol declared, TypeParameterSymbol self, TypeSymbol given, TypeParameterSymbol parameter) =>
         new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol> { [self] = parameter }).Apply(declared).Equals(given);
@@ -1205,9 +1208,9 @@ public sealed partial class SilGen {
 
             // 'using generator: inout G' is the address of the caller's storage, as any inout parameter is.
             // So is an array of them: the buffer's reference, the same whatever they are.
-            var inoutOwn = parameter.Modifier == ParameterModifier.InOut && IsHeld(parameterType, own) && parameterType is not MetatypeTypeSymbol;
+            var inoutOwn = parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out && IsHeld(parameterType, own) && parameterType is not MetatypeTypeSymbol;
             if (!Passable(parameterType) && !(Function(parameterType) is { } taken && IsGenericFunction(taken, own))
-                || Mentions(parameterType, own) && !inoutOwn && (parameter.IsVariadic || parameter.IsByReference || parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In))) {
+                || Mentions(parameterType, own) && !inoutOwn && (parameter.IsByReference || parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In or ParameterModifier.Consuming))) {
                 refused = $"the parameter '{parameter.Name}: {parameter.Type.ToDisplayString()}'";
                 return null;
             }
@@ -2230,8 +2233,24 @@ public sealed partial class SilGen {
                 return true;
             }
 
+            // Two arrays, slices or optionals of them, compared by what they conform to Equatable by.
+            if (IsHeldEquality(binary)) {
+                return true;
+            }
+
             return binary.Method is { } method && OperatorAllowed(method, binary.Left, [binary.Left, binary.Right], binary);
         }
+
+        /// <summary>
+        ///     Two arrays, slices or optionals of a type parameter's values
+        ///     compared, as their kind's table of Equatable says
+        ///     (<see cref="FunctionLowering.HeldEquality" />).
+        /// </summary>
+        bool IsHeldEquality(BoundBinaryOperator binary) =>
+            binary is { OperatorKind: BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual, Method: null }
+            && V(binary.Left.Type) is ArrayTypeSymbol or OptionalTypeSymbol && V(binary.Left.Type).Equals(V(binary.Right.Type)) && Simple(binary.Left.Type)
+            && (V(binary.Left.Type) is ArrayTypeSymbol array ? array.ElementType : ((OptionalTypeSymbol)V(binary.Left.Type)).UnderlyingType) is var element
+            && IsOwn(element) && generator.EquatableProtocol() is { } equatable && Known(element).Any(p => ReferenceEquals(p, equatable)) && generator.HasTemplate(V(binary.Left.Type), equatable);
 
         /// <summary>An operator applied to values this code holds: a requirement's, through its table, or a generic type's own, compiled once as a static member is.</summary>
         bool OperatorAllowed(FunctionSymbol method, BoundExpression first, ImmutableArray<BoundExpression> operands, BoundExpression at) {
@@ -2289,8 +2308,9 @@ public sealed partial class SilGen {
         }
 
         // An initialiser borrows what it is given, as any function compiled
-        // once does: its callers pass values of a type parameter where they are.
-        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) || IsClassInitializer(symbol) ? default : signature.Owned.Concat(hidden.Select(static _ => false)).ToImmutableArray();
+        // once does, and one that consumes a parameter: its callers pass
+        // values of a type parameter where they are.
+        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) || IsClassInitializer(symbol) || symbol.Parameters.Any(static p => p.Modifier == ParameterModifier.Consuming) ? default : signature.Owned.Concat(hidden.Select(static _ => false)).ToImmutableArray();
         var type = new FunctionType([..signature.Parameters, ..hidden], result, thrown, owned, signature.IsAsync);
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, OpaqueParametersAsThemselves(symbol), _loweringInstance);
@@ -3975,6 +3995,26 @@ public sealed partial class SilGen {
             Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, same)), $"cast to '{conversion.Type.ToDisplayString()}' failed"));
             var owned = Owned(value);
             return owned.Type == target ? owned : Emit(new BuiltinInst("opaque_take_as", target, owned));
+        }
+
+        /// <summary>Two arrays, slices or optionals of a type parameter's values compared: through their kind's table of Equatable, as any two values of a conforming type are.</summary>
+        SilValue? HeldEquality(BoundBinaryOperator binary) {
+            if (generator.EquatableProtocol() is not { } equatable
+                || generator.GenericRequirements(equatable).FindIndex(static r => r.Member is FunctionSymbol { Name: "==" }) is not (>= 0 and var index)
+                || generator.GenericEntryType(equatable, generator.GenericRequirements(equatable)[index].Member) is not { } type || MetadataOf(binary.Left.Type) is not { } metadata) {
+                return Missing(binary, $"'{Describe(binary.Syntax)}'");
+            }
+
+            var table = Emit(new BuiltinInst($"witness_table_known:{QualifiedName(equatable)}", SilType.WitnessTable, metadata));
+            var code = Emit(new BuiltinInst($"witness_generic:{index}", type, table));
+            var borrows = new List<SilValue>();
+            if (GenericArgument(binary.Left, Sub(binary.Left.Type), type.Parameters[0], borrows) is not { } left || GenericArgument(binary.Right, Sub(binary.Right.Type), type.Parameters[1], borrows) is not { } right) {
+                EndAll(borrows);
+                return null;
+            }
+
+            var same = Invoke(code, type, [left, right, metadata], borrows, binary.Syntax);
+            return same is null || binary.OperatorKind == BinaryOperatorKind.Equal ? same : Emit(new BuiltinInst("not_Bool", SilType.Bool, same));
         }
 
         /// <summary>

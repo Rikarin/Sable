@@ -33,6 +33,7 @@ lib/Sable.Generators/Case.sb                       0   0   # raise me: no tests 
 lib/Sable.Generators/Declaration.sb                0   0   # raise me: no tests yet
 lib/Sable.Generators/Field.sb                      0   0   # raise me: no tests yet
 lib/Sable.Generators/GeneratorRequest.sb           0   0   # raise me: no tests yet
+lib/Sable.Generators/Member.sb                    0   0   # raise me: no tests yet
 lib/Sable.Generators/Output.sb                     0  70   # raise me: no tests yet
 lib/Sable.Generators/Package.sb                    0   0   # raise me: no tests yet
 lib/Sable.Generators/Parameter.sb                  0   0   # raise me: no tests yet

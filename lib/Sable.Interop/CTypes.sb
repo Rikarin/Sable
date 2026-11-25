@@ -4,6 +4,9 @@ module Sable.Interop
 // width and sign on the platform the program is built for. The types of
 // stdint.h need no names here: an 'int32_t' is an I32 everywhere.
 
+/// C's `signed char`.
+public alias CSignedChar = I8
+
 /// C's `char`, which is signed but on Linux's arm64.
 #if os(linux)
 #if arch(arm64)
@@ -14,9 +17,6 @@ public alias CChar = I8
 #else
 public alias CChar = I8
 #endif
-
-/// C's `signed char`.
-public alias CSignedChar = I8
 
 /// C's `unsigned char`.
 public alias CUnsignedChar = U8

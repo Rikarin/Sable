@@ -121,10 +121,6 @@ async fn whatIsAskedForBeforeItWasWaitedForIsSaid() {
         await Task.yield()
         return 7
     }
-    do {
-        _ = try await services.buildAsync()
-        assert(false)
-    } catch {
-        expect(error.description().hasPrefix("Int is made as the provider is built, and was asked for before it was"))
-    }
+    let error = await expectThrows(ServiceError.self) { _ = try await services.buildAsync() }
+    expect((error?.description() ?? "").hasPrefix("Int is made as the provider is built, and was asked for before it was"))
 }

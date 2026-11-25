@@ -70,8 +70,7 @@ fn whatIsMissingIsSaidWithItsPath() {
     var services = ServiceCollection()
     services.addTransient(Between.self)
     services.addTransient(HoldsBetween.self)
-    let said = problems(services)
-    expect(said.contains("nothing provides ValidationTests.Scoped: ValidationTests.Between -> ValidationTests.Scoped"), said)
+    expect(problems(services).contains("nothing provides ValidationTests.Scoped: ValidationTests.Between -> ValidationTests.Scoped"))
 }
 
 @test
@@ -89,8 +88,7 @@ fn norThroughATransientOne() {
     services.addTransient(Between.self)
     assertEqual(problems(services), "")
     services.addSingleton(HoldsBetween.self)
-    let said = problems(services)
-    expect(said.contains("ValidationTests.HoldsBetween -> ValidationTests.Between -> ValidationTests.Scoped"), said)
+    expect(problems(services).contains("ValidationTests.HoldsBetween -> ValidationTests.Between -> ValidationTests.Scoped"))
 }
 
 @test
@@ -98,8 +96,7 @@ fn aServiceMayNotNeedItself() {
     var services = ServiceCollection()
     services.addTransient(Hen.self)
     services.addTransient(Egg.self)
-    let said = problems(services)
-    expect(said.contains("a service needs itself: ValidationTests.Hen -> ValidationTests.Egg -> ValidationTests.Hen"), said)
+    expect(problems(services).contains("a service needs itself: ValidationTests.Hen -> ValidationTests.Egg -> ValidationTests.Hen"))
 }
 
 @test
@@ -150,15 +147,11 @@ fn everyProblemIsSaid() {
     services.addScoped(Scoped.self)
     services.addTransient(Hen.self)
     services.addTransient(Egg.self)
-    do {
-        _ = try services.build()
-        assert(false)
-    } catch {
-        if case .Invalid(let problems) = error {
-            assertEqual(problems.count, 2)
-        } else {
-            assert(false)
-        }
+    let error = require(expectThrows(ServiceError.self) { _ = try services.build() })
+    if case .Invalid(let problems) = error {
+        assertEqual(problems.count, 2)
+    } else {
+        fail("it is said that \(error.description())")
     }
 }
 

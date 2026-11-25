@@ -82,13 +82,11 @@ fn aScopeEndsWhenItsBodyThrows() {
     var services = ServiceCollection()
     services.addScoped(Closing.self) { _scope in Closing("a", record) }
     let provider = try! services.build()
-    do {
+    expectThrows(TestError.self) {
         try provider.withScope { scope in
-            _ = try scope.resolve(Closing.self)
-            throw TestError("stop")
-        }
-    } catch {
-        expect(error is TestError)
+        _ = try scope.resolve(Closing.self)
+        throw TestError("stop")
+    }
     }
     assertEqual(record.all, "a")
 }
@@ -124,12 +122,8 @@ fn theProviderDisposesItsSingletons() {
     provider.dispose()
     assertEqual(record.all, "b a")
     expect(provider.isDisposed)
-    do {
-        _ = try provider.resolve(ClosingShared.self, key: "a")
-        assert(false)
-    } catch {
-        expect(error.description().contains("disposed"), error.description())
-    }
+    let error = expectThrows(ServiceError.self) { _ = try provider.resolve(ClosingShared.self, key: "a") }
+    expect((error?.description() ?? "").contains("disposed"))
 }
 
 @test
@@ -225,13 +219,11 @@ fn anAsyncScopeEndsWhenItsBodyThrows() async {
     var services = ServiceCollection()
     services.addTransient(Closing.self) { _scope in Closing("a", record) }
     let provider = try! services.build()
-    do {
+    await expectThrows(TestError.self) {
         try await provider.withAsyncScope { scope in
-            _ = try scope.resolve(Closing.self)
-            throw TestError("stop")
-        }
-    } catch {
-        record.add("caught")
+        _ = try scope.resolve(Closing.self)
+        throw TestError("stop")
     }
-    assertEqual(record.all, "a caught")
+    }
+    assertEqual(record.all, "a")
 }

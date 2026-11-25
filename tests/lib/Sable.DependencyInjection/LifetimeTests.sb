@@ -79,12 +79,8 @@ fn aScopedServiceIsNotTheProvidersToGive() {
     var services = ServiceCollection()
     services.addScoped(Counted.self) { _scope in Counted() }
     let provider = try! services.build()
-    do {
-        _ = try provider.resolve(Counted.self)
-        assert(false)
-    } catch {
-        expect(error.description().contains("Counted is scoped"), error.description())
-    }
+    let error = expectThrows(ServiceError.self) { _ = try provider.resolve(Counted.self) }
+    expect((error?.description() ?? "").contains("Counted is scoped"))
 }
 
 @test

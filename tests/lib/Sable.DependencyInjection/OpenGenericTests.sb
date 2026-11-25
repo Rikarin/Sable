@@ -62,8 +62,7 @@ fn anOpenGenericsOwnDependenciesAreChecked() {
     var services = ServiceCollection()
     services.addScoped(open: Repository.self, MemoryRepository.self)
     services.addScoped(Orders.self)
-    let said = problems(services)
-    expect(said.contains("nothing provides InjectionSupport.Connection: OpenGenericTests.Orders -> any InjectionSupport.Repository<InjectionSupport.Order> -> InjectionSupport.Connection"), said)
+    expect(problems(services).contains("nothing provides InjectionSupport.Connection: OpenGenericTests.Orders -> any InjectionSupport.Repository<InjectionSupport.Order> -> InjectionSupport.Connection"))
 }
 
 @test

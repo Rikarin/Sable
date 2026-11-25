@@ -297,15 +297,13 @@ async fn aProviderThatGoesDisposes() {
 async fn aScopeEndsWhenItsBodyThrows() {
     let sink = Memory()
     let provider = await provided(sink)
-    do {
+    await expectThrows(saying: "it fails") {
         try await provider.withScope { (scope: ServicesScope) throws in
-            _ = scope.resolve(Session.self)
-            throw TestError("it fails")
-        }
-        assert(false)
-    } catch {
-        assertEqual(sink.all, "session")
+        _ = scope.resolve(Session.self)
+        throw TestError("it fails")
     }
+    }
+    assertEqual(sink.all, "session")
 }
 
 @test

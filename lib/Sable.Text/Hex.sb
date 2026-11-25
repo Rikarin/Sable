@@ -31,8 +31,8 @@ public struct Hex {
                 if done > 0 {
                     let digits: U8[:] = uppercase ? hexUpperDigits : hexLowerDigits
                     for i in done..<bytes.count {
-                        buffer.store(digits[Int(bytes[i] >> 4)], at: 2 * i)
-                        buffer.store(digits[Int(bytes[i] & 0x0F)], at: 2 * i + 1)
+                        buffer.store(byte: digits[Int(bytes[i] >> 4)], at: 2 * i)
+                        buffer.store(byte: digits[Int(bytes[i] & 0x0F)], at: 2 * i + 1)
                     }
                     return buffer.finish(asciiCount: length)
                 }

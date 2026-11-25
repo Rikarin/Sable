@@ -91,7 +91,7 @@ public struct Base64 {
                     Base64.appendEncoded(bytes[done...], to: &rest, digits: Base64.digits(alphabet), padding: padding)
                     var at = length - rest.count
                     for byte in rest {
-                        buffer.store(byte, at: at)
+                        buffer.store(byte: byte, at: at)
                         at += 1
                     }
                     return buffer.finish(asciiCount: length)

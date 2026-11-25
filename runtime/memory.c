@@ -558,9 +558,15 @@ void sable_release_last(void *pointer) {
     object->strong = 0;
     // Unowned references hold the memory, not the object, until they go;
     // the last of them, on another thread, frees it once it sees it deinited.
-    uint32_t flags = __atomic_fetch_or(&object->flags, SABLE_DEINITED, __ATOMIC_ACQ_REL);
-    if ((flags >> SABLE_UNOWNED_SHIFT) > 0) {
-        return;
+    // With none now, and no weak ones, nothing has the object and nothing can
+    // come to: that it is deinited need not be said, which is most objects'
+    // end and would be an atomic operation each.
+    uint32_t flags = __atomic_load_n(&object->flags, __ATOMIC_ACQUIRE);
+    if ((flags >> SABLE_UNOWNED_SHIFT) > 0 || (flags & SABLE_HAS_SIDE)) {
+        flags = __atomic_fetch_or(&object->flags, SABLE_DEINITED, __ATOMIC_ACQ_REL);
+        if ((flags >> SABLE_UNOWNED_SHIFT) > 0) {
+            return;
+        }
     }
 
     object_gone(object);

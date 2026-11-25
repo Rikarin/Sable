@@ -38,7 +38,7 @@ public struct PercentEncoding {
                 // Which a byte is is not branched on: text may alternate.
                 let byte = bytes[i]
                 let isEncoded = encoded.contains(byte)
-                buffer.store(isEncoded ? percentEncoded(byte) : U64(byte == 0x20 ? space : byte), at: j)
+                buffer.store(word: isEncoded ? percentEncoded(byte) : U64(byte == 0x20 ? space : byte), at: j)
                 j += isEncoded ? 3 : 1
             }
             return buffer.finish(count: j)
@@ -118,13 +118,13 @@ public struct PercentEncoding {
                     let high = hexDigitValue(bytes[i])
                     let low = hexDigitValue(bytes[i + 1])
                     if (high | low) < 0x10 {
-                        buffer.store(high << 4 | low, at: j)
+                        buffer.store(byte: high << 4 | low, at: j)
                         i += 2
                         j += 1
                         continue
                     }
                 }
-                buffer.store(byte, at: j)
+                buffer.store(byte: byte, at: j)
                 j += 1
             }
             if let decoded = buffer.finishIfValid(count: j) {

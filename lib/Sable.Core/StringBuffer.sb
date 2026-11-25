@@ -14,8 +14,8 @@ module Sable.Core
 /// ```sable
 /// unsafe {
 ///     var buffer = StringBuffer.allocate(capacity: 8)
-///     buffer.store(0x68, at: 0)
-///     buffer.store(0x69, at: 1)
+///     buffer.store(byte: 0x68, at: 0)
+///     buffer.store(byte: 0x69, at: 1)
 ///     assert(buffer.finish(count: 2) == "hi")
 /// }
 /// ```
@@ -34,7 +34,7 @@ public struct StringBuffer {
 
     /// The byte at an offset set.
     @inline(always)
-    public fn store(_ byte: U8, at offset: Int) {
+    public fn store(byte: U8, at offset: Int) {
         if !(offset >= 0 && offset < capacity) {
             stringIndexOutOfRange()
         }
@@ -46,7 +46,7 @@ public struct StringBuffer {
     /// The eight bytes from an offset set, the number's lowest first; there
     /// must be room for all of them, though fewer may be what is wanted.
     @inline(always)
-    public fn store(_ word: U64, at offset: Int) {
+    public fn store(word: U64, at offset: Int) {
         if !(offset >= 0 && offset <= capacity - 8) {
             stringIndexOutOfRange()
         }

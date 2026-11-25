@@ -238,7 +238,7 @@ extension String {
                 run = run < end - i ? run : end - i
                 let kept = run == 8 ? U64.max : (1 << U64(8 * run)) - 1
                 let isLetter = asciiLetters(word, past) & kept
-                bytes.store(word ^ isLetter >> 2, at: j)
+                bytes.store(word: word ^ isLetter >> 2, at: j)
                 changed |= Int(isLetter >> 2)
                 i += run
                 j += run
@@ -252,7 +252,7 @@ extension String {
                 code |= (lead & 0x1F) << 6
                 let mask = pairs.utf8Word(code * 2 - 0x100) &- 0x3030
                 if (mask & 0x20) == 0 {
-                    bytes.store(word ^ mask & 0xFFFF, at: j)
+                    bytes.store(word: word ^ mask & 0xFFFF, at: j)
                     changed |= Int(mask & 0xFFFF)
                     i += 2
                     j += 2
@@ -286,7 +286,7 @@ extension String {
                 encoded = (0x808080F0 | mapped >> 18 | (mapped >> 12 & 0x3F) << 8 | (mapped >> 6 & 0x3F) << 16 | (mapped & 0x3F) << 24) unchecked as U64
                 written = 4
             }
-            bytes.store(encoded, at: j)
+            bytes.store(word: encoded, at: j)
             i += width
             j += written
         }
@@ -348,7 +348,7 @@ extension String {
                 let word = self.utf8Window(i)
                 let bits = asciiLetters(word, past) >> 2
                 changed |= bits
-                buffer.store(word ^ bits, at: i)
+                buffer.store(word: word ^ bits, at: i)
                 i += 8
             }
             if changed == 0 {

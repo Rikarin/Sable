@@ -127,7 +127,7 @@ public sealed class BorrowLoads : ISilPass {
     ///     The destroys of a load that its block branches on: one at the top
     ///     of each successor, which only that block leads to — the shape of
     ///     <c>if let</c>, <c>??</c> and <c>!</c>, whose none case only traps
-    ///     and need not destroy it. Everything borrowed from the
+    ///     and need not destroy it, and of a call that can throw. Everything borrowed from the
     ///     value, a payload included, must be used before its destroy, and
     ///     nothing on the way may write the storage.
     /// </summary>
@@ -138,7 +138,7 @@ public sealed class BorrowLoads : ISilPass {
         Uses uses,
         Dictionary<SilBlock, List<SilBlock>> predecessors
     ) {
-        if (block.Terminator is not (SwitchEnumInst or CondBranchInst) || block.Terminator is CondBranchInst branch && branch.Operands.Skip(1).Contains(load)) {
+        if (block.Terminator is not (SwitchEnumInst or CondBranchInst or TryApplyInst) || block.Terminator is CondBranchInst branch && branch.Operands.Skip(1).Contains(load)) {
             return null;
         }
 
@@ -163,8 +163,9 @@ public sealed class BorrowLoads : ISilPass {
 
         var slot = ExclusiveOf(load.Address);
         var owner = Owner(load.Address);
-        for (var k = index + 1; k < block.Instructions.Count - 1; k++) {
-            if (MayWrite(block.Instructions[k], slot, owner)) {
+        for (var k = index + 1; k < block.Instructions.Count; k++) {
+            // A branch writes nothing; a call that can throw is a call.
+            if (block.Instructions[k] is { IsTerminator: false } or TryApplyInst && MayWrite(block.Instructions[k], slot, owner)) {
                 return null;
             }
         }
@@ -210,7 +211,7 @@ public sealed class BorrowLoads : ISilPass {
                         break;
 
                     case { IsTerminator: true }:
-                        if (user is not SwitchEnumInst && !(user is CondBranchInst && ReferenceEquals(user.Operands[0], borrowed[n]))) {
+                        if (user is not (SwitchEnumInst or TryApplyInst) && !(user is CondBranchInst && ReferenceEquals(user.Operands[0], borrowed[n]))) {
                             return null;
                         }
 

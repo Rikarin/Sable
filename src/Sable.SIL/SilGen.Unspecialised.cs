@@ -810,9 +810,12 @@ public sealed partial class SilGen {
     ///     the instance's arguments and code that does not both use it.
     /// </summary>
     static bool IsStoredFunction(TypeSymbol type, NamedTypeSymbol definition) =>
-        type is FunctionTypeSymbol && Generics == GenericsMode.Unspecialised && !AmbientOptimised.Value && Mentions(type, definition.TypeParameters) && IsGenericFunction(type, definition.TypeParameters);
+        Function(type) is { } function && Generics == GenericsMode.Unspecialised && !AmbientOptimised.Value && Mentions(function, definition.TypeParameters) && IsGenericFunction(function, definition.TypeParameters);
 
-    readonly Dictionary<FieldSymbol, ThickFunctionType?> _storedFunctions = new(ReferenceEqualityComparer.Instance);
+    /// <summary>A function type, or the one an optional wraps.</summary>
+    static FunctionTypeSymbol? Function(TypeSymbol type) => type as FunctionTypeSymbol ?? (type as OptionalTypeSymbol)?.UnderlyingType as FunctionTypeSymbol;
+
+    readonly Dictionary<FieldSymbol, SilType?> _storedFunctions = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     ///     The type a field of a generic type keeps a function in, whatever
@@ -821,19 +824,19 @@ public sealed partial class SilGen {
     ///     and what writes it converts one to this. Null for any other field,
     ///     and of a type no code compiled once holds.
     /// </summary>
-    internal ThickFunctionType? StoredFunctionType(FieldSymbol field) {
+    internal SilType? StoredFunctionType(FieldSymbol field) {
         if (_storedFunctions.TryGetValue(field, out var known)) {
             return known;
         }
 
-        ThickFunctionType? stored = null;
-        if (_generics == GenericsMode.Unspecialised && field is { IsStatic: false, IsComputed: false, ReferenceKind: 0 } && field.Type is FunctionTypeSymbol
+        SilType? stored = null;
+        if (_generics == GenericsMode.Unspecialised && field is { IsStatic: false, IsComputed: false, ReferenceKind: 0 } && Function(field.Type) is not null
             && (field.ContainingSymbol is NamedTypeSymbol { TypeParameters.IsEmpty: false } owner ? owner.OriginalDefinition : null) is { } definition
             && IsStoredFunction(field.Type, definition) && IsPlainGeneric(definition)) {
             var own = definition.TypeParameters.ToDictionary(static p => p, TypeParameterSymbol.Stored);
             var map = new TypeSubstitution(own.ToDictionary(static p => p.Key, static p => (TypeSymbol)p.Value));
             using (Opaque(new GenericShape([..own.Values], []))) {
-                stored = Lower(map.Apply(_compilation.CanonicalType(definition, field.Type))) as ThickFunctionType;
+                stored = Lower(map.Apply(field.Type is OptionalTypeSymbol optional ? new OptionalTypeSymbol(_compilation.CanonicalType(definition, optional.UnderlyingType)) : _compilation.CanonicalType(definition, field.Type)));
             }
         }
 
@@ -1299,7 +1302,7 @@ public sealed partial class SilGen {
         bool HeldThrough(TypeSymbol declared, NamedTypeSymbol protocol, TypeSymbol on) => Simple(Canonical(Through(declared, protocol, V(on))));
 
         /// <summary>A type a value may have here: a type parameter, its metatype, or one that mentions none.</summary>
-        bool Simple(TypeSymbol type) => !Mentions(type) || IsHeld(V(type), _own) || IsGenericFunction(V(type), _own);
+        bool Simple(TypeSymbol type) => !Mentions(type) || IsHeld(V(type), _own) || Function(V(type)) is { } function && IsGenericFunction(function, _own);
 
         bool IsOwnArray(TypeSymbol type) => IsArrayOf(V(type), _own);
 
@@ -4061,6 +4064,30 @@ public sealed partial class SilGen {
         ///     that converts. The value itself, when it is neither's.
         /// </summary>
         SilValue AsFunction(SilValue value, SilType wanted) {
+            // An optional one: none, or the function it wraps as the other.
+            if (value.Type is EnumType { Cases: [("Some", ThickFunctionType wrapped), ("None", null)] } from && wanted is EnumType { Cases: [("Some", ThickFunctionType wrappedTo), ("None", null)] } to && from != to) {
+                if (SilType.SameErasingOpaque(wrapped, wrappedTo)) {
+                    return Emit(new BuiltinInst("opaque_take_as", to, Owned(value)));
+                }
+
+                var held = Owned(value);
+                var some = function.AddBlock();
+                var payload = Payload(some, wrapped);
+                var none = function.AddBlock();
+                var after = function.AddBlock();
+                var made = after.AddArgument(to);
+                Jump(new SwitchEnumInst(held, [(from.CaseIndex("Some"), some)], none));
+                _current = some;
+                var converted = AsFunction(payload, wrappedTo);
+                Destroy(held);
+                Branch(after, Emit(new EnumInst(to, to.CaseIndex("Some"), Owned(converted))));
+                _current = none;
+                Destroy(held);
+                Branch(after, Emit(new EnumInst(to, to.CaseIndex("None"), null)));
+                _current = after;
+                return made;
+            }
+
             if (value.Type is not ThickFunctionType given || wanted is not ThickFunctionType target || given == target) {
                 return value;
             }
@@ -4080,7 +4107,7 @@ public sealed partial class SilGen {
 
         /// <summary>A stored field read, as the type it has here: a function a generic type keeps in its own convention, as this code's.</summary>
         SilValue? AsRead(SilValue? read, BoundFieldAccess access) =>
-            read is { Type: ThickFunctionType kept } && generator.StoredFunctionType(access.Field) is not null && LowerType(access.Type) is ThickFunctionType here && kept != here
+            read is { Type: ThickFunctionType or EnumType } && read.Type is var kept && generator.StoredFunctionType(access.Field) is not null && LowerType(access.Type) is { } here && kept != here
                 ? AsFunction(read, here)
                 : read;
 

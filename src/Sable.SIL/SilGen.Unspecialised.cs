@@ -976,7 +976,9 @@ public sealed partial class SilGen {
     GenericShape? SignatureShape(FunctionSymbol symbol, out string? refused) {
         refused = null;
         var all = TypeParametersOf(symbol).ToList();
-        if (all.Count == 0 || !_declarations.TryGetValue(symbol, out var declaration) || IsRequirement(symbol, declaration.Syntax)
+        if (all.Count == 0 || !_declarations.TryGetValue(symbol, out var declaration)
+            // A requirement or a builtin, which has no body to compile either way.
+            || !symbol.HasBody && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null && _compilation.GetInheritedInitializerBody(symbol) is null
             // A task's is never called: the compiler makes one, queued.
             || symbol.FunctionKind == FunctionKind.Initializer && ReferenceEquals(symbol.ContainingSymbol, Core.Task)) {
             return null;
@@ -1127,10 +1129,6 @@ public sealed partial class SilGen {
 
         return new([..own], [..requirements]);
     }
-
-    /// <summary>A protocol's requirement, which has no body to compile either way.</summary>
-    static bool IsRequirement(FunctionSymbol symbol, SyntaxNode syntax) =>
-        RequirementProtocol(symbol) is not null && !symbol.HasBody;
 
     /// <summary>
     ///     A static member of a generic class, struct or union — a method or
@@ -1356,6 +1354,9 @@ public sealed partial class SilGen {
         /// <summary>Whether the code being checked may change the function's own self: a closure may too, through the box they share.</summary>
         bool OwnMutating => checkedSymbol.IsMutating || IsValueInitializer(checkedSymbol);
 
+        /// <summary>A value of an expression's type, standing for whatever is stored there.</summary>
+        BoundExpression Standing(BoundExpression of) => new BoundParameterAccess(of.Syntax, ParameterSymbol.Synthetic("$stored", generator.Core.Module, of.Type));
+
         /// <summary>
         ///     Whether an expression is a place this code may change: a
         ///     'var', an inout parameter, its own self, a stored field of one
@@ -1367,6 +1368,11 @@ public sealed partial class SilGen {
                 BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } => true,
                 // Implicitly, its own self.
                 null or BoundSelfAccess => OwnMutating,
+                // A subscript's element, and a computed property's value: read, changed and set.
+                BoundIndexAccess { Subscript: not null } element => IsPlace(element.Receiver) && SubscriptAllowed(element, null) && SubscriptAllowed(element, Standing(element)),
+                BoundFieldAccess { Receiver: var of, Field: { IsStatic: false, IsComputed: true, Builtin: null } computed } property when generator.SetterOf(computed) is { } setter =>
+                    (of is { Type: NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } } || IsPlace(of)) && PropertyAllowed(property)
+                    && CallAllowed(new BoundCall(property.Syntax, of, setter, [Standing(property)], generator.Core.Void)),
                 BoundFieldAccess { Receiver: { } on, Field: { IsStatic: false, IsComputed: false, Builtin: null } } field =>
                     PropertyAllowed(field) && (on.Type is NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } ? on is BoundSelfAccess or BoundLocalAccess or BoundParameterAccess or BoundFieldAccess : IsPlace(on)),
                 _ => false,
@@ -1470,7 +1476,7 @@ public sealed partial class SilGen {
                 case BoundConditionBinding { Local: { } bound } when Mentions(bound.Type) && (inClosure || !Simple(bound.Type)):
                 case BoundTypeTest test when Mentions(test.TestedType) || Mentions(test.Operand.Type) && (inClosure || !IsTestable(test.TestedType) || !IsOwn(test.Operand.Type)):
                 case BoundForEach { Element: { } element } loop when Mentions(element.Type)
-                                                                    && (inClosure || !IsOwnArray(loop.Sequence.Type) || !Simple(element.Type) || loop.Sequence is not (BoundLocalAccess or BoundParameterAccess or BoundSelfAccess or BoundFieldAccess { Receiver: BoundSelfAccess or BoundLocalAccess or BoundParameterAccess })):
+                                                                    && (inClosure || !IsOwnArray(loop.Sequence.Type) || !Simple(element.Type)):
                     return false;
                 case BoundCall call when CallMentions(call) && (inClosure || !CallAllowed(call)):
                     return false;
@@ -1816,7 +1822,7 @@ public sealed partial class SilGen {
                 return call.Arguments.All(a => Simple(a.Type));
             }
 
-            if (callee.Builtin is "array_append" or "array_append_repeating" or "array_append_holes" or "array_take" or "array_append_all" or "array_remove_last" or "array_rotate" or "array_reserve" or "array_clear" or "array_truncate" && call.Receiver is { } array && IsOwnArray(array.Type)) {
+            if (callee.Builtin is "array_append" or "array_append_repeating" or "array_append_holes" or "array_take" or "array_append_all" or "array_remove_last" or "array_rotate" or "array_reserve" or "array_clear" or "array_truncate" && (call.Receiver?.Type ?? (Owner(checkedSymbol) is null ? null : SelfType(checkedSymbol, TypeSubstitution.Empty))) is { } array && IsOwnArray(array)) {
                 return IsPlace(call.Receiver)
                        && call.Arguments.All(a => Simple(a.Type));
             }
@@ -1861,10 +1867,21 @@ public sealed partial class SilGen {
                 return No();
             }
 
+            // A subscript's 'some P' index, which says nothing of what it is bound to but its own type.
+            TypeSymbol? GivenFor(TypeParameterSymbol parameter) {
+                for (var i = 0; parameter.OpaqueParameter is { } opaque && i < callee.Parameters.Length && i < call.Arguments.Length; i++) {
+                    if (callee.Parameters[i].Type.Equals(opaque)) {
+                        return call.Arguments[i] is BoundConversion { ConversionKind: ConversionKind.Existential, Type: OpaqueTypeSymbol, Operand: var given } ? given.Type : call.Arguments[i].Type;
+                    }
+                }
+
+                return null;
+            }
+
             var boundMap = new Dictionary<TypeParameterSymbol, TypeSymbol>();
             foreach (var parameter in calleeShape.Parameters) {
                 if ((ReferenceEquals(parameter, calleeSelf) ? call.Substitution.Lookup(parameter) ?? receiverType
-                        : call.Substitution.Lookup(parameter) ?? ownerBound?.GetValueOrDefault(parameter)) is not { } given) {
+                        : call.Substitution.Lookup(parameter) ?? ownerBound?.GetValueOrDefault(parameter) ?? GivenFor(parameter)) is not { } given) {
                     return No();
                 }
 
@@ -1872,6 +1889,10 @@ public sealed partial class SilGen {
                 boundMap[parameter] = bound;
 
                 if (!Mentions(bound)) {
+                    if (!calleeShape.ProtocolsOf(parameter).All(p => generator.MeetsOnce(bound, p))) {
+                        return No();
+                    }
+
                     continue;
                 }
 
@@ -1976,7 +1997,7 @@ public sealed partial class SilGen {
                             return No();
                         }
                     } else if (bound is not (NamedTypeSymbol or ArrayTypeSymbol) || generator.Lower(bound) is not { } lowered || lowered is NominalType { IsNoncopyable: true } || bound.Equals(generator.Core.Never)
-                               || !own.ProtocolsOf(parameter).All(needed => bound.Satisfies(needed))) {
+                               || !own.ProtocolsOf(parameter).All(needed => bound.Satisfies(needed) && generator.MeetsOnce(bound, needed))) {
                         return No();
                     }
                 }
@@ -2337,7 +2358,9 @@ public sealed partial class SilGen {
 
         if (!_ownShapes.TryGetValue(requirement, out var shape)) {
             var requirements = new List<(TypeParameterSymbol, NamedTypeSymbol)>();
-            var passed = requirement.ConformanceRequirements.IsEmpty && requirement.SameTypeRequirements.IsEmpty;
+            // 'where C.Element == Element' reads one of its associated types as the protocol's.
+            var passed = requirement.ConformanceRequirements.IsEmpty
+                         && requirement.SameTypeRequirements.All(r => r.Left is DependentMemberTypeSymbol or TypeParameterSymbol && r.Right is DependentMemberTypeSymbol or TypeParameterSymbol);
             foreach (var parameter in requirement.TypeParameters) {
                 passed &= parameter is { IsValue: false, AllowsNoncopyable: false };
                 foreach (var part in parameter.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c))) {
@@ -2353,6 +2376,33 @@ public sealed partial class SilGen {
         }
 
         return shape;
+    }
+
+    /// <summary>
+    ///     Whether a type's table of a conformance is whole: what meets each
+    ///     requirement generic over its own parameters is compiled once, as
+    ///     its entry must be (<see cref="TrapWitness" />).
+    /// </summary>
+    internal bool MeetsOnce(TypeSymbol concrete, NamedTypeSymbol protocol) {
+        foreach (var each in ProtocolClosure([protocol])) {
+            foreach (var (_, member) in GenericRequirements(each)) {
+                if (member is not FunctionSymbol { TypeParameters.IsEmpty: false } requirement || GenericEntryType(each, requirement) is null) {
+                    continue;
+                }
+
+                var met = concrete switch {
+                    NamedTypeSymbol named => Implementation(named, requirement),
+                    ArrayTypeSymbol array => ArrayImplementation(array, requirement),
+                    OptionalTypeSymbol => Implementation(Core.Optional, requirement),
+                    _ => null,
+                };
+                if (met is null || UnspecialisedShape(met) is null) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /// <summary>The tables with an entry for a requirement generic over its own parameters that its conformer's member, not compiled once, cannot meet: it traps.</summary>

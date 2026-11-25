@@ -47,7 +47,7 @@ fn positions(_ list: LinkedList<Int>) -> LinkedListIndex[>..] {
         all.append(at)
         at = list.index(after: at)
     }
-    assert(all.isEmpty || all[all.count - 1] < list.endIndex)
+    expect(all.isEmpty || all[all.count - 1] < list.endIndex)
     // Backwards, the same positions.
     var i = all.count
     at = list.endIndex
@@ -118,7 +118,7 @@ fn randomChangesAgreeWithAnArray() {
     for gone in removed {
         assert(!list.isValid(gone))
     }
-    assert(list.isValid(list.endIndex))
+    expect(list.isValid(list.endIndex))
 }
 
 @test
@@ -165,7 +165,7 @@ fn endsSplitsAppendsAndReversal() {
     var tail = list.split(at: list.index(after: list.startIndex))
     assertEqual(shown(list), "2")
     assertEqual(shown(tail), "3,4")
-    assert(list.split(at: list.endIndex).isEmpty)
+    expect(list.split(at: list.endIndex).isEmpty)
 
     list.append(contentsOf: tail)
     assertEqual(shown(list), "2,3,4")
@@ -188,9 +188,9 @@ fn endsSplitsAppendsAndReversal() {
     assertEqual(shown(list), "7,4,3,2,8")
 
     tail.removeAll()
-    assert(tail.isEmpty && tail.first == none && tail.last == none)
-    assert(tail.removeFirst() == none && tail.removeLast() == none)
-    assert(tail.startIndex == tail.endIndex)
+    expect(tail.isEmpty && tail.first == none && tail.last == none)
+    expect(tail.removeFirst() == none && tail.removeLast() == none)
+    expect(tail.startIndex == tail.endIndex)
 }
 
 @test
@@ -206,20 +206,20 @@ fn aListIsAValueAndACollection() {
     let later = original
     assertEqual(later[second], 2)
     original.remove(at: second)
-    assert(!original.isValid(second) && later.isValid(second))
+    expect(!original.isValid(second) && later.isValid(second))
 
-    assert(LinkedList<Int>([1, 2]) == LinkedList<Int>([1, 2]))
-    assert(LinkedList<Int>([1, 2]) != LinkedList<Int>([2, 1]))
-    assert(LinkedList<Int>([1]) != LinkedList<Int>([1, 1]))
+    expect(LinkedList<Int>([1, 2]) == LinkedList<Int>([1, 2]))
+    expect(LinkedList<Int>([1, 2]) != LinkedList<Int>([2, 1]))
+    expect(LinkedList<Int>([1]) != LinkedList<Int>([1, 1]))
     assertEqual(LinkedList<Int>([1, 2]).debugDescription(), "LinkedList([1, 2])")
     assertEqual(original.endIndex.debugDescription(), "LinkedListIndex(end)")
-    assert(original.startIndex.debugDescription().hasPrefix("LinkedListIndex("))
+    expect(original.startIndex.debugDescription().hasPrefix("LinkedListIndex("))
     assertEqual(original.startIndex.hashValue, original.startIndex.hashValue)
 
     // The collection's own algorithms work on it.
     let words = LinkedList<String>(["a", "bb", "ccc"])
     assertEqual(words.count, 3)
-    assert(!words.isEmpty)
+    expect(!words.isEmpty)
     let long = words.firstIndex(where: { $0.count > 1 })!
     assertEqual(words[long], "bb")
     var total = 0

@@ -35,13 +35,13 @@ fn queueIsFirstInFirstOut() {
     queue.enqueue("c")
     assertEqual(queue.dequeue() ?? "", "b")
     assertEqual(queue.dequeue() ?? "", "c")
-    assert(queue.dequeue() == none)
+    expect(queue.dequeue() == none)
 }
 
 @test
 fn countCoversBothHalves() {
     let queue = Queue<Int>()
-    assert(queue.isEmpty)
+    expect(queue.isEmpty)
     assertEqual(queue.count, 0)
     queue.enqueue(1)
     queue.enqueue(2)
@@ -49,7 +49,7 @@ fn countCoversBothHalves() {
     assertEqual(queue.dequeue() ?? 0, 1)
     queue.enqueue(4)
     assertEqual(queue.count, 3)
-    assert(!queue.isEmpty)
+    expect(!queue.isEmpty)
 }
 
 @test
@@ -67,7 +67,7 @@ fn aQueuePeeksAndKeepsRoom() {
     assertEqual(queue.peek(), 1)
     queue.reserveCapacity(100)
     queue.enqueue(3)
-    assert(queue.toArray() == [1, 2, 3])
+    expect(queue.toArray() == [1, 2, 3])
     queue.removeAll()
-    assert(queue.isEmpty && queue.peek() == none)
+    expect(queue.isEmpty && queue.peek() == none)
 }

@@ -37,7 +37,7 @@ fn aDequesIteratorKeepsWhatItWasMadeFrom() {
     deque.append(3)
     assertEqual(iterator.next() ?? -1, 1)
     assertEqual(iterator.next() ?? -1, 2)
-    assert(iterator.next() == none, "the third came after")
+    expect(iterator.next() == none, "the third came after")
 }
 
 @test
@@ -59,12 +59,12 @@ fn dequeGrowsAtBothEnds() {
 @test
 fn anEmptyDequeGivesNone() {
     let deque = Deque<String>()
-    assert(deque.isEmpty)
+    expect(deque.isEmpty)
     assertEqual(deque.count, 0)
-    assert(deque.first == none)
-    assert(deque.last == none)
-    assert(deque.removeFirst() == none)
-    assert(deque.removeLast() == none)
+    expect(deque.first == none)
+    expect(deque.last == none)
+    expect(deque.removeFirst() == none)
+    expect(deque.removeLast() == none)
     assertEqual(deque.toArray().count, 0)
 }
 
@@ -72,11 +72,11 @@ fn anEmptyDequeGivesNone() {
 fn aDequeOfValuesKeepsTheirOrder() {
     let deque = Deque<String>(["a", "b", "c"])
     assertEqual(deque.count, 3)
-    assert(!deque.isEmpty)
-    assert(deque.toArray() == ["a", "b", "c"])
+    expect(!deque.isEmpty)
+    expect(deque.toArray() == ["a", "b", "c"])
     assertEqual(deque.removeLast() ?? "", "c")
     assertEqual(deque.removeFirst() ?? "", "a")
-    assert(deque.toArray() == ["b"])
+    expect(deque.toArray() == ["b"])
 }
 
 @test
@@ -93,7 +93,7 @@ fn removingFromBothEndsWrapsRoundTheSlots() {
     deque.append(7)
     deque.append(8)
     deque.prepend(1)
-    assert(deque.toArray() == [1, 2, 3, 4, 5, 6, 7, 8])
+    expect(deque.toArray() == [1, 2, 3, 4, 5, 6, 7, 8])
     assertEqual(deque.removeLast() ?? -1, 8)
     assertEqual(deque.last ?? -1, 7)
     assertEqual(deque[6], 7)
@@ -104,7 +104,7 @@ fn theSubscriptReplacesAnElementByPosition() {
     let deque = Deque<Int>([1, 2, 3])
     deque.prepend(0)
     deque[2] = 20
-    assert(deque.toArray() == [0, 1, 20, 3])
+    expect(deque.toArray() == [0, 1, 20, 3])
 }
 
 @test(traps: "array index out of range")
@@ -123,9 +123,9 @@ fn writingAtANegativeIndexTraps() {
 fn removeAllEmptiesTheDeque() {
     let deque = Deque<Int>([1, 2, 3])
     deque.removeAll()
-    assert(deque.isEmpty)
+    expect(deque.isEmpty)
     deque.prepend(4)
-    assert(deque.toArray() == [4])
+    expect(deque.toArray() == [4])
 }
 
 fn reversedElements<C: BidirectionalCollection>(_ items: C) -> C.Element[>..] {
@@ -142,18 +142,18 @@ fn reversedElements<C: BidirectionalCollection>(_ items: C) -> C.Element[>..] {
 fn aDequeIsARandomAccessCollection() {
     let deque = Deque<Int>([2, 3])
     deque.prepend(1)
-    assert(reversedElements(deque) == [3, 2, 1])
+    expect(reversedElements(deque) == [3, 2, 1])
     assertEqual(deque.distance(from: deque.startIndex, to: deque.endIndex), 3)
     assertEqual(deque[deque.index(deque.startIndex, offsetBy: 2)], 3)
     assertEqual(deque.firstIndex(of: 2) ?? -1, 1)
-    assert(deque.reversed().toArray() == [3, 2, 1])
+    expect(deque.reversed().toArray() == [3, 2, 1])
 }
 
 @test
 fn aDequeIsChangedInPlaceAsAMutableCollection() {
     var deque = Deque<Int>([1, 2, 3])
     deque.swapAt(0, 2)
-    assert(deque.toArray() == [3, 2, 1])
+    expect(deque.toArray() == [3, 2, 1])
 }
 
 @test
@@ -168,10 +168,10 @@ fn aDequeIsReadFromTheEnd() {
 fn aDequeIsSlicedRoundTheEndOfItsSlots() {
     let deque = Deque<Int>([1, 2, 3])
     deque.prepend(0)
-    assert(deque[1..<3] == [1, 2])
-    assert(deque[^2...] == [2, 3])
-    assert(deque[...^4] == [0])
-    assert(deque[2..<2] == [])
+    expect(deque[1..<3] == [1, 2])
+    expect(deque[^2...] == [2, 3])
+    expect(deque[...^4] == [0])
+    expect(deque[2..<2] == [])
 }
 
 @test
@@ -180,7 +180,7 @@ fn aDequeIsWrittenFromTheEndRoundTheEndOfItsSlots() {
     deque.prepend(1)
     deque[^1] = 9
     deque[^3] += 10
-    assert(deque.toArray() == [11, 2, 9])
+    expect(deque.toArray() == [11, 2, 9])
 }
 
 @test(traps: "array slice out of range")
@@ -204,16 +204,16 @@ fn aDequeInsertsRemovesAndRotates() {
     deque.insert(2, at: 1)
     deque.insert(0, at: 0)
     deque.insert(4, at: 4)
-    assert(deque.toArray() == [0, 1, 2, 3, 4])
+    expect(deque.toArray() == [0, 1, 2, 3, 4])
     assertEqual(deque.remove(at: 1), 1)
     assertEqual(deque.remove(at: 3), 4)
-    assert(deque.toArray() == [0, 2, 3])
+    expect(deque.toArray() == [0, 2, 3])
     deque.rotate(by: 1)
-    assert(deque.toArray() == [2, 3, 0])
+    expect(deque.toArray() == [2, 3, 0])
     deque.rotate(by: -1)
-    assert(deque.toArray() == [0, 2, 3])
+    expect(deque.toArray() == [0, 2, 3])
     deque.rotate(by: 7)
-    assert(deque.toArray() == [2, 3, 0])
+    expect(deque.toArray() == [2, 3, 0])
 }
 
 @test
@@ -257,16 +257,16 @@ fn aDequeAgreesWithAnArrayUnderRandomChanges() {
         step += 1
     }
     let expected = model.toArray()
-    assert(deque.toArray() == expected)
+    expect(deque.toArray() == expected)
     var (front, back) = deque.asSlices()
     front.append(contentsOf: back)
-    assert(front == expected)
+    expect(front == expected)
     deque.makeContiguous()
     let (whole, rest) = deque.asSlices()
-    assert(whole == expected && rest.isEmpty)
+    expect(whole == expected && rest.isEmpty)
     deque.reserveCapacity(5000)
-    assert(deque.capacity >= 5000)
-    assert(deque.toArray() == expected)
+    expect(deque.capacity >= 5000)
+    expect(deque.toArray() == expected)
 }
 
 class Counter {

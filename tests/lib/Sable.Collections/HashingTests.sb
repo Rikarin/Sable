@@ -21,12 +21,12 @@ fn keysAreToldApartByTheKeyTheyGive() {
     assertEqual(ports["HTTPS"], 443)
     ports["Http"] = 8080
     assertEqual(ports.count, 2)
-    assert(ports.keys == ["HTTP", "https"])
-    assert(ports.values == [8080, 443])
+    expect(ports.keys == ["HTTP", "https"])
+    expect(ports.values == [8080, 443])
     assertEqual(ports["HTTP"], 8080)
-    assert(ports.remove("hTtP") == 8080)
+    expect(ports.remove("hTtP") == 8080)
     assertEqual(ports.count, 1)
-    assert(ports.contains("HTTPS"))
+    expect(ports.contains("HTTPS"))
     ports["x"] = none
     assertEqual(ports.count, 1)
 }
@@ -55,22 +55,22 @@ fn aDefaultIsCountedUp() {
     seen["pear", default: 0] += 1
     assertEqual(seen["apple"], 2)
     assertEqual(seen.count, 2)
-    assert(seen.updateValue(5, forKey: "PEAR") == 1)
+    expect(seen.updateValue(5, forKey: "PEAR") == 1)
     assertEqual(seen["pear"], 5)
     seen.removeAll()
-    assert(seen.isEmpty)
+    expect(seen.isEmpty)
 }
 
 @test
 fn aSeededHashingHashesAlikeInEveryRun() {
     let seeded = Hashing<String>.seeded(42)
     assertEqual(seeded.hashValue(of: "x"), Hashing<String>.seeded(42).hashValue(of: "x"))
-    assert(seeded.hashValue(of: "x") != Hashing<String>.seeded(43).hashValue(of: "x"))
+    expect(seeded.hashValue(of: "x") != Hashing<String>.seeded(43).hashValue(of: "x"))
     var table = HashingDictionary<String, Int>(hashing: .seeded(42))
     table["x"] = 1
     assertEqual(table["x"], 1)
-    assert(Hashing<String>.standard().areSame("a", "a"))
-    assert(!Hashing<String>.standard().areSame("a", "A"))
+    expect(Hashing<String>.standard().areSame("a", "a"))
+    expect(!Hashing<String>.standard().areSame("a", "A"))
 }
 
 @test
@@ -85,7 +85,7 @@ fn integersCanBeTheirOwnHash() {
     }
     assertEqual(table.count, 1000)
     assertEqual(table[500 * 7919], 500)
-    assert(table[3] == none)
+    expect(table[3] == none)
 }
 
 @test
@@ -103,14 +103,14 @@ fn aHashingIsMadeFromItsParts() {
 @test
 fn aSetKeepsTheFirstOfValuesItsHashingCallsEqual() {
     var tags = HashingSet<String>(hashing: .by { $0.lowercased() })
-    assert(tags.insert("Swift"))
-    assert(!tags.insert("SWIFT"))
-    assert(tags.insert("Rust"))
+    expect(tags.insert("Swift"))
+    expect(!tags.insert("SWIFT"))
+    expect(tags.insert("Rust"))
     assertEqual(tags.count, 2)
-    assert(tags.contains("swift"))
-    assert(tags.toArray() == ["Swift", "Rust"])
-    assert(tags.remove("RUST"))
-    assert(!tags.remove("rust"))
+    expect(tags.contains("swift"))
+    expect(tags.toArray() == ["Swift", "Rust"])
+    expect(tags.remove("RUST"))
+    expect(!tags.remove("rust"))
     assertEqual(tags.count, 1)
     var users = HashingSet<User>(hashing: .by { $0.id })
     users.insert(User(id: 1, name: "a"))

@@ -49,7 +49,7 @@ fn emptied<C: RangeReplaceableCollection>(_ items: C) -> Int {
 @test
 fn aListIsARandomAccessCollection() {
     let list = List<Int>([1, 2, 3, 4])
-    assert(backwards(list) == [4, 3, 2, 1])
+    expect(backwards(list) == [4, 3, 2, 1])
     assertEqual(list.distance(from: list.startIndex, to: list.endIndex), 4)
     assertEqual(list[list.index(list.startIndex, offsetBy: 2)], 3)
     assertEqual(list.lazy.filter { $0 > 2 }.reduce(0) { $0 + $1 }, 7)
@@ -59,9 +59,9 @@ fn aListIsARandomAccessCollection() {
 fn aListIsChangedInPlaceAndGrownThroughTheProtocols() {
     var list = List<Int>([1, 2, 3])
     doubled(&list)
-    assert(list.toArray() == [2, 4, 6])
+    expect(list.toArray() == [2, 4, 6])
     let made: List<Int> = counting(to: 4)
-    assert(made.toArray() == [1, 2, 3])
+    expect(made.toArray() == [1, 2, 3])
     assertEqual(emptied(made), 0)
 }
 
@@ -69,9 +69,9 @@ fn aListIsChangedInPlaceAndGrownThroughTheProtocols() {
 fn anEmptyListHasNothing() {
     let list = List<Int>()
     assertEqual(list.count, 0)
-    assert(list.isEmpty)
-    assert(list.first == none)
-    assert(list.last == none)
+    expect(list.isEmpty)
+    expect(list.first == none)
+    expect(list.last == none)
     assertEqual(list.toArray().count, 0)
 }
 
@@ -79,18 +79,18 @@ fn anEmptyListHasNothing() {
 fn aListOfElementsKeepsTheirOrder() {
     let list = List<String>(["a", "b", "c"])
     assertEqual(list.count, 3)
-    assert(!list.isEmpty)
+    expect(!list.isEmpty)
     assertEqual(list[0], "a")
     assertEqual(list.first ?? "", "a")
     assertEqual(list.last ?? "", "c")
-    assert(list.toArray() == ["a", "b", "c"])
+    expect(list.toArray() == ["a", "b", "c"])
 }
 
 @test
 fn aListOfASliceHoldsItsRun() {
     let xs: Int[>..] = [1, 2, 3, 4]
     let list = List<Int>(xs[1..<3])
-    assert(list.toArray() == [2, 3])
+    expect(list.toArray() == [2, 3])
 }
 
 @test
@@ -100,7 +100,7 @@ fn aListMadeFromAGrowableArraySharesItsStorage() {
     xs.append(1)
     let list = List(xs)
     assertEqual(list.capacity, xs.capacity)
-    assert(list.toArray() == [1])
+    expect(list.toArray() == [1])
 }
 
 @test
@@ -115,8 +115,8 @@ fn aListAndTheArrayItWasMadeFromAreIndependentValues() {
     var list = List<Int>(xs)
     list[0] = 9
     xs[1] = 8
-    assert(xs == [1, 8, 3])
-    assert(list.toArray() == [9, 2, 3])
+    expect(xs == [1, 8, 3])
+    expect(list.toArray() == [9, 2, 3])
 }
 
 @test
@@ -125,17 +125,17 @@ fn copiesOfAListAreIndependentValues() {
     let b = a
     a.append(3)
     a[0] = 0
-    assert(a.toArray() == [0, 2, 3])
-    assert(b.toArray() == [1, 2])
+    expect(a.toArray() == [0, 2, 3])
+    expect(b.toArray() == [1, 2])
 }
 
 @test
 fn capacityIsRoomBeforeGrowing() {
     var list = List<Int>(capacity: 50)
-    assert(list.capacity >= 50)
+    expect(list.capacity >= 50)
     assertEqual(list.count, 0)
     list.reserveCapacity(200)
-    assert(list.capacity >= 200)
+    expect(list.capacity >= 200)
     list.append(1)
     assertEqual(list.count, 1)
 }
@@ -186,7 +186,7 @@ fn appendAddsAtTheEnd() {
     var list = List<Int>()
     list.append(1)
     list.append(contentsOf: [2, 3])
-    assert(list.toArray() == [1, 2, 3])
+    expect(list.toArray() == [1, 2, 3])
 }
 
 @test
@@ -195,7 +195,7 @@ fn insertPutsTheElementAtTheIndex() {
     list.insert(3, at: 2)
     list.insert(0, at: 0)
     list.insert(5, at: list.count)
-    assert(list.toArray() == [0, 1, 2, 3, 4, 5])
+    expect(list.toArray() == [0, 1, 2, 3, 4, 5])
 }
 
 @test(traps: "array slice out of range")
@@ -214,7 +214,7 @@ fn insertAtANegativeIndexTraps() {
 fn insertContentsOfPutsTheElementsAtTheIndex() {
     var list = List<String>(["a", "d"])
     list.insert(contentsOf: ["b", "c"], at: 1)
-    assert(list.toArray() == ["a", "b", "c", "d"])
+    expect(list.toArray() == ["a", "b", "c", "d"])
     list.insert(contentsOf: [], at: 4)
     assertEqual(list.count, 4)
 }
@@ -223,10 +223,10 @@ fn insertContentsOfPutsTheElementsAtTheIndex() {
 fn removeAtTakesOutTheElementAndClosesTheGap() {
     var list = List<String>(["a", "b", "c", "d"])
     assertEqual(list.remove(at: 1), "b")
-    assert(list.toArray() == ["a", "c", "d"])
+    expect(list.toArray() == ["a", "c", "d"])
     assertEqual(list.remove(at: 2), "d")
     assertEqual(list.remove(at: 0), "a")
-    assert(list.toArray() == ["c"])
+    expect(list.toArray() == ["c"])
 }
 
 @test(traps: "array index out of range")
@@ -239,9 +239,9 @@ fn removeAtPastTheEndTraps() {
 fn swapRemoveMovesTheLastIntoTheGap() {
     var list = List<Int>([1, 2, 3, 4])
     assertEqual(list.swapRemove(at: 0), 1)
-    assert(list.toArray() == [4, 2, 3])
+    expect(list.toArray() == [4, 2, 3])
     assertEqual(list.swapRemove(at: 2), 3)
-    assert(list.toArray() == [4, 2])
+    expect(list.toArray() == [4, 2])
 }
 
 @test(traps: "array index out of range")
@@ -255,7 +255,7 @@ fn removeFirstAndLastTakeTheEnds() {
     var list = List<Int>([1, 2, 3])
     assertEqual(list.removeFirst(), 1)
     assertEqual(list.removeLast(), 3)
-    assert(list.toArray() == [2])
+    expect(list.toArray() == [2])
 }
 
 @test(traps: "array index out of range")
@@ -274,45 +274,45 @@ fn removeLastOfAnEmptyListTraps() {
 fn popLastIsNoneWhenEmpty() {
     var list = List<Int>([7])
     assertEqual(list.popLast() ?? 0, 7)
-    assert(list.popLast() == none)
+    expect(list.popLast() == none)
 }
 
 @test
 fn removeAllWhereKeepsTheOrderOfTheRest() {
     var list = List<Int>([1, 2, 3, 4, 5, 6])
     list.removeAll(where: isEven)
-    assert(list.toArray() == [1, 3, 5])
+    expect(list.toArray() == [1, 3, 5])
     list.removeAll(where: (x: Int) => x > 100)
-    assert(list.toArray() == [1, 3, 5])
+    expect(list.toArray() == [1, 3, 5])
     list.removeAll(where: (x: Int) => true)
-    assert(list.isEmpty)
+    expect(list.isEmpty)
 }
 
 @test
 fn retainKeepsThoseThatPass() {
     var list = List<String>(["apple", "fig", "pear", "kiwi"])
     list.retain(where: (w: String) => w.count == 4)
-    assert(list.toArray() == ["pear", "kiwi"])
+    expect(list.toArray() == ["pear", "kiwi"])
 }
 
 @test
 fn dedupLeavesOneOfEachRun() {
     var list = List<Int>([1, 1, 2, 2, 2, 3, 1, 1])
     list.dedup()
-    assert(list.toArray() == [1, 2, 3, 1])
+    expect(list.toArray() == [1, 2, 3, 1])
     var one = List<Int>([4])
     one.dedup()
-    assert(one.toArray() == [4])
+    expect(one.toArray() == [4])
     var distinct = List<Int>([1, 2, 3])
     distinct.dedup()
-    assert(distinct.toArray() == [1, 2, 3])
+    expect(distinct.toArray() == [1, 2, 3])
 }
 
 @test
 fn containsFindsAnEqualElement() {
     let list = List<String>(["a", "b"])
-    assert(list.contains("b"))
-    assert(!list.contains("c"))
+    expect(list.contains("b"))
+    expect(!list.contains("c"))
 }
 
 @test
@@ -321,9 +321,9 @@ fn truncateDropsTheElementsFromTheCountOn() {
     list.truncate(to: 10)
     assertEqual(list.count, 4)
     list.truncate(to: 2)
-    assert(list.toArray() == [1, 2])
+    expect(list.toArray() == [1, 2])
     list.truncate(to: 0)
-    assert(list.isEmpty)
+    expect(list.isEmpty)
 }
 
 @test(traps: "array slice out of range")
@@ -336,24 +336,24 @@ fn truncateToANegativeCountTraps() {
 fn drainTakesOutARange() {
     var list = List<Int>([1, 2, 3, 4, 5])
     let middle = list.drain(1..<3)
-    assert(middle == [2, 3])
-    assert(list.toArray() == [1, 4, 5])
+    expect(middle == [2, 3])
+    expect(list.toArray() == [1, 4, 5])
     let nothing = list.drain(1..<1)
     assertEqual(nothing.count, 0)
     let all = list.drain(0..<3)
-    assert(all == [1, 4, 5])
-    assert(list.isEmpty)
+    expect(all == [1, 4, 5])
+    expect(list.isEmpty)
 }
 
 @test
 fn replaceSubrangeTakesMoreOrFewer() {
     var list = List<Int>([1, 2, 3])
     list.replaceSubrange(1..<2, with: [7, 8, 9])
-    assert(list.toArray() == [1, 7, 8, 9, 3])
+    expect(list.toArray() == [1, 7, 8, 9, 3])
     list.replaceSubrange(0..<4, with: [0])
-    assert(list.toArray() == [0, 3])
+    expect(list.toArray() == [0, 3])
     list.replaceSubrange(2..<2, with: [4])
-    assert(list.toArray() == [0, 3, 4])
+    expect(list.toArray() == [0, 3, 4])
 }
 
 @test(traps: "array slice out of range")
@@ -367,13 +367,13 @@ fn replaceSubrangePastTheEndTraps() {
 fn reorderingChangesTheListInPlace() {
     var list = List<Int>([3, 1, 2])
     list.swapAt(0, 2)
-    assert(list.toArray() == [2, 1, 3])
+    expect(list.toArray() == [2, 1, 3])
     list.reverse()
-    assert(list.toArray() == [3, 1, 2])
+    expect(list.toArray() == [3, 1, 2])
     list.sort()
-    assert(list.toArray() == [1, 2, 3])
+    expect(list.toArray() == [1, 2, 3])
     list.sort(by: (a: Int, b: Int) => b < a)
-    assert(list.toArray() == [3, 2, 1])
+    expect(list.toArray() == [3, 2, 1])
 }
 
 @test
@@ -415,11 +415,11 @@ fn aListIsReadFromTheEnd() {
 @test
 fn aListIsSlicedByAnyRange() {
     let list = List<Int>([1, 2, 3, 4])
-    assert(list[1..<3] == [2, 3])
-    assert(list[1...2] == [2, 3])
-    assert(list[2...] == [3, 4])
-    assert(list[..<^1] == [1, 2, 3])
-    assert(list[^2...^1] == [3, 4])
+    expect(list[1..<3] == [2, 3])
+    expect(list[1...2] == [2, 3])
+    expect(list[2...] == [3, 4])
+    expect(list[..<^1] == [1, 2, 3])
+    expect(list[^2...^1] == [3, 4])
 }
 
 @test
@@ -427,16 +427,16 @@ fn aListIsWrittenFromTheEnd() {
     var list = List<Int>([1, 2, 3])
     list[^1] = 9
     list[^3] += 10
-    assert(list.asSlice() == [11, 2, 9])
+    expect(list.asSlice() == [11, 2, 9])
 }
 
 @test
 fn aListHasARangeFromTheEndReplaced() {
     var list = List<Int>([1, 2, 3, 4])
     list[1..<^1] = List<Int>([7, 8, 9])
-    assert(list.asSlice() == [1, 7, 8, 9, 4])
+    expect(list.asSlice() == [1, 7, 8, 9, 4])
     list[^3...] = List<Int>()
-    assert(list.asSlice() == [1, 7])
+    expect(list.asSlice() == [1, 7])
 }
 
 @test(traps: "index ^4 is out of range for count 3")
@@ -448,7 +448,7 @@ fn aListPastItsStartTraps() {
 @test
 fn aListIsMadeFromAnySequence() {
     let list = List(1...3)
-    assert(list.toArray() == [1, 2, 3])
+    expect(list.toArray() == [1, 2, 3])
     let collected: List<Int> = (1...4).filter { $0 % 2 == 0 }.collect()
-    assert(collected.toArray() == [2, 4])
+    expect(collected.toArray() == [2, 4])
 }

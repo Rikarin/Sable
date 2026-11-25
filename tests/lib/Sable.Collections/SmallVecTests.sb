@@ -9,34 +9,34 @@ import Sable.Testing
 @test
 fn aSmallVecStaysInlineUpToItsInlineCapacity() {
     var small = SmallVec<Int, 3>()
-    assert(small.isEmpty)
+    expect(small.isEmpty)
     assertEqual(small.inlineCapacity, 3)
     assertEqual(small.capacity, 3)
     small.append(1)
     small.append(2)
     small.append(3)
-    assert(!small.isSpilled)
+    expect(!small.isSpilled)
     assertEqual(small.count, 3)
-    assert(small.toArray() == [1, 2, 3])
+    expect(small.toArray() == [1, 2, 3])
 }
 
 @test
 fn oneElementPastTheInlineCapacityMovesToTheHeap() {
     var small = SmallVec<Int, 2>([1, 2])
-    assert(!small.isSpilled)
+    expect(!small.isSpilled)
     small.append(3)
-    assert(small.isSpilled)
-    assert(small.capacity >= 3)
+    expect(small.isSpilled)
+    expect(small.capacity >= 3)
     assertEqual(small.count, 3)
-    assert(small.toArray() == [1, 2, 3])
+    expect(small.toArray() == [1, 2, 3])
 }
 
 @test
 fn appendingManyAtOnceSpillsOnce() {
     var small = SmallVec<Int, 2>()
     small.append(contentsOf: [1, 2, 3, 4])
-    assert(small.isSpilled)
-    assert(small.toArray() == [1, 2, 3, 4])
+    expect(small.isSpilled)
+    expect(small.toArray() == [1, 2, 3, 4])
     small.append(contentsOf: [5])
     assertEqual(small.count, 5)
 }
@@ -55,12 +55,12 @@ fn subscriptReadsAndWritesInlineAndOnTheHeap() {
 @test
 fn firstAndLastAreNoneWhenEmpty() {
     var small = SmallVec<Int, 2>()
-    assert(small.first == none)
-    assert(small.last == none)
+    expect(small.first == none)
+    expect(small.last == none)
     small.append(4)
     small.append(5)
-    assert(small.first == 4)
-    assert(small.last == 5)
+    expect(small.first == 4)
+    expect(small.last == 5)
 }
 
 @test
@@ -68,12 +68,12 @@ fn insertMovesTheElementsAfterUp() {
     var small = SmallVec<Int, 4>([1, 3])
     small.insert(2, at: 1)
     small.insert(0, at: 0)
-    assert(!small.isSpilled)
-    assert(small.toArray() == [0, 1, 2, 3])
+    expect(!small.isSpilled)
+    expect(small.toArray() == [0, 1, 2, 3])
     small.insert(4, at: 4)
-    assert(small.isSpilled)
+    expect(small.isSpilled)
     small.insert(9, at: 2)
-    assert(small.toArray() == [0, 1, 9, 2, 3, 4])
+    expect(small.toArray() == [0, 1, 9, 2, 3, 4])
 }
 
 @test(traps: "SmallVec.insert: index out of range")
@@ -92,18 +92,18 @@ fn truncateToANegativeCountTraps() {
 fn removeAtClosesTheGap() {
     var small = SmallVec<Int, 3>([1, 2, 3])
     assertEqual(small.remove(at: 1), 2)
-    assert(small.toArray() == [1, 3])
+    expect(small.toArray() == [1, 3])
     small.append(contentsOf: [4, 5])
     assertEqual(small.remove(at: 0), 1)
-    assert(small.toArray() == [3, 4, 5])
+    expect(small.toArray() == [3, 4, 5])
 }
 
 @test
 fn removeLastAndPopLastTakeFromTheEnd() {
     var small = SmallVec<Int, 1>([1, 2])
     assertEqual(small.removeLast(), 2)
-    assert(small.popLast() == 1)
-    assert(small.popLast() == none)
+    expect(small.popLast() == 1)
+    expect(small.popLast() == none)
     var inline = SmallVec<Int, 2>([7])
     assertEqual(inline.removeLast(), 7)
 }
@@ -114,47 +114,47 @@ fn truncateKeepsThePrefix() {
     small.truncate(to: 10)
     assertEqual(small.count, 4)
     small.truncate(to: 1)
-    assert(small.toArray() == [1])
+    expect(small.toArray() == [1])
 }
 
 @test
 fn removeAllAndShrinkToFitComeBackInline() {
     var small = SmallVec<Int, 2>([1, 2, 3])
     small.removeAll()
-    assert(small.isEmpty)
-    assert(!small.isSpilled)
+    expect(small.isEmpty)
+    expect(!small.isSpilled)
     small.append(contentsOf: [1, 2, 3])
     small.shrinkToFit()
-    assert(small.isSpilled, "three do not fit inline")
+    expect(small.isSpilled, "three do not fit inline")
     _ = small.removeLast()
     small.shrinkToFit()
-    assert(!small.isSpilled)
-    assert(small.toArray() == [1, 2])
+    expect(!small.isSpilled)
+    expect(small.toArray() == [1, 2])
     small.shrinkToFit()
-    assert(!small.isSpilled)
+    expect(!small.isSpilled)
 }
 
 @test
 fn reserveCapacityPastTheInlineRoomSpills() {
     var small = SmallVec<Int, 4>([1])
     small.reserveCapacity(3)
-    assert(!small.isSpilled)
+    expect(!small.isSpilled)
     small.reserveCapacity(10)
-    assert(small.isSpilled)
-    assert(small.capacity >= 10)
+    expect(small.isSpilled)
+    expect(small.capacity >= 10)
     small.reserveCapacity(20)
-    assert(small.capacity >= 20)
-    assert(small.toArray() == [1])
+    expect(small.capacity >= 20)
+    expect(small.toArray() == [1])
 }
 
 @test
 fn containsFindsAnEqualElement() {
     var small = SmallVec<String, 2>(["a"])
-    assert(small.contains("a"))
-    assert(!small.contains("b"))
+    expect(small.contains("a"))
+    expect(!small.contains("b"))
     small.append(contentsOf: ["b", "c"])
-    assert(small.contains("c"))
-    assert(!small.contains("d"))
+    expect(small.contains("c"))
+    expect(!small.contains("d"))
 }
 
 @test
@@ -167,7 +167,7 @@ fn aSmallVecIsGoneThroughInOrder() {
     assertEqual(total, 123)
     small.removeAll()
     for _ in small {
-        assert(false, "an empty vector gives nothing")
+        fail("an empty vector gives nothing")
     }
 }
 
@@ -196,11 +196,11 @@ fn built<C: RangeReplaceableCollection>(_ n: Int) -> C where C.Element == Int {
 fn aSmallVecIsMadeAndGrownAsARangeReplaceableCollection() {
     var small: SmallVec<Int, 2> = built(5)
     assertEqual(small.count, 5)
-    assert(small.isSpilled)
+    expect(small.isSpilled)
     small.replaceSubrange(1..<4, with: [9])
-    assert(small.toArray() == [0, 9, 4])
+    expect(small.toArray() == [0, 9, 4])
     small.clear()
-    assert(small.isEmpty)
+    expect(small.isEmpty)
 }
 
 @test
@@ -211,7 +211,7 @@ fn aSmallVecIsARandomAccessCollection() {
     assertEqual(small.index(small.startIndex, offsetBy: 1), 1)
     assertEqual(small.lastIndex(of: 6) ?? -1, 1)
     small.swapAt(0, 2)
-    assert(small.toArray() == [7, 6, 5])
+    expect(small.toArray() == [7, 6, 5])
 }
 
 @test
@@ -226,19 +226,19 @@ fn aSmallVecIsReadFromTheEndInlineOrNot() {
 @test
 fn aSmallVecIsSlicedInlineOrNot() {
     var small = SmallVec<Int, 4>([1, 2, 3])
-    assert(small[1...] == [2, 3])
-    assert(small[..<^1] == [1, 2])
+    expect(small[1...] == [2, 3])
+    expect(small[..<^1] == [1, 2])
     small.append(4)
     small.append(5)
-    assert(small.isSpilled)
-    assert(small[^2...] == [4, 5])
-    assert(small[1..<3] == [2, 3])
+    expect(small.isSpilled)
+    expect(small[^2...] == [4, 5])
+    expect(small[1..<3] == [2, 3])
 }
 
 @test
 fn aSmallVecIsMadeFromAnySequence() {
     let inline = SmallVec<Int, 4>(1...3)
-    assert(inline.toArray() == [1, 2, 3])
+    expect(inline.toArray() == [1, 2, 3])
     let spilled: SmallVec<Int, 2> = (1...5).collect()
     assertEqual(spilled.count, 5)
 }
@@ -247,11 +247,11 @@ fn aSmallVecIsMadeFromAnySequence() {
 fn aSmallVecIsWrittenFromTheEndInlineOrNot() {
     var small = SmallVec<Int, 2>([1, 2])
     small[^1] = 9
-    assert(small.toArray() == [1, 9])
+    expect(small.toArray() == [1, 9])
     small.append(3)
     small[^3] = 0
     small[1...^1] = SmallVec<Int, 2>([5])
-    assert(small.toArray() == [0, 5])
+    expect(small.toArray() == [0, 5])
 }
 
 @test
@@ -277,7 +277,7 @@ fn aSmallVecWithinItsRoomAllocatesOnceAtMost() {
         _ = v.popLast()
         v.truncate(to: 3)
     })
-    assert(made <= 1, "\(made) allocations")
+    expect(made <= 1, "\(made) allocations")
     // Past its room, it moves to the heap: an allocation, as it should.
     let spilled = allocations(during: () => {
         var v = SmallVec<Int, 2>()
@@ -285,7 +285,7 @@ fn aSmallVecWithinItsRoomAllocatesOnceAtMost() {
         v.append(2)
         v.append(3)
     })
-    assert(spilled > 0)
+    expect(spilled > 0)
 }
 
 @bench

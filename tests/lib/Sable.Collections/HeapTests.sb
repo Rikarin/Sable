@@ -15,8 +15,8 @@ fn theLeastAndTheGreatestComeOut() {
     while let next = heap.popMax() {
         largestFirst.append(next)
     }
-    assert(largestFirst == [9, 8, 7, 5, 3, 2, 1])
-    assert(heap.popMin() == none && heap.min == none && heap.max == none)
+    expect(largestFirst == [9, 8, 7, 5, 3, 2, 1])
+    expect(heap.popMin() == none && heap.min == none && heap.max == none)
     let words = Heap<String>(["pear", "apple", "fig"])
     assertEqual(words.popMin(), "apple")
     assertEqual(words.popMax(), "pear")
@@ -64,8 +64,8 @@ fn aHeapOfManyStaysInOrder() {
         assertEqual(heap.popMin(), i)
         assertEqual(heap.popMax(), 199 - i)
     }
-    assert(heap.isEmpty)
-    assert(heap.popMax() == none)
+    expect(heap.isEmpty)
+    expect(heap.popMax() == none)
 }
 
 @test
@@ -78,20 +78,20 @@ fn aHeapKeepsWhatTies() {
     assertEqual(heap.popMax(), 4)
     assertEqual(heap.popMax(), 4)
     assertEqual(heap.popMax(), 2)
-    assert(heap.isEmpty)
+    expect(heap.isEmpty)
 }
 
 @test
 fn aHeapIsGoneThroughAndEmptied() {
     let heap = Heap<Int>([5, 1, 9])
-    assert(!heap.isEmpty)
+    expect(!heap.isEmpty)
     var seen = heap.toArray()
     seen.sort()
-    assert(seen == [1, 5, 9])
+    expect(seen == [1, 5, 9])
     heap.removeAll()
-    assert(heap.isEmpty)
+    expect(heap.isEmpty)
     assertEqual(heap.count, 0)
-    assert(heap.min == none && heap.max == none)
+    expect(heap.min == none && heap.max == none)
     heap.insert(3)
     assertEqual(heap.min, 3)
     assertEqual(heap.max, 3)
@@ -101,9 +101,9 @@ fn aHeapIsGoneThroughAndEmptied() {
 fn prioritizedElementsGoByTheirPriorityAlone() {
     let write = Prioritized("write", priority: 2)
     let ship = Prioritized("ship", priority: 1)
-    assert(ship < write)
-    assert(write == Prioritized("read", priority: 2))
-    assert(write != ship)
+    expect(ship < write)
+    expect(write == Prioritized("read", priority: 2))
+    expect(write != ship)
     let heap = Heap<Prioritized<String, Int>>([write, ship])
     assertEqual(heap.popMin()!.element, "ship")
     assertEqual(heap.popMax()!.element, "write")

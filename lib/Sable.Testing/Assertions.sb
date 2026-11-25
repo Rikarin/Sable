@@ -80,7 +80,7 @@ public fn allocations(during body: () -> Void) -> Int {
 }
 
 /// Fails the test unless the body allocates nothing on the running thread.
-public fn assertNoAllocations(file: String = #file, line: Int = #line, _ body: () -> Void) {
+public fn assertNoAllocations(_ body: () -> Void, file: String = #file, line: Int = #line) {
     let made = allocations(during: body)
     assert(made == 0, "expected no allocations, got \(made)", file: file, line: line)
 }

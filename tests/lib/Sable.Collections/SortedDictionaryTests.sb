@@ -44,32 +44,32 @@ fn sortedKeys(_ model: [Int: Int]) -> Int[>..] {
 @test
 fn eachOperationByExample() {
     var d = SortedDictionary<String, Int>()
-    assert(d.isEmpty)
-    assert(d.first == none && d.last == none)
+    expect(d.isEmpty)
+    expect(d.first == none && d.last == none)
     d["m"] = 1
     d["c"] = 2
     d["x"] = 3
-    assert(d.updateValue(20, forKey: "c") == 2)
+    expect(d.updateValue(20, forKey: "c") == 2)
     assertEqual(d.count, 3)
     assertEqual(d["c"] ?? 0, 20)
-    assert(d.contains("x") && !d.contains("a"))
+    expect(d.contains("x") && !d.contains("a"))
     assertEqual(d.keys.joined(separator: ","), "c,m,x")
     assertEqual(d.values.count, 3)
     assertEqual(d.first!.key, "c")
     assertEqual(d.last!.key, "x")
     assertEqual(d.floor("n")!.key, "m")
     assertEqual(d.floor("m")!.key, "m")
-    assert(d.floor("a") == none)
+    expect(d.floor("a") == none)
     assertEqual(d.ceiling("d")!.key, "m")
-    assert(d.ceiling("y") == none)
+    expect(d.ceiling("y") == none)
     d["m"] = none
-    assert(!d.contains("m"))
-    assert(d.remove("zz") == none)
+    expect(!d.contains("m"))
+    expect(d.remove("zz") == none)
     assertEqual(d.popFirst()!.key, "c")
     assertEqual(d.popLast()!.key, "x")
-    assert(d.popFirst() == none)
+    expect(d.popFirst() == none)
     d.removeAll()
-    assert(d.isEmpty)
+    expect(d.isEmpty)
 }
 
 @test
@@ -79,9 +79,9 @@ fn literalsCopiesAndEquality() {
     b[4] = "d"
     assertEqual(a.count, 3)
     assertEqual(b.count, 4)
-    assert(a != b)
+    expect(a != b)
     b[4] = none
-    assert(a == b)
+    expect(a == b)
     assertEqual(a.debugDescription(), "[1: \"a\", 2: \"b\", 3: \"c\"]")
     assertEqual(SortedDictionary<Int, Int>().debugDescription(), "[:]")
 }
@@ -98,7 +98,7 @@ fn positionsAreRanks() {
     assertEqual(d[d.index(before: d.endIndex)].key, 297)
     assertEqual(d[d.index(d.startIndex, offsetBy: 50)].key, 150)
     assertEqual(d.index(forKey: 30)!.rank, 10)
-    assert(d.index(forKey: 31) == none)
+    expect(d.index(forKey: 31) == none)
     assertEqual(d[d.index(after: d.startIndex)].key, 3)
     var walked = 0
     var at = d.startIndex

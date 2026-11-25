@@ -10,11 +10,11 @@ import Sable.Testing
 fn anEmptyDictionaryHasNoKeys() {
     let dictionary = OrderedDictionary<String, Int>()
     assertEqual(dictionary.count, 0)
-    assert(dictionary.isEmpty)
-    assert(dictionary.get("a") == none)
-    assert(!dictionary.contains("a"))
-    assert(dictionary.index(of: "a") == none)
-    assert(dictionary.remove("a") == none)
+    expect(dictionary.isEmpty)
+    expect(dictionary.get("a") == none)
+    expect(!dictionary.contains("a"))
+    expect(dictionary.index(of: "a") == none)
+    expect(dictionary.remove("a") == none)
 }
 
 @test
@@ -24,9 +24,9 @@ fn keysKeepTheOrderTheyWereAdded() {
     dictionary.set("apple", 2)
     dictionary.set("mango", 3)
     assertEqual(dictionary.count, 3)
-    assert(!dictionary.isEmpty)
-    assert(dictionary.map({ entry in entry.0 }) == ["zebra", "apple", "mango"])
-    assert(dictionary.map({ entry in entry.1 }) == [1, 2, 3])
+    expect(!dictionary.isEmpty)
+    expect(dictionary.map({ entry in entry.0 }) == ["zebra", "apple", "mango"])
+    expect(dictionary.map({ entry in entry.1 }) == [1, 2, 3])
 }
 
 @test
@@ -38,7 +38,7 @@ fn settingAKeyAgainKeepsItsPlace() {
     assertEqual(dictionary.count, 2)
     assertEqual(dictionary.get("a") ?? 0, 10)
     assertEqual(dictionary.index(of: "a") ?? -1, 0)
-    assert(dictionary.map({ entry in entry.1 }) == [10, 2])
+    expect(dictionary.map({ entry in entry.1 }) == [10, 2])
 }
 
 @test
@@ -49,7 +49,7 @@ fn keysAndValuesCanBeReadByPosition() {
     assertEqual(dictionary.key(at: 1), 10)
     assertEqual(dictionary.value(at: 0), "thirty")
     assertEqual(dictionary.index(of: 10) ?? -1, 1)
-    assert(dictionary.contains(30))
+    expect(dictionary.contains(30))
 }
 
 @test(traps: "array index out of range")
@@ -67,13 +67,13 @@ fn removingAKeyClosesUpTheOrder() {
     dictionary.set("c", 3)
     dictionary.set("d", 4)
     assertEqual(dictionary.remove("b") ?? 0, 2)
-    assert(dictionary.map({ entry in entry.0 }) == ["a", "c", "d"])
+    expect(dictionary.map({ entry in entry.0 }) == ["a", "c", "d"])
     assertEqual(dictionary.index(of: "c") ?? -1, 1)
     assertEqual(dictionary.index(of: "d") ?? -1, 2)
     assertEqual(dictionary.get("d") ?? 0, 4)
-    assert(dictionary.remove("b") == none)
+    expect(dictionary.remove("b") == none)
     assertEqual(dictionary.remove("d") ?? 0, 4)
-    assert(dictionary.map({ entry in entry.0 }) == ["a", "c"])
+    expect(dictionary.map({ entry in entry.0 }) == ["a", "c"])
 }
 
 @test
@@ -83,8 +83,8 @@ fn aRemovedKeyAddedAgainGoesAtTheEnd() {
     dictionary.set("b", 2)
     _ = dictionary.remove("a")
     dictionary.set("a", 3)
-    assert(dictionary.map({ entry in entry.0 }) == ["b", "a"])
-    assert(dictionary.map({ entry in entry.1 }) == [2, 3])
+    expect(dictionary.map({ entry in entry.0 }) == ["b", "a"])
+    expect(dictionary.map({ entry in entry.1 }) == [2, 3])
 }
 
 @test
@@ -94,7 +94,7 @@ fn removeAllEmptiesTheDictionary() {
     dictionary.set("b", 2)
     dictionary.removeAll()
     assertEqual(dictionary.count, 0)
-    assert(!dictionary.contains("a"))
+    expect(!dictionary.contains("a"))
     dictionary.set("c", 3)
     assertEqual(dictionary.index(of: "c") ?? -1, 0)
 }
@@ -137,7 +137,7 @@ fn anOrderedDictionaryIsACollectionOfItsEntriesByPosition() {
     assertEqual(ages.index(ages.startIndex, offsetBy: 2), 2)
     assertEqual(ages.firstIndex(where: { $0.1 > 40 }) ?? -1, 1)
     assertEqual(ages.last?.0 ?? "", "cy")
-    assert(ages.reversed().map({ $0.0 }).toArray() == ["cy", "bo", "ann"])
+    expect(ages.reversed().map({ $0.0 }).toArray() == ["cy", "bo", "ann"])
     assertEqual(ages.index(before: ages.index(after: 0)), 0)
 }
 
@@ -164,22 +164,22 @@ fn anOrderedDictionaryIsMadeFromAnySequenceOfPairs() {
 @test
 fn anOrderedDictionaryChangesByPosition() {
     let ordered = OrderedDictionary<String, Int>([("a", 1), ("c", 3)])
-    assert(ordered.insert(2, forKey: "b", at: 1))
-    assert(!ordered.insert(9, forKey: "a", at: 0))
-    assert(ordered.keys == ["a", "b", "c"])
-    assert(ordered.values == [1, 2, 3])
+    expect(ordered.insert(2, forKey: "b", at: 1))
+    expect(!ordered.insert(9, forKey: "a", at: 0))
+    expect(ordered.keys == ["a", "b", "c"])
+    expect(ordered.values == [1, 2, 3])
     assertEqual(ordered.index(of: "c"), 2)
     ordered.swapAt(0, 2)
-    assert(ordered.keys == ["c", "b", "a"])
+    expect(ordered.keys == ["c", "b", "a"])
     assertEqual(ordered.index(of: "a"), 2)
     let (key, value) = ordered.remove(at: 1)
-    assert(key == "b" && value == 2)
-    assert(ordered.keys == ["c", "a"])
+    expect(key == "b" && value == 2)
+    expect(ordered.keys == ["c", "a"])
     assertEqual(ordered.index(of: "a"), 1)
     ordered.sortByKeys()
-    assert(ordered.keys == ["a", "c"])
+    expect(ordered.keys == ["a", "c"])
     ordered.sort(by: { $0.1 > $1.1 })
-    assert(ordered.keys == ["c", "a"])
+    expect(ordered.keys == ["c", "a"])
     assertEqual(ordered.get("a"), 1)
 }
 
@@ -260,6 +260,6 @@ fn anOrderedDictionaryAgreesWithAnArrayUnderRandomChanges() {
             assert(ordered.key(at: i).id == model[i].id && ordered.value(at: i) == model[i].text)
             assertEqual(ordered.index(of: Crowded { id: model[i].id }) ?? -1, i)
         }
-        assert(ordered.contains(Crowded { id: id }) == (model.firstIndex(where: { $0.id == id }) != none))
+        assertEqual(ordered.contains(Crowded { id: id }), (model.firstIndex(where: { $0.id == id }) != none))
     }
 }

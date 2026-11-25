@@ -9,32 +9,32 @@ import Sable.Testing
 @test
 fn anArrayVecFillsItsRoomAndRefusesMore() {
     var v = ArrayVec<Int, 4>()
-    assert(v.isEmpty && !v.isFull)
+    expect(v.isEmpty && !v.isFull)
     assertEqual(v.capacity, 4)
     assertEqual(v.remainingCapacity, 4)
-    assert(v.first == none && v.last == none && v.popLast() == none)
+    expect(v.first == none && v.last == none && v.popLast() == none)
     v.append(1)
-    assert(v.tryAppend(2))
-    assert(v.tryAppend(contentsOf: [3, 4]))
-    assert(v.isFull && v.remainingCapacity == 0)
-    assert(!v.tryAppend(5))
-    assert(!v.tryAppend(contentsOf: [5]))
-    assert(!v.tryInsert(0, at: 0))
-    assert(v.toArray() == [1, 2, 3, 4])
+    expect(v.tryAppend(2))
+    expect(v.tryAppend(contentsOf: [3, 4]))
+    expect(v.isFull && v.remainingCapacity == 0)
+    expect(!v.tryAppend(5))
+    expect(!v.tryAppend(contentsOf: [5]))
+    expect(!v.tryInsert(0, at: 0))
+    expect(v.toArray() == [1, 2, 3, 4])
     assertEqual(v.first ?? 0, 1)
     assertEqual(v.last ?? 0, 4)
-    assert(v.contains(3) && !v.contains(9))
+    expect(v.contains(3) && !v.contains(9))
 }
 
 @test
 fn editsInTheMiddleMoveTheRest() {
     var v = ArrayVec<String, 5>(["a", "b", "c"])
     v.insert("x", at: 1)
-    assert(v.tryInsert("y", at: 4))
-    assert(v.toArray() == ["a", "x", "b", "c", "y"])
+    expect(v.tryInsert("y", at: 4))
+    expect(v.toArray() == ["a", "x", "b", "c", "y"])
     assertEqual(v.remove(at: 1), "x")
     assertEqual(v.swapRemove(at: 0), "a")
-    assert(v.toArray() == ["y", "b", "c"])
+    expect(v.toArray() == ["y", "b", "c"])
     assertEqual(v.swapRemove(at: 2), "c")
     v[0] = "z"
     assertEqual(v.removeLast(), "b")
@@ -42,9 +42,9 @@ fn editsInTheMiddleMoveTheRest() {
     v.append(contentsOf: ["p", "q", "r"])
     v.truncate(to: 10)
     v.truncate(to: 1)
-    assert(v.toArray() == ["p"])
+    expect(v.toArray() == ["p"])
     v.removeAll()
-    assert(v.isEmpty)
+    expect(v.isEmpty)
     v.append("s")
     v.clear()
     assertEqual(v.count, 0)
@@ -56,10 +56,10 @@ fn anArrayVecIsAValueAndACollection() {
     var b = a
     b[0] = 9
     assertEqual(a[0], 3)
-    assert(a != b)
+    expect(a != b)
     b[0] = 3
-    assert(a == b)
-    assert(ArrayVec<Int, 3>([1]) != ArrayVec<Int, 3>([1, 2]))
+    expect(a == b)
+    expect(ArrayVec<Int, 3>([1]) != ArrayVec<Int, 3>([1, 2]))
     var total = 0
     for x in a {
         total += x
@@ -101,7 +101,7 @@ fn anArrayVecAllocatesItsRoomOnceAtMost() {
         let copy = v
         _ = copy == v
     })
-    assert(made <= 1, "\(made) allocations")
+    expect(made <= 1, "\(made) allocations")
 }
 
 @test(traps: "ArrayVec.append: full, at 2")

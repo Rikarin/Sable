@@ -32,10 +32,10 @@ fn priorityQueuePopsSmallestFirst() {
 @test
 fn anEmptyQueueGivesNone() {
     let queue = PriorityQueue<String>()
-    assert(queue.isEmpty)
+    expect(queue.isEmpty)
     assertEqual(queue.count, 0)
-    assert(queue.peek() == none)
-    assert(queue.pop() == none)
+    expect(queue.peek() == none)
+    expect(queue.pop() == none)
 }
 
 @test
@@ -47,7 +47,7 @@ fn anOrderGivenGoesFirst() {
         i = i + 1
     }
     assertEqual(queue.count, 50)
-    assert(!queue.isEmpty)
+    expect(!queue.isEmpty)
     assertEqual(queue.peek() ?? -1, 49)
     var previous = 50
     while let v = queue.pop() {
@@ -63,10 +63,10 @@ fn sortedElementsLeavesTheQueueAsItIs() {
     queue.push(3)
     queue.push(1)
     queue.push(2)
-    assert(queue.sortedElements() == [1, 2, 3])
+    expect(queue.sortedElements() == [1, 2, 3])
     assertEqual(queue.count, 3)
     queue.removeAll()
-    assert(queue.isEmpty)
+    expect(queue.isEmpty)
 }
 
 @test
@@ -89,7 +89,7 @@ fn aComparatorSaysWhatGoesFirst() {
     assertEqual(words.pop(), "kiwi")
     assertEqual(words.pop(), "pear")
     assertEqual(words.pop(), "fig")
-    assert(words.pop() == none)
+    expect(words.pop() == none)
 }
 
 @test
@@ -99,12 +99,12 @@ fn aPriorityQueueIsMadeAtOnceAndChangedInPlace() {
     assertEqual(queue.pushPop(0), 0)
     assertEqual(queue.pushPop(5), 1)
     assertEqual(queue.replaceTop(10), 2)
-    assert(queue.remove(where: { $0 == 8 }) == 8)
-    assert(queue.remove(where: { $0 == 99 }) == none)
-    assert(queue.update(where: { $0 == 10 }, to: 3))
-    assert(!queue.update(where: { $0 == 99 }, to: 3))
-    assert(queue.drainSorted() == [3, 4, 5, 7, 9])
-    assert(queue.isEmpty)
+    expect(queue.remove(where: { $0 == 8 }) == 8)
+    expect(queue.remove(where: { $0 == 99 }) == none)
+    expect(queue.update(where: { $0 == 10 }, to: 3))
+    expect(!queue.update(where: { $0 == 99 }, to: 3))
+    expect(queue.drainSorted() == [3, 4, 5, 7, 9])
+    expect(queue.isEmpty)
     let largest = PriorityQueue<Int>([1, 5, 3], using: Comparator<Int>.natural().reversed())
     assertEqual(largest.pop(), 5)
 }
@@ -138,7 +138,7 @@ fn aPriorityQueueAgreesWithSortingUnderRandomChanges() {
         step += 1
     }
     model.sort()
-    assert(queue.drainSorted() == model.toArray())
+    expect(queue.drainSorted() == model.toArray())
 }
 
 @test

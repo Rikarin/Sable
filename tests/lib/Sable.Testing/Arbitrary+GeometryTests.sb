@@ -1,0 +1,56 @@
+module ArbitraryGeometryTests
+
+// The types' Arbitrary conformances: what they promise, and laws over them.
+
+import Sable.Math.Geometry
+import Sable.Testing
+
+@test
+fn vectorsAreOfAnyComponents() {
+    forAll { (a: Vector2, b: Vector3, c: Vector4) in
+        expect(a.isNaN || Vector2(a.simd) == a)
+        expect(b.isNaN || Vector3(b.simd) == b && b.xy == Vector2(b.x, b.y))
+        expect(c.isNaN || Vector4(c.simd) == c)
+        expect(!b.isFinite || b.abs().minComponent >= 0)
+    }
+}
+
+@test
+fn wideVectorsAreOfAnyComponents() {
+    forAll { (d: Vector3D) in expect(d.isNaN || d == d) }
+}
+
+@test
+fn integersAreOfAnyComponents() {
+    forAll { (a: Int2, b: Int3, c: Int4) in
+        expect(a.min(a) == a && b.max(b) == b && c.xyz.xy == c.xy)
+    }
+}
+
+@test
+fn whatTurnsIsOfLengthOneAndWhatMovesHasAnInverse() {
+    forAll { (q: Quaternion, t: Transform, m: Matrix4x4) in
+        expect(nearEqual(q.length, 1))
+        expect(nearEqual(t.rotation.length, 1) && t.scale.minComponent >= 0.25 && t.scale.maxComponent <= 4)
+        expect(m.inverted() != none && m.decomposed() != none)
+    }
+    forAll { (a: Matrix3x3, b: Matrix3x2) in
+        expect(a.inverted() != none && b.inverted() != none)
+    }
+}
+
+@test
+fn planesRaysAndBoundsAreSuch() {
+    forAll { (sphere: BoundingSphere) in expect(!sphere.isEmpty && sphere.contains(sphere.center)) }
+    forAll { (plane: Plane, ray: Ray, box: BoundingBox) in
+        expect(nearEqual(plane.normal.length, 1) && nearEqual(ray.direction.length, 1) && !box.isEmpty)
+        if let distance = ray.intersection(with: plane) {
+            expect(plane.dotCoordinate(ray.point(at: distance)).abs() <= 0.00001 * (1 + distance + ray.origin.length + plane.d.abs()))
+        }
+        if let distance = ray.intersection(with: box) {
+            let reach = Vector3(repeating: 0.00001 * (200 + distance))
+            expect(BoundingBox(box.minimum - reach, box.maximum + reach).contains(ray.point(at: distance)))
+        }
+        expect(box.contains(box.center) && box.intersects(BoundingSphere(containing: box)))
+    }
+}

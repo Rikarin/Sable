@@ -1,0 +1,33 @@
+module MatrixInvertBench
+
+import Sable.Math.Geometry
+
+// 256 transforms composed, inverted and taken apart, four thousand times over.
+
+@main
+fn main() {
+    let count = 256
+    var matrices: Matrix4x4[>..] = []
+    for i in 0..<count {
+        matrices.append(Matrix4x4(scale: Vector3(1, 2, 3), rotation: Quaternion(axis: Vector3(1, 2, F32(i % 3)), angle: F32(i % 60) * 0.1), translation: Vector3(F32(i % 5), 1, -1)))
+    }
+    var sum: F64 = 0
+    for round in 0..<4000 {
+        matrices[0].m41 = F32(round % 16)
+        sum += F64(total(matrices))
+    }
+    print("\(sum / 1024000:.1)")
+}
+
+fn total(_ matrices: Matrix4x4[:]) -> F32 {
+    var sum: F32 = 0
+    for i in 0..<matrices.count {
+        if let inverse = matrices[i].inverted() {
+            sum += inverse.m41
+        }
+        if let parts = matrices[i].decomposed() {
+            sum += parts.scale.y + parts.translation.x
+        }
+    }
+    return sum
+}

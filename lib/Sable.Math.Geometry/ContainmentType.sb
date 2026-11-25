@@ -1,0 +1,14 @@
+module Sable.Math.Geometry
+
+/// How one volume lies to another.
+@derive(Equatable, Hashable, Debug)
+public enum ContainmentType {
+    /// They have no point in common.
+    Disjoint
+
+    /// The other is wholly inside.
+    Contains
+
+    /// They overlap, or touch, and the other is not wholly inside.
+    Intersects
+}

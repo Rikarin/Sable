@@ -1,0 +1,14 @@
+module Sable.Math.Geometry
+
+/// Which side of a plane something is on.
+@derive(Equatable, Hashable, Debug)
+public enum PlaneIntersectionType {
+    /// Wholly on the side the normal points away from.
+    Back
+
+    /// Wholly on the side the normal points to.
+    Front
+
+    /// On the plane, or on both sides of it.
+    Intersecting
+}

@@ -899,7 +899,6 @@ Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     Karatsuba and Toom-3 products, Burnikel–Ziegler
                     division, text in any radix by halves; pow, powMod,
                     gcd, isqrt, two's-complement bits, bytes),
-                    Matrix, Quaternion,
                     statistics generic over every number type (mean,
                     median, mode, quantiles, variance, covariance,
                     correlation, histogram; compensated and two-pass;
@@ -908,6 +907,11 @@ Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     exponential, Bernoulli, weighted index): here rather
                     than beside the generators, as the core has no
                     functions of them
+Sable.Math.Geometry Vector2, Vector3, Vector4, Matrix3x2, Matrix3x3, Matrix4x4,
+                    Quaternion, Plane and Transform of F32s, Int2 to Int4,
+                    Vector3D (F64); Ray, BoundingBox, BoundingSphere,
+                    BoundingFrustum and their tests; Half2, Half4, UNorm8x4
+                    and the like, PackedQuaternion (below)
 Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     OpenOptions (positional reads and writes, metadata,
                     setLength, sync), BufferedReader BufferedWriter
@@ -1422,6 +1426,82 @@ as good as `zstd --train`'s.
   tar's, as the format asks. Nothing is said of owners as files are made.
 - Not there: encryption, archives in parts, other methods of zip's, and
   zlib-wrapped or brotli tars known by their bytes.
+
+### Geometry
+
+`Sable.Math.Geometry` is what System.Numerics has of vectors, matrices,
+quaternions and planes, and the bounds and rays a game engine asks with them.
+Its conventions are stated once, here, and each is asserted by
+`tests/lib/Sable.Math.Geometry/ConventionTests.sb`:
+
+| | |
+|---|---|
+| Handedness | right-handed: X × Y is Z |
+| Up, forward | +Y, -Z (+X is right) |
+| Vectors | rows: a point is moved as `v * m` |
+| Storage | by rows: `m11 m12 m13 m14 m21 …` |
+| Translation | the last row, `m41 m42 m43`: bytes 48 to 60 |
+| Composition | `local * parent`, left to right, of quaternions too |
+| Angles | radians, counter-clockwise with the axis pointing at one |
+| Euler angles | yaw (y), pitch (x), roll (z) of the body, in that order |
+| Quaternions | x, y, z, then the scalar w; `q` and `-q` turn alike |
+| Depth | 0...1, reversed: the near plane is 1, the far plane 0 |
+| Winding | counter-clockwise seen from a plane's front |
+| Planes | `normal · p + d` is 0; the front is where it is above 0 |
+| Textures, pixels | from the top left, y down |
+
+A matrix of row vectors by rows is, byte for byte, the matrix of column vectors
+by columns that does the same, which is what GLSL, HLSL and SPIR-V read by
+default: it is uploaded as it is. .NET's Matrix4x4 is the same bytes.
+
+- **Where .NET differs.** .NET's projections run depth forward; here they take
+  `depth: .Forward` for that. .NET's `Quaternion *` is Hamilton's product,
+  which turns by the right first; `a * b` here is its `Concatenate(a, b)`. A
+  vector too short to have a direction normalises to zero, and a quaternion to
+  the identity, where .NET's are NaN. `inverted()` is an optional, where .NET
+  gives a matrix of NaNs and false; so is `decomposed()`, whose mirror is in
+  the scale's x where .NET's is in the greatest. `slerp` and `nlerp` hold the
+  amount to 0...1. `Plane.transformed(by:)` normalises. `viewport` is .NET's
+  left-handed one, the one that keeps depths as they are. There is no
+  left-handed camera.
+  For all else the two are near each other, not the same bits: .NET fuses and
+  estimates as its processor can. `DotNetTests.sb` holds them to a relative
+  2e-5 on results that .NET gave (`tools/conformance/geometry/reference.cs`).
+- **The same bits everywhere.** What is made of `+`, `-`, `*`, `/` and the
+  square root is the same on every processor, at every level of optimisation
+  and in the interpreter: nothing is fused, estimated or reassociated
+  (`DeterminismTests.sb` has the bits). So is `slerp`, which has a sine and
+  an arc cosine of its own for that. The exceptions are what takes the
+  platform's sine, cosine or tangent: rotations and quaternions of an angle,
+  a quaternion's `angle`, skews, and the perspective of a field of view.
+  A simulation that must agree across machines makes those once, or not.
+- **Equality** is exact and IEEE's (`-0 == 0`, a NaN equals nothing), hashes
+  agree with it, and what is near is `nearEqual(_:tolerance:)`: relative above
+  1 and absolute below.
+- **Layout.** Plain structs of their components, aligned to 4 as C's: 8, 12,
+  16, 24, 36 and 64 bytes. `@inline_layout` is not for them (it makes a counted
+  block of a value); a struct is already its bytes. They are not aligned to 16, so that
+  an array of Vector3 is a tight vertex buffer and a field costs no padding;
+  loads of four lanes need no alignment on either processor. std140 and std430
+  align a `vec3` and a `mat3`'s columns to 16, which is the buffer's padding
+  to lay out: a `Vector4` or a `Matrix4x4`, or an `@align(16)` struct around
+  the field. `withComponents` views an array of them as `F32`s and `withBytes`
+  as bytes, with no copy; `simd` and `init(_: SIMD)` go to and from a register.
+- **Scalars, and F64.** The types are of `F32`, not generic: generics cost
+  nothing specialised, but a build compiled once for every type
+  (`SABLE_GENERICS=unspecialised`) would call an addition through a witness,
+  and every signature and message would say `Vector3<F32>`. What an engine
+  wants in `F64` is positions in a large world, which is `Vector3D`, and
+  `relative(to:)` makes them `F32`s from a camera; rotations, scales and the
+  matrices then made are `F32`.
+- **Speed.** The arithmetic is written out by component, which LLVM makes the
+  vector instructions of (as fast as `SIMD<F32, 4>` written by hand, and
+  quicker in the interpreter); only `slerp` takes lanes itself. Slices are
+  moved by `transformPositions(_:into:)` and its kin. Nothing allocates but
+  `corners` and `toArray()`, which are arrays: `corner(_:)` is not. See
+  `benchmarks/library/{matrix-multiply,matrix-invert,transform-points,quaternion-blend,frustum-cull,vector-particles}`.
+- **Others' conformances.** Serializable is in Sable.Serialize and Arbitrary in
+  Sable.Testing, so that a program of vectors has neither module.
 
 ### Decimal
 

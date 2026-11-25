@@ -1,0 +1,33 @@
+module Sable.Math.Geometry
+
+/// Two `F16`s, as a vertex or a texture has them (float16x2): 4
+/// bytes, aligned to 2. For storing; arithmetic is done in a `Vector2`.
+///
+/// ```sable
+/// let packed = Half2(Vector2(0.5, -2))
+/// assert(packed.vector == Vector2(0.5, -2))
+/// assert(MemoryLayout<Half2>.size == 4)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct Half2: Sendable {
+    /// The x component.
+    public var x: F16
+
+    /// The y component.
+    public var y: F16
+
+    /// The components.
+    public init(_ x: F16, _ y: F16) {
+        self.x = x
+        self.y = y
+    }
+
+    /// Each component rounded to the nearest `F16`: too large a one is infinite.
+    public init(_ value: Vector2) {
+        x = F16(value.x)
+        y = F16(value.y)
+    }
+
+    /// The components as `F32`s, exactly.
+    public var vector: Vector2 => Vector2(F32(x), F32(y))
+}

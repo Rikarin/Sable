@@ -133,9 +133,9 @@ fn aThrowingGroupGivesResultsAndErrorsInTheirTurn() async throws {
 
     await expectThrows(Bad.Odd(n: 3)) {
         _ = try await withThrowingTaskGroup(of: Int.self) { group in
-        group.spawn { try await even(3) }
-        return try await group.next() ?? 0
-    }
+            group.spawn { try await even(3) }
+            return try await group.next() ?? 0
+        }
     }
 }
 
@@ -144,17 +144,17 @@ fn aThrowingGroupsBodyThatThrowsCancelsTheChildrenLeft() async {
     let log = Log()
     await expectThrows(CancellationError.self) {
         _ = try await withThrowingTaskGroup(of: Int.self) { group in
-        group.spawn {
-            let slept = (try? await Task.sleep(nanoseconds: 10_000_000_000)) != none
-            // Shared, but in turn: the latch, or the group's end, orders them.
-            unsafe {
-                log.add(slept ? "ran" : "cancelled")
+            group.spawn {
+                let slept = (try? await Task.sleep(nanoseconds: 10_000_000_000)) != none
+                // Shared, but in turn: the latch, or the group's end, orders them.
+                unsafe {
+                    log.add(slept ? "ran" : "cancelled")
+                }
+                return 1
             }
-            return 1
+            expect(!group.isCancelled)
+            throw CancellationError()
         }
-        expect(!group.isCancelled)
-        throw CancellationError()
-    }
     }
     assertEqual(log.text, "cancelled")
 }
@@ -163,12 +163,12 @@ fn aThrowingGroupsBodyThatThrowsCancelsTheChildrenLeft() async {
 fn waitingForAllOfAThrowingGroupThrowsTheFirstError() async {
     await expectThrows(Bad.Odd(n: 5)) {
         _ = try await withThrowingTaskGroup(of: Int.self) { group in
-        group.spawn { 1 }
-        group.spawn(priority: .high) { try await even(5) }
-        expect(!group.isEmpty)
-        try await group.waitForAll()
-        return 0
-    }
+            group.spawn { 1 }
+            group.spawn(priority: .high) { try await even(5) }
+            expect(!group.isEmpty)
+            try await group.waitForAll()
+            return 0
+        }
     }
 }
 

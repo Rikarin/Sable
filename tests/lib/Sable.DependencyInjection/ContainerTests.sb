@@ -299,9 +299,9 @@ async fn aScopeEndsWhenItsBodyThrows() {
     let provider = await provided(sink)
     await expectThrows(saying: "it fails") {
         try await provider.withScope { (scope: ServicesScope) throws in
-        _ = scope.resolve(Session.self)
-        throw TestError("it fails")
-    }
+            _ = scope.resolve(Session.self)
+            throw TestError("it fails")
+        }
     }
     assertEqual(sink.all, "session")
 }

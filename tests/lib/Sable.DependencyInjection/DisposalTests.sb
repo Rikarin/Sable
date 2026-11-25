@@ -84,9 +84,9 @@ fn aScopeEndsWhenItsBodyThrows() {
     let provider = try! services.build()
     expectThrows(TestError.self) {
         try provider.withScope { scope in
-        _ = try scope.resolve(Closing.self)
-        throw TestError("stop")
-    }
+            _ = try scope.resolve(Closing.self)
+            throw TestError("stop")
+        }
     }
     assertEqual(record.all, "a")
 }
@@ -221,9 +221,9 @@ fn anAsyncScopeEndsWhenItsBodyThrows() async {
     let provider = try! services.build()
     await expectThrows(TestError.self) {
         try await provider.withAsyncScope { scope in
-        _ = try scope.resolve(Closing.self)
-        throw TestError("stop")
-    }
+            _ = try scope.resolve(Closing.self)
+            throw TestError("stop")
+        }
     }
     assertEqual(record.all, "a")
 }

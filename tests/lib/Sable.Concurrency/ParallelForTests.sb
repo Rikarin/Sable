@@ -48,11 +48,11 @@ fn anErrorStopsTheLoop() {
     let done = Atomic(0)
     expectThrows(Bad(100)) {
         try parallelFor(0..<1_000_000) { (i: Int) throws -> Void in
-        done.add(1)
-        if i == 100 {
-            throw Bad(i)
+            done.add(1)
+            if i == 100 {
+                throw Bad(i)
+            }
         }
-    }
     }
     expect(done.load() < 1_000_000)
 }
@@ -61,8 +61,8 @@ fn anErrorStopsTheLoop() {
 fn oneOfSeveralErrorsIsThrown() {
     expectThrows(Bad.self) {
         try parallelFor(0..<100) { (i: Int) throws -> Void in
-        throw Bad(i)
-    }
+            throw Bad(i)
+        }
     }
 }
 
@@ -115,11 +115,11 @@ async fn aLoopIsCancelledWithItsTask() {
     let task = Task.spawn { () -> Void in
         expectThrows(CancellationError.self) {
             try parallelFor(0..<10_000_000) { (i: Int) throws -> Void in
-            started.countDown()
-            try Task.checkCancellation()
-            done.add(1)
-            Thread.sleep(Duration.microseconds(10))
-        }
+                started.countDown()
+                try Task.checkCancellation()
+                done.add(1)
+                Thread.sleep(Duration.microseconds(10))
+            }
         }
     }
     if Runtime.workerCount() > 0 {
@@ -195,17 +195,17 @@ async fn anAsyncBodysErrorCancelsTheOthers() {
     let begun = Atomic(0)
     await expectThrows(Bad(3)) {
         try await parallelForEach(0..<1000, degree: 4) { n in
-        begun.add(1)
-        if n == 3 {
-            throw Bad(n)
+            begun.add(1)
+            if n == 3 {
+                throw Bad(n)
+            }
+            do {
+                try await Task.sleep(nanoseconds: 60_000_000_000)
+            } catch {
+                cancelled.add(1)
+                throw error
+            }
         }
-        do {
-            try await Task.sleep(nanoseconds: 60_000_000_000)
-        } catch {
-            cancelled.add(1)
-            throw error
-        }
-    }
     }
     assertEqual(cancelled.load(), 3)
     assertEqual(begun.load(), 4)
@@ -217,9 +217,9 @@ async fn anAsyncLoopIsCancelledWithItsTask() {
     let task = Task.spawn { () -> Void in
         await expectThrows(CancellationError.self) {
             try await parallelForEach(0..<100, degree: 2) { n in
-            await begun.release()
-            try await Task.sleep(nanoseconds: 60_000_000_000)
-        }
+                await begun.release()
+                try await Task.sleep(nanoseconds: 60_000_000_000)
+            }
         }
     }
     await begun.acquire()

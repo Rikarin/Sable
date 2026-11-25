@@ -545,8 +545,11 @@ public static class SyntaxFormatter {
 
         /// <summary>Keeps a break the author made, indenting what follows it.</summary>
         void KeepBreak(SyntaxKind at) {
-            if (_groups.Count > 0) {
-                var group = _groups.Peek();
+            // A break before the first token of a line is what the line is in
+            // that breaks, not the line: the only statement of a closure
+            // starts on one of its own, and what its body is indented from.
+            var group = _groups.FirstOrDefault(g => g.Closer != SyntaxKind.None || g.OpenedAt != _tokens);
+            if (group is not null) {
                 if (group.Closer != SyntaxKind.None && !group.Broken && _tokens == group.OpenedAt) {
                     group.Broken = true;
                     group.Indents++;

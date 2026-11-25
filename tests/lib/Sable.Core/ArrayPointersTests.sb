@@ -122,18 +122,18 @@ fn whatTheBodyThrowsIsThrown() {
     var numbers = [1]
     expectThrows(Oops.Bad) {
         try numbers.withPointer { (start: RawPtr<Int>) throws(Oops) in
-        throw Oops.Bad
-    }
+            throw Oops.Bad
+        }
     }
     expectThrows(Oops.Bad) {
         try numbers.withMutablePointer { (start: RawPtr<Int>) throws(Oops) in
-        throw Oops.Bad
-    }
+            throw Oops.Bad
+        }
     }
     expectThrows(Oops.Bad) {
         try Memory.withPointer(to: &number) { (place: RawPtr<Int>) throws(Oops) in
-        throw Oops.Bad
-    }
+            throw Oops.Bad
+        }
     }
 }
 

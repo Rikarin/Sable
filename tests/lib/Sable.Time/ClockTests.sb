@@ -95,14 +95,14 @@ fn measuringIsOnTheClock() async {
 fn measuringThrowsWhatTheBodyThrows() async {
     expectThrows(Oops.self) {
         _ = try measure { () throws(Oops) -> Void in
-        throw Oops()
-    }
+            throw Oops()
+        }
     }
     await expectThrows(Oops.self) {
         _ = try await measure { () throws(Oops) -> Void in
-        await Task.yield()
-        throw Oops()
-    }
+            await Task.yield()
+            throw Oops()
+        }
     }
 }
 

@@ -31,8 +31,8 @@ fn aTargetsValuesAreMadeOfTheBytes() {
 fn aTrapSaysWhatTheTargetWasCalledWith() {
     let ended = expectPanic("too many") {
         fuzzCall("M.f", [1, 1, 2, 5]) { (n: U8, m: U8) in
-        if m == 1 { fatalError("too many") }
-    }
+            if m == 1 { fatalError("too many") }
+        }
     }
     if let ended {
         expect(ended.errors.contains("called with 1, 1"))
@@ -43,8 +43,8 @@ fn aTrapSaysWhatTheTargetWasCalledWith() {
 fn whatATargetThrowsIsATrap() {
     expectPanic("M.f threw: ") {
         fuzzCall("M.f", [1, 1]) { (n: U8) in
-        throw Odd.Number(Int(n))
-    }
+            throw Odd.Number(Int(n))
+        }
     }
 }
 
@@ -90,9 +90,9 @@ async fn savedInputsAreCases() throws {
     var cases: TestArguments[>..] = []
     listing("FuzzTests.saved", "crash\t/x/crash-1\t0aff\ncorpus\t/x/a\t\ncorpus\t/x/b\t01\n") {
         cases = fuzzReplays("FuzzTests.saved") { data in
-        seen.calls += 1
-        seen.text += "\(data.toArray())"
-    }
+            seen.calls += 1
+            seen.text += "\(data.toArray())"
+        }
     }
     assertEqual(cases.map({ $0.description }), ["crash-1", "corpus"])
     try await cases[0].run(FixtureScope())

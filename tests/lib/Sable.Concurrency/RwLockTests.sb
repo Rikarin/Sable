@@ -68,14 +68,14 @@ fn aThrowingReaderOrWriterLetsTheLockGo() {
     let n = RwLock<Int>(1)
     expectThrows {
         try n.read { value in
-        throw Failure()
-    }
+            throw Failure()
+        }
     }
     expectThrows {
         try n.write { value in
-        value = 7
-        throw Failure()
-    }
+            value = 7
+            throw Failure()
+        }
     }
     n.write { $0 += 1 }
     assertEqual(n.read { $0 }, 8)
@@ -89,12 +89,12 @@ fn aReaderWaitsForTheWriter() async {
     let writer = Task.spawn {
         await Task.blocking {
             table.write { value in
-            writing.store(true)
-            while !started.load() { }
-            // Time for the reader to come to the lock, and wait.
-            pause()
-            value = 5
-        }
+                writing.store(true)
+                while !started.load() { }
+                // Time for the reader to come to the lock, and wait.
+                pause()
+                value = 5
+            }
         }
     }
     while !writing.load() {
@@ -102,9 +102,9 @@ fn aReaderWaitsForTheWriter() async {
     }
     let reader = Task.spawn {
         await Task.blocking {
-        started.store(true)
-        return table.read { $0 }
-    }
+            started.store(true)
+            return table.read { $0 }
+        }
     }
     assertEqual(await reader.value, 5)
     await writer.value
@@ -119,15 +119,15 @@ fn aWriterWaitsForTheReadersAndGoesBeforeLaterOnes() async {
     let first = Task.spawn {
         await Task.blocking {
             table.read { value in
-            reading.store(true)
-            while !writing.load() { }
-            // Time for the writer to come to the lock, and wait; then
-            // for the later reader.
-            pause()
-            assertEqual(value, 0)
-            while !readingLater.load() { }
-            pause()
-        }
+                reading.store(true)
+                while !writing.load() { }
+                // Time for the writer to come to the lock, and wait; then
+                // for the later reader.
+                pause()
+                assertEqual(value, 0)
+                while !readingLater.load() { }
+                pause()
+            }
         }
     }
     while !reading.load() {
@@ -135,20 +135,20 @@ fn aWriterWaitsForTheReadersAndGoesBeforeLaterOnes() async {
     }
     let writer = Task.spawn {
         await Task.blocking {
-        writing.store(true)
-        return table.write { value -> Int in
-            value += 1
-            return value
+            writing.store(true)
+            return table.write { value -> Int in
+                value += 1
+                return value
+            }
         }
-    }
     }
     let later = Task.spawn {
         await Task.blocking {
-        while !writing.load() { }
-        pause()
-        readingLater.store(true)
-        return table.read { $0 }
-    }
+            while !writing.load() { }
+            pause()
+            readingLater.store(true)
+            return table.read { $0 }
+        }
     }
     assertEqual(await writer.value, 1)
     assertEqual(await later.value, 1)

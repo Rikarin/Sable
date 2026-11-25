@@ -74,11 +74,11 @@ fn anErrorNoOneJoinsIsDropped() {
 fn anErrorJoinedIsThrown() {
     expectThrows(Broken.Down) {
         try Thread.scope { (s: ThreadScope) throws -> Void in
-        let thread = s.spawn { () throws -> Int in
-            throw Broken.Down
+            let thread = s.spawn { () throws -> Int in
+                throw Broken.Down
+            }
+            _ = try thread.join()
         }
-        _ = try thread.join()
-    }
     }
 }
 

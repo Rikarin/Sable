@@ -37,8 +37,8 @@ fn whatAnErrorLeavesIsUnbound() {
     let local = TaskLocal("none")
     expectThrows(Broken.Down) {
         try local.withValue("bound") { () throws -> Void in
-        throw Broken.Down
-    }
+            throw Broken.Down
+        }
     }
     assertEqual(local.value, "none")
 }
@@ -106,9 +106,9 @@ async fn aChildKeepsItsValueOnceTheBindingHasEnded() {
     let opened = AsyncSemaphore(permits: 0)
     let child = local.withValue(Tracked("kept", gone)) {
         Task.spawn {
-        await opened.acquire()
-        return local.value!.name
-    }
+            await opened.acquire()
+            return local.value!.name
+        }
     }
     assertEqual(gone.load(), 0)
     expect(local.value == none)

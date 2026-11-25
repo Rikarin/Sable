@@ -7,8 +7,8 @@ import Sable.Validation
 fn whatIsSaidIsOfTheLastCheck() {
     let result = verdict(5) {
         $0.greaterThan(9).message("big").code("Big").severity(.Warning)
-        .lessThan(1).message { (whole, value) in "small, not \(value!)" }.severity(.Info)
-        .equal(4)
+            .lessThan(1).message { (whole, value) in "small, not \(value!)" }.severity(.Info)
+            .equal(4)
     }
     assertEqual(result.toString(), "big\nsmall, not 5\n'It' must be equal to 4.")
     assertEqual(result.failures.map(\.code), ["Big", "LessThan", "Equal"])
@@ -62,11 +62,11 @@ fn mustWithSeesTheWholeValue() {
 fn aCustomRuleReportsWhatItFinds() {
     let result = verdict([1, 2, 3]) {
         $0.custom { (numbers, context) in
-        if numbers.count > 2 {
-            context.fail("{PropertyName} has {Count}", code: "Many", severity: .Warning, placeholders: ["Count": "\(numbers.count)"])
-            context.fail("first", under: "[0]")
+            if numbers.count > 2 {
+                context.fail("{PropertyName} has {Count}", code: "Many", severity: .Warning, placeholders: ["Count": "\(numbers.count)"])
+                context.fail("first", under: "[0]")
+            }
         }
-    }
     }
     assertEqual(result.toString(), "It has 3\nfirst")
     assertEqual(result.failures[0].code, "Many")

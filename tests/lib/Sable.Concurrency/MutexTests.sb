@@ -27,9 +27,9 @@ fn aMutexKeepsWhatAThrowingClosureLeft() {
     let n = Mutex<Int>(1)
     expectThrows {
         try n.withLock { value in
-        value = 7
-        throw Failure()
-    }
+            value = 7
+            throw Failure()
+        }
     }
     assertEqual(n.withLock { $0 }, 7)
 }

@@ -135,13 +135,13 @@ union Oops: Error { Bad }
 fn whatTheBodyThrowsIsThrown() {
     expectThrows(Oops.self) {
         try "x".withCString { (text: CStr) throws(Oops) in
-        throw Oops.Bad
-    }
+            throw Oops.Bad
+        }
     }
     expectThrows(Oops.self) {
         try ["x"].withCStrings { (texts: RawPtr<RawPtr<CChar>>) throws(Oops) in
-        throw Oops.Bad
-    }
+            throw Oops.Bad
+        }
     }
 }
 

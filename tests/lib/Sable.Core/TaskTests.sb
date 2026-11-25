@@ -250,8 +250,8 @@ fn blockingWorkGivesWhatItsBodyGives() async {
 fn blockingWorkThrowsWhatItsBodyThrows() async {
     await expectThrows(Refusal.No) {
         _ = try await Task.blocking { () throws(Refusal) -> Int in
-        throw Refusal.No
-    }
+            throw Refusal.No
+        }
     }
 }
 

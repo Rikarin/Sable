@@ -216,4 +216,21 @@ public sealed class FormatterRuleTests {
     [Fact]
     public void KeepsABlankLineAfterAComment() =>
         AssertFormats("module M\n\n// note\n\nfn f() { }\n", "module M\n\n// note\n\nfn f() { }\n");
+
+    /// <summary>A closure that is another's only statement is indented from its own line (#336).</summary>
+    [Theory]
+    [InlineData("each { x in\n    print(x)\n    print(x)\n}")]
+    [InlineData("each {\n    print(1)\n    print(2)\n}")]
+    [InlineData("each { x in\n    if x > 1 {\n        print(x)\n    }\n}")]
+    [InlineData("run {\n    each { x in\n        print(x)\n        print(x)\n    }\n}")]
+    [InlineData("try first\n    .second")]
+    public void AClosuresOnlyStatementIsIndentedFromItsLine(string statement) {
+        var inner = statement.Replace("\n", "\n        ", StringComparison.Ordinal);
+        var source = $"module M\n\nfn f() {{\n    run {{\n        {inner}\n    }}\n}}\n";
+        AssertFormats(source, source);
+
+        // Wherever it was written.
+        var flat = string.Join("\n", source.Split('\n').Select(static l => l.TrimStart()));
+        AssertFormats(flat, source);
+    }
 }

@@ -121,16 +121,16 @@ fn anErrorIsThrownAndNothingIsLeftBehind() {
     let xs = numbers(20_000)
     expectThrows(Bad(5000)) {
         _ = try xs.parallel.map { (n: Int) throws -> String in
-        if n == 5000 {
-            throw Bad(n)
+            if n == 5000 {
+                throw Bad(n)
+            }
+            return "text \(n)"
         }
-        return "text \(n)"
-    }
     }
     expectThrows(Bad.self) {
         _ = try xs.parallel.filter { (n: Int) throws -> Bool in
-        throw Bad(n)
-    }
+            throw Bad(n)
+        }
     }
     expectThrows(Bad.self) {
         _ = try xs.parallel.reduce(0, { (total: Int, n: Int) throws -> Int in
@@ -139,13 +139,13 @@ fn anErrorIsThrownAndNothingIsLeftBehind() {
     }
     expectThrows(Bad.self) {
         _ = try xs.parallel.first { (n: Int) throws -> Bool in
-        throw Bad(n)
-    }
+            throw Bad(n)
+        }
     }
     expectThrows(Bad.self) {
         try xs.parallel.forEach { (n: Int) throws -> Void in
-        throw Bad(n)
-    }
+            throw Bad(n)
+        }
     }
 }
 
@@ -215,11 +215,11 @@ fn anErrorLeavesEveryElementThere() {
     var texts = (0..<2000).map { "text \($0)" }
     expectThrows(Bad(1500)) {
         try texts.parallelModify { (text: inout String) throws -> Void in
-        text += "."
-        if text == "text 1500." {
-            throw Bad(1500)
+            text += "."
+            if text == "text 1500." {
+                throw Bad(1500)
+            }
         }
-    }
     }
     expect(texts.enumerated().allSatisfy { $0.1 == "text \($0.0)" || $0.1 == "text \($0.0)." })
 }

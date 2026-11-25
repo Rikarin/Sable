@@ -251,9 +251,9 @@ fn dependentRulesAreRunOnlyWhereTheRulePasses() {
         customer.age = age
         return found(customer) {
             $0.field(\.age).greaterThan(18).dependentRules {
-            $0.field(\.country).equal("SK")
-            $0.field(\.nick).notNull()
-        }
+                $0.field(\.country).equal("SK")
+                $0.field(\.nick).notNull()
+            }
         }
     }
     assertEqual(run(12), ["age GreaterThan"])

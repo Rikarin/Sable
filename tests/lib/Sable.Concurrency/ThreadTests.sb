@@ -227,8 +227,8 @@ fn theMainThreadBlocksOnATask() throws {
     assertEqual(slept, 8)
     expectThrows(Bad(2)) {
         _ = try Thread.blockOn { () throws(Bad) -> Int in
-        throw Bad(2)
-    }
+            throw Bad(2)
+        }
     }
 }
 
@@ -252,9 +252,9 @@ async fn aTaskSpawnedByAThreadOutlivesIt() {
     let result = Atomic(0)
     let task = Thread.spawn {
         Task.spawn {
-        await opened.acquire()
-        result.store(5)
-    }
+            await opened.acquire()
+            result.store(5)
+        }
     }
     let spawned = await task.value()
     await opened.release()

@@ -72,8 +72,8 @@ union Oops: Error { Bad }
 fn whatTheBodyThrowsIsThrown() {
     expectThrows(Oops.self) {
         try withCallback({ (context: RawPtr<Opaque>) in }) { (function: CFunction<(RawPtr<Opaque>) -> ()>, context: RawPtr<Opaque>) throws(Oops) in
-        throw Oops.Bad
-    }
+            throw Oops.Bad
+        }
     }
 }
 

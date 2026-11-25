@@ -110,9 +110,9 @@ fn writeAlgorithm(_ writer: AsnWriter, _ id: String) throws(AsnError) {
 fn writeAttribute(_ writer: AsnWriter, _ id: String, _ value: String, _ kind: AsnStringKind) throws(AsnError) {
     try writer.writeSetOf {
         try writer.writeSequence {
-        try writer.writeObjectIdentifier(id)
-        try writer.writeString(value, kind)
-    }
+            try writer.writeObjectIdentifier(id)
+            try writer.writeString(value, kind)
+        }
     }
 }
 
@@ -180,36 +180,36 @@ fn writeToBeSigned(_ writer: AsnWriter) throws(AsnError) {
             try writeAlgorithm(writer, "1.2.840.113549.1.1.1")
             try writer.writeBitString {
                 try writer.writeSequence {
-                try writer.writeUnsignedInteger(modulus())
-                try writer.writeInt(65537)
-            }
+                    try writer.writeUnsignedInteger(modulus())
+                    try writer.writeInt(65537)
+                }
             }
         }
         try writer.writeExplicit(.context(3)) {
             try writer.writeSequence {
-            try writer.writeSequence {
-                try writer.writeObjectIdentifier("2.5.29.14")
-                try writer.writeOctetString {
-                    try writer.writeOctetString(keyId)
+                try writer.writeSequence {
+                    try writer.writeObjectIdentifier("2.5.29.14")
+                    try writer.writeOctetString {
+                        try writer.writeOctetString(keyId)
+                    }
                 }
-            }
-            try writer.writeSequence {
-                try writer.writeObjectIdentifier("2.5.29.15")
-                try writer.writeBool(true)
-                try writer.writeOctetString {
-                    try writer.writeNamedBits(flags: 1 << 5 | 1 << 6)
+                try writer.writeSequence {
+                    try writer.writeObjectIdentifier("2.5.29.15")
+                    try writer.writeBool(true)
+                    try writer.writeOctetString {
+                        try writer.writeNamedBits(flags: 1 << 5 | 1 << 6)
+                    }
                 }
-            }
-            try writer.writeSequence {
-                try writer.writeObjectIdentifier("2.5.29.19")
-                try writer.writeBool(true)
-                try writer.writeOctetString {
-                    try writer.writeSequence {
-                        try writer.writeBool(true)
+                try writer.writeSequence {
+                    try writer.writeObjectIdentifier("2.5.29.19")
+                    try writer.writeBool(true)
+                    try writer.writeOctetString {
+                        try writer.writeSequence {
+                            try writer.writeBool(true)
+                        }
                     }
                 }
             }
-        }
         }
     }
 }
@@ -361,35 +361,35 @@ fn theExampleRevocationList() {
         try writer.writeUtcTime(utc("2005-02-06T12:00:00Z"))
         try writer.writeSequence {
             try writer.writeSequence {
-            try writer.writeInt(18)
-            try writer.writeUtcTime(utc("2004-11-19T15:57:03Z"))
-            try writer.writeSequence {
+                try writer.writeInt(18)
+                try writer.writeUtcTime(utc("2004-11-19T15:57:03Z"))
                 try writer.writeSequence {
-                try writer.writeObjectIdentifier("2.5.29.21")
-                try writer.writeOctetString {
-                    try writer.writeEnumerated(1)
-                }
-            }
-            }
-        }
-        }
-        try writer.writeExplicit(.context(0)) {
-            try writer.writeSequence {
-            try writer.writeSequence {
-                try writer.writeObjectIdentifier("2.5.29.35")
-                try writer.writeOctetString {
                     try writer.writeSequence {
-                        try writer.writeOctetString(hex("0868AF8533C8394A7AF882938E706A4A20842C32"), tag: .context(0))
+                        try writer.writeObjectIdentifier("2.5.29.21")
+                        try writer.writeOctetString {
+                            try writer.writeEnumerated(1)
+                        }
                     }
                 }
             }
+        }
+        try writer.writeExplicit(.context(0)) {
             try writer.writeSequence {
-                try writer.writeObjectIdentifier("2.5.29.20")
-                try writer.writeOctetString {
-                    try writer.writeInt(12)
+                try writer.writeSequence {
+                    try writer.writeObjectIdentifier("2.5.29.35")
+                    try writer.writeOctetString {
+                        try writer.writeSequence {
+                            try writer.writeOctetString(hex("0868AF8533C8394A7AF882938E706A4A20842C32"), tag: .context(0))
+                        }
+                    }
+                }
+                try writer.writeSequence {
+                    try writer.writeObjectIdentifier("2.5.29.20")
+                    try writer.writeOctetString {
+                        try writer.writeInt(12)
+                    }
                 }
             }
-        }
         }
     }
     let toBeSigned = try! writer.bytes()

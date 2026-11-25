@@ -240,16 +240,16 @@ async fn aFixtureThatCannotBeMadeIsSaid() async {
     let scope = FixtureScope()
     let itself = await expectThrows(FixtureError.self) {
         _ = try await scope.fixture(Scratch.self, named: "A") { scope in
-        _ = try await scope.fixture(Scratch.self, named: "A") { inner in Scratch() }
-        return Scratch()
-    }
+            _ = try await scope.fixture(Scratch.self, named: "A") { inner in Scratch() }
+            return Scratch()
+        }
     }
     expect(itself?.description() == "the fixture 'A' is made from itself")
     let shorter = await expectThrows(FixtureError.self) {
         _ = try await scope.fixture(Package.self, named: "P") { scope in
-        _ = try await scope.fixture(Scratch.self, named: "S") { inner in Scratch() }
-        return Package()
-    }
+            _ = try await scope.fixture(Scratch.self, named: "S") { inner in Scratch() }
+            return Package()
+        }
     }
     expect(shorter?.message == "the fixture 'P' is FixtureLifetime.PerPackage, and cannot be made from 'S', which is FixtureLifetime.PerTest")
 }

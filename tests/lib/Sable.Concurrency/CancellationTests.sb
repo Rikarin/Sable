@@ -30,12 +30,12 @@ fn cancellingAGroupReachesItsGrandchildren() async {
             group.spawn {
                 // A child with a group of its own: its children are cancelled too.
                 await withTaskGroup(of: Void.self) { inner in
-                inner.spawn {
-                    if await sleepsUntilCancelled() {
-                        _ = reached.update { $0 + 1 }
+                    inner.spawn {
+                        if await sleepsUntilCancelled() {
+                            _ = reached.update { $0 + 1 }
+                        }
                     }
                 }
-            }
             }
             i += 1
         }
@@ -50,12 +50,12 @@ fn aTimeoutCancelsTheBodysChildren() async {
     let stopped = Atomic<Bool>(false)
     _ = try? await withTimeout(Duration.milliseconds(20)) {
         await withTaskGroup(of: Void.self) { group in
-        group.spawn {
-            if await sleepsUntilCancelled() {
-                stopped.store(true)
+            group.spawn {
+                if await sleepsUntilCancelled() {
+                    stopped.store(true)
+                }
             }
         }
-    }
     }
     expect(stopped.load())
 }
@@ -78,9 +78,9 @@ fn aBodyTooSlowTimesOutPromptly() async {
     let started = Instant.now()
     let error = await expectThrows(TimeoutError.self) {
         _ = try await withTimeout(Duration.milliseconds(20)) {
-        try await Task.sleep(for: Duration.seconds(60))
-        return 1
-    }
+            try await Task.sleep(for: Duration.seconds(60))
+            return 1
+        }
     }
     expect(error?.duration == Duration.milliseconds(20))
     expect(error?.description() == "timed out after \(Duration.milliseconds(20).toString())")
@@ -98,8 +98,8 @@ struct Broken: Error {
 fn aBodysOwnErrorPassesThrough() async {
     await expectThrows(saying: "broken") {
         _ = try await withTimeout(Duration.seconds(30)) { () throws -> Int in
-        throw Broken()
-    }
+            throw Broken()
+        }
     }
 }
 
@@ -108,9 +108,9 @@ fn timeoutsNest() async {
     let error = await expectThrows(TimeoutError.self) {
         _ = try await withTimeout(Duration.seconds(30)) {
             try await withTimeout(Duration.milliseconds(10)) {
-            try await Task.sleep(for: Duration.seconds(60))
-            return 0
-        }
+                try await Task.sleep(for: Duration.seconds(60))
+                return 0
+            }
         }
     }
     expect(error?.duration == Duration.milliseconds(10))
@@ -197,9 +197,9 @@ fn aTokenStopsStructuredWork() async {
     source.cancel(after: Duration.milliseconds(10))
     await expectThrows(CancellationError.self) {
         _ = try await withCancellation(source.token) {
-        try await Task.sleep(for: Duration.seconds(60))
-        return 1
-    }
+            try await Task.sleep(for: Duration.seconds(60))
+            return 1
+        }
     }
 }
 
@@ -253,8 +253,8 @@ fn aContinuationIsResumedFromElsewhere() async {
     assertEqual(value, 42)
     await expectThrows(saying: "broken") {
         _ = try await withContinuation(returning: Int.self, throwing: Broken.self) { continuation in
-        continuation.resume(throwing: Broken())
-    }
+            continuation.resume(throwing: Broken())
+        }
     }
     let given = await withContinuation(returning: String.self) { continuation in
         continuation.resume(with: .Ok("outcome"))

@@ -93,6 +93,15 @@ public static class SilPassManager {
     public static void RemoveUnreachable(SilModule module) {
         if (Reachable(module) is { } reached) {
             module.RemoveAll(f => !reached.Contains(f.Name));
+            // An error's box nothing makes keeps its type, which a catch may ask about, with its base's methods.
+            foreach (var box in module.Types.OfType<ClassType>().Where(static t => t.Superclass?.Name == "any$Error")) {
+                for (var i = 0; i < box.VTable.Count; i++) {
+                    var method = box.VTable[i].Method;
+                    if (!reached.Contains(box.VTable[i].Function) && box.Superclass!.VTable.FirstOrDefault(m => m.Method == method) is { Function: { } inherited }) {
+                        box.VTable[i] = (method, inherited);
+                    }
+                }
+            }
         }
     }
 
@@ -144,6 +153,11 @@ public static class SilPassManager {
                     // A class's vtable is part of its metadata, which is
                     // emitted whether or not anything makes one (an
                     // existential's box among them), so what it names stays.
+                    // An error's box is reached where the error is boxed, below.
+                    if (@class.Superclass?.Name == "any$Error") {
+                        break;
+                    }
+
                     foreach (var (_, method) in @class.VTable) {
                         pending.Push(method);
                     }
@@ -324,6 +338,13 @@ public static class SilPassManager {
 
                     case ClassMethodInst dispatch:
                         foreach (var type in module.Types.OfType<ClassType>()) {
+                            // An error's box is made where the error is boxed and nowhere else, which
+                            // reaches its vtable: one nothing reached boxes — a library's, of an error
+                            // the program never meets — is no 'any Error' here.
+                            if (type.Superclass?.Name == "any$Error" && !made.Contains(type)) {
+                                continue;
+                            }
+
                             if (type.VTable.FirstOrDefault(m => m.Method == dispatch.Method) is { Function: { } target }) {
                                 pending.Push(target);
                             }

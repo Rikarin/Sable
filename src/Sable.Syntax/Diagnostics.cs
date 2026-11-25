@@ -465,6 +465,9 @@ public sealed class DiagnosticBag : IReadOnlyCollection<Diagnostic> {
     /// <summary>How many errors were held back while suppressed: whether a speculative parse went wrong.</summary>
     public int SuppressedErrors { get; private set; }
 
+    /// <summary>Goes back to a count from before a question whose errors were only its own.</summary>
+    internal void ForgetSuppressedErrors(int count) => SuppressedErrors = count;
+
     public void Add(Diagnostic diagnostic) {
         if (_suppressed == 0) {
             _items.Add(diagnostic.AnchoredAt(Anchor));

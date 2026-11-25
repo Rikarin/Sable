@@ -983,4 +983,45 @@ public sealed partial class CompiledOnceTests {
         """,
         "Test.split", "Test.taken", "Test.constant", "Test.caught", "Test.expects", "Test.same", "Test.differs", "Test.run", "Test.unwrapped"
     );
+
+    /// <summary>A closure that calls a static requirement of Self's, and a type a function declares boxed by code compiled once and cast.</summary>
+    [Fact]
+    public void AClosureThatNamesSelfAloneAndALocalTypeAreCompiledOnce() => Prints(
+        "made 3\nlocal 4\n",
+        """
+            module Test
+
+            protocol Makes {
+                static fn make(_ n: Int) -> String
+            }
+
+            extension Makes {
+                static fn maker() -> (Int) -> String => { Self.make($0) }
+            }
+
+            struct Maker: Makes {
+                static fn make(_ n: Int) -> String => "made \(n)"
+            }
+
+            protocol Named {
+                fn name() -> String
+            }
+
+            fn boxed<T>(_ t: T) -> any Any => t
+
+            @main
+            fn main() {
+                print(Maker.maker()(3))
+
+                struct Local: Named {
+                    var n: Int
+                    fn name() -> String => "local \(n)"
+                }
+
+                let held = boxed(Local { n: 4 })
+                print((held as! any Named).name())
+            }
+        """,
+        "Test.Makes.maker", "Test.boxed"
+    );
 }

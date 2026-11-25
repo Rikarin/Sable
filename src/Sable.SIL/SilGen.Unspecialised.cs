@@ -3643,7 +3643,17 @@ public sealed partial class SilGen {
                 return MetadataOf(element) is { } of ? Emit(new BuiltinInst(array.ArrayKind == ArrayKind.Slice ? "metadata_slice" : "metadata_array", SilType.Metadata, of)) : null;
             }
 
-            return LowerType(type) is { } lowered ? Emit(new MetadataInst(lowered)) : null;
+            if (LowerType(type) is not { } lowered) {
+                return null;
+            }
+
+            // A type a function declares, which nothing that looks for the
+            // types that conform to a protocol finds: code compiled once may box it.
+            if (type is NamedTypeSymbol { IsConstructed: false, ContainingSymbol: FunctionSymbol, DeclaringSyntax: [var declared, ..] } local) {
+                generator.Given(local, lowered, declared);
+            }
+
+            return Emit(new MetadataInst(lowered));
         }
 
         /// <summary>The type parameter of this function a requirement's call is on, as Self, or an associated type read through one; null for a call on anything else.</summary>

@@ -66,12 +66,14 @@ public struct CallableMember {
     /// }
     ///
     /// let at = Point.callable("at")!
-    /// assert((try at.call(3) as! Point).x == 3)
+    /// assert((try! at.call(3) as! Point).x == 3)
     /// do {
     ///     _ = try at.call("three")
     ///     assert(false)
     /// } catch let error as CallError {
     ///     assert(error.description() == "argument 0 is 'Int', and was given 'String'")
+    /// } catch {
+    ///     assert(false)
     /// }
     /// ```
     public fn call(_ arguments: any Any...) throws -> any Any => try call(with: arguments)

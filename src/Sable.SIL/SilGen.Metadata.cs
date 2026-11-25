@@ -162,6 +162,15 @@ public sealed partial class SilGen {
         }
     }
 
+    /// <summary>A type a function declares, given to code compiled once, which may box it: as <see cref="Boxed" />.</summary>
+    internal void Given(NamedTypeSymbol concrete, SilType value, SyntaxNode at) {
+        if (_boxed.TryAdd(value, concrete)) {
+            foreach (var target in _castTargets.Where(concrete.Satisfies)) {
+                WitnessTable(concrete, value, target, at);
+            }
+        }
+    }
+
     /// <summary>
     ///     A protocol cast to: the witness tables of every type of the program
     ///     that conforms to it, and of every type boxed so far that does.

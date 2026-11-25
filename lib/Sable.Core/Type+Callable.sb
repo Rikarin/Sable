@@ -24,7 +24,7 @@ extension Type {
     ///
     /// let greeter: any Any = Greeter()
     /// for member in type(of: greeter).callableMembers where member.name == "greet" {
-    ///     assert(try member.call(on: greeter, "you") as! String == "hello, you")
+    ///     assert(try! member.call(on: greeter, "you") as! String == "hello, you")
     /// }
     /// ```
     public var callableMembers: CallableMember[>..] {
@@ -70,7 +70,7 @@ extension Type {
     ///
     /// let shapes: Type = (any Shape).self
     /// for each in shapes.callableSubtypes() {
-    ///     let shape = try each.callable("init")!.call(2.0) as! any Shape
+    ///     let shape = try! each.callable("init")!.call(2.0) as! any Shape
     ///     assert(shape.area() == 4.0)
     /// }
     /// ```

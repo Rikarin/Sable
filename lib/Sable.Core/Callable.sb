@@ -17,8 +17,8 @@ module Sable.Core
 ///     }
 /// }
 ///
-/// var counter: any Any = try Counter.callable("init")!.call(1)
-/// assert(try Counter.callable("add")!.call(mutating: &counter, 2) as! Int == 3)
+/// var counter: any Any = try! Counter.callable("init")!.call(1)
+/// assert(try! Counter.callable("add")!.call(mutating: &counter, 2) as! Int == 3)
 /// assert((counter as! Counter).count == 3)
 /// ```
 public protocol Callable: Reflectable {

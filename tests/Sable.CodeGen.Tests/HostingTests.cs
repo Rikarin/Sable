@@ -157,7 +157,9 @@ public sealed class HostingTests {
         }
 
         var (output, errors, status) = Drive(Worker("context.lifetime.requestStop()\nwhile true { }", "builder.options.shutdownTimeout = Duration.milliseconds(100)"), (_, _) => { });
-        Assert.EndsWith("stopping\nstopped\nnot stopped in time: worker\n", output);
+        // It asks for the stop as the host starts: either may be said first.
+        Assert.Contains("stopping\n", output);
+        Assert.EndsWith("stopped\nnot stopped in time: worker\n", output);
         Assert.Equal(1, status);
         Assert.Contains("ERROR host: not stopped in time services=worker", errors, StringComparison.Ordinal);
     }

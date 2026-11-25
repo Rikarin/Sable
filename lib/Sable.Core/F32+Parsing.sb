@@ -20,7 +20,17 @@ extension F32: Parsable {
         if styles.contains(.HexFloat) {
             return try hexFloat(text.asSubstring, styles)
         }
-        let plain = try plainFloat(text.asSubstring, styles)
+        let text = text.asSubstring
+        // A finite number and nothing else, as most texts are, the runtime
+        // reads at once; what it does not is checked, and then read without
+        // what the styles allow around it.
+        if styles.contains(.Sign) {
+            let (parsed, value) = text.base.parseF32(text.start, text.end)
+            if parsed {
+                return value
+            }
+        }
+        let plain = try plainFloat(text, styles)
         if let special = specialFloat(plain) {
             return F32(special)
         }

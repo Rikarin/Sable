@@ -71,6 +71,11 @@ extension NumberFormatter {
     /// The number the text writes as the locale does, its whole, as
     /// `LocalizableNumber.parse(_:format:locale:)` reads it.
     public fn parse<T: LocalizableNumber>(_ text: String) throws(ParseError) -> T {
+        if let (value, places) = plainRead(text) {
+            if let known = T.ofScaled(value, places: places) {
+                return known
+            }
+        }
         let read = trimmedRead(readable(text))
         if read.isEmpty {
             throw .Empty
@@ -98,10 +103,66 @@ extension NumberFormatter {
         throw readError(read)
     }
 
+    /// The number the text writes, as a whole one divided by a power of ten,
+    /// where it is written the plainest way: a minus perhaps, ASCII digits,
+    /// and the locale's separators in their places. None for any other, which
+    /// the rest of 'parse' reads, or refuses.
+    fn plainRead(_ text: String) -> (Int, Int)? {
+        if numberFormat.kind != .Decimal || digits[0] != '0' || pattern.hasNegative || !positive.0.isEmpty || !positive.1.isEmpty {
+            return none
+        }
+        let end = text.utf8Count
+        let isNegative = end > 0 && text.utf8[0] == 0x2D
+        var at = isNegative ? 1 : 0
+        if end - at > 24 {
+            return none
+        }
+        var value = 0
+        // Digits in all, those since the last separator, and the places
+        // after the point.
+        var count = 0
+        var since = 0
+        var grouped = false
+        var places = -1
+        while at < end {
+            let byte = Int(text.utf8[at])
+            if byte >= 48 && byte <= 57 {
+                value = value * 10 + byte - 48
+                count += 1
+                since += 1
+                if places >= 0 {
+                    places += 1
+                }
+                if count > 17 {
+                    return none
+                }
+                at += 1
+            } else if places < 0 && count > 0 && hasBytes(text, at, decimal) {
+                if grouped && since != pattern.primaryGroup {
+                    return none
+                }
+                places = 0
+                at += decimal.utf8Count
+            } else if places < 0 && count > 0 && pattern.primaryGroup > 0 && numberFormat.grouping != .Never && hasBytes(text, at, group) {
+                if since == 0 || (grouped ? since != pattern.secondaryGroup : since > pattern.secondaryGroup) {
+                    return none
+                }
+                grouped = true
+                since = 0
+                at += group.utf8Count
+            } else {
+                return none
+            }
+        }
+        if count == 0 || places == 0 || places < 0 && grouped && since != pattern.primaryGroup || isNegative && value == 0 {
+            return none
+        }
+        return (isNegative ? 0 - value : value, places < 0 ? 0 : places)
+    }
+
     /// The affixes a number of the sign may have, the fullest first.
     fn parseAffixes(_ negative: Bool) -> (String, String)[>..] {
         var all: (String, String)[>..] = []
-        var parts = NumberParts(negative ? "-1" : "1")
         var names: String[>..] = [currency]
         if !currencyCode.isEmpty {
             names.append(currencyText(currencyCode, .Narrow, locale.data))
@@ -109,7 +170,7 @@ extension NumberFormatter {
             names.append("")
         }
         for name in names {
-            var (before, after) = affixes(parts)
+            var (before, after) = negative ? self.negative : positive
             if !currency.isEmpty {
                 before = before.replacing(currency, with: name)
                 after = after.replacing(currency, with: name)
@@ -117,9 +178,7 @@ extension NumberFormatter {
             all.append((before, after))
             if negative {
                 // A minus at the very front, whatever the pattern's place.
-                parts.negative = false
-                let (plainBefore, plainAfter) = affixes(parts)
-                parts.negative = true
+                let (plainBefore, plainAfter) = positive
                 if currency.isEmpty {
                     all.append(("-" + plainBefore, plainAfter))
                 } else {
@@ -276,4 +335,20 @@ extension NumberFormatter {
 
 fn sameRead(_ a: ReadChar[>..], _ b: ReadChar[>..]) -> Bool {
     return a.count == b.count && hasRead(a, 0, b)
+}
+
+/// Whether the text has the other's bytes at the offset.
+fn hasBytes(_ text: String, _ at: Int, _ other: String) -> Bool {
+    let count = other.utf8Count
+    if count == 0 || at + count > text.utf8Count {
+        return false
+    }
+    var i = 0
+    while i < count {
+        if text.utf8[at + i] != other.utf8[i] {
+            return false
+        }
+        i += 1
+    }
+    return true
 }

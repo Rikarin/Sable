@@ -592,6 +592,7 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_string_count_range(ptr, i64, i64)
                                 declare i64 @sable_string_compare_range(ptr, i64, i64, ptr, i64, i64)
                                 declare i64 @sable_string_utf8_find_range(ptr, i64, i64, ptr, i64, i64)
+                                declare i64 @sable_string_utf8_find_any(ptr, i64, i64, ptr)
                                 declare i64 @sable_string_utf8_find_last_range(ptr, i64, i64, ptr, i64, i64)
                                 @sable_hash_seed = external global i64
                                 declare i64 @sable_random_bits()
@@ -599,6 +600,11 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_secure_zero(ptr, i64)
                                 declare zeroext i1 @sable_crypto_blocks(i64, ptr, ptr, i64, i64)
                                 declare zeroext i1 @sable_crypto_blocks_raw(i64, ptr, ptr, i64)
+                                declare zeroext i1 @sable_vector_available()
+                                declare float @sable_vector_reduce_F32(i64, ptr, i64, i64, ptr, i64)
+                                declare double @sable_vector_reduce_F64(i64, ptr, i64, i64, ptr, i64)
+                                declare void @sable_vector_map_F32(ptr, i64, ptr, i64, i64, ptr, i64)
+                                declare void @sable_vector_map_F64(ptr, i64, ptr, i64, i64, ptr, i64)
                                 declare ptr @sable_string_join(ptr, ptr)
                                 declare i64 @sable_string_compare(ptr, ptr)
                                 declare i64 @sable_string_find(ptr, ptr, i64)
@@ -3975,10 +3981,10 @@ public sealed partial class LlvmEmitter {
                 NegativeOffsetTraps(operands[1]);
                 var lastIndex = Fresh();
                 Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
-                var last = SliceElement(operands[0], lastIndex, (SliceType)builtin.Operands[0].Type);
+                var last = builtin.Operands[0].Type is ArrayType whole ? InlineElement(operands[0], lastIndex, whole.Element) : SliceElement(operands[0], lastIndex, (SliceType)builtin.Operands[0].Type);
                 var first = Fresh();
                 Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
-                Line($"{Result()} = load {integer}, ptr {first}, align 1");
+                Line($"{Result()} = load {integer}, ptr {first}, align 1, !tbaa {TbaaElement}");
                 return;
             }
 
@@ -3991,6 +3997,20 @@ public sealed partial class LlvmEmitter {
                 NegativeOffsetTraps(operands[1]);
                 var lastIndex = Fresh();
                 Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
+                if (((AddressType)builtin.Operands[0].Type).Pointee is ArrayType bytes) {
+                    if (!builtin.Name.StartsWith("bytes_store_array_unique_", StringComparison.Ordinal)) {
+                        MakeUnique(operands[0], bytes);
+                    }
+
+                    var array = Fresh();
+                    var start = Fresh();
+                    Line($"{array} = load ptr, ptr {operands[0]}");
+                    var end = InlineElement(array, lastIndex, bytes.Element);
+                    Line($"{start} = getelementptr inbounds i8, ptr {end}, i64 {1 - width}");
+                    Line($"store {integer} {operands[2]}, ptr {start}, align 1, !tbaa {TbaaElement}");
+                    return;
+                }
+
                 var written = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
                 string last;
                 if (builtin.Name.StartsWith("bytes_store_unique_", StringComparison.Ordinal)) {
@@ -4005,7 +4025,7 @@ public sealed partial class LlvmEmitter {
 
                 var first = Fresh();
                 Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
-                Line($"store {integer} {operands[2]}, ptr {first}, align 1");
+                Line($"store {integer} {operands[2]}, ptr {first}, align 1, !tbaa {TbaaElement}");
                 return;
             }
 
@@ -4680,6 +4700,38 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call zeroext i1 @sable_crypto_blocks_raw(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");
                     return;
 
+                // Only an x86-64 processor has kernels to be asked for: elsewhere
+                // the calls are not there.
+                case "vector_available":
+                    Line(module._target.Triple.StartsWith("x86_64", StringComparison.Ordinal)
+                        ? $"{Result()} = call zeroext i1 @sable_vector_available()"
+                        : $"{Result()} = and i1 false, false");
+                    return;
+
+                case "vector_reduce_F32" or "vector_reduce_F64": {
+                    var type = (SliceType)builtin.Operands[1].Type;
+                    var parts = VectorOperands(operands[1], operands[2], type);
+                    Line($"{Result()} = call {Type(type.Element)} @sable_{builtin.Name}(i64 {operands[0]}, {parts})");
+                    return;
+                }
+
+                // To a slice made the only reference to its run first, as a
+                // write of its first element would.
+                case "vector_map_F32" or "vector_map_F64": {
+                    var type = (SliceType)builtin.Operands[2].Type;
+                    var empty = Fresh();
+                    var any = NewLabel("elements");
+                    var after = NewLabel("after");
+                    Line($"{empty} = icmp eq i64 {SlicePart(operands[2], type, 2)}, 0");
+                    Line($"br i1 {empty}, label %{after}, label %{any}");
+                    Continue(any);
+                    var first = SliceMutableElement(operands[0], "0", type);
+                    Line($"call void @sable_{builtin.Name}(ptr {first}, i64 {operands[1]}, {VectorOperands(operands[2], operands[3], type)})");
+                    Line($"br label %{after}");
+                    Continue(after);
+                    return;
+                }
+
                 case "string_find":
                     Line($"{Result()} = call i64 @sable_string_find(ptr {operands[0]}, ptr {operands[1]}, i64 {operands[2]})");
                     return;
@@ -4698,6 +4750,10 @@ public sealed partial class LlvmEmitter {
 
                 case "string_compare_range" or "string_utf8_find_range" or "string_utf8_find_last_range":
                     Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, ptr {operands[3]}, i64 {operands[4]}, i64 {operands[5]})");
+                    return;
+
+                case "string_utf8_find_any":
+                    Line($"{Result()} = call i64 @sable_string_utf8_find_any(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, ptr {operands[3]})");
                     return;
 
                 case "string_at":
@@ -5331,43 +5387,9 @@ public sealed partial class LlvmEmitter {
                     _names[builtin] = SliceMutableElement(operands[0], operands[1], addressed);
                     return;
 
-                // The check inline — the empty array, or an array of its own
-                // kind whose buffer has one reference, is unique already — and
-                // the call only for the rest: a shared buffer, which it
-                // copies, or a mapped file's bytes, which are never the array's.
-                case "array_make_unique": {
-                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
-                    var metadata = ArrayMetadataOf(arrayType);
-                    var array = Fresh();
-                    var isNull = Fresh();
-                    Line($"{array} = load ptr, ptr {operands[0]}");
-                    Line($"{isNull} = icmp eq ptr {array}, null");
-                    var check = NewLabel("shared");
-                    var copy = NewLabel("copy");
-                    var done = NewLabel("unique");
-                    Line($"br i1 {isNull}, label %{done}, label %{check}");
-                    Continue(check);
-                    var typeField = Fresh();
-                    var type = Fresh();
-                    var strongField = Fresh();
-                    var strong = Fresh();
-                    var own = Fresh();
-                    var one = Fresh();
-                    var unique = Fresh();
-                    Line($"{typeField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 0");
-                    Line($"{type} = load ptr, ptr {typeField}, !tbaa {TbaaHeader}");
-                    Line($"{own} = icmp eq ptr {type}, {metadata}");
-                    Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-                    Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
-                    Line($"{one} = icmp eq i32 {strong}, 1");
-                    Line($"{unique} = and i1 {own}, {one}");
-                    Line($"br i1 {unique}, label %{done}, label %{copy}");
-                    Continue(copy);
-                    Line($"call void @sable_array_make_unique(ptr {operands[0]}, ptr {metadata})");
-                    Line($"br label %{done}");
-                    Continue(done);
+                case "array_make_unique":
+                    MakeUnique(operands[0], (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee);
                     return;
-                }
 
                 // Unique already: the element written where it is, its index checked.
                 case "array_set_unique": {
@@ -6862,11 +6884,53 @@ public sealed partial class LlvmEmitter {
         ///     A slice's element's address to write: the runtime makes the
         ///     slice the only reference to its run first, and checks the index.
         /// </summary>
+        string VectorOperands(string x, string y, SliceType type) =>
+            $"ptr {SlicePart(x, type, 0)}, i64 {SlicePart(x, type, 1)}, i64 {SlicePart(x, type, 2)}, ptr {SlicePart(y, type, 0)}, i64 {SlicePart(y, type, 1)}";
+
         string SliceMutableElement(string slot, string index, SliceType type) {
             var element = Fresh();
             SiteForRuntime();
             Line($"{element} = call ptr @sable_slice_mutable_element(ptr {slot}, ptr {ArrayMetadataOf(new ArrayType(type.Element))}, i64 {index})");
             return element;
+        }
+
+        /// <summary>
+        ///     An array's place made the only reference to its buffer, the
+        ///     check inline — the empty array, or an array of its own kind
+        ///     whose buffer has one reference, is unique already — and the
+        ///     call only for the rest: a shared buffer, which it copies, or a
+        ///     mapped file's bytes, which are never the array's.
+        /// </summary>
+        void MakeUnique(string slot, ArrayType arrayType) {
+            var metadata = ArrayMetadataOf(arrayType);
+            var array = Fresh();
+            var isNull = Fresh();
+            Line($"{array} = load ptr, ptr {slot}");
+            Line($"{isNull} = icmp eq ptr {array}, null");
+            var check = NewLabel("shared");
+            var copy = NewLabel("copy");
+            var done = NewLabel("unique");
+            Line($"br i1 {isNull}, label %{done}, label %{check}");
+            Continue(check);
+            var typeField = Fresh();
+            var type = Fresh();
+            var strongField = Fresh();
+            var strong = Fresh();
+            var own = Fresh();
+            var one = Fresh();
+            var unique = Fresh();
+            Line($"{typeField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 0");
+            Line($"{type} = load ptr, ptr {typeField}, !tbaa {TbaaHeader}");
+            Line($"{own} = icmp eq ptr {type}, {metadata}");
+            Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
+            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+            Line($"{one} = icmp eq i32 {strong}, 1");
+            Line($"{unique} = and i1 {own}, {one}");
+            Line($"br i1 {unique}, label %{done}, label %{copy}");
+            Continue(copy);
+            Line($"call void @sable_array_make_unique(ptr {slot}, ptr {metadata})");
+            Line($"br label %{done}");
+            Continue(done);
         }
 
         /// <summary>An element's address, its index checked against the count — inline, with no call.</summary>

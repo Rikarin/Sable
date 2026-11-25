@@ -78,9 +78,10 @@ public struct TimeOfDay: Comparable, Hashable {
     /// "09:05:03", with the fraction of the second where there is one,
     /// its zeros after the last other digit left off: "09:05:03.25".
     public fn toString() -> String {
-        let fraction = fractionDigits(nanosecond)
-        let text = two(hour) + ":" + two(minute) + ":" + two(second)
-        return fraction.isEmpty ? text : text + "." + fraction
+        var text = DateTimeText()
+        text.addTime(secondOfDay)
+        text.addFraction(nanosecond)
+        return text.toString()
     }
 
     /// The time as the pattern writes it: .NET's custom and standard

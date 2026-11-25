@@ -65,9 +65,9 @@ public struct UtcOffset: Comparable, Hashable {
     /// "+01:00", "-03:30", "+00:00"; with the seconds where there are any,
     /// "+00:19:32".
     public fn toString() -> String {
-        let magnitude = totalSeconds < 0 ? 0 - totalSeconds : totalSeconds
-        let text = (totalSeconds < 0 ? "-" : "+") + two(magnitude / 3600) + ":" + two(magnitude / 60 % 60)
-        return magnitude % 60 == 0 ? text : text + ":" + two(magnitude % 60)
+        var text = DateTimeText()
+        text.addOffset(self)
+        return text.toString()
     }
 
     public operator == (a: UtcOffset, b: UtcOffset) -> Bool {

@@ -9,6 +9,11 @@ module Sable.Math
 // are generic over the width and the lanes, and the overloads for each
 // type pick them.
 //
+// The sum and the dot product, which wait for nothing but the addition
+// before, take eight registers (foldBytes). On an x86-64 processor with AVX2
+// the runtime's kernels (runtime/vectors.c) do the same a wider vector at a
+// time: the same lanes in the same order, so the same numbers.
+//
 // A float sum is added in lanes and then pairwise (SIMD's reduceAdd), so
 // it is not the left-to-right sum of a loop: it rounds differently, as
 // .NET's does, and is usually closer. Inputs that should be the same
@@ -17,11 +22,20 @@ module Sable.Math
 /// The bytes a kernel takes a step: four of the target's vector registers.
 const stepBytes = 4 * Platform.vectorBytes
 
+/// The bytes a sum or a dot product takes a step: eight registers.
+const foldBytes = 8 * Platform.vectorBytes
+
 /// The F32s a kernel takes a step.
 const f32Step = stepBytes / 4
 
 /// The F64s a kernel takes a step.
 const f64Step = stepBytes / 8
+
+/// The F32s a sum or a dot product takes a step.
+const f32Fold = foldBytes / 4
+
+/// The F64s a sum or a dot product takes a step.
+const f64Fold = foldBytes / 8
 
 /// The kernels over arrays of floats, a vector at a time, as .NET's
 /// TensorPrimitives: named apart from the statistics' generic `sum`,
@@ -32,10 +46,14 @@ public struct TensorPrimitives {
     /// ```sable
     /// assert(TensorPrimitives.sum([1.0, 2.0, 3.0, 4.0, 5.0] as F64[:]) == 15.0)
     /// ```
-    public static fn sum(_ x: F32[:]) -> F32 => sumOf(x, SIMD<F32, f32Step>())
+    public static fn sum(_ x: F32[:]) -> F32 {
+        return vectorAvailable() ? vectorReduce(vectorSum, x, x) : sumOf(x, SIMD<F32, f32Fold>())
+    }
 
     /// The sum of the elements: 0 for none.
-    public static fn sum(_ x: F64[:]) -> F64 => sumOf(x, SIMD<F64, f64Step>())
+    public static fn sum(_ x: F64[:]) -> F64 {
+        return vectorAvailable() ? vectorReduce(vectorSum, x, x) : sumOf(x, SIMD<F64, f64Fold>())
+    }
 
     /// The dot product: the sum of the products of the elements at each
     /// index. Traps unless the two are the same length.
@@ -45,21 +63,25 @@ public struct TensorPrimitives {
     /// let y: F32[>..] = [4, 5, 6]
     /// assert(TensorPrimitives.dot(x, y) == 32)
     /// ```
-    public static fn dot(_ x: F32[:], _ y: F32[:]) -> F32 => dotOf(x, y, SIMD<F32, f32Step>())
+    public static fn dot(_ x: F32[:], _ y: F32[:]) -> F32 {
+        return vectorAvailable() && x.count == y.count ? vectorReduce(vectorDot, x, y) : dotOf(x, y, SIMD<F32, f32Fold>())
+    }
 
     /// The dot product: the sum of the products of the elements at each
     /// index. Traps unless the two are the same length.
-    public static fn dot(_ x: F64[:], _ y: F64[:]) -> F64 => dotOf(x, y, SIMD<F64, f64Step>())
+    public static fn dot(_ x: F64[:], _ y: F64[:]) -> F64 {
+        return vectorAvailable() && x.count == y.count ? vectorReduce(vectorDot, x, y) : dotOf(x, y, SIMD<F64, f64Fold>())
+    }
 
     /// The Euclidean norm, √(Σ xᵢ²): the length of the vector the elements are.
     ///
     /// ```sable
     /// assert(TensorPrimitives.norm([3.0, 4.0] as F64[:]) == 5.0)
     /// ```
-    public static fn norm(_ x: F32[:]) -> F32 => dotOf(x, x, SIMD<F32, f32Step>()).squareRoot()
+    public static fn norm(_ x: F32[:]) -> F32 => dot(x, x).squareRoot()
 
     /// The Euclidean norm, √(Σ xᵢ²): the length of the vector the elements are.
-    public static fn norm(_ x: F64[:]) -> F64 => dotOf(x, x, SIMD<F64, f64Step>()).squareRoot()
+    public static fn norm(_ x: F64[:]) -> F64 => dot(x, x).squareRoot()
 
     /// The cosine of the angle between two vectors, x·y / (|x| |y|): 1 for
     /// the same direction, 0 at right angles, -1 opposite; NaN if either is
@@ -71,11 +93,15 @@ public struct TensorPrimitives {
     /// assert(TensorPrimitives.cosineSimilarity(x, y) == 0.0)
     /// assert(TensorPrimitives.cosineSimilarity(x, x) == 1.0)
     /// ```
-    public static fn cosineSimilarity(_ x: F32[:], _ y: F32[:]) -> F32 => cosineOf(x, y, SIMD<F32, f32Step>())
+    public static fn cosineSimilarity(_ x: F32[:], _ y: F32[:]) -> F32 {
+        return vectorAvailable() && x.count == y.count ? vectorReduce(vectorCosine, x, y) : cosineOf(x, y, SIMD<F32, f32Step>())
+    }
 
     /// The cosine of the angle between two vectors, x·y / (|x| |y|). Traps
     /// unless the two are the same length.
-    public static fn cosineSimilarity(_ x: F64[:], _ y: F64[:]) -> F64 => cosineOf(x, y, SIMD<F64, f64Step>())
+    public static fn cosineSimilarity(_ x: F64[:], _ y: F64[:]) -> F64 {
+        return vectorAvailable() && x.count == y.count ? vectorReduce(vectorCosine, x, y) : cosineOf(x, y, SIMD<F64, f64Step>())
+    }
 
     /// The least element: lane-wise minimums, then the least of those. A NaN
     /// is passed over (as 'min' passes it over) unless every element is one.
@@ -105,50 +131,84 @@ public struct TensorPrimitives {
     /// assert(result == [11, 22, 33])
     /// ```
     public static fn add(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+        if vectorAvailable() && x.count == y.count && destination.count >= x.count {
+            destination.vectorMap(vectorAdd, x, y)
+            return
+        }
         elementwise(x, y, &destination, SIMD<F32, f32Step>(), .Add)
     }
 
     /// Writes each 'x[i] + y[i]' to 'destination[i]'.
     public static fn add(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+        if vectorAvailable() && x.count == y.count && destination.count >= x.count {
+            destination.vectorMap(vectorAdd, x, y)
+            return
+        }
         elementwise(x, y, &destination, SIMD<F64, f64Step>(), .Add)
     }
 
     /// Writes each 'x[i] - y[i]' to 'destination[i]'. Traps unless x and y
     /// are the same length and the destination at least as long.
     public static fn subtract(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+        if vectorAvailable() && x.count == y.count && destination.count >= x.count {
+            destination.vectorMap(vectorSubtract, x, y)
+            return
+        }
         elementwise(x, y, &destination, SIMD<F32, f32Step>(), .Subtract)
     }
 
     /// Writes each 'x[i] - y[i]' to 'destination[i]'.
     public static fn subtract(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+        if vectorAvailable() && x.count == y.count && destination.count >= x.count {
+            destination.vectorMap(vectorSubtract, x, y)
+            return
+        }
         elementwise(x, y, &destination, SIMD<F64, f64Step>(), .Subtract)
     }
 
     /// Writes each 'x[i] × y[i]' to 'destination[i]'. Traps unless x and y
     /// are the same length and the destination at least as long.
     public static fn multiply(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+        if vectorAvailable() && x.count == y.count && destination.count >= x.count {
+            destination.vectorMap(vectorMultiply, x, y)
+            return
+        }
         elementwise(x, y, &destination, SIMD<F32, f32Step>(), .Multiply)
     }
 
     /// Writes each 'x[i] × y[i]' to 'destination[i]'.
     public static fn multiply(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+        if vectorAvailable() && x.count == y.count && destination.count >= x.count {
+            destination.vectorMap(vectorMultiply, x, y)
+            return
+        }
         elementwise(x, y, &destination, SIMD<F64, f64Step>(), .Multiply)
     }
 
     /// Writes each 'x[i] / y[i]' to 'destination[i]'. Traps unless x and y
     /// are the same length and the destination at least as long.
     public static fn divide(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+        if vectorAvailable() && x.count == y.count && destination.count >= x.count {
+            destination.vectorMap(vectorDivide, x, y)
+            return
+        }
         elementwise(x, y, &destination, SIMD<F32, f32Step>(), .Divide)
     }
 
     /// Writes each 'x[i] / y[i]' to 'destination[i]'.
     public static fn divide(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+        if vectorAvailable() && x.count == y.count && destination.count >= x.count {
+            destination.vectorMap(vectorDivide, x, y)
+            return
+        }
         elementwise(x, y, &destination, SIMD<F64, f64Step>(), .Divide)
     }
 
     /// Writes the softmax of x to the destination: each 'exp(x[i] - m) / Σ
     /// exp(x[j] - m)', m the greatest element (which keeps every exponential
     /// at most 1, so none overflows). The results are positive and sum to 1.
+    /// The exponentials are a vector's, within two units in the last place,
+    /// and the same on every processor, but not always what `exp` gives.
     /// Traps on no elements, or a destination shorter than x.
     ///
     /// ```sable
@@ -157,14 +217,61 @@ public struct TensorPrimitives {
     /// assert(result == [0.5, 0.5])
     /// ```
     public static fn softmax(_ x: F32[:], into destination: inout F32[>..]) {
-        softmaxOf(x, &destination, SIMD<F32, f32Step>())
+        checkRoom(destination.count, x.count)
+        let greatest = extremeOf(x, SIMD<F32, f32Step>(), least: false)
+        divideBy(fillExponentials(x, greatest, &destination), &destination, x.count, SIMD<F32, f32Step>())
     }
 
     /// Writes the softmax of x to the destination. Traps on no elements, or a
     /// destination shorter than x.
     public static fn softmax(_ x: F64[:], into destination: inout F64[>..]) {
-        softmaxOf(x, &destination, SIMD<F64, f64Step>())
+        checkRoom(destination.count, x.count)
+        let greatest = extremeOf(x, SIMD<F64, f64Step>(), least: false)
+        divideBy(fillExponentials(x, greatest, &destination), &destination, x.count, SIMD<F64, f64Step>())
     }
+}
+
+// ---- The runtime's, for AVX2 ----
+
+// What the runtime's kernels are told to do (runtime/vectors.c).
+const vectorSum = 1
+const vectorDot = 2
+const vectorCosine = 3
+const vectorAdd = 4
+const vectorSubtract = 5
+const vectorMultiply = 6
+const vectorDivide = 7
+
+/// Whether the runtime has kernels for this processor: not in the interpreter,
+/// and not on any but x86-64 with AVX2.
+@builtin("vector_available")
+fn vectorAvailable() -> Bool
+
+/// The reduction of x and y, which are the same length.
+@builtin("vector_reduce_F32")
+fn vectorReduce(_ kernel: Int, _ x: F32[:], _ y: F32[:]) -> F32
+
+@builtin("vector_reduce_F64")
+fn vectorReduce(_ kernel: Int, _ x: F64[:], _ y: F64[:]) -> F64
+
+extension F32[:] {
+    /// The operation on each element of x and y, which are the same length
+    /// and no longer than this, written to this.
+    mutating fn vectorMap(_ kernel: Int, _ x: F32[:], _ y: F32[:]) {
+        self.mapSlice(kernel, x, y)
+    }
+
+    @builtin("vector_map_F32")
+    mutating fn mapSlice(_ kernel: Int, _ x: F32[:], _ y: F32[:])
+}
+
+extension F64[:] {
+    mutating fn vectorMap(_ kernel: Int, _ x: F64[:], _ y: F64[:]) {
+        self.mapSlice(kernel, x, y)
+    }
+
+    @builtin("vector_map_F64")
+    mutating fn mapSlice(_ kernel: Int, _ x: F64[:], _ y: F64[:])
 }
 
 // ---- The kernels, generic over the lanes and the width ----
@@ -298,20 +405,72 @@ fn elementwise<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ y: T[:]
     }
 }
 
-fn softmaxOf<T: SIMDScalar & BinaryFloatingPoint & ElementaryFunctions, N: Int>(_ x: T[:], _ destination: inout T[>..], _ zero: SIMD<T, N>) {
-    let room = destination.count
-    if room < x.count {
-        preconditionFailure("a destination of \(room) elements for \(x.count)")
-    }
-    let greatest = extremeOf(x, zero, least: false)
+/// Writes e to each element less the greatest to the destination, and adds
+/// them up: an element is the same whichever lane it is worked out in.
+fn fillExponentials(_ x: F32[:], _ greatest: F32, _ destination: inout F32[>..]) -> F32 {
     let count = x.count
-    var total = T.zero
-    for i in 0..<count {
-        let e = T.exp(x[i] - greatest)
-        destination[i] = e
-        total = total + e
+    let shift = SIMD<F32, f32Step>(repeating: greatest)
+    var sums = SIMD<F32, f32Step>()
+    var i = 0
+    while i + f32Step <= count {
+        let e = exponential(SIMD<F32, f32Step>.load(from: x, at: i) - shift)
+        destination.store(e, at: i)
+        sums = sums + e
+        i += f32Step
     }
 
+    var total = sums.reduceAdd()
+    if i < count {
+        var rest = F32[>..](repeating: greatest, count: f32Step)
+        for j in i..<count {
+            rest[j - i] = x[j]
+        }
+        let e = exponential(SIMD<F32, f32Step>.load(from: rest, at: 0) - shift)
+        while i < count {
+            destination[i] = e[i % f32Step]
+            total = total + destination[i]
+            i += 1
+        }
+    }
+    return total
+}
+
+fn fillExponentials(_ x: F64[:], _ greatest: F64, _ destination: inout F64[>..]) -> F64 {
+    let count = x.count
+    let shift = SIMD<F64, f64Step>(repeating: greatest)
+    var sums = SIMD<F64, f64Step>()
+    var i = 0
+    while i + f64Step <= count {
+        let e = exponential(SIMD<F64, f64Step>.load(from: x, at: i) - shift)
+        destination.store(e, at: i)
+        sums = sums + e
+        i += f64Step
+    }
+
+    var total = sums.reduceAdd()
+    if i < count {
+        var rest = F64[>..](repeating: greatest, count: f64Step)
+        for j in i..<count {
+            rest[j - i] = x[j]
+        }
+        let e = exponential(SIMD<F64, f64Step>.load(from: rest, at: 0) - shift)
+        while i < count {
+            destination[i] = e[i % f64Step]
+            total = total + destination[i]
+            i += 1
+        }
+    }
+    return total
+}
+
+fn checkRoom(_ room: Int, _ count: Int) {
+    if room < count {
+        preconditionFailure("a destination of \(room) elements for \(count)")
+    }
+}
+
+/// Divides the first elements by the number.
+fn divideBy<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ total: T, _ destination: inout T[>..], _ count: Int, _ zero: SIMD<T, N>) {
     let scale = SIMD<T, N>(repeating: total)
     var i = 0
     while i + N <= count {

@@ -1,0 +1,38 @@
+module RuntimeTests
+
+import Sable.Testing
+
+// Where the first byte in one of the ranges is, a byte at a time.
+fn slowly(_ text: String, _ from: Int, _ to: Int, _ ranges: String) -> Int {
+    for i in from..<to {
+        var k = 0
+        while k < ranges.utf8Count {
+            if text.utf8[i] >= ranges.utf8[k] && text.utf8[i] <= ranges.utf8[k + 1] {
+                return i
+            }
+            k += 2
+        }
+    }
+    return -1
+}
+
+@test
+fn aByteOfAnyRangeIsFoundWhereverItIs() {
+    let filler = "éxé¿~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+    for ranges in ["", "aa", "ac", "AZ09", "aabbAZ", "aabbccdd", "aabbccddee", "AEae__\u{0}\u{1F}"] {
+        for at in 0..<40 {
+            for found in ["a", "b", "C", "\u{1}", "5", "_", "d", "e"] {
+                var text = ""
+                for i in 0..<40 {
+                    text += i == at ? found : String.fromChar(filler.toArray()[i])
+                }
+                for from in [0, 1, 9] {
+                    let end = text.utf8Count
+                    assertEqual(Runtime.findAnyUtf8(text, from, end, ranges), slowly(text, from, end, ranges))
+                    assertEqual(Runtime.findAnyUtf8(text, from, end - 8, ranges), slowly(text, from, end - 8, ranges))
+                }
+            }
+        }
+    }
+    assertEqual(Runtime.findAnyUtf8("a", 1, 1, "aa"), -1)
+}

@@ -94,7 +94,12 @@ public struct UtcDateTime: Comparable, Hashable {
 
     /// "2026-11-17T09:05:03Z": to the second.
     public fn iso8601() -> String {
-        return isoDate() + "T" + two(hour) + ":" + two(minute) + ":" + two(second) + "Z"
+        var text = DateTimeText()
+        text.addDate(date)
+        text.add('T')
+        text.addTime(secondOfDay)
+        text.add('Z')
+        return text.toString()
     }
 
     /// "2026-11-17".

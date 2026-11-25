@@ -1,7 +1,6 @@
 module Sable.Serialize
 
-// Strings are joined in a balanced tree, so that building a long text from
-// many small pieces costs n log n rather than n squared.
+// Strings are joined at once at the end.
 struct TextBuilder {
     var parts: String[>..]
 
@@ -14,7 +13,7 @@ struct TextBuilder {
     }
 
     public fn build() -> String {
-        return joinRange(parts, 0, parts.count)
+        return parts.count == 1 ? parts[0] : Runtime.joinStrings(parts, "")
     }
 
     public fn isEmpty() -> Bool {
@@ -24,21 +23,6 @@ struct TextBuilder {
 
 fn newBuilder() -> TextBuilder {
     return TextBuilder { parts: [] }
-}
-
-fn joinRange(_ parts: String[>..], _ from: Int, _ to: Int) -> String {
-    let count = to - from
-    if count <= 0 {
-        return ""
-    }
-    if count == 1 {
-        return parts[from]
-    }
-    if count == 2 {
-        return parts[from] + parts[from + 1]
-    }
-    let middle = from + count / 2
-    return joinRange(parts, from, middle) + joinRange(parts, middle, to)
 }
 
 fn join(_ parts: String[>..], _ separator: String) -> String {

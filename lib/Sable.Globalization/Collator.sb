@@ -43,10 +43,7 @@ public struct Collator {
     let backwards: Bool
     let tailored: [Int: CollationString[>..]]
     let moves: CollationMove[>..]
-    /// The element of each ASCII character that begins no longer string, or
-    /// -1; and the strings each begins, the collation's own and the root's.
-    let ascii: Int[>..]
-    let asciiStrings: CollationString[>..][>..]
+    let common: CollationCommon
 
     /// The locale's order. What is not said is the locale's, or tertiary,
     /// not numeric, and punctuation counted.
@@ -67,32 +64,21 @@ public struct Collator {
         }
         let alternate = locale.keyword("ka") ?? ""
         let tailored = tailoredStrings(collationTailoring(name) ?? "")
+        let isNumeric = numeric ?? (locale.keyword("kn") == none ? false : locale.keyword("kn")! != "false")
+        let ignored = ignorePunctuation ?? (alternate == "shifted" || alternate != "noignore" && settings.contains("shifted"))
+        let moves = collationMoves(collationReorder(name) ?? "")
         self.locale = locale
         self.strength = strength ?? asked
-        self.numeric = numeric ?? (locale.keyword("kn") == none ? false : locale.keyword("kn")! != "false")
+        self.numeric = isNumeric
         self.caseFirst = caseFirst ?? first
-        self.ignorePunctuation = ignorePunctuation ?? (alternate == "shifted" || alternate != "noignore" && settings.contains("shifted"))
+        self.ignorePunctuation = ignored
         self.backwards = settings.contains("backwards")
         self.tailored = tailored
-        self.moves = collationMoves(collationReorder(name) ?? "")
-        var ascii: Int[>..] = []
-        var asciiStrings: CollationString[>..][>..] = []
-        var code = 0
-        while code < 128 {
-            var elements: Int[>..] = []
-            var strings: CollationString[>..] = tailored[code] ?? []
-            for s in rootContractions(code) {
-                strings.append(s)
-            }
-            if strings.isEmpty {
-                addRootElements(code, into: &elements)
-            }
-            ascii.append(elements.count == 1 ? elements[0] : -1)
-            asciiStrings.append(strings)
-            code += 1
-        }
-        self.ascii = ascii
-        self.asciiStrings = asciiStrings
+        self.moves = moves
+        // Where punctuation is passed over, what an element counts for
+        // depends on those before it: 'adjusted' places them all.
+        let placing: CollationMove[>..] = ignored ? [] as CollationMove[>..] : moves
+        self.common = CollationCommon(tailored, placing, numeric: isNumeric)
     }
 
     /// Which of the texts comes first.
@@ -103,7 +89,12 @@ public struct Collator {
     /// assert(czech.compare("chata", "hora") == .Greater && czech.compare("chata", "jih") == .Less)
     /// ```
     public fn compare(_ a: String, _ b: String) -> Ordering {
-        if a == b {
+        if !ignorePunctuation && !backwards {
+            let order = compareAlone(a, b)
+            if order < 2 {
+                return order < 0 ? .Less : order > 0 ? .Greater : .Equal
+            }
+        } else if a == b {
             return .Equal
         }
         let left = elements(a)
@@ -119,6 +110,108 @@ public struct Collator {
             }
         }
         return order
+    }
+
+    /// The order of two texts, as -1, 0 or 1, if the characters
+    /// that decide it stand alone; 2 if they may not.
+    fn compareAlone(_ a: String, _ b: String) -> Int {
+        // Past what they begin with alike.
+        let aCount = a.utf8Count
+        let bCount = b.utf8Count
+        let shorter = aCount < bCount ? aCount : bCount
+        var from = 0
+        while from < shorter && a.utf8[from] == b.utf8[from] {
+            from += 1
+        }
+        if from == aCount && from == bCount {
+            return 0
+        }
+        while from < aCount && (a.utf8[from] & 0xC0) == 0x80 || from < bCount && (b.utf8[from] & 0xC0) == 0x80 {
+            from -= 1
+        }
+        // Two characters that differ and what follows each, all alone: what
+        // decides most comparisons.
+        let left = common.entry(of: a, at: from)
+        let right = common.entry(of: b, at: from)
+        if (left | right) > 0 && (from == 0 || ((left | right) & collationGoesOn) == 0) {
+            let x = (left & collationElementMask) >> 20
+            let y = (right & collationElementMask) >> 20
+            if x != y && x != 0 && y != 0 {
+                let after = common.entry(of: a, at: from + (a.utf8[from] < 0x80 ? 1 : 2)) | common.entry(of: b, at: from + (b.utf8[from] < 0x80 ? 1 : 2))
+                if after >= 0 && (((left | right) & collationBegins) == 0 || (after & collationGoesOn) == 0) {
+                    return x < y ? -1 : 1
+                }
+            }
+        }
+        var i = CollationCursor(a, from, common)
+        var j = CollationCursor(b, from, common)
+        while from > 0 && (i.joins || j.joins) {
+            // Back to where a string may begin that goes on into this.
+            from -= 1
+            while (a.utf8[from] & 0xC0) == 0x80 {
+                from -= 1
+            }
+            i = CollationCursor(a, from, common)
+            j = CollationCursor(b, from, common)
+        }
+        while true {
+            var x = 0
+            var e = 0
+            while x == 0 {
+                e = i.next(a, common)
+                x = e >> 20
+            }
+            var y = 0
+            var f = 0
+            while y == 0 {
+                f = j.next(b, common)
+                y = f >> 20
+            }
+            if e == -2 || f == -2 {
+                return 2
+            }
+            if x != y {
+                // The end, -1, is before any weight.
+                return x < y ? -1 : 1
+            }
+            if x < 0 {
+                break
+            }
+        }
+        if strength == .Primary {
+            return 0
+        }
+        let order = compareAlone(a, b, from, accents: true)
+        if order != 0 || strength == .Secondary {
+            return order
+        }
+        let last = compareAlone(a, b, from, accents: false)
+        return last == 0 && strength == .Identical ? 2 : last
+    }
+
+    /// The order of the texts from the offset on, whose characters stand
+    /// alone, by their secondaries or their tertiaries.
+    fn compareAlone(_ a: String, _ b: String, _ from: Int, accents: Bool) -> Int {
+        var i = CollationCursor(a, from, common)
+        var j = CollationCursor(b, from, common)
+        while true {
+            var x = 0
+            while x == 0 {
+                let e = i.next(a, common)
+                x = e < 0 ? -1 : accents ? (e >> 10) & 1023 : tertiary(e)
+            }
+            var y = 0
+            while y == 0 {
+                let e = j.next(b, common)
+                y = e < 0 ? -1 : accents ? (e >> 10) & 1023 : tertiary(e)
+            }
+            if x != y {
+                return x < y ? -1 : 1
+            }
+            if x < 0 {
+                return 0
+            }
+        }
     }
 
     /// Whether the first text comes before the second: what `sorted(by:)`
@@ -144,6 +237,7 @@ public struct Collator {
     public fn sortKey(_ text: String) -> SortKey {
         let all = elements(text)
         var bytes: U8[>..] = []
+        bytes.reserveCapacity(4 * all.count + 2)
         for e in all {
             addWeight(e >> 20, into: &bytes)
         }
@@ -213,118 +307,60 @@ public struct Collator {
 
     /// The text's collation elements, in order (UTS #10, S2).
     fn elements(_ text: String) -> Int[>..] {
+        var all: Int[>..] = []
+        all.reserveCapacity(text.utf8Count)
+        // The characters since the last place nothing can join across, and
+        // their entry where there is one and it stands alone.
+        var unit = 0
+        var unitEntry = -1
+        var begins = false
+        var at = 0
+        for c in text {
+            let code = c.codePoint
+            let entry = common.entry(code)
+            if entry >= 0 && !(begins && (entry & collationGoesOn) != 0) {
+                addUnit(text, unit, at, unitEntry, into: &all)
+                unit = at
+                unitEntry = entry
+            } else {
+                unitEntry = -1
+            }
+            begins = entry < 0 || (entry & collationBegins) != 0
+            at += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4
+        }
+        addUnit(text, unit, at, unitEntry, into: &all)
+        return ignorePunctuation ? adjusted(all) : all
+    }
+
+    /// The elements of the text's characters from one offset to another.
+    fn addUnit(_ text: String, _ start: Int, _ end: Int, _ entry: Int, into all: inout Int[>..]) {
+        if start == end {
+            return
+        }
+        if entry >= 0 {
+            common.add(entry, into: &all)
+            return
+        }
+        let first = all.count
         var codes: Int[>..<] = []
-        for c in text.normalized(.NFD) {
+        for c in text[String.Index(utf8Offset: start)..<String.Index(utf8Offset: end)].toString().normalized(.NFD) {
             codes.append(c.codePoint)
         }
-        var all: Int[>..] = []
-        all.reserveCapacity(codes.count)
         var i = 0
         while i < codes.count {
-            let code = codes[i]
-            if numeric && isNumber(code) {
+            if numeric && isNumber(codes[i]) {
                 i = addNumber(codes, i, into: &all)
-            } else if code < 128 && ascii[code] >= 0 {
-                all.append(ascii[code])
-                i += 1
             } else {
-                i = addLongest(&codes, i, into: &all)
+                i = addLongest(&codes, i, tailored, into: &all)
             }
         }
-        if ignorePunctuation || !moves.isEmpty {
-            all = adjusted(all)
-        }
-        return all
-    }
-
-    /// The elements of the longest string from the place on; where the next
-    /// begins. Marks a longer string takes from further on are taken out.
-    fn addLongest(_ codes: inout Int[>..<], _ start: Int, into all: inout Int[>..]) -> Int {
-        let strings = stringsFrom(codes[start])
-        if strings.isEmpty {
-            addRootElements(codes[start], into: &all)
-            return start + 1
-        }
-        // The code points matched so far, and the string they are.
-        var matched: Int[>..] = []
-        var best: CollationString? = none
-        for s in strings {
-            if s.codes.count > matched.count && startsAt(codes, start, s.codes) {
-                matched = s.codes
-                best = s
+        if !ignorePunctuation && !moves.isEmpty {
+            i = first
+            while i < all.count {
+                all[i] = placed(all[i], moves)
+                i += 1
             }
         }
-        if best == none {
-            matched = [codes[start]]
-        }
-        let end = start + matched.count
-        // Marks after it, each not blocked by one of as high a class before
-        // it (S2.1.1 to S2.1.3).
-        var at = end
-        var lastClass = 0
-        while at < codes.count {
-            let mark = Char.fromCodePoint(codes[at])!.canonicalCombiningClass
-            if mark == 0 {
-                break
-            }
-            if lastClass < mark {
-                var longer = matched
-                longer.append(codes[at])
-                if let found = known(longer, strings) {
-                    matched = longer
-                    best = found
-                    codes[at..<at + 1] = []
-                    continue
-                }
-            }
-            lastClass = mark
-            at += 1
-        }
-        if let found = best {
-            for e in found.elements {
-                all.append(e)
-            }
-        } else {
-            addRootElements(codes[start], into: &all)
-        }
-        return end
-    }
-
-    /// The strings that begin with the code point, the collation's own
-    /// before the root's.
-    fn stringsFrom(_ code: Int) -> CollationString[>..] {
-        if code < 128 {
-            return asciiStrings[code]
-        }
-        var strings: CollationString[>..] = tailored[code] ?? []
-        for s in rootContractions(code) {
-            strings.append(s)
-        }
-        return strings
-    }
-
-    /// The string of exactly the code points.
-    fn known(_ codes: Int[>..], _ strings: CollationString[>..]) -> CollationString? {
-        for s in strings {
-            if s.codes == codes {
-                return s
-            }
-        }
-        return none
-    }
-
-    fn startsAt(_ codes: Int[>..<], _ start: Int, _ wanted: Int[>..]) -> Bool {
-        if start + wanted.count > codes.count {
-            return false
-        }
-        var i = 0
-        while i < wanted.count {
-            if codes[start + i] != wanted[i] {
-                return false
-            }
-            i += 1
-        }
-        return true
     }
 
     /// Whether the code point is a decimal digit of any script.
@@ -354,41 +390,122 @@ public struct Collator {
         return i
     }
 
-    /// The elements with punctuation left out, if it is, and the scripts in
-    /// the locale's order.
+    /// The elements with punctuation left out, and the scripts in the
+    /// locale's order.
     fn adjusted(_ elements: Int[>..]) -> Int[>..] {
         var all: Int[>..] = []
         var afterVariable = false
         for e in elements {
             let primary = e >> 20
-            if ignorePunctuation {
-                if primary > 1 && primary <= collationVariableTop && (e >> 10 & 1023) != 0 {
-                    afterVariable = true
-                    continue
-                }
-                if primary == 0 && afterVariable {
-                    continue
-                }
-                afterVariable = false
+            if primary > 1 && primary <= collationVariableTop && (e >> 10 & 1023) != 0 {
+                afterVariable = true
+                continue
             }
-            all.append(elementOf(moved(primary, e), e >> 10 & 1023, e & 1023))
+            if primary == 0 && afterVariable {
+                continue
+            }
+            afterVariable = false
+            all.append(placed(e, moves))
         }
         return all
     }
+}
 
-    /// Where the locale's order of scripts puts the primary.
-    fn moved(_ primary: Int, _ element: Int) -> Int {
-        // A number's own digits have no secondary, and are in no script.
-        if (element >> 10 & 1023) == 0 {
-            return primary
+/// The element where the locale's order of scripts puts it.
+fn placed(_ element: Int, _ moves: CollationMove[>..]) -> Int {
+    // A number's own digits have no secondary, and are in no script.
+    if moves.isEmpty || ((element >> 10) & 1023) == 0 {
+        return element
+    }
+    let primary = element >> 20
+    for run in moves {
+        if primary >= run.start && primary < run.end {
+            return element + ((run.target - run.start) << 20)
         }
-        for run in moves {
-            if primary >= run.start && primary < run.end {
-                return run.target + primary - run.start
+    }
+    return element
+}
+
+/// The elements of the longest string from the place on; where the next
+/// begins. Marks a longer string takes from further on are taken out.
+fn addLongest(_ codes: inout Int[>..<], _ start: Int, _ tailored: [Int: CollationString[>..]], into all: inout Int[>..]) -> Int {
+    // The strings that begin with the code point, the collation's own before
+    // the root's.
+    var strings: CollationString[>..] = tailored[codes[start]] ?? []
+    for s in rootContractions(codes[start]) {
+        strings.append(s)
+    }
+    if strings.isEmpty {
+        addRootElements(codes[start], into: &all)
+        return start + 1
+    }
+    // The code points matched so far, and the string they are.
+    var matched: Int[>..] = []
+    var best: CollationString? = none
+    for s in strings {
+        if s.codes.count > matched.count && startsAt(codes, start, s.codes) {
+            matched = s.codes
+            best = s
+        }
+    }
+    if best == none {
+        matched = [codes[start]]
+    }
+    let end = start + matched.count
+    // Marks after it, each not blocked by one of as high a class before
+    // it (S2.1.1 to S2.1.3).
+    var at = end
+    var lastClass = 0
+    while at < codes.count {
+        let mark = Char.fromCodePoint(codes[at])!.canonicalCombiningClass
+        if mark == 0 {
+            break
+        }
+        if lastClass < mark {
+            var longer = matched
+            longer.append(codes[at])
+            if let found = known(longer, strings) {
+                matched = longer
+                best = found
+                codes[at..<at + 1] = []
+                continue
             }
         }
-        return primary
+        lastClass = mark
+        at += 1
     }
+    if let found = best {
+        for e in found.elements {
+            all.append(e)
+        }
+    } else {
+        addRootElements(codes[start], into: &all)
+    }
+    return end
+}
+
+/// The string of exactly the code points.
+fn known(_ codes: Int[>..], _ strings: CollationString[>..]) -> CollationString? {
+    for s in strings {
+        if s.codes == codes {
+            return s
+        }
+    }
+    return none
+}
+
+fn startsAt(_ codes: Int[>..<], _ start: Int, _ wanted: Int[>..]) -> Bool {
+    if start + wanted.count > codes.count {
+        return false
+    }
+    var i = 0
+    while i < wanted.count {
+        if codes[start + i] != wanted[i] {
+            return false
+        }
+        i += 1
+    }
+    return true
 }
 
 /// The collation whose tables the locale's order is in.

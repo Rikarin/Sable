@@ -47,6 +47,12 @@ sort as unassigned.
   after that block (3).
 - collationContractions: up to three code points (4 each), the first element
   in the pool (4) and how many (2); sorted.
+- collationCommon: for each code point below COMMON, in order, its first
+  element (8), how many more it has (1, or 'O' where it is not to be taken
+  alone: a mark, or one the tables do not have), where they are in the pool
+  (4), and 1 if a contraction may begin in it and go on past it, plus 2 if
+  one may go on into it (1). collationCommonDecomposed has the same code
+  points' canonical decompositions, three code points (4 each) or zeros.
 - collationTailoring: for a collation, a line per string: the string's
   length (1), its code points (4 each), its elements (8 each). Then
   collationReorder: the runs of primaries (first, after the last, 4 each) in
@@ -64,11 +70,13 @@ import glob
 import os
 import re
 import sys
+import unicodedata
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 RECORDS_PER_LINE = 48
 UNICODE_AGE = 16
 MAX_TAILORING = 2000
+COMMON = 0x530
 
 LOCALES = """
     en en-001 en-AU en-CA en-GB en-IE en-IN en-NZ en-ZA
@@ -771,6 +779,20 @@ def write_collation():
         codes = [ord(c) for c in s] + [0] * (3 - len(s))
         pairs.append("".join(base32(c, 4) for c in codes) + pooled(contracted[s]))
 
+    begins = {c for s in contracted for c in s[:-1]}
+    goes_on = {c for s in contracted for c in s[1:]}
+    common, decomposed = [], []
+    for cp in range(COMMON):
+        d = nfd(chr(cp))
+        es = elements(root, chr(cp))
+        alone = all(c in plain for c in map(ord, d)) and unicodedata.combining(d[0]) == 0 and len(es) <= 4
+        assert len(d) <= 3 and d[0] != "\0" or cp == 0
+        flags = any(c in begins for c in d) + 2 * (d[0] in goes_on)
+        rest = pooled(es[1:]) if alone and len(es) > 1 else base32(0, 6)
+        first = packed(es[0]) if alone and es else base32(0, 8)
+        common.append(first + (rest[5] if alone else "O") + rest[:4] + base32(flags, 1))
+        decomposed.append("".join(base32(ord(c), 4) for c in d) + base32(0, 4 * (3 - len(d))))
+
     def lines(records):
         return ["".join(records[i:i + RECORDS_PER_LINE]) for i in range(0, len(records), RECORDS_PER_LINE)]
 
@@ -786,8 +808,9 @@ def write_collation():
     out.append(f"const collationNine = {nine}\n")
     out.append("// The secondary and the tertiary most elements have.\n")
     out.append(f"const collationCommonSecondary = {secondary[0x500]}\nconst collationCommonTertiary = {tertiary[0x500]}\n")
-    out.append(f"const collationRunCount = {len(table)}\nconst collationContractionCount = {len(pairs)}\n\n")
-    for name, records in (("collationIndex", index), ("collationRuns", table), ("collationPool", pool), ("collationContractions", pairs)):
+    out.append(f"const collationRunCount = {len(table)}\nconst collationContractionCount = {len(pairs)}\n")
+    out.append(f"const collationCommonLimit = {COMMON}\n\n")
+    for name, records in (("collationCommon", common), ("collationCommonDecomposed", decomposed), ("collationIndex", index), ("collationRuns", table), ("collationPool", pool), ("collationContractions", pairs)):
         out.append(block(name, lines(records)) + "\n")
     tag_names = list(tailored)
     var = lambda prefix, tag: prefix + "".join(p.capitalize() for p in tag.split("-"))

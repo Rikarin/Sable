@@ -287,3 +287,24 @@ fn randomArraysAreSearchedAsTheLoopsDo() {
         assertEqual(slice.count(of: value), scalarCount(slice, value))
     }
 }
+
+@test
+fn aBytesCountIsTheSameAtEveryLength() {
+    var bytes: U8[>..] = []
+    var fives = 0
+    for i in 0..<700 {
+        assertEqual(bytes.count(of: 5), fives)
+        if i > 3 {
+            assertEqual(bytes[3..<i].count(of: 5), fives - (i > 2 ? 1 : 0))
+        }
+        // 5 at the third place, and then at every seventh.
+        let next: U8 = i == 2 || i % 7 == 4 ? 5 : 250
+        fives += next == 5 ? 1 : 0
+        bytes.append(next)
+    }
+    // Past what a lane of a byte counts up to.
+    let same = U8[>..](repeating: 255, count: 40000)
+    assertEqual(same.count(of: 255), 40000)
+    assertEqual(same[1..<39998].count(of: 255), 39997)
+    assertEqual(same.count(of: 0), 0)
+}

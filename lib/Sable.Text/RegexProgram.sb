@@ -267,6 +267,19 @@ final class RegexProgram {
         }
     }
 
+    /// Whether the instruction may take a character past ASCII.
+    fn mayTakeWide(_ pc: Int) -> Bool {
+        let op = ops[pc]
+        if op == opChar {
+            return xs[pc] >= 128
+        }
+        if op == opClass {
+            let chars = classes[xs[pc]]
+            return !chars.isPlainRanges || chars.ignoreCase || chars.ranges.count > 0 && chars.ranges[chars.ranges.count - 1] >= 128
+        }
+        return true
+    }
+
     /// Whether the instruction takes a character, and that one.
     fn takes(_ pc: Int, _ code: Int) -> Bool {
         let op = ops[pc]

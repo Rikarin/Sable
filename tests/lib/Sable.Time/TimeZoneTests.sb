@@ -310,3 +310,44 @@ fn tzdirIsWhereTheDatabaseIs() {
         let _ = Runtime.removeEnvironment("TZDIR")
     }
 }
+
+@test
+fn aZoneKeepsToItsRuleAfterItsLastChange() {
+    if !hasDatabase() {
+        return
+    }
+    // The database's zone writes its rule out for some decades; a zone of the
+    // rule alone does not.
+    for (id, rule) in [
+        ("America/New_York", "EST5EDT,M3.2.0,M11.1.0"),
+        ("Europe/Prague", "CET-1CEST,M3.5.0,M10.5.0/3"),
+        ("Australia/Sydney", "AEST-10AEDT,M10.1.0,M4.1.0/3"),
+    ] {
+        let zone = try! TimeZone.find(id)
+        let byRule = try! TimeZone.posix(rule)
+        var at = moment(2010, 1, 1, 0)
+        while at < moment(2060, 1, 1, 0) {
+            assertEqual(zone.offset(at: at), byRule.offset(at: at))
+            assertEqual(zone.isDaylightSaving(at: at), byRule.isDaylightSaving(at: at))
+            assertEqual(zone.abbreviation(at: at), byRule.abbreviation(at: at))
+            at = at.adding(Duration.hours(261))
+        }
+        var transition = byRule.nextTransition(after: moment(2030, 1, 1, 0))
+        while let next = transition {
+            if next.instant > moment(2045, 1, 1, 0) {
+                break
+            }
+            let before = next.instant.adding(Duration.seconds(-1))
+            assertEqual(zone.nextTransition(after: before)!.instant, next.instant)
+            assertEqual(zone.previousTransition(before: next.instant.adding(Duration.seconds(1)))!.instant, next.instant)
+            assertEqual(zone.offset(at: next.instant), next.offset)
+            assertEqual(zone.offset(at: before), byRule.offset(at: before))
+            let there = next.instant.zoned(in: zone)
+            assertEqual(there.isDaylightSaving, next.isDaylightSaving)
+            assertEqual(there.abbreviation, next.abbreviation)
+            assertEqual(there.hour, there.local.hour)
+            assertEqual(there.minute, there.local.minute)
+            transition = byRule.nextTransition(after: next.instant)
+        }
+    }
+}

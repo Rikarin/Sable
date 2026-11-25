@@ -22,11 +22,22 @@ public struct ZonedDateTime: Comparable, Hashable {
     public let zone: TimeZone
     /// The zone's offset at the moment.
     public let offset: UtcOffset
+    /// Where among the zone's local time types the one at the moment is.
+    let type: Int
 
     init(instant: UtcDateTime, zone: TimeZone, offset: UtcOffset) {
         self.instant = instant
         self.zone = zone
         self.offset = offset
+        self.type = zone.data.typeIndex(at: instant.secondsSinceEpoch)
+    }
+
+    /// The same with the type found already.
+    init(instant: UtcDateTime, zone: TimeZone, offset: UtcOffset, type: Int) {
+        self.instant = instant
+        self.zone = zone
+        self.offset = offset
+        self.type = type
     }
 
     /// Now, in the zone.
@@ -55,6 +66,8 @@ public struct ZonedDateTime: Comparable, Hashable {
         }
     }
 
+    var secondOfDay: Int => floorModulo(instant.secondsSinceEpoch + offset.totalSeconds, 86400)
+
     /// The moment at the offset, the zone forgotten.
     public var offsetDateTime: OffsetDateTime => OffsetDateTime(local: local, offset: offset)
 
@@ -63,17 +76,17 @@ public struct ZonedDateTime: Comparable, Hashable {
     public var year: Int => local.year
     public var month: Int => local.month
     public var day: Int => local.day
-    public var hour: Int => local.hour
-    public var minute: Int => local.minute
-    public var second: Int => local.second
-    public var nanosecond: Int => local.nanosecond
+    public var hour: Int => secondOfDay / 3600
+    public var minute: Int => secondOfDay / 60 % 60
+    public var second: Int => secondOfDay % 60
+    public var nanosecond: Int => instant.nanosecond
     public var weekday: Weekday => local.weekday
 
     /// The zone's abbreviation then: "CET", "EDT".
-    public var abbreviation: String => zone.abbreviation(at: instant)
+    public var abbreviation: String => zone.data.types[type].abbreviation
 
     /// Whether the zone kept daylight saving time then.
-    public var isDaylightSaving: Bool => zone.isDaylightSaving(at: instant)
+    public var isDaylightSaving: Bool => zone.data.types[type].isDaylightSaving
 
     /// The same moment in another zone.
     public fn withZone(_ other: TimeZone) -> ZonedDateTime {
@@ -195,26 +208,21 @@ extension ZonedDateTime: Parsable {
         let text = source.toString()
         var scanner = IsoScanner(text)
         let parsed = try scanner.dateTime()
-        if scanner.current != '[' {
-            throw .Invalid(at: scanner.at)
+        if !scanner.isAt('[') {
+            throw .Invalid(at: scanner.position(scanner.at))
         }
         let idAt = scanner.at + 1
         var close = idAt
-        while close < scanner.chars.count && scanner.chars[close] != ']' {
+        while close < scanner.count && scanner.bytes[close] != 93 {
             close += 1
         }
-        if close >= scanner.chars.count {
-            throw .Invalid(at: close)
+        if close >= scanner.count {
+            throw .Invalid(at: scanner.position(close))
         }
-        if close + 1 != scanner.chars.count {
-            throw .Invalid(at: close + 1)
+        if close + 1 != scanner.count {
+            throw .Invalid(at: scanner.position(close + 1))
         }
-        var id = ""
-        var i = idAt
-        while i < close {
-            id += String.fromChar(scanner.chars[i])
-            i += 1
-        }
+        let id = text[String.Index(utf8Offset: idAt)..<String.Index(utf8Offset: close)].toString()
         if let zone = try? TimeZone.find(id) {
             if let offset = parsed.offset {
                 let found = match zone.offsets(for: parsed.local) {
@@ -229,7 +237,7 @@ extension ZonedDateTime: Parsable {
             }
             return parsed.local.zoned(in: zone)
         }
-        throw .Invalid(at: idAt)
+        throw .Invalid(at: scanner.position(idAt))
     }
 }
 

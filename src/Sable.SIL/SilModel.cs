@@ -1313,6 +1313,7 @@ public static class SharedStorage {
             // An array changed where it is: its count, its buffer, an element.
             BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve" or "array_rotate" or "array_store_slice" or "array_append_utf8" or "array_append_repeating" or "array_append_all" or "array_element_addr" } array
                 => (array.Operands[0], true),
+            BuiltinInst { Name: var name } stored when name.StartsWith("bytes_store_array_", StringComparison.Ordinal) => (stored.Operands[0], true),
             _ => null,
         };
 
@@ -2673,6 +2674,7 @@ public static class SilBuiltins {
         // inside it, counted, compared, searched and hashed where they lie.
         Add("string_count_range", SilType.Int, SilType.String, SilType.Int, SilType.Int);
         Add("string_compare_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("string_utf8_find_any", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.String);
         Add("string_utf8_find_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.String, SilType.Int, SilType.Int);
         Add("string_utf8_find_last_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.String, SilType.Int, SilType.Int);
         Add("string_hash_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.Int);
@@ -2704,6 +2706,17 @@ public static class SilBuiltins {
         Add("raw_secure_zero", SilType.Unit, SilType.Int, SilType.Int);
         Add("crypto_blocks", SilType.Bool, SilType.Int, SilType.Int, new SliceType(SilType.U8));
         Add("crypto_blocks_raw", SilType.Bool, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        // Sable.Math's kernels over arrays of floats, where the processor has
+        // more than the target's baseline: whether it has, a reduction of one
+        // slice or two by its number (the sum, dot product or cosine), and an
+        // elementwise operation on two to the first elements of a third.
+        Add("vector_available", SilType.Bool);
+        foreach (var real in new[] { SilType.F32, SilType.F64 }) {
+            var reals = new SliceType(real);
+            Add($"vector_reduce_{real}", real, SilType.Int, reals, reals);
+            Add($"vector_map_{real}", SilType.Unit, SilType.Address(reals), SilType.Int, reals, reals);
+        }
+
         Add("string_join", SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("string_compare", SilType.Int, SilType.String, SilType.String);
         // Where a part next occurs in a text, at or after a scalar position: a scalar index, or -1.
@@ -2997,8 +3010,12 @@ public static class SilBuiltins {
         // reference to its run first.
         foreach (var unsigned in new[] { SilType.U16, SilType.U32, SilType.U64 }) {
             Add($"bytes_load_{unsigned}", unsigned, new SliceType(SilType.U8), SilType.Int);
+            Add($"bytes_load_array_{unsigned}", unsigned, new ArrayType(SilType.U8), SilType.Int);
             Add($"bytes_store_{unsigned}", SilType.Unit, SilType.Address(new SliceType(SilType.U8)), SilType.Int, unsigned);
             Add($"bytes_store_unique_{unsigned}", SilType.Unit, SilType.Address(new SliceType(SilType.U8)), SilType.Int, unsigned);
+            // The same, of an array of bytes in its place (HoistUniqueness).
+            Add($"bytes_store_array_{unsigned}", SilType.Unit, SilType.Address(new ArrayType(SilType.U8)), SilType.Int, unsigned);
+            Add($"bytes_store_array_unique_{unsigned}", SilType.Unit, SilType.Address(new ArrayType(SilType.U8)), SilType.Int, unsigned);
         }
 
         // A float's bits as the unsigned integer of its width, and back: the

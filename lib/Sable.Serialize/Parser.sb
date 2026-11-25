@@ -2,148 +2,137 @@ module Sable.Serialize
 
 // The parser is an object: one cursor, shared by every method it calls.
 // It reads UTF-8 bytes, well-formed — a String's, or bytes checked first —
-// decoding a scalar where it looks at one, and taking a string's run of
-// plain bytes whole. Positions count scalars, as a String's indices do.
+// and nothing but a string may hold one that is not ASCII, so it looks at
+// bytes alone, taking a string's run of plain ones whole. Positions count
+// scalars, as a String's indices do, and lines; they are counted only where
+// an error says one.
 public class Parser {
     let bytes: U8[>..]
-    // The byte the cursor is at, and how many scalars come before it.
+    let count: Int
+    // The byte the cursor is at.
     var at: Int
-    var offset: Int
-    var line: Int
-    var column: Int
     var options: ParseOptions
 
     init(_ text: String, _ options: ParseOptions) {
         var bytes: U8[>..] = []
-        bytes.reserveCapacity(text.utf8Count)
-        for byte in text.utf8 {
-            bytes.append(byte)
-        }
-        self.bytes = bytes
-        self.at = 0
-        self.offset = 0
-        self.line = 1
-        self.column = 1
-        self.options = options
+        bytes.append(utf8: text)
+        self.init(bytes: bytes, options)
     }
 
     // The bytes, which must be well-formed UTF-8, taken as they are: an
     // array is shared, not copied, so a mapped file is parsed where it lies.
     init(bytes: U8[>..], _ options: ParseOptions) {
         self.bytes = bytes
+        self.count = bytes.count
         self.at = 0
-        self.offset = 0
-        self.line = 1
-        self.column = 1
         self.options = options
     }
 
-    fn position() -> Position {
+    // Where a byte is, as an error says it.
+    fn position(_ end: Int) -> Position {
+        var offset = 0
+        var line = 1
+        var column = 1
+        for i in 0..<end {
+            let byte = bytes[i]
+            if (byte & 0xC0) == 0x80 {
+                continue
+            }
+            offset += 1
+            column += 1
+            if byte == 0x0A {
+                line += 1
+                column = 1
+            }
+        }
         return Position { offset: offset, line: line, column: column }
     }
 
-    fn atEnd() -> Bool {
-        return at >= bytes.count
+    // The byte at the cursor, or NUL at the end.
+    fn peek() -> U8 {
+        return at < count ? bytes[at] : 0
     }
 
-    fn peek() -> Char? {
-        if atEnd() {
-            return none
-        }
-        return scalar()
-    }
-
-    // The scalar at the cursor, which is not at the end.
-    fn scalar() -> Char {
+    // The scalar that starts at a byte.
+    fn scalar(_ at: Int) -> Char {
         let lead = Int(bytes[at])
         if lead < 0x80 {
             return Char.fromCodePoint(lead)!
         }
-        let count = width(lead)
+        let width = lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4
         var code = lead & (lead < 0xE0 ? 0x1F : lead < 0xF0 ? 0x0F : 0x07)
         var i = 1
-        while i < count {
+        while i < width {
             code = (code << 6) | (Int(bytes[at + i]) & 0x3F)
             i += 1
         }
         return Char.fromCodePoint(code)!
     }
 
-    fn width(_ lead: Int) -> Int {
-        return lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4
+    // What is at a byte is not what was expected there.
+    fn unexpected(_ at: Int, _ expected: String) -> ParseError {
+        if at >= count {
+            return ParseError.UnexpectedEnd(at: position(at), expected: expected)
+        }
+        return ParseError.UnexpectedCharacter(at: position(at), found: scalar(at), expected: expected)
     }
 
     // Whether the byte at the cursor is an ASCII digit.
     fn atDigit() -> Bool {
-        return !atEnd() && bytes[at] >= 0x30 && bytes[at] <= 0x39
+        return at < count && bytes[at] >= 0x30 && bytes[at] <= 0x39
     }
 
-    fn peekIs(_ c: Char) -> Bool {
-        return peek() == c
-    }
-
-    fn advance() -> Char {
-        let c = scalar()
-        at = at + width(Int(bytes[at]))
-        offset = offset + 1
-        if c == '\n' {
-            line = line + 1
-            column = 1
-        } else {
-            column = column + 1
+    fn expect(_ wanted: U8, _ expected: String) throws(ParseError) {
+        if at >= count || bytes[at] != wanted {
+            throw unexpected(at, expected)
         }
-        return c
-    }
-
-    fn next(_ expected: String) throws(ParseError) -> Char {
-        if atEnd() {
-            throw ParseError.UnexpectedEnd(at: position(), expected: expected)
-        }
-        return advance()
-    }
-
-    fn expect(_ wanted: Char, _ expected: String) throws(ParseError) {
-        let at = position()
-        let c = try next(expected)
-        if c != wanted {
-            throw ParseError.UnexpectedCharacter(at: at, found: c, expected: expected)
-        }
+        at += 1
     }
 
     // Whitespace, and comments when they are allowed: '// ...' to the end
     // of the line, and '/* ... */'.
     fn skipSpace() throws(ParseError) {
-        while !atEnd() {
-            let c = scalar()
-            if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
-                advance()
+        var i = at
+        while i < count {
+            let byte = bytes[i]
+            if byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D {
+                i += 1
                 continue
             }
-            if c == '/' && options.allowComments {
+            if byte == 0x2F && options.allowComments {
+                at = i
                 try skipComment()
+                i = at
                 continue
             }
-            return
+            break
         }
+        at = i
     }
 
     fn skipComment() throws(ParseError) {
-        let at = position()
-        advance()
-        let kind = try next("'/' or '*' after '/'")
-        if kind == '/' {
-            while !atEnd() && !peekIs('\n') {
-                advance()
+        let start = at
+        at += 1
+        if at >= count {
+            throw unexpected(at, "'/' or '*' after '/'")
+        }
+        if bytes[at] == 0x2F {
+            while at < count && bytes[at] != 0x0A {
+                at += 1
             }
             return
         }
-        if kind != '*' {
-            throw ParseError.UnexpectedCharacter(at: at, found: kind, expected: "a comment")
+        if bytes[at] != 0x2A {
+            throw ParseError.UnexpectedCharacter(at: position(start), found: scalar(at), expected: "a comment")
         }
+        at += 1
         while true {
-            let c = try next("the end of the comment")
-            if c == '*' && peekIs('/') {
-                advance()
+            if at >= count {
+                throw unexpected(at, "the end of the comment")
+            }
+            at += 1
+            if bytes[at - 1] == 0x2A && peek() == 0x2F {
+                at += 1
                 return
             }
         }
@@ -153,87 +142,84 @@ public class Parser {
         try skipSpace()
         let value = try parseValue(0)
         try skipSpace()
-        if !atEnd() {
-            throw ParseError.TrailingText(at: position())
+        if at < count {
+            throw ParseError.TrailingText(at: position(at))
         }
         return value
     }
 
     fn parseValue(_ depth: Int) throws(ParseError) -> JsonValue {
-        let at = position()
-        guard let c = peek() else {
-            throw ParseError.UnexpectedEnd(at: at, expected: "a value")
-        }
-
-        if c == '{' {
-            return try parseObject(depth + 1)
-        }
-        if c == '[' {
-            return try parseArray(depth + 1)
-        }
-        if c == '"' {
+        let byte = peek()
+        if byte == 0x22 {
             return JsonValue.Text(value: try parseString())
         }
-        if c == 't' {
+        if byte == 0x2D || byte >= 0x30 && byte <= 0x39 {
+            return JsonValue.Number(value: try parseNumber())
+        }
+        if byte == 0x7B {
+            return try parseObject(depth + 1)
+        }
+        if byte == 0x5B {
+            return try parseArray(depth + 1)
+        }
+        if byte == 0x74 {
             try parseWord("true")
             return JsonValue.Bool(value: true)
         }
-        if c == 'f' {
+        if byte == 0x66 {
             try parseWord("false")
             return JsonValue.Bool(value: false)
         }
-        if c == 'n' {
+        if byte == 0x6E {
             try parseWord("null")
             return JsonValue.Null
         }
-        if c == '-' || c.isDigit {
-            return JsonValue.Number(value: try parseNumber())
-        }
-        throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "a value")
+        throw unexpected(at, "a value")
     }
 
     fn parseWord(_ word: String) throws(ParseError) {
-        var i = 0
-        while i < word.count {
-            try expect(word.at(i), "'\(word)'")
-            i = i + 1
+        for byte in word.utf8 {
+            if at >= count || bytes[at] != byte {
+                throw unexpected(at, "'\(word)'")
+            }
+            at += 1
         }
     }
 
     fn checkDepth(_ depth: Int) throws(ParseError) {
         if depth > options.maxDepth {
-            throw ParseError.TooDeep(at: position(), limit: options.maxDepth)
+            throw ParseError.TooDeep(at: position(at), limit: options.maxDepth)
         }
     }
 
     fn parseArray(_ depth: Int) throws(ParseError) -> JsonValue {
         try checkDepth(depth)
-        try expect('[', "'['")
+        at += 1
         try skipSpace()
 
         var items: JsonValue[>..] = []
-        if peekIs(']') {
-            advance()
+        if peek() == 0x5D {
+            at += 1
             return JsonValue.Array(items: items)
         }
 
         while true {
-            try skipSpace()
             items.append(try parseValue(depth))
             try skipSpace()
 
-            let at = position()
-            let c = try next("',' or ']'")
-            if c == ']' {
+            let byte = peek()
+            if byte == 0x5D {
+                at += 1
                 return JsonValue.Array(items: items)
             }
-            if c != ',' {
-                throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "',' or ']'")
+            if byte != 0x2C {
+                throw unexpected(at, "',' or ']'")
             }
 
+            at += 1
             try skipSpace()
-            if options.allowTrailingCommas && peekIs(']') {
-                advance()
+            if peek() == 0x5D && options.allowTrailingCommas {
+                at += 1
                 return JsonValue.Array(items: items)
             }
         }
@@ -241,103 +227,121 @@ public class Parser {
 
     fn parseObject(_ depth: Int) throws(ParseError) -> JsonValue {
         try checkDepth(depth)
-        try expect('{', "'{'")
+        at += 1
         try skipSpace()
 
         var members: Member[>..] = []
-        if peekIs('}') {
-            advance()
+        if peek() == 0x7D {
+            at += 1
             return JsonValue.Object(members: members)
         }
 
         while true {
-            try skipSpace()
-            let keyAt = position()
-            guard let first = peek() else {
-                throw ParseError.UnexpectedEnd(at: keyAt, expected: "a key")
-            }
-            if first != '"' {
-                throw ParseError.UnexpectedCharacter(at: keyAt, found: first, expected: "a key")
+            let keyAt = at
+            if peek() != 0x22 {
+                throw unexpected(at, "a key")
             }
 
             let key = try parseString()
             if options.rejectDuplicateKeys {
                 for existing in members {
                     if existing.key == key {
-                        throw ParseError.DuplicateKey(at: keyAt, key: key)
+                        throw ParseError.DuplicateKey(at: position(keyAt), key: key)
                     }
                 }
             }
 
             try skipSpace()
-            try expect(':', "':'")
+            try expect(0x3A, "':'")
             try skipSpace()
             let value = try parseValue(depth)
             members.append(Member { key: key, value: value })
             try skipSpace()
 
-            let at = position()
-            let c = try next("',' or '}'")
-            if c == '}' {
+            let byte = peek()
+            if byte == 0x7D {
+                at += 1
                 return JsonValue.Object(members: members)
             }
-            if c != ',' {
-                throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "',' or '}'")
+            if byte != 0x2C {
+                throw unexpected(at, "',' or '}'")
             }
 
+            at += 1
             try skipSpace()
-            if options.allowTrailingCommas && peekIs('}') {
-                advance()
+            if peek() == 0x7D && options.allowTrailingCommas {
+                at += 1
                 return JsonValue.Object(members: members)
             }
         }
     }
 
+    // Where the run of bytes that are neither quote, backslash nor control
+    // ends: well-formed UTF-8, as all the bytes are.
+    fn runEnd(_ start: Int) -> Int {
+        var i = start
+        while i < count {
+            let byte = bytes[i]
+            if byte == 0x22 || byte == 0x5C || byte < 0x20 {
+                break
+            }
+            i += 1
+        }
+        return i
+    }
+
+    // From the quote the cursor is at.
     fn parseString() throws(ParseError) -> String {
-        try expect('"', "'\"'")
-        var builder = newBuilder()
+        let start = at + 1
+        let end = runEnd(start)
+        at = end
+        if peek() == 0x22 {
+            at = end + 1
+            unsafe {
+                return Runtime.stringFromValidUtf8(bytes[start..<end])
+            }
+        }
+        return try parsePieces(start)
+    }
 
+    // The rest of a string whose first run, from 'start', the cursor is at
+    // the end of.
+    fn parsePieces(_ start: Int) throws(ParseError) -> String {
+        var text: U8[>..] = []
+        text.append(contentsOf: bytes[start..<at])
         while true {
-            // A run of bytes that are neither quote, backslash nor control,
-            // taken whole: well-formed, as all the bytes are.
-            let run = self.at
-            while self.at < bytes.count {
-                let byte = bytes[self.at]
-                if byte == 0x22 || byte == 0x5C || byte < 0x20 {
-                    break
-                }
-                if (byte & 0xC0) != 0x80 {
-                    offset = offset + 1
-                    column = column + 1
-                }
-                self.at = self.at + 1
+            if at >= count {
+                throw unexpected(at, "the end of the string")
             }
-            if self.at > run {
+            let byte = bytes[at]
+            if byte == 0x22 {
+                at += 1
                 unsafe {
-                    builder.add(Runtime.stringFromValidUtf8(bytes[run..<self.at]))
+                    return Runtime.stringFromValidUtf8(text)
                 }
             }
-
-            let at = position()
-            let c = try next("the end of the string")
-            if c == '"' {
-                return builder.build()
+            if byte != 0x5C {
+                throw ParseError.ControlCharacter(at: position(at), code: Int(byte))
             }
-            if c == '\\' {
-                builder.addChar(try parseEscape(at))
-                continue
-            }
-            if c.codePoint < 32 {
-                throw ParseError.ControlCharacter(at: at, code: c.codePoint)
-            }
-            builder.addChar(c)
+            at += 1
+            try parseEscape(at - 1).encodeUtf8(into: &text)
+            let run = at
+            at = runEnd(run)
+            text.append(contentsOf: bytes[run..<at])
         }
     }
 
-    // 'at' is where the backslash is: what an error points to.
-    fn parseEscape(_ at: Position) throws(ParseError) -> Char {
-        let c = try next("an escape")
-        return match c {
+    // 'start' is where the backslash is: what an error points to.
+    fn parseEscape(_ start: Int) throws(ParseError) -> Char {
+        if at >= count {
+            throw unexpected(at, "an escape")
+        }
+        let c = scalar(at)
+        if c == 'u' {
+            at += 1
+            return try parseUnicode(start)
+        }
+        let escaped = match c {
             case '"'  => '"'
             case '\\' => '\\'
             case '/'  => '/'
@@ -346,22 +350,25 @@ public class Parser {
             case 'n'  => '\n'
             case 'r'  => '\r'
             case 't'  => '\t'
-            case 'u'  => try parseUnicode(at)
             default => {
-                throw ParseError.InvalidEscape(at: at, found: c)
+                throw ParseError.InvalidEscape(at: position(start), found: c)
             }
         }
+        at += 1
+        return escaped
     }
 
     fn parseHex4() throws(ParseError) -> Int {
         var value = 0
         var i = 0
         while i < 4 {
-            let at = position()
-            let c = try next("a hex digit")
-            guard let digit = hexValue(c) else {
-                throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "a hex digit")
+            if at >= count {
+                throw unexpected(at, "a hex digit")
             }
+            guard let digit = hexValue(scalar(at)) else {
+                throw unexpected(at, "a hex digit")
+            }
+            at += 1
             value = value * 16 + digit
             i = i + 1
         }
@@ -369,23 +376,23 @@ public class Parser {
     }
 
     // '\uXXXX', and the pair of them a scalar above U+FFFF takes.
-    fn parseUnicode(_ at: Position) throws(ParseError) -> Char {
+    fn parseUnicode(_ start: Int) throws(ParseError) -> Char {
         let high = try parseHex4()
         if high >= 0xDC00 && high <= 0xDFFF {
-            throw ParseError.InvalidUnicode(at: at, reason: "a low surrogate with no high one before it")
+            throw ParseError.InvalidUnicode(at: position(start), reason: "a low surrogate with no high one before it")
         }
         if high < 0xD800 || high > 0xDBFF {
             return Char.fromCodePoint(high)!
         }
 
-        if !peekIs('\\') {
-            throw ParseError.InvalidUnicode(at: at, reason: "a high surrogate with no low one after it")
+        if peek() != 0x5C {
+            throw ParseError.InvalidUnicode(at: position(start), reason: "a high surrogate with no low one after it")
         }
-        advance()
-        try expect('u', "'u' of a low surrogate")
+        at += 1
+        try expect(0x75, "'u' of a low surrogate")
         let low = try parseHex4()
         if low < 0xDC00 || low > 0xDFFF {
-            throw ParseError.InvalidUnicode(at: at, reason: "a high surrogate followed by something else")
+            throw ParseError.InvalidUnicode(at: position(start), reason: "a high surrogate followed by something else")
         }
         return Char.fromCodePoint(0x10000 + (high - 0xD800) * 1024 + (low - 0xDC00))!
     }
@@ -393,66 +400,74 @@ public class Parser {
     // RFC 8259's grammar, exactly: '-'? ('0' | [1-9][0-9]*) ('.' [0-9]+)?
     // ([eE] [+-]? [0-9]+)?
     fn parseNumber() throws(ParseError) -> F64 {
-        let at = position()
-        var builder = newBuilder()
-
-        if peekIs('-') {
-            builder.addChar(advance())
+        let start = at
+        let negative = bytes[at] == 0x2D
+        if negative {
+            at += 1
         }
 
-        guard let first = peek() else {
-            throw ParseError.InvalidNumber(at: at, reason: "no digits")
+        let digits = at
+        // Of the digits so far, for as long as they are few.
+        var value = 0
+        while atDigit() {
+            value = at - digits < 16 ? value * 10 + Int(bytes[at]) - 48 : value
+            at += 1
         }
-        if !first.isDigit {
-            throw ParseError.InvalidNumber(at: at, reason: "no digits")
+        if at == digits {
+            throw ParseError.InvalidNumber(at: position(start), reason: "no digits")
+        }
+        if bytes[digits] == 0x30 && at > digits + 1 {
+            throw ParseError.InvalidNumber(at: position(start), reason: "a leading zero")
         }
 
-        if first == '0' {
-            builder.addChar(advance())
-            if let after = peek() {
-                if after.isDigit {
-                    throw ParseError.InvalidNumber(at: at, reason: "a leading zero")
-                }
-            }
-        } else {
+        var written = at - digits
+        var places = 0
+        if peek() == 0x2E {
+            at += 1
+            let fraction = at
             while atDigit() {
-                builder.addChar(advance())
+                value = written + at - fraction < 16 ? value * 10 + Int(bytes[at]) - 48 : value
+                at += 1
+            }
+            places = at - fraction
+            written += places
+            if places == 0 {
+                throw ParseError.InvalidNumber(at: position(start), reason: "no digits after the point")
             }
         }
 
-        if peekIs('.') {
-            builder.addChar(advance())
-            var fraction = 0
+        var exact = written < 16
+        if peek() == 0x65 || peek() == 0x45 {
+            exact = false
+            at += 1
+            if peek() == 0x2B || peek() == 0x2D {
+                at += 1
+            }
+            let exponent = at
             while atDigit() {
-                builder.addChar(advance())
-                fraction = fraction + 1
+                at += 1
             }
-            if fraction == 0 {
-                throw ParseError.InvalidNumber(at: at, reason: "no digits after the point")
-            }
-        }
-
-        if peekIs('e') || peekIs('E') {
-            builder.addChar(advance())
-            if peekIs('+') || peekIs('-') {
-                builder.addChar(advance())
-            }
-            var exponent = 0
-            while atDigit() {
-                builder.addChar(advance())
-                exponent = exponent + 1
-            }
-            if exponent == 0 {
-                throw ParseError.InvalidNumber(at: at, reason: "no digits in the exponent")
+            if at == exponent {
+                throw ParseError.InvalidNumber(at: position(start), reason: "no digits in the exponent")
             }
         }
 
-        guard let value = builder.build().toF64() else {
-            throw ParseError.InvalidNumber(at: at, reason: "out of range")
+        // Fifteen digits or fewer are an F64, as the power of ten the places
+        // are is, and dividing one by the other rounds once.
+        if exact {
+            let magnitude = F64(value) / powersOfTen[places]
+            return negative ? -magnitude : magnitude
         }
-        return value
+        unsafe {
+            guard let parsed = Runtime.stringFromValidUtf8(bytes[start..<at]).toF64() else {
+                throw ParseError.InvalidNumber(at: position(start), reason: "out of range")
+            }
+            return parsed
+        }
     }
 }
+
+const powersOfTen: F64[16] = [1.0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15]
 
 /// The JSON the bytes hold, UTF-8, read where they are: an array is shared
 /// with the parser, not copied — a mapped file's bytes are parsed in place.
@@ -471,12 +486,8 @@ public fn parse(bytes: U8[>..]) throws(ParseError) -> JsonValue {
 public fn parseWith(bytes: U8[>..], _ options: ParseOptions) throws(ParseError) -> JsonValue {
     let bad = Runtime.validateUtf8(bytes: bytes)
     if bad >= 0 {
-        // Where it is, by scalars: the well-formed bytes before it.
-        let before = Parser(bytes: bytes, options)
-        while before.at < bad {
-            let _ = before.advance()
-        }
-        throw ParseError.InvalidUnicode(at: before.position(), reason: "ill-formed UTF-8")
+        let parser = Parser(bytes: bytes, options)
+        throw ParseError.InvalidUnicode(at: parser.position(bad), reason: "ill-formed UTF-8")
     }
     let parser = Parser(bytes: bytes, options)
     return try parser.parseDocument()

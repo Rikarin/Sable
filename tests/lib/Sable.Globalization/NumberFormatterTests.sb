@@ -237,3 +237,62 @@ fn aFormatterIsMadeOnceForMany() {
     assertEqual(formatter.locale.tag, "en")
     assert(formatter.numberFormat.kind == .Currency("usd"))
 }
+
+// A Decimal is written out and read by its digits; an F64 and an Int of few
+// digits are not, and must come to the same.
+@test
+fn aFloatIsWrittenAndReadAsTheDecimalItIs() {
+    var two = NumberFormat.decimal
+    two.minimumFractionDigits = 2
+    two.maximumFractionDigits = 2
+    var bare = NumberFormat.decimal
+    bare.grouping = .Never
+    bare.minimumIntegerDigits = 4
+    var always = NumberFormat.decimal
+    always.grouping = .Always
+    always.sign = .Always
+    for tag in ["und", "de", "fr", "en-IN", "es", "pl", "sv", "ar-EG", "fa", "he", "cs"] {
+        for format in [two, bare, always, NumberFormat.percent, NumberFormat.currency("EUR"), NumberFormat.currency("CHF")] {
+            let formatter = NumberFormatter(format, locale: locale(tag))
+            var n = 1
+            while n < 1_000_000_000_000 {
+                for cents in [n, n + 5, n + 50, 0 - n] {
+                    let exact = try! Decimal.parse("\(cents)") / Decimal(100)
+                    let text = formatter.format(F64(cents) / 100.0)
+                    assertEqual(text, formatter.format(exact))
+                    assertEqual(formatter.format(cents), formatter.format(Decimal(cents)))
+                    let read: F64 = try! formatter.parse(text)
+                    let wanted: Decimal = try! formatter.parse(text)
+                    assertEqual("\(read)", "\(try! F64.parse("\(wanted)"))")
+                    if format.kind != .Decimal || format.minimumFractionDigits != none {
+                        continue
+                    }
+                    let whole: Int = try! formatter.parse(formatter.format(cents))
+                    assertEqual(whole, cents)
+                }
+                n = n * 7 + 3
+            }
+        }
+    }
+}
+
+@test
+fn aFloatThatIsNoPlainDecimalIsRounded() {
+    let german = NumberFormatter(.decimal, locale: locale("de"))
+    assertEqual(german.format(0.0005), "0,001")
+    assertEqual(german.format(1.0005), "1")
+    assertEqual(german.format(2.0015), "2,002")
+    assertEqual(german.format(0.125), "0,125")
+    assertEqual(german.format(1.0 / 3.0), "0,333")
+    assertEqual(german.format(-0.0), "-0")
+    assertEqual(german.format(-0.0001), "-0")
+    assertEqual(german.format(1e15 + 0.5), "1.000.000.000.000.000,5")
+    assertEqual(german.format(Int.min), "-9.223.372.036.854.775.808")
+    for wrong in ["1.23", "1.2345", "12.34.567", ",", "-", "1,2,3", ".123", "1..234", "1.234.", "1,234.567"] {
+        assert(readError(wrong, "de") != none, wrong)
+    }
+    let big: F64 = try! german.parse("123.456.789.012.345.678.901")
+    assertEqual(big, 1.2345678901234568e20)
+    let zero: F64 = try! german.parse("-0")
+    assert(1.0 / zero < 0.0)
+}

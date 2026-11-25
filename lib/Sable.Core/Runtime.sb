@@ -757,6 +757,13 @@ public struct Runtime {
     @builtin("string_utf8_find_range")
     public static fn findUtf8(_ text: String, _ from: Int, _ to: Int, _ part: String, _ partFrom: Int, _ partTo: Int) -> Int
 
+    /// Where the first byte of the text's range is that is in one of the
+    /// ranges of ASCII bytes, each two characters, its least and its
+    /// greatest: its UTF-8 offset in the text, or -1. Natively, up to four
+    /// are looked for sixteen bytes at a time.
+    @builtin("string_utf8_find_any")
+    public static fn findAnyUtf8(_ text: String, _ from: Int, _ to: Int, _ ranges: String) -> Int
+
     /// Where the part's range of bytes last occurs inside the text's: its
     /// UTF-8 offset in the text, or -1.
     @builtin("string_utf8_find_last_range")

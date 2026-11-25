@@ -98,7 +98,21 @@ public struct File {
 
     /// Replaces the file's contents, making it if it is not there.
     public static fn write(_ path: some PathLike, _ text: String) throws(IoError) {
-        try File.writeBytes(path, text.utf8Bytes())
+        // A piece at a time: no copy of the whole is made.
+        let piece = 65536
+        let count = text.utf8.count
+        let file = try File.open(path, options: .writing)
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(count < piece ? count : piece)
+        var start = 0
+        while start < count {
+            let end = count - start < piece ? count : start + piece
+            bytes.removeAll(keepingCapacity: true)
+            bytes.append(utf8: text, from: start, to: end)
+            try file.write(bytes)
+            start = end
+        }
+        file.close()
     }
 
     /// Adds to the end of the file, making it if it is not there.

@@ -2076,11 +2076,17 @@ internal sealed class Parser {
         // 'String[>..]' — and close nothing.
         var brackets = 0;
 
-        // Parentheses are a function type's, 'Box<(Int) -> Bool>': with no
-        // arrow after one, 'a < (b) > (c)' compares.
-        var parens = 0;
-        var parenthesised = false;
-        var arrow = false;
+        // Parentheses are a function type's, 'Box<(Int) -> Bool>', or a
+        // tuple's, 'Box<(Int, Int)>': with neither an arrow after them nor a
+        // comma in them, 'a < (b) > (c)' compares. Each is whether what it
+        // holds could be such a type so far, and how deep in '<' it opened.
+        var parens = new Stack<(bool IsType, int Depth)>();
+
+        void Holds() {
+            if (parens.TryPop(out var open)) {
+                parens.Push((true, open.Depth));
+            }
+        }
 
         try {
             while (true) {
@@ -2111,7 +2117,7 @@ internal sealed class Parser {
                     case SyntaxKind.GreaterToken:
                         depth--;
                         if (depth == 0) {
-                            return parens == 0 && arrow == parenthesised && IsAfterTypeArgumentList(Peek(1).Kind);
+                            return parens.Count == 0 && IsAfterTypeArgumentList(Peek(1).Kind);
                         }
 
                         break;
@@ -2119,29 +2125,34 @@ internal sealed class Parser {
                     case SyntaxKind.GreaterGreaterToken:
                         depth -= 2;
                         if (depth <= 0) {
-                            return parens == 0 && arrow == parenthesised && IsAfterTypeArgumentList(Peek(1).Kind);
+                            return parens.Count == 0 && IsAfterTypeArgumentList(Peek(1).Kind);
                         }
 
                         break;
 
                     case SyntaxKind.OpenParenToken:
-                        parens++;
-                        parenthesised = true;
+                        parens.Push((Peek(1).Kind is SyntaxKind.CloseParenToken, depth));
+                        break;
+
+                    case SyntaxKind.CommaToken when parens.TryPeek(out var tuple) && tuple.Depth == depth:
+                        Holds();
                         break;
 
                     case SyntaxKind.CloseParenToken:
-                        if (--parens < 0) {
+                        if (parens.Count == 0 || !parens.Pop().IsType && Peek(1).Kind is not SyntaxKind.ArrowToken) {
                             return false;
                         }
 
                         break;
 
+                    // What is in parentheses with an arrow in it is a type: '((Int) -> Bool)?'.
                     case SyntaxKind.ArrowToken when Peek(-1).Kind is SyntaxKind.CloseParenToken:
-                        arrow = true;
+                        Holds();
                         break;
 
                     // 'Buf<Int, 4>': a value given to a value generic parameter.
-                    case SyntaxKind.IntegerLiteralToken when Peek(-1).Kind is SyntaxKind.LessToken or SyntaxKind.CommaToken:
+                    case SyntaxKind.IntegerLiteralToken when Peek(-1).Kind is SyntaxKind.LessToken or SyntaxKind.CommaToken
+                                                             && (!parens.TryPeek(out var around) || around.Depth < depth):
                     case SyntaxKind.IdentifierToken:
                     case SyntaxKind.DotToken:
                     case SyntaxKind.CommaToken:
@@ -2149,10 +2160,14 @@ internal sealed class Parser {
                     case SyntaxKind.AmpersandToken:
                     case SyntaxKind.PipeToken:
                     case SyntaxKind.ColonToken:
-                    case SyntaxKind.SomeKeyword:
-                    case SyntaxKind.AnyKeyword:
                     case SyntaxKind.RefKeyword:
                     case SyntaxKind.CapitalSelfKeyword:
+                        break;
+
+                    // Nor does an expression begin with 'any': '(any P)?'.
+                    case SyntaxKind.SomeKeyword:
+                    case SyntaxKind.AnyKeyword:
+                        Holds();
                         break;
 
                     default:
@@ -2178,9 +2193,13 @@ internal sealed class Parser {
                 or SyntaxKind.CloseBraceToken => true,
             SyntaxKind.CommaToken or SyntaxKind.SemicolonToken or SyntaxKind.ColonToken => true,
             SyntaxKind.DotToken => true,
+
+            // 'Gen<Int> { … }': nothing compares with a block.
+            SyntaxKind.OpenBraceToken => true,
             SyntaxKind.EndOfFile => true,
             _ => false,
         };
+
     // =======================================================================
     // Closures
     // =======================================================================

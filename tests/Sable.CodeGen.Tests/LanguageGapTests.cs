@@ -327,4 +327,48 @@ public sealed class LanguageGapTests {
             }
             """).Stdout
         );
+
+    /// <summary>A call's type arguments before a trailing closure, and a tuple among them (#333).</summary>
+    [Fact]
+    public void TypeArgumentsBeforeAClosureAndOfATuple() =>
+        Assert.Equal(
+            """
+            3
+            2
+            5 6
+            8
+
+            """,
+            Programs.AssertAgree("""
+            module C333
+
+            import Sable.IO
+
+            struct Gen<A> {
+                let make: () -> A
+
+                init(_ make: @escaping () -> A) {
+                    self.make = make
+                }
+            }
+
+            struct Held<T> {
+                let value: T
+            }
+
+            fn run<A>(_ g: Gen<A>) -> A {
+                return g.make()
+            }
+
+            @main
+            fn main() {
+                let a = Gen<Int> { 3 }
+                print(a.make())
+                print(run(Gen<(Int, Int)>({ (1, 2) })).1)
+                let h = Held<(a: Int, b: Int)>(value: (a: 5, b: 6))
+                print("\(h.value.a) \(run(Gen<Int> { h.value.b }))")
+                print(run(Gen<(Int, Held<(Int, Int)>)> { (7, Held<(Int, Int)>(value: (8, 9))) }).1.value.0)
+            }
+            """).Stdout
+        );
 }

@@ -293,6 +293,20 @@ public sealed class ExpressionParserTests {
     public void AFunctionTypeIsATypeArgument(string source) =>
         Assert.Contains("(GenericName Box (TypeArgumentList < (FunctionType", Parse(source), StringComparison.Ordinal);
 
+    /// <summary>A tuple is one too, and a block after the list is the call's closure (#333).</summary>
+    [Theory]
+    [InlineData("f(Gen<(Int, Int)>(g))", "(GenericName Gen (TypeArgumentList < (TupleType")]
+    [InlineData("Gen<(a: A, b: B)>()", "(GenericName Gen (TypeArgumentList < (TupleType")]
+    [InlineData("Gen<Map<A, (B, C)>>.empty", "(GenericName Gen (TypeArgumentList < (SimpleNameType Map (TypeArgumentList <")]
+    [InlineData("Gen<((Int) -> Bool)?>()", "(GenericName Gen (TypeArgumentList < (OptionalType")]
+    [InlineData("Gen<(Buf<Int, 4>, Int)>()", "(GenericName Gen (TypeArgumentList < (TupleType")]
+    [InlineData("Gen<(any Error)?>()", "(GenericName Gen (TypeArgumentList < (OptionalType")]
+    [InlineData("Gen<((A, B)) -> C>()", "(GenericName Gen (TypeArgumentList < (FunctionType")]
+    [InlineData("Gen<Int> { 3 }", "(Invocation (GenericName Gen (TypeArgumentList < (SimpleNameType Int) >)) (BraceClosure")]
+    [InlineData("f(Gen<Int> { 3 }, 4)", "(Invocation (GenericName Gen (TypeArgumentList < (SimpleNameType Int) >)) (BraceClosure")]
+    public void ATupleIsATypeArgumentAndAClosureMayFollow(string source, string expected) =>
+        Assert.Contains(expected, Parse(source), StringComparison.Ordinal);
+
     [Theory]
     [InlineData("f { (p: RawPtr<U64[16]>) in p }")]
     [InlineData("f { (p: U8[..4], q: Buf<Int, 4>) -> U8[2] in p }")]
@@ -303,6 +317,9 @@ public sealed class ExpressionParserTests {
     [InlineData("a < (b)")]
     [InlineData("f(a < (b), c > (d))")]
     [InlineData("a < (b + 1) && c > d")]
+    [InlineData("f(a < (b), c > (d, e))")]
+    [InlineData("f(a < (b, 1), c > (d))")]
+    [InlineData("f((a < (b)), { c > d })")]
     public void AParenthesisAfterLessThanIsAnOperand(string source) =>
         Assert.DoesNotContain("TypeArgumentList", Parse(source), StringComparison.Ordinal);
 

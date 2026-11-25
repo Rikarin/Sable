@@ -3025,8 +3025,9 @@ public static class SilBuiltins {
         Add("raw_copy", SilType.Unit, SilType.Int, SilType.Int, SilType.Int);
         Add("raw_fill", SilType.Unit, SilType.Int, SilType.U8, SilType.Int);
         // A slice of bytes copied to an address, and a run of one (from an index,
-        // so many, in its bounds) from an address.
+        // so many, in its bounds) from an address; and so many added at an array's end.
         Add("raw_from_bytes", SilType.Unit, SilType.Int, new SliceType(SilType.U8));
+        Add("array_append_raw", SilType.Unit, SilType.Address(new ArrayType(SilType.U8)), SilType.Int, SilType.Int);
         Add("bytes_from_raw", SilType.Unit, SilType.Address(new SliceType(SilType.U8)), SilType.Int, SilType.Int, SilType.Int);
 
         // Atomics (Atomic<Value>): each on the value at a raw address, with

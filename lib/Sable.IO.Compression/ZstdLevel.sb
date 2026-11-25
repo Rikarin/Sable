@@ -1,0 +1,86 @@
+module Sable.IO.Compression
+
+/// How a level looks for matches.
+@derive(Equatable)
+enum ZstdStrategy {
+    /// The last place with the same few bytes.
+    Fast
+    /// That, and the last with the same eight.
+    Double
+    /// Rows of the last places with the same few bytes: the first long match, or
+    /// a better one a byte on, or two.
+    Greedy
+    Lazy
+    Lazy2
+    /// Every match of every place, in a tree, and the parse of least bits.
+    Best
+}
+
+struct ZstdLevel {
+    var windowLog: Int
+    /// The logs of the second table's or the tree's entries, and of the hash
+    /// table's.
+    var chainLog: Int
+    var hashLog: Int
+    /// How many places are looked at, as a log, and how many bytes are hashed.
+    var searchLog: Int
+    var minMatch: Int
+    /// The length that ends a search; of a fast level, how far apart places
+    /// are looked for.
+    var target: Int
+    var strategy: ZstdStrategy
+
+    static let most: Int = 22
+
+    /// For a level from 1 to 22, or below 0, faster the lower, and about so
+    /// many bytes.
+    init(level: Int, expecting count: Int) {
+        let rows: Int[>..][>..] = [
+            [19, 12, 13, 1, 6, 1],
+            [19, 13, 14, 1, 7, 0],
+            [20, 15, 16, 1, 6, 0],
+            [21, 16, 17, 1, 5, 0],
+            [21, 18, 18, 1, 5, 0],
+            [21, 18, 19, 3, 5, 2],
+            [21, 18, 19, 3, 5, 4],
+            [21, 19, 20, 4, 5, 8],
+            [21, 19, 20, 4, 5, 16],
+            [22, 20, 21, 4, 5, 16],
+            [22, 21, 22, 5, 5, 16],
+            [22, 21, 22, 6, 5, 16],
+            [22, 22, 23, 6, 5, 32],
+            [22, 22, 22, 6, 5, 32],
+            [22, 22, 22, 4, 4, 32],
+            [22, 22, 22, 5, 4, 32],
+            [22, 22, 22, 5, 4, 48],
+            [23, 23, 22, 5, 4, 64],
+            [23, 23, 22, 6, 3, 96],
+            [23, 24, 22, 7, 3, 256],
+            [25, 25, 23, 7, 3, 256],
+            [26, 26, 24, 7, 3, 512],
+            [27, 27, 25, 9, 3, 999],
+        ]
+        let row = rows[level < 0 ? 0 : level]
+        windowLog = row[0]
+        chainLog = row[1]
+        hashLog = row[2]
+        searchLog = row[3]
+        minMatch = row[4]
+        target = level < 0 ? 0 - level : row[5]
+        strategy = level <= 2 ? .Fast : (level <= 4 ? .Double : (level == 5 ? .Greedy : (level <= 7 ? .Lazy : (level <= 13 ? .Lazy2 : .Best))))
+        // No more than the bytes need.
+        if count < 1 << windowLog {
+            var needed = 10
+            while 1 << needed < count {
+                needed += 1
+            }
+            windowLog = needed
+            let least = needed + 1 < 10 ? 10 : needed + 1
+            hashLog = hashLog < least ? hashLog : least
+            chainLog = chainLog < needed + (strategy == .Best ? 1 : 0) ? chainLog : needed + (strategy == .Best ? 1 : 0)
+            if strategy == .Fast && minMatch > 5 && count < 1 << 17 {
+                minMatch = 5
+            }
+        }
+    }
+}

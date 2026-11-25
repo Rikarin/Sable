@@ -162,8 +162,12 @@ fn dictionariesAreUsed() throws {
 fn says(_ bytes: U8[>..], _ what: String) -> Bool {
     do {
         _ = try Deflate.decompress(bytes)
+        print("nothing wrong, where it was: \(what)")
         return false
     } catch {
+        if error != .Corrupt(what) {
+            print("\(error), where it was: \(what)")
+        }
         return error == .Corrupt(what)
     }
 }

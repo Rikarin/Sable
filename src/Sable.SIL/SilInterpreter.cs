@@ -2493,7 +2493,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Alive((HeapObject)operands[0]!).Type.IsSubclassOf(target);
         }
 
-        if (builtin.Name == "bytes_from_raw" || builtin.Name.StartsWith("raw_", StringComparison.Ordinal)) {
+        if (builtin.Name is "bytes_from_raw" or "array_append_raw" || builtin.Name.StartsWith("raw_", StringComparison.Ordinal)) {
             return RawBuiltin(builtin, operands);
         }
 

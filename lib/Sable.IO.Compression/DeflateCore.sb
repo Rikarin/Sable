@@ -165,12 +165,8 @@ final class DeflateCore {
     fn drain(into output: inout ByteBuffer) {
         let count = writer.position - target.address
         if count > 0 {
-            let from = target.address
-            output.write(reserving: count) { bytes, at in
-                unsafe {
-                    NativeMemory.copy(from: RawPtr<U8>(address: from), to: &bytes, at: at, byteCount: count)
-                }
-                return count
+            unsafe {
+                output.append(from: RawPtr<U8>(address: target.address), byteCount: count)
             }
             writer.position = target.address
         }

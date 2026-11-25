@@ -13,7 +13,7 @@ struct Crc32 {
     unsafe static fn kernel(_ state: Int, _ address: Int, _ count: Int) -> Int
 
     unsafe mutating fn update(at address: Int, count: Int) {
-        let table = crcTable
+        let table = crcTable.get()
         var crc = state
         var at = address
         let end = address &+ count
@@ -48,27 +48,26 @@ unsafe fn crcStep(_ table: Int, _ crc: U32, _ word: U64) -> U32 {
 }
 
 /// What each byte does to the checksum with none to seven after it.
-let crcTable: Int = {
-        () -> Int in
-        var table = U32[>..](repeating: 0, count: 2048)
-        var i = 0
-        while i < 256 {
-            var crc = U32(i)
-            var bit = 0
-            while bit < 8 {
-                crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1
-                bit += 1
-            }
-            table[i] = crc
-            i += 1
+static let crcTable: LazyTable = LazyTable { () -> Int in
+    var table = U32[>..](repeating: 0, count: 2048)
+    var i = 0
+    while i < 256 {
+        var crc = U32(i)
+        var bit = 0
+        while bit < 8 {
+            crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1
+            bit += 1
         }
-        while i < 2048 {
-            let before = table[i - 256]
-            table[i] = table[Int(before & 0xFF)] ^ (before >> 8)
-            i += 1
-        }
-        return constantTable(table)
-    }()
+        table[i] = crc
+        i += 1
+    }
+    while i < 2048 {
+        let before = table[i - 256]
+        table[i] = table[Int(before & 0xFF)] ^ (before >> 8)
+        i += 1
+    }
+    return constantTable(table)
+}
 
 /// Adler-32 of bytes as they come: zlib's.
 struct Adler32 {

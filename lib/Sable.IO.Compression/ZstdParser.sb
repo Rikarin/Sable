@@ -1,0 +1,523 @@
+module Sable.IO.Compression
+
+/// Where a block's sequences and literals are put, and the last three offsets
+/// as its decoder will have them.
+struct ZstdSequences {
+    /// The sequences, three words each, and the literals.
+    let sequences: Int
+    let literals: Int
+    var count: Int
+    var literalEnd: Int
+    var offset1: Int
+    var offset2: Int
+    var offset3: Int
+
+    /// A match added, after so many literals from 'from' on, up to 47 bytes
+    /// past which may be read. Its offset is written as one of the last three
+    /// where it is one.
+    @inline(always)
+    unsafe mutating fn add(from: Int, literals count: Int, length: Int, offset: Int) {
+        copy16(from: from, to: literalEnd)
+        if count > 16 {
+            var done = 16
+            repeat {
+                copy16(from: from &+ done, to: literalEnd &+ done)
+                copy16(from: from &+ done &+ 16, to: literalEnd &+ done &+ 16)
+                done = done &+ 32
+            } while done < count
+        }
+        literalEnd = literalEnd &+ count
+        var written = offset &+ 3
+        if offset == offset1 && count > 0 {
+            written = 1
+        } else if offset == offset2 {
+            written = count > 0 ? 2 : 1
+            offset2 = offset1
+            offset1 = offset
+        } else if offset == offset3 {
+            written = count > 0 ? 3 : 2
+            offset3 = offset2
+            offset2 = offset1
+            offset1 = offset
+        } else {
+            if count == 0 && offset == offset1 &- 1 {
+                written = 3
+            }
+            offset3 = offset2
+            offset2 = offset1
+            offset1 = offset
+        }
+        let at = sequences &+ 12 &* self.count
+        store32(count unchecked as U32, at)
+        store32((length &- 3) unchecked as U32, at &+ 4)
+        store32(written unchecked as U32, at &+ 8)
+        self.count = self.count &+ 1
+    }
+
+    /// The literals after the last match.
+    unsafe mutating fn addLast(from: Int, literals count: Int) {
+        copyBytes(from: from, to: literalEnd, count)
+        literalEnd = literalEnd &+ count
+    }
+}
+
+/// What finds a zstd block's matches, by tables of the places seen. A place is
+/// counted from the frame's start, in a U32, so that the window may slide.
+final class ZstdParser {
+    let level: ZstdLevel
+    let hashes: Block
+    /// The second table, the tree's two words a place, or the rows' tags and
+    /// then their heads.
+    let chains: Block
+    /// The log of how many places a row has.
+    let rowLog: Int
+    let hashes3: Block
+    /// The next place that is in no chain, or tree.
+    var inserted: Int
+    let best: ZstdBestParse?
+
+    init(level: ZstdLevel) {
+        self.level = level
+        hashes = Block(count: 4 << level.hashLog, zeroed: true)
+        rowLog = level.searchLog < 4 ? 4 : (level.searchLog > 6 ? 6 : level.searchLog)
+        let hasRows = level.strategy == .Greedy || level.strategy == .Lazy || level.strategy == .Lazy2
+        chains = Block(count: level.strategy == .Fast ? 0 : (hasRows ? 2 << level.hashLog : 4 << level.chainLog), zeroed: true)
+        hashes3 = Block(count: level.strategy == .Best ? 4 << 16 : 0, zeroed: true)
+        inserted = 0
+        best = level.strategy == .Best ? ZstdBestParse() : none
+    }
+
+    var rowTags: Int => chains.address
+
+    var rowHeads: Int => chains.address + (1 << level.hashLog)
+
+    /// The sequences of the bytes from 'start' up to 'end', after which eight
+    /// bytes may be read: a block of the window from 'low' on, places being
+    /// addresses less 'base'.
+    unsafe fn parse(_ start: Int, _ end: Int, low: Int, base: Int, into sequences: inout ZstdSequences) {
+        match level.strategy {
+            case .Fast   => { self.parseFast(start, end, low: low, base: base, into: &sequences) }
+            case .Double => { self.parseDouble(start, end, low: low, base: base, into: &sequences) }
+            case .Best   => { best!.parse(start, end, low: low, base: base, parser: self, into: &sequences) }
+            case _       => { self.parseLazy(start, end, low: low, base: base, into: &sequences) }
+        }
+    }
+
+    /// The places of a dictionary put in the tables.
+    unsafe fn insert(from start: Int, to end: Int, base: Int) {
+        if end - start < 8 {
+            return
+        }
+        let last = end &- 8
+        var at = start
+        match level.strategy {
+            case .Fast => {
+                while at <= last {
+                    store32((at &- base) unchecked as U32, hashes.address &+ 4 &* hashOf(load64(at), level.minMatch, level.hashLog))
+                    at = at &+ 1
+                }
+            }
+            case .Double => {
+                while at <= last {
+                    let word = load64(at)
+                    store32((at &- base) unchecked as U32, hashes.address &+ 4 &* hashOf(word, 8, level.hashLog))
+                    store32((at &- base) unchecked as U32, chains.address &+ 4 &* hashOf(word, level.minMatch, level.chainLog))
+                    at = at &+ 1
+                }
+            }
+            case .Best => {
+                inserted = start &- base
+                best!.insert(from: start, to: last, low: start, base: base, end: end, parser: self)
+            }
+            case _ => {
+                inserted = start &- base
+                self.insertRows(to: last, base: base)
+            }
+        }
+    }
+
+    // ---- Fast ----------------------------------------------------------------
+
+    unsafe fn parseFast(_ start: Int, _ end: Int, low: Int, base: Int, into sequences: inout ZstdSequences) {
+        let heads = hashes.address
+        let width = level.minMatch
+        let log = level.hashLog
+        let stride = level.target > 0 ? level.target : 1
+        let window = 1 << level.windowLog
+        var made = sequences
+        var at = start
+        var anchor = start
+        let last = end &- 8
+        if at == low {
+            at = at &+ 1
+        }
+        while at < last {
+            // The last offset again, a byte on.
+            let next = at &+ 1
+            let word = load64(at)
+            let head = heads &+ 4 &* hashOf(word, width, log)
+            let place = (at &- base) unchecked as U32
+            let distance = (place &- load32(head)) unchecked as Int
+            store32(place, head)
+            let again = made.offset1
+            if again <= next &- low && load32(next &- again) == load32(next) {
+                let length = matchEnd(next &- again &+ 4, next &+ 4, end) &- next
+                made.add(from: anchor, literals: next &- anchor, length: length, offset: again)
+                at = next &+ length
+                anchor = at
+                if at <= last {
+                    store32((next &+ 1 &- base) unchecked as U32, heads &+ 4 &* hashOf(load64(next &+ 1), width, log))
+                    store32((at &- 2 &- base) unchecked as U32, heads &+ 4 &* hashOf(load64(at &- 2), width, log))
+                }
+            } else if distance <= at &- low && distance <= window && load32(at &- distance) == word unchecked as U32 {
+                var from = at
+                var length = matchEnd(at &- distance &+ 4, at &+ 4, end) &- at
+                while from > anchor && from &- distance > low && load8(from &- 1) == load8(from &- distance &- 1) {
+                    from = from &- 1
+                    length = length &+ 1
+                }
+                made.add(from: anchor, literals: from &- anchor, length: length, offset: distance)
+                let found = at
+                at = from &+ length
+                anchor = at
+                if at <= last {
+                    store32((found &+ 2 &- base) unchecked as U32, heads &+ 4 &* hashOf(load64(found &+ 2), width, log))
+                    store32((at &- 2 &- base) unchecked as U32, heads &+ 4 &* hashOf(load64(at &- 2), width, log))
+                }
+            } else {
+                at = at &+ stride &+ ((at &- anchor) >> 8)
+                continue
+            }
+            // The offset before the last, with no literals between.
+            while at <= last {
+                let before = made.offset2
+                if before > at &- low || load32(at &- before) != load32(at) {
+                    break
+                }
+                let length = matchEnd(at &- before &+ 4, at &+ 4, end) &- at
+                store32((at &- base) unchecked as U32, heads &+ 4 &* hashOf(load64(at), width, log))
+                made.add(from: anchor, literals: 0, length: length, offset: before)
+                at = at &+ length
+                anchor = at
+            }
+        }
+        made.addLast(from: anchor, literals: end &- anchor)
+        sequences = made
+    }
+
+    // ---- Double --------------------------------------------------------------
+
+    unsafe fn parseDouble(_ start: Int, _ end: Int, low: Int, base: Int, into sequences: inout ZstdSequences) {
+        let longs = hashes.address
+        let shorts = chains.address
+        let width = level.minMatch
+        let longLog = level.hashLog
+        let shortLog = level.chainLog
+        let window = 1 << level.windowLog
+        var made = sequences
+        var at = start
+        var anchor = start
+        let last = end &- 9
+        if at == low {
+            at = at &+ 1
+        }
+        while at < last {
+            let word = load64(at)
+            let place = (at &- base) unchecked as U32
+            let longHead = longs &+ 4 &* hashOf(word, 8, longLog)
+            let shortHead = shorts &+ 4 &* hashOf(word, width, shortLog)
+            let longDistance = (place &- load32(longHead)) unchecked as Int
+            let shortDistance = (place &- load32(shortHead)) unchecked as Int
+            store32(place, longHead)
+            store32(place, shortHead)
+            let reach = at &- low < window ? at &- low : window
+            let next = at &+ 1
+            let again = made.offset1
+            var from = at
+            var length = 0
+            var distance = 0
+            if again <= next &- low && load32(next &- again) == load32(next) {
+                from = next
+                length = matchEnd(next &- again &+ 4, next &+ 4, end) &- next
+                distance = again
+            } else if longDistance <= reach && load64(at &- longDistance) == word {
+                length = matchEnd(at &- longDistance &+ 8, at &+ 8, end) &- at
+                distance = longDistance
+            } else if shortDistance <= reach && load32(at &- shortDistance) == word unchecked as U32 {
+                // A long match a byte on is better.
+                let nextWord = load64(next)
+                let nextHead = longs &+ 4 &* hashOf(nextWord, 8, longLog)
+                let nextDistance = (place &+ 1 &- load32(nextHead)) unchecked as Int
+                store32(place &+ 1, nextHead)
+                if nextDistance <= reach && load64(next &- nextDistance) == nextWord {
+                    from = next
+                    length = matchEnd(next &- nextDistance &+ 8, next &+ 8, end) &- next
+                    distance = nextDistance
+                } else {
+                    length = matchEnd(at &- shortDistance &+ 4, at &+ 4, end) &- at
+                    distance = shortDistance
+                }
+            } else {
+                at = at &+ 1 &+ ((at &- anchor) >> 8)
+                continue
+            }
+            if distance != again {
+                while from > anchor && from &- distance > low && load8(from &- 1) == load8(from &- distance &- 1) {
+                    from = from &- 1
+                    length = length &+ 1
+                }
+            }
+            made.add(from: anchor, literals: from &- anchor, length: length, offset: distance)
+            let found = at
+            at = from &+ length
+            anchor = at
+            if at <= last {
+                let early = load64(found &+ 2)
+                store32(place &+ 2, longs &+ 4 &* hashOf(early, 8, longLog))
+                store32(place &+ 2, shorts &+ 4 &* hashOf(early, width, shortLog))
+                let late = (at &- 2 &- base) unchecked as U32
+                store32(late, longs &+ 4 &* hashOf(load64(at &- 2), 8, longLog))
+                store32(late &+ 1, shorts &+ 4 &* hashOf(load64(at &- 1), width, shortLog))
+            }
+            while at <= last {
+                let before = made.offset2
+                if before > at &- low || load32(at &- before) != load32(at) {
+                    break
+                }
+                let more = matchEnd(at &- before &+ 4, at &+ 4, end) &- at
+                let here = load64(at)
+                store32((at &- base) unchecked as U32, longs &+ 4 &* hashOf(here, 8, longLog))
+                store32((at &- base) unchecked as U32, shorts &+ 4 &* hashOf(here, width, shortLog))
+                made.add(from: anchor, literals: 0, length: more, offset: before)
+                at = at &+ more
+                anchor = at
+            }
+        }
+        made.addLast(from: anchor, literals: end &- anchor)
+        sequences = made
+    }
+
+    // ---- Lazy ----------------------------------------------------------------
+
+    /// The places before an address put in their rows, up to it: of a long run
+    /// the first and the last alone.
+    @inline(always)
+    unsafe fn insertRows(to end: Int, base: Int) {
+        var at = base &+ inserted
+        if end &- at > 384 {
+            let first = at &+ 96
+            while at < first {
+                self.insertRow(at, base)
+                at = at &+ 1
+            }
+            at = end &- 32
+        }
+        while at < end {
+            self.insertRow(at, base)
+            at = at &+ 1
+        }
+        inserted = end &- base
+    }
+
+    /// A place put in its row in place of the oldest: a row has the last places
+    /// with a hash, the newest at its head, and beside them eight more bits of
+    /// each one's hash.
+    @inline(always)
+    unsafe fn insertRow(_ at: Int, _ base: Int) {
+        let hash = hashOf(load64(at), level.minMatch, level.hashLog &- rowLog &+ 8)
+        let row = hash >> 8
+        let heads = rowHeads &+ row
+        let head = (load8(heads) &- 1) & ((1 << rowLog) &- 1)
+        store8(head, heads)
+        let slot = (row << rowLog) &+ head
+        store8(hash, rowTags &+ slot)
+        store32((at &- base) unchecked as U32, hashes.address &+ 4 &* slot)
+    }
+
+    /// The longest match at a place, longer than 'shortest', which is put in
+    /// its row: its length, at bit 32, and its offset; or 0.
+    @inline(always)
+    unsafe fn longest(_ at: Int, _ end: Int, low: Int, base: Int, shortest: Int, depth: Int) -> Int {
+        self.insertRows(to: at, base: base)
+        let log = rowLog
+        let size = 1 << log
+        let hash = hashOf(load64(at), level.minMatch, level.hashLog &- log &+ 8)
+        let first = (hash >> 8) << log
+        let head = load8(rowHeads &+ (hash >> 8))
+        let place = (at &- base) unchecked as U32
+        let reach = at &- low < 1 << level.windowLog ? at &- low : 1 << level.windowLog
+        // Which of the row's tags are the hash's, the newest first: a bit each.
+        let wanted = ((hash & 255) unchecked as U64) &* 0x0101_0101_0101_0101
+        var mask: U64 = 0
+        var i = 0
+        while i < size {
+            let differing = load64(rowTags &+ first &+ i) ^ wanted
+            let same = ~(((differing & 0x7F7F_7F7F_7F7F_7F7F) &+ 0x7F7F_7F7F_7F7F_7F7F) | differing | 0x7F7F_7F7F_7F7F_7F7F)
+            mask = mask | ((same >> 7) &* 0x0102_0408_1020_4080) >> 56 << ((i & 63) unchecked as U64)
+            i = i &+ 8
+        }
+        if size < 64 {
+            mask = mask | mask << ((size & 63) unchecked as U64)
+            mask = (mask >> (head unchecked as U64)) & (((1 as U64) << ((size & 63) unchecked as U64)) &- 1)
+        } else {
+            mask = mask.rotatedRight(by: head)
+        }
+        var best = shortest
+        var found = 0
+        var left = depth
+        while mask != 0 && left > 0 {
+            let slot = first &+ ((head &+ mask.trailingZeroCount) & (size &- 1))
+            mask = mask & (mask &- 1)
+            left = left &- 1
+            let distance = (place &- load32(hashes.address &+ 4 &* slot)) unchecked as Int
+            if distance > reach {
+                break
+            }
+            let candidate = at &- distance
+            if load32(candidate &+ best &- 3) == load32(at &+ best &- 3) {
+                let length = matchEnd(candidate, at, end) &- at
+                if length > best {
+                    best = length
+                    found = length << 32 | distance
+                    if at &+ length == end {
+                        break
+                    }
+                }
+            }
+        }
+        self.insertRow(at, base)
+        inserted = at &+ 1 &- base
+        return found
+    }
+
+    /// What a match saves, about: four for each byte, less its offset's bits.
+    @inline(always)
+    static fn gain(_ length: Int, _ offset: Int, _ bytes: Int) -> Int {
+        return length &* bytes &- (63 &- (offset &+ 3).leadingZeroCount)
+    }
+
+    unsafe fn parseLazy(_ start: Int, _ end: Int, low: Int, base: Int, into sequences: inout ZstdSequences) {
+        let depth = 1 << level.searchLog
+        let wait = level.strategy == .Greedy ? 0 : (level.strategy == .Lazy ? 1 : 2)
+        var made = sequences
+        var at = start
+        var anchor = start
+        let last = end &- 8
+        if at == low {
+            at = at &+ 1
+        }
+        while at < last {
+            var length = 0
+            var offset = 0
+            var from = at &+ 1
+            // The last offset again, a byte on.
+            let again = made.offset1
+            if again <= from &- low && load32(from &- again) == load32(from) {
+                length = matchEnd(from &- again &+ 4, from &+ 4, end) &- from
+                offset = again
+            }
+            if wait > 0 || length == 0 {
+                let found = self.longest(at, end, low: low, base: base, shortest: length > 3 ? length : 3, depth: depth)
+                if found != 0 {
+                    length = found >> 32
+                    offset = found & 0xFFFF_FFFF
+                    from = at
+                }
+            }
+            if length < 4 {
+                at = at &+ 1 &+ ((at &- anchor) >> 8)
+                continue
+            }
+            // A better one a byte on, or two.
+            while wait > 0 && at < last {
+                at = at &+ 1
+                var better = false
+                if again <= at &- low && load32(at &- again) == load32(at) && offset != again {
+                    let other = matchEnd(at &- again &+ 4, at &+ 4, end) &- at
+                    if other &* 3 > length &* 3 &- (63 &- (offset &+ 3).leadingZeroCount) &+ 1 {
+                        length = other
+                        offset = again
+                        from = at
+                    }
+                }
+                var found = self.longest(at, end, low: low, base: base, shortest: 3, depth: depth)
+                if found != 0 && ZstdParser.gain(found >> 32, found & 0xFFFF_FFFF, 4) > ZstdParser.gain(length, offset == again ? 0 : offset, 4) &+ 4 {
+                    length = found >> 32
+                    offset = found & 0xFFFF_FFFF
+                    from = at
+                    better = true
+                }
+                if better {
+                    continue
+                }
+                if wait == 2 && at < last {
+                    at = at &+ 1
+                    if again <= at &- low && load32(at &- again) == load32(at) && offset != again {
+                        let other = matchEnd(at &- again &+ 4, at &+ 4, end) &- at
+                        if other &* 4 > length &* 4 &- (63 &- (offset &+ 3).leadingZeroCount) &+ 1 {
+                            length = other
+                            offset = again
+                            from = at
+                        }
+                    }
+                    found = self.longest(at, end, low: low, base: base, shortest: 3, depth: depth)
+                    if found != 0 && ZstdParser.gain(found >> 32, found & 0xFFFF_FFFF, 4) > ZstdParser.gain(length, offset == again ? 0 : offset, 4) &+ 7 {
+                        length = found >> 32
+                        offset = found & 0xFFFF_FFFF
+                        from = at
+                        continue
+                    }
+                }
+                break
+            }
+            if offset != again {
+                while from > anchor && from &- offset > low && load8(from &- 1) == load8(from &- offset &- 1) {
+                    from = from &- 1
+                    length = length &+ 1
+                }
+            }
+            made.add(from: anchor, literals: from &- anchor, length: length, offset: offset)
+            at = from &+ length
+            anchor = at
+            while at <= last {
+                let before = made.offset2
+                if before > at &- low || load32(at &- before) != load32(at) {
+                    break
+                }
+                let more = matchEnd(at &- before &+ 4, at &+ 4, end) &- at
+                made.add(from: anchor, literals: 0, length: more, offset: before)
+                at = at &+ more
+                anchor = at
+            }
+        }
+        made.addLast(from: anchor, literals: end &- anchor)
+        sequences = made
+    }
+}
+
+/// Where a word of so many bytes is in a table of 2^log places.
+@inline(always)
+fn hashOf(_ word: U64, _ width: Int, _ log: Int) -> Int {
+    if width == 4 {
+        return ((((word unchecked as U32) &* 0x9E37_79B1) >> (((32 &- log) & 31) unchecked as U32)) unchecked as Int)
+    }
+    return ((((word << (((64 &- 8 &* width) & 63) unchecked as U64)) &* 0xCF1B_BCDC_B7A5_6463) >> (((64 &- log) & 63) unchecked as U64)) unchecked as Int)
+}
+
+/// Where two runs of the same bytes, the second after the first, end being the
+/// same, in the second, up to 'end': up to seven bytes past it are read.
+@inline(always)
+unsafe fn matchEnd(_ first: Int, _ second: Int, _ end: Int) -> Int {
+    var a = first
+    var b = second
+    while b < end {
+        let difference = load64(a) ^ load64(b)
+        if difference != 0 {
+            b = b &+ (difference.trailingZeroCount >> 3)
+            return b < end ? b : end
+        }
+        a = a &+ 8
+        b = b &+ 8
+    }
+    return end
+}

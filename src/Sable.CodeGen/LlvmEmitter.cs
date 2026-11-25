@@ -682,6 +682,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_array_append_utf8(ptr nocapture, ptr, ptr, i64, i64)
                                 declare void @sable_array_append_all(ptr nocapture, ptr, ptr, i64, i64)
                                 declare void @sable_array_append_holes(ptr nocapture, ptr, i64)
+                                declare void @sable_array_append_raw(ptr nocapture, ptr, ptr nocapture readonly, i64)
                                 declare void @sable_array_append_repeating(ptr nocapture, ptr, ptr nocapture readonly, i64)
                                 declare void @sable_array_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare void @sable_slice_rotate(ptr nocapture, ptr, i64, i64, i64)
@@ -4452,6 +4453,13 @@ public sealed partial class LlvmEmitter {
                     Line($"call void @llvm.memcpy.p0.p0.i64(ptr {RawAddress(operands[0])}, ptr {first}, i64 {count}, i1 false)");
                     Line($"br label %{after}");
                     Continue(after);
+                    return;
+                }
+
+                case "array_append_raw": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    SiteForRuntime();
+                    Line($"call void @sable_array_append_raw(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {RawAddress(operands[1])}, i64 {operands[2]})");
                     return;
                 }
 

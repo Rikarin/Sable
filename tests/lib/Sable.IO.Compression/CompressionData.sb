@@ -156,7 +156,7 @@ public fn has(_ program: String) async -> Bool {
     }
 }
 
-public fn join(_ first: U8[>..], _ second: U8[>..]) -> U8[>..] {
+public fn join<T>(_ first: T[>..], _ second: T[>..]) -> T[>..] {
     var both = first
     both.append(contentsOf: second)
     return both

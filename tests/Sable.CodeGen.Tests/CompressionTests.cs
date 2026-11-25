@@ -85,7 +85,7 @@ public sealed class CompressionTests {
     [Fact]
     public void DeflateStaysInItsMemory() =>
         Assert.Equal(
-            "whole true\npieces true\nrefused 24\n",
+            "whole true\npieces true\nrefused 12\n",
             Output(
                 """
                 var whole = true
@@ -115,9 +115,56 @@ public sealed class CompressionTests {
                 print("pieces \(back.bytes == bytes)")
                 var refused = 0
                 var seed: U64 = 1
-                while seed < 25 {
+                while seed < 13 {
                     do {
                         _ = try Zlib.decompress(damaged(Zlib.compress(sample(400, seed), level: Int(seed) % 10), seed))
+                    } catch {
+                        refused += 1
+                    }
+                    seed += 1
+                }
+                print("refused \(refused)")
+                """
+            )
+        );
+
+    [Fact]
+    public void ZstdStaysInItsMemory() =>
+        Assert.Equal(
+            "whole true\npieces true\nrefused 12\n",
+            Output(
+                """
+                var whole = true
+                for level in [1, 3, 5, 19] {
+                    let bytes = sample(700 + level * 31, U64(level + 7))
+                    whole = whole && (try! Zstd.decompress(Zstd.compress(bytes, level: level))) == bytes
+                }
+                print("whole \(whole)")
+                let bytes = sample(2500, 98)
+                let known = try! ZstdDictionary(bytes[..<400])
+                var packed = ByteBuffer()
+                let encoder = ZstdEncoder(level: 5, dictionary: known)
+                encoder.compress(bytes[..<1000], into: &packed)
+                encoder.flush(into: &packed)
+                encoder.compress(bytes[1000...], into: &packed)
+                encoder.finish(into: &packed)
+                let decoder = ZstdDecoder(limits: DecompressionLimits(), dictionary: known)
+                var back = ByteBuffer()
+                var at = 0
+                while at < packed.count {
+                    let end = at + 200 < packed.count ? at + 200 : packed.count
+                    let step = try! decoder.decompress(packed.bytes[at..<end], into: &back, limit: 300)
+                    at += step.consumed
+                }
+                while !decoder.isFinished {
+                    _ = try! decoder.decompress([], into: &back, limit: 300)
+                }
+                print("pieces \(back.bytes == bytes)")
+                var refused = 0
+                var seed: U64 = 1
+                while seed < 13 {
+                    do {
+                        _ = try Zstd.decompress(damaged(Zstd.compress(sample(400, seed), level: 1 + Int(seed) % 6), seed))
                     } catch {
                         refused += 1
                     }

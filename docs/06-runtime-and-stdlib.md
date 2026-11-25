@@ -897,7 +897,7 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     Environment (variables listed, set and removed under
                     'unsafe', arguments as text and bytes, home, temporary
                     and known folders by XDG, Apple and Windows rules)
-Sable.IO.Compression Deflate Zlib Gzip (below), all at once, as they come
+Sable.IO.Compression Deflate Zlib Gzip Zstd (below), all at once, as they come
                     (Compressor, Decompressor) and as readers and writers
                     that compress, async ones too, with limits on what is
                     decompressed
@@ -1206,6 +1206,16 @@ runs the codecs in `CompressionTests`.
   parse of least bits, by what the symbols took in the pass before, three
   times. Blocks end where their symbols change. Its output is not zlib's,
   byte for byte.
+- **Zstd** decodes a block at a time: its literals' four Huffman streams at
+  once, five bytes of each a step, through one table of eleven bits; then its
+  sequences, each read and done. It takes dictionaries (raw bytes, and those
+  `zstd --train` makes), skippable frames, and windows up to a limit of 128
+  MiB unless told otherwise; memory grows as a frame's bytes come, not by what
+  its header says. The encoder has zstd's levels, 1 to 22 and the fast ones
+  below 0, and their parameters: hash tables (1 to 4), rows of the last places
+  with a hash and eight more bits of it beside each (5 to 13), a tree of
+  places and the parse of least bits over a whole block (14 to 22). It does
+  not split blocks by their content, nor write several at once.
 - A decoder says how much it consumed, exactly, so what follows a stream can
   be read; a gzip decoder reads every member. `DecompressionLimits` bound
   the length and the ratio.

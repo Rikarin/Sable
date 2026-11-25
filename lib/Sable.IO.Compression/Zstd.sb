@@ -1,0 +1,48 @@
+module Sable.IO.Compression
+
+/// Zstandard (RFC 8878), all at once.
+///
+/// ```sable
+/// let packed = Zstd.compress("so so so so so so so so so so".utf8Bytes(), level: 19)
+/// assert(try! Zstd.decompress(packed) == "so so so so so so so so so so".utf8Bytes())
+/// ```
+public struct Zstd {
+    /// The bytes compressed to a frame, at a level from 1 to 22, the smallest,
+    /// or below 0, faster the lower; with a checksum, or not; with a dictionary
+    /// that the decoder is given too, if with one.
+    public static fn compress(_ source: U8[:], level: Int = 3, checksum: Bool = true, dictionary: ZstdDictionary? = none) -> U8[>..] {
+        var output = ByteBuffer()
+        compress(source, into: &output, level: level, checksum: checksum, dictionary: dictionary)
+        return output.takeBytes()
+    }
+
+    /// The bytes compressed at the buffer's end: to how many.
+    @discardable
+    public static fn compress(_ source: U8[:], into output: inout ByteBuffer, level: Int = 3, checksum: Bool = true, dictionary: ZstdDictionary? = none) -> Int {
+        let before = output.count
+        let encoder = ZstdEncoder(level: level, checksum: checksum, dictionary: dictionary, contentSize: source.count)
+        encoder.compress(source, into: &output)
+        encoder.finish(into: &output)
+        return output.count - before
+    }
+
+    /// The bytes decompressed, every frame of them: `.Truncated` where the
+    /// last does not end.
+    public static fn decompress(_ source: U8[:], limits: DecompressionLimits = DecompressionLimits(), dictionary: ZstdDictionary? = none) throws(CompressionError) -> U8[>..] {
+        var output = ByteBuffer()
+        try decompress(source, into: &output, limits: limits, dictionary: dictionary)
+        return output.takeBytes()
+    }
+
+    /// The bytes decompressed at the buffer's end: to how many.
+    @discardable
+    public static fn decompress(_ source: U8[:], into output: inout ByteBuffer, limits: DecompressionLimits = DecompressionLimits(), dictionary: ZstdDictionary? = none) throws(CompressionError) -> Int {
+        var decoder = ZstdDecoder(limits: limits, dictionary: dictionary)
+        return try decompressWhole(&decoder, source, into: &output)
+    }
+
+    /// The most bytes so many can be compressed to, at any level.
+    public static fn maxCompressedLength(_ count: Int) -> Int {
+        return count + (count / 131072 + 1) * 3 + 22
+    }
+}

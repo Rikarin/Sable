@@ -69,6 +69,21 @@ public struct NativeMemory {
         bytes.fill(from: offset, raw: source.address, byteCount)
     }
 
+    /// 'byteCount' bytes from 'source' on added at the end of the bytes.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     let memory = NativeMemory.allocate(byteCount: 4, zeroed: true)
+    ///     defer { NativeMemory.deallocate(memory) }
+    ///     var bytes: U8[>..] = [7]
+    ///     NativeMemory.append(from: memory, byteCount: 2, to: &bytes)
+    ///     assert(bytes == [7, 0, 0])
+    /// }
+    /// ```
+    public unsafe static fn append(from source: RawPtr<U8>, byteCount: Int, to bytes: inout U8[>..]) {
+        bytes.append(raw: source.address, byteCount)
+    }
+
     /// 'byteCount' bytes from 'target' on, each set to the byte: C's 'memset'.
     public unsafe static fn fill<T>(_ target: RawPtr<T>, with byte: U8, byteCount: Int) {
         precondition(byteCount >= 0, "filling \(byteCount) bytes")
@@ -79,4 +94,9 @@ public struct NativeMemory {
 extension U8[:] {
     @builtin("bytes_from_raw")
     unsafe mutating fn fill(from offset: Int, raw address: Int, _ byteCount: Int)
+}
+
+extension U8[>..] {
+    @builtin("array_append_raw")
+    unsafe mutating fn append(raw address: Int, _ byteCount: Int)
 }

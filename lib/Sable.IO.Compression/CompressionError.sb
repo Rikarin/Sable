@@ -40,12 +40,5 @@ public union CompressionError: Error {
     }
 
     /// The same as what a Reader throws.
-    var asIoError: IoError {
-        get {
-            if case .Truncated = self {
-                return .UnexpectedEof
-            }
-            return .InvalidData(what: description())
-        }
-    }
+    var asIoError: IoError => .InvalidData(what: description())
 }

@@ -2,7 +2,7 @@ module Sable.IO.Compression
 
 /// The symbol of a length, 3 to 258, after 257's, a byte each from 0 on; and
 /// that of a distance d, where d - 1 < 256, or, from 256 on, (d - 1) >> 7.
-let deflateSymbols: Int = {
+static let deflateSymbols: Int = {
         () -> Int in
         unsafe {
             let table = NativeMemory.allocate(byteCount: 259 + 512, zeroed: true).address
@@ -33,7 +33,7 @@ let deflateSymbols: Int = {
 
 /// The same bases and extra bits, for an encoder to read unchecked: of 29
 /// lengths, then of 30 distances, then their extra bits.
-let deflateBases: Int = {
+static let deflateBases: Int = {
         () -> Int in
         var all: U32[>..] = []
         all.append(contentsOf: deflateLengthBases)

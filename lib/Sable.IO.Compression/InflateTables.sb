@@ -11,42 +11,42 @@ module Sable.IO.Compression
 //     the end      1 at bit 13
 //     no code      neither
 
-let inflateLiteral: U32 = 0x8000_0000
-let inflateSpecial: U32 = 0x8000
-let inflateSubtable: U32 = 0x4000
-let inflateEnd: U32 = 0x2000
+const inflateLiteral: U32 = 0x8000_0000
+const inflateSpecial: U32 = 0x8000
+const inflateSubtable: U32 = 0x4000
+const inflateEnd: U32 = 0x2000
 
 /// How many entries the tables may have: a code of 288 symbols looked up by
 /// eleven bits, of 32 by eight, and of 19 by seven (zlib's 'enough').
-let inflateLengthEntries: Int = 2342
-let inflateDistanceEntries: Int = 402
-let inflatePrecodeEntries: Int = 128
+const inflateLengthEntries: Int = 2342
+const inflateDistanceEntries: Int = 402
+const inflatePrecodeEntries: Int = 128
 
 /// The order a block's code lengths' own code's lengths are in.
-let precodeOrder: U32[>..] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+static let precodeOrder: U32[>..] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
 
 /// The bases of the lengths from symbol 257 on, and their extra bits.
-let deflateLengthBases: U32[>..] = [
+static let deflateLengthBases: U32[>..] = [
     3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258,
 ]
 
-let deflateLengthBits: U32[>..] = [
+static let deflateLengthBits: U32[>..] = [
     0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
 ]
 
 /// The bases of the distances, and their extra bits.
-let deflateDistanceBases: U32[>..] = [
+static let deflateDistanceBases: U32[>..] = [
     1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
     8193, 12289, 16385, 24577,
 ]
 
-let deflateDistanceBits: U32[>..] = [
+static let deflateDistanceBits: U32[>..] = [
     0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
 ]
 
 /// What each symbol's entry has, whatever its code: 288 of literals and
 /// lengths, 32 of distances, and 19 of code lengths.
-let inflateSymbols: Int = {
+static let inflateSymbols: Int = {
         () -> Int in
         var entries: U32[>..] = []
         var i: U32 = 0

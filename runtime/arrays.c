@@ -500,6 +500,22 @@ void sable_array_append_holes(SableArray **slot, const SableMetadata *type, int6
     array->count += count;
 }
 
+// So many bytes at an address added at the end of a byte array, grown as
+// appending them one at a time grows it.
+void sable_array_append_raw(SableArray **slot, const SableMetadata *type, const void *source, int64_t count) {
+    if (count < 0) {
+        trap_here("cannot append a negative number of elements");
+    }
+
+    if (count == 0) {
+        return;
+    }
+
+    SableArray *array = with_room(slot, type, count);
+    memcpy(array->elements + array->count, source, (size_t)count);
+    array->count += count;
+}
+
 // 'count' copies of the element at 'value' added at the end at once: the
 // array made the only reference to its buffer, grown as appending them one
 // at a time grows it. A trivial element is copied as bytes — by memset when

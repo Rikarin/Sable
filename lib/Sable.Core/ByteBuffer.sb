@@ -91,6 +91,11 @@ public struct ByteBuffer {
         storage.removeLast(count - used)
     }
 
+    /// So many bytes at an address added.
+    package unsafe mutating fn append(from source: RawPtr<U8>, byteCount: Int) {
+        NativeMemory.append(from: source, byteCount: byteCount, to: &storage)
+    }
+
     /// How many bytes have been written.
     public var count: Int => storage.count
 

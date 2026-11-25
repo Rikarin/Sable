@@ -1,0 +1,221 @@
+module Sable.IO.Compression
+
+// What zstd's sequences are made of (RFC 8878): the base of each code of a
+// literal length or a match length and how many bits more it has, and how the
+// codes are distributed where a block does not say. A distribution has how
+// many of a table's states each code has, or -1 for one that has less than one.
+
+/// 36 bases of literal lengths, 53 of match lengths, then the bits of each.
+static let zstdBases: Int = constantTable([
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32, 40, 48, 64, 128, 256, 512, 1024,
+    2048, 4096, 8192, 16384, 32768, 65536,
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
+    34, 35, 37, 39, 41, 43, 47, 51, 59, 67, 83, 99, 131, 259, 515, 1027, 2051, 4099, 8195, 16387, 32771, 65539,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3,
+    3, 4, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+] as U32[>..])
+
+static let zstdLiteralDistribution: Int[>..] = [
+    4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1, -1, -1, -1, -1,
+]
+
+static let zstdMatchDistribution: Int[>..] = [
+    1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1,
+]
+
+static let zstdOffsetDistribution: Int[>..] = [
+    1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1,
+]
+
+/// Which of a sequence's three codes a table is of.
+@derive(Equatable)
+enum ZstdCode: Int {
+    LiteralLength = 0
+    Offset = 1
+    MatchLength = 2
+
+    var index: Int => self as Int
+
+    /// The most symbols there may be, and the most bits its tables may have.
+    var symbolCount: Int => self == .LiteralLength ? 36 : (self == .Offset ? 32 : 53)
+
+    var maxLog: Int => self == .Offset ? 8 : 9
+
+    var defaultLog: Int => self == .Offset ? 5 : 6
+
+    var defaultDistribution: Int[>..] {
+        get {
+            return self == .LiteralLength ? zstdLiteralDistribution : (self == .Offset ? zstdOffsetDistribution : zstdMatchDistribution)
+        }
+    }
+
+    unsafe fn base(_ symbol: Int) -> U32 {
+        if self == .Offset {
+            return 1 << ((symbol & 31) unchecked as U32)
+        }
+        return load32(zstdBases &+ 4 &* (self == .LiteralLength ? symbol : 36 &+ symbol))
+    }
+
+    unsafe fn bits(_ symbol: Int) -> U32 {
+        if self == .Offset {
+            return symbol unchecked as U32
+        }
+        return load32(zstdBases &+ 4 &* (self == .LiteralLength ? 89 &+ symbol : 125 &+ symbol))
+    }
+}
+
+/// A distribution read from a block: how many bytes it takes, its counts put at
+/// an address, two bytes each, and its log and how many symbols it has; or a
+/// length of 0 where it is none.
+unsafe fn readDistribution(_ source: Int, count: Int, counts: Int, symbolCount: Int, maxLog: Int) -> (length: Int, log: Int, symbols: Int) {
+    let end = count &* 8
+    if count < 1 {
+        return (length: 0, log: 0, symbols: 0)
+    }
+    let log = (load8(source) & 15) &+ 5
+    if log > maxLog {
+        return (length: 0, log: 0, symbols: 0)
+    }
+    var at = 4
+    var remaining = (1 << log) &+ 1
+    var threshold = 1 << log
+    var width = log &+ 1
+    var symbol = 0
+    var afterZero = false
+    while remaining > 1 && symbol < symbolCount {
+        if at >= end {
+            return (length: 0, log: 0, symbols: 0)
+        }
+        if afterZero {
+            // How many more are zero, two bits at a time, three for more.
+            var run = 3
+            while run == 3 {
+                if at >= end {
+                    return (length: 0, log: 0, symbols: 0)
+                }
+                run = (load16(source &+ (at >> 3)) >> (at & 7)) & 3
+                at = at &+ 2
+                var zeros = run
+                while zeros > 0 {
+                    if symbol >= symbolCount {
+                        return (length: 0, log: 0, symbols: 0)
+                    }
+                    store16(0, counts &+ 2 &* symbol)
+                    symbol = symbol &+ 1
+                    zeros = zeros &- 1
+                }
+            }
+            afterZero = false
+            if symbol >= symbolCount {
+                break
+            }
+        }
+        let word = (load32(source &+ (at >> 3)) >> ((at & 7) unchecked as U32)) unchecked as Int
+        let most = 2 &* threshold &- 1 &- remaining
+        var value = word & (threshold &- 1)
+        if value < most {
+            at = at &+ width &- 1
+        } else {
+            value = word & (2 &* threshold &- 1)
+            if value >= threshold {
+                value = value &- most
+            }
+            at = at &+ width
+        }
+        // Less one: -1 is less than one.
+        value = value &- 1
+        remaining = remaining &- (value < 0 ? 1 : value)
+        store16(value, counts &+ 2 &* symbol)
+        symbol = symbol &+ 1
+        afterZero = value == 0
+        while remaining < threshold {
+            width = width &- 1
+            threshold = threshold >> 1
+        }
+    }
+    if remaining != 1 || at > end {
+        return (length: 0, log: 0, symbols: 0)
+    }
+    return (length: (at &+ 7) >> 3, log: log, symbols: symbol)
+}
+
+/// The symbols of a distribution spread over a table's states, a byte each.
+/// 'next' has room for two bytes a symbol, and is each one's first state.
+unsafe fn spreadSymbols(_ spread: Int, counts: Int, symbols: Int, log: Int, next: Int) {
+    let size = 1 << log
+    var high = size &- 1
+    var symbol = 0
+    while symbol < symbols {
+        let count = RawPtr<U8>(address: counts &+ 2 &* symbol).load(as: I16.self) unchecked as Int
+        if count == -1 {
+            store8(symbol, spread &+ high)
+            high = high &- 1
+            store16(1, next &+ 2 &* symbol)
+        } else {
+            store16(count, next &+ 2 &* symbol)
+        }
+        symbol = symbol &+ 1
+    }
+    let step = (size >> 1) &+ (size >> 3) &+ 3
+    let mask = size &- 1
+    var at = 0
+    symbol = 0
+    while symbol < symbols {
+        var left = RawPtr<U8>(address: counts &+ 2 &* symbol).load(as: I16.self) unchecked as Int
+        while left > 0 {
+            store8(symbol, spread &+ at)
+            at = (at &+ step) & mask
+            while at > high {
+                at = (at &+ step) & mask
+            }
+            left = left &- 1
+        }
+        symbol = symbol &+ 1
+    }
+}
+
+/// The decoding table of a distribution: an entry, a U64, for each state, with
+/// the code's base in its low half, and above that the next state's base (16
+/// bits), how many bits are read into it (8), and how many are read on the
+/// code's base (8). 'work' has room for 1024 bytes.
+unsafe fn buildSequenceTable(_ table: Int, _ code: ZstdCode, counts: Int, symbols: Int, log: Int, work: Int) {
+    let spread = work
+    let next = work &+ 512
+    spreadSymbols(spread, counts: counts, symbols: symbols, log: log, next: next)
+    let size = 1 << log
+    var state = 0
+    while state < size {
+        let symbol = load8(spread &+ state)
+        let from = load16(next &+ 2 &* symbol)
+        store16(from &+ 1, next &+ 2 &* symbol)
+        let bits = log &- (63 &- from.leadingZeroCount)
+        let low = code.base(symbol) unchecked as U64
+        let first = ((from << bits) &- size) unchecked as U64
+        let entry = low | first << 32 | (bits unchecked as U64) << 48 | (code.bits(symbol) unchecked as U64) << 56
+        store64(entry, table &+ 8 &* state)
+        state = state &+ 1
+    }
+}
+
+/// The tables of the three codes' own distributions: 64 entries of literal
+/// lengths, 32 of offsets, 64 of match lengths.
+static let zstdDefaultTables: Int = {
+        () -> Int in
+        unsafe {
+            let tables = NativeMemory.allocate(byteCount: 8 * 160).address
+            let work = Block(count: 1024 + 128)
+            for code in [ZstdCode.LiteralLength, ZstdCode.Offset, ZstdCode.MatchLength] {
+                let distribution = code.defaultDistribution
+                var i = 0
+                while i < distribution.count {
+                    store16(distribution[i], work.address + 1024 + 2 * i)
+                    i += 1
+                }
+                let at = code == .LiteralLength ? 0 : (code == .Offset ? 64 : 96)
+                buildSequenceTable(tables + 8 * at, code, counts: work.address + 1024, symbols: distribution.count, log: code.defaultLog, work: work.address)
+            }
+            return tables
+        }
+    }()

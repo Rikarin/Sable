@@ -1,7 +1,7 @@
 module Sable.IO.Compression
 
 /// The bytes a decoder was given and has not read, in memory, with sixteen
-/// zeros past them that may be read too.
+/// zeros before them, and thirty-two after, that may be read too.
 struct InputBuffer {
     let block: Block
     let capacity: Int
@@ -11,9 +11,13 @@ struct InputBuffer {
 
     init(capacity: Int) {
         self.capacity = capacity
-        block = Block(count: capacity + 16)
-        position = block.address
-        end = block.address
+        block = Block(count: capacity + 48)
+        position = block.address + 16
+        end = position
+        unsafe {
+            store64(0, block.address)
+            store64(0, block.address &+ 8)
+        }
     }
 
     /// How many are unread.
@@ -23,12 +27,13 @@ struct InputBuffer {
     /// many.
     mutating fn fill(_ source: U8[:], from index: Int) -> Int {
         let left = count
-        if left > 0 && position != block.address {
+        let start = block.address + 16
+        if left > 0 && position != start {
             unsafe {
-                copyBytes(from: position, to: block.address, left)
+                copyBytes(from: position, to: start, left)
             }
         }
-        position = block.address
+        position = start
         end = position + left
         let taken = source.count - index < capacity - left ? source.count - index : capacity - left
         unsafe {
@@ -36,6 +41,8 @@ struct InputBuffer {
             end = end + taken
             store64(0, end)
             store64(0, end &+ 8)
+            store64(0, end &+ 16)
+            store64(0, end &+ 24)
         }
         return taken
     }

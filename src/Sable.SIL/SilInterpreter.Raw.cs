@@ -123,6 +123,28 @@ public sealed partial class SilInterpreter {
                 return null;
             }
 
+            case "array_append_raw": {
+                var (from, count) = ((long)operands[1]!, (long)operands[2]!);
+                if (count < 0) {
+                    throw new SilTrap("cannot append a negative number of elements");
+                }
+
+                if (count > 0) {
+                    var (block, at) = RawRange(from, count);
+                    if (block.Written.AsSpan(at, (int)count).Contains(false)) {
+                        throw new SilTrap($"reading bytes at 0x{from:x} that no one wrote");
+                    }
+
+                    var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
+                    array.Elements.EnsureCapacity(array.Elements.Count + (int)count);
+                    foreach (var value in block.Bytes.AsSpan(at, (int)count)) {
+                        array.Elements.Add((long)value);
+                    }
+                }
+
+                return null;
+            }
+
             case "bytes_from_raw": {
                 var (index, from, count) = ((long)operands[1]!, (long)operands[2]!, (int)(long)operands[3]!);
                 if (count > 0) {

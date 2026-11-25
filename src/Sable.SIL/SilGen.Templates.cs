@@ -116,6 +116,10 @@ public sealed partial class SilGen {
     ///     type's conformance can have one.
     /// </summary>
     internal bool HasTemplate(TypeSymbol type, NamedTypeSymbol protocol) {
+        if (type is ArrayTypeSymbol or OptionalTypeSymbol) {
+            return HasStructuralTemplate(type, protocol.OriginalDefinition);
+        }
+
         if (type is not NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Union, OriginalDefinition: var definition }
             || definition is not { ExtendedOptional: null, ExtendedArray: null } || !IsPlainGeneric(definition) || definition.TypeParameters.Any(static p => p.IsValue || p.AllowsNoncopyable)) {
             return false;
@@ -141,6 +145,89 @@ public sealed partial class SilGen {
         var closure = ProtocolClosure([protocol]).ToList();
         Templates(definition, instance, closure.Select(QualifiedName).ToHashSet(StringComparer.Ordinal));
         return _templatesAsked[(definition, protocol)] = closure.TrueForAll(p => _module.FindWitnessTable(instance, QualifiedName(p)) is { IsTemplate: true });
+    }
+
+    readonly Dictionary<(string Family, NamedTypeSymbol Protocol), bool> _structuralAsked = [];
+
+    /// <summary>
+    ///     Whether an array, a slice or an optional of type parameters,
+    ///     <c>T[&gt;..]</c> given as a <c>C: Collection</c>, has a template
+    ///     table of a conformance: one for every array, every slice and every
+    ///     optional, found by the kind of the metadata and, where its
+    ///     extension asks something of the element, by what that conforms to.
+    /// </summary>
+    bool HasStructuralTemplate(TypeSymbol type, NamedTypeSymbol protocol) {
+        if (!CompilesOnce || !IsTabledProtocol(protocol) || !protocol.TypeParameters.IsEmpty) {
+            return false;
+        }
+
+        // A struct has extensions for an optional, an array for its elements' kinds.
+        var family = type switch {
+            ArrayTypeSymbol { ArrayKind: ArrayKind.Slice } => "slice",
+            ArrayTypeSymbol { ArrayKind: ArrayKind.Fixed or ArrayKind.Grow or ArrayKind.GrowShrink } => "array",
+            OptionalTypeSymbol => "optional",
+            _ => null,
+        };
+        if (family is null || type is ArrayTypeSymbol array && !protocol.ArrayConformers.Any(c => Symbols.Compilation.MatchArray(c, array) is not null)) {
+            return false;
+        }
+
+        // Asked again while it is made, from a witness of its own: as it will be.
+        if (_structuralAsked.TryGetValue((family, protocol), out var has)) {
+            return has;
+        }
+
+        _structuralAsked[(family, protocol)] = true;
+        return _structuralAsked[(family, protocol)] = MakeStructuralTemplate(type, family, protocol);
+    }
+
+    bool MakeStructuralTemplate(TypeSymbol type, string family, NamedTypeSymbol protocol) {
+        if (!Bases(protocol).All(b => HasStructuralTemplate(type, b.OriginalDefinition))) {
+            return false;
+        }
+
+        NamedTypeSymbol? definition;
+        TypeSymbol concrete;
+        var required = new List<(TypeParameterSymbol, NamedTypeSymbol)>();
+        if (type is ArrayTypeSymbol array) {
+            // The first that declares it of one type parameter's elements: 'extension<Element> Element[:]: Collection'.
+            definition = protocol.ArrayConformers.FirstOrDefault(c => Symbols.Compilation.MatchArray(c, array) is not null && c is { ExtendedArray.ElementType: TypeParameterSymbol, TypeParameters.Length: 1 });
+            if (definition is null) {
+                return false;
+            }
+
+            concrete = new ArrayTypeSymbol(definition.TypeParameters[0], array.ArrayKind);
+        } else {
+            definition = Core.Optional;
+            concrete = definition.ExtendedOptional!;
+            var symbols = ProtocolSymbols(definition);
+            var conditional = ConditionalProtocols(definition).Where(c => c.Protocol == QualifiedName(protocol)).Select(static c => ((string, ImmutableArray<(int, string)> Requirements)?)c).FirstOrDefault();
+            if (conditional is null && !DeclaredProtocols(definition).Contains(QualifiedName(protocol))) {
+                return false;
+            }
+
+            foreach (var (_, requirement) in conditional?.Requirements ?? []) {
+                if (!symbols.TryGetValue(requirement, out var each)) {
+                    return false;
+                }
+
+                required.Add((definition.TypeParameters[0], each));
+            }
+        }
+
+        var element = new OpaqueType("Element");
+        SilType? instance = family switch {
+            "array" => new ArrayType(element),
+            "slice" => new SliceType(element),
+            _ => null,
+        };
+        if (instance is null) {
+            using (Opaque(new GenericShape(definition.TypeParameters, []))) {
+                instance = Lower(concrete);
+            }
+        }
+
+        return instance is not null && TemplateTable(definition, instance, protocol, [..required], concrete, family);
     }
 
     /// <summary>The protocols the registry may be asked about: those a call opens a type as, those cast to, and what a template's associated types conform to.</summary>
@@ -213,11 +300,13 @@ public sealed partial class SilGen {
     }
 
     /// <summary>The template table of a generic type's conformance to a protocol, for its instance made at run time; none when an entry cannot be made.</summary>
-    void TemplateTable(NamedTypeSymbol definition, NominalType instance, NamedTypeSymbol protocol, ImmutableArray<(TypeParameterSymbol, NamedTypeSymbol)> required) {
-        if (!IsTabledProtocol(protocol) || !protocol.TypeParameters.IsEmpty || definition.ExtendedOptional is not null || definition.ExtendedArray is not null
+    bool TemplateTable(
+        NamedTypeSymbol definition, SilType instance, NamedTypeSymbol protocol, ImmutableArray<(TypeParameterSymbol, NamedTypeSymbol)> required, TypeSymbol? structural = null, string family = ""
+    ) {
+        if (!IsTabledProtocol(protocol) || !protocol.TypeParameters.IsEmpty || structural is null && (definition.ExtendedOptional is not null || definition.ExtendedArray is not null)
             || Bases(protocol).Any(b => _module.FindWitnessTable(instance, QualifiedName(b)) is null)
             || (definition.DeclaringSyntax.FirstOrDefault() ?? protocol.DeclaringSyntax.FirstOrDefault()) is not { } at) {
-            return;
+            return false;
         }
 
         // What the witnesses compiled once are given: each argument's metadata, and the tables its constraints and the conformance require.
@@ -225,7 +314,7 @@ public sealed partial class SilGen {
         foreach (var parameter in definition.TypeParameters) {
             foreach (var constraint in parameter.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c))) {
                 if (constraint is not NamedTypeSymbol each || !IsTabledProtocol(each)) {
-                    return;
+                    return false;
                 }
 
                 requirements.Add((parameter, each.OriginalDefinition));
@@ -253,33 +342,39 @@ public sealed partial class SilGen {
         var shape = new GenericShape(definition.TypeParameters, [..requirements]);
         var table = new SilWitnessTable(instance, QualifiedName(protocol)) { IsTemplate = true };
         table.Bases.AddRange(Bases(protocol).Select(QualifiedName));
+        if (structural is not null) {
+            table.Required.AddRange(shape.Requirements.Select(static r => QualifiedName(r.Protocol)).Distinct());
+        }
+
+        var concrete = structural ?? definition.Construct([..definition.TypeParameters.Cast<TypeSymbol>()]);
         for (var i = 0; i < protocol.OriginalDefinition.AssociatedTypes.Length; i++) {
-            if (!TemplateAssociated(definition, table, protocol, i, shape, at)) {
+            if (!TemplateAssociated(definition, concrete, family, table, protocol, i, shape, at)) {
                 Refused(protocol.OriginalDefinition.AssociatedTypes[i].Name);
-                return;
+                return false;
             }
         }
 
         foreach (var (key, member) in GenericRequirements(protocol)) {
             if (member is FunctionSymbol { TypeParameters.IsEmpty: false } || GenericEntryType(protocol, member) is not { } type) {
                 Refused(key);
-                return;
+                return false;
             }
 
             string? witness;
             using (_diagnostics.Suppress()) {
-                witness = TemplateWitness(definition, protocol, table.Entries.Count, member, key, type, shape, at);
+                witness = TemplateWitness(definition, concrete, family, protocol, table.Entries.Count, member, key, type, shape, at);
             }
 
             if (witness is null) {
                 Refused(key);
-                return;
+                return false;
             }
 
             table.Entries.Add((key, witness, type));
         }
 
         _module.AddWitnessTable(table);
+        return true;
     }
 
     /// <summary>
@@ -288,13 +383,13 @@ public sealed partial class SilGen {
     ///     Self's — which reads the type arguments there, as an entry does.
     ///     False when its metadata, or what it conforms to, cannot be found so.
     /// </summary>
-    bool TemplateAssociated(NamedTypeSymbol definition, SilWitnessTable table, NamedTypeSymbol protocol, int index, GenericShape shape, SyntaxNode at) {
+    bool TemplateAssociated(NamedTypeSymbol definition, TypeSymbol concrete, string family, SilWitnessTable table, NamedTypeSymbol protocol, int index, GenericShape shape, SyntaxNode at) {
         var associated = protocol.OriginalDefinition.AssociatedTypes[index];
-        var concrete = definition.Construct([..definition.TypeParameters.Cast<TypeSymbol>()]);
         using (Opaque(shape))
         using (AssociatedContext(definition)) {
-            var read = _compilation.AssociatedTypeOf(concrete, associated) is { } declared ? TypeSubstitution.For(concrete).Apply(declared) : null;
-            if (read is null) {
+            var read = concrete is NamedTypeSymbol named ? _compilation.AssociatedTypeOf(named, associated) is { } declared ? TypeSubstitution.For(named).Apply(declared) : null
+                : new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol> { [protocol.OriginalDefinition.SelfTypeParameter!] = concrete }).Apply(new DependentMemberTypeSymbol(protocol.OriginalDefinition.SelfTypeParameter!, associated));
+            if (read is null or DependentMemberTypeSymbol { BaseType: ArrayTypeSymbol or OptionalTypeSymbol }) {
                 return false;
             }
 
@@ -303,7 +398,7 @@ public sealed partial class SilGen {
                 return false;
             }
 
-            var stem = $"$template$associated${Sanitise(QualifiedName(definition))}${Sanitise(QualifiedName(protocol))}${index}";
+            var stem = $"$template$associated${Sanitise(QualifiedName(definition))}{(family.Length > 0 ? "$" + family : "")}${Sanitise(QualifiedName(protocol))}${index}";
             var hidden = shape.Parameters.Select(static _ => SilType.Metadata).Concat(shape.Requirements.Select(static _ => SilType.WitnessTable));
             var body = new SilFunction(stem + "$body", new FunctionType([..hidden], SilType.Metadata));
             body.ParameterNames.AddRange(shape.Parameters.Select(static p => $"$metadata.{ParameterName(p)}"));
@@ -339,8 +434,8 @@ public sealed partial class SilGen {
                     GenericTable(bound, constraint.OriginalDefinition, at);
                 } else if (bound is TypeParameterSymbol or DependentMemberTypeSymbol) {
                     OpenedProtocol(constraint.OriginalDefinition, false, false, at);
-                } else if (bound is not NamedTypeSymbol) {
-                    // An array's, an optional's or a tuple's conformance has no template.
+                } else if (bound is not NamedTypeSymbol && !HasTemplate(bound, constraint.OriginalDefinition)) {
+                    // A tuple's conformance has no template, nor an array's that cannot be made.
                     return false;
                 }
 
@@ -390,9 +485,9 @@ public sealed partial class SilGen {
     ///     type with them. Null when the witness cannot be made.
     /// </summary>
     string? TemplateWitness(
-        NamedTypeSymbol definition, NamedTypeSymbol protocol, int index, Symbol member, string key, FunctionType type, GenericShape shape, SyntaxNode at
+        NamedTypeSymbol definition, TypeSymbol concrete, string family, NamedTypeSymbol protocol, int index, Symbol member, string key, FunctionType type, GenericShape shape, SyntaxNode at
     ) {
-        var stem = $"$template$witness${Sanitise(QualifiedName(definition))}${Sanitise(QualifiedName(protocol))}${index}${(member.Name.All(char.IsLetterOrDigit) ? member.Name : "op")}";
+        var stem = $"$template$witness${Sanitise(QualifiedName(definition))}{(family.Length > 0 ? "$" + family : "")}${Sanitise(QualifiedName(protocol))}${index}${(member.Name.All(char.IsLetterOrDigit) ? member.Name : "op")}";
         if (_module.Find(stem) is not null) {
             return stem;
         }
@@ -409,7 +504,6 @@ public sealed partial class SilGen {
         var innerType = new FunctionType([..type.Parameters.Take(own), ..hidden, ..type.Parameters.Skip(own)], type.Result, type.Thrown, isAsync: type.IsAsync);
         string? inner;
         using (Opaque(shape)) {
-            var concrete = definition.Construct([..definition.TypeParameters.Cast<TypeSymbol>()]);
             inner = Lower(concrete) is { } value ? GenericWitness(concrete, value, protocol, key, member, innerType, at, ($"{stem}$body", shape)) : null;
         }
 

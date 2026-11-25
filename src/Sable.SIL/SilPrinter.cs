@@ -155,6 +155,10 @@ public static class SilPrinter {
                 builder.Append("  associated ").Append(Quote(name)).Append(": $").Append(type).Append('\n');
             }
 
+            foreach (var required in table.Required) {
+                builder.Append("  requires ").Append(Quote(required)).Append('\n');
+            }
+
             foreach (var accessor in table.Accessors) {
                 builder.Append("  accessor @").Append(accessor).Append('\n');
             }

@@ -405,11 +405,23 @@ public sealed partial class LlvmEmitter {
         }
 
         var body = new StringBuilder("define internal void @\"sable.templates.register\"() {\nentry:\n");
-        foreach (var table in module.WitnessTables.Where(static t => t is { IsTemplate: true, Conformer: NominalType })) {
+        foreach (var table in module.WitnessTables.Where(static t => t.IsTemplate)) {
             var associated = "null";
             if (HasAssociated(table)) {
                 associated = WitnessTableName(table.Conformer, table.Protocol)[..^1] + ".accessors\"";
                 _globals.Append($"{associated} = {SharedLinkage} constant [{table.Accessors.Count} x ptr] [{string.Join(", ", table.Accessors.Select(a => $"ptr @{Global(a)}"))}]{Comdat(associated, SharedLinkage)}\n");
+            }
+
+            if (TypeMetadata.KindOf(table.Conformer) is (MetadataKind.Array or MetadataKind.Slice or MetadataKind.Optional) and var kind) {
+                // Every array's, slice's or optional's, whose element conforms to what the extension asks.
+                var required = "null";
+                if (table.Required.Count > 0) {
+                    required = WitnessTableName(table.Conformer, table.Protocol)[..^1] + ".required\"";
+                    _globals.Append($"{required} = {SharedLinkage} constant [{table.Required.Count} x ptr] [{string.Join(", ", table.Required.Select(p => $"ptr {ProtocolDescriptor(p)}"))}]{Comdat(required, SharedLinkage)}\n");
+                }
+
+                body.Append($"  call void @sable_register_structural_template(i64 {(int)kind}, ptr {WitnessTableGlobal(table)}, ptr {associated}, i64 {table.Required.Count}, ptr {required})\n");
+                continue;
             }
 
             body.Append($"  call void @sable_register_template(ptr {TrapMessage(DeclaredName((NominalType)table.Conformer))}, ptr {WitnessTableGlobal(table)}, ptr {associated})\n");
@@ -539,6 +551,7 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_witness_table(ptr, ptr)
                                         declare void @sable_register_witness_table(ptr, ptr)
                                         declare void @sable_register_template(ptr, ptr, ptr)
+                                        declare void @sable_register_structural_template(i64, ptr, ptr, i64, ptr)
                                         declare void @sable_register_generic_deinit(ptr, ptr)
                                         declare ptr @sable_witness_table_cached(ptr, ptr, ptr)
                                         declare ptr @sable_array_metadata(ptr, ptr)

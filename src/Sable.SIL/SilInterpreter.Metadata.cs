@@ -222,6 +222,11 @@ public sealed partial class SilInterpreter {
             }
         }
 
+        // A structural type's, which has no records: one made for it, or its kind's template.
+        if (TypeMetadata.KindOf(type) is MetadataKind.Array or MetadataKind.Slice or MetadataKind.Optional) {
+            return module.FindWitnessTable(type, protocol) ?? TemplateInstance(type, protocol);
+        }
+
         return null;
     }
 
@@ -237,9 +242,18 @@ public sealed partial class SilInterpreter {
             return made;
         }
 
-        if (type is not NominalType { TypeArguments.IsEmpty: false, DisplayName: { } display } || display.IndexOf('<') is not (> 0 and var open)
-            || module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && t.Conformer is NominalType { DisplayName: { } generic }
-                                                       && generic.IndexOf('<') == open && generic.AsSpan(0, open).SequenceEqual(display.AsSpan(0, open))) is not { } template) {
+        // An array's, a slice's or an optional's: its kind's, when its element conforms to what the extension requires.
+        SilWitnessTable? template;
+        if (TypeMetadata.KindOf(type) is (MetadataKind.Array or MetadataKind.Slice or MetadataKind.Optional) and var kind) {
+            var element = TypeMetadata.ArgumentsOf(type)[0];
+            template = module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && TypeMetadata.KindOf(t.Conformer) == kind
+                                                                && t.Required.TrueForAll(r => WitnessTableOf(element, r) is not null));
+            if (template is null) {
+                return null;
+            }
+        } else if (type is not NominalType { TypeArguments.IsEmpty: false, DisplayName: { } display } || display.IndexOf('<') is not (> 0 and var open)
+            || (template = module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && t.Conformer is NominalType { DisplayName: { } generic }
+                                                       && generic.IndexOf('<') == open && generic.AsSpan(0, open).SequenceEqual(display.AsSpan(0, open)))) is null) {
             return null;
         }
 

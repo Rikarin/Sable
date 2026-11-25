@@ -402,6 +402,8 @@ public sealed class SilParser {
                 var name = Expect(TokenKind.String, "an associated type's name").Text;
                 Expect(":");
                 table.AssociatedTypes.Add((name, ParseType()));
+            } else if (Accept("requires")) {
+                table.Required.Add(Expect(TokenKind.String, "a protocol's name").Text);
             } else if (Accept("accessor")) {
                 table.Accessors.Add(Expect(TokenKind.Global, "an accessor's name").Text);
             } else if (Accept("conforms")) {

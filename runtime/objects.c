@@ -218,10 +218,13 @@ static struct {
     size_t length;
     const SableWitnessTable *table;
     const SableAssociatedAccessor *associated; // null: the table is every instance's
+    // An array's, a slice's or an optional's: the metadata's kind, and what its element must conform to.
+    int64_t kind, required_count;
+    const SableProtocol *const *required;
 } *templates;
 static int64_t template_count, template_capacity;
 
-void sable_register_template(const char *name, const SableWitnessTable *table, const SableAssociatedAccessor *associated) {
+static void register_template(const char *name, const SableWitnessTable *table, const SableAssociatedAccessor *associated, int64_t kind, int64_t required_count, const SableProtocol *const *required) {
     if (template_count == template_capacity) {
         template_capacity = template_capacity == 0 ? 16 : template_capacity * 2;
         templates = realloc(templates, (size_t)template_capacity * sizeof *templates);
@@ -234,7 +237,20 @@ void sable_register_template(const char *name, const SableWitnessTable *table, c
     templates[template_count].length = strlen(name);
     templates[template_count].table = table;
     templates[template_count].associated = associated;
+    templates[template_count].kind = kind;
+    templates[template_count].required_count = required_count;
+    templates[template_count].required = required;
     template_count++;
+}
+
+void sable_register_template(const char *name, const SableWitnessTable *table, const SableAssociatedAccessor *associated) {
+    register_template(name, table, associated, 0, 0, NULL);
+}
+
+// The template of a conformance every array, slice or optional has whose
+// element conforms to what its extension requires: one for the kind.
+void sable_register_structural_template(int64_t kind, const SableWitnessTable *table, const SableAssociatedAccessor *associated, int64_t required_count, const SableProtocol *const *required) {
+    register_template("", table, associated, kind, required_count, required);
 }
 
 typedef struct SableTemplateInstance {
@@ -288,6 +304,23 @@ static const SableWitnessTable *template_instance(const SableTypeMetadata *type,
 
 static const SableWitnessTable *template_table(const SableTypeMetadata *type, const SableProtocol *protocol) {
     for (int64_t i = 0; i < template_count; i++) {
+        if (templates[i].kind != 0) {
+            if (templates[i].kind != type->kind || type->argument_count == 0 || !same_protocol(templates[i].table->protocol, protocol)) {
+                continue;
+            }
+
+            bool holds = true;
+            for (int64_t j = 0; j < templates[i].required_count && holds; j++) {
+                holds = sable_witness_table(type->arguments[0], templates[i].required[j]) != NULL;
+            }
+
+            if (holds) {
+                return templates[i].associated == NULL ? templates[i].table : template_instance(type, templates[i].table, templates[i].associated);
+            }
+
+            continue;
+        }
+
         if (same_protocol(templates[i].table->protocol, protocol) && strncmp(type->name, templates[i].name, templates[i].length) == 0
             && type->name[templates[i].length] == '<') {
             return templates[i].associated == NULL ? templates[i].table : template_instance(type, templates[i].table, templates[i].associated);
@@ -337,7 +370,8 @@ const SableWitnessTable *sable_witness_table(const SableTypeMetadata *type, cons
         }
 
         const SableWitnessTable *table = registered_table(type, protocol);
-        if (table == NULL && conforms && type->argument_count > 0 && type->name != NULL) {
+        bool structural = type->kind == SABLE_KIND_ARRAY || type->kind == SABLE_KIND_SLICE || type->kind == SABLE_KIND_OPTIONAL;
+        if (table == NULL && (conforms || structural) && type->argument_count > 0 && type->name != NULL) {
             table = template_table(type, protocol);
         }
 

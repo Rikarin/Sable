@@ -1195,7 +1195,7 @@ public sealed partial class SilGen {
 
         // Why each function that could be is not, for whoever is widening what can be.
         if (TracesGenerics && checker.Refused is { } refused) {
-            Console.Error.WriteLine($"specialised {TraceName(symbol)}: {refused.GetType().Name} '{refused.Syntax.ToString().Trim().ReplaceLineEndings(" ")}'{(Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") == "2" && refused is BoundExpression e ? $" : {e.Type.ToDisplayString()} ({e.Type.GetType().Name}){(e is BoundConversion c ? $" {c.ConversionKind} of {c.Operand.GetType().Name} {c.Operand.Type.ToDisplayString()}" : "")}" : "")}");
+            Console.Error.WriteLine($"specialised {TraceName(symbol)}: {refused.GetType().Name} {(Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") == "2" ? checker.RefusedAt : "")} '{refused.Syntax.ToString().Trim().ReplaceLineEndings(" ")}'{(Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") == "2" && refused is BoundExpression e ? $" : {e.Type.ToDisplayString()} ({e.Type.GetType().Name}){(e is BoundConversion c ? $" {c.ConversionKind} of {c.Operand.GetType().Name} {c.Operand.Type.ToDisplayString()}" : "")}" : "")}");
         }
 
         return false;
@@ -1668,6 +1668,14 @@ public sealed partial class SilGen {
             Mentions(call.Type) || call.Receiver is { } receiver && Mentions(receiver.Type) || call.Arguments.Any(a => Mentions(a.Type))
             || call.Substitution.Parameters.Any(p => call.Substitution.Lookup(p) is { } bound && Mentions(bound));
 
+        /// <summary>Which condition kept a call out, by its line, for SABLE_GENERICS_TRACE=2.</summary>
+        bool No([System.Runtime.CompilerServices.CallerLineNumber] int line = 0) {
+            RefusedAt = line;
+            return false;
+        }
+
+        public int RefusedAt { get; private set; }
+
         bool CallAllowed(BoundCall call) {
             var callee = call.Function;
 
@@ -1708,7 +1716,7 @@ public sealed partial class SilGen {
             }
 
             if (!IsGeneric(callee) || generator.UnspecialisedShape(callee) is not { } calleeShape) {
-                return false;
+                return No();
             }
 
             Describes |= generator.DescribesValues(callee);
@@ -1729,24 +1737,24 @@ public sealed partial class SilGen {
             var ownerBound = calleeOwner is null ? null : OwnerBindings(calleeOwner, call.Receiver is null ? (Owner(checkedSymbol) is null ? null : SelfType(checkedSymbol, TypeSubstitution.Empty)) : receiverType);
             if (call.Receiver is { } onValue && Mentions(onValue.Type) && (calleeSelf is null || receiverType is null || !IsOwn(receiverType))
                 && (ownerBound is null || !Simple(onValue.Type))) {
-                return false;
+                return No();
             }
 
             if (calleeOwner is not null && callee.IsMutating && call.Receiver is not (null or BoundSelfAccess) && !IsPlace(call.Receiver)) {
-                return false;
+                return No();
             }
 
             // One that changes self changes a local, or this function's own self.
             if (calleeSelf is not null && callee.IsMutating && receiverType is not null && IsOwn(receiverType) && call.Receiver is not (null or BoundSelfAccess) && !IsPlace(call.Receiver)
                 || callee.IsMutating && call.Receiver is null or BoundSelfAccess && !OwnMutating) {
-                return false;
+                return No();
             }
 
             var boundMap = new Dictionary<TypeParameterSymbol, TypeSymbol>();
             foreach (var parameter in calleeShape.Parameters) {
                 if ((ReferenceEquals(parameter, calleeSelf) ? call.Substitution.Lookup(parameter) ?? receiverType
                         : call.Substitution.Lookup(parameter) ?? ownerBound?.GetValueOrDefault(parameter)) is not { } given) {
-                    return false;
+                    return No();
                 }
 
                 var bound = V(given);
@@ -1762,7 +1770,7 @@ public sealed partial class SilGen {
                 // or a generic type's instance, whose conformances have templates.
                 if (bound is not TypeParameterSymbol && IsHeld(V(bound), _own) && bound is not MetatypeTypeSymbol) {
                     if (!calleeShape.ProtocolsOf(parameter).All(p => generator.HasTemplate(bound, p))) {
-                        return false;
+                        return No();
                     }
 
                     continue;
@@ -1770,12 +1778,12 @@ public sealed partial class SilGen {
 
                 // What the callee requires of it, this function has: its own tables, or what they refine.
                 if (!IsOwn(bound)) {
-                    return false;
+                    return No();
                 }
 
                 var has = Known(bound);
                 if (!calleeShape.ProtocolsOf(parameter).All(needed => has.Any(p => ReferenceEquals(p, needed)))) {
-                    return false;
+                    return No();
                 }
             }
 
@@ -1792,7 +1800,7 @@ public sealed partial class SilGen {
             if (callee is { IsRethrows: true, RethrownAlso: { } also } && Canonical(calleeSubstitution.Apply(also)) is var rethrown && Mentions(rethrown) && !rethrown.Equals(generator.Core.Never)
                 && (callee.ThrownType is not { } declared || !Canonical(calleeSubstitution.Apply(declared)).Equals(rethrown))
                 && (_handlers.Count > 0 || _closureDepth > 0 || checkedSymbol.ThrownType is not ExistentialTypeSymbol { Constraint: var erased } || !erased.Equals(generator.Core.Error))) {
-                return false;
+                return No();
             }
 
             return callee.ThrownType is not { } calleeThrown || ThrowsAllowed(calleeSubstitution.Apply(calleeThrown));
@@ -1803,7 +1811,7 @@ public sealed partial class SilGen {
             var callee = call.Function;
             if (RequirementProtocol(callee) is not { } declared || generator.GenericEntryType(declared, callee) is null
                 || !generator.GenericRequirements(declared).Exists(r => ReferenceEquals(r.Member, callee))) {
-                return false;
+                return No();
             }
 
             var protocol = declared.OriginalDefinition;
@@ -1816,18 +1824,18 @@ public sealed partial class SilGen {
             } is { } read ? V(read) : null;
 
             if (selfType is null || !IsOwn(selfType) || !Known(selfType).Any(p => ReferenceEquals(p, protocol))) {
-                return false;
+                return No();
             }
 
             if (callee.ThrownType is { } thrown && !ThrowsAllowed(Through(thrown, protocol, selfType))) {
-                return false;
+                return No();
             }
 
             // A method that changes its value changes it in a local, or a
             // protocol extension's own self, when it may change it.
             // Or a stored field of the self of a method that may change it: 'base.next()'.
             if (callee.IsMutating && call.Receiver is not null && !IsPlace(call.Receiver)) {
-                return false;
+                return No();
             }
 
             // Generic over parameters of its own: each bound to a type this
@@ -1839,7 +1847,7 @@ public sealed partial class SilGen {
                 var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
                 foreach (var parameter in own.Parameters) {
                     if (call.Substitution.Lookup(parameter) is not { } given) {
-                        return false;
+                        return No();
                     }
 
                     var bound = V(given);
@@ -1847,11 +1855,11 @@ public sealed partial class SilGen {
                     if (IsOwn(bound)) {
                         var has = Known(bound);
                         if (!own.ProtocolsOf(parameter).All(needed => has.Any(p => ReferenceEquals(p, needed)))) {
-                            return false;
+                            return No();
                         }
                     } else if (Mentions(bound) || bound is not (NamedTypeSymbol or ArrayTypeSymbol) || generator.Lower(bound) is not { } lowered || lowered is NominalType { IsNoncopyable: true } || bound.Equals(generator.Core.Never)
                                || !own.ProtocolsOf(parameter).All(needed => bound.Satisfies(needed))) {
-                        return false;
+                        return No();
                     }
                 }
 
@@ -1859,7 +1867,7 @@ public sealed partial class SilGen {
                 Describes = DebugDescribes = true;
                 foreach (var (declaredParameter, argument) in callee.Parameters.Zip(call.Arguments)) {
                     if (!OwnTypeAs(declaredParameter.Type, argument.Type)) {
-                        return false;
+                        return No();
                     }
                 }
 
@@ -1873,7 +1881,7 @@ public sealed partial class SilGen {
 
             foreach (var (declaredParameter, argument) in callee.Parameters.Zip(call.Arguments)) {
                 if (SilGen.Mentions(declaredParameter.Type, [self!]) ? !SameThrough(declaredParameter.Type, protocol, selfType, argument.Type) : Mentions(argument.Type)) {
-                    return false;
+                    return No();
                 }
             }
 
@@ -2254,7 +2262,9 @@ public sealed partial class SilGen {
     ///     does not declare each conformance itself, or it cannot be lowered.
     /// </summary>
     internal bool GenericTable(TypeSymbol concrete, NamedTypeSymbol protocol, SyntaxNode at, bool describe = true, bool debugDescribe = false) {
-        if (Lower(concrete) is not { } value || concrete is not (NamedTypeSymbol or ArrayTypeSymbol)) {
+        // 'any Error' is an error itself.
+        var self = concrete.Equals(Core.AnyError) && ProtocolClosure([Core.Error]).Any(p => ReferenceEquals(p, protocol.OriginalDefinition));
+        if (Lower(concrete) is not { } value || !self && concrete is not (NamedTypeSymbol or ArrayTypeSymbol or OptionalTypeSymbol)) {
             return false;
         }
 
@@ -2270,11 +2280,11 @@ public sealed partial class SilGen {
             if (!concrete.Equals(Core.Never) && !closure.TrueForAll(p => declared.Contains(QualifiedName(p)))) {
                 return false;
             }
-        } else if (!CompilesOnce || value is not ArrayType) {
+        } else if (!self && (!CompilesOnce || value is not (ArrayType or SliceType or EnumType))) {
             return false;
         }
 
-        if (!closure.TrueForAll(concrete.Satisfies)) {
+        if (!self && !closure.TrueForAll(concrete.Satisfies)) {
             return false;
         }
 
@@ -2304,7 +2314,7 @@ public sealed partial class SilGen {
                         Describer(read, lowered, at, debugDescribed);
                     }
 
-                    if (AssociatedBinding(concrete, associated) is not { } bound || bound is not (NamedTypeSymbol or ArrayTypeSymbol)) {
+                    if (AssociatedBinding(concrete, associated) is not { } bound || bound is not (NamedTypeSymbol or ArrayTypeSymbol or OptionalTypeSymbol)) {
                         continue;
                     }
 
@@ -2485,7 +2495,7 @@ public sealed partial class SilGen {
     /// <summary>How a template's witness, compiled once for the generic type, finds the metadata of what it reads through its type parameters.</summary>
     void TemplateRecipes(SilFunction function, TypeSymbol concrete, (string Name, GenericShape Shape)? template) {
         if (template is { } compiledOnce) {
-            AssociatedRecipes(function, ((NamedTypeSymbol)concrete).OriginalDefinition, compiledOnce.Shape);
+            AssociatedRecipes(function, concrete is NamedTypeSymbol named ? named.OriginalDefinition : compiledOnce.Shape.Parameters[0].ContainingSymbol!, compiledOnce.Shape);
         }
     }
 
@@ -3499,7 +3509,7 @@ public sealed partial class SilGen {
             foreach (var (subject, constraint) in callee.ConformanceRequirements.Concat(extension?.ConformanceRequirements ?? [])) {
                 var named = Sub(WithAssociatedTypes(callee, bound).Apply(subject));
                 if (subject is TypeParameterSymbol direct && found.Parameters.Contains(direct)
-                    || named is not (NamedTypeSymbol or ArrayTypeSymbol) || Mentions(named, [.._genericMetadata.Keys])) {
+                    || named is not (NamedTypeSymbol or ArrayTypeSymbol or OptionalTypeSymbol) || Mentions(named, [.._genericMetadata.Keys])) {
                     continue;
                 }
 

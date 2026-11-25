@@ -262,7 +262,7 @@ public sealed class TypeMetadata {
         static MetadataField Field(string name, SilType type, int offset) => new(name, DisplayName(type), offset, FieldKind(type), type);
     }
 
-    static ImmutableArray<SilType> ArgumentsOf(SilType type) =>
+    internal static ImmutableArray<SilType> ArgumentsOf(SilType type) =>
         type switch {
             NominalType { TypeArguments.IsEmpty: false } generic => generic.TypeArguments,
             EnumType optional when IsOptional(optional) && optional.Cases[0].Payload is { } wrapped => [wrapped],
@@ -351,6 +351,15 @@ public sealed class SilWitnessTable(SilType conformer, string protocol) {
     ///     Empty when it has no associated type and refines no protocol that has.
     /// </summary>
     public List<string> Accessors { get; } = [];
+
+    /// <summary>
+    ///     What a template for arrays, slices or optionals of a type known at
+    ///     run time asks of the element's or wrapped type
+    ///     (<c>extension&lt;Element: Equatable&gt; Element[:]: Equatable</c>): one
+    ///     that does not conform gives none. A generic type's own template
+    ///     has none: its metadata's conformance records say which hold.
+    /// </summary>
+    public List<string> Required { get; } = [];
 
     /// <summary>
     ///     Each requirement the protocol itself declares, in declaration order,

@@ -1,0 +1,263 @@
+module Sable.Serialize.Asn1
+
+import Sable.Text
+
+// The REAL the bytes from the one to before the other are (X.690 §8.5), as
+// CER and DER have it (§11.3) if it must be canonical.
+fn decodeReal(_ bytes: U8[:], _ from: Int, _ to: Int, _ canonical: Bool) throws(AsnError) -> F64 {
+    if from == to {
+        return 0.0
+    }
+    let first = bytes[from]
+    if first >= 0x80 {
+        return try decodeBinaryReal(bytes, from, to, canonical)
+    }
+    if first < 0x40 {
+        return try decodeDecimalReal(bytes, from, to, canonical)
+    }
+    if to - from != 1 || first > 0x43 {
+        throw AsnError.Malformed(at: from, reason: "a reserved REAL")
+    }
+    return first == 0x40 ? F64.infinity : first == 0x41 ? -F64.infinity : first == 0x42 ? F64.nan : -0.0
+}
+
+fn decodeBinaryReal(_ bytes: U8[:], _ from: Int, _ to: Int, _ canonical: Bool) throws(AsnError) -> F64 {
+    let first = bytes[from]
+    let base = Int(first >> 4 & 3)
+    let scale = Int(first >> 2 & 3)
+    if base == 3 {
+        throw AsnError.Malformed(at: from, reason: "a REAL of a reserved base")
+    }
+    if canonical && (base != 0 || scale != 0) {
+        throw AsnError.NotCanonical(at: from, reason: "a REAL that is not scaled by powers of two alone")
+    }
+    var at = from + 1
+    var size = Int(first & 3) + 1
+    let isLong = size == 4
+    if isLong {
+        if at >= to {
+            throw AsnError.Malformed(at: at, reason: "a REAL ends inside its exponent")
+        }
+        size = Int(bytes[at])
+        at += 1
+        if size == 0 {
+            throw AsnError.Malformed(at: at - 1, reason: "a REAL's exponent is a byte at least")
+        }
+    }
+    if size > to - at {
+        throw AsnError.Malformed(at: to, reason: "a REAL ends inside its exponent")
+    }
+    let isPadded = size > 1 && ((bytes[at] == 0 && bytes[at + 1] < 0x80) || (bytes[at] == 0xFF && bytes[at + 1] >= 0x80))
+    if isPadded && isLong {
+        throw AsnError.Malformed(at: at, reason: "a REAL's exponent is in more bytes than it needs")
+    }
+    if canonical && (isPadded || (isLong && size < 4)) {
+        throw AsnError.NotCanonical(at: at, reason: "a REAL's exponent is in more bytes than it needs")
+    }
+    var exponent = bytes[at] >= 0x80 ? -1 : 0
+    let isHuge = size > 4
+    if !isHuge {
+        for i in at..<at + size {
+            exponent = exponent << 8 | Int(bytes[i])
+        }
+    } else {
+        // Minimal, and so past any F64's by far.
+        exponent = exponent < 0 ? -0x7FFF_FFFF : 0x7FFF_FFFF
+    }
+    at += size
+    if canonical && (at == to || bytes[at] == 0 || (bytes[to - 1] & 1) == 0) {
+        throw AsnError.NotCanonical(at: at, reason: "a REAL's mantissa is not odd, in as few bytes as hold it")
+    }
+    // The mantissa's top bits, the last of them set if any after it is.
+    var mantissa: U64 = 0
+    var dropped = 0
+    while at < to {
+        if mantissa >> 56 == 0 {
+            mantissa = mantissa << 8 | U64(bytes[at])
+        } else {
+            dropped += 8
+            if bytes[at] != 0 {
+                mantissa |= 1
+            }
+        }
+        at += 1
+    }
+    let power = exponent * (base == 0 ? 1 : base == 1 ? 3 : 4) + scale + dropped
+    let magnitude = scaledToNearest(mantissa, power)
+    if magnitude == F64.infinity {
+        throw AsnError.OutOfRange(at: from, reason: "the REAL is too large for an F64")
+    }
+    return (first & 0x40) != 0 ? -magnitude : magnitude
+}
+
+// The F64 nearest to the mantissa times that power of two, ties to even:
+// rounded once, to the bits a subnormal has.
+fn scaledToNearest(_ mantissa: U64, _ power: Int) -> F64 {
+    if mantissa == 0 {
+        return 0.0
+    }
+    let width = 64 - mantissa.leadingZeroCount
+    let top = power + width - 1
+    if top > 1023 {
+        return F64.infinity
+    }
+    if top < -1075 {
+        return 0.0
+    }
+    let precision = top >= -1022 ? 53 : 53 - (-1022 - top)
+    let extra = width - precision
+    if extra <= 0 {
+        return F64(mantissa).scaled(byPowerOfTwo: power)
+    }
+    let wide = U128(mantissa)
+    let half: U128 = 1 << U128(extra - 1)
+    let rest = wide & ((half << 1) - 1)
+    var kept = wide >> U128(extra)
+    if rest > half || (rest == half && (kept & 1) == 1) {
+        kept += 1
+    }
+    return F64(U64.truncating(kept)).scaled(byPowerOfTwo: power + extra)
+}
+
+// The most bytes a REAL in decimal may be: past 800 digits none changes the
+// nearest F64.
+let maximumDecimal = 1024
+
+// A REAL in decimal, in one of ISO 6093's three forms.
+fn decodeDecimalReal(_ bytes: U8[:], _ from: Int, _ to: Int, _ canonical: Bool) throws(AsnError) -> F64 {
+    let form = bytes[from]
+    if form == 0 || form > 3 {
+        throw AsnError.Malformed(at: from, reason: "a reserved REAL")
+    }
+    if to - from > maximumDecimal {
+        throw AsnError.OutOfRange(at: from, reason: "a decimal REAL of more than \(maximumDecimal) bytes")
+    }
+    var at = from + 1
+    while at < to && bytes[at] == 0x20 {
+        at += 1
+    }
+    let start = at
+    var text: U8[>..] = []
+    if at < to && (bytes[at] == 0x2B || bytes[at] == 0x2D) {
+        text.append(bytes[at])
+        at += 1
+    }
+    let digitsStart = at
+    var digits = copyDigits(bytes, &at, to, &text)
+    if digits == 0 {
+        text.append(0x30)
+    }
+    let hasMark = form != 1 && at < to && (bytes[at] == 0x2E || bytes[at] == 0x2C)
+    var fraction = 0
+    if hasMark {
+        text.append(0x2E)
+        at += 1
+        fraction = copyDigits(bytes, &at, to, &text)
+        if fraction == 0 {
+            text.append(0x30)
+        }
+        digits += fraction
+    }
+    if digits == 0 || (form == 2 && !hasMark) {
+        throw AsnError.Malformed(at: at, reason: "not a decimal REAL")
+    }
+    if form == 3 {
+        if at >= to || (bytes[at] != 0x45 && bytes[at] != 0x65) {
+            throw AsnError.Malformed(at: at, reason: "not a decimal REAL")
+        }
+        text.append(0x65)
+        at += 1
+        if at < to && (bytes[at] == 0x2B || bytes[at] == 0x2D) {
+            text.append(bytes[at])
+            at += 1
+        }
+        if copyDigits(bytes, &at, to, &text) == 0 {
+            throw AsnError.Malformed(at: at, reason: "not a decimal REAL")
+        }
+    }
+    if at < to {
+        throw AsnError.Malformed(at: at, reason: "not a decimal REAL")
+    }
+    if canonical && !isCanonicalDecimal(bytes, start, to, form, digitsStart, fraction) {
+        throw AsnError.NotCanonical(at: from, reason: "a decimal REAL that is not in its one form")
+    }
+    let string = textOf(text)
+    var value = 0.0
+    do {
+        value = try F64.parse(string)
+    } catch {
+        if error != .Underflow {
+            value = F64.infinity
+        }
+    }
+    if !value.isFinite {
+        throw AsnError.OutOfRange(at: from, reason: "the REAL is too large for an F64")
+    }
+    return value
+}
+
+// Copies the digits there, and says how many.
+fn copyDigits(_ bytes: U8[:], _ at: inout Int, _ to: Int, _ text: inout U8[>..]) -> Int {
+    let start = at
+    while at < to && bytes[at] >= 0x30 && bytes[at] <= 0x39 {
+        text.append(bytes[at])
+        at += 1
+    }
+    return at - start
+}
+
+// Whether a decimal known to be well-formed is as X.690 §11.3.2 has it:
+// `-15.E-3`, its mantissa neither starting nor ending in 0, its exponent
+// without a plus, unless it is `+0`, or zeros before it.
+fn isCanonicalDecimal(_ bytes: U8[:], _ start: Int, _ to: Int, _ form: U8, _ digitsStart: Int, _ fraction: Int) -> Bool {
+    if form != 3 || fraction != 0 || bytes[start] == 0x2B || bytes[start - 1] != 3 || bytes[digitsStart] == 0x30 {
+        return false
+    }
+    var mark = digitsStart
+    while bytes[mark] >= 0x30 && bytes[mark] <= 0x39 {
+        mark += 1
+    }
+    if mark == digitsStart || bytes[mark] != 0x2E || bytes[mark - 1] == 0x30 || bytes[mark + 1] != 0x45 {
+        return false
+    }
+    let exponent = mark + 2
+    if bytes[exponent] == 0x2B {
+        return to == exponent + 2 && bytes[exponent + 1] == 0x30
+    }
+    return bytes[bytes[exponent] == 0x2D ? exponent + 1 : exponent] != 0x30
+}
+
+// The contents of a REAL, in base 2, its mantissa odd, as every rule takes it.
+fn encodeReal(_ value: F64) -> U8[>..] {
+    if value != value {
+        return [0x42]
+    }
+    if value == 0.0 {
+        return value.isSignMinus ? [0x43] : []
+    }
+    if !value.isFinite {
+        return value > 0.0 ? [0x40] : [0x41]
+    }
+    let biased = Int(value.bits >> 52 & 0x7FF)
+    var mantissa = value.bits & 0xF_FFFF_FFFF_FFFF
+    var exponent = -1074
+    if biased > 0 {
+        mantissa |= 1 << 52
+        exponent = biased - 1075
+    }
+    let zeros = mantissa.trailingZeroCount
+    mantissa = mantissa >> U64(zeros)
+    exponent += zeros
+    let isShort = exponent >= -128 && exponent < 128
+    var contents: U8[>..] = [0x80 | (value < 0.0 ? 0x40 : 0) | (isShort ? 0 : 1)]
+    if !isShort {
+        contents.append(U8.truncating(exponent >> 8))
+    }
+    contents.append(U8.truncating(exponent))
+    var shift = (63 - mantissa.leadingZeroCount) / 8 * 8
+    while shift >= 0 {
+        contents.append(U8.truncating(mantissa >> U64(shift)))
+        shift -= 8
+    }
+    return contents
+}

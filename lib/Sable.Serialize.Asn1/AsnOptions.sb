@@ -1,0 +1,28 @@
+module Sable.Serialize.Asn1
+
+/// What an AsnReader takes.
+///
+/// ```sable
+/// let options = AsnOptions(maximumDepth: 4)
+/// var reader = AsnReader([0x30, 0x02, 0x30, 0x00], rules: .Der, options: options)
+/// var outer = try! reader.readSequence()
+/// assert(try! outer.readSequence().isAtEnd)
+/// ```
+public struct AsnOptions {
+    /// How deep sequences, sets, explicit tags and strings in pieces may
+    /// nest.
+    public var maximumDepth: Int
+    /// The last year a UTCTime's two digits can mean: 2049 makes 50 to 99
+    /// the 1900s, as X.509 has it.
+    public var twoDigitYearMaximum: Int
+    /// Whether a SET's or SET OF's order is left unchecked, by CER and DER:
+    /// for what others wrote wrong, and for a SET with an untagged CHOICE
+    /// in it, whose place CER gives by tags the encoding does not have.
+    public var skipSetOrder: Bool
+
+    public init(maximumDepth: Int = 128, twoDigitYearMaximum: Int = 2049, skipSetOrder: Bool = false) {
+        self.maximumDepth = maximumDepth
+        self.twoDigitYearMaximum = twoDigitYearMaximum
+        self.skipSetOrder = skipSetOrder
+    }
+}

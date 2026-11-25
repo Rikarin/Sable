@@ -1,0 +1,62 @@
+module Sable.Serialize.Asn1
+
+/// ASN.1's types of text.
+@derive(Equatable, Hashable, Debug)
+public enum AsnStringKind {
+    /// UTF8String: any text.
+    Utf8
+    /// NumericString: the digits 0 to 9, and spaces.
+    Numeric
+    /// PrintableString: ASCII letters and digits, space, and '()+,-./:=?
+    Printable
+    /// TeletexString, or T61String, read as what is in certificates: as
+    /// UTF-8, if it is that, and otherwise as Latin-1. Written as ASCII.
+    Teletex
+    /// VideotexString, read and written as ASCII.
+    Videotex
+    /// IA5String: ASCII.
+    Ia5
+    /// GraphicString, read and written as ASCII without its controls.
+    Graphic
+    /// VisibleString, or ISO646String: ASCII without its controls.
+    Visible
+    /// GeneralString, read and written as ASCII.
+    General
+    /// UniversalString: any text, four bytes a character.
+    Universal
+    /// BMPString: the characters up to U+FFFF, two bytes each.
+    Bmp
+    /// ObjectDescriptor, which is a GraphicString.
+    ObjectDescriptor
+    /// OID-IRI: an object identifier's name in Unicode labels.
+    OidIri
+    /// RELATIVE-OID-IRI: the end of one.
+    RelativeOidIri
+
+    /// The type's own tag.
+    public var tag: AsnTag {
+        get {
+            return AsnTag.universal(number)
+        }
+    }
+
+    var number: Int => match self {
+        case .Utf8             => 12
+        case .Numeric          => 18
+        case .Printable        => 19
+        case .Teletex          => 20
+        case .Videotex         => 21
+        case .Ia5              => 22
+        case .Graphic          => 25
+        case .Visible          => 26
+        case .General          => 27
+        case .Universal        => 28
+        case .Bmp              => 30
+        case .ObjectDescriptor => 7
+        case .OidIri           => 35
+        case .RelativeOidIri   => 36
+    }
+
+    // Whether a string of the type can be in pieces: not an IRI.
+    var canBeConstructed: Bool => self != .OidIri && self != .RelativeOidIri
+}

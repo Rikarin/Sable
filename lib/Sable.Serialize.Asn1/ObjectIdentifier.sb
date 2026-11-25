@@ -1,0 +1,203 @@
+module Sable.Serialize.Asn1
+
+/// An OBJECT IDENTIFIER: numbers that name something, each given out by
+/// whom the ones before it name. Held as it is encoded, so two compare as
+/// their bytes do.
+///
+/// ```sable
+/// let sha256 = try! ObjectIdentifier.parse("2.16.840.1.101.3.4.2.1")
+/// assert(sha256.encoded == [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01])
+/// assert(sha256 == ObjectIdentifier([2, 16, 840, 1, 101, 3, 4, 2, 1]))
+/// assert("\(sha256)" == "2.16.840.1.101.3.4.2.1")
+/// ```
+@derive(Equatable, Hashable)
+public struct ObjectIdentifier {
+    /// Its contents as encoded, without the tag and the length.
+    public let encoded: U8[>..]
+
+    /// The identifier of the numbers; traps if they are not one's: at least
+    /// two, the first 0, 1 or 2, and the second less than 40 after a 0 or 1.
+    public init(_ arcs: U128[:]) {
+        guard let contents = oidContents(arcs) else {
+            preconditionFailure("the numbers are not an object identifier's")
+        }
+        self.encoded = contents
+    }
+
+    /// The identifier of the numbers; none if they are not one's.
+    public static fn of(arcs: U128[:]) -> ObjectIdentifier? {
+        if let contents = oidContents(arcs) {
+            return ObjectIdentifier { encoded: contents }
+        }
+        return none
+    }
+
+    /// The identifier whose contents those are: at most 128 numbers, of 128
+    /// bits each.
+    public static fn decode(_ contents: U8[:]) throws(AsnError) -> ObjectIdentifier {
+        try checkArcs(contents, 0, contents.count, 1)
+        return ObjectIdentifier { encoded: contents.toArray() }
+    }
+
+    /// Its numbers.
+    public var arcs: U128[>..] {
+        get {
+            var arcs: U128[>..] = []
+            for value in subidentifiers(encoded) {
+                if arcs.isEmpty {
+                    let root: U128 = value < 40 ? 0 : value < 80 ? 1 : 2
+                    arcs.append(root)
+                    arcs.append(value - root * 40)
+                } else {
+                    arcs.append(value)
+                }
+            }
+            return arcs
+        }
+    }
+
+    /// Whether the other's numbers begin with all of this one's.
+    public fn isPrefix(of other: ObjectIdentifier) -> Bool {
+        let count = encoded.count
+        return other.encoded.count >= count && other.encoded[0..<count] == encoded
+    }
+
+    /// Its numbers, dotted.
+    public fn toString() -> String {
+        return arcsText(arcs)
+    }
+}
+
+extension ObjectIdentifier: Parsable {
+    /// The identifier that dotted numbers are: `1.2.840.113549`.
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> ObjectIdentifier {
+        let numbers = try parseArcs(source.toString())
+        guard let contents = oidContents(numbers) else {
+            throw ParseError.Invalid(at: 0)
+        }
+        return ObjectIdentifier { encoded: contents }
+    }
+}
+
+extension ObjectIdentifier: Debug {
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}
+
+// The most numbers an identifier may have.
+let maximumArcs = 128
+
+// The contents of the numbers, or none if they are not an identifier's.
+fn oidContents(_ arcs: U128[:]) -> U8[>..]? {
+    if arcs.count < 2 || arcs.count > maximumArcs || arcs[0] > 2 || (arcs[0] < 2 && arcs[1] >= 40) || arcs[1] > U128.max - 80 {
+        return none
+    }
+    var contents: U8[>..] = []
+    appendArc(&contents, arcs[0] * 40 + arcs[1])
+    for arc in arcs[2...] {
+        appendArc(&contents, arc)
+    }
+    return contents
+}
+
+// The number in base 128, the top bit of each byte but the last set.
+fn appendArc(_ contents: inout U8[>..], _ arc: U128) {
+    var shift = 0
+    while shift < 126 && arc >> U128(shift) >= 128 {
+        shift += 7
+    }
+    while shift > 0 {
+        contents.append(0x80 | U8.truncating(arc >> U128(shift) & 0x7F))
+        shift -= 7
+    }
+    contents.append(U8.truncating(arc & 0x7F))
+}
+
+// Throws unless the bytes from the one to before the other are numbers, at
+// least one, and no more than there may be when so many were before them.
+fn checkArcs(_ bytes: U8[:], _ from: Int, _ to: Int, _ before: Int) throws(AsnError) {
+    if from == to {
+        throw AsnError.Malformed(at: from, reason: "an object identifier has a number at least")
+    }
+    var count = before
+    var value: U128 = 0
+    var starts = true
+    var i = from
+    while i < to {
+        let byte = bytes[i]
+        if starts {
+            if byte == 0x80 {
+                throw AsnError.Malformed(at: i, reason: "an object identifier's number is in more bytes than it needs")
+            }
+            count += 1
+            if count > maximumArcs {
+                throw AsnError.OutOfRange(at: i, reason: "an object identifier has more than \(maximumArcs) numbers")
+            }
+            value = 0
+        }
+        if value >> 121 != 0 {
+            throw AsnError.OutOfRange(at: i, reason: "an object identifier's number is more than 128 bits")
+        }
+        value = value << 7 | U128(byte & 0x7F)
+        starts = byte < 0x80
+        i += 1
+    }
+    if !starts {
+        throw AsnError.Malformed(at: to, reason: "an object identifier ends inside a number")
+    }
+}
+
+// The numbers that contents checked before are.
+fn subidentifiers(_ contents: U8[:]) -> U128[>..] {
+    var all: U128[>..] = []
+    var value: U128 = 0
+    for byte in contents {
+        value = value << 7 | U128(byte & 0x7F)
+        if byte < 0x80 {
+            all.append(value)
+            value = 0
+        }
+    }
+    return all
+}
+
+fn arcsText(_ arcs: U128[>..]) -> String {
+    return arcs.map({ "\($0)" }).joined(separator: ".")
+}
+
+// Dotted numbers, each without zeros before it.
+fn parseArcs(_ text: String) throws(ParseError) -> U128[>..] {
+    var bytes: U8[>..] = []
+    bytes.append(utf8: text)
+    if bytes.isEmpty {
+        throw ParseError.Empty
+    }
+    var arcs: U128[>..] = []
+    var start = 0
+    var value: U128 = 0
+    for i in 0...bytes.count {
+        if i == bytes.count || bytes[i] == 0x2E {
+            if i == start {
+                throw ParseError.InvalidDigit(at: i)
+            }
+            if arcs.count == maximumArcs {
+                throw ParseError.Overflow
+            }
+            arcs.append(value)
+            value = 0
+            start = i + 1
+            continue
+        }
+        let byte = bytes[i]
+        if byte < 0x30 || byte > 0x39 || (i > start && bytes[start] == 0x30) {
+            throw ParseError.InvalidDigit(at: i)
+        }
+        let digit = U128(byte - 0x30)
+        if value > (U128.max - digit) / 10 {
+            throw ParseError.Overflow
+        }
+        value = value * 10 + digit
+    }
+    return arcs
+}

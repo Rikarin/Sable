@@ -319,6 +319,24 @@ public sealed class BindingTests {
     public void AnEmptyArrayArgumentTakesTheParametersType() =>
         AssertClean("let n = count([])", "fn count(_ items: String[>..]) -> Int { return items.count }");
 
+    /// <summary>
+    ///     An array literal bends to the parameter's element type if its
+    ///     elements are literals: one with an Int variable in it stays an
+    ///     array of Int, which was once passed on as bytes.
+    /// </summary>
+    [Fact]
+    public void AnArrayLiteralOfTypedElementsKeepsTheirType() {
+        const string extra = "fn bytes(_ items: U8[:]) -> Int { return items.count }";
+        AssertClean("let n = bytes([1, 2 + 3, -0])", extra);
+        AssertClean("let x: U8 = 1\nlet n = bytes([x, 2])", extra);
+        foreach (var literal in (string[])["[x]", "[x, 1]", "[1, x]", "[x > 2 ? 1 : 0]"]) {
+            Assert.Contains(
+                ErrorsIn($"let x = \"a\".count\nlet n = bytes({literal})", extra),
+                static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+            );
+        }
+    }
+
     /// <summary>A label may pass over parameters with defaults, never over one without.</summary>
     [Fact]
     public void ALabelMayPassOverDefaultedParametersOnly() {

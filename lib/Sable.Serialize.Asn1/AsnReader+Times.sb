@@ -1,0 +1,247 @@
+module Sable.Serialize.Asn1
+
+import Sable.Text
+import Sable.Time
+
+extension AsnReader {
+    /// A UTCTime, whose two digits of a year are the ones in the hundred
+    /// years to AsnOptions' `twoDigitYearMaximum`. By CER and DER it has
+    /// seconds and is UTC; by BER it may have neither.
+    ///
+    /// ```sable
+    /// var reader = AsnReader([0x17, 0x0D, 0x39, 0x32, 0x30, 0x35, 0x32, 0x31, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x5A], rules: .Der)
+    /// assert(try! reader.readUtcTime().instant.rfc3339() == "1992-05-21T00:00:00Z")
+    /// ```
+    public mutating fn readUtcTime(tag: AsnTag = .utcTime) throws(AsnError) -> OffsetDateTime {
+        let value = try expect(tag, 23)
+        var time = AsnTimeText(try octets(value), value.contents)
+        var year = try time.number(2)
+        let maximum = options.twoDigitYearMaximum
+        year += maximum / 100 * 100
+        if year > maximum {
+            year -= 100
+        }
+        let date = try time.date(year)
+        let hour = try time.number(2)
+        let minute = try time.number(2)
+        var second = 0
+        if time.isAtDigit {
+            second = try time.number(2)
+        } else if rules != .Ber {
+            throw AsnError.NotCanonical(at: time.position, reason: "a UTCTime without its seconds")
+        }
+        let local = try time.local(date, hour, minute, second, 0)
+        guard let offset = try time.offset(minutes: true, canonical: rules != .Ber) else {
+            throw AsnError.Malformed(at: time.position, reason: "a UTCTime without its offset")
+        }
+        try time.finish()
+        at = value.end
+        return OffsetDateTime(local: local, offset: offset)
+    }
+
+    /// A GeneralizedTime, to the nanosecond: digits past that are dropped.
+    /// By CER and DER it has seconds and is UTC. By BER it may have minutes
+    /// or hours for its last part, a fraction of that, and no offset: then
+    /// it is the one given, or an error.
+    ///
+    /// ```sable
+    /// let writer = AsnWriter(rules: .Der)
+    /// try! writer.writeGeneralizedTime(try! OffsetDateTime.parseRfc3339("1992-07-22T13:21:00.300Z"))
+    /// var reader = AsnReader(try! writer.bytes(), rules: .Der)
+    /// assert(try! reader.readGeneralizedTime().instant.rfc3339() == "1992-07-22T13:21:00.3Z")
+    /// ```
+    public mutating fn readGeneralizedTime(tag: AsnTag = .generalizedTime, assuming: UtcOffset? = none) throws(AsnError) -> OffsetDateTime {
+        let value = try expect(tag, 24)
+        let isCanonical = rules != .Ber
+        var time = AsnTimeText(try octets(value), value.contents)
+        let date = try time.date(try time.number(4))
+        let hour = try time.number(2)
+        var minute = 0
+        var second = 0
+        // Of what a fraction is, in nanoseconds.
+        var unit = 3_600_000_000_000
+        if time.isAtDigit {
+            minute = try time.number(2)
+            unit = 60_000_000_000
+            if time.isAtDigit {
+                second = try time.number(2)
+                unit = 1_000_000_000
+            }
+        }
+        if isCanonical && unit != 1_000_000_000 {
+            throw AsnError.NotCanonical(at: time.position, reason: "a GeneralizedTime without its seconds")
+        }
+        let extra = try time.fraction(of: unit, canonical: isCanonical)
+        let local = try time.local(date, hour, minute, second, extra)
+        let written = try time.offset(minutes: false, canonical: isCanonical)
+        guard let offset = written != none ? written : assuming else {
+            throw AsnError.Malformed(at: time.position, reason: "a GeneralizedTime without an offset")
+        }
+        try time.finish()
+        at = value.end
+        return OffsetDateTime(local: local, offset: offset)
+    }
+
+    /// A DATE.
+    public mutating fn readDate(tag: AsnTag = .date) throws(AsnError) -> Date {
+        let value = try primitive(tag, 31)
+        var time = AsnTimeText(bytes[value.contents..<value.contentsEnd], value.contents)
+        let date = try time.date(try time.number(4))
+        try time.finish()
+        at = value.end
+        return date
+    }
+
+    /// A TIME-OF-DAY.
+    public mutating fn readTimeOfDay(tag: AsnTag = .timeOfDay) throws(AsnError) -> TimeOfDay {
+        let value = try primitive(tag, 32)
+        var time = AsnTimeText(bytes[value.contents..<value.contentsEnd], value.contents)
+        let result = try time.timeOfDay()
+        try time.finish()
+        at = value.end
+        return result
+    }
+
+    /// A DATE-TIME.
+    public mutating fn readDateTime(tag: AsnTag = .dateTime) throws(AsnError) -> LocalDateTime {
+        let value = try primitive(tag, 33)
+        var time = AsnTimeText(bytes[value.contents..<value.contentsEnd], value.contents)
+        let date = try time.date(try time.number(4))
+        let result = LocalDateTime(date: date, time: try time.timeOfDay())
+        try time.finish()
+        at = value.end
+        return result
+    }
+
+    /// A DURATION, as ISO 8601 writes it: `P1Y2M`, whose months no Duration
+    /// has.
+    public mutating fn readDuration(tag: AsnTag = .duration) throws(AsnError) -> String {
+        let value = try primitive(tag, 34)
+        let contents = bytes[value.contents..<value.contentsEnd]
+        let text = try isoText(contents, value.contents, rules != .Ber)
+        if !isDuration(contents) {
+            throw AsnError.Malformed(at: value.contents, reason: "not a duration")
+        }
+        if rules != .Ber && shortestDuration(contents).count != contents.count {
+            throw AsnError.NotCanonical(at: value.contents, reason: "a duration with parts of 0")
+        }
+        at = value.end
+        return "P" + text
+    }
+
+    /// A TIME: whatever ISO 8601 writes of times, as it is written.
+    public mutating fn readTime(tag: AsnTag = .time) throws(AsnError) -> String {
+        let value = try primitive(tag, 14)
+        let text = try isoText(bytes[value.contents..<value.contentsEnd], value.contents, rules != .Ber)
+        at = value.end
+        return text
+    }
+}
+
+// The text of a TIME or DURATION: ASCII that ISO 8601 uses, and, where it
+// must be canonical, no comma.
+fn isoText(_ octets: U8[:], _ at: Int, _ canonical: Bool) throws(AsnError) -> String {
+    if octets.isEmpty {
+        throw AsnError.Malformed(at: at, reason: "no time")
+    }
+    for i in 0..<octets.count {
+        let byte = octets[i]
+        if !isIsoByte(byte) {
+            throw AsnError.Malformed(at: at + i, reason: "a byte that is in no time")
+        }
+        if canonical && byte == 0x2C {
+            throw AsnError.NotCanonical(at: at + i, reason: "a comma in a time")
+        }
+    }
+    return textOf(octets)
+}
+
+// Digits, capitals, and + , - . / :
+fn isIsoByte(_ byte: U8) -> Bool {
+    return (byte >= 0x2B && byte <= 0x3A) || (byte >= 0x41 && byte <= 0x5A)
+}
+
+// Whether the text is an ISO 8601 duration without its 'P': its parts in order, the last of
+// them alone with a fraction, or weeks by themselves.
+fn isDuration(_ bytes: U8[:]) -> Bool {
+    var i = 0
+    var order = 0
+    var isTime = false
+    var hasFraction = false
+    var parts = 0
+    while i < bytes.count {
+        if bytes[i] == 0x54 {
+            if isTime || i == bytes.count - 1 {
+                return false
+            }
+            isTime = true
+            order = 4
+            i += 1
+        }
+        let start = i
+        while i < bytes.count && bytes[i] >= 0x30 && bytes[i] <= 0x39 {
+            i += 1
+        }
+        if i == start || hasFraction || i == bytes.count {
+            return false
+        }
+        if bytes[i] == 0x2E || bytes[i] == 0x2C {
+            hasFraction = true
+            i += 1
+            let fraction = i
+            while i < bytes.count && bytes[i] >= 0x30 && bytes[i] <= 0x39 {
+                i += 1
+            }
+            if i == fraction || i == bytes.count {
+                return false
+            }
+        }
+        let next = designatorOrder(bytes[i], isTime)
+        if next <= order || (next == 8 && parts > 0) {
+            return false
+        }
+        order = next
+        parts += 1
+        i += 1
+    }
+    return parts > 0
+}
+
+// Where a part of a duration goes among others: years, months, days, then
+// hours, minutes, seconds; weeks after everything, as nothing follows them.
+fn designatorOrder(_ letter: U8, _ isTime: Bool) -> Int {
+    if isTime {
+        return letter == 0x48 ? 5 : letter == 0x4D ? 6 : letter == 0x53 ? 7 : 0
+    }
+    return letter == 0x59 ? 1 : letter == 0x4D ? 2 : letter == 0x44 ? 3 : letter == 0x57 ? 8 : 0
+}
+
+// A duration without its 'P', as CER and DER have it (X.690 §11.9): without
+// the parts that are 0, but for the last; points for commas.
+fn shortestDuration(_ text: U8[:]) -> U8[>..] {
+    var bytes = text.toArray()
+    var kept: U8[>..] = []
+    var mark: U8[>..] = []
+    var start = 0
+    for i in 0..<bytes.count {
+        if bytes[i] == 0x2C {
+            bytes[i] = 0x2E
+        }
+        if bytes[i] == 0x54 {
+            mark = [0x54]
+            start = i + 1
+        } else if bytes[i] >= 0x41 {
+            var isZero = true
+            for k in start..<i {
+                isZero = isZero && (bytes[k] == 0x30 || bytes[k] == 0x2E)
+            }
+            if !isZero || i == bytes.count - 1 {
+                kept.append(contentsOf: mark)
+                mark = []
+                kept.append(contentsOf: bytes[start...i])
+            }
+            start = i + 1
+        }
+    }
+    return kept
+}

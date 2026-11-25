@@ -1,0 +1,90 @@
+module Sable.Serialize.Asn1
+
+// A value's length, -1 for an indefinite one, and where the byte after it is.
+struct AsnLength {
+    let count: Int
+    let next: Int
+
+    // The length at the position, of a value that ends by 'end': checked
+    // against the bytes there are and against the rules' form of it.
+    static fn read(
+        _ bytes: U8[:],
+        _ at: Int,
+        _ end: Int,
+        _ isConstructed: Bool,
+        _ rules: AsnEncodingRules
+    ) throws(AsnError) -> AsnLength {
+        if at >= end {
+            throw AsnError.UnexpectedEnd(at: at)
+        }
+        let first = bytes[at]
+        if first == 0x80 {
+            if !isConstructed {
+                throw AsnError.Malformed(at: at, reason: "a primitive value of an indefinite length")
+            }
+            if rules == .Der {
+                throw AsnError.NotCanonical(at: at, reason: "an indefinite length")
+            }
+            return AsnLength(count: -1, next: at + 1)
+        }
+        if isConstructed && rules == .Cer {
+            throw AsnError.NotCanonical(at: at, reason: "a constructed value of a definite length")
+        }
+        var count = 0
+        var next = at + 1
+        if first < 0x80 {
+            count = Int(first)
+        } else {
+            if first == 0xFF {
+                throw AsnError.Malformed(at: at, reason: "a reserved length")
+            }
+            let size = Int(first & 0x7F)
+            if size > end - next {
+                throw AsnError.UnexpectedEnd(at: end)
+            }
+            for _ in 0..<size {
+                if count > 0x7F_FFFF_FFFF_FFFF {
+                    throw AsnError.UnexpectedEnd(at: end)
+                }
+                count = count << 8 | Int(bytes[next])
+                next += 1
+            }
+            if rules != .Ber && (count < 0x80 || bytes[at + 1] == 0) {
+                throw AsnError.NotCanonical(at: at, reason: "a length in more bytes than it needs")
+            }
+        }
+        if count > end - next {
+            throw AsnError.UnexpectedEnd(at: end)
+        }
+        return AsnLength(count: count, next: next)
+    }
+
+    // The length's bytes, as few as hold it, put on the end.
+    static fn append(_ to: inout U8[>..], _ count: Int) {
+        if count < 0x80 {
+            to.append(U8(count))
+            return
+        }
+        let size = AsnLength.size(count) - 1
+        to.append(0x80 | U8(size))
+        var shift = (size - 1) * 8
+        while shift >= 0 {
+            to.append(U8.truncating(count >> shift))
+            shift -= 8
+        }
+    }
+
+    // How many bytes the length is.
+    static fn size(_ count: Int) -> Int {
+        if count < 0x80 {
+            return 1
+        }
+        var size = 1
+        var rest = count
+        while rest > 0 {
+            size += 1
+            rest = rest >> 8
+        }
+        return size
+    }
+}

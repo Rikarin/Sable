@@ -123,7 +123,7 @@ public class Task<Success> {
             return await child.value
         }
         child.cancel()
-        let _ = await child.value
+        _ = await child.value
         return none
     }
 

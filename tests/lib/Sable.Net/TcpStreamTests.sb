@@ -298,9 +298,15 @@ fn aReadAnAcceptAndAWriteTimeOut() async {
         let client = try await TcpStream.connect(listener.localAddress)
         let server = try await listener.accept()
         assert((try? await withTimeout(Duration.milliseconds(20)) { try await server.read(upTo: 9) }) == none)
-        // A write that no one reads, too.
-        let block = U8[>..](repeating: 7, count: 32 << 20)
-        assert((try? await withTimeout(Duration.milliseconds(50)) { try await server.write(block) }) == none)
+        // Writes that no one reads, too: more than one, as a system may take
+        // a large one whole.
+        let block = U8[>..](repeating: 7, count: 1 << 20)
+        let wrote: Void? = try? await withTimeout(Duration.milliseconds(50)) {
+            while true {
+                try await server.write(block)
+            }
+        }
+        assert(wrote == none)
         assertEqual((try await client.read(upTo: 4)).count, 4)
         try await client.write([1, 2])
         assertEqual(try await server.read(upTo: 9), [1, 2])

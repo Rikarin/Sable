@@ -81,16 +81,21 @@ void sable_lock_acquire(void *mutex) {
 
 // For a thread that takes the lock to have many things at once of those the
 // threads it meets there add one at a time: if it is held, one of them is at
-// it now, and a wait of a microsecond or so, away from its cache line, finds
+// it now, and a wait of a microsecond or two, away from its cache line, finds
 // many more. Back at once, the thread would find a few and soon be back
-// again, and each of the two would wait for the line at each.
+// again, and each of the two would wait for the line at each. Four turns is
+// the steadiest measured: with two, Intel's threads still meet that way.
+enum { LATER_TURNS = 4 };
+
 void sable_lock_acquire_later(void *mutex) {
     if (mutex_try_lock(mutex)) {
         return;
     }
 
-    spin_turn();
-    spin_turn();
+    for (int turn = 0; turn < LATER_TURNS; turn++) {
+        spin_turn();
+    }
+
     sable_lock_acquire(mutex);
 }
 

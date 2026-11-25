@@ -26,7 +26,7 @@ fn grow(_ depth: Int, _ width: Int, _ ran: Atomic<Int>) async {
     }
     for _ in 0..<width {
         // Not waited for: the parent finishes once it has.
-        let _ = Task.spawn { await grow(depth - 1, width, ran) }
+        _ = Task.spawn { await grow(depth - 1, width, ran) }
     }
 }
 
@@ -63,7 +63,7 @@ fn aCancellationReachesAChildSpawnedMeanwhile() async {
         let begun = Atomic<Int>(0)
         let parent = Task.spawn {
             for _ in 0..<8 {
-                let _ = Task.spawn {
+                _ = Task.spawn {
                     begun.add(1)
                     do {
                         try await Task.sleep(nanoseconds: 60_000_000_000)
@@ -92,7 +92,7 @@ fn manyWaitForOneTaskAndRaiseIt() async {
         let waiting = await withTaskGroup(of: Int.self) { group -> Int in
             for i in 0..<8 {
                 group.spawn(priority: i % 2 == 0 ? TaskPriority.high : TaskPriority.low) {
-                    let _ = await desk.serve()
+                    _ = await desk.serve()
                     return await work.value
                 }
             }
@@ -212,4 +212,15 @@ fn aCancelledWaitWithALimitGivesWhatTheBodyGave() async {
     await Task.yield()
     outer.cancel()
     assert(await outer.value == true)
+}
+
+@test
+fn aGrantEndsOneParkWhicheverComesFirst() async {
+    let list = WaitList()
+    list.grant()
+    await list.parkForGrant()
+    let parked = Task.spawn { await list.parkForGrant() }
+    await Task.settle()
+    list.grant()
+    await parked.value
 }

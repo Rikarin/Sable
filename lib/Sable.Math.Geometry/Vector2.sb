@@ -1,0 +1,271 @@
+module Sable.Math.Geometry
+
+import Sable.Math
+import Sable.Serialize
+
+/// Two `F32`s: a point on a screen, a texture coordinate, a size. 8 bytes,
+/// aligned to 4, its components in order.
+///
+/// ```sable
+/// let v = Vector2(3, 4) * 2
+/// assert(v.length == 2 * 5 && v[0] == v.x)
+/// ```
+@derive(Serializable)
+public struct Vector2: Hashable, AdditiveArithmetic, Sendable {
+    /// The x component.
+    public var x: F32
+
+    /// The y component.
+    public var y: F32
+
+    /// The vector of the components.
+    public init(_ x: F32, _ y: F32) {
+        self.x = x
+        self.y = y
+    }
+
+    /// Every component the value.
+    public init(repeating value: F32) {
+        x = value
+        y = value
+    }
+
+    /// The integers, each the nearest `F32`.
+    public init(_ integers: Int2) {
+        x = F32(integers.x)
+        y = F32(integers.y)
+    }
+
+    /// The lanes, in order.
+    public init(_ lanes: SIMD<F32, 2>) {
+        x = lanes[0]
+        y = lanes[1]
+    }
+
+    /// The two floats of the slice from the offset on. Traps unless they are all in it.
+    public init(from components: F32[:], at offset: Int = 0) {
+        x = components[offset]
+        y = components[offset + 1]
+    }
+
+    /// Every component zero.
+    public static var zero: Vector2 => Vector2(0, 0)
+
+    /// Every component one.
+    public static var one: Vector2 => Vector2(1, 1)
+
+    /// The x axis.
+    public static var unitX: Vector2 => Vector2(1, 0)
+
+    /// The y axis.
+    public static var unitY: Vector2 => Vector2(0, 1)
+
+    /// How many components there are: 2.
+    public static var componentCount: Int => 2
+
+    /// The components as lanes of a vector register.
+    public var simd: SIMD<F32, 2> {
+        get {
+            var lanes = SIMD<F32, 2>()
+            lanes[0] = x
+            lanes[1] = y
+            return lanes
+        }
+    }
+
+    /// The component at the index, x first; outside 0..<2 traps.
+    public subscript(index: Int) -> F32 {
+        get {
+            switch index {
+                case 0: return x
+                case 1: return y
+                default: preconditionFailure("a Vector2 has no component \(index)")
+            }
+        }
+        set {
+            switch index {
+                case 0: x = newValue
+                case 1: y = newValue
+                default: preconditionFailure("a Vector2 has no component \(index)")
+            }
+        }
+    }
+
+    /// Writes the components to the slice from the offset on. Traps unless
+    /// there is room for all two, and then writes none.
+    public fn copy(to destination: inout F32[:], at offset: Int = 0) {
+        destination[offset + 1] = y
+        destination[offset] = x
+    }
+
+    /// The length, √(x² + y²).
+    ///
+    /// ```sable
+    /// assert(Vector2(3, 4).length == 5)
+    /// ```
+    public var length: F32 => (x * x + y * y).squareRoot()
+
+    /// The square of the length, with no square root: what to compare by.
+    public var lengthSquared: F32 => x * x + y * y
+
+    /// Whether every component is zero, of either sign.
+    public var isZero: Bool => x == 0 && y == 0
+
+    /// Whether any component is NaN.
+    public var isNaN: Bool => x.isNaN || y.isNaN
+
+    /// Whether every component is finite.
+    public var isFinite: Bool => x.isFinite && y.isFinite
+
+    /// The components added together.
+    public var sum: F32 => x + y
+
+    /// The least component; NaN if any is.
+    public var minComponent: F32 => x.minimum(y)
+
+    /// The greatest component; NaN if any is.
+    public var maxComponent: F32 => x.maximum(y)
+
+    /// The vector of length 1 the same way; a vector shorter than a
+    /// millionth has none, and gives `zero` rather than NaNs (.NET gives NaNs).
+    ///
+    /// ```sable
+    /// assert((Vector2.unitY * 8).normalized() == Vector2.unitY)
+    /// assert(Vector2.zero.normalized() == Vector2.zero)
+    /// ```
+    public fn normalized() -> Vector2 {
+        let squared = lengthSquared
+        if squared < 1e-12 {
+            return Vector2.zero
+        }
+        return self * (1 / squared.squareRoot())
+    }
+
+    /// The dot product: the product of the lengths and the cosine between.
+    public fn dot(_ other: Vector2) -> F32 => x * other.x + y * other.y
+
+    /// The z of the cross product: the signed area of the parallelogram, which
+    /// is positive where the other is counter-clockwise from this.
+    public fn cross(_ other: Vector2) -> F32 => x * other.y - y * other.x
+
+    /// A quarter turn counter-clockwise: (-y, x).
+    public var perpendicular: Vector2 => Vector2(-y, x)
+
+    /// How far apart two points are.
+    public fn distance(to other: Vector2) -> F32 => (self - other).length
+
+    /// The square of how far apart two points are.
+    public fn distanceSquared(to other: Vector2) -> F32 => (self - other).lengthSquared
+
+    /// `self + (other - self) * amount`: exactly this at 0, and at 1 the other
+    /// but for rounding. The amount is not clamped.
+    ///
+    /// ```sable
+    /// assert(Vector2.zero.lerp(to: Vector2.one, 0.25) == Vector2(repeating: 0.25))
+    /// ```
+    public fn lerp(to other: Vector2, _ amount: F32) -> Vector2 => self + (other - self) * amount
+
+    /// The smaller of each pair of components: NaN if either is, and -0 below +0.
+    public fn min(_ other: Vector2) -> Vector2 => Vector2(x.minimum(other.x), y.minimum(other.y))
+
+    /// The larger of each pair of components: NaN if either is, and +0 above -0.
+    public fn max(_ other: Vector2) -> Vector2 => Vector2(x.maximum(other.x), y.maximum(other.y))
+
+    /// Each component held within the bounds': `max(lower).min(upper)`.
+    public fn clamped(lower: Vector2, upper: Vector2) -> Vector2 => self.max(lower).min(upper)
+
+    /// Each component's magnitude.
+    public fn abs() -> Vector2 => Vector2(x.abs(), y.abs())
+
+    /// Each component's square root.
+    public fn squareRoot() -> Vector2 => Vector2(x.squareRoot(), y.squareRoot())
+
+    /// Each component rounded down.
+    public fn floor() -> Vector2 => Vector2(x.rounded(.Down), y.rounded(.Down))
+
+    /// Each component rounded up.
+    public fn ceil() -> Vector2 => Vector2(x.rounded(.Up), y.rounded(.Up))
+
+    /// Each component rounded toward zero.
+    public fn truncated() -> Vector2 => Vector2(x.rounded(.TowardZero), y.rounded(.TowardZero))
+
+    /// Each component rounded to the nearest integer, a half to even.
+    public fn rounded() -> Vector2 => Vector2(x.rounded(.ToNearestOrEven), y.rounded(.ToNearestOrEven))
+
+    /// What the function makes of each component: `v.map { sin($0) }`.
+    public fn map<E: Error>(_ body: (F32) throws(E) -> F32) throws(E) -> Vector2 {
+        return Vector2(try body(x), try body(y))
+    }
+
+    /// The direction reflected by a surface of the (unit) normal.
+    ///
+    /// ```sable
+    /// assert(Vector2.unitY.reflected(normal: Vector2.unitY) == -Vector2.unitY)
+    /// ```
+    public fn reflected(normal: Vector2) -> Vector2 => self - normal * (2 * self.dot(normal))
+
+    /// The part of the vector along another; `zero` along one too short to
+    /// have a direction.
+    public fn projected(onto other: Vector2) -> Vector2 {
+        let squared = other.lengthSquared
+        if squared < 1e-12 {
+            return Vector2.zero
+        }
+        return other * (self.dot(other) / squared)
+    }
+
+    /// Whether each component is near the other's: see the function
+    /// `nearEqual`. `==` is exact.
+    public fn nearEqual(_ other: Vector2, tolerance: F32 = 1e-6) -> Bool {
+        return Sable.Math.Geometry.nearEqual(x, other.x, tolerance: tolerance) && Sable.Math.Geometry.nearEqual(y, other.y, tolerance: tolerance)
+    }
+
+    /// The sum, component by component.
+    public operator + (lhs: Vector2, rhs: Vector2) -> Vector2 => Vector2(lhs.x + rhs.x, lhs.y + rhs.y)
+
+    /// The difference, component by component.
+    public operator - (lhs: Vector2, rhs: Vector2) -> Vector2 => Vector2(lhs.x - rhs.x, lhs.y - rhs.y)
+
+    /// The product, component by component.
+    public operator * (lhs: Vector2, rhs: Vector2) -> Vector2 => Vector2(lhs.x * rhs.x, lhs.y * rhs.y)
+
+    /// The quotient, component by component.
+    public operator / (lhs: Vector2, rhs: Vector2) -> Vector2 => Vector2(lhs.x / rhs.x, lhs.y / rhs.y)
+
+    /// Every component negated.
+    public prefix operator - (operand: Vector2) -> Vector2 => Vector2(-operand.x, -operand.y)
+
+    /// Every component times the number.
+    public operator * (lhs: Vector2, rhs: F32) -> Vector2 => Vector2(lhs.x * rhs, lhs.y * rhs)
+
+    /// Every component times the number.
+    public operator * (lhs: F32, rhs: Vector2) -> Vector2 => rhs * lhs
+
+    /// Every component divided by the number, each quotient correctly rounded.
+    public operator / (lhs: Vector2, rhs: F32) -> Vector2 => Vector2(lhs.x / rhs, lhs.y / rhs)
+
+    /// Whether the components are exactly equal, as IEEE has it: -0 is 0, and
+    /// a NaN equals nothing, itself included.
+    public operator == (lhs: Vector2, rhs: Vector2) -> Bool => lhs.x == rhs.x && lhs.y == rhs.y
+
+    /// The components' hashes: vectors that are equal hash alike, zeros of either sign too.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(x)
+        hasher.combine(y)
+    }
+}
+
+extension Vector2: Formattable {
+    /// The components in parentheses, each written as the spec says, the
+    /// whole padded to the width.
+    ///
+    /// ```sable
+    /// assert("\(Vector2.unitX:.1)" == "(1.0, 0.0)")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([x, y], spec, named: "Vector2")
+}
+
+extension Vector2: Debug {
+    /// As source writes it: `Vector2(1.0, 1.0)`.
+    public fn debugDescription() -> String => "Vector2(\(x.debugDescription()), \(y.debugDescription()))"
+}

@@ -1,0 +1,155 @@
+module Sable.Math.Geometry
+
+import Sable.Serialize
+
+/// A linear transform: nine `F32`s by rows, of row vectors, as the first
+/// three rows and columns of a `Matrix4x4`. 36 bytes, aligned to 4; a GLSL
+/// `mat3` in a buffer pads each of its three to 16 bytes, so a buffer wants
+/// a `Matrix4x4`.
+///
+/// ```sable
+/// let m = Matrix3x3(scale: Vector3(1, 2, 3))
+/// assert(Vector3.one * m == Vector3(1, 2, 3))
+/// assert(m.determinant == 6)
+/// ```
+@derive(Serializable)
+public struct Matrix3x3: Hashable, Sendable {
+    /// Row 1, column 1.
+    public var m11: F32
+
+    /// Row 1, column 2.
+    public var m12: F32
+
+    /// Row 1, column 3.
+    public var m13: F32
+
+    /// Row 2, column 1.
+    public var m21: F32
+
+    /// Row 2, column 2.
+    public var m22: F32
+
+    /// Row 2, column 3.
+    public var m23: F32
+
+    /// Row 3, column 1.
+    public var m31: F32
+
+    /// Row 3, column 2.
+    public var m32: F32
+
+    /// Row 3, column 3.
+    public var m33: F32
+
+    /// The matrix of the elements, row by row.
+    public init(_ m11: F32, _ m12: F32, _ m13: F32, _ m21: F32, _ m22: F32, _ m23: F32, _ m31: F32, _ m32: F32, _ m33: F32) {
+        self.m11 = m11
+        self.m12 = m12
+        self.m13 = m13
+        self.m21 = m21
+        self.m22 = m22
+        self.m23 = m23
+        self.m31 = m31
+        self.m32 = m32
+        self.m33 = m33
+    }
+
+    /// The matrix of the rows.
+    public init(_ row1: Vector3, _ row2: Vector3, _ row3: Vector3) {
+        self = Matrix3x3(row1.x, row1.y, row1.z, row2.x, row2.y, row2.z, row3.x, row3.y, row3.z)
+    }
+
+    /// The first three rows and columns.
+    public init(_ matrix: Matrix4x4) {
+        self = matrix.linear
+    }
+
+    /// Turns as the quaternion, of length 1, does.
+    public init(rotation: Quaternion) {
+        self = Matrix4x4(rotation: rotation).linear
+    }
+
+    /// Scales along each axis.
+    public init(scale: Vector3) {
+        self = Matrix3x3(scale.x, 0, 0, 0, scale.y, 0, 0, 0, scale.z)
+    }
+
+    /// Moves nothing.
+    public static var identity: Matrix3x3 => Matrix3x3(1, 0, 0, 0, 1, 0, 0, 0, 1)
+
+    /// How many components there are: 9.
+    public static var componentCount: Int => 9
+
+    /// The first row.
+    public var row1: Vector3 => Vector3(m11, m12, m13)
+
+    /// The second row.
+    public var row2: Vector3 => Vector3(m21, m22, m23)
+
+    /// The third row.
+    public var row3: Vector3 => Vector3(m31, m32, m33)
+
+    /// The vector moved.
+    public fn transform(_ value: Vector3) -> Vector3 => value * self
+
+    /// The rows for columns.
+    public fn transposed() -> Matrix3x3 => Matrix3x3(m11, m21, m31, m12, m22, m32, m13, m23, m33)
+
+    /// The determinant: what volumes are multiplied by.
+    public var determinant: F32 => m11 * (m22 * m33 - m23 * m32) - m12 * (m21 * m33 - m23 * m31) + m13 * (m21 * m32 - m22 * m31)
+
+    /// The transform that undoes this one; none where the determinant is zero.
+    ///
+    /// ```sable
+    /// assert(Matrix3x3(scale: Vector3(2, 4, 8)).inverted()! == Matrix3x3(scale: Vector3(0.5, 0.25, 0.125)))
+    /// ```
+    public fn inverted() -> Matrix3x3? {
+        let whole = determinant
+        if whole == 0 {
+            return none
+        }
+        let s = 1 / whole
+        return Matrix3x3(
+            (m22 * m33 - m23 * m32) * s, (m13 * m32 - m12 * m33) * s, (m12 * m23 - m13 * m22) * s,
+            (m23 * m31 - m21 * m33) * s, (m11 * m33 - m13 * m31) * s, (m13 * m21 - m11 * m23) * s,
+            (m21 * m32 - m22 * m31) * s, (m12 * m31 - m11 * m32) * s, (m11 * m22 - m12 * m21) * s
+        )
+    }
+
+    /// Whether each element is near the other's.
+    public fn nearEqual(_ other: Matrix3x3, tolerance: F32 = 0.000001) -> Bool {
+        return row1.nearEqual(other.row1, tolerance: tolerance) && row2.nearEqual(other.row2, tolerance: tolerance) && row3.nearEqual(other.row3, tolerance: tolerance)
+    }
+
+    /// The left transform and then the right.
+    public operator * (lhs: Matrix3x3, rhs: Matrix3x3) -> Matrix3x3 => Matrix3x3(lhs.row1 * rhs, lhs.row2 * rhs, lhs.row3 * rhs)
+
+    /// The row vector moved.
+    public operator * (lhs: Vector3, rhs: Matrix3x3) -> Vector3 {
+        return Vector3(
+            lhs.x * rhs.m11 + lhs.y * rhs.m21 + lhs.z * rhs.m31,
+            lhs.x * rhs.m12 + lhs.y * rhs.m22 + lhs.z * rhs.m32,
+            lhs.x * rhs.m13 + lhs.y * rhs.m23 + lhs.z * rhs.m33
+        )
+    }
+
+    /// Whether the elements are exactly equal, as IEEE has it.
+    public operator == (lhs: Matrix3x3, rhs: Matrix3x3) -> Bool => lhs.row1 == rhs.row1 && lhs.row2 == rhs.row2 && lhs.row3 == rhs.row3
+
+    /// The elements' hashes.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(row1)
+        hasher.combine(row2)
+        hasher.combine(row3)
+    }
+}
+
+extension Matrix3x3: Formattable {
+    /// The elements, row by row, in parentheses.
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([m11, m12, m13, m21, m22, m23, m31, m32, m33], spec, named: "Matrix3x3")
+}
+
+extension Matrix3x3: Debug {
+    /// The three rows.
+    public fn debugDescription() -> String => "Matrix3x3(\(row1.debugDescription()), \(row2.debugDescription()), \(row3.debugDescription()))"
+}

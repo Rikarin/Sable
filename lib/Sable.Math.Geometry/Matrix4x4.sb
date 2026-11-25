@@ -1,0 +1,444 @@
+module Sable.Math.Geometry
+
+import Sable.Math
+import Sable.Serialize
+
+// The type, its rotations and scales, and its algebra; cameras and
+// projections are in Matrix4x4+Cameras.sb, and slices of points in
+// Matrix4x4+Transforms.sb.
+
+/// A transform of homogeneous points: sixteen `F32`s by rows, of row vectors.
+/// A point is moved as `v * m`, the translation is the last row, and
+/// `local * parent` is what is written first and then what is next
+/// (docs/06 "Geometry"). 64 bytes, aligned to 4.
+///
+/// The bytes are those of a GLSL or HLSL `mat4` of column vectors, by
+/// columns, that does the same: they go to the GPU as they are, not
+/// transposed. .NET's Matrix4x4 is the same bytes too.
+///
+/// ```sable
+/// let local = Matrix4x4(scale: Vector3(repeating: 2))
+/// let parent = Matrix4x4(translation: Vector3(10, 0, 0))
+/// assert((local * parent).transformPosition(Vector3(1, 0, 0)) == Vector3(12, 0, 0))
+/// assert(Vector4(1, 0, 0, 1) * (parent * local) == Vector4(22, 0, 0, 1))
+/// ```
+@derive(Serializable)
+public struct Matrix4x4: Hashable, Sendable {
+    /// Row 1, column 1.
+    public var m11: F32
+
+    /// Row 1, column 2.
+    public var m12: F32
+
+    /// Row 1, column 3.
+    public var m13: F32
+
+    /// Row 1, column 4.
+    public var m14: F32
+
+    /// Row 2, column 1.
+    public var m21: F32
+
+    /// Row 2, column 2.
+    public var m22: F32
+
+    /// Row 2, column 3.
+    public var m23: F32
+
+    /// Row 2, column 4.
+    public var m24: F32
+
+    /// Row 3, column 1.
+    public var m31: F32
+
+    /// Row 3, column 2.
+    public var m32: F32
+
+    /// Row 3, column 3.
+    public var m33: F32
+
+    /// Row 3, column 4.
+    public var m34: F32
+
+    /// Row 4, column 1: the translation's x.
+    public var m41: F32
+
+    /// Row 4, column 2: the translation's y.
+    public var m42: F32
+
+    /// Row 4, column 3: the translation's z.
+    public var m43: F32
+
+    /// Row 4, column 4.
+    public var m44: F32
+
+    /// The matrix of the elements, row by row.
+    public init(
+        _ m11: F32, _ m12: F32, _ m13: F32, _ m14: F32, _ m21: F32, _ m22: F32, _ m23: F32, _ m24: F32,
+        _ m31: F32, _ m32: F32, _ m33: F32, _ m34: F32, _ m41: F32, _ m42: F32, _ m43: F32, _ m44: F32
+    ) {
+        self.m11 = m11
+        self.m12 = m12
+        self.m13 = m13
+        self.m14 = m14
+        self.m21 = m21
+        self.m22 = m22
+        self.m23 = m23
+        self.m24 = m24
+        self.m31 = m31
+        self.m32 = m32
+        self.m33 = m33
+        self.m34 = m34
+        self.m41 = m41
+        self.m42 = m42
+        self.m43 = m43
+        self.m44 = m44
+    }
+
+    /// The matrix of the rows.
+    public init(_ row1: Vector4, _ row2: Vector4, _ row3: Vector4, _ row4: Vector4) {
+        self = Matrix4x4(row1.x, row1.y, row1.z, row1.w, row2.x, row2.y, row2.z, row2.w, row3.x, row3.y, row3.z, row3.w, row4.x, row4.y, row4.z, row4.w)
+    }
+
+    /// The sixteen floats of the slice from the offset on, row by row. Traps
+    /// unless they are all in it.
+    public init(from components: F32[:], at offset: Int = 0) {
+        self = Matrix4x4(Vector4(from: components, at: offset), Vector4(from: components, at: offset + 4), Vector4(from: components, at: offset + 8), Vector4(from: components, at: offset + 12))
+    }
+
+    /// The transform of the linear part alone.
+    public init(_ linear: Matrix3x3) {
+        self = Matrix4x4(Vector4(linear.row1, 0), Vector4(linear.row2, 0), Vector4(linear.row3, 0), Vector4.unitW)
+    }
+
+    /// The 2D transform, of x and y.
+    public init(_ flat: Matrix3x2) {
+        self = Matrix4x4(flat.m11, flat.m12, 0, 0, flat.m21, flat.m22, 0, 0, 0, 0, 1, 0, flat.m31, flat.m32, 0, 1)
+    }
+
+    /// Moves points.
+    public init(translation: Vector3) {
+        self = Matrix4x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, translation.x, translation.y, translation.z, 1)
+    }
+
+    /// Scales along each axis.
+    public init(scale: Vector3) {
+        self = Matrix4x4(scale.x, 0, 0, 0, 0, scale.y, 0, 0, 0, 0, scale.z, 0, 0, 0, 0, 1)
+    }
+
+    /// Scales along each axis, from a point that stays where it is.
+    public init(scale: Vector3, about center: Vector3) {
+        self = Matrix4x4(scale: scale)
+        let moved = center * (Vector3.one - scale)
+        m41 = moved.x
+        m42 = moved.y
+        m43 = moved.z
+    }
+
+    /// Turns about the x axis, y toward z, by radians.
+    ///
+    /// ```sable
+    /// let quarter = Matrix4x4(rotationX: F32.pi / 2)
+    /// assert(quarter.transformDirection(Vector3.unitY).nearEqual(Vector3.unitZ))
+    /// ```
+    public init(rotationX radians: F32) {
+        let s = F32.sin(radians)
+        let c = F32.cos(radians)
+        self = Matrix4x4(1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1)
+    }
+
+    /// Turns about the y axis, z toward x, by radians.
+    public init(rotationY radians: F32) {
+        let s = F32.sin(radians)
+        let c = F32.cos(radians)
+        self = Matrix4x4(c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1)
+    }
+
+    /// Turns about the z axis, x toward y, by radians.
+    public init(rotationZ radians: F32) {
+        let s = F32.sin(radians)
+        let c = F32.cos(radians)
+        self = Matrix4x4(c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+    }
+
+    /// Turns about the axis by radians, counter-clockwise seen with the axis
+    /// pointing at one.
+    public init(axis direction: Vector3, angle radians: F32) {
+        self = Matrix4x4(rotation: Quaternion(axis: direction, angle: radians))
+    }
+
+    /// Turns by the angles of `Quaternion(yaw:pitch:roll:)`.
+    public init(yaw aboutY: F32, pitch aboutX: F32, roll aboutZ: F32) {
+        self = Matrix4x4(rotation: Quaternion(yaw: aboutY, pitch: aboutX, roll: aboutZ))
+    }
+
+    /// Turns as the quaternion, of length 1, does.
+    public init(rotation q: Quaternion) {
+        let xx = q.x * q.x
+        let yy = q.y * q.y
+        let zz = q.z * q.z
+        let xy = q.x * q.y
+        let xz = q.x * q.z
+        let yz = q.y * q.z
+        let wx = q.w * q.x
+        let wy = q.w * q.y
+        let wz = q.w * q.z
+        self = Matrix4x4(
+            1 - 2 * (yy + zz), 2 * (xy + wz), 2 * (xz - wy), 0,
+            2 * (xy - wz), 1 - 2 * (xx + zz), 2 * (yz + wx), 0,
+            2 * (xz + wy), 2 * (yz - wx), 1 - 2 * (xx + yy), 0,
+            0, 0, 0, 1
+        )
+    }
+
+    /// Scales, then turns, then moves.
+    ///
+    /// ```sable
+    /// let m = Matrix4x4(scale: Vector3(repeating: 2), rotation: Quaternion.identity, translation: Vector3.unitY)
+    /// assert(m.transformPosition(Vector3.one) == Vector3(2, 3, 2))
+    /// ```
+    public init(scale: Vector3, rotation: Quaternion, translation: Vector3) {
+        let turn = Matrix4x4(rotation: rotation)
+        self = Matrix4x4(
+            turn.m11 * scale.x, turn.m12 * scale.x, turn.m13 * scale.x, 0,
+            turn.m21 * scale.y, turn.m22 * scale.y, turn.m23 * scale.y, 0,
+            turn.m31 * scale.z, turn.m32 * scale.z, turn.m33 * scale.z, 0,
+            translation.x, translation.y, translation.z, 1
+        )
+    }
+
+    /// Moves nothing.
+    public static var identity: Matrix4x4 => Matrix4x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+
+    /// Every element zero.
+    public static var zero: Matrix4x4 => Matrix4x4(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+    /// How many components there are: 16.
+    public static var componentCount: Int => 16
+
+    /// The first row.
+    public var row1: Vector4 => Vector4(m11, m12, m13, m14)
+
+    /// The second row.
+    public var row2: Vector4 => Vector4(m21, m22, m23, m24)
+
+    /// The third row.
+    public var row3: Vector4 => Vector4(m31, m32, m33, m34)
+
+    /// The fourth row: the translation, and 1 of an affine transform.
+    public var row4: Vector4 => Vector4(m41, m42, m43, m44)
+
+    /// The first column.
+    public var column1: Vector4 => Vector4(m11, m21, m31, m41)
+
+    /// The second column.
+    public var column2: Vector4 => Vector4(m12, m22, m32, m42)
+
+    /// The third column.
+    public var column3: Vector4 => Vector4(m13, m23, m33, m43)
+
+    /// The fourth column.
+    public var column4: Vector4 => Vector4(m14, m24, m34, m44)
+
+    /// How far points are moved: the first three of the last row.
+    public var translation: Vector3 {
+        get {
+            return Vector3(m41, m42, m43)
+        }
+        set {
+            m41 = newValue.x
+            m42 = newValue.y
+            m43 = newValue.z
+        }
+    }
+
+    /// What was +X: the first row.
+    public var right: Vector3 => Vector3(m11, m12, m13)
+
+    /// What was +Y: the second row.
+    public var up: Vector3 => Vector3(m21, m22, m23)
+
+    /// What was -Z: the third row negated.
+    public var forward: Vector3 => Vector3(-m31, -m32, -m33)
+
+    /// The linear part: the first three rows and columns.
+    public var linear: Matrix3x3 => Matrix3x3(row1.xyz, row2.xyz, row3.xyz)
+
+    /// Whether this is the identity, each element within a millionth.
+    public var isIdentity: Bool => nearEqual(Matrix4x4.identity)
+
+    /// The element of the row and the column, each 1...4 as `m11` names
+    /// them; others trap.
+    ///
+    /// ```sable
+    /// var m = Matrix4x4.identity
+    /// m[4, 1] = 7
+    /// assert(m.translation == Vector3(7, 0, 0) && m[1, 1] == 1)
+    /// ```
+    public subscript(row: Int, column: Int) -> F32 {
+        get {
+            switch row {
+                case 1: return row1[column - 1]
+                case 2: return row2[column - 1]
+                case 3: return row3[column - 1]
+                case 4: return row4[column - 1]
+                default: preconditionFailure("a Matrix4x4 has no row \(row)")
+            }
+        }
+        set {
+            var rows = (row1, row2, row3, row4)
+            switch row {
+                case 1: rows.0[column - 1] = newValue
+                case 2: rows.1[column - 1] = newValue
+                case 3: rows.2[column - 1] = newValue
+                case 4: rows.3[column - 1] = newValue
+                default: preconditionFailure("a Matrix4x4 has no row \(row)")
+            }
+            self = Matrix4x4(rows.0, rows.1, rows.2, rows.3)
+        }
+    }
+
+    /// Writes the elements, row by row, to the slice from the offset on.
+    /// Traps unless there is room for all sixteen.
+    public fn copy(to destination: inout F32[:], at offset: Int = 0) {
+        row4.copy(to: &destination, at: offset + 12)
+        row3.copy(to: &destination, at: offset + 8)
+        row2.copy(to: &destination, at: offset + 4)
+        row1.copy(to: &destination, at: offset)
+    }
+
+    /// The rows for columns.
+    public fn transposed() -> Matrix4x4 => Matrix4x4(column1, column2, column3, column4)
+
+    /// The determinant: what volumes are multiplied by.
+    public var determinant: F32 {
+        get {
+            let a = m31 * m42 - m32 * m41
+            let b = m31 * m43 - m33 * m41
+            let c = m31 * m44 - m34 * m41
+            let d = m32 * m43 - m33 * m42
+            let e = m32 * m44 - m34 * m42
+            let f = m33 * m44 - m34 * m43
+            let one = m11 * (m22 * f - m23 * e + m24 * d) - m12 * (m21 * f - m23 * c + m24 * b)
+            return one + m13 * (m21 * e - m22 * c + m24 * a) - m14 * (m21 * d - m22 * b + m23 * a)
+        }
+    }
+
+    /// The transform that undoes this one; none where there is none, the
+    /// determinant being zero.
+    ///
+    /// ```sable
+    /// let m = Matrix4x4(translation: Vector3(1, 2, 3))
+    /// assert(m * m.inverted()! == Matrix4x4.identity)
+    /// assert(Matrix4x4(scale: Vector3(1, 0, 1)).inverted() == none)
+    /// ```
+    public fn inverted() -> Matrix4x4? {
+        let a = m11 * m22 - m12 * m21
+        let b = m11 * m23 - m13 * m21
+        let c = m11 * m24 - m14 * m21
+        let d = m12 * m23 - m13 * m22
+        let e = m12 * m24 - m14 * m22
+        let f = m13 * m24 - m14 * m23
+        let g = m31 * m42 - m32 * m41
+        let h = m31 * m43 - m33 * m41
+        let i = m31 * m44 - m34 * m41
+        let j = m32 * m43 - m33 * m42
+        let k = m32 * m44 - m34 * m42
+        let l = m33 * m44 - m34 * m43
+        let whole = a * l - b * k + c * j + d * i - e * h + f * g
+        if whole == 0 {
+            return none
+        }
+        let s = 1 / whole
+        return Matrix4x4(
+            (m22 * l - m23 * k + m24 * j) * s, (m13 * k - m12 * l - m14 * j) * s, (m42 * f - m43 * e + m44 * d) * s, (m33 * e - m32 * f - m34 * d) * s,
+            (m23 * i - m21 * l - m24 * h) * s, (m11 * l - m13 * i + m14 * h) * s, (m43 * c - m41 * f - m44 * b) * s, (m31 * f - m33 * c + m34 * b) * s,
+            (m21 * k - m22 * i + m24 * g) * s, (m12 * i - m11 * k - m14 * g) * s, (m41 * e - m42 * c + m44 * a) * s, (m32 * c - m31 * e - m34 * a) * s,
+            (m22 * h - m21 * j - m23 * g) * s, (m11 * j - m12 * h + m13 * g) * s, (m42 * b - m41 * d - m43 * a) * s, (m31 * d - m32 * b + m33 * a) * s
+        )
+    }
+
+    /// The scale, rotation and translation this affine transform is; none
+    /// where an axis is scaled to nothing, so that no rotation can be told. Of a
+    /// mirrored one the scale's x is negative. A shear is lost.
+    ///
+    /// ```sable
+    /// let t = Matrix4x4(scale: Vector3(1, 2, 3), rotation: Quaternion.identity, translation: Vector3.one).decomposed()!
+    /// assert(t.scale == Vector3(1, 2, 3) && t.translation == Vector3.one && t.rotation.isIdentity)
+    /// ```
+    public fn decomposed() -> Transform? {
+        let lengths = Vector3(right.length, up.length, forward.length)
+        if isNearZero(lengths.x) || isNearZero(lengths.y) || isNearZero(lengths.z) {
+            return none
+        }
+        // Only the sign of the three scales' product can be told: it is x's.
+        let scale = determinant < 0 ? Vector3(-lengths.x, lengths.y, lengths.z) : lengths
+        let turn = Matrix4x4(row1 / scale.x, row2 / scale.y, row3 / scale.z, Vector4.unitW)
+        return Transform(translation: translation, rotation: Quaternion(rotation: turn), scale: scale)
+    }
+
+    /// The elements so far from these to the other's.
+    public fn lerp(to other: Matrix4x4, _ amount: F32) -> Matrix4x4 {
+        return Matrix4x4(row1.lerp(to: other.row1, amount), row2.lerp(to: other.row2, amount), row3.lerp(to: other.row3, amount), row4.lerp(to: other.row4, amount))
+    }
+
+    /// The transform and then the rotation.
+    public fn rotated(by rotation: Quaternion) -> Matrix4x4 => self * Matrix4x4(rotation: rotation)
+
+    /// Whether each element is near the other's.
+    public fn nearEqual(_ other: Matrix4x4, tolerance: F32 = 0.000001) -> Bool {
+        return row1.nearEqual(other.row1, tolerance: tolerance) && row2.nearEqual(other.row2, tolerance: tolerance) && row3.nearEqual(other.row3, tolerance: tolerance) && row4.nearEqual(other.row4, tolerance: tolerance)
+    }
+
+    /// The left transform and then the right.
+    public operator * (lhs: Matrix4x4, rhs: Matrix4x4) -> Matrix4x4 {
+        return Matrix4x4(lhs.row1 * rhs, lhs.row2 * rhs, lhs.row3 * rhs, lhs.row4 * rhs)
+    }
+
+    /// The homogeneous row vector moved, and not divided by w.
+    public operator * (lhs: Vector4, rhs: Matrix4x4) -> Vector4 {
+        return Vector4(
+            lhs.x * rhs.m11 + lhs.y * rhs.m21 + lhs.z * rhs.m31 + lhs.w * rhs.m41,
+            lhs.x * rhs.m12 + lhs.y * rhs.m22 + lhs.z * rhs.m32 + lhs.w * rhs.m42,
+            lhs.x * rhs.m13 + lhs.y * rhs.m23 + lhs.z * rhs.m33 + lhs.w * rhs.m43,
+            lhs.x * rhs.m14 + lhs.y * rhs.m24 + lhs.z * rhs.m34 + lhs.w * rhs.m44
+        )
+    }
+
+    /// Every element times the number.
+    public operator * (lhs: Matrix4x4, rhs: F32) -> Matrix4x4 => Matrix4x4(lhs.row1 * rhs, lhs.row2 * rhs, lhs.row3 * rhs, lhs.row4 * rhs)
+
+    /// The sum, element by element.
+    public operator + (lhs: Matrix4x4, rhs: Matrix4x4) -> Matrix4x4 => Matrix4x4(lhs.row1 + rhs.row1, lhs.row2 + rhs.row2, lhs.row3 + rhs.row3, lhs.row4 + rhs.row4)
+
+    /// The difference, element by element.
+    public operator - (lhs: Matrix4x4, rhs: Matrix4x4) -> Matrix4x4 => Matrix4x4(lhs.row1 - rhs.row1, lhs.row2 - rhs.row2, lhs.row3 - rhs.row3, lhs.row4 - rhs.row4)
+
+    /// Every element negated.
+    public prefix operator - (operand: Matrix4x4) -> Matrix4x4 => Matrix4x4(-operand.row1, -operand.row2, -operand.row3, -operand.row4)
+
+    /// Whether the elements are exactly equal, as IEEE has it.
+    public operator == (lhs: Matrix4x4, rhs: Matrix4x4) -> Bool => lhs.row1 == rhs.row1 && lhs.row2 == rhs.row2 && lhs.row3 == rhs.row3 && lhs.row4 == rhs.row4
+
+    /// The elements' hashes.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(row1)
+        hasher.combine(row2)
+        hasher.combine(row3)
+        hasher.combine(row4)
+    }
+}
+
+extension Matrix4x4: Formattable {
+    /// The elements, row by row, in parentheses.
+    public fn format(_ spec: FormatSpec) -> String {
+        return formatComponents([m11, m12, m13, m14, m21, m22, m23, m24, m31, m32, m33, m34, m41, m42, m43, m44], spec, named: "Matrix4x4")
+    }
+}
+
+extension Matrix4x4: Debug {
+    /// The four rows.
+    public fn debugDescription() -> String {
+        return "Matrix4x4(\(row1.debugDescription()), \(row2.debugDescription()), \(row3.debugDescription()), \(row4.debugDescription()))"
+    }
+}

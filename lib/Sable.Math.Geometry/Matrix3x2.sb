@@ -1,0 +1,183 @@
+module Sable.Math.Geometry
+
+import Sable.Math
+import Sable.Serialize
+
+/// An affine transform of the plane: six `F32`s by rows, of row vectors, the
+/// translation the last row. 24 bytes, aligned to 4. A positive angle turns
+/// x toward y: counter-clockwise where y is up, clockwise on a screen.
+///
+/// ```sable
+/// let m = Matrix3x2(scale: Vector2(2, 2)) * Matrix3x2(translation: Vector2(10, 0))
+/// assert(m.transformPosition(Vector2(1, 1)) == Vector2(12, 2))
+/// ```
+@derive(Serializable)
+public struct Matrix3x2: Hashable, Sendable {
+    /// Row 1, column 1.
+    public var m11: F32
+
+    /// Row 1, column 2.
+    public var m12: F32
+
+    /// Row 2, column 1.
+    public var m21: F32
+
+    /// Row 2, column 2.
+    public var m22: F32
+
+    /// Row 3, column 1: the translation's x.
+    public var m31: F32
+
+    /// Row 3, column 2: the translation's y.
+    public var m32: F32
+
+    /// The matrix of the elements, row by row.
+    public init(_ m11: F32, _ m12: F32, _ m21: F32, _ m22: F32, _ m31: F32, _ m32: F32) {
+        self.m11 = m11
+        self.m12 = m12
+        self.m21 = m21
+        self.m22 = m22
+        self.m31 = m31
+        self.m32 = m32
+    }
+
+    /// The matrix of the rows.
+    public init(_ row1: Vector2, _ row2: Vector2, _ row3: Vector2) {
+        self = Matrix3x2(row1.x, row1.y, row2.x, row2.y, row3.x, row3.y)
+    }
+
+    /// Moves points.
+    public init(translation: Vector2) {
+        self = Matrix3x2(1, 0, 0, 1, translation.x, translation.y)
+    }
+
+    /// Scales along each axis, from a point that stays where it is.
+    ///
+    /// ```sable
+    /// let m = Matrix3x2(scale: Vector2(3, 3), about: Vector2(1, 1))
+    /// assert(m.transformPosition(Vector2(1, 1)) == Vector2(1, 1))
+    /// ```
+    public init(scale: Vector2, about center: Vector2 = Vector2(0, 0)) {
+        let moved = center * (Vector2.one - scale)
+        self = Matrix3x2(scale.x, 0, 0, scale.y, moved.x, moved.y)
+    }
+
+    /// Turns x toward y by radians, about a point.
+    public init(rotation radians: F32, about center: Vector2 = Vector2(0, 0)) {
+        let s = F32.sin(radians)
+        let c = F32.cos(radians)
+        self = Matrix3x2(c, s, -s, c, center.x * (1 - c) + center.y * s, center.y * (1 - c) - center.x * s)
+    }
+
+    /// Leans by radians along each axis, about a point.
+    public init(skewX: F32, skewY: F32, about center: Vector2 = Vector2(0, 0)) {
+        let x = F32.tan(skewX)
+        let y = F32.tan(skewY)
+        self = Matrix3x2(1, y, x, 1, -center.y * x, -center.x * y)
+    }
+
+    /// Moves nothing.
+    public static var identity: Matrix3x2 => Matrix3x2(1, 0, 0, 1, 0, 0)
+
+    /// How many components there are: 6.
+    public static var componentCount: Int => 6
+
+    /// The first row.
+    public var row1: Vector2 => Vector2(m11, m12)
+
+    /// The second row.
+    public var row2: Vector2 => Vector2(m21, m22)
+
+    /// The third row: the translation.
+    public var row3: Vector2 => Vector2(m31, m32)
+
+    /// How far points are moved.
+    public var translation: Vector2 => row3
+
+    /// Whether this is the identity, each element within a millionth.
+    public var isIdentity: Bool => nearEqual(Matrix3x2.identity)
+
+    /// The point moved.
+    public fn transformPosition(_ position: Vector2) -> Vector2 {
+        return Vector2(position.x * m11 + position.y * m21 + m31, position.x * m12 + position.y * m22 + m32)
+    }
+
+    /// The direction moved: the translation is nothing to it.
+    public fn transformDirection(_ direction: Vector2) -> Vector2 {
+        return Vector2(direction.x * m11 + direction.y * m21, direction.x * m12 + direction.y * m22)
+    }
+
+    /// Each point moved, written to the destination. Traps unless it has
+    /// room for them.
+    public fn transformPositions(_ source: Vector2[:], into destination: inout Vector2[:]) {
+        precondition(destination.count >= source.count, "the destination is shorter than the source")
+        for i in 0..<source.count {
+            destination[i] = transformPosition(source[i])
+        }
+    }
+
+    /// The determinant: what areas are multiplied by.
+    public var determinant: F32 => m11 * m22 - m21 * m12
+
+    /// The transform that undoes this one; none where the determinant is zero.
+    ///
+    /// ```sable
+    /// let m = Matrix3x2(translation: Vector2(3, 4))
+    /// assert(m * m.inverted()! == Matrix3x2.identity)
+    /// ```
+    public fn inverted() -> Matrix3x2? {
+        let whole = determinant
+        if whole == 0 {
+            return none
+        }
+        let s = 1 / whole
+        return Matrix3x2(m22 * s, -m12 * s, -m21 * s, m11 * s, (m21 * m32 - m31 * m22) * s, (m31 * m12 - m11 * m32) * s)
+    }
+
+    /// The elements so far from these to the other's.
+    public fn lerp(to other: Matrix3x2, _ amount: F32) -> Matrix3x2 {
+        return Matrix3x2(row1.lerp(to: other.row1, amount), row2.lerp(to: other.row2, amount), row3.lerp(to: other.row3, amount))
+    }
+
+    /// Whether each element is near the other's.
+    public fn nearEqual(_ other: Matrix3x2, tolerance: F32 = 0.000001) -> Bool {
+        return row1.nearEqual(other.row1, tolerance: tolerance) && row2.nearEqual(other.row2, tolerance: tolerance) && row3.nearEqual(other.row3, tolerance: tolerance)
+    }
+
+    /// The left transform and then the right.
+    public operator * (lhs: Matrix3x2, rhs: Matrix3x2) -> Matrix3x2 {
+        return Matrix3x2(rhs.transformDirection(lhs.row1), rhs.transformDirection(lhs.row2), rhs.transformPosition(lhs.row3))
+    }
+
+    /// Every element times the number.
+    public operator * (lhs: Matrix3x2, rhs: F32) -> Matrix3x2 => Matrix3x2(lhs.row1 * rhs, lhs.row2 * rhs, lhs.row3 * rhs)
+
+    /// The sum, element by element.
+    public operator + (lhs: Matrix3x2, rhs: Matrix3x2) -> Matrix3x2 => Matrix3x2(lhs.row1 + rhs.row1, lhs.row2 + rhs.row2, lhs.row3 + rhs.row3)
+
+    /// The difference, element by element.
+    public operator - (lhs: Matrix3x2, rhs: Matrix3x2) -> Matrix3x2 => Matrix3x2(lhs.row1 - rhs.row1, lhs.row2 - rhs.row2, lhs.row3 - rhs.row3)
+
+    /// Every element negated.
+    public prefix operator - (operand: Matrix3x2) -> Matrix3x2 => Matrix3x2(-operand.row1, -operand.row2, -operand.row3)
+
+    /// Whether the elements are exactly equal, as IEEE has it.
+    public operator == (lhs: Matrix3x2, rhs: Matrix3x2) -> Bool => lhs.row1 == rhs.row1 && lhs.row2 == rhs.row2 && lhs.row3 == rhs.row3
+
+    /// The elements' hashes.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(row1)
+        hasher.combine(row2)
+        hasher.combine(row3)
+    }
+}
+
+extension Matrix3x2: Formattable {
+    /// The elements, row by row, in parentheses.
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([m11, m12, m21, m22, m31, m32], spec, named: "Matrix3x2")
+}
+
+extension Matrix3x2: Debug {
+    /// The three rows.
+    public fn debugDescription() -> String => "Matrix3x2(\(row1.debugDescription()), \(row2.debugDescription()), \(row3.debugDescription()))"
+}

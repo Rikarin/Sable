@@ -1,0 +1,188 @@
+module Sable.Math.Geometry
+
+import Sable.Serialize
+
+/// A box along the axes, as its least and its greatest corner: 24 bytes.
+///
+/// The empty box has its least corner above its greatest, and merging
+/// anything with it gives that thing: where an accumulation begins.
+///
+/// ```sable
+/// var bounds = BoundingBox.empty
+/// for point in [Vector3(1, 2, 3), Vector3(-1, 0, 5)] {
+///     bounds = bounds.merged(with: point)
+/// }
+/// assert(bounds == BoundingBox(Vector3(-1, 0, 3), Vector3(1, 2, 5)))
+/// ```
+@derive(Serializable)
+public struct BoundingBox: Hashable, Sendable {
+    /// The corner of least coordinates.
+    public var minimum: Vector3
+
+    /// The corner of greatest coordinates.
+    public var maximum: Vector3
+
+    /// The box between the corners.
+    public init(_ minimum: Vector3, _ maximum: Vector3) {
+        self.minimum = minimum
+        self.maximum = maximum
+    }
+
+    /// The box of the points; empty for none.
+    public init(containing points: Vector3[:]) {
+        var least = Vector3(repeating: F32.infinity)
+        var greatest = Vector3(repeating: -F32.infinity)
+        for i in 0..<points.count {
+            least = least.min(points[i])
+            greatest = greatest.max(points[i])
+        }
+        minimum = least
+        maximum = greatest
+    }
+
+    /// The box of the sphere.
+    public init(containing sphere: BoundingSphere) {
+        if sphere.isEmpty {
+            self = BoundingBox.empty
+        } else {
+            self = BoundingBox(sphere.center - Vector3(repeating: sphere.radius), sphere.center + Vector3(repeating: sphere.radius))
+        }
+    }
+
+    /// The box of nothing.
+    public static var empty: BoundingBox => BoundingBox(Vector3(repeating: F32.infinity), Vector3(repeating: -F32.infinity))
+
+    /// The middle.
+    public var center: Vector3 => (minimum + maximum) * 0.5
+
+    /// The whole width, height and depth.
+    public var size: Vector3 => maximum - minimum
+
+    /// Half the size: how far the faces are from the middle.
+    public var extent: Vector3 => size * 0.5
+
+    /// Whether nothing is in it.
+    public var isEmpty: Bool => minimum.x > maximum.x || minimum.y > maximum.y || minimum.z > maximum.z
+
+    /// The eight corners, in an array: those of `corner`, in order.
+    public var corners: Vector3[>..] => (0..<8).map { self.corner($0) }
+
+    /// The corner of the number, 0..<8: x changes slowest and z fastest, the
+    /// least of each first.
+    ///
+    /// ```sable
+    /// let box = BoundingBox(Vector3.zero, Vector3(1, 2, 3))
+    /// assert(box.corner(0) == Vector3.zero && box.corner(1) == Vector3(0, 0, 3))
+    /// ```
+    public fn corner(_ index: Int) -> Vector3 {
+        precondition(index >= 0 && index < 8, "a box has 8 corners")
+        return Vector3((index & 4) == 0 ? minimum.x : maximum.x, (index & 2) == 0 ? minimum.y : maximum.y, (index & 1) == 0 ? minimum.z : maximum.z)
+    }
+
+    /// The box of both.
+    public fn merged(with other: BoundingBox) -> BoundingBox {
+        return BoundingBox(minimum.min(other.minimum), maximum.max(other.maximum))
+    }
+
+    /// The box of this one and the point.
+    public fn merged(with point: Vector3) -> BoundingBox => BoundingBox(minimum.min(point), maximum.max(point))
+
+    /// Whether the point is inside or on a face.
+    public fn contains(_ point: Vector3) -> Bool {
+        return point.x >= minimum.x && point.x <= maximum.x && point.y >= minimum.y && point.y <= maximum.y && point.z >= minimum.z && point.z <= maximum.z
+    }
+
+    /// How another box lies to this one.
+    ///
+    /// ```sable
+    /// let outer = BoundingBox(Vector3(-10, -10, -10), Vector3(10, 10, 10))
+    /// assert(outer.contains(BoundingBox(Vector3.zero, Vector3.one)) == .Contains)
+    /// assert(outer.contains(BoundingBox(Vector3.zero, Vector3(20, 1, 1))) == .Intersects)
+    /// ```
+    public fn contains(_ other: BoundingBox) -> ContainmentType {
+        if !intersects(other) {
+            return .Disjoint
+        }
+        return contains(other.minimum) && contains(other.maximum) ? .Contains : .Intersects
+    }
+
+    /// How a sphere lies to this box.
+    public fn contains(_ sphere: BoundingSphere) -> ContainmentType {
+        if !intersects(sphere) {
+            return .Disjoint
+        }
+        let bounds = BoundingBox(containing: sphere)
+        return contains(bounds.minimum) && contains(bounds.maximum) ? .Contains : .Intersects
+    }
+
+    /// Whether two boxes have a point in common.
+    public fn intersects(_ other: BoundingBox) -> Bool {
+        return maximum.x >= other.minimum.x && minimum.x <= other.maximum.x && maximum.y >= other.minimum.y && minimum.y <= other.maximum.y && maximum.z >= other.minimum.z && minimum.z <= other.maximum.z
+    }
+
+    /// Whether a sphere and this box have a point in common.
+    public fn intersects(_ sphere: BoundingSphere) -> Bool {
+        if sphere.isEmpty || isEmpty {
+            return false
+        }
+        let closest = sphere.center.clamped(lower: minimum, upper: maximum)
+        return sphere.center.distanceSquared(to: closest) <= sphere.radius * sphere.radius
+    }
+
+    /// Which side of the plane the box is on. It is on one only where it
+    /// clears the plane by more than this test's own rounding: a box that
+    /// touches is never called behind, and so never culled.
+    public fn side(of plane: Plane) -> PlaneIntersectionType {
+        // Only the corners furthest along the normal each way can tell.
+        let normal = plane.normal.abs()
+        let middle = center
+        let reach = extent.dot(normal)
+        let distance = plane.dotCoordinate(middle)
+        // 'distance' and 'reach' round apart: the one's error is relative to
+        // the terms that cancel in it, Σ|nᵢcᵢ| + |d|, and the other's to
+        // itself, about 5u of the sum of the three, and roundingSlack is 8u.
+        // No fixed margin would do: a box a thousand times as far out has a
+        // thousand times the error.
+        let margin = roundingSlack * (reach + middle.abs().dot(normal) + plane.d.abs())
+        if distance > reach + margin {
+            return .Front
+        }
+        return distance < -reach - margin ? .Back : .Intersecting
+    }
+
+    /// The box, along the axes, of this box moved by an affine matrix: it
+    /// grows as it turns. An empty box is empty still.
+    public fn transformed(by matrix: Matrix4x4) -> BoundingBox {
+        if isEmpty {
+            return self
+        }
+        let middle = matrix.transformPosition(center)
+        let half = extent
+        let reach = matrix.row1.xyz.abs() * half.x + matrix.row2.xyz.abs() * half.y + matrix.row3.xyz.abs() * half.z
+        return BoundingBox(middle - reach, middle + reach)
+    }
+
+    /// Whether both corners are near the other's.
+    public fn nearEqual(_ other: BoundingBox, tolerance: F32 = 0.000001) -> Bool {
+        return minimum.nearEqual(other.minimum, tolerance: tolerance) && maximum.nearEqual(other.maximum, tolerance: tolerance)
+    }
+
+    /// Whether both corners are exactly equal, as IEEE has it.
+    public operator == (lhs: BoundingBox, rhs: BoundingBox) -> Bool => lhs.minimum == rhs.minimum && lhs.maximum == rhs.maximum
+
+    /// The corners' hashes.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(minimum)
+        hasher.combine(maximum)
+    }
+}
+
+extension BoundingBox: Formattable {
+    /// The two corners, in parentheses.
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([minimum, maximum], spec, named: "BoundingBox")
+}
+
+extension BoundingBox: Debug {
+    /// As source writes it.
+    public fn debugDescription() -> String => "BoundingBox(\(minimum.debugDescription()), \(maximum.debugDescription()))"
+}

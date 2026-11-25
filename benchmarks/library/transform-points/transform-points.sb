@@ -1,0 +1,36 @@
+module TransformPointsBench
+
+import Sable.Math.Geometry
+
+// 4,096 points moved by a matrix, four thousand times over: by the slice,
+// and then each moved, turned by a quaternion and its length summed.
+
+@main
+fn main() {
+    let count = 4096
+    var points: Vector3[>..] = []
+    for i in 0..<count {
+        points.append(Vector3(F32(i % 17), F32(i % 13), F32(i % 11)))
+    }
+    var moved = points
+    let turn = Quaternion(axis: Vector3(1, 1, 0), angle: 0.5)
+    var sum: F64 = 0
+    for round in 0..<4000 {
+        let matrix = Matrix4x4(scale: Vector3(1, 2, 1), rotation: turn, translation: Vector3(F32(round % 8), 0, 1))
+        matrix.transformPositions(points, into: &moved)
+        sum += F64(moved[round % count].x)
+    }
+    for round in 0..<1000 {
+        points[0].x = F32(round % 8)
+        sum += F64(lengths(points, turn)) / 4096
+    }
+    print("\(sum / 5000:.2)")
+}
+
+fn lengths(_ points: Vector3[:], _ turn: Quaternion) -> F32 {
+    var sum: F32 = 0
+    for i in 0..<points.count {
+        sum += turn.transform(points[i] + Vector3.unitY).normalized().dot(Vector3.one)
+    }
+    return sum
+}

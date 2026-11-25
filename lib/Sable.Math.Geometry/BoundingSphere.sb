@@ -1,0 +1,162 @@
+module Sable.Math.Geometry
+
+import Sable.Serialize
+
+/// A sphere around something: the cheapest bound to test, the same however
+/// it is turned. 16 bytes. The empty sphere's radius is below 0; nothing is
+/// in it and it meets nothing.
+///
+/// ```sable
+/// let sphere = BoundingSphere(containing: [Vector3(-1, 0, 0), Vector3(1, 0, 0)])
+/// assert(sphere.center == Vector3.zero && sphere.contains(Vector3(1, 0, 0)))
+/// ```
+@derive(Serializable)
+public struct BoundingSphere: Hashable, Sendable {
+    /// The middle.
+    public var center: Vector3
+
+    /// How far from it the surface is; below 0 for the empty sphere.
+    public var radius: F32
+
+    /// The sphere of the radius about the point.
+    public init(_ center: Vector3, _ radius: F32) {
+        self.center = center
+        self.radius = radius
+    }
+
+    /// A sphere the points are all in, about the middle of their box: not
+    /// the smallest, usually a few percent off it. Empty for none.
+    public init(containing points: Vector3[:]) {
+        if points.isEmpty {
+            self = BoundingSphere.empty
+        } else {
+            let middle = BoundingBox(containing: points).center
+            var squared: F32 = 0
+            for i in 0..<points.count {
+                squared = squared.maximum(middle.distanceSquared(to: points[i]))
+            }
+            // The root, squared again, may fall below what it is the root of,
+            // and the point that set it outside: so the next float up.
+            self = BoundingSphere(middle, squared.squareRoot().nextUp)
+        }
+    }
+
+    /// The sphere through the box's corners.
+    public init(containing box: BoundingBox) {
+        self = box.isEmpty ? BoundingSphere.empty : BoundingSphere(box.center, box.extent.length)
+    }
+
+    /// The sphere of nothing.
+    public static var empty: BoundingSphere => BoundingSphere(Vector3.zero, -1)
+
+    /// Whether nothing is in it.
+    public var isEmpty: Bool => radius < 0
+
+    /// The smallest sphere both are in: one of them where it holds the other.
+    ///
+    /// ```sable
+    /// let both = BoundingSphere(Vector3(-2, 0, 0), 1).merged(with: BoundingSphere(Vector3(2, 0, 0), 1))
+    /// assert(both == BoundingSphere(Vector3.zero, 3))
+    /// ```
+    public fn merged(with other: BoundingSphere) -> BoundingSphere {
+        if isEmpty {
+            return other
+        }
+        if other.isEmpty {
+            return self
+        }
+        let offset = other.center - center
+        let distance = offset.length
+        if distance + other.radius <= radius {
+            return self
+        }
+        if distance + radius <= other.radius {
+            return other
+        }
+        let reach = (distance + radius + other.radius) * 0.5
+        let direction = distance < zeroTolerance ? Vector3.zero : offset / distance
+        return BoundingSphere(center + direction * (reach - radius), reach)
+    }
+
+    /// Whether the point is inside or on the surface.
+    public fn contains(_ point: Vector3) -> Bool => radius >= 0 && center.distanceSquared(to: point) <= radius * radius
+
+    /// How another sphere lies to this one.
+    public fn contains(_ other: BoundingSphere) -> ContainmentType {
+        if isEmpty || other.isEmpty {
+            return .Disjoint
+        }
+        let distance = center.distance(to: other.center)
+        if distance > radius + other.radius {
+            return .Disjoint
+        }
+        return distance + other.radius <= radius ? .Contains : .Intersects
+    }
+
+    /// How a box lies to this sphere.
+    public fn contains(_ box: BoundingBox) -> ContainmentType {
+        if !intersects(box) {
+            return .Disjoint
+        }
+        for i in 0..<8 {
+            if !contains(box.corner(i)) {
+                return .Intersects
+            }
+        }
+        return .Contains
+    }
+
+    /// Whether two spheres have a point in common.
+    public fn intersects(_ other: BoundingSphere) -> Bool {
+        let reach = radius + other.radius
+        return radius >= 0 && other.radius >= 0 && center.distanceSquared(to: other.center) <= reach * reach
+    }
+
+    /// Whether a box and this sphere have a point in common.
+    public fn intersects(_ box: BoundingBox) -> Bool => box.intersects(self)
+
+    /// Which side of the plane the sphere is on: on one only where it clears
+    /// the plane by more than this test's rounding (`BoundingBox.side(of:)`).
+    public fn side(of plane: Plane) -> PlaneIntersectionType {
+        let distance = plane.dotCoordinate(center)
+        let margin = roundingSlack * (radius + center.abs().dot(plane.normal.abs()) + plane.d.abs())
+        if distance > radius + margin {
+            return .Front
+        }
+        return distance < -radius - margin ? .Back : .Intersecting
+    }
+
+    /// The sphere around this one moved by an affine matrix: its radius
+    /// grows by the greatest of the three scales.
+    public fn transformed(by matrix: Matrix4x4) -> BoundingSphere {
+        if isEmpty {
+            return self
+        }
+        let squared = matrix.row1.xyz.lengthSquared.maximum(matrix.row2.xyz.lengthSquared).maximum(matrix.row3.xyz.lengthSquared)
+        return BoundingSphere(matrix.transformPosition(center), radius * squared.squareRoot())
+    }
+
+    /// Whether the middle and the radius are near the other's.
+    public fn nearEqual(_ other: BoundingSphere, tolerance: F32 = 0.000001) -> Bool {
+        return center.nearEqual(other.center, tolerance: tolerance) && Sable.Math.Geometry.nearEqual(radius, other.radius, tolerance: tolerance)
+    }
+
+    /// Whether the middle and the radius are exactly equal, as IEEE has it.
+    public operator == (lhs: BoundingSphere, rhs: BoundingSphere) -> Bool => lhs.center == rhs.center && lhs.radius == rhs.radius
+
+    /// The middle's and the radius's hashes.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(center)
+        hasher.combine(radius)
+    }
+}
+
+extension BoundingSphere: Formattable {
+    /// The middle's components and the radius, in parentheses.
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([center.x, center.y, center.z, radius], spec, named: "BoundingSphere")
+}
+
+extension BoundingSphere: Debug {
+    /// As source writes it.
+    public fn debugDescription() -> String => "BoundingSphere(\(center.debugDescription()), \(radius.debugDescription()))"
+}

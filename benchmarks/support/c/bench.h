@@ -3,13 +3,16 @@
 // which does the work and says what it computed with 'bench_printf'; and 'BENCH_MAIN(work)', or BENCH_MAIN_WITH(work, setup), whose
 // 'static void setup(void)' makes what it needs. Run without arguments, the program
 // does the work once and prints what it computed; with '--measure', it prints
-// 'check' and the samples, as support/dotnet/Program.cs does.
+// 'check' and the samples, as support/dotnet/Program.cs does. Built with
+// BENCH_COUNT defined, it counts what the work allocates, for '--allocations',
+// and is not timed. What C's library allocates for itself is not seen.
 
 #ifndef BENCH_H
 #define BENCH_H
 
 #include <math.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +20,42 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <time.h>
+
+#ifdef BENCH_COUNT
+static _Atomic long long bench_count, bench_bytes;
+
+static inline size_t bench_add(size_t size) {
+    atomic_fetch_add_explicit(&bench_count, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&bench_bytes, (long long)size, memory_order_relaxed);
+    return size;
+}
+
+static inline void *bench_malloc(size_t size) {
+    return malloc(bench_add(size));
+}
+
+static inline void *bench_calloc(size_t count, size_t size) {
+    bench_add(count * size);
+    return calloc(count, size);
+}
+
+// A block that grows counts as a new one of its new size, as where a list's
+// buffer is copied to a larger one.
+static inline void *bench_realloc(void *block, size_t size) {
+    return realloc(block, bench_add(size));
+}
+
+static inline char *bench_strdup(const char *text) {
+    bench_add(strlen(text) + 1);
+    return strdup(text);
+}
+
+#define malloc(size) bench_malloc(size)
+#define calloc(count, size) bench_calloc(count, size)
+#define realloc(block, size) bench_realloc(block, size)
+#undef strdup
+#define strdup(text) bench_strdup(text)
+#endif
 
 static char bench_check[4096];
 static size_t bench_length;
@@ -90,6 +129,18 @@ static int bench_main(int argc, char **argv, void (*work)(void)) {
         printf("%s", bench_check);
         return 0;
     }
+
+#ifdef BENCH_COUNT
+    if (strcmp(argv[1], "--allocations") == 0) {
+        // Once for what the first run makes and keeps, then those counted.
+        enum { RUNS = 3 };
+        bench_iterate(work, 1);
+        long long count = bench_count, bytes = bench_bytes;
+        bench_iterate(work, RUNS);
+        printf("allocated\t%f\t%f\n", (double)(bench_bytes - bytes) / RUNS, (double)(bench_count - count) / RUNS);
+        return 0;
+    }
+#endif
 
     double warm_up = bench_option(argc, argv, "--warm-up-ms", 100) * 1e6;
     double length = bench_option(argc, argv, "--sample-ms", 10) * 1e6;

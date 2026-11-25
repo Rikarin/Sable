@@ -58,9 +58,11 @@ which do what the harness does and print their samples for `compare.py`.
   and JIT's among them — and of the processes it waited for. It is less at the
   mercy of what else the machine does; and what only waits costs nothing.
 - The table has the median, of an operation: what the body does, once.
-- *allocated* is what an operation allocates: for Sable, objects and buffers as
-  the allocator rounds them; for .NET, `GC.GetTotalAllocatedBytes`. Rust's and
-  C's are not counted.
+- What an operation allocates is counted of every thread, apart from the
+  samples: for Sable, objects and buffers as the allocator rounds them; for
+  .NET, `GC.GetTotalAllocatedBytes`; for Rust, by a global allocator, and for C,
+  by `malloc` and its like as the port calls them, of the sizes asked for, in a
+  build of the port that is not timed. What a block grows to counts whole.
 - Every port computes something that depends on all its work, and it must be
   what the Sable benchmark's `check` is.
 - *Whole processes* is another thing: the processor time of a process from its
@@ -77,14 +79,19 @@ which do what the harness does and print their samples for `compare.py`.
 | benchmark | the folder's name, and the case's arguments |
 | Sable, .NET, Rust, C | processor time an operation, with its unit, three digits; the fastest in bold; `—` without a port; what went wrong, where it did |
 | vs .NET, vs Rust, vs C | Sable's time over the other's |
-| Sable allocated, .NET allocated | bytes an operation, with their unit |
+
+`### Memory: Standard library` and `### Memory: Programs` have the bytes an operation
+allocates, in the same columns, and how many allocations Sable's, Rust's and
+C's are (.NET does not say; Sable's are objects, without their buffers). A dash under *vs* is where the other allocates
+nothing; the means are of those where both allocate more than 1 KB, as less is
+mostly the line the benchmark returns.
 
 `### Elapsed` has the time by the clock, in the same columns, of the benchmarks
 tagged `wall` (`@bench(tags: ["wall"])`): the parallel ones, whose processor time
 is much the same however many threads share it.
 
 The last row is the geometric mean of each ratio, and of how many. `### Whole
-processes` has the same columns in milliseconds, without the last two; and
+processes` has the same columns in milliseconds; and
 `### Failures`, when there are any, says what did not build, run or agree,
 which the script exits with 1 for.
 

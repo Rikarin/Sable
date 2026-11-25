@@ -21,6 +21,10 @@ every thread and of the processes waited for, as it is less at the mercy of
 what else the machine does, and what a program costs. (.NET's has its
 collector's and its JIT's threads' in it, as they are its cost.)
 
+What an operation allocates is a table of its own: of every thread, the bytes
+and how many allocations, of which .NET says the bytes alone. Rust's and C's are
+counted by a build of the port apart, so that no time has the counting in it.
+
 A program's whole process is a table of its own: its start-up (programs/startup,
 which does nothing), and each of 'programs' run once, start to end, cold.
 
@@ -61,6 +65,8 @@ DOTNET = BENCHMARKS / "support" / "dotnet"
 LANGUAGES = {"dotnet": ".NET", "rust": "Rust", "c": "C"}
 SETS = {"library": "Standard library", "programs": "Programs"}
 WHOLE_RUNS = 7
+# Under this, an allocated size is mostly the line a benchmark returns.
+LEAST_BYTES = 1024
 
 
 def build_dotnet(project, directory, name):
@@ -96,6 +102,7 @@ class Benchmark:
         self.has_wall = has_wall  # tagged "wall": the time it takes is of interest too
         self.wall = {}  # language -> nanoseconds an operation by the clock
         self.bytes = {}  # language -> bytes an operation allocates
+        self.allocations = {}  # language -> how many allocations those are
         self.whole = {}  # language -> processor milliseconds of the whole process
         self.errors = {}  # language -> what went wrong
 
@@ -149,19 +156,19 @@ class Runner:
         out = self.scratch / "sable.json"
         run_command([benchmark.harness, "--exact", benchmark.harness_name, "--json", out, "--metric", "processor", *self.options], cwd=self.scratch)
         (result,) = json.loads(out.read_text())["benchmarks"]
-        return result["processor"], result["wall"], result["allocatedBytes"], result["check"]
+        return result["processor"], result["wall"], (result["allocatedBytes"], result["allocations"]), result["check"]
 
-    def executable(self, benchmark, language):
-        """The port's command: built the first time, as every case of it is one executable."""
+    def executable(self, benchmark, language, counting=False):
+        """The port's command, or that of it which counts: built the first time, as every case of it is one executable."""
         if language == "dotnet":
             return [self.tools["dotnet"], benchmark.key]
-        path = self.scratch / f"{benchmark.group}-{benchmark.folder.name}-{language}"
+        path = self.scratch / f"{benchmark.group}-{benchmark.folder.name}-{language}{'-counting' if counting else ''}"
         if language == "sable":
             command = [self.tools["sable"], "build", benchmark.folder / f"{benchmark.folder.name}.sb", "-o", path]
         elif language == "rust":
-            command = [self.tools["rust"], "--edition", "2021", "-C", "opt-level=3", "-C", "overflow-checks=on", "-A", "warnings", benchmark.ports["rust"], "-o", path]
+            command = [self.tools["rust"], "--edition", "2021", "-C", "opt-level=3", "-C", "overflow-checks=on", "-A", "warnings", *(["--cfg", "bench_count"] if counting else []), benchmark.ports["rust"], "-o", path]
         else:
-            command = [self.tools["c"], "-O2", "-pthread", benchmark.ports["c"], "-o", path, "-lm"]
+            command = [self.tools["c"], "-O2", "-pthread", *(["-DBENCH_COUNT"] if counting else []), benchmark.ports["c"], "-o", path, "-lm"]
         if path not in self.built:
             run_command(command)
             self.built[path] = [path]
@@ -177,11 +184,16 @@ class Runner:
                 walls.append(wall / iterations)
                 samples.append(processor / iterations)
             elif kind == "allocated":
-                allocated = float(fields[0])
+                allocated = float(fields[0]), None
             elif kind == "check":
                 check = fields[0].replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
         if not samples or check is None:
             raise Failure("measured nothing")
+        if language in ("rust", "c"):
+            output = run_command([*self.executable(benchmark, language, counting=True), "--allocations"], cwd=self.scratch).stdout
+            allocated = next((tuple(map(float, line.split("\t")[1:])) for line in output.splitlines() if line.startswith("allocated\t")), None)
+            if allocated is None:
+                raise Failure("counted no allocations")
         return samples, walls, allocated, check
 
     def measure(self, benchmark):
@@ -209,7 +221,9 @@ class Runner:
             if benchmark.has_wall:
                 benchmark.wall[language] = statistics.median(walls)
             if allocated is not None:
-                benchmark.bytes[language] = allocated
+                benchmark.bytes[language], count = allocated
+                if count is not None:
+                    benchmark.allocations[language] = count
 
     def whole(self, benchmark):
         """The programs' whole processes, each language's in turn."""
@@ -249,17 +263,25 @@ def size(count):
     return f"{count:.0f} B"
 
 
+def count(number):
+    for scale, unit in ((1e9, "G"), (1e6, "M"), (1e3, "k")):
+        if number >= scale:
+            return f"{number / scale:.3g}{unit}" if number / scale < 100 else f"{number / scale:.0f}{unit}"
+    return f"{number:.3g}" if number < 100 else f"{number:.0f}"
+
+
 def ratio(values, language):
     if "sable" in values and values.get(language, 0) > 0:
         return values["sable"] / values[language]
     return None
 
 
-def table(benchmarks, languages, values, show, columns, extra=()):
+def table(benchmarks, languages, values, show, columns, extra=(), least=0):
     """Header, then a row a benchmark, then the geometric mean of each ratio.
 
     'values' gives a benchmark's of each language, and 'show' writes one;
     'extra' is columns more at the end, each a title and what gives its cell.
+    The means are of the ratios of values over 'least'.
     """
     rows = [["benchmark", f"Sable{columns}", *(f"{LANGUAGES[x]}{columns}" for x in languages), *(f"vs {LANGUAGES[x]}" for x in languages), *(title for title, _ in extra)]]
     best = []
@@ -278,7 +300,8 @@ def table(benchmarks, languages, values, show, columns, extra=()):
         best.append([i + 1 for i, language in enumerate(ordered) if fastest is not None and each.get(language) == fastest])
     means = ["geometric mean", *[""] * (1 + len(languages))]
     for language in languages:
-        ratios = [value for benchmark in benchmarks if (value := ratio(values(benchmark), language))]
+        each = [values(benchmark) for benchmark in benchmarks]
+        ratios = [value for v in each if (value := ratio(v, language)) and min(v["sable"], v[language]) > least]
         means.append(f"{math.exp(sum(map(math.log, ratios)) / len(ratios)):.2f}× of {len(ratios)}" if ratios else "—")
     rows.append(means + [""] * len(extra))
     return rows, best
@@ -383,19 +406,15 @@ def main():
     notes = (
         f"Processor time an operation, warm: the median of up to {arguments.samples} samples of {arguments.sample_ms} ms or an iteration, "
         f"after {arguments.warm_up_ms} ms of warm-up, measured the same way in each language. 'vs' is Sable's time over the other's, "
-        "so under 1 Sable is faster. 'allocated' is what an operation allocates, of Sable's and .NET's heaps. "
+        "so under 1 Sable is faster. "
         "A dash is a benchmark with no port in that language."
     )
     print("; ".join(about) + f"\n{notes}")
     page = ["## Sable against .NET, Rust and C", "", "; ".join(about), "", notes]
 
-    def allocated(language):
-        return lambda b: size(b.bytes[language]) if language in b.bytes else "—"
-
-    extra = [("Sable allocated", allocated("sable")), *([(".NET allocated", allocated("dotnet"))] if "dotnet" in languages else [])]
     for group, title in SETS.items():
         if chosen := [b for b in benchmarks if b.group == group]:
-            rows, best = table(chosen, languages, lambda b: b.ns, duration, "", extra)
+            rows, best = table(chosen, languages, lambda b: b.ns, duration, "")
             print(f"\n{title}\n{text(rows)}")
             page += ["", f"### {title}", "", markdown(rows, best)]
     if walled := [b for b in benchmarks if b.wall]:
@@ -403,6 +422,20 @@ def main():
         note = f"The time an operation takes by the clock, of the benchmarks tagged 'wall', whose point is to take less of it by {os.cpu_count()} processors."
         print(f"\nElapsed\n{note}\n{text(rows)}")
         page += ["", "### Elapsed", "", note, "", markdown(rows, best)]
+    def allocations(language):
+        return lambda b: count(b.allocations[language]) if language in b.allocations else "—"
+
+    counted = [(title, allocations(language)) for language, title in (("sable", "Sable objects"), ("rust", "Rust allocations"), ("c", "C allocations")) if language in ["sable", *languages]]
+    note = (
+        "What an operation allocates, of every thread: bytes, and how many objects or allocations, which .NET does not say. 'vs' is Sable's bytes over the other's, "
+        f"so under 1 Sable allocates less; a dash where the other allocates nothing. The means are of those where both allocate more than {size(LEAST_BYTES)}. "
+        "Sable's and .NET's bytes have an object's header in them; Rust's and C's are those asked for, and C's without what its library allocates for itself. Sable's objects are without their buffers, which are in the bytes alone."
+    )
+    for group, title in SETS.items():
+        if chosen := [b for b in benchmarks if b.group == group and b.bytes]:
+            rows, best = table(chosen, languages, lambda b: b.bytes, size, "", counted, LEAST_BYTES)
+            print(f"\nMemory: {title}\n{note}\n{text(rows)}")
+            page += ["", f"### Memory: {title}", "", note, "", markdown(rows, best)]
     if whole := [*startup, *programs]:
         rows, best = table(whole, languages, lambda b: b.whole, lambda ms: f"{ms:.1f}", " ms")
         note = f"Processor time of the process from its start to its end, cold, the median of {WHOLE_RUNS} runs; 'startup' prints a line."

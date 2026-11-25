@@ -5,10 +5,7 @@ public struct Directory {
     /// Whether a directory is at the path, or what a link there leads to is
     /// one.
     public static fn exists(_ path: some PathLike) -> Bool {
-        if let metadata = try? FileMetadata.of(path.filePath, followLinks: true) {
-            return metadata.isDirectory
-        }
-        return false
+        return FileMetadata.kind(of: path.filePath) == .Directory
     }
 
     /// Makes the directory. Unless 'recursive', its parent must be there

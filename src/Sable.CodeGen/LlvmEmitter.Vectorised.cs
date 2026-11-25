@@ -16,7 +16,7 @@ public sealed partial class LlvmEmitter {
     const string WideSuffix = "$avx2";
 
     /// <summary>What the runtime's <c>PROCESSOR_AVX2</c> (processor.c) promises.</summary>
-    internal const string WideFeatures = "+avx2,+bmi,+bmi2";
+    internal const string WideFeatures = "+avx2,+bmi,+bmi2,+popcnt";
 
     internal const string WideAttributes = $"noinline \"target-features\"=\"{WideFeatures}\"";
 

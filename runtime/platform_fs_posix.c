@@ -44,26 +44,44 @@ static void metadata_of(const struct stat *info, FileMetadata *metadata) {
 #endif
 }
 
-// When it was made, which Linux's stat does not say and statx does, on a
-// file system that keeps it.
-static void created_of(int fd, const char *name, bool follow, FileMetadata *metadata) {
 #if defined(__linux__) && defined(STATX_BTIME) && defined(SYS_statx)
+#define SABLE_STATX 1
+
+// All of it in one call: when it was made is what Linux's stat does not say
+// and statx does, on a file system that keeps it. Less than zero where the
+// kernel, or what a sandbox lets through, has no statx.
+static int statx_metadata(int fd, const char *name, int flags, FileMetadata *metadata) {
     struct statx info;
-    int flags = (name[0] == '\0' ? AT_EMPTY_PATH : 0) | (follow ? 0 : AT_SYMLINK_NOFOLLOW);
-    if (syscall(SYS_statx, fd, name, flags, STATX_BTIME, &info) == 0 && (info.stx_mask & STATX_BTIME)) {
-        metadata->created[0] = info.stx_btime.tv_sec;
-        metadata->created[1] = info.stx_btime.tv_nsec;
-        metadata->has_created = 1;
+    if (syscall(SYS_statx, fd, name, flags, STATX_BASIC_STATS | STATX_BTIME, &info) != 0) {
+        return errno == ENOSYS || errno == EPERM ? -1 : 0;
     }
-#else
-    (void)fd;
-    (void)name;
-    (void)follow;
-    (void)metadata;
-#endif
+
+    metadata->size = (int64_t)info.stx_size;
+    metadata->kind = file_kind_of(info.stx_mode);
+    metadata->permissions = info.stx_mode & 07777;
+    metadata->modified[0] = info.stx_mtime.tv_sec;
+    metadata->modified[1] = info.stx_mtime.tv_nsec;
+    metadata->accessed[0] = info.stx_atime.tv_sec;
+    metadata->accessed[1] = info.stx_atime.tv_nsec;
+    metadata->has_created = (info.stx_mask & STATX_BTIME) != 0;
+    metadata->created[0] = metadata->has_created ? info.stx_btime.tv_sec : 0;
+    metadata->created[1] = metadata->has_created ? info.stx_btime.tv_nsec : 0;
+    return 1;
 }
+#endif
 
 static bool file_metadata(PlatformFile file, FileMetadata *metadata, FileError *error) {
+#if defined(SABLE_STATX)
+    int known = statx_metadata((int)file, "", AT_EMPTY_PATH, metadata);
+    if (known >= 0) {
+        if (known == 0) {
+            file_failed(error);
+        }
+
+        return known > 0;
+    }
+#endif
+
     struct stat info;
     if (fstat((int)file, &info) != 0) {
         file_failed(error);
@@ -71,11 +89,21 @@ static bool file_metadata(PlatformFile file, FileMetadata *metadata, FileError *
     }
 
     metadata_of(&info, metadata);
-    created_of((int)file, "", true, metadata);
     return true;
 }
 
 static bool fs_metadata(const char *name, bool follow, FileMetadata *metadata, FileError *error) {
+#if defined(SABLE_STATX)
+    int known = statx_metadata(AT_FDCWD, name, follow ? 0 : AT_SYMLINK_NOFOLLOW, metadata);
+    if (known >= 0) {
+        if (known == 0) {
+            file_failed(error);
+        }
+
+        return known > 0;
+    }
+#endif
+
     struct stat info;
     if ((follow ? stat(name, &info) : lstat(name, &info)) != 0) {
         file_failed(error);
@@ -83,7 +111,6 @@ static bool fs_metadata(const char *name, bool follow, FileMetadata *metadata, F
     }
 
     metadata_of(&info, metadata);
-    created_of(AT_FDCWD, name, follow, metadata);
     return true;
 }
 
@@ -569,7 +596,9 @@ static bool copy_by_reading(int from, int to, FileError *error) {
 #endif
 
 // The bytes of one open file written to another, at the system's fastest.
-static bool copy_bytes(int source, int target, FileError *error) {
+// 'length' is what the source had when it was opened.
+static bool copy_bytes(int source, int target, int64_t length, FileError *error) {
+    (void)length;
 #if defined(__APPLE__)
     if (fcopyfile(source, target, NULL, COPYFILE_DATA) == 0) {
         return true;
@@ -578,17 +607,22 @@ static bool copy_bytes(int source, int target, FileError *error) {
     file_failed(error);
     return false;
 #elif defined(__linux__)
-    for (bool any = false;;) {
+    for (int64_t copied = 0;;) {
         ssize_t moved = copy_file_range(source, NULL, target, NULL, (size_t)1 << 30, 0);
         if (moved > 0) {
-            any = true;
+            // All it had: it is not asked for more only to be told so.
+            copied += moved;
+            if (copied == length) {
+                return true;
+            }
+
             continue;
         }
 
         // A file of /proc says it has no length, and gives nothing here
         // that reading does not.
         if (moved == 0) {
-            return any || copy_by_reading(source, target, error);
+            return copied > 0 || copy_by_reading(source, target, error);
         }
 
         if (errno == EINTR) {
@@ -631,15 +665,6 @@ static bool file_copy(const char *from, const char *to, bool replace, FileError 
         return false;
     }
 
-    // Emptied to be written, it would be lost: looked at before it is opened,
-    // which a read-only file could not be, and again after.
-    if (replace && stat(to, &there) == 0 && there.st_dev == info.st_dev && there.st_ino == info.st_ino) {
-        close(source);
-        error->kind = FILE_ERROR_INVALID;
-        error->code = EINVAL;
-        return false;
-    }
-
 #if defined(__APPLE__)
     if (fclonefileat(source, AT_FDCWD, to, 0) == 0) {
         close(source);
@@ -654,19 +679,25 @@ static bool file_copy(const char *from, const char *to, bool replace, FileError 
         file_failed(error);
         if (target >= 0) {
             close(target);
+        } else if (replace && stat(to, &there) == 0 && there.st_dev == info.st_dev && there.st_ino == info.st_ino) {
+            // The file itself, read-only: what is wrong is not that.
+            error->kind = FILE_ERROR_INVALID;
+            error->code = EINVAL;
         }
+
         close(source);
         return false;
     }
 
+    // Emptied to be written, the file itself would be lost.
     bool copied = false;
     if (there.st_dev == info.st_dev && there.st_ino == info.st_ino) {
         error->kind = FILE_ERROR_INVALID;
         error->code = EINVAL;
-    } else if (S_ISREG(there.st_mode) && ftruncate(target, 0) != 0) {
+    } else if (S_ISREG(there.st_mode) && there.st_size != 0 && ftruncate(target, 0) != 0) {
         file_failed(error);
     } else {
-        copied = copy_bytes(source, target, error);
+        copied = copy_bytes(source, target, info.st_size, error);
 #if !defined(__wasi__)
         if (copied && S_ISREG(there.st_mode) && fchmod(target, mode) != 0) {
             file_failed(error);

@@ -3,7 +3,7 @@
 // it is called; the portable code runs everywhere else and does the same.
 
 enum {
-    PROCESSOR_AVX2 = 1,   // AVX2, BMI1 and BMI2, and a system that keeps the registers
+    PROCESSOR_AVX2 = 1,   // AVX2, BMI1, BMI2 and POPCNT, and a system that keeps the registers
     PROCESSOR_ASKED = 128,
 };
 
@@ -17,8 +17,8 @@ enum {
 
 static int processor_features(void) {
     unsigned int a, b, c, d;
-    // OSXSAVE and AVX; then that the system saves the upper halves.
-    if (!__get_cpuid(1, &a, &b, &c, &d) || !(c >> 27 & 1) || !(c >> 28 & 1)) {
+    // OSXSAVE, AVX and POPCNT; then that the system saves the upper halves.
+    if (!__get_cpuid(1, &a, &b, &c, &d) || !(c >> 27 & 1) || !(c >> 28 & 1) || !(c >> 23 & 1)) {
         return 0;
     }
 

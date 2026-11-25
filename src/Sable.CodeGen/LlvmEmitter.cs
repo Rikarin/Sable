@@ -2772,6 +2772,24 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>Branches to a trap with this message when the condition holds, and carries on otherwise.</summary>
         /// <summary>An offset into bytes below zero traps, as an index out of range.</summary>
+        /// <summary>
+        ///     Traps unless the index, and the elements after it, as many as
+        ///     are wanted in all, are in range: one comparison, of the index
+        ///     with the first that has too few from it on — none has enough,
+        ///     and that is 0, in an array of fewer.
+        /// </summary>
+        void IndexTraps(string index, string count, int elements) {
+            var limit = count;
+            if (elements > 1) {
+                limit = Fresh();
+                Line($"{limit} = call i64 @llvm.usub.sat.i64(i64 {count}, i64 {elements - 1})");
+            }
+
+            var outside = Fresh();
+            Line($"{outside} = icmp uge i64 {index}, {limit}");
+            TrapIf(outside, "array index out of range");
+        }
+
         void NegativeOffsetTraps(string offset) {
             var negative = Fresh();
             Line($"{negative} = icmp slt i64 {offset}, 0");
@@ -4106,12 +4124,7 @@ public sealed partial class LlvmEmitter {
             if (builtin.Name.StartsWith("bytes_load_", StringComparison.Ordinal)) {
                 var integer = Type(builtin.Type);
                 var width = SilType.IntegerInfo(builtin.Type)!.Value.Bits / 8;
-                NegativeOffsetTraps(operands[1]);
-                var lastIndex = Fresh();
-                Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
-                var last = builtin.Operands[0].Type is ArrayType whole ? InlineElement(operands[0], lastIndex, whole.Element) : SliceElement(operands[0], lastIndex, (SliceType)builtin.Operands[0].Type);
-                var first = Fresh();
-                Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
+                var first = builtin.Operands[0].Type is ArrayType whole ? InlineElement(operands[0], operands[1], whole.Element, elements: width) : SliceElement(operands[0], operands[1], (SliceType)builtin.Operands[0].Type, elements: width);
                 Line($"{Result()} = load {integer}, ptr {first}, align 1, !tbaa {TbaaScalar}");
                 return;
             }
@@ -4122,37 +4135,35 @@ public sealed partial class LlvmEmitter {
             if (builtin.Name.StartsWith("bytes_store_", StringComparison.Ordinal)) {
                 var integer = Type(builtin.Operands[2].Type);
                 var width = SilType.IntegerInfo(builtin.Operands[2].Type)!.Value.Bits / 8;
-                NegativeOffsetTraps(operands[1]);
-                var lastIndex = Fresh();
-                Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
                 if (((AddressType)builtin.Operands[0].Type).Pointee is ArrayType bytes) {
                     if (!builtin.Name.StartsWith("bytes_store_array_unique_", StringComparison.Ordinal)) {
                         MakeUnique(operands[0], bytes);
                     }
 
                     var array = Fresh();
-                    var start = Fresh();
                     Line($"{array} = load ptr, ptr {operands[0]}");
-                    var end = InlineElement(array, lastIndex, bytes.Element);
-                    Line($"{start} = getelementptr inbounds i8, ptr {end}, i64 {1 - width}");
+                    var start = InlineElement(array, operands[1], bytes.Element, elements: width);
                     Line($"store {integer} {operands[2]}, ptr {start}, align 1, !tbaa {TbaaScalar}");
                     return;
                 }
 
                 var written = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
-                string last;
+                string first;
                 if (builtin.Name.StartsWith("bytes_store_unique_", StringComparison.Ordinal)) {
                     // The only reference to its buffer already (an array's
                     // place viewed in place): the index checked, and no call.
                     var slice = Fresh();
                     Line($"{slice} = load {Type(written)}, ptr {operands[0]}");
-                    last = SliceElement(slice, lastIndex, written);
+                    first = SliceElement(slice, operands[1], written, elements: width);
                 } else {
-                    last = SliceMutableElement(operands[0], lastIndex, written);
+                    NegativeOffsetTraps(operands[1]);
+                    var (lastIndex, from) = (Fresh(), Fresh());
+                    Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
+                    var last = SliceMutableElement(operands[0], lastIndex, written);
+                    Line($"{from} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
+                    first = from;
                 }
 
-                var first = Fresh();
-                Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
                 Line($"store {integer} {operands[2]}, ptr {first}, align 1, !tbaa {TbaaScalar}");
                 return;
             }
@@ -7116,24 +7127,21 @@ public sealed partial class LlvmEmitter {
         ///     slice's count — not its buffer's — inline, with no call. A slice
         ///     with elements has a buffer.
         /// </summary>
-        string SliceElement(string slice, string index, SliceType type, bool check = true) {
+        string SliceElement(string slice, string index, SliceType type, bool check = true, int elements = 1) {
             var buffer = SlicePart(slice, type, 0);
             var start = SlicePart(slice, type, 1);
             if (check) {
-                var count = SlicePart(slice, type, 2);
-                var outside = Fresh();
-                Line($"{outside} = icmp uge i64 {index}, {count}");
-                TrapIf(outside, "array index out of range");
+                IndexTraps(index, SlicePart(slice, type, 2), elements);
             }
 
             var elementsField = Fresh();
-            var elements = Fresh();
+            var first = Fresh();
             var position = Fresh();
             var element = Fresh();
             Line($"{elementsField} = getelementptr inbounds %SableArrayHeader, ptr {buffer}, i32 0, i32 3");
-            Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
+            Line($"{first} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
             Line($"{position} = add i64 {start}, {index}");
-            Line($"{element} = {ElementAt(type.Element, elements, position)}");
+            Line($"{element} = {ElementAt(type.Element, first, position)}");
             return element;
         }
 
@@ -7191,22 +7199,19 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>An element's address, its index checked against the count — inline, with no call.</summary>
-        string InlineElement(string array, string index, SilType elementType, bool check = true) {
+        string InlineElement(string array, string index, SilType elementType, bool check = true, int elements = 1) {
             // An index proved in range is not checked again: an array with an
             // element in range is not the empty one, null.
             if (check) {
-                var count = Count(array);
-                var outside = Fresh();
-                Line($"{outside} = icmp uge i64 {index}, {count}");
-                TrapIf(outside, "array index out of range");
+                IndexTraps(index, Count(array), elements);
             }
 
             var elementsField = Fresh();
-            var elements = Fresh();
+            var first = Fresh();
             var element = Fresh();
             Line($"{elementsField} = getelementptr inbounds %SableArrayHeader, ptr {array}, i32 0, i32 3");
-            Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
-            Line($"{element} = {ElementAt(elementType, elements, index)}");
+            Line($"{first} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
+            Line($"{element} = {ElementAt(elementType, first, index)}");
             return element;
         }
 

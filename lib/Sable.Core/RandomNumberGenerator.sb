@@ -77,9 +77,10 @@ extension RandomNumberGenerator {
     public mutating fn fill(bytes: inout U8[:]) {
         let count = bytes.count
         var i = 0
-        while i + 8 <= count {
+        let whole = count - count % 8
+        while i < whole {
             bytes.writeU64(next(), at: i, endian: .Little)
-            i += 8
+            i = i &+ 8
         }
         if i < count {
             var bits = next()

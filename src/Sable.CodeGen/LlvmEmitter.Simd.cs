@@ -25,16 +25,11 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                // The last element's index checked, as reading it would, and
-                // a negative offset refused: then one load, at the element's alignment.
+                // Every element's index checked, in one comparison: then one
+                // load, at the element's alignment.
                 case "load": {
                     var vector = (VectorType)builtin.Type;
-                    NegativeOffsetTraps(operands[1]);
-                    var lastIndex = Fresh();
-                    Line($"{lastIndex} = add i64 {operands[1]}, {vector.Count - 1}");
-                    var last = SliceElement(operands[0], lastIndex, (SliceType)builtin.Operands[0].Type);
-                    var start = Fresh();
-                    Line($"{start} = getelementptr inbounds {Type(vector.Element)}, ptr {last}, i64 {1 - vector.Count}");
+                    var start = SliceElement(operands[0], operands[1], (SliceType)builtin.Operands[0].Type, elements: vector.Count);
                     Line($"{Result()} = load {Type(vector)}, ptr {start}, align {TypeLayout.Align(vector.Element)}");
                     return;
                 }
@@ -59,17 +54,12 @@ public sealed partial class LlvmEmitter {
                 // index checked, and no call but the trap.
                 case "store_unique": {
                     var vector = (VectorType)builtin.Operands[1].Type;
-                    NegativeOffsetTraps(operands[2]);
-                    var lastIndex = Fresh();
-                    Line($"{lastIndex} = add i64 {operands[2]}, {vector.Count - 1}");
                     var stored = ((AddressType)builtin.Operands[0].Type).Pointee;
                     var held = Fresh();
                     Line($"{held} = load {Type(stored)}, ptr {operands[0]}");
-                    var last = stored is SliceType slice
-                        ? SliceElement(held, lastIndex, slice)
-                        : InlineElement(held, lastIndex, ((ArrayType)stored).Element);
-                    var start = Fresh();
-                    Line($"{start} = getelementptr inbounds {Type(vector.Element)}, ptr {last}, i64 {1 - vector.Count}");
+                    var start = stored is SliceType slice
+                        ? SliceElement(held, operands[2], slice, elements: vector.Count)
+                        : InlineElement(held, operands[2], ((ArrayType)stored).Element, elements: vector.Count);
                     Line($"store {Type(vector)} {operands[1]}, ptr {start}, align {TypeLayout.Align(vector.Element)}");
                     return;
                 }

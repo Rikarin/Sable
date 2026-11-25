@@ -110,16 +110,20 @@ public struct TensorPrimitives {
     /// ```sable
     /// assert(TensorPrimitives.min([3.0, -1.0, 2.0] as F64[:]) == -1.0)
     /// ```
+    @vectorised
     public static fn min(_ x: F32[:]) -> F32 => extremeOf(x, SIMD<F32, f32Step>(), least: true)
 
     /// The least element. Traps on none.
+    @vectorised
     public static fn min(_ x: F64[:]) -> F64 => extremeOf(x, SIMD<F64, f64Step>(), least: true)
 
     /// The greatest element. A NaN is passed over unless every element is
     /// one. Traps on none.
+    @vectorised
     public static fn max(_ x: F32[:]) -> F32 => extremeOf(x, SIMD<F32, f32Step>(), least: false)
 
     /// The greatest element. Traps on none.
+    @vectorised
     public static fn max(_ x: F64[:]) -> F64 => extremeOf(x, SIMD<F64, f64Step>(), least: false)
 
     /// Writes each 'x[i] + y[i]' to 'destination[i]'. Traps unless x and y
@@ -216,6 +220,7 @@ public struct TensorPrimitives {
     /// TensorPrimitives.softmax([0.0, 0.0], into: &result)
     /// assert(result == [0.5, 0.5])
     /// ```
+    @vectorised
     public static fn softmax(_ x: F32[:], into destination: inout F32[>..]) {
         checkRoom(destination.count, x.count)
         let greatest = extremeOf(x, SIMD<F32, f32Step>(), least: false)
@@ -224,6 +229,7 @@ public struct TensorPrimitives {
 
     /// Writes the softmax of x to the destination. Traps on no elements, or a
     /// destination shorter than x.
+    @vectorised
     public static fn softmax(_ x: F64[:], into destination: inout F64[>..]) {
         checkRoom(destination.count, x.count)
         let greatest = extremeOf(x, SIMD<F64, f64Step>(), least: false)
@@ -339,6 +345,7 @@ fn cosineOf<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ y: T[:], _
     return dot / (xSquared.squareRoot() * ySquared.squareRoot())
 }
 
+@inline(always)
 fn extremeOf<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ zero: SIMD<T, N>, least: Bool) -> T {
     if x.count == 0 {
         preconditionFailure("the extreme of no elements")
@@ -407,6 +414,7 @@ fn elementwise<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ y: T[:]
 
 /// Writes e to each element less the greatest to the destination, and adds
 /// them up: an element is the same whichever lane it is worked out in.
+@inline(always)
 fn fillExponentials(_ x: F32[:], _ greatest: F32, _ destination: inout F32[>..]) -> F32 {
     let count = x.count
     let shift = SIMD<F32, f32Step>(repeating: greatest)
@@ -435,6 +443,7 @@ fn fillExponentials(_ x: F32[:], _ greatest: F32, _ destination: inout F32[>..])
     return total
 }
 
+@inline(always)
 fn fillExponentials(_ x: F64[:], _ greatest: F64, _ destination: inout F64[>..]) -> F64 {
     let count = x.count
     let shift = SIMD<F64, f64Step>(repeating: greatest)
@@ -470,6 +479,7 @@ fn checkRoom(_ room: Int, _ count: Int) {
 }
 
 /// Divides the first elements by the number.
+@inline(always)
 fn divideBy<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ total: T, _ destination: inout T[>..], _ count: Int, _ zero: SIMD<T, N>) {
     let scale = SIMD<T, N>(repeating: total)
     var i = 0

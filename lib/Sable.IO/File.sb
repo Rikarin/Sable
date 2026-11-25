@@ -282,10 +282,8 @@ public struct File {
     /// Whether something that is not a directory is at the path, or what a
     /// link there leads to.
     public static fn exists(_ path: some PathLike) -> Bool {
-        if let metadata = try? FileMetadata.of(path.filePath, followLinks: true) {
-            return !metadata.isDirectory
-        }
-        return false
+        let kind = FileMetadata.kind(of: path.filePath)
+        return kind != none && kind != .Directory
     }
 
     /// Removes the file, or the link itself: a directory is removed by

@@ -31,14 +31,14 @@ public class BitSet {
         if value < 0 || word >= words.count {
             extend(to: word + 1)
         }
+        // Written whether it was there or not: which is as hard to guess as
+        // the values are, and a wrong guess costs more than the write.
         let held = words[word]
         let mask = bit(value)
-        if (held & mask) != 0 {
-            return false
-        }
+        let isNew = (held & mask) == 0
         words[word] = held | mask
-        members = members + 1
-        return true
+        members = members &+ isNew.selecting(1, 0)
+        return isNew
     }
 
     // At least so many words; a negative count traps, as indexing an array by
@@ -138,10 +138,12 @@ public class BitSet {
         members = BitSet.population(words)
     }
 
-    static fn population(_ words: U64[>..]) -> Int {
+    // At most sixty-four for each eight bytes: no sum of them leaves an Int.
+    @vectorised
+    static fn population(_ words: U64[:]) -> Int {
         var total = 0
         for word in words {
-            total += word.popCount
+            total = total &+ word.popCount
         }
         return total
     }

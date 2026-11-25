@@ -1,0 +1,102 @@
+module Array2DTests
+
+// Array2D and Array3D (Sable.Math.Tensors), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Math.Tensors
+
+import Sable.Math.Tensors
+import Sable.Testing
+
+@test
+fn aGridHasRowsAndColumns() {
+    var grid = Array2D<Int>(rows: 3, columns: 4, repeating: 0)
+    grid[1, 2] = 7
+    expect(grid[1, 2] == 7)
+    expect(grid.rows == 3 && grid.columns == 4 && grid.count == 12)
+    expect(grid.length(of: 0) == 3 && grid.length(of: 1) == 4)
+    expect(grid.row(1) == [0, 0, 7, 0])
+    expect(grid.column(2) == [0, 7, 0])
+    expect(grid.elements.count == 12)
+}
+
+@test
+fn aGridIsMappedTransposedAndMadeATensor() {
+    let grid = Array2D<Int>(rows: 2, columns: 3, elements: [1, 2, 3, 4, 5, 6])
+    expect(grid.map { $0 * 2 }[1, 2] == 12)
+    let turned = grid.transposed()
+    expect(turned.rows == 3 && turned[2, 1] == 6 && turned.row(0) == [1, 4])
+    expect(grid.toTensor().shape == [2, 3])
+    expect(grid.toTensor()[1, 0] == 4)
+    expect(grid == Array2D<Int>(rows: 2, columns: 3, elements: [1, 2, 3, 4, 5, 6]))
+    expect(grid != turned)
+}
+
+@test(traps: "(2, 0) is outside a grid of 2 by 3")
+fn aPlaceOutsideTheGridTraps() {
+    let grid = Array2D<Int>(rows: 2, columns: 3, repeating: 0)
+    _ = grid[2, 0]
+}
+
+@test(traps: "a grid has dimensions 0 and 1, not 2")
+fn aThirdDimensionTraps() {
+    _ = Array2D<Int>(rows: 2, columns: 3, repeating: 0).length(of: 2)
+}
+
+@test(traps: "row 2 is outside a grid of 2 rows")
+fn aRowOutsideTraps() {
+    _ = Array2D<Int>(rows: 2, columns: 3, repeating: 0).row(2)
+}
+
+@test(traps: "column 3 is outside a grid of 3 columns")
+fn aColumnOutsideTraps() {
+    _ = Array2D<Int>(rows: 2, columns: 3, repeating: 0).column(3)
+}
+
+@test(traps: "5 elements for a grid of 2 by 3")
+fn tooFewElementsForAGridTrap() {
+    _ = Array2D<Int>(rows: 2, columns: 3, elements: [1, 2, 3, 4, 5])
+}
+
+@test(traps: "a grid of -1 by 3")
+fn aNegativeSizeTraps() {
+    _ = Array2D<Int>(rows: -1, columns: 3, repeating: 0)
+}
+
+@test
+fn aThreeDimensionalArray() {
+    var voxels = Array3D<Bool>(depth: 2, rows: 3, columns: 4, repeating: false)
+    voxels[1, 2, 3] = true
+    expect(voxels[1, 2, 3] && !voxels[0, 2, 3])
+    expect(voxels.count == 24)
+    expect(voxels.length(of: 0) == 2 && voxels.length(of: 1) == 3 && voxels.length(of: 2) == 4)
+    expect(voxels.layer(1)[2, 3])
+    expect(voxels.elements[23])
+    expect(voxels.toTensor().shape == [2, 3, 4])
+    let numbers = Array3D<Int>(depth: 1, rows: 1, columns: 2, elements: [1, 2])
+    expect(numbers == Array3D<Int>(depth: 1, rows: 1, columns: 2, elements: [1, 2]))
+}
+
+@test(traps: "(2, 0, 0) is outside an array of 2 by 3 by 4")
+fn aPlaceOutsideTheArrayTraps() {
+    let voxels = Array3D<Int>(depth: 2, rows: 3, columns: 4, repeating: 0)
+    _ = voxels[2, 0, 0]
+}
+
+@test(traps: "an array of three dimensions has 0, 1 and 2, not 3")
+fn aFourthDimensionTraps() {
+    _ = Array3D<Int>(depth: 1, rows: 1, columns: 1, repeating: 0).length(of: 3)
+}
+
+@test(traps: "layer 1 is outside an array of depth 1")
+fn aLayerOutsideTraps() {
+    _ = Array3D<Int>(depth: 1, rows: 1, columns: 1, repeating: 0).layer(1)
+}
+
+@test(traps: "3 elements for an array of 1 by 1 by 2")
+fn tooManyElementsForAnArrayTrap() {
+    _ = Array3D<Int>(depth: 1, rows: 1, columns: 2, elements: [1, 2, 3])
+}
+
+@test(traps: "an array of 1 by -1 by 2")
+fn aNegativeArrayTraps() {
+    _ = Array3D<Int>(depth: 1, rows: -1, columns: 2, repeating: 0)
+}

@@ -1,0 +1,291 @@
+module Sable.Math.Tensors
+
+/// An n-dimensional array that owns its elements: .NET's `Tensor<T>`, NumPy's
+/// `ndarray`. Its shape is the length of each dimension; its elements lie one
+/// after another in a layout, row-major unless it is made column-major. It is
+/// a value, copied on write as an array is.
+///
+/// Indexing it by `TensorIndex`es gives a `TensorView`, which copies nothing;
+/// `withMutableView` lends a part of it to be written in place. Arithmetic on
+/// numbers broadcasts as NumPy's does (`+`, `-`, `*`, `/`, and with a number),
+/// and it reduces along an axis (`sum`, `mean`, `min`, `max`, `argmax`),
+/// multiplies as matrices (`matmul`) and changes shape (`reshaped`,
+/// `transposed`, `permuted`, `squeezed`, `unsqueezed`, `concatenate`, `stack`,
+/// `split`, `gathered`).
+///
+/// ```sable
+/// var t = Tensor<F32>.zeros(shape: [2, 3, 4])
+/// t[1, 2, 3] = 1.0
+/// let bias = Tensor<F32>(shape: [4], elements: [1, 2, 3, 4])
+/// let s = (t + bias) * 2.0
+/// assert(s[1, 2, 3] == 10 && s[0, 0, 1] == 4)
+/// assert(t.sum(axis: 2).shape == [2, 3])
+/// let r = t.reshaped([6, 4]).transposed()
+/// assert(r.shape == [4, 6] && r[3, 5] == 1)
+/// ```
+public struct Tensor<T> {
+    var storage: T[>..]
+
+    /// The length of each dimension.
+    public let shape: Int[>..]
+
+    /// How far apart, in elements, two places one apart in each dimension lie.
+    public let strides: Int[>..]
+
+    /// How its elements lie.
+    public let layout: TensorLayout
+
+    /// A tensor of the shape with every element the value.
+    public init(shape: Int[:], repeating value: T, layout: TensorLayout = .RowMajor) {
+        checkShape(shape)
+        self.shape = shape.toArray()
+        self.layout = layout
+        strides = contiguousStrides(shape, layout)
+        storage = T[>..](repeating: value, count: elementCount(shape))
+    }
+
+    /// A tensor of the shape with the elements, in row-major order: as many
+    /// as the shape has.
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [2, 2], elements: [1, 2, 3, 4])
+    /// assert(t[1, 0] == 3)
+    /// ```
+    public init(shape: Int[:], elements: T[:]) {
+        checkShape(shape)
+        if elementCount(shape) != elements.count {
+            preconditionFailure("\(elements.count) elements for a tensor of shape \(shape)")
+        }
+        self.shape = shape.toArray()
+        layout = .RowMajor
+        strides = contiguousStrides(shape, .RowMajor)
+        storage = elements.toArray()
+    }
+
+    /// A tensor of the shape, laid out so, with each element what the closure
+    /// gives for its index.
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [2, 3]) { $0[0] * 10 + $0[1] }
+    /// assert(t.toArray() == [0, 1, 2, 10, 11, 12])
+    /// ```
+    public init(shape: Int[:], layout: TensorLayout = .RowMajor, _ element: (Int[:]) -> T) {
+        checkShape(shape)
+        self.shape = shape.toArray()
+        self.layout = layout
+        strides = contiguousStrides(shape, layout)
+        var made: T[>..] = []
+        made.reserveCapacity(elementCount(shape))
+        let count = elementCount(shape)
+        if layout == .RowMajor {
+            var index = Int[>..](repeating: 0, count: shape.count)
+            var i = 0
+            while i < count {
+                made.append(element(index))
+                var axis = shape.count - 1
+                while axis >= 0 {
+                    index[axis] += 1
+                    if index[axis] < shape[axis] {
+                        break
+                    }
+                    index[axis] = 0
+                    axis -= 1
+                }
+                i += 1
+            }
+        } else {
+            var index = Int[>..](repeating: 0, count: shape.count)
+            var i = 0
+            while i < count {
+                made.append(element(index))
+                var axis = 0
+                while axis < shape.count {
+                    index[axis] += 1
+                    if index[axis] < shape[axis] {
+                        break
+                    }
+                    index[axis] = 0
+                    axis += 1
+                }
+                i += 1
+            }
+        }
+        storage = made
+    }
+
+    /// A tensor of a view's elements, copied, row-major.
+    public init(_ view: TensorView<T>) {
+        self.init(shape: view.shape, elements: view.toArray())
+    }
+
+    init(storage: T[>..], shape: Int[>..], layout: TensorLayout) {
+        self.storage = storage
+        self.shape = shape
+        self.layout = layout
+        strides = contiguousStrides(shape, layout)
+    }
+
+    /// How many dimensions it has.
+    public var rank: Int => shape.count
+
+    /// How many elements it has.
+    public var count: Int => storage.count
+
+    /// Its elements in row-major order, copied.
+    public fn toArray() -> T[>..] => layout == .RowMajor ? storage : self.view.toArray()
+
+    /// The whole of it, as a view.
+    public var view: TensorView<T> => TensorView<T>(storage: storage, offset: 0, shape: shape, strides: strides)
+
+    /// Its elements as they lie in its layout, for code that takes a slice.
+    public var elements: T[:] => storage
+
+    /// The element of a tensor of rank 1.
+    public subscript(i: Int) -> T {
+        get => storage[offsetOf([i], shape, strides, 0)]
+        set { storage[offsetOf([i], shape, strides, 0)] = newValue }
+    }
+
+    /// The element at the place of a tensor of rank 2.
+    public subscript(i: Int, j: Int) -> T {
+        get => storage[self.offset2(i, j)]
+        set { storage[self.offset2(i, j)] = newValue }
+    }
+
+    /// The element at the place of a tensor of rank 3.
+    public subscript(i: Int, j: Int, k: Int) -> T {
+        get => storage[self.offset3(i, j, k)]
+        set { storage[self.offset3(i, j, k)] = newValue }
+    }
+
+    /// The element at an index of any rank.
+    public subscript(index index: Int[:]) -> T {
+        get => storage[offsetOf(index, shape, strides, 0)]
+        set { storage[offsetOf(index, shape, strides, 0)] = newValue }
+    }
+
+    @inline(always)
+    fn offset2(_ i: Int, _ j: Int) -> Int {
+        if shape.count != 2 || i < 0 || i >= shape[0] || j < 0 || j >= shape[1] {
+            return offsetOf([i, j], shape, strides, 0)
+        }
+        return i * strides[0] + j * strides[1]
+    }
+
+    @inline(always)
+    fn offset3(_ i: Int, _ j: Int, _ k: Int) -> Int {
+        if shape.count != 3 || i < 0 || i >= shape[0] || j < 0 || j >= shape[1] || k < 0 || k >= shape[2] {
+            return offsetOf([i, j, k], shape, strides, 0)
+        }
+        return i * strides[0] + j * strides[1] + k * strides[2]
+    }
+
+    /// A part of it, by NumPy's basic indexing, as a view: nothing is copied.
+    /// Up to four indices are given so, any number by `sliced`; dimensions not
+    /// indexed are whole.
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [2, 3, 4]) { $0[0] * 100 + $0[1] * 10 + $0[2] }
+    /// let v = t[.All, .range(1..<3), .step(2)]
+    /// assert(v.shape == [2, 2, 2])
+    /// assert(v.toArray() == [10, 12, 20, 22, 110, 112, 120, 122])
+    /// ```
+    public subscript(_ first: TensorIndex) -> TensorView<T> {
+        get => self.view.sliced([first])
+    }
+
+    /// A part of it, by two indices.
+    public subscript(_ first: TensorIndex, _ second: TensorIndex) -> TensorView<T> {
+        get => self.view.sliced([first, second])
+    }
+
+    /// A part of it, by three indices.
+    public subscript(_ first: TensorIndex, _ second: TensorIndex, _ third: TensorIndex) -> TensorView<T> {
+        get => self.view.sliced([first, second, third])
+    }
+
+    /// A part of it, by four indices.
+    public subscript(_ first: TensorIndex, _ second: TensorIndex, _ third: TensorIndex, _ fourth: TensorIndex) -> TensorView<T> {
+        get => self.view.sliced([first, second, third, fourth])
+    }
+
+    /// A part of it, by NumPy's basic indexing, the indices given as an array.
+    public fn sliced(_ indices: TensorIndex[:]) -> TensorView<T> => self.view.sliced(indices)
+
+    /// Lends a part of it, chosen as the subscript chooses one, to be written
+    /// in place, for as long as the body runs: nothing is copied, and nothing
+    /// else reaches the tensor till the body returns.
+    ///
+    /// ```sable
+    /// var t = Tensor<Int>(shape: [2, 3], repeating: 0)
+    /// t.withMutableView([.All, .At(1)]) { (column: inout MutableTensorView<Int>) in
+    ///     column.fill(7)
+    /// }
+    /// assert(t.toArray() == [0, 7, 0, 0, 7, 0])
+    /// ```
+    public mutating fn withMutableView<R>(_ indices: TensorIndex[:], _ body: (inout MutableTensorView<T>) -> R) -> R {
+        let part = indexed(indices, shape, strides, 0)
+        var lent = MutableTensorView<T>(storage: storage, offset: part.offset, shape: part.shape, strides: part.strides)
+        // The tensor lets go of its elements while the view has them, so that
+        // they are the view's alone and written in place.
+        storage = []
+        let result = body(&lent)
+        storage = lent.storage
+        return result
+    }
+
+    /// The same elements in another shape, row-major: one length may be -1,
+    /// which is worked out from the rest.
+    ///
+    /// ```sable
+    /// let t = Tensor<Int>(shape: [2, 3], elements: [1, 2, 3, 4, 5, 6])
+    /// assert(t.reshaped([3, -1]).shape == [3, 2])
+    /// ```
+    public fn reshaped(_ shape: Int[:]) -> Tensor<T> {
+        let resolved = resolvedShape(shape, count: count)
+        return Tensor<T>(storage: self.toArray(), shape: resolved, layout: .RowMajor)
+    }
+
+    /// The same, laid out the other way or this way: copied where it changes.
+    public fn laidOut(_ layout: TensorLayout) -> Tensor<T> {
+        if layout == self.layout {
+            return self
+        }
+        let view = self.view
+        return Tensor<T>(shape: shape, layout: layout) { view[index: $0] }
+    }
+}
+
+extension Tensor where T: Numeric {
+    /// A tensor of zeros.
+    public static fn zeros(shape: Int[:], layout: TensorLayout = .RowMajor) -> Tensor<T> {
+        return Tensor<T>(shape: shape, repeating: T.zero, layout: layout)
+    }
+
+    /// A tensor of ones.
+    public static fn ones(shape: Int[:], layout: TensorLayout = .RowMajor) -> Tensor<T> {
+        return Tensor<T>(shape: shape, repeating: T.one, layout: layout)
+    }
+
+    /// The identity matrix of a size.
+    ///
+    /// ```sable
+    /// assert(Tensor<Int>.identity(2).toArray() == [1, 0, 0, 1])
+    /// ```
+    public static fn identity(_ size: Int) -> Tensor<T> {
+        var made = Tensor<T>(shape: [size, size], repeating: T.zero)
+        var i = 0
+        while i < size {
+            made.storage[i * size + i] = T.one
+            i += 1
+        }
+        return made
+    }
+}
+
+extension Tensor: Equatable where T: Equatable {
+    /// The same shape and the same elements at each place, whatever the layout.
+    public operator == (lhs: Tensor<T>, rhs: Tensor<T>) -> Bool {
+        return lhs.shape == rhs.shape && lhs.toArray() == rhs.toArray()
+    }
+}

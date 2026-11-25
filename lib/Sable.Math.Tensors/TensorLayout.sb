@@ -1,0 +1,9 @@
+module Sable.Math.Tensors
+
+/// How a tensor's elements lie in its storage: the last index moving fastest
+/// (C's, NumPy's and .NET's order) or the first (Fortran's, BLAS's).
+@derive(Equatable, Hashable, Debug)
+public enum TensorLayout {
+    RowMajor
+    ColumnMajor
+}

@@ -1,0 +1,268 @@
+module Sable.Math.Tensors
+
+// Shapes and strides: what every tensor and view is laid out by. A shape is
+// the length of each dimension; a stride how far apart in storage two places
+// one apart in the dimension are, which is zero for a dimension broadcast.
+
+/// How many elements a shape has: the product of its lengths, 1 for none.
+fn elementCount(_ shape: Int[:]) -> Int {
+    var count = 1
+    for length in shape {
+        count = count * length
+    }
+    return count
+}
+
+/// The strides of a shape's elements one after another, in a layout.
+fn contiguousStrides(_ shape: Int[:], _ layout: TensorLayout) -> Int[>..] {
+    var strides = Int[>..](repeating: 0, count: shape.count)
+    var step = 1
+    if layout == .RowMajor {
+        var axis = shape.count - 1
+        while axis >= 0 {
+            strides[axis] = step
+            step = step * shape[axis]
+            axis -= 1
+        }
+    } else {
+        var axis = 0
+        while axis < shape.count {
+            strides[axis] = step
+            step = step * shape[axis]
+            axis += 1
+        }
+    }
+    return strides
+}
+
+/// Traps unless every length is at least zero.
+fn checkShape(_ shape: Int[:]) {
+    for length in shape {
+        if length < 0 {
+            preconditionFailure("a tensor's lengths are not negative: \(shape)")
+        }
+    }
+}
+
+/// The shape two shapes broadcast to, by NumPy's rule: aligned at their last
+/// dimensions, each pair equal or one of them 1; none where they do not.
+///
+/// ```sable
+/// assert(broadcastShape([8, 1, 6, 1], [7, 1, 5]) == [8, 7, 6, 5])
+/// assert(broadcastShape([2, 3], [4, 3]) == none)
+/// ```
+public fn broadcastShape(_ a: Int[:], _ b: Int[:]) -> Int[>..]? {
+    let rank = a.count > b.count ? a.count : b.count
+    var shape = Int[>..](repeating: 1, count: rank)
+    var i = 0
+    while i < rank {
+        let x = i < rank - a.count ? 1 : a[i - (rank - a.count)]
+        let y = i < rank - b.count ? 1 : b[i - (rank - b.count)]
+        if x == y || y == 1 {
+            shape[i] = x
+        } else if x == 1 {
+            shape[i] = y
+        } else {
+            return none
+        }
+        i += 1
+    }
+    return shape
+}
+
+/// The shape a reshape asks for, its one -1 (if any) worked out from the count.
+fn resolvedShape(_ shape: Int[:], count: Int) -> Int[>..] {
+    var known = 1
+    var unknown = -1
+    var i = 0
+    while i < shape.count {
+        if shape[i] == -1 {
+            if unknown >= 0 {
+                preconditionFailure("a shape may have one -1, not more: \(shape)")
+            }
+            unknown = i
+        } else if shape[i] < 0 {
+            preconditionFailure("a tensor's lengths are not negative: \(shape)")
+        } else {
+            known = known * shape[i]
+        }
+        i += 1
+    }
+    var result = shape.toArray()
+    if unknown >= 0 {
+        if known == 0 || count % known != 0 {
+            preconditionFailure("\(count) elements cannot be shaped \(shape)")
+        }
+        result[unknown] = count / known
+    } else if known != count {
+        preconditionFailure("\(count) elements cannot be shaped \(shape)")
+    }
+    return result
+}
+
+/// An axis given as NumPy takes one, negative from the end, checked.
+fn normalisedAxis(_ axis: Int, rank: Int) -> Int {
+    let resolved = axis < 0 ? axis + rank : axis
+    if resolved < 0 || resolved >= rank {
+        preconditionFailure("axis \(axis) is out of range for a tensor of rank \(rank)")
+    }
+    return resolved
+}
+
+/// The offset of an index of a shape, by the strides, from an offset.
+fn offsetOf(_ index: Int[:], _ shape: Int[:], _ strides: Int[:], _ start: Int) -> Int {
+    if index.count != shape.count {
+        preconditionFailure("an index of \(index.count) for a tensor of rank \(shape.count)")
+    }
+    var offset = start
+    var axis = 0
+    while axis < index.count {
+        let at = index[axis]
+        if at < 0 || at >= shape[axis] {
+            preconditionFailure("index \(at) is out of range for dimension \(axis) of length \(shape[axis])")
+        }
+        offset = offset + at * strides[axis]
+        axis += 1
+    }
+    return offset
+}
+
+/// One place, checked, of a dimension: negative from the end.
+@inline(always)
+fn checkedPlace(_ at: Int, _ length: Int, _ axis: Int) -> Int {
+    let place = at < 0 ? at + length : at
+    if place < 0 || place >= length {
+        preconditionFailure("index \(at) is out of range for dimension \(axis) of length \(length)")
+    }
+    return place
+}
+
+/// A view's layout after indexing it: its offset, shape and strides.
+struct Indexed {
+    var offset: Int
+    var shape: Int[>..]
+    var strides: Int[>..]
+}
+
+/// What indices make of a layout, by NumPy's basic indexing: dimensions not
+/// indexed are whole.
+fn indexed(_ indices: TensorIndex[:], _ shape: Int[:], _ strides: Int[:], _ start: Int) -> Indexed {
+    var result = Indexed(offset: start, shape: [], strides: [])
+    var axis = 0
+    for index in indices {
+        if index != .NewAxis && axis >= shape.count {
+            preconditionFailure("\(indices.count) indices for a tensor of rank \(shape.count)")
+        }
+        match index {
+            case .All => {
+                result.shape.append(shape[axis])
+                result.strides.append(strides[axis])
+                axis += 1
+            }
+            case .At(let at) => {
+                result.offset = result.offset + checkedPlace(at, shape[axis], axis) * strides[axis]
+                axis += 1
+            }
+            case .Slice(let start, let end, let step) => {
+                if step <= 0 {
+                    preconditionFailure("a slice's step is positive, not \(step)")
+                }
+                let length = shape[axis]
+                var from = start < 0 ? start + length : start
+                var to = end < 0 ? end + length : end
+                from = from < 0 ? 0 : from > length ? length : from
+                to = to < 0 ? 0 : to > length ? length : to
+                let count = to > from ? (to - from + step - 1) / step : 0
+                result.offset = result.offset + (count > 0 ? from * strides[axis] : 0)
+                result.shape.append(count)
+                result.strides.append(strides[axis] * step)
+                axis += 1
+            }
+            case .NewAxis => {
+                result.shape.append(1)
+                result.strides.append(0)
+            }
+        }
+    }
+    while axis < shape.count {
+        result.shape.append(shape[axis])
+        result.strides.append(strides[axis])
+        axis += 1
+    }
+    return result
+}
+
+/// The strides a layout has broadcast to a shape: a dimension it lacks, or
+/// has of length 1 where the shape's is longer, moves nothing.
+fn broadcastStrides(_ shape: Int[:], _ strides: Int[:], to target: Int[:]) -> Int[>..] {
+    if shape.count > target.count {
+        preconditionFailure("a tensor of shape \(shape) cannot be broadcast to \(target)")
+    }
+    var result = Int[>..](repeating: 0, count: target.count)
+    let skip = target.count - shape.count
+    var i = 0
+    while i < shape.count {
+        if shape[i] == target[skip + i] {
+            result[skip + i] = shape[i] == 1 ? 0 : strides[i]
+        } else if shape[i] != 1 {
+            preconditionFailure("a tensor of shape \(shape) cannot be broadcast to \(target)")
+        }
+        i += 1
+    }
+    return result
+}
+
+/// The next index of a shape in row-major order, the last dimension excluded,
+/// moving the offsets by the strides; false once past the end.
+@inline(always)
+fn advance(_ index: inout Int[>..], _ shape: Int[:], _ offsets: inout Int[>..], _ strides: Int[>..][:]) -> Bool {
+    var axis = shape.count - 2
+    while axis >= 0 {
+        index[axis] += 1
+        var k = 0
+        while k < offsets.count {
+            offsets[k] = offsets[k] + strides[k][axis]
+            k += 1
+        }
+        if index[axis] < shape[axis] {
+            return true
+        }
+        k = 0
+        while k < offsets.count {
+            offsets[k] = offsets[k] - strides[k][axis] * shape[axis]
+            k += 1
+        }
+        index[axis] = 0
+        axis -= 1
+    }
+    return false
+}
+
+/// The lengths or strides without the one at a place.
+fn removing(_ values: Int[:], at place: Int) -> Int[>..] {
+    var result: Int[>..] = []
+    var i = 0
+    while i < values.count {
+        if i != place {
+            result.append(values[i])
+        }
+        i += 1
+    }
+    return result
+}
+
+/// The lengths or strides with a value put at a place, the rest after it.
+fn inserting(_ value: Int, into values: Int[:], at place: Int) -> Int[>..] {
+    var result: Int[>..] = []
+    var i = 0
+    while i <= values.count {
+        if i == place {
+            result.append(value)
+        }
+        if i < values.count {
+            result.append(values[i])
+        }
+        i += 1
+    }
+    return result
+}

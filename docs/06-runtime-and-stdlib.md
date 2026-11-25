@@ -1051,6 +1051,12 @@ Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     exponential, Bernoulli, weighted index): here rather
                     than beside the generators, as the core has no
                     functions of them
+Sable.Math.Tensors  Tensor<T> (n-dimensional, row- or column-major), TensorView
+                    and MutableTensorView (strided, no copy), NumPy's
+                    broadcasting and basic indexing, reductions along an axis,
+                    matmul, softmax, reshape, transpose, permute, squeeze,
+                    concatenate, stack, split, gather; Array2D, Array3D
+                    (below)
 Sable.Math.Geometry Vector2, Vector3, Vector4, Matrix3x2, Matrix3x3, Matrix4x4,
                     Quaternion, Plane and Transform of F32s, Int2 to Int4,
                     Vector3D (F64); Ray, BoundingBox, BoundingSphere,
@@ -1797,6 +1803,44 @@ default: it is uploaded as it is. .NET's Matrix4x4 is the same bytes.
   `benchmarks/library/{matrix-multiply,matrix-invert,transform-points,quaternion-blend,frustum-cull,vector-particles}`.
 - **Others' conformances.** Serializable is in Sable.Serialize and Arbitrary in
   Sable.Testing, so that a program of vectors has neither module.
+
+### Tensors
+
+`Sable.Math.Tensors` is .NET's `Tensor<T>` and NumPy's `ndarray`: a shape, and
+elements in one array laid out by strides, row-major unless made column-major.
+A `Tensor` owns its elements and is a value, copied on write.
+
+- **Views.** `t[.All, .range(1..<3), .step(2)]` (up to four indices, or any
+  number by `sliced`) is a `TensorView`: an offset and strides over the same
+  elements, nothing copied. As a slice does (docs/02 §2.5), a view shares its
+  storage the way a second copy of the array would: it may be kept, and the
+  tensor's later writes are not in it. Writing in place is lending: a
+  `MutableTensorView` is had only as an `inout` parameter, of
+  `t.withMutableView([...]) { ... }` or an array's
+  `withTensorView(shape:) { ... }`, which give the view the elements and
+  take them back, so nothing else reaches them while it writes (§2.3's
+  exclusivity) and nothing is copied.
+- **NumPy's rules.** Broadcasting (shapes aligned at their last dimensions,
+  each pair equal or one of them 1), basic indexing (`.At` drops the
+  dimension, a negative place counts from the end, a slice's bounds are
+  held to the dimension, `.NewAxis`), reductions along an axis with or
+  without `keepingDimension`, `argmax` the first greatest, and `matmul`'s
+  vectors and stacks. `tools/conformance/tensors/numpy_cases.py` writes
+  `tests/lib/Sable.Math.Tensors/NumpyTests.sb` from what NumPy makes of each
+  case; its output must be the file in the repository.
+- **matmul.** F32 and F64 matrices go by a kernel of vectors: a tile of four
+  rows by sixteen F32s (eight F64s) kept in registers, each element of A
+  times a row of B added in by a fused multiply-add. 512 x 512 of F32 takes
+  3.4 ms against 12.9 ms for .NET 11 with System.Numerics.Tensors 9.0
+  (whose Tensor has no matrix product, so the port is TensorPrimitives'
+  MultiplyAdd, a row at a time; `benchmarks/library/tensor-matmul`, Apple M1
+  Max). OpenBLAS is not on the machine and was not measured. Other number
+  types multiply element by element.
+- **Elementwise work** is a closure an element, generic over the numeric
+  protocols, not yet vectors: `(t + bias) * 0.5` summed along an axis of a
+  256 x 256 x 16 F32 tensor takes 4.6 times .NET's TensorPrimitives loop.
+- `Array2D<T>` and `Array3D<T>` are rectangular arrays of any element, for
+  grids rather than arithmetic, .NET's `T[,]` and `T[,,]`.
 
 ### Decimal
 

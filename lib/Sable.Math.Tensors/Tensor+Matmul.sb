@@ -1,0 +1,230 @@
+module Sable.Math.Tensors
+
+// Matrix products, as NumPy's matmul: of two matrices; a vector on either side
+// taken as a row or a column and its dimension dropped after; and stacks of
+// matrices, their leading dimensions broadcast together. F32 and F64 matrices
+// are multiplied by a kernel of vectors, a tile of 4 rows by a vector's width
+// of columns kept in registers; any other number type element by element.
+
+extension Tensor where T: Numeric {
+    /// The matrix product, as NumPy's `matmul`.
+    ///
+    /// ```sable
+    /// let a = Tensor<Int>(shape: [2, 3], elements: [1, 2, 3, 4, 5, 6])
+    /// let b = Tensor<Int>(shape: [3, 2], elements: [7, 8, 9, 10, 11, 12])
+    /// assert(Tensor.matmul(a, b).toArray() == [58, 64, 139, 154])
+    /// let v = Tensor<Int>(shape: [3], elements: [1, 0, 1])
+    /// assert(Tensor.matmul(a, v).toArray() == [4, 10])
+    /// ```
+    public static fn matmul(_ a: Tensor<T>, _ b: Tensor<T>) -> Tensor<T> {
+        return matrixProduct(a.view, b.view) { (x: T[:], y: T[:], m: Int, k: Int, n: Int) -> T[>..] in
+            multiplied(x, y, m, k, n)
+        }
+    }
+
+    /// The dot product of two vectors of the same length.
+    ///
+    /// ```sable
+    /// let x = Tensor<Int>(shape: [3], elements: [1, 2, 3])
+    /// assert(Tensor.dot(x, x) == 14)
+    /// ```
+    public static fn dot(_ a: Tensor<T>, _ b: Tensor<T>) -> T {
+        if a.rank != 1 || b.rank != 1 || a.shape[0] != b.shape[0] {
+            preconditionFailure("the dot product of shapes \(a.shape) and \(b.shape), which are not vectors of one length")
+        }
+        var total = T.zero
+        var i = 0
+        while i < a.count {
+            total = total + a.storage[i] * b.storage[i]
+            i += 1
+        }
+        return total
+    }
+}
+
+extension Tensor where T == F32 {
+    /// The matrix product, as NumPy's `matmul`, by vectors.
+    public static fn matmul(_ a: Tensor<F32>, _ b: Tensor<F32>) -> Tensor<F32> {
+        return matrixProduct(a.view, b.view) { (x: F32[:], y: F32[:], m: Int, k: Int, n: Int) -> F32[>..] in
+            multipliedByVectors(x, y, m, k, n, SIMD<F32, 16>())
+        }
+    }
+}
+
+extension Tensor where T == F64 {
+    /// The matrix product, as NumPy's `matmul`, by vectors.
+    public static fn matmul(_ a: Tensor<F64>, _ b: Tensor<F64>) -> Tensor<F64> {
+        return matrixProduct(a.view, b.view) { (x: F64[:], y: F64[:], m: Int, k: Int, n: Int) -> F64[>..] in
+            multipliedByVectors(x, y, m, k, n, SIMD<F64, 8>())
+        }
+    }
+}
+
+/// NumPy's matmul over shapes, each pair of matrices multiplied by the kernel
+/// given the two row-major, their sizes m x k and k x n.
+fn matrixProduct<T>(_ a: TensorView<T>, _ b: TensorView<T>, _ kernel: (T[:], T[:], Int, Int, Int) -> T[>..]) -> Tensor<T> {
+    if a.rank == 0 || b.rank == 0 {
+        preconditionFailure("matmul of shapes \(a.shape) and \(b.shape): neither may be a scalar")
+    }
+    let left = a.rank == 1 ? a.unsqueezed(axis: 0) : a
+    let right = b.rank == 1 ? b.unsqueezed(axis: 1) : b
+    let m = left.shape[left.rank - 2]
+    let k = left.shape[left.rank - 1]
+    let n = right.shape[right.rank - 1]
+    if right.shape[right.rank - 2] != k {
+        preconditionFailure("matmul of shapes \(a.shape) and \(b.shape): \(k) columns against \(right.shape[right.rank - 2]) rows")
+    }
+    let leftBatch = left.shape[..<(left.rank - 2)].toArray()
+    let rightBatch = right.shape[..<(right.rank - 2)].toArray()
+    guard let batch = broadcastShape(leftBatch, rightBatch) else {
+        preconditionFailure("matmul of shapes \(a.shape) and \(b.shape): the stacks do not broadcast together")
+    }
+    var leftShape = batch
+    leftShape.append(m)
+    leftShape.append(k)
+    var rightShape = batch
+    rightShape.append(k)
+    rightShape.append(n)
+    let lefts = left.broadcast(to: leftShape)
+    let rights = right.broadcast(to: rightShape)
+    var made: T[>..] = []
+    let stacks = elementCount(batch)
+    var index = Int[>..](repeating: 0, count: batch.count)
+    var s = 0
+    while s < stacks {
+        var leftIndex: TensorIndex[>..] = []
+        var rightIndex: TensorIndex[>..] = []
+        for at in index {
+            leftIndex.append(.At(at))
+            rightIndex.append(.At(at))
+        }
+        let x = lefts.sliced(leftIndex)
+        let y = rights.sliced(rightIndex)
+        let product = x.isContiguous && y.isContiguous && x.offset == 0 && y.offset == 0 && x.storage.count == m * k && y.storage.count == k * n
+            ? kernel(x.storage, y.storage, m, k, n)
+            : kernel(x.toArray(), y.toArray(), m, k, n)
+        // One pair of matrices is the whole product, which is not copied.
+        if stacks == 1 {
+            made = product
+        } else {
+            made.append(contentsOf: product)
+        }
+        var axis = batch.count - 1
+        while axis >= 0 {
+            index[axis] += 1
+            if index[axis] < batch[axis] {
+                break
+            }
+            index[axis] = 0
+            axis -= 1
+        }
+        s += 1
+    }
+    var shape = batch
+    if a.rank > 1 {
+        shape.append(m)
+    }
+    if b.rank > 1 {
+        shape.append(n)
+    }
+    return Tensor<T>(storage: made, shape: shape, layout: .RowMajor)
+}
+
+/// The product of an m x k and a k x n matrix, row-major, element by element.
+fn multiplied<T: Numeric>(_ a: T[:], _ b: T[:], _ m: Int, _ k: Int, _ n: Int) -> T[>..] {
+    var c = T[>..](repeating: T.zero, count: m * n)
+    var i = 0
+    while i < m {
+        var p = 0
+        while p < k {
+            let x = a[i * k + p]
+            var j = 0
+            while j < n {
+                c[i * n + j] = c[i * n + j] + x * b[p * n + j]
+                j += 1
+            }
+            p += 1
+        }
+        i += 1
+    }
+    return c
+}
+
+/// The product of an m x k and a k x n matrix, row-major, a tile of four rows
+/// by N columns at a time in registers: each element of A times a vector of a
+/// row of B, added in as one fused multiply-add. What is left of the rows or
+/// the columns goes a row or an element at a time.
+fn multipliedByVectors<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ a: T[:], _ b: T[:], _ m: Int, _ k: Int, _ n: Int, _ _zero: SIMD<T, N>) -> T[>..] {
+    var c = T[>..](repeating: T.zero, count: m * n)
+    if m == 0 || n == 0 || k == 0 {
+        return c
+    }
+    let size = MemoryLayout<T>.stride
+    let wide = n - n % N
+    a.withPointer { (left: RawPtr<T>) in
+        b.withPointer { (right: RawPtr<T>) in
+            c.withMutablePointer { (target: RawPtr<T>) in
+                unsafe {
+                    let x = left.address
+                    let y = right.address
+                    let z = target.address
+                    var j = 0
+                    while j < wide {
+                        var i = 0
+                        while i + 4 <= m {
+                            var c0 = SIMD<T, N>()
+                            var c1 = SIMD<T, N>()
+                            var c2 = SIMD<T, N>()
+                            var c3 = SIMD<T, N>()
+                            var p = 0
+                            while p < k {
+                                let row = RawPtr<U8>(address: y &+ (p &* n &+ j) &* size).load(as: SIMD<T, N>.self)
+                                let at = x &+ (i &* k &+ p) &* size
+                                c0 = SIMD<T, N>(repeating: RawPtr<T>(address: at).load()).fusedMultiplyAdd(row, c0)
+                                c1 = SIMD<T, N>(repeating: RawPtr<T>(address: at &+ k &* size).load()).fusedMultiplyAdd(row, c1)
+                                c2 = SIMD<T, N>(repeating: RawPtr<T>(address: at &+ 2 &* k &* size).load()).fusedMultiplyAdd(row, c2)
+                                c3 = SIMD<T, N>(repeating: RawPtr<T>(address: at &+ 3 &* k &* size).load()).fusedMultiplyAdd(row, c3)
+                                p = p &+ 1
+                            }
+                            let to = z &+ (i &* n &+ j) &* size
+                            RawPtr<U8>(address: to).storeBytes(of: c0)
+                            RawPtr<U8>(address: to &+ n &* size).storeBytes(of: c1)
+                            RawPtr<U8>(address: to &+ 2 &* n &* size).storeBytes(of: c2)
+                            RawPtr<U8>(address: to &+ 3 &* n &* size).storeBytes(of: c3)
+                            i = i &+ 4
+                        }
+                        while i < m {
+                            var c0 = SIMD<T, N>()
+                            var p = 0
+                            while p < k {
+                                let row = RawPtr<U8>(address: y &+ (p &* n &+ j) &* size).load(as: SIMD<T, N>.self)
+                                c0 = SIMD<T, N>(repeating: RawPtr<T>(address: x &+ (i &* k &+ p) &* size).load()).fusedMultiplyAdd(row, c0)
+                                p = p &+ 1
+                            }
+                            RawPtr<U8>(address: z &+ (i &* n &+ j) &* size).storeBytes(of: c0)
+                            i = i &+ 1
+                        }
+                        j = j &+ N
+                    }
+                    // The columns past the last whole vector.
+                    var i = 0
+                    while i < m && wide < n {
+                        var p = 0
+                        while p < k {
+                            let s = RawPtr<T>(address: x &+ (i &* k &+ p) &* size).load()
+                            var jj = wide
+                            while jj < n {
+                                let place = RawPtr<T>(address: z &+ (i &* n &+ jj) &* size)
+                                place.store(s.fusedMultiplyAdd(RawPtr<T>(address: y &+ (p &* n &+ jj) &* size).load(), place.load()))
+                                jj = jj &+ 1
+                            }
+                            p = p &+ 1
+                        }
+                        i = i &+ 1
+                    }
+                }
+            }
+        }
+    }
+    return c
+}

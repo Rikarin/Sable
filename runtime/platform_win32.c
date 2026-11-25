@@ -774,6 +774,11 @@ static int socket_connect_datagram(PlatformSocket socket, const PlatformAddress 
 
 static int64_t socket_read(PlatformSocket socket, void *bytes, int64_t size) {
     int got = recv((SOCKET)socket, bytes, size > INT32_MAX ? INT32_MAX : (int)size, 0);
+    if (got < 0 && WSAGetLastError() == WSAESHUTDOWN) {
+        // No more is to be read of it: its end, as POSIX says it.
+        return 0;
+    }
+
     return got >= 0 ? got : socket_status();
 }
 

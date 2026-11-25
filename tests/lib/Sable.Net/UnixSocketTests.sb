@@ -9,6 +9,9 @@ import Sable.Process
 import Sable.Testing
 import Sable.Time
 
+// Windows' Unix sockets are not verified yet (#62).
+#if !os(windows)
+
 /// A path no other test has, short enough for a socket's.
 fn path(_ name: String) -> String {
     return "/tmp/sable-\(Process.id())-\(name)"
@@ -220,3 +223,5 @@ fn aSenderWaitsForAReceiverThatIsFull() async {
         assert(false, error.description())
     }
 }
+
+#endif

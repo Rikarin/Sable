@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Sable.Driver.Commands;
 using Sable.Symbols;
 using static Sable.CodeGen.Tests.Harnesses;
@@ -379,14 +380,18 @@ public sealed class TestRunnerTests {
             .ToList();
         Assert.NotEmpty(modules);
         Assert.Empty(Directory.GetFiles(Path.Combine(Root, "tests/lib"), "*.sb"));
+        // Every module is run, and what failed said of all of them together.
+        var failed = new List<string>();
         foreach (var module in modules) {
             var files = Directory.GetFiles(module, "*.sb", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToList();
             // Each test in a process of its own, as 'sable test' runs them:
             // one that hangs fails by its name rather than holding this one.
             var run = NativeEach([..files.Select(f => new SourceText(File.ReadAllText(f), Path.GetRelativePath(Root, f).Replace('\\', '/')))], TimeSpan.FromSeconds(60));
-            Assert.True(run.ExitCode == 0, module + "\n" + run.Stdout + run.Stderr);
-            Assert.Matches(@"test result: ok\. \d+ passed; 0 failed; 0 filtered out", run.Stdout);
-            Assert.Equal("", run.Stderr);
+            if (run.ExitCode != 0 || run.Stderr != "" || !Regex.IsMatch(run.Stdout, @"test result: ok\. \d+ passed; 0 failed; 0 filtered out")) {
+                failed.Add(module + "\n" + run.Stdout + run.Stderr);
+            }
         }
+
+        Assert.True(failed.Count == 0, string.Join("\n", failed));
     }
 }

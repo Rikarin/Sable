@@ -89,7 +89,25 @@ public struct StringBuffer {
         if !(count >= 0 && count <= capacity) {
             stringIndexOutOfRange()
         }
-        return StringBuffer.take(address, count)
+        return StringBuffer.take(address, count, -1)
+    }
+
+    /// The same of bytes that are all ASCII, which are then not counted.
+    public unsafe fn finish(asciiCount count: Int) -> String {
+        if !(count >= 0 && count <= capacity) {
+            stringIndexOutOfRange()
+        }
+        return StringBuffer.take(address, count, count)
+    }
+
+    /// As many whole blocks of the bytes as the processor has instructions
+    /// for put through the codec and written from an offset: how many bytes
+    /// that was, which may be none (Codec).
+    public fn encode(_ codec: Codec, _ bytes: U8[:], at offset: Int) -> Int {
+        if !(offset >= 0 && offset <= capacity) {
+            stringIndexOutOfRange()
+        }
+        return StringBuffer.run(codec as Int, bytes, address + offset, capacity - offset)
     }
 
     /// The first 'count' bytes as a string, if they are well-formed UTF-8, or
@@ -102,12 +120,12 @@ public struct StringBuffer {
             self.discard()
             return none
         }
-        return StringBuffer.take(address, count)
+        return StringBuffer.take(address, count, -1)
     }
 
     /// The room given back, nothing made of it: the buffer is done with.
     public unsafe fn discard() {
-        let _ = StringBuffer.take(address, 0)
+        let _ = StringBuffer.take(address, 0, 0)
     }
 
     @builtin("string_buffer_make")
@@ -122,8 +140,11 @@ public struct StringBuffer {
     @builtin("string_buffer_valid")
     static fn isValid(_ address: Int, _ count: Int) -> Bool
 
+    @builtin("codec_bytes_raw")
+    static fn run(_ codec: Int, _ bytes: U8[:], _ address: Int, _ room: Int) -> Int
+
     @builtin("string_buffer_take")
-    static fn take(_ address: Int, _ count: Int) -> String
+    static fn take(_ address: Int, _ count: Int, _ scalars: Int) -> String
 }
 
 // Out of line, so that a check is a comparison and a branch never taken.

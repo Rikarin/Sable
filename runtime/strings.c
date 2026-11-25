@@ -133,18 +133,23 @@ char *sable_string_buffer_grow(char *bytes, int64_t used, int64_t capacity) {
     return moved;
 }
 
-// The first 'length' bytes as a string: the string itself, unless it would
-// keep much more room than it has use for.
-SableString *sable_string_buffer_take(char *bytes, int64_t length) {
+// The first 'length' bytes as a string of 'count' scalars, or as many as they
+// are when that is negative: the string itself, unless it would keep much
+// more room than it has use for.
+SableString *sable_string_buffer_take(char *bytes, int64_t length, int64_t count) {
+    if (count < 0) {
+        count = count_scalars(bytes, length);
+    }
+
     SableString *string = string_of_bytes(bytes);
     if (string->length - length > 32 + length / 4) {
-        SableString *fitted = make_string(bytes, length);
+        SableString *fitted = make_counted(bytes, length, count);
         sable_release(&string->header);
         return fitted;
     }
 
     string->length = length;
-    string->count = count_scalars(bytes, length);
+    string->count = count;
     return string;
 }
 
@@ -763,26 +768,37 @@ int64_t sable_string_utf8_find_last_range(const SableString *text, int64_t from,
 // once, the common run, so ASCII text is checked at memory speed.
 //
 // Where the machine can look sixteen bytes up in a sixteen-entry table at
-// once (NEON's tbl, SSSE3's pshufb, WebAssembly's swizzle), whole blocks of
+// once (NEON's tbl, SSSE3's pshufb — compiled for whether or not every
+// machine the program may run on has it, and asked for as it runs —
+// WebAssembly's swizzle), whole blocks of
 // any text are checked first, sixteen bytes a step (lookup16_utf8_fine,
 // below). The first block that is not fine, and what is left at the end, is
 // walked byte by byte from the start of the sequence it is in, which finds
 // the exact place.
-#if defined(__ARM_NEON) || defined(__SSSE3__) || defined(__wasm_simd128__)
+#if defined(__ARM_NEON) || defined(__SSSE3__) || defined(__x86_64__) || defined(__wasm_simd128__)
 #define SABLE_LOOKUP16 1
 #if defined(__ARM_NEON)
 #include <arm_neon.h>
 #elif defined(__SSSE3__)
 #include <tmmintrin.h>
+#elif defined(__x86_64__)
+#include <cpuid.h>
+#include <tmmintrin.h>
+#define SABLE_LOOKUP16_TARGET __attribute__((target("ssse3")))
+#define SABLE_LOOKUP16_ASKED 1
 #else
 #include <wasm_simd128.h>
 #endif
 
+#ifndef SABLE_LOOKUP16_TARGET
+#define SABLE_LOOKUP16_TARGET
+#endif
+
 // Each byte of 'indices', each under 16, replaced by that entry of 'table'.
-static inline sable_bytes16 lookup16(sable_bytes16 table, sable_bytes16 indices) {
+SABLE_LOOKUP16_TARGET static inline sable_bytes16 lookup16(sable_bytes16 table, sable_bytes16 indices) {
 #if defined(__ARM_NEON)
     return (sable_bytes16)vqtbl1q_u8((uint8x16_t)table, (uint8x16_t)indices);
-#elif defined(__SSSE3__)
+#elif defined(__SSSE3__) || defined(__x86_64__)
     return (sable_bytes16)_mm_shuffle_epi8((__m128i)table, (__m128i)indices);
 #else
     return (sable_bytes16)wasm_i8x16_swizzle((v128_t)table, (v128_t)indices);
@@ -802,7 +818,7 @@ static inline sable_bytes16 lookup16(sable_bytes16 table, sable_bytes16 indices)
 // the errors that pair could be; a pair is wrong where all three agree. A
 // third or fourth byte must be a continuation, which the tables leave to the
 // bytes two and three back.
-static inline bool lookup16_utf8_fine(sable_bytes16 block, sable_bytes16 previous) {
+SABLE_LOOKUP16_TARGET static inline bool lookup16_utf8_fine(sable_bytes16 block, sable_bytes16 previous) {
     enum {
         TOO_SHORT = 1 << 0, TOO_LONG = 1 << 1, OVERLONG_3 = 1 << 2, TOO_LARGE = 1 << 3,
         SURROGATE = 1 << 4, OVERLONG_2 = 1 << 5, TOO_LARGE_1000 = 1 << 6, OVERLONG_4 = 1 << 6,
@@ -850,11 +866,11 @@ static inline bool lookup16_utf8_fine(sable_bytes16 block, sable_bytes16 previou
     sable_bytes16 continuing = (sable_bytes16)((two >= 0xE0) | (three >= 0xF0)) & 0x80;
     return !any16((sable_mask16)(continuing ^ special));
 }
-#endif
 
-static int64_t first_invalid_utf8(const uint8_t *bytes, int64_t length) {
+// How many of the bytes, sixteen at a time, are well-formed, but for a
+// sequence that the last of them may cut short.
+SABLE_LOOKUP16_TARGET static int64_t utf8_fine_blocks(const uint8_t *bytes, int64_t length) {
     int64_t i = 0;
-#ifdef SABLE_LOOKUP16
     sable_bytes16 previous = { 0 };
     while (i + 16 <= length) {
         sable_bytes16 block = load16((const char *)bytes + i);
@@ -864,7 +880,16 @@ static int64_t first_invalid_utf8(const uint8_t *bytes, int64_t length) {
             if (previous[15] >= 0xC0 || previous[14] >= 0xE0 || previous[13] >= 0xF0) {
                 break;
             }
-        } else if (!lookup16_utf8_fine(block, previous)) {
+
+            // And those that follow it, with nothing to carry between them.
+            do {
+                i += 16;
+            } while (i + 16 <= length && !any16((sable_mask16)(load16((const char *)bytes + i) & (uint8_t)0x80)));
+            previous = (sable_bytes16){ 0 };
+            continue;
+        }
+
+        if (!lookup16_utf8_fine(block, previous)) {
             break;
         }
 
@@ -872,14 +897,43 @@ static int64_t first_invalid_utf8(const uint8_t *bytes, int64_t length) {
         i += 16;
     }
 
-    // Everything before 'i' is well-formed but for a sequence the block's
-    // start may cut: back to where that sequence starts.
-    int64_t start = i < 3 ? 0 : i - 3;
-    while (start < i && (bytes[start] & 0xC0) == 0x80) {
-        start++;
+    return i;
+}
+
+#ifdef SABLE_LOOKUP16_ASKED
+static bool lookup16_available(void) {
+    static int known = -1;
+    int available = __atomic_load_n(&known, __ATOMIC_RELAXED);
+    if (available < 0) {
+        unsigned a, b, c, d;
+        available = __get_cpuid(1, &a, &b, &c, &d) && (c >> 9 & 1);
+        __atomic_store_n(&known, available, __ATOMIC_RELAXED);
     }
 
-    i = start;
+    return available;
+}
+#else
+static bool lookup16_available(void) {
+    return true;
+}
+#endif
+#endif
+
+static int64_t first_invalid_utf8(const uint8_t *bytes, int64_t length) {
+    int64_t i = 0;
+#ifdef SABLE_LOOKUP16
+    if (length >= 16 && lookup16_available()) {
+        i = utf8_fine_blocks(bytes, length);
+
+        // Everything before 'i' is well-formed but for a sequence the block's
+        // start may cut: back to where that sequence starts.
+        int64_t start = i < 3 ? 0 : i - 3;
+        while (start < i && (bytes[start] & 0xC0) == 0x80) {
+            start++;
+        }
+
+        i = start;
+    }
 #endif
     while (i < length) {
         if (i + 16 <= length && !any16((sable_mask16)(load16((const char *)bytes + i) & (uint8_t)0x80))) {

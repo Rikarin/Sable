@@ -38,6 +38,7 @@
 #include "random.c"
 #include "arrays.c"
 #include "crypto.c"
+#include "codecs.c"
 #include "leaks.c"
 #include "metadata.c"
 #include "inline_layout.c"

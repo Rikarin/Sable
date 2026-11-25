@@ -582,6 +582,10 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_secure_zero(ptr, i64)
                                 declare zeroext i1 @sable_crypto_blocks(i64, ptr, ptr, i64, i64)
                                 declare zeroext i1 @sable_crypto_blocks_raw(i64, ptr, ptr, i64)
+                                declare i64 @sable_codec_bytes(i64, ptr, i64, i64, ptr, i64)
+                                declare i64 @sable_codec_string(i64, ptr, i64, i64, ptr, i64)
+                                declare i64 @sable_utf8_to_utf16(ptr, i64, i64, ptr, i64)
+                                declare i64 @sable_utf16_to_utf8(ptr, i64, i64, ptr, i64)
                                 declare ptr @sable_string_join(ptr, ptr)
                                 declare i64 @sable_string_compare(ptr, ptr)
                                 declare i64 @sable_string_find(ptr, ptr, i64)
@@ -814,7 +818,7 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_string_from_ascii_words(i64, i64, i64, i64, i64, i64)
                                 declare ptr @sable_string_buffer_make(i64)
                                 declare ptr @sable_string_buffer_grow(ptr, i64, i64)
-                                declare ptr @sable_string_buffer_take(ptr, i64)
+                                declare ptr @sable_string_buffer_take(ptr, i64, i64)
                                 declare zeroext i1 @sable_string_buffer_valid(ptr, i64)
                                 declare void @llvm.dbg.declare(metadata, metadata, metadata)
                                 declare void @llvm.dbg.value(metadata, metadata, metadata)
@@ -4594,6 +4598,60 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
+                // Blocks of Base64 or Hex, from a slice of bytes or a range of a
+                // string's, to a slice from an index on, made the only reference
+                // to its run, or to a string being written: how many bytes of
+                // the source were done.
+                case "codec_bytes_bytes" or "codec_string_bytes": {
+                    var fromString = builtin.Name == "codec_string_bytes";
+                    var index = operands[^1];
+                    var type = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var first = SliceMutableElement(operands[0], index, type);
+                    var slice = Fresh();
+                    var room = Fresh();
+                    Line($"{slice} = load {Type(type)}, ptr {operands[0]}");
+                    var count = SlicePart(slice, type, 2);
+                    Line($"{room} = sub i64 {count}, {index}");
+                    if (fromString) {
+                        Line($"{Result()} = call i64 @sable_codec_string(i64 {operands[1]}, ptr {operands[2]}, i64 {operands[3]}, i64 {operands[4]}, ptr {first}, i64 {room})");
+                    } else {
+                        var sourceType = (SliceType)builtin.Operands[2].Type;
+                        var buffer = SlicePart(operands[2], sourceType, 0);
+                        var start = SlicePart(operands[2], sourceType, 1);
+                        var length = SlicePart(operands[2], sourceType, 2);
+                        Line($"{Result()} = call i64 @sable_codec_bytes(i64 {operands[1]}, ptr {buffer}, i64 {start}, i64 {length}, ptr {first}, i64 {room})");
+                    }
+
+                    return;
+                }
+
+                // UTF-8 as UTF-16 or the other way, from a slice to another from
+                // an index on, made the only reference to its run.
+                case "utf8_to_utf16" or "utf16_to_utf8": {
+                    var type = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var first = SliceMutableElement(operands[0], operands[2], type);
+                    var slice = Fresh();
+                    var room = Fresh();
+                    Line($"{slice} = load {Type(type)}, ptr {operands[0]}");
+                    var count = SlicePart(slice, type, 2);
+                    Line($"{room} = sub i64 {count}, {operands[2]}");
+                    var sourceType = (SliceType)builtin.Operands[1].Type;
+                    var buffer = SlicePart(operands[1], sourceType, 0);
+                    var start = SlicePart(operands[1], sourceType, 1);
+                    var length = SlicePart(operands[1], sourceType, 2);
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {buffer}, i64 {start}, i64 {length}, ptr {first}, i64 {room})");
+                    return;
+                }
+
+                case "codec_bytes_raw": {
+                    var sourceType = (SliceType)builtin.Operands[1].Type;
+                    var buffer = SlicePart(operands[1], sourceType, 0);
+                    var start = SlicePart(operands[1], sourceType, 1);
+                    var length = SlicePart(operands[1], sourceType, 2);
+                    Line($"{Result()} = call i64 @sable_codec_bytes(i64 {operands[0]}, ptr {buffer}, i64 {start}, i64 {length}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");
+                    return;
+                }
+
                 case "crypto_blocks_raw":
                     Line($"{Result()} = call zeroext i1 @sable_crypto_blocks_raw(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");
                     return;
@@ -4725,7 +4783,7 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "string_buffer_take":
-                    Line($"{Result()} = call ptr @sable_string_buffer_take(ptr {RawAddress(operands[0])}, i64 {operands[1]})");
+                    Line($"{Result()} = call ptr @sable_string_buffer_take(ptr {RawAddress(operands[0])}, i64 {operands[1]}, i64 {operands[2]})");
                     return;
 
                 // The first bytes of five words as a string, in one call that

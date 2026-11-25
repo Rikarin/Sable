@@ -25,6 +25,16 @@ public struct StringWriter {
         return StringWriter { buffer: StringBuffer.allocate(capacity: capacity + 8), count: 0 }
     }
 
+    /// How many bytes there is room for before it grows.
+    public var capacity: Int => buffer.capacity - 8
+
+    /// Room for at least 'minimum' bytes in all.
+    public mutating fn reserveCapacity(_ minimum: Int) {
+        if minimum > self.capacity {
+            buffer = StringWriter.grown(buffer, count, minimum - count)
+        }
+    }
+
     /// Room made for 'more' bytes past those appended, and eight.
     @inline(always)
     mutating fn makeRoom(_ more: Int) {

@@ -22,6 +22,23 @@ public struct Hex {
     /// assert(Hex.encode(bytes) == "007fa0")
     /// ```
     public static fn encode(_ bytes: U8[:], uppercase: Bool = false) -> String {
+        if bytes.count >= 32 {
+            // All but the last few bytes where the string will be.
+            let length = bytes.count * 2
+            unsafe {
+                let buffer = StringBuffer.allocate(capacity: length)
+                let done = buffer.encode(uppercase ? .HexUpperEncode : .HexEncode, bytes, at: 0)
+                if done > 0 {
+                    let digits: U8[:] = uppercase ? hexUpperDigits : hexLowerDigits
+                    for i in done..<bytes.count {
+                        buffer.store(digits[Int(bytes[i] >> 4)], at: 2 * i)
+                        buffer.store(digits[Int(bytes[i] & 0x0F)], at: 2 * i + 1)
+                    }
+                    return buffer.finish(asciiCount: length)
+                }
+                buffer.discard()
+            }
+        }
         var text: U8[>..] = []
         text.append(repeating: 0, count: bytes.count * 2)
         Hex.writeEncoded(bytes, to: &text, at: 0, uppercase: uppercase)
@@ -57,6 +74,32 @@ public struct Hex {
     /// }
     /// ```
     public static fn decode<S: StringProtocol>(_ text: S) throws(DecodeError) -> U8[>..] {
+        let piece = text.asSubstring
+        let start = piece.startIndex.utf8Offset
+        let count = piece.endIndex.utf8Offset - start
+        if count >= 64 && count % 2 == 0 {
+            // All but the last few digits, or as far as there are only
+            // digits, where the string has them; what is wrong after that
+            // is found, and said where it is, below.
+            var decoded: U8[>..] = []
+            decoded.append(repeating: 0, count: count / 2)
+            let done = decoded.write(.HexDecode, of: piece.base, from: start, to: start + count, at: 0)
+            if done > 0 {
+                let digits = piece.base.utf8
+                var bad: U8 = 0
+                var i = done
+                while i < count {
+                    let high = hexValues[Int(digits[start + i])]
+                    let low = hexValues[Int(digits[start + i + 1])]
+                    bad |= high | low
+                    decoded[i / 2] = high << 4 | low & 0x0F
+                    i += 2
+                }
+                if bad < 0x10 {
+                    return decoded
+                }
+            }
+        }
         return try Hex.decode(bytes: textBytes(text))
     }
 
@@ -73,7 +116,7 @@ public struct Hex {
         // Thirty-two digits at a time, as far as they are digits; the first
         // thirty-two with one that is not are looked at again below, which
         // says where it is.
-        var i = 0
+        var i = whole >= 64 ? bytes.write(.HexDecode, of: text[..<whole], at: 0) : 0
         while whole - i >= 32 {
             let (values, areDigits) = Hex.digitValues(SIMD<U8, 32>.load(from: text, at: i))
             if !areDigits {
@@ -147,8 +190,8 @@ public struct Hex {
         // What a nibble of ten or more adds past '9' + 1 to reach its letter.
         let letters: U64 = uppercase ? 0x07 : 0x27
         let count = bytes.count
-        var i = 0
-        var j = start
+        var i = count >= 32 ? text.write(uppercase ? .HexUpperEncode : .HexEncode, of: bytes, at: start) : 0
+        var j = start + 2 * i
         let letterGap = SIMD<U8, 32>(repeating: letters unchecked as U8)
         while count - i >= 16 {
             let v = SIMD<U8, 16>.load(from: bytes, at: i)

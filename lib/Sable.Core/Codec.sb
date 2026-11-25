@@ -1,0 +1,59 @@
+module Sable.Core
+
+/// What Sable.Text's Base64 and Hex have the runtime do whole blocks of, by
+/// the processor's own instructions where it has them.
+public enum Codec: Int {
+    Base64Encode = 1
+    Base64Decode = 2
+    HexEncode = 3
+    HexDecode = 4
+    Base64UrlEncode = 9
+    Base64UrlDecode = 10
+    HexUpperEncode = 11
+}
+
+extension U8[:] {
+    /// As many whole blocks of the source as the processor has instructions
+    /// for put through the codec, and written over these bytes from an index
+    /// that is in them: how many bytes of the source that was, which is none
+    /// where there are no such instructions. Decoding stops before a block
+    /// with a byte that is no digit.
+    public mutating fn write(_ codec: Codec, of source: U8[:], at index: Int) -> Int {
+        return self.run(codec as Int, source, index)
+    }
+
+    /// The same of a string's bytes from one offset up to another.
+    public mutating fn write(_ codec: Codec, of text: String, from start: Int, to end: Int, at index: Int) -> Int {
+        return self.run(codec as Int, text, start, end, index)
+    }
+
+    @builtin("codec_bytes_bytes")
+    mutating fn run(_ codec: Int, _ source: U8[:], _ index: Int) -> Int
+
+    @builtin("codec_string_bytes")
+    mutating fn run(_ codec: Int, _ text: String, _ start: Int, _ end: Int, _ index: Int) -> Int
+
+    /// The UTF-8 of the UTF-16 units written over these bytes from an index
+    /// that is in them, where there is room for three bytes a unit and
+    /// sixteen more, as far as it is well-formed: how many units that is,
+    /// times 2^32, and how many bytes it came to. Sable.Text's transcoding
+    /// is written over it; none is done in the interpreter.
+    public mutating fn writeUtf8(of units: U16[:], at index: Int) -> Int {
+        return self.fromUtf16(units, index)
+    }
+
+    @builtin("utf16_to_utf8")
+    mutating fn fromUtf16(_ units: U16[:], _ index: Int) -> Int
+}
+
+extension U16[:] {
+    /// The UTF-16 of the bytes, which must be well-formed UTF-8, written over
+    /// these units from an index that is in them, where there is room for a
+    /// unit a byte: how many units, or none in the interpreter.
+    public unsafe mutating fn writeUtf16(ofValid bytes: U8[:], at index: Int) -> Int {
+        return self.fromUtf8(bytes, index)
+    }
+
+    @builtin("utf8_to_utf16")
+    mutating fn fromUtf8(_ bytes: U8[:], _ index: Int) -> Int
+}

@@ -30,25 +30,40 @@ module Sable.Text
 /// assert(builder.count == 6)
 /// ```
 public class TextBuilder: TextWriter {
-    // The text: the pieces in order, then the bytes of the tail, which
-    // becomes a piece when it is full.
+    // The text: the pieces in order, then the tail, a string being written
+    // that becomes a piece when it is full.
     var pieces: String[>..] = []
-    var tail: U8[>..] = []
+    var tail: StringWriter
     var scalars: Int = 0
     var bytes: Int = 0
 
     /// An empty builder.
-    public init() { }
+    public init() {
+        unsafe {
+            tail = StringWriter.allocate(capacity: 0)
+        }
+    }
 
     /// A builder holding the text.
     public init(_ text: String) {
+        unsafe {
+            tail = StringWriter.allocate(capacity: 0)
+        }
         append(text)
     }
 
     /// An empty builder with room for that many bytes of text before its
     /// buffer grows.
     public init(capacity: Int) {
-        tail.reserveCapacity(capacity)
+        unsafe {
+            tail = StringWriter.allocate(capacity: capacity)
+        }
+    }
+
+    deinit {
+        unsafe {
+            tail.discard()
+        }
     }
 
     // ---- Size --------------------------------------------------------------
@@ -85,7 +100,7 @@ public class TextBuilder: TextWriter {
         scalars += text.count
         bytes += length
         if length <= 256 {
-            tail.append(utf8: text)
+            tail.append(utf8: text, from: 0, to: length)
             if tail.count >= 65536 {
                 flush()
             }
@@ -98,9 +113,12 @@ public class TextBuilder: TextWriter {
     /// The character added at the end, encoded straight into the buffer.
     public fn append(_ character: Char) {
         let before = tail.count
-        character.encodeUtf8(into: &tail)
+        tail.append(codePoint: character.codePoint)
         scalars += 1
         bytes += tail.count - before
+        if tail.count >= 65536 {
+            flush()
+        }
     }
 
     /// The integer added at the end in decimal, its digits written straight
@@ -119,31 +137,54 @@ public class TextBuilder: TextWriter {
         var rest = value
         let before = tail.count
         if rest < 0 {
-            tail.append(0x2D)
+            tail.append(byte: 0x2D)
             rest = -rest
         }
-        var digits = 1
-        var scan = rest
-        while scan >= 10 {
-            scan = scan / 10
-            digits += 1
-        }
-        var k = 0
-        while k < digits {
-            tail.append(0x30)
-            k += 1
-        }
-        var at = tail.count - 1
-        while true {
-            tail[at] = U8.truncating(0x30 + rest % 10)
-            rest = rest / 10
-            if rest == 0 {
-                break
+        // Eight digits are a word: those before the last eight, the last of
+        // which is the first that may be fewer, and then eight at a time.
+        let least = 100_000_000
+        if rest >= least {
+            let high = rest / least
+            if high >= least {
+                appendDigits(below: high / least, zeros: false)
+                appendDigits(below: high % least, zeros: true)
+            } else {
+                appendDigits(below: high, zeros: false)
             }
-            at -= 1
+            appendDigits(below: rest % least, zeros: true)
+        } else {
+            appendDigits(below: rest, zeros: false)
         }
         scalars += tail.count - before
         bytes += tail.count - before
+        if tail.count >= 65536 {
+            flush()
+        }
+    }
+
+    // A number below a hundred million, all eight of its digits or only
+    // those there are.
+    @inline(always)
+    fn appendDigits(below value: Int, zeros: Bool) {
+        var rest = U32(value)
+        var word: U64 = 0
+        var digits = 0
+        while true {
+            let next = rest / 10
+            word = word << 8 | U64(0x30 + (rest - next * 10))
+            digits += 1
+            rest = next
+            if rest == 0 {
+                break
+            }
+        }
+        if zeros {
+            while digits < 8 {
+                word = word << 8 | 0x30
+                digits += 1
+            }
+        }
+        tail.append(word: word, length: digits)
     }
 
     /// The characters added at the end, in order.
@@ -281,27 +322,9 @@ public class TextBuilder: TextWriter {
     public fn replace(_ target: String, with replacement: String) -> Int {
         precondition(!target.isEmpty, "replacing an empty text")
         let whole = whole()
-        var result: U8[>..] = []
-        var found = 0
-        var start = 0
-        while true {
-            let at = Runtime.findUtf8(text: whole, part: target, from: start)
-            if at < 0 {
-                break
-            }
-            if found == 0 {
-                result.reserveCapacity(whole.utf8Count)
-            }
-            result.append(utf8: whole, from: start, to: at)
-            result.append(utf8: replacement)
-            found += 1
-            start = at + target.utf8Count
-        }
+        let found = whole.count(of: target)
         if found > 0 {
-            result.append(utf8: whole, from: start, to: whole.utf8Count)
-            unsafe {
-                replaceAll(with: [String.fromUtf8Unchecked(result)])
-            }
+            replaceAll(with: [whole.replacing(target, with: replacement)])
         }
         return found
     }
@@ -318,7 +341,7 @@ public class TextBuilder: TextWriter {
     /// Every character taken out; the room for pieces kept.
     public fn clear() {
         pieces.removeAll(keepingCapacity: true)
-        tail.removeAll(keepingCapacity: true)
+        tail.truncate(to: 0)
         scalars = 0
         bytes = 0
     }
@@ -327,11 +350,13 @@ public class TextBuilder: TextWriter {
 
     // The tail made a piece, its room kept for what comes next.
     fn flush() {
-        if !tail.isEmpty {
+        if tail.count > 0 {
+            // As much room again, for a full one; a little for one taken early.
+            let room = tail.count >= 65536 ? tail.count + 256 : 0
             unsafe {
-                pieces.append(String.fromUtf8Unchecked(tail))
+                pieces.append(tail.finish())
+                tail = StringWriter.allocate(capacity: room)
             }
-            tail.removeAll(keepingCapacity: true)
         }
     }
 
@@ -381,7 +406,7 @@ public class TextBuilder: TextWriter {
     // The text made these pieces, the counts taken again.
     fn replaceAll(with parts: String[>..]) {
         pieces.removeAll(keepingCapacity: true)
-        tail.removeAll(keepingCapacity: true)
+        tail.truncate(to: 0)
         scalars = 0
         bytes = 0
         for part in parts {

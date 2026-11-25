@@ -776,6 +776,10 @@ public sealed partial class SilGen {
                 return false;
             }
 
+            if (DescribesValues(symbol)) {
+                Describer(given, lowered, at, DebugDescribesValues(symbol));
+            }
+
             hidden.Add(lowered);
         }
 

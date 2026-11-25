@@ -33,6 +33,7 @@
 #include "references.c"
 #include "coverage.c"
 #include "traps.c"
+#include "numbers.c"
 #include "strings.c"
 #include "hashing.c"
 #include "random.c"

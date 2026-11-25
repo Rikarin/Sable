@@ -20,7 +20,11 @@ extension U128: Parsable {
     /// assert(try! U128.parse("0x7f", radix: 16, styles: .Prefix) == 127)
     /// ```
     public static fn parse<S: StringProtocol>(_ text: S, radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> U128 {
-        let (negative, magnitude) = try parseInteger(text.asSubstring, radix, styles)
+        let text = text.asSubstring
+        if let value = shortInteger(text, radix, styles), value >= 0 {
+            return U128(value)
+        }
+        let (negative, magnitude) = try parseInteger(text, radix, styles)
         return try unsignedValue(negative, magnitude, 340282366920938463463374607431768211455)
     }
 }

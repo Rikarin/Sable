@@ -20,7 +20,11 @@ extension I8: Parsable {
     /// assert(try! I8.parse("0x7f", radix: 16, styles: .Prefix) == 127)
     /// ```
     public static fn parse<S: StringProtocol>(_ text: S, radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> I8 {
-        let (negative, magnitude) = try parseInteger(text.asSubstring, radix, styles)
+        let text = text.asSubstring
+        if let value = shortInteger(text, radix, styles), value >= -128 && value <= 127 {
+            return I8(value)
+        }
+        let (negative, magnitude) = try parseInteger(text, radix, styles)
         let value = try signedValue(negative, magnitude, 127)
         return I8(value)
     }

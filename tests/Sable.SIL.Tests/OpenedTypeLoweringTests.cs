@@ -114,8 +114,10 @@ public sealed class OpenedTypeLoweringTests {
             }
 
             fn debug<T: Zero>(_ type: T.Type) -> String {
-                let made: T? = T.zero()
-                return made?.name() ?? "none"
+                var made = T.zero()
+                let again = { made = T.zero() }
+                again()
+                return made.name()
             }
 
             fn main() {

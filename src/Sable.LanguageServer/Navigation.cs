@@ -409,12 +409,7 @@ public sealed partial class LanguageServer {
                     continue;
                 }
 
-                var bound = model.GetBoundNode(invocation);
-                while (bound is BoundConversion conversion) {
-                    bound = conversion.Operand;
-                }
-
-                if (bound is BoundCall call && SemanticModel.SameSymbol(call.Function, function)) {
+                if (model.GetBoundNode(invocation) is { } bound && SemanticModel.Unconverted(bound) is BoundCall call && SemanticModel.SameSymbol(call.Function, function)) {
                     found.Add(label.Span);
                 }
             }

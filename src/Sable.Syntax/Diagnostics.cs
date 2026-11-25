@@ -275,6 +275,7 @@ public enum ErrorCode {
     ERR_InvalidEntryPoint = 3514,
     ERR_InvalidAutoclosure = 3515,
     ERR_AutoclosureForwarded = 3516,
+    ERR_InvalidExpressionCapture = 3517,
 
     // ---- Format specs in interpolation (S3660-S3669) -------------------------
     ERR_FormatSpecMalformed = 3660,

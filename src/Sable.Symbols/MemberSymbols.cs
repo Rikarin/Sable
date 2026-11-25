@@ -675,4 +675,8 @@ public sealed class LocalSymbol(
     ///     initialiser's. Null for a local whose type is not opaque.
     /// </summary>
     public TypeSymbol? HiddenType { get; internal set; }
+
+    /// <summary>A 'let' of the type that the compiler, not the program, declares.</summary>
+    public static LocalSymbol Synthesised(string name, Symbol container, TypeSymbol type) =>
+        new(name, container, null, false) { TypeResolver = () => type };
 }

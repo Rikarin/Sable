@@ -37,6 +37,20 @@ public sealed record TestFunction(
     /// </summary>
     public string? ExpectedTrap { get; init; }
 
+    /// <summary><c>@test(tags: ["slow"])</c>: what a filter may ask for it by.</summary>
+    public IReadOnlyList<string> Tags { get; init; } = [];
+
+    /// <summary><c>@test(timeout: .seconds(5))</c>: how long it may run; null for as long as it takes.</summary>
+    public TimeSpan? Timeout { get; init; }
+
+    /// <summary>
+    ///     <c>@test(arguments: [1, 2])</c>: the arrays its cases are made
+    ///     from, as they are written — one of what it is called with, a tuple
+    ///     for several parameters; or one for each parameter, every value of
+    ///     one with every value of the others. Empty for a test that takes nothing.
+    /// </summary>
+    public IReadOnlyList<ExpressionSyntax> Arguments { get; init; } = [];
+
     /// <summary>As the harness lists and filters it: <c>Module.function</c>, or <c>Module.Type.function</c>.</summary>
     public string QualifiedName => Module.Length == 0 ? CallPath : $"{Module}.{CallPath}";
 
@@ -52,7 +66,8 @@ public sealed record TestFunction(
 /// <remarks>
 ///     <para>
 ///         A test takes nothing and gives nothing back; it may throw, and an
-///         error it throws fails it. A benchmark takes nothing, and its whole
+///         error it throws fails it. One given <c>arguments:</c>, arrays, takes
+///         parameters, and is a test for each value. A benchmark takes nothing, and its whole
 ///         body is timed, or takes a <c>Sable.Testing.Bencher</c>, and times
 ///         what it hands the bencher's <c>iterate</c>. Either is a function of
 ///         a module or a static method of a type that is not generic, so that
@@ -101,11 +116,18 @@ public sealed partial class Compilation {
     }
 
     /// <summary>What is wrong with the file's <c>@test</c>, <c>@bench</c> and <c>@fuzz</c> functions; its semantic model reports these.</summary>
-    internal IReadOnlyList<Diagnostic> CheckTestFunctions(SyntaxTree tree) {
+    /// <param name="arguments">Filled with the arrays of the tests' <c>arguments:</c>, each with its type and where it is bound, for the model to bind.</param>
+    internal IReadOnlyList<Diagnostic> CheckTestFunctions(SyntaxTree tree, List<(ExpressionSyntax Array, TypeSymbol Type, Symbol Owner)> arguments) {
         var diagnostics = new List<Diagnostic>();
         foreach (var declaration in tree.Root.DescendantNodes().OfType<FunctionDeclarationSyntax>()) {
-            if (KindOf(declaration) is not null) {
-                Examine(declaration, tree, diagnostics);
+            if (KindOf(declaration) is not null && Examine(declaration, tree, diagnostics) is { Arguments.Count: > 0 } test) {
+                var parameters = test.Symbol.Parameters;
+                for (var i = 0; i < test.Arguments.Count; i++) {
+                    var element = test.Arguments.Count == 1 && parameters.Length > 1
+                        ? new TupleTypeSymbol([..parameters.Select(static p => p.Type)], [..parameters.Select(static _ => (string?)null)])
+                        : parameters[i].Type;
+                    arguments.Add((test.Arguments[i], new ArrayTypeSymbol(element, ArrayKind.Grow), test.Symbol.ContainingSymbol!));
+                }
             }
         }
 
@@ -145,15 +167,14 @@ public sealed partial class Compilation {
             Report(ErrorCode.ERR_TestAndBench, attributes[1].Span, "a function is one of a test, a benchmark and a fuzz target, not more");
         }
 
-        string? expectedTrap = null;
+        var options = new TestOptions();
         foreach (var attribute in attributes.Where(static a => a.ArgumentList is not null)) {
             if (attribute.Name.ToString().Trim() is BenchAttribute or FuzzAttribute) {
                 Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, $"'@{attribute.Name.ToString().Trim()}' takes no arguments");
-            } else if (TrapExpected(attribute) is { } trap) {
-                expectedTrap = trap;
-            } else {
-                Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span,
-                    "'@test' takes nothing, or 'traps' for a test that must trap, or 'traps: \"text\"' for one whose trap must say that");
+            } else if (options.Read(attribute) is { } bad) {
+                Report(ErrorCode.ERR_TestAttributeArguments, bad.Span,
+                    "'@test' takes nothing, or 'traps' for a test that must trap, or 'traps: \"text\"' for one whose trap must say that; "
+                    + "'arguments: [...]', the values it is run with; 'tags: [\"text\"]'; and 'timeout: .seconds(5)'");
             }
         }
 
@@ -171,9 +192,11 @@ public sealed partial class Compilation {
         }
 
         var takesBencher = false;
-        if (kind == TestKind.Test) {
+        if (kind == TestKind.Test && options.Arguments.Count > 0) {
+            CheckTestArguments(function, declaration, options.Arguments, Report);
+        } else if (kind == TestKind.Test) {
             if (function.Parameters.Length > 0) {
-                Report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test takes no parameters: the harness has nothing to pass it");
+                Report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test takes no parameters: the harness has nothing to pass it, unless '@test(arguments: [...])' says what");
             }
         } else if (kind == TestKind.Fuzz) {
             if (function.Parameters is not [{ Type: ArrayTypeSymbol { ArrayKind: ArrayKind.Slice, ElementType: var element } }] || !ReferenceEquals(element, Core.U8)) {
@@ -231,32 +254,120 @@ public sealed partial class Compilation {
         }
 
         return ok
-            ? new(function, declaration, tree, kind, GetFileScope(tree).Module.Name, callPath, function.ThrownType is not null, takesBencher) { ExpectedTrap = expectedTrap }
+            ? new(function, declaration, tree, kind, GetFileScope(tree).Module.Name, callPath, function.ThrownType is not null, takesBencher) {
+                ExpectedTrap = options.Trap, Tags = options.Tags, Timeout = options.Timeout, Arguments = options.Arguments,
+            }
             : null;
     }
 
     /// <summary>
-    ///     What <c>@test(traps)</c> or <c>@test(traps: "text")</c> expects of
-    ///     the trap: "" for any, the text for one saying it; null for any
-    ///     other arguments.
+    ///     That there are as many arrays to make a test's cases from as it
+    ///     takes: one for one parameter, one of tuples for several, or one for
+    ///     each. Whether they are of what it takes is found as the file's
+    ///     semantic model binds them, where the test is declared.
     /// </summary>
-    static string? TrapExpected(AttributeSyntax attribute) {
-        if (attribute.ArgumentList is not { Arguments: [var argument] }) {
+    static void CheckTestArguments(FunctionSymbol function, FunctionDeclarationSyntax declaration, IReadOnlyList<ExpressionSyntax> arguments, Action<ErrorCode, TextSpan, string> report) {
+        var parameters = function.Parameters;
+        if (parameters.Any(static p => p.Modifier is not ParameterModifier.None || p.IsVariadic || p.IsAutoclosure || p.IsByReference)) {
+            report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test's parameters are plain ones, each given a value of '@test(arguments: [...])'");
+            return;
+        }
+
+        if (parameters.IsEmpty || arguments.Count != 1 && arguments.Count != parameters.Length) {
+            report(
+                ErrorCode.ERR_TestTakesParameters,
+                declaration.Parameters.Span,
+                parameters.IsEmpty
+                    ? "a test given 'arguments:' takes a parameter for them"
+                    : $"'arguments:' is one array, of {(parameters.Length == 1 ? "what the test takes" : $"tuples of the {parameters.Length} values the test takes")}"
+                      + $"{(parameters.Length == 1 ? "" : $", or {parameters.Length} arrays, one for each")}; here are {arguments.Count}"
+            );
+        }
+    }
+
+    /// <summary>What <c>@test(…)</c> says of a test.</summary>
+    sealed class TestOptions {
+        public string? Trap { get; private set; }
+        public List<string> Tags { get; } = [];
+        public TimeSpan? Timeout { get; private set; }
+        public List<ExpressionSyntax> Arguments { get; } = [];
+
+        /// <summary>Reads the attribute's arguments; gives the one that is not one '@test' takes, or null.</summary>
+        public SyntaxNode? Read(AttributeSyntax attribute) {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var inArguments = false;
+            if (attribute.ArgumentList!.Arguments.Count == 0) {
+                return attribute.ArgumentList;
+            }
+
+            foreach (var argument in attribute.ArgumentList.Arguments) {
+                var name = argument.NameToken.IsNone ? "" : argument.NameToken.Text;
+                if (name.Length == 0) {
+                    // 'traps' alone, as a name; or another array of arguments.
+                    if (argument.Expression.ToString().Trim() == "traps" && seen.Add("traps")) {
+                        Trap = "";
+                        inArguments = false;
+                    } else if (inArguments) {
+                        Arguments.Add(argument.Expression);
+                    } else {
+                        return argument;
+                    }
+
+                    continue;
+                }
+
+                inArguments = name == "arguments";
+                if (!seen.Add(name)) {
+                    return argument;
+                }
+
+                switch (name) {
+                    case "traps" when Text(argument.Expression) is { } text:
+                        Trap = text;
+                        break;
+                    case "tags" when argument.Expression is ArrayExpressionSyntax array && array.Elements.All(static e => Text(e) is { } tag && IsTag(tag)):
+                        Tags.AddRange(array.Elements.Select(static e => Text(e)!));
+                        break;
+                    case "timeout" when Duration(argument.Expression) is { } timeout:
+                        Timeout = timeout;
+                        break;
+                    case "arguments":
+                        Arguments.Add(argument.Expression);
+                        break;
+                    default:
+                        return argument;
+                }
+            }
+
             return null;
         }
 
-        // 'traps' alone, as a name.
-        if (argument.NameToken.IsNone && argument.Expression.ToString().Trim() == "traps") {
-            return "";
-        }
+        /// <summary>A plain string: no interpolation, nothing to evaluate.</summary>
+        static string? Text(ExpressionSyntax expression) =>
+            expression is LiteralExpressionSyntax { Token.Kind: SyntaxKind.StringLiteralToken } literal
+            && literal.Token.Parts.All(static p => p.Kind == StringPartKind.Literal)
+                ? literal.Token.Value as string
+                : null;
 
-        // 'traps: "text"', a plain string: no interpolation, nothing to evaluate.
-        if (argument.NameToken.Text == "traps" && argument.Expression is LiteralExpressionSyntax { Token.Kind: SyntaxKind.StringLiteralToken } literal
-            && literal.Token.Parts.All(static p => p.Kind == StringPartKind.Literal) && literal.Token.Value is string text) {
-            return text;
-        }
+        /// <summary>A tag a filter can be written with: no space, nor what a filter is put together with.</summary>
+        static bool IsTag(string tag) => tag.Length > 0 && tag.All(static c => !char.IsWhiteSpace(c) && !char.IsControl(c) && !"&|!()*,\"".Contains(c));
 
-        return null;
+        /// <summary><c>.seconds(5)</c>, <c>.milliseconds(200)</c> or <c>.minutes(2)</c>, as Sable.Time's Duration has them, of a literal.</summary>
+        static TimeSpan? Duration(ExpressionSyntax expression) {
+            var parts = expression.ToString().Trim().TrimEnd(')').Split('(');
+            if (parts is not [var unit, var number] || !double.TryParse(number.Replace("_", "", StringComparison.Ordinal), System.Globalization.NumberStyles.AllowDecimalPoint,
+                    System.Globalization.CultureInfo.InvariantCulture, out var value) || value <= 0) {
+                return null;
+            }
+
+            double? seconds = unit switch {
+                ".seconds" => value,
+                ".milliseconds" => value / 1000,
+                ".minutes" => value * 60,
+                _ => null,
+            };
+            return seconds is { } length and < 1e9 ? TimeSpan.FromSeconds(length) : null;
+        }
     }
 
     static string Noun(TestKind kind) => kind switch {

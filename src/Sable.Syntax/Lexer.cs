@@ -1882,7 +1882,7 @@ public sealed class Lexer {
         var name = TextBetween(start, i);
         return name.Length > 0
             && name is not
-            ("file" or "line" or "column" or "function" or "module");
+            ("file" or "line" or "column" or "function" or "module" or "expression");
     }
 
     /// <summary>Consumes a directive line and applies it to the conditional stack.</summary>

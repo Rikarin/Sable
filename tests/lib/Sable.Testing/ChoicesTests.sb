@@ -1,0 +1,191 @@
+module ChoicesTests
+
+// The choices arbitrary values are made from, and what is made of them
+// (Sable.Testing), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Testing
+import Sable.Collections
+
+// What the choices make of the type.
+fn made<T: Arbitrary>(_ type: T.Type, _ choices: U64[>..]) -> T {
+    return T.arbitrary(from: Choices(replaying: choices))
+}
+
+@test
+fn choicesAreTheSeeds() {
+    let one = Choices(seed: 5)
+    let other = Choices(seed: 5)
+    var i = 0
+    while i < 20 {
+        assertEqual(one.draw(upTo: U64.max), other.draw(upTo: U64.max))
+        i += 1
+    }
+    assertEqual(one.drawn.count, 20)
+    assertNotEqual(Choices(seed: 6).draw(upTo: U64.max), one.drawn[0])
+}
+
+@test
+fn choicesSaidAgainAreHeldToTheirLimits() {
+    let choices = Choices(replaying: [3, 900, 1])
+    assertEqual(choices.below(10), 3)
+    assertEqual(choices.draw(upTo: 9), 9)
+    assertEqual(choices.chance(0, outOf: 5), true)
+    // Nothing is left: the simplest.
+    assertEqual(choices.element(of: ["a", "b"]), "a")
+    assertEqual(choices.drawn, [3, 9, 1, 0])
+}
+
+@test
+fn bytesAreChoices() {
+    let choices = Choices(bytes: [1, 2, 0, 0, 0, 0, 0, 0, 5])
+    assertEqual(choices.draw(upTo: U64.max), 513)
+    assertEqual(choices.draw(upTo: U64.max), 5)
+}
+
+@test
+fn aCollectionIsAsLongAsItsChoicesSay() {
+    // Each element is after a 1, and a 0 ends them.
+    assertEqual(made(Int[>..].self, [1, 3, 5, 0, 1, 2, 3, 1, 0]), [5, -4])
+    assertEqual(String.arbitrary(from: Choices(replaying: [1, 0, 2, 1, 1, 33, 1, 2, 0x161, 1, 3, 0xD801])), "cAš\u{E001}")
+    assertEqual(Set<Bool>.arbitrary(from: Choices(replaying: [1, 1, 1, 1])).count, 1)
+    assertEqualText("\(made([U8: Bool].self, [1, 2, 3, 1]))", "[3: true]")
+    var count = 0
+    Choices(replaying: [1, 1, 1, 1, 1]).times(2, 4) { count += 1 }
+    assertEqual(count, 4)
+}
+
+@test
+fn theSimplestValues() {
+    let none0 = Choices(replaying: [])
+    assertEqual(Int.arbitrary(from: none0), 0)
+    assertEqual(F64.arbitrary(from: none0), 0.0)
+    assertEqual(Char.arbitrary(from: none0), 'a')
+    assertEqual(Bool.arbitrary(from: none0), false)
+    assert(made(Int?.self, []) == none)
+    assertEqual(UUID.arbitrary(from: none0), UUID(high: 0, low: 0))
+    assertEqual(Outcome<Int, Bool>.arbitrary(from: none0).ok, 0)
+    assert(Range<Int>.arbitrary(from: none0).isEmpty)
+}
+
+@test
+fn theEndsOfTheNumbersAreReached() {
+    assertEqual(I8.arbitrary(from: Choices(replaying: [7, 127, 1])), I8.min)
+    assertEqual(I8.arbitrary(from: Choices(replaying: [7, 127, 0])), I8.max)
+    assertEqual(U128.arbitrary(from: Choices(replaying: [128, U64.max, U64.max])), U128.max)
+    assertEqual(I128.arbitrary(from: Choices(replaying: [127, U64.max, U64.max, 1])), I128.min)
+    assert(F64.arbitrary(from: Choices(replaying: [3, 4])) == F64.infinity)
+    assert(F32.arbitrary(from: Choices(replaying: [3, 5])) == -F32.infinity)
+    assertEqual(F64.arbitrary(from: Choices(replaying: [1, 1, 1, 0, 64])), 1.25)
+    assertEqual(F64.arbitrary(from: Choices(replaying: [2, 0x3FF0000000000000])), 1.0)
+    assertEqual(F32.arbitrary(from: Choices(replaying: [2, 0x3F800000])), 1.0)
+}
+
+// Every size of every built-in type, made and made again from what it drew.
+@test
+fn aValueIsMadeAgainFromItsChoices() {
+    forAll { (seed: U64, part: U8) in
+        let size = Int(part % 101)
+        fn same<T: Arbitrary>(_ type: T.Type) {
+            let choices = Choices(seed: seed, size: size)
+            let value = "\(T.arbitrary(from: choices):?)"
+            expect("\(T.arbitrary(from: Choices(replaying: choices.drawn, size: size)):?)" == value)
+        }
+        same(Int.self)
+        same(I16.self)
+        same(I32.self)
+        same(I64.self)
+        same(U16.self)
+        same(U32.self)
+        same(U64.self)
+        same(UInt.self)
+        same(F32.self)
+        same(F64.self)
+        same([String: Int?].self)
+        same(Outcome<Char, Bool>.self)
+        same(Range<I8>.self)
+    }
+}
+
+@derive(Equatable, Debug, Arbitrary)
+enum Direction {
+    North
+    South
+    East
+}
+
+@derive(Equatable, Debug, Arbitrary)
+struct Move {
+    var direction: Direction
+    let steps: U8
+}
+
+@derive(Debug, Arbitrary)
+@indirect
+union Path {
+    Then(Path, Move)
+    Start
+    Jump(to: Int)
+}
+
+@derive(Equatable, Debug, Arbitrary)
+struct Both<A, B> {
+    let a: A
+    let b: B
+}
+
+@test
+fn derivedValuesAreMadeOfTheirParts() {
+    assertEqual(Direction.arbitrary(from: Choices(replaying: [2])), Direction.East)
+    assertEqual(Direction.arbitrary(from: Choices(replaying: [])), Direction.North)
+    assertEqual(Move.arbitrary(from: Choices(replaying: [1, 3, 6])), Move(direction: .South, steps: 6))
+    assertEqual(Both<Bool, Move>.arbitrary(from: Choices(replaying: [1, 2])), Both(a: true, b: Move(direction: .East, steps: 0)))
+    // The case that can hold another is the last.
+    assertEqualText("\(Path.arbitrary(from: Choices(replaying: [])):?)", "Path.Start")
+    assertEqualText("\(Path.arbitrary(from: Choices(replaying: [1, 2, 3])):?)", "Path.Jump(to: 3)")
+    assertEqualText("\(Path.arbitrary(from: Choices(replaying: [2, 0, 1, 1, 1])):?)", "Path.Then(Path.Start, Move(direction: Direction.South, steps: 1))")
+}
+
+@test
+fn aValueOfItsOwnKindComesToAnEnd() {
+    fn length(_ path: Path) -> Int {
+        return match path {
+            case .Then(let before, _) => 1 + length(before)
+            default                   => 0
+        }
+    }
+    forAll(cases: 300) { (path: Path) in expect(length(path) < 1000) }
+    let enough = Choices(replaying: [], size: 0)
+    while !enough.isEnough {
+        _ = enough.draw(upTo: 1)
+    }
+    assertEqual(enough.chooseCase(simple: 0, all: 3), 0)
+}
+
+// ---- Gen --------------------------------------------------------------------
+
+@test
+fn generatorsMakeWhatTheySay() {
+    forAll(Gen.number(in: -5 as I8...5)) { (n: I8) in expect(n >= -5 && n <= 5) }
+    forAll(Gen.number(in: I64.min...I64.max)) { (n: I64) in expect(n &+ 1 != n) }
+    forAll(Gen.number(in: 3...9)) { (n: Int) in expect(n >= 3 && n <= 9) }
+    forAll(Gen.number(in: -9...-3)) { (n: Int) in expect(n >= -9 && n <= -3) }
+    forAll(Gen.float(in: 1.0...2.0), Gen.finite()) { (x: F64, y: F64) in expect(x >= 1.0 && x <= 2.0 && y.isFinite) }
+    forAll(Gen.ascii(count: 2...4), Gen.string(of: Gen.element(of: ['x', 'y'])), Gen.always(3)) { (s: String, t: String, n: Int) in
+        expect(s.count >= 2 && s.count <= 4 && n == 3)
+        expect(t.filter({ $0 != 'x' && $0 != 'y' }).isEmpty)
+    }
+    forAll(Gen.oneOf([Gen.always(1), Gen.number(in: 5...6)]).optional().array(count: 1...3)) { (xs: Int?[>..]) in
+        expect(xs.count >= 1 && xs.count <= 3 && !xs.contains(where: { $0 == 2 }))
+    }
+    forAll(Gen.weighted([(1, Gen.always("x")), (3, Gen.always("y"))]).zip(Gen.arbitrary(Bool.self))) { (p: (String, Bool)) in expect(p.0 == "x" || p.0 == "y") }
+    forAll(Gen.arbitrary(Int.self).filter { $0 % 2 == 0 }.map { $0 + 1 }) { (n: Int) in expect(n % 2 != 0) }
+}
+
+@test
+fn theSimplestNumberOfARangeIsNearestNought() {
+    let simplest = Choices(replaying: [])
+    assertEqual(Gen.number(in: -5...5).value(from: simplest), 0)
+    assertEqual(Gen.number(in: 3...5).value(from: simplest), 3)
+    assertEqual(Gen.number(in: -5...-3).value(from: simplest), -3)
+}

@@ -13,15 +13,19 @@ public sealed class TestCommand : HarnessCommand {
     public override string Summary => "run the @test functions (and, with --doc, the doc examples)";
 
     public override string Usage => """
-        usage: sable test [<file.sb>|<directory>...] [filter...] [--doc] [--bless] [--list] [--exact] [--show-output] [--release] [-g] [-- <harness options>]
+        usage: sable test [<file.sb>|<directory>...] [filter...] [--filter <expression>] [--doc] [--bless] [--list] [--exact] [--show-output] [--release] [-g] [-- <harness options>]
 
         Without a file, tests the package in this directory or the nearest above it: its
         library with the files under tests/, and its dependencies. A directory stands for
         every .sb file under it, built as one program.
 
-          filter             run the tests whose names (Module.function) contain it
+          filter             run the tests whose names (Module.function) contain it; a case of a
+                             @test(arguments:) test is named Module.function(arguments)
+          --filter <expr>    run the tests it selects: 'tag:fast & !name:*Slow*', 'file:Parser | parse' —
+                             tag:, name: and file: terms, with & | ! ( ) between them, '*' for any text
           --doc              also run the ```sable examples in doc comments, as tests
-          --bless            write each generator snapshot case's expected/ from what the generators produce (docs/08 §8.8)
+          --bless            write the snapshots the tests compare with (as SABLE_UPDATE_SNAPSHOTS=1 does),
+                             and each generator snapshot case's expected/ (docs/08 §8.8), from what they are now
           --list             list the tests instead of running them
           --exact            a filter is a whole name, not part of one
           --show-output      show what passing tests print, too
@@ -30,7 +34,10 @@ public sealed class TestCommand : HarnessCommand {
           --exclusivity=...  keep or drop the dynamic exclusivity checks (kept by default)
           -j, --jobs <n>     run n tests at once (default: one per processor)
           --timeout <secs>   stop a test that runs longer, and fail it (default: none; one running
-                             over 60 s is said to be)
+                             over 60 s is said to be); a test's own @test(timeout:) wins
+          --seed <n>         make the property tests' cases from this seed, as a failure's report gives it
+          --junit <path>     write the results there too, as JUnit's XML
+          --trx <path>       write the results there too, as Visual Studio's TRX
           --in-process       run the tests one after another in one process, the first failure ending it
           --harness-out <p>  build the harness to p, with '-g' to debug it ('<p> --run-test <name>'), and run nothing
           --coverage         count the lines and branches of the package's code the tests run: a
@@ -46,6 +53,7 @@ public sealed class TestCommand : HarnessCommand {
     bool _coverage;
     List<string> _covered = [];
     string? _lcov;
+    List<TestReport> _reports = [];
 
     protected override bool MeasureCoverage => _coverage;
 
@@ -59,6 +67,7 @@ public sealed class TestCommand : HarnessCommand {
         _coverage = false;
         _covered = [];
         _lcov = null;
+        _reports = [];
         var rest = new List<string>();
         for (var i = 0; i < arguments.Count; i++) {
             switch (arguments[i]) {
@@ -84,7 +93,13 @@ public sealed class TestCommand : HarnessCommand {
                 case "--lcov" when i + 1 < arguments.Count:
                     _lcov = Path.GetFullPath(arguments[++i]);
                     break;
-                case "-j" or "--jobs" or "--timeout" or "--cover" or "--lcov":
+                case "--junit" when i + 1 < arguments.Count:
+                    _reports.Add(new(TestReportFormat.Junit, Path.GetFullPath(arguments[++i])));
+                    break;
+                case "--trx" when i + 1 < arguments.Count:
+                    _reports.Add(new(TestReportFormat.Trx, Path.GetFullPath(arguments[++i])));
+                    break;
+                case "-j" or "--jobs" or "--timeout" or "--cover" or "--lcov" or "--junit" or "--trx":
                     return BadUsage();
                 case "--":
                     rest.AddRange(arguments.Skip(i));
@@ -128,8 +143,14 @@ public sealed class TestCommand : HarnessCommand {
     ///     run in one process, is the harness's own.
     /// </summary>
     protected override int Execute(string executable, IReadOnlyList<string> arguments) {
+        // Where a snapshot's file is: beside the test's, whose name is from there.
+        var environment = new Dictionary<string, string> { ["SABLE_TEST_ROOT"] = ProgramDirectory };
+        if (Bless) {
+            environment["SABLE_UPDATE_SNAPSHOTS"] = "1";
+        }
+
         if (CoverageCounters is not { } counters) {
-            return Run(executable, arguments);
+            return Run(executable, arguments, environment);
         }
 
         // Each test process appends its counts to one file, which is then
@@ -137,7 +158,8 @@ public sealed class TestCommand : HarnessCommand {
         // process's environment, which every command running here shares.
         var counts = Path.Combine(Path.GetTempPath(), $"sable-coverage-{Guid.NewGuid():N}.txt");
         try {
-            var code = Run(executable, arguments, new Dictionary<string, string> { ["SABLE_COVERAGE"] = counts });
+            environment["SABLE_COVERAGE"] = counts;
+            var code = Run(executable, arguments, environment);
             if (!arguments.Contains("--list")) {
                 Report(counters, Coverage.ReadCounts(counts));
             }
@@ -150,7 +172,7 @@ public sealed class TestCommand : HarnessCommand {
 
     int Run(string executable, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string>? environment = null) =>
         TestRunner.Handles(arguments)
-            ? TestRunner.Run(executable, arguments, _jobs, _timeout, Console.Out, Console.Error, environment)
+            ? TestRunner.Run(executable, arguments, _jobs, _timeout, Console.Out, Console.Error, environment, _reports)
             : Execute(executable, arguments, environment);
 
     /// <summary>
@@ -218,5 +240,7 @@ public sealed class TestCommand : HarnessCommand {
         ["--exact"] = false,
         ["--show-output"] = false,
         ["--in-process"] = false,
+        ["--filter"] = true,
+        ["--seed"] = true,
     };
 }

@@ -1,0 +1,59 @@
+module Sable.Testing
+
+import Sable.Collections
+
+// Arbitrary for what holds arbitrary values: none is the simplest optional,
+// and the empty collection the simplest one.
+
+extension Optional: Arbitrary where Wrapped: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Wrapped? {
+        if choices.chance(3, outOf: 4) {
+            return Wrapped.arbitrary(from: choices)
+        }
+        return none
+    }
+}
+
+extension<Element: Arbitrary> Element[>..]: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Element[>..] {
+        var all: Element[>..] = []
+        choices.times(0, Int.max) { all.append(Element.arbitrary(from: choices)) }
+        return all
+    }
+}
+
+extension Dictionary: Arbitrary where Key: Arbitrary, Value: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Dictionary<Key, Value> {
+        var all = Dictionary<Key, Value>()
+        choices.times(0, Int.max) {
+            let key = Key.arbitrary(from: choices)
+            all[key] = Value.arbitrary(from: choices)
+        }
+        return all
+    }
+}
+
+extension Set: Arbitrary where Element: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Set<Element> {
+        var all = Set<Element>()
+        choices.times(0, Int.max) { _ = all.insert(Element.arbitrary(from: choices)) }
+        return all
+    }
+}
+
+extension Range: Arbitrary where Bound: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Range<Bound> {
+        let one = Bound.arbitrary(from: choices)
+        let other = Bound.arbitrary(from: choices)
+        return one < other ? one..<other : other..<one
+    }
+}
+
+extension Outcome: Arbitrary where T: Arbitrary, E: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Outcome<T, E> {
+        if choices.chance(1, outOf: 4) {
+            return .Err(E.arbitrary(from: choices))
+        }
+        return .Ok(T.arbitrary(from: choices))
+    }
+}

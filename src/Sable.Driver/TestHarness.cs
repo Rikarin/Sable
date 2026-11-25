@@ -305,6 +305,13 @@ public static class TestHarness {
             thunks.Append("    ]\n}\n");
             files.Add(SyntaxTree.Parse(new SourceText(thunks.ToString(), $"<harness:{module.Key}>"), options));
             main.Append(CultureInfo.InvariantCulture, $"import {module.Key}.{{ {list} }}\n");
+
+            // The cases of each test that has any: a file of its own for each.
+            foreach (var (test, i) in module.Select(static (t, i) => (t, i)).Where(static t => t.t.Arguments.Count > 0)) {
+                var cases = CasesName(m, i);
+                files.Add(SyntaxTree.Parse(new SourceText(WriteCases(test, cases), $"<harness:{test.QualifiedName}>"), options));
+                main.Append(CultureInfo.InvariantCulture, $"import {module.Key}.{{ {cases} }}\n");
+            }
         }
 
         var (caseType, run) = kind == TestKind.Test ? ("TestCase", "runTests") : ("BenchCase", "runBenchmarks");
@@ -314,8 +321,12 @@ public static class TestHarness {
             main.Append(CultureInfo.InvariantCulture, $"    let list{m} = sableHarnessList{m}()\n");
             var i = 0;
             foreach (var test in modules[m]) {
-                var traps = kind == TestKind.Test ? $", traps: {(test.ExpectedTrap is { } trap ? Quote(trap) : "none")}" : "";
-                main.Append(CultureInfo.InvariantCulture, $"    all.append({caseType} {{ name: {Quote(test.QualifiedName)}, location: {Quote(test.Location)}, run: list{m}[{i++}]{traps} }})\n");
+                var more = kind != TestKind.Test ? ""
+                    : string.Create(
+                        CultureInfo.InvariantCulture,
+                        $", traps: {(test.ExpectedTrap is { } trap ? Quote(trap) : "none")}, tags: [{string.Join(", ", test.Tags.Select(Quote))}], timeLimit: {(test.Timeout ?? TimeSpan.Zero).Ticks * 100}, cases: {(test.Arguments.Count > 0 ? CasesName(m, i) : "none")}"
+                    );
+                main.Append(CultureInfo.InvariantCulture, $"    all.append({caseType} {{ name: {Quote(test.QualifiedName)}, location: {Quote(test.Location)}, run: list{m}[{i++}]{more} }})\n");
             }
         }
 
@@ -324,11 +335,54 @@ public static class TestHarness {
         return files;
     }
 
+    static string CasesName(int module, int test) => string.Create(CultureInfo.InvariantCulture, $"sableHarnessCases{module}_{test}");
+
+    /// <summary>
+    ///     The file that gives a <c>@test(arguments:)</c> test's cases: its
+    ///     arrays, as they are written, in a file with the imports of the one
+    ///     they are in — and, for a static method's, in an extension of its
+    ///     type — and a closure calling the test for each of what they hold.
+    /// </summary>
+    static string WriteCases(TestFunction test, string name) {
+        var parameters = test.Symbol.Parameters;
+        var types = test.Syntax.Parameters.Parameters.Select(static p => p.Type.ToString().Trim()).ToList();
+        var arrays = test.Arguments.Select(static a => a.ToString().Trim()).ToList();
+        var values = Enumerable.Range(0, parameters.Length).Select(static i => string.Create(CultureInfo.InvariantCulture, $"sableValue{i}")).ToList();
+        var body = new StringBuilder();
+        body.Append("    var sableCases: TestArguments[>..] = []\n");
+        if (arrays.Count == 1 && parameters.Length > 1) {
+            body.Append(CultureInfo.InvariantCulture, $"    let sableValues: ({string.Join(", ", types)})[>..] = {arrays[0]}\n    for ({string.Join(", ", values)}) in sableValues {{\n");
+        } else {
+            for (var i = 0; i < arrays.Count; i++) {
+                body.Append(CultureInfo.InvariantCulture, $"    let sableValues{i}: ({types[i]})[>..] = {arrays[i]}\n");
+            }
+
+            for (var i = 0; i < arrays.Count; i++) {
+                body.Append(CultureInfo.InvariantCulture, $"    for {values[i]} in sableValues{i} {{\n");
+            }
+        }
+
+        var call = string.Join(", ", parameters.Select((p, i) => p.Label == "_" ? values[i] : $"{p.Label ?? p.Name}: {values[i]}"));
+        var described = string.Join(", ", values.Select(static v => $"\\(describeArgument({v}))"));
+        body.Append(CultureInfo.InvariantCulture, $"        sableCases.append(TestArguments(\"{described}\", {Thunk(test, call)}))\n");
+        body.Append(string.Concat(Enumerable.Repeat("    }\n", arrays.Count))).Append("    return sableCases\n");
+
+        var unit = (CompilationUnitSyntax)test.Tree.Root;
+        var imports = unit.Imports.Select(i => test.Tree.Text.Text.Substring(i.Span.Start, i.Span.Length).Trim());
+        var type = test.CallPath.LastIndexOf('.') is var dot and >= 0 ? test.CallPath[..dot] : null;
+        var code = type is null
+            ? $"public fn {name}() -> TestArguments[>..] {{\n{body}}}\n"
+            : $"public fn {name}() -> TestArguments[>..] {{\n    return {type}.{name}()\n}}\n\nextension {type} {{\n    static fn {name}() -> TestArguments[>..] {{\n{body}    }}\n}}\n";
+        return $"module {test.Module}\n\n{string.Join('\n', imports)}\nimport Sable.Testing.{{ TestArguments, describeArgument }}\n\n// Written by the compiler for 'sable test'.\n{code}";
+    }
+
     /// <summary>The closure that runs one test from inside its module.</summary>
     /// <remarks>What a test throws is described as interpolation describes it, for its failure's report.</remarks>
-    static string Thunk(TestFunction test) => test switch {
-        { Kind: TestKind.Test, Throws: false } => $"() => {{ {Await(test)}{test.CallPath}(); return none }}",
-        { Kind: TestKind.Test, Throws: true } => $"() => {{\n            do {{ try {Await(test)}{test.CallPath}() }} catch {{ return \"\\(error)\" }}\n            return none\n        }}",
+    static string Thunk(TestFunction test, string arguments = "") => test switch {
+        // One whose cases are run instead.
+        { Kind: TestKind.Test, Arguments.Count: > 0 } when arguments.Length == 0 => "() => { return none }",
+        { Kind: TestKind.Test, Throws: false } => $"() => {{ {Await(test)}{test.CallPath}({arguments}); return none }}",
+        { Kind: TestKind.Test, Throws: true } => $"() => {{\n            do {{ try {Await(test)}{test.CallPath}({arguments}) }} catch {{ return \"\\(error)\" }}\n            return none\n        }}",
         { Kind: TestKind.Bench, TakesBencher: true } => $"(b: Bencher) => {{ {Await(test)}{test.CallPath}(b) }}",
         { Kind: TestKind.Bench, IsAsync: true } => $"(b: Bencher) => {{ await b.iterateAsync(() => {{ await {test.CallPath}() }}) }}",
         _ => $"(b: Bencher) => {{ b.iterate(() => {test.CallPath}()) }}",

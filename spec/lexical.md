@@ -238,7 +238,7 @@ opening delimiter, not at EOF.
 
 ```
 #if #elseif #else #endif
-#file #line #column #function #module
+#file #line #column #function #module #expression
 #error("message") #warning("message")
 ```
 
@@ -248,7 +248,7 @@ them and the IDE can offer to switch configurations. The directive lines
 themselves are `Directive` trivia.
 
 A directive must be the first thing on its line, which is what separates it
-from the `#file`-style builtins — those five names are read as builtins
+from the `#file`-style builtins — those six names are read as builtins
 wherever they appear, and any other `#name` at the start of a line is a
 directive, reported as unknown if it is not one of the six above. The condition after `#if` and `#elseif` may
 use identifiers, `true`, `false`, `os(...)`, `arch(...)`, `feature(...)`, `!`,

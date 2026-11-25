@@ -2200,7 +2200,8 @@ internal sealed class Parser {
         for (var offset = 0; offset < 64; offset++) {
             switch (Peek(offset).Kind) {
                 case SyntaxKind.InKeyword:
-                    return true;
+                    // 'in:' is a label, of a call the body starts with.
+                    return Peek(offset + 1).Kind != SyntaxKind.ColonToken;
 
                 case SyntaxKind.IdentifierToken:
                 case SyntaxKind.UnderscoreToken:

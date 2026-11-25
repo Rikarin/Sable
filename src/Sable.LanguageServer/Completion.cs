@@ -271,7 +271,7 @@ public sealed partial class LanguageServer {
             case BoundCall call:
                 chosen = call.Function;
                 break;
-            case BoundConversion { Operand: BoundCall call }:
+            case { } bound when SemanticModel.Unconverted(bound) is BoundCall call:
                 chosen = call.Function;
                 break;
         }

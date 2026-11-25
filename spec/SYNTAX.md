@@ -1792,7 +1792,12 @@ unreachable()                              // -> Never
 
 Each reports the place it was called from: a parameter whose default is
 `#file`, `#line`, `#column` or `#function` takes the call's place, not its
-own.
+own. One whose default is `#expression` is given what the call's first
+argument is written as and the value each part of it had as it was worked out,
+in a class with `static fn begin()` and `fn note<T>(_ text: String, _ value: T)
+-> T` (Sable.Testing's `CapturedExpression`): how `expect(a.count == 2)` says
+what `a.count` was. A default and nothing else, and not the first parameter's
+(S3517).
 
 `assert` checks only where `DEBUG` is defined (an unoptimised build, or a
 profile with `debug-assertions`), in the library's code as in the
@@ -1980,7 +1985,7 @@ an optimised one; never both. A package's profile may choose with
 | `@extern("c", "name")` | fn | Foreign import |
 | `@export("name")` | fn, var | Foreign export |
 | `@packed` / `@align(16)` | struct | Layout control |
-| `@test` / `@bench` | fn | Collected by `sable test` / `sable bench` |
+| `@test` / `@bench` | fn | Collected by `sable test` / `sable bench`; `@test` may say `arguments: [...]`, `tags: [...]`, `timeout: .seconds(5)` and `traps` (docs/05 §5.1) |
 | `@fuzz` | fn taking `U8[:]` | A fuzz target, run by `sable fuzz` under libFuzzer: it fails by trapping or throwing |
 | `@main` | fn | Program entry point: a module-level fn taking nothing and returning nothing or an `Int` exit status, one per module (S3514) |
 | `@generator("name", members: [...], always: true)` | fn in `generators/` | A source generator, run for declarations marked `@name`; `members` are the attributes it reads on fields, cases and parameters; `always` runs a package generator for every package (docs/08) |

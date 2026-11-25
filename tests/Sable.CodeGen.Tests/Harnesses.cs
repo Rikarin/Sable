@@ -64,7 +64,7 @@ internal static class Harnesses {
             var output = new StringWriter();
             var errors = new StringWriter();
             var status = TestRunner.Run(executable, [], Environment.ProcessorCount, limit, output, errors,
-                new Dictionary<string, string> { ["SABLE_CHECK_LEAKS"] = "1" });
+                new Dictionary<string, string> { ["SABLE_CHECK_LEAKS"] = "1", ["SABLE_TEST_ROOT"] = Root });
             return new(output.ToString(), errors.ToString(), status);
         } finally {
             Platform.DeleteExecutable(executable);

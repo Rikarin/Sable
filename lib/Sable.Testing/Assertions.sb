@@ -18,6 +18,9 @@ fn stopTest() throws(TestFailure) {
 /// for it in a failed test's errors.
 let failureMarker = "assertion failed: "
 
+/// The marker a failed expectation's report starts with.
+let expectationMarker = "expectation failed: "
+
 /// Ends the test, failed, saying why.
 public fn fail(_ message: String) {
     Runtime.writeError(failureMarker + message + "\n")

@@ -1,0 +1,239 @@
+module HarnessTests
+
+// What a test may say beyond an assertion (Sable.Testing) — expectations,
+// death tests, snapshots, cases — as a test of them sees it; what each says
+// when it fails is in tests/Sable.CodeGen.Tests/TestFeatureTests.cs. Run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Testing
+
+@derive(Equatable, Debug)
+union Oops: Error {
+    Bad
+    Worse(Int)
+}
+
+fn fail(_ n: Int) throws(Oops) -> Int {
+    if n > 1 {
+        throw .Worse(n)
+    }
+    if n == 1 {
+        throw .Bad
+    }
+    return n
+}
+
+@test
+async fn whatIsThrownIsGiven() {
+    expect(expectThrows(Oops.self) { _ = try fail(3) } == Oops.Worse(3))
+    expectThrows(Oops.Bad) { _ = try fail(1) }
+    expect(expectNoThrow { try fail(0) } == 0)
+    await expectThrows(Oops.self) {
+        await Task.yield()
+        _ = try fail(1)
+    }
+    await expectThrows(Oops.Worse(2)) {
+        await Task.yield()
+        _ = try fail(2)
+    }
+    let got = await expectNoThrow {
+        await Task.yield()
+        return try fail(0)
+    }
+    expect(got == 0)
+}
+
+// A test that fails in the way it is asked to, by a variable, and passes when
+// it is not asked: run by 'whatAFailureSays', in a process of its own.
+@test
+async fn fails() {
+    let n = 3
+    let missing: Int? = none
+    let numbers = [1, 2, 3]
+    switch Runtime.environment("SABLE_TESTING_FAILS") ?? "" {
+        case "expect": expect(1 + 1 == n, "not so")
+        case "tried": expect((try? fail(n - 3)) == n)
+        case "parts": expect(numbers.count > n || numbers[0] == 2)
+        case "require": _ = require(missing)
+        case "require that": require(n == 4, "why")
+        case "record": recordFailure("first line\nsecond line")
+        case "throws":
+            expectThrows(Oops.self, "why") { }
+        case "throws another":
+            expectThrows(ParseError.self) { _ = try fail(1) }
+        case "throws later":
+            await expectThrows(Oops.self) { await Task.yield() }
+        case "throws one":
+            expectThrows(Oops.Worse(1)) { _ = try fail(1) }
+        case "throws none":
+            expectThrows(Oops.Bad) { _ = try fail(0) }
+        case "throws none later":
+            await expectThrows(Oops.Bad) { await Task.yield() }
+        case "no throw":
+            expectNoThrow { _ = try fail(1) }
+        case "no throw later":
+            _ = await expectNoThrow {
+                await Task.yield()
+                return try fail(1)
+            }
+        case "returns":
+            expectPanic("that") { _ = numbers.count }
+        case "traps":
+            expectPanic("this") { fatalError("that") }
+        case "exits":
+            expectPanic { Runtime.exit(4) }
+        case "exits otherwise":
+            expectExit(5) { Runtime.exit(6) }
+        case "does not exit":
+            expectExit(5) { _ = numbers.count }
+        case "property":
+            forAll { (n: U16) in expect(n < 10) }
+        case "property throws":
+            forAll(Gen.number(in: 0...9)) { (n: Int) in
+                if n > 2 {
+                    throw Oops.Worse(n)
+                }
+            }
+        case "property traps":
+            forAll { (xs: Int[>..], i: U8) in
+                if xs.count > 2 {
+                    _ = xs[Int(i)]
+                }
+            }
+        case "property later":
+            await forAll { (n: Int) in
+                await Task.yield()
+                expect(n < 99)
+            }
+        case "property of three":
+            forAll { (a: U8, b: Bool, s: String) in expect(a < 7 || b || s.count < 2) }
+        case "seeded":
+            forAll { (b: Bool) in expect(b) }
+        case "filtered out":
+            forAll(Gen.arbitrary(Bool.self).filter { b in b && !b }) { (b: Bool) in expect(b) }
+        case "flaky":
+            forAll { (b: Bool) in expect(timesRun() != 1) }
+        case "snapshot": assertSnapshot("x", function: "missing")
+        case "snapshot differs": assertSnapshot("a\nc", named: "ab", function: "kept")
+        default: break
+    }
+}
+
+// How often it was called.
+let calls: Atomic<Int> = Atomic(0)
+
+fn timesRun() -> Int {
+    return calls.add(1) + 1
+}
+
+@test(arguments: [
+    ("expect", "expectation failed: 1 + 1 == n: not so ("),
+    ("expect", "       left: 2\n      right: 3\n"),
+    ("tried", "       left: 0\n      right: 3\n"),
+    ("parts", "    numbers: [1, 2, 3]\n    numbers.count: 3\n    n: 3\n    numbers.count > n: false\n    numbers[0]: 1\n    numbers[0] == 2: false\n"),
+    ("require", "expectation failed: missing: there is no value"),
+    ("require that", "expectation failed: n == 4: why"),
+    ("record", "expectation failed: first line ("),
+    ("throws", "expectation failed: nothing was thrown: why"),
+    ("throws another", "expectation failed: another error was thrown: Oops.Bad"),
+    ("throws later", "expectation failed: nothing was thrown"),
+    ("throws one", "expectation failed: 'Oops.Bad' was thrown, and 'Oops.Worse(1)' was to be"),
+    ("throws none", "expectation failed: nothing was thrown, and 'Oops.Bad' was to be"),
+    ("throws none later", "expectation failed: nothing was thrown, and 'Oops.Bad' was to be"),
+    ("no throw", "expectation failed: an error was thrown: Oops.Bad"),
+    ("no throw later", "expectation failed: an error was thrown: Oops.Bad"),
+    ("returns", "expectation failed: the body was to trap with 'that', and it returned"),
+    ("traps", "expectation failed: the body trapped, but not with 'this'"),
+    ("exits", "expectation failed: the body was to trap, and it ended the process with status 4"),
+    ("exits otherwise", "expectation failed: the body was to end the process with status 5, and it was 6"),
+    ("does not exit", "expectation failed: the body was to end the process with status 5, and it returned"),
+    ("property", "expectation failed: the property does not hold of 10"),
+    ("property throws", "expectation failed: the body threw an error: Oops.Worse(3)"),
+    ("property traps", "expectation failed: the property does not hold of [0, 0, 0], 3"),
+    ("property later", "expectation failed: the property does not hold of 99"),
+    ("property of three", "expectation failed: the property does not hold of 7, false, \"aa\""),
+    ("property", "of seed 42: 'sable test --seed 42' runs it again"),
+    ("seeded", "SABLE_TEST_SEED is 'none', which is not a number"),
+    ("filtered out", "expectation failed: too few values were let through"),
+    ("flaky", "it held when it was run again"),
+    ("snapshot", "there is no snapshot '__snapshots__/HarnessTests.missing.snap'"),
+    ("snapshot differs", "  a\n- b\n+ c"),
+])
+fn whatAFailureSays(_ which: String, _ said: String) {
+    let program = Runtime.executablePath()
+    if program.isEmpty {
+        return
+    }
+    // The test is a process's only one.
+    unsafe {
+        _ = Runtime.setEnvironment("SABLE_TESTING_FAILS", which)
+        _ = Runtime.setEnvironment("SABLE_UPDATE_SNAPSHOTS", "0")
+        _ = Runtime.setEnvironment("SABLE_TEST_SEED", which == "seeded" ? "none" : "42")
+    }
+    _ = require(Runtime.run(program, ["--run-test", "HarnessTests.fails"], ""))
+    let errors = Runtime.lastErrorOutput()
+    expect(Runtime.lastExitStatus() == 134, errors)
+    expect(errors.contains(said))
+}
+
+@test
+async fn aProcessThatEndsIsSeenToEnd() {
+    let numbers = [1, 2, 3]
+    let end = expectPanic("out of range") { print(numbers[3]) }
+    expect(end?.message == "array index out of range" && end?.status == 134)
+    let exit = expectExit(7) {
+        print("out")
+        Runtime.exit(7)
+    }
+    expect(exit?.message == "" && exit?.output == "out\n")
+    await expectPanic("in the end") {
+        await Task.yield()
+        fatalError("in the end")
+    }
+    await expectExit(0) {
+        await Task.yield()
+        Runtime.exit(0)
+    }
+}
+
+// A trap in a property's case is shrunk in processes of its own; here, one
+// within a process, which is said as it is.
+@test
+fn aPropertyThatTraps() {
+    let ended = expectPanic("integer overflow") {
+        forAll(Gen.number(in: 0 as U8...255)) { (n: U8) in _ = n + 1 }
+    }
+    expect(ended == none || ended.errors.contains("the property does not hold of 255"))
+}
+
+@test(arguments: ["", "a b/c", "name"])
+fn aSnapshotIsOfItsCase(_ text: String) {
+    assertSnapshot(text)
+    assertSnapshot([text], named: "in an array")
+    assertSnapshot(text + "\n" + text)
+}
+
+@test
+fn aCaseIsNamedForItsArguments() {
+    let cases: () -> TestArguments[>..] = () => [
+        TestArguments("1, \"x\"", () => { return none }),
+        TestArguments("1, \"x\"", () => { return "thrown" }),
+        TestArguments("é".repeated(130), () => { return none }),
+    ]
+    let test = TestCase { name: "S.t", location: "s.sb:1", run: () => { return none }, traps: "x", tags: ["t"], timeLimit: 5, cases: cases }
+    let all = test.expanded()
+    expect(all.map({ $0.name }) == ["S.t(1, \"x\")", "S.t(1, \"x\")#2", "S.t(\("é".repeated(120))…)"])
+    expect(all[0].traps == "x" && all[0].tags == ["t"] && all[0].timeLimit == 5 && all[0].cases == none)
+    expect(all[0].expanded().count == 1)
+}
+
+@test(arguments: [1, 2], ["a", "b"], tags: ["cases"], timeout: .minutes(5))
+async fn everyPairOfTwoArraysIsACase(_ n: Int, _ letter: String) {
+    await Task.yield()
+    expect(n > 0 && letter.count == 1)
+}
+
+@test(arguments: [0], traps: "division")
+fn aCaseMayHaveToTrap(_ n: Int) {
+    print(1 / n)
+}

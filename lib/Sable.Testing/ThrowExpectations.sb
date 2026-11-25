@@ -1,0 +1,106 @@
+module Sable.Testing
+
+// What a body should throw, and that it should not.
+
+/// Fails the test unless the body throws an error of the type, and gives
+/// the error. The test goes on.
+///
+/// ```sable
+/// let error = expectThrows(ParseError.self) { _ = try Int.parse("12x") }
+/// expect(error?.description() == "not a digit at 2")
+/// ```
+@discardable
+public fn expectThrows<E>(_ type: E.Type, _ message: String = "", file: String = #file, line: Int = #line, _ body: () throws -> Void) -> E? {
+    do {
+        try body()
+    } catch {
+        return thrown(error, message, file, line)
+    }
+    recordFailure("nothing was thrown\(said(message))", file: file, line: line)
+    return none
+}
+
+/// The same of a body that waits.
+@discardable
+public async fn expectThrows<E>(_ type: E.Type, _ message: String = "", file: String = #file, line: Int = #line, _ body: async () throws -> Void) -> E? {
+    do {
+        try await body()
+    } catch {
+        return thrown(error, message, file, line)
+    }
+    recordFailure("nothing was thrown\(said(message))", file: file, line: line)
+    return none
+}
+
+/// Fails the test unless the body throws this very error. The test goes on.
+///
+/// ```sable
+/// expectThrows(ParseError.Empty) { _ = try Int.parse("") }
+/// ```
+public fn expectThrows<E: Equatable>(_ expected: E, _ message: String = "", file: String = #file, line: Int = #line, _ body: () throws -> Void) {
+    do {
+        try body()
+        recordFailure("nothing was thrown, and '\(expected:?)' was to be\(said(message))", file: file, line: line)
+    } catch {
+        isExpected(error, expected, message, file, line)
+    }
+}
+
+/// The same of a body that waits.
+public async fn expectThrows<E: Equatable>(_ expected: E, _ message: String = "", file: String = #file, line: Int = #line, _ body: async () throws -> Void) {
+    do {
+        try await body()
+        recordFailure("nothing was thrown, and '\(expected:?)' was to be\(said(message))", file: file, line: line)
+    } catch {
+        isExpected(error, expected, message, file, line)
+    }
+}
+
+/// Fails the test unless the body ends without throwing, and gives what it
+/// made. The test goes on.
+///
+/// ```sable
+/// expect(expectNoThrow { try Int.parse("12") } == 12)
+/// ```
+@discardable
+public fn expectNoThrow<T>(_ message: String = "", file: String = #file, line: Int = #line, _ body: () throws -> T) -> T? {
+    do {
+        return try body()
+    } catch {
+        recordFailure("an error was thrown: \(error)\(said(message))", file: file, line: line)
+        return none
+    }
+}
+
+/// The same of a body that waits.
+@discardable
+public async fn expectNoThrow<T>(_ message: String = "", file: String = #file, line: Int = #line, _ body: async () throws -> T) -> T? {
+    do {
+        return try await body()
+    } catch {
+        recordFailure("an error was thrown: \(error)\(said(message))", file: file, line: line)
+        return none
+    }
+}
+
+fn said(_ message: String) -> String {
+    return message.isEmpty ? "" : ": \(message)"
+}
+
+// The error, when it is one of the type; otherwise the test fails.
+fn thrown<E>(_ error: any Error, _ message: String, _ file: String, _ line: Int) -> E? {
+    if let wanted = error as? E {
+        return wanted
+    }
+    recordFailure("another error was thrown: \(error)\(said(message))", file: file, line: line)
+    return none
+}
+
+fn isExpected<E: Equatable>(_ error: any Error, _ expected: E, _ message: String, _ file: String, _ line: Int) {
+    if let same = error as? E {
+        if same == expected {
+            return
+        }
+    }
+    recordFailure("'\(error)' was thrown, and '\(expected:?)' was to be\(said(message))", file: file, line: line)
+}

@@ -40,6 +40,9 @@ public abstract class HarnessCommand : Command {
     /// <summary>The directory of what is built: the workspace's root, or the first file's.</summary>
     protected string ProgramDirectory { get; private set; } = ".";
 
+    /// <summary>'--bless': what is compared with a file is written to it instead.</summary>
+    protected bool Bless { get; private set; }
+
     /// <summary>What the command line asked for.</summary>
     protected sealed record Options(
         IReadOnlyList<string> Files,
@@ -138,6 +141,7 @@ public abstract class HarnessCommand : Command {
         // written there and kept, for a debugger to start.
         var executable = options.Output ?? Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}{NativeTarget.Host.ExecutableSuffix}");
         ProgramDirectory = program.Directory;
+        Bless = options.Bless;
         try {
             var code = Build(program.Trees, program.Directory, options, executable, program.Cache, program.Link, program.LinkInputs)
                 ?? (options.Output is null ? Execute(executable, options.HarnessArguments) : 0);
@@ -188,7 +192,9 @@ public abstract class HarnessCommand : Command {
 
             var parseOptions = Pipeline.ParseOptionsFor(options.Optimise);
             var directory = Path.GetDirectoryName(Path.GetFullPath(options.Files[0]))!;
-            return ([..options.Files.Select(f => SyntaxTree.Parse(new SourceText(File.ReadAllText(f), Path.GetFileName(f)), parseOptions))],
+            // Each file by its name, from the first one's directory: those
+            // under it or beside it are told apart.
+            return ([..options.Files.Select(f => SyntaxTree.Parse(new SourceText(File.ReadAllText(f), Path.GetRelativePath(directory, Path.GetFullPath(f)).Replace('\\', '/')), parseOptions))],
                 directory, null, [], "", Path.Combine(directory, "target"));
         }
 

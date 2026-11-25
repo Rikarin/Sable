@@ -544,6 +544,27 @@ public sealed class LanguageServerTests : IDisposable {
         Assert.Contains("ok: @autoclosure () -> Bool", hover.Get("contents")!.Value.GetString("value"), StringComparison.Ordinal);
     }
 
+    /// <summary>A call given '#expression' is bound inside what captures it, and is the call all the same (#73).</summary>
+    [Fact]
+    public async Task ACallThatCapturesItsExpressionIsTheCall() {
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/captured.sb";
+        const string text = "module App\n\nfinal class Told {\n    static fn begin() -> Told { return Told() }\n    fn note<T>(_ text: String, _ value: T) -> T { return value }\n}\n\n"
+            + "fn check(_ no: Int) { }\nfn check(_ ok: Bool, why: String = \"\", told: Told = #expression) { }\n\nfn main() {\n    let count = 1\n    check(count == 2, why: \"no\")\n}\n";
+        await client.OpenAsync(uri, text);
+        var help = await client.AtAsync("textDocument/signatureHelp", uri, text, At(text, "check(count", 6));
+        Assert.Equal(1, help.GetInt("activeSignature"));
+
+        var definition = await client.AtAsync("textDocument/definition", uri, text, At(text, "check(count", 1));
+        var start = definition.Get("range")!.Value.Get("start")!.Value;
+        Assert.Equal(8, start.GetInt("line"));
+        var hover = await client.AtAsync("textDocument/hover", uri, text, At(text, "count == 2", 1));
+        Assert.Contains("count: Int", hover.Get("contents")!.Value.GetString("value"), StringComparison.Ordinal);
+        var references = await client.AtAsync("textDocument/references", uri, text, At(text, "why: String", 1), new { context = new { includeDeclaration = false } });
+        Assert.Equal(1, references.GetArrayLength());
+    }
+
     // ---- A workspace with the library's source -------------------------------
 
     /// <summary>

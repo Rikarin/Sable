@@ -15,7 +15,8 @@ import Sable.Collections
 // '--run-test <name>'), so a trap — an assertion's, or an index out of
 // range — fails that test and no other.
 
-/// One '@test' function, as the compiler's entry point lists it.
+/// One '@test' function, as the compiler's entry point lists it; or one
+/// case of a '@test(arguments:)' function, which it makes a test each of.
 public struct TestCase {
     /// Qualified: 'Module.function'.
     public var name: String
@@ -27,18 +28,117 @@ public struct TestCase {
     /// '@test(traps)': none for a test that must not trap; for one that
     /// must, what the trap's message must contain ("" for any trap).
     public var traps: String?
+    /// '@test(tags:)': what a filter may ask for it by.
+    public var tags: String[>..]
+    /// '@test(timeout:)': how long it may run, in nanoseconds; 0 for as
+    /// long as it takes.
+    public var timeLimit: Int
+    /// '@test(arguments:)': its cases, worked out when asked; none for a
+    /// test that is one.
+    public var cases: (() -> TestArguments[>..])?
 }
 
-/// Runs the test, failing it if it throws, and saying what it threw.
+/// One case of a '@test(arguments:)' test: the arguments, written out, and
+/// the test run with them.
+public struct TestArguments {
+    public var description: String
+    public var run: async () -> String?
+
+    public init(_ description: String, _ run: @escaping async () -> String?) {
+        self.description = description
+        self.run = run
+    }
+}
+
+/// What a test's argument is called in its case's name.
+public fn describeArgument<T>(_ value: T) -> String {
+    return "\(value:?)"
+}
+
+extension TestCase {
+    /// The test's cases, each a test named after it and its arguments —
+    /// 'Suite.parses("1.5", 1.5)' — or the test itself, when it takes none.
+    /// Two cases of the same name are told apart by a number.
+    ///
+    /// ```sable
+    /// let cases: () -> TestArguments[>..] = () => [
+    ///     TestArguments("1", () => { return none }),
+    ///     TestArguments("1", () => { return none }),
+    ///     TestArguments("a\nb", () => { return none }),
+    /// ]
+    /// let test = TestCase { name: "S.t", location: "s.sb:1", run: () => { return none }, traps: none, tags: [], timeLimit: 0, cases: cases }
+    /// assert(test.expanded().map({ $0.name }) == ["S.t(1)", "S.t(1)#2", "S.t(a b)"])
+    /// ```
+    public fn expanded() -> TestCase[>..] {
+        guard let cases = cases else {
+            return [self]
+        }
+        let test = name
+        Runtime.setTrapHook({ message, site, frames in
+            Runtime.writeError("fatal error: \(message)\n\(site.isEmpty ? "" : "  at \(site)\n")  working out the arguments of \(test)\n")
+        })
+        let all = cases()
+        _ = Runtime.takeTrapHook(otherwise: { message, site, frames in })
+        var seen = Dictionary<String, Int>()
+        var expanded: TestCase[>..] = []
+        for arguments in all {
+            var one = self
+            one.cases = none
+            one.run = arguments.run
+            one.name = "\(name)(\(nameable(arguments.description)))"
+            let times = (seen[one.name] ?? 0) + 1
+            seen[one.name] = times
+            if times > 1 {
+                one.name = "\(one.name)#\(times)"
+            }
+            expanded.append(one)
+        }
+        return expanded
+    }
+
+    /// The '@test' function's name, of it or of one of its cases.
+    var function: String {
+        get {
+            if let parenthesis = name.firstIndex(of: '(') {
+                return name[..<parenthesis].toString()
+            }
+            return name
+        }
+    }
+}
+
+// A name on one line, and not a long one: an argument's description is its
+// value's, which may be neither.
+fn nameable(_ description: String) -> String {
+    let name = TextBuilder()
+    var count = 0
+    for c in description {
+        if count == 120 {
+            name.append("…")
+            break
+        }
+        name.append(String.fromChar(c < ' ' || c == '\u{7F}' ? ' ' : c))
+        count += 1
+    }
+    return name.build()
+}
+
+/// Runs the test, failing it if it throws, and saying what it threw; or if
+/// an expectation of it failed, which has said so.
 async fn runOne(_ test: TestCase) {
+    TestState.begin(test.name)
     if let thrown = await test.run() {
         fail("the test threw an error: \(thrown)")
+    }
+    if TestState.failed.load() > 0 {
+        endFailedTest()
     }
 }
 
 /// What the harness was asked to do.
 struct TestOptions {
     var filters: String[>..]
+    var expression: TestFilter?
     var list: Bool
     var describe: Bool
     var inProcess: Bool
@@ -48,7 +148,7 @@ struct TestOptions {
 }
 
 fn parseTestOptions() -> TestOptions? {
-    var options = TestOptions { filters: [], list: false, describe: false, inProcess: false, only: none, showOutput: false, exact: false }
+    var options = TestOptions { filters: [], expression: none, list: false, describe: false, inProcess: false, only: none, showOutput: false, exact: false }
     var i = 0
     let count = Runtime.argumentCount()
     while i < count {
@@ -66,8 +166,26 @@ fn parseTestOptions() -> TestOptions? {
         } else if argument == "--run-test" && i + 1 < count {
             options.only = Runtime.argument(i + 1)
             i = i + 1
+        } else if argument == "--role" && i + 1 < count {
+            TestState.role = Runtime.argument(i + 1)
+            i = i + 1
+        } else if argument == "--seed" && i + 1 < count {
+            guard let seed = try? U64.parse(Runtime.argument(i + 1)) else {
+                Runtime.writeError("'--seed' wants a number, not '\(Runtime.argument(i + 1))'\n")
+                return none
+            }
+            TestState.seed = seed
+            i = i + 1
+        } else if argument == "--filter" && i + 1 < count {
+            do {
+                options.expression = try TestFilter(Runtime.argument(i + 1))
+            } catch {
+                Runtime.writeError("'--filter \(Runtime.argument(i + 1))': \(error.message)\n")
+                return none
+            }
+            i = i + 1
         } else if argument.hasPrefix("--") {
-            Runtime.writeError("unknown option '\(argument)'\nusage: <harness> [filter...] [--list] [--exact] [--show-output] [--in-process] [--run-test <name>]\n")
+            Runtime.writeError("unknown option '\(argument)'\nusage: <harness> [filter...] [--filter <expression>] [--list] [--exact] [--show-output] [--in-process] [--seed <n>] [--run-test <name>]\n")
             return none
         } else {
             options.filters.append(argument)
@@ -77,14 +195,34 @@ fn parseTestOptions() -> TestOptions? {
     return options
 }
 
-/// Whether the name is selected: by any of the filters, as a part of it (or
-/// all of it, with '--exact'); every name is, with none.
-fn selected(_ name: String, _ filters: String[>..], _ exact: Bool) -> Bool {
-    if filters.count == 0 {
+/// Whether the test is selected: by the filter, and by any of the names, as
+/// a part of its own (or all of it, or of its function's, with '--exact');
+/// every test is, with none.
+fn selected(_ test: TestCase, _ options: TestOptions) -> Bool {
+    if let filter = options.expression {
+        if !filter.matches(test) {
+            return false
+        }
+    }
+    if options.filters.count == 0 {
         return true
     }
-    for filter in filters {
-        if exact ? name == filter : name.contains(filter) {
+    for filter in options.filters {
+        if options.exact ? test.name == filter || test.function == filter : test.name.contains(filter) {
+            return true
+        }
+    }
+    return false
+}
+
+/// Whether the tests of a function may be selected: not, when '--exact'
+/// names other ones, and then its cases are not worked out.
+fn mayBeSelected(_ test: TestCase, _ options: TestOptions) -> Bool {
+    if !options.exact || options.filters.isEmpty {
+        return true
+    }
+    for filter in options.filters {
+        if filter == test.name || filter.hasPrefix(test.name + "(") {
             return true
         }
     }
@@ -106,9 +244,17 @@ public async fn runTests(_ tests: TestCase[>..]) -> Int {
     // One test, in this process, for the harness that started it.
     if let name = options.only {
         for test in tests {
-            if test.name == name {
+            if test.name == name && test.cases == none {
                 await runOne(test)
                 return 0
+            }
+            if test.cases != none && name.hasPrefix(test.name + "(") {
+                for one in test.expanded() {
+                    if one.name == name {
+                        await runOne(one)
+                        return 0
+                    }
+                }
             }
         }
         Runtime.writeError("no test named '\(name)'\n")
@@ -116,12 +262,20 @@ public async fn runTests(_ tests: TestCase[>..]) -> Int {
     }
 
     var chosen: TestCase[>..] = []
+    var filteredOut = 0
     for test in tests {
-        if selected(test.name, options.filters, options.exact) {
-            chosen.append(test)
+        if !mayBeSelected(test, options) {
+            filteredOut += 1
+            continue
+        }
+        for one in test.expanded() {
+            if selected(one, options) {
+                chosen.append(one)
+            } else {
+                filteredOut += 1
+            }
         }
     }
-    let filteredOut = tests.count - chosen.count
 
     if options.list {
         for test in chosen {
@@ -131,13 +285,15 @@ public async fn runTests(_ tests: TestCase[>..]) -> Int {
         return 0
     }
 
-    // For 'sable test': a line a test, its name, place and expected trap,
-    // separated by tabs; '-' for a test that must not trap.
+    // For 'sable test': a line a test, its name, place, expected trap ('-'
+    // for a test that must not trap), time limit and tags, separated by
+    // tabs; and last how many were left out.
     if options.describe {
         for test in chosen {
             let traps = test.traps ?? "-"
-            print("\(test.name)\t\(test.location)\t\(traps)")
+            print("\(test.name)\t\(test.location)\t\(traps)\t\(test.timeLimit)\t\(test.tags.joined(separator: ","))")
         }
+        print("filtered out\t\(filteredOut)")
         return 0
     }
 
@@ -151,6 +307,7 @@ public async fn runTests(_ tests: TestCase[>..]) -> Int {
     if options.inProcess || program.count == 0 {
         var ignored = 0
         for test in chosen {
+            TestState.isAlone = false
             if test.traps != none {
                 ignored = ignored + 1
                 print("test \(test.name) ... ignored (it must trap, which only a process of its own can)")
@@ -170,7 +327,7 @@ public async fn runTests(_ tests: TestCase[>..]) -> Int {
     var reports: String[>..] = []
     for test in chosen {
         let begun = Runtime.monotonicNanoseconds()
-        let output = Runtime.run(program, ["--run-test", test.name], "")
+        let output = Runtime.run(program, ["--run-test", test.name, "--seed", "\(TestState.seed)"], "")
         let took = Runtime.monotonicNanoseconds() - begun
         let status = output == none ? -1 : Runtime.lastExitStatus()
         let errors = output == none ? "" : Runtime.lastErrorOutput()
@@ -223,13 +380,21 @@ public fn verdict(_ test: TestCase, _ status: Int, _ errors: String) -> String? 
     if status == 0 {
         return "the test was to trap\(trapWanted(expected)), and it returned"
     }
-    if status < 0 || ("\n" + errors).contains("\n" + failureMarker) {
+    if status < 0 || hasFailed(errors) {
         return ""
     }
     if expected.count > 0 && !errors.contains(expected) {
         return "the test trapped, but not with '\(expected)'"
     }
     return none
+}
+
+/// Whether the errors hold a failed assertion's report, or a failed
+/// expectation's: a line that starts with its marker. Sable.Core's 'assert'
+/// says the same after 'fatal error: '.
+fn hasFailed(_ errors: String) -> Bool {
+    let lines = "\n" + errors
+    return lines.contains("\n" + failureMarker) || lines.contains("\n" + expectationMarker)
 }
 
 fn trapWanted(_ expected: String) -> String {
@@ -247,19 +412,16 @@ fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: St
     if output.count > 0 {
         report.append("\nstdout:\n" + indented(output))
     }
-    // An assertion's own trap says nothing its report has not. Its report
-    // starts a line: Sable.Core's 'assert' says the same after 'fatal error: '.
-    var shown = errors
-    if ("\n" + errors).contains("\n" + failureMarker) {
-        shown = withoutAssertionTrap(errors)
-    }
+    // An assertion's own trap says nothing its report has not.
+    let reported = hasFailed(errors)
+    let shown = reported ? withoutAssertionTrap(errors) : errors
     if shown.count > 0 {
         report.append("\n" + indented(shown))
     }
     if why.count > 0 {
         report.append("\n    \(why)")
     }
-    if !("\n" + errors).contains("\n" + failureMarker) {
+    if !reported {
         report.append("\n    (exit status \(status))")
     }
     return report.build()

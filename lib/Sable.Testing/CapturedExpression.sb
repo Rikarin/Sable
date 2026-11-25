@@ -1,0 +1,139 @@
+module Sable.Testing
+
+import Sable.Text
+
+/// An expression as it was written and the values its parts had, which a
+/// parameter whose default is '#expression' is given: what 'expect' and
+/// 'require' say of a condition that did not hold. A part is described only
+/// if the report asks, as it is by then.
+///
+/// ```sable
+/// fn written(_ condition: Bool, _ captured: CapturedExpression = #expression) -> String {
+///     return captured.text
+/// }
+/// let names = ["a", "b"]
+/// assert(written(names.count == 3) == "names.count == 3")
+/// ```
+public final class CapturedExpression {
+    // Every part whose value is told, as it was worked out: the whole
+    // expression is the last.
+    var texts: String[>..]
+    var values: (() -> String)[>..]
+
+    init() {
+        texts = []
+        values = []
+    }
+
+    /// One nothing has been worked out for: what a call that leaves off a
+    /// '#expression' starts with.
+    public static fn begin() -> CapturedExpression {
+        return CapturedExpression()
+    }
+
+    /// Keeps the value of a part, written so, and gives it back.
+    public fn note<T>(_ text: String, _ value: T) -> T {
+        texts.append(text)
+        values.append(() => "\(value:?)")
+        return value
+    }
+
+    /// The whole expression, as it was written; empty when it was not
+    /// worked out.
+    public var text: String => texts.isEmpty ? "" : texts[texts.count - 1]
+
+    /// Each part and its value, inner parts before those they are in, one
+    /// that is its own value — a literal — and the whole left out.
+    ///
+    /// ```sable
+    /// fn parts(_ condition: Bool, _ captured: CapturedExpression = #expression) -> (String, String)[>..] {
+    ///     return captured.parts
+    /// }
+    /// let names = ["a", "b"]
+    /// let told = parts(names.count == 3)
+    /// assert(told.count == 2)
+    /// assert(told[0].0 == "names" && told[0].1 == "[\"a\", \"b\"]")
+    /// assert(told[1].0 == "names.count" && told[1].1 == "2")
+    /// ```
+    public var parts: (String, String)[>..] {
+        get {
+            var told: (String, String)[>..] = []
+            var i = 0
+            while i + 1 < texts.count {
+                let text = texts[i]
+                let value = values[i]()
+                if text != value && !CapturedExpression.contains(told, text, value) {
+                    told.append((text, value))
+                }
+                i += 1
+            }
+            return told
+        }
+    }
+
+    static fn contains(_ told: (String, String)[>..], _ text: String, _ value: String) -> Bool {
+        for (other, its) in told {
+            if other == text && its == value {
+                return true
+            }
+        }
+        return false
+    }
+
+    // Where the two sides of an expression that says they are equal are kept;
+    // none for any other.
+    var sides: (Int, Int)? {
+        get {
+            // 'try f() == 3' is the sides' comparison, tried.
+            var whole = text
+            for word in ["try! ", "try? ", "try ", "await "] {
+                if whole.hasPrefix(word) {
+                    whole = whole.slice(from: word.count, to: whole.count)
+                }
+            }
+            var right = texts.count - 2
+            while right > 0 {
+                var left = right - 1
+                while left >= 0 {
+                    if CapturedExpression.isEquality(whole, texts[left], texts[right]) {
+                        return (left, right)
+                    }
+                    left -= 1
+                }
+                right -= 1
+            }
+            return none
+        }
+    }
+
+    // Either side may be written in parentheses, which are no part of it.
+    static fn isEquality(_ whole: String, _ left: String, _ right: String) -> Bool {
+        for first in [left, "(\(left))"] {
+            if whole == "\(first) == \(right)" || whole == "\(first) == (\(right))" {
+                return true
+            }
+        }
+        return false
+    }
+
+    // What a failed expectation says after what was to hold, a line each:
+    // for an equality, where its two sides first differ; what its parts were.
+    fn details() -> String {
+        let report = TextBuilder()
+        var compared: (String, String)[>..] = []
+        if let (left, right) = sides {
+            let leftValue = values[left]()
+            let rightValue = values[right]()
+            compared = [(texts[left], leftValue), (texts[right], rightValue)]
+            if leftValue != rightValue {
+                report.append(indented(differenceReport(leftValue, rightValue)) + "\n")
+            }
+        }
+        for (part, value) in parts {
+            if !CapturedExpression.contains(compared, part, value) {
+                report.append("    \(part): \(value)\n")
+            }
+        }
+        return report.build()
+    }
+}

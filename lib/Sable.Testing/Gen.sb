@@ -1,0 +1,221 @@
+module Sable.Testing
+
+/// A way of making arbitrary values, for when a type's own is not what a
+/// property wants: the numbers of a range, one of a few words, an array of
+/// so many. Rust's proptest calls it a strategy, Haskell a `Gen`. Put
+/// together from others, and shrunk with no more said: a value is shrunk by
+/// the choices it was made from.
+///
+/// ```sable
+/// let small = Gen.number(in: 0...9)
+/// let word = Gen.string(of: Gen.element(of: ['a', 'b']), count: 1...3)
+/// forAll(small, word) { (n, text) in
+///     expect(n <= 9 && text.count <= 3)
+/// }
+/// ```
+public struct Gen<T> {
+    let make: (Choices) -> T
+
+    /// The generator whose value is what the body makes of the choices.
+    public init(_ make: @escaping (Choices) -> T) {
+        self.make = make
+    }
+
+    /// A value made from the choices.
+    public fn value(from choices: Choices) -> T {
+        return make(choices)
+    }
+
+    /// Values of a type as it makes them itself.
+    ///
+    /// ```sable
+    /// let few = Gen.arbitrary(Int.self).array(count: 1...5)
+    /// forAll(few) { (numbers: Int[>..]) in expect(!numbers.isEmpty) }
+    /// ```
+    public static fn arbitrary<V: Arbitrary>(_ type: V.Type) -> Gen<V> {
+        return Gen<V>((choices) => V.arbitrary(from: choices))
+    }
+
+    // As 'init' does, whatever the type of the value.
+    static fn making<V>(_ make: @escaping (Choices) -> V) -> Gen<V> {
+        return Gen<V>(make)
+    }
+
+    /// Always the value.
+    public static fn always<V>(_ value: V) -> Gen<V> {
+        return Gen<V>((choices) => value)
+    }
+
+    /// One of the elements, each as likely: the first is the simplest.
+    public static fn element<V>(of elements: V[>..]) -> Gen<V> {
+        precondition(!elements.isEmpty, "there is no element to choose")
+        return Gen<V>((choices) => choices.element(of: elements))
+    }
+
+    /// What one of the generators makes, each as likely: the first's are
+    /// the simplest.
+    public static fn oneOf<V>(_ generators: Gen<V>[>..]) -> Gen<V> {
+        precondition(!generators.isEmpty, "there is no generator to choose")
+        return Gen<V>((choices) => choices.element(of: generators).make(choices))
+    }
+
+    /// What one of the generators makes, each as often as its weight is of
+    /// them all: the first's are the simplest.
+    ///
+    /// ```sable
+    /// let mostlyAscii = Gen.weighted([(9, Gen.element(of: ['a', 'b', 'c'])), (1, Gen.arbitrary(Char.self))])
+    /// ```
+    public static fn weighted<V>(_ generators: (Int, Gen<V>)[>..]) -> Gen<V> {
+        var total = 0
+        for (weight, _) in generators {
+            precondition(weight > 0, "a weight must be positive")
+            total += weight
+        }
+        precondition(total > 0, "there is no generator to choose")
+        let all = total
+        return Gen<V>((choices) => {
+            let chosen = choices.choose(U64(generators.count - 1)) {
+                var left = choices.generator.next(upperBound: all)
+                var at: U64 = 0
+                for (weight, _) in generators {
+                    if left < weight {
+                        break
+                    }
+                    left -= weight
+                    at += 1
+                }
+                return at
+            }
+            return generators[Int(chosen)].1.make(choices)
+        })
+    }
+
+    /// What the body makes of each value.
+    ///
+    /// ```sable
+    /// let even = Gen.number(in: 0...50).map { $0 * 2 }
+    /// ```
+    public fn map<U>(_ body: @escaping (T) -> U) -> Gen<U> {
+        let make = self.make
+        return Gen<U>((choices) => body(make(choices)))
+    }
+
+    /// What the generator the body gives for each value makes: what a value
+    /// is made with depends on another.
+    ///
+    /// ```sable
+    /// // An array, and a place in it.
+    /// let indexed = Gen.number(in: 0...99).array(count: 1...10).flatMap { (all: Int[>..]) in
+    ///     Gen.number(in: 0...all.count - 1).map { (all, $0) }
+    /// }
+    /// forAll(indexed) { pair in expect(pair.1 < pair.0.count) }
+    /// ```
+    public fn flatMap<U>(_ body: @escaping (T) -> Gen<U>) -> Gen<U> {
+        let make = self.make
+        return Gen<U>((choices) => body(make(choices)).make(choices))
+    }
+
+    /// The values the test holds of. One it holds of too few of is better
+    /// made to hold: after a hundred that it does not, the case is given up
+    /// on, and a property that gives up on too many fails.
+    public fn filter(_ test: @escaping (T) -> Bool) -> Gen<T> {
+        let make = self.make
+        return Gen<T>((choices) => {
+            var value = choices.span { make(choices) }
+            var tried = 1
+            while !test(value) {
+                if tried == 100 {
+                    choices.isRejected = true
+                    break
+                }
+                value = choices.span { make(choices) }
+                tried += 1
+            }
+            return value
+        })
+    }
+
+    /// None, or a value.
+    public fn optional() -> Gen<T?> {
+        let make = self.make
+        return Gen<T?>((choices) => {
+            if choices.chance(3, outOf: 4) {
+                return make(choices)
+            }
+            return none
+        })
+    }
+
+    /// An array of as many as the range says.
+    public fn array(count: ClosedRange<Int> = 0...Int.max) -> Gen<T[>..]> {
+        let make = self.make
+        precondition(count.lowerBound >= 0, "a count must not be negative")
+        return Gen<T[>..]>((choices) => {
+            var all: T[>..] = []
+            choices.times(count.lowerBound, count.upperBound) { all.append(make(choices)) }
+            return all
+        })
+    }
+
+    /// A value of each.
+    public fn zip<U>(_ other: Gen<U>) -> Gen<(T, U)> {
+        let make = self.make
+        return Gen.making((choices) => {
+            let first = make(choices)
+            return (first, other.make(choices))
+        })
+    }
+
+    // ---- Of the built-in types -------------------------------------------------
+
+    /// The numbers of the range: the nearest to 0 is the simplest, or the
+    /// lower end when none is near it.
+    ///
+    /// ```sable
+    /// forAll(Gen.number(in: -5...5)) { (n: Int) in expect(n * n <= 25) }
+    /// ```
+    public static fn number<N: FixedWidthInteger>(in range: ClosedRange<N>) -> Gen<N> {
+        let least = range.lowerBound
+        let greatest = range.upperBound
+        // How far the simplest is from each end, as unsigned numbers are.
+        let simplest = least > N.zero ? least : greatest < N.zero ? greatest : N.zero
+        let above = U128.truncating(greatest.wrappingSub(simplest))
+        let below = U128.truncating(simplest.wrappingSub(least))
+        return Gen<N>((choices) => {
+            // Over it, and then under: as likely as there are more of them.
+            let under = below > 0 && (above == 0 || choices.draw(upTo: 1) == 1)
+            let room = U64.truncating(under ? below : above)
+            let offset = N.truncating(U128(arbitraryBits(choices, upTo: room)))
+            return under ? simplest.wrappingSub(offset) : simplest.wrappingAdd(offset)
+        })
+    }
+
+    /// Numbers of the range, its lower end the simplest, and its ends among
+    /// them.
+    public static fn float(in range: ClosedRange<F64>) -> Gen<F64> {
+        let least = range.lowerBound
+        let length = range.upperBound - least
+        let steps: U64 = 1 << 53
+        return Gen<F64>((choices) => {
+            let part = F64(arbitraryBits(choices, upTo: steps)) / F64(steps)
+            return (least + length * part).min(range.upperBound)
+        })
+    }
+
+    /// Any number that is one: no infinity, no NaN.
+    public static fn finite() -> Gen<F64> {
+        return Gen.arbitrary(F64.self).map { $0.isFinite ? $0 : 0.0 }
+    }
+
+    /// Text of as many of the characters as the range says.
+    public static fn string(of characters: Gen<Char>, count: ClosedRange<Int> = 0...Int.max) -> Gen<String> {
+        return characters.array(count: count).map { text(of: $0) }
+    }
+
+    /// Text of ASCII that prints.
+    public static fn ascii(count: ClosedRange<Int> = 0...Int.max) -> Gen<String> {
+        // A letter first, so that it shrinks to 'aaa'.
+        let letters = Gen<Char>((choices) => (32 + (choices.below(95) + 65) % 95) as Char)
+        return Gen.string(of: letters, count: count)
+    }
+}

@@ -1,0 +1,193 @@
+module Sable.Testing
+
+import Sable.Text
+
+// Death tests: a body that should end the process is run in a process of
+// its own. The test is run again there (the harness, '--run-test' and the
+// name) as far as that body, so what comes before the body in the test is
+// done again, and what comes after it is not.
+
+/// How the process a death test's body was run in ended, and what it wrote.
+///
+/// ```sable
+/// let ended = expectPanic { fatalError("no more") }
+/// expect(ended == none || ended.message == "no more")
+/// ```
+public struct ProcessEnd {
+    /// Its exit status: 134 for a trap.
+    public let status: Int
+    /// What it wrote to standard output, the test's before the body too.
+    public let output: String
+    /// What it wrote to standard error in the body.
+    public let errors: String
+
+    /// What it stopped with, 'fatal error: ' left off; empty when it was
+    /// not a trap that ended it.
+    public var message: String {
+        get {
+            for line in errors.lines() {
+                if line.hasPrefix("fatal error: ") {
+                    return line.slice(from: "fatal error: ".count, to: line.count)
+                }
+            }
+            return ""
+        }
+    }
+}
+
+// What the process writes as it comes to the body, and as it leaves it.
+let deathTestBegun = "\u{1}death test begun\n"
+let deathTestReturned = "\u{1}death test returned\n"
+
+/// Fails the test unless the body traps — an index out of range, an
+/// overflow, 'fatalError' — with the text in its message; gives how it
+/// ended. The test goes on.
+///
+/// The body is run in a process of its own, which runs the test again up to
+/// there; what it changes is not seen here. Where no process can be started
+/// — in a run of every test in one, the interpreter, WebAssembly — the body
+/// is not run, and the result is none.
+///
+/// ```sable
+/// let numbers = [1, 2, 3]
+/// expectPanic("out of range") { print(numbers[3]) }
+/// ```
+@discardable
+public fn expectPanic(_ containing: String = "", file: String = #file, line: Int = #line, _ body: () -> Void) -> ProcessEnd? {
+    switch nextDeathTest() {
+        case 1:
+            enterDeathTest()
+            body()
+            leaveDeathTest()
+        case 2:
+            return panicked(runDeathTest(file, line), containing, file, line)
+        default:
+            return none
+    }
+}
+
+/// The same of a body that waits.
+@discardable
+public async fn expectPanic(_ containing: String = "", file: String = #file, line: Int = #line, _ body: async () -> Void) -> ProcessEnd? {
+    switch nextDeathTest() {
+        case 1:
+            enterDeathTest()
+            await body()
+            leaveDeathTest()
+        case 2:
+            return panicked(runDeathTest(file, line), containing, file, line)
+        default:
+            return none
+    }
+}
+
+/// Fails the test unless the body ends the process with the status, as
+/// 'Process.exit' does; gives how it ended. The body is run as
+/// 'expectPanic''s is. The test goes on.
+///
+/// ```sable
+/// expectExit(3) { Runtime.exit(3) }
+/// ```
+@discardable
+public fn expectExit(_ status: Int, file: String = #file, line: Int = #line, _ body: () -> Void) -> ProcessEnd? {
+    switch nextDeathTest() {
+        case 1:
+            enterDeathTest()
+            body()
+            leaveDeathTest()
+        case 2:
+            return exited(runDeathTest(file, line), status, file, line)
+        default:
+            return none
+    }
+}
+
+/// The same of a body that waits.
+@discardable
+public async fn expectExit(_ status: Int, file: String = #file, line: Int = #line, _ body: async () -> Void) -> ProcessEnd? {
+    switch nextDeathTest() {
+        case 1:
+            enterDeathTest()
+            await body()
+            leaveDeathTest()
+        case 2:
+            return exited(runDeathTest(file, line), status, file, line)
+        default:
+            return none
+    }
+}
+
+// What to do at the test's next death test: 0 to pass it by, one another
+// process is for; 1 to run its body, what this process is for; 2 to start a
+// process for it. One in a property's case is run only as the cases are
+// first run: a process for it makes those again.
+fn nextDeathTest() -> Int {
+    let number = TestState.deathTests.add(1)
+    if TestState.role.isEmpty {
+        return 2
+    }
+    return TestState.role == "death:\(number)" ? 1 : 0
+}
+
+fn enterDeathTest() {
+    // The hook a property, or the program, set is not the body's to call.
+    _ = Runtime.takeTrapHook(otherwise: { message, site, frames in })
+    Runtime.writeError(deathTestBegun)
+}
+
+fn leaveDeathTest() -> Never {
+    Runtime.writeError(deathTestReturned)
+    Runtime.exit(0)
+}
+
+// The body's process, run to its end; none when it cannot be, or when it
+// never came to the body, which is a failure said.
+fn runDeathTest(_ file: String, _ line: Int) -> ProcessEnd? {
+    guard let ended = TestState.runAgain(as: "death:\(TestState.deathTests.load() - 1)") else {
+        Runtime.writeError("a death test was not run: there is no process to run it in (\(file):\(line))\n")
+        return none
+    }
+    if let begun = ended.errors.firstRange(of: deathTestBegun) {
+        return ProcessEnd { status: ended.status, output: ended.output, errors: ended.errors[begun.upperBound...].toString() }
+    }
+    recordFailure("the test, run again, ended before its death test was come to: exit status \(ended.status)\n\(indented(ended.errors))", file: file, line: line)
+    return none
+}
+
+fn panicked(_ ended: ProcessEnd?, _ containing: String, _ file: String, _ line: Int) -> ProcessEnd? {
+    guard let ended = ended else {
+        return none
+    }
+    if ended.errors.contains(deathTestReturned) {
+        recordFailure("the body was to trap\(trapWanted(containing)), and it returned", file: file, line: line)
+        return none
+    }
+    if ended.status != 134 {
+        recordFailure("the body was to trap\(trapWanted(containing)), and it ended the process with status \(ended.status)\(wrote(ended))", file: file, line: line)
+        return none
+    }
+    if !ended.errors.contains(containing) {
+        recordFailure("the body trapped, but not with '\(containing)'\(wrote(ended))", file: file, line: line)
+        return none
+    }
+    return ended
+}
+
+fn exited(_ ended: ProcessEnd?, _ status: Int, _ file: String, _ line: Int) -> ProcessEnd? {
+    guard let ended = ended else {
+        return none
+    }
+    if ended.errors.contains(deathTestReturned) {
+        recordFailure("the body was to end the process with status \(status), and it returned", file: file, line: line)
+        return none
+    }
+    if ended.status != status {
+        recordFailure("the body was to end the process with status \(status), and it was \(ended.status)\(wrote(ended))", file: file, line: line)
+        return none
+    }
+    return ended
+}
+
+fn wrote(_ ended: ProcessEnd) -> String {
+    return ended.errors.isEmpty ? "" : "\n" + indented(ended.errors)
+}

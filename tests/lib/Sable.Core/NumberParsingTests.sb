@@ -587,3 +587,14 @@ fn wideIntegersAreWrittenInFull() {
         assertEqual("\(-power)", "-1" + zeros(count))
     }
 }
+
+// Any number is read back from what it is written as, in any radix.
+@test
+fn anyNumberIsReadBack() {
+    forAll { (n: I128, f: F64, part: U8) in
+        expect(try I128.parse("\(n)") == n)
+        expect(try I64.parse("\(I64.truncating(n):x)", radix: 16) == I64.truncating(n))
+        let read = try F64.parse("\(f)")
+        expect(read == f || read != read && f != f)
+    }
+}

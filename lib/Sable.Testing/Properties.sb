@@ -1,0 +1,393 @@
+module Sable.Testing
+
+import Sable.Text
+
+// Property tests: a body that should hold of every value is tried with many
+// arbitrary ones, small to large, and a failing one is made as simple as it
+// can be before it is shown. A run's cases are its seed's: '--seed', or
+// SABLE_TEST_SEED, makes them again.
+//
+// A body fails by an expectation it does not meet, by throwing, or by
+// trapping. A trap ends the process: the test run again, in a process for
+// each case, finds the simplest that traps.
+
+/// Fails the test unless the body holds of arbitrary values of its type,
+/// so many of them: no expectation of it fails, and it neither throws nor
+/// traps. The simplest value found that it does not hold of is shown, with
+/// the seed that makes it again. The test goes on, but after a trap.
+///
+/// ```sable
+/// forAll { (numbers: Int[>..]) in
+///     expect(numbers.sorted().count == numbers.count)
+/// }
+/// ```
+public fn forAll<T: Arbitrary>(cases: Int = 100, file: String = #file, line: Int = #line, _ body: @escaping (T) throws -> Void) {
+    forAll(Gen.arbitrary(T.self), cases: cases, file: file, line: line, body)
+}
+
+/// The same of arbitrary pairs.
+///
+/// ```sable
+/// forAll { (a: I32, b: I32) in
+///     expect(a &+ b == b &+ a)
+/// }
+/// ```
+public fn forAll<A: Arbitrary, B: Arbitrary>(cases: Int = 100, file: String = #file, line: Int = #line, _ body: @escaping (A, B) throws -> Void) {
+    forAll(Gen.arbitrary(A.self), Gen.arbitrary(B.self), cases: cases, file: file, line: line, body)
+}
+
+/// The same of arbitrary threes.
+public fn forAll<A: Arbitrary, B: Arbitrary, C: Arbitrary>(cases: Int = 100, file: String = #file, line: Int = #line, _ body: @escaping (A, B, C) throws -> Void) {
+    forAll(Gen.arbitrary(A.self), Gen.arbitrary(B.self), Gen.arbitrary(C.self), cases: cases, file: file, line: line, body)
+}
+
+/// Fails the test unless the body holds of what the generator makes.
+///
+/// ```sable
+/// forAll(Gen.number(in: 1...100)) { (n: Int) in expect(100 / n >= 1) }
+/// ```
+public fn forAll<T>(_ generator: Gen<T>, cases: Int = 100, file: String = #file, line: Int = #line, _ body: @escaping (T) throws -> Void) {
+    let property = PropertyRun(cases, file, line)
+    property.run { choices in
+        let value = generator.make(choices)
+        property.arguments = () => "\(value:?)"
+        if !choices.isRejected {
+            do {
+                try body(value)
+            } catch {
+                property.threw("\(error)")
+            }
+        }
+    }
+}
+
+/// Fails the test unless the body holds of what the two generators make.
+public fn forAll<A, B>(_ first: Gen<A>, _ second: Gen<B>, cases: Int = 100, file: String = #file, line: Int = #line, _ body: @escaping (A, B) throws -> Void) {
+    let property = PropertyRun(cases, file, line)
+    property.run { choices in
+        let a = first.make(choices)
+        let b = second.make(choices)
+        property.arguments = () => "\(a:?), \(b:?)"
+        if !choices.isRejected {
+            do {
+                try body(a, b)
+            } catch {
+                property.threw("\(error)")
+            }
+        }
+    }
+}
+
+/// Fails the test unless the body holds of what the three generators make.
+public fn forAll<A, B, C>(_ first: Gen<A>, _ second: Gen<B>, _ third: Gen<C>, cases: Int = 100, file: String = #file, line: Int = #line,
+    _ body: @escaping (A, B, C) throws -> Void) {
+    let property = PropertyRun(cases, file, line)
+    property.run { choices in
+        let a = first.make(choices)
+        let b = second.make(choices)
+        let c = third.make(choices)
+        property.arguments = () => "\(a:?), \(b:?), \(c:?)"
+        if !choices.isRejected {
+            do {
+                try body(a, b, c)
+            } catch {
+                property.threw("\(error)")
+            }
+        }
+    }
+}
+
+/// Fails the test unless the body, which waits, holds of arbitrary values
+/// of its type.
+public async fn forAll<T: Arbitrary>(cases: Int = 100, file: String = #file, line: Int = #line, _ body: @escaping async (T) throws -> Void) {
+    await forAll(Gen.arbitrary(T.self), cases: cases, file: file, line: line, body)
+}
+
+/// Fails the test unless the body, which waits, holds of what the
+/// generator makes. (Several values are a 'zip' of their generators.)
+public async fn forAll<T>(_ generator: Gen<T>, cases: Int = 100, file: String = #file, line: Int = #line, _ body: @escaping async (T) throws -> Void) {
+    let property = PropertyRun(cases, file, line)
+    property.begin()
+    while let choices = property.nextCase() {
+        let value = generator.make(choices)
+        property.arguments = () => "\(value:?)"
+        if !choices.isRejected {
+            do {
+                try await body(value)
+            } catch {
+                property.threw("\(error)")
+            }
+        }
+        property.endCase(choices, retry: none)
+    }
+    property.end()
+}
+
+// What a process run for one case says of the choices that failed.
+let propertyDrawn = "\u{1}property "
+let propertyArguments = "\u{1}arguments "
+
+/// One 'forAll', as it runs.
+final class PropertyRun {
+    let cases: Int
+    let file: String
+    let line: Int
+    // Which of the test's it is, from 0.
+    let number: Int
+    // How many cases have been run, and how many a filter gave up on.
+    var ran: Int
+    var rejected: Int
+    // What the case running is made from, its size and its arguments,
+    // written out when asked.
+    var current: Choices?
+    var size: Int
+    var arguments: () -> String
+    // What the case that failed was called with, before it was shrunk.
+    var firstSeen: String
+    var failedBefore: Int
+    var isDone: Bool
+    // Whether this process was started for one case of it.
+    let isReplay: Bool
+
+    init(_ cases: Int, _ file: String, _ line: Int) {
+        precondition(cases > 0, "a property is tried with at least one case")
+        self.cases = cases
+        self.file = file
+        self.line = line
+        number = TestState.properties.add(1)
+        ran = 0
+        rejected = 0
+        current = none
+        size = 0
+        arguments = () => ""
+        firstSeen = ""
+        failedBefore = 0
+        isDone = false
+        isReplay = TestState.role.hasPrefix("property:\(number):")
+    }
+
+    // Every case, and the simplest of those that fail, run here.
+    fn run(_ trial: @escaping (Choices) -> Void) {
+        begin()
+        while let choices = nextCase() {
+            trial(choices)
+            let size = size
+            endCase(choices, retry: (script) => {
+                let again = Choices(replaying: script, size: size)
+                self.current = again
+                trial(again)
+                return again
+            })
+        }
+        end()
+    }
+
+    fn begin() {
+        failedBefore = TestState.failed.load()
+        // A process for one case of another property is not for this one.
+        isDone = TestState.role.hasPrefix("property:") && !isReplay
+        if isDone {
+            return
+        }
+        TestState.quiet = !isReplay
+        Runtime.setTrapHook({ message, site, frames in self.trapped(message, site) })
+    }
+
+    // What the next case is made from; none when all have been run.
+    fn nextCase() -> Choices? {
+        if isDone || ran >= cases {
+            return none
+        }
+        if rejected > cases * 10 {
+            fail("too few values were let through: \(rejected) cases were given up on, and \(ran) run")
+            return none
+        }
+        if isReplay {
+            return replayed()
+        }
+        // The first is the smallest, and the last as large as they come.
+        size = cases == 1 ? 100 : ran * 100 / (cases - 1)
+        var mixer = SplitMix64(seed: TestState.seed ^ (U64(number) << 48) ^ (U64(ran) << 16) ^ U64(rejected))
+        let choices = Choices(seed: mixer.next(), size: size)
+        current = choices
+        arguments = () => "a value that was not made"
+        return choices
+    }
+
+    // This process's one case: its size in the role, its choices on
+    // standard input.
+    fn replayed() -> Choices {
+        let parts = TestState.role.split(':')
+        size = (try? Int.parse(parts[2])) ?? 100
+        let choices = Choices(replaying: Drawn.read(Runtime.readLine() ?? "").choices, size: size)
+        current = choices
+        return choices
+    }
+
+    fn threw(_ error: String) {
+        say("the body threw an error: \(error) (\(file):\(line))")
+    }
+
+    // The case has been run: whether it failed, and then, run again as
+    // 'retry' does, the simplest that does; in processes, with none.
+    fn endCase(_ choices: Choices, retry: ((U64[>..]) -> Choices)?) {
+        let failures = TestState.failed.load() - failedBefore
+        if isReplay {
+            if failures > 0 && !choices.isRejected {
+                mark(choices)
+                Runtime.exit(1)
+            }
+            Runtime.exit(0)
+        }
+        if choices.isRejected {
+            TestState.failed.store(failedBefore)
+            rejected += 1
+            return
+        }
+        ran += 1
+        if failures == 0 {
+            return
+        }
+        isDone = true
+        TestState.failed.store(failedBefore)
+        firstSeen = arguments()
+        guard let retry = retry else {
+            // An async body is run again where it can be waited for.
+            if !shrinkInProcesses(drawn(choices)) {
+                report(firstSeen, 0)
+            }
+            return
+        }
+        let shrinker = Shrinker(drawn(choices), tries: 10000, nanoseconds: 10_000_000_000) { script in
+            let again = retry(script)
+            let failed = TestState.failed.load() > self.failedBefore && !again.isRejected
+            TestState.failed.store(self.failedBefore)
+            return failed ? self.drawn(again) : none
+        }
+        shrinker.run()
+        // Run once more for its arguments, and then to say what fails of it.
+        _ = retry(shrinker.best)
+        let failedAgain = TestState.failed.load() > failedBefore
+        TestState.failed.store(failedBefore)
+        report(arguments(), shrinker.steps)
+        if failedAgain {
+            _ = retry(shrinker.best)
+        } else {
+            Runtime.writeError("    it held when it was run again: it depends on something besides its arguments\n")
+        }
+    }
+
+    fn end() {
+        if TestState.role.hasPrefix("property:") && !isReplay {
+            return
+        }
+        TestState.quiet = false
+        _ = Runtime.takeTrapHook(otherwise: { message, site, frames in })
+    }
+
+    fn drawn(_ choices: Choices) -> Drawn {
+        return Drawn { choices: choices.drawn, spans: choices.spans }
+    }
+
+    fn fail(_ message: String) {
+        TestState.quiet = false
+        isDone = true
+        recordFailure(message, file: file, line: line)
+    }
+
+    fn report(_ shown: String, _ steps: Int) {
+        let report = TextBuilder()
+        report.append("the property does not hold of \(shown)")
+        if steps > 0 && firstSeen != shown {
+            report.append("\n    made simpler from \(firstSeen)")
+        }
+        report.append("\n    case \(ran) of \(cases), of seed \(TestState.seed): 'sable test --seed \(TestState.seed)' runs it again")
+        fail(report.build())
+    }
+
+    // ---- In processes --------------------------------------------------------
+
+    // The case running trapped, and the process is about to end.
+    fn trapped(_ message: String, _ site: String) {
+        let place = site.isEmpty ? "" : "\n  at \(site)"
+        // What is said when there is no case to shrink.
+        let said = "fatal error: \(message)\(place)\n"
+        guard let choices = current else {
+            Runtime.writeError(said)
+            return
+        }
+        if isReplay {
+            Runtime.writeError(said)
+            mark(choices)
+            return
+        }
+        // While it was run once more, to say what fails of it: said.
+        if !TestState.quiet {
+            Runtime.writeError(said)
+            return
+        }
+        if firstSeen.isEmpty {
+            ran += 1
+            firstSeen = arguments()
+        }
+        if !shrinkInProcesses(drawn(choices)) {
+            report(firstSeen, 0)
+            Runtime.writeError(said)
+        }
+    }
+
+    // The simplest case that fails, each tried in a process of its own, and
+    // what it says: false where there are none.
+    fn shrinkInProcesses(_ failing: Drawn) -> Bool {
+        if !TestState.role.isEmpty || inProcess(failing.choices) == none {
+            return false
+        }
+        let shrinker = Shrinker(failing, tries: 1000, nanoseconds: 30_000_000_000) { script in self.inProcess(script) }
+        shrinker.run()
+        guard let ended = process(shrinker.best) else {
+            return false
+        }
+        report(marked(ended.errors, propertyArguments) ?? firstSeen, shrinker.steps)
+        for line in ended.errors.lines() {
+            if !line.hasPrefix(propertyDrawn) && !line.hasPrefix(propertyArguments) {
+                Runtime.writeError(line + "\n")
+            }
+        }
+        return true
+    }
+
+    // The test run again, as far as the case made from the choices.
+    fn process(_ script: U64[>..]) -> (status: Int, output: String, errors: String)? {
+        return TestState.runAgain(as: "property:\(number):\(size)", input: Drawn { choices: script, spans: [] }.written() + "\n")
+    }
+
+    // What the case drew, if it failed: the choices themselves when it ended
+    // too suddenly to say.
+    fn inProcess(_ script: U64[>..]) -> Drawn? {
+        guard let ended = process(script) else {
+            return none
+        }
+        if ended.status == 0 {
+            return none
+        }
+        if let drawn = marked(ended.errors, propertyDrawn) {
+            return Drawn.read(drawn)
+        }
+        return Drawn { choices: script, spans: [] }
+    }
+
+    // What is on the line of the errors that starts so.
+    fn marked(_ errors: String, _ mark: String) -> String? {
+        for line in errors.lines() {
+            if line.hasPrefix(mark) {
+                return line.slice(from: mark.count, to: line.count)
+            }
+        }
+        return none
+    }
+
+    // For the process that started this one for a case, which failed.
+    fn mark(_ choices: Choices) {
+        Runtime.writeError("\(propertyDrawn)\(drawn(choices).written())\n\(propertyArguments)\(arguments().replacing("\n", with: "\\n"))\n")
+    }
+}

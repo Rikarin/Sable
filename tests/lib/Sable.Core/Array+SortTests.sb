@@ -214,3 +214,28 @@ fn sortOfARangeOfAFixedArrayOrdersThoseElements() {
     values[..<^1].sort()
     assert(values == [2, 3, 4, 1])
 }
+
+// Any array sorted is in order, and what it was: each value as often.
+@test
+fn anArraySortedIsItselfInOrder() {
+    fn counts(_ values: I16[>..]) -> [I16: Int] {
+        var counts: [I16: Int] = [:]
+        for value in values {
+            counts[value] = (counts[value] ?? 0) + 1
+        }
+        return counts
+    }
+    forAll(Gen.arbitrary(I16.self).array(count: 0...200)) { (values: I16[>..]) in
+        var sorted = values
+        sorted.sort()
+        var unstable = values
+        unstable.sortUnstable()
+        require(sorted.isSorted())
+        expect(unstable == sorted)
+        let before = counts(values)
+        for (value, count) in counts(sorted) {
+            expect(before[value] == count)
+        }
+        expect(sorted.count == values.count)
+    }
+}

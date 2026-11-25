@@ -22,6 +22,9 @@ public enum DerivedMember {
 
     /// <summary><c>static decode(from:)</c>, field by field from a Decoder: <c>Serializable</c>.</summary>
     Decode,
+
+    /// <summary><c>static arbitrary(from:)</c>, field by field from choices: Sable.Testing's <c>Arbitrary</c>.</summary>
+    Arbitrary,
 }
 
 /// <summary>One member <c>@derive</c> made, and where it was asked for.</summary>
@@ -72,6 +75,7 @@ public sealed partial class Compilation {
         ("Debug", DerivedMember.Debug),
         ("Serializable", DerivedMember.Encode),
         ("Serializable", DerivedMember.Decode),
+        ("Arbitrary", DerivedMember.Arbitrary),
     ];
 
     readonly List<(NamedTypeSymbol Type, AttributeSyntax Attribute, FileScope? Scope)> _derivations = [];
@@ -106,14 +110,19 @@ public sealed partial class Compilation {
     FunctionSymbol? ProtocolRequirement(string protocol, string member) =>
         CoreProtocol(protocol)?.GetMembers(member).OfType<FunctionSymbol>().FirstOrDefault();
 
-    NamedTypeSymbol? CoreProtocol(string name) =>
+    internal NamedTypeSymbol? CoreProtocol(string name) =>
         GetModule("Sable.Core")?.GetType(name) is { TypeKind: TypeKind.Protocol } protocol ? protocol : null;
 
-    /// <summary>A protocol <c>@derive</c> knows: Sable.Core's, or Sable.Serialize's <c>Serializable</c>.</summary>
+    /// <summary>A protocol <c>@derive</c> knows: Sable.Core's, Sable.Serialize's <c>Serializable</c> or Sable.Testing's <c>Arbitrary</c>.</summary>
     NamedTypeSymbol? DerivableProtocol(string name) =>
-        name == "Serializable"
-            ? GetModule("Sable.Serialize")?.GetType(name) is { TypeKind: TypeKind.Protocol } serializable ? serializable : null
-            : CoreProtocol(name);
+        name switch {
+            "Serializable" => SerializeType(name),
+            "Arbitrary" => TestingType(name),
+            _ => CoreProtocol(name),
+        } is { TypeKind: TypeKind.Protocol } protocol ? protocol : null;
+
+    /// <summary>A type of Sable.Testing's, which a derived Arbitrary conformance uses.</summary>
+    internal NamedTypeSymbol? TestingType(string name) => GetModule("Sable.Testing")?.GetType(name);
 
     /// <summary>A type of Sable.Serialize's, which a derived Serializable conformance uses.</summary>
     internal NamedTypeSymbol? SerializeType(string name) => GetModule("Sable.Serialize")?.GetType(name);
@@ -191,7 +200,7 @@ public sealed partial class Compilation {
                 ReportDeclaration(
                     ErrorCode.ERR_UnknownDerivation,
                     argument.Span,
-                    $"'{name}' cannot be derived; '@derive' knows Equatable, Hashable, Comparable, Debug, Serializable and Copy"
+                    $"'{name}' cannot be derived; '@derive' knows Equatable, Hashable, Comparable, Debug, Serializable, Arbitrary and Copy"
                 );
                 continue;
             }
@@ -217,6 +226,8 @@ public sealed partial class Compilation {
                     at,
                     protocolName == "Serializable"
                         ? "'@derive(Serializable)' needs Sable.Serialize: 'import Sable.Serialize'"
+                        : protocolName == "Arbitrary"
+                        ? "'@derive(Arbitrary)' needs Sable.Testing: 'import Sable.Testing'"
                         : $"'@derive({protocolName})' needs Sable.Core's '{protocolName}', which is not here"
                 );
                 continue;
@@ -288,6 +299,7 @@ public sealed partial class Compilation {
             DerivedMember.Hash => "hash",
             DerivedMember.Encode => "encode",
             DerivedMember.Decode => "decode",
+            DerivedMember.Arbitrary => "arbitrary",
             _ => "debugDescription",
         };
 
@@ -305,8 +317,17 @@ public sealed partial class Compilation {
             type.DeclaredAccessibility,
             isOperator ? FunctionKind.Operator : FunctionKind.Ordinary
         ) {
-            IsStatic = isOperator || member == DerivedMember.Decode,
+            IsStatic = isOperator || member is DerivedMember.Decode or DerivedMember.Arbitrary,
         };
+
+        if (member == DerivedMember.Arbitrary) {
+            // 'static arbitrary(from choices: Choices) -> Self'.
+            var choices = TestingType("Choices");
+            function.Parameters = [new ParameterSymbol("choices", "from", function, null, 0) { TypeResolver = () => choices ?? (TypeSymbol)ErrorTypeSymbol.Instance }];
+            function.ReturnTypeResolver = () => self;
+            type.AddMember(function);
+            return function;
+        }
 
         if (member is DerivedMember.Encode or DerivedMember.Decode) {
             var error = SerializeType("SerializeError")!;

@@ -32,39 +32,26 @@ fn decodeError(_ text: String, alphabet: Base32.Alphabet = .Standard, padding: P
     return none
 }
 
-@test
-fn theRfc4648TestVectorsEncode() {
-    assertEqual(Base32.encode("".utf8Bytes()), "")
-    assertEqual(Base32.encode("f".utf8Bytes()), "MY======")
-    assertEqual(Base32.encode("fo".utf8Bytes()), "MZXQ====")
-    assertEqual(Base32.encode("foo".utf8Bytes()), "MZXW6===")
-    assertEqual(Base32.encode("foob".utf8Bytes()), "MZXW6YQ=")
-    assertEqual(Base32.encode("fooba".utf8Bytes()), "MZXW6YTB")
-    assertEqual(Base32.encode("foobar".utf8Bytes()), "MZXW6YTBOI======")
+// RFC 4648 §10: what it encodes, as Base32 and as base32hex.
+@test(arguments: [
+    ("", "", ""), ("f", "MY======", "CO======"), ("fo", "MZXQ====", "CPNG===="), ("foo", "MZXW6===", "CPNMU==="),
+    ("foob", "MZXW6YQ=", "CPNMUOG="), ("fooba", "MZXW6YTB", "CPNMUOJ1"), ("foobar", "MZXW6YTBOI======", "CPNMUOJ1E8======"),
+])
+fn theRfc4648TestVectors(_ text: String, _ standard: String, _ hex: String) throws(DecodeError) {
+    let bytes = text.utf8Bytes()
+    expect(Base32.encode(bytes) == standard)
+    expect(Base32.encode(bytes, alphabet: .Hex) == hex)
+    expect(try Base32.decode(standard) == bytes)
+    expect(try Base32.decode(hex, alphabet: .Hex) == bytes)
 }
 
 @test
-fn theRfc4648HexTestVectorsEncode() {
-    assertEqual(Base32.encode("".utf8Bytes(), alphabet: .Hex), "")
-    assertEqual(Base32.encode("f".utf8Bytes(), alphabet: .Hex), "CO======")
-    assertEqual(Base32.encode("fo".utf8Bytes(), alphabet: .Hex), "CPNG====")
-    assertEqual(Base32.encode("foo".utf8Bytes(), alphabet: .Hex), "CPNMU===")
-    assertEqual(Base32.encode("foob".utf8Bytes(), alphabet: .Hex), "CPNMUOG=")
-    assertEqual(Base32.encode("fooba".utf8Bytes(), alphabet: .Hex), "CPNMUOJ1")
-    assertEqual(Base32.encode("foobar".utf8Bytes(), alphabet: .Hex), "CPNMUOJ1E8======")
-}
-
-@test
-fn theRfc4648TestVectorsDecode() {
-    assertBytes(try! Base32.decode(""), "".utf8Bytes())
-    assertBytes(try! Base32.decode("MY======"), "f".utf8Bytes())
-    assertBytes(try! Base32.decode("MZXQ===="), "fo".utf8Bytes())
-    assertBytes(try! Base32.decode("MZXW6==="), "foo".utf8Bytes())
-    assertBytes(try! Base32.decode("MZXW6YQ="), "foob".utf8Bytes())
-    assertBytes(try! Base32.decode("MZXW6YTB"), "fooba".utf8Bytes())
-    assertBytes(try! Base32.decode("MZXW6YTBOI======"), "foobar".utf8Bytes())
-    assertBytes(try! Base32.decode("CO======", alphabet: .Hex), "f".utf8Bytes())
-    assertBytes(try! Base32.decode("CPNMUOJ1E8======", alphabet: .Hex), "foobar".utf8Bytes())
+fn anyBytesRoundTrip() {
+    forAll { (bytes: U8[>..], padding: Bool) in
+        let text = Base32.encode(bytes, padding: padding)
+        expect(text.utf8Count == Base32.encodedLength(bytes.count, padding: padding))
+        expect(try Base32.decode(text, padding: padding ? .Required : .Forbidden) == bytes)
+    }
 }
 
 @test

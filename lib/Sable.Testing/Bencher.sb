@@ -231,7 +231,7 @@ public async fn runBenchmarks(_ benches: BenchCase[>..]) -> Int {
 
     var chosen: BenchCase[>..] = []
     for bench in benches {
-        if selected(bench.name, options.filters, false) {
+        if selectedByName(bench.name, options.filters) {
             chosen.append(bench)
         }
     }
@@ -381,4 +381,15 @@ fn makeDirectories(_ path: String) -> Bool {
         }
     }
     return Runtime.isDirectory(path)
+}
+
+/// Whether the name is selected: by any of the filters, as a part of it;
+/// every name is, with none.
+fn selectedByName(_ name: String, _ filters: String[>..]) -> Bool {
+    for filter in filters {
+        if name.contains(filter) {
+            return true
+        }
+    }
+    return filters.isEmpty
 }

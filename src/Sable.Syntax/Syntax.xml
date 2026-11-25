@@ -431,7 +431,7 @@
   </Node>
 
   <Node Name="BuiltinExpressionSyntax" Base="ExpressionSyntax" Kind="BuiltinExpression"
-        Doc="A compiler builtin: `#file`, `#line`, `#column`, `#function`, `#module`.">
+        Doc="A compiler builtin: `#file`, `#line`, `#column`, `#function`, `#module`, `#expression`.">
     <Field Name="HashToken" Type="Token" />
     <Field Name="NameToken" Type="Token" />
   </Node>

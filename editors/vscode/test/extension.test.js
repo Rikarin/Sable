@@ -399,6 +399,53 @@ test("the Test Explorer lists a package's tests and reports a run", { skip: !pos
   assert.match(run.output, /test result: FAILED/);
 });
 
+test("a test's cases are items under it, run and debugged one by one", { skip: !posix && "needs a shell script for sable" }, async () => {
+  const root = tree({ "package.sb": PACKAGE, "src/main.sb": MAIN });
+  const script = path.join(root, "cases-sable");
+  fs.writeFileSync(script, `#!/bin/sh
+if [ "$2" = "--list" ]; then
+  echo 'Demo.adds: test (src/main.sb:3)'
+  echo 'Demo.S.parses("a.b (c)", 1.5): test (src/main.sb:7)'
+  echo 'Demo.S.parses("", 0): test (src/main.sb:7)'
+  exit 0
+fi
+printf '%s\\n' "$@" > '${root}/arguments'
+echo 'test Demo.S.parses("a.b (c)", 1.5) ... FAILED (2 µs)'
+echo 'test Demo.S.parses("", 0) ... ok (1 ms)'
+echo ''
+echo '---- Demo.S.parses("a.b (c)", 1.5) (src/main.sb:7) ----'
+echo '    expectation failed: x == 1 (src/main.sb:8)'
+echo ''
+echo 'test result: FAILED.'
+exit 1
+`, { mode: 0o755 });
+  const { modules, recorded } = load({ folders: [root], settings: { "sable.path": script } });
+  modules.testing.register(context(root));
+  const controller = recorded.controllers[0];
+  await controller.resolveHandler(undefined);
+
+  const list = (item) => {
+    const all = [];
+    item.children.forEach((child) => all.push(child));
+    return all;
+  };
+  const packages = [];
+  controller.items.forEach((item) => packages.push(item));
+  const [adds, parses] = list(packages[0]);
+  assert.deepEqual([adds.label, parses.label, parses.description], ["adds", "parses", "Demo.S"]);
+  assert.deepEqual(list(parses).map((t) => t.label), ['("a.b (c)", 1.5)', '("", 0)']);
+
+  const profile = controller.profiles.find((p) => p.isDefault);
+  const token = { isCancellationRequested: false, onCancellationRequested: () => {} };
+  await profile.handler({ include: [parses], exclude: [] }, token);
+  assert.deepEqual(fs.readFileSync(path.join(root, "arguments"), "utf8").trim().split("\n"), ["test", 'Demo.S.parses("a.b (c)", 1.5)', 'Demo.S.parses("", 0)', "--exact"]);
+  const run = controller.runs[0];
+  const outcome = (id) => run.events.filter((e) => e.id === `${root}::${id}` && e.event !== "started").map((e) => e.event);
+  assert.deepEqual(outcome('Demo.S.parses("a.b (c)", 1.5)'), ["failed"]);
+  assert.deepEqual(outcome('Demo.S.parses("", 0)'), ["passed"]);
+  assert.match(run.events.find((e) => e.event === "failed").rest[0].message, /expectation failed: x == 1/);
+});
+
 test("the Test Explorer debugs a test in a harness built with debug information", { skip: !posix && "needs a shell script for sable" }, async () => {
   const root = tree({ "package.sb": PACKAGE, "src/main.sb": MAIN });
   const sablePath = fakeSable(root);

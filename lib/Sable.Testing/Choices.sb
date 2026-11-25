@@ -1,0 +1,172 @@
+module Sable.Testing
+
+/// What an arbitrary value is made from: a series of choices, each a number
+/// up to a limit, 0 the simplest. They are drawn at random, or said again
+/// from a list; every one drawn is kept, so that a value is made again from
+/// its choices, and a simpler one from simpler choices. That is how a
+/// property's failing case is shrunk: whatever made the value, a 'filter' or
+/// a struct's invariant among it, makes the simpler one too.
+///
+/// ```sable
+/// let choices = Choices(seed: 7)
+/// let number = choices.draw(upTo: 9)
+/// let letter = choices.element(of: ["a", "b", "c"])
+/// let again = Choices(replaying: choices.drawn)
+/// assert(again.draw(upTo: 9) == number)
+/// assert(again.element(of: ["a", "b", "c"]) == letter)
+/// ```
+public final class Choices {
+    /// Every choice drawn so far.
+    public private(set) var drawn: U64[>..]
+    // Where each span began and ended, outer ones after those in them.
+    var spans: (start: Int, end: Int)[>..]
+    // What is said again, before anything is the simplest; none when drawing
+    // at random.
+    var script: U64[>..]?
+    var generator: SeededRandomNumberGenerator
+    /// How large a value to make, 0 to 100: how long an array, how wide a
+    /// number. A property's first cases are small ones.
+    public let size: Int
+    // Whether a value was asked for that a 'filter' never let through.
+    var isRejected: Bool
+
+    /// Choices at random, the seed's.
+    public init(seed: U64, size: Int = 100) {
+        drawn = []
+        spans = []
+        script = none
+        generator = SeededRandomNumberGenerator(seed: seed)
+        self.size = size
+        isRejected = false
+    }
+
+    /// The choices of the list, in order, and after them the simplest: a
+    /// choice greater than its limit is the limit.
+    public init(replaying script: U64[>..], size: Int = 100) {
+        drawn = []
+        spans = []
+        self.script = script
+        generator = SeededRandomNumberGenerator(seed: 0)
+        self.size = size
+        isRejected = false
+    }
+
+    /// Choices from bytes, eight to each: what a fuzz target makes a value
+    /// of its own from.
+    ///
+    /// ```sable
+    /// let choices = Choices(bytes: [1, 0, 0, 0, 0, 0, 0, 0, 2])
+    /// assert(choices.draw(upTo: 100) == 1)
+    /// assert(choices.draw(upTo: 100) == 2)
+    /// assert(choices.draw(upTo: 100) == 0)
+    /// ```
+    public init(bytes: U8[:]) {
+        drawn = []
+        spans = []
+        var script: U64[>..] = []
+        var at = 0
+        while at < bytes.count {
+            var value: U64 = 0
+            var i = 0
+            while i < 8 && at + i < bytes.count {
+                value = value | (U64(bytes[at + i]) << U64(8 * i))
+                i += 1
+            }
+            script.append(value)
+            at += 8
+        }
+        self.script = script
+        generator = SeededRandomNumberGenerator(seed: 0)
+        size = 100
+        isRejected = false
+    }
+
+    /// A choice from 0 to the limit, each as likely as every other.
+    public fn draw(upTo limit: U64) -> U64 {
+        return choose(limit) {
+            if limit == U64.max {
+                return generator.next()
+            }
+            return generator.next(upperBound: limit + 1)
+        }
+    }
+
+    /// A choice from 0 to the limit, made so when it is made at random: a
+    /// distribution of one's own.
+    public fn choose(_ limit: U64, _ atRandom: () -> U64) -> U64 {
+        var value: U64 = 0
+        if let script = script {
+            if drawn.count < script.count {
+                value = script[drawn.count]
+            }
+        } else {
+            value = atRandom()
+        }
+        if value > limit {
+            value = limit
+        }
+        drawn.append(value)
+        return value
+    }
+
+    /// A number from 0 up to, not including, the bound.
+    public fn below(_ bound: Int) -> Int {
+        precondition(bound > 0, "the bound must be positive")
+        return Int(draw(upTo: U64(bound - 1)))
+    }
+
+    /// True so many times out of so many: false is the simpler.
+    public fn chance(_ times: Int, outOf total: Int) -> Bool {
+        return choose(1) { generator.next(upperBound: total) < times ? 1 : 0 } == 1
+    }
+
+    /// One of the elements: the first is the simplest.
+    public fn element<T>(of elements: T[:]) -> T {
+        precondition(elements.count > 0, "there is no element to choose")
+        return elements[below(elements.count)]
+    }
+
+    /// Which of so many cases to make: any, until so many choices have been
+    /// made that a value that holds its own kind should come to an end, and
+    /// then one of the simple ones, which do not. They are numbered after
+    /// one another in the order they are given. What '@derive(Arbitrary)'
+    /// makes a union's case with.
+    public fn chooseCase(simple: Int, all: Int) -> Int {
+        return below(isEnough && simple > 0 ? simple : all)
+    }
+
+    /// Whether a value has been made from so many choices that what more it
+    /// could hold is best left out.
+    public var isEnough: Bool => drawn.count >= 64 + size * 8
+
+    /// The choices the body draws, kept together: they are left out as one
+    /// when a case is shrunk.
+    public fn span<T>(_ body: () -> T) -> T {
+        let start = drawn.count
+        let value = body()
+        spans.append((start: start, end: drawn.count))
+        return value
+    }
+
+    /// How many elements a collection has is told one at a time, so that
+    /// each is left out by itself: calls the body as often as it makes the
+    /// elements, at least and at most so many.
+    public fn times(_ least: Int, _ most: Int, _ body: () -> Void) {
+        // A tenth of the size is the mean of the lengths: an end is as
+        // likely after each element.
+        let mean = size / 10 + 1
+        var count = 0
+        var more = true
+        while more && count < most {
+            let start = drawn.count
+            if count >= least {
+                more = !isEnough && chance(mean, outOf: mean + 1)
+            }
+            if more {
+                body()
+                spans.append((start: start, end: drawn.count))
+                count += 1
+            }
+        }
+    }
+}

@@ -17,6 +17,9 @@ public struct Blake2b: HashFunction {
     var buffered: Int
     var compressed: U64
 
+    // The memory as it began, when there is a key in it, to begin again from.
+    let keyed: SecretMemory?
+
     /// A 64-byte digest, with no key.
     public init() {
         self.init(digestByteCount: 64, key: [])
@@ -51,10 +54,11 @@ public struct Blake2b: HashFunction {
         compressed = 0
         buffered = key.count > 0 ? 128 : 0
         box = SecretBox(memory: memory)
+        keyed = key.count > 0 ? memory : none
         unsafe {
             var i = 0
             while i < 8 {
-                store64(load64(blake2bConstants + 8 * i), memory.address + 8 * i)
+                store64(load64(blake2bConstants &+ 8 &* i), memory.address &+ 8 &* i)
                 i += 1
             }
             let parameters = 0x0101_0000 | key.count << 8 | digestByteCount
@@ -100,7 +104,21 @@ public struct Blake2b: HashFunction {
             Native.zero(end.address + 64 + buffered, 128 - buffered)
             compressBlake2b(end.address, end.address + 64, compressed &+ (buffered unchecked as U64), last: true)
         }
-        return Digest(end.bytes(from: 0, count: size))
+        return Digest(taking: end.bytes(from: 0, count: size))
+    }
+
+    /// The digest of every byte given so far, after which nothing has been:
+    /// what is hashed next has the same length of digest, and the same key.
+    public mutating fn finalizeAndReset() -> Digest {
+        let digest = self.finalize()
+        if let start = keyed {
+            box = SecretBox(memory: start)
+            buffered = 128
+            compressed = 0
+        } else {
+            self = Blake2b(digestByteCount: size)
+        }
+        return digest
     }
 }
 
@@ -109,21 +127,21 @@ public struct Blake2b: HashFunction {
 unsafe fn compressBlake2b(_ state: Int, _ block: Int, _ count: U64, last: Bool) {
     let iv = blake2bConstants
     var v0 = load64(state)
-    var v1 = load64(state + 8)
-    var v2 = load64(state + 16)
-    var v3 = load64(state + 24)
-    var v4 = load64(state + 32)
-    var v5 = load64(state + 40)
-    var v6 = load64(state + 48)
-    var v7 = load64(state + 56)
+    var v1 = load64(state &+ 8)
+    var v2 = load64(state &+ 16)
+    var v3 = load64(state &+ 24)
+    var v4 = load64(state &+ 32)
+    var v5 = load64(state &+ 40)
+    var v6 = load64(state &+ 48)
+    var v7 = load64(state &+ 56)
     var v8 = load64(iv)
-    var v9 = load64(iv + 8)
-    var v10 = load64(iv + 16)
-    var v11 = load64(iv + 24)
-    var v12 = load64(iv + 32) ^ count
-    var v13 = load64(iv + 40)
-    var v14 = load64(iv + 48)
-    var v15 = load64(iv + 56)
+    var v9 = load64(iv &+ 8)
+    var v10 = load64(iv &+ 16)
+    var v11 = load64(iv &+ 24)
+    var v12 = load64(iv &+ 32) ^ count
+    var v13 = load64(iv &+ 40)
+    var v14 = load64(iv &+ 48)
+    var v15 = load64(iv &+ 56)
     if last {
         v14 = ~v14
     }
@@ -135,76 +153,76 @@ unsafe fn compressBlake2b(_ state: Int, _ block: Int, _ count: U64, last: Bool) 
         v12 = (v12 ^ v0).rotatedRight(by: 32)
         v8 = v8 &+ v12
         v4 = (v4 ^ v8).rotatedRight(by: 24)
-        v0 = v0 &+ v4 &+ load64(block &+ (load64(order + 8) unchecked as Int))
+        v0 = v0 &+ v4 &+ load64(block &+ (load64(order &+ 8) unchecked as Int))
         v12 = (v12 ^ v0).rotatedRight(by: 16)
         v8 = v8 &+ v12
         v4 = (v4 ^ v8).rotatedRight(by: 63)
-        v1 = v1 &+ v5 &+ load64(block &+ (load64(order + 16) unchecked as Int))
+        v1 = v1 &+ v5 &+ load64(block &+ (load64(order &+ 16) unchecked as Int))
         v13 = (v13 ^ v1).rotatedRight(by: 32)
         v9 = v9 &+ v13
         v5 = (v5 ^ v9).rotatedRight(by: 24)
-        v1 = v1 &+ v5 &+ load64(block &+ (load64(order + 24) unchecked as Int))
+        v1 = v1 &+ v5 &+ load64(block &+ (load64(order &+ 24) unchecked as Int))
         v13 = (v13 ^ v1).rotatedRight(by: 16)
         v9 = v9 &+ v13
         v5 = (v5 ^ v9).rotatedRight(by: 63)
-        v2 = v2 &+ v6 &+ load64(block &+ (load64(order + 32) unchecked as Int))
+        v2 = v2 &+ v6 &+ load64(block &+ (load64(order &+ 32) unchecked as Int))
         v14 = (v14 ^ v2).rotatedRight(by: 32)
         v10 = v10 &+ v14
         v6 = (v6 ^ v10).rotatedRight(by: 24)
-        v2 = v2 &+ v6 &+ load64(block &+ (load64(order + 40) unchecked as Int))
+        v2 = v2 &+ v6 &+ load64(block &+ (load64(order &+ 40) unchecked as Int))
         v14 = (v14 ^ v2).rotatedRight(by: 16)
         v10 = v10 &+ v14
         v6 = (v6 ^ v10).rotatedRight(by: 63)
-        v3 = v3 &+ v7 &+ load64(block &+ (load64(order + 48) unchecked as Int))
+        v3 = v3 &+ v7 &+ load64(block &+ (load64(order &+ 48) unchecked as Int))
         v15 = (v15 ^ v3).rotatedRight(by: 32)
         v11 = v11 &+ v15
         v7 = (v7 ^ v11).rotatedRight(by: 24)
-        v3 = v3 &+ v7 &+ load64(block &+ (load64(order + 56) unchecked as Int))
+        v3 = v3 &+ v7 &+ load64(block &+ (load64(order &+ 56) unchecked as Int))
         v15 = (v15 ^ v3).rotatedRight(by: 16)
         v11 = v11 &+ v15
         v7 = (v7 ^ v11).rotatedRight(by: 63)
-        v0 = v0 &+ v5 &+ load64(block &+ (load64(order + 64) unchecked as Int))
+        v0 = v0 &+ v5 &+ load64(block &+ (load64(order &+ 64) unchecked as Int))
         v15 = (v15 ^ v0).rotatedRight(by: 32)
         v10 = v10 &+ v15
         v5 = (v5 ^ v10).rotatedRight(by: 24)
-        v0 = v0 &+ v5 &+ load64(block &+ (load64(order + 72) unchecked as Int))
+        v0 = v0 &+ v5 &+ load64(block &+ (load64(order &+ 72) unchecked as Int))
         v15 = (v15 ^ v0).rotatedRight(by: 16)
         v10 = v10 &+ v15
         v5 = (v5 ^ v10).rotatedRight(by: 63)
-        v1 = v1 &+ v6 &+ load64(block &+ (load64(order + 80) unchecked as Int))
+        v1 = v1 &+ v6 &+ load64(block &+ (load64(order &+ 80) unchecked as Int))
         v12 = (v12 ^ v1).rotatedRight(by: 32)
         v11 = v11 &+ v12
         v6 = (v6 ^ v11).rotatedRight(by: 24)
-        v1 = v1 &+ v6 &+ load64(block &+ (load64(order + 88) unchecked as Int))
+        v1 = v1 &+ v6 &+ load64(block &+ (load64(order &+ 88) unchecked as Int))
         v12 = (v12 ^ v1).rotatedRight(by: 16)
         v11 = v11 &+ v12
         v6 = (v6 ^ v11).rotatedRight(by: 63)
-        v2 = v2 &+ v7 &+ load64(block &+ (load64(order + 96) unchecked as Int))
+        v2 = v2 &+ v7 &+ load64(block &+ (load64(order &+ 96) unchecked as Int))
         v13 = (v13 ^ v2).rotatedRight(by: 32)
         v8 = v8 &+ v13
         v7 = (v7 ^ v8).rotatedRight(by: 24)
-        v2 = v2 &+ v7 &+ load64(block &+ (load64(order + 104) unchecked as Int))
+        v2 = v2 &+ v7 &+ load64(block &+ (load64(order &+ 104) unchecked as Int))
         v13 = (v13 ^ v2).rotatedRight(by: 16)
         v8 = v8 &+ v13
         v7 = (v7 ^ v8).rotatedRight(by: 63)
-        v3 = v3 &+ v4 &+ load64(block &+ (load64(order + 112) unchecked as Int))
+        v3 = v3 &+ v4 &+ load64(block &+ (load64(order &+ 112) unchecked as Int))
         v14 = (v14 ^ v3).rotatedRight(by: 32)
         v9 = v9 &+ v14
         v4 = (v4 ^ v9).rotatedRight(by: 24)
-        v3 = v3 &+ v4 &+ load64(block &+ (load64(order + 120) unchecked as Int))
+        v3 = v3 &+ v4 &+ load64(block &+ (load64(order &+ 120) unchecked as Int))
         v14 = (v14 ^ v3).rotatedRight(by: 16)
         v9 = v9 &+ v14
         v4 = (v4 ^ v9).rotatedRight(by: 63)
         order += 128
     }
     store64(load64(state) ^ v0 ^ v8, state)
-    store64(load64(state + 8) ^ v1 ^ v9, state + 8)
-    store64(load64(state + 16) ^ v2 ^ v10, state + 16)
-    store64(load64(state + 24) ^ v3 ^ v11, state + 24)
-    store64(load64(state + 32) ^ v4 ^ v12, state + 32)
-    store64(load64(state + 40) ^ v5 ^ v13, state + 40)
-    store64(load64(state + 48) ^ v6 ^ v14, state + 48)
-    store64(load64(state + 56) ^ v7 ^ v15, state + 56)
+    store64(load64(state &+ 8) ^ v1 ^ v9, state &+ 8)
+    store64(load64(state &+ 16) ^ v2 ^ v10, state &+ 16)
+    store64(load64(state &+ 24) ^ v3 ^ v11, state &+ 24)
+    store64(load64(state &+ 32) ^ v4 ^ v12, state &+ 32)
+    store64(load64(state &+ 40) ^ v5 ^ v13, state &+ 40)
+    store64(load64(state &+ 48) ^ v6 ^ v14, state &+ 48)
+    store64(load64(state &+ 56) ^ v7 ^ v15, state &+ 56)
 }
 
 /// SHA-512's initial state.

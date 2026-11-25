@@ -6,12 +6,12 @@ namespace Sable.CodeGen.Tests;
 
 /// <summary>
 ///     The system's random source (runtime/random.c): a program it fails for
-///     stops. The failure is the program's own getentropy, which the link
-///     takes in place of the C library's.
+///     stops. The failure is the program's own getrandom, which the link takes in
+///     place of the C library's; macOS's arc4random has none to say.
 /// </summary>
 [Native]
 public sealed class RandomSourceTests {
-    const string FailingSource = "\ndefine i32 @getentropy(ptr %bytes, i64 %count) {\n  ret i32 -1\n}\n";
+    const string FailingSource = "\ndefine i64 @getrandom(ptr %bytes, i64 %count, i32 %flags) {\n  ret i64 -1\n}\n";
 
     const string Draw = """
                         module R
@@ -25,7 +25,7 @@ public sealed class RandomSourceTests {
 
     [Fact]
     public void ADrawWhoseSourceFailsTraps() {
-        if (!CanBuild || OperatingSystem.IsWindows()) {
+        if (!CanBuild || !OperatingSystem.IsLinux()) {
             return;
         }
 

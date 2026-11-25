@@ -73,3 +73,19 @@ fn zeroingACopyLeavesTheOriginal() {
     assert(original == message(10))
     assert(copy == U8[>..](repeating: 0, count: 10))
 }
+
+@test
+fn bytesAreAllOneOnlyWhenEveryOneIs() {
+    var count = 0
+    while count < 20 {
+        assert(constantTimeEquals(U8[>..](repeating: 7, count: count), repeating: 7))
+        var i = 0
+        while i < count {
+            var other = U8[>..](repeating: 7, count: count)
+            other[i] = 6
+            assert(!constantTimeEquals(other, repeating: 7))
+            i += 1
+        }
+        count += 1
+    }
+}

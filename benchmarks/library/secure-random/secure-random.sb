@@ -1,0 +1,25 @@
+module SecureRandomBench
+
+// The system's random bytes against .NET's RandomNumberGenerator.Fill: 64 KiB
+// two hundred times, then 16 bytes two hundred thousand times. Prints the
+// mean of the first bytes of the last in eighths of 256.
+
+import Sable.Crypto
+
+@main
+fn main() {
+    var bytes = U8[>..](repeating: 0, count: 65536)
+    for _ in 0..<200 {
+        SecureRandom.fill(&bytes)
+    }
+    var key = U8[>..](repeating: 0, count: 16)
+    for i in 0..<200_000 {
+        SecureRandom.fill(&key)
+        bytes[i % 65536] = key[i % 16]
+    }
+    var total = 0
+    for byte in bytes {
+        total += Int(byte)
+    }
+    print((total / 65536 + 16) / 32)
+}

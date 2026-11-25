@@ -10,20 +10,20 @@ struct Sha1Blocks: BlockHash {
 
     static var bigEndianLength: Bool => true
 
-    static var kernel: Int => 0
+    static var kernel: Int => Native.sha1
 
     unsafe static fn compress(state: Int, block: Int) {
         let w = block + blockBytes
         var t = 0
         while t < 16 {
-            store32(load32(block + 4 * t).byteSwapped, w + 4 * t)
+            store32(load32(block &+ 4 &* t).byteSwapped, w &+ 4 &* t)
             t += 1
         }
         var a = load32(state)
-        var b = load32(state + 4)
-        var c = load32(state + 8)
-        var d = load32(state + 12)
-        var e = load32(state + 16)
+        var b = load32(state &+ 4)
+        var c = load32(state &+ 8)
+        var d = load32(state &+ 12)
+        var e = load32(state &+ 16)
         t = 0
         while t < 20 {
             let next = a.rotatedLeft(by: 5) &+ (d ^ (b & (c ^ d))) &+ e &+ 0x5A827999 &+ Sha1Blocks.scheduled(w, t)
@@ -62,10 +62,10 @@ struct Sha1Blocks: BlockHash {
             t += 1
         }
         store32(load32(state) &+ a, state)
-        store32(load32(state + 4) &+ b, state + 4)
-        store32(load32(state + 8) &+ c, state + 8)
-        store32(load32(state + 12) &+ d, state + 12)
-        store32(load32(state + 16) &+ e, state + 16)
+        store32(load32(state &+ 4) &+ b, state &+ 4)
+        store32(load32(state &+ 8) &+ c, state &+ 8)
+        store32(load32(state &+ 12) &+ d, state &+ 12)
+        store32(load32(state &+ 16) &+ e, state &+ 16)
     }
 
     /// The schedule's word of a round, worked out in the window of sixteen.
@@ -75,7 +75,7 @@ struct Sha1Blocks: BlockHash {
         if t < 16 {
             return load32(at)
         }
-        let word = load32(w + 4 * ((t + 13) & 15)) ^ load32(w + 4 * ((t + 8) & 15)) ^ load32(w + 4 * ((t + 2) & 15)) ^ load32(at)
+        let word = load32(w &+ 4 &* ((t &+ 13) & 15)) ^ load32(w &+ 4 &* ((t &+ 8) & 15)) ^ load32(w &+ 4 &* ((t &+ 2) & 15)) ^ load32(at)
         store32(word.rotatedLeft(by: 1), at)
         return word.rotatedLeft(by: 1)
     }

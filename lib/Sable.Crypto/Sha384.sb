@@ -34,6 +34,12 @@ public struct Sha384: HashFunction {
         return bigEndianDigest64(state.finish(), count: 48)
     }
 
+    public mutating fn finalizeAndReset() -> Digest {
+        let digest = bigEndianDigest64(state.finishInPlace(), count: 48)
+        state.restart(Sha384.initialState)
+        return digest
+    }
+
     public static fn iterateHmac(inner: Sha384, outer: Sha384, first: U8[:], iterations: Int) -> U8[>..] {
         return BlockState<Sha512Blocks>.iterateHmac(inner: inner.state, outer: outer.state, first: first, iterations: iterations)
     }

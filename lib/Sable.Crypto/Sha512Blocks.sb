@@ -18,56 +18,56 @@ struct Sha512Blocks: BlockHash {
         let k = sha512Constants
         var i = 0
         while i < 16 {
-            store64(load64(block + 8 * i).byteSwapped, w + 8 * i)
+            store64(load64(block &+ 8 &* i).byteSwapped, w &+ 8 &* i)
             i += 1
         }
         var a = load64(state)
-        var b = load64(state + 8)
-        var c = load64(state + 16)
-        var d = load64(state + 24)
-        var e = load64(state + 32)
-        var f = load64(state + 40)
-        var g = load64(state + 48)
-        var h = load64(state + 56)
+        var b = load64(state &+ 8)
+        var c = load64(state &+ 16)
+        var d = load64(state &+ 24)
+        var e = load64(state &+ 32)
+        var f = load64(state &+ 40)
+        var g = load64(state &+ 48)
+        var h = load64(state &+ 56)
         var t = 0
         while t < 80 {
             if t >= 16 {
                 // Sixteen words on, all at once.
                 i = 0
                 while i < 16 {
-                    let w1 = load64(w + 8 * ((i + 1) & 15))
-                    let w14 = load64(w + 8 * ((i + 14) & 15))
+                    let w1 = load64(w &+ 8 &* ((i &+ 1) & 15))
+                    let w14 = load64(w &+ 8 &* ((i &+ 14) & 15))
                     let s0 = w1.rotatedRight(by: 1) ^ w1.rotatedRight(by: 8) ^ (w1 >> 7)
                     let s1 = w14.rotatedRight(by: 19) ^ w14.rotatedRight(by: 61) ^ (w14 >> 6)
-                    store64(load64(w + 8 * i) &+ s0 &+ load64(w + 8 * ((i + 9) & 15)) &+ s1, w + 8 * i)
+                    store64(load64(w &+ 8 &* i) &+ s0 &+ load64(w &+ 8 &* ((i &+ 9) & 15)) &+ s1, w &+ 8 &* i)
                     i += 1
                 }
             }
             // Sixteen rounds, eight written out so that no word moves.
             i = 0
             while i < 16 {
-                h = h &+ (e.rotatedRight(by: 14) ^ e.rotatedRight(by: 18) ^ e.rotatedRight(by: 41)) &+ (g ^ (e & (f ^ g))) &+ load64(k + 8 * (t + i)) &+ load64(w + 8 * (i))
+                h = h &+ (e.rotatedRight(by: 14) ^ e.rotatedRight(by: 18) ^ e.rotatedRight(by: 41)) &+ (g ^ (e & (f ^ g))) &+ load64(k &+ 8 &* (t &+ i)) &+ load64(w &+ 8 &* (i))
                 d = d &+ h
                 h = h &+ (a.rotatedRight(by: 28) ^ a.rotatedRight(by: 34) ^ a.rotatedRight(by: 39)) &+ ((a & b) | (c & (a | b)))
-                g = g &+ (d.rotatedRight(by: 14) ^ d.rotatedRight(by: 18) ^ d.rotatedRight(by: 41)) &+ (f ^ (d & (e ^ f))) &+ load64(k + 8 * (t + i + 1)) &+ load64(w + 8 * (i + 1))
+                g = g &+ (d.rotatedRight(by: 14) ^ d.rotatedRight(by: 18) ^ d.rotatedRight(by: 41)) &+ (f ^ (d & (e ^ f))) &+ load64(k &+ 8 &* (t &+ i &+ 1)) &+ load64(w &+ 8 &* (i &+ 1))
                 c = c &+ g
                 g = g &+ (h.rotatedRight(by: 28) ^ h.rotatedRight(by: 34) ^ h.rotatedRight(by: 39)) &+ ((h & a) | (b & (h | a)))
-                f = f &+ (c.rotatedRight(by: 14) ^ c.rotatedRight(by: 18) ^ c.rotatedRight(by: 41)) &+ (e ^ (c & (d ^ e))) &+ load64(k + 8 * (t + i + 2)) &+ load64(w + 8 * (i + 2))
+                f = f &+ (c.rotatedRight(by: 14) ^ c.rotatedRight(by: 18) ^ c.rotatedRight(by: 41)) &+ (e ^ (c & (d ^ e))) &+ load64(k &+ 8 &* (t &+ i &+ 2)) &+ load64(w &+ 8 &* (i &+ 2))
                 b = b &+ f
                 f = f &+ (g.rotatedRight(by: 28) ^ g.rotatedRight(by: 34) ^ g.rotatedRight(by: 39)) &+ ((g & h) | (a & (g | h)))
-                e = e &+ (b.rotatedRight(by: 14) ^ b.rotatedRight(by: 18) ^ b.rotatedRight(by: 41)) &+ (d ^ (b & (c ^ d))) &+ load64(k + 8 * (t + i + 3)) &+ load64(w + 8 * (i + 3))
+                e = e &+ (b.rotatedRight(by: 14) ^ b.rotatedRight(by: 18) ^ b.rotatedRight(by: 41)) &+ (d ^ (b & (c ^ d))) &+ load64(k &+ 8 &* (t &+ i &+ 3)) &+ load64(w &+ 8 &* (i &+ 3))
                 a = a &+ e
                 e = e &+ (f.rotatedRight(by: 28) ^ f.rotatedRight(by: 34) ^ f.rotatedRight(by: 39)) &+ ((f & g) | (h & (f | g)))
-                d = d &+ (a.rotatedRight(by: 14) ^ a.rotatedRight(by: 18) ^ a.rotatedRight(by: 41)) &+ (c ^ (a & (b ^ c))) &+ load64(k + 8 * (t + i + 4)) &+ load64(w + 8 * (i + 4))
+                d = d &+ (a.rotatedRight(by: 14) ^ a.rotatedRight(by: 18) ^ a.rotatedRight(by: 41)) &+ (c ^ (a & (b ^ c))) &+ load64(k &+ 8 &* (t &+ i &+ 4)) &+ load64(w &+ 8 &* (i &+ 4))
                 h = h &+ d
                 d = d &+ (e.rotatedRight(by: 28) ^ e.rotatedRight(by: 34) ^ e.rotatedRight(by: 39)) &+ ((e & f) | (g & (e | f)))
-                c = c &+ (h.rotatedRight(by: 14) ^ h.rotatedRight(by: 18) ^ h.rotatedRight(by: 41)) &+ (b ^ (h & (a ^ b))) &+ load64(k + 8 * (t + i + 5)) &+ load64(w + 8 * (i + 5))
+                c = c &+ (h.rotatedRight(by: 14) ^ h.rotatedRight(by: 18) ^ h.rotatedRight(by: 41)) &+ (b ^ (h & (a ^ b))) &+ load64(k &+ 8 &* (t &+ i &+ 5)) &+ load64(w &+ 8 &* (i &+ 5))
                 g = g &+ c
                 c = c &+ (d.rotatedRight(by: 28) ^ d.rotatedRight(by: 34) ^ d.rotatedRight(by: 39)) &+ ((d & e) | (f & (d | e)))
-                b = b &+ (g.rotatedRight(by: 14) ^ g.rotatedRight(by: 18) ^ g.rotatedRight(by: 41)) &+ (a ^ (g & (h ^ a))) &+ load64(k + 8 * (t + i + 6)) &+ load64(w + 8 * (i + 6))
+                b = b &+ (g.rotatedRight(by: 14) ^ g.rotatedRight(by: 18) ^ g.rotatedRight(by: 41)) &+ (a ^ (g & (h ^ a))) &+ load64(k &+ 8 &* (t &+ i &+ 6)) &+ load64(w &+ 8 &* (i &+ 6))
                 f = f &+ b
                 b = b &+ (c.rotatedRight(by: 28) ^ c.rotatedRight(by: 34) ^ c.rotatedRight(by: 39)) &+ ((c & d) | (e & (c | d)))
-                a = a &+ (f.rotatedRight(by: 14) ^ f.rotatedRight(by: 18) ^ f.rotatedRight(by: 41)) &+ (h ^ (f & (g ^ h))) &+ load64(k + 8 * (t + i + 7)) &+ load64(w + 8 * (i + 7))
+                a = a &+ (f.rotatedRight(by: 14) ^ f.rotatedRight(by: 18) ^ f.rotatedRight(by: 41)) &+ (h ^ (f & (g ^ h))) &+ load64(k &+ 8 &* (t &+ i &+ 7)) &+ load64(w &+ 8 &* (i &+ 7))
                 e = e &+ a
                 a = a &+ (b.rotatedRight(by: 28) ^ b.rotatedRight(by: 34) ^ b.rotatedRight(by: 39)) &+ ((b & c) | (d & (b | c)))
                 i += 8
@@ -75,13 +75,13 @@ struct Sha512Blocks: BlockHash {
             t += 16
         }
         store64(load64(state) &+ a, state)
-        store64(load64(state + 8) &+ b, state + 8)
-        store64(load64(state + 16) &+ c, state + 16)
-        store64(load64(state + 24) &+ d, state + 24)
-        store64(load64(state + 32) &+ e, state + 32)
-        store64(load64(state + 40) &+ f, state + 40)
-        store64(load64(state + 48) &+ g, state + 48)
-        store64(load64(state + 56) &+ h, state + 56)
+        store64(load64(state &+ 8) &+ b, state &+ 8)
+        store64(load64(state &+ 16) &+ c, state &+ 16)
+        store64(load64(state &+ 24) &+ d, state &+ 24)
+        store64(load64(state &+ 32) &+ e, state &+ 32)
+        store64(load64(state &+ 40) &+ f, state &+ 40)
+        store64(load64(state &+ 48) &+ g, state &+ 48)
+        store64(load64(state &+ 56) &+ h, state &+ 56)
     }
 }
 

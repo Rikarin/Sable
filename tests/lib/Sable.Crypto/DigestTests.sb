@@ -35,3 +35,56 @@ fn digestsAreEqualWhenTheirBytesAre() {
     let known = Set<Digest>([Digest(message(4)), Digest(message(5)), Digest(message(4))])
     assertEqual(known.count, 2)
 }
+
+/// Every way there is of hashing, reset and used again.
+fn resets<H: HashFunction>(_ type: H.Type) {
+    var hash = H()
+    let empty = hash.finalize()
+    for count in [0, 1, 55, 56, 64, 111, 112, 128, 136, 300] {
+        let bytes = U8[>..](repeating: 9, count: count)
+        hash.update(bytes)
+        let copy = hash
+        let digest = hash.finalize()
+        assert(hash.finalizeAndReset() == digest)
+        assert(hash.finalize() == empty)
+        // A copy made before is not reset.
+        assert(copy.finalize() == digest)
+        assert(H.hash(bytes) == digest)
+    }
+}
+
+@test
+fn aFunctionResetHasNothingHashed() {
+    resets(Sha256.self)
+    resets(Sha384.self)
+    resets(Sha512.self)
+    resets(Sha3_256.self)
+    resets(Sha3_384.self)
+    resets(Sha3_512.self)
+    resets(Blake2b.self)
+    resets(Blake3.self)
+    resets(Insecure.Md5.self)
+    resets(Insecure.Sha1.self)
+}
+
+/// A function reset is what it was before it was given anything.
+fn resetsTo<H: HashFunction>(_ start: H) {
+    var hash = start
+    let empty = start.finalize()
+    for count in [0, 1, 64, 128, 1024, 5000] {
+        hash.update(U8[>..](repeating: 9, count: count))
+        let digest = hash.finalize()
+        assert(hash.finalizeAndReset() == digest)
+        assert(hash.finalize() == empty && start.finalize() == empty)
+    }
+    hash.update([1])
+    assert(hash.finalizeAndReset() != empty)
+}
+
+@test
+fn aFunctionResetKeepsItsKeyAndLength() {
+    resetsTo(Blake2b(digestByteCount: 20))
+    resetsTo(Blake2b(digestByteCount: 32, key: SymmetricKey([1, 2, 3])))
+    resetsTo(Blake3(key: SymmetricKey(U8[>..](repeating: 1, count: 32))))
+    resetsTo(Blake3(derivingKeyFor: "a test"))
+}

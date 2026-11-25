@@ -34,6 +34,12 @@ public struct Sha256: HashFunction {
         return bigEndianDigest32(state.finish(), count: 32)
     }
 
+    public mutating fn finalizeAndReset() -> Digest {
+        let digest = bigEndianDigest32(state.finishInPlace(), count: 32)
+        state.restart(Sha256.initialState)
+        return digest
+    }
+
     public static fn iterateHmac(inner: Sha256, outer: Sha256, first: U8[:], iterations: Int) -> U8[>..] {
         return BlockState<Sha256Blocks>.iterateHmac(inner: inner.state, outer: outer.state, first: first, iterations: iterations)
     }

@@ -85,3 +85,36 @@ fn aCodeInPartsIsTheWholes() {
     assert(code.finalize() == Hmac<Sha512>.authenticationCode(for: message(300), using: key))
     assert(begun.finalize() == Hmac<Sha512>.authenticationCode(for: message(100), using: key))
 }
+
+@test
+fn aCodeInPartsIsCheckedAsItStands() {
+    let key = SymmetricKey(message(40))
+    var code = Hmac<Sha256>(key: key)
+    code.update(message(100)[..<60])
+    assert(!code.isValid(Hmac<Sha256>.authenticationCode(for: message(100), using: key)))
+    code.update(message(100)[60...])
+    let whole = Hmac<Sha256>.authenticationCode(for: message(100), using: key)
+    assert(code.isValid(whole) && code.isValid(whole.bytes))
+    assert(!code.isValid(whole.bytes[..<31]) && !code.isValid([]))
+    // Checking it leaves it as it was.
+    code.update([1])
+    assert(!code.isValid(whole))
+}
+
+@test
+fn keysOfEveryLengthAroundABlockMakeTheCodeTheirPaddingDoes() {
+    for count in [0, 1, 63, 64, 65, 127, 128, 129, 200] {
+        // RFC 2104, written out.
+        var pad = count > 64 ? Sha256.hash(message(count)).bytes : message(count)
+        while pad.count < 64 {
+            pad.append(0)
+        }
+        var inner = Sha256()
+        inner.update(U8[>..](pad.map { $0 ^ 0x36 }))
+        inner.update(message(20))
+        var outer = Sha256()
+        outer.update(U8[>..](pad.map { $0 ^ 0x5C }))
+        outer.update(inner.finalize().bytes)
+        assert(Hmac<Sha256>.authenticationCode(for: message(20), using: SymmetricKey(message(count))) == outer.finalize())
+    }
+}

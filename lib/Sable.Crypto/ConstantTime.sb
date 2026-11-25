@@ -33,6 +33,24 @@ public fn constantTimeEquals(_ a: U8[:], _ b: U8[:]) -> Bool {
     return difference == 0
 }
 
+/// Whether every byte is the one given, in a time that depends only on how
+/// many there are: whether a secret is all zeros, say. .NET's
+/// `CryptographicOperations.FixedTimeEquals` with a byte.
+///
+/// ```sable
+/// assert(constantTimeEquals([0, 0, 0], repeating: 0))
+/// assert(!constantTimeEquals([0, 1, 0], repeating: 0))
+/// ```
+public fn constantTimeEquals(_ bytes: U8[:], repeating byte: U8) -> Bool {
+    var difference: U64 = 0
+    var i = 0
+    while i < bytes.count {
+        difference = blackBox(difference | U64(bytes[i] ^ byte))
+        i += 1
+    }
+    return difference == 0
+}
+
 /// Sets every byte to zero, whether or not anything reads them after, which
 /// an ordinary loop of writes just before the bytes are let go of is not
 /// sure to. .NET's `CryptographicOperations.ZeroMemory`.

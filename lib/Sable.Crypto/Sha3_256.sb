@@ -23,6 +23,6 @@ public struct Sha3_256: HashFunction {
     }
 
     public fn finalize() -> Digest {
-        return Digest(sponge.output(count: 32))
+        return Digest(taking: sponge.output(count: 32))
     }
 }

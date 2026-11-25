@@ -161,3 +161,51 @@ fn theStandardsSamplesOfOutputWithNoFixedLengthAreGiven() {
     var strongReader = strong.reader()
     assertEqual("\(Digest(strongReader.read(count: 64)))", "1755133f1534752aad0748f2c706fb5c784512cab835cd15676b16c0c6647fa96faa7af634a0bf8ff6df39374fa00fad9a39e322a7c92065a64eb1fb0801eb2b")
 }
+
+@test
+fn kmac128InPartsIsCheckedAsItStands() {
+    let key = SymmetricKey(message(32))
+    var code = Kmac128(key: key, customization: [1])
+    code.update(utf8: "a ")
+    code.update(utf8: "message")
+    let whole = code.finalize()
+    var bytes: U8[>..] = []
+    bytes.append(utf8: "a message")
+    assert(whole == Kmac128.authenticationCode(for: bytes, using: key, customization: [1]))
+    assert(code.isValid(whole) && code.isValid(whole.bytes) && code.isValid(code.finalize(count: 16)))
+    // A part of a code is not the code of that length.
+    assert(!code.isValid(whole.bytes[..<24]) && !code.isValid(code.finalize(count: 15)))
+    assert(Kmac128.isValid(whole, for: bytes, using: key, customization: [1]))
+    assert(!Kmac128.isValid(whole, for: bytes, using: key))
+    var reader = code.reader()
+    let output = reader.read(count: 100)
+    // A part of the output is.
+    assert(code.isValidOutput(output) && code.isValidOutput(output[..<16]))
+    assert(!code.isValidOutput(output[..<15]) && !code.isValidOutput(output[1...]) && !code.isValidOutput(whole.bytes))
+    code.update([1])
+    assert(!code.isValid(whole) && !code.isValidOutput(output))
+}
+
+@test
+fn kmac256InPartsIsCheckedAsItStands() {
+    let key = SymmetricKey(message(32))
+    var code = Kmac256(key: key, customization: [1])
+    code.update(utf8: "a ")
+    code.update(utf8: "message")
+    let whole = code.finalize()
+    var bytes: U8[>..] = []
+    bytes.append(utf8: "a message")
+    assert(whole == Kmac256.authenticationCode(for: bytes, using: key, customization: [1]))
+    assert(code.isValid(whole) && code.isValid(whole.bytes) && code.isValid(code.finalize(count: 16)))
+    // A part of a code is not the code of that length.
+    assert(!code.isValid(whole.bytes[..<24]) && !code.isValid(code.finalize(count: 15)))
+    assert(Kmac256.isValid(whole, for: bytes, using: key, customization: [1]))
+    assert(!Kmac256.isValid(whole, for: bytes, using: key))
+    var reader = code.reader()
+    let output = reader.read(count: 100)
+    // A part of the output is.
+    assert(code.isValidOutput(output) && code.isValidOutput(output[..<16]))
+    assert(!code.isValidOutput(output[..<15]) && !code.isValidOutput(output[1...]) && !code.isValidOutput(whole.bytes))
+    code.update([1])
+    assert(!code.isValid(whole) && !code.isValidOutput(output))
+}

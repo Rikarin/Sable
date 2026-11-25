@@ -27,11 +27,14 @@ public struct Hkdf<H: HashFunction> {
 
     /// The first step: the secret made a key of a digest's length.
     public static fn extract(_ secret: SymmetricKey, salt: U8[:] = []) -> SymmetricKey {
-        var code = Hmac<H>(secret: salt)
+        var code = Hmac<H>(key: SymmetricKey(salt))
         var bytes = secret.bytes()
         code.update(bytes)
         bytes.zeroSecurely()
-        return SymmetricKey(code.finalize().bytes)
+        var key = code.spend().bytes
+        let extracted = SymmetricKey(key)
+        key.zeroSecurely()
+        return extracted
     }
 
     /// The second: a key of a digest's length, or any strong one, made a key

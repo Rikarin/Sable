@@ -1,0 +1,115 @@
+module StreamTests
+
+// Streams hashed and authenticated as they are read (Sable.Crypto). Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.IO
+import Sable.Testing
+
+/// Gives its bytes a few at a time, and then an error, if it is to.
+struct Trickle: Reader {
+    var bytes: U8[>..]
+    var fails: Bool
+
+    mutating fn read(upTo count: Int) throws(IoError) -> U8[>..] {
+        if bytes.isEmpty && fails {
+            throw IoError.UnexpectedEof
+        }
+        let taken = bytes.count < 7 ? bytes.count : 7
+        let part = bytes[..<taken].toArray()
+        bytes = bytes[taken...].toArray()
+        return part
+    }
+}
+
+/// The same of a task's, from a place in bytes that do not change.
+final class AsyncTrickle: AsyncReader {
+    let bytes: U8[>..]
+    let at: Atomic<Int>
+
+    init(_ bytes: U8[>..]) {
+        self.bytes = bytes
+        at = Atomic<Int>(0)
+    }
+
+    fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        await Task.yield()
+        let start = at.load()
+        let end = start + 7 < bytes.count ? start + 7 : bytes.count
+        at.store(end)
+        return bytes[start..<end].toArray()
+    }
+}
+
+let key = SymmetricKey(U8[>..](repeating: 5, count: 32))
+
+fn message() -> U8[>..] {
+    return U8[>..]((0..<300).map { U8($0 & 0xFF) })
+}
+
+@test
+fn aReaderIsHashedToItsEnd() throws {
+    var reader = Trickle(bytes: message(), fails: false)
+    assert(try Sha256.hash(reading: &reader) == Sha256.hash(message()))
+    // Nothing is left.
+    assert(try Sha256.hash(reading: &reader) == Sha256.hash([]))
+    var stream = MemoryStream(message())
+    assert(try Sha3_256.hash(reading: &stream) == Sha3_256.hash(message()))
+}
+
+@test
+fn aReaderIsHashedAfterWhatWasGiven() throws {
+    var hash = Blake2b()
+    hash.update(message()[..<10])
+    var reader = Trickle(bytes: message()[10...].toArray(), fails: false)
+    try hash.update(reading: &reader)
+    assert(hash.finalize() == Blake2b.hash(message()))
+}
+
+@test
+fn aReadersErrorIsThrown() {
+    var reader = Trickle(bytes: message(), fails: true)
+    let digest = try? Sha256.hash(reading: &reader)
+    assert(digest.isNone)
+    reader = Trickle(bytes: message(), fails: true)
+    let valid = try? Hmac<Sha256>.isValid([], reading: &reader, using: key)
+    assert(valid.isNone)
+}
+
+@test
+fn anAsyncReaderIsHashedToItsEnd() async throws {
+    assert(try await Sha512.hash(reading: AsyncTrickle(message())) == Sha512.hash(message()))
+}
+
+@test
+fn aReadersHmacIsThatOfItsBytes() async throws {
+    let code = Hmac<Sha256>.authenticationCode(for: message(), using: key)
+    var reader = Trickle(bytes: message(), fails: false)
+    assert(try Hmac<Sha256>.authenticationCode(reading: &reader, using: key) == code)
+    reader = Trickle(bytes: message(), fails: false)
+    assert(try Hmac<Sha256>.isValid(code.bytes, reading: &reader, using: key))
+    reader = Trickle(bytes: message()[1...].toArray(), fails: false)
+    assert(!(try Hmac<Sha256>.isValid(code.bytes, reading: &reader, using: key)))
+    assert(try await Hmac<Sha256>.authenticationCode(reading: AsyncTrickle(message()), using: key) == code)
+    assert(try await Hmac<Sha256>.isValid(code.bytes, reading: AsyncTrickle(message()), using: key))
+    assert(!(try await Hmac<Sha256>.isValid(code.bytes, reading: AsyncTrickle([]), using: key)))
+}
+
+@test
+fn aReadersKmacIsThatOfItsBytes() async throws {
+    let customization: U8[>..] = [1, 2]
+    let short = Kmac128.authenticationCode(for: message(), using: key, customization: customization)
+    let long = Kmac256.authenticationCode(for: message(), using: key, customization: customization)
+    var reader = Trickle(bytes: message(), fails: false)
+    assert(try Kmac128.isValid(short.bytes, reading: &reader, using: key, customization: customization))
+    reader = Trickle(bytes: message(), fails: false)
+    assert(!(try Kmac128.isValid(short.bytes, reading: &reader, using: key)))
+    reader = Trickle(bytes: message(), fails: false)
+    assert(try Kmac256.isValid(long.bytes, reading: &reader, using: key, customization: customization))
+    reader = Trickle(bytes: [], fails: false)
+    assert(!(try Kmac256.isValid(long.bytes, reading: &reader, using: key, customization: customization)))
+    assert(try await Kmac128.isValid(short.bytes, reading: AsyncTrickle(message()), using: key, customization: customization))
+    assert(try await Kmac256.isValid(long.bytes, reading: AsyncTrickle(message()), using: key, customization: customization))
+    assert(!(try await Kmac256.isValid(short.bytes, reading: AsyncTrickle(message()), using: key, customization: customization)))
+}

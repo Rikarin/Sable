@@ -1437,13 +1437,19 @@ linked. The alternative was CommonCrypto, CNG and OpenSSL: three libraries
 whose algorithms differ (none has BLAKE3; SHA-3 and Argon2 depend on the
 version), the last of which a Linux machine need not have, and none of which
 the interpreter could call. What only they had is speed, which is the
-processor's instructions, and those are in `runtime/crypto.c`: the SHA-256
-block by ARMv8's and x86's SHA extensions, and SHA-512's and Keccak's by
-ARMv8.2's. Which the processor has is asked once (sysctl, getauxval,
-IsProcessorFeaturePresent, cpuid); a kernel is asked for whole blocks
-(`crypto_blocks`) and says whether it did them, and where it did not the
-portable loop does. `SABLE_CRYPTO_PORTABLE=1` says the processor has none,
-for tests. x86's SHA-512 and SHA-3, and everything else, are portable only.
+processor's instructions, and those are in `runtime/crypto.c`, for SHA-1,
+SHA-256, SHA-512 and Keccak: ARMv8's SHA instructions and ARMv8.2's, x86's
+SHA extensions, and for what those do not have AVX-512 or else AVX2 and BMI2
+(SHA-512's schedule is worked out two blocks at a time while the first one's
+rounds wait on each other; Keccak's lanes are in AVX-512's registers, or in
+the ordinary ones with BMI's). ARM's Keccak instructions are used on Apple's
+processors only, as Neoverse's do one at a time and the portable code is
+twice as fast there. Which the processor has is asked once (sysctl,
+getauxval, IsProcessorFeaturePresent, cpuid); a kernel is asked for whole
+blocks (`crypto_blocks`) and says whether it did them, and where it did not
+the portable loop does. For tests, `SABLE_CRYPTO_PORTABLE=1` says the
+processor has none, and `SABLE_CRYPTO_NARROW=1` that it has no AVX-512.
+Everything else is portable only: MD5, BLAKE2b, BLAKE3, Argon2id, scrypt.
 
 - **State** — a hash's, an HMAC's, a key's — is raw memory of its own
   (`SecretMemory`), zeroed by its owner's deinit, where no copy of it is
@@ -1459,16 +1465,19 @@ for tests. x86's SHA-512 and SHA-3, and everything else, are portable only.
 - **`secureZero`** is a call of the runtime's whose memset is kept by an
   assembly barrier, in the link's optimiser too.
 - **Randomness** is one source, `random_bytes` of the platform layer, for
-  `SecureRandom`, `SystemRandomNumberGenerator` and UUIDs: getentropy 256
-  bytes at a time (again on EINTR), BCryptGenRandom, or WASI's random_get.
-  When it fails the program traps.
+  `SecureRandom`, `SystemRandomNumberGenerator` and UUIDs: arc4random_buf on
+  Apple's systems, getrandom on Linux (again on EINTR), BCryptGenRandom, or
+  WASI's random_get. When it fails the program traps.
+- **Verifying** a code (`isValid` of `Hmac` and the KMACs) takes the bytes,
+  what was given to `update` so far, or a reader's bytes to its end, where
+  the task may suspend; `.NET`'s `...AndReset` is a copy kept of the value.
 - **Passwords.** Argon2id fills its lanes one after another. Verifying reads
   a PHC string strictly — one spelling of each number, the parameters in
   their order, a salt of at least 8 bytes and a hash of at least 16 — and
   refuses one that asks for more memory or work than the caller's limits.
 
-SHA-256, SHA-512, SHA3-256 and HMAC are timed against .NET by the benchmarks
-of those names. Symmetric ciphers and signatures are not here yet.
+SHA-1, SHA-256, SHA-512, SHA3-256, MD5, HMAC, PBKDF2 and the random source
+are timed against .NET by the benchmarks of those names. Symmetric ciphers and signatures are not here yet.
 
 **Sockets.** `Sable.Net`'s sockets are nonblocking and handles of the
 runtime's (`runtime/net.c`), read, written, accepted from and connected over

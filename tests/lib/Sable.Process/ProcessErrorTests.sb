@@ -16,16 +16,20 @@ fn aProcessErrorIsAnError() {
     expect(isAnError(ProcessError.NotFound(program: "nothing-by-this-name")))
 }
 
-@test
-fn aProcessErrorSaysWhatCouldNotBeDone() {
-    assertEqual(ProcessError.NotFound(program: "nothing-by-this-name").description(), "no program 'nothing-by-this-name' could be started")
-    assertEqual(ProcessError.PermissionDenied(program: "x").description(), "'x' may not be run")
-    assertEqual(ProcessError.NotExecutable(program: "x").description(), "'x' is not a program the system can run")
-    assertEqual(ProcessError.NoDirectory(path: "x").description(), "no directory 'x' to start a program in")
-    assertEqual(ProcessError.File(path: "x").description(), "'x' could not be opened for a program's stream")
-    assertEqual(ProcessError.InvalidArgument(text: "x").description(), "'x' cannot be given to a program")
-    assertEqual(ProcessError.Unsupported.description(), "this system cannot do that")
-    assertEqual(ProcessError.Cancelled.description(), "the task was cancelled")
-    assertEqual(ProcessError.Io(error: IoError.Disconnected).description(), IoError.Disconnected.description())
-    assertEqual(ProcessError.Os(program: "x", code: 11).description(), "'x' could not be started: the system's error 11")
+let errors: (ProcessError, String)[>..] = [
+    (ProcessError.NotFound(program: "nothing-by-this-name"), "no program 'nothing-by-this-name' could be started"),
+    (ProcessError.PermissionDenied(program: "x"), "'x' may not be run"),
+    (ProcessError.NotExecutable(program: "x"), "'x' is not a program the system can run"),
+    (ProcessError.NoDirectory(path: "x"), "no directory 'x' to start a program in"),
+    (ProcessError.File(path: "x"), "'x' could not be opened for a program's stream"),
+    (ProcessError.InvalidArgument(text: "x"), "'x' cannot be given to a program"),
+    (ProcessError.Unsupported, "this system cannot do that"),
+    (ProcessError.Cancelled, "the task was cancelled"),
+    (ProcessError.Io(error: IoError.Disconnected), IoError.Disconnected.description()),
+    (ProcessError.Os(program: "x", code: 11), "'x' could not be started: the system's error 11"),
+]
+
+@test(arguments: errors)
+fn aProcessErrorSaysWhatCouldNotBeDone(_ error: ProcessError, _ text: String) {
+    expect(error.description() == text)
 }

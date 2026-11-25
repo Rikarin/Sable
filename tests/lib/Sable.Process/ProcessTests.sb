@@ -53,26 +53,12 @@ fn aProgramASignalEndedSaysWhich() {
 
 @test
 fn whatIsNoProgramIsNotFound() {
-    do {
-        _ = try Process.run("surely-not-a-program-here", [])
-        assert(false)
-    } catch .NotFound(let program) {
-        assertEqual(program, "surely-not-a-program-here")
-    } catch {
-        assert(false)
-    }
+    expectThrows(saying: ProcessError.NotFound(program: "surely-not-a-program-here").description()) { _ = try Process.run("surely-not-a-program-here", []) }
 }
 
 @test
 fn aNulInAnArgumentIsRefused() {
-    do {
-        _ = try Process.run("echo", ["a\u{0}b"])
-        assert(false)
-    } catch .InvalidArgument(let text) {
-        assertEqual(text.count, 3)
-    } catch {
-        assert(false)
-    }
+    expectThrows(saying: ProcessError.InvalidArgument(text: "a\u{0}b").description()) { _ = try Process.run("echo", ["a\u{0}b"]) }
 }
 
 @test

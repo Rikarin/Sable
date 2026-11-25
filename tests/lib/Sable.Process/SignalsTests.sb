@@ -26,7 +26,7 @@ fn aSignalAnotherProgramSendsComes() async {
     let sent = try! await Command("sh").arguments(["-c", "kill -USR2 $PPID"]).status()
     expect(sent.success)
     for await signal in signals {
-        assert(signal == Signal.User2)
+        expect(signal == Signal.User2)
         break
     }
 }
@@ -74,7 +74,7 @@ fn itComesAgain() async {
     var i = 0
     while i < 20 {
         Signals.raise(.User1)
-        assert(await iterator.next()! == Signal.User1)
+        expect(await iterator.next()! == Signal.User1, "\(i)")
         i += 1
     }
 }

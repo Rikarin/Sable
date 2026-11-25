@@ -6,15 +6,16 @@ module SignalTests
 import Sable.Process
 import Sable.Testing
 
-@test
-fn everySignalIsTheOneOfItsNumber() {
-    let all: Signal[>..] = [.Hangup, .Interrupt, .Quit, .Abort, .Kill, .SegmentationFault, .Pipe, .Alarm, .Terminate, .User1, .User2, .Child, .Continue, .Stop, .WindowChange]
-    var names: String[>..] = []
-    for signal in all {
-        assert(Signal.of(number: signal.number) == signal)
-        names.append(Signal.of(number: signal.number).name)
-    }
-    expect(names == ["HUP", "INT", "QUIT", "ABRT", "KILL", "SEGV", "PIPE", "ALRM", "TERM", "USR1", "USR2", "CHLD", "CONT", "STOP", "WINCH"])
+let signals: (Signal, String)[>..] = [
+    (.Hangup, "HUP"), (.Interrupt, "INT"), (.Quit, "QUIT"), (.Abort, "ABRT"), (.Kill, "KILL"),
+    (.SegmentationFault, "SEGV"), (.Pipe, "PIPE"), (.Alarm, "ALRM"), (.Terminate, "TERM"), (.User1, "USR1"),
+    (.User2, "USR2"), (.Child, "CHLD"), (.Continue, "CONT"), (.Stop, "STOP"), (.WindowChange, "WINCH"),
+]
+
+@test(arguments: signals)
+fn everySignalIsTheOneOfItsNumber(_ signal: Signal, _ name: String) {
+    expect(Signal.of(number: signal.number) == signal)
+    expect(Signal.of(number: signal.number).name == name)
 }
 
 @test

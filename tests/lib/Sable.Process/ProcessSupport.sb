@@ -1,0 +1,63 @@
+module ProcessSupport
+
+// What the tests of Sable.Process share.
+
+import Sable.Concurrency
+import Sable.IO
+import Sable.Process
+import Sable.Testing
+import Sable.Time
+
+#if !os(windows)
+
+public fn sh(_ script: String) -> Command {
+    return Command("sh").arguments(["-c", script])
+}
+
+/// Whether the process has ended, and been reaped, soon enough: a zombie can
+/// still be signalled.
+public fn isGone(_ id: String) async -> Bool {
+    var tries = 0
+    while tries < 400 {
+        let asked = try! await sh("kill -0 \(id)").stderr(.Null).status()
+        if !asked.success {
+            return true
+        }
+        try? await Task.sleep(for: Duration.milliseconds(10))
+        tries += 1
+    }
+    return false
+}
+
+/// Files of a test's own, removed after it.
+public final class TemporaryFiles: Fixture {
+    var paths: String[>..] = []
+
+    public init() { }
+
+    /// Where a file of the name may be: there is none yet.
+    public fn path(_ name: String) -> String {
+        let path = "\(Environment.temporaryDirectory)/sable-process-\(Process.id())-\(name)"
+        paths.append(path)
+        return path
+    }
+
+    /// A file that may be run, of the text.
+    public fn program(_ name: String, _ text: String) throws -> String {
+        let path = path(name)
+        var options = OpenOptions.writing
+        options.permissions = 0o755
+        let file = try File.open(path, options: options)
+        try file.write(text.utf8.toArray())
+        file.close()
+        return path
+    }
+
+    public async fn tearDown() throws {
+        for path in paths {
+            try? File.remove(path)
+        }
+    }
+}
+
+#endif

@@ -10,28 +10,11 @@ import Sable.Process
 import Sable.Testing
 import Sable.Time
 
+import ProcessSupport
+
 // Shells, paths and signals as POSIX has them; Windows' are tested by
 // Sable.CodeGen.Tests' ProcessTests.
 #if !os(windows)
-
-fn sh(_ script: String) -> Command {
-    return Command("sh").arguments(["-c", script])
-}
-
-// Whether the process has ended, and been reaped, soon enough: a zombie
-// can still be signalled.
-fn isGone(_ id: Int) async -> Bool {
-    var tries = 0
-    while tries < 400 {
-        let asked = try! await sh("kill -0 \(id)").stderr(.Null).status()
-        if !asked.success {
-            return true
-        }
-        try? await Task.sleep(for: Duration.milliseconds(10))
-        tries += 1
-    }
-    return false
-}
 
 // ---- Its ending -------------------------------------------------------------
 
@@ -62,21 +45,15 @@ fn manyMayWaitForOne() async {
     try? await Task.sleep(for: Duration.milliseconds(20))
     child.stdin!.close()
     for task in waiting {
-        assert(await task.value.success)
+        expect(await task.value.success)
     }
 }
 
 @test
 fn aWaitCanHaveALimit() async {
     let child = try! Command("sleep").argument("60").spawn()
-    do {
-        _ = try await withTimeout(Duration.milliseconds(30)) { try await child.wait() }
-        assert(false)
-    } catch let error as TimeoutError {
-        expect(error.duration == Duration.milliseconds(30))
-    } catch {
-        assert(false)
-    }
+    let error = await expectThrows(TimeoutError.self) { _ = try await withTimeout(Duration.milliseconds(30)) { try await child.wait() } }
+    expect(error?.duration == Duration.milliseconds(30))
     // It runs on, and can be waited for again.
     expect(child.tryWait() == none)
     expect(child.kill())
@@ -90,15 +67,10 @@ fn aTaskCancelledBeforeItWaitsThrows() async {
         while !Task.isCancelled {
             await Task.yield()
         }
-        do {
-            _ = try await child.wait()
-            return "ended"
-        } catch {
-            return error.description()
-        }
+        await expectThrows(saying: ProcessError.Cancelled.description()) { _ = try await child.wait() }
     }
     waiting.cancel()
-    assertEqual(await waiting.value, ProcessError.Cancelled.description())
+    _ = await waiting.value
     child.kill()
     _ = try! await child.wait()
 }
@@ -110,7 +82,7 @@ fn aChildNoOneWaitsForIsNoZombie() async {
         let child = try! Command("true").spawn()
         id = child.id
     }
-    expect(await isGone(id))
+    expect(await isGone("\(id)"))
 }
 
 // ---- Killed and signalled -------------------------------------------------------
@@ -180,8 +152,8 @@ fn killingTheTreeEndsWhatItStarted() async {
     let second = try! await lines.next()
     expect(child.kill(tree: true))
     expect(try! await child.wait() == ExitStatus(signal: .Kill))
-    expect(await isGone(first!.toInt()!))
-    expect(await isGone(second!.toInt()!))
+    expect(await isGone(first!))
+    expect(await isGone(second!))
 }
 
 @test
@@ -254,20 +226,15 @@ fn writingMoreThanAPipeHoldsWaitsForItsReader() async {
 fn aWriteWaitingIsCancelled() async {
     let child = try! Command("sleep").argument("60").stdin(.Piped).spawn()
     let writing = Task.spawn {
-        do {
-            var bytes: U8[>..] = []
-            while bytes.count < 1_000_000 {
-                bytes.append(120)
-            }
-            try await child.stdin!.write(bytes)
-            return "written"
-        } catch {
-            return error.description()
+        var bytes: U8[>..] = []
+        while bytes.count < 1_000_000 {
+            bytes.append(120)
         }
+        await expectThrows(saying: IoError.Cancelled.description()) { try await child.stdin!.write(bytes) }
     }
     try? await Task.sleep(for: Duration.milliseconds(30))
     writing.cancel()
-    assertEqual(await writing.value, IoError.Cancelled.description())
+    _ = await writing.value
     child.kill()
     _ = try! await child.wait()
 }
@@ -276,26 +243,16 @@ fn aWriteWaitingIsCancelled() async {
 fn aReadWaitingIsCancelledOrClosed() async {
     let child = try! Command("sleep").argument("60").stdout(.Piped).stderr(.Piped).spawn()
     let cancelled = Task.spawn {
-        do {
-            _ = try await child.stdout!.read(upTo: 1)
-            return "read"
-        } catch {
-            return error.description()
-        }
+        await expectThrows(saying: IoError.Cancelled.description()) { _ = try await child.stdout!.read(upTo: 1) }
     }
     let closed = Task.spawn {
-        do {
-            _ = try await child.stderr!.read(upTo: 1)
-            return "read"
-        } catch {
-            return error.description()
-        }
+        await expectThrows(saying: IoError.Disconnected.description()) { _ = try await child.stderr!.read(upTo: 1) }
     }
     try? await Task.sleep(for: Duration.milliseconds(30))
     cancelled.cancel()
     child.stderr!.close()
-    assertEqual(await cancelled.value, IoError.Cancelled.description())
-    assertEqual(await closed.value, IoError.Disconnected.description())
+    _ = await cancelled.value
+    _ = await closed.value
     child.kill()
     _ = try! await child.wait()
 }

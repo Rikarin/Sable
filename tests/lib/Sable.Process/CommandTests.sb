@@ -10,27 +10,11 @@ import Sable.Process
 import Sable.Testing
 import Sable.Time
 
+import ProcessSupport
+
 // Shells, paths and signals as POSIX has them; Windows' are tested by
 // Sable.CodeGen.Tests' ProcessTests.
 #if !os(windows)
-
-fn sh(_ script: String) -> Command {
-    return Command("sh").arguments(["-c", script])
-}
-
-// A file of its own for the test, which removes it.
-fn scratch(_ name: String) -> String {
-    return "\(Environment.temporaryDirectory)/sable-process-\(Process.id())-\(name)"
-}
-
-fn failure(_ command: Command) -> ProcessError? {
-    do {
-        _ = try command.spawn()
-        return none
-    } catch {
-        return error
-    }
-}
 
 // ---- What it is given -------------------------------------------------------
 
@@ -103,9 +87,9 @@ fn aPathIsFoundFromThisProgramsDirectory() async {
 }
 
 @test
-fn itHasNoneOfThisProgramsFiles() async {
+fn itHasNoneOfThisProgramsFiles(files: TemporaryFiles) async {
     let before = try! await Command("ls").argument("/dev/fd").output()
-    let path = scratch("open")
+    let path = files.path("open")
     let file = try! File.open(path, options: .writing)
     let listener = try! TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
     let other = try! Command("cat").stdin(.Piped).stdout(.Piped).spawn()
@@ -114,7 +98,6 @@ fn itHasNoneOfThisProgramsFiles() async {
     _ = try! await other.wait()
     file.close()
     listener.close()
-    try! File.remove(path)
     // Its three streams, and what 'ls' opened to look.
     expect(after.output.contains("2\n") && !after.output.contains("5"), after.output)
     assertEqual(after.output, before.output)
@@ -136,9 +119,9 @@ fn nothingIsReadUnlessSaid() async {
 }
 
 @test
-fn aStreamCanBeAFile() async {
-    let input = scratch("in")
-    let output = scratch("out")
+fn aStreamCanBeAFile(files: TemporaryFiles) async {
+    let input = files.path("in")
+    let output = files.path("out")
     try! File.writeBytes(input, "from a file".utf8.toArray())
     let status = try! await Command("cat").stdin(.File(path: input)).stdout(.File(path: output)).status()
     expect(status.success)
@@ -147,17 +130,14 @@ fn aStreamCanBeAFile() async {
     let again = try! await sh("printf x").stdout(.File(path: output)).status()
     expect(again.success)
     expect(try! File.readBytes(output) == [0x78])
-    try! File.remove(input)
-    try! File.remove(output)
 }
 
 @test
-fn outputAndErrorsToOneFileAreInOrder() async {
-    let path = scratch("both")
+fn outputAndErrorsToOneFileAreInOrder(files: TemporaryFiles) async {
+    let path = files.path("both")
     let status = try! await sh("echo one; echo two >&2; echo three").stdout(.File(path: path)).stderr(.File(path: path)).status()
     expect(status.success)
     expect(try! File.readBytes(path) == "one\ntwo\nthree\n".utf8.toArray())
-    try! File.remove(path)
 }
 
 @test
@@ -211,71 +191,51 @@ fn manyAtOnceAllEnd() async {
 
 @test
 fn whatIsNotThereIsNotFound() {
-    if let error = failure(Command("surely-not-a-program")) {
-        assertEqual(error.description(), ProcessError.NotFound(program: "surely-not-a-program").description())
-    } else {
-        assert(false)
-    }
-    assertEqual(failure(Command("/surely/not/here"))!.description(), ProcessError.NotFound(program: "/surely/not/here").description())
-    assertEqual(failure(Command(""))!.description(), ProcessError.NotFound(program: "").description())
+    expectThrows(saying: ProcessError.NotFound(program: "surely-not-a-program").description()) { _ = try Command("surely-not-a-program").spawn() }
+    expectThrows(saying: ProcessError.NotFound(program: "/surely/not/here").description()) { _ = try Command("/surely/not/here").spawn() }
+    expectThrows(saying: ProcessError.NotFound(program: "").description()) { _ = try Command("").spawn() }
 }
 
 @test
-fn whatMayNotBeRunIsDenied() {
-    let path = scratch("plain")
+fn whatMayNotBeRunIsDenied(files: TemporaryFiles) {
+    let path = files.path("plain")
     try! File.writeBytes(path, "#!/bin/sh\n".utf8.toArray())
-    let error = failure(Command(path))
-    try! File.remove(path)
-    assertEqual(error!.description(), ProcessError.PermissionDenied(program: path).description())
-    assertEqual(failure(Command("/"))!.description(), ProcessError.PermissionDenied(program: "/").description())
+    expectThrows(saying: ProcessError.PermissionDenied(program: path).description()) { _ = try Command(path).spawn() }
+    expectThrows(saying: ProcessError.PermissionDenied(program: "/").description()) { _ = try Command("/").spawn() }
 }
 
 @test
-fn whatIsNoProgramIsNotExecutable() {
+fn whatIsNoProgramIsNotExecutable(files: TemporaryFiles) {
     // No shell is asked to make something of it.
-    let path = scratch("text")
-    var options = OpenOptions.writing
-    options.permissions = 0o755
-    let file = try! File.open(path, options: options)
-    try! file.write("echo no\n".utf8.toArray())
-    file.close()
-    let error = failure(Command(path))
-    try! File.remove(path)
-    assertEqual(error!.description(), ProcessError.NotExecutable(program: path).description())
+    let path = try! files.program("text", "echo no\n")
+    expectThrows(saying: ProcessError.NotExecutable(program: path).description()) { _ = try Command(path).spawn() }
 }
 
 @test
 fn aDirectoryThatIsNotThereIsSaidToBe() {
-    assertEqual(failure(Command("true").workingDirectory("/surely/not/here"))!.description(), ProcessError.NoDirectory(path: "/surely/not/here").description())
+    expectThrows(saying: ProcessError.NoDirectory(path: "/surely/not/here").description()) { _ = try Command("true").workingDirectory("/surely/not/here").spawn() }
 }
 
 @test
 fn aFileThatCannotBeOpenedIsSaid() {
-    let read = failure(Command("true").stdin(.File(path: "/surely/not/here")))
-    assertEqual(read!.description(), ProcessError.File(path: "/surely/not/here").description())
-    let written = failure(Command("true").stderr(.File(path: "/surely/not/there")))
-    assertEqual(written!.description(), ProcessError.File(path: "/surely/not/there").description())
+    expectThrows(saying: ProcessError.File(path: "/surely/not/here").description()) { _ = try Command("true").stdin(.File(path: "/surely/not/here")).spawn() }
+    expectThrows(saying: ProcessError.File(path: "/surely/not/there").description()) { _ = try Command("true").stderr(.File(path: "/surely/not/there")).spawn() }
 }
 
 @test
 fn whatCannotBeGivenIsRefused() {
-    assertEqual(failure(Command("true").argument("\u{0}"))!.description(), ProcessError.InvalidArgument(text: "\u{0}").description())
-    assertEqual(failure(Command("true").environment("", "x"))!.description(), ProcessError.InvalidArgument(text: "").description())
-    assertEqual(failure(Command("true").environment("A=B", "x"))!.description(), ProcessError.InvalidArgument(text: "A=B").description())
+    expectThrows(saying: ProcessError.InvalidArgument(text: "\u{0}").description()) { _ = try Command("true").argument("\u{0}").spawn() }
+    expectThrows(saying: ProcessError.InvalidArgument(text: "").description()) { _ = try Command("true").environment("", "x").spawn() }
+    expectThrows(saying: ProcessError.InvalidArgument(text: "A=B").description()) { _ = try Command("true").environment("A=B", "x").spawn() }
 }
 
 // ---- Cancelled -----------------------------------------------------------------
 
 @test
-fn oneCancelledIsKilled() async {
-    let path = scratch("pid")
+fn oneCancelledIsKilled(files: TemporaryFiles) async {
+    let path = files.path("pid")
     let running = Task.spawn {
-        do {
-            _ = try await sh("echo $$ > \(path); exec sleep 60").output()
-            return "ended"
-        } catch {
-            return error.description()
-        }
+        await expectThrows(saying: ProcessError.Cancelled.description()) { _ = try await sh("echo $$ > \(path); exec sleep 60").output() }
     }
     var id = ""
     while !id.contains('\n') {
@@ -283,35 +243,16 @@ fn oneCancelledIsKilled() async {
         id = (try? File.read(path)) ?? ""
     }
     running.cancel()
-    assertEqual(await running.value, ProcessError.Cancelled.description())
-    try! File.remove(path)
+    _ = await running.value
     expect(await isGone(id.trimmed()))
 }
 
 @test
 fn aStatusWaitedForTooLongIsKilled() async {
-    do {
+    let error = await expectThrows(TimeoutError.self) {
         _ = try await withTimeout(Duration.milliseconds(50)) { try await Command("sleep").argument("60").status() }
-        assert(false)
-    } catch let error as TimeoutError {
-        expect(error.duration == Duration.milliseconds(50))
-    } catch {
-        assert(false)
     }
-}
-
-// Whether the process has ended, and been reaped, soon enough.
-fn isGone(_ id: String) async -> Bool {
-    var tries = 0
-    while tries < 400 {
-        let asked = try! await sh("kill -0 \(id)").stderr(.Null).status()
-        if !asked.success {
-            return true
-        }
-        try? await Task.sleep(for: Duration.milliseconds(10))
-        tries += 1
-    }
-    return false
+    expect(error?.duration == Duration.milliseconds(50))
 }
 
 @test
@@ -331,10 +272,7 @@ fn argumentsAndVariablesNeedNotBeText() async {
 
 @test
 fn anArgumentWithANulIsRefused() {
-    match failure(Command("true").argument(OsString(bytes: [0x61, 0]))) {
-        case .Some(.InvalidArgument(let text)) => assertEqual(text, "a\u{0}")
-        case _                                 => assert(false)
-    }
+    expectThrows(saying: ProcessError.InvalidArgument(text: "a\u{0}").description()) { _ = try Command("true").argument(OsString(bytes: [0x61, 0])).spawn() }
 }
 
 #endif

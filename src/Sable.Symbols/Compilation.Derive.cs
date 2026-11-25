@@ -28,6 +28,15 @@ public enum DerivedMember {
 
     /// <summary><c>static rules(_:)</c>, a rule for each attribute that names one: Sable.Validation's <c>Validatable</c>.</summary>
     Rules,
+
+    /// <summary><c>static describeCallables()</c>, the members <c>@reflectable(callable)</c> makes callable: Sable.Core's <c>Callable</c>.</summary>
+    DescribeCallables,
+
+    /// <summary><c>static callMember(_:on:with:)</c>, one called: <c>Callable</c>.</summary>
+    CallMember,
+
+    /// <summary><c>static callMemberAsync(_:on:with:)</c>, one that waits called: <c>Callable</c>.</summary>
+    CallMemberAsync,
 }
 
 /// <summary>One member <c>@derive</c> made, and where it was asked for.</summary>
@@ -38,7 +47,10 @@ public sealed record Derivation(
     DerivedMember Member,
     SyntaxTree Tree
 ) {
-    /// <summary>The <c>@derive</c> that asked for it.</summary>
+    /// <summary>Whether, on a generic type, the conformance holds only where its fields' types conform.</summary>
+    public bool IsConditional => Member is not (DerivedMember.DescribeCallables or DerivedMember.CallMember or DerivedMember.CallMemberAsync);
+
+    /// <summary>The <c>@derive</c>, or <c>@reflectable(callable)</c>, that asked for it.</summary>
     public AttributeSyntax Attribute => (AttributeSyntax)Function.DeclaringSyntax[0];
 }
 
@@ -200,7 +212,65 @@ public sealed partial class Compilation {
         }
     }
 
+    /// <summary>
+    ///     <c>@reflectable(callable)</c> (docs/06 §6.3): the type conforms to
+    ///     <c>Callable</c>, whose three members describe and call its public ones.
+    /// </summary>
+    void DeriveCallable(NamedTypeSymbol type, AttributeSyntax attribute, SyntaxTree tree) {
+        if (CoreProtocol("Callable") is not { } protocol || GetModule("Sable.Core")?.GetType("CallableMember") is not { } member) {
+            return;
+        }
+
+        if (Copyability.IsNoncopyable(type)) {
+            ReportDeclaration(ErrorCode.ERR_NotReflectableKind, attribute.Span, $"'{type.Name}' is moved, never copied, so no 'any Any' holds one for a member to be called on: it cannot be '@reflectable(callable)'");
+            return;
+        }
+
+        var any = new ExistentialTypeSymbol(new CompositionTypeSymbol([]));
+        var error = new ExistentialTypeSymbol(CoreProtocol("Error")!);
+        foreach (var kind in new[] { DerivedMember.DescribeCallables, DerivedMember.CallMember, DerivedMember.CallMemberAsync }) {
+            var function = new FunctionSymbol(NameOf(kind), type, attribute, Accessibility.Public, FunctionKind.Ordinary) {
+                IsStatic = true,
+                IsAsync = kind == DerivedMember.CallMemberAsync,
+                // Outside the actor, or the main one, the type is on: a call hops to it.
+                IsNonisolated = true,
+            };
+            if (kind == DerivedMember.DescribeCallables) {
+                function.ReturnTypeResolver = () => new ArrayTypeSymbol(member, ArrayKind.Grow);
+            } else {
+                function.Parameters = [
+                    new ParameterSymbol("index", "_", function, null, 0) { TypeResolver = () => Core.Int },
+                    new ParameterSymbol("receiver", "on", function, null, 1) { TypeResolver = () => any, Modifier = ParameterModifier.InOut },
+                    new ParameterSymbol("arguments", "with", function, null, 2) { TypeResolver = () => new ArrayTypeSymbol(any, ArrayKind.Slice) },
+                ];
+                function.ReturnTypeResolver = () => any;
+                function.ThrownTypeResolver = () => error;
+            }
+
+            type.AddMember(function);
+            var derivation = new Derivation(function, type, protocol, kind, tree);
+            _derived.Add(derivation);
+            _derivedByFunction[function] = derivation;
+        }
+
+        TypeBinder.Defer(() => {
+                if (!type.BaseTypes.Contains(protocol)) {
+                    type.BaseTypes = type.BaseTypes.Add(protocol);
+                }
+            }
+        );
+    }
+
+    /// <summary>Whether a <c>@reflectable</c> asks for its type's members to be callable.</summary>
+    static bool AsksCallable(AttributeSyntax attribute) =>
+        AttributeName(attribute) == "reflectable" && attribute.ArgumentList is { Arguments: [{ Expression: var asked }] } && asked.ToString().Trim() == "callable";
+
     void Derive(NamedTypeSymbol type, AttributeSyntax attribute, SyntaxTree tree) {
+        if (AttributeName(attribute) == "reflectable") {
+            DeriveCallable(type, attribute, tree);
+            return;
+        }
+
         if (type.TypeKind is not (TypeKind.Struct or TypeKind.Union or TypeKind.Enum) || type.IsFlags) {
             ReportDeclaration(
                 ErrorCode.ERR_CannotDerive,
@@ -362,6 +432,9 @@ public sealed partial class Compilation {
             DerivedMember.Decode => "decode",
             DerivedMember.Arbitrary => "arbitrary",
             DerivedMember.Rules => "rules",
+            DerivedMember.DescribeCallables => "describeCallables",
+            DerivedMember.CallMember => "callMember",
+            DerivedMember.CallMemberAsync => "callMemberAsync",
             _ => "debugDescription",
         };
 

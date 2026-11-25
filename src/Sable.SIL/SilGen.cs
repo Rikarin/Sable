@@ -327,6 +327,7 @@ public sealed partial class SilGen {
     ///     is then all there.
     /// </summary>
     void LowerReached() {
+        LowerCallables();
         LowerPendingInstances();
         while (_deferred.Count > 0) {
             var reached = new List<string>();

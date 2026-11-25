@@ -1161,7 +1161,7 @@ public sealed partial class SilGen {
         }
 
         // A derived member's conformance requires of its type's arguments what it reads of them.
-        if (owner is { TypeParameters.IsEmpty: false } && _compilation.GetDerivation(symbol) is { Protocol: var derived } && IsTabledProtocol(derived)) {
+        if (owner is { TypeParameters.IsEmpty: false } && _compilation.GetDerivation(symbol) is { IsConditional: true, Protocol: var derived } && IsTabledProtocol(derived)) {
             foreach (var parameter in owner.TypeParameters) {
                 if (!requirements.Any(r => ReferenceEquals(r.Item1, parameter) && ReferenceEquals(r.Item2, derived.OriginalDefinition))) {
                     requirements.Add((parameter, derived.OriginalDefinition));
@@ -4233,7 +4233,10 @@ public sealed partial class SilGen {
             IReadOnlyCollection<TypeParameterSymbol> own = [.._genericMetadata.Keys];
             return Mentions(closureExpression.Type, own) || generator.CapturesOf(closureExpression).Any(c => Mentions(c.Type, own))
                    || Descendants(closureExpression.Body).Any(n => n is BoundExpression { Type: var type } && Mentions(type, own)
-                                                                  || n is BoundLocalDeclaration { Local.Type: var local } && Mentions(local, own));
+                                                                  || n is BoundLocalDeclaration { Local.Type: var local } && Mentions(local, own)
+                                                                  // 'Self.make()': what it is called for, though neither its receiver nor its result says.
+                                                                  || n is BoundCall call && (call.Substitution.Parameters.Any(p => call.Substitution.Lookup(p) is { } bound && Mentions(bound, own))
+                                                                                             || call.Receiver is null && OwnerOf(call.Function) is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } of } && own.Contains(of)));
         }
 
         /// <summary>

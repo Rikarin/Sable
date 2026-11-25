@@ -224,6 +224,7 @@ public static class SilPassManager {
         var erasing = new HashSet<bool>();
         var boxing = new HashSet<bool>();
         var casting = new HashSet<bool>();
+        var calling = new HashSet<bool>();
         while (pending.Count > 0) {
             var name = pending.Pop();
             if (!reached.Add(name) || module.Find(name) is not { } function) {
@@ -299,6 +300,13 @@ public static class SilPassManager {
                     case BuiltinInst { Name: "opaque_box" } when boxing.Add(true):
                         foreach (var (_, (_, boxer)) in module.Boxers) {
                             pending.Push(boxer);
+                        }
+
+                        break;
+
+                    case BuiltinInst { Name: "callable_members" } when calling.Add(true):
+                        foreach (var (_, (_, members)) in module.Callables) {
+                            pending.Push(members);
                         }
 
                         break;

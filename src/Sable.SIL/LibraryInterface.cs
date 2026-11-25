@@ -360,6 +360,10 @@ public sealed class LibraryInterface {
             program.Boxers.TryAdd(name, boxer);
         }
 
+        foreach (var (name, callable) in library.Callables) {
+            program.Callables.TryAdd(name, callable);
+        }
+
         foreach (var (name, caster) in library.Casters) {
             program.Casters.TryAdd(name, caster);
         }

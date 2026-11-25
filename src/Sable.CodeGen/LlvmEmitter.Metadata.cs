@@ -391,6 +391,26 @@ public sealed partial class LlvmEmitter {
     }
 
     /// <summary>
+    ///     A constructor that hands the runtime each type that asked for its
+    ///     members to be callable, with the function that describes them
+    ///     (<c>sable_register_callable</c>). Null for none reached.
+    /// </summary>
+    string? CallableRegistration(SilModule module) {
+        var callables = module.Callables.Values.Where(d => _reachable?.Contains(d.Function) != false && module.Find(d.Function) is not null).ToList();
+        if (callables.Count == 0) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.callables.register\"() {\nentry:\n");
+        foreach (var (type, function) in callables) {
+            body.Append($"  call void @sable_register_callable(ptr {TypeMetadataGlobal(type)}, ptr @{Global(function)})\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.callables.register\"";
+    }
+
+    /// <summary>
     ///     A constructor that hands the runtime each caster the module made,
     ///     with its existential's metadata (<c>sable_register_caster</c>): what
     ///     <c>sable_existential_cast</c> asks of a box. Null for none reached.
@@ -602,6 +622,10 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_box_unique(ptr, ptr)
                                         declare void @sable_opaque_free(ptr)
                                         declare void @sable_register_boxer(ptr, ptr)
+                                        declare void @sable_register_callable(ptr, ptr)
+                                        declare i64 @sable_callable_type_count()
+                                        declare ptr @sable_callable_type(i64)
+                                        declare ptr @sable_callable_members(i64)
                                         declare ptr @sable_witness_table_required(ptr, ptr)
                                         declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
                                         declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
@@ -719,6 +743,21 @@ public sealed partial class LlvmEmitter {
                 case "metadata_equal":
                     Line($"{Result()} = call i1 @sable_metadata_equal(ptr {operands[0]}, ptr {operands[1]})");
                     return true;
+
+                case "callable_type_count":
+                    Line($"{Result()} = call i64 @sable_callable_type_count()");
+                    return true;
+
+                case "callable_type":
+                    Line($"{Result()} = call ptr @sable_callable_type(i64 {operands[0]})");
+                    return true;
+
+                case "callable_members": {
+                    var accessor = Fresh();
+                    Line($"{accessor} = call ptr @sable_callable_members(i64 {operands[0]})");
+                    Line($"{Result()} = call {Type(builtin.Type)} {accessor}()");
+                    return true;
+                }
 
                 case "metadata_hash":
                     Line($"{Result()} = call i64 @sable_metadata_hash(ptr {operands[0]})");

@@ -14,7 +14,53 @@ public sealed partial class SilGen {
         foreach (var derivation in _compilation.Derivations) {
             if (IsLowerable(derivation.Function)) {
                 functions.Add(new(derivation.Function, null, _compilation.GetSemanticModel(derivation.Tree)));
+                if (derivation is { Member: DerivedMember.DescribeCallables, Type.IsGenericDefinition: false }
+                    && _evaluation is null && _unit?.Owns(derivation.Tree) != false && !_compilation.IsFromInterface(derivation.Tree)) {
+                    _callables.Add(derivation);
+                }
             }
+        }
+    }
+
+    /// <summary>The types of the unit that ask for their members to be callable (docs/06 §6.3).</summary>
+    readonly List<Derivation> _callables = [];
+
+    /// <summary>
+    ///     For each, the function that gives its members' descriptors, which the runtime is handed as the image starts: what
+    ///     finds a type's members by the type, and what makes a type one of
+    ///     those a program lists by what they conform to.
+    /// </summary>
+    void LowerCallables() {
+        var callables = _callables.ToList();
+        _callables.Clear();
+        foreach (var derivation in callables) {
+            if (Core.Module.GetType("Callable")?.GetMembers("callableMembers").OfType<FunctionSymbol>().FirstOrDefault(static f => f.HasBody) is not { } members
+                || Lower(derivation.Type) is not { } described || Lower(members.ReturnType) is not { } array) {
+                continue;
+            }
+
+            // The embedded build (docs/06 §6.1) carries no reflection.
+            if (_denyReflection) {
+                Report(
+                    ErrorCode.ERR_ReflectionDenied,
+                    derivation.Attribute.Span,
+                    $"'{derivation.Type.Name}' is '@reflectable(callable)', and this program is built with --deny-reflection"
+                );
+                continue;
+            }
+
+            var name = $"$callable${Sanitise(described.ToString())}";
+            var symbol = FunctionSymbol.Synthesized(name, derivation.Type);
+            var at = derivation.Attribute;
+            var call = new BoundCall(at, new BoundTypeExpression(at, derivation.Type), members, [], members.ReturnType) {
+                Substitution = new TypeSubstitution(new() { [Core.Module.GetType("Callable")!.SelfTypeParameter!] = derivation.Type }),
+            };
+            var function = new SilFunction(name, new FunctionType([], array));
+            new FunctionLowering(this, symbol, function, derivation.Tree.Text, TypeSubstitution.Empty)
+                .Lower(new BoundBlock(at, [], [new BoundReturn(at, call)]));
+            function.RemoveUnreachableBlocks();
+            _module.Add(function);
+            _module.Callables[described.ToString()] = (described, name);
         }
     }
 

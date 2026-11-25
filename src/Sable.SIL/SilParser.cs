@@ -359,6 +359,13 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_callable")) {
+                var callable = ParseType();
+                Expect("=");
+                module.Callables[callable.ToString()] = (callable, Expect(TokenKind.Global, "a function's name").Text);
+                continue;
+            }
+
             if (Accept("sil_caster")) {
                 var cast = ParseType();
                 Expect("=");

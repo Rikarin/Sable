@@ -382,7 +382,7 @@ public sealed partial class SilGen {
         }
 
         // One '@derive' gave it holds where each argument conforms.
-        if (structural is null && definition.Members.OfType<FunctionSymbol>().Any(m => _compilation.GetDerivation(m) is { Protocol: var derived } && ReferenceEquals(derived.OriginalDefinition, protocol.OriginalDefinition))) {
+        if (structural is null && definition.Members.OfType<FunctionSymbol>().Any(m => _compilation.GetDerivation(m) is { IsConditional: true, Protocol: var derived } && ReferenceEquals(derived.OriginalDefinition, protocol.OriginalDefinition))) {
             required = [..required, ..definition.TypeParameters.Select(p => (p, protocol.OriginalDefinition))];
         }
 

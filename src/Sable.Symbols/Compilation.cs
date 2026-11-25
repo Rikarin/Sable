@@ -825,7 +825,7 @@ public sealed partial class Compilation {
 
         // '@derive(…)': the members are made once every type is declared.
         foreach (var attribute in attributes) {
-            if (attribute.Name.ToString().Trim() == "derive") {
+            if (attribute.Name.ToString().Trim() == "derive" || type.IsReflectable && AsksCallable(attribute)) {
                 _derivations.Add((type, attribute, CurrentScope));
             }
         }

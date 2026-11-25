@@ -340,6 +340,9 @@ public sealed partial class SilInterpreter {
     ///     of a class; a type that conforms to each protocol of an existential
     ///     (every type is an <c>any Any</c>).
     /// </summary>
+    /// <summary>A type whose members are callable, by the order they are listed in.</summary>
+    (SilType Type, string Function) CallableAt(long index) => module.Callables.OrderBy(static c => c.Key, StringComparer.Ordinal).ElementAt((int)index).Value;
+
     bool IsSubtype(MetadataModel type, MetadataModel of) {
         if (ReferenceEquals(type, of)) {
             return true;
@@ -450,6 +453,15 @@ public sealed partial class SilInterpreter {
             // One model per type, as natively one record per type in an image.
             case "metadata_equal":
                 result = ReferenceEquals(operands[0], operands[1]);
+                return true;
+            case "callable_type_count":
+                result = (long)module.Callables.Count;
+                return true;
+            case "callable_type":
+                result = MetadataOf(CallableAt((long)operands[0]!).Type);
+                return true;
+            case "callable_members":
+                result = Call(module.Find(CallableAt((long)operands[0]!).Function)!, [], depth + 1);
                 return true;
             case "metadata_hash":
                 result = NameHash(((MetadataModel)operands[0]!).Described.Name);

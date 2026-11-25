@@ -780,8 +780,12 @@ public sealed partial class Compilation {
                 );
                 return;
 
+            case "reflectable" when attribute.ArgumentList is not null && !AsksCallable(attribute):
+                Malformed("'@reflectable' takes nothing, or 'callable': '@reflectable(callable)'");
+                return;
+
             case "packed" or "discardable" or "frozen" or "immutable" or "immortal" or "polymorphic" or "noncopy" or "escaping" or "Sendable" or "flags" or "MainActor"
-                or "reflectable" or "inline_layout" or "indirect" or "main" or "intrinsic" or "inlinable" or "vectorised"
+                or "inline_layout" or "indirect" or "main" or "intrinsic" or "inlinable" or "vectorised"
                 when attribute.ArgumentList is not null:
                 Malformed($"'@{name}' takes no arguments");
                 return;

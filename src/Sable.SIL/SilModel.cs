@@ -1834,6 +1834,14 @@ public sealed class SilModule {
     public Dictionary<string, (SilType Type, string Function)> Boxers { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    ///     For each type that asks for its members to be callable
+    ///     (<c>@reflectable(callable)</c>, docs/06 §6.3), by its name: the
+    ///     function that gives their descriptors (<c>callable_members</c>), registered with the runtime as the
+    ///     image starts.
+    /// </summary>
+    public Dictionary<string, (SilType Type, string Function)> Callables { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
     ///     For each existential generic code compiled once may cast to, by the
     ///     type's name: the function that puts a box's value where it is told
     ///     as that existential, if it is one (<c>existential_cast</c>) — made
@@ -2496,6 +2504,8 @@ public static class SilBuiltins {
                 return new([metadata, SilType.Int], SilType.Int);
             case "metadata_field_type" or "metadata_argument" when operands is [var m, var i] && m == metadata && i == SilType.Int:
                 return new([metadata, SilType.Int], metadata);
+            case "callable_members" when operands is [var i] && i == SilType.Int && result is ArrayType members:
+                return new([SilType.Int], members);
             case "metadata_equal" when operands is [var a, var b] && a == metadata && b == metadata:
                 return new([metadata, metadata], SilType.Bool);
             case "value_witness_copy" when operands is [var m, var value] && m == metadata:
@@ -3087,6 +3097,8 @@ public static class SilBuiltins {
         Add("metadata_argument", SilType.Metadata, SilType.Metadata, SilType.Int);
         Add("metadata_equal", SilType.Bool, SilType.Metadata, SilType.Metadata);
         Add("metadata_hash", SilType.U64, SilType.Metadata);
+        Add("callable_type_count", SilType.Int);
+        Add("callable_type", SilType.Metadata, SilType.Int);
         Add("metadata_is_subtype", SilType.Bool, SilType.Metadata, SilType.Metadata);
 
         Add("region_create", SilType.Region);

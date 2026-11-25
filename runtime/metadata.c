@@ -636,6 +636,43 @@ void sable_register_boxer(const SableTypeMetadata *type, SableBoxer box) {
     boxer_count++;
 }
 
+// The types that ask for their members to be callable ('@reflectable(callable)',
+// docs/06 section 6.3), registered by each image as it starts, each with the
+// function that gives its members' descriptors, an array.
+typedef void *(*SableCallables)(void);
+
+static struct {
+    const SableTypeMetadata *type;
+    SableCallables members;
+} *callables;
+static int64_t callable_count, callable_capacity;
+
+void sable_register_callable(const SableTypeMetadata *type, SableCallables members) {
+    if (callable_count == callable_capacity) {
+        callable_capacity = callable_capacity == 0 ? 16 : callable_capacity * 2;
+        callables = realloc(callables, (size_t)callable_capacity * sizeof *callables);
+        if (callables == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    callables[callable_count].type = type;
+    callables[callable_count].members = members;
+    callable_count++;
+}
+
+int64_t sable_callable_type_count(void) {
+    return callable_count;
+}
+
+const SableTypeMetadata *sable_callable_type(int64_t index) {
+    return callables[index].type;
+}
+
+SableCallables sable_callable_members(int64_t index) {
+    return callables[index].members;
+}
+
 static void *box_made(void *value, const SableTypeMetadata *type);
 
 void *sable_opaque_box(void *buffer, const SableTypeMetadata *type) {

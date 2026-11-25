@@ -20,8 +20,8 @@ public sealed class CompiledGenericsTests {
         }
         """;
 
-    static Compilation Compile() {
-        var compilation = Compilation.Create([SyntaxTree.Parse(new SourceText(Program, "app.sb"))]);
+    static Compilation Compile(string program = Program) {
+        var compilation = Compilation.Create([SyntaxTree.Parse(new SourceText(program, "app.sb"))]);
         Assert.DoesNotContain(compilation.GetAllDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);
         return compilation;
     }
@@ -76,6 +76,77 @@ public sealed class CompiledGenericsTests {
         Assert.All(called, name => Assert.True(info.Generics.ContainsKey(name[..^"$generic".Length]), name));
     }
 
+    /// <summary>
+    ///     #297's Done-when: a debug build of a program that uses the core's
+    ///     collections compiles none of their generic bodies again, whether
+    ///     the core compiles them once or, as a search by vectors is, for the
+    ///     types there are vectors of.
+    /// </summary>
+    [Fact]
+    public void AProgramUsingTheCoresCollectionsCompilesNoneOfTheirGenericCodeAgain() {
+        using var _ = SilGen.UseGenerics(GenericsMode.Unspecialised);
+        var compilation = Compile("""
+            module App
+
+            @derive(Hashable, Comparable)
+            struct Key { var name: String; var n: Int }
+
+            class Node { var value: Int; init(_ value: Int) { self.value = value } }
+
+            fn main() throws {
+                var numbers: Int[>..<] = [3, 1, 2]
+                numbers.append(4)
+                numbers.append(contentsOf: [9, 8])
+                numbers.sort()
+                numbers.reverse()
+                numbers.swapAt(0, 1)
+                print("\(numbers.contains(2)) \(numbers.firstIndex(of: 3) ?? -1) \(numbers.min() ?? 0) \(numbers.max() ?? 0) \(numbers.first ?? 0) \(numbers.last ?? 0)")
+                print("\(numbers.map { $0 * 2 }) \(numbers.filter { $0 > 2 }) \(numbers.reduce(0, { $0 + $1 })) \(numbers.sorted(by: { $0 > $1 }))")
+                print("\(numbers.contains(where: { $0 > 2 })) \(numbers.allSatisfy({ $0 > 0 })) \(numbers.prefix(2).count) \(numbers.dropFirst(1).count)")
+                print("\(numbers.enumerated().map { $0.offset + $0.element }) \(numbers[1..<3].count)")
+                print("\(numbers.flatMap { [$0, $0] }.count) \(numbers.compactMap { $0 > 2 ? $0 : none }.count) \(numbers.lazy.map { $0 + 1 }.reduce(0, { $0 + $1 }))")
+                print("\(["b", "a"].sorted().joined(separator: ",")) \(numbers == numbers) \(numbers.isEmpty)")
+
+                var names: [String: Int] = ["a": 1]
+                names["b"] = 2
+                names["b"] = none
+                names["b"] = none
+                names["b"] = none
+                names["b"] = none
+                _ = names.insert(3, forKey: "c")
+                _ = names.remove("c")
+                print("\(names["a"] ?? 0) \(names.count) \(names.map { $0.0 }.sorted()) \(names.mapValues { $0 + 1 }.count) \(names.contains { $0.1 > 1 })")
+                for (name, n) in names {
+                    print("\(name) \(n)")
+                }
+
+                var keyed: [Key: Node] = [:]
+                keyed[Key { name: "x", n: 1 }] = Node(4)
+                print("\(keyed[Key { name: "x", n: 1 }]?.value ?? 0)")
+                let nodes = [Node(1), Node(2)]
+                print("\(nodes.map { $0.value }.reduce(0, { $0 + $1 })) \(nodes.first(where: { $0.value == 2 })?.value ?? 0)")
+                let keys = [Key { name: "b", n: 2 }, Key { name: "a", n: 1 }]
+                print("\(keys.sorted().first?.name ?? "") \(keys.contains(Key { name: "a", n: 1 })) \(keys.min()?.n ?? 0)")
+                for i in stride(from: 0, to: 10, by: 3) {
+                    print("\(i)")
+                }
+
+                print("\(zip(numbers, nodes).map { $0.0 + $0.1.value }.count) \((1...3).map { $0 }.count) \((numbers.first as Int?).map { $0 + 1 } ?? 0)")
+                let bytes: U8[>..] = [1, 2, 3]
+                print("\(bytes.contains(2)) \(bytes.firstIndex(of: 3) ?? 0) \(bytes.max() ?? 0)")
+                let floats: F64[>..] = [1.5, 2.5]
+                print("\(floats.contains(2.5)) \(floats.min() ?? 0.0)")
+            }
+            """);
+        var (core, info) = LowerCore(compilation);
+        var face = LibraryInterface.Of(compilation, CoreLibrary.ModuleName, CoreLibrary.Contains, "test-compiler", "settings", LibraryInterface.InlinableSil(core, info), info);
+        var program = LowerProgram(compilation, face.CompiledGenerics());
+        Assert.NotEmpty(info.Prepared);
+        Assert.All(info.Prepared, name => Assert.NotNull(core.Find(name)));
+        var again = program.Functions.Select(static f => f.Name).Where(static n => n.StartsWith("Sable.Core.", StringComparison.Ordinal)).ToList();
+        Assert.True(again.Count == 0, string.Join("\n", again));
+    }
+
     [Fact]
     public void ASpecialisedBuildRecordsNoGenericCode() {
         using var _ = SilGen.UseGenerics(GenericsMode.Specialised);
@@ -114,6 +185,7 @@ public sealed class CompiledGenericsTests {
         Assert.NotNull(read);
         Assert.Equal(info.Generics, read.Generics);
         Assert.Equal(info.Inlinable, read.Inlinable);
+        Assert.Equal(info.Prepared, read.Prepared);
         Assert.Equal(face.Write(), read.Write());
     }
 }

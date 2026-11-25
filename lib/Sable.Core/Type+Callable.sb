@@ -1,0 +1,88 @@
+module Sable.Core
+
+@builtin("callable_type_count")
+fn callableTypeCount() -> Int
+
+@builtin("callable_type")
+fn callableType(_ index: Int) -> Type
+
+@builtin("callable_members")
+fn callableMembersAt(_ index: Int) -> CallableMember[>..]
+
+extension Type {
+    /// The members of a type that is '@reflectable(callable)', whatever type
+    /// this turns out to be at run time: none for any other, and for an
+    /// instance of a generic type ('Box<Int>.callableMembers()' has its).
+    ///
+    /// ```sable
+    /// @reflectable(callable)
+    /// class Greeter {
+    ///     public init() { }
+    ///
+    ///     public fn greet(_ who: String) -> String => "hello, \(who)"
+    /// }
+    ///
+    /// let greeter: any Any = Greeter()
+    /// for member in type(of: greeter).callableMembers where member.name == "greet" {
+    ///     assert(try member.call(on: greeter, "you") as! String == "hello, you")
+    /// }
+    /// ```
+    public var callableMembers: CallableMember[>..] {
+        get {
+            for index in 0..<callableTypeCount() {
+                if callableType(index) == self {
+                    return callableMembersAt(index)
+                }
+            }
+
+            return []
+        }
+    }
+
+    /// The first member with this name, or none: 'init' for an initialiser.
+    public fn callable(_ name: String) -> CallableMember? {
+        for member in callableMembers {
+            if member.name == name {
+                return member
+            }
+        }
+
+        return none
+    }
+
+    /// The program's '@reflectable(callable)' types that are subtypes of this
+    /// one, ordered by name: of a protocol's, '(any Plugin).self', the types
+    /// that conform to it. A type is there because it asked to be: one that
+    /// did not is not listed, nor a generic type.
+    ///
+    /// ```sable
+    /// protocol Shape {
+    ///     fn area() -> F64
+    /// }
+    ///
+    /// @reflectable(callable)
+    /// struct Square: Shape {
+    ///     public var side: F64
+    ///
+    ///     public init(_ side: F64) { self.side = side }
+    ///     public fn area() -> F64 => side * side
+    /// }
+    ///
+    /// let shapes: Type = (any Shape).self
+    /// for each in shapes.callableSubtypes() {
+    ///     let shape = try each.callable("init")!.call(2.0) as! any Shape
+    ///     assert(shape.area() == 4.0)
+    /// }
+    /// ```
+    public fn callableSubtypes() -> Type[>..] {
+        var found: Type[>..] = []
+        for index in 0..<callableTypeCount() {
+            let each = callableType(index)
+            if each.isSubtype(of: self) {
+                found.append(each)
+            }
+        }
+
+        return found.sorted(by: { $0.name < $1.name })
+    }
+}

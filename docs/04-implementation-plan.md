@@ -955,6 +955,11 @@ of `@intrinsic` members whose bodies the compiler writes, per type (unlike
   names and types, return type, static/public/mutating), union and enum
   cases with their payloads, declared conformances and the attributes as
   written; generic code reaches it through `T: Reflectable`.
+- `@reflectable(callable)` (tests in
+  `tests/Sable.CodeGen.Tests/CallableTests.cs`) makes the type's public
+  initialisers, methods and operators callable with boxed arguments, and
+  registers the type with the runtime, for `Type.callableMembers` and
+  `Type.callableSubtypes()` (docs/06 §6.3).
 - Nothing is emitted for a type until a program reflects on it: each
   question is a SIL function synthesised per type on first use, shared by
   later calls, and pruned with everything else unreachable. Hello world is
@@ -965,7 +970,7 @@ of `@intrinsic` members whose bodies the compiler writes, per type (unlike
 Deferred: a class reference is described as its static type, not the
 subclass it is; `Mirror(of:)` on `()` (a generic parameter of type `()`
 does not lower yet); computed properties; attribute payloads as values;
-dynamic invoke and construction; `Runtime.lookupType` and the manifest's
+`Runtime.lookupType` and the manifest's
 `reflect` list; `--explain-reflection` (there is no graph to print until
 metadata is emitted as data rather than code).
 

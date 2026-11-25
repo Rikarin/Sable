@@ -76,7 +76,7 @@ public sealed partial class SilGen {
                 return (InClosure || !Inside(symbol, actor), false);
             }
 
-            if (OnMainActor(callee) && (InClosure || !OnMainActor(symbol) && !InEntryPoint(symbol))) {
+            if (OnMainActor(callee) && (InClosure || (!OnMainActor(symbol) || IsNonisolated(symbol)) && !InEntryPoint(symbol))) {
                 return (true, true);
             }
 

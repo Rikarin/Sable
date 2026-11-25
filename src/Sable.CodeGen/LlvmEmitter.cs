@@ -194,6 +194,10 @@ public sealed partial class LlvmEmitter {
             constructors.Add(classes);
         }
 
+        if (CallableRegistration(module) is { } callables) {
+            constructors.Add(callables);
+        }
+
         if (BoxerRegistration(module) is { } boxers) {
             constructors.Add(boxers);
         }

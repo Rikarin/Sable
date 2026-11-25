@@ -1,0 +1,66 @@
+module Sable.Core
+
+/// What '@reflectable(callable)' gives a type: its public initialisers,
+/// methods and operators described, and called with boxed arguments, by
+/// name and at run time. The compiler writes the three requirements.
+///
+/// ```sable
+/// @reflectable(callable)
+/// struct Counter {
+///     public var count: Int
+///
+///     public init(from start: Int) { count = start }
+///
+///     public mutating fn add(_ n: Int) -> Int {
+///         count += n
+///         return count
+///     }
+/// }
+///
+/// var counter: any Any = try Counter.callable("init")!.call(1)
+/// assert(try Counter.callable("add")!.call(mutating: &counter, 2) as! Int == 3)
+/// assert((counter as! Counter).count == 3)
+/// ```
+public protocol Callable: Reflectable {
+    /// The members, with nothing to call them by: 'callableMembers' is for use.
+    static fn describeCallables() -> CallableMember[>..]
+
+    /// The member of an index called: on a receiver, which a mutating one changes.
+    static fn callMember(_ index: Int, on receiver: inout any Any, with arguments: (any Any)[:]) throws -> any Any
+
+    /// The member of an index called, of those whose call waits.
+    static fn callMemberAsync(_ index: Int, on receiver: inout any Any, with arguments: (any Any)[:]) async throws -> any Any
+}
+
+extension Callable {
+    /// The type's public initialisers, methods and operators, in the order
+    /// they are declared, its extensions' among them. A class has its own:
+    /// those it inherits are its superclass's.
+    public static fn callableMembers() -> CallableMember[>..] {
+        var members = describeCallables()
+        for index in 0..<members.count {
+            if !members[index].isCallable {
+                continue
+            }
+
+            if members[index].isAsync {
+                members[index].waiting = { try await Self.callMemberAsync(index, on: &$0, with: $1) }
+            } else {
+                members[index].direct = { try Self.callMember(index, on: &$0, with: $1) }
+            }
+        }
+
+        return members
+    }
+
+    /// The first member with this name, or none: 'init' for an initialiser.
+    public static fn callable(_ name: String) -> CallableMember? {
+        for member in callableMembers() {
+            if member.name == name {
+                return member
+            }
+        }
+
+        return none
+    }
+}

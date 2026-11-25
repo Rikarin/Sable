@@ -707,8 +707,8 @@ public sealed partial class SilGen {
 
     static bool HasPlainFields(NamedTypeSymbol definition) =>
         definition is { TypeKind: TypeKind.Class or TypeKind.Actor, IsNoncopyable: false, TypeParameters.IsEmpty: false }
-        // A task is the runtime's, laid out for its result (TaskClass).
-        && definition is not { Name: "Task", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }
+        // A task is the runtime's, laid out for its result (TaskClass), where its code is not compiled once.
+        && (TasksCompiledOnce || definition is not { Name: "Task", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } })
         && !definition.TypeParameters.Any(static p => p.IsValue || p.AllowsNoncopyable)
         && definition.BaseTypes.OfType<NamedTypeSymbol>().All(static b => b.TypeKind != TypeKind.Class)
         && StoredFields(definition).All(f => f.ReferenceKind == default
@@ -976,7 +976,9 @@ public sealed partial class SilGen {
     GenericShape? SignatureShape(FunctionSymbol symbol, out string? refused) {
         refused = null;
         var all = TypeParametersOf(symbol).ToList();
-        if (all.Count == 0 || !_declarations.TryGetValue(symbol, out var declaration) || IsRequirement(symbol, declaration.Syntax)) {
+        if (all.Count == 0 || !_declarations.TryGetValue(symbol, out var declaration) || IsRequirement(symbol, declaration.Syntax)
+            // A task's is never called: the compiler makes one, queued.
+            || symbol.FunctionKind == FunctionKind.Initializer && ReferenceEquals(symbol.ContainingSymbol, Core.Task)) {
             return null;
         }
 
@@ -1793,6 +1795,16 @@ public sealed partial class SilGen {
                 return Simple(call.Type) && call.Arguments.All(a => Simple(a.Type));
             }
 
+            // One of a generic type's own builtins that has nothing to do with its arguments: 'TaskGroup<T>.take(group)'.
+            if (callee is { Builtin: not null, IsStatic: true } && !Mentions(call.Type) && !call.Arguments.Any(a => Mentions(a.Type))) {
+                return true;
+            }
+
+            // A task's, which the compiler writes: its class is one for every result.
+            if (IsIntrinsic(callee) && ReferenceEquals(callee.ContainingSymbol, generator.Core.Task)) {
+                return TasksCompiledOnce && Simple(call.Type) && call.Arguments.All(a => Simple(a.Type)) && call.Receiver is null or BoundTypeExpression or { Type: NamedTypeSymbol } || No();
+            }
+
             // An array's own builtins, on an array of a type parameter's values held in a local.
             // One that only reads it: a slice of it, or a copy of a slice's run.
             if (callee.Builtin is "array_slice" or "array_of_slice" && call.Receiver is { } viewed && IsOwnArray(viewed.Type)) {
@@ -2002,6 +2014,11 @@ public sealed partial class SilGen {
             // An array's own: 'items.count'.
             if (field.Builtin is "array_count" or "array_capacity" && access.Receiver is { } array && IsOwnArray(array.Type)) {
                 return true;
+            }
+
+            // A task's value, and its handle.
+            if (ReferenceEquals(field.ContainingSymbol, generator.Core.Task) && field.Name is "value" or "handle" && access.Receiver is { Type: var taskType }) {
+                return TasksCompiledOnce && Simple(taskType) && Simple(access.Type);
             }
 
             // A stored field of a generic struct this function holds, where its metadata says.

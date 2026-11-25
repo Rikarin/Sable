@@ -163,7 +163,10 @@ public abstract class SilType : IEquatable<SilType> {
                                           && x.Fields.Zip(y.Fields).All(p => p.First.Name == p.Second.Name && SameErasingOpaque(p.First.Type, p.Second.Type, opaqueOnly)),
             (EnumType x, EnumType y) => x.Cases.Count == y.Cases.Count && (MentionsOpaque(x) || MentionsOpaque(y))
                                         && x.Cases.Zip(y.Cases).All(p => p.First.Name == p.Second.Name
-                                                                         && (p.First.Payload is null ? p.Second.Payload is null : p.Second.Payload is not null && SameErasingOpaque(p.First.Payload, p.Second.Payload, opaqueOnly))),
+                                                                         // 'Void?' carries nothing, where a 'T?' carries a T that is nothing.
+                                                                         && (p.First.Payload is null || p.Second.Payload is null
+                                                                             ? p.First.Payload == p.Second.Payload || opaqueOnly && (p.First.Payload ?? p.Second.Payload) is OpaqueType
+                                                                             : SameErasingOpaque(p.First.Payload, p.Second.Payload, opaqueOnly))),
             _ => false,
         };
 

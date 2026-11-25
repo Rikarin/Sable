@@ -1,0 +1,428 @@
+module ZstdTests
+
+// Zstandard: the reference's own golden frames, what the zstd command makes
+// and reads, our encoder's frames of every kind of bytes at every level,
+// dictionaries, what is damaged, and what limits stop.
+
+import CompressionData
+import Sable.IO
+import Sable.IO.Compression
+import Sable.Testing
+import Sable.Text
+
+fn hex(_ text: String) -> U8[>..] {
+    return try! Hex.decode(text)
+}
+
+@test
+fn goldenFramesAreDecompressed() throws {
+    let text = "Sable and zstd, zstd and Sable, and what a frame of it has in it: literals, sequences, literals."
+    assert((try Zstd.decompress(hex("28b52ffd246045020032c40d12b0ebe02112c7149655b530c21a5646c62c022079c9dad7969f9cd46da3f4d0e80b9df5bcd10dfb2a75e6fad603334b737c59fa4d4345050082b3c0e59867339912e42a75bef2f078"))) == text.utf8Bytes())
+    assert((try Zstd.decompress(hex("28b52ffd00001500000000"))).isEmpty)
+    assert((try Zstd.decompress(hex("28b52ffd00008500006848656c6c6f20576f726c64210a8000"))) == "Hello World!\n".utf8Bytes())
+    let run = try Zstd.decompress(hex("28b52ffda4000010000200100002001000020010000200100002001000020010000200100003001000f13e16e1"))
+    assert(run == U8[>..](repeating: 0, count: 1_048_576))
+    assert(fails(CompressionError.Corrupt("an offset of none")) { try Zstd.decompress(hex("28b52ffd0000450000080002002f430bae")) })
+    assert(fails(CompressionError.Corrupt("a Huffman table that is none")) { try Zstd.decompress(hex("28b52ffd000055000072800104207e1f02aa00")) })
+    assert(fails(CompressionError.Corrupt("bytes after a block's literals")) { try Zstd.decompress(hex("28b52ffd00009500006848656c6c6f20576f726c64210a80000000")) })
+}
+
+@test
+fn everyLevelRoundTrips() throws {
+    for level in [-20, -1, 1, 2, 3, 4, 5, 6, 8, 11, 13, 14, 17, 18, 19, 22] {
+        var kind = 0
+        while kind < 8 {
+            for length in sampleLengths {
+                let bytes = sample(kind, length, seed: U64(level + 100))
+                let packed = Zstd.compress(bytes, level: level)
+                assert((try Zstd.decompress(packed)) == bytes, "level \(level), kind \(kind), \(length) bytes")
+                assert(packed.count <= Zstd.maxCompressedLength(length), "level \(level), kind \(kind), \(length) bytes to \(packed.count)")
+            }
+            kind += 1
+        }
+    }
+}
+
+@test
+fn longFramesRoundTrip() throws {
+    for level in [-3, 1, 3, 5, 7, 12, 16] {
+        for kind in [0, 3, 4, 5, 7] {
+            let bytes = sample(kind, 500_000, seed: U64(level + 50))
+            let packed = Zstd.compress(bytes, level: level, checksum: level != 3)
+            assert((try Zstd.decompress(packed)) == bytes, "level \(level), kind \(kind)")
+            assert(packed.count <= Zstd.maxCompressedLength(bytes.count))
+        }
+    }
+    // A window that is slid under the tables.
+    let long = sample(5, 3_000_000, seed: 9)
+    for level in [1, 3, 5, 13] {
+        let encoder = ZstdEncoder(level: level)
+        var packed = ByteBuffer()
+        var at = 0
+        while at < long.count {
+            encoder.compress(long[at..<(at + 100_000)], into: &packed)
+            at += 100_000
+        }
+        encoder.finish(into: &packed)
+        assert((try Zstd.decompress(packed.bytes)) == long, "level \(level)")
+        assert(packed.count < 900_000, "level \(level): \(packed.count)")
+    }
+}
+
+@test
+fn higherLevelsAreSmaller() {
+    let bytes = sample(4, 300_000)
+    let fastest = Zstd.compress(bytes, level: -10).count
+    let fast = Zstd.compress(bytes, level: 1).count
+    let usual = Zstd.compress(bytes, level: 3).count
+    let slow = Zstd.compress(bytes, level: 9).count
+    let best = Zstd.compress(bytes, level: 19).count
+    assert(best < slow && slow < usual && usual < fast && fast < fastest, "\(fastest), \(fast), \(usual), \(slow), \(best)")
+    // A run is a few bytes a block.
+    assert(Zstd.compress(U8[>..](repeating: 7, count: 1_000_000)).count < 60)
+}
+
+@test
+fn piecesOfAnySizeRoundTrip() throws {
+    var seed: U64 = 1
+    while seed <= 40 {
+        let bytes = sample(Int(seed) % 8, 100_000 + Int(seed) * 9000, seed: seed)
+        var encoder = ZstdEncoder(level: 1 + Int(seed) % 13, checksum: seed % 3 == 0)
+        let packed = compressInPieces(&encoder, bytes, seed: seed, flushing: seed % 2 == 0)
+        var decoder = ZstdDecoder()
+        assert((try decompressInPieces(&decoder, packed, seed: seed)) == bytes, "seed \(seed)")
+        assert(decoder.isFinished)
+        seed += 1
+    }
+}
+
+@test
+fn whatIsFlushedCanBeDecompressed() throws {
+    let encoder = ZstdEncoder()
+    let decoder = ZstdDecoder()
+    var bytes = ByteBuffer()
+    var round = 0
+    while round < 20 {
+        let piece = sample(4, 100 + round * 37, seed: U64(round))
+        var packed = ByteBuffer()
+        encoder.compress(piece, into: &packed)
+        encoder.flush(into: &packed)
+        let step = try decoder.decompress(packed.bytes, into: &bytes)
+        assert(step.status == .NeedsInput && step.consumed == packed.count && step.produced == piece.count)
+        assert(!decoder.isFinished)
+        round += 1
+    }
+}
+
+@test
+fn framesFollowOneAnother() throws {
+    let first = Zstd.compress(sample(4, 1000))
+    let second = Zstd.compress(sample(5, 3000), checksum: false)
+    // A skippable frame of three bytes between.
+    let skippable: U8[>..] = [0x5A, 0x2A, 0x4D, 0x18, 3, 0, 0, 0, 1, 2, 3]
+    let all = join(join(skippable, first), join(skippable, second))
+    assert((try Zstd.decompress(all)) == join(sample(4, 1000), sample(5, 3000)))
+    var pieces = ZstdDecoder()
+    assert((try decompressInPieces(&pieces, all, seed: 4)) == join(sample(4, 1000), sample(5, 3000)))
+    let decoder = ZstdDecoder()
+    var bytes = ByteBuffer()
+    let step = try decoder.decompress(join(first, [0x28, 0xB5, 9, 9]), into: &bytes)
+    assert(step.status == .Finished && step.consumed == first.count)
+    assert(fails(CompressionError.Corrupt("bytes follow the end of the stream")) { try Zstd.decompress(join(first, [1])) })
+    assert(fails(CompressionError.Truncated) { try Zstd.decompress(join(first, [0x28, 0xB5, 0x2F])) })
+    assert(fails(CompressionError.Corrupt("no zstd frame")) { try Zstd.decompress([1, 2, 3, 4]) })
+    assert(fails(CompressionError.Truncated) { try Zstd.decompress([]) })
+    assert(fails(CompressionError.Truncated) { try Zstd.decompress(skippable[..<9].toArray()) })
+}
+
+fn says(_ bytes: U8[>..], _ what: String) -> Bool {
+    do {
+        _ = try Zstd.decompress(bytes)
+        print("nothing wrong, where it was: \(what)")
+        return false
+    } catch {
+        if error != .Corrupt(what) {
+            print("\(error), where it was: \(what)")
+        }
+        return error == .Corrupt(what)
+    }
+}
+
+/// A frame of a window of 1 KiB with one block, its last, of what is given.
+fn frame(_ kind: Int, _ block: U8[>..], size: Int = -1) -> U8[>..] {
+    let header = 1 | kind << 1 | (size < 0 ? block.count : size) << 3
+    let start: U8[>..] = [0x28, 0xB5, 0x2F, 0xFD, 0, 0, U8(header & 0xFF), U8(header >> 8 & 0xFF), U8(header >> 16)]
+    return join(start, block)
+}
+
+@test
+fn whatIsWrongIsSaid() {
+    var wrong = 0
+    wrong += says([0x28, 0xB5, 0x2F, 0xFD, 8, 0], "a frame header of no known kind") ? 0 : 1
+    wrong += says(frame(3, []), "a block of no known type") ? 0 : 1
+    wrong += says(frame(1, [7], size: 1025), "a block larger than the window") ? 0 : 1
+    wrong += says([0x28, 0xB5, 0x2F, 0xFD, 0x20, 2, 0x10, 0, 0, 1, 2, 9, 0, 0, 3], "a frame longer than it says") ? 0 : 1
+    wrong += says([0x28, 0xB5, 0x2F, 0xFD, 0x20, 4, 0x19, 0, 0, 1, 2, 3], "a frame shorter than it says") ? 0 : 1
+    wrong += says(frame(2, []), "an empty block") ? 0 : 1
+    // Raw literals, and what is after them.
+    wrong += says(frame(2, [2 << 3]), "literals cut short") ? 0 : 1
+    wrong += says(frame(2, [4]), "literals cut short") ? 0 : 1
+    wrong += says(frame(2, [1]), "literals cut short") ? 0 : 1
+    wrong += says(frame(2, [0x0C, 0xFF, 0xFF]), "more literals than a block has") ? 0 : 1
+    wrong += says(frame(2, [2 << 3, 1, 2]), "a block with no sequences") ? 0 : 1
+    wrong += says(frame(2, [0, 200]), "a block cut short") ? 0 : 1
+    wrong += says(frame(2, [0, 255, 0]), "a block cut short") ? 0 : 1
+    wrong += says(frame(2, [0, 1]), "a block cut short") ? 0 : 1
+    wrong += says(frame(2, [0, 1, 1]), "modes of no known kind") ? 0 : 1
+    wrong += says(frame(2, [0, 1, 0x40]), "a code of one symbol, which is none") ? 0 : 1
+    wrong += says(frame(2, [0, 1, 0x40, 36]), "a code of one symbol, which is none") ? 0 : 1
+    wrong += says(frame(2, [0, 1, 0x80, 0xFF]), "a distribution that is none") ? 0 : 1
+    wrong += says(frame(2, [0, 1, 0xC0]), "the last table's codes, where there was none") ? 0 : 1
+    wrong += says(frame(2, [0, 1, 0]), "a stream that does not end") ? 0 : 1
+    wrong += says(frame(2, [0, 1, 0, 0]), "a stream that does not end") ? 0 : 1
+    // One sequence whose tables have one symbol each: five literals it has not,
+    // an offset back of 5, a match of 3.
+    wrong += says(frame(2, [0, 1, 0x54, 5, 3, 0, 1]), "a sequence longer than its block") ? 0 : 1
+    wrong += says(frame(2, [8, 9, 1, 0x54, 1, 3, 0, 8]), "a match of bytes before the first") ? 0 : 1
+    wrong += says(frame(2, [8, 9, 1, 0x54, 1, 0, 0, 2]), "sequences that do not end where they should") ? 0 : 1
+    wrong += says(frame(2, [8, 9, 1, 0x54, 1, 0, 0, 1, 1]), "sequences that do not end where they should") ? 0 : 1
+    // A byte, and the byte again three times: the last offset.
+    assert((try! Zstd.decompress(frame(2, [8, 9, 1, 0x54, 1, 0, 0, 1]))) == [9, 9, 9, 9])
+    // Huffman literals with no table, or one that is none, or cut short.
+    wrong += says(frame(2, [3, 0x10, 0]), "the last Huffman table, where there was none") ? 0 : 1
+    wrong += says(frame(2, [2, 0x10]), "literals cut short") ? 0 : 1
+    wrong += says(frame(2, [2, 0xFF, 0xFF]), "literals cut short") ? 0 : 1
+    wrong += says(frame(2, [0x22, 0x00, 0x01, 0, 0, 0, 0]), "a Huffman table that is none") ? 0 : 1
+    wrong += says(frame(2, [0x22, 0xC0, 0x00, 0x81, 0xC0, 1]), "a Huffman table that is none") ? 0 : 1
+    // Two symbols, one bit each: a stream of two bits that should have one.
+    wrong += says(frame(2, [0x12, 0xC0, 0x00, 0x80, 0x10, 0x05, 0]), "literals that are not their codes'") ? 0 : 1
+    assert((try! Zstd.decompress(frame(2, [0x22, 0xC0, 0x00, 0x80, 0x10, 0x06, 0]))) == [1, 0])
+    var changed = Zstd.compress(sample(4, 100))
+    changed[changed.count - 1] = changed[changed.count - 1] ^ 1
+    wrong += says(changed, "the checksum is wrong") ? 0 : 1
+    // A size of more bytes than there are.
+    wrong += says([0x28, 0xB5, 0x2F, 0xFD, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0x80], "a frame of more bytes than there are") ? 0 : 1
+    assert(wrong == 0)
+}
+
+@test
+fn aFrameCutShortIsTruncated() {
+    for level in [1, 19] {
+        let packed = Zstd.compress(sample(7, 5000), level: level)
+        var length = 0
+        while length < packed.count {
+            assert(fails(CompressionError.Truncated) { try Zstd.decompress(packed[..<length]) })
+            length += 1 + length / 50
+        }
+    }
+}
+
+@test
+fn damageIsNeverMoreThanAnError() {
+    var seed: U64 = 1
+    var failed = 0
+    while seed <= 3000 {
+        let bytes = sample(Int(seed) % 8, 200 + Int(seed) % 3000, seed: seed)
+        let packed = Zstd.compress(bytes, level: 1 + Int(seed) % 19)
+        let limits = DecompressionLimits(maximumLength: 1 << 22)
+        do {
+            _ = try Zstd.decompress(damaged(packed, seed: seed), limits: limits)
+        } catch {
+            failed += 1
+        }
+        // Without its magic, which nothing would get past, or a checksum.
+        let bare = Zstd.compress(bytes, level: 1 + Int(seed) % 12, checksum: false)
+        let magic: U8[>..] = [0x28, 0xB5, 0x2F, 0xFD, 0, 0x70]
+        do {
+            _ = try Zstd.decompress(join(magic, damaged(bare[4...].toArray(), seed: seed)), limits: limits)
+        } catch {
+            failed += 1
+        }
+        var block = bare[(bare.count < 12 ? bare.count : 12)...].toArray()
+        if !block.isEmpty {
+            block = damaged(block, seed: seed + 7)
+        }
+        do {
+            _ = try Zstd.decompress(frame(2, block), limits: limits)
+        } catch {
+            failed += 1
+        }
+        seed += 1
+    }
+    assert(failed > 7000)
+}
+
+@test
+fn limitsAreKept() throws {
+    let bomb = Zstd.compress(U8[>..](repeating: 0, count: 20_000_000))
+    assert(bomb.count < 800)
+    let most = DecompressionLimits(maximumLength: 19_999_999)
+    assert(fails(CompressionError.LimitExceeded) { try Zstd.decompress(bomb, limits: most) })
+    let ratio = DecompressionLimits(maximumRatio: 1000)
+    assert(fails(CompressionError.LimitExceeded) { try Zstd.decompress(bomb, limits: ratio) })
+    // One whose header does not say how long it is.
+    let encoder = ZstdEncoder(level: 1)
+    var unsaid = ByteBuffer()
+    encoder.compress(U8[>..](repeating: 0, count: 20_000_000), into: &unsaid)
+    encoder.finish(into: &unsaid)
+    assert(fails(CompressionError.LimitExceeded) { try Zstd.decompress(unsaid.bytes, limits: most) })
+    assert((try Zstd.decompress(unsaid.bytes)).count == 20_000_000)
+    // A window of 512 KiB, where 256 KiB are allowed.
+    let decoder = ZstdDecoder(limits: DecompressionLimits(), maximumWindow: 262_144)
+    var bytes = ByteBuffer()
+    assert(fails(CompressionError.WindowTooLarge(bytes: 524_288)) { try decoder.decompress(unsaid.bytes, into: &bytes) })
+    // One of two terabytes is refused before anything is allocated for it.
+    assert(fails(CompressionError.WindowTooLarge(bytes: 2_199_023_255_552)) { try Zstd.decompress([0x28, 0xB5, 0x2F, 0xFD, 0, 0xF8, 1, 0, 0]) })
+}
+
+@test
+fn dictionariesAreUsed() throws {
+    let known = sample(4, 20_000, seed: 3)
+    let text = sample(4, 600, seed: 99)
+    let dictionary = try ZstdDictionary(known)
+    for level in [-2, 1, 3, 5, 9, 16, 19] {
+        let plain = Zstd.compress(text, level: level)
+        let packed = Zstd.compress(text, level: level, dictionary: dictionary)
+        assert(packed.count < plain.count, "level \(level): \(packed.count), \(plain.count)")
+        assert((try Zstd.decompress(packed, dictionary: dictionary)) == text)
+        // What the dictionary is part of for the first of its bytes only.
+        let long = sample(4, 400_000, seed: 98)
+        var encoder = ZstdEncoder(level: level, dictionary: dictionary)
+        let pieces = compressInPieces(&encoder, long, seed: 1, flushing: false)
+        var decoder = ZstdDecoder(limits: DecompressionLimits(), dictionary: dictionary)
+        assert((try decompressInPieces(&decoder, pieces, seed: 2)) == long, "level \(level)")
+        // The frames do not go on from one another.
+        assert((try Zstd.decompress(join(packed, packed), dictionary: dictionary)) == join(text, text))
+    }
+    assert(dictionary.id == 0)
+    assert(fails(CompressionError.Corrupt("a dictionary's Huffman table")) { try ZstdDictionary([0x37, 0xA4, 0x30, 0xEC, 1, 0, 0, 0]) })
+    // A frame that says which it needs.
+    assert(fails(CompressionError.DictionaryNeeded(id: 5)) { try Zstd.decompress([0x28, 0xB5, 0x2F, 0xFD, 1, 0, 5, 1, 0, 0]) })
+}
+
+@test
+fn zstdReadsAndWritesOurs() async throws {
+    if !(await has("zstd")) {
+        return
+    }
+    for level in [1, 3, 6, 12, 19] {
+        for kind in [0, 3, 4, 7] {
+            let bytes = sample(kind, 300_000, seed: U64(level))
+            let read = await run("zstd", ["-dcq"], input: Zstd.compress(bytes, level: level))
+            assert(read == bytes, "zstd reads level \(level), kind \(kind)")
+            if let packed = await run("zstd", ["-cq", "-\(level)"], input: bytes) {
+                assert((try Zstd.decompress(packed)) == bytes, "zstd's level \(level), kind \(kind)")
+                var decoder = ZstdDecoder()
+                assert((try decompressInPieces(&decoder, packed, seed: 1)) == bytes)
+            }
+        }
+    }
+}
+
+@test
+fn zstdsDictionariesAreUsed() async throws {
+    if !(await has("zstd")) {
+        return
+    }
+    let directory = try Temp.directory()
+    var files: String[>..] = []
+    var i = 0
+    while i < 300 {
+        let path = "\(directory.path)/\(i)"
+        try File.writeBytes(path, sample(4, 300 + i, seed: U64(i)))
+        files.append(path)
+        i += 1
+    }
+    let path = "\(directory.path)/dictionary"
+    let trained = await run("zstd", join(["--train", "-q", "--maxdict=8000", "-o", path], files), input: [])
+    if trained == none {
+        return
+    }
+    let dictionary = try ZstdDictionary(try File.readBytes(path))
+    assert(dictionary.id != 0)
+    let text = sample(4, 500, seed: 1234)
+    for level in [1, 3, 7, 19] {
+        let packed = Zstd.compress(text, level: level, dictionary: dictionary)
+        assert((try Zstd.decompress(packed, dictionary: dictionary)) == text)
+        assert(await run("zstd", ["-dcq", "-D", path], input: packed) == text, "zstd reads level \(level)")
+        assert(packed.count < Zstd.compress(text, level: level).count)
+        if let theirs = await run("zstd", ["-cq", "-\(level)", "-D", path], input: text) {
+            assert((try Zstd.decompress(theirs, dictionary: dictionary)) == text, "zstd's level \(level)")
+            assert(fails(CompressionError.DictionaryNeeded(id: dictionary.id)) { try Zstd.decompress(theirs) })
+        }
+    }
+    // Damaged, it is refused, or is another that is whole.
+    let bytes = try File.readBytes(path)
+    var seed: U64 = 1
+    while seed < 500 {
+        var changed = bytes
+        var walk = Walk(seed)
+        let at = 8 + walk.next(200)
+        changed[at] = changed[at] ^ U8(1 << walk.next(8))
+        if let other = try? ZstdDictionary(changed) {
+            let packed = Zstd.compress(text, dictionary: other)
+            assert((try Zstd.decompress(packed, dictionary: other)) == text)
+        }
+        seed += 1
+    }
+}
+
+@test
+fn theStreamsToo() throws {
+    let bytes = sample(4, 300_000)
+    let writer = ZstdWriter(MemoryStream(), encoder: ZstdEncoder(level: 5))
+    try writer.write(bytes)
+    try writer.finish()
+    var reader = ZstdReader(MemoryStream(writer.inner.bytes))
+    assert((try reader.readToEnd()) == bytes)
+}
+
+@test
+fn dictionariesAreTrained() async throws {
+    var samples: U8[>..][>..] = []
+    var seed: U64 = 1
+    while seed <= 400 {
+        samples.append(sample(4, 200 + Int(seed) % 300, seed: seed))
+        seed += 1
+    }
+    let text = sample(4, 300, seed: 4321)
+    let plain = Zstd.compress(text).count
+    for size in [256, 1000, 8000, 112_640] {
+        let trained = Zstd.trainDictionary(samples, size: size)
+        assert(trained.count <= size, "\(trained.count) of \(size) bytes")
+        let dictionary = try ZstdDictionary(trained)
+        assert(dictionary.id >= 32768)
+        let packed = Zstd.compress(text, dictionary: dictionary)
+        assert(packed.count < plain, "\(packed.count), \(plain) without")
+        assert((try Zstd.decompress(packed, dictionary: dictionary)) == text)
+        if await has("zstd") {
+            let directory = try Temp.directory()
+            try File.writeBytes("\(directory.path)/d", trained)
+            assert(await run("zstd", ["-dcq", "-D", "\(directory.path)/d"], input: packed) == text, "zstd reads what a dictionary of \(size) helped with")
+        }
+    }
+    // Of nothing, of one byte again and again, and of what is nowhere alike.
+    for few in [[], [U8[>..](repeating: 7, count: 100)], [sample(0, 3000)], [sample(0, 20_000), sample(1, 20_000)]] as U8[>..][>..][>..] {
+        let dictionary = try ZstdDictionary(Zstd.trainDictionary(few, size: 2000))
+        let packed = Zstd.compress(text, level: 7, dictionary: dictionary)
+        assert((try Zstd.decompress(packed, dictionary: dictionary)) == text)
+    }
+}
+
+@test
+fn windowsOfAnySizeRoundTrip() throws {
+    for log in [10, 12, 15, 18, 22] {
+        let bytes = sample(5, 1_500_000, seed: U64(log))
+        for level in [1, 3, 5, 16] {
+            let packed = Zstd.compress(bytes[..<300_000], level: level, windowLog: log)
+            assert((try Zstd.decompress(packed)) == bytes[..<300_000].toArray(), "level \(level), 2 to the \(log)")
+        }
+        let encoder = ZstdEncoder(level: 3, windowLog: log)
+        var packed = ByteBuffer()
+        encoder.compress(bytes, into: &packed)
+        encoder.finish(into: &packed)
+        let decoder = ZstdDecoder(limits: DecompressionLimits(), maximumWindow: 1 << log)
+        var back = ByteBuffer()
+        assert((try decoder.decompress(packed.bytes, into: &back)).status == .Finished && back.bytes == bytes, "2 to the \(log)")
+    }
+}

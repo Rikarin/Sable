@@ -1,0 +1,30 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// The files that an archive is made of.
+struct ArchiveFiles {
+    /// Each thing in a directory, its directories before what is in them: its
+    /// name in an archive, its path, and what it is.
+    static fn each(_ directory: FilePath, _ body: (String, FilePath, FileMetadata) throws(IoError) -> ()) throws(IoError) {
+        var options = WalkOptions()
+        options.sorted = true
+        for try entry in try Directory.walk(directory, options: options) {
+            guard let relative = entry.path.strippingPrefix(directory) else {
+                continue
+            }
+            var name = ""
+            for component in relative.components {
+                let part = String.fromUtf8Lossy(component.bytes)
+                name = name.isEmpty ? part : "\(name)/\(part)"
+            }
+            try body(name, entry.path, try entry.metadata())
+        }
+    }
+
+    /// Where a link leads, as an archive says it.
+    static fn target(_ path: FilePath) throws(IoError) -> String {
+        let target = try File.readLink(path)
+        return String.fromUtf8Lossy(target.bytes)
+    }
+}

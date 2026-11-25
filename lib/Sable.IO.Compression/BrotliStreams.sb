@@ -1,0 +1,28 @@
+module Sable.IO.Compression
+
+import Sable.IO
+
+/// A reader of brotli: .NET's `BrotliStream`.
+///
+/// ```sable
+/// let packed = Brotli.compress([1, 2, 3])
+/// var reader = BrotliReader(MemoryStream(packed))
+/// assert(try! reader.readToEnd() == [1, 2, 3])
+/// ```
+public alias BrotliReader<Inner: Reader> = DecompressingReader<BrotliDecoder, Inner>
+
+/// A writer of brotli.
+///
+/// ```sable
+/// let writer = BrotliWriter(MemoryStream(), encoder: BrotliEncoder(quality: 9))
+/// try! writer.write([1, 2, 3])
+/// try! writer.finish()
+/// assert(try! Brotli.decompress(writer.inner.bytes) == [1, 2, 3])
+/// ```
+public alias BrotliWriter<Inner: Writer> = CompressingWriter<BrotliEncoder, Inner>
+
+/// A reader of brotli that suspends while it waits.
+public alias AsyncBrotliReader<Inner: AsyncReader> = AsyncDecompressingReader<BrotliDecoder, Inner>
+
+/// A writer of brotli that suspends while it waits.
+public alias AsyncBrotliWriter<Inner: AsyncWriter> = AsyncCompressingWriter<BrotliEncoder, Inner>

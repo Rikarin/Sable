@@ -1,0 +1,92 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// Zip archives of files, all at once. .NET's `ZipFile`.
+public struct Zip {
+    /// An archive, in a file, of what a directory has: its files, directories
+    /// and links, by the order of their names; links as links. A file that is
+    /// there already is replaced.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// try! Directory.create(temp.path.appending("in/sub"), recursive: true)
+    /// try! File.write(temp.path.appending("in/sub/a.txt"), "hello")
+    /// try! Zip.create(temp.path.appending("a.zip"), from: temp.path.appending("in"))
+    /// try! Zip.extract(temp.path.appending("a.zip"), to: temp.path.appending("out"))
+    /// assert(try! File.read(temp.path.appending("out/sub/a.txt")) == "hello")
+    /// ```
+    public static fn create<Target: PathLike, Source: PathLike>(_ path: Target, from directory: Source, options: ZipOptions = ZipOptions()) throws(IoError) {
+        let writer = ZipWriter(BufferedWriter(try File.open(path, options: .writing)))
+        try ArchiveFiles.each(directory.filePath) { name, file, metadata throws(IoError) in
+            var own = options
+            own.modified = options.modified ?? metadata.modified
+            own.mode = metadata.permissions.mode
+            own.isLarge = metadata.size >= 4_000_000_000
+            match metadata.kind {
+                case .Directory    => { try writer.addDirectory(name, options: own) }
+                case .SymbolicLink => { try writer.addSymlink(name, to: try ArchiveFiles.target(file), options: own) }
+                case .File => {
+                    if metadata.size < 1 << 24 {
+                        try writer.add(name, try File.readBytes(file), options: own)
+                    } else {
+                        var reader = try File.open(file)
+                        try writer.add(name, reading: &reader, options: own)
+                    }
+                }
+                case _ => { }
+            }
+        }
+        try writer.finish()
+    }
+
+    /// What an archive has made files in a directory: see
+    /// `ZipArchive.extract`.
+    public static fn extract<Source: PathLike, Target: PathLike>(_ path: Source, to directory: Target, options: ExtractOptions = ExtractOptions()) throws(IoError) {
+        try ZipArchive.open(path).extract(to: directory, options: options)
+    }
+
+    /// An archive with entries changed: written anew beside it, those that are
+    /// not changed as they are, and put in its place. With none at the path,
+    /// one is made.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// let path = temp.path.appending("a.zip")
+    /// try! Zip.update(path) { changes in
+    ///     changes.set("a.txt", "one".utf8Bytes())
+    ///     changes.set("b.txt", "two".utf8Bytes())
+    /// }
+    /// try! Zip.update(path) { changes in
+    ///     changes.set("a.txt", "three".utf8Bytes())
+    ///     changes.remove("b.txt")
+    /// }
+    /// let archive = try! ZipArchive.open(path)
+    /// assert(archive.entries.count == 1)
+    /// assert(try! archive.read(archive.entries[0]) == "three".utf8Bytes())
+    /// ```
+    public static fn update(_ path: some PathLike, _ change: (inout ZipChanges) -> ()) throws(IoError) {
+        var changes = ZipChanges()
+        change(&changes)
+        let target = path.filePath
+        let made = try Temp.file(startingWith: ".zip-", in: target.parent)
+        var comment = ""
+        let writer = ZipWriter(BufferedWriter(made.file))
+        if File.exists(target) {
+            let archive = try ZipArchive.open(target)
+            comment = archive.comment
+            for entry in archive.entries {
+                if changes.removed[entry.name] == none {
+                    try writer.copy(entry, from: archive)
+                }
+            }
+            let mode = (try File.metadata(target)).permissions
+            try File.setPermissions(made.path, mode)
+        }
+        for (name, bytes, options) in changes.added {
+            try writer.add(name, bytes, options: options)
+        }
+        try writer.finish(comment: comment)
+        try made.persist(to: target)
+    }
+}

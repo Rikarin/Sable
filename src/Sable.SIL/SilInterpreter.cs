@@ -1551,6 +1551,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "codec_bytes_bytes" or "codec_string_bytes" or "codec_bytes_raw" or "utf8_to_utf16" or "utf16_to_utf8":
                 return 0L;
 
+            case "crc32_raw":
+                return operands[0];
+
             // The library reads the system's files, as where the runtime has nothing.
             case "trust_load":
                 return 0L;
@@ -2512,7 +2515,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Alive((HeapObject)operands[0]!).Type.IsSubclassOf(target);
         }
 
-        if (builtin.Name.StartsWith("raw_", StringComparison.Ordinal)) {
+        if (builtin.Name is "bytes_from_raw" or "array_append_raw" || builtin.Name.StartsWith("raw_", StringComparison.Ordinal)) {
             return RawBuiltin(builtin, operands);
         }
 

@@ -1,0 +1,78 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// A zip archive written by a task that suspends while it waits: a download
+/// made as it is sent. See `ZipWriter`.
+///
+/// ```sable
+/// let pipe = Pipe()
+/// let writer = AsyncZipWriter(pipe.writer)
+/// try! await writer.add("a.txt", "hello".utf8Bytes())
+/// try! await writer.finish()
+/// await pipe.writer.complete()
+/// var all: U8[>..] = []
+/// while true {
+///     let bytes = try! await pipe.reader.read(upTo: 1000)
+///     if bytes.isEmpty {
+///         break
+///     }
+///     all.append(contentsOf: bytes)
+/// }
+/// assert((try! ZipArchive(all)).entries[0].name == "a.txt")
+/// ```
+public final class AsyncZipWriter<Inner: AsyncWriter> {
+    /// The writer it writes to.
+    public let inner: Inner
+    let builder: ZipBuilder
+
+    /// Writing to the writer.
+    public init(_ inner: Inner) {
+        self.inner = inner
+        builder = ZipBuilder()
+    }
+
+    /// An entry of the bytes.
+    public fn add(_ name: String, _ bytes: U8[:], options: ZipOptions = ZipOptions()) async throws(IoError) {
+        try await inner.write(try builder.whole(name, bytes, options, mode: 0o100000 | options.mode & 0o7777))
+    }
+
+    /// A directory, whose name ends with "/", or is made to.
+    public fn addDirectory(_ name: String, options: ZipOptions = ZipOptions()) async throws(IoError) {
+        let mode = options.mode == 0o644 ? 0o755 : options.mode & 0o7777
+        try await inner.write(try builder.whole(name.hasSuffix("/") ? name : name + "/", [], options, mode: 0o040000 | mode))
+    }
+
+    /// An entry of everything the reader reads, a part at a time.
+    public fn add<R: AsyncReader>(_ name: String, reading reader: R, options: ZipOptions = ZipOptions()) async throws(IoError) {
+        try await self.begin(name, options: options)
+        while true {
+            let bytes = try await reader.read(upTo: 1 << 18)
+            if bytes.isEmpty {
+                break
+            }
+            try await self.write(bytes)
+        }
+        try await self.end()
+    }
+
+    /// An entry whose bytes are written next, up to 'end()'.
+    public fn begin(_ name: String, options: ZipOptions = ZipOptions()) async throws(IoError) {
+        try await inner.write(try builder.begin(name, options))
+    }
+
+    /// More of the entry begun.
+    public fn write(_ bytes: U8[:]) async throws(IoError) {
+        try await inner.write(try builder.write(bytes))
+    }
+
+    /// The end of the entry begun.
+    public fn end() async throws(IoError) {
+        try await inner.write(try builder.end())
+    }
+
+    /// The end of the archive, with a comment.
+    public fn finish(comment: String = "") async throws(IoError) {
+        try await inner.write(try builder.finish(comment: comment))
+    }
+}

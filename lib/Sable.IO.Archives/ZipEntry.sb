@@ -1,0 +1,50 @@
+module Sable.IO.Archives
+
+import Sable.IO
+import Sable.Time
+
+/// Something in a zip archive, as its central directory says.
+public struct ZipEntry: Sendable {
+    /// Its name, with "/" between its parts; a directory's ends with one.
+    public let name: String
+
+    /// What is said of it.
+    public let comment: String
+
+    /// How many bytes it is, and how many of the archive it takes.
+    public let size: Int
+    public let compressedSize: Int
+
+    /// Its CRC-32.
+    public let crc32: U32
+
+    /// How it is compressed.
+    public let method: ZipMethod
+
+    /// When it was last changed. Where the archive has no time but that of a
+    /// clock on a wall, which says no zone, as if the clock had shown UTC.
+    public let modified: UtcDateTime
+
+    /// The permissions and the kind of file it was on Unix: none where it was
+    /// made elsewhere.
+    public let mode: Int?
+
+    /// Whether it is encrypted: then it cannot be read here.
+    public let isEncrypted: Bool
+
+    // As the archive has them, for a copy.
+    let rawName: U8[>..]
+    let rawComment: U8[>..]
+    let flags: Int
+    let time: U32
+    let externalAttributes: U32
+    let madeBy: Int
+    // Where its local header is.
+    let offset: Int
+
+    /// Whether it is a directory.
+    public var isDirectory: Bool => name.hasSuffix("/") && !isSymlink
+
+    /// Whether it is a symbolic link: where it leads is its bytes.
+    public var isSymlink: Bool => mode != none && (mode! & 0o170000) == 0o120000
+}

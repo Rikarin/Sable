@@ -1,0 +1,20 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// A part of what an archive is read from, read in order.
+struct ZipData: Reader {
+    let source: ZipSource
+    var offset: Int
+    var left: Int
+
+    mutating fn read(upTo count: Int) throws(IoError) -> U8[>..] {
+        let bytes = try source.read(at: offset, upTo: count < left ? count : left)
+        if bytes.isEmpty && left > 0 && count > 0 {
+            throw .UnexpectedEof
+        }
+        offset += bytes.count
+        left -= bytes.count
+        return bytes
+    }
+}

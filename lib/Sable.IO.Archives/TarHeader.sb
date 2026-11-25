@@ -1,0 +1,202 @@
+module Sable.IO.Archives
+
+import Sable.IO
+import Sable.Time
+
+/// A tar header's 512 bytes, read and written: what of an entry ustar has, and
+/// what GNU tar put there instead.
+struct TarHeader {
+    static var size: Int => 512
+
+    static fn corrupt(_ what: String) -> IoError {
+        return .InvalidData(what: "the tar archive is corrupt: \(what)")
+    }
+
+    static fn isZero(_ block: U8[:]) -> Bool {
+        for byte in block {
+            if byte != 0 {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// The text of a field, up to a zero in it.
+    static fn text(_ block: U8[>..], _ start: Int, _ length: Int) -> String {
+        var end = start
+        while end < start + length && block[end] != 0 {
+            end += 1
+        }
+        return String.fromUtf8Lossy(block[start..<end])
+    }
+
+    /// A number: octal digits, spaces and zeros about them; or, its first bit
+    /// set, binary, two's complement, the most significant byte first.
+    static fn number(_ block: U8[>..], _ start: Int, _ length: Int) throws(IoError) -> Int {
+        if (block[start] & 0x80) != 0 {
+            let isNegative = (block[start] & 0x40) != 0
+            var value = isNegative ? -1 : 0
+            var i = 0
+            while i < length {
+                let byte = Int(i == 0 ? (isNegative ? block[start] : block[start] & 0x7F) : block[start + i])
+                // What does not fit is none that there is.
+                if value > 0x7F_FFFF_FFFF_FFFF || value < -0x80_0000_0000_0000 {
+                    throw TarHeader.corrupt("a number is larger than there are")
+                }
+                value = value << 8 | byte
+                i += 1
+            }
+            return value
+        }
+        var value = 0
+        var i = start
+        while i < start + length && block[i] == 0x20 {
+            i += 1
+        }
+        while i < start + length && block[i] >= 0x30 && block[i] <= 0x37 {
+            value = value * 8 + Int(block[i] - 0x30)
+            i += 1
+        }
+        while i < start + length {
+            if block[i] != 0x20 && block[i] != 0 {
+                throw TarHeader.corrupt("a number has something else in it")
+            }
+            i += 1
+        }
+        return value
+    }
+
+    /// The sum of the bytes, its own field's being spaces: as bytes without
+    /// signs, or with them, as some old tars had.
+    static fn sums(_ block: U8[>..]) -> (Int, Int) {
+        var plain = 0
+        var signed = 0
+        var i = 0
+        while i < TarHeader.size {
+            let byte = i >= 148 && i < 156 ? 0x20 : Int(block[i])
+            plain += byte
+            signed += byte >= 128 ? byte - 256 : byte
+            i += 1
+        }
+        return (plain, signed)
+    }
+
+    /// The entry of a header, its sum checked.
+    static fn read(_ block: U8[>..]) throws(IoError) -> TarEntry {
+        let (plain, signed) = TarHeader.sums(block)
+        let said = try TarHeader.number(block, 148, 8)
+        if said != plain && said != signed {
+            throw TarHeader.corrupt("a header's checksum is wrong")
+        }
+        let magic = TarHeader.text(block, 257, 6)
+        let isGnu = block[262] == 0x20 && magic.hasPrefix("ustar")
+        var name = TarHeader.text(block, 0, 100)
+        if magic == "ustar" && !isGnu {
+            let before = TarHeader.text(block, 345, 155)
+            if !before.isEmpty {
+                name = "\(before)/\(name)"
+            }
+        }
+        var entry = TarEntry(name, kind: TarEntryKind.of(block[156]), size: try TarHeader.number(block, 124, 12))
+        entry.mode = try TarHeader.number(block, 100, 8)
+        entry.userId = try TarHeader.number(block, 108, 8)
+        entry.groupId = try TarHeader.number(block, 116, 8)
+        entry.modified = UtcDateTime.fromUnix(try TarHeader.number(block, 136, 12))
+        entry.linkTarget = TarHeader.text(block, 157, 100)
+        if magic.hasPrefix("ustar") {
+            entry.userName = TarHeader.text(block, 265, 32)
+            entry.groupName = TarHeader.text(block, 297, 32)
+            if entry.kind == .CharacterDevice || entry.kind == .BlockDevice {
+                entry.deviceMajor = try TarHeader.number(block, 329, 8)
+                entry.deviceMinor = try TarHeader.number(block, 337, 8)
+            }
+        }
+        // Before there was a kind for one, a directory's name said it.
+        if entry.kind == .File && block[156] == 0 && name.hasSuffix("/") {
+            entry.kind = .Directory
+        }
+        if entry.size < 0 {
+            throw TarHeader.corrupt("an entry of less than no bytes")
+        }
+        return entry
+    }
+
+    /// The header of an entry, with the names given: what does not fit in a
+    /// field is cut short, and a number that does not is binary where that is
+    /// GNU tar's, or else none.
+    static fn write(_ entry: TarEntry, name: U8[>..], before: U8[>..], link: U8[>..], isGnu: Bool) -> U8[>..] {
+        var block = U8[>..](repeating: 0, count: TarHeader.size)
+        TarHeader.put(name, &block, 0, 100)
+        TarHeader.put(entry.mode & 0o7777, &block, 100, 8, isGnu)
+        TarHeader.put(entry.userId, &block, 108, 8, isGnu)
+        TarHeader.put(entry.groupId, &block, 116, 8, isGnu)
+        TarHeader.put(TarHeader.hasBytes(entry.kind) ? entry.size : 0, &block, 124, 12, isGnu)
+        TarHeader.put(entry.modified.secondsSinceEpoch, &block, 136, 12, isGnu)
+        block[156] = entry.kind.flag
+        TarHeader.put(link, &block, 157, 100)
+        TarHeader.put(isGnu ? "ustar  ".utf8Bytes() : "ustar\0".utf8Bytes(), &block, 257, 8)
+        if !isGnu {
+            block[263] = 0x30
+            block[264] = 0x30
+        }
+        TarHeader.put(entry.userName.utf8Bytes(), &block, 265, 31)
+        TarHeader.put(entry.groupName.utf8Bytes(), &block, 297, 31)
+        if entry.kind == .CharacterDevice || entry.kind == .BlockDevice {
+            TarHeader.put(entry.deviceMajor, &block, 329, 8, isGnu)
+            TarHeader.put(entry.deviceMinor, &block, 337, 8, isGnu)
+        }
+        TarHeader.put(before, &block, 345, 155)
+        var sum = TarHeader.sums(block).0
+        var i = 5
+        while i >= 0 {
+            block[148 + i] = 0x30 + U8(sum & 7)
+            sum = sum >> 3
+            i -= 1
+        }
+        block[154] = 0
+        block[155] = 0x20
+        return block
+    }
+
+    /// Whether an entry of the kind has bytes after its header.
+    static fn hasBytes(_ kind: TarEntryKind) -> Bool {
+        if case .Other(_) = kind {
+            return true
+        }
+        return kind == .File
+    }
+
+    static fn put(_ text: U8[>..], _ block: inout U8[>..], _ start: Int, _ length: Int) {
+        var i = 0
+        while i < text.count && i < length {
+            block[start + i] = text[i]
+            i += 1
+        }
+    }
+
+    /// Whether a number fits in a field's octal digits.
+    static fn fits(_ value: Int, _ length: Int) -> Bool {
+        return value >= 0 && value < 1 << (3 * (length - 1))
+    }
+
+    static fn put(_ value: Int, _ block: inout U8[>..], _ start: Int, _ length: Int, _ isGnu: Bool) {
+        var left = value
+        var i = length - 1
+        if !TarHeader.fits(value, length) && isGnu {
+            while i >= 0 {
+                block[start + i] = U8(left & 0xFF)
+                left = left >> 8
+                i -= 1
+            }
+            block[start] = block[start] | 0x80
+            return
+        }
+        left = TarHeader.fits(value, length) ? value : 0
+        i = length - 2
+        while i >= 0 {
+            block[start + i] = 0x30 + U8(left & 7)
+            left = left >> 3
+            i -= 1
+        }
+    }
+}

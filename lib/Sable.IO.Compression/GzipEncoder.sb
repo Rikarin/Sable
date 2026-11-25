@@ -1,0 +1,40 @@
+module Sable.IO.Compression
+
+/// Bytes compressed to gzip (RFC 1952), deflate with a header and a CRC-32, as
+/// they come.
+///
+/// ```sable
+/// let encoder = GzipEncoder(level: 1)
+/// var packed = ByteBuffer()
+/// encoder.compress([1, 2, 3], into: &packed)
+/// encoder.finish(into: &packed)
+/// assert(try! Gzip.decompress(packed.bytes) == [1, 2, 3])
+/// ```
+public final class GzipEncoder: Compressor {
+    let stream: DeflateStreamEncoder
+
+    /// At level 6, its header saying nothing.
+    public init() {
+        stream = DeflateStreamEncoder(format: .Gzip, level: 6)
+    }
+
+    /// At a level from 0, nothing compressed, to 9, the smallest, with what
+    /// the header is to say. Its extra fields are at most 65535 bytes.
+    public init(level: Int, header: GzipHeader = GzipHeader()) {
+        let extra = header.extra.count
+        precondition(extra <= 65535, "\(extra) bytes of extra fields")
+        stream = DeflateStreamEncoder(format: .Gzip, level: level, header: header)
+    }
+
+    public fn compress(_ source: U8[:], into output: inout ByteBuffer) {
+        stream.compress(source, into: &output)
+    }
+
+    public fn flush(into output: inout ByteBuffer) {
+        stream.flush(into: &output)
+    }
+
+    public fn finish(into output: inout ByteBuffer) {
+        stream.finish(into: &output)
+    }
+}

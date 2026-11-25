@@ -1,0 +1,15 @@
+module Sable.IO.Compression
+
+/// What a decoder's step did.
+@derive(Equatable)
+public struct CompressionProgress {
+    /// How many of the bytes given were taken. At the end of the stream those
+    /// after it are not.
+    public let consumed: Int
+
+    /// How many bytes were written.
+    public let produced: Int
+
+    /// Why it stopped.
+    public let status: CompressionStatus
+}

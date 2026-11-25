@@ -1,0 +1,61 @@
+module Sable.IO.Compression
+
+import Sable.IO
+
+/// What is written to it written to another writer, compressed, by a task that
+/// suspends while it waits: `AsyncGzipWriter` and the others. `finish()`
+/// writes the end of the stream, and must be called: letting go of the writer
+/// cannot wait.
+///
+/// ```sable
+/// let pipe = Pipe()
+/// let packed = AsyncGzipWriter(pipe.writer)
+/// try! await packed.write([1, 2, 3])
+/// try! await packed.finish()
+/// await pipe.writer.complete()
+/// assert(try! await AsyncGzipReader(pipe.reader).read(upTo: 10) == [1, 2, 3])
+/// ```
+public final class AsyncCompressingWriter<Encoder: Compressor, Inner: AsyncWriter>: AsyncWriter {
+    var encoder: Encoder
+    /// The writer it writes to.
+    public let inner: Inner
+    var isFinished: Bool
+
+    /// Compressing by the encoder, and writing to the writer.
+    public init(_ inner: Inner, encoder: Encoder = Encoder()) {
+        self.inner = inner
+        self.encoder = encoder
+        isFinished = false
+    }
+
+    public fn write(_ bytes: U8[:]) async throws(IoError) {
+        precondition(!isFinished, "writing after the end of the stream")
+        var buffer = ByteBuffer()
+        encoder.compress(bytes, into: &buffer)
+        if !buffer.isEmpty {
+            try await inner.write(buffer.bytes)
+        }
+    }
+
+    /// Everything written so far written on, so that it can be decompressed:
+    /// at some cost in size.
+    public fn flush() async throws(IoError) {
+        if !isFinished {
+            var buffer = ByteBuffer()
+            encoder.flush(into: &buffer)
+            try await inner.write(buffer.bytes)
+        }
+    }
+
+    /// The end of the stream written. Nothing can be written after; finishing
+    /// again does nothing.
+    public fn finish() async throws(IoError) {
+        if isFinished {
+            return
+        }
+        isFinished = true
+        var buffer = ByteBuffer()
+        encoder.finish(into: &buffer)
+        try await inner.write(buffer.bytes)
+    }
+}

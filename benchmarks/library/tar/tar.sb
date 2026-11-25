@@ -1,0 +1,29 @@
+module TarBench
+
+// A tar archive against .NET's System.Formats.Tar: five thousand small entries
+// written to memory and read again, ten times.
+
+import Sable.IO
+import Sable.IO.Archives
+
+@main
+fn main() {
+    let text = U8[>..](repeating: 0x61, count: 3000)
+    var total = 0
+    var round = 0
+    while round < 10 {
+        let writer = TarWriter(MemoryStream())
+        var i = 0
+        while i < 5000 {
+            try! writer.add(TarEntry("directory/entry \(i).txt"), text[..<(i % 3000)])
+            i += 1
+        }
+        try! writer.finish()
+        var reader = TarReader(MemoryStream(writer.inner.bytes))
+        while let entry = try! reader.next() {
+            total += entry.size + (try! reader.readToEnd()).count
+        }
+        round += 1
+    }
+    print("\(total)")
+}

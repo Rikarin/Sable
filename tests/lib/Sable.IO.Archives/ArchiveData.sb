@@ -1,0 +1,77 @@
+module ArchiveData
+
+// What the archives' tests share.
+
+import Sable.IO
+import Sable.IO.Archives
+import Sable.Process
+
+/// What is wrong with what a closure does, as an error says it; or "nothing".
+public fn problem<T>(_ body: () throws(IoError) -> T) -> String {
+    do {
+        _ = try body()
+        return "nothing"
+    } catch {
+        return error.description()
+    }
+}
+
+/// Bytes that compress somewhat.
+public fn bytes(_ count: Int, seed: Int = 1) -> U8[>..] {
+    var made: U8[>..] = []
+    var state = seed * 7919 + 1
+    while made.count < count {
+        state = state * 75 % 65537
+        made.append(U8(state % 11 * (state / 300 % 7)))
+    }
+    return made
+}
+
+/// What a program writes: none where there is no such program, or it fails.
+public fn run(_ program: String, _ arguments: String[>..], in directory: FilePath) async -> String? {
+    do {
+        let done = try await Command(program).arguments(arguments).workingDirectory(directory.string!).output()
+        return done.succeeded ? done.output : none
+    } catch {
+        return none
+    }
+}
+
+/// A directory made with files of every kind that archives have.
+public fn makeTree(_ root: FilePath) throws(IoError) {
+    try Directory.create(root.appending("empty"), recursive: true)
+    try Directory.create(root.appending("sub/deeper"), recursive: true)
+    try File.write(root.appending("a.txt"), "hello")
+    try File.writeBytes(root.appending("sub/large.bin"), bytes(700_000))
+    try File.writeBytes(root.appending("sub/deeper/none"), [])
+    try File.write(root.appending("sub/caf\u{E9} \u{2603}.txt"), "text")
+    try File.setPermissions(root.appending("a.txt"), FilePermissions(mode: 0o750))
+    let name = repeated("long", 40)
+    try Directory.create(root.appending(name))
+    try File.write(root.appending("\(name)/\(name)"), "far")
+    try File.createSymlink(at: root.appending("sub/link"), to: "../a.txt")
+}
+
+/// Whether a directory has what 'makeTree' made.
+public fn isTree(_ root: FilePath) throws(IoError) -> Bool {
+    let name = repeated("long", 40)
+    return (try File.read(root.appending("a.txt"))) == "hello"
+        && (try File.readBytes(root.appending("sub/large.bin"))) == bytes(700_000)
+        && (try File.readBytes(root.appending("sub/deeper/none"))).isEmpty
+        && (try File.read(root.appending("sub/caf\u{E9} \u{2603}.txt"))) == "text"
+        && (try File.read(root.appending("\(name)/\(name)"))) == "far"
+        && Directory.exists(root.appending("empty"))
+        && (try File.readLink(root.appending("sub/link"))).string == "../a.txt"
+        && ((try File.metadata(root.appending("a.txt"))).permissions.mode & 0o777) == 0o750
+}
+
+/// Text again and again.
+public fn repeated(_ text: String, _ count: Int) -> String {
+    var all = ""
+    var i = 0
+    while i < count {
+        all = all + text
+        i += 1
+    }
+    return all
+}

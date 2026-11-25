@@ -1,0 +1,54 @@
+module Sable.IO.Archives
+
+import Sable.Time
+
+/// Something in a tar archive.
+///
+/// ```sable
+/// var entry = TarEntry("notes/a.txt", size: 5)
+/// entry.mode = 0o600
+/// assert(entry.kind == .File && entry.linkTarget.isEmpty)
+/// ```
+public struct TarEntry: Sendable {
+    /// Its name, with "/" between its parts.
+    public var name: String
+
+    /// What it is.
+    public var kind: TarEntryKind
+
+    /// How many bytes it has.
+    public var size: Int
+
+    /// Its permissions, as Unix has them.
+    public var mode: Int = 0o644
+
+    /// Whose it is, by number and by name.
+    public var userId: Int = 0
+    public var groupId: Int = 0
+    public var userName: String = ""
+    public var groupName: String = ""
+
+    /// When it was last changed.
+    public var modified: UtcDateTime = UtcDateTime.unixEpoch
+
+    /// Where a link leads, or of what a hard link is another name.
+    public var linkTarget: String = ""
+
+    /// A device's numbers.
+    public var deviceMajor: Int = 0
+    public var deviceMinor: Int = 0
+
+    /// What else a pax archive says of it, by the keyword: "atime", "comment",
+    /// "SCHILY.xattr.user.note".
+    public var attributes: [String: String] = [:]
+
+    /// One of a name: a file of so many bytes, unless it is something else.
+    public init(_ name: String, kind: TarEntryKind = .File, size: Int = 0) {
+        self.name = name
+        self.kind = kind
+        self.size = size
+        if kind == .Directory {
+            mode = 0o755
+        }
+    }
+}

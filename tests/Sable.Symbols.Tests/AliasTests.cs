@@ -113,6 +113,30 @@ public sealed class AliasTests {
             """
         );
 
+    const string Pair = """
+                        struct Pair<A, B> {
+                            var first: A
+                            var second: B
+                            init(_ first: A, _ second: B, count: Int = 0) { self.first = first; self.second = second }
+                        }
+                        alias Named<T> = Pair<String, T>
+                        alias Both<T: Equatable> = Pair<T, T>
+                        """;
+
+    /// <summary>An initialiser called through a generic alias named bare infers the alias's parameters.</summary>
+    [Theory]
+    [InlineData("fn use() -> Pair<String, Int> { return Named(\"a\", 4) }")]
+    [InlineData("fn use() -> Pair<Int, Int> { let b = Both(4, 5); return b }")]
+    [InlineData("fn use() -> Pair<String, F64> { return Named(\"a\", 4.5, count: 3) }")]
+    [InlineData("fn use() { let n: Named<I8> = Named(\"a\", 4) }")]
+    public void AGenericAliasIsMadeWithoutItsArguments(string source) => AssertClean(Pair + "\n" + source);
+
+    [Theory]
+    [InlineData("struct Plain { }\nfn use() { let b = Both(Plain(), Plain()) }", ErrorCode.ERR_DoesNotConform)]
+    [InlineData("fn use() { let b = Both() }", ErrorCode.ERR_CannotInferTypeArgument)]
+    public void AGenericAliasMadeWithoutItsArgumentsIsChecked(string source, ErrorCode code) =>
+        Assert.Contains(ErrorsIn(Pair + "\n" + source), e => e.Code == code);
+
     // ---- Building a generic union's cases -------------------------------
 
     const string Box = "union Box<T> { Full(value: T), Empty }";

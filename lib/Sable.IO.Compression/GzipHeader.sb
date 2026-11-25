@@ -1,0 +1,41 @@
+module Sable.IO.Compression
+
+/// What a gzip member's header says besides how it is compressed (RFC 1952).
+///
+/// ```sable
+/// var header = GzipHeader()
+/// header.name = "notes.txt"
+/// header.modified = 1_700_000_000
+/// let encoder = GzipEncoder(level: 6, header: header)
+/// var packed = ByteBuffer()
+/// encoder.compress([1, 2, 3], into: &packed)
+/// encoder.finish(into: &packed)
+/// let decoder = GzipDecoder()
+/// var bytes = ByteBuffer()
+/// try! decoder.decompress(packed.bytes, into: &bytes)
+/// assert(decoder.header?.name == "notes.txt" && decoder.header?.modified == 1_700_000_000)
+/// ```
+@derive(Equatable)
+public struct GzipHeader: Sendable {
+    /// The name of the file compressed, in Latin-1.
+    public var name: String? = none
+
+    /// A comment, in Latin-1.
+    public var comment: String? = none
+
+    /// When the file was last changed, in seconds since 1970: 0 where that is
+    /// not said.
+    public var modified: U32 = 0
+
+    /// The system it was compressed on: 3 is Unix, 0 FAT, 255 unknown.
+    public var operatingSystem: U8 = 255
+
+    /// Whether the file is said to be text.
+    public var isText: Bool = false
+
+    /// Fields a program adds of its own, each two bytes, a length and as many.
+    public var extra: U8[>..] = []
+
+    /// Nothing said.
+    public init() { }
+}

@@ -1,0 +1,67 @@
+module Sable.IO.Compression
+
+/// Where the static dictionary's words are found, by a hash of the four bytes
+/// they begin with: 16384 heads, two bytes each, of a word's number, from one;
+/// then for each of the 13504 words the next with its hash, two bytes, its
+/// length, one, and its index among those so long, two. Made when first used.
+static let brotliWordIndex: LazyTable = LazyTable { () -> Int in
+    unsafe {
+        let words = brotliTables.get()
+        let table = NativeMemory.allocate(byteCount: 32768 + 6 * 16384, zeroed: true).address
+        var number = 1
+        var length = 4
+        while length <= 24 {
+            let count = 1 << (load32(brotliWords &+ 8 &* length) unchecked as Int)
+            let first = words &+ (load32(brotliWords &+ 8 &* length &+ 4) unchecked as Int)
+            var index = 0
+            while index < count {
+                let head = table &+ 2 &* brotliWordHash(load32(first &+ index &* length))
+                let entry = table &+ 32768 &+ 6 &* number
+                store16(load16(head), entry)
+                store16(length, entry &+ 2)
+                store16(index, entry &+ 4)
+                store16(number, head)
+                number += 1
+                index += 1
+            }
+            length += 1
+        }
+        return table
+    }
+}
+
+@inline(always)
+fn brotliWordHash(_ word: U32) -> Int {
+    return ((word &* 0x9E37_79B1) >> 18) unchecked as Int
+}
+
+/// The longest word of the dictionary that the bytes at a place begin with, of
+/// at least six letters and at most 'most': its length and its index, at bits
+/// 16 and 0; or 0.
+unsafe fn findBrotliWord(_ at: Int, most: Int) -> Int {
+    if most < 6 {
+        return 0
+    }
+    let table = brotliWordIndex.get()
+    let words = brotliTables.get()
+    let word = load32(at)
+    var best = 0
+    var bestLength = 5
+    var number = load16(table &+ 2 &* brotliWordHash(word))
+    var left = 24
+    while number != 0 && left > 0 {
+        let entry = table &+ 32768 &+ 6 &* number
+        let length = load16(entry &+ 2)
+        if length > bestLength && length <= most {
+            let index = load16(entry &+ 4)
+            let from = words &+ (load32(brotliWords &+ 8 &* length &+ 4) unchecked as Int) &+ index &* length
+            if matchEnd(from, at, at &+ length) == at &+ length {
+                best = length << 16 | index
+                bestLength = length
+            }
+        }
+        number = load16(entry)
+        left = left &- 1
+    }
+    return best
+}

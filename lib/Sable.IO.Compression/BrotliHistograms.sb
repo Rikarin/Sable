@@ -1,0 +1,202 @@
+module Sable.IO.Compression
+
+/// Counts of symbols put together where they are alike: what a brotli code is
+/// for, and which contexts share one.
+struct BrotliHistograms {
+    /// How many symbols each has, in words.
+    let symbols: Int
+    /// Where they are, and which of them each context has.
+    let counts: Int
+    let map: Int
+    /// How many there are.
+    var count: Int
+
+    /// About how many bits, in 256ths, the symbols counted take by a code of
+    /// their own, with what describes it.
+    unsafe static fn cost(_ counts: Int, _ symbols: Int) -> Int {
+        var total = 0
+        var weighted = 0
+        var used = 0
+        var i = 0
+        while i < symbols {
+            let these = load32(counts &+ 4 &* i) unchecked as Int
+            if these > 0 {
+                total = total &+ these
+                weighted = weighted &+ these &* logWeight(these)
+                used = used &+ 1
+            }
+            i = i &+ 1
+        }
+        if used <= 1 {
+            return 12 << 8
+        }
+        return total &* logWeight(total) &- weighted &+ ((24 &+ 5 &* used) << 8)
+    }
+
+    unsafe static fn hasAny(_ counts: Int, _ symbols: Int) -> Bool {
+        var i = 0
+        while i < symbols {
+            if load32(counts &+ 4 &* i) != 0 {
+                return true
+            }
+            i = i &+ 1
+        }
+        return false
+    }
+
+    /// The same of two together.
+    unsafe static fn cost(_ first: Int, _ second: Int, _ symbols: Int) -> Int {
+        var total = 0
+        var weighted = 0
+        var used = 0
+        var i = 0
+        while i < symbols {
+            let these = (load32(first &+ 4 &* i) &+ load32(second &+ 4 &* i)) unchecked as Int
+            if these > 0 {
+                total = total &+ these
+                weighted = weighted &+ these &* logWeight(these)
+                used = used &+ 1
+            }
+            i = i &+ 1
+        }
+        if used <= 1 {
+            return 12 << 8
+        }
+        return total &* logWeight(total) &- weighted &+ ((24 &+ 5 &* used) << 8)
+    }
+
+    /// The histograms, one for each context at first, put together pair by
+    /// pair while that saves anything: to the bits that they then take, in
+    /// 256ths. 'work' has room for 8 bytes a histogram and for each pair.
+    unsafe mutating fn cluster(work: Int) -> Int {
+        let many = count
+        let costs = work
+        let alive = work &+ 8 &* many
+        let pairs = work &+ 16 &* many
+        var total = 0
+        // Those that have any symbols: the others are as the first of them.
+        var left = 0
+        var i = 0
+        while i < many {
+            if BrotliHistograms.hasAny(counts &+ 4 &* symbols &* i, symbols) {
+                let these = BrotliHistograms.cost(counts &+ 4 &* symbols &* i, symbols)
+                store64(these unchecked as U64, costs &+ 8 &* i)
+                store64(i unchecked as U64, alive &+ 8 &* left)
+                store8(i, map &+ i)
+                left = left &+ 1
+                total = total &+ these
+            } else {
+                store8(255, map &+ i)
+            }
+            i = i &+ 1
+        }
+        let known = left == 0 ? 0 : load64(alive) unchecked as Int
+        i = 0
+        while i < many {
+            if load8(map &+ i) == 255 {
+                store8(known, map &+ i)
+            }
+            i = i &+ 1
+        }
+        // What each pair together would take more than apart.
+        var a = 0
+        while a < left {
+            let x = load64(alive &+ 8 &* a) unchecked as Int
+            var b = a &+ 1
+            while b < left {
+                let y = load64(alive &+ 8 &* b) unchecked as Int
+                store64(self.change(x, y, costs) unchecked as U64, pairs &+ 8 &* (x &* many &+ y))
+                b = b &+ 1
+            }
+            a = a &+ 1
+        }
+        while left > 1 {
+            var best = Int.max
+            var first = 0
+            var second = 0
+            a = 0
+            while a < left {
+                let x = load64(alive &+ 8 &* a) unchecked as Int
+                var b = a &+ 1
+                while b < left {
+                    let y = load64(alive &+ 8 &* b) unchecked as Int
+                    let change = load64(pairs &+ 8 &* (x &* many &+ y)) unchecked as Int
+                    if change < best {
+                        best = change
+                        first = a
+                        second = b
+                    }
+                    b = b &+ 1
+                }
+                a = a &+ 1
+            }
+            // A code the fewer is worth a little more than its bits.
+            if best >= 0 {
+                break
+            }
+            let x = load64(alive &+ 8 &* first) unchecked as Int
+            let y = load64(alive &+ 8 &* second) unchecked as Int
+            i = 0
+            while i < symbols {
+                let into = counts &+ 4 &* (symbols &* x &+ i)
+                store32(load32(into) &+ load32(counts &+ 4 &* (symbols &* y &+ i)), into)
+                i = i &+ 1
+            }
+            i = 0
+            while i < many {
+                if load8(map &+ i) == y {
+                    store8(x, map &+ i)
+                }
+                i = i &+ 1
+            }
+            total = total &+ best
+            store64(BrotliHistograms.cost(counts &+ 4 &* symbols &* x, symbols) unchecked as U64, costs &+ 8 &* x)
+            left = left &- 1
+            i = second
+            while i < left {
+                store64(load64(alive &+ 8 &* (i &+ 1)), alive &+ 8 &* i)
+                i = i &+ 1
+            }
+            i = 0
+            while i < left {
+                let other = load64(alive &+ 8 &* i) unchecked as Int
+                if other != x {
+                    let low = other < x ? other : x
+                    let high = other < x ? x : other
+                    store64(self.change(low, high, costs) unchecked as U64, pairs &+ 8 &* (low &* many &+ high))
+                }
+                i = i &+ 1
+            }
+        }
+        // Numbered as they first come, and moved to the start. One that had
+        // none may come before the first that had any.
+        let numbers = work
+        i = 0
+        while i < many {
+            store64(many unchecked as U64, numbers &+ 8 &* i)
+            i = i &+ 1
+        }
+        var next = 0
+        i = 0
+        while i < many {
+            let from = load8(map &+ i)
+            if load64(numbers &+ 8 &* from) unchecked as Int == many {
+                // The contexts before it have those moved over its place.
+                store64(next unchecked as U64, numbers &+ 8 &* from)
+                if from != next && left > 0 {
+                    copyBytes(from: counts &+ 4 &* symbols &* from, to: counts &+ 4 &* symbols &* next, 4 &* symbols)
+                }
+                next = next &+ 1
+            }
+            store8(load64(numbers &+ 8 &* from) unchecked as Int, map &+ i)
+            i = i &+ 1
+        }
+        count = next
+        return total
+    }
+
+    @inline(always)
+    unsafe fn change(_ a: Int, _ b: Int, _ costs: Int) -> Int {
+        return BrotliHistograms.cost(counts &+ 4 &* symbols &* a, counts &+ 4 &* symbols &* b, symbols) &- (load64(costs &+ 8 &* a) unchecked as Int) &- (load64(costs &+ 8 &* b) unchecked as Int)
+    }
+}

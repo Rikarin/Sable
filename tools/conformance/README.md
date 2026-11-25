@@ -13,6 +13,7 @@ python3 -I tools/conformance/x509/run.py data/limbo.json
 python3 -I tools/conformance/toml/run.py data/toml-test
 python3 -I tools/conformance/yaml/run.py data/yaml-test-suite
 python3 -I tools/conformance/json/run.py data/JSONTestSuite
+python3 -I tools/conformance/compression/run.py data/compression [corpus file ...]
 python3 -I tools/conformance/net/run.py data/iana
 python3 -I tools/conformance/random/run.py data/practrand/RNG_test --size 8GB
 ```
@@ -81,6 +82,16 @@ profile it is of: `rfc5280`, `crl`, `pathlen` and `pathological` by
 `CertificateProfile.Rfc5280`, `webpki` by `.WebPki`, and `bettertls`, `cve` and
 `online`, whose certificates are made by neither's rules, by `.Compatible`;
 `--profile` runs all by one.
+
+## compression: brotli's and zstd's own, and zlib
+
+`data/compression/zstd/`, the archive of https://github.com/facebook/zstd v1.5.7
+unpacked (`v1.5.7.tar.gz`, SHA-256 `37d72845…012ee3`): its golden frames, files
+and dictionaries; BSD. `data/compression/brotli/tests/testdata/`, that directory
+of https://github.com/google/brotli v1.0.9, file by file, as its archives leave
+it out: MIT. Python's zlib is the third. Corpus files (Silesia's, say) are
+compressed at every level and read by the `gzip`, `zstd` and `brotli` commands
+that are there, and theirs here.
 
 ## toml: toml-test
 

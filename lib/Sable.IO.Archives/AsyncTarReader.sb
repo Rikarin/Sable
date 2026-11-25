@@ -1,0 +1,120 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// A tar archive read by a task that suspends while it waits. See `TarReader`.
+///
+/// ```sable
+/// let pipe = Pipe()
+/// let writer = AsyncTarWriter(pipe.writer)
+/// try! await writer.add(TarEntry("a.txt"), "hello".utf8Bytes())
+/// try! await writer.finish()
+/// await pipe.writer.complete()
+/// let reader = AsyncTarReader(pipe.reader)
+/// let entry = try! await reader.next()
+/// assert(entry?.name == "a.txt")
+/// assert(try! await reader.read(upTo: 100) == "hello".utf8Bytes())
+/// ```
+public final class AsyncTarReader<Inner: AsyncReader>: AsyncReader {
+    /// The reader the archive comes from.
+    public let inner: Inner
+    var records: TarRecords
+    var left: Int
+    var padding: Int
+    var ended: Bool
+
+    /// Reading the reader.
+    public init(_ inner: Inner) {
+        self.inner = inner
+        records = TarRecords()
+        left = 0
+        padding = 0
+        ended = false
+    }
+
+    /// The next entry, whatever of the last one was not read passed over; none
+    /// at the archive's end.
+    public fn next() async throws(IoError) -> TarEntry? {
+        while !ended {
+            try await self.skip()
+            guard let block = try await self.block() else {
+                ended = true
+                return none
+            }
+            if TarHeader.isZero(block) {
+                _ = try await self.block()
+                ended = true
+                return none
+            }
+            var entry = try TarHeader.read(block)
+            if case .Other(let flag) = entry.kind, flag == 0x78 || flag == 0x67 || flag == 0x4C || flag == 0x4B {
+                if entry.size > TarRecords.most {
+                    throw TarHeader.corrupt("a header of more than a megabyte")
+                }
+                left = entry.size
+                var bytes: U8[>..] = []
+                while left > 0 {
+                    bytes.append(contentsOf: try await self.read(upTo: left))
+                }
+                padding = TarRecords.padding(entry.size)
+                match flag {
+                    case 0x78 => { try TarRecords.parse(bytes, into: &records.own) }
+                    case 0x67 => { try TarRecords.parse(bytes, into: &records.all) }
+                    case 0x4C => { records.longName = TarRecords.long(bytes) }
+                    case _    => { records.longLink = TarRecords.long(bytes) }
+                }
+                continue
+            }
+            try records.apply(to: &entry)
+            if TarHeader.hasBytes(entry.kind) {
+                left = entry.size
+                padding = TarRecords.padding(entry.size)
+            } else {
+                entry.size = 0
+            }
+            return entry
+        }
+        return none
+    }
+
+    /// Up to so many of the last entry's bytes: none at its end.
+    public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        if left == 0 || count <= 0 {
+            return []
+        }
+        let bytes = try await inner.read(upTo: count < left ? count : left)
+        if bytes.isEmpty {
+            throw .UnexpectedEof
+        }
+        left -= bytes.count
+        return bytes
+    }
+
+    fn skip() async throws(IoError) {
+        while left > 0 {
+            _ = try await self.read(upTo: 1 << 18)
+        }
+        while padding > 0 {
+            let bytes = try await inner.read(upTo: padding)
+            if bytes.isEmpty {
+                throw .UnexpectedEof
+            }
+            padding -= bytes.count
+        }
+    }
+
+    fn block() async throws(IoError) -> U8[>..]? {
+        var all: U8[>..] = []
+        while all.count < TarHeader.size {
+            let bytes = try await inner.read(upTo: TarHeader.size - all.count)
+            if bytes.isEmpty {
+                if all.isEmpty {
+                    return none
+                }
+                throw .UnexpectedEof
+            }
+            all.append(contentsOf: bytes)
+        }
+        return all
+    }
+}

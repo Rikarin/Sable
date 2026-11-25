@@ -1,0 +1,344 @@
+module Sable.IO.Archives
+
+import Sable.IO
+import Sable.IO.Compression
+import Sable.Text
+import Sable.Time
+
+/// A zip archive read: its entries are what its central directory, at its end,
+/// says, and each can be read on its own. .NET's `ZipArchive`.
+///
+/// Zip64 archives are read, those with something before them, and names in
+/// code page 437; entries that are stored, deflated or compressed by
+/// Zstandard. Encrypted ones are not, nor archives in several parts. Entries
+/// that share bytes, as of an archive made to be a thousand times what it is,
+/// are refused when it is opened.
+///
+/// ```sable
+/// let writer = ZipWriter(MemoryStream())
+/// try! writer.add("notes/a.txt", "hello".utf8Bytes())
+/// try! writer.finish()
+/// let archive = try! ZipArchive(writer.inner.bytes)
+/// assert(archive.entries.count == 1 && archive.entries[0].size == 5)
+/// assert(try! archive.read(archive.entry(named: "notes/a.txt")!) == "hello".utf8Bytes())
+/// ```
+public final class ZipArchive {
+    let source: ZipSource
+
+    /// What it has, in the central directory's order.
+    public let entries: ZipEntry[>..]
+
+    /// What is said of it.
+    public let comment: String
+
+    // How many bytes come before the archive's own first.
+    let shift: Int
+    // Where its central directory is.
+    let directory: Int
+    let names: [String: Int]
+
+    /// The archive in a file, which is open as long as this is.
+    public static fn open(_ path: some PathLike) throws(IoError) -> ZipArchive {
+        return try ZipArchive(source: ZipSource(try File.open(path)))
+    }
+
+    /// The archive in memory.
+    public convenience init(_ bytes: U8[>..]) throws(IoError) {
+        try self.init(source: ZipSource(bytes))
+    }
+
+    init(source: ZipSource) throws(IoError) {
+        self.source = source
+        let end = try ZipArchive.findEnd(source)
+        comment = end.comment
+        directory = end.directory
+        shift = end.shift
+        let read = try ZipArchive.readDirectory(source, end)
+        entries = read
+        var found: [String: Int] = [:]
+        var i = 0
+        while i < read.count {
+            // Of two with a name, the last is what most programs have.
+            found[read[i].name] = i
+            i += 1
+        }
+        names = found
+        try ZipArchive.checkApart(read, end.directory - end.shift)
+    }
+
+    /// The entry with the name: the last of them, where there are several.
+    public fn entry(named name: String) -> ZipEntry? {
+        if let index = names[name] {
+            return entries[index]
+        }
+        return none
+    }
+
+    // ---- The central directory -----------------------------------------------
+
+    struct End {
+        let directory: Int
+        let size: Int
+        let count: Int
+        let shift: Int
+        let comment: String
+    }
+
+    static fn corrupt(_ what: String) -> IoError {
+        return .InvalidData(what: "the zip archive is corrupt: \(what)")
+    }
+
+    /// The end record, the last there is whose comment ends where the archive
+    /// does, and what of it Zip64's has instead.
+    static fn findEnd(_ source: ZipSource) throws(IoError) -> End {
+        let start = source.size < 65557 ? 0 : source.size - 65557
+        let tail = try source.readExactly(at: start, source.size - start)
+        var at = tail.count - 22
+        while at >= 0 {
+            if tail.readU32(at: at, endian: .Little) == ZipFormat.end && at + 22 + Int(tail.readU16(at: at + 20, endian: .Little)) == tail.count {
+                break
+            }
+            at -= 1
+        }
+        if at < 0 {
+            throw ZipArchive.corrupt("it has no end record")
+        }
+        let disk = Int(tail.readU16(at: at + 4, endian: .Little))
+        var count = Int(tail.readU16(at: at + 10, endian: .Little))
+        var size = Int(tail.readU32(at: at + 12, endian: .Little))
+        var offset = Int(tail.readU32(at: at + 16, endian: .Little))
+        let comment = ZipFormat.text(tail[(at + 22)...].toArray(), isUtf8: Utf8.isValid(tail[(at + 22)...]))
+        var last = start + at
+        if (disk == 0xFFFF || count == 0xFFFF || size == 0xFFFF_FFFF || offset == 0xFFFF_FFFF) && last >= 20 {
+            let locator = try source.readExactly(at: last - 20, 20)
+            if locator.readU32(at: 0, endian: .Little) == ZipFormat.locator {
+                // Where it says, or, with something before the archive, right
+                // before the locator.
+                let said = locator.readU64(at: 8, endian: .Little)
+                var place = said < U64(source.size) ? Int(said) : -1
+                if place < 0 || place > last - 76 || (try source.readExactly(at: place, 4)).readU32(at: 0, endian: .Little) != ZipFormat.end64 {
+                    place = last - 76
+                }
+                if place < 0 {
+                    throw ZipArchive.corrupt("its Zip64 record is not there")
+                }
+                let record = try source.readExactly(at: place, 56)
+                if record.readU32(at: 0, endian: .Little) != ZipFormat.end64 {
+                    throw ZipArchive.corrupt("its Zip64 record is not there")
+                }
+                if record.readU32(at: 16, endian: .Little) != 0 || record.readU32(at: 20, endian: .Little) != 0 {
+                    throw .Unsupported(what: "a zip archive in several parts")
+                }
+                count = try ZipArchive.number(record.readU64(at: 32, endian: .Little))
+                size = try ZipArchive.number(record.readU64(at: 40, endian: .Little))
+                offset = try ZipArchive.number(record.readU64(at: 48, endian: .Little))
+                last = place
+            }
+        } else if disk != 0 {
+            throw .Unsupported(what: "a zip archive in several parts")
+        }
+        let directory = last - size
+        if directory < 0 || offset > directory || count > size / 46 {
+            throw ZipArchive.corrupt("its central directory is not where it says")
+        }
+        return End(directory: directory, size: size, count: count, shift: directory - offset, comment: comment)
+    }
+
+    static fn number(_ value: U64) throws(IoError) -> Int {
+        if value > 0x7FFF_FFFF_FFFF_FFFF {
+            throw ZipArchive.corrupt("a number is larger than there are")
+        }
+        return Int(value)
+    }
+
+    static fn readDirectory(_ source: ZipSource, _ end: End) throws(IoError) -> ZipEntry[>..] {
+        let bytes = try source.readExactly(at: end.directory, end.size)
+        var entries: ZipEntry[>..] = []
+        var at = 0
+        while entries.count < end.count {
+            if at + 46 > bytes.count || bytes.readU32(at: at, endian: .Little) != ZipFormat.central {
+                throw ZipArchive.corrupt("its central directory ends early")
+            }
+            let nameLength = Int(bytes.readU16(at: at + 28, endian: .Little))
+            let extraLength = Int(bytes.readU16(at: at + 30, endian: .Little))
+            let commentLength = Int(bytes.readU16(at: at + 32, endian: .Little))
+            let next = at + 46 + nameLength + extraLength + commentLength
+            if next > bytes.count {
+                throw ZipArchive.corrupt("its central directory ends early")
+            }
+            entries.append(try ZipArchive.readEntry(bytes, at, nameLength, extraLength, commentLength))
+            at = next
+        }
+        return entries
+    }
+
+    static fn readEntry(_ bytes: U8[>..], _ at: Int, _ nameLength: Int, _ extraLength: Int, _ commentLength: Int) throws(IoError) -> ZipEntry {
+        let flags = Int(bytes.readU16(at: at + 8, endian: .Little))
+        let nameStart = at + 46
+        let rawName = bytes[nameStart..<(nameStart + nameLength)].toArray()
+        let rawComment = bytes[(nameStart + nameLength + extraLength)..<(nameStart + nameLength + extraLength + commentLength)].toArray()
+        // Some of Unix's write UTF-8 and do not say it.
+        let host = Int(bytes.readU16(at: at + 4, endian: .Little)) >> 8
+        let isUtf8 = (flags & 0x800) != 0 || (host == 3 || host == 19) && Utf8.isValid(rawName)
+        var name = ZipFormat.text(rawName, isUtf8: isUtf8)
+        let time = bytes.readU32(at: at + 12, endian: .Little)
+        var modified = ZipFormat.time(dos: time)
+        var compressedSize = Int(bytes.readU32(at: at + 20, endian: .Little))
+        var size = Int(bytes.readU32(at: at + 24, endian: .Little))
+        var offset = Int(bytes.readU32(at: at + 42, endian: .Little))
+        let madeBy = Int(bytes.readU16(at: at + 4, endian: .Little))
+        let external = bytes.readU32(at: at + 38, endian: .Little)
+
+        // The fields that say more: what is too large for the record, the time
+        // in UTC, and a name in UTF-8.
+        var field = nameStart + nameLength
+        let end = field + extraLength
+        while field + 4 <= end {
+            let id = bytes.readU16(at: field, endian: .Little)
+            let length = Int(bytes.readU16(at: field + 2, endian: .Little))
+            var part = field + 4
+            field = part + length
+            if field > end {
+                break
+            }
+            if id == 1 {
+                if size == 0xFFFF_FFFF {
+                    size = try ZipArchive.large(bytes, &part, field)
+                }
+                if compressedSize == 0xFFFF_FFFF {
+                    compressedSize = try ZipArchive.large(bytes, &part, field)
+                }
+                if offset == 0xFFFF_FFFF {
+                    offset = try ZipArchive.large(bytes, &part, field)
+                }
+            } else if id == 0x5455 && length >= 5 && (bytes[part] & 1) != 0 {
+                modified = UtcDateTime.fromUnix(Int(bytes.readI32(at: part + 1, endian: .Little)))
+            } else if id == 0x7075 && length > 5 && bytes[part] == 1 {
+                var crc = Crc32()
+                crc.update(rawName)
+                if bytes.readU32(at: part + 1, endian: .Little) == crc.value {
+                    name = String.fromUtf8Lossy(bytes[(part + 5)..<field])
+                }
+            }
+        }
+        // Unix's kind and permissions, which MS-DOS's machines do not say.
+        let mode = Int(external >> 16)
+        return ZipEntry(
+            name: name,
+            comment: ZipFormat.text(rawComment, isUtf8: isUtf8),
+            size: size,
+            compressedSize: compressedSize,
+            crc32: bytes.readU32(at: at + 16, endian: .Little),
+            method: ZipMethod.of(Int(bytes.readU16(at: at + 10, endian: .Little))),
+            modified: modified,
+            mode: (host == 3 || host == 19) && mode != 0 ? mode : none,
+            isEncrypted: (flags & 0x41) != 0,
+            rawName: rawName,
+            rawComment: rawComment,
+            flags: flags,
+            time: time,
+            externalAttributes: external,
+            madeBy: madeBy,
+            offset: offset,
+        )
+    }
+
+    static fn large(_ bytes: U8[>..], _ part: inout Int, _ end: Int) throws(IoError) -> Int {
+        if part + 8 > end {
+            throw ZipArchive.corrupt("an entry's Zip64 field is too short")
+        }
+        let value = try ZipArchive.number(bytes.readU64(at: part, endian: .Little))
+        part += 8
+        return value
+    }
+
+    /// No two entries have a byte both, and none has one of the directory's.
+    static fn checkApart(_ entries: ZipEntry[>..], _ directory: Int) throws(IoError) {
+        var spans: (Int, Int)[>..] = []
+        for entry in entries {
+            let header = 30 + entry.rawName.count
+            if entry.offset > directory || entry.compressedSize > directory - entry.offset || header > directory - entry.offset - entry.compressedSize {
+                throw ZipArchive.corrupt("'\(entry.name)' is not in it")
+            }
+            spans.append((entry.offset, entry.offset + header + entry.compressedSize))
+        }
+        spans.sort(by: { $0.0 < $1.0 })
+        var i = 1
+        while i < spans.count {
+            if spans[i].0 < spans[i - 1].1 {
+                throw ZipArchive.corrupt("its entries overlap")
+            }
+            i += 1
+        }
+    }
+
+    // ---- Entries -------------------------------------------------------------
+
+    /// Where an entry's compressed bytes are, as its own header says, which
+    /// must be what the central directory says.
+    fn data(of entry: ZipEntry) throws(IoError) -> ZipData {
+        let header = try source.readExactly(at: shift + entry.offset, 30)
+        if header.readU32(at: 0, endian: .Little) != ZipFormat.local {
+            throw ZipArchive.corrupt("'\(entry.name)' has no header")
+        }
+        let nameLength = Int(header.readU16(at: 26, endian: .Little))
+        let start = shift + entry.offset + 30 + nameLength + Int(header.readU16(at: 28, endian: .Little))
+        let name = try source.readExactly(at: shift + entry.offset + 30, nameLength)
+        if name != entry.rawName || Int(header.readU16(at: 8, endian: .Little)) != entry.method.number {
+            throw ZipArchive.corrupt("'\(entry.name)' is another in its header")
+        }
+        if start > directory || entry.compressedSize > directory - start {
+            throw ZipArchive.corrupt("'\(entry.name)' is not in it")
+        }
+        return ZipData(source: source, offset: start, left: entry.compressedSize)
+    }
+
+    /// An entry's bytes, to read in order.
+    public fn reader(for entry: ZipEntry) throws(IoError) -> ZipEntryReader {
+        if entry.isEncrypted {
+            throw .Unsupported(what: "an encrypted zip entry, '\(entry.name)'")
+        }
+        if case .Other(let number) = entry.method {
+            throw .Unsupported(what: "a zip entry, '\(entry.name)', compressed by method \(number)")
+        }
+        return ZipEntryReader(entry, try self.data(of: entry))
+    }
+
+    /// An entry's bytes, all of them: no more than 'limit'.
+    public fn read(_ entry: ZipEntry, limit: Int = Int.max) throws(IoError) -> U8[>..] {
+        if entry.size > limit {
+            throw .InvalidData(what: "'\(entry.name)' has more than \(limit) bytes")
+        }
+        var reader = try self.reader(for: entry)
+        return try reader.readToEnd()
+    }
+
+    /// Every entry made a file, a directory or a link in a directory, which is
+    /// made if it is not there. An entry that would be outside it fails, and
+    /// those after it are not made; see `ExtractOptions`.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// let writer = ZipWriter(MemoryStream())
+    /// try! writer.add("notes/a.txt", "hello".utf8Bytes())
+    /// try! writer.finish()
+    /// try! ZipArchive(writer.inner.bytes).extract(to: temp.path)
+    /// assert(try! File.read(temp.path.appending("notes/a.txt")) == "hello")
+    /// ```
+    public fn extract(to directory: some PathLike, options: ExtractOptions = ExtractOptions()) throws(IoError) {
+        let extraction = try Extraction(directory.filePath, options)
+        for entry in entries {
+            try extraction.count()
+            if entry.isSymlink {
+                let target = try self.read(entry, limit: 65536)
+                try extraction.link(entry.name, to: String.fromUtf8Lossy(target))
+            } else if entry.isDirectory {
+                try extraction.directory(entry.name, mode: entry.mode, modified: entry.modified)
+            } else {
+                var reader = try self.reader(for: entry)
+                try extraction.file(entry.name, mode: entry.mode, modified: entry.modified, reading: &reader)
+            }
+        }
+        try extraction.finish()
+    }
+}

@@ -1,0 +1,58 @@
+module BrotliDecompressBench
+
+// Brotli.decompress against .NET's BrotliStream, which is brotli: two megabytes of
+// text, compressed once, decompressed 15 times.
+
+import Sable.IO.Compression
+
+// Two megabytes of words, the commoner ones oftener, in lines, with numbers.
+fn textSample() -> U8[>..] {
+    let words = [
+        "the", "of", "and", "to", "in", "a", "is", "that", "for", "it", "as", "was",
+        "with", "be", "by", "on", "not", "he", "his", "but", "at", "are", "this", "have",
+        "from", "or", "had", "an", "they", "which", "one", "you", "were", "all", "her", "she",
+        "there", "would", "their", "we", "him", "been", "has", "when", "who", "will", "no", "more",
+        "if", "out", "so", "up", "said", "what", "its", "about", "than", "into", "them", "can",
+        "only", "other", "time", "new", "some", "could", "these", "two", "may", "first", "then", "do",
+        "any", "like", "my", "now", "over", "such", "our", "man", "me", "even", "most", "made",
+        "after", "also", "did", "many", "before", "must", "well", "back", "through", "years", "where", "much",
+        "your", "way", "down", "should", "because", "long", "each", "just", "state", "those", "people", "too",
+        "mr", "how", "little", "good", "world", "make", "very", "year", "still", "see", "own", "work",
+        "men", "day", "get", "here", "old", "life", "both", "between", "being", "under", "three", "never",
+        "know", "same", "last", "another", "while", "us", "off", "might", "great", "go", "come", "since",
+        "against", "right", "came", "take", "used", "himself", "few", "house", "american", "use", "place", "during",
+        "high", "without", "again", "home",
+    ]
+    var bytes: U8[>..] = []
+    var state: U64 = 1
+    while bytes.count < 2_000_000 {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        let random = Int(state >> 33)
+        let first = random % 160
+        let second = random / 160 % 160
+        bytes.append(contentsOf: words[first < second ? first : second].utf8Bytes())
+        let kind = random / 40000 % 16
+        if kind == 0 {
+            bytes.append(contentsOf: ".\n".utf8Bytes())
+        } else if kind == 1 {
+            bytes.append(contentsOf: " \(random % 10007) ".utf8Bytes())
+        } else {
+            bytes.append(0x20)
+        }
+    }
+    return bytes
+}
+
+@main
+fn main() {
+    let text = textSample()
+    let packed = Brotli.compress(text, quality: 4)
+    var total = 0
+    var round = 0
+    while round < 15 {
+        let bytes = try! Brotli.decompress(packed)
+        total += bytes.count + Int(bytes[bytes.count / 2])
+        round += 1
+    }
+    print("\(total)")
+}

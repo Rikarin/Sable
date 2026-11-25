@@ -1,0 +1,444 @@
+module TarTests
+
+// Tar archives: what is written is read, in every format and through the tar
+// command; every kind of header; what is damaged; and what would leave the
+// directory it is extracted to.
+
+import ArchiveData
+import Sable.IO
+import Sable.IO.Archives
+import Sable.IO.Compression
+import Sable.Testing
+import Sable.Time
+
+fn archive(_ format: TarFormat = .Pax, _ fill: (TarWriter<MemoryStream>) throws(IoError) -> ()) -> U8[>..] {
+    let writer = TarWriter(MemoryStream(), format: format)
+    try! fill(writer)
+    try! writer.finish()
+    return writer.inner.bytes
+}
+
+fn entries(_ bytes: U8[>..]) throws(IoError) -> (TarEntry, U8[>..])[>..] {
+    var reader = TarReader(MemoryStream(bytes))
+    var all: (TarEntry, U8[>..])[>..] = []
+    while let entry = try reader.next() {
+        all.append((entry, try reader.readToEnd()))
+    }
+    return all
+}
+
+@test
+fn entriesAreWrittenAndRead() throws {
+    for format in [TarFormat.Pax, TarFormat.Ustar, TarFormat.Gnu] {
+        let made = archive(format) { writer throws(IoError) in
+            var file = TarEntry("a/b.txt")
+            file.mode = 0o640
+            file.userId = 501
+            file.groupId = 20
+            file.userName = "someone"
+            file.groupName = "staff"
+            file.modified = UtcDateTime.fromUnix(1_700_000_000)
+            try writer.add(file, bytes(1000))
+            try writer.add(TarEntry("d", kind: .Directory))
+            var link = TarEntry("link", kind: .Symlink)
+            link.linkTarget = "a/b.txt"
+            try writer.add(link)
+            var hard = TarEntry("hard", kind: .HardLink)
+            hard.linkTarget = "a/b.txt"
+            try writer.add(hard)
+            var device = TarEntry("null", kind: .CharacterDevice)
+            device.deviceMajor = 1
+            device.deviceMinor = 3
+            try writer.add(device)
+            try writer.add(TarEntry("pipe", kind: .Fifo))
+            try writer.begin(TarEntry("parts", size: 1500))
+            try writer.write(bytes(1500)[..<700])
+            try writer.write(bytes(1500)[700...])
+            try writer.add(TarEntry("none"))
+            try writer.add(TarEntry("whole"), bytes(512))
+        }
+        assert(made.count % 10240 == 0)
+        let read = try entries(made)
+        assert(read.map { $0.0.name } == ["a/b.txt", "d/", "link", "hard", "null", "pipe", "parts", "none", "whole"], "\(format)")
+        let file = read[0].0
+        assert(file.kind == .File && file.size == 1000 && file.mode == 0o640 && file.userId == 501 && file.groupId == 20)
+        assert(file.userName == "someone" && file.groupName == "staff" && file.modified == UtcDateTime.fromUnix(1_700_000_000))
+        assert(read[0].1 == bytes(1000) && read[1].0.kind == .Directory && read[1].0.mode == 0o755)
+        assert(read[2].0.kind == .Symlink && read[2].0.linkTarget == "a/b.txt")
+        assert(read[3].0.kind == .HardLink && read[3].0.linkTarget == "a/b.txt")
+        assert(read[4].0.kind == .CharacterDevice && read[4].0.deviceMajor == 1 && read[4].0.deviceMinor == 3)
+        assert(read[5].0.kind == .Fifo && read[6].1 == bytes(1500) && read[7].1.isEmpty && read[8].1 == bytes(512))
+    }
+}
+
+@test
+fn whatDoesNotFitUstarIsSaidOtherwise() throws {
+    let long = repeated("0123456789", 30)
+    var file = TarEntry("\(long)/\u{2603}")
+    file.userId = 3_000_000
+    file.groupId = 1 << 40
+    file.userName = "\u{E9}"
+    file.groupName = repeated("g", 40)
+    file.modified = UtcDateTime { secondsSinceEpoch: 1_700_000_000, nanosecond: 123_456_789 }
+    file.attributes = ["comment": "a note", "SCHILY.xattr.user.x": "y=z\n"]
+    var link = TarEntry("link", kind: .Symlink)
+    link.linkTarget = long
+    link.modified = UtcDateTime { secondsSinceEpoch: -2, nanosecond: 500_000_000 }
+    let pax = try entries(archive { writer throws(IoError) in
+        try writer.add(file, [1, 2])
+        try writer.add(link)
+        try writer.add(TarEntry("after"), [3])
+    })
+    assert(pax[0].0.name == file.name && pax[0].0.userId == 3_000_000 && pax[0].0.groupId == 1 << 40)
+    assert(pax[0].0.userName == "\u{E9}" && pax[0].0.groupName == file.groupName && pax[0].0.modified == file.modified)
+    assert(pax[0].0.attributes["comment"] == "a note" && pax[0].0.attributes["SCHILY.xattr.user.x"] == "y=z\n")
+    assert(pax[0].1 == [1, 2] && pax[1].0.linkTarget == long && pax[1].0.modified == link.modified)
+    assert(pax[2].0.name == "after" && pax[2].0.attributes.isEmpty && pax[2].1 == [3])
+
+    let gnu = try entries(archive(.Gnu) { writer throws(IoError) in
+        try writer.add(file, [1, 2])
+        try writer.add(link)
+        try writer.add(TarEntry("after"), [3])
+    })
+    assert(gnu[0].0.name == file.name && gnu[0].0.userId == 3_000_000 && gnu[0].0.groupId == 1 << 40)
+    assert(gnu[0].0.modified == UtcDateTime.fromUnix(1_700_000_000) && gnu[1].0.linkTarget == long)
+    assert(gnu[1].0.modified == UtcDateTime.fromUnix(-2) && gnu[2].0.name == "after")
+
+    let ustar = TarWriter(MemoryStream(), format: .Ustar)
+    assert(problem { try ustar.add(file, [1]) }.hasSuffix("in a ustar archive, which has no room for it' is not supported here"))
+    // A name that ustar has in two parts.
+    let half = "\(repeated("d", 120))/\(repeated("f", 90))"
+    try ustar.add(TarEntry(half), [7])
+    try ustar.finish()
+    let split = try entries(ustar.inner.bytes)
+    assert(split[0].0.name == half && split[0].1 == [7])
+    assert(problem { try ustar.add(TarEntry("")) }.hasSuffix("was given something the system does not take"))
+}
+
+/// A header's checksum put right.
+fn summed(_ block: U8[>..], at start: Int = 0) -> U8[>..] {
+    var fixed = block
+    var sum = 0
+    var i = 0
+    while i < 512 {
+        sum += i >= 148 && i < 156 ? 0x20 : Int(fixed[start + i])
+        i += 1
+    }
+    i = 5
+    while i >= 0 {
+        fixed[start + 148 + i] = 0x30 + U8(sum & 7)
+        sum = sum >> 3
+        i -= 1
+    }
+    fixed[start + 154] = 0
+    fixed[start + 155] = 0x20
+    return fixed
+}
+
+@test
+fn oldHeadersAreRead() throws {
+    var old = archive(.Ustar) { writer throws(IoError) in try writer.add(TarEntry("d/x"), [1, 2, 3]) }
+    // Before ustar: no magic, and no kind.
+    var i = 156
+    old[156] = 0
+    i = 257
+    while i < 512 {
+        old[i] = 0
+        i += 1
+    }
+    assert((try entries(summed(old)))[0].1 == [1, 2, 3])
+    // A directory by its name alone, and spaces before a number.
+    old[2] = 0
+    old[124] = 0x20
+    old[134] = 0x30
+    old = summed(old)
+    assert((try entries(old[..<512].toArray()))[0].0.kind == .Directory)
+    // A sum as if bytes had signs.
+    var signed = archive(.Ustar) { writer throws(IoError) in try writer.add(TarEntry("\u{E9}x"), [1]) }
+    var sum = 0
+    i = 0
+    while i < 512 {
+        let byte = i >= 148 && i < 156 ? 0x20 : Int(signed[i])
+        sum += byte >= 128 ? byte - 256 : byte
+        i += 1
+    }
+    i = 5
+    while i >= 0 {
+        signed[148 + i] = 0x30 + U8(sum & 7)
+        sum = sum >> 3
+        i -= 1
+    }
+    assert((try entries(signed))[0].0.name == "\u{E9}x")
+    // The archive that ends with no zeros, and one with none but them.
+    let bare = archive { writer throws(IoError) in try writer.add(TarEntry("x"), [1]) }
+    assert((try entries(bare[..<1024].toArray())).count == 1)
+    assert((try entries([])).isEmpty && (try entries(U8[>..](repeating: 0, count: 1024))).isEmpty)
+    // A global record, which is of every entry after it.
+    var global = archive { writer throws(IoError) in
+        var entry = TarEntry("first")
+        entry.attributes = ["comment": "all"]
+        try writer.add(entry)
+        try writer.add(TarEntry("second"))
+    }
+    global[156] = 0x67
+    let both = try entries(summed(global))
+    assert(both[0].0.attributes["comment"] == "all" && both[1].0.attributes["comment"] == "all")
+}
+
+@test
+fn whatIsDamagedIsRefused() {
+    let good = archive { writer throws(IoError) in try writer.add(TarEntry("x"), bytes(600)) }
+    var changed = good
+    changed[0] = 0x79
+    assertEqualText(problem { try entries(changed) }, "the tar archive is corrupt: a header's checksum is wrong")
+    assertEqualText(problem { try entries(good[..<700].toArray()) }, "the stream ended before what was needed")
+    assertEqualText(problem { try entries(good[..<300].toArray()) }, "the stream ended before what was needed")
+    assertEqualText(problem { try entries(good[..<1300].toArray()) }, "the stream ended before what was needed")
+    changed = good
+    changed[125] = 0x39
+    assertEqualText(problem { try entries(summed(changed)) }, "the tar archive is corrupt: a number has something else in it")
+    changed = good
+    var i = 124
+    while i < 136 {
+        changed[i] = 0xFF
+        i += 1
+    }
+    assertEqualText(problem { try entries(summed(changed)) }, "the tar archive is corrupt: an entry of less than no bytes")
+    changed[124] = 0x8F
+    assertEqualText(problem { try entries(summed(changed)) }, "the tar archive is corrupt: a number is larger than there are")
+    // Sparse, both ways.
+    changed = good
+    changed[156] = 0x53
+    assertEqualText(problem { try entries(summed(changed)) }, "'a sparse file in a tar archive' is not supported here")
+    let sparse = archive { writer throws(IoError) in
+        var entry = TarEntry("x")
+        entry.attributes = ["GNU.sparse.major": "1"]
+        try writer.add(entry)
+    }
+    assertEqualText(problem { try entries(sparse) }, "'a sparse file in a tar archive' is not supported here")
+    // Records: more than there may be, and none that are.
+    changed = archive { writer throws(IoError) in
+        var entry = TarEntry("x")
+        entry.attributes = ["comment": repeated("x", 1 << 20)]
+        try writer.add(entry)
+    }
+    assertEqualText(problem { try entries(changed) }, "the tar archive is corrupt: a header of more than a megabyte")
+    let record = archive { writer throws(IoError) in
+        var entry = TarEntry("x")
+        entry.attributes = ["mtime": "1", "size": "0"]
+        try writer.add(entry)
+    }
+    for (from, to) in [("11 mtime=1", "99 mtime=1"), ("11 mtime=1", "x1 mtime=1"), ("mtime=1", "mtime+1"), ("11 mtime=1", "11 =time=1"), ("mtime=1", "mtime=x"), ("9 size=0", "9 size=-")] {
+        changed = record
+        let wanted = from.utf8Bytes()
+        let made = to.utf8Bytes()
+        i = 0
+        while i < 1024 {
+            if changed[i..<i + wanted.count].toArray() == wanted {
+                var j = 0
+                while j < made.count {
+                    changed[i + j] = made[j]
+                    j += 1
+                }
+            }
+            i += 1
+        }
+        let said = problem { try entries(changed) }
+        assert(said.hasPrefix("the tar archive is corrupt: "), "\(to): \(said)")
+    }
+}
+
+@test
+fn damageIsNeverMoreThanAnError() {
+    let good = archive { writer throws(IoError) in
+        var entry = TarEntry(repeated("n", 150))
+        entry.attributes = ["comment": "x", "atime": "12.5"]
+        entry.modified = UtcDateTime { secondsSinceEpoch: 5, nanosecond: 5 }
+        try writer.add(entry, bytes(300))
+        try writer.add(TarEntry("d", kind: .Directory))
+    }
+    var state: U64 = 88172645463325252
+    var round = 0
+    while round < 3000 {
+        var changed = good[..<3584].toArray()
+        var times = 1 + round % 4
+        while times > 0 {
+            state = state ^ (state << 13)
+            state = state ^ (state >> 7)
+            state = state ^ (state << 17)
+            changed[Int(state % 3584)] = U8(state >> 40 & 0xFF)
+            times -= 1
+        }
+        // Each header's sum put right, so that what is past it is looked at.
+        for at in [0, 1024, 2048] {
+            changed = summed(changed, at: at)
+        }
+        _ = try? entries(changed)
+        round += 1
+    }
+}
+
+@test
+fn directoriesAreArchivedAndExtracted() throws {
+    let temp = try Temp.directory()
+    try makeTree(temp.path.appending("in"))
+    for name in ["a.tar", "a.tar.gz", "a.tgz", "a.tar.zst", "a.tar.br"] {
+        try Tar.create(temp.path.appending(name), from: temp.path.appending("in"))
+        try Tar.extract(temp.path.appending(name), to: temp.path.appending("out-\(name)"))
+        assert(try isTree(temp.path.appending("out-\(name)")), name)
+    }
+    let before = (try File.metadata(temp.path.appending("in/sub"))).modified
+    assert((try File.metadata(temp.path.appending("out-a.tar/sub"))).modified == before)
+    let small = (try File.metadata(temp.path.appending("a.tar.zst"))).size
+    assert(small < (try File.metadata(temp.path.appending("a.tar"))).size / 2)
+    try Tar.create(temp.path.appending("g.tar"), from: temp.path.appending("in"), format: .Gnu)
+    try Tar.extract(temp.path.appending("g.tar"), to: temp.path.appending("g"))
+    assert(try isTree(temp.path.appending("g")))
+}
+
+@test
+fn nothingIsWrittenOutside() throws {
+    let temp = try Temp.directory()
+    try Directory.create(temp.path.appending("secret"))
+    try File.write(temp.path.appending("secret/file"), "secret")
+    let here = temp.path.appending("out")
+    fn extracting(_ fill: (TarWriter<MemoryStream>) throws(IoError) -> ()) -> String {
+        let made = archive(.Pax, fill)
+        return problem { try Tar.extract(reading: MemoryStream(made), to: here) }
+    }
+    for name in ["../up", "a/../../up", "/root", "a\\..\\..\\up", "C:x"] {
+        let said = extracting { writer throws(IoError) in try writer.add(TarEntry(name), [1]) }
+        assert(said.contains("leads out of the directory"), "\(name): \(said)")
+    }
+    fn entry(_ name: String, _ kind: TarEntryKind, _ target: String) -> TarEntry {
+        var made = TarEntry(name, kind: kind)
+        made.linkTarget = target
+        return made
+    }
+    // Links out, by a link or by a name; and a file through one.
+    assert(extracting { writer throws(IoError) in try writer.add(entry("link", .Symlink, "../secret")) }.hasPrefix("a link, 'link', leads to"))
+    assert(extracting { writer throws(IoError) in try writer.add(entry("hard", .HardLink, "../secret/file")) }.contains("leads out of the directory"))
+    let through = extracting { writer throws(IoError) in
+        try writer.add(TarEntry("real", kind: .Directory))
+        try writer.add(entry("way", .Symlink, "real"))
+        try writer.add(TarEntry("way/file"), [1])
+    }
+    assert(through == "'way' is in the way of an entry: it is no directory, or a link")
+    // A hard link of a link, or of what is not there.
+    let linked = extracting { writer throws(IoError) in
+        try writer.add(entry("other", .Symlink, "real"))
+        try writer.add(entry("hard", .HardLink, "other"))
+    }
+    assert(linked == "'hard' is another name for 'other', which is no file")
+    // One of a file that is, which then has both names.
+    let good = extracting { writer throws(IoError) in
+        try writer.add(TarEntry("./"))
+        try writer.add(TarEntry("one"), [1])
+    }
+    assert(good.contains("leads out of the directory"))
+    let named = extracting { writer throws(IoError) in
+        try writer.add(TarEntry(".", kind: .Directory))
+        try writer.add(TarEntry("pipe", kind: .Fifo))
+        try writer.add(TarEntry("one"), [1])
+        try writer.add(entry("two", .HardLink, "one"))
+    }
+    assert(named == "nothing" && (try File.readBytes(here.appending("two"))) == [1] && !File.exists(here.appending("pipe")))
+    assert((try Directory.list(temp.path)) == ["out", "secret"])
+    assert((try File.read(temp.path.appending("secret/file"))) == "secret")
+}
+
+@test
+fn limitsAreKept() throws {
+    let temp = try Temp.directory()
+    let made = archive { writer throws(IoError) in
+        try writer.add(TarEntry("zeros"), U8[>..](repeating: 0, count: 5_000_000))
+    }
+    var options = ExtractOptions()
+    options.limits.maximumTotal = 4_000_000
+    assertEqualText(problem { try Tar.extract(reading: MemoryStream(made), to: temp.path, options: options) }, "the archive has more bytes than the limits allow")
+    // Compressed, a decoder's limits hold too.
+    let packed = Gzip.compress(made)
+    let reader = GzipReader(MemoryStream(packed), decoder: GzipDecoder(limits: DecompressionLimits(maximumRatio: 100)))
+    assertEqualText(problem { try Tar.extract(reading: reader, to: temp.path.appending("x")) }, "more would be decompressed than the limits allow")
+}
+
+@test
+fn theAsyncOnesToo() async throws {
+    let pipe = Pipe(pauseWriterThreshold: 1 << 20)
+    let writer = AsyncTarWriter(pipe.writer)
+    var entry = TarEntry(repeated("x", 300))
+    entry.attributes = ["comment": "y"]
+    try await writer.add(entry, bytes(1000))
+    try await writer.add(TarEntry("d", kind: .Directory))
+    try await writer.begin(TarEntry("parts", size: 10))
+    try await writer.write(bytes(10)[..<4])
+    try await writer.write(bytes(10)[4...])
+    try await writer.add(TarEntry("skipped"), bytes(3000))
+    try await writer.add(TarEntry("last"), [1])
+    try await writer.finish()
+    await pipe.writer.complete()
+    let reader = AsyncTarReader(pipe.reader)
+    let first = try await reader.next()
+    assert(first?.name == entry.name && first!.attributes["comment"] == "y")
+    var all: U8[>..] = []
+    while true {
+        let part = try await reader.read(upTo: 100)
+        if part.isEmpty {
+            break
+        }
+        all.append(contentsOf: part)
+    }
+    assert(all == bytes(1000))
+    assert((try await reader.next())?.kind == .Directory)
+    assert((try await reader.next())?.size == 10)
+    assert((try await reader.next())?.name == "skipped")
+    assert((try await reader.next())?.name == "last")
+    assert((try await reader.next()) == none)
+    assert((try await reader.next()) == none)
+    for format in [TarFormat.Gnu] {
+        let other = Pipe(pauseWriterThreshold: 1 << 20)
+        let gnu = AsyncTarWriter(other.writer, format: format)
+        var link = TarEntry(repeated("x", 300), kind: .Symlink)
+        link.linkTarget = repeated("y", 300)
+        try await gnu.add(link)
+        await other.writer.complete()
+        let back = try await AsyncTarReader(other.reader).next()
+        assert(back?.name == link.name && back?.linkTarget == link.linkTarget)
+    }
+    let cut = Pipe()
+    try await cut.writer.write(bytes(100))
+    await cut.writer.complete()
+    do {
+        _ = try await AsyncTarReader(cut.reader).next()
+        fail("no error")
+    } catch {
+        assert(error.description() == "the stream ended before what was needed")
+    }
+}
+
+@test
+fn tarAgrees() async throws {
+    let temp = try Temp.directory()
+    try makeTree(temp.path.appending("in"))
+    if await run("tar", ["--version"], in: temp.path) == none {
+        return
+    }
+    for format in [TarFormat.Pax, TarFormat.Gnu] {
+        try Tar.create(temp.path.appending("ours.tar"), from: temp.path.appending("in"), format: format)
+        let directory = "theirs-\(format)"
+        try Directory.create(temp.path.appending(directory))
+        assert(await run("tar", ["-xf", "ours.tar", "-C", directory], in: temp.path) != none)
+        assert(try isTree(temp.path.appending(directory)), "\(format)")
+    }
+    for format in ["pax", "gnutar"] {
+        let made = await run("tar", ["-cf", "theirs.tar", "--format", format, "-C", "in", "."], in: temp.path)
+        if made == none {
+            continue
+        }
+        try Tar.extract(temp.path.appending("theirs.tar"), to: temp.path.appending("out-\(format)"))
+        assert(try isTree(temp.path.appending("out-\(format)")), format)
+    }
+    assert(await run("tar", ["-czf", "theirs.tgz", "-C", "in", "."], in: temp.path) != none)
+    try Tar.extract(temp.path.appending("theirs.tgz"), to: temp.path.appending("z"))
+    assert(try isTree(temp.path.appending("z")))
+}

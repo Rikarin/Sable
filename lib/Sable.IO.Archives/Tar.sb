@@ -1,0 +1,117 @@
+module Sable.IO.Archives
+
+import Sable.IO
+import Sable.IO.Compression
+
+/// Tar archives of files, all at once. .NET's `TarFile`.
+public struct Tar {
+    /// An archive, in a file, of what a directory has: its files, directories
+    /// and links, by the order of their names; links as links. A file that is
+    /// there already is replaced. One whose name ends with ".gz" or ".tgz",
+    /// ".zst" or ".br" is compressed so.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// try! Directory.create(temp.path.appending("in/sub"), recursive: true)
+    /// try! File.write(temp.path.appending("in/sub/a.txt"), "hello")
+    /// try! Tar.create(temp.path.appending("a.tar.gz"), from: temp.path.appending("in"))
+    /// try! Tar.extract(temp.path.appending("a.tar.gz"), to: temp.path.appending("out"))
+    /// assert(try! File.read(temp.path.appending("out/sub/a.txt")) == "hello")
+    /// ```
+    public static fn create<Target: PathLike, Source: PathLike>(_ path: Target, from directory: Source, format: TarFormat = .Pax) throws(IoError) {
+        let file = BufferedWriter(try File.open(path, options: .writing))
+        match path.filePath.pathExtension ?? "" {
+            case "gz" | "tgz" => {
+                let packed = GzipWriter(file)
+                try Tar.write(packed, from: directory, format: format)
+                try packed.finish()
+            }
+            case "zst" => {
+                let packed = ZstdWriter(file)
+                try Tar.write(packed, from: directory, format: format)
+                try packed.finish()
+            }
+            case "br" => {
+                let packed = BrotliWriter(file)
+                try Tar.write(packed, from: directory, format: format)
+                try packed.finish()
+            }
+            case _ => { try Tar.write(file, from: directory, format: format) }
+        }
+    }
+
+    /// The same, to anything that takes bytes: what compresses them, say.
+    public static fn write<Target: Writer, Source: PathLike>(_ target: Target, from directory: Source, format: TarFormat = .Pax) throws(IoError) {
+        let writer = TarWriter(target, format: format)
+        try ArchiveFiles.each(directory.filePath) { name, path, metadata throws(IoError) in
+            var entry = TarEntry(name)
+            entry.mode = metadata.permissions.mode & 0o7777
+            entry.modified = metadata.modified
+            match metadata.kind {
+                case .Directory => {
+                    entry.kind = .Directory
+                    try writer.add(entry)
+                }
+                case .SymbolicLink => {
+                    entry.kind = .Symlink
+                    entry.linkTarget = try ArchiveFiles.target(path)
+                    try writer.add(entry)
+                }
+                case .File => {
+                    // As long as it is said to be, whatever is done to it
+                    // meanwhile.
+                    let file = try File.open(path)
+                    entry.size = (try file.metadata()).size
+                    try writer.begin(entry)
+                    var left = entry.size
+                    while left > 0 {
+                        let bytes = try file.read(upTo: left < 1 << 18 ? left : 1 << 18)
+                        if bytes.isEmpty {
+                            throw .UnexpectedEof
+                        }
+                        try writer.write(bytes)
+                        left -= bytes.count
+                    }
+                }
+                case _ => { }
+            }
+        }
+        try writer.finish()
+    }
+
+    /// What an archive has made files, directories and links in a directory,
+    /// which is made if it is not there. An entry that would be outside it
+    /// fails, and those after it are not made; see `ExtractOptions`. Devices
+    /// and pipes are passed over. An archive compressed by gzip or zstd is
+    /// known by how it begins, and one by brotli by its name.
+    public static fn extract<Source: PathLike, Target: PathLike>(_ path: Source, to directory: Target, options: ExtractOptions = ExtractOptions()) throws(IoError) {
+        let file = try File.open(path)
+        let start = try file.read(at: 0, upTo: 4)
+        if start.count == 4 && start[0] == 0x1F && start[1] == 0x8B {
+            try Tar.extract(reading: GzipReader(file), to: directory, options: options)
+        } else if start.count == 4 && start.readU32(at: 0, endian: .Little) == 0xFD2F_B528 {
+            try Tar.extract(reading: ZstdReader(file), to: directory, options: options)
+        } else if path.filePath.pathExtension == "br" {
+            try Tar.extract(reading: BrotliReader(file), to: directory, options: options)
+        } else {
+            try Tar.extract(reading: BufferedReader(file), to: directory, options: options)
+        }
+    }
+
+    /// The same, of what is read.
+    public static fn extract<Source: Reader, Target: PathLike>(reading source: Source, to directory: Target, options: ExtractOptions = ExtractOptions()) throws(IoError) {
+        var reader = TarReader(source)
+        let extraction = try Extraction(directory.filePath, options)
+        while let entry = try reader.next() {
+            try extraction.count()
+            match entry.kind {
+                case .Directory => { try extraction.directory(entry.name, mode: entry.mode, modified: entry.modified) }
+                case .Symlink   => { try extraction.link(entry.name, to: entry.linkTarget) }
+                case .HardLink  => { try extraction.hardLink(entry.name, to: entry.linkTarget) }
+                case .File      => { try extraction.file(entry.name, mode: entry.mode, modified: entry.modified, reading: &reader) }
+                case _          => { }
+            }
+        }
+        try extraction.finish()
+    }
+}

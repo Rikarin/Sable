@@ -234,10 +234,7 @@ public struct MemoryStream: Reader, Writer, Seekable {
             bytes[position + i] = written[i]
             i = i + 1
         }
-        while i < written.count {
-            bytes.append(written[i])
-            i = i + 1
-        }
+        bytes.append(contentsOf: written[i...])
         position = position + written.count
     }
 

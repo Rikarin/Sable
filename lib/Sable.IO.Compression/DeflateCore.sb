@@ -1,0 +1,448 @@
+module Sable.IO.Compression
+
+/// Raw deflate encoded: what is given gathered in a window, and compressed a
+/// part at a time, each of one block or more.
+final class DeflateCore {
+    let level: Int
+    /// How many bytes a part has, after the 32 KiB before it.
+    let part: Int
+    let window: Block
+    /// Where the first byte is that may be matched, the first that is not
+    /// compressed, and the end.
+    var start: Int
+    var next: Int
+    var end: Int
+    /// A place's address less the place.
+    var base: Int
+    /// The hash tables, the chain, and the tokens of a block.
+    let tables: Block
+    let tokens: Block
+    let blocks: DeflateBlocks
+    let shift3: U32
+    let shift4: U32
+    let target: Block
+    var writer: BitWriter
+    var parser: DeflateBestParse?
+    var isFinished: Bool
+    let dictionary: U8[>..]
+    /// What the trailer is to have of the bytes compressed, as they come.
+    let format: DeflateFormat
+    var crc: Crc32
+    var adler: Adler32
+
+    static var tokenLimit: Int => 65536
+
+    /// For about so many bytes, if that is known.
+    init(format: DeflateFormat, level: Int, dictionary: U8[>..] = [], expecting count: Int = Int.max) {
+        precondition(level >= 0 && level <= 9, "a deflate level of \(level)")
+        self.format = format
+        self.level = level
+        crc = Crc32()
+        adler = Adler32()
+        self.dictionary = dictionary
+        let small = count < 262144 - dictionary.count ? (count + dictionary.count < 4096 ? 4096 : count + dictionary.count + 64) : 262144
+        part = small
+        window = Block(count: 32768 + small + 64)
+        start = window.address
+        next = start
+        end = start
+        // Places from one past the farthest a match may be, so that the tables'
+        // zeros are too far.
+        base = start - 32769
+        var bits = 16
+        while bits > 10 && 1 << (bits - 1) >= small {
+            bits -= 1
+        }
+        shift4 = U32(32 - bits)
+        shift3 = U32(32 - (bits < 15 ? bits : 15))
+        tables = Block(count: level == 0 ? 0 : (4 << 16) + (4 << 15) + 4 * DeflateMatches.chainEntries)
+        tokens = Block(count: level == 0 ? 0 : 4 * (DeflateCore.tokenLimit + 16) + 80)
+        blocks = DeflateBlocks()
+        target = Block(count: 32768 + small + 2048)
+        writer = BitWriter(bits: 0, count: 0, position: target.address)
+        parser = level == 9 ? DeflateBestParse(count: small) : none
+        isFinished = false
+        if level > 0 {
+            unsafe {
+                fillBytes(tables.address, with: 0, 4 << bits)
+                fillBytes(tables.address + (4 << 16), with: 0, 4 << (bits < 15 ? bits : 15))
+            }
+        }
+        self.preset()
+    }
+
+    /// The dictionary as if it had been compressed.
+    fn preset() {
+        if dictionary.isEmpty {
+            return
+        }
+        let kept = dictionary.count < 32768 ? dictionary[0...] : dictionary[(dictionary.count - 32768)...]
+        unsafe {
+            NativeMemory.copy(from: kept, to: RawPtr<U8>(address: end))
+            end = end + kept.count
+            store64(0, end)
+            next = end
+            if level > 0 {
+                self.matches().insert(from: start, to: end, limit: end - 3)
+            }
+        }
+    }
+
+    fn matches() -> DeflateMatches {
+        return DeflateMatches {
+            heads3: tables.address + (4 << 16),
+            heads4: tables.address,
+            chain: tables.address + (4 << 16) + (4 << 15),
+            base: base,
+            start: start,
+            shift3: shift3,
+            shift4: shift4,
+        }
+    }
+
+    /// Where the window ends.
+    var limit: Int => window.address + 32768 + part
+
+    fn compress(_ source: U8[:], into output: inout ByteBuffer) {
+        precondition(!isFinished, "compressing after the end of the stream")
+        var at = 0
+        while at < source.count {
+            if end == limit {
+                self.compressPart(isLast: false, isFlush: false, into: &output)
+                self.slide()
+            }
+            let taken = source.count - at < limit - end ? source.count - at : limit - end
+            unsafe {
+                NativeMemory.copy(from: source[at..<at + taken], to: RawPtr<U8>(address: end))
+                if format == .Gzip {
+                    crc.update(at: end, count: taken)
+                } else if format == .Zlib {
+                    adler.update(at: end, count: taken)
+                }
+                end = end + taken
+                store64(0, end)
+            }
+            at += taken
+        }
+    }
+
+    fn flush(into output: inout ByteBuffer) {
+        precondition(!isFinished, "flushing after the end of the stream")
+        self.compressPart(isLast: false, isFlush: true, into: &output)
+        // An empty stored block, so that what came before ends on a byte.
+        unsafe {
+            DeflateBlocks.writeStored(&writer, source: end, count: 0, isLast: false)
+        }
+        self.drain(into: &output)
+    }
+
+    fn finish(into output: inout ByteBuffer) {
+        precondition(!isFinished, "the stream is finished already")
+        self.compressPart(isLast: true, isFlush: true, into: &output)
+        unsafe {
+            writer.align()
+        }
+        self.drain(into: &output)
+        isFinished = true
+    }
+
+    /// The window moved on: the 32 KiB before what is not compressed kept.
+    fn slide() {
+        let keep = next - start < 32768 ? next - start : 32768
+        let from = next - keep
+        let moved = from - window.address
+        if moved > 0 {
+            unsafe {
+                copyBytes(from: from, to: window.address, end - from + 8)
+            }
+            start = window.address
+            next -= moved
+            end -= moved
+            base -= moved
+        }
+    }
+
+    fn drain(into output: inout ByteBuffer) {
+        let count = writer.position - target.address
+        if count > 0 {
+            unsafe {
+                output.append(from: RawPtr<U8>(address: target.address), byteCount: count)
+            }
+            writer.position = target.address
+        }
+    }
+
+    /// What there is compressed; unless that is all there will be, or all for
+    /// now, up to as near its end as a match may reach.
+    fn compressPart(isLast: Bool, isFlush: Bool, into output: inout ByteBuffer) {
+        unsafe {
+            if level == 0 {
+                if end > next || isLast {
+                    DeflateBlocks.writeStored(&writer, source: next, count: end - next, isLast: isLast)
+                    next = end
+                    self.drain(into: &output)
+                }
+                return
+            }
+            let stop = isFlush ? end : end - 262
+            if next >= stop && isLast {
+                blocks.resetCounts()
+                blocks.write(&writer, tokens: tokens.address, tokenCount: 0, source: next, count: 0, isLast: true)
+                self.drain(into: &output)
+            }
+            while next < stop {
+                let from = next
+                blocks.resetCounts()
+                let found = level == 1 ? self.parseFast(stop: stop) : (level == 9 ? self.parseBest(stop: stop) : self.parse(stop: stop))
+                blocks.write(&writer, tokens: tokens.address, tokenCount: found, source: from, count: next - from, isLast: isLast && next >= stop)
+                self.drain(into: &output)
+            }
+        }
+    }
+
+    /// One block's tokens, each the first match found by one look at the last
+    /// place with the same four bytes: how many.
+    unsafe fn parseFast(stop: Int) -> Int {
+        let heads = tables.address
+        let counts = blocks.lengthCounts
+        let distanceCounts = blocks.distanceCounts
+        let symbols = deflateSymbols
+        let base = self.base
+        let start = self.start
+        let shift = shift4
+        var token = tokens.address
+        let tokenEnd = token &+ 4 &* DeflateCore.tokenLimit
+        var at = next
+        let searchEnd = stop &- 4
+        while at < searchEnd && token < tokenEnd {
+            let word = load32(at)
+            let head = heads &+ 4 &* (((word &* 0x9E37_79B1) >> shift) unchecked as Int)
+            let place = (at &- base) unchecked as U32
+            let distance = (place &- load32(head)) unchecked as Int
+            store32(place, head)
+            if distance <= 32768 && distance <= at &- start && load32(at &- distance) == word {
+                let most = stop &- at < 258 ? stop &- at : 258
+                let length = matchLength(at &- distance, at, from: 4, most: most)
+                store32((length << 16 | (distance &- 1)) unchecked as U32, token)
+                token = token &+ 4
+                let symbol = counts &+ 4 &* (257 &+ load8(symbols &+ length))
+                store32(load32(symbol) &+ 1, symbol)
+                let further = distanceCounts &+ 4 &* load8(symbols &+ 259 &+ (distance <= 256 ? distance &- 1 : 256 &+ ((distance &- 1) >> 7)))
+                store32(load32(further) &+ 1, further)
+                // The place before the next is found again by.
+                let after = at &+ length
+                if after < searchEnd {
+                    let last = load32(after &- 1)
+                    store32((after &- 1 &- base) unchecked as U32, heads &+ 4 &* (((last &* 0x9E37_79B1) >> shift) unchecked as Int))
+                }
+                at = after
+            } else {
+                let byte = (word & 0xFF) unchecked as Int
+                store32(byte unchecked as U32, token)
+                token = token &+ 4
+                let symbol = counts &+ 4 &* byte
+                store32(load32(symbol) &+ 1, symbol)
+                at = at &+ 1
+            }
+        }
+        while at < stop && at >= searchEnd && token < tokenEnd {
+            let byte = load8(at)
+            store32(byte unchecked as U32, token)
+            token = token &+ 4
+            let symbol = counts &+ 4 &* byte
+            store32(load32(symbol) &+ 1, symbol)
+            at = at &+ 1
+        }
+        next = at
+        return (token &- tokens.address) >> 2
+    }
+
+    /// The least length of match worth its bits: where few bytes are used, a
+    /// literal is of few bits.
+    unsafe fn leastLength(_ at: Int, _ stop: Int, depth: Int) -> Int {
+        let end = stop &- at < 4096 ? stop : at &+ 4096
+        let seen = tokens.address
+        fillBytes(seen, with: 0, 256)
+        var used = 0
+        var i = at
+        while i < end {
+            let byte = seen &+ load8(i)
+            if load8(byte) == 0 {
+                store8(1, byte)
+                used = used &+ 1
+            }
+            i = i &+ 1
+        }
+        let least = used < 6 ? 9 : (used < 8 ? 8 : (used < 10 ? 7 : (used < 16 ? 6 : (used < 45 ? 5 : (used < 80 ? 4 : 3)))))
+        let most = depth < 5 ? 4 : (depth < 10 ? 5 : (depth < 16 ? 7 : 9))
+        return least < most ? least : most
+    }
+
+    /// One block's tokens, the longest matches taken, those that a longer one
+    /// begins soon after left: how many.
+    unsafe fn parse(stop: Int) -> Int {
+        let search = DeflateLevel(level: level)
+        let depth = search.depth
+        let nice = search.nice
+        let waits = search.waits
+        let matches = self.matches()
+        let counts = blocks.lengthCounts
+        let distanceCounts = blocks.distanceCounts
+        let symbols = deflateSymbols
+        let least = self.leastLength(next, stop, depth: depth)
+        let first = tokens.address
+        let tokenEnd = first &+ 4 &* DeflateCore.tokenLimit
+        var splitter = BlockSplitter(counts: first &+ 4 &* (DeflateCore.tokenLimit &+ 16))
+        var token = first
+        var at = next
+        let from = at
+        // The last places have too few bytes after them to hash.
+        let insertEnd = end &- 4
+        var current = 0
+        while at < stop && token < tokenEnd {
+            if splitter.since >= 512 && at &- from >= 5000 && stop &- at >= 5000 && splitter.shouldEnd(length: at &- from) {
+                break
+            }
+            let most = stop &- at < 258 ? stop &- at : 258
+            if most < 5 || at >= insertEnd {
+                self.put(literal: load8(at), token, counts)
+                token = token &+ 4
+                at = at &+ 1
+                continue
+            }
+            current = matches.longest(at, shortest: least &- 1, most: most, nice: nice < most ? nice : most, depth: depth)
+            var length = current >> 16
+            var distance = current & 0xFFFF
+            if length < least || length == 3 && distance >= 8192 {
+                splitter.addLiteral(load8(at))
+                self.put(literal: load8(at), token, counts)
+                token = token &+ 4
+                at = at &+ 1
+                continue
+            }
+            // Looked for where the match is; then, if it is not long, one
+            // place on, and two.
+            var matchAt = at
+            var inserted = at
+            while length < nice && waits > 0 {
+                var ahead = matchAt &+ 1
+                var room = stop &- ahead < 258 ? stop &- ahead : 258
+                if room < 5 || ahead >= insertEnd {
+                    break
+                }
+                var other = matches.longest(ahead, shortest: length &- 1, most: room, nice: nice < room ? nice : room, depth: depth >> 1)
+                inserted = ahead
+                if DeflateCore.isBetter(other, than: length, distance, by: 2) {
+                    splitter.addLiteral(load8(matchAt))
+                    self.put(literal: load8(matchAt), token, counts)
+                    token = token &+ 4
+                    matchAt = ahead
+                    length = other >> 16
+                    distance = other & 0xFFFF
+                    continue
+                }
+                if waits == 1 {
+                    break
+                }
+                ahead = matchAt &+ 2
+                room = stop &- ahead < 258 ? stop &- ahead : 258
+                if room < 5 || ahead >= insertEnd {
+                    break
+                }
+                other = matches.longest(ahead, shortest: length &- 1, most: room, nice: nice < room ? nice : room, depth: depth >> 2)
+                inserted = ahead
+                if !DeflateCore.isBetter(other, than: length, distance, by: 6) {
+                    break
+                }
+                splitter.addLiteral(load8(matchAt))
+                splitter.addLiteral(load8(matchAt &+ 1))
+                self.put(literal: load8(matchAt), token, counts)
+                self.put(literal: load8(matchAt &+ 1), token &+ 4, counts)
+                token = token &+ 8
+                matchAt = ahead
+                length = other >> 16
+                distance = other & 0xFFFF
+            }
+            splitter.addMatch(length)
+            store32((length << 16 | distance) unchecked as U32, token)
+            token = token &+ 4
+            let symbol = counts &+ 4 &* (257 &+ load8(symbols &+ length))
+            store32(load32(symbol) &+ 1, symbol)
+            let further = distanceCounts &+ 4 &* load8(symbols &+ 259 &+ (distance < 256 ? distance : 256 &+ (distance >> 7)))
+            store32(load32(further) &+ 1, further)
+            at = matchAt &+ length
+            matches.insert(from: inserted &+ 1, to: at, limit: insertEnd)
+        }
+        next = at
+        return (token &- first) >> 2
+    }
+
+    /// Whether a match, as found, saves more than the one before it: four a
+    /// byte it is longer, less what its distance's bits are more.
+    @inline(always)
+    static fn isBetter(_ other: Int, than length: Int, _ distance: Int, by least: Int) -> Bool {
+        let otherLength = other >> 16
+        let otherDistance = other & 0xFFFF
+        let bits = (distance &+ 1).leadingZeroCount &- (otherDistance &+ 1).leadingZeroCount
+        return otherLength >= length && 4 &* (otherLength &- length) &- bits > least
+    }
+
+    @inline(always)
+    unsafe fn put(literal byte: Int, _ token: Int, _ counts: Int) {
+        store32(byte unchecked as U32, token)
+        let at = counts &+ 4 &* byte
+        store32(load32(at) &+ 1, at)
+    }
+
+    /// One block's tokens, the least found of all there are: how many.
+    unsafe fn parseBest(stop: Int) -> Int {
+        let parser = self.parser!
+        let matches = self.matches()
+        let insertEnd = end &- 4
+        let least = self.leastLength(next, stop, depth: 64)
+        var splitter = BlockSplitter(counts: tokens.address &+ 4 &* (DeflateCore.tokenLimit &+ 16))
+        var at = next
+        let from = at
+        let blockEnd = stop &- from < DeflateCore.tokenLimit ? stop : from &+ DeflateCore.tokenLimit
+        var counted = at
+        parser.begin()
+        while at < blockEnd {
+            if splitter.since >= 512 && at &- from >= 5000 && stop &- at >= 5000 && splitter.shouldEnd(length: at &- from) {
+                break
+            }
+            if !parser.hasRoom {
+                break
+            }
+            let most = blockEnd &- at < 258 ? blockEnd &- at : 258
+            var longest = 0
+            if most >= 5 && at < insertEnd {
+                longest = matches.all(at, most: most, depth: 64, into: parser)
+            }
+            parser.endPlace()
+            if at >= counted {
+                if longest >= least {
+                    splitter.addMatch(longest)
+                    counted = at &+ longest
+                } else {
+                    splitter.addLiteral(load8(at))
+                    counted = at &+ 1
+                }
+            }
+            at = at &+ 1
+            if longest >= 64 {
+                // One so long is taken whole.
+                let after = at &+ longest &- 1
+                while at < after && parser.hasRoom {
+                    if at < insertEnd {
+                        matches.insert(at)
+                    }
+                    parser.endPlace()
+                    at = at &+ 1
+                }
+            }
+        }
+        let count = at &- from
+        next = at
+        return parser.parse(from, count, blocks: blocks, tokens: tokens.address)
+    }
+}

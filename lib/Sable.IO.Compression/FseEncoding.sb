@@ -1,0 +1,263 @@
+module Sable.IO.Compression
+
+// Finite state entropy encoded (RFC 8878, section 4.1): a distribution made of
+// counts, written, and the table that symbols are encoded by. A table has at
+// its start its log and how many symbols; from 8 on, two words a symbol, what
+// its bits and its next state are worked out by, with room for 256; and from
+// 2056 on the next states, two bytes each. Its state is kept in a word.
+
+/// How many bytes a table of at most nine bits has.
+const fseTableBytes: Int = 2056 + 1024
+
+/// About the binary logarithm of a number from 1 on, in 256ths.
+@inline(always)
+fn logWeight(_ value: Int) -> Int {
+    let high = 63 &- (value | 1).leadingZeroCount
+    return (high << 8) &+ ((value << 8) >> high)
+}
+
+/// Counts, a U32 each of which 'total' is the sum, made a distribution of so
+/// many states, two bytes each, where at least two are not zero.
+unsafe fn normalizeCounts(_ counts: Int, symbols: Int, total: Int, log: Int, into distribution: Int) {
+    let rest: U32[>..] = [0, 473195, 504333, 520860, 550000, 700000, 750000, 830000]
+    let scale = 62 &- log
+    let step = (1 << 62) / total
+    let part = 1 << (scale &- 20)
+    let low = total >> log
+    var left = 1 << log
+    var largest = 0
+    var largestShare = 0
+    var symbol = 0
+    while symbol < symbols {
+        let count = load32(counts &+ 4 &* symbol) unchecked as Int
+        var share = 0
+        if count == 0 {
+            share = 0
+        } else if count <= low {
+            share = -1
+            left = left &- 1
+        } else {
+            share = (count &* step) >> scale
+            if share < 8 {
+                let over = part &* (rest[share] unchecked as Int)
+                share = share &+ (count &* step &- (share << scale) > over ? 1 : 0)
+            }
+            if share > largestShare {
+                largestShare = share
+                largest = symbol
+            }
+            left = left &- share
+        }
+        store16(share, distribution &+ 2 &* symbol)
+        symbol = symbol &+ 1
+    }
+    if 0 &- left >= largestShare >> 1 {
+        normalizeEvenly(counts, symbols: symbols, total: total, log: log, into: distribution)
+    } else {
+        store16(largestShare &+ left, distribution &+ 2 &* largest)
+    }
+}
+
+/// The same where the states left are too few for the largest to give up.
+unsafe fn normalizeEvenly(_ counts: Int, symbols: Int, total: Int, log: Int, into distribution: Int) {
+    let pending = -2
+    let low = total >> log
+    var lowOne = total &* 3 >> (log &+ 1)
+    var remaining = total
+    var distributed = 0
+    var symbol = 0
+    while symbol < symbols {
+        let count = load32(counts &+ 4 &* symbol) unchecked as Int
+        var share = pending
+        if count == 0 {
+            share = 0
+        } else if count <= low {
+            share = -1
+        } else if count <= lowOne {
+            share = 1
+        }
+        if share != pending && count > 0 {
+            distributed = distributed &+ 1
+            remaining = remaining &- count
+        }
+        store16(share, distribution &+ 2 &* symbol)
+        symbol = symbol &+ 1
+    }
+    var left = (1 << log) &- distributed
+    if left == 0 {
+        return
+    }
+    if remaining / left > lowOne {
+        lowOne = remaining &* 3 / (left &* 2)
+        symbol = 0
+        while symbol < symbols {
+            let count = load32(counts &+ 4 &* symbol) unchecked as Int
+            if shareOf(distribution, symbol) == pending && count <= lowOne {
+                store16(1, distribution &+ 2 &* symbol)
+                distributed = distributed &+ 1
+                remaining = remaining &- count
+            }
+            symbol = symbol &+ 1
+        }
+        left = (1 << log) &- distributed
+    }
+    if remaining == 0 {
+        // All are settled: what is left goes to those that have any.
+        symbol = 0
+        while left > 0 {
+            let share = shareOf(distribution, symbol)
+            if share > 0 {
+                store16(share &+ 1, distribution &+ 2 &* symbol)
+                left = left &- 1
+            }
+            symbol = symbol &+ 1 == symbols ? 0 : symbol &+ 1
+        }
+        return
+    }
+    let scale = 62 &- log
+    let middle = (1 << (scale &- 1)) &- 1
+    let step = ((left << scale) &+ middle) / remaining
+    var at = middle
+    symbol = 0
+    while symbol < symbols {
+        if shareOf(distribution, symbol) == pending {
+            let end = at &+ (load32(counts &+ 4 &* symbol) unchecked as Int) &* step
+            let share = (end >> scale) &- (at >> scale)
+            store16(share < 1 ? 1 : share, distribution &+ 2 &* symbol)
+            at = end
+        }
+        symbol = symbol &+ 1
+    }
+}
+
+@inline(always)
+unsafe fn shareOf(_ distribution: Int, _ symbol: Int) -> Int {
+    return RawPtr<U8>(address: distribution &+ 2 &* symbol).load(as: I16.self) unchecked as Int
+}
+
+/// Whether a distribution's states add up, as they must to be written.
+unsafe fn isWhole(_ distribution: Int, symbols: Int, log: Int) -> Bool {
+    var sum = 0
+    var symbol = 0
+    while symbol < symbols {
+        let share = shareOf(distribution, symbol)
+        sum = sum &+ (share < 0 ? 1 : share)
+        symbol = symbol &+ 1
+    }
+    return sum == 1 << log
+}
+
+/// A distribution written at an address: to where.
+unsafe fn writeDistribution(_ distribution: Int, symbols: Int, log: Int, to target: Int) -> Int {
+    var writer = BitWriter(bits: 0, count: 0, position: target)
+    writer.write(log &- 5, 4)
+    var remaining = (1 << log) &+ 1
+    var threshold = 1 << log
+    var width = log &+ 1
+    var symbol = 0
+    var afterZero = false
+    while symbol < symbols && remaining > 1 {
+        if afterZero {
+            var zeros = 0
+            while symbol < symbols && shareOf(distribution, symbol) == 0 {
+                zeros = zeros &+ 1
+                symbol = symbol &+ 1
+            }
+            if symbol == symbols {
+                break
+            }
+            while zeros >= 3 {
+                writer.write(3, 2)
+                zeros = zeros &- 3
+            }
+            writer.write(zeros, 2)
+        }
+        let share = shareOf(distribution, symbol)
+        symbol = symbol &+ 1
+        let most = 2 &* threshold &- 1 &- remaining
+        remaining = remaining &- (share < 0 ? 1 : share)
+        var value = share &+ 1
+        if value >= threshold {
+            value = value &+ most
+        }
+        writer.write(value, width &- (value < most ? 1 : 0))
+        afterZero = share == 0
+        while remaining < threshold {
+            width = width &- 1
+            threshold = threshold >> 1
+        }
+    }
+    writer.align()
+    return writer.position
+}
+
+/// The table symbols of a distribution are encoded by. 'work' has room for
+/// 1024 bytes.
+unsafe fn buildFseTable(_ table: Int, distribution: Int, symbols: Int, log: Int, work: Int) {
+    let size = 1 << log
+    let spread = work
+    let next = work &+ 512
+    spreadSymbols(spread, counts: distribution, symbols: symbols, log: log, next: next)
+    store32(log unchecked as U32, table)
+    store32(symbols unchecked as U32, table &+ 4)
+    // Where each symbol's states start.
+    var start = 0
+    var symbol = 0
+    while symbol < symbols {
+        let share = shareOf(distribution, symbol)
+        let at = table &+ 8 &+ 8 &* symbol
+        store16(start, next &+ 2 &* symbol)
+        if share == 0 {
+            store32((((log &+ 1) << 16) &- size) unchecked as U32, at)
+        } else if share == -1 || share == 1 {
+            store32(((log << 16) &- size) unchecked as U32, at)
+            store32((start &- 1) unchecked as U32, at &+ 4)
+            start = start &+ 1
+        } else {
+            let bits = log &- (63 &- (share &- 1).leadingZeroCount)
+            store32(((bits << 16) &- (share << bits)) unchecked as U32, at)
+            store32((start &- share) unchecked as U32, at &+ 4)
+            start = start &+ share
+        }
+        symbol = symbol &+ 1
+    }
+    let states = table &+ 2056
+    var state = 0
+    while state < size {
+        let at = next &+ 2 &* load8(spread &+ state)
+        let place = load16(at)
+        store16(place &+ 1, at)
+        store16(size &+ state, states &+ 2 &* place)
+        state = state &+ 1
+    }
+}
+
+/// A table of one symbol, which takes no bits.
+unsafe fn buildFseSymbol(_ table: Int, _ symbol: Int) {
+    store32(0, table)
+    store32((symbol &+ 1) unchecked as U32, table &+ 4)
+    store32(0, table &+ 8 &+ 8 &* symbol)
+    store32(0, table &+ 8 &+ 8 &* symbol &+ 4)
+    store16(0, table &+ 2056)
+    store16(0, table &+ 2058)
+}
+
+/// The state whose next symbol back is this, the first encoded.
+@inline(always)
+unsafe fn firstState(_ table: Int, _ symbol: Int) -> Int {
+    let change = load32(table &+ 8 &+ 8 &* symbol)
+    let bits = (change &+ 0x8000) >> 16
+    let value = ((bits << 16) &- change) >> bits
+    return load16(table &+ 2056 &+ 2 &* ((value &+ load32(table &+ 8 &+ 8 &* symbol &+ 4)) unchecked as I32 unchecked as Int))
+}
+
+/// How many bits a state gives as a symbol is encoded, and the state after.
+@inline(always)
+unsafe fn stateBits(_ table: Int, _ symbol: Int, _ state: Int) -> Int {
+    return (((state unchecked as U32) &+ load32(table &+ 8 &+ 8 &* symbol)) >> 16) unchecked as Int
+}
+
+@inline(always)
+unsafe fn nextState(_ table: Int, _ symbol: Int, _ state: Int, _ bits: Int) -> Int {
+    return load16(table &+ 2056 &+ 2 &* ((state >> bits) &+ (load32(table &+ 8 &+ 8 &* symbol &+ 4) unchecked as I32 unchecked as Int)))
+}

@@ -663,6 +663,7 @@ public sealed partial class LlvmEmitter {
                                 declare double @sable_vector_reduce_F64(i64, ptr, i64, i64, ptr, i64)
                                 declare void @sable_vector_map_F32(ptr, i64, ptr, i64, i64, ptr, i64)
                                 declare void @sable_vector_map_F64(ptr, i64, ptr, i64, i64, ptr, i64)
+                                declare i64 @sable_crc32(i64, ptr, i64)
                                 declare i64 @sable_codec_bytes(i64, ptr, i64, i64, ptr, i64)
                                 declare i64 @sable_codec_string(i64, ptr, i64, i64, ptr, i64)
                                 declare i64 @sable_utf8_to_utf16(ptr, i64, i64, ptr, i64)
@@ -690,6 +691,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_array_append_utf8(ptr nocapture, ptr, ptr, i64, i64)
                                 declare void @sable_array_append_all(ptr nocapture, ptr, ptr, i64, i64)
                                 declare void @sable_array_append_holes(ptr nocapture, ptr, i64)
+                                declare void @sable_array_append_raw(ptr nocapture, ptr, ptr nocapture readonly, i64)
                                 declare void @sable_array_append_repeating(ptr nocapture, ptr, ptr nocapture readonly, i64)
                                 declare void @sable_array_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare void @sable_slice_rotate(ptr nocapture, ptr, i64, i64, i64)
@@ -4460,6 +4462,46 @@ public sealed partial class LlvmEmitter {
                     Line($"call void @llvm.memset.p0.i64(ptr {RawAddress(operands[0])}, i8 {operands[1]}, i64 {operands[2]}, i1 false)");
                     return;
 
+                case "raw_from_bytes": {
+                    var type = (SliceType)builtin.Operands[1].Type;
+                    var some = NewLabel("bytes");
+                    var after = NewLabel("after");
+                    var empty = Fresh();
+                    var count = SlicePart(operands[1], type, 2);
+                    Line($"{empty} = icmp eq i64 {count}, 0");
+                    Line($"br i1 {empty}, label %{after}, label %{some}");
+                    Continue(some);
+                    var first = SliceElement(operands[1], "0", type, check: false);
+                    Line($"call void @llvm.memcpy.p0.p0.i64(ptr {RawAddress(operands[0])}, ptr {first}, i64 {count}, i1 false)");
+                    Line($"br label %{after}");
+                    Continue(after);
+                    return;
+                }
+
+                case "array_append_raw": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    SiteForRuntime();
+                    Line($"call void @sable_array_append_raw(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {RawAddress(operands[1])}, i64 {operands[2]})");
+                    return;
+                }
+
+                // The slice made the only reference to its run first, as a
+                // write of its first byte would.
+                case "bytes_from_raw": {
+                    var type = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var empty = Fresh();
+                    var some = NewLabel("bytes");
+                    var after = NewLabel("after");
+                    Line($"{empty} = icmp eq i64 {operands[3]}, 0");
+                    Line($"br i1 {empty}, label %{after}, label %{some}");
+                    Continue(some);
+                    var first = SliceMutableElement(operands[0], operands[1], type);
+                    Line($"call void @llvm.memcpy.p0.p0.i64(ptr {first}, ptr {RawAddress(operands[2])}, i64 {operands[3]}, i1 false)");
+                    Line($"br label %{after}");
+                    Continue(after);
+                    return;
+                }
+
                 // A value at an address: copied out (retained), moved out (as
                 // it is), or moved in. An opaque one through its buffer, by its
                 // value witnesses. Aligned as its type is, or to a byte.
@@ -5096,6 +5138,10 @@ public sealed partial class LlvmEmitter {
 
                 case "crypto_cipher_raw":
                     Line($"{Result()} = call zeroext i1 @sable_cipher(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {RawAddress(operands[2])}, ptr null, i64 0, ptr {RawAddress(operands[3])}, ptr {RawAddress(operands[4])}, i64 {operands[5]})");
+                    return;
+
+                case "crc32_raw":
+                    Line($"{Result()} = call i64 @sable_crc32(i64 {operands[0]}, ptr {RawAddress(operands[1])}, i64 {operands[2]})");
                     return;
 
                 case "crypto_blocks_raw":

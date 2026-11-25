@@ -1,0 +1,273 @@
+module Sable.IO.Compression
+
+/// Bytes compressed to Zstandard (RFC 8878) as they come, one frame of them.
+/// .NET's `ZstandardEncoder`.
+///
+/// ```sable
+/// let encoder = ZstdEncoder(level: 19)
+/// var packed = ByteBuffer()
+/// encoder.compress([1, 2, 3], into: &packed)
+/// encoder.finish(into: &packed)
+/// assert(try! Zstd.decompress(packed.bytes) == [1, 2, 3])
+/// ```
+public final class ZstdEncoder: Compressor {
+    let level: Int
+    let parameters: ZstdLevel
+    /// How many bytes a block has at most: no more than the window.
+    let blockSize: Int
+    let hasChecksum: Bool
+    let dictionary: ZstdDictionary?
+    /// How many bytes there are to be in all, or -1.
+    let contentSize: Int
+    var window: Block
+    /// The first byte that may be matched, the first not compressed, the end.
+    var low: Int
+    var next: Int
+    var end: Int
+    var base: Int
+    let parser: ZstdParser
+    let writer: ZstdBlockWriter
+    let sequenceRoom: Block
+    let target: Block
+    var offset1: Int
+    var offset2: Int
+    var offset3: Int
+    var hash: XxHash64
+    var hasBegun: Bool
+    var isFinished: Bool
+    var length: Int
+
+    /// At level 3, with a checksum.
+    public convenience init() {
+        self.init(level: 3, checksum: true, dictionary: none, windowLog: none, contentSize: -1)
+    }
+
+    /// At a level from 1 to 22, the smallest, or below 0, faster the lower;
+    /// with a checksum, or not; with a dictionary that the decoder is given
+    /// too, if with one; with a window of 2 to a power from 10 to 27 bytes, or
+    /// the level's own.
+    public convenience init(level: Int, checksum: Bool = true, dictionary: ZstdDictionary? = none, windowLog: Int? = none) {
+        self.init(level: level, checksum: checksum, dictionary: dictionary, windowLog: windowLog, contentSize: -1)
+    }
+
+    init(level: Int, checksum: Bool, dictionary: ZstdDictionary?, windowLog: Int?, contentSize: Int) {
+        precondition(level >= -100 && level <= ZstdLevel.most && level != 0, "a zstd level of \(level)")
+        self.level = level
+        self.contentSize = contentSize
+        self.dictionary = dictionary
+        hasChecksum = checksum
+        let known = dictionary == none ? 0 : dictionary!.content.count
+        var made = ZstdLevel(level: level, expecting: contentSize < 0 ? Int.max : contentSize + known)
+        if let log = windowLog {
+            precondition(log >= 10 && log <= 27, "a zstd window of 2 to the \(log) bytes")
+            made.windowLog = contentSize < 0 || log < made.windowLog ? log : made.windowLog
+            made.reach = 1 << made.windowLog
+        } else if contentSize < 0 && known > 1 << made.windowLog {
+            // The whole dictionary in reach of the first bytes at least.
+            while made.windowLog < 27 && 1 << made.windowLog < known {
+                made.windowLog += 1
+            }
+            made.reach = 1 << made.windowLog
+        }
+        parameters = made
+        blockSize = made.reach < ZstdBlocks.maxBlock ? made.reach : ZstdBlocks.maxBlock
+        let reach = 1 << made.windowLog
+        let spare = contentSize >= 0 && contentSize + known <= reach ? contentSize : (reach > 524288 ? reach : 524288)
+        window = Block(count: (known > reach ? known : reach) + spare + ZstdBlocks.maxBlock + 64)
+        low = window.address
+        next = low
+        end = low
+        base = low - reach - 1
+        parser = ZstdParser(level: made)
+        parser.inserted = low - base
+        writer = ZstdBlockWriter(maxSequences: ZstdBlocks.maxBlock / 3 + 1)
+        sequenceRoom = Block(count: 16 * (ZstdBlocks.maxBlock / 3 + 2) + ZstdBlocks.maxBlock + 64)
+        target = Block(count: 2 * ZstdBlocks.maxBlock + 2048)
+        offset1 = 1
+        offset2 = 4
+        offset3 = 8
+        hash = XxHash64()
+        hasBegun = false
+        isFinished = false
+        length = 0
+        unsafe {
+            clearAfter(end)
+        }
+        if let given = dictionary {
+            unsafe {
+                NativeMemory.copy(from: given.content, to: RawPtr<U8>(address: end))
+                end = end + known
+                next = end
+                clearAfter(end)
+                parser.insert(from: low, to: end, base: base)
+                writer.use(given)
+            }
+            offset1 = given.offsets.0
+            offset2 = given.offsets.1
+            offset3 = given.offsets.2
+        }
+    }
+
+    var limit: Int => window.address + window.count - 64
+
+    public fn compress(_ source: U8[:], into output: inout ByteBuffer) {
+        precondition(!isFinished, "compressing after the end of the stream")
+        var at = 0
+        while at < source.count {
+            // A whole block is compressed when there is more than it, so that
+            // the last one is never empty but of nothing.
+            if end - next == blockSize {
+                self.begin(into: &output)
+                self.writeBlock(isLast: false, into: &output)
+            }
+            if end == limit {
+                self.slide()
+            }
+            let room = least(limit - end, blockSize - (end - next))
+            let taken = least(source.count - at, room)
+            unsafe {
+                NativeMemory.copy(from: source[at..<at + taken], to: RawPtr<U8>(address: end))
+                if hasChecksum {
+                    hash.update(at: end, count: taken)
+                }
+                end = end + taken
+                clearAfter(end)
+            }
+            at += taken
+            length += taken
+        }
+    }
+
+    fn least(_ a: Int, _ b: Int) -> Int {
+        return a < b ? a : b
+    }
+
+    public fn flush(into output: inout ByteBuffer) {
+        precondition(!isFinished, "flushing after the end of the stream")
+        self.begin(into: &output)
+        if end > next {
+            self.writeBlock(isLast: false, into: &output)
+        }
+    }
+
+    public fn finish(into output: inout ByteBuffer) {
+        precondition(!isFinished, "the stream is finished already")
+        precondition(contentSize < 0 || length == contentSize, "a frame of another length than was said")
+        isFinished = true
+        self.begin(into: &output)
+        self.writeBlock(isLast: true, into: &output)
+        if hasChecksum {
+            output.write(bytes: DeflateStreamEncoder.littleEndian(hash.value unchecked as U32))
+        }
+    }
+
+    /// The frame's header.
+    fn begin(into output: inout ByteBuffer) {
+        if hasBegun {
+            return
+        }
+        hasBegun = true
+        output.write(bytes: [0x28, 0xB5, 0x2F, 0xFD])
+        let id: U32 = dictionary == none ? 0 : dictionary!.id
+        let idFlag = id == 0 ? 0 : (id < 256 ? 1 : (id < 65536 ? 2 : 3))
+        let reach = 1 << parameters.windowLog
+        let isSingle = contentSize >= 0 && contentSize <= reach
+        let sizeFlag = contentSize < 256 ? 0 : (contentSize < 65792 ? 1 : (contentSize <= 0xFFFF_FFFF ? 2 : 3))
+        output.writeU8(U8(sizeFlag << 6 | (isSingle ? 0x20 : 0) | (hasChecksum ? 4 : 0) | idFlag))
+        if !isSingle {
+            output.writeU8(U8((parameters.windowLog - 10) << 3))
+        }
+        var shift = 0
+        let idSize = idFlag == 3 ? 4 : idFlag
+        while shift < idSize {
+            output.writeU8(U8(id >> U32(8 * shift) & 0xFF))
+            shift += 1
+        }
+        if contentSize >= 0 {
+            let size = sizeFlag == 0 ? (isSingle ? 1 : 0) : 1 << sizeFlag
+            let value = sizeFlag == 1 ? contentSize - 256 : contentSize
+            shift = 0
+            while shift < size {
+                output.writeU8(U8(value >> (8 * shift) & 0xFF))
+                shift += 1
+            }
+        }
+    }
+
+    /// The window moved on: what may be matched kept, before what is not
+    /// compressed.
+    fn slide() {
+        let reach = 1 << parameters.windowLog
+        let keep = next - low < reach ? next - low : reach
+        let from = next - keep
+        let moved = from - window.address
+        if moved > 0 {
+            unsafe {
+                copyBytes(from: from, to: window.address, end - from + 32)
+            }
+            low = window.address
+            next -= moved
+            end -= moved
+            base -= moved
+        }
+    }
+
+    /// What is not compressed, at most a block of it, written as one.
+    fn writeBlock(isLast: Bool, into output: inout ByteBuffer) {
+        let count = end - next
+        let at = target.address + 3
+        unsafe {
+            var kind = 0
+            var size = count
+            var written = at
+            if count > 2 && self.isRun(next, count) {
+                kind = 1
+                size = count
+                store8(load8(next), at)
+                written = at + 1
+            } else if count > 7 {
+                var sequences = ZstdSequences(
+                    sequences: sequenceRoom.address,
+                    literals: sequenceRoom.address + 16 * (ZstdBlocks.maxBlock / 3 + 2),
+                    count: 0,
+                    literalEnd: sequenceRoom.address + 16 * (ZstdBlocks.maxBlock / 3 + 2),
+                    offset1: offset1,
+                    offset2: offset2,
+                    offset3: offset3,
+                )
+                parser.parse(next, end, low: low, base: base, into: &sequences)
+                let packed = writer.write(
+                    literals: sequences.literals,
+                    literalCount: sequences.literalEnd - sequences.literals,
+                    sequences: sequences.sequences,
+                    count: sequences.count,
+                    compressLiterals: level > 0,
+                    to: at,
+                )
+                if packed - at < count - (count >> 7) - 2 {
+                    kind = 2
+                    size = packed - at
+                    written = packed
+                    writer.keep()
+                    offset1 = sequences.offset1
+                    offset2 = sequences.offset2
+                    offset3 = sequences.offset3
+                }
+            }
+            if kind == 0 {
+                copyBytes(from: next, to: at, count)
+                written = at + count
+            }
+            let header = (isLast ? 1 : 0) | kind << 1 | size << 3
+            store16(header, target.address)
+            store8(header >> 16, target.address + 2)
+            output.append(from: RawPtr<U8>(address: target.address), byteCount: written - target.address)
+        }
+        next = end
+    }
+
+    /// Whether so many bytes are all the same.
+    unsafe fn isRun(_ at: Int, _ count: Int) -> Bool {
+        return load8(at) == load8(at + 1) && matchEnd(at, at + 1, at + count) == at + count
+    }
+}

@@ -1,0 +1,35 @@
+module Sable.IO.Compression
+
+/// How much a decoder may decompress before it throws `.LimitExceeded`: what
+/// bytes from anyone, which may decompress to a thousand times as many,
+/// should be decompressed with.
+///
+/// ```sable
+/// let bomb = Deflate.compress(U8[>..](repeating: 0, count: 1_000_000))
+/// do {
+///     _ = try Deflate.decompress(bomb, limits: DecompressionLimits(maximumRatio: 100))
+///     assertionFailure("a bomb")
+/// } catch {
+///     assert(error == .LimitExceeded)
+/// }
+/// ```
+public struct DecompressionLimits: Sendable {
+    /// The most bytes that may be written.
+    public var maximumLength: Int
+
+    /// The most bytes that may be written for each byte read, past the first
+    /// 64 KiB written.
+    public var maximumRatio: Int
+
+    /// No more than these: without them, as many as there are.
+    public init(maximumLength: Int = Int.max, maximumRatio: Int = Int.max) {
+        precondition(maximumLength >= 0 && maximumRatio > 0, "limits of \(maximumLength) bytes, and \(maximumRatio) to one")
+        self.maximumLength = maximumLength
+        self.maximumRatio = maximumRatio
+    }
+
+    /// Whether so many bytes may be written of so many.
+    fn allows(written: Int, read: Int) -> Bool {
+        return written <= maximumLength && (written <= 65536 || (written - 65536) / maximumRatio <= read)
+    }
+}

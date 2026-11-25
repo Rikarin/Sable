@@ -25,6 +25,10 @@ struct RawMemory {
     @builtin("raw_fill")
     unsafe static fn fill(_ target: Int, _ byte: U8, _ byteCount: Int)
 
+    /// The bytes copied to the address on.
+    @builtin("raw_from_bytes")
+    unsafe static fn store(_ address: Int, _ bytes: U8[:])
+
     /// A copy of the value at the address, which is aligned for it.
     @intrinsic
     unsafe static fn load<T>(_ address: Int) -> T

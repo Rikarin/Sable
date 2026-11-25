@@ -1,0 +1,74 @@
+module Sable.IO.Compression
+
+/// Brotli (RFC 7932) decompressed as it comes. .NET's `BrotliDecoder`.
+///
+/// ```sable
+/// let decoder = BrotliDecoder()
+/// var bytes = ByteBuffer()
+/// let step = try! decoder.decompress(Brotli.compress([1, 2, 3]), into: &bytes)
+/// assert(step.status == .Finished && bytes.bytes == [1, 2, 3])
+/// ```
+public final class BrotliDecoder: Decompressor {
+    let limits: DecompressionLimits
+    let core: BrotliCore
+    var totalRead: Int
+
+    /// Of a stream of any length.
+    public init() {
+        limits = DecompressionLimits()
+        core = BrotliCore()
+        totalRead = 0
+    }
+
+    /// Decompressing no more than the limits. A window is at most 16 MiB.
+    public init(limits: DecompressionLimits) {
+        self.limits = limits
+        core = BrotliCore()
+        totalRead = 0
+    }
+
+    public static var isConcatenable: Bool => false
+
+    public var isFinished: Bool => core.stage == .Finished && core.window.pending == 0
+
+    public fn decompress(_ source: U8[:], into output: inout ByteBuffer, limit: Int) throws(CompressionError) -> CompressionProgress {
+        precondition(limit >= 0, "a limit of \(limit) bytes")
+        var consumed = 0
+        var produced = 0
+        while true {
+            produced += core.window.drain(into: &output, limit: limit - produced)
+            if core.window.pending > 0 {
+                let back = core.input.giveBack()
+                totalRead -= back
+                return CompressionProgress(consumed: consumed - back, produced: produced, status: .NeedsOutput)
+            }
+            core.window.makeRoom(for: BrotliCore.stepRoom)
+            let result = core.run()
+            if !limits.allows(written: core.produced, read: totalRead) {
+                throw .LimitExceeded
+            }
+            match result {
+                case .Failed    => { throw .Corrupt(core.problem) }
+                case .NeedsRoom => { }
+                case .Finished => {
+                    if core.window.pending == 0 {
+                        let back = core.input.giveBack()
+                        totalRead -= back
+                        return CompressionProgress(consumed: consumed - back, produced: produced, status: .Finished)
+                    }
+                }
+                case .NeedsInput => {
+                    let taken = consumed < source.count ? core.input.fill(source, from: consumed) : 0
+                    consumed += taken
+                    totalRead += taken
+                    if taken == 0 && core.window.pending == 0 {
+                        if core.input.count >= core.input.capacity {
+                            throw .Corrupt("a header larger than any is")
+                        }
+                        return CompressionProgress(consumed: consumed, produced: produced, status: .NeedsInput)
+                    }
+                }
+            }
+        }
+    }
+}

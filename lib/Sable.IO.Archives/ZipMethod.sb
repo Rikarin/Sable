@@ -1,0 +1,36 @@
+module Sable.IO.Archives
+
+/// How a zip entry is compressed.
+@derive(Equatable, Hashable, Debug)
+public union ZipMethod: Sendable {
+    /// Not at all.
+    Store
+
+    Deflate
+
+    /// By Zstandard, which fewer programs read.
+    Zstd
+
+    /// In some way that is not read here, by its number.
+    Other(number: Int)
+
+    var number: Int {
+        get {
+            return match self {
+                case .Store             => 0
+                case .Deflate           => 8
+                case .Zstd              => 93
+                case .Other(let number) => number
+            }
+        }
+    }
+
+    static fn of(_ number: Int) -> ZipMethod {
+        return match number {
+            case 0  => .Store
+            case 8  => .Deflate
+            case 93 => .Zstd
+            case _  => .Other(number: number)
+        }
+    }
+}

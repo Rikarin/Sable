@@ -1,0 +1,95 @@
+module Sable.IO.Compression
+
+/// What zstd's encoder and decoder may both know before a frame: bytes it may
+/// copy from, and, in a dictionary of zstd's own format (one that `zstd
+/// --train` or `Zstd.trainDictionary` made), what its first block's codes are.
+///
+/// ```sable
+/// let dictionary = try! ZstdDictionary("what every message says".utf8Bytes())
+/// assert(dictionary.id == 0)
+/// let packed = Zstd.compress("what every message says: hello".utf8Bytes(), dictionary: dictionary)
+/// assert(try! Zstd.decompress(packed, dictionary: dictionary) == "what every message says: hello".utf8Bytes())
+/// ```
+@immutable
+public final class ZstdDictionary {
+    /// Which dictionary it is, which a frame made with it says: 0 for one that
+    /// is only bytes.
+    public let id: U32
+    /// The bytes that may be copied from.
+    let content: U8[>..]
+    /// A ZstdEntropy's tables, and what it has beside them: none of a dictionary
+    /// that is only bytes.
+    let tables: Block?
+    let huffmanLog: Int
+    let logs: (Int, Int, Int)
+    /// How the three codes are distributed, two bytes a symbol, 128 for each,
+    /// and how many symbols each has, for an encoder's tables.
+    let distributions: Block?
+    let symbols: (Int, Int, Int)
+    let offsets: (Int, Int, Int)
+
+    /// The dictionary in the bytes: of zstd's format where they begin as one
+    /// does, or else only the bytes. Throws where it is of the format and
+    /// damaged.
+    public init(_ bytes: U8[:]) throws(CompressionError) {
+        if bytes.count < 8 || bytes.readU32(at: 0, endian: .Little) != 0xEC30_A437 {
+            id = 0
+            content = bytes.toArray()
+            tables = none
+            huffmanLog = 11
+            logs = (-1, -1, -1)
+            distributions = none
+            symbols = (0, 0, 0)
+            offsets = (1, 4, 8)
+            return
+        }
+        id = bytes.readU32(at: 4, endian: .Little)
+        let made = ZstdEntropy()
+        let kept = Block(count: 384, zeroed: true)
+        var counts = (0, 0, 0)
+        let memory = Block(count: bytes.count + 32, zeroed: true)
+        var at = memory.address + 16 + 8
+        let end = memory.address + 16 + bytes.count
+        unsafe {
+            NativeMemory.copy(from: bytes, to: RawPtr<U8>(address: memory.address + 16))
+            let length = made.readHuffman(at, count: end - at)
+            if length == 0 {
+                throw .Corrupt("a dictionary's Huffman table")
+            }
+            at += length
+            for code in [ZstdCode.Offset, ZstdCode.MatchLength, ZstdCode.LiteralLength] {
+                let size = made.readTable(code, at, count: end - at)
+                if size == 0 {
+                    throw .Corrupt("a dictionary's tables")
+                }
+                at += size
+                copyBytes(from: made.work + 1024, to: kept.address + 128 * code.index, 2 * made.lastSymbols)
+                match code {
+                    case .LiteralLength => { counts.0 = made.lastSymbols }
+                    case .Offset        => { counts.1 = made.lastSymbols }
+                    case .MatchLength   => { counts.2 = made.lastSymbols }
+                }
+            }
+            if end - at < 12 {
+                throw .Corrupt("a dictionary's offsets")
+            }
+            made.offset1 = load32(at) unchecked as Int
+            made.offset2 = load32(at + 4) unchecked as Int
+            made.offset3 = load32(at + 8) unchecked as Int
+            at += 12
+        }
+        let size = end - at
+        for offset in [made.offset1, made.offset2, made.offset3] {
+            if offset == 0 || offset > size {
+                throw .Corrupt("a dictionary's offsets")
+            }
+        }
+        content = bytes[(bytes.count - size)...].toArray()
+        tables = made.memory
+        huffmanLog = made.huffmanLog
+        distributions = kept
+        symbols = counts
+        logs = made.logs
+        offsets = (made.offset1, made.offset2, made.offset3)
+    }
+}

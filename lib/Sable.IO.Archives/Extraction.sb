@@ -1,0 +1,175 @@
+module Sable.IO.Archives
+
+import Sable.IO
+import Sable.Time
+
+/// A directory that an archive is extracted to: what keeps it in there. Each
+/// directory on the way to a file is looked at before the file is made, and is
+/// not a link; a file is made anew, or replaced, and never written through
+/// what is there. (A program that changes the directory meanwhile, in a place
+/// it may write to, is not kept out.)
+final class Extraction {
+    let root: FilePath
+    let options: ExtractOptions
+    var entries: Int
+    var total: Int
+    /// The directories' times, which are set when nothing more is put in them.
+    var times: (FilePath, UtcDateTime)[>..]
+
+    /// To a directory, which is made if it is not there.
+    init(_ root: FilePath, _ options: ExtractOptions) throws(IoError) {
+        self.root = root
+        self.options = options
+        entries = 0
+        total = 0
+        times = []
+        if !Directory.exists(root) {
+            try Directory.create(root, recursive: true)
+        }
+    }
+
+    /// One more entry, of at most the limits' number.
+    fn count() throws(IoError) {
+        entries += 1
+        let most = options.limits.maximumEntries
+        if entries > most {
+            throw .InvalidData(what: "the archive has more than \(most) entries")
+        }
+    }
+
+    /// So many bytes more, of an entry that has 'size' with them.
+    fn add(_ count: Int, size: Int) throws(IoError) {
+        total += count
+        if size > options.limits.maximumEntry || total > options.limits.maximumTotal {
+            throw .InvalidData(what: "the archive has more bytes than the limits allow")
+        }
+    }
+
+    /// Where an entry's name is, its directories made: none for the directory
+    /// itself.
+    fn place(_ parts: String[>..]) throws(IoError) -> FilePath {
+        var path = root
+        var i = 0
+        while i < parts.count - 1 {
+            path = path.appending(parts[i])
+            try self.enter(path, parts[i])
+            i += 1
+        }
+        return parts.isEmpty ? path : path.appending(parts[parts.count - 1])
+    }
+
+    /// A directory made, if it is not there; what is must be one.
+    fn enter(_ path: FilePath, _ name: String) throws(IoError) {
+        if let kind = Extraction.kind(path) {
+            if kind != .Directory {
+                throw .InvalidData(what: "'\(name)' is in the way of an entry: it is no directory, or a link")
+            }
+            return
+        }
+        try Directory.create(path)
+    }
+
+    /// What is at a path, a link being one; none where nothing is.
+    static fn kind(_ path: FilePath) -> FileKind? {
+        if let found = try? File.metadata(path, followLinks: false) {
+            return found.kind
+        }
+        return none
+    }
+
+    /// What is at a path gone, so that something else may be made there.
+    fn clear(_ path: FilePath) throws(IoError) {
+        if let kind = Extraction.kind(path) {
+            if !options.overwrite || kind == .Directory {
+                throw .AlreadyExists(path: path.string ?? "a file")
+            }
+            try File.remove(path)
+        }
+    }
+
+    fn directory(_ name: String, mode: Int?, modified: UtcDateTime?) throws(IoError) {
+        let parts = try ArchiveNames.parts(name, portable: options.portableNames)
+        if parts.isEmpty {
+            return
+        }
+        let path = try self.place(parts)
+        try self.enter(path, name)
+        if let given = mode, options.keepPermissions {
+            // One that could not be written in could not be extracted to.
+            try File.setPermissions(path, FilePermissions(mode: given & 0o777 | 0o700))
+        }
+        if let time = modified, options.keepTimes {
+            times.append((path, time))
+        }
+    }
+
+    /// A file made of what is read, which must be 'size' bytes, if that is
+    /// known.
+    fn file<R: Reader>(_ name: String, mode: Int?, modified: UtcDateTime?, reading reader: inout R) throws(IoError) {
+        let parts = try ArchiveNames.parts(name, portable: options.portableNames)
+        if parts.isEmpty {
+            throw ArchiveNames.unsafeName(name)
+        }
+        let path = try self.place(parts)
+        try self.clear(path)
+        var opening = OpenOptions()
+        opening.write = true
+        opening.createNew = true
+        let file = try File.open(path, options: opening)
+        var size = 0
+        while true {
+            let bytes = try reader.read(upTo: 1 << 18)
+            if bytes.isEmpty {
+                break
+            }
+            size += bytes.count
+            try self.add(bytes.count, size: size)
+            try file.write(bytes)
+        }
+        file.close()
+        if let given = mode, options.keepPermissions {
+            try File.setPermissions(path, FilePermissions(mode: given & 0o777))
+        }
+        if let time = modified, options.keepTimes {
+            try File.setModified(path, time)
+        }
+    }
+
+    fn link(_ name: String, to target: String) throws(IoError) {
+        if options.links == .Skipped {
+            return
+        }
+        let parts = try ArchiveNames.parts(name, portable: options.portableNames)
+        if parts.isEmpty || options.links == .Refused || !ArchiveNames.staysInside(parts, target: target) {
+            throw .InvalidData(what: "a link, '\(name)', leads to '\(target)'")
+        }
+        let path = try self.place(parts)
+        try self.clear(path)
+        try File.createSymlink(at: path, to: target)
+    }
+
+    /// Another name for a file that was extracted.
+    fn hardLink(_ name: String, to target: String) throws(IoError) {
+        let parts = try ArchiveNames.parts(name, portable: options.portableNames)
+        let targetParts = try ArchiveNames.parts(target, portable: options.portableNames)
+        if parts.isEmpty || targetParts.isEmpty {
+            throw ArchiveNames.unsafeName(name)
+        }
+        let from = try self.place(targetParts)
+        if Extraction.kind(from) != .File {
+            throw .InvalidData(what: "'\(name)' is another name for '\(target)', which is no file")
+        }
+        let path = try self.place(parts)
+        try self.clear(path)
+        try File.createHardLink(at: path, to: from)
+    }
+
+    /// The directories' times set, the innermost first.
+    fn finish() throws(IoError) {
+        var i = times.count - 1
+        while i >= 0 {
+            try File.setModified(times[i].0, times[i].1)
+            i -= 1
+        }
+    }
+}

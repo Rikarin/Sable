@@ -1,0 +1,17 @@
+module Sable.IO.Archives
+
+/// How a tar archive's headers are written.
+@derive(Equatable, Hashable, Debug)
+public enum TarFormat {
+    /// As POSIX.1-2001 has them: ustar's, and records before them of what
+    /// those have no room for. What every tar of this century reads.
+    Pax
+
+    /// As POSIX.1-1988 has them, alone: a name that is too long, or a file of
+    /// 8 GiB, fails.
+    Ustar
+
+    /// As GNU tar's own: long names before the headers, and large numbers in
+    /// binary.
+    Gnu
+}

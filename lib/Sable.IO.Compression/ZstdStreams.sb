@@ -1,0 +1,28 @@
+module Sable.IO.Compression
+
+import Sable.IO
+
+/// A reader of zstd: .NET's `ZstandardStream`.
+///
+/// ```sable
+/// let packed = Zstd.compress([1, 2, 3])
+/// var reader = ZstdReader(MemoryStream(packed))
+/// assert(try! reader.readToEnd() == [1, 2, 3])
+/// ```
+public alias ZstdReader<Inner: Reader> = DecompressingReader<ZstdDecoder, Inner>
+
+/// A writer of zstd.
+///
+/// ```sable
+/// let writer = ZstdWriter(MemoryStream(), encoder: ZstdEncoder(level: 9))
+/// try! writer.write([1, 2, 3])
+/// try! writer.finish()
+/// assert(try! Zstd.decompress(writer.inner.bytes) == [1, 2, 3])
+/// ```
+public alias ZstdWriter<Inner: Writer> = CompressingWriter<ZstdEncoder, Inner>
+
+/// A reader of zstd that suspends while it waits.
+public alias AsyncZstdReader<Inner: AsyncReader> = AsyncDecompressingReader<ZstdDecoder, Inner>
+
+/// A writer of zstd that suspends while it waits.
+public alias AsyncZstdWriter<Inner: AsyncWriter> = AsyncCompressingWriter<ZstdEncoder, Inner>

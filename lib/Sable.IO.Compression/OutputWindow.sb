@@ -1,0 +1,118 @@
+module Sable.IO.Compression
+
+/// What a decoder wrote last, in memory: what it may copy from, and, at its
+/// end, what has not been given to its caller yet.
+struct OutputWindow {
+    var block: Block
+    /// How many of the bytes before the end must be kept.
+    var history: Int
+    /// How many bytes there are to be at most, if that is known.
+    var total: Int
+    /// Where the bytes start that may be copied from, the first not given
+    /// away, and the end.
+    var start: Int
+    var drained: Int
+    var end: Int
+
+    /// With room for 'room' bytes after the history, and some to spare.
+    init(history: Int, room: Int) {
+        self.history = history
+        total = Int.max
+        block = Block(count: history + room + 64)
+        start = block.address
+        drained = start
+        end = start
+    }
+
+    /// Where writing must stop: 64 bytes from where the memory does.
+    var limit: Int => block.address &+ block.count &- 64
+
+    /// How many bytes its caller has not been given.
+    var pending: Int => end &- drained
+
+    /// As many of them as may be, at the end of the buffer: how many.
+    mutating fn drain(into output: inout ByteBuffer, limit: Int) -> Int {
+        let count = pending < limit ? pending : limit
+        if count > 0 {
+            unsafe {
+                output.append(from: RawPtr<U8>(address: drained), byteCount: count)
+            }
+            drained = drained + count
+        }
+        return count
+    }
+
+    /// Room made: with nothing pending, all but the history is let go of.
+    mutating fn makeRoom() {
+        if end &- block.address > history && pending == 0 {
+            let keep = end &- start < history ? end &- start : history
+            unsafe {
+                copyBytes(from: end - keep, to: block.address, keep)
+            }
+            start = block.address
+            end = start + keep
+            drained = end
+        }
+    }
+
+    /// Another history, as a stream begins that will write no more than so
+    /// many bytes, what must be kept of them aside.
+    mutating fn setHistory(_ history: Int, total: Int) {
+        self.history = history
+        self.total = total
+    }
+
+    /// Room made for so many bytes, with nothing pending: in more memory, until
+    /// there is as much as the history needs, and the same after it, so that it
+    /// is not moved often.
+    mutating fn makeRoom(for count: Int) {
+        if limit - end >= count {
+            return
+        }
+        let held = end - start
+        let keep = held < history ? held : history
+        let most = total < history + history ? total : history + (history > 262144 ? history : 262144)
+        let size = block.count - 64
+        if held < history && size < most + count || size < keep + count {
+            var wanted = size * 2 > keep + count ? size * 2 : keep + count
+            wanted = wanted < most + count ? wanted : most + count
+            let larger = Block(count: wanted + 64)
+            unsafe {
+                copyBytes(from: end - keep, to: larger.address, keep)
+            }
+            block = larger
+        } else {
+            unsafe {
+                copyBytes(from: end - keep, to: block.address, keep)
+            }
+        }
+        start = block.address
+        end = start + keep
+        drained = end
+    }
+
+    /// Bytes as if they had been written and given away, where there is room.
+    mutating fn addDictionary(_ bytes: U8[:]) {
+        unsafe {
+            NativeMemory.copy(from: bytes, to: RawPtr<U8>(address: end))
+        }
+        end = end + bytes.count
+        drained = end
+    }
+
+    /// Nothing kept of what was written: what comes next starts anew.
+    mutating fn forget() {
+        start = end
+    }
+
+    /// The bytes as if they had been written, and given away: a dictionary.
+    mutating fn preset(_ bytes: U8[:]) {
+        let kept = bytes.count < history ? bytes : bytes[bytes.count - history...]
+        unsafe {
+            NativeMemory.copy(from: kept, to: RawPtr<U8>(address: block.address))
+        }
+        start = block.address
+        end = start + kept.count
+        drained = end
+    }
+}

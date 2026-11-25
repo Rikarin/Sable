@@ -1,0 +1,60 @@
+module Sable.IO.Compression
+
+/// Gzip (RFC 1952), deflate with a header and a CRC-32, all at once.
+///
+/// ```sable
+/// let packed = Gzip.compress([7, 7, 7, 7, 7, 7, 7, 7])
+/// assert(try! Gzip.decompress(packed) == [7, 7, 7, 7, 7, 7, 7, 7])
+/// ```
+public struct Gzip {
+    /// The bytes compressed, at a level from 0, nothing, to 9, the smallest.
+    public static fn compress(_ source: U8[:], level: Int = 6) -> U8[>..] {
+        var output = ByteBuffer()
+        compress(source, into: &output, level: level)
+        return output.takeBytes()
+    }
+
+    /// The bytes compressed at the buffer's end: to how many.
+    @discardable
+    public static fn compress(_ source: U8[:], into output: inout ByteBuffer, level: Int = 6) -> Int {
+        return deflateWhole(source, into: &output, .Gzip, level)
+    }
+
+    /// The bytes decompressed, every member of them: `.Truncated` where the
+    /// last does not end. Zeros may follow it, and nothing else.
+    public static fn decompress(_ source: U8[:], limits: DecompressionLimits = DecompressionLimits()) throws(CompressionError) -> U8[>..] {
+        var output = ByteBuffer()
+        try decompress(source, into: &output, limits: limits)
+        return output.takeBytes()
+    }
+
+    /// The bytes decompressed at the buffer's end: to how many.
+    @discardable
+    public static fn decompress(_ source: U8[:], into output: inout ByteBuffer, limits: DecompressionLimits = DecompressionLimits()) throws(CompressionError) -> Int {
+        // The padding is no part of the stream.
+        var end = source.count
+        while end > 0 && source[end - 1] == 0 {
+            end -= 1
+        }
+        let decoder = GzipDecoder(limits: limits)
+        var at = 0
+        var produced = 0
+        while true {
+            let step = try decoder.decompress(source[at...], into: &output, limit: Int.max)
+            at += step.consumed
+            produced += step.produced
+            if step.status == .NeedsInput {
+                throw .Truncated
+            }
+            if at < end {
+                throw .Corrupt("bytes follow the end of the stream")
+            }
+            return produced
+        }
+    }
+
+    /// The most bytes so many can be compressed to, at any level.
+    public static fn maxCompressedLength(_ count: Int) -> Int {
+        return Deflate.maxCompressedLength(count) + 18
+    }
+}

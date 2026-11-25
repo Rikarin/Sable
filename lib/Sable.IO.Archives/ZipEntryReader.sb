@@ -1,0 +1,63 @@
+module Sable.IO.Archives
+
+import Sable.IO
+import Sable.IO.Compression
+
+/// A zip entry's bytes, decompressed as they are read. At their end, that they
+/// are as many as the archive says, and have the CRC-32 it says, is checked.
+///
+/// ```sable
+/// let writer = ZipWriter(MemoryStream())
+/// try! writer.add("a.txt", "hello".utf8Bytes())
+/// try! writer.finish()
+/// let archive = try! ZipArchive(writer.inner.bytes)
+/// var reader = try! archive.reader(for: archive.entry(named: "a.txt")!)
+/// assert(try! reader.read(upTo: 2) == "he".utf8Bytes())
+/// assert(try! reader.readToEnd() == "llo".utf8Bytes())
+/// ```
+public final class ZipEntryReader: Reader {
+    /// What is read.
+    public let entry: ZipEntry
+    var bytes: any Reader
+    var crc: Crc32
+    var count: Int
+    var ended: Bool
+
+    init(_ entry: ZipEntry, _ data: ZipData) {
+        self.entry = entry
+        // No more than there should be is decompressed.
+        let limits = DecompressionLimits(maximumLength: entry.size)
+        if entry.method == .Deflate {
+            bytes = DeflateReader(data, decoder: DeflateDecoder(limits: limits))
+        } else if entry.method == .Zstd {
+            bytes = ZstdReader(data, decoder: ZstdDecoder(limits: limits))
+        } else {
+            bytes = data
+        }
+        crc = Crc32()
+        count = 0
+        ended = false
+    }
+
+    public fn read(upTo count: Int) throws(IoError) -> U8[>..] {
+        if ended || count <= 0 {
+            return []
+        }
+        let bytes = try self.bytes.read(upTo: count)
+        crc.update(bytes)
+        self.count += bytes.count
+        if self.count > entry.size {
+            throw .InvalidData(what: "'\(entry.name)' is longer than the archive says")
+        }
+        if bytes.isEmpty {
+            ended = true
+            if self.count != entry.size {
+                throw .InvalidData(what: "'\(entry.name)' is shorter than the archive says")
+            }
+            if crc.value != entry.crc32 {
+                throw .InvalidData(what: "'\(entry.name)' has another checksum than the archive says")
+            }
+        }
+        return bytes
+    }
+}

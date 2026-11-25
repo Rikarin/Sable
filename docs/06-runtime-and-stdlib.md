@@ -930,6 +930,16 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     as text and as OsString, set and removed under
                     'unsafe', home, temporary and known folders by XDG,
                     Apple and Windows rules)
+Sable.IO.Compression Deflate Zlib Gzip Zstd Brotli (below), all at once, as they come
+                    (Compressor, Decompressor) and as readers and writers
+                    that compress, async ones too, with limits on what is
+                    decompressed
+Sable.IO.Archives   ZipArchive (random access by the central directory,
+                    Zip64) ZipWriter (to anything, with descriptors) Zip
+                    (create, extract, update), TarReader TarWriter (old,
+                    ustar, pax and GNU headers) Tar; async writers and a
+                    reader; extraction that stays in its directory, with
+                    limits (below)
 Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
                     urltestdata.json passes whole; resolution, setters,
                     origin, query items), Host (domain, IPv4, IPv6,
@@ -1290,6 +1300,98 @@ busy machine, Sable's over .NET's; "before" is the same without these):
 | base64 | 4.25 | 1.22 |
 | utf16 | 2.76 | 1.32 |
 | utf8-validate (as it was) | — | 0.30 |
+
+### Compression
+
+`Sable.IO.Compression` is written in Sable, not bound to zlib. A codec works
+in memory of its own, at addresses, which nothing checks; its callers' bytes
+are copied in and out of it a run at a time, while they are in the cache
+(`NativeMemory.copy`, to and from a `U8[:]`). What keeps every access in that
+memory is the code around it: margins at both ends of a buffer, every length
+and distance checked against them. The interpreter, which checks each access,
+runs the codecs in `CompressionTests`.
+
+- **Inflate** decodes by tables of eleven bits of a literal's or length's
+  code and eight of a distance's, with subtables for longer codes, from a
+  64-bit buffer refilled without a branch, up to three literals at a time,
+  matches copied sixteen bytes at a time. Near the end of its input or of its
+  room it decodes a symbol at a time, and puts back what it had not all of.
+- **Deflate** has levels 0 to 9: nothing; one look at the last place with the
+  same four bytes; chains of such places, the first long match taken (2 to
+  4), or a better one awaited for a byte (5 to 7) or two (8); and at 9 the
+  parse of least bits, by what the symbols took in the pass before, three
+  times. Blocks end where their symbols change. Its output is not zlib's,
+  byte for byte.
+- **Zstd** decodes a block at a time: its literals' four Huffman streams at
+  once, five bytes of each a step, through one table of eleven bits; then its
+  sequences, each read and done. It takes dictionaries (raw bytes, and those
+  `zstd --train` makes), skippable frames, and windows up to a limit of 128
+  MiB unless told otherwise; memory grows as a frame's bytes come, not by what
+  its header says. The encoder has zstd's levels, 1 to 22 and the fast ones
+  below 0, and their parameters: hash tables (1 to 4), rows of the last places
+  with a hash and eight more bits of it beside each (5 to 13), a tree of
+  places and the parse of least bits over a whole block (14 to 22). It does
+  not split blocks by their content, nor write several at once.
+- **Brotli** decodes by tables of eight bits, the bits in variables across a
+  whole run of commands. The static dictionary, its transforms and its context
+  tables are RFC 7932's, made into a source file by
+  `tools/brotli-dictionary.py`, packed, and unpacked when first needed. The
+  encoder has qualities 0 to 11 over the zstd encoder's match finders (at 10
+  and 11 its parse of least bits, by zstd's costs rather than brotli's), and
+  codes of its own: a literal's chosen by the bytes before it, contexts alike
+  sharing one (from 5), by the best of up to four modes; a distance's by the
+  copy's length. It does not split meta-blocks into block types, and uses two
+  of the dictionary's transforms.
+- A decoder says how much it consumed, exactly, so what follows a stream can
+  be read; a gzip decoder reads every member. `DecompressionLimits` bound
+  the length and the ratio.
+- CRC-32 is the processor's where it has the instructions
+  (`runtime/checksums.c`: ARM's, or PCLMULQDQ), eight bytes by tables else.
+
+Against .NET 11's, which are zlib-ng, zstd 1.5.7 and brotli, all C, on an
+Apple M1 Max that was busy (the best of three runs; MB/s, and the ratio):
+
+| | Sable packs | .NET packs | Sable unpacks | .NET unpacks |
+|:--|--:|--:|--:|--:|
+| dickens, gzip 6 | 58, 2.631 | 69, 2.616 | 619 | 370 |
+| mozilla, gzip 6 | 90, 2.720 | 85, 2.638 | 541 | 452 |
+| dickens, zstd 1 | 277, 2.381 | 349, 2.392 | 827 | 1136 |
+| dickens, zstd 3 | 180, 2.771 | 186, 2.773 | 722 | 864 |
+| mozilla, zstd 3 | 311, 2.772 | 295, 2.786 | 840 | 1132 |
+| dickens, brotli 5 | 45, 3.086 | 44, 3.014 | 391 | 438 |
+| mozilla, brotli 5 | 56, 3.029 | 53, 3.109 | 294 | 415 |
+
+Of the rest: zstd's levels 5 to 12 are at two thirds of its speed for the same
+ratios, 14 to 19 at about its own, within 1.5 % of its ratio; gzip 9 is 4.6 %
+smaller than .NET's and a third as fast; brotli 11 is 2.6 % (dickens) and
+6.5 % (xml) larger than the reference's, and slower. Dictionaries trained are
+as good as `zstd --train`'s.
+
+### Archives
+
+`Sable.IO.Archives` reads and writes zip and tar.
+
+- **Extraction stays in its directory.** A name with "..", a root, a drive or
+  a zero in it fails, with "/" between its parts or a backslash; on Windows,
+  and where `portableNames` asks, so do devices' names and those Windows
+  changes. Each directory on the way to a file is looked at, not through
+  links, before it is entered, and a file is made anew (`createNew`) or
+  replaces what was there, never written through. A symbolic link is made
+  only if its target, worked out by its text, is inside; a hard link only of
+  a file that is. Set-id bits are dropped. Limits bound the entries, each
+  one's bytes and all of them; a program that swaps directories meanwhile is
+  not defended against.
+- **Zip** takes what the central directory says, and refuses an entry whose
+  own header says another name or method, entries that overlap (the bombs
+  that are a thousand times their size are made so), and bytes that are more,
+  fewer or others than said. Names are UTF-8 where they say so, or are so on
+  Unix, else code page 437. A time is the extended field's, in UTC, or
+  MS-DOS's, as if it were.
+- **Tar** refuses sparse files, and a header's records of more than a
+  megabyte. What ustar has no room for is written as pax's records, or as GNU
+  tar's, as the format asks. Nothing is said of owners as files are made.
+- Not there: encryption, archives in parts, other methods of zip's, and
+  zlib-wrapped or brotli tars known by their bytes.
 
 ### Decimal
 

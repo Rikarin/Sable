@@ -1,0 +1,525 @@
+module Sable.IO.Compression
+
+/// A brotli meta-block's bits made of its commands: each some literals, and a
+/// copy of earlier bytes or a word of the dictionary. The literals' codes are
+/// told apart by the bytes before them, and the distances' by the copies'
+/// lengths, where that saves anything.
+///
+/// A command is four words: how many literals, how long the copy, how many
+/// bytes it makes — which of a word may be others — and how far back it is.
+final class BrotliBlockWriter {
+    /// The histograms: of literals, 64 of 256; of commands, 704; of distances,
+    /// 4 of 544. Then the code lengths and the codes of each, as many; the
+    /// context maps, and room to work in.
+    let memory: Block
+    /// The same of literals, by another mode, to compare.
+    let other: Block
+    /// What each command's symbols are: the command's, and the distance's with
+    /// its extra bits' value above it, or 0xFFFF_FFFF for none.
+    let symbols: Block
+
+    static var distanceSymbols: Int => 64
+
+    init(maxCommands: Int) {
+        memory = Block(count: 4 * 16384 + 2816 + 1024 + 4 * 16384 + 2816 + 1024 + 64 + 64 + 98304, zeroed: true)
+        other = Block(count: 4 * 16384 + 64)
+        symbols = Block(count: 8 * maxCommands)
+    }
+
+    var literalCounts: Int => memory.address
+
+    var commandCounts: Int => memory.address + 65536
+
+    var distanceCounts: Int => memory.address + 65536 + 2816
+
+    var literalCodes: Int => memory.address + 65536 + 2816 + 1024
+
+    var commandCodes: Int => memory.address + 65536 + 2816 + 1024 + 65536
+
+    var distanceCodes: Int => memory.address + 65536 + 2816 + 1024 + 65536 + 2816
+
+    var literalMap: Int => memory.address + 2 * (65536 + 2816 + 1024)
+
+    var distanceMap: Int => memory.address + 2 * (65536 + 2816 + 1024) + 64
+
+    var work: Int => memory.address + 2 * (65536 + 2816 + 1024) + 128
+
+    /// A meta-block of the bytes from 'source' up to 'end', before which
+    /// 'before' is how many bytes the stream had, written. 'last' has the last
+    /// four distances, which are left as they are after it. 'hard' is how many
+    /// modes of contexts to try: 0 for none.
+    unsafe fn write(_ writer: inout BitWriter, commands: Int, count: Int, source: Int, end: Int, before: Int, last: inout (Int, Int, Int, Int), hard: Int) {
+        fillBytes(memory.address, with: 0, 65536 + 2816 + 1024)
+        self.countCommands(commands, count, &last)
+
+        // The literals by each mode of contexts, the least of them.
+        var mode = 2
+        var literals = BrotliHistograms(symbols: 256, counts: literalCounts, map: literalMap, count: 1)
+        // Of few bytes there is too little to tell apart.
+        let modes = end - source < 256 ? 0 : (end - source < 16384 && hard > 1 ? 2 : hard)
+        if modes == 0 {
+            self.countLiterals(commands, count, source, before, mode: -1, into: literalCounts)
+            fillBytes(literalMap, with: 0, 64)
+        } else {
+            var bestCost = Int.max
+            var tried = 0
+            while tried < modes {
+                let this = tried == 0 ? 2 : (tried == 1 ? 3 : (tried == 2 ? 1 : 0))
+                fillBytes(other.address, with: 0, 65536)
+                self.countLiterals(commands, count, source, before, mode: this, into: other.address)
+                var made = BrotliHistograms(symbols: 256, counts: other.address, map: other.address + 65536, count: 64)
+                let cost = made.cluster(work: work)
+                if cost < bestCost {
+                    bestCost = cost
+                    mode = this
+                    copyBytes(from: other.address, to: literalCounts, 1024 * made.count)
+                    copyBytes(from: other.address + 65536, to: literalMap, 64)
+                    literals.count = made.count
+                }
+                tried += 1
+            }
+        }
+        var distances = BrotliHistograms(symbols: BrotliBlockWriter.distanceSymbols, counts: distanceCounts, map: distanceMap, count: 4)
+        _ = distances.cluster(work: work)
+
+        // One type of block of each category; no direct distances.
+        writer.write(0, 3)
+        writer.write(0, 6)
+        writer.write(mode, 2)
+        self.writeCount(&writer, literals.count)
+        if literals.count > 1 {
+            self.writeMap(&writer, literalMap, 64, literals.count)
+        }
+        self.writeCount(&writer, distances.count)
+        if distances.count > 1 {
+            self.writeMap(&writer, distanceMap, 4, distances.count)
+        }
+        var i = 0
+        while i < literals.count {
+            self.writeCode(&writer, counts: literalCounts + 1024 * i, symbols: 256, alphabet: 256, codes: literalCodes + 1024 * i)
+            i += 1
+        }
+        self.writeCode(&writer, counts: commandCounts, symbols: 704, alphabet: 704, codes: commandCodes)
+        i = 0
+        while i < distances.count {
+            let at = 4 * BrotliBlockWriter.distanceSymbols * i
+            self.writeCode(&writer, counts: distanceCounts + at, symbols: BrotliBlockWriter.distanceSymbols, alphabet: 64, codes: distanceCodes + at)
+            i += 1
+        }
+        self.writeCommands(&writer, commands, count, source, before, mode: literals.count > 1 ? mode : -1)
+    }
+
+    @inline(always)
+    unsafe static fn insertCode(_ count: Int) -> Int {
+        if count < 6 {
+            return count
+        }
+        if count < 130 {
+            let bits = 62 &- (count &- 2).leadingZeroCount
+            return (bits << 1) &+ ((count &- 2) >> bits) &+ 2
+        }
+        if count < 2114 {
+            return 73 &- (count &- 66).leadingZeroCount
+        }
+        return count < 6210 ? 21 : (count < 22594 ? 22 : 23)
+    }
+
+    @inline(always)
+    unsafe static fn copyCode(_ length: Int) -> Int {
+        if length < 10 {
+            return length &- 2
+        }
+        if length < 134 {
+            let bits = 62 &- (length &- 6).leadingZeroCount
+            return (bits << 1) &+ ((length &- 6) >> bits) &+ 4
+        }
+        if length < 2118 {
+            return 75 &- (length &- 70).leadingZeroCount
+        }
+        return 23
+    }
+
+    /// The symbol of a command, whose distance is the last one, or not.
+    @inline(always)
+    unsafe static fn commandCode(_ insert: Int, _ copy: Int, last: Bool) -> Int {
+        let low = (copy & 7) | (insert & 7) << 3
+        if last && insert < 8 && copy < 16 {
+            return low | (copy >> 3) << 6
+        }
+        // Of each pair of eights, the cell of 64 symbols it is in.
+        let cell = (0xA_9785_4632 >> (4 &* (3 &* (insert >> 3) &+ (copy >> 3)))) & 15
+        return low | cell << 6
+    }
+
+    unsafe fn countCommands(_ commands: Int, _ count: Int, _ last: inout (Int, Int, Int, Int)) {
+        var one = last.0
+        var two = last.1
+        var three = last.2
+        var four = last.3
+        var i = 0
+        while i < count {
+            let at = commands &+ 16 &* i
+            let insert = load32(at) unchecked as Int
+            let copy = load32(at &+ 4) unchecked as Int
+            let made = load32(at &+ 8) unchecked as Int
+            let distance = load32(at &+ 12) unchecked as Int
+            var symbol = 0
+            var extra = 0
+            // A copy whose distance is none is the last's, which makes nothing.
+            if distance == 0 {
+                symbol = 0
+            } else if (made & 0x8000_0000) == 0 && distance == one {
+                symbol = 0
+            } else {
+                symbol = -1
+                if (made & 0x8000_0000) == 0 {
+                    symbol = distance == two ? 1 : (distance == three ? 2 : (distance == four ? 3 : -1))
+                    if symbol < 0 {
+                        let offset = distance &- one
+                        let further = distance &- two
+                        if offset >= -3 && offset <= 3 {
+                            symbol = offset < 0 ? 2 &- 2 &* offset : 3 &+ 2 &* offset
+                        } else if further >= -3 && further <= 3 {
+                            symbol = further < 0 ? 8 &- 2 &* further : 9 &+ 2 &* further
+                        }
+                    }
+                    four = three
+                    three = two
+                    two = one
+                    one = distance
+                }
+                if symbol < 0 {
+                    let value = distance &+ 3
+                    let bits = 62 &- value.leadingZeroCount
+                    symbol = 16 &+ 2 &* (bits &- 1) &+ ((value >> bits) & 1)
+                    extra = value & ((1 << bits) &- 1)
+                }
+            }
+            let isLast = symbol == 0
+            let insertCode = BrotliBlockWriter.insertCode(insert)
+            let copyCode = BrotliBlockWriter.copyCode(copy)
+            let code = BrotliBlockWriter.commandCode(insertCode, copyCode, last: isLast)
+            let commandAt = commandCounts &+ 4 &* code
+            store32(load32(commandAt) &+ 1, commandAt)
+            var written: U32 = 0xFFFF_FFFF
+            if code >= 128 && distance != 0 {
+                written = (symbol | extra << 6) unchecked as U32
+                let context = copy > 4 ? 3 : copy &- 2
+                let distanceAt = distanceCounts &+ 4 &* (BrotliBlockWriter.distanceSymbols &* context &+ symbol)
+                store32(load32(distanceAt) &+ 1, distanceAt)
+            }
+            store32(code unchecked as U32, symbols.address &+ 8 &* i)
+            store32(written, symbols.address &+ 8 &* i &+ 4)
+            i = i &+ 1
+        }
+        last = (one, two, three, four)
+    }
+
+    /// The context of a byte, after two others.
+    @inline(always)
+    unsafe static fn context(_ mode: Int, _ one: Int, _ two: Int, _ tables: Int) -> Int {
+        if mode == 2 {
+            return load8(tables &+ one) | load8(tables &+ 256 &+ two)
+        }
+        if mode == 3 {
+            return load8(tables &+ 512 &+ one) << 3 | load8(tables &+ 512 &+ two)
+        }
+        return mode == 0 ? one & 63 : one >> 2
+    }
+
+    unsafe fn countLiterals(_ commands: Int, _ count: Int, _ source: Int, _ before: Int, mode: Int, into counts: Int) {
+        let tables = brotliTables.get() &+ brotliContextStart
+        var at = source
+        var i = 0
+        while i < count {
+            let command = commands &+ 16 &* i
+            let end = at &+ (load32(command) unchecked as Int)
+            if mode < 0 {
+                while at < end {
+                    let slot = counts &+ 4 &* load8(at)
+                    store32(load32(slot) &+ 1, slot)
+                    at = at &+ 1
+                }
+            } else {
+                // What came before the stream is zeros.
+                var one = at &- source &+ before > 0 ? load8(at &- 1) : 0
+                var two = at &- source &+ before > 1 ? load8(at &- 2) : 0
+                while at < end {
+                    let byte = load8(at)
+                    let slot = counts &+ 4 &* (256 &* BrotliBlockWriter.context(mode, one, two, tables) &+ byte)
+                    store32(load32(slot) &+ 1, slot)
+                    two = one
+                    one = byte
+                    at = at &+ 1
+                }
+            }
+            at = at &+ ((load32(command &+ 8) & 0x7FFF_FFFF) unchecked as Int)
+            i = i &+ 1
+        }
+    }
+
+    unsafe fn writeCommands(_ writer: inout BitWriter, _ commands: Int, _ count: Int, _ source: Int, _ before: Int, mode: Int) {
+        let tables = brotliTables.get() &+ brotliContextStart
+        var made = writer
+        var at = source
+        var i = 0
+        while i < count {
+            let command = commands &+ 16 &* i
+            let insert = load32(command) unchecked as Int
+            let copy = load32(command &+ 4) unchecked as Int
+            let symbol = load32(symbols.address &+ 8 &* i) unchecked as Int
+            let distance = load32(symbols.address &+ 8 &* i &+ 4)
+            let code = load32(commandCodes &+ 4 &* symbol)
+            made.write((code & 0xFF_FFFF) unchecked as Int, (code >> 24) unchecked as Int)
+            let low = load32(brotliCommands &+ 8 &* symbol)
+            made.write(insert &- ((low & 0xFFFF) unchecked as Int), (low >> 16 & 31) unchecked as Int)
+            made.write(copy &- (load32(brotliCommands &+ 8 &* symbol &+ 4) unchecked as Int), (low >> 24 & 31) unchecked as Int)
+            let end = at &+ insert
+            if mode < 0 {
+                while at < end {
+                    let literal = load32(literalCodes &+ 4 &* load8(at))
+                    made.write((literal & 0xFF_FFFF) unchecked as Int, (literal >> 24) unchecked as Int)
+                    at = at &+ 1
+                }
+            } else {
+                var one = at &- source &+ before > 0 ? load8(at &- 1) : 0
+                var two = at &- source &+ before > 1 ? load8(at &- 2) : 0
+                while at < end {
+                    let byte = load8(at)
+                    let histogram = load8(literalMap &+ BrotliBlockWriter.context(mode, one, two, tables))
+                    let literal = load32(literalCodes &+ 4 &* (256 &* histogram &+ byte))
+                    made.write((literal & 0xFF_FFFF) unchecked as Int, (literal >> 24) unchecked as Int)
+                    two = one
+                    one = byte
+                    at = at &+ 1
+                }
+            }
+            at = at &+ ((load32(command &+ 8) & 0x7FFF_FFFF) unchecked as Int)
+            if distance != 0xFFFF_FFFF {
+                let histogram = load8(distanceMap &+ (copy > 4 ? 3 : copy &- 2))
+                let number = (distance & 63) unchecked as Int
+                let code = load32(distanceCodes &+ 4 &* (BrotliBlockWriter.distanceSymbols &* histogram &+ number))
+                made.write((code & 0xFF_FFFF) unchecked as Int, (code >> 24) unchecked as Int)
+                if number >= 16 {
+                    made.write((distance >> 6) unchecked as Int, 1 &+ ((number &- 16) >> 1))
+                }
+            }
+            i = i &+ 1
+        }
+        writer = made
+    }
+
+    // ---- Headers -------------------------------------------------------------
+
+    /// 1 to 256, in one bit to eleven.
+    unsafe fn writeCount(_ writer: inout BitWriter, _ count: Int) {
+        if count == 1 {
+            writer.write(0, 1)
+            return
+        }
+        let width = 63 &- (count &- 1).leadingZeroCount
+        writer.write(1 | width << 1, 4)
+        writer.write(count &- 1 &- (1 << width), width)
+    }
+
+    /// A context map, as it is: no run lengths, and no moving to the front.
+    unsafe fn writeMap(_ writer: inout BitWriter, _ map: Int, _ size: Int, _ trees: Int) {
+        let counts = work + 40000
+        let codes = work + 42000
+        fillBytes(counts, with: 0, 4 * 272)
+        var i = 0
+        while i < size {
+            let at = counts + 4 * load8(map + i)
+            store32(load32(at) + 1, at)
+            i += 1
+        }
+        writer.write(0, 1)
+        self.writeCode(&writer, counts: counts, symbols: trees, alphabet: trees, codes: codes)
+        i = 0
+        while i < size {
+            let code = load32(codes + 4 * load8(map + i))
+            writer.write((code & 0xFF_FFFF) unchecked as Int, (code >> 24) unchecked as Int)
+            i += 1
+        }
+        writer.write(0, 1)
+    }
+
+    /// The code of counted symbols made, and described.
+    unsafe fn writeCode(_ writer: inout BitWriter, counts: Int, symbols: Int, alphabet: Int, codes: Int) {
+        let lengths = work + 44000
+        var used = 0
+        var few = (0, 0, 0, 0)
+        var i = 0
+        while i < symbols {
+            if load32(counts + 4 * i) != 0 {
+                match used {
+                    case 0 => { few.0 = i }
+                    case 1 => { few.1 = i }
+                    case 2 => { few.2 = i }
+                    case 3 => { few.3 = i }
+                    case _ => { }
+                }
+                used += 1
+            }
+            i += 1
+        }
+        let width = alphabet <= 1 ? 0 : 64 - (alphabet - 1).leadingZeroCount
+        if used <= 1 {
+            fillBytes(codes, with: 0, 4 * symbols)
+            writer.write(1, 4)
+            writer.write(few.0, width)
+            return
+        }
+        _ = huffmanLengths(counts, count: symbols, limit: 15, lengths: lengths, work: work + 45000)
+        if used <= 4 {
+            self.writeSimple(&writer, lengths, used, few, width)
+            huffmanCodes(lengths: lengths, count: symbols, codes: codes, work: work + 45000)
+            return
+        }
+        huffmanCodes(lengths: lengths, count: symbols, codes: codes, work: work + 45000)
+        self.writeLengths(&writer, lengths, symbols)
+    }
+
+    /// A code of two symbols to four: their lengths are made what their order
+    /// says they are, the shortest first.
+    unsafe fn writeSimple(_ writer: inout BitWriter, _ lengths: Int, _ used: Int, _ few: (Int, Int, Int, Int), _ width: Int) {
+        var order: Int[>..] = [few.0, few.1]
+        if used > 2 {
+            order.append(few.2)
+        }
+        if used > 3 {
+            order.append(few.3)
+        }
+        // By length, and by number of those that are as long.
+        var i = 1
+        while i < order.count {
+            var j = i
+            while j > 0 && load8(lengths + order[j]) < load8(lengths + order[j - 1]) {
+                let moved = order[j]
+                order[j] = order[j - 1]
+                order[j - 1] = moved
+                j -= 1
+            }
+            i += 1
+        }
+        writer.write(1, 2)
+        writer.write(used - 1, 2)
+        for symbol in order {
+            writer.write(symbol, width)
+        }
+        if used == 4 {
+            writer.write(load8(lengths + order[0]) == 1 ? 1 : 0, 1)
+        }
+    }
+
+    /// The lengths of a code, by a code of their own.
+    unsafe fn writeLengths(_ writer: inout BitWriter, _ lengths: Int, _ symbols: Int) {
+        let tokens = work + 48000
+        let counts = work + 51000
+        fillBytes(counts, with: 0, 72)
+        var count = symbols
+        while load8(lengths + count - 1) == 0 {
+            count -= 1
+        }
+        // Runs of zeros, three to ten at a time and in eights more, and of the
+        // length before, three to six and in fours.
+        var made = 0
+        var before = 8
+        var i = 0
+        while i < count {
+            let length = load8(lengths + i)
+            var run = 1
+            while i + run < count && load8(lengths + i + run) == length {
+                run += 1
+            }
+            i += run
+            if length != 0 && length != before {
+                made = self.addLength(tokens, made, counts, length, 0)
+                before = length
+                run -= 1
+            }
+            if run < 3 || length != 0 && run < 4 {
+                while run > 0 {
+                    made = self.addLength(tokens, made, counts, length, 0)
+                    run -= 1
+                }
+                continue
+            }
+            // The digits of the run, the last first.
+            let symbol = length == 0 ? 17 : 16
+            let shift = length == 0 ? 3 : 2
+            let start = made
+            var rest = run - 3
+            while true {
+                made = self.addLength(tokens, made, counts, symbol, rest & ((1 << shift) - 1))
+                rest = rest >> shift
+                if rest == 0 {
+                    break
+                }
+                rest -= 1
+            }
+            var low = start
+            var high = made - 1
+            while low < high {
+                let moved = load32(tokens + 4 * low)
+                store32(load32(tokens + 4 * high), tokens + 4 * low)
+                store32(moved, tokens + 4 * high)
+                low += 1
+                high -= 1
+            }
+        }
+        let own = work + 52000
+        let codes = work + 52100
+        let used = huffmanLengths(counts, count: 18, limit: 5, lengths: own, work: work + 45000)
+        var last = 18
+        if used <= 1 {
+            // One symbol, which takes no bits: the others' lengths are zero.
+            i = 0
+            while i < 18 {
+                store8(load32(counts + 4 * i) != 0 ? 3 : 0, own + i)
+                i += 1
+            }
+        } else {
+            while load8(own + (brotliLengthOrder[last - 1] unchecked as Int)) == 0 {
+                last -= 1
+            }
+        }
+        var skipped = 0
+        if load8(own + 1) == 0 && load8(own + 2) == 0 {
+            skipped = load8(own + 3) == 0 ? 3 : 2
+        }
+        writer.write(skipped, 2)
+        // The codes of the lengths' lengths.
+        let values: Int[>..] = [0, 7, 3, 2, 1, 15]
+        let widths: Int[>..] = [2, 4, 3, 2, 2, 4]
+        i = skipped
+        while i < last {
+            let length = load8(own + (brotliLengthOrder[i] unchecked as Int))
+            writer.write(values[length], widths[length])
+            i += 1
+        }
+        if used <= 1 {
+            fillBytes(codes, with: 0, 72)
+        } else {
+            huffmanCodes(lengths: own, count: 18, codes: codes, work: work + 45000)
+        }
+        i = 0
+        while i < made {
+            let token = load32(tokens + 4 * i) unchecked as Int
+            let symbol = token & 31
+            let code = load32(codes + 4 * symbol)
+            writer.write((code & 0xFF_FFFF) unchecked as Int, (code >> 24) unchecked as Int)
+            if symbol >= 16 {
+                writer.write(token >> 5, symbol - 14)
+            }
+            i += 1
+        }
+    }
+
+    unsafe fn addLength(_ tokens: Int, _ made: Int, _ counts: Int, _ symbol: Int, _ extra: Int) -> Int {
+        store32((symbol | extra << 5) unchecked as U32, tokens + 4 * made)
+        let at = counts + 4 * symbol
+        store32(load32(at) + 1, at)
+        return made + 1
+    }
+}

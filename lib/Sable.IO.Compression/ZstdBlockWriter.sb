@@ -1,0 +1,715 @@
+module Sable.IO.Compression
+
+/// A zstd block's bytes made of its literals and its sequences: the literals
+/// by Huffman codes, the sequences by tables of their three codes, each the
+/// block's own, the last block's, or one known beforehand, whichever is least.
+///
+/// A sequence is four words: how many literals, how long a match, less three,
+/// what its offset is, as it is written: 1 to 3 for one of the last three, or
+/// the offset and three; and the offset.
+final class ZstdBlockWriter {
+    /// The literals' Huffman codes, in a word each, the bits with their number
+    /// at bit 24, of this block and the last; the three codes' tables, of this
+    /// and the last; and room to work in.
+    let memory: Block
+    var hasHuffman: Bool
+    /// Which of the last block's three tables there are.
+    var hasTable: (Bool, Bool, Bool)
+    /// What this block has instead, if it is written.
+    var newHuffman: Bool
+    var newTables: (Bool, Bool, Bool)
+    /// Each sequence's three codes, a byte each.
+    let codes: Block
+    let maxSequences: Int
+
+    init(maxSequences: Int) {
+        self.maxSequences = maxSequences
+        memory = Block(count: 2048 + 6 * fseTableBytes + 3 * 128 + 3 * 256 + 16384, zeroed: true)
+        codes = Block(count: 3 * maxSequences + 64)
+        hasHuffman = false
+        hasTable = (false, false, false)
+        newHuffman = false
+        newTables = (false, false, false)
+    }
+
+    var huffman: Int => memory.address
+
+    var lastHuffman: Int => memory.address + 1024
+
+    var counts: Int => memory.address + 2048 + 6 * fseTableBytes
+
+    var work: Int => memory.address + 2048 + 6 * fseTableBytes + 1152
+
+    fn table(_ code: ZstdCode) -> Int {
+        return memory.address + 2048 + 2 * code.index * fseTableBytes
+    }
+
+    fn lastTable(_ code: ZstdCode) -> Int {
+        return table(code) + fseTableBytes
+    }
+
+    fn has(_ code: ZstdCode) -> Bool {
+        return code == .LiteralLength ? hasTable.0 : (code == .Offset ? hasTable.1 : hasTable.2)
+    }
+
+    fn setNew(_ code: ZstdCode, _ isNew: Bool) {
+        match code {
+            case .LiteralLength => { newTables.0 = isNew }
+            case .Offset        => { newTables.1 = isNew }
+            case .MatchLength   => { newTables.2 = isNew }
+        }
+    }
+
+    /// Nothing known, as a frame begins.
+    fn reset() {
+        hasHuffman = false
+        hasTable = (false, false, false)
+    }
+
+    /// A dictionary's codes, as if a block before had had them.
+    unsafe fn use(_ dictionary: ZstdDictionary) {
+        guard let tables = dictionary.tables, let distributions = dictionary.distributions else {
+            return
+        }
+        // The Huffman codes' lengths, as the table they are decoded by has
+        // them, whose entries each has as many of as its code is short.
+        let lengths = work &+ 3072
+        fillBytes(lengths, with: 0, 256)
+        var last = 0
+        var i = 0
+        while i < 1 << dictionary.huffmanLog {
+            let entry = load16(tables.address &+ 2 &* i)
+            store8(entry & 15, lengths &+ (entry >> 8))
+            last = entry >> 8 > last ? entry >> 8 : last
+            i = i &+ 1
+        }
+        self.makeCodes(lengths, last: last)
+        copyBytes(from: huffman, to: lastHuffman, 1024)
+        hasHuffman = true
+        for code in [ZstdCode.LiteralLength, ZstdCode.Offset, ZstdCode.MatchLength] {
+            let symbols = code == .LiteralLength ? dictionary.symbols.0 : (code == .Offset ? dictionary.symbols.1 : dictionary.symbols.2)
+            let log = code == .LiteralLength ? dictionary.logs.0 : (code == .Offset ? dictionary.logs.1 : dictionary.logs.2)
+            buildFseTable(lastTable(code), distribution: distributions.address &+ 128 &* code.index, symbols: symbols, log: log, work: work)
+        }
+        hasTable = (true, true, true)
+    }
+
+    /// What this block has kept for the next: it was written.
+    unsafe fn keep() {
+        if newHuffman {
+            copyBytes(from: huffman, to: lastHuffman, 1024)
+            hasHuffman = true
+        }
+        for code in [ZstdCode.LiteralLength, ZstdCode.Offset, ZstdCode.MatchLength] {
+            let isNew = code == .LiteralLength ? newTables.0 : (code == .Offset ? newTables.1 : newTables.2)
+            if isNew {
+                copyBytes(from: table(code), to: lastTable(code), fseTableBytes)
+                match code {
+                    case .LiteralLength => { hasTable.0 = true }
+                    case .Offset        => { hasTable.1 = true }
+                    case .MatchLength   => { hasTable.2 = true }
+                }
+            }
+        }
+    }
+
+    /// A block written at an address, where there is room for twice its bytes
+    /// and 1024: to where.
+    unsafe fn write(literals: Int, literalCount: Int, sequences: Int, count: Int, compressLiterals: Bool, to target: Int) -> Int {
+        newHuffman = false
+        newTables = (false, false, false)
+        var at = self.writeLiterals(literals, literalCount, compressLiterals, to: target)
+        if count < 128 {
+            store8(count, at)
+            at = at &+ 1
+        } else if count < 0x7F00 {
+            store8(128 &+ (count >> 8), at)
+            store8(count & 255, at &+ 1)
+            at = at &+ 2
+        } else {
+            store8(255, at)
+            store16(count &- 0x7F00, at &+ 1)
+            at = at &+ 3
+        }
+        if count == 0 {
+            return at
+        }
+        let modes = at
+        at = at &+ 1
+        var shift = 6
+        var mode = 0
+        self.findCodes(sequences, count)
+        for code in [ZstdCode.LiteralLength, ZstdCode.Offset, ZstdCode.MatchLength] {
+            let (chosen, end) = self.chooseTable(code, count, to: at)
+            mode = mode | chosen << shift
+            at = end
+            shift = shift &- 2
+        }
+        store8(mode, modes)
+        return self.writeSequences(sequences, count, to: at)
+    }
+
+    // ---- Literals ------------------------------------------------------------
+
+    unsafe fn writeLiterals(_ literals: Int, _ count: Int, _ compress: Bool, to target: Int) -> Int {
+        if !compress || count < (hasHuffman ? 16 : 64) {
+            return writeRaw(literals, count, to: target)
+        }
+        // Counted four ways at once, as runs of a byte are.
+        let counted = work &+ 4096
+        fillBytes(counted, with: 0, 4096)
+        var i = 0
+        while i &+ 4 <= count {
+            let word = load32(literals &+ i)
+            let a = counted &+ 4 &* ((word & 255) unchecked as Int)
+            let b = counted &+ 1024 &+ 4 &* ((word >> 8 & 255) unchecked as Int)
+            let c = counted &+ 2048 &+ 4 &* ((word >> 16 & 255) unchecked as Int)
+            let d = counted &+ 3072 &+ 4 &* ((word >> 24) unchecked as Int)
+            store32(load32(a) &+ 1, a)
+            store32(load32(b) &+ 1, b)
+            store32(load32(c) &+ 1, c)
+            store32(load32(d) &+ 1, d)
+            i = i &+ 4
+        }
+        while i < count {
+            let at = counted &+ 4 &* load8(literals &+ i)
+            store32(load32(at) &+ 1, at)
+            i = i &+ 1
+        }
+        var most = 0
+        var last = 0
+        i = 0
+        while i < 256 {
+            let at = counted &+ 4 &* i
+            let sum = load32(at) &+ load32(at &+ 1024) &+ load32(at &+ 2048) &+ load32(at &+ 3072)
+            store32(sum, at)
+            if sum > 0 {
+                last = i
+            }
+            if sum unchecked as Int > most {
+                most = sum unchecked as Int
+            }
+            i = i &+ 1
+        }
+        if most == count {
+            return writeHeader(1, count, to: target, and: load8(literals))
+        }
+        if most <= (count >> 7) &+ 4 {
+            return writeRaw(literals, count, to: target)
+        }
+
+        // Its own code, or the last block's.
+        let lengths = work &+ 3072
+        _ = huffmanLengths(counted, count: 256, limit: 11, lengths: lengths, work: work)
+        let header = work &+ 8192
+        let headerEnd = self.writeWeights(lengths, last: last, to: header)
+        var ownBits = Int.max
+        if headerEnd > header {
+            ownBits = 8 &* (headerEnd &- header)
+            i = 0
+            while i <= last {
+                ownBits = ownBits &+ (load32(counted &+ 4 &* i) unchecked as Int) &* load8(lengths &+ i)
+                i = i &+ 1
+            }
+        }
+        var lastBits = Int.max
+        if hasHuffman {
+            lastBits = 0
+            i = 0
+            while i <= last {
+                let frequency = load32(counted &+ 4 &* i) unchecked as Int
+                let width = (load32(lastHuffman &+ 4 &* i) >> 24) unchecked as Int
+                if frequency > 0 && width == 0 {
+                    lastBits = Int.max
+                    break
+                }
+                lastBits = lastBits &+ frequency &* width
+                i = i &+ 1
+            }
+        }
+        let useLast = lastBits <= ownBits
+        let bits = useLast ? lastBits : ownBits
+        if bits == Int.max || (bits >> 3) &+ (count >> 6) &+ 2 >= count {
+            return writeRaw(literals, count, to: target)
+        }
+        let isSingle = count < 256
+        let headerSize = count < 1024 ? 3 : (count < 16384 ? 4 : 5)
+        var at = target &+ headerSize
+        if !useLast {
+            self.makeCodes(lengths, last: last)
+            copyBytes(from: header, to: at, headerEnd &- header)
+            at = at &+ (headerEnd &- header)
+        }
+        let codes = useLast ? lastHuffman : huffman
+        if isSingle {
+            at = ZstdBlockWriter.writeStream(literals, count, codes, to: at)
+        } else {
+            let jumps = at
+            let quarter = (count &+ 3) / 4
+            at = at &+ 6
+            i = 0
+            while i < 4 {
+                let size = i < 3 ? quarter : count &- 3 &* quarter
+                let end = ZstdBlockWriter.writeStream(literals &+ i &* quarter, size, codes, to: at)
+                if i < 3 {
+                    store16(end &- at, jumps &+ 2 &* i)
+                }
+                at = end
+                i = i &+ 1
+            }
+        }
+        let packed = at &- target &- headerSize
+        if packed >= count {
+            return writeRaw(literals, count, to: target)
+        }
+        newHuffman = !useLast
+        let kind = useLast ? 3 : 2
+        if headerSize == 3 {
+            let word = kind | (isSingle ? 0 : 1) << 2 | count << 4 | packed << 14
+            store16(word, target)
+            store8(word >> 16, target &+ 2)
+        } else if headerSize == 4 {
+            store32((kind | 2 << 2 | count << 4 | packed << 18) unchecked as U32, target)
+        } else {
+            let word = kind | 3 << 2 | count << 4 | packed << 22
+            store32(word unchecked as U32, target)
+            store8(word >> 32, target &+ 4)
+        }
+        return at
+    }
+
+    /// The literals as they are.
+    unsafe fn writeRaw(_ literals: Int, _ count: Int, to target: Int) -> Int {
+        let at = writeHeader(0, count, to: target, and: -1)
+        copyBytes(from: literals, to: at, count)
+        return at &+ count
+    }
+
+    /// The header of literals that are not compressed, and a byte.
+    unsafe fn writeHeader(_ kind: Int, _ count: Int, to target: Int, and byte: Int) -> Int {
+        var at = target
+        if count < 32 {
+            store8(kind | count << 3, at)
+            at = at &+ 1
+        } else if count < 4096 {
+            store16(kind | 1 << 2 | count << 4, at)
+            at = at &+ 2
+        } else {
+            let word = kind | 3 << 2 | count << 4
+            store16(word, at)
+            store8(word >> 16, at &+ 2)
+            at = at &+ 3
+        }
+        if byte >= 0 {
+            store8(byte, at)
+            at = at &+ 1
+        }
+        return at
+    }
+
+    /// A Huffman code's description, its symbols' weights, which are those it
+    /// is decoded by: to where, or to nowhere where it cannot be described.
+    unsafe fn writeWeights(_ lengths: Int, last: Int, to target: Int) -> Int {
+        var longest = 0
+        var i = 0
+        while i <= last {
+            let length = load8(lengths &+ i)
+            longest = length > longest ? length : longest
+            i = i &+ 1
+        }
+        // All but the last symbol's.
+        let weights = work &+ 10240
+        i = 0
+        while i < last {
+            let length = load8(lengths &+ i)
+            store8(length == 0 ? 0 : longest &+ 1 &- length, weights &+ i)
+            i = i &+ 1
+        }
+        let packed = self.packWeights(weights, last, to: target &+ 1)
+        if packed > 0 && packed < 128 && (last > 128 || packed < (last &+ 1) / 2) {
+            store8(packed, target)
+            return target &+ 1 &+ packed
+        }
+        if last > 128 {
+            return target
+        }
+        store8(127 &+ last, target)
+        store8(0, weights &+ last)
+        i = 0
+        while i < last {
+            store8(load8(weights &+ i) << 4 | load8(weights &+ i &+ 1), target &+ 1 &+ i / 2)
+            i = i &+ 2
+        }
+        return target &+ 1 &+ (last &+ 1) / 2
+    }
+
+    /// Weights encoded by a table of their own: to how many bytes, or 0.
+    unsafe fn packWeights(_ weights: Int, _ count: Int, to target: Int) -> Int {
+        if count <= 2 {
+            return 0
+        }
+        let counted = work &+ 10496
+        fillBytes(counted, with: 0, 64)
+        var i = 0
+        var most: U32 = 0
+        var last = 0
+        while i < count {
+            let weight = load8(weights &+ i)
+            let sum = load32(counted &+ 4 &* weight) &+ 1
+            store32(sum, counted &+ 4 &* weight)
+            most = sum > most ? sum : most
+            last = weight > last ? weight : last
+            i = i &+ 1
+        }
+        if most unchecked as Int == count || most == 1 {
+            return 0
+        }
+        var log = 63 &- (count &- 1).leadingZeroCount &- 2
+        let needed = 64 &- last.leadingZeroCount
+        log = log < needed ? needed : log
+        log = log < 5 ? 5 : (log > 6 ? 6 : log)
+        let distribution = work &+ 10624
+        normalizeCounts(counted, symbols: last &+ 1, total: count, log: log, into: distribution)
+        if !isWhole(distribution, symbols: last &+ 1, log: log) {
+            return 0
+        }
+        let table = work &+ 11000
+        buildFseTable(table, distribution: distribution, symbols: last &+ 1, log: log, work: work &+ 14200)
+        let end = writeDistribution(distribution, symbols: last &+ 1, log: log, to: target)
+        var writer = BitWriter(bits: 0, count: 0, position: end)
+        // Two states take turns, from the last back.
+        i = count
+        var first = 0
+        var second = 0
+        if (count & 1) != 0 {
+            first = firstState(table, load8(weights &+ i &- 1))
+            second = firstState(table, load8(weights &+ i &- 2))
+            i = i &- 2
+            i = i &- 1
+            let weight = load8(weights &+ i)
+            let bits = stateBits(table, weight, first)
+            writer.write(first & ((1 << bits) &- 1), bits)
+            first = nextState(table, weight, first, bits)
+        } else {
+            second = firstState(table, load8(weights &+ i &- 1))
+            first = firstState(table, load8(weights &+ i &- 2))
+            i = i &- 2
+        }
+        while i > 0 {
+            i = i &- 1
+            var weight = load8(weights &+ i)
+            var bits = stateBits(table, weight, second)
+            writer.write(second & ((1 << bits) &- 1), bits)
+            second = nextState(table, weight, second, bits)
+            i = i &- 1
+            weight = load8(weights &+ i)
+            bits = stateBits(table, weight, first)
+            writer.write(first & ((1 << bits) &- 1), bits)
+            first = nextState(table, weight, first, bits)
+        }
+        writer.write(second & ((1 << log) &- 1), log)
+        writer.write(first & ((1 << log) &- 1), log)
+        writer.write(1, 1)
+        writer.align()
+        return writer.position &- target
+    }
+
+    /// The codes of lengths: those of the longest first from zero up, as the
+    /// table they are decoded by has them.
+    unsafe fn makeCodes(_ lengths: Int, last: Int) {
+        let counted = work &+ 64
+        fillBytes(counted, with: 0, 64)
+        var longest = 0
+        var i = 0
+        while i <= last {
+            let length = load8(lengths &+ i)
+            let at = counted &+ 4 &* length
+            store32(load32(at) &+ 1, at)
+            longest = length > longest ? length : longest
+            i = i &+ 1
+        }
+        // Where each length's codes start: half of where the longer ones ended.
+        var start: U32 = 0
+        var length = longest
+        while length > 0 {
+            let at = counted &+ 4 &* length
+            let these = load32(at)
+            store32(start, at)
+            start = (start &+ these) >> 1
+            length = length &- 1
+        }
+        i = 0
+        while i < 256 {
+            length = i <= last ? load8(lengths &+ i) : 0
+            if length == 0 {
+                store32(0, huffman &+ 4 &* i)
+            } else {
+                let at = counted &+ 4 &* length
+                let code = load32(at)
+                store32(code &+ 1, at)
+                store32(code | (length unchecked as U32) << 24, huffman &+ 4 &* i)
+            }
+            i = i &+ 1
+        }
+    }
+
+    /// Literals by their codes, the last first, and the bit that ends them.
+    unsafe static fn writeStream(_ literals: Int, _ count: Int, _ codes: Int, to target: Int) -> Int {
+        var bits: U64 = 0
+        var bitCount = 0
+        var position = target
+        var at = literals &+ count
+        while ((at &- literals) & 3) != 0 {
+            at = at &- 1
+            let code = load32(codes &+ 4 &* load8(at))
+            bits = bits | (code & 0xFF_FFFF) unchecked as U64 << ((bitCount & 63) unchecked as U64)
+            bitCount = bitCount &+ ((code >> 24) unchecked as Int)
+        }
+        store64(bits, position)
+        position = position &+ (bitCount >> 3)
+        bits = bits >> ((bitCount & 56) unchecked as U64)
+        bitCount = bitCount & 7
+        while at > literals {
+            at = at &- 4
+            let word = load32(at)
+            var code = load32(codes &+ 4 &* ((word >> 24) unchecked as Int))
+            bits = bits | (code & 0xFF_FFFF) unchecked as U64 << ((bitCount & 63) unchecked as U64)
+            bitCount = bitCount &+ ((code >> 24) unchecked as Int)
+            code = load32(codes &+ 4 &* ((word >> 16 & 255) unchecked as Int))
+            bits = bits | (code & 0xFF_FFFF) unchecked as U64 << ((bitCount & 63) unchecked as U64)
+            bitCount = bitCount &+ ((code >> 24) unchecked as Int)
+            code = load32(codes &+ 4 &* ((word >> 8 & 255) unchecked as Int))
+            bits = bits | (code & 0xFF_FFFF) unchecked as U64 << ((bitCount & 63) unchecked as U64)
+            bitCount = bitCount &+ ((code >> 24) unchecked as Int)
+            code = load32(codes &+ 4 &* ((word & 255) unchecked as Int))
+            bits = bits | (code & 0xFF_FFFF) unchecked as U64 << ((bitCount & 63) unchecked as U64)
+            bitCount = bitCount &+ ((code >> 24) unchecked as Int)
+            store64(bits, position)
+            position = position &+ (bitCount >> 3)
+            bits = bits >> ((bitCount & 56) unchecked as U64)
+            bitCount = bitCount & 7
+        }
+        store64(bits | (1 as U64) << (bitCount unchecked as U64), position)
+        return position &+ 1
+    }
+
+    // ---- Sequences -----------------------------------------------------------
+
+    /// Each sequence's codes, counted.
+    unsafe fn findCodes(_ sequences: Int, _ count: Int) {
+        let literalCodes = codes.address
+        let offsetCodes = literalCodes &+ maxSequences
+        let matchCodes = offsetCodes &+ maxSequences
+        let counted = counts
+        fillBytes(counted, with: 0, 3 &* 256)
+        var i = 0
+        while i < count {
+            let at = sequences &+ 16 &* i
+            let literalLength = load32(at) unchecked as Int
+            let matchLength = load32(at &+ 4) unchecked as Int
+            let offset = load32(at &+ 8) unchecked as Int
+            let literalCode = literalLength < 64 ? load8(zstdLengthCodes &+ literalLength) : 82 &- literalLength.leadingZeroCount
+            let matchCode = matchLength < 128 ? load8(zstdLengthCodes &+ 64 &+ matchLength) : 99 &- matchLength.leadingZeroCount
+            let offsetCode = 63 &- offset.leadingZeroCount
+            store8(literalCode, literalCodes &+ i)
+            store8(matchCode, matchCodes &+ i)
+            store8(offsetCode, offsetCodes &+ i)
+            let a = counted &+ 4 &* literalCode
+            store32(load32(a) &+ 1, a)
+            let b = counted &+ 256 &+ 4 &* offsetCode
+            store32(load32(b) &+ 1, b)
+            let c = counted &+ 512 &+ 4 &* matchCode
+            store32(load32(c) &+ 1, c)
+            i = i &+ 1
+        }
+    }
+
+    /// The table of a code for this block, the least there is: its mode, and
+    /// where what describes it ends.
+    unsafe fn chooseTable(_ code: ZstdCode, _ count: Int, to target: Int) -> (Int, Int) {
+        let counted = counts &+ 256 &* code.index
+        var most = 0
+        var last = 0
+        var i = 0
+        while i < 64 {
+            let these = load32(counted &+ 4 &* i) unchecked as Int
+            most = these > most ? these : most
+            last = these > 0 ? i : last
+            i = i &+ 1
+        }
+        let distribution = work &+ 1024
+        let defaults = code.defaultDistribution
+        let mayDefault = last < defaults.count
+        setNew(code, true)
+        if most == count {
+            // One symbol: as little as its byte, or nothing, where it is few
+            // times and the default has it.
+            if count <= 2 && mayDefault {
+                self.useDefault(code)
+                return (0, target)
+            }
+            buildFseSymbol(table(code), last)
+            store8(last, target)
+            return (1, target &+ 1)
+        }
+
+        var defaultBits = Int.max
+        if mayDefault {
+            defaultBits = 0
+            i = 0
+            while i <= last {
+                let share = defaults[i] < 0 ? 1 : defaults[i]
+                defaultBits = defaultBits &+ (load32(counted &+ 4 &* i) unchecked as Int) &* ((code.defaultLog << 8) &- logWeight(share) &+ 256)
+                i = i &+ 1
+            }
+        }
+        var lastBits = Int.max
+        if has(code) {
+            lastBits = ZstdBlockWriter.cost(counted, last, lastTable(code))
+        }
+        var log = 63 &- (count &- 1).leadingZeroCount &- 2
+        let needed = 65 &- last.leadingZeroCount
+        let least = 64 &- count.leadingZeroCount
+        log = log < (needed < least ? needed : least) ? (needed < least ? needed : least) : log
+        log = log < 5 ? 5 : (log > code.maxLog ? code.maxLog : log)
+        normalizeCounts(counted, symbols: last &+ 1, total: count, log: log, into: distribution)
+        var ownBits = Int.max
+        var end = target
+        if isWhole(distribution, symbols: last &+ 1, log: log) {
+            end = writeDistribution(distribution, symbols: last &+ 1, log: log, to: target)
+            ownBits = (end &- target) &* 8 << 8
+            i = 0
+            while i <= last {
+                let share = shareOf(distribution, i)
+                ownBits = ownBits &+ (load32(counted &+ 4 &* i) unchecked as Int) &* ((log << 8) &- logWeight(share < 0 ? 1 : share) &+ 256)
+                i = i &+ 1
+            }
+        }
+        if defaultBits <= lastBits && defaultBits <= ownBits {
+            self.useDefault(code)
+            return (0, target)
+        }
+        if lastBits <= ownBits {
+            setNew(code, false)
+            copyBytes(from: lastTable(code), to: table(code), fseTableBytes)
+            return (3, target)
+        }
+        buildFseTable(table(code), distribution: distribution, symbols: last &+ 1, log: log, work: work)
+        return (2, end)
+    }
+
+    unsafe fn useDefault(_ code: ZstdCode) {
+        let distribution = work &+ 1024
+        let defaults = code.defaultDistribution
+        var i = 0
+        while i < defaults.count {
+            store16(defaults[i], distribution &+ 2 &* i)
+            i += 1
+        }
+        buildFseTable(table(code), distribution: distribution, symbols: defaults.count, log: code.defaultLog, work: work)
+    }
+
+    /// What the counted symbols cost by a table, in 256ths of a bit, or the
+    /// most there is where it has not all of them.
+    unsafe static fn cost(_ counted: Int, _ last: Int, _ table: Int) -> Int {
+        let log = load32(table) unchecked as Int
+        let symbols = load32(table &+ 4) unchecked as Int
+        if last >= symbols || log == 0 {
+            return Int.max
+        }
+        let size = 1 << log
+        var bits = 0
+        var i = 0
+        while i <= last {
+            let these = load32(counted &+ 4 &* i) unchecked as Int
+            if these > 0 {
+                // How many bits a state gives is a whole number or one less:
+                // which, for how many of the states.
+                let change = load32(table &+ 8 &+ 8 &* i) unchecked as Int
+                let least = change >> 16
+                if least >= log {
+                    return Int.max
+                }
+                let above = 2 &* size &- (((least &+ 1) << 16) &- change)
+                bits = bits &+ these &* ((least << 8) &+ ((above << 8) >> log))
+            }
+            i = i &+ 1
+        }
+        return bits
+    }
+
+    /// The sequences by their tables, the last first.
+    unsafe fn writeSequences(_ sequences: Int, _ count: Int, to target: Int) -> Int {
+        let literalCodes = codes.address
+        let offsetCodes = literalCodes &+ maxSequences
+        let matchCodes = offsetCodes &+ maxSequences
+        let literalTable = table(.LiteralLength)
+        let offsetTable = table(.Offset)
+        let matchTable = table(.MatchLength)
+        let widths = zstdBases &+ 4 &* 89
+        var writer = BitWriter(bits: 0, count: 0, position: target)
+        var i = count &- 1
+        var literalState = firstState(literalTable, load8(literalCodes &+ i))
+        var offsetState = firstState(offsetTable, load8(offsetCodes &+ i))
+        var matchState = firstState(matchTable, load8(matchCodes &+ i))
+        var isFirst = true
+        while i >= 0 {
+            let literalCode = load8(literalCodes &+ i)
+            let offsetCode = load8(offsetCodes &+ i)
+            let matchCode = load8(matchCodes &+ i)
+            if !isFirst {
+                let offsetBits = stateBits(offsetTable, offsetCode, offsetState)
+                let matchBits = stateBits(matchTable, matchCode, matchState)
+                let literalBits = stateBits(literalTable, literalCode, literalState)
+                let low = (offsetState & ((1 << offsetBits) &- 1)) | (matchState & ((1 << matchBits) &- 1)) << offsetBits
+                writer.write(low | (literalState & ((1 << literalBits) &- 1)) << (offsetBits &+ matchBits), offsetBits &+ matchBits &+ literalBits)
+                offsetState = nextState(offsetTable, offsetCode, offsetState, offsetBits)
+                matchState = nextState(matchTable, matchCode, matchState, matchBits)
+                literalState = nextState(literalTable, literalCode, literalState, literalBits)
+            }
+            isFirst = false
+            let at = sequences &+ 16 &* i
+            let literalWidth = load32(widths &+ 4 &* literalCode) unchecked as Int
+            let matchWidth = load32(widths &+ 144 &+ 4 &* matchCode) unchecked as Int
+            let literalValue = (load32(at) unchecked as Int) & ((1 << literalWidth) &- 1)
+            let matchValue = (load32(at &+ 4) &- (load32(zstdBases &+ 144 &+ 4 &* matchCode) &- 3)) unchecked as Int
+            writer.write(literalValue | matchValue << literalWidth, literalWidth &+ matchWidth)
+            writer.write((load32(at &+ 8) unchecked as Int) & ((1 << offsetCode) &- 1), offsetCode)
+            i = i &- 1
+        }
+        writer.write(matchState & ((1 << (load32(matchTable) unchecked as Int)) &- 1), load32(matchTable) unchecked as Int)
+        writer.write(offsetState & ((1 << (load32(offsetTable) unchecked as Int)) &- 1), load32(offsetTable) unchecked as Int)
+        writer.write(literalState & ((1 << (load32(literalTable) unchecked as Int)) &- 1), load32(literalTable) unchecked as Int)
+        writer.write(1, 1)
+        writer.align()
+        return writer.position
+    }
+}
+
+/// The code of each literal length below 64, then of each match length, less
+/// three, below 128: a byte each.
+static let zstdLengthCodes: Int = {
+        () -> Int in
+        unsafe {
+            let table = NativeMemory.allocate(byteCount: 192).address
+            var code = 0
+            var i = 0
+            while i < 64 {
+                while code < 35 && load32(zstdBases &+ 4 &* (code &+ 1)) unchecked as Int <= i {
+                    code += 1
+                }
+                store8(code, table + i)
+                i += 1
+            }
+            code = 0
+            i = 0
+            while i < 128 {
+                while code < 52 && load32(zstdBases &+ 4 &* (37 &+ code)) unchecked as Int <= i + 3 {
+                    code += 1
+                }
+                store8(code, table + 64 + i)
+                i += 1
+            }
+            return table
+        }
+    }()

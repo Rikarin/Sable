@@ -1,0 +1,290 @@
+module Sable.IO.Compression
+
+/// What a zstd block is decoded by, and the next may use again: a Huffman table
+/// of the literals, and a table each of the sequences' codes; and the last
+/// three offsets.
+final class ZstdEntropy {
+    /// The Huffman table, 2048 entries of two bytes, or 4096: how many bits, and
+    /// above them the byte; the three codes' tables, of 512, 256 and 512 entries; and
+    /// room to work in.
+    let memory: Block
+    /// Whether there is a Huffman table, and the logs of the three, or -1 for
+    /// one there is not.
+    var hasHuffman: Bool
+    /// By how many bits the Huffman table is looked up: eleven, or twelve, as
+    /// the reference takes them, though RFC 8878 does not.
+    var huffmanLog: Int
+    var logs: (Int, Int, Int)
+    /// How many symbols the last table read has.
+    var lastSymbols: Int
+    var offset1: Int
+    var offset2: Int
+    var offset3: Int
+
+    init() {
+        memory = Block(count: 8192 + 8 * 1280 + 4096, zeroed: true)
+        hasHuffman = false
+        huffmanLog = 11
+        logs = (-1, -1, -1)
+        lastSymbols = 0
+        offset1 = 1
+        offset2 = 4
+        offset3 = 8
+    }
+
+    var huffman: Int => memory.address
+
+    var literalLengths: Int => memory.address + 8192
+
+    var offsets: Int => memory.address + 8192 + 4096
+
+    var matchLengths: Int => memory.address + 8192 + 6144
+
+    var work: Int => memory.address + 8192 + 10240
+
+    fn table(_ code: ZstdCode) -> Int {
+        return code == .LiteralLength ? literalLengths : (code == .Offset ? offsets : matchLengths)
+    }
+
+    fn setLog(_ code: ZstdCode, _ log: Int) {
+        match code {
+            case .LiteralLength => { logs.0 = log }
+            case .Offset        => { logs.1 = log }
+            case .MatchLength   => { logs.2 = log }
+        }
+    }
+
+    fn log(_ code: ZstdCode) -> Int {
+        return code == .LiteralLength ? logs.0 : (code == .Offset ? logs.1 : logs.2)
+    }
+
+    /// Nothing known, as a frame begins; or what a dictionary says.
+    fn reset(_ dictionary: ZstdDictionary?) {
+        hasHuffman = false
+        logs = (-1, -1, -1)
+        offset1 = 1
+        offset2 = 4
+        offset3 = 8
+        if let known = dictionary, let tables = known.tables {
+            unsafe {
+                copyBytes(from: tables.address, to: memory.address, 8192 + 10240)
+            }
+            hasHuffman = true
+            huffmanLog = known.huffmanLog
+            logs = known.logs
+            offset1 = known.offsets.0
+            offset2 = known.offsets.1
+            offset3 = known.offsets.2
+        }
+    }
+
+    /// A code's table read from a block or a dictionary: how many bytes it
+    /// takes, or 0 where it is none.
+    unsafe fn readTable(_ code: ZstdCode, _ source: Int, count: Int) -> Int {
+        let counts = work + 1024
+        let read = readDistribution(source, count: count, counts: counts, symbolCount: code.symbolCount, maxLog: code.maxLog)
+        if read.length == 0 {
+            return 0
+        }
+        buildSequenceTable(table(code), code, counts: counts, symbols: read.symbols, log: read.log, work: work)
+        setLog(code, read.log)
+        lastSymbols = read.symbols
+        return read.length
+    }
+
+    /// A code's table that has one symbol only.
+    unsafe fn setSymbol(_ code: ZstdCode, _ symbol: Int) {
+        store64((code.base(symbol) unchecked as U64) | (code.bits(symbol) unchecked as U64) << 56, table(code))
+        setLog(code, 0)
+    }
+
+    unsafe fn setDefault(_ code: ZstdCode) {
+        let at = code == .LiteralLength ? 0 : (code == .Offset ? 64 : 96)
+        copyBytes(from: zstdDefaultTables + 8 * at, to: table(code), 8 << code.defaultLog)
+        setLog(code, code.defaultLog)
+    }
+
+    /// The Huffman table read from a block or a dictionary: how many bytes it
+    /// takes, or 0 where it is none.
+    unsafe fn readHuffman(_ source: Int, count: Int) -> Int {
+        if count < 1 {
+            return 0
+        }
+        let weights = work
+        let first = load8(source)
+        var symbols = 0
+        var length = 0
+        if first >= 128 {
+            symbols = first &- 127
+            length = 1 &+ (symbols &+ 1) / 2
+            if length > count {
+                return 0
+            }
+            var i = 0
+            while i < symbols {
+                let pair = load8(source &+ 1 &+ i / 2)
+                store8(pair >> 4, weights &+ i)
+                store8(pair & 15, weights &+ i &+ 1)
+                i = i &+ 2
+            }
+        } else {
+            length = 1 &+ first
+            if length > count {
+                return 0
+            }
+            symbols = self.readWeights(source &+ 1, count: first, weights: weights)
+            if symbols == 0 {
+                return 0
+            }
+        }
+        return self.buildHuffman(weights, symbols) ? length : 0
+    }
+
+    /// Weights compressed by a table of their own: how many, or 0.
+    unsafe fn readWeights(_ source: Int, count: Int, weights: Int) -> Int {
+        let counts = work &+ 1024
+        let read = readDistribution(source, count: count, counts: counts, symbolCount: 256, maxLog: 6)
+        if read.length == 0 || read.length >= count {
+            return 0
+        }
+        let spread = work &+ 2048
+        let next = work &+ 2112
+        spreadSymbols(spread, counts: counts, symbols: read.symbols, log: read.log, next: next)
+        // An entry for each state: its symbol, its bits, the next state's base.
+        let table = work &+ 2624
+        let size = 1 << read.log
+        var state = 0
+        while state < size {
+            let symbol = load8(spread &+ state)
+            let from = load16(next &+ 2 &* symbol)
+            store16(from &+ 1, next &+ 2 &* symbol)
+            let bits = read.log &- (63 &- from.leadingZeroCount)
+            store32((symbol | bits << 8 | ((from << bits) &- size) << 16) unchecked as U32, table &+ 4 &* state)
+            state = state &+ 1
+        }
+        // Two states, taking turns, each from bits read from the end back.
+        let stream = source &+ read.length
+        let last = load8(stream &+ count &- read.length &- 1)
+        if last == 0 {
+            return 0
+        }
+        var at = 8 &* (count &- read.length &- 1) &+ (63 &- last.leadingZeroCount)
+        at = at &- read.log
+        var first = readBitsBack(stream, at, read.log)
+        at = at &- read.log
+        var second = readBitsBack(stream, at, read.log)
+        if at < 0 {
+            return 0
+        }
+        var made = 0
+        while made < 254 {
+            let entry = load32(table &+ 4 &* first) unchecked as Int
+            store8(entry & 255, weights &+ made)
+            made = made &+ 1
+            let bits = entry >> 8 & 255
+            at = at &- bits
+            first = (entry >> 16) &+ readBitsBack(stream, at, bits)
+            if at < 0 {
+                // The other's last symbol, and the end.
+                store8(load8(table &+ 4 &* second), weights &+ made)
+                return made &+ 1
+            }
+            let other = first
+            first = second
+            second = other
+        }
+        return 0
+    }
+
+    /// The table of symbols' weights, the last of which is whatever is left:
+    /// false where they are no code's.
+    unsafe fn buildHuffman(_ weights: Int, _ given: Int) -> Bool {
+        let ranks = work &+ 3072
+        fillBytes(ranks, with: 0, 64)
+        var total = 0
+        var i = 0
+        while i < given {
+            let weight = load8(weights &+ i)
+            if weight > 12 {
+                return false
+            }
+            if weight > 0 {
+                total = total &+ (1 << (weight &- 1))
+            }
+            i = i &+ 1
+        }
+        if total == 0 {
+            return false
+        }
+        let log = 64 &- total.leadingZeroCount
+        let left = (1 << log) &- total
+        if log > 12 || (left & (left &- 1)) != 0 {
+            return false
+        }
+        store8(64 &- left.leadingZeroCount, weights &+ given)
+        let symbols = given &+ 1
+        i = 0
+        while i < symbols {
+            let at = ranks &+ 4 &* load8(weights &+ i)
+            store32(load32(at) &+ 1, at)
+            i = i &+ 1
+        }
+        // At least two symbols have the least weight, and evenly many.
+        let least = load32(ranks &+ 4)
+        if least < 2 || (least & 1) != 0 {
+            return false
+        }
+        // Where each weight's entries start, in a table of eleven bits or twelve.
+        let width = log > 11 ? 12 : 11
+        huffmanLog = width
+        var start = 0
+        var weight = 1
+        while weight <= 12 {
+            let size = (load32(ranks &+ 4 &* weight) unchecked as Int) << (weight &- 1 &+ width &- log)
+            store32(start unchecked as U32, ranks &+ 4 &* weight)
+            start = start &+ size
+            weight = weight &+ 1
+        }
+        let table = huffman
+        i = 0
+        while i < symbols {
+            weight = load8(weights &+ i)
+            if weight > 0 {
+                let bits = log &+ 1 &- weight
+                let entry = (bits | i << 8) unchecked as U64 &* 0x0001_0001_0001_0001
+                let at = ranks &+ 4 &* weight
+                var slot = load32(at) unchecked as Int
+                let size = 1 << (weight &- 1 &+ width &- log)
+                store32((slot &+ size) unchecked as U32, at)
+                let end = slot &+ size
+                if size >= 4 {
+                    while slot < end {
+                        store64(entry, table &+ 2 &* slot)
+                        slot = slot &+ 4
+                    }
+                } else {
+                    while slot < end {
+                        store16(entry unchecked as Int, table &+ 2 &* slot)
+                        slot = slot &+ 1
+                    }
+                }
+            }
+            i = i &+ 1
+        }
+        hasHuffman = true
+        return true
+    }
+}
+
+/// So many bits, up to twelve, of a stream read from its end back, those
+/// before its start zero.
+@inline(always)
+unsafe fn readBitsBack(_ stream: Int, _ position: Int, _ count: Int) -> Int {
+    if position >= 0 {
+        return ((load32(stream &+ (position >> 3)) >> ((position & 7) unchecked as U32)) unchecked as Int) & ((1 << count) &- 1)
+    }
+    if position &+ count <= 0 {
+        return 0
+    }
+    return (load16(stream) & ((1 << (position &+ count)) &- 1)) << (0 &- position)
+}

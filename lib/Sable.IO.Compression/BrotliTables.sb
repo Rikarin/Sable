@@ -1,0 +1,284 @@
+module Sable.IO.Compression
+
+import Sable.Text
+
+/// The static dictionary, the transforms and the context tables (RFC 7932),
+/// unpacked when they are first asked for: 122784 bytes, 648, and three of 256.
+static let brotliTables: LazyTable = LazyTable { () -> Int in
+    var digits: U8[>..] = []
+    for byte in brotliData.utf8 {
+        if byte > 0x20 {
+            digits.append(byte)
+        }
+    }
+    let bytes = try! Deflate.decompress(try! Base64.decode(bytes: digits))
+    unsafe {
+        let table = NativeMemory.allocate(byteCount: bytes.count).address
+        NativeMemory.copy(from: bytes, to: RawPtr<U8>(address: table))
+        return table
+    }
+}
+
+/// Where the parts after the dictionary are.
+const brotliTransformStart: Int = 122784
+const brotliContextStart: Int = 123432
+
+/// How many bits a word's index has of each length, and where that length's
+/// words start, two words for each of the lengths 0 to 24.
+static let brotliWords: Int = {
+        () -> Int in
+        let bits: U32[>..] = [0, 0, 0, 0, 10, 10, 11, 11, 10, 10, 10, 10, 10, 9, 9, 8, 7, 7, 8, 7, 7, 6, 6, 5, 5]
+        var table: U32[>..] = []
+        var at: U32 = 0
+        var length = 0
+        while length < 25 {
+            table.append(bits[length])
+            table.append(at)
+            if length >= 4 {
+                at += U32(length) << bits[length]
+            }
+            length += 1
+        }
+        return constantTable(table)
+    }()
+
+/// Each transform's prefix, as where it is among the transforms' bytes, how it
+/// changes the word, and where its suffix is, at bits 0, 16 and 8: a word each.
+static let brotliTransforms: LazyTable = LazyTable { () -> Int in
+    unsafe {
+        var table: U32[>..] = []
+        var at = 0
+        while table.count < 121 {
+            let before = at
+            while load8(brotliTables.get() + brotliTransformStart + at) != 0 {
+                at += 1
+            }
+            let kind = load8(brotliTables.get() + brotliTransformStart + at + 1)
+            at += 2
+            let suffix = at
+            while load8(brotliTables.get() + brotliTransformStart + at) != 0 {
+                at += 1
+            }
+            at += 1
+            table.append(U32(before | kind << 11 | suffix << 16))
+        }
+        return constantTable(table)
+    }
+}
+
+/// What each of the 704 insert-and-copy codes is: the least insert length in
+/// 16 bits, its extra bits in 8 from bit 16, the copy's extra bits in 7 from
+/// bit 24; whether the last distance is the distance, in bit 31; and in the
+/// next word the least copy length.
+static let brotliCommands: Int = {
+        () -> Int in
+        let inserts: U32[>..] = [0, 1, 2, 3, 4, 5, 6, 8, 10, 14, 18, 26, 34, 50, 66, 98, 130, 194, 322, 578, 1090, 2114, 6210, 22594]
+        let insertBits: U32[>..] = [0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10, 12, 14, 24]
+        let copies: U32[>..] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 18, 22, 30, 38, 54, 70, 102, 134, 198, 326, 582, 1094, 2118]
+        let copyBits: U32[>..] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10, 24]
+        // Of each 64 codes, where the insert lengths' and the copies' eight begin.
+        let cells: (Int, Int)[>..] = [(0, 0), (0, 8), (0, 0), (0, 8), (8, 0), (8, 8), (0, 16), (16, 0), (8, 16), (16, 8), (16, 16)]
+        var table: U32[>..] = []
+        var code = 0
+        while code < 704 {
+            let insert = cells[code / 64].0 + (code >> 3 & 7)
+            let copy = cells[code / 64].1 + (code & 7)
+            table.append(inserts[insert] | insertBits[insert] << 16 | copyBits[copy] << 24 | (code < 128 ? 0x8000_0000 : 0))
+            table.append(copies[copy])
+            code += 1
+        }
+        return constantTable(table)
+    }()
+
+/// Block counts' bases, and their extra bits.
+static let brotliBlockBases: U32[>..] = [
+    1, 5, 9, 13, 17, 25, 33, 41, 49, 65, 81, 97, 113, 145, 177, 209, 241, 305, 369, 497, 753, 1265, 2289, 4337, 8433, 16625,
+]
+
+static let brotliBlockBits: U32[>..] = [2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 8, 9, 10, 11, 12, 13, 24]
+
+/// The order a prefix code's code lengths' own lengths are in.
+static let brotliLengthOrder: U32[>..] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+/// How many entries a code's table may have, looked up by eight bits first: of
+/// 256 literals, 704 commands, 520 distances, 258 block types.
+const brotliLiteralEntries: Int = 664
+const brotliCommandEntries: Int = 1080
+const brotliDistanceEntries: Int = 920
+
+/// A word of the dictionary put through a transform, at an address, where
+/// there is room for 37 bytes: how long it is.
+unsafe fn writeBrotliWord(_ target: Int, length: Int, index: Int, transform: Int) -> Int {
+    let entry = load32(brotliTransforms.get() &+ 4 &* transform) unchecked as Int
+    let texts = brotliTables.get() &+ brotliTransformStart
+    var to = target
+    var from = texts &+ (entry & 0x7FF)
+    while load8(from) != 0 {
+        store8(load8(from), to)
+        from = from &+ 1
+        to = to &+ 1
+    }
+    let kind = entry >> 11 & 31
+    var word = brotliTables.get() &+ (load32(brotliWords &+ 8 &* length &+ 4) unchecked as Int) &+ index &* length
+    var count = length
+    if kind >= 12 {
+        // The last left out, then the first.
+        count = count &- (kind &- 11)
+    } else if kind >= 3 {
+        word = word &+ (kind &- 2)
+        count = count &- (kind &- 2)
+    }
+    count = count < 0 ? 0 : count
+    copyBytes(from: word, to: to, count)
+    if kind == 1 && count > 0 {
+        _ = fermentBrotli(to, count)
+    } else if kind == 2 {
+        var at = 0
+        while at < count {
+            at = at &+ fermentBrotli(to &+ at, count &- at)
+        }
+    }
+    to = to &+ count
+    from = texts &+ (entry >> 16)
+    while load8(from) != 0 {
+        store8(load8(from), to)
+        from = from &+ 1
+        to = to &+ 1
+    }
+    return to &- target
+}
+
+/// The first character of so many bytes made a capital, about, as the format
+/// says: how many bytes it is thought to have.
+unsafe fn fermentBrotli(_ at: Int, _ count: Int) -> Int {
+    let first = load8(at)
+    if first < 192 {
+        if first >= 97 && first <= 122 {
+            store8(first ^ 32, at)
+        }
+        return 1
+    }
+    if first < 224 {
+        if count > 1 {
+            store8(load8(at &+ 1) ^ 32, at &+ 1)
+        }
+        return 2
+    }
+    if count > 2 {
+        store8(load8(at &+ 2) ^ 5, at &+ 2)
+    }
+    return 3
+}
+
+/// The table of a prefix code, looked up by eight bits first: an entry, a U32,
+/// has the symbol at bit 16 and its bits at 0; or, with 1 at bit 15, where the
+/// entries of longer codes that start so are, at bit 16, by how many bits more
+/// they are looked up, at 8. 'lengths' has the symbols' lengths, a byte each,
+/// of a code that is whole, or of one symbol, which takes no bits. False where
+/// there is not room for the table.
+unsafe fn buildBrotliTable(_ table: Int, lengths: Int, count: Int, room: Int, work: Int) -> Bool {
+    let counts = work
+    let offsets = work &+ 32
+    let sorted = work &+ 64
+    fillBytes(counts, with: 0, 32)
+    var i = 0
+    var used = 0
+    var only = 0
+    while i < count {
+        let length = load8(lengths &+ i)
+        if length > 0 {
+            let at = counts &+ 2 &* length
+            store16(load16(at) &+ 1, at)
+            used = used &+ 1
+            only = i
+        }
+        i = i &+ 1
+    }
+    if used == 1 {
+        i = 0
+        while i < 256 {
+            store32((only << 16) unchecked as U32, table &+ 4 &* i)
+            i = i &+ 1
+        }
+        return true
+    }
+    var longest = 15
+    while longest > 1 && load16(counts &+ 2 &* longest) == 0 {
+        longest = longest &- 1
+    }
+    var offset = 0
+    var length = 1
+    while length <= 15 {
+        store16(offset, offsets &+ 2 &* length)
+        offset = offset &+ load16(counts &+ 2 &* length)
+        length = length &+ 1
+    }
+    i = 0
+    while i < count {
+        let of = load8(lengths &+ i)
+        if of > 0 {
+            let at = load16(offsets &+ 2 &* of)
+            store16(i, sorted &+ 2 &* at)
+            store16(at &+ 1, offsets &+ 2 &* of)
+        }
+        i = i &+ 1
+    }
+    var code = 0
+    var next = 256
+    var subtable = -1
+    var subtableStart = 0
+    var subtableBits = 0
+    var at = 0
+    length = 1
+    while length <= longest {
+        var these = load16(counts &+ 2 &* length)
+        while these > 0 {
+            let symbol = load16(sorted &+ 2 &* at)
+            at = at &+ 1
+            if length <= 8 {
+                let whole = (symbol << 16 | length) unchecked as U32
+                let step = 1 << length
+                var slot = code
+                while slot < 256 {
+                    store32(whole, table &+ 4 &* slot)
+                    slot = slot &+ step
+                }
+            } else {
+                let low = code & 255
+                if low != subtable {
+                    subtable = low
+                    subtableBits = length &- 8
+                    var over = (1 << subtableBits) &- these
+                    var longer = length
+                    while over > 0 && longer < longest {
+                        longer = longer &+ 1
+                        subtableBits = subtableBits &+ 1
+                        over = over &* 2 &- load16(counts &+ 2 &* longer)
+                    }
+                    subtableStart = next
+                    next = next &+ (1 << subtableBits)
+                    if next > room {
+                        return false
+                    }
+                    store32((subtableStart << 16 | 0x8000 | subtableBits << 8) unchecked as U32, table &+ 4 &* low)
+                }
+                let whole = (symbol << 16 | (length &- 8)) unchecked as U32
+                let step = 1 << (length &- 8)
+                var slot = code >> 8
+                let end = 1 << subtableBits
+                while slot < end {
+                    store32(whole, table &+ 4 &* (subtableStart &+ slot))
+                    slot = slot &+ step
+                }
+            }
+            these = these &- 1
+            var bit = 1 << (length &- 1)
+            while (code & bit) != 0 {
+                bit = bit >> 1
+            }
+            code = bit == 0 ? 0 : (code & (bit &- 1)) | bit
+        }
+        length = length &+ 1
+    }
+    return true
+}

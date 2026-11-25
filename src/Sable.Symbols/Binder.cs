@@ -3676,7 +3676,7 @@ public sealed partial class Binder {
                 return new BoundTypeExpression(syntax, type);
 
             case AliasSymbol alias:
-                return new BoundTypeExpression(syntax, alias.AliasedType);
+                return new BoundTypeExpression(syntax, alias.AliasedType) { OpenAlias = alias.TypeParameters.IsEmpty ? null : alias };
 
             case UnionCaseSymbol unionCase: {
                 var union = (NamedTypeSymbol)unionCase.ContainingSymbol!;
@@ -5127,6 +5127,16 @@ public sealed partial class Binder {
                     return new BoundError(syntax, arguments.ToArray());
                 }
 
+                // 'Pairs(4, 5)' for 'alias Pairs<T> = Pair<T, T>': the alias's
+                // parameters are what the arguments say they must be.
+                if (typeExpression.OpenAlias is { } openAlias) {
+                    if (InferAlias(openAlias, namedType, initializers, arguments, labels, syntax, expectedType) is not NamedTypeSymbol inferred) {
+                        return new BoundError(syntax, arguments.ToArray());
+                    }
+
+                    namedType = inferred;
+                }
+
                 // A generic type's initialiser sees the type's parameters as the
                 // type was written — 'Box<String>(…)' — or as its arguments say
                 // they must be — 'Box("z")'.
@@ -5409,6 +5419,48 @@ public sealed partial class Binder {
         syntax is ImplicitMemberAccessExpressionSyntax implicitMember
             ? Record(implicitMember, BindImplicitMemberAccess(implicitMember, expectedType))
             : BindExpression(syntax);
+
+    /// <summary>
+    ///     What a generic alias named with no type arguments names where an
+    ///     initialiser of it is called: its parameters inferred from the
+    ///     type that is wanted, then from the arguments. Null, and reported,
+    ///     where they say nothing of one.
+    /// </summary>
+    TypeSymbol? InferAlias(
+        AliasSymbol alias,
+        NamedTypeSymbol aliased,
+        ImmutableArray<FunctionSymbol> initializers,
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<string?> labels,
+        SyntaxNode syntax,
+        TypeSymbol? expectedType
+    ) {
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        var outer = aliased.TypeArguments.IsEmpty ? TypeSubstitution.Empty : TypeSubstitution.For(aliased);
+        if (Expand(expectedType) is { } wanted) {
+            TypeSubstitution.Unify(aliased, wanted, alias.TypeParameters, map);
+        }
+
+        foreach (var initializer in initializers.Where(i => i.Parameters.Length >= arguments.Length)) {
+            var slots = Align(initializer, labels, arguments.Length);
+            for (var i = 0; i < arguments.Length; i++) {
+                if (slots[i] < initializer.Parameters.Length && arguments[i] is not BoundUnboundClosure) {
+                    TypeSubstitution.Unify(outer.Apply(initializer.Parameters[slots[i]].Type), arguments[i].Type, alias.TypeParameters, map);
+                }
+            }
+        }
+
+        if (alias.TypeParameters.FirstOrDefault(p => !map.ContainsKey(p)) is { } open) {
+            _diagnostics.Error(
+                ErrorCode.ERR_CannotInferTypeArgument,
+                syntax.Span,
+                $"cannot infer '{open.Name}' of '{alias.Name}' from these arguments"
+            );
+            return null;
+        }
+
+        return _compilation.TypeBinder.ApplyAlias(alias, [..alias.TypeParameters.Select(p => map[p])], _containingSymbol, syntax.Span);
+    }
 
     BoundExpression BindCallToGroup(
         SyntaxNode syntax,

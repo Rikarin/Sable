@@ -23,6 +23,10 @@ public union IoError: Error {
     /// The stream ended before as many bytes as were needed came.
     UnexpectedEof,
 
+    /// What was read is not in the format it should be in: compressed bytes
+    /// that are damaged.
+    InvalidData(what: String),
+
     /// An argument the system does not take: a seek before the start, or
     /// a handle already closed.
     InvalidInput(path: String),
@@ -80,6 +84,7 @@ public union IoError: Error {
             case .IsDirectory(let path)          => "'\(path)' is a directory"
             case .Interrupted                    => "the call was interrupted"
             case .UnexpectedEof                  => "the stream ended before what was needed"
+            case .InvalidData(let what)          => what
             case .InvalidInput(let path)         => "'\(path)' was given something the system does not take"
             case .DirectoryNotEmpty(let path)    => "'\(path)' is not empty"
             case .NotADirectory(let path)        => "'\(path)' is not a directory"

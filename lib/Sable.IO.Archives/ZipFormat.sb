@@ -1,0 +1,80 @@
+module Sable.IO.Archives
+
+import Sable.Time
+import Sable.Text
+
+// What zip's records say (PKWARE's APPNOTE), and how.
+
+struct ZipFormat {
+    static var local: U32 => 0x0403_4B50
+
+    static var central: U32 => 0x0201_4B50
+
+    static var end: U32 => 0x0605_4B50
+
+    static var end64: U32 => 0x0606_4B50
+
+    static var locator: U32 => 0x0706_4B50
+
+    static var descriptor: U32 => 0x0807_4B50
+
+    /// A date and a time as MS-DOS has them, in two words, the date above: to
+    /// two seconds, from 1980 to 2107.
+    static fn dosTime(_ time: UtcDateTime) -> U32 {
+        if time.year < 1980 {
+            return 0x0021_0000
+        }
+        if time.year > 2107 {
+            return 0xFF9F_BF7D
+        }
+        let date = (time.year - 1980) << 9 | time.month << 5 | time.day
+        return U32(date << 16 | time.hour << 11 | time.minute << 5 | time.second / 2)
+    }
+
+    static fn time(dos: U32) -> UtcDateTime {
+        let date = Int(dos >> 16)
+        let clock = Int(dos & 0xFFFF)
+        let time = UtcDateTime.of(
+            year: 1980 + (date >> 9),
+            month: date >> 5 & 15,
+            day: date & 31,
+            hour: clock >> 11,
+            minute: clock >> 5 & 63,
+            second: (clock & 31) * 2,
+        )
+        return time ?? UtcDateTime.of(year: 1980, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+    }
+
+    /// Text that is UTF-8, or said to be; or else as the IBM PC had it, code
+    /// page 437.
+    static fn text(_ bytes: U8[>..], isUtf8: Bool) -> String {
+        var isAscii = true
+        for byte in bytes {
+            isAscii = isAscii && byte < 0x80
+        }
+        if isUtf8 || isAscii {
+            return String.fromUtf8Lossy(bytes)
+        }
+        let builder = TextBuilder()
+        for byte in bytes {
+            if byte < 0x80 {
+                builder.append(String.fromUtf8Lossy([byte]))
+            } else {
+                builder.append(zipCodePage[Int(byte) - 0x80])
+            }
+        }
+        return builder.build()
+    }
+}
+
+/// The upper half of code page 437.
+static let zipCodePage: String[>..] = [
+    "Ç", "ü", "é", "â", "ä", "à", "å", "ç", "ê", "ë", "è", "ï", "î", "ì", "Ä", "Å",
+    "É", "æ", "Æ", "ô", "ö", "ò", "û", "ù", "ÿ", "Ö", "Ü", "¢", "£", "¥", "₧", "ƒ",
+    "á", "í", "ó", "ú", "ñ", "Ñ", "ª", "º", "¿", "⌐", "¬", "½", "¼", "¡", "«", "»",
+    "░", "▒", "▓", "│", "┤", "╡", "╢", "╖", "╕", "╣", "║", "╗", "╝", "╜", "╛", "┐",
+    "└", "┴", "┬", "├", "─", "┼", "╞", "╟", "╚", "╔", "╩", "╦", "╠", "═", "╬", "╧",
+    "╨", "╤", "╥", "╙", "╘", "╒", "╓", "╫", "╪", "┘", "┌", "█", "▄", "▌", "▐", "▀",
+    "α", "ß", "Γ", "π", "Σ", "σ", "µ", "τ", "Φ", "Θ", "Ω", "δ", "∞", "φ", "ε", "∩",
+    "≡", "±", "≥", "≤", "⌠", "⌡", "÷", "≈", "°", "∙", "·", "√", "ⁿ", "²", "■", "\u{A0}",
+]

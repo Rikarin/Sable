@@ -1,0 +1,34 @@
+module Sable.IO.Archives
+
+import Sable.Time
+
+/// How an entry is put in a zip archive.
+///
+/// ```sable
+/// var options = ZipOptions()
+/// options.method = .Zstd
+/// options.level = 9
+/// assert(options.mode == 0o644)
+/// ```
+public struct ZipOptions: Sendable {
+    /// How it is compressed; bytes that would not be less are stored.
+    public var method: ZipMethod = .Deflate
+
+    /// The level it is compressed at: the method's usual one, unless told.
+    public var level: Int? = none
+
+    /// When it was last changed: now, unless told.
+    public var modified: UtcDateTime? = none
+
+    /// Its permissions, as Unix has them.
+    public var mode: Int = 0o644
+
+    /// What is said of it.
+    public var comment: String = ""
+
+    /// Whether it may be 4 GiB or more, where how long it is is not known when
+    /// it is begun.
+    public var isLarge: Bool = false
+
+    public init() { }
+}

@@ -1,0 +1,64 @@
+module Sable.IO.Compression
+
+/// Raw deflate (RFC 1951), all at once. It has no checksum: zlib's format and
+/// gzip's do.
+///
+/// ```sable
+/// let packed = Deflate.compress("so so so so so so".utf8Bytes(), level: 9)
+/// assert(packed.count < 17)
+/// assert(try! Deflate.decompress(packed) == "so so so so so so".utf8Bytes())
+/// ```
+public struct Deflate {
+    /// The bytes compressed, at a level from 0, nothing, to 9, the smallest.
+    public static fn compress(_ source: U8[:], level: Int = 6) -> U8[>..] {
+        var output = ByteBuffer()
+        compress(source, into: &output, level: level)
+        return output.takeBytes()
+    }
+
+    /// The bytes compressed at the buffer's end: to how many.
+    @discardable
+    public static fn compress(_ source: U8[:], into output: inout ByteBuffer, level: Int = 6) -> Int {
+        return deflateWhole(source, into: &output, .Raw, level)
+    }
+
+    /// The bytes decompressed. They must be one stream and no more:
+    /// `.Truncated` where it does not end.
+    public static fn decompress(_ source: U8[:], limits: DecompressionLimits = DecompressionLimits()) throws(CompressionError) -> U8[>..] {
+        var output = ByteBuffer()
+        try decompress(source, into: &output, limits: limits)
+        return output.takeBytes()
+    }
+
+    /// The bytes decompressed at the buffer's end: to how many.
+    @discardable
+    public static fn decompress(_ source: U8[:], into output: inout ByteBuffer, limits: DecompressionLimits = DecompressionLimits()) throws(CompressionError) -> Int {
+        var decoder = DeflateDecoder(limits: limits)
+        return try decompressWhole(&decoder, source, into: &output)
+    }
+
+    /// The most bytes so many can be compressed to, at any level.
+    public static fn maxCompressedLength(_ count: Int) -> Int {
+        return count + (count / 4096 + 1) * 6 + 16
+    }
+}
+
+fn deflateWhole(_ source: U8[:], into output: inout ByteBuffer, _ format: DeflateFormat, _ level: Int) -> Int {
+    let before = output.count
+    let encoder = DeflateStreamEncoder(format: format, level: level, expecting: source.count)
+    encoder.compress(source, into: &output)
+    encoder.finish(into: &output)
+    return output.count - before
+}
+
+/// Bytes decompressed that must be a whole stream and no more.
+fn decompressWhole<Decoder: Decompressor>(_ decoder: inout Decoder, _ source: U8[:], into output: inout ByteBuffer) throws(CompressionError) -> Int {
+    let step = try decoder.decompress(source, into: &output, limit: Int.max)
+    if step.status != .Finished {
+        throw .Truncated
+    }
+    if step.consumed != source.count {
+        throw .Corrupt("bytes follow the end of the stream")
+    }
+    return step.produced
+}

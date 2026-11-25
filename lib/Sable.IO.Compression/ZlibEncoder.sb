@@ -1,0 +1,38 @@
+module Sable.IO.Compression
+
+/// Bytes compressed to zlib's format (RFC 1950), deflate and an Adler-32, as
+/// they come.
+///
+/// ```sable
+/// let encoder = ZlibEncoder()
+/// var packed = ByteBuffer()
+/// encoder.compress([1, 2, 3], into: &packed)
+/// encoder.finish(into: &packed)
+/// assert(try! Zlib.decompress(packed.bytes) == [1, 2, 3])
+/// ```
+public final class ZlibEncoder: Compressor {
+    let stream: DeflateStreamEncoder
+
+    /// At level 6.
+    public init() {
+        stream = DeflateStreamEncoder(format: .Zlib, level: 6)
+    }
+
+    /// At a level from 0, nothing compressed, to 9, the smallest; with a
+    /// dictionary that the decoder is given too, if with one.
+    public init(level: Int, dictionary: U8[>..] = []) {
+        stream = DeflateStreamEncoder(format: .Zlib, level: level, dictionary: dictionary)
+    }
+
+    public fn compress(_ source: U8[:], into output: inout ByteBuffer) {
+        stream.compress(source, into: &output)
+    }
+
+    public fn flush(into output: inout ByteBuffer) {
+        stream.flush(into: &output)
+    }
+
+    public fn finish(into output: inout ByteBuffer) {
+        stream.finish(into: &output)
+    }
+}

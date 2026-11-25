@@ -1,0 +1,50 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// What a zip archive is read from, at any offset: a file, or memory.
+final class ZipSource {
+    let file: FileHandle?
+    let bytes: U8[>..]
+    let size: Int
+
+    init(_ file: FileHandle) throws(IoError) {
+        self.file = file
+        bytes = []
+        size = try file.metadata().size
+    }
+
+    init(_ bytes: U8[>..]) {
+        file = none
+        self.bytes = bytes
+        size = bytes.count
+    }
+
+    /// Up to so many bytes from an offset on: none past the end.
+    fn read(at offset: Int, upTo count: Int) throws(IoError) -> U8[>..] {
+        if offset >= size || count <= 0 {
+            return []
+        }
+        let most = count < size - offset ? count : size - offset
+        if let handle = file {
+            return try handle.read(at: offset, upTo: most)
+        }
+        return bytes[offset..<offset + most].toArray()
+    }
+
+    /// Exactly so many bytes.
+    fn readExactly(at offset: Int, _ count: Int) throws(IoError) -> U8[>..] {
+        if offset < 0 || count < 0 || offset > size - count {
+            throw .InvalidData(what: "the archive ends before what it says it has")
+        }
+        var all: U8[>..] = []
+        while all.count < count {
+            let more = try self.read(at: offset + all.count, upTo: count - all.count)
+            if more.isEmpty {
+                throw .UnexpectedEof
+            }
+            all.append(contentsOf: more)
+        }
+        return all
+    }
+}

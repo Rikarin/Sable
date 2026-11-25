@@ -1,0 +1,22 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// What is changed in a zip archive: entries put in, in place of those of
+/// their names, and others taken out. `Zip.update` does it.
+public struct ZipChanges {
+    var removed: [String: Bool] = [:]
+    var added: (String, U8[>..], ZipOptions)[>..] = []
+
+    /// No entry of the name.
+    public mutating fn remove(_ name: String) {
+        removed[name] = true
+        added = added.filter { $0.0 != name }
+    }
+
+    /// An entry of the bytes, and no other of its name.
+    public mutating fn set(_ name: String, _ bytes: U8[>..], options: ZipOptions = ZipOptions()) {
+        self.remove(name)
+        added.append((name, bytes, options))
+    }
+}

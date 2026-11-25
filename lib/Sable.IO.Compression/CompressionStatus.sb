@@ -1,0 +1,14 @@
+module Sable.IO.Compression
+
+/// Why a decoder stopped where it did: .NET's `OperationStatus`.
+@derive(Equatable, Hashable, Debug)
+public enum CompressionStatus {
+    /// Every byte given is taken, and the stream goes on.
+    NeedsInput
+
+    /// As much as was allowed is written, and there is more, or may be.
+    NeedsOutput
+
+    /// The stream is at its end.
+    Finished
+}

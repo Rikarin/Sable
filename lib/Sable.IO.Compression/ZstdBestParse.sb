@@ -1,0 +1,465 @@
+module Sable.IO.Compression
+
+/// The parse of a zstd block of least bits, for what its symbols are thought to
+/// take: every match of every place, found in a tree of the places with the
+/// same few bytes; and from the block's start, the least way to each place.
+final class ZstdBestParse {
+    /// The least way to each place, in eight words: its price, in 256ths of a
+    /// bit, with the literals before it; the length of the match it is by, or
+    /// 0 for a literal; its offset; how many literals there are since the last
+    /// match; and the last three offsets.
+    let nodes: Block
+    /// Where each place's matches end, and the matches: a length at bit 32,
+    /// and an offset.
+    let places: Block
+    let matches: Block
+    var found: Int
+    /// Where this place's begin.
+    var placeFirst: Int
+    /// What a literal costs; then a literal length's code, a match length's,
+    /// an offset's; a word each. Then how many there were of each.
+    let prices: Block
+    var isPriced: Bool
+
+    /// How many matches are kept of a place.
+    static var mostMatches: Int => 12
+
+    init() {
+        nodes = Block(count: 32 * (ZstdBlocks.maxBlock + 2))
+        places = Block(count: 4 * (ZstdBlocks.maxBlock + 2))
+        matches = Block(count: 8 * ZstdBestParse.mostMatches * (ZstdBlocks.maxBlock + 1))
+        prices = Block(count: 2 * 4 * (256 + 64 + 64 + 64), zeroed: true)
+        found = 0
+        placeFirst = 0
+        isPriced = false
+    }
+
+    var literalPrices: Int => prices.address
+
+    var lengthPrices: Int => prices.address + 1024
+
+    var matchPrices: Int => prices.address + 1280
+
+    var offsetPrices: Int => prices.address + 1536
+
+    /// From a price to its count.
+    static var toCounts: Int => 1792
+
+    /// What the counts make each symbol cost.
+    unsafe fn price() {
+        let groups: (Int, Int)[>..] = [(0, 256), (256, 36), (320, 53), (384, 32)]
+        for (from, size) in groups {
+            let at = prices.address + 4 * from
+            var total = 0
+            var i = 0
+            while i < size {
+                total += (load32(at + ZstdBestParse.toCounts + 4 * i) unchecked as Int) + 1
+                i += 1
+            }
+            let whole = logWeight(total)
+            i = 0
+            while i < size {
+                let count = load32(at + ZstdBestParse.toCounts + 4 * i) unchecked as Int
+                store32((whole &- logWeight(count &+ 1)) unchecked as U32, at + 4 * i)
+                i += 1
+            }
+        }
+    }
+
+    /// What a first block's symbols may be: its literals, the codes short.
+    unsafe fn guess(_ start: Int, _ end: Int) {
+        let counts = prices.address + ZstdBestParse.toCounts
+        fillBytes(counts, with: 0, 1792)
+        var at = start
+        while at < end {
+            let slot = counts &+ 4 &* load8(at)
+            store32(load32(slot) &+ 1, slot)
+            at = at &+ 1
+        }
+        var i = 0
+        while i < 256 {
+            store32(load32(counts &+ 4 &* i) >> 4, counts &+ 4 &* i)
+            i = i &+ 1
+        }
+        let lengths = counts + 1024
+        let matchLengths = counts + 1280
+        let offsets = counts + 1536
+        i = 0
+        while i < 36 {
+            store32((i < 2 ? 4 : (i < 16 ? 2 : 1)) unchecked as U32, lengths + 4 * i)
+            i += 1
+        }
+        i = 0
+        while i < 53 {
+            store32((i < 20 ? 3 : 1) unchecked as U32, matchLengths + 4 * i)
+            i += 1
+        }
+        i = 0
+        while i < 32 {
+            store32((i < 18 ? 4 : 1) unchecked as U32, offsets + 4 * i)
+            i += 1
+        }
+    }
+
+    @inline(always)
+    unsafe fn add(_ length: Int, _ offset: Int) {
+        // The longest is kept in place of the one before it.
+        if found &- placeFirst == ZstdBestParse.mostMatches {
+            found = found &- 1
+        }
+        store64((length << 32 | offset) unchecked as U64, matches.address &+ 8 &* found)
+        found = found &+ 1
+    }
+
+    /// The place put in the tree: the matches longer than 'shortest' added, if
+    /// they are asked for. How far on from it the next place should be, which
+    /// in a long run is past it.
+    unsafe fn insert(_ at: Int, _ end: Int, low: Int, base: Int, shortest: Int, adding: Bool, parser: ZstdParser) -> Int {
+        let level = parser.level
+        let tree = parser.chains.address
+        let mask = (1 << (level.chainLog &- 1)) &- 1
+        let place = (at &- base) unchecked as U32
+        let width = level.minMatch < 4 ? 4 : level.minMatch
+        let head = parser.hashes.address &+ 4 &* hashOf(load64(at), width, level.hashLog)
+        var next = load32(head)
+        store32(place, head)
+        let reach = at &- low < level.reach ? at &- low : level.reach
+        var best = shortest
+        if level.minMatch == 3 {
+            let head3 = parser.hashes3.address &+ 4 &* hashOf(load64(at), 3, 16)
+            let distance = (place &- load32(head3)) unchecked as Int
+            store32(place, head3)
+            if adding && distance <= reach && distance < 1 << 18 && ((load32(at) ^ load32(at &- distance)) << 8) == 0 {
+                let length = matchEnd(at &- distance, at, end) &- at
+                if length > best {
+                    best = length
+                    self.add(length, distance)
+                }
+            }
+        }
+        // Where the next place that is less, and more, than this is put.
+        var smaller = tree &+ 8 &* ((at &- base) & mask)
+        var larger = smaller &+ 4
+        var commonSmaller = 0
+        var commonLarger = 0
+        var farthest = 9
+        var left = 1 << level.searchLog
+        while left > 0 {
+            let distance = (place &- next) unchecked as Int
+            if distance > reach || distance == 0 || distance > mask {
+                break
+            }
+            let candidate = at &- distance
+            let children = tree &+ 8 &* ((next unchecked as Int) & mask)
+            var length = commonSmaller < commonLarger ? commonSmaller : commonLarger
+            length = matchEnd(candidate &+ length, at &+ length, end) &- at
+            if length > best {
+                best = length
+                if length &- distance > farthest {
+                    farthest = length &- distance
+                }
+                if adding {
+                    self.add(length, distance)
+                }
+            }
+            if at &+ length == end || length > 8192 {
+                // Equal as far as is known: dropped, so that the tree stays
+                // ordered.
+                break
+            }
+            if load8(candidate &+ length) < load8(at &+ length) {
+                store32(next, smaller)
+                commonSmaller = length
+                smaller = children &+ 4
+                next = load32(smaller)
+            } else {
+                store32(next, larger)
+                commonLarger = length
+                larger = children
+                next = load32(larger)
+            }
+            left = left &- 1
+        }
+        store32(0, smaller)
+        store32(0, larger)
+        return farthest &- 8
+    }
+
+    /// The places of a dictionary.
+    unsafe fn insert(from start: Int, to last: Int, low: Int, base: Int, end: Int, parser: ZstdParser) {
+        var at = start
+        while at <= last {
+            at = at &+ self.insert(at, end, low: low, base: base, shortest: 7, adding: false, parser: parser)
+        }
+        parser.inserted = at &- base
+    }
+
+    unsafe fn parse(_ start: Int, _ end: Int, low: Int, base: Int, parser: ZstdParser, into sequences: inout ZstdSequences) {
+        let level = parser.level
+        let count = end &- start
+        let least = level.minMatch < 4 ? 3 : 4
+        // Places left out by the last block, near its end.
+        found = 0
+        var at = base &+ parser.inserted
+        if at < start {
+            let last = start &- 1
+            while at <= last && at &+ 8 <= end {
+                at = at &+ self.insert(at, end, low: low, base: base, shortest: 7, adding: false, parser: parser)
+            }
+        }
+        // The matches of every place.
+        store32(0, places.address)
+        var i = 0
+        var skipTo = at
+        while i < count {
+            at = start &+ i
+            if at &+ 8 <= end && at >= skipTo {
+                placeFirst = found
+                skipTo = at &+ self.insert(at, end, low: low, base: base, shortest: least &- 1, adding: true, parser: parser)
+                // A long run is not looked into.
+                if found > placeFirst {
+                    let length = (load64(matches.address &+ 8 &* (found &- 1)) >> 32) unchecked as Int
+                    if length >= 1024 && at &+ length &- 64 > skipTo {
+                        skipTo = at &+ length &- 64
+                    }
+                }
+            }
+            i = i &+ 1
+            store32(found unchecked as U32, places.address &+ 4 &* i)
+        }
+        parser.inserted = skipTo &- base
+
+        var passes = level.searchLog >= 6 ? 2 : 1
+        if !isPriced {
+            self.guess(start, end)
+            self.price()
+            isPriced = true
+            passes = 2
+        }
+        while true {
+            self.findLeast(start, count, low: low, least: least, level: level, sequences)
+            passes = passes &- 1
+            self.count(start, count)
+            self.price()
+            if passes == 0 {
+                break
+            }
+        }
+        self.take(start, count, into: &sequences)
+    }
+
+    @inline(always)
+    unsafe fn relax(_ node: Int, _ price: U32, _ length: Int, _ offset: Int, _ one: U32, _ two: U32, _ three: U32) {
+        if price < load32(node) {
+            store32(price, node)
+            store32(length unchecked as U32, node &+ 4)
+            store32(offset unchecked as U32, node &+ 8)
+            store32(0, node &+ 12)
+            store32(one, node &+ 16)
+            store32(two, node &+ 20)
+            store32(three, node &+ 24)
+        }
+    }
+
+    @inline(always)
+    unsafe static fn lengthCode(_ count: Int) -> Int {
+        return count < 64 ? load8(zstdLengthCodes &+ count) : 82 &- count.leadingZeroCount
+    }
+
+    @inline(always)
+    unsafe static fn matchCode(_ length: Int) -> Int {
+        return length < 131 ? load8(zstdLengthCodes &+ 61 &+ length) : 99 &- (length &- 3).leadingZeroCount
+    }
+
+    @inline(always)
+    unsafe fn lengthPrice(_ count: Int) -> U32 {
+        let code = ZstdBestParse.lengthCode(count)
+        return load32(lengthPrices &+ 4 &* code) &+ (load32(zstdBases &+ 4 &* (89 &+ code)) << 8)
+    }
+
+    @inline(always)
+    unsafe fn matchPrice(_ length: Int) -> U32 {
+        let code = ZstdBestParse.matchCode(length)
+        return load32(matchPrices &+ 4 &* code) &+ (load32(zstdBases &+ 4 &* (125 &+ code)) << 8)
+    }
+
+    @inline(always)
+    unsafe fn offsetPrice(_ written: Int) -> U32 {
+        let code = 63 &- written.leadingZeroCount
+        return load32(offsetPrices &+ 4 &* code) &+ ((code unchecked as U32) << 8)
+    }
+
+    /// The least way to each place.
+    unsafe fn findLeast(_ start: Int, _ count: Int, low: Int, least: Int, level: ZstdLevel, _ sequences: ZstdSequences) {
+        let nodes = self.nodes.address
+        let end = start &+ count
+        var i = 1
+        while i <= count {
+            store32(0xFFFF_FFFF, nodes &+ 32 &* i)
+            i = i &+ 1
+        }
+        store32(0, nodes)
+        store32(0, nodes &+ 4)
+        store32(0, nodes &+ 8)
+        store32(0, nodes &+ 12)
+        store32(sequences.offset1 unchecked as U32, nodes &+ 16)
+        store32(sequences.offset2 unchecked as U32, nodes &+ 20)
+        store32(sequences.offset3 unchecked as U32, nodes &+ 24)
+        // What a word of 32 bits cannot hold: prices less the first's.
+        let nice = level.target
+        let nothing = self.lengthPrice(0)
+        i = 0
+        while i < count {
+            let at = start &+ i
+            let node = nodes &+ 32 &* i
+            let price = load32(node)
+            let literals = load32(node &+ 12) unchecked as Int
+            let one = load32(node &+ 16)
+            let two = load32(node &+ 20)
+            let three = load32(node &+ 24)
+            // A literal.
+            let after = node &+ 32
+            let literal = price &+ load32(literalPrices &+ 4 &* load8(at)) &+ self.lengthPrice(literals &+ 1) &- self.lengthPrice(literals)
+            if literal < load32(after) {
+                store32(literal, after)
+                store32(0, after &+ 4)
+                store32((literals &+ 1) unchecked as U32, after &+ 12)
+                store32(one, after &+ 16)
+                store32(two, after &+ 20)
+                store32(three, after &+ 24)
+            }
+            if at &+ 8 > end {
+                i = i &+ 1
+                continue
+            }
+            let word = load32(at)
+            let reach = at &- low
+            let before = price &+ nothing
+            var longest = least &- 1
+            // The last three offsets.
+            var which = 0
+            while which < 3 {
+                let offset = literals > 0 ? (which == 0 ? one : (which == 1 ? two : three)) : (which == 0 ? two : (which == 1 ? three : one &- 1))
+                let distance = offset unchecked as Int
+                if distance > 0 && distance <= reach && ((load32(at &- distance) ^ word) << (least == 3 ? 8 : 0)) == 0 {
+                    let length = matchEnd(at &- distance &+ least, at &+ least, end) &- at
+                    let cost = before &+ self.offsetPrice(which &+ 1)
+                    // The offsets after it.
+                    let isFirst = literals > 0 && which == 0
+                    let isSecond = literals > 0 ? which == 1 : which == 0
+                    let newTwo = isFirst ? two : one
+                    let newThree = isFirst || isSecond ? three : two
+                    // Every length of it, of a long one the first, and all.
+                    let most = length < nice ? length : nice
+                    var l = least
+                    while l <= most {
+                        relax(nodes &+ 32 &* (i &+ l), cost &+ self.matchPrice(l), l, distance, offset, newTwo, newThree)
+                        l = l &+ 1
+                    }
+                    if length > most {
+                        relax(nodes &+ 32 &* (i &+ length), cost &+ self.matchPrice(length), length, distance, offset, newTwo, newThree)
+                    }
+                    longest = length > longest ? length : longest
+                }
+                which = which &+ 1
+            }
+            var found = load32(places.address &+ 4 &* i) unchecked as Int
+            let last = load32(places.address &+ 4 &* (i &+ 1)) unchecked as Int
+            var l = least
+            while found < last {
+                let entry = load64(matches.address &+ 8 &* found)
+                let distance = (entry & 0xFFFF_FFFF) unchecked as Int
+                let length = (entry >> 32) unchecked as Int
+                let cost = before &+ self.offsetPrice(distance &+ 3)
+                let most = length < nice ? length : nice
+                while l <= most {
+                    relax(nodes &+ 32 &* (i &+ l), cost &+ self.matchPrice(l), l, distance, distance unchecked as U32, one, two)
+                    l = l &+ 1
+                }
+                if length > most {
+                    relax(nodes &+ 32 &* (i &+ length), cost &+ self.matchPrice(length), length, distance, distance unchecked as U32, one, two)
+                }
+                longest = length > longest ? length : longest
+                found = found &+ 1
+            }
+            // One so long is taken, and nothing within it looked for.
+            i = i &+ (longest >= 1024 ? longest : 1)
+        }
+    }
+
+    /// The way found, its nodes' first word made the place each is reached
+    /// from, and each place's the next: the last's is none.
+    unsafe fn link(_ count: Int) {
+        let nodes = self.nodes.address
+        var next = count
+        var at = count
+        while at > 0 {
+            let length = load32(nodes &+ 32 &* at &+ 4) unchecked as Int
+            let from = at &- (length == 0 ? 1 : length)
+            store32(next unchecked as U32, nodes &+ 32 &* at &+ 28)
+            next = at
+            at = from
+        }
+        store32(next unchecked as U32, nodes &+ 28)
+    }
+
+    /// The symbols along the least way, counted, with half of those before.
+    unsafe fn count(_ start: Int, _ count: Int) {
+        self.link(count)
+        let nodes = self.nodes.address
+        let counts = prices.address + ZstdBestParse.toCounts
+        var i = 0
+        while i < 448 {
+            store32(load32(counts &+ 4 &* i) >> 2, counts &+ 4 &* i)
+            i = i &+ 1
+        }
+        var at = 0
+        var literals = 0
+        while at < count {
+            let next = load32(nodes &+ 32 &* at &+ 28) unchecked as Int
+            let length = load32(nodes &+ 32 &* next &+ 4) unchecked as Int
+            if length == 0 {
+                let slot = counts &+ 4 &* load8(start &+ at)
+                store32(load32(slot) &+ 1, slot)
+                literals = literals &+ 1
+            } else {
+                let lengthSlot = counts &+ 1024 &+ 4 &* ZstdBestParse.lengthCode(literals)
+                store32(load32(lengthSlot) &+ 1, lengthSlot)
+                let matchSlot = counts &+ 1280 &+ 4 &* ZstdBestParse.matchCode(length)
+                store32(load32(matchSlot) &+ 1, matchSlot)
+                let node = nodes &+ 32 &* at
+                let offset = load32(nodes &+ 32 &* next &+ 8)
+                let one = load32(node &+ 16)
+                let two = load32(node &+ 20)
+                let three = load32(node &+ 24)
+                var code = 63 &- ((offset unchecked as Int) &+ 3).leadingZeroCount
+                if literals > 0 {
+                    code = offset == one ? 0 : (offset == two || offset == three ? 1 : code)
+                } else {
+                    code = offset == two ? 0 : (offset == three || offset &+ 1 == one ? 1 : code)
+                }
+                let offsetSlot = counts &+ 1536 &+ 4 &* code
+                store32(load32(offsetSlot) &+ 1, offsetSlot)
+                literals = 0
+            }
+            at = next
+        }
+    }
+
+    /// The sequences along it.
+    unsafe fn take(_ start: Int, _ count: Int, into sequences: inout ZstdSequences) {
+        let nodes = self.nodes.address
+        var at = 0
+        var anchor = 0
+        while at < count {
+            let next = load32(nodes &+ 32 &* at &+ 28) unchecked as Int
+            let length = load32(nodes &+ 32 &* next &+ 4) unchecked as Int
+            if length > 0 {
+                sequences.add(from: start &+ anchor, literals: at &- anchor, length: length, offset: load32(nodes &+ 32 &* next &+ 8) unchecked as Int)
+                anchor = next
+            }
+            at = next
+        }
+        sequences.addLast(from: start &+ anchor, literals: count &- anchor)
+    }
+}

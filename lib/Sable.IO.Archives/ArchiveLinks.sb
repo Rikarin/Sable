@@ -1,0 +1,14 @@
+module Sable.IO.Archives
+
+/// What is done with an archive's symbolic links as it is extracted.
+@derive(Equatable, Hashable, Debug)
+public enum ArchiveLinks {
+    /// Those that lead to somewhere in the directory are made; any other fails.
+    Inside
+
+    /// None are made.
+    Skipped
+
+    /// Any fails.
+    Refused
+}

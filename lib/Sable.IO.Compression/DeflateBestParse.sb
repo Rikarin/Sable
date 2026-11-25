@@ -1,0 +1,198 @@
+module Sable.IO.Compression
+
+/// The parse of a block of least bits, for what its symbols are thought to
+/// take: every match of every place kept, the least way from each place to the
+/// end found from the end back, the symbols of it counted, and the same again
+/// by what they take then.
+final class DeflateBestParse {
+    /// Where each place's matches end, of a U32 each, and the matches.
+    let places: Block
+    let matches: Block
+    let room: Int
+    var place: Int
+    var found: Int
+    /// The least cost from each place to the end, and the token that begins it.
+    let costs: Block
+    /// What each literal, each length from 3 on, and each distance's symbol
+    /// costs, in sixteenths of a bit.
+    let prices: Block
+    var isPriced: Bool
+
+    /// Of blocks of so many bytes, at most 64 KiB.
+    init(count: Int) {
+        let most = count < DeflateCore.tokenLimit ? count : DeflateCore.tokenLimit
+        room = 8 * most + 1024
+        places = Block(count: 4 * (most + 2))
+        matches = Block(count: 4 * (room + 1024))
+        costs = Block(count: 8 * (most + 2))
+        prices = Block(count: 4 * (256 + 259 + 32), zeroed: true)
+        place = 0
+        found = 0
+        isPriced = false
+    }
+
+    fn begin() {
+        place = 0
+        found = 0
+        unsafe {
+            store32(0, places.address)
+        }
+    }
+
+    /// Whether there is room for another place's matches.
+    var hasRoom: Bool => found < room
+
+    @inline(always)
+    unsafe fn add(_ length: Int, _ distance: Int) {
+        store32((length << 16 | distance) unchecked as U32, matches.address &+ 4 &* found)
+        found = found &+ 1
+    }
+
+    @inline(always)
+    unsafe fn endPlace() {
+        place = place &+ 1
+        store32(found unchecked as U32, places.address &+ 4 &* place)
+    }
+
+    /// The tokens of the block of 'count' bytes from 'source' on, counted: how
+    /// many.
+    unsafe fn parse(_ source: Int, _ count: Int, blocks: DeflateBlocks, tokens: Int) -> Int {
+        if !isPriced {
+            self.priceFirst()
+            isPriced = true
+        }
+        var pass = 0
+        var made = 0
+        while pass < 3 {
+            self.findLeast(source, count)
+            blocks.resetCounts()
+            made = self.take(count, source, blocks: blocks, tokens: tokens)
+            blocks.makeLengths()
+            self.price(blocks)
+            pass = pass &+ 1
+        }
+        return made
+    }
+
+    var literalPrices: Int => prices.address
+
+    var lengthPrices: Int => prices.address + 1024
+
+    var distancePrices: Int => prices.address + 1024 + 1036
+
+    unsafe fn priceFirst() {
+        var i = 0
+        while i < 256 {
+            store32(8 * 16, literalPrices &+ 4 &* i)
+            i = i &+ 1
+        }
+        i = 3
+        while i <= 258 {
+            store32(112 &+ 16 &* load32(deflateBases &+ 4 &* (59 &+ load8(deflateSymbols &+ i))), lengthPrices &+ 4 &* i)
+            i = i &+ 1
+        }
+        i = 0
+        while i < 30 {
+            store32(80 &+ 16 &* load32(deflateBases &+ 4 &* (88 &+ i)), distancePrices &+ 4 &* i)
+            i = i &+ 1
+        }
+    }
+
+    /// What the code lengths make each symbol cost; one not used may be, for
+    /// about the longest there is.
+    unsafe fn price(_ blocks: DeflateBlocks) {
+        var i = 0
+        while i < 256 {
+            let length = load8(blocks.lengths &+ i)
+            store32((16 &* (length == 0 ? 13 : length)) unchecked as U32, literalPrices &+ 4 &* i)
+            i = i &+ 1
+        }
+        i = 3
+        while i <= 258 {
+            let symbol = load8(deflateSymbols &+ i)
+            let length = load8(blocks.lengths &+ 257 &+ symbol)
+            store32(((16 &* (length == 0 ? 13 : length)) unchecked as U32) &+ 16 &* load32(deflateBases &+ 4 &* (59 &+ symbol)), lengthPrices &+ 4 &* i)
+            i = i &+ 1
+        }
+        i = 0
+        while i < 30 {
+            let length = load8(blocks.distanceLengths &+ i)
+            store32(((16 &* (length == 0 ? 10 : length)) unchecked as U32) &+ 16 &* load32(deflateBases &+ 4 &* (88 &+ i)), distancePrices &+ 4 &* i)
+            i = i &+ 1
+        }
+    }
+
+    /// The least cost from each place to the end, and its first token.
+    unsafe fn findLeast(_ source: Int, _ count: Int) {
+        let costs = self.costs.address
+        let literals = literalPrices
+        let lengths = lengthPrices
+        let distances = distancePrices
+        let symbols = deflateSymbols
+        let places = self.places.address
+        let matches = self.matches.address
+        store32(0, costs &+ 8 &* count)
+        var i = count &- 1
+        while i >= 0 {
+            let here = costs &+ 8 &* i
+            let byte = load8(source &+ i)
+            var best = load32(literals &+ 4 &* byte) &+ load32(here &+ 8)
+            var token = byte unchecked as U32
+            var at = load32(places &+ 4 &* i) unchecked as Int
+            let end = load32(places &+ 4 &* (i &+ 1)) unchecked as Int
+            var length = 3
+            while at < end {
+                let found = load32(matches &+ 4 &* at)
+                at = at &+ 1
+                let distance = (found & 0xFFFF) unchecked as Int
+                // A match may go on past where the block was ended.
+                let whole = (found >> 16) unchecked as Int
+                let longest = whole < count &- i ? whole : count &- i
+                let price = load32(distances &+ 4 &* load8(symbols &+ 259 &+ (distance < 256 ? distance : 256 &+ (distance >> 7))))
+                if longest >= 64 && length < longest {
+                    length = longest
+                }
+                while length <= longest {
+                    let cost = price &+ load32(lengths &+ 4 &* length) &+ load32(here &+ 8 &* length)
+                    if cost < best {
+                        best = cost
+                        token = (length << 16 | distance) unchecked as U32
+                    }
+                    length = length &+ 1
+                }
+            }
+            store32(best, here)
+            store32(token, here &+ 4)
+            i = i &- 1
+        }
+    }
+
+    /// The tokens along the least way, counted.
+    unsafe fn take(_ count: Int, _ source: Int, blocks: DeflateBlocks, tokens: Int) -> Int {
+        let costs = self.costs.address
+        let counts = blocks.lengthCounts
+        let distanceCounts = blocks.distanceCounts
+        let symbols = deflateSymbols
+        var token = tokens
+        var i = 0
+        while i < count {
+            let taken = load32(costs &+ 8 &* i &+ 4)
+            store32(taken, token)
+            token = token &+ 4
+            if taken < 256 {
+                let at = counts &+ 4 &* (taken unchecked as Int)
+                store32(load32(at) &+ 1, at)
+                i = i &+ 1
+            } else {
+                let length = (taken >> 16) unchecked as Int
+                let distance = (taken & 0xFFFF) unchecked as Int
+                let symbol = counts &+ 4 &* (257 &+ load8(symbols &+ length))
+                store32(load32(symbol) &+ 1, symbol)
+                let further = distanceCounts &+ 4 &* load8(symbols &+ 259 &+ (distance < 256 ? distance : 256 &+ (distance >> 7)))
+                store32(load32(further) &+ 1, further)
+                i = i &+ length
+            }
+        }
+        return (token &- tokens) >> 2
+    }
+}

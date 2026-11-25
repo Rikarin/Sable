@@ -1,0 +1,28 @@
+module Sable.IO.Compression
+
+/// A table made when it is first asked for, rather than as the program starts,
+/// and never freed.
+final class LazyTable {
+    let address: Atomic<Int>
+    let make: () -> Int
+
+    init(_ make: @escaping () -> Int) {
+        address = Atomic<Int>(0)
+        self.make = make
+    }
+
+    /// Where the table is. Two tasks that ask first at once may both make it:
+    /// the one that is kept is either's.
+    @inline(always)
+    fn get() -> Int {
+        let known = address.load(.Acquire)
+        return known != 0 ? known : self.fill()
+    }
+
+    @inline(never)
+    fn fill() -> Int {
+        let made = make()
+        _ = address.compareExchange(expected: 0, desired: made)
+        return address.load(.Acquire)
+    }
+}

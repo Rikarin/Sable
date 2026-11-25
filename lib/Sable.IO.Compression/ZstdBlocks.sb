@@ -1,0 +1,454 @@
+module Sable.IO.Compression
+
+/// A zstd block decoded: its literals, and the sequences that copy them and
+/// earlier bytes to a window. Every method gives back what is wrong, or none.
+final class ZstdBlocks {
+    let entropy: ZstdEntropy
+    /// The literals, where they are not the block's own bytes, with room to
+    /// read past them.
+    let literals: Block
+    var literalStart: Int
+    var literalCount: Int
+
+    static var maxBlock: Int => 131072
+
+    init() {
+        entropy = ZstdEntropy()
+        literals = Block(count: ZstdBlocks.maxBlock + 64, zeroed: true)
+        literalStart = 0
+        literalCount = 0
+    }
+
+    /// The block of 'count' bytes from 'source' on, sixteen bytes before and
+    /// after which may be read, decoded to the window's end, where there is
+    /// room for 'most' bytes and sixty-four more.
+    unsafe fn decode(_ source: Int, count: Int, into window: inout OutputWindow, most: Int) -> String? {
+        var length = 0
+        if let problem = self.readLiterals(source, count, most, &length) {
+            return problem
+        }
+        let at = source &+ length
+        let end = source &+ count
+        if at >= end {
+            return "a block with no sequences"
+        }
+        var sequences = load8(at)
+        var from = at &+ 1
+        if sequences > 127 {
+            if sequences < 255 {
+                if end &- from < 1 {
+                    return "a block cut short"
+                }
+                sequences = ((sequences &- 128) << 8) &+ load8(from)
+                from = from &+ 1
+            } else {
+                if end &- from < 2 {
+                    return "a block cut short"
+                }
+                sequences = load16(from) &+ 0x7F00
+                from = from &+ 2
+            }
+        }
+        if sequences == 0 {
+            if from != end {
+                return "bytes after a block's literals"
+            }
+            copyBytes(from: literalStart, to: window.end, literalCount)
+            window.end = window.end &+ literalCount
+            return none
+        }
+        if from >= end {
+            return "a block cut short"
+        }
+        let modes = load8(from)
+        from = from &+ 1
+        if (modes & 3) != 0 {
+            return "modes of no known kind"
+        }
+        var shift = 6
+        for code in [ZstdCode.LiteralLength, ZstdCode.Offset, ZstdCode.MatchLength] {
+            match modes >> shift & 3 {
+                case 0 => { entropy.setDefault(code) }
+                case 1 => {
+                    if from >= end || load8(from) >= code.symbolCount {
+                        return "a code of one symbol, which is none"
+                    }
+                    entropy.setSymbol(code, load8(from))
+                    from = from &+ 1
+                }
+                case 2 => {
+                    let size = entropy.readTable(code, from, count: end &- from)
+                    if size == 0 {
+                        return "a distribution that is none"
+                    }
+                    from = from &+ size
+                }
+                case _ => {
+                    if entropy.log(code) < 0 {
+                        return "the last table's codes, where there was none"
+                    }
+                }
+            }
+            shift = shift &- 2
+        }
+        return self.execute(from, end, sequences, into: &window, most: most)
+    }
+
+    unsafe fn readLiterals(_ source: Int, _ count: Int, _ most: Int, _ length: inout Int) -> String? {
+        if count < 1 {
+            return "an empty block"
+        }
+        let first = load8(source)
+        let kind = first & 3
+        let format = first >> 2 & 3
+        if kind < 2 {
+            // Raw, or a byte repeated: its length is in one byte to three.
+            let header = format == 1 ? 2 : (format == 3 ? 3 : 1)
+            if count < header {
+                return "literals cut short"
+            }
+            let size = format == 1 ? load16(source) >> 4 : (format == 3 ? (load16(source) | load8(source &+ 2) << 16) >> 4 : first >> 3)
+            if size > most {
+                return "more literals than a block has"
+            }
+            literalCount = size
+            if kind == 0 {
+                if count &- header < size {
+                    return "literals cut short"
+                }
+                literalStart = source &+ header
+                length = header &+ size
+            } else {
+                if count &- header < 1 {
+                    return "literals cut short"
+                }
+                literalStart = literals.address
+                fillBytes(literalStart, with: load8(source &+ header) unchecked as U8, size)
+                length = header &+ 1
+            }
+            return none
+        }
+        let header = format < 2 ? 3 : format &+ 2
+        if count < header {
+            return "literals cut short"
+        }
+        let width = format < 2 ? 10 : (format == 2 ? 14 : 18)
+        let word = ((load32(source) unchecked as Int) | (header == 5 ? load8(source &+ 4) << 32 : 0)) >> 4
+        let size = word & ((1 << width) &- 1)
+        let packed = word >> width & ((1 << width) &- 1)
+        if size > most {
+            return "more literals than a block has"
+        }
+        if count &- header < packed {
+            return "literals cut short"
+        }
+        var at = source &+ header
+        var left = packed
+        if kind == 2 {
+            let taken = entropy.readHuffman(at, count: left)
+            if taken == 0 {
+                return "a Huffman table that is none"
+            }
+            at = at &+ taken
+            left = left &- taken
+        } else if !entropy.hasHuffman {
+            return "the last Huffman table, where there was none"
+        }
+        literalStart = literals.address
+        literalCount = size
+        length = header &+ packed
+        let right = format == 0 ? ZstdBlocks.stream(at, left, to: literalStart, size, entropy.huffman, entropy.huffmanLog) : ZstdBlocks.streams(at, left, to: literalStart, size, entropy.huffman, entropy.huffmanLog)
+        return right ? none : "literals that are not their codes'"
+    }
+
+    /// One stream of Huffman codes, read from its end back, of 'size' bytes:
+    /// false where it is not, exactly.
+    unsafe static fn stream(_ source: Int, _ count: Int, to target: Int, _ size: Int, _ table: Int, _ log: Int) -> Bool {
+        if count < 1 {
+            return false
+        }
+        let last = load8(source &+ count &- 1)
+        if last == 0 {
+            return false
+        }
+        return finishStream(source, 8 &* (count &- 1) &+ (63 &- last.leadingZeroCount), target, target &+ size, table, log)
+    }
+
+    /// The rest of a stream of which so many bits are left.
+    unsafe static fn finishStream(_ source: Int, _ bits: Int, _ target: Int, _ end: Int, _ table: Int, _ log: Int) -> Bool {
+        var left = bits
+        var to = target
+        // Four at a time while eight bytes before are the stream's.
+        let shift = (64 &- log) unchecked as U64
+        while left >= 64 && end &- to >= 4 {
+            // The bits above those left are used already.
+            var word = load64(source &+ ((left &+ 7) >> 3) &- 8) << (((0 &- left) & 7) unchecked as U64)
+            var used = 0
+            var i = 0
+            while i < 4 {
+                let entry = load16(table &+ 2 &* ((word >> (shift & 63)) unchecked as Int))
+                word = word << ((entry & 15) unchecked as U64)
+                used = used &+ (entry & 15)
+                store8(entry >> 8, to &+ i)
+                i = i &+ 1
+            }
+            to = to &+ 4
+            left = left &- used
+        }
+        while to < end {
+            let entry = load16(table &+ 2 &* readBitsBack(source, left &- log, log))
+            left = left &- (entry & 15)
+            if left < 0 {
+                return false
+            }
+            store8(entry >> 8, to)
+            to = to &+ 1
+        }
+        return left == 0
+    }
+
+    /// Four streams of Huffman codes, each of a quarter of 'size' bytes: the
+    /// four decoded at once, five bytes of each at a time, while there are so
+    /// many, and eight bytes before where each is read.
+    unsafe static fn streams(_ source: Int, _ count: Int, to target: Int, _ size: Int, _ table: Int, _ log: Int) -> Bool {
+        if count < 10 || size < 6 {
+            return false
+        }
+        let start0 = source &+ 6
+        let start1 = start0 &+ load16(source)
+        let start2 = start1 &+ load16(source &+ 2)
+        let start3 = start2 &+ load16(source &+ 4)
+        let end = source &+ count
+        if start3 >= end || start1 == start0 || start2 == start1 || start3 == start2 {
+            return false
+        }
+        let quarter = (size &+ 3) / 4
+        var to0 = target
+        var to1 = target &+ quarter
+        var to2 = to1 &+ quarter
+        var to3 = to2 &+ quarter
+        let last = target &+ size
+        if to3 > last {
+            return false
+        }
+        var left0 = streamBits(start0, start1)
+        var left1 = streamBits(start1, start2)
+        var left2 = streamBits(start2, start3)
+        var left3 = streamBits(start3, end)
+        if left0 < 0 || left1 < 0 || left2 < 0 || left3 < 0 {
+            return false
+        }
+        if log == 11 && left0 >= 64 && left1 >= 64 && left2 >= 64 && left3 >= 64 {
+            // Each stream's next bits at the top of a word, whose lowest set
+            // bit says how many of it are used; and where the word is from.
+            var at0 = start0 &+ (left0 &+ 7) / 8 &- 8
+            var at1 = start1 &+ (left1 &+ 7) / 8 &- 8
+            var at2 = start2 &+ (left2 &+ 7) / 8 &- 8
+            var at3 = start3 &+ (left3 &+ 7) / 8 &- 8
+            var word0 = (load64(at0) | 1) << (((0 &- left0) & 7) unchecked as U64)
+            var word1 = (load64(at1) | 1) << (((0 &- left1) & 7) unchecked as U64)
+            var word2 = (load64(at2) | 1) << (((0 &- left2) & 7) unchecked as U64)
+            var word3 = (load64(at3) | 1) << (((0 &- left3) & 7) unchecked as U64)
+            while true {
+                // A round reads at most seven bytes of each.
+                var rounds = (at0 &- start0) / 7
+                rounds = least(rounds, (at1 &- start1) / 7)
+                rounds = least(rounds, (at2 &- start2) / 7)
+                rounds = least(rounds, (at3 &- start3) / 7)
+                rounds = least(rounds, (last &- to3) / 5)
+                if rounds == 0 {
+                    break
+                }
+                while rounds > 0 {
+                    var i = 0
+                    while i < 5 {
+                        let entry0 = load16(table &+ 2 &* ((word0 >> 53) unchecked as Int))
+                        let entry1 = load16(table &+ 2 &* ((word1 >> 53) unchecked as Int))
+                        let entry2 = load16(table &+ 2 &* ((word2 >> 53) unchecked as Int))
+                        let entry3 = load16(table &+ 2 &* ((word3 >> 53) unchecked as Int))
+                        word0 = word0 << ((entry0 & 15) unchecked as U64)
+                        word1 = word1 << ((entry1 & 15) unchecked as U64)
+                        word2 = word2 << ((entry2 & 15) unchecked as U64)
+                        word3 = word3 << ((entry3 & 15) unchecked as U64)
+                        store8(entry0 >> 8, to0 &+ i)
+                        store8(entry1 >> 8, to1 &+ i)
+                        store8(entry2 >> 8, to2 &+ i)
+                        store8(entry3 >> 8, to3 &+ i)
+                        i = i &+ 1
+                    }
+                    to0 = to0 &+ 5
+                    to1 = to1 &+ 5
+                    to2 = to2 &+ 5
+                    to3 = to3 &+ 5
+                    let used0 = word0.trailingZeroCount
+                    let used1 = word1.trailingZeroCount
+                    let used2 = word2.trailingZeroCount
+                    let used3 = word3.trailingZeroCount
+                    at0 = at0 &- (used0 >> 3)
+                    at1 = at1 &- (used1 >> 3)
+                    at2 = at2 &- (used2 >> 3)
+                    at3 = at3 &- (used3 >> 3)
+                    word0 = (load64(at0) | 1) << ((used0 & 7) unchecked as U64)
+                    word1 = (load64(at1) | 1) << ((used1 & 7) unchecked as U64)
+                    word2 = (load64(at2) | 1) << ((used2 & 7) unchecked as U64)
+                    word3 = (load64(at3) | 1) << ((used3 & 7) unchecked as U64)
+                    rounds = rounds &- 1
+                }
+            }
+            left0 = 8 &* (at0 &- start0) &+ 64 &- word0.trailingZeroCount
+            left1 = 8 &* (at1 &- start1) &+ 64 &- word1.trailingZeroCount
+            left2 = 8 &* (at2 &- start2) &+ 64 &- word2.trailingZeroCount
+            left3 = 8 &* (at3 &- start3) &+ 64 &- word3.trailingZeroCount
+        }
+        if !finishStream(start0, left0, to0, target &+ quarter, table, log) || !finishStream(start1, left1, to1, target &+ 2 &* quarter, table, log) {
+            return false
+        }
+        return finishStream(start2, left2, to2, target &+ 3 &* quarter, table, log) && finishStream(start3, left3, to3, last, table, log)
+    }
+
+    @inline(always)
+    static fn least(_ a: Int, _ b: Int) -> Int {
+        return a < b ? a : b
+    }
+
+    /// How many bits a stream has, below the one that ends it; or -1.
+    unsafe static fn streamBits(_ start: Int, _ end: Int) -> Int {
+        let last = load8(end &- 1)
+        return last == 0 ? -1 : 8 &* (end &- start &- 1) &+ (63 &- last.leadingZeroCount)
+    }
+
+    /// The sequences read, backwards from the block's end, and done: each some
+    /// literals, and a match.
+    unsafe fn execute(_ start: Int, _ end: Int, _ count: Int, into window: inout OutputWindow, most: Int) -> String? {
+        if end <= start || load8(end &- 1) == 0 {
+            return "a stream that does not end"
+        }
+        let literalTable = entropy.literalLengths
+        let offsetTable = entropy.offsets
+        let matchTable = entropy.matchLengths
+        let first = window.start
+        var target = window.end
+        let targetEnd = target &+ most
+        var literal = literalStart
+        let literalEnd = literalStart &+ literalCount
+        var offset1 = entropy.offset1
+        var offset2 = entropy.offset2
+        var offset3 = entropy.offset3
+
+        // Sixty-four bits, from eight bytes at 'at', of which so many were used.
+        var at = end &- 8
+        let lowest = start &- 8
+        var bits = load64(at)
+        var used = load8(end &- 1).leadingZeroCount &- 55
+        var literalState = (bits << (used unchecked as U64) >> 1 >> ((63 &- entropy.logs.0) unchecked as U64)) unchecked as Int
+        used = used &+ entropy.logs.0
+        var offsetState = (bits << (used unchecked as U64) >> 1 >> ((63 &- entropy.logs.1) unchecked as U64)) unchecked as Int
+        used = used &+ entropy.logs.1
+        var matchState = (bits << (used unchecked as U64) >> 1 >> ((63 &- entropy.logs.2) unchecked as U64)) unchecked as Int
+        used = used &+ entropy.logs.2
+
+        var left = count
+        while true {
+            at = at &- (used >> 3)
+            used = used & 7
+            if at < lowest {
+                return "sequences past their end"
+            }
+            bits = load64(at)
+            let literalEntry = load64(literalTable &+ 8 &* literalState)
+            let offsetEntry = load64(offsetTable &+ 8 &* offsetState)
+            let matchEntry = load64(matchTable &+ 8 &* matchState)
+            let literalBits = (literalEntry >> 56) unchecked as Int
+            let offsetBits = (offsetEntry >> 56) unchecked as Int
+            let matchBits = (matchEntry >> 56) unchecked as Int
+
+            // The offset's bits, at most thirty-one, the match length's and the
+            // literal length's, at most sixteen each.
+            let offsetValue = ((offsetEntry & 0xFFFF_FFFF) &+ (bits << ((used & 63) unchecked as U64) >> 1 >> (((63 &- offsetBits) & 63) unchecked as U64))) unchecked as Int
+            used = used &+ offsetBits
+            let matchLength = ((matchEntry & 0xFFFF_FFFF) &+ (bits << ((used & 63) unchecked as U64) >> 1 >> (((63 &- matchBits) & 63) unchecked as U64))) unchecked as Int
+            used = used &+ matchBits
+            if offsetBits &+ matchBits &+ literalBits > 30 {
+                at = at &- (used >> 3)
+                used = used & 7
+                if at < lowest {
+                    return "sequences past their end"
+                }
+                bits = load64(at)
+            }
+            let literalLength = ((literalEntry & 0xFFFF_FFFF) &+ (bits << ((used & 63) unchecked as U64) >> 1 >> (((63 &- literalBits) & 63) unchecked as U64))) unchecked as Int
+            used = used &+ literalBits
+
+            var offset = offsetValue &- 3
+            if offsetValue > 3 {
+                offset3 = offset2
+                offset2 = offset1
+                offset1 = offset
+            } else {
+                let which = literalLength == 0 ? offsetValue &+ 1 : offsetValue
+                if which == 1 {
+                    offset = offset1
+                } else {
+                    offset = which == 2 ? offset2 : (which == 3 ? offset3 : offset1 &- 1)
+                    if which != 2 {
+                        offset3 = offset2
+                    }
+                    offset2 = offset1
+                    offset1 = offset
+                }
+                if offset <= 0 {
+                    return "an offset of none"
+                }
+            }
+
+            if literalLength > literalEnd &- literal || literalLength &+ matchLength > targetEnd &- target {
+                return "a sequence longer than its block"
+            }
+            copy16(from: literal, to: target)
+            if literalLength > 16 {
+                var done = 16
+                repeat {
+                    copy16(from: literal &+ done, to: target &+ done)
+                    copy16(from: literal &+ done &+ 16, to: target &+ done &+ 16)
+                    done = done &+ 32
+                } while done < literalLength
+            }
+            literal = literal &+ literalLength
+            target = target &+ literalLength
+            if offset > target &- first {
+                return "a match of bytes before the first"
+            }
+            copyMatch(to: target, distance: offset, length: matchLength)
+            target = target &+ matchLength
+
+            left = left &- 1
+            if left == 0 {
+                break
+            }
+            // The next states, at most twenty-six bits.
+            let literalWidth = (literalEntry >> 48 & 255) unchecked as Int
+            literalState = (literalEntry >> 32 & 0xFFFF) unchecked as Int &+ ((bits << ((used & 63) unchecked as U64) >> 1 >> (((63 &- literalWidth) & 63) unchecked as U64)) unchecked as Int)
+            used = used &+ literalWidth
+            let matchWidth = (matchEntry >> 48 & 255) unchecked as Int
+            matchState = (matchEntry >> 32 & 0xFFFF) unchecked as Int &+ ((bits << ((used & 63) unchecked as U64) >> 1 >> (((63 &- matchWidth) & 63) unchecked as U64)) unchecked as Int)
+            used = used &+ matchWidth
+            let offsetWidth = (offsetEntry >> 48 & 255) unchecked as Int
+            offsetState = (offsetEntry >> 32 & 0xFFFF) unchecked as Int &+ ((bits << ((used & 63) unchecked as U64) >> 1 >> (((63 &- offsetWidth) & 63) unchecked as U64)) unchecked as Int)
+            used = used &+ offsetWidth
+        }
+        // Every bit must have been used.
+        if 8 &* (at &- start) &+ 64 != used {
+            return "sequences that do not end where they should"
+        }
+        entropy.offset1 = offset1
+        entropy.offset2 = offset2
+        entropy.offset3 = offset3
+        let rest = literalEnd &- literal
+        if rest > targetEnd &- target {
+            return "more literals than the block has room for"
+        }
+        copyBytes(from: literal, to: target, rest)
+        window.end = target &+ rest
+        return none
+    }
+}

@@ -1,0 +1,70 @@
+module Sable.IO.Compression
+
+import Sable.IO
+
+/// What is written to it written to another writer, compressed: `GzipWriter`,
+/// `ZlibWriter`, `DeflateWriter`, `BrotliWriter` and `ZstdWriter` are this
+/// with their own encoders. `finish()` writes the end of the stream; letting
+/// go of the writer does too, where nothing is left to report a failure to.
+///
+/// ```sable
+/// let writer = GzipWriter(MemoryStream())
+/// try! writer.write([1, 2, 3])
+/// try! writer.finish()
+/// assert(try! Gzip.decompress(writer.inner.bytes) == [1, 2, 3])
+/// ```
+public final class CompressingWriter<Encoder: Compressor, Inner: Writer>: Writer {
+    var encoder: Encoder
+    /// The writer it writes to.
+    public var inner: Inner
+    var isFinished: Bool
+
+    /// Compressing by the encoder, and writing to the writer.
+    public init(_ inner: Inner, encoder: Encoder = Encoder()) {
+        self.inner = inner
+        self.encoder = encoder
+        isFinished = false
+    }
+
+    deinit {
+        if !isFinished {
+            var buffer = ByteBuffer()
+            encoder.finish(into: &buffer)
+            try? inner.write(buffer.bytes)
+            try? inner.flush()
+        }
+    }
+
+    public fn write(_ bytes: U8[:]) throws(IoError) {
+        precondition(!isFinished, "writing after the end of the stream")
+        var buffer = ByteBuffer()
+        encoder.compress(bytes, into: &buffer)
+        if !buffer.isEmpty {
+            try inner.write(buffer.bytes)
+        }
+    }
+
+    /// Everything written so far written on, so that it can be decompressed:
+    /// at some cost in size.
+    public fn flush() throws(IoError) {
+        if !isFinished {
+            var buffer = ByteBuffer()
+            encoder.flush(into: &buffer)
+            try inner.write(buffer.bytes)
+        }
+        try inner.flush()
+    }
+
+    /// The end of the stream written, and the writer flushed. Nothing can be
+    /// written after; finishing again does nothing.
+    public fn finish() throws(IoError) {
+        if isFinished {
+            return
+        }
+        isFinished = true
+        var buffer = ByteBuffer()
+        encoder.finish(into: &buffer)
+        try inner.write(buffer.bytes)
+        try inner.flush()
+    }
+}

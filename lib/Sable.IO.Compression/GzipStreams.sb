@@ -1,0 +1,31 @@
+module Sable.IO.Compression
+
+import Sable.IO
+
+/// A reader of gzip: .NET's `GZipStream`.
+///
+/// ```sable
+/// let packed = Gzip.compress([1, 2, 3])
+/// var reader = GzipReader(MemoryStream(packed))
+/// assert(try! reader.readToEnd() == [1, 2, 3])
+/// let limits = DecompressionLimits(maximumLength: 2)
+/// var limited = GzipReader(MemoryStream(packed), decoder: GzipDecoder(limits: limits))
+/// assert((try? limited.readToEnd()) == none)
+/// ```
+public alias GzipReader<Inner: Reader> = DecompressingReader<GzipDecoder, Inner>
+
+/// A writer of gzip.
+///
+/// ```sable
+/// let writer = GzipWriter(MemoryStream(), encoder: GzipEncoder(level: 9))
+/// try! writer.write([1, 2, 3])
+/// try! writer.finish()
+/// assert(try! Gzip.decompress(writer.inner.bytes) == [1, 2, 3])
+/// ```
+public alias GzipWriter<Inner: Writer> = CompressingWriter<GzipEncoder, Inner>
+
+/// A reader of gzip that suspends while it waits.
+public alias AsyncGzipReader<Inner: AsyncReader> = AsyncDecompressingReader<GzipDecoder, Inner>
+
+/// A writer of gzip that suspends while it waits.
+public alias AsyncGzipWriter<Inner: AsyncWriter> = AsyncCompressingWriter<GzipEncoder, Inner>

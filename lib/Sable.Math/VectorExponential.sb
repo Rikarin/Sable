@@ -1,0 +1,51 @@
+module Sable.Math
+
+// The exponential of a vector's lanes, for softmax: of numbers that are 0 or
+// less, or NaN. It is worked out in the lanes' own arithmetic, so it is the
+// same number on every processor, natively and interpreted, and it is within
+// two units in the last place of the exponential: not always what libm's
+// 'exp' gives.
+//
+// x is n ln 2 + r, with n a whole number and |r| at most half of ln 2, and
+// its exponential 2^n times that of r, which S. Moshier's polynomials (Cephes)
+// approximate. n is found by adding a number so large that the sum keeps no
+// fraction: it is then in the low bits of the sum.
+
+/// e to each lane, none of them above 0: 0 past the least subnormal.
+fn exponential<N: Int>(_ lanes: SIMD<F32, N>) -> SIMD<F32, N> {
+    let least = SIMD<F32, N>(repeating: -104.0)
+    let x = SIMD<F32, N>.select(lanes.lanesLess(than: least), least, lanes)
+    let shifted = x * 1.44269504 + 12582912.0
+    let whole = shifted - 12582912.0
+    let r = x - whole * 0.693359375 - whole * -0.000212194440
+    var sum = r * 0.00019875691500 + 0.0013981999507
+    sum = sum * r + 0.0083334519073
+    sum = sum * r + 0.041665795894
+    sum = sum * r + 0.16666665459
+    sum = sum * r + 0.5
+    sum = sum * r * r + r + 1.0
+    // 2^n in two halves, as it may be too small for an exponent.
+    let n = SIMD<I32, N>.reinterpreting(shifted) &- SIMD<I32, N>(repeating: 0x4B400000)
+    let half = n >> SIMD<I32, N>(repeating: 1)
+    let bias = SIMD<I32, N>(repeating: 127)
+    let place = SIMD<I32, N>(repeating: 23)
+    return sum * SIMD<F32, N>.reinterpreting((half &+ bias) << place) * SIMD<F32, N>.reinterpreting((n &- half &+ bias) << place)
+}
+
+/// e to each lane, none of them above 0: 0 past the least subnormal.
+fn exponential<N: Int>(_ lanes: SIMD<F64, N>) -> SIMD<F64, N> {
+    let least = SIMD<F64, N>(repeating: -746.0)
+    let x = SIMD<F64, N>.select(lanes.lanesLess(than: least), least, lanes)
+    let shifted = x * 1.4426950408889634 + 6755399441055744.0
+    let whole = shifted - 6755399441055744.0
+    let r = x - whole * 0.693145751953125 - whole * 0.00000142860682030941723212
+    let square = r * r
+    let odd = r * ((square * 0.000126177193074810590878 + 0.0302994407707441961300) * square + 1.0)
+    let even = ((square * 0.00000300198505138664455042 + 0.00252448340349684104192) * square + 0.227265548208155028766) * square + 2.0
+    let sum = odd / (even - odd) * 2.0 + 1.0
+    let n = SIMD<I64, N>.reinterpreting(shifted) &- SIMD<I64, N>(repeating: 0x4338000000000000)
+    let half = n >> SIMD<I64, N>(repeating: 1)
+    let bias = SIMD<I64, N>(repeating: 1023)
+    let place = SIMD<I64, N>(repeating: 52)
+    return sum * SIMD<F64, N>.reinterpreting((half &+ bias) << place) * SIMD<F64, N>.reinterpreting((n &- half &+ bias) << place)
+}

@@ -1110,9 +1110,10 @@ M-series machine (arm64, NEON): a dot product, a sum and a multiply over
 (`benchmarks/programs/kernels`); the six kernels of
 `benchmarks/library/tensor-primitives` take 0.06 s of processor
 time, start-up included, against 87 ms for .NET 11 with
-System.Numerics.Tensors 9.0's TensorPrimitives, steady state. F16 and BF16
-kernels, and an exponential of vectors for softmax (it calls libm's for
-each element), are still to come.
+System.Numerics.Tensors 9.0's TensorPrimitives, steady state. `softmax` works
+its exponentials out a vector at a time too (`VectorExponential.sb`), within
+two units in the last place rather than as libm's. F16 and BF16 kernels are
+still to come.
 
 **The library's own hot paths** (#229) are loops over `SIMD` too, each with
 its scalar loop for what is left — the last step taken over the last
@@ -1132,8 +1133,11 @@ several starts, at every position:
 - in the runtime's C: substring search, UTF-8 validation, counting a
   string's scalars, and a byte's search and count.
 
-There is no dispatch on what the processor has beyond its baseline (SSE2,
-NEON): nothing is compiled for AVX2 or above. Against .NET 11 on an Apple
+Little is dispatched on what the processor has beyond its baseline (SSE2,
+NEON): the kernels of `TensorPrimitives` (`runtime/vectors.c`), SHA-512 and a
+byte's count have forms for AVX2, chosen as they are called, that give the
+same bits; `SABLE_PORTABLE=1` says the processor has no more than the
+baseline. Against .NET 11 on an Apple
 M1 Max (`tools/bench/compare.py`, processor time, the median of 7 runs on a
 busy machine, Sable's over .NET's; "before" is the same without these):
 

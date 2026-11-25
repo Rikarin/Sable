@@ -875,30 +875,63 @@ int64_t sable_bytes_find_any(const SableArray *buffer, int64_t start, int64_t co
     return -1;
 }
 
-// How many times the byte is in the slice: sixteen bytes compared a step,
-// the matches added up in byte lanes and gathered before they can overflow.
+// How many times the byte is in the bytes: four vectors compared a step, the
+// matches added up in byte lanes and gathered before they can overflow.
+#define SABLE_COUNT_BYTES(attributes, name, V)                                              \
+    attributes static int64_t name(const uint8_t *bytes, int64_t count, uint8_t byte) {     \
+        const V wanted = (V){ 0 } + byte;                                                   \
+        const int64_t width = (int64_t)sizeof(V);                                           \
+        int64_t total = 0, i = 0;                                                           \
+        while (i + 4 * width <= count) {                                                    \
+            V a = { 0 }, b = { 0 }, c = { 0 }, d = { 0 };                                   \
+            /* Each lane counts up to 63 in each of the four, and 252 in all. */            \
+            int64_t end = i + 4 * width * 63 < count ? i + 4 * width * 63 : count;          \
+            for (; i + 4 * width <= end; i += 4 * width) {                                  \
+                V p, q, r, s;                                                               \
+                memcpy(&p, bytes + i, sizeof p);                                            \
+                memcpy(&q, bytes + i + width, sizeof q);                                    \
+                memcpy(&r, bytes + i + 2 * width, sizeof r);                                \
+                memcpy(&s, bytes + i + 3 * width, sizeof s);                                \
+                a -= (V)(p == wanted);                                                      \
+                b -= (V)(q == wanted);                                                      \
+                c -= (V)(r == wanted);                                                      \
+                d -= (V)(s == wanted);                                                      \
+            }                                                                               \
+            a += b + c + d;                                                                 \
+            for (int k = 0; k < (int)sizeof(V); k++) {                                      \
+                total += a[k];                                                              \
+            }                                                                               \
+        }                                                                                   \
+        V lanes = { 0 };                                                                    \
+        for (; i + width <= count; i += width) {                                            \
+            V p;                                                                            \
+            memcpy(&p, bytes + i, sizeof p);                                                \
+            lanes -= (V)(p == wanted);                                                      \
+        }                                                                                   \
+        for (int k = 0; k < (int)sizeof(V); k++) {                                          \
+            total += lanes[k];                                                              \
+        }                                                                                   \
+        for (; i < count; i++) {                                                            \
+            total += bytes[i] == byte;                                                      \
+        }                                                                                   \
+        return total;                                                                       \
+    }
+
+SABLE_COUNT_BYTES(, count_bytes, sable_bytes16)
+
+#if defined(SABLE_X64)
+typedef uint8_t sable_bytes32 __attribute__((vector_size(32)));
+SABLE_COUNT_BYTES(SABLE_TARGET_AVX2, count_bytes_avx2, sable_bytes32)
+#endif
+
 int64_t sable_bytes_count(const SableArray *buffer, int64_t start, int64_t count, uint8_t byte) {
     const uint8_t *bytes = slice_bytes(buffer, start);
-    sable_bytes16 wanted = (sable_bytes16){ 0 } + byte;
-    int64_t total = 0, i = 0;
-    while (i + 16 <= count) {
-        sable_bytes16 lanes = { 0 };
-        // Each lane counts up to 255 before it is gathered.
-        int64_t end = i + 16 * 255 < count ? i + 16 * 255 : count;
-        for (; i + 16 <= end; i += 16) {
-            lanes -= (sable_bytes16)(load16((const char *)bytes + i) == wanted);
-        }
-
-        for (int k = 0; k < 16; k++) {
-            total += lanes[k];
-        }
+#if defined(SABLE_X64)
+    if (count >= 256 && processor_has_avx2()) {
+        return count_bytes_avx2(bytes, count, byte);
     }
-
-    for (; i < count; i++) {
-        total += bytes[i] == byte;
-    }
-
-    return total;
+#endif
+    return count_bytes(bytes, count, byte);
 }
 
 // Bytes already known to be well-formed UTF-8, as a string: what

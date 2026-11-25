@@ -582,6 +582,11 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_secure_zero(ptr, i64)
                                 declare zeroext i1 @sable_crypto_blocks(i64, ptr, ptr, i64, i64)
                                 declare zeroext i1 @sable_crypto_blocks_raw(i64, ptr, ptr, i64)
+                                declare zeroext i1 @sable_vector_available()
+                                declare float @sable_vector_reduce_F32(i64, ptr, i64, i64, ptr, i64)
+                                declare double @sable_vector_reduce_F64(i64, ptr, i64, i64, ptr, i64)
+                                declare void @sable_vector_map_F32(ptr, i64, ptr, i64, i64, ptr, i64)
+                                declare void @sable_vector_map_F64(ptr, i64, ptr, i64, i64, ptr, i64)
                                 declare ptr @sable_string_join(ptr, ptr)
                                 declare i64 @sable_string_compare(ptr, ptr)
                                 declare i64 @sable_string_find(ptr, ptr, i64)
@@ -4547,6 +4552,38 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call zeroext i1 @sable_crypto_blocks_raw(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");
                     return;
 
+                // Only an x86-64 processor has kernels to be asked for: elsewhere
+                // the calls are not there.
+                case "vector_available":
+                    Line(module._target.Triple.StartsWith("x86_64", StringComparison.Ordinal)
+                        ? $"{Result()} = call zeroext i1 @sable_vector_available()"
+                        : $"{Result()} = and i1 false, false");
+                    return;
+
+                case "vector_reduce_F32" or "vector_reduce_F64": {
+                    var type = (SliceType)builtin.Operands[1].Type;
+                    var parts = VectorOperands(operands[1], operands[2], type);
+                    Line($"{Result()} = call {Type(type.Element)} @sable_{builtin.Name}(i64 {operands[0]}, {parts})");
+                    return;
+                }
+
+                // To a slice made the only reference to its run first, as a
+                // write of its first element would.
+                case "vector_map_F32" or "vector_map_F64": {
+                    var type = (SliceType)builtin.Operands[2].Type;
+                    var empty = Fresh();
+                    var any = NewLabel("elements");
+                    var after = NewLabel("after");
+                    Line($"{empty} = icmp eq i64 {SlicePart(operands[2], type, 2)}, 0");
+                    Line($"br i1 {empty}, label %{after}, label %{any}");
+                    Continue(any);
+                    var first = SliceMutableElement(operands[0], "0", type);
+                    Line($"call void @sable_{builtin.Name}(ptr {first}, i64 {operands[1]}, {VectorOperands(operands[2], operands[3], type)})");
+                    Line($"br label %{after}");
+                    Continue(after);
+                    return;
+                }
+
                 case "string_find":
                     Line($"{Result()} = call i64 @sable_string_find(ptr {operands[0]}, ptr {operands[1]}, i64 {operands[2]})");
                     return;
@@ -6719,6 +6756,9 @@ public sealed partial class LlvmEmitter {
         ///     A slice's element's address to write: the runtime makes the
         ///     slice the only reference to its run first, and checks the index.
         /// </summary>
+        string VectorOperands(string x, string y, SliceType type) =>
+            $"ptr {SlicePart(x, type, 0)}, i64 {SlicePart(x, type, 1)}, i64 {SlicePart(x, type, 2)}, ptr {SlicePart(y, type, 0)}, i64 {SlicePart(y, type, 1)}";
+
         string SliceMutableElement(string slot, string index, SliceType type) {
             var element = Fresh();
             SiteForRuntime();

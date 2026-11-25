@@ -2704,6 +2704,17 @@ public static class SilBuiltins {
         Add("raw_secure_zero", SilType.Unit, SilType.Int, SilType.Int);
         Add("crypto_blocks", SilType.Bool, SilType.Int, SilType.Int, new SliceType(SilType.U8));
         Add("crypto_blocks_raw", SilType.Bool, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        // Sable.Math's kernels over arrays of floats, where the processor has
+        // more than the target's baseline: whether it has, a reduction of one
+        // slice or two by its number (the sum, dot product or cosine), and an
+        // elementwise operation on two to the first elements of a third.
+        Add("vector_available", SilType.Bool);
+        foreach (var real in new[] { SilType.F32, SilType.F64 }) {
+            var reals = new SliceType(real);
+            Add($"vector_reduce_{real}", real, SilType.Int, reals, reals);
+            Add($"vector_map_{real}", SilType.Unit, SilType.Address(reals), SilType.Int, reals, reals);
+        }
+
         Add("string_join", SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("string_compare", SilType.Int, SilType.String, SilType.String);
         // Where a part next occurs in a text, at or after a scalar position: a scalar index, or -1.

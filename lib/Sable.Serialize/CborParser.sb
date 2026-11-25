@@ -5,7 +5,7 @@ module Sable.Serialize
 struct CborParser {
     let bytes: U8[>..]
     let maximumDepth: Int
-    let deterministic: Bool
+    let conformance: CborConformance
     var starts: Int[>..] = []
     var afters: Int[>..] = []
     // The arrays, maps and tags open: the node, its major type, how many
@@ -17,14 +17,14 @@ struct CborParser {
     var counts: Int[>..] = []
     var at: Int = 0
 
-    init(_ bytes: U8[>..], _ maximumDepth: Int, _ deterministic: Bool) {
+    init(_ bytes: U8[>..], _ maximumDepth: Int, _ conformance: CborConformance) {
         self.bytes = bytes
         self.maximumDepth = maximumDepth
-        self.deterministic = deterministic
+        self.conformance = conformance
     }
 
-    static fn parse(_ bytes: U8[>..], _ maximumDepth: Int, _ deterministic: Bool) throws(SerializeError) -> CborDocument {
-        var parser = CborParser(bytes, maximumDepth, deterministic)
+    static fn parse(_ bytes: U8[>..], _ maximumDepth: Int, _ conformance: CborConformance) throws(SerializeError) -> CborDocument {
+        var parser = CborParser(bytes, maximumDepth, conformance)
         try parser.item()
         while !parser.nodes.isEmpty {
             try parser.item()
@@ -50,14 +50,18 @@ struct CborParser {
             try finished()
             return
         }
-        if deterministic {
+        if conformance.isDeterministic {
             try checkHead(head)
         }
         let node = starts.count
         starts.append(at)
         afters.append(node + 1)
         if head.major == 2 || head.major == 3 {
+            let start = at
             at = (try CborString(bytes, at, head)).end
+            if head.major == 2 && conformance.isDeterministic && !majors.isEmpty && majors[majors.count - 1] == 6 {
+                try checkBignum(start + head.size, start)
+            }
         } else if head.major >= 4 && head.major <= 6 {
             var items = -1
             if head.major == 6 {
@@ -110,8 +114,12 @@ struct CborParser {
         let _ = left.removeLast()
         let _ = counts.removeLast()
         afters[node] = starts.count
-        if deterministic && major == 5 {
-            try checkOrder(node)
+        if major == 5 && conformance != .Lax {
+            if conformance == .Strict {
+                try checkKeys(node)
+            } else {
+                try checkOrder(node)
+            }
         }
     }
 
@@ -124,11 +132,42 @@ struct CborParser {
         var shortest: U8[>..] = []
         if head.major == 7 && head.info >= 25 {
             appendCborFloat(&shortest, cborFloat(head))
+            if head.info == 25 && (head.argument & 0x7C00) == 0x7C00 && (head.argument & 0x3FF) != 0 && head.argument != 0x7E00 {
+                throw cborFault("a NaN, not 0x7E00, which is not deterministic,", at)
+            }
         } else {
             appendCborHead(&shortest, U8(head.major), head.argument)
         }
         if shortest.count != head.size {
             throw cborFault("a head longer than it need be, which is not deterministic,", at)
+        }
+    }
+
+    // Whether the bytes that end here, a tag's value, are not a bignum, or
+    // are one that 64 bits do not hold, without zeros before it.
+    fn checkBignum(_ data: Int, _ start: Int) throws(SerializeError) {
+        let tag = (try cborHead(bytes, starts[nodes[nodes.count - 1]])).argument
+        if (tag == 2 || tag == 3) && (at - data <= 8 || bytes[data] == 0) {
+            throw cborFault("a bignum longer than it need be, which is not deterministic,", start)
+        }
+    }
+
+    // Whether each of the map's keys is there once.
+    fn checkKeys(_ node: Int) throws(SerializeError) {
+        var keys: Int[>..] = []
+        var key = node + 1
+        while key < afters[node] {
+            keys.append(key)
+            key = afters[afters[key]]
+        }
+        let compared: (Int, Int) -> Int = { compareBytes(bytes, starts[$0], starts[afters[$0]], starts[$1], starts[afters[$1]]) }
+        keys.sort(by: { compared($0, $1) < 0 })
+        var i = 1
+        while i < keys.count {
+            if compared(keys[i - 1], keys[i]) == 0 {
+                throw cborFault("a map has a key twice", starts[keys[i - 1] > keys[i] ? keys[i - 1] : keys[i]])
+            }
+            i += 1
         }
     }
 
@@ -138,7 +177,7 @@ struct CborParser {
         while key < afters[node] {
             let value = afters[key]
             let next = afters[value]
-            if next < afters[node] && compareBytes(bytes, starts[key], starts[value], starts[next], starts[afters[next]]) >= 0 {
+            if next < afters[node] && conformance.compareKeys(bytes, starts[key], starts[value], starts[next], starts[afters[next]]) >= 0 {
                 throw cborFault("a map's keys out of order, which is not deterministic,", starts[next])
             }
             key = next

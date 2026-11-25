@@ -1,0 +1,32 @@
+module Sable.Serialize
+
+/// How much of CBOR is taken, and how it is written: the encodings RFC 8949
+/// has of one value, or only one of them.
+@derive(Equatable, Hashable, Debug)
+public enum CborConformance {
+    /// Any well-formed CBOR is read; the preferred serialization (§4.1) is
+    /// written, with the indefinite lengths asked for and a map's entries in
+    /// the order they are in.
+    Lax
+    /// As Lax, but a key in a map twice, byte for byte, is an error (§5.6).
+    Strict
+    /// The core deterministic encoding (§4.2.1), alone: the preferred
+    /// serialization, of definite lengths, a map's entries in the order of
+    /// their keys' bytes. A bignum that 64 bits hold is the integer, and NaN
+    /// is the 16-bit quiet one.
+    Deterministic
+    /// The same but with shorter keys before longer ones (§4.2.3): what RFC
+    /// 7049 called canonical.
+    LengthFirst
+
+    var isDeterministic: Bool => self == .Deterministic || self == .LengthFirst
+
+    // The two keys compared, in the order a map has them.
+    fn compareKeys(_ bytes: U8[>..], _ aStart: Int, _ aEnd: Int, _ bStart: Int, _ bEnd: Int) -> Int {
+        let difference = (aEnd - aStart) - (bEnd - bStart)
+        if self == .LengthFirst && difference != 0 {
+            return difference
+        }
+        return compareBytes(bytes, aStart, aEnd, bStart, bEnd)
+    }
+}

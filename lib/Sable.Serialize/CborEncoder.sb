@@ -7,13 +7,13 @@ module Sable.Serialize
 /// one entry; an array or map whose count is not known has an indefinite
 /// length. A map's key may be any value: where a key would be, encode it.
 ///
-/// The deterministic encoding (§4.2.1) has no indefinite lengths, and its
-/// maps' entries are in their keys' order, by their bytes; a key that is
-/// there twice is an error. What `Cbor.encode` uses; alone, a writer of any
+/// By `.Deterministic` (§4.2.1) it has no indefinite lengths, and its maps'
+/// entries are in their keys' order, by their bytes; a key that is there
+/// twice is an error. What `Cbor.encode` uses; alone, a writer of any
 /// CBOR.
 ///
 /// ```sable
-/// let encoder = CborEncoder(deterministic: true)
+/// let encoder = CborEncoder(conformance: .Deterministic)
 /// try! encoder.beginMap(count: none)
 /// try! encoder.encodeKey("b")
 /// try! encoder.encodeTag(1)
@@ -32,11 +32,13 @@ public final class CborEncoder: Encoder {
     // each struct, map or case open, whether it is part of the one around it.
     var flattening: Bool = false
     var flattened: Bool[>..] = []
-    let deterministic: Bool
+    // The tag just written, if one was.
+    var lastTag: U64 = 0
+    let conformance: CborConformance
 
     /// An encoder that has written nothing.
-    public init(deterministic: Bool = false) {
-        self.deterministic = deterministic
+    public init(conformance: CborConformance = .Lax) {
+        self.conformance = conformance
     }
 
     /// The CBOR written: an array or a map still open, or a tag of nothing,
@@ -67,7 +69,7 @@ public final class CborEncoder: Encoder {
         if !frames.isEmpty {
             let last = frames.count - 1
             frames[last].written += 1
-            if deterministic && frames[last].isMap {
+            if conformance != .Lax && frames[last].isMap {
                 frames[last].starts.append(written.count)
             }
         }
@@ -134,10 +136,34 @@ public final class CborEncoder: Encoder {
         written.append(utf8: value)
     }
 
+    /// Bytes. After a bignum's tag, 2 or 3, they are its magnitude, which by
+    /// the deterministic encodings has no zeros before it, and is an integer
+    /// where 64 bits hold it.
     public fn encodeBytes(_ value: U8[>..]) throws(SerializeError) {
+        if conformance.isDeterministic && afterTag && (lastTag == 2 || lastTag == 3) {
+            encodeBignum(value)
+            return
+        }
         try beginItem()
         appendHead(2, U64(value.count))
         written.append(contentsOf: value)
+    }
+
+    fn encodeBignum(_ magnitude: U8[>..]) {
+        var start = 0
+        while start < magnitude.count && magnitude[start] == 0 {
+            start += 1
+        }
+        afterTag = false
+        if magnitude.count - start <= 8 {
+            // The tag, a byte, goes.
+            let _ = written.removeLast()
+            let major: U8 = lastTag == 2 ? 0 : 1
+            appendHead(major, readBigEndian(magnitude, start, magnitude.count - start))
+            return
+        }
+        appendHead(2, U64(magnitude.count - start))
+        written.append(contentsOf: magnitude[start...])
     }
 
     /// A tag, whose value is encoded next: 1 and a number is a moment, say,
@@ -146,6 +172,7 @@ public final class CborEncoder: Encoder {
         try beginItem()
         appendHead(6, tag)
         afterTag = true
+        lastTag = tag
     }
 
     // ---- Arrays and maps -----------------------------------------------------
@@ -159,7 +186,7 @@ public final class CborEncoder: Encoder {
             appendHead(U8(isMap ? 5 : 4), U64(count))
             frames.append(BinaryFrame(start: written.count, isMap: isMap, count: isMap ? count * 2 : count))
         } else {
-            if !deterministic {
+            if !conformance.isDeterministic {
                 written.append(U8(isMap ? 0xBF : 0x9F))
             }
             frames.append(BinaryFrame(start: written.count, isMap: isMap, count: none))
@@ -177,11 +204,11 @@ public final class CborEncoder: Encoder {
         if let reason = frameFault(frame) {
             throw fault(reason)
         }
-        if deterministic && isMap {
+        if conformance != .Lax && isMap {
             try sortEntries(frame)
         }
         if frame.count == none {
-            if deterministic {
+            if conformance.isDeterministic {
                 var head: U8[>..] = []
                 appendCborHead(&head, U8(isMap ? 5 : 4), U64(isMap ? frame.written / 2 : frame.written))
                 insertBytes(&written, head, at: frame.start)
@@ -191,7 +218,8 @@ public final class CborEncoder: Encoder {
         }
     }
 
-    // Puts the map's entries, the last thing written, in their keys' order.
+    // Puts the map's entries, the last thing written, in their keys' order,
+    // if they are to be in one, each there once.
     fn sortEntries(_ frame: BinaryFrame) throws(SerializeError) {
         let starts = frame.starts
         let bytes = written
@@ -200,20 +228,23 @@ public final class CborEncoder: Encoder {
         for i in 0..<(starts.count / 2) {
             order.append(i * 2)
             if i > 0 {
-                let compared = compareBytes(bytes, starts[i * 2 - 2], starts[i * 2 - 1], starts[i * 2], starts[i * 2 + 1])
+                let compared = conformance.compareKeys(bytes, starts[i * 2 - 2], starts[i * 2 - 1], starts[i * 2], starts[i * 2 + 1])
                 sorted = sorted && compared < 0
             }
         }
         if sorted {
             return
         }
-        order.sort(by: { compareBytes(bytes, starts[$0], starts[$0 + 1], starts[$1], starts[$1 + 1]) < 0 })
+        order.sort(by: { conformance.compareKeys(bytes, starts[$0], starts[$0 + 1], starts[$1], starts[$1 + 1]) < 0 })
         for i in 1..<order.count {
             let a = order[i - 1]
             let b = order[i]
             if compareBytes(bytes, starts[a], starts[a + 1], starts[b], starts[b + 1]) == 0 {
                 throw fault("a map has the same key twice")
             }
+        }
+        if conformance == .Strict {
+            return
         }
         var rest: U8[>..] = []
         for entry in order {

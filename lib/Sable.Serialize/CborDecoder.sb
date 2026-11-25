@@ -40,10 +40,9 @@ public final class CborDecoder: Decoder {
 
     /// A decoder of the one item the bytes are; SerializeError.Syntax when
     /// they are not one, or nest arrays, maps and tags deeper than that, or
-    /// are not the deterministic encoding (RFC 8949 §4.2.1), if it is asked
-    /// for.
-    public static fn parse(_ bytes: U8[>..], maximumDepth: Int = 128, deterministic: Bool = false) throws(SerializeError) -> CborDecoder {
-        let document = try CborParser.parse(bytes, maximumDepth, deterministic)
+    /// are not what `conformance` takes.
+    public static fn parse(_ bytes: U8[>..], maximumDepth: Int = 128, conformance: CborConformance = .Lax) throws(SerializeError) -> CborDecoder {
+        let document = try CborParser.parse(bytes, maximumDepth, conformance)
         return CborDecoder(document, 0, parent: none, key: none, index: -1)
     }
 

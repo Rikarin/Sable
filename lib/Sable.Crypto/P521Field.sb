@@ -14,7 +14,7 @@ struct P521Field: CurveField {
 
     static var constants: Int => p521Constants
 
-    static var baseTable: Int => p521BaseTable
+    static var baseTable: Int => p521BaseTable.get(Weierstrass<P521Field>.makeBaseTable)
 
     static var factor: U64 => 1
 
@@ -373,4 +373,4 @@ let p521Order = MontgomeryModulus(bigEndian: [
     0x64, 0x09,
 ])
 
-let p521BaseTable: Int = Weierstrass<P521Field>.makeBaseTable()
+let p521BaseTable = LazyTable()

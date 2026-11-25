@@ -1,0 +1,30 @@
+module Sable.Crypto
+
+/// A table worked out when it is first wanted, and never freed: its address.
+/// Globals are set as a program starts, which one that does not use a curve
+/// should not wait for.
+struct LazyTable: Sendable {
+    let address: Atomic<Int>
+
+    init() {
+        address = Atomic<Int>(0)
+    }
+
+    /// The table, made if it is not yet. Two threads that find it not made
+    /// both make it, and one of the two, which are alike, is kept.
+    fn get(_ make: () -> Int) -> Int {
+        let known = address.load(ordering: .Acquire)
+        if known != 0 {
+            return known
+        }
+        let made = make()
+        let (isKept, other) = address.compareExchange(expected: 0, desired: made, ordering: .AcquireRelease)
+        if isKept {
+            return made
+        }
+        unsafe {
+            NativeMemory.deallocate(RawPtr<U8>(address: made))
+        }
+        return other
+    }
+}

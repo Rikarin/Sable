@@ -13,7 +13,7 @@ struct P256Field: CurveField {
 
     static var constants: Int => p256Constants
 
-    static var baseTable: Int => p256BaseTable
+    static var baseTable: Int => p256BaseTable.get(Weierstrass<P256Field>.makeBaseTable)
 
     static var factor: U64 => 1
 
@@ -176,4 +176,4 @@ let p256Order = MontgomeryModulus(bigEndian: [
     0xBC, 0xE6, 0xFA, 0xAD, 0xA7, 0x17, 0x9E, 0x84, 0xF3, 0xB9, 0xCA, 0xC2, 0xFC, 0x63, 0x25, 0x51,
 ])
 
-let p256BaseTable: Int = Weierstrass<P256Field>.makeBaseTable()
+let p256BaseTable = LazyTable()

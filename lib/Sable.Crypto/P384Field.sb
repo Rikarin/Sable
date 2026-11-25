@@ -13,7 +13,7 @@ struct P384Field: CurveField {
 
     static var constants: Int => p384Constants
 
-    static var baseTable: Int => p384BaseTable
+    static var baseTable: Int => p384BaseTable.get(Weierstrass<P384Field>.makeBaseTable)
 
     static var factor: U64 => 0x100000001
 
@@ -293,4 +293,4 @@ let p384Order = MontgomeryModulus(bigEndian: [
     0x58, 0x1A, 0x0D, 0xB2, 0x48, 0xB0, 0xA7, 0x7A, 0xEC, 0xEC, 0x19, 0x6A, 0xCC, 0xC5, 0x29, 0x73,
 ])
 
-let p384BaseTable: Int = Weierstrass<P384Field>.makeBaseTable()
+let p384BaseTable = LazyTable()

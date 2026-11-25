@@ -58,6 +58,9 @@ lib/Sable.Crypto/Sha1Blocks.sb                     0   0   # run only where the 
 lib/Sable.Crypto/Sha256Blocks.sb                   0   0   # run only where the processor has no SHA-256 of its own; CryptoTests runs it everywhere
 lib/Sable.Crypto/Sha512Blocks.sb                   0   0   # run only where the processor has no SHA-512 of its own; CryptoTests runs it everywhere
 lib/Sable.Crypto/KeccakPermutation.sb               0   0   # run only where the processor has no Keccak of its own; CryptoTests runs it everywhere
+lib/Sable.Crypto/LazyTable.sb                     80  70   # the rest is the thread that lost a race to make a table
+lib/Sable.Crypto/WriteDer.sb                      85  50   # what writing DER throws is a trap, and nothing makes it
+lib/Sable.Crypto.X509/TrustStore+System.sb        40  30   # half is the macOS and Windows stores', half the files' elsewhere
 lib/Sable.Core/Dictionary+Order.sb                 0   0   # package: what OrderedDictionary is made of, and Sable.Collections' OrderedDictionaryTests run it
 lib/Sable.Math/VectorKernels.sb                    50  40   # run only where the processor has no AVX2; SABLE_PORTABLE and Sable.CodeGen.Tests run it everywhere
 lib/Sable.Text/TranscodingKernels.sb              50  50   # run only where the runtime has no kernel; Sable.CodeGen.Tests run it interpreted

@@ -177,11 +177,12 @@ extension Weierstrass {
             }
             i -= 1
         }
+        let base = F.baseTable
         var window = 0
         while window < windows(width) {
             let (magnitude, sign) = digit(a, window, width: width)
             if magnitude != 0 {
-                let entry = F.baseTable + (window * perWindow + (magnitude unchecked as Int) - 1) * 2 * F.size
+                let entry = base + (window * perWindow + (magnitude unchecked as Int) - 1) * 2 * F.size
                 addPublic(r, r, entry, affine: true, subtract: sign != 0, scratch: scratch)
             }
             window += 1

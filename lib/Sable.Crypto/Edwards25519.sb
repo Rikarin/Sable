@@ -252,7 +252,7 @@ struct Edwards25519 {
             Wide.put(digits, i, value &- (carry << 4))
             i = i &+ 1
         }
-        let table = edwardsBaseTable
+        let table = edwardsBaseTable.get(Edwards25519.makeBaseTable)
         setIdentity(r)
         i = 1
         while i < 64 {
@@ -386,7 +386,7 @@ struct Edwards25519 {
         }
         let aDigits = slidePublic(a, width: 5)
         let bDigits = slidePublic(b, width: 8)
-        let odd = edwardsOddTable
+        let odd = edwardsOddTable.get(Edwards25519.makeOddTable)
         setIdentity(r)
         i = 255
         while i >= 0 && aDigits[i] == 0 && bDigits[i] == 0 {
@@ -418,6 +418,6 @@ let edwardsConstants: Int = constantTable([
     0x68AB3A5B7DDA3, 0xEEA2A5EADBB, 0x2AF8DF483C27E, 0x332B375274732, 0x67875F0FD78B7,
 ] as U64[>..])
 
-let edwardsBaseTable: Int = Edwards25519.makeBaseTable()
+let edwardsBaseTable = LazyTable()
 
-let edwardsOddTable: Int = Edwards25519.makeOddTable()
+let edwardsOddTable = LazyTable()

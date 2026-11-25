@@ -178,4 +178,23 @@ public sealed class CryptoTests {
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         Assert.Contains("call void @sable_secure_zero(", result.LlvmIr!, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     .NET's RSA signature, checked natively and interpreted: the public-key algorithm whose arithmetic is
+    ///     short enough to interpret.
+    /// </summary>
+    [Fact]
+    public void ASignatureIsCheckedTheSameInterpreted() {
+        using var key = RSA.Create(1024);
+        var modulus = key.ExportParameters(false).Modulus!;
+        var signature = key.SignData(Bytes(50), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var source = Program($$"""
+                let key = try! RsaPublicKey(modulus: [{{string.Join(", ", modulus)}}], exponent: 65537)
+                var signature: U8[>..] = [{{string.Join(", ", signature)}}]
+                print(key.isValid(signature, for: message(50), padding: .Pkcs1(.Sha256)))
+                signature[50] = signature[50] ^ 1
+                print(key.isValid(signature, for: message(50), padding: .Pkcs1(.Sha256)))
+            """);
+        Assert.Equal("true\nfalse\n", AssertAgree(source).Stdout);
+    }
 }

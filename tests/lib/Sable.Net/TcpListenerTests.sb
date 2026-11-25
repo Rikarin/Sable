@@ -146,7 +146,7 @@ fn aPortIsFreeAgainThoughItsConnectionsStillClose() async {
 @test
 fn noListenersShareAPort() async {
     assertEqual(await thrown {
-        let _ = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0), sharePort: true)
+        _ = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0), sharePort: true)
     }, "'127.0.0.1:0' is not supported here")
 }
 

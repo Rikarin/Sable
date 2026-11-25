@@ -90,7 +90,7 @@ fn thePersonnelRecord() {
     var orders: String[>..] = []
     while !members.isAtEnd {
         orders.append("\(try! members.peekTag())")
-        let _ = try! members.readEncoded()
+        _ = try! members.readEncoded()
     }
     assertEqualText(orders.joined(separator: " "), "[APPLICATION 1] [APPLICATION 2] [0] [1] [2] [3]")
     let refused = AsnReader(hex(expected), rules: .Der)
@@ -264,7 +264,7 @@ fn theExampleCertificate() {
     assertEqual(try! version.readInt(), 2)
     assertEqual(try! inner.readInt(), 17)
     assertEqual(inner.position, 16)
-    let _ = try! inner.readEncoded()
+    _ = try! inner.readEncoded()
     var issuer = try! inner.readSequence()
     var values: String[>..] = []
     while !issuer.isAtEnd {
@@ -283,10 +283,10 @@ fn theExampleCertificate() {
     var validity = try! inner.readSequence()
     assertEqualText(try! validity.readUtcTime().instant.rfc3339(), "2004-04-30T14:25:34Z")
     assertEqualText(try! validity.readUtcTime().instant.rfc3339(), "2005-04-30T14:25:34Z")
-    let _ = try! inner.readEncoded()
+    _ = try! inner.readEncoded()
     assertEqual(inner.position, 201)
     var key = try! inner.readSequence()
-    let _ = try! key.readEncoded()
+    _ = try! key.readEncoded()
     var keyBits = try! key.readBitStringContents()
     assertEqual(keyBits.position, 223)
     var rsa = try! keyBits.readSequence()
@@ -314,7 +314,7 @@ fn theExampleCertificate() {
         var changed = certificate
         changed[i] = changed[i] ^ 0x20
         var other = AsnReader(changed, rules: .Der)
-        let _ = try? walk(&other)
+        _ = try? walk(&other)
     }
 }
 
@@ -335,17 +335,17 @@ fn walk(_ reader: inout AsnReader) throws(AsnError) {
             var inner = try reader.readOctetStringContents()
             try walk(&inner)
         } else if tag.matches(.integer) {
-            let _ = try reader.readBigInt()
+            _ = try reader.readBigInt()
         } else if tag.matches(.utcTime) {
-            let _ = try reader.readUtcTime()
+            _ = try reader.readUtcTime()
         } else if tag.matches(.objectIdentifier) {
-            let _ = try reader.readObjectIdentifier()
+            _ = try reader.readObjectIdentifier()
         } else if tag.matches(.bitString) {
-            let _ = try reader.readBitString()
+            _ = try reader.readBitString()
         } else if tag.matches(.enumerated) {
-            let _ = try reader.readEnumerated()
+            _ = try reader.readEnumerated()
         } else {
-            let _ = try reader.readEncoded()
+            _ = try reader.readEncoded()
         }
     }
 }
@@ -396,7 +396,7 @@ fn theExampleRevocationList() {
     assertEqual(signed(toBeSigned, listSignature()).count, 356)
     var info = AsnReader(digestInfo(listSignature()), rules: .Der)
     var fields = try! info.readSequence()
-    let _ = try! fields.readEncoded()
+    _ = try! fields.readEncoded()
     assertEqualText(Hex.encode(try! fields.readOctetString()), "\(Insecure.Sha1.hash(toBeSigned))")
     var reader = AsnReader(toBeSigned, rules: .Der)
     try! walk(&reader)

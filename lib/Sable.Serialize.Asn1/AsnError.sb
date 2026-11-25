@@ -7,7 +7,7 @@ module Sable.Serialize.Asn1
 /// ```sable
 /// var reader = AsnReader([0x01, 0x01, 0x01], rules: .Der)
 /// do {
-///     let _ = try reader.readBool()
+///     _ = try reader.readBool()
 /// } catch {
 ///     assert(error == .NotCanonical(at: 2, reason: "true is 0xFF"))
 ///     assert(error.description() == "byte 2: true is 0xFF")

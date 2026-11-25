@@ -6,7 +6,7 @@ import Sable.Text
 
 fn failure(_ text: String) -> String {
     do {
-        let _ = try ObjectIdentifier.parse(text)
+        _ = try ObjectIdentifier.parse(text)
         return "parsed"
     } catch {
         return error.description()

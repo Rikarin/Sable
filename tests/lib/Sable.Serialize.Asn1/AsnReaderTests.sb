@@ -349,7 +349,7 @@ fn aDecimalReal() {
     long.append(repeating: 0x31, count: 1024)
     var reader = AsnReader(long, rules: .Ber)
     do {
-        let _ = try reader.readReal()
+        _ = try reader.readReal()
         assert(false)
     } catch {
         assertEqualText(error.description(), "byte 4: a decimal REAL of more than 1024 bytes")
@@ -386,7 +386,7 @@ fn anObjectIdentifier() {
     many.append(repeating: 1, count: 128)
     var reader = AsnReader(many, rules: .Der)
     do {
-        let _ = try reader.readObjectIdentifier()
+        _ = try reader.readObjectIdentifier()
         assert(false)
     } catch {
         assertEqualText(error.description(), "byte 130: an object identifier has more than 128 numbers")
@@ -665,18 +665,18 @@ fn tags() {
     assert(try! reader.peekEncoded() == [0xA1, 0x00])
     assert(try! reader.peekContents().isEmpty)
     assertEqual(reader.position, 0)
-    let _ = try! reader.readEncoded()
+    _ = try! reader.readEncoded()
     assert(reader.isAtEnd && !reader.isNext(.context(1)))
     // A type's tag is not another's.
     do {
-        let _ = try reader.readBool(tag: .integer)
+        _ = try reader.readBool(tag: .integer)
         assert(false)
     } catch {
         assertEqualText(error.description(), "INTEGER is another type's own tag")
         assert(error.offset == none)
     }
     do {
-        let _ = try reader.readExplicit(.sequence)
+        _ = try reader.readExplicit(.sequence)
         assert(false)
     } catch {
         assertEqualText(error.description(), "an explicit tag is not one of ASN.1's own")
@@ -746,7 +746,7 @@ fn taggedValues() {
     for (hex, expected) in [("a0060101ff0101ff", "byte 5: more after the last value"), ("a000", "byte 2: the bytes end inside a value")] {
         var reader = AsnReader(try! Hex.decode(hex), rules: .Der)
         do {
-            let _ = try reader.readExplicit(.context(0))
+            _ = try reader.readExplicit(.context(0))
             assert(false)
         } catch {
             assertEqualText(error.description(), expected)
@@ -776,7 +776,7 @@ fn encapsulatedValues() {
     assertEqual(try! inner.readInt(), 5)
     var odd = AsnReader(try! Hex.decode("0302010a"), rules: .Der)
     do {
-        let _ = try odd.readBitStringContents()
+        _ = try odd.readBitStringContents()
         assert(false)
     } catch {
         assertEqualText(error.description(), "byte 2: a BIT STRING of values is not whole bytes")
@@ -847,7 +847,7 @@ fn nestingHasALimit() {
     var reader = AsnReader([0x04, 0x02, 0x04, 0x00], rules: .Der, options: AsnOptions(maximumDepth: 1))
     var inner = try! reader.readOctetStringContents()
     do {
-        let _ = try inner.readOctetStringContents()
+        _ = try inner.readOctetStringContents()
         assert(false)
     } catch {
         assertEqual(error, AsnError.TooDeep(at: 2, limit: 1))
@@ -912,6 +912,6 @@ fn anyBytesAreReadOrRefused() {
         if !asDer.hasPrefix("byte ") {
             assertEqualText(ber(whats[index], hex), asDer)
         }
-        let _ = cer(whats[index], hex)
+        _ = cer(whats[index], hex)
     }
 }

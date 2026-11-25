@@ -113,7 +113,7 @@ fn readCertificate(_ reader: inout AsnReader) throws(AsnError) -> Int {
     sum += try validity.readUtcTime().year
     sum += try readName(&fields)
     var key = try fields.readSequence()
-    let _ = try key.readEncoded()
+    _ = try key.readEncoded()
     var contents = try key.readOctetStringContents()
     var numbers = try contents.readSequence()
     sum += try numbers.readIntegerBytes().count

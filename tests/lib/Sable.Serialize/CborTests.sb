@@ -55,7 +55,7 @@ fn refusal(_ hex: String, depth: Int = 128, conformance: CborConformance = .Lax)
 
 fn refusal(of bytes: U8[>..], depth: Int = 128, conformance: CborConformance = .Lax) -> String {
     do {
-        let _ = try CborValue.parse(bytes, maximumDepth: depth, conformance: conformance)
+        _ = try CborValue.parse(bytes, maximumDepth: depth, conformance: conformance)
         return ""
     } catch {
         return error.description()
@@ -176,8 +176,8 @@ fn theReaderReadsEveryExampleAsTokens() throws {
     // A sequence of items (RFC 8742), and a position in it.
     assert(try tokens(bytes("0180f6")) == [.Unsigned(value: 1), .BeginArray(count: 0), .End, .Simple(value: 22)])
     var reader = CborReader(bytes("820102"))
-    let _ = try reader.next()
-    let _ = try reader.next()
+    _ = try reader.next()
+    _ = try reader.next()
     assertEqual(reader.position, 2)
     assertEqual(reader.depth, 1)
 }
@@ -428,40 +428,40 @@ fn decodersSayWhereAndWhatIsWrong() throws {
     var messages: String[>..] = []
     let attempts: (() throws(SerializeError) -> Void)[>..] = [
         {
-            let _ = try root.field("zz").decodeInt()
+            _ = try root.field("zz").decodeInt()
         },
         {
-            let _ = try root.field("zz").decodeValue()
+            _ = try root.field("zz").decodeValue()
         },
         {
-            let _ = try root.decodeInt()
+            _ = try root.decodeInt()
         },
         {
-            let _ = try root.field("a").decodeString()
+            _ = try root.field("a").decodeString()
         },
         {
-            let _ = try root.field("a").element(1).decodeBool()
+            _ = try root.field("a").element(1).decodeBool()
         },
         {
-            let _ = try root.field("a").element(0).decodeBytes()
+            _ = try root.field("a").element(0).decodeBytes()
         },
         {
-            let _ = try root.field("a").element(0).decodeSequence()
+            _ = try root.field("a").element(0).decodeSequence()
         },
         {
-            let _ = try root.field("a").element(1).decodeFloat()
+            _ = try root.field("a").element(1).decodeFloat()
         },
         {
-            let _ = try root.field("a").element(1).decodeTimestamp()
+            _ = try root.field("a").element(1).decodeTimestamp()
         },
         {
-            let _ = try root.field("b c").decodeMap()
+            _ = try root.field("b c").decodeMap()
         },
         {
-            let _ = try root.field("a").caseName()
+            _ = try root.field("a").caseName()
         },
         {
-            let _ = try root.field("b c").caseName()
+            _ = try root.field("b c").caseName()
         },
         { try root.field("a").beginStruct("T") },
         {
@@ -644,7 +644,7 @@ fn anyBytesAreReadOrRefused() {
         if let value = try? CborValue.parse(made) {
             let again = try! value.bytes()
             assert(try! CborValue.parse(again).bytes() == again)
-            let _ = value.diagnostic()
+            _ = value.diagnostic()
             assert((try? tokens(made)) != none)
         }
     }

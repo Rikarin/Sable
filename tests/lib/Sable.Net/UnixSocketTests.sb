@@ -154,7 +154,7 @@ fn aLargeWriteWaitsForItsReader() async {
     do {
         let listener = try UnixListener.bind(at)
         defer {
-            let _ = try? File.remove(at)
+            _ = try? File.remove(at)
         }
         let client = try await UnixStream.connect(at)
         let server = try await listener.accept()
@@ -187,7 +187,7 @@ fn aReadAndAnAcceptTimeOut() async {
     do {
         let listener = try UnixListener.bind(at)
         defer {
-            let _ = try? File.remove(at)
+            _ = try? File.remove(at)
         }
         assert((try? await withTimeout(Duration.milliseconds(20)) { try await listener.accept() }) == none)
         let client = try await UnixStream.connect(at)
@@ -227,11 +227,11 @@ fn closingAStreamWakesItsRead() async {
 @test
 fn thereAreNoDatagrams() async {
     assertEqual(await thrown {
-        let _ = try UnixDatagramSocket.unbound()
+        _ = try UnixDatagramSocket.unbound()
     }, "'' is not supported here")
     let at = path("datagram")
     assertEqual(await thrown {
-        let _ = try UnixDatagramSocket.bind(at)
+        _ = try UnixDatagramSocket.bind(at)
     }, "'\(at)' is not supported here")
     assert(!File.exists(at))
 }

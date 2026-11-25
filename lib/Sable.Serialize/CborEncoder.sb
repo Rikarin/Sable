@@ -157,7 +157,7 @@ public final class CborEncoder: Encoder {
         afterTag = false
         if magnitude.count - start <= 8 {
             // The tag, a byte, goes.
-            let _ = written.removeLast()
+            _ = written.removeLast()
             let major: U8 = lastTag == 2 ? 0 : 1
             appendHead(major, readBigEndian(magnitude, start, magnitude.count - start))
             return

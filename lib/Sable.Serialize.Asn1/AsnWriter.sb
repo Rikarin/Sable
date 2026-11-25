@@ -351,7 +351,7 @@ public final class AsnWriter {
         if rules != .Ber && (kind == .Set || kind == .SetOf) {
             try sort(frame)
         }
-        let _ = frames.removeLast()
+        _ = frames.removeLast()
         let count = written.count - frame.contents
         if rules == .Cer {
             if !kind.isString {

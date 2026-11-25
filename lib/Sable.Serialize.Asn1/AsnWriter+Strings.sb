@@ -98,7 +98,7 @@ extension AsnWriter {
             text.bytes.append(0x2E)
             text.number(utc.nanosecond, 9)
             while text.bytes[text.bytes.count - 1] == 0x30 {
-                let _ = text.bytes.removeLast()
+                _ = text.bytes.removeLast()
             }
         }
         text.bytes.append(0x5A)

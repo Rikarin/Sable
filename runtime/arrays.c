@@ -475,6 +475,31 @@ void sable_array_append_all(SableArray **slot, const SableMetadata *type, const 
     array->count += count;
 }
 
+// 'count' holes added at the end at once: zeros, which destroying, copying
+// and sharing an element pass over, as they do an object's field not set yet.
+void sable_array_append_holes(SableArray **slot, const SableMetadata *type, int64_t count) {
+    if (count < 0) {
+        trap_here("cannot append a negative number of elements");
+    }
+
+    if (count == 0) {
+        return;
+    }
+
+    int64_t size = type->element_size;
+    int64_t held = *slot == NULL ? 0 : (*slot)->count;
+    if (count > INT64_MAX / 4 / (size > 0 ? size : 1) - held) {
+        trap_here("cannot append so many elements");
+    }
+
+    SableArray *array = with_room(slot, type, count);
+    if (type->copy_element != NULL) {
+        memset(array->elements + array->count * size, 0, (size_t)(count * size));
+    }
+
+    array->count += count;
+}
+
 // 'count' copies of the element at 'value' added at the end at once: the
 // array made the only reference to its buffer, grown as appending them one
 // at a time grows it. A trivial element is copied as bytes — by memset when

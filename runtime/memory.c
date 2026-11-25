@@ -379,7 +379,9 @@ static void *buffer_resize(void *buffer, int64_t old, int64_t size) {
             return spare;
         }
 
-        void *grown = realloc(buffer, (size_t)size);
+        // Never of nothing, which is not to have a buffer: an array of
+        // elements of no size has one, and has no need of it.
+        void *grown = realloc(buffer, (size_t)(size > 0 ? size : 1));
         if (grown == NULL) {
             sable_trap("out of memory");
         }

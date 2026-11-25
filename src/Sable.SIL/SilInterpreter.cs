@@ -2362,6 +2362,34 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
             }
 
+            // A hole is a null, which a release or a copy passes over.
+            case "array_append_holes": {
+                var count = (long)operands[1]!;
+                if (count < 0) {
+                    throw new SilTrap("cannot append a negative number of elements");
+                }
+
+                if (count > int.MaxValue) {
+                    throw new SilTrap("cannot append so many elements");
+                }
+
+                if (count > 0) {
+                    Unique(builtin.Operands[0], (IReference)operands[0]!).Elements.AddRange(Enumerable.Repeat<object?>(null, (int)count));
+                }
+
+                return null;
+            }
+
+            case "array_take": {
+                var (array, at) = Writable(builtin.Operands[0], (IReference)operands[0]!, (long)operands[1]!);
+                var taken = array.Elements[at];
+                if (!array.Type.Element.IsTrivial) {
+                    array.Elements[at] = null;
+                }
+
+                return taken;
+            }
+
             case "array_append_utf8": {
                 var all = System.Text.Encoding.UTF8.GetBytes(Text(operands[1]).Value);
                 var from = (long)operands[2]!;

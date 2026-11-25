@@ -674,6 +674,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_array_truncate(ptr nocapture, ptr, i64)
                                 declare void @sable_array_append_utf8(ptr nocapture, ptr, ptr, i64, i64)
                                 declare void @sable_array_append_all(ptr nocapture, ptr, ptr, i64, i64)
+                                declare void @sable_array_append_holes(ptr nocapture, ptr, i64)
                                 declare void @sable_array_append_repeating(ptr nocapture, ptr, ptr nocapture readonly, i64)
                                 declare void @sable_array_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare void @sable_slice_rotate(ptr nocapture, ptr, i64, i64, i64)
@@ -5777,6 +5778,35 @@ public sealed partial class LlvmEmitter {
                     SiteForRuntime();
                     Line($"call void @sable_array_append_repeating(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {value}, i64 {operands[2]})");
                     ShareBufferAt(builtin.Operands[0], arrayType);
+                    return;
+                }
+
+                case "array_append_holes": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    SiteForRuntime();
+                    Line($"call void @sable_array_append_holes(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, i64 {operands[1]})");
+                    ShareBufferAt(builtin.Operands[0], arrayType);
+                    return;
+                }
+
+                // Where a trivial element was is left as it is: nothing
+                // destroys one, and no one reads a hole.
+                case "array_take": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var element = MutableElement(operands[0], operands[1], arrayType);
+                    if (arrayType.Element is var taken && SilType.IsIndirect(taken)) {
+                        var buffer = OpaqueBuffer(taken);
+                        _names[builtin] = buffer;
+                        OpaqueMove(taken, buffer, element);
+                        Line($"call void @llvm.memset.p0.i64(ptr {element}, i8 0, i64 {OpaqueSize(taken)}, i1 false)");
+                        return;
+                    }
+
+                    Line($"{Result()} = load {Type(taken)}, ptr {element}");
+                    if (!taken.IsTrivial) {
+                        Line($"store {Type(taken)} zeroinitializer, ptr {element}");
+                    }
+
                     return;
                 }
 

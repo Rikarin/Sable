@@ -123,6 +123,17 @@ extension<Element> Element[>..] {
     @builtin("array_remove_last")
     public mutating fn removeLast() -> Element
 
+    // Elements that are not there, added at the end: a store of the library's
+    // own with room it has not filled (Deque's). Nothing but a write is of a
+    // hole; copying the array, or letting go of it, passes over them. There
+    // are none in an array a program sees.
+    @builtin("array_append_holes")
+    package mutating fn append(holes count: Int)
+
+    // The element at the place, moved out: where it was is a hole.
+    @builtin("array_take")
+    package mutating fn take(at index: Int) -> Element
+
     /// Every element, taken out.
     @builtin("array_clear")
     public mutating fn clear()

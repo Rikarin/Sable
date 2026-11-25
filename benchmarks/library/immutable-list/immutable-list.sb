@@ -4,9 +4,9 @@ module ImmutableListBench
 // with the old versions kept for a while, inserted into, cut and joined.
 
 import Sable.Collections
+import Sable.Testing
 
-@main
-fn main() {
+fn run() -> String {
     var list = ImmutableList<Int>()
     for i in 0..<300000 {
         list.append(i)
@@ -39,5 +39,10 @@ fn main() {
         let cut = (i * 7919) % 200000
         list = list[cut...] + list[..<cut]
     }
-    print("\(total) \(list.count) \(list[12345])")
+    return "\(total) \(list.count) \(list[12345])"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

@@ -4,14 +4,19 @@ module FrozenCreateBench
 // way to look keys up costs.
 
 import Sable.Collections
+import Sable.Testing
 
-@main
-fn main() {
+fn run() -> String {
     var total = 0
     for round in 0..<40 {
         let numbers = FrozenDictionary<Int, Int>((0..<2000).map { ($0 * 104729 + round, $0) })
         let names = FrozenDictionary<String, Int>((0..<1000).map { ("identifier\($0 + round)", $0) })
         total += numbers[104729 * 1000 + round]! + names["identifier\(500 + round)"]!
     }
-    print("\(total)")
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

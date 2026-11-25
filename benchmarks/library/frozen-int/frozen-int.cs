@@ -2,7 +2,9 @@
 using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 
-[Benchmark("library/frozen-int")]
+[Benchmark("library/frozen-int", 100, 1)]
+[Benchmark("library/frozen-int", 100, 104729)]
+[Benchmark("library/frozen-int", 10000, 1299709)]
 static class LibraryFrozenInt {
     [MethodImpl(MethodImplOptions.NoInlining)]
     static long Look(FrozenDictionary<long, long> frozen, List<long> keys, int rounds) {
@@ -18,7 +20,7 @@ static class LibraryFrozenInt {
         }
     }
 
-    static long Run(int count, long spread) {
+    public static Func<string> Setup(int count, int spread) {
         checked {
             var pairs = new List<KeyValuePair<long, long>>();
             var keys = new List<long>();
@@ -28,9 +30,8 @@ static class LibraryFrozenInt {
                 keys.Add(i * spread * 2 + 1);
             }
 
-            return Look(pairs.ToFrozenDictionary(), keys, 5000000 / count);
+            var frozen = pairs.ToFrozenDictionary();
+            return () => Look(frozen, keys, 5000000 / count).ToString();
         }
     }
-
-    public static string Run() => $"{Run(100, 1)} {Run(100, 104729)} {Run(10000, 1299709)}";
 }

@@ -4,6 +4,7 @@ module FrozenIntBench
 // looked up, half of them not there.
 
 import Sable.Collections
+import Sable.Testing
 
 @inline(never)
 fn look(_ frozen: FrozenDictionary<Int, Int>, _ keys: Int[>..], _ rounds: Int) -> Int {
@@ -16,8 +17,8 @@ fn look(_ frozen: FrozenDictionary<Int, Int>, _ keys: Int[>..], _ rounds: Int) -
     return total
 }
 
-@inline(never)
-fn run(_ count: Int, _ spread: Int) -> Int {
+// The dictionary of so many keys, and those and as many not in it.
+fn input(_ count: Int, _ spread: Int) -> (FrozenDictionary<Int, Int>, Int[>..]) {
     var pairs: (Int, Int)[>..] = []
     var keys: Int[>..] = []
     for i in 0..<count {
@@ -25,10 +26,12 @@ fn run(_ count: Int, _ spread: Int) -> Int {
         keys.append(i * spread * 2)
         keys.append(i * spread * 2 + 1)
     }
-    return look(FrozenDictionary<Int, Int>(pairs), keys, 5000000 / count)
+    return (FrozenDictionary<Int, Int>(pairs), keys)
 }
 
-@main
-fn main() {
-    print("\(run(100, 1)) \(run(100, 104729)) \(run(10000, 1299709))")
+@bench(arguments: [(100, 1), (100, 104729), (10000, 1299709)])
+fn measure(_ b: Bencher, _ count: Int, _ spread: Int) {
+    let (frozen, keys) = input(count, spread)
+    let total = b.iterate { look(frozen, keys, 5000000 / count) }
+    b.check("\(total)")
 }

@@ -5,6 +5,7 @@ module FrozenStringBench
 // by strings of their own, a third of them not there.
 
 import Sable.Collections
+import Sable.Testing
 
 @inline(never)
 fn look(_ frozen: FrozenDictionary<String, Int>, _ keys: String[>..], _ rounds: Int) -> Int {
@@ -25,15 +26,23 @@ fn entries(_ count: Int, _ text: (Int) -> String) -> (String, Int)[>..] {
     return pairs
 }
 
-@main
-fn main() {
+fn run(_ short: FrozenDictionary<String, Int>, _ shortKeys: String[>..], _ names: FrozenDictionary<String, Int>, _ nameKeys: String[>..], _ paths: FrozenDictionary<String, Int>, _ pathKeys: String[>..], _ headers: FrozenDictionary<String, Int>, _ headerKeys: String[>..]) -> String {
+    var total = look(short, shortKeys, 40000)
+    total += look(names, nameKeys, 6000)
+    total += look(paths, pathKeys, 150)
+    total += look(headers, headerKeys, 20000)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
     let short = FrozenDictionary<String, Int>(entries(30) { "k\($0 * 77)" })
     let names = FrozenDictionary<String, Int>(entries(200) { "identifier\($0)" })
     let paths = FrozenDictionary<String, Int>(entries(5000) { "src/module/\($0 * 7)/file.sb" })
     let headers = FrozenDictionary<String, Int>(ignoringAsciiCase: entries(50) { "X-Header-\($0 * 31)-Name" })
-    var total = look(short, (0..<45).map { "k\($0 * 77)" }, 40000)
-    total += look(names, (0..<300).map { "identifier\($0)" }, 6000)
-    total += look(paths, (0..<7500).map { "src/module/\($0 * 7)/file.sb" }, 150)
-    total += look(headers, (0..<75).map { "x-header-\($0 * 31)-NAME" }, 20000)
-    print("\(total)")
+    let shortKeys = (0..<45).map { "k\($0 * 77)" }
+    let nameKeys = (0..<300).map { "identifier\($0)" }
+    let pathKeys = (0..<7500).map { "src/module/\($0 * 7)/file.sb" }
+    let headerKeys = (0..<75).map { "x-header-\($0 * 31)-NAME" }
+    b.check(b.iterate { run(short, shortKeys, names, nameKeys, paths, pathKeys, headers, headerKeys) })
 }

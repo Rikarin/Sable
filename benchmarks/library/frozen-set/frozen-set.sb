@@ -4,6 +4,7 @@ module FrozenSetBench
 // a few hundred, most of them not.
 
 import Sable.Collections
+import Sable.Testing
 
 @inline(never)
 fn within<E: Hashable>(_ frozen: FrozenSet<E>, _ values: E[>..], _ rounds: Int) -> Int {
@@ -18,12 +19,16 @@ fn within<E: Hashable>(_ frozen: FrozenSet<E>, _ values: E[>..], _ rounds: Int) 
     return total
 }
 
-@main
-fn main() {
+fn run(_ words: FrozenSet<String>, _ numbers: FrozenSet<Int>, _ texts: String[>..], _ candidates: Int[>..], _ someNumbers: Int[>..]) -> String {
+    return "\(within(words, texts, 3000)) \(within(numbers, candidates, 4000)) \(within(numbers, someNumbers, 10000))"
+}
+
+@bench
+fn measure(_ b: Bencher) {
     let words = FrozenSet<String>((0..<300).map { "word-\($0 * 31)" })
     let numbers = FrozenSet<Int>((0..<300).map { $0 * 104729 })
     let texts = (0..<1000).map { "word-\($0 * 10)" }
     let candidates = (0..<1000).map { $0 * 35000 }
     let someNumbers = (0..<300).map { $0 * 104729 * 3 }
-    print("\(within(words, texts, 3000)) \(within(numbers, candidates, 4000)) \(within(numbers, someNumbers, 10000))")
+    b.check(b.iterate { run(words, numbers, texts, candidates, someNumbers) })
 }

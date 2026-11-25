@@ -22,12 +22,12 @@ static class LibraryFrozenSet {
 
     static List<T> Each<T>(int count, Func<int, T> make) => Enumerable.Range(0, count).Select(make).ToList();
 
-    public static string Run() {
+    public static Func<string> Setup() {
         var words = Each(300, i => $"word-{i * 31}").ToFrozenSet();
         var numbers = Each(300, i => i * 104729L).ToFrozenSet();
         var texts = Each(1000, i => $"word-{i * 10}");
         var candidates = Each(1000, i => i * 35000L);
         var someNumbers = Each(300, i => i * 104729L * 3);
-        return $"{Within(words, texts, 3000)} {Within(numbers, candidates, 4000)} {Within(numbers, someNumbers, 10000)}";
+        return () => $"{Within(words, texts, 3000)} {Within(numbers, candidates, 4000)} {Within(numbers, someNumbers, 10000)}";
     }
 }

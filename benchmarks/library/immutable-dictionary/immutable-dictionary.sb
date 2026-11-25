@@ -4,11 +4,11 @@ module ImmutableDictionaryBench
 // version kept for a while, taken apart.
 
 import Sable.Collections
+import Sable.Testing
 
 fn key(_ i: Int) -> Int => (i * 1103515245 + 12345) % 2147483648
 
-@main
-fn main() {
+fn run() -> String {
     var map = ImmutableDictionary<Int, Int>()
     for i in 0..<200000 {
         map[key(i)] = i
@@ -36,5 +36,10 @@ fn main() {
     for (key, value) in map {
         total = total &+ (key ^ value)
     }
-    print("\(total) \(map.count) \(current.count)")
+    return "\(total) \(map.count) \(current.count)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

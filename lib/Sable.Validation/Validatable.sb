@@ -1,0 +1,58 @@
+module Sable.Validation
+
+/// A type that knows the rules its values are held to. `@derive(Validatable)`
+/// makes the conformance from attributes on a struct's fields, each a rule
+/// of `FieldRules` by the method's name, with the method's arguments; it
+/// can be written by hand as well, as a `Validator`'s rules are.
+///
+/// ```sable
+/// @derive(Validatable)
+/// struct Signup {
+///     @notEmpty @email
+///     var email: String
+///     @range(18...) @message("You must be an adult.")
+///     var age: Int
+///     @length(8...64)
+///     var password: String
+///     @equal(\.password)
+///     var repeated: String
+/// }
+///
+/// let result = await Signup(email: "ada@example.org", age: 12, password: "correct horse", repeated: "horse").validate()
+/// assert(result.messages(at: "age") == ["You must be an adult."])
+/// assert(result.has(errorAt: "repeated"))
+/// assert(!result.has(errorAt: "email"))
+/// ```
+///
+/// A rule a program adds to `FieldRules` in an extension is an attribute as
+/// the library's are. What no attribute says — a rule of two fields, one of
+/// a server's — goes in `moreRules`.
+public protocol Validatable {
+    /// Adds the type's rules: those `@derive(Validatable)` makes.
+    static fn rules(_ r: inout Rules<Self>)
+
+    /// Adds rules besides those; none, unless the type writes it.
+    static fn moreRules(_ r: inout Rules<Self>)
+}
+
+extension Validatable {
+    public static fn moreRules(_ r: inout Rules<Self>) { }
+
+    /// All the type's rules.
+    public static fn validationRules() -> Rules<Self> {
+        var all = Rules<Self>()
+        Self.rules(&all)
+        Self.moreRules(&all)
+        return all
+    }
+
+    /// What the type's rules say of the value.
+    public async fn validate(_ options: ValidationOptions = ValidationOptions()) -> ValidationResult {
+        return await Self.validationRules().validate(self, options)
+    }
+
+    /// The value, if it is valid.
+    public async fn validated(_ options: ValidationOptions = ValidationOptions()) throws(ValidationError) -> Self {
+        return try await Self.validationRules().validated(self, options)
+    }
+}

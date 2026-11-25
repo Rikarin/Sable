@@ -1,0 +1,105 @@
+module Sable.Validation
+
+import Sable.Serialize
+
+/// What went wrong with a request, as RFC 9457's `application/problem+json`
+/// says it, with the `errors` ASP.NET's validation problems add: each
+/// field's messages, by its path.
+///
+/// ```sable
+/// let result = ValidationResult([ValidationFailure(path: "age", message: "Too young.")])
+/// let problem = result.problemDetails(instance: "/signup")
+/// assert(try! Json.encode(problem) == "{\"type\":\"https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1\",\"title\":\"One or more validation errors occurred.\",\"status\":400,\"instance\":\"/signup\",\"errors\":{\"age\":[\"Too young.\"]}}")
+/// ```
+///
+/// A member that says nothing is not written; members of other names are
+/// ignored as it is read, as the RFC asks.
+public struct ProblemDetails: Serializable {
+    /// A URI of the kind of problem; `about:blank`, which is not written,
+    /// for one its status says all of.
+    public var type: String
+    /// What kind of problem it is, for a person to read.
+    public var title: String?
+    /// The HTTP status.
+    public var status: Int?
+    /// What went wrong this time.
+    public var detail: String?
+    /// A URI of this time.
+    public var instance: String?
+    /// Each field's messages, by its path.
+    public var errors: [String: String[>..]]
+
+    /// The media type it is sent as.
+    public static var mediaType: String => "application/problem+json"
+
+    public init(type: String = "about:blank", title: String? = none, status: Int? = none, detail: String? = none, instance: String? = none, errors: [String: String[>..]] = [:]) {
+        self.type = type
+        self.title = title
+        self.status = status
+        self.detail = detail
+        self.instance = instance
+        self.errors = errors
+    }
+
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginStruct("ProblemDetails", count: none)
+        if type != "about:blank" {
+            try encoder.encodeField("type")
+            try encoder.encodeString(type)
+        }
+        if let title = title {
+            try encoder.encodeField("title")
+            try encoder.encodeString(title)
+        }
+        if let status = status {
+            try encoder.encodeField("status")
+            try encoder.encodeInt(status)
+        }
+        if let detail = detail {
+            try encoder.encodeField("detail")
+            try encoder.encodeString(detail)
+        }
+        if let instance = instance {
+            try encoder.encodeField("instance")
+            try encoder.encodeString(instance)
+        }
+        if errors.count > 0 {
+            try encoder.encodeField("errors")
+            try errors.encode(to: encoder)
+        }
+        try encoder.endStruct()
+    }
+
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> ProblemDetails {
+        var problem = ProblemDetails()
+        for member in try decoder.decodeMap() {
+            let value = member.value
+            if member.key == "type" {
+                problem.type = try Optional<String>.decode(from: value) ?? "about:blank"
+            } else if member.key == "title" {
+                problem.title = try Optional<String>.decode(from: value)
+            } else if member.key == "status" {
+                problem.status = try Optional<Int>.decode(from: value)
+            } else if member.key == "detail" {
+                problem.detail = try Optional<String>.decode(from: value)
+            } else if member.key == "instance" {
+                problem.instance = try Optional<String>.decode(from: value)
+            } else if member.key == "errors" {
+                problem.errors = try Dictionary<String, String[>..]>.decode(from: value)
+            }
+        }
+        return problem
+    }
+}
+
+extension ValidationResult {
+    /// The failures as a response's problem: a 400, unless another status is given.
+    public fn problemDetails(status: Int = 400, title: String = "One or more validation errors occurred.", instance: String? = none) -> ProblemDetails {
+        return ProblemDetails(
+            type: status == 400 ? "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1" : "about:blank",
+            title: title,
+            status: status,
+            instance: instance,
+            errors: byPath)
+    }
+}

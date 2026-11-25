@@ -403,11 +403,14 @@ public sealed partial class Compilation {
     void CheckUserAttribute(SyntaxTree tree, AttributeSyntax attribute, string name) {
         var scope = GetFileScope(tree);
         var context = AttributeContext(attribute) ?? scope.Module;
-        var found = attribute.Name is SimpleNameTypeSyntax { TypeArgumentList: null } simple
-            ? TypeBinder.Lookup(simple.Identifier.Text, context, scope, simple.Span, report: false)
-            : null;
-        if (found is not NamedTypeSymbol { TypeKind: TypeKind.Struct } type || Core.Attribute is not { } protocol
-            || !type.BaseTypes.Contains(protocol)) {
+        if (UserAttributeType(attribute, scope) is not { } type) {
+            // A rule of a type that derives Validatable is looked up, and
+            // reported if there is none, with that type's other rules.
+            if (IsValidationRule(attribute)) {
+                return;
+            }
+
+            var found = AttributeType(attribute, scope);
             ReportDeclaration(
                 ErrorCode.ERR_UnknownAttribute,
                 attribute.Name.Span,
@@ -446,6 +449,18 @@ public sealed partial class Compilation {
 
         _userAttributes[attribute] = (type, value);
     }
+
+    /// <summary>What an attribute's name names, if it is a type.</summary>
+    Symbol? AttributeType(AttributeSyntax attribute, FileScope scope) =>
+        attribute.Name is SimpleNameTypeSyntax { TypeArgumentList: null } simple
+            ? TypeBinder.Lookup(simple.Identifier.Text, AttributeContext(attribute) ?? scope.Module, scope, simple.Span, report: false)
+            : null;
+
+    /// <summary>The struct conforming to <c>Attribute</c> an attribute names, if one.</summary>
+    NamedTypeSymbol? UserAttributeType(AttributeSyntax attribute, FileScope scope) =>
+        AttributeType(attribute, scope) is NamedTypeSymbol { TypeKind: TypeKind.Struct } type && Core.Attribute is { } protocol && type.BaseTypes.Contains(protocol)
+            ? type
+            : null;
 
     /// <summary>The declaration an attribute is written on, as a symbol, if it is one.</summary>
     Symbol? AttributeContext(AttributeSyntax attribute) {

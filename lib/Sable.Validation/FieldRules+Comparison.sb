@@ -1,0 +1,137 @@
+module Sable.Validation
+
+extension FieldRules where V: Equatable {
+    /// Equal to the value.
+    @discardable
+    public fn equal(_ other: V) -> FieldRules<T, V> {
+        return compare("Equal", (whole: T) => other, none, (a: V?, b: V?) => same(a, b))
+    }
+
+    /// Equal to the other field: both none are.
+    @discardable
+    public fn equal(_ other: KeyPath<T, V?>) -> FieldRules<T, V> {
+        return compare("Equal", (whole: T) => other.value(of: whole), other.path, (a: V?, b: V?) => same(a, b))
+    }
+
+    /// Not equal to the value.
+    @discardable
+    public fn notEqual(_ other: V) -> FieldRules<T, V> {
+        return compare("NotEqual", (whole: T) => other, none, (a: V?, b: V?) => !same(a, b))
+    }
+
+    /// Not equal to the other field.
+    @discardable
+    public fn notEqual(_ other: KeyPath<T, V?>) -> FieldRules<T, V> {
+        return compare("NotEqual", (whole: T) => other.value(of: whole), other.path, (a: V?, b: V?) => !same(a, b))
+    }
+
+    /// One of the values.
+    @discardable
+    public fn oneOf(_ values: V[>..]) -> FieldRules<T, V> {
+        return check("OneOf", (value: V) => values.contains(value), (whole: T, value: V?) => ["Values": listed(values)])
+    }
+
+    /// None of the values.
+    @discardable
+    public fn noneOf(_ values: V[>..]) -> FieldRules<T, V> {
+        return check("NoneOf", (value: V) => !values.contains(value), (whole: T, value: V?) => ["Values": listed(values)])
+    }
+
+    fn compare(_ rule: String, _ other: @escaping (T) -> V?, _ field: String?, _ test: @escaping (V?, V?) -> Bool) -> FieldRules<T, V> {
+        return add(Check<T, V>(rule, takesNone: true, .Test((whole: T, value: V?) => test(value, other(whole))), comparison(other, field)))
+    }
+}
+
+/// Both none, or both there and equal.
+fn same<V: Equatable>(_ a: V?, _ b: V?) -> Bool {
+    if let a = a, let b = b {
+        return a == b
+    }
+    return a == none && b == none
+}
+
+fn listed<V>(_ values: V[>..]) -> String {
+    var text = ""
+    for (i, value) in values.enumerated() {
+        text = i == 0 ? "\(value)" : "\(text), \(value)"
+    }
+    return text
+}
+
+extension FieldRules {
+    /// What a comparison's message may say: what it is compared with, and,
+    /// of a field, what that is called.
+    fn comparison(_ other: @escaping (T) -> V?, _ field: String?) -> (T, V?) -> [String: String] {
+        return (whole: T, value: V?) => {
+            var values: [String: String] = [:]
+            if let value = other(whole) {
+                values["ComparisonValue"] = "\(value)"
+            } else {
+                values["ComparisonValue"] = ""
+            }
+            if let field = field {
+                values["ComparisonProperty"] = Messages.name(of: field)
+            }
+            return values
+        }
+    }
+}
+
+extension FieldRules where V: Comparable {
+    /// Greater than the value.
+    @discardable
+    public fn greaterThan(_ other: V) -> FieldRules<T, V> {
+        return order("GreaterThan", (whole: T) => other, none, (a: V, b: V) => b < a)
+    }
+
+    /// Greater than the other field; where that is none, anything is.
+    @discardable
+    public fn greaterThan(_ other: KeyPath<T, V?>) -> FieldRules<T, V> {
+        return order("GreaterThan", (whole: T) => other.value(of: whole), other.path, (a: V, b: V) => b < a)
+    }
+
+    /// The value, or greater.
+    @discardable
+    public fn greaterThanOrEqual(_ other: V) -> FieldRules<T, V> {
+        return order("GreaterThanOrEqual", (whole: T) => other, none, (a: V, b: V) => b <= a)
+    }
+
+    /// What the other field is, or greater; where that is none, anything is.
+    @discardable
+    public fn greaterThanOrEqual(_ other: KeyPath<T, V?>) -> FieldRules<T, V> {
+        return order("GreaterThanOrEqual", (whole: T) => other.value(of: whole), other.path, (a: V, b: V) => b <= a)
+    }
+
+    /// Less than the value.
+    @discardable
+    public fn lessThan(_ other: V) -> FieldRules<T, V> {
+        return order("LessThan", (whole: T) => other, none, (a: V, b: V) => a < b)
+    }
+
+    /// Less than the other field; where that is none, anything is.
+    @discardable
+    public fn lessThan(_ other: KeyPath<T, V?>) -> FieldRules<T, V> {
+        return order("LessThan", (whole: T) => other.value(of: whole), other.path, (a: V, b: V) => a < b)
+    }
+
+    /// The value, or less.
+    @discardable
+    public fn lessThanOrEqual(_ other: V) -> FieldRules<T, V> {
+        return order("LessThanOrEqual", (whole: T) => other, none, (a: V, b: V) => a <= b)
+    }
+
+    /// What the other field is, or less; where that is none, anything is.
+    @discardable
+    public fn lessThanOrEqual(_ other: KeyPath<T, V?>) -> FieldRules<T, V> {
+        return order("LessThanOrEqual", (whole: T) => other.value(of: whole), other.path, (a: V, b: V) => a <= b)
+    }
+
+    fn order(_ rule: String, _ other: @escaping (T) -> V?, _ field: String?, _ test: @escaping (V, V) -> Bool) -> FieldRules<T, V> {
+        return add(Check<T, V>(rule, takesNone: false, .Test((whole: T, value: V?) => {
+            guard let bound = other(whole) else {
+                return true
+            }
+            return test(value!, bound)
+        }), comparison(other, field)))
+    }
+}

@@ -1,0 +1,156 @@
+module ValidationTests
+
+import Sable.Testing
+import Sable.Validation
+
+@derive(Validatable)
+struct Place {
+    @notEmpty
+    var city: String
+    @length(2)
+    var country: String?
+}
+
+@derive(Validatable, Equatable)
+struct Signup {
+    @notEmpty
+    @email
+    var email: String
+    @range(18...)
+    @message("You must be an adult.")
+    @code("Adult")
+    @severity(.Warning)
+    var age: Int
+    @length(8...64)
+    @matches("[0-9]")
+    var password: String
+    @equal(\.password)
+    var repeated: String
+    @notNull
+    @oneOf(["a", "b"])
+    var kind: String?
+    @slug
+    var slug: String
+    @must({ $0 % 2 == 0 })
+    var even: Int
+    @range(0.0..<1.0)
+    var share: F64
+    var unruled: Int = 0
+}
+
+fn signup() -> Signup {
+    return Signup(email: "a@b.org", age: 20, password: "passw0rd", repeated: "passw0rd", kind: "a", slug: "s-1", even: 2, share: 0.5)
+}
+
+@test
+async fn attributesAreTheRules() {
+    assert((await signup().validate()).isValid)
+    var bad = signup()
+    bad.email = ""
+    bad.age = 3
+    bad.password = "password"
+    bad.kind = none
+    bad.slug = "S"
+    bad.even = 1
+    bad.share = 1.0
+    let result = await bad.validate()
+    assertEqual(result.failures.map { "\($0.path) \($0.code)" }, [
+        "email NotEmpty", "email Email", "age Adult", "password Matches", "repeated Equal", "kind NotNull", "slug Slug", "even Must", "share Within",
+    ])
+    assertEqual(result.messages(at: "age"), ["You must be an adult."])
+    assertEqual(result.failures(at: "age")[0].severity, Severity.Warning)
+}
+
+@test
+async fn validatedGivesTheValueOrThrows() {
+    assert((try! await signup().validated()) == signup())
+    do {
+        _ = try await Place(city: "", country: "SK").validated()
+        assert(false)
+    } catch {
+        assertEqual(error.result.failures[0].path, "city")
+    }
+}
+
+@derive(Validatable)
+struct Trip {
+    @validated
+    var from: Place
+    @validated
+    var to: Place?
+    var stops: Place[>..]
+    @lessThan(\.until)
+    var since: Int
+    var until: Int?
+
+    static fn moreRules(_ r: inout Rules<Trip>) {
+        r.each(\.stops).validated()
+        r.must({ $0.stops.count < 3 }).message("Too many stops.")
+        r.ruleSet("Book") { $0.field(\.to).notNull() }
+    }
+}
+
+@test
+async fn aFieldOfAValidatableTypeIsValidByItsOwnRules() {
+    let nowhere = Place(city: "", country: "SVK")
+    let trip = Trip(from: nowhere, to: nowhere, stops: [nowhere, Place(city: "x", country: none), nowhere], since: 3, until: 2)
+    assertEqual((await trip.validate()).failures.map(\.path), [
+        "from.city", "from.country", "to.city", "to.country", "since", "stops[0].city", "stops[0].country", "stops[2].city", "stops[2].country", "",
+    ])
+    let plain = Trip(from: Place(city: "x", country: none), to: none, stops: [], since: 3, until: none)
+    assert((await plain.validate()).isValid)
+    assertEqual((await plain.validate(ValidationOptions(ruleSets: ["Book"]))).failures.map(\.path), ["to"])
+}
+
+@derive(Validatable)
+struct Bounds<Bound: Comparable> {
+    @lessThanOrEqual(\.upper)
+    var lower: Bound
+    var upper: Bound
+}
+
+@test
+async fn aGenericTypeDerives() {
+    assert((await Bounds<Int>(lower: 1, upper: 1).validate()).isValid)
+    assert((await Bounds<String>(lower: "b", upper: "a").validate()).has(errorAt: "lower"))
+}
+
+struct ByHand: Validatable {
+    var n: Int
+
+    static fn rules(_ r: inout Rules<ByHand>) {
+        r.field(\.n).greaterThan(0)
+    }
+}
+
+@test
+async fn aConformanceIsWrittenByHandToo() {
+    assert((await ByHand(n: 0).validate()).has(errorAt: "n"))
+    assert((try! ByHand.validationRules().check(ByHand(n: 1))).isValid)
+}
+
+struct Docs: Attribute {
+    var text: String
+}
+
+@derive(Validatable)
+struct Documented {
+    @Docs("not a rule")
+    @greaterThan(0)
+    var n: Int
+}
+
+@test
+async fn aProgramsOwnAttributeIsNoRule() {
+    assertEqual((await Documented(n: 0).validate()).failures.count, 1)
+}
+
+@test
+async fn aTypeInABodyDerives() {
+    @derive(Validatable)
+    struct Local {
+        @notEmpty
+        var name: String
+    }
+    assert((await Local(name: "").validate()).has(errorAt: "name"))
+}

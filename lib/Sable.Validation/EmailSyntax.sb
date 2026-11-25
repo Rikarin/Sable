@@ -1,0 +1,162 @@
+module Sable.Validation
+
+import Sable.Net
+
+/// What counts as an email address.
+///
+/// ```sable
+/// assert(EmailSyntax.Html.accepts("ada@example.org"))
+/// assert(!EmailSyntax.Html.accepts("\"ada lovelace\"@example.org"))
+/// assert(EmailSyntax.Smtp.accepts("\"ada lovelace\"@example.org"))
+/// assert(EmailSyntax.Simple.accepts("ada lovelace@example org"))
+/// ```
+@derive(Equatable, Debug)
+public enum EmailSyntax {
+    /// What a browser takes in `<input type=email>`: the HTML standard's
+    /// "valid email address", letters, digits and a few signs in the name,
+    /// and a domain of ASCII labels.
+    Html
+    /// What SMTP carries: RFC 5321's Mailbox, with a quoted name or not, at
+    /// a domain, internationalised (RFC 6531) or not, or an address in
+    /// brackets, and its limits of length.
+    Smtp
+    /// An `@` with something on either side of it, and no other, nor a line
+    /// break: FluentValidation's and .NET's.
+    Simple
+
+    public fn accepts(_ text: String) -> Bool {
+        return match self {
+            case .Html   => isHtmlAddress(text)
+            case .Smtp   => isMailbox(text)
+            case .Simple => isSimpleAddress(text)
+        }
+    }
+}
+
+fn isSimpleAddress(_ text: String) -> Bool {
+    let bytes = text.utf8
+    var at = -1
+    for (i, byte) in bytes.enumerated() {
+        if byte == 0x0D || byte == 0x0A {
+            return false
+        }
+        if byte == 0x40 {
+            if at >= 0 {
+                return false
+            }
+            at = i
+        }
+    }
+    return at > 0 && at < bytes.count - 1
+}
+
+/// RFC 5322's atext, which the HTML standard names.
+fn isAtomText(_ byte: U8) -> Bool {
+    return byte >= 0x61 && byte <= 0x7A || byte >= 0x41 && byte <= 0x5A || byte >= 0x30 && byte <= 0x39 || "!#$%&'*+/=?^_`{|}~-".utf8.contains(byte)
+}
+
+fn isHtmlAddress(_ text: String) -> Bool {
+    let bytes = text.utf8
+    var at = 0
+    while at < bytes.count && bytes[at] != 0x40 {
+        if !isAtomText(bytes[at]) && bytes[at] != 0x2E {
+            return false
+        }
+        at += 1
+    }
+    return at > 0 && at < bytes.count && areLabels(bytes, from: at + 1)
+}
+
+/// Whether the bytes from there on are labels of letters, digits and
+/// hyphens, 63 at most and none at either end a hyphen, with dots between.
+fn areLabels(_ bytes: Utf8View, from start: Int) -> Bool {
+    var length = 0
+    var last: U8 = 0x2D
+    for i in start..<bytes.count {
+        let byte = bytes[i]
+        if byte == 0x2E {
+            if length == 0 || last == 0x2D {
+                return false
+            }
+            length = 0
+        } else {
+            let hyphen = byte == 0x2D
+            let ok = hyphen || byte >= 0x61 && byte <= 0x7A || byte >= 0x41 && byte <= 0x5A || byte >= 0x30 && byte <= 0x39
+            length += 1
+            if !ok || hyphen && length == 1 || length > 63 {
+                return false
+            }
+        }
+        last = byte
+    }
+    return length > 0 && last != 0x2D
+}
+
+fn isMailbox(_ text: String) -> Bool {
+    let bytes = text.utf8
+    var at = 0
+    if bytes.count > 254 || bytes.isEmpty {
+        return false
+    }
+    if bytes[0] == 0x22 {
+        // Quoted-string: qtextSMTP, or a backslash and a printable character.
+        at = 1
+        while at < bytes.count && bytes[at] != 0x22 {
+            if bytes[at] == 0x5C {
+                at += 1
+                if at == bytes.count {
+                    return false
+                }
+            }
+            if bytes[at] < 0x20 || bytes[at] == 0x7F {
+                return false
+            }
+            at += 1
+        }
+        at += 1
+    } else {
+        // Dot-string: atoms with dots between them.
+        var length = 0
+        while at < bytes.count && bytes[at] != 0x40 {
+            if bytes[at] == 0x2E {
+                if length == 0 {
+                    return false
+                }
+                length = 0
+            } else if isAtomText(bytes[at]) || bytes[at] >= 0x80 {
+                length += 1
+            } else {
+                return false
+            }
+            at += 1
+        }
+        if length == 0 {
+            return false
+        }
+    }
+    if at > 64 || at >= bytes.count || bytes[at] != 0x40 {
+        return false
+    }
+    let domain = text.splitLastOnce("@")!.1
+    if domain.hasPrefix("[") {
+        return domain.hasSuffix("]") && isAddressLiteral(domain)
+    }
+    guard let ascii = Idna.toAscii(domain) else {
+        return false
+    }
+    return ascii.utf8Count <= 253 && areLabels(ascii.utf8, from: 0)
+}
+
+/// `[192.0.2.1]` or `[IPv6:2001:db8::1]`.
+fn isAddressLiteral(_ text: String) -> Bool {
+    var inner = text.trimmingPrefix("[").trimmingSuffix("]")
+    let six = inner.lowercased().hasPrefix("ipv6:")
+    if six {
+        inner = inner.splitOnce(":")!.1
+    }
+    do {
+        return (try IpAddress.parse(inner)).isV6 == six
+    } catch {
+        return false
+    }
+}

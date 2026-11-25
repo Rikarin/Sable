@@ -1,0 +1,38 @@
+module ValidationTests
+
+import Sable.Testing
+import Sable.Validation
+
+struct ServerOptions {
+    var port: Int
+    var names: String[>..]
+}
+
+struct ServerOptionsValidator: Validator<ServerOptions> {
+    fn rules(_ r: inout Rules<ServerOptions>) {
+        r.field(\.port).inRange(1...65535)
+        r.each(\.names).notEmpty()
+    }
+}
+
+@test
+async fn validOptionsAreGivenBack() {
+    assertEqual((try! await validatedOptions(ServerOptions(port: 80, names: []), by: ServerOptionsValidator())).port, 80)
+    assertEqual((try! await validatedOptions(Place(city: "x", country: none), named: "place")).city, "x")
+}
+
+@test
+async fn optionsThatAreNotValidSayWhichTheyAre() {
+    do {
+        _ = try await validatedOptions(ServerOptions(port: 0, names: ["", "a"]), named: "server", by: ServerOptionsValidator())
+        assert(false)
+    } catch {
+        assertEqual(error.result.failures.map(\.path), ["server.port", "server.names[0]"])
+    }
+    do {
+        _ = try await validatedOptions(Place(city: "", country: none))
+        assert(false)
+    } catch {
+        assertEqual(error.result.failures.map(\.path), ["city"])
+    }
+}

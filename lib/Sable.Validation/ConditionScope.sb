@@ -1,0 +1,10 @@
+module Sable.Validation
+
+/// Which of a field's checks a condition is for.
+@derive(Equatable, Debug)
+public enum ConditionScope {
+    /// Those written before it.
+    AllBefore
+    /// The last one written before it, alone.
+    LastOnly
+}

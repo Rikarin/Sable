@@ -1,0 +1,12 @@
+module ValidationTests
+
+import Sable.Testing
+import Sable.Validation
+
+@test
+fn aTemplateFillsWhatItKnows() {
+    let values = ["A": "1", "B": ""]
+    for (text, filled) in [("", ""), ("plain", "plain"), ("{A}{B}{A}", "11"), ("{C}", "{C}"), ("{{A}}", "{A}"), ("{", "{"), ("}", "}"), ("a{A", "a{A"), ("{A}}}", "1}"), ("é{A}ž", "é1ž"), ("{{{A}}}", "{1}")] {
+        assertEqual(MessageTemplate(text).fill(values), filled)
+    }
+}

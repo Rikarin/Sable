@@ -1,0 +1,44 @@
+module ValidationTests
+
+import Sable.Globalization
+import Sable.Testing
+import Sable.Validation
+
+struct Translations: MessageCatalog {
+    fn template(for code: String, in locale: Locale) -> String? {
+        if locale.language == "sk" {
+            return code == "NotEmpty" ? "Pole {PropertyName} nesmie byť prázdne." : code == "MyCode" ? "Podľa kódu." : none
+        }
+        return none
+    }
+
+    fn name(of path: String, in locale: Locale) -> String? {
+        return locale.language == "sk" && path == "country" ? "Krajina" : none
+    }
+}
+
+struct Bare: MessageCatalog {
+    fn template(for code: String, in locale: Locale) -> String? => locale == Locale.invariant ? "[\(code)]" : none
+}
+
+async fn inSlovak(_ catalog: any MessageCatalog, _ tag: String?, _ add: @escaping (inout Rules<TestCustomer>) -> ()) -> String {
+    var customer = ada()
+    customer.country = ""
+    let locale: Locale? = if let tag = tag { Locale.of(tag) } else { none }
+    return (await Of<TestCustomer>(add).validate(customer, ValidationOptions(messages: catalog, locale: locale))).toString()
+}
+
+@test
+async fn aMessageIsLookedUpByCodeThenByRule() {
+    assertEqual(await inSlovak(Translations(), "sk-SK") { $0.field(\.country).notEmpty() }, "Pole Krajina nesmie byť prázdne.")
+    assertEqual(await inSlovak(Translations(), "sk-SK") { $0.field(\.country).notEmpty().code("MyCode") }, "Podľa kódu.")
+    assertEqual(await inSlovak(Translations(), "sk-SK") { $0.field(\.country).notEmpty().code("Other") }, "Pole Krajina nesmie byť prázdne.")
+    assertEqual(await inSlovak(Translations(), "sk-SK") { $0.field(\.country).minLength(1) }, "'Krajina' must be at least 1 long. It is 0 long.")
+    assertEqual(await inSlovak(Translations(), "cs") { $0.field(\.country).notEmpty() }, "'Country' must not be empty.")
+    assertEqual(await inSlovak(Translations(), "sk") { $0.field(\.country).named("X").notEmpty().message("{PropertyName}!") }, "X!")
+}
+
+@test
+async fn theLocaleIsTheInvariantOneUnlessGiven() {
+    assertEqual(await inSlovak(Bare(), none) { $0.field(\.country).notEmpty() }, "[NotEmpty]")
+}

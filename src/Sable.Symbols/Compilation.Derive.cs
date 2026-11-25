@@ -22,6 +22,9 @@ public enum DerivedMember {
 
     /// <summary><c>static decode(from:)</c>, field by field from a Decoder: <c>Serializable</c>.</summary>
     Decode,
+
+    /// <summary><c>static rules(_:)</c>, a rule for each attribute that names one: Sable.Validation's <c>Validatable</c>.</summary>
+    Rules,
 }
 
 /// <summary>One member <c>@derive</c> made, and where it was asked for.</summary>
@@ -72,6 +75,7 @@ public sealed partial class Compilation {
         ("Debug", DerivedMember.Debug),
         ("Serializable", DerivedMember.Encode),
         ("Serializable", DerivedMember.Decode),
+        ("Validatable", DerivedMember.Rules),
     ];
 
     readonly List<(NamedTypeSymbol Type, AttributeSyntax Attribute, FileScope? Scope)> _derivations = [];
@@ -113,10 +117,55 @@ public sealed partial class Compilation {
     NamedTypeSymbol? DerivableProtocol(string name) =>
         name == "Serializable"
             ? GetModule("Sable.Serialize")?.GetType(name) is { TypeKind: TypeKind.Protocol } serializable ? serializable : null
+            : name == "Validatable"
+            ? ValidationType(name) is { TypeKind: TypeKind.Protocol } validatable ? validatable : null
             : CoreProtocol(name);
 
     /// <summary>A type of Sable.Serialize's, which a derived Serializable conformance uses.</summary>
     internal NamedTypeSymbol? SerializeType(string name) => GetModule("Sable.Serialize")?.GetType(name);
+
+    /// <summary>A type of Sable.Validation's, which a derived Validatable conformance uses.</summary>
+    NamedTypeSymbol? ValidationType(string name) => GetModule("Sable.Validation")?.GetType(name);
+
+    /// <summary>
+    ///     Binds a derived <c>Validatable</c>'s rules, reporting what is wrong
+    ///     with the attributes that are rules where each is written.
+    /// </summary>
+    void BindValidationRules(Derivation derivation, FileScope scope) {
+        var type = derivation.Type;
+        var self = type.IsGenericDefinition ? type.Construct([..type.TypeParameters]) : type;
+        var fields = DerivedConformance.StoredFields(type)
+            .Select(f => (Field: f, Rules: (IReadOnlyList<AttributeSyntax>)[..ValidationRulesOf(f)]))
+            .Where(static f => f.Rules.Count > 0)
+            .ToList();
+        var binder = new Binder(this, scope, derivation.Function);
+        var body = binder.BindValidationRules(derivation, self, fields);
+        foreach (var diagnostic in binder.Diagnostics) {
+            _declarationDiagnostics.Add(diagnostic);
+        }
+
+        _derivedBodies[derivation.Function] = body;
+    }
+
+    /// <summary>The attributes of a field that are rules: those that are nothing else.</summary>
+    IEnumerable<AttributeSyntax> ValidationRulesOf(FieldSymbol field) =>
+        field.DeclaringSyntax is [FieldDeclarationSyntax declaration] && FileScopeOf(declaration) is { } scope
+            ? AttributesOf(declaration).Where(a =>
+                AttributeName(a) is { Length: > 0 } name
+                && !KnownAttributes.ContainsKey(name)
+                && !IsGeneratorAttribute(scope.Tree, a, name, out _)
+                && UserAttributeType(a, scope) is null)
+            : [];
+
+    /// <summary>
+    ///     True for an attribute on a field of a struct that derives
+    ///     <c>Validatable</c>, by what is written: a type declared in a body
+    ///     derives only as the body is bound.
+    /// </summary>
+    static bool IsValidationRule(AttributeSyntax attribute) =>
+        attribute.Parent is FieldDeclarationSyntax { Parent: StructDeclarationSyntax type }
+        && AttributesOf(type).Any(static a =>
+            AttributeName(a) == "derive" && a.ArgumentList is { } list && list.Arguments.Any(static d => d.Expression.ToString().Trim() == "Validatable"));
 
     /// <summary>
     ///     A field's initial value, bound as a memberwise initialiser would put
@@ -191,7 +240,7 @@ public sealed partial class Compilation {
                 ReportDeclaration(
                     ErrorCode.ERR_UnknownDerivation,
                     argument.Span,
-                    $"'{name}' cannot be derived; '@derive' knows Equatable, Hashable, Comparable, Debug, Serializable and Copy"
+                    $"'{name}' cannot be derived; '@derive' knows Equatable, Hashable, Comparable, Debug, Serializable, Validatable and Copy"
                 );
                 continue;
             }
@@ -217,8 +266,14 @@ public sealed partial class Compilation {
                     at,
                     protocolName == "Serializable"
                         ? "'@derive(Serializable)' needs Sable.Serialize: 'import Sable.Serialize'"
+                        : protocolName == "Validatable" ? "'@derive(Validatable)' needs Sable.Validation: 'import Sable.Validation'"
                         : $"'@derive({protocolName})' needs Sable.Core's '{protocolName}', which is not here"
                 );
+                continue;
+            }
+
+            if (member == DerivedMember.Rules && (type.TypeKind != TypeKind.Struct || ValidationType("Rules") is null)) {
+                ReportDeclaration(ErrorCode.ERR_CannotDerive, at, $"'@derive(Validatable)' is for structs, whose fields' attributes are the rules; '{type.Name}' is not one");
                 continue;
             }
 
@@ -273,6 +328,13 @@ public sealed partial class Compilation {
                 }
             );
 
+            // Its fields conform to nothing; its attributes are its body.
+            if (member == DerivedMember.Rules) {
+                var scope = GetFileScope(tree);
+                TypeBinder.DeferLate(() => BindValidationRules(derivation, scope));
+                continue;
+            }
+
             // Implied, it is checked by what implied it: a field that is not
             // Hashable is reported once, as not Hashable.
             if (isExplicit) {
@@ -288,6 +350,7 @@ public sealed partial class Compilation {
             DerivedMember.Hash => "hash",
             DerivedMember.Encode => "encode",
             DerivedMember.Decode => "decode",
+            DerivedMember.Rules => "rules",
             _ => "debugDescription",
         };
 
@@ -305,8 +368,17 @@ public sealed partial class Compilation {
             type.DeclaredAccessibility,
             isOperator ? FunctionKind.Operator : FunctionKind.Ordinary
         ) {
-            IsStatic = isOperator || member == DerivedMember.Decode,
+            IsStatic = isOperator || member is DerivedMember.Decode or DerivedMember.Rules,
         };
+
+        // 'rules(_ r: inout Rules<Self>)'.
+        if (member == DerivedMember.Rules) {
+            var rules = ValidationType("Rules")!;
+            function.Parameters = [new ParameterSymbol("r", "_", function, null, 0) { TypeResolver = () => rules.Construct([self]), Modifier = ParameterModifier.InOut }];
+            function.ReturnTypeResolver = () => Core.Void;
+            type.AddMember(function);
+            return function;
+        }
 
         if (member is DerivedMember.Encode or DerivedMember.Decode) {
             var error = SerializeType("SerializeError")!;

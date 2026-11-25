@@ -1,0 +1,49 @@
+module Sable.Validation
+
+extension FieldRules {
+    /// The value is valid by another validator, whose failures' paths are
+    /// under this one's: FluentValidation's `SetValidator`. It is asked for
+    /// its rules as the first value is checked, so a tree's may use itself.
+    ///
+    /// The rule sets asked for are its too, unless others are named.
+    ///
+    /// ```sable
+    /// struct Line { var total: Int }
+    /// struct Order { var lines: Line[>..] }
+    ///
+    /// struct LineValidator: Validator<Line> {
+    ///     fn rules(_ r: inout Rules<Line>) { r.field(\.total).greaterThan(0) }
+    /// }
+    ///
+    /// var rules = Rules<Order>()
+    /// rules.each(\.lines).use(LineValidator())
+    /// let result = await rules.validate(Order(lines: [Line(total: 1), Line(total: 0)]))
+    /// assert(result.failures[0].path == "lines[1].total")
+    /// ```
+    @discardable
+    public fn use<W: Validator<V>>(_ validator: W, ruleSets: String[>..] = []) -> FieldRules<T, V> {
+        return nested(NestedRules<V>(() => Rules<V>(validator)), ruleSets)
+    }
+
+    /// The value is valid by those rules.
+    @discardable
+    public fn use(rules: Rules<V>, ruleSets: String[>..] = []) -> FieldRules<T, V> {
+        return nested(NestedRules<V>(() => rules), ruleSets)
+    }
+
+    fn nested(_ rules: NestedRules<V>, _ sets: String[>..]) -> FieldRules<T, V> {
+        var lower: String[>..] = []
+        for name in sets {
+            lower.append(name.lowercased())
+        }
+        return add(Check<T, V>("Nested", takesNone: false, .Nested(rules, lower), none))
+    }
+}
+
+extension FieldRules where V: Validatable {
+    /// The value is valid by its own type's rules.
+    @discardable
+    public fn validated() -> FieldRules<T, V> {
+        return nested(NestedRules<V>(() => V.validationRules()), [])
+    }
+}

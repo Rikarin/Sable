@@ -986,6 +986,7 @@ Sable.Net          Url, sockets, Dns; Http client to come
 Sable.Time         Instant, Duration, Clock, Calendar
 Sable.Process      spawn, environment, signals
 Sable.Hosting      host, lifetime, services, cron jobs
+Sable.Validation   validators, rules, @derive(Validatable)
 Sable.Diagnostics  Logger, tracing, metrics
 Sable.Testing      the test harness `sable test` drives
 ```

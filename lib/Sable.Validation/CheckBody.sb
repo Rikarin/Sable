@@ -1,0 +1,12 @@
+module Sable.Validation
+
+/// What a check does: says whether a value is right, or reports what is wrong with it.
+union CheckBody<T, V> {
+    Test((T, V?) -> Bool)
+    TestWaiting(async (T, V?) -> Bool)
+    Report((T, V?, RuleContext) -> ())
+    ReportWaiting(async (T, V?, RuleContext) -> ())
+    /// Another validator's rules, and the rule sets of them to run, if not
+    /// the ones asked for.
+    Nested(NestedRules<V>, String[>..])
+}

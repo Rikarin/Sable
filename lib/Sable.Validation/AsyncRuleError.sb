@@ -1,0 +1,12 @@
+module Sable.Validation
+
+/// A value was checked without waiting, by rules one of which waits.
+@derive(Equatable)
+public struct AsyncRuleError: Error {
+    /// The path of the field the rule is of.
+    public let path: String
+
+    public fn description() -> String {
+        return "a rule of '\(path)' is asynchronous, so it is run by 'await validate', not by 'check'"
+    }
+}

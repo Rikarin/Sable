@@ -1,0 +1,228 @@
+module Sable.Validation
+
+/// The rules of a `T`, as a validator adds them, and ready to be run.
+///
+/// ```sable
+/// struct Order { var total: Int, var lines: String[>..] }
+///
+/// var rules = Rules<Order>()
+/// rules.field(\.total).greaterThan(0)
+/// rules.each(\.lines).notEmpty()
+/// let result = await rules.validate(Order(total: 3, lines: ["a", ""]))
+/// assert(result.failures.map(\.path) == ["lines[1]"])
+/// ```
+public struct Rules<T> {
+    var all: Rule<T>[>..] = []
+    var sets: String[>..] = []
+
+    /// What a rule's failure means for the rules after it.
+    public var cascade: CascadeMode = .Continue
+
+    /// What a check's failure means for the checks after it of one field,
+    /// in the rules added from here on that do not say themselves.
+    public var ruleCascade: CascadeMode = .Continue
+
+    /// No rules.
+    public init() { }
+
+    /// A validator's.
+    public init<V: Validator<T>>(_ validator: V) {
+        validator.rules(&self)
+    }
+
+    /// The rules of a validator only known to be one.
+    public init(erased validator: any Validator<T>) {
+        validator.rules(&self)
+    }
+
+    // ---- Adding ----------------------------------------------------------
+
+    /// Rules of a field, by a key path to it.
+    @discardable
+    public mutating fn field<V>(_ path: KeyPath<T, V>) -> FieldRules<T, V> {
+        return add(FieldRules<T, V>(path.path, sets, ruleCascade, (value: T) => path.value(of: value)))
+    }
+
+    /// Rules of an optional field: where it is none, only the ones that ask
+    /// whether it is — `notNull`, `notEmpty`, `equal` — are run.
+    @discardable
+    public mutating fn field<V>(_ path: KeyPath<T, V?>) -> FieldRules<T, V> {
+        return add(FieldRules<T, V>(path.path, sets, ruleCascade, (value: T) => path.value(of: value)))
+    }
+
+    /// Rules of each of a field's elements, whose path has its position:
+    /// `orders[2]`.
+    @discardable
+    public mutating fn each<C: Sequence>(_ path: KeyPath<T, C>) -> FieldRules<T, C.Element> where C.Failure == Never {
+        return add(FieldRules<T, C.Element>(each: path.path, sets, ruleCascade, (value: T) => {
+            var elements: C.Element[>..] = []
+            for element in path.value(of: value) {
+                elements.append(element)
+            }
+            return elements
+        }))
+    }
+
+    /// Rules of each of an optional field's elements; none has none.
+    @discardable
+    public mutating fn each<C: Sequence>(_ path: KeyPath<T, C?>) -> FieldRules<T, C.Element> where C.Failure == Never {
+        return add(FieldRules<T, C.Element>(each: path.path, sets, ruleCascade, (value: T) => {
+            var elements: C.Element[>..] = []
+            if let held = path.value(of: value) {
+                for element in held {
+                    elements.append(element)
+                }
+            }
+            return elements
+        }))
+    }
+
+    /// Rules of the value itself.
+    @discardable
+    public mutating fn model() -> FieldRules<T, T> {
+        return add(FieldRules<T, T>("", sets, ruleCascade, (value: T) => value))
+    }
+
+    /// A rule of the value itself: `r.must({ $0.start < $0.end }).message("It ends before it starts.")`.
+    @discardable
+    public mutating fn must(_ test: @escaping (T) -> Bool) -> FieldRules<T, T> {
+        return model().must(test)
+    }
+
+    /// A rule of the value itself that waits.
+    @discardable
+    public mutating fn must(_ test: @escaping async (T) -> Bool) -> FieldRules<T, T> {
+        return model().must(test)
+    }
+
+    /// The rules of a field of no stored member, read by the closure.
+    @discardable
+    public mutating fn computed<V>(_ name: String, _ read: @escaping (T) -> V) -> FieldRules<T, V> {
+        return add(FieldRules<T, V>(name, sets, ruleCascade, (value: T) => read(value)))
+    }
+
+    /// Another validator's rules of the same type, added to these.
+    public mutating fn include<V: Validator<T>>(_ validator: V) {
+        validator.rules(&self)
+    }
+
+    /// Rules in a set of that name, run only where it is asked for
+    /// (`ValidationOptions.ruleSets`); several names, with commas between
+    /// them, are several sets.
+    ///
+    /// ```sable
+    /// var rules = Rules<String>()
+    /// rules.model().maxLength(5)
+    /// rules.ruleSet("Create") { $0.model().notEmpty() }
+    /// assert((await rules.validate("")).isValid)
+    /// assert(!(await rules.validate("", ValidationOptions(ruleSets: ["create"]))).isValid)
+    /// ```
+    public mutating fn ruleSet(_ names: String, _ body: (inout Rules<T>) -> ()) {
+        let outer = sets
+        sets = []
+        for name in names.split(separator: ',') {
+            sets.append(name.trimmed().lowercased())
+        }
+        body(&self)
+        sets = outer
+    }
+
+    /// Rules run where the condition holds, which is asked once for them
+    /// all, and others where it does not.
+    public mutating fn when(_ condition: @escaping (T) -> Bool, _ body: (inout Rules<T>) -> (), otherwise: (inout Rules<T>) -> () = { (rules: inout Rules<T>) in }) {
+        group(Condition<T>(condition), body, otherwise)
+    }
+
+    /// Rules run where the condition, which waits, holds.
+    public mutating fn when(_ condition: @escaping async (T) -> Bool, _ body: (inout Rules<T>) -> (), otherwise: (inout Rules<T>) -> () = { (rules: inout Rules<T>) in }) {
+        group(Condition<T>(waiting: condition), body, otherwise)
+    }
+
+    /// Rules run where the condition does not hold.
+    public mutating fn unless(_ condition: @escaping (T) -> Bool, _ body: (inout Rules<T>) -> (), otherwise: (inout Rules<T>) -> () = { (rules: inout Rules<T>) in }) {
+        group(Condition<T>((value: T) => !condition(value)), body, otherwise)
+    }
+
+    /// Rules run where the condition, which waits, does not hold.
+    public mutating fn unless(_ condition: @escaping async (T) -> Bool, _ body: (inout Rules<T>) -> (), otherwise: (inout Rules<T>) -> () = { (rules: inout Rules<T>) in }) {
+        group(Condition<T>(waiting: { (value: T) in !(await condition(value)) }), body, otherwise)
+    }
+
+    mutating fn group(_ condition: Condition<T>, _ body: (inout Rules<T>) -> (), _ otherwise: (inout Rules<T>) -> ()) {
+        var rules = inner()
+        body(&rules)
+        var others = inner()
+        otherwise(&others)
+        all.append(RuleGroup<T>(condition, rules, others))
+    }
+
+    /// No rules yet, of the sets these are added to.
+    fn inner() -> Rules<T> {
+        var rules = Rules<T>()
+        rules.sets = sets
+        rules.cascade = cascade
+        rules.ruleCascade = ruleCascade
+        return rules
+    }
+
+    mutating fn add<V>(_ rule: FieldRules<T, V>) -> FieldRules<T, V> {
+        all.append(rule)
+        return rule
+    }
+
+    // ---- Running ---------------------------------------------------------
+
+    /// What the rules say of the value.
+    public async fn validate(_ value: T, _ options: ValidationOptions = ValidationOptions()) -> ValidationResult {
+        let run = ValidationRun(options)
+        await runWaiting(value, at: "", in: run)
+        return run.result
+    }
+
+    /// What the rules say of the value, with nothing waited for: an error
+    /// where a rule that applies waits.
+    public fn check(_ value: T, _ options: ValidationOptions = ValidationOptions()) throws(AsyncRuleError) -> ValidationResult {
+        let run = ValidationRun(options)
+        self.run(value, at: "", in: run)
+        if let path = run.waits {
+            throw AsyncRuleError(path: path)
+        }
+        return run.result
+    }
+
+    /// The value, if it is valid.
+    public async fn validated(_ value: T, _ options: ValidationOptions = ValidationOptions()) throws(ValidationError) -> T {
+        let result = await validate(value, options)
+        if !result.isValid {
+            throw ValidationError(result)
+        }
+        return value
+    }
+
+    /// Whether some rule may wait.
+    public var mayWait: Bool => all.contains { $0.mayWait() }
+
+    fn run(_ value: T, at base: String, in run: ValidationRun) {
+        let before = run.failures.count
+        for rule in all {
+            rule.run(value, at: base, in: run)
+            if run.waits != none || cascade == .Stop && run.failures.count > before {
+                return
+            }
+        }
+    }
+
+    async fn runWaiting(_ value: T, at base: String, in run: ValidationRun) {
+        let before = run.failures.count
+        for rule in all {
+            if rule.mayWait() {
+                await rule.runWaiting(value, at: base, in: run)
+            } else {
+                rule.run(value, at: base, in: run)
+            }
+            if cascade == .Stop && run.failures.count > before {
+                return
+            }
+        }
+    }
+}

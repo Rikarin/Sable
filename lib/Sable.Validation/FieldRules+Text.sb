@@ -1,0 +1,155 @@
+module Sable.Validation
+
+import Sable.Math
+import Sable.Net
+import Sable.Text
+
+extension FieldRules where V == String {
+    /// The pattern matches, somewhere in the text unless it is anchored.
+    @discardable
+    public fn matches(_ pattern: Regex) -> FieldRules<T, V> {
+        return check("Matches", (value: String) => pattern.isMatch(value), (whole: T, value: V?) => ["RegularExpression": pattern.pattern])
+    }
+
+    /// The pattern, which must be one, matches.
+    @discardable
+    public fn matches(_ pattern: String, options: RegexOptions = .None) -> FieldRules<T, V> {
+        do {
+            return matches(try Regex(pattern, options: options))
+        } catch {
+            preconditionFailure("'\(pattern)' is not a pattern: \(error.description())")
+        }
+    }
+
+    /// An email address, by that syntax.
+    @discardable
+    public fn email(_ syntax: EmailSyntax = .Html) -> FieldRules<T, V> {
+        return check("Email", (value: String) => syntax.accepts(value))
+    }
+
+    /// An absolute URL, as `Url.parse` reads one, of one of the schemes if
+    /// any are named.
+    @discardable
+    public fn url(schemes: String[>..] = []) -> FieldRules<T, V> {
+        return check("Url", (value: String) => {
+            if schemes.isEmpty {
+                return Url.canParse(value)
+            }
+            do {
+                return schemes.contains((try Url.parse(value)).scheme)
+            } catch {
+                return false
+            }
+        })
+    }
+
+    /// A UUID, in any form `UUID.parse` reads.
+    @discardable
+    public fn uuid() -> FieldRules<T, V> {
+        return check("Uuid", (value: String) => {
+            do {
+                _ = try UUID.parse(value)
+                return true
+            } catch {
+                return false
+            }
+        })
+    }
+
+    /// A payment card's number: 8 to 19 digits, with hyphens and spaces
+    /// between them or not, the last of which Luhn's sum checks (ISO/IEC 7812-1).
+    @discardable
+    public fn creditCard() -> FieldRules<T, V> {
+        return check("CreditCard", (value: String) => isCardNumber(value))
+    }
+
+    /// A number `Decimal.parse` reads.
+    @discardable
+    public fn decimal() -> FieldRules<T, V> {
+        return check("Decimal", (value: String) => decimalOf(value) != none)
+    }
+
+    /// A number of at most `precision` digits, at most `scale` of them
+    /// decimals. Text that is no number is refused.
+    @discardable
+    public fn precisionScale(_ precision: Int, _ scale: Int, ignoringTrailingZeros: Bool = false) -> FieldRules<T, V> {
+        return check(
+            "PrecisionScale",
+            (value: String) => if let number = decimalOf(value) { fits(number, precision, scale, ignoringTrailingZeros) } else { false },
+            (whole: T, value: V?) => digits(decimalOf(value!) ?? Decimal.zero, precision, scale, ignoringTrailingZeros))
+    }
+}
+
+extension FieldRules where V == Decimal {
+    /// At most `precision` digits, at most `scale` of them decimals, so at
+    /// most `precision - scale` before the point: SQL's `decimal(p, s)`.
+    ///
+    /// ```sable
+    /// var rules = Rules<Decimal>()
+    /// rules.model().precisionScale(4, 2)
+    /// assert((await rules.validate(Decimal(1234, scale: 2))).isValid)
+    /// assert(!(await rules.validate(Decimal(1234, scale: 1))).isValid)
+    /// ```
+    @discardable
+    public fn precisionScale(_ precision: Int, _ scale: Int, ignoringTrailingZeros: Bool = false) -> FieldRules<T, V> {
+        return check(
+            "PrecisionScale",
+            (value: Decimal) => fits(value, precision, scale, ignoringTrailingZeros),
+            (whole: T, value: V?) => digits(value!, precision, scale, ignoringTrailingZeros))
+    }
+}
+
+fn decimalOf(_ text: String) -> Decimal? {
+    do {
+        return try Decimal.parse(text)
+    } catch {
+        return none
+    }
+}
+
+/// How many of a number's digits are before the point, and after it.
+fn digitsOf(_ value: Decimal, _ ignoringTrailingZeros: Bool) -> (Int, Int) {
+    let number = ignoringTrailingZeros ? value.normalized() : value
+    var count = 0
+    var rest = number.coefficient.magnitude
+    while rest > 0 {
+        count += 1
+        rest = rest / 10
+    }
+    return (max(count - number.scale, 0), number.scale)
+}
+
+fn fits(_ value: Decimal, _ precision: Int, _ scale: Int, _ ignoringTrailingZeros: Bool) -> Bool {
+    let (whole, decimals) = digitsOf(value, ignoringTrailingZeros)
+    return decimals <= scale && whole <= precision - scale
+}
+
+fn digits(_ value: Decimal, _ precision: Int, _ scale: Int, _ ignoringTrailingZeros: Bool) -> [String: String] {
+    let (whole, decimals) = digitsOf(value, ignoringTrailingZeros)
+    return ["ExpectedPrecision": "\(precision)", "ExpectedScale": "\(scale)", "Digits": "\(whole)", "ActualScale": "\(decimals)"]
+}
+
+/// Whether the text is 8 to 19 digits, with spaces and hyphens, whose sum by
+/// Luhn's formula is a multiple of ten.
+fn isCardNumber(_ text: String) -> Bool {
+    var sum = 0
+    var count = 0
+    for byte in text.utf8.reversed() {
+        if byte == 0x20 || byte == 0x2D {
+            continue
+        }
+        if byte < 0x30 || byte > 0x39 {
+            return false
+        }
+        var digit = Int(byte) - 0x30
+        if count % 2 == 1 {
+            digit *= 2
+            if digit > 9 {
+                digit -= 9
+            }
+        }
+        sum += digit
+        count += 1
+    }
+    return count >= 8 && count <= 19 && sum % 10 == 0
+}

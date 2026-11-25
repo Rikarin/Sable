@@ -1,0 +1,40 @@
+module Sable.Validation
+
+/// One check of a field's: the rule it is, and what it says when broken.
+final class Check<T, V> {
+    /// The rule: the code of its failures, unless `code` is.
+    let rule: String
+    /// Whether it is run where the field is none.
+    let takesNone: Bool
+    let body: CheckBody<T, V>
+    /// What its message's placeholders stand for, besides every rule's.
+    let detail: ((T, V?) -> [String: String])?
+    var code: String? = none
+    var severity: Severity = .Error
+    var message: String? = none
+    var makeMessage: ((T, V?) -> String)? = none
+    var conditions: Condition<T>[>..] = []
+
+    init(_ rule: String, takesNone: Bool, _ body: CheckBody<T, V>, _ detail: ((T, V?) -> [String: String])?) {
+        self.rule = rule
+        self.takesNone = takesNone
+        self.body = body
+        self.detail = detail
+    }
+
+    var waits: Bool {
+        get {
+            for condition in conditions {
+                if condition.waits {
+                    return true
+                }
+            }
+            return match body {
+                case .Test(_)                           => false
+                case .Report(_)                         => false
+                case .TestWaiting(_), .ReportWaiting(_) => true
+                case .Nested(_, _)                      => true
+            }
+        }
+    }
+}

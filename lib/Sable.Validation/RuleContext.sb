@@ -1,0 +1,51 @@
+module Sable.Validation
+
+/// Where a custom rule says what it finds.
+///
+/// ```sable
+/// var rules = Rules<Int[>..]>()
+/// rules.model().named("Numbers").custom { (numbers, context) in
+///     if numbers.count > 2 {
+///         context.fail("{PropertyName} are too many: {Count}.", code: "TooMany", placeholders: ["Count": "\(numbers.count)"])
+///     }
+/// }
+/// let result = await rules.validate([1, 2, 3])
+/// assert(result.failures[0].message == "Numbers are too many: 3.")
+/// ```
+public final class RuleContext {
+    /// The path of the value the rule is of, from the one validated.
+    public let path: String
+    /// What it is called.
+    public let name: String
+    let valueText: String?
+    let severity: Severity
+    let code: String?
+    let run: ValidationRun
+
+    init(path: String, name: String, valueText: String?, severity: Severity, code: String?, run: ValidationRun) {
+        self.path = path
+        self.name = name
+        self.valueText = valueText
+        self.severity = severity
+        self.code = code
+        self.run = run
+    }
+
+    /// The value breaks the rule. The message may have placeholders, the
+    /// ones given and `PropertyName`, `PropertyPath` and `PropertyValue`;
+    /// `under` is the path of the part of the value that does.
+    public fn fail(_ message: String, code: String = "Custom", severity: Severity? = none, under: String = "", placeholders: [String: String] = [:]) {
+        var values = placeholders
+        let at = ValidationRun.join(path, under)
+        values["PropertyName"] = name
+        values["PropertyPath"] = at
+        values["PropertyValue"] = valueText ?? ""
+        run.failures.append(ValidationFailure(
+            path: at,
+            message: MessageTemplate(message).fill(values),
+            code: self.code ?? code,
+            severity: severity ?? self.severity,
+            attemptedValue: under.isEmpty ? valueText : none,
+            placeholders: values))
+    }
+}

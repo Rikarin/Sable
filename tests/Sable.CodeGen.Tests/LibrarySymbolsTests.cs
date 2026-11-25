@@ -113,6 +113,9 @@ public sealed class LibrarySymbolsTests {
 
     // Generators, and a generic function over the library's protocols.
     [InlineData("module M\n\nfn evens(below n: Int) -> some Sequence<Int> {\n    for i in 0..<n where i % 2 == 0 { yield i }\n}\n\nfn total<S: Sequence>(_ s: S) -> Int where S.Element == Int {\n    var sum = 0\n    for x in s { sum += x }\n    return sum\n}\n\nfn main() {\n    print(total(evens(below: 10)), total([1, 2, 3]))\n}\n")]
+
+    // Key paths, and a derived Validatable's rules, the library's methods and extensions.
+    [InlineData("module M\n\nimport Sable.Validation\n\n@derive(Validatable)\nstruct Point {\n    @range(1...) @lessThan(\\.y)\n    var x: Int\n    var y: Int?\n    @notEmpty @email\n    var name: String\n}\n\nfn main() {\n    var rules = Point.validationRules()\n    rules.field(\\.name).maxLength(3)\n    let all = [Point(x: 1, y: none, name: \"a\")]\n    print(all.map(\\.name)[0])\n}\n")]
     public void ASmallProgramCompilesAsFromSource(string source) => Same(source);
 
     /// <summary>A program extending the library's own types is compiled with them declared from source.</summary>

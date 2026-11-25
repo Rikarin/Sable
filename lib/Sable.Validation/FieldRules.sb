@@ -1,0 +1,391 @@
+module Sable.Validation
+
+import Sable.Globalization
+
+/// The rules of one field, or of each of a field's elements: checks, one
+/// after another, with what their failures say. A rule is added by calling
+/// it, and what is said of it comes after it.
+///
+/// ```sable
+/// struct Account { var name: String, var age: Int }
+///
+/// var rules = Rules<Account>()
+/// rules.field(\.name).stopOnFirstFailure()
+///     .notEmpty().message("Who are you?")
+///     .maxLength(8).code("NAME_LENGTH").severity(.Warning)
+///     .matches("^[a-z]+$").when({ $0.age < 18 }, for: .LastOnly)
+///
+/// let result = await rules.validate(Account(name: "", age: 30))
+/// assert(result.failures.map(\.message) == ["Who are you?"])
+/// ```
+///
+/// A program's own rules are extensions:
+///
+/// ```sable ignore
+/// extension FieldRules where V == String {
+///     @discardable
+///     fn slug() -> FieldRules<T, V> {
+///         return matches("^[a-z0-9-]+$").code("Slug").message("'{PropertyName}' may hold a-z, 0-9 and hyphens.")
+///     }
+/// }
+///
+/// var rules = Rules<String>()
+/// rules.model().named("Slug").slug()
+/// assert((await rules.validate("a b")).failures[0].message == "'Slug' may hold a-z, 0-9 and hyphens.")
+/// ```
+public final class FieldRules<T, V>: Rule<T> {
+    let path: String
+    let read: ((T) -> V?)?
+    let readEach: ((T) -> V[>..])?
+    var checks: Check<T, V>[>..] = []
+    var keeps: ((V) -> Bool)? = none
+    var cascade: CascadeMode
+    var name: String? = none
+    var reportedPath: String? = none
+    var dependents: Rules<T>? = none
+
+    init(_ path: String, _ sets: String[>..], _ cascade: CascadeMode, _ read: @escaping (T) -> V?) {
+        self.path = path
+        self.read = read
+        readEach = none
+        self.cascade = cascade
+        super.init(sets: sets)
+    }
+
+    init(each path: String, _ sets: String[>..], _ cascade: CascadeMode, _ read: @escaping (T) -> V[>..]) {
+        self.path = path
+        self.read = none
+        readEach = read
+        self.cascade = cascade
+        super.init(sets: sets)
+    }
+
+    // ---- What is said of the rules -------------------------------------------
+
+    /// The last check's message, with placeholders: `{PropertyName}`,
+    /// `{PropertyPath}`, `{PropertyValue}`, `{CollectionIndex}` of an
+    /// element, and the rule's own (`{MinLength}`, `{ComparisonValue}`, …).
+    @discardable
+    public fn message(_ template: String) -> FieldRules<T, V> {
+        last("message").message = template
+        return self
+    }
+
+    /// The last check's message, made of the value the rule is of and the
+    /// field's, with placeholders too.
+    @discardable
+    public fn message(_ make: @escaping (T, V?) -> String) -> FieldRules<T, V> {
+        last("message").makeMessage = make
+        return self
+    }
+
+    /// The last check's code, in place of its rule's name.
+    @discardable
+    public fn code(_ code: String) -> FieldRules<T, V> {
+        last("code").code = code
+        return self
+    }
+
+    /// How bad the last check's failures are.
+    @discardable
+    public fn severity(_ severity: Severity) -> FieldRules<T, V> {
+        last("severity").severity = severity
+        return self
+    }
+
+    /// What the field is called in messages, in place of its path's words.
+    @discardable
+    public fn named(_ name: String) -> FieldRules<T, V> {
+        self.name = name
+        return self
+    }
+
+    /// What the field's path is said to be, in place of its members.
+    @discardable
+    public fn reported(at path: String) -> FieldRules<T, V> {
+        reportedPath = path
+        return self
+    }
+
+    /// The first of the field's checks to fail is the last to be made.
+    @discardable
+    public fn stopOnFirstFailure() -> FieldRules<T, V> {
+        cascade = .Stop
+        return self
+    }
+
+    /// The elements to check, of a rule of each.
+    @discardable
+    public fn filter(_ keeps: @escaping (V) -> Bool) -> FieldRules<T, V> {
+        self.keeps = keeps
+        return self
+    }
+
+    /// The checks before this are made only where the condition holds.
+    @discardable
+    public fn when(_ condition: @escaping (T) -> Bool, for scope: ConditionScope = .AllBefore) -> FieldRules<T, V> {
+        return restrict(Condition<T>(condition), scope)
+    }
+
+    /// The checks before this are made only where the condition, which waits, holds.
+    @discardable
+    public fn when(_ condition: @escaping async (T) -> Bool, for scope: ConditionScope = .AllBefore) -> FieldRules<T, V> {
+        return restrict(Condition<T>(waiting: condition), scope)
+    }
+
+    /// The checks before this are made only where the condition does not hold.
+    @discardable
+    public fn unless(_ condition: @escaping (T) -> Bool, for scope: ConditionScope = .AllBefore) -> FieldRules<T, V> {
+        return restrict(Condition<T>((value: T) => !condition(value)), scope)
+    }
+
+    /// The checks before this are made only where the condition, which waits, does not hold.
+    @discardable
+    public fn unless(_ condition: @escaping async (T) -> Bool, for scope: ConditionScope = .AllBefore) -> FieldRules<T, V> {
+        return restrict(Condition<T>(waiting: { (value: T) in !(await condition(value)) }), scope)
+    }
+
+    /// Rules run only where this field's checks all pass.
+    @discardable
+    public fn dependentRules(_ body: (inout Rules<T>) -> ()) -> FieldRules<T, V> {
+        var rules = Rules<T>()
+        rules.sets = sets
+        rules.ruleCascade = cascade
+        body(&rules)
+        dependents = rules
+        return self
+    }
+
+    fn restrict(_ condition: Condition<T>, _ scope: ConditionScope) -> FieldRules<T, V> {
+        if scope == .LastOnly {
+            last("when").conditions.append(condition)
+        } else {
+            for check in checks {
+                check.conditions.append(condition)
+            }
+        }
+        return self
+    }
+
+    fn last(_ what: String) -> Check<T, V> {
+        guard let check = checks.last else {
+            preconditionFailure("'\(what)' is said of the rule before it, and there is none of '\(path)'")
+        }
+        return check
+    }
+
+    // ---- Adding ----------------------------------------------------------
+
+    /// A check of a value that is there.
+    fn check(_ rule: String, _ test: @escaping (V) -> Bool, _ detail: ((T, V?) -> [String: String])? = none) -> FieldRules<T, V> {
+        return add(Check<T, V>(rule, takesNone: false, .Test((whole: T, value: V?) => test(value!)), detail))
+    }
+
+    fn add(_ check: Check<T, V>) -> FieldRules<T, V> {
+        checks.append(check)
+        return self
+    }
+
+    // ---- Running ---------------------------------------------------------
+
+    override fn mayWait() -> Bool {
+        for check in checks {
+            if check.waits {
+                return true
+            }
+        }
+        return if let rules = dependents { rules.mayWait } else { false }
+    }
+
+    override fn run(_ value: T, at base: String, in run: ValidationRun) {
+        let at = ValidationRun.join(base, reportedPath ?? path)
+        if !run.selects(sets) || !run.selects(path: at) {
+            return
+        }
+        let before = run.failures.count
+        if let read = read {
+            runOne(value, read(value), at, none, run)
+        } else {
+            for (i, element) in readEach!(value).enumerated() {
+                if let keeps = keeps, !keeps(element) {
+                    continue
+                }
+                runOne(value, element, "\(at)[\(i)]", i, run)
+            }
+        }
+        if let rules = dependents, run.failures.count == before && run.waits == none {
+            rules.run(value, at: base, in: run)
+        }
+    }
+
+    fn runOne(_ value: T, _ field: V?, _ at: String, _ index: Int?, _ run: ValidationRun) {
+        let before = run.failures.count
+        for check in checks {
+            if field == none && !check.takesNone {
+                continue
+            }
+            var applies = true
+            for condition in check.conditions {
+                guard let holds = condition.holds(value) else {
+                    run.waits = at
+                    return
+                }
+                if !holds {
+                    applies = false
+                    break
+                }
+            }
+            if !applies {
+                continue
+            }
+            match check.body {
+                case .Test(let test) => {
+                    if !test(value, field) {
+                        fail(check, value, field, at, index, run)
+                    }
+                }
+                case .Report(let report) => report(value, field, context(check, field, at, run))
+                case .Nested(let nested, let sets) => {
+                    let outer = run.sets
+                    if !sets.isEmpty {
+                        run.sets = sets
+                    }
+                    nested.rules.run(field!, at: at, in: run)
+                    run.sets = outer
+                }
+                case .TestWaiting(_), .ReportWaiting(_) => { run.waits = at }
+            }
+            if run.waits != none || cascade == .Stop && run.failures.count > before {
+                return
+            }
+        }
+    }
+
+    override async fn runWaiting(_ value: T, at base: String, in run: ValidationRun) {
+        let at = ValidationRun.join(base, reportedPath ?? path)
+        if !run.selects(sets) || !run.selects(path: at) {
+            return
+        }
+        let before = run.failures.count
+        if let read = read {
+            await runOneWaiting(value, read(value), at, none, run)
+        } else {
+            for (i, element) in readEach!(value).enumerated() {
+                if let keeps = keeps, !keeps(element) {
+                    continue
+                }
+                await runOneWaiting(value, element, "\(at)[\(i)]", i, run)
+            }
+        }
+        if let rules = dependents, run.failures.count == before {
+            await rules.runWaiting(value, at: base, in: run)
+        }
+    }
+
+    async fn runOneWaiting(_ value: T, _ field: V?, _ at: String, _ index: Int?, _ run: ValidationRun) {
+        let before = run.failures.count
+        for check in checks {
+            if field == none && !check.takesNone {
+                continue
+            }
+            var applies = true
+            for condition in check.conditions {
+                if !(await condition.holdsWaiting(value)) {
+                    applies = false
+                    break
+                }
+            }
+            if !applies {
+                continue
+            }
+            match check.body {
+                case .Test(let test) => {
+                    if !test(value, field) {
+                        fail(check, value, field, at, index, run)
+                    }
+                }
+                case .TestWaiting(let test) => {
+                    if !(await test(value, field)) {
+                        fail(check, value, field, at, index, run)
+                    }
+                }
+                case .Report(let report)        => report(value, field, context(check, field, at, run))
+                case .ReportWaiting(let report) => await report(value, field, context(check, field, at, run))
+                case .Nested(let nested, let sets) => {
+                    let outer = run.sets
+                    if !sets.isEmpty {
+                        run.sets = sets
+                    }
+                    await nested.rules.runWaiting(field!, at: at, in: run)
+                    run.sets = outer
+                }
+            }
+            if cascade == .Stop && run.failures.count > before {
+                return
+            }
+        }
+    }
+
+    // ---- Failing ---------------------------------------------------------
+
+    fn context(_ check: Check<T, V>, _ field: V?, _ at: String, _ run: ValidationRun) -> RuleContext {
+        return RuleContext(path: at, name: displayName(run), valueText: text(field), severity: check.severity, code: check.code, run: run)
+    }
+
+    fn displayName(_ run: ValidationRun) -> String {
+        if let name = name {
+            return name
+        }
+        if let messages = run.options.messages, let name = messages.name(of: path, in: run.options.locale ?? Locale.invariant) {
+            return name
+        }
+        return Messages.name(of: path)
+    }
+
+    fn text(_ field: V?) -> String? {
+        if let field = field {
+            return "\(field)"
+        }
+        return none
+    }
+
+    fn fail(_ check: Check<T, V>, _ value: T, _ field: V?, _ at: String, _ index: Int?, _ run: ValidationRun) {
+        let shown = text(field)
+        var values: [String: String] = [:]
+        if let detail = check.detail {
+            values = detail(value, field)
+        }
+        values["PropertyName"] = displayName(run)
+        values["PropertyPath"] = at
+        values["PropertyValue"] = shown ?? ""
+        if let index = index {
+            values["CollectionIndex"] = "\(index)"
+        }
+        run.failures.append(ValidationFailure(
+            path: at,
+            message: MessageTemplate(template(check, value, field, run)).fill(values),
+            code: check.code ?? check.rule,
+            severity: check.severity,
+            attemptedValue: shown,
+            placeholders: values))
+    }
+
+    fn template(_ check: Check<T, V>, _ value: T, _ field: V?, _ run: ValidationRun) -> String {
+        if let make = check.makeMessage {
+            return make(value, field)
+        }
+        if let message = check.message {
+            return message
+        }
+        if let messages = run.options.messages {
+            let locale = run.options.locale ?? Locale.invariant
+            if let code = check.code, let own = messages.template(for: code, in: locale) {
+                return own
+            }
+            if let own = messages.template(for: check.rule, in: locale) {
+                return own
+            }
+        }
+        return Messages.template(for: check.rule) ?? "'{PropertyName}' is not valid."
+    }
+}

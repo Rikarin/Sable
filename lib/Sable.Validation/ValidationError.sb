@@ -1,0 +1,30 @@
+module Sable.Validation
+
+/// A value is not valid: what `validated` throws, with every failure.
+///
+/// ```sable
+/// struct PortValidator: Validator<Int> {
+///     fn rules(_ r: inout Rules<Int>) { r.model().named("Port").inRange(1...65535) }
+/// }
+/// do {
+///     _ = try await PortValidator().validated(0)
+/// } catch {
+///     assert(error.description() == "Validation failed:\n -- 'Port' must be between 1 and 65535. You entered 0.")
+/// }
+/// ```
+public struct ValidationError: Error {
+    /// What was found.
+    public let result: ValidationResult
+
+    public init(_ result: ValidationResult) {
+        self.result = result
+    }
+
+    public fn description() -> String {
+        var text = "Validation failed:"
+        for failure in result.failures {
+            text = text + (failure.path.isEmpty ? "\n -- \(failure.message)" : "\n -- \(failure.path): \(failure.message)")
+        }
+        return text
+    }
+}

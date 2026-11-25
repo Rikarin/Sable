@@ -1,0 +1,34 @@
+module Sable.Validation
+
+/// What a rule is run only where it holds of the value the rule is of.
+struct Condition<T> {
+    let test: ((T) -> Bool)?
+    let wait: (async (T) -> Bool)?
+
+    init(_ test: @escaping (T) -> Bool) {
+        self.test = test
+        wait = none
+    }
+
+    init(waiting test: @escaping async (T) -> Bool) {
+        self.test = none
+        wait = test
+    }
+
+    var waits: Bool => wait != none
+
+    /// None where it has to be waited for.
+    fn holds(_ value: T) -> Bool? {
+        if let test = test {
+            return test(value)
+        }
+        return none
+    }
+
+    async fn holdsWaiting(_ value: T) -> Bool {
+        if let test = test {
+            return test(value)
+        }
+        return await wait!(value)
+    }
+}

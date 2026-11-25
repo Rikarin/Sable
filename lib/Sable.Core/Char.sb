@@ -225,7 +225,7 @@ extension Char {
             if code < 0x80 {
                 return self.asciiUppercased()
             }
-            return Char.fromCodePoint(unicodeMapped(upperMappingTable, count: upperMappingTableCount, code))!
+            return Char.fromCodePoint(upperCased(code))!
         }
     }
 
@@ -236,7 +236,7 @@ extension Char {
             if code < 0x80 {
                 return self.asciiLowercased()
             }
-            return Char.fromCodePoint(unicodeMapped(lowerMappingTable, count: lowerMappingTableCount, code))!
+            return Char.fromCodePoint(lowerCased(code))!
         }
     }
 
@@ -250,7 +250,7 @@ extension Char {
             if code < 0x80 {
                 return self.asciiLowercased()
             }
-            return Char.fromCodePoint(unicodeMapped(foldingTable, count: foldingTableCount, code))!
+            return Char.fromCodePoint(foldedCase(code))!
         }
     }
 

@@ -1603,6 +1603,14 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return at >= 0 && at < bytes.Length ? (long)bytes[at] : throw new SilTrap("string index out of range");
             }
 
+            case "string_utf8_load_U64": {
+                var bytes = Text(operands[0]).Utf8;
+                var at = (long)operands[1]!;
+                return at >= 0 && at <= bytes.Length - 8
+                    ? System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan((int)at))
+                    : throw new SilTrap("string index out of range");
+            }
+
             case "string_index_scalar":
                 return DecodeUtf8(Text(operands[0]).Utf8, ScalarStart(Text(operands[0]).Utf8, (long)operands[1]!)).Scalar;
 
@@ -1685,6 +1693,18 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             case "string_from_utf8_unchecked":
                 return Allocate(new HeapString(Encoding.UTF8.GetString(BytesOf(operands[0]))));
+
+            case "string_buffer_make" or "string_buffer_grow" or "string_buffer_copy" or "string_buffer_take":
+                return StringBufferBuiltin(builtin, operands);
+
+            case "string_from_ascii_words": {
+                var bytes = new byte[40];
+                for (var word = 0; word < 5; word++) {
+                    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(8 * word), (ulong)operands[word]!);
+                }
+
+                return Allocate(new HeapString(Encoding.ASCII.GetString(bytes, 0, (int)(long)operands[5]!)));
+            }
 
             case "string_trimmed": {
                 var scalars = Text(operands[0]).Scalars;

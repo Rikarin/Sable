@@ -147,7 +147,11 @@ public struct UUID {
     /// assert(UUID.max.compactString() == "ffffffffffffffffffffffffffffffff")
     /// ```
     public fn compactString() -> String {
-        return hexDigits(high, 16) + hexDigits(low, 16)
+        // ASCII digits, in memory's order.
+        unsafe {
+            return Runtime.stringFromAscii(hexDigits(high >> 32).byteSwapped, hexDigits(high & 0xFFFF_FFFF).byteSwapped,
+                hexDigits(low >> 32).byteSwapped, hexDigits(low & 0xFFFF_FFFF).byteSwapped, 0, count: 32)
+        }
     }
 
     /// The canonical form in braces, as Microsoft writes it: .NET's "B".
@@ -157,22 +161,52 @@ public struct UUID {
 
     /// The canonical form: 8-4-4-4-12 lower-case hexadecimal digits.
     public fn toString() -> String {
-        return hexDigits(high >> 32, 8) + "-" + hexDigits(high >> 16 & 0xFFFF, 4) + "-" + hexDigits(high & 0xFFFF, 4) + "-"
-            + hexDigits(low >> 48, 4) + "-" + hexDigits(low & 0xFFFF_FFFF_FFFF, 12)
+        let first = hexDigits(high >> 32)
+        let second = hexDigits(high & 0xFFFF_FFFF)
+        let third = hexDigits(low >> 32)
+        let fourth = hexDigits(low & 0xFFFF_FFFF)
+        // "xxxxxxxx", "-xxxx-xx", "xx-xxxx-", "xxxxxxxx" and "xxxx": the
+        // first of each in the highest byte until the words are made ASCII
+        // text in memory's order.
+        let groups = 0x2D00_0000_002D_0000 | second >> 32 << 24 | second >> 16 & 0xFFFF
+        let middle = second << 48 | third >> 32 << 8 | 0x0000_2D00_0000_002D
+        let end = third << 32 | fourth >> 32
+        unsafe {
+            return Runtime.stringFromAscii(first.byteSwapped, groups.byteSwapped, middle.byteSwapped, end.byteSwapped,
+                (fourth << 32).byteSwapped, count: 36)
+        }
     }
 }
 
-/// The word's low 'count' hexadecimal digits, lower-case, zeros kept.
-fn hexDigits(_ word: U64, _ count: Int) -> String {
-    let digits: Char[16] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f']
-    var scalars: Char[>..] = []
-    scalars.reserveCapacity(count)
-    var shift = 4 * (count - 1)
-    while shift >= 0 {
-        scalars.append(digits[Int(word >> U64(shift) & 0xF)])
-        shift -= 4
-    }
-    return String(scalars)
+/// The eight lower-case hexadecimal digits of a 32-bit word, the first in
+/// the highest byte: each half byte spread to a byte of its own, and made a
+/// digit by arithmetic on all eight at once.
+@inline(always)
+fn hexDigits(_ word: U64) -> U64 {
+    var nibbles = (word | word << 16) & 0x0000_FFFF_0000_FFFF
+    nibbles = (nibbles | nibbles << 8) & 0x00FF_00FF_00FF_00FF
+    nibbles = (nibbles | nibbles << 4) & 0x0F0F_0F0F_0F0F_0F0F
+    // A byte of one where the nibble is ten or more: 'a' is 0x27 past '9' + 1.
+    let tens = (nibbles &+ 0x0606_0606_0606_0606) >> 4 & 0x0101_0101_0101_0101
+    return nibbles &+ 0x3030_3030_3030_3030 &+ tens &* 0x27
+}
+
+/// What the eight hexadecimal digits write, the first in the highest byte;
+/// 'bad' is given bits of where one is not a digit. Each test is a carry
+/// into its byte's top bit: every byte's low seven bits and what takes the
+/// least accepted to 0x80.
+@inline(always)
+fn hexValue(_ text: U64, bad: inout U64) -> U64 {
+    let tops: U64 = 0x8080_8080_8080_8080
+    let low = text & 0x7F7F_7F7F_7F7F_7F7F
+    let folded = low | 0x2020_2020_2020_2020
+    let digits = (low &+ 0x5050_5050_5050_5050) & ~(low &+ 0x4646_4646_4646_4646) & tops
+    let letters = (folded &+ 0x1F1F_1F1F_1F1F_1F1F) & ~(folded &+ 0x1919_1919_1919_1919) & tops
+    bad |= ~(digits | letters) & tops | text & tops
+    var nibbles = (text & 0x0F0F_0F0F_0F0F_0F0F) &+ (letters >> 7) &* 9
+    nibbles = (nibbles | nibbles >> 4) & 0x00FF_00FF_00FF_00FF
+    nibbles = (nibbles | nibbles >> 8) & 0x0000_FFFF_0000_FFFF
+    return (nibbles | nibbles >> 16) & 0xFFFF_FFFF
 }
 
 extension UUID: Hashable, Comparable {
@@ -221,55 +255,79 @@ extension UUID: Parsable {
     /// assert(id == (try! UUID.parse("urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8")))
     /// ```
     public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> UUID {
-        let scalars = source.toString().toArray()
-        var start = 0
-        var end = scalars.count
-        if end == 0 {
+        let piece = source.asSubstring
+        let text = piece.base
+        var start = piece.start
+        var end = piece.end
+        if end == start {
             throw .Empty
         }
-        if end == 45 && String(scalars[0..<9]).lowercased() == "urn:uuid:" {
+        if end - start == 45 && text.utf8Slice(start, start + 9).asciiLowercased() == "urn:uuid:" {
+            start += 9
+        } else if end - start == 38 && text.utf8Byte(start) == 0x7B && text.utf8Byte(end - 1) == 0x7D {
+            start += 1
+            end -= 1
+        }
+        // The digits' values eight at a time, and whether any was wrong;
+        // only then is it looked for.
+        var bad: U64 = 0
+        var high: U64 = 0
+        var low: U64 = 0
+        if end - start == 36 {
+            // The four before a hyphen, and the four after it.
+            let last = hexValue(text.utf8Word(start + 28).byteSwapped, bad: &bad)
+            let second = text.utf8Word(start + 9).byteSwapped & 0xFFFF_FFFF_0000_0000 | text.utf8Word(start + 10).byteSwapped & 0xFFFF_FFFF
+            let third = text.utf8Word(start + 19).byteSwapped & 0xFFFF_FFFF_0000_0000 | text.utf8Word(start + 20).byteSwapped & 0xFFFF_FFFF
+            high = hexValue(text.utf8Word(start).byteSwapped, bad: &bad) << 32 | hexValue(second, bad: &bad)
+            low = hexValue(third, bad: &bad) << 32 | last
+            let hyphens = (text.utf8Byte(start + 8) ^ 0x2D) | (text.utf8Byte(start + 13) ^ 0x2D) | (text.utf8Byte(start + 18) ^ 0x2D)
+                | (text.utf8Byte(start + 23) ^ 0x2D)
+            bad |= U64(hyphens)
+        } else if end - start == 32 {
+            low = hexValue(text.utf8Word(start + 16).byteSwapped, bad: &bad) << 32 | hexValue(text.utf8Word(start + 24).byteSwapped, bad: &bad)
+            high = hexValue(text.utf8Word(start).byteSwapped, bad: &bad) << 32 | hexValue(text.utf8Word(start + 8).byteSwapped, bad: &bad)
+        } else {
+            bad = 1
+        }
+        if bad != 0 {
+            throw UUID.parseError(piece.toString())
+        }
+        return UUID(high: high, low: low)
+    }
+
+    // Why the text, which is not empty, is not a UUID.
+    static fn parseError(_ text: String) -> ParseError {
+        let scalars = text.toArray()
+        var start = 0
+        var end = scalars.count
+        if end == 45 && String(scalars[0..<9]).asciiLowercased() == "urn:uuid:" {
             start = 9
         } else if end == 38 {
             if scalars[0] != '{' {
-                throw .Invalid(at: 0)
+                return .Invalid(at: 0)
             }
             if scalars[37] != '}' {
-                throw .Invalid(at: 37)
+                return .Invalid(at: 37)
             }
             start = 1
             end = 37
         }
         let hyphenated = end - start == 36
-        if !hyphenated && end - start != 32 {
-            throw .Invalid(at: start)
-        }
-        var high: U64 = 0
-        var low: U64 = 0
-        var digits = 0
-        var i = start
-        while i < end {
-            let c = scalars[i]
-            let offset = i - start
-            if hyphenated && (offset == 8 || offset == 13 || offset == 18 || offset == 23) {
-                if c != '-' {
-                    throw .Invalid(at: i)
+        if hyphenated || end - start == 32 {
+            var i = start
+            while i < end {
+                let c = scalars[i]
+                let offset = i - start
+                if hyphenated && (offset == 8 || offset == 13 || offset == 18 || offset == 23) {
+                    if c != '-' {
+                        return .Invalid(at: i)
+                    }
+                } else if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+                    return .InvalidDigit(at: i)
                 }
                 i += 1
-                continue
             }
-            let code = c.codePoint
-            let value = code >= 48 && code <= 57 ? code - 48 : code >= 97 && code <= 102 ? code - 87 : code >= 65 && code <= 70 ? code - 55 : 16
-            if value == 16 {
-                throw .InvalidDigit(at: i)
-            }
-            if digits < 16 {
-                high = high << 4 | U64(value)
-            } else {
-                low = low << 4 | U64(value)
-            }
-            digits += 1
-            i += 1
         }
-        return UUID(high: high, low: low)
+        return .Invalid(at: start)
     }
 }

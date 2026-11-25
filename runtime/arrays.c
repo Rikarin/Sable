@@ -907,6 +907,17 @@ SableString *sable_string_from_utf8_unchecked(const SableArray *buffer, int64_t 
     return count == 0 ? make_counted("", 0, 0) : make_string((const char *)slice_bytes(buffer, start), count);
 }
 
+// The first 'count' bytes of the words, ASCII and at most forty, as a string.
+SableString *sable_string_from_ascii_words(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, int64_t count) {
+    uint64_t words[5] = { a, b, c, d, e };
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    for (int i = 0; i < 5; i++) {
+        words[i] = __builtin_bswap64(words[i]);
+    }
+#endif
+    return make_counted((const char *)words, count, count);
+}
+
 static const SableMetadata string_array_metadata = {
     sable_array_destroy, "[String]", sizeof(void *), copy_string_element, destroy_string_element,
     sizeof(SableArray), _Alignof(SableArray), NULL, NULL,

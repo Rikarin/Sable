@@ -2658,6 +2658,7 @@ public static class SilBuiltins {
         // these trap on one out of range or inside a scalar's bytes.
         Add("string_utf8_count", SilType.Int, SilType.String);
         Add("string_utf8_at", SilType.U8, SilType.String, SilType.Int);
+        Add("string_utf8_load_U64", SilType.U64, SilType.String, SilType.Int);
         Add("string_index_scalar", SilType.Char, SilType.String, SilType.Int);
         Add("string_index_after", SilType.Int, SilType.String, SilType.Int);
         Add("string_index_before", SilType.Int, SilType.String, SilType.Int);
@@ -2684,6 +2685,16 @@ public static class SilBuiltins {
         Add("bytes_find_any", SilType.Int, new SliceType(SilType.U8), new SliceType(SilType.U8));
         Add("bytes_count", SilType.Int, new SliceType(SilType.U8), SilType.U8);
         Add("string_from_utf8_unchecked", SilType.String, new SliceType(SilType.U8));
+        // A string being written (StringBuffer), by the address of its
+        // bytes: made with room for so many, moved to more room, given a
+        // run of a text's bytes, and taken as the string of the first so many.
+        Add("string_buffer_make", SilType.Int, SilType.Int);
+        Add("string_buffer_grow", SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        Add("string_buffer_copy", SilType.Unit, SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("string_buffer_take", SilType.String, SilType.Int, SilType.Int);
+        // The first 'n' bytes of five words, each little-endian, which are
+        // ASCII and at most forty: short text made in registers.
+        Add("string_from_ascii_words", SilType.String, SilType.U64, SilType.U64, SilType.U64, SilType.U64, SilType.U64, SilType.Int);
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
         // A string's bytes hashed under a key (folded multiplies), and the key every

@@ -112,6 +112,42 @@ static SableString *make_cstring(const char *text) {
     return make_string(text, (int64_t)strlen(text));
 }
 
+// ---- Strings written in place
+//
+// What StringBuffer is: a string whose bytes are set through their address
+// before anything else has it, its length the room there is until it is
+// taken.
+
+static SableString *string_of_bytes(char *bytes) {
+    return (SableString *)(void *)(bytes - offsetof(SableString, bytes));
+}
+
+char *sable_string_buffer_make(int64_t capacity) {
+    return new_string(capacity, 0)->bytes;
+}
+
+char *sable_string_buffer_grow(char *bytes, int64_t used, int64_t capacity) {
+    char *moved = sable_string_buffer_make(capacity);
+    memcpy(moved, bytes, (size_t)used);
+    sable_release(&string_of_bytes(bytes)->header);
+    return moved;
+}
+
+// The first 'length' bytes as a string: the string itself, unless it would
+// keep much more room than it has use for.
+SableString *sable_string_buffer_take(char *bytes, int64_t length) {
+    SableString *string = string_of_bytes(bytes);
+    if (string->length - length > 32 + length / 4) {
+        SableString *fitted = make_string(bytes, length);
+        sable_release(&string->header);
+        return fitted;
+    }
+
+    string->length = length;
+    string->count = count_scalars(bytes, length);
+    return string;
+}
+
 // The length of the well-formed UTF-8 sequence starting at bytes[i], or 0 if
 // none does: no overlong forms, no surrogates, nothing past U+10FFFF.
 static int utf8_sequence(const uint8_t *bytes, int64_t i, int64_t length) {

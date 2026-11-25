@@ -24,7 +24,7 @@ public sealed partial class SilGen {
             _tooLargeArray = null;
             _diagnostics.Add(Diagnostic.Error(ErrorCode.ERR_InlineArrayTooLarge, at.Span,
                 $"'{array.ToDisplayString()}' takes {bytes} bytes held inline, more than the {TypeLayout.MaximumInlineBytes} an inline array may: "
-                + $"use '{array.ElementType.ToDisplayString()}[]', whose elements are on the heap").AnchoredAt(at));
+                + $"use '{array.ElementType.ToDisplayString()}{(array.ArrayKind == ArrayKind.Inline ? "[>..]" : "[]")}', whose elements are on the heap").AnchoredAt(at));
             return;
         }
 

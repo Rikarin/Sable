@@ -495,6 +495,9 @@ public sealed class LibraryInterface {
                 case InlineArrayType inline:
                     Visit(inline.Element);
                     break;
+                case FixedArrayType fixedArray:
+                    Visit(fixedArray.Element);
+                    break;
                 case AddressType address:
                     Visit(address.Pointee);
                     break;

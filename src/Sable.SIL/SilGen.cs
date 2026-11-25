@@ -5508,6 +5508,30 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Identity } conversion when !IsArrayView(conversion):
                     return Borrow(conversion.Operand);
 
+                // A global 'let' or 'const' held in memory — a table of numbers,
+                // 'const powers: F64[16]' — borrowed where it is: nothing writes
+                // it once it is made, and a copy would be every element.
+                case BoundFieldAccess { Field: { IsMutable: false } global } when SilGen.IsGlobal(global) && generator.ConstantRead(global) is null
+                                                                                 && generator.GlobalOf(global) is var (globalName, globalType) && SilType.IsInMemory(globalType):
+                    return Hold(Emit(new LoadBorrowInst(Emit(new GlobalAddrInst(globalName, globalType)))));
+
+                // A range of an inline array, for a use: lent where it is, when it can be.
+                case BoundIndexAccess inlineRange when SlicingRange(inlineRange) is { } rangeOfInline && !IsInlineArray(inlineRange.Receiver)
+                                                      && LowerType(inlineRange.Receiver.Type) is FixedArrayType: {
+                    if (Borrow(inlineRange.Receiver) is not { Type: FixedArrayType viewedType } viewedArray) {
+                        return null;
+                    }
+
+                    if (RangeBounds(rangeOfInline, () => Emit(new BuiltinInst("array_count", SilType.Int, viewedArray))) is not var (rangeFrom, rangeTo)) {
+                        End(viewedArray);
+                        return null;
+                    }
+
+                    var ranged = Hold(Emit(new BuiltinInst("array_slice", new SliceType(viewedType.Element), viewedArray, rangeFrom, rangeTo)));
+                    _lentFrom[ranged] = viewedArray;
+                    return ranged;
+                }
+
                 // An inline array viewed as a slice, for a use: lent where it is, when it can be.
                 case BoundConversion { ConversionKind: ConversionKind.Identity } inlineView when IsArrayView(inlineView) && !IsInlineArray(inlineView.Operand)
                                                                                                 && LowerType(inlineView.Operand.Type) is FixedArrayType:

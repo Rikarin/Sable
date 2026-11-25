@@ -3366,7 +3366,9 @@ public sealed partial class LlvmEmitter {
                     // zeros. One that holds without owning is never destroyed,
                     // so what it held before it is written is never read.
                     if (!alloc.ElementType.IsTrivial && !alloc.Unmanaged) {
-                        if (SilType.IsInMemory(alloc.ElementType)) {
+                        if (SilType.IsBitwise(alloc.ElementType)) {
+                            // Bits alone: nothing in it is ever destroyed.
+                        } else if (SilType.IsInMemory(alloc.ElementType)) {
                             Line($"call void @llvm.memset.p0.i64(ptr {name}, i8 0, i64 {OpaqueSize(alloc.ElementType)}, i1 false)");
                         } else {
                             Line($"store {Type(alloc.ElementType)} zeroinitializer, ptr {name}");
@@ -3424,7 +3426,9 @@ public sealed partial class LlvmEmitter {
                     _names[load] = buffer;
                     if (load.Kind == LoadKind.Take) {
                         OpaqueMove(opaqueLoad, buffer, Name(load.Address));
-                        Line($"call void @llvm.memset.p0.i64(ptr {Name(load.Address)}, i8 0, i64 {OpaqueSize(opaqueLoad)}, i1 false)");
+                        if (!SilType.IsBitwise(opaqueLoad)) {
+                            Line($"call void @llvm.memset.p0.i64(ptr {Name(load.Address)}, i8 0, i64 {OpaqueSize(opaqueLoad)}, i1 false)");
+                        }
                     } else {
                         OpaqueWitness(opaqueLoad, CopyWitness, buffer, Name(load.Address));
                     }
@@ -3569,7 +3573,9 @@ public sealed partial class LlvmEmitter {
 
                 case DestroyAddrInst { Address.Type: AddressType { Pointee: var opaqueDestroyed } } destroy when Held(opaqueDestroyed) && destroy.Address is not AllocStackInst { Unmanaged: true }:
                     OpaqueWitness(opaqueDestroyed, DestroyWitness, Name(destroy.Address));
-                    Line($"call void @llvm.memset.p0.i64(ptr {Name(destroy.Address)}, i8 0, i64 {OpaqueSize(opaqueDestroyed)}, i1 false)");
+                    if (!SilType.IsBitwise(opaqueDestroyed)) {
+                        Line($"call void @llvm.memset.p0.i64(ptr {Name(destroy.Address)}, i8 0, i64 {OpaqueSize(opaqueDestroyed)}, i1 false)");
+                    }
                     return;
 
                 case CopyValueInst copy:

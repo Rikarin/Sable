@@ -243,11 +243,36 @@ public sealed partial class LlvmEmitter {
                         return true;
                     }
 
+                    // Nothing to do, inline, when what comes back is still the
+                    // view of the elements where they are; the runtime else.
                     default: {
                         var back = (SliceType)builtin.Operands[1].Type;
+                        var (buffer, start, backCount) = (SlicePart(operands[1], back, 0), SlicePart(operands[1], back, 1), SlicePart(operands[1], back, 2));
+                        var isNull = Fresh();
+                        var check = NewLabel("lent");
+                        var store = NewLabel("restore");
+                        var done = NewLabel("restored");
+                        Line($"{isNull} = icmp eq ptr {buffer}, null");
+                        Line($"br i1 {isNull}, label %{store}, label %{check}");
+                        Continue(check);
+                        var elementsField = Fresh();
+                        var firstElement = Fresh();
+                        var at = Fresh();
+                        var same = Fresh();
+                        var sameCount = Fresh();
+                        var both = Fresh();
+                        Line($"{elementsField} = getelementptr inbounds %SableArrayHeader, ptr {buffer}, i32 0, i32 3");
+                        Line($"{firstElement} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
+                        Line($"{at} = getelementptr inbounds {PartType(lentPlace.Element)}, ptr {firstElement}, i64 {start}");
+                        Line($"{same} = icmp eq ptr {at}, {elements}");
+                        Line($"{sameCount} = icmp eq i64 {backCount}, {count}");
+                        Line($"{both} = and i1 {same}, {sameCount}");
+                        Line($"br i1 {both}, label %{done}, label %{store}, !prof !{{!\"branch_weights\", i32 1000, i32 1}}");
+                        Continue(store);
                         SiteForRuntime();
-                        Line($"call void @sable_inline_restore(ptr {elements}, i64 {count}, ptr {ElementsMetadata(lentPlace.Element)}, ptr {SlicePart(operands[1], back, 0)}, "
-                             + $"i64 {SlicePart(operands[1], back, 1)}, i64 {SlicePart(operands[1], back, 2)})");
+                        Line($"call void @sable_inline_restore(ptr {elements}, i64 {count}, ptr {ElementsMetadata(lentPlace.Element)}, ptr {buffer}, i64 {start}, i64 {backCount})");
+                        Line($"br label %{done}");
+                        Continue(done);
                         return true;
                     }
                 }

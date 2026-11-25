@@ -1616,6 +1616,7 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
             AddressType address => SilType.Address(Substitute(address.Pointee)),
             InlinePointerType pointer => new InlinePointerType(Substitute(pointer.Pointee)),
             InlineArrayType inline => new InlineArrayType(Substitute(inline.Element), inline.Capacity),
+            FixedArrayType fixedArray => new FixedArrayType(Substitute(fixedArray.Element), fixedArray.Count, fixedArray.IsBounded),
             VectorType vector => vector,
             FunctionType function => new FunctionType([..function.Parameters.Select(Substitute)], Substitute(function.Result), function.Thrown is { } thrown ? Substitute(thrown) : null,
                 function.Owned.IsEmpty ? default : function.Owned, function.IsAsync),

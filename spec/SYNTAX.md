@@ -149,8 +149,8 @@ T&<u32>             // relative reference, 4-byte offset from the field
 T&<u16 in pool>     // relative reference from a named pool base
 T&?                 // optional reference
 T[]                 // fixed-at-construction array
-T[8]                // fixed size
-T[..]  T[..64]      // inline capacity, resizable within it
+T[8]                // fixed size, its elements inline where the array is
+T[..]  T[..64]      // inline capacity, resizable within it, its elements inline
 T[>..]              // grow-only array
 T[>..<]             // grow/shrink array
 T[:]                // slice view
@@ -862,6 +862,9 @@ extension U8[:] { fn toString() -> String { } }
 
 - Each kind is extended on its own: `T[]` (every fixed size), `T[..]` (every
   inline capacity), `T[>..]`, `T[>..<]`, `T[:]`. No size or capacity is written.
+  `T[k]` and `T[..k]` hold their elements inline (docs/02 §2.5): a member of
+  `T[:]` called on one is lent the elements where they are, and one that
+  changes them changes the array in place.
   What `T[:]` declares, every kind has; a kind's own member of the same name
   comes first.
 - Inside, `self` is the array. The parameters may be constrained, inline or

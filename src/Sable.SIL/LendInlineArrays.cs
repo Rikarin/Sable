@@ -74,6 +74,7 @@ public sealed class LendInlineArrays : ISilPass {
 
                 if (change) {
                     view.Rename("fixed_lend_mut");
+                    UniqueWrites(view, uses);
                     continue;
                 }
 
@@ -98,6 +99,24 @@ public sealed class LendInlineArrays : ISilPass {
                 }
 
                 i = block.Instructions.IndexOf(view);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     A view lent to change is the only reference to its header while
+    ///     nothing copies it: written through its slot in place, inline, as a
+    ///     slice made unique is (<c>array_set_unique</c>), with no call.
+    /// </summary>
+    static void UniqueWrites(BuiltinInst view, Uses uses) {
+        if (uses.Of(view) is not [StoreInst { Address: AllocStackInst slot }]
+            || uses.Of(slot).Any(static u => u is LoadInst { Kind: LoadKind.Copy } or CopyValueInst or ApplyInst or TryApplyInst)) {
+            return;
+        }
+
+        foreach (var user in uses.Of(slot)) {
+            if (user is BuiltinInst { Name: "array_set" or "array_element_addr" } write && ReferenceEquals(write.Operands[0], slot)) {
+                write.Rename(write.Name + "_unique");
             }
         }
     }

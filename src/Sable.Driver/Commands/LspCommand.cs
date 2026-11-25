@@ -28,6 +28,7 @@ public sealed class LspCommand : Command {
             Console.OpenStandardOutput(),
             new LanguageServerOptions {
                 LibraryFor = Library.For,
+                GenerateLoose = Generators.LibraryGenerators.ForEditor,
                 LibraryModules = Library.ModuleNames,
                 LibraryCheck = static (compilation, own) => Library.CheckFor(compilation, own) is { } check ? new(check.Skipped, () => check.Passed()) : null,
                 // Standard output is the protocol's: whatever resolving prints

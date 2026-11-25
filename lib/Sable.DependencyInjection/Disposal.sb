@@ -1,0 +1,6 @@
+module Sable.DependencyInjection
+
+union Disposal {
+    Ends(service: any Disposable)
+    Waits(service: any AsyncDisposable)
+}

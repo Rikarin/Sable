@@ -11595,11 +11595,33 @@ public sealed partial class SilGen {
                     : null,
             };
             return self switch {
-                NamedTypeSymbol concrete => Implementation(concrete, call.Function),
+                NamedTypeSymbol concrete => ImplementationByArguments(concrete, call) ?? Implementation(concrete, call.Function),
                 ArrayTypeSymbol array => generator.ArrayImplementation(array, call.Function),
                 OptionalTypeSymbol optional => Implementation(Nominal(optional)!, call.Function),
                 _ => null,
             };
+        }
+
+        /// <summary>
+        ///     Of a type that conforms to several instances of one generic
+        ///     protocol — <c>Provides&lt;Int&gt;</c> and <c>Provides&lt;String&gt;</c>
+        ///     — the member that takes what the call gives; null for any other.
+        /// </summary>
+        FunctionSymbol? ImplementationByArguments(NamedTypeSymbol concrete, BoundCall call) {
+            if (call.Arguments.IsEmpty || OwnerOf(call.Function)?.OriginalDefinition is not { TypeKind: TypeKind.Protocol, TypeParameters.IsEmpty: false } protocol
+                || IsExtensionOnly(call.Function)
+                || concrete.SupertypesOf(protocol).Take(2).Count() < 2) {
+                return null;
+            }
+
+            var own = TypeSubstitution.For(concrete);
+            var given = call.Arguments.Select(a => Sub(a.Type)).ToList();
+            return concrete.OriginalDefinition.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
+                f.Name == call.Function.Name
+                && f.IsStatic == call.Function.IsStatic
+                && f.TypeParameters.IsEmpty
+                && SameLabels(f, call.Function)
+                && f.Parameters.Zip(given).All(pair => own.Apply(pair.First.Type).Equals(pair.Second)));
         }
 
         /// <summary>

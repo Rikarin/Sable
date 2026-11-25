@@ -1023,9 +1023,10 @@ Sable.Hosting       ApplicationBuilder and Host (services started in order,
                     ApplicationLifetime, recurring jobs (CronExpression,
                     intervals, overlap policies), Systemd (sd_notify)
 Sable.DependencyInjection
-                    ServiceCollection (singleton, scoped, transient; keyed,
-                    open generics; checked as it is built), ServiceProvider,
-                    ServiceScope, @derive(Injectable)
+                    @injectable and @container (a graph checked and made as
+                    it is compiled); ServiceCollection (singleton, scoped,
+                    transient; keyed, open generics; checked as it is built),
+                    ServiceProvider, ServiceScope
 Sable.Crypto        HashFunction and Digest: SHA-2, SHA-3, BLAKE2b, BLAKE3,
                     Insecure.Md5 and Sha1; SHAKE; Hmac, KMAC; Hkdf, Pbkdf2,
                     Scrypt, Argon2id; PasswordHash (PHC strings); AesGcm,
@@ -1485,41 +1486,100 @@ place.
 
 ### Dependency injection
 
-`Sable.DependencyInjection` (#81) is Microsoft.Extensions.DependencyInjection's
-container: a `ServiceCollection` of registrations, the `ServiceProvider` its
-`build` makes, and `ServiceScope`s.
+`Sable.DependencyInjection` (#81) is Microsoft.Extensions.DependencyInjection
+in two layers over the same declarations: `@container`, whose graph is checked
+and whose code is written as the program is compiled (the way of Dagger, Jab
+and Pure.DI), and `ServiceCollection`, registrations made as it runs.
 
-- **Factories.** `@derive(Injectable)` writes a type's `create(from:)`, its
-  initialiser called with what a scope gives for each parameter, and
-  `dependencies()`, what that is. A parameter no container can give — an
-  `inout`, a function that takes something, a slice — is an error where it
-  is (S3071), as is a type with several initialisers and none marked
-  `@Inject`. Nothing is called through reflection.
+```sable
+@injectable(.Scoped, as: OrderRepository.self)
+final class SqlOrderRepository: OrderRepository {
+    init(database: Database) { … }
+}
+
+@container
+struct AppServices {
+    @include(Payments.Services.self)
+    @singleton fn clock() -> any Clock { return SystemClock() }
+    @singleton async fn database(config: Config) throws -> Database { … }
+    @keyed("hot") @singleton fn hotCache() -> any Cache { … }
+}
+
+let provider = try await AppServices.build()
+provider.withScope { scope in
+    scope.resolve(OrderService.self).run()
+}
+```
+
+- **`@injectable`** (a generator, `lib/Sable.DependencyInjection/generators/`)
+  writes a class's, a struct's or an actor's factory from its initialiser —
+  the one marked `@inject`, of several: `Injectable.make`, called with what a
+  `ServiceScope` gives for each parameter, and `dependencies`, what that is.
+  An async initialiser's is `AsyncInjectable`'s. With a lifetime, the type is
+  also registered: as itself or `as:` what it conforms to, under `key:`. A
+  generic type is registered for every type it is asked for as. Nothing is
+  called through reflection.
+- **Parameters.** `T`, `Lazy<T>`, `() -> T`, `T[]` and `T[>..]` (every
+  registration), `T?`, `@keyed("k")`, and a default value for what is not
+  registered. Anything else is an error where the parameter is (S3232).
+- **`@container`** (the same) is a Sendable struct or class. It has the
+  package's `@injectable` types, the fragments it includes, and its own
+  functions marked `@singleton`, `@scoped` or `@transient`. Written beside it
+  are a provider and a scope, `AppServicesProvider` and `AppServicesScope`, in
+  which each service is a function that calls initialisers and functions by
+  name. Each is a `Provides<Service>` for what it gives — the provider, what
+  needs no scope — and `resolve` is a `ServiceContainer`'s `where Self:
+  Provides<Service>`, so asking for anything else does not compile. Keyed
+  services are got by `find(_:key:)`, and those with several registrations by
+  `resolveAll`.
+- **Checked at compile time**, each error with the way to it and where it
+  starts (`OrderService → OrderRepository → Database: nothing provides
+  Database`): what is missing, a scoped service in a singleton, a service that
+  needs itself with no `Lazy` or factory on the way, several registrations
+  where one is asked for, a singleton that is not Sendable, and a throwing or
+  async maker of anything but a singleton.
+- **Effects.** A singleton whose making throws or waits is made by `build`,
+  after what it is made from; `build` is `async` and `throws` just as they
+  are. So `resolve` does neither. Any other singleton is made the first time
+  it is wanted.
+- **Fragments.** A package with registered `@injectable` types gets a public
+  `Services`, in the module of theirs fewest names deep. `@include(M.Services.self)`
+  has a container build them, their graph checked with its own; an error there
+  is at the container. A type the package keeps to itself is made by a
+  function of the fragment, when it is registered as what is public, of what
+  is.
+- **`ServiceCollection`** is a value. `add` takes a container, a fragment or
+  any `ServiceModule`; `addSingleton`, `addScoped` and `addTransient` a type,
+  a closure or a value, `open:` a generic; `tryAdd`, `replace…` and `remove`
+  change what was added, as a test does. `build` runs the same checks on what
+  the registrations say they are made from, and `ServiceError.Invalid` has
+  all that is wrong; `buildAsync` also makes what is waited for. A closure's
+  own dependencies are known only `from:` what it says, else as it runs, so
+  `resolve` throws a `ServiceError` here.
 - **Keys.** A service is known by its `Type` and, for a keyed one, a string.
-  It is kept as an `any Any` and given as the type asked for, so one that
-  only the running program knows is a service like any other.
+  It is kept as an `any Any` and given as the type asked for, so one that only
+  the running program knows is a service like any other: `resolve(type)`.
 - **Open generics.** `addScoped(open: Repository.self, SqlRepository.self)`
   takes two `GenericType`s (§6.2). Asked for `any Repository<Order>`, the
   provider reads the type arguments from its metadata, makes
   `SqlRepository<Order>`'s of the same, and opens it as `Injectable`. The
   cast back to `any Repository<Order>` has the tables of every generic type
   of the program that conforms where its arguments are known, so an instance
-  no code names is one all the same.
-- **Sharing.** A singleton's service is Sendable, so the provider is; a
-  `ServiceScope` is not, and what is scoped or transient need not be. Two
-  threads that want one singleton wait for one of them to make it.
-- **Checks.** `build` goes through what the registrations say they are made
-  from: what is missing, what leads back to itself (but by a `Lazy` or a
-  closure), and what scoped service a singleton would hold, each with its
-  path. A closure's dependencies are not known, so it is held to the same as
-  it runs.
-- **Disposal.** A scope disposes what it made, the last first, as its
-  closure ends; the provider its singletons. `withAsyncScope` waits for an
-  `AsyncDisposable`. A transient one is its scope's to dispose; one asked of
-  the provider, the provider's, as in .NET.
+  no code names is one all the same. `@container` closes them as it is
+  compiled, for the uses there are.
+- **Sharing.** A singleton's service is Sendable, so a provider is; a scope is
+  not, and what is scoped or transient need not be. Two threads that want one
+  singleton wait for one of them to make it.
+- **Disposal.** A scope disposes what it made (`Disposable`,
+  `AsyncDisposable`), the last first, and then lets go of what it held, as its
+  closure ends; the provider its singletons. A container's `withScope` waits
+  where it must be awaited; a `ServiceProvider`'s is `withAsyncScope`. What is
+  transient is its scope's to dispose; asked of the provider, the provider's,
+  as in .NET. A singleton's `Lazy` and factories do not keep their provider.
 
-`@container`, whose graph is checked as it is compiled, is not written: the
-standard library has no generators, and the graph is the compiler's to see.
+Over the fifty-service graph of `benchmarks/library/dependency-container`, the
+container takes 0.5 to 0.7 of .NET's time, and `dependency-injection`'s
+collection 2.3 times it: .NET compiles a graph's code as it runs.
 
 ### Hosting
 
@@ -1530,7 +1590,7 @@ swift-service-lifecycle's ordering: `ApplicationBuilder` (`services`,
 
 - **Services.** `services` is the list of services to run, each made as the
   host is built: by a typed closure from a `HostContext`, or, for a type
-  that derives `Injectable`, by the builder's `container`
+  that is `@injectable`, by the builder's `container`
   (`Sable.DependencyInjection`, below), which has the host's environment,
   configuration, logging, lifetime and clock too. The host disposes the
   container once its services have stopped.
@@ -1820,10 +1880,6 @@ Derivation is implemented as compiler-known conformance synthesis against the
 always-present `FieldDescriptor` metadata, not as source generation. It
 composes with generics (`@derive(Equatable)` on `Pair<T, U>` yields a
 conditional conformance `where T: Equatable, U: Equatable`).
-
-`Injectable` is for classes, actors and structs alike, and reads the type's
-initialiser, not its fields: `create(from:)` calls it with what a
-`ServiceScope` gives for each parameter ("Dependency injection", above).
 
 `Serializable` writes a struct as an object of its fields, an enum as its
 case's name, and a union's case tagged externally (`{"Circle": {"radius":

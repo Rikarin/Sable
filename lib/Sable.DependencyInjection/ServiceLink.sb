@@ -7,9 +7,9 @@ struct ServiceLink: Sendable {
     let entry: ServiceEntry
 }
 
-// An entry being made, and where its links are.
+// An entry being made, and where the links are of the one it is made for.
 struct Making {
     let entry: ServiceEntry
-    var next: Int
+    let next: Int
     let end: Int
 }

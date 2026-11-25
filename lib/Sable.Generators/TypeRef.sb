@@ -13,12 +13,23 @@ public struct TypeRef {
     /// The whole type, as the compiler writes it.
     public var text: String
     /// Its generic arguments; an optional's or an array's element; a
-    /// dictionary's key and value; a tuple's elements.
+    /// dictionary's key and value; a tuple's elements; a function's
+    /// parameters, then what it returns.
     public var arguments: TypeRef[>..] = []
     /// Every protocol it conforms to, by name.
     public var conformances: String[>..] = []
     /// The attributes on its declaration, by name.
     public var attributes: String[>..] = []
+
+    /// Its name as code outside the types it is in writes it: `Outer.Inner`.
+    public var qualifiedName: String = ""
+    /// An array's brackets, as `[]` or `[>..]`; a function's `async` and
+    /// `throws`; else "".
+    public var suffix: String = ""
+    /// Whether it, and all it is made of, is declared `public`.
+    public var isPublic: Bool = false
+    /// Whether nothing derives from it.
+    public var isFinal: Bool = false
 
     /// Whether it conforms to the protocol named.
     public fn conforms(to name: String) -> Bool {

@@ -1,21 +1,14 @@
 module Sable.DependencyInjection
 
 /// A type that a container can make: it says what it is made from, and how.
-/// `@derive(Injectable)` writes both from the type's initialiser.
+/// `@injectable` writes both from the type's initialiser.
 ///
-/// ```sable
-/// @immutable
-/// @derive(Injectable)
+/// ```sable ignore
+/// @injectable(.Singleton)
 /// final class Greeter {
 ///     let name: String
 ///     init(name: String) { self.name = name }
 /// }
-///
-/// let services = ServiceCollection()
-/// services.addSingleton(String.self, value: "Ada")
-/// services.addSingleton(Greeter.self)
-/// let provider = try! services.build()
-/// assert(try! provider.resolve(Greeter.self).name == "Ada")
 /// ```
 ///
 /// What each of the initialiser's parameters is given:
@@ -27,13 +20,31 @@ module Sable.DependencyInjection
 /// | `T[]`, `T[>..]` | every registration of it, in order |
 /// | `() -> T` | a closure that gives the service: a new one each call, if it is transient |
 /// | `Lazy<T>` | the service, the first time its value is read |
-/// | `@Keyed("k") x: T` | the one registered with that key |
+/// | `@keyed("k") x: T` | the one registered with that key |
 /// | `x: T = value` | the service, or the default when it is not registered |
+/// | `ServiceScope` | the scope itself, of a `ServiceCollection`'s provider |
+///
+/// A type may as well say so itself:
+///
+/// ```sable
+/// struct Greeter: Injectable {
+///     let name: String
+///     static fn make(_ services: ServiceScope) throws -> Greeter {
+///         return Greeter { name: try services.resolve(String.self) }
+///     }
+/// }
+///
+/// var services = ServiceCollection()
+/// services.addSingleton(String.self, value: "Ada")
+/// services.addTransient(Greeter.self)
+/// let provider = try! services.build()
+/// assert(try! provider.resolve(Greeter.self).name == "Ada")
+/// ```
 public protocol Injectable {
     /// One, made from what the scope gives.
-    static fn create(from services: ServiceScope) throws -> Self
+    static fn make(_ services: ServiceScope) throws -> Self
 
-    /// What `create` asks the scope for: what a provider is checked by as it
+    /// What `make` asks the scope for: what a provider is checked by as it
     /// is built. None, if it does not say.
     static fn dependencies() -> ServiceDependency[>..]
 }

@@ -1,0 +1,468 @@
+module DependencyContainerBench
+
+import Sable.DependencyInjection
+
+// A graph of fifty services resolved in a scope of its own, as a request's
+// is: twelve transient ones over thirteen scoped ones over twenty-five
+// singletons, each made from the two below it: by a container whose code is
+// written as it is compiled. What it is beside is the .NET container.
+
+@injectable(.Transient)
+final class N0 {
+    let n1: N1
+    let n2: N2
+    init(n1: N1, n2: N2) {
+        self.n1 = n1
+        self.n2 = n2
+    }
+    fn total() -> Int { return 0 + n1.total() + n2.total() }
+}
+
+@injectable(.Transient)
+final class N1 {
+    let n3: N3
+    let n4: N4
+    init(n3: N3, n4: N4) {
+        self.n3 = n3
+        self.n4 = n4
+    }
+    fn total() -> Int { return 1 + n3.total() + n4.total() }
+}
+
+@injectable(.Transient)
+final class N2 {
+    let n5: N5
+    let n6: N6
+    init(n5: N5, n6: N6) {
+        self.n5 = n5
+        self.n6 = n6
+    }
+    fn total() -> Int { return 2 + n5.total() + n6.total() }
+}
+
+@injectable(.Transient)
+final class N3 {
+    let n7: N7
+    let n8: N8
+    init(n7: N7, n8: N8) {
+        self.n7 = n7
+        self.n8 = n8
+    }
+    fn total() -> Int { return 3 + n7.total() + n8.total() }
+}
+
+@injectable(.Transient)
+final class N4 {
+    let n9: N9
+    let n10: N10
+    init(n9: N9, n10: N10) {
+        self.n9 = n9
+        self.n10 = n10
+    }
+    fn total() -> Int { return 4 + n9.total() + n10.total() }
+}
+
+@injectable(.Transient)
+final class N5 {
+    let n11: N11
+    let n12: N12
+    init(n11: N11, n12: N12) {
+        self.n11 = n11
+        self.n12 = n12
+    }
+    fn total() -> Int { return 5 + n11.total() + n12.total() }
+}
+
+@injectable(.Transient)
+final class N6 {
+    let n13: N13
+    let n14: N14
+    init(n13: N13, n14: N14) {
+        self.n13 = n13
+        self.n14 = n14
+    }
+    fn total() -> Int { return 6 + n13.total() + n14.total() }
+}
+
+@injectable(.Transient)
+final class N7 {
+    let n15: N15
+    let n16: N16
+    init(n15: N15, n16: N16) {
+        self.n15 = n15
+        self.n16 = n16
+    }
+    fn total() -> Int { return 7 + n15.total() + n16.total() }
+}
+
+@injectable(.Transient)
+final class N8 {
+    let n17: N17
+    let n18: N18
+    init(n17: N17, n18: N18) {
+        self.n17 = n17
+        self.n18 = n18
+    }
+    fn total() -> Int { return 8 + n17.total() + n18.total() }
+}
+
+@injectable(.Transient)
+final class N9 {
+    let n19: N19
+    let n20: N20
+    init(n19: N19, n20: N20) {
+        self.n19 = n19
+        self.n20 = n20
+    }
+    fn total() -> Int { return 9 + n19.total() + n20.total() }
+}
+
+@injectable(.Transient)
+final class N10 {
+    let n21: N21
+    let n22: N22
+    init(n21: N21, n22: N22) {
+        self.n21 = n21
+        self.n22 = n22
+    }
+    fn total() -> Int { return 10 + n21.total() + n22.total() }
+}
+
+@injectable(.Transient)
+final class N11 {
+    let n23: N23
+    let n24: N24
+    init(n23: N23, n24: N24) {
+        self.n23 = n23
+        self.n24 = n24
+    }
+    fn total() -> Int { return 11 + n23.total() + n24.total() }
+}
+
+@injectable(.Scoped)
+final class N12 {
+    let n25: N25
+    let n26: N26
+    init(n25: N25, n26: N26) {
+        self.n25 = n25
+        self.n26 = n26
+    }
+    fn total() -> Int { return 12 + n25.total() + n26.total() }
+}
+
+@injectable(.Scoped)
+final class N13 {
+    let n27: N27
+    let n28: N28
+    init(n27: N27, n28: N28) {
+        self.n27 = n27
+        self.n28 = n28
+    }
+    fn total() -> Int { return 13 + n27.total() + n28.total() }
+}
+
+@injectable(.Scoped)
+final class N14 {
+    let n29: N29
+    let n30: N30
+    init(n29: N29, n30: N30) {
+        self.n29 = n29
+        self.n30 = n30
+    }
+    fn total() -> Int { return 14 + n29.total() + n30.total() }
+}
+
+@injectable(.Scoped)
+final class N15 {
+    let n31: N31
+    let n32: N32
+    init(n31: N31, n32: N32) {
+        self.n31 = n31
+        self.n32 = n32
+    }
+    fn total() -> Int { return 15 + n31.total() + n32.total() }
+}
+
+@injectable(.Scoped)
+final class N16 {
+    let n33: N33
+    let n34: N34
+    init(n33: N33, n34: N34) {
+        self.n33 = n33
+        self.n34 = n34
+    }
+    fn total() -> Int { return 16 + n33.total() + n34.total() }
+}
+
+@injectable(.Scoped)
+final class N17 {
+    let n35: N35
+    let n36: N36
+    init(n35: N35, n36: N36) {
+        self.n35 = n35
+        self.n36 = n36
+    }
+    fn total() -> Int { return 17 + n35.total() + n36.total() }
+}
+
+@injectable(.Scoped)
+final class N18 {
+    let n37: N37
+    let n38: N38
+    init(n37: N37, n38: N38) {
+        self.n37 = n37
+        self.n38 = n38
+    }
+    fn total() -> Int { return 18 + n37.total() + n38.total() }
+}
+
+@injectable(.Scoped)
+final class N19 {
+    let n39: N39
+    let n40: N40
+    init(n39: N39, n40: N40) {
+        self.n39 = n39
+        self.n40 = n40
+    }
+    fn total() -> Int { return 19 + n39.total() + n40.total() }
+}
+
+@injectable(.Scoped)
+final class N20 {
+    let n41: N41
+    let n42: N42
+    init(n41: N41, n42: N42) {
+        self.n41 = n41
+        self.n42 = n42
+    }
+    fn total() -> Int { return 20 + n41.total() + n42.total() }
+}
+
+@injectable(.Scoped)
+final class N21 {
+    let n43: N43
+    let n44: N44
+    init(n43: N43, n44: N44) {
+        self.n43 = n43
+        self.n44 = n44
+    }
+    fn total() -> Int { return 21 + n43.total() + n44.total() }
+}
+
+@injectable(.Scoped)
+final class N22 {
+    let n45: N45
+    let n46: N46
+    init(n45: N45, n46: N46) {
+        self.n45 = n45
+        self.n46 = n46
+    }
+    fn total() -> Int { return 22 + n45.total() + n46.total() }
+}
+
+@injectable(.Scoped)
+final class N23 {
+    let n47: N47
+    let n48: N48
+    init(n47: N47, n48: N48) {
+        self.n47 = n47
+        self.n48 = n48
+    }
+    fn total() -> Int { return 23 + n47.total() + n48.total() }
+}
+
+@injectable(.Scoped)
+final class N24 {
+    let n49: N49
+    init(n49: N49) {
+        self.n49 = n49
+    }
+    fn total() -> Int { return 24 + n49.total() }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N25 {
+    init() { }
+    fn total() -> Int { return 25 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N26 {
+    init() { }
+    fn total() -> Int { return 26 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N27 {
+    init() { }
+    fn total() -> Int { return 27 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N28 {
+    init() { }
+    fn total() -> Int { return 28 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N29 {
+    init() { }
+    fn total() -> Int { return 29 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N30 {
+    init() { }
+    fn total() -> Int { return 30 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N31 {
+    init() { }
+    fn total() -> Int { return 31 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N32 {
+    init() { }
+    fn total() -> Int { return 32 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N33 {
+    init() { }
+    fn total() -> Int { return 33 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N34 {
+    init() { }
+    fn total() -> Int { return 34 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N35 {
+    init() { }
+    fn total() -> Int { return 35 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N36 {
+    init() { }
+    fn total() -> Int { return 36 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N37 {
+    init() { }
+    fn total() -> Int { return 37 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N38 {
+    init() { }
+    fn total() -> Int { return 38 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N39 {
+    init() { }
+    fn total() -> Int { return 39 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N40 {
+    init() { }
+    fn total() -> Int { return 40 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N41 {
+    init() { }
+    fn total() -> Int { return 41 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N42 {
+    init() { }
+    fn total() -> Int { return 42 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N43 {
+    init() { }
+    fn total() -> Int { return 43 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N44 {
+    init() { }
+    fn total() -> Int { return 44 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N45 {
+    init() { }
+    fn total() -> Int { return 45 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N46 {
+    init() { }
+    fn total() -> Int { return 46 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N47 {
+    init() { }
+    fn total() -> Int { return 47 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N48 {
+    init() { }
+    fn total() -> Int { return 48 }
+}
+
+@immutable
+@injectable(.Singleton)
+final class N49 {
+    init() { }
+    fn total() -> Int { return 49 }
+}
+
+@container
+struct Nodes { }
+
+fn main() {
+    let provider = Nodes.build()
+    var total = 0
+    for _ in 0..<20000 {
+        total += provider.withScope { scope in scope.resolve(N0.self).total() }
+    }
+    print("\(total)")
+}

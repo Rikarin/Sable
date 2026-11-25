@@ -34,6 +34,13 @@ public sealed record GenerationInput(string Package, IReadOnlyList<GeneratorSet>
     /// <summary>What else its types resolve against: its dependencies' files, with what their generators wrote.</summary>
     public IReadOnlyList<SyntaxTree> References { get; init; } = [];
 
+    /// <summary>
+    ///     The packages it depends on, directly or not, and their own files:
+    ///     the declarations in them a package generator that says <c>with:</c>
+    ///     is given too (docs/08 §8.3).
+    /// </summary>
+    public IReadOnlyList<(string Package, IReadOnlyList<SyntaxTree> Files)> Dependencies { get; init; } = [];
+
     /// <summary>The files its manifest lists for its generators.</summary>
     public IReadOnlyList<GeneratorInputFile> Inputs { get; init; } = [];
 
@@ -165,13 +172,25 @@ public static class SourceGenerators {
         var generated = new List<GeneratedFile>();
         var modules = input.Files.Select(static f => (f.Root as CompilationUnitSyntax)?.Module?.Name.ToString().Trim()).OfType<string>().ToHashSet(StringComparer.Ordinal);
         foreach (var group in requests.GroupBy(static r => r.Set)) {
-            var compiled = Compile(group.Key);
-            diagnostics.AddRange(compiled.DiagnosticsFor(group.Key));
-            if (compiled.Module is not { } module) {
-                continue;
+            Dictionary<Request, RunOutput> outputs;
+            if (group.Key.IsLibrary && group.All(static r => Runs.ContainsKey(r.Key) || GeneratorRuns.Read(r.Key) is { } kept && Runs.TryAdd(r.Key, new([..kept.Messages.Select(static m => new RunMessage(m.Severity, m.Location, m.Text))], [..kept.Files.Select(static f => (f.Name, f.Module, f.Text))])))) {
+                // A library generator's, of this compiler's: nothing to compile or run.
+                outputs = group.ToDictionary(static r => r, static r => Runs[r.Key]);
+            } else {
+                var compiled = Compile(group.Key);
+                diagnostics.AddRange(compiled.DiagnosticsFor(group.Key));
+                if (compiled.Module is not { } module) {
+                    continue;
+                }
+
+                outputs = Execute(compiled, module, [..group], input.StepLimit, diagnostics);
+                if (group.Key.IsLibrary) {
+                    foreach (var (request, output) in outputs) {
+                        GeneratorRuns.Write(request.Key, new([..output.Messages.Select(static m => new GeneratorRuns.Message(m.Severity, m.Location, m.Text))], [..output.Files.Select(static f => new GeneratorRuns.File(f.Name, f.Module, f.Text))]));
+                    }
+                }
             }
 
-            var outputs = Execute(compiled, module, [..group], input.StepLimit, diagnostics);
             var names = new Dictionary<(string Generator, string Name), Request>();
             foreach (var request in group) {
                 if (outputs.TryGetValue(request, out var output)) {
@@ -206,7 +225,7 @@ public static class SourceGenerators {
             foreach (var generator in set.Generators) {
                 if (generator.Name.Length == 0) {
                     diagnostics.Add((Rule(generator.Attribute.Span,
-                        "a generator is named by a string: '@generator(\"name\")' runs for declarations marked '@name'; it may also say 'members: [\"a\", \"b\"]', the attributes it reads on fields, cases and parameters, and 'always: true'"),
+                        "a generator is named by a string: '@generator(\"name\")' runs for declarations marked '@name'; it may also say 'members: [\"a\", \"b\"]', the attributes it reads on members and parameters, and, given the whole package, 'with: [\"a\", \"b\"]', the attributes of what else it is given, and 'always: true'"),
                         generator.Tree));
                 } else if (BuiltInAttributes.Contains(generator.Name)) {
                     diagnostics.Add((Rule(generator.Attribute.Span, $"'@{generator.Name}' is the compiler's own attribute; a generator cannot answer to it"), generator.Tree));
@@ -239,6 +258,8 @@ public static class SourceGenerators {
 
         var requests = new List<Request>();
         foreach (var (name, (set, generator)) in byName.OrderBy(static g => g.Key, StringComparer.Ordinal)) {
+            var wanted = generator.With.ToHashSet(StringComparer.Ordinal);
+            wanted.Add(name);
             var mine = found.Where(f => f.Name == name).ToList();
             if (generator.Kind == GeneratorKind.Declaration) {
                 foreach (var f in mine) {
@@ -247,6 +268,17 @@ public static class SourceGenerators {
                 }
 
                 continue;
+            }
+
+            // A package generator's 'with:': what carries those attributes,
+            // in the order it is all declared in, each once.
+            if (wanted.Count > 1) {
+                mine = [];
+                foreach (var tree in input.Files) {
+                    if (tree.Root is CompilationUnitSyntax unit) {
+                        mine.AddRange(GeneratorRequests.Find(unit, wanted).DistinctBy(static f => f.Node).Select(f => (f.Name, tree, unit, f.Node, f.Attribute, f.Container)));
+                    }
+                }
             }
 
             if (mine.Count == 0 && !generator.Always) {
@@ -259,6 +291,21 @@ public static class SourceGenerators {
                 var (lines, item) = describer.Describe(i, mine[i].Tree, mine[i].Unit, mine[i].Node, mine[i].Attribute, mine[i].Container);
                 text.Append(lines);
                 items.Add(item);
+            }
+
+            // Its dependencies' declarations, for one that says 'with:': after its own.
+            foreach (var (package, files) in generator.With.Count > 0 ? input.Dependencies : []) {
+                foreach (var tree in files) {
+                    if (tree.Root is not CompilationUnitSyntax unit) {
+                        continue;
+                    }
+
+                    foreach (var f in GeneratorRequests.Find(unit, wanted).DistinctBy(static f => f.Node)) {
+                        var (lines, item) = describer.Describe(items.Count, tree, unit, f.Node, f.Attribute, f.Container, package);
+                        text.Append(lines);
+                        items.Add(item);
+                    }
+                }
             }
 
             requests.Add(new(set, generator, items, text.Append("Z\n").ToString()));
@@ -312,8 +359,14 @@ public static class SourceGenerators {
             return new(null, diagnostics);
         }
 
+        // The standard library's bodies, once known to check cleanly with a
+        // program that cannot change that, are neither checked again nor
+        // lowered beyond what the generators reach (LibraryCheck).
+        var check = Library.CheckFor(compilation, program);
+        var standard = check?.Skipped;
         var own = set.Files.ToHashSet();
-        foreach (var (diagnostic, file) in compilation.GetAllDiagnosticsByFile().Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)) {
+        var checkedFiles = standard is null ? compilation.GetAllDiagnosticsByFile() : compilation.GetAllDiagnosticsByFile(t => !standard(t));
+        foreach (var (diagnostic, file) in checkedFiles.Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)) {
             if (file is not null && own.Contains(file)) {
                 diagnostics.Add((diagnostic, file));
             } else {
@@ -334,9 +387,9 @@ public static class SourceGenerators {
             return new(null, diagnostics);
         }
 
-        var (module, lowering) = SilGen.Lower(compilation);
-        foreach (var diagnostic in lowering.Where(static d => d.Severity == DiagnosticSeverity.Error)) {
-            diagnostics.Add((diagnostic, set.Files.FirstOrDefault(f => diagnostic.Span.End <= f.Text.Length) ?? set.Files[0]));
+        var (module, lowering) = SilGen.LowerByFile(compilation, false, standard);
+        foreach (var (diagnostic, tree) in lowering.Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)) {
+            diagnostics.Add((diagnostic, tree is not null && own.Contains(tree) ? tree : set.Files.FirstOrDefault(f => diagnostic.Span.End <= f.Text.Length) ?? set.Files[0]));
         }
 
         if (diagnostics.Count > 0) {
@@ -347,6 +400,12 @@ public static class SourceGenerators {
             return new(null, [(Diagnostic.Error(ErrorCode.ERR_GeneratorRule, default, $"internal error: SIL verification failed: {problems[0]}"), set.Files[0])]);
         }
 
+        if (standard is null) {
+            check?.Passed();
+        }
+
+        // What the generators can reach, made quicker for the interpreter.
+        SilPassManager.RemoveUnreachable(module);
         return new(module, []);
     }
 
@@ -437,6 +496,10 @@ public static class SourceGenerators {
         const string expected = "a generator is declared 'fn name(_ declaration: Declaration, into output: inout Output)', or, to be given the whole package, 'fn name(_ pkg: Package, into output: inout Output)'";
         if (generator.Always && generator.Kind != GeneratorKind.Package) {
             return "'always: true' is for a generator given the whole package, 'fn name(_ pkg: Package, into output: inout Output)': a generator given one declaration runs only when there is one";
+        }
+
+        if (generator.With.Count > 0 && generator.Kind != GeneratorKind.Package) {
+            return "'with:' is for a generator given the whole package, 'fn name(_ pkg: Package, into output: inout Output)': a generator given one declaration is given those with its own attribute";
         }
 
         if (compilation.GetSemanticModel(generator.Tree).GetSymbolOf(generator.Declaration) is not FunctionSymbol function) {
@@ -672,7 +735,10 @@ public static class SourceGenerators {
             }
 
             names[(generator, name)] = request;
-            yield return new(home.Tree, generator, name, WithHeader(request, home.Unit!, module, generator, text, parsed));
+            // In a module of the package's choosing, it goes beside the first
+            // declaration there is in that module: a binary's, with the binary.
+            var beside = module.Length == 0 ? home : HomeIn(input, request, module) ?? home;
+            yield return new(beside.Tree!, generator, name, WithHeader(request, beside.Unit!, module, generator, text, parsed));
         }
     }
 
@@ -692,6 +758,17 @@ public static class SourceGenerators {
         }
 
         return (null, null);
+    }
+
+    /// <summary>The file of the first of the package's own declarations in the module, if there is one.</summary>
+    static (SyntaxTree? Tree, CompilationUnitSyntax? Unit)? HomeIn(GenerationInput input, Request request, string module) {
+        foreach (var item in request.Items) {
+            if (item.Unit.Module?.Name.ToString().Trim() == module && input.Files.Contains(item.Tree)) {
+                return (item.Tree, item.Unit);
+            }
+        }
+
+        return null;
     }
 
     static string? FileNameProblem(string name) =>

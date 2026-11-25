@@ -24,8 +24,14 @@ public sealed record GeneratorFunction(string Name, string Module, string Functi
     /// <summary><c>always: true</c>: a package generator that runs even for a package with no declaration for it.</summary>
     public bool Always => GeneratorSet.Argument(Attribute, "always") is LiteralExpressionSyntax { Token.Kind: SyntaxKind.TrueKeyword };
 
-    /// <summary>The attributes it reads on fields, cases and parameters: its <c>members:</c>.</summary>
-    public IReadOnlyList<string> Members => GeneratorSet.MemberAttributes(Attribute);
+    /// <summary>The attributes it reads on members and parameters: its <c>members:</c>.</summary>
+    public IReadOnlyList<string> Members => GeneratorSet.Names(Attribute, "members");
+
+    /// <summary>
+    ///     The attributes of the declarations a package generator is given
+    ///     beside its own, and runs for: its <c>with:</c>.
+    /// </summary>
+    public IReadOnlyList<string> With => GeneratorSet.Names(Attribute, "with");
 }
 
 /// <summary>
@@ -64,6 +70,9 @@ public sealed class GeneratorSet {
         Key = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key.ToString())));
     }
 
+    /// <summary>Whether it is the standard library's own (<see cref="LibraryGenerators" />), and so the compiler's.</summary>
+    public bool IsLibrary { get; init; }
+
     /// <summary>The package the generators are in.</summary>
     public string Package { get; }
 
@@ -75,7 +84,7 @@ public sealed class GeneratorSet {
 
     /// <summary>The attributes the generators answer to, and read on members: what a file that can see them may write.</summary>
     public (IReadOnlyList<string> Types, IReadOnlyList<string> Members) Attributes =>
-        ([..Generators.Select(static g => g.Name).Where(static n => n.Length > 0)],
+        ([..Generators.SelectMany(static g => g.With.Prepend(g.Name)).Where(static n => n.Length > 0).Distinct()],
             [..Generators.SelectMany(static g => g.Members)]);
 
     /// <summary>What a cache of anything the program computes is keyed by: the toolchain, the library and its files.</summary>
@@ -110,12 +119,16 @@ public sealed class GeneratorSet {
     public static GeneratorSet FromSources(string package, IReadOnlyList<(string Name, string Text)> files) =>
         new(package, [..files.Select(static f => SyntaxTree.Parse(new SourceText(f.Text, f.Name)))]);
 
+    /// <summary>One of the standard library's, by the module it is part of.</summary>
+    public static GeneratorSet OfLibrary(string module, IReadOnlyList<(string Name, string Text)> files) =>
+        new(module, [..files.Select(static f => SyntaxTree.Parse(new SourceText(f.Text, f.Name)))]) { IsLibrary = true };
+
     /// <summary>A generator program from trees already parsed: the editor's documents, so that what is said about them is said about those.</summary>
     public static GeneratorSet FromTrees(string package, IReadOnlyList<SyntaxTree> files) => new(package, files);
 
     /// <summary>
     ///     The name in <c>@generator("name")</c>, if it is written as a string
-    ///     literal, with nothing else but <c>members:</c> and <c>always:</c>.
+    ///     literal, with nothing else but <c>members:</c>, <c>with:</c> and <c>always:</c>.
     /// </summary>
     static string? GeneratorName(AttributeSyntax attribute) {
         if (attribute.ArgumentList is not { Arguments: [{ NameToken.IsNone: true, Expression: var first }, ..] arguments }
@@ -126,7 +139,7 @@ public sealed class GeneratorSet {
         var rest = arguments.Skip(1).ToList();
         var valid = rest.Count == rest.Select(static a => a.NameToken.Text).Distinct().Count()
             && rest.All(static a => a.NameToken.Text switch {
-                "members" => MemberAttributes(a.Expression) is not null,
+                "members" or "with" => Names(a.Expression) is not null,
                 "always" => a.Expression is LiteralExpressionSyntax { Token.Kind: SyntaxKind.TrueKeyword or SyntaxKind.FalseKeyword },
                 _ => false,
             });
@@ -136,11 +149,11 @@ public sealed class GeneratorSet {
     internal static ExpressionSyntax? Argument(AttributeSyntax attribute, string label) =>
         attribute.ArgumentList?.Arguments.FirstOrDefault(a => a.NameToken.Text == label)?.Expression;
 
-    /// <summary>The names in <c>members: ["rename", "skip"]</c>: the attributes a generator reads on fields, cases and parameters.</summary>
-    internal static IReadOnlyList<string> MemberAttributes(AttributeSyntax attribute) =>
-        Argument(attribute, "members") is { } members ? MemberAttributes(members) ?? [] : [];
+    /// <summary>The names in <c>members: ["rename", "skip"]</c>, or another argument that lists attributes.</summary>
+    internal static IReadOnlyList<string> Names(AttributeSyntax attribute, string label) =>
+        Argument(attribute, label) is { } names ? Names(names) ?? [] : [];
 
-    static IReadOnlyList<string>? MemberAttributes(ExpressionSyntax expression) {
+    static IReadOnlyList<string>? Names(ExpressionSyntax expression) {
         if (expression is not ArrayExpressionSyntax array) {
             return null;
         }

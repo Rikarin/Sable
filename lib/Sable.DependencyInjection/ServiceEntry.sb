@@ -10,29 +10,35 @@ final class ServiceEntry {
     let key: ServiceKey
     let lifetime: ServiceLifetime
     let dependencies: ServiceDependency[>..]
-    // Where a scope keeps its own, for a scoped one.
+    // Which it is of the provider's.
     let slot: Int
+    // Where a scope keeps its own, for a scoped one.
+    let place: Int
     // Where its links start, of the provider's, and how many places it has there.
     let firstLink: Int
     let linkCount: Int
     // Whether what it makes is the provider's to dispose.
     let owned: Bool
-    let make: (ServiceScope) throws -> any Any
+    let maker: ServiceMaker
+    // Whether it is made as the provider is built.
+    let eager: Bool
     // A singleton's, once made.
     let cell: OnceCell<any Any>
     let making: Mutex<Bool>
     // The type of what it made first, when there is nothing to dispose of one.
     let plain: OnceCell<Type>
 
-    init(key: ServiceKey, lifetime: ServiceLifetime, dependencies: ServiceDependency[>..], slot: Int, firstLink: Int, owned: Bool, make: @escaping (ServiceScope) throws -> any Any) {
+    init(key: ServiceKey, lifetime: ServiceLifetime, dependencies: ServiceDependency[>..], slot: Int, place: Int, firstLink: Int, owned: Bool, maker: ServiceMaker, eager: Bool = false) {
         self.key = key
         self.lifetime = lifetime
         self.dependencies = dependencies
         self.slot = slot
+        self.place = place
         self.firstLink = firstLink
         linkCount = firstLink < 0 ? 0 : dependencies.count
         self.owned = owned
-        self.make = make
+        self.maker = maker
+        self.eager = eager
         cell = OnceCell<any Any>()
         making = Mutex(false)
         plain = OnceCell<Type>()
@@ -50,13 +56,13 @@ final class ServiceEntry {
                 if scope.isRoot {
                     throw scope.scopedFromRoot(self)
                 }
-                if slot < scope.kept.count {
-                    if let held = scope.kept[slot] {
+                if place < scope.kept.count {
+                    if let held = scope.kept[place] {
                         return held
                     }
                 }
                 let made = try build(scope)
-                scope.keep(made, at: slot)
+                scope.keep(made, at: place)
                 return made
             }
             case .Transient => {
@@ -68,6 +74,9 @@ final class ServiceEntry {
     // Made once, whoever asks: the others wait. What it is made from is the
     // provider's, not the scope's that asked first.
     fn single(_ scope: ServiceScope) throws(ServiceError) -> any Any {
+        if maker.start != none {
+            throw ServiceError.NotStarted(service: key)
+        }
         // Being made by whom this one is made for: to wait would be for ever.
         if scope.isMaking(self) {
             throw ServiceError.Circular(path: scope.path(to: key))
@@ -82,8 +91,7 @@ final class ServiceEntry {
         }
     }
 
-    fn isPlain(_ made: any Any) -> Bool {
-        let type = type(of: made)
+    fn isPlain(_ type: Type) -> Bool {
         if let known = plain.get() {
             if known == type {
                 return true
@@ -99,14 +107,30 @@ final class ServiceEntry {
     fn build(_ scope: ServiceScope) throws(ServiceError) -> any Any {
         try scope.begin(self)
         do {
-            let made = try make(scope)
-            scope.end()
-            if owned && !isPlain(made) {
+            let made = try maker.make(scope)
+            scope.finish()
+            if owned && !isPlain(type(of: made)) {
                 scope.note(made)
             }
             return made
         } catch {
-            scope.end()
+            scope.finish()
+            throw error as? ServiceError ?? ServiceError.Failed(service: key, error: error)
+        }
+    }
+
+    // Made as its provider is built, by a closure that waits.
+    async fn begin(_ start: async (ServiceScope) throws -> any Any, in scope: ServiceScope) throws(ServiceError) {
+        try scope.begin(self)
+        do {
+            let made = try await start(scope)
+            scope.finish()
+            if owned && !isPlain(type(of: made)) {
+                scope.note(made)
+            }
+            _ = cell.getOrInit { made }
+        } catch {
+            scope.finish()
             throw error as? ServiceError ?? ServiceError.Failed(service: key, error: error)
         }
     }

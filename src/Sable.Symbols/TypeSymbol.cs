@@ -44,6 +44,13 @@ public abstract class TypeSymbol(SyntaxNode? declaration = null) : Symbol(declar
     public NamedTypeSymbol? SupertypeOf(NamedTypeSymbol definition) =>
         Conversions.Supertypes(this).OfType<NamedTypeSymbol>().FirstOrDefault(t => ReferenceEquals(t.OriginalDefinition, definition.OriginalDefinition));
 
+    /// <summary>Every class this type derives from and protocol it conforms to, itself among them.</summary>
+    public IEnumerable<TypeSymbol> Supertypes => Conversions.Supertypes(this);
+
+    /// <summary>Every instance of the definition this type inherits from or conforms to: a type may be a <c>Provides&lt;Int&gt;</c> and a <c>Provides&lt;String&gt;</c>.</summary>
+    public IEnumerable<NamedTypeSymbol> SupertypesOf(NamedTypeSymbol definition) =>
+        Supertypes.OfType<NamedTypeSymbol>().Where(t => ReferenceEquals(t.OriginalDefinition, definition.OriginalDefinition)).Distinct();
+
     public override string ToString() => ToDisplayString();
 
     public virtual bool Equals(TypeSymbol? other) => ReferenceEquals(this, other);

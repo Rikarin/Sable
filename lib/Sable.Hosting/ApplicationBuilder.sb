@@ -25,7 +25,7 @@ public final class ApplicationBuilder {
     /// (`HostedServices.add(_:_:)` of a type). The host's environment,
     /// configuration, logging, lifetime and clock are registered as it is
     /// built, unless something else is; it disposes the rest as it stops.
-    public let container: ServiceCollection
+    public var container: ServiceCollection
     /// What they are configured by: the environment's variables, if not set.
     public var configuration: any HostConfiguration
     /// How they log.
@@ -66,21 +66,49 @@ public final class ApplicationBuilder {
     }
 
     /// The host, its services made, each from its closure in order. What a
-    /// closure throws, this throws.
+    /// closure throws, this throws; and ServiceError where the container has
+    /// something wrong, or must be waited for (`buildAsync`).
     public fn build() throws -> Host {
         let lifetime = ApplicationLifetime()
-        _ = container.tryAdd(ServiceDescriptor.of(HostEnvironment.self, none, environment))
-        _ = container.tryAdd(ServiceDescriptor.of((any HostConfiguration).self, none, configuration))
-        _ = container.tryAdd(ServiceDescriptor.of(HostLogging.self, none, logging))
-        _ = container.tryAdd(ServiceDescriptor.of(ApplicationLifetime.self, none, lifetime))
-        _ = container.tryAdd(ServiceDescriptor.of((any HostClock).self, none, clock))
+        return try host(lifetime, try registered(lifetime).build())
+    }
+
+    /// The host, as `build` makes it, with what in its container must be
+    /// waited for.
+    ///
+    /// ```sable
+    /// let builder = ApplicationBuilder()
+    /// builder.container.addSingleton(Int.self) { _services in
+    ///     await Task.yield()
+    ///     return 8080
+    /// }
+    /// let host = try! await builder.buildAsync()
+    /// assert(try! host.context.container.resolve(Int.self) == 8080)
+    /// ```
+    public async fn buildAsync() throws -> Host {
+        let lifetime = ApplicationLifetime()
+        return try host(lifetime, try await registered(lifetime).buildAsync())
+    }
+
+    // What the container has, with the host's own.
+    fn registered(_ lifetime: ApplicationLifetime) -> ServiceCollection {
+        var all = container
+        all.tryAdd(ServiceDescriptor.of(HostEnvironment.self, none, environment))
+        all.tryAdd(ServiceDescriptor.of((any HostConfiguration).self, none, configuration))
+        all.tryAdd(ServiceDescriptor.of(HostLogging.self, none, logging))
+        all.tryAdd(ServiceDescriptor.of(ApplicationLifetime.self, none, lifetime))
+        all.tryAdd(ServiceDescriptor.of((any HostClock).self, none, clock))
+        return all
+    }
+
+    fn host(_ lifetime: ApplicationLifetime, _ provider: ServiceProvider) throws -> Host {
         let context = HostContext {
             environment: environment,
             configuration: configuration,
             logging: logging,
             lifetime: lifetime,
             clock: clock,
-            container: try container.build()
+            container: provider
         }
         var runs: ServiceRun[>..] = []
         for entry in services.entries {

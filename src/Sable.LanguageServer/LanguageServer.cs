@@ -29,6 +29,9 @@ public sealed class LanguageServerOptions {
     /// </summary>
     public Func<SyntaxTree, IReadOnlyList<SyntaxTree>> LibraryFor { get; init; } = static _ => [];
 
+    /// <summary>What the library's own generators write for files that are in no package (docs/08 §8.1).</summary>
+    public Func<IReadOnlyList<SyntaxTree>, GeneratedTrees>? GenerateLoose { get; init; }
+
     /// <summary>
     ///     What is known of a compilation's library files — the standard
     ///     library's, and its dependencies' files read from disk, known by
@@ -199,7 +202,9 @@ public sealed partial class LanguageServer {
         var dependencies = project is null ? [] : _dependencies.For(project, snapshot, Log);
         dependencies = [..dependencies, ..WorkspaceLibrary(snapshot, key).Except(dependencies)];
         return Analysis.Build(
-            snapshot, key, dependencies, _options.LibraryFor, project?.Generate is { } generate ? (trees, others) => Generated(generate, trees, others) : null, project?.Lints);
+            snapshot, key, dependencies, _options.LibraryFor, project?.Generate is { } generate ? (trees, others) => Generated(generate, trees, others)
+            : project is null && _options.GenerateLoose is { } loose ? (trees, others) => Generated((own, _) => loose(own), trees, others)
+            : null, project?.Lints);
     }
 
     /// <summary>

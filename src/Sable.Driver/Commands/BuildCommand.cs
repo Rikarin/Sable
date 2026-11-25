@@ -1,3 +1,4 @@
+using Sable.Driver.Generators;
 using System.Diagnostics;
 using Sable.CodeGen;
 using Sable.Driver.Build;
@@ -280,7 +281,24 @@ public class BuildCommand : Command {
 
         var cache = Directory.CreateTempSubdirectory("sable-file-");
         try {
-            var outcome = IncrementalBuild.Build([new UnitPlan("main", [new SourceFile(input, Path.GetFileName(options.Input), [])])], settings, Path.GetFullPath(executable), cache.FullName, log: Console.Error);
+            var sources = new List<SourceFile> { new(input, Path.GetFileName(options.Input), []) };
+            // What the library's generators write for it is compiled with it.
+            var tree = SyntaxTree.Parse(new SourceText(File.ReadAllText(input), Path.GetFileName(options.Input)), Pipeline.ParseOptionsFor(options.Optimise, target));
+            var (_, errors, warnings) = LibraryGenerators.Expand([tree]);
+            Report(warnings);
+            if (errors.Count > 0) {
+                Report(errors);
+                return 1;
+            }
+
+            foreach (var file in LibraryGenerators.Run([tree]).Files) {
+                var path = Path.Combine(cache.FullName, LibraryGenerators.NameOf(file));
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, file.Text);
+                sources.Add(new(path, LibraryGenerators.NameOf(file), []));
+            }
+
+            var outcome = IncrementalBuild.Build([new UnitPlan("main", sources)], settings, Path.GetFullPath(executable), cache.FullName, log: Console.Error);
             Report(outcome.Warnings);
             if (!outcome.Succeeded) {
                 Report(outcome.Errors);

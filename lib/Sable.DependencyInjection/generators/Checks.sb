@@ -1,0 +1,201 @@
+module DependencyInjectionGenerators
+
+import Sable.Generators
+
+// What is wrong with a container's graph, each said once, where it is.
+struct Checks {
+    var graph: Graph
+    // Where a message goes that is about what is not in this package.
+    let container: Location
+    // What was gone through, by twice its number, plus one under a singleton.
+    var seen: [Int: Bool] = [:]
+    // Where this is, from what was gone through first; and from where on it
+    // is all made together, before which something is asked for later.
+    var path: Int[>..] = []
+    var together: Int = 0
+    var later: Later[>..] = []
+    var hasErrors: Bool = false
+
+    init(_ graph: Graph, container: Location) {
+        self.graph = graph
+        self.container = container
+    }
+
+    // Finds what each registration is given, closing the open generics asked
+    // for, and then goes through it all: from what nothing else asks for, so
+    // that a message has the whole way to what it is about.
+    mutating fn check(_ output: inout Output) {
+        var asked: [Int: Bool] = [:]
+        var i = 0
+        while i < graph.registrations.count {
+            for j in 0..<graph.registrations[i].needs.count {
+                let need = graph.registrations[i].needs[j]
+                if need.kind == .Scope {
+                    error("a container made by '@container' has no ServiceScope to give: only a ServiceCollection's provider has", at: need.location, i, &output)
+                    continue
+                }
+                let targets = graph.candidates(need.service, need.key)
+                graph.registrations[i].needs[j].targets = targets
+                for target in targets {
+                    if target != i {
+                        asked[target] = true
+                    }
+                }
+            }
+            i += 1
+            if i > 5000 {
+                error("the open generics here have no end: each is made from another of itself", at: container, 0, &output)
+                return
+            }
+        }
+        for at in 0..<graph.registrations.count {
+            effects(at, &output)
+        }
+        for at in 0..<graph.registrations.count {
+            if asked[at] == none {
+                visit(at, &output)
+            }
+        }
+        for at in 0..<graph.registrations.count {
+            visit(at, &output)
+        }
+    }
+
+    mutating fn visit(_ at: Int, _ output: inout Output) {
+        check(at, -1, &output)
+        while !later.isEmpty {
+            let next = later.removeLast()
+            path = next.path
+            together = path.count
+            check(next.at, next.holder, &output)
+            path = []
+            together = 0
+        }
+    }
+
+    mutating fn effects(_ at: Int, _ output: inout Output) {
+        let registration = graph.registrations[at]
+        if !registration.isSingleton && (registration.isAsync || registration.isThrowing) {
+            let how = registration.isAsync ? "is made by waiting" : "is made by what may throw"
+            error("\(registration.title) \(how), and only a singleton may be, which the container makes as it is built: 'resolve' never throws, and never waits", at: registration.location, at, &output)
+        }
+        if registration.isSingleton && !registration.isShared {
+            error("\(registration.title) is a singleton, which any thread may use, and is not Sendable", at: registration.location, at, &output)
+        }
+    }
+
+    mutating fn check(_ at: Int, _ above: Int, _ output: inout Output) {
+        let registration = graph.registrations[at]
+        let holder = registration.isSingleton ? at : above
+        let mark = at * 2 + (holder < 0 ? 0 : 1)
+        if seen[mark] != none {
+            return
+        }
+        seen[mark] = true
+        path.append(at)
+        for need in registration.needs {
+            if need.kind == .Scope {
+                continue
+            }
+            if need.targets.isEmpty {
+                if need.kind == .One && !need.hasDefault || need.isDeferred {
+                    missing(need, at, &output)
+                }
+                continue
+            }
+            if need.targets.count > 1 && need.kind != .All {
+                error("\(chain(to: titled(need))): \(need.targets.count) are registered where one is asked for: \(makers(of: need))", at: need.location, at, &output)
+                continue
+            }
+            for target in need.targets {
+                follow(target, need, at, holder, &output)
+            }
+        }
+        _ = path.removeLast()
+    }
+
+    mutating fn follow(_ target: Int, _ need: Need, _ at: Int, _ holder: Int, _ output: inout Output) {
+        let next = graph.registrations[target]
+        if next.isScoped && holder >= 0 {
+            error("\(chain(from: holder, to: next.title)): a singleton would hold a scoped service", at: need.location, at, &output)
+            return
+        }
+        if need.isDeferred {
+            later.append(Later { at: target, holder: holder, path: path })
+            return
+        }
+        if path[together...].contains(target) {
+            error("\(chain(from: target, to: next.title)): a service needs itself, and nothing on the way is a Lazy or a factory", at: need.location, at, &output)
+            return
+        }
+        check(target, holder, &output)
+    }
+
+    mutating fn missing(_ need: Need, _ at: Int, _ output: inout Output) {
+        var why = "nothing provides \(titled(need))"
+        if let owner = graph.hidden[Graph.slot(need.service, need.key)] {
+            why += ": package '\(owner)' does, and keeps it to itself"
+        }
+        error("\(chain(to: titled(need))): \(why)", at: need.location, at, &output)
+    }
+
+    fn makers(of need: Need) -> String {
+        var all: String[>..] = []
+        for target in need.targets {
+            all.append(graph.registrations[target].describedMaker)
+        }
+        return all.joined(separator: " and ")
+    }
+
+    fn titled(_ need: Need) -> String {
+        return need.key.isEmpty ? short(need.service) : "\(short(need.service)) (\"\(need.key)\")"
+    }
+
+    fn chain(to last: String) -> String {
+        var text = ""
+        for each in path {
+            text += graph.registrations[each].title + " → "
+        }
+        return text + last
+    }
+
+    // The way from the one, if it is on it, to the other.
+    fn chain(from first: Int, to last: String) -> String {
+        var titles: String[>..] = []
+        for each in path {
+            if each == first || !titles.isEmpty {
+                titles.append(graph.registrations[each].title)
+            }
+        }
+        if titles.isEmpty {
+            titles.append(graph.registrations[first].title)
+        }
+        titles.append(last)
+        return titles.joined(separator: " → ")
+    }
+
+    mutating fn error(_ message: String, at location: Location, _ registration: Int, _ output: inout Output) {
+        hasErrors = true
+        let own = registration >= graph.registrations.count || graph.registrations[registration].packageName.isEmpty
+        output.error(message, at: own ? location : container)
+    }
+}
+
+// What is asked for only after its owner has been made, gone through by itself.
+struct Later {
+    let at: Int
+    let holder: Int
+    let path: Int[>..]
+}
+
+extension Registration {
+    // How it is made, as a message says it.
+    var describedMaker: String {
+        get {
+            if making == .Function {
+                return "\(callee)()"
+            }
+            return type == none ? title : short(type ?? service)
+        }
+    }
+}

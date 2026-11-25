@@ -2,7 +2,10 @@ module Sable.Generators
 
 /// What a package generator is given: the package, every declaration in it
 /// that carries the generator's attribute, and the files its manifest lists
-/// for its generators.
+/// for its generators. A generator that says `with:` is given the
+/// declarations with those attributes too, and after its own package's those
+/// of the packages it depends on, directly or not, each of which says its
+/// `packageName`.
 public struct Package {
     public var name: String
     public var declarations: Declaration[>..] = []

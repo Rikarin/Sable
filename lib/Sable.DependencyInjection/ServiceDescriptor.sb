@@ -1,6 +1,12 @@
 module Sable.DependencyInjection
 
 /// A registration: a service, how long it lives, and how it is made.
+///
+/// ```sable
+/// var services = ServiceCollection()
+/// services.add(ServiceDescriptor.of(Int.self, .Singleton) { _services in 7 })
+/// assert(services.descriptors[0].lifetime == .Singleton)
+/// ```
 public struct ServiceDescriptor: Sendable {
     /// The service.
     public let key: ServiceKey
@@ -8,29 +14,35 @@ public struct ServiceDescriptor: Sendable {
     public let lifetime: ServiceLifetime
     /// What it is made from, as far as it says.
     public let dependencies: ServiceDependency[>..]
+    /// Whether it is made as the provider is built: a singleton whose making
+    /// throws or waits, which then fails before anything asks for it.
+    public let isEager: Bool
     let maker: ServiceMaker
     // Whether the provider disposes what it makes.
     let owned: Bool
 
-    init(_ key: ServiceKey, _ lifetime: ServiceLifetime, _ dependencies: ServiceDependency[>..], owned: Bool, _ make: @escaping @Sendable (ServiceScope) throws -> any Any) {
+    init(_ key: ServiceKey, _ lifetime: ServiceLifetime, _ dependencies: ServiceDependency[>..], owned: Bool, eager: Bool, _ maker: ServiceMaker) {
         self.key = key
         self.lifetime = lifetime
         self.dependencies = dependencies
-        maker = ServiceMaker(make)
+        isEager = eager
+        self.maker = maker
         self.owned = owned
     }
 
-    fn entry(slot: Int, firstLink: Int) -> ServiceEntry {
-        return ServiceEntry(key: key, lifetime: lifetime, dependencies: dependencies, slot: slot, firstLink: firstLink, owned: owned, make: maker.make)
+    init(_ key: ServiceKey, waiting dependencies: ServiceDependency[>..], _ start: @escaping @Sendable async (ServiceScope) throws -> any Any) {
+        self.key = key
+        lifetime = ServiceLifetime.Singleton
+        self.dependencies = dependencies
+        isEager = true
+        maker = ServiceMaker(waiting: start)
+        owned = true
     }
-}
 
-// What makes a service: kept as an object's, so that a descriptor is Sendable.
-@immutable
-final class ServiceMaker {
-    let make: (ServiceScope) throws -> any Any
+    /// Whether its making waits, so that `ServiceCollection.buildAsync` is to build it.
+    public var isAsync: Bool => maker.start != none
 
-    init(_ make: @escaping @Sendable (ServiceScope) throws -> any Any) {
-        self.make = make
+    fn entry(slot: Int, place: Int, firstLink: Int) -> ServiceEntry {
+        return ServiceEntry(key: key, lifetime: lifetime, dependencies: dependencies, slot: slot, place: place, firstLink: firstLink, owned: owned, maker: maker, eager: isEager)
     }
 }

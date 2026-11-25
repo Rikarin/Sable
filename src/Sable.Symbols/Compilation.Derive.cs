@@ -25,12 +25,6 @@ public enum DerivedMember {
 
     /// <summary><c>static arbitrary(from:)</c>, field by field from choices: Sable.Testing's <c>Arbitrary</c>.</summary>
     Arbitrary,
-
-    /// <summary><c>static create(from:)</c>, the initialiser called with what a scope gives: Sable.DependencyInjection's <c>Injectable</c>.</summary>
-    Create,
-
-    /// <summary><c>static dependencies()</c>, what that is: <c>Injectable</c>.</summary>
-    Dependencies,
 }
 
 /// <summary>One member <c>@derive</c> made, and where it was asked for.</summary>
@@ -82,8 +76,6 @@ public sealed partial class Compilation {
         ("Serializable", DerivedMember.Encode),
         ("Serializable", DerivedMember.Decode),
         ("Arbitrary", DerivedMember.Arbitrary),
-        ("Injectable", DerivedMember.Create),
-        ("Injectable", DerivedMember.Dependencies),
     ];
 
     readonly List<(NamedTypeSymbol Type, AttributeSyntax Attribute, FileScope? Scope)> _derivations = [];
@@ -121,12 +113,11 @@ public sealed partial class Compilation {
     internal NamedTypeSymbol? CoreProtocol(string name) =>
         GetModule("Sable.Core")?.GetType(name) is { TypeKind: TypeKind.Protocol } protocol ? protocol : null;
 
-    /// <summary>A protocol <c>@derive</c> knows: Sable.Core's, Sable.Serialize's <c>Serializable</c>, Sable.Testing's <c>Arbitrary</c> or Sable.DependencyInjection's <c>Injectable</c>.</summary>
+    /// <summary>A protocol <c>@derive</c> knows: Sable.Core's, Sable.Serialize's <c>Serializable</c> or Sable.Testing's <c>Arbitrary</c>.</summary>
     NamedTypeSymbol? DerivableProtocol(string name) =>
         name switch {
             "Serializable" => SerializeType(name),
             "Arbitrary" => TestingType(name),
-            "Injectable" => InjectionType(name),
             _ => CoreProtocol(name),
         } is { TypeKind: TypeKind.Protocol } protocol ? protocol : null;
 
@@ -135,13 +126,6 @@ public sealed partial class Compilation {
 
     /// <summary>A type of Sable.Serialize's, which a derived Serializable conformance uses.</summary>
     internal NamedTypeSymbol? SerializeType(string name) => GetModule("Sable.Serialize")?.GetType(name);
-
-    /// <summary>A type of Sable.DependencyInjection's, which a derived Injectable conformance uses.</summary>
-    internal NamedTypeSymbol? InjectionType(string name) => GetModule("Sable.DependencyInjection")?.GetType(name);
-
-    /// <summary>A parameter's default value, as a call at <paramref name="at" /> that leaves it off has it.</summary>
-    internal BoundExpression? BindParameterDefault(SyntaxNode at, ParameterSymbol parameter, TypeSubstitution substitution) =>
-        FileScopeOf(at) is { } scope ? new Binder(this, scope, parameter.ContainingSymbol!).DefaultArgument(at, parameter, substitution) : null;
 
     /// <summary>
     ///     A field's initial value, bound as a memberwise initialiser would put
@@ -169,10 +153,7 @@ public sealed partial class Compilation {
     }
 
     void Derive(NamedTypeSymbol type, AttributeSyntax attribute, SyntaxTree tree) {
-        // A container makes a class, an actor or a struct.
-        var injects = type.TypeKind is TypeKind.Class or TypeKind.Actor or TypeKind.Struct
-                      && attribute.ArgumentList is { Arguments.Count: > 0 } named && named.Arguments.All(static a => a.Expression.ToString().Trim() == "Injectable");
-        if (!injects && type.TypeKind is not (TypeKind.Struct or TypeKind.Union or TypeKind.Enum) || type.IsFlags) {
+        if (type.TypeKind is not (TypeKind.Struct or TypeKind.Union or TypeKind.Enum) || type.IsFlags) {
             ReportDeclaration(
                 ErrorCode.ERR_CannotDerive,
                 attribute.Span,
@@ -219,7 +200,7 @@ public sealed partial class Compilation {
                 ReportDeclaration(
                     ErrorCode.ERR_UnknownDerivation,
                     argument.Span,
-                    $"'{name}' cannot be derived; '@derive' knows Equatable, Hashable, Comparable, Debug, Serializable, Arbitrary, Injectable and Copy"
+                    $"'{name}' cannot be derived; '@derive' knows Equatable, Hashable, Comparable, Debug, Serializable, Arbitrary and Copy"
                 );
                 continue;
             }
@@ -247,7 +228,6 @@ public sealed partial class Compilation {
                         ? "'@derive(Serializable)' needs Sable.Serialize: 'import Sable.Serialize'"
                         : protocolName == "Arbitrary"
                         ? "'@derive(Arbitrary)' needs Sable.Testing: 'import Sable.Testing'"
-                        : protocolName == "Injectable" ? "'@derive(Injectable)' needs Sable.DependencyInjection: 'import Sable.DependencyInjection'"
                         : $"'@derive({protocolName})' needs Sable.Core's '{protocolName}', which is not here"
                 );
                 continue;
@@ -271,11 +251,6 @@ public sealed partial class Compilation {
                 continue;
             }
 
-            if (member is DerivedMember.Create && type.TypeKind is not (TypeKind.Class or TypeKind.Actor or TypeKind.Struct)) {
-                ReportDeclaration(ErrorCode.ERR_CannotDerive, at, $"'@derive(Injectable)' is for classes, actors and structs, which an initialiser makes; '{type.Name}' is not one");
-                break;
-            }
-
             if (type.GetMembers(memberName).Any()) {
                 // An implied '==' the type already has is the one to use.
                 if (isExplicit) {
@@ -297,17 +272,7 @@ public sealed partial class Compilation {
             _derived.Add(derivation);
             _derivedByFunction[function] = derivation;
 
-            if (member is DerivedMember.Create or DerivedMember.Dependencies) {
-                isExplicit = false;
-                if (member == DerivedMember.Create) {
-                    TypeBinder.DeferLate(() => {
-                            if (InjectedInitializer.WhyNot(this, type) is var (where, why)) {
-                                ReportDeclaration(ErrorCode.ERR_CannotDerive, where ?? at, why);
-                            }
-                        }
-                    );
-                }
-            } else if (type.IsGenericDefinition && !type.DerivedConformances.Contains(protocol)) {
+            if (type.IsGenericDefinition && !type.DerivedConformances.Contains(protocol)) {
                 type.DerivedConformances = type.DerivedConformances.Add(protocol);
             }
 
@@ -335,8 +300,6 @@ public sealed partial class Compilation {
             DerivedMember.Encode => "encode",
             DerivedMember.Decode => "decode",
             DerivedMember.Arbitrary => "arbitrary",
-            DerivedMember.Create => "create",
-            DerivedMember.Dependencies => "dependencies",
             _ => "debugDescription",
         };
 
@@ -354,7 +317,7 @@ public sealed partial class Compilation {
             type.DeclaredAccessibility,
             isOperator ? FunctionKind.Operator : FunctionKind.Ordinary
         ) {
-            IsStatic = isOperator || member is DerivedMember.Decode or DerivedMember.Arbitrary or DerivedMember.Create or DerivedMember.Dependencies,
+            IsStatic = isOperator || member is DerivedMember.Decode or DerivedMember.Arbitrary,
         };
 
         if (member == DerivedMember.Arbitrary) {
@@ -362,20 +325,6 @@ public sealed partial class Compilation {
             var choices = TestingType("Choices");
             function.Parameters = [new ParameterSymbol("choices", "from", function, null, 0) { TypeResolver = () => choices ?? (TypeSymbol)ErrorTypeSymbol.Instance }];
             function.ReturnTypeResolver = () => self;
-            type.AddMember(function);
-            return function;
-        }
-
-        if (member is DerivedMember.Create) {
-            function.Parameters = [new ParameterSymbol("services", "from", function, null, 0) { TypeResolver = () => InjectionType("ServiceScope") ?? (TypeSymbol)ErrorTypeSymbol.Instance }];
-            function.ThrownTypeResolver = () => Core.AnyError;
-            function.ReturnTypeResolver = () => self;
-            type.AddMember(function);
-            return function;
-        }
-
-        if (member is DerivedMember.Dependencies) {
-            function.ReturnTypeResolver = () => new ArrayTypeSymbol(InjectionType("ServiceDependency") ?? (TypeSymbol)ErrorTypeSymbol.Instance, ArrayKind.Grow);
             type.AddMember(function);
             return function;
         }

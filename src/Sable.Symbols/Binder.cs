@@ -5260,7 +5260,7 @@ public sealed partial class Binder {
         var target = wanted is OptionalTypeSymbol optional ? optional.UnderlyingType : wanted;
         return Unparenthesised(argument) switch {
             ClosureExpressionSyntax or BraceClosureExpressionSyntax
-                when target is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } or TupleTypeSymbol or ArrayTypeSymbol =>
+                when target is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } or TupleTypeSymbol or ArrayTypeSymbol || AsksForMembers(target) =>
                 "a closure",
             ImplicitMemberAccessExpressionSyntax or InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax }
                 when target is FunctionTypeSymbol =>
@@ -5268,6 +5268,11 @@ public sealed partial class Binder {
             _ => null,
         };
     }
+
+    /// <summary>An existential of a protocol that requires something: no function type has the members.</summary>
+    static bool AsksForMembers(TypeSymbol type) =>
+        type is ExistentialTypeSymbol existential
+        && CompositionTypeSymbol.PartsOf(existential.Constraint).OfType<NamedTypeSymbol>().Any(static p => p.Members.Any(static m => m.ContainingSymbol is NamedTypeSymbol));
 
     static bool IsClosure(ExpressionSyntax expression) =>
         expression switch {
@@ -6732,7 +6737,7 @@ public sealed partial class Binder {
 
             if (!Conversions.Satisfies(subjectType, substitution.Apply(constraint), _conversions.Equivalence)) {
                 return Reject(
-                    $"it requires '{subject.ToDisplayString()}: {constraint.ToDisplayString()}', "
+                    $"it requires '{subject.ToDisplayString()}: {substitution.Apply(constraint).ToDisplayString()}', "
                     + $"and '{subjectType.ToDisplayString()}' is not"
                 );
             }
@@ -8295,6 +8300,15 @@ public sealed partial class Binder {
         // make anyway: 'dog as Animal', 'point as any Shape'.
         if (isPlain && _conversions.Classify(source, target, IsLiteral(operand)) is not null) {
             return Convert(operand, target, syntax);
+        }
+
+        // 'xs as Int[]': an array that grew, as one that is done growing, and
+        // back. Both are a buffer, shared until either is changed.
+        if (isPlain
+            && source is ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed, Capacity: null, CapacityParameter: null } grown
+            && target is ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed, Capacity: null, CapacityParameter: null } made
+            && grown.ElementType.Equals(made.ElementType)) {
+            return new BoundConversion(syntax, type, operand, ConversionKind.Identity);
         }
 
         // What a value is may be known only as the program runs: an

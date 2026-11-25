@@ -1,0 +1,17 @@
+module Sable.DependencyInjection
+
+/// Something that gives a service: each of a `@container`'s scopes, and its
+/// provider, is a `Provides<Service>` for each service that it can give and
+/// no other, so asking it for anything else does not compile.
+///
+/// ```sable
+/// class Answers: ServiceContainer, Provides<Int> {
+///     fn provide(_ type: Int.Type) -> Int { return 42 }
+/// }
+///
+/// assert(Answers().resolve(Int.self) == 42)
+/// ```
+public protocol Provides<Service> {
+    /// The service.
+    fn provide(_ type: Service.Type) -> Service
+}

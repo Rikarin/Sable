@@ -1,0 +1,60 @@
+module Sable.DependencyInjection
+
+import Sable.Concurrency
+
+/// What a provider is to dispose, whichever thread made it: what the code
+/// `@container` writes keeps a container's singletons in.
+///
+/// ```sable
+/// class Connection: Disposable {
+///     fn dispose() { print("closed") }
+/// }
+///
+/// let made = SharedDisposals()
+/// _ = made.noted(Connection())
+/// made.dispose()
+/// assert(made.isDisposed)
+/// ```
+@immutable
+public final class SharedDisposals {
+    let held: Mutex<Disposals>
+    let ended: Atomic<Bool>
+
+    public init() {
+        held = Mutex(Disposals())
+        ended = Atomic(false)
+    }
+
+    /// Whether it has been disposed.
+    public var isDisposed: Bool => ended.load()
+
+    /// Something made, kept to be disposed, and given back.
+    public fn noted<T>(_ value: T) -> T {
+        held.withLock { (all: inout Disposals) -> Void in all.note(value) }
+        return value
+    }
+
+    /// Disposes it all, the last made first; again, nothing.
+    public fn dispose() {
+        if !ended.exchange(true) {
+            var all = taken()
+            all.disposeAll()
+        }
+    }
+
+    /// Disposes it all, the last made first, waiting for each AsyncDisposable.
+    public async fn disposeAsync() {
+        if !ended.exchange(true) {
+            var all = taken()
+            await all.disposeAllAsync()
+        }
+    }
+
+    fn taken() -> Disposals {
+        return held.withLock { (all: inout Disposals) -> Disposals in
+            let made = all
+            all = Disposals()
+            return made
+        }
+    }
+}

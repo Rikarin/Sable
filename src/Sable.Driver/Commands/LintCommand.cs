@@ -1,3 +1,4 @@
+using Sable.Driver.Generators;
 using Sable.Driver.Packages;
 using Sable.Symbols;
 using Sable.Syntax;
@@ -192,6 +193,7 @@ public sealed class LintCommand : PackageCommand {
         var graph = PackageBuilder.Resolve(workspace, environment, new(Package: package));
         var found = 0;
         var failed = 0;
+        var generatedFor = new Dictionary<string, GeneratedSources>(StringComparer.Ordinal);
         foreach (var member in PackageBuilder.Selected(workspace, package)) {
             var configuration = levels(member.Manifest.Lints);
             var targets = new List<BinTarget?>();
@@ -203,9 +205,12 @@ public sealed class LintCommand : PackageCommand {
             foreach (var target in targets) {
                 // As 'sable check' lints: the library's files with the library,
                 // a binary's entry file with the binary — each file once.
-                var program = PackageBuilder.Program(graph, member.Name, target);
-                var own = member.LibrarySources().Count;
-                IReadOnlyList<SyntaxTree> linted = target is null ? [..program.Take(own)] : [program[0]];
+                // What their generators write is compiled with them, and not linted.
+                var generated = generatedFor[member.Name] = generatedFor.GetValueOrDefault(member.Name) ?? PackageGenerators.Run(graph, member.Name, dev: false, optimise: false);
+                var program = PackageBuilder.Program(graph, member.Name, target, generated: generated);
+                var written = PackageBuilder.Program(graph, member.Name, target);
+                var own = written.Take(target is null ? member.LibrarySources().Count : 1).Select(static t => t.Text.FileName).ToHashSet(StringComparer.Ordinal);
+                IReadOnlyList<SyntaxTree> linted = [..program.Where(t => own.Contains(t.Text.FileName))];
                 if (Lint(program, linted, configuration) is not var (lints, errors)) {
                     Console.Error.WriteLine($"error: could not lint {member.Name}: it does not compile; fix the errors first");
                     return 1;
@@ -221,6 +226,7 @@ public sealed class LintCommand : PackageCommand {
 
     /// <summary>Compiles a program and prints the lints of <paramref name="linted" />; null, having printed the errors, when it does not compile.</summary>
     static (int Found, int Failed)? Lint(IReadOnlyList<SyntaxTree> program, IReadOnlyList<SyntaxTree> linted, LintConfiguration configuration) {
+        program = LibraryGenerators.Expand(program).Program;
         var compilation = Compilation.Create([..program, ..Library.For(program)]);
         var errors = compilation.GetAllDiagnosticsByFile()
             .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error && d.Tree is not null)

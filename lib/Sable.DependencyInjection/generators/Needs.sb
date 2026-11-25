@@ -1,0 +1,166 @@
+module DependencyInjectionGenerators
+
+import Sable.Generators
+
+// What a parameter is given of a service.
+enum NeedKind {
+    // The service.
+    One
+    // The service, or none.
+    Optional
+    // Every registration of it.
+    All
+    // A closure that gives it.
+    Factory
+    // A Lazy of it.
+    Lazy
+    // A ServiceCollection's scope itself.
+    Scope
+}
+
+// A parameter, as what it needs.
+struct Need {
+    let label: String
+    let name: String
+    let kind: NeedKind
+    // The service; for a `T?`, a `T[]`, a `() -> T` or a `Lazy<T>`, the `T`.
+    let service: TypeRef
+    // The service's key, or "".
+    let key: String
+    // The parameter's own type.
+    let type: TypeRef
+    let hasDefault: Bool
+    let defaultText: String
+    let location: Location
+    // The registrations it is given.
+    var targets: Int[>..] = []
+
+    // Whether it is asked for after its owner has been made.
+    var isDeferred: Bool => kind == .Factory || kind == .Lazy
+}
+
+// What the parameter needs, and, when no container gives it, why not.
+fn need(of parameter: Parameter) -> (Need, String?) {
+    let type = parameter.resolved
+    var kind = NeedKind.One
+    var service = type
+    var why: String? = none
+    if type.kind == "optional" {
+        kind = .Optional
+        service = type.arguments[0]
+    } else if type.kind == "array" {
+        kind = .All
+        service = type.arguments[0]
+        if type.suffix == "[:]" {
+            why = "is a '\(type.text)', which refers into what somebody else holds, or is of a size of its own"
+        }
+    } else if type.kind == "function" {
+        kind = .Factory
+        service = type.arguments.isEmpty ? type : type.arguments[type.arguments.count - 1]
+        if type.arguments.count != 1 || !type.suffix.isEmpty {
+            why = "is a '\(type.text)'; a container gives a function that takes nothing, and neither throws nor waits"
+        }
+    } else if type.moduleName == "Sable.Concurrency" && type.name == "Lazy" && type.arguments.count == 1 {
+        kind = .Lazy
+        service = type.arguments[0]
+    } else if type.moduleName == "Sable.DependencyInjection" && type.name == "ServiceScope" {
+        kind = .Scope
+    }
+    var key = ""
+    if let keyed = parameter.attribute(named: "keyed") {
+        if keyed.arguments.count == 1 && keyed.arguments[0].label.isEmpty && keyed.arguments[0].string != none {
+            key = keyed.arguments[0].string ?? ""
+        } else {
+            why = "says '@keyed' of something other than a key: a string literal"
+        }
+    }
+    if parameter.type.hasSuffix("...") {
+        why = "takes any number of values"
+    }
+    let made = Need {
+        label: parameter.label,
+        name: parameter.name,
+        kind: kind,
+        service: service,
+        key: key,
+        type: type,
+        hasDefault: parameter.hasDefault,
+        defaultText: parameter.defaultText,
+        location: parameter.location
+    }
+    return (made, why)
+}
+
+// The type's one initialiser, or of several the one marked '@inject'.
+fn injected(_ declaration: Declaration) -> Member? {
+    if declaration.initializers.count == 1 {
+        return declaration.initializers[0]
+    }
+    let marked = declaration.initializers.filter { $0.attribute(named: "inject") != none }.toArray()
+    return marked.count == 1 ? marked[0] : none
+}
+
+// A string as code writes it.
+fn quoted(_ text: String) -> String {
+    return "\"" + text.replacing("\\", with: "\\\\").replacing("\"", with: "\\\"") + "\""
+}
+
+// ', key: "k"', for one with a key.
+fn keyArgument(_ key: String) -> String {
+    return key.isEmpty ? "" : ", key: \(quoted(key))"
+}
+
+// What a ServiceScope is asked, by the name of it, for what is needed; and
+// whether asking may throw.
+fn asked(_ need: Need, _ scope: String, _ types: inout TypeWriter) -> (String, Bool) {
+    let type = types.name(need.service) + ".self" + keyArgument(need.key)
+    match need.kind {
+        case .Scope => {
+            return (scope, false)
+        }
+        case .One => {
+            if need.hasDefault && !need.defaultText.isEmpty {
+                return ("\(scope).resolve(\(type), otherwise: { \(need.defaultText) })", true)
+            }
+            return ("\(scope).resolve(\(type))", true)
+        }
+        case .Optional => {
+            return ("\(scope).find(\(type))", true)
+        }
+        case .All => {
+            return ("\(scope).resolveAll(\(type))" + (need.type.suffix == "[>..]" ? "" : " as \(types.source(need.type))"), true)
+        }
+        case .Factory => {
+            return ("\(scope).factory(\(type))", false)
+        }
+        case .Lazy => {
+            return ("\(scope).lazily(\(type))", false)
+        }
+    }
+}
+
+// The arguments of a call that a ServiceScope gives, and whether any throws.
+fn arguments(_ needs: Need[>..], from scope: String, _ types: inout TypeWriter) -> (String, Bool) {
+    var all: String[>..] = []
+    var throwing = false
+    for need in needs {
+        let (text, mayThrow) = asked(need, scope, &types)
+        all.append(need.label.isEmpty ? text : "\(need.label): \(text)")
+        throwing = throwing || mayThrow
+    }
+    return (all.joined(separator: ", "), throwing)
+}
+
+// '[ServiceDependency(…), …]'.
+fn dependencyList(_ needs: Need[>..], _ types: inout TypeWriter) -> String {
+    var all: String[>..] = []
+    for need in needs {
+        if need.kind == .Scope {
+            continue
+        }
+        let optional = need.kind == .Optional || need.kind == .One && need.hasDefault
+        let kind = need.kind == .All ? ".All" : need.isDeferred ? ".Deferred" : optional ? ".Optional" : ".Required"
+        all.append("ServiceDependency(\(types.name(need.service)).self\(keyArgument(need.key)), kind: \(kind))")
+    }
+    return "[" + all.joined(separator: ", ") + "]"
+}

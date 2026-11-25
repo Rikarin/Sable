@@ -974,6 +974,16 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
 
             if (left is TypeParameterSymbol parameter) {
+                // A method's 'where Self: P', of the protocol or the type it
+                // is in, is the method's alone: asked of each call of it, and
+                // known in its body.
+                if (context is FunctionSymbol method && !method.TypeParameters.Contains(parameter) && parameter.ContainingSymbol is NamedTypeSymbol) {
+                    method.ConformanceRequirements = method.ConformanceRequirements.AddRange(
+                        CompositionTypeSymbol.PartsOf(right).Select(part => new ConformanceRequirement(left, part))
+                    );
+                    continue;
+                }
+
                 parameter.Constraints = parameter.Constraints.AddRange(CompositionTypeSymbol.PartsOf(right));
                 continue;
             }

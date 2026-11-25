@@ -19,7 +19,9 @@
   <ItemGroup>
     <!-- The standard library: Sable source, compiled with every program that imports it.
          Sable.Core is not here: every compilation has it, so Sable.Symbols carries it. -->
-    <EmbeddedResource Include="../../lib/**/*.sb" Exclude="../../lib/Sable.Core/*.sb;../../lib/package.sb" LogicalName="lib/%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../../lib/**/*.sb" Exclude="../../lib/Sable.Core/*.sb;../../lib/package.sb;../../lib/*/generators/**/*.sb" LogicalName="lib/%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- Its modules' source generators (docs/08 §8.1): run for a program that imports the module, and no part of it. -->
+    <EmbeddedResource Include="../../lib/**/generators/*.sb" LogicalName="generators/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
     <!-- 'sable explain': the diagnostics' long-form documentation. -->

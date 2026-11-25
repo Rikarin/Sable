@@ -42,11 +42,6 @@ internal sealed partial class DerivedBodies(CoreTypes core, Func<string, string,
             return Arbitrary(type, self) is { } made ? new BoundBlock(_at, [], [..made]) : null;
         }
 
-        if (derivation.Member is DerivedMember.Create or DerivedMember.Dependencies) {
-            var statements = derivation.Member == DerivedMember.Create ? Create(type, self) : Dependencies(type, self);
-            return statements is null ? null : new BoundBlock(_at, [], [..statements]);
-        }
-
         // 'hash(into:)' is statements, each feeding the hasher, and returns nothing.
         if (derivation.Member == DerivedMember.Hash) {
             var fed = type.TypeKind switch {

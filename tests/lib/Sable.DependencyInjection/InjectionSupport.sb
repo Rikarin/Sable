@@ -24,7 +24,7 @@ public protocol Clock: Sendable {
 }
 
 @immutable
-@derive(Injectable)
+@injectable
 public final class FixedClock: Clock {
     public init() { }
     public fn now() -> Int { return 12 }
@@ -35,12 +35,12 @@ public protocol Repository<Item> {
     fn first() -> Item?
 }
 
-@derive(Injectable)
+@injectable
 public final class Connection {
     public init() { }
 }
 
-@derive(Injectable)
+@injectable
 public final class MemoryRepository<Item>: Repository<Item> {
     let connection: Connection
     let log: Log<MemoryRepository<Item>>
@@ -55,7 +55,7 @@ public final class MemoryRepository<Item>: Repository<Item> {
     public fn isOn(_ other: Connection) -> Bool { return connection === other }
 }
 
-@derive(Injectable)
+@injectable
 public final class Log<Category> {
     public init() { }
     public fn category() -> String { return "\(Category.self)" }

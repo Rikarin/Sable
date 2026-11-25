@@ -58,6 +58,22 @@ public struct Declaration {
     public var isAsync: Bool = false
     /// Whether a function `throws`.
     public var isThrowing: Bool = false
+    /// A type's own type, with its generic parameters as its arguments.
+    public var type: TypeRef? = none
+    /// What a type derives from and conforms to, each with its arguments.
+    public var supertypes: TypeRef[>..] = []
+    /// What a generic type's parameters must be.
+    public var constraints: Constraint[>..] = []
+    /// A type's initialisers, as it declares them, or else the one the
+    /// compiler writes of its stored properties.
+    public var initializers: Member[>..] = []
+    /// A type's methods, as it declares them: not its extensions'.
+    public var methods: Member[>..] = []
+    /// Whether nothing derives from it: any type but a class not `final`.
+    public var isFinal: Bool = false
+    /// The package it is in, for a dependency's declaration; "" for the
+    /// package's own.
+    public var packageName: String = ""
     /// The imports of the file it is in, each as written after `import`.
     public var imports: String[>..] = []
     /// The name of the file it is in, for messages.

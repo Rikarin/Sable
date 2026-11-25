@@ -1,0 +1,71 @@
+module HostContainerTests
+
+import Sable.Concurrency
+import Sable.DependencyInjection
+import Sable.Hosting
+import Sable.Testing
+
+@immutable
+@injectable(.Singleton)
+final class Ledger: Disposable {
+    let lines: Mutex<String[>..]> = Mutex([])
+    init() { }
+    fn add(_ line: String) {
+        lines.withLock { $0.append(line) }
+    }
+    fn dispose() { add("disposed") }
+    var all: String => lines.withLock { $0.joined(separator: " ") }
+}
+
+@immutable
+@injectable(.Singleton)
+final class Worker: HostedService {
+    let ledger: Ledger
+    let lifetime: ApplicationLifetime
+    let name: String
+    init(ledger: Ledger, lifetime: ApplicationLifetime, environment: HostEnvironment, @keyed("name") name: String) {
+        self.ledger = ledger
+        self.lifetime = lifetime
+        self.name = environment.name.isEmpty ? "nowhere" : name
+    }
+    async fn run(cancellation: CancellationToken) throws {
+        ledger.add("\(name) ran")
+        lifetime.requestStop()
+    }
+}
+
+fn builder(_ ledger: Ledger) -> ApplicationBuilder {
+    let builder = ApplicationBuilder()
+    builder.container.addSingleton(Ledger.self) { _services in ledger }
+    builder.services.add("worker", Worker.self)
+    return builder
+}
+
+@test
+async fn aServiceIsMadeByTheContainer() {
+    let ledger = Ledger()
+    let builder = builder(ledger)
+    builder.container.addSingleton(String.self, key: "name", value: "worker")
+    let host = try! builder.build()
+    try! await host.run()
+    assertEqual(ledger.all, "worker ran disposed")
+}
+
+@test
+async fn whatMustBeWaitedForIs() {
+    let ledger = Ledger()
+    let builder = builder(ledger)
+    builder.container.addSingleton(String.self, key: "name") { _services in
+        await Task.yield()
+        return "late"
+    }
+    do {
+        _ = try builder.build()
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "String (\"name\") must be waited for: 'buildAsync' builds them")
+    }
+    let host = try! await builder.buildAsync()
+    try! await host.run()
+    assertEqual(ledger.all, "late ran disposed")
+}

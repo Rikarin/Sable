@@ -1,0 +1,129 @@
+module DependencyInjectionGenerators
+
+import Sable.Generators
+import Sable.Text
+
+// '@injectable': the type's factory, its initialiser called with what a scope
+// gives for each parameter, and what that is.
+@generator("injectable", members: ["keyed", "inject"])
+fn injectable(_ declaration: Declaration, into output: inout Output) {
+    let name = declaration.qualifiedName
+    if declaration.keyword != "class" && declaration.keyword != "struct" && declaration.keyword != "actor" {
+        output.error("a container makes a class, an actor or a struct, by its initialiser; '\(name)' is none of them", at: declaration.location)
+        return
+    }
+    guard let making = injected(declaration) else {
+        output.error(declaration.initializers.isEmpty ? "'\(name)' has no initialiser to make it with" : "'\(name)' has \(declaration.initializers.count) initialisers; mark the one a container is to use '@inject'", at: declaration.location)
+        return
+    }
+    if let why = lifetimeProblem(declaration) {
+        output.error(why)
+        return
+    }
+    var needs: Need[>..] = []
+    var wrong = false
+    for parameter in making.parameters {
+        let (need, why) = need(of: parameter)
+        needs.append(need)
+        if let why = why {
+            output.error("no container makes '\(name)': its parameter '\(parameter.name)' \(why)", at: parameter.location)
+            wrong = true
+        }
+    }
+    if wrong {
+        return
+    }
+    if making.isAsync && lifetime(of: declaration) != "Singleton" && !lifetime(of: declaration).isEmpty {
+        output.error("'\(name)' has an initialiser that waits, so it can only be a singleton, which is made as its provider is built", at: making.location)
+        return
+    }
+
+    var types = TypeWriter(in: declaration.moduleName)
+    types.add("Sable.DependencyInjection")
+    let access = declaration.isPublic ? "public " : ""
+    let itself = declaration.container.isEmpty ? declaration.typeName : declaration.container + "." + declaration.typeName
+    let asking = needs.isEmpty ? "_services" : "services"
+    let (given, asks) = arguments(needs, from: "services", &types)
+    let throwing = asks || making.isThrowing ? "try " : ""
+    let body = TextBuilder()
+    body.appendLine("extension \(name): \(making.isAsync ? "AsyncInjectable" : "Injectable") {")
+    body.appendLine("    \(access)static \(making.isAsync ? "async " : "")fn make(_ \(asking): ServiceScope) throws -> \(itself) {")
+    body.appendLine("        return \(throwing)\(making.isAsync ? "await " : "")\(itself)(\(given))")
+    body.appendLine("    }")
+    body.appendLine()
+    body.appendLine("    \(access)static fn dependencies() -> ServiceDependency[>..] {")
+    body.appendLine("        return \(dependencyList(needs, &types))")
+    body.appendLine("    }")
+    body.appendLine("}")
+    let file = declaration.moduleName.replacing(".", with: "_") + "_" + name.replacing(".", with: "_")
+    output.add(file: "\(file).injectable.sb", types.importLines() + "\n" + body.build())
+}
+
+// '@injectable(.Scoped)': "Scoped"; "" where it says none, and the type is
+// made by whoever asks for it and registered by whoever says so.
+fn lifetime(of declaration: Declaration) -> String {
+    guard let attribute = declaration.attribute(named: "injectable") else {
+        return ""
+    }
+    for argument in attribute.arguments {
+        if argument.label.isEmpty {
+            return argument.text.splitLastOnce(".")?.1 ?? argument.text
+        }
+    }
+    return ""
+}
+
+fn lifetimeProblem(_ declaration: Declaration) -> String? {
+    guard let attribute = declaration.attribute(named: "injectable") else {
+        return none
+    }
+    for argument in attribute.arguments {
+        if argument.label.isEmpty {
+            let said = lifetime(of: declaration)
+            if said != "Singleton" && said != "Scoped" && said != "Transient" {
+                return "'@injectable' says how long a service lives: '.Singleton', '.Scoped' or '.Transient', not '\(argument.text)'"
+            }
+        } else if argument.label == "as" {
+            if serviceType(of: declaration) == none {
+                return "'\(declaration.name)' is not \(article(argument.text))"
+            }
+        } else if argument.label == "key" {
+            if argument.string == none {
+                return "'key:' is a string literal"
+            }
+        } else {
+            return "'@injectable' takes a lifetime, 'as:' and 'key:', not '\(argument.label):'"
+        }
+    }
+    return none
+}
+
+fn article(_ text: String) -> String {
+    let name = typeName(text)
+    return "aeiouAEIOU".contains(name.first ?? 'x') ? "an '\(name)'" : "a '\(name)'"
+}
+
+// 'OrderRepository.self' or '(any Orders.Repository).self': 'Repository'.
+fn typeName(_ text: String) -> String {
+    var name = text.replacing(".self", with: "").replacing("(", with: "").replacing(")", with: "").replacing("any ", with: "")
+    name = name.splitOnce("<")?.0 ?? name
+    return name.splitLastOnce(".")?.1 ?? name
+}
+
+// What it is registered as: itself, or the type it says with 'as:'; none when
+// it is not one.
+fn serviceType(of declaration: Declaration) -> TypeRef? {
+    guard let argument = declaration.attribute(named: "injectable")?.argument(named: "as") else {
+        return declaration.type
+    }
+    let name = typeName(argument)
+    if name == declaration.name {
+        return declaration.type
+    }
+    for type in declaration.supertypes {
+        if type.name == name {
+            return type
+        }
+    }
+    return none
+}

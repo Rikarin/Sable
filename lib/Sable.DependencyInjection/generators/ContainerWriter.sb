@@ -1,0 +1,638 @@
+module DependencyInjectionGenerators
+
+import Sable.Generators
+import Sable.Text
+
+// Writes a container's provider and scope, of a graph nothing is wrong with.
+struct ContainerWriter {
+    let declaration: Declaration
+    let graph: Graph
+    let provider: String
+    let scope: String
+    let access: String
+    var types: TypeWriter
+    // Whether a registration needs a scope, by its number.
+    var scoped: [Int: Bool] = [:]
+    // Where a scoped one is kept.
+    var slots: [Int: Int] = [:]
+    var text: TextBuilder = TextBuilder()
+
+    init(_ declaration: Declaration, _ graph: Graph) {
+        self.declaration = declaration
+        self.graph = graph
+        let name = declaration.qualifiedName.replacing(".", with: "")
+        provider = name + "Provider"
+        scope = name + "Scope"
+        access = declaration.isPublic ? "public " : ""
+        types = TypeWriter(in: declaration.moduleName)
+        types.add("Sable.Concurrency")
+        types.add("Sable.DependencyInjection")
+        for i in 0..<graph.registrations.count {
+            if graph.registrations[i].isScoped {
+                slots[i] = slots.count
+            }
+        }
+    }
+
+    mutating fn write() -> String {
+        for i in 0..<graph.registrations.count {
+            _ = needsScope(i, [])
+        }
+        writeBuild()
+        writeProvider()
+        writeScope()
+        let lines = types.importLines()
+        return lines + "\n" + text.build()
+    }
+
+    // Whether making it makes something scoped, on the way or later.
+    mutating fn needsScope(_ at: Int, _ above: Int[>..]) -> Bool {
+        let registration = graph.registrations[at]
+        if registration.isScoped || registration.isSingleton {
+            scoped[at] = registration.isScoped
+            return registration.isScoped
+        }
+        if let known = scoped[at] {
+            return known
+        }
+        if above.contains(at) {
+            return false
+        }
+        var path = above
+        path.append(at)
+        var result = false
+        for need in registration.needs {
+            for target in need.targets {
+                if needsScope(target, path) {
+                    result = true
+                }
+            }
+        }
+        // One on a round through a Lazy is known once the round is.
+        if result || above.isEmpty {
+            scoped[at] = result
+        }
+        return result
+    }
+
+    fn isScoped(_ at: Int) -> Bool {
+        return scoped[at] ?? false
+    }
+
+    var hasAsync: Bool => graph.registrations.contains(where: { $0.disposal == "async" })
+
+    // ---- What makes them ------------------------------------------------
+
+    // The call that gives one, in the provider or in a scope.
+    fn giving(_ at: Int, _ inScope: Bool) -> String {
+        let registration = graph.registrations[at]
+        return inScope && registration.isSingleton ? "provider.get_\(registration.name)()" : "self.get_\(registration.name)()"
+    }
+
+    fn list(_ all: Int[>..], _ inScope: Bool) -> String {
+        var given: String[>..] = []
+        for each in all {
+            given.append(giving(each, inScope))
+        }
+        return "[" + given.joined(separator: ", ") + "]"
+    }
+
+    fn reachable(_ all: Int[>..], _ inScope: Bool) -> Int[>..] {
+        var found: Int[>..] = []
+        for each in all {
+            if inScope || !isScoped(each) {
+                found.append(each)
+            }
+        }
+        return found
+    }
+
+    fn closure(_ at: Int, _ inScope: Bool) -> String {
+        if inScope {
+            return "{ \(giving(at, true)) }"
+        }
+        let registration = graph.registrations[at]
+        return "[weak self] () => { guard let provider = self else { fatalError(\(quoted(registration.title + " was asked for after its provider had gone"))) } return provider.get_\(registration.name)() }"
+    }
+
+    mutating fn arguments(_ needs: Need[>..], _ inScope: Bool) -> String {
+        var all: String[>..] = []
+        for need in needs {
+            var value = ""
+            match need.kind {
+                case .One => {
+                    if need.targets.isEmpty {
+                        continue
+                    }
+                    value = giving(need.targets[0], inScope)
+                }
+                case .Optional => {
+                    value = need.targets.isEmpty ? "none" : giving(need.targets[0], inScope)
+                }
+                case .All => {
+                    value = list(need.targets, inScope)
+                }
+                case .Factory => {
+                    value = closure(need.targets[0], inScope)
+                }
+                case .Lazy => {
+                    value = "\(types.source(need.type))(\(closure(need.targets[0], inScope)))"
+                }
+                case .Scope => {
+                    continue
+                }
+            }
+            all.append(need.label.isEmpty ? value : "\(need.label): \(value)")
+        }
+        return all.joined(separator: ", ")
+    }
+
+    // The expression that makes a new one.
+    mutating fn making(_ registration: Registration, _ inScope: Bool) -> String {
+        let given = arguments(registration.needs, inScope)
+        match registration.making {
+            case .Initialiser => {
+                return "\(types.source(registration.type ?? registration.service))(\(given))"
+            }
+            case .Function => {
+                return (inScope ? "provider.container." : "container.") + "\(registration.callee)(\(given))"
+            }
+            case .Fragment => {
+                types.add(registration.callee.splitLastOnce(".")?.0?.splitLastOnce(".")?.0 ?? "")
+                return "\(registration.callee)(\(given))"
+            }
+        }
+    }
+
+    // ---- The container --------------------------------------------------
+
+    fn hasEager(_ test: (Registration) -> Bool) -> Bool {
+        return graph.registrations.contains(where: { $0.isEager && test($0) })
+    }
+
+    mutating fn writeBuild() {
+        let waits = hasEager { $0.isAsync }
+        let throwing = hasEager { $0.isThrowing }
+        let name = declaration.qualifiedName
+        let signature = "\(access)static \(waits ? "async " : "")fn build"
+        let result = "\(throwing ? "throws " : "")-> \(provider)"
+        text.appendLine("extension \(name) {")
+        if isPlain {
+            text.appendLine("    /// What gives the container's services, each singleton that throws or waits made.")
+            text.appendLine("    \(signature)() \(result) {")
+            text.appendLine("        return \(throwing ? "try " : "")\(waits ? "await " : "")build(\(name)())")
+            text.appendLine("    }")
+            text.appendLine()
+        }
+        text.appendLine("    /// What gives this container's services, each singleton that throws or waits made.")
+        text.appendLine("    \(signature)(_ container: \(name)) \(result) {")
+        text.appendLine("        let provider = \(provider)(container)")
+        let order = eagerOrder()
+        let indent = throwing ? "    " : ""
+        if throwing {
+            text.appendLine("        do {")
+        }
+        for at in order {
+            let registration = graph.registrations[at]
+            let lead = (registration.isThrowing ? "try " : "") + (registration.isAsync ? "await " : "")
+            text.appendLine("        \(indent)let made_\(registration.name) = \(lead)\(makingOutside(registration))")
+            let kept = registration.disposal == "no" ? "made_" + registration.name : "provider.made.noted(made_\(registration.name))"
+            text.appendLine("        \(indent)_ = provider.cell_\(registration.name).getOrInit { \(kept) }")
+        }
+        if throwing {
+            text.appendLine("        } catch {")
+            text.appendLine("            \(waits ? "await provider.disposeAsync()" : "provider.dispose()")")
+            text.appendLine("            throw error")
+            text.appendLine("        }")
+        }
+        text.appendLine("        return provider")
+        text.appendLine("    }")
+        text.appendLine("}")
+        text.appendLine()
+    }
+
+    // The same expression as the provider's own, from outside it.
+    mutating fn makingOutside(_ registration: Registration) -> String {
+        return making(registration, false).replacing("self.", with: "provider.").replacing("[weak self]", with: "[weak provider]").replacing("guard let provider = self else", with: "guard let provider = provider else")
+    }
+
+    // Whether the container is made with nothing.
+    var isPlain: Bool {
+        get {
+            for each in declaration.initializers {
+                if each.parameters.allSatisfy({ $0.hasDefault }) && !each.isAsync && !each.isThrowing {
+                    return true
+                }
+            }
+            return declaration.initializers.isEmpty
+        }
+    }
+
+    // What is made as the container is built, each after what it is made from.
+    fn eagerOrder() -> Int[>..] {
+        var order: Int[>..] = []
+        var done: [Int: Bool] = [:]
+        for at in 0..<graph.registrations.count {
+            if graph.registrations[at].isEager {
+                visitEager(at, &order, &done)
+            }
+        }
+        return order
+    }
+
+    fn visitEager(_ at: Int, _ order: inout Int[>..], _ done: inout [Int: Bool]) {
+        if done[at] != none {
+            return
+        }
+        done[at] = true
+        for need in graph.registrations[at].needs {
+            if !need.isDeferred {
+                for target in need.targets {
+                    visitEager(target, &order, &done)
+                }
+            }
+        }
+        if graph.registrations[at].isEager {
+            order.append(at)
+        }
+    }
+
+    // ---- The provider ---------------------------------------------------
+
+    // The services one gives where one is asked for: those with one registration.
+    fn provided(_ inScope: Bool) -> Int[>..] {
+        var all: Int[>..] = []
+        for at in 0..<graph.registrations.count {
+            let registration = graph.registrations[at]
+            if registration.key.isEmpty && (inScope || !isScoped(at)) && graph.byService[Graph.slot(registration.service, "")]?.count == 1 {
+                all.append(at)
+            }
+        }
+        return all
+    }
+
+    mutating fn conformances(_ inScope: Bool) -> String {
+        var all: String[>..] = ["ServiceContainer"]
+        for at in provided(inScope) {
+            all.append("Provides<\(types.source(graph.registrations[at].service))>")
+        }
+        return all.joined(separator: ", ")
+    }
+
+    mutating fn writeProvider() {
+        text.appendLine("/// Gives \(declaration.qualifiedName)'s services: what it has for the whole program, and the")
+        text.appendLine("/// scopes that give the rest.")
+        text.appendLine("@immutable")
+        text.appendLine("\(access)final class \(provider): \(conformances(false)) {")
+        text.appendLine("    let container: \(declaration.qualifiedName)")
+        text.appendLine("    let made: SharedDisposals = SharedDisposals()")
+        for registration in graph.registrations {
+            if registration.isSingleton {
+                let type = types.source(registration.service)
+                text.appendLine("    let cell_\(registration.name): OnceCell<\(type)> = OnceCell<\(type)>()")
+            }
+        }
+        text.appendLine()
+        text.appendLine("    init(_ container: \(declaration.qualifiedName)) {")
+        text.appendLine("        self.container = container")
+        text.appendLine("    }")
+        text.appendLine()
+        text.appendLine("    deinit {")
+        text.appendLine("        made.dispose()")
+        text.appendLine("    }")
+        text.appendLine()
+        writeScopes()
+        text.appendLine("    /// Disposes what it made, the last made first; again, nothing.")
+        text.appendLine("    \(access)fn dispose() {")
+        text.appendLine("        made.dispose()")
+        text.appendLine("    }")
+        text.appendLine()
+        text.appendLine("    /// Disposes what it made, the last made first, waiting for each AsyncDisposable.")
+        text.appendLine("    \(access)async fn disposeAsync() {")
+        text.appendLine("        await made.disposeAsync()")
+        text.appendLine("    }")
+        for at in 0..<graph.registrations.count {
+            let registration = graph.registrations[at]
+            if registration.isSingleton {
+                writeSingleton(registration)
+            } else if !isScoped(at) {
+                writeTransient(registration, false)
+            }
+        }
+        writeProvided(false)
+        text.appendLine("}")
+        text.appendLine()
+    }
+
+    mutating fn writeScopes() {
+        if !hasAsync {
+            text.appendLine("    /// What the closure makes of a new scope, which ends as it does.")
+            text.appendLine("    \(access)fn withScope<R, E: Error>(_ body: (\(scope)) throws(E) -> R) throws(E) -> R {")
+            text.appendLine("        let scope = \(scope)(self)")
+            text.appendLine("        do {")
+            text.appendLine("            let result = try body(scope)")
+            text.appendLine("            scope.end()")
+            text.appendLine("            return result")
+            text.appendLine("        } catch {")
+            text.appendLine("            scope.end()")
+            text.appendLine("            throw error")
+            text.appendLine("        }")
+            text.appendLine("    }")
+            text.appendLine()
+        }
+        text.appendLine("    /// What the closure makes of a new scope, which ends as it does, waiting for each")
+        text.appendLine("    /// AsyncDisposable it made.")
+        text.appendLine("    \(access)async fn withScope<R, E: Error>(_ body: async (\(scope)) throws(E) -> R) throws(E) -> R {")
+        text.appendLine("        let scope = \(scope)(self)")
+        text.appendLine("        do {")
+        text.appendLine("            let result = try await body(scope)")
+        text.appendLine("            await scope.endAsync()")
+        text.appendLine("            return result")
+        text.appendLine("        } catch {")
+        text.appendLine("            await scope.endAsync()")
+        text.appendLine("            throw error")
+        text.appendLine("        }")
+        text.appendLine("    }")
+        text.appendLine()
+    }
+
+    mutating fn writeSingleton(_ registration: Registration) {
+        let type = types.source(registration.service)
+        text.appendLine()
+        text.appendLine("    fn get_\(registration.name)() -> \(type) {")
+        if registration.isEager {
+            text.appendLine("        guard let value = cell_\(registration.name).get() else {")
+            text.appendLine("            fatalError(\(quoted(registration.title + " was asked for before the container had made it, by what is made earlier")))")
+            text.appendLine("        }")
+            text.appendLine("        return value")
+        } else {
+            text.appendLine("        if let value = cell_\(registration.name).get() {")
+            text.appendLine("            return value")
+            text.appendLine("        }")
+            let making = making(registration, false)
+            text.appendLine("        return cell_\(registration.name).getOrInit { \(registration.disposal == "no" ? making : "made.noted(\(making))") }")
+        }
+        text.appendLine("    }")
+    }
+
+    mutating fn writeTransient(_ registration: Registration, _ inScope: Bool) {
+        let type = types.source(registration.service)
+        text.appendLine()
+        text.appendLine("    fn get_\(registration.name)() -> \(type) {")
+        let making = making(registration, inScope)
+        if registration.disposal == "no" {
+            text.appendLine("        return \(making)")
+        } else if inScope {
+            text.appendLine("        let value: \(type) = \(making)")
+            text.appendLine("        made.note(value)")
+            text.appendLine("        return value")
+        } else {
+            text.appendLine("        return made.noted(\(making))")
+        }
+        text.appendLine("    }")
+    }
+
+    mutating fn writeProvided(_ inScope: Bool) {
+        for at in provided(inScope) {
+            let registration = graph.registrations[at]
+            let shown = registration.service.isPublic ? access : ""
+            text.appendLine()
+            text.appendLine("    \(shown)fn provide(_ _type: \(types.name(registration.service)).Type) -> \(types.source(registration.service)) {")
+            text.appendLine("        return \(giving(at, inScope))")
+            text.appendLine("    }")
+        }
+        // Those with several, and those with keys.
+        var several: String[>..] = []
+        var keyed: String[>..] = []
+        for at in 0..<graph.registrations.count {
+            let registration = graph.registrations[at]
+            let service = identity(registration.service)
+            let shown = registration.service.isPublic ? access : ""
+            let all = reachable(graph.byService[Graph.slot(registration.service, "")] ?? [], inScope)
+            if registration.key.isEmpty && all.count > 1 && !several.contains(service) {
+                several.append(service)
+                text.appendLine()
+                text.appendLine("    /// Every registration of it, in order.")
+                text.appendLine("    \(shown)fn resolveAll(_ _type: \(types.name(registration.service)).Type) -> \(types.name(registration.service))[>..] {")
+                text.appendLine("        return \(list(all, inScope))")
+                text.appendLine("    }")
+            }
+            if !registration.key.isEmpty && !keyed.contains(service) {
+                keyed.append(service)
+                text.appendLine()
+                text.appendLine("    /// The one registered with this key; none, if there is none.")
+                text.appendLine("    \(shown)fn find(_ _type: \(types.name(registration.service)).Type, key: String) -> \(types.name(registration.service))? {")
+                for i in 0..<graph.registrations.count {
+                    let each = graph.registrations[i]
+                    if !each.key.isEmpty && identity(each.service) == service && (inScope || !isScoped(i)) {
+                        text.appendLine("        if key == \(quoted(each.key)) {")
+                        text.appendLine("            return \(giving(i, inScope))")
+                        text.appendLine("        }")
+                    }
+                }
+                text.appendLine("        return none")
+                text.appendLine("    }")
+            }
+        }
+    }
+
+    // ---- The scope ------------------------------------------------------
+
+    mutating fn writeScope() {
+        text.appendLine("/// A part of a program's life with services of its own: a request, a job. Each scoped")
+        text.appendLine("/// service is made once in it, and let go as it ends, the last made first.")
+        text.appendLine("\(access)final class \(scope): \(conformances(true)) {")
+        text.appendLine("    /// What gives what the whole program shares.")
+        text.appendLine("    \(access)let provider: \(provider)")
+        text.appendLine("    var made: Disposals = Disposals()")
+        if !slots.isEmpty {
+            text.appendLine("    var order: Int[>..] = []")
+        }
+        text.appendLine("    var isEnded: Bool = false")
+        for registration in graph.registrations {
+            if registration.isScoped {
+                text.appendLine("    var held_\(registration.name): \(types.name(registration.service))? = none")
+            }
+        }
+        text.appendLine()
+        text.appendLine("    init(_ provider: \(provider)) {")
+        text.appendLine("        self.provider = provider")
+        text.appendLine("    }")
+        text.appendLine()
+        text.appendLine("    deinit {")
+        text.appendLine("        end()")
+        text.appendLine("    }")
+        text.appendLine()
+        text.appendLine("    fn end() {")
+        text.appendLine("        isEnded = true")
+        text.appendLine("        made.disposeAll()")
+        text.appendLine("        release()")
+        text.appendLine("    }")
+        text.appendLine()
+        text.appendLine("    async fn endAsync() {")
+        text.appendLine("        isEnded = true")
+        text.appendLine("        await made.disposeAllAsync()")
+        text.appendLine("        release()")
+        text.appendLine("    }")
+        text.appendLine()
+        text.appendLine("    // What it holds, let go the last made first.")
+        text.appendLine("    fn release() {")
+        if !slots.isEmpty {
+            text.appendLine("        while !order.isEmpty {")
+            text.appendLine("            match order.removeLast() {")
+            for at in 0..<graph.registrations.count {
+                if let slot = slots[at] {
+                    text.appendLine("                case \(slot) => {")
+                    text.appendLine("                    held_\(graph.registrations[at].name) = none")
+                    text.appendLine("                }")
+                }
+            }
+            text.appendLine("                case _ => { }")
+            text.appendLine("            }")
+            text.appendLine("        }")
+        }
+        text.appendLine("    }")
+        for at in 0..<graph.registrations.count {
+            let registration = graph.registrations[at]
+            if registration.isScoped {
+                writeScoped(registration, slots[at] ?? 0)
+            } else if !registration.isSingleton {
+                writeTransient(registration, true)
+            }
+        }
+        writeProvided(true)
+        text.appendLine("}")
+    }
+
+    mutating fn writeScoped(_ registration: Registration, _ slot: Int) {
+        let type = types.source(registration.service)
+        text.appendLine()
+        text.appendLine("    fn get_\(registration.name)() -> \(type) {")
+        text.appendLine("        if let value = held_\(registration.name) {")
+        text.appendLine("            return value")
+        text.appendLine("        }")
+        text.appendLine("        if isEnded {")
+        text.appendLine("            fatalError(\(quoted(registration.title + " was asked for after its scope had ended")))")
+        text.appendLine("        }")
+        text.appendLine("        let value: \(type) = \(making(registration, true))")
+        text.appendLine("        held_\(registration.name) = value")
+        text.appendLine("        order.append(\(slot))")
+        if registration.disposal != "no" {
+            text.appendLine("        made.note(value)")
+        }
+        text.appendLine("        return value")
+        text.appendLine("    }")
+    }
+
+    // ---- What a ServiceCollection is given ------------------------------
+
+    mutating fn registrations(_ own: Declaration[>..], _ included: String[>..]) -> String {
+        text = TextBuilder()
+        let name = declaration.qualifiedName
+        text.appendLine("extension \(name): \(isPlain ? "StandardModule" : "ServiceModule") {")
+        if isPlain {
+            text.appendLine("    \(access)static fn standard() -> \(name) {")
+            text.appendLine("        return \(name)()")
+            text.appendLine("    }")
+            text.appendLine()
+        }
+        text.appendLine("    /// Registers all that the container knows.")
+        text.appendLine("    \(access)fn register(in services: inout ServiceCollection) {")
+        for fragment in included {
+            text.appendLine("        services.add(\(fragment).self)")
+        }
+        for each in own {
+            text.appendLine("        " + registrationOf(each, &types))
+        }
+        for registration in graph.registrations {
+            if registration.making == .Function {
+                text.appendLine("        " + functionOf(registration))
+            }
+        }
+        text.appendLine("    }")
+        text.appendLine("}")
+        return text.build()
+    }
+
+    mutating fn functionOf(_ registration: Registration) -> String {
+        let (given, asks) = DependencyInjectionGenerators.arguments(registration.needs, from: "scope", &types)
+        let lead = (asks || registration.isThrowing ? "try " : "") + (registration.isAsync ? "await " : "")
+        let scopeName = given.contains("scope") ? "scope" : "_scope"
+        let key = registration.key.isEmpty ? "" : quoted(registration.key) + ", "
+        let dependencies = dependencyList(registration.needs, &types)
+        let service = types.name(registration.service) + ".self"
+        let making = "{ \(scopeName) in \(lead)self.\(registration.callee)(\(given)) }"
+        if registration.isAsync {
+            return "services.add(ServiceDescriptor.waiting(\(service), \(key)from: \(dependencies)) \(making))"
+        }
+        return "services.add(ServiceDescriptor.of(\(service), .\(registration.lifetime), \(key)from: \(dependencies), eager: \(registration.isEager)) \(making))"
+    }
+}
+
+// A type's registration in a ServiceCollection.
+fn registrationOf(_ declaration: Declaration, _ types: inout TypeWriter) -> String {
+    let service = serviceType(of: declaration)
+    let itself = types.qualifier(declaration.moduleName) + declaration.qualifiedName
+    let key = keyArgument(declaration.attribute(named: "injectable")?.string(named: "key") ?? "")
+    let name = "services.add\(lifetime(of: declaration))"
+    let isItself = service == none || service?.qualifiedName == declaration.qualifiedName && service?.moduleName == declaration.moduleName
+    if !declaration.typeParameters.isEmpty {
+        let opened = isItself ? itself : types.qualifier(service?.moduleName ?? "") + (service?.qualifiedName ?? "")
+        return "\(name)(open: \(opened).self, \(itself).self\(key))"
+    }
+    guard let other = service, !isItself else {
+        return "\(name)(\(itself).self\(key))"
+    }
+    return "\(name)(\(types.name(other)).self, \(itself).self\(key))"
+}
+
+// ---- A package's fragment -----------------------------------------------
+
+fn writeFragment(_ own: Declaration[>..], _ pkg: Package, _ output: inout Output) {
+    let moduleName = fragmentModule(pkg, "")
+    var types = TypeWriter(in: moduleName)
+    types.add("Sable.DependencyInjection")
+    let body = TextBuilder()
+    body.appendLine("/// What package '\(pkg.name)' registers: '@include(\(moduleName).Services.self)' has a")
+    body.appendLine("/// container build it, and 'services.add(Services.self)' a ServiceCollection.")
+    body.appendLine("public struct Services: StandardModule {")
+    body.appendLine("    public init() { }")
+    body.appendLine()
+    body.appendLine("    public static fn standard() -> Services {")
+    body.appendLine("        return Services()")
+    body.appendLine("    }")
+    body.appendLine()
+    body.appendLine("    public fn register(in services: inout ServiceCollection) {")
+    for each in own {
+        body.appendLine("        " + registrationOf(each, &types))
+    }
+    body.appendLine("    }")
+    for each in own {
+        guard let service = serviceType(of: each), let making = injected(each) else {
+            continue
+        }
+        if each.isPublic && making.isPublic || !service.isPublic || !each.typeParameters.isEmpty {
+            continue
+        }
+        if making.parameters.contains(where: { !$0.resolved.isPublic }) {
+            continue
+        }
+        var taken: String[>..] = []
+        var given: String[>..] = []
+        for parameter in making.parameters {
+            let label = parameter.label.isEmpty ? "_ " : parameter.label == parameter.name ? "" : parameter.label + " "
+            let type = parameter.resolved.kind == "function" ? "@escaping " : ""
+            taken.append("\(label)\(parameter.name): \(type)\(types.source(parameter.resolved))" + (parameter.defaultText.isEmpty ? "" : " = \(parameter.defaultText)"))
+            given.append(parameter.label.isEmpty ? parameter.name : "\(parameter.label): \(parameter.name)")
+        }
+        let effects = making.isAsync ? "async " : ""
+        let lead = (making.isThrowing ? "try " : "") + (making.isAsync ? "await " : "")
+        body.appendLine()
+        body.appendLine("    /// One, for a container that includes these.")
+        body.appendLine("    public static \(effects)fn \(fragmentFunction(each))(\(taken.joined(separator: ", "))) \(making.isThrowing ? "throws " : "")-> \(types.source(service)) {")
+        body.appendLine("        return \(lead)\(types.qualifier(each.moduleName))\(each.qualifiedName)(\(given.joined(separator: ", ")))")
+        body.appendLine("    }")
+    }
+    body.appendLine("}")
+    output.add(file: "Services.sb", types.importLines() + "\n" + body.build(), inModule: moduleName)
+}

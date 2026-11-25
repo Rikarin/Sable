@@ -3,22 +3,59 @@ module Sable.DependencyInjection
 extension ServiceDescriptor {
     /// A registration of a type as itself, made from its own dependencies.
     public static fn of<T: Injectable>(_ type: T.Type, _ lifetime: ServiceLifetime, _ key: String? = none) -> ServiceDescriptor {
-        return ServiceDescriptor(ServiceKey(type, key: key), lifetime, T.dependencies(), owned: true, { scope in try T.create(from: scope) })
+        return ServiceDescriptor(ServiceKey(type, key: key), lifetime, T.dependencies(), owned: true, eager: false, ServiceMaker { scope in try T.make(scope) })
     }
 
     /// A registration of a `T` as an `S`, made from its own dependencies.
     /// Asked for where a `T` is not an `S`, it is ServiceError.WrongType.
     public static fn of<S, T: Injectable>(_ service: S.Type, _ type: T.Type, _ lifetime: ServiceLifetime, _ key: String? = none) -> ServiceDescriptor {
-        return ServiceDescriptor(ServiceKey(service, key: key), lifetime, T.dependencies(), owned: true, { scope in try T.create(from: scope) })
+        return ServiceDescriptor(ServiceKey(service, key: key), lifetime, T.dependencies(), owned: true, eager: false, ServiceMaker { scope in try T.make(scope) })
     }
 
     /// A registration of what the closure makes.
     public static fn of<S>(_ service: S.Type, _ lifetime: ServiceLifetime, _ key: String? = none, _ make: @escaping @Sendable (ServiceScope) throws -> S) -> ServiceDescriptor {
-        return ServiceDescriptor(ServiceKey(service, key: key), lifetime, [], owned: true, { scope in try make(scope) })
+        return ServiceDescriptor(ServiceKey(service, key: key), lifetime, [], owned: true, eager: false, ServiceMaker { scope in try make(scope) })
+    }
+
+    /// A registration of what the closure makes, of what it says it is made
+    /// from: what is checked as a provider is built, besides what the closure
+    /// asks for as it runs. With `eager`, a singleton is made then too.
+    ///
+    /// ```sable
+    /// var services = ServiceCollection()
+    /// services.add(ServiceDescriptor.of(String.self, .Transient, from: [ServiceDependency(Int.self)]) { services in
+    ///     "\(try services.resolve(Int.self))"
+    /// })
+    /// do {
+    ///     _ = try services.build()
+    /// } catch {
+    ///     assert(error.description().contains("nothing provides Int"))
+    /// }
+    /// ```
+    public static fn of<S>(
+        _ service: S.Type,
+        _ lifetime: ServiceLifetime,
+        _ key: String? = none,
+        from dependencies: ServiceDependency[>..],
+        eager: Bool = false,
+        _ make: @escaping @Sendable (ServiceScope) throws -> S
+    ) -> ServiceDescriptor {
+        return ServiceDescriptor(ServiceKey(service, key: key), lifetime, dependencies, owned: true, eager: eager, ServiceMaker { scope in try make(scope) })
+    }
+
+    /// A singleton's registration, made by a closure that waits, as the
+    /// provider is built, after what it says it is made from.
+    public static fn waiting<S>(
+        _ service: S.Type,
+        _ key: String? = none,
+        from dependencies: ServiceDependency[>..],
+        _ make: @escaping @Sendable async (ServiceScope) throws -> S
+    ) -> ServiceDescriptor {
+        return ServiceDescriptor(ServiceKey(service, key: key), waiting: dependencies, { scope in try await make(scope) })
     }
 
     /// A singleton's registration, already made.
     public static fn of<S: Sendable>(_ service: S.Type, _ key: String? = none, _ value: S) -> ServiceDescriptor {
-        return ServiceDescriptor(ServiceKey(service, key: key), ServiceLifetime.Singleton, [], owned: false, { _scope in value })
+        return ServiceDescriptor(ServiceKey(service, key: key), ServiceLifetime.Singleton, [], owned: false, eager: false, ServiceMaker { _scope in value })
     }
 }

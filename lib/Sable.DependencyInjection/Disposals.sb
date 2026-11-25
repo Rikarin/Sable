@@ -1,10 +1,28 @@
 module Sable.DependencyInjection
 
-// What a scope, or the provider, is to dispose, in the order it was made.
-struct Disposals {
+/// What a scope, or a provider, is to dispose, in the order it was made: what
+/// the code `@container` writes keeps them in.
+///
+/// ```sable
+/// class Connection: Disposable {
+///     fn dispose() { print("closed") }
+/// }
+///
+/// var made = Disposals()
+/// made.note(Connection())
+/// made.disposeAll()
+/// assert(made.isEmpty)
+/// ```
+public struct Disposals {
     var made: Disposal[>..] = []
 
-    mutating fn note(_ value: any Any) {
+    public init() { }
+
+    /// Whether there is nothing to dispose.
+    public var isEmpty: Bool => made.isEmpty
+
+    /// Something made: kept, when it is Disposable or AsyncDisposable.
+    public mutating fn note(_ value: any Any) {
         if let waits = value as? any AsyncDisposable {
             made.append(Disposal.Waits(service: waits))
         } else if let ends = value as? any Disposable {
@@ -12,9 +30,11 @@ struct Disposals {
         }
     }
 
-    // The last made first. Taken out one at a time, since one may be released
+    /// Disposes it all, the last made first. What is only AsyncDisposable, and
+    /// cannot be waited for here, is a trap.
+    // Taken out one at a time, since one may be released
     // by being disposed, and what it held before anything made earlier is.
-    mutating fn disposeAll() {
+    public mutating fn disposeAll() {
         while !made.isEmpty {
             match made.removeLast() {
                 case .Ends(let service) => {
@@ -31,7 +51,8 @@ struct Disposals {
         }
     }
 
-    mutating async fn disposeAllAsync() {
+    /// Disposes it all, the last made first, waiting for each AsyncDisposable.
+    public mutating async fn disposeAllAsync() {
         while !made.isEmpty {
             match made.removeLast() {
                 case .Ends(let service) => {
@@ -43,9 +64,4 @@ struct Disposals {
             }
         }
     }
-}
-
-union Disposal {
-    Ends(service: any Disposable)
-    Waits(service: any AsyncDisposable)
 }

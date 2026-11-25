@@ -4,13 +4,16 @@ import Sable.Concurrency
 import Sable.DependencyInjection
 
 // ---------------------------------------------------------------------------
-// A shop put together by a container: each type says what it is made from,
-// and the collection says which type stands for which, and for how long.
+// A shop put together by a container: each type says what it is made from by
+// its initialiser, and how long it lives. '@container' writes the code that
+// makes them, and what is missing, or would be held for too long, or leads
+// back to itself, does not compile. A ServiceCollection makes the same shop
+// as the program runs, here with another clock.
 // ---------------------------------------------------------------------------
 
-/// What a request says as it goes.
+/// What happens, as it does.
 @immutable
-@derive(Injectable)
+@injectable(.Singleton)
 final class Journal {
     let lines: Mutex<String[>..]>
 
@@ -29,18 +32,29 @@ final class Journal {
     }
 }
 
+protocol Clock: Sendable {
+    fn now() -> Int
+}
+
+struct StoppedClock: Clock {
+    let time: Int
+    fn now() -> Int { return time }
+}
+
 /// A logger for each type that logs: an open generic.
 @immutable
-@derive(Injectable)
+@injectable(.Singleton)
 final class Logger<Category> {
     let journal: Journal
+    let clock: any Clock
 
-    init(journal: Journal) {
+    init(journal: Journal, clock: any Clock) {
         self.journal = journal
+        self.clock = clock
     }
 
     fn info(_ text: String) {
-        journal.note("\(Category.self): \(text)")
+        journal.note("\(clock.now()) \(Category.self): \(text)")
     }
 }
 
@@ -51,7 +65,7 @@ protocol Repository<Item> {
 }
 
 /// A transaction: begun with the request, committed as its scope ends.
-@derive(Injectable)
+@injectable(.Scoped)
 final class Transaction: Disposable {
     let log: Logger<Transaction>
     var changes: Int = 0
@@ -66,7 +80,7 @@ final class Transaction: Disposable {
     }
 }
 
-@derive(Injectable)
+@injectable(.Scoped, as: Repository.self)
 final class MemoryRepository<Item>: Repository<Item> {
     let transaction: Transaction
     let log: Logger<MemoryRepository<Item>>
@@ -99,32 +113,43 @@ protocol Discount {
     fn off(_ price: Int) -> Int
 }
 
-@derive(Injectable)
+@injectable(.Transient, as: Discount.self)
 struct Regular: Discount {
     fn off(_ price: Int) -> Int { return price / 10 }
 }
 
-@derive(Injectable)
+@injectable(.Transient, as: Discount.self)
 struct Seasonal: Discount {
-    @Keyed("season")
+    @keyed("season")
     let amount: Int
     fn off(_ price: Int) -> Int { return amount }
 }
 
-@derive(Injectable)
+/// Where prices are in, read before anything is sold.
+struct Prices: Sendable {
+    let currency: String
+}
+
+struct Sms { }
+
+@injectable(.Scoped)
 final class Checkout {
     let orders: any Repository<Order>
     let receipts: any Repository<Receipt>
     let discounts: (any Discount)[]
     let log: Logger<Checkout>
-    let currency: String
+    let prices: Lazy<Prices>
+    let sms: Sms?
+    let greeting: String
 
-    init(orders: any Repository<Order>, receipts: any Repository<Receipt>, discounts: (any Discount)[], log: Logger<Checkout>, currency: String = "kr") {
+    init(orders: any Repository<Order>, receipts: any Repository<Receipt>, discounts: (any Discount)[], log: Logger<Checkout>, prices: Lazy<Prices>, sms: Sms?, greeting: String = "thank you") {
         self.orders = orders
         self.receipts = receipts
         self.discounts = discounts
         self.log = log
-        self.currency = currency
+        self.prices = prices
+        self.sms = sms
+        self.greeting = greeting
     }
 
     fn buy(_ item: String, price: Int) {
@@ -134,42 +159,55 @@ final class Checkout {
         }
         orders.add(Order { item: item })
         receipts.add(Receipt { total: total })
-        log.info("\(item) for \(total) \(currency)")
+        log.info("\(item) for \(total) \(prices.value.currency), \(greeting)")
+    }
+}
+
+@container
+struct Shop {
+    @singleton
+    fn clock() -> any Clock { return StoppedClock { time: 9 } }
+    @keyed("season")
+    @singleton
+    fn season() -> Int { return 5 }
+
+    // Waited for as the shop is built, so that 'resolve' never waits.
+    @singleton
+    async fn prices() -> Prices {
+        await Task.yield()
+        return Prices { currency: "kr" }
     }
 }
 
 @main
-fn main() {
-    let services = ServiceCollection()
-    services.addSingleton(Journal.self)
-    services.addSingleton(open: Logger.self, Logger.self)
-    services.addScoped(Transaction.self)
-    services.addScoped(open: Repository.self, MemoryRepository.self)
-    services.addTransient((any Discount).self, Regular.self)
-    services.addTransient((any Discount).self, Seasonal.self)
-    services.addSingleton(Int.self, key: "season", value: 5)
-    services.addScoped(Checkout.self)
-
-    let provider = try! services.build()
+async fn main() {
+    let shop = await Shop.build()
     for items in [["tea", "cups"], ["a kettle"]] {
-        provider.withScope { scope in
-            let checkout = try! scope.resolve(Checkout.self)
+        shop.withScope { scope in
+            let checkout = scope.resolve(Checkout.self)
             for item in items {
                 checkout.buy(item, price: 100)
             }
             // The same repository the checkout was given, in this scope.
-            let orders = try! scope.resolve((any Repository<Order>).self)
-            print("\(orders.count()) ordered")
+            print("\(scope.resolve((any Repository<Order>).self).count()) ordered")
         }
     }
-    try! provider.resolve(Journal.self).report()
+    shop.resolve(Journal.self).report()
+
+    // The same shop, put together as the program runs, at another time.
+    var services = ServiceCollection()
+    services.add(Shop.self)
+    services.replaceSingleton((any Clock).self) { _services in StoppedClock { time: 23 } }
+    let late = try! await services.buildAsync()
+    late.withScope { scope in
+        (try! scope.resolve(Checkout.self)).buy("a teapot", price: 200)
+    }
+    (try! late.resolve(Journal.self)).report()
 
     // What a collection lacks is said before anything is made.
-    let incomplete = ServiceCollection()
-    incomplete.addScoped(Checkout.self)
-    incomplete.addScoped(open: Repository.self, MemoryRepository.self)
+    services.remove((any Clock).self)
     do {
-        _ = try incomplete.build()
+        _ = try await services.buildAsync()
     } catch {
         if case .Invalid(let problems) = error {
             print(problems[0].description())

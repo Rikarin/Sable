@@ -1,0 +1,493 @@
+module ContainerTests
+
+import Sable.Concurrency
+import Sable.DependencyInjection
+import Sable.Testing
+
+import InjectionSupport
+
+// ---- A graph with one of everything ----------------------------------------
+
+protocol Sink: Sendable {
+    fn write(_ line: String)
+}
+
+@immutable
+final class Memory: Sink {
+    let lines: Mutex<String[>..]> = Mutex([])
+    fn write(_ line: String) {
+        lines.withLock { $0.append(line) }
+    }
+    var all: String => lines.withLock { $0.joined(separator: " ") }
+}
+
+@immutable
+@injectable(.Singleton)
+final class Logger<Category> {
+    let sink: any Sink
+    init(sink: any Sink) { self.sink = sink }
+    fn say(_ what: String) { sink.write("\(Category.self):\(what)") }
+}
+
+protocol Store<Item> {
+    fn describe() -> String
+}
+
+@injectable(.Scoped, as: Store.self)
+final class SqlStore<Item>: Store<Item> {
+    let session: Session
+    let log: Logger<SqlStore<Item>>
+    init(session: Session, log: Logger<SqlStore<Item>>) {
+        self.session = session
+        self.log = log
+    }
+    fn describe() -> String { return "\(Item.self) in \(session.database.url)" }
+}
+
+@immutable
+final class Database: Disposable {
+    let url: String
+    let sink: any Sink
+    init(url: String, sink: any Sink) {
+        self.url = url
+        self.sink = sink
+    }
+    fn dispose() { sink.write("database") }
+}
+
+@injectable(.Scoped)
+final class Session: Disposable {
+    let database: Database
+    let sink: any Sink
+    init(database: Database, sink: any Sink) {
+        self.database = database
+        self.sink = sink
+    }
+    fn dispose() { sink.write("session") }
+}
+
+@injectable(.Transient)
+final class Ticket: Disposable {
+    let sink: any Sink
+    init(sink: any Sink) { self.sink = sink }
+    fn dispose() { sink.write("ticket") }
+}
+
+protocol Rule {
+    fn name() -> String
+}
+
+@injectable(.Transient, as: Rule.self)
+struct Cheap: Rule {
+    fn name() -> String { return "cheap" }
+}
+
+@injectable(.Scoped, as: Rule.self)
+struct Loyal: Rule {
+    let session: Session
+    fn name() -> String { return "loyal to \(session.database.url)" }
+}
+
+@injectable(.Transient, as: Rule.self, key: "strict")
+struct Strict: Rule {
+    fn name() -> String { return "strict" }
+}
+
+struct NotThere { }
+
+// A singleton that asks later, so it does not keep its provider.
+@immutable
+@injectable(.Singleton)
+final class Late {
+    let clock: Lazy<any Clock>
+    let again: () -> Plain
+
+    init(clock: Lazy<any Clock>, _ again: @escaping () -> Plain) {
+        self.clock = clock
+        self.again = again
+    }
+}
+
+@injectable(.Transient)
+struct Plain: Sendable {
+    let size: Int = 3
+}
+
+// A cycle, broken by a Lazy.
+@injectable(.Scoped)
+final class Parent {
+    let child: Lazy<Child>
+    init(child: Lazy<Child>) { self.child = child }
+}
+
+@injectable(.Scoped)
+final class Child {
+    weak var parent: Parent?
+    init(parent: Parent) { self.parent = parent }
+}
+
+@injectable(.Singleton)
+actor Counter {
+    var count: Int = 0
+    init() { }
+    fn next() -> Int {
+        count += 1
+        return count
+    }
+}
+
+@injectable(.Scoped)
+final class Service {
+    let orders: any Store<Order>
+    let log: Logger<Service>
+    let strict: any Rule
+    let rules: (any Rule)[]
+    let listed: (any Rule)[>..]
+    let missing: NotThere?
+    let session: Session?
+    let retries: Int
+    let tickets: () -> Ticket
+    let parent: Parent
+
+    init(orders: any Store<Order>, log: Logger<Service>, @keyed("strict") strict: any Rule, rules: (any Rule)[], listed: (any Rule)[>..], missing: NotThere?, session: Session?, retries: Int = 4, tickets: @escaping () -> Ticket, _ parent: Parent) {
+        self.orders = orders
+        self.log = log
+        self.strict = strict
+        self.rules = rules
+        self.listed = listed
+        self.missing = missing
+        self.session = session
+        self.retries = retries
+        self.tickets = tickets
+        self.parent = parent
+    }
+}
+
+struct Settings: Sendable {
+    let url: String
+}
+
+struct Refused: Error {
+    let url: String
+    fn description() -> String { return "no database at \(url)" }
+    fn debugDescription() -> String { return description() }
+}
+
+@container
+struct Services {
+    let sink: Memory
+    let url: String = "here"
+
+    @singleton
+    fn journal() -> any Sink { return sink }
+    @singleton
+    fn settings() -> Settings { return Settings { url: url } }
+    @singleton
+    fn clock() -> any Clock { return FixedClock() }
+    @singleton
+    fn name() -> String { return "services" }
+
+    @singleton
+    async fn database(settings: Settings, sink: any Sink) throws -> Database {
+        await Task.yield()
+        if settings.url == "nowhere" {
+            throw Refused { url: settings.url }
+        }
+        return Database(url: settings.url, sink: sink)
+    }
+
+    // Made after the database it is made from, which is declared later or not.
+    @keyed("title")
+    @singleton
+    fn title(database: Database, name: String = "nobody") throws -> String {
+        return "\(name) of \(database.url)"
+    }
+}
+
+async fn provided(_ sink: Memory = Memory()) -> ServicesProvider {
+    return try! await Services.build(Services { sink: sink })
+}
+
+@test
+async fn everyFormOfParameterIsGiven() {
+    let sink = Memory()
+    let provider = await provided(sink)
+    await provider.withScope { scope in
+        let service = scope.resolve(Service.self)
+        assertEqual(service.orders.describe(), "InjectionSupport.Order in here")
+        service.log.say("hello")
+        assertEqual(service.strict.name(), "strict")
+        assertEqual(service.rules.map { $0.name() }.joined(separator: ", "), "cheap, loyal to here")
+        assertEqual(service.listed.count, 2)
+        assert(service.missing == none)
+        assert((service.session!) === scope.resolve(Session.self))
+        assertEqual(service.retries, 4)
+        assert(service.tickets() !== service.tickets())
+        assert(service.parent.child.value.parent! === service.parent)
+        assert(scope.resolve(Service.self) === service)
+    }
+    assertEqual(sink.all, "ContainerTests.Service:hello ticket ticket session")
+}
+
+@test
+async fn aScopedServiceIsOneForItsScope() {
+    let provider = await provided()
+    let first = await provider.withScope { scope in scope.resolve(Session.self) }
+    let second = await provider.withScope { scope in
+        assert(scope.resolve(Session.self) === scope.resolve(Session.self))
+        assert(scope.resolve(Ticket.self) !== scope.resolve(Ticket.self))
+        return scope.resolve(Session.self)
+    }
+    assert(first !== second)
+    assert(first.database === provider.resolve(Database.self))
+}
+
+@test
+async fn theProviderGivesWhatIsTheWholePrograms() {
+    let provider = await provided()
+    assertEqual(provider.resolve(Database.self).url, "here")
+    assertEqual(provider.resolve((any Clock).self).now(), 12)
+    assertEqual(provider.find(String.self, key: "title")!, "services of here")
+    assert(provider.find(String.self, key: "other") == none)
+    assertEqual(provider.find((any Rule).self, key: "strict")!.name(), "strict")
+    let late = provider.resolve(Late.self)
+    assert(!late.clock.isMade)
+    assertEqual(late.clock.value.now(), 12)
+    assertEqual(late.again().size, 3)
+    assertEqual(await provider.resolve(Counter.self).next(), 1)
+    assertEqual(await provider.resolve(Counter.self).next(), 2)
+}
+
+@test
+async fn aScopeGivesEveryRegistration() {
+    let provider = await provided()
+    await provider.withScope { scope in
+        assertEqual(scope.resolveAll((any Rule).self).count, 2)
+    }
+}
+
+@test
+async fn servicesAreDisposedTheLastMadeFirst() {
+    let sink = Memory()
+    let provider = await provided(sink)
+    await provider.withScope { scope in
+        _ = scope.resolve(Ticket.self)
+        _ = scope.resolve(Session.self)
+        _ = scope.resolve(Ticket.self)
+    }
+    assertEqual(sink.all, "ticket session ticket")
+    _ = provider.resolve(Ticket.self)
+    await provider.disposeAsync()
+    await provider.disposeAsync()
+    assertEqual(sink.all, "ticket session ticket ticket database")
+}
+
+@test
+async fn aProviderThatGoesDisposes() {
+    let sink = Memory()
+    do {
+        let provider = await provided(sink)
+        assertEqual(provider.resolve(Database.self).url, "here")
+        assertEqual(provider.resolve(Late.self).again().size, 3)
+    }
+    assertEqual(sink.all, "database")
+}
+
+@test
+async fn aScopeEndsWhenItsBodyThrows() {
+    let sink = Memory()
+    let provider = await provided(sink)
+    do {
+        try await provider.withScope { (scope: ServicesScope) throws in
+            _ = scope.resolve(Session.self)
+            throw TestError("it fails")
+        }
+        assert(false)
+    } catch {
+        assertEqual(sink.all, "session")
+    }
+}
+
+@test
+async fn whatASingletonThrowsIsTheBuilds() {
+    do {
+        _ = try await Services.build(Services { sink: Memory(), url: "nowhere" })
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "no database at nowhere")
+    }
+}
+
+fn nowBy<C: ServiceContainer & Provides<any Clock>>(_ container: C) -> Int {
+    return container.resolve((any Clock).self).now()
+}
+
+@test
+async fn codeMayAskAnyContainerThatProvidesIt() {
+    let provider = await provided()
+    assertEqual(nowBy(provider), 12)
+    assertEqual(await provider.withScope { scope in nowBy(scope) }, 12)
+}
+
+@test
+async fn aSingletonIsMadeOnceByManyTasks() {
+    let provider = await provided()
+    let seen = await withTaskGroup(of: Int.self) { group in
+        for _i in 0..<8 {
+            group.spawn { await provider.resolve(Counter.self).next() }
+        }
+        var most = 0
+        while let each = await group.next() {
+            most = each > most ? each : most
+        }
+        return most
+    }
+    assertEqual(seen, 8)
+}
+
+// ---- The same graph, in a ServiceCollection --------------------------------
+
+@test
+async fn theSameGraphIsACollections() {
+    let sink = Memory()
+    var services = ServiceCollection()
+    services.add(Services { sink: sink })
+    let provider = try! await services.buildAsync()
+    await provider.withAsyncScope { scope in
+        let service = try! scope.resolve(Service.self)
+        assertEqual(service.orders.describe(), "InjectionSupport.Order in here")
+        service.log.say("hello")
+        assertEqual(service.strict.name(), "strict")
+        assertEqual(service.rules.map { $0.name() }.joined(separator: ", "), "cheap, loyal to here")
+        assertEqual(service.listed.count, 2)
+        assert(service.missing == none)
+        assert((service.session!) === (try! scope.resolve(Session.self)))
+        assertEqual(service.retries, 4)
+        assert(service.tickets() !== service.tickets())
+        assert(service.parent.child.value.parent! === service.parent)
+    }
+    assertEqual(sink.all, "ContainerTests.Service:hello ticket ticket session")
+    assertEqual(try! provider.resolve(String.self, key: "title"), "services of here")
+    assertEqual((try! provider.resolve(Late.self)).clock.value.now(), 12)
+    assertEqual(await (try! provider.resolve(Counter.self)).next(), 1)
+    await provider.disposeAsync()
+    assertEqual(sink.all, "ContainerTests.Service:hello ticket ticket session database")
+}
+
+@test
+async fn aTestPutsItsOwnInPlaceOfAContainers() {
+    var services = ServiceCollection()
+    services.add(Services { sink: Memory() })
+    services.replaceSingleton(Database.self) { scope in Database(url: "nowhere near", sink: try scope.resolve((any Sink).self)) }
+    services.remove((any Rule).self)
+    services.replaceScoped((any Rule).self, key: "strict") { _scope in Cheap() }
+    let provider = try! await services.buildAsync()
+    provider.withScope { scope in
+        let service = try! scope.resolve(Service.self)
+        assertEqual(service.orders.describe(), "InjectionSupport.Order in nowhere near")
+        assertEqual(service.strict.name(), "cheap")
+        assertEqual(service.rules.count, 0)
+    }
+}
+
+@test
+fn whatWaitsMustBeBuiltByWaiting() {
+    var services = ServiceCollection()
+    services.add(Services { sink: Memory() })
+    do {
+        _ = try services.build()
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "ContainerTests.Warm, ContainerTests.Database must be waited for: 'buildAsync' builds them")
+    }
+}
+
+@test
+async fn whatASingletonThrowsIsTheCollectionsBuilds() {
+    var services = ServiceCollection()
+    services.add(Services { sink: Memory(), url: "nowhere" })
+    do {
+        _ = try await services.buildAsync()
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "ContainerTests.Database could not be made: no database at nowhere")
+    }
+}
+
+// ---- A container made of nothing, with what is waited for as it ends -------
+
+final class Pipe: AsyncDisposable {
+    let record: Record
+    init(record: Record) { self.record = record }
+    async fn disposeAsync() {
+        await Task.yield()
+        record.add("pipe")
+    }
+}
+
+@immutable
+@container
+final class Pipes {
+    let record: Record = Record()
+    init() { }
+
+    @singleton
+    fn journal() -> Record { return record }
+    @scoped
+    fn pipe(record: Record) -> Pipe { return Pipe(record: record) }
+    // What the rest of the package's types ask for.
+    @singleton
+    fn sink() -> any Sink { return Memory() }
+    @singleton
+    fn clock() -> any Clock { return FixedClock() }
+    @singleton
+    fn database(sink: any Sink) -> Database { return Database(url: "there", sink: sink) }
+}
+
+@test
+async fn whatIsWaitedForAsItEnds() {
+    let provider = try! await Pipes.build()
+    await provider.withScope { scope in
+        _ = scope.resolve(Pipe.self)
+    }
+    assertEqual(provider.resolve(Record.self).all, "pipe")
+
+    var services = ServiceCollection()
+    services.add(Pipes.self)
+    let other = try! await services.buildAsync()
+    await other.withAsyncScope { scope in
+        _ = try! scope.resolve(Pipe.self)
+    }
+    assertEqual((try! other.resolve(Record.self)).all, "pipe")
+}
+
+// ---- Making by waiting -----------------------------------------------------
+
+@immutable
+@injectable(.Singleton)
+final class Warm {
+    let database: Database
+    let title: String
+    async init(database: Database, @keyed("warm") title: String?) throws {
+        await Task.yield()
+        self.database = database
+        self.title = title ?? "untitled"
+    }
+}
+
+@test
+async fn anInitialiserMayWait() {
+    let provider = await provided()
+    assertEqual(provider.resolve(Warm.self).title, "untitled")
+
+    var services = ServiceCollection()
+    services.addSingleton(String.self, key: "warm", value: "warm")
+    services.addSingleton(Warm.self)
+    services.addSingleton(Database.self) { _scope in
+        await Task.yield()
+        return Database(url: "later", sink: Memory())
+    }
+    let other = try! await services.buildAsync()
+    assertEqual((try! other.resolve(Warm.self)).title, "warm")
+    assertEqual((try! other.resolve(Warm.self)).database.url, "later")
+}

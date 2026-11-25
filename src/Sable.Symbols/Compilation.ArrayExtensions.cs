@@ -199,11 +199,22 @@ public sealed partial class Compilation {
         TypeBinder.DeferConformanceCheck(carrier);
     }
 
+    /// <summary>
+    ///     What may meet a conformance's requirements: the conforming module's
+    ///     own members before another's, which is an extension of arrays it
+    ///     does not know, and does not change what its conformance means.
+    /// </summary>
     void FindArrayMembers(NamedTypeSymbol carrier) =>
         carrier.ArrayMembersNamed = name =>
             carrier.ExtendedArray is { } extended && LookupArrayMember(extended, name) is { Owner: not null } found
-                ? found.Members
+                ? found.Members.OrderBy(member => ReferenceEquals(ArrayModuleOf(member), carrier.ContainingSymbol) ? 0 : 1)
                 : [];
+
+    static Symbol? ArrayModuleOf(Symbol member) =>
+        member.ContainingSymbol switch {
+            ExtensionSymbol extension => extension.ExtendedType.ContainingSymbol,
+            var owner => owner?.ContainingSymbol,
+        };
 
     /// <summary>
     ///     The array extension that conforms this array to the protocol, and

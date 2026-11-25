@@ -1,0 +1,45 @@
+module Negative.ArrayIterators
+
+// An array's 'makeIterator' of the program's own, of a type built from the
+// array, is not what makes arrays sequences: the library's is. What an
+// associated type is is never asked of itself through another kind of the
+// array, or another construction of the conformer (#310).
+
+extension<Element> Element[:] {
+    public fn makeIterator() -> ChainIterator<ReversedIterator<Element[>..]>, ArrayIterator<Element>> {
+    } //! S6004
+}
+
+extension<Element> Element[>..] {
+    public fn makeIterator() -> OfSequence<Element[:]> {
+    } //! S6004
+}
+
+extension<Element> Element[..] {
+    public fn makeIterator() -> OfSequence<Element[..][>..]> {
+    } //! S6004
+}
+
+public struct OfSequence<S: Sequence>: Iterator {
+    public mutating fn next() -> S.Element? {
+        return none
+    }
+}
+
+struct Grows<T>: Sequence { //! S3023 does not say what 'Element' is //! S3023 requires 'Iter.Element == Element'
+    fn makeIterator() -> OfSequence<Grows<T[]>> {
+        return OfSequence<Grows<T[]>> { }
+    }
+}
+
+struct Left<T>: Sequence { //! S3023 does not say what 'Element' is //! S3023 requires 'Iter.Element == Element'
+    fn makeIterator() -> OfSequence<Right<T>> {
+        return OfSequence<Right<T>> { }
+    }
+}
+
+struct Right<T>: Sequence { //! S3023 does not say what 'Element' is //! S3023 requires 'Iter.Element == Element'
+    fn makeIterator() -> OfSequence<Left<T[]>> {
+        return OfSequence<Left<T[]>> { }
+    }
+}

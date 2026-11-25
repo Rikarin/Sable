@@ -643,11 +643,13 @@ internal static class ConformanceChecker {
         return null;
 
         // What the conformer has not said: a protocol's own associated type,
-        // or one read through the conformer itself. 'Base.Iter.Element',
-        // through a parameter of the conformer's, is said.
+        // or one read through the conformer itself, or through another
+        // construction of it: a slice's, through the growable array the same
+        // extension conforms. Said, it would be what asks what it is.
+        // 'Base.Iter.Element', through a parameter of the conformer's, is said.
         bool MentionsAssociated(TypeSymbol type) =>
             type switch {
-                DependentMemberTypeSymbol member => RootOf(member).Equals(self) || MentionsAssociated(RootOf(member)),
+                DependentMemberTypeSymbol member => IsConformer(RootOf(member)) || MentionsAssociated(RootOf(member)),
                 TypeParameterSymbol parameter => parameter.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol },
                 NamedTypeSymbol named => named.TypeArguments.Any(MentionsAssociated),
                 OptionalTypeSymbol optional => MentionsAssociated(optional.UnderlyingType),
@@ -656,6 +658,11 @@ internal static class ConformanceChecker {
                 FunctionTypeSymbol function => function.ParameterTypes.Any(MentionsAssociated) || MentionsAssociated(function.ReturnType),
                 _ => false,
             };
+
+        bool IsConformer(TypeSymbol root) =>
+            root.Equals(self)
+            || root is NamedTypeSymbol named && ReferenceEquals(named.OriginalDefinition, conformer)
+            || conformer.ExtendedArray is not null && Compilation.MatchArray(conformer, root) is not null;
 
         static TypeSymbol RootOf(DependentMemberTypeSymbol member) =>
             member.BaseType is DependentMemberTypeSymbol inner ? RootOf(inner) : member.BaseType;

@@ -1,0 +1,88 @@
+module Sable.Interop
+
+/// A closure given to C to keep: a C function pointer, and the context that
+/// C hands back to it. `F` is the C function's whole type, the context among
+/// its parameters, which the closure is given and need not look at.
+///
+/// C may call it from any thread, one Sable knows nothing of included, so
+/// what it captures is Sendable, as a task's is; and for as long as the
+/// CCallback is held. Let go of it once C has been told to forget the
+/// function. If C calls it after that all the same the program stops, saying
+/// so: the context is not an address, and is never another closure's.
+///
+/// ```sable
+/// import Sable.Interop
+///
+/// let total = Atomic<Int>(0)
+/// let callback = CCallback { (n: CInt, context: RawPtr<Opaque>) in
+///     total.add(Int(n))
+/// }
+/// // As C would call it, with the function and the context it was given:
+/// unsafe {
+///     callback.function.function()(40, callback.context)
+/// }
+/// assert(total.load() == 40)
+/// ```
+@immutable
+public final class CCallback<F: CSignature>: Sendable {
+    /// The function to give C.
+    public let function: CFunction<F>
+    /// The context to give C with it.
+    public let context: RawPtr<Opaque>
+
+    /// The closure as a C function and a context, which the function takes
+    /// where 'position' says: a 'RawPtr<Opaque>' parameter of `F`.
+    public init(context position: ContextPosition = .Last, @Sendable _ closure: F) {
+        function = CFunction<F>.withContext(position)
+        context = beginCallback(closure, confined: false)
+    }
+
+    deinit {
+        callbackEnd(context.address)
+    }
+}
+
+/// The closure lent to C for a call: 'body' is given it as a C function
+/// pointer and a context, and calls the C function that calls it back. It may
+/// capture anything, so it is called on this thread alone, and by the time
+/// 'body' returns for the last time: C calling it on another thread, or
+/// later, stops the program.
+///
+/// ```sable
+/// import Sable.Interop
+///
+/// var seen: Int[>..] = []
+/// withCallback({ (n: CInt, context: RawPtr<Opaque>) in seen.append(Int(n)) }) { function, context in
+///     // What a C function given the two would do:
+///     unsafe {
+///         function.function()(7, context)
+///     }
+/// }
+/// assert(seen == [7])
+/// ```
+public fn withCallback<F: CSignature, R, E: Error>(_ closure: F, context position: ContextPosition = .Last,
+        _ body: (CFunction<F>, RawPtr<Opaque>) throws(E) -> R) throws(E) -> R {
+    let function = CFunction<F>.withContext(position)
+    let context = beginCallback(closure, confined: true)
+    defer {
+        callbackEnd(context.address)
+    }
+    return try body(function, context)
+}
+
+// The closure moved into the runtime's table (runtime/foreign.c).
+fn beginCallback<F>(_ closure: F, confined: Bool) -> RawPtr<Opaque> {
+    unsafe {
+        let held = RawPtr<F>.allocate(count: 1)
+        held.initialize(to: closure)
+        let context = callbackBegin(held.address, confined)
+        held.deallocate()
+        return RawPtr<Opaque>(address: context)
+    }
+}
+
+@extern("c", "sable_callback_begin")
+fn callbackBegin(_ closure: Int, _ confined: Bool) -> Int
+
+@extern("c", "sable_callback_end")
+fn callbackEnd(_ context: Int)

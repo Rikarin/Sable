@@ -1,0 +1,9 @@
+module Sable.Interop
+
+/// Where among its parameters a callback takes the context C hands back to
+/// it: last, as most take it, or first.
+@derive(Equatable, Debug)
+public enum ContextPosition {
+    First
+    Last
+}

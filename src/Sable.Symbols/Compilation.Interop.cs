@@ -17,9 +17,9 @@ namespace Sable.Symbols;
 ///     </para>
 ///     <para>
 ///         What crosses must be something C has the same way: the integer
-///         types, <c>F32</c> and <c>F64</c>, <c>Bool</c>, and a struct of
-///         those, which is passed as C passes the struct of the same fields
-///         (LlvmEmitter's C calling convention). A string, a class, an
+///         types, <c>F32</c> and <c>F64</c>, <c>Bool</c>, a <c>RawPtr</c>,
+///         and a struct of those, which is passed as C passes the struct of
+///         the same fields (LlvmEmitter's C calling convention). A string, a class, an
 ///         optional or a closure is not, and is S3224.
 ///     </para>
 /// </remarks>
@@ -154,6 +154,13 @@ public sealed partial class Compilation {
         }
 
         var attribute = function.ForeignName is not null ? "@extern" : "@export";
+
+        // What C does with a pointer, nothing here can check: who calls it vouches.
+        if (function.ForeignName is not null && !function.IsUnsafe && function.Parameters.FirstOrDefault(static p => HasCPointer(p.Type)) is { } pointer) {
+            yield return Diagnostic.Error(ErrorCode.ERR_ForeignPointerNotUnsafe, declaration.Identifier.Span,
+                $"'{function.Name}' gives C the pointer '{pointer.Name}', and what C does with it only the caller can vouch for: declare it 'unsafe fn'");
+        }
+
         foreach (var (parameter, syntax) in function.Parameters.Zip(declaration.Parameters.Parameters)) {
             // 'args: CVarArg...': C's '...', after at least one fixed parameter.
             if (parameter.IsVariadic) {
@@ -188,9 +195,69 @@ public sealed partial class Compilation {
         type is ArrayTypeSymbol { ElementType: NamedTypeSymbol { TypeKind: TypeKind.Protocol, Name: "CVarArg" } protocol }
         && ReferenceEquals(protocol.ContainingSymbol, Core.Module);
 
+    /// <summary>
+    ///     A C pointer: Sable.Core's <c>RawPtr</c>, or a struct whose one
+    ///     field is one (<c>NonNull</c>, Sable.Interop's <c>CFunction</c>, a
+    ///     program's own handle), generic or not: only what it points at is.
+    /// </summary>
+    static bool IsCPointer(TypeSymbol type, int depth = 0) {
+        if (type is not NamedTypeSymbol { TypeKind: TypeKind.Struct } structure || depth > 32) {
+            return false;
+        }
+
+        var definition = structure.OriginalDefinition;
+        if (definition is { Name: "RawPtr", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }) {
+            return true;
+        }
+
+        return StoredFields(definition).Take(2).ToList() is [var only] && !HasDeinit(definition) && IsCPointer(only.Type, depth + 1);
+    }
+
+    /// <summary>Whether the type is a C pointer, or a struct with one somewhere in it.</summary>
+    static bool HasCPointer(TypeSymbol type, int depth = 0) =>
+        IsCPointer(type) || depth < 32 && type is NamedTypeSymbol { TypeKind: TypeKind.Struct, IsGenericDefinition: false } structure
+        && StoredFields(structure).Any(f => HasCPointer(f.Type, depth + 1));
+
+    static IEnumerable<FieldSymbol> StoredFields(NamedTypeSymbol structure) =>
+        structure.Members.OfType<FieldSymbol>().Where(static f => !f.IsStatic && !f.IsComputed);
+
+    static bool HasDeinit(NamedTypeSymbol structure) =>
+        structure.Members.OfType<FunctionSymbol>().Any(static f => f.FunctionKind == FunctionKind.Deinitializer);
+
+    /// <summary>True for Sable.Interop's <c>CSignature</c>: what a function type C can call, or be called by, meets.</summary>
+    internal static bool IsCSignatureProtocol(TypeSymbol type) =>
+        type is NamedTypeSymbol { Name: "CSignature", TypeKind: TypeKind.Protocol, ContainingSymbol: ModuleSymbol { Name: "Sable.Interop" } };
+
+    /// <summary>
+    ///     Why C has no function of the type, or null when it has:
+    ///     <c>CSignature</c>, which function types alone meet, by what they
+    ///     take and give.
+    /// </summary>
+    internal static string? WhyNotCSignature(TypeSymbol type) {
+        if (type is not FunctionTypeSymbol function) {
+            return $"'{type.ToDisplayString()}' is not a function type";
+        }
+
+        if (function.IsAsync || function.ThrownType is not null || function.IsRethrows) {
+            return "a C function neither waits nor throws";
+        }
+
+        if (!function.InOutParameters.IsEmpty) {
+            return "C passes by value, never 'inout'";
+        }
+
+        foreach (var parameter in function.ParameterTypes) {
+            if (WhyNotC(parameter, []) is { } why) {
+                return why;
+            }
+        }
+
+        return function.ReturnType is NamedTypeSymbol { Name: "Void", TypeKind: TypeKind.Builtin } ? null : WhyNotC(function.ReturnType, []);
+    }
+
     /// <summary>Why C has no value of the type the same way, or null when it has.</summary>
-    string? WhyNotC(TypeSymbol type, HashSet<TypeSymbol> visiting) {
-        if (type.IsError) {
+    static string? WhyNotC(TypeSymbol type, HashSet<TypeSymbol> visiting) {
+        if (type.IsError || IsCPointer(type)) {
             return null;
         }
 
@@ -206,11 +273,11 @@ public sealed partial class Compilation {
             }
 
             // A deinit runs where Sable lets go of the value; C would copy it and never run it.
-            if (structure.Members.OfType<FunctionSymbol>().Any(static f => f.FunctionKind == FunctionKind.Deinitializer)) {
+            if (HasDeinit(structure)) {
                 return $"'{structure.Name}' has a deinit, which C would never run";
             }
 
-            var fields = structure.Members.OfType<FieldSymbol>().Where(static f => !f.IsStatic && !f.IsComputed).ToList();
+            var fields = StoredFields(structure).ToList();
             if (fields.Count == 0) {
                 return $"'{structure.Name}' has no fields, and a C struct has at least one";
             }
@@ -221,9 +288,10 @@ public sealed partial class Compilation {
                 }
             }
 
+            visiting.Remove(structure);
             return null;
         }
 
-        return $"'{type.ToDisplayString()}' is not a C type; what crosses is an integer, F32, F64, Bool, or a struct of those";
+        return $"'{type.ToDisplayString()}' is not a C type; what crosses is an integer, F32, F64, Bool, a RawPtr, or a struct of those";
     }
 }

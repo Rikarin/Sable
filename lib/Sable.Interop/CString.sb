@@ -1,0 +1,56 @@
+module Sable.Interop
+
+/// A C string of Sable's own — bytes, then a NUL — in memory that stays where
+/// it is for as long as this is held: Rust's `CString`. For one call,
+/// `withCString` is enough; this is for what C keeps.
+///
+/// ```sable
+/// import Sable.Interop
+///
+/// let name = try! CString("config")
+/// assert(name.cStr.count == 6)
+/// assert(name.string == "config")
+/// assert((try? CString("a\u{0}b")) == none)
+/// ```
+@immutable
+public final class CString: Sendable {
+    /// Its bytes' start, theirs for as long as this is held.
+    public let pointer: RawPtr<CChar>
+    /// How many bytes there are, the NUL not counted.
+    public let count: Int
+
+    /// The text's UTF-8. Text with a NUL in it, which C would take to end
+    /// there, throws.
+    public convenience init(_ text: String) throws(InteriorNul) {
+        try self.init(bytes: text.utf8Bytes())
+    }
+
+    /// The bytes, which have no NUL among them.
+    public init(bytes: U8[:]) throws(InteriorNul) {
+        if let at = bytes.firstIndex(of: 0) {
+            throw InteriorNul(position: at)
+        }
+        unsafe {
+            pointer = nulTerminated(bytes)
+        }
+        count = bytes.count
+    }
+
+    deinit {
+        unsafe {
+            pointer.deallocate()
+        }
+    }
+
+    /// The string as C sees it, for as long as this is held.
+    public var cStr: CStr {
+        get {
+            unsafe {
+                return CStr.viewing(pointer)
+            }
+        }
+    }
+
+    /// The text, copied.
+    public var string: String => cStr.string
+}

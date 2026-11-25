@@ -172,6 +172,33 @@ static int processor_count(void) {
 static void thread_yield(void) {
 }
 
+// One thread, the runtime's own: none to wait for the end of.
+static void platform_at_thread_exit(void *value) {
+    (void)value;
+}
+
+// ---- Libraries ---------------------------------------------------------------
+
+// A module is whole as it is linked: none is loaded as it runs.
+static void *library_open(const char *path, int flags, char **message) {
+    (void)path;
+    (void)flags;
+    *message = strdup("libraries are not loaded under WASI: unsupported");
+    return NULL;
+}
+
+static bool library_symbol(void *library, const char *name, void **address, char **message) {
+    (void)library;
+    (void)name;
+    *address = NULL;
+    *message = strdup("libraries are not loaded under WASI: unsupported");
+    return false;
+}
+
+static void library_close(void *library) {
+    (void)library;
+}
+
 // ---- The I/O reactor -------------------------------------------------------
 
 // None: no socket is ever added (socket_listen and socket_connect fail).

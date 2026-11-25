@@ -748,7 +748,7 @@ public static class NativeBuild {
         // program's frames from its .symtab where dladdr cannot. And 'frem'
         // becomes a call to fmod, which glibc keeps in libm, not libc. The
         // executor's pool is threads: pthread, which older glibc keeps apart.
-        NativePlatform.Linux => ["-Wl,--gc-sections", "-lm", "-pthread"],
+        NativePlatform.Linux => ["-Wl,--gc-sections", "-lm", "-ldl", "-pthread"],
 
         // lld, which takes LLVM bitcode as Microsoft's linker does not; the
         // main thread's stack the size a POSIX one's is, 8 MiB, not 1; a

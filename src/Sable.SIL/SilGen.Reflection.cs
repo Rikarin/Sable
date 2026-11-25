@@ -46,7 +46,7 @@ public sealed partial class SilGen {
             container = container.ContainingSymbol;
         }
 
-        return container is ModuleSymbol { Name: "Sable.Core" };
+        return container is ModuleSymbol { Name: "Sable.Core" or "Sable.Interop" };
     }
 
     // -----------------------------------------------------------------------

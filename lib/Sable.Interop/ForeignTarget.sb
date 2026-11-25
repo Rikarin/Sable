@@ -1,0 +1,14 @@
+module Sable.Interop
+
+// What a function value over a C function holds: where the function is, and
+// what keeps it there. The code the compiler writes for such a value reads
+// 'address' (SilGen.Foreign.cs).
+final class ForeignTarget {
+    let address: Int
+    let library: LibraryHandle?
+
+    init(address: Int, library: LibraryHandle?) {
+        self.address = address
+        self.library = library
+    }
+}

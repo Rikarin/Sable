@@ -3218,7 +3218,7 @@ public sealed partial class Binder {
             case BoundError:
                 return;
 
-            case var other when other.Type is FunctionTypeSymbol or OptionalTypeSymbol { UnderlyingType: FunctionTypeSymbol }:
+            case var other when other.Type is FunctionTypeSymbol or TypeParameterSymbol or OptionalTypeSymbol { UnderlyingType: FunctionTypeSymbol }:
                 _diagnostics.Error(
                     ErrorCode.ERR_TaskCaptureNotSendable,
                     argument.Syntax.Span,
@@ -5471,6 +5471,13 @@ public sealed partial class Binder {
                              && expected is FunctionTypeSymbol { ParameterTypes.IsEmpty: true } lazyType
                     ? BindAutoclosure(syntaxes[i], lazyType)
                     : BindExpression(syntaxes[i], expected);
+
+                // A closure for a parameter of type 'F', all that says what F
+                // is, says it for the closures after it too.
+                if (expected is TypeParameterSymbol open && slots[i] < resolved.Parameters.Length && inferrable.Contains(open)) {
+                    substitution = Combine(outer, Infer(resolved, rebound.ToImmutable(), labels, outer, expectedType));
+                    _openTypeParameters = [..inferrable.Where(p => substitution.Lookup(p) is null)];
+                }
             }
 
             _openTypeParameters = saved;
@@ -6317,6 +6324,11 @@ public sealed partial class Binder {
             if (fitting.Count == 1) {
                 return Apply(fitting[0].FunctionType, group.Substitution ?? TypeSubstitution.Empty);
             }
+        }
+
+        // 'keep(compare)' for 'keep<F>(_ f: F)': the one function named says what F is.
+        if (parameter is TypeParameterSymbol && argument is BoundFunctionGroup { Candidates: [{ TypeParameters.IsEmpty: true } named] } only) {
+            return Apply(named.FunctionType, only.Substitution ?? TypeSubstitution.Empty);
         }
 
         return Decayed(parameter, argument.Type);

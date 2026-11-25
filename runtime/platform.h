@@ -137,10 +137,24 @@ static void condition_broadcast(PlatformCondition *condition);
 // as large as the main thread's and watched for overflow as it is; false
 // when the system will not make one.
 static bool thread_start(void (*run)(void *argument), void *argument);
+// Has the calling thread, one the runtime did not start, give 'value' to
+// foreign_thread_end (foreign.c) as it ends.
+static void platform_at_thread_exit(void *value);
 // The processors the program may run on, at least one.
 static int processor_count(void);
 // Lets another thread run: a spin that has waited long enough.
 static void thread_yield(void);
+
+// ---- Libraries (foreign.c) ---------------------------------------------------
+
+// The program's own symbols for a path of NULL. 'flags': LIBRARY_GLOBAL, its
+// symbols are given to libraries loaded after it. NULL, or false, with why in
+// 'message', where one fails. A symbol there may still be at NULL.
+enum { LIBRARY_GLOBAL = 1 };
+
+static void *library_open(const char *path, int flags, char **message);
+static bool library_symbol(void *library, const char *name, void **address, char **message);
+static void library_close(void *library);
 
 // ---- The I/O reactor -------------------------------------------------------
 
@@ -448,6 +462,9 @@ static bool file_sync(PlatformFile file, FileError *error);
 static bool file_set_length(PlatformFile file, int64_t length, FileError *error);
 static bool file_metadata(PlatformFile file, FileMetadata *metadata, FileError *error);
 static bool file_close(PlatformFile file, FileError *error);
+// A descriptor of the C library's closed, or made another of; -1 for failure.
+static bool descriptor_close(int descriptor, FileError *error);
+static int descriptor_duplicate(int descriptor, FileError *error);
 // Standard input (0), output (1) or error (2), as a file.
 static PlatformFile file_standard(int which);
 // The whole file copied, its permissions with it, at the system's fastest;

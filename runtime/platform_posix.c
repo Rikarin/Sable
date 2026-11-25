@@ -731,6 +731,64 @@ static void thread_yield(void) {
     sched_yield();
 }
 
+static void foreign_thread_end(void *pointer); // foreign.c
+
+#if defined(__APPLE__)
+// Run while the thread's own variables are still there, which a pthread key's
+// destructor may come after.
+void _tlv_atexit(void (*run)(void *value), void *value);
+
+static void platform_at_thread_exit(void *value) {
+    _tlv_atexit(foreign_thread_end, value);
+}
+#else
+static pthread_key_t foreign_key;
+
+static void foreign_key_make(void) {
+    if (pthread_key_create(&foreign_key, foreign_thread_end) != 0) {
+        sable_trap("no thread key is left");
+    }
+}
+
+static void platform_at_thread_exit(void *value) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, foreign_key_make);
+    pthread_setspecific(foreign_key, value);
+}
+#endif
+
+// ---- Libraries ---------------------------------------------------------------
+
+static char *dynamic_error(void) {
+    const char *message = dlerror();
+    return strdup(message != NULL ? message : "the system does not say why");
+}
+
+static void *library_open(const char *path, int flags, char **message) {
+    void *library = dlopen(path, RTLD_NOW | ((flags & LIBRARY_GLOBAL) != 0 ? RTLD_GLOBAL : RTLD_LOCAL));
+    if (library == NULL) {
+        *message = dynamic_error();
+    }
+
+    return library;
+}
+
+// A symbol may be at NULL: only dlerror says whether it is there.
+static bool library_symbol(void *library, const char *name, void **address, char **message) {
+    dlerror();
+    *address = dlsym(library, name);
+    const char *why = *address == NULL ? dlerror() : NULL;
+    if (why != NULL) {
+        *message = strdup(why);
+    }
+
+    return why == NULL;
+}
+
+static void library_close(void *library) {
+    dlclose(library);
+}
+
 // ---- The I/O reactor -------------------------------------------------------
 
 // kqueue where there is one (macOS, the BSDs), epoll on Linux. Sockets are

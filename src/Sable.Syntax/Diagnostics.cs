@@ -223,6 +223,8 @@ public enum ErrorCode {
     // ---- C interop (S3223-S3229): '@extern' and '@export' (SYNTAX.md §24).
     ERR_MalformedForeign = 3223,
     ERR_NotACType = 3224,
+    ERR_ForeignPointerNotUnsafe = 3225,
+    ERR_CFunctionCaptures = 3226,
 
     // ---- Source generators (S3230-S3239): docs/08.
     ERR_GeneratorRule = 3230,

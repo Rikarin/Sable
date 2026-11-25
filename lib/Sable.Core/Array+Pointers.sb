@@ -1,0 +1,68 @@
+module Sable.Core
+
+// Arrays' elements where they lie, for C and for raw-memory code.
+
+extension<Element> Element[:] {
+    /// Where the elements lie, one after another, for as long as 'body'
+    /// runs: they may be read there, and not written. Null when there are
+    /// none.
+    ///
+    /// ```sable
+    /// let third = [10, 20, 30].withPointer { start in
+    ///     unsafe { start.load(at: 2) }
+    /// }
+    /// assert(third == 30)
+    /// ```
+    public fn withPointer<R, E: Error>(_ body: (RawPtr<Element>) throws(E) -> R) throws(E) -> R {
+        unsafe {
+            let start = RawPtr<Element>(address: RawMemory.sliceAddress(self))
+            defer {
+                unsafe {
+                    RawMemory.sliceEnd(self)
+                }
+            }
+            return try body(start)
+        }
+    }
+}
+
+extension<Element> Element[>..] {
+    /// Where the elements lie, one after another, for as long as 'body'
+    /// runs, to be read and written there: the array is the only reference
+    /// to them by then. There are 'count' of them, and no more; null when
+    /// there are none.
+    ///
+    /// ```sable
+    /// var numbers = [1, 2, 3]
+    /// let before = numbers
+    /// numbers.withMutablePointer { start in
+    ///     unsafe { start.store(9, at: 1) }
+    /// }
+    /// assert(numbers == [1, 9, 3] && before == [1, 2, 3])
+    /// ```
+    public mutating fn withMutablePointer<R, E: Error>(_ body: (RawPtr<Element>) throws(E) -> R) throws(E) -> R {
+        unsafe {
+            let start = RawPtr<Element>(address: RawMemory.arrayAddress(&self))
+            defer {
+                unsafe {
+                    RawMemory.addressEnd(&self)
+                }
+            }
+            return try body(start)
+        }
+    }
+}
+
+extension RawPtr<Element> {
+    /// The first 'count' values, copied into an array.
+    ///
+    /// ```sable
+    /// let copy = [1, 2, 3].withPointer { start in
+    ///     unsafe { start.copied(count: 2) }
+    /// }
+    /// assert(copy == [1, 2])
+    /// ```
+    public unsafe fn copied(count: Int) -> Element[>..] {
+        return UnsafeBuffer<Element>.viewing(self, count: count).toArray()
+    }
+}

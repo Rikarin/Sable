@@ -151,6 +151,26 @@ static bool file_close(PlatformFile file, FileError *error) {
     return true;
 }
 
+static bool descriptor_close(int descriptor, FileError *error) {
+    return file_close(descriptor, error);
+}
+
+// Not for a program run later.
+static int descriptor_duplicate(int descriptor, FileError *error) {
+#ifdef __wasi__
+    (void)descriptor;
+    errno = ENOTSUP;
+    int made = -1;
+#else
+    int made = fcntl(descriptor, F_DUPFD_CLOEXEC, 0);
+#endif
+    if (made < 0) {
+        file_failed(error);
+    }
+
+    return made;
+}
+
 static PlatformFile file_standard(int which) {
     return which;
 }

@@ -1,0 +1,62 @@
+module Sable.Interop
+
+import Sable.IO
+
+#if os(windows)
+/// A handle of Windows', this program's to close, which is done as it goes:
+/// Rust's `OwnedHandle`, .NET's `SafeHandle`. It is moved, never copied, so
+/// it is closed once. Windows alone has it.
+@noncopy
+public struct OwnedHandle {
+    // Null once given away.
+    var held: RawPtr<Opaque>
+
+    /// The handle, which the caller vouches is open and is no one else's to
+    /// close: one `CloseHandle` closes.
+    public unsafe static fn taking(_ handle: RawPtr<Opaque>) -> OwnedHandle {
+        return OwnedHandle(held: handle)
+    }
+
+    init(held: RawPtr<Opaque>) {
+        self.held = held
+    }
+
+    deinit {
+        if held.address != 0 && held.address != -1 {
+            unsafe {
+                _ = closeHandle(held)
+            }
+        }
+    }
+
+    /// The handle, to be used while this is here.
+    public var handle: RawPtr<Opaque> => held
+
+    /// Whether it has a handle: neither null nor INVALID_HANDLE_VALUE.
+    public var isValid: Bool => held.address != 0 && held.address != -1
+
+    /// The handle given away: whoever takes it closes it.
+    public mutating fn release() -> RawPtr<Opaque> {
+        let given = held
+        held = RawPtr<Opaque>.null
+        return given
+    }
+
+    /// Another handle of the same object.
+    public fn duplicate() throws(IoError) -> OwnedHandle {
+        unsafe {
+            let made = duplicateHandle(held)
+            if made.isNull {
+                throw IoError.Os(path: "a handle", code: Runtime.fileErrorCode())
+            }
+            return OwnedHandle.taking(made)
+        }
+    }
+}
+
+@extern("c", "sable_handle_close")
+unsafe fn closeHandle(_ handle: RawPtr<Opaque>) -> Bool
+
+@extern("c", "sable_handle_duplicate")
+unsafe fn duplicateHandle(_ handle: RawPtr<Opaque>) -> RawPtr<Opaque>
+#endif

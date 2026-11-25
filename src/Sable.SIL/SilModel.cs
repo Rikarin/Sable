@@ -2147,6 +2147,26 @@ public static class SilBuiltins {
             return operands is [AddressType] ? new([operands[0]], SilType.Int) : null;
         }
 
+        // Where a value's storage is, or an array's elements (made the only
+        // reference to them), or a slice's, for C; and the end of what is done
+        // there, after which the storage may hold anything. What a function's
+        // C entry is at (SilGen.Foreign.cs).
+        if (name is "address_begin" or "address_end") {
+            return operands is [AddressType] ? new([operands[0]], name == "address_end" ? SilType.Unit : SilType.Int) : null;
+        }
+
+        if (name == "array_address") {
+            return operands is [AddressType { Pointee: ArrayType }] ? new([operands[0]], SilType.Int) : null;
+        }
+
+        if (name is "slice_address" or "slice_end") {
+            return operands is [SliceType] ? new([operands[0]], name == "slice_end" ? SilType.Unit : SilType.Int) : null;
+        }
+
+        if (name == "c_address") {
+            return operands is [FunctionType] ? new([operands[0]], SilType.Int) : null;
+        }
+
         // 'blackBox(value)'': a slot the optimiser must assume is read and
         // written, for a benchmark's work to be kept.
         if (name == BlackBox) {

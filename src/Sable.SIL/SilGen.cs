@@ -10701,6 +10701,12 @@ public sealed partial class SilGen {
                     return RawMemoryIntrinsic(call, callee.Name);
                 }
 
+                // C function pointers (SilGen.Foreign.cs).
+                if (owner is { Name: "CFunction", ContainingSymbol: ModuleSymbol { Name: "Sable.Interop" } }
+                    || callee is { Name: "cFunction", ContainingSymbol: ModuleSymbol { Name: "Sable.Interop" } }) {
+                    return ForeignIntrinsic(call);
+                }
+
                 // An inline-layout value's bytes (SilGen.Inline.cs).
                 if (owner is not null && ReferenceEquals(owner, Core.Bytes)) {
                     return BytesOf(call);
@@ -12087,6 +12093,35 @@ public sealed partial class SilGen {
                 Emit(new BuiltinInst("share", SilType.Unit, sharedValue));
                 End(sharedValue);
                 return UnitValue.Instance;
+            }
+
+            // Where a value, an array's elements or a slice's are, and the end
+            // of what is done there: the storage is the caller's, 'inout', or
+            // kept alive, in between.
+            if (name is "addressOf" or "addressEnd" or "arrayAddress" && call.Arguments is [var place]) {
+                var borrows = new List<SilValue>();
+                if (Address(Unconverted(place), borrows) is not { } at) {
+                    EndAll(borrows);
+                    return null;
+                }
+
+                var made = Emit(name switch {
+                    "addressOf" => new BuiltinInst("address_begin", SilType.Int, at),
+                    "arrayAddress" => new BuiltinInst("array_address", SilType.Int, at),
+                    _ => new BuiltinInst("address_end", SilType.Unit, at),
+                });
+                EndAll(borrows);
+                return name == "addressEnd" ? UnitValue.Instance : made;
+            }
+
+            if (name is "sliceAddress" or "sliceEnd" && call.Arguments is [var viewed]) {
+                if (Borrow(viewed) is not { } slice) {
+                    return null;
+                }
+
+                var at = Emit(new BuiltinInst(name == "sliceEnd" ? "slice_end" : "slice_address", name == "sliceEnd" ? SilType.Unit : SilType.Int, slice));
+                End(slice);
+                return name == "sliceEnd" ? UnitValue.Instance : at;
             }
 
             var builtin = name switch {

@@ -1,0 +1,34 @@
+module Sable.Interop
+
+/// A variable of a library's: where it is, and a hold on the library, which
+/// stays open while there is one.
+///
+/// ```sable
+/// import Sable.Interop
+///
+/// unsafe {
+///     if let index = DynamicLibrary.program.variable("optind", as: CInt.self) {
+///         assert(index.load() == 1)
+///     }
+/// }
+/// ```
+public struct LibraryVariable<T> {
+    /// Where the variable is, for as long as this is held.
+    public let pointer: RawPtr<T>
+    let library: LibraryHandle
+
+    init(pointer: RawPtr<T>, library: LibraryHandle) {
+        self.pointer = pointer
+        self.library = library
+    }
+
+    /// Its value. Unsafe, as reading what C may change at once is.
+    public unsafe fn load() -> T {
+        return pointer.load()
+    }
+
+    /// Its value changed.
+    public unsafe fn store(_ value: T) {
+        pointer.store(value)
+    }
+}

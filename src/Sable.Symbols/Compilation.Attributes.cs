@@ -178,11 +178,11 @@ public sealed partial class Compilation {
 
             // A Sable.Core '@intrinsic' has the body each use is lowered to;
             // anywhere else there is none, and the declaration would be empty.
-            if (name == "intrinsic" && CoreLibrary.ModuleOf(tree) != CoreLibrary.ModuleName) {
+            if (name == "intrinsic" && CoreLibrary.ModuleOf(tree) is not (CoreLibrary.ModuleName or "Sable.Interop")) {
                 ReportDeclaration(
                     ErrorCode.ERR_BuiltinOutsideCore,
                     attribute.Span,
-                    "only Sable.Core may declare an '@intrinsic': its body is the compiler's, for each type it is used with"
+                    "only Sable.Core and Sable.Interop may declare an '@intrinsic': its body is the compiler's, for each type it is used with"
                 );
                 continue;
             }
@@ -231,7 +231,9 @@ public sealed partial class Compilation {
         }
 
         var held = type is OptionalTypeSymbol optional ? optional.UnderlyingType : type;
-        if (held is not FunctionTypeSymbol) {
+        var isClosure = held is FunctionTypeSymbol
+            || name == "Sendable" && held is TypeParameterSymbol { Constraints: var constraints } && constraints.Any(IsCSignatureProtocol);
+        if (!isClosure) {
             ReportDeclaration(
                 ErrorCode.ERR_AttributeDoesNotApply,
                 attribute.Span,

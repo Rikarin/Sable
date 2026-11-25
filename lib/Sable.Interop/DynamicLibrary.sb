@@ -1,0 +1,151 @@
+module Sable.Interop
+
+import Sable.IO
+
+/// A shared library, loaded as the program runs: POSIX's `dlopen`, Windows'
+/// `LoadLibraryW`, .NET's `NativeLibrary`. It is closed once nothing holds
+/// it: neither this, nor any function or variable looked up in it, so none
+/// is ever used after its code has gone.
+///
+/// ```sable
+/// import Sable.Interop
+///
+/// let program = DynamicLibrary.program
+/// unsafe {
+///     let length: ((RawPtr<CChar>) -> CSize)? = program.symbol("strlen")
+///     assert("sable".withCString { length!($0.pointer) } == 5)
+///     assert(!program.contains("no_such_function"))
+/// }
+/// ```
+///
+/// Looking a symbol up is unsafe: a library does not say what type its
+/// functions are, so the caller vouches for it. Loading one is too, since it
+/// runs the library's initialisers.
+public struct DynamicLibrary: Sendable {
+    let library: LibraryHandle
+    /// The path, or the name, it was opened by; "" for the program itself.
+    public let path: FilePath
+
+    init(library: LibraryHandle, path: FilePath) {
+        self.library = library
+        self.path = path
+    }
+
+    /// The program itself, and the libraries it is linked with: what their
+    /// symbols are looked up in.
+    public static var program: DynamicLibrary {
+        get {
+            unsafe {
+                return DynamicLibrary(library: LibraryHandle(openLibrary(RawPtr<CChar>.null, 0)), path: FilePath(""))
+            }
+        }
+    }
+
+    /// The library at a path — or of a name, with no separator in it, which
+    /// is looked for where the system keeps libraries: `libz.so.1`,
+    /// `libz.1.dylib`, `zlib1.dll`. 'global' gives its symbols to libraries
+    /// opened after it, as some of C's plug-ins need (Windows has no such
+    /// thing). Under WASI there is none to open.
+    ///
+    /// ```sable
+    /// import Sable.Interop
+    ///
+    /// do {
+    ///     unsafe {
+    ///         _ = try DynamicLibrary.open("no-such-library")
+    ///     }
+    ///     assert(false)
+    /// } catch .NotLoaded(let library, _) {
+    ///     assert(library == "no-such-library")
+    /// } catch {
+    ///     assert(false)
+    /// }
+    /// ```
+    public unsafe static fn open<P: PathLike>(_ path: P, global: Bool = false) throws(LibraryError) -> DynamicLibrary {
+        let file = path.filePath
+        let name = "\(file)"
+        if file.bytes.contains(0) || file.isEmpty {
+            throw LibraryError.NotLoaded(library: name, reason: file.isEmpty ? "it has no name" : "its name has a NUL in it")
+        }
+        let opened = withNulTerminated(file.bytes) { text in
+            unsafe {
+                return openLibrary(text.pointer, global ? 1 as CInt : 0 as CInt)
+            }
+        }
+        if opened.isNull {
+            throw LibraryError.NotLoaded(library: name, reason: libraryError().string)
+        }
+        return DynamicLibrary(library: LibraryHandle(opened), path: file)
+    }
+
+    /// The function of the name, as a function value that keeps the library
+    /// open; none when it has none. The caller vouches that it is of the
+    /// type `F`, which C's declaration of it says.
+    public unsafe fn symbol<F: CSignature>(_ name: String) -> F? {
+        if let found = address(name) {
+            if found != 0 {
+                return CFunction<F>.closure(ForeignTarget(address: found, library: library))
+            }
+        }
+        return none
+    }
+
+    /// The function of the name, as `symbol` gives it, or an error that says
+    /// it is not there.
+    ///
+    /// ```sable
+    /// import Sable.Interop
+    ///
+    /// fn processIdentifier() throws(LibraryError) -> CInt {
+    ///     unsafe {
+    ///         #if os(windows)
+    ///         let get: () -> CInt = try DynamicLibrary.program.function("_getpid")
+    ///         #else
+    ///         let get: () -> CInt = try DynamicLibrary.program.function("getpid")
+    ///         #endif
+    ///         return get()
+    ///     }
+    /// }
+    /// assert(try! processIdentifier() > 0)
+    /// ```
+    public unsafe fn function<F: CSignature>(_ name: String) throws(LibraryError) -> F {
+        unsafe {
+            if let found = symbol(name) as F? {
+                return found
+            }
+        }
+        throw LibraryError.NoSymbol(name: name, library: "\(path)")
+    }
+
+    /// The variable of the name, which keeps the library open; none when it
+    /// has none. The caller vouches that it is of the type `T`.
+    public unsafe fn variable<T>(_ name: String, as type: T.Type) -> LibraryVariable<T>? {
+        if let found = address(name) {
+            if found != 0 {
+                return LibraryVariable<T>(pointer: RawPtr<T>(address: found), library: library)
+            }
+        }
+        return none
+    }
+
+    /// Whether the library has the symbol, function or variable.
+    public fn contains(_ name: String) -> Bool {
+        return address(name) != none
+    }
+
+    // Where the symbol is, which may be 0; none when there is none.
+    fn address(_ name: String) -> Int? {
+        if name.contains('\u{0}') {
+            return none
+        }
+        var at = RawPtr<Opaque>.null
+        let found = name.withCString { (text: CStr) -> Bool in
+            return Memory.withPointer(to: &at) { (place: RawPtr<RawPtr<Opaque>>) -> Bool in
+                unsafe {
+                    return librarySymbol(library.handle, text, place)
+                }
+            }
+        }
+        return found ? at.address : none
+    }
+}

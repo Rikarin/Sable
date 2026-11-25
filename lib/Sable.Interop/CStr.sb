@@ -1,0 +1,74 @@
+module Sable.Interop
+
+/// A C string someone else keeps — `const char *` — a pointer to bytes up to
+/// a NUL: Rust's `&CStr`. It crosses to C as the pointer.
+///
+/// Making one of a pointer is unsafe: the caller vouches that it is not
+/// null, that a NUL follows, and that the bytes stay as they are while this
+/// is used. What it is given by — `withCString`, `CString.cStr` — says for
+/// how long that is; `string` and `bytes` are copies.
+///
+/// ```sable
+/// import Sable.Interop
+///
+/// "naïve".withCString { text in
+///     assert(text.count == 6)
+///     assert(text.string == "naïve")
+///     assert(text.bytes[0] == 0x6E)
+/// }
+/// ```
+public struct CStr: Debug {
+    /// Where the bytes start.
+    public let pointer: RawPtr<CChar>
+
+    /// The C string at the pointer.
+    public unsafe static fn viewing(_ pointer: RawPtr<CChar>) -> CStr {
+        return CStr(pointer: pointer)
+    }
+
+    init(pointer: RawPtr<CChar>) {
+        self.pointer = pointer
+    }
+
+    /// How many bytes there are before the NUL: C's `strlen`, which goes
+    /// through them.
+    public var count: Int {
+        get {
+            unsafe {
+                return Int(stringLength(self))
+            }
+        }
+    }
+
+    /// Whether the first byte is the NUL.
+    public var isEmpty: Bool {
+        get {
+            unsafe {
+                return pointer.cast(to: U8.self).load() == 0
+            }
+        }
+    }
+
+    /// The bytes before the NUL, copied.
+    public var bytes: U8[>..] {
+        get {
+            unsafe {
+                return pointer.cast(to: U8.self).copied(count: count)
+            }
+        }
+    }
+
+    /// The text, copied, each ill-formed sequence made U+FFFD.
+    public var string: String => String.fromUtf8Lossy(bytes)
+
+    /// The text, copied, when it is UTF-8.
+    public var validated: String? => try? String.fromUtf8(bytes)
+
+    /// The text in quotes.
+    public fn debugDescription() -> String {
+        return string.debugDescription()
+    }
+}
+
+@extern("c", "strlen")
+unsafe fn stringLength(_ text: CStr) -> CSize

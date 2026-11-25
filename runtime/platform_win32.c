@@ -351,6 +351,119 @@ static void thread_yield(void) {
     SwitchToThread();
 }
 
+// The calling thread's value, given to foreign_thread_end (foreign.c) as a
+// fiber-local one's clean-up, which a thread that ends runs.
+static void foreign_thread_end(void *pointer);
+
+static void WINAPI foreign_fiber_end(void *value) {
+    if (value != NULL) {
+        foreign_thread_end(value);
+    }
+}
+
+static void platform_at_thread_exit(void *value) {
+    static DWORD slot = FLS_OUT_OF_INDEXES;
+    static SRWLOCK lock = SRWLOCK_INIT;
+    AcquireSRWLockExclusive(&lock);
+    if (slot == FLS_OUT_OF_INDEXES) {
+        slot = FlsAlloc(foreign_fiber_end);
+    }
+
+    ReleaseSRWLockExclusive(&lock);
+    if (slot == FLS_OUT_OF_INDEXES || !FlsSetValue(slot, value)) {
+        sable_trap("no thread slot is left");
+    }
+}
+
+// ---- Libraries ---------------------------------------------------------------
+
+static char *windows_error(DWORD code) {
+    wchar_t *text = NULL;
+    DWORD length = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, code, 0, (wchar_t *)&text, 0, NULL);
+    while (length > 0 && (text[length - 1] == L'\n' || text[length - 1] == L'\r' || text[length - 1] == L' ')) {
+        text[--length] = L'\0';
+    }
+
+    if (length == 0) {
+        char number[48];
+        snprintf(number, sizeof number, "the system's error %lu", (unsigned long)code);
+        return strdup(number);
+    }
+
+    char *message = from_wide(text);
+    LocalFree(text);
+    return message;
+}
+
+// The program, as a library: its symbols are looked for in every module loaded.
+static char program_library;
+
+static void *library_open(const char *path, int flags, char **message) {
+    (void)flags; // every module's symbols are its own
+    if (path == NULL) {
+        return &program_library;
+    }
+
+    wchar_t *wide = to_wide(path);
+    // A path's own directory is where what it needs is looked for first;
+    // a name is looked for where a program's libraries are, and not in the
+    // working directory.
+    bool is_path = wcspbrk(wide, L"\\/") != NULL;
+    DWORD mode = 0;
+    SetThreadErrorMode(SEM_FAILCRITICALERRORS, &mode);
+    HMODULE library;
+    DWORD code = 0;
+    if (is_path) {
+        // LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR is for an absolute path alone.
+        wchar_t *full = _wfullpath(NULL, wide, 0);
+        library = LoadLibraryExW(full != NULL ? full : wide, NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        code = GetLastError();
+        free(full);
+    } else {
+        library = LoadLibraryExW(wide, NULL, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        code = GetLastError();
+    }
+
+    SetThreadErrorMode(mode, NULL);
+    free(wide);
+    if (library == NULL) {
+        *message = windows_error(code);
+    }
+
+    return library;
+}
+
+static bool library_symbol(void *library, const char *name, void **address, char **message) {
+    *address = NULL;
+    DWORD code = ERROR_PROC_NOT_FOUND;
+    if (library != &program_library) {
+        *address = (void *)GetProcAddress(library, name);
+        code = GetLastError();
+    } else {
+        HMODULE modules[1024];
+        DWORD size = 0;
+        if (EnumProcessModules(GetCurrentProcess(), modules, sizeof modules, &size)) {
+            DWORD count = size / sizeof modules[0];
+            for (DWORD i = 0; i < count && i < 1024 && *address == NULL; i++) {
+                *address = (void *)GetProcAddress(modules[i], name);
+            }
+        }
+    }
+
+    if (*address == NULL) {
+        *message = windows_error(code);
+    }
+
+    return *address != NULL;
+}
+
+static void library_close(void *library) {
+    if (library != &program_library) {
+        FreeLibrary(library);
+    }
+}
+
 // ---- The I/O reactor -------------------------------------------------------
 
 // An I/O completion port. A socket's readiness comes to it as a completion
@@ -1490,6 +1603,32 @@ static bool file_close(PlatformFile file, FileError *error) {
     }
 
     return true;
+}
+
+// The C runtime's descriptors, whose errors are its own.
+static void descriptor_failed(FileError *error) {
+    error->kind = errno == EBADF ? FILE_ERROR_INVALID : FILE_ERROR_OTHER;
+    error->code = errno;
+}
+
+static bool descriptor_close(int descriptor, FileError *error) {
+    if (_close(descriptor) != 0) {
+        descriptor_failed(error);
+        return false;
+    }
+
+    return true;
+}
+
+static int descriptor_duplicate(int descriptor, FileError *error) {
+    int made = _dup(descriptor);
+    if (made < 0) {
+        descriptor_failed(error);
+    } else {
+        SetHandleInformation((HANDLE)_get_osfhandle(made), HANDLE_FLAG_INHERIT, 0);
+    }
+
+    return made;
 }
 
 static PlatformFile file_standard(int which) {

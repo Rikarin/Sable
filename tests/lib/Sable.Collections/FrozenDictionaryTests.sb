@@ -124,9 +124,9 @@ fn stringsHoweverSpread() {
         agrees(keys, others)
     }
     forAll(Gen.string(of: Gen.element(of: ['a', 'b'])).array(count: 0...80), Gen.string(of: Gen.element(of: ['a', 'b'])).array(count: 0...40), cases: 60) {
-        (keys: String[>..], others: String[>..]) in
-        agrees(keys, others)
-    }
+            (keys: String[>..], others: String[>..]) in
+            agrees(keys, others)
+        }
 }
 
 @test

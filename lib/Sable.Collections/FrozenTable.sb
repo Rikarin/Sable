@@ -599,7 +599,7 @@ struct FrozenTable<Key: Hashable> {
     /// multiplier, of those tried, that moves the fewest along.
     mutating const fn place(_ hashes: U64[>..]) {
         sizeSlots()
-        let tries = keys.count <= 100 ? 256 : keys.count <= 1000 ? 64 : keys.count <= 10000 ? 16 : 4
+        let tries = keys.count <= 100 ? 64 : keys.count <= 1000 ? 12 : 4
         var best = Int.max
         var attempt = 0
         while attempt < tries && best > 0 {

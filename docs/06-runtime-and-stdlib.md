@@ -1225,7 +1225,7 @@ strategy chosen as the table is made (`FrozenTable.sb`):
 | anything else | in such a table, by their own `hash(into:)` under a seed |
 
 The multiplier, or the seed, is the one that moves the fewest keys from their
-own slots, of as many as 256 tried, so that a lookup compares one key. The
+own slots, of as many as 64 tried, so that a lookup compares one key. The
 hashes are the same in every run, which lets a table be made while compiling
 and means that its keys, though not what is looked up, must be trusted.
 `FrozenDictionary(ignoringAsciiCase:)` folds ASCII's letters eight bytes at a

@@ -10,11 +10,11 @@ module Sable.Collections
 /// holds it: a `var` is its own builder.
 ///
 /// ```sable
-/// let set = ImmutableSortedSet<Int>([5, 1, 9])
-/// let more = set.inserting(7)
-/// assert(set.toArray() == [1, 5, 9] && more.toArray() == [1, 5, 7, 9])
+/// let odd = ImmutableSortedSet<Int>([5, 1, 9])
+/// let more = odd.inserting(7)
+/// assert(odd.toArray() == [1, 5, 9] && more.toArray() == [1, 5, 7, 9])
 /// assert(more.floor(6) == 5 && more.range(5...8).count == 2)
-/// assert(set.union(ImmutableSortedSet<Int>([2])).toArray() == [1, 2, 5, 9])
+/// assert(odd.union(ImmutableSortedSet<Int>([2])).toArray() == [1, 2, 5, 9])
 /// ```
 public struct ImmutableSortedSet<Element: Comparable> {
     var members: ImmutableList<Element> = ImmutableList<Element>()

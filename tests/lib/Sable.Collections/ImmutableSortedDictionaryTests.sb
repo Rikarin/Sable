@@ -45,8 +45,8 @@ fn aDictionaryIsWhatAMutableOneWouldBe() {
                     }
                 }
                 case .Remove(let key) => expect(map.remove(Int(key)) == model.remove(Int(key)))
-                case .PopFirst => expect(map.popFirst()?.key == model.popFirst()?.key)
-                case .PopLast => expect(map.popLast()?.value == model.popLast()?.value)
+                case .PopFirst        => expect(map.popFirst()?.key == model.popFirst()?.key)
+                case .PopLast         => expect(map.popLast()?.value == model.popLast()?.value)
                 case .Split(let key) => {
                     let high = map.split(at: Int(key))
                     let modelHigh = model.split(at: Int(key))

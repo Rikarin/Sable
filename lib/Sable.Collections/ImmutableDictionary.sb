@@ -123,7 +123,8 @@ public struct ImmutableDictionary<Key: Hashable, Value> {
     /// had. The closure is given the value 'inout'.
     ///
     /// ```sable
-    /// var tags = ImmutableDictionary<String, String[>..]>([("a", ["x"])])
+    /// var tags = ImmutableDictionary<String, String[>..]>()
+    /// tags["a"] = ["x"]
     /// assert(tags.modify("a") { $0.append("y") })
     /// assert(tags["a"]! == ["x", "y"])
     /// ```

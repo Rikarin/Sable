@@ -1,0 +1,4 @@
+benchmark,job,mean_ns,margin_ns,deviation_ns,median_ns,minimum_ns,maximum_ns,samples,outliers,iterations,bytes_per_second,items_per_second,allocations,allocated_bytes,retains,releases,instructions,cycles,change,p,verdict
+"M.f(1, 2)",,50.500,318.310,0.707,50.500,50.000,51.000,2,0,10,40554455446,79207921,2.000,50.000,1.000,3.000,2500.0,,,,
+M.g,,50.500,318.310,0.707,50.500,50.000,51.000,2,0,10,40554455446,79207921,2.000,50.000,1.000,3.000,2500.0,,0.1980,0.333333,within noise
+

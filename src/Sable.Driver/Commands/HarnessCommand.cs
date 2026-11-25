@@ -37,7 +37,7 @@ public abstract class HarnessCommand : Command {
     /// <summary>The counters of the harness just built, when it measures coverage.</summary>
     protected CoverageMap? CoverageCounters { get; private set; }
 
-    /// <summary>Whether a package's harness built before may be run again: not when the build itself is wanted.</summary>
+    /// <summary>Whether a package's harness built before may be run again: not when the build itself is wanted, each benchmark in it a function of its own.</summary>
     protected virtual bool KeepsHarness => true;
 
     /// <summary>The harness just built, and how; null for one kept from before.</summary>
@@ -292,7 +292,8 @@ public abstract class HarnessCommand : Command {
             options.Exclusivity ?? (options.Debug || !options.Optimise),
             MeasureCoverage && CoveredLibrary is null ? file => IsUnder(file, directory) : null,
             MeasureCoverage ? CoveredLibrary : null,
-            options.OptLevel
+            options.OptLevel,
+            !KeepsHarness
         );
         Built = result;
         Native = options.Native;

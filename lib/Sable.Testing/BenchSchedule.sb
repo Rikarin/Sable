@@ -4,7 +4,8 @@ import Sable.Math
 
 /// How long a benchmark is run, and what its samples are taken to be.
 public struct BenchSettings {
-    /// How many samples to take; none for as many as the mean needs, of 15 to 100.
+    /// How many samples to take, unless the time for them is over; none for
+    /// as many as the mean needs, of 15 to 100.
     public var samples: Int? = none
     /// How long a sample lasts at least: its iterations are chosen for that.
     public var sampleNanoseconds: Int = 10_000_000
@@ -159,7 +160,7 @@ public struct BenchSchedule {
 
     mutating fn warmIfDone() {
         let wanted = F64(settings.warmUpNanoseconds)
-        if warmed < wanted || (rises < 2 && warmRuns < 50 && warmed < 10.0 * wanted) {
+        if (warmed < wanted && warmRuns < 1000) || (rises < 2 && warmRuns < 50 && warmed < 3.0 * wanted) {
             return
         }
         let per = warmRuns > 0 ? lastRun : 0.0
@@ -168,11 +169,11 @@ public struct BenchSchedule {
 
     // Whether there are samples enough.
     fn enough() -> Bool {
-        if let wanted = settings.samples {
-            return samples.count >= wanted
-        }
-        if samples.count >= 100 || (samples.count >= 5 && measured >= F64(settings.budgetNanoseconds)) {
+        if samples.count >= (settings.samples ?? 100) || (samples.count >= 5 && measured >= F64(settings.budgetNanoseconds)) {
             return true
+        }
+        if settings.samples != none {
+            return false
         }
         return samples.count >= 15 && BenchStatistics(nanoseconds(processor: settings.usesProcessorTime), outliers: settings.outliers).relativeMargin <= settings.precision
     }

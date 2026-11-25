@@ -1060,7 +1060,8 @@ Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
 Sable.Testing       @test @bench; assert, assertEqual and the like; expect and
                     require, which show their expression's parts; expectThrows;
                     expectPanic and expectExit (death tests); assertSnapshot;
-                    forAll, Arbitrary and Gen (property tests); Bencher
+                    forAll, Arbitrary and Gen (property tests); Bencher,
+                    BenchStatistics, MannWhitney, BenchComparison
 Sable.Interop       C's types by name (CInt, CLong, CChar, CSize, CWChar),
                     CStr, CString, withCString, withWideCString,
                     withCStrings, CFunction and cFunction, CCallback,
@@ -1068,6 +1069,35 @@ Sable.Interop       C's types by name (CInt, CLong, CChar, CSize, CWChar),
                     variable), OwnedFd, OwnedHandle (Windows)
 Sable.Reflect       the reflection surface described above
 ```
+
+### Benchmarks
+
+A benchmark (`@bench`, docs/05 §5.1) takes a `Bencher` and gives its `iterate`
+what to measure; without one, its whole body is timed:
+
+```sable ignore
+@bench(arguments: [64, 65536], tags: ["hash"])
+fn digest(_ b: Bencher, _ size: Int) {
+    let bytes = U8[>..](repeating: 7, count: size)
+    b.bytesPerIteration = size
+    let last = b.iterate { Sha256.hash(bytes) }
+    b.check("\(last.bytes[0])")
+}
+```
+
+- `iterate(body)` and `iterateAsync(body)` give what the body returned last.
+  What it returns is kept from the optimiser by `blackBox`, as the body is;
+  a body that does the same thing to the same input many times over should
+  put a `blackBox` in its own loop too, or link-time optimisation may work a
+  pure function out once.
+- `iterate(setup:_:batch:cleanup:)` makes each iteration a value of its own,
+  given `inout`, `batch` of them at a time, untimed.
+- `bytesPerIteration` and `itemsPerIteration` add a throughput;
+  `operationsPerIteration` divides what is reported by what the body does.
+- `check(text)` says what was computed: the same wherever it is run.
+- `BenchStatistics` (Tukey's fences, Student's t), `MannWhitney` and
+  `BenchComparison` are the arithmetic, of any samples; `BenchSchedule` which
+  runs there are to be, without a clock.
 
 ### Tests
 

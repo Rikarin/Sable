@@ -1,0 +1,315 @@
+module BenchStatisticsTests
+
+// The benchmark harness's arithmetic (Sable.Testing), on numbers chosen
+// rather than measured: the reference values are SciPy's, R's and the
+// exact fractions.
+
+import Sable.Math
+import Sable.Testing
+
+fn near(_ a: F64, _ b: F64, _ within: F64 = 1e-9) -> Bool {
+    return (a - b).abs() <= within * max(1.0, b.abs())
+}
+
+@test
+fn noSamplesAreNothing() {
+    assertEqual(BenchStatistics([]), BenchStatistics([], outliers: .Keep))
+    let one = BenchStatistics([4.0])
+    assertEqual(one.count, 1)
+    assertEqual(one.mean, 4.0)
+    assertEqual(one.margin, 0.0)
+    assertEqual(one.relativeMargin, 0.0)
+    assertEqual(BenchStatistics([]).relativeMargin, 0.0)
+}
+
+@test
+fn theStatisticsOfEight() {
+    let s = BenchStatistics([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0], outliers: .Keep)
+    assertEqual(s.mean, 5.0)
+    assertEqual(s.median, 4.5)
+    assertEqual(s.minimum, 2.0)
+    assertEqual(s.maximum, 9.0)
+    assertEqual(s.firstQuartile, 4.0)
+    assertEqual(s.thirdQuartile, 5.5)
+    expect(near(s.deviation, 2.138089935299395))
+    expect(near(s.standardError, 0.7559289460184544))
+    // t(0.9995, 7) is 5.407882520861725.
+    expect(near(s.margin, 0.7559289460184544 * 5.407882520861725, 1e-7))
+    expect(near(s.relativeMargin, s.margin / 5.0))
+}
+
+@test
+fn tukeysFences() {
+    let samples = [10.0, 10.0, 11.0, 11.0, 12.0, 12.0, 30.0, -8.0]
+    assertEqual(withoutOutliers(samples, .Keep).count, 8)
+    assertEqual(withoutOutliers(samples, .RemoveUpper), [10.0, 10.0, 11.0, 11.0, 12.0, 12.0, -8.0])
+    assertEqual(withoutOutliers(samples, .RemoveAll), [10.0, 10.0, 11.0, 11.0, 12.0, 12.0])
+    // Three have no quartiles to speak of.
+    assertEqual(withoutOutliers([1.0, 1.0, 100.0], .RemoveAll).count, 3)
+    let s = BenchStatistics(samples, outliers: .RemoveAll)
+    assertEqual(s.removed, 2)
+    assertEqual(s.mean, 11.0)
+}
+
+@test(arguments: [
+    (0.975, 1, 12.706204736174698), (0.975, 10, 2.2281388519649385), (0.9995, 1, 636.6192487687196), (0.9995, 2, 31.599054576443622),
+    (0.9995, 14, 4.140454112738029), (0.9995, 19, 3.883405852592083), (0.9995, 99, 3.391528866), (0.75, 1, 1.0), (0.5, 3, 0.0),
+])
+fn studentsQuantiles(_ p: F64, _ degrees: Int, _ t: F64) {
+    expect(near(studentQuantile(p, degrees), t, 1e-6))
+    expect(near(studentQuantile(1.0 - p, degrees), 0.0 - t, 1e-6))
+    expect(near(studentCumulative(t, degrees), p, 1e-9))
+}
+
+@test
+fn mannWhitneyExactly() {
+    // One order of the C(10, 5) = 252, either way.
+    let apart = MannWhitney([1.0, 2.0, 3.0, 4.0, 5.0], [6.0, 7.0, 8.0, 9.0, 10.0])
+    assertEqual(apart.u, 0.0)
+    expect(near(apart.probability, 2.0 / 252.0))
+    let other = MannWhitney([6.0, 7.0, 8.0, 9.0, 10.0], [1.0, 2.0, 3.0, 4.0, 5.0])
+    assertEqual(other.u, 25.0)
+    expect(near(other.probability, 2.0 / 252.0))
+    // wilcox.test(c(1, 3, 5, 7), c(2, 4, 6)): W = 6, p = 1.
+    let mixed = MannWhitney([1.0, 3.0, 5.0, 7.0], [2.0, 4.0, 6.0])
+    assertEqual(mixed.u, 6.0)
+    assertEqual(mixed.probability, 1.0)
+    // Of the ten orders of two and three, four have a U of 2 or less.
+    expect(near(MannWhitney([1.0, 4.0], [2.0, 3.0, 5.0]).probability, 0.8))
+}
+
+@test
+fn mannWhitneyByTheNormal() {
+    var low: F64[>..] = []
+    var high: F64[>..] = []
+    for i in 0..<25 {
+        low.append(F64(i))
+        high.append(F64(i) + 100.0)
+    }
+    expect(near(MannWhitney(low, high).probability, 1.4156562248495632e-9, 1e-15))
+    // Ties share their ranks, and take from the variance.
+    let tied = MannWhitney([1.0, 1.0, 2.0, 3.0], [2.0, 3.0, 3.0, 4.0])
+    assertEqual(tied.u, 2.5)
+    expect(near(tied.probability, 0.13416918012812581))
+    assertEqual(MannWhitney([1.0, 1.0], [1.0, 1.0]).probability, 1.0)
+    assertEqual(MannWhitney([], [1.0]).probability, 1.0)
+}
+
+// Samples about a middle, in a pattern of no chance.
+fn spread(_ middle: F64, _ width: F64, _ count: Int) -> F64[>..] {
+    var samples: F64[>..] = []
+    for i in 0..<count {
+        samples.append(middle + width * F64(i * 7919 % 1009) / 1009.0)
+    }
+    return samples
+}
+
+@test
+fn verdicts() {
+    let before = spread(100.0, 5.0, 20)
+    let slower = BenchComparison(before, spread(112.0, 5.0, 20))
+    assertEqual(slower.verdict, .Regressed)
+    expect(slower.ratio > 1.1 && slower.probability < 0.001)
+    expect(slower.description(of: "main").hasSuffix("% vs main (REGRESSED, p = 0.0000)"))
+    let faster = BenchComparison(before, spread(80.0, 5.0, 20))
+    assertEqual(faster.verdict, .Improved)
+    expect(faster.description(of: "main").contains("(improved, p ="))
+    // Certain, and small.
+    let small = BenchComparison(before, spread(105.0, 0.5, 20))
+    assertEqual(small.verdict, .WithinNoise)
+    assertEqual(BenchComparison(before, spread(105.0, 0.5, 20), threshold: 0.001).verdict, .Regressed)
+    // Large, and not certain: three samples cannot be.
+    assertEqual(BenchComparison([1.0, 2.0, 3.0], [10.0, 20.0, 30.0]).verdict, .WithinNoise)
+    assertEqual(BenchComparison([0.0], [1.0]).verdict, .WithinNoise)
+    expect(BenchComparison([0.0], [1.0]).description(of: "x") == "+0.00% vs x (within noise, p = 1.0000)")
+}
+
+fn run(_ settings: BenchSettings, _ cost: (BenchPhase, Int) -> F64) -> (BenchSchedule, String) {
+    var schedule = BenchSchedule(settings)
+    var phases = ""
+    var rounds = 0
+    while schedule.phase != .Done && rounds < 10000 {
+        let letter = match schedule.phase {
+            case .Pilot => "p"
+            case .WarmUp => "w"
+            case .Overhead => "o"
+            case .Measure => "m"
+            case .Memory => "a"
+            case .Counters => "c"
+            default => "!"
+        }
+        phases += letter
+        let wall = cost(schedule.phase, schedule.iterations)
+        schedule.record(wall: wall, processor: wall / 2.0)
+        rounds += 1
+    }
+    return (schedule, phases)
+}
+
+@test
+fn theScheduleOfALongBody() {
+    // A second each: one pilot run is warm-up enough, and five the budget's.
+    var settings = BenchSettings()
+    settings.countsInstructions = true
+    let (schedule, phases) = run(settings) { phase, count in F64(count) * 1e9 }
+    assertEqual(phases, "pmmmmmac")
+    assertEqual(schedule.iterations, 1)
+    assertEqual(schedule.nanoseconds(processor: false), [1e9, 1e9, 1e9, 1e9, 1e9])
+    assertEqual(schedule.nanoseconds(processor: true)[0], 5e8)
+}
+
+@test
+fn theScheduleOfAShortBody() {
+    // Two nanoseconds, of which a half is the loop's.
+    let (schedule, phases) = run(BenchSettings()) { phase, count in F64(count) * (phase == .Overhead ? 0.5 : 2.0) }
+    expect(phases.hasPrefix("pp"))
+    expect(phases.contains("w"))
+    expect(phases.hasSuffix("ooooo" + "m".repeated(15) + "a"))
+    assertEqual(schedule.iterations, 5_000_000)
+    assertEqual(schedule.overhead(processor: false), 0.5)
+    assertEqual(schedule.nanoseconds(processor: false)[0], 1.5)
+}
+
+@test
+fn theScheduleTakesWhatItNeeds() {
+    // Always the same: fifteen will do. Never settled: a hundred.
+    var round = 0
+    let (noisy, _) = run(BenchSettings()) { phase, count in
+        round += 1
+        return F64(count) * 1e4 * (round % 2 == 0 ? 1.0 : 2.0)
+    }
+    assertEqual(noisy.samples.count, 100)
+    // Getting faster and faster: warm-up until three times its time.
+    var cost = 1e6
+    let (falling, phases) = run(BenchSettings()) { phase, count in
+        cost *= 0.9999
+        return F64(count) * cost
+    }
+    expect(phases.filter { $0 == 'w' }.count >= 27 && phases.filter { $0 == 'w' }.count <= 50)
+    expect(falling.samples.count >= 15)
+    var settings = BenchSettings.quick
+    settings.samples = 4
+    assertEqual(run(settings) { phase, count in F64(count) * 100.0 }.0.samples.count, 4)
+    // Free: the iterations are many, and not without end.
+    expect(run(settings) { phase, count in 0.0 }.0.samples.count == 4)
+}
+
+fn measurement(_ name: String) -> BenchMeasurement {
+    return BenchMeasurement(
+        name: name, samples: [BenchSample(iterations: 10, wall: 1010.0, processor: 2020.0), BenchSample(iterations: 10, wall: 1030.0, processor: 2040.0)],
+        wallOverhead: 1.0, processorOverhead: 2.0, memory: BenchMemory(allocations: 4.0, bytes: 100.0, retains: 2.0, releases: 6.0),
+        counters: BenchCounters(instructions: 5000.0, cycles: -1.0), check: "a\tb\n\\c", operations: 2, bytes: 4096, items: 8
+    )
+}
+
+@test
+fn aMeasurementIsWrittenAndRead() {
+    let m = measurement("M.f")
+    assertEqual(m.nanoseconds(processor: false), [50.0, 51.0])
+    assertEqual(m.nanoseconds(processor: true), [100.0, 101.0])
+    assertEqual(m.memoryPerOperation, BenchMemory(allocations: 2.0, bytes: 50.0, retains: 1.0, releases: 3.0))
+    let text = "printed\n" + m.encoded() + "more"
+    assertEqual(require(BenchMeasurement.decoded("M.f", text)), m)
+    var plain = m
+    plain.counters = none
+    assertEqual(require(BenchMeasurement.decoded("M.f", plain.encoded())), plain)
+    expect(BenchMeasurement.decoded("M.f", "printed\n") == none)
+}
+
+fn results() -> BenchResult[>..] {
+    let m = measurement("M.f(1, 2)")
+    let statistics = BenchStatistics(m.nanoseconds(processor: false))
+    return [
+        BenchResult { job: "", location: "m.sb:3", measurement: m, statistics: statistics, comparison: none },
+        BenchResult { job: "", location: "m.sb:9", measurement: measurement("M.g"), statistics: statistics, comparison: BenchComparison([50.0, 51.0], [60.0, 61.0]) },
+    ]
+}
+
+@test
+fn theReports() {
+    assertSnapshot(benchMarkdown(results()), named: "markdown")
+    assertSnapshot(benchCsv(results()), named: "csv")
+    assertSnapshot(benchJson(results(), processor: false), named: "json")
+    let text = formatBaseline(results())
+    assertSnapshot(text, named: "baseline")
+    let back = parseBaseline(text + "nothing\n")
+    assertEqual(back.map { $0.name }, ["M.f(1, 2)", "M.g"])
+    assertEqual(back[0].nanoseconds(processor: false), [50.0, 51.0])
+    assertEqual(back[0].nanoseconds(processor: true), [100.0, 101.0])
+}
+
+@test
+fn theBencherMeasures() {
+    let b = Bencher("sum", BenchSettings.quick)
+    expect(b.measurement == none)
+    var calls = 0
+    let last = b.iterate(() => {
+        calls += 1
+        return calls
+    })
+    assertEqual(last, calls)
+    let m = require(b.measurement)
+    assertEqual(m.samples.count, 3)
+    expect(calls >= m.samples[0].iterations * 4)
+}
+
+@test
+fn whatAnIterationAllocates() {
+    let b = Bencher("arrays", BenchSettings.quick)
+    b.iterate { U8[>..](repeating: 1, count: 1000) }
+    let memory = require(b.measurement).memory
+    if Runtime.executablePath().isEmpty {
+        return
+    }
+    expect(near(memory.allocations, 1.0))
+    expect(memory.bytes >= 1000.0 && memory.bytes < 1200.0)
+    expect(near(memory.releases, 1.0))
+}
+
+@test
+fn eachIterationItsOwn() {
+    let b = Bencher("sorted", BenchSettings.quick)
+    let values = [3, 1, 2]
+    var made = 0
+    var cleaned = 0
+    let last = b.iterate(setup: {
+        made += 1
+        return values
+    }, { (copy: inout Int[]) in
+        copy.sort()
+        return copy[0]
+    }, batch: 4, cleanup: { (copy: inout Int[]) in cleaned += copy[2] == 3 ? 1 : 0 })
+    assertEqual(last, 1)
+    // An overhead's run gives 'cleanup' values nothing has sorted.
+    expect(cleaned > 0 && cleaned <= made)
+    expect(b.measurement != none)
+}
+
+@test
+async fn awaitedIterations() {
+    let b = Bencher("awaited", BenchSettings.quick)
+    let last = await b.iterateAsync {
+        await Task.yield()
+        return 7
+    }
+    assertEqual(last, 7)
+    expect(b.measurement != none)
+    let c = Bencher("its own", BenchSettings.quick)
+    let cleaned = Atomic<Int>(0)
+    let sum = await c.iterateAsync(setup: { 20 }, { (n: Int) in
+        await Task.yield()
+        return n + 1
+    }, cleanup: { (n: Int) in _ = cleaned.add(n) })
+    assertEqual(sum, 21)
+    expect(cleaned.load() > 0)
+}
+
+@test
+fn casesAndFilters() {
+    let cases: () -> BenchArguments[>..] = () => [BenchArguments("1", { b in }), BenchArguments("1", { b in }), BenchArguments("a\nb", { b in })]
+    let bench = BenchCase { name: "S.b", location: "s.sb:1", tags: ["slow"], run: { b in }, cases: cases }
+    assertEqual(bench.expanded().map { $0.name }, ["S.b(1)", "S.b(1)#2", "S.b(a b)"])
+    let filter = try! TestFilter("tag:slow & file:s.sb & S.b")
+    expect(filter.matches(name: bench.name, location: bench.location, tags: bench.tags))
+    expect(!filter.matches(name: bench.name, location: "t.sb:1", tags: bench.tags))
+}

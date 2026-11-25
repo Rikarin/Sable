@@ -183,12 +183,19 @@ tools/bench/compare.py                  # against .NET, Rust and C
 tools/bench/compare.py map-int words    # some
 ```
 
-It prints a table of each benchmark's time in each language, and CI's
+It prints a table of each benchmark's time in each language, measured the same
+way in all of them (Sable's by `sable bench`), and CI's
 *Benchmarks* runs have the same tables as their summary. Each benchmark is a
 folder with its ports in it, under `benchmarks/library` (the standard library)
 or `benchmarks/programs`; [benchmarks/README.md](benchmarks/README.md) says how
-to add one. CI fails on a port that does not build or prints something else,
+to add one. CI fails on a port that does not build or computes something else,
 never on a time.
+
+```bash
+# Before and after, with a sable of before, built elsewhere:
+sable bench benchmarks/library/map-int --job "before=sable=$BEFORE/sable" --job after=
+sable bench benchmarks/library sha --job O2=-O2 --job O3=-O3
+```
 
 ## The syntax tree
 

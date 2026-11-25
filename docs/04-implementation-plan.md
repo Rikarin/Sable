@@ -1986,7 +1986,7 @@ Full design in [05-toolchain.md](05-toolchain.md).
   the first failure stops the run. Harness options: filters (substring of
   `Module.function`, any of several), `--exact`, `--list`, `--show-output`.
   Exit code 0 when all selected pass, 1 when one fails, 2 for bad usage.
-- **Benchmarks** warm up (doubling a batch until 50 ms have passed), size a
+- **Benchmarks** (as first built; #129 below) warm up (doubling a batch until 50 ms have passed), size a
   sample from that to last ≥ 5 ms, take 20 samples, and report mean, median
   and standard deviation per iteration. `--save-baseline <name>` writes
   `target/bench/<name>.txt` (or `--baseline-dir`): one tab-separated line per
@@ -2080,9 +2080,19 @@ Full design in [05-toolchain.md](05-toolchain.md).
   those, as the process that trapped ends. `TestReport.cs` writes JUnit and TRX.
 - **Deferred:** a time limit inside the harness's own runner (`--in-process`,
   or the harness run directly rather than by `sable test`); fixtures,
-  lifecycle, serial groups, retries and skipping (#107); `@bench(arguments:)`
-  and one filter for both commands (#129: `TestFilter` is in Sable.Testing for
-  it).
+  lifecycle, serial groups, retries and skipping (#107).
+- **The benchmark harness (#129).** `BenchRunner.sb` starts the harness again
+  for each benchmark (`--run-bench`), whose measurement it reads from lines
+  that start with a control character (`BenchMeasurement.encoded`).
+  `BenchSchedule` is the phases as a state machine fed times, so that tests
+  feed it any; `Bencher` reads the clocks. Jobs are other harnesses, built by
+  the driver in processes of their own (`BenchCommand`) and named to the first
+  with `--job`; a git ref's is built from `git archive`. A harness is optimised
+  by the passes `sable build` runs at its level (it had been built with those
+  of `-O0` and clang's `-O2`). Bytes are counted only while asked to be
+  (`sable_memory_counting`, what SABLE_STATS sets for a whole run), the
+  processor's counters and time are the builtin `measurement`.
+  `--asm` marks the benchmarks `noinline` in the IR and reads clang's `-S`.
 
 ### Packages, as implemented
 

@@ -30,9 +30,8 @@ public sealed class BenchRunnerTests {
         @bench
         fn summing(_ b: Bencher) {
             let n = 50
-            b.iterate(() => {
-                let total = work(n)
-            })
+            b.itemsPerIteration = n
+            b.check("\(b.iterate { work(n) })")
         }
 
         @bench
@@ -52,7 +51,7 @@ public sealed class BenchRunnerTests {
         }
         """;
 
-    const string Line = @"mean [0-9.]+ (ns|µs|ms) / iter, median [0-9.]+ (ns|µs|ms), ± [0-9.]+ (ns|µs|ms) \(3 × \d+ iterations\), [0-9.]+ allocations / iter";
+    const string Line = @"[0-9.]+ (ns|µs|ms) ± [0-9.]+ (ns|µs|ms) \(median [0-9.]+ (ns|µs|ms), [23] × \d+ iterations(, 1 outliers?)?\), allocations [0-9.]+ \([0-9.]+ [KM]?i?B\), retains [0-9.]+, releases [0-9.]+(, [0-9.]+ [kMGT]?(B|items)/s)*";
 
     [Fact]
     public void EachBenchmarkReportsItsTimePerIteration() {
@@ -114,10 +113,82 @@ public sealed class BenchRunnerTests {
         }
 
         var list = Native(Benches, TestKind.Bench, ["--list", "ing"]);
-        Assert.Equal("Speed.summing: bench (test.sb:14)\nSpeed.Grouped.joining: bench (test.sb:28)\n2 benchmarks\n", list.Stdout);
+        Assert.Equal("Speed.summing: bench (test.sb:14)\nSpeed.Grouped.joining: bench (test.sb:27)\n2 benchmarks\n", list.Stdout);
+
+        var described = Native(Benches, TestKind.Bench, ["--describe", "--filter", "name:*.timed* | forgets"]);
+        Assert.Matches(@"^Speed\.timedWhole\ttest\.sb:\d+\t-\t0\t\nSpeed\.forgets\ttest\.sb:\d+\t-\t0\t\nfiltered out\t2\n$", described.Stdout);
+        Assert.Equal(2, Native(Benches, TestKind.Bench, ["--filter", "("]).ExitCode);
+        Assert.Equal(2, Native(Benches, TestKind.Bench, ["--samples"]).ExitCode);
+        Assert.Equal(2, Native(Benches, TestKind.Bench, ["--samples", "none"]).ExitCode);
+        Assert.Equal(3, Native(Benches, TestKind.Bench, ["--run-bench", "Speed.none"]).ExitCode);
 
         var one = Native(Benches, TestKind.Bench, ["--quick", "Whole"]);
         Assert.Matches($"^running 1 benchmark\nbench Speed\\.timedWhole \\.\\.\\. {Line}\n\nbench result: 1 measured\n$", one.Stdout);
+    }
+
+    /// <summary>'arguments:' makes a benchmark for each value, named with it; 'tags:' is what a filter asks for.</summary>
+    [Fact]
+    public void ABenchmarkWithArgumentsIsOneForEach() {
+        if (!CanBuild) {
+            return;
+        }
+
+        const string program = """
+            module Sizes
+
+            import Sable.Testing
+
+            @bench(arguments: [16, 64], tags: ["copy"])
+            fn filled(_ b: Bencher, _ size: Int) {
+                b.bytesPerIteration = size
+                b.check("\(b.iterate { U8[>..](repeating: 1, count: size) }.count)")
+            }
+
+            struct Pairs {
+                @bench(arguments: [("a", 1), ("b", 2)])
+                static fn repeated(text: String, count: Int) {
+                    _ = blackBox(text.repeated(count))
+                }
+            }
+
+            @bench(arguments: [1], [2, 3])
+            async fn products(b: Bencher, x: Int, y: Int) {
+                b.check("\(await b.iterateAsync { x * y })")
+            }
+            """;
+        var run = Native(program, TestKind.Bench, ["--quick"]);
+        Assert.Equal("", run.Stderr);
+        Assert.Equal(0, run.ExitCode);
+        Assert.Matches($"^running 6 benchmarks\nbench Sizes\\.filled\\(16\\) \\.\\.\\. {Line}\nbench Sizes\\.filled\\(64\\) \\.\\.\\. {Line}\n"
+            + $"bench Sizes\\.Pairs\\.repeated\\(\"a\", 1\\) \\.\\.\\. {Line}\nbench Sizes\\.Pairs\\.repeated\\(\"b\", 2\\) \\.\\.\\. {Line}\n"
+            + $"bench Sizes\\.products\\(1, 2\\) \\.\\.\\. {Line}\nbench Sizes\\.products\\(1, 3\\) \\.\\.\\. {Line}\n\nbench result: 6 measured\n$", run.Stdout);
+        Assert.Equal("Sizes.filled(16)\ttest.sb:6\t-\t0\tcopy\nSizes.filled(64)\ttest.sb:6\t-\t0\tcopy\nfiltered out\t4\n", Native(program, TestKind.Bench, ["--describe", "--filter", "tag:copy"]).Stdout);
+        Assert.Equal("Sizes.filled(64): bench (test.sb:6)\n1 benchmark\n", Native(program, TestKind.Bench, ["--list", "--exact", "Sizes.filled(64)"]).Stdout);
+    }
+
+    /// <summary>A trap in a benchmark fails it, and the run, and no other benchmark.</summary>
+    [Fact]
+    public void ATrapFailsItsBenchmarkAlone() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var run = Native("""
+            module Failing
+
+            import Sable.Testing
+
+            @bench
+            fn traps(_ b: Bencher) {
+                b.iterate { fatalError("no good") }
+            }
+
+            @bench
+            fn works() {
+            }
+            """, TestKind.Bench, ["--quick"]);
+        Assert.Equal(1, run.ExitCode);
+        Assert.Matches($"bench Failing\\.traps \\.\\.\\. FAILED \\(exit status 134\\)\n    fatal error: no good\n(    .*\n)*bench Failing\\.works \\.\\.\\. {Line}\n\nbench result: 1 measured; 1 failed\n$", run.Stdout);
     }
 
     [Fact]
@@ -136,15 +207,23 @@ public sealed class BenchRunnerTests {
             var lines = File.ReadAllLines(Path.Combine(place, "before.txt"));
             Assert.StartsWith("# sable bench baseline", lines[0], StringComparison.Ordinal);
             Assert.Equal(3, lines.Length);
-            Assert.Matches(@"^Speed\.summing\t\d+\t\d+\t\d+\t\d+$", lines[1]);
-            Assert.Matches(@"^Speed\.Grouped\.joining\t\d+\t\d+\t\d+\t\d+$", lines[2]);
+            Assert.Matches(@"^Speed\.summing(\t[0-9.]+ [0-9.]+){3}$", lines[1]);
+            Assert.Matches(@"^Speed\.Grouped\.joining(\t[0-9.]+ [0-9.]+){3}$", lines[2]);
 
             var compared = Native(Benches, TestKind.Bench, ["--quick", "--baseline", "before", "--baseline-dir", place, "summing", "Whole"]);
             Assert.Equal(0, compared.ExitCode);
             Assert.StartsWith("running 2 benchmarks against baseline 'before'\n", compared.Stdout, StringComparison.Ordinal);
-            Assert.Matches($"bench Speed\\.summing \\.\\.\\. {Line}; [+-][0-9.]+% vs baseline \\((within noise|improved|REGRESSED)\\)\n", compared.Stdout);
+            Assert.Matches($"bench Speed\\.summing \\.\\.\\. {Line}; [+-][0-9.]+% vs baseline \\(within noise, p = [0-9.]+\\)\n", compared.Stdout);
             Assert.Matches($"bench Speed\\.timedWhole \\.\\.\\. {Line}; new\n", compared.Stdout);
-            Assert.Matches(@"\nbench result: 2 measured; [01] regressed\n$", compared.Stdout);
+            Assert.Matches(@"\nbench result: 2 measured; 0 regressed\n$", compared.Stdout);
+
+            // Slower than a baseline that says it took no time to speak of, for certain.
+            File.WriteAllText(Path.Combine(place, "fast.txt"), $"Speed.summing{string.Concat(Enumerable.Range(1, 20).Select(static i => $"\t0.0{i} 0.0{i}"))}\n");
+            string[] slow = ["--samples", "20", "--sample-ms", "0.1", "--warm-up-ms", "0.1", "--baseline", "fast", "--baseline-dir", place, "summing"];
+            var slower = Native(Benches, TestKind.Bench, slow);
+            Assert.EndsWith("bench result: 1 measured; 1 regressed\n", slower.Stdout, StringComparison.Ordinal);
+            Assert.Equal(0, slower.ExitCode);
+            Assert.Equal(1, Native(Benches, TestKind.Bench, [..slow, "--fail-on-regression"]).ExitCode);
 
             var missing = Native(Benches, TestKind.Bench, ["--quick", "--baseline", "after", "--baseline-dir", place]);
             Assert.Equal(2, missing.ExitCode);
@@ -154,58 +233,39 @@ public sealed class BenchRunnerTests {
         }
     }
 
-    /// <summary>The statistics, the baseline's format and the verdicts, on numbers chosen rather than measured.</summary>
+    /// <summary>The statistics and the verdicts, on numbers chosen rather than measured (tests/lib/Sable.Testing has the rest).</summary>
     [Fact]
     public void TheArithmeticOnFixedNumbers() =>
         Assert.Equal(
             """
-            mean 5.00 median 4.50 deviation 2.94
-            mean 4.00 median 4.00 deviation 0.00
-            +10.00% vs baseline (REGRESSED)
-            +3.00% vs baseline (within noise)
-            -20.00% vs baseline (improved)
-            +10.00% vs baseline (within noise)
-            Speed.a 5000 4500 2943 100
-            Speed.b 1500 1500 0 7
-            2 Speed.b 1.50
+            5.00 4.50 2.94
+            6 1 10.50
+            BenchVerdict.Regressed BenchVerdict.Improved BenchVerdict.WithinNoise
+            0.007937
+            4.1405 12.7062
             850 ns|12.40 µs|3.05 ms|1.20 s|7.25 ns
 
             """,
             Programs.AssertAgree("""
                 module Fixed
                 import Sable.Testing
-                import Sable.Text
-
-                fn show(_ r: BenchResult) {
-                    print("mean \(r.mean:.2f) median \(r.median:.2f) deviation \(r.deviation:.2f)")
-                }
-
-                fn result(_ mean: F64, _ deviation: F64) -> BenchResult {
-                    return BenchResult { name: "x", mean: mean, median: mean, deviation: deviation, iterations: 1 }
-                }
 
                 @main
                 fn main() {
-                    let a = summarise("Speed.a", [2.0, 4.0, 5.0, 9.0], 100)
-                    show(a)
-                    show(summarise("one", [4.0], 1))
+                    let a = BenchStatistics([2.0, 4.0, 5.0, 9.0], outliers: .Keep)
+                    print("\(a.mean:.2f) \(a.median:.2f) \(a.deviation:.2f)")
+                    let b = BenchStatistics([10.0, 11.0, 10.0, 11.0, 10.0, 11.0, 50.0])
+                    print("\(b.count) \(b.removed) \(b.mean:.2f)")
 
-                    print(comparison(result(100.0, 1.0), result(110.0, 1.0)).0)
-                    print(comparison(result(100.0, 1.0), result(103.0, 1.0)).0)
-                    print(comparison(result(100.0, 1.0), result(80.0, 1.0)).0)
-                    // Noisy runs: 10% is within twice their deviations.
-                    print(comparison(result(100.0, 3.0), result(110.0, 3.0)).0)
-
-                    let b = BenchResult { name: "Speed.b", mean: 1.5, median: 1.5, deviation: 0.0, iterations: 7 }
-                    let text = formatBaseline([a, b])
-                    for line in text.lines() {
-                        if !line.hasPrefix("#") {
-                            print(line.replacing("\t", with: " "))
-                        }
+                    var before: F64[>..] = []
+                    var after: F64[>..] = []
+                    for i in 0..<12 {
+                        before.append(100.0 + F64(i) / 10.0)
+                        after.append(120.0 + F64(i) / 10.0)
                     }
-                    let back = parseBaseline(text)
-                    print("\(back.count) \(back[1].name) \(back[1].mean:.2f)")
-
+                    print("\(BenchComparison(before, after).verdict:?) \(BenchComparison(after, before).verdict:?) \(BenchComparison(before, before).verdict:?)")
+                    print("\(MannWhitney([1.0, 2.0, 3.0, 4.0, 5.0], [6.0, 7.0, 8.0, 9.0, 10.0]).probability:.6f)")
+                    print("\(studentQuantile(0.9995, 14):.4f) \(studentQuantile(0.975, 1):.4f)")
                     print("\(formatDuration(850))|\(formatDuration(12400))|\(formatDuration(3050000))|\(formatDuration(1200000000))|\(formatNanoseconds(7.25))")
                 }
                 """).Stdout
@@ -227,8 +287,97 @@ public sealed class BenchRunnerTests {
             Assert.Equal(0, bench.Run([file, "--list"]));
             Assert.Equal(2, bench.Run([file, "--doc"]));
             Assert.Equal(2, bench.Run([file, "--save-baseline"]));
+            Assert.Equal(2, bench.Run([file, "--job", "no words"]));
+            Assert.Equal(2, bench.Run([file, "--job", "a=not-a-word"]));
+            Assert.Equal(2, bench.Run([file, "--job", "a=-O0", "--job", "a=-O1"]));
+
+            // Each format, and a history's rows, which are added to.
+            string At(string name) => Path.Combine(directory.FullName, name);
+            for (var i = 0; i < 2; i++) {
+                Assert.Equal(0, bench.Run([file, "--quick", "--markdown", At("m.md"), "--csv", At("c.csv"), "--json", At("j.json"), "--history", At("h.tsv"), "summing"]));
+            }
+
+            Assert.Matches(@"^\| benchmark \|.*\n\|:--\|.*\n\| `Speed\.summing` \|.*\n$", File.ReadAllText(At("m.md")));
+            Assert.Matches(@"^benchmark,job,mean_ns,.*\nSpeed\.summing,,[0-9.]+,.*\n$", File.ReadAllText(At("c.csv")));
+            using var json = System.Text.Json.JsonDocument.Parse(File.ReadAllText(At("j.json")));
+            var result = json.RootElement.GetProperty("benchmarks")[0];
+            Assert.Equal("1225", result.GetProperty("check").GetString());
+            Assert.Equal(3, result.GetProperty("processor").GetArrayLength());
+            Assert.Matches(@"^date\tcommit\tbenchmark\tms\tallocations\tretains\treleases\n(\d{4}-\d\d-\d\d\t\S+\tSpeed\.summing\t[0-9.]+\t0\t0\t0\n){2}$", File.ReadAllText(At("h.tsv")));
         } finally {
             directory.Delete(true);
         }
+    }
+
+    /// <summary>What the benchmarks are compiled to, in place of a run; each a function of its own, and its closures.</summary>
+    [Fact]
+    public void TheSilAndTheAssemblyOfABenchmark() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-bench-asm-");
+        try {
+            File.WriteAllText(Path.Combine(directory.FullName, "speed.sb"), Benches);
+            var (code, output, errors) = Sable(directory.FullName, "bench", "speed.sb", "Whole", "--sil", "--asm");
+            Assert.True(code == 0, errors);
+            Assert.StartsWith("sil @Speed.timedWhole : $() -> ()", output, StringComparison.Ordinal);
+            Assert.Contains("sable.Speed.timedWhole", output[output.IndexOf("\n}\n", StringComparison.Ordinal)..], StringComparison.Ordinal);
+            Assert.DoesNotContain("joining", output, StringComparison.Ordinal);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>The benchmarks as they are at a commit, and as they are now, run in turn and compared; what one computed differs, and fails.</summary>
+    [Fact]
+    public void ComparedWithACommit() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-bench-git-");
+        try {
+            void Git(params string[] arguments) => Assert.Equal(0, Start("git", directory.FullName, ["-c", "user.name=t", "-c", "user.email=t@example.org", ..arguments]).ExitCode);
+            var place = Directory.CreateDirectory(Path.Combine(directory.FullName, "inner")).FullName;
+            var file = Path.Combine(place, "speed.sb");
+            File.WriteAllText(file, Benches);
+            Git("init", "-q");
+            Git("add", ".");
+            Git("commit", "-q", "-m", "first");
+            File.WriteAllText(file, Benches.Replace("let n = 50", "let n = 60", StringComparison.Ordinal).Replace("fn timedWhole", "fn timedNew", StringComparison.Ordinal));
+
+            var (code, output, errors) = Sable(place, "bench", "speed.sb", "--quick", "--launches", "1", "--compare", "HEAD", "summing", "timed");
+            Assert.True(code == 1, errors + output);
+            Assert.Contains("bench Speed.summing ... computed '1225', and then '1770'\n", output, StringComparison.Ordinal);
+            Assert.Matches($"bench Speed\\.summing \\[HEAD\\] \\.\\.\\. {Line}\n", output);
+            Assert.Contains("bench Speed.summing [this] ... ", output, StringComparison.Ordinal);
+            Assert.Contains("% vs HEAD (", output, StringComparison.Ordinal);
+            Assert.Contains("bench Speed.timedNew [HEAD] ... not there\n", output, StringComparison.Ordinal);
+            Assert.Contains("bench Speed.timedNew [this] ... ", output, StringComparison.Ordinal);
+
+            (code, _, errors) = Sable(place, "bench", "speed.sb", "--compare", "no-such-commit");
+            Assert.Equal(2, code);
+            Assert.Contains("'no-such-commit' is neither a file nor a commit", errors, StringComparison.Ordinal);
+        } finally {
+            // Git's objects are read-only, which Windows does not delete.
+            foreach (var path in Directory.GetFiles(directory.FullName, "*", SearchOption.AllDirectories)) {
+                File.SetAttributes(path, FileAttributes.Normal);
+            }
+
+            directory.Delete(true);
+        }
+    }
+
+    static (int ExitCode, string Output, string Errors) Sable(string directory, params string[] arguments) =>
+        Start(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") is { Length: > 0 } host ? host : "dotnet", directory, [typeof(Command).Assembly.Location, ..arguments]);
+
+    static (int ExitCode, string Output, string Errors) Start(string program, string directory, string[] arguments) {
+        var start = new System.Diagnostics.ProcessStartInfo(program, arguments) { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
+        using var process = System.Diagnostics.Process.Start(start)!;
+        var errors = process.StandardError.ReadToEndAsync();
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, output.Replace("\r\n", "\n", StringComparison.Ordinal), errors.Result);
     }
 }

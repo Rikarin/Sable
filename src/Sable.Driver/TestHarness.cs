@@ -67,16 +67,18 @@ public static class TestHarness {
         bool checkExclusivity = true,
         Func<string, bool>? coverage = null,
         Func<string, bool>? coverLibrary = null,
-        string? optLevel = null
+        string? optLevel = null,
+        bool apart = false
     ) {
         var warnings = new List<string>();
         CoverageMap? map = null;
         var result = Compile(trees, kind, out tests, docExamples, debugDirectory, checkExclusivity, warnings,
-            coverage is null && coverLibrary is null ? null : (coverage ?? (static _ => false), coverLibrary, m => map = m), optLevel);
+            coverage is null && coverLibrary is null ? null : (coverage ?? (static _ => false), coverLibrary, m => map = m), optLevel, apart);
         return result with { Warnings = warnings, Coverage = map };
     }
 
     /// <param name="optLevel">The level whose SIL passes are run; every one of them when null.</param>
+    /// <param name="apart">Keep each test a function of its own, inlined nowhere: to look at what it became.</param>
     /// <param name="warnings">Filled with the program's warnings, once it has been checked.</param>
     static CompileResult Compile(
         IReadOnlyList<SyntaxTree> trees,
@@ -87,7 +89,8 @@ public static class TestHarness {
         bool checkExclusivity,
         List<string> warnings,
         (Func<string, bool> Measured, Func<string, bool>? Library, Action<CoverageMap> Made)? coverage = null,
-        string? optLevel = null
+        string? optLevel = null,
+        bool apart = false
     ) {
         tests = [];
         var program = trees.ToList();
@@ -152,6 +155,13 @@ public static class TestHarness {
         var problems = SilVerifier.Verify(module);
         if (problems.Count > 0) {
             return new(module, null, [..problems.Select(static p => $"internal error: SIL verification failed: {p}")]);
+        }
+
+        if (apart) {
+            var names = tests.Select(static t => t.QualifiedName).ToHashSet(StringComparer.Ordinal);
+            foreach (var function in module.Functions.Where(f => names.Contains(f.Name))) {
+                function.Inline = SilInline.Never;
+            }
         }
 
         // Counted where the program's own code is, before any pass: the

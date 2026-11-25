@@ -1,6 +1,6 @@
-module Bench
+module PingPong
 
-import Sable.Time
+import Sable.Testing
 
 // Ping-pong: two tasks hand a ball back and forth through an actor a
 // hundred thousand times — each parked in a wait list until it is its turn,
@@ -51,25 +51,32 @@ fn yielding(_ table: Table, _ player: Int, _ rounds: Int) async -> Int {
     }
 }
 
-@main
-fn main() async {
-    let rounds = 100_000
+let rounds = 100_000
+
+// A hit's time.
+@bench
+fn parked(_ b: Bencher) async {
     let table = Table()
-
-    var start = Instant.now()
-    let a = Task.spawn { await table.hit(0, rounds) }
-    let b = Task.spawn { await table.hit(1, rounds) }
-    await a.value
-    await b.value
-    print("ping-pong, parked: \(start.elapsed.totalNanoseconds / rounds) ns per hit")
-
-    await table.reset()
-    start = Instant.now()
-    let c = Task.spawn { await yielding(table, 0, rounds) }
-    let d = Task.spawn { await yielding(table, 1, rounds) }
-    let hits = await c.value + await d.value
-    print("ping-pong, yielding: \(start.elapsed.totalNanoseconds / rounds) ns per hit")
-    if hits != rounds {
-        print("hits lost")
+    b.operationsPerIteration = rounds
+    await b.iterateAsync {
+        await table.reset()
+        let first = Task.spawn { await table.hit(0, rounds) }
+        let second = Task.spawn { await table.hit(1, rounds) }
+        await first.value
+        await second.value
     }
+    b.check("\(await table.turn())")
+}
+
+@bench
+fn yielded(_ b: Bencher) async {
+    let table = Table()
+    b.operationsPerIteration = rounds
+    let hits = await b.iterateAsync {
+        await table.reset()
+        let first = Task.spawn { await yielding(table, 0, rounds) }
+        let second = Task.spawn { await yielding(table, 1, rounds) }
+        return await first.value + await second.value
+    }
+    b.check("\(hits)")
 }

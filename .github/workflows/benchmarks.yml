@@ -1,6 +1,7 @@
 # Sable against .NET, Rust and C (tools/bench/compare.py), the tables in the
-# run's summary. What fails it is a benchmark that does not build or run, or
-# a port that prints something else; never a time: a shared runner's are too
+# run's summary and artifact (benchmarks/README.md says what their columns
+# are). What fails it is a benchmark that does not build or run, or a port
+# that computes something else; never a time: a shared runner's are too
 # noisy to hold anyone to, and only those of one run compare.
 name: Benchmarks
 
@@ -10,10 +11,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
-      runs:
-        description: Runs of each benchmark (the median counts)
+      samples:
+        description: Samples of each benchmark, at most (the median counts)
         required: false
-        default: "5"
+        default: "15"
 
 concurrency:
   group: benchmarks-${{ github.ref }}
@@ -55,8 +56,8 @@ jobs:
         id: compare
         env:
           SABLE: src/Sable.Driver/bin/Release/net11.0/sable
-          RUNS: ${{ inputs.runs || '5' }}
-        run: tools/bench/compare.py --runs "$RUNS" --require dotnet,rust,c --markdown benchmarks.md
+          SAMPLES: ${{ inputs.samples || '15' }}
+        run: tools/bench/compare.py --samples "$SAMPLES" --require dotnet,rust,c --markdown benchmarks.md
 
       - name: Report
         if: ${{ !cancelled() && steps.compare.outcome != 'skipped' }}

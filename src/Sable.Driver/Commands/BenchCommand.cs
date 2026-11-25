@@ -34,7 +34,7 @@ public sealed class BenchCommand : HarnessCommand {
         10 ms, the loop's own time taken out, and 15 to 100 samples taken, until the mean's 99.9 %
         confidence interval is 2 % either way or 3 s have passed.
 
-          --samples <n>           that many samples
+          --samples <n>           that many samples, unless the time for them is over
           --sample-ms, --warm-up-ms, --budget-ms <n>  a sample's time, the warm-up's, and the most there is for samples
           --quick                 a few short samples: to check the benchmarks run, not to time them
           --metric wall|processor what is reported and compared: the clock's time (the default), or
@@ -352,14 +352,7 @@ public sealed class BenchCommand : HarnessCommand {
         }
 
         if (_asm) {
-            // Each as a function of its own, where the harness would have it inlined.
-            var apart = string.Join('\n', ir.Split('\n').Select(line =>
-                line.StartsWith("define ", StringComparison.Ordinal) && line.EndsWith(" nounwind {", StringComparison.Ordinal)
-                && line.IndexOf("sable.", StringComparison.Ordinal) is var at and >= 0 && line.IndexOf('(', at) is var end and >= 0
-                && Wanted(line[(at + "sable.".Length)..end].TrimEnd('"'))
-                    ? line[..^1] + "noinline {"
-                    : line));
-            var assembly = NativeBuild.CompileToAssembly(apart, Native);
+            var assembly = NativeBuild.CompileToAssembly(ir, Native);
             if (!assembly.Succeeded) {
                 Console.Error.Write(assembly.Output);
                 return 1;

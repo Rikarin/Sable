@@ -50,6 +50,14 @@ public sealed class TestAttributeTests {
     }
 
     [Fact]
+    public void ABenchmarksArguments() {
+        Assert.Empty(ErrorsOf(Program("@bench(arguments: [1, 2], tags: [\"fast\"])\nfn b(_ x: Bencher, _ n: Int) { x.iterate(() => { }) }\n@bench(arguments: [(1, \"a\")])\nfn c(_ n: Int, _ s: String) { }")));
+        Rejects("S3100", "@bench(arguments: [1])\nfn b() { }", "takes a parameter for them");
+        Rejects("S3100", "@bench(arguments: [1], [2], [3])\nfn b(_ x: Bencher, _ n: Int, _ m: Int) { }", "tuples of the 2 values");
+        Assert.NotEmpty(ErrorsOf(Program("@bench(arguments: [\"a\"])\nfn b(_ x: Bencher, _ n: Int) { x.iterate(() => { }) }")));
+    }
+
+    [Fact]
     public void NotBoth() =>
         Rejects("S3106", "@test @bench\nfn t() { }", "one of a test, a benchmark and a fuzz target");
 
@@ -57,7 +65,9 @@ public sealed class TestAttributeTests {
     public void TheAttributesTakeOnlyWhatTheyTake() {
         Rejects("S3107", "@test(\"slow\")\nfn t() { }", "'@test' takes nothing, or 'traps'");
         Rejects("S3107", "@test(traps: 1)\nfn t() { }", "'@test' takes nothing, or 'traps'");
-        Rejects("S3107", "@bench(traps)\nfn b() { }", "'@bench' takes no arguments");
+        Rejects("S3107", "@bench(traps)\nfn b() { }", "'@bench' takes nothing, or 'arguments: [...]'");
+        Rejects("S3107", "@bench(timeout: .seconds(1))\nfn b() { }", "'@bench' takes nothing, or 'arguments: [...]'");
+        Rejects("S3107", "@fuzz(1)\nfn f(_ data: U8[:]) { }", "'@fuzz' takes no arguments");
     }
 
     [Fact]

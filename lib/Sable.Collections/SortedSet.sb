@@ -21,11 +21,11 @@ module Sable.Collections
 public struct SortedSet<Element: Comparable>: Sequence {
     public alias Iter = SortedSetIterator<Element>
 
-    var tree: BTree<Element, Bool>
+    var tree: BTree<Element, SortedSetMember>
 
     /// An empty set.
     public init() {
-        tree = BTree<Element, Bool>()
+        tree = BTree<Element, SortedSetMember>()
     }
 
     /// The set of the elements, each once. Elements already in order are
@@ -58,15 +58,15 @@ public struct SortedSet<Element: Comparable>: Sequence {
     }
 
     /// The tree of elements in order, each once.
-    static fn treeOf(_ elements: Element[:]) -> BTree<Element, Bool> {
-        var marks: Bool[>..] = []
+    static fn treeOf(_ elements: Element[:]) -> BTree<Element, SortedSetMember> {
+        var marks: SortedSetMember[>..] = []
         marks.reserveCapacity(elements.count)
         var i = 0
         while i < elements.count {
-            marks.append(true)
+            marks.append(SortedSetMember { })
             i = i + 1
         }
-        return BTree<Element, Bool>.build(elements, marks)
+        return BTree<Element, SortedSetMember>.build(elements, marks)
     }
 
     /// How many elements there are.
@@ -83,7 +83,7 @@ public struct SortedSet<Element: Comparable>: Sequence {
     /// Adds the element: true if it was not there already.
     @discardable
     public mutating fn insert(_ element: Element) -> Bool {
-        return tree.insert(element, true) == none
+        return tree.insert(element, SortedSetMember { }) == none
     }
 
     /// Removes the element: true if it was there.
@@ -94,7 +94,7 @@ public struct SortedSet<Element: Comparable>: Sequence {
 
     /// Removes every element.
     public mutating fn removeAll() {
-        tree = BTree<Element, Bool>()
+        tree = BTree<Element, SortedSetMember>()
     }
 
     /// The least element, or none.
@@ -208,7 +208,7 @@ public struct SortedSet<Element: Comparable>: Sequence {
             return
         }
         for element in added {
-            tree.insert(element, true)
+            tree.insert(element, SortedSetMember { })
         }
     }
 
@@ -412,7 +412,7 @@ extension SortedSet: Debug where Element: Debug {
 
 /// Gives a SortedSet's elements in order.
 public struct SortedSetIterator<Element: Comparable>: Iterator {
-    var cursor: BTreeCursor<Element, Bool>
+    var cursor: BTreeCursor<Element, SortedSetMember>
 
     public mutating fn next() -> Element? {
         if let entry = cursor.next() {
@@ -426,7 +426,7 @@ public struct SortedSetIterator<Element: Comparable>: Iterator {
 public struct SortedSetRange<Element: Comparable>: Sequence {
     public alias Iter = SortedSetIterator<Element>
 
-    let tree: BTree<Element, Bool>
+    let tree: BTree<Element, SortedSetMember>
     let lower: Element?
     let lowerIncluded: Bool
     let upper: Element?
@@ -436,3 +436,6 @@ public struct SortedSetRange<Element: Comparable>: Sequence {
         return SortedSetIterator { cursor: BTreeCursor(tree, from: lower, included: lowerIncluded, to: upper, included: upperIncluded) }
     }
 }
+
+/// What a set's tree has for each element: nothing.
+struct SortedSetMember { }

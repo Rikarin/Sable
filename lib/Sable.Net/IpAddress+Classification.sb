@@ -1,7 +1,8 @@
 module Sable.Net
 
 // What kind of address one is, by IANA's special-purpose address registries
-// (RFC 6890), as they were in 2026. Each question is asked of the canonical
+// (RFC 6890), as of 2025-10-09, which tools/conformance/net compares with
+// them. Each question is asked of the canonical
 // address: '::ffff:127.0.0.1' is the loopback, as a packet to it would find,
 // and a filter that said otherwise would let a request through to it.
 

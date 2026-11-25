@@ -1410,8 +1410,9 @@ public final class YamlParser {
             at = i
             skipLine()
             written.append(contentsOf: bytes[i..<at])
-            broken = at < count
-            if broken {
+            // The end of the text ends a line as a break does.
+            broken = true
+            if at < count {
                 newLine()
             }
             end = at

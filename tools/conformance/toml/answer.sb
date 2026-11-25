@@ -1,0 +1,103 @@
+module TomlConformance
+
+// Answers what run.py asks of Sable.Serialize's TOML: the path of a document
+// a line, and for each its value as toml-test's tagged JSON, or "error" and
+// why. A document that does not come back the same once it is written, or
+// edited and left as it was, answers that instead.
+
+import Sable.IO
+import Sable.Serialize
+import Sable.Text
+import Sable.Time
+
+fn quoted(_ text: String) -> String {
+    var made: U8[>..] = [0x22]
+    for byte in text.utf8 {
+        if byte < 0x20 || byte == 0x22 || byte == 0x5C || byte == 0x7F {
+            made.append(utf8: "\\u00")
+            made.append(utf8: String.format(byte))
+        } else {
+            made.append(byte)
+        }
+    }
+    made.append(0x22)
+    unsafe {
+        return String.fromUtf8Unchecked(made)
+    }
+}
+
+extension String {
+    static fn format(_ byte: U8) -> String {
+        let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+        return digits[Int(byte >> 4)] + digits[Int(byte & 15)]
+    }
+}
+
+fn tagged(_ value: TomlValue) -> String {
+    return match value {
+        case .Text(let text)      => leaf("string", text)
+        case .Integer(let number) => leaf("integer", "\(number)")
+        case .Float(let number)   => leaf("float", "\(number)")
+        case .Bool(let truth)     => leaf("bool", "\(truth)")
+        case .OffsetDateTime(_)   => leaf("datetime", value.text!)
+        case .LocalDateTime(_)    => leaf("datetime-local", value.text!)
+        case .LocalDate(_)        => leaf("date-local", value.text!)
+        case .LocalTime(_)        => leaf("time-local", value.text!)
+        case .Array(let items)    => "[" + items.map({ tagged($0) }).joined(separator: ",") + "]"
+        case .Table(let table)    => tagged(table)
+    }
+}
+
+fn leaf(_ type: String, _ value: String) -> String {
+    return "{\"type\":\"" + type + "\",\"value\":" + quoted(value) + "}"
+}
+
+// In the order of the keys: a written table has its own values first.
+fn tagged(_ table: TomlTable) -> String {
+    var members: String[>..] = []
+    for entry in table.entries {
+        members.append(quoted(entry.key) + ":" + tagged(entry.value))
+    }
+    members.sort()
+    return "{" + members.joined(separator: ",") + "}"
+}
+
+fn answer(_ path: String) -> String {
+    var text = ""
+    do {
+        text = try String.fromUtf8(try! File.readBytes(path))
+    } catch {
+        return "error " + quoted(error.description())
+    }
+    do {
+        let table = try Toml.parse(text)
+        let json = tagged(table)
+        guard let written = try? Toml.write(table), let again = try? Toml.parse(written) else {
+            return "not written, or not read again"
+        }
+        // The text is compared: NaN is not itself.
+        if tagged(again) != json {
+            return "another value once written: " + quoted(written)
+        }
+        guard let document = try? TomlDocument.parse(text) else {
+            return "not a TomlDocument"
+        }
+        if document.text() != text {
+            return "another text as a TomlDocument"
+        }
+        return json
+    } catch {
+        return "error " + quoted(error.description())
+    }
+}
+
+fn main() {
+    var input = BufferedReader(Console.standardInput)
+    let written = BufferedWriter(Console.standardOutput)
+    while let path = try! input.readLine() {
+        var text: U8[>..] = []
+        text.append(utf8: answer(path) + "\n")
+        try! written.write(text)
+    }
+    try! written.flush()
+}

@@ -1,0 +1,42 @@
+module NetConformance
+
+// Answers what run.py asks of Sable.Net: for an address, what it is said to
+// be; for a scheme and "port", its port.
+
+import Sable.IO
+import Sable.Net
+
+fn answer(_ line: String) -> String {
+    if line.hasPrefix("port ") {
+        let scheme = line.split(separator: ' ')[1]
+        if let port = Url.defaultPort(scheme) {
+            return "\(port)"
+        }
+        return "none"
+    }
+    let address = try! IpAddress.parse(line)
+    var kinds: String[>..] = []
+    if address.isGlobal { kinds.append("global") }
+    if address.isUnspecified { kinds.append("unspecified") }
+    if address.isLoopback { kinds.append("loopback") }
+    if address.isPrivate { kinds.append("private") }
+    if address.isLinkLocal { kinds.append("link-local") }
+    if address.isShared { kinds.append("shared") }
+    if address.isDocumentation { kinds.append("documentation") }
+    if address.isBenchmarking { kinds.append("benchmarking") }
+    if address.isMulticast { kinds.append("multicast") }
+    if address.isBroadcast { kinds.append("broadcast") }
+    if address.isReserved { kinds.append("reserved") }
+    return kinds.joined(separator: " ")
+}
+
+fn main() {
+    var input = BufferedReader(Console.standardInput)
+    let written = BufferedWriter(Console.standardOutput)
+    while let line = try! input.readLine() {
+        var text: U8[>..] = []
+        text.append(utf8: answer(line) + "\n")
+        try! written.write(text)
+    }
+    try! written.flush()
+}

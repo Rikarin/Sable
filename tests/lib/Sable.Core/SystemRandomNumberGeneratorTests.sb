@@ -43,3 +43,31 @@ fn twoGeneratorsDoNotRepeatEachOther() {
     var b = SystemRandomNumberGenerator()
     assert(a.next() != b.next() || a.next() != b.next())
 }
+
+@test
+fn fillGivesEveryByteRandomBits() {
+    var system = SystemRandomNumberGenerator()
+    // Past the 256 bytes getentropy gives at once.
+    var bytes = U8[>..](repeating: 0, count: 1000)
+    var everSet = bytes
+    for _ in 0..<64 {
+        system.fill(bytes: &bytes)
+        for i in 0..<1000 {
+            everSet[i] = everSet[i] | bytes[i]
+        }
+    }
+    assert(everSet == U8[>..](repeating: 0xFF, count: 1000))
+}
+
+@test
+fn fillOfASliceChangesThatRangeAlone() {
+    var system = SystemRandomNumberGenerator()
+    var bytes = U8[>..](repeating: 0, count: 48)
+    let before = bytes
+    system.fill(bytes: &bytes[16..<32])
+    assert(bytes[..<16] == before[..<16] && bytes[32...] == before[32...])
+    assert(bytes != before && before == U8[>..](repeating: 0, count: 48))
+    var nothing: U8[>..] = []
+    system.fill(bytes: &nothing)
+    assert(nothing.isEmpty)
+}

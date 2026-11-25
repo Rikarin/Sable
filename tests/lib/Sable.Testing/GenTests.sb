@@ -1,0 +1,69 @@
+module GenTests
+
+// The makers of 'Gen': each is of the type it is called through, or of the
+// one its arguments say (Sable.Testing). Run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Testing
+
+// What a generator makes of twenty seeds.
+fn made<T>(_ generator: Gen<T>) -> T[>..] {
+    var all: T[>..] = []
+    for seed in 1...20 {
+        all.append(generator.value(from: Choices(seed: U64(seed))))
+    }
+    return all
+}
+
+@test
+fn aNumberIsOfTheTypeNamed() {
+    let small = Gen<U32>.number(in: 0...4)
+    let given: Gen<U32> = small
+    expect(made(given).allSatisfy { $0 <= 4 })
+    let signed: Gen<I8> = Gen<I8>.number(in: -3...3)
+    expect(made(signed).allSatisfy { $0 >= -3 && $0 <= 3 })
+    let wanted: Gen<U16> = Gen.number(in: U16(5)...6)
+    expect(made(wanted).allSatisfy { $0 == 5 || $0 == 6 })
+    let plain: Gen<Int> = Gen.number(in: 0...0)
+    expect(made(plain).allSatisfy { $0 == 0 })
+}
+
+@test
+fn aFloatIsOfTheTypeNamed() {
+    let narrow: Gen<F32> = Gen<F32>.float(in: -1.0...1.0)
+    expect(made(narrow).allSatisfy { $0 >= -1.0 && $0 <= 1.0 })
+    let wide: Gen<F64> = Gen.float(in: 2.0...3.0)
+    expect(made(wide).allSatisfy { $0 >= 2.0 && $0 <= 3.0 })
+    expect(made(Gen<F16>.float(in: 0.0...1.0)).allSatisfy { $0 >= 0.0 && $0 <= 1.0 })
+    // The simplest is the lower end.
+    expect(Gen.float(in: 2.0...3.0).value(from: Choices(replaying: [])) == 2.0)
+    expect(made(Gen<F64>.finite()).allSatisfy { $0.isFinite })
+    expect(made(Gen.finite()).allSatisfy { $0.isFinite })
+}
+
+@test
+fn elementsAreOfTheTypeNamed() {
+    let bytes = Gen<U8>.element(of: [1, 2, 3])
+    let given: Gen<U8> = bytes
+    expect(made(given).allSatisfy { $0 >= 1 && $0 <= 3 })
+    let one: Gen<U64> = Gen<U64>.always(7)
+    expect(made(one).allSatisfy { $0 == 7 })
+    let either = Gen<I16>.oneOf([Gen<I16>.always(1), Gen<I16>.number(in: 8...9)])
+    let of: Gen<I16> = either
+    expect(made(of).allSatisfy { $0 == 1 || $0 == 8 || $0 == 9 })
+    let weighted = Gen<U8>.weighted([(9, Gen<U8>.number(in: 0...1)), (1, Gen<U8>.always(200))])
+    expect(made(weighted).allSatisfy { $0 <= 1 || $0 == 200 })
+}
+
+@test
+fn makersSayTheirTypeWithNoneNamed() {
+    let a: Gen<String> = Gen.ascii(count: 1...3)
+    expect(made(a).allSatisfy { $0.count >= 1 && $0.count <= 3 })
+    let b: Gen<String> = Gen<String>.string(of: Gen.element(of: ['a', 'b']), count: 2...2)
+    expect(made(b).allSatisfy { $0.count == 2 })
+    let c: Gen<Bool> = Gen.arbitrary(Bool.self)
+    let d: Gen<Bool> = Gen<Bool>.arbitrary(Bool.self)
+    expect(made(c) == made(d))
+    let e: Gen<(Int, U8)> = Gen.number(in: 0...3).zip(Gen<U8>.number(in: 4...5))
+    expect(made(e).allSatisfy { $0.0 <= 3 && $0.1 >= 4 })
+}

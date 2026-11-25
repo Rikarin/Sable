@@ -9,7 +9,7 @@ import Sable.Testing
 
 const tolerance: F32 = 0.001
 
-fn scalars(_ low: F64, _ high: F64) -> Gen<F32> => Gen<F32>.float(in: low...high).map { F32($0) }
+fn scalars(_ low: F64, _ high: F64) -> Gen<F32> => Gen.float(in: low...high).map { F32($0) }
 
 let vectors: Gen<Vector3> = scalars(-10, 10).array(count: 3...3).map { Vector3($0[0], $0[1], $0[2]) }
 let directions: Gen<Vector3> = vectors.filter { $0.lengthSquared > 0.01 }

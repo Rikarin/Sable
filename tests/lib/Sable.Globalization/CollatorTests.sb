@@ -117,7 +117,7 @@ fn aCollatorSortsAndCompares() {
 
 // A character of the alphabets whose characters are taken alone, with marks,
 // digits, spaces and others among them.
-let characters: Gen<Char> = Gen<Char>.weighted([
+let characters: Gen<Char> = Gen.weighted([
     (4, Gen.number(in: 0x61...0x7A)), (1, Gen.number(in: 0x41...0x5A)), (1, Gen.number(in: 0x300...0x36F)), (1, Gen.number(in: 0xC0...0x54F)),
     (1, Gen.number(in: 0x30...0x39)), (1, Gen.number(in: 0x20...0x2F)), (1, Gen.number(in: 0xE00...0xE5F)), (1, Gen.number(in: 0x410...0x44F)),
     (1, Gen.element(of: "chlzsnygdjěř·ÅåäöøæœßİıñÑ".toArray()).map { $0.codePoint }),

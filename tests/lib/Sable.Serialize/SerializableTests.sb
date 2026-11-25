@@ -234,6 +234,14 @@ fn errorsSayWhere() {
     assertEqual(failure(Shape.self, "{\"a\":1,\"b\":2}"), "$: expected a case's name, or an object of one member, found an object")
     assertEqual(failure(Event.self, "{\"type\":\"Key\"}"), "$.code: missing")
     assertEqual(failure(Event.self, "{\"kind\":\"Key\"}"), "$.type: missing")
+    assertEqual(failure(U16.self, "70000"), "$: out of a U16's range")
+    assertEqual(failure(U32.self, "-1"), "$: out of a U32's range")
+    assertEqual(failure(I32.self, "3000000000"), "$: out of an I32's range")
+    assertEqual(failure(U8.self, "300"), "$: out of a U8's range")
+    assertEqual(failure(U64.self, "-1"), "$: -1 is not an unsigned integer")
+    assertEqual(failure(U64.self, "18446744073709551616"), "$: 18446744073709551616 does not fit a U64")
+    assertEqual(failure(Bool.self, "1"), "$: expected a Bool, found a number")
+    assertEqual(failure(String.self, "\"\\ud800\""), "not JSON: line 1, column 2: invalid \\u escape: a high surrogate with no low one after it")
     assertEqual(failure(Item.self, "{\"name\":\"a\",\"price\":1e999}"), "$.price: 1e999 is out of range")
     assertEqual(failure(Item.self, "{\"name\":\"a\" \"price\":1}"), "not JSON: line 1, column 13: found '\"' where ',' or '}' was expected")
     assertEqual(failure(Item.self, "{\"weird key\":1}"), "$.name: missing")
@@ -243,7 +251,7 @@ fn errorsSayWhere() {
 }
 
 @test
-fn theDecoderAndJsonValuesDirectly() throws {
+fn aDecoderSaysWhereItIsAndWhatItHas() throws {
     let root = try JsonDecoder.parse("{\"a\":[1,{\"b c\":null}],\"u\":\"\\u00e9\\ud83d\\ude00\\n\",\"n\":-0.5e2,\"t\":true,\"f\":false}")
     assertEqual(root.count, 5)
     let a = try root.field("a").decodeSequence()
@@ -272,12 +280,11 @@ fn theDecoderAndJsonValuesDirectly() throws {
     }
     assertEqual(keys.joined(separator: ","), "a,u,n,t,f")
     expect(root.field("n").field("x").isMissing)
-
-    // A document of any shape, as a JsonValue, and back.
-    let value = try Json.decode(JsonValue.self, from: "{\"x\":[1,true,null,\"s\"]}")
-    assertEqual(try Json.encode(value), "{\"x\":[1.0,true,null,\"s\"]}")
     expectThrows { _ = try JsonValue.decode(from: root.field("absent")) }
+}
 
+@test
+fn theLibrarysTypesAreReadAndWritten() throws {
     var counts = Dictionary<String, Int>()
     counts["one"] = 1
     let back = try Json.decode(Dictionary<String, Int>.self, from: try Json.encode(counts))
@@ -288,36 +295,30 @@ fn theDecoderAndJsonValuesDirectly() throws {
     assertEqual(failure(Char.self, "\"ab\""), "$: 'ab' is not one character")
     let numbers: U8[>..] = [0, 255]
     assertEqual(try Json.encode(numbers), "[0,255]")
-    let ints: I16[>..] = [-32768]
-    assertEqual((try Json.decode(I16[>..].self, from: try Json.encode(ints)))[0], -32768)
-    let wide: I32[>..] = [7]
-    assertEqual((try Json.decode(I32[>..].self, from: try Json.encode(wide)))[0], 7)
-    let longs: I64[>..] = [7]
-    assertEqual((try Json.decode(I64[>..].self, from: try Json.encode(longs)))[0], 7)
-    let halves: U16[>..] = [7]
-    assertEqual((try Json.decode(U16[>..].self, from: try Json.encode(halves)))[0], 7)
-    let words: U32[>..] = [7]
-    assertEqual((try Json.decode(U32[>..].self, from: try Json.encode(words)))[0], 7)
-    let unsigned: UInt[>..] = [7]
-    assertEqual((try Json.decode(UInt[>..].self, from: try Json.encode(unsigned)))[0], 7)
-    assertEqual(failure(U16.self, "70000"), "$: out of a U16's range")
-    assertEqual(failure(U32.self, "-1"), "$: out of a U32's range")
-    assertEqual(failure(I32.self, "3000000000"), "$: out of an I32's range")
-    assertEqual(failure(U8.self, "300"), "$: out of a U8's range")
-    assertEqual(failure(U64.self, "-1"), "$: -1 is not an unsigned integer")
-    assertEqual(failure(U64.self, "18446744073709551616"), "$: 18446744073709551616 does not fit a U64")
-    assertEqual(failure(Bool.self, "1"), "$: expected a Bool, found a number")
-    assertEqual(failure(Int.self, " 1 x"), "not JSON: line 1, column 4: text after the value")
-    assertEqual(failure(Int.self, "tru"), "not JSON: line 1, column 4: the text ends where 'true' was expected")
-    assertEqual(failure(Int.self, "[1,"), "not JSON: line 1, column 4: the text ends where a value was expected")
-    assertEqual(failure(Int.self, "-"), "not JSON: line 1, column 1: invalid number: no digits")
-    assertEqual(failure(Int.self, "1."), "not JSON: line 1, column 1: invalid number: no digits after the point")
-    assertEqual(failure(Int.self, "1e"), "not JSON: line 1, column 1: invalid number: no digits in the exponent")
-    assertEqual(failure(Int.self, "\"abc"), "not JSON: line 1, column 5: the text ends where the end of the string was expected")
-    assertEqual(failure(Int.self, "\"a\u{1}\""), "not JSON: line 1, column 3: control character U+0001 must be escaped")
-    assertEqual(failure(Int.self, "{1:2}"), "not JSON: line 1, column 2: found '1' where a key was expected")
-    assertEqual(failure(String.self, "\"\\ud800\""), "not JSON: line 1, column 2: invalid \\u escape: a high surrogate with no low one after it")
-    assertEqual(failure(Int.self, "{\"a\" 2}"), "not JSON: line 1, column 6: found '2' where ':' was expected")
+    expect(try roundTrip([-32768] as I16[>..]) == [-32768])
+    expect(try roundTrip([7] as I32[>..]) == [7])
+    expect(try roundTrip([7] as I64[>..]) == [7])
+    expect(try roundTrip([7] as U16[>..]) == [7])
+    expect(try roundTrip([7] as U32[>..]) == [7])
+    expect(try roundTrip([7] as UInt[>..]) == [7])
+    let value = try Json.decode(JsonValue.self, from: "{\"x\":[1,true,null,\"s\"]}")
+    assertEqual(try Json.encode(value), "{\"x\":[1.0,true,null,\"s\"]}")
+}
+
+@test(arguments: [
+    (" 1 x", "not JSON: line 1, column 4: text after the value"),
+    ("tru", "not JSON: line 1, column 4: the text ends where 'true' was expected"),
+    ("[1,", "not JSON: line 1, column 4: the text ends where a value was expected"),
+    ("-", "not JSON: line 1, column 1: invalid number: no digits"),
+    ("1.", "not JSON: line 1, column 1: invalid number: no digits after the point"),
+    ("1e", "not JSON: line 1, column 1: invalid number: no digits in the exponent"),
+    ("\"abc", "not JSON: line 1, column 5: the text ends where the end of the string was expected"),
+    ("\"a\u{1}\"", "not JSON: line 1, column 3: control character U+0001 must be escaped"),
+    ("{1:2}", "not JSON: line 1, column 2: found '1' where a key was expected"),
+    ("{\"a\" 2}", "not JSON: line 1, column 6: found '2' where ':' was expected"),
+])
+fn whatIsNotJsonIsRefusedWhereItIs(_ text: String, _ why: String) {
+    assertEqual(failure(Int.self, text), why)
 }
 
 // ---- Flattened fields ----------------------------------------------------
@@ -463,12 +464,8 @@ fn aDateTimeIsIso8601() throws {
     expect((try roundTrip(before)) == before)
     expect((try Json.decode(UtcDateTime.self, from: "\"2023-11-15T00:13:20+02:00\"")) == whole)
     assertEqual(failure(UtcDateTime.self, "\"soon\""), "$: 'soon' is not an ISO 8601 date and time")
-    do {
-        _ = try Json.encode(UtcDateTime.fromUnix(400000000000))
-        fail("a year of five digits was written")
-    } catch {
-        expect(error.description().hasPrefix("$: ISO 8601 has no year 14"))
-    }
+    let error = expectThrows(SerializeError.self) { _ = try Json.encode(UtcDateTime.fromUnix(400000000000)) }
+    expect((error?.description() ?? "").hasPrefix("$: ISO 8601 has no year 14"))
 }
 
 struct Blob: Serializable {
@@ -482,22 +479,33 @@ struct Blob: Serializable {
 }
 
 @test
-fn bytesAreBase64InJson() throws {
-    // RFC 4648's vectors, and the alphabet's last two digits.
-    let vectors: (String, String)[>..] = [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")]
-    for (text, encoded) in vectors {
-        var bytes: U8[>..] = []
-        bytes.append(utf8: text)
-        assertEqual(try Json.encode(Blob { bytes: bytes }), "\"" + encoded + "\"")
-        require((try Json.decode(Blob.self, from: "\"" + encoded + "\"")).bytes == bytes)
-    }
+fn base64sLastDigitsAndAMissingEndAreRead() throws {
     assertEqual(try Json.encode(Blob { bytes: [251, 255, 191] }), "\"+/+/\"")
     expect((try Json.decode(Blob.self, from: "\"+/+/\"")).bytes == [251, 255, 191])
     expect((try Json.decode(Blob.self, from: "\"Zg\"")).bytes == [102])
-    for bad in ["Z", "Zg===", "Z!==", "Zh==", "Zg=", "===="] {
-        assertEqual(failure(Blob.self, "\"" + bad + "\""), "$: '" + bad + "' is not base64")
-    }
     assertEqual(failure(Blob.self, "1"), "$: expected a base64 string, found a number")
+}
+
+// RFC 4648's vectors.
+@test(arguments: [
+    ("", ""),
+    ("f", "Zg=="),
+    ("fo", "Zm8="),
+    ("foo", "Zm9v"),
+    ("foob", "Zm9vYg=="),
+    ("fooba", "Zm9vYmE="),
+    ("foobar", "Zm9vYmFy"),
+])
+fn bytesAreBase64InJson(_ text: String, _ encoded: String) throws {
+    var bytes: U8[>..] = []
+    bytes.append(utf8: text)
+    assertEqual(try Json.encode(Blob { bytes: bytes }), "\"" + encoded + "\"")
+    expect((try Json.decode(Blob.self, from: "\"" + encoded + "\"")).bytes == bytes)
+}
+
+@test(arguments: ["Z", "Zg===", "Z!==", "Zh==", "Zg=", "===="])
+fn whatIsNotBase64IsRefused(_ bad: String) {
+    assertEqual(failure(Blob.self, "\"" + bad + "\""), "$: '" + bad + "' is not base64")
 }
 
 @test

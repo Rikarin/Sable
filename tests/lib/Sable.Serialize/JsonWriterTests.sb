@@ -67,22 +67,20 @@ fn prettyHasALineEach() {
     assertEqualText(written(PrintOptions(indent: 11), sample), lines.replacing("  ", with: "           ").replacing(": ", with: ":"))
 }
 
-@test
-fn stringsAreEscapedWhereTheyMustBe() {
-    for (text, json) in [
-        ("", "\"\""), ("a", "\"a\""), ("a\"b\\c/d", "\"a\\\"b\\\\c/d\""), ("\n\r\t\u{8}\u{C}", "\"\\n\\r\\t\\b\\f\""),
-        ("\u{0}\u{1F}\u{7F}", "\"\\u0000\\u001f\u{7F}\""), ("é€😀", "\"é€😀\""), ("01234567\"", "\"01234567\\\"\""),
-        ("0123456\n89abcdef\n", "\"0123456\\n89abcdef\\n\""), ("\"\"\"\"\"\"\"\"\"\"\"", "\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\""),
-        ("a long text that has nothing to escape in it", "\"a long text that has nothing to escape in it\""),
-        ("a long text that has é, and then\nmore: é", "\"a long text that has é, and then\\nmore: é\""),
-    ] {
-        assertEqual(written { w in w.writeString(text) }, json)
-        assertEqual(written { w in w.writeString(utf8: bytes(text)) }, json)
-        assertEqual(quote(text, false), json)
-        var reader = JsonReader(json)
-        _ = try! reader.next()
-        assertEqual(try! reader.string(), text)
-    }
+@test(arguments: [
+    ("", "\"\""), ("a", "\"a\""), ("a\"b\\c/d", "\"a\\\"b\\\\c/d\""), ("\n\r\t\u{8}\u{C}", "\"\\n\\r\\t\\b\\f\""),
+    ("\u{0}\u{1F}\u{7F}", "\"\\u0000\\u001f\u{7F}\""), ("é€😀", "\"é€😀\""), ("01234567\"", "\"01234567\\\"\""),
+    ("0123456\n89abcdef\n", "\"0123456\\n89abcdef\\n\""), ("\"\"\"\"\"\"\"\"\"\"\"", "\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\""),
+    ("a long text that has nothing to escape in it", "\"a long text that has nothing to escape in it\""),
+    ("a long text that has é, and then\nmore: é", "\"a long text that has é, and then\\nmore: é\""),
+])
+fn stringsAreEscapedWhereTheyMustBe(_ text: String, _ json: String) {
+    assertEqual(written { w in w.writeString(text) }, json)
+    assertEqual(written { w in w.writeString(utf8: bytes(text)) }, json)
+    assertEqual(quote(text, false), json)
+    var reader = JsonReader(json)
+    _ = try! reader.next()
+    assertEqual(try! reader.string(), text)
 }
 
 fn bytes(_ text: String) -> U8[>..] {
@@ -91,32 +89,27 @@ fn bytes(_ text: String) -> U8[>..] {
     return made
 }
 
-@test
-fn asciiAloneIsWrittenWhenAskedFor() {
+@test(arguments: [
+    ("plain", "\"plain\""), ("é", "\"\\u00e9\""), ("€uro", "\"\\u20acuro\""), ("a 😀 of a longer text", "\"a \\ud83d\\ude00 of a longer text\""),
+    ("\u{7F}\u{FFFF}\u{10FFFF}", "\"\\u007f\\uffff\\udbff\\udfff\""), ("\n\"", "\"\\n\\\"\""),
+])
+fn asciiAloneIsWrittenWhenAskedFor(_ text: String, _ json: String) {
     let options = PrintOptions(asciiOnly: true)
-    for (text, json) in [
-        ("plain", "\"plain\""), ("é", "\"\\u00e9\""), ("€uro", "\"\\u20acuro\""), ("a 😀 of a longer text", "\"a \\ud83d\\ude00 of a longer text\""),
-        ("\u{7F}\u{FFFF}\u{10FFFF}", "\"\\u007f\\uffff\\udbff\\udfff\""), ("\n\"", "\"\\n\\\"\""),
-    ] {
-        assertEqual(written(options) { w in w.writeString(text) }, json)
-        assertEqual(written(options) { w in w.writeString(utf8: bytes(text)) }, json)
-        assertEqual(written(options) { w in
-            w.writeBeginObject()
-            w.writeKey(text)
-            w.writeNull()
-            w.writeEndObject()
-        }, "{\(json):null}")
-    }
+    assertEqual(written(options) { w in w.writeString(text) }, json)
+    assertEqual(written(options) { w in w.writeString(utf8: bytes(text)) }, json)
+    assertEqual(written(options) { w in
+        w.writeBeginObject()
+        w.writeKey(text)
+        w.writeNull()
+        w.writeEndObject()
+    }, "{\(json):null}")
 }
 
 @test
-fn numbersAreWrittenInFull() throws {
-    for value in [0, 7, 9, 10, 99, 100, 12345, -1, -10, Int.max, Int.min, 999999999999999999, 1000000000000000000] {
-        assertEqual(written { w in w.writeInt(value) }, "\(value)")
-    }
+fn unsignedNumbersAndFloatsAreWrittenInFull() throws {
     let wide: U64[>..] = [0, 9999999999999999999, 10000000000000000000, U64.max]
     for value in wide {
-        assertEqual(written { w in w.writeUInt(value) }, "\(value)")
+        expect(written { w in w.writeUInt(value) } == "\(value)")
     }
     var power: U64 = 1
     for _ in 0..<19 {
@@ -135,6 +128,11 @@ fn numbersAreWrittenInFull() throws {
     for value in [F64.nan, F64.infinity, -F64.infinity] {
         expectThrows(saying: "$: JSON has no \(value)") { try writer.writeFloat(value) }
     }
+}
+
+@test(arguments: [0, 7, 9, 10, 99, 100, 12345, -1, -10, Int.max, Int.min, 999999999999999999, 1000000000000000000])
+fn numbersAreWrittenInFull(_ value: Int) {
+    assertEqual(written { w in w.writeInt(value) }, "\(value)")
 }
 
 @test
@@ -274,50 +272,44 @@ fn aWriterWritesDocumentsOneAfterAnother() {
 }
 
 @test
-fn anyTreeComesBackTheSame() throws {
-    var random = Pcg64(seed: 52)
-    for _ in 0..<200 {
-        let value = tree(&random, 0)
+fn anyTreeComesBackTheSame() {
+    forAll(Gen<JsonValue>((choices) => tree(choices, 0)), cases: 200) { (value: JsonValue) in
         for options in [compact(), pretty(2), PrintOptions(asciiOnly: true, spaced: true), PrintOptions(indent: 3, tabs: true)] {
-            let text = renderWith(value, options)
-            assertEqualText(render(try parse(text)), render(value))
+            let written = renderWith(value, options)
+            expect(render(try parse(written)) == render(value), written)
         }
     }
 }
 
-fn tree(_ random: inout Pcg64, _ depth: Int) -> JsonValue {
-    let kind = Int.random(in: 0..<(depth > 4 ? 4 : 6), using: &random)
-    let count = Int.random(in: 0..<5, using: &random)
+fn tree(_ choices: Choices, _ depth: Int) -> JsonValue {
+    let kind = choices.below(depth > 4 ? 4 : 6)
+    let count = choices.below(5)
     if kind == 0 {
-        return number(F64.random(in: -1e6..<1e6, using: &random))
+        return number(Gen<F64>.float(in: -1e6...1e6).value(from: choices))
     }
     if kind == 1 {
-        return integer(Int.random(in: -1000..<1000, using: &random))
+        return integer(Gen<Int>.number(in: -1000...999).value(from: choices))
     }
     if kind < 4 {
-        return kind == 2 ? text(someText(&random)) : count == 0 ? null() : boolean(count > 2)
+        return kind == 2 ? text(someText(choices)) : count == 0 ? null() : boolean(count > 2)
     }
     if kind == 4 {
         var items: JsonValue[>..] = []
         for _ in 0..<count {
-            items.append(tree(&random, depth + 1))
+            items.append(choices.span { tree(choices, depth + 1) })
         }
         return array(items)
     }
     var members: Member[>..] = []
     for _ in 0..<count {
-        members.append(member(someText(&random), tree(&random, depth + 1)))
+        members.append(choices.span { member(someText(choices), tree(choices, depth + 1)) })
     }
     return object(members)
 }
 
-fn someText(_ random: inout Pcg64) -> String {
-    let pieces = ["a", "plain text of sixteen", "\"", "\\", "\n", "\u{1}", "é", "€", "😀", "\u{7F}", " "]
-    var made = ""
-    for _ in 0..<Int.random(in: 0..<8, using: &random) {
-        made += pieces[Int.random(in: 0..<pieces.count, using: &random)]
-    }
-    return made
+fn someText(_ choices: Choices) -> String {
+    let pieces: String[>..] = ["a", "plain text of sixteen", "\"", "\\", "\n", "\u{1}", "é", "€", "😀", "\u{7F}", " "]
+    return Gen<String>.element(of: pieces).array(count: 0...7).value(from: choices).joined(separator: "")
 }
 
 // ---- What a debug build refuses ----------------------------------------------

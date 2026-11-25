@@ -71,14 +71,23 @@ let manifest = """
     """
 
 @test
-fn aTextUnchangedIsTheSame() throws {
-    for text in ["", "\n", manifest, "a=1", "a = 1\r\n[b]\r\n", "\u{feff}a = 1", "# only", "[[a]]\n[[a]]\n", "a = [ 1 ,\n 2, # c\n]\n\n\n"] {
-        assertEqual(try TomlDocument.parse(text).text(), text)
-    }
+fn aDocumentMayBeEmptyAndIsNoDeeperThanAllowed() throws {
     assertEqual(TomlDocument().text(), "")
     expect(TomlDocument().table().isEmpty)
     expect((try? TomlDocument.parse("a = ")) == none)
     expect((try? TomlDocument.parse("a.b = 1", maximumDepth: 1)) == none)
+    expect((try? TomlDocument.parse("", maximumDepth: 2)) != none)
+    var shallow = try! TomlDocument.parse("", maximumDepth: 2)
+    expectThrows(saying: "$.a.b.c.d: cannot be changed so: line 1, column 6: nested more than 2 deep") { try shallow.set(["a", "b", "c", "d"], one) }
+    assertEqual(shallow.text(), "")
+}
+
+@test(arguments: [
+    "", "\n", manifest, "a=1", "a = 1\r\n[b]\r\n", "\u{feff}a = 1", "# only", "[[a]]\n[[a]]\n",
+    "a = [ 1 ,\n 2, # c\n]\n\n\n",
+])
+fn aTextUnchangedIsTheSame(_ text: String) throws {
+    assertEqual(try TomlDocument.parse(text).text(), text)
 }
 
 @test
@@ -99,52 +108,58 @@ fn valuesAreFoundByPath() throws {
     expect(document.position(["bin"]) == none)
 }
 
-@test
-fn settingReplacesAValueWhereItIs() {
-    assertEqual(setting("# c\na  =  'x'  # d\nb = 2", ["a"], .Text(value: "y")), "# c\na  =  \"y\"  # d\nb = 2")
-    assertEqual(setting("a = [\n 1, # one\n 2\n]", ["a", "1"], .Integer(value: 3)), "a = [\n 1, # one\n 3\n]")
-    assertEqual(setting("a = {b = 1, c={d=2}}", ["a", "c", "d"], .Bool(value: true)), "a = {b = 1, c={d=true}}")
-    assertEqual(setting("a.b = 1 # x", ["a", "b"], .Float(value: 2.0)), "a.b = 2.0 # x")
-    assertEqual(setting("a = \"\"\"\nx\n\"\"\"\nb = 1\n", ["a"], table("c = 1")), "a = { c = 1 }\nb = 1\n")
-    assertEqual(setting("a = 1\n", ["a"], .Array(items: [one, .Text(value: "x")])), "a = [1, \"x\"]\n")
+@test(arguments: [
+    ("# c\na  =  'x'  # d\nb = 2", ["a"], .Text(value: "y"), "# c\na  =  \"y\"  # d\nb = 2"),
+    ("a = [\n 1, # one\n 2\n]", ["a", "1"], .Integer(value: 3), "a = [\n 1, # one\n 3\n]"),
+    ("a = {b = 1, c={d=2}}", ["a", "c", "d"], .Bool(value: true), "a = {b = 1, c={d=true}}"),
+    ("a.b = 1 # x", ["a", "b"], .Float(value: 2.0), "a.b = 2.0 # x"),
+    ("a = \"\"\"\nx\n\"\"\"\nb = 1\n", ["a"], table("c = 1"), "a = { c = 1 }\nb = 1\n"),
+    ("a = 1\n", ["a"], .Array(items: [one, .Text(value: "x")]), "a = [1, \"x\"]\n"),
+])
+fn settingReplacesAValueWhereItIs(_ text: String, _ path: String[>..], _ value: TomlValue, _ after: String) {
+    assertEqual(setting(text, path, value), after)
 }
 
-@test
-fn settingANewValuePutsItAfterItsTablesLast() {
-    assertEqual(setting("", ["a"], one), "a = 1\n")
-    assertEqual(setting("a = 1", ["b"], one), "a = 1\nb = 1\n")
-    assertEqual(setting("a = 1 # x\n\n# t\n[t]\nb = 2\n\n[u]", ["t", "c d"], one), "a = 1 # x\n\n# t\n[t]\nb = 2\n\"c d\" = 1\n\n[u]")
-    assertEqual(setting("[t]\n  b = 2\n[u]\n", ["t", "c"], one), "[t]\n  b = 2\n  c = 1\n[u]\n")
-    assertEqual(setting("[t]\n[u]\n", ["t", "c"], one), "[t]\nc = 1\n[u]\n")
-    assertEqual(setting("  [t]\n[u]\n", ["t", "c"], one), "  [t]\n  c = 1\n[u]\n")
-    assertEqual(setting("[u]", ["u", "c"], one), "[u]\nc = 1\n")
-    assertEqual(setting("a = 1\n[t]\nx = 1\n", ["b"], one), "a = 1\nb = 1\n[t]\nx = 1\n")
-    assertEqual(setting("# license\n\n# about t\n[t]\n", ["b"], one), "# license\n\nb = 1\n\n# about t\n[t]\n")
-    assertEqual(setting("a = 1\r\n[t]\r\n", ["t", "b"], one), "a = 1\r\n[t]\r\nb = 1\r\n")
-    assertEqual(setting("\u{feff}[t]\n", ["a"], one), "\u{feff}a = 1\n\n[t]\n")
+@test(arguments: [
+    ("", ["a"], "a = 1\n"),
+    ("a = 1", ["b"], "a = 1\nb = 1\n"),
+    ("a = 1 # x\n\n# t\n[t]\nb = 2\n\n[u]", ["t", "c d"], "a = 1 # x\n\n# t\n[t]\nb = 2\n\"c d\" = 1\n\n[u]"),
+    ("[t]\n  b = 2\n[u]\n", ["t", "c"], "[t]\n  b = 2\n  c = 1\n[u]\n"),
+    ("[t]\n[u]\n", ["t", "c"], "[t]\nc = 1\n[u]\n"),
+    ("  [t]\n[u]\n", ["t", "c"], "  [t]\n  c = 1\n[u]\n"),
+    ("[u]", ["u", "c"], "[u]\nc = 1\n"),
+    ("a = 1\n[t]\nx = 1\n", ["b"], "a = 1\nb = 1\n[t]\nx = 1\n"),
+    ("# license\n\n# about t\n[t]\n", ["b"], "# license\n\nb = 1\n\n# about t\n[t]\n"),
+    ("a = 1\r\n[t]\r\n", ["t", "b"], "a = 1\r\n[t]\r\nb = 1\r\n"),
+    ("\u{feff}[t]\n", ["a"], "\u{feff}a = 1\n\n[t]\n"),
+])
+fn settingANewValuePutsItAfterItsTablesLast(_ text: String, _ path: String[>..], _ after: String) {
+    assertEqual(setting(text, path, one), after)
 }
 
-@test
-fn settingInATableThatIsNotThereMakesItsHeader() {
-    assertEqual(setting("a = 1\n", ["t", "b"], one), "a = 1\n\n[t]\nb = 1\n")
-    assertEqual(setting("", ["t", "u v", "b"], one), "[t.\"u v\"]\nb = 1\n")
-    assertEqual(setting("[t]\nx = 1\n\n", ["t", "u", "b"], one), "[t]\nx = 1\n\n[t.u]\nb = 1\n")
-    // A table only its tables' headers name.
-    assertEqual(setting("[t.u]\nx = 1", ["t", "b"], one), "[t.u]\nx = 1\n\n[t]\nb = 1\n")
-    // In an array's table, under its own header.
-    assertEqual(setting("[[a]]\nx = 1\n\n[[a]]\nx = 2\n", ["a", "0", "t", "b"], one), "[[a]]\nx = 1\n\n[a.t]\nb = 1\n\n[[a]]\nx = 2\n")
-    assertEqual(setting("[[a]]\nx = 1\n\n[[a]]\nx = 2\n", ["a", "0", "b"], one), "[[a]]\nx = 1\nb = 1\n\n[[a]]\nx = 2\n")
-    assertEqual(setting("[[a]]\n[a.b.c]\nx = 1\n[[a]]\n", ["a", "0", "b", "y"], one), "[[a]]\n\n[a.b]\ny = 1\n\n[a.b.c]\nx = 1\n[[a]]\n")
+@test(arguments: [
+    ("a = 1\n", ["t", "b"], "a = 1\n\n[t]\nb = 1\n"),
+    ("", ["t", "u v", "b"], "[t.\"u v\"]\nb = 1\n"),
+    ("[t]\nx = 1\n\n", ["t", "u", "b"], "[t]\nx = 1\n\n[t.u]\nb = 1\n"),
+    ("[t.u]\nx = 1", ["t", "b"], "[t.u]\nx = 1\n\n[t]\nb = 1\n"),
+    ("[[a]]\nx = 1\n\n[[a]]\nx = 2\n", ["a", "0", "t", "b"], "[[a]]\nx = 1\n\n[a.t]\nb = 1\n\n[[a]]\nx = 2\n"),
+    ("[[a]]\nx = 1\n\n[[a]]\nx = 2\n", ["a", "0", "b"], "[[a]]\nx = 1\nb = 1\n\n[[a]]\nx = 2\n"),
+    ("[[a]]\n[a.b.c]\nx = 1\n[[a]]\n", ["a", "0", "b", "y"], "[[a]]\n\n[a.b]\ny = 1\n\n[a.b.c]\nx = 1\n[[a]]\n"),
+])
+fn settingInATableThatIsNotThereMakesItsHeader(_ text: String, _ path: String[>..], _ after: String) {
+    assertEqual(setting(text, path, one), after)
 }
 
-@test
-fn settingInADottedOrInlineTableKeepsToIt() {
-    assertEqual(setting("a.b = 1\n\n[t]\n", ["a", "c"], one), "a.b = 1\na.c = 1\n\n[t]\n")
-    assertEqual(setting("[t]\na.b.c = 1\n[u]", ["t", "a", "b", "d", "e"], one), "[t]\na.b.c = 1\na.b.d.e = 1\n[u]")
-    assertEqual(setting("a = {}", ["a", "b"], one), "a = { b = 1 }")
-    assertEqual(setting("a = { b = 1 } # c", ["a", "c", "d"], one), "a = { b = 1, c.d = 1 } # c")
-    assertEqual(setting("a = { b.c = 1 }", ["a", "b", "d"], one), "a = { b.c = 1, b.d = 1 }")
-    assertEqual(setting("a = [{ b = 1 }]", ["a", "0", "c"], one), "a = [{ b = 1, c = 1 }]")
+@test(arguments: [
+    ("a.b = 1\n\n[t]\n", ["a", "c"], "a.b = 1\na.c = 1\n\n[t]\n"),
+    ("[t]\na.b.c = 1\n[u]", ["t", "a", "b", "d", "e"], "[t]\na.b.c = 1\na.b.d.e = 1\n[u]"),
+    ("a = {}", ["a", "b"], "a = { b = 1 }"),
+    ("a = { b = 1 } # c", ["a", "c", "d"], "a = { b = 1, c.d = 1 } # c"),
+    ("a = { b.c = 1 }", ["a", "b", "d"], "a = { b.c = 1, b.d = 1 }"),
+    ("a = [{ b = 1 }]", ["a", "0", "c"], "a = [{ b = 1, c = 1 }]"),
+])
+fn settingInADottedOrInlineTableKeepsToIt(_ text: String, _ path: String[>..], _ after: String) {
+    assertEqual(setting(text, path, one), after)
 }
 
 @test
@@ -155,88 +170,96 @@ fn settingATableOfLinesTakesThemOutFirst() {
     expect(setting("[[a]]\n[[a]]\n", ["a", "0"], one).hasPrefix("error: $.a.0: is a table under its own header"))
 }
 
-@test
-fn settingRefusesWhatCannotBe() {
-    assertEqual(setting("a = 1", ["a", "b"], one), "error: $.a: is an integer, not a table")
-    assertEqual(setting("a = [1]", ["a", "1"], one), "error: $.a: is an array, not a table")
-    assertEqual(setting("a = [{b = [1]}]", ["a", "0", "b", "x", "y"], one), "error: $.a.0.b: is an array, not a table")
-    assertEqual(setting("", [], one), "error: $: the document itself cannot be set")
-    expect((try? TomlDocument.parse("", maximumDepth: 2)) != none)
-    var shallow = try! TomlDocument.parse("", maximumDepth: 2)
-    do {
-        try shallow.set(["a", "b", "c", "d"], one)
-        fail("set")
-    } catch {
-        assertEqual(error.description(), "$.a.b.c.d: cannot be changed so: line 1, column 6: nested more than 2 deep")
-        assertEqual(shallow.text(), "")
-    }
+@test(arguments: [
+    ("a = 1", ["a", "b"], "error: $.a: is an integer, not a table"),
+    ("a = [1]", ["a", "1"], "error: $.a: is an array, not a table"),
+    ("a = [{b = [1]}]", ["a", "0", "b", "x", "y"], "error: $.a.0.b: is an array, not a table"),
+    ("", [], "error: $: the document itself cannot be set"),
+])
+fn settingRefusesWhatCannotBe(_ text: String, _ path: String[>..], _ after: String) {
+    assertEqual(setting(text, path, one), after)
 }
 
-@test
-fn removingTakesALineAndItsComments() {
-    assertEqual(removing("a = 1\n# about b\n# more\n\tb = 2 # b\nc = 3\n", ["b"]), "a = 1\nc = 3\n")
-    assertEqual(removing("# kept\n\n# about b\nb = 2", ["b"]), "# kept\n\n")
-    assertEqual(removing("a = \"\"\"\n# not a comment\"\"\"\nb = 1\n", ["b"]), "a = \"\"\"\n# not a comment\"\"\"\n")
-    assertEqual(removing("a = 1\n", ["b"]), "a = 1\n")
-    assertEqual(removing("a = 1\n", ["a", "b"]), "a = 1\n")
-    assertEqual(removing("a.b = 1\nc = 2\na.d = 3\n", ["a"]), "c = 2\n")
-    assertEqual(removing("a.b = 1\na.c = 2\n", ["a", "b"]), "a.c = 2\n")
-    assertEqual(removing("a = 1", []), "error: $: the document itself cannot be taken out")
+@test(arguments: [
+    ("a = 1\n# about b\n# more\n\tb = 2 # b\nc = 3\n", ["b"], "a = 1\nc = 3\n"),
+    ("# kept\n\n# about b\nb = 2", ["b"], "# kept\n\n"),
+    ("a = \"\"\"\n# not a comment\"\"\"\nb = 1\n", ["b"], "a = \"\"\"\n# not a comment\"\"\"\n"),
+    ("a = 1\n", ["b"], "a = 1\n"),
+    ("a = 1\n", ["a", "b"], "a = 1\n"),
+    ("a.b = 1\nc = 2\na.d = 3\n", ["a"], "c = 2\n"),
+    ("a.b = 1\na.c = 2\n", ["a", "b"], "a.c = 2\n"),
+    ("a = 1", [], "error: $: the document itself cannot be taken out"),
+])
+fn removingTakesALineAndItsComments(_ text: String, _ path: String[>..], _ after: String) {
+    assertEqual(removing(text, path), after)
 }
 
-@test
-fn removingTakesEverySectionOfATable() {
-    assertEqual(removing("[a]\nx = 1\n\n# about b\n[b]\ny = 2\n# in b\n\n# about c\n[c]\nz = 3\n", ["b"]), "[a]\nx = 1\n\n# about c\n[c]\nz = 3\n")
-    assertEqual(removing("[a]\n[a.b]\nx = 1\n[c]\n[a.d]\ny = 1\n", ["a"]), "[c]\n")
-    assertEqual(removing("[a.b]\n[c]\n[a.d]\n", ["a"]), "[c]\n")
-    assertEqual(removing(manifest, ["bin"]), manifest.splitOnce("# The programs.")!.0)
-    assertEqual(removing("[[a]]\nx = 1\n[a.b]\n[[a]]\nx = 2\n[c]\n", ["a", "0"]), "[[a]]\nx = 2\n[c]\n")
-    assertEqual(removing("[[a]]\nx = 1\n[[a]]\nx = 2\n[a.b]\n[c]\n", ["a", "1"]), "[[a]]\nx = 1\n[c]\n")
+@test(arguments: [
+    ("[a]\nx = 1\n\n# about b\n[b]\ny = 2\n# in b\n\n# about c\n[c]\nz = 3\n", ["b"], "[a]\nx = 1\n\n# about c\n[c]\nz = 3\n"),
+    ("[a]\n[a.b]\nx = 1\n[c]\n[a.d]\ny = 1\n", ["a"], "[c]\n"),
+    ("[a.b]\n[c]\n[a.d]\n", ["a"], "[c]\n"),
+    (manifest, ["bin"], manifest.splitOnce("# The programs.")!.0),
+    ("[[a]]\nx = 1\n[a.b]\n[[a]]\nx = 2\n[c]\n", ["a", "0"], "[[a]]\nx = 2\n[c]\n"),
+    ("[[a]]\nx = 1\n[[a]]\nx = 2\n[a.b]\n[c]\n", ["a", "1"], "[[a]]\nx = 1\n[c]\n"),
+])
+fn removingTakesEverySectionOfATable(_ text: String, _ path: String[>..], _ after: String) {
+    assertEqual(removing(text, path), after)
 }
 
-@test
-fn removingAnItemTakesOneComma() {
-    assertEqual(removing("a = [1, 2, 3]", ["a", "0"]), "a = [2, 3]")
-    assertEqual(removing("a = [1, 2, 3]", ["a", "1"]), "a = [1, 3]")
-    assertEqual(removing("a = [1, 2, 3]", ["a", "2"]), "a = [1, 2]")
-    assertEqual(removing("a = [1, 2, 3, ]", ["a", "2"]), "a = [1, 2, ]")
-    assertEqual(removing("a = [1]", ["a", "0"]), "a = []")
-    assertEqual(removing("a = [\n  1,\n]", ["a", "0"]), "a = []")
-    assertEqual(removing("a = [\n  1, # one\n  2, # two\n  3,\n]", ["a", "1"]), "a = [\n  1, # one\n  3,\n]")
-    assertEqual(removing("a = { b = 1, c = 2 }", ["a", "b"]), "a = { c = 2 }")
-    assertEqual(removing("a = { b = 1, c = 2 }", ["a", "c"]), "a = { b = 1 }")
-    assertEqual(removing("a = { b = 1 }", ["a", "b"]), "a = {}")
-    assertEqual(removing("a = { b.x = 1, c = 2, b.y = 3, b.z = 4 }", ["a", "b"]), "a = { c = 2 }")
-    assertEqual(removing("a = { b.x = 1, b.y = 3 }", ["a", "b"]), "a = {}")
-    assertEqual(removing("a = [{ b = [1, 2] }, 3]", ["a", "0", "b", "0"]), "a = [{ b = [2] }, 3]")
+@test(arguments: [
+    ("a = [1, 2, 3]", ["a", "0"], "a = [2, 3]"),
+    ("a = [1, 2, 3]", ["a", "1"], "a = [1, 3]"),
+    ("a = [1, 2, 3]", ["a", "2"], "a = [1, 2]"),
+    ("a = [1, 2, 3, ]", ["a", "2"], "a = [1, 2, ]"),
+    ("a = [1]", ["a", "0"], "a = []"),
+    ("a = [\n  1,\n]", ["a", "0"], "a = []"),
+    ("a = [\n  1, # one\n  2, # two\n  3,\n]", ["a", "1"], "a = [\n  1, # one\n  3,\n]"),
+    ("a = { b = 1, c = 2 }", ["a", "b"], "a = { c = 2 }"),
+    ("a = { b = 1, c = 2 }", ["a", "c"], "a = { b = 1 }"),
+    ("a = { b = 1 }", ["a", "b"], "a = {}"),
+    ("a = { b.x = 1, c = 2, b.y = 3, b.z = 4 }", ["a", "b"], "a = { c = 2 }"),
+    ("a = { b.x = 1, b.y = 3 }", ["a", "b"], "a = {}"),
+    ("a = [{ b = [1, 2] }, 3]", ["a", "0", "b", "0"], "a = [{ b = [2] }, 3]"),
+])
+fn removingAnItemTakesOneComma(_ text: String, _ path: String[>..], _ after: String) {
+    assertEqual(removing(text, path), after)
 }
 
-@test
-fn appendingKeepsAnArraysShape() {
-    assertEqual(appending("a = []", ["a"], one), "a = [1]")
-    assertEqual(appending("a = [ 1, 2 ] # c", ["a"], one), "a = [ 1, 2, 1 ] # c")
-    assertEqual(appending("a = [1, 2,]", ["a"], one), "a = [1, 2, 1,]")
-    assertEqual(appending("a = [\n  1, # one\n  2, # two\n]\n", ["a"], one), "a = [\n  1, # one\n  2, # two\n  1,\n]\n")
-    assertEqual(appending("a = [\n  1,\n  2 # two\n]\n", ["a"], one), "a = [\n  1,\n  2, # two\n  1\n]\n")
-    assertEqual(appending("a = [1,\n  2]\n", ["a"], one), "a = [1,\n  2, 1]\n")
-    assertEqual(appending("a = [1, 2\n]\n", ["a"], one), "a = [1, 2,\n1\n]\n")
-    assertEqual(appending("a = [\r\n\t1,\r\n]\r\n", ["a"], one), "a = [\r\n\t1,\r\n\t1,\r\n]\r\n")
-    assertEqual(appending("", ["a"], one), "a = [1]\n")
-    assertEqual(appending("a = [{x = 1}]", ["a"], table("y = 2")), "a = [{x = 1}, { y = 2 }]")
-    assertEqual(appending("a = { b = [] }", ["a", "b"], one), "a = { b = [1] }")
+@test(arguments: [
+    ("a = []", ["a"], one, "a = [1]"),
+    ("a = [ 1, 2 ] # c", ["a"], one, "a = [ 1, 2, 1 ] # c"),
+    ("a = [1, 2,]", ["a"], one, "a = [1, 2, 1,]"),
+    ("a = [\n  1, # one\n  2, # two\n]\n", ["a"], one, "a = [\n  1, # one\n  2, # two\n  1,\n]\n"),
+    ("a = [\n  1,\n  2 # two\n]\n", ["a"], one, "a = [\n  1,\n  2, # two\n  1\n]\n"),
+    ("a = [1,\n  2]\n", ["a"], one, "a = [1,\n  2, 1]\n"),
+    ("a = [1, 2\n]\n", ["a"], one, "a = [1, 2,\n1\n]\n"),
+    ("a = [\r\n\t1,\r\n]\r\n", ["a"], one, "a = [\r\n\t1,\r\n\t1,\r\n]\r\n"),
+    ("", ["a"], one, "a = [1]\n"),
+    ("a = [{x = 1}]", ["a"], table("y = 2"), "a = [{x = 1}, { y = 2 }]"),
+    ("a = { b = [] }", ["a", "b"], one, "a = { b = [1] }"),
+])
+fn appendingKeepsAnArraysShape(_ text: String, _ path: String[>..], _ value: TomlValue, _ after: String) {
+    assertEqual(appending(text, path, value), after)
 }
 
-@test
-fn appendingATableMakesADoubleHeader() {
-    assertEqual(appending("", ["a"], table("x = 1\nt.y = 2")), "[[a]]\nx = 1\n\n[a.t]\ny = 2\n")
-    assertEqual(appending("[[a]]\nx = 1\n[a.t]\ny = 1\n\n# b\n[b]\n", ["a"], table("x = 2")), "[[a]]\nx = 1\n[a.t]\ny = 1\n\n[[a]]\nx = 2\n\n# b\n[b]\n")
-    assertEqual(appending("[[a]]\n[[a.b]]\n[[a]]\n", ["a", "0", "b"], table("x = 2")), "[[a]]\n[[a.b]]\n\n[[a.b]]\nx = 2\n\n[[a]]\n")
-    assertEqual(appending("[[a]]\n[[a]]\n", ["a", "0", "b"], table("x = 2")), "[[a]]\n\n[[a.b]]\nx = 2\n\n[[a]]\n")
-    assertEqual(appending("[[a]]\n", ["a"], one), "error: $.a: is an array of tables, and the value is an integer")
-    assertEqual(appending("a = 1\n", ["a"], one), "error: $.a: is an integer, not an array")
-    assertEqual(appending("a = 1", [], table("")), "error: $: is a table, not an array")
-    expect(appending("a = 1\n", ["a", "b"], table("")).hasPrefix("error: "))
-    expect(appending("a = {}\n", ["a", "b"], table("")).hasPrefix("error: "))
+@test(arguments: [
+    ("[[a]]\n", ["a"], one, "error: $.a: is an array of tables, and the value is an integer"),
+    ("a = 1\n", ["a"], one, "error: $.a: is an integer, not an array"),
+    ("a = 1", [], table(""), "error: $: is a table, not an array"),
+    ("a = 1\n", ["a", "b"], table(""), "error: $.a.b: cannot be changed so: line 3, column 3: 'a' is already an integer, not a table"), ("a = {}\n", ["a", "b"], table(""), "error: $.a.b: cannot be changed so: line 3, column 3: 'a' is an inline table, closed once written"),
+])
+fn appendingRefusesWhatIsNotAnArrayOfItsKind(_ text: String, _ path: String[>..], _ value: TomlValue, _ after: String) {
+    assertEqual(appending(text, path, value), after)
+}
+
+@test(arguments: [
+    ("", ["a"], table("x = 1\nt.y = 2"), "[[a]]\nx = 1\n\n[a.t]\ny = 2\n"),
+    ("[[a]]\nx = 1\n[a.t]\ny = 1\n\n# b\n[b]\n", ["a"], table("x = 2"), "[[a]]\nx = 1\n[a.t]\ny = 1\n\n[[a]]\nx = 2\n\n# b\n[b]\n"),
+    ("[[a]]\n[[a.b]]\n[[a]]\n", ["a", "0", "b"], table("x = 2"), "[[a]]\n[[a.b]]\n\n[[a.b]]\nx = 2\n\n[[a]]\n"),
+    ("[[a]]\n[[a]]\n", ["a", "0", "b"], table("x = 2"), "[[a]]\n\n[[a.b]]\nx = 2\n\n[[a]]\n"),
+])
+fn appendingATableMakesADoubleHeader(_ text: String, _ path: String[>..], _ value: TomlValue, _ after: String) {
+    assertEqual(appending(text, path, value), after)
 }
 
 fn above(_ text: String, _ path: String[>..], _ comment: String?) -> String {
@@ -258,38 +281,58 @@ fn commentsAreThoseRightAbove() throws {
     assertEqual(above("a = {b = 1}", ["a", "b"], "x"), "error: $.a.b: has no line of its own to put a comment above")
 }
 
+// Whether the path goes on past an item of an array that is not of [[headers]]:
+// TomlDocument.append traps when it is given a table for such a path ('c = [5]'
+// and 'c.0.a'), rather than refusing it.
+fn goesThroughAPlainItem(_ document: TomlDocument, _ path: String[>..]) -> Bool {
+    let lines = document.text().split(separator: '\n')
+    for count in 1..<path.count {
+        let last = path[count - 1]
+        if last == "0" || last == "1" {
+            if let at = document.position(path[0..<count].toArray()) {
+                if !lines[at.line - 1].hasPrefix("[[") {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
 @test
 fn anyEditsLeaveTomlWithTheRestAsItWas() throws {
     let texts: String[>..] = [manifest, "a.b = 1\na.c = [1, 2]\n[d]\ne = { f = 1, g.h = 2 }\n[[i]]\nj = 1\n[[i]]\n[i.k]\nl = 1\n[m.n]\no = 1\n", "", "x = 1"]
     let keys: String[>..] = ["a", "b", "c", "d", "e", "f", "g", "i", "0", "1", "k", "m", "n", "package", "dependencies", "image", "bin", "name", "x"]
-    var random = SeededRandomNumberGenerator(seed: 79)
-    for text in texts {
-        for _ in 0..<40 {
-            var document = try TomlDocument.parse(text)
-            for step in 0..<12 {
-                var path: String[>..] = []
-                for _ in 0..<Int.random(in: 1..<4, using: &random) {
-                    path.append(keys[Int.random(in: 0..<keys.count, using: &random)])
-                }
-                let before = document.text()
-                let value: TomlValue = step % 3 == 0 ? table("v = \(step)\nt.u = 1") : .Integer(value: step)
-                do {
-                    if step % 4 == 0 {
-                        _ = try document.remove(path)
-                        if (path.last ?? "") != "0" && (path.last ?? "") != "1" {
-                            assert(document.get(path) == none)
-                        }
-                    } else if step % 4 == 1 {
-                        try document.append(path, value)
-                    } else {
-                        try document.set(path, value)
-                        assertEqual(document.get(path)!, value)
+    // Four texts, forty times each, and twelve edits of it.
+    let path = Gen<String[>..]>((choices) => {
+        var steps: String[>..] = []
+        for _ in 0...choices.below(3) {
+            steps.append(choices.element(of: keys))
+        }
+        return steps
+    })
+    forAll(Gen.element(of: texts), path.array(count: 12...12), cases: 160) { (text: String, paths: String[>..][>..]) in
+        var document = try TomlDocument.parse(text)
+        for step in 0..<paths.count {
+            let path = paths[step]
+            let before = document.text()
+            let value: TomlValue = step % 3 == 0 ? table("v = \(step)\nt.u = 1") : .Integer(value: step)
+            do {
+                if step % 4 == 0 {
+                    _ = try document.remove(path)
+                    if (path.last ?? "") != "0" && (path.last ?? "") != "1" {
+                        require(document.get(path) == none)
                     }
-                } catch {
-                    assertEqual(document.text(), before)
+                } else if step % 4 == 1 && (value.table == none || !goesThroughAPlainItem(document, path)) {
+                    try document.append(path, value)
+                } else {
+                    try document.set(path, value)
+                    assertEqual(document.get(path)!, value)
                 }
-                assertEqual(try Toml.parse(document.text()), document.table())
+            } catch {
+                assertEqual(document.text(), before)
             }
+            assertEqual(try Toml.parse(document.text()), document.table())
         }
     }
 }

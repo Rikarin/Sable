@@ -1,0 +1,13 @@
+module SerializeSupport
+
+import Sable.Testing
+
+// Up to 39 bytes of any kind: a choice each, where an array of arbitrary
+// bytes has three.
+public let anyBytes: Gen<U8[>..]> = Gen<U8[>..]>((choices) => {
+    var bytes: U8[>..] = []
+    for _ in 0..<choices.below(40) {
+        bytes.append(U8(choices.below(256)))
+    }
+    return bytes
+})

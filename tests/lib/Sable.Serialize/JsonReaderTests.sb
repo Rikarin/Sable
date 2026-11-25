@@ -121,105 +121,124 @@ fn tokensAreInTheirOrderWithTheirPlaces() {
         """)
 }
 
-@test
-fn anyValueIsADocument() {
-    assertEqual(read("\t\r\n 12 \n"), "Number 2:2/0 12\nend")
-    assertEqual(read("\"\""), "String 1:1/0 \nend")
-    assertEqual(read("null"), "Null 1:1/0 null\nend")
-    assertEqual(read("-0"), "Number 1:1/0 -0\nend")
+@test(arguments: [
+    ("\t\r\n 12 \n", "Number 2:2/0 12\nend"),
+    ("\"\"", "String 1:1/0 \nend"),
+    ("null", "Null 1:1/0 null\nend"),
+    ("-0", "Number 1:1/0 -0\nend"),
+])
+fn anyValueIsADocument(_ text: String, _ tokens: String) {
+    assertEqual(read(text), tokens)
 }
 
-@test
-fn whatIsNotTheGrammarIsRefusedWhereItIs() {
-    assertEqual(refused(""), "line 1, column 1: the text ends where a value was expected")
-    assertEqual(refused("  "), "line 1, column 3: the text ends where a value was expected")
-    assertEqual(refused("[1"), "line 1, column 3: the text ends where ',' or ']' was expected")
-    assertEqual(refused("[1 2]"), "line 1, column 4: found '2' where ',' or ']' was expected")
-    assertEqual(refused("[1,]"), "line 1, column 4: found ']' where a value was expected")
-    assertEqual(refused("[,1]"), "line 1, column 2: found ',' where a value was expected")
-    assertEqual(refused("[1}"), "line 1, column 3: found '}' where ',' or ']' was expected")
-    assertEqual(refused("{\"a\":1]"), "line 1, column 7: found ']' where ',' or '}' was expected")
-    assertEqual(refused("{\"a\":1,}"), "line 1, column 8: found '}' where a key was expected")
-    assertEqual(refused("{\"a\""), "line 1, column 5: the text ends where ':' was expected")
-    assertEqual(refused("{\"a\",1}"), "line 1, column 5: found ',' where ':' was expected")
-    assertEqual(refused("{\"a\":}"), "line 1, column 6: found '}' where a value was expected")
-    assertEqual(refused("{a:1}"), "line 1, column 2: found 'a' where a key was expected")
-    assertEqual(refused("{"), "line 1, column 2: the text ends where a key was expected")
-    assertEqual(refused("[\n\n é]"), "line 3, column 2: found 'é' where a value was expected")
-    assertEqual(refused("1 1"), "line 1, column 3: text after the value")
-    assertEqual(refused("[]]"), "line 1, column 3: text after the value")
-    assertEqual(refused("// x\n1"), "line 1, column 1: found '/' where a value was expected")
-    assertEqual(refused("\u{0C}1"), "line 1, column 1: found U+000c where a value was expected")
-    assertEqual(refused("\u{FEFF}1"), "line 1, column 1: found '\u{FEFF}' where a value was expected")
-    assertEqual(refused("trie"), "line 1, column 3: found 'i' where 'true' was expected")
-    assertEqual(refused("falsé"), "line 1, column 5: found 'é' where 'false' was expected")
-    assertEqual(refused("nul"), "line 1, column 4: the text ends where 'null' was expected")
-    assertEqual(refused("nulls"), "line 1, column 5: text after the value")
+@test(arguments: [
+    ("", "line 1, column 1: the text ends where a value was expected"),
+    ("  ", "line 1, column 3: the text ends where a value was expected"),
+    ("[1", "line 1, column 3: the text ends where ',' or ']' was expected"),
+    ("[1 2]", "line 1, column 4: found '2' where ',' or ']' was expected"),
+    ("[1,]", "line 1, column 4: found ']' where a value was expected"),
+    ("[,1]", "line 1, column 2: found ',' where a value was expected"),
+    ("[1}", "line 1, column 3: found '}' where ',' or ']' was expected"),
+    ("{\"a\":1]", "line 1, column 7: found ']' where ',' or '}' was expected"),
+    ("{\"a\":1,}", "line 1, column 8: found '}' where a key was expected"),
+    ("{\"a\"", "line 1, column 5: the text ends where ':' was expected"),
+    ("{\"a\",1}", "line 1, column 5: found ',' where ':' was expected"),
+    ("{\"a\":}", "line 1, column 6: found '}' where a value was expected"),
+    ("{a:1}", "line 1, column 2: found 'a' where a key was expected"),
+    ("{", "line 1, column 2: the text ends where a key was expected"),
+    ("[\n\n é]", "line 3, column 2: found 'é' where a value was expected"),
+    ("1 1", "line 1, column 3: text after the value"),
+    ("[]]", "line 1, column 3: text after the value"),
+    ("// x\n1", "line 1, column 1: found '/' where a value was expected"),
+    ("\u{0C}1", "line 1, column 1: found U+000c where a value was expected"),
+    ("\u{FEFF}1", "line 1, column 1: found '\u{FEFF}' where a value was expected"),
+    ("trie", "line 1, column 3: found 'i' where 'true' was expected"),
+    ("falsé", "line 1, column 5: found 'é' where 'false' was expected"),
+    ("nul", "line 1, column 4: the text ends where 'null' was expected"),
+    ("nulls", "line 1, column 5: text after the value"),
+])
+fn whatIsNotTheGrammarIsRefusedWhereItIs(_ text: String, _ why: String) {
+    assertEqual(refused(text), why)
 }
 
-@test
-fn numbersAreRfc8259s() {
-    for good in ["0", "-0", "10", "0.0", "1.5", "-1.25e10", "1E5", "1e+05", "1e-5", "123456789012345678901234567890"] {
-        assertEqual(read(good), "Number 1:1/0 \(good)\nend")
-    }
-    assertEqual(refused("01"), "line 1, column 1: invalid number: a leading zero")
-    assertEqual(refused("[-012]"), "line 1, column 2: invalid number: a leading zero")
-    assertEqual(refused("-"), "line 1, column 1: invalid number: no digits")
-    assertEqual(refused("-a"), "line 1, column 1: invalid number: no digits")
-    assertEqual(refused("1."), "line 1, column 1: invalid number: no digits after the point")
-    assertEqual(refused("[1.e1]"), "line 1, column 2: invalid number: no digits after the point")
-    assertEqual(refused("1e"), "line 1, column 1: invalid number: no digits in the exponent")
-    assertEqual(refused("[1e+]"), "line 1, column 2: invalid number: no digits in the exponent")
-    for bad in ["+1", ".5", "1.5.5", "0x10", "1_000", "NaN", "Infinity", "-Infinity", "1e5.5", "--1"] {
-        _ = refused(bad)
-    }
+@test(arguments: [
+    ("01", "line 1, column 1: invalid number: a leading zero"),
+    ("[-012]", "line 1, column 2: invalid number: a leading zero"),
+    ("-", "line 1, column 1: invalid number: no digits"),
+    ("-a", "line 1, column 1: invalid number: no digits"),
+    ("1.", "line 1, column 1: invalid number: no digits after the point"),
+    ("[1.e1]", "line 1, column 2: invalid number: no digits after the point"),
+    ("1e", "line 1, column 1: invalid number: no digits in the exponent"),
+    ("[1e+]", "line 1, column 2: invalid number: no digits in the exponent"),
+    ("+1", "line 1, column 1: found '+' where a value was expected"), (".5", "line 1, column 1: found '.' where a value was expected"), ("1.5.5", "line 1, column 4: text after the value"), ("0x10", "line 1, column 2: text after the value"), ("1_000", "line 1, column 2: text after the value"), ("NaN", "line 1, column 1: found 'N' where a value was expected"), ("Infinity", "line 1, column 1: found 'I' where a value was expected"),
+    ("-Infinity", "line 1, column 1: invalid number: no digits"), ("1e5.5", "line 1, column 4: text after the value"), ("--1", "line 1, column 1: invalid number: no digits"),
+])
+fn whatIsNoNumberIsRefused(_ text: String, _ why: String) {
+    assertEqual(refused(text), why)
+}
+
+@test(arguments: ["0", "-0", "10", "0.0", "1.5", "-1.25e10", "1E5", "1e+05", "1e-5", "123456789012345678901234567890"])
+fn numbersAreRfc8259s(_ text: String) {
+    assertEqual(read(text), "Number 1:1/0 \(text)\nend")
 }
 
 @test
 fn stringsHaveTheirEscapes() {
     assertEqual(read(#"["\"\\\/\b\f\n\r\t", "\u0041\u00e9\u20AC\ud83d\ude00", "", "plain, and more than sixteen bytes of it"]"#),
         "BeginArray 1:1/1 [\nString 1:2/1 \"\\/\u{8}\u{C}\n\r\t\nString 1:22/1 Aé€😀\nString 1:56/1 \nString 1:60/1 plain, and more than sixteen bytes of it\nEndArray 1:102/0 ]\nend")
-    assertEqual(refused(#"["\x"]"#), "line 1, column 3: \\x is not an escape")
-    assertEqual(refused(#"["\é"]"#), "line 1, column 3: \\é is not an escape")
-    assertEqual(refused(#"["\"#), "line 1, column 4: the text ends where an escape was expected")
-    assertEqual(refused(#"["\u12"#), "line 1, column 7: the text ends where a hex digit was expected")
-    assertEqual(refused(#"["\u12G4"]"#), "line 1, column 7: found 'G' where a hex digit was expected")
-    assertEqual(refused(#"["\u00é"]"#), "line 1, column 7: found 'é' where a hex digit was expected")
-    assertEqual(refused(#"["abc"#), "line 1, column 6: the text ends where the end of the string was expected")
-    assertEqual(refused("[\"a\nb\"]"), "line 1, column 4: control character U+000a must be escaped")
-    assertEqual(refused("[\"0123456789abcdefgh\u{1F}\"]"), "line 1, column 21: control character U+001f must be escaped")
 }
 
-@test
-fn aSurrogateIsOneOfAPair() {
-    let low = "line 1, column 3: invalid \\u escape: a low surrogate with no high one before it"
-    let high = "line 1, column 3: invalid \\u escape: a high surrogate with no low one after it"
-    let other = "line 1, column 3: invalid \\u escape: a high surrogate followed by something else"
-    assertEqual(refused(#"["\udc00"]"#), low)
-    assertEqual(refused(#"["\ud800"]"#), high)
-    assertEqual(refused(#"["\ud800x"]"#), high)
-    assertEqual(refused(#"["\ud800\n"]"#), "line 1, column 10: found 'n' where 'u' of a low surrogate was expected")
-    assertEqual(refused(#"["\ud800\é"]"#), "line 1, column 10: found 'é' where 'u' of a low surrogate was expected")
-    assertEqual(refused(#"["\ud800\ud800"]"#), other)
-    assertEqual(refused(#"["\ud800\u0041"]"#), other)
-    assertEqual(refused(#"["\ud800"#), "line 1, column 9: the text ends where a low surrogate was expected")
-    assertEqual(refused(#"["\ud800\"#), "line 1, column 10: the text ends where 'u' of a low surrogate was expected")
-    assertEqual(refused(#"["\ud800\ud"#), "line 1, column 12: the text ends where a hex digit was expected")
+@test(arguments: [
+    (#"["\x"]"#, "line 1, column 3: \\x is not an escape"),
+    (#"["\é"]"#, "line 1, column 3: \\é is not an escape"),
+    (#"["\"#, "line 1, column 4: the text ends where an escape was expected"),
+    (#"["\u12"#, "line 1, column 7: the text ends where a hex digit was expected"),
+    (#"["\u12G4"]"#, "line 1, column 7: found 'G' where a hex digit was expected"),
+    (#"["\u00é"]"#, "line 1, column 7: found 'é' where a hex digit was expected"),
+    (#"["abc"#, "line 1, column 6: the text ends where the end of the string was expected"),
+    ("[\"a\nb\"]", "line 1, column 4: control character U+000a must be escaped"),
+    ("[\"0123456789abcdefgh\u{1F}\"]", "line 1, column 21: control character U+001f must be escaped"),
+])
+fn whatIsNoStringIsRefused(_ text: String, _ why: String) {
+    assertEqual(refused(text), why)
+}
+
+let lowAlone = "line 1, column 3: invalid \\u escape: a low surrogate with no high one before it"
+let highAlone = "line 1, column 3: invalid \\u escape: a high surrogate with no low one after it"
+let highAndSomethingElse = "line 1, column 3: invalid \\u escape: a high surrogate followed by something else"
+
+@test(arguments: [
+    (#"["\udc00"]"#, lowAlone),
+    (#"["\ud800"]"#, highAlone),
+    (#"["\ud800x"]"#, highAlone),
+    (#"["\ud800\n"]"#, "line 1, column 10: found 'n' where 'u' of a low surrogate was expected"),
+    (#"["\ud800\é"]"#, "line 1, column 10: found 'é' where 'u' of a low surrogate was expected"),
+    (#"["\ud800\ud800"]"#, highAndSomethingElse),
+    (#"["\ud800\u0041"]"#, highAndSomethingElse),
+    (#"["\ud800"#, "line 1, column 9: the text ends where a low surrogate was expected"),
+    (#"["\ud800\"#, "line 1, column 10: the text ends where 'u' of a low surrogate was expected"),
+    (#"["\ud800\ud"#, "line 1, column 12: the text ends where a hex digit was expected"),
+])
+fn aSurrogateIsOneOfAPair(_ text: String, _ why: String) {
+    assertEqual(refused(text), why)
 }
 
 @test
 fn stringsAreUtf8() {
     assertEqual(read(bytes: [0x22, 0xC3, 0xA9, 0xF0, 0x9F, 0x98, 0x80, 0x22]), "String 1:1/0 é😀\nend")
     assertEqual(refused(bytes: [0x22, 0x61, 0xFF, 0x22]), "line 1, column 3: invalid \\u escape: ill-formed UTF-8")
-    let sequences: U8[>..][>..] = [[0xC3], [0x80], [0xC0, 0x80], [0xED, 0xA0, 0x80], [0xF4, 0x90, 0x80, 0x80], [0xE2, 0x82]]
-    for bad in sequences {
-        var bytes: U8[>..] = [0x22, 0x61]
-        bytes.append(contentsOf: bad)
-        bytes.append(0x22)
-        assertEqual(refused(bytes: bytes), "line 1, column 3: invalid \\u escape: ill-formed UTF-8")
-        // Outside a string it is only not JSON.
-        assertEqual(refused(bytes: bad), "line 1, column 1: found '\u{FFFD}' where a value was expected")
-    }
+}
+
+let illFormed: U8[>..][>..] = [[0xC3], [0x80], [0xC0, 0x80], [0xED, 0xA0, 0x80], [0xF4, 0x90, 0x80, 0x80], [0xE2, 0x82]]
+
+@test(arguments: illFormed)
+fn illFormedUtf8IsRefused(_ bad: U8[>..]) {
+    var bytes: U8[>..] = [0x22, 0x61]
+    bytes.append(contentsOf: bad)
+    bytes.append(0x22)
+    assertEqual(refused(bytes: bytes), "line 1, column 3: invalid \\u escape: ill-formed UTF-8")
+    // Outside a string it is only not JSON.
+    assertEqual(refused(bytes: bad), "line 1, column 1: found '\u{FFFD}' where a value was expected")
 }
 
 @test
@@ -242,18 +261,24 @@ fn nestingIsBounded() {
 fn relaxedTakesCommentsAndTrailingCommas() {
     let text = "// first\n[1, /* two */ 2, // rest\n {\"a\" /*c*/ : /**/ 3,},]//end"
     assertEqual(read(text, relaxed()), "BeginArray 2:1/1 [\nNumber 2:2/1 1\nNumber 2:15/1 2\nBeginObject 3:2/2 {\nKey 3:3/2 a\nNumber 3:20/2 3\nEndObject 3:22/1 }\nEndArray 3:24/0 ]\nend")
-    assertEqual(refused("[1,,]", relaxed()), "line 1, column 4: found ',' where a value was expected")
-    assertEqual(refused("[,]", relaxed()), "line 1, column 2: found ',' where a value was expected")
-    assertEqual(refused("{,}", relaxed()), "line 1, column 2: found ',' where a key was expected")
-    assertEqual(refused("1,", relaxed()), "line 1, column 2: text after the value")
-    assertEqual(refused("[1 /", relaxed()), "line 1, column 5: the text ends where '/' or '*' after '/' was expected")
-    assertEqual(refused("[1 /x", relaxed()), "line 1, column 4: found '/' where a comment was expected")
-    assertEqual(refused("[1 /* x *", relaxed()), "line 1, column 10: the text ends where the end of the comment was expected")
-    assertEqual(refused("[/*/ 1]", relaxed()), "line 1, column 8: the text ends where the end of the comment was expected")
     assertEqual(refused(bytes: [0x2F, 0x2F, 0xFF, 0x0A, 0x31], relaxed()), "line 1, column 3: invalid \\u escape: ill-formed UTF-8")
     // Either alone.
     _ = refused("[1,]", ParseOptions(allowComments: true))
     _ = refused("[1]//", ParseOptions(allowTrailingCommas: true))
+}
+
+@test(arguments: [
+    ("[1,,]", "line 1, column 4: found ',' where a value was expected"),
+    ("[,]", "line 1, column 2: found ',' where a value was expected"),
+    ("{,}", "line 1, column 2: found ',' where a key was expected"),
+    ("1,", "line 1, column 2: text after the value"),
+    ("[1 /", "line 1, column 5: the text ends where '/' or '*' after '/' was expected"),
+    ("[1 /x", "line 1, column 4: found '/' where a comment was expected"),
+    ("[1 /* x *", "line 1, column 10: the text ends where the end of the comment was expected"),
+    ("[/*/ 1]", "line 1, column 8: the text ends where the end of the comment was expected"),
+])
+fn relaxedRefusesWhatIsNeither(_ text: String, _ why: String) {
+    assertEqual(refused(text, relaxed()), why)
 }
 
 @test
@@ -352,29 +377,27 @@ fn failure(_ reader: JsonReader, _ body: (JsonReader) throws(ParseError) -> Void
     }
 }
 
-@test
-fn longValuesAreCompared() throws {
-    for text in ["", "a", "abcdefg", "abcdefgh", "abcdefghi", "abcdefghijklmnop", "abcdefghijklmnopq"] {
-        var reader = JsonReader("\"\(text)\"")
-        _ = try reader.next()
-        require(reader.valueEquals(text) && !reader.valueEquals(text + "x"))
-        if !text.isEmpty {
-            require(!reader.valueEquals("_" + text.slice(from: 1, to: text.count)))
-            require(!reader.valueEquals(text.slice(from: 0, to: text.count - 1) + "_"))
-        }
+@test(arguments: ["", "a", "abcdefg", "abcdefgh", "abcdefghi", "abcdefghijklmnop", "abcdefghijklmnopq"])
+fn longValuesAreCompared(_ text: String) throws {
+    var reader = JsonReader("\"\(text)\"")
+    _ = try reader.next()
+    expect(reader.valueEquals(text) && !reader.valueEquals(text + "x"))
+    if !text.isEmpty {
+        expect(!reader.valueEquals("_" + text.slice(from: 1, to: text.count)))
+        expect(!reader.valueEquals(text.slice(from: 0, to: text.count - 1) + "_"))
     }
 }
 
-@test
-fn aFloatIsTheNearest() throws {
-    for text in ["0.1", "-0.25", "123456789012345", "1234567890123456", "0.000000000000001", "3.141592653589793", "1e-7", "5e-324", "1.7976931348623157e308", "9007199254740993", "0.30000000000000004"] {
-        var reader = JsonReader(text)
-        _ = try reader.next()
-        assertEqual(try reader.float(), try F64.parse(text))
-    }
-    var reader = JsonReader("-0.0")
+@test(arguments: [
+    "0.1", "-0.25", "123456789012345", "1234567890123456", "0.000000000000001", "3.141592653589793", "1e-7", "5e-324",
+    "1.7976931348623157e308", "9007199254740993", "0.30000000000000004",
+    "-0.0",
+])
+fn aFloatIsTheNearest(_ text: String) throws {
+    var reader = JsonReader(text)
     _ = try reader.next()
-    expect((try reader.float()).isSignMinus)
+    assertEqual(try reader.float(), try F64.parse(text))
+    expect((try reader.float()).isSignMinus == text.hasPrefix("-"))
 }
 
 @test
@@ -438,7 +461,10 @@ fn aTypeIsDecodedAsTheOptionsAllow() throws {
     let options = ParseOptions(allowComments: true, allowTrailingCommas: true, reportComments: true, allowMultipleValues: true)
     assertEqual(try Json.decode(Int[>..].self, from: "/*a*/[1, /*b*/ 2,]//c", options: options), [1, 2])
     assertEqual(try Json.decode(Int.self, fromBytes: utf8("7 // seven"), options: relaxed()), 7)
-    for (text, reason) in [("1 2", "line 1, column 3: text after the value"), ("[] {}", "line 1, column 4: text after the value"), (" ", "line 1, column 2: the text ends where a value was expected")] {
+    for (text, reason) in [
+        ("1 2", "line 1, column 3: text after the value"), ("[] {}", "line 1, column 4: text after the value"),
+        (" ", "line 1, column 2: the text ends where a value was expected"),
+    ] {
         expectThrows(saying: "not JSON: \(reason)") { _ = try Json.decode(JsonValue.self, from: text, options: options) }
         assertEqual(describe { _ = try parseWith(text, options) }, reason)
     }
@@ -577,6 +603,7 @@ fn aLongTokenInManyPiecesIsLookedAtOnce() throws {
     var reader = JsonReader.streaming(relaxed())
     reader.append([0x5B, 0x22])
     let piece = utf8("0123456789é\\n123")
+    let digits = utf8("1234567890123456")
     for _ in 0..<65536 {
         reader.append(piece)
         _ = try reader.next()
@@ -585,14 +612,14 @@ fn aLongTokenInManyPiecesIsLookedAtOnce() throws {
     _ = try reader.next()
     assertEqual(reader.rawValue.count, 65536 * piece.count)
     for _ in 0..<65536 {
-        reader.append(utf8("1234567890123456"))
+        reader.append(digits)
         _ = try reader.next()
     }
     reader.append([0x2C, 0x2F, 0x2A])
     expect(try reader.next() == .Number)
     for _ in 0..<65536 {
-        reader.append(utf8("1234567890123456"))
-        assert(try reader.next() == none)
+        reader.append(digits)
+        assert(try reader.next() == none, "a comment without its end")
     }
     reader.append(utf8("*/ null]"))
     reader.finish()
@@ -614,7 +641,7 @@ fn tokensAreReadWithoutAllocating() {
                 sum += 1
             }
         }
-        expect(sum == 13)
+        assert(sum == 13)
     }
 }
 

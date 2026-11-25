@@ -5,6 +5,7 @@ import Sable.Serialize
 import Sable.Testing
 import Sable.Text
 import Sable.Time
+import SerializeSupport
 
 @derive(Serializable, Equatable, Debug)
 union Shape {
@@ -74,102 +75,95 @@ fn tokens(_ bytes: U8[>..], depth: Int = 128) throws(SerializeError) -> CborToke
 
 // RFC 8949 Appendix A, the encodings that are preferred ones: what each is
 // in diagnostic notation.
-fn preferredVectors() -> (String, String)[>..] {
-    return [
-        ("0", "00"), ("1", "01"), ("10", "0a"), ("23", "17"), ("24", "1818"), ("25", "1819"), ("100", "1864"),
-        ("1000", "1903e8"), ("1000000", "1a000f4240"), ("1000000000000", "1b000000e8d4a51000"),
-        ("18446744073709551615", "1bffffffffffffffff"), ("2(h'010000000000000000')", "c249010000000000000000"),
-        ("-18446744073709551616", "3bffffffffffffffff"), ("3(h'010000000000000000')", "c349010000000000000000"),
-        ("-1", "20"), ("-10", "29"), ("-100", "3863"), ("-1000", "3903e7"),
-        ("0.0", "f90000"), ("-0.0", "f98000"), ("1.0", "f93c00"), ("1.1", "fb3ff199999999999a"), ("1.5", "f93e00"),
-        ("65504.0", "f97bff"), ("100000.0", "fa47c35000"), ("3.4028234663852886e+38", "fa7f7fffff"),
-        ("1e+300", "fb7e37e43c8800759c"), ("-4.0", "f9c400"), ("-4.1", "fbc010666666666666"),
-        ("Infinity", "f97c00"), ("NaN", "f97e00"), ("-Infinity", "f9fc00"),
-        ("false", "f4"), ("true", "f5"), ("null", "f6"), ("undefined", "f7"), ("simple(16)", "f0"), ("simple(255)", "f8ff"),
-        ("0(\"2013-03-21T20:04:00Z\")", "c074323031332d30332d32315432303a30343a30305a"),
-        ("1(1363896240)", "c11a514b67b0"), ("1(1363896240.5)", "c1fb41d452d9ec200000"),
-        ("23(h'01020304')", "d74401020304"), ("24(h'6449455446')", "d818456449455446"),
-        ("32(\"http://www.example.com\")", "d82076687474703a2f2f7777772e6578616d706c652e636f6d"),
-        ("h''", "40"), ("h'01020304'", "4401020304"), ("\"\"", "60"), ("\"a\"", "6161"), ("\"IETF\"", "6449455446"),
-        ("\"\\\"\\\\\"", "62225c"), ("\"\u{fc}\"", "62c3bc"), ("\"\u{6c34}\"", "63e6b0b4"), ("\"\u{10151}\"", "64f0908591"),
-        ("[]", "80"), ("[1, 2, 3]", "83010203"), ("[1, [2, 3], [4, 5]]", "8301820203820405"),
-        ("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]",
-            "98190102030405060708090a0b0c0d0e0f101112131415161718181819"),
-        ("{}", "a0"), ("{1: 2, 3: 4}", "a201020304"), ("{\"a\": 1, \"b\": [2, 3]}", "a26161016162820203"),
-        ("[\"a\", {\"b\": \"c\"}]", "826161a161626163"),
-        ("{\"a\": \"A\", \"b\": \"B\", \"c\": \"C\", \"d\": \"D\", \"e\": \"E\"}", "a56161614161626142616361436164614461656145"),
-    ]
-}
+let preferredVectors: (String, String)[>..] = [
+    ("0", "00"), ("1", "01"), ("10", "0a"), ("23", "17"), ("24", "1818"), ("25", "1819"), ("100", "1864"),
+    ("1000", "1903e8"), ("1000000", "1a000f4240"), ("1000000000000", "1b000000e8d4a51000"),
+    ("18446744073709551615", "1bffffffffffffffff"), ("2(h'010000000000000000')", "c249010000000000000000"),
+    ("-18446744073709551616", "3bffffffffffffffff"), ("3(h'010000000000000000')", "c349010000000000000000"),
+    ("-1", "20"), ("-10", "29"), ("-100", "3863"), ("-1000", "3903e7"),
+    ("0.0", "f90000"), ("-0.0", "f98000"), ("1.0", "f93c00"), ("1.1", "fb3ff199999999999a"), ("1.5", "f93e00"),
+    ("65504.0", "f97bff"), ("100000.0", "fa47c35000"), ("3.4028234663852886e+38", "fa7f7fffff"),
+    ("1e+300", "fb7e37e43c8800759c"), ("-4.0", "f9c400"), ("-4.1", "fbc010666666666666"),
+    ("Infinity", "f97c00"), ("NaN", "f97e00"), ("-Infinity", "f9fc00"),
+    ("false", "f4"), ("true", "f5"), ("null", "f6"), ("undefined", "f7"), ("simple(16)", "f0"), ("simple(255)", "f8ff"),
+    ("0(\"2013-03-21T20:04:00Z\")", "c074323031332d30332d32315432303a30343a30305a"),
+    ("1(1363896240)", "c11a514b67b0"), ("1(1363896240.5)", "c1fb41d452d9ec200000"),
+    ("23(h'01020304')", "d74401020304"), ("24(h'6449455446')", "d818456449455446"),
+    ("32(\"http://www.example.com\")", "d82076687474703a2f2f7777772e6578616d706c652e636f6d"),
+    ("h''", "40"), ("h'01020304'", "4401020304"), ("\"\"", "60"), ("\"a\"", "6161"), ("\"IETF\"", "6449455446"),
+    ("\"\\\"\\\\\"", "62225c"), ("\"\u{fc}\"", "62c3bc"), ("\"\u{6c34}\"", "63e6b0b4"), ("\"\u{10151}\"", "64f0908591"),
+    ("[]", "80"), ("[1, 2, 3]", "83010203"), ("[1, [2, 3], [4, 5]]", "8301820203820405"),
+    ("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]",
+        "98190102030405060708090a0b0c0d0e0f101112131415161718181819"),
+    ("{}", "a0"), ("{1: 2, 3: 4}", "a201020304"), ("{\"a\": 1, \"b\": [2, 3]}", "a26161016162820203"),
+    ("[\"a\", {\"b\": \"c\"}]", "826161a161626163"),
+    ("{\"a\": \"A\", \"b\": \"B\", \"c\": \"C\", \"d\": \"D\", \"e\": \"E\"}", "a56161614161626142616361436164614461656145"),
+]
 
 // The rest of Appendix A: other encodings of the value.
-fn otherVectors() -> (String, String)[>..] {
-    return [
-        ("Infinity", "fa7f800000"), ("NaN", "fa7fc00000"), ("-Infinity", "faff800000"),
-        ("Infinity", "fb7ff0000000000000"), ("NaN", "fb7ff8000000000000"), ("-Infinity", "fbfff0000000000000"),
-        ("h'0102030405'", "5f42010243030405ff"), ("\"streaming\"", "7f657374726561646d696e67ff"),
-        ("[]", "9fff"), ("[1, [2, 3], [4, 5]]", "9f018202039f0405ffff"), ("[1, [2, 3], [4, 5]]", "9f01820203820405ff"),
-        ("[1, [2, 3], [4, 5]]", "83018202039f0405ff"), ("[1, [2, 3], [4, 5]]", "83019f0203ff820405"),
-        ("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]",
-            "9f0102030405060708090a0b0c0d0e0f101112131415161718181819ff"),
-        ("{\"a\": 1, \"b\": [2, 3]}", "bf61610161629f0203ffff"), ("[\"a\", {\"b\": \"c\"}]", "826161bf61626163ff"),
-        ("{\"Fun\": true, \"Amt\": -2}", "bf6346756ef563416d7421ff"),
-    ]
+let otherVectors: (String, String)[>..] = [
+    ("Infinity", "fa7f800000"), ("NaN", "fa7fc00000"), ("-Infinity", "faff800000"),
+    ("Infinity", "fb7ff0000000000000"), ("NaN", "fb7ff8000000000000"), ("-Infinity", "fbfff0000000000000"),
+    ("h'0102030405'", "5f42010243030405ff"), ("\"streaming\"", "7f657374726561646d696e67ff"),
+    ("[]", "9fff"), ("[1, [2, 3], [4, 5]]", "9f018202039f0405ffff"), ("[1, [2, 3], [4, 5]]", "9f01820203820405ff"),
+    ("[1, [2, 3], [4, 5]]", "83018202039f0405ff"), ("[1, [2, 3], [4, 5]]", "83019f0203ff820405"),
+    ("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]",
+        "9f0102030405060708090a0b0c0d0e0f101112131415161718181819ff"),
+    ("{\"a\": 1, \"b\": [2, 3]}", "bf61610161629f0203ffff"), ("[\"a\", {\"b\": \"c\"}]", "826161bf61626163ff"),
+    ("{\"Fun\": true, \"Amt\": -2}", "bf6346756ef563416d7421ff"),
+]
+
+@test(arguments: preferredVectors)
+fn rfc8949sExamplesAreReadAndWritten(_ diagnostic: String, _ hex: String) throws {
+    let value = try CborValue.parse(bytes(hex))
+    expect(value.diagnostic() == diagnostic)
+    expect(Hex.encode(try value.bytes()) == hex)
+    expect(Hex.encode(try value.bytes(conformance: .Deterministic)) == hex)
+    expect(refusal(hex, conformance: .Deterministic) == "")
 }
 
-@test
-fn rfc8949sExamplesAreReadAndWritten() throws {
-    for (diagnostic, hex) in preferredVectors() {
-        let value = try CborValue.parse(bytes(hex))
-        assertEqual(value.diagnostic(), diagnostic)
-        assertEqual(Hex.encode(try value.bytes()), hex)
-        assertEqual(Hex.encode(try value.bytes(conformance: .Deterministic)), hex)
-        assertEqual(refusal(hex, conformance: .Deterministic), "")
-    }
-    for (diagnostic, hex) in otherVectors() {
-        assertEqual((try CborValue.parse(bytes(hex))).diagnostic(), diagnostic)
-        assert(refusal(hex, conformance: .Deterministic).contains("which is not deterministic"))
-    }
-    // The two subnormal and least normal halves, by value.
-    expect(try CborValue.parse(bytes("f90001")) == .Float(value: 5.960464477539063e-8))
-    expect(try CborValue.parse(bytes("f90400")) == .Float(value: 0.00006103515625))
-    assertEqual(Hex.encode(try Cbor.encode(5.960464477539063e-8)), "f90001")
-    assertEqual(Hex.encode(try Cbor.encode(0.00006103515625)), "f90400")
+@test(arguments: otherVectors)
+fn rfc8949sOtherEncodingsAreReadAndNotDeterministic(_ diagnostic: String, _ hex: String) throws {
+    expect((try CborValue.parse(bytes(hex))).diagnostic() == diagnostic)
+    expect(refusal(hex, conformance: .Deterministic).contains("which is not deterministic"))
 }
 
-@test
-fn theReaderReadsEveryExampleAsTokens() throws {
-    for (_, hex) in preferredVectors() {
-        // What the tokens say, written again.
-        let encoder = CborEncoder()
-        var inMap: Bool[>..] = []
-        for token in try tokens(bytes(hex)) {
-            match token {
-                case .Unsigned(let value) => try encoder.encodeUInt(value)
-                case .Negative(let n)     => try encoder.encodeNegative(n)
-                case .Bytes(let value)    => try encoder.encodeBytes(value)
-                case .Text(let value)     => try encoder.encodeString(value)
-                case .BeginArray(let count) => {
-                    inMap.append(false)
-                    try encoder.beginSequence(count: count)
-                }
-                case .BeginMap(let count) => {
-                    inMap.append(true)
-                    try encoder.beginMap(count: count)
-                }
-                case .End => {
-                    if inMap.removeLast() {
-                        try encoder.endMap()
-                    } else {
-                        try encoder.endSequence()
-                    }
-                }
-                case .Tag(let number)   => try encoder.encodeTag(number)
-                case .Simple(let value) => try encoder.encodeSimple(value)
-                case .Float(let value)  => try encoder.encodeFloat(value)
+@test(arguments: preferredVectors)
+fn theReaderReadsEveryExampleAsTokens(_ diagnostic: String, _ hex: String) throws {
+    // What the tokens say, written again.
+    let encoder = CborEncoder()
+    var inMap: Bool[>..] = []
+    for token in try tokens(bytes(hex)) {
+        match token {
+            case .Unsigned(let value) => try encoder.encodeUInt(value)
+            case .Negative(let n)     => try encoder.encodeNegative(n)
+            case .Bytes(let value)    => try encoder.encodeBytes(value)
+            case .Text(let value)     => try encoder.encodeString(value)
+            case .BeginArray(let count) => {
+                inMap.append(false)
+                try encoder.beginSequence(count: count)
             }
+            case .BeginMap(let count) => {
+                inMap.append(true)
+                try encoder.beginMap(count: count)
+            }
+            case .End => {
+                if inMap.removeLast() {
+                    try encoder.endMap()
+                } else {
+                    try encoder.endSequence()
+                }
+            }
+            case .Tag(let number)   => try encoder.encodeTag(number)
+            case .Simple(let value) => try encoder.encodeSimple(value)
+            case .Float(let value)  => try encoder.encodeFloat(value)
         }
-        assertEqual(Hex.encode(try encoder.bytes()), hex)
     }
+    assertEqual(Hex.encode(try encoder.bytes()), hex)
+}
+
+@test
+fn theReaderReadsWhatHasNoLengthAndSequences() throws {
     expect(try tokens(bytes("7f61616162ff")) == [.Text(value: "ab")])
     expect(try tokens(bytes("5f4101ff")) == [.Bytes(value: [1])])
     expect(try tokens(bytes("bf01c102ff")) == [.BeginMap(count: none), .Unsigned(value: 1), .Tag(number: 1), .Unsigned(value: 2), .End])
@@ -182,63 +176,51 @@ fn theReaderReadsEveryExampleAsTokens() throws {
     assertEqual(reader.depth, 1)
 }
 
-@test
-fn integersTakeTheFewestBytes() throws {
-    let cases: (Int, String)[>..] = [
-        (255, "18ff"), (256, "190100"), (65535, "19ffff"), (65536, "1a00010000"), (4294967295, "1affffffff"),
-        (4294967296, "1b0000000100000000"), (Int.max, "1b7fffffffffffffff"), (-24, "37"), (-25, "3818"),
-        (-256, "38ff"), (-257, "390100"), (-65536, "39ffff"), (-65537, "3a00010000"), (Int.min, "3b7fffffffffffffff"),
-    ]
-    for (value, hex) in cases {
-        assertEqual(Hex.encode(try Cbor.encode(value)), hex)
-        assertEqual(try Cbor.decode(Int.self, from: bytes(hex)), value)
-        assertEqual((try CborValue.parse(bytes(hex))).int!, value)
-        require(CborValue.integer(value) == (try CborValue.parse(bytes(hex))))
-    }
-    assertEqual(try Cbor.decode(U64.self, from: bytes("1bffffffffffffffff")), U64.max)
-    for hex in ["01", "1801", "190001", "1a00000001", "1b0000000000000001", "c24101", "c24a00000000000000000001"] {
-        assertEqual(try Cbor.decode(Int.self, from: bytes(hex)), 1)
-        assertEqual(try Cbor.decode(U64.self, from: bytes(hex)), 1)
-        assertEqual(try Cbor.decode(F64.self, from: bytes(hex)), 1.0)
-    }
-    assertEqual(try Cbor.decode(Int.self, from: bytes("c34100")), -1)
-    assertEqual(try Cbor.decode(F64.self, from: bytes("c249010000000000000000")), 18446744073709551616.0)
-    assertEqual(try Cbor.decode(F64.self, from: bytes("c34107")), -8.0)
-    assertEqual(try Cbor.decode(F64.self, from: bytes("3863")), -100.0)
-    for hex in ["1bffffffffffffffff", "3bffffffffffffffff", "c249010000000000000000", "f93c00"] {
-        require((try? Cbor.decode(Int.self, from: bytes(hex))) == none)
-    }
-    for hex in ["20", "c249010000000000000000", "c34100"] {
-        require((try? Cbor.decode(U64.self, from: bytes(hex))) == none)
-    }
-    expect((CborValue.Unsigned(value: U64.max)).int == none && (CborValue.Negative(n: U64.max)).int == none && CborValue.Null.int == none)
+// What each reads as: an Int, a U64, an F64.
+let integers: (String, Int?, U64?, F64?)[>..] = [
+    ("01", 1, 1, 1.0), ("1801", 1, 1, 1.0), ("190001", 1, 1, 1.0), ("1a00000001", 1, 1, 1.0), ("1b0000000000000001", 1, 1, 1.0),
+    ("c24101", 1, 1, 1.0), ("c24a00000000000000000001", 1, 1, 1.0),
+    ("1bffffffffffffffff", none, U64.max, 18446744073709551616.0), ("3bffffffffffffffff", none, none, -18446744073709551616.0),
+    ("c249010000000000000000", none, none, 18446744073709551616.0), ("f93c00", none, none, 1.0),
+    ("20", -1, none, -1.0), ("c34100", -1, none, -1.0), ("c34107", -8, none, -8.0), ("3863", -100, none, -100.0),
+]
+
+@test(arguments: integers)
+fn anIntegerIsReadFromAnyForm(_ hex: String, _ int: Int?, _ unsigned: U64?, _ float: F64?) {
+    expect((try? Cbor.decode(Int.self, from: bytes(hex))) == int)
+    expect((try? Cbor.decode(U64.self, from: bytes(hex))) == unsigned)
+    expect((try? Cbor.decode(F64.self, from: bytes(hex))) == float)
+}
+
+@test(arguments: [
+    (255, "18ff"), (256, "190100"), (65535, "19ffff"), (65536, "1a00010000"), (4294967295, "1affffffff"),
+    (4294967296, "1b0000000100000000"), (Int.max, "1b7fffffffffffffff"), (-24, "37"), (-25, "3818"),
+    (-256, "38ff"), (-257, "390100"), (-65536, "39ffff"), (-65537, "3a00010000"), (Int.min, "3b7fffffffffffffff"),
+])
+fn integersTakeTheFewestBytes(_ value: Int, _ hex: String) throws {
+    expect(Hex.encode(try Cbor.encode(value)) == hex)
+    expect(try Cbor.decode(Int.self, from: bytes(hex)) == value)
+    expect((try CborValue.parse(bytes(hex))).int == value)
+    expect(CborValue.integer(value) == (try CborValue.parse(bytes(hex))))
 }
 
 @test
 fn floatsTakeTheFewestBitsThatHoldThem() throws {
+    assertEqual(Hex.encode(try Cbor.encode(65505.0)), "fa477fe100")
+    // The two subnormal and least normal halves.
+    assertEqual(Hex.encode(try Cbor.encode(5.960464477539063e-8)), "f90001")
+    assertEqual(Hex.encode(try Cbor.encode(0.00006103515625)), "f90400")
+    expect(try CborValue.parse(bytes("f90001")) == .Float(value: 5.960464477539063e-8))
+    expect(try CborValue.parse(bytes("f90400")) == .Float(value: 0.00006103515625))
+    assertEqual(Hex.encode(try Cbor.encode(F64.fromBits(0x7FF8_0000_0000_1234))), "f97e00")
+    assertEqual(try Cbor.decode(F32.self, from: try Cbor.encode(0.1 as F32)), 0.1 as F32)
     for value in [0.0, 1.5, 65504.0, 65505.0, 0.1, 1e300, 5e-324, 3.4028234663852886e+38, -2.25, 5.960464477539063e-8, 2.98e-8] {
         assertEqual(try Cbor.decode(F64.self, from: try Cbor.encode(value)), value)
     }
-    assertEqual(Hex.encode(try Cbor.encode(65505.0)), "fa477fe100")
-    assertEqual(Hex.encode(try Cbor.encode(F64.fromBits(0x7FF8_0000_0000_1234))), "f97e00")
-    assertEqual(try Cbor.decode(F32.self, from: try Cbor.encode(0.1 as F32)), 0.1 as F32)
 }
 
 @test
 fn aDerivedTypeGoesThereAndBack() throws {
-    let record = Record {
-        name: "r",
-        meta: Meta { version: U64.max, rate: 0.5 },
-        shapes: [.Circle(radius: 0.1), .Point(-1, 2), .Empty],
-        note: none,
-        when: UtcDateTime.fromUnix(1700000000),
-    }
-    for deterministic in [false, true] {
-        let encoded = try Cbor.encode(record, conformance: deterministic ? .Deterministic : .Lax)
-        assertEqual(encoded[0], deterministic ? 0xA6 as U8 : 0xBF as U8)
-        require(try Cbor.decode(Record.self, from: encoded) == record)
-        assertEqual(refusal(of: encoded, conformance: .Deterministic).isEmpty, deterministic)
-    }
     var counts = Dictionary<String, Int>()
     counts["one"] = 1
     assertEqual(Hex.encode(try Cbor.encode(counts)), "a1636f6e6501")
@@ -248,6 +230,19 @@ fn aDerivedTypeGoesThereAndBack() throws {
     // Indefinite lengths throughout, and tags that are looked through.
     let shapes = try Cbor.decode(Shape[>..].self, from: bytes("9fd9d9f765456d707479bf7f65506f696e7460ff9f0120ffffff"))
     expect(shapes == [.Empty, .Point(1, -1)])
+    for deterministic in [false, true] {
+        let record = Record {
+            name: "r",
+            meta: Meta { version: U64.max, rate: 0.5 },
+            shapes: [.Circle(radius: 0.1), .Point(-1, 2), .Empty],
+            note: none,
+            when: UtcDateTime.fromUnix(1700000000),
+        }
+        let encoded = try Cbor.encode(record, conformance: deterministic ? .Deterministic : .Lax)
+        assertEqual(encoded[0], deterministic ? 0xA6 as U8 : 0xBF as U8)
+        expect(try Cbor.decode(Record.self, from: encoded) == record)
+        assertEqual(refusal(of: encoded, conformance: .Deterministic).isEmpty, deterministic)
+    }
 }
 
 @test
@@ -312,16 +307,19 @@ fn theDeterministicEncodingSortsAMapByItsKeysBytes() throws {
 
 @test
 fn aDecoderCanAskForTheDeterministicEncoding() {
-    for hex in ["1800", "190001", "1a0000ffff", "1b00000000ffffffff", "5800", "7800", "9800", "b800", "d800f6", "fa3fc00000", "fb3ff8000000000000", "a2616201616100", "a2616100616101", "5f40ff", "a2f4006100"] {
-        if hex != "a2f4006100" {
-            require(refusal(hex, conformance: .Deterministic).contains("not deterministic"))
-        }
-        assertEqual(refusal(hex, conformance: .Deterministic).isEmpty, false)
-    }
+    expect(refusal("a2f4006100", conformance: .Deterministic) != "")
     assertEqual(refusal("a3616101616202f400", conformance: .Deterministic), "")
     assertEqual(refusal("a2616201616100", conformance: .Deterministic), "not CBOR: a map's keys out of order, which is not deterministic, at byte 4")
     expect((try? Cbor.decode(Int.self, from: bytes("1800"), conformance: .Deterministic)) == none)
     expect((try? CborDecoder.parse(bytes("1800"), conformance: .Deterministic)) == none)
+}
+
+@test(arguments: [
+    "1800", "190001", "1a0000ffff", "1b00000000ffffffff", "5800", "7800", "9800", "b800", "d800f6", "fa3fc00000",
+    "fb3ff8000000000000", "a2616201616100", "a2616100616101", "5f40ff",
+])
+fn whatIsNotDeterministicIsRefused(_ hex: String) {
+    expect(refusal(hex, conformance: .Deterministic).contains("not deterministic"))
 }
 
 @test
@@ -334,6 +332,7 @@ fn aDeterministicNanAndBignumHaveOneEncoding() {
     // RFC 8949 §3.4.3: 2^64 is a bignum, and what is less is not.
     assertEqual(refusal("c249010000000000000000", conformance: .Deterministic), "")
     assertEqual(refusal("c349010000000000000000", conformance: .Deterministic), "")
+    assertEqual(refusal("c54101", conformance: .Deterministic), "")
     for hex in ["c248ffffffffffffffff", "c24a00010000000000000000", "c240", "c34101"] {
         assertEqual(refusal(hex), "")
         assertEqual(
@@ -341,24 +340,26 @@ fn aDeterministicNanAndBignumHaveOneEncoding() {
             "not CBOR: a bignum longer than it need be, which is not deterministic, at byte 1"
         )
     }
-    assertEqual(refusal("c54101", conformance: .Deterministic), "")
-    let cases: (U8[>..], U64, String)[>..] = [
-        ([], 2, "00"),
-        ([0, 5], 2, "05"),
-        ([0, 5], 3, "25"),
-        ([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], 3, "3bffffffffffffffff"),
-        ([0, 1, 0, 0, 0, 0, 0, 0, 0, 0], 2, "c249010000000000000000"),
-        ([0, 5], 24, "d818420005"),
-    ]
-    for (data, tag, hex) in cases {
-        let encoder = CborEncoder(conformance: .Deterministic)
-        try! encoder.beginSequence(count: 2)
-        try! encoder.encodeTag(tag)
-        try! encoder.encodeBytes(data)
-        try! encoder.encodeInt(1)
-        try! encoder.endSequence()
-        assertEqual(Hex.encode(try! encoder.bytes()), "82" + hex + "01")
-    }
+}
+
+let bignums: (U8[>..], U64, String)[>..] = [
+    ([], 2, "00"),
+    ([0, 5], 2, "05"),
+    ([0, 5], 3, "25"),
+    ([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], 3, "3bffffffffffffffff"),
+    ([0, 1, 0, 0, 0, 0, 0, 0, 0, 0], 2, "c249010000000000000000"),
+    ([0, 5], 24, "d818420005"),
+]
+
+@test(arguments: bignums)
+fn bignumsAreWrittenAsTheirLeast(_ data: U8[>..], _ tag: U64, _ hex: String) throws {
+    let encoder = CborEncoder(conformance: .Deterministic)
+    try encoder.beginSequence(count: 2)
+    try encoder.encodeTag(tag)
+    try encoder.encodeBytes(data)
+    try encoder.encodeInt(1)
+    try encoder.endSequence()
+    expect(Hex.encode(try encoder.bytes()) == "82" + hex + "01")
 }
 
 @test
@@ -410,13 +411,13 @@ fn aMomentReadsFromItsTags() throws {
     let before = try Cbor.decode(UtcDateTime.self, from: bytes("c1f9be00"))
     expect(before == UtcDateTime { secondsSinceEpoch: -2, nanosecond: 500000000 })
     for hex in ["c11bffffffffffffffff", "c1fb7e37e43c8800759c", "c1f97e00", "c1f97c00", "c11b7fffffffffffffff", "c1f6", "01"] {
-        require((try? CborDecoder.parse(bytes(hex)).decodeTimestamp()) == none)
+        expect((try? CborDecoder.parse(bytes(hex)).decodeTimestamp()) == none)
     }
 }
 
 @test
 fn decodersSayWhereAndWhatIsWrong() throws {
-    let root = try CborDecoder.parse(bytes("a3616182016178 05f5 63622063a1f601".replacing(" ", with: "")))
+    let root = try CborDecoder.parse(bytes("a361618201617805f563622063a1f601"))
     assertEqual(root.path, "$")
     assertEqual(root.count, 3)
     expect(root.kind == .Map && !root.isNull && !root.isMissing && root.tags.isEmpty)
@@ -425,88 +426,52 @@ fn decodersSayWhereAndWhatIsWrong() throws {
     expect(root.hasField("a") && !root.hasField("c") && !root.hasField("5") && !root.field("a").hasField("a"))
     expect(!root.excluding(["a"]).hasField("a"))
     assertEqual(try root.excluding(["a"]).excluding(["5"]).decodeMap().count, 1)
-    var messages: String[>..] = []
-    let attempts: (() throws(SerializeError) -> Void)[>..] = [
-        {
-            _ = try root.field("zz").decodeInt()
-        },
-        {
-            _ = try root.field("zz").decodeValue()
-        },
-        {
-            _ = try root.decodeInt()
-        },
-        {
-            _ = try root.field("a").decodeString()
-        },
-        {
-            _ = try root.field("a").element(1).decodeBool()
-        },
-        {
-            _ = try root.field("a").element(0).decodeBytes()
-        },
-        {
-            _ = try root.field("a").element(0).decodeSequence()
-        },
-        {
-            _ = try root.field("a").element(1).decodeFloat()
-        },
-        {
-            _ = try root.field("a").element(1).decodeTimestamp()
-        },
-        {
-            _ = try root.field("b c").decodeMap()
-        },
-        {
-            _ = try root.field("a").caseName()
-        },
-        {
-            _ = try root.field("b c").caseName()
-        },
-        { try root.field("a").beginStruct("T") },
-        {
-            throw root.unknownCase("Z")
-        },
-        {
-            throw root.field("a").invalid("bad")
-        },
-    ]
-    for attempt in attempts {
-        do {
-            try attempt()
-            fail("read")
-        } catch {
-            messages.append(error.description())
-        }
-    }
-    assertEqual(messages.joined(separator: "\n"), """
-        $.zz: missing
-        $.zz: missing
-        $: expected an integer, found a map
-        $.a: expected a string, found an array
-        $.a[1]: expected a Bool, found a string
-        $.a[0]: expected bytes, found an integer
-        $.a[0]: expected an array, found an integer
-        $.a[1]: expected a number, found a string
-        $.a[1]: expected a moment, found a string
-        $['b c']: a key is neither a string nor an integer
-        $.a: expected a case's name, or a map of one entry, found an array
-        $['b c']: expected a case's name, or a map of one entry, found a map
-        $.a: expected a map (T), found an array
-        $: no case 'Z'
-        $.a: bad
-        """)
-    var kinds = ""
-    for hex in ["f6", "f7", "f4", "01", "20", "f90000", "60", "40", "80", "a0", "c24101", "f0", "c1c240", "9fff", "bfff"] {
-        let decoder = try CborDecoder.parse(bytes(hex))
-        kinds += "\(decoder.kind) "
-        require(!decoder.kindName.isEmpty)
-    }
-    assertEqual(kinds, "Null Null Bool Number Number Number String Bytes Sequence Map Number Number Number Sequence Map ")
     assertEqual(try CborDecoder.parse(bytes("9f010203ff")).count, 3)
     assertEqual(try CborDecoder.parse(bytes("bf0102ff")).count, 1)
     expect(root.field("zz").kind == .Missing && root.field("zz").kindName == "nothing" && root.casePayload().isMissing)
     expect(try CborDecoder.parse(bytes("d9d9f7c101")).tags == [55799, 1])
+    expectThrows(saying: "$.zz: missing") { _ = try root.field("zz").decodeInt() }
+    expectThrows(saying: "$.zz: missing") { _ = try root.field("zz").decodeValue() }
+    expectThrows(saying: "$: expected an integer, found a map") { _ = try root.decodeInt() }
+    expectThrows(saying: "$.a: expected a string, found an array") { _ = try root.field("a").decodeString() }
+    expectThrows(saying: "$.a[1]: expected a Bool, found a string") { _ = try root.field("a").element(1).decodeBool() }
+    expectThrows(saying: "$.a[0]: expected bytes, found an integer") { _ = try root.field("a").element(0).decodeBytes() }
+    expectThrows(saying: "$.a[0]: expected an array, found an integer") { _ = try root.field("a").element(0).decodeSequence() }
+    expectThrows(saying: "$.a[1]: expected a number, found a string") { _ = try root.field("a").element(1).decodeFloat() }
+    expectThrows(saying: "$.a[1]: expected a moment, found a string") { _ = try root.field("a").element(1).decodeTimestamp() }
+    expectThrows(saying: "$['b c']: a key is neither a string nor an integer") { _ = try root.field("b c").decodeMap() }
+    expectThrows(saying: "$.a: expected a case's name, or a map of one entry, found an array") { _ = try root.field("a").caseName() }
+    expectThrows(saying: "$['b c']: expected a case's name, or a map of one entry, found a map") { _ = try root.field("b c").caseName() }
+    expectThrows(saying: "$.a: expected a map (T), found an array") { try root.field("a").beginStruct("T") }
+    expectThrows(saying: "$: no case 'Z'") {
+        throw root.unknownCase("Z")
+    }
+    expectThrows(saying: "$.a: bad") {
+        throw root.field("a").invalid("bad")
+    }
+}
+
+@test(arguments: [
+    ("f6", DecodedKind.Null),
+    ("f7", DecodedKind.Null),
+    ("f4", DecodedKind.Bool),
+    ("01", DecodedKind.Number),
+    ("20", DecodedKind.Number),
+    ("f90000", DecodedKind.Number),
+    ("60", DecodedKind.String),
+    ("40", DecodedKind.Bytes),
+    ("80", DecodedKind.Sequence),
+    ("a0", DecodedKind.Map),
+    ("c24101", DecodedKind.Number),
+    ("f0", DecodedKind.Number),
+    ("c1c240", DecodedKind.Number),
+    ("9fff", DecodedKind.Sequence),
+    ("bfff", DecodedKind.Map),
+])
+fn aDecoderHasTheKindOfItsItem(_ hex: String, _ kind: DecodedKind) throws {
+    let decoder = try CborDecoder.parse(bytes(hex))
+    expect(decoder.kind == kind)
+    expect(decoder.kindName != "")
 }
 
 @test
@@ -550,6 +515,7 @@ fn theEncoderRefusesWhatWouldNotBeCbor() {
 
 @test
 fn aValueOfEveryKindGoesThereAndBack() throws {
+    expect(CborValue.Unsigned(value: U64.max).int == none && CborValue.Negative(n: U64.max).int == none && CborValue.Null.int == none)
     let value = CborValue.Map(entries: [
         CborEntry { key: .Text(value: "a"), value: .Array(items: [.Null, .Undefined, .Bool(value: true), .Simple(value: 99)]) },
         CborEntry { key: .Negative(n: U64.max), value: .Float(value: 2.5) },
@@ -579,24 +545,14 @@ fn aValueGoesThroughOtherFormats() throws {
     expect((try? CborValue.decode(from: try JsonDecoder.parse("{}").field("a"))) == none)
 }
 
-@test
-fn illFormedCborIsRefused() {
-    assertEqual(refusal(""), "not CBOR: no item where one should be at byte 0")
-    assertEqual(refusal("0102"), "not CBOR: more after the item at byte 1")
-    assertEqual(refusal("62c328"), "not CBOR: ill-formed UTF-8 in the string at byte 0")
-    // RFC 8949 Appendix F: an end in a head, a string, an array, a map, a tag
-    // and an indefinite length.
-    for hex in ["18", "19", "1a", "1b", "1901", "1a0102", "1b01020304050607", "38", "58", "78", "98", "9a01ff00", "b8", "d8", "f8", "f900", "fa0000", "fb000000", "41", "61", "5affffffff00", "5bffffffffffffffff010203", "7affffffff00", "7b7fffffffffffffff010203", "81", "818181818181818181", "8200", "a1", "a20102", "a100", "a2000000", "c0", "5f4100", "7f6100", "9f", "9f0102", "bf", "bf01020102", "819f", "9f8000", "9f9f9f9f9fffffffff", "9f819f819f9fffffff"] {
-        assertEqual(refusal(hex).isEmpty, false)
-        assertEqual((try? tokens(bytes(hex))) == none, true)
-    }
-    // Reserved additional information, simple values below 32 in two bytes,
-    // chunks of the wrong kind, breaks where none may be, half an entry.
-    for hex in ["1c", "1d", "1e", "3c", "5c", "7d", "9e", "bc", "dd", "fc", "fd", "fe", "f800", "f801", "f818", "f81f", "5f00ff", "5f21ff", "5f6100ff", "5f80ff", "5fa0ff", "5fc000ff", "5fe0ff", "7f4100ff", "5f5f4100ffff", "7f7f6100ffff", "ff", "81ff", "8200ff", "a1ff", "a1ff00", "a100ff", "a20000ff", "9f81ff", "9f829f819f9fffffffff", "bf00ff", "bf000000ff", "1f", "3f", "df00ff", "c1ff", "9fc1ff"] {
-        assertEqual(refusal(hex).isEmpty, false)
-        assertEqual((try? tokens(bytes(hex))) == none, true)
-    }
-    assertEqual(refusal("7f61c3 61bcff".replacing(" ", with: "")), "not CBOR: ill-formed UTF-8 in the string at byte 1")
+@test(arguments: [
+    ("", "not CBOR: no item where one should be at byte 0"),
+    ("0102", "not CBOR: more after the item at byte 1"),
+    ("62c328", "not CBOR: ill-formed UTF-8 in the string at byte 0"),
+    ("7f61c361bcff", "not CBOR: ill-formed UTF-8 in the string at byte 1"),
+])
+fn illFormedCborIsRefused(_ hex: String, _ message: String) {
+    assertEqual(refusal(hex), message)
 }
 
 @test
@@ -604,16 +560,30 @@ fn everyPrefixOfAValueIsRefused() throws {
     let record = Record { name: "a name", meta: Meta { version: 70000, rate: 0.5 }, shapes: [.Circle(radius: 0.1)], note: "n", when: UtcDateTime.fromUnix(0) }
     let encoded = try Cbor.encode(record)
     for count in 0..<encoded.count {
-        assert(!refusal(of: encoded[0..<count].toArray()).isEmpty)
+        expect(refusal(of: encoded[0..<count].toArray()) != "", "the first \(count) bytes")
     }
 }
 
-@test
-fn declaredLengthsAreCheckedBeforeAnythingIsMade() {
-    for hex in ["5bffffffffffffffff", "7bffffffffffffffff", "9bffffffffffffffff", "bbffffffffffffffff", "9b7fffffffffffffff00", "bb7fffffffffffffff0000", "9a7fffffff00", "5b7fffffffffffffff00"] {
-        assertEqual(refusal(hex).isEmpty, false)
-        assertEqual((try? tokens(bytes(hex))) == none, true)
-    }
+@test(arguments: [
+    // Lengths there are not the bytes for.
+    "5bffffffffffffffff", "7bffffffffffffffff", "9bffffffffffffffff", "bbffffffffffffffff", "9b7fffffffffffffff00",
+    "bb7fffffffffffffff0000", "9a7fffffff00", "5b7fffffffffffffff00",
+    // RFC 8949 Appendix F: an end in a head, a string, an array, a map, a tag
+    // and an indefinite length.
+    "18", "19", "1a", "1b", "1901", "1a0102", "1b01020304050607", "38", "58", "78", "98", "9a01ff00", "b8", "d8", "f8",
+    "f900", "fa0000", "fb000000", "41", "61", "5affffffff00", "5bffffffffffffffff010203", "7affffffff00",
+    "7b7fffffffffffffff010203", "81", "818181818181818181", "8200", "a1", "a20102", "a100", "a2000000", "c0", "5f4100",
+    "7f6100", "9f", "9f0102", "bf", "bf01020102", "819f", "9f8000", "9f9f9f9f9fffffffff", "9f819f819f9fffffff",
+    // Reserved additional information, simple values below 32 in two bytes,
+    // chunks of the wrong kind, breaks where none may be, half an entry.
+    "1c", "1d", "1e", "3c", "5c", "7d", "9e", "bc", "dd", "fc", "fd", "fe", "f800", "f801", "f818", "f81f", "5f00ff",
+    "5f21ff", "5f6100ff", "5f80ff", "5fa0ff", "5fc000ff", "5fe0ff", "7f4100ff", "5f5f4100ffff", "7f7f6100ffff", "ff",
+    "81ff", "8200ff", "a1ff", "a1ff00", "a100ff", "a20000ff", "9f81ff", "9f829f819f9fffffffff", "bf00ff", "bf000000ff",
+    "1f", "3f", "df00ff", "c1ff", "9fc1ff",
+])
+fn whatIsNotWellFormedIsRefused(_ hex: String) {
+    expect(refusal(hex) != "")
+    expect((try? tokens(bytes(hex))) == none)
 }
 
 @test
@@ -635,17 +605,13 @@ fn nestingIsBounded() {
 
 @test
 fn anyBytesAreReadOrRefused() {
-    var random = SeededRandomNumberGenerator(seed: 8949)
-    for _ in 0..<4000 {
-        var made: U8[>..] = []
-        for _ in 0..<Int.random(in: 0..<40, using: &random) {
-            made.append(U8.truncating(Int.random(in: 0..<256, using: &random)))
+    forAll(anyBytes, cases: 4000) { (made: U8[>..]) in
+        guard let value = try? CborValue.parse(made) else {
+            return
         }
-        if let value = try? CborValue.parse(made) {
-            let again = try! value.bytes()
-            assertEqual(try! CborValue.parse(again).bytes(), again)
-            _ = value.diagnostic()
-            assert((try? tokens(made)) != none)
-        }
+        let again = try value.bytes()
+        expect(try CborValue.parse(again).bytes() == again)
+        _ = value.diagnostic()
+        expect((try? tokens(made)) != none)
     }
 }

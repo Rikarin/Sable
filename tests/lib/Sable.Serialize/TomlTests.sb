@@ -41,271 +41,335 @@ fn value(_ text: String) -> String {
     return all.hasPrefix("{a:") ? all.slice(from: 3, to: all.count - 1) : all
 }
 
-fn invalid(_ texts: String[>..]) {
-    for text in texts {
-        assert(read(text).hasPrefix("error: "), "is read: " + text + " as " + read(text))
-        assert((try? TomlDocument.parse(text)) == none)
+// What the text holds is as shown, or neither the parser nor the document's
+// takes it.
+fn reads(_ text: String, _ shown: String) {
+    if shown == "refused" {
+        expect(read(text).hasPrefix("error: "), "is read as \(read(text))")
+        expect((try? TomlDocument.parse(text)) == none)
+    } else {
+        expect(read(text) == shown)
     }
 }
 
-// ---- Comments, keys ----------------------------------------------------------
-
-@test
-fn commentsAndBlankLinesHoldNothing() {
-    assertEqual(read(""), "{}")
-    assertEqual(read("\n \t\r\n# only\n#\n\t# tab\there"), "{}")
-    assertEqual(read("a = 1 # after\n# b = 2\nc = \"# not one\"#x"), "{a:i1,c:s\"# not one\"}")
-    assertEqual(read("\u{feff}a = 1"), "{a:i1}")
-    assertEqual(read("# \u{e9}\u{1f600}\na=1"), "{a:i1}")
-    invalid(["# a\u{0}b", "# a\u{1}", "# a\u{1f}", "# a\u{7f}", "# a\u{8}", "a = 1 # \u{c}", "# a\rb", "# a\r", "a = 1\r", "a = 1\rb = 2", "a\u{feff} = 1", "x = 1\n\u{feff}"])
+// The same of the text after 'a = '.
+fn isValue(_ text: String, _ shown: String) {
+    reads("a = " + text, shown == "refused" ? shown : "{a:" + shown + "}")
 }
 
-@test
-fn keysAreBareQuotedOrDotted() {
-    assertEqual(read("key = 1\nbare_key = 2\nbare-key = 3\n1234 = 4"), "{key:i1,bare_key:i2,bare-key:i3,1234:i4}")
-    assertEqual(read(#""127.0.0.1" = 1"# + "\n" + #""ʎǝʞ" = 2"# + "\n" + #"'quoted "v"' = 3"# + "\n'' = 4"), "{127.0.0.1:i1,ʎǝʞ:i2,quoted \"v\":i3,:i4}")
-    assertEqual(read("a.b = 1\na . c = 2\na.\"d.e\" = 3\n'a'.f.g=4"), "{a:{b:i1,c:i2,d.e:i3,f:{g:i4}}}")
-    assertEqual(read("3.14159 = 'pi'"), "{3:{14159:s\"pi\"}}")
-    assertEqual(read("apple.type = 1\norange.type = 2\napple.skin = 3"), "{apple:{type:i1,skin:i3},orange:{type:i2}}")
-    assertEqual(read(#""a\u0062\n" = 1"#), "{ab\n:i1}")
-    assertEqual(read("true = 1\ninf = 2\n1979-05-27 = 3\n-_- = 4"), "{true:i1,inf:i2,1979-05-27:i3,-_-:i4}")
-    invalid([
-        "= 1", "a", "a =", "a = # c", "a = \n1", "a\n= 1", "a b = 1", "a. = 1", ".a = 1", "a..b = 1", "a = 1 b = 2", "a = 1\na = 2",
-        "spelling = 1\n\"spelling\" = 2", "a.b = 1\na.b.c = 2", "a = 1\na.b = 2", "a.b = 1\na = 2", "a.b = 1\na.b = 2", "é = 1",
-        "a! = 1", "a = 1, b = 2", "\"a = 1", "'a = 1", "\"\"\"a\"\"\" = 1", "'''a''' = 1", "\"a\nb\" = 1", "a+b = 1", "[a] = 1", "a = b", "a == 1", "a: 1",
-        "\"a\" \"b\" = 1", "a\"b\" = 1", "a = 1.a", "\"\\x41\" = 1",
-    ])
+let basicQuotes = "\"\"\""
+let literalQuotes = "'''"
+
+// ---- Comments, keys ----------------------------------------------------------
+
+@test(arguments: [
+    ("", "{}"),
+    ("\n \t\r\n# only\n#\n\t# tab\there", "{}"),
+    ("a = 1 # after\n# b = 2\nc = \"# not one\"#x", "{a:i1,c:s\"# not one\"}"),
+    ("\u{feff}a = 1", "{a:i1}"),
+    ("# \u{e9}\u{1f600}\na=1", "{a:i1}"),
+    ("# a\u{0}b", "refused"), ("# a\u{1}", "refused"), ("# a\u{1f}", "refused"), ("# a\u{7f}", "refused"),
+    ("# a\u{8}", "refused"), ("a = 1 # \u{c}", "refused"), ("# a\rb", "refused"), ("# a\r", "refused"),
+    ("a = 1\r", "refused"), ("a = 1\rb = 2", "refused"), ("a\u{feff} = 1", "refused"), ("x = 1\n\u{feff}", "refused"),
+])
+fn commentsAndBlankLinesHoldNothing(_ text: String, _ shown: String) {
+    reads(text, shown)
+}
+
+@test(arguments: [
+    ("key = 1\nbare_key = 2\nbare-key = 3\n1234 = 4", "{key:i1,bare_key:i2,bare-key:i3,1234:i4}"),
+    (#""127.0.0.1" = 1"# + "\n" + #""ʎǝʞ" = 2"# + "\n" + #"'quoted "v"' = 3"# + "\n'' = 4", "{127.0.0.1:i1,ʎǝʞ:i2,quoted \"v\":i3,:i4}"),
+    ("a.b = 1\na . c = 2\na.\"d.e\" = 3\n'a'.f.g=4", "{a:{b:i1,c:i2,d.e:i3,f:{g:i4}}}"),
+    ("3.14159 = 'pi'", "{3:{14159:s\"pi\"}}"),
+    ("apple.type = 1\norange.type = 2\napple.skin = 3", "{apple:{type:i1,skin:i3},orange:{type:i2}}"),
+    (#""a\u0062\n" = 1"#, "{ab\n:i1}"),
+    ("true = 1\ninf = 2\n1979-05-27 = 3\n-_- = 4", "{true:i1,inf:i2,1979-05-27:i3,-_-:i4}"),
+    ("= 1", "refused"), ("a", "refused"), ("a =", "refused"), ("a = # c", "refused"), ("a = \n1", "refused"),
+    ("a\n= 1", "refused"), ("a b = 1", "refused"), ("a. = 1", "refused"), (".a = 1", "refused"),
+    ("a..b = 1", "refused"), ("a = 1 b = 2", "refused"), ("a = 1\na = 2", "refused"),
+    ("spelling = 1\n\"spelling\" = 2", "refused"), ("a.b = 1\na.b.c = 2", "refused"), ("a = 1\na.b = 2", "refused"),
+    ("a.b = 1\na = 2", "refused"), ("a.b = 1\na.b = 2", "refused"), ("é = 1", "refused"), ("a! = 1", "refused"),
+    ("a = 1, b = 2", "refused"), ("\"a = 1", "refused"), ("'a = 1", "refused"), ("\"\"\"a\"\"\" = 1", "refused"),
+    ("'''a''' = 1", "refused"), ("\"a\nb\" = 1", "refused"), ("a+b = 1", "refused"), ("[a] = 1", "refused"),
+    ("a = b", "refused"), ("a == 1", "refused"), ("a: 1", "refused"), ("\"a\" \"b\" = 1", "refused"),
+    ("a\"b\" = 1", "refused"), ("a = 1.a", "refused"), ("\"\\x41\" = 1", "refused"),
+])
+fn keysAreBareQuotedOrDotted(_ text: String, _ shown: String) {
+    reads(text, shown)
 }
 
 // ---- Strings -----------------------------------------------------------------
 
-@test
-fn basicStringsHaveEscapes() {
-    assertEqual(value(#""\b\t\n\f\r\"\\ \u00e9 \U0001F600 \u0000""#), #"s"\b\t\n\f\r\"\\ é 😀 \u0000""#)
-    assertEqual(value("\"\""), "s\"\"")
-    assertEqual(value("\"tab\there 'x' é\""), "s\"tab\\there 'x' é\"")
-    assertEqual(value(#""\uD7FF\uE000\U0010FFFF""#), "s\"\u{D7FF}\u{E000}\u{10FFFF}\"")
-    invalid([
-        #"a = "\a""#, #"a = "\e""#, #"a = "\x41""#, #"a = "\ ""#, #"a = "\u""#, #"a = "\u12""#, #"a = "\u123g""#, #"a = "\U0000004""#, #"a = "\uD800""#, #"a = "\uDFFF""#,
-        #"a = "\U00110000""#, #"a = "\UFFFFFFFF""#, #"a = "\"#, #"a = "\""#, "a = \"x", "a = \"x\ny\"", "a = \"\u{0}\"", "a = \"\u{1f}\"", "a = \"\u{7f}\"", "a = \"\r\"",
-        "a = \"\u{b}\"", "a = \"x\" y", "a = \"x\"\"y\"", "a = \"x\\\ny\"", #"a = "\'""#, #"a = "\/""#, #"a = "\N""#,
-    ])
+@test(arguments: [
+    (#""\b\t\n\f\r\"\\ \u00e9 \U0001F600 \u0000""#, #"s"\b\t\n\f\r\"\\ é 😀 \u0000""#),
+    ("\"\"", "s\"\""),
+    ("\"tab\there 'x' é\"", "s\"tab\\there 'x' é\""),
+    (#""\uD7FF\uE000\U0010FFFF""#, "s\"\u{D7FF}\u{E000}\u{10FFFF}\""),
+    (#""\a""#, "refused"), (#""\e""#, "refused"), (#""\x41""#, "refused"), (#""\ ""#, "refused"), (#""\u""#, "refused"),
+    (#""\u12""#, "refused"), (#""\u123g""#, "refused"), (#""\U0000004""#, "refused"), (#""\uD800""#, "refused"),
+    (#""\uDFFF""#, "refused"), (#""\U00110000""#, "refused"), (#""\UFFFFFFFF""#, "refused"), (#""\"#, "refused"),
+    (#""\""#, "refused"), ("\"x", "refused"), ("\"x\ny\"", "refused"), ("\"\u{0}\"", "refused"),
+    ("\"\u{1f}\"", "refused"), ("\"\u{7f}\"", "refused"), ("\"\r\"", "refused"), ("\"\u{b}\"", "refused"),
+    ("\"x\" y", "refused"), ("\"x\"\"y\"", "refused"), ("\"x\\\ny\"", "refused"), (#""\'""#, "refused"),
+    (#""\/""#, "refused"), (#""\N""#, "refused"),
+])
+fn basicStringsHaveEscapes(_ text: String, _ shown: String) {
+    isValue(text, shown)
 }
 
-@test
-fn literalStringsHaveNone() {
-    assertEqual(value(#"'C:\Users\n "x"	'"#), #"s"C:\\Users\\n \"x\"\t""#)
-    assertEqual(value("''"), "s\"\"")
-    invalid(["a = 'x", "a = 'x\ny'", "a = 'it's'", "a = '\u{0}'", "a = '\u{7f}'", "a = '\u{1}'", "a = '\r'", "a = 'x\ry'"])
+@test(arguments: [
+    (#"'C:\Users\n "x"	'"#, #"s"C:\\Users\\n \"x\"\t""#),
+    ("''", "s\"\""),
+    ("'x", "refused"), ("'x\ny'", "refused"), ("'it's'", "refused"), ("'\u{0}'", "refused"), ("'\u{7f}'", "refused"),
+    ("'\u{1}'", "refused"), ("'\r'", "refused"), ("'x\ry'", "refused"),
+])
+fn literalStringsHaveNone(_ text: String, _ shown: String) {
+    isValue(text, shown)
 }
 
-@test
-fn multiLineBasicStringsTrimAndFold() {
-    let q = "\"\"\""
-    assertEqual(value(q + "\nRoses\nViolets" + q), "s\"Roses\\nViolets\"")
-    assertEqual(value(q + "\r\nRoses\r\nViolets" + q), "s\"Roses\\nViolets\"")
-    assertEqual(value(q + "\n\nx" + q), "s\"\\nx\"")
-    assertEqual(value(q + q), "s\"\"")
-    assertEqual(value(q + "\n" + q), "s\"\"")
-    assertEqual(value(q + "\nThe quick \\\n\n\n  fox \\\n    jumps.\\\n   " + q), "s\"The quick fox jumps.\"")
-    assertEqual(value(q + "a \\  \t\r\n \t b" + q), "s\"a b\"")
-    assertEqual(value(q + "two: \"\"." + q), "s\"two: \\\"\\\".\"")
-    assertEqual(value(q + "\"" + q), "s\"\\\"\"")
-    assertEqual(value(q + "\"\"x\"\"" + q), "s\"\\\"\\\"x\\\"\\\"\"")
-    assertEqual(value(q + "a\\\"\"\"\\\"b" + q), "s\"a\\\"\\\"\\\"\\\"b\"")
-    assertEqual(value(q + "\\u00e9\\t" + "\t" + q), "s\"é\\t\\t\"")
-    invalid([
-        "a = " + q, "a = " + q + "x", "a = " + q + "x\"\"", "a = " + q + "x" + q + q, "a = " + q + "\u{0}" + q, "a = " + q + "\u{7f}" + q, "a = " + q + "x\ry" + q,
-        "a = " + q + "\\q" + q, "a = " + q + "\\ x" + q, "a = " + q + "a \\ b" + q, "a = " + q + "\\", "a = " + q + "\\uD800" + q, "a = " + q + "x" + q + " y",
-        "a = " + q + "\\\r" + q, "a = " + q + q + q,
-    ])
+@test(arguments: [
+    (basicQuotes + "\nRoses\nViolets" + basicQuotes, "s\"Roses\\nViolets\""),
+    (basicQuotes + "\r\nRoses\r\nViolets" + basicQuotes, "s\"Roses\\nViolets\""),
+    (basicQuotes + "\n\nx" + basicQuotes, "s\"\\nx\""),
+    (basicQuotes + basicQuotes, "s\"\""),
+    (basicQuotes + "\n" + basicQuotes, "s\"\""),
+    (basicQuotes + "\nThe quick \\\n\n\n  fox \\\n    jumps.\\\n   " + basicQuotes, "s\"The quick fox jumps.\""),
+    (basicQuotes + "a \\  \t\r\n \t b" + basicQuotes, "s\"a b\""),
+    (basicQuotes + "two: \"\"." + basicQuotes, "s\"two: \\\"\\\".\""),
+    (basicQuotes + "\"" + basicQuotes, "s\"\\\"\""),
+    (basicQuotes + "\"\"x\"\"" + basicQuotes, "s\"\\\"\\\"x\\\"\\\"\""),
+    (basicQuotes + "a\\\"\"\"\\\"b" + basicQuotes, "s\"a\\\"\\\"\\\"\\\"b\""),
+    (basicQuotes + "\\u00e9\\t" + "\t" + basicQuotes, "s\"é\\t\\t\""),
+    (basicQuotes, "refused"), (basicQuotes + "x", "refused"), (basicQuotes + "x\"\"", "refused"),
+    (basicQuotes + "x" + basicQuotes + basicQuotes, "refused"), (basicQuotes + "\u{0}" + basicQuotes, "refused"),
+    (basicQuotes + "\u{7f}" + basicQuotes, "refused"), (basicQuotes + "x\ry" + basicQuotes, "refused"),
+    (basicQuotes + "\\q" + basicQuotes, "refused"), (basicQuotes + "\\ x" + basicQuotes, "refused"),
+    (basicQuotes + "a \\ b" + basicQuotes, "refused"), (basicQuotes + "\\", "refused"),
+    (basicQuotes + "\\uD800" + basicQuotes, "refused"), (basicQuotes + "x" + basicQuotes + " y", "refused"),
+    (basicQuotes + "\\\r" + basicQuotes, "refused"), (basicQuotes + basicQuotes + basicQuotes, "refused"),
+])
+fn multiLineBasicStringsTrimAndFold(_ text: String, _ shown: String) {
+    isValue(text, shown)
 }
 
-@test
-fn multiLineLiteralStringsTakeEverything() {
-    let q = "'''"
-    assertEqual(value(q + "\nraw \\n stays\n\\\nx" + q), #"s"raw \\n stays\n\\\nx""#)
-    assertEqual(value(q + "it's" + q), "s\"it's\"")
-    assertEqual(value(q + "'x''" + q), "s\"'x''\"")
-    assertEqual(value(q + "\r\n\r\n" + q), "s\"\\n\"")
-    assertEqual(value(q + q), "s\"\"")
-    assertEqual(value(q + "\"\"\"" + q), #"s"\"\"\"""#)
-    invalid(["a = " + q, "a = " + q + "x''", "a = " + q + "x" + q + q, "a = " + q + "\u{0}" + q, "a = " + q + "\u{1b}" + q, "a = " + q + "x\ry" + q, "a = " + q + q + q])
+@test(arguments: [
+    (literalQuotes + "\nraw \\n stays\n\\\nx" + literalQuotes, #"s"raw \\n stays\n\\\nx""#),
+    (literalQuotes + "it's" + literalQuotes, "s\"it's\""),
+    (literalQuotes + "'x''" + literalQuotes, "s\"'x''\""),
+    (literalQuotes + "\r\n\r\n" + literalQuotes, "s\"\\n\""),
+    (literalQuotes + literalQuotes, "s\"\""),
+    (literalQuotes + "\"\"\"" + literalQuotes, #"s"\"\"\"""#),
+    (literalQuotes, "refused"), (literalQuotes + "x''", "refused"),
+    (literalQuotes + "x" + literalQuotes + literalQuotes, "refused"),
+    (literalQuotes + "\u{0}" + literalQuotes, "refused"), (literalQuotes + "\u{1b}" + literalQuotes, "refused"),
+    (literalQuotes + "x\ry" + literalQuotes, "refused"), (literalQuotes + literalQuotes + literalQuotes, "refused"),
+])
+fn multiLineLiteralStringsTakeEverything(_ text: String, _ shown: String) {
+    isValue(text, shown)
 }
 
 // ---- Numbers, Bools ----------------------------------------------------------
 
-@test
-fn integersAreDecimalHexadecimalOctalOrBinary() {
-    let cases: (String, String)[>..] = [
-        ("+99", "i99"), ("42", "i42"), ("0", "i0"), ("-17", "i-17"), ("+0", "i0"), ("-0", "i0"), ("1_000", "i1000"), ("5_349_221", "i5349221"), ("53_49_221", "i5349221"),
-        ("1_2_3_4_5", "i12345"), ("0xDEADBEEF", "i3735928559"), ("0xdeadbeef", "i3735928559"), ("0xdead_beef", "i3735928559"), ("0o01234567", "i342391"), ("0o755", "i493"),
-        ("0b11010110", "i214"), ("0b1_0", "i2"), ("0x0", "i0"), ("0x00ff", "i255"), ("9223372036854775807", "i9223372036854775807"),
-        ("-9223372036854775808", "i-9223372036854775808"), ("0x7fffffffffffffff", "i9223372036854775807"), ("0o777777777777777777777", "i9223372036854775807"),
-        ("0b111111111111111111111111111111111111111111111111111111111111111", "i9223372036854775807"),
-    ]
-    for (text, shown) in cases {
-        assertEqual(value(text), shown)
-    }
-    for text in [
-        "01", "+01", "-01", "00", "-00", "0_0", "_1", "1_", "1__0", "+_1", "+", "-", "++1", "--1", "+-1", "1 2", "0x", "0o", "0b", "0x_1", "0x1_", "0x1__2", "0xg", "0o8", "0b2", "0X1", "0O1", "0B1",
-        "+0x1", "-0x1", "+0o1", "-0b1", "1a", "0x1.0", "9223372036854775808", "-9223372036854775809", "0x8000000000000000", "0xffffffffffffffff", "0o1000000000000000000000",
-        "0b1000000000000000000000000000000000000000000000000000000000000000", "1,000", "1'000", "1L", "0xDEADBEEFG", "_", "1_000_", "\u{0661}", "1\u{a0}", "e1",
-    ] as String[>..] {
-        expect(value(text).hasPrefix("error: "), text)
-    }
-    assertEqual(value("9223372036854775808"), "error: line 1, column 5: '9223372036854775808' does not fit 64 bits")
+@test(arguments: [
+    ("+99", "i99"), ("42", "i42"), ("0", "i0"), ("-17", "i-17"), ("+0", "i0"), ("-0", "i0"), ("1_000", "i1000"), ("5_349_221", "i5349221"), ("53_49_221", "i5349221"),
+    ("1_2_3_4_5", "i12345"), ("0xDEADBEEF", "i3735928559"), ("0xdeadbeef", "i3735928559"), ("0xdead_beef", "i3735928559"), ("0o01234567", "i342391"), ("0o755", "i493"),
+    ("0b11010110", "i214"), ("0b1_0", "i2"), ("0x0", "i0"), ("0x00ff", "i255"), ("9223372036854775807", "i9223372036854775807"),
+    ("-9223372036854775808", "i-9223372036854775808"), ("0x7fffffffffffffff", "i9223372036854775807"), ("0o777777777777777777777", "i9223372036854775807"),
+    ("0b111111111111111111111111111111111111111111111111111111111111111", "i9223372036854775807"),
+    ("01", "refused"), ("+01", "refused"), ("-01", "refused"), ("00", "refused"), ("-00", "refused"),
+    ("0_0", "refused"), ("_1", "refused"), ("1_", "refused"), ("1__0", "refused"), ("+_1", "refused"), ("+", "refused"),
+    ("-", "refused"), ("++1", "refused"), ("--1", "refused"), ("+-1", "refused"), ("1 2", "refused"), ("0x", "refused"),
+    ("0o", "refused"), ("0b", "refused"), ("0x_1", "refused"), ("0x1_", "refused"), ("0x1__2", "refused"),
+    ("0xg", "refused"), ("0o8", "refused"), ("0b2", "refused"), ("0X1", "refused"), ("0O1", "refused"),
+    ("0B1", "refused"), ("+0x1", "refused"), ("-0x1", "refused"), ("+0o1", "refused"), ("-0b1", "refused"),
+    ("1a", "refused"), ("0x1.0", "refused"), ("9223372036854775808", "refused"), ("-9223372036854775809", "refused"),
+    ("0x8000000000000000", "refused"), ("0xffffffffffffffff", "refused"), ("0o1000000000000000000000", "refused"),
+    ("0b1000000000000000000000000000000000000000000000000000000000000000", "refused"), ("1,000", "refused"),
+    ("1'000", "refused"), ("1L", "refused"), ("0xDEADBEEFG", "refused"), ("_", "refused"), ("1_000_", "refused"),
+    ("\u{0661}", "refused"), ("1\u{a0}", "refused"), ("e1", "refused"),
+])
+fn integersAreDecimalHexadecimalOctalOrBinary(_ text: String, _ shown: String) {
+    isValue(text, shown)
 }
 
-@test
-fn floatsHaveFractionsAndExponents() {
-    let cases: (String, String)[>..] = [
-        ("+1.0", "f1.0"), ("3.1415", "f3.1415"), ("-0.01", "f-0.01"), ("5e+22", "f5e+22"), ("1e06", "f1000000.0"), ("-2E-2", "f-0.02"), ("6.626e-34", "f6.626e-34"),
-        ("224_617.445_991_228", "f224617.445991228"), ("0.0", "f0.0"), ("-0.0", "f-0.0"), ("+0.0", "f0.0"), ("0e0", "f0.0"), ("1e0_0", "f1.0"), ("1_0e1_0", "f100000000000.0"), ("0.1_2", "f0.12"),
-        ("inf", "finf"), ("+inf", "finf"), ("-inf", "f-inf"), ("nan", "fnan"), ("+nan", "fnan"), ("-nan", "fnan"), ("1e400", "finf"), ("3e-400", "f0.0"),
-    ]
-    for (text, shown) in cases {
-        assertEqual(value(text), shown)
-    }
-    for text in [
-        ".7", "7.", "3.e+20", "1.", "+.1", "1e", "1e+", "1e1.0", "1e_1", "1e1_", "1_.0", "1._0", "1.0_", "1.0_e1", "1__0.0", "01.0", "-01.0", "00.0", "1.2.3", "Inf", "NaN", "INF", "++inf", "in f", "infinity",
-        "nan1", "1e1e1", "0x1p3", "1.0f", "1.e1", "1.0e", "_1.0", "+ 1.0", "1,5", "inf_", "0_1.0", "e", "1e 1",
-    ] as String[>..] {
-        expect(value(text).hasPrefix("error: "), text)
-    }
+@test(arguments: [
+    ("+1.0", "f1.0"), ("3.1415", "f3.1415"), ("-0.01", "f-0.01"), ("5e+22", "f5e+22"), ("1e06", "f1000000.0"), ("-2E-2", "f-0.02"), ("6.626e-34", "f6.626e-34"),
+    ("224_617.445_991_228", "f224617.445991228"), ("0.0", "f0.0"), ("-0.0", "f-0.0"), ("+0.0", "f0.0"), ("0e0", "f0.0"), ("1e0_0", "f1.0"), ("1_0e1_0", "f100000000000.0"), ("0.1_2", "f0.12"),
+    ("inf", "finf"), ("+inf", "finf"), ("-inf", "f-inf"), ("nan", "fnan"), ("+nan", "fnan"), ("-nan", "fnan"), ("1e400", "finf"), ("3e-400", "f0.0"),
+    (".7", "refused"), ("7.", "refused"), ("3.e+20", "refused"), ("1.", "refused"), ("+.1", "refused"),
+    ("1e", "refused"), ("1e+", "refused"), ("1e1.0", "refused"), ("1e_1", "refused"), ("1e1_", "refused"),
+    ("1_.0", "refused"), ("1._0", "refused"), ("1.0_", "refused"), ("1.0_e1", "refused"), ("1__0.0", "refused"),
+    ("01.0", "refused"), ("-01.0", "refused"), ("00.0", "refused"), ("1.2.3", "refused"), ("Inf", "refused"),
+    ("NaN", "refused"), ("INF", "refused"), ("++inf", "refused"), ("in f", "refused"), ("infinity", "refused"),
+    ("nan1", "refused"), ("1e1e1", "refused"), ("0x1p3", "refused"), ("1.0f", "refused"), ("1.e1", "refused"),
+    ("1.0e", "refused"), ("_1.0", "refused"), ("+ 1.0", "refused"), ("1,5", "refused"), ("inf_", "refused"),
+    ("0_1.0", "refused"), ("e", "refused"), ("1e 1", "refused"),
+])
+fn floatsHaveFractionsAndExponents(_ text: String, _ shown: String) {
+    isValue(text, shown)
 }
 
-@test
-fn boolsAreLowerCase() {
-    assertEqual(value("true"), "true")
-    assertEqual(value("false"), "false")
-    invalid(["a = True", "a = FALSE", "a = truer", "a = fals", "a = t", "a = true false", "a = true_", "a = 1true", "a = yes", "a = null", "a = \"a\"true"])
+@test(arguments: [
+    ("true", "true"),
+    ("false", "false"),
+    ("True", "refused"), ("FALSE", "refused"), ("truer", "refused"), ("fals", "refused"), ("t", "refused"),
+    ("true false", "refused"), ("true_", "refused"), ("1true", "refused"), ("yes", "refused"), ("null", "refused"),
+    ("\"a\"true", "refused"),
+])
+fn boolsAreLowerCase(_ text: String, _ shown: String) {
+    isValue(text, shown)
 }
 
 // ---- Dates and times ---------------------------------------------------------
 
-@test
-fn datesAndTimesAreRfc3339s() {
-    let cases: (String, String)[>..] = [
-        ("1979-05-27T07:32:00Z", "dt1979-05-27T07:32:00Z"), ("1979-05-27T00:32:00-07:00", "dt1979-05-27T00:32:00-07:00"),
-        ("1979-05-27T00:32:00.999999-07:00", "dt1979-05-27T00:32:00.999999-07:00"), ("1979-05-27 07:32:00Z", "dt1979-05-27T07:32:00Z"),
-        ("1979-05-27t07:32:00z", "dt1979-05-27T07:32:00Z"), ("1979-05-27T07:32:00+23:59", "dt1979-05-27T07:32:00+23:59"), ("1979-05-27T07:32:00+00:00", "dt1979-05-27T07:32:00Z"),
-        ("1979-05-27T07:32:00", "ldt1979-05-27T07:32:00"), ("1979-05-27T00:32:00.5", "ldt1979-05-27T00:32:00.5"), ("1979-05-27 07:32:00 # c", "ldt1979-05-27T07:32:00"),
-        ("1979-05-27", "ld1979-05-27"), ("2000-02-29", "ld2000-02-29"), ("0000-01-01", "ld0000-01-01"), ("9999-12-31", "ld9999-12-31"), ("1979-05-27 # c", "ld1979-05-27"), ("1979-05-27 ", "ld1979-05-27"),
-        ("07:32:00", "lt07:32:00"), ("00:32:00.999999", "lt00:32:00.999999"), ("23:59:59.1234567899", "lt23:59:59.123456789"), ("23:59:60", "lt23:59:59"),
-    ]
-    for (text, shown) in cases {
-        assertEqual(value(text), shown)
-    }
-    for text in [
-        "1979-13-01", "1979-00-01", "1979-01-32", "1979-01-00", "1979-02-29", "1900-02-29", "1979-04-31", "79-05-27", "1979-5-27", "1979-05-7", "1979-05-27T", "1979-05-27T07", "1979-05-27T07:32",
-        "1979-05-27T07:32Z", "1979-05-27T24:00:00", "1979-05-27T07:60:00", "1979-05-27T07:32:61", "1979-05-27T07:32:00.", "1979-05-27T07:32:00.Z", "1979-05-27T7:32:00", "1979-05-27T07:32:00+24:00",
-        "1979-05-27T07:32:00+07:60", "1979-05-27T07:32:00+07", "1979-05-27T07:32:00+0700", "1979-05-27T07:32:00Zz", "1979-05-27T07:32:00z1", "1979-05-27TT07:32:00", "1979-05-27  07:32:00", "1979-05-27x07:32:00",
-        "07:32", "7:32:00", "07:32:0", "24:00:00", "07:60:00", "07:32:61", "07:32:00Z", "07:32:00.", "07:32:00.1.2", "07:32:00+01:00", "07-32-00", "1979/05/27", "10000-01-01", "-1979-05-27", "1979-05-27-", "1979-05-27T07:32:00-7:00",
-        "1987-07-05 17:45:00\tZ", "12:34:5a", "1a:00:00", "2021-1-1", "198a-01-01",
-    ] as String[>..] {
-        expect(value(text).hasPrefix("error: "), text)
-    }
+@test(arguments: [
+    ("1979-05-27T07:32:00Z", "dt1979-05-27T07:32:00Z"), ("1979-05-27T00:32:00-07:00", "dt1979-05-27T00:32:00-07:00"),
+    ("1979-05-27T00:32:00.999999-07:00", "dt1979-05-27T00:32:00.999999-07:00"), ("1979-05-27 07:32:00Z", "dt1979-05-27T07:32:00Z"),
+    ("1979-05-27t07:32:00z", "dt1979-05-27T07:32:00Z"), ("1979-05-27T07:32:00+23:59", "dt1979-05-27T07:32:00+23:59"), ("1979-05-27T07:32:00+00:00", "dt1979-05-27T07:32:00Z"),
+    ("1979-05-27T07:32:00", "ldt1979-05-27T07:32:00"), ("1979-05-27T00:32:00.5", "ldt1979-05-27T00:32:00.5"), ("1979-05-27 07:32:00 # c", "ldt1979-05-27T07:32:00"),
+    ("1979-05-27", "ld1979-05-27"), ("2000-02-29", "ld2000-02-29"), ("0000-01-01", "ld0000-01-01"), ("9999-12-31", "ld9999-12-31"), ("1979-05-27 # c", "ld1979-05-27"), ("1979-05-27 ", "ld1979-05-27"),
+    ("07:32:00", "lt07:32:00"), ("00:32:00.999999", "lt00:32:00.999999"), ("23:59:59.1234567899", "lt23:59:59.123456789"), ("23:59:60", "lt23:59:59"),
+    ("1979-13-01", "refused"), ("1979-00-01", "refused"), ("1979-01-32", "refused"), ("1979-01-00", "refused"),
+    ("1979-02-29", "refused"), ("1900-02-29", "refused"), ("1979-04-31", "refused"), ("79-05-27", "refused"),
+    ("1979-5-27", "refused"), ("1979-05-7", "refused"), ("1979-05-27T", "refused"), ("1979-05-27T07", "refused"),
+    ("1979-05-27T07:32", "refused"), ("1979-05-27T07:32Z", "refused"), ("1979-05-27T24:00:00", "refused"),
+    ("1979-05-27T07:60:00", "refused"), ("1979-05-27T07:32:61", "refused"), ("1979-05-27T07:32:00.", "refused"),
+    ("1979-05-27T07:32:00.Z", "refused"), ("1979-05-27T7:32:00", "refused"), ("1979-05-27T07:32:00+24:00", "refused"),
+    ("1979-05-27T07:32:00+07:60", "refused"), ("1979-05-27T07:32:00+07", "refused"),
+    ("1979-05-27T07:32:00+0700", "refused"), ("1979-05-27T07:32:00Zz", "refused"), ("1979-05-27T07:32:00z1", "refused"),
+    ("1979-05-27TT07:32:00", "refused"), ("1979-05-27  07:32:00", "refused"), ("1979-05-27x07:32:00", "refused"),
+    ("07:32", "refused"), ("7:32:00", "refused"), ("07:32:0", "refused"), ("24:00:00", "refused"),
+    ("07:60:00", "refused"), ("07:32:61", "refused"), ("07:32:00Z", "refused"), ("07:32:00.", "refused"),
+    ("07:32:00.1.2", "refused"), ("07:32:00+01:00", "refused"), ("07-32-00", "refused"), ("1979/05/27", "refused"),
+    ("10000-01-01", "refused"), ("-1979-05-27", "refused"), ("1979-05-27-", "refused"),
+    ("1979-05-27T07:32:00-7:00", "refused"), ("1987-07-05 17:45:00\tZ", "refused"), ("12:34:5a", "refused"),
+    ("1a:00:00", "refused"), ("2021-1-1", "refused"), ("198a-01-01", "refused"),
+])
+fn datesAndTimesAreRfc3339s(_ text: String, _ shown: String) {
+    isValue(text, shown)
 }
 
 // ---- Arrays, inline tables ---------------------------------------------------
 
-@test
-fn arraysHoldAnyValuesOverAnyLines() {
-    assertEqual(value("[]"), "[]")
-    assertEqual(value("[ ]"), "[]")
-    assertEqual(value("[ 1, 2, 3 ]"), "[i1,i2,i3]")
-    assertEqual(value("[1,2,]"), "[i1,i2]")
-    assertEqual(value("[[1, 2], ['a', \"b\"], [], 1.5, true, {x = 1}, 1979-05-27]"), "[[i1,i2],[s\"a\",s\"b\"],[],f1.5,true,{x:i1},ld1979-05-27]")
-    assertEqual(value("[ # c\n  1 # d\n # e\n , # f\n  2,\r\n# g ]\n]"), "[i1,i2]")
-    assertEqual(value("[\n]"), "[]")
-    assertEqual(value("[\"\"\"\nx\"\"\", '''y''']"), "[s\"x\",s\"y\"]")
-    invalid(["a = [", "a = ]", "a = [1", "a = [1,", "a = [,]", "a = [1,,2]", "a = [,1]", "a = [1 2]", "a = [1\n2]", "a = [1]]", "a = [1] 2", "a = [a]", "a = [b = 1]", "a = [1 # c]", "a = [1;2]", "a = [1,,]", "a = [{]", "a = [\"x]"])
+@test(arguments: [
+    ("[]", "[]"),
+    ("[ ]", "[]"),
+    ("[ 1, 2, 3 ]", "[i1,i2,i3]"),
+    ("[1,2,]", "[i1,i2]"),
+    ("[[1, 2], ['a', \"b\"], [], 1.5, true, {x = 1}, 1979-05-27]", "[[i1,i2],[s\"a\",s\"b\"],[],f1.5,true,{x:i1},ld1979-05-27]"),
+    ("[ # c\n  1 # d\n # e\n , # f\n  2,\r\n# g ]\n]", "[i1,i2]"),
+    ("[\n]", "[]"),
+    ("[\"\"\"\nx\"\"\", '''y''']", "[s\"x\",s\"y\"]"),
+    ("[", "refused"), ("]", "refused"), ("[1", "refused"), ("[1,", "refused"), ("[,]", "refused"),
+    ("[1,,2]", "refused"), ("[,1]", "refused"), ("[1 2]", "refused"), ("[1\n2]", "refused"), ("[1]]", "refused"),
+    ("[1] 2", "refused"), ("[a]", "refused"), ("[b = 1]", "refused"), ("[1 # c]", "refused"), ("[1;2]", "refused"),
+    ("[1,,]", "refused"), ("[{]", "refused"), ("[\"x]", "refused"),
+])
+fn arraysHoldAnyValuesOverAnyLines(_ text: String, _ shown: String) {
+    isValue(text, shown)
 }
 
-@test
-fn inlineTablesAreOnOneLineAndClosed() {
-    assertEqual(value("{}"), "{}")
-    assertEqual(value("{ }"), "{}")
-    assertEqual(value("{ first = \"T\", last='P' }"), "{first:s\"T\",last:s\"P\"}")
-    assertEqual(value("{x=1,y={z=[1,\n2]}}"), "{x:i1,y:{z:[i1,i2]}}")
-    assertEqual(value("{ type.name = 'pug', type.age = 2, \"q k\" = 1 }"), "{type:{name:s\"pug\",age:i2},q k:i1}")
-    assertEqual(value("{ a.b.c = 1, a.b.d = 2, a.e = 3 }"), "{a:{b:{c:i1,d:i2},e:i3}}")
-    assertEqual(value("{ x = \"\"\"\na\nb\"\"\" }"), "{x:s\"a\\nb\"}")
-    invalid([
-        "a = {", "a = }", "a = {x = 1", "a = {x = 1,}", "a = {,}", "a = {x = 1,,y = 2}", "a = {x = 1 y = 2}", "a = {x}", "a = {x = }", "a = {1}", "a = {\n}", "a = {x = 1\n}", "a = {x = 1,\ny = 2}", "a = { # c\n}", "a = {x = 1 # c\n}",
-        "a = {x = 1, x = 2}", "a = {x = 1, x.y = 2}", "a = {x.y = 1, x = 2}", "a = {x.y = 1, x.y = 2}", "a = {x = {y = 1}, x.z = 2}", "a = {x = [1], x.y = 2}", "a = {x = 1}\na.y = 2", "a = {x = {}}\na.x.y = 2", "a = {}\n[a]", "a = {}\n[a.b]", "a = {}\n[[a]]",
-        "a = {b = {}}\n[a.b]", "a = {b = {}}\n[a.b.c]", "[a]\nb = {}\n[a.b]", "[a]\nb = {}\n[a.b.c]", "a = {x = 1} 2", "a.b = {}\na.b.c = 1", "a = {x = 1]}", "a = {\"x\"}", "a = [{b = 1}]\n[a.c]", "a = [{b = 1}]\n[[a]]", "a = [{}]\n[a]",
-    ])
+@test(arguments: [
+    ("{}", "{}"),
+    ("{ }", "{}"),
+    ("{ first = \"T\", last='P' }", "{first:s\"T\",last:s\"P\"}"),
+    ("{x=1,y={z=[1,\n2]}}", "{x:i1,y:{z:[i1,i2]}}"),
+    ("{ type.name = 'pug', type.age = 2, \"q k\" = 1 }", "{type:{name:s\"pug\",age:i2},q k:i1}"),
+    ("{ a.b.c = 1, a.b.d = 2, a.e = 3 }", "{a:{b:{c:i1,d:i2},e:i3}}"),
+    ("{ x = \"\"\"\na\nb\"\"\" }", "{x:s\"a\\nb\"}"),
+    ("{", "refused"), ("}", "refused"), ("{x = 1", "refused"), ("{x = 1,}", "refused"), ("{,}", "refused"),
+    ("{x = 1,,y = 2}", "refused"), ("{x = 1 y = 2}", "refused"), ("{x}", "refused"), ("{x = }", "refused"),
+    ("{1}", "refused"), ("{x = 1, x = 2}", "refused"), ("{x = 1, x.y = 2}", "refused"), ("{x.y = 1, x = 2}", "refused"),
+    ("{x.y = 1, x.y = 2}", "refused"), ("{x = {y = 1}, x.z = 2}", "refused"), ("{x = [1], x.y = 2}", "refused"),
+    ("{x = 1} 2", "refused"), ("{x = 1]}", "refused"), ("{\"x\"}", "refused"), ("{\n}", "refused"),
+    ("{x = 1\n}", "refused"), ("{x = 1,\ny = 2}", "refused"), ("{ # c\n}", "refused"), ("{x = 1 # c\n}", "refused"),
+])
+fn inlineTablesAreOnOneLineAndClosed(_ text: String, _ shown: String) {
+    isValue(text, shown)
 }
 
 // ---- Tables ------------------------------------------------------------------
 
-@test
-fn headersMakeTables() {
-    assertEqual(read("[table]\nk = 1\n[ d . \"e.f\" . 'g' ] # c\nk = 2\n[empty]"), "{table:{k:i1},d:{e.f:{g:{k:i2}}},empty:{}}")
-    assertEqual(read("[x.y.z.w]\na = 1\n[x]\nb = 2\n[x.y]\nc = 3"), "{x:{y:{z:{w:{a:i1}},c:i3},b:i2}}")
-    assertEqual(read("top = 1\n[fruit]\napple.color = 'r'\napple.taste.sweet = true\n[fruit.apple.texture]\nsmooth = true"), "{top:i1,fruit:{apple:{color:s\"r\",taste:{sweet:true},texture:{smooth:true}}}}")
-    assertEqual(read("[fruit.apple]\n[animal]\n[fruit.orange]"), "{fruit:{apple:{},orange:{}},animal:{}}")
-    assertEqual(read("[a.b.c]\nz = 9\n[a]\nb.x = 1"), "{a:{b:{c:{z:i9},x:i1}}}")
-    assertEqual(read("a.b = 1\n[a.c]\nd = 2"), "{a:{b:i1,c:{d:i2}}}")
-    assertEqual(read("['']\n['a'.''.b]"), "{:{},a:{:{b:{}}}}")
-    invalid([
-        "[fruit]\napple = 1\n[fruit]\norange = 2", "[a]\n[a]", "[fruit]\napple = 1\n[fruit.apple]", "a = 1\n[a]", "a = 1\n[a.b]", "[]", "[a", "[a]]", "[a.]", "[.a]", "[a..b]", "[ ]", "[a] b = 1", "[a]b", "[a b]", "[a\n]", "[\na]", "[a # c\n]",
-        "[a = 1]", "[\"a]", "[[a]", "a.b = 1\n[a]", "a.b.c = 1\n[a.b]", "[fruit]\napple.color = 1\n[fruit.apple]", "[fruit]\napple.taste.sweet = 1\n[fruit.apple.taste]", "[a.b.c]\nz = 9\n[a]\nb.c.t = 1", "[a.b.c.d]\nz = 9\n[a]\nb.c.d.k.t = 1",
-        "[a.b]\n[a]\nb.x = 1", "[a.b.c]\nz = 9\n[a]\nb.x = 1\n[a.b]", "[a]\nb = 1\n[a.b.c]", "[\"a\"]\n['a']", "[a]\n\"b\" = 1\nb = 2", "a = 1\n[b]\n[a]", "[a.b]\n[a.b]", "[a]x=1", "\"a\"]", "]a[", "[a.\"b]",
-    ])
+@test(arguments: [
+    ("[table]\nk = 1\n[ d . \"e.f\" . 'g' ] # c\nk = 2\n[empty]", "{table:{k:i1},d:{e.f:{g:{k:i2}}},empty:{}}"),
+    ("[x.y.z.w]\na = 1\n[x]\nb = 2\n[x.y]\nc = 3", "{x:{y:{z:{w:{a:i1}},c:i3},b:i2}}"),
+    ("top = 1\n[fruit]\napple.color = 'r'\napple.taste.sweet = true\n[fruit.apple.texture]\nsmooth = true", "{top:i1,fruit:{apple:{color:s\"r\",taste:{sweet:true},texture:{smooth:true}}}}"),
+    ("[fruit.apple]\n[animal]\n[fruit.orange]", "{fruit:{apple:{},orange:{}},animal:{}}"),
+    ("[a.b.c]\nz = 9\n[a]\nb.x = 1", "{a:{b:{c:{z:i9},x:i1}}}"),
+    ("a.b = 1\n[a.c]\nd = 2", "{a:{b:i1,c:{d:i2}}}"),
+    ("['']\n['a'.''.b]", "{:{},a:{:{b:{}}}}"),
+    ("[fruit]\napple = 1\n[fruit]\norange = 2", "refused"), ("[a]\n[a]", "refused"),
+    ("[fruit]\napple = 1\n[fruit.apple]", "refused"), ("a = 1\n[a]", "refused"), ("a = 1\n[a.b]", "refused"),
+    ("[]", "refused"), ("[a", "refused"), ("[a]]", "refused"), ("[a.]", "refused"), ("[.a]", "refused"),
+    ("[a..b]", "refused"), ("[ ]", "refused"), ("[a] b = 1", "refused"), ("[a]b", "refused"), ("[a b]", "refused"),
+    ("[a\n]", "refused"), ("[\na]", "refused"), ("[a # c\n]", "refused"), ("[a = 1]", "refused"), ("[\"a]", "refused"),
+    ("[[a]", "refused"), ("a.b = 1\n[a]", "refused"), ("a.b.c = 1\n[a.b]", "refused"),
+    ("[fruit]\napple.color = 1\n[fruit.apple]", "refused"),
+    ("[fruit]\napple.taste.sweet = 1\n[fruit.apple.taste]", "refused"), ("[a.b.c]\nz = 9\n[a]\nb.c.t = 1", "refused"),
+    ("[a.b.c.d]\nz = 9\n[a]\nb.c.d.k.t = 1", "refused"), ("[a.b]\n[a]\nb.x = 1", "refused"),
+    ("[a.b.c]\nz = 9\n[a]\nb.x = 1\n[a.b]", "refused"), ("[a]\nb = 1\n[a.b.c]", "refused"),
+    ("[\"a\"]\n['a']", "refused"), ("[a]\n\"b\" = 1\nb = 2", "refused"), ("a = 1\n[b]\n[a]", "refused"),
+    ("[a.b]\n[a.b]", "refused"), ("[a]x=1", "refused"), ("\"a\"]", "refused"), ("]a[", "refused"),
+    ("[a.\"b]", "refused"),
+    // An inline table is closed once written.
+    ("a = {x = 1}\na.y = 2", "refused"), ("a = {x = {}}\na.x.y = 2", "refused"), ("a = {}\n[a]", "refused"),
+    ("a = {}\n[a.b]", "refused"), ("a = {}\n[[a]]", "refused"), ("a = {b = {}}\n[a.b]", "refused"),
+    ("a = {b = {}}\n[a.b.c]", "refused"), ("[a]\nb = {}\n[a.b]", "refused"), ("[a]\nb = {}\n[a.b.c]", "refused"),
+    ("a.b = {}\na.b.c = 1", "refused"), ("a = [{b = 1}]\n[a.c]", "refused"), ("a = [{b = 1}]\n[[a]]", "refused"),
+    ("a = [{}]\n[a]", "refused"),
+])
+fn headersMakeTables(_ text: String, _ shown: String) {
+    reads(text, shown)
 }
 
-@test
-fn doubleHeadersMakeArraysOfTables() {
-    assertEqual(read("[[p]]\nn = 1\n[[p]] # empty\n[[p]]\nn = 2"), "{p:[{n:i1},{},{n:i2}]}")
-    assertEqual(
-        read("[[f]]\nn = 'a'\n[f.p]\nc = 1\n[[f.v]]\nn = 'x'\n[[f.v]]\nn = 'y'\n[[f]]\nn = 'b'\n[[f.v]]\nn = 'z'"),
-        "{f:[{n:s\"a\",p:{c:i1},v:[{n:s\"x\"},{n:s\"y\"}]},{n:s\"b\",v:[{n:s\"z\"}]}]}"
-    )
-    assertEqual(read("[[a.b]]\nx = 1\n[a]\ny = 2\n[[a.b]]"), "{a:{b:[{x:i1},{}],y:i2}}")
-    assertEqual(read("[[ a . 'b' ]]\n[a.b.c]\n[[a.b]]\n[a.b.c]"), "{a:{b:[{c:{}},{c:{}}]}}")
-    invalid([
-        "[fruit.physical]\n[[fruit]]", "fruits = []\n[[fruits]]", "[[f]]\nn = 1\n[[f.v]]\nn = 2\n[f.v]", "[[f]]\n[f.p]\n[[f.p]]", "[[a]]\n[a]", "[a]\n[[a]]", "a = 1\n[[a]]", "[[a]", "[[a]]]", "[ [a]]", "[[a] ]", "[[]]", "[[ ]]", "[[a.]]", "[[a]] b = 1",
-        "[[a.b]]\n[a]\nb.y = 2", "a = [1]\n[[a]]", "a = [{}]\n[[a.b]]", "[[a]]\nb = 1\n[a.b]", "[[a]]\nb = 1\n[[a.b]]", "[[a.b]]\n[a.b]", "a.b = 1\n[[a]]", "[[a]]\n[a.b]\n[a.b]", "[a.b]\n[[a]]",
-    ])
+@test(arguments: [
+    ("[[p]]\nn = 1\n[[p]] # empty\n[[p]]\nn = 2", "{p:[{n:i1},{},{n:i2}]}"),
+    ("[[f]]\nn = 'a'\n[f.p]\nc = 1\n[[f.v]]\nn = 'x'\n[[f.v]]\nn = 'y'\n[[f]]\nn = 'b'\n[[f.v]]\nn = 'z'", "{f:[{n:s\"a\",p:{c:i1},v:[{n:s\"x\"},{n:s\"y\"}]},{n:s\"b\",v:[{n:s\"z\"}]}]}"),
+    ("[[a.b]]\nx = 1\n[a]\ny = 2\n[[a.b]]", "{a:{b:[{x:i1},{}],y:i2}}"),
+    ("[[ a . 'b' ]]\n[a.b.c]\n[[a.b]]\n[a.b.c]", "{a:{b:[{c:{}},{c:{}}]}}"),
+    ("[fruit.physical]\n[[fruit]]", "refused"), ("fruits = []\n[[fruits]]", "refused"),
+    ("[[f]]\nn = 1\n[[f.v]]\nn = 2\n[f.v]", "refused"), ("[[f]]\n[f.p]\n[[f.p]]", "refused"), ("[[a]]\n[a]", "refused"),
+    ("[a]\n[[a]]", "refused"), ("a = 1\n[[a]]", "refused"), ("[[a]", "refused"), ("[[a]]]", "refused"),
+    ("[ [a]]", "refused"), ("[[a] ]", "refused"), ("[[]]", "refused"), ("[[ ]]", "refused"), ("[[a.]]", "refused"),
+    ("[[a]] b = 1", "refused"), ("[[a.b]]\n[a]\nb.y = 2", "refused"), ("a = [1]\n[[a]]", "refused"),
+    ("a = [{}]\n[[a.b]]", "refused"), ("[[a]]\nb = 1\n[a.b]", "refused"), ("[[a]]\nb = 1\n[[a.b]]", "refused"),
+    ("[[a.b]]\n[a.b]", "refused"), ("a.b = 1\n[[a]]", "refused"), ("[[a]]\n[a.b]\n[a.b]", "refused"),
+    ("[a.b]\n[[a]]", "refused"),
+])
+fn doubleHeadersMakeArraysOfTables(_ text: String, _ shown: String) {
+    reads(text, shown)
 }
 
 // ---- Errors, bounds ----------------------------------------------------------
 
-@test
-fn errorsSayWhereAndWhy() {
-    let cases: (String, String)[>..] = [
-        ("é = 1", "line 1, column 1: expected a key, found 'é'"),
-        ("a = 1\n\n  b = é", "line 3, column 7: expected a value, found 'é'"),
-        ("\"é\" = 1 x", "line 1, column 9: expected the end of the line, found 'x'"),
-        ("[t]\n[t]", "line 2, column 2: the table 't' is defined twice"),
-        ("a = \"open", "line 1, column 5: the string is not closed on its line"),
-        ("a = hello", "line 1, column 5: 'hello' is not a value: a string needs quotes"),
-        ("a = [1, 2", "line 1, column 5: the array is not closed with ']'"),
-        ("a = [1 2]", "line 1, column 8: expected ',' or ']' in the array, found '2'"),
-        ("a = { b = 1,\n c = 2 }", "line 1, column 13: an inline table is written on one line"),
-        ("a = { b = 1, }", "line 1, column 14: an inline table has no comma after its last value"),
-        ("a = { b = 1 c = 2 }", "line 1, column 13: expected ',' or '}' in the inline table, found 'c'"),
-        ("[a\nb = 1", "line 1, column 3: expected ']' to close the header, found the end of the line"),
-        ("[[a", "line 1, column 4: expected ']]' to close the header, found the end"),
-        ("a", "line 1, column 2: expected '=' after the key, found the end"),
-        ("a\u{1}", "line 1, column 2: expected '=' after the key, found a control character"),
-        ("x = { y = 1 }\n[x.z]", "line 2, column 2: 'x' is an inline table, closed once written"),
-        ("[a.\"b c\"]\n[a]\n\"b c\".d = 1", "line 3, column 1: '\"b c\"' is already a table with a header, so a dotted key cannot add to it"),
-        ("a = 1\n[[a]]", "line 2, column 3: 'a' is already an integer, not an array of tables"),
-        ("a = \"\"\"x", "line 1, column 5: the string is not closed with three quotes"),
-        ("a = 1979-02-30", "line 1, column 5: '1979-02-30' is not a date or a time"),
-        ("a = \"\\u12\"", "line 1, column 6: an escape '\\u' needs 4 hexadecimal digits"),
-        ("a = \"\\uD800\"", "line 1, column 6: the escape is not a Unicode scalar value"),
-        ("a = \"\\q\"", "line 1, column 6: not an escape TOML has"),
-    ]
-    for (text, message) in cases {
-        assertEqual(read(text), "error: " + message)
-    }
-    expectThrows(saying: "not TOML: line 1, column 5: expected a value, found the end") { _ = try Toml.decode(Dictionary<String, Int>.self, from: "a = ") }
-    expectThrows(saying: "not TOML: line 1, column 4: ill-formed UTF-8") { _ = try TomlDecoder.parse(bytes: [0x61, 0x3D, 0x22, 0xFF, 0x22]) }
+@test(arguments: [
+    ("é = 1", "line 1, column 1: expected a key, found 'é'"),
+    ("a = 1\n\n  b = é", "line 3, column 7: expected a value, found 'é'"),
+    ("\"é\" = 1 x", "line 1, column 9: expected the end of the line, found 'x'"),
+    ("[t]\n[t]", "line 2, column 2: the table 't' is defined twice"),
+    ("a = \"open", "line 1, column 5: the string is not closed on its line"),
+    ("a = hello", "line 1, column 5: 'hello' is not a value: a string needs quotes"),
+    ("a = [1, 2", "line 1, column 5: the array is not closed with ']'"),
+    ("a = [1 2]", "line 1, column 8: expected ',' or ']' in the array, found '2'"),
+    ("a = { b = 1,\n c = 2 }", "line 1, column 13: an inline table is written on one line"),
+    ("a = { b = 1, }", "line 1, column 14: an inline table has no comma after its last value"),
+    ("a = { b = 1 c = 2 }", "line 1, column 13: expected ',' or '}' in the inline table, found 'c'"),
+    ("[a\nb = 1", "line 1, column 3: expected ']' to close the header, found the end of the line"),
+    ("[[a", "line 1, column 4: expected ']]' to close the header, found the end"),
+    ("a", "line 1, column 2: expected '=' after the key, found the end"),
+    ("a\u{1}", "line 1, column 2: expected '=' after the key, found a control character"),
+    ("x = { y = 1 }\n[x.z]", "line 2, column 2: 'x' is an inline table, closed once written"),
+    ("[a.\"b c\"]\n[a]\n\"b c\".d = 1", "line 3, column 1: '\"b c\"' is already a table with a header, so a dotted key cannot add to it"),
+    ("a = 1\n[[a]]", "line 2, column 3: 'a' is already an integer, not an array of tables"),
+    ("a = \"\"\"x", "line 1, column 5: the string is not closed with three quotes"),
+    ("a = 1979-02-30", "line 1, column 5: '1979-02-30' is not a date or a time"),
+    ("a = \"\\u12\"", "line 1, column 6: an escape '\\u' needs 4 hexadecimal digits"),
+    ("a = \"\\uD800\"", "line 1, column 6: the escape is not a Unicode scalar value"),
+    ("a = \"\\q\"", "line 1, column 6: not an escape TOML has"),
+    ("a = 9223372036854775808", "line 1, column 5: '9223372036854775808' does not fit 64 bits"),
+])
+fn errorsSayWhereAndWhy(_ text: String, _ message: String) {
+    assertEqual(read(text), "error: " + message)
 }
 
 fn repeated(_ text: String, _ count: Int) -> String {
@@ -325,7 +389,7 @@ fn nestingIsBoundedHoweverItIsWritten() {
         "a = {" + repeated("b.", 100) + "b = {" + repeated("b.", 100) + "b = 1}}",
     ]
     for text in hostile {
-        assert(read(text).contains("nested more than 128 deep"))
+        expect(read(text).contains("nested more than 128 deep"), "\(text.slice(from: 0, to: 10))…")
     }
     var arrays = ""
     var path = "a"
@@ -355,22 +419,24 @@ fn manyKeysAreNotQuadratic() throws {
 @test
 fn anyTextIsReadOrRefused() throws {
     let pieces: String[>..] = ["a", "b", ".", "=", " ", "\n", "[", "]", "[[", "]]", "{", "}", ",", "\"", "'", "\"\"\"", "'''", "#", "1", "0x", "_", "-", "+", "e", "inf", "true", "1979-05-27", "T07:32:00", "Z", "\\", "\\u00e9", "é", "\r\n", "\t", "a = 1\n", "[a]\n", "[[a]]\n", "a.b = 2\n"]
-    var random = SeededRandomNumberGenerator(seed: 1)
     var valid = 0
-    for _ in 0..<6000 {
+    let texts = Gen<String>((choices) => {
         var text = ""
-        for _ in 0..<Int.random(in: 1..<14, using: &random) {
-            text = text + pieces[Int.random(in: 0..<pieces.count, using: &random)]
+        for _ in 0...choices.below(13) {
+            text = text + choices.element(of: pieces)
         }
+        return text
+    })
+    forAll(texts, cases: 6000) { (text: String) in
         if let table = try? Toml.parse(text) {
             valid += 1
             // What is written is read as the same.
             let again = try Toml.parse(try Toml.write(table))
-            assertEqual(show(.Table(table: again)).count, show(.Table(table: table)).count)
-            assertEqual((try TomlDocument.parse(text)).text(), text)
+            expect(show(.Table(table: again)).count == show(.Table(table: table)).count)
+            expect((try TomlDocument.parse(text)).text() == text)
         }
     }
-    expect(valid > 100, "\(valid)")
+    expect(valid > 100)
 }
 
 // ---- Tables as values, writing -----------------------------------------------
@@ -564,6 +630,8 @@ fn theEncoderRefusesWhatTomlHasNot() {
         try encoder.encodeBytes([1, 2])
         try encoder.endMap()
     }), "x = 1\ny = \"AQI=\"\n")
+    expectThrows(saying: "not TOML: line 1, column 5: expected a value, found the end") { _ = try Toml.decode(Dictionary<String, Int>.self, from: "a = ") }
+    expectThrows(saying: "not TOML: line 1, column 4: ill-formed UTF-8") { _ = try TomlDecoder.parse(bytes: [0x61, 0x3D, 0x22, 0xFF, 0x22]) }
 }
 
 @test
@@ -582,101 +650,38 @@ fn decodersSayWhereAndWhatIsWrong() throws {
     assertEqual(try root.field("a").element(0).decodeUInt(), 1)
     assertEqual(try root.field("a").element(0).decodeFloat(), 1.0)
     expect(try root.field("h").element(0).field("i").decodeBool())
-    var messages: String[>..] = []
-    let attempts: (() throws(SerializeError) -> Void)[>..] = [
-        {
-            _ = try root.field("zz").decodeInt()
-        },
-        {
-            _ = try root.field("zz").decodeValue()
-        },
-        {
-            _ = try root.decodeInt()
-        },
-        {
-            _ = try root.field("a").decodeString()
-        },
-        {
-            _ = try root.field("a").element(1).decodeBool()
-        },
-        {
-            _ = try root.field("a").element(0).decodeBytes()
-        },
-        {
-            _ = try root.field("a").element(0).decodeSequence()
-        },
-        {
-            _ = try root.field("a").element(1).decodeFloat()
-        },
-        {
-            _ = try root.field("a").element(1).decodeUInt()
-        },
-        {
-            _ = try root.field("b c").field("d").decodeUInt()
-        },
-        {
-            _ = try root.field("b c").field("f").decodeBytes()
-        },
-        {
-            _ = try root.field("g").decodeInt()
-        },
-        {
-            _ = try root.field("h").decodeMap()
-        },
-        {
-            _ = try root.field("a").caseName()
-        },
-        {
-            _ = try root.field("b c").caseName()
-        },
-        { try root.field("a").beginStruct("T") },
-        { try root.field("zz").beginStruct("T") },
-        {
-            throw root.unknownCase("Z")
-        },
-        {
-            throw root.field("h").mismatch("x")
-        },
-        {
-            throw root.field("h").element(0).field("j").mismatch("x")
-        },
-    ]
-    for attempt in attempts {
-        do {
-            try attempt()
-            fail("read")
-        } catch {
-            messages.append(error.description())
-        }
-    }
-    assertEqual(messages.joined(separator: "\n"), """
-        $.zz: missing
-        $.zz: missing
-        $: expected an integer, found a table
-        $.a: expected a string, found an array
-        $.a[1]: expected a Bool, found a string
-        $.a[0]: expected a base64 string, found an integer
-        $.a[0]: expected an array, found an integer
-        $.a[1]: expected a number, found a string
-        $.a[1]: expected an unsigned integer, found a string
-        $['b c'].d: -1 does not fit a U64
-        $['b c'].f: '!' is not base64
-        $.g: expected an integer, found a float
-        $.h: expected a table, found an array of tables
-        $.a: expected a case's name, or a table of one value, found an array
-        $['b c']: expected a case's name, or a table of one value, found a table
-        $.a: expected a table (T), found an array
-        $.zz: missing
-        $: no case 'Z'
-        $.h: expected x, found an array of tables
-        $.h[0].j: expected x, found a date
-        """)
     var kinds = ""
     for decoder in [root.field("a"), root.field("g"), root.field("a").element(1), root.field("h").element(0).field("i"), root.field("h").element(0).field("j"), root.field("zz")] {
         kinds += "\(decoder.kind) "
     }
     assertEqual(kinds, "Sequence Number String Bool String Missing ")
     expect(root.casePayload().isMissing && root.field("zz").kindName == "nothing")
+    expectThrows(saying: "$.zz: missing") { _ = try root.field("zz").decodeInt() }
+    expectThrows(saying: "$.zz: missing") { _ = try root.field("zz").decodeValue() }
+    expectThrows(saying: "$: expected an integer, found a table") { _ = try root.decodeInt() }
+    expectThrows(saying: "$.a: expected a string, found an array") { _ = try root.field("a").decodeString() }
+    expectThrows(saying: "$.a[1]: expected a Bool, found a string") { _ = try root.field("a").element(1).decodeBool() }
+    expectThrows(saying: "$.a[0]: expected a base64 string, found an integer") { _ = try root.field("a").element(0).decodeBytes() }
+    expectThrows(saying: "$.a[0]: expected an array, found an integer") { _ = try root.field("a").element(0).decodeSequence() }
+    expectThrows(saying: "$.a[1]: expected a number, found a string") { _ = try root.field("a").element(1).decodeFloat() }
+    expectThrows(saying: "$.a[1]: expected an unsigned integer, found a string") { _ = try root.field("a").element(1).decodeUInt() }
+    expectThrows(saying: "$['b c'].d: -1 does not fit a U64") { _ = try root.field("b c").field("d").decodeUInt() }
+    expectThrows(saying: "$['b c'].f: '!' is not base64") { _ = try root.field("b c").field("f").decodeBytes() }
+    expectThrows(saying: "$.g: expected an integer, found a float") { _ = try root.field("g").decodeInt() }
+    expectThrows(saying: "$.h: expected a table, found an array of tables") { _ = try root.field("h").decodeMap() }
+    expectThrows(saying: "$.a: expected a case's name, or a table of one value, found an array") { _ = try root.field("a").caseName() }
+    expectThrows(saying: "$['b c']: expected a case's name, or a table of one value, found a table") { _ = try root.field("b c").caseName() }
+    expectThrows(saying: "$.a: expected a table (T), found an array") { try root.field("a").beginStruct("T") }
+    expectThrows(saying: "$.zz: missing") { try root.field("zz").beginStruct("T") }
+    expectThrows(saying: "$: no case 'Z'") {
+        throw root.unknownCase("Z")
+    }
+    expectThrows(saying: "$.h: expected x, found an array of tables") {
+        throw root.field("h").mismatch("x")
+    }
+    expectThrows(saying: "$.h[0].j: expected x, found a date") {
+        throw root.field("h").element(0).field("j").mismatch("x")
+    }
 }
 
 @test

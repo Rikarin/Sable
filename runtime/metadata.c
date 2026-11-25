@@ -592,6 +592,13 @@ static bool existential_made(void *box, const SableTypeMetadata *held, const Sab
 }
 
 bool sable_existential_cast(void *box, const SableTypeMetadata *to, void *into) {
+    // To 'any Error', which is the box itself.
+    if (to->kind == SABLE_KIND_CLASS && sable_metadata_is_subtype((*(const SableMetadata *const *)box)->type, to)) {
+        sable_retain(box);
+        *(void **)into = box;
+        return true;
+    }
+
     const SableTypeMetadata *held = sable_box_value_metadata(box);
     if (to->kind == SABLE_KIND_EXISTENTIAL && to->name != NULL && strncmp(to->name, "any ", 4) == 0) {
         for (int64_t i = 0; i < caster_count; i++) {

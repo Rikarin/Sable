@@ -389,7 +389,13 @@ public sealed partial class SilGen {
     }
 
     /// <summary>A type as the same-type requirements in force where it is lowered make it: <c>S.Iter.Element</c> as <c>S.Element</c>.</summary>
-    internal TypeSymbol Canonical(TypeSymbol type) => _associatedContext is { } context ? _compilation.CanonicalType(context, type) : type;
+    internal TypeSymbol Canonical(TypeSymbol type) => _associatedContext is { } context ? _compilation.CanonicalType(context, Bare(type)) : type;
+
+    /// <summary>An associated type of a protocol's own Self as the protocol's code names it: <c>Failure</c> for <c>Self.Failure</c>.</summary>
+    static TypeSymbol Bare(TypeSymbol type) =>
+        type is not DependentMemberTypeSymbol { BaseType: var on, Associated: var associated } ? type
+        : on is TypeParameterSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } owner } self && ReferenceEquals(owner.OriginalDefinition.SelfTypeParameter, self) ? associated
+        : Bare(on) is var bare && !ReferenceEquals(bare, on) ? new DependentMemberTypeSymbol(bare, associated) : type;
 
     /// <summary>
     ///     What an unspecialised function takes besides its own parameters: a
@@ -1232,7 +1238,7 @@ public sealed partial class SilGen {
         /// <summary>The protocols, with those they refine, a type parameter or an associated type is known here to conform to.</summary>
         List<NamedTypeSymbol> Known(TypeSymbol type) => ProtocolClosure(generator.ProtocolsKnown(checkedSymbol, shape, V(type)));
 
-        TypeSymbol Canonical(TypeSymbol type) => generator._compilation.CanonicalType(checkedSymbol, V(type));
+        TypeSymbol Canonical(TypeSymbol type) => generator._compilation.CanonicalType(checkedSymbol, Bare(V(type)));
 
         /// <summary>Whether a requirement's type, read through the type it is called on, is the type given, as the requirements in force here read both.</summary>
         bool SameThrough(TypeSymbol declared, NamedTypeSymbol protocol, TypeSymbol on, TypeSymbol given) {
@@ -1815,15 +1821,18 @@ public sealed partial class SilGen {
 
             // A 'rethrows(E)' callee whose E is a type only metadata knows here,
             // and whose functions may throw something else too, throws them
-            // together as 'any Error' (#297): only a function that throws one
-            // may throw it on, as it is; it cannot be seen as E again yet.
+            // together as 'any Error' (#297): a function that throws one may
+            // throw it on, as it is, and one that throws E takes it out of
+            // its box; a handler cannot see it as E yet.
             if (callee is { IsRethrows: true, RethrownAlso: { } also } && Canonical(calleeSubstitution.Apply(also)) is var rethrown && Mentions(rethrown) && !rethrown.Equals(generator.Core.Never)
                 && (callee.ThrownType is not { } declared || !Canonical(calleeSubstitution.Apply(declared)).Equals(rethrown))
-                && (_handlers.Count > 0 || _closureDepth > 0 || checkedSymbol.ThrownType is not ExistentialTypeSymbol { Constraint: var erased } || !erased.Equals(generator.Core.Error))) {
+                && (_handlers.Count > 0 || _closureDepth > 0 || !(checkedSymbol.ThrownType is ExistentialTypeSymbol { Constraint: var erased } && erased.Equals(generator.Core.Error)
+                    // Or one whose error is E itself, which is what its 'any Error' holds.
+                    || checkedSymbol.ThrownType is { } ownThrown && Canonical(ownThrown).Equals(rethrown) && IsOwn(rethrown)))) {
                 return No();
             }
 
-            return callee.ThrownType is not { } calleeThrown || ThrowsAllowed(calleeSubstitution.Apply(calleeThrown));
+            return callee.ThrownType is not { } calleeThrown || ThrowsAllowed(calleeSubstitution.Apply(calleeThrown)) || No();
         }
 
         /// <summary>A requirement of the protocols a type parameter has, called on one, as its generic witness takes it.</summary>
@@ -2315,6 +2324,12 @@ public sealed partial class SilGen {
         foreach (var each in closure) {
             if (WitnessTable(concrete, value, each, at) is { } made && _partial.Contains(made)) {
                 return false;
+            }
+        }
+
+        if (self && value is NominalType anyError) {
+            foreach (var name in closure.Select(QualifiedName).Where(n => !anyError.Conformances.Contains(n))) {
+                anyError.Conformances.Add(name);
             }
         }
 
@@ -2972,6 +2987,19 @@ public sealed partial class SilGen {
         SilArgument? _errorOut;
 
         /// <summary>
+        ///     An <c>any Error</c> that is an error of a type only its
+        ///     metadata knows — what a 'rethrows(E)' callee throws whose
+        ///     functions throw nothing else — as that type: out of its box.
+        /// </summary>
+        SilValue Unerased(SilValue error, TypeSymbol to, OpaqueType wanted) {
+            var slot = NewSlot(wanted);
+            var isOne = Emit(new BuiltinInst("existential_cast", SilType.Bool, error, MetadataOf(to)!, slot));
+            Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, isOne)), $"an error that is not {to.ToDisplayString()}"));
+            Destroy(error);
+            return Emit(new LoadInst(slot, LoadKind.Take));
+        }
+
+        /// <summary>
         ///     An error on its way out of a bridged function whose error is
         ///     written where its caller says: written there, as the type it is,
         ///     and the address thrown. False for any other function.
@@ -2979,6 +3007,12 @@ public sealed partial class SilGen {
         bool ErrorOut(ref SilValue error) {
             if (_errorOut is not { } into || _handlers.Count > 0 || _current is null) {
                 return false;
+            }
+
+            // An 'any Error' that is one of its type: taken out of its box.
+            if (error.Type is ClassType { Name: "any$Error" } && into.Type is AddressType { Pointee: OpaqueType thrownHere } && symbol.ThrownType is { } own
+                && CanonicalHere(Sub(own)) is var named && IsOpaqueHere(named)) {
+                error = Unerased(Owned(error), named, thrownHere);
             }
 
             // A callee's, written where it was told: this function's own place.

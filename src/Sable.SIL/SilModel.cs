@@ -1848,6 +1848,11 @@ public sealed class SilModule {
     ///     declarations alone, so every unit of a program writes the same.
     /// </summary>
     public List<(string Protocol, SilWitnessTable? Witnesses)> ConformancesOf(SilType type) {
+        // An array, a slice or an optional, which declares nothing itself: what it was given a table of.
+        if (TypeMetadata.KindOf(type) is MetadataKind.Array or MetadataKind.Slice or MetadataKind.Optional) {
+            return [.._witnessTableList.Where(t => !t.IsTemplate && t.Conformer.Equals(type)).Select(static t => (t.Protocol, (SilWitnessTable?)t))];
+        }
+
         var declared = type is NominalType nominal ? nominal.Conformances : PrimitiveConformances.GetValueOrDefault(type.ToString()) ?? [];
         return [..declared.Distinct(StringComparer.Ordinal).Select(p => (p, FindWitnessTable(type, p)))];
     }

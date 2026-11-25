@@ -541,6 +541,14 @@ public sealed partial class SilInterpreter {
                     return true;
                 }
 
+                // To 'any Error', which is the box itself.
+                if (to.Type is ClassType && IsSubtype(MetadataOf(box.Type), to)) {
+                    Retain(box.Type, box);
+                    place.Set(box);
+                    result = true;
+                    return true;
+                }
+
                 var held = box.Type.TypeArguments is [var of] ? of : box.Type.Fields[0].Type;
                 var value = box.Fields[0];
                 var dynamic = held is ClassType && value is HeapObject it ? Alive(it).Type : held;

@@ -1510,6 +1510,11 @@ x is Drawable         // conformance/type test, narrows in the true branch
 x unchecked as I32    // explicit wrapping/truncating conversion
 ```
 
+An array literal passed where a parameter's elements are an existential has
+each of its own converted, as `let xs: (any Any)[] = [1, "a"]` does: `f([1, "a"])`
+of an `(any Any)[:]`. Where another overload takes the literal as it is, that one
+is called.
+
 Of an optional, `is`, `as?`, `as!` and the patterns `is T` and `let x as T` ask
 of the value it holds: `none` is no `T`, and `as!` of it traps.
 

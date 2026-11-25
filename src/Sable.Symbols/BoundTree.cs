@@ -559,6 +559,15 @@ public sealed class BoundArray(
     ImmutableArray<BoundExpression> elements)
     : BoundExpression(syntax, type) {
     public ImmutableArray<BoundExpression> Elements { get; } = elements;
+    /// <summary>
+    ///     A call's argument: its elements before any was converted to what
+    ///     the first is, for a parameter whose elements are an existential.
+    /// </summary>
+    internal ImmutableArray<BoundExpression> AsWritten { get; init; }
+
+    /// <summary>A call's argument whose elements are of no one type: the element that differs, and the error unless the parameter says what they are.</summary>
+    internal (SyntaxNode Element, string Message)? Inconsistent { get; init; }
+
     public override IEnumerable<BoundNode> Children => Elements;
 }
 

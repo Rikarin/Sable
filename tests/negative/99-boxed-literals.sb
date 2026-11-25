@@ -1,0 +1,68 @@
+module Negative.BoxedLiterals
+
+// An array literal passed where the elements are an existential is converted
+// element by element (#339); anywhere else its elements are of one type.
+
+protocol Shape {
+    fn area() -> Int
+}
+
+struct Square: Shape {
+    let n: Int
+
+    fn area() -> Int {
+        return n * n
+    }
+}
+
+struct Holder<T> {
+    var all: T[>..]
+
+    init(_ all: T[>..]) {
+        self.all = all
+    }
+}
+
+fn anything(_ xs: (any Any)[>..]) -> Int {
+    return xs.count
+}
+
+fn shapes(_ xs: (any Shape)[:]) -> Int {
+    return xs.count
+}
+
+fn numbers(_ xs: Int[:]) -> Int {
+    return xs.count
+}
+
+fn generic<T>(_ xs: T[:]) -> Int {
+    return xs.count
+}
+
+fn grid(_ xs: Int[][]) -> Int {
+    return xs.count
+}
+
+fn value(_ x: any Any) {
+}
+
+fn wrong() {
+    let a = shapes([Square(n: 1), 2]) //! S3015 this element is 'Int' but the array holds 'Square'
+    let b = shapes([1, 2]) //! S3007 argument 1 is 'Int[]', and 'xs' takes '(any Shape)[:]'
+    let c = numbers([1, "a"]) //! S3015 this element is 'String' but the array holds 'Int'
+    let d = generic([1, "a"]) //! S3015 this element is 'String' but the array holds 'Int'
+    let e = Holder([1, "a"]) //! S3015 this element is 'String' but the array holds 'Int'
+    let f = numbers([1 << 2, "a"]) //! S3015 this element is 'String' but the array holds 'Int'
+    let g = grid([[1, "a"]]) //! S3015 this element is 'String' but the array holds 'Int'
+    let h = numbers(([1, "a"])) //! S3015 this element is 'String' but the array holds 'Int'
+    let i = anything([1, missing]) //! S2002 no symbol named 'missing'
+    let j = anything([[1, "a"]]) //! S3015 this element is 'String' but the array holds 'Int'
+    value([1, "a"]) //! S3015 this element is 'String' but the array holds 'Int'
+    let xs = [1, "a"] //! S3015 this element is 'String' but the array holds 'Int'
+}
+
+fn right() {
+    let a = anything([1, "a"]) + anything([1, 2]) + anything([])
+    let b = shapes([Square(n: 1)])
+    let c = Holder<any Any>([1, "a"])
+}

@@ -682,4 +682,118 @@ public sealed class LanguageGapTests {
                 print("\(twice)")
             }
             """).Stdout);
+
+    /// <summary>An array literal passed where the elements are an existential is converted element by element (#339).</summary>
+    [Fact]
+    public void AnArrayLiteralTakesAParametersExistentialElements() =>
+        Assert.Equal(
+            """
+            2 2
+            10
+            4
+            ifsu
+            ui
+            fi
+            ints any
+            3
+            2
+            2
+            4
+            3
+            2
+            2
+
+            """,
+            Programs.AssertAgree("""
+            module C339
+
+            import Sable.IO
+
+            protocol Shape {
+                fn area() -> Int
+            }
+
+            struct Sq: Shape {
+                let n: Int
+                fn area() -> Int {
+                    return n * n
+                }
+            }
+
+            struct Rect: Shape {
+                let a: Int
+                let b: Int
+                fn area() -> Int {
+                    return a * b
+                }
+            }
+
+            struct Bag {
+                let all: (any Any)[>..]
+
+                init(_ all: (any Any)[>..]) {
+                    self.all = all
+                }
+
+                fn with<T>(_ first: T, _ rest: (any Any)[:]) -> Int {
+                    return rest.count + all.count
+                }
+            }
+
+            union Tree {
+                Leaves((any Any)[>..])
+            }
+
+            fn f(_ xs: (any Any)[>..]) -> Int => xs.count
+
+            fn areas(_ xs: (any Shape)[:]) -> Int {
+                var sum = 0
+                for x in xs {
+                    sum += x.area()
+                }
+                return sum
+            }
+
+            fn kinds(_ xs: (any Any)[:]) -> String {
+                var all = ""
+                for x in xs {
+                    all += x is Int ? "i" : x is F64 ? "f" : x is String ? "s" : x is U8 ? "u" : "?"
+                }
+                return all
+            }
+
+            fn over(_ xs: Int[:]) -> String => "ints"
+            fn over(_ xs: (any Any)[:]) -> String => "any"
+
+            fn grid(_ xs: (any Any)[>..][>..]) -> Int => xs[0].count + xs[1].count
+
+            fn maybe(_ xs: ((any Any)?)[>..]) -> Int => xs.count
+
+            fn optional(_ xs: (any Any)[>..]?) -> Int => xs?.count ?? 0
+
+            fn generic<T>(_ xs: T[:]) -> Int => xs.count
+
+            @main
+            fn main() {
+                print("\(f([1, 2])) \(f([1, "a"]))")
+                print(areas([Sq(n: 2), Rect(a: 2, b: 3)]))
+                print(areas([Sq(n: 2)]))
+                let small: U8 = 3
+                print(kinds([1, 2.5, "a", small]))
+                print(kinds([small, 1]))
+                print(kinds([2.5, 1]))
+                print("\(over([1, 2])) \(over([1, "b"]))")
+                print(grid([[1, "a"], [2.0]]))
+                print(maybe([1, "a"]))
+                print(optional(["a", 1]))
+                print(Bag([1, "x"]).with(3, ["a", 1 << 2]))
+                if case .Leaves(let xs) = Tree.Leaves([1, "a", 2]) {
+                    print(xs.count)
+                }
+                let g: ((any Any)[>..]) -> Int = { (xs: (any Any)[>..]) -> Int in xs.count }
+                print(g([1, "a"]))
+                print(generic([1, 2]))
+            }
+            """).Stdout
+        );
 }

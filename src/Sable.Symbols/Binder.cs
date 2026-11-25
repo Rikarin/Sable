@@ -5024,6 +5024,8 @@ public sealed partial class Binder {
         foreach (var argument in ArgumentSyntaxes(syntax)) {
             if (_speculated.Remove(argument)) {
                 BindExpression(argument);
+            } else if (_bound.TryGetValue(Unparenthesised(argument), out var passed)) {
+                ReportInconsistent(passed);
             }
         }
 
@@ -5128,6 +5130,10 @@ public sealed partial class Binder {
 
         var syntaxes = argumentSyntax.ToImmutable();
         var labels = labelBuilder.ToImmutable();
+
+        foreach (var argument in syntaxes) {
+            AddArrayArgument(argument);
+        }
 
         var arguments = syntaxes
             .Select(e => IsClosure(e) ? new BoundUnboundClosure(e) : speculative || TakesParameterType(e) ? Speculate(e) : BindExpression(e))
@@ -7229,7 +7235,14 @@ public sealed partial class Binder {
                 continue;
             }
 
-            if (conversion is null) {
+            // An array literal whose elements each become what the parameter's are.
+            var inconsistent = arguments[i] is BoundArray { AsWritten.IsDefaultOrEmpty: false } && TypeSubstitution.ContainsError(arguments[i].Type);
+            if ((conversion is null || inconsistent) && FitsBoxed(arguments[i], wanted)) {
+                cost += Conversions.Cost(ConversionKind.Existential) + 1;
+                continue;
+            }
+
+            if (conversion is null || inconsistent) {
                 return Reject(
                     $"argument {i + 1} is '{arguments[i].Type.ToDisplayString()}', "
                     + $"and '{parameter.Name}' takes '{wanted.ToDisplayString()}'"
@@ -7842,7 +7855,54 @@ public sealed partial class Binder {
         return new BoundTuple(syntax, type, elements);
     }
 
+    /// <summary>The array literals among a call's arguments, until each is bound: what their elements are may be for the parameter to say.</summary>
+    readonly HashSet<ExpressionSyntax> _arrayArguments = [];
+
+    void AddArrayArgument(ExpressionSyntax argument) {
+        if (Unparenthesised(argument) is ArrayExpressionSyntax array) {
+            _arrayArguments.Add(array);
+            foreach (var element in array.Elements) {
+                AddArrayArgument(element);
+            }
+        }
+    }
+
+    /// <summary>Reports that an argument's array literal holds no one type, where no parameter said what its elements are.</summary>
+    void ReportInconsistent(BoundNode argument) {
+        if (argument is not BoundArray array) {
+            return;
+        }
+
+        if (array.Inconsistent is var (element, message)) {
+            _diagnostics.Error(ErrorCode.ERR_InconsistentArrayElements, element.Span, message);
+            return;
+        }
+
+        foreach (var each in array.Elements) {
+            ReportInconsistent(each);
+        }
+    }
+
+    /// <summary>The element type of an array of an existential, an optional of one, or such arrays: what an argument's literal is converted to element by element.</summary>
+    static TypeSymbol? BoxedElement(TypeSymbol target) =>
+        (target is OptionalTypeSymbol optional ? optional.UnderlyingType : target) is ArrayTypeSymbol { ElementType: var element }
+        && (element is ExistentialTypeSymbol or OptionalTypeSymbol { UnderlyingType: ExistentialTypeSymbol } || BoxedElement(element) is not null)
+            ? element
+            : null;
+
+    /// <summary>Whether a call's array literal, each element converted, is an array of an existential: <c>[1, "a"]</c> an <c>(any Any)[]</c>.</summary>
+    bool FitsBoxed(BoundExpression argument, TypeSymbol target) =>
+        argument is BoundArray { AsWritten.IsDefaultOrEmpty: false } array && BoxedElement(target) is { } element
+        && array.AsWritten.All(e => e is BoundArray && BoxedElement(element) is not null
+            ? FitsBoxed(e, element)
+            : TypeSubstitution.ContainsError(e.Type)
+                // Its error has been reported, but for a literal's of no one type.
+                ? e is not BoundArray
+                : _conversions.Classify(e.Type, element, IsLiteral(e)) is not null);
+
     BoundExpression BindArray(ArrayExpressionSyntax syntax, TypeSymbol? expectedType) {
+        var isArgument = _arrayArguments.Remove(syntax) && expectedType is null;
+        (SyntaxNode, string)? inconsistent = null;
         // '[.Read, .Write]' where a '@flags' enum is wanted: the flags, together.
         if (Expand(expectedType) is NamedTypeSymbol { IsFlags: true } flags) {
             return BindFlags(syntax, flags);
@@ -7886,6 +7946,7 @@ public sealed partial class Binder {
         }
 
         var elements = bound.Select(static e => e!).ToImmutableArray();
+        var written = elements;
 
         // 'T[..k]' holds at most k.
         if (expectedType is ArrayTypeSymbol { ArrayKind: ArrayKind.Inline, Capacity: { } capacity } bounded && elements.Length > capacity) {
@@ -7923,12 +7984,13 @@ public sealed partial class Binder {
                     continue;
                 }
 
-                _diagnostics.Error(
-                    ErrorCode.ERR_InconsistentArrayElements,
-                    element.Syntax.Span,
-                    $"this element is '{element.Type.ToDisplayString()}' but the array holds "
-                    + $"'{elementType.ToDisplayString()}'"
-                );
+                var message = $"this element is '{element.Type.ToDisplayString()}' but the array holds '{elementType.ToDisplayString()}'";
+                if (isArgument) {
+                    inconsistent = (element.Syntax, message);
+                } else {
+                    _diagnostics.Error(ErrorCode.ERR_InconsistentArrayElements, element.Syntax.Span, message);
+                }
+
                 elementType = ErrorTypeSymbol.Instance;
                 break;
             }
@@ -7957,7 +8019,10 @@ public sealed partial class Binder {
             ? expected.ArrayKind
             : ArrayKind.Fixed;
 
-        return new BoundArray(syntax, new ArrayTypeSymbol(elementType, arrayKind), elements);
+        return new BoundArray(syntax, new ArrayTypeSymbol(elementType, arrayKind), elements) {
+            AsWritten = isArgument ? written : default,
+            Inconsistent = inconsistent,
+        };
     }
 
     // -----------------------------------------------------------------------
@@ -10325,6 +10390,18 @@ public sealed partial class Binder {
     ) {
         if (expression is BoundFunctionGroup group) {
             expression = Materialize(group, target);
+        }
+
+        // An argument's array literal, its elements for the parameter to say:
+        // each is converted, and a literal is what it is alone.
+        if (expression is BoundArray { AsWritten.IsDefaultOrEmpty: false } writtenArray && BoxedElement(target) is { } boxed && FitsBoxed(writtenArray, target)) {
+            var made = new BoundArray(
+                writtenArray.Syntax,
+                target is OptionalTypeSymbol { UnderlyingType: var held } ? held : target,
+                [..writtenArray.AsWritten.Select(e => Convert(IsLiteralOnly(e.Syntax) ? BindExpression((ExpressionSyntax)e.Syntax, boxed) : e, boxed, e.Syntax))]
+            );
+            _bound[writtenArray.Syntax] = made;
+            expression = made;
         }
 
         // An argument's literal, given the type of the parameter it is for:

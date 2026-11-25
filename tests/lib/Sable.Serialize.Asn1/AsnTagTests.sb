@@ -4,27 +4,26 @@ import Sable.Serialize.Asn1
 import Sable.Testing
 import Sable.Text
 
-@test
-fn aTagIsItsBytes() {
-    let cases: (AsnTag, String)[>..] = [
-        (.bool, "01"),
-        (AsnTag.sequence.asConstructed(), "30"),
-        (.application(30), "5e"),
-        (.application(31), "5f1f"),
-        (.context(127), "9f7f"),
-        (.context(128), "9f8100"),
-        (AsnTag(.Private, 16383, isConstructed: true), "ffff7f"),
-        (AsnTag(.Private, 16384), "df818000"),
-        (AsnTag(.Private, 2147483647), "df87ffffff7f"),
-    ]
-    for (tag, hex) in cases {
-        assertEqualText(Hex.encode(tag.encoded()), hex)
-        assertEqual(tag.encodedSize, hex.count / 2)
-        let (found, size) = try! AsnTag.decode(try! Hex.decode(hex + "ff"))
-        assertEqual(found, tag)
-        assertEqual(size, hex.count / 2)
-        assertEqual(found.asPrimitive().asConstructed().isConstructed, true)
-    }
+let tags: (AsnTag, String)[>..] = [
+    (.bool, "01"),
+    (AsnTag.sequence.asConstructed(), "30"),
+    (.application(30), "5e"),
+    (.application(31), "5f1f"),
+    (.context(127), "9f7f"),
+    (.context(128), "9f8100"),
+    (AsnTag(.Private, 16383, isConstructed: true), "ffff7f"),
+    (AsnTag(.Private, 16384), "df818000"),
+    (AsnTag(.Private, 2147483647), "df87ffffff7f"),
+]
+
+@test(arguments: tags)
+fn aTagIsItsBytes(_ tag: AsnTag, _ hex: String) {
+    assertEqualText(Hex.encode(tag.encoded()), hex)
+    assertEqual(tag.encodedSize, hex.count / 2)
+    let (found, size) = try! AsnTag.decode(try! Hex.decode(hex + "ff"))
+    assertEqual(found, tag)
+    assertEqual(size, hex.count / 2)
+    assertEqual(found.asPrimitive().asConstructed().isConstructed, true)
 }
 
 @test
@@ -35,49 +34,29 @@ fn aTagMatchesWhateverIsInIt() {
     assertEqual(tag.asConstructed().asPrimitive(), tag)
 }
 
-@test
-fn aTagIsWrittenAsInAModule() {
-    let names: (AsnTag, String)[>..] = [
-        (.integer, "INTEGER"),
-        (.duration, "DURATION"),
-        (.universal(36), "RELATIVE-OID-IRI"),
-        (.universal(37), "[UNIVERSAL 37]"),
-        (.context(0), "[0]"),
-        (.application(1), "[APPLICATION 1]"),
-        (AsnTag(.Private, 2), "[PRIVATE 2]"),
-    ]
-    for (tag, name) in names {
-        assertEqualText("\(tag)", name)
-    }
+let names: (AsnTag, String)[>..] = [
+    (.integer, "INTEGER"),
+    (.duration, "DURATION"),
+    (.universal(36), "RELATIVE-OID-IRI"),
+    (.universal(37), "[UNIVERSAL 37]"),
+    (.context(0), "[0]"),
+    (.application(1), "[APPLICATION 1]"),
+    (AsnTag(.Private, 2), "[PRIVATE 2]"),
+]
+
+@test(arguments: names)
+fn aTagIsWrittenAsInAModule(_ tag: AsnTag, _ name: String) {
+    assertEqualText("\(tag)", name)
 }
 
-@test
-fn everyTypeHasItsNumber() {
-    let tags: AsnTag[>..] = [
-        .bool,
-        .integer,
-        .bitString,
-        .octetString,
-        .null,
-        .objectIdentifier,
-        .external,
-        .real,
-        .enumerated,
-        .embeddedPdv,
-        .relativeOid,
-        .time,
-        .sequence,
-        .set,
-        .utcTime,
-        .generalizedTime,
-        .characterString,
-        .date,
-        .timeOfDay,
-        .dateTime,
-        .duration,
-    ]
-    assertEqualText(
-        tags.map({ "\($0.number)" }).joined(separator: " "),
-        "1 2 3 4 5 6 8 9 10 11 13 14 16 17 23 24 29 31 32 33 34"
-    )
+let numbers: (AsnTag, Int)[>..] = [
+    (.bool, 1), (.integer, 2), (.bitString, 3), (.octetString, 4), (.null, 5), (.objectIdentifier, 6), (.external, 8),
+    (.real, 9), (.enumerated, 10), (.embeddedPdv, 11), (.relativeOid, 13), (.time, 14), (.sequence, 16), (.set, 17),
+    (.utcTime, 23), (.generalizedTime, 24), (.characterString, 29), (.date, 31), (.timeOfDay, 32), (.dateTime, 33),
+    (.duration, 34),
+]
+
+@test(arguments: numbers)
+fn everyTypeHasItsNumber(_ tag: AsnTag, _ number: Int) {
+    expect(Int(tag.number) == number)
 }

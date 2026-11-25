@@ -138,6 +138,26 @@ fn show(_ what: String, _ rules: AsnEncodingRules, _ hex: String, _ options: Asn
     }
 }
 
+// Shown so by the rules: "der", "ber", "cer", or "all" of them; or by DER with
+// a set's values in any order, or with two digits a year of 1961 to 2060.
+fn shows(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    if rules == "all" {
+        expect(der(what, hex) == shown)
+        expect(ber(what, hex) == shown)
+        expect(cer(what, hex) == shown)
+    } else if rules == "ber" {
+        expect(ber(what, hex) == shown)
+    } else if rules == "cer" {
+        expect(cer(what, hex) == shown)
+    } else if rules == "any order" {
+        expect(show(what, .Der, hex, AsnOptions(skipSetOrder: true)) == shown)
+    } else if rules == "to 2060" {
+        expect(show(what, .Der, hex, AsnOptions(twoDigitYearMaximum: 2060)) == shown)
+    } else {
+        expect(der(what, hex) == shown)
+    }
+}
+
 fn der(_ what: String, _ hex: String) -> String {
     return show(what, .Der, hex)
 }
@@ -157,226 +177,189 @@ fn text(_ tag: String, _ text: String) -> String {
     return "\(tag)\(Hex.encode([U8(bytes.count)]))\(Hex.encode(bytes))"
 }
 
-@test
-fn aBoolean() {
-    for rules in allRules() {
-        assertEqualText(show("bool", rules, "01 01 00"), "false")
-        assertEqualText(show("bool", rules, "01 01 ff"), "true")
-        assertEqualText(show("bool", rules, "01 00"), "byte 2: a BOOLEAN is one byte")
-        assertEqualText(show("bool", rules, "01 02 0000"), "byte 2: a BOOLEAN is one byte")
-    }
-    assertEqualText(ber("bool", "01 01 01"), "true")
-    assertEqualText(der("bool", "01 01 01"), "byte 2: true is 0xFF")
-    assertEqualText(cer("bool", "01 01 80"), "byte 2: true is 0xFF")
-    assertEqualText(der("bool", "02 01 01"), "byte 0: expected BOOLEAN, found INTEGER")
-    assertEqualText(ber("bool", "21 03 0101ff"), "byte 0: the value is constructed and should be primitive")
+@test(arguments: [
+    ("all", "bool", "01 01 00", "false"),
+    ("all", "bool", "01 01 ff", "true"),
+    ("all", "bool", "01 00", "byte 2: a BOOLEAN is one byte"),
+    ("all", "bool", "01 02 0000", "byte 2: a BOOLEAN is one byte"),
+    ("ber", "bool", "01 01 01", "true"),
+    ("der", "bool", "01 01 01", "byte 2: true is 0xFF"),
+    ("cer", "bool", "01 01 80", "byte 2: true is 0xFF"),
+    ("der", "bool", "02 01 01", "byte 0: expected BOOLEAN, found INTEGER"),
+    ("ber", "bool", "21 03 0101ff", "byte 0: the value is constructed and should be primitive"),
+])
+fn aBoolean(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
-@test
-fn anInteger() {
-    let cases: (String, String)[>..] = [
-        ("02 01 00", "0"),
-        ("02 01 7f", "127"),
-        ("02 02 0080", "128"),
-        ("02 01 80", "-128"),
-        ("02 02 ff7f", "-129"),
-        ("02 08 7fffffffffffffff", "9223372036854775807"),
-        ("02 08 8000000000000000", "-9223372036854775808"),
-    ]
-    for (hex, value) in cases {
-        assertEqualText(der("int", hex), value)
-        assertEqualText(der("big", hex), value)
-    }
-    assertEqualText(der("int", "02 09 008000000000000000"), "byte 2: the integer is not an Int")
-    assertEqualText(der("uint", "02 09 008000000000000000"), "9223372036854775808")
-    assertEqualText(der("uint", "02 09 00ffffffffffffffff"), "18446744073709551615")
-    assertEqualText(der("uint", "02 01 00"), "0")
-    assertEqualText(der("uint", "02 01 ff"), "byte 2: the INTEGER is not a U64")
-    assertEqualText(der("uint", "02 09 010000000000000000"), "byte 2: the INTEGER is not a U64")
-    assertEqualText(der("big", "02 09 ff0000000000000000"), "-18446744073709551616")
-    assertEqualText(der("bytes", "02 02 0080"), "0080")
+@test(arguments: [
+    ("der", "int", "02 01 00", "0"),
+    ("der", "big", "02 01 00", "0"),
+    ("der", "int", "02 01 7f", "127"),
+    ("der", "big", "02 01 7f", "127"),
+    ("der", "int", "02 02 0080", "128"),
+    ("der", "big", "02 02 0080", "128"),
+    ("der", "int", "02 01 80", "-128"),
+    ("der", "big", "02 01 80", "-128"),
+    ("der", "int", "02 02 ff7f", "-129"),
+    ("der", "big", "02 02 ff7f", "-129"),
+    ("der", "int", "02 08 7fffffffffffffff", "9223372036854775807"),
+    ("der", "big", "02 08 7fffffffffffffff", "9223372036854775807"),
+    ("der", "int", "02 08 8000000000000000", "-9223372036854775808"),
+    ("der", "big", "02 08 8000000000000000", "-9223372036854775808"),
+    ("der", "int", "02 09 008000000000000000", "byte 2: the integer is not an Int"),
+    ("der", "uint", "02 09 008000000000000000", "9223372036854775808"),
+    ("der", "uint", "02 09 00ffffffffffffffff", "18446744073709551615"),
+    ("der", "uint", "02 01 00", "0"),
+    ("der", "uint", "02 01 ff", "byte 2: the INTEGER is not a U64"),
+    ("der", "uint", "02 09 010000000000000000", "byte 2: the INTEGER is not a U64"),
+    ("der", "big", "02 09 ff0000000000000000", "-18446744073709551616"),
+    ("der", "bytes", "02 02 0080", "0080"),
     // §8.3.2 is of every rule.
-    for rules in allRules() {
-        assertEqualText(show("int", rules, "02 00"), "byte 2: an integer is a byte at least")
-        assertEqualText(show("int", rules, "02 02 007f"), "byte 2: an integer is in more bytes than it needs")
-        assertEqualText(show("big", rules, "02 02 ff80"), "byte 2: an integer is in more bytes than it needs")
-    }
-    assertEqualText(der("enum", "0a 01 05"), "5")
-    assertEqualText(der("enum", "0a 02 0005"), "byte 2: an integer is in more bytes than it needs")
-    var reader = AsnReader([0x0A, 0x01, 0x07], rules: .Der)
-    assertEqualText(Hex.encode(try! reader.readEnumeratedBytes()), "07")
+    ("all", "int", "02 00", "byte 2: an integer is a byte at least"),
+    ("all", "int", "02 02 007f", "byte 2: an integer is in more bytes than it needs"),
+    ("all", "big", "02 02 ff80", "byte 2: an integer is in more bytes than it needs"),
+    ("der", "enum", "0a 01 05", "5"),
+    ("der", "enum", "0a 02 0005", "byte 2: an integer is in more bytes than it needs"),
+])
+fn anInteger(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
-@test
-fn aNull() {
-    assertEqualText(der("null", "05 00"), "null")
-    assertEqualText(der("null", "05 01 00"), "byte 2: a NULL has no contents")
-    assertEqualText(der("null", "05 81 00"), "byte 1: a length in more bytes than it needs")
-    assertEqualText(ber("null", "05 81 00"), "null")
+@test(arguments: [
+    ("der", "null", "05 00", "null"),
+    ("der", "null", "05 01 00", "byte 2: a NULL has no contents"),
+    ("der", "null", "05 81 00", "byte 1: a length in more bytes than it needs"),
+    ("ber", "null", "05 81 00", "null"),
+])
+fn aNull(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
-@test
-fn aReal() {
-    let cases: (String, String)[>..] = [
-        ("09 00", "0.0"),
-        ("09 01 40", "\(F64.infinity)"),
-        ("09 01 41", "\(-F64.infinity)"),
-        ("09 01 42", "\(F64.nan)"),
-        ("09 03 80 00 01", "1.0"),
-        ("09 03 c0 00 01", "-1.0"),
-        ("09 03 80 ff 01", "0.5"),
-        ("09 03 80 fb 05", "0.15625"),
-        ("09 04 81 fb ce 01", "5e-324"),
-        ("09 05 80 0a 10 00 01", "1073742848.0"),
-        ("09 0a 81 03 cb 1f ffff ffff ffff", "1.7976931348623157e+308"),
-        ("09 07 03 31 35 2e 45 2d 33", "0.015"),
-        ("09 06 03 31 2e 45 2b 30", "1.0"),
-        ("09 07 03 2d 35 2e 45 31 30", "-50000000000.0"),
-    ]
-    for (hex, value) in cases {
-        assertEqualText(der("real", hex), value)
-        assertEqualText(cer("real", hex), value)
-        assertEqualText(ber("real", hex), value)
-    }
-    var reader = AsnReader([0x09, 0x01, 0x43], rules: .Der)
-    let zero = try! reader.readReal()
-    expect(zero == 0.0 && zero.isSignMinus)
+@test(arguments: [
+    ("all", "real", "09 00", "0.0"),
+    ("all", "real", "09 01 40", "\(F64.infinity)"),
+    ("all", "real", "09 01 41", "\(-F64.infinity)"),
+    ("all", "real", "09 01 42", "\(F64.nan)"),
+    ("all", "real", "09 03 80 00 01", "1.0"),
+    ("all", "real", "09 03 c0 00 01", "-1.0"),
+    ("all", "real", "09 03 80 ff 01", "0.5"),
+    ("all", "real", "09 03 80 fb 05", "0.15625"),
+    ("all", "real", "09 04 81 fb ce 01", "5e-324"),
+    ("all", "real", "09 05 80 0a 10 00 01", "1073742848.0"),
+    ("all", "real", "09 0a 81 03 cb 1f ffff ffff ffff", "1.7976931348623157e+308"),
+    ("all", "real", "09 07 03 31 35 2e 45 2d 33", "0.015"),
+    ("all", "real", "09 06 03 31 2e 45 2b 30", "1.0"),
+    ("all", "real", "09 07 03 2d 35 2e 45 31 30", "-50000000000.0"),
+    ("all", "real", "09 01 43", "-0.0"),
+    ("ber", "real", "09 03 b0 00 01", "byte 2: a REAL of a reserved base"),
+    ("ber", "real", "09 01 44", "byte 2: a reserved REAL"), ("ber", "real", "09 02 40 00", "byte 2: a reserved REAL"),
+    ("ber", "real", "09 01 80", "byte 3: a REAL ends inside its exponent"),
+    ("ber", "real", "09 01 83", "byte 3: a REAL ends inside its exponent"),
+    ("ber", "real", "09 02 83 00", "byte 3: a REAL's exponent is a byte at least"),
+    ("der", "real", "09 03 80 00 02", "byte 4: a REAL's mantissa is not odd, in as few bytes as hold it"),
+    ("der", "real", "09 03 90 01 01", "byte 2: a REAL that is not scaled by powers of two alone"),
+    ("ber", "real", text("09", "\u{3}1.E400"), "byte 2: the REAL is too large for an F64"),
+    ("ber", "real", text("09", "\u{4}1"), "byte 2: a reserved REAL"),
+    ("ber", "real", "09 01 00", "byte 2: a reserved REAL"),
+])
+fn aReal(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
-@test
-fn aRealOfOtherBases() {
-    // 8.5.7: base 8 and 16, a scale, an even mantissa, padding.
-    let cases: (String, String)[>..] = [
-        ("09 03 90 01 01", "8.0"),
-        ("09 03 a0 01 01", "16.0"),
-        ("09 03 a0 ff 03", "0.1875"),
-        ("09 03 8c 00 01", "8.0"),
-        ("09 03 80 00 02", "2.0"),
-        ("09 04 80 00 00 03", "3.0"),
-        ("09 04 81 00 01 01", "2.0"),
-        ("09 06 83 03 00 00 01 01", "byte 4: a REAL's exponent is in more bytes than it needs"),
-        ("09 06 83 03 01 00 00 01", "byte 2: the REAL is too large for an F64"),
-        ("09 04 83 01 01 01", "2.0"),
-        ("09 03 80 00 00", "0.0"),
-        ("09 02 80 00", "0.0"),
-    ]
-    for (hex, value) in cases {
-        assertEqualText(ber("real", hex), value)
-        require(der("real", hex).hasPrefix("byte "), "DER took \(hex)")
-    }
-    assertEqualText(ber("real", "09 03 b0 00 01"), "byte 2: a REAL of a reserved base")
-    assertEqualText(ber("real", "09 01 44"), "byte 2: a reserved REAL")
-    assertEqualText(ber("real", "09 02 40 00"), "byte 2: a reserved REAL")
-    assertEqualText(ber("real", "09 01 80"), "byte 3: a REAL ends inside its exponent")
-    assertEqualText(ber("real", "09 01 83"), "byte 3: a REAL ends inside its exponent")
-    assertEqualText(ber("real", "09 02 83 00"), "byte 3: a REAL's exponent is a byte at least")
-    assertEqualText(der("real", "09 03 80 00 02"), "byte 4: a REAL's mantissa is not odd, in as few bytes as hold it")
-    assertEqualText(der("real", "09 03 90 01 01"), "byte 2: a REAL that is not scaled by powers of two alone")
+// 8.5.7: base 8 and 16, a scale, an even mantissa, padding.
+@test(arguments: [
+    ("09 03 90 01 01", "8.0"),
+    ("09 03 a0 01 01", "16.0"),
+    ("09 03 a0 ff 03", "0.1875"),
+    ("09 03 8c 00 01", "8.0"),
+    ("09 03 80 00 02", "2.0"),
+    ("09 04 80 00 00 03", "3.0"),
+    ("09 04 81 00 01 01", "2.0"),
+    ("09 06 83 03 00 00 01 01", "byte 4: a REAL's exponent is in more bytes than it needs"),
+    ("09 06 83 03 01 00 00 01", "byte 2: the REAL is too large for an F64"),
+    ("09 04 83 01 01 01", "2.0"),
+    ("09 03 80 00 00", "0.0"),
+    ("09 02 80 00", "0.0"),
+])
+fn aRealOfOtherBases(_ hex: String, _ value: String) {
+    expect(ber("real", hex) == value)
+    expect(der("real", hex).hasPrefix("byte "))
 }
 
-@test
-fn aRealIsRoundedOnce() {
+@test(arguments: [
     // 2^53 + 1 and 2^53 + 3 are halfway between two, and go to the even one.
-    assertEqualText(der("real", "09 09 80 00 20 0000 0000 0001"), "9007199254740992.0")
-    assertEqualText(der("real", "09 09 80 00 20 0000 0000 0003"), "9007199254740996.0")
+    ("der", "real", "09 09 80 00 20 0000 0000 0001", "9007199254740992.0"),
+    ("der", "real", "09 09 80 00 20 0000 0000 0003", "9007199254740996.0"),
     // A bit far past the mantissa breaks the tie.
-    assertEqualText(der("real", "09 0b 80 f0 20 0000 0000 0001 0001"), "9007199254740994.0")
+    ("der", "real", "09 0b 80 f0 20 0000 0000 0001 0001", "9007199254740994.0"),
     // Half the least subnormal is a tie with 0, and a bit more than it is not.
-    assertEqualText(der("real", "09 04 81 fb cd 01"), "0.0")
-    assertEqualText(der("real", "09 04 81 fb cc 03"), "5e-324")
-    assertEqualText(der("real", "09 04 81 fb cc 01"), "0.0")
-    assertEqualText(der("real", "09 06 83 01 80 000000"), "byte 4: a REAL's exponent is in more bytes than it needs")
-    assertEqualText(ber("real", "09 08 83 05 80 00000000 01"), "0.0")
-    assertEqualText(ber("real", "09 08 83 05 7f 00000000 01"), "byte 2: the REAL is too large for an F64")
-    assertEqualText(der("real", "09 04 81 04 00 01"), "byte 2: the REAL is too large for an F64")
+    ("der", "real", "09 04 81 fb cd 01", "0.0"),
+    ("der", "real", "09 04 81 fb cc 03", "5e-324"),
+    ("der", "real", "09 04 81 fb cc 01", "0.0"),
+    ("der", "real", "09 06 83 01 80 000000", "byte 4: a REAL's exponent is in more bytes than it needs"),
+    ("ber", "real", "09 08 83 05 80 00000000 01", "0.0"),
+    ("ber", "real", "09 08 83 05 7f 00000000 01", "byte 2: the REAL is too large for an F64"),
+    ("der", "real", "09 04 81 04 00 01", "byte 2: the REAL is too large for an F64"),
+])
+fn aRealIsRoundedOnce(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
+}
+
+// ISO 6093's forms.
+@test(arguments: [
+    ("\u{1}123", "123.0"),
+    ("\u{1}  -5", "-5.0"),
+    ("\u{1}+07", "7.0"),
+    ("\u{1}1.5", "not"),
+    ("\u{1}", "not"),
+    ("\u{1}-", "not"),
+    ("\u{2}1.5", "1.5"),
+    ("\u{2}1,5", "1.5"),
+    ("\u{2}.5", "0.5"),
+    ("\u{2}-.5", "-0.5"),
+    ("\u{2}5.", "5.0"),
+    ("\u{2}.", "not"),
+    ("\u{2}5", "not"),
+    ("\u{2}5.5x", "not"),
+    ("\u{3}1.5E2", "150.0"),
+    ("\u{3}15e1", "150.0"),
+    ("\u{3}0.E+0", "0.0"),
+    ("\u{3}1.E", "not"),
+    ("\u{3}1.", "not"),
+    ("\u{3}1.E-400", "0.0"),
+])
+fn aDecimalReal(_ value: String, _ expected: String) {
+    let found = ber("real", text("09", value))
+    expect(expected == "not" ? found.hasSuffix("not a decimal REAL") : found == expected, "is \(found)")
+}
+
+// §11.3.2.
+@test(arguments: [
+    "\u{1}1",
+    "\u{2}1.5",
+    "\u{3}10.E1",
+    "\u{3}01.E1",
+    "\u{3}1.5E1",
+    "\u{3}1E1",
+    "\u{3}1.e1",
+    "\u{3}+1.E1",
+    "\u{3} 1.E1",
+    "\u{3}1.E+1",
+    "\u{3}1.E0",
+    "\u{3}1.E-0",
+    "\u{3}1.E01",
+    "\u{3}1,E1",
+    "\u{3}0.E+0",
+    "\u{3}.1E1",
+    "\u{3}1.E+00",
+])
+fn aDecimalRealHasOneFormInDer(_ value: String) {
+    assertEqualText(der("real", text("09", value)), "byte 2: a decimal REAL that is not in its one form")
 }
 
 @test
-fn aDecimalReal() {
-    // ISO 6093's forms.
-    let cases: (String, String)[>..] = [
-        ("\u{1}123", "123.0"),
-        ("\u{1}  -5", "-5.0"),
-        ("\u{1}+07", "7.0"),
-        ("\u{1}1.5", "not"),
-        ("\u{1}", "not"),
-        ("\u{1}-", "not"),
-        ("\u{2}1.5", "1.5"),
-        ("\u{2}1,5", "1.5"),
-        ("\u{2}.5", "0.5"),
-        ("\u{2}-.5", "-0.5"),
-        ("\u{2}5.", "5.0"),
-        ("\u{2}.", "not"),
-        ("\u{2}5", "not"),
-        ("\u{2}5.5x", "not"),
-        ("\u{3}1.5E2", "150.0"),
-        ("\u{3}15e1", "150.0"),
-        ("\u{3}0.E+0", "0.0"),
-        ("\u{3}1.E", "not"),
-        ("\u{3}1.", "not"),
-        ("\u{3}1.E-400", "0.0"),
-    ]
-    for (value, expected) in cases {
-        let found = ber("real", text("09", value))
-        require(expected == "not" ? found.hasSuffix("not a decimal REAL") : found == expected, "\(value) is \(found)")
-    }
-    assertEqualText(ber("real", text("09", "\u{3}1.E400")), "byte 2: the REAL is too large for an F64")
-    assertEqualText(ber("real", text("09", "\u{4}1")), "byte 2: a reserved REAL")
-    assertEqualText(ber("real", "09 01 00"), "byte 2: a reserved REAL")
-    // §11.3.2.
-    for value in [
-        "\u{1}1",
-        "\u{2}1.5",
-        "\u{3}10.E1",
-        "\u{3}01.E1",
-        "\u{3}1.5E1",
-        "\u{3}1E1",
-        "\u{3}1.e1",
-        "\u{3}+1.E1",
-        "\u{3} 1.E1",
-        "\u{3}1.E+1",
-        "\u{3}1.E0",
-        "\u{3}1.E-0",
-        "\u{3}1.E01",
-        "\u{3}1,E1",
-        "\u{3}0.E+0",
-        "\u{3}.1E1",
-        "\u{3}1.E+00",
-    ] {
-        assertEqualText(der("real", text("09", value)), "byte 2: a decimal REAL that is not in its one form")
-    }
-    var long: U8[>..] = [0x09, 0x82, 0x04, 0x01, 0x01]
-    long.append(repeating: 0x31, count: 1024)
-    var reader = AsnReader(long, rules: .Ber)
-    expectThrows(saying: "byte 4: a decimal REAL of more than 1024 bytes") { _ = try reader.readReal() }
-}
-
-@test
-fn anObjectIdentifier() {
-    // §8.19.5's example.
-    assertEqualText(der("oid", "06 03 883703"), "2.999.3")
-    assertEqualText(der("oid", "06 06 2a864886f70d"), "1.2.840.113549")
-    assertEqualText(der("oid", "06 01 00"), "0.0")
-    assertEqualText(der("oid", "06 01 27"), "0.39")
-    assertEqualText(der("oid", "06 01 4f"), "1.39")
-    assertEqualText(der("oid", "06 01 50"), "2.0")
-    assertEqualText(der("oid", "06 00"), "byte 2: an object identifier has a number at least")
-    assertEqualText(der("oid", "06 02 8001"), "byte 2: an object identifier's number is in more bytes than it needs")
-    assertEqualText(der("oid", "06 03 2a8001"), "byte 3: an object identifier's number is in more bytes than it needs")
-    assertEqualText(der("oid", "06 02 2a86"), "byte 4: an object identifier ends inside a number")
-    // 2.25 and a UUID of all ones is the most there is.
-    assertEqualText(
-        der("oid", "06 14 69 83ffffffffffffffffffffffffffffffffff7f"),
-        "2.25.340282366920938463463374607431768211455"
-    )
-    assertEqualText(
-        der("oid", "06 14 69 84ffffffffffffffffffffffffffffffffff7f"),
-        "byte 21: an object identifier's number is more than 128 bits"
-    )
-    // §8.20.5's example.
-    assertEqualText(der("relative", "0d 04 c27b0302"), "8571.3.2")
-    assertEqualText(der("relative", "0d 01 00"), "0")
-    assertEqualText(der("relative", "0d 00"), "byte 2: an object identifier has a number at least")
+fn numbersAndDecimalsHaveABound() {
     var many: U8[>..] = [0x06, 0x81, 0x80]
     many.append(repeating: 1, count: 128)
     var reader = AsnReader(many, rules: .Der)
@@ -384,50 +367,84 @@ fn anObjectIdentifier() {
     many[0] = 0x0D
     reader = AsnReader(many, rules: .Der)
     assertEqual(try! reader.readRelativeOid().count, 128)
+    var long: U8[>..] = [0x09, 0x82, 0x04, 0x01, 0x01]
+    long.append(repeating: 0x31, count: 1024)
+    var decimal = AsnReader(long, rules: .Ber)
+    expectThrows(saying: "byte 4: a decimal REAL of more than 1024 bytes") { _ = try decimal.readReal() }
 }
 
-@test
-fn anOctetString() {
-    assertEqualText(der("octets", "04 00"), "")
-    assertEqualText(der("octets", "04 02 cafe"), "cafe")
-    assertEqualText(der("octets", "24 04 0402cafe"), "byte 0: a string in pieces")
-    assertEqualText(ber("octets", "24 04 0402cafe"), "cafe")
-    assertEqualText(ber("octets", "24 80 0401ca 0401fe 0000"), "cafe")
-    assertEqualText(ber("octets", "24 80 2480 0401ca 0000 2403 0401fe 0000"), "cafe")
-    assertEqualText(ber("octets", "24 00"), "")
-    assertEqualText(ber("octets", "24 80 0301ca 0000"), "byte 2: expected OCTET STRING, found BIT STRING")
-    assertEqualText(ber("octets", "24 80 0401ca"), "byte 5: the bytes end inside a value")
-    assertEqualText(cer("octets", "24 80 0401ca 0401fe 0000"), "byte 5: a string's pieces are not of 1000 bytes")
+@test(arguments: [
+    // §8.19.5's example.
+    ("der", "oid", "06 03 883703", "2.999.3"),
+    ("der", "oid", "06 06 2a864886f70d", "1.2.840.113549"),
+    ("der", "oid", "06 01 00", "0.0"),
+    ("der", "oid", "06 01 27", "0.39"),
+    ("der", "oid", "06 01 4f", "1.39"),
+    ("der", "oid", "06 01 50", "2.0"),
+    ("der", "oid", "06 00", "byte 2: an object identifier has a number at least"),
+    ("der", "oid", "06 02 8001", "byte 2: an object identifier's number is in more bytes than it needs"),
+    ("der", "oid", "06 03 2a8001", "byte 3: an object identifier's number is in more bytes than it needs"),
+    ("der", "oid", "06 02 2a86", "byte 4: an object identifier ends inside a number"),
+    // 2.25 and a UUID of all ones is the most there is.
+    ("der", "oid", "06 14 69 83ffffffffffffffffffffffffffffffffff7f", "2.25.340282366920938463463374607431768211455"),
+    ("der", "oid", "06 14 69 84ffffffffffffffffffffffffffffffffff7f", "byte 21: an object identifier's number is more than 128 bits"),
+    // §8.20.5's example.
+    ("der", "relative", "0d 04 c27b0302", "8571.3.2"),
+    ("der", "relative", "0d 01 00", "0"),
+    ("der", "relative", "0d 00", "byte 2: an object identifier has a number at least"),
+])
+fn anObjectIdentifier(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
-@test
-fn aBitString() {
+@test(arguments: [
+    ("der", "octets", "04 00", ""),
+    ("der", "octets", "04 02 cafe", "cafe"),
+    ("der", "octets", "24 04 0402cafe", "byte 0: a string in pieces"),
+    ("ber", "octets", "24 04 0402cafe", "cafe"),
+    ("ber", "octets", "24 80 0401ca 0401fe 0000", "cafe"),
+    ("ber", "octets", "24 80 2480 0401ca 0000 2403 0401fe 0000", "cafe"),
+    ("ber", "octets", "24 00", ""),
+    ("ber", "octets", "24 80 0301ca 0000", "byte 2: expected OCTET STRING, found BIT STRING"),
+    ("ber", "octets", "24 80 0401ca", "byte 5: the bytes end inside a value"),
+    ("cer", "octets", "24 80 0401ca 0401fe 0000", "byte 5: a string's pieces are not of 1000 bytes"),
+])
+fn anOctetString(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
+}
+
+@test(arguments: [
     // §8.6.4.2's example, and the same in pieces.
-    assertEqualText(der("bits", "03 07 040a3b5f291cd0"), "0a3b5f291cd0/4")
-    assertEqualText(ber("bits", "23 80 0303000a3b 0305045f291cd0 0000"), "0a3b5f291cd0/4")
-    assertEqualText(der("bits", "03 01 00"), "/0")
-    assertEqualText(ber("bits", "23 80 0000"), "/0")
-    assertEqualText(der("bits", "03 00"), "byte 2: a BIT STRING is a byte at least")
-    assertEqualText(der("bits", "03 02 08ff"), "byte 2: a BIT STRING has not 8 unused bits")
-    assertEqualText(der("bits", "03 01 01"), "byte 2: a BIT STRING has not 1 unused bits")
-    assertEqualText(ber("bits", "03 02 04ff"), "f0/4")
-    assertEqualText(der("bits", "03 02 04ff"), "byte 3: a BIT STRING's unused bits are not zero")
-    assertEqualText(ber("bits", "23 80 030204f0 03020000 0000"), "byte 6: a piece after one that is not whole bytes")
-    assertEqualText(ber("bits", "23 80 0401ff 0000"), "byte 2: expected BIT STRING, found OCTET STRING")
+    ("der", "bits", "03 07 040a3b5f291cd0", "0a3b5f291cd0/4"),
+    ("ber", "bits", "23 80 0303000a3b 0305045f291cd0 0000", "0a3b5f291cd0/4"),
+    ("der", "bits", "03 01 00", "/0"),
+    ("ber", "bits", "23 80 0000", "/0"),
+    ("der", "bits", "03 00", "byte 2: a BIT STRING is a byte at least"),
+    ("der", "bits", "03 02 08ff", "byte 2: a BIT STRING has not 8 unused bits"),
+    ("der", "bits", "03 01 01", "byte 2: a BIT STRING has not 1 unused bits"),
+    ("ber", "bits", "03 02 04ff", "f0/4"),
+    ("der", "bits", "03 02 04ff", "byte 3: a BIT STRING's unused bits are not zero"),
+    ("ber", "bits", "23 80 030204f0 03020000 0000", "byte 6: a piece after one that is not whole bytes"),
+    ("ber", "bits", "23 80 0401ff 0000", "byte 2: expected BIT STRING, found OCTET STRING"),
+])
+fn aBitString(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
-@test
-fn namedBits() {
-    assertEqualText(der("named", "03 02 0106"), "06/1")
-    assertEqualText(der("flags", "03 02 0106"), "96")
-    assertEqualText(der("flags", "03 03 070080"), "256")
-    assertEqualText(der("flags", "03 01 00"), "0")
-    assertEqualText(der("named", "03 02 0006"), "byte 2: a named bit list ends in a zero")
-    assertEqualText(der("named", "03 02 0000"), "byte 2: a named bit list ends in a zero")
-    assertEqualText(ber("named", "03 02 0006"), "06/0")
-    assertEqualText(ber("flags", "03 02 0006"), "96")
-    assertEqualText(der("flags", "03 09 000000000000000001"), "9223372036854775808")
-    assertEqualText(der("flags", "03 0a 07 000000000000000080"), "byte 0: bit 64 is set, and a U64 has 64")
+@test(arguments: [
+    ("der", "named", "03 02 0106", "06/1"),
+    ("der", "flags", "03 02 0106", "96"),
+    ("der", "flags", "03 03 070080", "256"),
+    ("der", "flags", "03 01 00", "0"),
+    ("der", "named", "03 02 0006", "byte 2: a named bit list ends in a zero"),
+    ("der", "named", "03 02 0000", "byte 2: a named bit list ends in a zero"),
+    ("ber", "named", "03 02 0006", "06/0"),
+    ("ber", "flags", "03 02 0006", "96"),
+    ("der", "flags", "03 09 000000000000000001", "9223372036854775808"),
+    ("der", "flags", "03 0a 07 000000000000000080", "byte 0: bit 64 is set, and a U64 has 64"),
+])
+fn namedBits(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
 @test
@@ -467,187 +484,208 @@ fn cerHasLongStringsInPieces() {
     assertEqualText(try! nameReader.readString(), name)
 }
 
-@test
-fn text() {
+@test(arguments: [
     // §8.23.5.4's example.
-    assertEqualText(der("Visible", "1a 05 4a6f6e6573"), "Jones")
-    assertEqualText(ber("Visible", "3a 09 0403 4a6f6e 0402 6573"), "Jones")
-    assertEqualText(ber("Visible", "3a 80 0403 4a6f6e 0402 6573 0000"), "Jones")
-    assertEqualText(ber("Visible", "3a 80 1a03 4a6f6e 0000"), "byte 2: expected OCTET STRING, found VisibleString")
-    assertEqualText(der("Utf8", "0c 03 e282ac"), "€")
-    assertEqualText(der("Utf8", "0c 02 61ff"), "byte 3: ill-formed UTF-8")
-    assertEqualText(der("Utf8", "0c 03 eda080"), "byte 2: ill-formed UTF-8")
-    assertEqualText(der("Utf8", "0c 00"), "")
-    assertEqualText(der("Numeric", text("12", "12 34")), "12 34")
-    assertEqualText(der("Numeric", text("12", "1-2")), "byte 3: a byte that is no character of a NumericString")
-    let printable = "ABCXYZabcxyz0189 '()+,-./:=?"
-    assertEqualText(der("Printable", text("13", printable)), printable)
-    for wrong in ["*", "@", "&", "_", "\"", ";", "<", ">", "[", "{", "!", "`", "\u{0}", "\u{7F}"] {
-        assertEqualText(der("Printable", text("13", wrong)), "byte 2: a byte that is no character of a PrintableString")
-    }
-    assertEqualText(der("Ia5", text("16", "a@b\u{0}\u{7F}")), "a@b\u{0}\u{7F}")
-    assertEqualText(der("Ia5", "16 01 80"), "byte 2: a byte that is no character of a IA5String")
-    assertEqualText(der("Visible", "1a 01 1f"), "byte 2: a byte that is no character of a VisibleString")
-    assertEqualText(der("Bmp", "1e 04 00e9 20ac"), "é€")
-    assertEqualText(der("Bmp", "1e 03 00e920"), "byte 5: the text ends inside a character")
-    assertEqualText(der("Bmp", "1e 04 d83dde00"), "byte 2: not a Unicode character")
-    assertEqualText(der("Universal", "1c 08 0001f600 00000061"), "😀a")
-    assertEqualText(der("Universal", "1c 04 00110000"), "byte 2: not a Unicode character")
-    assertEqualText(der("Universal", "1c 04 0000dfff"), "byte 2: not a Unicode character")
-    assertEqualText(der("Universal", "1c 02 0061"), "byte 4: the text ends inside a character")
+    ("der", "Visible", "1a 05 4a6f6e6573", "Jones"),
+    ("ber", "Visible", "3a 09 0403 4a6f6e 0402 6573", "Jones"),
+    ("ber", "Visible", "3a 80 0403 4a6f6e 0402 6573 0000", "Jones"),
+    ("ber", "Visible", "3a 80 1a03 4a6f6e 0000", "byte 2: expected OCTET STRING, found VisibleString"),
+    ("der", "Utf8", "0c 03 e282ac", "€"),
+    ("der", "Utf8", "0c 02 61ff", "byte 3: ill-formed UTF-8"),
+    ("der", "Utf8", "0c 03 eda080", "byte 2: ill-formed UTF-8"),
+    ("der", "Utf8", "0c 00", ""),
+    ("der", "Numeric", text("12", "12 34"), "12 34"),
+    ("der", "Numeric", text("12", "1-2"), "byte 3: a byte that is no character of a NumericString"),
+    ("der", "Printable", text("13", "ABCXYZabcxyz0189 '()+,-./:=?"), "ABCXYZabcxyz0189 '()+,-./:=?"),
+    ("der", "Printable", text("13", "*"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", "@"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", "&"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", "_"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", "\""), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", ";"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", "<"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", ">"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", "["), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", "{"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", "!"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", "`"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", "\u{0}"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Printable", text("13", "\u{7F}"), "byte 2: a byte that is no character of a PrintableString"),
+    ("der", "Ia5", text("16", "a@b\u{0}\u{7F}"), "a@b\u{0}\u{7F}"),
+    ("der", "Ia5", "16 01 80", "byte 2: a byte that is no character of a IA5String"),
+    ("der", "Visible", "1a 01 1f", "byte 2: a byte that is no character of a VisibleString"),
+    ("der", "Bmp", "1e 04 00e9 20ac", "é€"),
+    ("der", "Bmp", "1e 03 00e920", "byte 5: the text ends inside a character"),
+    ("der", "Bmp", "1e 04 d83dde00", "byte 2: not a Unicode character"),
+    ("der", "Universal", "1c 08 0001f600 00000061", "😀a"),
+    ("der", "Universal", "1c 04 00110000", "byte 2: not a Unicode character"),
+    ("der", "Universal", "1c 04 0000dfff", "byte 2: not a Unicode character"),
+    ("der", "Universal", "1c 02 0061", "byte 4: the text ends inside a character"),
+])
+fn text(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
-@test
-fn textOfEscapedCharacterSets() {
+@test(arguments: [
     // What certificates call a T61String.
-    assertEqualText(der("Teletex", "14 04 636166e9"), "café")
-    assertEqualText(der("Teletex", "14 05 636166c3a9"), "café")
-    assertEqualText(der("Teletex", "14 02 1b41"), "byte 2: TeletexString is read as text only where it is ASCII")
-    assertEqualText(der("General", text("1b", "host")), "host")
-    assertEqualText(der("General", "1b 01 e9"), "byte 2: GeneralString is read as text only where it is ASCII")
-    assertEqualText(der("Graphic", text("19", "x")), "x")
-    assertEqualText(der("Graphic", "19 01 0a"), "byte 2: GraphicString is read as text only where it is ASCII")
-    assertEqualText(der("Videotex", text("15", "x")), "x")
-    assertEqualText(der("ObjectDescriptor", text("07", "Basic Encoding")), "Basic Encoding")
-    var reader = AsnReader([0x1B, 0x02, 0x1B, 0xE9], rules: .Der)
-    assertEqualText(Hex.encode(try! reader.readStringBytes(.General)), "1be9")
+    ("der", "Teletex", "14 04 636166e9", "café"),
+    ("der", "Teletex", "14 05 636166c3a9", "café"),
+    ("der", "Teletex", "14 02 1b41", "byte 2: TeletexString is read as text only where it is ASCII"),
+    ("der", "General", text("1b", "host"), "host"),
+    ("der", "General", "1b 01 e9", "byte 2: GeneralString is read as text only where it is ASCII"),
+    ("der", "Graphic", text("19", "x"), "x"),
+    ("der", "Graphic", "19 01 0a", "byte 2: GraphicString is read as text only where it is ASCII"),
+    ("der", "Videotex", text("15", "x"), "x"),
+    ("der", "ObjectDescriptor", text("07", "Basic Encoding"), "Basic Encoding"),
+])
+fn textOfEscapedCharacterSets(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
-@test
-fn anIri() {
-    assertEqualText(der("OidIri", text("1f23", "/ASN.1/Basic-Encoding")), "/ASN.1/Basic-Encoding")
-    assertEqualText(der("RelativeOidIri", text("1f24", "Basic/É")), "Basic/É")
-    assertEqualText(der("OidIri", text("1f23", "ASN.1")), "byte 3: an OID-IRI starts with a '/'")
-    assertEqualText(der("OidIri", text("1f23", "/")), "byte 3: an empty label")
-    assertEqualText(der("OidIri", text("1f23", "/a//b")), "byte 6: an empty label")
-    assertEqualText(der("OidIri", text("1f23", "/a/")), "byte 5: an empty label")
-    assertEqualText(der("RelativeOidIri", text("1f24", "/a")), "byte 3: an empty label")
-    assertEqualText(der("OidIri", "1f23 00"), "byte 3: an empty label")
-    assertEqualText(ber("OidIri", "3f23 80 0401 2f 0000"), "byte 0: the value is constructed and should be primitive")
+@test(arguments: [
+    ("der", "OidIri", text("1f23", "/ASN.1/Basic-Encoding"), "/ASN.1/Basic-Encoding"),
+    ("der", "RelativeOidIri", text("1f24", "Basic/É"), "Basic/É"),
+    ("der", "OidIri", text("1f23", "ASN.1"), "byte 3: an OID-IRI starts with a '/'"),
+    ("der", "OidIri", text("1f23", "/"), "byte 3: an empty label"),
+    ("der", "OidIri", text("1f23", "/a//b"), "byte 6: an empty label"),
+    ("der", "OidIri", text("1f23", "/a/"), "byte 5: an empty label"),
+    ("der", "RelativeOidIri", text("1f24", "/a"), "byte 3: an empty label"),
+    ("der", "OidIri", "1f23 00", "byte 3: an empty label"),
+    ("ber", "OidIri", "3f23 80 0401 2f 0000", "byte 0: the value is constructed and should be primitive"),
+])
+fn anIri(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
-@test
-fn aUtcTime() {
+@test(arguments: [
     // §11.8.4 and §11.8.5's examples.
-    assertEqualText(der("utc", text("17", "920521000000Z")), "1992-05-21T00:00:00+00:00")
-    assertEqualText(der("utc", text("17", "920622123421Z")), "1992-06-22T12:34:21+00:00")
-    assertEqualText(der("utc", text("17", "920722132100Z")), "1992-07-22T13:21:00+00:00")
-    assertEqualText(der("utc", text("17", "920520240000Z")), "byte 2: there is no such time")
-    assertEqualText(der("utc", text("17", "9207221321Z")), "byte 12: a UTCTime without its seconds")
-    assertEqualText(ber("utc", text("17", "9207221321Z")), "1992-07-22T13:21:00+00:00")
-    assertEqualText(ber("utc", text("17", "9207221321-0330")), "1992-07-22T13:21:00-03:30")
-    assertEqualText(ber("utc", text("17", "920722132159+0100")), "1992-07-22T13:21:59+01:00")
-    assertEqualText(der("utc", text("17", "920722132159+0000")), "byte 14: a time that is not UTC")
-    assertEqualText(ber("utc", text("17", "920722132159")), "byte 14: a UTCTime without its offset")
-    assertEqualText(ber("utc", text("17", "920722132159+01")), "byte 17: a time without a digit there")
-    assertEqualText(ber("utc", text("17", "920722132159+2400")), "byte 14: there is no such offset")
-    assertEqualText(ber("utc", text("17", "920722132159x")), "byte 14: a time without its offset there")
-    assertEqualText(der("utc", text("17", "920722132159Zx")), "byte 15: more after a time")
-    assertEqualText(der("utc", text("17", "920230000000Z")), "byte 2: there is no such date")
-    assertEqualText(der("utc", text("17", "92072213215Z")), "byte 13: a time without a digit there")
-    assertEqualText(der("utc", "17 00"), "byte 2: a time without a digit there")
+    ("der", "utc", text("17", "920521000000Z"), "1992-05-21T00:00:00+00:00"),
+    ("der", "utc", text("17", "920622123421Z"), "1992-06-22T12:34:21+00:00"),
+    ("der", "utc", text("17", "920722132100Z"), "1992-07-22T13:21:00+00:00"),
+    ("der", "utc", text("17", "920520240000Z"), "byte 2: there is no such time"),
+    ("der", "utc", text("17", "9207221321Z"), "byte 12: a UTCTime without its seconds"),
+    ("ber", "utc", text("17", "9207221321Z"), "1992-07-22T13:21:00+00:00"),
+    ("ber", "utc", text("17", "9207221321-0330"), "1992-07-22T13:21:00-03:30"),
+    ("ber", "utc", text("17", "920722132159+0100"), "1992-07-22T13:21:59+01:00"),
+    ("der", "utc", text("17", "920722132159+0000"), "byte 14: a time that is not UTC"),
+    ("ber", "utc", text("17", "920722132159"), "byte 14: a UTCTime without its offset"),
+    ("ber", "utc", text("17", "920722132159+01"), "byte 17: a time without a digit there"),
+    ("ber", "utc", text("17", "920722132159+2400"), "byte 14: there is no such offset"),
+    ("ber", "utc", text("17", "920722132159x"), "byte 14: a time without its offset there"),
+    ("der", "utc", text("17", "920722132159Zx"), "byte 15: more after a time"),
+    ("der", "utc", text("17", "920230000000Z"), "byte 2: there is no such date"),
+    ("der", "utc", text("17", "92072213215Z"), "byte 13: a time without a digit there"),
+    ("der", "utc", "17 00", "byte 2: a time without a digit there"),
     // The two digits' century.
-    assertEqualText(der("utc", text("17", "491231235959Z")), "2049-12-31T23:59:59+00:00")
-    assertEqualText(der("utc", text("17", "500101000000Z")), "1950-01-01T00:00:00+00:00")
-    let later = AsnOptions(twoDigitYearMaximum: 2060)
-    assertEqualText(show("utc", .Der, text("17", "500101000000Z"), later), "2050-01-01T00:00:00+00:00")
-    assertEqualText(show("utc", .Der, text("17", "610101000000Z"), later), "1961-01-01T00:00:00+00:00")
+    ("der", "utc", text("17", "491231235959Z"), "2049-12-31T23:59:59+00:00"),
+    ("der", "utc", text("17", "500101000000Z"), "1950-01-01T00:00:00+00:00"),
+    ("to 2060", "utc", text("17", "500101000000Z"), "2050-01-01T00:00:00+00:00"),
+    ("to 2060", "utc", text("17", "610101000000Z"), "1961-01-01T00:00:00+00:00"),
     // In pieces, as any string may be by BER.
-    assertEqualText(ber("utc", "37 80 0406 393230353231 0407 3030303030305a 0000"), "1992-05-21T00:00:00+00:00")
+    ("ber", "utc", "37 80 0406 393230353231 0407 3030303030305a 0000", "1992-05-21T00:00:00+00:00"),
+])
+fn aUtcTime(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
-@test
-fn aGeneralizedTime() {
+@test(arguments: [
     // §11.7.5's examples.
-    assertEqualText(der("time", text("18", "19920521000000Z")), "1992-05-21T00:00:00+00:00")
-    assertEqualText(der("time", text("18", "19920622123421Z")), "1992-06-22T12:34:21+00:00")
-    assertEqualText(der("time", text("18", "19920722132100.3Z")), "1992-07-22T13:21:00.3+00:00")
-    assertEqualText(der("time", text("18", "19920520240000Z")), "byte 2: there is no such time")
-    assertEqualText(der("time", text("18", "19920622123421.0Z")), "byte 17: a time's fraction ends in a zero")
-    assertEqualText(der("time", text("18", "19920722132100.30Z")), "byte 18: a time's fraction ends in a zero")
-    assertEqualText(der("time", text("18", "199207221321Z")), "byte 14: a GeneralizedTime without its seconds")
-    assertEqualText(der("time", text("18", "19920722132100,3Z")), "byte 16: a comma in a time")
-    assertEqualText(der("time", text("18", "19920722132100.Z")), "byte 17: a time without a digit there")
-    assertEqualText(der("time", text("18", "19920722132100")), "byte 16: a time that is not UTC")
-    assertEqualText(der("time", text("18", "19920722132100+0000")), "byte 16: a time that is not UTC")
+    ("der", "time", text("18", "19920521000000Z"), "1992-05-21T00:00:00+00:00"),
+    ("der", "time", text("18", "19920622123421Z"), "1992-06-22T12:34:21+00:00"),
+    ("der", "time", text("18", "19920722132100.3Z"), "1992-07-22T13:21:00.3+00:00"),
+    ("der", "time", text("18", "19920520240000Z"), "byte 2: there is no such time"),
+    ("der", "time", text("18", "19920622123421.0Z"), "byte 17: a time's fraction ends in a zero"),
+    ("der", "time", text("18", "19920722132100.30Z"), "byte 18: a time's fraction ends in a zero"),
+    ("der", "time", text("18", "199207221321Z"), "byte 14: a GeneralizedTime without its seconds"),
+    ("der", "time", text("18", "19920722132100,3Z"), "byte 16: a comma in a time"),
+    ("der", "time", text("18", "19920722132100.Z"), "byte 17: a time without a digit there"),
+    ("der", "time", text("18", "19920722132100"), "byte 16: a time that is not UTC"),
+    ("der", "time", text("18", "19920722132100+0000"), "byte 16: a time that is not UTC"),
     // X.680 §46.3's forms, by BER.
-    assertEqualText(ber("time", text("18", "19851106210627.3Z")), "1985-11-06T21:06:27.3+00:00")
-    assertEqualText(ber("time", text("18", "19851106210627.3-0500")), "1985-11-06T21:06:27.3-05:00")
-    assertEqualText(ber("time", text("18", "1985110621.5-05")), "1985-11-06T21:30:00-05:00")
-    assertEqualText(ber("time", text("18", "198511062106,25Z")), "1985-11-06T21:06:15+00:00")
-    assertEqualText(ber("time", text("18", "19851106210627.300Z")), "1985-11-06T21:06:27.3+00:00")
-    assertEqualText(ber("time", text("18", "1985110621")), "byte 12: a GeneralizedTime without an offset")
-    assertEqualText(ber("local", text("18", "1985110621")), "1985-11-06T21:00:00-05:00")
-    assertEqualText(ber("time", text("18", "19851106210660Z")), "byte 2: there is no such time")
+    ("ber", "time", text("18", "19851106210627.3Z"), "1985-11-06T21:06:27.3+00:00"),
+    ("ber", "time", text("18", "19851106210627.3-0500"), "1985-11-06T21:06:27.3-05:00"),
+    ("ber", "time", text("18", "1985110621.5-05"), "1985-11-06T21:30:00-05:00"),
+    ("ber", "time", text("18", "198511062106,25Z"), "1985-11-06T21:06:15+00:00"),
+    ("ber", "time", text("18", "19851106210627.300Z"), "1985-11-06T21:06:27.3+00:00"),
+    ("ber", "time", text("18", "1985110621"), "byte 12: a GeneralizedTime without an offset"),
+    ("ber", "local", text("18", "1985110621"), "1985-11-06T21:00:00-05:00"),
+    ("ber", "time", text("18", "19851106210660Z"), "byte 2: there is no such time"),
     // Past the nanosecond, dropped; however many digits.
-    assertEqualText(der("time", text("18", "19851106210627.1234567899Z")), "1985-11-06T21:06:27.123456789+00:00")
-    assertEqualText(der("time", text("18", "19851106235959.99999999999999999999999999Z")), "1985-11-06T23:59:59.999999999+00:00")
+    ("der", "time", text("18", "19851106210627.1234567899Z"), "1985-11-06T21:06:27.123456789+00:00"),
+    ("der", "time", text("18", "19851106235959.99999999999999999999999999Z"), "1985-11-06T23:59:59.999999999+00:00"),
+])
+fn aGeneralizedTime(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
-@test
-fn theOtherTimes() {
-    assertEqualText(der("date", text("1f1f", "20240229")), "2024-02-29")
-    assertEqualText(der("date", text("1f1f", "20230229")), "byte 3: there is no such date")
-    assertEqualText(der("date", text("1f1f", "2024-02-29")), "byte 7: a time without a digit there")
-    assertEqualText(der("clock", text("1f20", "182307")), "18:23:07")
-    assertEqualText(der("clock", text("1f20", "1823")), "byte 7: a time without a digit there")
-    assertEqualText(der("clock", text("1f20", "240000")), "byte 3: there is no such time")
-    assertEqualText(der("datetime", text("1f21", "20240229182307")), "2024-02-29T18:23:07")
-    assertEqualText(der("datetime", text("1f21", "20240229182307Z")), "byte 17: more after a time")
-    for (value, expected) in [
-        ("1Y2M", "P1Y2M"),
-        ("T30S", "PT30S"),
-        ("1Y2M3DT4H5M6.5S", "P1Y2M3DT4H5M6.5S"),
-        ("3W", "P3W"),
-        ("T0S", "PT0S"),
-        ("0D", "P0D"),
-    ] {
-        assertEqualText(der("duration", text("1f22", value)), expected)
-    }
-    for wrong in ["1", "Y", "1M1Y", "1YT", "T", "1Y1W", "1W1D", "1.5Y2M", "1.Y", "T1Y", "1H", "1Y1Y", "TT1S", "1.5"] {
-        assertEqualText(ber("duration", text("1f22", wrong)), "byte 3: not a duration")
-    }
-    assertEqualText(der("duration", "1f22 00"), "byte 3: no time")
+@test(arguments: [
+    ("der", "date", text("1f1f", "20240229"), "2024-02-29"),
+    ("der", "date", text("1f1f", "20230229"), "byte 3: there is no such date"),
+    ("der", "date", text("1f1f", "2024-02-29"), "byte 7: a time without a digit there"),
+    ("der", "clock", text("1f20", "182307"), "18:23:07"),
+    ("der", "clock", text("1f20", "1823"), "byte 7: a time without a digit there"),
+    ("der", "clock", text("1f20", "240000"), "byte 3: there is no such time"),
+    ("der", "datetime", text("1f21", "20240229182307"), "2024-02-29T18:23:07"),
+    ("der", "datetime", text("1f21", "20240229182307Z"), "byte 17: more after a time"),
+    ("der", "duration", text("1f22", "1Y2M"), "P1Y2M"),
+    ("der", "duration", text("1f22", "T30S"), "PT30S"),
+    ("der", "duration", text("1f22", "1Y2M3DT4H5M6.5S"), "P1Y2M3DT4H5M6.5S"),
+    ("der", "duration", text("1f22", "3W"), "P3W"),
+    ("der", "duration", text("1f22", "T0S"), "PT0S"),
+    ("der", "duration", text("1f22", "0D"), "P0D"),
+    ("ber", "duration", text("1f22", "1"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "Y"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "1M1Y"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "1YT"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "T"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "1Y1W"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "1W1D"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "1.5Y2M"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "1.Y"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "T1Y"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "1H"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "1Y1Y"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "TT1S"), "byte 3: not a duration"),
+    ("ber", "duration", text("1f22", "1.5"), "byte 3: not a duration"),
+    ("der", "duration", "1f22 00", "byte 3: no time"),
     // §11.9.1 a and d.
-    assertEqualText(ber("duration", text("1f22", "1Y0M3D")), "P1Y0M3D")
-    assertEqualText(der("duration", text("1f22", "1Y0M3D")), "byte 3: a duration with parts of 0")
-    assertEqualText(ber("duration", text("1f22", "T1,5S")), "PT1,5S")
-    assertEqualText(der("duration", text("1f22", "T1,5S")), "byte 5: a comma in a time")
-    assertEqualText(der("iso", text("0e", "1985-11-06T21:06:27.3Z")), "1985-11-06T21:06:27.3Z")
-    assertEqualText(der("iso", text("0e", "x")), "byte 2: a byte that is in no time")
-    assertEqualText(ber("date", "3f1f 80 0000"), "byte 0: the value is constructed and should be primitive")
+    ("ber", "duration", text("1f22", "1Y0M3D"), "P1Y0M3D"),
+    ("der", "duration", text("1f22", "1Y0M3D"), "byte 3: a duration with parts of 0"),
+    ("ber", "duration", text("1f22", "T1,5S"), "PT1,5S"),
+    ("der", "duration", text("1f22", "T1,5S"), "byte 5: a comma in a time"),
+    ("der", "iso", text("0e", "1985-11-06T21:06:27.3Z"), "1985-11-06T21:06:27.3Z"),
+    ("der", "iso", text("0e", "x"), "byte 2: a byte that is in no time"),
+    ("ber", "date", "3f1f 80 0000", "byte 0: the value is constructed and should be primitive"),
+])
+fn theOtherTimes(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
+}
+
+@test(arguments: [
+    ("ber", "octets", "04 81 01 ff", "ff"),
+    ("ber", "octets", "04 84 00000001 ff", "ff"),
+    ("ber", "octets", "04 8a 00000000000000000001 ff", "ff"),
+    ("cer", "octets", "04 81 01 ff", "byte 1: a length in more bytes than it needs"),
+    ("der", "octets", "04 81 01 ff", "byte 1: a length in more bytes than it needs"),
+    ("cer", "octets", "04 82 0080", "byte 1: a length in more bytes than it needs"),
+    ("der", "octets", "04 82 0080", "byte 1: a length in more bytes than it needs"),
+    ("der", "octets", "04 ff", "byte 1: a reserved length"),
+    ("der", "octets", "04", "byte 1: the bytes end inside a value"),
+    ("der", "octets", "", "byte 0: the bytes end inside a value"),
+    ("der", "octets", "04 02 ff", "byte 3: the bytes end inside a value"),
+    ("der", "octets", "04 82 01", "byte 3: the bytes end inside a value"),
+    ("der", "octets", "04 84 7fffffff 00", "byte 7: the bytes end inside a value"),
+    ("der", "octets", "04 88 7fffffffffffffff 00", "byte 11: the bytes end inside a value"),
+    ("der", "octets", "04 89 ffffffffffffffffff 00", "byte 12: the bytes end inside a value"),
+    ("der", "octets", "04 80 0000", "byte 1: a primitive value of an indefinite length"),
+    ("der", "octets", "04 00 00", "byte 2: more after the last value"),
+])
+fn lengths(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
 @test
-fn lengths() {
-    assertEqualText(ber("octets", "04 81 01 ff"), "ff")
-    assertEqualText(ber("octets", "04 84 00000001 ff"), "ff")
-    assertEqualText(ber("octets", "04 8a 00000000000000000001 ff"), "ff")
-    for rules in [AsnEncodingRules.Cer, AsnEncodingRules.Der] {
-        assertEqualText(show("octets", rules, "04 81 01 ff"), "byte 1: a length in more bytes than it needs")
-        assertEqualText(show("octets", rules, "04 82 0080"), "byte 1: a length in more bytes than it needs")
-    }
-    assertEqualText(der("octets", "04 ff"), "byte 1: a reserved length")
-    assertEqualText(der("octets", "04"), "byte 1: the bytes end inside a value")
-    assertEqualText(der("octets", ""), "byte 0: the bytes end inside a value")
-    assertEqualText(der("octets", "04 02 ff"), "byte 3: the bytes end inside a value")
-    assertEqualText(der("octets", "04 82 01"), "byte 3: the bytes end inside a value")
-    assertEqualText(der("octets", "04 84 7fffffff 00"), "byte 7: the bytes end inside a value")
-    assertEqualText(der("octets", "04 88 7fffffffffffffff 00"), "byte 11: the bytes end inside a value")
-    assertEqualText(der("octets", "04 89 ffffffffffffffffff 00"), "byte 12: the bytes end inside a value")
-    assertEqualText(der("octets", "04 80 0000"), "byte 1: a primitive value of an indefinite length")
-    assertEqualText(der("octets", "04 00 00"), "byte 2: more after the last value")
-}
-
-@test
-fn tags() {
-    assertEqualText(der("skip", "1f1f 00"), "1f1f00")
-    assertEqualText(der("skip", "1f1e 00"), "byte 0: a tag's number is in more bytes than it needs")
-    assertEqualText(der("skip", "1f801f 00"), "byte 1: a tag's number is in more bytes than it needs")
-    assertEqualText(der("skip", "1f8f"), "byte 2: the bytes end inside a value")
-    assertEqualText(der("skip", "df87ffffff7f 00"), "df87ffffff7f00")
-    assertEqualText(der("skip", "df8880808000 00"), "byte 0: a tag's number is more than 2147483647")
-    assertEqualText(der("skip", "0000"), "byte 0: an end of contents where there should be a value")
+fn tagsArePeekedAtAndBytesAreAsTheyWereWritten() {
     var reader = AsnReader([0xA1, 0x00], rules: .Der)
     let tag = try! reader.peekTag()
     expect(tag == AsnTag.context(1).asConstructed())
@@ -658,31 +696,31 @@ fn tags() {
     _ = try! reader.readEncoded()
     expect(reader.isAtEnd && !reader.isNext(.context(1)))
     // A type's tag is not another's.
-    do {
-        _ = try reader.readBool(tag: .integer)
-        assert(false)
-    } catch {
-        assertEqualText(error.description(), "INTEGER is another type's own tag")
-        expect(error.offset == none)
-    }
+    let error = expectThrows(AsnError.self) { _ = try reader.readBool(tag: .integer) }
+    expect(error?.description() == "INTEGER is another type's own tag")
+    expect(error?.offset == none)
     expectThrows(saying: "an explicit tag is not one of ASN.1's own") { _ = try reader.readExplicit(.sequence) }
+    reader = AsnReader([0x1B, 0x02, 0x1B, 0xE9], rules: .Der)
+    assertEqualText(Hex.encode(try! reader.readStringBytes(.General)), "1be9")
+    reader = AsnReader([0x0A, 0x01, 0x07], rules: .Der)
+    assertEqualText(Hex.encode(try! reader.readEnumeratedBytes()), "07")
+}
+
+@test(arguments: [
+    ("der", "skip", "1f1f 00", "1f1f00"),
+    ("der", "skip", "1f1e 00", "byte 0: a tag's number is in more bytes than it needs"),
+    ("der", "skip", "1f801f 00", "byte 1: a tag's number is in more bytes than it needs"),
+    ("der", "skip", "1f8f", "byte 2: the bytes end inside a value"),
+    ("der", "skip", "df87ffffff7f 00", "df87ffffff7f00"),
+    ("der", "skip", "df8880808000 00", "byte 0: a tag's number is more than 2147483647"),
+    ("der", "skip", "0000", "byte 0: an end of contents where there should be a value"),
+])
+fn tags(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
 @test
-fn sequences() {
-    // §8.9.3's example: {name "Smith", ok TRUE}.
-    assertEqualText(der("seq", "30 0a 1605 536d697468 0101ff"), "1605536d697468 0101ff")
-    assertEqualText(ber("seq", "30 80 0101ff 0000"), "0101ff")
-    assertEqualText(cer("seq", "30 80 0101ff 0000"), "0101ff")
-    assertEqualText(der("seq", "30 80 0101ff 0000"), "byte 1: an indefinite length")
-    assertEqualText(cer("seq", "30 03 0101ff"), "byte 1: a constructed value of a definite length")
-    assertEqualText(ber("seq", "30 80 3080 0000 0101ff 0000"), "30800000 0101ff")
-    assertEqualText(ber("seq", "30 80 0101ff"), "byte 5: the bytes end inside a value")
-    assertEqualText(ber("seq", "30 80 0101ff 00"), "byte 6: the bytes end inside a value")
-    assertEqualText(ber("seq", "30 80 0101ff 0001"), "byte 5: an end of contents that is not two zero bytes")
-    assertEqualText(ber("seq", "30 80 2000 0000"), "byte 2: an end of contents that is not two zero bytes")
-    assertEqualText(der("seq", "10 00"), "byte 0: the value is primitive and should be constructed")
-    assertEqualText(der("seq", "30 03 0102ff"), "byte 5: the bytes end inside a value")
+fn aSequenceHasItsOwnPositions() {
     var reader = AsnReader([0x30, 0x03, 0x02, 0x01, 0x05], rules: .Der)
     var inner = try! reader.readSequence()
     assertEqual(inner.position, 2)
@@ -693,24 +731,44 @@ fn sequences() {
     assertEqual(try! inner.readInt(), 5)
 }
 
-@test
-fn setsAreInOrder() {
+@test(arguments: [
+    // §8.9.3's example: {name "Smith", ok TRUE}.
+    ("der", "seq", "30 0a 1605 536d697468 0101ff", "1605536d697468 0101ff"),
+    ("ber", "seq", "30 80 0101ff 0000", "0101ff"),
+    ("cer", "seq", "30 80 0101ff 0000", "0101ff"),
+    ("der", "seq", "30 80 0101ff 0000", "byte 1: an indefinite length"),
+    ("cer", "seq", "30 03 0101ff", "byte 1: a constructed value of a definite length"),
+    ("ber", "seq", "30 80 3080 0000 0101ff 0000", "30800000 0101ff"),
+    ("ber", "seq", "30 80 0101ff", "byte 5: the bytes end inside a value"),
+    ("ber", "seq", "30 80 0101ff 00", "byte 6: the bytes end inside a value"),
+    ("ber", "seq", "30 80 0101ff 0001", "byte 5: an end of contents that is not two zero bytes"),
+    ("ber", "seq", "30 80 2000 0000", "byte 2: an end of contents that is not two zero bytes"),
+    ("der", "seq", "10 00", "byte 0: the value is primitive and should be constructed"),
+    ("der", "seq", "30 03 0102ff", "byte 5: the bytes end inside a value"),
+])
+fn sequences(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
+}
+
+@test(arguments: [
     // By tags: universal, application, context, private, and constructed or
     // not is no part of it.
-    let ordered = "31 0e 020101 0c00 420101 8000 a100 c000"
-    assertEqualText(der("set", ordered), "020101 0c00 420101 8000 a100 c000")
-    assertEqualText(der("set", "31 04 a100 8200"), "a100 8200")
-    assertEqualText(der("set", "31 04 8200 a100"), "byte 4: a set's values are not in the order of their tags")
-    assertEqualText(der("set", "31 06 020101 020102"), "byte 5: a set's values are not in the order of their tags")
-    assertEqualText(ber("set", "31 06 020102 020101"), "020102 020101")
-    assertEqualText(show("set", .Der, "31 04 8200 a100", AsnOptions(skipSetOrder: true)), "8200 a100")
+    ("der", "set", "31 0e 020101 0c00 420101 8000 a100 c000", "020101 0c00 420101 8000 a100 c000"),
+    ("der", "set", "31 04 a100 8200", "a100 8200"),
+    ("der", "set", "31 04 8200 a100", "byte 4: a set's values are not in the order of their tags"),
+    ("der", "set", "31 06 020101 020102", "byte 5: a set's values are not in the order of their tags"),
+    ("ber", "set", "31 06 020102 020101", "020102 020101"),
+    ("any order", "set", "31 04 8200 a100", "8200 a100"),
     // By bytes.
-    assertEqualText(der("setof", "31 0b 020101 020101 020102 0c00"), "020101 020101 020102 0c00")
-    assertEqualText(der("setof", "31 06 020102 020101"), "byte 5: a set's values are not in order")
-    assertEqualText(der("setof", "31 07 02020100 020102"), "byte 6: a set's values are not in order")
-    assertEqualText(ber("setof", "31 06 020102 020101"), "020102 020101")
-    assertEqualText(cer("setof", "31 80 020102 020101 0000"), "byte 5: a set's values are not in order")
-    assertEqualText(show("setof", .Der, "31 06 020102 020101", AsnOptions(skipSetOrder: true)), "020102 020101")
+    ("der", "setof", "31 0b 020101 020101 020102 0c00", "020101 020101 020102 0c00"),
+    ("der", "setof", "31 06 020102 020101", "byte 5: a set's values are not in order"),
+    ("der", "setof", "31 07 02020100 020102", "byte 6: a set's values are not in order"),
+    ("ber", "setof", "31 06 020102 020101", "020102 020101"),
+    ("cer", "setof", "31 80 020102 020101 0000", "byte 5: a set's values are not in order"),
+    ("any order", "setof", "31 06 020102 020101", "020102 020101"),
+])
+fn setsAreInOrder(_ rules: String, _ what: String, _ hex: String, _ shown: String) {
+    shows(rules, what, hex, shown)
 }
 
 @test
@@ -730,13 +788,8 @@ fn taggedValues() {
     // One value, no more and no less.
     for (hex, expected) in [("a0060101ff0101ff", "byte 5: more after the last value"), ("a000", "byte 2: the bytes end inside a value")] {
         var reader = AsnReader(try! Hex.decode(hex), rules: .Der)
-        do {
-            _ = try reader.readExplicit(.context(0))
-            assert(false)
-        } catch {
-            assertEqualText(error.description(), expected)
-            assertEqual(reader.position, 0)
-        }
+        expectThrows(saying: expected) { _ = try reader.readExplicit(.context(0)) }
+        expect(reader.position == 0, hex)
     }
     // Implicit tags of every kind of value.
     var sequence = AsnReader(try! Hex.decode("a0030101ff"), rules: .Der)
@@ -882,7 +935,9 @@ fn anyBytesAreReadOrRefused() {
         }
         let hex = Hex.encode(made)
         let asDer = der(whats[index], hex)
-        assert(asDer != "moved by a failed read")
+        if asDer == "moved by a failed read" {
+            fail("\(whats[index]) of \(hex) is \(asDer)")
+        }
         // What DER takes, BER does, and reads the same.
         if !asDer.hasPrefix("byte ") {
             assertEqualText(ber(whats[index], hex), asDer)

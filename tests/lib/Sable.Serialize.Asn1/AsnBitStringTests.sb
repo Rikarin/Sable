@@ -9,7 +9,7 @@ fn bitsAreCountedFromTheTop() {
     assertEqual(bits.count, 10)
     expect(bits[0] && bits[9])
     for i in 1..<9 {
-        require(!bits[i])
+        expect(!bits[i], "\(i)")
     }
     expect(bits.has(9) && !bits.has(10) && !bits.has(-1) && !bits.has(100))
 }

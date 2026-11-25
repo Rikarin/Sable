@@ -27,26 +27,6 @@ fn der(_ body: (AsnWriter) throws(AsnError) -> Void) -> String {
 
 @test
 fn numbers() {
-    let cases: (Int, String)[>..] = [
-        (0, "020100"),
-        (127, "02017f"),
-        (128, "02020080"),
-        (255, "020200ff"),
-        (256, "02020100"),
-        (-1, "0201ff"),
-        (-128, "020180"),
-        (-129, "0202ff7f"),
-        (Int.max, "02087fffffffffffffff"),
-        (Int.min, "02088000000000000000"),
-    ]
-    for (value, hex) in cases {
-        assertEqualText(der({ w in try w.writeInt(value) }), hex)
-        assertEqualText(der({ w in try w.writeBigInt(BigInt(value)) }), hex)
-        let encoded = try! Hex.decode(hex)
-        assertEqualText(der({ w in try w.writeIntegerBytes(encoded[2...]) }), hex)
-        var reader = AsnReader(encoded, rules: .Der)
-        assertEqual(try! reader.readInt(), value)
-    }
     assertEqualText(der({ w in try w.writeUInt(U64.max) }), "020900ffffffffffffffff")
     assertEqualText(der({ w in try w.writeUInt(5) }), "020105")
     assertEqualText(der({ w in try w.writeUnsignedInteger([]) }), "020100")
@@ -62,34 +42,55 @@ fn numbers() {
     assertEqualText(der({ w in try w.writeNull() }), "0500")
 }
 
+@test(arguments: [
+    (0, "020100"),
+    (127, "02017f"),
+    (128, "02020080"),
+    (255, "020200ff"),
+    (256, "02020100"),
+    (-1, "0201ff"),
+    (-128, "020180"),
+    (-129, "0202ff7f"),
+    (Int.max, "02087fffffffffffffff"),
+    (Int.min, "02088000000000000000"),
+])
+fn anIntsBytesAreAsFewAsHoldIt(_ value: Int, _ hex: String) throws {
+    expect(der({ w in try w.writeInt(value) }) == hex)
+    expect(der({ w in try w.writeBigInt(BigInt(value)) }) == hex)
+    let encoded = try! Hex.decode(hex)
+    expect(der({ w in try w.writeIntegerBytes(encoded[2...]) }) == hex)
+    var reader = AsnReader(encoded, rules: .Der)
+    expect(try! reader.readInt() == value)
+}
+
 @test
-fn reals() {
-    let cases: (F64, String)[>..] = [
-        (0.0, "0900"),
-        (1.0, "0903800001"),
-        (-1.0, "0903c00001"),
-        (0.15625, "090380fb05"),
-        (1024.0, "0903800a01"),
-        (F64.infinity, "090140"),
-        (-F64.infinity, "090141"),
-        (F64.nan, "090142"),
-        (F64.leastNonzeroMagnitude, "090481fbce01"),
-        (F64.greatestFiniteMagnitude, "090a8103cb1fffffffffffff"),
-    ]
-    for (value, hex) in cases {
-        assertEqualText(der({ w in try w.writeReal(value) }), hex)
-    }
-    assertEqualText(der({ w in try w.writeReal(-0.0) }), "090143")
-    var random = SeededRandomNumberGenerator(seed: 85)
-    for _ in 0..<2000 {
-        let value = F64.fromBits(random.next())
+fn anyRealIsReadBack() {
+    forAll(Gen<U64>((choices) => choices.draw(upTo: U64.max)), cases: 2000) { (bits: U64) in
+        let value = F64.fromBits(bits)
         if value == value {
             let writer = AsnWriter(rules: .Der)
-            try! writer.writeReal(value)
-            var reader = AsnReader(try! writer.bytes(), rules: .Der)
-            assertEqual(try! reader.readReal(), value)
+            try writer.writeReal(value)
+            var reader = AsnReader(try writer.bytes(), rules: .Der)
+            expect(try reader.readReal() == value)
         }
     }
+}
+
+@test(arguments: [
+    (0.0, "0900"),
+    (1.0, "0903800001"),
+    (-1.0, "0903c00001"),
+    (0.15625, "090380fb05"),
+    (1024.0, "0903800a01"),
+    (F64.infinity, "090140"),
+    (-F64.infinity, "090141"),
+    (F64.nan, "090142"),
+    (F64.leastNonzeroMagnitude, "090481fbce01"),
+    (F64.greatestFiniteMagnitude, "090a8103cb1fffffffffffff"),
+    (-0.0, "090143"),
+])
+fn reals(_ value: F64, _ hex: String) throws {
+    expect(der({ w in try w.writeReal(value) }) == hex)
 }
 
 @test
@@ -201,34 +202,32 @@ fn whatHoldsValues() {
     assertEqualText(der({ w in try w.writeEncoded([]) }), "byte 0: the bytes end inside a value")
 }
 
-@test
-fn lengthsOfEverySize() {
-    for count in [0, 1, 127, 128, 255, 256, 65535, 65536, 70000] {
-        for rules in allRules() {
-            var contents: U8[>..] = []
-            for i in 0..<count {
-                contents.append(U8.truncating(i))
-            }
-            let writer = AsnWriter(rules: rules)
-            try! writer.writeSequence(tag: .context(1000)) {
-                try writer.writeOctetString(contents)
-                try writer.writeOctetString {
-                    try writer.writeOctetString(contents)
-                }
-                try writer.writeBitString {
-                    try writer.writeOctetString(contents)
-                }
-            }
-            var reader = AsnReader(try! writer.bytes(), rules: rules)
-            var inner = try! reader.readSequence(tag: .context(1000))
-            assertEqual(try! inner.readOctetString(), contents)
-            var octets = try! inner.readOctetStringContents()
-            assertEqual(try! octets.readOctetString(), contents)
-            var bits = try! inner.readBitStringContents()
-            assertEqual(try! bits.readOctetString(), contents)
-            try! inner.finish()
-            try! reader.finish()
+@test(arguments: [0, 1, 127, 128, 255, 256, 65535, 65536, 70000])
+fn lengthsOfEverySize(_ count: Int) {
+    for rules in allRules() {
+        var contents: U8[>..] = []
+        for i in 0..<count {
+            contents.append(U8.truncating(i))
         }
+        let writer = AsnWriter(rules: rules)
+        try! writer.writeSequence(tag: .context(1000)) {
+            try writer.writeOctetString(contents)
+            try writer.writeOctetString {
+                try writer.writeOctetString(contents)
+            }
+            try writer.writeBitString {
+                try writer.writeOctetString(contents)
+            }
+        }
+        var reader = AsnReader(try! writer.bytes(), rules: rules)
+        var inner = try! reader.readSequence(tag: .context(1000))
+        assertEqual(try! inner.readOctetString(), contents)
+        var octets = try! inner.readOctetStringContents()
+        assertEqual(try! octets.readOctetString(), contents)
+        var bits = try! inner.readBitStringContents()
+        assertEqual(try! bits.readOctetString(), contents)
+        try! inner.finish()
+        try! reader.finish()
     }
 }
 
@@ -328,27 +327,28 @@ fn whatIsNotBalanced() {
 
 @test
 fn anyTreeIsReadBack() {
-    var random = SeededRandomNumberGenerator(seed: 690)
-    for round in 0..<300 {
-        let rules: AsnEncodingRules = round % 3 == 0 ? .Ber : round % 3 == 1 ? .Cer : .Der
+    let written: Gen<(AsnEncodingRules, U8[>..])> = Gen((choices) => {
+        let rules = choices.element(of: allRules())
         let writer = AsnWriter(rules: rules)
-        writeAny(writer, 0, &random)
-        let bytes = try! writer.bytes()
+        writeAny(writer, 0, choices)
+        return (rules, try! writer.bytes())
+    })
+    forAll(written, cases: 300) { (written: (AsnEncodingRules, U8[>..])) in
         // Written again as it is read, it is the same bytes.
-        var reader = AsnReader(bytes, rules: rules)
-        let again = AsnWriter(rules: rules)
-        try! copy(&reader, again)
-        assertEqual(try! again.bytes(), bytes)
+        var reader = AsnReader(written.1, rules: written.0)
+        let again = AsnWriter(rules: written.0)
+        try copy(&reader, again)
+        expect(try again.bytes() == written.1)
     }
 }
 
-fn writeAny(_ writer: AsnWriter, _ depth: Int, _ random: inout SeededRandomNumberGenerator) {
-    let kind = Int.random(in: 0..<(depth > 4 ? 4 : 7), using: &random)
+fn writeAny(_ writer: AsnWriter, _ depth: Int, _ choices: Choices) {
+    let kind = choices.below(depth > 4 ? 4 : 7)
     if kind == 0 {
-        try! writer.writeInt(Int.truncating(random.next()) >> Int.random(in: 0..<64, using: &random))
+        try! writer.writeInt(Int.truncating(choices.draw(upTo: U64.max)) >> choices.below(64))
     } else if kind == 1 {
         var bytes: U8[>..] = []
-        bytes.append(repeating: 5, count: Int.random(in: 0..<2500, using: &random))
+        bytes.append(repeating: 5, count: choices.below(2500))
         try! writer.writeOctetString(bytes)
     } else if kind == 2 {
         try! writer.writeBool(depth % 2 == 0)
@@ -360,8 +360,8 @@ fn writeAny(_ writer: AsnWriter, _ depth: Int, _ random: inout SeededRandomNumbe
         } else {
             try! writer.beginSetOf()
         }
-        for _ in 0..<Int.random(in: 0..<6, using: &random) {
-            writeAny(writer, depth + 1, &random)
+        for _ in 0..<choices.below(6) {
+            choices.span { writeAny(writer, depth + 1, choices) }
         }
         if kind == 4 {
             try! writer.endSequence()

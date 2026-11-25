@@ -13,32 +13,21 @@ fn failure(_ text: String) -> String {
     }
 }
 
-@test
-fn dottedNumbersAreReadAndWritten() {
-    for text in ["0.0", "0.39", "1.0", "1.39", "2.0", "2.40", "2.999.3", "1.2.840.113549.1.1.11", "2.25.340282366920938463463374607431768211455"] {
-        let id = try! ObjectIdentifier.parse(text)
-        assertEqualText("\(id)", text)
-        assertEqual(try! ObjectIdentifier.decode(id.encoded), id)
-        assertEqual(ObjectIdentifier.of(arcs: id.arcs)!, id)
-    }
-    assertEqualText(Hex.encode(try! ObjectIdentifier.parse("1.2.840.113549").encoded), "2a864886f70d")
+@test(arguments: [
+    "0.0", "0.39", "1.0", "1.39", "2.0", "2.40", "2.999.3", "1.2.840.113549.1.1.11",
+    "2.25.340282366920938463463374607431768211455",
+])
+fn dottedNumbersAreReadAndWritten(_ text: String) {
+    let id = try! ObjectIdentifier.parse(text)
+    assertEqualText("\(id)", text)
+    assertEqual(try! ObjectIdentifier.decode(id.encoded), id)
+    assertEqual(ObjectIdentifier.of(arcs: id.arcs)!, id)
 }
 
 @test
-fn whatIsNotAnIdentifier() {
-    assertEqualText(failure(""), "the text is empty")
-    assertEqualText(failure("1"), "not a value at 0")
-    assertEqualText(failure("3.1"), "not a value at 0")
-    assertEqualText(failure("0.40"), "not a value at 0")
-    assertEqualText(failure("1.40"), "not a value at 0")
-    assertEqualText(failure("1."), "not a digit at 2")
-    assertEqualText(failure(".1"), "not a digit at 0")
-    assertEqualText(failure("1..2"), "not a digit at 2")
-    assertEqualText(failure("1.02"), "not a digit at 3")
-    assertEqualText(failure("1.a"), "not a digit at 2")
-    assertEqualText(failure("2.1.340282366920938463463374607431768211456"), "the number is too large")
-    let many: String[>..] = []
-    var arcs = many
+fn anIdentifierHasTwoTo128NumbersInItsBytes() {
+    assertEqualText(Hex.encode(try! ObjectIdentifier.parse("1.2.840.113549").encoded), "2a864886f70d")
+    var arcs: String[>..] = []
     for _ in 0..<129 {
         arcs.append("1")
     }
@@ -46,6 +35,23 @@ fn whatIsNotAnIdentifier() {
     expect(ObjectIdentifier.of(arcs: [1]) == none)
     expect(ObjectIdentifier.of(arcs: [2, U128.max]) == none)
     expect((try? ObjectIdentifier.decode([0x80])) == none)
+}
+
+@test(arguments: [
+    ("", "the text is empty"),
+    ("1", "not a value at 0"),
+    ("3.1", "not a value at 0"),
+    ("0.40", "not a value at 0"),
+    ("1.40", "not a value at 0"),
+    ("1.", "not a digit at 2"),
+    (".1", "not a digit at 0"),
+    ("1..2", "not a digit at 2"),
+    ("1.02", "not a digit at 3"),
+    ("1.a", "not a digit at 2"),
+    ("2.1.340282366920938463463374607431768211456", "the number is too large"),
+])
+fn whatIsNotAnIdentifier(_ text: String, _ why: String) {
+    expect(failure(text) == why)
 }
 
 @test

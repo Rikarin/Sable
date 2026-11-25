@@ -37,7 +37,9 @@ fn aValueIsBoundForAsLongAsTheBodyRuns() {
 fn whatAnErrorLeavesIsUnbound() {
     let local = TaskLocal("none")
     assert(thrown {
-        try local.withValue("bound") { () throws -> Void in throw Failed() }
+        try local.withValue("bound") { () throws -> Void in
+        throw Failed()
+    }
     } is Failed)
     assertEqual(local.value, "none")
 }
@@ -105,9 +107,9 @@ async fn aChildKeepsItsValueOnceTheBindingHasEnded() {
     let opened = AsyncSemaphore(permits: 0)
     let child = local.withValue(Tracked("kept", gone)) {
         Task.spawn {
-            await opened.acquire()
-            return local.value!.name
-        }
+        await opened.acquire()
+        return local.value!.name
+    }
     }
     assertEqual(gone.load(), 0)
     assert(local.value == none)

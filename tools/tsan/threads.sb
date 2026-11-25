@@ -34,7 +34,9 @@ fn main() async {
         for thread in threads {
             thread.thread.unpark()
         }
-        let waiting = threads.map { thread in Task.spawn { await thread.value().count } }
+        let waiting = threads.map { thread in
+            Task.spawn { await thread.value().count }
+        }
         for task in waiting {
             total.add(await task.value)
         }
@@ -62,18 +64,18 @@ fn main() async {
 
         let seen = await request.withValue("round \(round)") {
             await withTaskGroup(of: Int.self) { group in
-                for _ in 0..<20 {
-                    group.spawn {
-                        local.withValue { $0.n += 1 }
-                        return request.value.count
-                    }
+            for _ in 0..<20 {
+                group.spawn {
+                    local.withValue { $0.n += 1 }
+                    return request.value.count
                 }
-                var sum = 0
-                for await count in group {
-                    sum += count
-                }
-                return sum
             }
+            var sum = 0
+            for await count in group {
+                sum += count
+            }
+            return sum
+        }
         }
         total.add(seen)
         total.add(await Thread.spawn { Thread.blockOn { await Task.spawn { 1 }.value } }.value())

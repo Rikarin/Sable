@@ -55,7 +55,9 @@ extension<Element: Sendable> Element[:] {
             }
             try parallelForChunks(0..<pieces, degree: degree, grain: grain) { (taken: Range<Int>) throws(E) -> Void in
                 let chunk = ArrayChunk<Element>(start)
-                defer { chunk.end() }
+                defer {
+                    chunk.end()
+                }
                 var piece = taken.lowerBound
                 while piece < taken.upperBound {
                     let first = piece * each

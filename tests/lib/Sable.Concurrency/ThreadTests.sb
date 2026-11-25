@@ -53,7 +53,9 @@ fn aThreadsOutcomeMayBeAwaited() async throws {
     parked.thread.unpark()
     assertEqual(await waiting.value, 42)
     assertEqual(await parked.value(), 42)
-    let refused = Thread.spawn { () throws(Refused) -> Int in throw Refused { code: 1 } }
+    let refused = Thread.spawn { () throws(Refused) -> Int in
+        throw Refused { code: 1 }
+    }
     do {
         _ = try await refused.value()
         fail("it threw")
@@ -199,7 +201,9 @@ fn aSleepTakesAtLeastItsTime() {
 @test
 fn aThreadSpawnsTasksAndBlocksOnThem() async {
     let sum = Thread.spawn {
-        let tasks = (0..<20).map { n in Task.spawn { n } }
+        let tasks = (0..<20).map { n in
+            Task.spawn { n }
+        }
         return Thread.blockOn {
             var sum = 0
             for task in tasks {
@@ -221,7 +225,9 @@ fn theMainThreadBlocksOnATask() throws {
     }
     assertEqual(slept, 8)
     let error = thrown {
-        _ = try Thread.blockOn { () throws(Refused) -> Int in throw Refused { code: 2 } }
+        _ = try Thread.blockOn { () throws(Refused) -> Int in
+        throw Refused { code: 2 }
+    }
     } as? Refused
     assertEqual(error?.code, 2)
 }
@@ -246,9 +252,9 @@ async fn aTaskSpawnedByAThreadOutlivesIt() {
     let result = Atomic(0)
     let task = Thread.spawn {
         Task.spawn {
-            await opened.acquire()
-            result.store(5)
-        }
+        await opened.acquire()
+        result.store(5)
+    }
     }
     let spawned = await task.value()
     await opened.release()

@@ -15,7 +15,9 @@ struct Bad: Error {
 fn eachNumberIsDoneOnce() {
     for count in [0, 1, 2, 3, 17, 1000, 10_000] {
         let done: Mutex<Int[>..]> = Mutex([])
-        parallelFor(5..<5 + count) { i in done.withLock { $0.append(i) } }
+        parallelFor(5..<5 + count) { i in
+            done.withLock { $0.append(i) }
+        }
         assertEqual(done.withLock { $0.sorted() }, (5..<5 + count).toArray())
     }
 }
@@ -42,7 +44,9 @@ fn theDegreeAndTheGrainAreKeptTo() {
 @test
 fn oneThreadGoesThroughARangeInOrder() {
     let seen: Mutex<Int[>..]> = Mutex([])
-    parallelFor(0..<50, degree: 1) { i in seen.withLock { $0.append(i) } }
+    parallelFor(0..<50, degree: 1) { i in
+        seen.withLock { $0.append(i) }
+    }
     assertEqual(seen.withLock { $0 }, (0..<50).toArray())
 }
 
@@ -51,11 +55,11 @@ fn anErrorStopsTheLoop() {
     let done = Atomic(0)
     let error = thrown {
         try parallelFor(0..<1_000_000) { (i: Int) throws -> Void in
-            done.add(1)
-            if i == 100 {
-                throw Bad { number: i }
-            }
+        done.add(1)
+        if i == 100 {
+            throw Bad { number: i }
         }
+    }
     } as? Bad
     assertEqual(error?.number, 100)
     assert(done.load() < 1_000_000)
@@ -64,7 +68,9 @@ fn anErrorStopsTheLoop() {
 @test
 fn oneOfSeveralErrorsIsThrown() {
     let error = thrown {
-        try parallelFor(0..<100) { (i: Int) throws -> Void in throw Bad { number: i } }
+        try parallelFor(0..<100) { (i: Int) throws -> Void in
+        throw Bad { number: i }
+    }
     } as? Bad
     assert(error != none)
 }
@@ -175,7 +181,9 @@ fn aDivisionIsInvokedAgain() {
 @test
 fn anInvokedErrorIsThrown() {
     let error = thrown {
-        _ = try parallelInvoke({ () throws -> Int in throw Bad { number: 4 } }, { 5 })
+        _ = try parallelInvoke({ () throws -> Int in
+            throw Bad { number: 4 }
+        }, { 5 })
     } as? Bad
     assertEqual(error?.number, 4)
 }

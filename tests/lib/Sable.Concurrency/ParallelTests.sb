@@ -119,24 +119,32 @@ fn anErrorIsThrownAndNothingIsLeftBehind() {
     let xs = numbers(20_000)
     let error = thrown {
         _ = try xs.parallel.map { (n: Int) throws -> String in
-            if n == 5000 {
-                throw Bad { number: n }
-            }
-            return "text \(n)"
+        if n == 5000 {
+            throw Bad { number: n }
         }
+        return "text \(n)"
+    }
     } as? Bad
     assertEqual(error?.number, 5000)
     assert(thrown {
-        _ = try xs.parallel.filter { (n: Int) throws -> Bool in throw Bad { number: n } }
+        _ = try xs.parallel.filter { (n: Int) throws -> Bool in
+        throw Bad { number: n }
+    }
     } is Bad)
     assert(thrown {
-        _ = try xs.parallel.reduce(0, { (total: Int, n: Int) throws -> Int in throw Bad { number: n } }, combine: { $0 + $1 })
+        _ = try xs.parallel.reduce(0, { (total: Int, n: Int) throws -> Int in
+            throw Bad { number: n }
+        }, combine: { $0 + $1 })
     } is Bad)
     assert(thrown {
-        _ = try xs.parallel.first { (n: Int) throws -> Bool in throw Bad { number: n } }
+        _ = try xs.parallel.first { (n: Int) throws -> Bool in
+        throw Bad { number: n }
+    }
     } is Bad)
     assert(thrown {
-        try xs.parallel.forEach { (n: Int) throws -> Void in throw Bad { number: n } }
+        try xs.parallel.forEach { (n: Int) throws -> Void in
+        throw Bad { number: n }
+    }
     } is Bad)
 }
 
@@ -194,7 +202,11 @@ fn aChunkKeptIsEmpty() {
     assertEqual(kept.withLock { $0 }, 3)
     unsafe {
         var chunk: ArrayChunk<Int>? = none
-        xs.parallelModifyChunks(of: 3) { unsafe { chunk = $0 } }
+        xs.parallelModifyChunks(of: 3) {
+            unsafe {
+                chunk = $0
+            }
+        }
         assertEqual(chunk!.count, 0)
     }
 }
@@ -204,11 +216,11 @@ fn anErrorLeavesEveryElementThere() {
     var texts = (0..<2000).map { "text \($0)" }
     let error = thrown {
         try texts.parallelModify { (text: inout String) throws -> Void in
-            text += "."
-            if text == "text 1500." {
-                throw Bad { number: 1500 }
-            }
+        text += "."
+        if text == "text 1500." {
+            throw Bad { number: 1500 }
         }
+    }
     } as? Bad
     assertEqual(error?.number, 1500)
     assert(texts.enumerated().allSatisfy { $0.1 == "text \($0.0)" || $0.1 == "text \($0.0)." })

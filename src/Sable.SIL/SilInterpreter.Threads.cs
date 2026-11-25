@@ -84,7 +84,7 @@ public sealed partial class SilInterpreter {
         switch (name) {
             case "thread_new": {
                 var id = ++_nextThread;
-                _threads[id] = new(id, (string)operands[0]!);
+                _threads[id] = new(id, Text(operands[0]).Value);
                 return id;
             }
 
@@ -99,7 +99,7 @@ public sealed partial class SilInterpreter {
                 return operands[0];
 
             case "thread_name":
-                return _threads[(long)operands[0]!].Name;
+                return Allocate(new HeapString(_threads[(long)operands[0]!].Name));
 
             // It runs to its end, as a task of its own would.
             case "thread_start": {

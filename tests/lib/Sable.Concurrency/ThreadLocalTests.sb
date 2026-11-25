@@ -3,6 +3,7 @@ module ThreadLocalTests
 // ThreadLocal (Sable.Concurrency).
 
 import Sable.Concurrency
+import Sable.Interop
 import Sable.Testing
 
 struct Failed: Error { }
@@ -119,9 +120,9 @@ fn whatTheClosureLeavesIsKeptWhenItThrows() {
     let local = ThreadLocal { 1 }
     assert(thrown {
         try local.withValue { (n: inout Int) throws -> Void in
-            n = 7
-            throw Failed()
-        }
+        n = 7
+        throw Failed()
+    }
     } is Failed)
     assertEqual(local.value, 7)
 }
@@ -181,7 +182,10 @@ async fn aWorkersValuesAreThere() {
     let local = ThreadLocal { 0 }
     let total = await withTaskGroup(of: Int.self) { group in
         for _ in 0..<200 {
-            group.spawn { local.withValue { $0 += 1; return $0 } }
+            group.spawn { local.withValue {
+                $0 += 1;
+                return $0
+            } }
         }
         var greatest = 0
         for await count in group {
@@ -204,3 +208,40 @@ fn thrown(_ body: () throws -> Void) -> any Error {
         return error
     }
 }
+
+// A thread C made destroys its values as it ends, too.
+#if !os(windows)
+@extern("c", "pthread_create")
+unsafe fn threadCreate(_ thread: RawPtr<UInt>, _ attributes: RawPtr<Opaque>, _ start: CFunction<(RawPtr<Opaque>) -> RawPtr<Opaque>>, _ context: RawPtr<Opaque>) -> CInt
+
+@extern("c", "pthread_join")
+unsafe fn threadJoin(_ thread: UInt, _ result: RawPtr<RawPtr<Opaque>>) -> CInt
+
+@test
+fn aThreadOfCsDestroysItsValues() {
+    let log: Mutex<String[>..]> = Mutex([])
+    let local = ThreadLocal { Marked("c", log) }
+    let ids: Mutex<Int[>..]> = Mutex([])
+    let callback = CCallback { (context: RawPtr<Opaque>) -> RawPtr<Opaque> in
+        _ = local.value
+        let id = Thread.current.id
+        ids.withLock { $0.append(id) }
+        return context
+    }
+    for _ in 0..<3 {
+        var thread: UInt = 0
+        let made = Memory.withPointer(to: &thread) { (place: RawPtr<UInt>) -> CInt in
+            unsafe {
+                return threadCreate(place, RawPtr<Opaque>.null, callback.function, callback.context)
+            }
+        }
+        assertEqual(made, 0)
+        unsafe {
+            _ = threadJoin(thread, RawPtr<RawPtr<Opaque>>.null)
+        }
+    }
+    assertEqual(log.withLock { $0 }, ["c", "c", "c"])
+    let seen = ids.withLock { $0 }
+    assert(seen[0] != seen[1] && seen[1] != seen[2] && seen[0] != seen[2])
+}
+#endif

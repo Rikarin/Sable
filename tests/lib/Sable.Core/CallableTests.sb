@@ -1,0 +1,163 @@
+module CallableTests
+
+// '@reflectable(callable)' (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+struct Refused: Error {
+    var n: Int
+}
+
+protocol Step {
+    fn name() -> String
+}
+
+@reflectable(callable)
+struct Counter: Step {
+    public var count: Int
+
+    public init(from start: Int) { count = start }
+
+    public mutating fn add(_ n: Int) throws -> Int {
+        if n < 0 {
+            throw Refused { n: n }
+        }
+
+        count += n
+        return count
+    }
+
+    public fn name() -> String => "counter"
+
+    public fn later(_ n: Int) async throws -> Int {
+        await Task.yield()
+        if n < 0 {
+            throw Refused { n: n }
+        }
+
+        return count + n
+    }
+
+    public mutating fn bump() async {
+        await Task.yield()
+        count += 1
+    }
+
+    public static fn zero() -> Counter => Counter(from: 0)
+    public operator + (a: Counter, b: Counter) -> Counter => Counter(from: a.count + b.count)
+    public fn give<T>(_ t: T) -> T => t
+    fn internalOnly() { }
+}
+
+@reflectable(callable)
+class Named: Step {
+    let text: String
+
+    public init(_ text: String) { self.text = text }
+
+    public fn name() -> String => text
+}
+
+@reflectable
+struct Quiet: Step {
+    public fn name() -> String => "quiet"
+}
+
+/// What a call threw, as text: none for one that did not.
+fn refusal(_ call: () throws -> any Any) -> String? {
+    do {
+        _ = try call()
+        return none
+    } catch let error as CallError {
+        return error.description()
+    } catch {
+        return "thrown on"
+    }
+}
+
+@test
+fn membersAreDescribed() {
+    let members = Counter.callableMembers()
+    assertEqual(members.map { $0.name }.joined(separator: " "), "init add name later bump zero + give")
+    let add = members[1]
+    assertEqual(add.signature, "mutating fn add(_ n: Int) throws -> Int")
+    assertEqual(add.parameterNames, ["n"])
+    assert(add.parameterTypes == [Int.self as Type])
+    assert(add.returnType == Int.self)
+    assert(add.isMutating && add.isThrowing && !add.isAsync && add.isCallable)
+    assert(add.kind == .Method && members[0].kind == .Initializer && members[5].kind == .StaticMethod && members[6].kind == .Operator)
+    assert(members[0].returnType == Counter.self && members[4].isAsync)
+    assert(!members[7].isCallable)
+    assert(Counter.callable("internalOnly") == none && Counter.callable("missing") == none)
+}
+
+@test
+fn membersAreCalledAndWhatIsWrongIsThrown() throws {
+    var counter = try Counter.callable("init")!.call(2)
+    let type = type(of: counter)
+    assertEqual(try type.callable("add")!.call(mutating: &counter, 3) as! Int, 5)
+    assertEqual((counter as! Counter).count, 5)
+    assertEqual((try type.callable("zero")!.call() as! Counter).count, 0)
+    assertEqual((try type.callable("+")!.call(counter, counter) as! Counter).count, 10)
+    let arguments: (any Any)[>..] = [7]
+    assertEqual((try type.callable("init")!.call(with: arguments) as! Counter).count, 7)
+    assertEqual(try type.callable("add")!.call(mutating: &counter, with: arguments) as! Int, 12)
+    assertEqual(try type.callable("name")!.call(on: counter, with: []) as! String, "counter")
+
+    assertEqual(refusal { try type.callable("add")!.call(mutating: &counter, -1) }, "thrown on")
+    assertEqual((counter as! Counter).count, 12)
+    assertEqual(refusal { try type.callable("init")!.call() }, "it takes 1 arguments and was given 0")
+    assertEqual(refusal { try type.callable("init")!.call("2") }, "argument 0 is 'Int', and was given 'String'")
+    assertEqual(refusal { try type.callable("name")!.call() }, "it is a method, called on a value: 'call(on:)' calls it")
+    assertEqual(refusal { try type.callable("name")!.call(on: 3) }, "it is called on 'CallableTests.Counter', not 'Int'")
+    assertEqual(refusal { try type.callable("add")!.call(on: counter, 3) }, "it is mutating: 'call(mutating:)' calls it")
+    assertEqual(refusal { try type.callable("later")!.call(on: counter, 3) }, "its call waits: 'callAsync' calls it")
+    assertEqual(refusal { try type.callable("give")!.call(on: counter, 3) }, "it cannot be called with boxed arguments: it is generic over type parameters of its own")
+    assertEqual(refusal { try Counter.callMember(99, on: &counter, with: []) }, "it cannot be called with boxed arguments: there is no such member")
+}
+
+@test
+fn membersThatWaitAreWaitedFor() async throws {
+    var counter: any Any = Counter(from: 1)
+    let empty: (any Any)[>..] = []
+    let one: (any Any)[>..] = [1]
+    assertEqual(try await Counter.callable("later")!.callAsync(on: counter, 4) as! Int, 5)
+    assertEqual(try await Counter.callable("later")!.callAsync(on: counter, with: one) as! Int, 2)
+    _ = try await Counter.callable("bump")!.callAsync(mutating: &counter)
+    _ = try await Counter.callable("bump")!.callAsync(mutating: &counter, with: empty)
+    assertEqual((counter as! Counter).count, 3)
+    assertEqual(try await Counter.callable("name")!.callAsync(on: counter) as! String, "counter")
+    assertEqual((try await Counter.callable("init")!.callAsync(8) as! Counter).count, 8)
+    assertEqual((try await Counter.callable("init")!.callAsync(with: one) as! Counter).count, 1)
+    do {
+        _ = try await Counter.callable("later")!.callAsync(on: counter, -4)
+        fail("not thrown")
+    } catch let refused as Refused {
+        assertEqual(refused.n, -4)
+    }
+
+    do {
+        _ = try await Counter.callable("bump")!.callAsync(on: counter)
+        fail("not thrown")
+    } catch let error as CallError {
+        assert(error.description().hasPrefix("it is mutating"))
+    }
+
+    do {
+        _ = try await Counter.callable("later")!.callAsync(1)
+        fail("not thrown")
+    } catch let error as CallError {
+        assert(error.description().hasPrefix("it is a method"))
+    }
+}
+
+@test
+fn theTypesThatAskAreListedByWhatTheyConformTo() throws {
+    let steps: Type = (any Step).self
+    let found = steps.callableSubtypes()
+    assertEqual(found.map { $0.name }.joined(separator: " "), "CallableTests.Counter CallableTests.Named")
+    assert((Named.self as Type).callableSubtypes() == [Named.self as Type])
+    assert((Quiet.self as Type).callableMembers.isEmpty && (Int.self as Type).callable("init") == none)
+    assertEqual(try found[1].callable("name")!.call(on: found[1].callable("init")!.call("it")) as! String, "it")
+}

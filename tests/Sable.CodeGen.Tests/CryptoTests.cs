@@ -14,6 +14,9 @@ namespace Sable.CodeGen.Tests;
 public sealed class CryptoTests {
     static readonly IReadOnlyDictionary<string, string> Portable = new Dictionary<string, string> { ["SABLE_CRYPTO_PORTABLE"] = "1" };
 
+    /// <summary>The AVX2 kernels, where the processor has AVX-512 too.</summary>
+    static readonly IReadOnlyDictionary<string, string> Narrow = new Dictionary<string, string> { ["SABLE_CRYPTO_NARROW"] = "1" };
+
     const string Message = """
                            fn message(_ count: Int) -> U8[>..] {
                                var bytes: U8[>..] = []
@@ -45,12 +48,13 @@ public sealed class CryptoTests {
         Assert.Equal(expected, AssertAgree(source, stepLimit: 100_000_000).Stdout);
         if (CanBuild) {
             Assert.Equal(expected, BuildAndRun(source, environment: Portable).Stdout);
+            Assert.Equal(expected, BuildAndRun(source, environment: Narrow).Stdout);
         }
     }
 
     [Fact]
     public void EveryWayOfHashingGivesWhatDotNetDoes() {
-        int[] lengths = [0, 1, 55, 56, 63, 64, 65, 111, 112, 127, 128, 129, 300];
+        int[] lengths = [0, 1, 55, 56, 63, 64, 65, 111, 112, 127, 128, 129, 300, 511, 512, 640, 1000];
         var expected = new StringBuilder();
         var body = new StringBuilder();
         foreach (var length in lengths) {

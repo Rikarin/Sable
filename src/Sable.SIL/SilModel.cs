@@ -2958,11 +2958,18 @@ public static class SilBuiltins {
         // The next task the running thread spawns starts cancelled: a
         // cancelled group's child, before any thread can run it.
         Add("task_spawn_cancelled", SilType.Unit);
+
+        // A wait for a child with a limit (withTimeout): begun; whether the
+        // child has ended; and, the child's, that it has.
+        Add("task_timed_begin", SilType.Unit);
+        Add("task_timed_woken", SilType.Bool);
+        Add("task_timed_end", SilType.Unit);
         Add("task_hop", SilType.Unit, SilType.Int);
         Add("task_waitlist_new", SilType.Int);
         Add("task_waitlist_free", SilType.Unit, SilType.Int);
         Add("task_waitlist_wake", SilType.Unit, SilType.Int);
         Add("task_waitlist_wake_one", SilType.Unit, SilType.Int);
+        Add("task_waitlist_grant", SilType.Unit, SilType.Int);
         Add("task_park", SilType.Unit, SilType.Int);
 
         // A wait list's ticket — how many times it has been woken — and a
@@ -3054,6 +3061,7 @@ public static class SilBuiltins {
         Add("lock_new", SilType.Int);
         Add("lock_free", SilType.Unit, SilType.Int);
         Add("lock_acquire", SilType.Unit, SilType.Int);
+        Add("lock_acquire_later", SilType.Unit, SilType.Int);
         Add("lock_try_acquire", SilType.Bool, SilType.Int);
         Add("lock_release", SilType.Unit, SilType.Int);
         // A reader/writer lock: what reading it gives, its end takes.

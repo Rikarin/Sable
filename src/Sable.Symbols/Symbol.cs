@@ -61,15 +61,37 @@ public enum TypeKind {
 ///     declared, which is what lets a diagnostic point at the source and the
 ///     language server answer "go to definition".
 /// </remarks>
-public abstract class Symbol {
+public abstract class Symbol(SyntaxNode? declaration = null) {
     public abstract SymbolKind Kind { get; }
     public abstract string Name { get; }
 
     /// <summary>The symbol this one is declared inside, or null for a module.</summary>
     public virtual Symbol? ContainingSymbol => null;
 
-    /// <summary>The syntax that declared this symbol; empty for synthesised ones.</summary>
-    public virtual ImmutableArray<SyntaxNode> DeclaringSyntax => [];
+    ImmutableArray<SyntaxNode> _declaringSyntax = declaration is null ? [] : [declaration];
+
+    /// <summary>
+    ///     The syntax that declared this symbol; empty for synthesised ones. A
+    ///     symbol read from a library's interface finds it in the library's
+    ///     source (<see cref="Source" />), which is parsed when it is first
+    ///     asked for: what only needs to know whether there is any asks
+    ///     <see cref="IsDeclared" />.
+    /// </summary>
+    public virtual ImmutableArray<SyntaxNode> DeclaringSyntax {
+        get {
+            if (_declaringSyntax.IsEmpty && Source is { } source) {
+                _declaringSyntax = [source.Find()];
+            }
+
+            return _declaringSyntax;
+        }
+    }
+
+    /// <summary>For a symbol read from a library's interface, where the library's source declares it; null for any other.</summary>
+    internal SymbolSource? Source { get; set; }
+
+    /// <summary>Whether any source declares the symbol: whether it has <see cref="DeclaringSyntax" />, without parsing it.</summary>
+    public virtual bool IsDeclared => Source is not null || !_declaringSyntax.IsEmpty;
 
     public virtual Accessibility DeclaredAccessibility => Accessibility.Internal;
 
@@ -82,7 +104,7 @@ public abstract class Symbol {
     ///     itself; one bound from source is synthesised when nothing declares it.
     /// </summary>
     public bool IsSynthesized {
-        get => _synthesized ?? DeclaringSyntax.IsEmpty;
+        get => _synthesized ?? !IsDeclared;
         internal set => _synthesized = value;
     }
 

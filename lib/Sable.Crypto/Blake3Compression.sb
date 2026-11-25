@@ -17,13 +17,13 @@ let BLAKE3_DERIVE_KEY_MATERIAL: U32 = 64
 unsafe fn compressBlake3(_ chaining: Int, _ block: Int, counter: U64, length: U32, flags: U32, to target: Int, extended: Bool) {
     let iv = blake3Constants
     let h0 = load32(chaining)
-    let h1 = load32(chaining + 4)
-    let h2 = load32(chaining + 8)
-    let h3 = load32(chaining + 12)
-    let h4 = load32(chaining + 16)
-    let h5 = load32(chaining + 20)
-    let h6 = load32(chaining + 24)
-    let h7 = load32(chaining + 28)
+    let h1 = load32(chaining &+ 4)
+    let h2 = load32(chaining &+ 8)
+    let h3 = load32(chaining &+ 12)
+    let h4 = load32(chaining &+ 16)
+    let h5 = load32(chaining &+ 20)
+    let h6 = load32(chaining &+ 24)
+    let h7 = load32(chaining &+ 28)
     var v0 = h0
     var v1 = h1
     var v2 = h2
@@ -33,9 +33,9 @@ unsafe fn compressBlake3(_ chaining: Int, _ block: Int, counter: U64, length: U3
     var v6 = h6
     var v7 = h7
     var v8 = load32(iv)
-    var v9 = load32(iv + 4)
-    var v10 = load32(iv + 8)
-    var v11 = load32(iv + 12)
+    var v9 = load32(iv &+ 4)
+    var v10 = load32(iv &+ 8)
+    var v11 = load32(iv &+ 12)
     var v12 = counter unchecked as U32
     var v13 = (counter >> 32) unchecked as U32
     var v14 = length
@@ -48,85 +48,85 @@ unsafe fn compressBlake3(_ chaining: Int, _ block: Int, counter: U64, length: U3
         v12 = (v12 ^ v0).rotatedRight(by: 16)
         v8 = v8 &+ v12
         v4 = (v4 ^ v8).rotatedRight(by: 12)
-        v0 = v0 &+ v4 &+ load32(block &+ (load64(order + 8) unchecked as Int))
+        v0 = v0 &+ v4 &+ load32(block &+ (load64(order &+ 8) unchecked as Int))
         v12 = (v12 ^ v0).rotatedRight(by: 8)
         v8 = v8 &+ v12
         v4 = (v4 ^ v8).rotatedRight(by: 7)
-        v1 = v1 &+ v5 &+ load32(block &+ (load64(order + 16) unchecked as Int))
+        v1 = v1 &+ v5 &+ load32(block &+ (load64(order &+ 16) unchecked as Int))
         v13 = (v13 ^ v1).rotatedRight(by: 16)
         v9 = v9 &+ v13
         v5 = (v5 ^ v9).rotatedRight(by: 12)
-        v1 = v1 &+ v5 &+ load32(block &+ (load64(order + 24) unchecked as Int))
+        v1 = v1 &+ v5 &+ load32(block &+ (load64(order &+ 24) unchecked as Int))
         v13 = (v13 ^ v1).rotatedRight(by: 8)
         v9 = v9 &+ v13
         v5 = (v5 ^ v9).rotatedRight(by: 7)
-        v2 = v2 &+ v6 &+ load32(block &+ (load64(order + 32) unchecked as Int))
+        v2 = v2 &+ v6 &+ load32(block &+ (load64(order &+ 32) unchecked as Int))
         v14 = (v14 ^ v2).rotatedRight(by: 16)
         v10 = v10 &+ v14
         v6 = (v6 ^ v10).rotatedRight(by: 12)
-        v2 = v2 &+ v6 &+ load32(block &+ (load64(order + 40) unchecked as Int))
+        v2 = v2 &+ v6 &+ load32(block &+ (load64(order &+ 40) unchecked as Int))
         v14 = (v14 ^ v2).rotatedRight(by: 8)
         v10 = v10 &+ v14
         v6 = (v6 ^ v10).rotatedRight(by: 7)
-        v3 = v3 &+ v7 &+ load32(block &+ (load64(order + 48) unchecked as Int))
+        v3 = v3 &+ v7 &+ load32(block &+ (load64(order &+ 48) unchecked as Int))
         v15 = (v15 ^ v3).rotatedRight(by: 16)
         v11 = v11 &+ v15
         v7 = (v7 ^ v11).rotatedRight(by: 12)
-        v3 = v3 &+ v7 &+ load32(block &+ (load64(order + 56) unchecked as Int))
+        v3 = v3 &+ v7 &+ load32(block &+ (load64(order &+ 56) unchecked as Int))
         v15 = (v15 ^ v3).rotatedRight(by: 8)
         v11 = v11 &+ v15
         v7 = (v7 ^ v11).rotatedRight(by: 7)
-        v0 = v0 &+ v5 &+ load32(block &+ (load64(order + 64) unchecked as Int))
+        v0 = v0 &+ v5 &+ load32(block &+ (load64(order &+ 64) unchecked as Int))
         v15 = (v15 ^ v0).rotatedRight(by: 16)
         v10 = v10 &+ v15
         v5 = (v5 ^ v10).rotatedRight(by: 12)
-        v0 = v0 &+ v5 &+ load32(block &+ (load64(order + 72) unchecked as Int))
+        v0 = v0 &+ v5 &+ load32(block &+ (load64(order &+ 72) unchecked as Int))
         v15 = (v15 ^ v0).rotatedRight(by: 8)
         v10 = v10 &+ v15
         v5 = (v5 ^ v10).rotatedRight(by: 7)
-        v1 = v1 &+ v6 &+ load32(block &+ (load64(order + 80) unchecked as Int))
+        v1 = v1 &+ v6 &+ load32(block &+ (load64(order &+ 80) unchecked as Int))
         v12 = (v12 ^ v1).rotatedRight(by: 16)
         v11 = v11 &+ v12
         v6 = (v6 ^ v11).rotatedRight(by: 12)
-        v1 = v1 &+ v6 &+ load32(block &+ (load64(order + 88) unchecked as Int))
+        v1 = v1 &+ v6 &+ load32(block &+ (load64(order &+ 88) unchecked as Int))
         v12 = (v12 ^ v1).rotatedRight(by: 8)
         v11 = v11 &+ v12
         v6 = (v6 ^ v11).rotatedRight(by: 7)
-        v2 = v2 &+ v7 &+ load32(block &+ (load64(order + 96) unchecked as Int))
+        v2 = v2 &+ v7 &+ load32(block &+ (load64(order &+ 96) unchecked as Int))
         v13 = (v13 ^ v2).rotatedRight(by: 16)
         v8 = v8 &+ v13
         v7 = (v7 ^ v8).rotatedRight(by: 12)
-        v2 = v2 &+ v7 &+ load32(block &+ (load64(order + 104) unchecked as Int))
+        v2 = v2 &+ v7 &+ load32(block &+ (load64(order &+ 104) unchecked as Int))
         v13 = (v13 ^ v2).rotatedRight(by: 8)
         v8 = v8 &+ v13
         v7 = (v7 ^ v8).rotatedRight(by: 7)
-        v3 = v3 &+ v4 &+ load32(block &+ (load64(order + 112) unchecked as Int))
+        v3 = v3 &+ v4 &+ load32(block &+ (load64(order &+ 112) unchecked as Int))
         v14 = (v14 ^ v3).rotatedRight(by: 16)
         v9 = v9 &+ v14
         v4 = (v4 ^ v9).rotatedRight(by: 12)
-        v3 = v3 &+ v4 &+ load32(block &+ (load64(order + 120) unchecked as Int))
+        v3 = v3 &+ v4 &+ load32(block &+ (load64(order &+ 120) unchecked as Int))
         v14 = (v14 ^ v3).rotatedRight(by: 8)
         v9 = v9 &+ v14
         v4 = (v4 ^ v9).rotatedRight(by: 7)
         order += 128
     }
     store32(v0 ^ v8, target)
-    store32(v1 ^ v9, target + 4)
-    store32(v2 ^ v10, target + 8)
-    store32(v3 ^ v11, target + 12)
-    store32(v4 ^ v12, target + 16)
-    store32(v5 ^ v13, target + 20)
-    store32(v6 ^ v14, target + 24)
-    store32(v7 ^ v15, target + 28)
+    store32(v1 ^ v9, target &+ 4)
+    store32(v2 ^ v10, target &+ 8)
+    store32(v3 ^ v11, target &+ 12)
+    store32(v4 ^ v12, target &+ 16)
+    store32(v5 ^ v13, target &+ 20)
+    store32(v6 ^ v14, target &+ 24)
+    store32(v7 ^ v15, target &+ 28)
     if extended {
-        store32(v8 ^ h0, target + 32)
-        store32(v9 ^ h1, target + 36)
-        store32(v10 ^ h2, target + 40)
-        store32(v11 ^ h3, target + 44)
-        store32(v12 ^ h4, target + 48)
-        store32(v13 ^ h5, target + 52)
-        store32(v14 ^ h6, target + 56)
-        store32(v15 ^ h7, target + 60)
+        store32(v8 ^ h0, target &+ 32)
+        store32(v9 ^ h1, target &+ 36)
+        store32(v10 ^ h2, target &+ 40)
+        store32(v11 ^ h3, target &+ 44)
+        store32(v12 ^ h4, target &+ 48)
+        store32(v13 ^ h5, target &+ 52)
+        store32(v14 ^ h6, target &+ 56)
+        store32(v15 ^ h7, target &+ 60)
     }
 }
 

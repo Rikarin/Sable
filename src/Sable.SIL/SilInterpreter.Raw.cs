@@ -339,7 +339,7 @@ public sealed partial class SilInterpreter {
                 _locks.Remove((long)operands[0]!);
                 return null;
 
-            case "lock_acquire": {
+            case "lock_acquire" or "lock_acquire_later": {
                 var handle = (long)operands[0]!;
                 if (_locks[handle]) {
                     throw new SilTrap("a lock is taken that is held already: with one thread running every task, it would never be released");

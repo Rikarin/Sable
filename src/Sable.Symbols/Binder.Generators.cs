@@ -48,7 +48,10 @@ public sealed partial class Binder {
     }
 
     /// <summary>True for a declared function whose body yields: its call runs nothing, so neither waits nor throws.</summary>
-    internal static bool IsGenerator(FunctionSymbol function) =>
+    internal static bool IsGenerator(FunctionSymbol function) => function.IsGenerator;
+
+    /// <summary>What <see cref="FunctionSymbol.IsGenerator" /> is worked out from: the declaration's body.</summary>
+    internal static bool Yields(FunctionSymbol function) =>
         function.DeclaringSyntax.FirstOrDefault() switch {
             FunctionDeclarationSyntax { Body: { } body } => Yields(body),
             AccessorSyntax { Body: { } body } => Yields(body),

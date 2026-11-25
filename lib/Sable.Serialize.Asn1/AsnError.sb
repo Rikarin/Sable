@@ -1,0 +1,62 @@
+module Sable.Serialize.Asn1
+
+/// Why bytes are not the value asked for, and where: `at` counts from the
+/// start of what the outermost AsnReader was made of, or, inside a string
+/// that was in pieces, of the string.
+///
+/// ```sable
+/// var reader = AsnReader([0x01, 0x01, 0x01], rules: .Der)
+/// do {
+///     _ = try reader.readBool()
+/// } catch {
+///     assert(error == .NotCanonical(at: 2, reason: "true is 0xFF"))
+///     assert(error.description() == "byte 2: true is 0xFF")
+/// }
+/// ```
+@derive(Equatable, Debug)
+public union AsnError: Error {
+    /// The bytes end before the value does.
+    UnexpectedEnd(at: Int)
+    /// The bytes are no encoding of such a value, by any of the rules.
+    Malformed(at: Int, reason: String)
+    /// An encoding of the value, but not the one the rules have for it.
+    NotCanonical(at: Int, reason: String)
+    /// Another value is there than the one asked for.
+    UnexpectedTag(at: Int, expected: AsnTag, found: AsnTag)
+    /// There is more after the last value there should be.
+    TrailingData(at: Int)
+    /// Values are nested deeper than the reader was told to go.
+    TooDeep(at: Int, limit: Int)
+    /// The value is well-formed, and more than the type it was asked for as
+    /// holds, or than the library takes.
+    OutOfRange(at: Int, reason: String)
+    /// What a writer was asked for has no encoding, or the caller asked for
+    /// a value by a tag that cannot be its own.
+    Invalid(reason: String)
+
+    /// Where the bytes are wrong; none when it is the call that is.
+    public var offset: Int? => match self {
+        case .UnexpectedEnd(let at)       => at
+        case .Malformed(let at, _)        => at
+        case .NotCanonical(let at, _)     => at
+        case .UnexpectedTag(let at, _, _) => at
+        case .TrailingData(let at)        => at
+        case .TooDeep(let at, _)          => at
+        case .OutOfRange(let at, _)       => at
+        case .Invalid(_)                  => none
+    }
+
+    /// Where, and what is wrong there.
+    public fn description() -> String {
+        return match self {
+            case .UnexpectedEnd(let at)                          => "byte \(at): the bytes end inside a value"
+            case .Malformed(let at, let reason)                  => "byte \(at): \(reason)"
+            case .NotCanonical(let at, let reason)               => "byte \(at): \(reason)"
+            case .UnexpectedTag(let at, let expected, let found) => "byte \(at): expected \(expected), found \(found)"
+            case .TrailingData(let at)                           => "byte \(at): more after the last value"
+            case .TooDeep(let at, let limit)                     => "byte \(at): nested more than \(limit) deep"
+            case .OutOfRange(let at, let reason)                 => "byte \(at): \(reason)"
+            case .Invalid(let reason)                            => reason
+        }
+    }
+}

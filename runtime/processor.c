@@ -3,7 +3,8 @@
 // it is called; the portable code runs everywhere else and does the same.
 
 enum {
-    PROCESSOR_AVX2 = 1,   // AVX2, BMI1, BMI2 and POPCNT, and a system that keeps the registers
+    PROCESSOR_AVX2 = 1,     // AVX2, BMI1, BMI2 and POPCNT, and a system that keeps the registers
+    PROCESSOR_AVX512 = 2,   // those, and AVX-512's F and VL, and its registers kept as well
     PROCESSOR_ASKED = 128,
 };
 
@@ -14,6 +15,7 @@ enum {
 
 #define SABLE_X64 1
 #define SABLE_TARGET_AVX2 __attribute__((target("avx2,bmi,bmi2")))
+#define SABLE_TARGET_AVX512 __attribute__((target("avx2,bmi,bmi2,avx512f,avx512vl")))
 
 static int processor_features(void) {
     unsigned int a, b, c, d;
@@ -28,7 +30,11 @@ static int processor_features(void) {
         return 0;
     }
 
-    return (b >> 5 & 1) && (b >> 3 & 1) && (b >> 8 & 1) ? PROCESSOR_AVX2 : 0;
+    if (!(b >> 5 & 1) || !(b >> 3 & 1) || !(b >> 8 & 1)) {
+        return 0;
+    }
+
+    return PROCESSOR_AVX2 | ((low & 0xE6) == 0xE6 && (b >> 16 & 1) && (b >> 31 & 1) ? PROCESSOR_AVX512 : 0);
 }
 
 #endif
@@ -40,7 +46,7 @@ int32_t sable_processor_known;
 // Two threads that look at once find the same. SABLE_PORTABLE=1 says the
 // processor has nothing more, so that the tests can run the portable code
 // where the kernels would.
-static inline bool processor_has_avx2(void) {
+static inline int processor_known(void) {
 #if defined(SABLE_X64)
     int features = __atomic_load_n(&sable_processor_known, __ATOMIC_RELAXED);
     if (features == 0) {
@@ -49,8 +55,12 @@ static inline bool processor_has_avx2(void) {
         __atomic_store_n(&sable_processor_known, features, __ATOMIC_RELAXED);
     }
 
-    return (features & PROCESSOR_AVX2) != 0;
+    return features;
 #else
-    return false;
+    return 0;
 #endif
+}
+
+static inline bool processor_has_avx2(void) {
+    return (processor_known() & PROCESSOR_AVX2) != 0;
 }

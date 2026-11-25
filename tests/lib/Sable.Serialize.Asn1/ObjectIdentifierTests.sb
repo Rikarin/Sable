@@ -1,0 +1,65 @@
+module ObjectIdentifierTests
+
+import Sable.Serialize.Asn1
+import Sable.Testing
+import Sable.Text
+
+fn failure(_ text: String) -> String {
+    do {
+        _ = try ObjectIdentifier.parse(text)
+        return "parsed"
+    } catch {
+        return error.description()
+    }
+}
+
+@test
+fn dottedNumbersAreReadAndWritten() {
+    for text in ["0.0", "0.39", "1.0", "1.39", "2.0", "2.40", "2.999.3", "1.2.840.113549.1.1.11", "2.25.340282366920938463463374607431768211455"] {
+        let id = try! ObjectIdentifier.parse(text)
+        assertEqualText("\(id)", text)
+        assertEqual(try! ObjectIdentifier.decode(id.encoded), id)
+        assertEqual(ObjectIdentifier.of(arcs: id.arcs)!, id)
+    }
+    assertEqualText(Hex.encode(try! ObjectIdentifier.parse("1.2.840.113549").encoded), "2a864886f70d")
+}
+
+@test
+fn whatIsNotAnIdentifier() {
+    assertEqualText(failure(""), "the text is empty")
+    assertEqualText(failure("1"), "not a value at 0")
+    assertEqualText(failure("3.1"), "not a value at 0")
+    assertEqualText(failure("0.40"), "not a value at 0")
+    assertEqualText(failure("1.40"), "not a value at 0")
+    assertEqualText(failure("1."), "not a digit at 2")
+    assertEqualText(failure(".1"), "not a digit at 0")
+    assertEqualText(failure("1..2"), "not a digit at 2")
+    assertEqualText(failure("1.02"), "not a digit at 3")
+    assertEqualText(failure("1.a"), "not a digit at 2")
+    assertEqualText(failure("2.1.340282366920938463463374607431768211456"), "the number is too large")
+    let many: String[>..] = []
+    var arcs = many
+    for _ in 0..<129 {
+        arcs.append("1")
+    }
+    assertEqualText(failure(arcs.joined(separator: ".")), "the number is too large")
+    assert(ObjectIdentifier.of(arcs: [1]) == none)
+    assert(ObjectIdentifier.of(arcs: [2, U128.max]) == none)
+    assert((try? ObjectIdentifier.decode([0x80])) == none)
+}
+
+@test
+fn oneIsAPrefixOfThoseItNames() {
+    let pkcs1 = ObjectIdentifier([1, 2, 840, 113549, 1, 1])
+    assert(pkcs1.isPrefix(of: ObjectIdentifier([1, 2, 840, 113549, 1, 1, 11])))
+    assert(pkcs1.isPrefix(of: pkcs1))
+    assert(!pkcs1.isPrefix(of: ObjectIdentifier([1, 2, 840, 113549, 1])))
+    assert(!pkcs1.isPrefix(of: ObjectIdentifier([1, 2, 840, 113549, 1, 2, 1])))
+}
+
+@test
+fn identifiersAreKeys() {
+    var names: Dictionary<ObjectIdentifier, String> = [:]
+    names[ObjectIdentifier([2, 5, 4, 3])] = "commonName"
+    assertEqualText(names[try! ObjectIdentifier.parse("2.5.4.3")] ?? "", "commonName")
+}

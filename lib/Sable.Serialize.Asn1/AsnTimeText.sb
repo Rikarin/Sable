@@ -1,0 +1,122 @@
+module Sable.Serialize.Asn1
+
+import Sable.Time
+
+// The text of a time, read from its start.
+struct AsnTimeText {
+    let octets: U8[:]
+    // Where the first of them is, to say where an error is.
+    let start: Int
+    var at: Int = 0
+
+    init(_ octets: U8[:], _ start: Int) {
+        self.octets = octets
+        self.start = start
+    }
+
+    var position: Int => start + at
+
+    var isAtDigit: Bool => at < octets.count && octets[at] >= 0x30 && octets[at] <= 0x39
+
+    fn finish() throws(AsnError) {
+        if at < octets.count {
+            throw AsnError.Malformed(at: position, reason: "more after a time")
+        }
+    }
+
+    // The number of so many digits.
+    mutating fn number(_ count: Int) throws(AsnError) -> Int {
+        var value = 0
+        for _ in 0..<count {
+            if !isAtDigit {
+                throw AsnError.Malformed(at: position, reason: "a time without a digit there")
+            }
+            value = value * 10 + Int(octets[at] - 0x30)
+            at += 1
+        }
+        return value
+    }
+
+    // The month and day of that year.
+    mutating fn date(_ year: Int) throws(AsnError) -> Date {
+        let month = try number(2)
+        let day = try number(2)
+        guard let date = Date.of(year: year, month: month, day: day) else {
+            throw AsnError.Malformed(at: start, reason: "there is no such date")
+        }
+        return date
+    }
+
+    mutating fn timeOfDay() throws(AsnError) -> TimeOfDay {
+        let hour = try number(2)
+        let minute = try number(2)
+        let second = try number(2)
+        guard let time = TimeOfDay.of(hour: hour, minute: minute, second: second) else {
+            throw AsnError.Malformed(at: start, reason: "there is no such time")
+        }
+        return time
+    }
+
+    fn local(_ date: Date, _ hour: Int, _ minute: Int, _ second: Int, _ nanoseconds: Int) throws(AsnError) -> LocalDateTime {
+        guard let time = TimeOfDay.of(hour: hour, minute: minute, second: second) else {
+            throw AsnError.Malformed(at: start, reason: "there is no such time")
+        }
+        return LocalDateTime(date: date, time: TimeOfDay.fromNanosecondOfDay(time.nanosecondOfDay + nanoseconds))
+    }
+
+    // The decimal fraction there, if there is one, of so many nanoseconds.
+    mutating fn fraction(of unit: Int, canonical: Bool) throws(AsnError) -> Int {
+        if at == octets.count || (octets[at] != 0x2E && octets[at] != 0x2C) {
+            return 0
+        }
+        if canonical && octets[at] == 0x2C {
+            throw AsnError.NotCanonical(at: position, reason: "a comma in a time")
+        }
+        at += 1
+        let first = at
+        var digits: I128 = 0
+        var scale: I128 = 1
+        while isAtDigit {
+            if scale < 1_000_000_000_000_000_000 {
+                digits = digits * 10 + I128(octets[at] - 0x30)
+                scale *= 10
+            }
+            at += 1
+        }
+        if at == first {
+            throw AsnError.Malformed(at: position, reason: "a time without a digit there")
+        }
+        if canonical && octets[at - 1] == 0x30 {
+            throw AsnError.NotCanonical(at: position - 1, reason: "a time's fraction ends in a zero")
+        }
+        return Int.truncating(digits * I128(unit) / scale)
+    }
+
+    // The offset there: Z, or hours and minutes, which may be left out
+    // unless they are asked for; none where there is nothing.
+    mutating fn offset(minutes: Bool, canonical: Bool) throws(AsnError) -> UtcOffset? {
+        if canonical && (at == octets.count || octets[at] != 0x5A) {
+            throw AsnError.NotCanonical(at: position, reason: "a time that is not UTC")
+        }
+        if at == octets.count {
+            return none
+        }
+        let sign = octets[at]
+        if sign == 0x5A {
+            at += 1
+            return UtcOffset.utc
+        }
+        if sign != 0x2B && sign != 0x2D {
+            throw AsnError.Malformed(at: position, reason: "a time without its offset there")
+        }
+        let first = position
+        at += 1
+        let hour = try number(2)
+        let minute = minutes || isAtDigit ? try number(2) : 0
+        if hour > 23 || minute > 59 {
+            throw AsnError.Malformed(at: first, reason: "there is no such offset")
+        }
+        let seconds = hour * 3600 + minute * 60
+        return UtcOffset.of(seconds: sign == 0x2D ? -seconds : seconds)
+    }
+}

@@ -141,8 +141,16 @@ fn aPortIsFreeAgainThoughItsConnectionsStillClose() async {
     }
 }
 
-// Windows has no such sharing: it is Unsupported there.
-#if !os(windows)
+// Windows has no such sharing.
+#if os(windows)
+@test
+fn noListenersShareAPort() async {
+    assertEqual(await thrown {
+        _ = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0), sharePort: true)
+    }, "'127.0.0.1:0' is not supported here")
+}
+
+#else
 @test
 fn severalListenersShareAPortThatAllSayTheyShare() {
     do {

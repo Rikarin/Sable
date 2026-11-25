@@ -1,0 +1,226 @@
+module TaskTreeTests
+
+// The task tree without its lock (runtime/tasks.c): tasks spawned, finished,
+// cancelled, escalated and waited for by many threads at once, and children
+// that stay in their parent's list for a while once they have finished.
+
+import Sable.Concurrency
+import Sable.Testing
+import Sable.Time
+
+actor Desk {
+    var served = 0
+
+    fn serve() async -> Int {
+        served += 1
+        await Task.yield()
+        return served
+    }
+}
+
+// A task with children, and they with theirs: how many of them ran.
+fn grow(_ depth: Int, _ width: Int, _ ran: Atomic<Int>) async {
+    ran.add(1)
+    if depth == 0 {
+        return
+    }
+    for _ in 0..<width {
+        // Not waited for: the parent finishes once it has.
+        _ = Task.spawn { await grow(depth - 1, width, ran) }
+    }
+}
+
+@test
+fn aTaskFinishesOnceEveryTaskBeneathItHas() async {
+    for _ in 0..<20 {
+        let ran = Atomic<Int>(0)
+        await Task.spawn { await grow(5, 3, ran) }.value
+        assertEqual(ran.load(), 364)
+    }
+}
+
+@test
+fn oneTaskSpawnsManyThatFinishAsItGoes() async {
+    let ran = Atomic<Int>(0)
+    await Task.spawn {
+        for i in 0..<5000 {
+            let child = Task.spawn {
+                ran.add(1)
+                return i
+            }
+            if i % 3 == 0 {
+                assertEqual(await child.value, i)
+            }
+        }
+    }.value
+    assertEqual(ran.load(), 5000)
+}
+
+@test
+fn aCancellationReachesAChildSpawnedMeanwhile() async {
+    for _ in 0..<200 {
+        let stopped = Atomic<Int>(0)
+        let begun = Atomic<Int>(0)
+        let parent = Task.spawn {
+            for _ in 0..<8 {
+                _ = Task.spawn {
+                    begun.add(1)
+                    do {
+                        try await Task.sleep(nanoseconds: 60_000_000_000)
+                    } catch {
+                        stopped.add(1)
+                    }
+                }
+            }
+        }
+        let canceller = Task.spawn { parent.cancel() }
+        await canceller.value
+        await parent.value
+        assertEqual(begun.load(), 8)
+        assertEqual(stopped.load(), 8)
+    }
+}
+
+@test
+fn manyWaitForOneTaskAndRaiseIt() async {
+    for round in 0..<100 {
+        let desk = Desk()
+        let work = Task.spawn(priority: .background) {
+            let child = Task.spawn { await desk.serve() }
+            return await child.value + round
+        }
+        let waiting = await withTaskGroup(of: Int.self) { group -> Int in
+            for i in 0..<8 {
+                group.spawn(priority: i % 2 == 0 ? TaskPriority.high : TaskPriority.low) {
+                    _ = await desk.serve()
+                    return await work.value
+                }
+            }
+            var sum = 0
+            for await value in group {
+                sum += value
+            }
+            return sum
+        }
+        assert(waiting >= 8 * (round + 1))
+        assertEqual(waiting % 8, 0)
+    }
+}
+
+@test
+fn aWaitListIsWokenAndItsTasksCancelledAtOnce() async {
+    for _ in 0..<200 {
+        let list = WaitList()
+        let woken = Atomic<Int>(0)
+        let ticket = list.ticket
+        var tasks: Task<Void>[>..] = []
+        for i in 0..<6 {
+            tasks.append(
+                Task.spawn {
+                    if i % 2 == 0 {
+                        await list.parkCancellably(since: ticket)
+                    } else {
+                        await list.park(since: ticket)
+                    }
+                    woken.add(1)
+                })
+        }
+        let first = tasks[0]
+        let third = tasks[2]
+        let stopper = Task.spawn {
+            first.cancel()
+            third.cancel()
+        }
+        let waker = Task.spawn { list.wakeAll() }
+        for task in tasks {
+            await task.value
+        }
+        await stopper.value
+        await waker.value
+        assertEqual(woken.load(), 6)
+    }
+}
+
+@test
+fn aListGoesWithATaskCancelledInIt() async {
+    for _ in 0..<300 {
+        let waiting = Task.spawn {
+            let list = WaitList()
+            let waker = Task.spawn { list.wakeOne() }
+            await list.parkCancellably()
+            await waker.value
+        }
+        await Task.yield()
+        waiting.cancel()
+        await waiting.value
+    }
+}
+
+@test
+fn limitsEndOneWayOrTheOther() async {
+    var early = 0
+    var late = 0
+    for i in 0..<200 {
+        let limited = await Task.limited(nanoseconds: 1 + i * 500) {
+            try? await Task.sleep(nanoseconds: 50_000)
+            return i
+        }
+        if let value = limited {
+            assertEqual(value, i)
+            early += 1
+        } else {
+            late += 1
+        }
+    }
+    assertEqual(early + late, 200)
+}
+
+@test
+fn aLimitOfNothingStillWaitsForTheBody() async {
+    let ended = Atomic<Bool>(false)
+    let value = await Task.limited(nanoseconds: 0) {
+        while !Task.isCancelled {
+            await Task.yield()
+        }
+        ended.store(true)
+        return 1
+    }
+    assert(value == none)
+    assert(ended.load())
+}
+
+@test
+fn limitsNestAndFollowEachOther() async {
+    let total = await Task.limited(nanoseconds: 60_000_000_000) { () -> Int in
+        var sum = 0
+        for i in 0..<50 {
+            sum += await Task.limited(nanoseconds: 60_000_000_000) { i } ?? -1000
+        }
+        return sum
+    }
+    assert(total == 1225)
+}
+
+@test
+fn aCancelledWaitWithALimitGivesWhatTheBodyGave() async {
+    let outer = Task.spawn {
+        return await Task.limited(nanoseconds: 60_000_000_000) {
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            return Task.isCancelled
+        }
+    }
+    await Task.yield()
+    outer.cancel()
+    assert(await outer.value == true)
+}
+
+@test
+fn aGrantEndsOneParkWhicheverComesFirst() async {
+    let list = WaitList()
+    list.grant()
+    await list.parkForGrant()
+    let parked = Task.spawn { await list.parkForGrant() }
+    await Task.settle()
+    list.grant()
+    await parked.value
+}

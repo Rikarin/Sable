@@ -2,9 +2,9 @@ module Sable.Crypto
 
 /// Bytes no one can predict, from the system: for keys, salts, nonces and
 /// tokens. The source is the one `SystemRandomNumberGenerator` draws from —
-/// getentropy on macOS and Linux, BCryptGenRandom on Windows, random_get on
-/// WASI — and a program it fails for is stopped, never given weaker bytes.
-/// .NET's `RandomNumberGenerator`.
+/// arc4random on macOS, getrandom on Linux, BCryptGenRandom on Windows,
+/// random_get on WASI — and a program it fails for is stopped, never given
+/// weaker bytes. .NET's `RandomNumberGenerator`.
 ///
 /// ```sable
 /// let salt = SecureRandom.bytes(16)

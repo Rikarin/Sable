@@ -1,0 +1,15 @@
+module Sable.Serialize.Asn1
+
+/// The rules values are written by, and read ones must have been (X.690).
+@derive(Equatable, Hashable, Debug)
+public enum AsnEncodingRules {
+    /// The Basic Encoding Rules: a value has many encodings, and a reader
+    /// takes any of them.
+    Ber
+    /// The Canonical Encoding Rules: one encoding each, with indefinite
+    /// lengths, and strings in pieces of a thousand bytes.
+    Cer
+    /// The Distinguished Encoding Rules: one encoding each, with definite
+    /// lengths. What is signed is written by these.
+    Der
+}

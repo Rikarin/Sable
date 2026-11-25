@@ -1,0 +1,235 @@
+module Sable.Serialize.Asn1
+
+/// What a value says it is: a class, a number, and whether its contents are
+/// values themselves. Two tags that differ in the last alone are of one type.
+///
+/// ```sable
+/// let tag = AsnTag.context(0)
+/// assert(tag.encoded() == [0x80] && tag.asConstructed().encoded() == [0xA0])
+/// assert("\(tag)" == "[0]" && "\(AsnTag.sequence)" == "SEQUENCE")
+/// assert(tag.matches(tag.asConstructed()))
+/// ```
+@derive(Equatable, Hashable)
+public struct AsnTag {
+    public let tagClass: AsnTagClass
+    /// From 0 to 2147483647.
+    public let number: Int
+    public let isConstructed: Bool
+
+    /// A tag; traps if no tag has that number.
+    public init(_ tagClass: AsnTagClass, _ number: Int, isConstructed: Bool = false) {
+        if number < 0 || number > maximumTagNumber {
+            preconditionFailure("a tag's number is from 0 to 2147483647, not \(number)")
+        }
+        self.tagClass = tagClass
+        self.number = number
+        self.isConstructed = isConstructed
+    }
+
+    /// The tag `[number]` is in a module.
+    public static fn context(_ number: Int) -> AsnTag {
+        return AsnTag(.ContextSpecific, number)
+    }
+
+    /// The tag `[APPLICATION number]` is in a module.
+    public static fn application(_ number: Int) -> AsnTag {
+        return AsnTag(.Application, number)
+    }
+
+    /// The tag of one of ASN.1's own types.
+    public static fn universal(_ number: Int) -> AsnTag {
+        return AsnTag(.Universal, number)
+    }
+
+    public static var bool: AsnTag => AsnTag.universal(1)
+    public static var integer: AsnTag => AsnTag.universal(2)
+    public static var bitString: AsnTag => AsnTag.universal(3)
+    public static var octetString: AsnTag => AsnTag.universal(4)
+    public static var null: AsnTag => AsnTag.universal(5)
+    public static var objectIdentifier: AsnTag => AsnTag.universal(6)
+    public static var external: AsnTag => AsnTag.universal(8)
+    public static var real: AsnTag => AsnTag.universal(9)
+    public static var enumerated: AsnTag => AsnTag.universal(10)
+    public static var embeddedPdv: AsnTag => AsnTag.universal(11)
+    public static var relativeOid: AsnTag => AsnTag.universal(13)
+    public static var time: AsnTag => AsnTag.universal(14)
+    public static var sequence: AsnTag => AsnTag.universal(16)
+    public static var set: AsnTag => AsnTag.universal(17)
+    public static var utcTime: AsnTag => AsnTag.universal(23)
+    public static var generalizedTime: AsnTag => AsnTag.universal(24)
+    public static var characterString: AsnTag => AsnTag.universal(29)
+    public static var date: AsnTag => AsnTag.universal(31)
+    public static var timeOfDay: AsnTag => AsnTag.universal(32)
+    public static var dateTime: AsnTag => AsnTag.universal(33)
+    public static var duration: AsnTag => AsnTag.universal(34)
+
+    /// The same tag, of a value whose contents are values.
+    public fn asConstructed() -> AsnTag {
+        return AsnTag(tagClass, number, isConstructed: true)
+    }
+
+    /// The same tag, of a value whose contents are not.
+    public fn asPrimitive() -> AsnTag {
+        return AsnTag(tagClass, number)
+    }
+
+    /// Whether the other is of the same class and number, constructed or not.
+    public fn matches(_ other: AsnTag) -> Bool {
+        return number == other.number && tagClass == other.tagClass
+    }
+
+    /// How many bytes the tag is.
+    public var encodedSize: Int {
+        get {
+            var size = 1
+            if number > 30 {
+                var rest = number
+                while rest > 0 {
+                    size += 1
+                    rest = rest >> 7
+                }
+            }
+            return size
+        }
+    }
+
+    /// The tag's bytes: a value's first.
+    public fn encoded() -> U8[>..] {
+        var bytes: U8[>..] = []
+        append(to: &bytes, constructed: isConstructed)
+        return bytes
+    }
+
+    /// The tag the bytes begin with, and how many of them it is.
+    ///
+    /// ```sable
+    /// let (tag, size) = try! AsnTag.decode([0x5F, 0x81, 0x01, 0x00])
+    /// assert(tag == .application(129) && size == 3)
+    /// ```
+    public static fn decode(_ bytes: U8[:]) throws(AsnError) -> (AsnTag, Int) {
+        return try decodeTag(bytes, 0, bytes.count)
+    }
+
+    // The tag's bytes, put on the end.
+    fn append(to bytes: inout U8[>..], constructed: Bool) {
+        let first: U8 = classBits | (constructed ? 0x20 : 0)
+        if number <= 30 {
+            bytes.append(first | U8.truncating(number))
+            return
+        }
+        bytes.append(first | 31)
+        var shift = (encodedSize - 2) * 7
+        while shift > 0 {
+            bytes.append(0x80 | U8.truncating(number >> shift & 0x7F))
+            shift -= 7
+        }
+        bytes.append(U8.truncating(number & 0x7F))
+    }
+
+    var classBits: U8 => match tagClass {
+        case .Universal       => 0
+        case .Application     => 0x40
+        case .ContextSpecific => 0x80
+        case .Private         => 0xC0
+    }
+
+    // Where the tag sorts among others: by class, then by number.
+    var order: Int => Int(classBits) << 32 | number
+
+    /// The tag as a module has it: `INTEGER`, `[0]`, `[APPLICATION 1]`.
+    public fn toString() -> String {
+        return match tagClass {
+            case .Universal       => universalName(number)
+            case .Application     => "[APPLICATION \(number)]"
+            case .ContextSpecific => "[\(number)]"
+            case .Private         => "[PRIVATE \(number)]"
+        }
+    }
+}
+
+extension AsnTag: Debug {
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}
+
+let maximumTagNumber = 0x7FFF_FFFF
+
+fn universalName(_ number: Int) -> String {
+    let names: String[>..] = [
+        "end of contents",
+        "BOOLEAN",
+        "INTEGER",
+        "BIT STRING",
+        "OCTET STRING",
+        "NULL",
+        "OBJECT IDENTIFIER",
+        "ObjectDescriptor",
+        "EXTERNAL",
+        "REAL",
+        "ENUMERATED",
+        "EMBEDDED PDV",
+        "UTF8String",
+        "RELATIVE-OID",
+        "TIME",
+        "[UNIVERSAL 15]",
+        "SEQUENCE",
+        "SET",
+        "NumericString",
+        "PrintableString",
+        "TeletexString",
+        "VideotexString",
+        "IA5String",
+        "UTCTime",
+        "GeneralizedTime",
+        "GraphicString",
+        "VisibleString",
+        "GeneralString",
+        "UniversalString",
+        "CHARACTER STRING",
+        "BMPString",
+        "DATE",
+        "TIME-OF-DAY",
+        "DATE-TIME",
+        "DURATION",
+        "OID-IRI",
+        "RELATIVE-OID-IRI",
+    ]
+    return number < names.count ? names[number] : "[UNIVERSAL \(number)]"
+}
+
+// The tag at the position, before the end, and where the byte after it is.
+fn decodeTag(_ bytes: U8[:], _ at: Int, _ end: Int) throws(AsnError) -> (AsnTag, Int) {
+    if at >= end {
+        throw AsnError.UnexpectedEnd(at: at)
+    }
+    let first = bytes[at]
+    let tagClass: AsnTagClass = first < 0x40 ? .Universal : first < 0x80 ? .Application : first < 0xC0 ? .ContextSpecific : .Private
+    let isConstructed = (first & 0x20) != 0
+    if (first & 31) != 31 {
+        return (AsnTag(tagClass, Int(first & 31), isConstructed: isConstructed), at + 1)
+    }
+    var number = 0
+    var next = at + 1
+    while true {
+        if next >= end {
+            throw AsnError.UnexpectedEnd(at: next)
+        }
+        let byte = bytes[next]
+        if byte == 0x80 && number == 0 {
+            throw AsnError.Malformed(at: next, reason: "a tag's number is in more bytes than it needs")
+        }
+        number = number << 7 | Int(byte & 0x7F)
+        if number > maximumTagNumber {
+            throw AsnError.OutOfRange(at: at, reason: "a tag's number is more than 2147483647")
+        }
+        next += 1
+        if byte < 0x80 {
+            break
+        }
+    }
+    if number < 31 {
+        throw AsnError.Malformed(at: at, reason: "a tag's number is in more bytes than it needs")
+    }
+    return (AsnTag(tagClass, number, isConstructed: isConstructed), next)
+}

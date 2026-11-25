@@ -9,7 +9,7 @@ namespace Sable.Symbols;
 ///     <c>List&lt;Int&gt;</c> symbols are equal. Named types compare by definition
 ///     and type arguments; the structural forms compare by their parts.
 /// </remarks>
-public abstract class TypeSymbol : Symbol, IEquatable<TypeSymbol> {
+public abstract class TypeSymbol(SyntaxNode? declaration = null) : Symbol(declaration), IEquatable<TypeSymbol> {
     public abstract TypeKind TypeKind { get; }
 
     /// <summary>True for types with identity and a reference count.</summary>
@@ -67,11 +67,10 @@ public sealed class NamedTypeSymbol : TypeSymbol {
         SyntaxNode? declaration = null,
         Accessibility accessibility = Accessibility.Internal,
         bool isVariableSize = false
-    ) {
+    ) : base(declaration) {
         Name = name;
         TypeKind = typeKind;
         ContainingSymbol = container;
-        DeclaringSyntax = declaration is null ? [] : [declaration];
         DeclaredAccessibility = accessibility;
         IsVariableSize = isVariableSize;
         OriginalDefinition = this;
@@ -81,7 +80,6 @@ public sealed class NamedTypeSymbol : TypeSymbol {
         Name = definition.Name;
         TypeKind = definition.TypeKind;
         ContainingSymbol = definition.ContainingSymbol;
-        DeclaringSyntax = definition.DeclaringSyntax;
         DeclaredAccessibility = definition.DeclaredAccessibility;
         IsVariableSize = definition.IsVariableSize;
         OriginalDefinition = definition;
@@ -95,7 +93,8 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     public override string Name { get; }
     public override TypeKind TypeKind { get; }
     public override Symbol? ContainingSymbol { get; }
-    public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; }
+    public override ImmutableArray<SyntaxNode> DeclaringSyntax => ReferenceEquals(OriginalDefinition, this) ? base.DeclaringSyntax : OriginalDefinition.DeclaringSyntax;
+    public override bool IsDeclared => ReferenceEquals(OriginalDefinition, this) ? base.IsDeclared : OriginalDefinition.IsDeclared;
     public override Accessibility DeclaredAccessibility { get; }
 
     /// <summary>True for a <c>union X..</c>, whose values are each their own size.</summary>
@@ -399,14 +398,11 @@ public sealed class TypeParameterSymbol(
     string name,
     Symbol container,
     SyntaxNode? declaration,
-    int ordinal) : TypeSymbol {
+    int ordinal) : TypeSymbol(declaration) {
     public override SymbolKind Kind => SymbolKind.TypeParameter;
     public override string Name { get; } = name;
     public override TypeKind TypeKind => TypeKind.Struct;
     public override Symbol? ContainingSymbol { get; } = container;
-
-    public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
-        declaration is null ? [] : [declaration];
 
     public int Ordinal { get; } = ordinal;
 
@@ -692,7 +688,7 @@ internal static class Copyability {
     ///     'Wrapped' of 'T?' — are declared nowhere, and say for themselves.
     /// </summary>
     public static string? Refusal(TypeParameterSymbol parameter, TypeSymbol argument, string owner) =>
-        parameter.AllowsNoncopyable || parameter.DeclaringSyntax.IsEmpty || !IsNoncopyable(argument)
+        parameter.AllowsNoncopyable || !parameter.IsDeclared || !IsNoncopyable(argument)
             ? null
             : $"'{argument.ToDisplayString()}' {(argument is TypeParameterSymbol ? "may be @noncopy ('~Copyable')" : "is @noncopy")}, "
               + $"so it cannot be '{parameter.Name}' of '{owner}', which is implicitly Copyable; "

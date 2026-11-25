@@ -1,0 +1,488 @@
+module Sable.Serialize.Asn1
+
+import Sable.Math
+
+/// Writes ASN.1 values (X.690) one after another, by the rules it is given:
+/// .NET's AsnWriter. What holds values is begun and ended, or written with
+/// what writes its values; its length is worked out as it ends, as is a
+/// set's order by CER and DER.
+///
+/// Each `write` takes the tag a value of its type may have instead of the
+/// type's own, as `[0] IMPLICIT` gives it one.
+///
+/// ```sable
+/// // SEQUENCE { version INTEGER, name [0] IMPLICIT UTF8String OPTIONAL }
+/// let writer = AsnWriter(rules: .Der)
+/// try! writer.writeSequence {
+///     try writer.writeInt(2)
+///     try writer.writeString("hi", .Utf8, tag: .context(0))
+/// }
+/// assert(try! writer.bytes() == [0x30, 0x07, 0x02, 0x01, 0x02, 0x80, 0x02, 0x68, 0x69])
+/// ```
+public final class AsnWriter {
+    var written: U8[>..] = []
+    var frames: AsnFrame[>..] = []
+    /// The rules it writes by.
+    public let rules: AsnEncodingRules
+
+    /// A writer that has written nothing.
+    public init(rules: AsnEncodingRules) {
+        self.rules = rules
+    }
+
+    /// What is written: an error while something begun is not ended.
+    public fn bytes() throws(AsnError) -> U8[>..] {
+        if !frames.isEmpty {
+            throw AsnError.Invalid(reason: "\(frames[frames.count - 1].kind.name) was begun and not ended")
+        }
+        return written
+    }
+
+    /// Forgets what was written, and keeps the memory for what will be.
+    public fn reset() {
+        written.removeAll(keepingCapacity: true)
+        frames.removeAll(keepingCapacity: true)
+    }
+
+    // ---- Any value -----------------------------------------------------------
+
+    /// A value already encoded by these rules: one, and its whole bytes.
+    public fn writeEncoded(_ value: U8[:]) throws(AsnError) {
+        let found = try AsnReader(value, rules: rules).element()
+        if found.end < value.count {
+            throw AsnError.TrailingData(at: found.end)
+        }
+        item()
+        written.append(contentsOf: value)
+    }
+
+    // ---- What holds values ---------------------------------------------------
+
+    /// A SEQUENCE or SEQUENCE OF begins, or, by the tag `external`,
+    /// `embeddedPdv` or `characterString`, a type that is one under another
+    /// name.
+    public fn beginSequence(tag: AsnTag = .sequence) throws(AsnError) {
+        let isOther = tag.tagClass == .Universal && (tag.number == 8 || tag.number == 11 || tag.number == 29)
+        try begin(.Sequence, tag, isOther ? tag.number : 16)
+    }
+
+    public fn endSequence() throws(AsnError) {
+        try end(.Sequence)
+    }
+
+    /// A SEQUENCE of what the body writes.
+    public fn writeSequence(tag: AsnTag = .sequence, _ body: () throws(AsnError) -> Void) throws(AsnError) {
+        try beginSequence(tag: tag)
+        try body()
+        try endSequence()
+    }
+
+    /// A SET begins, whose values CER and DER put in the order of their
+    /// tags; the same tag twice is an error.
+    public fn beginSet(tag: AsnTag = .set) throws(AsnError) {
+        try begin(.Set, tag, 17)
+    }
+
+    public fn endSet() throws(AsnError) {
+        try end(.Set)
+    }
+
+    /// A SET of what the body writes.
+    public fn writeSet(tag: AsnTag = .set, _ body: () throws(AsnError) -> Void) throws(AsnError) {
+        try beginSet(tag: tag)
+        try body()
+        try endSet()
+    }
+
+    /// A SET OF begins, whose values CER and DER put in the order of their
+    /// bytes.
+    ///
+    /// ```sable
+    /// let writer = AsnWriter(rules: .Der)
+    /// try! writer.writeSetOf {
+    ///     try writer.writeInt(300)
+    ///     try writer.writeInt(2)
+    /// }
+    /// assert(try! writer.bytes() == [0x31, 0x07, 0x02, 0x01, 0x02, 0x02, 0x02, 0x01, 0x2C])
+    /// ```
+    public fn beginSetOf(tag: AsnTag = .set) throws(AsnError) {
+        try begin(.SetOf, tag, 17)
+    }
+
+    public fn endSetOf() throws(AsnError) {
+        try end(.SetOf)
+    }
+
+    /// A SET OF what the body writes.
+    public fn writeSetOf(tag: AsnTag = .set, _ body: () throws(AsnError) -> Void) throws(AsnError) {
+        try beginSetOf(tag: tag)
+        try body()
+        try endSetOf()
+    }
+
+    /// An explicit tag begins, of the one value written before it ends.
+    public fn beginExplicit(_ tag: AsnTag) throws(AsnError) {
+        if tag.tagClass == .Universal {
+            throw AsnError.Invalid(reason: "an explicit tag is not one of ASN.1's own")
+        }
+        try begin(.Explicit, tag, -1)
+    }
+
+    public fn endExplicit() throws(AsnError) {
+        try end(.Explicit)
+    }
+
+    /// An explicit tag of the value the body writes.
+    ///
+    /// ```sable
+    /// let writer = AsnWriter(rules: .Der)
+    /// try! writer.writeExplicit(.context(0)) {
+    ///     try writer.writeInt(2)
+    /// }
+    /// assert(try! writer.bytes() == [0xA0, 0x03, 0x02, 0x01, 0x02])
+    /// ```
+    public fn writeExplicit(_ tag: AsnTag, _ body: () throws(AsnError) -> Void) throws(AsnError) {
+        try beginExplicit(tag)
+        try body()
+        try endExplicit()
+    }
+
+    /// An OCTET STRING begins, whose bytes are the values written before it
+    /// ends, as an X.509 extension's are.
+    public fn beginOctetString(tag: AsnTag = .octetString) throws(AsnError) {
+        try begin(.OctetString, tag, 4)
+    }
+
+    public fn endOctetString() throws(AsnError) {
+        try end(.OctetString)
+    }
+
+    /// An OCTET STRING whose bytes are the values the body writes.
+    public fn writeOctetString(tag: AsnTag = .octetString, _ body: () throws(AsnError) -> Void) throws(AsnError) {
+        try beginOctetString(tag: tag)
+        try body()
+        try endOctetString()
+    }
+
+    /// A BIT STRING begins, whose bytes are the values written before it
+    /// ends, as a public key's are in a certificate.
+    public fn beginBitString(tag: AsnTag = .bitString) throws(AsnError) {
+        try begin(.BitString, tag, 3)
+        written.append(0)
+    }
+
+    public fn endBitString() throws(AsnError) {
+        try end(.BitString)
+    }
+
+    /// A BIT STRING whose bytes are the values the body writes.
+    public fn writeBitString(tag: AsnTag = .bitString, _ body: () throws(AsnError) -> Void) throws(AsnError) {
+        try beginBitString(tag: tag)
+        try body()
+        try endBitString()
+    }
+
+    // ---- Booleans, null and numbers ------------------------------------------
+
+    /// A BOOLEAN.
+    public fn writeBool(_ value: Bool, tag: AsnTag = .bool) throws(AsnError) {
+        let byte: U8 = value ? 0xFF : 0
+        try primitive(tag, 1, [byte])
+    }
+
+    /// A NULL.
+    public fn writeNull(tag: AsnTag = .null) throws(AsnError) {
+        try primitive(tag, 5, [])
+    }
+
+    /// An INTEGER.
+    public fn writeInt(_ value: Int, tag: AsnTag = .integer) throws(AsnError) {
+        try int(value, tag, 2)
+    }
+
+    /// An INTEGER.
+    public fn writeUInt(_ value: U64, tag: AsnTag = .integer) throws(AsnError) {
+        if let small = Int.exactly(value) {
+            try int(small, tag, 2)
+            return
+        }
+        try checkOwn(tag, 2)
+        item()
+        tag.append(to: &written, constructed: false)
+        written.append(9)
+        written.append(0)
+        appendInteger(Int.truncating(value), 8)
+    }
+
+    /// An INTEGER.
+    public fn writeBigInt(_ value: BigInt, tag: AsnTag = .integer) throws(AsnError) {
+        try primitive(tag, 2, value.toBytes(.Big))
+    }
+
+    /// An INTEGER, whose two's complement those bytes are, the most
+    /// significant first: as few as hold it, or it is an error.
+    public fn writeIntegerBytes(_ bytes: U8[:], tag: AsnTag = .integer) throws(AsnError) {
+        if bytes.isEmpty || (bytes.count > 1 && ((bytes[0] == 0 && bytes[1] < 0x80) || (bytes[0] == 0xFF && bytes[1] >= 0x80))) {
+            throw AsnError.Invalid(reason: "an integer's bytes are as few as hold it")
+        }
+        try primitive(tag, 2, bytes)
+    }
+
+    /// An INTEGER, not negative, whose magnitude those bytes are, the most
+    /// significant first, with any zeros before it: what a key's numbers
+    /// are held as.
+    ///
+    /// ```sable
+    /// let writer = AsnWriter(rules: .Der)
+    /// try! writer.writeUnsignedInteger([0, 0x80])
+    /// assert(try! writer.bytes() == [0x02, 0x02, 0x00, 0x80])
+    /// ```
+    public fn writeUnsignedInteger(_ magnitude: U8[:], tag: AsnTag = .integer) throws(AsnError) {
+        var start = 0
+        while start < magnitude.count && magnitude[start] == 0 {
+            start += 1
+        }
+        try checkOwn(tag, 2)
+        let pads = start == magnitude.count || magnitude[start] >= 0x80
+        item()
+        tag.append(to: &written, constructed: false)
+        AsnLength.append(&written, magnitude.count - start + (pads ? 1 : 0))
+        if pads {
+            written.append(0)
+        }
+        written.append(contentsOf: magnitude[start...])
+    }
+
+    /// An ENUMERATED.
+    public fn writeEnumerated(_ value: Int, tag: AsnTag = .enumerated) throws(AsnError) {
+        try int(value, tag, 10)
+    }
+
+    /// A REAL, in base 2.
+    public fn writeReal(_ value: F64, tag: AsnTag = .real) throws(AsnError) {
+        try primitive(tag, 9, encodeReal(value))
+    }
+
+    // ---- Object identifiers --------------------------------------------------
+
+    /// An OBJECT IDENTIFIER.
+    public fn writeObjectIdentifier(_ value: ObjectIdentifier, tag: AsnTag = .objectIdentifier) throws(AsnError) {
+        try primitive(tag, 6, value.encoded)
+    }
+
+    /// An OBJECT IDENTIFIER, dotted: an error if it is not one.
+    public fn writeObjectIdentifier(_ text: String, tag: AsnTag = .objectIdentifier) throws(AsnError) {
+        guard let value = try? ObjectIdentifier.parse(text) else {
+            throw AsnError.Invalid(reason: "'\(text)' is not an object identifier")
+        }
+        try writeObjectIdentifier(value, tag: tag)
+    }
+
+    /// A RELATIVE-OID: 1 to 128 numbers.
+    public fn writeRelativeOid(_ arcs: U128[:], tag: AsnTag = .relativeOid) throws(AsnError) {
+        if arcs.isEmpty || arcs.count > maximumArcs {
+            throw AsnError.Invalid(reason: "a RELATIVE-OID is 1 to \(maximumArcs) numbers")
+        }
+        var contents: U8[>..] = []
+        for arc in arcs {
+            appendArc(&contents, arc)
+        }
+        try primitive(tag, 13, contents)
+    }
+
+    // ---- The bytes -----------------------------------------------------------
+
+    // A value is about to be written in what is open.
+    fn item() {
+        let last = frames.count - 1
+        if last >= 0 && frames[last].kind.keepsStarts {
+            frames[last].starts.append(written.count)
+        }
+    }
+
+    // The tag, the length and the contents of a value.
+    fn primitive(_ tag: AsnTag, _ own: Int, _ contents: U8[:]) throws(AsnError) {
+        try checkOwn(tag, own)
+        item()
+        tag.append(to: &written, constructed: false)
+        AsnLength.append(&written, contents.count)
+        written.append(contentsOf: contents)
+    }
+
+    fn int(_ value: Int, _ tag: AsnTag, _ own: Int) throws(AsnError) {
+        try checkOwn(tag, own)
+        item()
+        tag.append(to: &written, constructed: false)
+        let magnitude = U64.truncating(value < 0 ? ~value : value)
+        let size = (64 - magnitude.leadingZeroCount) / 8 + 1
+        written.append(U8(size))
+        appendInteger(value, size)
+    }
+
+    // The low 'size' bytes of the value, the most significant first.
+    fn appendInteger(_ value: Int, _ size: Int) {
+        var shift = (size - 1) * 8
+        while shift >= 0 {
+            written.append(U8.truncating(value >> shift))
+            shift -= 8
+        }
+    }
+
+    // The tag goes before the contents, and a length of one byte: the one it
+    // is if it fits, or room for the first of it.
+    fn begin(_ kind: AsnFrameKind, _ tag: AsnTag, _ own: Int) throws(AsnError) {
+        try checkOwn(tag, own)
+        item()
+        let start = written.count
+        tag.append(to: &written, constructed: !kind.isString)
+        let length: U8 = rules == .Cer && !kind.isString ? 0x80 : 0
+        written.append(length)
+        frames.append(AsnFrame(kind: kind, tag: tag, start: start, contents: written.count))
+    }
+
+    fn end(_ kind: AsnFrameKind) throws(AsnError) {
+        if frames.isEmpty || frames[frames.count - 1].kind != kind {
+            throw AsnError.Invalid(reason: "\(kind.name) was ended and not begun")
+        }
+        let frame = frames[frames.count - 1]
+        if kind == .Explicit && frame.starts.count != 1 {
+            throw AsnError.Invalid(reason: "an explicit tag is of one value, not \(frame.starts.count)")
+        }
+        if rules != .Ber && (kind == .Set || kind == .SetOf) {
+            try sort(frame)
+        }
+        _ = frames.removeLast()
+        let count = written.count - frame.contents
+        if rules == .Cer {
+            if !kind.isString {
+                written.append(0)
+                written.append(0)
+                return
+            }
+            if count > cerPiece {
+                let contents = written[frame.contents...].toArray()
+                written.removeLast(written.count - frame.start)
+                appendPieces(frame.tag, contents, kind == .BitString ? 3 : 4, 0)
+                return
+            }
+        }
+        if count < 0x80 {
+            written[frame.contents - 1] = U8(count)
+            return
+        }
+        // The length's other bytes are put on the end, and moved to where
+        // they go.
+        var length: U8[>..] = []
+        AsnLength.append(&length, count)
+        written[frame.contents - 1] = length[0]
+        written.append(contentsOf: length[1...])
+        written.rotate(from: frame.contents, to: written.count, left: count)
+    }
+
+    // Puts a set's values, the last thing written, in their order.
+    fn sort(_ frame: AsnFrame) throws(AsnError) {
+        let starts = frame.starts
+        let count = starts.count
+        let bytes = written
+        let all = bytes
+        let isSet = frame.kind == .Set
+        var orders: Int[>..] = []
+        if isSet {
+            for start in starts {
+                orders.append(try decodeTag(all, start, all.count).0.order)
+            }
+        }
+        let end = all.count
+        let before: (Int, Int) -> Int = { a, b in
+            if isSet {
+                return orders[a] - orders[b]
+            }
+            return compareRuns(all, starts[a], a + 1 < count ? starts[a + 1] : end, starts[b], b + 1 < count ? starts[b + 1] : end)
+        }
+        var order: Int[>..] = []
+        var isSorted = true
+        for i in 0..<count {
+            order.append(i)
+            isSorted = isSorted && (i == 0 || before(i - 1, i) < 0)
+        }
+        if isSorted {
+            return
+        }
+        order.sort(by: { before($0, $1) < 0 })
+        var sorted: U8[>..] = []
+        sorted.reserveCapacity(end - frame.contents)
+        for k in 0..<count {
+            let i = order[k]
+            if isSet && k > 0 && before(order[k - 1], i) == 0 {
+                throw AsnError.Invalid(reason: "a set has two values of one tag")
+            }
+            sorted.append(contentsOf: all[starts[i]..<(i + 1 < count ? starts[i + 1] : end)])
+        }
+        written.removeLast(end - frame.contents)
+        written.append(contentsOf: sorted)
+    }
+
+    // A string as CER has one of more than a thousand bytes: in pieces, each
+    // a string of the type with that number. A bit string's contents have
+    // their first byte, and the last piece so many unused bits.
+    fn appendPieces(_ tag: AsnTag, _ contents: U8[:], _ number: Int, _ unusedBits: Int) {
+        tag.append(to: &written, constructed: true)
+        written.append(0x80)
+        let isBits = number == 3
+        let size = isBits ? cerPiece - 1 : cerPiece
+        var start = isBits ? 1 : 0
+        while start < contents.count {
+            let end = min(start + size, contents.count)
+            written.append(U8(number))
+            AsnLength.append(&written, end - start + (isBits ? 1 : 0))
+            if isBits {
+                written.append(end == contents.count ? U8(unusedBits) : 0)
+            }
+            written.append(contentsOf: contents[start..<end])
+            start = end
+        }
+        written.append(0)
+        written.append(0)
+    }
+}
+
+// Something a writer has begun.
+enum AsnFrameKind {
+    Sequence
+    Set
+    SetOf
+    Explicit
+    OctetString
+    BitString
+
+    // Whether it is a string, its values its bytes.
+    var isString: Bool => self == .OctetString || self == .BitString
+
+    // Whether where each of its values starts is kept.
+    var keepsStarts: Bool => self == .Set || self == .SetOf || self == .Explicit
+
+    var name: String => match self {
+        case .Sequence    => "a sequence"
+        case .Set         => "a set"
+        case .SetOf       => "a set of"
+        case .Explicit    => "an explicit tag"
+        case .OctetString => "an octet string"
+        case .BitString   => "a bit string"
+    }
+}
+
+struct AsnFrame {
+    let kind: AsnFrameKind
+    let tag: AsnTag
+    // Where its tag starts, and where its contents do.
+    let start: Int
+    let contents: Int
+    var starts: Int[>..] = []
+
+    init(kind: AsnFrameKind, tag: AsnTag, start: Int, contents: Int) {
+        self.kind = kind
+        self.tag = tag
+        self.start = start
+        self.contents = contents
+    }
+}

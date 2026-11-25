@@ -1,0 +1,288 @@
+// Answers what run.py asks of Sable.Crypto, and of the ChaCha generator: a
+// request a line, its words apart by spaces, bytes in hexadecimal and "-" for
+// none of them.
+
+module CryptoConformance
+
+import Sable.Crypto
+import Sable.IO
+
+fn bytes(_ word: String) -> U8[>..] {
+    var made: U8[>..] = []
+    if word == "-" {
+        return made
+    }
+    var high = -1
+    for byte in word.utf8 {
+        let digit = byte <= 0x39 ? Int(byte) - 0x30 : (Int(byte) | 0x20) - 0x57
+        if high < 0 {
+            high = digit
+        } else {
+            made.append(U8(high * 16 + digit))
+            high = -1
+        }
+    }
+    return made
+}
+
+fn hex(_ bytes: U8[:]) -> String {
+    return "\(Digest(bytes))"
+}
+
+fn number(_ word: String) -> Int {
+    return try! Int.parse(word)
+}
+
+// Where the pieces a message is given in end: none is a block's length, and
+// some are empty.
+fn pieces(_ count: Int) -> Int[>..] {
+    var ends: Int[>..] = []
+    var at = 0
+    var size = 0
+    while at < count {
+        at = at + size < count ? at + size : count
+        ends.append(at)
+        size = (size * 5 + 3) % 151
+    }
+    return ends
+}
+
+fn fitted(_ bytes: U8[>..], _ length: Int) -> U8[>..] {
+    if length == 0 {
+        return bytes
+    }
+    var made = bytes
+    while made.count < length {
+        made.append(0)
+    }
+    return made[..<length].toArray()
+}
+
+fn hash<H: HashFunction>(_ type: H.Type, _ words: String[>..]) -> String {
+    match words[0] {
+        case "hash" => {
+            let message = bytes(words[2])
+            let whole = H.hash(message)
+            var function = H()
+            var start = 0
+            for end in pieces(message.count) {
+                function.update(message[start..<end])
+                start = end
+            }
+            return function.finalize() == whole ? "\(whole)" : "in pieces it is another"
+        }
+        case "hmac" => {
+            let key = SymmetricKey(bytes(words[2]))
+            let message = bytes(words[3])
+            let code = Hmac<H>.authenticationCode(for: message, using: key)
+            var function = Hmac<H>(key: key)
+            var start = 0
+            for end in pieces(message.count) {
+                function.update(message[start..<end])
+                start = end
+            }
+            return function.finalize() == code ? "\(code)" : "in pieces it is another"
+        }
+        case "isvalid" => {
+            return Hmac<H>.isValid(bytes(words[4]), for: bytes(words[3]), using: SymmetricKey(bytes(words[2]))) ? "valid" : "invalid"
+        }
+        case "hkdf" => {
+            do {
+                let key = try Hkdf<H>.deriveKey(from: SymmetricKey(bytes(words[2])), salt: bytes(words[3]), info: bytes(words[4]), byteCount: number(words[5]))
+                return hex(key.bytes())
+            } catch {
+                return "error"
+            }
+        }
+        case "pbkdf2" => {
+            do {
+                let key = try Pbkdf2<H>.deriveKey(from: SymmetricKey(bytes(words[2])), salt: bytes(words[3]), iterations: number(words[4]), byteCount: number(words[5]))
+                return hex(key.bytes())
+            } catch {
+                return "error"
+            }
+        }
+        // SHA-1's and SHA-2's Monte Carlo test: each round hashes the three
+        // digests before, a thousand times. The length is the message's in
+        // ACVP's alternate one, 0 for as long as it comes.
+        case "monte2" => {
+            var seed = bytes(words[2])
+            let length = number(words[3])
+            var text = ""
+            for _ in 0..<100 {
+                var a = seed
+                var b = seed
+                var c = seed
+                for _ in 0..<1000 {
+                    var message = a
+                    message.append(contentsOf: b)
+                    message.append(contentsOf: c)
+                    a = b
+                    b = c
+                    c = H.hash(fitted(message, length)).bytes
+                }
+                text = text + hex(c)
+                seed = c
+            }
+            return text
+        }
+        case "monte3" => {
+            var digest = bytes(words[2])
+            let length = number(words[3])
+            var text = ""
+            for _ in 0..<100 {
+                for _ in 0..<1000 {
+                    digest = H.hash(fitted(digest, length)).bytes
+                }
+                text = text + hex(digest)
+            }
+            return text
+        }
+        case "large" => {
+            let content = bytes(words[2])
+            var block: U8[>..] = []
+            while block.count < 65536 {
+                block.append(contentsOf: content)
+            }
+            var left = number(words[3])
+            var function = H()
+            while left > 0 {
+                let taken = left < block.count ? left : block.count
+                function.update(block[..<taken])
+                left -= taken
+            }
+            return "\(function.finalize())"
+        }
+        case _ => {
+            return "unknown"
+        }
+    }
+}
+
+fn output<X: ExtendableOutputFunction>(_ function: X, _ words: String[>..]) -> String {
+    match words[0] {
+        case "xof" => {
+            let message = bytes(words[2])
+            let count = number(words[3])
+            var one = function
+            one.update(message)
+            let whole = one.finalize(count: count)
+            var inPieces = function
+            var start = 0
+            for end in pieces(message.count) {
+                inPieces.update(message[start..<end])
+                start = end
+            }
+            var reader = inPieces.reader()
+            var read: U8[>..] = []
+            start = 0
+            for end in pieces(count) {
+                read.append(contentsOf: reader.read(count: end - start))
+                start = end
+            }
+            return read == whole ? hex(whole) : "in pieces it is another"
+        }
+        case "montexof" => {
+            var message = bytes(words[2])
+            let least = number(words[3])
+            let most = number(words[4])
+            var count = most
+            var text = ""
+            for _ in 0..<100 {
+                var result: U8[>..] = []
+                for _ in 0..<1000 {
+                    var one = function
+                    one.update(message)
+                    result = one.finalize(count: count)
+                    let last = Int(result[result.count - 2]) * 256 + Int(result[result.count - 1])
+                    count = least + last % (most - least + 1)
+                    message = fitted(result, 16)
+                }
+                text = text + hex(result) + ","
+            }
+            return text
+        }
+        case _ => {
+            return "unknown"
+        }
+    }
+}
+
+// The message under ChaCha20 as RFC 8439 has it, from its first block: the
+// generator's 64-bit counter and stream are the RFC's counter and nonce.
+fn chacha(_ words: String[>..]) -> String {
+    let given = bytes(words[1])
+    let nonce = bytes(words[2])
+    var key: U8[32] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    for i in 0..<32 {
+        key[i] = given[i]
+    }
+    let first = U64(nonce.readU32(at: 0, endian: .Little))
+    let stream = U64(nonce.readU32(at: 4, endian: .Little)) | U64(nonce.readU32(at: 8, endian: .Little)) << 32
+    var generator = ChaCha(key: key, stream: stream)
+    generator.seek(toBlock: 1 | first << 32)
+    let message = bytes(words[3])
+    var made = U8[>..](repeating: 0, count: message.count)
+    generator.fill(bytes: &made)
+    for i in 0..<message.count {
+        made[i] = made[i] ^ message[i]
+    }
+    return hex(made)
+}
+
+fn kmac(_ words: String[>..]) -> String {
+    let key = SymmetricKey(bytes(words[2]))
+    let message = bytes(words[3])
+    let customization = bytes(words[4])
+    let count = number(words[5])
+    if words[1] == "128" {
+        var function = Kmac128(key: key, customization: customization)
+        function.update(message)
+        if words[0] == "kmacxof" {
+            var reader = function.reader()
+            return hex(reader.read(count: count))
+        }
+        let code = function.finalize(count: count)
+        return Kmac128.isValid(code.bytes, for: message, using: key, customization: customization) ? "\(code)" : "its own code is not valid"
+    }
+    var function = Kmac256(key: key, customization: customization)
+    function.update(message)
+    if words[0] == "kmacxof" {
+        var reader = function.reader()
+        return hex(reader.read(count: count))
+    }
+    let code = function.finalize(count: count)
+    return Kmac256.isValid(code.bytes, for: message, using: key, customization: customization) ? "\(code)" : "its own code is not valid"
+}
+
+fn answer(_ words: String[>..]) -> String {
+    if words[0] == "chacha" {
+        return chacha(words)
+    }
+    if words[0] == "kmac" || words[0] == "kmacxof" {
+        return kmac(words)
+    }
+    return match words[1] {
+        case "SHA1"     => hash(Insecure.Sha1.self, words)
+        case "SHA256"   => hash(Sha256.self, words)
+        case "SHA384"   => hash(Sha384.self, words)
+        case "SHA512"   => hash(Sha512.self, words)
+        case "SHA3_256" => hash(Sha3_256.self, words)
+        case "SHA3_384" => hash(Sha3_384.self, words)
+        case "SHA3_512" => hash(Sha3_512.self, words)
+        case "SHAKE128" => output(Shake128(), words)
+        case "SHAKE256" => output(Shake256(), words)
+        case _          => "unknown"
+    }
+}
+
+fn main() {
+    var input = BufferedReader(Console.standardInput)
+    let written = BufferedWriter(Console.standardOutput)
+    while let line = try! input.readLine() {
+        var text: U8[>..] = []
+        text.append(utf8: answer(line.split(separator: ' ')) + "\n")
+        try! written.write(text)
+    }
+    try! written.flush()
+}

@@ -36,9 +36,11 @@ public sealed record Derivation(
     NamedTypeSymbol Type,
     NamedTypeSymbol Protocol,
     DerivedMember Member,
-    AttributeSyntax Attribute,
     SyntaxTree Tree
-);
+) {
+    /// <summary>The <c>@derive</c> that asked for it.</summary>
+    public AttributeSyntax Attribute => (AttributeSyntax)Function.DeclaringSyntax[0];
+}
 
 /// <summary>
 ///     <c>@derive(Equatable, Hashable, Comparable, Debug)</c> (docs/06 §6.5).
@@ -281,7 +283,7 @@ public sealed partial class Compilation {
             if (protocolName == "Serializable" && member == DerivedMember.Decode) {
                 isExplicit = false;
             }
-            var derivation = new Derivation(function, type, protocol, member, attribute, tree);
+            var derivation = new Derivation(function, type, protocol, member, tree);
             _derived.Add(derivation);
             _derivedByFunction[function] = derivation;
 

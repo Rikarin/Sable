@@ -469,7 +469,7 @@ public sealed partial class SilGen {
             var model = generator._compilation.GetSemanticModel(generator.TreeOf(source)!);
             foreach (var part in (FunctionSymbol?[])[yielding.MakeIterator, yielding.Next]) {
                 if (part is not null && generator._names.TryAdd(part, $"{name}${part.Name}")) {
-                    generator._declarations[part] = (closureExpression.Syntax, model);
+                    generator._declarations[part] = new(part, closureExpression.Syntax, model);
                 }
             }
 

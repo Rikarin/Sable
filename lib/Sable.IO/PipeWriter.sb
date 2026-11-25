@@ -42,8 +42,7 @@ public struct PipeWriter: AsyncWriter {
     /// The bytes buffered and flushed; an error, `Disconnected`, once the
     /// reader has completed.
     public fn write(_ bytes: U8[:]) async throws(IoError) {
-        await buffer(bytes)
-        if (await flush()).isCompleted {
+        if (await pipe.flushed(bytes)).isCompleted {
             throw IoError.Disconnected
         }
     }

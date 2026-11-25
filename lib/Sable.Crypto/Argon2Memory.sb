@@ -74,11 +74,11 @@ struct Argon2Memory {
         if independent {
             Native.zero(input, 1024)
             store64(pass unchecked as U64, input)
-            store64(lane unchecked as U64, input + 8)
-            store64(slice unchecked as U64, input + 16)
-            store64((columns * lanes) unchecked as U64, input + 24)
-            store64(passes unchecked as U64, input + 32)
-            store64(2, input + 40)
+            store64(lane unchecked as U64, input &+ 8)
+            store64(slice unchecked as U64, input &+ 16)
+            store64((columns * lanes) unchecked as U64, input &+ 24)
+            store64(passes unchecked as U64, input &+ 32)
+            store64(2, input &+ 40)
         }
         // The first two blocks of all are there already.
         var index = pass == 0 && slice == 0 ? 2 : 0
@@ -92,11 +92,11 @@ struct Argon2Memory {
                 // A block of addresses for each 128.
                 if index >> 7 != made {
                     made = index >> 7
-                    store64((made + 1) unchecked as U64, input + 48)
+                    store64((made + 1) unchecked as U64, input &+ 48)
                     argon2Compress(zeros, input, addresses, keeping: false)
                     argon2Compress(zeros, addresses, addresses, keeping: false)
                 }
-                chosen = load64(addresses + 8 * (index & 127))
+                chosen = load64(addresses &+ 8 &* (index & 127))
             } else {
                 chosen = load64(previous)
             }
@@ -127,7 +127,7 @@ struct Argon2Memory {
             var i = 0
             while i < 1024 {
                 unsafe {
-                    store64(load64(last + i) ^ load64(other + i), last + i)
+                    store64(load64(last &+ i) ^ load64(other &+ i), last &+ i)
                 }
                 i += 8
             }
@@ -149,9 +149,9 @@ struct Argon2Memory {
         let q = work.address + 1024
         var i = 0
         while i < 1024 {
-            let word = load64(x + i) ^ load64(y + i)
-            store64(word, r + i)
-            store64(word, q + i)
+            let word = load64(x &+ i) ^ load64(y &+ i)
+            store64(word, r &+ i)
+            store64(word, q &+ i)
             i += 8
         }
         i = 0
@@ -166,8 +166,8 @@ struct Argon2Memory {
         }
         i = 0
         while i < 1024 {
-            let word = load64(r + i) ^ load64(q + i)
-            store64(keeping ? word ^ load64(target + i) : word, target + i)
+            let word = load64(r &+ i) ^ load64(q &+ i)
+            store64(keeping ? word ^ load64(target &+ i) : word, target &+ i)
             i += 8
         }
     }
@@ -183,21 +183,21 @@ fn argon2Add(_ a: U64, _ b: U64) -> U64 {
 /// that many bytes apart.
 unsafe fn argon2Permute(_ first: Int, _ step: Int) {
     var v0 = load64(first)
-    var v1 = load64(first + 8)
-    var v2 = load64(first + step)
-    var v3 = load64(first + step + 8)
-    var v4 = load64(first + 2 * step)
-    var v5 = load64(first + 2 * step + 8)
-    var v6 = load64(first + 3 * step)
-    var v7 = load64(first + 3 * step + 8)
-    var v8 = load64(first + 4 * step)
-    var v9 = load64(first + 4 * step + 8)
-    var v10 = load64(first + 5 * step)
-    var v11 = load64(first + 5 * step + 8)
-    var v12 = load64(first + 6 * step)
-    var v13 = load64(first + 6 * step + 8)
-    var v14 = load64(first + 7 * step)
-    var v15 = load64(first + 7 * step + 8)
+    var v1 = load64(first &+ 8)
+    var v2 = load64(first &+ step)
+    var v3 = load64(first &+ step &+ 8)
+    var v4 = load64(first &+ 2 &* step)
+    var v5 = load64(first &+ 2 &* step &+ 8)
+    var v6 = load64(first &+ 3 &* step)
+    var v7 = load64(first &+ 3 &* step &+ 8)
+    var v8 = load64(first &+ 4 &* step)
+    var v9 = load64(first &+ 4 &* step &+ 8)
+    var v10 = load64(first &+ 5 &* step)
+    var v11 = load64(first &+ 5 &* step &+ 8)
+    var v12 = load64(first &+ 6 &* step)
+    var v13 = load64(first &+ 6 &* step &+ 8)
+    var v14 = load64(first &+ 7 &* step)
+    var v15 = load64(first &+ 7 &* step &+ 8)
     v0 = argon2Add(v0, v4)
     v12 = (v12 ^ v0).rotatedRight(by: 32)
     v8 = argon2Add(v8, v12)
@@ -263,19 +263,19 @@ unsafe fn argon2Permute(_ first: Int, _ step: Int) {
     v9 = argon2Add(v9, v14)
     v4 = (v4 ^ v9).rotatedRight(by: 63)
     store64(v0, first)
-    store64(v1, first + 8)
-    store64(v2, first + step)
-    store64(v3, first + step + 8)
-    store64(v4, first + 2 * step)
-    store64(v5, first + 2 * step + 8)
-    store64(v6, first + 3 * step)
-    store64(v7, first + 3 * step + 8)
-    store64(v8, first + 4 * step)
-    store64(v9, first + 4 * step + 8)
-    store64(v10, first + 5 * step)
-    store64(v11, first + 5 * step + 8)
-    store64(v12, first + 6 * step)
-    store64(v13, first + 6 * step + 8)
-    store64(v14, first + 7 * step)
-    store64(v15, first + 7 * step + 8)
+    store64(v1, first &+ 8)
+    store64(v2, first &+ step)
+    store64(v3, first &+ step &+ 8)
+    store64(v4, first &+ 2 &* step)
+    store64(v5, first &+ 2 &* step &+ 8)
+    store64(v6, first &+ 3 &* step)
+    store64(v7, first &+ 3 &* step &+ 8)
+    store64(v8, first &+ 4 &* step)
+    store64(v9, first &+ 4 &* step &+ 8)
+    store64(v10, first &+ 5 &* step)
+    store64(v11, first &+ 5 &* step &+ 8)
+    store64(v12, first &+ 6 &* step)
+    store64(v13, first &+ 6 &* step &+ 8)
+    store64(v14, first &+ 7 &* step)
+    store64(v15, first &+ 7 &* step &+ 8)
 }

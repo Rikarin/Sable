@@ -130,3 +130,99 @@ fn twoWatchersBothHear() async throws {
     let event = FileEvent { kind: .Created, path: path }
     assert(event == FileEvent { kind: .Created, path: path } && event != FileEvent { kind: .Rescan, path: path })
 }
+
+@test
+fn aFileReplacedIsStillWatched() async throws {
+    let temp = try Temp.directory()
+    let path = temp.path.appending("file")
+    try File.write(path, "one")
+    let watcher = try FileWatcher.watch(path)
+    // As an editor saves it, twice: what is watched is the path.
+    for text in ["two", "three"] {
+        try? await Task.sleep(for: Duration.milliseconds(100))
+        let beside = try Temp.file(in: temp.path)
+        try beside.file.write(text.utf8Bytes())
+        try beside.persist(to: path)
+        let heard = try? await withTimeout(Duration.seconds(10)) {
+            for await event in watcher {
+                assert(event.path == path)
+                if event.kind != .Removed {
+                    return true
+                }
+            }
+            return false
+        }
+        assert(heard ?? false, text)
+    }
+    try File.remove(path)
+    assert(await comes(watcher, .Removed, path))
+    try File.write(path, "four")
+    assert(await comes(watcher, .Created, path))
+}
+
+@test
+fn whatIsMovedIsWatchedByItsNewName() async throws {
+    let temp = try Temp.directory()
+    let inside = temp.path.appending("inside")
+    try Directory.create(inside.appending("a"), recursive: true)
+    let watcher = try FileWatcher.watch(inside)
+
+    // Within it, with a directory in it.
+    try Directory.create(inside.appending("a/deep"))
+    assert(await comes(watcher, .Created, inside.appending("a/deep")))
+    try File.rename(from: inside.appending("a"), to: inside.appending("b"))
+    assert(await comes(watcher, .Created, inside.appending("b")))
+    try File.write(inside.appending("b/deep/x"), "x")
+    assert(await comes(watcher, .Created, inside.appending("b/deep/x")))
+
+    // Out of it: removed, and no longer watched.
+    let outside = temp.path.appending("outside")
+    try File.rename(from: inside.appending("b"), to: outside)
+    assert(await comes(watcher, .Removed, inside.appending("b")))
+    try File.write(outside.appending("deep/y"), "y")
+    try File.write(inside.appending("after"), "z")
+    var iterator = watcher.makeAsyncIterator()
+    while true {
+        let event = (await iterator.next())!
+        assert(event.path.fileName != "y", "\(event.path)")
+        if event.path.fileName == "after" {
+            break
+        }
+    }
+
+    // And in again.
+    try File.rename(from: outside, to: inside.appending("c"))
+    assert(await comes(watcher, .Created, inside.appending("c")))
+    try File.write(inside.appending("c/deep/z"), "z")
+    assert(await comes(watcher, .Created, inside.appending("c/deep/z")))
+}
+
+@test
+fn theRemovalOfWhatIsWatchedComes() async throws {
+    let temp = try Temp.directory()
+    let path = temp.path.appending("d")
+    try Directory.create(path)
+    let watcher = try FileWatcher.watch(path)
+    try Directory.remove(path)
+    assert(await comes(watcher, .Removed, path))
+}
+
+// More happens than is kept: it is said that what is there must be looked
+// at again, and what happens after is told as before.
+@test
+fn whatIsNotTakenInTimeIsARescan() async throws {
+    let temp = try Temp.directory()
+    let watcher = try FileWatcher.watch(temp.path)
+    var i = 0
+    while i < 10000 {
+        let path = temp.path.appending("\(i)")
+        try File.write(path, "")
+        try File.remove(path)
+        i += 1
+    }
+    try Directory.create(temp.path.appending("late"))
+    try await Task.sleep(for: Duration.seconds(1))
+    assert(await comes(watcher, .Rescan, temp.path))
+    try File.write(temp.path.appending("late/x"), "x")
+    assert(await comes(watcher, .Created, temp.path.appending("late/x")))
+}

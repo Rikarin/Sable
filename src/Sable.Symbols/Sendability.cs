@@ -168,6 +168,5 @@ internal static class Sendability {
     ///     '@MainActor' keeps its state where only the main actor reaches it.
     /// </summary>
     static bool Has(NamedTypeSymbol type, string attribute) =>
-        type.DeclaringSyntax.Any(s => s is Sable.Syntax.ClassDeclarationSyntax { Attributes: var attributes }
-            && attributes.Any(a => a.Name.ToString().Trim() == attribute));
+        type is { TypeKind: TypeKind.Class, IsDeclared: true } && type.OriginalDefinition.GetAttribute(attribute) is { FromExtension: false };
 }

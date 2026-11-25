@@ -129,6 +129,10 @@ static bool mutex_try_lock(PlatformMutex *mutex) {
     return true;
 }
 
+static bool mutex_looks_free(PlatformMutex *mutex) {
+    return !mutex->held;
+}
+
 static void condition_init(PlatformCondition *condition) {
     condition->signalled = 0;
 }

@@ -1,0 +1,56 @@
+module Sable.Crypto
+
+import Sable.IO
+
+// Streams hashed and authenticated as they are read, without all of one in
+// memory at once.
+
+/// How much is asked of a reader at a time.
+let streamedBytes: Int = 65536
+
+extension HashFunction {
+    /// Hashes what the reader has left, to its end, after the bytes
+    /// already given.
+    public mutating fn update<R: Reader>(reading reader: inout R) throws(IoError) {
+        while true {
+            let bytes = try reader.read(upTo: streamedBytes)
+            if bytes.isEmpty {
+                return
+            }
+            self.update(bytes)
+        }
+    }
+
+    /// Hashes what the reader has left, to its end, after the bytes
+    /// already given, the task suspended while it waits for them.
+    public mutating fn update<R: AsyncReader>(reading reader: R) async throws(IoError) {
+        while true {
+            let bytes = try await reader.read(upTo: streamedBytes)
+            if bytes.isEmpty {
+                return
+            }
+            self.update(bytes)
+        }
+    }
+
+    /// The digest of what the reader has left, to its end. .NET's `HashData`
+    /// of a stream.
+    ///
+    /// ```sable
+    /// var stream = MemoryStream([0x61, 0x62, 0x63])
+    /// assert((try! Sha256.hash(reading: &stream)) == Sha256.hash(utf8: "abc"))
+    /// ```
+    public static fn hash<R: Reader>(reading reader: inout R) throws(IoError) -> Digest {
+        var function = Self()
+        try function.update(reading: &reader)
+        return function.finalizeAndReset()
+    }
+
+    /// The digest of what the reader has left, to its end, the task
+    /// suspended while it waits for it.
+    public static fn hash<R: AsyncReader>(reading reader: R) async throws(IoError) -> Digest {
+        var function = Self()
+        try await function.update(reading: reader)
+        return function.finalizeAndReset()
+    }
+}

@@ -628,6 +628,17 @@ static bool mutex_try_lock(PlatformMutex *mutex) {
     return pthread_mutex_trylock(mutex) == 0;
 }
 
+// What it looks like now, without taking its cache line from the thread that
+// holds it; true where the system's mutex does not say.
+static bool mutex_looks_free(PlatformMutex *mutex) {
+#if defined(__GLIBC__)
+    return __atomic_load_n(&mutex->__data.__lock, __ATOMIC_RELAXED) == 0;
+#else
+    (void)mutex;
+    return true;
+#endif
+}
+
 // A timed wait counts on the monotonic clock: macOS waits for a relative
 // time, and elsewhere the condition is made to use that clock.
 static void condition_init(PlatformCondition *condition) {
@@ -1769,11 +1780,17 @@ static char *executable_path(int argc, char **argv) {
 // ---- Randomness ----------------------------------------------------------
 
 static bool random_bytes(void *buffer, size_t length) {
-    // getentropy gives at most 256 bytes a call, all of them or none.
+#if defined(__APPLE__)
+    // The system's generator in the process, which is seeded by the kernel's
+    // and again after a fork, and which cannot fail: a call of getentropy
+    // for each 256 bytes takes twenty times as long.
+    arc4random_buf(buffer, length);
+#else
+    // As much as there is left: it gives less when a signal comes.
     char *next = buffer;
     while (length > 0) {
-        size_t part = length < 256 ? length : 256;
-        if (getentropy(next, part) != 0) {
+        ssize_t given = getrandom(next, length, 0);
+        if (given < 0) {
             if (errno == EINTR) {
                 continue;
             }
@@ -1781,9 +1798,10 @@ static bool random_bytes(void *buffer, size_t length) {
             return false;
         }
 
-        next += part;
-        length -= part;
+        next += given;
+        length -= (size_t)given;
     }
+#endif
 
     return true;
 }

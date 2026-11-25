@@ -23,6 +23,11 @@ public struct Digest: Hashable, Formattable, Debug, Sendable {
         self.bytes = bytes.toArray()
     }
 
+    /// The digest those bytes are, not copied.
+    init(taking bytes: consuming U8[>..]) {
+        self.bytes = bytes
+    }
+
     /// How many bytes the digest has.
     public var count: Int => bytes.count
 

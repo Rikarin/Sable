@@ -1,0 +1,71 @@
+module Sable.Serialize.Asn1
+
+/// A BIT STRING's value: bits, the first the top one of the first byte.
+///
+/// ```sable
+/// let bits = AsnBitString(bytes: [0b1010_0000], unusedBits: 5)
+/// assert(bits.count == 3)
+/// assert(bits[0] && !bits[1] && bits[2])
+/// ```
+@derive(Equatable, Debug)
+public struct AsnBitString {
+    /// The bits, eight a byte, the last byte's unused ones zero.
+    public let bytes: U8[:]
+    /// How many of the last byte's low bits are not the value's: 0 to 7.
+    public let unusedBits: Int
+
+    /// The bytes' bits, but for so many at the end. Traps unless those are 0
+    /// to 7 and, with no bytes, 0.
+    public init(bytes: U8[:], unusedBits: Int = 0) {
+        if unusedBits < 0 || unusedBits > 7 || (unusedBits > 0 && bytes.isEmpty) {
+            preconditionFailure("\(bytes.count) bytes have not \(unusedBits) unused bits")
+        }
+        self.unusedBits = unusedBits
+        if unusedBits > 0 && (bytes[bytes.count - 1] & unusedMask(unusedBits)) != 0 {
+            var cleared = bytes.toArray()
+            cleared[bytes.count - 1] &= ~unusedMask(unusedBits)
+            self.bytes = cleared
+        } else {
+            self.bytes = bytes
+        }
+    }
+
+    /// How many bits there are.
+    public var count: Int => bytes.count * 8 - unusedBits
+
+    /// Whether there are no bits.
+    public var isEmpty: Bool => bytes.isEmpty
+
+    /// Whether the bit is 1; traps past the last.
+    public subscript(index: Int) -> Bool {
+        get {
+            if index < 0 || index >= count {
+                preconditionFailure("there is no bit \(index) of \(count)")
+            }
+            return (bytes[index / 8] >> U8(7 - index % 8) & 1) == 1
+        }
+    }
+
+    /// Whether the bit is 1: false past the last, as a named bit is.
+    public fn has(_ index: Int) -> Bool {
+        return index >= 0 && index < count && self[index]
+    }
+
+    // The bits without the zeros after the last one, as CER and DER have a
+    // named bit list.
+    var trimmed: AsnBitString {
+        get {
+            var last = count - 1
+            while last >= 0 && !self[last] {
+                last -= 1
+            }
+            let size = (last + 8) / 8
+            return AsnBitString(bytes: bytes[0..<size], unusedBits: size * 8 - last - 1)
+        }
+    }
+}
+
+// The low bits a bit string does not use.
+fn unusedMask(_ unusedBits: Int) -> U8 {
+    return U8((1 << unusedBits) - 1)
+}

@@ -1,16 +1,16 @@
 module Sable.Core
 
 /// The operating system's random numbers: each draw is fresh bits from its
-/// cryptographically secure source (getentropy on macOS, Linux and WASI,
-/// BCryptGenRandom on Windows), so no run repeats another and no output
+/// cryptographically secure source (arc4random on macOS, getrandom on
+/// Linux, BCryptGenRandom on Windows, random_get on WASI), so no run repeats another and no output
 /// predicts the next; a program it fails for is stopped, never given other
 /// bits. What every 'random' function uses when not given a
 /// generator. Swift's `SystemRandomNumberGenerator`; Rust's `OsRng`.
 ///
 /// It keeps no state, so one can be made wherever it is needed. Each draw
-/// asks the system, which is slower than a seeded generator; for many
-/// draws that need not be secret, seed a SeededRandomNumberGenerator from
-/// it.
+/// asks the system, which is slower than a seeded generator: for many bytes
+/// 'fill(bytes:)' asks once, and for many draws that need not be secret,
+/// seed a SeededRandomNumberGenerator from it.
 ///
 /// ```sable
 /// var system = SystemRandomNumberGenerator()
@@ -27,4 +27,23 @@ public struct SystemRandomNumberGenerator: RandomNumberGenerator {
     public mutating fn next() -> U64 {
         return Runtime.randomBits() unchecked as U64
     }
+
+    /// Fills every byte with random bits, asking the system for all of them
+    /// at once.
+    ///
+    /// ```sable
+    /// var system = SystemRandomNumberGenerator()
+    /// var salt = U8[>..](repeating: 0, count: 16)
+    /// system.fill(bytes: &salt)
+    /// assert(salt != U8[>..](repeating: 0, count: 16))
+    /// ```
+    public mutating fn fill(bytes: inout U8[:]) {
+        bytes.fillFromSystem()
+    }
+}
+
+extension U8[:] {
+    /// Every byte one from the system's random source.
+    @builtin("bytes_random")
+    mutating fn fillFromSystem()
 }

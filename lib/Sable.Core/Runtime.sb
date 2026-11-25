@@ -307,6 +307,11 @@ public struct Runtime {
     @builtin("lock_acquire")
     public static fn lockAcquire(_ lock: Int)
 
+    /// As 'lockAcquire', by a thread that comes for many things at once: if
+    /// the lock is held, it lets them gather for a microsecond or so first.
+    @builtin("lock_acquire_later")
+    public static fn lockAcquireLater(_ lock: Int)
+
     @builtin("lock_try_acquire")
     public static fn lockTryAcquire(_ lock: Int) -> Bool
 
@@ -669,9 +674,8 @@ public struct Runtime {
     @builtin("hash_seed")
     public static fn hashSeed() -> Int
 
-    /// 64 bits from the operating system's random source (getentropy, or
-    /// BCryptGenRandom on Windows; a trap when it fails), fresh at each call: what
-    /// SystemRandomNumberGenerator draws.
+    /// 64 bits from the operating system's random source (a trap when
+    /// it fails), fresh at each call: what SystemRandomNumberGenerator draws.
     @builtin("random_bits")
     public static fn randomBits() -> Int
 

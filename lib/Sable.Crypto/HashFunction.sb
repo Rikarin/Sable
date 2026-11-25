@@ -37,6 +37,18 @@ public protocol HashFunction: Sendable {
     /// was: more can be given, and a later `finalize` covers it all.
     fn finalize() -> Digest
 
+    /// The digest of every byte given so far, after which nothing has been:
+    /// quicker than 'finalize' where nothing more is to be hashed, as the
+    /// function's own memory is worked in and not a copy of it.
+    ///
+    /// ```sable
+    /// var hash = Sha256()
+    /// hash.update(utf8: "abc")
+    /// assert(hash.finalizeAndReset() == Sha256.hash(utf8: "abc"))
+    /// assert(hash.finalize() == Sha256.hash([]))
+    /// ```
+    mutating fn finalizeAndReset() -> Digest
+
     /// PBKDF2's inner loop: HMAC of the first block, HMAC of that, and so
     /// on to as many blocks as there are iterations, all combined by
     /// exclusive or. The functions given have HMAC's two padded keys hashed.
@@ -46,6 +58,12 @@ public protocol HashFunction: Sendable {
 }
 
 extension HashFunction {
+    public mutating fn finalizeAndReset() -> Digest {
+        let digest = self.finalize()
+        self = Self()
+        return digest
+    }
+
     public static fn iterateHmac(inner: Self, outer: Self, first: U8[:], iterations: Int) -> U8[>..] {
         var sum = first.toArray()
         var block = first.toArray()
@@ -54,8 +72,11 @@ extension HashFunction {
             var hash = inner
             hash.update(block)
             var end = outer
-            end.update(hash.finalize().bytes)
-            block = end.finalize().bytes
+            var digest = hash.finalizeAndReset().bytes
+            end.update(digest)
+            digest.zeroSecurely()
+            block.zeroSecurely()
+            block = end.finalizeAndReset().bytes
             var i = 0
             while i < sum.count {
                 sum[i] = sum[i] ^ block[i]
@@ -83,7 +104,7 @@ extension HashFunction {
     public static fn hash(_ bytes: U8[:]) -> Digest {
         var function = Self()
         function.update(bytes)
-        return function.finalize()
+        return function.finalizeAndReset()
     }
 
     /// The digest of the text's UTF-8 bytes.
@@ -94,6 +115,6 @@ extension HashFunction {
     public static fn hash(utf8 text: String) -> Digest {
         var function = Self()
         function.update(utf8: text)
-        return function.finalize()
+        return function.finalizeAndReset()
     }
 }

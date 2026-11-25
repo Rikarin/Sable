@@ -22,16 +22,54 @@ namespace Sable.Syntax;
 /// </remarks>
 public sealed class SyntaxTree {
     readonly SyntaxToken _trailingEndOfFile;
+    readonly SyntaxNode? _root;
+    readonly IReadOnlyList<Diagnostic>? _diagnostics;
+
+    /// <summary>For a tree parsed when first asked for (<see cref="Deferred" />), its content; null for any other.</summary>
+    readonly Lazy<SyntaxTree>? _deferred;
 
     public SourceText Text { get; }
-    public SyntaxNode Root { get; }
-    public IReadOnlyList<Diagnostic> Diagnostics { get; }
+    public SyntaxNode Root => _root ?? _deferred!.Value.Root;
+    public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics ?? _deferred!.Value.Diagnostics;
+
+    /// <summary>Whether the text has been parsed: a <see cref="Deferred" /> tree's is when something first asks for its nodes.</summary>
+    public bool IsParsed => _deferred is null || _deferred.IsValueCreated;
+
+    /// <summary>
+    ///     A tree whose text is parsed only once something asks for its nodes
+    ///     or diagnostics: a file of the standard library, of which a build
+    ///     against its interface reads few (docs/05 §5.4). What it is to its
+    ///     module — the module it declares and those it imports — is known
+    ///     without parsing it (<see cref="Header" />).
+    /// </summary>
+    public static SyntaxTree Deferred(SourceText text, ParseOptions options) => new(text, options);
+
+    SyntaxTree(SourceText text, ParseOptions options) {
+        Text = text;
+        Options = options;
+        _deferred = new(() => Parse(text, options));
+        _header = new(() => SourceHeader.Scan(text.Text) ?? SourceHeader.Of(Root));
+    }
+
+    readonly Lazy<SourceHeader>? _header;
+    SourceHeader? _parsedHeader;
+
+    /// <summary>The module the file declares and the modules it imports, without parsing a file not parsed yet.</summary>
+    public SourceHeader Header => _header?.Value ?? (_parsedHeader ??= SourceHeader.Of(Root));
+
+    /// <summary>Parses the trees that are not parsed yet (<see cref="Deferred" />), each once, several at a time.</summary>
+    public static void ParseAll(IEnumerable<SyntaxTree> trees) {
+        var pending = trees.Where(static t => !t.IsParsed).ToList();
+        if (pending.Count > 0) {
+            Parallel.ForEach(pending, static t => _ = t.Root);
+        }
+    }
 
     /// <summary>
     ///     The end-of-file token. A compilation unit owns it as a child; the
     ///     single-construct entry points carry it beside the root instead.
     /// </summary>
-    public SyntaxToken EndOfFileToken =>
+    public SyntaxToken EndOfFileToken => _deferred is not null ? _deferred.Value.EndOfFileToken :
         _trailingEndOfFile.IsNone && Root is CompilationUnitSyntax unit
             ? unit.EndOfFileToken
             : _trailingEndOfFile;
@@ -40,13 +78,17 @@ public sealed class SyntaxTree {
     ///     The token stream this tree was built from, kept so that an edit can
     ///     splice rather than re-lex.
     /// </summary>
-    internal ImmutableArray<GreenToken> Tokens { get; }
+    internal ImmutableArray<GreenToken> Tokens => _deferred?.Value.Tokens ?? _tokens;
+
+    readonly ImmutableArray<GreenToken> _tokens = [];
 
     /// <summary>
     ///     True when the file uses conditional compilation, which makes the lexer
     ///     stateful across tokens and so rules out splicing.
     /// </summary>
-    internal bool HasDirectives { get; }
+    internal bool HasDirectives => _deferred?.Value.HasDirectives ?? _hasDirectives;
+
+    readonly bool _hasDirectives;
 
     internal SyntaxTree(
         SourceText text,
@@ -60,22 +102,22 @@ public sealed class SyntaxTree {
         IReadOnlyDictionary<GreenNode, TokenExtent>? memberExtents = null
     ) {
         Text = text;
-        Root = root;
+        _root = root;
         _trailingEndOfFile = endOfFileToken;
         Options = options;
 
         // Sorted so that a full parse and an incremental one, which collect
         // diagnostics in different orders, report the same sequence.
-        Diagnostics = [
+        _diagnostics = [
             ..diagnostics
                 .OrderBy(static d => d.Span.Start)
                 .ThenBy(static d => d.Span.Length)
                 .ThenBy(static d => (int)d.Code)
         ];
-        Tokens = tokens.IsDefault ? [] : tokens;
-        HasDirectives = hasDirectives;
-        LexicalDiagnostics = lexicalDiagnostics ?? [];
-        MemberExtents = memberExtents ?? new Dictionary<GreenNode, TokenExtent>();
+        _tokens = tokens.IsDefault ? [] : tokens;
+        _hasDirectives = hasDirectives;
+        _lexicalDiagnostics = lexicalDiagnostics ?? [];
+        _memberExtents = memberExtents ?? new Dictionary<GreenNode, TokenExtent>();
     }
 
     /// <summary>
@@ -83,7 +125,9 @@ public sealed class SyntaxTree {
     ///     <see cref="Tokens" />: its own, and any it looked at past either end.
     ///     A member is reused only while all of these are unchanged.
     /// </summary>
-    internal IReadOnlyDictionary<GreenNode, TokenExtent> MemberExtents { get; }
+    internal IReadOnlyDictionary<GreenNode, TokenExtent> MemberExtents => _memberExtents ?? _deferred!.Value.MemberExtents;
+
+    readonly IReadOnlyDictionary<GreenNode, TokenExtent>? _memberExtents;
 
     /// <summary>
     ///     The diagnostics the lexer of the whole file produced, kept apart
@@ -95,7 +139,9 @@ public sealed class SyntaxTree {
     ///     say: an interpolation hole is lexed by the parser, and its lexer
     ///     errors are the parser's to regenerate.
     /// </remarks>
-    internal IReadOnlyList<Diagnostic> LexicalDiagnostics { get; }
+    internal IReadOnlyList<Diagnostic> LexicalDiagnostics => _lexicalDiagnostics ?? _deferred!.Value.LexicalDiagnostics;
+
+    readonly IReadOnlyList<Diagnostic>? _lexicalDiagnostics;
 
     /// <summary>The diagnostics the parser produced, holes included.</summary>
     internal IEnumerable<Diagnostic> ParserDiagnostics {

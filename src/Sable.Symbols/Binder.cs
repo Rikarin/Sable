@@ -6634,7 +6634,9 @@ public sealed partial class Binder {
                 return Reject($"argument {i + 1} is {mismatch}, and '{parameter.Name}' takes '{wanted.ToDisplayString()}'");
             }
 
-            var conversion = _conversions.Classify(arguments[i].Type, wanted, IsLiteral(arguments[i]) || IsLiteralOnly(arguments[i].Syntax));
+            var conversion = KeepsItsElements(arguments[i], wanted)
+                ? null
+                : _conversions.Classify(arguments[i].Type, wanted, IsLiteral(arguments[i]) || IsLiteralOnly(arguments[i].Syntax));
 
             // An '@autoclosure' parameter passed on bare is the overload it
             // was meant for, and is told to call it (S3516).
@@ -6745,7 +6747,7 @@ public sealed partial class Binder {
                 // 'f(3) { … }' of 'f(_ x: Int, scale: Int = 2, by: (Int) -> Int)'.
                 while (next < parameters.Length - 1
                        && !parameters[next].IsVariadic
-                       && (parameters[next].DeclaringSyntax is [ParameterSyntax { DefaultValue: not null }]
+                       && (parameters[next] is { HasDefaultValue: true, IsDeclared: true }
                            || MemberwiseField(parameters[next]) is not null)
                        && !ResemblesFunction(parameters[next].Type)) {
                     next++;
@@ -6753,7 +6755,7 @@ public sealed partial class Binder {
             } else if (i < labels.Length && labels[i] is { } label) {
                 var reach = next;
                 while (reach < parameters.Length
-                       && (parameters[reach].DeclaringSyntax is [ParameterSyntax { DefaultValue: not null, EllipsisToken.IsNone: true }]
+                       && (parameters[reach] is { HasDefaultValue: true, IsVariadic: false, IsDeclared: true }
                            || MemberwiseField(parameters[reach]) is not null)
                        && !Names(parameters[reach], label)) {
                     reach++;
@@ -6867,6 +6869,24 @@ public sealed partial class Binder {
     static bool IsLiteral(BoundExpression expression) =>
         expression is BoundLiteral or BoundArray or BoundDictionary
         || expression is BoundRange range && (range.Lower is null or BoundLiteral) && (range.Upper is null or BoundLiteral);
+
+    /// <summary>
+    ///     True for an array literal bound already whose elements are of
+    ///     another number type than the array wanted, and not all of them
+    ///     literals that bend to it: <c>[count, 1]</c> of an <c>Int</c> is no
+    ///     <c>U8[:]</c>.
+    /// </summary>
+    bool KeepsItsElements(BoundExpression expression, TypeSymbol target) {
+        while (target is OptionalTypeSymbol optional) {
+            target = optional.UnderlyingType;
+        }
+
+        return expression is BoundArray { Type: ArrayTypeSymbol { ElementType: var own } } array
+               && target is ArrayTypeSymbol { ElementType: var wanted }
+               && !own.Equals(wanted)
+               && Core.IsNumeric(wanted)
+               && !array.Elements.All(static e => e is BoundLiteral or BoundConversion { Operand: BoundLiteral } || IsLiteralOnly(e.Syntax));
+    }
 
     /// <summary>The message for a value of one type where another is wanted.</summary>
     /// <remarks>
@@ -9778,7 +9798,7 @@ public sealed partial class Binder {
             return expression;
         }
 
-        var conversion = _conversions.Classify(expression.Type, target, IsLiteral(expression));
+        var conversion = KeepsItsElements(expression, target) ? null : _conversions.Classify(expression.Type, target, IsLiteral(expression));
 
         // 'let o: (any Shape)? = Square()': into what the optional wraps,
         // boxed or upcast, and then wrapped.

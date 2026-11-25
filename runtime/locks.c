@@ -32,9 +32,21 @@ void sable_lock_free(void *mutex) {
 // nanoseconds — a collection's shard, a queue's end — so a thread tries
 // again a few times before it asks the system to put it to sleep, which
 // costs the sleeper and the thread that wakes it each a call into the kernel.
+//
 // The pause between is short on ARM ('yield'): a thread that waits out the
 // holder awake there only passes the lock to and fro, where asleep it leaves
-// the holder to take it again and again.
+// the holder to take it again and again. On x86, where a sleep and its wake
+// cost more, the pause is twice as long each time instead, up to some
+// microseconds: long enough for the holder to take the lock many times over
+// with no one else at its cache line. And the lock is looked at before it is
+// tried (mutex_looks_free), as a try that fails takes the line from the
+// holder too.
+#if defined(__aarch64__)
+enum { LOCK_SPINS = 40, LOCK_FIRST_PAUSES = 8, LOCK_MOST_PAUSES = 8 };
+#else
+enum { LOCK_SPINS = 12, LOCK_FIRST_PAUSES = 1, LOCK_MOST_PAUSES = 128 };
+#endif
+
 static inline void lock_pause(void) {
 #if defined(__aarch64__)
     __asm__ __volatile__("yield");
@@ -43,24 +55,48 @@ static inline void lock_pause(void) {
 #endif
 }
 
-enum { LOCK_SPINS = 40 };
-
-void sable_lock_acquire(void *mutex) {
-    if (mutex_try_lock(mutex)) {
-        return;
-    }
-
+static __attribute__((noinline)) void lock_acquire_held(void *mutex) {
+    count_executor(&locks_contended);
+    int pauses = LOCK_FIRST_PAUSES;
     for (int spin = 0; spin < LOCK_SPINS; spin++) {
-        for (int pause = 0; pause < 8; pause++) {
+        for (int pause = 0; pause < pauses; pause++) {
             lock_pause();
         }
 
-        if (mutex_try_lock(mutex)) {
+        pauses = pauses * 2 < LOCK_MOST_PAUSES ? pauses * 2 : LOCK_MOST_PAUSES;
+        if (mutex_looks_free(mutex) && mutex_try_lock(mutex)) {
             return;
         }
     }
 
+    count_executor(&locks_slept);
     mutex_lock(mutex);
+}
+
+void sable_lock_acquire(void *mutex) {
+    if (!mutex_try_lock(mutex)) {
+        lock_acquire_held(mutex);
+    }
+}
+
+// For a thread that takes the lock to have many things at once of those the
+// threads it meets there add one at a time: if it is held, one of them is at
+// it now, and a wait of a microsecond or two, away from its cache line, finds
+// many more. Back at once, the thread would find a few and soon be back
+// again, and each of the two would wait for the line at each. Four turns is
+// the steadiest measured: with two, Intel's threads still meet that way.
+enum { LATER_TURNS = 4 };
+
+void sable_lock_acquire_later(void *mutex) {
+    if (mutex_try_lock(mutex)) {
+        return;
+    }
+
+    for (int turn = 0; turn < LATER_TURNS; turn++) {
+        spin_turn();
+    }
+
+    sable_lock_acquire(mutex);
 }
 
 bool sable_lock_try_acquire(void *mutex) {

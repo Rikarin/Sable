@@ -1,0 +1,63 @@
+module Sable.Crypto
+
+import Sable.IO
+
+extension Hmac {
+    /// Authenticates what the reader has left, to its end, after the bytes
+    /// already given.
+    public mutating fn update<R: Reader>(reading reader: inout R) throws(IoError) {
+        while true {
+            let bytes = try reader.read(upTo: streamedBytes)
+            if bytes.isEmpty {
+                return
+            }
+            self.update(bytes)
+        }
+    }
+
+    /// Authenticates what the reader has left, to its end, after the bytes
+    /// already given, the task suspended while it waits for them.
+    public mutating fn update<R: AsyncReader>(reading reader: R) async throws(IoError) {
+        while true {
+            let bytes = try await reader.read(upTo: streamedBytes)
+            if bytes.isEmpty {
+                return
+            }
+            self.update(bytes)
+        }
+    }
+
+    /// The code of what the reader has left, to its end.
+    ///
+    /// ```sable
+    /// let key = SymmetricKey.random(byteCount: 32)
+    /// var stream = MemoryStream([1, 2, 3])
+    /// let code = try! Hmac<Sha256>.authenticationCode(reading: &stream, using: key)
+    /// assert(Hmac<Sha256>.isValid(code, for: [1, 2, 3], using: key))
+    /// ```
+    public static fn authenticationCode<R: Reader>(reading reader: inout R, using key: SymmetricKey) throws(IoError) -> Digest {
+        var code = Hmac<H>(key: key)
+        try code.update(reading: &reader)
+        return code.spend()
+    }
+
+    /// The code of what the reader has left, to its end, the task suspended
+    /// while it waits for it.
+    public static fn authenticationCode<R: AsyncReader>(reading reader: R, using key: SymmetricKey) async throws(IoError) -> Digest {
+        var code = Hmac<H>(key: key)
+        try await code.update(reading: reader)
+        return code.spend()
+    }
+
+    /// Whether the code is that of what the reader has left, to its end,
+    /// compared in constant time.
+    public static fn isValid<R: Reader>(_ code: U8[:], reading reader: inout R, using key: SymmetricKey) throws(IoError) -> Bool {
+        return constantTimeEquals((try Hmac<H>.authenticationCode(reading: &reader, using: key)).bytes, code)
+    }
+
+    /// Whether the code is that of what the reader has left, to its end,
+    /// compared in constant time, the task suspended while it waits for it.
+    public static fn isValid<R: AsyncReader>(_ code: U8[:], reading reader: R, using key: SymmetricKey) async throws(IoError) -> Bool {
+        return constantTimeEquals((try await Hmac<H>.authenticationCode(reading: reader, using: key)).bytes, code)
+    }
+}

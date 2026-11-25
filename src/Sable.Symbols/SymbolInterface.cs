@@ -33,7 +33,7 @@ namespace Sable.Symbols;
 /// </remarks>
 public static class SymbolInterface {
     /// <summary>The section's own version: bump when what is written, or what it means, changes.</summary>
-    public const int Version = 2;
+    public const int Version = 3;
 
     enum Entry : byte {
         Module = 1,
@@ -87,12 +87,19 @@ public static class SymbolInterface {
     ///     <paramref name="context" /> — the compilation's modules, or the
     ///     units read before — and, without it, in what the modules import.
     /// </summary>
-    public static byte[] Write(IEnumerable<ModuleSymbol> modules, IEnumerable<ModuleSymbol>? context = null) {
-        var writer = new SymbolWriter([..modules], context?.ToList());
+    public static byte[] Write(IEnumerable<ModuleSymbol> modules, IEnumerable<ModuleSymbol>? context = null) => Write(modules, context, [], out _);
+
+    /// <param name="roots">Declarations of the modules' that no member list has and nothing else may name: the types array extensions declare their members on, extensions with no members.</param>
+    /// <param name="table">The declarations written, in their order: what else is written of one is by its index.</param>
+    internal static byte[] Write(IEnumerable<ModuleSymbol> modules, IEnumerable<ModuleSymbol>? context, IEnumerable<Symbol> roots, out IReadOnlyList<Symbol> table) {
+        var writer = new SymbolWriter([..modules], context?.ToList(), [..roots]);
+        table = writer.Table;
         return writer.Write();
     }
 
-    sealed class SymbolWriter(List<ModuleSymbol> modules, List<ModuleSymbol>? context) {
+    sealed class SymbolWriter(List<ModuleSymbol> modules, List<ModuleSymbol>? context, List<Symbol> roots) {
+        public IReadOnlyList<Symbol> Table => _table;
+
         readonly List<Symbol> _table = [];
         readonly Dictionary<Symbol, int> _ids = new(ReferenceEqualityComparer.Instance);
         readonly HashSet<ModuleSymbol> _own = new(modules, ReferenceEqualityComparer.Instance);
@@ -101,8 +108,18 @@ public static class SymbolInterface {
         readonly List<NamedTypeSymbol> _missing = [];
 
         public byte[] Write() {
+            // Every module first: a type of one may be extended by another.
             foreach (var module in modules) {
-                Declare(module);
+                _ids[module] = _table.Count;
+                _table.Add(module);
+            }
+
+            foreach (var member in modules.SelectMany(static m => m.Members)) {
+                DeclareMember(member);
+            }
+
+            foreach (var root in roots) {
+                Declare(root);
             }
 
             // Members other units' extensions add to these modules' types are
@@ -226,12 +243,6 @@ public static class SymbolInterface {
             _ids[symbol] = id;
             _table.Add(symbol);
             switch (symbol) {
-                case ModuleSymbol module:
-                    foreach (var member in module.Members) {
-                        DeclareMember(member);
-                    }
-
-                    break;
                 case NamedTypeSymbol type:
                     foreach (var parameter in type.TypeParameters) {
                         Declare(parameter);
@@ -686,9 +697,15 @@ public static class SymbolInterface {
     ///     one was compiled against, read first.
     /// </summary>
     /// <exception cref="InvalidDataException">The bytes are not a symbol section this compiler wrote, or name a type no dependency declares.</exception>
-    public static IReadOnlyList<ModuleSymbol> Read(ReadOnlySpan<byte> bytes, IEnumerable<ModuleSymbol>? dependencies = null) {
+    public static IReadOnlyList<ModuleSymbol> Read(ReadOnlySpan<byte> bytes, IEnumerable<ModuleSymbol>? dependencies = null) => Read(bytes, dependencies, out _);
+
+    /// <param name="table">The declarations read, in the order they were written.</param>
+    internal static IReadOnlyList<ModuleSymbol> Read(ReadOnlySpan<byte> bytes, IEnumerable<ModuleSymbol>? dependencies, out IReadOnlyList<Symbol> table) {
         try {
-            return new SymbolReader(bytes.ToArray(), [..dependencies ?? []]).Read();
+            var reader = new SymbolReader(bytes.ToArray(), [..dependencies ?? []]);
+            var modules = reader.Read();
+            table = reader.Table;
+            return modules;
         } catch (Exception failure) when (failure is EndOfStreamException or IOException or ArgumentException or InvalidCastException
                                               or IndexOutOfRangeException or ArgumentOutOfRangeException or OverflowException or FormatException
                                               or InvalidOperationException or NullReferenceException) {
@@ -699,6 +716,8 @@ public static class SymbolInterface {
     sealed class SymbolReader(byte[] bytes, List<ModuleSymbol> dependencies) {
         readonly BinaryReader _input = new(new MemoryStream(bytes, writable: false), Encoding.UTF8);
         Symbol[] _table = [];
+
+        public IReadOnlyList<Symbol> Table => _table;
 
         public IReadOnlyList<ModuleSymbol> Read() {
             if (_input.ReadInt32() != Version) {

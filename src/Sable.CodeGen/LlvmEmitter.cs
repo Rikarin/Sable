@@ -750,12 +750,16 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_threads_begin()
                                 declare void @sable_object_unmade(ptr)
                                 declare void @sable_task_spawn_cancelled()
+                                declare void @sable_task_timed_begin()
+                                declare zeroext i1 @sable_task_timed_woken()
+                                declare void @sable_task_timed_end()
                                 declare zeroext i1 @sable_actor_hop(ptr)
                                 declare ptr @sable_actor_current()
                                 declare ptr @sable_waitlist_new()
                                 declare ptr @sable_lock_new()
                                 declare void @sable_lock_free(ptr)
                                 declare void @sable_lock_acquire(ptr)
+                                declare void @sable_lock_acquire_later(ptr)
                                 declare zeroext i1 @sable_lock_try_acquire(ptr)
                                 declare void @sable_lock_release(ptr)
                                 declare ptr @sable_rwlock_new()
@@ -772,6 +776,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_waitlist_free(ptr)
                                 declare void @sable_waitlist_wake(ptr)
                                 declare void @sable_waitlist_wake_one(ptr)
+                                declare void @sable_waitlist_grant(ptr)
                                 declare zeroext i1 @sable_task_park(ptr)
                                 declare zeroext i1 @sable_task_park_cancellable(ptr, i64)
                                 declare i64 @sable_waitlist_ticket(ptr)
@@ -4275,6 +4280,18 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call i64 @sable_task_priority()");
                     return;
 
+                case "task_timed_begin":
+                    Line("call void @sable_task_timed_begin()");
+                    return;
+
+                case "task_timed_end":
+                    Line("call void @sable_task_timed_end()");
+                    return;
+
+                case "task_timed_woken":
+                    Line($"{Result()} = call zeroext i1 @sable_task_timed_woken()");
+                    return;
+
                 case "task_spawn_cancelled":
                     Line("call void @sable_task_spawn_cancelled()");
                     return;
@@ -4510,7 +4527,7 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case "lock_free" or "lock_acquire" or "lock_release" or "condition_free" or "condition_signal" or "condition_broadcast"
+                case "lock_free" or "lock_acquire" or "lock_acquire_later" or "lock_release" or "condition_free" or "condition_signal" or "condition_broadcast"
                     or "rwlock_free" or "rwlock_write" or "rwlock_write_done":
                     Line($"call void @sable_{builtin.Name}(ptr {RawAddress(operands[0])})");
                     return;
@@ -4542,7 +4559,7 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case "task_waitlist_free" or "task_waitlist_wake" or "task_waitlist_wake_one": {
+                case "task_waitlist_free" or "task_waitlist_wake" or "task_waitlist_wake_one" or "task_waitlist_grant": {
                     var list = Fresh();
                     Line($"{list} = inttoptr i64 {operands[0]} to ptr");
                     Line($"call void @sable_{builtin.Name[5..]}(ptr {list})");

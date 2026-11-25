@@ -14,43 +14,45 @@ struct Md5Blocks: BlockHash {
 
     unsafe static fn compress(state: Int, block: Int) {
         var a = load32(state)
-        var b = load32(state + 4)
-        var c = load32(state + 8)
-        var d = load32(state + 12)
+        var b = load32(state &+ 4)
+        var c = load32(state &+ 8)
+        var d = load32(state &+ 12)
         let k = md5Constants
         var i = 0
         while i < 16 {
-            a = b &+ (a &+ (d ^ (b & (c ^ d))) &+ load32(k + 4 * i) &+ load32(block + 4 * i)).rotatedLeft(by: 7)
-            d = a &+ (d &+ (c ^ (a & (b ^ c))) &+ load32(k + 4 * (i + 1)) &+ load32(block + 4 * (i + 1))).rotatedLeft(by: 12)
-            c = d &+ (c &+ (b ^ (d & (a ^ b))) &+ load32(k + 4 * (i + 2)) &+ load32(block + 4 * (i + 2))).rotatedLeft(by: 17)
-            b = c &+ (b &+ (a ^ (c & (d ^ a))) &+ load32(k + 4 * (i + 3)) &+ load32(block + 4 * (i + 3))).rotatedLeft(by: 22)
+            a = b &+ (a &+ (d ^ (b & (c ^ d))) &+ load32(k &+ 4 &* i) &+ load32(block &+ 4 &* i)).rotatedLeft(by: 7)
+            d = a &+ (d &+ (c ^ (a & (b ^ c))) &+ load32(k &+ 4 &* (i &+ 1)) &+ load32(block &+ 4 &* (i &+ 1))).rotatedLeft(by: 12)
+            c = d &+ (c &+ (b ^ (d & (a ^ b))) &+ load32(k &+ 4 &* (i &+ 2)) &+ load32(block &+ 4 &* (i &+ 2))).rotatedLeft(by: 17)
+            b = c &+ (b &+ (a ^ (c & (d ^ a))) &+ load32(k &+ 4 &* (i &+ 3)) &+ load32(block &+ 4 &* (i &+ 3))).rotatedLeft(by: 22)
             i += 4
         }
+        // G's halves have no bit in common, so they are added apart: only one
+        // waits for the step before.
         while i < 32 {
-            a = b &+ (a &+ (c ^ (d & (b ^ c))) &+ load32(k + 4 * i) &+ load32(block + 4 * ((5 * i + 1) & 15))).rotatedLeft(by: 5)
-            d = a &+ (d &+ (b ^ (c & (a ^ b))) &+ load32(k + 4 * (i + 1)) &+ load32(block + 4 * ((5 * i + 6) & 15))).rotatedLeft(by: 9)
-            c = d &+ (c &+ (a ^ (b & (d ^ a))) &+ load32(k + 4 * (i + 2)) &+ load32(block + 4 * ((5 * i + 11) & 15))).rotatedLeft(by: 14)
-            b = c &+ (b &+ (d ^ (a & (c ^ d))) &+ load32(k + 4 * (i + 3)) &+ load32(block + 4 * ((5 * i + 16) & 15))).rotatedLeft(by: 20)
+            a = b &+ (a &+ load32(k &+ 4 &* i) &+ load32(block &+ 4 &* ((5 &* i &+ 1) & 15)) &+ (c & ~d) &+ (b & d)).rotatedLeft(by: 5)
+            d = a &+ (d &+ load32(k &+ 4 &* (i &+ 1)) &+ load32(block &+ 4 &* ((5 &* i &+ 6) & 15)) &+ (b & ~c) &+ (a & c)).rotatedLeft(by: 9)
+            c = d &+ (c &+ load32(k &+ 4 &* (i &+ 2)) &+ load32(block &+ 4 &* ((5 &* i &+ 11) & 15)) &+ (a & ~b) &+ (d & b)).rotatedLeft(by: 14)
+            b = c &+ (b &+ load32(k &+ 4 &* (i &+ 3)) &+ load32(block &+ 4 &* ((5 &* i &+ 16) & 15)) &+ (d & ~a) &+ (c & a)).rotatedLeft(by: 20)
             i += 4
         }
         while i < 48 {
-            a = b &+ (a &+ (b ^ c ^ d) &+ load32(k + 4 * i) &+ load32(block + 4 * ((3 * i + 5) & 15))).rotatedLeft(by: 4)
-            d = a &+ (d &+ (a ^ b ^ c) &+ load32(k + 4 * (i + 1)) &+ load32(block + 4 * ((3 * i + 8) & 15))).rotatedLeft(by: 11)
-            c = d &+ (c &+ (d ^ a ^ b) &+ load32(k + 4 * (i + 2)) &+ load32(block + 4 * ((3 * i + 11) & 15))).rotatedLeft(by: 16)
-            b = c &+ (b &+ (c ^ d ^ a) &+ load32(k + 4 * (i + 3)) &+ load32(block + 4 * ((3 * i + 14) & 15))).rotatedLeft(by: 23)
+            a = b &+ (a &+ (b ^ c ^ d) &+ load32(k &+ 4 &* i) &+ load32(block &+ 4 &* ((3 &* i &+ 5) & 15))).rotatedLeft(by: 4)
+            d = a &+ (d &+ (a ^ b ^ c) &+ load32(k &+ 4 &* (i &+ 1)) &+ load32(block &+ 4 &* ((3 &* i &+ 8) & 15))).rotatedLeft(by: 11)
+            c = d &+ (c &+ (d ^ a ^ b) &+ load32(k &+ 4 &* (i &+ 2)) &+ load32(block &+ 4 &* ((3 &* i &+ 11) & 15))).rotatedLeft(by: 16)
+            b = c &+ (b &+ (c ^ d ^ a) &+ load32(k &+ 4 &* (i &+ 3)) &+ load32(block &+ 4 &* ((3 &* i &+ 14) & 15))).rotatedLeft(by: 23)
             i += 4
         }
         while i < 64 {
-            a = b &+ (a &+ (c ^ (b | ~d)) &+ load32(k + 4 * i) &+ load32(block + 4 * ((7 * i) & 15))).rotatedLeft(by: 6)
-            d = a &+ (d &+ (b ^ (a | ~c)) &+ load32(k + 4 * (i + 1)) &+ load32(block + 4 * ((7 * i + 7) & 15))).rotatedLeft(by: 10)
-            c = d &+ (c &+ (a ^ (d | ~b)) &+ load32(k + 4 * (i + 2)) &+ load32(block + 4 * ((7 * i + 14) & 15))).rotatedLeft(by: 15)
-            b = c &+ (b &+ (d ^ (c | ~a)) &+ load32(k + 4 * (i + 3)) &+ load32(block + 4 * ((7 * i + 21) & 15))).rotatedLeft(by: 21)
+            a = b &+ (a &+ (c ^ (b | ~d)) &+ load32(k &+ 4 &* i) &+ load32(block &+ 4 &* ((7 &* i) & 15))).rotatedLeft(by: 6)
+            d = a &+ (d &+ (b ^ (a | ~c)) &+ load32(k &+ 4 &* (i &+ 1)) &+ load32(block &+ 4 &* ((7 &* i &+ 7) & 15))).rotatedLeft(by: 10)
+            c = d &+ (c &+ (a ^ (d | ~b)) &+ load32(k &+ 4 &* (i &+ 2)) &+ load32(block &+ 4 &* ((7 &* i &+ 14) & 15))).rotatedLeft(by: 15)
+            b = c &+ (b &+ (d ^ (c | ~a)) &+ load32(k &+ 4 &* (i &+ 3)) &+ load32(block &+ 4 &* ((7 &* i &+ 21) & 15))).rotatedLeft(by: 21)
             i += 4
         }
         store32(load32(state) &+ a, state)
-        store32(load32(state + 4) &+ b, state + 4)
-        store32(load32(state + 8) &+ c, state + 8)
-        store32(load32(state + 12) &+ d, state + 12)
+        store32(load32(state &+ 4) &+ b, state &+ 4)
+        store32(load32(state &+ 8) &+ c, state &+ 8)
+        store32(load32(state &+ 12) &+ d, state &+ 12)
     }
 }
 

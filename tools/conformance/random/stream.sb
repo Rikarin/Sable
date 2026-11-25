@@ -1,0 +1,89 @@
+module RandomStream
+
+// The output of one of the library's generators, without end, on standard
+// output: what run.py pipes to PractRand. The argument says which.
+
+import Sable.IO
+
+fn stream<G: RandomNumberGenerator>(_ given: G) {
+    var generator = given
+    let output = Console.standardOutput
+    var bytes = U8[>..](repeating: 0, count: 65536)
+    while true {
+        generator.fill(bytes: &bytes)
+        do {
+            try output.write(bytes)
+        } catch {
+            return
+        }
+    }
+}
+
+// Four generators drawn from in turn, as a program uses streams or jumps for
+// its tasks: they are related if they are correlated.
+struct Interleaved<G: RandomNumberGenerator>: RandomNumberGenerator {
+    var generators: G[>..]
+    var at: Int = 0
+
+    mutating fn next() -> U64 {
+        let value = generators[at].next()
+        at = (at + 1) & 3
+        return value
+    }
+}
+
+// As UniformRandom does it: each bit of the mantissa, from the top down, of
+// floats from 0 up to 1, two to a draw.
+struct Floats: RandomNumberGenerator {
+    var generator: SeededRandomNumberGenerator
+
+    mutating fn next() -> U64 {
+        let high = F64.random(in: 0.0..<1.0, using: &generator)
+        let low = F64.random(in: 0.0..<1.0, using: &generator)
+        let shift = 4294967296.0
+        return U64(high * shift) << 32 | U64(low * shift)
+    }
+}
+
+fn main() {
+    let name = Environment.arguments()[0]
+    match name {
+        case "xoshiro256" => stream(SeededRandomNumberGenerator(seed: 42))
+        case "pcg64"      => stream(Pcg64(seed: 42))
+        case "chacha"     => stream(ChaCha(seed: 42))
+        case "splitmix64" => stream(SplitMix64(seed: 42))
+        case "system"     => stream(SystemRandomNumberGenerator())
+        case "floats"     => stream(Floats { generator: SeededRandomNumberGenerator(seed: 42) })
+        case "pcg64-streams" => {
+            var generators: Pcg64[>..] = []
+            for i in 0..<4 {
+                generators.append(Pcg64(seed: 42, stream: U64(i)))
+            }
+            stream(Interleaved { generators: generators })
+        }
+        case "chacha-streams" => {
+            var generators: ChaCha[>..] = []
+            for i in 0..<4 {
+                generators.append(ChaCha(seed: 42, stream: U64(i)))
+            }
+            stream(Interleaved { generators: generators })
+        }
+        case "xoshiro256-jumps" => {
+            var generators: SeededRandomNumberGenerator[>..] = []
+            var generator = SeededRandomNumberGenerator(seed: 42)
+            for _ in 0..<4 {
+                generators.append(generator)
+                generator.jump()
+            }
+            stream(Interleaved { generators: generators })
+        }
+        case "xoshiro256-seeds" => {
+            var generators: SeededRandomNumberGenerator[>..] = []
+            for i in 0..<4 {
+                generators.append(SeededRandomNumberGenerator(seed: U64(i)))
+            }
+            stream(Interleaved { generators: generators })
+        }
+        case _ => Console.writeErrorLine("no generator is called \(name)")
+    }
+}

@@ -283,6 +283,11 @@ static bool mutex_try_lock(PlatformMutex *mutex) {
     return TryAcquireSRWLockExclusive(mutex) != 0;
 }
 
+static bool mutex_looks_free(PlatformMutex *mutex) {
+    (void)mutex;
+    return true;
+}
+
 static void condition_init(PlatformCondition *condition) {
     InitializeConditionVariable(condition);
 }
@@ -578,6 +583,12 @@ static void socket_address_from(const struct sockaddr_storage *from, int length,
     }
 }
 
+// Whether a reparse point with the tag (IO_REPARSE_TAG_AF_UNIX, which older
+// headers have not) is a Unix domain socket's file: no link.
+static bool is_socket_tag(DWORD tag) {
+    return tag == 0x80000023u;
+}
+
 static SOCKET socket_open(const PlatformAddress *address, int kind) {
     if (!sockets_start()) {
         return INVALID_SOCKET;
@@ -636,14 +647,13 @@ static bool socket_bind(SOCKET handle, const PlatformAddress *address, int flags
     }
 
     if (address->family == NET_UNIX && (flags & NET_REPLACE)) {
-        // A Unix domain socket's file is a reparse point of its own kind.
         char *name = ((struct sockaddr_un *)&at)->sun_path;
         wchar_t *wide = to_wide(name);
         WIN32_FIND_DATAW found;
         HANDLE search = FindFirstFileW(wide, &found);
         if (search != INVALID_HANDLE_VALUE) {
             FindClose(search);
-            if ((found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && found.dwReserved0 == 0x80000023L) {
+            if ((found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && is_socket_tag(found.dwReserved0)) {
                 DeleteFileW(wide);
             }
         }
@@ -698,6 +708,17 @@ static PlatformSocket socket_connect(const PlatformAddress *address) {
     int length = socket_address(address, &to);
     if (length == 0) {
         return socket_fail_as(NET_ERROR_INVALID);
+    }
+
+    if (address->family == NET_UNIX) {
+        // Windows says of a path where nothing is that it refused.
+        wchar_t *wide = to_wide(((struct sockaddr_un *)&to)->sun_path);
+        bool missing = GetFileAttributesW(wide) == INVALID_FILE_ATTRIBUTES
+                       && (GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND);
+        free(wide);
+        if (missing) {
+            return socket_fail_as(NET_ERROR_NOT_FOUND);
+        }
     }
 
     SOCKET handle = socket_open(address, SOCK_STREAM);

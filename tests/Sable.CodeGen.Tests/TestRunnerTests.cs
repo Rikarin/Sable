@@ -387,7 +387,7 @@ public sealed class TestRunnerTests {
             // Each test in a process of its own, as 'sable test' runs them:
             // one that hangs fails by its name rather than holding this one.
             var run = NativeEach([..files.Select(f => new SourceText(File.ReadAllText(f), Path.GetRelativePath(Root, f).Replace('\\', '/')))], TimeSpan.FromSeconds(60));
-            if (run.ExitCode != 0 || run.Stderr != "" || !Regex.IsMatch(run.Stdout, @"test result: ok\. \d+ passed; 0 failed; 0 filtered out")) {
+            if (run.ExitCode != 0 || run.Stderr != "" || !Regex.IsMatch(run.Stdout, @"test result: ok\. \d+ passed; 0 failed; (\d+ skipped; )?0 filtered out")) {
                 failed.Add(module + "\n" + run.Stdout + run.Stderr);
             }
         }

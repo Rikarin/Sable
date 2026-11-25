@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Sable.Driver.Commands;
 using Sable.Symbols;
 using static Sable.CodeGen.Tests.Harnesses;
@@ -350,7 +351,7 @@ public sealed class BenchRunnerTests {
             var (code, output, errors) = Sable(place, "bench", "speed.sb", "--quick", "--launches", "1", "--compare", "HEAD", "summing", "timed");
             Assert.True(code == 1, errors + output);
             Assert.Contains("bench Speed.summing ... computed '1225', and then '1770'\n", output, StringComparison.Ordinal);
-            Assert.Matches($"bench Speed\\.summing \\[HEAD\\] \\.\\.\\. {Line}\n", output);
+            Assert.True(Regex.IsMatch(output, $"bench Speed\\.summing \\[HEAD\\] \\.\\.\\. {Line}\n"), output);
             Assert.Contains("bench Speed.summing [this] ... ", output, StringComparison.Ordinal);
             Assert.Contains("% vs HEAD (", output, StringComparison.Ordinal);
             Assert.Contains("bench Speed.timedNew [HEAD] ... not there\n", output, StringComparison.Ordinal);

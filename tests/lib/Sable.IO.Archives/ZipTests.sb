@@ -429,16 +429,10 @@ fn linksAreNoWayOut(temp: TemporaryFiles) throws {
     try ZipArchive(same).extract(to: there, options: options)
     expect((try File.metadata(there.appending("link"), followLinks: false)).isFile)
     expect((try Directory.list(temp.path.appending("secret"))).isEmpty)
-    #if !os(windows)
-    // Permissions that a new file should not have.
-    var bold = ZipOptions()
-    bold.mode = 0o6777
-    let setuid = archive { writer throws(IoError) in try writer.add("setuid", [1], options: bold) }
-    try ZipArchive(setuid).extract(to: there)
-    expect(((try File.metadata(there.appending("setuid"))).permissions.mode & 0o7777) == 0o777)
-    #endif
 }
 
+#if !os(windows)
+// Permissions that a new file should not have: Windows has none.
 @test
 fn aNewFileIsGivenNoOthersRights(temp: TemporaryFiles) throws {
     var bold = ZipOptions()
@@ -447,6 +441,7 @@ fn aNewFileIsGivenNoOthersRights(temp: TemporaryFiles) throws {
     try ZipArchive(setuid).extract(to: temp.path)
     expect(((try File.metadata(temp.path.appending("setuid"))).permissions.mode & 0o7777) == 0o777)
 }
+#endif
 
 @test
 fn limitsAreKept(temp: TemporaryFiles) throws {

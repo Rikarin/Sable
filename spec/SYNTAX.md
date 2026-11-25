@@ -1365,6 +1365,13 @@ if let zero = t as? any Zero.Type {
 }
 ```
 
+The static members of `P` — its requirements, and what extensions of it add —
+are reached on an `any P.Type` itself, which opens it the same way:
+
+```sable
+let made = zero.zero()                 // an 'any Zero'
+```
+
 What the call gives back is what code that does not know `T` can hold: a
 result of `T` is erased to the existential of `T`'s protocols (`any Zero`,
 `any Zero & Named`, and `any Any` when it has none), a `T?` to an optional of
@@ -1442,7 +1449,10 @@ type it gives back or throws has no existential to be erased to —
 constrained to a generic protocol, or to `Error` (S3165) — and when it is async and gives back
 `Self` or an associated type (S3161). A requirement generic over type
 parameters of its own, `fn visit<T: Named>(_ item: T)`, is called through
-it as any other.
+it as any other. A member of an extension of a generic protocol, used on an
+`any Validator<Int>`, is its copy for the existential, whose `Self` is
+`any Validator<Int>`; a type that conforms to several instances of the
+protocol is an existential of each by that one's members.
 
 **Generic code given it.** A call of a generic function that gives an
 existential for a type parameter opens it, and runs the callee compiled

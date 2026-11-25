@@ -4254,7 +4254,7 @@ public sealed partial class SilGen {
                 var complete = true;
                 foreach (var protocol in LayoutProtocols(layout)) {
                     complete &= WitnessTable(candidate, value, protocol, at) is { } table
-                                && MissingWitness(table, candidate.SupertypeOf(protocol) ?? protocol) is null;
+                                && MissingWitness(table, ConformanceTo(candidate, protocol) ?? protocol) is null;
                 }
 
                 if (!complete) {
@@ -4266,7 +4266,7 @@ public sealed partial class SilGen {
             // metadata, and its tables — constants where the type is known.
             SilValue Witnessed(SilBlock at, SilValue own) {
                 var metadata = at.Append(new MetadataInst(value));
-                var tables = LayoutProtocols(layout!).Select(p => at.Append(new BuiltinInst($"witness_table_known:{QualifiedName(p)}", SilType.WitnessTable, metadata)));
+                var tables = LayoutProtocols(layout!).Select(p => at.Append(new BuiltinInst($"witness_table_known:{TableName(candidate, p)}", SilType.WitnessTable, metadata)));
                 return at.Append(new StructInst(layout!, [own, metadata, ..tables]));
             }
 
@@ -7272,8 +7272,14 @@ public sealed partial class SilGen {
                     return Wrap(conversion);
 
                 // A call's result of the type it opened a Type as, erased (SilGen.Opening.cs).
+                case BoundConversion { ConversionKind: ConversionKind.OpenedErasure, Operand: var used } erasure when OpenedReceiver(used) is { } through:
+                    return OpenedMetatypeUse(used, through, erasure);
+
                 case BoundConversion { ConversionKind: ConversionKind.OpenedErasure, Operand: BoundCall erased } erasure:
                     return OpenedCall(erased, erasure);
+
+                case BoundFieldAccess usedField when OpenedReceiver(usedField) is { } through:
+                    return OpenedMetatypeUse(usedField, through, null);
 
                 // The Type a call opens: its metadata, evaluated as the call began.
                 case BoundConversion { ConversionKind: ConversionKind.Open, Type: MetatypeTypeSymbol { InstanceType: TypeParameterSymbol openedType } } open:
@@ -10876,6 +10882,11 @@ public sealed partial class SilGen {
         SilValue? Call(BoundCall call) {
             Locate(call.Syntax);
 
+            // A static member of an 'any P.Type' (SilGen.Opening.cs).
+            if (OpenedReceiver(call) is { } received) {
+                return OpenedMetatypeUse(call, received, null);
+            }
+
             // A call that opens a Type: its metadata and tables found first (SilGen.Opening.cs).
             if (!ReferenceEquals(_openingCall, call) && call.Arguments.Any(static a => a is BoundConversion { ConversionKind: ConversionKind.Open })) {
                 return OpenedCall(call, null);
@@ -11086,6 +11097,13 @@ public sealed partial class SilGen {
                 return Emit(new StructInst(structType, [..fields.Select((f, i) => IntoField(structType.Fields[i].Type, AsFunction(f, structType.Fields[i].Type), Emit))]));
             }
 
+            // A protocol's member on self, where an extension's instance has an
+            // existential as its Self: through the existential, as on any other.
+            if (call.Receiver is null && HasSelf(callee) && OwnerOf(callee) is { TypeKind: TypeKind.Protocol }
+                && OwnerOf(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } ownSelf } && substitution.Lookup(ownSelf) is ExistentialTypeSymbol) {
+                call = new BoundCall(call.Syntax, new BoundSelfAccess(call.Syntax, ownSelf, symbol.IsMutating), callee, call.Arguments, call.Type) { Substitution = call.Substitution };
+            }
+
             // A requirement of Error's, called on 'any Error': through the
             // object's vtable, where its box put the error type's own.
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && call.Receiver is { } errorReceiver && IsAnyError(errorReceiver.Type)) {
@@ -11096,7 +11114,7 @@ public sealed partial class SilGen {
             // table; a member of an extension of the protocol, on the value
             // opened as a type known by its metadata.
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && call.Receiver is { } existentialReceiver
-                && Sub(existentialReceiver.Type) is ExistentialTypeSymbol) {
+                && Sub(existentialReceiver.Type) is ExistentialTypeSymbol && !IsMemberOfInstance(existentialReceiver, callee, SlotName(callee))) {
                 return IsRequirementOf(existentialReceiver, SlotName(callee)) && !OpensForResult(callee, callee.ReturnType, callee.ThrownType) && generator.OwnShape(callee) is null
                     ? ExistentialCall(existentialReceiver, SlotName(callee), call.Arguments, call)
                     : OpenedExistential(existentialReceiver, callee, callee.IsMutating, call,
@@ -11580,7 +11598,9 @@ public sealed partial class SilGen {
             var receiver = receiverOf is null ? TypeSubstitution.Empty
                 : OwnerOf(callee) is { ExtendedArray: not null } carrier ? Compilation.MatchArray(carrier, receiverOf) ?? TypeSubstitution.Empty
                 : OwnerOf(callee) is { ExtendedOptional: not null } && receiverOf is OptionalTypeSymbol optional ? TypeSubstitution.For(Core.Optional.Construct([optional.UnderlyingType]))
-                : TypeSubstitution.For(receiverOf is NamedTypeSymbol named && ConstructedOwner(named, callee) is { } owner ? owner : receiverOf);
+                : TypeSubstitution.For(receiverOf is NamedTypeSymbol named && ConstructedOwner(named, callee) is { } owner ? owner
+                    : receiverOf is ExistentialTypeSymbol { Constraint: var held } && InstanceIn(held, OwnerOf(callee)) is { } instance ? instance
+                    : receiverOf);
             // A local function sees the type parameters around it as this
             // instance has them.
             var map = IsLocalFunction(callee) ? substitution.Parameters.ToDictionary(p => p, p => substitution.Lookup(p)!) : new Dictionary<TypeParameterSymbol, TypeSymbol>();
@@ -11757,13 +11777,13 @@ public sealed partial class SilGen {
             var tables = new List<SilValue>();
             foreach (var protocol in generator.LayoutProtocols(layout)) {
                 var table = generator.WitnessTable(concrete, value, protocol, at.Syntax);
-                var missing = table is null ? protocol.Name : generator.MissingWitness(table, concrete.SupertypeOf(protocol) ?? protocol);
+                var missing = table is null ? protocol.Name : generator.MissingWitness(table, ConformanceTo(concrete, protocol) ?? protocol);
                 if (missing is not null) {
                     Emit(new DestroyValueInst(held));
                     return Missing(at, $"'{missing}' of '{concrete.ToDisplayString()}' through an existential");
                 }
 
-                tables.Add(Emit(new BuiltinInst($"witness_table_known:{QualifiedName(protocol)}", SilType.WitnessTable, metadata)));
+                tables.Add(Emit(new BuiltinInst($"witness_table_known:{generator.TableName(concrete, protocol)}", SilType.WitnessTable, metadata)));
             }
 
             // The same tables are what a cast finds in the registry.
@@ -12506,7 +12526,7 @@ public sealed partial class SilGen {
                 return ErrorCall(receiver, GetterSlot(access.Field), [], access);
             }
 
-            if (Sub(receiver.Type) is ExistentialTypeSymbol) {
+            if (Sub(receiver.Type) is ExistentialTypeSymbol && !IsMemberOfInstance(receiver, access.Field, GetterSlot(access.Field))) {
                 return IsRequirementOf(receiver, GetterSlot(access.Field)) && !OpensForResult(access.Field, access.Field.Type, null)
                     ? ExistentialCall(receiver, GetterSlot(access.Field), [], access)
                     : OpenedExistential(receiver, access.Field, false, access,

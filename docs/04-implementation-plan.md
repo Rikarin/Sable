@@ -2662,10 +2662,7 @@ their payloads' types. Types are looked up in the executable and in each Sable
 shared library it has loaded.
 
 Not yet, for such values: an indirect capture seen from
-outside the closure, which is shown as the one-element array that holds it;
-and, on Linux arm64 (clang 18), the locals of `Gen.later` in
-`UnspecialisedFramesAreNamedAndShowWhatTheyHold`, shown as invalid strings,
-whose cause is not found (the DWARF a newer clang makes of the same IR is right).
+outside the closure, which is shown as the one-element array that holds it.
 
 Not yet: an `@inline_layout` value's variable-size fields (bounded and
 grow-only arrays, whose offsets are only found by walking the bytes); the

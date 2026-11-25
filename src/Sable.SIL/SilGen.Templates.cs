@@ -294,7 +294,7 @@ public sealed partial class SilGen {
         }
 
         foreach (var (key, member) in GenericRequirements(protocol)) {
-            if (member is FunctionSymbol { TypeParameters.IsEmpty: false } || GenericEntryType(protocol, member) is not { } type) {
+            if (GenericEntryType(protocol, member) is not { } type) {
                 Refused(key);
                 return;
             }
@@ -438,9 +438,28 @@ public sealed partial class SilGen {
             FieldSymbol field => field.IsStatic ? 0 : 1,
             _ => 0,
         };
-        var hidden = shape.Parameters.Select(static _ => SilType.Metadata).Concat(shape.Requirements.Select(static _ => SilType.WitnessTable));
-        var innerType = new FunctionType([..type.Parameters.Take(own), ..hidden, ..type.Parameters.Skip(own)], type.Result, type.Thrown, isAsync: type.IsAsync);
+        // One generic over parameters of its own is compiled once for those too:
+        // theirs come before Self's metadata, the type arguments' among them.
+        var generic = member is FunctionSymbol { TypeParameters.IsEmpty: false } requirement ? OwnShape(requirement) : null;
+        if (member is FunctionSymbol { TypeParameters.IsEmpty: false } && generic is null) {
+            return null;
+        }
+
+        var ownParameters = generic?.Parameters.Length ?? 0;
+        var ownHidden = ownParameters + (generic?.Requirements.Length ?? 0);
+        var before = generic is null ? own : type.Parameters.Length - 1 - ownHidden;
+        var metadataOf = shape.Parameters.Select(static _ => SilType.Metadata);
+        var tablesOf = shape.Requirements.Select(static _ => SilType.WitnessTable);
+        ImmutableArray<SilType> parameters = [
+            ..type.Parameters.Take(before), ..metadataOf, ..type.Parameters.Skip(before).Take(ownParameters), ..tablesOf, ..type.Parameters.Skip(before + ownParameters),
+        ];
+        var innerType = new FunctionType(parameters, type.Result, type.Thrown, isAsync: type.IsAsync);
         string? inner;
+        var definitionShape = shape;
+        if (generic is not null) {
+            shape = new GenericShape([..shape.Parameters, ..generic.Parameters], [..shape.Requirements, ..generic.Requirements]);
+        }
+
         using (Opaque(shape)) {
             var concrete = definition.Construct([..definition.TypeParameters.Cast<TypeSymbol>()]);
             inner = Lower(concrete) is { } value ? GenericWitness(concrete, value, protocol, key, member, innerType, at, ($"{stem}$body", shape)) : null;
@@ -454,7 +473,11 @@ public sealed partial class SilGen {
         thunk.ParameterNames.AddRange([..Enumerable.Range(0, type.Parameters.Length - 1).Select(static i => $"$argument{i}"), "$metadata.Self"]);
         var entry = thunk.AddBlock();
         var given = type.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
-        var arguments = new List<SilValue>([..given.Take(own), ..TemplateArguments(entry, given[^1], shape), ..given.Skip(own)]);
+        var read = TemplateArguments(entry, given[^1], definitionShape);
+        var arguments = new List<SilValue>([
+            ..given.Take(before), ..read.Take(definitionShape.Parameters.Length), ..given.Skip(before).Take(ownParameters), ..read.Skip(definitionShape.Parameters.Length),
+            ..given.Skip(before + ownParameters),
+        ]);
         var callee = entry.Append(new FunctionRefInst(inner, innerType));
         if (type.Thrown is null) {
             var result = entry.Append(new ApplyInst(callee, type.Result, [..arguments]));

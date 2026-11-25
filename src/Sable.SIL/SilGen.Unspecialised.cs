@@ -2334,7 +2334,7 @@ public sealed partial class SilGen {
         var requirement = (FunctionSymbol)member;
         // By its place in the table: operators sanitise alike (+ and - both to $).
         var index = GenericRequirements(protocol).FindIndex(r => ReferenceEquals(r.Member, requirement));
-        var name = template?.Name ?? $"$generic$witness${Sanitise(value.ToString())}${Sanitise(QualifiedName(protocol))}${index}${(requirement.Name.All(char.IsLetterOrDigit) ? requirement.Name : "op")}";
+        var name = template?.Name ?? $"$generic$witness${Sanitise(value.ToString())}${Sanitise(TableName(concrete, protocol))}${index}${(requirement.Name.All(char.IsLetterOrDigit) ? requirement.Name : "op")}";
 
         // A template's witness is compiled once for the generic type: given its arguments' metadata and tables, as hidden parameters.
         if (template is { } compiledOnce && _module.Find(name) is null) {
@@ -2349,12 +2349,12 @@ public sealed partial class SilGen {
         if (ownShape is not null) {
             _unspecialised[name] = (requirement, ownShape);
             Opening();
-        } else if (!requirement.TypeParameters.IsEmpty) {
+        } else if (!requirement.TypeParameters.IsEmpty && template is null) {
             return null;
         }
 
         using var opaqueOwn = ownShape is null ? null : Opaque(ownShape);
-        using var ownContext = ownShape is null ? null : AssociatedContext(requirement);
+        using var ownContext = requirement.TypeParameters.IsEmpty ? null : AssociatedContext(requirement);
         var self = protocol.OriginalDefinition.SelfTypeParameter!;
         var syntax = requirement.DeclaringSyntax.FirstOrDefault() ?? at;
         if (SourceOf(syntax) is not { } source) {
@@ -2423,8 +2423,8 @@ public sealed partial class SilGen {
 
         function.RemoveUnreachableBlocks();
         TemplateRecipes(function, concrete, template);
-        if (ownShape is not null) {
-            AssociatedRecipes(function, requirement, ownShape);
+        if ((ownShape ?? (requirement.TypeParameters.IsEmpty ? null : template?.Shape)) is { } generic) {
+            AssociatedRecipes(function, requirement, generic);
         }
 
         AsTrampoline(function);
@@ -2469,7 +2469,7 @@ public sealed partial class SilGen {
     /// </summary>
     string? GenericGetter(TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, FieldSymbol field, FunctionType type, SyntaxNode at, (string Name, GenericShape Shape)? template = null) {
         var index = GenericRequirements(protocol).FindIndex(r => ReferenceEquals(r.Member, field));
-        var name = template?.Name ?? $"$generic$witness${Sanitise(value.ToString())}${Sanitise(QualifiedName(protocol))}${index}${field.Name}";
+        var name = template?.Name ?? $"$generic$witness${Sanitise(value.ToString())}${Sanitise(TableName(concrete, protocol))}${index}${field.Name}";
         if (_module.Find(name) is not null) {
             return name;
         }
@@ -3283,7 +3283,9 @@ public sealed partial class SilGen {
             // An error of an associated type: where it goes.
             (SilValue Passed, AllocStackInst? Slot, bool CannotThrow)? error = null;
             if (errorOut is not null) {
-                if (callee.ThrownType is not { } thrown || GenericErrorOut(errorOut, Through(thrown, protocol, parameter)) is not { } place) {
+                // One of the requirement's own parameters', 'throws(R.Failure)', is of what the call binds it to.
+                var own = new TypeSubstitution(callee.TypeParameters.Where(p => call.Substitution.Lookup(p) is not null).ToDictionary(static p => p, p => Sub(call.Substitution.Lookup(p)!)));
+                if (callee.ThrownType is not { } thrown || GenericErrorOut(errorOut, own.Apply(Through(thrown, protocol, parameter))) is not { } place) {
                     EndAll(borrows);
                     return Missing(call, "where this call's error goes");
                 }

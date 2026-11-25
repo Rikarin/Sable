@@ -338,7 +338,9 @@ fn anArchiveCutMeanwhileIsAnError() throws {
     let read = try ZipArchive.open(path)
     var reader = try read.reader(for: read.entries[0])
     assert(reader.entry.name == "a" && (try reader.read(upTo: 0)).isEmpty && (try reader.read(upTo: 10)).count == 10)
-    let file = try File.open(path, options: .appending)
+    var cut = OpenOptions()
+    cut.write = true
+    let file = try File.open(path, options: cut)
     try file.setLength(5000)
     assertEqualText(problem { try reader.readToEnd() }, "the stream ended before what was needed")
 }
@@ -379,12 +381,14 @@ fn linksAreNoWayOut() throws {
     try ZipArchive(same).extract(to: there, options: options)
     assert((try File.metadata(there.appending("link"), followLinks: false)).isFile)
     assert((try Directory.list(temp.path.appending("secret"))).isEmpty)
+    #if !os(windows)
     // Permissions that a new file should not have.
     var bold = ZipOptions()
     bold.mode = 0o6777
     let setuid = archive { writer throws(IoError) in try writer.add("setuid", [1], options: bold) }
     try ZipArchive(setuid).extract(to: there)
     assert(((try File.metadata(there.appending("setuid"))).permissions.mode & 0o7777) == 0o777)
+    #endif
 }
 
 @test

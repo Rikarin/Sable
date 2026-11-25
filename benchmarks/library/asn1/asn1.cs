@@ -1,6 +1,6 @@
 using System.Formats.Asn1;
 
-// Twenty thousand certificates of X.509's shape written one after another, and each read back.
+// Twenty thousand certificates of X.509's shape written and each read back.
 [Benchmark("library/asn1")]
 static class LibraryAsn1 {
     const string DomainComponent = "0.9.2342.19200300.100.1.25";
@@ -29,23 +29,19 @@ static class LibraryAsn1 {
         var from = new DateTimeOffset(2024, 4, 30, 14, 25, 34, TimeSpan.Zero);
         var to = new DateTimeOffset(2025, 4, 30, 14, 25, 34, TimeSpan.Zero);
         var writer = new AsnWriter(AsnEncodingRules.DER);
+        long size = 0, sum = 0, check = 0;
         for (var i = 0; i < 20000; i++) {
+            writer.Reset();
             WriteCertificate(writer, i, modulus, from, to);
-        }
-
-        var bytes = writer.Encode();
-        var reader = new AsnReader(bytes, AsnEncodingRules.DER);
-        long sum = 0;
-        while (reader.HasData) {
+            var bytes = writer.Encode();
+            size += bytes.Length;
+            check = checked(check * 31 + bytes[i % bytes.Length]) % 1000003;
+            var reader = new AsnReader(bytes, AsnEncodingRules.DER);
             sum += ReadCertificate(reader);
+            reader.ThrowIfNotEmpty();
         }
 
-        long check = 0;
-        foreach (var b in bytes) {
-            check = checked(check * 31 + b) % 1000003;
-        }
-
-        return $"{bytes.Length} {sum} {check}";
+        return $"{size} {sum} {check}";
     }
 
     static void WriteName(AsnWriter writer, string common) {

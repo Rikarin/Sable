@@ -65,26 +65,15 @@ struct AsnLength {
             to.append(U8(count))
             return
         }
-        let size = AsnLength.size(count) - 1
+        var size = 1
+        while count >> (size * 8) > 0 {
+            size += 1
+        }
         to.append(0x80 | U8(size))
         var shift = (size - 1) * 8
         while shift >= 0 {
             to.append(U8.truncating(count >> shift))
             shift -= 8
         }
-    }
-
-    // How many bytes the length is.
-    static fn size(_ count: Int) -> Int {
-        if count < 0x80 {
-            return 1
-        }
-        var size = 1
-        var rest = count
-        while rest > 0 {
-            size += 1
-            rest = rest >> 8
-        }
-        return size
     }
 }

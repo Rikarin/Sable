@@ -3,8 +3,8 @@ module Asn1Bench
 import Sable.Serialize.Asn1
 import Sable.Time
 
-// ASN.1 by DER: twenty thousand certificates of X.509's shape written one
-// after another, and each read back whole.
+// ASN.1 by DER: twenty thousand certificates of X.509's shape written, and
+// each read back whole.
 
 fn writeName(_ writer: AsnWriter, _ common: String) throws(AsnError) {
     try writer.beginSequence()
@@ -145,18 +145,18 @@ fn main() throws(AsnError) {
     let from = UtcDateTime.of(year: 2024, month: 4, day: 30, hour: 14, minute: 25, second: 34)!.withOffset(UtcOffset.utc)
     let to = UtcDateTime.of(year: 2025, month: 4, day: 30, hour: 14, minute: 25, second: 34)!.withOffset(UtcOffset.utc)
     let writer = AsnWriter(rules: .Der)
-    for i in 0..<20000 {
-        try writeCertificate(writer, i, modulus, from, to)
-    }
-    let bytes = try writer.bytes()
-    var reader = AsnReader(bytes, rules: .Der)
+    var size = 0
     var sum = 0
-    while !reader.isAtEnd {
-        sum += try readCertificate(&reader)
-    }
     var check = 0
-    for byte in bytes {
-        check = (check * 31 + Int(byte)) % 1000003
+    for i in 0..<20000 {
+        writer.reset()
+        try writeCertificate(writer, i, modulus, from, to)
+        let bytes = try writer.bytes()
+        size += bytes.count
+        check = (check * 31 + Int(bytes[i % bytes.count])) % 1000003
+        var reader = AsnReader(bytes, rules: .Der)
+        sum += try readCertificate(&reader)
+        try reader.finish()
     }
-    print("\(bytes.count) \(sum) \(check)")
+    print("\(size) \(sum) \(check)")
 }

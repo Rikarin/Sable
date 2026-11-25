@@ -498,8 +498,8 @@ public sealed partial class SilGen {
         };
         // One generic over parameters of its own is compiled once for those too:
         // theirs come before Self's metadata, the type arguments' among them.
-        var generic = member is FunctionSymbol { TypeParameters.IsEmpty: false } requirement ? OwnShape(requirement) : null;
-        if (member is FunctionSymbol { TypeParameters.IsEmpty: false } && generic is null) {
+        var generic = member is FunctionSymbol requirement ? OwnShape(requirement) : null;
+        if (member is FunctionSymbol declared && !OwnParameters(declared).IsEmpty && generic is null) {
             return null;
         }
 

@@ -1783,7 +1783,7 @@ public sealed partial class SilGen {
             if (own is not null) {
                 var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
                 foreach (var parameter in own.Parameters) {
-                    if (call.Substitution.Lookup(parameter) is not { } given) {
+                    if ((parameter.OpaqueParameter is null ? call.Substitution.Lookup(parameter) : OpaqueGiven(call, parameter)) is not { } given) {
                         return false;
                     }
 
@@ -1803,7 +1803,7 @@ public sealed partial class SilGen {
                 ownBound = new TypeSubstitution(map);
                 Describes = DebugDescribes = true;
                 foreach (var (declaredParameter, argument) in callee.Parameters.Zip(call.Arguments)) {
-                    if (!OwnTypeAs(declaredParameter.Type, argument.Type)) {
+                    if (!OwnTypeAs(declaredParameter.Type, PassedAsItIs(argument).Type)) {
                         return false;
                     }
                 }
@@ -1812,7 +1812,7 @@ public sealed partial class SilGen {
             }
 
             bool OwnTypeAs(TypeSymbol declared, TypeSymbol given) {
-                var read = ownBound.Apply(declared);
+                var read = Substitute(ownBound, declared);
                 return SilGen.Mentions(read, [self!]) ? SameThrough(read, protocol, selfType, given) : read.Equals(V(given)) || Canonical(read).Equals(Canonical(given));
             }
 
@@ -2060,16 +2060,18 @@ public sealed partial class SilGen {
     internal FunctionType? GenericEntryType(NamedTypeSymbol protocol, FunctionSymbol requirement) {
         var arguments = TypeSubstitution.For(protocol);
         protocol = protocol.OriginalDefinition;
-        if (protocol.SelfTypeParameter is not { } self || requirement.IsRethrows || !requirement.OpaqueTypeParameters.IsEmpty
-            || !requirement.TypeParameters.IsEmpty && OwnShape(requirement) is null) {
+        if (protocol.SelfTypeParameter is not { } self || requirement.IsRethrows
+            || !OwnParameters(requirement).IsEmpty && OwnShape(requirement) is null) {
             return null;
         }
 
-        var own = new List<TypeParameterSymbol>([self, ..protocol.AssociatedTypes, ..requirement.TypeParameters]);
+        var ownParameters = OwnParameters(requirement);
+        var asThemselves = OpaqueParametersAsThemselves(requirement);
+        var own = new List<TypeParameterSymbol>([self, ..protocol.AssociatedTypes, ..ownParameters]);
         var opaque = new OpaqueType(self.Name);
         SilType? Slot(TypeSymbol type) {
-            type = arguments.Apply(type);
-            return type.Equals(self) ? opaque : HeldOfSelf(type, self, requirement.TypeParameters) is { } held ? held : Mentions(type, own) ? null : Lower(type);
+            type = Substitute(asThemselves, arguments.Apply(type));
+            return type.Equals(self) ? opaque : HeldOfSelf(type, self, ownParameters) is { } held ? held : Mentions(type, own) ? null : Lower(type);
         }
 
         var parameters = ImmutableArray.CreateBuilder<SilType>();
@@ -2094,7 +2096,7 @@ public sealed partial class SilGen {
             }
         }
 
-        if ((Slot(requirement.ReturnType) ?? ArrayOfSelf(arguments.Apply(requirement.ReturnType), self, requirement.TypeParameters)) is not { } result) {
+        if ((Slot(requirement.ReturnType) ?? ArrayOfSelf(arguments.Apply(requirement.ReturnType), self, ownParameters)) is not { } result) {
             return null;
         }
 
@@ -2150,15 +2152,15 @@ public sealed partial class SilGen {
     ///     for one that has none, or with one the convention cannot pass.
     /// </summary>
     GenericShape? OwnShape(FunctionSymbol requirement) {
-        if (requirement.TypeParameters.IsEmpty) {
+        if (OwnParameters(requirement).IsEmpty) {
             return null;
         }
 
         if (!_ownShapes.TryGetValue(requirement, out var shape)) {
             var requirements = new List<(TypeParameterSymbol, NamedTypeSymbol)>();
             var passed = requirement.ConformanceRequirements.IsEmpty && requirement.SameTypeRequirements.IsEmpty;
-            foreach (var parameter in requirement.TypeParameters) {
-                passed &= parameter is { IsValue: false, AllowsNoncopyable: false };
+            foreach (var parameter in OwnParameters(requirement)) {
+                passed &= parameter is { IsValue: false, AllowsNoncopyable: false } && parameter.OpaqueParameter is not { Arguments.IsEmpty: false };
                 foreach (var part in parameter.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c))) {
                     if (part is NamedTypeSymbol protocol && IsTabledProtocol(protocol)) {
                         requirements.Add((parameter, protocol.OriginalDefinition));
@@ -2168,11 +2170,24 @@ public sealed partial class SilGen {
                 }
             }
 
-            _ownShapes[requirement] = shape = passed ? new([..requirement.TypeParameters], [..requirements]) : null;
+            _ownShapes[requirement] = shape = passed ? new([..OwnParameters(requirement)], [..requirements]) : null;
         }
 
         return shape;
     }
+
+    /// <summary>A requirement's own type parameters: those it declares, and one for each <c>some P</c> its parameters have.</summary>
+    static ImmutableArray<TypeParameterSymbol> OwnParameters(FunctionSymbol requirement) => requirement.TypeParameters.AddRange(requirement.OpaqueTypeParameters);
+
+    /// <summary>What a call gives for a <c>some P</c> parameter of its callee: the type of what is passed. Null where two have one <c>some P</c> and are of two types.</summary>
+    static TypeSymbol? OpaqueGiven(BoundCall call, TypeParameterSymbol parameter) {
+        var given = call.Function.Parameters.Zip(call.Arguments).Where(p => p.First.Type.Equals(parameter.OpaqueParameter)).Select(static p => PassedAsItIs(p.Second).Type).ToList();
+        return given.Count > 0 && given.TrueForAll(g => g.Equals(given[0])) ? given[0] : null;
+    }
+
+    /// <summary>An argument as it is, not as the <c>some P</c> it is passed as.</summary>
+    static BoundExpression PassedAsItIs(BoundExpression argument) =>
+        argument is BoundConversion { ConversionKind: ConversionKind.Existential, Type: OpaqueTypeSymbol } passed ? passed.Operand : argument;
 
     /// <summary>The tables with an entry for a requirement generic over its own parameters that its conformer's member, not compiled once, cannot meet: it traps.</summary>
     readonly HashSet<SilWitnessTable> _partial = new(ReferenceEqualityComparer.Instance);
@@ -2349,12 +2364,12 @@ public sealed partial class SilGen {
         if (ownShape is not null) {
             _unspecialised[name] = (requirement, ownShape);
             Opening();
-        } else if (!requirement.TypeParameters.IsEmpty && template is null) {
+        } else if (!OwnParameters(requirement).IsEmpty && template is null) {
             return null;
         }
 
         using var opaqueOwn = ownShape is null ? null : Opaque(ownShape);
-        using var ownContext = requirement.TypeParameters.IsEmpty ? null : AssociatedContext(requirement);
+        using var ownContext = OwnParameters(requirement).IsEmpty ? null : AssociatedContext(requirement);
         var self = protocol.OriginalDefinition.SelfTypeParameter!;
         var syntax = requirement.DeclaringSyntax.FirstOrDefault() ?? at;
         if (SourceOf(syntax) is not { } source) {
@@ -2362,7 +2377,7 @@ public sealed partial class SilGen {
         }
 
         var bound = new Dictionary<TypeParameterSymbol, TypeSymbol> { [self] = concrete };
-        foreach (var parameter in requirement.TypeParameters) {
+        foreach (var parameter in OwnParameters(requirement)) {
             bound[parameter] = parameter;
         }
 
@@ -2423,7 +2438,7 @@ public sealed partial class SilGen {
 
         function.RemoveUnreachableBlocks();
         TemplateRecipes(function, concrete, template, definition);
-        if ((ownShape ?? (requirement.TypeParameters.IsEmpty ? null : template?.Shape)) is { } generic) {
+        if ((ownShape ?? (OwnParameters(requirement).IsEmpty ? null : template?.Shape)) is { } generic) {
             AssociatedRecipes(function, requirement, generic);
         }
 
@@ -3210,10 +3225,15 @@ public sealed partial class SilGen {
         /// </summary>
         SilValue? GenericRequirementCall(BoundCall call, TypeSymbol parameter) {
             var callee = call.Function;
+            TypeSymbol? OwnGiven(TypeParameterSymbol own) => (own.OpaqueParameter is null ? call.Substitution.Lookup(own) : OpaqueGiven(call, own)) is { } given ? Sub(given) : null;
             var protocol = RequirementProtocol(callee)!.OriginalDefinition;
             var index = generator.GenericRequirements(protocol).FindIndex(r => ReferenceEquals(r.Member, callee));
             if (index < 0 || generator.GenericEntryType(protocol, (Symbol)callee) is not { } type) {
                 return Missing(call, $"'{callee.Name}' through a witness table");
+            }
+
+            if (OwnParameters(callee).Any(p => OwnGiven(p) is null)) {
+                return Missing(call, $"'{callee.Name}' given values of two types for one 'some' parameter's type");
             }
 
             var code = Emit(new BuiltinInst($"witness_generic:{index}", type, TableFor(parameter, protocol)));
@@ -3242,7 +3262,7 @@ public sealed partial class SilGen {
                     argument = Address(call.Arguments[i], borrows);
                 } else if (SilType.IsIndirect(type.Parameters[arguments.Count])) {
                     // Where it is, or, of a type the requirements in force make known here, in a slot of its own.
-                    argument = GenericArgument(call.Arguments[i], Sub(call.Arguments[i].Type), type.Parameters[arguments.Count], borrows);
+                    argument = GenericArgument(PassedAsItIs(call.Arguments[i]), Sub(PassedAsItIs(call.Arguments[i]).Type), type.Parameters[arguments.Count], borrows);
                 } else if ((argument = Borrow(call.Arguments[i])) is not null) {
                     borrows.Add(argument);
                 }
@@ -3284,7 +3304,7 @@ public sealed partial class SilGen {
             (SilValue Passed, AllocStackInst? Slot, bool CannotThrow)? error = null;
             if (errorOut is not null) {
                 // One of the requirement's own parameters', 'throws(R.Failure)', is of what the call binds it to.
-                var own = new TypeSubstitution(callee.TypeParameters.Where(p => call.Substitution.Lookup(p) is not null).ToDictionary(static p => p, p => Sub(call.Substitution.Lookup(p)!)));
+                var own = new TypeSubstitution(OwnParameters(callee).Select(p => (Parameter: p, Given: OwnGiven(p))).Where(static p => p.Given is not null).ToDictionary(static p => p.Parameter, static p => p.Given!));
                 if (callee.ThrownType is not { } thrown || GenericErrorOut(errorOut, own.Apply(Through(thrown, protocol, parameter))) is not { } place) {
                     EndAll(borrows);
                     return Missing(call, "where this call's error goes");
@@ -3296,7 +3316,7 @@ public sealed partial class SilGen {
 
             // Its own type parameters' metadata and tables: what the call binds them to.
             if (ownShape is not null) {
-                var ownBound = new TypeSubstitution(ownShape.Parameters.ToDictionary(static p => p, p => Sub(call.Substitution.Lookup(p)!)));
+                var ownBound = new TypeSubstitution(ownShape.Parameters.ToDictionary(static p => p, p => OwnGiven(p)!));
                 foreach (var (ownParameter, ownProtocol) in ownShape.Requirements) {
                     if (ownBound.Lookup(ownParameter) is { } given && !IsOpaqueHere(given)) {
                         generator.GenericTable(given, ownProtocol, call.Syntax, true, true);

@@ -1541,7 +1541,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "codec_bytes_bytes" or "codec_string_bytes" or "codec_bytes_raw" or "utf8_to_utf16" or "utf16_to_utf8":
                 return 0L;
 
-            case "crypto_blocks" or "crypto_blocks_raw" or "vector_available":
+            case "crypto_blocks" or "crypto_blocks_raw" or "crypto_cipher" or "crypto_cipher_in_place" or "crypto_cipher_raw" or "vector_available":
                 return false;
 
             case "random_bits":

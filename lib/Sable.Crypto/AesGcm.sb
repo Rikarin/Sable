@@ -1,0 +1,72 @@
+module Sable.Crypto
+
+/// AES-GCM, SP 800-38D: AES in counter mode, and a tag by GHASH. With a key
+/// of 32 bytes, what most protocols have; with the processor's instructions
+/// for both, the fastest there is.
+///
+/// Under one key, and whatever copies of the value there are:
+///
+/// - a nonce is for one message only. Random ones, of 12 bytes, are counted
+///   here, and after 2^32 there is LimitExceeded instead of another (the
+///   chance of two the same is then 2^-32); a key that is made into several
+///   values is counted in each. For more than that take counters, another
+///   key, or `XChaCha20Poly1305`.
+/// - a message has at most 2^36 - 32 bytes, which is enforced; and all of
+///   them together should have no more than 2^43, for messages of up to
+///   16 KiB about 2^29 of them, as each block makes what the cipher gives a
+///   little less like random bytes. That is not counted.
+/// - a short tag is as easy to forge as it is short.
+///
+/// .NET's `AesGcm`; CryptoKit's `AES.GCM`.
+///
+/// ```sable
+/// let cipher = try! AesGcm(key: SymmetricKey.random(byteCount: 32))
+/// let box = try! cipher.seal([0x68, 0x69], associatedData: [1])
+/// assert((try! cipher.open(box, associatedData: [1])) == [0x68, 0x69])
+/// ```
+public struct AesGcm: AuthenticatedCipher {
+    let state: AeadState
+
+    /// The cipher under a key of 16, 24 or 32 bytes. Tags of 16 bytes may be
+    /// cut to 12 or more. Nonces are of 12 bytes; another length, up to 128,
+    /// is for what was sealed with it elsewhere, and is hashed to a counter,
+    /// which two of them might share.
+    ///
+    /// ```sable
+    /// assert((try! AesGcm(key: SymmetricKey.random(byteCount: 16))).tagByteCount == 16)
+    /// ```
+    public init(key: SymmetricKey, tagByteCount: Int = 16, nonceByteCount: Int = 12) throws(CryptoError) {
+        if tagByteCount < 12 || tagByteCount > 16 {
+            throw CryptoError.InvalidParameter(reason: "an AES-GCM tag has 12 to 16 bytes, not \(tagByteCount)")
+        }
+        if nonceByteCount < 1 || nonceByteCount > 128 {
+            throw CryptoError.InvalidParameter(reason: "an AES-GCM nonce has 1 to 128 bytes, not \(nonceByteCount)")
+        }
+        let aes = try AesKey(key, hashing: true)
+        state = AeadState(sealing: .GcmSeal, opening: .GcmOpen, aes: aes, secret: none, nonceByteCount: nonceByteCount, tagByteCount: tagByteCount)
+    }
+
+    public var nonceByteCount: Int => state.nonceByteCount
+
+    public var tagByteCount: Int => state.tagByteCount
+
+    public fn randomNonce() throws(CryptoError) -> U8[>..] {
+        return try state.randomNonce()
+    }
+
+    public fn seal(_ plaintext: U8[:], into ciphertext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError) {
+        try state.seal(plaintext, into: &ciphertext, nonce: nonce, associatedData: associatedData, tag: &tag)
+    }
+
+    public fn seal(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError) {
+        try state.seal(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: &tag)
+    }
+
+    public fn open(_ ciphertext: U8[:], into plaintext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError) {
+        try state.open(ciphertext, into: &plaintext, nonce: nonce, associatedData: associatedData, tag: tag)
+    }
+
+    public fn open(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError) {
+        try state.open(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: tag)
+    }
+}

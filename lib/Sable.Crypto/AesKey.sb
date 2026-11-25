@@ -1,0 +1,56 @@
+module Sable.Crypto
+
+/// An AES key's round keys, in memory zeroed when the last cipher that has
+/// them goes: as the processor's instructions take them, or as the portable
+/// code does (and for GCM what GHASH multiplies by).
+@immutable
+final class AesKey {
+    let memory: SecretMemory
+
+    /// Where the portable code's round keys are in the memory, after how
+    /// many rounds there are, and where its hash key is. A kernel has its own
+    /// order (runtime/ciphers.c), and 1024 bytes are enough for either.
+    static var portableOffset: Int => 16
+
+    static var hashOffset: Int => 976
+
+    /// The round keys of a key of 16, 24 or 32 bytes; with 'hashing', GHASH's too.
+    init(_ key: SymmetricKey, hashing: Bool = false) throws(CryptoError) {
+        let count = key.byteCount
+        if count != 16 && count != 24 && count != 32 {
+            throw CryptoError.InvalidParameter(reason: "an AES key has 16, 24 or 32 bytes, not \(count)")
+        }
+        memory = SecretMemory(count: 1024)
+        let address = memory.address
+        unsafe {
+            if Native.cipher(Native.aesKey, address, 0, from: key.memory.address, to: 0, count: count) {
+                if hashing {
+                    _ = Native.cipher(Native.gcmKey, address, 0, from: 0, to: 0, count: 0)
+                }
+                return
+            }
+            store64((count / 4 + 6) unchecked as U64, address)
+            BitslicedAes.expand(key.memory.address, byteCount: count, to: address &+ AesKey.portableOffset, rounds: count / 4 + 6)
+            if hashing {
+                // The zero block's cipher.
+                let blocks = SecretMemory(count: 64)
+                PortableModes.encrypt(address, blocks.address)
+                PortableModes.copyBlock(blocks.address, to: address &+ AesKey.hashOffset)
+            }
+        }
+    }
+
+    var address: Int => memory.address
+
+    /// The block at an address enciphered, or deciphered, with room for three more after it.
+    unsafe fn cipher(_ block: Int, decrypt: Bool) {
+        let kind = decrypt ? Cipher.EcbDecrypt : Cipher.EcbEncrypt
+        if !Native.cipher(kind as Int, address, 0, from: block, to: block, count: 16) {
+            if decrypt {
+                BitslicedAes.decrypt(address &+ AesKey.portableOffset, rounds: load64(address) unchecked as Int, block)
+            } else {
+                PortableModes.encrypt(address, block)
+            }
+        }
+    }
+}

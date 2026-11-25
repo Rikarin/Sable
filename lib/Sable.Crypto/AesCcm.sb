@@ -1,0 +1,62 @@
+module Sable.Crypto
+
+/// AES-CCM, SP 800-38C: AES in counter mode, and a tag by CBC-MAC. For what
+/// must have it (Bluetooth, Matter, some of TLS): it runs the cipher twice
+/// for each block, one after another, and is several times slower than
+/// `AesGcm`.
+///
+/// Under one key a nonce is for one message only, and random ones of n bytes
+/// are counted: after 2^(4n - 16) of them, which is 2^32 of 12 bytes and few
+/// of the shortest, there is LimitExceeded instead of another. A nonce of n
+/// bytes leaves 15 - n for the message's length, so one of 13 is for
+/// messages of up to 65535 bytes, one of 12 up to 2^24 - 1, which is
+/// enforced. A short tag is as easy to forge as it is short.
+///
+/// .NET's `AesCcm`.
+///
+/// ```sable
+/// let cipher = try! AesCcm(key: SymmetricKey.random(byteCount: 16), tagByteCount: 8, nonceByteCount: 13)
+/// let box = try! cipher.seal([0x68, 0x69])
+/// assert(box.nonce.count == 13 && box.tag.count == 8)
+/// assert((try! cipher.open(box)) == [0x68, 0x69])
+/// ```
+public struct AesCcm: AuthenticatedCipher {
+    let state: AeadState
+
+    /// The cipher under a key of 16, 24 or 32 bytes, with tags of 4 to 16
+    /// bytes, an even number, and nonces of 7 to 13.
+    public init(key: SymmetricKey, tagByteCount: Int = 16, nonceByteCount: Int = 12) throws(CryptoError) {
+        if tagByteCount < 4 || tagByteCount > 16 || tagByteCount % 2 != 0 {
+            throw CryptoError.InvalidParameter(reason: "an AES-CCM tag has 4, 6, 8, 10, 12, 14 or 16 bytes, not \(tagByteCount)")
+        }
+        if nonceByteCount < 7 || nonceByteCount > 13 {
+            throw CryptoError.InvalidParameter(reason: "an AES-CCM nonce has 7 to 13 bytes, not \(nonceByteCount)")
+        }
+        let aes = try AesKey(key)
+        state = AeadState(sealing: .CcmSeal, opening: .CcmOpen, aes: aes, secret: none, nonceByteCount: nonceByteCount, tagByteCount: tagByteCount)
+    }
+
+    public var nonceByteCount: Int => state.nonceByteCount
+
+    public var tagByteCount: Int => state.tagByteCount
+
+    public fn randomNonce() throws(CryptoError) -> U8[>..] {
+        return try state.randomNonce()
+    }
+
+    public fn seal(_ plaintext: U8[:], into ciphertext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError) {
+        try state.seal(plaintext, into: &ciphertext, nonce: nonce, associatedData: associatedData, tag: &tag)
+    }
+
+    public fn seal(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError) {
+        try state.seal(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: &tag)
+    }
+
+    public fn open(_ ciphertext: U8[:], into plaintext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError) {
+        try state.open(ciphertext, into: &plaintext, nonce: nonce, associatedData: associatedData, tag: tag)
+    }
+
+    public fn open(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError) {
+        try state.open(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: tag)
+    }
+}

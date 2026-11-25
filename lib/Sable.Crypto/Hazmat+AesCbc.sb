@@ -1,0 +1,60 @@
+module Sable.Crypto
+
+extension Hazmat {
+    /// AES, each block made a part of the next (CBC). The initialisation
+    /// vector must be random, one nobody could have told before, and new for
+    /// each message; it is not secret after. Anyone can change bits of the
+    /// message, and whoever learns whether a ciphertext's padding is right
+    /// can read it: authenticate the vector and the ciphertext, with `Hmac`,
+    /// and decrypt only what is authentic.
+    ///
+    /// ```sable
+    /// let cipher = try! Hazmat.AesCbc(key: SymmetricKey.random(byteCount: 16))
+    /// let iv = SecureRandom.bytes(16)
+    /// let ciphertext = try! cipher.encrypt([1, 2, 3], iv: iv)
+    /// assert(ciphertext.count == 16)
+    /// assert((try! cipher.decrypt(ciphertext, iv: iv)) == [1, 2, 3])
+    /// ```
+    public struct AesCbc: Sendable {
+        let aes: AesKey
+
+        /// The cipher under a key of 16, 24 or 32 bytes.
+        public init(key: SymmetricKey) throws(CryptoError) {
+            aes = try AesKey(key)
+        }
+
+        /// The plaintext enciphered.
+        public fn encrypt(_ plaintext: U8[:], iv: U8[:], padding: Padding = .Pkcs7) throws(CryptoError) -> U8[>..] {
+            var bytes = try Hazmat.padded(plaintext, padding)
+            try self.encrypt(inPlace: &bytes, iv: iv)
+            return bytes
+        }
+
+        /// The ciphertext deciphered, or InvalidPadding.
+        public fn decrypt(_ ciphertext: U8[:], iv: U8[:], padding: Padding = .Pkcs7) throws(CryptoError) -> U8[>..] {
+            try Hazmat.checkCiphertext(ciphertext.count, padding)
+            var bytes = ciphertext.toArray()
+            try self.decrypt(inPlace: &bytes, iv: iv)
+            try Hazmat.unpad(&bytes, padding)
+            return bytes
+        }
+
+        /// Whole blocks enciphered in place.
+        public fn encrypt(inPlace bytes: inout U8[:], iv: U8[:]) throws(CryptoError) {
+            try Hazmat.checkWhole(bytes.count)
+            let block = try Hazmat.block(iv)
+            unsafe {
+                Cipher.CbcEncrypt.run(aes.address, block.address, inPlace: &bytes)
+            }
+        }
+
+        /// Whole blocks deciphered in place.
+        public fn decrypt(inPlace bytes: inout U8[:], iv: U8[:]) throws(CryptoError) {
+            try Hazmat.checkWhole(bytes.count)
+            let block = try Hazmat.block(iv)
+            unsafe {
+                Cipher.CbcDecrypt.run(aes.address, block.address, inPlace: &bytes)
+            }
+        }
+    }
+}

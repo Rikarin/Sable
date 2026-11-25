@@ -1,0 +1,127 @@
+module Sable.Crypto
+
+/// ChaCha20 (RFC 8439) in portable code, and what XChaCha20 makes of it.
+struct PortableChaCha {
+    /// The sixteen words at an address put through ten double rounds, and
+    /// written at another: with the words added to what came out, the
+    /// stream's block; without, what HChaCha20 takes its key from.
+    unsafe static fn rounds(_ state: Int, to target: Int, added: Bool) {
+        var x0 = load32(state)
+        var x1 = load32(state &+ 4)
+        var x2 = load32(state &+ 8)
+        var x3 = load32(state &+ 12)
+        var x4 = load32(state &+ 16)
+        var x5 = load32(state &+ 20)
+        var x6 = load32(state &+ 24)
+        var x7 = load32(state &+ 28)
+        var x8 = load32(state &+ 32)
+        var x9 = load32(state &+ 36)
+        var x10 = load32(state &+ 40)
+        var x11 = load32(state &+ 44)
+        var x12 = load32(state &+ 48)
+        var x13 = load32(state &+ 52)
+        var x14 = load32(state &+ 56)
+        var x15 = load32(state &+ 60)
+        var round = 0
+        while round < 10 {
+            quarter(&x0, &x4, &x8, &x12)
+            quarter(&x1, &x5, &x9, &x13)
+            quarter(&x2, &x6, &x10, &x14)
+            quarter(&x3, &x7, &x11, &x15)
+            quarter(&x0, &x5, &x10, &x15)
+            quarter(&x1, &x6, &x11, &x12)
+            quarter(&x2, &x7, &x8, &x13)
+            quarter(&x3, &x4, &x9, &x14)
+            round += 1
+        }
+        store32(x0, target)
+        store32(x1, target &+ 4)
+        store32(x2, target &+ 8)
+        store32(x3, target &+ 12)
+        store32(x4, target &+ 16)
+        store32(x5, target &+ 20)
+        store32(x6, target &+ 24)
+        store32(x7, target &+ 28)
+        store32(x8, target &+ 32)
+        store32(x9, target &+ 36)
+        store32(x10, target &+ 40)
+        store32(x11, target &+ 44)
+        store32(x12, target &+ 48)
+        store32(x13, target &+ 52)
+        store32(x14, target &+ 56)
+        store32(x15, target &+ 60)
+        if added {
+            var i = 0
+            while i < 64 {
+                store32(load32(target &+ i) &+ load32(state &+ i), target &+ i)
+                i += 4
+            }
+        }
+    }
+
+    @inline(always)
+    static fn quarter(_ a: inout U32, _ b: inout U32, _ c: inout U32, _ d: inout U32) {
+        a = a &+ b
+        d = (d ^ a).rotatedLeft(by: 16)
+        c = c &+ d
+        b = (b ^ c).rotatedLeft(by: 12)
+        a = a &+ b
+        d = (d ^ a).rotatedLeft(by: 8)
+        c = c &+ d
+        b = (b ^ c).rotatedLeft(by: 7)
+    }
+
+    /// The words of the first block at an address: the key's, at another,
+    /// and after them 16 bytes of number and nonce, at a third.
+    unsafe static fn start(_ state: Int, key: Int, nonce: Int) {
+        store32(0x61707865, state)
+        store32(0x3320646E, state &+ 4)
+        store32(0x79622D32, state &+ 8)
+        store32(0x6B206574, state &+ 12)
+        NativeMemory.copy(from: RawPtr<U8>(address: key), to: RawPtr<U8>(address: state &+ 16), byteCount: 32)
+        NativeMemory.copy(from: RawPtr<U8>(address: nonce), to: RawPtr<U8>(address: state &+ 48), byteCount: 16)
+    }
+
+    /// ChaCha20-Poly1305: the text in the stream from its second block on,
+    /// and its tag, under the first one's key.
+    unsafe static fn poly(_ key: Int, _ work: Int, decrypt: Bool, _ associatedData: U8[:], _ text: inout U8[:]) {
+        let memory = SecretMemory(count: 144)
+        let state = memory.address
+        let block = state &+ 64
+        let number = block &+ 64
+        NativeMemory.copy(from: RawPtr<U8>(address: work), to: RawPtr<U8>(address: number &+ 4), byteCount: 12)
+        start(state, key: key, nonce: number)
+        rounds(state, to: block, added: true)
+        var sum = PortablePoly1305(key: block)
+        sum.add(associatedData)
+        if decrypt {
+            sum.add(text)
+        }
+        var at = 0
+        var next: U32 = 1
+        while at < text.count {
+            store32(next, state &+ 48)
+            rounds(state, to: block, added: true)
+            let taken = text.count - at < 64 ? text.count - at : 64
+            PortableModes.mix(block, into: &text, at, count: taken)
+            next = next &+ 1
+            at += taken
+        }
+        if !decrypt {
+            sum.add(text)
+        }
+        sum.add(associatedData.count unchecked as U64, text.count unchecked as U64)
+        sum.finish(at: work &+ 16)
+    }
+
+    /// HChaCha20: the key, at an address, that XChaCha20 uses ChaCha20 under,
+    /// of the key at another and a nonce's first 16 bytes at a third.
+    unsafe static fn subkey(_ target: Int, key: Int, nonce: Int) {
+        let memory = SecretMemory(count: 128)
+        let state = memory.address
+        start(state, key: key, nonce: nonce)
+        rounds(state, to: state &+ 64, added: false)
+        NativeMemory.copy(from: RawPtr<U8>(address: state &+ 64), to: RawPtr<U8>(address: target), byteCount: 16)
+        NativeMemory.copy(from: RawPtr<U8>(address: state &+ 112), to: RawPtr<U8>(address: target &+ 16), byteCount: 16)
+    }
+}

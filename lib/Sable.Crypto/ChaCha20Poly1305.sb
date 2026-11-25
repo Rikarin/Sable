@@ -1,0 +1,54 @@
+module Sable.Crypto
+
+/// ChaCha20-Poly1305, RFC 8439: what is as fast as AES-GCM where the
+/// processor has no instructions for AES, and as safe everywhere.
+///
+/// Under one key a nonce, of 12 bytes, is for one message only. Random ones
+/// are counted here, and after 2^32 there is LimitExceeded instead of
+/// another (the chance of two the same is then 2^-32): for more take
+/// counters, or `XChaCha20Poly1305`. A message has at most 2^38 - 64 bytes,
+/// which is enforced.
+///
+/// .NET's `ChaCha20Poly1305`; CryptoKit's `ChaChaPoly`.
+///
+/// ```sable
+/// let cipher = try! ChaCha20Poly1305(key: SymmetricKey.random(byteCount: 32))
+/// let box = try! cipher.seal([0x68, 0x69], associatedData: [1])
+/// assert((try! cipher.open(box, associatedData: [1])) == [0x68, 0x69])
+/// ```
+public struct ChaCha20Poly1305: AuthenticatedCipher {
+    let state: AeadState
+
+    /// The cipher under a key of 32 bytes.
+    ///
+    /// ```sable
+    /// assert((try! ChaCha20Poly1305(key: SymmetricKey.random(byteCount: 32))).nonceByteCount == 12)
+    /// ```
+    public init(key: SymmetricKey) throws(CryptoError) {
+        state = try AeadState.chaCha(key, nonceByteCount: 12)
+    }
+
+    public var nonceByteCount: Int => state.nonceByteCount
+
+    public var tagByteCount: Int => state.tagByteCount
+
+    public fn randomNonce() throws(CryptoError) -> U8[>..] {
+        return try state.randomNonce()
+    }
+
+    public fn seal(_ plaintext: U8[:], into ciphertext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError) {
+        try state.seal(plaintext, into: &ciphertext, nonce: nonce, associatedData: associatedData, tag: &tag)
+    }
+
+    public fn seal(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError) {
+        try state.seal(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: &tag)
+    }
+
+    public fn open(_ ciphertext: U8[:], into plaintext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError) {
+        try state.open(ciphertext, into: &plaintext, nonce: nonce, associatedData: associatedData, tag: tag)
+    }
+
+    public fn open(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError) {
+        try state.open(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: tag)
+    }
+}

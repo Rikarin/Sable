@@ -1,0 +1,86 @@
+module Sable.Crypto
+
+/// Ciphers that hide a message and no more: nothing shows that one was
+/// changed, and each is safe only with what is written beside it. They are
+/// what other formats and protocols are made of, and for those; a message is
+/// for an `AuthenticatedCipher`. That their names begin with `Hazmat` says so
+/// wherever they are used.
+///
+/// ```sable
+/// let cipher = try! Hazmat.AesCbc(key: SymmetricKey.random(byteCount: 32))
+/// let iv = SecureRandom.bytes(16)
+/// let ciphertext = try! cipher.encrypt([1, 2, 3], iv: iv)
+/// assert((try! cipher.decrypt(ciphertext, iv: iv)) == [1, 2, 3])
+/// ```
+public struct Hazmat {
+    private init() { }
+
+    /// What is after a message to make it whole blocks.
+    @derive(Equatable, Debug)
+    public enum Padding: Sendable {
+        /// Nothing: the message is whole blocks.
+        None
+
+        /// 1 to 16 bytes, each how many there are.
+        Pkcs7
+    }
+
+    /// An initialisation vector, or a counter block, in memory of its own.
+    static fn block(_ iv: U8[:]) throws(CryptoError) -> SecretMemory {
+        if iv.count != 16 {
+            throw CryptoError.InvalidParameter(reason: "an initialisation vector of AES has 16 bytes, not \(iv.count)")
+        }
+        return SecretMemory(iv)
+    }
+
+    static fn checkWhole(_ count: Int) throws(CryptoError) {
+        if count % 16 != 0 {
+            throw CryptoError.InvalidParameter(reason: "without padding, this cipher takes whole blocks of 16 bytes, not \(count) bytes")
+        }
+    }
+
+    /// The plaintext with its padding.
+    static fn padded(_ plaintext: U8[:], _ padding: Padding) throws(CryptoError) -> U8[>..] {
+        if padding == .None {
+            try checkWhole(plaintext.count)
+            return plaintext.toArray()
+        }
+        let more = 16 - plaintext.count % 16
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(plaintext.count + more)
+        bytes.append(contentsOf: plaintext)
+        bytes.append(repeating: more unchecked as U8, count: more)
+        return bytes
+    }
+
+    /// Checks that a ciphertext is whole blocks, and at least one where it
+    /// has padding.
+    static fn checkCiphertext(_ count: Int, _ padding: Padding) throws(CryptoError) {
+        if count % 16 != 0 || (padding == .Pkcs7 && count == 0) {
+            throw CryptoError.InvalidParameter(reason: "a ciphertext of this cipher is whole blocks of 16 bytes\(padding == .Pkcs7 ? ", one at least" : ""), not \(count) bytes")
+        }
+    }
+
+    /// The plaintext without its padding. Which of its bytes is wrong does
+    /// not show in how long that takes; that one is does, in the error.
+    static fn unpad(_ bytes: inout U8[>..], _ padding: Padding) throws(CryptoError) {
+        if padding == .None {
+            return
+        }
+        let count = bytes.count
+        let more = U32(bytes[count - 1])
+        var wrong = ((more &- 1) | (16 &- more)) >> 31
+        var i: U32 = 0
+        while i < 16 {
+            let within = 0 &- ((i &- more) >> 31)
+            wrong = blackBox(wrong | (within & (U32(bytes[count - 1 - Int(i)]) ^ more)))
+            i += 1
+        }
+        if wrong != 0 {
+            secureZero(&bytes)
+            throw CryptoError.InvalidPadding
+        }
+        secureZero(&bytes[(count - Int(more))...])
+        bytes.removeLast(Int(more))
+    }
+}

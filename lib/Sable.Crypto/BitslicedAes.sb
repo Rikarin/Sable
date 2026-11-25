@@ -1,0 +1,469 @@
+module Sable.Crypto
+
+/// Four AES blocks as eight words, one for each bit of a byte (after
+/// BearSSL's "ct64"): every step is the same few ANDs, XORs and shifts
+/// whatever the key and the blocks are, and nothing is looked up by them.
+struct BitslicedAes {
+    var q0: U64
+    var q1: U64
+    var q2: U64
+    var q3: U64
+    var q4: U64
+    var q5: U64
+    var q6: U64
+    var q7: U64
+
+    init() {
+        q0 = 0
+        q1 = 0
+        q2 = 0
+        q3 = 0
+        q4 = 0
+        q5 = 0
+        q6 = 0
+        q7 = 0
+    }
+
+    /// The four blocks at an address.
+    init(loading address: Int) {
+        unsafe {
+            let a = BitslicedAes.spread(address)
+            let b = BitslicedAes.spread(address &+ 16)
+            let c = BitslicedAes.spread(address &+ 32)
+            let d = BitslicedAes.spread(address &+ 48)
+            q0 = a.0
+            q1 = b.0
+            q2 = c.0
+            q3 = d.0
+            q4 = a.1
+            q5 = b.1
+            q6 = c.1
+            q7 = d.1
+            transpose()
+        }
+    }
+
+    /// The four blocks written at an address.
+    unsafe mutating fn store(_ address: Int) {
+        transpose()
+        BitslicedAes.gather(q0, q4, address)
+        BitslicedAes.gather(q1, q5, address &+ 16)
+        BitslicedAes.gather(q2, q6, address &+ 32)
+        BitslicedAes.gather(q3, q7, address &+ 48)
+    }
+
+    /// The block at an address, its bytes spread over two words.
+    @inline(always)
+    unsafe static fn spread(_ address: Int) -> (U64, U64) {
+        let a = BitslicedAes.spread(load32(address)) | BitslicedAes.spread(load32(address &+ 8)) << 8
+        let b = BitslicedAes.spread(load32(address &+ 4)) | BitslicedAes.spread(load32(address &+ 12)) << 8
+        return (a, b)
+    }
+
+    @inline(always)
+    static fn spread(_ word: U32) -> U64 {
+        var x = U64(word)
+        x = (x | x << 16) & 0x0000FFFF0000FFFF
+        return (x | x << 8) & 0x00FF00FF00FF00FF
+    }
+
+    @inline(always)
+    unsafe static fn gather(_ a: U64, _ b: U64, _ address: Int) {
+        store32(BitslicedAes.gather(a), address)
+        store32(BitslicedAes.gather(b), address &+ 4)
+        store32(BitslicedAes.gather(a >> 8), address &+ 8)
+        store32(BitslicedAes.gather(b >> 8), address &+ 12)
+    }
+
+    @inline(always)
+    static fn gather(_ word: U64) -> U32 {
+        var x = word & 0x00FF00FF00FF00FF
+        x = (x | x >> 8) & 0x0000FFFF0000FFFF
+        return (x | x >> 16) unchecked as U32
+    }
+
+    /// The bits of the words' bytes swapped for the words of the bytes' bits,
+    /// and the other way round.
+    @inline(always)
+    mutating fn transpose() {
+        BitslicedAes.swap(&q0, &q1, 0x5555555555555555, 1)
+        BitslicedAes.swap(&q2, &q3, 0x5555555555555555, 1)
+        BitslicedAes.swap(&q4, &q5, 0x5555555555555555, 1)
+        BitslicedAes.swap(&q6, &q7, 0x5555555555555555, 1)
+        BitslicedAes.swap(&q0, &q2, 0x3333333333333333, 2)
+        BitslicedAes.swap(&q1, &q3, 0x3333333333333333, 2)
+        BitslicedAes.swap(&q4, &q6, 0x3333333333333333, 2)
+        BitslicedAes.swap(&q5, &q7, 0x3333333333333333, 2)
+        BitslicedAes.swap(&q0, &q4, 0x0F0F0F0F0F0F0F0F, 4)
+        BitslicedAes.swap(&q1, &q5, 0x0F0F0F0F0F0F0F0F, 4)
+        BitslicedAes.swap(&q2, &q6, 0x0F0F0F0F0F0F0F0F, 4)
+        BitslicedAes.swap(&q3, &q7, 0x0F0F0F0F0F0F0F0F, 4)
+    }
+
+    @inline(always)
+    static fn swap(_ a: inout U64, _ b: inout U64, _ low: U64, _ shift: U64) {
+        let x = a
+        let y = b
+        a = (x & low) | (y & low) << shift
+        b = (x >> shift & low) | (y & ~low)
+    }
+
+    /// The round key at an address, spread and in words of bits as the blocks are.
+    @inline(always)
+    unsafe mutating fn add(key: Int) {
+        q0 = q0 ^ load64(key)
+        q1 = q1 ^ load64(key &+ 8)
+        q2 = q2 ^ load64(key &+ 16)
+        q3 = q3 ^ load64(key &+ 24)
+        q4 = q4 ^ load64(key &+ 32)
+        q5 = q5 ^ load64(key &+ 40)
+        q6 = q6 ^ load64(key &+ 48)
+        q7 = q7 ^ load64(key &+ 56)
+    }
+
+    /// Every byte put through the S-box, by Boyer and Peralta's circuit of
+    /// its arithmetic (A depth-16 circuit for the AES S-box, 2011).
+    mutating fn substitute() {
+        let x0 = q7
+        let x1 = q6
+        let x2 = q5
+        let x3 = q4
+        let x4 = q3
+        let x5 = q2
+        let x6 = q1
+        let x7 = q0
+
+        // The linear layer before.
+        let y14 = x3 ^ x5
+        let y13 = x0 ^ x6
+        let y9 = x0 ^ x3
+        let y8 = x0 ^ x5
+        let t0 = x1 ^ x2
+        let y1 = t0 ^ x7
+        let y4 = y1 ^ x3
+        let y12 = y13 ^ y14
+        let y2 = y1 ^ x0
+        let y5 = y1 ^ x6
+        let y3 = y5 ^ y8
+        let t1 = x4 ^ y12
+        let y15 = t1 ^ x5
+        let y20 = t1 ^ x1
+        let y6 = y15 ^ x7
+        let y10 = y15 ^ t0
+        let y11 = y20 ^ y9
+        let y7 = x7 ^ y11
+        let y17 = y10 ^ y11
+        let y19 = y10 ^ y8
+        let y16 = t0 ^ y11
+        let y21 = y13 ^ y16
+        let y18 = x0 ^ y16
+
+        // The inversion.
+        let t2 = y12 & y15
+        let t3 = y3 & y6
+        let t4 = t3 ^ t2
+        let t5 = y4 & x7
+        let t6 = t5 ^ t2
+        let t7 = y13 & y16
+        let t8 = y5 & y1
+        let t9 = t8 ^ t7
+        let t10 = y2 & y7
+        let t11 = t10 ^ t7
+        let t12 = y9 & y11
+        let t13 = y14 & y17
+        let t14 = t13 ^ t12
+        let t15 = y8 & y10
+        let t16 = t15 ^ t12
+        let t17 = t4 ^ t14
+        let t18 = t6 ^ t16
+        let t19 = t9 ^ t14
+        let t20 = t11 ^ t16
+        let t21 = t17 ^ y20
+        let t22 = t18 ^ y19
+        let t23 = t19 ^ y21
+        let t24 = t20 ^ y18
+        let t25 = t21 ^ t22
+        let t26 = t21 & t23
+        let t27 = t24 ^ t26
+        let t28 = t25 & t27
+        let t29 = t28 ^ t22
+        let t30 = t23 ^ t24
+        let t31 = t22 ^ t26
+        let t32 = t31 & t30
+        let t33 = t32 ^ t24
+        let t34 = t23 ^ t33
+        let t35 = t27 ^ t33
+        let t36 = t24 & t35
+        let t37 = t36 ^ t34
+        let t38 = t27 ^ t36
+        let t39 = t29 & t38
+        let t40 = t25 ^ t39
+        let t41 = t40 ^ t37
+        let t42 = t29 ^ t33
+        let t43 = t29 ^ t40
+        let t44 = t33 ^ t37
+        let t45 = t42 ^ t41
+        let z0 = t44 & y15
+        let z1 = t37 & y6
+        let z2 = t33 & x7
+        let z3 = t43 & y16
+        let z4 = t40 & y1
+        let z5 = t29 & y7
+        let z6 = t42 & y11
+        let z7 = t45 & y17
+        let z8 = t41 & y10
+        let z9 = t44 & y12
+        let z10 = t37 & y3
+        let z11 = t33 & y4
+        let z12 = t43 & y13
+        let z13 = t40 & y5
+        let z14 = t29 & y2
+        let z15 = t42 & y9
+        let z16 = t45 & y14
+        let z17 = t41 & y8
+
+        // The linear layer after.
+        let t46 = z15 ^ z16
+        let t47 = z10 ^ z11
+        let t48 = z5 ^ z13
+        let t49 = z9 ^ z10
+        let t50 = z2 ^ z12
+        let t51 = z2 ^ z5
+        let t52 = z7 ^ z8
+        let t53 = z0 ^ z3
+        let t54 = z6 ^ z7
+        let t55 = z16 ^ z17
+        let t56 = z12 ^ t48
+        let t57 = t50 ^ t53
+        let t58 = z4 ^ t46
+        let t59 = z3 ^ t54
+        let t60 = t46 ^ t57
+        let t61 = z14 ^ t57
+        let t62 = t52 ^ t58
+        let t63 = t49 ^ t58
+        let t64 = z4 ^ t59
+        let t65 = t61 ^ t62
+        let t66 = z1 ^ t63
+        let s0 = t59 ^ t63
+        let s6 = t56 ^ ~t62
+        let s7 = t48 ^ ~t60
+        let t67 = t64 ^ t65
+        let s3 = t53 ^ t66
+        let s4 = t51 ^ t66
+        let s5 = t47 ^ t65
+        let s1 = t64 ^ ~s3
+        let s2 = t55 ^ ~t67
+        q7 = s0
+        q6 = s1
+        q5 = s2
+        q4 = s3
+        q3 = s4
+        q2 = s5
+        q1 = s6
+        q0 = s7
+    }
+
+    /// The S-box's affine map undone, which is what is between the S-box and
+    /// its inverse on both sides of it.
+    @inline(always)
+    mutating fn undoAffine() {
+        let a0 = ~q0
+        let a1 = ~q1
+        let a2 = q2
+        let a3 = q3
+        let a4 = q4
+        let a5 = ~q5
+        let a6 = ~q6
+        let a7 = q7
+        q7 = a1 ^ a4 ^ a6
+        q6 = a0 ^ a3 ^ a5
+        q5 = a7 ^ a2 ^ a4
+        q4 = a6 ^ a1 ^ a3
+        q3 = a5 ^ a0 ^ a2
+        q2 = a4 ^ a7 ^ a1
+        q1 = a3 ^ a6 ^ a0
+        q0 = a2 ^ a5 ^ a7
+    }
+
+    /// Every byte put through the inverse S-box.
+    mutating fn unsubstitute() {
+        undoAffine()
+        substitute()
+        undoAffine()
+    }
+
+    @inline(always)
+    static fn shiftRows(_ x: U64) -> U64 {
+        let still = x & 0x000000000000FFFF
+        let second = (x & 0x00000000FFF00000) >> 4 | (x & 0x00000000000F0000) << 12
+        let third = (x & 0x0000FF0000000000) >> 8 | (x & 0x000000FF00000000) << 8
+        let fourth = (x & 0xF000000000000000) >> 12 | (x & 0x0FFF000000000000) << 4
+        return still | second | third | fourth
+    }
+
+    @inline(always)
+    mutating fn shiftRows() {
+        q0 = BitslicedAes.shiftRows(q0)
+        q1 = BitslicedAes.shiftRows(q1)
+        q2 = BitslicedAes.shiftRows(q2)
+        q3 = BitslicedAes.shiftRows(q3)
+        q4 = BitslicedAes.shiftRows(q4)
+        q5 = BitslicedAes.shiftRows(q5)
+        q6 = BitslicedAes.shiftRows(q6)
+        q7 = BitslicedAes.shiftRows(q7)
+    }
+
+    @inline(always)
+    static fn unshiftRows(_ x: U64) -> U64 {
+        let still = x & 0x000000000000FFFF
+        let second = (x & 0x000000000FFF0000) << 4 | (x & 0x00000000F0000000) >> 12
+        let third = (x & 0x000000FF00000000) << 8 | (x & 0x0000FF0000000000) >> 8
+        let fourth = (x & 0x000F000000000000) << 12 | (x & 0xFFF0000000000000) >> 4
+        return still | second | third | fourth
+    }
+
+    @inline(always)
+    mutating fn unshiftRows() {
+        q0 = BitslicedAes.unshiftRows(q0)
+        q1 = BitslicedAes.unshiftRows(q1)
+        q2 = BitslicedAes.unshiftRows(q2)
+        q3 = BitslicedAes.unshiftRows(q3)
+        q4 = BitslicedAes.unshiftRows(q4)
+        q5 = BitslicedAes.unshiftRows(q5)
+        q6 = BitslicedAes.unshiftRows(q6)
+        q7 = BitslicedAes.unshiftRows(q7)
+    }
+
+    @inline(always)
+    mutating fn mixColumns() {
+        // Each column's bytes and the ones below them, then two below.
+        let s0 = q0 ^ q0.rotatedRight(by: 16)
+        let s1 = q1 ^ q1.rotatedRight(by: 16)
+        let s2 = q2 ^ q2.rotatedRight(by: 16)
+        let s3 = q3 ^ q3.rotatedRight(by: 16)
+        let s4 = q4 ^ q4.rotatedRight(by: 16)
+        let s5 = q5 ^ q5.rotatedRight(by: 16)
+        let s6 = q6 ^ q6.rotatedRight(by: 16)
+        let s7 = q7 ^ q7.rotatedRight(by: 16)
+        q0 = s7 ^ q0 ^ s0 ^ s0.rotatedRight(by: 32)
+        q1 = s0 ^ s7 ^ q1 ^ s1 ^ s1.rotatedRight(by: 32)
+        q2 = s1 ^ q2 ^ s2 ^ s2.rotatedRight(by: 32)
+        q3 = s2 ^ s7 ^ q3 ^ s3 ^ s3.rotatedRight(by: 32)
+        q4 = s3 ^ s7 ^ q4 ^ s4 ^ s4.rotatedRight(by: 32)
+        q5 = s4 ^ q5 ^ s5 ^ s5.rotatedRight(by: 32)
+        q6 = s5 ^ q6 ^ s6 ^ s6.rotatedRight(by: 32)
+        q7 = s6 ^ q7 ^ s7 ^ s7.rotatedRight(by: 32)
+    }
+
+    /// MixColumns' inverse is MixColumns after five of each byte and four of
+    /// the one two below it.
+    @inline(always)
+    mutating fn unmixColumns() {
+        let t0 = q0 ^ q0.rotatedRight(by: 32)
+        let t1 = q1 ^ q1.rotatedRight(by: 32)
+        let t2 = q2 ^ q2.rotatedRight(by: 32)
+        let t3 = q3 ^ q3.rotatedRight(by: 32)
+        let t4 = q4 ^ q4.rotatedRight(by: 32)
+        let t5 = q5 ^ q5.rotatedRight(by: 32)
+        let t6 = q6 ^ q6.rotatedRight(by: 32)
+        let t7 = q7 ^ q7.rotatedRight(by: 32)
+        q0 = q0 ^ t6
+        q1 = q1 ^ t7 ^ t6
+        q2 = q2 ^ t0 ^ t7
+        q3 = q3 ^ t1 ^ t6
+        q4 = q4 ^ t2 ^ t7 ^ t6
+        q5 = q5 ^ t3 ^ t7
+        q6 = q6 ^ t4
+        q7 = q7 ^ t5
+        mixColumns()
+    }
+
+    /// The four blocks at an address enciphered, under the round keys at another.
+    unsafe static fn encrypt(_ keys: Int, rounds: Int, _ address: Int) {
+        var q = BitslicedAes(loading: address)
+        q.add(key: keys)
+        var round = 1
+        while round < rounds {
+            q.substitute()
+            q.shiftRows()
+            q.mixColumns()
+            q.add(key: keys &+ 64 &* round)
+            round += 1
+        }
+        q.substitute()
+        q.shiftRows()
+        q.add(key: keys &+ 64 &* rounds)
+        q.store(address)
+    }
+
+    /// The four blocks at an address deciphered, under the round keys at another.
+    unsafe static fn decrypt(_ keys: Int, rounds: Int, _ address: Int) {
+        var q = BitslicedAes(loading: address)
+        q.add(key: keys &+ 64 &* rounds)
+        var round = rounds - 1
+        while round > 0 {
+            q.unshiftRows()
+            q.unsubstitute()
+            q.add(key: keys &+ 64 &* round)
+            q.unmixColumns()
+            round -= 1
+        }
+        q.unshiftRows()
+        q.unsubstitute()
+        q.add(key: keys)
+        q.store(address)
+    }
+
+    /// The S-box of each byte of a word.
+    static fn substitute(_ word: U32) -> U32 {
+        var q = BitslicedAes()
+        q.q0 = U64(word)
+        q.transpose()
+        q.substitute()
+        q.transpose()
+        return q.q0 unchecked as U32
+    }
+
+    /// FIPS 197's key expansion of the key at an address, each round key
+    /// spread over eight words.
+    unsafe static fn expand(_ key: Int, byteCount: Int, to keys: Int, rounds: Int) {
+        let words = byteCount / 4
+        let expanded = SecretMemory(count: 16 * (rounds + 1) + 64)
+        let w = expanded.address
+        NativeMemory.copy(from: RawPtr<U8>(address: key), to: RawPtr<U8>(address: w), byteCount: byteCount)
+        var constant: U32 = 1
+        var i = words
+        while i < 4 * (rounds + 1) {
+            var word = load32(w &+ 4 &* (i - 1))
+            if i % words == 0 {
+                word = BitslicedAes.substitute(word.rotatedRight(by: 8)) ^ constant
+                constant = constant << 1 ^ (constant >> 7) &* 0x11B
+            } else if words > 6 && i % words == 4 {
+                word = BitslicedAes.substitute(word)
+            }
+            store32(load32(w &+ 4 &* (i - words)) ^ word, w &+ 4 &* i)
+            i += 1
+        }
+        let four = w + 16 * (rounds + 1)
+        var round = 0
+        while round <= rounds {
+            // The same key for each of the four blocks.
+            var block = 0
+            while block < 4 {
+                NativeMemory.copy(from: RawPtr<U8>(address: w &+ 16 &* round), to: RawPtr<U8>(address: four &+ 16 &* block), byteCount: 16)
+                block += 1
+            }
+            let q = BitslicedAes(loading: four)
+            let to = keys &+ 64 &* round
+            store64(q.q0, to)
+            store64(q.q1, to &+ 8)
+            store64(q.q2, to &+ 16)
+            store64(q.q3, to &+ 24)
+            store64(q.q4, to &+ 32)
+            store64(q.q5, to &+ 40)
+            store64(q.q6, to &+ 48)
+            store64(q.q7, to &+ 56)
+            round += 1
+        }
+    }
+}

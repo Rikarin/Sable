@@ -1,0 +1,122 @@
+module Sable.Crypto
+
+/// Poly1305 (RFC 8439) in five limbs of 26 bits: the products of two, added
+/// up, are still 64 bits, and nothing depends on what they are.
+struct PortablePoly1305 {
+    let r0: U64
+    let r1: U64
+    let r2: U64
+    let r3: U64
+    let r4: U64
+    let pad0: U64
+    let pad1: U64
+    var h0: U64
+    var h1: U64
+    var h2: U64
+    var h3: U64
+    var h4: U64
+
+    /// Nothing summed yet, under the 32-byte key at an address.
+    init(key: Int) {
+        unsafe {
+            let words = (load64(key), load64(key &+ 8), load64(key &+ 16), load64(key &+ 24))
+            let low = words.0 & 0x0FFFFFFC0FFFFFFF
+            let high = words.1 & 0x0FFFFFFC0FFFFFFC
+            r0 = low & 0x3FFFFFF
+            r1 = low >> 26 & 0x3FFFFFF
+            r2 = (low >> 52 | high << 12) & 0x3FFFFFF
+            r3 = high >> 14 & 0x3FFFFFF
+            r4 = high >> 40
+            pad0 = words.2
+            pad1 = words.3
+            h0 = 0
+            h1 = 0
+            h2 = 0
+            h3 = 0
+            h4 = 0
+        }
+    }
+
+    /// The bytes, and zeros to a whole block after them.
+    mutating fn add(_ bytes: U8[:]) {
+        let count = bytes.count
+        var at = 0
+        while at + 16 <= count {
+            add(bytes.readU64(at: at, endian: .Little), bytes.readU64(at: at + 8, endian: .Little))
+            at += 16
+        }
+        if at < count {
+            var low: U64 = 0
+            var high: U64 = 0
+            var i = count - 1
+            while i >= at {
+                high = high << 8 | low >> 56
+                low = low << 8 | U64(bytes[i])
+                i -= 1
+            }
+            add(low, high)
+        }
+    }
+
+    /// A block, of two little-endian words.
+    mutating fn add(_ low: U64, _ high: U64) {
+        let a0 = h0 &+ (low & 0x3FFFFFF)
+        let a1 = h1 &+ (low >> 26 & 0x3FFFFFF)
+        let a2 = h2 &+ ((low >> 52 | high << 12) & 0x3FFFFFF)
+        let a3 = h3 &+ (high >> 14 & 0x3FFFFFF)
+        let a4 = h4 &+ (high >> 40 | 0x1000000)
+        let s1 = r1 &* 5
+        let s2 = r2 &* 5
+        let s3 = r3 &* 5
+        let s4 = r4 &* 5
+        var d0 = a0 &* r0 &+ a1 &* s4 &+ a2 &* s3 &+ a3 &* s2 &+ a4 &* s1
+        var d1 = a0 &* r1 &+ a1 &* r0 &+ a2 &* s4 &+ a3 &* s3 &+ a4 &* s2
+        var d2 = a0 &* r2 &+ a1 &* r1 &+ a2 &* r0 &+ a3 &* s4 &+ a4 &* s3
+        var d3 = a0 &* r3 &+ a1 &* r2 &+ a2 &* r1 &+ a3 &* r0 &+ a4 &* s4
+        var d4 = a0 &* r4 &+ a1 &* r3 &+ a2 &* r2 &+ a3 &* r1 &+ a4 &* r0
+        d1 = d1 &+ (d0 >> 26)
+        d2 = d2 &+ (d1 >> 26)
+        d3 = d3 &+ (d2 >> 26)
+        d4 = d4 &+ (d3 >> 26)
+        d0 = (d0 & 0x3FFFFFF) &+ (d4 >> 26) &* 5
+        h1 = (d1 & 0x3FFFFFF) &+ (d0 >> 26)
+        h0 = d0 & 0x3FFFFFF
+        h2 = d2 & 0x3FFFFFF
+        h3 = d3 & 0x3FFFFFF
+        h4 = d4 & 0x3FFFFFF
+    }
+
+    /// The tag written at an address.
+    unsafe fn finish(at address: Int) {
+        // Carried all the way, then less the prime if that is not negative,
+        // which is chosen by a mask.
+        var a1 = h1
+        var a2 = h2 &+ (a1 >> 26)
+        a1 = a1 & 0x3FFFFFF
+        var a3 = h3 &+ (a2 >> 26)
+        a2 = a2 & 0x3FFFFFF
+        var a4 = h4 &+ (a3 >> 26)
+        a3 = a3 & 0x3FFFFFF
+        var a0 = h0 &+ (a4 >> 26) &* 5
+        a4 = a4 & 0x3FFFFFF
+        a1 = a1 &+ (a0 >> 26)
+        a0 = a0 & 0x3FFFFFF
+        let g0 = a0 &+ 5
+        let g1 = a1 &+ (g0 >> 26)
+        let g2 = a2 &+ (g1 >> 26)
+        let g3 = a3 &+ (g2 >> 26)
+        let g4 = a4 &+ (g3 >> 26) &- 0x4000000
+        let mask = blackBox((g4 >> 63) &- 1)
+        a0 = (a0 & ~mask) | (g0 & 0x3FFFFFF & mask)
+        a1 = (a1 & ~mask) | (g1 & 0x3FFFFFF & mask)
+        a2 = (a2 & ~mask) | (g2 & 0x3FFFFFF & mask)
+        a3 = (a3 & ~mask) | (g3 & 0x3FFFFFF & mask)
+        a4 = (a4 & ~mask) | (g4 & mask)
+        let low = a0 | a1 << 26 | a2 << 52
+        let high = a2 >> 12 | a3 << 14 | a4 << 40
+        let sum = low &+ pad0
+        let carry = ((low & pad0) | ((low | pad0) & ~sum)) >> 63
+        store64(sum, address)
+        store64(high &+ pad1 &+ carry, address &+ 8)
+    }
+}

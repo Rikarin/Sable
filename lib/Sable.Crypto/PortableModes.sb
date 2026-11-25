@@ -1,0 +1,277 @@
+module Sable.Crypto
+
+/// AES's modes in portable code, a block or four at a time in memory beside
+/// the text: what runtime/ciphers.c does where the processor has no
+/// instructions for it. 'key' is the address of an AesKey's memory.
+struct PortableModes {
+    /// So many blocks, up to four, at an address enciphered.
+    @inline(always)
+    unsafe static fn encrypt(_ key: Int, _ blocks: Int) {
+        BitslicedAes.encrypt(key &+ AesKey.portableOffset, rounds: load64(key) unchecked as Int, blocks)
+    }
+
+    /// The text's bytes from an index on, up to so many, copied to an address.
+    @inline(always)
+    unsafe static fn load(_ text: U8[:], _ at: Int, to address: Int, count: Int) -> Int {
+        let taken = text.count - at < count ? text.count - at : count
+        store(text[at..<at + taken], at: address)
+        return taken
+    }
+
+    /// The text's bytes from an index on exclusive or as many at an address.
+    @inline(always)
+    unsafe static fn mix(_ address: Int, into text: inout U8[:], _ at: Int, count: Int) {
+        var i = 0
+        while i + 8 <= count {
+            text.writeU64(text.readU64(at: at + i, endian: .native) ^ load64(address &+ i), at: at + i, endian: .native)
+            i += 8
+        }
+        while i < count {
+            text[at + i] = text[at + i] ^ RawPtr<U8>(address: address).load(at: i)
+            i += 1
+        }
+    }
+
+    /// The text's bytes from an index on made those at an address.
+    @inline(always)
+    unsafe static fn unload(_ address: Int, to text: inout U8[:], _ at: Int, count: Int) {
+        var i = 0
+        while i < count {
+            text[at + i] = RawPtr<U8>(address: address).load(at: i)
+            i += 1
+        }
+    }
+
+    /// The block at one address made its exclusive or with the one at another.
+    @inline(always)
+    unsafe static fn mixBlock(_ source: Int, into target: Int) {
+        store64(load64(target) ^ load64(source), target)
+        store64(load64(target &+ 8) ^ load64(source &+ 8), target &+ 8)
+    }
+
+    @inline(always)
+    unsafe static fn copyBlock(_ source: Int, to target: Int) {
+        store64(load64(source), target)
+        store64(load64(source &+ 8), target &+ 8)
+    }
+
+    unsafe static fn ecb(_ key: Int, decrypt: Bool, _ text: inout U8[:]) {
+        let memory = SecretMemory(count: 64)
+        var at = 0
+        while at < text.count {
+            let taken = load(text, at, to: memory.address, count: 64)
+            if decrypt {
+                BitslicedAes.decrypt(key &+ AesKey.portableOffset, rounds: load64(key) unchecked as Int, memory.address)
+            } else {
+                encrypt(key, memory.address)
+            }
+            unload(memory.address, to: &text, at, count: taken)
+            at += taken
+        }
+    }
+
+    unsafe static fn cbcEncrypt(_ key: Int, _ work: Int, _ text: inout U8[:]) {
+        let memory = SecretMemory(count: 64)
+        let block = memory.address
+        copyBlock(work, to: block)
+        var at = 0
+        while at < text.count {
+            _ = load(text, at, to: block &+ 16, count: 16)
+            mixBlock(block &+ 16, into: block)
+            encrypt(key, block)
+            unload(block, to: &text, at, count: 16)
+            at += 16
+        }
+        copyBlock(block, to: work)
+    }
+
+    unsafe static fn cbcDecrypt(_ key: Int, _ work: Int, _ text: inout U8[:]) {
+        // The block before, and the four there are before they are deciphered.
+        let memory = SecretMemory(count: 144)
+        let blocks = memory.address
+        let before = blocks &+ 64
+        copyBlock(work, to: before)
+        var at = 0
+        while at < text.count {
+            let taken = load(text, at, to: blocks, count: 64)
+            NativeMemory.copy(from: RawPtr<U8>(address: blocks), to: RawPtr<U8>(address: before &+ 16), byteCount: 64)
+            BitslicedAes.decrypt(key &+ AesKey.portableOffset, rounds: load64(key) unchecked as Int, blocks)
+            var i = 0
+            while i < taken {
+                mixBlock(before &+ i, into: blocks &+ i)
+                i += 16
+            }
+            unload(blocks, to: &text, at, count: taken)
+            copyBlock(before &+ taken, to: before)
+            at += taken
+        }
+        copyBlock(before, to: work)
+    }
+
+    /// Four counter blocks from the one at an address, whose last 'width'
+    /// words of 32 bits are the counter, written at another; the first is
+    /// then the next.
+    unsafe static fn counters(_ counter: Int, _ blocks: Int, wide: Bool) {
+        var i = 0
+        while i < 64 {
+            copyBlock(counter, to: blocks &+ i)
+            if wide {
+                let low = load64(counter &+ 8).byteSwapped &+ 1
+                // One where the low half came to zero, without asking.
+                let carry = ~(low | (0 &- low)) >> 63
+                store64(low.byteSwapped, counter &+ 8)
+                store64((load64(counter).byteSwapped &+ carry).byteSwapped, counter)
+            } else {
+                store32((load32(counter &+ 12).byteSwapped &+ 1).byteSwapped, counter &+ 12)
+            }
+            i += 16
+        }
+    }
+
+    /// The text in CTR from the counter block at an address on, which is not changed.
+    unsafe static fn ctr(_ key: Int, _ work: Int, _ text: inout U8[:], wide: Bool = true) {
+        let memory = SecretMemory(count: 80)
+        let blocks = memory.address
+        let counter = blocks &+ 64
+        copyBlock(work, to: counter)
+        var at = 0
+        while at < text.count {
+            let taken = text.count - at < 64 ? text.count - at : 64
+            counters(counter, blocks, wide: wide)
+            encrypt(key, blocks)
+            mix(blocks, into: &text, at, count: taken)
+            at += taken
+        }
+    }
+
+    unsafe static fn cfb(_ key: Int, _ work: Int, decrypt: Bool, _ text: inout U8[:]) {
+        let memory = SecretMemory(count: 64)
+        let block = memory.address
+        copyBlock(work, to: block)
+        var at = 0
+        while at < text.count {
+            encrypt(key, block)
+            let taken = load(text, at, to: block &+ 16, count: 16)
+            mix(block, into: &text, at, count: taken)
+            if decrypt {
+                copyBlock(block &+ 16, to: block)
+            } else {
+                _ = load(text, at, to: block, count: 16)
+            }
+            at += taken
+        }
+    }
+
+    unsafe static fn cfb8(_ key: Int, _ work: Int, decrypt: Bool, _ text: inout U8[:]) {
+        let memory = SecretMemory(count: 64)
+        let block = memory.address
+        let window = SecretMemory(count: 24)
+        copyBlock(work, to: window.address)
+        var at = 0
+        while at < text.count {
+            copyBlock(window.address, to: block)
+            encrypt(key, block)
+            let read = text[at]
+            let written = read ^ RawPtr<U8>(address: block).load()
+            text[at] = written
+            store8(decrypt ? read : written, window.address &+ 16)
+            copyBlock(window.address &+ 1, to: window.address)
+            at += 1
+        }
+    }
+
+    /// GCM, or for Ghash only its sum, of the text.
+    unsafe static fn gcm(_ kind: Cipher, _ key: Int, _ work: Int, _ associatedData: U8[:], _ text: inout U8[:]) {
+        var sum = PortableGhash(key: key &+ AesKey.hashOffset)
+        sum.add(associatedData)
+        if kind != .GcmSeal {
+            sum.add(text)
+        }
+        let memory = SecretMemory(count: 80)
+        let blocks = memory.address
+        if kind != .Ghash {
+            let counter = blocks &+ 64
+            copyBlock(work, to: counter)
+            store32((load32(counter &+ 12).byteSwapped &+ 1).byteSwapped, counter &+ 12)
+            ctr(key, counter, &text, wide: false)
+        }
+        if kind == .GcmSeal {
+            sum.add(text)
+        }
+        sum.add(high: (associatedData.count * 8) unchecked as U64, low: (text.count * 8) unchecked as U64)
+        store64(sum.high.byteSwapped, work &+ 16)
+        store64(sum.low.byteSwapped, work &+ 24)
+        if kind != .Ghash {
+            copyBlock(work, to: blocks)
+            encrypt(key, blocks)
+            mixBlock(blocks, into: work &+ 16)
+        }
+    }
+
+    /// Bytes worked into the CBC-MAC at an address, zeros after them to a
+    /// whole block; 'used' bytes of the first block are in it already, and
+    /// its cipher still to come.
+    unsafe static fn mac(_ key: Int, _ mac: Int, _ bytes: U8[:], used: Int = 0) {
+        var at = 0
+        var used = used
+        while at < bytes.count {
+            let taken = bytes.count - at < 16 - used ? bytes.count - at : 16 - used
+            var i = 0
+            while i < taken {
+                store8(RawPtr<U8>(address: mac).load(at: used + i) ^ bytes[at + i], mac &+ used &+ i)
+                i += 1
+            }
+            encrypt(key, mac)
+            used = 0
+            at += taken
+        }
+    }
+
+    /// CCM: the CBC-MAC of B0, the associated data with its length before it
+    /// and the plaintext, and the text in CTR.
+    unsafe static fn ccm(_ key: Int, _ work: Int, decrypt: Bool, _ associatedData: U8[:], _ text: inout U8[:]) {
+        let memory = SecretMemory(count: 144)
+        let sum = memory.address
+        copyBlock(work, to: sum)
+        encrypt(key, sum)
+        let count = associatedData.count
+        if count > 0 {
+            var used = 2
+            var first: U64 = 0
+            if count < 0xFF00 {
+                first = (count unchecked as U64) << 48
+            } else if count <= 0xFFFFFFFF {
+                used = 6
+                first = (count unchecked as U64) << 16 | 0xFFFE000000000000
+            } else {
+                // Two bytes of the length are past the first word.
+                used = 10
+                first = (count unchecked as U64) >> 16 | 0xFFFF000000000000
+                store64(load64(sum &+ 8) ^ ((count unchecked as U64) << 48).byteSwapped, sum &+ 8)
+            }
+            store64(load64(sum) ^ first.byteSwapped, sum)
+            mac(key, sum, associatedData, used: used)
+        }
+
+        // The counter is as wide as the length, and the message too short
+        // for it to reach the nonce.
+        let counter = sum &+ 64
+        copyBlock(work, to: counter)
+        let flags = RawPtr<U8>(address: counter).load() & 7
+        store8(flags, counter)
+        Native.zero(counter &+ 15 &- Int(flags), Int(flags) + 1)
+        let start = counter &+ 16
+        copyBlock(counter, to: start)
+        encrypt(key, start)
+        store64((load64(counter &+ 8).byteSwapped &+ 1).byteSwapped, counter &+ 8)
+        if !decrypt {
+            mac(key, sum, text)
+        }
+        ctr(key, counter, &text)
+        if decrypt {
+            mac(key, sum, text)
+        }
+        copyBlock(sum, to: work &+ 16)
+        mixBlock(start, into: work &+ 16)
+    }
+}

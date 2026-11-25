@@ -1,0 +1,200 @@
+module Sable.Crypto
+
+/// What an authenticated cipher has: its key made ready, how long its nonces
+/// and tags are, and how many random nonces it has given.
+@immutable
+final class AeadState {
+    let sealing: Cipher
+    let opening: Cipher
+
+    // AES's key, or ChaCha20's.
+    let aes: AesKey?
+    let secret: SecretMemory?
+    let nonceByteCount: Int
+    let tagByteCount: Int
+    let randomNonces: Atomic<U64>
+
+    init(sealing: Cipher, opening: Cipher, aes: AesKey?, secret: SecretMemory?, nonceByteCount: Int, tagByteCount: Int) {
+        self.sealing = sealing
+        self.opening = opening
+        self.aes = aes
+        self.secret = secret
+        self.nonceByteCount = nonceByteCount
+        self.tagByteCount = tagByteCount
+        randomNonces = Atomic<U64>(0)
+    }
+
+    /// ChaCha20's, of a key of 32 bytes.
+    static fn chaCha(_ key: SymmetricKey, nonceByteCount: Int) throws(CryptoError) -> AeadState {
+        if key.byteCount != 32 {
+            throw CryptoError.InvalidParameter(reason: "a ChaCha20 key has 32 bytes, not \(key.byteCount)")
+        }
+        return AeadState(sealing: .PolySeal, opening: .PolyOpen, aes: none, secret: key.memory, nonceByteCount: nonceByteCount, tagByteCount: 16)
+    }
+
+    /// How many random nonces there may be: with n bits of nonce, 2^((n - 32) / 2)
+    /// of them, which makes two the same with a chance of 2^-32 at most.
+    var randomNonceLimit: U64 {
+        get {
+            let bits = 4 * nonceByteCount - 16
+            return bits <= 0 ? 1 : bits >= 63 ? U64.max : 1 << (bits unchecked as U64)
+        }
+    }
+
+    /// A random nonce, while there may be more.
+    fn randomNonce() throws(CryptoError) -> U8[>..] {
+        if randomNonces.add(1, ordering: .Relaxed) >= randomNonceLimit {
+            _ = randomNonces.subtract(1, ordering: .Relaxed)
+            throw CryptoError.LimitExceeded(reason: "this key has had \(randomNonceLimit) random nonces of \(nonceByteCount) bytes, and one more could be one it has had")
+        }
+        return SecureRandom.bytes(nonceByteCount)
+    }
+
+    /// What a message must be to be sealed or opened.
+    fn check(_ nonce: U8[:], text: Int, room: Int) throws(CryptoError) {
+        if nonce.count != nonceByteCount {
+            throw CryptoError.InvalidParameter(reason: "a nonce of this cipher has \(nonceByteCount) bytes, not \(nonce.count)")
+        }
+        if room != text {
+            throw CryptoError.InvalidParameter(reason: "the plaintext and the ciphertext are as long as each other, not \(text) and \(room) bytes")
+        }
+        if text > longest {
+            throw CryptoError.LimitExceeded(reason: "a message of this cipher has at most \(longest) bytes, not \(text)")
+        }
+    }
+
+    /// The most bytes a message may have: what the cipher's counter can count.
+    var longest: Int => match sealing {
+        case .GcmSeal => 0xFFFFFFFE0
+        case .CcmSeal => nonceByteCount <= 8 ? Int.max : (1 << (8 * (15 - nonceByteCount))) - 1
+        case _        => 0x3FFFFFFFC0
+    }
+
+    /// The cipher's first block made at 'work' of a nonce, and what follows it: the key's address.
+    unsafe fn start(_ work: Int, _ nonce: U8[:], text: Int, associated: Bool) -> Int {
+        match sealing {
+            case .GcmSeal => {
+                let key = aes!.address
+                if nonce.count == 12 {
+                    store(nonce, at: work)
+                    store32((1 as U32).byteSwapped, work &+ 12)
+                } else {
+                    var copied = nonce.toArray()
+                    Cipher.Ghash.run(key, work, inPlace: &copied)
+                    PortableModes.copyBlock(work &+ 16, to: work)
+                }
+                return key
+            }
+            case .CcmSeal => {
+                // The flags: whether there is associated data, the tag's
+                // length and the length's own; then the nonce, and the length.
+                let width = 15 - nonce.count
+                store64(0, work)
+                store64((text unchecked as U64).byteSwapped, work &+ 8)
+                store(nonce, at: work &+ 1)
+                let flags = (associated ? 64 : 0) | (tagByteCount - 2) / 2 << 3 | (width - 1)
+                store8(flags unchecked as U8, work)
+                return aes!.address
+            }
+            case _ => {
+                let key = secret!.address
+                if nonce.count == 12 {
+                    store(nonce, at: work)
+                    return key
+                }
+
+                // XChaCha20: a key of the nonce's first part, after the work.
+                store(nonce, at: work)
+                PortableChaCha.subkey(work &+ 48, key: key, nonce: work)
+                store64(load64(work &+ 16), work &+ 4)
+                store32(0, work)
+                return work &+ 48
+            }
+        }
+    }
+
+    /// The work's memory, taken from and given back to the system for each message.
+    static var workBytes: Int => 80
+
+    fn seal(_ plaintext: U8[:], into ciphertext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError) {
+        try check(nonce, text: plaintext.count, room: ciphertext.count)
+        try checkTag(tag.count)
+        unsafe {
+            let work = NativeMemory.allocate(byteCount: AeadState.workBytes).address
+            defer { AeadState.release(work) }
+            let key = start(work, nonce, text: plaintext.count, associated: !associatedData.isEmpty)
+            sealing.run(key, work, associatedData: associatedData, plaintext, to: &ciphertext)
+            PortableModes.unload(work &+ 16, to: &tag, 0, count: tagByteCount)
+        }
+    }
+
+    fn seal(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError) {
+        try check(nonce, text: text.count, room: text.count)
+        try checkTag(tag.count)
+        unsafe {
+            let work = NativeMemory.allocate(byteCount: AeadState.workBytes).address
+            defer { AeadState.release(work) }
+            let key = start(work, nonce, text: text.count, associated: !associatedData.isEmpty)
+            sealing.run(key, work, associatedData: associatedData, inPlace: &text)
+            PortableModes.unload(work &+ 16, to: &tag, 0, count: tagByteCount)
+        }
+    }
+
+    fn checkTag(_ count: Int) throws(CryptoError) {
+        if count != tagByteCount {
+            throw CryptoError.InvalidParameter(reason: "a tag of this cipher has \(tagByteCount) bytes, not \(count)")
+        }
+    }
+
+    fn open(_ ciphertext: U8[:], into plaintext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError) {
+        try check(nonce, text: ciphertext.count, room: plaintext.count)
+        var right = false
+        if tag.count == tagByteCount {
+            unsafe {
+                let work = NativeMemory.allocate(byteCount: AeadState.workBytes).address
+                defer { AeadState.release(work) }
+                let key = start(work, nonce, text: ciphertext.count, associated: !associatedData.isEmpty)
+                opening.run(key, work, associatedData: associatedData, ciphertext, to: &plaintext)
+                right = AeadState.isSame(tag, as: work &+ 16)
+            }
+        }
+        if !right {
+            plaintext.zeroSecurely()
+            throw CryptoError.AuthenticationFailed
+        }
+    }
+
+    fn open(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError) {
+        try check(nonce, text: text.count, room: text.count)
+        var right = false
+        if tag.count == tagByteCount {
+            unsafe {
+                let work = NativeMemory.allocate(byteCount: AeadState.workBytes).address
+                defer { AeadState.release(work) }
+                let key = start(work, nonce, text: text.count, associated: !associatedData.isEmpty)
+                opening.run(key, work, associatedData: associatedData, inPlace: &text)
+                right = AeadState.isSame(tag, as: work &+ 16)
+            }
+        }
+        if !right {
+            text.zeroSecurely()
+            throw CryptoError.AuthenticationFailed
+        }
+    }
+
+    unsafe static fn release(_ work: Int) {
+        Native.zero(work, workBytes)
+        NativeMemory.deallocate(RawPtr<U8>(address: work))
+    }
+
+    /// Whether the bytes are those at an address, in constant time.
+    unsafe static fn isSame(_ bytes: U8[:], as address: Int) -> Bool {
+        var difference: U8 = 0
+        var i = 0
+        while i < bytes.count {
+            difference = blackBox(difference | (bytes[i] ^ RawPtr<U8>(address: address).load(at: i)))
+            i += 1
+        }
+        return difference == 0
+    }
+}

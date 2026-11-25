@@ -1,0 +1,53 @@
+module Sable.Crypto
+
+extension Hazmat {
+    /// AES, each block alone (ECB): equal blocks of a message are equal in
+    /// the ciphertext, so it hides no message of more than one. For single
+    /// blocks, and for making other modes of.
+    ///
+    /// ```sable
+    /// let cipher = try! Hazmat.AesEcb(key: SymmetricKey.random(byteCount: 16))
+    /// let block = U8[>..](repeating: 7, count: 16)
+    /// assert((try! cipher.decrypt(try! cipher.encrypt(block))) == block)
+    /// ```
+    public struct AesEcb: Sendable {
+        let aes: AesKey
+
+        /// The cipher under a key of 16, 24 or 32 bytes.
+        public init(key: SymmetricKey) throws(CryptoError) {
+            aes = try AesKey(key)
+        }
+
+        /// The plaintext enciphered.
+        public fn encrypt(_ plaintext: U8[:], padding: Padding = .None) throws(CryptoError) -> U8[>..] {
+            var bytes = try Hazmat.padded(plaintext, padding)
+            try self.encrypt(inPlace: &bytes)
+            return bytes
+        }
+
+        /// The ciphertext deciphered, or InvalidPadding.
+        public fn decrypt(_ ciphertext: U8[:], padding: Padding = .None) throws(CryptoError) -> U8[>..] {
+            try Hazmat.checkCiphertext(ciphertext.count, padding)
+            var bytes = ciphertext.toArray()
+            try self.decrypt(inPlace: &bytes)
+            try Hazmat.unpad(&bytes, padding)
+            return bytes
+        }
+
+        /// Whole blocks enciphered in place.
+        public fn encrypt(inPlace bytes: inout U8[:]) throws(CryptoError) {
+            try Hazmat.checkWhole(bytes.count)
+            unsafe {
+                Cipher.EcbEncrypt.run(aes.address, 0, inPlace: &bytes)
+            }
+        }
+
+        /// Whole blocks deciphered in place.
+        public fn decrypt(inPlace bytes: inout U8[:]) throws(CryptoError) {
+            try Hazmat.checkWhole(bytes.count)
+            unsafe {
+                Cipher.EcbDecrypt.run(aes.address, 0, inPlace: &bytes)
+            }
+        }
+    }
+}

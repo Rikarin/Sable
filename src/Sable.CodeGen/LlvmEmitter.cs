@@ -648,6 +648,8 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_secure_zero(ptr, i64)
                                 declare zeroext i1 @sable_crypto_blocks(i64, ptr, ptr, i64, i64)
                                 declare zeroext i1 @sable_crypto_blocks_raw(i64, ptr, ptr, i64)
+                                declare zeroext i1 @sable_crypto_cipher(i64, ptr, ptr, ptr, i64, i64, ptr, i64, i64, ptr)
+                                declare zeroext i1 @sable_cipher(i64, ptr, ptr, ptr, i64, ptr, ptr, i64)
                                 declare zeroext i1 @sable_vector_available()
                                 @sable_processor_known = external global i32
                                 declare float @sable_vector_reduce_F32(i64, ptr, i64, i64, ptr, i64)
@@ -4988,6 +4990,47 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call i64 @sable_codec_bytes(i64 {operands[0]}, ptr {buffer}, i64 {start}, i64 {length}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");
                     return;
                 }
+
+                // A slice of bytes put through a cipher, with another of associated
+                // data, over the first bytes of a third, or over itself, which is
+                // made the only reference to its run.
+                case "crypto_cipher" or "crypto_cipher_in_place": {
+                    var inPlace = builtin.Name == "crypto_cipher_in_place";
+                    var type = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var slice = Fresh();
+                    var empty = Fresh();
+                    var any = NewLabel("bytes");
+                    var before = NewLabel("before");
+                    var after = NewLabel("after");
+                    Line($"{slice} = load {Type(type)}, ptr {operands[0]}");
+                    Line($"{empty} = icmp eq i64 {SlicePart(slice, type, 2)}, 0");
+                    Line($"br label %{before}");
+                    Continue(before);
+                    Line($"br i1 {empty}, label %{after}, label %{any}");
+                    Continue(any);
+                    var first = SliceMutableElement(operands[0], "0", type);
+                    Line($"br label %{after}");
+                    Continue(after);
+                    var output = Fresh();
+                    Line($"{output} = phi ptr [ null, %{before} ], [ {first}, %{any} ]");
+                    var parts = new List<string>();
+                    for (var i = 4; i < operands.Length; i++) {
+                        var read = (SliceType)builtin.Operands[i].Type;
+                        parts.Add($"ptr {SlicePart(operands[i], read, 0)}, i64 {SlicePart(operands[i], read, 1)}, i64 {SlicePart(operands[i], read, 2)}");
+                    }
+
+                    // In place, the input is where the output is.
+                    if (inPlace) {
+                        parts.Add($"ptr null, i64 -1, i64 {SlicePart(slice, type, 2)}");
+                    }
+
+                    Line($"{Result()} = call zeroext i1 @sable_crypto_cipher(i64 {operands[1]}, ptr {RawAddress(operands[2])}, ptr {RawAddress(operands[3])}, {string.Join(", ", parts)}, ptr {output})");
+                    return;
+                }
+
+                case "crypto_cipher_raw":
+                    Line($"{Result()} = call zeroext i1 @sable_cipher(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {RawAddress(operands[2])}, ptr null, i64 0, ptr {RawAddress(operands[3])}, ptr {RawAddress(operands[4])}, i64 {operands[5]})");
+                    return;
 
                 case "crypto_blocks_raw":
                     Line($"{Result()} = call zeroext i1 @sable_crypto_blocks_raw(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");

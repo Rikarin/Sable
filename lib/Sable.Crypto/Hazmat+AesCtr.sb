@@ -1,0 +1,54 @@
+module Sable.Crypto
+
+extension Hazmat {
+    /// AES as a stream (CTR): the message and the enciphered counter blocks,
+    /// exclusive or, both ways. No counter block may ever be used again under
+    /// the key, by the same message or another: two texts of one stream give
+    /// away both. Anyone can change any bit of the message.
+    ///
+    /// ```sable
+    /// let cipher = try! Hazmat.AesCtr(key: SymmetricKey.random(byteCount: 16))
+    /// let first = SecureRandom.bytes(16)
+    /// let ciphertext = try! cipher.apply([1, 2, 3], counterBlock: first)
+    /// assert((try! cipher.apply(ciphertext, counterBlock: first)) == [1, 2, 3])
+    /// ```
+    public struct AesCtr: Sendable {
+        let aes: AesKey
+
+        /// The cipher under a key of 16, 24 or 32 bytes.
+        public init(key: SymmetricKey) throws(CryptoError) {
+            aes = try AesKey(key)
+        }
+
+        /// The text enciphered, or deciphered, from a first counter block,
+        /// which is counted up as a big-endian number of 16 bytes, so many
+        /// blocks on.
+        ///
+        /// ```sable
+        /// let cipher = try! Hazmat.AesCtr(key: SymmetricKey.random(byteCount: 16))
+        /// let start = U8[>..](repeating: 0xFF, count: 16)
+        /// let text = U8[>..](repeating: 1, count: 40)
+        /// let whole = try! cipher.apply(text, counterBlock: start)
+        /// assert((try! cipher.apply(text[32...], counterBlock: start, skippingBlocks: 2)) == whole[32...].toArray())
+        /// ```
+        public fn apply(_ text: U8[:], counterBlock: U8[:], skippingBlocks: U64 = 0) throws(CryptoError) -> U8[>..] {
+            var bytes = text.toArray()
+            try self.apply(inPlace: &bytes, counterBlock: counterBlock, skippingBlocks: skippingBlocks)
+            return bytes
+        }
+
+        /// The same in place.
+        public fn apply(inPlace bytes: inout U8[:], counterBlock: U8[:], skippingBlocks: U64 = 0) throws(CryptoError) {
+            let block = try Hazmat.block(counterBlock)
+            unsafe {
+                let low = load64(block.address &+ 8).byteSwapped
+                let sum = low &+ skippingBlocks
+                if sum < low {
+                    store64((load64(block.address).byteSwapped &+ 1).byteSwapped, block.address)
+                }
+                store64(sum.byteSwapped, block.address &+ 8)
+                Cipher.Ctr.run(aes.address, block.address, inPlace: &bytes)
+            }
+        }
+    }
+}

@@ -1,0 +1,164 @@
+module Sable.Crypto
+
+/// AES key wrap, RFC 3394 (SP 800-38F's KW) and, with padding, RFC 5649
+/// (KWP): a key enciphered under another, for keeping or sending. It needs no
+/// nonce: the same key wrapped twice is the same bytes, which tells that it
+/// is. For keys; what is not one is for an `AuthenticatedCipher`.
+///
+/// .NET's `AesKeyWrap`, and its `Aes.EncryptKeyWrapPadded`; CryptoKit's
+/// `AES.KeyWrap`.
+///
+/// ```sable
+/// let wrapping = try! AesKeyWrap(key: SymmetricKey.random(byteCount: 32))
+/// let key = SymmetricKey.random(byteCount: 16)
+/// let wrapped = try! wrapping.wrap(key)
+/// assert(wrapped.count == 24)
+/// assert((try! wrapping.unwrap(wrapped)) == key)
+/// ```
+public struct AesKeyWrap: Sendable {
+    let aes: AesKey
+
+    /// Wrapping under a key of 16, 24 or 32 bytes.
+    public init(key: SymmetricKey) throws(CryptoError) {
+        aes = try AesKey(key)
+    }
+
+    /// The key wrapped, 8 bytes longer. It must have 16 bytes or more, and
+    /// a multiple of 8.
+    public fn wrap(_ key: SymmetricKey) throws(CryptoError) -> U8[>..] {
+        let count = key.byteCount
+        if count < 16 || count % 8 != 0 {
+            throw CryptoError.InvalidParameter(reason: "a key to wrap without padding has a multiple of 8 bytes, and 16 at least, not \(count)")
+        }
+        return wrap(key, start: 0xA6A6A6A6A6A6A6A6, padded: count)
+    }
+
+    /// The key that was wrapped, or AuthenticationFailed when the bytes are
+    /// not one's, wrapped under this key.
+    public fn unwrap(_ wrapped: U8[:]) throws(CryptoError) -> SymmetricKey {
+        if wrapped.count < 24 || wrapped.count % 8 != 0 {
+            throw CryptoError.AuthenticationFailed
+        }
+        let memory = unwrapped(wrapped)
+        unsafe {
+            if blackBox(load64(memory.address) ^ 0xA6A6A6A6A6A6A6A6) != 0 {
+                throw CryptoError.AuthenticationFailed
+            }
+        }
+        return AesKeyWrap.key(memory, count: wrapped.count - 8)
+    }
+
+    /// A key of any length but none wrapped, with zeros after it to a
+    /// multiple of 8 bytes.
+    ///
+    /// ```sable
+    /// let wrapping = try! AesKeyWrap(key: SymmetricKey.random(byteCount: 32))
+    /// let key = SymmetricKey.random(byteCount: 33)
+    /// assert((try! wrapping.unwrapPadded(try! wrapping.wrapPadded(key))) == key)
+    /// ```
+    public fn wrapPadded(_ key: SymmetricKey) throws(CryptoError) -> U8[>..] {
+        let count = key.byteCount
+        if count < 1 || count > 0xFFFFFFFF {
+            throw CryptoError.InvalidParameter(reason: "a key to wrap has 1 to 4294967295 bytes, not \(count)")
+        }
+        return wrap(key, start: (count unchecked as U64) | 0xA65959A600000000, padded: (count + 7) / 8 * 8)
+    }
+
+    /// The key that was wrapped with padding, or AuthenticationFailed when
+    /// the bytes are not one's, wrapped under this key.
+    public fn unwrapPadded(_ wrapped: U8[:]) throws(CryptoError) -> SymmetricKey {
+        let padded = wrapped.count - 8
+        if padded < 8 || padded % 8 != 0 {
+            throw CryptoError.AuthenticationFailed
+        }
+        let memory = unwrapped(wrapped)
+        unsafe {
+            // The constant, a length that is the padded one's, and zeros
+            // after it: whether all are, and not which is not.
+            let start = load64(memory.address).byteSwapped
+            var wrong = (start >> 32) ^ 0xA65959A6
+            let count = start & 0xFFFFFFFF
+            let zeros = (padded unchecked as U64) &- count
+            wrong = blackBox(wrong | zeros >> 3)
+            var i: U64 = 0
+            let last = memory.address &+ 8 &+ padded
+            while i < 8 {
+                let byte = U64(RawPtr<U8>(address: last &- 1 &- (i unchecked as Int)).load())
+                wrong = blackBox(wrong | (byte & (0 &- ((i &- (zeros & 7)) >> 63))))
+                i += 1
+            }
+            if wrong != 0 {
+                throw CryptoError.AuthenticationFailed
+            }
+            return AesKeyWrap.key(memory, count: count unchecked as Int)
+        }
+    }
+
+    /// The key after the first 8 bytes.
+    static fn key(_ memory: SecretMemory, count: Int) -> SymmetricKey {
+        let key = SecretMemory(count: count)
+        unsafe {
+            NativeMemory.copy(from: RawPtr<U8>(address: memory.address &+ 8), to: RawPtr<U8>(address: key.address), byteCount: count)
+        }
+        return SymmetricKey(memory: key)
+    }
+
+    fn wrap(_ key: SymmetricKey, start: U64, padded: Int) -> U8[>..] {
+        let memory = SecretMemory(count: padded + 8)
+        let work = SecretMemory(count: 64)
+        let block = work.address
+        unsafe {
+            let at = memory.address
+            store64(start.byteSwapped, at)
+            NativeMemory.copy(from: RawPtr<U8>(address: key.memory.address), to: RawPtr<U8>(address: at &+ 8), byteCount: key.byteCount)
+            if padded == 8 {
+                // One block is the cipher's alone.
+                PortableModes.copyBlock(at, to: block)
+                aes.cipher(block, decrypt: false)
+                PortableModes.copyBlock(block, to: at)
+            } else {
+                var step: U64 = 1
+                store64(load64(at), block)
+                while step <= (6 * (padded / 8)) unchecked as U64 {
+                    let place = at &+ 8 &+ 8 &* (((step &- 1) unchecked as Int) % (padded / 8))
+                    store64(load64(place), block &+ 8)
+                    aes.cipher(block, decrypt: false)
+                    store64(load64(block) ^ step.byteSwapped, block)
+                    store64(load64(block &+ 8), place)
+                    step += 1
+                }
+                store64(load64(block), at)
+            }
+        }
+        return memory.bytes(from: 0, count: padded + 8)
+    }
+
+    /// What was wrapped, its first 8 bytes being what shows whether it was.
+    fn unwrapped(_ wrapped: U8[:]) -> SecretMemory {
+        let memory = SecretMemory(wrapped)
+        let work = SecretMemory(count: 64)
+        let block = work.address
+        let padded = wrapped.count - 8
+        unsafe {
+            let at = memory.address
+            if padded == 8 {
+                PortableModes.copyBlock(at, to: block)
+                aes.cipher(block, decrypt: true)
+                PortableModes.copyBlock(block, to: at)
+            } else {
+                var step = (6 * (padded / 8)) unchecked as U64
+                store64(load64(at), block)
+                while step > 0 {
+                    let place = at &+ 8 &+ 8 &* (((step &- 1) unchecked as Int) % (padded / 8))
+                    store64(load64(block) ^ step.byteSwapped, block)
+                    store64(load64(place), block &+ 8)
+                    aes.cipher(block, decrypt: true)
+                    store64(load64(block &+ 8), place)
+                    step -= 1
+                }
+                store64(load64(block), at)
+            }
+        }
+        return memory
+    }
+}

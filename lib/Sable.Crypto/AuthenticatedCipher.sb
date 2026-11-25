@@ -1,0 +1,109 @@
+module Sable.Crypto
+
+/// A cipher that also shows that nobody has changed what it enciphered: what
+/// to encrypt with. `AesGcm`, `AesCcm`, `ChaCha20Poly1305` and
+/// `XChaCha20Poly1305` are.
+///
+/// A message is sealed under a key and a nonce, which is not secret and must
+/// never be another message's under the same key: with AES-GCM or
+/// ChaCha20-Poly1305, two messages of one nonce give away both, and let
+/// anyone forge more. `seal(_:associatedData:)` takes a random nonce, and
+/// counts them, so that no key has more than are safe; where a nonce is the
+/// caller's — a counter that is kept, or that a protocol says — its being
+/// new is the caller's to see to.
+///
+/// Associated data is authenticated and not enciphered: what the message
+/// belongs to, or its number. It must be the same when the message is opened.
+///
+/// Opening gives nothing but an error when the tag, the ciphertext, the
+/// nonce, the associated data or the key is not the one it was sealed with:
+/// not which it is, and no part of the plaintext, which is zeroed where it
+/// would have been.
+///
+/// ```sable
+/// fn roundTrip<C: AuthenticatedCipher>(_ cipher: C) throws(CryptoError) {
+///     let message: U8[>..] = [1, 2, 3]
+///     let box = try cipher.seal(message, associatedData: [9])
+///     assert((try cipher.open(box, associatedData: [9])) == message)
+/// }
+/// try! roundTrip(try! AesGcm(key: SymmetricKey.random(byteCount: 32)))
+/// try! roundTrip(try! XChaCha20Poly1305(key: SymmetricKey.random(byteCount: 32)))
+/// ```
+public protocol AuthenticatedCipher: Sendable {
+    /// How many bytes a nonce has.
+    var nonceByteCount: Int { get }
+
+    /// How many bytes a tag has.
+    var tagByteCount: Int { get }
+
+    /// A new random nonce, or LimitExceeded when the key has had as many as
+    /// are safe.
+    fn randomNonce() throws(CryptoError) -> U8[>..]
+
+    /// Seals the plaintext into a ciphertext as long as it, and its tag into
+    /// another. The plaintext may be of the array the ciphertext is.
+    fn seal(_ plaintext: U8[:], into ciphertext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError)
+
+    /// Seals the text in place, and its tag into another.
+    fn seal(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError)
+
+    /// Opens the ciphertext into a plaintext as long as it, which is all
+    /// zeros when the tag is wrong.
+    fn open(_ ciphertext: U8[:], into plaintext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError)
+
+    /// Opens the text in place, which is all zeros when the tag is wrong.
+    fn open(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError)
+}
+
+extension AuthenticatedCipher {
+    /// The plaintext sealed with a random nonce.
+    ///
+    /// ```sable
+    /// let cipher = try! ChaCha20Poly1305(key: SymmetricKey.random(byteCount: 32))
+    /// let box = try! cipher.seal([1, 2, 3])
+    /// assert(box.nonce != (try! cipher.seal([1, 2, 3])).nonce)
+    /// ```
+    public fn seal(_ plaintext: U8[:], associatedData: U8[:] = []) throws(CryptoError) -> SealedBox {
+        return try self.seal(plaintext, nonce: try self.randomNonce(), associatedData: associatedData)
+    }
+
+    /// The plaintext sealed with a nonce that no other message under the key
+    /// has, and none will.
+    ///
+    /// ```sable
+    /// let cipher = try! AesGcm(key: SymmetricKey.random(byteCount: 32))
+    /// var number = U8[>..](repeating: 0, count: 12)
+    /// number.writeU64(7, at: 4, endian: .Big)
+    /// let box = try! cipher.seal([1, 2, 3], nonce: number)
+    /// assert((try! cipher.open(box)) == [1, 2, 3])
+    /// ```
+    public fn seal(_ plaintext: U8[:], nonce: U8[:], associatedData: U8[:] = []) throws(CryptoError) -> SealedBox {
+        var ciphertext = U8[>..](repeating: 0, count: plaintext.count)
+        var tag = U8[>..](repeating: 0, count: self.tagByteCount)
+        try self.seal(plaintext, into: &ciphertext, nonce: nonce, associatedData: associatedData, tag: &tag)
+        return SealedBox(nonce: nonce.toArray(), ciphertext: ciphertext, tag: tag)
+    }
+
+    /// The plaintext of a box that nobody has changed, or AuthenticationFailed.
+    ///
+    /// ```sable
+    /// let cipher = try! AesGcm(key: SymmetricKey.random(byteCount: 32))
+    /// let box = try! cipher.seal([1, 2, 3], associatedData: [4])
+    /// do {
+    ///     _ = try cipher.open(box, associatedData: [5])
+    ///     assert(false)
+    /// } catch {
+    ///     assert(error == .AuthenticationFailed)
+    /// }
+    /// ```
+    public fn open(_ box: SealedBox, associatedData: U8[:] = []) throws(CryptoError) -> U8[>..] {
+        return try self.open(box.ciphertext, nonce: box.nonce, tag: box.tag, associatedData: associatedData)
+    }
+
+    /// The plaintext of a ciphertext and the tag detached from it.
+    public fn open(_ ciphertext: U8[:], nonce: U8[:], tag: U8[:], associatedData: U8[:] = []) throws(CryptoError) -> U8[>..] {
+        var plaintext = U8[>..](repeating: 0, count: ciphertext.count)
+        try self.open(ciphertext, into: &plaintext, nonce: nonce, associatedData: associatedData, tag: tag)
+        return plaintext
+    }
+}

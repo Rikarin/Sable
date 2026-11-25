@@ -71,6 +71,11 @@ enum {
     CRYPTO_SHA1 = 8,
     CRYPTO_WIDE = 16,   // of SHA-512's and Keccak's, the AVX-512 ones
     CRYPTO_ASKED = 128,
+    CRYPTO_AES = 256,          // AES, and the carryless multiplication GHASH is done by
+    CRYPTO_VAES = 512,         // those on two blocks at once
+    CRYPTO_VAES_WIDE = 1024,   // and on four
+    CRYPTO_VECTORS = 2048,     // what ChaCha20 and Poly1305 need, which every one has
+    CRYPTO_AVX2 = 4096,
 };
 
 #if defined(SABLE_CRYPTO_ARM64) || defined(SABLE_CRYPTO_X64)
@@ -152,18 +157,20 @@ static int crypto_features(void) {
     // Every 64-bit ARM Apple has made has SHA-1's and SHA-256's. Keccak's are
     // used only here: Arm's own processors (Neoverse) do them all on one of
     // their vector units, at half the portable code's speed.
-    return CRYPTO_SHA1 | CRYPTO_SHA256 | (apple_feature("hw.optional.arm.FEAT_SHA512") ? CRYPTO_SHA512 : 0)
+    return CRYPTO_VECTORS | CRYPTO_AES | CRYPTO_SHA1 | CRYPTO_SHA256 | (apple_feature("hw.optional.arm.FEAT_SHA512") ? CRYPTO_SHA512 : 0)
         | (apple_feature("hw.optional.arm.FEAT_SHA3") ? CRYPTO_KECCAK : 0);
 #elif defined(__linux__)
-    // HWCAP_SHA1, HWCAP_SHA2 and HWCAP_SHA512, which older headers lack.
+    // HWCAP_AES, HWCAP_PMULL, HWCAP_SHA1, HWCAP_SHA2 and HWCAP_SHA512, which
+    // older headers lack.
     unsigned long has = getauxval(AT_HWCAP);
-    return ((has >> 5 & 1) ? CRYPTO_SHA1 : 0) | ((has >> 6 & 1) ? CRYPTO_SHA256 : 0) | ((has >> 21 & 1) ? CRYPTO_SHA512 : 0);
+    return CRYPTO_VECTORS | ((has >> 3 & 3) == 3 ? CRYPTO_AES : 0)
+        | ((has >> 5 & 1) ? CRYPTO_SHA1 : 0) | ((has >> 6 & 1) ? CRYPTO_SHA256 : 0) | ((has >> 21 & 1) ? CRYPTO_SHA512 : 0);
 #elif defined(_WIN32)
     // PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE and
     // PF_ARM_SHA512_INSTRUCTIONS_AVAILABLE, which older headers lack.
-    return (IsProcessorFeaturePresent(30) ? CRYPTO_SHA1 | CRYPTO_SHA256 : 0) | (IsProcessorFeaturePresent(65) ? CRYPTO_SHA512 : 0);
+    return CRYPTO_VECTORS | (IsProcessorFeaturePresent(30) ? CRYPTO_AES | CRYPTO_SHA1 | CRYPTO_SHA256 : 0) | (IsProcessorFeaturePresent(65) ? CRYPTO_SHA512 : 0);
 #else
-    return 0;
+    return CRYPTO_VECTORS;
 #endif
 }
 
@@ -316,16 +323,25 @@ SABLE_TARGET_SHA3 static void keccak_blocks(uint64_t *state, const uint8_t *data
 static int crypto_features(void) {
     unsigned int a, b, c, d;
     if (!__get_cpuid(1, &a, &b, &c, &d)) {
-        return 0;
+        return CRYPTO_VECTORS;
     }
 
     bool vectors = (c >> 9 & 1) && (c >> 19 & 1);   // SSSE3 and SSE4.1
-    int features = vectors && __get_cpuid_count(7, 0, &a, &b, &c, &d) && (b >> 29 & 1) ? CRYPTO_SHA1 | CRYPTO_SHA256 : 0;
-    if (processor_has_avx2()) {
-        features |= CRYPTO_SHA512 | CRYPTO_KECCAK;
+    int features = CRYPTO_VECTORS | (vectors && (c >> 25 & 1) && (c >> 1 & 1) ? CRYPTO_AES : 0);
+    if (!__get_cpuid_count(7, 0, &a, &b, &c, &d)) {
+        b = c = 0;
     }
 
-    return features | (processor_known() & PROCESSOR_AVX512 ? CRYPTO_WIDE : 0);
+    features |= vectors && (b >> 29 & 1) ? CRYPTO_SHA1 | CRYPTO_SHA256 : 0;
+    bool wide = (processor_known() & PROCESSOR_AVX512) != 0;
+    if (processor_has_avx2()) {
+        features |= CRYPTO_SHA512 | CRYPTO_KECCAK | CRYPTO_AVX2;
+        if ((features & CRYPTO_AES) && (c >> 9 & 1) && (c >> 10 & 1)) {   // VAES and VPCLMULQDQ
+            features |= CRYPTO_VAES | (wide && (b >> 30 & 1) ? CRYPTO_VAES_WIDE : 0);   // AVX-512's BW
+        }
+    }
+
+    return features | (wide ? CRYPTO_WIDE : 0);
 }
 
 // ---- SHA-1, by the SHA extensions ----------------------------------------------
@@ -610,7 +626,8 @@ SABLE_TARGET_AVX512 static void keccak_blocks_wide(uint64_t *state, const uint8_
 // What the processor has kernels for, found once and kept. Two threads that
 // look at once find the same. SABLE_CRYPTO_PORTABLE=1 says it has none, so
 // that the tests can run the portable code where the kernels would;
-// SABLE_CRYPTO_NARROW=1 that it has no AVX-512, so that they can run AVX2's.
+// SABLE_CRYPTO_NARROW=1 that it has no AVX-512, so that they can run AVX2's,
+// and SABLE_CRYPTO_NARROW=2 that the ciphers have no AVX2 either.
 static int crypto_available(void) {
     static int known;
     int features = __atomic_load_n(&known, __ATOMIC_RELAXED);
@@ -618,8 +635,8 @@ static int crypto_available(void) {
         const char *portable = getenv("SABLE_CRYPTO_PORTABLE");
         const char *narrow = getenv("SABLE_CRYPTO_NARROW");
         features = CRYPTO_ASKED | (portable != NULL && strcmp(portable, "1") == 0 ? 0 : crypto_features());
-        if (narrow != NULL && strcmp(narrow, "1") == 0) {
-            features &= ~CRYPTO_WIDE;
+        if (narrow != NULL && (strcmp(narrow, "1") == 0 || strcmp(narrow, "2") == 0)) {
+            features &= ~(CRYPTO_WIDE | CRYPTO_VAES_WIDE | (narrow[0] == '2' ? CRYPTO_VAES | CRYPTO_AVX2 : 0));
         }
 
         __atomic_store_n(&known, features, __ATOMIC_RELAXED);

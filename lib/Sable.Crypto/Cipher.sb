@@ -1,0 +1,106 @@
+module Sable.Crypto
+
+/// What the ciphers ask of the runtime (runtime/ciphers.c), each of the same
+/// number there, and the portable code for where it has nothing: whichever
+/// runs, the bytes are the same.
+enum Cipher: Int {
+    /// Whole blocks.
+    EcbEncrypt = 3
+    EcbDecrypt = 4
+
+    /// Whole blocks; 'work' is the block before the first, then the last one.
+    CbcEncrypt = 5
+    CbcDecrypt = 6
+
+    /// 'work' is the first counter block, its counter all 128 bits.
+    Ctr = 7
+
+    /// 'work' is the block before the first.
+    CfbEncrypt = 8
+    CfbDecrypt = 9
+    Cfb8Encrypt = 10
+    Cfb8Decrypt = 11
+
+    /// 'work' is the first counter block, J0; the tag is made after it.
+    GcmSeal = 12
+    GcmOpen = 13
+
+    /// The same, the input only hashed, and the tag not encrypted.
+    Ghash = 14
+
+    /// 'work' is B0; the tag is made after it.
+    CcmSeal = 15
+    CcmOpen = 16
+
+    /// 'work' is the nonce, of 12 bytes; the tag is made 16 bytes on.
+    PolySeal = 17
+    PolyOpen = 18
+
+    /// The text put through the cipher, in place, under the key at an
+    /// address, with the associated data; 'work' is an address too.
+    unsafe fn run(_ key: Int, _ work: Int, associatedData: U8[:] = [], inPlace text: inout U8[:]) {
+        if !text.cipher(self as Int, key, work, associatedData) {
+            runPortably(key, work, associatedData, &text)
+        }
+    }
+
+    /// The input put through the cipher, over as many bytes of the output.
+    unsafe fn run(_ key: Int, _ work: Int, associatedData: U8[:] = [], _ input: U8[:], to output: inout U8[:]) {
+        if !output.cipher(self as Int, key, work, associatedData, input) {
+            copyBytes(input, to: &output)
+            runPortably(key, work, associatedData, &output[..<input.count])
+        }
+    }
+
+    unsafe fn runPortably(_ key: Int, _ work: Int, _ associatedData: U8[:], _ text: inout U8[:]) {
+        match self {
+            case .EcbEncrypt | .EcbDecrypt    => PortableModes.ecb(key, decrypt: self == .EcbDecrypt, &text)
+            case .CbcEncrypt                  => PortableModes.cbcEncrypt(key, work, &text)
+            case .CbcDecrypt                  => PortableModes.cbcDecrypt(key, work, &text)
+            case .Ctr                         => PortableModes.ctr(key, work, &text)
+            case .CfbEncrypt | .CfbDecrypt    => PortableModes.cfb(key, work, decrypt: self == .CfbDecrypt, &text)
+            case .Cfb8Encrypt | .Cfb8Decrypt  => PortableModes.cfb8(key, work, decrypt: self == .Cfb8Decrypt, &text)
+            case .GcmSeal | .GcmOpen | .Ghash => PortableModes.gcm(self, key, work, associatedData, &text)
+            case .CcmSeal | .CcmOpen          => PortableModes.ccm(key, work, decrypt: self == .CcmOpen, associatedData, &text)
+            case .PolySeal | .PolyOpen        => PortableChaCha.poly(key, work, decrypt: self == .PolyOpen, associatedData, &text)
+        }
+    }
+}
+
+extension Native {
+    /// The round keys of the key that is the input, made at the key's address.
+    static var aesKey: Int => 1
+
+    /// What GHASH multiplies by, made of the round keys.
+    static var gcmKey: Int => 2
+
+    /// So many bytes at an address put through a cipher, over as many at
+    /// another, which may be the same; false, with nothing done, where there
+    /// is no kernel for it (or this is the interpreter).
+    @builtin("crypto_cipher_raw")
+    unsafe static fn cipher(_ kind: Int, _ key: Int, _ work: Int, from input: Int, to output: Int, count: Int) -> Bool
+}
+
+extension U8[:] {
+    /// The input put through a cipher, over this one's first bytes.
+    @builtin("crypto_cipher")
+    unsafe mutating fn cipher(_ kind: Int, _ key: Int, _ work: Int, _ associatedData: U8[:], _ input: U8[:]) -> Bool
+
+    /// These bytes put through a cipher in place.
+    @builtin("crypto_cipher_in_place")
+    unsafe mutating fn cipher(_ kind: Int, _ key: Int, _ work: Int, _ associatedData: U8[:]) -> Bool
+}
+
+/// The bytes written over as many of another's first ones.
+fn copyBytes(_ bytes: U8[:], to target: inout U8[:]) {
+    let count = bytes.count
+    var i = 0
+    while i + 8 <= count {
+        target.writeU64(bytes.readU64(at: i, endian: .native), at: i, endian: .native)
+        i += 8
+    }
+    while i < count {
+        target[i] = bytes[i]
+        i += 1
+    }
+}

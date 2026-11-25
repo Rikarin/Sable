@@ -1,0 +1,65 @@
+module Sable.Crypto
+
+extension Hazmat {
+    /// AES, the ciphertext fed back to make the stream (CFB). The
+    /// initialisation vector must be new for each message under the key, and
+    /// is better random; it is not secret. Anyone can change bits of the
+    /// message.
+    ///
+    /// ```sable
+    /// let cipher = try! Hazmat.AesCfb(key: SymmetricKey.random(byteCount: 16))
+    /// let iv = SecureRandom.bytes(16)
+    /// let ciphertext = try! cipher.encrypt([1, 2, 3], iv: iv)
+    /// assert((try! cipher.decrypt(ciphertext, iv: iv)) == [1, 2, 3])
+    /// ```
+    public struct AesCfb: Sendable {
+        /// How much of the ciphertext is fed back at a time.
+        @derive(Equatable, Debug)
+        public enum Feedback: Sendable {
+            /// A whole block: CFB128. The last one may be cut short.
+            Block
+
+            /// A byte: CFB8, which runs the cipher for each.
+            Byte
+        }
+
+        let aes: AesKey
+        let feedback: Feedback
+
+        /// The cipher under a key of 16, 24 or 32 bytes.
+        public init(key: SymmetricKey, feedback: Feedback = .Block) throws(CryptoError) {
+            aes = try AesKey(key)
+            self.feedback = feedback
+        }
+
+        /// The plaintext, of any length, enciphered.
+        public fn encrypt(_ plaintext: U8[:], iv: U8[:]) throws(CryptoError) -> U8[>..] {
+            var bytes = plaintext.toArray()
+            try self.encrypt(inPlace: &bytes, iv: iv)
+            return bytes
+        }
+
+        /// The ciphertext deciphered.
+        public fn decrypt(_ ciphertext: U8[:], iv: U8[:]) throws(CryptoError) -> U8[>..] {
+            var bytes = ciphertext.toArray()
+            try self.decrypt(inPlace: &bytes, iv: iv)
+            return bytes
+        }
+
+        /// The text enciphered in place.
+        public fn encrypt(inPlace bytes: inout U8[:], iv: U8[:]) throws(CryptoError) {
+            let block = try Hazmat.block(iv)
+            unsafe {
+                (feedback == .Block ? Cipher.CfbEncrypt : Cipher.Cfb8Encrypt).run(aes.address, block.address, inPlace: &bytes)
+            }
+        }
+
+        /// The text deciphered in place.
+        public fn decrypt(inPlace bytes: inout U8[:], iv: U8[:]) throws(CryptoError) {
+            let block = try Hazmat.block(iv)
+            unsafe {
+                (feedback == .Block ? Cipher.CfbDecrypt : Cipher.Cfb8Decrypt).run(aes.address, block.address, inPlace: &bytes)
+            }
+        }
+    }
+}

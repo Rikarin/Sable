@@ -1,0 +1,49 @@
+module Sable.Crypto
+
+/// XChaCha20-Poly1305 (draft-irtf-cfrg-xchacha, and libsodium):
+/// ChaCha20-Poly1305 with nonces of 24 bytes, which may all be random,
+/// however many messages a key has. What to take when nothing else says
+/// which. A message has at most 2^38 - 64 bytes, which is enforced.
+///
+/// ```sable
+/// let cipher = try! XChaCha20Poly1305(key: SymmetricKey.random(byteCount: 32))
+/// let box = try! cipher.seal([0x68, 0x69])
+/// assert(box.nonce.count == 24)
+/// assert((try! cipher.open(box)) == [0x68, 0x69])
+/// ```
+public struct XChaCha20Poly1305: AuthenticatedCipher {
+    let state: AeadState
+
+    /// The cipher under a key of 32 bytes.
+    ///
+    /// ```sable
+    /// assert((try! XChaCha20Poly1305(key: SymmetricKey.random(byteCount: 32))).nonceByteCount == 24)
+    /// ```
+    public init(key: SymmetricKey) throws(CryptoError) {
+        state = try AeadState.chaCha(key, nonceByteCount: 24)
+    }
+
+    public var nonceByteCount: Int => state.nonceByteCount
+
+    public var tagByteCount: Int => state.tagByteCount
+
+    public fn randomNonce() throws(CryptoError) -> U8[>..] {
+        return try state.randomNonce()
+    }
+
+    public fn seal(_ plaintext: U8[:], into ciphertext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError) {
+        try state.seal(plaintext, into: &ciphertext, nonce: nonce, associatedData: associatedData, tag: &tag)
+    }
+
+    public fn seal(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: inout U8[:]) throws(CryptoError) {
+        try state.seal(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: &tag)
+    }
+
+    public fn open(_ ciphertext: U8[:], into plaintext: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError) {
+        try state.open(ciphertext, into: &plaintext, nonce: nonce, associatedData: associatedData, tag: tag)
+    }
+
+    public fn open(inPlace text: inout U8[:], nonce: U8[:], associatedData: U8[:], tag: U8[:]) throws(CryptoError) {
+        try state.open(inPlace: &text, nonce: nonce, associatedData: associatedData, tag: tag)
+    }
+}

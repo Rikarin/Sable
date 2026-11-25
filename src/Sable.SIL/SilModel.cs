@@ -2772,6 +2772,9 @@ public static class SilBuiltins {
         Add("codec_bytes_raw", SilType.Int, SilType.Int, new SliceType(SilType.U8), SilType.Int, SilType.Int);
         Add("crypto_blocks", SilType.Bool, SilType.Int, SilType.Int, new SliceType(SilType.U8));
         Add("crypto_blocks_raw", SilType.Bool, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        Add("crypto_cipher", SilType.Bool, SilType.Address(new SliceType(SilType.U8)), SilType.Int, SilType.Int, SilType.Int, new SliceType(SilType.U8), new SliceType(SilType.U8));
+        Add("crypto_cipher_in_place", SilType.Bool, SilType.Address(new SliceType(SilType.U8)), SilType.Int, SilType.Int, SilType.Int, new SliceType(SilType.U8));
+        Add("crypto_cipher_raw", SilType.Bool, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
         // Sable.Math's kernels over arrays of floats, where the processor has
         // more than the target's baseline: whether it has, a reduction of one
         // slice or two by its number (the sum, dot product or cosine), and an

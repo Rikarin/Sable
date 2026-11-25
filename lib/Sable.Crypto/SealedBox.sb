@@ -1,0 +1,63 @@
+module Sable.Crypto
+
+/// A message sealed by an authenticated cipher: its nonce, the ciphertext,
+/// which is as long as the message, and the tag that only the key makes.
+/// None of them is secret.
+///
+/// ```sable
+/// let cipher = try! AesGcm(key: SymmetricKey.random(byteCount: 32))
+/// let box = try! cipher.seal([1, 2, 3])
+/// assert(box.combined.count == 12 + 3 + 16)
+/// assert((try! SealedBox(combined: box.combined)) == box)
+/// ```
+@derive(Equatable)
+public struct SealedBox: Sendable {
+    /// What the message was sealed with, which no other may be under the same key.
+    public let nonce: U8[>..]
+
+    /// The message, enciphered.
+    public let ciphertext: U8[>..]
+
+    /// What shows that the rest, and the associated data, are as they were sealed.
+    public let tag: U8[>..]
+
+    /// A box of its parts.
+    public init(nonce: U8[>..], ciphertext: U8[>..], tag: U8[>..]) {
+        self.nonce = nonce
+        self.ciphertext = ciphertext
+        self.tag = tag
+    }
+
+    /// The box whose `combined` the bytes are. Ones too few to be one could
+    /// not be opened, and are refused as what cannot be is.
+    ///
+    /// ```sable
+    /// do {
+    ///     _ = try SealedBox(combined: [1, 2, 3])
+    ///     assert(false)
+    /// } catch {
+    ///     assert(error == .AuthenticationFailed)
+    /// }
+    /// ```
+    public init(combined bytes: U8[:], nonceByteCount: Int = 12, tagByteCount: Int = 16) throws(CryptoError) {
+        if nonceByteCount < 0 || tagByteCount < 0 || bytes.count < nonceByteCount || bytes.count - nonceByteCount < tagByteCount {
+            throw CryptoError.AuthenticationFailed
+        }
+        nonce = bytes[..<nonceByteCount].toArray()
+        ciphertext = bytes[nonceByteCount..<bytes.count - tagByteCount].toArray()
+        tag = bytes[(bytes.count - tagByteCount)...].toArray()
+    }
+
+    /// The nonce, the ciphertext and the tag, one after another: CryptoKit's
+    /// `combined`, and how many protocols send them.
+    public var combined: U8[>..] {
+        get {
+            var bytes: U8[>..] = []
+            bytes.reserveCapacity(nonce.count + ciphertext.count + tag.count)
+            bytes.append(contentsOf: nonce)
+            bytes.append(contentsOf: ciphertext)
+            bytes.append(contentsOf: tag)
+            return bytes
+        }
+    }
+}

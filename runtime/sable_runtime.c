@@ -41,6 +41,7 @@
 #include "arrays.c"
 #include "vectors.c"
 #include "crypto.c"
+#include "ciphers.c"
 #include "codecs.c"
 #include "leaks.c"
 #include "metadata.c"

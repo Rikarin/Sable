@@ -1,10 +1,11 @@
 module List
 
+import Sable.Testing
+
 // The growable array against .NET's List<long>: ten million appends, then
 // iteration by for-in and by index, then removing from the end; three times.
 
-@main
-fn main() {
+fn run() -> String {
     var total = 0
     var round = 0
     while round < 3 {
@@ -32,5 +33,10 @@ fn main() {
         round = round + 1
     }
 
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

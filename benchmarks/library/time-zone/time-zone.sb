@@ -1,12 +1,11 @@
 module TimeZoneBench
 
+import Sable.Testing
 import Sable.Time
 
 // Time zones: the offset of New York at half a million moments of twenty years.
 
-@main
-fn main() throws(TimeZoneError) {
-    let zone = try TimeZone.find("America/New_York")
+fn run(_ zone: TimeZone) throws(TimeZoneError) -> String {
     var total = 0
     for i in 0..<500000 {
         let moment = UtcDateTime.fromUnix(946684800 + i * 1261)
@@ -14,5 +13,11 @@ fn main() throws(TimeZoneError) {
         total += there.hour
         if there.isDaylightSaving { total += 1 }
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let zone = try! TimeZone.find("America/New_York")
+    b.check(b.iterate { try! run(zone) })
 }

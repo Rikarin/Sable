@@ -1,9 +1,10 @@
 module UuidBench
 
+import Sable.Testing
+
 // UUIDs: 300,000 written as text and read back, three times.
 
-@main
-fn main() {
+fn run() -> String {
     var total = 0
     for round in 0..<3 {
         for i in 0..<300000 {
@@ -13,5 +14,10 @@ fn main() {
             if back == id { total += text.count }
         }
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

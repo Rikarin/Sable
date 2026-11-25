@@ -1,5 +1,6 @@
 // Port of sort.sb, with qsort.
 #include <stdbool.h>
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
 static int by_value(const void *a, const void *b) {
@@ -11,15 +12,18 @@ static int by_text(const void *a, const void *b) {
     return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
-int main(void) {
-    enum { WORDS = 200000 };
-    Ints numbers = {0};
+enum { WORDS = 200000 };
+
+static Ints numbers;
+static char **words;
+
+static void setup(void) {
     int64_t x = 42;
     for (int i = 0; i < 1000000; i++) {
         x = next_random(x);
         ints_append(&numbers, x);
     }
-    char **words = xrealloc(NULL, WORDS * sizeof(char *));
+    words = xrealloc(NULL, WORDS * sizeof(char *));
     for (int i = 0; i < WORDS; i++) {
         x = next_random(x);
         char text[32];
@@ -27,7 +31,9 @@ int main(void) {
         words[i] = strdup(text);
         if (words[i] == NULL) trap("out of memory");
     }
+}
 
+static void run(void) {
     int64_t n = numbers.count;
     int64_t *a = xrealloc(NULL, (size_t)n * sizeof(int64_t));
     memcpy(a, numbers.elements, (size_t)n * sizeof(int64_t));
@@ -43,12 +49,10 @@ int main(void) {
     for (int i = 1; i < WORDS; i++) {
         if (strcmp(b[i], b[i - 1]) < 0) ordered = false;
     }
-    printf("%s %lld %lld %s %s\n", ordered ? "true" : "false", (long long)a[0], (long long)a[n / 2], b[0], b[WORDS - 1]);
+    bench_printf("%s %lld %lld %s %s\n", ordered ? "true" : "false", (long long)a[0], (long long)a[n / 2], b[0], b[WORDS - 1]);
 
-    for (int i = 0; i < WORDS; i++) free(words[i]);
-    free(words);
     free(b);
     free(a);
-    free(numbers.elements);
-    return 0;
 }
+
+BENCH_MAIN_WITH(run, setup)

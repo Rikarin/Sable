@@ -5,11 +5,9 @@ module BigIntMultiply
 // times over — Toom-3 at the top, Karatsuba and schoolbook below.
 
 import Sable.Math
+import Sable.Testing
 
-@main
-fn main() {
-    let a = BigInt(3).pow(209590)
-    let b = BigInt(7).pow(118330)
+fn run(_ a: BigInt, _ b: BigInt) -> String {
     var bits = 0
     var low: U64 = 0
     var i = 0
@@ -19,5 +17,12 @@ fn main() {
         low = low ^ U64.truncating(product)
         i = i + 1
     }
-    print("\(bits) \(low)")
+    return "\(bits) \(low)"
+}
+
+@bench
+fn measure(_ bench: Bencher) {
+    let a = BigInt(3).pow(209590)
+    let b = BigInt(7).pow(118330)
+    bench.check(bench.iterate { run(a, b) })
 }

@@ -1,37 +1,44 @@
 module CCallBench
 
-// Sable calling C: a function linked, one looked up as the program runs, and
+// Sable calling C: a function linked (one no optimiser knows the meaning of,
+// as clang does labs's), one looked up as the program runs, and
 // one given text as a C string.
 
 import Sable.Interop
+import Sable.Testing
 
-@extern("c", "labs")
+@extern("c", "imaxabs")
 fn cLabs(_ n: CLong) -> CLong
 
 @extern("c", "strlen")
 unsafe fn cLength(_ text: CStr) -> CSize
 
-fn main() {
+fn run() -> String {
     var total: CLong = 0
+    var length = 0
     var i: CLong = 0
     while i < 20_000_000 {
         total = total &+ cLabs(i - 10_000_000)
         i += 1
     }
     unsafe {
-        let absolute: (CLong) -> CLong = try! DynamicLibrary.program.function("labs")
+        let absolute: (CLong) -> CLong = try! DynamicLibrary.program.function("imaxabs")
         i = 0
         while i < 20_000_000 {
             total = total &+ absolute(i - 10_000_000)
             i += 1
         }
-        var length = 0
         let text = "a name, as long as many are"
         i = 0
         while i < 500_000 {
             length += text.withCString { Int(cLength($0)) }
             i += 1
         }
-        print("\(total) \(length)")
     }
+    return "\(total) \(length)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

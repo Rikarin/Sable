@@ -5,6 +5,7 @@ module CCallbackBench
 // through its pointer with a closure's (withCallback).
 
 import Sable.Interop
+import Sable.Testing
 
 @extern("c", "qsort")
 unsafe fn cSort(_ base: RawPtr<CInt>, _ count: CSize, _ size: CSize, _ compare: CFunction<(RawPtr<CInt>, RawPtr<CInt>) -> CInt>)
@@ -16,7 +17,7 @@ fn byValue(_ a: RawPtr<CInt>, _ b: RawPtr<CInt>) -> CInt {
     }
 }
 
-fn main() {
+fn run() -> String {
     var numbers: CInt[>..] = []
     var seed: U32 = 12345
     var i = 0
@@ -43,5 +44,10 @@ fn main() {
             }
         }
     }
-    print("\(numbers[0]) \(numbers[150_000]) \(numbers[299_999]) \(total)")
+    return "\(numbers[0]) \(numbers[150_000]) \(numbers[299_999]) \(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

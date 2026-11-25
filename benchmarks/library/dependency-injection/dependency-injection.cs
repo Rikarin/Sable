@@ -203,7 +203,7 @@ static class LibraryDependencyInjection {
         public long Total() => 49;
     }
 
-    public static string Run() {
+    public static Func<string> Setup() {
         var services = new ServiceCollection();
         services.AddTransient<N0>();
         services.AddTransient<N1>();
@@ -255,7 +255,11 @@ static class LibraryDependencyInjection {
         services.AddSingleton<N47>();
         services.AddSingleton<N48>();
         services.AddSingleton<N49>();
-        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = false });
+        var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = false });
+        return () => Run(provider);
+    }
+
+    static string Run(ServiceProvider provider) {
         long total = 0;
         for (var i = 0; i < 20000; i++) {
             using var scope = provider.CreateScope();

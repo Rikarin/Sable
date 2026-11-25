@@ -1,9 +1,15 @@
 // A megabyte to hex and back, forty times.
 [Benchmark("library/hex")]
 static class LibraryHex {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var bytes = CodecSample.Bytes();
+            return () => Run(bytes);
+        }
+    }
+
+    static string Run(byte[] bytes) {
+        checked {
             long digits = 0;
             long check = 0;
             for (var round = 0; round < 40; round++) {

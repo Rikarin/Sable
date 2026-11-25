@@ -1,0 +1,28 @@
+module AesGcmBench
+
+import Sable.Crypto
+import Sable.Testing
+
+// AES-256-GCM of 64 bytes and of 64 KiB, sealed in place with a nonce that counts,
+// and opened again. What it comes to is the sum of the tags' first bytes.
+
+fn run(_ cipher: AesGcm, _ size: Int, _ rounds: Int) -> String {
+    var text = U8[>..](repeating: 1, count: size)
+    var nonce = U8[>..](repeating: 0, count: 12)
+    var tag = U8[>..](repeating: 0, count: 16)
+    var total = 0
+    for i in 0..<rounds {
+        nonce.writeU64(U64(i), at: 0, endian: .Little)
+        try! cipher.seal(inPlace: &text, nonce: nonce, associatedData: [], tag: &tag)
+        total += Int(tag[0])
+        try! cipher.open(inPlace: &text, nonce: nonce, associatedData: [], tag: tag)
+    }
+    return "\(total + Int(text[size - 1]))"
+}
+
+@bench(arguments: [(64, 100_000), (65536, 600)])
+fn measure(_ b: Bencher, _ size: Int, _ rounds: Int) {
+    let cipher = try! AesGcm(key: SymmetricKey(U8[>..](repeating: 7, count: 32)))
+    b.bytesPerIteration = size * rounds
+    b.check(b.iterate { run(cipher, size, rounds) })
+}

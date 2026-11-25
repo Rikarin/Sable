@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
 
 static class RegexSample {
-    // The regex benchmarks' text, as library/regex-*/*.sb make it: about a
+    // The regex benchmarks' text, as library/regex/regex.sb makes it: about a
     // megabyte of words chosen by xorshift, with names and e-mail addresses among
     // them, in lines of a dozen words or so, a few of the words not ASCII.
     public static string Text() {
@@ -36,20 +36,5 @@ static class RegexSample {
         }
 
         return builder.ToString();
-    }
-
-    // The matches of the pattern in the text, counted ten times over; the text's
-    // length is in UTF-8 bytes, as Sable counts it.
-    public static string Count(string pattern, RegexOptions options) {
-        checked {
-            var text = Text();
-            var regex = new Regex(pattern, options);
-            long count = 0;
-            for (var round = 0; round < 10; round++) {
-                count += regex.Count(text);
-            }
-
-            return $"{count} {System.Text.Encoding.UTF8.GetByteCount(text)}";
-        }
     }
 }

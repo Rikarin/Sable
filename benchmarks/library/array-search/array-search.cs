@@ -17,7 +17,7 @@ static class LibraryArraySearch {
         return total;
     }
 
-    public static string Run() {
+    public static Func<string> Setup() {
         var words = new int[65536];
         var longs = new long[65536];
         var bytes = new byte[65536];
@@ -33,6 +33,10 @@ static class LibraryArraySearch {
         bytes[65530] = 202;
         bytes[3] = 199;
         var others = (int[])words.Clone();
+        return () => Run(words, others, longs, bytes);
+    }
+
+    static string Run(int[] words, int[] others, long[] longs, byte[] bytes) {
         return (Work(words, others, longs, bytes, 1000) + Work(words.AsSpan(0, 24), others.AsSpan(0, 24), longs.AsSpan(0, 24), bytes.AsSpan(0, 24), 200000)).ToString();
     }
 }

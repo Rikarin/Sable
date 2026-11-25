@@ -4,7 +4,7 @@
 // on SortedDictionary: the keys are walked in order as Sable's range does).
 [Benchmark("library/sorted-dictionary")]
 static class LibrarySortedDictionary {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             const int n = 200000;
             var keys = new long[n];
@@ -13,7 +13,13 @@ static class LibrarySortedDictionary {
                 x = (x * 1103515245 + 12345) % 2147483648;
                 keys[i] = x;
             }
+            return () => Run(keys);
+        }
+    }
 
+    static string Run(long[] keys) {
+        checked {
+            var n = keys.Length;
             var d = new SortedDictionary<long, long>();
             for (var i = 0; i < n; i++) {
                 d[keys[i]] = i;

@@ -4,6 +4,7 @@ module ZstdDecompressBench
 // text, compressed once, decompressed 40 times.
 
 import Sable.IO.Compression
+import Sable.Testing
 
 // Two megabytes of words, the commoner ones oftener, in lines, with numbers.
 fn textSample() -> U8[>..] {
@@ -43,10 +44,7 @@ fn textSample() -> U8[>..] {
     return bytes
 }
 
-@main
-fn main() {
-    let text = textSample()
-    let packed = Zstd.compress(text, level: 3, checksum: false)
+fn run(_ packed: U8[>..]) -> String {
     var total = 0
     var round = 0
     while round < 40 {
@@ -54,5 +52,12 @@ fn main() {
         total += bytes.count + Int(bytes[bytes.count / 2])
         round += 1
     }
-    print("\(total)")
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let text = textSample()
+    let packed = Zstd.compress(text, level: 3, checksum: false)
+    b.check(b.iterate { run(packed) })
 }

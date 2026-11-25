@@ -1,10 +1,11 @@
 module AsyncSequenceBench
 
+import Sable.Testing
+
 // The async sequences' operators over two million numbers that are there at
 // once: filter, map, prefix, chunked and zip.
 
-@main
-fn main() async {
+fn run() async -> String {
     let squares = await (0..<1000000).async
         .filter { $0 % 3 != 0 }
         .map { $0 * 2 + 1 }
@@ -18,5 +19,10 @@ fn main() async {
     for await (a, b) in zip((0..<500000).async, (0..<500000).async.map { $0 + 1 }) {
         zipped += a ^ b
     }
-    print("\(squares) \(chunks) \(zipped)")
+    return "\(squares) \(chunks) \(zipped)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { await run() })
 }

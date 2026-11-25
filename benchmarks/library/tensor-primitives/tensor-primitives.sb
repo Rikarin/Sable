@@ -12,9 +12,9 @@ module TensorPrimitivesBench
 // side computes its own way, to four.
 
 import Sable.Math
+import Sable.Testing
 
-@main
-fn main() {
+fn run() -> String {
     let n = 4096
     var x: F32[>..] = []
     var y: F32[>..] = []
@@ -48,5 +48,10 @@ fn main() {
         round = round + 1
     }
 
-    print("\(total:.1f) \(cosine:.3f) \(F64(TensorPrimitives.sum(products)):.1f) \(spread:.4f)")
+    return "\(total:.1f) \(cosine:.3f) \(F64(TensorPrimitives.sum(products)):.1f) \(spread:.4f)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

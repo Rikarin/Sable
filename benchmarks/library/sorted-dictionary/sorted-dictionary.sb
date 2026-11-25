@@ -1,26 +1,17 @@
 module SortedDictionaryBench
 
 import Sable.Collections
+import Sable.Testing
 
 // SortedDictionary<Int, Int> against .NET 11's (a red-black tree): 200,000
 // pseudo-random keys inserted, each looked up, a third removed, then the
 // rest gone through in order and the keys of a range counted.
 // The .NET port does the same, and prints the same line.
 
-@main
-fn main() {
-    let n = 200000
-    var keys: Int[>..] = []
-    var x = 12345
-    var i = 0
-    while i < n {
-        x = (x * 1103515245 + 12345) % 2147483648
-        keys.append(x)
-        i = i + 1
-    }
-
+fn run(_ keys: Int[>..]) -> String {
+    let n = keys.count
     var d = SortedDictionary<Int, Int>()
-    i = 0
+    var i = 0
     while i < n {
         d[keys[i]] = i
         i = i + 1
@@ -59,5 +50,19 @@ fn main() {
         inRange = inRange + 1
     }
 
-    print("\(d.count) \(found) \(total) \(inRange) \(ordered)")
+    return "\(d.count) \(found) \(total) \(inRange) \(ordered)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let n = 200000
+    var keys: Int[>..] = []
+    var x = 12345
+    var i = 0
+    while i < n {
+        x = (x * 1103515245 + 12345) % 2147483648
+        keys.append(x)
+        i = i + 1
+    }
+    b.check(b.iterate { run(keys) })
 }

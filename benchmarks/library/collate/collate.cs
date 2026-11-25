@@ -1,7 +1,7 @@
 // Port of collate.sb.
 [Benchmark("library/collate")]
 static class LibraryCollate {
-    public static string Run() {
+    public static Func<string> Setup() {
         string[] letters = ["a", "b", "c", "e", "k", "l", "o", "r", "s", "t", "å", "ä", "ö"];
         var words = new List<string>();
         long x = 42;
@@ -16,6 +16,10 @@ static class LibraryCollate {
         }
 
         var swedish = new System.Globalization.CultureInfo("sv-SE").CompareInfo;
+        return () => Run(words, swedish);
+    }
+
+    static string Run(List<string> words, System.Globalization.CompareInfo swedish) {
         var sorted = new List<string>(words);
         sorted.Sort((a, b) => swedish.Compare(a, b));
         var keyed = words.Select(w => (Key: swedish.GetSortKey(w), Word: w)).ToList();

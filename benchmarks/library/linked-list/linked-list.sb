@@ -1,12 +1,12 @@
 module LinkedListBench
 
 import Sable.Collections
+import Sable.Testing
 
 // LinkedList<Int>: half a million appended, gone through ten times, and
 // two million moved from the front to the back.
 
-@main
-fn main() {
+fn run() -> String {
     var list = LinkedList<Int>()
     for i in 0..<500000 {
         list.append(i)
@@ -22,5 +22,10 @@ fn main() {
         total += value
         list.append(value)
     }
-    print("\(list.count) \(total)")
+    return "\(list.count) \(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

@@ -1,5 +1,7 @@
 module Orders
 
+import Sable.Testing
+
 // Inline layout (docs/02 §2.5): order records built, read and serialised —
 // a nested record of variable-size fields in one pointer-free block. Each
 // record is built in the frame of the function that uses it, so the hot
@@ -46,8 +48,7 @@ fn roundTrip(_ i: Int) -> U64 {
     }
 }
 
-@main
-fn main() {
+fn run() -> String {
     var sum: U64 = 0
     for i in 0..<1000000 {
         sum = sum + priced(i)
@@ -55,5 +56,15 @@ fn main() {
             sum = sum + roundTrip(i)
         }
     }
-    print(sum)
+    return "\(sum)"
+}
+
+@main
+fn main() {
+    print(run())
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

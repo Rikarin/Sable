@@ -1,6 +1,7 @@
 // Port of complex-fft.sb, with C's complex numbers.
 #include <complex.h>
 #include <math.h>
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
 // glibc leaves it out for a clang it does not know.
@@ -46,17 +47,25 @@ static void transform(double complex *values, int64_t n, const double complex *r
     }
 }
 
-int main(void) {
-    double complex *signal = xrealloc(NULL, N * sizeof *signal), *values = xrealloc(NULL, N * sizeof *values);
-    double complex *forward = xrealloc(NULL, N / 2 * sizeof *forward), *inverse = xrealloc(NULL, N / 2 * sizeof *inverse);
+static double complex *points, *forward, *inverse;
+
+static void setup(void) {
+    points = xrealloc(NULL, N * sizeof *points);
+    forward = xrealloc(NULL, N / 2 * sizeof *forward);
+    inverse = xrealloc(NULL, N / 2 * sizeof *inverse);
     for (int64_t i = 0; i < N; i++) {
-        values[i] = signal[i] = CMPLX((double)(i * 7919 % 1009) / 1009.0, (double)(i * 104729 % 757) / 757.0);
+        points[i] = CMPLX((double)(i * 7919 % 1009) / 1009.0, (double)(i * 104729 % 757) / 757.0);
     }
     for (int64_t i = 0; i < N / 2; i++) {
         double angle = -2.0 * 3.14159265358979323846 * (double)i / N;
         forward[i] = CMPLX(cos(angle), sin(angle));
         inverse[i] = conj(forward[i]);
     }
+}
+
+static void run(void) {
+    double complex *values = xrealloc(NULL, N * sizeof *values);
+    memcpy(values, points, N * sizeof *values);
     double peak = 0.0;
     for (int round = 0; round < 16; round++) {
         transform(values, N, forward);
@@ -68,12 +77,10 @@ int main(void) {
     }
     double error = 0.0;
     for (int64_t i = 0; i < N; i++) {
-        error += cabs(values[i] - signal[i]);
+        error += cabs(values[i] - points[i]);
     }
-    free(signal);
     free(values);
-    free(forward);
-    free(inverse);
-    printf("%.3f %s\n", peak, error < 0.000001 ? "true" : "false");
-    return 0;
+    bench_printf("%.3f %s\n", peak, error < 0.000001 ? "true" : "false");
 }
+
+BENCH_MAIN_WITH(run, setup)

@@ -1,9 +1,15 @@
 // A megabyte to Base64 and back, as a string and as ASCII bytes, forty times.
 [Benchmark("library/base64")]
 static class LibraryBase64 {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var bytes = CodecSample.Bytes();
+            return () => Run(bytes);
+        }
+    }
+
+    static string Run(byte[] bytes) {
+        checked {
             long digits = 0;
             long check = 0;
             for (var round = 0; round < 40; round++) {

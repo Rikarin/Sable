@@ -1,11 +1,11 @@
 module FormatLocaleBench
 
 import Sable.Globalization
+import Sable.Testing
 
 // Numbers written and read by a locale.
 
-@main
-fn main() {
+fn run() -> String {
     var format = NumberFormat.decimal
     format.minimumFractionDigits = 2
     format.maximumFractionDigits = 2
@@ -18,5 +18,10 @@ fn main() {
         let read: F64 = try! german.parse(text)
         sum += read
     }
-    print("\(total) \(sum)")
+    return "\(total) \(sum)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

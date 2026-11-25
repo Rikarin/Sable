@@ -1,14 +1,16 @@
-module RegexAlternation
+module RegexBench
 
-// Regex against .NET 11's System.Text.RegularExpressions, rebar-style:
-// an alternation of five names, counted in a megabyte of text ten times over. .NET runs it with
-// RegexOptions.Compiled (regex-alternation) and NonBacktracking
-// (regex-alternation/nonbacktracking).
+// Regex against .NET 11's System.Text.RegularExpressions (RegexOptions.Compiled),
+// rebar-style: a pattern's matches counted in a megabyte of text, ten times
+// over. 'words' matches every few bytes, Unicode word characters among them;
+// 'literal' and 'alternation' match seldom; 'email' seldom too, after much
+// that begins as one does.
 
+import Sable.Testing
 import Sable.Text
 
-/// The text the regex benchmarks search, as RegexText in ../dotnet makes
-/// it: about a megabyte of words chosen by xorshift, with names and e-mail
+/// The text the regex benchmarks search, as RegexSample.cs in ../../support/dotnet
+/// makes it: about a megabyte of words chosen by xorshift, with names and e-mail
 /// addresses among them, in lines of a dozen words or so, a few of the
 /// words not ASCII.
 fn regexText() -> String {
@@ -46,15 +48,27 @@ fn regexText() -> String {
     return parts.joined()
 }
 
-@main
-fn main() {
-    let text = regexText()
-    let regex = try! Regex(#"Sherlock|Holmes|Watson|Irene|Adler"#)
+let patterns: [String: String] = [
+    "words": #"\w+"#,
+    "literal": #"Sherlock Holmes"#,
+    "alternation": #"Sherlock|Holmes|Watson|Irene|Adler"#,
+    "email": #"[\w.+-]+@[\w-]+\.[\w.-]+"#,
+]
+
+fn run(_ regex: Regex, _ text: String) -> String {
     var count = 0
-    var round = 0
-    while round < 10 {
-        count = count + regex.count(in: text)
-        round = round + 1
+    for _ in 0..<10 {
+        // Each round reads the input anew: nothing is kept from the last.
+        _ = blackBox(count)
+        count += regex.count(in: text)
     }
-    print("\(count) \(text.utf8Count)")
+    return "\(count) \(text.utf8Count)"
+}
+
+@bench(arguments: ["words", "literal", "alternation", "email"])
+fn measure(_ b: Bencher, _ pattern: String) {
+    let text = regexText()
+    let regex = try! Regex(patterns[pattern]!)
+    b.bytesPerIteration = text.utf8Count * 10
+    b.check(b.iterate { run(regex, text) })
 }

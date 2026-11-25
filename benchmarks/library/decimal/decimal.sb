@@ -6,9 +6,9 @@ module DecimalBench
 // quotient with no end, rounded to four places.
 
 import Sable.Math
+import Sable.Testing
 
-@main
-fn main() {
+fn run() -> String {
     var total = Decimal.zero
     var shares = Decimal.zero
     let three = Decimal(3)
@@ -25,5 +25,10 @@ fn main() {
         shares = shares + (net / three).rounded(scale: 4)
         i = i + 1
     }
-    print("\(total) \(shares)")
+    return "\(total) \(shares)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

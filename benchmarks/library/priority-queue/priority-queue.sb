@@ -1,12 +1,12 @@
 module PriorityQueueBench
 
 import Sable.Collections
+import Sable.Testing
 
 // PriorityQueue<Int>: 300,000 pseudo-random numbers pushed and popped in
 // order, then a million pushed and popped in a queue a thousand long.
 
-@main
-fn main() {
+fn run() -> String {
     let queue = PriorityQueue<Int>()
     var x = 12345
     var total = 0
@@ -26,5 +26,10 @@ fn main() {
         queue.push(x)
         total = (total * 31 + queue.pop()!) % 1000000007
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

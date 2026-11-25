@@ -1,5 +1,6 @@
 // Port of rw-lock.sb: four threads and a pthread read-write lock.
 #include <pthread.h>
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
 static pthread_rwlock_t gate = PTHREAD_RWLOCK_INITIALIZER;
@@ -21,12 +22,14 @@ static void *work(void *argument) {
     return NULL;
 }
 
-int main(void) {
+static void run(void) {
+    count = 0;
     pthread_t threads[4];
     for (intptr_t t = 0; t < 4; t++) {
         if (pthread_create(&threads[t], NULL, work, (void *)t) != 0) trap("pthread_create");
     }
     for (int t = 0; t < 4; t++) pthread_join(threads[t], NULL);
-    printf("%lld\n", (long long)count);
-    return 0;
+    bench_printf("%lld\n", (long long)count);
 }
+
+BENCH_MAIN(run)

@@ -1,10 +1,11 @@
 module FormatFloatBench
 
+import Sable.Testing
+
 // F64s as text, the shortest that reads back: 200,000 with a
 // fraction of up to sixteen digits.
 
-@main
-fn main() {
+fn run() -> String {
     var x = 12345
     var characters = 0
     for _ in 0..<200000 {
@@ -12,5 +13,10 @@ fn main() {
         let value = F64(x * 2 + 1) / 4096.0 / 3.0 + 0.5
         characters += value.toString().count
     }
-    print(characters)
+    return "\(characters)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

@@ -1,7 +1,7 @@
 // Port of parse-float.sb.
 [Benchmark("library/parse-float")]
 static class LibraryParseFloat {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var texts = new List<string>();
             long x = 12345;
@@ -11,7 +11,12 @@ static class LibraryParseFloat {
                 x = (x * 1103515245 + 12345) % 2147483648;
                 texts.Add($"{whole % 100000}.{x}");
             }
+            return () => Run(texts);
+        }
+    }
 
+    static string Run(List<string> texts) {
+        checked {
             var total = 0.0;
             for (var round = 0; round < 5; round++) {
                 foreach (var text in texts) {

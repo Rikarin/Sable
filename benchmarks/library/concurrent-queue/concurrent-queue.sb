@@ -1,14 +1,14 @@
 module ConcurrentQueueBench
 
 import Sable.Concurrency
+import Sable.Testing
 
 // ConcurrentQueue<Int> against .NET 11's: two producers enqueue half a
 // million numbers each while two consumers dequeue them all and add them
 // up. The .NET port does the same with four threads, and prints the
 // same line.
 
-@main
-fn main() async {
+fn run() async -> String {
     let queue = ConcurrentQueue<Int>()
     let taken = Atomic<Int>(0)
     let sum = await withTaskGroup(of: Int.self) { group -> Int in
@@ -44,5 +44,10 @@ fn main() async {
         }
         return all
     }
-    print("\(sum)")
+    return "\(sum)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { await run() })
 }

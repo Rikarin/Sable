@@ -1,14 +1,12 @@
 module NormalizeBench
 
+import Sable.Testing
 import Sable.Text
 
 // Unicode normalisation: a megabyte of text to NFD and back to NFC, then
 // ASCII, which is neither.
 
-@main
-fn main() {
-    let accented = "Ça été où à la fête, señor Größe: Ärger über Öl. ".repeated(20000)
-    let ascii = "The quick brown fox jumps over the lazy dog, again. ".repeated(20000)
+fn run(_ accented: String, _ ascii: String) -> String {
     var total = 0
     for _ in 0..<3 {
         let apart = accented.normalized(.NFD)
@@ -16,5 +14,12 @@ fn main() {
         if apart.normalized(.NFC) == accented { total += 1 }
         total += ascii.normalized(.NFC).count
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let accented = "Ça été où à la fête, señor Größe: Ärger über Öl. ".repeated(20000)
+    let ascii = "The quick brown fox jumps over the lazy dog, again. ".repeated(20000)
+    b.check(b.iterate { run(accented, ascii) })
 }

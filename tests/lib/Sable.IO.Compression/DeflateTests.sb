@@ -1,0 +1,373 @@
+module DeflateTests
+
+// Raw deflate, and zlib's and gzip's wrappers of it: what zlib made, what our
+// own encoder makes of every kind of bytes at every level, what is damaged,
+// and what limits stop.
+
+import CompressionData
+import Sable.IO
+import Sable.IO.Compression
+import Sable.Testing
+import Sable.Text
+
+fn hex(_ text: String) -> U8[>..] {
+    return try! Hex.decode(text)
+}
+
+@test
+fn whatZlibMadeIsDecompressed() throws {
+    let text = "Sable, Sable, Sable and sable: a deflate stream in every way. "
+    let sentence = (text + text + text).utf8Bytes()
+    // Fixed codes, dynamic ones, a stored block, zlib's wrapper.
+    assert(try Deflate.decompress(hex("0b4e4cca49d5510846a21412f352148a412c2b85448594d4b49cc4925485e292a2d4c45c85cc3c85d4b2d4a24a85f2c44a3d146df4d60d00")) == sentence)
+    var squares = ""
+    var i = 0
+    while i < 130 {
+        squares = squares + "\(i * i) "
+        i += 1
+    }
+    let packed = hex(
+        "2592db01032108045ba1047908d87f6399bdfc444e1718961c732b7be66d712ddbea5997ad9b9f631e9c55bca27848d0c4e5dc6719859e6c74559c5b76e3d99db646d79cc3f770bfbc3f74af5597443f5470a794aba607c53dd5a5d4eeaa6f0ba0453210f99618208c230a17719c6791a72cea386464442b1addad5e1fba5446525fd09027f5b2a89cea9143b75cfae683a00e2c25aa4af8aa20ad86b946d36a8c7b98e7ba064e4dcc8b5dcd7c47d1e3ae0faf64396e92d197dc1eaaf4526fce9539640c3d6d2e7d67209807cbcafa0df8b6b48b867917faa739501041899b4cf9f67cbb925927beb88e0c6e14d88cd85d79ee918a4b3e7acb525fb91bff4da73c8f2bfb63b48978df52befd64dd6f41da5a3e2db0bcbfff8672a154bcabd591c76f62847f9ef85dc5fddd774ad3d2ff00"
+    )
+    assert(try Deflate.decompress(packed) == squares.utf8Bytes())
+    assert(try Deflate.decompress(hex("010600f9ff73746f726564")) == "stored".utf8Bytes())
+    assert(try Zlib.decompress(hex("789c0b4e4cca49d5510846a21412f352148a412c2b85448594d4b49cc4925485e292a2d4c45c85cc3c85d4b2d4a24a85f2c44a3d146df4d60d00114a3f6d")) == sentence)
+}
+
+@test
+fn everyLevelRoundTrips() throws {
+    var level = 0
+    while level <= 9 {
+        var kind = 0
+        while kind < 8 {
+            for length in sampleLengths {
+                let bytes = sample(kind, length, seed: U64(level + 1))
+                let packed = Deflate.compress(bytes, level: level)
+                assert(try Deflate.decompress(packed) == bytes, "level \(level), kind \(kind), \(length) bytes")
+                assert(packed.count <= Deflate.maxCompressedLength(length), "level \(level), kind \(kind), \(length) bytes to \(packed.count)")
+            }
+            kind += 1
+        }
+        level += 1
+    }
+}
+
+@test
+fn longStreamsRoundTrip() throws {
+    var level = 0
+    while level <= 9 {
+        for kind in [0, 4, 5, 7] {
+            let bytes = sample(kind, 700_000, seed: U64(level))
+            let packed = Zlib.compress(bytes, level: level)
+            assert(try Zlib.decompress(packed) == bytes, "level \(level), kind \(kind)")
+            assert(packed.count <= Zlib.maxCompressedLength(bytes.count), "level \(level), kind \(kind): \(packed.count)")
+        }
+        level += 1
+    }
+}
+
+@test
+fn higherLevelsAreSmaller() {
+    let bytes = sample(4, 300_000)
+    let fast = Deflate.compress(bytes, level: 1).count
+    let usual = Deflate.compress(bytes, level: 6).count
+    let best = Deflate.compress(bytes, level: 9).count
+    assert(best < usual && usual < fast && fast < 150_000, "\(fast), \(usual), \(best)")
+    assert(Deflate.compress(bytes, level: 0).count > 300_000)
+}
+
+@test
+fn piecesOfAnySizeRoundTrip() throws {
+    var seed: U64 = 1
+    while seed <= 40 {
+        let bytes = sample(Int(seed) % 8, 30_000 + Int(seed) * 3000, seed: seed)
+        var encoder = DeflateEncoder(level: Int(seed) % 10)
+        let packed = compressInPieces(&encoder, bytes, seed: seed, flushing: seed % 2 == 0)
+        var decoder = DeflateDecoder()
+        assert(try decompressInPieces(&decoder, packed, seed: seed) == bytes, "seed \(seed)")
+        assert(decoder.isFinished)
+        seed += 1
+    }
+}
+
+@test
+fn whatIsFlushedCanBeDecompressed() throws {
+    let encoder = GzipEncoder()
+    var packed = ByteBuffer()
+    let decoder = GzipDecoder()
+    var bytes = ByteBuffer()
+    var round = 0
+    while round < 20 {
+        let piece = sample(4, 100 + round * 37, seed: U64(round))
+        encoder.compress(piece, into: &packed)
+        encoder.flush(into: &packed)
+        let step = try decoder.decompress(packed.bytes, into: &bytes)
+        assert(step.status == .NeedsInput && step.consumed == packed.count && step.produced == piece.count)
+        packed.clear()
+        round += 1
+    }
+}
+
+@test
+fn theBytesAfterTheEndAreNotTaken() throws {
+    let packed = Deflate.compress(sample(4, 5000))
+    let decoder = DeflateDecoder()
+    var bytes = ByteBuffer()
+    let step = try decoder.decompress(join(packed, [1, 2, 3]), into: &bytes)
+    assert(step.status == .Finished && step.consumed == packed.count && step.produced == 5000)
+    assert(fails(CompressionError.Corrupt("bytes follow the end of the stream")) { try Deflate.decompress(join(packed, [1])) })
+}
+
+@test
+fn aSliceIsFilled() throws {
+    let packed = Deflate.compress([1, 2, 3, 4, 5])
+    var decoder = DeflateDecoder()
+    var room: U8[>..] = [9, 0, 0, 0]
+    let first = try decoder.decompress(packed, into: &room, at: 1)
+    assert(room == [9, 1, 2, 3] && first.produced == 3 && first.status == .NeedsOutput)
+    let rest = try decoder.decompress(packed[first.consumed...], into: &room, at: 2)
+    assert(room == [9, 1, 4, 5] && rest.status == .Finished)
+}
+
+@test
+fn dictionariesAreUsed() throws {
+    let dictionary = "a deflate stream".utf8Bytes()
+    let text = "Sable, Sable, Sable and sable: a deflate stream in every way. "
+    let sentence = (text + text + text).utf8Bytes()
+    let packed = hex("78f9310706030b4e4cca49d55140a61412f352148a412c2b854434e50a99790aa965a945950ae589957a0a03a91b00114a3f6d")
+    var decoder = ZlibDecoder(limits: DecompressionLimits(), dictionary: dictionary)
+    var bytes = ByteBuffer()
+    assert(try decoder.decompress(packed, into: &bytes).status == .Finished)
+    assert(bytes.bytes == sentence)
+    assert(fails(CompressionError.DictionaryNeeded(id: 0x3107_0603)) { try Zlib.decompress(packed) })
+
+    for level in [1, 4, 6, 9] {
+        let long = sample(4, 40_000, seed: 5)
+        for size in [10, 1000, 40_000] {
+            let known = long[0..<size].toArray()
+            let plain = Deflate.compress(long[0..<900], level: level)
+            var encoder = DeflateEncoder(level: level, dictionary: known)
+            let made = compressInPieces(&encoder, long[0..<900].toArray(), seed: 3, flushing: false)
+            var reader = DeflateDecoder(limits: DecompressionLimits(), dictionary: known)
+            assert(try decompressInPieces(&reader, made, seed: 4) == long[0..<900].toArray(), "level \(level), a dictionary of \(size)")
+            assert(size < 1000 || made.count < plain.count)
+            var zlib = ZlibEncoder(level: level, dictionary: known)
+            let wrapped = compressInPieces(&zlib, long, seed: 3, flushing: false)
+            var unwrapper = ZlibDecoder(limits: DecompressionLimits(), dictionary: known)
+            assert(try decompressInPieces(&unwrapper, wrapped, seed: 4) == long)
+        }
+    }
+}
+
+fn says(_ bytes: U8[>..], _ what: String) -> Bool {
+    do {
+        _ = try Deflate.decompress(bytes)
+        return false
+    } catch {
+        return error == .Corrupt(what)
+    }
+}
+
+/// Bits put together, least significant first: pairs of a value and a width.
+fn bits(_ parts: (Int, Int)[>..]) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var held = 0
+    var count = 0
+    for (value, width) in parts {
+        held |= value << count
+        count += width
+        while count >= 8 {
+            bytes.append(U8(held & 0xFF))
+            held >>= 8
+            count -= 8
+        }
+    }
+    bytes.append(U8(held & 0xFF))
+    return bytes
+}
+
+@test
+fn whatIsWrongIsSaid() {
+    assert(says([0x07], "a block of no known type"))
+    assert(says([0x01, 1, 0, 0, 0, 5], "a stored block's length is not its complement's"))
+    // A match before the first byte: length 3 (0000001), distance 1.
+    assert(says(bits([(1, 1), (1, 2), (0x40, 7), (0, 5), (0, 7), (0, 8), (0, 8)]), "a match is of bytes before the first"))
+    // The fixed codes' symbols 286 and 287, and distances 30 and 31.
+    assert(says(bits([(1, 1), (1, 2), (0x63, 8), (0, 16), (0, 16)]), "a literal has no such code"))
+    assert(says(bits([(1, 1), (1, 2), (0x0C, 8), (0x40, 7), (0x0F, 5), (0, 16), (0, 16)]), "a distance has no such code"))
+    // Dynamic codes: too many symbols, lengths that are no code's.
+    assert(says(bits([(1, 1), (2, 2), (30, 5), (0, 5), (0, 4), (0, 16)]), "a block has too many symbols"))
+    assert(says(bits([(1, 1), (2, 2), (0, 5), (30, 5), (0, 4), (0, 16)]), "a block has too many symbols"))
+    assert(says(bits([(1, 1), (2, 2), (0, 5), (0, 5), (0, 4), (0x249, 12), (0, 16)]), "the lengths of a code's lengths are no code's"))
+    assert(says(bits([(1, 1), (2, 2), (0, 5), (0, 5), (0, 4), (0x001, 12), (0, 16)]), "the lengths of a code's lengths are no code's"))
+    // 16 first, which repeats nothing.
+    assert(says(bits([(1, 1), (2, 2), (0, 5), (0, 5), (0, 4), (0x009, 12), (0, 16)]), "the first code length repeats the one before"))
+    // 138 zeros, and 138 more: 258 symbols, all zeros.
+    assert(says(bits([(1, 1), (2, 2), (0, 5), (0, 5), (0, 4), (1, 3), (0, 3), (1, 3), (0, 3), (1, 1), (127, 7), (1, 1), (127, 7), (0, 16)]), "the code lengths go on past the last"))
+    assert(says(bits([(1, 1), (2, 2), (0, 5), (0, 5), (0, 4), (1, 3), (0, 3), (1, 3), (0, 3), (1, 1), (127, 7), (1, 1), (109, 7), (0, 16)]), "a block's end has no code"))
+}
+
+@test
+fn theWrappersAreChecked() {
+    let bytes = sample(4, 1000)
+    let zlib = Zlib.compress(bytes)
+    assert(fails(CompressionError.Corrupt("no zlib header")) { try Zlib.decompress([0x78, 0x9D, 0, 0]) })
+    assert(fails(CompressionError.Corrupt("no zlib header")) { try Zlib.decompress([0x79, 0x1A]) })
+    assert(fails(CompressionError.Corrupt("no zlib header")) { try Zlib.decompress([0x88, 0x1C]) })
+    var changed = zlib
+    changed[changed.count - 1] = changed[changed.count - 1] ^ 1
+    assert(fails(CompressionError.Corrupt("the checksum is wrong")) { try Zlib.decompress(changed) })
+
+    let gzip = Gzip.compress(bytes)
+    assert(fails(CompressionError.Corrupt("no gzip header")) { try Gzip.decompress(zlib) })
+    changed = gzip
+    changed[2] = 7
+    assert(fails(CompressionError.Corrupt("a gzip header of no known kind")) { try Gzip.decompress(changed) })
+    changed = gzip
+    changed[3] = 0x20
+    assert(fails(CompressionError.Corrupt("a gzip header of no known kind")) { try Gzip.decompress(changed) })
+    changed = gzip
+    changed[changed.count - 8] = changed[changed.count - 8] ^ 1
+    assert(fails(CompressionError.Corrupt("the checksum is wrong")) { try Gzip.decompress(changed) })
+    changed = gzip
+    changed[changed.count - 1] = changed[changed.count - 1] ^ 1
+    assert(fails(CompressionError.Corrupt("the length is wrong")) { try Gzip.decompress(changed) })
+    assert(fails(CompressionError.Corrupt("bytes follow the end of the stream")) { try Gzip.decompress(join(gzip, [1, 2])) })
+    assert(fails(CompressionError.Corrupt("bytes follow the end of the stream")) { try Gzip.decompress(join(gzip, [0x1F, 2])) })
+    assert(fails(CompressionError.Truncated) { try Gzip.decompress(join(gzip, [0x1F, 0x8B])) })
+}
+
+@test
+fn aStreamCutShortIsTruncated() {
+    let bytes = sample(7, 3000)
+    let gzip = Gzip.compress(bytes)
+    let zlib = Zlib.compress(bytes, level: 1)
+    let raw = Deflate.compress(bytes, level: 0)
+    var length = 0
+    while length < gzip.count {
+        assert(fails(CompressionError.Truncated) { try Gzip.decompress(gzip[..<length]) })
+        length += 1
+    }
+    length = 0
+    while length < zlib.count {
+        assert(fails(CompressionError.Truncated) { try Zlib.decompress(zlib[..<length]) })
+        length += 1
+    }
+    length = 0
+    while length < raw.count {
+        assert(fails(CompressionError.Truncated) { try Deflate.decompress(raw[..<length]) })
+        length += 7
+    }
+}
+
+@test
+fn damageIsNeverMoreThanAnError() {
+    var seed: U64 = 1
+    var failed = 0
+    while seed <= 3000 {
+        let bytes = sample(Int(seed) % 8, 200 + Int(seed) % 2000, seed: seed)
+        let packed = Deflate.compress(bytes, level: Int(seed) % 10)
+        do {
+            let limits = DecompressionLimits(maximumLength: 1 << 20)
+            _ = try Deflate.decompress(damaged(packed, seed: seed), limits: limits)
+        } catch {
+            failed += 1
+        }
+        do {
+            _ = try Gzip.decompress(damaged(Gzip.compress(bytes), seed: seed))
+        } catch {
+            failed += 1
+        }
+        var random = sample(0, 1 + Int(seed) % 300, seed: seed)
+        random[0] = random[0] & 0xF8 | U8(1 + seed % 2 * 4)
+        do {
+            _ = try Deflate.decompress(random)
+        } catch {
+            failed += 1
+        }
+        seed += 1
+    }
+    assert(failed > 5000)
+}
+
+@test
+fn limitsAreKept() throws {
+    let bomb = Gzip.compress(U8[>..](repeating: 0, count: 10_000_000), level: 9)
+    assert(bomb.count < 12_000)
+    assert(try Gzip.decompress(bomb, limits: DecompressionLimits(maximumLength: 10_000_000)).count == 10_000_000)
+    let most = DecompressionLimits(maximumLength: 9_999_999)
+    assert(fails(CompressionError.LimitExceeded) { try Gzip.decompress(bomb, limits: most) })
+    let ratio = DecompressionLimits(maximumRatio: 500)
+    assert(fails(CompressionError.LimitExceeded) { try Gzip.decompress(bomb, limits: ratio) })
+    assert(try Gzip.decompress(bomb, limits: DecompressionLimits(maximumRatio: 1100)).count == 10_000_000)
+    // Little is always let through.
+    let small = Gzip.compress(U8[>..](repeating: 0, count: 60_000))
+    assert(try Gzip.decompress(small, limits: DecompressionLimits(maximumRatio: 1)).count == 60_000)
+}
+
+@test
+fn gzipHasMembersAndAHeader() throws {
+    var header = GzipHeader()
+    header.name = "caf\u{E9} \u{2603}.txt"
+    header.comment = "a comment"
+    header.modified = 1_700_000_000
+    header.operatingSystem = 3
+    header.isText = true
+    header.extra = [0x41, 0x42, 2, 0, 9, 9]
+    var packed = ByteBuffer()
+    let encoder = GzipEncoder(level: 9, header: header)
+    encoder.compress([1, 2, 3], into: &packed)
+    encoder.finish(into: &packed)
+    let decoder = GzipDecoder()
+    var bytes = ByteBuffer()
+    var at = 0
+    while at < packed.count {
+        // A byte at a time: the header is looked at again until it is whole.
+        let step = try decoder.decompress(packed.bytes[at..<(at + 1)], into: &bytes)
+        at += step.consumed
+    }
+    assert(decoder.isFinished && bytes.bytes == [1, 2, 3])
+    var expected = header
+    expected.name = "caf\u{E9} ?.txt"
+    assert(decoder.header == expected)
+
+    // A header's own checksum, which the encoder does not write.
+    let checked = hex("1f8b0802000000000003dd1b03000000000000000000")
+    var right = checked
+    var crc = 0
+    var found = 0
+    while crc < 65536 {
+        right[10] = U8(crc & 0xFF)
+        right[11] = U8(crc >> 8)
+        do {
+            found += try Gzip.decompress(right).isEmpty ? 1 : 0
+        } catch { }
+        crc += 1
+    }
+    assert(found == 1)
+
+    let both = join(join(Gzip.compress([1, 2, 3], level: 1), Gzip.compress([])), Gzip.compress([4], level: 9))
+    assert(try Gzip.decompress(both) == [1, 2, 3, 4])
+    assert(try Gzip.decompress(join(both, [0, 0, 0])) == [1, 2, 3, 4])
+    var pieces = GzipDecoder()
+    assert(try decompressInPieces(&pieces, both, seed: 1) == [1, 2, 3, 4])
+}
+
+@test
+fn gzipReadsAndWritesOurs() async throws {
+    if !(await has("gzip")) {
+        return
+    }
+    var level = 0
+    while level <= 9 {
+        for kind in [0, 3, 4, 7] {
+            let bytes = sample(kind, 200_000, seed: U64(level))
+            let read = await run("gzip", ["-dc"], input: Gzip.compress(bytes, level: level))
+            assert(read == bytes, "gzip reads level \(level), kind \(kind)")
+            if let packed = await run("gzip", ["-c", "-\(level == 0 ? 1 : level)"], input: bytes) {
+                assert(try Gzip.decompress(packed) == bytes, "gzip's level \(level), kind \(kind)")
+            }
+        }
+        level += 1
+    }
+}

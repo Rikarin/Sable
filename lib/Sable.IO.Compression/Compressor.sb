@@ -1,0 +1,28 @@
+module Sable.IO.Compression
+
+/// What compresses bytes a run at a time, as they come: `DeflateEncoder`,
+/// `ZlibEncoder`, `GzipEncoder`, `BrotliEncoder`, `ZstdEncoder`.
+///
+/// ```sable
+/// let encoder = GzipEncoder()
+/// var packed = ByteBuffer()
+/// encoder.compress("hello, ".utf8Bytes(), into: &packed)
+/// encoder.compress("hello".utf8Bytes(), into: &packed)
+/// encoder.finish(into: &packed)
+/// assert(try! Gzip.decompress(packed.bytes) == "hello, hello".utf8Bytes())
+/// ```
+public protocol Compressor {
+    /// One at the level that suits most.
+    init()
+
+    /// The bytes compressed, or held to be, and what that comes to written at
+    /// the buffer's end.
+    mutating fn compress(_ source: U8[:], into output: inout ByteBuffer)
+
+    /// Everything held compressed, so that what was written so far can be
+    /// decompressed whole: at some cost in size.
+    mutating fn flush(into output: inout ByteBuffer)
+
+    /// The end of the stream written. Nothing can be compressed after.
+    mutating fn finish(into output: inout ByteBuffer)
+}

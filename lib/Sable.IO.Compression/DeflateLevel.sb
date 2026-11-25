@@ -1,0 +1,23 @@
+module Sable.IO.Compression
+
+/// How hard a level looks for matches.
+struct DeflateLevel {
+    /// How many earlier places are looked at, and the length of match that
+    /// ends the search.
+    let depth: Int
+    let nice: Int
+    /// How many bytes on a better match is looked for before one is taken: 0,
+    /// 1, 2; or every byte, the least of all parses found.
+    let waits: Int
+
+    static let bestParse: Int = 3
+
+    /// One of the levels 2 to 9.
+    init(level: Int) {
+        let depths: Int[>..] = [6, 12, 16, 16, 24, 80, 300, 64]
+        let nices: Int[>..] = [10, 14, 30, 30, 65, 130, 258, 258]
+        depth = depths[level - 2]
+        nice = nices[level - 2]
+        waits = level <= 4 ? 0 : (level <= 7 ? 1 : (level == 8 ? 2 : DeflateLevel.bestParse))
+    }
+}

@@ -37,9 +37,46 @@ public struct NativeMemory {
         RawMemory.copy(to: target.address, from: source.address, byteCount)
     }
 
+    /// The bytes copied to 'target' on, where there is room for them.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     let memory = NativeMemory.allocate(byteCount: 4)
+    ///     defer { NativeMemory.deallocate(memory) }
+    ///     NativeMemory.copy(from: [1, 2, 3, 4], to: memory)
+    ///     assert(memory.load(at: 2) == 3)
+    /// }
+    /// ```
+    public unsafe static fn copy(from bytes: U8[:], to target: RawPtr<U8>) {
+        RawMemory.store(target.address, bytes)
+    }
+
+    /// 'byteCount' bytes from 'source' on, copied over the slice's from an
+    /// offset on, all of which must be in it.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     let memory = NativeMemory.allocate(byteCount: 4, zeroed: true)
+    ///     defer { NativeMemory.deallocate(memory) }
+    ///     var bytes: U8[>..] = [7, 7, 7, 7, 7]
+    ///     NativeMemory.copy(from: memory, to: &bytes, at: 1, byteCount: 4)
+    ///     assert(bytes == [7, 0, 0, 0, 0])
+    /// }
+    /// ```
+    public unsafe static fn copy(from source: RawPtr<U8>, to bytes: inout U8[:], at offset: Int, byteCount: Int) {
+        let count = bytes.count
+        precondition(byteCount >= 0 && offset >= 0 && offset <= count - byteCount, "\(byteCount) bytes from \(offset) of \(count)")
+        bytes.fill(from: offset, raw: source.address, byteCount)
+    }
+
     /// 'byteCount' bytes from 'target' on, each set to the byte: C's 'memset'.
     public unsafe static fn fill<T>(_ target: RawPtr<T>, with byte: U8, byteCount: Int) {
         precondition(byteCount >= 0, "filling \(byteCount) bytes")
         RawMemory.fill(target.address, byte, byteCount)
     }
+}
+
+extension U8[:] {
+    @builtin("bytes_from_raw")
+    unsafe mutating fn fill(from offset: Int, raw address: Int, _ byteCount: Int)
 }

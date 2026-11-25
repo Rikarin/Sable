@@ -1,0 +1,51 @@
+module Sable.IO.Compression
+
+import Sable.IO
+
+/// Why bytes could not be decompressed.
+///
+/// ```sable
+/// do {
+///     _ = try Deflate.decompress([0xFF, 0xFF])
+/// } catch {
+///     assert(error.description() == "the data is corrupt: a block of no known type")
+/// }
+/// ```
+@derive(Equatable)
+public union CompressionError: Error {
+    /// The bytes are not the format's, or are damaged: what is wrong.
+    Corrupt(String),
+
+    /// The bytes end before the stream in them does.
+    Truncated,
+
+    /// More would be decompressed than the limits allow.
+    LimitExceeded,
+
+    /// The stream needs a dictionary that was not given, or another one.
+    DictionaryNeeded(id: U32),
+
+    /// The stream needs a window larger than the decoder allows.
+    WindowTooLarge(bytes: Int),
+
+    /// What went wrong.
+    public fn description() -> String {
+        return match self {
+            case .Corrupt(let what)         => "the data is corrupt: \(what)"
+            case .Truncated                 => "the data ends before the stream does"
+            case .LimitExceeded             => "more would be decompressed than the limits allow"
+            case .DictionaryNeeded(let id)  => "the data needs the dictionary \(id)"
+            case .WindowTooLarge(let bytes) => "the data needs a window of \(bytes) bytes"
+        }
+    }
+
+    /// The same as what a Reader throws.
+    var asIoError: IoError {
+        get {
+            if case .Truncated = self {
+                return .UnexpectedEof
+            }
+            return .InvalidData(what: description())
+        }
+    }
+}

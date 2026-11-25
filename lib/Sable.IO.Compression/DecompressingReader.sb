@@ -1,0 +1,73 @@
+module Sable.IO.Compression
+
+import Sable.IO
+
+/// What another reader reads, decompressed: `GzipReader`, `ZlibReader`,
+/// `DeflateReader`, `BrotliReader` and `ZstdReader` are this with their own
+/// decoders.
+///
+/// Data that is damaged is an `IoError.InvalidData`, and data that ends early
+/// an `.UnexpectedEof`.
+///
+/// ```sable
+/// let packed = Gzip.compress("one line\nand another\n".utf8Bytes())
+/// var reader = GzipReader(MemoryStream(packed))
+/// assert(try! reader.read(upTo: 3) == "one".utf8Bytes())
+/// assert(try! reader.readToEnd() == " line\nand another\n".utf8Bytes())
+/// ```
+public struct DecompressingReader<Decoder: Decompressor, Inner: Reader>: Reader {
+    /// What decompresses it: a gzip decoder has the header.
+    public var decoder: Decoder
+    /// The reader the compressed bytes come from.
+    public var inner: Inner
+    var input: U8[>..]
+    var position: Int
+    var ended: Bool
+
+    /// Reading the reader, and decompressing by the decoder.
+    public init(_ inner: Inner, decoder: Decoder = Decoder()) {
+        self.inner = inner
+        self.decoder = decoder
+        input = []
+        position = 0
+        ended = false
+    }
+
+    /// The bytes read after the end of the stream, which are no part of it.
+    /// There are none until the end was read.
+    public var unread: U8[:] => input[position...]
+
+    public mutating fn read(upTo count: Int) throws(IoError) -> U8[>..] {
+        if count <= 0 || ended {
+            return []
+        }
+        var buffer = ByteBuffer()
+        while true {
+            var step: CompressionProgress
+            do {
+                step = try decoder.decompress(input[position...], into: &buffer, limit: count)
+            } catch {
+                throw error.asIoError
+            }
+            position += step.consumed
+            if step.produced > 0 {
+                return buffer.takeBytes()
+            }
+            if step.status == .Finished && (!Decoder.isConcatenable || position < input.count) {
+                ended = true
+                return []
+            }
+            if step.consumed == 0 || position >= input.count {
+                input = try inner.read(upTo: 65536)
+                position = 0
+                if input.isEmpty {
+                    if !decoder.isFinished {
+                        throw .UnexpectedEof
+                    }
+                    ended = true
+                    return []
+                }
+            }
+        }
+    }
+}

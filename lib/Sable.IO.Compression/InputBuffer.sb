@@ -1,0 +1,49 @@
+module Sable.IO.Compression
+
+/// The bytes a decoder was given and has not read, in memory, with sixteen
+/// zeros past them that may be read too.
+struct InputBuffer {
+    let block: Block
+    let capacity: Int
+    /// Where the next byte is, and where the last one ends.
+    var position: Int
+    var end: Int
+
+    init(capacity: Int) {
+        self.capacity = capacity
+        block = Block(count: capacity + 16)
+        position = block.address
+        end = block.address
+    }
+
+    /// How many are unread.
+    var count: Int => end &- position
+
+    /// As many of the bytes from an index on as there is room for, added: how
+    /// many.
+    mutating fn fill(_ source: U8[:], from index: Int) -> Int {
+        let left = count
+        if left > 0 && position != block.address {
+            unsafe {
+                copyBytes(from: position, to: block.address, left)
+            }
+        }
+        position = block.address
+        end = position + left
+        let taken = source.count - index < capacity - left ? source.count - index : capacity - left
+        unsafe {
+            NativeMemory.copy(from: source[index..<index + taken], to: RawPtr<U8>(address: end))
+            end = end + taken
+            store64(0, end)
+            store64(0, end &+ 8)
+        }
+        return taken
+    }
+
+    /// Every unread byte dropped, to be given again: how many.
+    mutating fn giveBack() -> Int {
+        let left = count
+        end = position
+        return left
+    }
+}

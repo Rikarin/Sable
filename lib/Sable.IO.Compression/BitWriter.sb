@@ -1,0 +1,30 @@
+module Sable.IO.Compression
+
+/// Bits written least significant first, at an address, where there is room
+/// for them and eight bytes more.
+struct BitWriter {
+    var bits: U64
+    var count: Int
+    var position: Int
+
+    /// Up to fifty-six more, of which there is none above 'width'.
+    @inline(always)
+    unsafe mutating fn write(_ value: Int, _ width: Int) {
+        bits = bits | (value unchecked as U64) << ((count & 63) unchecked as U64)
+        count = count &+ width
+        store64(bits, position)
+        position = position &+ (count >> 3)
+        bits = bits >> ((count & 56) unchecked as U64)
+        count = count & 7
+    }
+
+    /// Zeros to the end of a byte.
+    unsafe mutating fn align() {
+        if count > 0 {
+            store8(bits unchecked as Int, position)
+            position = position &+ 1
+            bits = 0
+            count = 0
+        }
+    }
+}

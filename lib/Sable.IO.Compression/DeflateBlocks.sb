@@ -1,0 +1,307 @@
+module Sable.IO.Compression
+
+/// The symbol of a length, 3 to 258, after 257's, a byte each from 0 on; and
+/// that of a distance d, where d - 1 < 256, or, from 256 on, (d - 1) >> 7.
+let deflateSymbols: Int = {
+        () -> Int in
+        unsafe {
+            let table = NativeMemory.allocate(byteCount: 259 + 512, zeroed: true).address
+            var symbol = 0
+            while symbol < 29 {
+                let base = deflateLengthBases[symbol] unchecked as Int
+                var length = base
+                while length < base + (1 << (deflateLengthBits[symbol] unchecked as Int)) && length <= 258 {
+                    store8(symbol, table + length)
+                    length += 1
+                }
+                symbol += 1
+            }
+            symbol = 0
+            while symbol < 30 {
+                let base = deflateDistanceBases[symbol] unchecked as Int - 1
+                let end = base + (1 << (deflateDistanceBits[symbol] unchecked as Int))
+                var distance = base
+                while distance < end {
+                    store8(symbol, table + 259 + (distance < 256 ? distance : 256 + (distance >> 7)))
+                    distance += distance < 256 ? 1 : 128
+                }
+                symbol += 1
+            }
+            return table
+        }
+    }()
+
+/// The same bases and extra bits, for an encoder to read unchecked: of 29
+/// lengths, then of 30 distances, then their extra bits.
+let deflateBases: Int = {
+        () -> Int in
+        var all: U32[>..] = []
+        all.append(contentsOf: deflateLengthBases)
+        all.append(contentsOf: deflateDistanceBases)
+        all.append(contentsOf: deflateLengthBits)
+        all.append(contentsOf: deflateDistanceBits)
+        return constantTable(all)
+    }()
+
+/// What a deflate block is written by: the symbols counted, the codes made of
+/// the counts, and the block's bits, whichever kind of block is least.
+///
+/// A block's symbols are tokens, a U32 each: a literal, or a match's length
+/// at bit 16 and its distance below it.
+final class DeflateBlocks {
+    /// 288 counts of literals and lengths, and 32 of distances; the codes'
+    /// lengths of those, a byte each; the codes; the length code's lengths,
+    /// each with what it repeats above it; room to work in.
+    let memory: Block
+
+    init() {
+        memory = Block(count: 1280 + 352 + 1408 + 1408 + 4400, zeroed: true)
+    }
+
+    var lengthCounts: Int => memory.address
+
+    var distanceCounts: Int => memory.address + 1152
+
+    var lengths: Int => memory.address + 1280
+
+    var distanceLengths: Int => memory.address + 1568
+
+    var codes: Int => memory.address + 1632
+
+    var distanceCodes: Int => memory.address + 2784
+
+    var repeats: Int => memory.address + 3040
+
+    var precode: Int => memory.address + 4320
+
+    var work: Int => memory.address + 4448
+
+    unsafe fn resetCounts() {
+        fillBytes(memory.address, with: 0, 1280)
+    }
+
+    /// How many bits a block of the counts takes by the code lengths given.
+    unsafe fn cost(_ lengths: Int, _ distanceLengths: Int) -> Int {
+        var total = 0
+        var i = 0
+        while i < 286 {
+            let count = load32(lengthCounts &+ 4 &* i) unchecked as Int
+            let extra = i > 256 ? load32(deflateBases &+ 4 &* (59 &+ i &- 257)) unchecked as Int : 0
+            total = total &+ count &* (load8(lengths &+ i) &+ extra)
+            i = i &+ 1
+        }
+        i = 0
+        while i < 30 {
+            let count = load32(distanceCounts &+ 4 &* i) unchecked as Int
+            let extra = load32(deflateBases &+ 4 &* (88 &+ i)) unchecked as Int
+            total = total &+ count &* (load8(distanceLengths &+ i) &+ extra)
+            i = i &+ 1
+        }
+        return total
+    }
+
+    /// The least code lengths for the counts, the end's among them.
+    unsafe fn makeLengths() {
+        store32(1, lengthCounts &+ 1024)
+        _ = huffmanLengths(lengthCounts, count: 286, limit: 15, lengths: lengths, work: work)
+        _ = huffmanLengths(distanceCounts, count: 30, limit: 15, lengths: distanceLengths, work: work)
+    }
+
+    /// A block of the tokens, whose counts are counted, written in the least
+    /// way: of the bytes from 'source' on, 'count' of them.
+    unsafe fn write(_ writer: inout BitWriter, tokens: Int, tokenCount: Int, source: Int, count: Int, isLast: Bool) {
+        self.makeLengths()
+
+        // The codes' lengths, one after the other, in their own code.
+        var lengthCount = 286
+        while lengthCount > 257 && load8(lengths &+ lengthCount &- 1) == 0 {
+            lengthCount = lengthCount &- 1
+        }
+        var distanceCount = 30
+        while distanceCount > 1 && load8(distanceLengths &+ distanceCount &- 1) == 0 {
+            distanceCount = distanceCount &- 1
+        }
+        let all = work &+ 3000
+        copyBytes(from: lengths, to: all, lengthCount)
+        copyBytes(from: distanceLengths, to: all &+ lengthCount, distanceCount)
+        let repeatCount = self.repeatLengths(all, lengthCount + distanceCount)
+        let precodeCounts = work &+ 2000
+        let precodeLengths = work &+ 2100
+        _ = huffmanLengths(precodeCounts, count: 19, limit: 7, lengths: precodeLengths, work: work)
+        var precodeCount = 19
+        while precodeCount > 4 && load8(precodeLengths &+ (precodeOrder[precodeCount - 1] unchecked as Int)) == 0 {
+            precodeCount = precodeCount &- 1
+        }
+        var header = 14 &+ 3 &* precodeCount
+        var i = 0
+        while i < 19 {
+            let extra = i == 16 ? 2 : (i == 17 ? 3 : (i == 18 ? 7 : 0))
+            header = header &+ (load32(precodeCounts &+ 4 &* i) unchecked as Int) &* (load8(precodeLengths &+ i) &+ extra)
+            i = i &+ 1
+        }
+        let dynamicCost = header &+ self.cost(lengths, distanceLengths)
+
+        // The fixed codes' cost, and a stored block's.
+        let fixed = work &+ 3400
+        fillBytes(fixed, with: 8, 144)
+        fillBytes(fixed &+ 144, with: 9, 112)
+        fillBytes(fixed &+ 256, with: 7, 24)
+        fillBytes(fixed &+ 280, with: 8, 8)
+        fillBytes(fixed &+ 288, with: 5, 32)
+        let fixedCost = self.cost(fixed, fixed &+ 288)
+        let storedCost = ((count &+ 65534) / 65535 &* 5 &+ count) &* 8
+        let least = dynamicCost < fixedCost ? dynamicCost : fixedCost
+        if storedCost < least {
+            DeflateBlocks.writeStored(&writer, source: source, count: count, isLast: isLast)
+            return
+        }
+        writer.write(isLast ? 1 : 0, 1)
+        if fixedCost <= dynamicCost {
+            writer.write(1, 2)
+            copyBytes(from: fixed, to: lengths, 288)
+            copyBytes(from: fixed &+ 288, to: distanceLengths, 32)
+            huffmanCodes(lengths: lengths, count: 288, codes: codes, work: work)
+            huffmanCodes(lengths: distanceLengths, count: 32, codes: distanceCodes, work: work)
+        } else {
+            writer.write(2, 2)
+            writer.write((lengthCount &- 257) unchecked as Int, 5)
+            writer.write((distanceCount &- 1) unchecked as Int, 5)
+            writer.write((precodeCount &- 4) unchecked as Int, 4)
+            i = 0
+            while i < precodeCount {
+                writer.write(load8(precodeLengths &+ (precodeOrder[i] unchecked as Int)) unchecked as Int, 3)
+                i = i &+ 1
+            }
+            huffmanCodes(lengths: precodeLengths, count: 19, codes: precode, work: work)
+            i = 0
+            while i < repeatCount {
+                let item = load32(repeats &+ 4 &* i) unchecked as Int
+                let symbol = item & 31
+                let code = load32(precode &+ 4 &* symbol)
+                writer.write((code & 0xFF_FFFF) unchecked as Int, (code >> 24) unchecked as Int)
+                if symbol >= 16 {
+                    writer.write((item >> 5) unchecked as Int, symbol == 16 ? 2 : (symbol == 17 ? 3 : 7))
+                }
+                i = i &+ 1
+            }
+            huffmanCodes(lengths: lengths, count: 286, codes: codes, work: work)
+            huffmanCodes(lengths: distanceLengths, count: 30, codes: distanceCodes, work: work)
+        }
+        self.writeTokens(&writer, tokens: tokens, count: tokenCount)
+        let end = load32(codes &+ 1024)
+        writer.write((end & 0xFF_FFFF) unchecked as Int, (end >> 24) unchecked as Int)
+    }
+
+    unsafe fn writeTokens(_ writer: inout BitWriter, tokens: Int, count: Int) {
+        var bits = writer.bits
+        var bitCount = writer.count
+        var position = writer.position
+        let lengthCodes = codes
+        let distances = distanceCodes
+        let symbols = deflateSymbols
+        let bases = deflateBases
+        var at = tokens
+        let end = tokens &+ 4 &* count
+        while at < end {
+            let token = load32(at)
+            at = at &+ 4
+            if token < 256 {
+                let code = load32(lengthCodes &+ 4 &* (token unchecked as Int))
+                bits = bits | (code & 0xFF_FFFF) unchecked as U64 << ((bitCount & 63) unchecked as U64)
+                bitCount = bitCount &+ ((code >> 24) unchecked as Int)
+            } else {
+                let length = (token >> 16) unchecked as Int
+                let distance = (token & 0xFFFF) unchecked as Int
+                let symbol = load8(symbols &+ length)
+                var code = load32(lengthCodes &+ 4 &* (257 &+ symbol))
+                bits = bits | (code & 0xFF_FFFF) unchecked as U64 << ((bitCount & 63) unchecked as U64)
+                bitCount = bitCount &+ ((code >> 24) unchecked as Int)
+                bits = bits | (length &- (load32(bases &+ 4 &* symbol) unchecked as Int)) unchecked as U64 << ((bitCount & 63) unchecked as U64)
+                bitCount = bitCount &+ (load32(bases &+ 4 &* (59 &+ symbol)) unchecked as Int)
+                let further = load8(symbols &+ 259 &+ (distance < 256 ? distance : 256 &+ (distance >> 7)))
+                code = load32(distances &+ 4 &* further)
+                bits = bits | (code & 0xFF_FFFF) unchecked as U64 << ((bitCount & 63) unchecked as U64)
+                bitCount = bitCount &+ ((code >> 24) unchecked as Int)
+                bits = bits | (distance &+ 1 &- (load32(bases &+ 4 &* (29 &+ further)) unchecked as Int)) unchecked as U64 << ((bitCount & 63) unchecked as U64)
+                bitCount = bitCount &+ (load32(bases &+ 4 &* (88 &+ further)) unchecked as Int)
+            }
+            store64(bits, position)
+            position = position &+ (bitCount >> 3)
+            bits = bits >> ((bitCount & 56) unchecked as U64)
+            bitCount = bitCount & 7
+        }
+        writer.bits = bits
+        writer.count = bitCount
+        writer.position = position
+    }
+
+    /// The runs of the lengths, as symbols of their own code, counted: how
+    /// many. What a symbol says it repeats is above its five bits.
+    unsafe fn repeatLengths(_ all: Int, _ count: Int) -> Int {
+        let counts = work &+ 2000
+        fillBytes(counts, with: 0, 76)
+        var made = 0
+        var i = 0
+        while i < count {
+            let length = load8(all &+ i)
+            var run = 1
+            while i &+ run < count && load8(all &+ i &+ run) == length {
+                run = run &+ 1
+            }
+            i = i &+ run
+            if length == 0 {
+                while run >= 11 {
+                    let these = run < 138 ? run : 138
+                    self.addRepeat(made, 18, these &- 11)
+                    made = made &+ 1
+                    run = run &- these
+                }
+                if run >= 3 {
+                    self.addRepeat(made, 17, run &- 3)
+                    made = made &+ 1
+                    run = 0
+                }
+            } else if run >= 4 {
+                self.addRepeat(made, length, 0)
+                made = made &+ 1
+                run = run &- 1
+                while run >= 3 {
+                    let these = run < 6 ? run : 6
+                    self.addRepeat(made, 16, these &- 3)
+                    made = made &+ 1
+                    run = run &- these
+                }
+            }
+            while run > 0 {
+                self.addRepeat(made, length, 0)
+                made = made &+ 1
+                run = run &- 1
+            }
+        }
+        return made
+    }
+
+    @inline(always)
+    unsafe fn addRepeat(_ index: Int, _ symbol: Int, _ extra: Int) {
+        store32((symbol | extra << 5) unchecked as U32, repeats &+ 4 &* index)
+        let at = work &+ 2000 &+ 4 &* symbol
+        store32(load32(at) &+ 1, at)
+    }
+
+    /// Stored blocks of the bytes.
+    unsafe static fn writeStored(_ writer: inout BitWriter, source: Int, count: Int, isLast: Bool) {
+        var at = source
+        var left = count
+        repeat {
+            let these = left < 65535 ? left : 65535
+            left = left &- these
+            writer.write(isLast && left == 0 ? 1 : 0, 3)
+            writer.align()
+            store16(these, writer.position)
+            store16(these ^ 0xFFFF, writer.position &+ 2)
+            copyBytes(from: at, to: writer.position &+ 4, these)
+            writer.position = writer.position &+ 4 &+ these
+            at = at &+ these
+        } while left > 0
+    }
+}

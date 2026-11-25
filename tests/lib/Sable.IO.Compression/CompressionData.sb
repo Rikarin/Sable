@@ -1,0 +1,173 @@
+module CompressionData
+
+// What the codecs' tests share: bytes of every kind to compress, and what
+// breaks them.
+
+import Sable.IO
+import Sable.IO.Compression
+import Sable.Process
+
+/// A random walk of numbers: xorshift.
+public struct Walk {
+    var state: U64
+
+    public init(_ seed: U64) {
+        state = seed &* 0x9E37_79B9_7F4A_7C15 ^ 0x2545_F491_4F6C_DD1D
+    }
+
+    public mutating fn next(_ below: Int) -> Int {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return Int(state % U64(below))
+    }
+}
+
+/// Bytes of one of eight kinds: random, of one byte, of few, runs, words, what
+/// came long before again, slowly rising numbers, and none of those alone.
+public fn sample(_ kind: Int, _ count: Int, seed: U64 = 1) -> U8[>..] {
+    var walk = Walk(seed + U64(kind) * 977 + 3)
+    var bytes: U8[>..] = []
+    let words = ["the ", "archive ", "of ", "a ", "Sable ", "window", ", ", "distance ", "match\n", "length "]
+    while bytes.count < count {
+        match kind % 8 {
+            case 0 => { bytes.append(U8(walk.next(256))) }
+            case 1 => { bytes.append(0x61) }
+            case 2 => { bytes.append(U8(0x61 + walk.next(4))) }
+            case 3 => { bytes.append(repeating: U8(walk.next(256)), count: 1 + walk.next(400)) }
+            case 4 => { bytes.append(contentsOf: words[walk.next(words.count)].utf8Bytes()) }
+            case 5 => {
+                if bytes.count < 1000 || walk.next(8) == 0 {
+                    bytes.append(U8(walk.next(256)))
+                } else {
+                    let back = 1 + walk.next(bytes.count < 200000 ? bytes.count : 200000)
+                    var left = 3 + walk.next(600)
+                    while left > 0 {
+                        bytes.append(bytes[bytes.count - back])
+                        left -= 1
+                    }
+                }
+            }
+            case 6 => {
+                let n = bytes.count / 4
+                bytes.append(U8(n & 0xFF))
+                bytes.append(U8(n >> 8 & 0xFF))
+                bytes.append(U8(walk.next(3)))
+                bytes.append(0)
+            }
+            case _ => { bytes.append(contentsOf: sample(walk.next(7), 1 + walk.next(5000), seed: U64(walk.next(1000)))) }
+        }
+    }
+    bytes.removeLast(bytes.count - count)
+    return bytes
+}
+
+/// Lengths around the codecs' own: their least matches, their windows.
+public let sampleLengths: Int[>..] = [0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 33, 63, 64, 65, 100, 255, 256, 257, 258, 259, 1000, 4095, 4096, 4097, 20000]
+
+/// Everything decompressed, given and taken in pieces of random sizes.
+public fn decompressInPieces<D: Decompressor>(_ decoder: inout D, _ packed: U8[>..], seed: U64) throws(CompressionError) -> U8[>..] {
+    var walk = Walk(seed)
+    var buffer = ByteBuffer()
+    var at = 0
+    var idle = 0
+    while true {
+        let take = walk.next(5) == 0 ? walk.next(5000) : walk.next(12)
+        let end = at + take < packed.count ? at + take : packed.count
+        let limit = walk.next(3) == 0 ? walk.next(20) : walk.next(50000)
+        let before = buffer.count
+        let step = try decoder.decompress(packed[at..<end], into: &buffer, limit: limit)
+        precondition(step.produced == buffer.count - before && step.produced <= limit && step.consumed <= end - at, "what a step says it did")
+        at += step.consumed
+        if step.status == .Finished && (at == packed.count || !D.isConcatenable) {
+            return buffer.takeBytes()
+        }
+        if step.consumed == 0 && step.produced == 0 && at == packed.count {
+            idle += 1
+            if idle > 100 {
+                throw .Truncated
+            }
+        } else {
+            idle = 0
+        }
+    }
+}
+
+/// Everything compressed, given in pieces of random sizes, flushed here and
+/// there.
+public fn compressInPieces<C: Compressor>(_ encoder: inout C, _ bytes: U8[>..], seed: U64, flushing: Bool) -> U8[>..] {
+    var walk = Walk(seed)
+    var buffer = ByteBuffer()
+    var at = 0
+    while at < bytes.count {
+        let take = 1 + (walk.next(4) == 0 ? walk.next(30000) : walk.next(300))
+        let end = at + take < bytes.count ? at + take : bytes.count
+        encoder.compress(bytes[at..<end], into: &buffer)
+        at = end
+        if flushing && walk.next(10) == 0 {
+            encoder.flush(into: &buffer)
+        }
+    }
+    encoder.finish(into: &buffer)
+    return buffer.takeBytes()
+}
+
+/// The bytes with a few of them changed, dropped, or put in.
+public fn damaged(_ bytes: U8[>..], seed: U64) -> U8[>..] {
+    var walk = Walk(seed)
+    var changed = bytes
+    var times = 1 + walk.next(3)
+    while times > 0 && !changed.isEmpty {
+        let at = walk.next(changed.count)
+        match walk.next(4) {
+            case 0 => { changed[at] = changed[at] ^ U8(1 << walk.next(8)) }
+            case 1 => { changed[at] = U8(walk.next(256)) }
+            case 2 => { changed.removeLast(changed.count - at) }
+            case _ => {
+                let rest = changed[at...].toArray()
+                changed.removeLast(changed.count - at)
+                changed.append(U8(walk.next(256)))
+                changed.append(contentsOf: rest)
+            }
+        }
+        times -= 1
+    }
+    return changed
+}
+
+/// What a program writes, given bytes: none where there is no such program, or
+/// it fails.
+public fn run(_ program: String, _ arguments: String[>..], input: U8[>..]) async -> U8[>..]? {
+    do {
+        let done = try await Command(program).arguments(arguments).output(input: input)
+        return done.succeeded ? done.outputBytes : none
+    } catch {
+        return none
+    }
+}
+
+/// Whether there is such a program.
+public fn has(_ program: String) async -> Bool {
+    do {
+        _ = try await Command(program).argument("--version").output()
+        return true
+    } catch {
+        return false
+    }
+}
+
+public fn join(_ first: U8[>..], _ second: U8[>..]) -> U8[>..] {
+    var both = first
+    both.append(contentsOf: second)
+    return both
+}
+
+/// Whether a call throws the error.
+public fn fails<E: Error, T>(_ expected: E, _ body: () throws(E) -> T) -> Bool {
+    do {
+        _ = try body()
+        return false
+    } catch {
+        return error.debugDescription() == expected.debugDescription()
+    }
+}

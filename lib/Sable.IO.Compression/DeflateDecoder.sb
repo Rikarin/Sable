@@ -1,0 +1,33 @@
+module Sable.IO.Compression
+
+/// Raw deflate (RFC 1951) decompressed as it comes: .NET's `DeflateDecoder`,
+/// and what `DeflateStream` reads by.
+///
+/// ```sable
+/// let decoder = DeflateDecoder()
+/// var bytes = ByteBuffer()
+/// let step = try! decoder.decompress(Deflate.compress([1, 2, 3]), into: &bytes)
+/// assert(step.status == .Finished && bytes.bytes == [1, 2, 3])
+/// ```
+public final class DeflateDecoder: Decompressor {
+    let stream: InflateStream
+
+    /// Of a stream of any length, with no dictionary.
+    public init() {
+        stream = InflateStream(format: .Raw, limits: DecompressionLimits(), dictionary: [])
+    }
+
+    /// Decompressing no more than the limits, of a stream compressed with the
+    /// dictionary, if with one.
+    public init(limits: DecompressionLimits, dictionary: U8[>..] = []) {
+        stream = InflateStream(format: .Raw, limits: limits, dictionary: dictionary)
+    }
+
+    public static var isConcatenable: Bool => false
+
+    public var isFinished: Bool => stream.isFinished
+
+    public fn decompress(_ source: U8[:], into output: inout ByteBuffer, limit: Int) throws(CompressionError) -> CompressionProgress {
+        return try stream.step(source, into: &output, limit: limit)
+    }
+}

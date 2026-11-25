@@ -1,0 +1,505 @@
+module Sable.IO.Compression
+
+/// How far an inflater's run got.
+@derive(Equatable)
+enum InflateResult {
+    NeedsInput
+    NeedsRoom
+    Finished
+    Failed
+}
+
+/// Where an inflater is in its stream.
+@derive(Equatable)
+enum InflateState {
+    /// Before a block's header.
+    Header
+    /// In a stored block: how many bytes are left is 'storedLeft'.
+    Stored
+    /// In a block of codes, its tables built.
+    Codes
+    /// After the last block.
+    Finished
+}
+
+/// Raw deflate (RFC 1951) decoded, from an input buffer to a window, either of
+/// which may be at its end anywhere.
+final class Inflate {
+    var input: InputBuffer
+    var window: OutputWindow
+    var state: InflateState
+    /// The bits read from the input and not used, fewer than eight between
+    /// runs, and how many.
+    var bits: U64
+    var bitCount: Int
+    var isLast: Bool
+    var storedLeft: Int
+    /// The tables, the code lengths they are built of, and room to work in.
+    let tables: Block
+    var lengthBits: Int
+    var distanceBits: Int
+    /// Whether the tables are the fixed codes'.
+    var isFixed: Bool
+    /// What was wrong.
+    var problem: String
+
+    init() {
+        input = InputBuffer(capacity: 65536)
+        window = OutputWindow(history: 32768, room: 131072)
+        state = .Header
+        bits = 0
+        bitCount = 0
+        isLast = false
+        storedLeft = 0
+        tables = Block(count: 4 * (inflateLengthEntries + inflateDistanceEntries + inflatePrecodeEntries) + 512 + 704)
+        lengthBits = 0
+        distanceBits = 0
+        isFixed = false
+        problem = ""
+    }
+
+    var lengthTable: Int => tables.address
+
+    var distanceTable: Int => tables.address + 4 * inflateLengthEntries
+
+    var precodeTable: Int => tables.address + 4 * (inflateLengthEntries + inflateDistanceEntries)
+
+    var codeLengths: Int => tables.address + 4 * (inflateLengthEntries + inflateDistanceEntries + inflatePrecodeEntries)
+
+    var work: Int => codeLengths + 512
+
+    /// A stream begun where the last ended.
+    fn restart() {
+        state = .Header
+        bits = 0
+        bitCount = 0
+        isLast = false
+        window.forget()
+    }
+
+    fn fail(_ what: String) -> InflateResult {
+        problem = what
+        return .Failed
+    }
+
+    /// Bits from the input until there are as many as asked for, at most
+    /// fifty-six: false where there are not.
+    fn need(_ count: Int) -> Bool {
+        while bitCount < count {
+            if input.position >= input.end {
+                return false
+            }
+            unsafe {
+                bits = bits | (load8(input.position) unchecked as U64) << ((bitCount & 63) unchecked as U64)
+            }
+            input.position = input.position &+ 1
+            bitCount = bitCount &+ 8
+        }
+        return true
+    }
+
+    /// So many bits, which there are.
+    fn take(_ count: Int) -> Int {
+        let mask = ((1 as U64) << ((count & 63) unchecked as U64)) &- 1
+        let value = (bits & mask) unchecked as Int
+        bits = bits >> ((count & 63) unchecked as U64)
+        bitCount = bitCount &- count
+        return value
+    }
+
+    /// Whole bytes of the bits put back, so that fewer than eight are left.
+    fn putBack() {
+        input.position = input.position &- (bitCount >> 3)
+        bitCount = bitCount & 7
+        bits = bits & (((1 as U64) << ((bitCount & 63) unchecked as U64)) &- 1)
+    }
+
+    /// As much decoded as there is input and room for.
+    fn run() -> InflateResult {
+        while true {
+            let result = match state {
+                case .Header   => self.header()
+                case .Stored   => self.stored()
+                case .Codes    => self.codes()
+                case .Finished => InflateResult.Finished
+            }
+            if let stop = result {
+                return stop
+            }
+        }
+    }
+
+    fn endBlock() {
+        state = isLast ? .Finished : .Header
+        if isLast {
+            putBack()
+        }
+    }
+
+    /// A block's header, from where it starts again if it is not all there:
+    /// none when it is read.
+    fn header() -> InflateResult? {
+        let position = input.position
+        let savedBits = bits
+        let savedCount = bitCount
+        let result = self.readHeader()
+        if let stop = result, stop == .NeedsInput {
+            input.position = position
+            bits = savedBits
+            bitCount = savedCount
+        }
+        return result
+    }
+
+    fn readHeader() -> InflateResult? {
+        if !self.need(3) {
+            return .NeedsInput
+        }
+        isLast = self.take(1) == 1
+        let type = self.take(2)
+        if type == 0 {
+            _ = self.take(bitCount & 7)
+            if !self.need(32) {
+                return .NeedsInput
+            }
+            let length = self.take(16)
+            if length != (self.take(16) ^ 0xFFFF) {
+                return self.fail("a stored block's length is not its complement's")
+            }
+            self.putBack()
+            storedLeft = length
+            state = .Stored
+            return none
+        }
+        if type == 1 {
+            if !isFixed {
+                unsafe {
+                    self.buildFixed()
+                }
+            }
+            state = .Codes
+            return none
+        }
+        if type == 3 {
+            return self.fail("a block of no known type")
+        }
+        isFixed = false
+        unsafe {
+            return self.readCodes()
+        }
+    }
+
+    unsafe fn buildFixed() {
+        fillBytes(codeLengths, with: 8, 144)
+        fillBytes(codeLengths + 144, with: 9, 112)
+        fillBytes(codeLengths + 256, with: 7, 24)
+        fillBytes(codeLengths + 280, with: 8, 8)
+        lengthBits = buildInflateTable(lengthTable, lengths: codeLengths, count: 288, symbols: inflateSymbols, tableBits: 11, room: inflateLengthEntries, work: work, mayBeIncomplete: false)
+        fillBytes(codeLengths, with: 5, 32)
+        distanceBits = buildInflateTable(distanceTable, lengths: codeLengths, count: 32, symbols: inflateSymbols + 4 * 288, tableBits: 8, room: inflateDistanceEntries, work: work, mayBeIncomplete: false)
+        isFixed = true
+    }
+
+    /// A dynamic block's codes.
+    unsafe fn readCodes() -> InflateResult? {
+        if !self.need(14) {
+            return .NeedsInput
+        }
+        let lengthCount = self.take(5) + 257
+        let distanceCount = self.take(5) + 1
+        let precodeCount = self.take(4) + 4
+        if lengthCount > 286 || distanceCount > 30 {
+            return self.fail("a block has too many symbols")
+        }
+        fillBytes(codeLengths, with: 0, 24)
+        var i = 0
+        while i < precodeCount {
+            if !self.need(3) {
+                return .NeedsInput
+            }
+            store8(self.take(3), codeLengths &+ (precodeOrder[i] unchecked as Int))
+            i += 1
+        }
+        let precodeBits = buildInflateTable(precodeTable, lengths: codeLengths, count: 19, symbols: inflateSymbols + 4 * 320, tableBits: 7, room: inflatePrecodeEntries, work: work, mayBeIncomplete: false)
+        if precodeBits == 0 {
+            return self.fail("the lengths of a code's lengths are no code's")
+        }
+        let lengths = codeLengths
+        let count = lengthCount + distanceCount
+        i = 0
+        while i < count {
+            // A code and what it repeats are at most fourteen bits, and where
+            // the input ends there are zeros for it to seem to go on with.
+            let enough = self.need(14)
+            let entry = load32(precodeTable &+ 4 &* ((bits & (((1 as U64) << ((precodeBits & 63) unchecked as U64)) &- 1)) unchecked as Int))
+            if (entry & inflateSpecial) != 0 {
+                return enough ? self.fail("a code's length has no such code") : .NeedsInput
+            }
+            let used = (entry & 0xFF) unchecked as Int
+            let symbol = (entry >> 16) unchecked as Int
+            let extra = symbol < 16 ? 0 : (symbol == 16 ? 2 : (symbol == 17 ? 3 : 7))
+            if used + extra > bitCount {
+                return .NeedsInput
+            }
+            _ = self.take(used)
+            if symbol < 16 {
+                store8(symbol, lengths &+ i)
+                i += 1
+                continue
+            }
+            var value: U8 = 0
+            var times = self.take(extra) + (symbol == 18 ? 11 : 3)
+            if symbol == 16 {
+                if i == 0 {
+                    return self.fail("the first code length repeats the one before")
+                }
+                value = load8(lengths &+ i &- 1) unchecked as U8
+            }
+            if i + times > count {
+                return self.fail("the code lengths go on past the last")
+            }
+            while times > 0 {
+                store8(value unchecked as Int, lengths &+ i)
+                i = i &+ 1
+                times = times &- 1
+            }
+        }
+        if load8(lengths &+ 256) == 0 {
+            return self.fail("a block's end has no code")
+        }
+        lengthBits = buildInflateTable(lengthTable, lengths: lengths, count: lengthCount, symbols: inflateSymbols, tableBits: 11, room: inflateLengthEntries, work: work, mayBeIncomplete: true)
+        if lengthBits == 0 {
+            return self.fail("the lengths of the literals' codes are no code's")
+        }
+        distanceBits = buildInflateTable(distanceTable, lengths: lengths + lengthCount, count: distanceCount, symbols: inflateSymbols + 4 * 288, tableBits: 8, room: inflateDistanceEntries, work: work, mayBeIncomplete: true)
+        if distanceBits == 0 {
+            return self.fail("the lengths of the distances' codes are no code's")
+        }
+        state = .Codes
+        return none
+    }
+
+    fn stored() -> InflateResult? {
+        while storedLeft > 0 {
+            let room = window.limit - window.end
+            if room <= 0 {
+                return .NeedsRoom
+            }
+            // The bits left over are none: the header put back whole bytes.
+            var count = storedLeft < room ? storedLeft : room
+            count = count < input.count ? count : input.count
+            if count == 0 {
+                return .NeedsInput
+            }
+            unsafe {
+                copyBytes(from: input.position, to: window.end, count)
+            }
+            input.position = input.position + count
+            window.end = window.end + count
+            storedLeft -= count
+        }
+        self.endBlock()
+        return none
+    }
+
+    /// A block's symbols: in a loop that checks nothing but the distances
+    /// while there are plenty of both input and room, and one at a time, each
+    /// checked, near the end of either.
+    fn codes() -> InflateResult? {
+        unsafe {
+            return self.decode()
+        }
+    }
+
+    unsafe fn decode() -> InflateResult? {
+        let lengths = lengthTable
+        let distances = distanceTable
+        let lengthMask = ((1 as U64) << ((lengthBits & 63) unchecked as U64)) &- 1
+        let distanceMask = ((1 as U64) << ((distanceBits & 63) unchecked as U64)) &- 1
+        let start = window.start
+        var position = input.position
+        var place = window.end
+        var buffer = bits
+        var count = bitCount
+        let safeInput = input.end &- 24
+        let safeOutput = window.limit &- 320
+        var problemFound = 0
+        var ended = false
+
+        while position < safeInput && place < safeOutput {
+            // At least fifty-six bits.
+            buffer = buffer | load64(position) << ((count & 63) unchecked as U64)
+            position = position &+ ((63 &- count) >> 3)
+            count = count | 56
+            var entry = load32(lengths &+ 4 &* ((buffer & lengthMask) unchecked as Int))
+            if entry >= inflateLiteral {
+                // Up to three literals, of at most eleven bits each.
+                buffer = buffer >> ((entry & 31) unchecked as U64)
+                count = count &- ((entry & 0xFF) unchecked as Int)
+                store8((entry >> 16) unchecked as Int, place)
+                place = place &+ 1
+                entry = load32(lengths &+ 4 &* ((buffer & lengthMask) unchecked as Int))
+                if entry >= inflateLiteral {
+                    buffer = buffer >> ((entry & 31) unchecked as U64)
+                    count = count &- ((entry & 0xFF) unchecked as Int)
+                    store8((entry >> 16) unchecked as Int, place)
+                    place = place &+ 1
+                    entry = load32(lengths &+ 4 &* ((buffer & lengthMask) unchecked as Int))
+                    if entry >= inflateLiteral {
+                        buffer = buffer >> ((entry & 31) unchecked as U64)
+                        count = count &- ((entry & 0xFF) unchecked as Int)
+                        store8((entry >> 16) unchecked as Int, place)
+                        place = place &+ 1
+                        continue
+                    }
+                }
+                buffer = buffer | load64(position) << ((count & 63) unchecked as U64)
+                position = position &+ ((63 &- count) >> 3)
+                count = count | 56
+            }
+            if (entry & inflateSpecial) != 0 {
+                if (entry & inflateSubtable) != 0 {
+                    buffer = buffer >> ((entry & 31) unchecked as U64)
+                    count = count &- ((entry & 0xFF) unchecked as Int)
+                    let index = buffer & (((1 as U64) << ((entry >> 8 & 15) unchecked as U64)) &- 1)
+                    entry = load32(lengths &+ 4 &* ((entry >> 16) unchecked as Int &+ (index unchecked as Int)))
+                    if entry >= inflateLiteral {
+                        buffer = buffer >> ((entry & 31) unchecked as U64)
+                        count = count &- ((entry & 0xFF) unchecked as Int)
+                        store8((entry >> 16) unchecked as Int, place)
+                        place = place &+ 1
+                        continue
+                    }
+                }
+                if (entry & inflateSpecial) != 0 {
+                    if (entry & inflateEnd) == 0 {
+                        problemFound = 1
+                        break
+                    }
+                    buffer = buffer >> ((entry & 31) unchecked as U64)
+                    count = count &- ((entry & 0xFF) unchecked as Int)
+                    ended = true
+                    break
+                }
+            }
+            // A length and its extra bits, at most twenty, and a distance and
+            // its, at most twenty-eight.
+            let lengthSaved = buffer
+            buffer = buffer >> ((entry & 31) unchecked as U64)
+            count = count &- ((entry & 0xFF) unchecked as Int)
+            let length = (entry >> 16) unchecked as Int &+ (((lengthSaved & (((1 as U64) << ((entry & 31) unchecked as U64)) &- 1)) >> ((entry >> 8 & 31) unchecked as U64)) unchecked as Int)
+            entry = load32(distances &+ 4 &* ((buffer & distanceMask) unchecked as Int))
+            if (entry & inflateSpecial) != 0 {
+                if (entry & inflateSubtable) == 0 {
+                    problemFound = 2
+                    break
+                }
+                buffer = buffer >> ((entry & 31) unchecked as U64)
+                count = count &- ((entry & 0xFF) unchecked as Int)
+                let index = buffer & (((1 as U64) << ((entry >> 8 & 15) unchecked as U64)) &- 1)
+                entry = load32(distances &+ 4 &* ((entry >> 16) unchecked as Int &+ (index unchecked as Int)))
+                if (entry & inflateSpecial) != 0 {
+                    problemFound = 2
+                    break
+                }
+            }
+            let distanceSaved = buffer
+            buffer = buffer >> ((entry & 31) unchecked as U64)
+            count = count &- ((entry & 0xFF) unchecked as Int)
+            let distance = (entry >> 16) unchecked as Int &+ (((distanceSaved & (((1 as U64) << ((entry & 31) unchecked as U64)) &- 1)) >> ((entry >> 8 & 31) unchecked as U64)) unchecked as Int)
+            if distance > place &- start {
+                problemFound = 3
+                break
+            }
+            copyMatch(to: place, distance: distance, length: length)
+            place = place &+ length
+        }
+
+        // The whole bytes put back: what is left is fewer than eight bits.
+        position = position &- (count >> 3)
+        count = count & 7
+        buffer = buffer & (((1 as U64) << ((count & 63) unchecked as U64)) &- 1)
+
+        while problemFound == 0 && !ended {
+            // A symbol needs at most forty-eight bits; the input is followed
+            // by zeros, and what it took of them it did not have.
+            if place > window.limit &- 320 {
+                break
+            }
+            while count < 48 && position < input.end {
+                buffer = buffer | (load8(position) unchecked as U64) << ((count & 63) unchecked as U64)
+                position = position &+ 1
+                count = count &+ 8
+            }
+            var used = 0
+            var rest = buffer
+            var entry = load32(lengths &+ 4 &* ((rest & lengthMask) unchecked as Int))
+            if (entry & inflateSpecial) != 0 && (entry & inflateSubtable) != 0 && entry < inflateLiteral {
+                rest = rest >> ((entry & 31) unchecked as U64)
+                used = (entry & 0xFF) unchecked as Int
+                let index = rest & (((1 as U64) << ((entry >> 8 & 15) unchecked as U64)) &- 1)
+                entry = load32(lengths &+ 4 &* ((entry >> 16) unchecked as Int &+ (index unchecked as Int)))
+            }
+            used = used &+ ((entry & 0xFF) unchecked as Int)
+            if used > count {
+                break
+            }
+            if entry >= inflateLiteral {
+                store8((entry >> 16) unchecked as Int, place)
+                place = place &+ 1
+                buffer = buffer >> ((used & 63) unchecked as U64)
+                count = count &- used
+                continue
+            }
+            if (entry & inflateSpecial) != 0 {
+                if (entry & inflateEnd) == 0 {
+                    problemFound = 1
+                    break
+                }
+                buffer = buffer >> ((used & 63) unchecked as U64)
+                count = count &- used
+                ended = true
+                break
+            }
+            let length = (entry >> 16) unchecked as Int &+ (((rest & (((1 as U64) << ((entry & 31) unchecked as U64)) &- 1)) >> ((entry >> 8 & 31) unchecked as U64)) unchecked as Int)
+            rest = rest >> ((entry & 31) unchecked as U64)
+            entry = load32(distances &+ 4 &* ((rest & distanceMask) unchecked as Int))
+            if (entry & inflateSubtable) != 0 && (entry & inflateSpecial) != 0 {
+                rest = rest >> ((entry & 31) unchecked as U64)
+                used = used &+ ((entry & 0xFF) unchecked as Int)
+                let index = rest & (((1 as U64) << ((entry >> 8 & 15) unchecked as U64)) &- 1)
+                entry = load32(distances &+ 4 &* ((entry >> 16) unchecked as Int &+ (index unchecked as Int)))
+            }
+            used = used &+ ((entry & 0xFF) unchecked as Int)
+            if used > count {
+                break
+            }
+            if (entry & inflateSpecial) != 0 {
+                problemFound = 2
+                break
+            }
+            let distance = (entry >> 16) unchecked as Int &+ (((rest & (((1 as U64) << ((entry & 31) unchecked as U64)) &- 1)) >> ((entry >> 8 & 31) unchecked as U64)) unchecked as Int)
+            if distance > place &- start {
+                problemFound = 3
+                break
+            }
+            copyMatch(to: place, distance: distance, length: length)
+            place = place &+ length
+            buffer = buffer >> ((used & 63) unchecked as U64)
+            count = count &- used
+        }
+
+        input.position = position &- (count >> 3)
+        bitCount = count & 7
+        bits = buffer & (((1 as U64) << ((bitCount & 63) unchecked as U64)) &- 1)
+        window.end = place
+        if problemFound != 0 {
+            return self.fail(problemFound == 1 ? "a literal has no such code" : (problemFound == 2 ? "a distance has no such code" : "a match is of bytes before the first"))
+        }
+        if ended {
+            self.endBlock()
+            return none
+        }
+        return place > window.limit &- 320 ? .NeedsRoom : .NeedsInput
+    }
+}

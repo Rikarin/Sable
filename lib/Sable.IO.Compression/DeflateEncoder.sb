@@ -1,0 +1,38 @@
+module Sable.IO.Compression
+
+/// Bytes compressed to raw deflate (RFC 1951) as they come: .NET's
+/// `DeflateEncoder`, and what `DeflateStream` writes by.
+///
+/// ```sable
+/// let encoder = DeflateEncoder(level: 9)
+/// var packed = ByteBuffer()
+/// encoder.compress([1, 2, 3], into: &packed)
+/// encoder.finish(into: &packed)
+/// assert(try! Deflate.decompress(packed.bytes) == [1, 2, 3])
+/// ```
+public final class DeflateEncoder: Compressor {
+    let stream: DeflateStreamEncoder
+
+    /// At level 6.
+    public init() {
+        stream = DeflateStreamEncoder(format: .Raw, level: 6)
+    }
+
+    /// At a level from 0, nothing compressed, to 9, the smallest; with a
+    /// dictionary that the decoder is given too, if with one.
+    public init(level: Int, dictionary: U8[>..] = []) {
+        stream = DeflateStreamEncoder(format: .Raw, level: level, dictionary: dictionary)
+    }
+
+    public fn compress(_ source: U8[:], into output: inout ByteBuffer) {
+        stream.compress(source, into: &output)
+    }
+
+    public fn flush(into output: inout ByteBuffer) {
+        stream.flush(into: &output)
+    }
+
+    public fn finish(into output: inout ByteBuffer) {
+        stream.finish(into: &output)
+    }
+}

@@ -1,0 +1,202 @@
+module Sable.IO.Compression
+
+// The tables deflate's Huffman codes are decoded by. An entry of one, a U32,
+// is looked up by the bits to come, and is
+//
+//   a literal      1 at bit 31, the byte at 16, how many bits it takes at 0
+//   a length or    its base at 16, the code's bits at 8, and at 0 those and
+//   a distance     its extra bits' together
+//   anything else  1 at bit 15, the code's bits at 0, and
+//     a subtable   1 at bit 14, where it starts at 16, its index's bits at 8
+//     the end      1 at bit 13
+//     no code      neither
+
+let inflateLiteral: U32 = 0x8000_0000
+let inflateSpecial: U32 = 0x8000
+let inflateSubtable: U32 = 0x4000
+let inflateEnd: U32 = 0x2000
+
+/// How many entries the tables may have: a code of 288 symbols looked up by
+/// eleven bits, of 32 by eight, and of 19 by seven (zlib's 'enough').
+let inflateLengthEntries: Int = 2342
+let inflateDistanceEntries: Int = 402
+let inflatePrecodeEntries: Int = 128
+
+/// The order a block's code lengths' own code's lengths are in.
+let precodeOrder: U32[>..] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+
+/// The bases of the lengths from symbol 257 on, and their extra bits.
+let deflateLengthBases: U32[>..] = [
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258,
+]
+
+let deflateLengthBits: U32[>..] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+]
+
+/// The bases of the distances, and their extra bits.
+let deflateDistanceBases: U32[>..] = [
+    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
+    8193, 12289, 16385, 24577,
+]
+
+let deflateDistanceBits: U32[>..] = [
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
+]
+
+/// What each symbol's entry has, whatever its code: 288 of literals and
+/// lengths, 32 of distances, and 19 of code lengths.
+let inflateSymbols: Int = {
+        () -> Int in
+        var entries: U32[>..] = []
+        var i: U32 = 0
+        while i < 256 {
+            entries.append(inflateLiteral | i << 16)
+            i += 1
+        }
+        entries.append(inflateSpecial | inflateEnd)
+        var at = 0
+        while at < 29 {
+            entries.append(deflateLengthBases[at] << 16 | deflateLengthBits[at])
+            at += 1
+        }
+        entries.append(inflateSpecial)
+        entries.append(inflateSpecial)
+        at = 0
+        while at < 30 {
+            entries.append(deflateDistanceBases[at] << 16 | deflateDistanceBits[at])
+            at += 1
+        }
+        entries.append(inflateSpecial)
+        entries.append(inflateSpecial)
+        i = 0
+        while i < 19 {
+            entries.append(i << 16)
+            i += 1
+        }
+        return constantTable(entries)
+    }()
+
+/// The table of a code, looked up by at most 'tableBits' bits first: how many
+/// it is, or 0 where the lengths, a byte each, are not a code's. 'symbols' has
+/// their entries, and there is room for 'room' in the table. A code of one
+/// symbol, or none, may be incomplete, as zlib's may.
+unsafe fn buildInflateTable(_ table: Int, lengths: Int, count: Int, symbols: Int, tableBits: Int, room: Int, work: Int, mayBeIncomplete: Bool) -> Int {
+    // How many codes there are of each length, in sixteen halves of words,
+    // where each length's symbols start, and the symbols by length.
+    let counts = work
+    let offsets = work &+ 32
+    let sorted = work &+ 64
+    var i = 0
+    while i < 32 {
+        store64(0, work &+ i)
+        i = i &+ 8
+    }
+    i = 0
+    while i < count {
+        let at = counts &+ 2 &* load8(lengths &+ i)
+        store16(load16(at) &+ 1, at)
+        i = i &+ 1
+    }
+    var longest = 15
+    while longest > 0 && load16(counts &+ 2 &* longest) == 0 {
+        longest = longest &- 1
+    }
+    var left = 1
+    var length = 1
+    var offset = 0
+    while length <= 15 {
+        left = left &* 2 &- load16(counts &+ 2 &* length)
+        if left < 0 {
+            return 0
+        }
+        store16(offset, offsets &+ 2 &* length)
+        offset = offset &+ load16(counts &+ 2 &* length)
+        length = length &+ 1
+    }
+    if left > 0 && (longest > 1 || !mayBeIncomplete) {
+        return 0
+    }
+    i = 0
+    while i < count {
+        let of = load8(lengths &+ i)
+        if of != 0 {
+            let at = load16(offsets &+ 2 &* of)
+            store16(i, sorted &+ 2 &* at)
+            store16(at &+ 1, offsets &+ 2 &* of)
+        }
+        i = i &+ 1
+    }
+    let bits = longest < tableBits ? (longest > 0 ? longest : 1) : tableBits
+    let size = 1 << bits
+    if left > 0 {
+        i = 0
+        while i < size {
+            store32(inflateSpecial | (bits unchecked as U32), table &+ 4 &* i)
+            i = i &+ 1
+        }
+    }
+
+    // The codes in order, each its bits reversed.
+    var code = 0
+    var next = size
+    var subtable = -1
+    var subtableStart = 0
+    var subtableBits = 0
+    var at = 0
+    length = 1
+    while length <= longest {
+        var these = load16(counts &+ 2 &* length)
+        while these > 0 {
+            let entry = load32(symbols &+ 4 &* load16(sorted &+ 2 &* at))
+            at = at &+ 1
+            if length <= bits {
+                let whole = entry &+ (length unchecked as U32 &* 0x101)
+                let step = 1 << length
+                var slot = code
+                while slot < size {
+                    store32(whole, table &+ 4 &* slot)
+                    slot = slot &+ step
+                }
+            } else {
+                let low = code & (size &- 1)
+                if low != subtable {
+                    // As large as holds every code that starts so.
+                    subtable = low
+                    subtableBits = length &- bits
+                    var over = (1 << subtableBits) &- these
+                    var longer = length
+                    while over > 0 && longer < longest {
+                        longer = longer &+ 1
+                        subtableBits = subtableBits &+ 1
+                        over = over &* 2 &- load16(counts &+ 2 &* longer)
+                    }
+                    subtableStart = next
+                    next = next &+ (1 << subtableBits)
+                    if next > room {
+                        return 0
+                    }
+                    let link = inflateSpecial | inflateSubtable | (subtableStart unchecked as U32) << 16 | (subtableBits unchecked as U32) << 8 | (bits unchecked as U32)
+                    store32(link, table &+ 4 &* low)
+                }
+                let whole = entry &+ ((length &- bits) unchecked as U32 &* 0x101)
+                let step = 1 << (length &- bits)
+                var slot = code >> bits
+                let end = 1 << subtableBits
+                while slot < end {
+                    store32(whole, table &+ 4 &* (subtableStart &+ slot))
+                    slot = slot &+ step
+                }
+            }
+            these = these &- 1
+            // The next code's, counting up from its other end.
+            var bit = 1 << (length &- 1)
+            while (code & bit) != 0 {
+                bit = bit >> 1
+            }
+            code = bit == 0 ? 0 : (code & (bit &- 1)) | bit
+        }
+        length = length &+ 1
+    }
+    return bits
+}

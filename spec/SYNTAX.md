@@ -169,6 +169,11 @@ alias Id<T>   = U64                            // generic alias (phantom)
 public alias Result<T> = Outcome<T, AppError>  // partial application
 ```
 
+A generic alias named bare where an initialiser of it is called infers its
+parameters, as a generic type does: `GzipReader(file)` is a
+`DecompressingReader<GzipDecoder, FileHandle>` for `alias GzipReader<R: Reader> =
+DecompressingReader<GzipDecoder, R>` and a `file: FileHandle`.
+
 ### Structural unions
 
 ```sable

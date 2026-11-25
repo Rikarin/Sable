@@ -1,0 +1,74 @@
+module Sable.IO.Compression
+
+/// Where a block of symbols should end: where those that came last are not
+/// like those before. They are counted in ten kinds, eight of literals and
+/// two of matches, and compared every 512 of them.
+struct BlockSplitter {
+    /// Twenty counts: those before, and those since.
+    let counts: Int
+    var total: Int
+    var since: Int
+
+    /// Counting in memory of eighty bytes.
+    init(counts: Int) {
+        self.counts = counts
+        total = 0
+        since = 0
+        unsafe {
+            fillBytes(counts, with: 0, 80)
+        }
+    }
+
+    @inline(always)
+    unsafe mutating fn addLiteral(_ byte: Int) {
+        let at = counts &+ 40 &+ 4 &* ((byte >> 5 & 6) | (byte & 1))
+        store32(load32(at) &+ 1, at)
+        since = since &+ 1
+    }
+
+    @inline(always)
+    unsafe mutating fn addMatch(_ length: Int) {
+        let at = counts &+ 40 &+ 4 &* (length >= 9 ? 9 : 8)
+        store32(load32(at) &+ 1, at)
+        since = since &+ 1
+    }
+
+    /// Whether a block of so many bytes should end here, where there are
+    /// enough symbols to compare; if not, they are those before.
+    unsafe mutating fn shouldEnd(length: Int) -> Bool {
+        if total > 0 {
+            var difference = 0
+            var i = 0
+            while i < 10 {
+                let expected = load32(counts &+ 4 &* i) unchecked as Int &* since
+                let found = load32(counts &+ 40 &+ 4 &* i) unchecked as Int &* total
+                difference = difference &+ (expected > found ? expected &- found : found &- expected)
+                i = i &+ 1
+            }
+            let all = total &+ since
+            var limit = since &* 200 / 512 &* total
+            if length < 10000 && all < 8192 {
+                limit = limit &+ limit &* (8192 &- all) / 8192
+            }
+            if difference &+ length / 4096 &* total >= limit {
+                return true
+            }
+        }
+        var i = 0
+        while i < 10 {
+            let at = counts &+ 4 &* i
+            store32(load32(at) &+ load32(at &+ 40), at)
+            store32(0, at &+ 40)
+            i = i &+ 1
+        }
+        total = total &+ since
+        since = 0
+        return false
+    }
+
+    unsafe mutating fn reset() {
+        fillBytes(counts, with: 0, 80)
+        total = 0
+        since = 0
+    }
+}

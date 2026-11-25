@@ -1,0 +1,152 @@
+module Sable.IO.Compression
+
+// The codecs work in memory of their own, at addresses, which nothing checks:
+// what is read and written is proved to be in it by the code around it, as the
+// interpreter, which checks every access, is run to see. Their callers' bytes
+// are copied in and out a run at a time, in the processor's cache. Every
+// machine Sable runs on is little endian, as are the formats.
+
+/// Memory of so many bytes, freed with what holds it.
+final class Block {
+    let address: Int
+    let count: Int
+
+    init(count: Int, zeroed: Bool = false) {
+        self.count = count
+        unsafe {
+            address = NativeMemory.allocate(byteCount: count, alignment: 64, zeroed: zeroed).address
+        }
+    }
+
+    deinit {
+        unsafe {
+            NativeMemory.deallocate(RawPtr<U8>(address: address))
+        }
+    }
+}
+
+@inline(always)
+unsafe fn load8(_ address: Int) -> Int {
+    return RawPtr<U8>(address: address).load(as: U8.self) unchecked as Int
+}
+
+@inline(always)
+unsafe fn load16(_ address: Int) -> Int {
+    return RawPtr<U8>(address: address).load(as: U16.self) unchecked as Int
+}
+
+@inline(always)
+unsafe fn load32(_ address: Int) -> U32 {
+    return RawPtr<U8>(address: address).load(as: U32.self)
+}
+
+@inline(always)
+unsafe fn load64(_ address: Int) -> U64 {
+    return RawPtr<U8>(address: address).load(as: U64.self)
+}
+
+@inline(always)
+unsafe fn store8(_ value: Int, _ address: Int) {
+    RawPtr<U8>(address: address).storeBytes(of: value unchecked as U8)
+}
+
+@inline(always)
+unsafe fn store16(_ value: Int, _ address: Int) {
+    RawPtr<U8>(address: address).storeBytes(of: value unchecked as U16)
+}
+
+@inline(always)
+unsafe fn store32(_ value: U32, _ address: Int) {
+    RawPtr<U8>(address: address).storeBytes(of: value)
+}
+
+@inline(always)
+unsafe fn store64(_ value: U64, _ address: Int) {
+    RawPtr<U8>(address: address).storeBytes(of: value)
+}
+
+@inline(always)
+unsafe fn copy8(from source: Int, to target: Int) {
+    store64(load64(source), target)
+}
+
+@inline(always)
+unsafe fn copy16(from source: Int, to target: Int) {
+    let low = load64(source)
+    let high = load64(source &+ 8)
+    store64(low, target)
+    store64(high, target &+ 8)
+}
+
+/// So many bytes, which may overlap.
+unsafe fn copyBytes(from source: Int, to target: Int, _ count: Int) {
+    NativeMemory.copy(from: RawPtr<U8>(address: source), to: RawPtr<U8>(address: target), byteCount: count)
+}
+
+unsafe fn fillBytes(_ target: Int, with byte: U8, _ count: Int) {
+    NativeMemory.fill(RawPtr<U8>(address: target), with: byte, byteCount: count)
+}
+
+/// A run of the output 'distance' back, copied to 'target', which it may
+/// reach: up to 15 bytes past its end may be written too.
+@inline(always)
+unsafe fn copyMatch(to target: Int, distance: Int, length: Int) {
+    if distance >= 16 {
+        let end = target &+ length
+        var to = target
+        var from = target &- distance
+        copy16(from: from, to: to)
+        while to &+ 16 < end {
+            from = from &+ 16
+            to = to &+ 16
+            copy16(from: from, to: to)
+        }
+    } else {
+        copyNearMatch(to: target, distance: distance, length: length)
+    }
+}
+
+/// One whose distance is below sixteen.
+@inline(never)
+unsafe fn copyNearMatch(to target: Int, distance: Int, length: Int) {
+    let end = target &+ length
+    var to = target
+    var from = target &- distance
+    if distance == 1 {
+        let run = (load8(from) unchecked as U64) &* 0x0101_0101_0101_0101
+        repeat {
+            store64(run, to)
+            to = to &+ 8
+        } while to < end
+        return
+    }
+    if distance < 8 {
+        // Eight bytes one by one; then as many at once, from the least
+        // multiple of the distance that is as far.
+        var i = 0
+        while i < 8 {
+            store8(load8(from &+ i), to &+ i)
+            i = i &+ 1
+        }
+        to = to &+ 8
+        from = to &- (distance &+ 7) / distance &* distance
+    }
+    while to < end {
+        copy8(from: from, to: to)
+        from = from &+ 8
+        to = to &+ 8
+    }
+}
+
+/// Constants in memory of their own, which is never freed: their address.
+fn constantTable(_ values: U32[:]) -> Int {
+    unsafe {
+        let table = NativeMemory.allocate(byteCount: 4 * values.count).address
+        var i = 0
+        while i < values.count {
+            store32(values[i], table &+ 4 &* i)
+            i += 1
+        }
+        return table
+    }
+}

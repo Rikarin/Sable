@@ -2772,6 +2772,9 @@ public static class SilBuiltins {
         Add("codec_bytes_raw", SilType.Int, SilType.Int, new SliceType(SilType.U8), SilType.Int, SilType.Int);
         Add("crypto_blocks", SilType.Bool, SilType.Int, SilType.Int, new SliceType(SilType.U8));
         Add("crypto_blocks_raw", SilType.Bool, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        // A CRC-32's state after the bytes at an address: how many of them were
+        // done in the high half (none, where there are no instructions for it).
+        Add("crc32_raw", SilType.Int, SilType.Int, SilType.Int, SilType.Int);
         // Sable.Math's kernels over arrays of floats, where the processor has
         // more than the target's baseline: whether it has, a reduction of one
         // slice or two by its number (the sum, dot product or cosine), and an
@@ -3021,6 +3024,10 @@ public static class SilBuiltins {
         Add("raw_free", SilType.Unit, SilType.Int);
         Add("raw_copy", SilType.Unit, SilType.Int, SilType.Int, SilType.Int);
         Add("raw_fill", SilType.Unit, SilType.Int, SilType.U8, SilType.Int);
+        // A slice of bytes copied to an address, and a run of one (from an index,
+        // so many, in its bounds) from an address.
+        Add("raw_from_bytes", SilType.Unit, SilType.Int, new SliceType(SilType.U8));
+        Add("bytes_from_raw", SilType.Unit, SilType.Address(new SliceType(SilType.U8)), SilType.Int, SilType.Int, SilType.Int);
 
         // Atomics (Atomic<Value>): each on the value at a raw address, with
         // a memory ordering as an Int — 0 relaxed, 1 acquire, 2 release, 3

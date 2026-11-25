@@ -200,6 +200,10 @@ public sealed class BoundSuperAccess(SyntaxNode syntax, NamedTypeSymbol baseType
 public sealed class BoundTypeExpression(SyntaxNode syntax, TypeSymbol referencedType)
     : BoundExpression(syntax, referencedType) {
     public TypeSymbol ReferencedType { get; } = referencedType;
+
+    /// <summary>The generic alias the type was named by with no type arguments, whose parameters it is in terms of.</summary>
+    public AliasSymbol? OpenAlias { get; init; }
+
     public override IEnumerable<BoundNode> Children => [];
 }
 

@@ -1515,6 +1515,36 @@ internal sealed class TypeBinder(Compilation compilation) {
     internal TypeSymbol BindGenericName(Symbol found, GenericNameSyntax syntax, Symbol context, FileScope? scope) =>
         Resolved(syntax, found, ApplyTypeArguments(found, syntax.TypeArgumentList, context, scope, syntax.Span));
 
+    /// <summary>What a generic alias names for type arguments, one for each parameter, checked against its constraints.</summary>
+    internal TypeSymbol ApplyAlias(AliasSymbol alias, ImmutableArray<TypeSymbol> arguments, Symbol context, TextSpan span) {
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        for (var i = 0; i < arguments.Length; i++) {
+            map[alias.TypeParameters[i]] = arguments[i];
+        }
+
+        // Resolving the target binds the parameters' constraints,
+        // which each argument must meet: 'Channel<T: Sendable>'.
+        var aliased = alias.AliasedType;
+        var substitution = new TypeSubstitution(map);
+        if (!arguments.Any(TypeSubstitution.ContainsError)) {
+            var equivalence = TypeEquivalence.ForSymbol(context);
+            for (var i = 0; i < arguments.Length; i++) {
+                foreach (var constraint in alias.TypeParameters[i].Constraints) {
+                    if (!Conversions.Satisfies(arguments[i], substitution.Apply(constraint), equivalence)) {
+                        _diagnostics.Error(
+                            ErrorCode.ERR_DoesNotConform,
+                            span,
+                            $"'{arguments[i].ToDisplayString()}' does not conform to '{constraint.ToDisplayString()}', "
+                            + $"which '{alias.Name}' requires of '{alias.TypeParameters[i].Name}'"
+                        );
+                    }
+                }
+            }
+        }
+
+        return substitution.Apply(aliased);
+    }
+
     TypeSymbol ApplyTypeArguments(
         Symbol symbol,
         TypeArgumentListSyntax? argumentList,
@@ -1570,32 +1600,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                     );
                 }
 
-                var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
-                for (var i = 0; i < expected; i++) {
-                    map[alias.TypeParameters[i]] = arguments[i];
-                }
-
-                // Resolving the target binds the parameters' constraints,
-                // which each argument must meet: 'Channel<T: Sendable>'.
-                var aliased = alias.AliasedType;
-                var substitution = new TypeSubstitution(map);
-                if (!arguments.Any(TypeSubstitution.ContainsError)) {
-                    var equivalence = TypeEquivalence.ForSymbol(context);
-                    for (var i = 0; i < expected; i++) {
-                        foreach (var constraint in alias.TypeParameters[i].Constraints) {
-                            if (!Conversions.Satisfies(arguments[i], substitution.Apply(constraint), equivalence)) {
-                                _diagnostics.Error(
-                                    ErrorCode.ERR_DoesNotConform,
-                                    span,
-                                    $"'{arguments[i].ToDisplayString()}' does not conform to '{constraint.ToDisplayString()}', "
-                                    + $"which '{alias.Name}' requires of '{alias.TypeParameters[i].Name}'"
-                                );
-                            }
-                        }
-                    }
-                }
-
-                return substitution.Apply(aliased);
+                return ApplyAlias(alias, arguments, context, span);
             }
 
             // 'some Sequence<Int>': a protocol's associated types, in order.

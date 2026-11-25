@@ -1541,6 +1541,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "codec_bytes_bytes" or "codec_string_bytes" or "codec_bytes_raw" or "utf8_to_utf16" or "utf16_to_utf8":
                 return 0L;
 
+            case "crc32_raw":
+                return operands[0];
+
             case "crypto_blocks" or "crypto_blocks_raw" or "vector_available":
                 return false;
 
@@ -2490,7 +2493,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Alive((HeapObject)operands[0]!).Type.IsSubclassOf(target);
         }
 
-        if (builtin.Name.StartsWith("raw_", StringComparison.Ordinal)) {
+        if (builtin.Name == "bytes_from_raw" || builtin.Name.StartsWith("raw_", StringComparison.Ordinal)) {
             return RawBuiltin(builtin, operands);
         }
 

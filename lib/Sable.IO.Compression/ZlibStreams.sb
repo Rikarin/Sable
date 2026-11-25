@@ -1,0 +1,31 @@
+module Sable.IO.Compression
+
+import Sable.IO
+
+/// A reader of zlib's format: .NET's `ZLibStream`.
+///
+/// ```sable
+/// let packed = Zlib.compress([1, 2, 3])
+/// var reader = ZlibReader(MemoryStream(packed))
+/// assert(try! reader.readToEnd() == [1, 2, 3])
+/// let limits = DecompressionLimits(maximumLength: 2)
+/// var limited = ZlibReader(MemoryStream(packed), decoder: ZlibDecoder(limits: limits))
+/// assert((try? limited.readToEnd()) == none)
+/// ```
+public alias ZlibReader<Inner: Reader> = DecompressingReader<ZlibDecoder, Inner>
+
+/// A writer of zlib's format.
+///
+/// ```sable
+/// let writer = ZlibWriter(MemoryStream(), encoder: ZlibEncoder(level: 9))
+/// try! writer.write([1, 2, 3])
+/// try! writer.finish()
+/// assert(try! Zlib.decompress(writer.inner.bytes) == [1, 2, 3])
+/// ```
+public alias ZlibWriter<Inner: Writer> = CompressingWriter<ZlibEncoder, Inner>
+
+/// A reader of zlib's format that suspends while it waits.
+public alias AsyncZlibReader<Inner: AsyncReader> = AsyncDecompressingReader<ZlibDecoder, Inner>
+
+/// A writer of zlib's format that suspends while it waits.
+public alias AsyncZlibWriter<Inner: AsyncWriter> = AsyncCompressingWriter<ZlibEncoder, Inner>

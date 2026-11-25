@@ -1,0 +1,31 @@
+module Sable.IO.Compression
+
+import Sable.IO
+
+/// A reader of raw deflate: .NET's `DeflateStream`.
+///
+/// ```sable
+/// let packed = Deflate.compress([1, 2, 3])
+/// var reader = DeflateReader(MemoryStream(packed))
+/// assert(try! reader.readToEnd() == [1, 2, 3])
+/// let limits = DecompressionLimits(maximumLength: 2)
+/// var limited = DeflateReader(MemoryStream(packed), decoder: DeflateDecoder(limits: limits))
+/// assert((try? limited.readToEnd()) == none)
+/// ```
+public alias DeflateReader<Inner: Reader> = DecompressingReader<DeflateDecoder, Inner>
+
+/// A writer of raw deflate.
+///
+/// ```sable
+/// let writer = DeflateWriter(MemoryStream(), encoder: DeflateEncoder(level: 9))
+/// try! writer.write([1, 2, 3])
+/// try! writer.finish()
+/// assert(try! Deflate.decompress(writer.inner.bytes) == [1, 2, 3])
+/// ```
+public alias DeflateWriter<Inner: Writer> = CompressingWriter<DeflateEncoder, Inner>
+
+/// A reader of raw deflate that suspends while it waits.
+public alias AsyncDeflateReader<Inner: AsyncReader> = AsyncDecompressingReader<DeflateDecoder, Inner>
+
+/// A writer of raw deflate that suspends while it waits.
+public alias AsyncDeflateWriter<Inner: AsyncWriter> = AsyncCompressingWriter<DeflateEncoder, Inner>

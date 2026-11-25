@@ -1,0 +1,61 @@
+module Sable.IO.Compression
+
+/// What decompresses bytes a run at a time, as they come: `DeflateDecoder`,
+/// `ZlibDecoder`, `GzipDecoder`, `BrotliDecoder`, `ZstdDecoder`.
+///
+/// ```sable
+/// let packed = Gzip.compress("hello, hello".utf8Bytes())
+/// let decoder = GzipDecoder()
+/// var text = ByteBuffer()
+/// let first = try! decoder.decompress(packed[..<15], into: &text)
+/// assert(first.consumed == 15 && first.status == .NeedsInput)
+/// let rest = try! decoder.decompress(packed[15...], into: &text)
+/// assert(rest.status == .Finished && text.count == 12)
+/// ```
+public protocol Decompressor {
+    /// One of a stream of any length, with no dictionary.
+    init()
+
+    /// As much of the bytes decompressed, at the buffer's end, as it can: to
+    /// the end of the bytes, or of the stream, or until 'limit' bytes are
+    /// written. Bytes not consumed are given again with those after them.
+    mutating fn decompress(_ source: U8[:], into output: inout ByteBuffer, limit: Int) throws(CompressionError) -> CompressionProgress
+
+    /// Whether the stream is at an end, where it may stop.
+    var isFinished: Bool { get }
+
+    /// Whether another stream may follow one that has ended, as part of the
+    /// same data: a gzip file's members, zstd's frames.
+    static var isConcatenable: Bool { get }
+}
+
+extension Decompressor {
+    /// All of the bytes decompressed, as much as there is.
+    @discardable
+    public mutating fn decompress(_ source: U8[:], into output: inout ByteBuffer) throws(CompressionError) -> CompressionProgress {
+        return try self.decompress(source, into: &output, limit: Int.max)
+    }
+
+    /// As much decompressed as fits in the slice from an offset on.
+    ///
+    /// ```sable
+    /// let packed = Deflate.compress([1, 2, 3, 4, 5])
+    /// let decoder = DeflateDecoder()
+    /// var room: U8[>..] = [0, 0, 0]
+    /// let step = try! decoder.decompress(packed, into: &room)
+    /// assert(room == [1, 2, 3] && step.produced == 3 && step.status == .NeedsOutput)
+    /// ```
+    @discardable
+    public mutating fn decompress(_ source: U8[:], into target: inout U8[:], at offset: Int = 0) throws(CompressionError) -> CompressionProgress {
+        precondition(offset >= 0 && offset <= target.count, "offset \(offset) of \(target.count)")
+        var buffer = ByteBuffer()
+        let step = try self.decompress(source, into: &buffer, limit: target.count - offset)
+        let bytes = buffer.bytes
+        var i = 0
+        while i < bytes.count {
+            target[offset + i] = bytes[i]
+            i += 1
+        }
+        return step
+    }
+}

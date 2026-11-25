@@ -1,0 +1,42 @@
+module Sable.IO.Compression
+
+/// Zlib's format (RFC 1950), deflate and an Adler-32, all at once.
+///
+/// ```sable
+/// let packed = Zlib.compress([7, 7, 7, 7, 7, 7, 7, 7])
+/// assert(try! Zlib.decompress(packed) == [7, 7, 7, 7, 7, 7, 7, 7])
+/// ```
+public struct Zlib {
+    /// The bytes compressed, at a level from 0, nothing, to 9, the smallest.
+    public static fn compress(_ source: U8[:], level: Int = 6) -> U8[>..] {
+        var output = ByteBuffer()
+        compress(source, into: &output, level: level)
+        return output.takeBytes()
+    }
+
+    /// The bytes compressed at the buffer's end: to how many.
+    @discardable
+    public static fn compress(_ source: U8[:], into output: inout ByteBuffer, level: Int = 6) -> Int {
+        return deflateWhole(source, into: &output, .Zlib, level)
+    }
+
+    /// The bytes decompressed. They must be one stream and no more:
+    /// `.Truncated` where it does not end.
+    public static fn decompress(_ source: U8[:], limits: DecompressionLimits = DecompressionLimits()) throws(CompressionError) -> U8[>..] {
+        var output = ByteBuffer()
+        try decompress(source, into: &output, limits: limits)
+        return output.takeBytes()
+    }
+
+    /// The bytes decompressed at the buffer's end: to how many.
+    @discardable
+    public static fn decompress(_ source: U8[:], into output: inout ByteBuffer, limits: DecompressionLimits = DecompressionLimits()) throws(CompressionError) -> Int {
+        var decoder = ZlibDecoder(limits: limits)
+        return try decompressWhole(&decoder, source, into: &output)
+    }
+
+    /// The most bytes so many can be compressed to, at any level.
+    public static fn maxCompressedLength(_ count: Int) -> Int {
+        return Deflate.maxCompressedLength(count) + 6
+    }
+}

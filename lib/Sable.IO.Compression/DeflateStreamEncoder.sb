@@ -1,0 +1,101 @@
+module Sable.IO.Compression
+
+/// Deflate with a wrapper of its own encoded as it comes: what the three
+/// encoders are.
+final class DeflateStreamEncoder {
+    let format: DeflateFormat
+    let core: DeflateCore
+    let header: GzipHeader
+    var hasBegun: Bool
+    var length: Int
+
+    init(format: DeflateFormat, level: Int, dictionary: U8[>..] = [], header: GzipHeader = GzipHeader(), expecting count: Int = Int.max) {
+        self.format = format
+        self.header = header
+        core = DeflateCore(format: format, level: level, dictionary: dictionary, expecting: count)
+        hasBegun = false
+        length = 0
+    }
+
+    fn begin(into output: inout ByteBuffer) {
+        if hasBegun {
+            return
+        }
+        hasBegun = true
+        let level = core.level
+        if format == .Zlib {
+            // A window of 32 KiB, about what level, and whether there is a
+            // dictionary, and what makes the two a multiple of 31.
+            var flags = level < 2 ? 0 : (level < 6 ? 0x40 : (level == 6 ? 0x80 : 0xC0))
+            if !core.dictionary.isEmpty {
+                flags |= 0x20
+            }
+            flags += 31 - (0x7800 | flags) % 31
+            output.writeU8(0x78)
+            output.writeU8(U8(flags))
+            if !core.dictionary.isEmpty {
+                var checksum = Adler32()
+                checksum.update(core.dictionary)
+                output.write(bytes: DeflateStreamEncoder.bigEndian(checksum.value))
+            }
+        } else if format == .Gzip {
+            var flags: U8 = header.isText ? 1 : 0
+            flags |= header.extra.isEmpty ? 0 : 4
+            flags |= header.name == none ? 0 : 8
+            flags |= header.comment == none ? 0 : 16
+            output.write(bytes: [0x1F, 0x8B, 8, flags])
+            output.write(bytes: DeflateStreamEncoder.littleEndian(header.modified))
+            output.writeU8(U8(level == 9 ? 2 : (level <= 1 ? 4 : 0)))
+            output.writeU8(header.operatingSystem)
+            if !header.extra.isEmpty {
+                output.writeU8(U8(header.extra.count & 0xFF))
+                output.writeU8(U8(header.extra.count >> 8))
+                output.write(bytes: header.extra)
+            }
+            if let name = header.name {
+                DeflateStreamEncoder.writeLatin1(name, into: &output)
+            }
+            if let comment = header.comment {
+                DeflateStreamEncoder.writeLatin1(comment, into: &output)
+            }
+        }
+    }
+
+    static fn writeLatin1(_ text: String, into output: inout ByteBuffer) {
+        for c in text.scalars {
+            let point = c.codePoint
+            output.writeU8(point == 0 || point > 0xFF ? 0x3F : U8(point))
+        }
+        output.writeU8(0)
+    }
+
+    static fn littleEndian(_ value: U32) -> U8[>..] {
+        return [U8(value & 0xFF), U8(value >> 8 & 0xFF), U8(value >> 16 & 0xFF), U8(value >> 24)]
+    }
+
+    static fn bigEndian(_ value: U32) -> U8[>..] {
+        return [U8(value >> 24), U8(value >> 16 & 0xFF), U8(value >> 8 & 0xFF), U8(value & 0xFF)]
+    }
+
+    fn compress(_ source: U8[:], into output: inout ByteBuffer) {
+        begin(into: &output)
+        length += source.count
+        core.compress(source, into: &output)
+    }
+
+    fn flush(into output: inout ByteBuffer) {
+        begin(into: &output)
+        core.flush(into: &output)
+    }
+
+    fn finish(into output: inout ByteBuffer) {
+        begin(into: &output)
+        core.finish(into: &output)
+        if format == .Gzip {
+            output.write(bytes: DeflateStreamEncoder.littleEndian(core.crc.value))
+            output.write(bytes: DeflateStreamEncoder.littleEndian(length unchecked as U32))
+        } else if format == .Zlib {
+            output.write(bytes: DeflateStreamEncoder.bigEndian(core.adler.value))
+        }
+    }
+}

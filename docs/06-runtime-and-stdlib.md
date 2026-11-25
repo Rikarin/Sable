@@ -897,6 +897,10 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     Environment (variables listed, set and removed under
                     'unsafe', arguments as text and bytes, home, temporary
                     and known folders by XDG, Apple and Windows rules)
+Sable.IO.Compression Deflate Zlib Gzip (below), all at once, as they come
+                    (Compressor, Decompressor) and as readers and writers
+                    that compress, async ones too, with limits on what is
+                    decompressed
 Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
                     urltestdata.json passes whole; resolution, setters,
                     origin, query items), Host (domain, IPv4, IPv6,
@@ -1180,6 +1184,33 @@ busy machine, Sable's over .NET's; "before" is the same without these):
 | base64 | 4.25 | 1.22 |
 | utf16 | 2.76 | 1.32 |
 | utf8-validate (as it was) | — | 0.30 |
+
+### Compression
+
+`Sable.IO.Compression` is written in Sable, not bound to zlib. A codec works
+in memory of its own, at addresses, which nothing checks; its callers' bytes
+are copied in and out of it a run at a time, while they are in the cache
+(`NativeMemory.copy`, to and from a `U8[:]`). What keeps every access in that
+memory is the code around it: margins at both ends of a buffer, every length
+and distance checked against them. The interpreter, which checks each access,
+runs the codecs in `CompressionTests`.
+
+- **Inflate** decodes by tables of eleven bits of a literal's or length's
+  code and eight of a distance's, with subtables for longer codes, from a
+  64-bit buffer refilled without a branch, up to three literals at a time,
+  matches copied sixteen bytes at a time. Near the end of its input or of its
+  room it decodes a symbol at a time, and puts back what it had not all of.
+- **Deflate** has levels 0 to 9: nothing; one look at the last place with the
+  same four bytes; chains of such places, the first long match taken (2 to
+  4), or a better one awaited for a byte (5 to 7) or two (8); and at 9 the
+  parse of least bits, by what the symbols took in the pass before, three
+  times. Blocks end where their symbols change. Its output is not zlib's,
+  byte for byte.
+- A decoder says how much it consumed, exactly, so what follows a stream can
+  be read; a gzip decoder reads every member. `DecompressionLimits` bound
+  the length and the ratio.
+- CRC-32 is the processor's where it has the instructions
+  (`runtime/checksums.c`: ARM's, or PCLMULQDQ), eight bytes by tables else.
 
 ### Decimal
 

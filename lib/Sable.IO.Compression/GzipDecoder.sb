@@ -1,0 +1,38 @@
+module Sable.IO.Compression
+
+/// Gzip (RFC 1952), deflate with a header and a CRC-32, decompressed as it
+/// comes: every member of it, each one's checksum and length checked. Bytes
+/// after the last that start no other are left unread.
+///
+/// ```sable
+/// let decoder = GzipDecoder()
+/// var bytes = ByteBuffer()
+/// var twice = Gzip.compress([1, 2])
+/// twice.append(contentsOf: Gzip.compress([3]))
+/// let step = try! decoder.decompress(twice, into: &bytes)
+/// assert(step.status == .Finished && bytes.bytes == [1, 2, 3])
+/// ```
+public final class GzipDecoder: Decompressor {
+    let stream: InflateStream
+
+    /// Of a stream of any length.
+    public init() {
+        stream = InflateStream(format: .Gzip, limits: DecompressionLimits(), dictionary: [])
+    }
+
+    /// Decompressing no more than the limits.
+    public init(limits: DecompressionLimits) {
+        stream = InflateStream(format: .Gzip, limits: limits, dictionary: [])
+    }
+
+    /// The last member's header, once it was read.
+    public var header: GzipHeader? => stream.header
+
+    public static var isConcatenable: Bool => true
+
+    public var isFinished: Bool => stream.isFinished
+
+    public fn decompress(_ source: U8[:], into output: inout ByteBuffer, limit: Int) throws(CompressionError) -> CompressionProgress {
+        return try stream.step(source, into: &output, limit: limit)
+    }
+}

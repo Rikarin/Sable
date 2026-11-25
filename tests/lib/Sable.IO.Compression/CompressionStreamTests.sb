@@ -1,0 +1,190 @@
+module CompressionStreamTests
+
+// Readers that decompress and writers that compress, over memory and over a
+// pipe, with reads that give a few bytes at a time.
+
+import CompressionData
+import Sable.IO
+import Sable.IO.Compression
+import Sable.Testing
+
+/// A reader that gives at most a few bytes a read.
+struct Trickle: Reader {
+    var bytes: U8[>..]
+    var position: Int = 0
+
+    mutating fn read(upTo count: Int) throws(IoError) -> U8[>..] {
+        let take = count < 7 ? count : 7
+        let end = position + take < bytes.count ? position + take : bytes.count
+        let got = bytes[position..<end].toArray()
+        position = end
+        return got
+    }
+}
+
+/// A writer that cannot be written to.
+struct Full: Writer {
+    mutating fn write(_ bytes: U8[:]) throws(IoError) {
+        throw .Failed(path: "full")
+    }
+
+    mutating fn flush() throws(IoError) { }
+}
+
+@test
+fn readersDecompress() throws {
+    let bytes = sample(7, 200_000)
+    var gzip = GzipReader(Trickle(bytes: join(Gzip.compress(bytes), Gzip.compress([1, 2]))))
+    assert(try gzip.readToEnd() == join(bytes, [1, 2]))
+    assert(try gzip.read(upTo: 10).isEmpty)
+    var zlib = ZlibReader(Trickle(bytes: join(Zlib.compress(bytes), [5])))
+    var all: U8[>..] = []
+    while true {
+        let read = try zlib.read(upTo: 1000)
+        assert(read.count <= 1000)
+        if read.isEmpty {
+            break
+        }
+        all.append(contentsOf: read)
+    }
+    assert(all == bytes)
+    var raw = DeflateReader(MemoryStream(join(Deflate.compress(bytes), [5, 6])))
+    assert(try raw.readToEnd() == bytes && raw.unread.toArray() == [5, 6])
+    assert(try raw.read(upTo: 0).isEmpty)
+    var trailed = GzipReader(MemoryStream(join(Gzip.compress([1]), [7, 8])))
+    assert(try trailed.readToEnd() == [1] && trailed.unread.toArray() == [7, 8])
+}
+
+@test
+fn readersSayWhatIsWrong() {
+    let packed = Gzip.compress(sample(4, 1000))
+    var short = GzipReader(MemoryStream(packed[..<(packed.count - 1)].toArray()))
+    assert(fails(IoError.UnexpectedEof) { try short.readToEnd() })
+    var empty = GzipReader(MemoryStream())
+    assert(fails(IoError.UnexpectedEof) { try empty.readToEnd() })
+    var changed = packed
+    changed[0] = 0
+    var damagedReader = GzipReader(MemoryStream(changed))
+    assert(fails(IoError.InvalidData(what: "the data is corrupt: no gzip header")) { try damagedReader.readToEnd() })
+    let limits = DecompressionLimits(maximumLength: 999)
+    var limited = GzipReader(MemoryStream(packed), decoder: GzipDecoder(limits: limits))
+    assert(fails(IoError.InvalidData(what: "more would be decompressed than the limits allow")) { try limited.readToEnd() })
+}
+
+@test
+fn writersCompress() throws {
+    let bytes = sample(4, 300_000)
+    let gzip = GzipWriter(MemoryStream(), encoder: GzipEncoder(level: 9))
+    let zlib = ZlibWriter(MemoryStream())
+    let raw = DeflateWriter(MemoryStream())
+    var at = 0
+    while at < bytes.count {
+        let piece = bytes[at..<(at + 1000)]
+        try gzip.write(piece)
+        try zlib.write(piece)
+        try raw.write(piece)
+        at += 1000
+        if at == 100_000 {
+            try zlib.flush()
+            var reader = ZlibReader(MemoryStream(zlib.inner.bytes))
+            assert(try reader.readExactly(100_000) == bytes[..<100_000].toArray())
+        }
+    }
+    try gzip.finish()
+    try gzip.finish()
+    try gzip.flush()
+    try zlib.finish()
+    try raw.finish()
+    assert(try Gzip.decompress(gzip.inner.bytes) == bytes)
+    assert(try Zlib.decompress(zlib.inner.bytes) == bytes)
+    assert(try Deflate.decompress(raw.inner.bytes) == bytes)
+    let full = GzipWriter(Full())
+    assert(fails(IoError.Failed(path: "full")) { try full.finish() })
+}
+
+/// A class over the bytes written, to look at them once the writer is gone.
+final class Kept: Writer {
+    var bytes: U8[>..] = []
+
+    fn write(_ written: U8[:]) throws(IoError) {
+        bytes.append(contentsOf: written)
+    }
+
+    fn flush() throws(IoError) { }
+}
+
+@test
+fn lettingGoOfAWriterFinishesIt() throws {
+    let kept = Kept()
+    if true {
+        let writer = GzipWriter(kept)
+        try writer.write([1, 2, 3])
+    }
+    assert(try Gzip.decompress(kept.bytes) == [1, 2, 3])
+}
+
+@test
+fn theAsyncOnesToo() async throws {
+    let bytes = sample(4, 50_000)
+    let pipe = Pipe(pauseWriterThreshold: 1 << 20)
+    let writer = AsyncGzipWriter(pipe.writer)
+    try await writer.write(bytes[..<20_000])
+    try await writer.flush()
+    try await writer.write(bytes[20_000...])
+    try await writer.finish()
+    try await writer.finish()
+    await pipe.writer.complete()
+    let reader = AsyncGzipReader(pipe.reader)
+    var all: U8[>..] = []
+    while true {
+        let read = try await reader.read(upTo: 3000)
+        if read.isEmpty {
+            break
+        }
+        all.append(contentsOf: read)
+    }
+    assert(all == bytes)
+    assert(try await reader.read(upTo: 10).isEmpty && reader.unread.isEmpty)
+
+    let short = Pipe()
+    try await short.writer.write([0x1F, 0x8B])
+    await short.writer.complete()
+    let cut = AsyncGzipReader(short.reader)
+    do {
+        _ = try await cut.read(upTo: 10)
+        fail("no error")
+    } catch {
+        assert(error.debugDescription() == "IoError.UnexpectedEof")
+    }
+
+    let wrong = Pipe()
+    try await wrong.writer.write([9, 9, 9, 9, 9, 9, 9, 9, 9, 9])
+    await wrong.writer.complete()
+    let bad = AsyncZlibReader(wrong.reader)
+    do {
+        _ = try await bad.read(upTo: 10)
+        fail("no error")
+    } catch {
+        assert(error.description() == "the data is corrupt: no zlib header")
+    }
+}
+
+@test
+fn aStepSaysWhatItDid() throws {
+    let packed = Zlib.compress([1, 2])
+    let decoder = ZlibDecoder()
+    var bytes = ByteBuffer()
+    let step = try decoder.decompress(packed, into: &bytes)
+    assert(step == CompressionProgress(consumed: packed.count, produced: 2, status: .Finished))
+    assert(decoder.isFinished && step.status.debugDescription() == "CompressionStatus.Finished")
+}
+
+@test
+fn errorsSayWhatTheyAre() {
+    assert(CompressionError.Truncated.description() == "the data ends before the stream does")
+    assert(CompressionError.LimitExceeded.description() == "more would be decompressed than the limits allow")
+    assert(CompressionError.DictionaryNeeded(id: 7).description() == "the data needs the dictionary 7")
+    assert(CompressionError.Corrupt("it is odd").description() == "the data is corrupt: it is odd")
+    assert(CompressionError.LimitExceeded != CompressionError.Truncated && CompressionError.WindowTooLarge(bytes: 1) != .WindowTooLarge(bytes: 2))
+    assert(CompressionError.WindowTooLarge(bytes: 9).description() == "the data needs a window of 9 bytes")
+}

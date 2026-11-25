@@ -1,0 +1,307 @@
+module Sable.IO.Compression
+
+/// What a deflate stream is wrapped in.
+@derive(Equatable)
+enum DeflateFormat {
+    Raw
+    Zlib
+    Gzip
+}
+
+/// Deflate with a wrapper of its own decoded as it comes: what the three
+/// decoders are.
+final class InflateStream {
+    @derive(Equatable)
+    enum Stage {
+        Start
+        Body
+        Trailer
+        /// After a gzip member, where another may start.
+        Between
+        Finished
+    }
+
+    let format: DeflateFormat
+    let limits: DecompressionLimits
+    let dictionary: U8[>..]
+    let inflate: Inflate
+    var stage: Stage
+    var crc: Crc32
+    var adler: Adler32
+    /// How much this member has written, which its trailer says, and how much
+    /// was read and written in all.
+    var memberLength: Int
+    var totalRead: Int
+    var totalWritten: Int
+    var header: GzipHeader?
+
+    init(format: DeflateFormat, limits: DecompressionLimits, dictionary: U8[>..]) {
+        self.format = format
+        self.limits = limits
+        self.dictionary = dictionary
+        inflate = Inflate()
+        stage = .Start
+        crc = Crc32()
+        adler = Adler32()
+        memberLength = 0
+        totalRead = 0
+        totalWritten = 0
+        header = none
+        if format == .Raw {
+            stage = .Body
+            if !dictionary.isEmpty {
+                inflate.window.preset(dictionary)
+            }
+        }
+    }
+
+    var isFinished: Bool => (stage == .Finished || stage == .Between) && inflate.window.pending == 0
+
+    fn step(_ source: U8[:], into output: inout ByteBuffer, limit: Int) throws(CompressionError) -> CompressionProgress {
+        precondition(limit >= 0, "a limit of \(limit) bytes")
+        var consumed = 0
+        var produced = 0
+        while true {
+            produced += inflate.window.drain(into: &output, limit: limit - produced)
+            if inflate.window.pending > 0 {
+                let back = inflate.input.giveBack()
+                totalRead -= back
+                return CompressionProgress(consumed: consumed - back, produced: produced, status: .NeedsOutput)
+            }
+            inflate.window.makeRoom()
+            let ran = try self.run()
+            if ran && inflate.window.pending > 0 {
+                continue
+            }
+            if !ran {
+                let taken = consumed < source.count ? inflate.input.fill(source, from: consumed) : 0
+                if taken > 0 {
+                    consumed += taken
+                    totalRead += taken
+                    continue
+                }
+                if inflate.window.pending > 0 {
+                    continue
+                }
+                if stage == .Between && inflate.input.count == 0 {
+                    return CompressionProgress(consumed: consumed, produced: produced, status: .Finished)
+                }
+                return CompressionProgress(consumed: consumed, produced: produced, status: .NeedsInput)
+            }
+            if stage == .Finished {
+                let back = inflate.input.giveBack()
+                totalRead -= back
+                return CompressionProgress(consumed: consumed - back, produced: produced, status: .Finished)
+            }
+        }
+    }
+
+    /// As far as there is input and room: false where it needs input.
+    fn run() throws(CompressionError) -> Bool {
+        while true {
+            match stage {
+                case .Start => {
+                    let began = format == .Zlib ? try self.startZlib() : try self.startGzip()
+                    if !began {
+                        return false
+                    }
+                    stage = .Body
+                    crc = Crc32()
+                    adler = Adler32()
+                    memberLength = 0
+                }
+                case .Body => {
+                    let before = inflate.window.end
+                    let result = inflate.run()
+                    let written = inflate.window.end - before
+                    unsafe {
+                        if format == .Gzip {
+                            crc.update(at: before, count: written)
+                        } else if format == .Zlib {
+                            adler.update(at: before, count: written)
+                        }
+                    }
+                    memberLength += written
+                    totalWritten += written
+                    if !limits.allows(written: totalWritten, read: totalRead) {
+                        throw .LimitExceeded
+                    }
+                    match result {
+                        case .NeedsInput => { return false }
+                        case .NeedsRoom  => { return true }
+                        case .Failed     => { throw .Corrupt(inflate.problem) }
+                        case .Finished => {
+                            inflate.bits = 0
+                            inflate.bitCount = 0
+                            stage = format == .Raw ? .Finished : .Trailer
+                        }
+                    }
+                }
+                case .Trailer => {
+                    if !(try self.checkTrailer()) {
+                        return false
+                    }
+                    stage = format == .Gzip ? .Between : .Finished
+                }
+                case .Between => {
+                    // Zeros may pad a member; anything else that starts no
+                    // other member is not this stream's.
+                    if inflate.input.count == 0 {
+                        return false
+                    }
+                    let left = inflate.input.count
+                    unsafe {
+                        if load8(inflate.input.position) != 0x1F {
+                            stage = .Finished
+                            return true
+                        }
+                        if left < 2 {
+                            return false
+                        }
+                        if load8(inflate.input.position + 1) != 0x8B {
+                            stage = .Finished
+                            return true
+                        }
+                    }
+                    inflate.restart()
+                    stage = .Start
+                }
+                case .Finished => { return true }
+            }
+        }
+    }
+
+    fn startZlib() throws(CompressionError) -> Bool {
+        if inflate.input.count < 2 {
+            return false
+        }
+        unsafe {
+            let at = inflate.input.position
+            let first = load8(at)
+            let second = load8(at + 1)
+            if (first & 15) != 8 || (first << 8 | second) % 31 != 0 || first >> 4 > 7 {
+                throw .Corrupt("no zlib header")
+            }
+            if (second & 0x20) != 0 {
+                if inflate.input.count < 6 {
+                    return false
+                }
+                let id = load32(at + 2).byteSwapped
+                var checksum = Adler32()
+                checksum.update(dictionary)
+                if dictionary.isEmpty || checksum.value != id {
+                    throw .DictionaryNeeded(id: id)
+                }
+                inflate.window.preset(dictionary)
+                inflate.input.position += 4
+            }
+            inflate.input.position += 2
+        }
+        return true
+    }
+
+    fn startGzip() throws(CompressionError) -> Bool {
+        let start = inflate.input.position
+        let end = inflate.input.end
+        if end - start < 10 {
+            return false
+        }
+        var parsed = GzipHeader()
+        var at = start + 10
+        unsafe {
+            let flags = load8(start + 3)
+            if load16(start) != 0x8B1F {
+                throw .Corrupt("no gzip header")
+            }
+            if load8(start + 2) != 8 || (flags & 0xE0) != 0 {
+                throw .Corrupt("a gzip header of no known kind")
+            }
+            parsed.isText = (flags & 1) != 0
+            parsed.modified = load32(start + 4)
+            parsed.operatingSystem = load8(start + 9) unchecked as U8
+            if (flags & 4) != 0 {
+                if end - at < 2 || end - at - 2 < load16(at) {
+                    return try self.waitForHeader()
+                }
+                let length = load16(at)
+                at += 2
+                while at < start + 12 + length {
+                    parsed.extra.append(load8(at) unchecked as U8)
+                    at += 1
+                }
+            }
+            var field = 8
+            while field <= 16 {
+                if (flags & field) != 0 {
+                    // Latin-1, made UTF-8.
+                    var text: U8[>..] = []
+                    var ended = false
+                    while at < end && !ended {
+                        let byte = load8(at)
+                        if byte == 0 {
+                            ended = true
+                        } else if byte < 0x80 {
+                            text.append(byte unchecked as U8)
+                        } else {
+                            text.append((0xC0 | byte >> 6) unchecked as U8)
+                            text.append((0x80 | (byte & 0x3F)) unchecked as U8)
+                        }
+                        at += 1
+                    }
+                    if !ended {
+                        return try self.waitForHeader()
+                    }
+                    if field == 8 {
+                        parsed.name = String.fromUtf8Lossy(text)
+                    } else {
+                        parsed.comment = String.fromUtf8Lossy(text)
+                    }
+                }
+                field += 8
+            }
+            if (flags & 2) != 0 {
+                if end - at < 2 {
+                    return try self.waitForHeader()
+                }
+                var checksum = Crc32()
+                checksum.update(at: start, count: at - start)
+                if (checksum.value & 0xFFFF) unchecked as Int != load16(at) {
+                    throw .Corrupt("the gzip header's checksum is wrong")
+                }
+                at += 2
+            }
+        }
+        inflate.input.position = at
+        header = parsed
+        return true
+    }
+
+    fn waitForHeader() throws(CompressionError) -> Bool {
+        if inflate.input.count >= inflate.input.capacity {
+            throw .Corrupt("a gzip header of more than 64 KiB")
+        }
+        return false
+    }
+
+    fn checkTrailer() throws(CompressionError) -> Bool {
+        let size = format == .Gzip ? 8 : 4
+        if inflate.input.count < size {
+            return false
+        }
+        unsafe {
+            let at = inflate.input.position
+            if format == .Gzip {
+                if load32(at) != crc.value {
+                    throw .Corrupt("the checksum is wrong")
+                }
+                if load32(at + 4) != memberLength unchecked as U32 {
+                    throw .Corrupt("the length is wrong")
+                }
+            } else if load32(at).byteSwapped != adler.value {
+                throw .Corrupt("the checksum is wrong")
+            }
+        }
+        inflate.input.position += size
+        return true
+    }
+}

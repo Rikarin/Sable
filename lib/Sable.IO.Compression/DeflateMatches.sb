@@ -1,0 +1,153 @@
+module Sable.IO.Compression
+
+/// Where deflate's matches are found: every place by a hash of its three
+/// bytes and one of its four, and for each place the one before it with the
+/// same four. Places are counted from the stream's start, in a U32, so that
+/// the window may slide under them.
+struct DeflateMatches {
+    let heads3: Int
+    let heads4: Int
+    let chain: Int
+    /// A place's address less itself.
+    let base: Int
+    /// The first byte that may be matched.
+    let start: Int
+    let shift3: U32
+    let shift4: U32
+
+    static var chainEntries: Int => 32768
+
+    /// The place put in the tables; what was there before is dropped.
+    @inline(always)
+    unsafe fn insert(_ at: Int) {
+        let word = load32(at)
+        let place = (at &- base) unchecked as U32
+        store32(place, heads3 &+ 4 &* ((((word << 8) &* 0x9E37_79B1) >> shift3) unchecked as Int))
+        let head = heads4 &+ 4 &* (((word &* 0x9E37_79B1) >> shift4) unchecked as Int)
+        store32(load32(head), chain &+ 4 &* ((at &- base) & 32767))
+        store32(place, head)
+    }
+
+    /// Every longer match than the one before of the bytes at a place, put in
+    /// the tables too, nearest first: added to a parser's, the length at bit
+    /// 16 and the distance less one. How long the last is, or 0.
+    unsafe fn all(_ at: Int, most: Int, depth: Int, into parser: DeflateBestParse) -> Int {
+        let word = load32(at)
+        let place = (at &- base) unchecked as U32
+        let head3 = heads3 &+ 4 &* ((((word << 8) &* 0x9E37_79B1) >> shift3) unchecked as Int)
+        let head4 = heads4 &+ 4 &* (((word &* 0x9E37_79B1) >> shift4) unchecked as Int)
+        let near3 = load32(head3)
+        var next = load32(head4)
+        store32(place, head3)
+        store32(next, chain &+ 4 &* ((at &- base) & 32767))
+        store32(place, head4)
+        let farthest = at &- start < 32768 ? at &- start : 32768
+        var best = 0
+        let distance3 = (place &- near3) unchecked as Int
+        if distance3 <= farthest && ((load32(at &- distance3) ^ word) << 8) == 0 {
+            best = matchLength(at &- distance3, at, from: 3, most: most)
+            parser.add(best, distance3 &- 1)
+        }
+        var left = depth
+        while left > 0 && best < most {
+            let distance = (place &- next) unchecked as Int
+            if distance > farthest || distance == 0 {
+                break
+            }
+            let candidate = at &- distance
+            if load32(candidate) == word && load8(candidate &+ best) == load8(at &+ best) {
+                let length = matchLength(candidate, at, from: 4, most: most)
+                if length > best {
+                    best = length
+                    parser.add(best, distance &- 1)
+                }
+            }
+            next = load32(chain &+ 4 &* (((place &- (distance unchecked as U32)) & 32767) unchecked as Int))
+            left = left &- 1
+            if (place &- next) unchecked as Int <= distance {
+                break
+            }
+        }
+        return best
+    }
+
+    /// The places from one up to another.
+    @inline(always)
+    unsafe fn insert(from at: Int, to end: Int, limit: Int) {
+        var i = at
+        let last = end < limit ? end : limit
+        while i < last {
+            self.insert(i)
+            i = i &+ 1
+        }
+    }
+
+    /// The longest match of the bytes at a place, put in the tables too,
+    /// longer than 'shortest' and as long as 'most': its length at bit 16, and
+    /// its distance less one; or 'shortest' above nothing. At least four bytes
+    /// are there.
+    @inline(always)
+    unsafe fn longest(_ at: Int, shortest: Int, most: Int, nice: Int, depth: Int) -> Int {
+        let word = load32(at)
+        let place = (at &- base) unchecked as U32
+        let head3 = heads3 &+ 4 &* ((((word << 8) &* 0x9E37_79B1) >> shift3) unchecked as Int)
+        let head4 = heads4 &+ 4 &* (((word &* 0x9E37_79B1) >> shift4) unchecked as Int)
+        let near3 = load32(head3)
+        var next = load32(head4)
+        store32(place, head3)
+        store32(next, chain &+ 4 &* ((at &- base) & 32767))
+        store32(place, head4)
+        let farthest = at &- start < 32768 ? at &- start : 32768
+        var best = shortest
+        var bestDistance = 1
+        if best < 3 {
+            let distance = (place &- near3) unchecked as Int
+            if distance <= farthest && ((load32(at &- distance) ^ word) << 8) == 0 {
+                best = 3
+                bestDistance = distance
+            }
+        }
+        var tail = best < 3 ? 0 : best &- 3
+        var left = depth
+        while left > 0 {
+            let distance = (place &- next) unchecked as Int
+            if distance > farthest || distance == 0 {
+                break
+            }
+            let candidate = at &- distance
+            if load32(candidate) == word && load32(candidate &+ tail) == load32(at &+ tail) {
+                let length = matchLength(candidate, at, from: 4, most: most)
+                if length > best {
+                    best = length
+                    bestDistance = distance
+                    tail = length &- 3
+                    if length >= nice {
+                        break
+                    }
+                }
+            }
+            next = load32(chain &+ 4 &* (((place &- (distance unchecked as U32)) & 32767) unchecked as Int))
+            left = left &- 1
+            if (place &- next) unchecked as Int <= distance {
+                break
+            }
+        }
+        return best << 16 | (bestDistance &- 1)
+    }
+}
+
+/// How many bytes from two places on are the same, of which the first 'from'
+/// are known to be, up to 'most': up to seven past them are read.
+@inline(always)
+unsafe fn matchLength(_ first: Int, _ second: Int, from: Int, most: Int) -> Int {
+    var length = from
+    while length < most {
+        let difference = load64(first &+ length) ^ load64(second &+ length)
+        if difference != 0 {
+            length = length &+ (difference.trailingZeroCount >> 3)
+            return length < most ? length : most
+        }
+        length = length &+ 8
+    }
+    return most
+}

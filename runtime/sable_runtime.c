@@ -42,6 +42,7 @@
 #include "vectors.c"
 #include "crypto.c"
 #include "codecs.c"
+#include "checksums.c"
 #include "leaks.c"
 #include "metadata.c"
 #include "inline_layout.c"

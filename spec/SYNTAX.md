@@ -1515,6 +1515,10 @@ each of its own converted, as `let xs: (any Any)[] = [1, "a"]` does: `f([1, "a"]
 of an `(any Any)[:]`. Where another overload takes the literal as it is, that one
 is called.
 
+A tuple literal passed for a tuple parameter has its numbers take the types of
+the parameter's elements, as `let p: (F32, F32) = (0, 1)` does: `remap(x, from:
+(0, 1), to: (4, 0))` of `(T, T)`s, where the other arguments decide T.
+
 Of an optional, `is`, `as?`, `as!` and the patterns `is T` and `let x as T` ask
 of the value it holds: `none` is no `T`, and `as!` of it traps.
 

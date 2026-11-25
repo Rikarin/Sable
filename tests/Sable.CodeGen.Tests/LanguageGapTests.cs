@@ -796,4 +796,33 @@ public sealed class LanguageGapTests {
             }
             """).Stdout
         );
+
+    /// <summary>A tuple literal argument's numbers take the types of the parameter's elements, generic or not.</summary>
+    [Fact]
+    public void ATupleLiteralArgumentTakesTheParametersElementTypes() =>
+        Assert.Equal(
+            """
+            0.25
+            1.25
+            3.5
+            7 x
+
+            """,
+            Programs.AssertAgree("""
+            module TupleLiterals
+
+            import Sable.IO
+
+            fn plain(_ v: F32, from: (F32, F32)) -> F32 => v + from.0
+            fn generic<T: FloatingPoint>(_ v: T, from: (T, T)) -> T => v + from.0
+            fn mixed<T>(_ pair: (U8, T)) -> String => "\(pair.0) \(pair.1)"
+
+            @main
+            fn main() {
+                print(plain(0.25, from: (0, 1)))
+                print(generic(0.25 as F32, from: (1, 2)))
+                print(generic(0.5 as F16, from: (3.0, 2)))
+                print(mixed((7, "x")))
+            }
+            """).Stdout);
 }

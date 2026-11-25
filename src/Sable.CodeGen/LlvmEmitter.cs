@@ -1050,9 +1050,7 @@ public sealed partial class LlvmEmitter {
 
         var body = new StringBuilder("define internal void @\"sable.globals.share\"() {\nentry:\n");
         foreach (var (name, type) in held) {
-            var value = $"%v{held.FindIndex(g => g.Name == name)}";
-            body.Append($"  {value} = load {Type(type)}, ptr {GlobalStorage(name)}{StorageAlign(type)}\n");
-            Ownership(body, "  ", Witnessing.Share, type, value);
+            OwnershipAt(body, Witnessing.Share, type, GlobalStorage(name), $"%v{held.FindIndex(g => g.Name == name)}");
         }
 
         body.Append("  ret void\n}\n\ndefine internal void @\"sable.globals.register\"() {\nentry:\n")
@@ -1484,6 +1482,17 @@ public sealed partial class LlvmEmitter {
         return name;
     }
 
+    /// <summary>What a value at an address holds, copied, destroyed or visited: where it is for one held in memory, else loaded first (as <paramref name="loaded" />).</summary>
+    void OwnershipAt(StringBuilder body, Witnessing what, SilType type, string address, string loaded) {
+        if (SilType.IsInMemory(type)) {
+            Ownership(body, "  ", what, type, address);
+            return;
+        }
+
+        body.Append($"  {loaded} = load {Type(type)}, ptr {address}{StorageAlign(type)}\n");
+        Ownership(body, "  ", what, type, loaded);
+    }
+
     /// <summary>The function that copies, destroys or visits a value of an aggregate type, written the first time it is needed.</summary>
     string Witness(SilType type, Witnessing what) {
         var name = $"@\"sable.{what.ToString().ToLowerInvariant()}.{Mangled(type)}\"";
@@ -1630,9 +1639,8 @@ public sealed partial class LlvmEmitter {
                 continue;
             }
 
-            body.Append($"  %a{i} = getelementptr inbounds {objectType}, ptr %o, i32 0, i32 {ObjectSlot(type, i)}\n")
-                .Append($"  %f{i} = load {Type(type.Fields[i].Type)}, ptr %a{i}\n");
-            Ownership(body, "  ", false, type.Fields[i].Type, $"%f{i}");
+            body.Append($"  %a{i} = getelementptr inbounds {objectType}, ptr %o, i32 0, i32 {ObjectSlot(type, i)}\n");
+            OwnershipAt(body, Witnessing.Destroy, type.Fields[i].Type, $"%a{i}", $"%f{i}");
         }
 
         body.Append("  ret void\n}\n\n");
@@ -1645,9 +1653,8 @@ public sealed partial class LlvmEmitter {
                 continue;
             }
 
-            body.Append($"  %a{i} = getelementptr inbounds {objectType}, ptr %o, i32 0, i32 {ObjectSlot(type, i)}\n")
-                .Append($"  %f{i} = load {Type(type.Fields[i].Type)}, ptr %a{i}\n");
-            Ownership(body, "  ", Witnessing.Visit, type.Fields[i].Type, $"%f{i}");
+            body.Append($"  %a{i} = getelementptr inbounds {objectType}, ptr %o, i32 0, i32 {ObjectSlot(type, i)}\n");
+            OwnershipAt(body, Witnessing.Visit, type.Fields[i].Type, $"%a{i}", $"%f{i}");
         }
 
         body.Append("  ret void\n}\n\n");
@@ -1760,7 +1767,23 @@ public sealed partial class LlvmEmitter {
         var element = type.Element;
         var llvmElement = Type(element);
         string copy = "null", destroy = "null", visit = "null";
-        if (!element.IsTrivial) {
+        if (SilType.IsInMemory(element) && !SilType.IsBitwise(element)) {
+            // Held in memory: copied, destroyed and visited where it is.
+            copy = $"@\"sable.elementcopy.{Mangled(element)}\"";
+            destroy = $"@\"sable.elementdestroy.{Mangled(element)}\"";
+            visit = $"@\"sable.elementvisit.{Mangled(element)}\"";
+            var held = new StringBuilder();
+            held.Append($"define internal void {copy}(ptr %d, ptr %s) {{\nentry:\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 {SizeOf(llvmElement)}, i1 false)\n");
+            Ownership(held, "  ", true, element, "%d");
+            held.Append("  ret void\n}\n\n");
+            held.Append($"define internal void {destroy}(ptr %e) {{\nentry:\n");
+            Ownership(held, "  ", false, element, "%e");
+            held.Append("  ret void\n}\n\n");
+            held.Append($"define internal void {visit}(ptr %e) {{\nentry:\n");
+            Ownership(held, "  ", Witnessing.Visit, element, "%e");
+            held.Append("  ret void\n}\n\n");
+            _helpers.Append(held);
+        } else if (!SilType.IsBitwise(element)) {
             copy = $"@\"sable.elementcopy.{Mangled(element)}\"";
             destroy = $"@\"sable.elementdestroy.{Mangled(element)}\"";
             visit = $"@\"sable.elementvisit.{Mangled(element)}\"";

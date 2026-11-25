@@ -491,6 +491,25 @@ public sealed partial class LlvmEmitter {
                     return Typedef(DisplayName(slice),
                         Aggregate(DisplayName(slice) + "$slice", [("$array", slice.Parts.Elements[0]), ("start", SilType.Int), ("count", SilType.Int)], Size(slice), live: false));
 
+                // An inline array: its elements where it is, as a C array —
+                // a bounded one's after its count, under '$inline', for the
+                // formatters to show as many as it has.
+                case FixedArrayType inlineArray: {
+                    var elementBits = TypeLayout.Stride(inlineArray.Element) * 8;
+                    var elements = Node(
+                        $"!DICompositeType(tag: DW_TAG_array_type, baseType: {Type(inlineArray.Element) ?? Basic("uint8_t", 8, "DW_ATE_unsigned_char")}, size: {elementBits * inlineArray.Count}, "
+                        + $"elements: !{{{Node($"!DISubrange(count: {inlineArray.Count})")}}})"
+                    );
+                    if (!inlineArray.IsBounded) {
+                        return Typedef(DisplayName(inlineArray), elements);
+                    }
+
+                    return Typedef(DisplayName(inlineArray), Structure(DisplayName(inlineArray) + "$inline", Size(inlineArray), [
+                        Member("count", Int64, 8, 0),
+                        Member("elements", elements, elementBits / 8 * inlineArray.Count, TypeLayout.ElementsOffset(inlineArray)),
+                    ]));
+                }
+
                 case StructType structType when structType.Name.StartsWith("any$", StringComparison.Ordinal):
                     return Typedef(DisplayName(structType), Aggregate(DisplayName(structType) + "$existential", structType.Fields, Size(structType), live: false));
 

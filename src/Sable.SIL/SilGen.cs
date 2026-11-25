@@ -2470,7 +2470,7 @@ public sealed partial class SilGen {
             // struct a bounded one is bytes in the block instead (InlineField).
             // One too large to hold on a stack is refused (S7004).
             case ArrayTypeSymbol { ArrayKind: ArrayKind.Fixed or ArrayKind.Inline, Capacity: { } inlineCount } inlineArray: {
-                if (Lower(inlineArray.ElementType) is not { } inlineElement || IsMoveOnly(inlineElement)) {
+                if (Lower(inlineArray.ElementType) is not { } inlineElement || IsMoveOnly(inlineElement) || SilType.MentionsOpaque(inlineElement)) {
                     return null;
                 }
 
@@ -11817,6 +11817,9 @@ public sealed partial class SilGen {
             var error = errorBlock.AddArgument(type.Thrown);
             for (var i = borrows.Count - 1; i >= 0; i--) {
                 Unhold(borrows[i]);
+                if (_lentFrom.TryGetValue(borrows[i], out var lentSource)) {
+                    Unhold(lentSource);
+                }
             }
 
             Jump(new TryApplyInst(reference, type.Result, [..arguments], normal, errorBlock));
@@ -11848,6 +11851,11 @@ public sealed partial class SilGen {
                         break;
                     default:
                         Destroy(borrow);
+                        // An inline array's slice: the array it views, after.
+                        if (_lentFrom.TryGetValue(borrow, out var source)) {
+                            Release(source, failed);
+                        }
+
                         break;
                 }
             }
@@ -11882,6 +11890,7 @@ public sealed partial class SilGen {
 
             for (var i = borrows.Count - 1; i >= 0; i--) {
                 Release(borrows[i]);
+                _lentFrom.Remove(borrows[i]);
             }
 
             return result ?? (SilValue)UnitValue.Instance;

@@ -407,6 +407,10 @@ async fn whatIsThrownOfNoTypeInParticular() async {
         try skip(if: true, "later")
     }?.description() == "skipped: later")
     expectThrows(saying: "skipped: why") { try skip("why") }
+    expectThrows(TestSkip("why")) { try skip("why") }
+    expectThrows(FixtureError(message: "m")) {
+        throw FixtureError(message: "m")
+    }
     await expectThrows(saying: "m") {
         await Task.yield()
         throw FixtureError(message: "m")

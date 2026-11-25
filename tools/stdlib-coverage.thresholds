@@ -49,7 +49,6 @@ lib/Sable.Serialize/Statistics.sb                  0   0   # raise me: no tests 
 lib/Sable.Serialize/TextHelpers.sb                 0   0   # raise me: no tests yet
 lib/Sable.Serialize/Transform.sb                   0   0   # raise me: no tests yet
 lib/Sable.Testing/Assertions.sb                    0   0   # raise me: no tests yet
-lib/Sable.Testing/TestCase.sb                     45  40   # raise me
 
 # Under the default for a reason the tests cannot change.
 lib/Sable.Testing/BenchRunner.sb                    0   0   # run only in 'sable bench's harness, which BenchRunnerTests runs

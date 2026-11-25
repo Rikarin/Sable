@@ -254,6 +254,16 @@ fn whatIsNoRecordIsRefused(_ from: String, _ to: String) {
     expect(said.hasPrefix("the tar archive is corrupt: "), said)
 }
 
+@test(arguments: [("1.5", 1, 500_000_000), ("-1.25", -2, 750_000_000), ("7", 7, 0), ("3.1234567891", 3, 123_456_789)])
+fn aTimeMayHaveAnyFraction(_ text: String, _ seconds: Int, _ nanoseconds: Int) throws {
+    let made = archive { writer throws(IoError) in
+        var entry = TarEntry("x")
+        entry.attributes = ["mtime": text]
+        try writer.add(entry)
+    }
+    expect(try entries(made)[0].0.modified == UtcDateTime { secondsSinceEpoch: seconds, nanosecond: nanoseconds })
+}
+
 @test
 fn zerosPadTheRecords() throws {
     var made = archive { writer throws(IoError) in

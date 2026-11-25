@@ -3,15 +3,6 @@ module TimePeriodTests
 import Sable.Testing
 import Sable.Time
 
-fn periodError(_ text: String) -> ParseError? {
-    do {
-        _ = try Period.parse(text)
-        return none
-    } catch {
-        return error
-    }
-}
-
 @test
 fn periodsKeepTheirPartsApart() {
     let period = Period.of(years: 1, months: 14, days: 40)
@@ -29,33 +20,39 @@ fn periodsKeepTheirPartsApart() {
     assertEqual(Period.days(1).hashValue, Period.days(1).hashValue)
 }
 
+@test(arguments: [(Period.zero, "P0D"), (Period.of(years: 1, months: 2, days: 3), "P1Y2M3D"), (Period.months(-1), "P-1M")])
+fn periodsWriteAsISO8601(_ period: Period, _ text: String) {
+    assertEqual(period.toString(), text)
+}
+
 @test
-fn periodsWriteAsISO8601() {
-    assertEqual(Period.zero.toString(), "P0D")
-    assertEqual(Period.of(years: 1, months: 2, days: 3).toString(), "P1Y2M3D")
-    assertEqual(Period.months(-1).toString(), "P-1M")
+fn periodsDebugAsISO8601() {
     assertEqual(Period.days(10).debugDescription(), "P10D")
 }
 
-@test
-fn periodsReadISO8601() {
-    assertEqual(try! Period.parse("P1Y2M3D"), Period.of(years: 1, months: 2, days: 3))
-    assertEqual(try! Period.parse("p2w1d"), Period.days(15))
-    assertEqual(try! Period.parse("-P1M"), Period.months(-1))
-    assertEqual(try! Period.parse("+P1Y"), Period.years(1))
-    assertEqual(try! Period.parse("P-1M+2D"), Period.of(months: -1, days: 2))
-    assertEqual(try! Period.parse(Period.of(years: 7, days: -3).toString()), Period.of(years: 7, days: -3))
+@test(arguments: [
+    ("P1Y2M3D", Period.of(years: 1, months: 2, days: 3)),
+    ("p2w1d", Period.days(15)),
+    ("-P1M", Period.months(-1)),
+    ("+P1Y", Period.years(1)),
+    ("P-1M+2D", Period.of(months: -1, days: 2)),
+    (Period.of(years: 7, days: -3).toString(), Period.of(years: 7, days: -3)),
+])
+fn periodsReadISO8601(_ text: String, _ expected: Period) throws {
+    expect(try Period.parse(text) == expected)
 }
 
-@test
-fn aPeriodThatIsNotOneSaysWhere() {
-    assertEqual(periodError(""), ParseError.Empty)
-    assertEqual(periodError("1Y"), ParseError.Invalid(at: 0))
-    assertEqual(periodError("P"), ParseError.Invalid(at: 1))
-    assertEqual(periodError("PY"), ParseError.InvalidDigit(at: 1))
-    assertEqual(periodError("P1"), ParseError.Invalid(at: 2))
-    assertEqual(periodError("P1D1Y"), ParseError.Invalid(at: 3))
-    assertEqual(periodError("PT1H"), ParseError.InvalidDigit(at: 1))
-    assertEqual(periodError("P1X"), ParseError.Invalid(at: 2))
-    assertEqual(periodError("P99999999999999999999Y"), ParseError.Overflow)
+@test(arguments: [
+    ("", ParseError.Empty),
+    ("1Y", ParseError.Invalid(at: 0)),
+    ("P", ParseError.Invalid(at: 1)),
+    ("PY", ParseError.InvalidDigit(at: 1)),
+    ("P1", ParseError.Invalid(at: 2)),
+    ("P1D1Y", ParseError.Invalid(at: 3)),
+    ("PT1H", ParseError.InvalidDigit(at: 1)),
+    ("P1X", ParseError.Invalid(at: 2)),
+    ("P99999999999999999999Y", ParseError.Overflow),
+])
+fn aPeriodThatIsNotOneSaysWhere(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try Period.parse(text) }
 }

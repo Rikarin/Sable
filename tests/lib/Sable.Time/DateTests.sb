@@ -7,32 +7,18 @@ fn date(_ year: Int, _ month: Int, _ day: Int) -> Date {
     return Date.of(year: year, month: month, day: day)!
 }
 
-fn dateError(_ text: String) -> ParseError? {
-    do {
-        _ = try Date.parse(text)
-        return none
-    } catch {
-        return error
-    }
+@test(arguments: [(2023, 2, 29), (2024, 13, 1), (2024, 4, 31), (2024, 1, 0)])
+fn aDateIsOnlyOneThatExists(_ year: Int, _ month: Int, _ day: Int) {
+    expect(Date.of(year: year, month: month, day: day) == none)
 }
 
-fn patternError(_ text: String, _ pattern: String) -> ParseError? {
-    do {
-        _ = try Date.parse(text, pattern: pattern)
-        return none
-    } catch {
-        return error
-    }
+@test(arguments: [(2024, 367), (2023, 366)])
+fn aDayOfTheYearIsOnlyOneThatExists(_ year: Int, _ dayOfYear: Int) {
+    expect(Date.of(year: year, dayOfYear: dayOfYear) == none)
 }
 
 @test
-fn aDateIsOnlyOneThatExists() {
-    expect(Date.of(year: 2023, month: 2, day: 29) == none)
-    expect(Date.of(year: 2024, month: 13, day: 1) == none)
-    expect(Date.of(year: 2024, month: 4, day: 31) == none)
-    expect(Date.of(year: 2024, month: 1, day: 0) == none)
-    expect(Date.of(year: 2024, dayOfYear: 367) == none)
-    expect(Date.of(year: 2023, dayOfYear: 366) == none)
+fn theLastDayOfTheYearAndTheEpochAreDates() {
     assertEqual(Date.of(year: 2023, dayOfYear: 365)!, date(2023, 12, 31))
     assertEqual(Date.unixEpoch, date(1970, 1, 1))
 }
@@ -42,12 +28,14 @@ fn aDateCountsDaysFromTheEpoch() {
     assertEqual(date(1970, 1, 1).daysSinceEpoch, 0)
     assertEqual(date(1969, 12, 31).daysSinceEpoch, -1)
     assertEqual(date(2000, 3, 1).daysSinceEpoch, 11017)
-    var days = -800000
-    while days < 800000 {
-        assertEqual(Date.fromDaysSinceEpoch(days).daysSinceEpoch, days)
-        days += 9973
-    }
     assertEqual(Date.fromDaysSinceEpoch(-719528), date(0, 1, 1))
+}
+
+@test
+fn anyDaysFromTheEpochAreADateAndBack() {
+    forAll(Gen.number(in: -800000...800000), cases: 200) { (days: Int) in
+        expect(Date.fromDaysSinceEpoch(days).daysSinceEpoch == days)
+    }
 }
 
 @test
@@ -80,25 +68,40 @@ fn isoWeeksStartOnTheWeekOfTheFirstThursday() {
     assertEqual(Date.of(isoWeekYear: 2020, week: 53, weekday: .Sunday)!, date(2021, 1, 3))
     expect(Date.of(isoWeekYear: 2021, week: 53, weekday: .Monday) == none)
     expect(Date.of(isoWeekYear: 2021, week: 0, weekday: .Monday) == none)
-    // Every day's week reads back as the day.
-    var day = date(1999, 12, 1)
-    while day < date(2030, 2, 1) {
-        assertEqual(Date.of(isoWeekYear: day.isoWeekYear, week: day.isoWeek, weekday: day.weekday)!, day)
-        day = day.adding(days: 37)
-    }
 }
 
 @test
-fn addingMonthsClampsTheDay() {
-    assertEqual(date(2024, 1, 31).adding(months: 1), date(2024, 2, 29))
-    assertEqual(date(2023, 1, 31).adding(months: 1), date(2023, 2, 28))
-    assertEqual(date(2024, 3, 31).adding(months: -1), date(2024, 2, 29))
-    assertEqual(date(2024, 1, 15).adding(months: -13), date(2022, 12, 15))
-    assertEqual(date(2024, 1, 15).adding(months: 0), date(2024, 1, 15))
-    assertEqual(date(2024, 2, 29).adding(years: 1), date(2025, 2, 28))
-    assertEqual(date(2024, 2, 29).adding(years: 4), date(2028, 2, 29))
-    assertEqual(date(2024, 12, 31).adding(days: 1), date(2025, 1, 1))
-    assertEqual(date(2024, 12, 31).adding(days: 0), date(2024, 12, 31))
+fn anyDaysIsoWeekReadsBackAsTheDay() {
+    // 1999-12-01 to 2030-02-01.
+    forAll(Gen.number(in: 10926...21946), cases: 300) { (days: Int) in
+        let day = Date.fromDaysSinceEpoch(days)
+        expect(Date.of(isoWeekYear: day.isoWeekYear, week: day.isoWeek, weekday: day.weekday) == day)
+    }
+}
+
+@test(arguments: [
+    (date(2024, 1, 31), 1, date(2024, 2, 29)),
+    (date(2023, 1, 31), 1, date(2023, 2, 28)),
+    (date(2024, 3, 31), -1, date(2024, 2, 29)),
+    (date(2024, 1, 15), -13, date(2022, 12, 15)),
+    (date(2024, 1, 15), 0, date(2024, 1, 15)),
+])
+fn addingMonthsClampsTheDay(_ start: Date, _ months: Int, _ end: Date) {
+    assertEqual(start.adding(months: months), end)
+}
+
+@test(arguments: [(date(2024, 2, 29), 1, date(2025, 2, 28)), (date(2024, 2, 29), 4, date(2028, 2, 29))])
+fn addingYearsClampsTheDay(_ start: Date, _ years: Int, _ end: Date) {
+    assertEqual(start.adding(years: years), end)
+}
+
+@test(arguments: [(date(2024, 12, 31), 1, date(2025, 1, 1)), (date(2024, 12, 31), 0, date(2024, 12, 31))])
+fn addingDaysCarriesIntoTheMonthAndYear(_ start: Date, _ days: Int, _ end: Date) {
+    assertEqual(start.adding(days: days), end)
+}
+
+@test
+fn addingAPeriodAddsItsMonthsAndThenItsDays() {
     assertEqual(date(2024, 1, 31).adding(Period.of(months: 1, days: 1)), date(2024, 3, 1))
     assertEqual(date(2024, 3, 1).subtracting(Period.of(months: 1, days: 1)), date(2024, 1, 31))
 }
@@ -108,29 +111,33 @@ fn periodUntilAddsBackToTheOther() {
     assertEqual(date(2024, 1, 31).periodUntil(date(2024, 2, 29)), Period.of(days: 29))
     assertEqual(date(2024, 1, 31).periodUntil(date(2024, 3, 1)), Period.of(months: 1, days: 1))
     assertEqual(date(2020, 5, 5).periodUntil(date(2020, 5, 5)), Period.zero)
-    var start = date(2019, 11, 30)
-    var step = 0
-    while step < 60 {
-        let end = start.adding(days: step * 47 % 900 - 300)
-        let period = start.periodUntil(end)
-        assertEqual(start.adding(period), end)
-        assertEqual(start.daysUntil(end), end.daysSinceEpoch - start.daysSinceEpoch)
-        // Every part has the whole's sign.
-        let sign = end < start ? -1 : 1
-        assert(period.years * sign >= 0 && period.months * sign >= 0 && period.days * sign >= 0)
-        start = start.adding(days: 11)
-        step += 1
-    }
 }
 
 @test
-fn nextAndPreviousFindTheWeekday() {
+fn anyPeriodUntilADayAddsBackToIt() {
+    // Each within some years of 2020.
+    forAll(Gen.number(in: 16000...20000), Gen.number(in: -600...600), cases: 200) { (days: Int, length: Int) in
+        let start = Date.fromDaysSinceEpoch(days)
+        let end = start.adding(days: length)
+        let period = start.periodUntil(end)
+        expect(start.adding(period) == end)
+        expect(start.daysUntil(end) == length)
+        // Every part has the whole's sign.
+        let sign = length < 0 ? -1 : 1
+        expect(period.years * sign >= 0 && period.months * sign >= 0 && period.days * sign >= 0)
+    }
+}
+
+@test(arguments: [(.Saturday, date(2026, 11, 21)), (.Friday, date(2026, 11, 27))])
+fn nextFindsTheWeekday(_ weekday: Weekday, _ expected: Date) {
     let friday = date(2026, 11, 20)
-    assertEqual(friday.next(.Saturday), date(2026, 11, 21))
-    assertEqual(friday.next(.Friday), date(2026, 11, 27))
-    assertEqual(friday.previous(.Thursday), date(2026, 11, 19))
-    assertEqual(friday.previous(.Friday), date(2026, 11, 13))
-    assertEqual(friday.previous(.Saturday), date(2026, 11, 14))
+    assertEqual(friday.next(weekday), expected)
+}
+
+@test(arguments: [(.Thursday, date(2026, 11, 19)), (.Friday, date(2026, 11, 13)), (.Saturday, date(2026, 11, 14))])
+fn previousFindsTheWeekday(_ weekday: Weekday, _ expected: Date) {
+    let friday = date(2026, 11, 20)
+    assertEqual(friday.previous(weekday), expected)
 }
 
 @test
@@ -150,42 +157,62 @@ fn datesAreOrdered() {
     assertEqual(date(2026, 2, 2).hashValue, date(2026, 2, 2).hashValue)
 }
 
+@test(arguments: [
+    (date(2026, 1, 5), "2026-01-05"),
+    (date(987, 7, 4), "0987-07-04"),
+    (date(10000, 1, 1), "+10000-01-01"),
+    (date(-1, 12, 31), "-0001-12-31"),
+])
+fn datesWriteAsISO8601(_ day: Date, _ text: String) {
+    assertEqual(day.toString(), text)
+}
+
 @test
-fn datesWriteAsISO8601() {
-    assertEqual(date(2026, 1, 5).toString(), "2026-01-05")
-    assertEqual(date(987, 7, 4).toString(), "0987-07-04")
-    assertEqual(date(10000, 1, 1).toString(), "+10000-01-01")
-    assertEqual(date(-1, 12, 31).toString(), "-0001-12-31")
+fn datesDebugAsISO8601() {
     assertEqual(date(2026, 1, 5).debugDescription(), "2026-01-05")
 }
 
-@test
-fn datesReadEveryISO8601Form() {
-    assertEqual(try! Date.parse("2026-11-17"), date(2026, 11, 17))
-    assertEqual(try! Date.parse("20261117"), date(2026, 11, 17))
-    assertEqual(try! Date.parse("2026-321"), date(2026, 11, 17))
-    assertEqual(try! Date.parse("2026321"), date(2026, 11, 17))
-    assertEqual(try! Date.parse("2026-W47-2"), date(2026, 11, 17))
-    assertEqual(try! Date.parse("2026W472"), date(2026, 11, 17))
-    assertEqual(try! Date.parse("2026-W47"), date(2026, 11, 16))
-    assertEqual(try! Date.parse("+10000-01-01"), date(10000, 1, 1))
-    assertEqual(try! Date.parse("-0001-12-31"), date(-1, 12, 31))
-    assertEqual(try! Date.parse(date(-1, 12, 31).toString()), date(-1, 12, 31))
+@test(arguments: [
+    ("2026-11-17", date(2026, 11, 17)),
+    ("20261117", date(2026, 11, 17)),
+    ("2026-321", date(2026, 11, 17)),
+    ("2026321", date(2026, 11, 17)),
+    ("2026-W47-2", date(2026, 11, 17)),
+    ("2026W472", date(2026, 11, 17)),
+    ("2026-W47", date(2026, 11, 16)),
+    ("+10000-01-01", date(10000, 1, 1)),
+    ("-0001-12-31", date(-1, 12, 31)),
+    (date(-1, 12, 31).toString(), date(-1, 12, 31)),
+])
+fn datesReadEveryISO8601Form(_ text: String, _ expected: Date) throws {
+    expect(try Date.parse(text) == expected)
 }
 
-@test
-fn aDateThatIsNotOneSaysWhere() {
-    assertEqual(dateError(""), ParseError.Empty)
-    assertEqual(dateError("2026-13-01"), ParseError.Invalid(at: 5))
-    assertEqual(dateError("2026-02-30"), ParseError.Invalid(at: 8))
-    assertEqual(dateError("2026-366"), ParseError.Invalid(at: 5))
-    assertEqual(dateError("2026-W54"), ParseError.Invalid(at: 6))
-    assertEqual(dateError("2026-W47-8"), ParseError.Invalid(at: 9))
-    assertEqual(dateError("202611"), ParseError.InvalidDigit(at: 6))
-    assertEqual(dateError("2026/11/17"), ParseError.Invalid(at: 4))
-    assertEqual(dateError("2026-11-17T"), ParseError.Invalid(at: 10))
-    assertEqual(dateError("2026-11"), ParseError.Invalid(at: 7))
-    assertEqual(dateError("+100-01-01"), ParseError.InvalidDigit(at: 4))
+@test(arguments: [
+    ("", ParseError.Empty),
+    ("2026-13-01", ParseError.Invalid(at: 5)),
+    ("2026-02-30", ParseError.Invalid(at: 8)),
+    ("2026-366", ParseError.Invalid(at: 5)),
+    ("2026-W54", ParseError.Invalid(at: 6)),
+    ("2026-W47-8", ParseError.Invalid(at: 9)),
+    ("202611", ParseError.InvalidDigit(at: 6)),
+    ("2026/11/17", ParseError.Invalid(at: 4)),
+    ("2026-11-17T", ParseError.Invalid(at: 10)),
+    ("2026-11", ParseError.Invalid(at: 7)),
+    ("+100-01-01", ParseError.InvalidDigit(at: 4)),
+])
+fn aDateThatIsNotOneSaysWhere(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try Date.parse(text) }
+}
+
+@test(arguments: [
+    ("Monday, 17 November 2026", "dddd, d MMMM yyyy", ParseError.Invalid(at: 0)),
+    ("30/02/2026", "dd/MM/yyyy", ParseError.Invalid(at: 0)),
+    ("17/13/2026", "dd/MM/yyyy", ParseError.Invalid(at: 3)),
+    ("", "dd/MM/yyyy", ParseError.Empty),
+])
+fn aPatternThatDoesNotFitTheDateSaysWhere(_ text: String, _ pattern: String, _ error: ParseError) {
+    expectThrows(error) { _ = try Date.parse(text, pattern: pattern) }
 }
 
 @test
@@ -198,62 +225,49 @@ fn datesWriteAndReadPatterns() {
     assertEqual(try! Date.parse("17/11/26", pattern: "dd/MM/yy"), day)
     assertEqual(try! Date.parse("1/2/99", pattern: "d/M/yy"), date(1999, 2, 1))
     assertEqual(try! Date.parse("11/17/2026", pattern: "d"), day)
-    assertEqual(patternError("Monday, 17 November 2026", "dddd, d MMMM yyyy"), ParseError.Invalid(at: 0))
-    assertEqual(patternError("30/02/2026", "dd/MM/yyyy"), ParseError.Invalid(at: 0))
-    assertEqual(patternError("17/13/2026", "dd/MM/yyyy"), ParseError.Invalid(at: 3))
-    assertEqual(patternError("", "dd/MM/yyyy"), ParseError.Empty)
 }
 
-@test
-fn datesCountAcrossManyThousandYears() {
-    // Each way against a count of the days: past the years the quick
-    // arithmetic is for, on either side.
-    for start in [-40000, -32810, -32100, -400, 1500, 820000, 999990, 1000400] {
-        var year = start
-        var days = Date.of(year: year, month: 1, day: 1)!.daysSinceEpoch
-        while year < start + 130 {
-            var month = 1
-            while month <= 12 {
-                let length = daysInMonth(year, month)
-                for day in [1, 15, length] {
-                    let date = Date.of(year: year, month: month, day: day)!
-                    assertEqual(date.daysSinceEpoch, days + day - 1)
-                    assertEqual(Date.fromDaysSinceEpoch(days + day - 1), date)
-                }
-                days += length
-                month += 1
+// Each way against a count of the days: past the years the quick
+// arithmetic is for, on either side.
+@test(arguments: [-40000, -32810, -32100, -400, 1500, 820000, 999990, 1000400])
+fn datesCountAcrossManyThousandYears(_ start: Int) {
+    var year = start
+    var days = Date.of(year: year, month: 1, day: 1)!.daysSinceEpoch
+    while year < start + 130 {
+        var month = 1
+        while month <= 12 {
+            let length = daysInMonth(year, month)
+            for day in [1, 15, length] {
+                let date = Date.of(year: year, month: month, day: day)!
+                assertEqual(date.daysSinceEpoch, days + day - 1)
+                assertEqual(Date.fromDaysSinceEpoch(days + day - 1), date)
             }
-            year += 1
+            days += length
+            month += 1
         }
+        year += 1
     }
-    assertEqual(Date.of(year: 1970, month: 1, day: 1)!.daysSinceEpoch, 0)
+}
+
+@test(arguments: [
+    (5, 1, 2, "0005-01-02"),
+    (0, 12, 31, "0000-12-31"),
+    (-7, 10, 31, "-0007-10-31"),
+    (-12345, 10, 31, "-12345-10-31"),
+    (12345, 10, 31, "+12345-10-31"),
+    (9999, 10, 31, "9999-10-31"),
+])
+fn datesWriteEveryYear(_ year: Int, _ month: Int, _ day: Int, _ text: String) {
+    assertEqual(Date.of(year: year, month: month, day: day)!.toString(), text)
+}
+
+@test(arguments: [("2026-11-17é", .Invalid(at: 10)), ("2026-1é-17", .InvalidDigit(at: 6)), ("é2026", .InvalidDigit(at: 0))])
+fn errorsCountScalarsNotBytes(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try Date.parse(text) }
 }
 
 @test
-fn datesWriteEveryYear() {
-    assertEqual(Date.of(year: 5, month: 1, day: 2)!.toString(), "0005-01-02")
-    assertEqual(Date.of(year: 0, month: 12, day: 31)!.toString(), "0000-12-31")
-    assertEqual(Date.of(year: -7, month: 10, day: 31)!.toString(), "-0007-10-31")
-    assertEqual(Date.of(year: -12345, month: 10, day: 31)!.toString(), "-12345-10-31")
-    assertEqual(Date.of(year: 12345, month: 10, day: 31)!.toString(), "+12345-10-31")
-    assertEqual(Date.of(year: 9999, month: 10, day: 31)!.toString(), "9999-10-31")
-}
-
-@test
-fn errorsCountScalarsNotBytes() {
-    for (text, at) in [("2026-11-17é", 10), ("2026-1é-17", 6), ("é2026", 0)] {
-        do {
-            _ = try Date.parse(text)
-            assert(false)
-        } catch {
-            match error {
-                case .Invalid(let place)      => assertEqual(place, at)
-                case .InvalidDigit(let place) => assertEqual(place, at)
-                case _                        => assert(false)
-            }
-        }
-    }
-    // After the minus sign of three bytes.
+fn anOffsetsMinusSignIsOneScalarOfThreeBytes() throws {
     expectThrows(ParseError.InvalidDigit(at: 24)) { _ = try OffsetDateTime.parse("2026-11-17T01:02:03−01:0x") }
-    assertEqual(try! OffsetDateTime.parse("2026-11-17T01:02:03−01:00").offset.totalSeconds, -3600)
+    expect(try OffsetDateTime.parse("2026-11-17T01:02:03−01:00").offset.totalSeconds == -3600)
 }

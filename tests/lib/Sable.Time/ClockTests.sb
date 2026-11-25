@@ -62,7 +62,7 @@ fn aCancelledSleepThrowsOnEveryClock() async {
         sleeper.cancel()
     }
     for sleeper in sleepers {
-        assert(await sleeper.value)
+        expect(await sleeper.value, "the sleep was cancelled")
     }
 }
 
@@ -93,12 +93,12 @@ fn measuringIsOnTheClock() async {
 
 @test
 fn measuringThrowsWhatTheBodyThrows() async {
-    expectThrows {
+    expectThrows(Oops.self) {
         _ = try measure { () throws(Oops) -> Void in
         throw Oops()
     }
     }
-    await expectThrows {
+    await expectThrows(Oops.self) {
         _ = try await measure { () throws(Oops) -> Void in
         await Task.yield()
         throw Oops()

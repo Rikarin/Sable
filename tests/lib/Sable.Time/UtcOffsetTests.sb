@@ -3,15 +3,6 @@ module TimeUtcOffsetTests
 import Sable.Testing
 import Sable.Time
 
-fn offsetError(_ text: String) -> ParseError? {
-    do {
-        _ = try UtcOffset.parse(text)
-        return none
-    } catch {
-        return error
-    }
-}
-
 @test
 fn anOffsetIsAtMostADayAndTwoHours() {
     assertEqual(UtcOffset.of(seconds: 93599)!.toString(), "+25:59:59")
@@ -40,22 +31,26 @@ fn anOffsetHasPartsWithItsSign() {
     assertEqual(UtcOffset.hours(5).debugDescription(), "+05:00")
 }
 
-@test
-fn offsetsReadEveryISO8601Form() {
-    assertEqual(try! UtcOffset.parse("Z"), UtcOffset.utc)
-    assertEqual(try! UtcOffset.parse("+05:30"), UtcOffset.of(hours: 5, minutes: 30)!)
-    assertEqual(try! UtcOffset.parse("-0400"), UtcOffset.hours(-4))
-    assertEqual(try! UtcOffset.parse("+01"), UtcOffset.hours(1))
-    assertEqual(try! UtcOffset.parse("+00:19:32"), UtcOffset.of(seconds: 1172)!)
-    assertEqual(try! UtcOffset.parse("−02:00"), UtcOffset.hours(-2))
+@test(arguments: [
+    ("Z", UtcOffset.utc),
+    ("+05:30", UtcOffset.of(hours: 5, minutes: 30)!),
+    ("-0400", UtcOffset.hours(-4)),
+    ("+01", UtcOffset.hours(1)),
+    ("+00:19:32", UtcOffset.of(seconds: 1172)!),
+    ("−02:00", UtcOffset.hours(-2)),
+])
+fn offsetsReadEveryISO8601Form(_ text: String, _ expected: UtcOffset) throws {
+    expect(try UtcOffset.parse(text) == expected)
 }
 
-@test
-fn anOffsetThatIsNotOneSaysWhere() {
-    assertEqual(offsetError(""), ParseError.Empty)
-    assertEqual(offsetError("05:00"), ParseError.Invalid(at: 0))
-    assertEqual(offsetError("+26:00"), ParseError.Invalid(at: 1))
-    assertEqual(offsetError("+05:60"), ParseError.Invalid(at: 1))
-    assertEqual(offsetError("+5"), ParseError.InvalidDigit(at: 2))
-    assertEqual(offsetError("+05:00x"), ParseError.Invalid(at: 6))
+@test(arguments: [
+    ("", ParseError.Empty),
+    ("05:00", ParseError.Invalid(at: 0)),
+    ("+26:00", ParseError.Invalid(at: 1)),
+    ("+05:60", ParseError.Invalid(at: 1)),
+    ("+5", ParseError.InvalidDigit(at: 2)),
+    ("+05:00x", ParseError.Invalid(at: 6)),
+])
+fn anOffsetThatIsNotOneSaysWhere(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try UtcOffset.parse(text) }
 }

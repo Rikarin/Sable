@@ -3,15 +3,6 @@ module TimeTimeOfDayTests
 import Sable.Testing
 import Sable.Time
 
-fn timeError(_ text: String) -> ParseError? {
-    do {
-        _ = try TimeOfDay.parse(text)
-        return none
-    } catch {
-        return error
-    }
-}
-
 @test
 fn aTimeIsOnlyOneOnTheClock() {
     expect(TimeOfDay.of(hour: 24, minute: 0) == none)
@@ -51,30 +42,34 @@ fn timesWriteAsISO8601() {
     assertEqual(TimeOfDay.of(hour: 9, minute: 5, second: 3, nanosecond: 1)!.debugDescription(), "09:05:03.000000001")
 }
 
-@test
-fn timesReadEveryISO8601Form() {
-    assertEqual(try! TimeOfDay.parse("09:05:03"), TimeOfDay.of(hour: 9, minute: 5, second: 3)!)
-    assertEqual(try! TimeOfDay.parse("T090503"), TimeOfDay.of(hour: 9, minute: 5, second: 3)!)
-    assertEqual(try! TimeOfDay.parse("09:05"), TimeOfDay.of(hour: 9, minute: 5)!)
-    assertEqual(try! TimeOfDay.parse("0905"), TimeOfDay.of(hour: 9, minute: 5)!)
-    assertEqual(try! TimeOfDay.parse("09"), TimeOfDay.of(hour: 9, minute: 0)!)
-    assertEqual(try! TimeOfDay.parse("09.5"), TimeOfDay.of(hour: 9, minute: 30)!)
-    assertEqual(try! TimeOfDay.parse("09:30,25"), TimeOfDay.of(hour: 9, minute: 30, second: 15)!)
-    assertEqual(try! TimeOfDay.parse("09:05:03.123456789987"), TimeOfDay.of(hour: 9, minute: 5, second: 3, nanosecond: 123456789)!)
-    assertEqual(try! TimeOfDay.parse("23:59:59.999999999"), TimeOfDay.max)
+@test(arguments: [
+    ("09:05:03", TimeOfDay.of(hour: 9, minute: 5, second: 3)!),
+    ("T090503", TimeOfDay.of(hour: 9, minute: 5, second: 3)!),
+    ("09:05", TimeOfDay.of(hour: 9, minute: 5)!),
+    ("0905", TimeOfDay.of(hour: 9, minute: 5)!),
+    ("09", TimeOfDay.of(hour: 9, minute: 0)!),
+    ("09.5", TimeOfDay.of(hour: 9, minute: 30)!),
+    ("09:30,25", TimeOfDay.of(hour: 9, minute: 30, second: 15)!),
+    ("09:05:03.123456789987", TimeOfDay.of(hour: 9, minute: 5, second: 3, nanosecond: 123456789)!),
+    ("23:59:59.999999999", TimeOfDay.max),
+])
+fn timesReadEveryISO8601Form(_ text: String, _ expected: TimeOfDay) throws {
+    expect(try TimeOfDay.parse(text) == expected)
 }
 
-@test
-fn aTimeThatIsNotOneSaysWhere() {
-    assertEqual(timeError(""), ParseError.Empty)
-    assertEqual(timeError("24:00"), ParseError.Invalid(at: 0))
-    assertEqual(timeError("25:00"), ParseError.Invalid(at: 0))
-    assertEqual(timeError("12:60"), ParseError.Invalid(at: 3))
-    assertEqual(timeError("12:00:60"), ParseError.Invalid(at: 6))
-    assertEqual(timeError("12:00:00."), ParseError.InvalidDigit(at: 9))
-    assertEqual(timeError("1"), ParseError.InvalidDigit(at: 1))
-    assertEqual(timeError("12:0"), ParseError.InvalidDigit(at: 4))
-    assertEqual(timeError("12h"), ParseError.Invalid(at: 2))
+@test(arguments: [
+    ("", ParseError.Empty),
+    ("24:00", ParseError.Invalid(at: 0)),
+    ("25:00", ParseError.Invalid(at: 0)),
+    ("12:60", ParseError.Invalid(at: 3)),
+    ("12:00:60", ParseError.Invalid(at: 6)),
+    ("12:00:00.", ParseError.InvalidDigit(at: 9)),
+    ("1", ParseError.InvalidDigit(at: 1)),
+    ("12:0", ParseError.InvalidDigit(at: 4)),
+    ("12h", ParseError.Invalid(at: 2)),
+])
+fn aTimeThatIsNotOneSaysWhere(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try TimeOfDay.parse(text) }
 }
 
 @test

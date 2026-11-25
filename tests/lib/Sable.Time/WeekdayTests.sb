@@ -18,15 +18,20 @@ fn weekdaysAreNumberedFromMonday() {
     expect(Weekday.of(8) == none)
 }
 
+@test(arguments: [(Weekday.Wednesday, -10, Weekday.Sunday), (Weekday.Wednesday, 14, Weekday.Wednesday)])
+fn weekdaysAddedToGoRoundTheWeek(_ weekday: Weekday, _ days: Int, _ expected: Weekday) {
+    assertEqual(weekday.adding(days), expected)
+}
+
+@test(arguments: [(Weekday.Tuesday, .Tuesday, 0), (Weekday.Sunday, .Monday, 1), (Weekday.Monday, .Sunday, 6)])
+fn weekdaysCountTheDaysUntilAnother(_ weekday: Weekday, _ other: Weekday, _ days: Int) {
+    assertEqual(weekday.daysUntil(other), days)
+}
+
 @test
 fn weekdaysGoRoundTheWeek() {
     assertEqual(Weekday.Sunday.next, Weekday.Monday)
     assertEqual(Weekday.Monday.previous, Weekday.Sunday)
-    assertEqual(Weekday.Wednesday.adding(-10), Weekday.Sunday)
-    assertEqual(Weekday.Wednesday.adding(14), Weekday.Wednesday)
-    assertEqual(Weekday.Tuesday.daysUntil(.Tuesday), 0)
-    assertEqual(Weekday.Sunday.daysUntil(.Monday), 1)
-    assertEqual(Weekday.Monday.daysUntil(.Sunday), 6)
 }
 
 @test

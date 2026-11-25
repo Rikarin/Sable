@@ -10,24 +10,6 @@ fn ns(_ count: Int) -> Duration {
     return Duration.nanoseconds(count)
 }
 
-fn parseError(_ text: String) -> ParseError? {
-    do {
-        _ = try Duration.parse(text)
-        return none
-    } catch {
-        return error
-    }
-}
-
-fn isoError(_ text: String) -> ParseError? {
-    do {
-        _ = try Duration.parse(iso8601: text)
-        return none
-    } catch {
-        return error
-    }
-}
-
 // ---- Units ------------------------------------------------------------------
 
 @test
@@ -106,6 +88,20 @@ fn fractionsUnderANanosecondVanish() {
     assertEqual(Duration.zero * 1.0e300, Duration.zero)
 }
 
+@test(arguments: [
+    (9223372036854774784.0, ns(9223372036854774784)),
+    (9223372036854775808.0, none),
+    (-9223372036854775808.0, Duration.min),
+    (-9223372036854777856.0, none),
+    (1.0e19, none),
+    (F64.nan, none),
+    (F64.infinity, none),
+    (1.0e300, none),
+])
+fn aFractionOfNanosecondsIsExactOrNone(_ value: F64, _ expected: Duration?) {
+    assertEqual(Duration.checked(value, of: ns(1)), expected)
+}
+
 @test
 fn fractionsAreExactAtTheLimits() {
     assertEqual(Duration.max * 1.0, Duration.max)
@@ -113,14 +109,6 @@ fn fractionsAreExactAtTheLimits() {
     assertEqual(1.0 * Duration.max, Duration.max)
     assertEqual(Duration.max.checkedMul(-1.0), ns(-Int.max))
     assertEqual(Duration.min.checkedMul(-1.0), none)
-    assertEqual(Duration.checked(9223372036854774784.0, of: ns(1)), ns(9223372036854774784))
-    assertEqual(Duration.checked(9223372036854775808.0, of: ns(1)), none)
-    assertEqual(Duration.checked(-9223372036854775808.0, of: ns(1)), Duration.min)
-    assertEqual(Duration.checked(-9223372036854777856.0, of: ns(1)), none)
-    assertEqual(Duration.checked(1.0e19, of: ns(1)), none)
-    assertEqual(Duration.checked(F64.nan, of: ns(1)), none)
-    assertEqual(Duration.checked(F64.infinity, of: ns(1)), none)
-    assertEqual(Duration.checked(1.0e300, of: ns(1)), none)
 }
 
 @test(traps: "does not fit")
@@ -230,24 +218,24 @@ fn saturatingArithmeticGivesTheLimitsAtTheEdges() {
 
 // ---- Rounding ---------------------------------------------------------------
 
-@test
-fn roundingFollowsItsRule() {
-    let unit = ns(10)
+@test(arguments: [
+    (25, [30, 20, 30, 20, 20, 30]),
+    (-25, [-30, -20, -20, -30, -20, -30]),
+    (35, [40, 40, 40, 30, 30, 40]),
+    (24, [20, 20, 30, 20, 20, 30]),
+    (-26, [-30, -30, -20, -30, -20, -30]),
+    (40, [40, 40, 40, 40, 40, 40]),
+    (0, [0, 0, 0, 0, 0, 0]),
+])
+fn roundingFollowsItsRule(_ value: Int, _ expected: Int[>..]) {
     let rules: RoundingRule[] = [.ToNearestOrAwayFromZero, .ToNearestOrEven, .Up, .Down, .TowardZero, .AwayFromZero]
-    let cases: (Int, Int[])[] = [
-        (25, [30, 20, 30, 20, 20, 30]),
-        (-25, [-30, -20, -20, -30, -20, -30]),
-        (35, [40, 40, 40, 30, 30, 40]),
-        (24, [20, 20, 30, 20, 20, 30]),
-        (-26, [-30, -30, -20, -30, -20, -30]),
-        (40, [40, 40, 40, 40, 40, 40]),
-        (0, [0, 0, 0, 0, 0, 0]),
-    ]
-    for (value, wanted) in cases {
-        for i in 0..<rules.count {
-            assertEqual(ns(value).rounded(to: unit, rules[i]), ns(wanted[i]))
-        }
+    for i in 0..<rules.count {
+        expect(ns(value).rounded(to: ns(10), rules[i]) == ns(expected[i]), "\(rules[i]:?)")
     }
+}
+
+@test
+fn roundingIsToTheUnit() {
     assertEqual(Duration.milliseconds(1500).rounded(to: Duration.seconds(1)), Duration.seconds(2))
     assertEqual(Duration.seconds(-59).truncated(to: Duration.minutes(1)), Duration.zero)
 }
@@ -279,24 +267,30 @@ fn aUnitOfNoTimeIsRefused() {
 
 // ---- Text -------------------------------------------------------------------
 
+@test(arguments: [
+    (Duration.zero, "0s"),
+    (ns(1), "1ns"),
+    (ns(-999), "-999ns"),
+    (ns(1_000), "1µs"),
+    (ns(1_001), "1.001µs"),
+    (ns(999_999), "999.999µs"),
+    (ns(1_000_000), "1ms"),
+    (ns(-12_000_001), "-12.000001ms"),
+    (Duration.milliseconds(1_500), "1.5s"),
+    (ns(59_999_999_999), "59.999999999s"),
+    (Duration.minutes(1), "1m"),
+    (Duration.seconds(3_601), "1h 1s"),
+    (Duration.seconds(3_723), "1h 2m 3s"),
+    (Duration.days(2), "48h"),
+    (Duration.max, "2562047h 47m 16.854775807s"),
+    (Duration.min, "-2562047h 47m 16.854775808s"),
+])
+fn textIsExact(_ duration: Duration, _ text: String) {
+    assertEqual(duration.toString(), text)
+}
+
 @test
-fn textIsExact() {
-    assertEqual(Duration.zero.toString(), "0s")
-    assertEqual(ns(1).toString(), "1ns")
-    assertEqual(ns(-999).toString(), "-999ns")
-    assertEqual(ns(1_000).toString(), "1µs")
-    assertEqual(ns(1_001).toString(), "1.001µs")
-    assertEqual(ns(999_999).toString(), "999.999µs")
-    assertEqual(ns(1_000_000).toString(), "1ms")
-    assertEqual(ns(-12_000_001).toString(), "-12.000001ms")
-    assertEqual(Duration.milliseconds(1_500).toString(), "1.5s")
-    assertEqual(ns(59_999_999_999).toString(), "59.999999999s")
-    assertEqual(Duration.minutes(1).toString(), "1m")
-    assertEqual(Duration.seconds(3_601).toString(), "1h 1s")
-    assertEqual(Duration.seconds(3_723).toString(), "1h 2m 3s")
-    assertEqual(Duration.days(2).toString(), "48h")
-    assertEqual(Duration.max.toString(), "2562047h 47m 16.854775807s")
-    assertEqual(Duration.min.toString(), "-2562047h 47m 16.854775808s")
+fn debugTextIsTheNanoseconds() {
     assertEqual(Duration.min.debugDescription(), "Duration.nanoseconds(-9223372036854775808)")
 }
 
@@ -322,121 +316,151 @@ fn textHonoursItsSpec() {
 }
 
 @test
-fn textReadsBackTheSame() {
-    for n in [0, 1, -1, 999, 1000, 1001, 999_999_999, 1_000_000_001, 59_999_999_999, 60_000_000_000, 3_600_000_000_001, Int.max, Int.min, Int.min + 1] {
-        assertEqual(try! Duration.parse(ns(n).toString()), ns(n))
-        assertEqual(try! Duration.parse(ns(n).iso8601()), ns(n))
-        assertEqual(try! Duration.parse(iso8601: ns(n).iso8601()), ns(n))
-    }
-    var n = Int.max
-    while n != 0 {
-        assertEqual(try! Duration.parse(ns(n).toString()), ns(n))
-        assertEqual(try! Duration.parse(ns(-n).iso8601()), ns(-n))
-        n = n / 7
+fn textReadsBackTheSame() throws {
+    forAll(cases: 300) { (n: Int) in
+        expect(try Duration.parse(ns(n).toString()) == ns(n))
+        expect(try Duration.parse(ns(n).iso8601()) == ns(n))
+        expect(try Duration.parse(iso8601: ns(n).iso8601()) == ns(n))
     }
 }
 
-@test
-fn textIsReadInAnyParts() {
-    assertEqual(try! Duration.parse("1d 2h"), Duration.hours(26))
-    assertEqual(try! Duration.parse("2h30m"), Duration.minutes(150))
-    assertEqual(try! Duration.parse("+1.5h"), Duration.minutes(90))
-    assertEqual(try! Duration.parse(".5s"), Duration.milliseconds(500))
-    assertEqual(try! Duration.parse("5.s"), Duration.seconds(5))
-    assertEqual(try! Duration.parse("007s"), Duration.seconds(7))
+@test(arguments: [
+    0, 1, -1, 999, 1000, 1001, 999_999_999, 1_000_000_001, 59_999_999_999, 60_000_000_000, 3_600_000_000_001, Int.max, Int.min, Int.min + 1,
+])
+fn textAtTheEdgesOfItsUnitsReadsBackTheSame(_ n: Int) throws {
+    expect(try Duration.parse(ns(n).toString()) == ns(n))
+    expect(try Duration.parse(ns(n).iso8601()) == ns(n))
+    expect(try Duration.parse(iso8601: ns(n).iso8601()) == ns(n))
 }
 
-@test
-fn textUnderANanosecondIsRounded() {
-    assertEqual(try! Duration.parse("0.4ns"), ns(0))
-    assertEqual(try! Duration.parse("0.5ns"), ns(0))
-    assertEqual(try! Duration.parse("0.50000000000000000000000000001ns"), ns(1))
-    assertEqual(try! Duration.parse("1.5ns"), ns(2))
-    assertEqual(try! Duration.parse("-1.5ns"), ns(-2))
-    assertEqual(try! Duration.parse("2.5ns"), ns(2))
+@test(arguments: [
+    ("1d 2h", Duration.hours(26)),
+    ("2h30m", Duration.minutes(150)),
+    ("+1.5h", Duration.minutes(90)),
+    (".5s", Duration.milliseconds(500)),
+    ("5.s", Duration.seconds(5)),
+    ("007s", Duration.seconds(7)),
+])
+fn textIsReadInAnyParts(_ text: String, _ expected: Duration) throws {
+    expect(try Duration.parse(text) == expected)
+}
+
+@test(arguments: [
+    ("0.4ns", ns(0)),
+    ("0.5ns", ns(0)),
+    ("0.50000000000000000000000000001ns", ns(1)),
+    ("1.5ns", ns(2)),
+    ("-1.5ns", ns(-2)),
+    ("2.5ns", ns(2)),
     // Rounded once, after the parts are added.
-    assertEqual(try! Duration.parse("0.4ns 0.4ns"), ns(1))
-    assertEqual(try! Duration.parse("0.9ns 0.6ns 0.5ns"), ns(2))
-    assertEqual(try! Duration.parse("0.333333333333333333333333333333h"), Duration.minutes(20))
+    ("0.4ns 0.4ns", ns(1)),
+    ("0.9ns 0.6ns 0.5ns", ns(2)),
+    ("0.333333333333333333333333333333h", Duration.minutes(20)),
+])
+fn textUnderANanosecondIsRounded(_ text: String, _ expected: Duration) throws {
+    expect(try Duration.parse(text) == expected)
 }
 
-@test
-fn textPastTheLimitsOverflows() {
-    assertEqual(try! Duration.parse("9223372036854775807ns"), Duration.max)
-    assertEqual(try! Duration.parse("9223372036854775807.4ns"), Duration.max)
-    assertEqual(try! Duration.parse("-9223372036854775808ns"), Duration.min)
-    assertEqual(parseError("9223372036854775807.5ns"), ParseError.Overflow)
-    assertEqual(parseError("9223372036854775808ns"), ParseError.Overflow)
-    assertEqual(parseError("-9223372036854775809ns"), ParseError.Underflow)
-    assertEqual(parseError("-9223372036854775808.6ns"), ParseError.Underflow)
-    assertEqual(parseError("999999999999999999999999999999999999999999d"), ParseError.Overflow)
-    assertEqual(parseError("-2562047h 48m"), ParseError.Underflow)
+@test(arguments: [
+    ("9223372036854775807.5ns", ParseError.Overflow),
+    ("9223372036854775808ns", ParseError.Overflow),
+    ("-9223372036854775809ns", ParseError.Underflow),
+    ("-9223372036854775808.6ns", ParseError.Underflow),
+    ("999999999999999999999999999999999999999999d", ParseError.Overflow),
+    ("-2562047h 48m", ParseError.Underflow),
+])
+fn textPastTheLimitsOverflows(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try Duration.parse(text) }
 }
 
-@test
-fn textThatIsNoDurationSaysWhere() {
-    assertEqual(parseError("  "), ParseError.Empty)
-    assertEqual(parseError("-"), ParseError.Empty)
-    assertEqual(parseError("5"), ParseError.Invalid(at: 1))
-    assertEqual(parseError("5x"), ParseError.Invalid(at: 1))
-    assertEqual(parseError("1,5s"), ParseError.Invalid(at: 1))
-    assertEqual(parseError("."), ParseError.InvalidDigit(at: 0))
-    assertEqual(parseError("1h -2m"), ParseError.InvalidDigit(at: 3))
-    assertEqual(parseError("1.5.5s"), ParseError.Invalid(at: 3))
+@test(arguments: [
+    ("9223372036854775807ns", Duration.max),
+    ("9223372036854775807.4ns", Duration.max),
+    ("-9223372036854775808ns", Duration.min),
+])
+fn textAtTheLimitsIsRead(_ text: String, _ expected: Duration) throws {
+    expect(try Duration.parse(text) == expected)
+}
+
+@test(arguments: [
+    ("  ", ParseError.Empty),
+    ("-", ParseError.Empty),
+    ("5", ParseError.Invalid(at: 1)),
+    ("5x", ParseError.Invalid(at: 1)),
+    ("1,5s", ParseError.Invalid(at: 1)),
+    (".", ParseError.InvalidDigit(at: 0)),
+    ("1h -2m", ParseError.InvalidDigit(at: 3)),
+    ("1.5.5s", ParseError.Invalid(at: 3)),
+])
+fn textThatIsNoDurationSaysWhere(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try Duration.parse(text) }
 }
 
 // ---- ISO 8601 ---------------------------------------------------------------
 
-@test
-fn iso8601IsHoursMinutesAndSeconds() {
-    assertEqual(Duration.zero.iso8601(), "PT0S")
-    assertEqual(ns(1).iso8601(), "PT0.000000001S")
-    assertEqual(Duration.milliseconds(-1_500).iso8601(), "-PT1.5S")
-    assertEqual(Duration.hours(1).iso8601(), "PT1H")
-    assertEqual(Duration.seconds(3_605).iso8601(), "PT1H5S")
-    assertEqual(Duration.seconds(150).iso8601(), "PT2M30S")
-    assertEqual(Duration.max.iso8601(), "PT2562047H47M16.854775807S")
+@test(arguments: [
+    (Duration.zero, "PT0S"),
+    (ns(1), "PT0.000000001S"),
+    (Duration.milliseconds(-1_500), "-PT1.5S"),
+    (Duration.hours(1), "PT1H"),
+    (Duration.seconds(3_605), "PT1H5S"),
+    (Duration.seconds(150), "PT2M30S"),
+    (Duration.max, "PT2562047H47M16.854775807S"),
+])
+fn iso8601IsHoursMinutesAndSeconds(_ duration: Duration, _ text: String) {
+    assertEqual(duration.iso8601(), text)
+}
+
+@test(arguments: [("P99999999W", ParseError.Overflow), ("-PT2562047H47M16.854775809S", ParseError.Underflow)])
+fn iso8601PastTheLimitsOverflows(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try Duration.parse(iso8601: text) }
+}
+
+@test(arguments: [
+    ("P2W", Duration.days(14)),
+    ("P1W2D", Duration.days(9)),
+    ("P1DT12H", Duration.hours(36)),
+    ("P1.5D", Duration.hours(36)),
+    ("PT1,5S", Duration.milliseconds(1500)),
+    ("pt1h0.5m", Duration.seconds(3630)),
+    ("+PT1S", Duration.seconds(1)),
+    ("-P1D", Duration.days(-1)),
+    ("PT36000S", Duration.hours(10)),
+    ("PT0.0000000015S", ns(2)),
+])
+fn iso8601IsRead(_ text: String, _ expected: Duration) throws {
+    expect(try Duration.parse(iso8601: text) == expected)
 }
 
 @test
-fn iso8601IsRead() {
-    assertEqual(try! Duration.parse(iso8601: "P2W"), Duration.days(14))
-    assertEqual(try! Duration.parse(iso8601: "P1W2D"), Duration.days(9))
-    assertEqual(try! Duration.parse(iso8601: "P1DT12H"), Duration.hours(36))
-    assertEqual(try! Duration.parse(iso8601: "P1.5D"), Duration.hours(36))
-    assertEqual(try! Duration.parse(iso8601: "PT1,5S"), Duration.milliseconds(1500))
-    assertEqual(try! Duration.parse(iso8601: "pt1h0.5m"), Duration.seconds(3630))
-    assertEqual(try! Duration.parse(iso8601: "+PT1S"), Duration.seconds(1))
-    assertEqual(try! Duration.parse(iso8601: "-P1D"), Duration.days(-1))
-    assertEqual(try! Duration.parse(iso8601: "PT36000S"), Duration.hours(10))
-    assertEqual(try! Duration.parse(iso8601: "PT0.0000000015S"), ns(2))
+fn textMayBeIso8601() {
     assertEqual(try! Duration.parse(" PT1M "), Duration.minutes(1))
-    assertEqual(isoError("P99999999W"), ParseError.Overflow)
-    assertEqual(isoError("-PT2562047H47M16.854775809S"), ParseError.Underflow)
 }
 
-@test
-fn iso8601FormsThatAreNoDurationAreRefused() {
-    assertEqual(isoError(""), ParseError.Empty)
-    assertEqual(isoError("1S"), ParseError.Invalid(at: 0))
-    assertEqual(isoError("-"), ParseError.Invalid(at: 1))
-    assertEqual(isoError("P"), ParseError.Invalid(at: 1))
-    assertEqual(isoError("PT"), ParseError.Invalid(at: 2))
-    assertEqual(isoError("P1DT"), ParseError.Invalid(at: 4))
-    assertEqual(isoError("P1Y"), ParseError.Invalid(at: 2))
-    assertEqual(isoError("P1M"), ParseError.Invalid(at: 2))
-    assertEqual(isoError("P1H"), ParseError.Invalid(at: 2))
-    assertEqual(isoError("PT1D"), ParseError.Invalid(at: 3))
-    assertEqual(isoError("PT-1H"), ParseError.Invalid(at: 2))
-    assertEqual(isoError("PT1S1M"), ParseError.Invalid(at: 5))
-    assertEqual(isoError("PT1M1M"), ParseError.Invalid(at: 5))
-    assertEqual(isoError("PT1.5M1S"), ParseError.Invalid(at: 6))
-    assertEqual(isoError("PT.5S"), ParseError.Invalid(at: 2))
-    assertEqual(isoError("PT1.S"), ParseError.Invalid(at: 4))
-    assertEqual(isoError("PT1"), ParseError.Invalid(at: 3))
-    assertEqual(isoError("PT1ST1S"), ParseError.Invalid(at: 4))
-    assertEqual(isoError("P0000-00-00T01:00:00"), ParseError.Invalid(at: 5))
-    assertEqual(isoError("PT1S "), ParseError.Invalid(at: 4))
+@test(arguments: [
+    ("", ParseError.Empty),
+    ("1S", ParseError.Invalid(at: 0)),
+    ("-", ParseError.Invalid(at: 1)),
+    ("P", ParseError.Invalid(at: 1)),
+    ("PT", ParseError.Invalid(at: 2)),
+    ("P1DT", ParseError.Invalid(at: 4)),
+    ("P1Y", ParseError.Invalid(at: 2)),
+    ("P1M", ParseError.Invalid(at: 2)),
+    ("P1H", ParseError.Invalid(at: 2)),
+    ("PT1D", ParseError.Invalid(at: 3)),
+    ("PT-1H", ParseError.Invalid(at: 2)),
+    ("PT1S1M", ParseError.Invalid(at: 5)),
+    ("PT1M1M", ParseError.Invalid(at: 5)),
+    ("PT1.5M1S", ParseError.Invalid(at: 6)),
+    ("PT.5S", ParseError.Invalid(at: 2)),
+    ("PT1.S", ParseError.Invalid(at: 4)),
+    ("PT1", ParseError.Invalid(at: 3)),
+    ("PT1ST1S", ParseError.Invalid(at: 4)),
+    ("P0000-00-00T01:00:00", ParseError.Invalid(at: 5)),
+    ("PT1S ", ParseError.Invalid(at: 4)),
+])
+fn iso8601FormsThatAreNoDurationAreRefused(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try Duration.parse(iso8601: text) }
 }
 
 @test

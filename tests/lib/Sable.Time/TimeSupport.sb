@@ -1,0 +1,9 @@
+module TimeSupport
+
+// What several of Sable.Time's tests are written with.
+
+import Sable.Time
+
+/// Whether the system has a time zone database: Windows has none (TimeZone
+/// says why).
+public let hasDatabase: Bool = (try? TimeZone.find("Europe/Prague")) != none

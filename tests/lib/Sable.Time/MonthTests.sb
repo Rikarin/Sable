@@ -14,11 +14,9 @@ fn monthsAreNumberedFromJanuary() {
     expect(Month.of(13) == none)
 }
 
-@test
-fn monthsGoRoundTheYear() {
-    assertEqual(Month.December.adding(1), Month.January)
-    assertEqual(Month.January.adding(-1), Month.December)
-    assertEqual(Month.March.adding(25), Month.April)
+@test(arguments: [(Month.December, 1, Month.January), (Month.January, -1, Month.December), (Month.March, 25, Month.April)])
+fn monthsGoRoundTheYear(_ month: Month, _ count: Int, _ expected: Month) {
+    assertEqual(month.adding(count), expected)
 }
 
 @test

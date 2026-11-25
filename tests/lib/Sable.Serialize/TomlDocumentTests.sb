@@ -281,24 +281,6 @@ fn commentsAreThoseRightAbove() throws {
     assertEqual(above("a = {b = 1}", ["a", "b"], "x"), "error: $.a.b: has no line of its own to put a comment above")
 }
 
-// Whether the path goes on past an item of an array that is not of [[headers]]:
-// TomlDocument.append traps when it is given a table for such a path ('c = [5]'
-// and 'c.0.a'), rather than refusing it.
-fn goesThroughAPlainItem(_ document: TomlDocument, _ path: String[>..]) -> Bool {
-    let lines = document.text().split(separator: '\n')
-    for count in 1..<path.count {
-        let last = path[count - 1]
-        if last == "0" || last == "1" {
-            if let at = document.position(path[0..<count].toArray()) {
-                if !lines[at.line - 1].hasPrefix("[[") {
-                    return true
-                }
-            }
-        }
-    }
-    return false
-}
-
 @test
 fn anyEditsLeaveTomlWithTheRestAsItWas() throws {
     let texts: String[>..] = [manifest, "a.b = 1\na.c = [1, 2]\n[d]\ne = { f = 1, g.h = 2 }\n[[i]]\nj = 1\n[[i]]\n[i.k]\nl = 1\n[m.n]\no = 1\n", "", "x = 1"]
@@ -323,7 +305,7 @@ fn anyEditsLeaveTomlWithTheRestAsItWas() throws {
                     if (path.last ?? "") != "0" && (path.last ?? "") != "1" {
                         require(document.get(path) == none)
                     }
-                } else if step % 4 == 1 && (value.table == none || !goesThroughAPlainItem(document, path)) {
+                } else if step % 4 == 1 {
                     try document.append(path, value)
                 } else {
                     try document.set(path, value)

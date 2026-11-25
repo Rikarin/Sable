@@ -104,7 +104,7 @@ async fn runHere(_ tests: TestCase[>..], _ options: TestOptions, _ filteredOut: 
     print("test result: ok. \(passed) passed; 0 failed; \(ignored == 0 ? "" : "\(ignored) ignored; ")\(filteredOut) filtered out")
 }
 
-// How many of a function's cases a process is given.
+// How many of a suite's cases a process is given.
 let casesInAProcess = 64
 
 /// The tests of each process: those of a group together, where the first of

@@ -18,7 +18,7 @@ namespace Sable.Driver;
 ///     standard input with <c>--run-tests</c>, one after another, saying of
 ///     each on standard error when it begins and how it ended. Most are given
 ///     a process each; those that share a fixture, or are cases of one
-///     function, are given one together. A test that traps ends its process,
+///     suite's functions, are given one together. A test that traps ends its process,
 ///     and those after it are given another. What this prints is what the
 ///     harness's own runner prints; a test's line is printed as it finishes,
 ///     so with several at once they come in the order they finish.
@@ -252,7 +252,7 @@ internal static partial class TestRunner {
 
     /// <summary>
     ///     The tests of each process (Sable.Testing's <c>batches</c>): those of
-    ///     a group together, its suites apart; a function's cases so many to a
+    ///     a group together, its suites apart; a suite's cases so many to a
     ///     process, at least a few, so that slow ones run at once.
     /// </summary>
     internal static List<List<TestEntry>> Batches(IReadOnlyList<TestEntry> tests, int jobs) {

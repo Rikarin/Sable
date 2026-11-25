@@ -138,6 +138,12 @@ fn aFunctionTakesFixtures(_ store: Store, scratch: Scratch) {
     expect(scratch.used == 0)
 }
 
+@test(arguments: [(1, "a"), (2, "b")])
+fn aCaseTakesFixturesToo(_ n: Int, _ letter: String, scratch: Scratch) {
+    expect(scratch.used == 0 && n + 96 == Int(letter.utf8[0]))
+    scratch.used = n
+}
+
 @suite
 struct Memberwise {
     let scratch: Scratch

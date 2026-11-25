@@ -141,8 +141,8 @@ extension TestCase {
     }
 
     /// The tests it is run in one process with, one after another: those it
-    /// shares a fixture with, and a function's cases, which are many and
-    /// short. None for a test that has a process to itself, as one that
+    /// shares a fixture with, and the cases of its suite's functions, which
+    /// are many and short. None for a test that has a process to itself, as one that
     /// must trap has to.
     ///
     /// ```sable
@@ -166,7 +166,7 @@ extension TestCase {
                 case .PerPackage    => "package"
                 case .PerCollection => "collection \(fixtureCollection)"
                 case .PerSuite      => "suite \(suite)"
-                case .PerTest       => name == function ? none : "cases \(function)"
+                case .PerTest       => name == function ? none : "cases \(suite)"
             }
         }
     }

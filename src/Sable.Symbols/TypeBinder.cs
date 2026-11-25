@@ -492,7 +492,8 @@ internal sealed class TypeBinder(Compilation compilation) {
             // off its form: members are declared before expressions are bound.
             : declaration.Declarator.Initializer is { } initializer && InferFromSyntax(initializer.Value, field, scope) is { } inferred
                 ? inferred
-                : Error(
+                : ErrorIn(
+                    declaration,
                     ErrorCode.ERR_TypeNotFound,
                     declaration.Declarator.Span,
                     $"'{field.Name}' needs a type annotation: its type can be left out only when its initial value is a literal, "
@@ -1957,6 +1958,12 @@ internal sealed class TypeBinder(Compilation compilation) {
                 members.Add(syntax);
             }
         }
+    }
+
+    /// <summary>An error in the node's file, whatever is being bound as it is found.</summary>
+    ErrorTypeSymbol ErrorIn(SyntaxNode node, ErrorCode code, TextSpan span, string message) {
+        using var _ = _diagnostics.AnchoredAt(node);
+        return Error(code, span, message);
     }
 
     ErrorTypeSymbol Error(ErrorCode code, TextSpan span, string message) {

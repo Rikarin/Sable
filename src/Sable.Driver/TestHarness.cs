@@ -322,7 +322,7 @@ public static class TestHarness {
             // it takes, when it is skipped — is in a file with its imports.
             foreach (var (test, i) in module.Select(static (t, i) => (t, i)).Where(static t => NeedsFile(t.t))) {
                 files.Add(SyntaxTree.Parse(new SourceText(WriteTest(test, Suffix(m, i)), $"<harness:{test.QualifiedName}>"), options));
-                foreach (var name in new[] { (test.Arguments.Count > 0, CasesName), (test.Fixtures.Count > 0, RunName), (test.Fixtures.Count > 0 || test.Suite is { Parameters.Count: > 0 }, LifetimesName), (HasCondition(test), SkipsName) }.Where(static n => n.Item1)) {
+                foreach (var name in new[] { (test.Arguments.Count > 0, CasesName), (test.Fixtures.Count > 0 && test.Arguments.Count == 0, RunName), (test.Fixtures.Count > 0 || test.Suite is { Parameters.Count: > 0 }, LifetimesName), (HasCondition(test), SkipsName) }.Where(static n => n.Item1)) {
                     main.Append(CultureInfo.InvariantCulture, $"import {module.Key}.{{ {name.Item2}{Suffix(m, i)} }}\n");
                 }
             }
@@ -342,7 +342,7 @@ public static class TestHarness {
             var i = 0;
             foreach (var test in modules[m]) {
                 if (kind == TestKind.Test) {
-                    main.Append(CultureInfo.InvariantCulture, $"    if wantsTest({Quote(test.QualifiedName)}) {{\n        all.append(TestCase({Case(test, test.Fixtures.Count > 0 ? RunName + Suffix(m, i) : $"list{m}[{i}]", Suffix(m, i))}))\n    }}\n");
+                    main.Append(CultureInfo.InvariantCulture, $"    if wantsTest({Quote(test.QualifiedName)}) {{\n        all.append(TestCase({Case(test, test.Fixtures.Count > 0 && test.Arguments.Count == 0 ? RunName + Suffix(m, i) : $"list{m}[{i}]", Suffix(m, i))}))\n    }}\n");
                 } else {
                     main.Append(CultureInfo.InvariantCulture, $"    all.append({caseType} {{ name: {Quote(test.QualifiedName)}, location: {Quote(test.Location)}, run: list{m}[{i}] }})\n");
                 }
@@ -478,7 +478,7 @@ public static class TestHarness {
             functions.Add(("fn {0}() -> TestArguments[>..]", CasesName, "()", WriteCases(test)));
         }
 
-        if (test.Fixtures.Count > 0) {
+        if (test.Fixtures.Count > 0 && test.Arguments.Count == 0) {
             functions.Add(("async fn {0}(_ scope: FixtureScope) throws", RunName, "(scope)", $"    {Call(test, Passed(test.Fixtures))}\n"));
         }
 
@@ -513,8 +513,8 @@ public static class TestHarness {
 
     /// <summary>The body that gives a <c>@test(arguments:)</c> test's cases.</summary>
     static string WriteCases(TestFunction test) {
-        var parameters = test.Symbol.Parameters;
-        var types = test.Syntax.Parameters.Parameters.Select(static p => p.Type.ToString().Trim()).ToList();
+        var parameters = test.GivenParameters;
+        var types = test.Syntax.Parameters.Parameters.Take(parameters.Length).Select(static p => p.Type.ToString().Trim()).ToList();
         var arrays = test.Arguments.Select(static a => a.ToString().Trim()).ToList();
         var values = Enumerable.Range(0, parameters.Length).Select(static i => string.Create(CultureInfo.InvariantCulture, $"sableValue{i}")).ToList();
         var body = new StringBuilder();
@@ -531,7 +531,7 @@ public static class TestHarness {
             }
         }
 
-        var call = string.Join(", ", parameters.Select((p, i) => p.Label == "_" ? values[i] : $"{p.Label ?? p.Name}: {values[i]}"));
+        var call = string.Join(", ", parameters.Select((p, i) => p.Label == "_" ? values[i] : $"{p.Label ?? p.Name}: {values[i]}").Append(Passed(test.Fixtures)).Where(static a => a.Length > 0));
         var described = string.Join(", ", values.Select(static v => $"\\(describeArgument({v}))"));
         body.Append(CultureInfo.InvariantCulture, $"        sableCases.append(TestArguments(\"{described}\", (scope: FixtureScope) => {{ {Call(test, call)} }}))\n");
         return body.Append(string.Concat(Enumerable.Repeat("    }\n", arrays.Count))).Append("    return sableCases\n").ToString();

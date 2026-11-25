@@ -54,8 +54,11 @@ public sealed record TestFunction(
     /// <summary>How the suite an instance method is a test of is made, one for each test; null for a function or a static method.</summary>
     public TestMaking? Suite { get; init; }
 
-    /// <summary>The fixtures a function that is not given arguments takes.</summary>
+    /// <summary>The fixtures it takes, after its case's arguments.</summary>
     public IReadOnlyList<TestFixture> Fixtures { get; init; } = [];
+
+    /// <summary>The parameters that are its case's arguments.</summary>
+    public System.Collections.Immutable.ImmutableArray<ParameterSymbol> GivenParameters => [..Symbol.Parameters.Take(Symbol.Parameters.Length - Fixtures.Count)];
 
     /// <summary>The suite's attribute's options and its own, which win.</summary>
     internal IReadOnlyList<TestOptions> Options { get; init; } = [];
@@ -185,7 +188,7 @@ public sealed partial class Compilation {
             }
 
             if (test.Arguments.Count > 0) {
-                var parameters = test.Symbol.Parameters;
+                var parameters = test.GivenParameters;
                 for (var i = 0; i < test.Arguments.Count; i++) {
                     var element = test.Arguments.Count == 1 && parameters.Length > 1
                         ? new TupleTypeSymbol([..parameters.Select(static p => p.Type)], [..parameters.Select(static _ => (string?)null)])
@@ -260,7 +263,17 @@ public sealed partial class Compilation {
         TestMaking? suiteMaking = null;
         TestOptions? suiteOptions = null;
         if (kind == TestKind.Test && options.Arguments.Count > 0) {
-            CheckTestArguments(function, declaration, options.Arguments, Report);
+            // What it takes last that are fixtures are made; the rest is its case's.
+            var given = function.Parameters.Length;
+            while (given > 0 && GetModule("Sable.Testing")?.GetType("Fixture") is { } protocol && Conversions.Satisfies(function.Parameters[given - 1].Type, protocol)) {
+                given--;
+            }
+
+            CheckTestArguments([..function.Parameters.Take(given)], declaration, options.Arguments, Report);
+            fixtures = FixturesOf(function.Parameters.Skip(given), declaration.Parameters.Parameters.Skip(given).Select(static p => p.Type.ToString().Trim()), new(), out var problem);
+            if (problem is not null) {
+                Report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, problem);
+            }
         } else if (kind == TestKind.Test) {
             fixtures = FixturesOf(function.Parameters, declaration.Parameters.Parameters.Select(static p => p.Type.ToString().Trim()), new(), out var problem);
             if (problem is not null) {
@@ -460,8 +473,7 @@ public sealed partial class Compilation {
     ///     each. Whether they are of what it takes is found as the file's
     ///     semantic model binds them, where the test is declared.
     /// </summary>
-    static void CheckTestArguments(FunctionSymbol function, FunctionDeclarationSyntax declaration, IReadOnlyList<ExpressionSyntax> arguments, Action<ErrorCode, TextSpan, string> report) {
-        var parameters = function.Parameters;
+    static void CheckTestArguments(System.Collections.Immutable.ImmutableArray<ParameterSymbol> parameters, FunctionDeclarationSyntax declaration, IReadOnlyList<ExpressionSyntax> arguments, Action<ErrorCode, TextSpan, string> report) {
         if (parameters.Any(static p => p.Modifier is not ParameterModifier.None || p.IsVariadic || p.IsAutoclosure || p.IsByReference)) {
             report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test's parameters are plain ones, each given a value of '@test(arguments: [...])'");
             return;

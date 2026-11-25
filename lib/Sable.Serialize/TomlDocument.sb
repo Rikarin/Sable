@@ -346,7 +346,8 @@ public struct TomlDocument {
         var element: TomlNode? = none
         for i in 0..<path.count {
             if i < nodes.count && nodes[i].isArray {
-                if i + 1 < nodes.count {
+                // An item of a plain array is written in it, not under a header.
+                if i + 1 < nodes.count && nodes[i].isTableArray {
                     element = nodes[i + 1]
                 }
             } else {

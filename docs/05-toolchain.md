@@ -51,8 +51,8 @@ build produces.
 
 `sable test` runs tests in processes of their own, as many at once as there
 are processors (`-j`, or `--max-parallel`): a process for each, but one for
-those that share a fixture (docs/06 §6.4) and for a function's cases, up to 64
-of them, one after another. A test that traps ends its process; those after it
+those that share a fixture (docs/06 §6.4) and for the cases of a suite's
+functions, up to 64 of them, one after another. A test that traps ends its process; those after it
 in the process are run in another. What `@test` may say of one:
 
 ```sable
@@ -62,7 +62,8 @@ fn parses(_ text: String, _ value: Int) throws { expect(try Int.parse(text) == v
 
 - `arguments:` runs the test for each element of an array of what it takes —
   tuples, for several parameters — or, given an array for each parameter, for
-  each pair. Each case is a test: reported, timed, stopped and selected on its
+  each pair. What it takes last that are fixtures (docs/06 §6.4) are made for each.
+  Each case is a test: reported, timed, stopped and selected on its
   own, as `Module.parses("1", 1)`. (The arrays are worked out as the tests are
   listed; a case is named for its arguments as Debug writes them, a second one
   of the same name with `#2` after it.)

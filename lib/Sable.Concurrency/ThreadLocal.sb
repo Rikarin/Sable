@@ -116,16 +116,18 @@ public final class ThreadLocal<Value> {
     }
 
     unsafe fn current(at place: RawPtr<Value?>) -> Value {
-        guard let value = place.load() else {
-            preconditionFailure("a thread-local is asked for its value while 'withValue' has it")
-        }
-        return value
+        return there(place.load())
     }
 
     unsafe fn take(from place: RawPtr<Value?>) -> Value {
         let taken = place.move()
         place.initialize(to: none)
-        guard let value = taken else {
+        return there(move taken)
+    }
+
+    @inline(always)
+    fn there(_ held: Value?) -> Value {
+        guard let value = held else {
             preconditionFailure("a thread-local is asked for its value while 'withValue' has it")
         }
         return value

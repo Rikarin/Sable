@@ -63,7 +63,7 @@ extension<Element: Sendable> Element[:] {
                     let first = piece * each
                     let after = size == 0 ? taken.upperBound : piece + 1
                     let end = after * each
-                    chunk.become(first, end < total ? end : total)
+                    chunk.cover(first, end < total ? end : total)
                     try body(chunk)
                     piece = after
                 }

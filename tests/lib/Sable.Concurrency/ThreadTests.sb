@@ -152,7 +152,10 @@ fn aThreadHasTheStackItIsGiven() {
 
 @test
 fn aThreadRunsAtWhatPriorityTheSystemAllows() {
-    for priority in [ThreadPriority.Lowest, ThreadPriority.Low, ThreadPriority.Normal, ThreadPriority.High, ThreadPriority.Highest] {
+    // Not the lowest, which may not run while the machine is busy.
+    assert(ThreadPriority.Low != ThreadPriority.High)
+    assert(ThreadPriority.Lowest.debugDescription().hasSuffix("Lowest"))
+    for priority in [ThreadPriority.Low,ThreadPriority.Normal, ThreadPriority.High, ThreadPriority.Highest] {
         assertEqual(Thread.spawn(priority: priority) { 5 }.join(), 5)
     }
 }

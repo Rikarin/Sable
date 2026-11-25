@@ -32,7 +32,7 @@ fn aScopesThreadsChangeTheVariablesAroundIt() {
 fn aScopeGivesWhatItsBodyGives() {
     let total = Thread.scope { s in
         let first = s.spawn { 20 }
-        let second = s.spawn(name: "second", stackSize: 300_000, priority: .Low) { 22 }
+        let second = s.spawn(name: "second", stackSize: 300_000, priority: .High) { 22 }
         return first.join() + second.join()
     }
     assertEqual(total, 42)

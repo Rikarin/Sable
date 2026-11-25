@@ -21,9 +21,9 @@ namespace Sable.Symbols;
 ///         <c>Thread.scope</c>, which it outlives;</item>
 ///         <item>nothing else in the scope mentions it, read or written — the
 ///         scope's own code or another thread's closure;</item>
-///         <item>no other closure or local function of the function mentions
-///         it, which the scope's code might call, and no reference is made
-///         of it.</item>
+///         <item>no closure of the function that may escape mentions
+///         it, nor a local function, which the scope's code might call,
+///         and no reference made outside is used.</item>
 ///     </list>
 ///     A <c>let</c>, or a capture list's, is captured by its value, and any
 ///     number of threads may.
@@ -139,7 +139,8 @@ internal static class ScopeChecker {
         }
 
         foreach (var node in Descendants(scope.Body, except: scope.Closure)) {
-            if (node is BoundClosure or BoundLocalFunction && Descendants(node).Any(n => ReferenceEquals(Variable(n), variable))) {
+            // One that does not escape its call is over, or not begun, meanwhile.
+            if (node is BoundClosure { Symbol.IsContainedClosure: false } or BoundLocalFunction && Descendants(node).Any(n => ReferenceEquals(Variable(n), variable))) {
                 return "another closure of the function uses it, which the scope may call";
             }
         }

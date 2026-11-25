@@ -89,7 +89,7 @@ public final class JoinHandle<T: Sendable, E: Error> {
     /// is dropped. The program still ends only once it has.
     ///
     /// ```sable
-    /// Thread.spawn { }.detach()
+    /// Thread.spawn { 1 }.detach()
     /// ```
     public fn detach() {
         detached.store(true)

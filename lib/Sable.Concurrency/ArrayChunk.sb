@@ -81,7 +81,7 @@ public final class ArrayChunk<Element: Sendable> {
         precondition(index >= 0 && index < length, "index \(index) is out of range for a chunk of \(length)")
     }
 
-    fn become(_ first: Int, _ end: Int) {
+    fn cover(_ first: Int, _ end: Int) {
         self.first = first
         length = end - first
     }

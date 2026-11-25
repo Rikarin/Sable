@@ -3284,8 +3284,9 @@ public sealed partial class LlvmEmitter {
                     // follow to them and drops what they make pointless.
                     Line($"{name} = call ptr @sable_alloc_uninitialised(ptr {module.ClassMetadata(alloc.ClassType)}, i64 {size})");
                     var fields = Fresh();
-                    Line($"{fields} = getelementptr inbounds i8, ptr {name}, i64 {TypeLayout.ObjectHeaderSize}");
-                    Line($"call void @llvm.memset.p0.i64(ptr align {TypeLayout.PointerBytes} {fields}, i8 0, i64 sub (i64 {size}, i64 {TypeLayout.ObjectHeaderSize}), i1 false)");
+                    // Past the header, whose size is the target's.
+                    Line($"{fields} = getelementptr inbounds %SableObjectHeader, ptr {name}, i32 1");
+                    Line($"call void @llvm.memset.p0.i64(ptr align {TypeLayout.PointerBytes} {fields}, i8 0, i64 sub (i64 {size}, i64 ptrtoint (ptr getelementptr (%SableObjectHeader, ptr null, i32 1) to i64)), i1 false)");
                     return;
                 }
 

@@ -1,7 +1,7 @@
 module Sable.Concurrency
 
-// The values a channel or a stream holds, in the order they came: taken
-// from the front, dropped from either end. Taking moves a head along the
+// The values a stream or a broadcast holds, in the order they came: taken
+// from the front. Taking moves a head along the
 // array rather than shifting what is behind it; the array starts again
 // once it is emptied, and is compacted once most of it lies behind the
 // head, so a long-lived queue does not grow.
@@ -37,15 +37,6 @@ struct ValueQueue<Element> {
                 kept.append(items[i])
             }
             items = kept
-            head = 0
-        }
-        return value
-    }
-
-    mutating fn removeLast() -> Element {
-        let value = items.removeLast()
-        if head == items.count {
-            items.removeAll(keepingCapacity: true)
             head = 0
         }
         return value

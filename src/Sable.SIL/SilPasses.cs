@@ -32,7 +32,7 @@ public static class SilPassManager {
     ///     uncovers more of the other.
     /// </remarks>
     public static IReadOnlyList<ISilPass> Default { get; } = [
-        new PromoteSlots(), new InitFields(), new ForwardCopies(), new BorrowLoads(), new BorrowHeld(), new ForwardCopies(), new BorrowFields(), new BorrowLocals(), new BorrowLets(), new BorrowWalks(),
+        new PromoteSlots(), new InitFields(), new ForwardCopies(), new BorrowLoads(), new ReadInPlace(), new BorrowHeld(), new ForwardCopies(), new BorrowFields(), new BorrowLocals(), new BorrowLets(), new BorrowWalks(),
         new PromoteToStack(), new ReadInPlace(), new HoistUniqueness(),
     ];
 

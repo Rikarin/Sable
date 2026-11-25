@@ -163,3 +163,34 @@ fn aParkSinceTheCurrentTicketWaitsForTheNextWake() async {
     await waiter.value
     assert(woken.load())
 }
+
+@test
+fn aParkSinceAnOldTicketGoesOnAtOnceAfterOneIsWoken() async {
+    let list = WaitList()
+    let ticket = list.ticket
+    list.wakeOne()
+    await list.park(since: ticket)
+}
+
+@test
+fn wakingOneWakesTheFirstParked() async {
+    let list = WaitList()
+    let woken = Atomic(0)
+    let first = Task.spawn {
+        await list.park()
+        let _ = woken.add(1)
+    }
+    await Task.settle()
+    let second = Task.spawn {
+        await list.park()
+        let _ = woken.add(1)
+    }
+    await Task.settle()
+    list.wakeOne()
+    await first.value
+    await Task.settle()
+    assertEqual(woken.load(), 1)
+    list.wakeOne()
+    await second.value
+    assertEqual(woken.load(), 2)
+}

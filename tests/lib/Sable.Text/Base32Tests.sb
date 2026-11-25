@@ -5,32 +5,7 @@ module Base32Tests
 
 import Sable.Testing
 import Sable.Text
-
-// The bytes are the ones expected; when not, both are shown in hexadecimal.
-fn assertBytes(_ actual: U8[:], _ expected: U8[:]) {
-    expect(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
-}
-
-fn sample(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var state = 0x1D2B
-    var i = 0
-    while i < count {
-        state = (state * 75 + 74) % 65537
-        bytes.append(U8(state & 0xFF))
-        i += 1
-    }
-    return bytes
-}
-
-fn decodeError(_ text: String, alphabet: Base32.Alphabet = .Standard, padding: Padding = .Either) -> DecodeError? {
-    do {
-        _ = try Base32.decode(text, alphabet: alphabet, padding: padding)
-    } catch {
-        return error
-    }
-    return none
-}
+import TextSupport
 
 // RFC 4648 §10: what it encodes, as Base32 and as base32hex.
 @test(arguments: [
@@ -68,27 +43,24 @@ fn aTotpSecretDecodes() {
     assertBytes(try! Base32.decode("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"), "12345678901234567890".utf8Bytes())
 }
 
-@test
-fn everyLengthRoundTripsUnderEveryAlphabetAndPadding() {
-    let alphabets: Base32.Alphabet[>..] = [.Standard, .Hex]
-    for alphabet in alphabets {
-        var count = 0
-        while count <= 50 {
-            let bytes = sample(count)
-            let padded = Base32.encode(bytes, alphabet: alphabet)
-            let bare = Base32.encode(bytes, alphabet: alphabet, padding: false)
-            assertEqual(padded.utf8Count, Base32.encodedLength(count))
-            assertEqual(bare.utf8Count, Base32.encodedLength(count, padding: false))
-            assertEqual(padded.utf8Count % 8, 0)
-            assert(!bare.contains("="), "no padding when told")
-            assertBytes(try! Base32.decode(padded, alphabet: alphabet), bytes)
-            assertBytes(try! Base32.decode(bare, alphabet: alphabet), bytes)
-            assertBytes(try! Base32.decode(padded, alphabet: alphabet, padding: .Required), bytes)
-            assertBytes(try! Base32.decode(bare, alphabet: alphabet, padding: .Forbidden), bytes)
-            assertEqual(Base32.decodedLength(bare.utf8Count), count)
-            assert(Base32.decodedLength(padded.utf8Count) >= count, "an upper bound for padded text")
-            count += 1
-        }
+@test(arguments: [.Standard, .Hex])
+fn everyLengthRoundTripsUnderEveryAlphabetAndPadding(_ alphabet: Base32.Alphabet) {
+    var count = 0
+    while count <= 50 {
+        let bytes = sample(count)
+        let padded = Base32.encode(bytes, alphabet: alphabet)
+        let bare = Base32.encode(bytes, alphabet: alphabet, padding: false)
+        assertEqual(padded.utf8Count, Base32.encodedLength(count))
+        assertEqual(bare.utf8Count, Base32.encodedLength(count, padding: false))
+        assertEqual(padded.utf8Count % 8, 0)
+        assert(!bare.contains("="), "no padding when told")
+        assertBytes(try! Base32.decode(padded, alphabet: alphabet), bytes)
+        assertBytes(try! Base32.decode(bare, alphabet: alphabet), bytes)
+        assertBytes(try! Base32.decode(padded, alphabet: alphabet, padding: .Required), bytes)
+        assertBytes(try! Base32.decode(bare, alphabet: alphabet, padding: .Forbidden), bytes)
+        assertEqual(Base32.decodedLength(bare.utf8Count), count)
+        assert(Base32.decodedLength(padded.utf8Count) >= count, "an upper bound for padded text")
+        count += 1
     }
 }
 
@@ -112,38 +84,42 @@ fn decodingBytesIsDecodingTheirText() {
     assertBytes(try! Base32.decode(bytes: "MZXW6YQ=".utf8Bytes()), "foob".utf8Bytes())
 }
 
-@test
-fn aCharacterOutsideTheAlphabetIsNamedWithItsOffset() {
-    assertEqual(decodeError("MZXW1YTB"), .InvalidCharacter(at: 4, byte: 0x31))
-    assertEqual(decodeError("MZXW6YTBO8"), .InvalidCharacter(at: 9, byte: 0x38))
-    assertEqual(decodeError("CPNMW===", alphabet: .Hex), .InvalidCharacter(at: 4, byte: 0x57))
-    assertEqual(decodeError("MZX*"), .InvalidCharacter(at: 3, byte: 0x2A))
+@test(arguments: [
+    ("MZXW1YTB", .Standard, .InvalidCharacter(at: 4, byte: 0x31)),
+    ("MZXW6YTBO8", .Standard, .InvalidCharacter(at: 9, byte: 0x38)),
+    ("CPNMW===", .Hex, .InvalidCharacter(at: 4, byte: 0x57)),
+    ("MZX*", .Standard, .InvalidCharacter(at: 3, byte: 0x2A)),
+])
+fn aCharacterOutsideTheAlphabetIsNamedWithItsOffset(_ text: String, _ alphabet: Base32.Alphabet, _ error: DecodeError) {
+    expectThrows(error) { _ = try Base32.decode(text, alphabet: alphabet) }
 }
 
-@test
-fn aLastGroupNoBytesCanEndWithIsTheWrongLength() {
-    assertEqual(decodeError("M"), .InvalidLength(at: 0))
-    assertEqual(decodeError("MZX"), .InvalidLength(at: 0))
-    assertEqual(decodeError("MZXW6YTBMZXW6Y"), .InvalidLength(at: 8))
+@test(arguments: [("M", .InvalidLength(at: 0)), ("MZX", .InvalidLength(at: 0)), ("MZXW6YTBMZXW6Y", .InvalidLength(at: 8))])
+fn aLastGroupNoBytesCanEndWithIsTheWrongLength(_ text: String, _ error: DecodeError) {
+    expectThrows(error) { _ = try Base32.decode(text) }
 }
 
-@test
-fn paddingIsCheckedAgainstTheRule() {
-    assertEqual(decodeError("MY", padding: .Required), .InvalidPadding(at: 2))
-    assertEqual(decodeError("MY======", padding: .Forbidden), .InvalidPadding(at: 2))
-    assertEqual(decodeError("MY====="), .InvalidPadding(at: 2))
-    assertEqual(decodeError("MZXW6YTB="), .InvalidPadding(at: 8))
-    assertEqual(decodeError("MY======MY======"), .InvalidPadding(at: 2))
-    assertEqual(decodeError("MY======="), .InvalidPadding(at: 2))
-    assertEqual(decodeError("M======="), .InvalidPadding(at: 1))
+@test(arguments: [
+    ("MY", .Required, .InvalidPadding(at: 2)),
+    ("MY======", .Forbidden, .InvalidPadding(at: 2)),
+    ("MY=====", .Either, .InvalidPadding(at: 2)),
+    ("MZXW6YTB=", .Either, .InvalidPadding(at: 8)),
+    ("MY======MY======", .Either, .InvalidPadding(at: 2)),
+    ("MY=======", .Either, .InvalidPadding(at: 2)),
+    ("M=======", .Either, .InvalidPadding(at: 1)),
+])
+fn paddingIsCheckedAgainstTheRule(_ text: String, _ padding: Padding, _ error: DecodeError) {
+    expectThrows(error) { _ = try Base32.decode(text, padding: padding) }
 }
 
-@test
-fn bitsTheBytesDoNotUseAreRejected() {
-    assertEqual(decodeError("MZ======"), .TrailingBits(at: 1))
-    assertEqual(decodeError("MZXR===="), .TrailingBits(at: 3))
-    assertEqual(decodeError("MZXW7==="), .TrailingBits(at: 4))
-    assertEqual(decodeError("MZXW6YR="), .TrailingBits(at: 6))
+@test(arguments: [
+    ("MZ======", .TrailingBits(at: 1)),
+    ("MZXR====", .TrailingBits(at: 3)),
+    ("MZXW7===", .TrailingBits(at: 4)),
+    ("MZXW6YR=", .TrailingBits(at: 6)),
+])
+fn bitsTheBytesDoNotUseAreRejected(_ text: String, _ error: DecodeError) {
+    expectThrows(error) { _ = try Base32.decode(text) }
 }
 
 @test

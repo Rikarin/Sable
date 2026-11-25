@@ -7,92 +7,96 @@ module TextBuilderTests
 import Sable.Text
 import Sable.Testing
 
-/// A random walk of numbers: xorshift.
-struct Walk {
-    var state: U64
+// Characters of one, two, three and four UTF-8 bytes.
+let characters: Gen<Char> = Gen.element(of: ['a', 'b', 'é', 'ж', '語', '😀', '\n'])
+let pieces: Gen<String> = Gen.string(of: characters, count: 0...5)
 
-    mutating fn next(_ below: Int) -> Int {
-        state = state ^ (state << 13)
-        state = state ^ (state >> 7)
-        state = state ^ (state << 17)
-        return Int(state % U64(below))
-    }
+// Where an edit is: so many thousandths of the text's length, whatever that
+// has become.
+@derive(Debug)
+union Edit {
+    Append(text: String)
+    Insert(text: String, at: Int)
+    Remove(from: Int, to: Int)
+    Replace(from: Int, to: Int, text: String)
+    Set(character: Char, at: Int)
+    Truncate(to: Int)
+    ReplaceAll(character: Char, text: String)
 }
 
-// Characters of one, two, three and four UTF-8 bytes.
-let alphabet: String[>..] = ["a", "b", "é", "ж", "語", "😀", "\n"]
+let places: Gen<Int> = Gen.number(in: 0...1000)
+let edits: Gen<Edit> = Gen<Edit>((choices) => match choices.below(12) {
+    case 6  => .Insert(text: pieces.value(from: choices), at: places.value(from: choices))
+    case 7  => .Remove(from: places.value(from: choices), to: places.value(from: choices))
+    case 8  => .Replace(from: places.value(from: choices), to: places.value(from: choices), text: pieces.value(from: choices))
+    case 9  => .Set(character: characters.value(from: choices), at: places.value(from: choices))
+    case 10 => .Truncate(to: places.value(from: choices))
+    case 11 => .ReplaceAll(character: characters.value(from: choices), text: pieces.value(from: choices))
+    case _  => .Append(text: pieces.value(from: choices))
+})
 
-fn piece(_ walk: inout Walk) -> String {
-    var text = ""
-    let length = walk.next(6)
-    var i = 0
-    while i < length {
-        text = text + alphabet[walk.next(alphabet.count)]
-        i += 1
-    }
-    return text
+fn range(_ from: Int, _ to: Int, in text: String) -> Range<Int> {
+    let a = from * text.count / 1000
+    let b = to * text.count / 1000
+    return a < b ? a..<b : b..<a
 }
 
 @test
 fn randomEditsAgreeWithAString() {
-    var walk = Walk { state: 0x9E3779B97F4A7C15 }
-    let builder = TextBuilder()
-    var model = ""
-    var step = 0
-    while step < 3000 {
-        let choice = walk.next(12)
-        if choice < 6 {
-            let text = piece(&walk)
-            builder.append(text)
-            model = model + text
-        } else if choice == 6 {
-            let text = piece(&walk)
-            let at = walk.next(model.count + 1)
-            builder.insert(text, at: at)
-            model = model.slice(from: 0, to: at) + text + model.slice(from: at, to: model.count)
-        } else if choice == 7 && model.count > 0 {
-            let from = walk.next(model.count)
-            let to = from + walk.next(model.count - from + 1)
-            builder.remove(from..<to)
-            model = model.slice(from: 0, to: from) + model.slice(from: to, to: model.count)
-        } else if choice == 8 && model.count > 0 {
-            let from = walk.next(model.count)
-            let to = from + walk.next(model.count - from + 1)
-            let text = piece(&walk)
-            builder.replace(from..<to, with: text)
-            model = model.slice(from: 0, to: from) + text + model.slice(from: to, to: model.count)
-        } else if choice == 9 && model.count > 0 {
-            let at = walk.next(model.count)
-            let character = alphabet[walk.next(alphabet.count)].at(index: 0)
-            assertEqual(builder[at], model.at(index: at))
-            builder[at] = character
-            model = model.slice(from: 0, to: at) + String.fromChar(character) + model.slice(from: at + 1, to: model.count)
-        } else if choice == 10 && model.count > 200 {
-            let keep = walk.next(model.count)
-            builder.truncate(to: keep)
-            model = model.slice(from: 0, to: keep)
-        } else if choice == 11 {
-            let target = alphabet[walk.next(alphabet.count)]
-            let replacement = piece(&walk)
-            var expected = 0
-            var i = 0
-            while i < model.count {
-                if model.at(index: i) == target.at(index: 0) {
-                    expected += 1
+    forAll(edits.array(count: 0...150), cases: 60) { (edits: Edit[>..]) in
+        let builder = TextBuilder()
+        var model = ""
+        fn splice(_ range: Range<Int>, _ text: String) {
+            model = model.slice(from: 0, to: range.lowerBound) + text + model.slice(from: range.upperBound, to: model.count)
+        }
+        for edit in edits {
+            match edit {
+                case .Append(let text) => {
+                    builder.append(text)
+                    model = model + text
                 }
-                i += 1
+                case .Insert(let text, let place) => {
+                    let at = range(place, place, in: model)
+                    builder.insert(text, at: at.lowerBound)
+                    splice(at, text)
+                }
+                case .Remove(let from, let to) => {
+                    let gone = range(from, to, in: model)
+                    builder.remove(gone)
+                    splice(gone, "")
+                }
+                case .Replace(let from, let to, let text) => {
+                    let gone = range(from, to, in: model)
+                    builder.replace(gone, with: text)
+                    splice(gone, text)
+                }
+                case .Set(let character, let place) => {
+                    let at = place * model.count / 1000
+                    if at < model.count {
+                        expect(builder[at] == model.at(index: at))
+                        builder[at] = character
+                        splice(at..<at + 1, String.fromChar(character))
+                    }
+                }
+                case .Truncate(let place) => {
+                    // Seldom, or the text would never be long.
+                    if model.count > 100 {
+                        let keep = place * model.count / 1000
+                        builder.truncate(to: keep)
+                        model = model.slice(from: 0, to: keep)
+                    }
+                }
+                case .ReplaceAll(let character, let text) => {
+                    let target = String.fromChar(character)
+                    expect(builder.replace(target, with: text) == model.count(of: target))
+                    model = model.replacing(target, with: text)
+                }
             }
-            assertEqual(builder.replace(target, with: replacement), expected)
-            model = model.replacing(target, with: replacement)
+            expect(builder.count == model.count)
+            expect(builder.utf8Count == model.utf8Count)
         }
-        assertEqual(builder.count, model.count)
-        assertEqual(builder.utf8Count, model.utf8Count)
-        if step % 50 == 0 {
-            assertEqualText(builder.build(), model)
-        }
-        step += 1
+        expect(builder.build() == model)
     }
-    assertEqualText(builder.build(), model)
 }
 
 @test

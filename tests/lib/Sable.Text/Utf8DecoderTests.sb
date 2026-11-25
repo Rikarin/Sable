@@ -6,50 +6,29 @@ module Utf8DecoderTests
 import Sable.Testing
 import Sable.Text
 
-fn bytes(_ values: Int[>..]) -> U8[>..] {
-    var result: U8[>..] = []
-    for value in values {
-        result.append(U8(value))
-    }
-    return result
-}
-
 @test
 fn aScalarSplitAcrossChunksIsKeptWhole() {
     var decoder = Utf8Decoder()
-    assertEqual(decoder.decode(bytes([0x63, 0x61, 0x66, 0xC3])), "caf")
-    assertEqual(decoder.decode(bytes([0xA9, 0x21])), "é!")
+    assertEqual(decoder.decode([0x63, 0x61, 0x66, 0xC3]), "caf")
+    assertEqual(decoder.decode([0xA9, 0x21]), "é!")
     assertEqual(decoder.finish(), "")
     expect(!decoder.sawInvalid, "nothing was replaced")
 }
 
 @test
 fn aFourByteScalarSplitEachWay() {
-    let all: Int[>..] = [0x61, 0xF0, 0x9F, 0x98, 0x80, 0x62]
-    var cut = 1
-    while cut < all.count {
+    let all = "a😀b".utf8Bytes()
+    for cut in 1..<all.count {
         var decoder = Utf8Decoder()
-        var first: Int[>..] = []
-        var second: Int[>..] = []
-        var i = 0
-        while i < all.count {
-            if i < cut {
-                first.append(all[i])
-            } else {
-                second.append(all[i])
-            }
-            i = i + 1
-        }
-        let text = decoder.decode(bytes(first)) + decoder.decode(bytes(second)) + decoder.finish()
+        let text = decoder.decode(all[..<cut]) + decoder.decode(all[cut...]) + decoder.finish()
         assertEqual(text, "a😀b")
-        cut = cut + 1
     }
 }
 
 @test
 fn aSequenceLeftUnfinishedIsReplacedAtTheEnd() {
     var decoder = Utf8Decoder()
-    assertEqual(decoder.decode(bytes([0x61, 0xE2, 0x82])), "a")
+    assertEqual(decoder.decode([0x61, 0xE2, 0x82]), "a")
     assertEqual(decoder.finish(), "\u{FFFD}")
     expect(decoder.sawInvalid, "the unfinished sequence was replaced")
 }
@@ -57,16 +36,16 @@ fn aSequenceLeftUnfinishedIsReplacedAtTheEnd() {
 @test
 fn illFormedBytesAreReplacedAsTheyCome() {
     var decoder = Utf8Decoder()
-    assertEqual(decoder.decode(bytes([0x61, 0xFF, 0x62])), "a\u{FFFD}b")
+    assertEqual(decoder.decode([0x61, 0xFF, 0x62]), "a\u{FFFD}b")
     expect(decoder.sawInvalid, "replaced")
-    assertEqual(decoder.decode(bytes([0xC3, 0x28])), "\u{FFFD}(")
+    assertEqual(decoder.decode([0xC3, 0x28]), "\u{FFFD}(")
 }
 
 @test
 fn aContinuationByteAtTheEndIsNotHeldBack() {
     var decoder = Utf8Decoder()
-    assertEqual(decoder.decode(bytes([0x61, 0x80])), "a\u{FFFD}")
-    assertEqual(decoder.decode(bytes([0xC3, 0xA9, 0x80, 0x80, 0x80])), "é\u{FFFD}\u{FFFD}\u{FFFD}")
-    assertEqual(decoder.decode(bytes([0xF0, 0x80])), "\u{FFFD}\u{FFFD}")
+    assertEqual(decoder.decode([0x61, 0x80]), "a\u{FFFD}")
+    assertEqual(decoder.decode([0xC3, 0xA9, 0x80, 0x80, 0x80]), "é\u{FFFD}\u{FFFD}\u{FFFD}")
+    assertEqual(decoder.decode([0xF0, 0x80]), "\u{FFFD}\u{FFFD}")
     assertEqual(decoder.finish(), "")
 }

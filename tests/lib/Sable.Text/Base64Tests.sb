@@ -5,54 +5,32 @@ module Base64Tests
 
 import Sable.Testing
 import Sable.Text
+import TextSupport
 
-// The bytes are the ones expected; when not, both are shown in hexadecimal.
-fn assertBytes(_ actual: U8[:], _ expected: U8[:]) {
-    expect(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
+@test(arguments: [
+    ("", ""),
+    ("f", "Zg=="),
+    ("fo", "Zm8="),
+    ("foo", "Zm9v"),
+    ("foob", "Zm9vYg=="),
+    ("fooba", "Zm9vYmE="),
+    ("foobar", "Zm9vYmFy"),
+])
+fn theRfc4648TestVectorsEncode(_ text: String, _ encoded: String) {
+    assertEqual(Base64.encode(text.utf8Bytes()), encoded)
 }
 
-// 'count' bytes that run through every value, in no simple order.
-fn sample(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var state = 0x2545
-    var i = 0
-    while i < count {
-        state = (state * 75 + 74) % 65537
-        bytes.append(U8(state & 0xFF))
-        i += 1
-    }
-    return bytes
-}
-
-fn decodeError(_ text: String, alphabet: Base64.Alphabet = .Standard, padding: Padding = .Either) -> DecodeError? {
-    do {
-        _ = try Base64.decode(text, alphabet: alphabet, padding: padding)
-    } catch {
-        return error
-    }
-    return none
-}
-
-@test
-fn theRfc4648TestVectorsEncode() {
-    assertEqual(Base64.encode("".utf8Bytes()), "")
-    assertEqual(Base64.encode("f".utf8Bytes()), "Zg==")
-    assertEqual(Base64.encode("fo".utf8Bytes()), "Zm8=")
-    assertEqual(Base64.encode("foo".utf8Bytes()), "Zm9v")
-    assertEqual(Base64.encode("foob".utf8Bytes()), "Zm9vYg==")
-    assertEqual(Base64.encode("fooba".utf8Bytes()), "Zm9vYmE=")
-    assertEqual(Base64.encode("foobar".utf8Bytes()), "Zm9vYmFy")
-}
-
-@test
-fn theRfc4648TestVectorsDecode() {
-    assertBytes(try! Base64.decode(""), "".utf8Bytes())
-    assertBytes(try! Base64.decode("Zg=="), "f".utf8Bytes())
-    assertBytes(try! Base64.decode("Zm8="), "fo".utf8Bytes())
-    assertBytes(try! Base64.decode("Zm9v"), "foo".utf8Bytes())
-    assertBytes(try! Base64.decode("Zm9vYg=="), "foob".utf8Bytes())
-    assertBytes(try! Base64.decode("Zm9vYmE="), "fooba".utf8Bytes())
-    assertBytes(try! Base64.decode("Zm9vYmFy"), "foobar".utf8Bytes())
+@test(arguments: [
+    ("", ""),
+    ("Zg==", "f"),
+    ("Zm8=", "fo"),
+    ("Zm9v", "foo"),
+    ("Zm9vYg==", "foob"),
+    ("Zm9vYmE=", "fooba"),
+    ("Zm9vYmFy", "foobar"),
+])
+fn theRfc4648TestVectorsDecode(_ encoded: String, _ text: String) {
+    assertBytes(try! Base64.decode(encoded), text.utf8Bytes())
 }
 
 @test
@@ -82,27 +60,24 @@ fn everyByteValueRoundTripsInBothAlphabets() {
     assertBytes(try! Base64.decode(urlSafe, alphabet: .UrlSafe), bytes)
 }
 
-@test
-fn everyLengthRoundTripsUnderEveryAlphabetAndPadding() {
-    let alphabets: Base64.Alphabet[>..] = [.Standard, .UrlSafe]
-    for alphabet in alphabets {
-        var count = 0
-        while count <= 70 {
-            let bytes = sample(count)
-            let padded = Base64.encode(bytes, alphabet: alphabet)
-            let bare = Base64.encode(bytes, alphabet: alphabet, padding: false)
-            assertEqual(padded.utf8Count, Base64.encodedLength(count))
-            assertEqual(bare.utf8Count, Base64.encodedLength(count, padding: false))
-            assertEqual(padded.utf8Count % 4, 0)
-            assert(!bare.contains("="), "no padding when told")
-            assertBytes(try! Base64.decode(padded, alphabet: alphabet), bytes)
-            assertBytes(try! Base64.decode(bare, alphabet: alphabet), bytes)
-            assertBytes(try! Base64.decode(padded, alphabet: alphabet, padding: .Required), bytes)
-            assertBytes(try! Base64.decode(bare, alphabet: alphabet, padding: .Forbidden), bytes)
-            assertEqual(Base64.decodedLength(bare.utf8Count), count)
-            assert(Base64.decodedLength(padded.utf8Count) >= count, "an upper bound for padded text")
-            count += 1
-        }
+@test(arguments: [.Standard, .UrlSafe])
+fn everyLengthRoundTripsUnderEveryAlphabetAndPadding(_ alphabet: Base64.Alphabet) {
+    var count = 0
+    while count <= 70 {
+        let bytes = sample(count)
+        let padded = Base64.encode(bytes, alphabet: alphabet)
+        let bare = Base64.encode(bytes, alphabet: alphabet, padding: false)
+        assertEqual(padded.utf8Count, Base64.encodedLength(count))
+        assertEqual(bare.utf8Count, Base64.encodedLength(count, padding: false))
+        assertEqual(padded.utf8Count % 4, 0)
+        assert(!bare.contains("="), "no padding when told")
+        assertBytes(try! Base64.decode(padded, alphabet: alphabet), bytes)
+        assertBytes(try! Base64.decode(bare, alphabet: alphabet), bytes)
+        assertBytes(try! Base64.decode(padded, alphabet: alphabet, padding: .Required), bytes)
+        assertBytes(try! Base64.decode(bare, alphabet: alphabet, padding: .Forbidden), bytes)
+        assertEqual(Base64.decodedLength(bare.utf8Count), count)
+        assert(Base64.decodedLength(padded.utf8Count) >= count, "an upper bound for padded text")
+        count += 1
     }
 }
 
@@ -151,67 +126,85 @@ fn lengthsCountGroupsAndTheirRemainder() {
     assertEqual(Base64.decodedLength(4), 3)
 }
 
-@test
-fn aCharacterOutsideTheAlphabetIsNamedWithItsOffset() {
-    assertEqual(decodeError("Zm9v*mFy"), .InvalidCharacter(at: 4, byte: 0x2A))
-    assertEqual(decodeError("Zm 9v"), .InvalidCharacter(at: 2, byte: 0x20))
-    assertEqual(decodeError("Zm9vYmF\n"), .InvalidCharacter(at: 7, byte: 0x0A))
-    assertEqual(decodeError("Zm9vYé"), .InvalidCharacter(at: 5, byte: 0xC3))
-    assertEqual(decodeError("*m8"), .InvalidCharacter(at: 0, byte: 0x2A))
-    assertEqual(decodeError("Z*8"), .InvalidCharacter(at: 1, byte: 0x2A))
-    assertEqual(decodeError("Zm*"), .InvalidCharacter(at: 2, byte: 0x2A))
-    assertEqual(decodeError("Zm9v*"), .InvalidCharacter(at: 4, byte: 0x2A))
+@test(arguments: [
+    ("Zm9v*mFy", .InvalidCharacter(at: 4, byte: 0x2A)),
+    ("Zm 9v", .InvalidCharacter(at: 2, byte: 0x20)),
+    ("Zm9vYmF\n", .InvalidCharacter(at: 7, byte: 0x0A)),
+    ("Zm9vYé", .InvalidCharacter(at: 5, byte: 0xC3)),
+    ("*m8", .InvalidCharacter(at: 0, byte: 0x2A)),
+    ("Z*8", .InvalidCharacter(at: 1, byte: 0x2A)),
+    ("Zm*", .InvalidCharacter(at: 2, byte: 0x2A)),
+    ("Zm9v*", .InvalidCharacter(at: 4, byte: 0x2A)),
+])
+fn aCharacterOutsideTheAlphabetIsNamedWithItsOffset(_ text: String, _ error: DecodeError) {
+    expectThrows(error) { _ = try Base64.decode(text) }
+}
+
+@test(arguments: [
+    ("-_8=", .Standard, .InvalidCharacter(at: 0, byte: 0x2D)),
+    ("+/8=", .UrlSafe, .InvalidCharacter(at: 0, byte: 0x2B)),
+    ("ab_c", .Standard, .InvalidCharacter(at: 2, byte: 0x5F)),
+])
+fn eachAlphabetRejectsTheOthersDigits(_ text: String, _ alphabet: Base64.Alphabet, _ error: DecodeError) {
+    expectThrows(error) { _ = try Base64.decode(text, alphabet: alphabet) }
+}
+
+@test(arguments: [
+    ("Z", .Either, .InvalidLength(at: 0)),
+    ("Zm9vY", .Either, .InvalidLength(at: 4)),
+    ("Zm9vY", .Forbidden, .InvalidLength(at: 4)),
+])
+fn oneDigitLeftOverIsTheWrongLength(_ text: String, _ padding: Padding, _ error: DecodeError) {
+    expectThrows(error) { _ = try Base64.decode(text, padding: padding) }
+}
+
+@test(arguments: [
+    ("Zg", .Required, .InvalidPadding(at: 2)),
+    ("Zm8", .Required, .InvalidPadding(at: 3)),
+    ("Zg==", .Forbidden, .InvalidPadding(at: 2)),
+    ("Zm8=", .Forbidden, .InvalidPadding(at: 3)),
+])
+fn paddingIsCheckedAgainstTheRule(_ text: String, _ padding: Padding, _ error: DecodeError) {
+    expectThrows(error) { _ = try Base64.decode(text, padding: padding) }
 }
 
 @test
-fn eachAlphabetRejectsTheOthersDigits() {
-    assertEqual(decodeError("-_8=", alphabet: .Standard), .InvalidCharacter(at: 0, byte: 0x2D))
-    assertEqual(decodeError("+/8=", alphabet: .UrlSafe), .InvalidCharacter(at: 0, byte: 0x2B))
-    assertEqual(decodeError("ab_c"), .InvalidCharacter(at: 2, byte: 0x5F))
-}
-
-@test
-fn oneDigitLeftOverIsTheWrongLength() {
-    assertEqual(decodeError("Z"), .InvalidLength(at: 0))
-    assertEqual(decodeError("Zm9vY"), .InvalidLength(at: 4))
-    assertEqual(decodeError("Zm9vY", padding: .Forbidden), .InvalidLength(at: 4))
-}
-
-@test
-fn paddingIsCheckedAgainstTheRule() {
-    assertEqual(decodeError("Zg", padding: .Required), .InvalidPadding(at: 2))
-    assertEqual(decodeError("Zm8", padding: .Required), .InvalidPadding(at: 3))
-    assertEqual(decodeError("Zg==", padding: .Forbidden), .InvalidPadding(at: 2))
-    assertEqual(decodeError("Zm8=", padding: .Forbidden), .InvalidPadding(at: 3))
+fn whatNeedsNoPaddingMeetsTheRule() {
     assertBytes(try! Base64.decode("Zm9v", padding: .Required), "foo".utf8Bytes())
     assertBytes(try! Base64.decode("", padding: .Required), [])
 }
 
-@test
-fn theWrongAmountOfPaddingIsRejected() {
-    assertEqual(decodeError("Zg="), .InvalidPadding(at: 2))
-    assertEqual(decodeError("Zm8=="), .InvalidPadding(at: 3))
-    assertEqual(decodeError("Zm9v="), .InvalidPadding(at: 4))
-    assertEqual(decodeError("Zm9v=="), .InvalidPadding(at: 4))
-    assertEqual(decodeError("Zg==="), .InvalidPadding(at: 2))
-    assertEqual(decodeError("Z==="), .InvalidPadding(at: 1))
-    assertEqual(decodeError("===="), .InvalidPadding(at: 0))
-    assertEqual(decodeError("="), .InvalidPadding(at: 0))
+@test(arguments: [
+    ("Zg=", .InvalidPadding(at: 2)),
+    ("Zm8==", .InvalidPadding(at: 3)),
+    ("Zm9v=", .InvalidPadding(at: 4)),
+    ("Zm9v==", .InvalidPadding(at: 4)),
+    ("Zg===", .InvalidPadding(at: 2)),
+    ("Z===", .InvalidPadding(at: 1)),
+    ("====", .InvalidPadding(at: 0)),
+    ("=", .InvalidPadding(at: 0)),
+])
+fn theWrongAmountOfPaddingIsRejected(_ text: String, _ error: DecodeError) {
+    expectThrows(error) { _ = try Base64.decode(text) }
+}
+
+@test(arguments: [("Zg==Zg==", .InvalidPadding(at: 2)), ("Zm8=Zm9v", .InvalidPadding(at: 3)), ("Zm9v=m9v", .InvalidPadding(at: 4))])
+fn paddingInTheMiddleIsRejected(_ text: String, _ error: DecodeError) {
+    expectThrows(error) { _ = try Base64.decode(text) }
+}
+
+@test(arguments: [
+    ("Zh==", .TrailingBits(at: 1)),
+    ("Zh", .TrailingBits(at: 1)),
+    ("Zm9=", .TrailingBits(at: 2)),
+    ("Zm9vZm9", .TrailingBits(at: 6)),
+])
+fn bitsTheBytesDoNotUseAreRejected(_ text: String, _ error: DecodeError) {
+    expectThrows(error) { _ = try Base64.decode(text) }
 }
 
 @test
-fn paddingInTheMiddleIsRejected() {
-    assertEqual(decodeError("Zg==Zg=="), .InvalidPadding(at: 2))
-    assertEqual(decodeError("Zm8=Zm9v"), .InvalidPadding(at: 3))
-    assertEqual(decodeError("Zm9v=m9v"), .InvalidPadding(at: 4))
-}
-
-@test
-fn bitsTheBytesDoNotUseAreRejected() {
-    assertEqual(decodeError("Zh=="), .TrailingBits(at: 1))
-    assertEqual(decodeError("Zh"), .TrailingBits(at: 1))
-    assertEqual(decodeError("Zm9="), .TrailingBits(at: 2))
-    assertEqual(decodeError("Zm9vZm9"), .TrailingBits(at: 6))
+fn bitsTheBytesDoNotUseMayBeZero() {
     assertBytes(try! Base64.decode("Zg=="), [0x66])
 }
 
@@ -247,80 +240,70 @@ fn plainBase64(_ bytes: U8[:], _ alphabet: Base64.Alphabet, padding: Bool) -> U8
     return text
 }
 
-@test
-fn everyLengthAndStartEncodesAndDecodesAsTheDefinition() {
-    var random = SeededRandomNumberGenerator(seed: 229)
-    var all: U8[>..] = []
-    for _ in 0..<140 {
-        all.append(U8.random(in: 0...255, using: &random))
-    }
-    for alphabet in [.Standard, .UrlSafe] as Base64.Alphabet[>..] {
-        for start in 0..<4 {
-            for n in 0...130 {
-                let bytes = all[start..<(start + n)]
-                for padding in [true, false] as Bool[>..] {
-                    let expected = plainBase64(bytes, alphabet, padding: padding)
-                    assertBytes(Base64.encode(bytes, alphabet: alphabet, padding: padding).utf8Bytes(), expected)
-                    // Digits outside the slice are not read: they would be decoded.
-                    var text: U8[>..] = [0x41, 0x42, 0x43]
-                    text.append(contentsOf: expected)
-                    let end = text.count
-                    text.append(contentsOf: [0x44, 0x45, 0x46, 0x47])
-                    assertBytes(try! Base64.decode(bytes: text[3..<end], alphabet: alphabet), bytes)
-                }
-                var buffer = ByteBuffer()
-                buffer.write([0xAA])
-                Base64.encode(bytes, into: &buffer, alphabet: alphabet)
-                assertBytes(buffer.bytes[1...], plainBase64(bytes, alphabet, padding: true))
+@test(arguments: [.Standard, .UrlSafe])
+fn everyLengthAndStartEncodesAndDecodesAsTheDefinition(_ alphabet: Base64.Alphabet) {
+    let all = sample(140)
+    for start in 0..<4 {
+        for n in 0...130 {
+            let bytes = all[start..<(start + n)]
+            for padding in [true, false] as Bool[>..] {
+                let expected = plainBase64(bytes, alphabet, padding: padding)
+                assertBytes(Base64.encode(bytes, alphabet: alphabet, padding: padding).utf8Bytes(), expected)
+                // Digits outside the slice are not read: they would be decoded.
+                var text: U8[>..] = [0x41, 0x42, 0x43]
+                text.append(contentsOf: expected)
+                let end = text.count
+                text.append(contentsOf: [0x44, 0x45, 0x46, 0x47])
+                assertBytes(try! Base64.decode(bytes: text[3..<end], alphabet: alphabet), bytes)
             }
+            var buffer = ByteBuffer()
+            buffer.write([0xAA])
+            Base64.encode(bytes, into: &buffer, alphabet: alphabet)
+            assertBytes(buffer.bytes[1...], plainBase64(bytes, alphabet, padding: true))
         }
     }
 }
 
-@test
-fn everyValueOfEverySixBitsAtEveryPosition() {
-    // A group's four digits each take each of their 64 values.
-    for alphabet in [.Standard, .UrlSafe] as Base64.Alphabet[>..] {
-        let digits = plainDigits(alphabet)
-        var text = U8[>..](repeating: 0x41, count: 48)
-        for at in 0..<48 {
-            for value in 0..<64 {
-                text[at] = digits[value]
-                let bytes = try! Base64.decode(bytes: text, alphabet: alphabet)
-                let group = Int(bytes[at / 4 * 3]) << 16 | Int(bytes[at / 4 * 3 + 1]) << 8 | Int(bytes[at / 4 * 3 + 2])
-                assertEqual(group >> (18 - at % 4 * 6), value)
-                assertBytes(Base64.encode(bytes, alphabet: alphabet).utf8Bytes(), text)
-            }
-            text[at] = 0x41
+// A group's four digits each take each of their 64 values.
+@test(arguments: [.Standard, .UrlSafe])
+fn everyValueOfEverySixBitsAtEveryPosition(_ alphabet: Base64.Alphabet) {
+    let digits = plainDigits(alphabet)
+    var text = U8[>..](repeating: 0x41, count: 48)
+    for at in 0..<48 {
+        for value in 0..<64 {
+            text[at] = digits[value]
+            let bytes = try! Base64.decode(bytes: text, alphabet: alphabet)
+            let group = Int(bytes[at / 4 * 3]) << 16 | Int(bytes[at / 4 * 3 + 1]) << 8 | Int(bytes[at / 4 * 3 + 2])
+            assertEqual(group >> (18 - at % 4 * 6), value)
+            assertBytes(Base64.encode(bytes, alphabet: alphabet).utf8Bytes(), text)
         }
+        text[at] = 0x41
     }
 }
 
-@test
-fn everyByteThatIsNoDigitIsFoundAtEveryPositionOfALongText() {
-    for alphabet in [.Standard, .UrlSafe] as Base64.Alphabet[>..] {
-        let digits = plainDigits(alphabet)
-        var text = plainBase64(sample(60), alphabet, padding: true)
-        for at in 0..<(text.count - 1) {
-            let held = text[at]
-            for value in 0..<256 {
-                let byte = U8(value)
-                text[at] = byte
-                var thrown: DecodeError? = none
-                do {
-                    _ = try Base64.decode(bytes: text, alphabet: alphabet)
-                } catch {
-                    thrown = error
-                }
-                if digits.contains(byte) {
-                    assert(thrown == none)
-                } else if byte == 0x3D {
-                    assertEqual(thrown, .InvalidPadding(at: at))
-                } else {
-                    assertEqual(thrown, .InvalidCharacter(at: at, byte: byte))
-                }
+@test(arguments: [.Standard, .UrlSafe])
+fn everyByteThatIsNoDigitIsFoundAtEveryPositionOfALongText(_ alphabet: Base64.Alphabet) {
+    let digits = plainDigits(alphabet)
+    var text = plainBase64(sample(60), alphabet, padding: true)
+    for at in 0..<(text.count - 1) {
+        let held = text[at]
+        for value in 0..<256 {
+            let byte = U8(value)
+            text[at] = byte
+            var thrown: DecodeError? = none
+            do {
+                _ = try Base64.decode(bytes: text, alphabet: alphabet)
+            } catch {
+                thrown = error
             }
-            text[at] = held
+            if digits.contains(byte) {
+                assertEqual(thrown, none)
+            } else if byte == 0x3D {
+                assertEqual(thrown, .InvalidPadding(at: at))
+            } else {
+                assertEqual(thrown, .InvalidCharacter(at: at, byte: byte))
+            }
         }
+        text[at] = held
     }
 }

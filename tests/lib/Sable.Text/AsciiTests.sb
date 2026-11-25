@@ -40,7 +40,7 @@ fn plainUppered(_ byte: U8) -> U8 {
     return byte >= 0x61 && byte <= 0x7A ? byte - 32 : byte
 }
 
-@test
+@test(tags: ["slow"], timeout: .seconds(60))
 fn everyByteAtEveryPositionOfEveryLength() {
     for start in 0..<3 {
         for n in 0...130 {
@@ -73,22 +73,20 @@ fn everyByteAtEveryPositionOfEveryLength() {
     }
 }
 
-@test
-fn everyPairOfBytesComparesAsTheyAreLowered() {
-    for n in [1, 15, 16, 17, 31, 33] as Int[>..] {
-        var a = U8[>..](repeating: 0x78, count: n)
-        var b = U8[>..](repeating: 0x58, count: n)
-        for at in [0, n / 2, n - 1] as Int[>..] {
-            for x in 0..<256 {
-                a[at] = U8(x)
-                for y in 0..<256 {
-                    b[at] = U8(y)
-                    assertEqual(Ascii.equalsIgnoringCase(a, b), plainLowered(U8(x)) == plainLowered(U8(y)))
-                }
+@test(arguments: [1, 15, 16, 17, 31, 33])
+fn everyPairOfBytesComparesAsTheyAreLowered(_ n: Int) {
+    var a = U8[>..](repeating: 0x78, count: n)
+    var b = U8[>..](repeating: 0x58, count: n)
+    for at in [0, n / 2, n - 1] as Int[>..] {
+        for x in 0..<256 {
+            a[at] = U8(x)
+            for y in 0..<256 {
+                b[at] = U8(y)
+                assertEqual(Ascii.equalsIgnoringCase(a, b), plainLowered(U8(x)) == plainLowered(U8(y)))
             }
-            a[at] = 0x78
-            b[at] = 0x58
         }
+        a[at] = 0x78
+        b[at] = 0x58
     }
 }
 
@@ -99,10 +97,10 @@ fn comparingLooksNoFurtherThanTheSlices() {
         var b = U8[>..](repeating: 0x41, count: n + 4)
         a[0] = 0x31
         b[n + 3] = 0x32
-        assert(Ascii.equalsIgnoringCase(a[2..<(n + 2)], b[2..<(n + 2)]))
+        expect(Ascii.equalsIgnoringCase(a[2..<(n + 2)], b[2..<(n + 2)]))
         for at in 0..<n {
             b[2 + at] = 0x42
-            assert(!Ascii.equalsIgnoringCase(a[2..<(n + 2)], b[2..<(n + 2)]))
+            assert(!Ascii.equalsIgnoringCase(a[2..<(n + 2)], b[2..<(n + 2)]), "a letter differs")
             b[2 + at] = 0x41
         }
     }

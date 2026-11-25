@@ -6,15 +6,7 @@ module KernelTests
 
 import Sable.Testing
 import Sable.Text
-
-fn someBytes(_ count: Int, _ seed: U64) -> U8[>..] {
-    var rng = SeededRandomNumberGenerator(seed: seed)
-    var bytes: U8[>..] = []
-    for _ in 0..<count {
-        bytes.append((rng.next() & 0xFF) unchecked as U8)
-    }
-    return bytes
-}
+import TextSupport
 
 fn plainBase64(_ bytes: U8[:], _ digits: String, padding: Bool) -> String {
     var text = ""
@@ -35,7 +27,7 @@ fn base64OfEveryLengthIsThePlainOne() {
     let standard = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     let url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
     for count in 0..<200 {
-        let bytes = someBytes(count, U64(count))
+        let bytes = sample(count, seed: U64(count))
         for padding in [true, false] {
             let plain = plainBase64(bytes, standard, padding: padding)
             assertEqual(Base64.encode(bytes, padding: padding), plain)
@@ -57,32 +49,22 @@ fn base64OfEveryLengthIsThePlainOne() {
 
 @test
 fn aWrongBase64DigitIsSaidToBeWhereItIs() {
-    let text = Base64.encode(someBytes(150, 1))
+    let text = Base64.encode(sample(150, seed: 1))
     for at in 0..<200 {
         for wrong in ["!", "-", "\u{7F}", "\u{0}", "[", "`", "{"] {
             let before = text[..<text.index(atScalar: at)].toString()
             let after = text[text.index(atScalar: at + 1)...].toString()
-            do {
-                _ = try Base64.decode(before + wrong + after)
-                fail("\(wrong) at \(at) decoded")
-            } catch {
-                assert(error == .InvalidCharacter(at: at, byte: wrong.utf8[0]), "\(error) for \(wrong) at \(at)")
-            }
+            expectThrows(DecodeError.InvalidCharacter(at: at, byte: wrong.utf8[0]), "\(wrong:?) at \(at)") { _ = try Base64.decode(before + wrong + after) }
         }
     }
-    do {
-        _ = try Base64.decode(text[..<text.index(atScalar: 100)].toString() + "é" + text)
-        assert(false)
-    } catch {
-        expect(error == .InvalidCharacter(at: 100, byte: 0xC3))
-    }
+    expectThrows(DecodeError.InvalidCharacter(at: 100, byte: 0xC3)) { _ = try Base64.decode(text[..<text.index(atScalar: 100)].toString() + "é" + text) }
 }
 
 @test
 fn hexOfEveryLengthIsThePlainOne() {
     let lower = "0123456789abcdef"
     for count in 0..<200 {
-        let bytes = someBytes(count, U64(count))
+        let bytes = sample(count, seed: U64(count))
         var plain = ""
         for byte in bytes {
             plain = plain + "\(lower.at(index: Int(byte) >> 4))\(lower.at(index: Int(byte) & 15))"
@@ -97,17 +79,12 @@ fn hexOfEveryLengthIsThePlainOne() {
 
 @test
 fn aWrongHexDigitIsSaidToBeWhereItIs() {
-    let text = Hex.encode(someBytes(80, 1))
+    let text = Hex.encode(sample(80, seed: 1))
     for at in 0..<160 {
         for wrong in ["g", "G", "/", ":", "@", "`", "\u{0}", "P"] {
             let before = text[..<text.index(atScalar: at)].toString()
             let after = text[text.index(atScalar: at + 1)...].toString()
-            do {
-                _ = try Hex.decode(before + wrong + after)
-                fail("\(wrong) at \(at) decoded")
-            } catch {
-                assert(error == .InvalidCharacter(at: at, byte: wrong.utf8[0]), "\(error) for \(wrong) at \(at)")
-            }
+            expectThrows(DecodeError.InvalidCharacter(at: at, byte: wrong.utf8[0]), "\(wrong:?) at \(at)") { _ = try Hex.decode(before + wrong + after) }
         }
     }
 }
@@ -138,7 +115,7 @@ fn transcodingIsThePlainOne() {
         let text = someText(length, U64(length))
         var units: U16[>..] = [7]
         let (status, read) = Utf8.toUtf16(text.utf8Bytes(), into: &units)
-        assert(status == .Done && read == text.utf8Count)
+        expect(status == .Done && read == text.utf8Count)
         var plain: U16[>..] = [7]
         for unit in text.utf16 {
             plain.append(unit)
@@ -146,7 +123,7 @@ fn transcodingIsThePlainOne() {
         assertEqual(units, plain)
         var bytes: U8[>..] = []
         let (back, readBack) = Utf8.fromUtf16(units[1...], into: &bytes)
-        assert(back == .Done && readBack == units.count - 1)
+        expect(back == .Done && readBack == units.count - 1)
         assertEqual(bytes, text.utf8Bytes())
     }
 }
@@ -253,20 +230,13 @@ fn normalizationIsThePlainOne() {
     for c in "aeouAEOUqQ ,\u{300}\u{301}\u{302}\u{308}\u{323}\u{327}\u{328}\u{345}\u{E9}\u{1EC7}\u{1D6}\u{DF}\u{F73}\u{F71}\u{F72}\u{F80}\u{344}\u{340}\u{1100}\u{1161}\u{11A8}\u{AC00}\u{AC01}\u{9C7}\u{9BE}\u{FF76}\u{FF9E}\u{FB01}\u{2126}\u{212B}\u{B2}\u{FDFA}\u{3042}\u{3099}\u{1F600}\u{1D15E}\u{11131}\u{11127}\u{95C}" {
         pool.append(c)
     }
-    let forms: NormalizationForm[>..] = [.NFC, .NFD, .NFKC, .NFKD]
-    var rng = SeededRandomNumberGenerator(seed: 11)
-    for _ in 0..<1500 {
-        var scalars: Char[>..] = []
-        for _ in 0..<Int(rng.next() % 12) {
-            scalars.append(pool[Int(rng.next() % U64(pool.count))])
-        }
-        let text = String(scalars)
-        for form in forms {
-            let normalized = text.normalized(form)
-            assertEqual(normalized, plainlyNormalized(text, form))
-            assertEqual(normalized.normalized(form), normalized)
-            assert(normalized.isNormalized(form))
-            assertEqual(text.isNormalized(form), (text == normalized))
-        }
+    let texts = Gen.string(of: Gen.element(of: pool), count: 0...11)
+    let forms = Gen.element(of: [.NFC, .NFD, .NFKC, .NFKD] as NormalizationForm[>..])
+    forAll(texts, forms, cases: 6000) { (text: String, form: NormalizationForm) in
+        let normalized = text.normalized(form)
+        expect(normalized == plainlyNormalized(text, form))
+        expect(normalized.normalized(form) == normalized)
+        expect(normalized.isNormalized(form))
+        expect(text.isNormalized(form) == (text == normalized))
     }
 }

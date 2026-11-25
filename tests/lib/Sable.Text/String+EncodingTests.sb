@@ -7,27 +7,11 @@ module StringEncodingTests
 import Sable.Testing
 import Sable.Text
 
-fn bytes(_ values: Int[>..]) -> U8[>..] {
-    var result: U8[>..] = []
-    for value in values {
-        result.append(U8(value))
-    }
-    return result
-}
-
-fn units(_ values: Int[>..]) -> U16[>..] {
-    var result: U16[>..] = []
-    for value in values {
-        result.append(U16(value))
-    }
-    return result
-}
-
 @test
-fn wellFormedUtf8BecomesText() {
-    assertEqual((try? String.fromUtf8(bytes([0x63, 0x61, 0x66, 0xC3, 0xA9]))) ?? "?", "café")
-    assertEqual((try? String.fromUtf8(bytes([]))) ?? "?", "")
-    let text = (try? String.fromUtf8(bytes([0xF0, 0x9F, 0x98, 0x80, 0x21]))) ?? "?"
+fn wellFormedUtf8BecomesText() throws {
+    expect(try String.fromUtf8([0x63, 0x61, 0x66, 0xC3, 0xA9]) == "café")
+    expect(try String.fromUtf8([]) == "")
+    let text = try String.fromUtf8([0xF0, 0x9F, 0x98, 0x80, 0x21])
     assertEqual(text.count, 2)
     assertEqual(text.utf8Count, 5)
 }
@@ -35,9 +19,9 @@ fn wellFormedUtf8BecomesText() {
 @test
 fn wellFormedUtf8BecomesTextUnchecked() {
     unsafe {
-        assertEqual(String.fromUtf8Unchecked(bytes([0x63, 0x61, 0x66, 0xC3, 0xA9])), "café")
-        assertEqual(String.fromUtf8Unchecked(bytes([])), "")
-        let text = String.fromUtf8Unchecked(bytes([0xF0, 0x9F, 0x98, 0x80, 0x21]))
+        assertEqual(String.fromUtf8Unchecked([0x63, 0x61, 0x66, 0xC3, 0xA9]), "café")
+        assertEqual(String.fromUtf8Unchecked([]), "")
+        let text = String.fromUtf8Unchecked([0xF0, 0x9F, 0x98, 0x80, 0x21])
         assertEqual(text.count, 2)
         assertEqual(text.utf8Count, 5)
     }
@@ -53,47 +37,37 @@ fn aStringsOwnBytesComeBackUnchecked() {
 
 @test
 fn illFormedUtf8ThrowsWhereItIs() {
-    var caught = false
-    do {
-        _ = try String.fromUtf8(bytes([0x61, 0xE2, 0x82, 0x28]))
-    } catch {
-        caught = true
-        assertEqual(error.validUpTo, 1)
-        assertEqual(error.errorLength ?? 0, 2)
-    }
-    expect(caught, "the error was thrown")
+    let error = expectThrows(Utf8Error.self) { _ = try String.fromUtf8([0x61, 0xE2, 0x82, 0x28]) }
+    expect(error?.validUpTo == 1)
+    expect(error?.errorLength == 2)
+}
+
+@test(arguments: [
+    ([0x61, 0xF0, 0x9F, 0x62], "a\u{FFFD}b"),
+    ([0x61, 0x80, 0x80, 0x62], "a\u{FFFD}\u{FFFD}b"),
+    ([0xC0, 0xAF], "\u{FFFD}\u{FFFD}"),
+    ([0xED, 0xA0, 0x80], "\u{FFFD}\u{FFFD}\u{FFFD}"),
+    ([0x61, 0xE2, 0x82], "a\u{FFFD}"),
+    ([0x68, 0x69], "hi"),
+    ([], ""),
+])
+fn lossyDecodingReplacesEachMaximalSubpart(_ bytes: U8[>..], _ text: String) {
+    assertEqual(String.fromUtf8Lossy(bytes), text)
 }
 
 @test
-fn lossyDecodingReplacesEachMaximalSubpart() {
-    assertEqual(String.fromUtf8Lossy(bytes([0x61, 0xF0, 0x9F, 0x62])), "a\u{FFFD}b")
-    assertEqual(String.fromUtf8Lossy(bytes([0x61, 0x80, 0x80, 0x62])), "a\u{FFFD}\u{FFFD}b")
-    assertEqual(String.fromUtf8Lossy(bytes([0xC0, 0xAF])), "\u{FFFD}\u{FFFD}")
-    assertEqual(String.fromUtf8Lossy(bytes([0xED, 0xA0, 0x80])), "\u{FFFD}\u{FFFD}\u{FFFD}")
-    assertEqual(String.fromUtf8Lossy(bytes([0x61, 0xE2, 0x82])), "a\u{FFFD}")
-    assertEqual(String.fromUtf8Lossy(bytes([0x68, 0x69])), "hi")
-    assertEqual(String.fromUtf8Lossy(bytes([])), "")
-}
-
-@test
-fn utf16BecomesText() {
-    assertEqual((try? String.fromUtf16(units([0x48, 0x69, 0xD83D, 0xDE00]))) ?? "?", "Hi😀")
-    assertEqual((try? String.fromUtf16(units([0x20AC]))) ?? "?", "€")
-    assertEqual(String.fromUtf16Lossy(units([0x61, 0xD800, 0x62, 0xDC00])), "a\u{FFFD}b\u{FFFD}")
-    assertEqual(String.fromUtf16Lossy(units([0xD83D])), "\u{FFFD}")
+fn utf16BecomesText() throws {
+    expect(try String.fromUtf16([0x48, 0x69, 0xD83D, 0xDE00]) == "Hi😀")
+    expect(try String.fromUtf16([0x20AC]) == "€")
+    assertEqual(String.fromUtf16Lossy([0x61, 0xD800, 0x62, 0xDC00]), "a\u{FFFD}b\u{FFFD}")
+    assertEqual(String.fromUtf16Lossy([0xD83D]), "\u{FFFD}")
 }
 
 @test
 fn anUnpairedSurrogateThrowsWhereItIs() {
-    var index = -1
-    do {
-        _ = try String.fromUtf16(units([0x61, 0x62, 0xDE00]))
-    } catch {
-        index = error.index
-        assertEqual(error.debugDescription(), "unpaired surrogate at code unit 2")
-        expect(error == Utf16Error(index: 2) && error != Utf16Error(index: 1), "errors compare by index")
-    }
-    assertEqual(index, 2)
+    let error = expectThrows(Utf16Error.self) { _ = try String.fromUtf16([0x61, 0x62, 0xDE00]) }
+    expect(error == Utf16Error(index: 2) && error != Utf16Error(index: 1))
+    expect(error?.debugDescription() == "unpaired surrogate at code unit 2")
 }
 
 @test
@@ -106,35 +80,45 @@ fn utf32BecomesTextWhenEachCodeIsAScalar() {
 
 @test
 fn latin1BytesAreTheirOwnScalars() {
-    assertEqual(String.fromLatin1(bytes([0x63, 0x61, 0x66, 0xE9])), "café")
-    assertEqual(String.fromLatin1(bytes([0x41, 0x42])), "AB")
-    assertEqual(String.fromLatin1(bytes([0xFF, 0x80])), "\u{FF}\u{80}")
+    assertEqual(String.fromLatin1([0x63, 0x61, 0x66, 0xE9]), "café")
+    assertEqual(String.fromLatin1([0x41, 0x42]), "AB")
+    assertEqual(String.fromLatin1([0xFF, 0x80]), "\u{FF}\u{80}")
 }
 
 @test
 fn asciiBytesBecomeTextOnlyWhenAscii() {
-    assertEqual(String.fromAscii(bytes([0x6F, 0x6B])) ?? "?", "ok")
-    expect(String.fromAscii(bytes([0x6F, 0xE9])) == none, "0xE9 is not ASCII")
+    assertEqual(String.fromAscii([0x6F, 0x6B]) ?? "?", "ok")
+    expect(String.fromAscii([0x6F, 0xE9]) == none, "0xE9 is not ASCII")
 }
 
 @test
 fn encodingToEachForm() {
     let text = "a€😀"
-    expect(text.utf8Bytes() == bytes([0x61, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80]), "UTF-8")
-    expect(text.utf16Units() == units([0x61, 0x20AC, 0xD83D, 0xDE00]), "UTF-16")
+    expect(text.utf8Bytes() == [0x61, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80], "UTF-8")
+    expect(text.utf16Units() == [0x61, 0x20AC, 0xD83D, 0xDE00], "UTF-16")
     assertEqual(text.utf16Count, 4)
     let codes: U32[>..] = [0x61, 0x20AC, 0x1F600]
     expect(text.utf32Units() == codes, "UTF-32")
-    expect("café".latin1Bytes()! == bytes([0x63, 0x61, 0x66, 0xE9]), "Latin-1")
+    expect("café".latin1Bytes()! == [0x63, 0x61, 0x66, 0xE9], "Latin-1")
     expect(text.latin1Bytes() == none, "€ is not Latin-1")
-    expect("ok".asciiBytes()! == bytes([0x6F, 0x6B]), "ASCII")
+    expect("ok".asciiBytes()! == [0x6F, 0x6B], "ASCII")
     expect("café".asciiBytes() == none, "é is not ASCII")
 }
 
 @test
-fn encodingAndDecodingRoundTrip() {
+fn encodingAndDecodingRoundTrip() throws {
     let text = "Grüße, 世界 😀\u{0}"
-    assertEqual((try? String.fromUtf8(text.utf8Bytes())) ?? "?", text)
-    assertEqual((try? String.fromUtf16(text.utf16Units())) ?? "?", text)
+    expect(try String.fromUtf8(text.utf8Bytes()) == text)
+    expect(try String.fromUtf16(text.utf16Units()) == text)
     assertEqual(String.fromUtf32(text.utf32Units()) ?? "?", text)
+}
+
+@test
+fn anyTextRoundTripsThroughEachForm() {
+    forAll { (text: String) in
+        expect(try String.fromUtf8(text.utf8Bytes()) == text)
+        expect(try String.fromUtf16(text.utf16Units()) == text)
+        expect(String.fromUtf32(text.utf32Units()) == text)
+        expect(text.utf16Count == text.utf16Units().count)
+    }
 }

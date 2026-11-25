@@ -1,145 +1,86 @@
 module TranscodingTests
 
-// Utf8.toUtf16, Utf8.fromUtf16 and Utf16Decoder (Sable.Text): fuzzed
-// against the whole-input conversions, in one go and a random chunk at a
-// time. Run with
+// Utf8.toUtf16, Utf8.fromUtf16 and Utf16Decoder (Sable.Text): held
+// to the whole-input conversions, in one go and a chunk at a time. Run with
 //     tools/stdlib-coverage.sh Sable.Text
 
 import Sable.Testing
 import Sable.Text
-
-/// A random walk, its bytes weighted to the ranges UTF-8's rules turn on and
-/// its code units to the surrogates.
-struct Source {
-    var state: U64
-
-    mutating fn next() -> Int {
-        state = state ^ (state << 13)
-        state = state ^ (state >> 7)
-        state = state ^ (state << 17)
-        return Int(state >> 1)
-    }
-
-    mutating fn byte() -> U8 {
-        let pick = next() % 16
-        let low = next() % 64
-        let value = pick < 6 ? low + 0x20 : pick < 10 ? 0x80 + low : pick < 12 ? 0xC0 + low % 32 : pick < 14 ? 0xE0 + low % 16 : 0xF0 + low % 16
-        return U8.truncating(value)
-    }
-
-    mutating fn unit() -> U16 {
-        let pick = next() % 8
-        if pick < 4 {
-            return U16.truncating(0x20 + next() % 0x500)
-        }
-        if pick < 6 {
-            return U16.truncating(0xD800 + next() % 0x400)
-        }
-        return U16.truncating(0xDC00 + next() % 0x400)
-    }
-}
+import TextSupport
 
 @test
 fn utf8ToUtf16AgreesWithLossyDecoding() {
-    var source = Source { state: 0x9E3779B97F4A7C15 }
-    var round = 0
-    while round < 600 {
-        var bytes: U8[>..] = []
-        let length = source.next() % 40
-        while bytes.count < length {
-            bytes.append(source.byte())
-        }
+    forAll(nearlyUtf8.array(count: 0...39), Gen.number(in: 1...6).array(count: 0...39), cases: 600) { (bytes: U8[>..], cuts: Int[>..]) in
         let expected = String.fromUtf8Lossy(bytes).utf16Units()
-
         var whole: U16[>..] = []
         let (status, read) = Utf8.toUtf16(bytes, into: &whole)
-        assert(status == .Done && read == bytes.count, "one go")
-        assertEqual(whole, expected)
+        expect(status == .Done && read == bytes.count)
+        expect(whole == expected)
 
         // A chunk at a time, what is unread carried over to the next.
         var chunked: U16[>..] = []
         var carried: U8[>..] = []
-        var start = 0
-        while start < bytes.count {
-            let end = start + 1 + source.next() % 6
-            let stop = end < bytes.count ? end : bytes.count
+        for range in chunks(bytes.count, cuts) {
             var chunk = carried
-            chunk.append(contentsOf: bytes[start..<stop])
-            let last = stop == bytes.count
+            chunk.append(contentsOf: bytes[range])
+            let last = range.upperBound == bytes.count
             let (chunkStatus, chunkRead) = Utf8.toUtf16(chunk, into: &chunked, isFinalBlock: last)
-            assert(chunkStatus == (last ? .Done : chunkRead == chunk.count ? .Done : .NeedMoreData), "a chunk's status")
+            expect(chunkStatus == (last || chunkRead == chunk.count ? .Done : .NeedMoreData))
             carried = chunk[chunkRead...].toArray()
-            start = stop
         }
-        assertEqual(chunked, expected)
+        expect(chunked == expected)
 
         // Not replacing: it stops where the first error is.
         var strict: U16[>..] = []
         let (strictStatus, strictRead) = Utf8.toUtf16(bytes, into: &strict, replacingInvalid: false)
         if let at = Utf8.validate(bytes) {
-            assert(strictStatus == .InvalidData, "stops at an error")
-            assertEqual(strictRead, at)
+            expect(strictStatus == .InvalidData && strictRead == at)
         } else {
-            assert(strictStatus == .Done, "valid input is done")
+            expect(strictStatus == .Done, "valid input is done")
         }
-        round += 1
     }
 }
 
 @test
 fn fromUtf16AgreesWithLossyDecoding() {
-    var source = Source { state: 0xD1B54A32D192ED03 }
-    var round = 0
-    while round < 600 {
-        var units: U16[>..] = []
-        let length = source.next() % 30
-        while units.count < length {
-            units.append(source.unit())
-        }
+    forAll(nearlyUtf16.array(count: 0...29), Gen.number(in: 1...4).array(count: 0...29), cases: 600) { (units: U16[>..], cuts: Int[>..]) in
         let expected = String.fromUtf16Lossy(units).utf8Bytes()
-
         var whole: U8[>..] = []
         let (status, read) = Utf8.fromUtf16(units, into: &whole)
-        assert(status == .Done && read == units.count, "one go")
-        assertEqual(whole, expected)
+        expect(status == .Done && read == units.count)
+        expect(whole == expected)
 
         var chunked: U8[>..] = []
         var carried: U16[>..] = []
-        var start = 0
-        while start < units.count {
-            let end = start + 1 + source.next() % 4
-            let stop = end < units.count ? end : units.count
+        for range in chunks(units.count, cuts) {
             var chunk = carried
-            chunk.append(contentsOf: units[start..<stop])
-            let (_, chunkRead) = Utf8.fromUtf16(chunk, into: &chunked, isFinalBlock: stop == units.count)
+            chunk.append(contentsOf: units[range])
+            let (_, chunkRead) = Utf8.fromUtf16(chunk, into: &chunked, isFinalBlock: range.upperBound == units.count)
             carried = chunk[chunkRead...].toArray()
-            start = stop
         }
-        assertEqual(chunked, expected)
+        expect(chunked == expected)
 
         var strict: U8[>..] = []
         let (strictStatus, strictRead) = Utf8.fromUtf16(units, into: &strict, replacingInvalid: false)
         if let at = Utf16.validate(units) {
-            assert(strictStatus == .InvalidData, "stops at a lone surrogate")
-            assertEqual(strictRead, at)
+            expect(strictStatus == .InvalidData && strictRead == at)
         } else {
-            assert(strictStatus == .Done, "valid input is done")
+            expect(strictStatus == .Done, "valid input is done")
         }
+    }
+}
 
-        // The streaming decoder, fed random chunks, tells the same story.
+@test
+fn theStreamingDecoderAgreesWithLossyDecoding() {
+    forAll(nearlyUtf16.array(count: 0...29), Gen.number(in: 1...4).array(count: 0...29), cases: 600) { (units: U16[>..], cuts: Int[>..]) in
         var decoder = Utf16Decoder()
         var text = ""
-        start = 0
-        while start < units.count {
-            let end = start + 1 + source.next() % 4
-            let stop = end < units.count ? end : units.count
-            text = text + decoder.decode(units[start..<stop])
-            start = stop
+        for range in chunks(units.count, cuts) {
+            text = text + decoder.decode(units[range])
         }
         text = text + decoder.finish()
-        assertEqual(text, String.fromUtf16Lossy(units))
-        assertEqual(decoder.sawInvalid, Utf16.validate(units) != none)
-        round += 1
+        expect(text == String.fromUtf16Lossy(units))
+        expect(decoder.sawInvalid == (Utf16.validate(units) != none))
     }
 }
 
@@ -182,7 +123,7 @@ fn utf8Of(_ scalars: Char[:]) -> U8[>..] {
     return bytes
 }
 
-fn assertConverts(_ scalars: Char[:]) {
+fn assertConverts(_ scalars: Char[:], file: String = #file, line: Int = #line) {
     let bytes = utf8Of(scalars)
     let units = utf16Of(scalars)
     // What is there already stays, and slices of longer arrays are read only where they are.
@@ -191,32 +132,32 @@ fn assertConverts(_ scalars: Char[:]) {
     padded.append(0xF0)
     var gotUnits: U16[>..] = [7]
     let toUnits = Utf8.toUtf16(padded[1..<(bytes.count + 1)], into: &gotUnits)
-    expect(toUnits.status == .Done && toUnits.read == bytes.count)
-    expect(gotUnits[1...] == units && gotUnits[0] == 7)
+    expect(toUnits.status == .Done && toUnits.read == bytes.count, file: file, line: line)
+    expect(gotUnits[1...] == units && gotUnits[0] == 7, file: file, line: line)
 
     var paddedUnits: U16[>..] = [0xD800]
     paddedUnits.append(contentsOf: units)
     paddedUnits.append(0xDC00)
     var gotBytes: U8[>..] = [9]
     let toBytes = Utf8.fromUtf16(paddedUnits[1..<(units.count + 1)], into: &gotBytes)
-    expect(toBytes.status == .Done && toBytes.read == units.count)
-    expect(gotBytes[1...] == bytes && gotBytes[0] == 9)
+    expect(toBytes.status == .Done && toBytes.read == units.count, file: file, line: line)
+    expect(gotBytes[1...] == bytes && gotBytes[0] == 9, file: file, line: line)
 
     let text = try! String.fromUtf8(bytes)
-    expect(text.utf16Units() == units)
-    assertEqual(text.utf16Count, units.count)
-    assertEqual(text.utf32Units().count, scalars.count)
-    expect(try! String.fromUtf16(units) == text)
-    expect(String.fromUtf16Lossy(units) == text)
-    expect(Utf16.isValid(units))
+    expect(text.utf16Units() == units, file: file, line: line)
+    expect(text.utf16Count == units.count, file: file, line: line)
+    expect(text.utf32Units().count == scalars.count, file: file, line: line)
+    expect(try! String.fromUtf16(units) == text, file: file, line: line)
+    expect(String.fromUtf16Lossy(units) == text, file: file, line: line)
+    expect(Utf16.isValid(units), file: file, line: line)
     var latin = true
     for scalar in scalars {
         latin = latin && scalar.codePoint < 0x100
     }
     let latinBytes = text.latin1Bytes()
-    assertEqual(latinBytes != none, latin)
+    expect(latinBytes != none == latin, file: file, line: line)
     if latin {
-        expect(String.fromLatin1(latinBytes!) == text)
+        expect(String.fromLatin1(latinBytes!) == text, file: file, line: line)
     }
 }
 
@@ -262,44 +203,40 @@ fn aLongTextCrossesTheBlocksRoomIsMadeBy() {
         scalars.append(i % 3 == 0 ? '世' : i % 4095 == 1 ? '😀' : 'a')
     }
     assertConverts(scalars)
-    let wide = Char[>..](repeating: '世', count: 5000)
-    assertConverts(wide)
-    let pairs = Char[>..](repeating: '😀', count: 5000)
-    assertConverts(pairs)
+    assertConverts(Char[>..](repeating: '世', count: 5000))
+    assertConverts(Char[>..](repeating: '😀', count: 5000))
 }
 
-@test
-fn aLoneSurrogateAtEveryPosition() {
-    for n in [1, 15, 16, 17, 32, 33, 50] as Int[>..] {
-        for at in 0..<n {
-            for surrogate in [0xD800, 0xDBFF, 0xDC00, 0xDFFF] as U16[>..] {
-                var units = U16[>..](repeating: 0x61, count: n)
-                units[at] = surrogate
-                assertEqual(Utf16.validate(units) ?? -1, at)
-                var stopped: U8[>..] = []
-                let strict = Utf8.fromUtf16(units, into: &stopped, replacingInvalid: false)
-                assert(strict.status == .InvalidData)
-                assertEqual(strict.read, at)
-                assertEqual(stopped.count, at)
-                var replaced: U8[>..] = []
-                let lossy = Utf8.fromUtf16(units, into: &replaced)
-                assert(lossy.status == .Done)
-                assertEqual(replaced.count, n + 2)
-                assertEqual(replaced[at], 0xEF)
-                var partial: U8[>..] = []
-                let more = Utf8.fromUtf16(units, into: &partial, replacingInvalid: false, isFinalBlock: false)
-                let needsMore = at == n - 1 && surrogate < 0xDC00
-                assert(more.status == (needsMore ? .NeedMoreData : .InvalidData))
-                assertEqual(more.read, at)
-            }
-            // A pair that the block's end cuts, or a run of sixteen does.
-            if at + 1 < n {
-                var units = U16[>..](repeating: 0x61, count: n)
-                units[at] = 0xD83D
-                units[at + 1] = 0xDE00
-                assert(Utf16.validate(units) == none)
-                assertEqual(String.fromUtf16Lossy(units).count, n - 1)
-            }
+@test(arguments: [1, 15, 16, 17, 32, 33, 50])
+fn aLoneSurrogateAtEveryPosition(_ n: Int) {
+    for at in 0..<n {
+        for surrogate in [0xD800, 0xDBFF, 0xDC00, 0xDFFF] as U16[>..] {
+            var units = U16[>..](repeating: 0x61, count: n)
+            units[at] = surrogate
+            assertEqual(Utf16.validate(units), at)
+            var stopped: U8[>..] = []
+            let strict = Utf8.fromUtf16(units, into: &stopped, replacingInvalid: false)
+            assert(strict.status == .InvalidData)
+            assertEqual(strict.read, at)
+            assertEqual(stopped.count, at)
+            var replaced: U8[>..] = []
+            let lossy = Utf8.fromUtf16(units, into: &replaced)
+            assert(lossy.status == .Done)
+            assertEqual(replaced.count, n + 2)
+            assertEqual(replaced[at], 0xEF)
+            var partial: U8[>..] = []
+            let more = Utf8.fromUtf16(units, into: &partial, replacingInvalid: false, isFinalBlock: false)
+            let needsMore = at == n - 1 && surrogate < 0xDC00
+            assert(more.status == (needsMore ? .NeedMoreData : .InvalidData))
+            assertEqual(more.read, at)
+        }
+        // A pair that the block's end cuts, or a run of sixteen does.
+        if at + 1 < n {
+            var units = U16[>..](repeating: 0x61, count: n)
+            units[at] = 0xD83D
+            units[at + 1] = 0xDE00
+            assert(Utf16.validate(units) == none)
+            assertEqual(String.fromUtf16Lossy(units).count, n - 1)
         }
     }
 }

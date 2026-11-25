@@ -9,43 +9,9 @@ import Sable.Collections
 import Sable.IO
 import Sable.Testing
 import Sable.Text
+import TextSupport
 
-fn hexValue(_ digits: String) -> Int {
-    var value = 0
-    for digit in digits {
-        let code = digit.codePoint
-        value = value * 16 + (code <= 0x39 ? code - 0x30 : (code | 0x20) - 0x61 + 10)
-    }
-    return value
-}
-
-fn scalars(_ field: String) -> String {
-    var text = ""
-    for code in field.trimmed().split(separator: ' ') {
-        if !code.isEmpty {
-            text = text + String.fromChar(Char.fromCodePoint(hexValue(code))!)
-        }
-    }
-    return text
-}
-
-/// Where a UCD test file is: in tests/lib/Sable.Text/ucd/ of the repository,
-/// found from the directory the tests run in, which may be below its root.
-fn ucdFile(_ name: String) -> String {
-    var up = ""
-    var depth = 0
-    while depth < 8 {
-        let path = "\(up)tests/lib/Sable.Text/ucd/\(name)"
-        if File.exists(path) {
-            return path
-        }
-        up = up + "../"
-        depth = depth + 1
-    }
-    return "tests/lib/Sable.Text/ucd/\(name)"
-}
-
-@test
+@test(tags: ["slow"], timeout: .seconds(60))
 fn everyFormAgreesWithNormalizationTest() throws {
     // Each line is five strings, c1 to c5, with c2 = NFC(c1), c3 = NFD(c1),
     // c4 = NFKC(c1) and c5 = NFKD(c1), and the invariants of its header.
@@ -128,11 +94,7 @@ fn normalizingByExample() {
     assertEqual("a\u{301}\u{323}".normalized(.NFC), "\u{1EA1}\u{301}")
 }
 
-@test
-fn caseFoldingInFull() {
-    assertEqual("Straße".caseFolded(), "strasse")
-    assertEqual("ﬁ".caseFolded(), "fi")
-    assertEqual("ΣΑΣ".caseFolded(), "σασ")
-    assertEqual("K".caseFolded(), "k")
-    assertEqual("ǅ".caseFolded(), "ǆ")
+@test(arguments: [("Straße", "strasse"), ("ﬁ", "fi"), ("ΣΑΣ", "σασ"), ("K", "k"), ("ǅ", "ǆ")])
+fn caseFoldingInFull(_ text: String, _ folded: String) {
+    assertEqual(text.caseFolded(), folded)
 }

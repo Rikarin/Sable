@@ -5,32 +5,18 @@ module Base64EncoderTests
 
 import Sable.Testing
 import Sable.Text
+import TextSupport
 
-fn sample(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var state = 0x0BEE
-    var i = 0
-    while i < count {
-        state = (state * 75 + 74) % 65537
-        bytes.append(U8(state & 0xFF))
-        i += 1
-    }
-    return bytes
-}
-
-@test
-fn twoChunksSplitAnywhereEncodeAsTheWhole() {
+@test(arguments: [true, false])
+fn twoChunksSplitAnywhereEncodeAsTheWhole(_ padding: Bool) {
     let bytes = sample(23)
-    let paddings: Bool[>..] = [true, false]
-    for padding in paddings {
-        let whole = Base64.encode(bytes, alphabet: .UrlSafe, padding: padding)
-        var cut = 0
-        while cut <= bytes.count {
-            var encoder = Base64Encoder(alphabet: .UrlSafe, padding: padding)
-            let text = encoder.encode(bytes[..<cut]) + encoder.encode(bytes[cut...]) + encoder.finish()
-            assertEqual(text, whole)
-            cut += 1
-        }
+    let whole = Base64.encode(bytes, alphabet: .UrlSafe, padding: padding)
+    var cut = 0
+    while cut <= bytes.count {
+        var encoder = Base64Encoder(alphabet: .UrlSafe, padding: padding)
+        let text = encoder.encode(bytes[..<cut]) + encoder.encode(bytes[cut...]) + encoder.finish()
+        assertEqual(text, whole)
+        cut += 1
     }
 }
 
@@ -67,31 +53,28 @@ fn finishingEmptiesTheEncoderToBeginAgain() {
     assertEqual(encoder.finish(), "")
 }
 
-@test
-fn chunksEncodeIntoABufferAsTheWhole() {
+@test(arguments: [true, false])
+fn chunksEncodeIntoABufferAsTheWhole(_ padding: Bool) {
     let bytes = sample(23)
-    let paddings: Bool[>..] = [true, false]
-    for padding in paddings {
-        var first = 0
-        while first <= bytes.count {
-            var buffer = ByteBuffer()
-            buffer.writeU8(0x21)
-            var encoder = Base64Encoder(padding: padding)
-            encoder.encode(bytes[..<first], into: &buffer)
-            var i = first
-            while i < bytes.count {
-                encoder.encode(bytes[i..<i + 1], into: &buffer)
-                i += 1
-            }
-            encoder.finish(into: &buffer)
-            var expected = ByteBuffer()
-            expected.writeU8(0x21)
-            Base64.encode(bytes, into: &expected, padding: padding)
-            assertEqual(buffer.bytes, expected.bytes)
-            // Empty again.
-            encoder.finish(into: &buffer)
-            assertEqual(buffer.count, expected.count)
-            first += 1
+    var first = 0
+    while first <= bytes.count {
+        var buffer = ByteBuffer()
+        buffer.writeU8(0x21)
+        var encoder = Base64Encoder(padding: padding)
+        encoder.encode(bytes[..<first], into: &buffer)
+        var i = first
+        while i < bytes.count {
+            encoder.encode(bytes[i..<i + 1], into: &buffer)
+            i += 1
         }
+        encoder.finish(into: &buffer)
+        var expected = ByteBuffer()
+        expected.writeU8(0x21)
+        Base64.encode(bytes, into: &expected, padding: padding)
+        assertEqual(buffer.bytes, expected.bytes)
+        // Empty again.
+        encoder.finish(into: &buffer)
+        assertEqual(buffer.count, expected.count)
+        first += 1
     }
 }

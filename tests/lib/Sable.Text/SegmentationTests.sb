@@ -10,37 +10,13 @@ module SegmentationTests
 import Sable.IO
 import Sable.Testing
 import Sable.Text
+import TextSupport
 
 /// A case of a UCD break test: the text, and the pieces it breaks into.
 struct BreakCase {
     let text: String
     let pieces: String[>..]
     let line: String
-}
-
-fn hexValue(_ digits: String) -> Int {
-    var value = 0
-    for digit in digits {
-        let code = digit.codePoint
-        value = value * 16 + (code <= 0x39 ? code - 0x30 : (code | 0x20) - 0x61 + 10)
-    }
-    return value
-}
-
-/// Where a UCD test file is: in tests/lib/Sable.Text/ucd/ of the repository,
-/// found from the directory the tests run in, which may be below its root.
-fn ucdFile(_ name: String) -> String {
-    var up = ""
-    var depth = 0
-    while depth < 8 {
-        let path = "\(up)tests/lib/Sable.Text/ucd/\(name)"
-        if File.exists(path) {
-            return path
-        }
-        up = up + "../"
-        depth = depth + 1
-    }
-    return "tests/lib/Sable.Text/ucd/\(name)"
 }
 
 /// The cases of a break test file, comments and blank lines left out.
@@ -61,7 +37,7 @@ fn breakCases(_ name: String) throws -> BreakCase[>..] {
                     piece = ""
                 }
             } else if token != "×" && !token.isEmpty {
-                let scalar = String.fromChar(Char.fromCodePoint(hexValue(token))!)
+                let scalar = scalars(token)
                 text = text + scalar
                 piece = piece + scalar
             }

@@ -6,30 +6,34 @@ module DecodeErrorTests
 import Sable.Testing
 import Sable.Text
 
-@test
-fn eachCaseNamesItsOffset() {
-    let errors: DecodeError[>..] = [.InvalidCharacter(at: 1, byte: 0x2A), .InvalidLength(at: 2), .InvalidPadding(at: 3), .TrailingBits(at: 4)]
-    var expected = 1
-    for error in errors {
-        assertEqual(error.offset, expected)
-        expected += 1
-    }
+@test(arguments: [
+    (.InvalidCharacter(at: 1, byte: 0x2A), 1),
+    (.InvalidLength(at: 2), 2),
+    (.InvalidPadding(at: 3), 3),
+    (.TrailingBits(at: 4), 4),
+])
+fn eachCaseNamesItsOffset(_ error: DecodeError, _ offset: Int) {
+    assertEqual(error.offset, offset)
 }
 
-@test
-fn eachCaseDescribesWhatIsWrongAndWhere() {
-    assertEqual(DecodeError.InvalidCharacter(at: 3, byte: 0x2A).description(), "invalid character 0x2A at 3")
-    assertEqual(DecodeError.InvalidLength(at: 4).description(), "the text ends partway through the group at 4")
-    assertEqual(DecodeError.InvalidPadding(at: 5).description(), "invalid padding at 5")
-    assertEqual(DecodeError.TrailingBits(at: 6).description(), "the digit at 6 has bits the bytes do not use")
+@test(arguments: [
+    (.InvalidCharacter(at: 3, byte: 0x2A), "invalid character 0x2A at 3"),
+    (.InvalidLength(at: 4), "the text ends partway through the group at 4"),
+    (.InvalidPadding(at: 5), "invalid padding at 5"),
+    (.TrailingBits(at: 6), "the digit at 6 has bits the bytes do not use"),
+])
+fn eachCaseDescribesWhatIsWrongAndWhere(_ error: DecodeError, _ text: String) {
+    assertEqual(error.description(), text)
 }
 
-@test
-fn debugWritesTheCaseAsSourceDoes() {
-    assertEqual(DecodeError.InvalidCharacter(at: 3, byte: 42).debugDescription(), "DecodeError.InvalidCharacter(at: 3, byte: 42)")
-    assertEqual(DecodeError.InvalidLength(at: 4).debugDescription(), "DecodeError.InvalidLength(at: 4)")
-    assertEqual(DecodeError.InvalidPadding(at: 5).debugDescription(), "DecodeError.InvalidPadding(at: 5)")
-    assertEqual(DecodeError.TrailingBits(at: 6).debugDescription(), "DecodeError.TrailingBits(at: 6)")
+@test(arguments: [
+    (.InvalidCharacter(at: 3, byte: 42), "DecodeError.InvalidCharacter(at: 3, byte: 42)"),
+    (.InvalidLength(at: 4), "DecodeError.InvalidLength(at: 4)"),
+    (.InvalidPadding(at: 5), "DecodeError.InvalidPadding(at: 5)"),
+    (.TrailingBits(at: 6), "DecodeError.TrailingBits(at: 6)"),
+])
+fn debugWritesTheCaseAsSourceDoes(_ error: DecodeError, _ text: String) {
+    assertEqual(error.debugDescription(), text)
 }
 
 @test

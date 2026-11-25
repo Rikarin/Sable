@@ -1,0 +1,80 @@
+module TextSupport
+
+// What several of Sable.Text's tests are written with.
+
+import Sable.IO
+import Sable.Testing
+import Sable.Text
+
+/// The bytes are the ones expected; when not, both are shown in hexadecimal.
+public fn assertBytes(_ actual: U8[:], _ expected: U8[:], file: String = #file, line: Int = #line) {
+    // Written only then: the tests ask this many thousands of times.
+    if actual != expected {
+        recordFailure("\(Hex.encode(actual)) is not \(Hex.encode(expected))", file: file, line: line)
+    }
+}
+
+/// So many bytes, of every value, in no simple order.
+public fn sample(_ count: Int, seed: U64 = 229) -> U8[>..] {
+    var random = SeededRandomNumberGenerator(seed: seed)
+    var bytes: U8[>..] = []
+    for _ in 0..<count {
+        bytes.append(U8.random(in: 0...255, using: &random))
+    }
+    return bytes
+}
+
+/// Bytes weighted to the ranges UTF-8's rules turn on.
+public let nearlyUtf8: Gen<U8> = Gen.weighted([
+    (6, Gen.number(in: (0x20 as U8)...0x5F)), (4, Gen.number(in: (0x80 as U8)...0xBF)), (2, Gen.number(in: (0xC0 as U8)...0xDF)),
+    (2, Gen.number(in: (0xE0 as U8)...0xEF)), (2, Gen.number(in: (0xF0 as U8)...0xFF)),
+])
+
+/// Code units weighted to the surrogates.
+public let nearlyUtf16: Gen<U16> = Gen.weighted([
+    (4, Gen.number(in: (0x20 as U16)...0x51F)), (2, Gen.number(in: (0xD800 as U16)...0xDBFF)), (2, Gen.number(in: (0xDC00 as U16)...0xDFFF)),
+])
+
+/// The ranges that so many elements are cut into by lengths, the last of
+/// them all that the lengths leave.
+public fn chunks(_ count: Int, _ lengths: Int[>..]) -> Range<Int>[>..] {
+    var ranges: Range<Int>[>..] = []
+    var start = 0
+    for length in lengths {
+        let end = start + length < count ? start + length : count
+        if end > start {
+            ranges.append(start..<end)
+        }
+        start = end
+    }
+    if start < count {
+        ranges.append(start..<count)
+    }
+    return ranges
+}
+
+/// The scalars of a Unicode Character Database test's field: their codes in
+/// hexadecimal, spaces between.
+public fn scalars(_ field: String) -> String {
+    var text = ""
+    for code in field.trimmed().split(separator: ' ') {
+        if !code.isEmpty {
+            text = text + String.fromChar(Char.fromCodePoint(try! Int.parse(code, radix: 16))!)
+        }
+    }
+    return text
+}
+
+/// Where a UCD test file is: in tests/lib/Sable.Text/ucd/ of the repository,
+/// found from the directory the tests run in, which may be below its root.
+public fn ucdFile(_ name: String) -> String {
+    var up = ""
+    for _ in 0..<8 {
+        let path = "\(up)tests/lib/Sable.Text/ucd/\(name)"
+        if File.exists(path) {
+            return path
+        }
+        up = up + "../"
+    }
+    return "tests/lib/Sable.Text/ucd/\(name)"
+}

@@ -5,23 +5,7 @@ module Base64DecoderTests
 
 import Sable.Testing
 import Sable.Text
-
-// The bytes are the ones expected; when not, both are shown in hexadecimal.
-fn assertBytes(_ actual: U8[:], _ expected: U8[:]) {
-    expect(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
-}
-
-fn sample(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var state = 0x3C3C
-    var i = 0
-    while i < count {
-        state = (state * 75 + 74) % 65537
-        bytes.append(U8(state & 0xFF))
-        i += 1
-    }
-    return bytes
-}
+import TextSupport
 
 // The text decoded in two chunks, cut at a byte offset.
 fn decodeInTwo(_ text: U8[:], cut: Int, padding: Padding = .Either) throws(DecodeError) -> U8[>..] {
@@ -30,15 +14,6 @@ fn decodeInTwo(_ text: U8[:], cut: Int, padding: Padding = .Either) throws(Decod
     bytes.append(contentsOf: try decoder.decode(bytes: text[cut...]))
     bytes.append(contentsOf: try decoder.finish())
     return bytes
-}
-
-fn errorInTwo(_ text: String, cut: Int, padding: Padding = .Either) -> DecodeError? {
-    do {
-        _ = try decodeInTwo(text.utf8Bytes(), cut: cut, padding: padding)
-    } catch {
-        return error
-    }
-    return none
 }
 
 @test
@@ -81,19 +56,23 @@ fn theLastGroupIsHeldUntilTheEnd() {
     expect(decoder.padding == .Forbidden, "the rule it was given")
 }
 
-@test
-fn errorsCountFromTheStartOfTheStream() {
-    assertEqual(errorInTwo("Zm9vZm*v", cut: 5), .InvalidCharacter(at: 6, byte: 0x2A))
-    assertEqual(errorInTwo("Zm9vZm9v*m9v", cut: 9), .InvalidCharacter(at: 8, byte: 0x2A))
-    assertEqual(errorInTwo("Zm9vZm9vZm9", cut: 8), .TrailingBits(at: 10))
-    assertEqual(errorInTwo("Zm9vZg", cut: 2, padding: .Required), .InvalidPadding(at: 6))
+@test(arguments: [
+    ("Zm9vZm*v", 5, .Either, .InvalidCharacter(at: 6, byte: 0x2A)),
+    ("Zm9vZm9v*m9v", 9, .Either, .InvalidCharacter(at: 8, byte: 0x2A)),
+    ("Zm9vZm9vZm9", 8, .Either, .TrailingBits(at: 10)),
+    ("Zm9vZg", 2, .Required, .InvalidPadding(at: 6)),
+])
+fn errorsCountFromTheStartOfTheStream(_ text: String, _ cut: Int, _ padding: Padding, _ error: DecodeError) {
+    expectThrows(error) { _ = try decodeInTwo(text.utf8Bytes(), cut: cut, padding: padding) }
 }
 
-@test
-fn paddingBeforeTheEndIsRejected() {
-    assertEqual(errorInTwo("Zg==Zg==", cut: 4), .InvalidPadding(at: 2))
-    assertEqual(errorInTwo("Zg==Zg==", cut: 6), .InvalidPadding(at: 2))
-    assertEqual(errorInTwo("Zm9vZg==Zm9v", cut: 8), .InvalidPadding(at: 6))
+@test(arguments: [
+    ("Zg==Zg==", 4, .InvalidPadding(at: 2)),
+    ("Zg==Zg==", 6, .InvalidPadding(at: 2)),
+    ("Zm9vZg==Zm9v", 8, .InvalidPadding(at: 6)),
+])
+fn paddingBeforeTheEndIsRejected(_ text: String, _ cut: Int, _ error: DecodeError) {
+    expectThrows(error) { _ = try decodeInTwo(text.utf8Bytes(), cut: cut) }
 }
 
 @test

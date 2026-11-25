@@ -6,28 +6,21 @@ module Utf16Tests
 import Sable.Testing
 import Sable.Text
 
-fn units(_ values: Int[>..]) -> U16[>..] {
-    var result: U16[>..] = []
-    for value in values {
-        result.append(U16(value))
-    }
-    return result
-}
-
 @test
 fn wellFormedUtf16IsValid() {
-    expect(Utf16.isValid(units([])), "nothing")
-    expect(Utf16.isValid(units([0x48, 0xD83D, 0xDE00, 0xFFFF])), "a pair, and the BMP's last")
-    expect(Utf16.validate(units([0xD7FF, 0xE000])) == none, "around the surrogates")
+    expect(Utf16.isValid([]), "nothing")
+    expect(Utf16.isValid([0x48, 0xD83D, 0xDE00, 0xFFFF]), "a pair, and the BMP's last")
+    expect(Utf16.validate([0xD7FF, 0xE000]) == none, "around the surrogates")
+}
+
+@test(arguments: [([0xDE00, 0x48], 0), ([0x48, 0xD83D], 1), ([0xD83D, 0x48], 0), ([0xD83D, 0xD83D, 0xDE00], 0)])
+fn anUnpairedSurrogateIsFound(_ units: U16[>..], _ at: Int) {
+    assertEqual(Utf16.validate(units), at)
 }
 
 @test
-fn anUnpairedSurrogateIsFound() {
-    assertEqual(Utf16.validate(units([0xDE00, 0x48])) ?? -1, 0)
-    assertEqual(Utf16.validate(units([0x48, 0xD83D])) ?? -1, 1)
-    assertEqual(Utf16.validate(units([0xD83D, 0x48])) ?? -1, 0)
-    assertEqual(Utf16.validate(units([0xD83D, 0xD83D, 0xDE00])) ?? -1, 0)
-    expect(!Utf16.isValid(units([0xDBFF])), "a lone leading surrogate")
+fn aLoneLeadingSurrogateIsNotValid() {
+    expect(!Utf16.isValid([0xDBFF]), "a lone leading surrogate")
 }
 
 @test

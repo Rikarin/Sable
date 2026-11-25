@@ -1169,7 +1169,7 @@ public sealed partial class OpenedTypeTests {
             """
             protocol Takes {
                 static fn name() -> String
-                fn take<U>(_ u: U) -> Int
+                fn shown() -> String
             }
 
             struct Plain {}
@@ -1177,7 +1177,7 @@ public sealed partial class OpenedTypeTests {
             struct Box<T>: Takes {
                 var item: T
                 static fn name() -> String => "box"
-                fn take<U>(_ u: U) -> Int => 1
+                fn shown() -> String => "\([item])"
             }
 
             fn boxOf<T>(_ type: T.Type) -> Type => Box<T>.self

@@ -2956,7 +2956,7 @@ public sealed partial class Binder {
 
         foreach (var content in syntax.Contents) {
             if (content is InterpolationSyntax hole) {
-                var part = BindExpression(hole.Expression);
+                var part = AsValue(BindExpression(hole.Expression));
                 parts.Add(part);
                 formats.Add(hole.FormatToken.IsNone ? null : BindFormatSpec(hole, part));
             }
@@ -8525,6 +8525,15 @@ public sealed partial class Binder {
             );
         }
 
+        // What a generic type's record leaves out, read with the type arguments it has here.
+        if (missing.Count == 0 && !substitution.IsEmpty) {
+            foreach (var field in named.Members.OfType<FieldSymbol>().Where(static f => f is { IsStatic: false, IsComputed: false, HasInitializer: true })) {
+                if (!initialized.Contains(field.DisplayName) && FieldDefault(syntax, field, substitution.Apply(field.Type), substitution) is { } value) {
+                    fields.Add((field, value));
+                }
+            }
+        }
+
         return new BoundRecordExpression(syntax, named, fields.ToImmutable());
     }
 
@@ -9451,6 +9460,11 @@ public sealed partial class Binder {
         }
 
         var left = BindExpression(syntax.Left, operandExpected);
+
+        // A function named where a value may be none: 'xs.first', of 'first(where:)' alone.
+        if (syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken) {
+            left = AsValue(left);
+        }
 
         // The right side of '??' is typed by the left's unwrapped type.
         TypeSymbol? expected = syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken

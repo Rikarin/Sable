@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using Sable.Syntax;
 
 namespace Sable.Fuzz;
 
@@ -22,7 +23,8 @@ namespace Sable.Fuzz;
 ///     <para>
 ///         Mutations are libFuzzer's byte-level ones and the dictionary's
 ///         tokens, inserted and overwritten, plus line-level ones, as the
-///         inputs are mostly source text. What it keeps goes to the corpus
+///         inputs are mostly source text; and, of Sable source, the
+///         grammar-aware mutator's (<see cref="SyntaxMutator" />). What it keeps goes to the corpus
 ///         directory, which libFuzzer reads too, and the other way about.
 ///     </para>
 ///     <para>
@@ -36,7 +38,7 @@ namespace Sable.Fuzz;
 ///         still on disk; the next start keeps it as a crash.
 ///     </para>
 /// </remarks>
-public sealed unsafe class CoverageLoop(Target target, string corpus, IReadOnlyList<string> seeds, string artifacts, IReadOnlyList<byte[]> dictionary, int seed) {
+public sealed unsafe class CoverageLoop(Target target, string corpus, IReadOnlyList<string> seeds, string artifacts, IReadOnlyList<byte[]> dictionary, int seed, SyntaxMutator? mutator = null) {
     const int MapSize = 1 << 16;
 
     readonly byte[] _seen = new byte[MapSize];
@@ -211,7 +213,18 @@ public sealed unsafe class CoverageLoop(Target target, string corpus, IReadOnlyL
     static readonly long[] Interesting = [0, 1, -1, 2, 7, 8, 16, 31, 32, 64, 127, 128, 255, 256, 1000, 1024, 4096, 32767, 65535, 65536, int.MaxValue, uint.MaxValue, long.MaxValue];
 
     /// <summary>A mutant: one to sixteen edits, stacked, no longer than the target takes.</summary>
+    /// <remarks>Of Sable source, half are of whole nodes of its tree, now and then taken from another input's.</remarks>
     byte[] Mutate(byte[] parent) {
+        if (mutator is not null && _random.Next(2) == 0) {
+            var of = (ulong)_random.NextInt64();
+            var mutant = _random.Next(4) == 0
+                ? mutator.CrossOver(parent, _pool[_random.Next(_pool.Count)], of, target.MaxLength)
+                : mutator.Mutate(parent, of, target.MaxLength);
+            if (mutant.Length > 0) {
+                return mutant;
+            }
+        }
+
         var bytes = new List<byte>(parent);
         for (var edits = 1 << _random.Next(5); edits > 0; edits--) {
             Edit(bytes);

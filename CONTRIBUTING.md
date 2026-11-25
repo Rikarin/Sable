@@ -251,11 +251,12 @@ Two kinds of fuzzer look for inputs the compiler mishandles.
 
 The random ones are tests, run small by every build and large every night
 ([.github/workflows/fuzz.yml](.github/workflows/fuzz.yml)): token soup through
-the parser (`Sable.Syntax.Tests`, `Soup`), the repository's programs mutated at
+the parser (`Sable.Syntax.Tests`, `Soup`), the repository's programs mutated by
+whole syntax nodes ([SyntaxMutator](src/Sable.Syntax/SyntaxMutator.cs)) and at
 token boundaries through the whole front end (`CompilerFuzzTests`), random
-registries through the package resolver (`ResolverFuzzTests`), and
-`fromBytes` under AddressSanitizer and UBSan
-([tools/fuzz/run.sh](tools/fuzz/run.sh)). `SABLE_FUZZ_SEED` and
+registries through the package resolver (`ResolverFuzzTests`), and generated
+programs run every way they can be, which must agree (`DifferentialFuzzTests`).
+`SABLE_FUZZ_SEED` and
 `SABLE_FUZZ_SCALE` run them from another seed, many times over;
 `tools/fuzz/overnight.sh 8h` runs them all in rounds until a deadline and keeps
 every distinct failure.
@@ -271,8 +272,9 @@ column as an editor sends them, equal to a full parse), the front end (what
 async lowering and the optimising passes), SIL as text (read or refused with
 the parser's error, printed and read back, verified SIL kept verified by the
 passes), the resolver (on a registry written as text, checked against trying
-every assignment), the package files (manifest, lock file, registry index)
-and `fromBytes`. The mutations use dictionaries generated from the lexer's own
+every assignment), the package files (manifest, lock file, registry index),
+library interfaces, and generated programs run several ways in the
+interpreter. The parser and the front end have node-level mutants too. The mutations use dictionaries generated from the lexer's own
 tables, and the corpus starts from the repository's `.sb` and `.sil` files;
 new syntax or a new kind of lowering wants a seed in `tests/corpus`, as
 `20-coroutines.sb` is for generators, throwing iteration and async functions.
@@ -284,10 +286,10 @@ tools/fuzz/coverage.sh --summary           # the latest run's results so far
 ```
 
 On Linux, with `LIBFUZZER_DOTNET` set to a built libfuzzer-dotnet, the engine
-is libFuzzer, as the nightly jobs run it, one job and 90 minutes a target. On macOS, Apple's
-clang has no libFuzzer runtime: the .NET targets run under the fuzzer's own
-in-process loop, on the same coverage, and `fromBytes` is not fuzzed (its seeds
-are only checked under the sanitizers). The corpus persists in
+is libFuzzer, as the nightly jobs run it, one job and an hour a target (the first third of
+the parser's and the front end's in the fuzzer's own loop, which alone can call
+the node-level mutator). On macOS the targets run under that in-process loop,
+on the same coverage. The corpus persists in
 `artifacts/fuzz-corpus/`. Results go to `artifacts/fuzz/<start>/`, as
 `overnight.sh`'s do: `summary.txt` lists each distinct failure with the inputs
 that hit it, and each input is kept with what replaying it says and a
@@ -297,16 +299,24 @@ layer's own project.
 
 `sable fuzz` is the toolchain's own fuzzer, for any package's `@fuzz`
 functions (docs/05 §5.1), and what replaces the C# fuzzers once the compiler
-is written in Sable. The repository's targets are in
-[tools/fuzz/stdlib.sb](tools/fuzz/stdlib.sb) and `fromBytes` in
-[tools/fuzz/inline_layout.sb](tools/fuzz/inline_layout.sb), fuzzed nightly;
-locally, as with the other fuzzers, keep runs short:
+is written in Sable. The repository's targets are the library's readers, in
+[tools/fuzz/targets](tools/fuzz/targets) with their seeds and dictionaries
+(`fuzz/<Module.target>/`, `.dict`), and `fromBytes` in
+[tools/fuzz/inline_layout.sb](tools/fuzz/inline_layout.sb), each fuzzed nightly;
+a new reader in the library wants a target and a seed or two there. Locally, as
+with the other fuzzers, keep runs short:
 
 ```bash
-sable fuzz tools/fuzz/stdlib.sb --list
-sable fuzz tools/fuzz/stdlib.sb utf8 --time 5m    # needs a clang with libFuzzer
-sable fuzz tools/fuzz/stdlib.sb --replay          # the saved inputs, with any clang
+export CC=$(brew --prefix llvm)/bin/clang                     # macOS: a clang with libFuzzer
+sable fuzz tools/fuzz/targets --list
+sable fuzz tools/fuzz/targets FuzzText.utf8 --runs 10000      # one process, to the first failure
+sable fuzz tools/fuzz/targets FuzzText.utf8 --duration 5m
+sable fuzz tools/fuzz/targets --replay                        # the saved inputs, with any clang
+sable test tools/fuzz/targets                                 # the same, as tests
 ```
+
+`gh workflow run "Nightly fuzz" --ref <branch> -f only=sable-fuzz -f sable_fuzz_duration=30s`
+runs the nightly targets shortly on a branch.
 
 ## Design documents
 

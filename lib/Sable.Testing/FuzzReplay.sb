@@ -1,0 +1,115 @@
+module Sable.Testing
+
+import Sable.Text
+
+// What 'sable fuzz' kept, run again by 'sable test': each saved failure of a
+// '@fuzz' target is a test of its own, 'Module.target(crash-…)', and its
+// corpus one more, 'Module.target(corpus)'. 'sable test' lists the inputs in
+// a file for each target, in the directory SABLE_FUZZ_INPUTS names; run any
+// other way the targets have no tests.
+
+/// The saved inputs of a '@fuzz' target, as the cases of a test of its name.
+public fn fuzzReplays(_ name: String, _ run: @escaping (U8[:]) -> Void) -> TestArguments[>..] {
+    var cases: TestArguments[>..] = []
+    var corpus: FuzzInput[>..] = []
+    for input in FuzzReplay.inputs(name) {
+        if input.isCrash {
+            cases.append(TestArguments(input.file, () => {
+                FuzzReplay.replay([input], run)
+                return none
+            }))
+        } else {
+            corpus.append(input)
+        }
+    }
+    if !corpus.isEmpty {
+        let all = corpus
+        cases.append(TestArguments("corpus", () => {
+            FuzzReplay.replay(all, run)
+            return none
+        }))
+    }
+    return cases
+}
+
+/// An input 'sable fuzz' kept.
+struct FuzzInput {
+    let isCrash: Bool
+    /// Its file's name, and where it is.
+    let file: String
+    let path: String
+    let bytes: U8[>..]
+}
+
+struct FuzzReplay {
+    // The input that is running, for a trap to say: empty for none.
+    static var current: String = ""
+
+    // How long the corpus may take, which is run the smallest first. What is
+    // left is said, and not run.
+    static let most: Int = 20_000_000_000
+
+    /// The line that says which saved input was running.
+    static var saying: String {
+        get {
+            return current.isEmpty ? "" : "  with the saved input \(current)\n"
+        }
+    }
+
+    /// The inputs listed for the target, a line each: 'crash' or 'corpus',
+    /// the file's path and its bytes in hexadecimal, with tabs between.
+    static fn inputs(_ name: String) -> FuzzInput[>..] {
+        var all: FuzzInput[>..] = []
+        guard let directory = Runtime.environment("SABLE_FUZZ_INPUTS") else {
+            return all
+        }
+        guard let listed = Runtime.readFile("\(directory)/\(name).inputs") else {
+            return all
+        }
+        for line in listed.lines() {
+            let fields = line.split('\t')
+            if fields.count == 3 {
+                let path = fields[1]
+                let parts = path.split('/')
+                all.append(FuzzInput { isCrash: fields[0] == "crash", file: parts[parts.count - 1], path: path, bytes: unhex(fields[2]) })
+            }
+        }
+        return all
+    }
+
+    static fn replay(_ inputs: FuzzInput[>..], _ run: (U8[:]) -> Void) {
+        let deadline = Runtime.monotonicNanoseconds() + most
+        var ran = 0
+        for input in inputs {
+            if ran > 0 && Runtime.monotonicNanoseconds() > deadline {
+                break
+            }
+            current = input.path
+            Runtime.setTrapHook({ message, site, frames in
+                Runtime.writeError("fatal error: \(message)\n\(site.isEmpty ? "" : "  at \(site)\n")\(FuzzReplay.saying)")
+            })
+            run(input.bytes)
+            ran += 1
+        }
+        _ = Runtime.takeTrapHook(otherwise: { message, site, frames in })
+        current = ""
+        print("\(ran) saved input\(ran == 1 ? "" : "s") run\(ran < inputs.count ? ", of \(inputs.count): 'sable fuzz --replay' runs them all" : "")")
+    }
+}
+
+// The bytes written as two digits each.
+fn unhex(_ text: String) -> U8[>..] {
+    var bytes: U8[>..] = []
+    let digits = text.utf8Bytes()
+    bytes.reserveCapacity(digits.count / 2)
+    var i = 0
+    while i + 1 < digits.count {
+        bytes.append(hexValue(digits[i]) * 16 + hexValue(digits[i + 1]))
+        i += 2
+    }
+    return bytes
+}
+
+fn hexValue(_ digit: U8) -> U8 {
+    return digit >= 97 ? digit - 87 : digit - 48
+}

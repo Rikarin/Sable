@@ -149,6 +149,21 @@ public sealed class TestCommand : HarnessCommand {
             environment["SABLE_UPDATE_SNAPSHOTS"] = "1";
         }
 
+        // What 'sable fuzz' kept is run once each, as tests of its targets' names.
+        var replays = FuzzReplays.List(ProgramDirectory, TargetDirectory);
+        if (replays is null) {
+            return ExecuteIn(environment, executable, arguments);
+        }
+
+        try {
+            environment[FuzzReplays.Variable] = replays;
+            return ExecuteIn(environment, executable, arguments);
+        } finally {
+            Directory.Delete(replays, true);
+        }
+    }
+
+    int ExecuteIn(Dictionary<string, string> environment, string executable, IReadOnlyList<string> arguments) {
         if (CoverageCounters is not { } counters) {
             return Run(executable, arguments, environment);
         }

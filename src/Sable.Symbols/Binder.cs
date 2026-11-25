@@ -3443,7 +3443,9 @@ public sealed partial class Binder {
         }
 
         if (_scope.ImportedNames.TryGetValue(name, out var imported)) {
-            return BindMemberGroup(syntax, null, [imported], null);
+            // A function's name is every overload's.
+            var overloads = imported is FunctionSymbol { ContainingSymbol: ModuleSymbol from } ? Visible(from.GetMembers(imported.Name), ref hidden) : [];
+            return BindMemberGroup(syntax, null, overloads.Count > 1 ? overloads : [imported], null);
         }
 
         foreach (var module in _scope.Imports) {
@@ -6810,6 +6812,13 @@ public sealed partial class Binder {
             if (arguments[i] is BoundUnboundClosure { Syntax: ExpressionSyntax unbound }
                 && ShapeMismatch(unbound, wanted) is { } mismatch) {
                 return Reject($"argument {i + 1} is {mismatch}, and '{parameter.Name}' takes '{wanted.ToDisplayString()}'");
+            }
+
+            // A function named as a value has the parameters it has: 'f' of
+            // two does not fit a '(A) -> Void', whatever A may be.
+            if (arguments[i] is BoundFunctionGroup functions && wanted is FunctionTypeSymbol { ParameterTypes.Length: var count }
+                && functions.Candidates.All(f => (f.ContainingSymbol is ModuleSymbol || f.IsStatic) && f.Parameters.Length != count)) {
+                return Reject($"argument {i + 1} takes {Plural(functions.Candidates[0].Parameters.Length, "argument")}, and '{parameter.Name}' is '{wanted.ToDisplayString()}'");
             }
 
             // Nor is a key path a value of a type parameter in scope, which

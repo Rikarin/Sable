@@ -35,7 +35,7 @@ struct PosixRule {
     fn isDaylightSaving(at seconds: Int) -> Bool {
         if let daylight = self.daylight {
             let year = civilFromDays(floorDivide(seconds + standard.offset, 86400)).y
-            let begins = startOf(year, daylight)
+            let begins = startOf(year)
             let ends = endOf(year, daylight)
             if begins < ends {
                 return begins <= seconds && seconds < ends
@@ -46,7 +46,7 @@ struct PosixRule {
     }
 
     /// When daylight saving begins in the year, in seconds since the epoch.
-    fn startOf(_ year: Int, _ daylight: LocalTimeType) -> Int {
+    fn startOf(_ year: Int) -> Int {
         return start.day(in: year) * 86400 + startTime - standard.offset
     }
 
@@ -84,7 +84,7 @@ struct PosixRule {
             var bestType = standard
             var y = year - 1
             while y <= year + 1 {
-                let begins = startOf(y, daylight)
+                let begins = startOf(y)
                 let ends = endOf(y, daylight)
                 if begins > seconds && (!found || begins < bestAt) {
                     found = true
@@ -112,7 +112,7 @@ struct PosixRule {
             var bestType = standard
             var y = year - 1
             while y <= year + 1 {
-                let begins = startOf(y, daylight)
+                let begins = startOf(y)
                 let ends = endOf(y, daylight)
                 if begins < seconds && (!found || begins > bestAt) {
                     found = true

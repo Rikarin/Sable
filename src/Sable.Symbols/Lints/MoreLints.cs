@@ -153,6 +153,7 @@ internal sealed class UnusedPrivateLint : Lint {
 
     public override void Check(LintContext context) {
         var trees = context.Compilation.SyntaxTrees.Where(static t => !CoreLibrary.Contains(t) && t.Root is CompilationUnitSyntax).ToList();
+        HashSet<string>? inactive = null;
         foreach (var declaration in context.Tree.Root.DescendantNodes().OfType<DeclarationSyntax>()) {
             if (declaration.Parent is DeclarationStatementSyntax || context.Compilation.GetDeclaredSymbol(declaration) is not { DeclaredAccessibility: Accessibility.Private } symbol) {
                 continue;
@@ -164,6 +165,12 @@ internal sealed class UnusedPrivateLint : Lint {
                 _ => null,
             };
             if (what is null || BodyFacts.Ignored(symbol.Name) || Compilation.AttributesOf(declaration).Any(static a => CalledFromOutside.Contains(Compilation.AttributeName(a)))) {
+                continue;
+            }
+
+            // An '#if' branch not compiled may use it.
+            inactive ??= [..trees.SelectMany(static t => BodyFacts.NamesInInactiveCode(t.Root))];
+            if (inactive.Contains(symbol.Name)) {
                 continue;
             }
 

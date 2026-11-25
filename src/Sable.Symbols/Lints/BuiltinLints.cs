@@ -36,6 +36,13 @@ internal sealed class BodyFacts {
     public HashSet<Symbol> Read { get; } = new(ReferenceEqualityComparer.Instance);
     public HashSet<Symbol> Changed { get; } = new(ReferenceEqualityComparer.Instance);
 
+    /// <summary>
+    ///     The names written in the body's code that is not compiled: the
+    ///     branches of an <c>#if</c> not taken. What another platform or
+    ///     profile reads or changes there is neither unused nor unchanged.
+    /// </summary>
+    public HashSet<string> InactiveNames { get; private set; } = [];
+
     /// <summary>Local functions in the body, whose parameters are the body's to check too.</summary>
     public List<FunctionSymbol> LocalFunctions { get; } = [];
 
@@ -49,6 +56,7 @@ internal sealed class BodyFacts {
         var facts = new BodyFacts();
         facts.Walk(body, PatternOrigin: LocalOrigin.Pattern);
         facts.ChangedThroughArguments(context, body.Syntax);
+        facts.InactiveNames = NamesInInactiveCode(body.Syntax);
         Cache.AddOrUpdate(body, facts);
         return facts;
     }
@@ -186,6 +194,42 @@ internal sealed class BodyFacts {
             _ => null,
         };
 
+    /// <summary>
+    ///     The names in a node's code that is not compiled. A word of a comment
+    ///     or a string there counts too, as an interpolation's would have to.
+    /// </summary>
+    public static HashSet<string> NamesInInactiveCode(SyntaxNode node) {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var token in node.DescendantTokens()) {
+            AddNames(token.LeadingTrivia, names);
+            AddNames(token.TrailingTrivia, names);
+        }
+
+        return names;
+    }
+
+    static void AddNames(SyntaxTriviaList list, HashSet<string> names) {
+        foreach (var trivia in list) {
+            if (trivia.Kind != SyntaxKind.DisabledTextTrivia) {
+                continue;
+            }
+
+            var text = trivia.Text;
+            for (var i = 0; i < text.Length;) {
+                var start = i;
+                while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] == '_')) {
+                    i++;
+                }
+
+                if (i > start) {
+                    names.Add(text[start..i]);
+                } else {
+                    i++;
+                }
+            }
+        }
+    }
+
     /// <remarks>A '$' name is the compiler's own, as the element of 'for _ in xs' is.</remarks>
     public static bool Ignored(string name) => name.StartsWith('_') || name.StartsWith('$');
 
@@ -218,7 +262,7 @@ internal sealed class UnusedLocalLint : Lint {
         foreach (var body in context.Bodies) {
             var facts = BodyFacts.Of(context, body.Body);
             foreach (var (local, origin) in facts.Declared) {
-                if (BodyFacts.Ignored(local.Name) || facts.Read.Contains(local) || local.DeclaringSyntax.IsEmpty) {
+                if (BodyFacts.Ignored(local.Name) || facts.Read.Contains(local) || facts.InactiveNames.Contains(local.Name) || local.DeclaringSyntax.IsEmpty) {
                     continue;
                 }
 
@@ -258,7 +302,12 @@ internal sealed class UnusedParameterLint : Lint {
                 }
 
                 foreach (var parameter in candidate.Parameters) {
-                    if (BodyFacts.Ignored(parameter.Name) || facts.Read.Contains(parameter) || parameter.DeclaringSyntax is not [ParameterSyntax syntax]) {
+                    // 'of type: T.Type' says what 'T' is, which is its use.
+                    if (parameter.Type is MetatypeTypeSymbol) {
+                        continue;
+                    }
+
+                    if (BodyFacts.Ignored(parameter.Name) || facts.Read.Contains(parameter) || facts.InactiveNames.Contains(parameter.Name) || parameter.DeclaringSyntax is not [ParameterSyntax syntax]) {
                         continue;
                     }
 
@@ -331,8 +380,9 @@ internal sealed class UnusedImportLint : Lint {
             return;
         }
 
-        // Every name the file writes, outside its module and import lines.
-        var written = new HashSet<string>(StringComparer.Ordinal);
+        // Every name the file writes, outside its module and import lines, and
+        // in the code not compiled for this target and profile.
+        var written = BodyFacts.NamesInInactiveCode(unit);
         foreach (var token in unit.DescendantTokens()) {
             if (BodyFacts.AncestorsAndSelf(token.Parent).Any(static n => n is ImportDeclarationSyntax or ModuleDeclarationSyntax)) {
                 continue;
@@ -402,7 +452,7 @@ internal sealed class VarNeverMutatedLint : Lint {
         foreach (var body in context.Bodies) {
             var facts = BodyFacts.Of(context, body.Body);
             foreach (var (local, origin) in facts.Declared) {
-                if (origin != LocalOrigin.Declaration || !local.IsMutable || facts.Changed.Contains(local) || BodyFacts.Ignored(local.Name)) {
+                if (origin != LocalOrigin.Declaration || !local.IsMutable || facts.Changed.Contains(local) || facts.InactiveNames.Contains(local.Name) || BodyFacts.Ignored(local.Name)) {
                     continue;
                 }
 

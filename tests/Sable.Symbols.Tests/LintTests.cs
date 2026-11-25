@@ -69,6 +69,28 @@ public sealed class LintTests {
     }
 
     [Fact]
+    public void CodeNotCompiledUsesWhatItNames() {
+        const string source = """
+            module M
+            fn pick(here: Int, there: Int, nowhere: Int) -> Int {
+                let local = 1
+                var changed = 2
+                #if NEVER_DEFINED
+                changed += 1
+                return there + local + helper()
+                #else
+                return here + changed
+                #endif
+            }
+            private fn helper() -> Int { return 1 }
+            fn named<T>(of type: T.Type) -> Int { return 1 }
+            """;
+        var found = Assert.Single(Lint(source));
+        Assert.Equal(ErrorCode.LNT_UnusedParameter, found.Code);
+        Assert.Contains("'nowhere'", found.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VarNeverMutated() {
         const string source = """
             module M

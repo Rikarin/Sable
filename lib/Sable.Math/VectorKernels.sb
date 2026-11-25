@@ -346,7 +346,7 @@ fn cosineOf<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ y: T[:], _
 }
 
 @inline(always)
-fn extremeOf<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ zero: SIMD<T, N>, least: Bool) -> T {
+fn extremeOf<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ _zero: SIMD<T, N>, least: Bool) -> T {
     if x.count == 0 {
         preconditionFailure("the extreme of no elements")
     }
@@ -379,7 +379,7 @@ enum Elementwise {
     Divide
 }
 
-fn elementwise<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ y: T[:], _ destination: inout T[>..], _ zero: SIMD<T, N>, _ op: Elementwise) {
+fn elementwise<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ y: T[:], _ destination: inout T[>..], _ _zero: SIMD<T, N>, _ op: Elementwise) {
     let count = x.count
     let room = destination.count
     if count != y.count {
@@ -480,7 +480,7 @@ fn checkRoom(_ room: Int, _ count: Int) {
 
 /// Divides the first elements by the number.
 @inline(always)
-fn divideBy<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ total: T, _ destination: inout T[>..], _ count: Int, _ zero: SIMD<T, N>) {
+fn divideBy<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ total: T, _ destination: inout T[>..], _ count: Int, _ _zero: SIMD<T, N>) {
     let scale = SIMD<T, N>(repeating: total)
     var i = 0
     while i + N <= count {

@@ -222,7 +222,7 @@ fn firstEqualToAny<T: SIMDScalar>(_ xs: T[:], _ candidates: T[:]) -> Int {
 // Of one to five candidates in at least a step's elements: the fifth, or
 // whichever there are, compared again in place of those there are not.
 @inline(always)
-fn firstEqualToAny<T: SIMDScalar, N: Int>(_ xs: T[:], _ candidates: T[:], _ zero: SIMD<T, N>) -> Int {
+fn firstEqualToAny<T: SIMDScalar, N: Int>(_ xs: T[:], _ candidates: T[:], _ _zero: SIMD<T, N>) -> Int {
     let most = candidates.count - 1
     let a = SIMD<T, N>(repeating: candidates[0])
     let b = SIMD<T, N>(repeating: candidates[most < 1 ? most : 1])

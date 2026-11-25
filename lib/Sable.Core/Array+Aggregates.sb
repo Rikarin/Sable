@@ -157,7 +157,7 @@ fn extreme<T: SIMDScalar & FixedWidthInteger>(_ xs: T[:], least: Bool) -> T? {
 
 // Of at least one element: 'W' lanes a step while there are, then 'N'.
 @inline(always)
-fn extreme<T: SIMDScalar & FixedWidthInteger, N: Int, W: Int>(_ xs: T[:], least: Bool, _ zero: SIMD<T, N>, _ wideZero: SIMD<T, W>) -> T {
+fn extreme<T: SIMDScalar & FixedWidthInteger, N: Int, W: Int>(_ xs: T[:], least: Bool, _ _zero: SIMD<T, N>, _ _wideZero: SIMD<T, W>) -> T {
     let count = xs.count
     if count < N {
         var found = xs[0]

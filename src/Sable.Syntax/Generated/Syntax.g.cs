@@ -1276,7 +1276,7 @@ public sealed class TypeExpressionSyntax : ExpressionSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitTypeExpression(this);
 }
 
-/// <summary>A compiler builtin: `#file`, `#line`, `#column`, `#function`, `#module`.</summary>
+/// <summary>A compiler builtin: `#file`, `#line`, `#column`, `#function`, `#module`, `#expression`.</summary>
 public sealed class BuiltinExpressionSyntax : ExpressionSyntax
 {
     internal BuiltinExpressionSyntax(GreenNode green, SyntaxNode? parent, int position)

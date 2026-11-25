@@ -35,8 +35,12 @@ public sealed partial class SilGen {
             }
         }
 
-        _diagnostics.Add(Diagnostic.Error(ErrorCode.ERR_NotLoweredYet, span, message).AnchoredAt(anchor));
-        _files.TryAdd(_diagnostics.Last(), tree);
+        // What is only tried, a witness compiled once for one, reports nothing.
+        var diagnostic = Diagnostic.Error(ErrorCode.ERR_NotLoweredYet, span, message).AnchoredAt(anchor);
+        _diagnostics.Add(diagnostic);
+        if (ReferenceEquals(_diagnostics.LastOrDefault(), diagnostic)) {
+            _files.TryAdd(diagnostic, tree);
+        }
     }
 
     /// <summary>A file of the standard library: the one the compiler carries, or the program's own standing in for it.</summary>

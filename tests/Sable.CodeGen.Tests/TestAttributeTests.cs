@@ -67,7 +67,7 @@ public sealed class TestAttributeTests {
         Rejects("S3107", "@test(traps: 1)\nfn t() { }", "'@test' takes nothing, or 'traps'");
         Rejects("S3107", "@bench(traps)\nfn b() { }", "'@bench' takes nothing, or 'arguments: [...]'");
         Rejects("S3107", "@bench(timeout: .seconds(1))\nfn b() { }", "'@bench' takes nothing, or 'arguments: [...]'");
-        Rejects("S3107", "@fuzz(1)\nfn f(_ data: U8[:]) { }", "'@fuzz' takes no arguments");
+        Rejects("S3107", "@fuzz(1)\nfn f(_ data: U8[:]) { }", "'@fuzz' takes nothing, or 'mutator: f'");
     }
 
     [Fact]

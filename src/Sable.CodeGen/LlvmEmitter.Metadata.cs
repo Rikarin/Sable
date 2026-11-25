@@ -237,8 +237,25 @@ public sealed partial class LlvmEmitter {
             _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {{ ptr, i64, ptr }}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
         }
 
-        _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64, i64, ptr, ptr }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
-            .Append($"ptr {written}, i64 {type.TypeArguments.Length}, i64 {records.Count}, ptr {conformances}, ptr {labels} }}{Comdat(name, SharedLinkage)}\n");
+        // A class's, in a hierarchy: its vtable, and what gives its superclass's metadata from its own.
+        var vtable = "null";
+        var slots = 0;
+        var superclass = "null";
+        if (type is ClassType inherited && SilType.MentionsOpaque(inherited)) {
+            slots = inherited.VTable.Count;
+            if (slots > 0) {
+                vtable = $"@\"sable.shape.vtable.{Mangled(type)}\"";
+                var entries = string.Join(", ", inherited.VTable.Select(m => _reachable?.Contains(m.Function) == false ? "ptr null" : $"ptr @{Global(m.Function)}"));
+                _globals.Append($"{vtable} = {SharedLinkage} constant [{slots} x ptr] [{entries}]{Comdat(vtable, SharedLinkage)}\n");
+            }
+
+            if (_module?.SuperclassAccessors.TryGetValue(DeclaredName(type), out var accessor) == true) {
+                superclass = $"@{Global(accessor)}";
+            }
+        }
+
+        _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64, i64, ptr, ptr, i64, ptr, ptr }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
+            .Append($"ptr {written}, i64 {type.TypeArguments.Length}, i64 {records.Count}, ptr {conformances}, ptr {labels}, i64 {slots}, ptr {vtable}, ptr {superclass} }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 
@@ -374,6 +391,26 @@ public sealed partial class LlvmEmitter {
     }
 
     /// <summary>
+    ///     A constructor that hands the runtime each type that asked for its
+    ///     members to be callable, with the function that describes them
+    ///     (<c>sable_register_callable</c>). Null for none reached.
+    /// </summary>
+    string? CallableRegistration(SilModule module) {
+        var callables = module.Callables.Values.Where(d => _reachable?.Contains(d.Function) != false && module.Find(d.Function) is not null).ToList();
+        if (callables.Count == 0) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.callables.register\"() {\nentry:\n");
+        foreach (var (type, function) in callables) {
+            body.Append($"  call void @sable_register_callable(ptr {TypeMetadataGlobal(type)}, ptr @{Global(function)})\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.callables.register\"";
+    }
+
+    /// <summary>
     ///     A constructor that hands the runtime each caster the module made,
     ///     with its existential's metadata (<c>sable_register_caster</c>): what
     ///     <c>sable_existential_cast</c> asks of a box. Null for none reached.
@@ -393,18 +430,19 @@ public sealed partial class LlvmEmitter {
         return "@\"sable.casters.register\"";
     }
 
-    /// <summary>What the registry knows a template's instances by: a generic type's name, or an array's, a slice's or an optional's sign.</summary>
+    /// <summary>What the registry knows a template's instances by: a generic type's name, or an array's, a slice's, an optional's or a structural union's sign.</summary>
     static string TemplateName(SilType type) =>
+        type == SilGen.UnionConformer ? "|" :
         SilModule.StructuralElement(type) is null ? DeclaredName((NominalType)type) : type switch { SliceType => "[:]", ArrayType => "[]", _ => "?" };
 
     /// <summary>
     ///     A constructor that gives the registry what arrays, slices and
-    ///     optionals conform to (<c>sable_register_structural</c>), in a module
+    ///     optionals, and structural unions, conform to (<c>sable_register_structural</c>), in a module
     ///     that asks it. Null for another.
     /// </summary>
     string? StructuralRegistration(SilModule module) {
-        if (module.StructuralConformances.Count == 0 || !module.Functions.Any(f => _reachable?.Contains(f.Name) != false
-                && f.Blocks.Any(static b => b.Instructions.Any(static i => i is BuiltinInst { Name: var name } && AsksRegistry(name))))) {
+        if (module.StructuralConformances.Count == 0 || !module.WitnessTables.Any(static t => t.IsTemplate) && !module.Functions.Any(f => _reachable?.Contains(f.Name) != false
+                && (f.AssociatedMetadata.Count > 0 || f.Blocks.Any(static b => b.Instructions.Any(static i => i is BuiltinInst { Name: var name } && AsksRegistry(name)))))) {
             return null;
         }
 
@@ -428,7 +466,7 @@ public sealed partial class LlvmEmitter {
     /// <summary>A builtin that asks the conformance registry about a type known as the program runs.</summary>
     static bool AsksRegistry(string builtin) =>
         builtin.StartsWith("witness_table:", StringComparison.Ordinal) || builtin.StartsWith("witness_table_required:", StringComparison.Ordinal)
-        || builtin.StartsWith("metadata_is", StringComparison.Ordinal) || builtin.StartsWith("class_conforms:", StringComparison.Ordinal);
+        || builtin.StartsWith("metadata_is", StringComparison.Ordinal) || builtin is "existential_cast" || builtin.StartsWith("class_conforms:", StringComparison.Ordinal);
 
     /// <summary>
     ///     A constructor that hands the runtime each template table the module
@@ -599,6 +637,11 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_opaque_debug_describe(ptr, ptr)
                                         declare void @sable_register_debug_describer(ptr, ptr)
                                         declare ptr @sable_opaque_erase_error(ptr, ptr)
+                                        declare ptr @sable_object_ancestor(ptr, ptr)
+                                        declare ptr @sable_structural_union_type(i64, ptr)
+                                        declare void @sable_union_inject(ptr, ptr, ptr, ptr)
+                                        declare ptr @sable_union_case_metadata(ptr, ptr)
+                                        declare ptr @sable_union_case_payload(ptr, ptr)
                                         declare void @sable_register_error_eraser(ptr, ptr)
                                         declare ptr @sable_opaque_alloc(ptr)
                                         declare ptr @sable_opaque_box(ptr, ptr)
@@ -607,6 +650,10 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_box_unique(ptr, ptr)
                                         declare void @sable_opaque_free(ptr)
                                         declare void @sable_register_boxer(ptr, ptr)
+                                        declare void @sable_register_callable(ptr, ptr)
+                                        declare i64 @sable_callable_type_count()
+                                        declare ptr @sable_callable_type(i64)
+                                        declare ptr @sable_callable_members(i64)
                                         declare ptr @sable_witness_table_required(ptr, ptr)
                                         declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
                                         declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
@@ -725,12 +772,32 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call i1 @sable_metadata_equal(ptr {operands[0]}, ptr {operands[1]})");
                     return true;
 
+                case "callable_type_count":
+                    Line($"{Result()} = call i64 @sable_callable_type_count()");
+                    return true;
+
+                case "callable_type":
+                    Line($"{Result()} = call ptr @sable_callable_type(i64 {operands[0]})");
+                    return true;
+
+                case "callable_members": {
+                    var accessor = Fresh();
+                    Line($"{accessor} = call ptr @sable_callable_members(i64 {operands[0]})");
+                    Line($"{Result()} = call {Type(builtin.Type)} {accessor}()");
+                    return true;
+                }
+
                 case "metadata_hash":
                     Line($"{Result()} = call i64 @sable_metadata_hash(ptr {operands[0]})");
                     return true;
 
                 case "metadata_is_subtype":
                     Line($"{Result()} = call i1 @sable_metadata_is_subtype(ptr {operands[0]}, ptr {operands[1]})");
+                    return true;
+
+                // An object's class, or the one it inherits from of a generic class's name.
+                case var ancestor when ancestor.StartsWith("object_metadata_as:", StringComparison.Ordinal):
+                    Line($"{Result()} = call ptr @sable_object_ancestor(ptr {operands[0]}, ptr {module.TrapMessage(ancestor["object_metadata_as:".Length..])})");
                     return true;
 
                 // An object's own class: its header's object metadata's type metadata.
@@ -837,6 +904,12 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call ptr @sable_opaque_type(ptr {operands[0]}, ptr {operands[1]})");
                     return true;
                 // An error of one, boxed as 'any Error' by its type's eraser, which the runtime finds.
+                case "union_inject":
+                    Line($"call void @sable_union_inject(ptr {operands[0]}, ptr {OpaqueMetadata(builtin.Operands[0].Type)}, ptr {operands[1]}, ptr {OpaqueMetadata(((AddressType)builtin.Operands[1].Type).Pointee)})");
+                    return true;
+                case "union_case_metadata" or "union_case_payload":
+                    Line($"{Result()} = call ptr @sable_{builtin.Name}(ptr {operands[0]}, ptr {operands[1]})");
+                    return true;
                 case "opaque_erase_error":
                     Line($"{Result()} = call ptr @sable_opaque_erase_error(ptr {operands[0]}, ptr {OpaqueMetadata(builtin.Operands[0].Type)})");
                     return true;

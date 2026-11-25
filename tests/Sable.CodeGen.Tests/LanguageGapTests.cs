@@ -646,4 +646,40 @@ public sealed class LanguageGapTests {
             Assert.Contains(message, ran.Stderr);
         }
     }
+
+    /// <summary>A generic type's record that leaves out a field whose default is of its type parameters, and a function named as a value where one is written out.</summary>
+    [Fact]
+    public void ARecordsDefaultsHaveItsTypeArgumentsAndAFunctionIsWrittenOut() =>
+        Assert.Equal("a 0\n1 b 1\n<(Int) -> Int>\n", Programs.AssertAgree("""
+            module M
+
+            struct Inner<T> {
+                var last: T
+                var log: T[>..] = []
+            }
+
+            struct Outer<A, B> {
+                var first: A
+                var inner: Inner<B>? = none
+                var seen: [String: A] = [:]
+            }
+
+            fn kept<T>(_ t: T) -> Inner<T> {
+                var i = Inner<T> { last: t }
+                i.log.append(t)
+                return i
+            }
+
+            fn twice(_ n: Int) -> Int => n * 2
+
+            @main
+            fn main() {
+                let i = Inner<String> { last: "a" }
+                print("\(i.last) \(i.log.count)")
+                var o = Outer<Int, String> { first: 1 }
+                o.inner = kept("b")
+                print("\(o.first) \(o.inner!.last) \(o.inner!.log.count + o.seen.count)")
+                print("\(twice)")
+            }
+            """).Stdout);
 }

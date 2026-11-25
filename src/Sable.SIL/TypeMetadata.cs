@@ -61,6 +61,9 @@ public enum MetadataFlags {
     /// <summary>A Bool: an enum of it and cases without payloads takes its spare values, 2 on.</summary>
     BoolNiche = 64,
 
+    /// <summary>A structural union, <c>A | B</c>, whose arguments are its cases' types, in the order of their names.</summary>
+    StructuralUnion = 256,
+
     /// <summary>A Char: an enum of it and cases without payloads takes the values past U+10FFFF.</summary>
     CharNiche = 128,
 }
@@ -157,6 +160,7 @@ public sealed class TypeMetadata {
         var flags = (type.IsTrivial && !noncopyable ? MetadataFlags.Trivial : MetadataFlags.None)
                     | (noncopyable ? MetadataFlags.Noncopyable : MetadataFlags.None)
                     | (deinit ? MetadataFlags.HasDeinit : MetadataFlags.None)
+                    | (IsStructuralUnion(type) ? MetadataFlags.StructuralUnion : MetadataFlags.None)
                     | (type is ClassType || type == SilType.String ? MetadataFlags.NullablePayload : MetadataFlags.None)
                     | (type == SilType.Bool ? MetadataFlags.BoolNiche : MetadataFlags.None)
                     | (type == SilType.Char ? MetadataFlags.CharNiche : MetadataFlags.None);
@@ -189,6 +193,9 @@ public sealed class TypeMetadata {
     /// <summary>True for an optional: <c>Optional$…</c>, some and none.</summary>
     public static bool IsOptional(SilType type) =>
         type is EnumType { Name: var name, Cases: [("Some", _), ("None", null)] } && name.StartsWith("Optional$", StringComparison.Ordinal);
+
+    /// <summary>True for a structural union, <c>A | B</c> (SilGen.LowerUnion).</summary>
+    public static bool IsStructuralUnion(SilType type) => type is EnumType { IsUnion: true, Name: var name } && name.StartsWith("Union$", StringComparison.Ordinal);
 
     public static MetadataKind KindOf(SilType type) =>
         type switch {
@@ -262,10 +269,11 @@ public sealed class TypeMetadata {
         static MetadataField Field(string name, SilType type, int offset) => new(name, DisplayName(type), offset, FieldKind(type), type);
     }
 
-    static ImmutableArray<SilType> ArgumentsOf(SilType type) =>
+    internal static ImmutableArray<SilType> ArgumentsOf(SilType type) =>
         type switch {
             NominalType { TypeArguments.IsEmpty: false } generic => generic.TypeArguments,
             EnumType optional when IsOptional(optional) && optional.Cases[0].Payload is { } wrapped => [wrapped],
+            EnumType union when IsStructuralUnion(union) => [..union.Cases.Select(static c => c.Payload!)],
             ArrayType array => [array.Element],
             SliceType slice => [slice.Element],
             TupleType tuple => tuple.Elements,

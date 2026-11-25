@@ -163,7 +163,10 @@ public abstract class SilType : IEquatable<SilType> {
                                           && x.Fields.Zip(y.Fields).All(p => p.First.Name == p.Second.Name && SameErasingOpaque(p.First.Type, p.Second.Type, opaqueOnly)),
             (EnumType x, EnumType y) => x.Cases.Count == y.Cases.Count && (MentionsOpaque(x) || MentionsOpaque(y))
                                         && x.Cases.Zip(y.Cases).All(p => p.First.Name == p.Second.Name
-                                                                         && (p.First.Payload is null ? p.Second.Payload is null : p.Second.Payload is not null && SameErasingOpaque(p.First.Payload, p.Second.Payload, opaqueOnly))),
+                                                                         // 'Void?' carries nothing, where a 'T?' carries a T that is nothing.
+                                                                         && (p.First.Payload is null || p.Second.Payload is null
+                                                                             ? p.First.Payload == p.Second.Payload || opaqueOnly && (p.First.Payload ?? p.Second.Payload) is OpaqueType
+                                                                             : SameErasingOpaque(p.First.Payload, p.Second.Payload, opaqueOnly))),
             _ => false,
         };
 
@@ -1787,6 +1790,13 @@ public sealed class SilModule {
         return _witnessTables[(table.Conformer.ToString(), table.Protocol)];
     }
 
+    /// <summary>
+    ///     For each generic class with a superclass whose objects code compiled
+    ///     once makes, by its name: the function that gives its superclass's
+    ///     metadata from its own (SilGen.Hierarchies.cs).
+    /// </summary>
+    public Dictionary<string, string> SuperclassAccessors { get; } = new(StringComparer.Ordinal);
+
     /// <summary>What each built-in type (<c>Int</c>, <c>String</c>, …) declares it conforms to, by the type's name: its conformance records.</summary>
     public Dictionary<string, List<string>> PrimitiveConformances { get; } = new(StringComparer.Ordinal);
 
@@ -1822,6 +1832,14 @@ public sealed class SilModule {
     ///     type is known, and registered with the runtime as describers are.
     /// </summary>
     public Dictionary<string, (SilType Type, string Function)> Boxers { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     For each type that asks for its members to be callable
+    ///     (<c>@reflectable(callable)</c>, docs/06 §6.3), by its name: the
+    ///     function that gives their descriptors (<c>callable_members</c>), registered with the runtime as the
+    ///     image starts.
+    /// </summary>
+    public Dictionary<string, (SilType Type, string Function)> Callables { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
     ///     For each existential generic code compiled once may cast to, by the
@@ -1864,9 +1882,9 @@ public sealed class SilModule {
     }
 
     /// <summary>
-    ///     What every array, slice and optional conforms to, where the type it
-    ///     is of conforms to each protocol required. Their metadata has no
-    ///     records: the runtime is given this list.
+    ///     What every array, slice, optional and structural union conforms
+    ///     to, where each type it is of conforms to each protocol required.
+    ///     Their metadata has no records: the runtime is given this list.
     /// </summary>
     public List<(MetadataKind Kind, string Protocol, ImmutableArray<string> Requirements)> StructuralConformances { get; } = [];
 
@@ -1874,8 +1892,17 @@ public sealed class SilModule {
     public static SilType? StructuralElement(SilType type) =>
         ArrayType.ElementOf(type) ?? (type is EnumType optional ? TypeMetadata.OptionalPayload(optional) : null);
 
-    /// <summary>Whether an array, a slice or an optional conforms to the protocol.</summary>
+    /// <summary>The kind of structural type a template table is every one of's; none for a generic type's.</summary>
+    public static MetadataKind? TemplateKind(SilWitnessTable table) =>
+        table.Conformer == SilGen.UnionConformer ? MetadataKind.Union
+        : StructuralElement(table.Conformer) is not null ? TypeMetadata.KindOf(table.Conformer) : null;
+
+    /// <summary>Whether an array, a slice, an optional or a structural union conforms to the protocol.</summary>
     public bool HasStructuralConformance(SilType type, string protocol) {
+        if (TypeMetadata.IsStructuralUnion(type)) {
+            return StructuralConformances.Exists(c => c.Kind == MetadataKind.Union && c.Protocol == protocol && c.Requirements.All(r => ((EnumType)type).Cases.TrueForAll(m => HasConformance(m.Payload!, r))));
+        }
+
         if (StructuralElement(type) is not { } element) {
             return false;
         }
@@ -2532,6 +2559,8 @@ public static class SilBuiltins {
                 return new([metadata, SilType.Int], SilType.Int);
             case "metadata_field_type" or "metadata_argument" when operands is [var m, var i] && m == metadata && i == SilType.Int:
                 return new([metadata, SilType.Int], metadata);
+            case "callable_members" when operands is [var i] && i == SilType.Int && result is ArrayType members:
+                return new([SilType.Int], members);
             case "metadata_equal" when operands is [var a, var b] && a == metadata && b == metadata:
                 return new([metadata, metadata], SilType.Bool);
             case "value_witness_copy" when operands is [var m, var value] && m == metadata:
@@ -2544,6 +2573,8 @@ public static class SilBuiltins {
                 return new([metadata, value], SilType.Unit) { Consumed = [1] };
             case "box_metadata" when operands is [ClassType box]:
                 return new([box], metadata);
+            case var ancestor when ancestor.StartsWith("object_metadata_as:", StringComparison.Ordinal) && operands is [ClassType ofClass]:
+                return new([ofClass], metadata);
             case "object_metadata" when operands is [ClassType type]:
                 return new([type], metadata);
             case "witness_table_exists" when operands is [var table] && table == SilType.WitnessTable:
@@ -2585,6 +2616,14 @@ public static class SilBuiltins {
             // An error of one, boxed as 'any Error' by its type's eraser: taken.
             case "opaque_erase_error" when operands is [OpaqueType erased] && result is ClassType:
                 return new([erased], result) { Consumed = [0] };
+            // An error of a type only its metadata knows put in a union of it
+            // and others, where that goes; and which case a union holds.
+            case "union_inject" when operands is [OpaqueType member, AddressType { Pointee: OpaqueType }]:
+                return new([member, operands[1]], SilType.Unit) { Consumed = [0] };
+            case "union_case_metadata" when operands is [OpaqueType union, var m] && m == metadata:
+                return new([union, metadata], metadata);
+            case "union_case_payload" when operands is [OpaqueType union, var m] && m == metadata && result == union:
+                return new([union, metadata], result);
             // A call that opens a Type (#297 stage 6): a buffer its metadata
             // sizes for a result of it; that result, boxed by its type's
             // boxer, the buffer let go; and the buffer let go unwritten.
@@ -3122,6 +3161,8 @@ public static class SilBuiltins {
         Add("metadata_argument", SilType.Metadata, SilType.Metadata, SilType.Int);
         Add("metadata_equal", SilType.Bool, SilType.Metadata, SilType.Metadata);
         Add("metadata_hash", SilType.U64, SilType.Metadata);
+        Add("callable_type_count", SilType.Int);
+        Add("callable_type", SilType.Metadata, SilType.Int);
         Add("metadata_is_subtype", SilType.Bool, SilType.Metadata, SilType.Metadata);
 
         Add("region_create", SilType.Region);

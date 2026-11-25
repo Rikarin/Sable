@@ -81,7 +81,7 @@ public sealed partial class SilGen {
                 }
             }
 
-            if (witness is null && type is not null && member is FunctionSymbol generic && !OwnParameters(generic).IsEmpty) {
+            if (witness is null && type is not null && member is FunctionSymbol generic && (!OwnParameters(generic).IsEmpty || generic.FunctionKind == FunctionKind.Initializer)) {
                 witness = TrapWitness(table, key, type);
             }
 
@@ -177,6 +177,15 @@ public sealed partial class SilGen {
         if (concrete is NamedTypeSymbol or ArrayTypeSymbol or OptionalTypeSymbol && concrete is var named && _boxed.TryAdd(value, named)) {
             foreach (var target in _castTargets.Where(named.Satisfies)) {
                 WitnessTable(named, value, target, at);
+            }
+        }
+    }
+
+    /// <summary>A type a function declares, given to code compiled once, which may box it: as <see cref="Boxed" />.</summary>
+    internal void Given(NamedTypeSymbol concrete, SilType value, SyntaxNode at) {
+        if (_boxed.TryAdd(value, concrete)) {
+            foreach (var target in _castTargets.Where(concrete.Satisfies)) {
+                WitnessTable(concrete, value, target, at);
             }
         }
     }

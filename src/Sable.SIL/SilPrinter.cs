@@ -140,8 +140,26 @@ public static class SilPrinter {
             builder.Append("sil_caster $").Append(type).Append(" = @").Append(function).Append('\n');
         }
 
+        foreach (var (_, (type, function)) in module.Callables.OrderBy(static d => d.Key, StringComparer.Ordinal)) {
+            builder.Append("sil_callable $").Append(type).Append(" = @").Append(function).Append('\n');
+        }
+
         foreach (var (type, function) in module.GenericDeinits.OrderBy(static d => d.Key, StringComparer.Ordinal)) {
             builder.Append("sil_generic_deinit ").Append(Quote(type)).Append(" = @").Append(function).Append('\n');
+        }
+
+        foreach (var (type, function) in module.SuperclassAccessors.OrderBy(static d => d.Key, StringComparer.Ordinal)) {
+            builder.Append("sil_superclass ").Append(Quote(type)).Append(" = @").Append(function).Append('\n');
+        }
+
+        // What says which structural types have the templates below: the rest the declarations say, where the module was lowered.
+        foreach (var (kind, protocol, requirements) in module.StructuralConformances.Where(c => module.WitnessTables.Any(t => t.IsTemplate && t.Protocol == c.Protocol && SilModule.TemplateKind(t) == c.Kind))) {
+            builder.Append("sil_structural ").Append(Quote(kind.ToString())).Append(' ').Append(Quote(protocol));
+            foreach (var requirement in requirements) {
+                builder.Append(' ').Append(Quote(requirement));
+            }
+
+            builder.Append('\n');
         }
 
         foreach (var table in module.WitnessTables) {
@@ -170,7 +188,7 @@ public static class SilPrinter {
             builder.Append("}\n");
         }
 
-        if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0 || module.WitnessTables.Count > 0 || module.Describers.Count > 0 || module.DebugDescribers.Count > 0 || module.ErrorErasers.Count > 0 || module.Boxers.Count > 0 || module.Casters.Count > 0 || module.GenericDeinits.Count > 0)
+        if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0 || module.WitnessTables.Count > 0 || module.Describers.Count > 0 || module.DebugDescribers.Count > 0 || module.ErrorErasers.Count > 0 || module.Boxers.Count > 0 || module.Casters.Count > 0 || module.Callables.Count > 0 || module.GenericDeinits.Count > 0)
             && module.Functions.Exists(f => include?.Invoke(f) != false)) {
             builder.Append('\n');
         }

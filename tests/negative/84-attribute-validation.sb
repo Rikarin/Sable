@@ -21,7 +21,7 @@ fn versioned() { }
 @available(beos)                        //! S3094 'beos' is no platform
 fn elsewhere() { }
 
-@reflectable(true)                      //! S3094 '@reflectable' takes no arguments
+@reflectable(true)                      //! S3094 '@reflectable' takes nothing, or 'callable'
 struct Shown { }
 
 @main                                   //! S3514 'start' takes no parameters

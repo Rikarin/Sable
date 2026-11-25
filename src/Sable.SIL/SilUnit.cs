@@ -62,7 +62,11 @@ public sealed record SilUnit(Func<SyntaxTree, bool> Owns) {
 ///     interface's SIL has them (<see cref="SilUnitInfo.Inlinable" />).
 /// </param>
 /// <param name="DebugDescribing">Of <paramref name="Functions" />, those that write a value of a type they are given out with <c>?</c> (<see cref="SilUnitInfo.DebugDescribing" />).</param>
-public sealed record CompiledGenerics(Func<SyntaxTree, bool> Covers, IReadOnlyDictionary<string, bool> Functions, IReadOnlySet<string> Inlinable, IReadOnlySet<string>? DebugDescribing = null);
+/// <param name="Prepared">The instances of the generic functions it keeps copied that its archive has, by name (<see cref="SilUnitInfo.Prepared" />).</param>
+public sealed record CompiledGenerics(
+    Func<SyntaxTree, bool> Covers, IReadOnlyDictionary<string, bool> Functions, IReadOnlySet<string> Inlinable, IReadOnlySet<string>? DebugDescribing = null,
+    IReadOnlySet<string>? Prepared = null
+);
 
 /// <summary>What separate lowering tells the code generator about a unit's module.</summary>
 public sealed class SilUnitInfo {
@@ -105,6 +109,14 @@ public sealed class SilUnitInfo {
     ///     describer, which it makes for no other.
     /// </summary>
     public SortedSet<string> DebugDescribing { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     For a unit that compiles a library's generics in an unoptimised
+    ///     build: the instances of those it keeps copied for each type — the
+    ///     arrays' vector searches, over SIMD scalars — that it made for every
+    ///     type they can be for, so that no other unit makes one.
+    /// </summary>
+    public SortedSet<string> Prepared { get; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>

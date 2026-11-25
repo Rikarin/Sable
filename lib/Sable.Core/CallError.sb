@@ -1,0 +1,40 @@
+module Sable.Core
+
+/// Why a member could not be called with the boxed arguments it was given
+/// ('CallableMember.call'): found before it is called, and thrown in place
+/// of calling it.
+public union CallError: Error {
+    /// It takes another number of arguments; each is given, a default value's too.
+    ArgumentCount(expected: Int, given: Int)
+
+    /// An argument is of another type than the parameter's.
+    Argument(index: Int, expected: Type, given: Type)
+
+    /// The receiver is not of the type the member is declared on.
+    Receiver(expected: Type, given: Type)
+
+    /// It is a method, and was called with nothing to call it on.
+    NoReceiver
+
+    /// It is mutating: 'call(mutating:)' calls it.
+    Mutating
+
+    /// Its call waits: 'callAsync' calls it.
+    Async
+
+    /// It is described and cannot be called, for the reason it gives.
+    NotCallable(String)
+
+    /// What went wrong, in words.
+    public fn description() -> String {
+        return match self {
+            case .ArgumentCount(let expected, let given)       => "it takes \(expected) arguments and was given \(given)"
+            case .Argument(let index, let expected, let given) => "argument \(index) is '\(expected.name)', and was given '\(given.name)'"
+            case .Receiver(let expected, let given)            => "it is called on '\(expected.name)', not '\(given.name)'"
+            case .NoReceiver                                   => "it is a method, called on a value: 'call(on:)' calls it"
+            case .Mutating                                     => "it is mutating: 'call(mutating:)' calls it"
+            case .Async                                        => "its call waits: 'callAsync' calls it"
+            case .NotCallable(let why)                         => "it cannot be called with boxed arguments: \(why)"
+        }
+    }
+}

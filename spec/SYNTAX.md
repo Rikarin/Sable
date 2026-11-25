@@ -1990,7 +1990,7 @@ awaited as the scope ends.
 ```sable
 @inline_layout struct Packet { }    // contiguous, pointer-free, serialisable
 @noncopy struct Handle { }          // move-only
-@reflectable class Model { }        // full runtime reflection
+@reflectable class Model { }        // described at run time; (callable): called, too
 @immutable class Config { }         // deeply immutable, therefore Sendable
 @immortal static let shared = Registry()  // never released
 
@@ -2069,7 +2069,8 @@ an optimised one; never both. A package's profile may choose with
 | `@vectorised` | fn | Compiled for the wider vectors a processor may have as well as the target's own — for AVX2 on x86-64 — and whichever the program is running on can run called: the same results, sooner. For a loop over `SIMD` vectors, or one that LLVM makes one of. Not inlined where it is called, and compiled once, as any function is, if it gives a vector to a function that is not inlined in it |
 | `@inline_layout` | struct, union | Contiguous pointer-free layout |
 | `@noncopy` | struct, union | Move-only |
-| `@reflectable` | type | Emit full reflection metadata |
+| `@reflectable` | type | Conforms it to `Reflectable`: `TypeInfo.of` describes it |
+| `@reflectable(callable)` | type | Conforms it to `Callable` too: its public initialisers, methods and operators are called with boxed arguments, and it is listed among the types that conform to a protocol (docs/06 §6.3). Not for a move-only type (S3080) |
 | `@immutable` | class | Deeply immutable; implies `Sendable` |
 | `@immortal` | static let | Skip refcounting |
 | `@flags` | enum | Bitset semantics |

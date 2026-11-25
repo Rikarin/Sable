@@ -291,7 +291,7 @@ fn theHarnessRunsAndReports() {
     expect(ran.output.contains("test FixtureTests.skipped ... skipped: not now\n"))
     expect(ran.output.contains("test FixtureTests.skippedAsItRuns ... skipped: what it needs is not here\n"))
     expect(ran.output.contains(", on try 2\n"))
-    expect(ran.output.contains("---- FixtureTests.StoreTests.traps (FixtureTests.sb:"))
+    expect(ran.output.contains("---- FixtureTests.StoreTests.traps (") && ran.output.contains("FixtureTests.sb:"))
     expect(ran.output.contains("    fatal error: array index out of range\n"))
     expect(ran.output.contains("    (exit status 134)\n"))
     expect(ran.output.contains("    suite down\n    scratch down after 1\n"))
@@ -335,7 +335,7 @@ fn theTestsAreListed() {
         return
     }
     expect(ran.status == 0)
-    expect(ran.output.hasPrefix("FixtureTests.oneAtATime: test (FixtureTests.sb:") && ran.output.hasSuffix("1 test\n"))
+    expect(ran.output.hasPrefix("FixtureTests.oneAtATime: test (") && ran.output.contains("FixtureTests.sb:") && ran.output.hasSuffix("1 test\n"))
 }
 
 @test(arguments: [

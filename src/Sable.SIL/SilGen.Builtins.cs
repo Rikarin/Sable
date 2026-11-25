@@ -194,6 +194,11 @@ public sealed partial class SilGen {
             signature ??= new([], SilType.Unit);
         }
 
+        // The array of Sable.Core's CallableMember, which only its library says.
+        if (name == "callable_members" && loweredResult is not null) {
+            signature = SilBuiltins.Resolve(name, lowered!, loweredResult);
+        }
+
         // The object a struct holds, whatever its class.
         if (name == "ref_is_unique" && lowered is [{ } held]) {
             signature = SilBuiltins.Resolve(name, [held]) ?? new([], SilType.Unit);
@@ -405,8 +410,8 @@ public sealed partial class SilGen {
                 generator._module.FieldDescriptors = true;
             }
 
-            // Only a SIMD builtin takes its type from the declaration; the rest are told by their operands.
-            var simd = SimdBuiltins.Is(name);
+            // Only a SIMD builtin and a callable type's members take their type from the declaration; the rest are told by their operands.
+            var simd = SimdBuiltins.Is(name) || name == "callable_members";
             var resolved = SilBuiltins.Find(name) ?? SilBuiltins.Resolve(name, [..borrowed.Select(static b => b.Type)], simd ? declared : null);
             if (!Agrees(name, resolved, declared, at) || resolved is not { } signature) {
                 _failed = true;

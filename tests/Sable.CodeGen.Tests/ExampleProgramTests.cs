@@ -128,6 +128,27 @@ public sealed class ExampleProgramTests {
         );
 
     [Fact]
+    public void ThePluginsAreFoundAndCalledByName() =>
+        Assert.Equal(
+            "Examples.Plugins.Quote: init(_ mark: String)\n"
+            + "Examples.Plugins.Quote: fn apply(_ text: String) -> String\n"
+            + "Examples.Plugins.Quote: fn use(_ mark: String)\n"
+            + "Examples.Plugins.Repeat: init(_ times: Int)\n"
+            + "Examples.Plugins.Repeat: fn apply(_ text: String) throws -> String\n"
+            + "Examples.Plugins.Upper: init()\n"
+            + "Examples.Plugins.Upper: fn apply(_ text: String) -> String\n"
+            + "Upper: SABLE \n"
+            + "Repeat 2: SABLE SABLE \n"
+            + "Quote *: *SABLE SABLE *\n"
+            + "Repeat twice: no such filter\n"
+            + "Missing: no such filter\n"
+            + "\"hello\"\n"
+            + "argument 0 is 'String', and was given 'Int'\n"
+            + "nothing to repeat\n",
+            Run("07-plugins.sb")
+        );
+
+    [Fact]
     public void TheEchoServerTalksToItself() =>
         Assert.Equal("hello\n100 of 100 heard themselves\nechoed 995 bytes\n", Run("05-echo-server.sb"));
 

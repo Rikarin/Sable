@@ -36,6 +36,7 @@ enum {
     SABLE_TYPE_FIELD_TYPES = 16, // and each names its field's type's metadata
     SABLE_TYPE_NULLABLE = 32,    // one counted reference, never null: an optional of it is null for none
     SABLE_TYPE_BOOL = 64,        // a Bool: an enum of it and empty cases takes its spare values, 2 on
+    SABLE_TYPE_STRUCTURAL = 256, // a structural union, 'A | B': its arguments its cases' types, by name
     SABLE_TYPE_CHAR = 128,       // a Char: an enum of it and empty cases takes the values past U+10FFFF
 };
 
@@ -299,7 +300,8 @@ static const SableWitnessTable *template_instance(const SableTypeMetadata *type,
     return table;
 }
 
-// Whether a template's name is the type's: an array's is "[]", a slice's "[:]", an optional's "?".
+// Whether a template's name is the type's: an array's is "[]", a slice's "[:]",
+// an optional's "?", a structural union's "|".
 static bool is_instance_of(const SableTypeMetadata *type, const char *name, size_t length) {
     switch (type->kind) {
     case SABLE_KIND_ARRAY:
@@ -309,6 +311,10 @@ static bool is_instance_of(const SableTypeMetadata *type, const char *name, size
     case SABLE_KIND_OPTIONAL:
         return strcmp(name, "?") == 0;
     default:
+        if ((type->flags & SABLE_TYPE_STRUCTURAL) != 0) {
+            return strcmp(name, "|") == 0;
+        }
+
         return strncmp(type->name, name, length) == 0 && type->name[length] == '<';
     }
 }
@@ -323,14 +329,14 @@ static const SableWitnessTable *template_table(const SableTypeMetadata *type, co
     return NULL;
 }
 
-// What every array, slice and optional conforms to, by its kind: where the
-// type it is of meets what is asked. Their metadata, the same in every unit
+// What every array, slice, optional and structural union conforms to, by its
+// kind: where each type it is of meets what is asked. Their metadata, the same in every unit
 // and made as the program runs, carries no records; each image that asks the
 // registry gives it the list of what it sees declared.
 typedef struct SableStructuralConformance {
     SableConformance record; // its witnesses null: a table registered, or a template's
     int64_t kind;
-    int64_t requirement_count; // of the one type argument
+    int64_t requirement_count; // of each type argument
     const SableProtocol *const *requirements;
 } SableStructuralConformance;
 
@@ -354,7 +360,8 @@ void sable_register_structural(const SableStructuralConformance *list, int64_t c
 const SableConformance *sable_type_conformance(const SableTypeMetadata *type, const SableProtocol *protocol);
 
 static const SableConformance *structural_conformance(const SableTypeMetadata *type, const SableProtocol *protocol) {
-    if ((type->kind != SABLE_KIND_ARRAY && type->kind != SABLE_KIND_SLICE && type->kind != SABLE_KIND_OPTIONAL) || type->argument_count < 1) {
+    bool is_union = (type->flags & SABLE_TYPE_STRUCTURAL) != 0;
+    if ((type->kind != SABLE_KIND_ARRAY && type->kind != SABLE_KIND_SLICE && type->kind != SABLE_KIND_OPTIONAL && !is_union) || type->argument_count < 1) {
         return NULL;
     }
 
@@ -367,7 +374,9 @@ static const SableConformance *structural_conformance(const SableTypeMetadata *t
 
             bool holds = true;
             for (int64_t k = 0; k < each->requirement_count && holds; k++) {
-                holds = sable_type_conformance(type->arguments[0], each->requirements[k]) != NULL;
+                for (int64_t m = 0; m < (is_union ? type->argument_count : 1) && holds; m++) {
+                    holds = sable_type_conformance(type->arguments[m], each->requirements[k]) != NULL;
+                }
             }
 
             if (holds) {

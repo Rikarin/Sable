@@ -38,6 +38,10 @@ internal sealed partial class DerivedBodies(CoreTypes core, Func<string, string,
             return statements is null ? null : new BoundBlock(_at, [], [..statements]);
         }
 
+        if (!derivation.IsConditional) {
+            return new BoundBlock(_at, [], [..Callable(derivation.Member, type, self)]);
+        }
+
         if (derivation.Member == DerivedMember.Arbitrary) {
             return Arbitrary(type, self) is { } made ? new BoundBlock(_at, [], [..made]) : null;
         }

@@ -391,12 +391,12 @@ public static class AsyncLowering {
 
             // The parameters, in the frame from the start: read in every state.
             // One of a type parameter's type is where its caller holds it, for
-            // the whole call: the frame keeps its address.
+            // the whole call: the frame keeps its address. A shorthand one, '$0', is no field's name.
             var parameters = body.Arguments.ToList();
             var parameterFields = new List<int>();
             for (var i = 0; i < parameters.Count; i++) {
                 var indirect = SilType.IsIndirect(parameters[i].Type);
-                var field = entry.Append(Field(i < parameterNames.Count ? parameterNames[i] : $"$parameter{i}", indirect ? new AddressType(parameters[i].Type) : parameters[i].Type));
+                var field = entry.Append(Field(i < parameterNames.Count && parameterNames[i] is not ['$', >= '0' and <= '9', ..] ? parameterNames[i] : $"$parameter{i}", indirect ? new AddressType(parameters[i].Type) : parameters[i].Type));
                 parameterFields.Add(frame.Fields.Count - 1);
                 SilValue value = entry.Append(new LoadInst(field, LoadKind.Trivial) { Location = at });
                 if (indirect) {

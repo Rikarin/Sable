@@ -102,7 +102,7 @@ struct FrozenTable<Key: Hashable> {
         var seen = I32[>..](repeating: -1, count: size)
         var i = 0
         while i < given.count {
-            var at = Int.truncating((firstHash(given[i]) &* FrozenText.second()) >> 32) & (size - 1)
+            var at = (((firstHash(given[i]) &* FrozenText.second()) >> 32) unchecked as Int) & (size - 1)
             while seen[at] >= 0 && !isSame(keys[Int(seen[at])], given[i]) {
                 at = (at + 1) & (size - 1)
             }
@@ -289,7 +289,7 @@ struct FrozenTable<Key: Hashable> {
 
     const fn findHashed(_ key: Key) -> Int {
         let mask = slots.count &- 1
-        var at = Int.truncating(hash(key, multiplier) >> shift)
+        var at = (hash(key, multiplier) >> shift) unchecked as Int
         while true {
             let position = Int(slots[at])
             if position < 0 || keys[position] == key {
@@ -303,7 +303,7 @@ struct FrozenTable<Key: Hashable> {
 
     @inline(always)
     const fn slot(of hash: U64) -> Int {
-        return Int.truncating((hash &* multiplier) >> shift)
+        return ((hash &* multiplier) >> shift) unchecked as Int
     }
 
     /// What tells some of a text's bytes apart, by the table's strategy.
@@ -527,7 +527,7 @@ struct FrozenTable<Key: Hashable> {
                 zeros = 1
                 continue
             }
-            var at = Int.truncating((word &* FrozenText.second()) >> 32) & (size - 1)
+            var at = (((word &* FrozenText.second()) >> 32) unchecked as Int) & (size - 1)
             while seen[at] != 0 && seen[at] != word {
                 at = (at + 1) & (size - 1)
             }
@@ -616,7 +616,7 @@ struct FrozenTable<Key: Hashable> {
         var steps = 0
         i = 0
         while i < hashes.count && steps < most {
-            var at = Int.truncating((hashes[i] &* trial) >> shift)
+            var at = (((hashes[i] &* trial) >> shift) unchecked as Int)
             while slots[at] >= 0 {
                 at = (at + 1) & mask
                 steps += 1

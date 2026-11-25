@@ -932,6 +932,9 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
 
     /// <summary>Set where the rest of the block being copied is not reached.</summary>
     bool _unreached;
+
+    /// <summary>The generic body's blocks a branch taken in this copy leads to.</summary>
+    readonly HashSet<SilBlock> _reached = new(ReferenceEqualityComparer.Instance);
     SilBlock? _into;
 
     /// <summary>The copy's signature, its body yet to come; null when the types do not make one.</summary>
@@ -1079,7 +1082,14 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
             }
         }
 
+        // A block only branches this copy never takes lead to is left out:
+        // what is in it may be what only another type's copy can say.
+        _reached.Add(_generic.Entry);
         foreach (var block in order) {
+            if (!_reached.Contains(block)) {
+                continue;
+            }
+
             _into = _blocks[block];
             _unreached = false;
             foreach (var instruction in block.Instructions) {
@@ -1087,7 +1097,23 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                     break;
                 }
 
+                if (instruction is CondBranchInst decided && Raw(decided.Condition) is IntegerLiteralInst { Value: var taken }) {
+                    var (target, passed) = taken != 0 ? (decided.WhenTrue, decided.TrueArguments) : (decided.WhenFalse, decided.FalseArguments);
+                    Emit(new BranchInst(Block(target), [..passed.Select(Value)]), instruction);
+                    _reached.Add(target);
+                    break;
+                }
+
                 Copy(instruction);
+                if (instruction.IsTerminator && !_unreached) {
+                    _reached.UnionWith(block.Successors);
+                }
+            }
+        }
+
+        foreach (var (block, copy) in _blocks) {
+            if (!_reached.Contains(block)) {
+                copy.Append(new UnreachableInst());
             }
         }
 
@@ -1281,6 +1307,13 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
             }
         }
 
+        // 'T.self == Int.self', of a T known here.
+        if (callee is FunctionRefInst { Function: "Sable.Core.Type.==" } && arguments is [var left, var right]
+            && specialiser.KnownMetadata(left) is { } leftType && specialiser.KnownMetadata(right) is { } rightType) {
+            Map(call, Emit(new IntegerLiteralInst(SilType.Bool, leftType == rightType ? 1 : 0), call));
+            return;
+        }
+
         if (callee is not GenericReference generic) {
             var callee1 = Value(call.Operands[0]);
             Map(call, call switch {
@@ -1445,6 +1478,24 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
             case "metadata_equal" when specialiser.KnownMetadata(operands[0]) is { } a && specialiser.KnownMetadata(operands[1]) is { } b:
                 Map(builtin, Emit(new IntegerLiteralInst(SilType.Bool, a == b ? 1 : 0), builtin));
                 return;
+
+            case "metadata_kind" when specialiser.KnownMetadata(operands[0]) is { } kindOf && TypeMetadata.KindOf(kindOf) is var kind:
+                Map(builtin, Emit(new IntegerLiteralInst(SilType.Int, (long)kind), builtin));
+                return;
+
+            case "cmp_eq_Int" when operands is [IntegerLiteralInst one, IntegerLiteralInst other]:
+                Map(builtin, Emit(new IntegerLiteralInst(SilType.Bool, one.Value == other.Value ? 1 : 0), builtin));
+                return;
+
+            case "opaque_copy_as": {
+                var held = Value(builtin.Operands[0]);
+                if (held.Type != builtin.Type) {
+                    throw new Refused($"{name} of {held.Type} as {builtin.Type}");
+                }
+
+                Map(builtin, held.Type.IsTrivial ? held : Emit(new CopyValueInst(held), builtin));
+                return;
+            }
 
             // Its dynamic type: what the metadata says, but for an object, whose class may be a subclass.
             // And for an existential, what its box holds.

@@ -2537,6 +2537,9 @@ public static class SilBuiltins {
                 return new([viewed], result!);
             case "opaque_take_as" when operands is [var taken] && result is not null && result != taken && SilType.SameErasingOpaque(taken, result, opaqueOnly: true):
                 return new([taken], result!) { Consumed = [0] };
+            // A value only its metadata knows, which is of the type: a copy of it.
+            case "opaque_copy_as" when operands is [OpaqueType known] && result is not null && !SilType.MentionsOpaque(result):
+                return new([known], result);
             case "metadata_array" or "metadata_slice" when operands is [var element] && element == metadata:
                 return new([metadata], metadata);
             case "opaque_type" when operands is [OpaqueType value, var m] && m == metadata:

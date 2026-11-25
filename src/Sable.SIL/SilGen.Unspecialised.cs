@@ -3526,6 +3526,57 @@ public sealed partial class SilGen {
                 return Missing(conversion, $"the conversion to '{conversion.Type.ToDisplayString()}'");
             }
 
+            // 'key as! String': one that is a String is it, with nothing
+            // boxed; one of any other type that holds nothing else is not.
+            if (conversion.ConversionKind == ConversionKind.Explicit && IsPlain(CastTo(conversion)) && LowerType(CastTo(conversion)) is { } plain
+                && LowerType(conversion.Type) is { } wanted) {
+                var after = function.AddBlock();
+                var joined = after.AddArgument(wanted);
+                var optional = Sub(conversion.Type) is OptionalTypeSymbol ? (EnumType)wanted : null;
+
+                var known = function.AddBlock();
+                var other = function.AddBlock();
+                Jump(new CondBranchInst(Emit(new BuiltinInst("metadata_equal", SilType.Bool, metadata, Emit(new MetadataInst(plain)))), known, [], other, []));
+
+                _current = known;
+                SilValue same = Emit(new BuiltinInst("opaque_copy_as", plain, value));
+                Destroy(value);
+                Branch(after, optional is null ? same : Emit(new EnumInst(optional, optional.CaseIndex("Some"), same)));
+
+                _current = other;
+                var holder = function.AddBlock();
+                var kind = Emit(new BuiltinInst("metadata_kind", SilType.Int, metadata));
+                foreach (var holds in new[] { MetadataKind.Existential, MetadataKind.Optional, MetadataKind.Union }) {
+                    var next = function.AddBlock();
+                    Jump(new CondBranchInst(Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, kind, Emit(new IntegerLiteralInst(SilType.Int, (long)holds)))), holder, [], next, []));
+                    _current = next;
+                }
+
+                if (optional is null) {
+                    Emit(new CondFailInst(Emit(new IntegerLiteralInst(SilType.Bool, 1)), $"cast to '{CastTo(conversion).ToDisplayString()}' failed"));
+                    Jump(new UnreachableInst());
+                } else {
+                    Destroy(value);
+                    Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("None"), null)));
+                }
+
+                _current = holder;
+                if (OpaqueBoxed(conversion, type, metadata, value, opaque) is not { } boxed) {
+                    return null;
+                }
+
+                Branch(after, Owned(boxed));
+                _current = after;
+                return joined;
+            }
+
+            return OpaqueBoxed(conversion, type, metadata, value, opaque);
+        }
+
+        /// <summary>A type whose values are told by it alone: no object, whose class may be derived, and nothing that may hold another's.</summary>
+        static bool IsPlain(TypeSymbol type) => type is NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Enum or TypeKind.Builtin };
+
+        SilValue? OpaqueBoxed(BoundConversion conversion, TypeSymbol type, SilValue metadata, SilValue value, OpaqueType opaque) {
             generator.ErasesAny();
             var held = Emit(new BuiltinInst("opaque_type", SilType.Metadata, value, metadata));
             var buffer = Emit(new BuiltinInst("opaque_alloc", SilType.Address(opaque), metadata));

@@ -249,12 +249,12 @@ final class MontgomeryModulus {
         return value & 31
     }
 
-    /// r = a⁻¹ for a prime modulus, by Fermat's theorem; 0 for 0.
+    /// r = a⁻¹, where there is one; 0 for 0. 'scratch' is a power's.
     unsafe fn invert(_ r: Int, _ a: Int, scratch: Int) {
-        let exponent = SecretMemory(count: 8 * count)
-        Wide.setSmall(exponent.address, 2, count)
-        _ = Wide.sub(exponent.address, address, exponent.address, count)
-        power(r, a, exponent.address, bits: bitCount, scratch: scratch)
+        ModularInverse.invert(r, a, modulus: address, factor: factor, bits: bitCount, count, scratch: scratch)
+        // Of a·R, that is, and what is wanted is over R².
+        enter(r, r, scratch: scratch)
+        enter(r, r, scratch: scratch)
     }
 
     /// r = a to a power that is not secret.

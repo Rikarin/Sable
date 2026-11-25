@@ -1,0 +1,114 @@
+module Sable.Crypto
+
+/// RFC 8017's encodings of a digest, for signatures. Neither a digest nor a
+/// signature is secret.
+struct RsaEncoding {
+    /// EMSA-PKCS1-v1_5 in so many bytes; none if there is no room. The
+    /// prefixes are DER's of the algorithm and the digest's length.
+    static fn pkcs1(_ digest: U8[:], _ hash: HashAlgorithm, count: Int) -> U8[>..]? {
+        let digestInfo: U8[>..] = match hash {
+            case .Sha1     => [0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00, 0x04, 0x14]
+            case .Sha256   => nistPrefix(1, 32)
+            case .Sha384   => nistPrefix(2, 48)
+            case .Sha512   => nistPrefix(3, 64)
+            case .Sha3_256 => nistPrefix(8, 32)
+            case .Sha3_384 => nistPrefix(9, 48)
+            case .Sha3_512 => nistPrefix(10, 64)
+        }
+        let used = digestInfo.count + digest.count
+        if digest.count != hash.digestByteCount || count < used + 11 {
+            return none
+        }
+        var made: U8[>..] = [0, 1]
+        made.append(repeating: 0xFF, count: count - used - 3)
+        made.append(0)
+        made.append(contentsOf: digestInfo)
+        made.append(contentsOf: digest)
+        return made
+    }
+
+    /// Of a hash whose identifier is 2.16.840.1.101.3.4.2 and a number.
+    static fn nistPrefix(_ number: U8, _ digestCount: U8) -> U8[>..] {
+        return [0x30, 17 + digestCount, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, number, 0x05, 0x00, 0x04, digestCount]
+    }
+
+    /// MGF1: so many bytes from a seed.
+    static fn mask(_ seed: U8[:], count: Int, _ hash: HashAlgorithm) -> U8[>..] {
+        var made: U8[>..] = []
+        var counter: U32 = 0
+        while made.count < count {
+            var input = seed.toArray()
+            input.append(repeating: 0, count: 4)
+            input.writeU32(counter, at: seed.count, endian: .Big)
+            made.append(contentsOf: hash.digest(of: input).bytes)
+            counter += 1
+        }
+        return made[..<count].toArray()
+    }
+
+    /// EMSA-PSS in so many bits; none if there is no room.
+    static fn pss(_ digest: U8[:], _ hash: HashAlgorithm, maskHash: HashAlgorithm, salt: U8[:], bits: Int) -> U8[>..]? {
+        let count = (bits + 7) / 8
+        let hashCount = hash.digestByteCount
+        if digest.count != hashCount || count < hashCount + salt.count + 2 {
+            return none
+        }
+        let h = hash.digest(of: salted(digest, salt)).bytes
+        let dbCount = count - hashCount - 1
+        var made = U8[>..](repeating: 0, count: dbCount - salt.count - 1)
+        made.append(1)
+        made.append(contentsOf: salt)
+        let mask = mask(h, count: dbCount, maskHash)
+        var i = 0
+        while i < dbCount {
+            made[i] = made[i] ^ mask[i]
+            i += 1
+        }
+        made[0] = made[0] & (0xFF >> U8(8 * count - bits))
+        made.append(contentsOf: h)
+        made.append(0xBC)
+        return made
+    }
+
+    /// Whether the bytes are EMSA-PSS of the digest.
+    static fn isPss(_ encoded: U8[:], _ digest: U8[:], _ hash: HashAlgorithm, maskHash: HashAlgorithm, saltByteCount: Int, bits: Int) -> Bool {
+        let count = (bits + 7) / 8
+        let hashCount = hash.digestByteCount
+        if saltByteCount < 0 || digest.count != hashCount || encoded.count != count || count < hashCount + saltByteCount + 2 {
+            return false
+        }
+        let dbCount = count - hashCount - 1
+        let top = U8(0xFF) >> U8(8 * count - bits)
+        if encoded[count - 1] != 0xBC || (encoded[0] & ~top) != 0 {
+            return false
+        }
+        let h = encoded[dbCount..<dbCount + hashCount]
+        var db = mask(h, count: dbCount, maskHash)
+        var i = 0
+        while i < dbCount {
+            db[i] = db[i] ^ encoded[i]
+            i += 1
+        }
+        db[0] = db[0] & top
+        let zeros = dbCount - saltByteCount - 1
+        i = 0
+        while i < zeros {
+            if db[i] != 0 {
+                return false
+            }
+            i += 1
+        }
+        if db[zeros] != 1 {
+            return false
+        }
+        return hash.digest(of: salted(digest, db[zeros + 1...])).bytes == h
+    }
+
+    /// What PSS hashes of a digest: eight zeros, it and the salt.
+    static fn salted(_ digest: U8[:], _ salt: U8[:]) -> U8[>..] {
+        var message = U8[>..](repeating: 0, count: 8)
+        message.append(contentsOf: digest)
+        message.append(contentsOf: salt)
+        return message
+    }
+}

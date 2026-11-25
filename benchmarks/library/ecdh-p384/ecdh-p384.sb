@@ -1,0 +1,20 @@
+module EcdhP384Bench
+
+// ECDH on P384 against .NET's ECDiffieHellman.DeriveRawSecretAgreement: 200
+// agreements.
+
+import Sable.Crypto
+
+@main
+fn main() {
+    let mine = EcdhPrivateKey<P384>.generate()
+    let yours = EcdhPrivateKey<P384>.generate()
+    let theirs = yours.publicKey
+    var count = 0
+    var round = 0
+    while round < 200 {
+        count += mine.sharedSecret(with: theirs).byteCount
+        round += 1
+    }
+    print("\(count)")
+}

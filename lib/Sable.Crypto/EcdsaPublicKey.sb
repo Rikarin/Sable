@@ -44,8 +44,8 @@ public struct EcdsaPublicKey<Curve: EllipticCurve>: Hashable, Debug, Sendable {
 
     /// Whether it is this key's signature of the message: of its digest, by
     /// the function the curve is usually used with unless another is given.
-    public fn isValid(_ signature: EcdsaSignature<Curve>, for message: U8[:], hash: HashAlgorithm = Curve.curve.hash) -> Bool {
-        return self.isValid(signature, digest: hash.hash(message).bytes)
+    public fn isValid(_ signature: EcdsaSignature<Curve>, for message: U8[:], hash: HashAlgorithm = Curve.curve.defaultHash) -> Bool {
+        return self.isValid(signature, digest: hash.digest(of: message).bytes)
     }
 
     /// Whether it is this key's signature of a message's digest.

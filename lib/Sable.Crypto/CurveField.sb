@@ -21,6 +21,9 @@ protocol CurveField {
     /// y, as elements.
     static var constants: Int { get }
 
+    /// What times the modulus is -1 modulo 2^64.
+    static var factor: U64 { get }
+
     /// The base point's order.
     static var order: MontgomeryModulus { get }
 
@@ -32,6 +35,12 @@ protocol CurveField {
 
     /// r = a².
     unsafe static fn square(_ r: Int, _ a: Int)
+
+    /// r = a + b.
+    unsafe static fn add(_ r: Int, _ a: Int, _ b: Int)
+
+    /// r = a - b.
+    unsafe static fn sub(_ r: Int, _ a: Int, _ b: Int)
 }
 
 extension CurveField {
@@ -49,21 +58,6 @@ extension CurveField {
     static var baseX: Int => constants &+ 4 &* size
 
     static var baseY: Int => constants &+ 5 &* size
-
-    /// r = a + b.
-    @inline(always)
-    unsafe static fn add(_ r: Int, _ a: Int, _ b: Int) {
-        let carry = Wide.add(r, a, b, limbs)
-        let borrow = Wide.sub(r, r, modulus, limbs)
-        _ = Wide.addMasked(r, modulus, maskOf(bit: borrow & (1 &- carry)), limbs)
-    }
-
-    /// r = a - b.
-    @inline(always)
-    unsafe static fn sub(_ r: Int, _ a: Int, _ b: Int) {
-        let borrow = Wide.sub(r, a, b, limbs)
-        _ = Wide.addMasked(r, modulus, maskOf(bit: borrow), limbs)
-    }
 
     /// r = -a.
     @inline(always)
@@ -117,18 +111,17 @@ extension CurveField {
 
     /// r = 1/a, or 0 for 0; nineteen elements of scratch.
     unsafe static fn invert(_ r: Int, _ a: Int, scratch: Int) {
-        let exponent = scratch &+ 18 &* size
-        Wide.setSmall(exponent, 2, limbs)
-        _ = Wide.sub(exponent, modulus, exponent, limbs)
-        power(r, a, publicExponent: exponent, scratch: scratch)
+        ModularInverse.invert(r, a, modulus: modulus, factor: factor, bits: bits, limbs, scratch: scratch)
+        // Of a·R, that is, and what is wanted is over R².
+        enter(r, r)
+        enter(r, r)
     }
 
     /// r = what squared is a, if anything is: each of the moduli is 3 modulo
     /// 4, so a to the power (p + 1)/4. Nineteen elements of scratch.
     unsafe static fn squareRoot(_ r: Int, _ a: Int, scratch: Int) {
         let exponent = scratch &+ 18 &* size
-        Wide.setSmall(exponent, 1, limbs)
-        // p + 1 may be one limb more: (p >> 2) + 1, p being 3 modulo 4.
+        // That is (p >> 2) + 1.
         Wide.halve(exponent, modulus, top: 0, limbs)
         Wide.halve(exponent, exponent, top: 0, limbs)
         let unit = scratch

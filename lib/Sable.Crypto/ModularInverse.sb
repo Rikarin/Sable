@@ -1,0 +1,228 @@
+module Sable.Crypto
+
+/// Inverses modulo an odd number, by the binary greatest common divisor as
+/// Pornin has it ("Optimized Binary GCD for Modular Inversion", 2020): 31
+/// steps at a time are worked out on 64 bits of the two numbers, their
+/// lowest 31 and their highest 33, and only then done to the whole of them.
+/// The steps are as many whatever the number is, and each is done with
+/// masks.
+struct ModularInverse {
+    /// How many bytes 'scratch' has.
+    static fn scratchBytes(_ n: Int) -> Int {
+        return 8 * (5 * n + 2)
+    }
+
+    /// r = x⁻¹ modulo m, both of n limbs and x under m, which is odd and of
+    /// so many bits; 0 if x is 0, and nothing in particular if it has no
+    /// inverse. 'factor' is -m⁻¹ modulo 2^64.
+    unsafe static fn invert(_ r: Int, _ x: Int, modulus m: Int, factor: U64, bits: Int, _ n: Int, scratch: Int) {
+        let a = scratch
+        let b = scratch &+ 8 &* n
+        let u = scratch &+ 16 &* n
+        let v = scratch &+ 24 &* n
+        let t = scratch &+ 32 &* n
+        Wide.copy(a, x, n)
+        Wide.copy(b, m, n)
+        Wide.setSmall(u, 1, n)
+        Wide.setSmall(v, 0, n)
+        var left = (2 * bits - 1 + 30) / 31
+        while left > 0 {
+            // The highest limb that either has anything in, and the next.
+            var highA: U64 = 0
+            var lowA: U64 = 0
+            var highB: U64 = 0
+            var lowB: U64 = 0
+            var above = maskOf(bit: 1)
+            var atNext = maskOf(bit: 1)
+            var single = maskOf(bit: 1)
+            var i = n &- 1
+            while i >= 0 {
+                let limbA = Wide.limb(a, i)
+                let limbB = Wide.limb(b, i)
+                highA = highA ^ ((highA ^ limbA) & above)
+                highB = highB ^ ((highB ^ limbB) & above)
+                lowA = lowA ^ ((lowA ^ limbA) & atNext)
+                lowB = lowB ^ ((lowB ^ limbB) & atNext)
+                single = above
+                atNext = above
+                above = above & maskIfZero(limbA | limbB)
+                i = i &- 1
+            }
+            // Where all is in the lowest limb, that is taken whole.
+            let shift = (highA | highB | 1).leadingZeroCount unchecked as U64
+            let topA = ((highA << shift) | ((lowA >> 1) >> (63 &- shift))) >> 31
+            let topB = ((highB << shift) | ((lowB >> 1) >> (63 &- shift))) >> 31
+            let firstA = Wide.limb(a, 0)
+            let firstB = Wide.limb(b, 0)
+            var nearA = (firstA & 0x7FFFFFFF) | (topA << 31)
+            var nearB = (firstB & 0x7FFFFFFF) | (topB << 31)
+            nearA = nearA ^ ((nearA ^ firstA) & single)
+            nearB = nearB ^ ((nearB ^ firstB) & single)
+            var f0: U64 = 1
+            var g0: U64 = 0
+            var f1: U64 = 0
+            var g1: U64 = 1
+            var step = 0
+            while step < 31 {
+                let odd = maskOf(bit: nearA & 1)
+                let less = 0 &- (highHalf(wide(nearA) &- wide(nearB)) & 1)
+                let swap = odd & less
+                let nears = (nearA ^ nearB) & swap
+                nearA = nearA ^ nears
+                nearB = nearB ^ nears
+                let fs = (f0 ^ f1) & swap
+                f0 = f0 ^ fs
+                f1 = f1 ^ fs
+                let gs = (g0 ^ g1) & swap
+                g0 = g0 ^ gs
+                g1 = g1 ^ gs
+                nearA = (nearA &- (nearB & odd)) >> 1
+                f0 = f0 &- (f1 & odd)
+                g0 = g0 &- (g1 & odd)
+                f1 = f1 &+ f1
+                g1 = g1 &+ g1
+                step = step &+ 1
+            }
+            // The steps done to a and b; either may come out negative, and
+            // is made positive with its factors.
+            let negativeA = combine(t, a, b, f0, g0, n)
+            let negativeB = combine(b, a, b, f1, g1, n)
+            Wide.copy(a, t, n)
+            negate(a, negativeA, n)
+            negate(b, negativeB, n)
+            f0 = (f0 ^ negativeA) &- negativeA
+            g0 = (g0 ^ negativeA) &- negativeA
+            f1 = (f1 ^ negativeB) &- negativeB
+            g1 = (g1 ^ negativeB) &- negativeB
+            combineModulo(t, u, v, f0, g0, m, factor, n)
+            combineModulo(v, u, v, f1, g1, m, factor, n)
+            Wide.copy(u, t, n)
+            left = left &- 1
+        }
+        Wide.copy(r, v, n)
+    }
+
+    /// r = (a·f + b·g) / 2^31, which is a whole number of n limbs and a
+    /// sign: all ones for a negative one. f and g are signed, from -2^31 to
+    /// 2^31. r may lie where a or b does.
+    @inline(always)
+    unsafe static fn combine(_ r: Int, _ a: Int, _ b: Int, _ f: U64, _ g: U64, _ n: Int) -> U64 {
+        // A negative factor is -2^64 and what its bits are; the 2^64 is
+        // taken away a limb up.
+        let signF = maskOf(bit: f >> 63)
+        let signG = maskOf(bit: g >> 63)
+        let factorF = wide(f)
+        let factorG = wide(g)
+        var carryF: U64 = 0
+        var carryG: U64 = 0
+        var borrowF: U64 = 0
+        var borrowG: U64 = 0
+        var lastA: U64 = 0
+        var lastB: U64 = 0
+        var carry: U64 = 0
+        var previous: U64 = 0
+        var i = 0
+        while i <= n {
+            let limbA = i < n ? Wide.limb(a, i) : 0
+            let limbB = i < n ? Wide.limb(b, i) : 0
+            let productF = wide(limbA) &* factorF &+ wide(carryF)
+            let productG = wide(limbB) &* factorG &+ wide(carryG)
+            carryF = highHalf(productF)
+            carryG = highHalf(productG)
+            let partF = wide(lowHalf(productF)) &- wide(lastA & signF) &- wide(borrowF)
+            borrowF = highHalf(partF) & 1
+            let partG = wide(lowHalf(productG)) &- wide(lastB & signG) &- wide(borrowG)
+            borrowG = highHalf(partG) & 1
+            let sum = wide(lowHalf(partF)) &+ wide(lowHalf(partG)) &+ wide(carry)
+            carry = highHalf(sum)
+            let limb = lowHalf(sum)
+            if i > 0 {
+                Wide.put(r, i &- 1, (previous >> 31) | (limb << 33))
+            }
+            previous = limb
+            lastA = limbA
+            lastB = limbB
+            i = i &+ 1
+        }
+        return maskOf(bit: previous >> 63)
+    }
+
+    /// r = -r where the mask is ones.
+    @inline(always)
+    unsafe static fn negate(_ r: Int, _ mask: U64, _ n: Int) {
+        var carry = mask & 1
+        var i = 0
+        while i < n {
+            let sum = wide(Wide.limb(r, i) ^ mask) &+ wide(carry)
+            Wide.put(r, i, lowHalf(sum))
+            carry = highHalf(sum)
+            i = i &+ 1
+        }
+    }
+
+    /// r = (u·f + v·g) / 2^31 modulo m: as much of m is added as makes the
+    /// low 31 bits zeros.
+    @inline(always)
+    unsafe static fn combineModulo(_ r: Int, _ u: Int, _ v: Int, _ f: U64, _ g: U64, _ m: Int, _ factor: U64, _ n: Int) {
+        let low = Wide.limb(u, 0) &* f &+ Wide.limb(v, 0) &* g
+        let multiple = wide((low &* factor) & 0x7FFFFFFF)
+        let signF = maskOf(bit: f >> 63)
+        let signG = maskOf(bit: g >> 63)
+        let factorF = wide(f)
+        let factorG = wide(g)
+        var carryF: U64 = 0
+        var carryG: U64 = 0
+        var carryM: U64 = 0
+        var borrowF: U64 = 0
+        var borrowG: U64 = 0
+        var lastU: U64 = 0
+        var lastV: U64 = 0
+        var carry: U64 = 0
+        var previous: U64 = 0
+        var i = 0
+        while i <= n {
+            let limbU = i < n ? Wide.limb(u, i) : 0
+            let limbV = i < n ? Wide.limb(v, i) : 0
+            let limbM = i < n ? Wide.limb(m, i) : 0
+            let productF = wide(limbU) &* factorF &+ wide(carryF)
+            let productG = wide(limbV) &* factorG &+ wide(carryG)
+            let productM = wide(limbM) &* multiple &+ wide(carryM)
+            carryF = highHalf(productF)
+            carryG = highHalf(productG)
+            carryM = highHalf(productM)
+            let partF = wide(lowHalf(productF)) &- wide(lastU & signF) &- wide(borrowF)
+            borrowF = highHalf(partF) & 1
+            let partG = wide(lowHalf(productG)) &- wide(lastV & signG) &- wide(borrowG)
+            borrowG = highHalf(partG) & 1
+            let sum = wide(lowHalf(partF)) &+ wide(lowHalf(partG)) &+ wide(lowHalf(productM)) &+ wide(carry)
+            carry = highHalf(sum)
+            let limb = lowHalf(sum)
+            if i > 0 {
+                Wide.put(r, i &- 1, (previous >> 31) | (limb << 33))
+            }
+            previous = limb
+            lastU = limbU
+            lastV = limbV
+            i = i &+ 1
+        }
+        // It is over -m and under 2m. What is past the n limbs: -1, 0 or 1.
+        var top = (((previous unchecked as I64) >> 31) unchecked as U64)
+        top = top &+ Wide.addMasked(r, m, maskOf(bit: top >> 63), n)
+        // Less m, unless that is negative.
+        var borrow: U64 = 0
+        i = 0
+        while i < n {
+            borrow = highHalf(wide(Wide.limb(r, i)) &- wide(Wide.limb(m, i)) &- wide(borrow)) & 1
+            i = i &+ 1
+        }
+        let over = maskOf(bit: (top & 1) | (1 &- borrow))
+        borrow = 0
+        i = 0
+        while i < n {
+            let less = wide(Wide.limb(r, i)) &- wide(Wide.limb(m, i) & over) &- wide(borrow)
+            Wide.put(r, i, lowHalf(less))
+            borrow = highHalf(less) & 1
+            i = i &+ 1
+        }
+    }
+}

@@ -1,0 +1,191 @@
+module Sable.Crypto
+
+/// How an RSA key is made (FIPS 186-5 A.1.3): two random primes of which
+/// neither less one has the exponent for a factor, and what follows from
+/// them, with no division but by what is public. Which candidates are not
+/// taken is told by how long it takes; nothing of those that are.
+struct RsaPrimes {
+    /// How many times a prime is tested; FIPS 186-5 asks for five of one of
+    /// 1024 bits, and fewer of longer ones.
+    static var rounds: Int => 8
+
+    /// The odd primes to 751.
+    static fn makeSmallPrimes() -> U64[>..] {
+        var primes: U64[>..] = []
+        var candidate: U64 = 3
+        while candidate < 752 {
+            var divisor: U64 = 3
+            while divisor * divisor <= candidate && candidate % divisor != 0 {
+                divisor += 2
+            }
+            if divisor * divisor > candidate {
+                primes.append(candidate)
+            }
+            candidate += 2
+        }
+        return primes
+    }
+
+    /// The number modulo one under 2^32, which is not secret, by multiplying
+    /// with its inverse: how long a division takes may tell of what is
+    /// divided.
+    unsafe static fn remainder(_ a: Int, _ n: Int, by divisor: U64) -> U64 {
+        let inverse = U64.max / divisor
+        var rest: U64 = 0
+        var i = n - 1
+        while i >= 0 {
+            let limb = Wide.limb(a, i)
+            rest = step((rest << 32) | (limb >> 32), divisor, inverse)
+            rest = step((rest << 32) | (limb & 0xFFFFFFFF), divisor, inverse)
+            i -= 1
+        }
+        return rest
+    }
+
+    /// A U64 modulo the divisor: the quotient is guessed at most two short.
+    @inline(always)
+    static fn step(_ value: U64, _ divisor: U64, _ inverse: U64) -> U64 {
+        var rest = value &- highHalf(wide(value) &* wide(inverse)) &* divisor
+        rest = rest &- (divisor & ~maskOf(bit: highHalf(wide(rest) &- wide(divisor)) & 1))
+        rest = rest &- (divisor & ~maskOf(bit: highHalf(wide(rest) &- wide(divisor)) & 1))
+        return rest
+    }
+
+    /// Whether a small prime divides the candidate.
+    unsafe static fn hasSmallFactor(_ a: Int, _ n: Int) -> Bool {
+        for prime in rsaSmallPrimes {
+            if remainder(a, n, by: prime) == 0 {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// A random prime of n limbs, its two top bits set, so that a product of
+    /// two has all its bits, and its two low ones, so that a half of it less
+    /// one is odd.
+    static fn prime(_ n: Int) -> MontgomeryModulus {
+        let candidate = SecretMemory(count: 8 * n)
+        let a = candidate.address
+        unsafe {
+            while true {
+                Native.random(a, 8 * n)
+                Wide.put(a, 0, Wide.limb(a, 0) | 3)
+                Wide.put(a, n - 1, Wide.limb(a, n - 1) | 0xC000000000000000)
+                if hasSmallFactor(a, n) || remainder(a, n, by: 65537) == 1 {
+                    continue
+                }
+                let modulus = MontgomeryModulus(at: a, count: n)
+                if isProbablePrime(modulus) {
+                    return modulus
+                }
+            }
+        }
+    }
+
+    /// Miller and Rabin's test. The number is 3 modulo 4, so that a base to
+    /// the power half of it less one must be 1 or -1.
+    unsafe static fn isProbablePrime(_ modulus: MontgomeryModulus) -> Bool {
+        let n = modulus.count
+        let work = SecretMemory(count: 8 * n * 4 + modulus.powerScratchBytes)
+        let exponent = work.address
+        let base = exponent + 8 * n
+        let minusOne = base + 8 * n
+        let power = minusOne + 8 * n
+        let scratch = power + 8 * n
+        Wide.halve(exponent, modulus.address, top: 0, n)
+        modulus.negate(minusOne, modulus.one)
+        var round = 0
+        while round < rounds {
+            // Any number, as a Montgomery number, is a random base.
+            Native.random(base, 8 * n)
+            modulus.enter(base, base, scratch: scratch)
+            if Wide.zeroMask(base, n) != 0 {
+                continue
+            }
+            modulus.power(power, base, exponent, bits: modulus.bitCount - 1, scratch: scratch)
+            if (Wide.equalMask(power, modulus.one, n) | Wide.equalMask(power, minusOne, n)) == 0 {
+                return false
+            }
+            round += 1
+        }
+        return true
+    }
+
+    /// r = 65537⁻¹ modulo m, of n limbs and no multiple of it: (1 + m·k) / e,
+    /// where k is -m⁻¹ modulo e.
+    unsafe static fn invertExponent(_ r: Int, modulo m: Int, _ n: Int) {
+        let e = SecretMemory(count: 8)
+        Wide.put(e.address, 0, 65537)
+        let small = MontgomeryModulus(at: e.address, count: 1)
+        let work = SecretMemory(count: 8 * (n + 4) + small.powerScratchBytes)
+        let k = work.address
+        let product = k + 8
+        let scratch = product + 8 * (n + 1)
+        Wide.remainder(k, m, n, e.address, 1, scratch: scratch)
+        small.enter(k, k, scratch: scratch)
+        small.invert(k, k, scratch: scratch)
+        small.negate(k, k)
+        small.leave(k, k, scratch: scratch)
+        Wide.multiply(product, m, n, k, 1)
+        var carry: U64 = 1
+        var i = 0
+        while i <= n {
+            let sum = wide(Wide.limb(product, i)) &+ wide(carry)
+            Wide.put(product, i, lowHalf(sum))
+            carry = highHalf(sum)
+            i = i &+ 1
+        }
+        // Divided exactly, from the lowest limb up.
+        let inverse = 0 &- small.factor
+        var borrow: U64 = 0
+        i = 0
+        while i < n {
+            let less = wide(Wide.limb(product, i)) &- wide(borrow)
+            let digit = lowHalf(less) &* inverse
+            Wide.put(r, i, digit)
+            borrow = highHalf(wide(digit) &* 65537) &+ (highHalf(less) & 1)
+            i = i &+ 1
+        }
+    }
+
+    /// A key of so many bits, or none if its primes are too near each other.
+    static fn key(bits: Int) -> RsaPrivateKey? {
+        let half = bits / 128
+        let n = 2 * half
+        let p = prime(half)
+        let q = prime(half)
+        unsafe {
+            // As good as never, of random ones.
+            if Wide.limb(p.address, half - 1) == Wide.limb(q.address, half - 1) {
+                return none
+            }
+            let memory = SecretMemory(count: 8 * (n + 3 * half))
+            let work = SecretMemory(count: 8 * n * 4 + p.powerScratchBytes)
+            let product = work.address
+            let lessP = product + 8 * n
+            let lessQ = lessP + 8 * n
+            let scratch = lessQ + 8 * n
+            Wide.multiply(product, p.address, half, q.address, half)
+            var modulus: U8[>..] = []
+            Wide.appendBigEndian(to: &modulus, product, count: 8 * n)
+            // Odd, so that one less is without the low bit.
+            Wide.copy(lessP, p.address, half)
+            Wide.put(lessP, 0, Wide.limb(lessP, 0) & ~1)
+            Wide.copy(lessQ, q.address, half)
+            Wide.put(lessQ, 0, Wide.limb(lessQ, 0) & ~1)
+            let d = memory.address
+            Wide.multiply(product, lessP, half, lessQ, half)
+            invertExponent(d, modulo: product, n)
+            invertExponent(d + 8 * n, modulo: lessP, half)
+            invertExponent(d + 8 * (n + half), modulo: lessQ, half)
+            let coefficient = d + 8 * (n + 2 * half)
+            p.enter(coefficient, q.address, scratch: scratch)
+            p.invert(coefficient, coefficient, scratch: scratch)
+            let key = RsaPrivateKey(publicKey: try! RsaPublicKey(modulus: modulus, exponent: 65537), p: p, q: q, memory: memory)
+            return key.works() ? key : none
+        }
+    }
+}
+
+let rsaSmallPrimes: U64[>..] = RsaPrimes.makeSmallPrimes()

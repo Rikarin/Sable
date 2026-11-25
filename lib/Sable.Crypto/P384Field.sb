@@ -15,53 +15,258 @@ struct P384Field: CurveField {
 
     static var baseTable: Int => p384BaseTable
 
+    static var factor: U64 => 0x100000001
+
     static var order: MontgomeryModulus => p384Order
 
     unsafe static fn multiply(_ r: Int, _ a: Int, _ b: Int) {
-        let m = p384Constants
-        var t: U64[7] = [0, 0, 0, 0, 0, 0, 0]
-        var i = 0
-        while i < 6 {
-            // As MontgomeryModulus does it, with the sum in registers.
-            let digit = wide(Wide.limb(b, i))
-            let x = wide(Wide.limb(a, 0)) &* digit &+ wide(t[0])
-            let q = wide(lowHalf(x) &* 0x100000001)
-            var c = highHalf(x)
-            var d = highHalf(q &* 0xFFFFFFFF &+ wide(lowHalf(x)))
-            var j = 1
-            while j < 6 {
-                let product = wide(Wide.limb(a, j)) &* digit &+ wide(t[j]) &+ wide(c)
-                c = highHalf(product)
-                let reduced = q &* wide(Wide.limb(m, j)) &+ wide(lowHalf(product)) &+ wide(d)
-                d = highHalf(reduced)
-                t[j &- 1] = lowHalf(reduced)
-                j = j &+ 1
-            }
-            let top = wide(t[6]) &+ wide(c) &+ wide(d)
-            t[5] = lowHalf(top)
-            t[6] = highHalf(top)
-            i = i &+ 1
-        }
-        // Less the modulus, if that leaves nothing to borrow from.
-        var s: U64[6] = [0, 0, 0, 0, 0, 0]
-        var borrow: U64 = 0
-        i = 0
-        while i < 6 {
-            let less = wide(t[i]) &- wide(Wide.limb(m, i)) &- wide(borrow)
-            s[i] = lowHalf(less)
-            borrow = highHalf(less) & 1
-            i = i &+ 1
-        }
-        let keep = maskOf(bit: borrow & (1 &- t[6]))
-        i = 0
-        while i < 6 {
-            Wide.put(r, i, (t[i] & keep) | (s[i] & ~keep))
-            i = i &+ 1
-        }
+        let a0 = wide(Wide.limb(a, 0))
+        let a1 = wide(Wide.limb(a, 1))
+        let a2 = wide(Wide.limb(a, 2))
+        let a3 = wide(Wide.limb(a, 3))
+        let a4 = wide(Wide.limb(a, 4))
+        let a5 = wide(Wide.limb(a, 5))
+        let b0 = wide(Wide.limb(b, 0))
+        let b1 = wide(Wide.limb(b, 1))
+        let b2 = wide(Wide.limb(b, 2))
+        let b3 = wide(Wide.limb(b, 3))
+        let b4 = wide(Wide.limb(b, 4))
+        let b5 = wide(Wide.limb(b, 5))
+        let x0 = a0 &* b0
+        let x1 = a1 &* b0 &+ wide(highHalf(x0))
+        let x2 = a2 &* b0 &+ wide(highHalf(x1))
+        let x3 = a3 &* b0 &+ wide(highHalf(x2))
+        let x4 = a4 &* b0 &+ wide(highHalf(x3))
+        let x5 = a5 &* b0 &+ wide(highHalf(x4))
+        let h0 = highHalf(x5)
+        let x6 = a0 &* b1 &+ wide(lowHalf(x1))
+        let x7 = a1 &* b1 &+ wide(lowHalf(x2)) &+ wide(highHalf(x6))
+        let x8 = a2 &* b1 &+ wide(lowHalf(x3)) &+ wide(highHalf(x7))
+        let x9 = a3 &* b1 &+ wide(lowHalf(x4)) &+ wide(highHalf(x8))
+        let x10 = a4 &* b1 &+ wide(lowHalf(x5)) &+ wide(highHalf(x9))
+        let x11 = a5 &* b1 &+ wide(h0) &+ wide(highHalf(x10))
+        let h1 = highHalf(x11)
+        let x12 = a0 &* b2 &+ wide(lowHalf(x7))
+        let x13 = a1 &* b2 &+ wide(lowHalf(x8)) &+ wide(highHalf(x12))
+        let x14 = a2 &* b2 &+ wide(lowHalf(x9)) &+ wide(highHalf(x13))
+        let x15 = a3 &* b2 &+ wide(lowHalf(x10)) &+ wide(highHalf(x14))
+        let x16 = a4 &* b2 &+ wide(lowHalf(x11)) &+ wide(highHalf(x15))
+        let x17 = a5 &* b2 &+ wide(h1) &+ wide(highHalf(x16))
+        let h2 = highHalf(x17)
+        let x18 = a0 &* b3 &+ wide(lowHalf(x13))
+        let x19 = a1 &* b3 &+ wide(lowHalf(x14)) &+ wide(highHalf(x18))
+        let x20 = a2 &* b3 &+ wide(lowHalf(x15)) &+ wide(highHalf(x19))
+        let x21 = a3 &* b3 &+ wide(lowHalf(x16)) &+ wide(highHalf(x20))
+        let x22 = a4 &* b3 &+ wide(lowHalf(x17)) &+ wide(highHalf(x21))
+        let x23 = a5 &* b3 &+ wide(h2) &+ wide(highHalf(x22))
+        let h3 = highHalf(x23)
+        let x24 = a0 &* b4 &+ wide(lowHalf(x19))
+        let x25 = a1 &* b4 &+ wide(lowHalf(x20)) &+ wide(highHalf(x24))
+        let x26 = a2 &* b4 &+ wide(lowHalf(x21)) &+ wide(highHalf(x25))
+        let x27 = a3 &* b4 &+ wide(lowHalf(x22)) &+ wide(highHalf(x26))
+        let x28 = a4 &* b4 &+ wide(lowHalf(x23)) &+ wide(highHalf(x27))
+        let x29 = a5 &* b4 &+ wide(h3) &+ wide(highHalf(x28))
+        let h4 = highHalf(x29)
+        let x30 = a0 &* b5 &+ wide(lowHalf(x25))
+        let x31 = a1 &* b5 &+ wide(lowHalf(x26)) &+ wide(highHalf(x30))
+        let x32 = a2 &* b5 &+ wide(lowHalf(x27)) &+ wide(highHalf(x31))
+        let x33 = a3 &* b5 &+ wide(lowHalf(x28)) &+ wide(highHalf(x32))
+        let x34 = a4 &* b5 &+ wide(lowHalf(x29)) &+ wide(highHalf(x33))
+        let x35 = a5 &* b5 &+ wide(h4) &+ wide(highHalf(x34))
+        let h5 = highHalf(x35)
+        P384Field.reduce(r, lowHalf(x0), lowHalf(x6), lowHalf(x12), lowHalf(x18), lowHalf(x24), lowHalf(x30), lowHalf(x31), lowHalf(x32), lowHalf(x33), lowHalf(x34), lowHalf(x35), h5)
     }
 
     unsafe static fn square(_ r: Int, _ a: Int) {
-        multiply(r, a, a)
+        let a0 = wide(Wide.limb(a, 0))
+        let a1 = wide(Wide.limb(a, 1))
+        let a2 = wide(Wide.limb(a, 2))
+        let a3 = wide(Wide.limb(a, 3))
+        let a4 = wide(Wide.limb(a, 4))
+        let a5 = wide(Wide.limb(a, 5))
+        // The products of two different limbs, once.
+        let x0 = a1 &* a0
+        let x1 = a2 &* a0 &+ wide(highHalf(x0))
+        let x2 = a3 &* a0 &+ wide(highHalf(x1))
+        let x3 = a4 &* a0 &+ wide(highHalf(x2))
+        let x4 = a5 &* a0 &+ wide(highHalf(x3))
+        let h0 = highHalf(x4)
+        let x5 = a2 &* a1 &+ wide(lowHalf(x2))
+        let x6 = a3 &* a1 &+ wide(lowHalf(x3)) &+ wide(highHalf(x5))
+        let x7 = a4 &* a1 &+ wide(lowHalf(x4)) &+ wide(highHalf(x6))
+        let x8 = a5 &* a1 &+ wide(h0) &+ wide(highHalf(x7))
+        let h1 = highHalf(x8)
+        let x9 = a3 &* a2 &+ wide(lowHalf(x7))
+        let x10 = a4 &* a2 &+ wide(lowHalf(x8)) &+ wide(highHalf(x9))
+        let x11 = a5 &* a2 &+ wide(h1) &+ wide(highHalf(x10))
+        let h2 = highHalf(x11)
+        let x12 = a4 &* a3 &+ wide(lowHalf(x11))
+        let x13 = a5 &* a3 &+ wide(h2) &+ wide(highHalf(x12))
+        let h3 = highHalf(x13)
+        let x14 = a5 &* a4 &+ wide(h3)
+        let h4 = highHalf(x14)
+        let m1 = lowHalf(x0)
+        let m2 = lowHalf(x1)
+        let m3 = lowHalf(x5)
+        let m4 = lowHalf(x6)
+        let m5 = lowHalf(x9)
+        let m6 = lowHalf(x10)
+        let m7 = lowHalf(x12)
+        let m8 = lowHalf(x13)
+        let m9 = lowHalf(x14)
+        let m10 = h4
+        // Doubled, and the squares added.
+        let s0 = a0 &* a0
+        let s1 = a1 &* a1
+        let s2 = a2 &* a2
+        let s3 = a3 &* a3
+        let s4 = a4 &* a4
+        let s5 = a5 &* a5
+        let y1 = wide(m1 << 1) &+ wide(highHalf(s0))
+        let y2 = wide((m2 << 1) | (m1 >> 63)) &+ wide(lowHalf(s1)) &+ wide(highHalf(y1))
+        let y3 = wide((m3 << 1) | (m2 >> 63)) &+ wide(highHalf(s1)) &+ wide(highHalf(y2))
+        let y4 = wide((m4 << 1) | (m3 >> 63)) &+ wide(lowHalf(s2)) &+ wide(highHalf(y3))
+        let y5 = wide((m5 << 1) | (m4 >> 63)) &+ wide(highHalf(s2)) &+ wide(highHalf(y4))
+        let y6 = wide((m6 << 1) | (m5 >> 63)) &+ wide(lowHalf(s3)) &+ wide(highHalf(y5))
+        let y7 = wide((m7 << 1) | (m6 >> 63)) &+ wide(highHalf(s3)) &+ wide(highHalf(y6))
+        let y8 = wide((m8 << 1) | (m7 >> 63)) &+ wide(lowHalf(s4)) &+ wide(highHalf(y7))
+        let y9 = wide((m9 << 1) | (m8 >> 63)) &+ wide(highHalf(s4)) &+ wide(highHalf(y8))
+        let y10 = wide((m10 << 1) | (m9 >> 63)) &+ wide(lowHalf(s5)) &+ wide(highHalf(y9))
+        let y11 = (m10 >> 63) &+ highHalf(s5) &+ highHalf(y10)
+        P384Field.reduce(r, lowHalf(s0), lowHalf(y1), lowHalf(y2), lowHalf(y3), lowHalf(y4), lowHalf(y5), lowHalf(y6), lowHalf(y7), lowHalf(y8), lowHalf(y9), lowHalf(y10), y11)
+    }
+
+    unsafe static fn add(_ r: Int, _ a: Int, _ b: Int) {
+        let x0 = wide(Wide.limb(a, 0)) &+ wide(Wide.limb(b, 0))
+        let x1 = wide(Wide.limb(a, 1)) &+ wide(Wide.limb(b, 1)) &+ wide(highHalf(x0))
+        let x2 = wide(Wide.limb(a, 2)) &+ wide(Wide.limb(b, 2)) &+ wide(highHalf(x1))
+        let x3 = wide(Wide.limb(a, 3)) &+ wide(Wide.limb(b, 3)) &+ wide(highHalf(x2))
+        let x4 = wide(Wide.limb(a, 4)) &+ wide(Wide.limb(b, 4)) &+ wide(highHalf(x3))
+        let x5 = wide(Wide.limb(a, 5)) &+ wide(Wide.limb(b, 5)) &+ wide(highHalf(x4))
+        // Less the modulus, if that leaves nothing to borrow from.
+        let z0 = wide(lowHalf(x0)) &- 0xFFFFFFFF
+        let z1 = wide(lowHalf(x1)) &- 0xFFFFFFFF00000000 &- wide(highHalf(z0) & 1)
+        let z2 = wide(lowHalf(x2)) &- 0xFFFFFFFFFFFFFFFE &- wide(highHalf(z1) & 1)
+        let z3 = wide(lowHalf(x3)) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z2) & 1)
+        let z4 = wide(lowHalf(x4)) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z3) & 1)
+        let z5 = wide(lowHalf(x5)) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z4) & 1)
+        let keep = maskOf(bit: (highHalf(z5) & 1) & (1 &- highHalf(x5)))
+        Wide.put(r, 0, (lowHalf(x0) & keep) | (lowHalf(z0) & ~keep))
+        Wide.put(r, 1, (lowHalf(x1) & keep) | (lowHalf(z1) & ~keep))
+        Wide.put(r, 2, (lowHalf(x2) & keep) | (lowHalf(z2) & ~keep))
+        Wide.put(r, 3, (lowHalf(x3) & keep) | (lowHalf(z3) & ~keep))
+        Wide.put(r, 4, (lowHalf(x4) & keep) | (lowHalf(z4) & ~keep))
+        Wide.put(r, 5, (lowHalf(x5) & keep) | (lowHalf(z5) & ~keep))
+    }
+
+    unsafe static fn sub(_ r: Int, _ a: Int, _ b: Int) {
+        let x0 = wide(Wide.limb(a, 0)) &- wide(Wide.limb(b, 0))
+        let x1 = wide(Wide.limb(a, 1)) &- wide(Wide.limb(b, 1)) &- wide(highHalf(x0) & 1)
+        let x2 = wide(Wide.limb(a, 2)) &- wide(Wide.limb(b, 2)) &- wide(highHalf(x1) & 1)
+        let x3 = wide(Wide.limb(a, 3)) &- wide(Wide.limb(b, 3)) &- wide(highHalf(x2) & 1)
+        let x4 = wide(Wide.limb(a, 4)) &- wide(Wide.limb(b, 4)) &- wide(highHalf(x3) & 1)
+        let x5 = wide(Wide.limb(a, 5)) &- wide(Wide.limb(b, 5)) &- wide(highHalf(x4) & 1)
+        // More by the modulus, if it is negative.
+        let under = maskOf(bit: highHalf(x5) & 1)
+        let z0 = wide(lowHalf(x0)) &+ wide(under & 0xFFFFFFFF)
+        let z1 = wide(lowHalf(x1)) &+ wide(under & 0xFFFFFFFF00000000) &+ wide(highHalf(z0))
+        let z2 = wide(lowHalf(x2)) &+ wide(under & 0xFFFFFFFFFFFFFFFE) &+ wide(highHalf(z1))
+        let z3 = wide(lowHalf(x3)) &+ wide(under) &+ wide(highHalf(z2))
+        let z4 = wide(lowHalf(x4)) &+ wide(under) &+ wide(highHalf(z3))
+        let z5 = wide(lowHalf(x5)) &+ wide(under) &+ wide(highHalf(z4))
+        Wide.put(r, 0, lowHalf(z0))
+        Wide.put(r, 1, lowHalf(z1))
+        Wide.put(r, 2, lowHalf(z2))
+        Wide.put(r, 3, lowHalf(z3))
+        Wide.put(r, 4, lowHalf(z4))
+        Wide.put(r, 5, lowHalf(z5))
+    }
+
+    /// A product of twelve limbs over R: six times, as much of the modulus
+    /// is added as makes the lowest limb zero, q of it. That is q six limbs
+    /// up, and here q times 2^32 - 1 more and q times 2^128 + 2^96 less.
+    @inline(always)
+    unsafe static fn reduce(_ r: Int, _ t0: U64, _ t1: U64, _ t2: U64, _ t3: U64, _ t4: U64, _ t5: U64, _ t6: U64, _ t7: U64, _ t8: U64, _ t9: U64, _ t10: U64, _ t11: U64) {
+        let q0 = t0 &+ (t0 << 32)
+        let d0 = (wide(q0) << 32) &- wide(q0)
+        let e0 = wide(t0) &+ wide(lowHalf(d0))
+        let f0 = signed(wide(t1) &+ wide(highHalf(d0)) &+ wide(highHalf(e0))) &- signed(wide(q0 << 32))
+        let g0 = signed(wide(t2)) &+ (f0 >> 64) &- signed(wide(q0)) &- signed(wide(q0 >> 32))
+        let k0 = signed(wide(t3)) &+ (g0 >> 64)
+        let l0 = signed(wide(t4)) &+ (k0 >> 64)
+        let n0 = signed(wide(t5)) &+ (l0 >> 64)
+        let w0 = signed(wide(t6) &+ wide(q0)) &+ (n0 >> 64)
+        let q1 = (f0 unchecked as U64) &+ ((f0 unchecked as U64) << 32)
+        let d1 = (wide(q1) << 32) &- wide(q1)
+        let e1 = wide((f0 unchecked as U64)) &+ wide(lowHalf(d1))
+        let f1 = signed(wide((g0 unchecked as U64)) &+ wide(highHalf(d1)) &+ wide(highHalf(e1))) &- signed(wide(q1 << 32))
+        let g1 = signed(wide((k0 unchecked as U64))) &+ (f1 >> 64) &- signed(wide(q1)) &- signed(wide(q1 >> 32))
+        let k1 = signed(wide((l0 unchecked as U64))) &+ (g1 >> 64)
+        let l1 = signed(wide((n0 unchecked as U64))) &+ (k1 >> 64)
+        let n1 = signed(wide((w0 unchecked as U64))) &+ (l1 >> 64)
+        let w1 = signed(wide(t7) &+ wide(q1) &+ wide(((w0 >> 64) unchecked as U64))) &+ (n1 >> 64)
+        let q2 = (f1 unchecked as U64) &+ ((f1 unchecked as U64) << 32)
+        let d2 = (wide(q2) << 32) &- wide(q2)
+        let e2 = wide((f1 unchecked as U64)) &+ wide(lowHalf(d2))
+        let f2 = signed(wide((g1 unchecked as U64)) &+ wide(highHalf(d2)) &+ wide(highHalf(e2))) &- signed(wide(q2 << 32))
+        let g2 = signed(wide((k1 unchecked as U64))) &+ (f2 >> 64) &- signed(wide(q2)) &- signed(wide(q2 >> 32))
+        let k2 = signed(wide((l1 unchecked as U64))) &+ (g2 >> 64)
+        let l2 = signed(wide((n1 unchecked as U64))) &+ (k2 >> 64)
+        let n2 = signed(wide((w1 unchecked as U64))) &+ (l2 >> 64)
+        let w2 = signed(wide(t8) &+ wide(q2) &+ wide(((w1 >> 64) unchecked as U64))) &+ (n2 >> 64)
+        let q3 = (f2 unchecked as U64) &+ ((f2 unchecked as U64) << 32)
+        let d3 = (wide(q3) << 32) &- wide(q3)
+        let e3 = wide((f2 unchecked as U64)) &+ wide(lowHalf(d3))
+        let f3 = signed(wide((g2 unchecked as U64)) &+ wide(highHalf(d3)) &+ wide(highHalf(e3))) &- signed(wide(q3 << 32))
+        let g3 = signed(wide((k2 unchecked as U64))) &+ (f3 >> 64) &- signed(wide(q3)) &- signed(wide(q3 >> 32))
+        let k3 = signed(wide((l2 unchecked as U64))) &+ (g3 >> 64)
+        let l3 = signed(wide((n2 unchecked as U64))) &+ (k3 >> 64)
+        let n3 = signed(wide((w2 unchecked as U64))) &+ (l3 >> 64)
+        let w3 = signed(wide(t9) &+ wide(q3) &+ wide(((w2 >> 64) unchecked as U64))) &+ (n3 >> 64)
+        let q4 = (f3 unchecked as U64) &+ ((f3 unchecked as U64) << 32)
+        let d4 = (wide(q4) << 32) &- wide(q4)
+        let e4 = wide((f3 unchecked as U64)) &+ wide(lowHalf(d4))
+        let f4 = signed(wide((g3 unchecked as U64)) &+ wide(highHalf(d4)) &+ wide(highHalf(e4))) &- signed(wide(q4 << 32))
+        let g4 = signed(wide((k3 unchecked as U64))) &+ (f4 >> 64) &- signed(wide(q4)) &- signed(wide(q4 >> 32))
+        let k4 = signed(wide((l3 unchecked as U64))) &+ (g4 >> 64)
+        let l4 = signed(wide((n3 unchecked as U64))) &+ (k4 >> 64)
+        let n4 = signed(wide((w3 unchecked as U64))) &+ (l4 >> 64)
+        let w4 = signed(wide(t10) &+ wide(q4) &+ wide(((w3 >> 64) unchecked as U64))) &+ (n4 >> 64)
+        let q5 = (f4 unchecked as U64) &+ ((f4 unchecked as U64) << 32)
+        let d5 = (wide(q5) << 32) &- wide(q5)
+        let e5 = wide((f4 unchecked as U64)) &+ wide(lowHalf(d5))
+        let f5 = signed(wide((g4 unchecked as U64)) &+ wide(highHalf(d5)) &+ wide(highHalf(e5))) &- signed(wide(q5 << 32))
+        let g5 = signed(wide((k4 unchecked as U64))) &+ (f5 >> 64) &- signed(wide(q5)) &- signed(wide(q5 >> 32))
+        let k5 = signed(wide((l4 unchecked as U64))) &+ (g5 >> 64)
+        let l5 = signed(wide((n4 unchecked as U64))) &+ (k5 >> 64)
+        let n5 = signed(wide((w4 unchecked as U64))) &+ (l5 >> 64)
+        let w5 = signed(wide(t11) &+ wide(q5) &+ wide(((w4 >> 64) unchecked as U64))) &+ (n5 >> 64)
+        let r0 = f5 unchecked as U64
+        let r1 = g5 unchecked as U64
+        let r2 = k5 unchecked as U64
+        let r3 = l5 unchecked as U64
+        let r4 = n5 unchecked as U64
+        let r5 = w5 unchecked as U64
+        let over = (w5 >> 64) unchecked as U64
+        // Less the modulus, if that leaves nothing to borrow from.
+        let z0 = wide(r0) &- 0xFFFFFFFF
+        let z1 = wide(r1) &- 0xFFFFFFFF00000000 &- wide(highHalf(z0) & 1)
+        let z2 = wide(r2) &- 0xFFFFFFFFFFFFFFFE &- wide(highHalf(z1) & 1)
+        let z3 = wide(r3) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z2) & 1)
+        let z4 = wide(r4) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z3) & 1)
+        let z5 = wide(r5) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z4) & 1)
+        let keep = maskOf(bit: (highHalf(z5) & 1) & (1 &- over))
+        Wide.put(r, 0, (r0 & keep) | (lowHalf(z0) & ~keep))
+        Wide.put(r, 1, (r1 & keep) | (lowHalf(z1) & ~keep))
+        Wide.put(r, 2, (r2 & keep) | (lowHalf(z2) & ~keep))
+        Wide.put(r, 3, (r3 & keep) | (lowHalf(z3) & ~keep))
+        Wide.put(r, 4, (r4 & keep) | (lowHalf(z4) & ~keep))
+        Wide.put(r, 5, (r5 & keep) | (lowHalf(z5) & ~keep))
+    }
+
+    @inline(always)
+    static fn signed(_ value: U128) -> I128 {
+        return value unchecked as I128
     }
 }
 

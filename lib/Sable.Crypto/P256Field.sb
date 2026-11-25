@@ -15,6 +15,8 @@ struct P256Field: CurveField {
 
     static var baseTable: Int => p256BaseTable
 
+    static var factor: U64 => 1
+
     static var order: MontgomeryModulus => p256Order
 
     unsafe static fn multiply(_ r: Int, _ a: Int, _ b: Int) {
@@ -58,15 +60,18 @@ struct P256Field: CurveField {
         let x0 = a1 &* a0
         let x1 = a2 &* a0 &+ wide(highHalf(x0))
         let x2 = a3 &* a0 &+ wide(highHalf(x1))
+        let h0 = highHalf(x2)
         let x3 = a2 &* a1 &+ wide(lowHalf(x2))
-        let x4 = a3 &* a1 &+ wide(highHalf(x2)) &+ wide(highHalf(x3))
-        let x5 = a3 &* a2 &+ wide(highHalf(x4))
+        let x4 = a3 &* a1 &+ wide(h0) &+ wide(highHalf(x3))
+        let h1 = highHalf(x4)
+        let x5 = a3 &* a2 &+ wide(h1)
+        let h2 = highHalf(x5)
         let m1 = lowHalf(x0)
         let m2 = lowHalf(x1)
         let m3 = lowHalf(x3)
         let m4 = lowHalf(x4)
         let m5 = lowHalf(x5)
-        let m6 = highHalf(x5)
+        let m6 = h2
         // Doubled, and the squares added.
         let s0 = a0 &* a0
         let s1 = a1 &* a1
@@ -80,6 +85,40 @@ struct P256Field: CurveField {
         let y6 = wide((m6 << 1) | (m5 >> 63)) &+ wide(lowHalf(s3)) &+ wide(highHalf(y5))
         let y7 = (m6 >> 63) &+ highHalf(s3) &+ highHalf(y6)
         P256Field.reduce(r, lowHalf(s0), lowHalf(y1), lowHalf(y2), lowHalf(y3), lowHalf(y4), lowHalf(y5), lowHalf(y6), y7)
+    }
+
+    unsafe static fn add(_ r: Int, _ a: Int, _ b: Int) {
+        let x0 = wide(Wide.limb(a, 0)) &+ wide(Wide.limb(b, 0))
+        let x1 = wide(Wide.limb(a, 1)) &+ wide(Wide.limb(b, 1)) &+ wide(highHalf(x0))
+        let x2 = wide(Wide.limb(a, 2)) &+ wide(Wide.limb(b, 2)) &+ wide(highHalf(x1))
+        let x3 = wide(Wide.limb(a, 3)) &+ wide(Wide.limb(b, 3)) &+ wide(highHalf(x2))
+        // Less the modulus, if that leaves nothing to borrow from.
+        let z0 = wide(lowHalf(x0)) &- 0xFFFFFFFFFFFFFFFF
+        let z1 = wide(lowHalf(x1)) &- 0xFFFFFFFF &- wide(highHalf(z0) & 1)
+        let z2 = wide(lowHalf(x2)) &- wide(highHalf(z1) & 1)
+        let z3 = wide(lowHalf(x3)) &- 0xFFFFFFFF00000001 &- wide(highHalf(z2) & 1)
+        let keep = maskOf(bit: (highHalf(z3) & 1) & (1 &- highHalf(x3)))
+        Wide.put(r, 0, (lowHalf(x0) & keep) | (lowHalf(z0) & ~keep))
+        Wide.put(r, 1, (lowHalf(x1) & keep) | (lowHalf(z1) & ~keep))
+        Wide.put(r, 2, (lowHalf(x2) & keep) | (lowHalf(z2) & ~keep))
+        Wide.put(r, 3, (lowHalf(x3) & keep) | (lowHalf(z3) & ~keep))
+    }
+
+    unsafe static fn sub(_ r: Int, _ a: Int, _ b: Int) {
+        let x0 = wide(Wide.limb(a, 0)) &- wide(Wide.limb(b, 0))
+        let x1 = wide(Wide.limb(a, 1)) &- wide(Wide.limb(b, 1)) &- wide(highHalf(x0) & 1)
+        let x2 = wide(Wide.limb(a, 2)) &- wide(Wide.limb(b, 2)) &- wide(highHalf(x1) & 1)
+        let x3 = wide(Wide.limb(a, 3)) &- wide(Wide.limb(b, 3)) &- wide(highHalf(x2) & 1)
+        // More by the modulus, if it is negative.
+        let under = maskOf(bit: highHalf(x3) & 1)
+        let z0 = wide(lowHalf(x0)) &+ wide(under)
+        let z1 = wide(lowHalf(x1)) &+ wide(under & 0xFFFFFFFF) &+ wide(highHalf(z0))
+        let z2 = wide(lowHalf(x2)) &+ wide(highHalf(z1))
+        let z3 = wide(lowHalf(x3)) &+ wide(under & 0xFFFFFFFF00000001) &+ wide(highHalf(z2))
+        Wide.put(r, 0, lowHalf(z0))
+        Wide.put(r, 1, lowHalf(z1))
+        Wide.put(r, 2, lowHalf(z2))
+        Wide.put(r, 3, lowHalf(z3))
     }
 
     /// A product of eight limbs over R: four times, as much of the modulus

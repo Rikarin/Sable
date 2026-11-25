@@ -4,10 +4,11 @@ module Sable.Crypto
 /// certificate or a token names one: what a signature is of.
 ///
 /// ```sable
-/// assert(HashAlgorithm.Sha256.hash([]) == Sha256.hash([]))
+/// assert(HashAlgorithm.Sha256.digest(of: []) == Sha256.hash([]))
 /// assert(HashAlgorithm.Sha384.digestByteCount == 48)
 /// ```
-public enum HashAlgorithm {
+@derive(Equatable, Hashable, Debug)
+public enum HashAlgorithm: Sendable {
     /// SHA-1, whose collisions have been found: for checking old signatures
     /// alone.
     Sha1
@@ -30,14 +31,14 @@ public enum HashAlgorithm {
     }
 
     /// The digest of the bytes.
-    public fn hash(_ bytes: U8[:]) -> Digest {
-        return digest(of: bytes, by: self)
+    public fn digest(of bytes: U8[:]) -> Digest {
+        return hashed(bytes, by: self)
     }
 }
 
 /// The digest of the bytes by an algorithm. Not in HashAlgorithm, where its
 /// cases' names hide the types'.
-fn digest(of bytes: U8[:], by algorithm: HashAlgorithm) -> Digest {
+fn hashed(_ bytes: U8[:], by algorithm: HashAlgorithm) -> Digest {
     return match algorithm {
         case .Sha1     => Insecure.Sha1.hash(bytes)
         case .Sha256   => Sha256.hash(bytes)

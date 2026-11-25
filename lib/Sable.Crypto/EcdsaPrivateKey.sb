@@ -57,13 +57,13 @@ public struct EcdsaPrivateKey<Curve: EllipticCurve>: Equatable, Debug, Sendable 
     /// assert(signature == key.sign([1], hash: .Sha512, deterministic: true))
     /// assert(key.publicKey.isValid(signature, for: [1], hash: .Sha512))
     /// ```
-    public fn sign(_ message: U8[:], hash: HashAlgorithm = Curve.curve.hash, deterministic: Bool = false) -> EcdsaSignature<Curve> {
-        return self.sign(digest: hash.hash(message).bytes, hash: hash, deterministic: deterministic)
+    public fn sign(_ message: U8[:], hash: HashAlgorithm = Curve.curve.defaultHash, deterministic: Bool = false) -> EcdsaSignature<Curve> {
+        return self.sign(digest: hash.digest(of: message).bytes, hash: hash, deterministic: deterministic)
     }
 
     /// The signature of a message's digest, by the function given: the
     /// digest is of any length, and the function makes the nonce.
-    public fn sign(digest value: U8[:], hash: HashAlgorithm = Curve.curve.hash, deterministic: Bool = false) -> EcdsaSignature<Curve> {
+    public fn sign(digest value: U8[:], hash: HashAlgorithm = Curve.curve.defaultHash, deterministic: Bool = false) -> EcdsaSignature<Curve> {
         let added = deterministic ? U8[>..]() : SecureRandom.bytes(32)
         return EcdsaSignature<Curve>(checked: Curve.curve.sign(scalar, digest: value, hash: hash, added: added))
     }

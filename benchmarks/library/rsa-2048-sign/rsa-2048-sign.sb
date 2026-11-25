@@ -1,0 +1,20 @@
+module Rsa2048SignBench
+
+// RSA of 2048 bits against .NET's RSA.SignData: 100 PSS signatures and 100 of
+// PKCS #1 v1.5, the last of which is checked.
+
+import Sable.Crypto
+
+@main
+fn main() {
+    let key = RsaPrivateKey.generate(bits: 2048)
+    var message = U8[>..](repeating: 7, count: 64)
+    var signature: U8[>..] = []
+    var round = 0
+    while round < 200 {
+        message[round % 64] = U8(round % 256)
+        signature = key.sign(message, padding: round % 2 == 0 ? .Pss(.Sha256) : .Pkcs1(.Sha256))
+        round += 1
+    }
+    print("\(key.publicKey.isValid(signature, for: message, padding: .Pkcs1(.Sha256)) ? 1 : 0)")
+}

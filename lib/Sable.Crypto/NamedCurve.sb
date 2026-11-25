@@ -7,7 +7,8 @@ module Sable.Crypto
 /// assert(NamedCurve.P384.byteCount == 48)
 /// assert(P384.curve == NamedCurve.P384)
 /// ```
-public enum NamedCurve {
+@derive(Equatable, Hashable, Debug)
+public enum NamedCurve: Sendable {
     P256
     P384
     P521
@@ -20,7 +21,7 @@ public enum NamedCurve {
     }
 
     /// The hash function its signatures are usually of.
-    public var hash: HashAlgorithm => match self {
+    public var defaultHash: HashAlgorithm => match self {
         case .P256 => .Sha256
         case .P384 => .Sha384
         case .P521 => .Sha512

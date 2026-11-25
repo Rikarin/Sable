@@ -1,0 +1,24 @@
+module EcdsaP256VerifyBench
+
+// ECDSA on P256 against .NET's ECDsa.VerifyData: a signature checked 1000
+// times, every fourth of another message.
+
+import Sable.Crypto
+
+@main
+fn main() {
+    let key = EcdsaPrivateKey<P256>.generate()
+    let publicKey = key.publicKey
+    let message = U8[>..](repeating: 7, count: 64)
+    let other = U8[>..](repeating: 8, count: 64)
+    let signature = key.sign(message)
+    var valid = 0
+    var round = 0
+    while round < 1000 {
+        if publicKey.isValid(signature, for: round % 4 == 3 ? other : message) {
+            valid += 1
+        }
+        round += 1
+    }
+    print("\(valid)")
+}

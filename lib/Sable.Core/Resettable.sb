@@ -1,0 +1,25 @@
+module Sable.Core
+
+/// A value that can be put back as it was made, keeping what it allocated:
+/// what an object pool calls as a value comes back, so that the next to
+/// rent it finds it empty — .NET's `IResettable`.
+///
+/// ```sable
+/// final class Scratch: Resettable {
+///     var lines: String[>..] = []
+///
+///     init() { }
+///
+///     fn reset() {
+///         lines.removeAll(keepingCapacity: true)
+///     }
+/// }
+/// var scratch = Scratch()
+/// scratch.lines.append("used")
+/// scratch.reset()
+/// assert(scratch.lines.isEmpty)
+/// ```
+public protocol Resettable {
+    /// Back to empty, as made, with the room it has kept.
+    mutating fn reset()
+}

@@ -1,0 +1,48 @@
+module ObjectPoolBench
+
+// A hundred thousand records formatted, each in a TextBuilder of 256 bytes:
+// made for each record ("fresh"), or rented from an ObjectPool and reset as
+// it goes back ("pooled"). The pooled one allocates the records' text and
+// nothing else.
+
+import Sable.Concurrency
+import Sable.Testing
+import Sable.Text
+
+fn record(_ builder: TextBuilder, _ i: Int) -> String {
+    builder.append("id=")
+    builder.append(i)
+    builder.append(", name=item")
+    builder.append(i % 100)
+    builder.append(", total=")
+    builder.append(i * 3)
+    builder.append(';')
+    return builder.build()
+}
+
+fn fresh() -> String {
+    var bytes = 0
+    for i in 0..<100_000 {
+        let builder = TextBuilder(capacity: 256)
+        bytes += record(builder, i).utf8Count
+    }
+    return "\(bytes)"
+}
+
+fn pooled(_ pool: ObjectPool<TextBuilder>) -> String {
+    var bytes = 0
+    for i in 0..<100_000 {
+        bytes += pool.with { record($0, i) }.utf8Count
+    }
+    return "\(bytes)"
+}
+
+@bench(arguments: ["fresh", "pooled"])
+fn measure(_ b: Bencher, _ how: String) {
+    let pool = ObjectPool<TextBuilder>(capacity: 16, create: { TextBuilder(capacity: 256) })
+    if how == "fresh" {
+        b.check(b.iterate { fresh() })
+    } else {
+        b.check(b.iterate { pooled(pool) })
+    }
+}

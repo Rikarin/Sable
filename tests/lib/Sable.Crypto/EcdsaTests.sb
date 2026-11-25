@@ -1,0 +1,147 @@
+module EcdsaTests
+
+// ECDSA on NIST's curves (Sable.Crypto): RFC 6979's signatures, OpenSSL's, and
+// what is refused. Run with tools/stdlib-coverage.sh Sable.Crypto; Wycheproof's
+// are tools/conformance/publickey.
+
+import Sable.Crypto
+import Sable.Testing
+import Sable.Text
+
+fn hex(_ text: String) -> U8[>..] {
+    return try! Hex.decode(text)
+}
+
+fn text(_ text: String) -> U8[>..] {
+    return text.utf8.toArray()
+}
+let opensslP256: String = """
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENLZmp6DPTKlA2FweGm7JD1JbG4j7
+LDA4yalmPDFHII6NKTSf77o7IT7POdZ7OeUWMEH9hgluOvHJKRACqwiQ6A==
+-----END PUBLIC KEY-----
+"""
+
+let opensslP384: String = """
+-----BEGIN PUBLIC KEY-----
+MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE+s3fgM/uGzUiq9TOgStu17YDxcbMSpLQ
+ABFxZ0VUDe0QRyNhQfC6d2WGjg6f7eekVPAlabe4HR/x4MV7VJen8rx+dyZzH/9n
+323qxmL0AWwt7cJL/yBRLMdMpObTdCSI
+-----END PUBLIC KEY-----
+"""
+
+let opensslP521: String = """
+-----BEGIN PUBLIC KEY-----
+MIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQAkbA7ckh+KCCRkxBkZgBWKjItU1DX
+Ez84ANWMBKD4Vsk9GKKpdUxSIp7whFm8h1eojNMTQ4IJ/+D7WKHIjmF85qcBpZKv
+aBvPk2LX8YMZocU/n4QteFCOH8gP4pl2dEA8wJRvtOkQsMr/5NNo192/4uxohZkI
+oy6rikTYCBDNJgqq1Gc=
+-----END PUBLIC KEY-----
+"""
+
+fn checkRfc<C: EllipticCurve>(_ curve: C.Type, _ secret: String, _ message: String, _ hash: HashAlgorithm, _ signature: String) {
+    let key = try! EcdsaPrivateKey<C>(hex(secret))
+    let made = key.sign(text(message), hash: hash, deterministic: true)
+    assertEqual(Hex.encode(made.bytes), signature)
+    assert(key.publicKey.isValid(made, for: text(message), hash: hash))
+}
+
+// RFC 6979 A.2.5 to A.2.7.
+@test
+fn theRfcsSignaturesAreMade() {
+    let p256 = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
+    checkRfc(P256.self, p256, "sample", .Sha1, "61340c88c3aaebeb4f6d667f672ca9759a6ccaa9fa8811313039ee4a35471d326d7f147dac089441bb2e2fe8f7a3fa264b9c475098fdcf6e00d7c996e1b8b7eb")
+    checkRfc(P256.self, p256, "sample", .Sha256, "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8")
+    checkRfc(P256.self, p256, "sample", .Sha512, "8496a60b5e9b47c825488827e0495b0e3fa109ec4568fd3f8d1097678eb97f002362ab1adbe2b8adf9cb9edab740ea6049c028114f2460f96554f61fae3302fe")
+    let p384 = "6b9d3dad2e1b8c1c05b19875b6659f4de23c3b667bf297ba9aa47740787137d896d5724e4c70a825f872c9ea60d2edf5"
+    checkRfc(P384.self, p384, "sample", .Sha384, "94edbb92a5ecb8aad4736e56c691916b3f88140666ce9fa73d64c4ea95ad133c81a648152e44acf96e36dd1e80fabe4699ef4aeb15f178cea1fe40db2603138f130e740a19624526203b6351d0a3a94fa329c145786e679e7b82c71a38628ac8")
+    let p521 = "00fad06daa62ba3b25d2fb40133da757205de67f5bb0018fee8c86e1b68c7e75caa896eb32f1f47c70855836a6d16fcc1466f6d8fbec67db89ec0c08b0e996b83538"
+    checkRfc(P521.self, p521, "sample", .Sha512, "00c328fafcbd79dd77850370c46325d987cb525569fb63c5d3bc53950e6d4c5f174e25a1ee9017b5d450606add152b534931d7d4e8455cc91f9b15bf05ec36e377fa00617cce7cf5064806c467f678d3b4080d6f1cc50af26ca209417308281b68af282623eaa63e5b5c0723d8b8c37ff0777b1a20f8ccb1dccc43997f1ee0e44da4a67a")
+}
+
+@test
+fn opensslsSignaturesAreValid() {
+    let p256 = try! EcdsaPublicKey<P256>.parse(pem: opensslP256)
+    let first = try! EcdsaSignature<P256>(der: hex("3046022100bb56b7f1ad7fc4a27336c4f656e30172ada559dfc095901bf1279f8f247cab98022100d60192a868246979ee2a22ed0052f27d01c9b9e94d1a03d9db4bad5d48c3ab74"))
+    assert(p256.isValid(first, for: text("a message")) && !p256.isValid(first, for: text("another")))
+    let p384 = try! EcdsaPublicKey<P384>.parse(pem: opensslP384)
+    let second = try! EcdsaSignature<P384>(der: hex("3065023100b7d8f3813c6536a79520590ec6c99d5f90d7e30aab4ddb6ca7382a98261326f63132235f8ba964f501deece486b0c24602301ec0bfac87f04d63a07422a3ce5d3f6b8900b5a4b402aad830e786e7bb36b3928d3773d13d6f7bd7a1f06689237092ad"))
+    assert(p384.isValid(second, for: text("a message")) && !p384.isValid(second, for: text("another")))
+    let p521 = try! EcdsaPublicKey<P521>.parse(pem: opensslP521)
+    let third = try! EcdsaSignature<P521>(der: hex("308188024201f2d1a3ba306350afbb767b650dd5b29cd657fe5aafc6703e7a594388e7c22abbde9ea242bcfce3d4159215b131f3068f92fdab87288381a085d3edb0ce9a4066e702420126612bc30ccfae54070b2610c258c00c153074251cff871a63e458d63a06cc57b2ccb5e8043efec8f396e8318c9f5d13a1c8742c243c11002922b1937ef733565c"))
+    assert(p521.isValid(third, for: text("a message")) && !p521.isValid(third, for: text("another")))
+}
+
+fn checkOwn<C: EllipticCurve>(_ curve: C.Type) {
+    let key = EcdsaPrivateKey<C>.generate()
+    for hash in [HashAlgorithm.Sha256, HashAlgorithm.Sha384, HashAlgorithm.Sha512, HashAlgorithm.Sha3_256, HashAlgorithm.Sha3_384, HashAlgorithm.Sha3_512, HashAlgorithm.Sha1] {
+        let signature = key.sign(text("a message"), hash: hash)
+        assert(key.publicKey.isValid(signature, for: text("a message"), hash: hash))
+        assert(!key.publicKey.isValid(signature, for: text("another"), hash: hash))
+        assert(try! EcdsaSignature<C>(der: signature.der) == signature)
+        assert(try! EcdsaSignature<C>(signature.bytes) == signature)
+    }
+    // Two are not alike: the nonce has random bytes in it.
+    assert(key.sign([1]) != key.sign([1]))
+    assert(key.sign([1], deterministic: true) == key.sign([1], deterministic: true))
+    // Any digest, longer than the order or of nothing.
+    for count in [0, 1, 20, 66, 100] {
+        let digest = U8[>..](repeating: 0xFF, count: count)
+        assert(key.publicKey.isValid(key.sign(digest: digest), digest: digest))
+    }
+}
+
+@test
+fn ownSignaturesAreValid() {
+    checkOwn(P256.self)
+    checkOwn(P384.self)
+    checkOwn(P521.self)
+}
+
+@test
+fn numbersASignatureDoesNotHaveAreNotValid() {
+    let key = EcdsaPrivateKey<P256>.generate()
+    let order = hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551")
+    let zero = U8[>..](repeating: 0, count: 32)
+    let good = key.sign([1]).bytes
+    for r in [zero, order, good[..<32].toArray()] {
+        for s in [zero, order, U8[>..](repeating: 0xFF, count: 32)] {
+            var bytes = r
+            bytes.append(contentsOf: s)
+            assert(!key.publicKey.isValid(try! EcdsaSignature<P256>(bytes), for: [1]))
+        }
+    }
+    assert((try? EcdsaSignature<P256>([1, 2])) == none)
+    assert(EcdsaSignature<P256>.self != EcdsaSignature<P384>.self)
+    assert(key.sign([1]).debugDescription().hasPrefix("EcdsaSignature<P256>("))
+}
+
+@test
+fn derIsReadStrictly() {
+    // Right; a length in two bytes; a zero too many; negative; something after;
+    // a number too long; three of them.
+    let bad = ["308106020101020101", "300702020001020101", "3006020181020101", "300602010102010100", "30060201010201", "3009020101020101020101"]
+    assert((try? EcdsaSignature<P256>(der: hex("3006020101020101"))) != none)
+    for each in bad {
+        assert((try? EcdsaSignature<P256>(der: hex(each))) == none)
+    }
+    var long: U8[>..] = [0x30, 0x26, 0x02, 0x21, 0x01]
+    long.append(repeating: 0, count: 32)
+    long.append(contentsOf: [0x02, 0x01, 0x01])
+    assert((try? EcdsaSignature<P256>(der: long)) == none)
+}
+
+@test
+fn scalarsAreFromOneToTheOrder() {
+    assert((try? EcdsaPrivateKey<P256>(U8[>..](repeating: 0, count: 32))) == none)
+    assert((try? EcdsaPrivateKey<P256>(hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"))) == none)
+    assert((try? EcdsaPrivateKey<P256>(U8[>..](repeating: 1, count: 31))) == none)
+    let last = try! EcdsaPrivateKey<P256>(hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550"))
+    let first = try! EcdsaPrivateKey<P256>(hex("0000000000000000000000000000000000000000000000000000000000000001"))
+    // Opposite points: the base point and its negative.
+    assertEqual(Hex.encode(first.publicKey.compressed), "036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296")
+    assertEqual(Hex.encode(last.publicKey.compressed), "026b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296")
+    assert(first.publicKey.isValid(first.sign([1]), for: [1]) && last.publicKey.isValid(last.sign([1]), for: [1]))
+    assert(first != last && first.debugDescription() == "EcdsaPrivateKey<P256>")
+    assertEqual(Hex.encode(last.bytes()), "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550")
+}

@@ -1,0 +1,354 @@
+module KeyFormatTests
+
+// Keys in PEM, DER and JWK (Sable.Crypto): OpenSSL's, read and written as they
+// were, and what is refused. Run with tools/stdlib-coverage.sh Sable.Crypto.
+
+import Sable.Crypto
+import Sable.Testing
+import Sable.Text
+
+fn hex(_ text: String) -> U8[>..] {
+    return try! Hex.decode(text)
+}
+
+fn text(_ text: String) -> U8[>..] {
+    return text.utf8.toArray()
+}
+let edKey: String = """
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIP651k0vPSRylyANscky3bbiJvOEGbyfqUjE47Oz0qqS
+-----END PRIVATE KEY-----
+"""
+
+let edPublic: String = """
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEASQlFGGnp9a+/Lta9n4hwj5CcxVd7vbkS47ixAx1r974=
+-----END PUBLIC KEY-----
+"""
+
+let xKey: String = """
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VuBCIEIKhl0BwvLTUJcew1uFpTXR+ZbQrm0kd2kkF6KLAuwTJE
+-----END PRIVATE KEY-----
+"""
+
+let xPublic: String = """
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VuAyEAQxsUr2VFJpJ3KvTsdm4TC4ikBCJNgQz18bl54UFgxXU=
+-----END PUBLIC KEY-----
+"""
+
+let p256Key: String = """
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQglePzBzWrs7a8VILv
+3AuIVO8AeRW4X2ug4OaufGuBVl2hRANCAAQ0tmanoM9MqUDYXB4abskPUlsbiPss
+MDjJqWY8MUcgjo0pNJ/vujshPs851ns55RYwQf2GCW468ckpEAKrCJDo
+-----END PRIVATE KEY-----
+"""
+
+let p256Public: String = """
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENLZmp6DPTKlA2FweGm7JD1JbG4j7
+LDA4yalmPDFHII6NKTSf77o7IT7POdZ7OeUWMEH9hgluOvHJKRACqwiQ6A==
+-----END PUBLIC KEY-----
+"""
+
+let p256Sec1: String = """
+-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIJXj8wc1q7O2vFSC79wLiFTvAHkVuF9roODmrnxrgVZdoAoGCCqGSM49
+AwEHoUQDQgAENLZmp6DPTKlA2FweGm7JD1JbG4j7LDA4yalmPDFHII6NKTSf77o7
+IT7POdZ7OeUWMEH9hgluOvHJKRACqwiQ6A==
+-----END EC PRIVATE KEY-----
+"""
+
+let p256Parameters: String = """
+-----BEGIN EC PARAMETERS-----
+BggqhkjOPQMBBw==
+-----END EC PARAMETERS-----
+-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIJXj8wc1q7O2vFSC79wLiFTvAHkVuF9roODmrnxrgVZdoAoGCCqGSM49
+AwEHoUQDQgAENLZmp6DPTKlA2FweGm7JD1JbG4j7LDA4yalmPDFHII6NKTSf77o7
+IT7POdZ7OeUWMEH9hgluOvHJKRACqwiQ6A==
+-----END EC PRIVATE KEY-----
+"""
+
+let p384Key: String = """
+-----BEGIN PRIVATE KEY-----
+MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDBHMi1wn8TMThH3gbVY
+3gpFbGMei9/QJb4e8xm4i8oGUGolCCr9eSXrC0ZLE7ij5xahZANiAAT6zd+Az+4b
+NSKr1M6BK27XtgPFxsxKktAAEXFnRVQN7RBHI2FB8Lp3ZYaODp/t56RU8CVpt7gd
+H/HgxXtUl6fyvH53JnMf/2ffberGYvQBbC3twkv/IFEsx0yk5tN0JIg=
+-----END PRIVATE KEY-----
+"""
+
+let p384Public: String = """
+-----BEGIN PUBLIC KEY-----
+MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE+s3fgM/uGzUiq9TOgStu17YDxcbMSpLQ
+ABFxZ0VUDe0QRyNhQfC6d2WGjg6f7eekVPAlabe4HR/x4MV7VJen8rx+dyZzH/9n
+323qxmL0AWwt7cJL/yBRLMdMpObTdCSI
+-----END PUBLIC KEY-----
+"""
+
+let p521Key: String = """
+-----BEGIN PRIVATE KEY-----
+MIHuAgEAMBAGByqGSM49AgEGBSuBBAAjBIHWMIHTAgEBBEIBpFxxh6Tr6i5bV9Re
+vgRiZhcIxXTSG78yv+U3+xSY/qs06MwL1bPerWEEvRa/66L6OM3BB2lbYl10JHyx
+AF0KWy6hgYkDgYYABACRsDtySH4oIJGTEGRmAFYqMi1TUNcTPzgA1YwEoPhWyT0Y
+oql1TFIinvCEWbyHV6iM0xNDggn/4PtYociOYXzmpwGlkq9oG8+TYtfxgxmhxT+f
+hC14UI4fyA/imXZ0QDzAlG+06RCwyv/k02jX3b/i7GiFmQijLquKRNgIEM0mCqrU
+Zw==
+-----END PRIVATE KEY-----
+"""
+
+let p521Public: String = """
+-----BEGIN PUBLIC KEY-----
+MIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQAkbA7ckh+KCCRkxBkZgBWKjItU1DX
+Ez84ANWMBKD4Vsk9GKKpdUxSIp7whFm8h1eojNMTQ4IJ/+D7WKHIjmF85qcBpZKv
+aBvPk2LX8YMZocU/n4QteFCOH8gP4pl2dEA8wJRvtOkQsMr/5NNo192/4uxohZkI
+oy6rikTYCBDNJgqq1Gc=
+-----END PUBLIC KEY-----
+"""
+
+let rsaKey: String = """
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC65MtLQOBeCx5W
+vZGBNZ1bOztPwvFP/DsDlUX7BqAabc2eFZDsAYEd1M4crZhZdTD+egAB/kYQFRSa
+vAp3NNgIe+yeeuR55klscOC8bf8e2Ro+FBoxSI7xBXCXrrVJOtWXK7yVLO7E6/Ud
+Q+4oAltd4ZPH7liumXOIJPsjUo9oNx+q2JC9UgV+mtxKCbp0DpIgV7VtyOMJnfxz
+Sv4VVeek8txtXAtncUT9FVygKBTzIFEjcwU3sTUqxcVKUSUKMQtoUkY6PebwNpkk
+Ohs9lCyRvz+JhD+W+bHiyZ9al0/yROkJEPpLkT/tMV1uJTmVehMMhyG1a9598/g3
+DFTPqzjZAgMBAAECggEAAJwxITVsrE9ndEeolbpP/fqN7R789kmvhltanT9LIxgi
+wX03v1kfE2bqYMQivWpbU6sNgUJiFcEfyhA2p40zz6jfNHe+MSN7AsMVxy4R/Tj0
+LBNGKQFCZhdbJRRv1VImbYzXiN7SgENvZfeevDn9MAus2l9q6Rh0EPnbvslc8sGZ
+58/VhUMWIrTbq0EJE4jVNnDwessE1qyZLUZKpVMcsQKQoxr31qK+x02yvkwK0+We
+eyN8z5tfyCcWkLBzivwvZUGi20iLTAK+TZoAkVRYBFJne7GMbOmu7SDAw3x6oqgD
+n2Z2tzPiXU3uRjrjQ2Cwfvi3EfXMsFHOaG0qxkWLUQKBgQD+JSNvA08JZymY7TD0
+M4BMkLXnpJEUHUA8dIQlXpZnPJQ49rr4IMZQdEFwU6UwYSk8GoKg1cWKTL920dtZ
+E0SRPdqysaQOo+I2OU1elR9uegpX3w/lDIHGcCZgai+ks4suHqVpoc4XhczPDQwf
+mwxwdOxgeiif+fz+LYGlNSsY6QKBgQC8Qf+yBzGcpK/TlBvP8h/cR9Fn6YmdPv4I
+YhsPZPJpwRyDj+s2Tk51WqwanYYKI+Qji3/7jKtkWYecWgzgYy6be/z7xKhq6MCF
+GA+3WPmWg3fThfdZdmxvUOAlCEc3dhNA7+lprQy3BuZ+ABKOaDDGA3ILY/UE4iHb
+lbVSX7cqcQKBgC+qv46ezEAzPTYVpszmq/WwXq3ny9497kJoiDCKISOT1Skp/b90
+Rj3o0C1FQwJj9tvzDPUlozthUbfzfHSkjIPBWjeR4fds/Yy2CrDmv1J1SWNZzx1i
+zyRs/IWw5Oa7Vit8TAIX+xOmYNek1tVGu3qMM5mUz/HRbYYu+tYFtuOhAoGAcnw0
+cmCblCY24xVsAH6/T2fBek70qFL5i8GVsTvzi8qre3qXURQ39Hgqt5jaPeprwA4C
+y8hVJpanuLauo/rNCjNRuw5yWWmoQohKbnbGefkDcvhCXv58nQly9jJdlOXSeags
+q15YoCmrHC8RGddU6eaIgVLNW6XlbzNQ7IJW0pECgYEAlGydPaK+OfCl2wXhBPv8
+kvDwvi+746ZUccBnKvlJHDiGe/sJJ8BBvHPexoBQV08zTc1jbYR2jgjzZkSwT2sL
+sWYzfyYtfgreZPLAF9YUkTJ6zP2FOUf+DkefXogiKZEISAccpyhmkuMn1dWWuhm0
+Xr4BpNp+0xb+YeUA8TvmAdw=
+-----END PRIVATE KEY-----
+"""
+
+let rsaPublic: String = """
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuuTLS0DgXgseVr2RgTWd
+Wzs7T8LxT/w7A5VF+wagGm3NnhWQ7AGBHdTOHK2YWXUw/noAAf5GEBUUmrwKdzTY
+CHvsnnrkeeZJbHDgvG3/HtkaPhQaMUiO8QVwl661STrVlyu8lSzuxOv1HUPuKAJb
+XeGTx+5YrplziCT7I1KPaDcfqtiQvVIFfprcSgm6dA6SIFe1bcjjCZ38c0r+FVXn
+pPLcbVwLZ3FE/RVcoCgU8yBRI3MFN7E1KsXFSlElCjELaFJGOj3m8DaZJDobPZQs
+kb8/iYQ/lvmx4smfWpdP8kTpCRD6S5E/7TFdbiU5lXoTDIchtWveffP4NwxUz6s4
+2QIDAQAB
+-----END PUBLIC KEY-----
+"""
+
+let rsaPkcs1: String = """
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEAuuTLS0DgXgseVr2RgTWdWzs7T8LxT/w7A5VF+wagGm3NnhWQ
+7AGBHdTOHK2YWXUw/noAAf5GEBUUmrwKdzTYCHvsnnrkeeZJbHDgvG3/HtkaPhQa
+MUiO8QVwl661STrVlyu8lSzuxOv1HUPuKAJbXeGTx+5YrplziCT7I1KPaDcfqtiQ
+vVIFfprcSgm6dA6SIFe1bcjjCZ38c0r+FVXnpPLcbVwLZ3FE/RVcoCgU8yBRI3MF
+N7E1KsXFSlElCjELaFJGOj3m8DaZJDobPZQskb8/iYQ/lvmx4smfWpdP8kTpCRD6
+S5E/7TFdbiU5lXoTDIchtWveffP4NwxUz6s42QIDAQABAoIBAACcMSE1bKxPZ3RH
+qJW6T/36je0e/PZJr4ZbWp0/SyMYIsF9N79ZHxNm6mDEIr1qW1OrDYFCYhXBH8oQ
+NqeNM8+o3zR3vjEjewLDFccuEf049CwTRikBQmYXWyUUb9VSJm2M14je0oBDb2X3
+nrw5/TALrNpfaukYdBD5277JXPLBmefP1YVDFiK026tBCROI1TZw8HrLBNasmS1G
+SqVTHLECkKMa99aivsdNsr5MCtPlnnsjfM+bX8gnFpCwc4r8L2VBottIi0wCvk2a
+AJFUWARSZ3uxjGzpru0gwMN8eqKoA59mdrcz4l1N7kY640NgsH74txH1zLBRzmht
+KsZFi1ECgYEA/iUjbwNPCWcpmO0w9DOATJC156SRFB1APHSEJV6WZzyUOPa6+CDG
+UHRBcFOlMGEpPBqCoNXFiky/dtHbWRNEkT3asrGkDqPiNjlNXpUfbnoKV98P5QyB
+xnAmYGovpLOLLh6laaHOF4XMzw0MH5sMcHTsYHoon/n8/i2BpTUrGOkCgYEAvEH/
+sgcxnKSv05Qbz/If3EfRZ+mJnT7+CGIbD2TyacEcg4/rNk5OdVqsGp2GCiPkI4t/
++4yrZFmHnFoM4GMum3v8+8SoaujAhRgPt1j5loN304X3WXZsb1DgJQhHN3YTQO/p
+aa0MtwbmfgASjmgwxgNyC2P1BOIh25W1Ul+3KnECgYAvqr+OnsxAMz02FabM5qv1
+sF6t58vePe5CaIgwiiEjk9UpKf2/dEY96NAtRUMCY/bb8wz1JaM7YVG383x0pIyD
+wVo3keH3bP2Mtgqw5r9SdUljWc8dYs8kbPyFsOTmu1YrfEwCF/sTpmDXpNbVRrt6
+jDOZlM/x0W2GLvrWBbbjoQKBgHJ8NHJgm5QmNuMVbAB+v09nwXpO9KhS+YvBlbE7
+84vKq3t6l1EUN/R4KreY2j3qa8AOAsvIVSaWp7i2rqP6zQozUbsOcllpqEKISm52
+xnn5A3L4Ql7+fJ0JcvYyXZTl0nmoLKteWKApqxwvERnXVOnmiIFSzVul5W8zUOyC
+VtKRAoGBAJRsnT2ivjnwpdsF4QT7/JLw8L4vu+OmVHHAZyr5SRw4hnv7CSfAQbxz
+3saAUFdPM03NY22Edo4I82ZEsE9rC7FmM38mLX4K3mTywBfWFJEyesz9hTlH/g5H
+n16IIimRCEgHHKcoZpLjJ9XVlroZtF6+AaTaftMW/mHlAPE75gHc
+-----END RSA PRIVATE KEY-----
+"""
+
+let rsaPublicPkcs1: String = """
+-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEAuuTLS0DgXgseVr2RgTWdWzs7T8LxT/w7A5VF+wagGm3NnhWQ7AGB
+HdTOHK2YWXUw/noAAf5GEBUUmrwKdzTYCHvsnnrkeeZJbHDgvG3/HtkaPhQaMUiO
+8QVwl661STrVlyu8lSzuxOv1HUPuKAJbXeGTx+5YrplziCT7I1KPaDcfqtiQvVIF
+fprcSgm6dA6SIFe1bcjjCZ38c0r+FVXnpPLcbVwLZ3FE/RVcoCgU8yBRI3MFN7E1
+KsXFSlElCjELaFJGOj3m8DaZJDobPZQskb8/iYQ/lvmx4smfWpdP8kTpCRD6S5E/
+7TFdbiU5lXoTDIchtWveffP4NwxUz6s42QIDAQAB
+-----END RSA PUBLIC KEY-----
+"""
+
+let explicitCurve: String = """
+-----BEGIN PUBLIC KEY-----
+MIIBSzCCAQMGByqGSM49AgEwgfcCAQEwLAYHKoZIzj0BAQIhAP////8AAAABAAAA
+AAAAAAAAAAAA////////////////MFsEIP////8AAAABAAAAAAAAAAAAAAAA////
+///////////8BCBaxjXYqjqT57PrvVV2mIa8ZR0GsMxTsPY7zjw+J9JgSwMVAMSd
+NgiG5wSTamZ44ROdJreBn36QBEEEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5
+RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9QIhAP////8AAAAA
+//////////+85vqtpxeehPO5ysL8YyVRAgEBA0IABDS2Zqegz0ypQNhcHhpuyQ9S
+WxuI+ywwOMmpZjwxRyCOjSk0n++6OyE+zznWeznlFjBB/YYJbjrxySkQAqsIkOg=
+-----END PUBLIC KEY-----
+"""
+
+let otherCurve: String = """
+-----BEGIN PUBLIC KEY-----
+MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEKAZ9xs4/Kex/M7RkVe9coYHynG/A3EOg
+3NiWYrwZXIdfFp/sjeIv4xE4Q7Munlp7vcJlvc4Cqnw9+y+4fCjpNA==
+-----END PUBLIC KEY-----
+"""
+
+let otherAlgorithm: String = """
+-----BEGIN PUBLIC KEY-----
+MEMwBQYDK2VxAzoAQWWH26QP1ULjV9fcKG2+3dvWZBzzeJPVpwAxab9whFJbtdvD
+bSa/HfCJzDb3DLDwXQq3QTUc+UwA
+-----END PUBLIC KEY-----
+"""
+
+let encrypted: String = """
+-----BEGIN ENCRYPTED PRIVATE KEY-----
+MIH0MF8GCSqGSIb3DQEFDTBSMDEGCSqGSIb3DQEFDDAkBBBSGTx6GRdldYT+mpaS
+B83LAgIIADAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQIeIb4BQrCDC2xfKC
+3lYorASBkDiNSoP/0bqZa164AYQk5xqf4lgeZyqdmzhpFRsiRGyoUAFDnFywcOlX
+nSp4UiF4hngLOsEH5R5dam/XF01OJLWrR1JVSlqAJIcWfIskmbVHyfsW4N5s1Zvg
+6mlI1+x6YC9fCzKvLUpqyN8MXGRzsV5RQr9K/vFa1FcAG1WwKQ+JgOF0g2YWX//B
+c6v9E+HEJg==
+-----END ENCRYPTED PRIVATE KEY-----
+"""
+
+fn check(_ secret: String, _ publicKey: String) {
+    let key = try! PrivateKey.parse(pem: secret)
+    let own = try! PublicKey.parse(pem: publicKey)
+    assert(key.publicKey == own)
+    assertEqual(key.pem().trimmed(), secret.trimmed())
+    assertEqual(own.pem.trimmed(), publicKey.trimmed())
+    assert(try! PrivateKey.parse(pkcs8: key.pkcs8()) == key)
+    assert(try! PublicKey.parse(spki: own.spki) == own)
+    assert(try! PrivateKey.parse(jwk: key.jwk()) == key)
+    assert(try! PublicKey.parse(jwk: own.jwk) == own)
+    // A private JWK has the public key too.
+    assert(try! PublicKey.parse(jwk: key.jwk()) == own)
+    assert(!key.debugDescription().contains("(") && own.debugDescription().hasPrefix("PublicKey."))
+    // Cut short, or with something after.
+    let der = key.pkcs8()
+    assert((try? PrivateKey.parse(pkcs8: der[..<^1])) == none && (try? PublicKey.parse(spki: own.spki[..<^1])) == none)
+    var longer = der
+    longer.append(0)
+    assert((try? PrivateKey.parse(pkcs8: longer)) == none)
+}
+
+@test
+fn opensslsKeysAreReadAndWrittenAsTheyWere() {
+    check(edKey, edPublic)
+    check(xKey, xPublic)
+    check(p256Key, p256Public)
+    check(p384Key, p384Public)
+    check(p521Key, p521Public)
+    check(rsaKey, rsaPublic)
+}
+
+@test
+fn theOlderFormatsAreRead() {
+    let p256 = try! PrivateKey.parse(pem: p256Key)
+    assert(try! PrivateKey.parse(pem: p256Sec1) == p256 && PrivateKey.parse(pem: p256Parameters) == p256)
+    assertEqual(PemBlock(label: "EC PRIVATE KEY", bytes: p256.sec1()!).text.trimmed(), p256Sec1.trimmed())
+    let rsa = try! PrivateKey.parse(pem: rsaKey)
+    assert(try! PrivateKey.parse(pem: rsaPkcs1) == rsa && rsa.sec1() == none)
+    assert(try! PublicKey.parse(pem: rsaPublicPkcs1) == rsa.publicKey)
+    let p521 = try! PrivateKey.parse(pem: p521Key)
+    assert(try! PrivateKey.parse(sec1: p521.sec1()!) == p521)
+    assert((try? PrivateKey.parse(sec1: p521.sec1()!, curve: .P256)) == none)
+    let p384 = try! PrivateKey.parse(pem: p384Key)
+    assert(try! PrivateKey.parse(sec1: p384.sec1()!, curve: .P384) == p384)
+}
+
+@test
+fn aKeyOfAnotherTypeIsNotTaken() {
+    assert((try? EcdsaPrivateKey<P256>.parse(pem: p384Key)) == none && (try? EcdsaPublicKey<P256>.parse(pem: p384Public)) == none)
+    assert((try? EcdhPrivateKey<P521>.parse(pem: rsaKey)) == none && (try? EcdhPublicKey<P521>.parse(pem: edPublic)) == none)
+    assert((try? Ed25519PrivateKey.parse(pem: xKey)) == none && (try? Ed25519PublicKey.parse(pem: xPublic)) == none)
+    assert((try? X25519PrivateKey.parse(pem: edKey)) == none && (try? X25519PublicKey.parse(pem: edPublic)) == none)
+    assert((try? RsaPrivateKey.parse(pem: edKey)) == none && (try? RsaPublicKey.parse(pem: edPublic)) == none)
+    assert(try! EcdhPrivateKey<P256>.parse(pem: p256Key).bytes() == EcdsaPrivateKey<P256>.parse(pem: p256Key).bytes())
+    assert(try! EcdhPublicKey<P384>.parse(pem: p384Public).bytes == EcdsaPublicKey<P384>.parse(pem: p384Public).bytes)
+    assert(try! EcdhPrivateKey<P521>.parse(pem: p521Key).publicKey.spki == EcdsaPrivateKey<P521>.parse(pem: p521Key).publicKey.spki)
+    assert(try! X25519PublicKey.parse(pem: xPublic).spki == X25519PrivateKey.parse(pem: xKey).publicKey.spki)
+    assert(try! EcdhPrivateKey<P384>.parse(pem: p384Key).pem().trimmed() == p384Key.trimmed())
+    assert(try! EcdsaPrivateKey<P521>.parse(pem: p521Key).pkcs8() == EcdhPrivateKey<P521>.parse(pem: p521Key).pkcs8())
+    assert(try! RsaPublicKey.parse(pem: rsaPublic) == RsaPrivateKey.parse(pem: rsaKey).publicKey)
+    assert(try! Ed25519PublicKey.parse(pem: edPublic) == Ed25519PrivateKey.parse(pem: edKey).publicKey)
+}
+
+@test
+fn whatTheLibraryHasNotIsRefused() {
+    assert((try? PublicKey.parse(pem: explicitCurve)) == none)
+    assert((try? PublicKey.parse(pem: otherCurve)) == none)
+    assert((try? PublicKey.parse(pem: otherAlgorithm)) == none)
+    assert((try? PrivateKey.parse(pem: encrypted)) == none)
+    assert((try? PublicKey.parse(pem: "nothing")) == none && (try? PublicKey.parse(spki: [0x30, 0x00])) == none)
+    // A private key with another's public key.
+    let one = EcdsaPrivateKey<P256>.generate()
+    let two = EcdsaPrivateKey<P256>.generate()
+    let der = one.pkcs8()
+    var mixed = der[..<der.count - 64].toArray()
+    mixed.append(contentsOf: two.publicKey.bytes[1...])
+    assert((try? PrivateKey.parse(pkcs8: mixed)) == none && (try? PrivateKey.parse(pkcs8: der)) != none)
+}
+
+// Ed25519's of RFC 8410 §10.3, whose second has its public key with it.
+@test
+fn rfc8410sKeysAreRead() {
+    let first = try! PrivateKey.parse(pem: "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\n-----END PRIVATE KEY-----\n")
+    let second = try! PrivateKey.parse(pem: "-----BEGIN PRIVATE KEY-----\nMHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\noB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrB\nZ9w7lshQhqowtrbLDFw4rXAxZuE=\n-----END PRIVATE KEY-----\n")
+    assert(first == second)
+    assert((try? PrivateKey.parse(pem: "-----BEGIN PRIVATE KEY-----\nMHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\noB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrB\nZ9w7lshQhqowtrbLDFw4rXAxZuF=\n-----END PRIVATE KEY-----\n")) == none)
+}
+
+@test
+fn jwksAreReadStrictly() {
+    // RFC 7517 A.1's first key.
+    let key = try! PublicKey.parse(jwk: "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4\",\"y\":\"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM\",\"use\":\"enc\",\"kid\":\"1\"}")
+    assertEqual(key.jwk, "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4\",\"y\":\"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM\"}")
+    let bad = [
+        "", "[]", "{}", "{\"kty\":1}", "{\"kty\":\"oct\",\"k\":\"AA\"}", "{\"kty\":\"OKP\",\"crv\":\"Ed448\",\"x\":\"AA\"}", "{\"kty\":\"OKP\"}",
+        "{\"kty\":\"EC\",\"crv\":\"P-192\",\"x\":\"AA\",\"y\":\"AA\"}", "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"AA\",\"y\":\"AA\"}", "{\"kty\":\"EC\",\"crv\":\"P-256\"}",
+        "{\"kty\":\"OKP\",\"crv\":\"X25519\",\"x\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}", "{\"kty\":\"RSA\",\"n\":\"AQ\",\"e\":\"AQAB\"}", "{\"kty\":\"RSA\",\"n\":\"AQ\",\"e\":\"AQABAQABAQABAQAB\"}",
+    ]
+    for each in bad {
+        assert((try? PublicKey.parse(jwk: each)) == none)
+        assert((try? PrivateKey.parse(jwk: each)) == none)
+    }
+    // Without a private key, and with another's public one.
+    assert((try? PrivateKey.parse(jwk: key.jwk)) == none)
+    let one = Ed25519PrivateKey.generate()
+    let two = Ed25519PrivateKey.generate()
+    assert((try? PrivateKey.parse(jwk: one.jwk().replacing(Base64.encode(one.publicKey.bytes, alphabet: .UrlSafe, padding: false), with: Base64.encode(two.publicKey.bytes, alphabet: .UrlSafe, padding: false)))) == none)
+}
+
+@test
+fn pemIsReadStrictly() {
+    let blocks = try! PemBlock.parse("a note\n-----BEGIN A B-----\r\nAQID\r\n-----END A B-----\r\n\r\n-----BEGIN C-----\n-----END C-----")
+    assert(blocks == [PemBlock(label: "A B", bytes: [1, 2, 3]), PemBlock(label: "C", bytes: [])])
+    assert(try! PemBlock.parse("").isEmpty)
+    for bad in ["-----BEGIN A-----\nAQID\n", "-----BEGIN A-----\nAQID\n-----END B-----\n", "-----BEGIN A-----\n!\n-----END A-----\n", "-----BEGIN A-----\nProc-Type: 4,ENCRYPTED\n\nAQID\n-----END A-----\n", "-----BEGIN A-----\nAQI\n-----END A-----\n"] {
+        assert((try? PemBlock.parse(bad)) == none)
+    }
+    let long = PemBlock(label: "X", bytes: U8[>..](repeating: 7, count: 100))
+    assertEqual(long.text.split(separator: '\n').toArray()[1].utf8.count, 64)
+    assert(try! PemBlock.parse(long.text) == [long])
+    assert(PemBlock(label: "X", bytes: [1]) != PemBlock(label: "Y", bytes: [1]))
+}

@@ -1,0 +1,431 @@
+module CertificateVerifierTests
+
+// CertificateVerifier (Sable.Crypto.X509): OpenSSL's path, and ones made to be
+// wrong in one way each. Run with tools/stdlib-coverage.sh Sable.Crypto.X509;
+// x509-limbo is tools/conformance/x509.
+
+import Sable.Crypto
+import Sable.Crypto.X509
+import Sable.Serialize.Asn1
+import Sable.Testing
+import Sable.Time
+
+let rootPem: String = """
+-----BEGIN CERTIFICATE-----
+MIIDJDCCAgygAwIBAgICEjQwDQYJKoZIhvcNAQELBQAwMzELMAkGA1UEBhMCQ0gx
+FTATBgNVBAoMDEV4YW1wbGUsIEx0ZDENMAsGA1UEAwwEUm9vdDAeFw0yNjAxMDEw
+MDAwMDBaFw0zNjAxMDEwMDAwMDBaMDMxCzAJBgNVBAYTAkNIMRUwEwYDVQQKDAxF
+eGFtcGxlLCBMdGQxDTALBgNVBAMMBFJvb3QwggEiMA0GCSqGSIb3DQEBAQUAA4IB
+DwAwggEKAoIBAQC65MtLQOBeCx5WvZGBNZ1bOztPwvFP/DsDlUX7BqAabc2eFZDs
+AYEd1M4crZhZdTD+egAB/kYQFRSavAp3NNgIe+yeeuR55klscOC8bf8e2Ro+FBox
+SI7xBXCXrrVJOtWXK7yVLO7E6/UdQ+4oAltd4ZPH7liumXOIJPsjUo9oNx+q2JC9
+UgV+mtxKCbp0DpIgV7VtyOMJnfxzSv4VVeek8txtXAtncUT9FVygKBTzIFEjcwU3
+sTUqxcVKUSUKMQtoUkY6PebwNpkkOhs9lCyRvz+JhD+W+bHiyZ9al0/yROkJEPpL
+kT/tMV1uJTmVehMMhyG1a9598/g3DFTPqzjZAgMBAAGjQjBAMA8GA1UdEwEB/wQF
+MAMBAf8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTG44n8p1/jOTQBMZGSkyjq
+W9gpgzANBgkqhkiG9w0BAQsFAAOCAQEAbqUIR0Owt1wuCg0ExcPAe/ET3YV9uEqa
+A4zW/FdZXz65HNzHHX72RoV7CWlV4zx+rXYuS7iX3ZVSOK26rD1damfbemfEnj1F
+leR/yM8fof4hxi9kgkhd3zJUjH0R+J3EIjVO6YJUewirVGVD2/7A5xe8QlFn1j/H
+gbf9VB/UpyFkt8bEwN5Z66j6m1jtxxSLWdThkOZa3Yoji1wgthxUoEieKaDhiaUk
+bymxQHW7yK+rut3bGyfla+akIP4XfV5P3e3nf8JKu/1XcIhYJh545Kt079OtWka+
+JxnW1C9tVvAlpPOXdlPz5nvjs7ODmzFyYeIEhNxMAOdCtMF1tX6Txw==
+-----END CERTIFICATE-----
+"""
+let interPem: String = """
+-----BEGIN CERTIFICATE-----
+MIIChDCCAWygAwIBAgIBIjANBgkqhkiG9w0BAQsFADAzMQswCQYDVQQGEwJDSDEV
+MBMGA1UECgwMRXhhbXBsZSwgTHRkMQ0wCwYDVQQDDARSb290MB4XDTI2MDEwMTAw
+MDAwMFoXDTM2MDEwMTAwMDAwMFowOzELMAkGA1UEBhMCQ0gxFTATBgNVBAoMDEV4
+YW1wbGUsIEx0ZDEVMBMGA1UEAwwMSW50ZXJtZWRpYXRlMFkwEwYHKoZIzj0CAQYI
+KoZIzj0DAQcDQgAEe84HkWxLQWMktUOpIoX++kSmSPDUKeQQ0++clX2Ud5FduvZY
+/NegB81i5qc32MWAk2Al/g6TwfJn11WPh84G9aNmMGQwEgYDVR0TAQH/BAgwBgEB
+/wIBADAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFMlG9acB+L8pCOVI/wT3vIrY
++kbWMB8GA1UdIwQYMBaAFMbjifynX+M5NAExkZKTKOpb2CmDMA0GCSqGSIb3DQEB
+CwUAA4IBAQBdDlOMJeOppxCpHXFmLYxevk4KwQcTWegorJJ/5wkt74HdoEqiwuRN
+JzsjlLKkHqOUnsN75clFLrB8kLGlBp/qaP4LR1mSLPke0/Q2e9ebm8CbPhBHM+7b
+2c/mGkW2oAS+aZyoyF7gk4lux/6JPUg1RgSyMD+rQj9xAgo9j+FM6BStIwWHray8
+JGdHiZN+h47NOLU42m0KqtY/0fjPwghkUQPLxqzf0rXyHIFxOtUdlH6xiJ0unpt/
+td/+WwefQMkwA4VVPmkBZNNxZn7jkGfNeDOlUIdy1mwUU94C8t3w+ouh9dv4qGja
+/KtQQJBsAD+BJ2L9GilkxnYPZLHnOrwz
+-----END CERTIFICATE-----
+"""
+let leafPem: String = """
+-----BEGIN CERTIFICATE-----
+MIICtDCCAlqgAwIBAgIECgsMDTAKBggqhkjOPQQDAjA7MQswCQYDVQQGEwJDSDEV
+MBMGA1UECgwMRXhhbXBsZSwgTHRkMRUwEwYDVQQDDAxJbnRlcm1lZGlhdGUwHhcN
+MjYwMTAxMDAwMDAwWhcNMzYwMTAxMDAwMDAwWjAaMRgwFgYDVQQDDA93d3cuZXhh
+bXBsZS5jb20wdjAQBgcqhkjOPQIBBgUrgQQAIgNiAATBHpJx7VFo2nM1SMny1rlg
+GKXOYRr9jU61jhMkzmxKoFxW37Bj2ISK/o+0UrLpKqe90pB02O3OLds9fo8KuC7A
+1a0aQHfORtp0vFRcFLfCM1O+wYJr/yp813mvWkvOT4CjggFOMIIBSjAJBgNVHRME
+AjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUH
+AwIwHQYDVR0OBBYEFM860kydDRFNLtnUZyUZ3S1Cq20uMB8GA1UdIwQYMBaAFMlG
+9acB+L8pCOVI/wT3vIrY+kbWMDQGCCsGAQUFBwEBBCgwJjAkBggrBgEFBQcwAYYY
+aHR0cDovL29jc3AuZXhhbXBsZS5jb20vMIGXBgNVHREEgY8wgYyCD3d3dy5leGFt
+cGxlLmNvbYISKi5hcHBzLmV4YW1wbGUuY29thwTAAAIBhxAgAQ24AAAAAAAAAAAA
+AAABgQ1hQGV4YW1wbGUuY29thhVodHRwczovL2V4YW1wbGUuY29tL3iIAyoDBKAO
+BgMqAwWgBwwFaGVsbG+kEjAQMQ4wDAYDVQQDDAVpbm5lcjAKBggqhkjOPQQDAgNI
+ADBFAiEAtBZuvCZ1YqkkHPpxYkx6rhgVBPwtQ+1Tx5ndWO6AszYCIFbjSNLnUG/U
+vZBm/LVl76Od66qgavZ2WI1kkQ9l0kxp
+-----END CERTIFICATE-----
+"""
+let pssPem: String = """
+-----BEGIN CERTIFICATE-----
+MIIC1DCCAYigAwIBAgIBBzBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUA
+oRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASAwMzELMAkGA1UEBhMC
+Q0gxFTATBgNVBAoMDEV4YW1wbGUsIEx0ZDENMAsGA1UEAwwEUm9vdDAeFw0yNjAx
+MDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMA4xDDAKBgNVBAMMA1BTUzB2MBAGByqG
+SM49AgEGBSuBBAAiA2IABMEeknHtUWjaczVIyfLWuWAYpc5hGv2NTrWOEyTObEqg
+XFbfsGPYhIr+j7RSsukqp73SkHTY7c4t2z1+jwq4LsDVrRpAd85G2nS8VFwUt8Iz
+U77Bgmv/KnzXea9aS85PgKNeMFwwGgYDVR0RBBMwEYIPcHNzLmV4YW1wbGUuY29t
+MB0GA1UdDgQWBBTPOtJMnQ0RTS7Z1GclGd0tQqttLjAfBgNVHSMEGDAWgBTG44n8
+p1/jOTQBMZGSkyjqW9gpgzBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUA
+oRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASADggEBABV+qp5EAfvj
+EFnwx0/7Fn0YQFP5DE/KyPd/6/H07d6q8FYl+k4ikhTGrZlksziMQwebjz4xv7G1
+Yng7elN1g0hBJLeDlHXqSOSeqXOtoe22/CdZb2/F0rsF5S7+kLme4I5YoykxgG8P
+YzlyuQeZobgkccsBmipmbURlqBOpL4TcZhtfERU9NpnhtWdHqnBgzZbhPsC3jF9O
+YGKjHsNRLop+gJ17usKEW1mca9hQ4GjqgAhN1rX1Px09IWW7bpygdPRJjzRqLvFQ
+0iruKcN5UjqIDiIvT+Mz5cw30nqE5kgm/a/alnF/pJg99jgVhpbb0g692LEzEuPc
+pzAjApy3phc=
+-----END CERTIFICATE-----
+"""
+let sha1Pem: String = """
+-----BEGIN CERTIFICATE-----
+MIICbjCCAVagAwIBAgIBCDANBgkqhkiG9w0BAQUFADAzMQswCQYDVQQGEwJDSDEV
+MBMGA1UECgwMRXhhbXBsZSwgTHRkMQ0wCwYDVQQDDARSb290MB4XDTI2MDEwMTAw
+MDAwMFoXDTM2MDEwMTAwMDAwMFowDzENMAsGA1UEAwwEU0hBMTB2MBAGByqGSM49
+AgEGBSuBBAAiA2IABMEeknHtUWjaczVIyfLWuWAYpc5hGv2NTrWOEyTObEqgXFbf
+sGPYhIr+j7RSsukqp73SkHTY7c4t2z1+jwq4LsDVrRpAd85G2nS8VFwUt8IzU77B
+gmv/KnzXea9aS85PgKNfMF0wGwYDVR0RBBQwEoIQc2hhMS5leGFtcGxlLmNvbTAd
+BgNVHQ4EFgQUzzrSTJ0NEU0u2dRnJRndLUKrbS4wHwYDVR0jBBgwFoAUxuOJ/Kdf
+4zk0ATGRkpMo6lvYKYMwDQYJKoZIhvcNAQEFBQADggEBAAJ2SXDlj9Ra/ItZCt6O
+aJ7wRJc+iXy0/KZVtvhoJOJEZ/xBA9LDe0K4OMDkuN2bG+rxkd4kB6TFwGPBK+e+
+vH4yE1cj+LNxCNKIIjhaKja/FfQAW1wRqWo5D8uam+XtIjoIcPjT1Nn//2u81u21
+n4jgDzZiC6DVxirjp/8S1GDcuypnxLkV6Qm8ew7JSOs6q0QI/yTZe6ipoNGmr/qN
+NQQ+ogIszBiPgeoBWXVi/Q3pdCUoJ2CW6tBhlZoed0s+brJ4gD4nS4KBZR/HM1+C
+gC22RFkNiFLz0Fqpl+yE+NUvp3ijHTGz/E+wGOH4pYKgLPTIxjeYeA0xUXvQllIa
+pH8=
+-----END CERTIFICATE-----
+"""
+let edPem: String = """
+-----BEGIN CERTIFICATE-----
+MIIBBDCBt6ADAgECAgEJMAUGAytlcDANMQswCQYDVQQDDAJFZDAeFw0yNjAxMDEw
+MDAwMDBaFw0zNjAxMDEwMDAwMDBaMA0xCzAJBgNVBAMMAkVkMCowBQYDK2VwAyEA
+DonhvLeQG/6HHd0m/1kbpvAQGl3zewu2p0iOoH0QWbKjPDA6MBkGA1UdEQQSMBCC
+DmVkLmV4YW1wbGUuY29tMB0GA1UdDgQWBBRBXHD1ST2YqbjBq23eft/EsrwFBjAF
+BgMrZXADQQCMjWgRbQdD5tvdF2DAxY3SWlCbmPhPC+YFJblAbMBCZZgUqgtx+w5+
+TqqhesCkBBz5sDZLkiUEvf/Vok7Kem0O
+-----END CERTIFICATE-----
+"""
+let crlEmpty: String = """
+-----BEGIN X509 CRL-----
+MIHzMIGbAgEBMAoGCCqGSM49BAMCMDsxCzAJBgNVBAYTAkNIMRUwEwYDVQQKDAxF
+eGFtcGxlLCBMdGQxFTATBgNVBAMMDEludGVybWVkaWF0ZRcNMjYwMTAxMDAwMDAw
+WhcNMzYwMTAxMDAwMDAwWqAvMC0wHwYDVR0jBBgwFoAUyUb1pwH4vykI5Uj/BPe8
+itj6RtYwCgYDVR0UBAMCAQUwCgYIKoZIzj0EAwIDRwAwRAIgbECx4dxrP7VgFSBC
+9519wkAzfS7V/mQ6ylkjFpYampMCIBEnKgh2DgAW4a8INs8oXfn+9QzvevGiEd0n
+wjf7xp3B
+-----END X509 CRL-----
+"""
+let crlRevoked: String = """
+-----BEGIN X509 CRL-----
+MIIBLzCB1gIBATAKBggqhkjOPQQDAjA7MQswCQYDVQQGEwJDSDEVMBMGA1UECgwM
+RXhhbXBsZSwgTHRkMRUwEwYDVQQDDAxJbnRlcm1lZGlhdGUXDTI2MDEwMTAwMDAw
+MFoXDTM2MDEwMTAwMDAwMFowOTASAgF3Fw0yNjAzMDEwMDAwMDBaMCMCBAoLDA0X
+DTI2MDMwMTAwMDAwMFowDDAKBgNVHRUEAwoBAaAvMC0wHwYDVR0jBBgwFoAUyUb1
+pwH4vykI5Uj/BPe8itj6RtYwCgYDVR0UBAMCAQYwCgYIKoZIzj0EAwIDSAAwRQIh
+ANxOrfT2Dv2uYGBdj2aoBcoeqBR8SDnH1f0T5eF2Ju2cAiBHJs83HwQNx3XTSDfU
+WhY8V3B4ioV6SzzD1hqMTo0UNA==
+-----END X509 CRL-----
+"""
+let crlRoot: String = """
+-----BEGIN X509 CRL-----
+MIIBwzCBrAIBATANBgkqhkiG9w0BAQsFADAzMQswCQYDVQQGEwJDSDEVMBMGA1UE
+CgwMRXhhbXBsZSwgTHRkMQ0wCwYDVQQDDARSb290Fw0yNjAxMDEwMDAwMDBaFw0z
+NjAxMDEwMDAwMDBaMBQwEgIBIhcNMjYwMzAxMDAwMDAwWqAvMC0wHwYDVR0jBBgw
+FoAUxuOJ/Kdf4zk0ATGRkpMo6lvYKYMwCgYDVR0UBAMCAQcwDQYJKoZIhvcNAQEL
+BQADggEBALCRcTjBSFVzRZ6JwDuuHLN82qa7MJovgAt8sFFBEQm98Mcr5W3ZBbN5
+AqSr+o9GiYPhTuQZrS9hSXdZx3DI2p1cCBa1aCQ8MDEfo3VUCZk5Yrfn2uQMGPVA
+xmL2DkV8gi23G7I7+fVAD7j9OH+zSH5pznFQ02x//8zy7XTfYHYY7U9yFiaGP4aF
+SBYSw4r6c23oHz2oLdFRb+mrZ0sh2DVauIbabO0qpmyZoc/CIJt0WWnsBgSZsowl
+xPJWAr2ENHkhUEF2ZqjBd/QNU+sUgjLRo+1xq5tdNcaC6XgMz4Hitbd7kItlax9k
+JQSH6EBOmMrP3a4enhqWP5BeoaydxU8=
+-----END X509 CRL-----
+"""
+
+let within: UtcDateTime = UtcDateTime.of(year: 2026, month: 6, day: 1, hour: 0, minute: 0, second: 0)!
+
+fn assertThrows(_ expected: CertificateError, _ body: () throws(CertificateError) -> Void) {
+    do {
+        try body()
+        fail("nothing was thrown")
+    } catch {
+        assertEqual(error, expected)
+    }
+}
+
+fn opensslVerifier() -> CertificateVerifier {
+    return CertificateVerifier(roots: TrustStore([try! Certificate.parse(pem: rootPem)]))
+}
+
+@test
+fn opensslsPathIsFound() {
+    let leaf = try! Certificate.parse(pem: leafPem)
+    let inter = try! Certificate.parse(pem: interPem)
+    let root = try! Certificate.parse(pem: rootPem)
+    let verifier = opensslVerifier()
+    assert(try! verifier.verify(leaf, intermediates: [root, inter], host: "www.example.com", at: within) == [leaf, inter, root])
+    assert(try! verifier.verify(leaf, intermediates: [inter], purpose: KeyPurpose.clientAuth, at: within).count == 3)
+    assert(try! verifier.verify(leaf, intermediates: [inter], purpose: none, at: within).count == 3)
+    assertThrows(CertificateError.UnknownIssuer(issuer: "CN=Intermediate,O=Example\\, Ltd,C=CH")) { () throws(CertificateError) in _ = try verifier.verify(leaf, at: within) }
+    assertThrows(CertificateError.HostMismatch(host: "other.example")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], host: "other.example", at: within) }
+    assertThrows(CertificateError.NotForPurpose(reason: "CN=www.example.com is not for 1.3.6.1.5.5.7.3.3")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], purpose: KeyPurpose.codeSigning, at: within) }
+    assertThrows(CertificateError.NotYetValid(subject: "CN=www.example.com")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: UtcDateTime.fromUnix(0)) }
+    assertThrows(CertificateError.Expired(subject: "CN=www.example.com")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: leaf.notAfter.adding(Duration.seconds(1))) }
+    assert(try! verifier.verify(leaf, intermediates: [inter], at: leaf.notAfter).count == 3 && verifier.verify(leaf, intermediates: [inter], at: leaf.notBefore).count == 3)
+    let pss = try! Certificate.parse(pem: pssPem)
+    assert(try! verifier.verify(pss, host: "pss.example.com", at: within).count == 2)
+    assertThrows(CertificateError.Unsupported(reason: "CN=SHA1 is signed with an algorithm the library does not take: 1.2.840.113549.1.1.5")) { () throws(CertificateError) in _ = try verifier.verify(try Certificate.parse(pem: sha1Pem), at: within) }
+}
+
+@test
+fn aCertificateTrustedItselfIsItsOwnPath() {
+    let own = try! Certificate.parse(pem: edPem)
+    let verifier = CertificateVerifier(roots: TrustStore([own]))
+    assert(try! verifier.verify(own, host: "ed.example.com", at: within) == [own])
+    assert((try? opensslVerifier().verify(own, host: "ed.example.com", at: within)) == none)
+}
+
+@test
+fn revokedCertificatesAreRefused() {
+    let leaf = try! Certificate.parse(pem: leafPem)
+    let inter = try! Certificate.parse(pem: interPem)
+    var verifier = opensslVerifier()
+    verifier.profile = .Rfc5280
+    verifier.revocationLists = [try! CertificateRevocationList.parse(pem: crlEmpty)]
+    assert(try! verifier.verify(leaf, intermediates: [inter], at: within).count == 3)
+    let list = try! CertificateRevocationList.parse(pem: crlRevoked)
+    assert(list.revoked.count == 2 && list.entry(for: leaf)!.reason == 1 && list.entry(for: inter) == none)
+    assertEqual(list.revoked[0].date.rfc3339(), "2026-03-01T00:00:00Z")
+    assert(list.thisUpdate.year == 2026 && list.nextUpdate!.year == 2036 && list.issuer == inter.subject && list.extensions.count >= 1)
+    assert(list.isSigned(by: try! inter.publicKey()) && !list.isSigned(by: try! leaf.publicKey()))
+    verifier.revocationLists = [list]
+    assertThrows(CertificateError.Revoked(subject: "CN=www.example.com")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: within) }
+    verifier.revocationLists = [try! CertificateRevocationList.parse(pem: crlRoot)]
+    assertThrows(CertificateError.Revoked(subject: "CN=Intermediate,O=Example\\, Ltd,C=CH")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: within) }
+    // A list out of date: the certificates are too, so one of before they were.
+    assert((try? CertificateRevocationList.parse(der: list.der[..<^1])) == none && (try? CertificateRevocationList.parse(pem: rootPem)) == none)
+    // Signed by another.
+    var changed = list.der
+    changed[changed.count - 1] = changed[changed.count - 1] ^ 1
+    verifier.revocationLists = [try! CertificateRevocationList.parse(der: changed)]
+    assertThrows(CertificateError.Invalid(reason: "the revocation list of CN=Intermediate,O=Example\\, Ltd,C=CH is not signed with its key")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: within) }
+    var i = 0
+    while i < list.der.count {
+        var other = list.der
+        other[i] = other[i] ^ 0x21
+        _ = try? CertificateRevocationList.parse(der: other)
+        i += 1
+    }
+}
+
+// ---- Paths made here ---------------------------------------------------------
+
+struct Authority {
+    let certificate: Certificate
+    let key: PrivateKey
+}
+
+fn authority(_ name: String, by issuer: Authority?, _ change: (inout CertificateBuilder) -> () = { (b: inout CertificateBuilder) in }) -> Authority {
+    let key = EcdsaPrivateKey<P256>.generate().anyKey
+    var builder = CertificateBuilder(subject: DistinguishedName(commonName: name), isAuthority: true)
+    change(&builder)
+    if let issuer {
+        return Authority(certificate: try! builder.issued(to: key.publicKey, by: issuer.certificate, signingKey: issuer.key), key: key)
+    }
+    return Authority(certificate: try! builder.selfSigned(with: key), key: key)
+}
+
+fn server(_ host: String, by issuer: Authority, _ change: (inout CertificateBuilder) -> () = { (b: inout CertificateBuilder) in }) -> Certificate {
+    var builder = CertificateBuilder(subject: DistinguishedName([]), host: host)
+    change(&builder)
+    return try! builder.issued(to: EcdsaPrivateKey<P256>.generate().publicKey.anyKey, by: issuer.certificate, signingKey: issuer.key)
+}
+
+fn problem(_ leaf: Certificate, _ between: Certificate[>..], _ root: Authority, host: String? = "a.example.com", profile: CertificateProfile = .Compatible) -> CertificateError? {
+    var verifier = CertificateVerifier(roots: TrustStore([root.certificate]))
+    verifier.profile = profile
+    do {
+        _ = try verifier.verify(leaf, intermediates: between, host: host)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn onlyAuthoritiesIssue() {
+    let root = authority("Root", by: none)
+    let inter = authority("Inter", by: root)
+    assert(problem(server("a.example.com", by: inter), [inter.certificate], root) == none)
+    assert(problem(server("a.example.com", by: inter), [inter.certificate], root, profile: .WebPki) == none)
+    // Not one, and one whose key is not for it.
+    let plain = authority("Plain", by: root) { (b: inout CertificateBuilder) in b.basicConstraints = BasicConstraints(isAuthority: false) }
+    assert(problem(server("a.example.com", by: plain), [plain.certificate], root) == CertificateError.Invalid(reason: "CN=Plain is no authority, and issued a certificate"))
+    let other = authority("Other", by: root) { (b: inout CertificateBuilder) in b.keyUsage = .DigitalSignature }
+    assert(problem(server("a.example.com", by: other), [other.certificate], root) == CertificateError.NotForPurpose(reason: "the key of CN=Other is not for signing certificates"))
+    let code = authority("Code", by: root) { (b: inout CertificateBuilder) in b.purposes = [KeyPurpose.codeSigning] }
+    assert(problem(server("a.example.com", by: code), [code.certificate], root) == CertificateError.NotForPurpose(reason: "CN=Code is not for 1.3.6.1.5.5.7.3.1"))
+    let free = authority("Any", by: root) { (b: inout CertificateBuilder) in b.purposes = [KeyPurpose.anyPurpose] }
+    assert(problem(server("a.example.com", by: free), [free.certificate], root) == none)
+    let old = authority("Old", by: root) { (b: inout CertificateBuilder) in b.notAfter = b.notBefore }
+    assert(problem(server("a.example.com", by: old), [old.certificate], root) == CertificateError.Expired(subject: "CN=Old"))
+    // Signed by another of the same name.
+    let impostor = authority("Inter", by: none)
+    assert(problem(server("a.example.com", by: impostor), [inter.certificate], root) == CertificateError.InvalidSignature(subject: ""))
+    let signs = server("a.example.com", by: inter) { (b: inout CertificateBuilder) in b.keyUsage = .KeyCertSign }
+    assert(problem(signs, [inter.certificate], root) == CertificateError.Invalid(reason: " may sign certificates, and is no authority"))
+    let constrains = server("a.example.com", by: inter) { (b: inout CertificateBuilder) in b.nameConstraints = NameConstraints(permitted: [.Dns("x")], excluded: []) }
+    assert(problem(constrains, [inter.certificate], root) == CertificateError.Invalid(reason: " has name constraints, and is no authority"))
+}
+
+@test
+fn pathsAreAsLongAsTheyMayBe() {
+    let root = authority("Root", by: none) { (b: inout CertificateBuilder) in b.basicConstraints = BasicConstraints(isAuthority: true, pathLength: 1) }
+    let one = authority("One", by: root)
+    let two = authority("Two", by: one)
+    assert(problem(server("a.example.com", by: one), [one.certificate], root) == none)
+    assert(problem(server("a.example.com", by: two), [two.certificate, one.certificate], root) == CertificateError.Invalid(reason: "CN=Root may have 1 authorities below it, and has 2"))
+    var last = authority("Free", by: none)
+    let free = last
+    var between: Certificate[>..] = []
+    var i = 0
+    while i < 10 {
+        last = authority("Step \(i)", by: last)
+        between.append(last.certificate)
+        i += 1
+    }
+    assert(problem(server("a.example.com", by: last), between, free) == CertificateError.LimitExceeded(reason: "a path of more than 8 authorities"))
+    var verifier = CertificateVerifier(roots: TrustStore([free.certificate]))
+    verifier.maximumDepth = 10
+    assertEqual(try! verifier.verify(server("a.example.com", by: last), intermediates: between, host: "a.example.com").count, 12)
+}
+
+// Two authorities that have issued each other, and a third way to the root.
+@test
+fn aWayRoundIsNotFollowedForEver() {
+    let root = authority("Root", by: none)
+    let a = authority("A", by: none)
+    let b = authority("B", by: none)
+    fn cross(_ subject: Authority, by issuer: Authority) -> Certificate {
+        var builder = CertificateBuilder(subject: subject.certificate.subject, isAuthority: true)
+        return try! builder.issued(to: subject.key.publicKey, by: issuer.certificate, signingKey: issuer.key)
+    }
+    let between = [cross(a, by: b), cross(b, by: a), a.certificate, b.certificate]
+    let leaf = server("a.example.com", by: a)
+    assert(problem(leaf, between.toArray(), root) != none)
+    var more = between.toArray()
+    more.append(cross(b, by: root))
+    assert(problem(leaf, more, root) == none)
+}
+
+@test
+fn namesAreWithinWhatIsPermitted() {
+    let root = authority("Root", by: none)
+    fn check(_ permitted: GeneralName[>..], _ excluded: GeneralName[>..], _ names: GeneralName[>..], _ good: Bool, subject: DistinguishedName = DistinguishedName([])) {
+        let inter = authority("Inter", by: root) { (b: inout CertificateBuilder) in b.nameConstraints = NameConstraints(permitted: permitted, excluded: excluded) }
+        let leaf = server("a", by: inter) { (b: inout CertificateBuilder) in
+            b.alternativeNames = names
+            b.subject = subject
+        }
+        assert((problem(leaf, [inter.certificate], root, host: none) == none) == good, "\(permitted.count) \(excluded.count) \(names[0])")
+    }
+    check([.Dns("example.com")], [], [.Dns("example.com"), .Dns("A.b.Example.com"), .Dns("*.example.com")], true)
+    check([.Dns("example.com")], [], [.Dns("badexample.com")], false)
+    check([.Dns("a.example.com")], [], [.Dns("*.example.com")], false)
+    check([.Dns("")], [], [.Dns("anything.example")], true)
+    check([], [.Dns("bad.example.com")], [.Dns("good.example.com")], true)
+    check([], [.Dns("bad.example.com")], [.Dns("x.bad.example.com")], false)
+    check([], [.Dns("bad.example.com")], [.Dns("*.example.com")], false)
+    check([], [.Dns("a.bad.example.com")], [.Dns("*.example.com")], true)
+    check([.Dns("example.com")], [], [.Dns("bad_name.example.com")], false)
+    check([.Dns("*.example.com")], [], [.Dns("a.example.com")], false)
+    check([.Dns("example.com")], [], [.Email("a@other.example")], true)
+    check([.Ip([10, 0, 0, 0, 255, 0, 0, 0])], [], [.Ip([10, 1, 2, 3])], true)
+    check([.Ip([10, 0, 0, 0, 255, 0, 0, 0])], [], [.Ip([11, 1, 2, 3])], false)
+    check([.Ip([10, 0, 0, 0, 255, 0, 255, 0])], [], [.Ip([10, 1, 0, 3])], false)
+    check([], [.Ip([10, 0, 0, 0, 255, 0, 0, 0])], [.Ip([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])], true)
+    check([.Email("a@example.com")], [], [.Email("a@EXAMPLE.com")], true)
+    check([.Email("a@example.com")], [], [.Email("b@example.com")], false)
+    check([.Email("example.com")], [], [.Email("b@example.com")], true)
+    check([.Email("example.com")], [], [.Email("b@sub.example.com")], false)
+    check([.Email(".example.com")], [], [.Email("b@sub.example.com")], true)
+    check([.Email(".example.com")], [], [.Email("b@example.com")], false)
+    check([.Email("a@b@example.com")], [], [.Email("b@example.com")], false)
+    check([.Email("example.com")], [], [.Email("no mailbox")], false)
+    check([.Email("example.com")], [], [.Dns("x.example")], false, subject: DistinguishedName([NameAttribute(.emailAddress, "a@other.example")]))
+    check([.Uri("example.com")], [], [.Uri("https://user@example.com:8443/path?q")], true)
+    check([.Uri(".example.com")], [], [.Uri("https://a.example.com")], true)
+    check([.Uri(".example.com")], [], [.Uri("https://example.com")], false)
+    check([.Uri("example.com")], [], [.Uri("urn:nothing")], false)
+    let inside = DistinguishedName([NameAttribute(.countryName, "CH"), NameAttribute(.commonName, "x")])
+    check([.Directory(DistinguishedName([NameAttribute(.countryName, "ch")]))], [], [.Dns("x.example")], true, subject: inside)
+    check([.Directory(DistinguishedName([NameAttribute(.countryName, "DE")]))], [], [.Dns("x.example")], false, subject: inside)
+    check([], [.Directory(inside)], [.Directory(inside)], false)
+    check([.Directory(inside)], [], [.Directory(DistinguishedName([NameAttribute(.countryName, "CH")]))], false)
+    let other = ObjectIdentifier([1, 2, 3])
+    check([], [.Other(other, [5, 0])], [.Other(other, [5, 0])], false)
+    check([.Other(other, [5, 0])], [], [.Other(other, [5, 0])], false)
+    check([], [.Other(other, [5, 0])], [.Other(ObjectIdentifier([1, 2, 4]), [5, 0])], true)
+    check([], [.RegisteredId(other)], [.RegisteredId(other)], false)
+}
+
+@test
+fn aCriticalExtensionThatIsNotKnownIsRefused() {
+    let root = authority("Root", by: none)
+    let mark = ObjectIdentifier([1, 3, 6, 1, 4, 1, 99999, 1])
+    let critical = server("a.example.com", by: root) { (b: inout CertificateBuilder) in b.extensions = [CertificateExtension(mark, isCritical: true, value: [5, 0])] }
+    assert(problem(critical, [], root) == CertificateError.Invalid(reason: " has a critical extension that is not known: 1.3.6.1.4.1.99999.1"))
+    let plain = server("a.example.com", by: root) { (b: inout CertificateBuilder) in b.extensions = [CertificateExtension(mark, isCritical: false, value: [5, 0])] }
+    assert(problem(plain, [], root) == none)
+}
+
+@test
+fn theProfilesAskForMore() {
+    let root = authority("Root", by: none)
+    fn check(_ first: CertificateProfile, _ change: (inout CertificateBuilder) -> ()) {
+        let leaf = server("a.example.com", by: root, change)
+        assert(problem(leaf, [], root) == none)
+        assert((problem(leaf, [], root, profile: .Rfc5280) == none) == (first == .WebPki))
+        assert(problem(leaf, [], root, profile: .WebPki) != none)
+    }
+    check(.Rfc5280) { (b: inout CertificateBuilder) in b.serialNumber = U8[>..](repeating: 1, count: 21) }
+    check(.Rfc5280) { (b: inout CertificateBuilder) in b.serialNumber = [0] }
+    check(.WebPki) { (b: inout CertificateBuilder) in b.subject = DistinguishedName(commonName: "b.example.com") }
+    check(.WebPki) { (b: inout CertificateBuilder) in b.purposes = [] }
+    check(.WebPki) { (b: inout CertificateBuilder) in b.purposes = [KeyPurpose.anyPurpose] }
+    check(.WebPki) { (b: inout CertificateBuilder) in
+        b.basicConstraints = BasicConstraints(isAuthority: true)
+        b.subject = DistinguishedName(commonName: "a.example.com")
+    }
+    let named = server("a.example.com", by: root) { (b: inout CertificateBuilder) in b.subject = DistinguishedName(commonName: "a.example.com") }
+    assert(problem(named, [], root, profile: .WebPki) == none)
+    let address = server("::1", by: root) { (b: inout CertificateBuilder) in b.subject = DistinguishedName(commonName: "::1") }
+    assert(problem(address, [], root, host: "::1", profile: .WebPki) == none)
+    let purposed = authority("Purposed", by: none) { (b: inout CertificateBuilder) in b.purposes = [KeyPurpose.serverAuth] }
+    assert(problem(server("a.example.com", by: purposed), [], purposed) == none)
+    assert(problem(server("a.example.com", by: purposed), [], purposed, profile: .WebPki) != none)
+}
+
+@test
+fn weakAndUnknownKeysAreRefused() {
+    let root = authority("Root", by: none)
+    let x = X25519PrivateKey.generate().anyKey
+    let agree = try! CertificateBuilder(subject: DistinguishedName([]), host: "a.example.com").issued(to: x.publicKey, by: root.certificate, signingKey: root.key)
+    assert(problem(agree, [], root) == none)
+    assert((try? CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: x)) == none)
+    assert((try? CertificateBuilder(subject: DistinguishedName(commonName: "x")).issued(to: x.publicKey, by: root.certificate, signingKey: EcdsaPrivateKey<P256>.generate().anyKey)) == none)
+    var modulus = U8[>..](repeating: 0xFF, count: 128)
+    modulus[127] = 0xFD
+    let short = try! CertificateBuilder(subject: DistinguishedName([]), host: "a.example.com").issued(to: RsaPublicKey(modulus: modulus, exponent: 3).anyKey, by: root.certificate, signingKey: root.key)
+    assert(problem(short, [], root) == CertificateError.Unsupported(reason: "the RSA key of  is of 1024 bits, not 2048 or more"))
+}

@@ -1,0 +1,78 @@
+module X25519Tests
+
+// X25519 (Sable.Crypto): RFC 7748's agreements, and points of small order. Run
+// with tools/stdlib-coverage.sh Sable.Crypto; Wycheproof's are
+// tools/conformance/publickey.
+
+import Sable.Crypto
+import Sable.Testing
+import Sable.Text
+
+fn hex(_ text: String) -> U8[>..] {
+    return try! Hex.decode(text)
+}
+
+fn text(_ text: String) -> U8[>..] {
+    return text.utf8.toArray()
+}
+
+fn agreed(_ scalar: String, _ point: String) -> String {
+    let secret = try! X25519PrivateKey(hex(scalar)).sharedSecret(with: try! X25519PublicKey(hex(point)))
+    return Hex.encode(secret.bytes())
+}
+
+@test
+fn theRfcsProductsAreMade() {
+    assertEqual(agreed("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4", "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c"), "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552")
+    assertEqual(agreed("4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d", "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493"), "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957")
+}
+
+@test
+fn theRfcsIterationsAreMade() {
+    var k = hex("0900000000000000000000000000000000000000000000000000000000000000")
+    var u = k
+    var round = 0
+    while round < 100 {
+        let next = try! X25519PrivateKey(k).sharedSecret(with: try! X25519PublicKey(u)).bytes()
+        u = k
+        k = next
+        if round == 0 {
+            assertEqual(Hex.encode(k), "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079")
+        }
+        round += 1
+    }
+    assertEqual(Hex.encode(k), "b1a5a73158904c020866c13939dd7e1aa26852ee1d2609c92e5a8f1debe2150a")
+}
+
+@test
+fn bothSidesAgree() {
+    let alice = try! X25519PrivateKey(hex("77076d0a7318a57d3c16c17251b26645dc6c2d0a6e0f9a9a9e2c6f6f6b1d0c1a"))
+    let bob = try! X25519PrivateKey(hex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"))
+    assertEqual(Hex.encode(bob.publicKey.bytes), "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
+    assert(try! alice.sharedSecret(with: bob.publicKey) == bob.sharedSecret(with: alice.publicKey))
+    let one = X25519PrivateKey.generate()
+    let two = X25519PrivateKey.generate()
+    assert(try! one.sharedSecret(with: two.publicKey) == two.sharedSecret(with: one.publicKey))
+}
+
+@test
+fn aPointOfSmallOrderIsRefused() {
+    let key = X25519PrivateKey.generate()
+    for point in ["0000000000000000000000000000000000000000000000000000000000000000", "0100000000000000000000000000000000000000000000000000000000000000", "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800"] {
+        do {
+            _ = try key.sharedSecret(with: try X25519PublicKey(hex(point)))
+            fail("a point of small order")
+        } catch {
+            assertEqual(error.description(), "an X25519 public key of small order")
+        }
+    }
+}
+
+@test
+fn keysAreOf32Bytes() {
+    assert((try? X25519PrivateKey([1])) == none && (try? X25519PublicKey([1])) == none)
+    let key = X25519PrivateKey.generate()
+    assert(key == (try! X25519PrivateKey(key.bytes())) && key != X25519PrivateKey.generate())
+    assertEqual(key.debugDescription(), "X25519PrivateKey")
+    assert(key.publicKey.debugDescription().hasPrefix("X25519PublicKey("))
+}

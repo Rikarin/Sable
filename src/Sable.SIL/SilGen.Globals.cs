@@ -11,12 +11,15 @@ namespace Sable.SIL;
 /// <remarks>
 ///     <para>
 ///         What an initial value reads is what its expression names and what
-///         the functions it calls read, as far as they can be followed: a
-///         call through a protocol or a closure value goes where only running
-///         it says, and is not followed. Go orders its package variables the
-///         same way. Globals that need nothing of each other keep the order
-///         they were declared in, file by file, so the program is set up as
-///         it reads where it can be.
+///         the functions it calls read, as Go orders its package variables. A
+///         call through a protocol, or of a method a subclass overrides, goes
+///         where only running it says: it may be any of the program's types'
+///         own, so a global one of them reads comes first too, where that
+///         leaves an order — and is no reason for an error where it does
+///         not. The standard library's globals come before the program's.
+///         Globals that need nothing of each other keep the order they were
+///         declared in, file by file, so the program is set up as it reads
+///         where it can be.
 ///     </para>
 ///     <para>
 ///         Two globals that need each other, through any number of others or
@@ -34,18 +37,18 @@ public sealed partial class SilGen {
 
         var ordered = new List<(FieldSymbol Field, string Name, SemanticModel Model)>(_globalFields.Count);
         var state = new Dictionary<FieldSymbol, bool>(); // false while being visited, true once placed
-        var path = new List<(FieldSymbol Global, IReadOnlyList<FunctionSymbol> Through)>();
+        var path = new List<(FieldSymbol Global, IReadOnlyList<FunctionSymbol> Through, bool Maybe)>();
         var reported = new HashSet<FieldSymbol>();
 
         void Visit(int index) {
             var global = _globalFields[index];
             state[global.Field] = false;
-            foreach (var (needed, through) in GlobalsNeededBy(global.Field, global.Model).OrderBy(n => declared[n.Global])) {
-                path.Add((global.Field, through));
+            foreach (var (needed, through, maybe) in GlobalsNeededBy(global.Field, global.Model).OrderBy(static n => n.Maybe).ThenBy(n => declared[n.Global])) {
+                path.Add((global.Field, through, maybe));
                 if (!state.TryGetValue(needed, out var placed)) {
                     Visit(declared[needed]);
-                } else if (!placed) {
-                    ReportCycle(path.SkipWhile(p => !ReferenceEquals(p.Global, needed)).ToList(), reported);
+                } else if (!placed && path.SkipWhile(p => !ReferenceEquals(p.Global, needed)).ToList() is var cycle && !cycle.Exists(static p => p.Maybe)) {
+                    ReportCycle(cycle.ConvertAll(static p => (p.Global, p.Through)), reported);
                 }
 
                 path.RemoveAt(path.Count - 1);
@@ -55,9 +58,11 @@ public sealed partial class SilGen {
             ordered.Add(global);
         }
 
-        for (var i = 0; i < _globalFields.Count; i++) {
-            if (!state.ContainsKey(_globalFields[i].Field)) {
-                Visit(i);
+        foreach (var library in (bool[])[true, false]) {
+            for (var i = 0; i < _globalFields.Count; i++) {
+                if (!state.ContainsKey(_globalFields[i].Field) && CoreLibrary.IsStandardLibrary(_globalFields[i].Model.SyntaxTree.Header.Module) == library) {
+                    Visit(i);
+                }
             }
         }
 
@@ -66,10 +71,11 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     The globals a global's initial value reads, each with the functions
-    ///     it reads it through, the first way found.
+    ///     it reads it through, the first way found, and whether only a call
+    ///     that may go elsewhere reads it.
     /// </summary>
-    List<(FieldSymbol Global, IReadOnlyList<FunctionSymbol> Through)> GlobalsNeededBy(FieldSymbol field, SemanticModel model) {
-        var needed = new List<(FieldSymbol, IReadOnlyList<FunctionSymbol>)>();
+    List<(FieldSymbol Global, IReadOnlyList<FunctionSymbol> Through, bool Maybe)> GlobalsNeededBy(FieldSymbol field, SemanticModel model) {
+        var needed = new List<(FieldSymbol, IReadOnlyList<FunctionSymbol>, bool)>();
         if (model.GetFieldInitializer(field) is not { } initial) {
             return needed;
         }
@@ -79,18 +85,31 @@ public sealed partial class SilGen {
         var seenGlobals = new HashSet<FieldSymbol>();
         var seenFunctions = new HashSet<FunctionSymbol>();
         var pending = new Queue<(References References, IReadOnlyList<FunctionSymbol> Through)>();
+        var maybe = new List<(FunctionSymbol Function, IReadOnlyList<FunctionSymbol> Through)>();
         pending.Enqueue((ReferencesOf([initial]), []));
-        while (pending.Count > 0) {
-            var ((globals, functions), through) = pending.Dequeue();
-            foreach (var global in globals) {
-                if (seenGlobals.Add(global)) {
-                    needed.Add((global, through));
+        for (var certain = true; pending.Count > 0 || maybe.Count > 0; certain = false) {
+            // What may be called, once all that is has been followed.
+            foreach (var (function, through) in maybe) {
+                if (seenFunctions.Add(function)) {
+                    pending.Enqueue((ReferencesOf(function), [..through, function]));
                 }
             }
 
-            foreach (var function in functions) {
-                if (seenFunctions.Add(function)) {
-                    pending.Enqueue((ReferencesOf(function), [..through, function]));
+            maybe.Clear();
+            while (pending.Count > 0) {
+                var ((globals, functions, mayRun), through) = pending.Dequeue();
+                maybe.AddRange(mayRun.Select(m => (m, through)));
+                foreach (var global in globals) {
+                    if (seenGlobals.Add(global)) {
+                        needed.Add((global, through, !certain));
+                    }
+                }
+
+                foreach (var function in functions) {
+                    if (seenFunctions.Add(function)) {
+                        pending.Enqueue((ReferencesOf(function), [..through, function]));
+                        maybe.AddRange(MayRun(function, function.Name, function.Parameters.Length).Select(m => (m, through)));
+                    }
                 }
             }
         }
@@ -98,8 +117,53 @@ public sealed partial class SilGen {
         return needed;
     }
 
+    Dictionary<string, List<FunctionSymbol>>? _programMembers;
+
+    /// <summary>
+    ///     The program's own functions a call of this one may run in its place:
+    ///     the members its types meet a requirement with, or override a method
+    ///     with. The library's are not looked through: its globals come first.
+    /// </summary>
+    IEnumerable<FunctionSymbol> MayRun(Symbol member, string name, int parameters) {
+        var requirement = member is FunctionSymbol called ? RequirementProtocol(called) : member.ContainingSymbol as NamedTypeSymbol is { TypeKind: TypeKind.Protocol } declaring ? declaring : null;
+        var overridden = requirement is null && member is FunctionSymbol { IsOpen: true } or FunctionSymbol { IsAbstract: true } ? Owner((FunctionSymbol)member)?.OriginalDefinition : null;
+        if (requirement is null && overridden is not { TypeKind: TypeKind.Class }) {
+            return [];
+        }
+
+        if (_programMembers is null) {
+            _programMembers = new(StringComparer.Ordinal);
+            void Gather(IEnumerable<Symbol> members) {
+                foreach (var type in members.OfType<NamedTypeSymbol>()) {
+                    Gather(type.Members);
+                    if (type.TypeKind == TypeKind.Protocol) {
+                        continue;
+                    }
+
+                    foreach (var member in type.Members) {
+                        var made = member is FieldSymbol { IsComputed: true } property ? GetterOf(property) : member as FunctionSymbol;
+                        if (made is not null) {
+                            (_programMembers.TryGetValue(member.Name, out var named) ? named : _programMembers[member.Name] = []).Add(made);
+                        }
+                    }
+                }
+            }
+
+            foreach (var module in _compilation.Modules.Where(static m => !CoreLibrary.IsStandardLibrary(m.Name))) {
+                Gather(module.Members);
+            }
+        }
+
+        name = member.ContainingSymbol is FieldSymbol field ? field.Name : name;
+        return !_programMembers.TryGetValue(name, out var candidates) ? [] : candidates.Where(c =>
+            c.Parameters.Length == parameters && Owner(c)?.OriginalDefinition is { } owner
+            && (requirement is not null ? owner.Supertypes.Any(s => s is NamedTypeSymbol named && ReferenceEquals(named.OriginalDefinition, requirement.OriginalDefinition)) || owner.Satisfies(requirement)
+                : !ReferenceEquals(owner, overridden) && owner.SupertypeOf(overridden!) is not null));
+    }
+
     /// <summary>The globals some code names, and the functions it calls or names, in the order written.</summary>
-    readonly record struct References(List<FieldSymbol> Globals, List<FunctionSymbol> Functions);
+    /// <param name="Maybe">The program's own members that may meet the protocol's properties read.</param>
+    readonly record struct References(List<FieldSymbol> Globals, List<FunctionSymbol> Functions, List<FunctionSymbol> Maybe);
 
     /// <summary>What each function reads and calls, worked out once for every global that reaches it.</summary>
     readonly Dictionary<FunctionSymbol, References> _referencesForOrder = [];
@@ -142,6 +206,7 @@ public sealed partial class SilGen {
     References ReferencesOf(IEnumerable<BoundNode> roots) {
         var globals = new List<FieldSymbol>();
         var functions = new List<FunctionSymbol>();
+        var maybe = new List<FunctionSymbol>();
 
         void Function(FunctionSymbol? function) {
             if (function is not null) {
@@ -158,6 +223,10 @@ public sealed partial class SilGen {
                 // A computed property's getter runs where it is read.
                 case BoundFieldAccess { Field: { IsComputed: true } field }:
                     Function(GetterOf(field));
+                    if (field.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }) {
+                        maybe.AddRange(MayRun(field, field.Name, 0));
+                    }
+
                     break;
 
                 case BoundCall call:
@@ -182,7 +251,7 @@ public sealed partial class SilGen {
             }
         }
 
-        return new(globals, functions);
+        return new(globals, functions, maybe);
     }
 
     /// <summary>

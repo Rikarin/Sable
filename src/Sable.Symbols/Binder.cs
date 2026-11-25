@@ -233,10 +233,10 @@ public sealed partial class Binder {
             return new InitializedSelf(extended, [], whole: function);
         }
 
-        // A struct's, in its body or an extension, sets its fields.
+        // A struct's, in its body or an extension, sets its fields; a class's extension's delegates to one that does.
         var type = function switch {
             { FunctionKind: FunctionKind.Initializer, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } named } => named,
-            { FunctionKind: FunctionKind.Initializer, ContainingSymbol: ExtensionSymbol { ExtendedType: { ExtendedArray: null, TypeKind: TypeKind.Struct } extendedStruct } } => extendedStruct,
+            { FunctionKind: FunctionKind.Initializer, ContainingSymbol: ExtensionSymbol { ExtendedType: { ExtendedArray: null, TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } extendedType } } => extendedType,
             _ => null,
         };
         if (type is null) {
@@ -517,7 +517,8 @@ public sealed partial class Binder {
     void PopScope() => _locals.RemoveAt(_locals.Count - 1);
 
     void Declare(string name, Symbol symbol) {
-        if (name.Length == 0 || _locals.Count == 0) {
+        // '_' names nothing.
+        if (name is "" or "_" || _locals.Count == 0) {
             return;
         }
 
@@ -1472,7 +1473,10 @@ public sealed partial class Binder {
         _diagnostics.Error(
             ErrorCode.ERR_UnsafeCallOutsideUnsafe,
             at.Span,
-            $"'{function.Name}' is an 'unsafe fn', safe only when its caller keeps the promise it documents; "
+            (function.FunctionKind == FunctionKind.Initializer
+                ? $"'{(function.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : function.ContainingSymbol)?.Name}.init' is an 'unsafe init'"
+                : $"'{function.Name}' is an 'unsafe fn'")
+            + ", safe only when its caller keeps the promise it documents; "
             + $"{use} inside an 'unsafe' block, or in another 'unsafe fn'"
         );
     }
@@ -2981,6 +2985,11 @@ public sealed partial class Binder {
         }
 
         if (EnclosingType() is { } type) {
+            if (InStaticMember) {
+                _diagnostics.Error(ErrorCode.ERR_SelfOutsideType, syntax.Span, $"a static member of '{type.Name}' has no 'self': its type is 'Self'");
+                return new BoundError(syntax);
+            }
+
             return new BoundSelfAccess(syntax, SelfTypeOf(type), SelfIsMutable(type));
         }
 
@@ -3447,6 +3456,12 @@ public sealed partial class Binder {
                 return new BoundError(syntax);
             }
 
+            // An enum's case of the same name as a type is no function and has
+            // no members of the type's: 'Circle(r: 2)' and 'Circle.unit' are the type's.
+            if (inherited.Members is [EnumCaseSymbol @case] && TypeNamedLike(@case, name, syntax) is { } type) {
+                return new BoundTypeExpression(syntax, type);
+            }
+
             return BindMemberGroup(syntax, null, inherited.Members, inherited.Owner, inherited.Substitution);
         }
 
@@ -3531,6 +3546,19 @@ public sealed partial class Binder {
             $"no symbol named '{name}' is in scope"
         );
         return new BoundError(syntax);
+    }
+
+    /// <summary>The type a name hidden by an enum's case names, where what is done with the name a type allows and a case does not.</summary>
+    NamedTypeSymbol? TypeNamedLike(EnumCaseSymbol @case, string name, SyntaxNode syntax) {
+        var called = syntax.Parent is InvocationExpressionSyntax call && ReferenceEquals(call.Expression, syntax);
+        var reached = syntax.Parent is MemberAccessExpressionSyntax access && ReferenceEquals(access.Expression, syntax) ? access.Name : null;
+        if (!called && reached is null
+            || _compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span, report: false) is not NamedTypeSymbol type) {
+            return null;
+        }
+
+        var member = (reached as IdentifierNameSyntax)?.Identifier.Text;
+        return called || member is not null && @case.ContainingSymbol is NamedTypeSymbol owner && LookupMemberOfKind(owner, member, instance: true) is null ? type : null;
     }
 
     /// <summary>
@@ -3636,6 +3664,10 @@ public sealed partial class Binder {
                 receiver = captured;
             }
 
+            if (receiver is null && containingType is not null && InStaticMember && functions.All(static f => f is { IsStatic: false, FunctionKind: FunctionKind.Ordinary })) {
+                return NoSelfFor(syntax, functions[0], containingType);
+            }
+
             // In a closure, 'helper(x)' is 'self.helper(x)', and captures it.
             if (receiver is null && containingType is not null
                 && _containingSymbol is FunctionSymbol closure && IsClosureSymbol(closure)
@@ -3664,6 +3696,10 @@ public sealed partial class Binder {
                 }
 
                 if (receiver is null && !field.IsStatic && containingType is not null) {
+                    if (InStaticMember) {
+                        return NoSelfFor(syntax, field, containingType);
+                    }
+
                     receiver = ImplicitSelf(syntax, containingType);
                 }
 
@@ -3741,6 +3777,20 @@ public sealed partial class Binder {
         return function;
     }
 
+    /// <summary>True in a static member of a type, or a closure or local function inside one: there is no <c>self</c>.</summary>
+    bool InStaticMember =>
+        _containingSymbol is FunctionSymbol function && OutermostFunction(function) is { IsStatic: true, FunctionKind: FunctionKind.Ordinary or FunctionKind.Operator or FunctionKind.Accessor };
+
+    /// <summary>Reports a member of each value of a type, named alone where there is no <c>self</c> to reach it through.</summary>
+    BoundError NoSelfFor(SyntaxNode syntax, Symbol member, NamedTypeSymbol type) {
+        _diagnostics.Error(
+            ErrorCode.ERR_SelfOutsideType,
+            syntax.Span,
+            $"'{member.Name}' is a member of a value of '{type.Name}', and a static member has no 'self': reach it through a value"
+        );
+        return new BoundError(syntax);
+    }
+
     /// <summary>The <c>self</c> a member of a type is reached through, its name written alone.</summary>
     BoundSelfAccess ImplicitSelf(SyntaxNode syntax, NamedTypeSymbol containingType) {
         // An array extension's member, reached from another's: self is this one's array.
@@ -3805,6 +3855,13 @@ public sealed partial class Binder {
         // does: 't.zero()' with 't: T.Type'. Its one value is the type, so
         // reading it has nothing to keep but what evaluating it does, which
         // a name or 'X.self' does not.
+        // An 'any P.Type' reaches the static members of P, on the type it holds (SYNTAX.md "Opening a type").
+        if (receiver.Type is ExistentialTypeSymbol { MetatypeOf: { } conformed } && name != "self"
+            && LookupMember(Core.Type, name, static m => !IsStaticMember(m)) is null
+            && LookupMemberOfKind(conformed, name, instance: false) is { Owner: { SelfTypeParameter: { } heldSelf } } ofProtocol && ofProtocol.Members.Any(IsStaticMember)) {
+            return OpenedMember(syntax, receiver, conformed, heldSelf, name);
+        }
+
         // An 'any P.Type' is a Type to whatever asks it what a Type is asked.
         if (receiver.Type is ExistentialTypeSymbol { MetatypeOf: not null } && name != "self") {
             receiver = Convert(receiver, Core.Type, syntax.Expression);
@@ -4086,6 +4143,30 @@ public sealed partial class Binder {
 
             _ => member,
         };
+    }
+
+    /// <summary>
+    ///     A static member of P's on an <c>any P.Type</c>: of the type the
+    ///     value holds, opened as P's Self, as a call that is given the value
+    ///     for a <c>T.Type</c> opens it. Its result is erased as that call's is.
+    /// </summary>
+    BoundExpression OpenedMember(MemberAccessExpressionSyntax syntax, BoundExpression receiver, TypeSymbol conformed, TypeParameterSymbol self, string name) {
+        if (!_openedTypes.TryGetValue((receiver, self), out var opened)) {
+            opened = TypeParameterSymbol.OpenedExistential(self, [..CompositionTypeSymbol.PartsOf(conformed)]);
+            _openedTypes[(receiver, self)] = opened;
+        }
+
+        if (LookupMemberOfKind(opened, name, instance: false) is not { } found || found.Members.Where(IsStaticMember).ToList() is not { Count: > 0 } statics) {
+            return new BoundError(syntax, receiver);
+        }
+
+        if (!CheckAccessible(statics[0], syntax.Name)) {
+            return new BoundError(syntax, receiver);
+        }
+
+        var through = new BoundConversion(syntax.Expression, new MetatypeTypeSymbol(opened), receiver, ConversionKind.Open);
+        var member = BindMemberGroup(syntax, through, statics, found.Owner, found.Substitution);
+        return member is BoundFieldAccess field ? OpenedResult(field, name, [opened], [..opened.Constraints], syntax) : member;
     }
 
     /// <summary>
@@ -6297,6 +6378,10 @@ public sealed partial class Binder {
         return new(map);
     }
 
+    /// <summary>How many of a call's arguments leave out a label their parameter has.</summary>
+    static int LabelsLeftOut(FunctionSymbol function, ImmutableArray<string?> labels) =>
+        function.Parameters.Zip(labels).Count(static p => p.Second is null && p.First.Label != "_");
+
     /// <summary>
     ///     What a type says where <paramref name="inferrable" /> are to be
     ///     inferred: an argument bound for a parameter still open — <c>[]</c>
@@ -6396,20 +6481,21 @@ public sealed partial class Binder {
             .OfType<TypeParameterSymbol>()
             .Where(static o => o.OpenedFrom is not null)
             .ToList();
+        // A static member's own receiver, an 'any P.Type'.
+        if (call.Receiver is BoundConversion { ConversionKind: ConversionKind.Open, Type: MetatypeTypeSymbol { InstanceType: TypeParameterSymbol received } }) {
+            opened.Add(received);
+        }
+
         if (opened.Count == 0) {
             return call;
         }
 
         var name = resolved.FunctionKind == FunctionKind.Initializer ? resolved.ContainingSymbol!.Name : resolved.Name;
-        bool Mentions(TypeSymbol type, TypeParameterSymbol of) =>
-            !TypeSubstitution.ContainsError(type)
-            && TypeSubstitution.ContainsError(new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol> { [of] = ErrorTypeSymbol.Instance }).Apply(type));
-
         var ok = true;
         var protocols = new List<TypeSymbol>();
         foreach (var each in opened) {
             var parameter = each.OpenedFrom!;
-            foreach (var constraint in parameter.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c))) {
+            foreach (var constraint in each.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c))) {
                 if (constraint is NamedTypeSymbol { TypeKind: TypeKind.Protocol, IsConstructed: false, TypeParameters.IsEmpty: true } protocol) {
                     protocols.Add(protocol);
                     continue;
@@ -6460,10 +6546,16 @@ public sealed partial class Binder {
             }
         }
 
-        if (!ok) {
-            return new BoundError(syntax, call);
-        }
+        return ok ? OpenedResult(call, name, opened, protocols, syntax) : new BoundError(syntax, call);
+    }
 
+    /// <summary>Whether a type is made of another.</summary>
+    static bool Mentions(TypeSymbol type, TypeParameterSymbol of) =>
+        !TypeSubstitution.ContainsError(type)
+        && TypeSubstitution.ContainsError(new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol> { [of] = ErrorTypeSymbol.Instance }).Apply(type));
+
+    /// <summary>What a use of the types a call opened gives back: one of them erased to the existential of its protocols; S3163 for one mentioned any other way.</summary>
+    BoundExpression OpenedResult(BoundExpression call, string name, List<TypeParameterSymbol> opened, List<TypeSymbol> protocols, SyntaxNode syntax) {
         var result = call.Type;
         if (opened.Count == 1 && ReferenceEquals(result, opened[0])) {
             return new BoundConversion(syntax, Erased(), call, ConversionKind.OpenedErasure);
@@ -6752,6 +6844,20 @@ public sealed partial class Binder {
             // takes the one that only reads, which is written for reading.
             if (use == SubscriptUse.Read && ReadOnlyOfTwo(best, candidate) is { } reader) {
                 best = reader;
+                continue;
+            }
+
+            // 'find(x)' is 'find(_ x: T)', which takes no label, rather than
+            // 'find(at: T)', which lets it be left out.
+            if (LabelsLeftOut(candidate, labels) - LabelsLeftOut(best, labels) is not 0 and var fewer) {
+                if (fewer < 0) {
+                    best = candidate;
+                    bestCost = cost.Value;
+                    bestViews = views;
+                    ambiguous = false;
+                    tied.Clear();
+                }
+
                 continue;
             }
 
@@ -10252,6 +10358,16 @@ public sealed partial class Binder {
     ///     hold exactly one function.
     /// </remarks>
     BoundExpression Materialize(BoundFunctionGroup group, TypeSymbol? expected) {
+        // A static member of an 'any P.Type' is of a type opened for one call.
+        if (group.Receiver is BoundConversion { ConversionKind: ConversionKind.Open }) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAValue,
+                group.Syntax.Span,
+                $"'{group.Candidates[0].Name}' of a type known only at run time is not a value: call it here, or in a closure"
+            );
+            return new BoundError(group.Syntax, group.Receiver);
+        }
+
         var substitution = group.Substitution ?? TypeSubstitution.Empty;
 
         FunctionSymbol? chosen = null;

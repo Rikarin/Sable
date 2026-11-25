@@ -1,0 +1,40 @@
+module X509ParseBench
+
+// Certificates read, against .NET's X509CertificateLoader: one of a server's
+// with ten extensions and names, 5000 times, and whose it is.
+
+import Sable.Crypto
+import Sable.Crypto.X509
+
+let pem: String = """
+-----BEGIN CERTIFICATE-----
+MIICtDCCAlqgAwIBAgIECgsMDTAKBggqhkjOPQQDAjA7MQswCQYDVQQGEwJDSDEV
+MBMGA1UECgwMRXhhbXBsZSwgTHRkMRUwEwYDVQQDDAxJbnRlcm1lZGlhdGUwHhcN
+MjYwMTAxMDAwMDAwWhcNMzYwMTAxMDAwMDAwWjAaMRgwFgYDVQQDDA93d3cuZXhh
+bXBsZS5jb20wdjAQBgcqhkjOPQIBBgUrgQQAIgNiAATBHpJx7VFo2nM1SMny1rlg
+GKXOYRr9jU61jhMkzmxKoFxW37Bj2ISK/o+0UrLpKqe90pB02O3OLds9fo8KuC7A
+1a0aQHfORtp0vFRcFLfCM1O+wYJr/yp813mvWkvOT4CjggFOMIIBSjAJBgNVHRME
+AjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUH
+AwIwHQYDVR0OBBYEFM860kydDRFNLtnUZyUZ3S1Cq20uMB8GA1UdIwQYMBaAFMlG
+9acB+L8pCOVI/wT3vIrY+kbWMDQGCCsGAQUFBwEBBCgwJjAkBggrBgEFBQcwAYYY
+aHR0cDovL29jc3AuZXhhbXBsZS5jb20vMIGXBgNVHREEgY8wgYyCD3d3dy5leGFt
+cGxlLmNvbYISKi5hcHBzLmV4YW1wbGUuY29thwTAAAIBhxAgAQ24AAAAAAAAAAAA
+AAABgQ1hQGV4YW1wbGUuY29thhVodHRwczovL2V4YW1wbGUuY29tL3iIAyoDBKAO
+BgMqAwWgBwwFaGVsbG+kEjAQMQ4wDAYDVQQDDAVpbm5lcjAKBggqhkjOPQQDAgNI
+ADBFAiEAtBZuvCZ1YqkkHPpxYkx6rhgVBPwtQ+1Tx5ndWO6AszYCIFbjSNLnUG/U
+vZBm/LVl76Od66qgavZ2WI1kkQ9l0kxp
+-----END CERTIFICATE-----
+"""
+
+@main
+fn main() {
+    let der = try! PemBlock.parse(pem)[0].bytes
+    var count = 0
+    var round = 0
+    while round < 5000 {
+        let certificate = try! Certificate.parse(der: der)
+        count += "\(certificate.subject)".utf8.count + certificate.notAfter.year
+        round += 1
+    }
+    print("\(count)")
+}

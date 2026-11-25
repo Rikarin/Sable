@@ -1,11 +1,14 @@
 module Sable.Crypto
 
 /// Arithmetic modulo 2^255 - 19. An element is five U64s at an address, of
-/// 51 bits each and a little more: the products of 'multiply' are under
-/// 2^51 + 2^20 a limb, sums and differences of those under 2^54, and any
-/// under 2^55 may be multiplied, so no carry is taken but in products. A
-/// result may lie where an operand does, and nothing depends on the values
-/// but the results.
+/// 51 bits each and a little more: a product's are under 2^51 + 2^18, and no
+/// other takes a carry. Two may be multiplied where the one's bound times
+/// the other's is under 2^108, of which a limb of the product is at most 77
+/// times as much, and the last five times: so that its carry, and 19 times
+/// the last one's, fit in 64 bits. Edwards's sums and the ladder multiply
+/// nothing over 2^53.4 with anything over 2^54.2. What 'sub' and 'negate'
+/// take away is under 2^53 - 76, or what 'negate' gave. A result may lie
+/// where an operand does, and nothing depends on the values but the results.
 struct Field25519 {
     /// How many bytes an element has.
     static var size: Int => 40
@@ -32,24 +35,24 @@ struct Field25519 {
         }
     }
 
-    /// r = a - b, with eight times the modulus added so that no limb is
-    /// negative: b's are under 2^54 - 152.
+    /// r = a - b, with four times the modulus added so that no limb is
+    /// negative.
     @inline(always)
     unsafe static fn sub(_ r: Int, _ a: Int, _ b: Int) {
-        Wide.put(r, 0, Wide.limb(a, 0) &+ 0x3FFFFFFFFFFF68 &- Wide.limb(b, 0))
+        Wide.put(r, 0, Wide.limb(a, 0) &+ 0x1FFFFFFFFFFFB4 &- Wide.limb(b, 0))
         var i = 1
         while i < 5 {
-            Wide.put(r, i, Wide.limb(a, i) &+ 0x3FFFFFFFFFFFF8 &- Wide.limb(b, i))
+            Wide.put(r, i, Wide.limb(a, i) &+ 0x1FFFFFFFFFFFFC &- Wide.limb(b, i))
             i = i &+ 1
         }
     }
 
     @inline(always)
     unsafe static fn negate(_ r: Int, _ a: Int) {
-        Wide.put(r, 0, 0x3FFFFFFFFFFF68 &- Wide.limb(a, 0))
+        Wide.put(r, 0, 0x1FFFFFFFFFFFB4 &- Wide.limb(a, 0))
         var i = 1
         while i < 5 {
-            Wide.put(r, i, 0x3FFFFFFFFFFFF8 &- Wide.limb(a, i))
+            Wide.put(r, i, 0x1FFFFFFFFFFFFC &- Wide.limb(a, i))
             i = i &+ 1
         }
     }
@@ -99,19 +102,20 @@ struct Field25519 {
         carry(r, t0, t1, t2, t3, t4)
     }
 
-    /// The carries of a product's limbs, each under 2^117.
+    /// The carries of a product's limbs, each under 2^115 and the last under
+    /// 2^111: all five at once, and once more.
     @inline(always)
     unsafe static fn carry(_ r: Int, _ t0: U128, _ t1: U128, _ t2: U128, _ t3: U128, _ t4: U128) {
-        let s1 = t1 &+ (t0 >> 51)
-        let s2 = t2 &+ (s1 >> 51)
-        let s3 = t3 &+ (s2 >> 51)
-        let s4 = t4 &+ (s3 >> 51)
-        let low = wide(lowHalf(t0) & mask) &+ (s4 >> 51) &* 19
-        Wide.put(r, 0, lowHalf(low) & mask)
-        Wide.put(r, 1, (lowHalf(s1) & mask) &+ lowHalf(low >> 51))
-        Wide.put(r, 2, lowHalf(s2) & mask)
-        Wide.put(r, 3, lowHalf(s3) & mask)
-        Wide.put(r, 4, lowHalf(s4) & mask)
+        let s0 = (lowHalf(t0) & mask) &+ 19 &* lowHalf(t4 >> 51)
+        let s1 = (lowHalf(t1) & mask) &+ lowHalf(t0 >> 51)
+        let s2 = (lowHalf(t2) & mask) &+ lowHalf(t1 >> 51)
+        let s3 = (lowHalf(t3) & mask) &+ lowHalf(t2 >> 51)
+        let s4 = (lowHalf(t4) & mask) &+ lowHalf(t3 >> 51)
+        Wide.put(r, 0, (s0 & mask) &+ 19 &* (s4 >> 51))
+        Wide.put(r, 1, (s1 & mask) &+ (s0 >> 51))
+        Wide.put(r, 2, (s2 & mask) &+ (s1 >> 51))
+        Wide.put(r, 3, (s3 & mask) &+ (s2 >> 51))
+        Wide.put(r, 4, (s4 & mask) &+ (s3 >> 51))
     }
 
     /// r = a·k, k under 2^32.

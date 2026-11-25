@@ -10,6 +10,7 @@ python3 -I tools/conformance/crypto/run.py data/
 python3 -I tools/conformance/ciphers/run.py data/
 python3 -I tools/conformance/toml/run.py data/toml-test
 python3 -I tools/conformance/yaml/run.py data/yaml-test-suite
+python3 -I tools/conformance/json/run.py data/JSONTestSuite
 python3 -I tools/conformance/net/run.py data/iana
 python3 -I tools/conformance/random/run.py data/practrand/RNG_test --size 8GB
 ```
@@ -76,6 +77,17 @@ https://github.com/yaml/yaml-test-suite, the `data` branch at
 `6ad3d2c62885d82fc349026c136ef560838fdf3d`, MIT. `run.py` lists the files that
 are not as the suite has them, by design, under `KNOWN`: the same key twice in
 a mapping is read as events and makes no nodes.
+
+## json: JSONTestSuite
+
+https://github.com/nst/JSONTestSuite at
+`1ef36fa01286573e846ac449e8683f8833c5b26a`, MIT; `test_parsing` of it. Each
+document is read whole, in pieces of some sizes, as a tree and as a decoder,
+which must agree, and what is accepted is written, printed and read again.
+`run.py` lists under `DECISIONS` what is made of the `i_` documents, which RFC
+8259 leaves open: any number of its grammar is a token, though an F64 is not
+made of one past them all; a lone surrogate's escape, ill-formed UTF-8, UTF-16
+and a byte order mark are refused; arrays and objects nest 512 deep.
 
 ## net: IANA's registries
 

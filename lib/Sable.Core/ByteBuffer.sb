@@ -149,9 +149,7 @@ public struct ByteBuffer {
 
     /// Adds the bytes, as they are.
     public mutating fn write(bytes: U8[:]) {
-        for byte in bytes {
-            storage.append(byte)
-        }
+        storage.append(contentsOf: bytes)
     }
 
     /// Adds the text's UTF-8 encoding: one to four bytes a scalar, and no

@@ -1,0 +1,46 @@
+module JsonWriteBench
+
+import Sable.Serialize
+
+// JSON written a token at a time, compact and indented: keys, integers,
+// floats, strings with nothing to escape, and with something.
+
+fn write(_ indented: Bool, _ round: Int) throws(SerializeError) -> (Int, Int) {
+    var writer = JsonWriter(options: indented ? pretty(2) : compact())
+    writer.writeBeginArray()
+    for i in 0..<30000 {
+        writer.writeBeginObject()
+        writer.writeKey("id")
+        writer.writeInt(i + round)
+        writer.writeKey("name")
+        writer.writeString("item number seven")
+        writer.writeKey("price")
+        try writer.writeFloat(F64(i % 1000) + 0.25)
+        writer.writeKey("tags")
+        writer.writeBeginArray()
+        writer.writeString("a")
+        writer.writeString("b\n")
+        writer.writeBool(true)
+        writer.writeNull()
+        writer.writeEndArray()
+        writer.writeKey("note")
+        writer.writeString("a longer text, as a description is")
+        writer.writeEndObject()
+    }
+    writer.writeEndArray()
+    let bytes = writer.takeBytes()
+    return (bytes.count, Int(bytes[bytes.count / 2]))
+}
+
+@main
+fn main() throws(SerializeError) {
+    var total = 0
+    var middle = 0
+    for round in 0..<10 {
+        let (compactCount, compactByte) = try write(false, round)
+        let (prettyCount, prettyByte) = try write(true, round)
+        total += compactCount + prettyCount
+        middle += compactByte + prettyByte
+    }
+    print("\(total) \(middle)")
+}

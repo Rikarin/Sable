@@ -1,0 +1,557 @@
+module Sable.Serialize
+
+import Sable.IO
+import Sable.Text
+
+/// JSON written a token at a time, compact or indented, as its bytes: .NET's
+/// Utf8JsonWriter. It puts the commas, the colons and the indentation in;
+/// what is written where is the caller's, and a debug build traps where that
+/// is not JSON — a value in an object with no key, an end of what is not
+/// open. What the printer and Json.encode are over.
+///
+/// ```sable
+/// var writer = JsonWriter()
+/// writer.writeBeginObject()
+/// writer.writeKey("tags")
+/// writer.writeBeginArray()
+/// writer.writeString("a\"b")
+/// writer.writeInt(-3)
+/// writer.writeEndArray()
+/// writer.writeEndObject()
+/// assert(writer.toString() == "{\"tags\":[\"a\\\"b\",-3]}")
+/// ```
+///
+/// The bytes are kept until they are taken: at the end by `takeBytes` or
+/// `toString`, or, as often as there are enough of them, by `flush(to:)`,
+/// which writes them to a Writer, an AsyncWriter or a ByteBuffer.
+public struct JsonWriter {
+    // What is written is the first 'count' of these: the rest is room.
+    var buffer: U8[>..] = []
+    var count: Int = 0
+    let options: PrintOptions
+    let indent: Int
+    // How many arrays and objects are open, and for each of the innermost
+    // 64 at most a bit, set for an object; the others' words are in 'outer'.
+    var nesting: Int = 0
+    var kinds: U64 = 0
+    var outer: U64[>..] = []
+    // Whether a value would follow another in what is open, or at the root;
+    // and whether one follows a key.
+    var isAfterValue: Bool = false
+    var isAfterKey: Bool = false
+    var flushed: Int = 0
+
+    /// A writer of compact JSON, or as the options say (`sortKeys` aside,
+    /// which is the printer's).
+    public init(options: PrintOptions = compact()) {
+        self.options = options
+        self.indent = options.indent
+    }
+
+    /// A writer into the array's room, what it held dropped.
+    public init(reusing bytes: consuming U8[>..], options: PrintOptions = compact()) {
+        self.options = options
+        self.indent = options.indent
+        buffer = move bytes
+    }
+
+    // ---- What is written -----------------------------------------------------
+
+    /// How many bytes are written and not yet flushed: .NET's BytesPending.
+    public var pendingCount: Int => count
+
+    /// How many bytes have been written in all.
+    public var writtenCount: Int => flushed + count
+
+    /// How many arrays and objects are open.
+    public var depth: Int => nesting
+
+    /// The bytes written and not yet flushed.
+    public var pending: U8[:] => buffer[0..<count]
+
+    /// The JSON written and not yet flushed.
+    public fn toString() -> String {
+        unsafe {
+            return Runtime.stringFromValidUtf8(buffer[0..<count])
+        }
+    }
+
+    /// The JSON written and not yet flushed, taken out: the writer is left
+    /// with none, and may write another document. In a debug build, traps unless what was begun was ended.
+    public mutating fn takeBytes() -> U8[>..] {
+        assert(nesting == 0 && !isAfterKey, "JSON is taken with an array or an object not ended")
+        var taken = move buffer
+        buffer = []
+        taken.removeLast(taken.count - count)
+        flushed += count
+        count = 0
+        isAfterValue = false
+        return taken
+    }
+
+    /// Forgets what is written and not yet flushed and what is open, to
+    /// write another document with the same options and room.
+    public mutating fn reset() {
+        count = 0
+        flushed = 0
+        nesting = 0
+        kinds = 0
+        outer = []
+        isAfterValue = false
+        isAfterKey = false
+    }
+
+    /// Writes what is written and not yet flushed to the sink, which is not
+    /// itself flushed.
+    ///
+    /// ```sable
+    /// var sink = MemoryStream([])
+    /// var writer = JsonWriter()
+    /// writer.writeBeginArray()
+    /// for i in 0..<3 {
+    ///     writer.writeInt(i)
+    ///     if writer.pendingCount > 4096 {
+    ///         try! writer.flush(to: &sink)
+    ///     }
+    /// }
+    /// writer.writeEndArray()
+    /// try! writer.flush(to: &sink)
+    /// assert(writer.pendingCount == 0 && writer.writtenCount == 7)
+    /// ```
+    public mutating fn flush<W: Writer>(to sink: inout W) throws(IoError) {
+        try sink.write(buffer[0..<count])
+        flushed += count
+        count = 0
+    }
+
+    /// Writes what is written and not yet flushed to the sink, the task
+    /// suspended while it waits.
+    public mutating fn flush<W: AsyncWriter>(to sink: W) async throws(IoError) {
+        let bytes = buffer[0..<count]
+        flushed += count
+        count = 0
+        // The room goes with the bytes: the sink may keep them.
+        buffer = []
+        try await sink.write(bytes)
+    }
+
+    /// Adds what is written and not yet flushed to the buffer.
+    public mutating fn flush(to sink: inout ByteBuffer) {
+        sink.write(bytes: buffer[0..<count])
+        flushed += count
+        count = 0
+    }
+
+    // ---- Arrays and objects --------------------------------------------------
+
+    /// `{`: keys, each with its value, follow, up to `writeEndObject`.
+    public mutating fn writeBeginObject() {
+        begin(0x7B, 1)
+    }
+
+    /// `}`.
+    public mutating fn writeEndObject() {
+        assert(nesting > 0 && (kinds & 1) == 1 && !isAfterKey, "an object ended where none is open, or a key has no value")
+        end(0x7D)
+    }
+
+    /// `[`: values follow, up to `writeEndArray`.
+    public mutating fn writeBeginArray() {
+        begin(0x5B, 0)
+    }
+
+    /// `]`.
+    public mutating fn writeEndArray() {
+        assert(nesting > 0 && (kinds & 1) == 0, "an array ended where none is open")
+        end(0x5D)
+    }
+
+    mutating fn begin(_ bracket: U8, _ kind: U64) {
+        beforeValue(1)
+        put(bracket)
+        if nesting > 0 && (nesting & 63) == 0 {
+            outer.append(kinds)
+        }
+        kinds = kinds << 1 | kind
+        nesting += 1
+        isAfterValue = false
+    }
+
+    mutating fn end(_ bracket: U8) {
+        nesting -= 1
+        if nesting > 0 && (nesting & 63) == 0 {
+            kinds = outer.removeLast()
+        } else {
+            kinds = kinds >> 1
+        }
+        reserve(1)
+        if indent > 0 && isAfterValue {
+            newline(1)
+        }
+        put(bracket)
+        isAfterValue = true
+    }
+
+    /// A member's key: its value is written next.
+    public mutating fn writeKey(_ key: String) {
+        assert(nesting > 0 && (kinds & 1) == 1 && !isAfterKey, "a key is written outside an object, or after another")
+        let length = key.utf8Count
+        separate(length + 4)
+        quoted(key)
+        reserve(2)
+        put(0x3A)
+        if options.spaced {
+            put(0x20)
+        }
+        isAfterKey = true
+    }
+
+    // ---- Values --------------------------------------------------------------
+
+    /// A string, what must be escaped in it escaped.
+    public mutating fn writeString(_ value: String) {
+        beforeValue(value.utf8Count + 2)
+        quoted(value)
+        isAfterValue = true
+    }
+
+    /// A string, from its UTF-8; bytes that are not trap in a debug build.
+    public mutating fn writeString(utf8 value: U8[:]) {
+        assert(Runtime.validateUtf8(bytes: value) < 0, "a JSON string is written from bytes that are not UTF-8")
+        if options.asciiOnly {
+            unsafe {
+                writeString(Runtime.stringFromValidUtf8(value))
+            }
+            return
+        }
+        beforeValue(value.count + 2)
+        put(0x22)
+        var start = 0
+        while true {
+            let stop = jsonStringStop(value, start)
+            append(value, start, stop)
+            if stop == value.count {
+                break
+            }
+            escape(value[stop])
+            start = stop + 1
+        }
+        reserve(1)
+        put(0x22)
+        isAfterValue = true
+    }
+
+    /// An integer.
+    public mutating fn writeInt(_ value: Int) {
+        if value >= 0 {
+            writeUInt(U64(value))
+            return
+        }
+        beforeValue(1)
+        put(0x2D)
+        // Negated as unsigned, so that Int.min's magnitude fits.
+        digits(0 &- U64.truncating(value))
+        isAfterValue = true
+    }
+
+    /// An unsigned integer.
+    public mutating fn writeUInt(_ value: U64) {
+        beforeValue(20)
+        digits(value)
+        isAfterValue = true
+    }
+
+    /// A number, in the fewest digits that read back as it. JSON has no NaN
+    /// or infinity, which are refused.
+    public mutating fn writeFloat(_ value: F64) throws(SerializeError) {
+        if !value.isFinite {
+            throw SerializeError.InvalidValue(path: "$", reason: "JSON has no \(value)")
+        }
+        let text = "\(value)"
+        beforeValue(text.utf8Count)
+        append(text)
+        isAfterValue = true
+    }
+
+    /// `true` or `false`.
+    public mutating fn writeBool(_ value: Bool) {
+        beforeValue(8)
+        let word: U64 = value ? 0x65757274 : 0x65_736C_6166
+        buffer.writeU64(word, at: count, endian: .Little)
+        count += value ? 4 : 5
+        isAfterValue = true
+    }
+
+    /// `null`.
+    public mutating fn writeNull() {
+        beforeValue(4)
+        buffer.writeU32(0x6C6C_756E, at: count, endian: .Little)
+        count += 4
+        isAfterValue = true
+    }
+
+    /// Bytes, as a string of their base64 (RFC 4648, padded).
+    public mutating fn writeBase64(_ value: U8[:]) {
+        let text = Base64.encode(value)
+        beforeValue(text.utf8Count + 2)
+        put(0x22)
+        append(text)
+        put(0x22)
+        isAfterValue = true
+    }
+
+    /// JSON already written — a whole value, as it is: what is not one
+    /// traps in a debug build. A number of any length is written so.
+    ///
+    /// ```sable
+    /// var writer = JsonWriter()
+    /// writer.writeBeginArray()
+    /// writer.writeRaw("1.000000000000000000001")
+    /// writer.writeRaw("{\"a\":0}")
+    /// writer.writeEndArray()
+    /// assert(writer.toString() == "[1.000000000000000000001,{\"a\":0}]")
+    /// ```
+    public mutating fn writeRaw(_ json: String) {
+        assert((try? parse(json)) != none, "what is written as JSON is not")
+        beforeValue(json.utf8Count)
+        append(json)
+        isAfterValue = true
+    }
+
+    /// A comment, `/* … */`, before whatever comes next: JSON has none, so
+    /// only a relaxed parser reads what is written. The text must not have
+    /// the comment's end in it.
+    public mutating fn writeComment(_ text: String) {
+        precondition(!text.contains("*/"), "a JSON comment has its end in its text")
+        let length = text.utf8Count
+        reserve(length + 4)
+        if indent > 0 && nesting > 0 && !isAfterKey {
+            newline(length + 4)
+        }
+        append("/*")
+        append(text)
+        append("*/")
+    }
+
+    // ---- Bytes ---------------------------------------------------------------
+
+    // Room for that many bytes more, and for a word past them.
+    @inline(always)
+    mutating fn reserve(_ more: Int) {
+        if count + more + 16 > buffer.count {
+            grow(more)
+        }
+    }
+
+    @inline(never)
+    mutating fn grow(_ more: Int) {
+        let least = count + more + 16 - buffer.count
+        let twice = buffer.count > 240 ? buffer.count : 240
+        buffer.append(repeating: 0, count: least > twice ? least : twice)
+    }
+
+    // A byte there is room for.
+    @inline(always)
+    mutating fn put(_ byte: U8) {
+        buffer[count] = byte
+        count += 1
+    }
+
+    // What comes before a value of that many bytes, at most, which there is
+    // room for then: a comma after the one before it, and the indentation;
+    // nothing after a key.
+    @inline(always)
+    mutating fn beforeValue(_ length: Int) {
+        if isAfterKey {
+            isAfterKey = false
+            reserve(length)
+            return
+        }
+        assert(nesting == 0 || (kinds & 1) == 0, "a value is written in an object without its key")
+        assert(nesting > 0 || !isAfterValue, "a JSON document has a second value")
+        separate(length)
+    }
+
+    @inline(always)
+    mutating fn separate(_ length: Int) {
+        reserve(length + 2)
+        if isAfterValue {
+            put(0x2C)
+            if options.spaced && indent == 0 {
+                put(0x20)
+            }
+        }
+        if indent > 0 && nesting > 0 {
+            newline(length)
+        }
+    }
+
+    // A line's end and the indentation of the next, with room for that many
+    // bytes after it.
+    mutating fn newline(_ length: Int) {
+        let spaces = indent * nesting
+        reserve(length + spaces + 1)
+        put(0x0A)
+        var left = spaces
+        let eight: U64 = options.tabs ? 0x0909_0909_0909_0909 : 0x2020_2020_2020_2020
+        while left > 0 {
+            buffer.writeU64(eight, at: count, endian: .Little)
+            count += left < 8 ? left : 8
+            left -= 8
+        }
+    }
+
+    // A string's bytes, as they are.
+    mutating fn append(_ text: String) {
+        append(text, 0, text.utf8Count)
+    }
+
+    mutating fn append(_ text: String, _ start: Int, _ end: Int) {
+        reserve(end - start)
+        let bytes = text.utf8
+        var i = start
+        while i + 8 <= bytes.count && i < end {
+            buffer.writeU64(bytes.readU64(at: i, endian: .Little), at: count + i - start, endian: .Little)
+            i += 8
+        }
+        while i < end {
+            buffer[count + i - start] = bytes[i]
+            i += 1
+        }
+        count += end - start
+    }
+
+    mutating fn append(_ bytes: U8[:], _ start: Int, _ end: Int) {
+        reserve(end - start)
+        var i = start
+        while i + 16 <= end {
+            buffer.store(SIMD<U8, 16>.load(from: bytes, at: i), at: count + i - start)
+            i += 16
+        }
+        while i < end {
+            buffer[count + i - start] = bytes[i]
+            i += 1
+        }
+        count += end - start
+    }
+
+    // The digits of a number there is room for, the last first.
+    mutating fn digits(_ value: U64) {
+        var width = 1
+        var bound: U64 = 10
+        while width < 20 && value >= bound {
+            width += 1
+            bound = width < 20 ? bound &* 10 : bound
+        }
+        reserve(width)
+        var rest = value
+        var i = count + width - 1
+        while rest >= 10 {
+            let next = rest / 10
+            buffer[i] = U8.truncating(rest &- next &* 10) + 0x30
+            rest = next
+            i -= 1
+        }
+        buffer[i] = U8.truncating(rest) + 0x30
+        count += width
+    }
+
+    // A string, quoted: eight bytes looked at and written at once, as far as
+    // none of them is to be escaped. There is room for it and its quotes.
+    mutating fn quoted(_ text: String) {
+        put(0x22)
+        let length = text.utf8Count
+        let asciiOnly = options.asciiOnly
+        var i = 0
+        while i < length {
+            // The zeros past the string's end stop the word's plain bytes
+            // as what is to be escaped does.
+            let word = text.utf8Window(i)
+            let plain = jsonPlainBytes(word, asciiOnly)
+            buffer.writeU64(word, at: count, endian: .Little)
+            i += plain
+            count += plain
+            if plain < 8 && i < length {
+                i = escape(text, i)
+                reserve(length - i + 2)
+            }
+        }
+        put(0x22)
+    }
+
+    // The byte, or the scalar that starts at it, escaped, and where the next
+    // is. What is left of the string is given room by the caller.
+    @inline(never)
+    mutating fn escape(_ text: String, _ start: Int) -> Int {
+        let bytes = text.utf8
+        let lead = bytes[start]
+        if lead < 0x80 {
+            escape(lead)
+            return start + 1
+        }
+        let width = lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4
+        var code = Int(lead) & (0x7F >> width)
+        for i in start + 1..<start + width {
+            code = code << 6 | Int(bytes[i]) & 0x3F
+        }
+        if code < 0x10000 {
+            escapeUnit(code)
+        } else {
+            escapeUnit(0xD800 + ((code - 0x10000) >> 10))
+            escapeUnit(0xDC00 + (code & 0x3FF))
+        }
+        return start + width
+    }
+
+    mutating fn escape(_ byte: U8) {
+        let letter: U8 = match byte {
+            case 0x22 => 0x22
+            case 0x5C => 0x5C
+            case 0x08 => 0x62
+            case 0x0C => 0x66
+            case 0x0A => 0x6E
+            case 0x0D => 0x72
+            case 0x09 => 0x74
+            default   => 0
+        }
+        if letter == 0 {
+            escapeUnit(Int(byte))
+            return
+        }
+        reserve(2)
+        put(0x5C)
+        put(letter)
+    }
+
+    mutating fn escapeUnit(_ unit: Int) {
+        reserve(6)
+        put(0x5C)
+        put(0x75)
+        put(jsonHexDigit(unit >> 12))
+        put(jsonHexDigit(unit >> 8 & 15))
+        put(jsonHexDigit(unit >> 4 & 15))
+        put(jsonHexDigit(unit & 15))
+    }
+}
+
+fn jsonHexDigit(_ value: Int) -> U8 {
+    return U8.truncating(value < 10 ? 0x30 + value : 0x57 + value)
+}
+
+// How many of a word's bytes, from the least significant, a string has as
+// they are: 8 if all. A byte is marked by its top bit where it is below
+// 0x20, a quote or a backslash, and past ASCII or a DEL if those are to be
+// escaped too; a borrow marks others only above a byte that is marked.
+@inline(always)
+fn jsonPlainBytes(_ word: U64, _ asciiOnly: Bool) -> Int {
+    let ones: U64 = 0x0101_0101_0101_0101
+    let quotes = word ^ 0x2222_2222_2222_2222
+    let slashes = word ^ 0x5C5C_5C5C_5C5C_5C5C
+    var marks = (word &- ones &* 0x20) & ~word | (quotes &- ones) & ~quotes | (slashes &- ones) & ~slashes
+    if asciiOnly {
+        let deletes = word ^ 0x7F7F_7F7F_7F7F_7F7F
+        marks = marks | word | (deletes &- ones) & ~deletes
+    }
+    marks = marks & 0x8080_8080_8080_8080
+    return marks == 0 ? 8 : marks.trailingZeroCount >> 3
+}

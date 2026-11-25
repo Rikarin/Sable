@@ -917,10 +917,19 @@ Sable.Serialize     Serializable (encode(to:), static decode(from:)) for
                     against Encoder and Decoder, protocols on serde's data
                     model (null, Bool, integers, floats, strings, bytes,
                     sequences, maps, structs, union cases) that any format
-                    can conform to; JsonEncoder, which writes JSON as it
-                    goes, and JsonDecoder, over a one-pass index of the
-                    document, every error at its path ($.items[3].name);
-                    Json.encode/decode; JsonValue. TOML 1.0: Toml, TomlValue,
+                    can conform to. JSON (RFC 8259; JSONTestSuite passes
+                    whole): JsonReader, a token at a time with no tree, over
+                    text, bytes, a Reader, or an AsyncReader's bytes as they
+                    come (JsonReader.streaming: it stops anywhere in a token
+                    and goes on), comments, trailing commas, depth, a key
+                    twice and values one after another by ParseOptions,
+                    strings and white space scanned 16 bytes a step; and
+                    JsonWriter, compact or indented, flushed to a Writer, an
+                    AsyncWriter or a ByteBuffer, its structure checked in a
+                    debug build. On them JsonValue's parser and printer,
+                    JsonEncoder, and JsonDecoder over a one-pass index of
+                    the document, every error at its path ($.items[3].name);
+                    Json.encode/decode. TOML 1.0: Toml, TomlValue,
                     TomlEncoder and TomlDecoder, and TomlDocument, which
                     edits a text and keeps its comments and layout.
                     MessagePack: extensions and timestamps. CBOR (RFC 8949):

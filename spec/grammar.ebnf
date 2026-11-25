@@ -454,7 +454,9 @@ PrefixOp          = "-" | "+" | "!" | "~" | "&" | "^"
 
 TryExpr           = ( "try" | "try" "?" | "try" "!" ) UnaryExpr
                     [ "catch" ( Block | Expression ) ] ;
-                    (* the catch supplies an inline fallback value *)
+                    (* the catch supplies an inline fallback value; '!' is
+                       try's only with nothing between them: 'try !f()' is
+                       'try (!f())' *)
 
 PostfixExpr       = PrimaryExpr { PostfixOp } ;
 PostfixOp         = "." MemberName [ GenericArgs ]

@@ -1,0 +1,838 @@
+module Sable.Serialize
+
+import Sable.Text
+
+// What a JsonReader reads next.
+const jsonWantsValue = 0
+const jsonWantsItemOrEnd = 1
+const jsonWantsKeyOrEnd = 2
+const jsonWantsCommaOrEnd = 3
+const jsonWantsItem = 4
+const jsonWantsKey = 5
+const jsonWantsColon = 6
+const jsonWantsNothing = 7
+
+/// JSON read a token at a time, its whole grammar checked as it goes and
+/// nothing made of it that is not asked for: .NET's Utf8JsonReader. What
+/// the parser and Json.decode are over.
+///
+/// ```sable
+/// var reader = JsonReader("{\"id\": 7, \"tags\": [\"a\", \"b\"], \"rest\": {}}")
+/// var id = 0
+/// _ = try! reader.next()
+/// while try! reader.next() == .Key {
+///     if reader.valueEquals("id") {
+///         _ = try! reader.next()
+///         id = try! reader.int()
+///     } else {
+///         try! reader.skipValue()
+///     }
+/// }
+/// assert(id == 7 && reader.token == .EndObject)
+/// assert(try! reader.next() == none)
+/// ```
+///
+/// It reads a string or bytes that are all there, or bytes as they come:
+/// `streaming()` makes a reader that is given them by `append`, between
+/// tokens or within one, and by `next(from:)` takes them from a Reader or
+/// an AsyncReader itself. It keeps what it has not read, and no more.
+///
+/// Strings and keys must be well-formed UTF-8, and a surrogate's escape one
+/// of a pair, as RFC 8259 §8 has text be interoperable: what is not is an
+/// error at its token, so every string token has a value.
+public struct JsonReader {
+    // The bytes there are, read or not; and, of a streaming reader, the
+    // array they are in, which they are a view of.
+    var bytes: U8[:]
+    var buffer: U8[>..] = []
+    let options: ParseOptions
+    // Whether no more bytes will come.
+    var isFinal: Bool
+    // Whether the bytes are known to be UTF-8.
+    let isText: Bool
+    // Where the next token is looked for, and where the search for the end
+    // of one that is not all there goes on.
+    var at: Int = 0
+    var scanned: Int = 0
+    var wants: Int = jsonWantsValue
+    // How many arrays and objects are open, and for each of the innermost
+    // 64 at most a bit, set for an object; the others' words are in 'outer'.
+    var nesting: Int = 0
+    var kinds: U64 = 0
+    var outer: U64[>..] = []
+    // The depth a value being skipped is at, or -1.
+    var skipping: Int = -1
+    // The keys there have been of each open object, if they are asked for.
+    var keys: [String: Bool][>..] = []
+    // What the last token is of: a string's or a comment's between its ends.
+    var valueStart: Int = 0
+    var valueEnd: Int = 0
+    var last: JsonToken? = none
+    // Whether the string last scanned has escapes.
+    var isEscaped: Bool = false
+    // Of the bytes let go, how many there were, and the Position of the
+    // first one kept.
+    var dropped: Int = 0
+    var droppedTo: Position = Position(offset: 0, line: 1, column: 1)
+
+    // A reader of bytes, perhaps known to be UTF-8, or of none yet.
+    init(_ bytes: U8[:], _ options: ParseOptions, isFinal: Bool, isText: Bool) {
+        self.bytes = bytes
+        self.options = options
+        self.isFinal = isFinal
+        self.isText = isText
+    }
+
+    /// A reader of a document's bytes, read where they are.
+    public init(_ bytes: U8[:], options: ParseOptions = strict()) {
+        self.init(bytes, options, isFinal: true, isText: false)
+    }
+
+    /// A reader of a document's text.
+    public init(_ text: String, options: ParseOptions = strict()) {
+        var bytes: U8[>..] = []
+        bytes.append(utf8: text)
+        self.init(bytes, options, isFinal: true, isText: true)
+    }
+
+    /// A reader with no bytes yet: `append` gives it some, and `finish`
+    /// says they were the last.
+    ///
+    /// ```sable
+    /// var reader = JsonReader.streaming()
+    /// reader.append([0x5B, 0x31])
+    /// assert(try! reader.next() == .BeginArray)
+    /// assert(try! reader.next() == none)
+    /// reader.append([0x32, 0x5D])
+    /// assert(try! reader.next() == .Number)
+    /// assert(try! reader.int() == 12)
+    /// assert(try! reader.next() == .EndArray)
+    /// reader.finish()
+    /// assert(try! reader.next() == none && reader.isAtEnd)
+    /// ```
+    public static fn streaming(_ options: ParseOptions = strict()) -> JsonReader {
+        return JsonReader([], options, isFinal: false, isText: false)
+    }
+
+    // ---- Where it is ---------------------------------------------------------
+
+    /// The token last read; none before the first.
+    public var token: JsonToken? => last
+
+    /// How many arrays and objects are open: one counts itself from its
+    /// Begin on, and not at its End.
+    public var depth: Int => nesting
+
+    /// How many bytes have been read, from the document's first.
+    public var bytesRead: Int => dropped + at
+
+    /// Whether every byte has been read, and the document was whole.
+    public var isAtEnd: Bool => isFinal && nesting == 0 && at == bytes.count && (wants == jsonWantsNothing || options.allowMultipleValues)
+
+    /// Where the token last read starts. Worked out when asked, by counting
+    /// the lines there are before it.
+    public var position: Position => position(tokenStart)
+
+    // Where the last token starts, its quote or comment's slash included.
+    var tokenStart: Int {
+        get {
+            if last == .Key || last == .String {
+                return valueStart - 1
+            }
+            return last == .Comment ? valueStart - 2 : valueStart
+        }
+    }
+
+    // Where a byte is, as an error says it: scalars and lines counted, as a
+    // String's indices are.
+    fn position(_ end: Int) -> Position {
+        var offset = droppedTo.offset
+        var line = droppedTo.line
+        var column = droppedTo.column
+        for i in 0..<end {
+            let byte = bytes[i]
+            if (byte & 0xC0) == 0x80 {
+                continue
+            }
+            offset += 1
+            column += 1
+            if byte == 0x0A {
+                line += 1
+                column = 1
+            }
+        }
+        return Position(offset: offset, line: line, column: column)
+    }
+
+    // ---- Bytes as they come --------------------------------------------------
+
+    /// Gives a streaming reader the bytes that come next. The value of the
+    /// token last read is let go.
+    public mutating fn append(_ chunk: U8[:]) {
+        precondition(!isFinal, "a JsonReader that has all its bytes is given more")
+        if at > 0 {
+            droppedTo = position(at)
+            dropped += at
+            scanned = scanned > at ? scanned - at : 0
+        }
+        // The view let go, so that the array is this reader's own to change.
+        bytes = []
+        if at == buffer.count {
+            buffer.removeAll(keepingCapacity: true)
+        } else if at > 0 {
+            var rest: U8[>..] = []
+            rest.append(contentsOf: buffer[at..<buffer.count])
+            buffer = rest
+        }
+        at = 0
+        valueStart = 0
+        valueEnd = 0
+        buffer.append(contentsOf: chunk)
+        bytes = buffer
+    }
+
+    /// Tells a streaming reader it has been given every byte.
+    public mutating fn finish() {
+        isFinal = true
+    }
+
+    // ---- Tokens --------------------------------------------------------------
+
+    /// The next token. None at the end of the document; or, of a streaming
+    /// reader, when the bytes it has are the beginning of one.
+    public mutating fn next() throws(ParseError) -> JsonToken? {
+        while true {
+            var i = at
+            if i < bytes.count && bytes[i] <= 0x20 {
+                i = bytes[i] == 0x20 && i + 1 < bytes.count && bytes[i + 1] > 0x20 ? i + 1 : jsonSpaceEnd(bytes, i)
+                at = i
+            }
+            if i >= bytes.count {
+                return try ended()
+            }
+            let byte = bytes[i]
+            if wants == jsonWantsCommaOrEnd {
+                if byte == 0x2C {
+                    at = i + 1
+                    wants = (kinds & 1) != 0 ? jsonWantsKey : jsonWantsItem
+                    continue
+                }
+                if byte == ((kinds & 1) != 0 ? 0x7D : 0x5D) {
+                    return close(i, (kinds & 1) != 0 ? .EndObject : .EndArray)
+                }
+            } else if wants == jsonWantsKey || wants == jsonWantsKeyOrEnd {
+                if byte == 0x22 {
+                    return try key(i)
+                }
+                if byte == 0x7D && (wants == jsonWantsKeyOrEnd || options.allowTrailingCommas) {
+                    return close(i, .EndObject)
+                }
+            } else if wants == jsonWantsColon {
+                if byte == 0x3A {
+                    at = i + 1
+                    wants = jsonWantsValue
+                    continue
+                }
+            } else if wants != jsonWantsNothing {
+                if byte == 0x22 {
+                    return try string(i)
+                }
+                if byte == 0x2D || byte >= 0x30 && byte <= 0x39 {
+                    return try number(i)
+                }
+                if byte == 0x7B {
+                    return try begin(i, 1, .BeginObject, jsonWantsKeyOrEnd)
+                }
+                if byte == 0x5B {
+                    return try begin(i, 0, .BeginArray, jsonWantsItemOrEnd)
+                }
+                if byte == 0x5D && (wants == jsonWantsItemOrEnd || wants == jsonWantsItem && options.allowTrailingCommas) {
+                    return close(i, .EndArray)
+                }
+                if byte == 0x74 {
+                    return try word(i, "true", .True)
+                }
+                if byte == 0x66 {
+                    return try word(i, "false", .False)
+                }
+                if byte == 0x6E {
+                    return try word(i, "null", .Null)
+                }
+            }
+            // Nothing a token or a separator here starts with.
+            if byte == 0x2F && options.allowComments {
+                if try !comment(i) {
+                    return none
+                }
+                if options.reportComments {
+                    last = .Comment
+                    return last
+                }
+                continue
+            }
+            if wants == jsonWantsNothing && options.allowMultipleValues {
+                wants = jsonWantsValue
+                continue
+            }
+            if isCut(i) {
+                return none
+            }
+            throw unexpected()
+        }
+    }
+
+    // What is at 'at' is nothing that may be there.
+    fn unexpected() -> ParseError {
+        if wants == jsonWantsNothing {
+            return ParseError.TrailingText(at: position(at))
+        }
+        if wants == jsonWantsCommaOrEnd {
+            return unexpected(at, (kinds & 1) != 0 ? "',' or '}'" : "',' or ']'")
+        }
+        if wants == jsonWantsColon {
+            return unexpected(at, "':'")
+        }
+        return unexpected(at, wants == jsonWantsKey || wants == jsonWantsKeyOrEnd ? "a key" : "a value")
+    }
+
+    // What is at a byte is not what was expected there.
+    fn unexpected(_ index: Int, _ expected: String) -> ParseError {
+        if index >= bytes.count {
+            return ParseError.UnexpectedEnd(at: position(bytes.count), expected: expected)
+        }
+        return ParseError.UnexpectedCharacter(at: position(index), found: scalar(index), expected: expected)
+    }
+
+    // How many bytes the scalar that starts at a byte would have.
+    fn scalarWidth(_ index: Int) -> Int {
+        let lead = bytes[index]
+        return lead < 0xC0 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4
+    }
+
+    // Whether the bytes there are end in the scalar that starts at a byte,
+    // and more may come: what an error would say is not known yet.
+    fn isCut(_ index: Int) -> Bool {
+        return !isFinal && index + scalarWidth(index) > bytes.count
+    }
+
+    // The scalar that starts at a byte, U+FFFD where none does.
+    fn scalar(_ index: Int) -> Char {
+        let width = scalarWidth(index)
+        if index + width <= bytes.count && Runtime.validateUtf8(bytes: bytes[index..<index + width]) < 0 {
+            return bytes[index..<index + width].toString().at(0)
+        }
+        return Char.fromCodePoint(0xFFFD)!
+    }
+
+    // At the end of the bytes there are, between tokens.
+    fn ended() throws(ParseError) -> JsonToken? {
+        if !isFinal || wants == jsonWantsNothing || options.allowMultipleValues && nesting == 0 && last == none {
+            return none
+        }
+        throw unexpected()
+    }
+
+    // At the end of the bytes there are, in a token: an error if they are
+    // all, or else what the search for its end goes on from, given more.
+    mutating fn incomplete(_ from: Int, _ expected: String) throws(ParseError) {
+        if isFinal {
+            throw unexpected(bytes.count, expected)
+        }
+        scanned = from
+    }
+
+    mutating fn begin(_ start: Int, _ kind: U64, _ token: JsonToken, _ next: Int) throws(ParseError) -> JsonToken? {
+        if nesting >= options.maxDepth {
+            throw ParseError.TooDeep(at: position(start), limit: options.maxDepth)
+        }
+        if nesting > 0 && (nesting & 63) == 0 {
+            outer.append(kinds)
+        }
+        kinds = kinds << 1 | kind
+        nesting += 1
+        at = start + 1
+        valueStart = start
+        valueEnd = at
+        wants = next
+        last = token
+        if options.rejectDuplicateKeys && kind == 1 {
+            let noKeys: [String: Bool] = [:]
+            keys.append(noKeys)
+        }
+        return token
+    }
+
+    mutating fn close(_ start: Int, _ token: JsonToken) -> JsonToken? {
+        if options.rejectDuplicateKeys && token == .EndObject {
+            _ = keys.removeLast()
+        }
+        nesting -= 1
+        if nesting > 0 && (nesting & 63) == 0 {
+            kinds = outer.removeLast()
+        } else {
+            kinds = kinds >> 1
+        }
+        return ended(start, start + 1, token)
+    }
+
+    // A token from one byte to another that ends a value.
+    @inline(always)
+    mutating fn ended(_ start: Int, _ end: Int, _ token: JsonToken) -> JsonToken? {
+        at = end
+        valueStart = start
+        valueEnd = end
+        wants = nesting == 0 ? jsonWantsNothing : jsonWantsCommaOrEnd
+        last = token
+        return token
+    }
+
+    mutating fn word(_ start: Int, _ text: String, _ token: JsonToken) throws(ParseError) -> JsonToken? {
+        let letters = text.utf8
+        for i in 0..<letters.count {
+            if start + i >= bytes.count {
+                try incomplete(0, "'\(text)'")
+                return none
+            }
+            if bytes[start + i] != letters[i] {
+                if isCut(start + i) {
+                    return none
+                }
+                throw unexpected(start + i, "'\(text)'")
+            }
+        }
+        return ended(start, start + letters.count, token)
+    }
+
+    // RFC 8259's grammar, exactly: '-'? ('0' | [1-9][0-9]*) ('.' [0-9]+)?
+    // ([eE] [+-]? [0-9]+)?
+    mutating fn number(_ start: Int) throws(ParseError) -> JsonToken? {
+        if scanned > start {
+            // Not all there when it was last looked at, and perhaps not now.
+            while scanned < bytes.count && jsonIsNumeric(bytes[scanned]) {
+                scanned += 1
+            }
+            if scanned == bytes.count && !isFinal {
+                return none
+            }
+            scanned = 0
+        }
+        // Where it stops, or the fault's: what stops at the end of the bytes
+        // is not all there, unless they are all.
+        let count = bytes.count
+        var i = start
+        if bytes[i] == 0x2D {
+            i += 1
+        }
+        let digits = i
+        while i < count && bytes[i] >= 0x30 && bytes[i] <= 0x39 {
+            i += 1
+        }
+        if i > digits + 1 && bytes[digits] == 0x30 {
+            throw ParseError.InvalidNumber(at: position(start), reason: "a leading zero")
+        }
+        if i == digits && (i < count || isFinal) {
+            throw ParseError.InvalidNumber(at: position(start), reason: "no digits")
+        }
+        if i < count && bytes[i] == 0x2E {
+            i += 1
+            let fraction = i
+            while i < count && bytes[i] >= 0x30 && bytes[i] <= 0x39 {
+                i += 1
+            }
+            if i == fraction && (i < count || isFinal) {
+                throw ParseError.InvalidNumber(at: position(start), reason: "no digits after the point")
+            }
+        }
+        if i < count && (bytes[i] == 0x65 || bytes[i] == 0x45) {
+            i += 1
+            if i < count && (bytes[i] == 0x2B || bytes[i] == 0x2D) {
+                i += 1
+            }
+            let exponent = i
+            while i < count && bytes[i] >= 0x30 && bytes[i] <= 0x39 {
+                i += 1
+            }
+            if i == exponent && (i < count || isFinal) {
+                throw ParseError.InvalidNumber(at: position(start), reason: "no digits in the exponent")
+            }
+        }
+        if i == count && !isFinal {
+            scanned = i
+            return none
+        }
+        return ended(start, i, .Number)
+    }
+
+    mutating fn string(_ start: Int) throws(ParseError) -> JsonToken? {
+        if try !scanString(start) {
+            return none
+        }
+        at = valueEnd + 1
+        wants = nesting == 0 ? jsonWantsNothing : jsonWantsCommaOrEnd
+        last = .String
+        return last
+    }
+
+    mutating fn key(_ start: Int) throws(ParseError) -> JsonToken? {
+        if try !scanString(start) {
+            return none
+        }
+        at = valueEnd + 1
+        wants = jsonWantsColon
+        if at < bytes.count && bytes[at] == 0x3A {
+            at += 1
+            wants = jsonWantsValue
+        }
+        last = .Key
+        if options.rejectDuplicateKeys {
+            let name = text()
+            if keys[keys.count - 1][name] != none {
+                throw ParseError.DuplicateKey(at: position(start), key: name)
+            }
+            keys[keys.count - 1][name] = true
+        }
+        return last
+    }
+
+    // The string whose quote is at 'start': where it is, and whether it has
+    // escapes; or false if its end is not there yet.
+    @inline(always)
+    mutating fn scanString(_ start: Int) throws(ParseError) -> Bool {
+        if scanned <= start {
+            let end = jsonPlainEnd(bytes, start + 1)
+            isEscaped = false
+            if end < bytes.count && bytes[end] == 0x22 {
+                valueStart = start + 1
+                valueEnd = end
+                return true
+            }
+            scanned = end
+        }
+        return try scanPieces(start)
+    }
+
+    // The rest of a string, from 'scanned' on, where something that is not
+    // plain ASCII is.
+    @inline(never)
+    mutating fn scanPieces(_ start: Int) throws(ParseError) -> Bool {
+        while true {
+            let i = jsonStringStop(bytes, scanned)
+            if i >= bytes.count {
+                try incomplete(i, "the end of the string")
+                return false
+            }
+            let byte = bytes[i]
+            if byte == 0x22 {
+                try checkUtf8(start + 1, i)
+                valueStart = start + 1
+                valueEnd = i
+                scanned = 0
+                return true
+            }
+            if byte != 0x5C {
+                throw ParseError.ControlCharacter(at: position(i), code: Int(byte))
+            }
+            isEscaped = true
+            // Looked at again from its backslash on, if it is not all there.
+            scanned = i
+            let after = try escape(i)
+            if after < 0 {
+                return false
+            }
+            scanned = after
+        }
+    }
+
+    fn checkUtf8(_ start: Int, _ end: Int) throws(ParseError) {
+        if !isText {
+            let bad = Runtime.validateUtf8(bytes: bytes[start..<end])
+            if bad >= 0 {
+                throw ParseError.InvalidUnicode(at: position(start + bad), reason: "ill-formed UTF-8")
+            }
+        }
+    }
+
+    // Where the escape whose backslash is at 'start' ends, or -1 if it is
+    // not all there yet.
+    fn escape(_ start: Int) throws(ParseError) -> Int {
+        if start + 1 >= bytes.count {
+            return try escapeEnd("an escape")
+        }
+        if bytes[start + 1] != 0x75 {
+            if jsonEscapedByte(bytes[start + 1]) == 0 {
+                if isCut(start + 1) {
+                    return -1
+                }
+                throw ParseError.InvalidEscape(at: position(start), found: scalar(start + 1))
+            }
+            return start + 2
+        }
+        let high = try hex4(start + 2)
+        if high < 0 {
+            return -1
+        }
+        if high >= 0xDC00 && high <= 0xDFFF {
+            throw ParseError.InvalidUnicode(at: position(start), reason: "a low surrogate with no high one before it")
+        }
+        if high < 0xD800 || high > 0xDBFF {
+            return start + 6
+        }
+        if start + 6 >= bytes.count {
+            return try escapeEnd("a low surrogate")
+        }
+        if bytes[start + 6] != 0x5C {
+            throw ParseError.InvalidUnicode(at: position(start), reason: "a high surrogate with no low one after it")
+        }
+        if start + 7 >= bytes.count {
+            return try escapeEnd("'u' of a low surrogate")
+        }
+        if bytes[start + 7] != 0x75 {
+            if isCut(start + 7) {
+                return -1
+            }
+            throw unexpected(start + 7, "'u' of a low surrogate")
+        }
+        let low = try hex4(start + 8)
+        if low < 0 {
+            return -1
+        }
+        if low < 0xDC00 || low > 0xDFFF {
+            throw ParseError.InvalidUnicode(at: position(start), reason: "a high surrogate followed by something else")
+        }
+        return start + 12
+    }
+
+    // The number four hexadecimal digits write, or -1 if they are not all
+    // there yet.
+    fn hex4(_ start: Int) throws(ParseError) -> Int {
+        for i in start..<start + 4 {
+            if i >= bytes.count {
+                return try escapeEnd("a hex digit")
+            }
+            if jsonHexValue(bytes[i]) < 0 {
+                if isCut(i) {
+                    return -1
+                }
+                throw unexpected(i, "a hex digit")
+            }
+        }
+        return jsonHex4(bytes, start)
+    }
+
+    fn escapeEnd(_ expected: String) throws(ParseError) -> Int {
+        if isFinal {
+            throw unexpected(bytes.count, expected)
+        }
+        return -1
+    }
+
+    // Past the comment whose slash is at 'start'; false if its end is not
+    // there yet.
+    mutating fn comment(_ start: Int) throws(ParseError) -> Bool {
+        if start + 1 >= bytes.count {
+            try incomplete(0, "'/' or '*' after '/'")
+            return false
+        }
+        var end = scanned > start + 2 ? scanned : start + 2
+        if bytes[start + 1] == 0x2F {
+            while end < bytes.count && bytes[end] != 0x0A {
+                end += 1
+            }
+            if end == bytes.count && !isFinal {
+                scanned = end
+                return false
+            }
+            at = end
+        } else if bytes[start + 1] == 0x2A {
+            while end + 1 < bytes.count && (bytes[end] != 0x2A || bytes[end + 1] != 0x2F) {
+                end += 1
+            }
+            if end + 1 >= bytes.count {
+                // A '*' that is last may be half of the end.
+                try incomplete(end, "the end of the comment")
+                return false
+            }
+            at = end + 2
+        } else {
+            throw ParseError.UnexpectedCharacter(at: position(start), found: scalar(start), expected: "a comment")
+        }
+        try checkUtf8(start + 2, end)
+        scanned = 0
+        valueStart = start + 2
+        valueEnd = end
+        isEscaped = false
+        return true
+    }
+
+    /// Goes past the value the reader is at: a key's, or the whole of an
+    /// array or object at its Begin, its last token the one the reader is at
+    /// after. At another token, nothing is done. False if a streaming reader
+    /// has not all of the value yet: called again with more, it goes on.
+    @discardable
+    public mutating fn skipValue() throws(ParseError) -> Bool {
+        if skipping < 0 {
+            if last == .Key {
+                skipping = nesting
+            } else if last == .BeginObject || last == .BeginArray {
+                skipping = nesting - 1
+            } else {
+                return true
+            }
+        }
+        while nesting > skipping || wants == jsonWantsValue || wants == jsonWantsColon {
+            if try next() == none {
+                return false
+            }
+        }
+        skipping = -1
+        return true
+    }
+
+    // ---- The token's value ---------------------------------------------------
+
+    /// The token's bytes where they are in the document: a string's or a
+    /// key's between its quotes, its escapes as they are written; a number's
+    /// digits; a comment's text.
+    public var rawValue: U8[:] => bytes[valueStart..<valueEnd]
+
+    /// Whether the string or key has escapes, so is not its raw value.
+    public var hasEscapes: Bool => isEscaped && (last == .String || last == .Key)
+
+    // The string's value, escapes as what they stand for.
+    fn text() -> String {
+        if !isEscaped {
+            unsafe {
+                return Runtime.stringFromValidUtf8(bytes[valueStart..<valueEnd])
+            }
+        }
+        var written: U8[>..] = []
+        appendUnescapedJson(bytes, valueStart, valueEnd, to: &written)
+        unsafe {
+            return Runtime.stringFromValidUtf8(written)
+        }
+    }
+
+    fn expect(_ token: JsonToken, _ expected: String) throws(ParseError) {
+        if last != token {
+            throw unexpected(tokenStart, expected)
+        }
+    }
+
+    /// The value of a string or a key, or a comment's text.
+    public fn string() throws(ParseError) -> String {
+        if last != .Key && last != .Comment {
+            try expect(.String, "a string")
+        }
+        return text()
+    }
+
+    /// The UTF-8 of a string or a key added at the array's end, with no
+    /// String made of it.
+    ///
+    /// ```sable
+    /// var reader = JsonReader("\"a\\u00e9\"")
+    /// _ = try! reader.next()
+    /// var written: U8[>..] = []
+    /// try! reader.appendString(to: &written)
+    /// assert(written == [0x61, 0xC3, 0xA9])
+    /// ```
+    public fn appendString(to written: inout U8[>..]) throws(ParseError) {
+        if last != .Key {
+            try expect(.String, "a string")
+        }
+        if isEscaped {
+            appendUnescapedJson(bytes, valueStart, valueEnd, to: &written)
+        } else {
+            written.append(contentsOf: rawValue)
+        }
+    }
+
+    /// Whether the token is a string or a key whose value is the text. No
+    /// String is made to find out, unless it has escapes.
+    public fn valueEquals(_ text: String) -> Bool {
+        if last != .Key && last != .String {
+            return false
+        }
+        if isEscaped {
+            return self.text() == text
+        }
+        return jsonBytesEqual(bytes, valueStart, valueEnd, text)
+    }
+
+    /// The value of `true` or `false`.
+    public fn bool() throws(ParseError) -> Bool {
+        if last == .False {
+            return false
+        }
+        try expect(.True, "true or false")
+        return true
+    }
+
+    /// The value of a number that is an integer, with no fraction or
+    /// exponent, and fits.
+    public fn int() throws(ParseError) -> Int {
+        try expect(.Number, "a number")
+        let negative = bytes[valueStart] == 0x2D
+        var i = negative ? valueStart + 1 : valueStart
+        // Up to eighteen digits cannot overflow.
+        if valueEnd - i > 18 {
+            return try integer(Int.self)
+        }
+        var value = 0
+        while i < valueEnd {
+            let digit = Int(bytes[i]) - 0x30
+            if digit < 0 || digit > 9 {
+                throw ParseError.InvalidNumber(at: position, reason: "not an integer")
+            }
+            value = value &* 10 &+ digit
+            i += 1
+        }
+        return negative ? -value : value
+    }
+
+    /// The value of a number that is an integer, with no fraction or
+    /// exponent, and fits the type.
+    ///
+    /// ```sable
+    /// var reader = JsonReader("255")
+    /// _ = try! reader.next()
+    /// assert(try! reader.integer(U8.self) == 255)
+    /// ```
+    public fn integer<T: FixedWidthInteger>(_ type: T.Type) throws(ParseError) -> T {
+        try expect(.Number, "a number")
+        if let value = try? T.parse(utf8: rawValue, radix: 10) {
+            return value
+        }
+        for byte in rawValue {
+            if byte == 0x2E || byte == 0x65 || byte == 0x45 {
+                throw ParseError.InvalidNumber(at: position, reason: "not an integer")
+            }
+        }
+        throw ParseError.InvalidNumber(at: position, reason: "out of range")
+    }
+
+    /// The value of a number, rounded to the nearest F64; one past them all
+    /// is an error.
+    public fn float() throws(ParseError) -> F64 {
+        try expect(.Number, "a number")
+        let value = jsonFloat(bytes, valueStart, valueEnd)
+        if !value.isFinite {
+            throw ParseError.InvalidNumber(at: position, reason: "out of range")
+        }
+        return value
+    }
+
+    /// The bytes a string of base64 writes (RFC 4648).
+    public fn base64() throws(ParseError) -> U8[>..] {
+        try expect(.String, "a string")
+        guard let decoded = try? Base64.decode(text()) else {
+            throw unexpected(tokenStart, "base64")
+        }
+        return decoded
+    }
+}
+
+// A byte a number may have.
+fn jsonIsNumeric(_ byte: U8) -> Bool {
+    return byte >= 0x30 && byte <= 0x39 || byte == 0x2E || byte == 0x2B || byte == 0x2D || byte == 0x65 || byte == 0x45
+}

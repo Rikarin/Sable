@@ -1,0 +1,133 @@
+module JsonConformance
+
+// Answers what run.py asks of Sable.Serialize's JSON: the path of a document
+// a line, and for each "accept", or "refuse" and why. What differs between
+// the ways there are of reading it — all at once, in pieces of some sizes,
+// as a tree, as a type's decoder — or is not the same once it is written
+// and read again, answers that instead.
+
+import Sable.IO
+import Sable.Serialize
+import Sable.Text
+
+// Each token with its value, or the error, as a line.
+fn tokens(_ bytes: U8[>..]) -> String[>..] {
+    var lines: String[>..] = []
+    var reader = JsonReader(bytes)
+    do {
+        while let token = try reader.next() {
+            lines.append(try line(reader, token))
+        }
+        lines.append(reader.isAtEnd ? "end" : "not at the end")
+    } catch {
+        lines.append("error \(error.description())")
+    }
+    return lines
+}
+
+fn line(_ reader: JsonReader, _ token: JsonToken) throws(ParseError) -> String {
+    let place = "\(describePosition(reader.position)) \(reader.depth)"
+    if token == .String || token == .Key {
+        return "\(token) \(place) \(try reader.string())"
+    }
+    return "\(token) \(place) \(reader.rawValue.toString())"
+}
+
+// The same, given the bytes in pieces of that size.
+fn tokens(_ bytes: U8[>..], size: Int) -> String[>..] {
+    var lines: String[>..] = []
+    var reader = JsonReader.streaming()
+    var given = 0
+    do {
+        while true {
+            if let token = try reader.next() {
+                lines.append(try line(reader, token))
+            } else if reader.isAtEnd {
+                break
+            } else if given < bytes.count {
+                let end = given + size < bytes.count ? given + size : bytes.count
+                reader.append(bytes[given..<end])
+                given = end
+            } else {
+                reader.finish()
+            }
+        }
+        lines.append("end")
+    } catch {
+        lines.append("error \(error.description())")
+    }
+    return lines
+}
+
+// The document's tokens written by a JsonWriter.
+fn rewritten(_ bytes: U8[>..], _ options: PrintOptions) throws(ParseError) -> U8[>..] {
+    var reader = JsonReader(bytes)
+    var writer = JsonWriter(options: options)
+    while let token = try reader.next() {
+        match token {
+            case .BeginObject => writer.writeBeginObject()
+            case .EndObject   => writer.writeEndObject()
+            case .BeginArray  => writer.writeBeginArray()
+            case .EndArray    => writer.writeEndArray()
+            case .Key         => writer.writeKey(try reader.string())
+            case .String      => writer.writeString(try reader.string())
+            case .Number      => writer.writeRaw(reader.rawValue.toString())
+            case .True        => writer.writeBool(true)
+            case .False       => writer.writeBool(false)
+            default           => writer.writeNull()
+        }
+    }
+    return writer.takeBytes()
+}
+
+// The tokens without their places.
+fn values(_ bytes: U8[>..]) throws(ParseError) -> String[>..] {
+    var lines: String[>..] = []
+    var reader = JsonReader(bytes)
+    while let token = try reader.next() {
+        lines.append(token == .String || token == .Key ? "\(token) \(try reader.string())" : "\(token) \(reader.rawValue.toString())")
+    }
+    return lines
+}
+
+fn answer(_ bytes: U8[>..]) -> String {
+    let whole = tokens(bytes)
+    for size in [1, 2, 3, 7, 64] {
+        let pieces = tokens(bytes, size: size)
+        if pieces != whole {
+            return "differs in pieces of \(size): \(pieces[pieces.count - 1]) and \(whole[whole.count - 1])"
+        }
+    }
+    let refused = whole[whole.count - 1].hasPrefix("error")
+    let tree = try? parse(bytes: bytes)
+    let decoder = try? JsonDecoder.parse(bytes: bytes)
+    if (decoder == none) != refused {
+        return "differs as a decoder"
+    }
+    if refused {
+        return tree == none ? "refuse \(whole[whole.count - 1])" : "differs as a tree"
+    }
+    do {
+        for options in [compact(), pretty(3), PrintOptions(asciiOnly: true, spaced: true), PrintOptions(indent: 1, tabs: true)] {
+            if try values(bytes) != values(try rewritten(bytes, options)) {
+                return "differs when written"
+            }
+        }
+        if let value = tree {
+            if render(try parse(render(value))) != render(value) {
+                return "differs when printed"
+            }
+            return "accept"
+        }
+        return "accept, but not as a tree"
+    } catch {
+        return "differs when written: \(error.description())"
+    }
+}
+
+@main
+fn main() throws(IoError) {
+    while let path = Console.readLine() {
+        print(answer(try File.readBytes(path)).replacing("\n", with: " "))
+    }
+}

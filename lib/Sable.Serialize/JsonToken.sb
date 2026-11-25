@@ -1,0 +1,38 @@
+module Sable.Serialize
+
+/// What a JsonReader is at: a value, its start or its end, or an object
+/// member's key.
+///
+/// ```sable
+/// var reader = JsonReader("[true]")
+/// var tokens: JsonToken[>..] = []
+/// while let token = try! reader.next() {
+///     tokens.append(token)
+/// }
+/// assert(tokens == [.BeginArray, .True, .EndArray])
+/// ```
+@derive(Equatable, Debug)
+public enum JsonToken {
+    /// `{`: the object's keys and their values follow, up to its EndObject.
+    BeginObject
+    /// `}`.
+    EndObject
+    /// `[`: the array's elements follow, up to its EndArray.
+    BeginArray
+    /// `]`.
+    EndArray
+    /// A member's key: its value is next.
+    Key
+    /// A string.
+    String
+    /// A number.
+    Number
+    /// `true`.
+    True
+    /// `false`.
+    False
+    /// `null`.
+    Null
+    /// A comment, where the options ask for them.
+    Comment
+}

@@ -66,3 +66,17 @@ fn aCaptureListOnABraceClosure(_ n: Int) -> Int {
 fn anEscapingClosureOutlivesTheCall(_ n: Int) -> (Int) -> Int {
     return x => x + n
 }
+
+// A function's name is an argument like any other: one that leaves a
+// parameter with nothing is said to.
+fn applied(_ start: Int = 0, _ body: (Int) -> Int) -> Int {
+    return body(start)
+}
+
+fn increment(_ n: Int) -> Int {
+    return n + 1
+}
+
+fn aFunctionIsTakenInItsPlace() -> Int {
+    return applied(1, increment) + applied(increment)   //! S3007 'body' has no default
+}

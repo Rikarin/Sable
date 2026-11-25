@@ -6479,10 +6479,14 @@ public sealed partial class Binder {
         // type, and is no error.
         var argumentError = arguments.Any(static a => a is not BoundUnboundClosure && TypeSubstitution.ContainsError(a.Type));
 
+        // A function's name stands in with one too, until a candidate says
+        // which function type it is to be.
+        var unreported = argumentError && arguments.All(static a => a is BoundUnboundClosure or BoundFunctionGroup || !TypeSubstitution.ContainsError(a.Type));
+
         // Each rejected candidate keeps its reason, so the error can say what
         // was wrong rather than only that something was (docs/04 §1.2).
         if (best is null) {
-            if (argumentError) {
+            if (argumentError && !unreported) {
                 return null;
             }
 

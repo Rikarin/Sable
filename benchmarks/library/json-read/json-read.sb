@@ -1,0 +1,52 @@
+module JsonReadBench
+
+import Sable.Serialize
+
+// JSON's tokens, with no tree: a document of some megabytes, and the same
+// indented, read a token at a time, the numbers' values taken and the keys
+// looked at.
+
+fn read(_ bytes: U8[:]) throws(ParseError) -> (Int, Int, F64) {
+    var reader = JsonReader(bytes)
+    var tokens = 0
+    var sum = 0
+    var price = 0.0
+    var isPrice = false
+    while let token = try reader.next() {
+        tokens += 1
+        if token == .Key {
+            isPrice = reader.valueEquals("price")
+        } else if token == .Number {
+            if isPrice {
+                price += try reader.float()
+            } else {
+                sum += try reader.int()
+            }
+        } else if token == .String {
+            sum += reader.rawValue.count
+        }
+    }
+    return (tokens, sum, price)
+}
+
+fn document(_ inner: String) -> U8[>..] {
+    var parts: String[>..] = []
+    for i in 0..<30000 {
+        parts.append("\(inner){\(inner)\"id\":\(i),\(inner)\"name\":\"item number \(i)\",\(inner)\"price\":\(i % 1000).25,"
+            + "\(inner)\"tags\":[\(inner)\"a\",\(inner)\"b\\n\",\(inner)true,\(inner)null],\(inner)\"note\":\"a longer text, as a description is\"}")
+    }
+    var bytes: U8[>..] = []
+    bytes.append(utf8: "[" + parts.joined(separator: ",") + "]")
+    return bytes
+}
+
+@main
+fn main() throws(ParseError) {
+    let compact = document("")
+    let pretty = document("\n        ")
+    for _ in 0..<10 {
+        let (tokens, sum, price) = try read(compact)
+        let (others, sums, prices) = try read(pretty)
+        print("\(tokens + others) \(sum + sums) \(price + prices:.2f)")
+    }
+}

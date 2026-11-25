@@ -1,23 +1,40 @@
 module Sable.Serialize
 
+/// How JSON is laid out and escaped, by the printer or a JsonWriter.
+///
+/// ```sable
+/// var writer = JsonWriter(options: PrintOptions(asciiOnly: true, spaced: true))
+/// writer.writeBeginObject()
+/// writer.writeKey("é")
+/// writer.writeNull()
+/// writer.writeEndObject()
+/// assert(writer.toString() == "{\"\\u00e9\": null}")
+/// ```
 public struct PrintOptions {
-    // Spaces per level; zero writes everything on one line.
-    public var indent: Int
-    public var sortKeys: Bool
-    // Escape everything outside ASCII as '\uXXXX'.
-    public var asciiOnly: Bool
-    // A space after ':' and ',' in one-line output.
-    public var spaced: Bool
+    /// Spaces, or tabs, per level; zero writes everything on one line.
+    public var indent: Int = 0
+    /// Whether an object's members are put in the order of their keys, by
+    /// Unicode scalar: the printer's, as a writer has no later ones.
+    public var sortKeys: Bool = false
+    /// Whether everything outside ASCII is escaped, as `\uXXXX`.
+    public var asciiOnly: Bool = false
+    /// Whether a space follows `:`, and `,` in one-line output.
+    public var spaced: Bool = false
+    /// Whether lines are indented with tabs rather than spaces.
+    public var tabs: Bool = false
 }
 
+/// One line, with no spaces.
 public fn compact() -> PrintOptions {
-    return PrintOptions { indent: 0, sortKeys: false, asciiOnly: false, spaced: false }
+    return PrintOptions()
 }
 
+/// A line for each value, indented by that many spaces a level.
 public fn pretty(_ indent: Int) -> PrintOptions {
-    return PrintOptions { indent: indent, sortKeys: false, asciiOnly: false, spaced: true }
+    return PrintOptions(indent: indent, spaced: true)
 }
 
+/// One line of ASCII, with the keys in order: equal values print the same.
 public fn canonical() -> PrintOptions {
-    return PrintOptions { indent: 0, sortKeys: true, asciiOnly: true, spaced: false }
+    return PrintOptions(sortKeys: true, asciiOnly: true)
 }

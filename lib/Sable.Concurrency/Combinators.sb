@@ -31,7 +31,20 @@ union Raced<T> {
 /// } catch { assert(false) }
 /// ```
 public fn withTimeout<T: Sendable>(_ duration: Duration, _ body: @Sendable async () throws -> T) async throws -> T {
-    return try await withTimeout(duration, clock: MonotonicClock(), body)
+    // On this clock the runtime's own timer does: the body alone is a task.
+    let limited = await Task.limited(nanoseconds: duration.totalNanoseconds) { await outcome(of: body) }
+    guard let ended = limited else {
+        throw TimeoutError(duration)
+    }
+    return try ended.get()
+}
+
+fn outcome<T>(of body: async () throws -> T) async -> Outcome<T, any Error> {
+    do {
+        return .Ok(try await body())
+    } catch {
+        return .Err(error)
+    }
 }
 
 /// As `withTimeout(_:_:)`, the duration measured on the clock.

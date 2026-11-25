@@ -32,6 +32,7 @@ typedef struct SableThread {
     // alive is the one less the other, added up over the threads.
     int64_t allocations, gone_objects;
     int64_t frames_made, frame_chunks; // async frames (frames.c)
+    int64_t tasks_spawned;
     struct SableThread *next; // every thread's, the latest first
     int32_t index;            // how many were made before it
 } SableThread;
@@ -135,10 +136,15 @@ static SpinLock threads_lock;
 _Noreturn void sable_trap(const char *message);
 
 __attribute__((noinline)) static SableThread *make_thread(void) {
-    SableThread *thread = calloc(1, sizeof(SableThread));
-    if (thread == NULL) {
+    // On cache lines of its own: the thread writes it all the time, and what
+    // malloc puts beside it may be another's. It lasts as long as the program.
+    enum { LINE = 128 };
+    char *block = calloc(1, sizeof(SableThread) + 2 * LINE);
+    if (block == NULL) {
         sable_trap("out of memory");
     }
+
+    SableThread *thread = (SableThread *)(((uintptr_t)block + LINE - 1) & ~(uintptr_t)(LINE - 1));
 
     spin_lock(&threads_lock);
     thread->next = all_threads;

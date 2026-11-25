@@ -126,6 +126,28 @@ public final class WaitList {
         WaitList.wakeFirst(handle)
     }
 
+    /// Parks the running task until it is given a grant, or takes one given
+    /// while no task was parked: each 'grant()' ends one such park, the first
+    /// to park's first, whichever of the two comes before the other. A list
+    /// used so is parked in no other way.
+    ///
+    /// ```sable
+    /// let list = WaitList()
+    /// list.grant()
+    /// await list.parkForGrant()   // goes on at once
+    /// ```
+    public fn parkForGrant() async {
+        await Task.parkCancellably(handle, Int.min)
+    }
+
+    /// Ends one task's 'parkForGrant()', now or to come.
+    public fn grant() {
+        WaitList.giveGrant(handle)
+    }
+
+    @builtin("task_waitlist_grant")
+    static fn giveGrant(_ handle: Int)
+
     @builtin("task_waitlist_wake_one")
     static fn wakeFirst(_ handle: Int)
 

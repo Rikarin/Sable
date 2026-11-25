@@ -29,7 +29,7 @@ public sealed partial class SilInterpreter {
         /// <summary>The root frame, once the task has begun.</summary>
         public HeapObject? Frame;
 
-        public bool Done, Finishing, Cancelled, Sleeping, Queued;
+        public bool Done, Finishing, Cancelled, Sleeping, Queued, Timed, TimedWoken;
         public long Deadline, SleepTicket, Priority = MediumPriority, Escalated = MediumPriority;
 
         /// <summary>The task it waits for, which its escalation reaches.</summary>
@@ -120,6 +120,9 @@ public sealed partial class SilInterpreter {
 
     /// <summary>How many times each wait list has been woken: its ticket.</summary>
     readonly Dictionary<long, long> _waitListTickets = [];
+
+    /// <summary>How many grants each wait list holds, given while no task was parked to take one.</summary>
+    readonly Dictionary<long, long> _waitListGrants = [];
 
     // The sleepers, by deadline and then by when they began to sleep; a
     // ticket that is no longer the task's is one it has left (cancelled).
@@ -440,6 +443,24 @@ public sealed partial class SilInterpreter {
                 return true;
             }
 
+            case "task_timed_begin":
+                Current.TimedWoken = false;
+                return null;
+
+            case "task_timed_woken":
+                return Current.TimedWoken;
+
+            case "task_timed_end":
+                if (Current.Parent is { } waiting) {
+                    waiting.TimedWoken = true;
+                    if (waiting is { Timed: true, Sleeping: true }) {
+                        waiting.Sleeping = false;
+                        Enqueue(waiting);
+                    }
+                }
+
+                return null;
+
             case "task_spawn_cancelled":
                 _spawnCancelled = true;
                 return null;
@@ -464,6 +485,7 @@ public sealed partial class SilInterpreter {
 
                 _waitLists.Remove((long)operands[0]!);
                 _waitListTickets.Remove((long)operands[0]!);
+                _waitListGrants.Remove((long)operands[0]!);
                 return null;
 
             // No list is Task.settle()'s: until no other task can go on.
@@ -480,6 +502,17 @@ public sealed partial class SilInterpreter {
             case "async_park_cancellable": {
                 var handle = (long)operands[0]!;
                 var ticket = (long)operands[1]!;
+                // The least there is: for a grant, taken at once if one was given.
+                if (ticket == long.MinValue) {
+                    if (_waitListGrants.GetValueOrDefault(handle) is > 0 and var grants) {
+                        _waitListGrants[handle] = grants - 1;
+                        return false;
+                    }
+
+                    _waitLists[handle].Add(Current);
+                    return true;
+                }
+
                 // Under -1: one whose cancellation does not wake it, that much under -2.
                 var cancellable = ticket >= -1;
                 var since = cancellable ? ticket : -2 - ticket;
@@ -512,6 +545,20 @@ public sealed partial class SilInterpreter {
                 return null;
             }
 
+            case "task_waitlist_grant": {
+                var handle = (long)operands[0]!;
+                var list = _waitLists[handle];
+                if (list.Count > 0) {
+                    var parked = list[0];
+                    list.RemoveAt(0);
+                    Enqueue(parked);
+                } else {
+                    _waitListGrants[handle] = _waitListGrants.GetValueOrDefault(handle) + 1;
+                }
+
+                return null;
+            }
+
             case "task_waitlist_wake_one": {
                 var handle = (long)operands[0]!;
                 var list = _waitLists[handle];
@@ -531,12 +578,19 @@ public sealed partial class SilInterpreter {
 
             // A cancelled task does not sleep.
             case "async_sleep": {
+                // Under 0: for as long above it, or until a child's 'task_timed_end'.
                 var nanoseconds = (long)operands[0]!;
-                if (nanoseconds <= 0 || Current.Cancelled) {
+                var self = Current;
+                self.Timed = nanoseconds < 0;
+                nanoseconds = nanoseconds == long.MinValue ? long.MaxValue : Math.Abs(nanoseconds);
+                if (nanoseconds == 0 || self.Cancelled) {
                     return Yield();
                 }
 
-                var self = Current;
+                if (self is { Timed: true, TimedWoken: true }) {
+                    return false;
+                }
+
                 var now = Monotonic();
                 self.Deadline = nanoseconds > long.MaxValue - now ? long.MaxValue : now + nanoseconds;
                 self.Sleeping = true;

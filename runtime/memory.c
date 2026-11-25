@@ -63,8 +63,10 @@ _Static_assert(sizeof(Slab) <= SLAB_HEADER, "a slab's header fits before its fir
 
 // Each class's slabs with room, the one handing out blocks first, and the
 // lock its slabs are taken and given back under.
-static Slab *slabs_with_room[SMALL_CLASSES];
-static SpinLock class_locks[SMALL_CLASSES];
+static struct {
+    _Alignas(128) Slab *with_room; // a class's on cache lines of its own
+    SpinLock lock;
+} classes[SMALL_CLASSES];
 
 _Noreturn void sable_trap(const char *message);
 
@@ -87,12 +89,12 @@ static inline Slab *slab_of(void *block) {
 
 static void slab_list(Slab *slab, unsigned class) {
     slab->previous = NULL;
-    slab->next = slabs_with_room[class];
+    slab->next = classes[class].with_room;
     if (slab->next != NULL) {
         slab->next->previous = slab;
     }
 
-    slabs_with_room[class] = slab;
+    classes[class].with_room = slab;
     slab->listed = true;
 }
 
@@ -100,7 +102,7 @@ static void slab_unlist(Slab *slab, unsigned class) {
     if (slab->previous != NULL) {
         slab->previous->next = slab->next;
     } else {
-        slabs_with_room[class] = slab->next;
+        classes[class].with_room = slab->next;
     }
 
     if (slab->next != NULL) {
@@ -187,9 +189,9 @@ __attribute__((noinline)) static void cache_fill(BlockCache *cache, unsigned cla
     int64_t size = small_sizes[class];
     int wanted = CACHE_BATCH;
     void *head = cache->head;
-    spin_lock(&class_locks[class]);
+    spin_lock(&classes[class].lock);
     while (wanted > 0) {
-        Slab *slab = slabs_with_room[class];
+        Slab *slab = classes[class].with_room;
         if (slab == NULL) {
             slab = slab_new(class);
         }
@@ -232,14 +234,14 @@ __attribute__((noinline)) static void cache_fill(BlockCache *cache, unsigned cla
         }
     }
 
-    spin_unlock(&class_locks[class]);
+    spin_unlock(&classes[class].lock);
     cache->head = head;
     cache->count += CACHE_BATCH;
 }
 
 // The thread holds too many blocks of the class: a batch back to the slabs.
 __attribute__((noinline)) static void cache_drain(BlockCache *cache, unsigned class, int count) {
-    spin_lock(&class_locks[class]);
+    spin_lock(&classes[class].lock);
     // Those one after another that are one slab's go back to it at once: what
     // was freed together was, mostly, allocated together.
     void *block = cache->head;
@@ -261,7 +263,7 @@ __attribute__((noinline)) static void cache_drain(BlockCache *cache, unsigned cl
 
     cache->head = block;
     cache->count -= given;
-    spin_unlock(&class_locks[class]);
+    spin_unlock(&classes[class].lock);
 }
 
 static inline void *small_alloc(SableThread *thread, unsigned class) {

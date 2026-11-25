@@ -1,0 +1,51 @@
+module Negative.UninferredCases
+
+// A generic union's case whose payload says nothing of a parameter (#338),
+// as 99-uninferred-arguments.sb says of functions.
+
+union Res<T> {
+    Ok(xs: T[>..])
+    One(x: T)
+    Two(x: T?, y: T)
+    Make(f: () -> T)
+    Nothing
+
+    // In the union itself its parameters are types like any other.
+    fn emptied() -> Res<T> {
+        let a = Res.Nothing
+        return Res.Ok(xs: [])
+    }
+}
+
+union Pair<A, B> {
+    Left(a: A)
+    Both(a: A, b: B)
+}
+
+fn taken(_ r: Res<Int>) {
+}
+
+fn said() {
+    let a = Res.Ok(xs: []) //! S3022 cannot infer 'T' of 'Res' from 'Ok': '[]' alone does not say what its elements are
+    let b = Res.One(x: none) //! S3022 cannot infer 'T' of 'Res' from 'One': 'none' alone does not say
+    let c = Pair.Left(a: 3) //! S3022 cannot infer 'B' of 'Pair' from 'Left': give it a type, as in 'Pair<Int, Int>.Left'
+    let d = Res.Make(f: { none }) //! S3022 the closure does not say what it is
+    let e = Res.Ok(xs: [none]) //! S3022 cannot infer 'T' of 'Res'
+    let f = Res.One(x: nothing) //! S2002 no symbol named 'nothing'
+    let g = Res.Nothing //! S3022 cannot infer 'T' of 'Res' from 'Nothing'
+    taken(Res.Ok(xs: [])) //! S3022 cannot infer 'T' of 'Res'
+}
+
+// Said by something else, they are what it says.
+fn settled<T>(_ x: T) -> Res<T> {
+    let a: Res<Int> = Res.Ok(xs: [])
+    let b = Res.Two(x: none, y: 3)
+    let c = Res.Make(f: { 4 })
+    let d: Pair<Int, String> = Pair.Left(a: 3)
+    let e: Res<Int> = .Ok(xs: [])
+    let f: Res<Int>? = Res.Ok(xs: [])
+    let g = Res<Int>.Ok(xs: [])
+    let h: Res<Int> = c
+    let i: Res<Int> = Res.Nothing
+    return Res.Ok(xs: [])
+}

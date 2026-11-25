@@ -1678,6 +1678,16 @@ public sealed partial class Binder {
                 $"'{binding.Identifier.Text}' needs a type annotation: 'none' alone does not say what it is optional of"
             );
             type = ErrorTypeSymbol.Instance;
+        } else if (declaredType is null && initializer is BoundUnionCaseGroup { Type: NamedTypeSymbol { TypeArguments.IsEmpty: true, TypeParameters: [var open, ..] } union, UnionCase.Name: var @case }
+                   && !IsInScope(open)) {
+            // Nor can a generic union's case that carries nothing say what
+            // the union is of.
+            _diagnostics.Error(
+                ErrorCode.ERR_CannotInferTypeArgument,
+                initializer.Syntax.Span,
+                $"cannot infer '{open.Name}' of '{union.Name}' from '{@case}': give it a type, as in '{union.Name}<{string.Join(", ", union.TypeParameters.Select(static _ => "Int"))}>.{@case}'"
+            );
+            type = ErrorTypeSymbol.Instance;
         }
 
         var local = new LocalSymbol(binding.Identifier.Text, _containingSymbol, declaration, isMutable) {
@@ -5370,13 +5380,21 @@ public sealed partial class Binder {
                 }
             }
 
+            var parameters = union.TypeParameters;
             for (var i = 0; i < arguments.Length; i++) {
-                TypeSubstitution.Unify(unionCase.Payload[i].Type, arguments[i].Type, union.TypeParameters, map);
+                TypeSubstitution.Unify(unionCase.Payload[i].Type, Said(arguments[i].Type, parameters), parameters, map);
             }
 
-            if (map.Count == union.TypeParameters.Length) {
+            // In the union itself its parameters are types like any other.
+            if (map.Count < parameters.Length && !IsInScope(parameters[0])) {
+                if (!InferUnionCase(syntax, unionCase, union, map, ref arguments, syntaxes)) {
+                    return new BoundError(syntax, arguments.ToArray());
+                }
+            }
+
+            if (map.Count == parameters.Length) {
                 substitution = new(map);
-                union = union.Construct([..union.TypeParameters.Select(substitution.Apply)]);
+                union = union.Construct([..parameters.Select(substitution.Apply)]);
             }
         }
 
@@ -5413,6 +5431,77 @@ public sealed partial class Binder {
         }
 
         return new BoundUnionCaseConstruction(syntax, union ?? group.Type, unionCase, converted.ToImmutable());
+    }
+
+    /// <summary>
+    ///     What the arguments of a case that took their type from its payload,
+    ///     a closure or a literal, say of the union's parameters once bound:
+    ///     'Res.Make(f: { 4 })'. False, and reported (S3022), where nothing
+    ///     says what one of them is.
+    /// </summary>
+    bool InferUnionCase(
+        SyntaxNode syntax,
+        UnionCaseSymbol unionCase,
+        NamedTypeSymbol union,
+        Dictionary<TypeParameterSymbol, TypeSymbol> map,
+        ref ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<ExpressionSyntax> syntaxes
+    ) {
+        var parameters = union.TypeParameters;
+        var untold = new HashSet<BoundExpression>(ReferenceEqualityComparer.Instance);
+        var saved = _openTypeParameters;
+        for (var i = 0; i < arguments.Length && map.Count < parameters.Length; i++) {
+            if (arguments[i] is not BoundUnboundClosure) {
+                continue;
+            }
+
+            _openTypeParameters = [..parameters.Where(p => !map.ContainsKey(p))];
+            var payload = unionCase.Payload[i].Type;
+            var expected = new TypeSubstitution(map).Apply(payload);
+            var isLiteral = !IsFunctionSyntax(syntaxes[i]);
+            if (isLiteral && expected is not FunctionTypeSymbol) {
+                expected = Said(expected, parameters);
+            }
+
+            var reported = _diagnostics.Count + _diagnostics.SuppressedErrors;
+            var bound = BindExpression(syntaxes[i], expected);
+            if (_diagnostics.Count + _diagnostics.SuppressedErrors == reported && (isLiteral || GivesNone(bound))) {
+                untold.Add(bound);
+            }
+
+            arguments = arguments.SetItem(i, bound);
+            TypeSubstitution.Unify(payload, Said(bound.Type, parameters), parameters, map);
+        }
+
+        _openTypeParameters = saved;
+        if (map.Count == parameters.Length) {
+            return true;
+        }
+
+        // An argument that is an error has had it reported.
+        foreach (var argument in arguments) {
+            if (argument is not BoundUnboundClosure && TypeSubstitution.ContainsError(argument.Type) && !IsNone(argument) && !untold.Contains(argument)) {
+                return false;
+            }
+        }
+
+        foreach (var parameter in parameters) {
+            if (map.ContainsKey(parameter)) {
+                continue;
+            }
+
+            var why = $": give it a type, as in '{union.Name}<{string.Join(", ", parameters.Select(static _ => "Int"))}>.{unionCase.Name}'";
+            for (var i = 0; i < arguments.Length; i++) {
+                if (TypeSubstitution.Mentions(unionCase.Payload[i].Type, parameter) && WhyUnsaid(arguments[i], syntaxes[i], untold) is { } unsaid) {
+                    why = unsaid;
+                    break;
+                }
+            }
+
+            _diagnostics.Error(ErrorCode.ERR_CannotInferTypeArgument, syntax.Span, $"cannot infer '{parameter.Name}' of '{union.Name}' from '{unionCase.Name}'{why}");
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -5929,16 +6018,8 @@ public sealed partial class Binder {
                     continue;
                 }
 
-                if (IsNone(arguments[i])) {
-                    return ": 'none' alone does not say what it is optional of, so give it a type, as in 'let x: Int? = none'";
-                }
-
-                if (i < syntaxes.Length && Unparenthesised(syntaxes[i]) is ClosureExpressionSyntax or BraceClosureExpressionSyntax) {
-                    return ": the closure does not say what it is, so write its type, as in '{ (x: Int) -> Int? in ... }'";
-                }
-
-                if (untold.Contains(arguments[i])) {
-                    return $": '{syntaxes[i].ToString().Trim()}' alone does not say what its elements are, so give it a type, as in 'let xs: Int[>..] = []'";
+                if (WhyUnsaid(arguments[i], i < syntaxes.Length ? syntaxes[i] : null, untold) is { } why) {
+                    return why;
                 }
             }
 
@@ -6065,6 +6146,13 @@ public sealed partial class Binder {
             ? new BoundConversion(syntax, new OptionalTypeSymbol(result), made, ConversionKind.OptionalWrap)
             : made;
     }
+
+    /// <summary>What about an argument leaves the type of its parameter unsaid, and what to write.</summary>
+    static string? WhyUnsaid(BoundExpression argument, ExpressionSyntax? written, HashSet<BoundExpression> untold) =>
+        IsNone(argument) ? ": 'none' alone does not say what it is optional of, so give it a type, as in 'let x: Int? = none'"
+        : written is not null && Unparenthesised(written) is ClosureExpressionSyntax or BraceClosureExpressionSyntax ? ": the closure does not say what it is, so write its type, as in '{ (x: Int) -> Int? in ... }'"
+        : written is not null && untold.Contains(argument) ? $": '{written.ToString().Trim()}' alone does not say what its elements are, so give it a type, as in 'let xs: Int[>..] = []'"
+        : null;
 
     /// <summary>
     ///     The defaults being put into a call right now, outermost first, each

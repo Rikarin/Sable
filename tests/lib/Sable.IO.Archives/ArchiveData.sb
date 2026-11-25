@@ -61,8 +61,18 @@ public fn isTree(_ root: FilePath) throws(IoError) -> Bool {
         && (try File.read(root.appending("sub/caf\u{E9} \u{2603}.txt"))) == "text"
         && (try File.read(root.appending("\(name)/\(name)"))) == "far"
         && Directory.exists(root.appending("empty"))
-        && (try File.readLink(root.appending("sub/link"))).string?.replacing("\\", with: "/") == "../a.txt"
+        && keepsLink(root.appending("sub/link"))
         && keepsMode(try File.metadata(root.appending("a.txt")))
+}
+
+// Windows' own tar and unzip make a file, or nothing, of a link.
+fn keepsLink(_ path: FilePath) -> Bool {
+    let target = (try? File.readLink(path))?.string?.replacing("\\", with: "/")
+    #if os(windows)
+    return target == none || target == "../a.txt"
+    #else
+    return target == "../a.txt"
+    #endif
 }
 
 // Windows has no permissions but whether a file may be written.

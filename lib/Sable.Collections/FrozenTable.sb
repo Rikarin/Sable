@@ -131,6 +131,9 @@ struct FrozenTable<Key: Hashable> {
         if (Key.self as Type) == U16.self || (Key.self as Type) == I8.self || (Key.self as Type) == Char.self {
             return .Integer
         }
+        if (Key.self as Type) == U64.self || (Key.self as Type) == UInt.self {
+            return .Integer
+        }
         return .Other
     }
 
@@ -160,6 +163,13 @@ struct FrozenTable<Key: Hashable> {
         }
         if (Key.self as Type) == I8.self {
             return Int(key as! I8)
+        }
+        // Past an Int's range, the number of the same bits.
+        if (Key.self as Type) == U64.self {
+            return (key as! U64) unchecked as Int
+        }
+        if (Key.self as Type) == UInt.self {
+            return (key as! UInt) unchecked as Int
         }
         return (key as! Char).codePoint
     }

@@ -2,6 +2,7 @@ module GlobalizationCollatorTests
 
 import Sable.Globalization
 import Sable.Testing
+import Sable.Text
 
 fn inOrder(_ collator: Collator, _ texts: String[>..]) {
     var i = 1
@@ -114,4 +115,60 @@ fn aCollatorSortsAndCompares() {
     assert("\(czech.sortKey("a"):?)".hasPrefix("SortKey("))
     let places = [czech.sortKey("a"): 1]
     assert(places[czech.sortKey("a")]! == 1 && czech.sortKey("a").bytes.count > 3)
+}
+
+struct Dice {
+    var state: U64
+
+    mutating fn next(_ below: Int) -> Int {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return Int(state % U64(below))
+    }
+
+    /// Up to six letters of the alphabets whose characters are taken alone,
+    /// with marks, digits, spaces and others among them.
+    mutating fn text() -> String {
+        var made = ""
+        for _ in 0..<next(7) {
+            let code = match next(12) {
+                case 0 => 0x300 + next(0x70)
+                case 1 => 0xC0 + next(0x490)
+                case 2 => 0x30 + next(10)
+                case 3 => 0x20 + next(16)
+                case 4 => 0xE00 + next(0x60)
+                case 5 => 0x410 + next(0x40)
+                case 6 => "chlzsnygdjěř·ÅåäöøæœßİıñÑ".toArray()[next(25)].codePoint
+                case _ => (next(4) == 0 ? 0x41 : 0x61) + next(26)
+            }
+            if let c = Char.fromCodePoint(code) {
+                made += String.fromChar(c)
+            }
+        }
+        return made
+    }
+}
+
+// Decomposed, a letter with a mark is not taken alone, and a sort key is of
+// the whole text: three ways to the same order.
+@test
+fn textsAreOrderedAlikeHoweverTheyAreWritten() {
+    var dice = Dice { state: 0x9E3779B97F4A7C15 }
+    for tag in ["und", "sv", "cs", "hu", "da", "es-u-co-trad", "fr-CA", "ru", "el", "tr", "lt", "cy", "vi", "en-u-kn", "en-u-ka-shifted"] {
+        let collator = Collator(Locale.of(tag)!)
+        for round in 0..<150 {
+            let a = dice.text()
+            let b = round % 3 == 0 ? a + dice.text() : round % 3 == 1 ? a.uppercased() + dice.text() : dice.text()
+            let order = collator.compare(a, b)
+            let what = "\(tag) \(a:?) \(b:?)"
+            let x = collator.sortKey(a)
+            let y = collator.sortKey(b)
+            assert(order == (x < y ? Ordering.Less : y < x ? Ordering.Greater : Ordering.Equal), what)
+            let c = a.normalized(.NFD)
+            let d = b.normalized(.NFD)
+            assertEqual(collator.compare(a, c), Ordering.Equal)
+            assert(collator.compare(c, d) == order && collator.compare(a, d) == order && collator.compare(c, b) == order, what)
+        }
+    }
 }

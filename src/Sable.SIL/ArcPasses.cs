@@ -526,6 +526,11 @@ public sealed class ForwardCopies : ISilPass {
                         continue;
                     }
 
+                    if (block.Instructions[i] is StructInst made && TryTakeApart(function, block, made, uses)) {
+                        changed = true;
+                        break;
+                    }
+
                     if (block.Instructions[i] is not CopyValueInst copy) {
                         continue;
                     }
@@ -542,6 +547,39 @@ public sealed class ForwardCopies : ISilPass {
                 }
             }
         } while (changed);
+    }
+
+    /// <summary>
+    ///     A struct made only to be read and destroyed — a view of a string's
+    ///     bytes, for one of them — is the values it was made of: its fields
+    ///     are those, and each is destroyed where it was.
+    /// </summary>
+    static bool TryTakeApart(SilFunction function, SilBlock block, StructInst made, Uses uses) {
+        if (made.Type.IsTrivial || made.StructType is { Deinit: not null } or { IsInline: true }) {
+            return false;
+        }
+
+        var users = uses.Of(made);
+        if (users.Any(static u => u is not (StructExtractInst or DestroyValueInst { Uncounted: false })) || !users.Any(static u => u is DestroyValueInst)) {
+            return false;
+        }
+
+        foreach (var user in users) {
+            if (user is StructExtractInst extract) {
+                Uses.Replace(function, extract, made.Operands[extract.Field]);
+                extract.Block!.Instructions.Remove(extract);
+                continue;
+            }
+
+            var at = user.Block!.Instructions.IndexOf(user);
+            user.Block.Instructions.RemoveAt(at);
+            foreach (var field in made.Operands.Where(static f => !f.Type.IsTrivial)) {
+                user.Block.Instructions.Insert(at++, new DestroyValueInst(field) { Block = user.Block, Location = user.Location });
+            }
+        }
+
+        block.Instructions.Remove(made);
+        return true;
     }
 
     static bool TryBorrowedCopy(SilFunction function, SilBlock block, int index, CopyValueInst copy, Uses uses) {

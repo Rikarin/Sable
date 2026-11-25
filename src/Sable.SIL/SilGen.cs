@@ -3138,14 +3138,22 @@ public sealed partial class SilGen {
         var arguments = closure.Signature.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
         var context = entry.AddArgument(SilType.Object);
         var box = entry.Append(new UncheckedRefCastInst(context, BoxType(type.Parameters[0])));
-        var self = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(box, 0))));
+        var held = entry.Append(new RefElementAddrInst(box, 0));
+        // The caller keeps the context, which nothing writes, until this
+        // returns: the method borrows the receiver from it. An async one is
+        // awaited in a frame of its own.
+        var borrows = !type.Parameters[0].IsTrivial && !method.IsAsync;
+        SilInstruction self = borrows ? new LoadBorrowInst(held) : new LoadInst(held);
+        entry.Append(self);
         SilValue callee = dynamic
             ? entry.Append(new ClassMethodInst(self, VTableSlot(method), type))
             : entry.Append(new FunctionRefInst(name, type));
         SilValue[] all = [self, ..arguments];
 
         void Release(SilBlock block) {
-            if (!self.Type.IsTrivial) {
+            if (borrows) {
+                block.Append(new EndBorrowInst(self));
+            } else if (!self.Type.IsTrivial) {
                 block.Append(new DestroyValueInst(self));
             }
         }

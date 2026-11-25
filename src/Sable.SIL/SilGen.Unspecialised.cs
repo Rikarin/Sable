@@ -1943,7 +1943,8 @@ public sealed partial class SilGen {
         // A library's, compiled in its archive: called there, its body not
         // bound. An optimised build copies in the inlinable ones from the
         // library's interface, to specialise (LibraryInterface.LinkInlinable).
-        if (CompiledBy(symbol) is not null) {
+        // A specialised build's archive has what its own code called, if any.
+        if (_generics == GenericsMode.Unspecialised && CompiledBy(symbol) is { } library && library.Functions.ContainsKey(_names[symbol])) {
             _external[name] = () => type;
             return (name, type);
         }

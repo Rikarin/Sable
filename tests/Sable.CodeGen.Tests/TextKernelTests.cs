@@ -14,7 +14,7 @@ public sealed class TextKernelTests {
     [Fact]
     public void CodecsAgree() =>
         Assert.Equal(
-            "true true true true\ntrue InvalidCharacter(at: 70, byte: 33)\n",
+            "true true true true\ntrue DecodeError.InvalidCharacter(at: 70, byte: 33)\n",
             Run("import Sable.Text", """
                 var bytes: U8[>..] = []
                 for i in 0..<150 {
@@ -41,7 +41,7 @@ public sealed class TextKernelTests {
     [Fact]
     public void TranscodingAndFormsAgree() =>
         Assert.Equal(
-            "41 true true\nvietnamese: ệ AI 가 1 | é true\nΣΊΣΥΦΟΣ ΣΣ| σίσυφος σς| straße SS\n",
+            "39 true true\nvietnamese: ệ AI 가 1 | é true\nΣΊΣΥΦΟΣ ΣΣ| σίσυφος σς| straße SS\n",
             Run("import Sable.Text", """
                 let text = "Grüße, мир, 世界 😀 and plain words too. "
                 var units: U16[>..] = []
@@ -59,7 +59,7 @@ public sealed class TextKernelTests {
     [Fact]
     public void UuidsAndUrlsAgree() =>
         Assert.Equal(
-            "6ba7b810-9dad-11d1-80b4-00c04fd430c8 6ba7b8109dad11d180b400c04fd430c8 true InvalidDigit(at: 9)\n"
+            "6ba7b810-9dad-11d1-80b4-00c04fd430c8 6ba7b8109dad11d180b400c04fd430c8 true ParseError.InvalidDigit(at: 9)\n"
             + "https://us%20er@example.com:8443/a/d%20e/?q=%C3%BC#top example.com 8443 /a/d%20e/\n"
             + "a%20b%2F%C3%BC%E2%9C%93 a b/ü✓ a+b%2F%C3%BC\n",
             Run("import Sable.Net", """

@@ -7,31 +7,31 @@ import Sable.Net
 import Sable.Testing
 
 @test
-fn theLoopbackInterfaceIsThere() {
-    let all = try! NetworkInterface.all()
-    let loopback = all.first(where: { $0.isLoopback })!
+fn theLoopbackInterfaceIsThere() throws {
+    let all = try NetworkInterface.all()
+    let loopback = require(all.first(where: { $0.isLoopback }))
     expect(loopback.isUp && loopback.isRunning)
     expect(loopback.index > 0)
     expect((loopback.mtu ?? 1) > 0)
     expect(loopback.hardwareAddress == none || loopback.hardwareAddress! == [0, 0, 0, 0, 0, 0])
     expect(!loopback.isPointToPoint)
-    let address = loopback.addresses.first(where: { $0.address == IpAddress.v4Loopback })!
+    let address = require(loopback.addresses.first(where: { $0.address == IpAddress.v4Loopback }))
     assertEqual(address.network.toString(), "127.0.0.0/8")
 }
 
 @test
-fn eachInterfaceIsListedOnceAndItsLinkLocalAddressesAreItsOwn() {
-    let all = try! NetworkInterface.all()
+fn eachInterfaceIsListedOnceAndItsLinkLocalAddressesAreItsOwn() throws {
+    let all = try NetworkInterface.all()
     var names: [String: Bool] = [:]
     for one in all {
-        assert(names[one.name] == none, one.name)
+        expect(names[one.name] == none, one.name)
         names[one.name] = true
         if let hardware = one.hardwareAddress {
             assertEqual(hardware.count, 6)
         }
         for each in one.addresses {
-            assert(each.prefixLength >= 0 && each.prefixLength <= (each.address.isV4 ? 32 : 128))
-            assert(each.network.contains(each.address))
+            expect(each.prefixLength >= 0 && each.prefixLength <= (each.address.isV4 ? 32 : 128))
+            expect(each.network.contains(each.address))
             if each.address.isV6 && each.address.isLinkLocal {
                 assertEqual(Int(each.address.scope), one.index)
             }

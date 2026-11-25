@@ -266,11 +266,7 @@ fn aCancelledConnectStopsEveryAttempt() async {
 
 @test
 fn aPortThatIsNoneIsRefused() async {
-    var said = ""
-    do {
+    await expectThrows(saying: "'localhost:70000' was given something the system does not take") {
         _ = try await TcpStream.connect(host: "localhost", port: 70_000)
-    } catch {
-        said = error.description()
     }
-    assertEqual(said, "'localhost:70000' was given something the system does not take")
 }

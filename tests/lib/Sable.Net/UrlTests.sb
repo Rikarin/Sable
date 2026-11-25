@@ -5,24 +5,11 @@ module UrlTests
 // each URL parsed — against its base, if it has one — and every part
 // compared with what a browser gives; and the API around it.
 
+import NetSupport
 import Sable.IO
 import Sable.Net
 import Sable.Serialize
 import Sable.Testing
-
-fn urlDataFile(_ name: String) -> String {
-    var up = ""
-    var depth = 0
-    while depth < 8 {
-        let path = "\(up)tests/lib/Sable.Net/data/\(name)"
-        if File.exists(path) {
-            return path
-        }
-        up = up + "../"
-        depth += 1
-    }
-    return "tests/lib/Sable.Net/data/\(name)"
-}
 
 fn expected(_ entry: JsonValue, _ key: String) -> String? {
     if let value = field(entry, key) {
@@ -33,7 +20,7 @@ fn expected(_ entry: JsonValue, _ key: String) -> String? {
 
 @test
 fn everyCaseOfWptsUrlTestData() throws {
-    let data = try parse(bytes: try File.readBytes(urlDataFile("urltestdata.json")))
+    let data = try parse(bytes: try File.readBytes(dataFile("urltestdata.json")))
     var checked = 0
     var failures: String[>..] = []
     for entry in itemsOf(data) {
@@ -78,14 +65,9 @@ fn everyCaseOfWptsUrlTestData() throws {
             failures.append("\(input) against \(expected(entry, "base") ?? "none"): " + differences.joined(separator: ", "))
         }
     }
-    if !failures.isEmpty {
-        var i = 0
-        while i < failures.count && i < 60 {
-            print(failures[i])
-            i += 1
-        }
+    for failure in failures.prefix(60) {
+        recordFailure(failure)
     }
-    print("urltestdata.json: \(checked) cases, \(failures.count) failed")
     assertEqual(failures.count, 0)
     expect(checked > 800)
 }

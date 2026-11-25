@@ -3,45 +3,46 @@ module IpAddressTests
 // IpAddress (Sable.Net): run with
 //     tools/stdlib-coverage.sh Sable.Net
 
+import NetSupport
 import Sable.Net
 import Sable.Testing
-
-fn ip(_ text: String) -> IpAddress {
-    return try! IpAddress.parse(text)
-}
 
 @test
 fn anIpv4AddressIsFourDecimalNumbers() {
     assertEqual(ip("0.0.0.0"), IpAddress.v4Any)
     assertEqual(ip("255.255.255.255"), IpAddress.v4Broadcast)
     assertEqual(ip("192.0.2.10"), IpAddress(192, 0, 2, 10))
-    for text in ["", "1", "1.2", "1.2.3", "1.2.3.4.5", "1.2.3.", ".1.2.3", "1..2.3", "1.2.3.4 ", " 1.2.3.4", "+1.2.3.4", "-1.2.3.4", "1.2.3.4.",
-        "256.0.0.1", "1.2.3.999", "1.2.3.1000", "01.2.3.4", "1.2.3.00", "0x7f.0.0.1", "0177.0.0.1", "127.1", "2130706433", "1.2.3.4/8", "1.2.3.4:80",
-        "１.2.3.4", "1.2.3.a", "99999999999999999999.0.0.1"] {
-        assert((try? IpAddress.parse(text)) == none, text)
-    }
 }
 
-@test
-fn anIpv6AddressIsReadAsRfc4291HasIt() {
-    let cases: (String, String)[>..] = [
-        ("::", "::"), ("::1", "::1"), ("1::", "1::"), ("0:0:0:0:0:0:0:1", "::1"), ("2001:DB8::8:800:200C:417A", "2001:db8::8:800:200c:417a"),
-        ("2001:db8:0:0:0:0:2:1", "2001:db8::2:1"), ("2001:db8:0:1:1:1:1:1", "2001:db8:0:1:1:1:1:1"), ("2001:0:0:1:0:0:0:1", "2001:0:0:1::1"),
-        ("2001:db8:0:0:1:0:0:1", "2001:db8::1:0:0:1"), ("2001:db8:0000:0:1::1", "2001:db8::1:0:0:1"), ("1:2:3:4:5:6:7::", "1:2:3:4:5:6:7:0"),
-        ("::2:3:4:5:6:7:8", "0:2:3:4:5:6:7:8"), ("::ffff:192.0.2.1", "::ffff:192.0.2.1"), ("::ffff:c000:201", "::ffff:192.0.2.1"),
-        ("::FFFF:0:0", "::ffff:0.0.0.0"), ("64:ff9b::192.0.2.33", "64:ff9b::c000:221"), ("1:2:3:4:5:6:1.2.3.4", "1:2:3:4:5:6:102:304"),
-        ("::1.2.3.4", "::102:304"), ("fe80::1%7", "fe80::1%7"), ("0001::0abc", "1::abc")
-    ]
-    for (text, written) in cases {
-        assertEqual(ip(text).toString(), written)
-        assertEqual(ip(written), ip(text))
-        assertEqual(ip("\(ip(text))"), ip(text))
-    }
-    for text in [":", ":::", "1", "1:", ":1", "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "1:2:3:4:5:6:7:8::", "::1:2:3:4:5:6:7:8", "1::2::3", "12345::", "::g",
-        "[::1]", "::1]", "::1/64", "::1.2.3", "::1.2.3.256", "::01.2.3.4", "1:2:3:4:5:6:7:1.2.3.4", "1.2.3.4::", "::1.2.3.4:5", "::%", "::1%", "::1%4294967296",
-        "::1%1x", "::1%no-such-interface", "1:2:3:4:5:6:7:", "0x1::", "::1 ", "1::2:", "::1%1%2"] {
-        assert((try? IpAddress.parse(text)) == none, text)
-    }
+@test(arguments: ["", "1", "1.2", "1.2.3", "1.2.3.4.5", "1.2.3.", ".1.2.3", "1..2.3", "1.2.3.4 ", " 1.2.3.4", "+1.2.3.4", "-1.2.3.4", "1.2.3.4.",
+    "256.0.0.1", "1.2.3.999", "1.2.3.1000", "01.2.3.4", "1.2.3.00", "0x7f.0.0.1", "0177.0.0.1", "127.1", "2130706433", "1.2.3.4/8", "1.2.3.4:80",
+    "１.2.3.4", "1.2.3.a", "99999999999999999999.0.0.1"])
+fn textThatIsNoIpv4AddressIsRefused(_ text: String) {
+    expectThrows { _ = try IpAddress.parse(text) }
+}
+
+let ipv6Texts: (String, String)[>..] = [
+    ("::", "::"), ("::1", "::1"), ("1::", "1::"), ("0:0:0:0:0:0:0:1", "::1"), ("2001:DB8::8:800:200C:417A", "2001:db8::8:800:200c:417a"),
+    ("2001:db8:0:0:0:0:2:1", "2001:db8::2:1"), ("2001:db8:0:1:1:1:1:1", "2001:db8:0:1:1:1:1:1"), ("2001:0:0:1:0:0:0:1", "2001:0:0:1::1"),
+    ("2001:db8:0:0:1:0:0:1", "2001:db8::1:0:0:1"), ("2001:db8:0000:0:1::1", "2001:db8::1:0:0:1"), ("1:2:3:4:5:6:7::", "1:2:3:4:5:6:7:0"),
+    ("::2:3:4:5:6:7:8", "0:2:3:4:5:6:7:8"), ("::ffff:192.0.2.1", "::ffff:192.0.2.1"), ("::ffff:c000:201", "::ffff:192.0.2.1"),
+    ("::FFFF:0:0", "::ffff:0.0.0.0"), ("64:ff9b::192.0.2.33", "64:ff9b::c000:221"), ("1:2:3:4:5:6:1.2.3.4", "1:2:3:4:5:6:102:304"),
+    ("::1.2.3.4", "::102:304"), ("fe80::1%7", "fe80::1%7"), ("0001::0abc", "1::abc")
+]
+
+@test(arguments: ipv6Texts)
+fn anIpv6AddressIsReadAsRfc4291HasIt(_ text: String, _ written: String) {
+    let address = ip(text)
+    expect(address.toString() == written)
+    expect(ip(written) == address)
+    expect(ip("\(address)") == address)
+}
+
+@test(arguments: [":", ":::", "1", "1:", ":1", "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "1:2:3:4:5:6:7:8::", "::1:2:3:4:5:6:7:8", "1::2::3", "12345::", "::g",
+    "[::1]", "::1]", "::1/64", "::1.2.3", "::1.2.3.256", "::01.2.3.4", "1:2:3:4:5:6:7:1.2.3.4", "1.2.3.4::", "::1.2.3.4:5", "::%", "::1%", "::1%4294967296",
+    "::1%1x", "::1%no-such-interface", "1:2:3:4:5:6:7:", "0x1::", "::1 ", "1::2:", "::1%1%2"])
+fn textThatIsNoIpv6AddressIsRefused(_ text: String) {
+    expectThrows { _ = try IpAddress.parse(text) }
 }
 
 @test
@@ -94,9 +95,8 @@ fn aMappedAddressIsItsIpv4One() {
     expect(!ip("::fffe:1.2.3.4").isV4Mapped)
 }
 
-/// The text's kinds, as one word.
-fn kinds(_ text: String) -> String {
-    let a = ip(text)
+/// The address's kinds, as one text.
+fn kinds(_ a: IpAddress) -> String {
     var said = ""
     said += a.isUnspecified ? "unspecified " : ""
     said += a.isLoopback ? "loopback " : ""
@@ -113,41 +113,40 @@ fn kinds(_ text: String) -> String {
 }
 
 /// Both edges of each block of IANA's registries, and what is just outside.
-@test
-fn addressesAreClassifiedAsIanaHasThem() {
-    let cases: (String, String)[>..] = [
-        ("0.0.0.0", "unspecified "), ("0.255.255.255", ""), ("1.0.0.0", "global "), ("9.255.255.255", "global "), ("10.0.0.0", "private "),
-        ("10.255.255.255", "private "), ("11.0.0.0", "global "), ("100.63.255.255", "global "), ("100.64.0.0", "shared "), ("100.127.255.255", "shared "),
-        ("100.128.0.0", "global "), ("126.255.255.255", "global "), ("127.0.0.0", "loopback "), ("127.255.255.255", "loopback "), ("128.0.0.0", "global "),
-        ("169.253.255.255", "global "), ("169.254.0.0", "link "), ("169.254.169.254", "link "), ("169.254.255.255", "link "), ("169.255.0.0", "global "),
-        ("172.15.255.255", "global "), ("172.16.0.0", "private "), ("172.31.255.255", "private "), ("172.32.0.0", "global "), ("191.255.255.255", "global "),
-        ("192.0.0.0", ""), ("192.0.0.8", ""), ("192.0.0.9", "global "), ("192.0.0.10", "global "), ("192.0.0.11", ""), ("192.0.0.170", ""), ("192.0.0.255", ""),
-        ("192.0.1.0", "global "), ("192.0.2.0", "documentation "), ("192.0.2.255", "documentation "), ("192.0.3.0", "global "), ("192.31.196.1", "global "),
-        ("192.52.193.1", "global "), ("192.88.98.255", "global "), ("192.88.99.0", ""), ("192.88.99.2", ""), ("192.88.100.0", "global "),
-        ("192.167.255.255", "global "), ("192.168.0.0", "private "), ("192.168.255.255", "private "), ("192.169.0.0", "global "), ("192.175.48.1", "global "),
-        ("198.17.255.255", "global "), ("198.18.0.0", "benchmarking "), ("198.19.255.255", "benchmarking "), ("198.20.0.0", "global "),
-        ("198.51.99.255", "global "), ("198.51.100.0", "documentation "), ("198.51.101.0", "global "), ("203.0.112.255", "global "),
-        ("203.0.113.0", "documentation "), ("203.0.114.0", "global "), ("223.255.255.255", "global "), ("224.0.0.0", "multicast "), ("239.255.255.255", "multicast "),
-        ("240.0.0.0", "reserved "), ("255.255.255.254", "reserved "), ("255.255.255.255", "broadcast "),
-        ("::", "unspecified "), ("::1", "loopback "), ("::2", ""), ("::7f00:1", ""), ("::ffff:0:7f00:1", ""), ("64:ff9b::808:808", "global "),
-        ("64:ff9b::a00:1", ""), ("64:ff9b::7f00:1", ""), ("64:ff9b::a9fe:a9fe", ""), ("64:ff9b:1::808:808", ""), ("64:ff9b::1:808:808", ""), ("100::1", ""),
-        ("100:0:0:1::1", ""), ("1fff:ffff::", ""), ("2000::", "global "), ("2000:ffff::", "global "), ("2001::1", ""), ("2001:0:4136:e378::1", ""),
-        ("2001:1::", ""), ("2001:1::1", "global "), ("2001:1::2", "global "), ("2001:1::3", "global "), ("2001:1::4", ""), ("2001:2::1", "benchmarking "),
-        ("2001:2:1::1", ""), ("2001:3::1", "global "), ("2001:4:112::1", "global "), ("2001:4:113::1", ""), ("2001:10::1", ""), ("2001:20::1", "global "),
-        ("2001:2f:ffff::1", "global "), ("2001:30::1", "global "), ("2001:3f::1", "global "), ("2001:40::1", ""), ("2001:1ff:ffff::", ""), ("2001:200::", "global "),
-        ("2001:db7:ffff::", "global "), ("2001:db8::", "documentation "), ("2001:db8:ffff::", "documentation "), ("2001:db9::", "global "), ("2002:7f00:1::", ""),
-        ("2002:808:808::1", ""), ("2003::", "global "), ("2620:4f:8000::1", "global "), ("3ffe:ffff::", "global "), ("3fff::", "documentation "),
-        ("3fff:fff:ffff::", "documentation "), ("3fff:1000::", "global "), ("3fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "global "), ("4000::", ""), ("5f00::1", ""),
-        ("fbff::", ""), ("fc00::", "private "), ("fdff:ffff::", "private "), ("fe00::", ""), ("fe80::1", "link "), ("febf::1", "link "), ("fec0::1", ""),
-        ("ff00::", "multicast "), ("ff02::1", "multicast "), ("ffff:ffff::", "multicast ")
-    ]
-    for (text, kind) in cases {
-        assertEqual("\(text) \(kinds(text))", "\(text) \(kind)")
-        let address = ip(text)
-        if address.isV4 {
-            // Mapped, it goes to the same place.
-            assertEqual("\(text) \(kinds(address.mappedToV6.toString()))", "\(text) \(kind)")
-        }
+let ianaKinds: (String, String)[>..] = [
+    ("0.0.0.0", "unspecified "), ("0.255.255.255", ""), ("1.0.0.0", "global "), ("9.255.255.255", "global "), ("10.0.0.0", "private "),
+    ("10.255.255.255", "private "), ("11.0.0.0", "global "), ("100.63.255.255", "global "), ("100.64.0.0", "shared "), ("100.127.255.255", "shared "),
+    ("100.128.0.0", "global "), ("126.255.255.255", "global "), ("127.0.0.0", "loopback "), ("127.255.255.255", "loopback "), ("128.0.0.0", "global "),
+    ("169.253.255.255", "global "), ("169.254.0.0", "link "), ("169.254.169.254", "link "), ("169.254.255.255", "link "), ("169.255.0.0", "global "),
+    ("172.15.255.255", "global "), ("172.16.0.0", "private "), ("172.31.255.255", "private "), ("172.32.0.0", "global "), ("191.255.255.255", "global "),
+    ("192.0.0.0", ""), ("192.0.0.8", ""), ("192.0.0.9", "global "), ("192.0.0.10", "global "), ("192.0.0.11", ""), ("192.0.0.170", ""), ("192.0.0.255", ""),
+    ("192.0.1.0", "global "), ("192.0.2.0", "documentation "), ("192.0.2.255", "documentation "), ("192.0.3.0", "global "), ("192.31.196.1", "global "),
+    ("192.52.193.1", "global "), ("192.88.98.255", "global "), ("192.88.99.0", ""), ("192.88.99.2", ""), ("192.88.100.0", "global "),
+    ("192.167.255.255", "global "), ("192.168.0.0", "private "), ("192.168.255.255", "private "), ("192.169.0.0", "global "), ("192.175.48.1", "global "),
+    ("198.17.255.255", "global "), ("198.18.0.0", "benchmarking "), ("198.19.255.255", "benchmarking "), ("198.20.0.0", "global "),
+    ("198.51.99.255", "global "), ("198.51.100.0", "documentation "), ("198.51.101.0", "global "), ("203.0.112.255", "global "),
+    ("203.0.113.0", "documentation "), ("203.0.114.0", "global "), ("223.255.255.255", "global "), ("224.0.0.0", "multicast "), ("239.255.255.255", "multicast "),
+    ("240.0.0.0", "reserved "), ("255.255.255.254", "reserved "), ("255.255.255.255", "broadcast "),
+    ("::", "unspecified "), ("::1", "loopback "), ("::2", ""), ("::7f00:1", ""), ("::ffff:0:7f00:1", ""), ("64:ff9b::808:808", "global "),
+    ("64:ff9b::a00:1", ""), ("64:ff9b::7f00:1", ""), ("64:ff9b::a9fe:a9fe", ""), ("64:ff9b:1::808:808", ""), ("64:ff9b::1:808:808", ""), ("100::1", ""),
+    ("100:0:0:1::1", ""), ("1fff:ffff::", ""), ("2000::", "global "), ("2000:ffff::", "global "), ("2001::1", ""), ("2001:0:4136:e378::1", ""),
+    ("2001:1::", ""), ("2001:1::1", "global "), ("2001:1::2", "global "), ("2001:1::3", "global "), ("2001:1::4", ""), ("2001:2::1", "benchmarking "),
+    ("2001:2:1::1", ""), ("2001:3::1", "global "), ("2001:4:112::1", "global "), ("2001:4:113::1", ""), ("2001:10::1", ""), ("2001:20::1", "global "),
+    ("2001:2f:ffff::1", "global "), ("2001:30::1", "global "), ("2001:3f::1", "global "), ("2001:40::1", ""), ("2001:1ff:ffff::", ""), ("2001:200::", "global "),
+    ("2001:db7:ffff::", "global "), ("2001:db8::", "documentation "), ("2001:db8:ffff::", "documentation "), ("2001:db9::", "global "), ("2002:7f00:1::", ""),
+    ("2002:808:808::1", ""), ("2003::", "global "), ("2620:4f:8000::1", "global "), ("3ffe:ffff::", "global "), ("3fff::", "documentation "),
+    ("3fff:fff:ffff::", "documentation "), ("3fff:1000::", "global "), ("3fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "global "), ("4000::", ""), ("5f00::1", ""),
+    ("fbff::", ""), ("fc00::", "private "), ("fdff:ffff::", "private "), ("fe00::", ""), ("fe80::1", "link "), ("febf::1", "link "), ("fec0::1", ""),
+    ("ff00::", "multicast "), ("ff02::1", "multicast "), ("ffff:ffff::", "multicast ")
+]
+
+@test(arguments: ianaKinds)
+fn addressesAreClassifiedAsIanaHasThem(_ text: String, _ kind: String) {
+    let address = ip(text)
+    expect(kinds(address) == kind)
+    if address.isV4 {
+        // Mapped, it goes to the same place.
+        expect(kinds(address.mappedToV6) == kind)
     }
 }
 
@@ -158,25 +157,25 @@ fn anAddressIsFormattedAndPadded() {
 }
 
 @test
-fn everyAddressIsReadBackAsWritten() {
-    var random = SeededRandomNumberGenerator(seed: 62)
-    for i in 0..<2000 {
-        let words = [random.next(), random.next(), random.next()]
-        // Many zero pieces, for '::' to stand for.
+fn everyIpv4AddressIsReadBackAsWritten() {
+    forAll(Gen.number(in: U32.min...U32.max), cases: 2000) { (bits: U32) in
+        let address = IpAddress(v4: bits)
+        expect(ip(address.toString()) == address)
+    }
+}
+
+@test
+fn everyIpv6AddressIsReadBackAsWritten() {
+    // Many zero pieces, for '::' to stand for.
+    let piece: Gen<U64> = Gen<U64>.oneOf([Gen<U64>.always(U64(0)), Gen<U64>.number(in: U64(0)...U64(0xFFFF))])
+    forAll(piece.array(count: 8...8), Gen<U32>.number(in: U32(0)...U32(4)), cases: 2000) { (pieces: U64[>..], scope: U32) in
         var high: U64 = 0
         var low: U64 = 0
-        for piece in 0..<4 {
-            let at = U64(16 * piece)
-            if (words[2] >> at & 1) == 0 {
-                high = high | (words[0] & 0xFFFF << at)
-            }
-            if (words[2] >> at & 2) == 0 {
-                low = low | (words[1] & 0xFFFF << at)
-            }
+        for i in 0..<4 {
+            high = (high << 16) | pieces[i]
+            low = (low << 16) | pieces[4 + i]
         }
-        let six = IpAddress(high: high, low: low, scope: U32(i % 5))
-        assertEqual(ip(six.toString()), six)
-        let four = IpAddress(v4: words[0] unchecked as U32)
-        assertEqual(ip(four.toString()), four)
+        let address = IpAddress(high: high, low: low, scope: scope)
+        expect(ip(address.toString()) == address)
     }
 }

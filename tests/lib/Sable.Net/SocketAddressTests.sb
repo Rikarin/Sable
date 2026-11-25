@@ -3,18 +3,19 @@ module SocketAddressTests
 // SocketAddress, and Host as an address (Sable.Net): run with
 //     tools/stdlib-coverage.sh Sable.Net
 
+import NetSupport
 import Sable.Net
 import Sable.Testing
 
-@test
-fn anAddressAndPortAreReadAndWritten() {
-    for text in ["127.0.0.1:0", "192.0.2.1:65535", "[::1]:80", "[2001:db8::1]:443", "[::ffff:192.0.2.1]:8080", "[fe80::1%4]:1"] {
-        assertEqual((try! SocketAddress.parse(text)).toString(), text)
-    }
-    for text in ["", "127.0.0.1", "127.0.0.1:", "127.0.0.1:65536", "127.0.0.1:-1", "127.0.0.1:+1", "127.0.0.1:80 ", "127.1:80", "::1:80", "[::1]", "[::1]80", "[::1]:",
-        "[::1", "[127.0.0.1]:80", "localhost:80", ":80", "[]:80", "127.0.0.1:99999999999999999999"] {
-        assert((try? SocketAddress.parse(text)) == none, text)
-    }
+@test(arguments: ["127.0.0.1:0", "192.0.2.1:65535", "[::1]:80", "[2001:db8::1]:443", "[::ffff:192.0.2.1]:8080", "[fe80::1%4]:1"])
+fn anAddressAndPortAreReadAndWritten(_ text: String) throws {
+    expect(try SocketAddress.parse(text).toString() == text)
+}
+
+@test(arguments: ["", "127.0.0.1", "127.0.0.1:", "127.0.0.1:65536", "127.0.0.1:-1", "127.0.0.1:+1", "127.0.0.1:80 ", "127.1:80", "::1:80", "[::1]", "[::1]80", "[::1]:",
+    "[::1", "[127.0.0.1]:80", "localhost:80", ":80", "[]:80", "127.0.0.1:99999999999999999999"])
+fn textThatIsNoAddressAndPortIsRefused(_ text: String) {
+    expectThrows { _ = try SocketAddress.parse(text) }
 }
 
 @test
@@ -31,15 +32,29 @@ fn socketAddressesAreOrderedAndHashed() {
     assertEqual("\(a:>14)", "  127.0.0.1:80")
 }
 
+@test(arguments: [("http://127.1:80/", "127.0.0.1"), ("http://[2001:db8::1]/", "2001:db8::1"), ("http://[::ffff:7f00:1]/", "::ffff:127.0.0.1")])
+fn aUrlsHostIsAnAddress(_ url: String, _ address: String) throws {
+    expect(try Url.parse(url).host?.ipAddress == ip(address))
+}
+
 @test
-fn aUrlsHostIsAnAddress() {
-    assertEqual((try! Url.parse("http://127.1:80/")).host!.ipAddress, IpAddress.v4Loopback)
-    assertEqual((try! Url.parse("http://[2001:db8::1]/")).host!.ipAddress, try! IpAddress.parse("2001:db8::1"))
-    expect((try! Url.parse("http://[::ffff:7f00:1]/")).host!.ipAddress!.isLoopback)
-    expect((try! Url.parse("http://example.com/")).host!.ipAddress == none)
-    for text in ["192.0.2.1", "2001:db8::1", "::", "::ffff:1.2.3.4"] {
-        let address = try! IpAddress.parse(text)
-        assertEqual(Host.address(address).ipAddress, address)
-    }
-    assertEqual(Host.address(try! IpAddress.parse("fe80::1%2")).description(), "[fe80::1]")
+fn aUrlsMappedLoopbackHostIsLoopback() throws {
+    let host = require(try Url.parse("http://[::ffff:7f00:1]/").host)
+    expect(require(host.ipAddress).isLoopback)
+}
+
+@test
+fn aUrlsHostThatIsANameIsNoAddress() throws {
+    let host = require(try Url.parse("http://example.com/").host)
+    expect(host.ipAddress == none)
+}
+
+@test(arguments: ["192.0.2.1", "2001:db8::1", "::", "::ffff:1.2.3.4"])
+fn anAddressIsAHostAndBack(_ text: String) {
+    expect(Host.address(ip(text)).ipAddress == ip(text))
+}
+
+@test
+fn aHostHasNoScope() {
+    expect(Host.address(ip("fe80::1%2")).description() == "[fe80::1]")
 }

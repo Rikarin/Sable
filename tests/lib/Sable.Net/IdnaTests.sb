@@ -4,25 +4,10 @@ module IdnaTests
 // IdnaTestV2.txt (Unicode 16, in tests/lib/Sable.Net/data/), with every
 // check on as the file asks: toASCII (nontransitional) and toUnicode.
 
+import NetSupport
 import Sable.IO
 import Sable.Net
 import Sable.Testing
-
-/// Where a test data file is: in tests/lib/Sable.Net/data/ of the
-/// repository, found from the directory the tests run in.
-fn dataFile(_ name: String) -> String {
-    var up = ""
-    var depth = 0
-    while depth < 8 {
-        let path = "\(up)tests/lib/Sable.Net/data/\(name)"
-        if File.exists(path) {
-            return path
-        }
-        up = up + "../"
-        depth += 1
-    }
-    return "tests/lib/Sable.Net/data/\(name)"
-}
 
 fn hexDigitValue(_ c: Char) -> Int {
     let code = c.codePoint
@@ -133,29 +118,27 @@ fn everyLineOfIdnaTestV2() throws {
         }
         checked += 1
     }
-    if !failures.isEmpty {
-        var i = 0
-        while i < failures.count && i < 40 {
-            print(failures[i])
-            i += 1
-        }
+    for failure in failures.prefix(40) {
+        recordFailure(failure)
     }
-    print("IdnaTestV2: \(checked) lines checked, \(skipped) skipped, \(failures.count) failed")
     assertEqual(failures.count, 0)
     expect(checked > 4000)
 }
 
+@test(arguments: [("bücher", "bcher-kva"), ("ü", "tda"), ("abc", "abc-")])
+fn textIsPunycodeAndBack(_ text: String, _ encoded: String) {
+    expect(Punycode.encode(text.unicodeScalarValues()) == encoded)
+    expect(Punycode.decode(encoded).map { codesText($0) } == text)
+}
+
 @test
 fn punycodeRoundTrips() {
-    assertEqual(Punycode.encode("bücher".unicodeScalarValues()) ?? "-", "bcher-kva")
-    assertEqual(Punycode.encode("ü".unicodeScalarValues()) ?? "-", "tda")
-    assertEqual(Punycode.encode("abc".unicodeScalarValues()) ?? "-", "abc-")
-    assertEqual(codesText(Punycode.decode("bcher-kva")!), "bücher")
-    assertEqual(codesText(Punycode.decode("tda")!), "ü")
     // RFC 3492's sample (A): Arabic (Egyptian).
-    let arabic = Punycode.decode("egbpdaj6bu4bxfgehfvwxn")!
-    assertEqual(Punycode.encode(arabic) ?? "-", "egbpdaj6bu4bxfgehfvwxn")
-    expect(Punycode.decode("ü") == none)
-    expect(Punycode.decode("a-!") == none)
-    expect(Punycode.decode("99999999999") == none)
+    let arabic = require(Punycode.decode("egbpdaj6bu4bxfgehfvwxn"))
+    expect(Punycode.encode(arabic) == "egbpdaj6bu4bxfgehfvwxn")
+}
+
+@test(arguments: ["ü", "a-!", "99999999999"])
+fn whatIsNoPunycodeIsNotDecoded(_ text: String) {
+    expect(Punycode.decode(text) == none)
 }

@@ -3,6 +3,7 @@ module UdpSocketTests
 // UdpSocket (Sable.Net): run with
 //     tools/stdlib-coverage.sh Sable.Net
 
+import NetSupport
 import Sable.IO
 import Sable.Net
 import Sable.Testing
@@ -10,16 +11,6 @@ import Sable.Time
 
 fn loopback() throws(IoError) -> UdpSocket {
     return try UdpSocket.bind(SocketAddress(.v4Loopback, port: 0))
-}
-
-/// What the body throws; "" for nothing.
-fn thrown(_ body: async () throws(IoError) -> ()) async -> String {
-    do {
-        try await body()
-        return ""
-    } catch {
-        return error.description()
-    }
 }
 
 @test
@@ -66,7 +57,7 @@ fn aDatagramTooLongForOneIsRefused() async throws {
     let a = try loopback()
     let b = try loopback()
     let long = U8[>..](repeating: 1, count: 70_000)
-    assertEqual(await thrown { try await a.send(long, to: b.localAddress) }, "the message is too long")
+    await expectThrows(saying: "the message is too long") { try await a.send(long, to: b.localAddress) }
     // The socket is as it was.
     try await a.send([1], to: b.localAddress)
     assertEqual((try await b.receive()).bytes, [1])
@@ -85,7 +76,7 @@ fn aConnectedSocketSendsAndReceivesWithOneOther() async throws {
     try await stranger.send([66], to: a.localAddress)
     try await b.send([2], to: a.localAddress)
     assertEqual((try await a.receive()).bytes, [2])
-    expect((await thrown { try await b.send([1]) }) != "")
+    await expectThrows { try await b.send([1]) }
 }
 
 @test
@@ -123,15 +114,15 @@ fn closingAndCancellingWakeAReceive() async throws {
     await Task.yield()
     a.close()
     assertEqual(await again.value, "the connection failed or was closed")
-    assertEqual(await thrown { try await a.send([1], to: SocketAddress(.v4Loopback, port: 9)) }, "the connection failed or was closed")
+    await expectThrows(saying: "the connection failed or was closed") { try await a.send([1], to: SocketAddress(.v4Loopback, port: 9)) }
 }
 
 @test
 fn aPortInUseIsSaidToBe() async throws {
     let a = try loopback()
-    assertEqual(await thrown {
+    expectThrows(saying: "'\(a.localAddress)' is in use") {
         _ = try UdpSocket.bind(a.localAddress)
-    }, "'\(a.localAddress)' is in use")
+    }
 }
 
 @test
@@ -152,9 +143,9 @@ fn aSocketsOptionsAreWhatTheyWereSetTo() async throws {
     assertEqual(try a.multicastHopLimit(), 1)
     try a.setMulticastHopLimit(3)
     assertEqual(try a.multicastHopLimit(), 3)
-    expect((await thrown { try a.setMulticastHopLimit(256) }) != "")
-    expect((await thrown { try a.setMulticastHopLimit(-1) }) != "")
-    expect((await thrown { try a.join(group: IpAddress.v4Loopback) }) != "")
+    expectThrows { try a.setMulticastHopLimit(256) }
+    expectThrows { try a.setMulticastHopLimit(-1) }
+    expectThrows { try a.join(group: IpAddress.v4Loopback) }
     let six = try UdpSocket.bind(SocketAddress(.v6Loopback, port: 0))
     try six.setHopLimit(9)
     assertEqual(try six.hopLimit(), 9)
@@ -167,10 +158,8 @@ fn aSocketsOptionsAreWhatTheyWereSetTo() async throws {
 /// On the loopback interface alone: nothing leaves the machine.
 @test
 fn aGroupsDatagramsReachThoseInIt() async throws {
-    let interface = (try NetworkInterface.all()).first(where: { $0.isLoopback })!
-    if !interface.supportsMulticast {
-        return
-    }
+    let interface = require(try NetworkInterface.all().first(where: { $0.isLoopback }))
+    try skip(if: !interface.supportsMulticast, "the loopback interface has no multicast")
     let group = IpAddress(239, 255, 62, 62)
     let first = try UdpSocket.bind(SocketAddress(.v4Any, port: 0), shareAddress: true)
     let second = try UdpSocket.bind(first.localAddress, shareAddress: true)
@@ -191,16 +180,14 @@ fn aGroupsDatagramsReachThoseInIt() async throws {
     try? await Task.sleep(nanoseconds: 30_000_000)
     left.cancel()
     assertEqual(await left.value, "the task was cancelled while it waited")
-    expect((await thrown { try first.join(group: IpAddress(127, 0, 0, 1)) }) != "")
-    expect((await thrown { try second.leave(group: group, interface: interface.index) }) != "")
+    expectThrows { try first.join(group: IpAddress(127, 0, 0, 1)) }
+    expectThrows { try second.leave(group: group, interface: interface.index) }
 }
 
 @test
 fn anIpv6GroupsDatagramsReachThoseInIt() async throws {
-    let interface = (try NetworkInterface.all()).first(where: { $0.isLoopback })!
-    if !interface.supportsMulticast {
-        return
-    }
+    let interface = require(try NetworkInterface.all().first(where: { $0.isLoopback }))
+    try skip(if: !interface.supportsMulticast, "the loopback interface has no multicast")
     let group = (try! IpAddress.parse("ff01::6262")).scoped(to: U32(interface.index))
     let receiver = try UdpSocket.bind(SocketAddress(.v6Any, port: 0))
     let sender = try UdpSocket.bind(SocketAddress(.v6Loopback, port: 0))
@@ -216,29 +203,29 @@ fn aClosedSocketsCallsThrow() async throws {
     let b = try loopback()
     a.close()
     let closed = "the connection failed or was closed"
-    assertEqual(await thrown {
+    expectThrows(saying: closed) {
         _ = try a.hopLimit()
-    }, closed)
-    assertEqual(await thrown {
+    }
+    expectThrows(saying: closed) {
         _ = try a.broadcast()
-    }, closed)
-    assertEqual(await thrown {
+    }
+    expectThrows(saying: closed) {
         _ = try a.multicastLoop()
-    }, closed)
-    assertEqual(await thrown {
+    }
+    expectThrows(saying: closed) {
         _ = try a.multicastHopLimit()
-    }, closed)
-    assertEqual(await thrown {
+    }
+    expectThrows(saying: closed) {
         _ = try a.receiveBufferSize()
-    }, closed)
-    assertEqual(await thrown {
+    }
+    expectThrows(saying: closed) {
         _ = try a.sendBufferSize()
-    }, closed)
-    assertEqual(await thrown { try a.setMulticastInterface(0) }, closed)
-    assertEqual(await thrown { try a.connect(to: b.localAddress) }, closed)
-    assertEqual(await thrown { try await a.send([1]) }, closed)
-    assertEqual(await thrown { try a.join(group: try! IpAddress.parse("ff01::1")) }, closed)
-    assertEqual(await thrown { try a.leave(group: try! IpAddress.parse("ff01::1")) }, closed)
+    }
+    expectThrows(saying: closed) { try a.setMulticastInterface(0) }
+    expectThrows(saying: closed) { try a.connect(to: b.localAddress) }
+    await expectThrows(saying: closed) { try await a.send([1]) }
+    expectThrows(saying: closed) { try a.join(group: try! IpAddress.parse("ff01::1")) }
+    expectThrows(saying: closed) { try a.leave(group: try! IpAddress.parse("ff01::1")) }
     // The other is as it was.
     try await b.send([1], to: b.localAddress)
     assertEqual((try await b.receive()).bytes, [1])
@@ -249,37 +236,37 @@ fn aClosedSocketSaysSoWhateverIsAsked() async {
     let a = try! loopback()
     let group = try! IpAddress.parse("ff02::1")
     a.close()
-    expect((await thrown { try a.connect(to: SocketAddress(IpAddress.v4Loopback, port: 9)) }) != "")
-    expect((await thrown { try await a.send([1]) }) != "")
-    assert((await thrown {
+    expectThrows { try a.connect(to: SocketAddress(IpAddress.v4Loopback, port: 9)) }
+    await expectThrows { try await a.send([1]) }
+    await expectThrows {
         _ = try await a.receive()
-    }) != "")
-    expect((await thrown { try a.setMulticastInterface(1) }) != "")
-    assert((await thrown {
+    }
+    expectThrows { try a.setMulticastInterface(1) }
+    expectThrows {
         _ = try a.multicastLoop()
-    }) != "")
-    expect((await thrown { try a.setMulticastLoop(true) }) != "")
-    assert((await thrown {
+    }
+    expectThrows { try a.setMulticastLoop(true) }
+    expectThrows {
         _ = try a.multicastHopLimit()
-    }) != "")
-    expect((await thrown { try a.setMulticastHopLimit(1) }) != "")
-    assert((await thrown {
+    }
+    expectThrows { try a.setMulticastHopLimit(1) }
+    expectThrows {
         _ = try a.broadcast()
-    }) != "")
-    expect((await thrown { try a.setBroadcast(true) }) != "")
-    assert((await thrown {
+    }
+    expectThrows { try a.setBroadcast(true) }
+    expectThrows {
         _ = try a.receiveBufferSize()
-    }) != "")
-    expect((await thrown { try a.setReceiveBufferSize(4096) }) != "")
-    assert((await thrown {
+    }
+    expectThrows { try a.setReceiveBufferSize(4096) }
+    expectThrows {
         _ = try a.sendBufferSize()
-    }) != "")
-    expect((await thrown { try a.setSendBufferSize(4096) }) != "")
-    assert((await thrown {
+    }
+    expectThrows { try a.setSendBufferSize(4096) }
+    expectThrows {
         _ = try a.hopLimit()
-    }) != "")
-    expect((await thrown { try a.setHopLimit(1) }) != "")
-    expect((await thrown { try a.join(group: group) }) != "")
-    expect((await thrown { try a.leave(group: group) }) != "")
+    }
+    expectThrows { try a.setHopLimit(1) }
+    expectThrows { try a.join(group: group) }
+    expectThrows { try a.leave(group: group) }
     expect(a.peerAddress == none)
 }

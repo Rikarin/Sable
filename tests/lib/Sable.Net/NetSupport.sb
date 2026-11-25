@@ -1,0 +1,35 @@
+module NetSupport
+
+// What several files of Sable.Net's tests use.
+
+import Sable.IO
+import Sable.Net
+
+public fn ip(_ text: String) -> IpAddress {
+    return try! IpAddress.parse(text)
+}
+
+/// What the body throws, as it says it; "" for nothing. For a body run on a
+/// task of its own; what is thrown here, expectThrows expects.
+public fn thrown(_ body: async () throws(IoError) -> ()) async -> String {
+    do {
+        try await body()
+        return ""
+    } catch {
+        return error.description()
+    }
+}
+
+/// Where a test data file is: in tests/lib/Sable.Net/data/ of the
+/// repository, found from the directory the tests run in.
+public fn dataFile(_ name: String) -> String {
+    var up = ""
+    for _ in 0..<8 {
+        let path = "\(up)tests/lib/Sable.Net/data/\(name)"
+        if File.exists(path) {
+            return path
+        }
+        up += "../"
+    }
+    return "tests/lib/Sable.Net/data/\(name)"
+}

@@ -4,28 +4,17 @@ module DnsTests
 // every system has in its hosts file. Run with
 //     tools/stdlib-coverage.sh Sable.Net
 
+import NetSupport
 import Sable.IO
 import Sable.Net
 import Sable.Testing
 import Sable.Time
 
-/// What the body throws; "" for nothing.
-fn thrown(_ body: async () throws(IoError) -> ()) async -> String {
-    do {
-        try await body()
-        return ""
-    } catch {
-        return error.description()
-    }
-}
-
 @test
 fn localhostIsLookedUp() async throws {
     let all = try await Dns.resolve("localhost")
     expect(!all.isEmpty)
-    for address in all {
-        assert(address.isLoopback)
-    }
+    expect(all.allSatisfy { $0.isLoopback }, "\(all:?)")
     let four = try await Dns.resolve("localhost", family: .V4, timeout: Duration.seconds(20))
     assertEqual(four, [IpAddress.v4Loopback])
 }
@@ -34,20 +23,17 @@ fn localhostIsLookedUp() async throws {
 fn anAddressIsItself() async throws {
     assertEqual(try await Dns.resolve("192.0.2.1"), [IpAddress(192, 0, 2, 1)])
     assertEqual(try await Dns.resolve("2001:db8::1", family: .V6), [try! IpAddress.parse("2001:db8::1")])
-    assertEqual(await thrown {
+    await expectThrows(saying: "'192.0.2.1' has no address") {
         _ = try await Dns.resolve("192.0.2.1", family: .V6)
-    }, "'192.0.2.1' has no address")
+    }
 }
 
 /// None of these reaches the resolver, which might read it as an address.
-@test
-fn textThatIsNoNameIsRefused() async {
-    for host in ["", "127.1", "0x7f.1", "0177.0.0.1", "2130706433", "0x7f000001", "127.0.0.01", "127.0.0.1.", "１２７.0.0.1", "a b", "a/b", "a:b", "[::1]", "::g",
-        "a\0.b", "a@b", "a%b"] {
-        assert((await thrown {
-            _ = try await Dns.resolve(host)
-        }).hasSuffix("was given something the system does not take"), host)
-    }
+@test(arguments: ["", "127.1", "0x7f.1", "0177.0.0.1", "2130706433", "0x7f000001", "127.0.0.01", "127.0.0.1.", "１２７.0.0.1", "a b", "a/b", "a:b", "[::1]", "::g",
+    "a\0.b", "a@b", "a%b"])
+fn textThatIsNoNameIsRefused(_ host: String) async {
+    let error = await expectThrows(IoError.self) { _ = try await Dns.resolve(host) }
+    expect(error?.description()?.hasSuffix("was given something the system does not take") == true, "\(error:?)")
 }
 
 @test

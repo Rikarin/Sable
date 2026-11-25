@@ -3,21 +3,13 @@ module TcpStreamTests
 // TcpStream (Sable.Net), tested with '@test': run with
 //     tools/stdlib-coverage.sh Sable.Net
 
+import NetSupport
 import Sable.Concurrency
 import Sable.IO
 import Sable.Net
 import Sable.Testing
 import Sable.Text
 import Sable.Time
-
-/// Bytes as text, to compare.
-fn text(_ bytes: U8[>..]) -> String {
-    var said = ""
-    for b in bytes {
-        said += "\(b) "
-    }
-    return said
-}
 
 /// Accepts one connection and sends back what it reads, each byte one more.
 fn echoOnce(_ listener: TcpListener) async throws(IoError) {
@@ -38,7 +30,7 @@ fn aStreamWritesAndReadsBytes() async throws {
     let stream = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
     try await stream.write([1, 2, 255])
     stream.finishWriting()
-    assertEqual(text(try await stream.readAll()), text([2, 3, 0]))
+    assertEqual(try await stream.readAll(), [2, 3, 0])
     await server.value
 }
 
@@ -49,7 +41,7 @@ fn aReadGivesWhatHasComeAndNothingAtTheEnd() async throws {
     let stream = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
     try await stream.write([9])
     stream.finishWriting()
-    assertEqual(text(try await stream.read(upTo: 10)), text([10]))
+    assertEqual(try await stream.read(upTo: 10), [10])
     assertEqual(try await stream.read(upTo: 10).count, 0)
     await server.value
 }
@@ -72,12 +64,11 @@ fn aLargeWriteWaitsForItsReader() async throws {
 }
 
 @test
-fn connectingWhereNothingListensThrows() async {
-    var port = 0
+fn connectingWhereNothingListensThrows() async throws {
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let port = listener.port
+    listener.close()
     await expectThrows(saying: "'127.0.0.1:\(port)' refused the connection") {
-        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-        port = listener.port
-        listener.close()
         _ = try await TcpStream.connect(host: "127.0.0.1", port: port)
     }
 }
@@ -88,20 +79,8 @@ fn usingAClosedStreamThrows() async throws {
     let server = Task.spawn { try? await listener.accept() }
     let stream = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
     stream.close()
-    var said = ""
-    do {
-        _ = try await stream.read(upTo: 1)
-    } catch {
-        said = error.description()
-    }
-    assertEqual(said, "the connection failed or was closed")
-    said = ""
-    do {
-        try await stream.write([1])
-    } catch {
-        said = error.description()
-    }
-    assertEqual(said, "the connection failed or was closed")
+    await expectThrows(saying: "the connection failed or was closed") { _ = try await stream.read(upTo: 1) }
+    await expectThrows(saying: "the connection failed or was closed") { try await stream.write([1]) }
     _ = await server.value
 }
 
@@ -110,16 +89,6 @@ fn pair() async throws(IoError) -> (TcpStream, TcpStream) {
     let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
     let client = try await TcpStream.connect(listener.localAddress)
     return (client, try await listener.accept())
-}
-
-/// What the body throws; "" for nothing.
-fn thrown(_ body: async () throws(IoError) -> ()) async -> String {
-    do {
-        try await body()
-        return ""
-    } catch {
-        return error.description()
-    }
 }
 
 @test
@@ -137,8 +106,8 @@ fn aHalfClosedConnectionIsStillWrittenTheOtherWay() async throws {
     client.finishWriting()
     assertEqual((try await server.read(upTo: 1)).count, 0)
     try await server.write([1, 2])
-    assertEqual(text(try await client.read(upTo: 10)), text([1, 2]))
-    expect((await thrown { try await client.write([1]) }) != "")
+    assertEqual(try await client.read(upTo: 10), [1, 2])
+    await expectThrows { try await client.write([1]) }
     client.finishReading()
     assertEqual((try await client.read(upTo: 1)).count, 0)
 }
@@ -243,11 +212,9 @@ fn aCancelledReadLosesNoByte() async throws {
         }
     }
     await writer.value
-    var right = got.count == 2000
-    for i in 0..<got.count {
-        right = right && Int(got[i]) == i % 251
-    }
-    expect(right, "\(got.count) bytes")
+    assertEqual(got.count, 2000)
+    let wrong = (0..<got.count).first(where: { Int(got[$0]) != $0 % 251 })
+    expect(wrong == none)
 }
 
 /// A read or an accept given up is begun again, and nothing is lost by it.
@@ -323,7 +290,7 @@ fn aTimeoutThatIsNotReachedLeavesTheConnectionOpen() async throws {
     let server = try await listener.accept()
     try? await Task.sleep(nanoseconds: 250_000_000)
     try await client.write([5])
-    assertEqual(text(try await server.read(upTo: 1)), text([5]))
+    assertEqual(try await server.read(upTo: 1), [5])
 }
 
 /// Connecting where no one answers: on Linux a listener whose queue is full,
@@ -363,9 +330,9 @@ fn connectingTimesOutAndIsCancelled() async throws {
     untimed.cancel()
     assertEqual(await waiting.value, "the task was cancelled while it waited")
     assertEqual(await untimed.value, "the task was cancelled while it waited")
-    assertEqual(await thrown {
+    await expectThrows(saying: "it took too long") {
         _ = try await TcpStream.connect(host: nowhere.ip.toString(), port: nowhere.port, timeout: Duration.milliseconds(30))
-    }, "it took too long")
+    }
 }
 
 @test
@@ -381,7 +348,7 @@ fn aConnectionsOptionsAreWhatTheyWereSetTo() async throws {
     assertEqual(keepAlive.interval, Duration.seconds(10))
     assertEqual(keepAlive.count, 4)
     let never = KeepAlive(idle: Duration.seconds(1), interval: Duration.seconds(1), count: 0)
-    assertEqual(await thrown { try client.setKeepAlive(never) }, "'a keep-alive' was given something the system does not take")
+    expectThrows(saying: "'a keep-alive' was given something the system does not take") { try client.setKeepAlive(never) }
     try client.setKeepAlive(none)
     expect((try client.keepAlive()) == none)
     try client.setReceiveBufferSize(100_000)
@@ -397,8 +364,8 @@ fn aConnectionsOptionsAreWhatTheyWereSetTo() async throws {
     assertEqual(try client.hopLimit(), 17)
     server.close()
     client.close()
-    assertEqual(await thrown { try client.setNoDelay(true) }, "the connection failed or was closed")
-    assertEqual(await thrown {
+    expectThrows(saying: "the connection failed or was closed") { try client.setNoDelay(true) }
+    expectThrows(saying: "the connection failed or was closed") {
         _ = try client.noDelay()
-    }, "the connection failed or was closed")
+    }
 }

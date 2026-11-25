@@ -3,19 +3,11 @@ module TcpListenerTests
 // TcpListener (Sable.Net), tested with '@test': run with
 //     tools/stdlib-coverage.sh Sable.Net
 
+import NetSupport
 import Sable.IO
 import Sable.Net
 import Sable.Testing
 import Sable.Time
-
-/// Bytes as text, to compare.
-fn text(_ bytes: U8[>..]) -> String {
-    var said = ""
-    for b in bytes {
-        said += "\(b) "
-    }
-    return said
-}
 
 @test
 fn aListenerOnPortZeroIsGivenAFreePort() throws {
@@ -25,13 +17,9 @@ fn aListenerOnPortZeroIsGivenAFreePort() throws {
 
 @test
 fn listeningOnAnAddressThatIsNotOursThrows() {
-    var thrown = ""
-    do {
+    expectThrows(saying: "'192.0.2.1:0' could not be reached") {
         _ = try TcpListener.bind(SocketAddress(IpAddress(192, 0, 2, 1), port: 0))
-    } catch {
-        thrown = error.description()
     }
-    assertEqual(thrown, "'192.0.2.1:0' could not be reached")
 }
 
 @test
@@ -42,24 +30,16 @@ fn aListenerAcceptsAConnection() async throws {
     let accepted = try await listener.accept()
     try await accepted.write([7])
     accepted.close()
-    if let stream = await client.value {
-        assertEqual(text(try await stream.readAll()), text([7]))
-    } else {
-        fail("the client did not connect")
-    }
+    let stream = require(await client.value, "the client did not connect")
+    expect(try await stream.readAll() == [7])
 }
 
 @test
 fn closingAListenerWakesItsAccept() async throws {
     let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-    let waiting = Task.spawn { () -> String in
-        do {
-            _ = try await listener.accept()
-            return "accepted"
-        } catch {
-            return error.description()
-        }
-    }
+    let waiting = Task.spawn { await thrown {
+        _ = try await listener.accept()
+    } }
     await Task.yield()
     listener.close()
     assertEqual(await waiting.value, "the connection failed or was closed")
@@ -68,36 +48,21 @@ fn closingAListenerWakesItsAccept() async throws {
 @test
 fn cancellingATaskWakesItsAccept() async throws {
     let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-    let waiting = Task.spawn { () -> String in
-        do {
-            _ = try await listener.accept()
-            return "accepted"
-        } catch {
-            return error.description()
-        }
-    }
+    let waiting = Task.spawn { await thrown {
+        _ = try await listener.accept()
+    } }
     await Task.yield()
     waiting.cancel()
     assertEqual(await waiting.value, "the task was cancelled while it waited")
-}
-
-/// What the body throws; "" for nothing.
-fn thrown(_ body: async () throws(IoError) -> ()) async -> String {
-    do {
-        try await body()
-        return ""
-    } catch {
-        return error.description()
-    }
 }
 
 @test
 fn aPortInUseIsSaidToBe() async throws {
     let first = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
     let address = first.localAddress
-    assertEqual(await thrown {
+    expectThrows(saying: "'\(address)' is in use") {
         _ = try TcpListener.bind(address)
-    }, "'\(address)' is in use")
+    }
     first.close()
     _ = try TcpListener.bind(address)
 }
@@ -121,9 +86,9 @@ fn aPortIsFreeAgainThoughItsConnectionsStillClose() async throws {
 #if os(windows)
 @test
 fn noListenersShareAPort() async {
-    assertEqual(await thrown {
+    expectThrows(saying: "'127.0.0.1:0' is not supported here") {
         _ = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0), sharePort: true)
-    }, "'127.0.0.1:0' is not supported here")
+    }
 }
 
 #else
@@ -143,9 +108,9 @@ fn anIpv6ListenerTakesIpv6AloneUnlessTold() async throws {
     let four = try TcpListener.bind(SocketAddress(.v4Loopback, port: six.port))
     four.close()
     let port = six.port
-    assert((await thrown {
+    await expectThrows {
         _ = try await TcpStream.connect(SocketAddress(.v4Loopback, port: port))
-    }) != "")
+    }
     _ = try await TcpStream.connect(SocketAddress(.v6Loopback, port: port))
 
     let both = try TcpListener.bind(SocketAddress(.v6Any, port: 0), dualStack: true)
@@ -192,7 +157,7 @@ fn aCancelledAcceptLeavesTheListenerListening() async throws {
             await Task.yield()
         }
         waiting.cancel()
-        assert(await waiting.value)
+        assert(await waiting.value, "a cancelled accept gave a connection")
     }
     let client = try await TcpStream.connect(listener.localAddress)
     let accepted = try await listener.accept()
@@ -207,5 +172,5 @@ fn theReceiveBufferIsWhatItsConnectionsHave() async throws {
     let accepted = try await listener.accept()
     expect((try accepted.receiveBufferSize()) >= 262_144)
     listener.close()
-    assertEqual(await thrown { try listener.setReceiveBufferSize(1000) }, "the connection failed or was closed")
+    expectThrows(saying: "the connection failed or was closed") { try listener.setReceiveBufferSize(1000) }
 }

@@ -821,6 +821,85 @@ void sable_slice_store_slice(SableSlice *slice, const SableMetadata *type, int64
     share_stored(slice->buffer, type, stored, count);
 }
 
+// ---- Inline arrays (#304) -------------------------------------------------
+
+// 'T[k]' and 'T[..k]' hold their elements where they are — in a frame, a
+// field, a payload — with no buffer; compiled code reads and writes them in
+// place. Viewed as a slice for a call, one is lent: a header in the
+// caller's frame, of this metadata, whose elements are the array's own
+// storage, and whose count is one for the view. Nothing the view is handed
+// to keeps it (the compiler proves so, or copies the elements out instead),
+// so the header is never freed; were the last reference to it let go — a
+// callee that put another slice in its view's place — it destroys nothing,
+// as the elements are the array's.
+const SableMetadata sable_lent_array_metadata = { NULL, "lent inline array", 0, NULL, NULL, 0, _Alignof(SableObject), NULL, NULL };
+
+// An inline array's elements copied out into a buffer of their own: what a
+// slice of one is where the compiler cannot lend it, and 'toArray()'.
+SableArray *sable_array_from_elements(const char *elements, int64_t count, const SableMetadata *type) {
+    if (count <= 0) {
+        return NULL;
+    }
+
+    SableArray *copy = sable_alloc(type, (int64_t)sizeof(SableArray));
+    copy->capacity = count;
+    copy->count = count;
+    copy->elements = buffer_alloc(count * type->element_size);
+    elements_copy(type, copy->elements, elements, count);
+    return copy;
+}
+
+// Elements [from, to) of an inline array's 'count' rotated left by 'by', in place.
+void sable_inline_rotate(char *elements, int64_t count, const SableMetadata *type, int64_t from, int64_t to, int64_t by) {
+    int64_t shift = rotation(from, to, by, count);
+    if (shift != 0) {
+        rotate_elements(elements + from * type->element_size, to - from, shift, type->element_size);
+    }
+}
+
+// The elements of a bounded inline array past the first 'keep' destroyed,
+// and its count, at '*count', made 'keep': more than it has traps.
+void sable_inline_truncate(char *elements, int64_t *count, const SableMetadata *type, int64_t keep) {
+    if (keep < 0 || keep > *count) {
+        trap_here("cannot keep more elements than the array has");
+    }
+
+    for (int64_t i = keep; i < *count; i++) {
+        element_destroy(type, elements + i * type->element_size);
+    }
+
+    *count = keep;
+}
+
+// The slice 'buffer'/'start'/'scount' stored over elements [from, to) of an
+// inline array's 'count', each replaced: nothing when it is still the view
+// of that range, its elements the range's already.
+void sable_inline_store_slice(char *elements, int64_t count, const SableMetadata *type, int64_t from, int64_t to, SableArray *buffer, int64_t start,
+                              int64_t scount) {
+    check_store(from, to, count, scount);
+    char *stored = elements + from * type->element_size;
+    if (scount == 0 || buffer->elements + start * type->element_size == stored) {
+        return;
+    }
+
+    store_run(stored, type, buffer, start, scount);
+}
+
+// The slice an inline array lent to a mutating member of 'Element[:]' gives
+// back, after the call (the view it was, or what the callee put in its
+// place), taken: nothing to do when it is still the view of the elements,
+// which were changed where they are; else its elements stored over the
+// array's — as many, or a trap — and the slice let go of.
+void sable_inline_restore(char *elements, int64_t count, const SableMetadata *type, SableArray *buffer, int64_t start, int64_t scount) {
+    if (scount == count && (count == 0 || buffer->elements + start * type->element_size == elements)) {
+        return;
+    }
+
+    check_store(0, count, count, scount);
+    store_run(elements, type, buffer, start, scount);
+    sable_release(buffer);
+}
+
 static void copy_string_element(void *destination, const void *source) {
     memcpy(destination, source, sizeof(void *));
     sable_retain(*(void *const *)source);

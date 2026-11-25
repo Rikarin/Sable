@@ -121,7 +121,7 @@ public sealed class BorrowHeld : ISilPass {
             _ when instruction.Type.IsTrivial || SilType.IsIndirect(instruction.Type) => null,
             LoadInst { Kind: LoadKind.Copy } load => LetField(load.Address)?.Reference,
             CopyValueInst copy => copy.Value,
-            BuiltinInst { Name: "slice_of" } view => view.Operands[0],
+            BuiltinInst { Name: "slice_of" } view when view.Operands[0].Type is not FixedArrayType => view.Operands[0],
             _ => null,
         };
 
@@ -138,7 +138,7 @@ public sealed class BorrowHeld : ISilPass {
     ///     The values whose end may be the value's: none for what a parameter
     ///     the caller lends holds; null when what keeps it alive is not known.
     /// </summary>
-    static List<SilValue>? Keepers(SilValue value, SilFunction function, Dictionary<SilBlock, SwitchEnumInst?> switches) {
+    internal static List<SilValue>? Keepers(SilValue value, SilFunction function, Dictionary<SilBlock, SwitchEnumInst?> switches) {
         for (var depth = 0; depth < 16; depth++) {
             switch (value) {
                 case SilArgument argument when argument.Block == function.Entry:
@@ -168,7 +168,7 @@ public sealed class BorrowHeld : ISilPass {
                 case LoadBorrowInst:
                     return [value];
 
-                case LoadInst or CopyValueInst or ApplyInst or AllocRefInst when SilVerifier.OwnershipOf(value) == Ownership.Owned:
+                case LoadInst or CopyValueInst or ApplyInst or AllocRefInst or BuiltinInst when SilVerifier.OwnershipOf(value) == Ownership.Owned:
                     return [value];
 
                 default:
@@ -183,7 +183,7 @@ public sealed class BorrowHeld : ISilPass {
     ///     Along every path from the copy to a destroy of it, what it is of
     ///     stays, and no instruction writes the field or takes it.
     /// </summary>
-    static bool Lives(SilInstruction copy, int index, RefElementAddrInst? field, HashSet<SilInstruction> destroys, List<SilValue> keepers) {
+    internal static bool Lives(SilInstruction copy, int index, RefElementAddrInst? field, HashSet<SilInstruction> destroys, List<SilValue> keepers) {
         bool Ends(SilInstruction instruction) {
             foreach (var keeper in keepers) {
                 if (instruction is EndBorrowInst end ? ReferenceEquals(end.Borrowed, keeper) : instruction.Operands.Contains(keeper) && Uses.Consumes(instruction, keeper)) {

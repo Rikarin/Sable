@@ -47,4 +47,7 @@ public enum TypeKind {
 
     /// What the runtime holds without describing: a closure's context, a region.
     Opaque
+
+    /// An inline array, `T[k]` or `T[..k]`: its elements where the value is.
+    InlineArray
 }

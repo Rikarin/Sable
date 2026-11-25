@@ -69,7 +69,7 @@ public sealed class PromoteToStack : ISilPass {
                         break;
 
                     // An array literal: its header and its elements together.
-                    case BuiltinInst { Name: "array_literal" } literal when !SilBuiltins.IsConstantArray(literal) && Promotable(literal, inLoop, uses, summaries, Dominators, out var holders):
+                    case BuiltinInst { Name: "array_literal", Type: ArrayType } literal when !SilBuiltins.IsConstantArray(literal) && Promotable(literal, inLoop, uses, summaries, Dominators, out var holders):
                         literal.Rename("array_literal_stack");
                         promoted.Add((literal, holders));
                         break;
@@ -347,7 +347,7 @@ public sealed class PromoteToStack : ISilPass {
     }
 
     /// <summary>For every function, which of its parameters may escape it.</summary>
-    static Dictionary<string, bool[]> Summarise(SilModule module) {
+    internal static Dictionary<string, bool[]> Summarise(SilModule module) {
         var summaries = module.Functions.ToDictionary(static f => f.Name, static f => new bool[f.Type.Parameters.Length]);
         var uses = module.Functions.ToDictionary(static f => f, static f => new Uses(f));
         for (var changed = true; changed;) {
@@ -498,7 +498,7 @@ public sealed class PromoteToStack : ISilPass {
     ///     code alone, and a context is followed only into code that does not
     ///     keep it (the closure's own arguments are another matter).
     /// </remarks>
-    static bool ArgumentEscapes(SilValue callee, List<SilValue> arguments, SilValue value, Dictionary<string, bool[]> summaries) {
+    internal static bool ArgumentEscapes(SilValue callee, List<SilValue> arguments, SilValue value, Dictionary<string, bool[]> summaries) {
         if (ReferenceEquals(callee, value) && value.Type is ThickFunctionType) {
             return arguments.Any(a => ReferenceEquals(a, value));
         }
@@ -526,13 +526,14 @@ public sealed class PromoteToStack : ISilPass {
         instruction is BuiltinInst builtin
         && (builtin.Name is "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve"
                 or "array_rotate" or "array_store_slice" or "array_append_utf8" or "array_append_repeating" or "array_append_holes" or "array_take" or "array_append_all"
-            || builtin.Name.StartsWith("bytes_store_array_", StringComparison.Ordinal))
+            || builtin.Name.StartsWith("bytes_store_array_", StringComparison.Ordinal)
+            || SimdBuiltins.Is(builtin.Name) && SimdBuiltins.Op(builtin.Name) is "store" or "store_unique")
         && value.Type is AddressType
         && ReferenceEquals(builtin.Operands[0], value)
         && !builtin.Operands.Skip(1).Any(o => ReferenceEquals(o, value));
 
     /// <summary>The builtins that read a value, or the slot it is in, and keep neither.</summary>
-    static bool BorrowsOnly(BuiltinInst builtin, SilValue value) {
+    internal static bool BorrowsOnly(BuiltinInst builtin, SilValue value) {
         if (builtin.Name.StartsWith("inline_", StringComparison.Ordinal)) {
             // Every inline operation reads the block or changes it where it is;
             // only the element and value operands are copied, as bytes.

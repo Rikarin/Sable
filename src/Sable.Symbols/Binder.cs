@@ -233,10 +233,10 @@ public sealed partial class Binder {
             return new InitializedSelf(extended, [], whole: function);
         }
 
-        // A struct's, in its body or an extension, sets its fields.
+        // A struct's, in its body or an extension, sets its fields; a class's extension's delegates to one that does.
         var type = function switch {
             { FunctionKind: FunctionKind.Initializer, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } named } => named,
-            { FunctionKind: FunctionKind.Initializer, ContainingSymbol: ExtensionSymbol { ExtendedType: { ExtendedArray: null, TypeKind: TypeKind.Struct } extendedStruct } } => extendedStruct,
+            { FunctionKind: FunctionKind.Initializer, ContainingSymbol: ExtensionSymbol { ExtendedType: { ExtendedArray: null, TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } extendedType } } => extendedType,
             _ => null,
         };
         if (type is null) {
@@ -516,7 +516,8 @@ public sealed partial class Binder {
     void PopScope() => _locals.RemoveAt(_locals.Count - 1);
 
     void Declare(string name, Symbol symbol) {
-        if (name.Length == 0 || _locals.Count == 0) {
+        // '_' names nothing.
+        if (name is "" or "_" || _locals.Count == 0) {
             return;
         }
 
@@ -1471,7 +1472,10 @@ public sealed partial class Binder {
         _diagnostics.Error(
             ErrorCode.ERR_UnsafeCallOutsideUnsafe,
             at.Span,
-            $"'{function.Name}' is an 'unsafe fn', safe only when its caller keeps the promise it documents; "
+            (function.FunctionKind == FunctionKind.Initializer
+                ? $"'{(function.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : function.ContainingSymbol)?.Name}.init' is an 'unsafe init'"
+                : $"'{function.Name}' is an 'unsafe fn'")
+            + ", safe only when its caller keeps the promise it documents; "
             + $"{use} inside an 'unsafe' block, or in another 'unsafe fn'"
         );
     }
@@ -3425,6 +3429,12 @@ public sealed partial class Binder {
                 return new BoundError(syntax);
             }
 
+            // An enum's case of the same name as a type is no function and has
+            // no members of the type's: 'Circle(r: 2)' and 'Circle.unit' are the type's.
+            if (inherited.Members is [EnumCaseSymbol @case] && TypeNamedLike(@case, name, syntax) is { } type) {
+                return new BoundTypeExpression(syntax, type);
+            }
+
             return BindMemberGroup(syntax, null, inherited.Members, inherited.Owner, inherited.Substitution);
         }
 
@@ -3507,6 +3517,19 @@ public sealed partial class Binder {
             $"no symbol named '{name}' is in scope"
         );
         return new BoundError(syntax);
+    }
+
+    /// <summary>The type a name hidden by an enum's case names, where what is done with the name a type allows and a case does not.</summary>
+    NamedTypeSymbol? TypeNamedLike(EnumCaseSymbol @case, string name, SyntaxNode syntax) {
+        var called = syntax.Parent is InvocationExpressionSyntax call && ReferenceEquals(call.Expression, syntax);
+        var reached = syntax.Parent is MemberAccessExpressionSyntax access && ReferenceEquals(access.Expression, syntax) ? access.Name : null;
+        if (!called && reached is null
+            || _compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span, report: false) is not NamedTypeSymbol type) {
+            return null;
+        }
+
+        var member = (reached as IdentifierNameSyntax)?.Identifier.Text;
+        return called || member is not null && @case.ContainingSymbol is NamedTypeSymbol owner && LookupMemberOfKind(owner, member, instance: true) is null ? type : null;
     }
 
     /// <summary>
@@ -6278,6 +6301,10 @@ public sealed partial class Binder {
         return new(map);
     }
 
+    /// <summary>How many of a call's arguments leave out a label their parameter has.</summary>
+    static int LabelsLeftOut(FunctionSymbol function, ImmutableArray<string?> labels) =>
+        function.Parameters.Zip(labels).Count(static p => p.Second is null && p.First.Label != "_");
+
     /// <summary>
     ///     What an argument's conformance says: <c>Rules(validator)</c>, its
     ///     initialiser <c>init&lt;V: Validator&lt;T&gt;&gt;(_ v: V)</c>, makes the
@@ -6709,6 +6736,20 @@ public sealed partial class Binder {
             // takes the one that only reads, which is written for reading.
             if (use == SubscriptUse.Read && ReadOnlyOfTwo(best, candidate) is { } reader) {
                 best = reader;
+                continue;
+            }
+
+            // 'find(x)' is 'find(_ x: T)', which takes no label, rather than
+            // 'find(at: T)', which lets it be left out.
+            if (LabelsLeftOut(candidate, labels) - LabelsLeftOut(best, labels) is not 0 and var fewer) {
+                if (fewer < 0) {
+                    best = candidate;
+                    bestCost = cost.Value;
+                    bestViews = views;
+                    ambiguous = false;
+                    tied.Clear();
+                }
+
                 continue;
             }
 

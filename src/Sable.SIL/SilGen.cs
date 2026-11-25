@@ -4777,8 +4777,11 @@ public sealed partial class SilGen {
                     continue;
                 }
 
+                // Moved in, as a self below is: a copy would be a second
+                // reference to what it holds, which the first change of it
+                // would have to copy for.
                 var box = Emit(new AllocRefInst(generator.BoxType(boxedType)));
-                Emit(new StoreInst(Emit(new LoadInst(original)), Emit(new RefElementAddrInst(box, 0)), StoreKind.Assign));
+                Emit(new StoreInst(Emit(new LoadInst(original, boxedType.IsTrivial ? null : LoadKind.Take)), Emit(new RefElementAddrInst(box, 0)), StoreKind.Assign));
                 _parameterBoxes[parameter] = (box, original);
                 _parameters[parameter] = Emit(new RefElementAddrInst(box, 0));
             }

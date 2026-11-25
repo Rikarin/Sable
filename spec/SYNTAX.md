@@ -98,12 +98,23 @@ let (a, b) = pair          // tuple destructuring
 let { name, age } = person // record destructuring by field name
 let { name: n } = person   // ...with rename
 
-static let MaxUsers = 10_000      // module-level, lazily initialised once
+static let MaxUsers = 10_000      // module-level, set once, as the program starts
 const Pi: F64 = 3.14159265358979  // compile-time constant, inlined
 ```
 
 Definite-assignment analysis is enforced: reading `total` before assignment is
 an error, not a zero.
+
+Module-level `let`s and `var`s, and types' static stored properties, are given
+their initial values once, on one thread, before `main` begins (and before a
+library's first function runs): each after the ones its initial value reads,
+itself or through the functions it calls, and otherwise in the order they are
+written, the standard library's first. Reading one costs nothing but the read.
+Two that need each other have no order, which is an error (S3411). A call
+through a protocol, or of a method subclasses override, may go to any of the
+program's types: what their own members read comes first too, where that leaves
+an order. For a value worked out when it is first asked for, a type has `lazy`
+properties (§13).
 
 Shadowing in a nested scope is allowed; shadowing in the same scope is an error.
 
@@ -456,7 +467,9 @@ copies share it.
 
 Overloading on parameter types, counts and labels is allowed. Overloading on
 return type alone is not. Resolution order: exact match → label match →
-implicit widening → protocol conformance → generic.
+implicit widening → protocol conformance → generic. A label left out of a call
+is a worse match than no label: `find(x)` is `find(_ x: Int)` rather than
+`find(x: Int)`.
 
 Two overloads that differ only in whether a closure they take is async are
 told apart by the closure: one that awaits is passed to the async one,
@@ -818,8 +831,10 @@ or designated initialisers. A struct's, an enum's, a union's or a built-in
 type's extension may add an initialiser that gives `self` its value on every
 path — a struct's field by field, any of them by `self.init(…)` or by
 `self = …` — as `extension String { init(twice s: String) { self = s + s } }`
-does (S3028); a class's may not (S3030). An extension of every growable array
-of a kind may add initialisers too (below).
+does (S3028); a class's may add a `convenience init`, which hands the work to
+one of the class's by `self.init(…)` (S3141), is not inherited, and no other
+(S3030). An extension of every growable array of a kind may add initialisers
+too (below). A protocol's may not: a static function does what one would.
 
 ### Array extensions
 
@@ -2139,7 +2154,7 @@ incompatible layouts, and FFI with non-`@safe`-annotated signatures. Inside an
 `unsafe.assumeRoot(p, as: x)`.
 
 A function that is safe only when its caller keeps a promise the compiler
-cannot check is declared `unsafe fn` — `unsafe static fn`, `unsafe mutating
+cannot check is declared `unsafe fn` — `unsafe static fn`, `unsafe init`, `unsafe mutating
 fn` and so on; `unsafe` before a brace starts a block, before `fn` or another
 modifier it modifies a function. Its documentation states the promise:
 

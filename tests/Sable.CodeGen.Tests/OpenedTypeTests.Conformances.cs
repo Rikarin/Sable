@@ -611,4 +611,66 @@ public sealed partial class OpenedTypeTests {
             print("\(equal(arrayOf(range), [1..<2, 3..<4] as any Any, [1..<2] as any Any))")
         """
     );
+
+    /// <summary>A requirement's own 'some P' parameters, on a type opened, an existential and a generic type made at run time.</summary>
+    [Fact]
+    public void ARequirementTakesSomeP() => Prints(
+        """
+        always a 1 x 1 s
+        missing
+        always a
+        always String x 1 String s 1 String
+        missing
+        always String
+        always Int x 1 Int s 1 Int
+        missing
+        always Int
+
+        """,
+        """
+        protocol Resolver {
+            fn get(_ name: String) throws -> String
+        }
+        struct Missing: Error { }
+        struct Always: Resolver {
+            fn get(_ name: String) -> String => "always \(name)"
+        }
+        final class Never1: Resolver {
+            init() { }
+            fn get(_ name: String) throws -> String { throw Missing() }
+        }
+        protocol Injectable {
+            static fn make(_ r: some Resolver) throws -> Self
+            fn show() -> String
+            fn both(_ a: some Formattable, _ b: some Debug) -> String
+        }
+        struct A: Injectable {
+            let s: String
+            static fn make(_ r: some Resolver) throws -> A => A { s: try r.get("a") }
+            fn show() -> String => s
+            fn both(_ a: some Formattable, _ b: some Debug) -> String => "\(a) \(b)"
+        }
+        final class Logger<T>: Injectable {
+            let s: String
+            init(_ s: String) { self.s = s }
+            static fn make(_ r: some Resolver) throws -> Logger<T> => Logger<T>(try r.get("\(T.self)"))
+            fn show() -> String => s
+            fn both(_ a: some Formattable, _ b: some Debug) -> String => "\(b) \(a) \(T.self)"
+        }
+        fn make<T: Injectable>(_ t: T.Type, _ r: some Resolver) throws -> T => try T.make(r)
+        fn loggerOf<T>(_ t: T.Type) -> Type => Logger<T>.self
+        fn both<T: Injectable>(_ x: T) -> String => x.both(1, "s")
+        """,
+        """
+            let int: Type = Int.self
+            let ts: Type[>..] = [A.self, Logger<String>.self, loggerOf(int)]
+            for t in ts {
+                let made = try! make(t, Always())
+                print("\(made.show()) \(made.both(1, "x")) \(both(made))")
+                print((try? make(t, Never1()))?.show() ?? "missing")
+                let z = t as! any Injectable.Type
+                print((try! z.make(Always())).show())
+            }
+        """
+    );
 }

@@ -4,18 +4,9 @@ module HkdfTests
 // against OpenSSL's. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
-
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
 
 // RFC 5869, appendix A.1.
 @test
@@ -47,6 +38,6 @@ fn aKeyOfMoreThan255DigestsIsRefused() {
     let secret = SymmetricKey(message(32))
     assertEqual((try! Hkdf<Sha256>.deriveKey(from: secret, byteCount: 255 * 32)).byteCount, 255 * 32)
     assertEqual((try! Hkdf<Sha256>.deriveKey(from: secret, byteCount: 0)).byteCount, 0)
-    expect((try? Hkdf<Sha256>.deriveKey(from: secret, byteCount: 255 * 32 + 1)) == none)
-    expect((try? Hkdf<Sha256>.deriveKey(from: secret, byteCount: -1)) == none)
+    expectThrows(CryptoError.self) { _ = try Hkdf<Sha256>.deriveKey(from: secret, byteCount: 255 * 32 + 1) }
+    expectThrows(CryptoError.self) { _ = try Hkdf<Sha256>.deriveKey(from: secret, byteCount: -1) }
 }

@@ -4,43 +4,16 @@ module HazmatTests
 // examples, each made of AesEcb, and misuse. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
+import Sable.Text
 
-fn bytes(_ text: String) -> U8[>..] {
-    var made: U8[>..] = []
-    var high = -1
-    for byte in text.utf8 {
-        let digit = byte <= 0x39 ? Int(byte) - 0x30 : Int(byte) - 0x57
-        if high < 0 {
-            high = digit
-        } else {
-            made.append(U8(high * 16 + digit))
-            high = -1
-        }
-    }
-    return made
-}
-
-fn hex(_ bytes: U8[:]) -> String {
-    return "\(Digest(bytes))"
-}
-
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
-
-let key: SymmetricKey = SymmetricKey(bytes("2b7e151628aed2a6abf7158809cf4f3c"))
-let key24: SymmetricKey = SymmetricKey(bytes("8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b"))
-let key32: SymmetricKey = SymmetricKey(bytes("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4"))
-let iv: U8[>..] = bytes("000102030405060708090a0b0c0d0e0f")
-let text: U8[>..] = bytes("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710")
+let key: SymmetricKey = SymmetricKey(hex("2b7e151628aed2a6abf7158809cf4f3c"))
+let key24: SymmetricKey = SymmetricKey(hex("8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b"))
+let key32: SymmetricKey = SymmetricKey(hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4"))
+let iv: U8[>..] = hex("000102030405060708090a0b0c0d0e0f")
+let text: U8[>..] = hex("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710")
 
 // SP 800-38A, F.1 to F.5.
 @test
@@ -68,22 +41,22 @@ fn theModesAreAsPublished() {
     let keys = [key, key24, key32]
     for i in 0..<3 {
         let e = try! Hazmat.AesEcb(key: keys[i])
-        assertEqual(hex(try! e.encrypt(text)), ecb[i])
-        require((try! e.decrypt(bytes(ecb[i]))) == text)
+        assertEqual(Hex.encode(try! e.encrypt(text)), ecb[i])
+        require((try! e.decrypt(hex(ecb[i]))) == text)
         let c = try! Hazmat.AesCbc(key: keys[i])
-        assertEqual(hex(try! c.encrypt(text, iv: iv, padding: .None)), cbc[i])
-        require((try! c.decrypt(bytes(cbc[i]), iv: iv, padding: .None)) == text)
+        assertEqual(Hex.encode(try! c.encrypt(text, iv: iv, padding: .None)), cbc[i])
+        require((try! c.decrypt(hex(cbc[i]), iv: iv, padding: .None)) == text)
         let f = try! Hazmat.AesCfb(key: keys[i])
-        assertEqual(hex(try! f.encrypt(text, iv: iv)), cfb[i])
-        require((try! f.decrypt(bytes(cfb[i]), iv: iv)) == text)
+        assertEqual(Hex.encode(try! f.encrypt(text, iv: iv)), cfb[i])
+        require((try! f.decrypt(hex(cfb[i]), iv: iv)) == text)
         let t = try! Hazmat.AesCtr(key: keys[i])
-        let counter = bytes("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
-        assertEqual(hex(try! t.apply(text, counterBlock: counter)), ctr[i])
-        require((try! t.apply(bytes(ctr[i]), counterBlock: counter)) == text)
+        let counter = hex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
+        assertEqual(Hex.encode(try! t.apply(text, counterBlock: counter)), ctr[i])
+        require((try! t.apply(hex(ctr[i]), counterBlock: counter)) == text)
     }
     let byte = try! Hazmat.AesCfb(key: key, feedback: .Byte)
-    assertEqual(hex(try! byte.encrypt(text[..<18], iv: iv)), "3b79424c9c0dd436bace9e0ed4586a4f32b9")
-    expect((try! byte.decrypt(bytes("3b79424c9c0dd436bace9e0ed4586a4f32b9"), iv: iv)) == text[..<18].toArray())
+    assertEqual(Hex.encode(try! byte.encrypt(text[..<18], iv: iv)), "3b79424c9c0dd436bace9e0ed4586a4f32b9")
+    expect((try! byte.decrypt(hex("3b79424c9c0dd436bace9e0ed4586a4f32b9"), iv: iv)) == text[..<18].toArray())
 }
 
 // Each mode in single blocks of AesEcb, at every length around the kernels' strides.
@@ -94,7 +67,7 @@ fn everyLengthIsMadeOfItsBlocks() {
     let cfb = try! Hazmat.AesCfb(key: key32)
     let cfb8 = try! Hazmat.AesCfb(key: key32, feedback: .Byte)
     let ctr = try! Hazmat.AesCtr(key: key32)
-    let start = bytes("ffffffffffffffffffffffffffffffef")
+    let start = hex("ffffffffffffffffffffffffffffffef")
     for count in 0..<300 {
         let plain = message(count)
         var chained: U8[>..] = []
@@ -149,33 +122,26 @@ fn everyLengthIsMadeOfItsBlocks() {
 }
 
 // Past the counter's last four bytes, its last eight, and all of them.
-@test
-fn theCounterIsAllOfItsBlock() {
-    let ctr = try! Hazmat.AesCtr(key: key)
+@test(arguments: ["000000000000000000000000fffffff0", "0000000000000000fffffffffffffff0", "fffffffffffffffffffffffffffffff0", "0102030405060708090a0bffffffffff"])
+fn theCounterIsAllOfItsBlock(_ start: String) throws {
+    let ctr = try Hazmat.AesCtr(key: key)
     let plain = message(2000)
-    for start in ["000000000000000000000000fffffff0", "0000000000000000fffffffffffffff0", "fffffffffffffffffffffffffffffff0", "0102030405060708090a0bffffffffff"] {
-        let whole = try! ctr.apply(plain, counterBlock: bytes(start))
-        for blocks in [1, 15, 16, 17, 40] {
-            require((try! ctr.apply(plain[(16 * blocks)...], counterBlock: bytes(start), skippingBlocks: U64(blocks))) == whole[(16 * blocks)...].toArray())
-        }
-        let block = try! Hazmat.AesEcb(key: key)
-        let after = start == "fffffffffffffffffffffffffffffff0" ? "00000000000000000000000000000000" : ""
-        if after != "" {
-            let stream = try! block.encrypt(bytes(after))
-            require(whole[256] == (stream[0] ^ plain[256]))
-        }
+    let whole = try ctr.apply(plain, counterBlock: hex(start))
+    for blocks in [1, 15, 16, 17, 40] {
+        expect(try ctr.apply(plain[(16 * blocks)...], counterBlock: hex(start), skippingBlocks: U64(blocks)) == whole[(16 * blocks)...].toArray(), "\(blocks) blocks on")
     }
-    let far = try! ctr.apply(plain, counterBlock: bytes("00000000000000000000000000000001"), skippingBlocks: U64.max)
-    expect(far == (try! ctr.apply(plain, counterBlock: bytes("00000000000000010000000000000000"))))
+    if start == "fffffffffffffffffffffffffffffff0" {
+        let stream = try Hazmat.AesEcb(key: key).encrypt(hex("00000000000000000000000000000000"))
+        expect(whole[256] == (stream[0] ^ plain[256]))
+    }
 }
 
-fn wrong(_ body: () throws(CryptoError) -> Void) -> String {
-    do {
-        try body()
-        return ""
-    } catch {
-        return error.description()
-    }
+@test
+fn asManyBlocksAsThereAreMayBeSkipped() throws {
+    let ctr = try Hazmat.AesCtr(key: key)
+    let plain = message(2000)
+    let far = try ctr.apply(plain, counterBlock: hex("00000000000000000000000000000001"), skippingBlocks: U64.max)
+    expect(try ctr.apply(plain, counterBlock: hex("00000000000000010000000000000000")) == far)
 }
 
 @test
@@ -183,26 +149,21 @@ fn wrongLengthsAreErrors() {
     let cbc = try! Hazmat.AesCbc(key: key)
     let ecb = try! Hazmat.AesEcb(key: key)
     let vector = "an initialisation vector of AES has 16 bytes, not 15"
-    assertEqual(wrong { _ = try cbc.encrypt(message(16), iv: message(15)) }, vector)
-    assertEqual(wrong { _ = try cbc.decrypt(message(16), iv: message(15)) }, vector)
-    assertEqual(wrong { _ = try (try Hazmat.AesCtr(key: key)).apply(message(16), counterBlock: message(15)) }, vector)
-    assertEqual(wrong { _ = try (try Hazmat.AesCfb(key: key)).encrypt(message(16), iv: message(15)) }, vector)
-    assertEqual(wrong { _ = try (try Hazmat.AesCfb(key: key)).decrypt(message(16), iv: message(15)) }, vector)
+    expectThrows(saying: vector) { _ = try cbc.encrypt(message(16), iv: message(15)) }
+    expectThrows(saying: vector) { _ = try cbc.decrypt(message(16), iv: message(15)) }
+    expectThrows(saying: vector) { _ = try (try Hazmat.AesCtr(key: key)).apply(message(16), counterBlock: message(15)) }
+    expectThrows(saying: vector) { _ = try (try Hazmat.AesCfb(key: key)).encrypt(message(16), iv: message(15)) }
+    expectThrows(saying: vector) { _ = try (try Hazmat.AesCfb(key: key)).decrypt(message(16), iv: message(15)) }
     let whole = "without padding, this cipher takes whole blocks of 16 bytes, not 17 bytes"
-    assertEqual(wrong { _ = try cbc.encrypt(message(17), iv: iv, padding: .None) }, whole)
-    assertEqual(wrong { _ = try ecb.encrypt(message(17)) }, whole)
-    assertEqual(wrong { _ = try ecb.decrypt(message(17)) }, "a ciphertext of this cipher is whole blocks of 16 bytes, not 17 bytes")
-    assertEqual(wrong { _ = try cbc.decrypt(message(17), iv: iv) }, "a ciphertext of this cipher is whole blocks of 16 bytes, one at least, not 17 bytes")
-    assertEqual(wrong { _ = try cbc.decrypt([], iv: iv) }, "a ciphertext of this cipher is whole blocks of 16 bytes, one at least, not 0 bytes")
-    assertEqual(wrong { _ = try Hazmat.AesEcb(key: SymmetricKey(message(5))) }, "an AES key has 16, 24 or 32 bytes, not 5")
+    expectThrows(saying: whole) { _ = try cbc.encrypt(message(17), iv: iv, padding: .None) }
+    expectThrows(saying: whole) { _ = try ecb.encrypt(message(17)) }
+    expectThrows(saying: "a ciphertext of this cipher is whole blocks of 16 bytes, not 17 bytes") { _ = try ecb.decrypt(message(17)) }
+    expectThrows(saying: "a ciphertext of this cipher is whole blocks of 16 bytes, one at least, not 17 bytes") { _ = try cbc.decrypt(message(17), iv: iv) }
+    expectThrows(saying: "a ciphertext of this cipher is whole blocks of 16 bytes, one at least, not 0 bytes") { _ = try cbc.decrypt([], iv: iv) }
+    expectThrows(saying: "an AES key has 16, 24 or 32 bytes, not 5") { _ = try Hazmat.AesEcb(key: SymmetricKey(message(5))) }
     var place = message(17)
-    do {
-        try cbc.encrypt(inPlace: &place, iv: iv)
-        assert(false)
-    } catch {
-        assertEqual(error.description(), whole)
-        expect(place == message(17))
-    }
+    expectThrows(saying: whole) { try cbc.encrypt(inPlace: &place, iv: iv) }
+    expect(place == message(17))
 }
 
 // Every last byte there is, with the bytes before it as they should be or not.
@@ -222,10 +183,10 @@ fn wrongPaddingIsAnError() {
                 var other = plain
                 other[31 - i] = other[31 - i] ^ 0x80
                 let changed = try! cipher.encrypt(other)
-                assertEqual(wrong { _ = try cipher.decrypt(changed, padding: .Pkcs7) }, "the message does not end in the padding it should")
+                expectThrows(saying: "the message does not end in the padding it should") { _ = try cipher.decrypt(changed, padding: .Pkcs7) }
             }
         } else {
-            assertEqual(wrong { _ = try cipher.decrypt(sealedText, padding: .Pkcs7) }, "the message does not end in the padding it should")
+            expectThrows(saying: "the message does not end in the padding it should") { _ = try cipher.decrypt(sealedText, padding: .Pkcs7) }
         }
     }
 }

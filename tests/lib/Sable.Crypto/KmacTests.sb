@@ -4,18 +4,9 @@ module KmacTests
 // every length against OpenSSL. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
-
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
 
 let tag = "My Tagged Application"
 

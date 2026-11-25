@@ -4,17 +4,10 @@ module X25519Tests
 // with tools/stdlib-coverage.sh Sable.Crypto; Wycheproof's are
 // tools/conformance/publickey.
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
 import Sable.Text
-
-fn hex(_ text: String) -> U8[>..] {
-    return try! Hex.decode(text)
-}
-
-fn text(_ text: String) -> U8[>..] {
-    return text.utf8.toArray()
-}
 
 fn agreed(_ scalar: String, _ point: String) -> String {
     let secret = try! X25519PrivateKey(hex(scalar)).sharedSecret(with: try! X25519PublicKey(hex(point)))
@@ -55,17 +48,16 @@ fn bothSidesAgree() {
     expect(try! one.sharedSecret(with: two.publicKey) == two.sharedSecret(with: one.publicKey))
 }
 
-@test
-fn aPointOfSmallOrderIsRefused() {
+@test(arguments: ["0000000000000000000000000000000000000000000000000000000000000000", "0100000000000000000000000000000000000000000000000000000000000000", "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800"])
+fn aPointOfSmallOrderIsRefused(_ point: String) {
     let key = X25519PrivateKey.generate()
-    for point in ["0000000000000000000000000000000000000000000000000000000000000000", "0100000000000000000000000000000000000000000000000000000000000000", "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800"] {
-        expectThrows(saying: "an X25519 public key of small order") { _ = try key.sharedSecret(with: try X25519PublicKey(hex(point))) }
-    }
+    expectThrows(saying: "an X25519 public key of small order") { _ = try key.sharedSecret(with: try X25519PublicKey(hex(point))) }
 }
 
 @test
 fn keysAreOf32Bytes() {
-    expect((try? X25519PrivateKey([1])) == none && (try? X25519PublicKey([1])) == none)
+    expectThrows { _ = try X25519PrivateKey([1]) }
+    expectThrows { _ = try X25519PublicKey([1]) }
     let key = X25519PrivateKey.generate()
     expect(key == (try! X25519PrivateKey(key.bytes())) && key != X25519PrivateKey.generate())
     assertEqual(key.debugDescription(), "X25519PrivateKey")

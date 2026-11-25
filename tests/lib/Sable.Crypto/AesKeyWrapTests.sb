@@ -3,65 +3,53 @@ module AesKeyWrapTests
 // AesKeyWrap (Sable.Crypto): the RFCs' cases, every length, and misuse. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
+import Sable.Text
 
-fn bytes(_ text: String) -> U8[>..] {
-    var made: U8[>..] = []
-    var high = -1
-    for byte in text.utf8 {
-        let digit = byte <= 0x39 ? Int(byte) - 0x30 : Int(byte) - 0x57
-        if high < 0 {
-            high = digit
-        } else {
-            made.append(U8(high * 16 + digit))
-            high = -1
-        }
-    }
-    return made
+/// A key wrapped as a standard has it: what a test's case is called is
+/// where that says it.
+struct Wrapped: Debug {
+    let section: String
+    let wrapping: String
+    let key: String
+    let wrapped: String
+
+    fn debugDescription() -> String => section
 }
 
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
+let wrapping24 = "000102030405060708090a0b0c0d0e0f1011121314151617"
+let wrapping32 = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+let rfc3394: Wrapped[>..] = [
+    Wrapped(section: "4.1", wrapping: "000102030405060708090a0b0c0d0e0f", key: "00112233445566778899aabbccddeeff", wrapped: "1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5"),
+    Wrapped(section: "4.2", wrapping: wrapping24, key: "00112233445566778899aabbccddeeff", wrapped: "96778b25ae6ca435f92b5b97c050aed2468ab8a17ad84e5d"),
+    Wrapped(section: "4.3", wrapping: wrapping32, key: "00112233445566778899aabbccddeeff", wrapped: "64e8c3f9ce0f5ba263e9777905818a2a93c8191e7d6e8ae7"),
+    Wrapped(section: "4.4", wrapping: wrapping24, key: "00112233445566778899aabbccddeeff0001020304050607", wrapped: "031d33264e15d33268f24ec260743edce1c6c7ddee725a936ba814915c6762d2"),
+    Wrapped(section: "4.5", wrapping: wrapping32, key: "00112233445566778899aabbccddeeff0001020304050607", wrapped: "a8f9bc1612c68b3ff6e6f4fbe30e71e4769c8b80a32cb8958cd5d17d6b254da1"),
+    Wrapped(section: "4.6", wrapping: wrapping32, key: "00112233445566778899aabbccddeeff000102030405060708090a0b0c0d0e0f", wrapped: "28c9f404c4b810f4cbccb35cfb87f8263f5786e2d80ed326cbc7f0e71a99f43bfb988b9b7a02dd21"),
+]
+
+@test(arguments: rfc3394)
+fn wrappingIsAsPublished(_ one: Wrapped) throws {
+    let cipher = try AesKeyWrap(key: SymmetricKey(hex(one.wrapping)))
+    let secret = SymmetricKey(hex(one.key))
+    expect(Hex.encode(try cipher.wrap(secret)) == one.wrapped)
+    expect(try cipher.unwrap(hex(one.wrapped)) == secret)
 }
 
-fn published(_ wrapping: String, _ key: String, _ wrapped: String, padded: Bool) {
-    let cipher = try! AesKeyWrap(key: SymmetricKey(bytes(wrapping)))
-    let secret = SymmetricKey(bytes(key))
-    if padded {
-        assertEqual("\(Digest(try! cipher.wrapPadded(secret)))", wrapped)
-        expect((try! cipher.unwrapPadded(bytes(wrapped))) == secret)
-    } else {
-        assertEqual("\(Digest(try! cipher.wrap(secret)))", wrapped)
-        expect((try! cipher.unwrap(bytes(wrapped))) == secret)
-    }
-}
+// RFC 5649, §6: 20 bytes, and 7.
+let rfc5649: Wrapped[>..] = [
+    Wrapped(section: "20 bytes", wrapping: "5840df6e29b02af1ab493b705bf16ea1ae8338f4dcc176a8", key: "c37b7e6492584340bed12207808941155068f738", wrapped: "138bdeaa9b8fa7fc61f97742e72248ee5ae6ae5360d1ae6a5f54f373fa543b6a"),
+    Wrapped(section: "7 bytes", wrapping: "5840df6e29b02af1ab493b705bf16ea1ae8338f4dcc176a8", key: "466f7250617369", wrapped: "afbeb0f07dfbf5419200f2ccb50bb24f"),
+]
 
-// RFC 3394, §4.1 to 4.6.
-@test
-fn wrappingIsAsPublished() {
-    let whole = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-    let key = "00112233445566778899aabbccddeeff0001020304050607"
-    published("000102030405060708090a0b0c0d0e0f", "00112233445566778899aabbccddeeff", "1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5", padded: false)
-    published("000102030405060708090a0b0c0d0e0f1011121314151617", "00112233445566778899aabbccddeeff", "96778b25ae6ca435f92b5b97c050aed2468ab8a17ad84e5d", padded: false)
-    published(whole, "00112233445566778899aabbccddeeff", "64e8c3f9ce0f5ba263e9777905818a2a93c8191e7d6e8ae7", padded: false)
-    published("000102030405060708090a0b0c0d0e0f1011121314151617", key, "031d33264e15d33268f24ec260743edce1c6c7ddee725a936ba814915c6762d2", padded: false)
-    published(whole, key, "a8f9bc1612c68b3ff6e6f4fbe30e71e4769c8b80a32cb8958cd5d17d6b254da1", padded: false)
-    published(whole, key + "08090a0b0c0d0e0f", "28c9f404c4b810f4cbccb35cfb87f8263f5786e2d80ed326cbc7f0e71a99f43bfb988b9b7a02dd21", padded: false)
-}
-
-// RFC 5649, §6.
-@test
-fn paddedWrappingIsAsPublished() {
-    let key = "5840df6e29b02af1ab493b705bf16ea1ae8338f4dcc176a8"
-    published(key, "c37b7e6492584340bed12207808941155068f738", "138bdeaa9b8fa7fc61f97742e72248ee5ae6ae5360d1ae6a5f54f373fa543b6a", padded: true)
-    published(key, "466f7250617369", "afbeb0f07dfbf5419200f2ccb50bb24f", padded: true)
+@test(arguments: rfc5649)
+fn paddedWrappingIsAsPublished(_ one: Wrapped) throws {
+    let cipher = try AesKeyWrap(key: SymmetricKey(hex(one.wrapping)))
+    let secret = SymmetricKey(hex(one.key))
+    expect(Hex.encode(try cipher.wrapPadded(secret)) == one.wrapped)
+    expect(try cipher.unwrapPadded(hex(one.wrapped)) == secret)
 }
 
 @test
@@ -74,7 +62,7 @@ fn everyLengthIsUnwrapped() {
         assertEqual((try! cipher.unwrapPadded(padded)), key)
         if count >= 16 && count % 8 == 0 {
             let wrapped = try! cipher.wrap(key)
-            assert(wrapped.count == count + 8 && wrapped != padded)
+            expect(wrapped.count == count + 8 && wrapped != padded, "\(count) bytes")
             assertEqual((try! cipher.unwrap(wrapped)), key)
             refused(cipher, wrapped, padded: true)
             refused(cipher, padded, padded: false)
@@ -86,12 +74,7 @@ fn everyLengthIsUnwrapped() {
 }
 
 fn refused(_ cipher: AesKeyWrap, _ wrapped: U8[:], padded: Bool) {
-    do {
-        _ = padded ? try cipher.unwrapPadded(wrapped) : try cipher.unwrap(wrapped)
-        fail("it was unwrapped")
-    } catch {
-        assertEqual(error, .AuthenticationFailed)
-    }
+    expectThrows(CryptoError.AuthenticationFailed) { _ = padded ? try cipher.unwrapPadded(wrapped) : try cipher.unwrap(wrapped) }
 }
 
 @test
@@ -131,7 +114,7 @@ fn wrongPaddingIsRefused() {
     let cipher = try! AesKeyWrap(key: key)
     let block = try! Hazmat.AesEcb(key: key)
     for length in 0..<20 {
-        var plain = bytes("a65959a6")
+        var plain = hex("a65959a6")
         plain.append(contentsOf: [0, 0, 0, U8(length)])
         plain.append(contentsOf: [1, 2, 3, 4, 5, 6, 7, 0])
         let wrapped = try! block.encrypt(plain)
@@ -141,10 +124,10 @@ fn wrongPaddingIsRefused() {
             refused(cipher, wrapped, padded: true)
         }
     }
-    refused(cipher, try! block.encrypt(bytes("a65959a6ffffffff0102030405060708")), padded: true)
-    refused(cipher, try! block.encrypt(bytes("a65959a7000000080102030405060708")), padded: true)
-    refused(cipher, try! block.encrypt(bytes("a65959a6000000050102030405000100")), padded: true)
-    refused(cipher, try! block.encrypt(bytes("a65959a6000000050102030405800000")), padded: true)
+    refused(cipher, try! block.encrypt(hex("a65959a6ffffffff0102030405060708")), padded: true)
+    refused(cipher, try! block.encrypt(hex("a65959a7000000080102030405060708")), padded: true)
+    refused(cipher, try! block.encrypt(hex("a65959a6000000050102030405000100")), padded: true)
+    refused(cipher, try! block.encrypt(hex("a65959a6000000050102030405800000")), padded: true)
 }
 
 @test

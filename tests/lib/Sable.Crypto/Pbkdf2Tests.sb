@@ -16,13 +16,20 @@ fn derive<H: HashFunction>(_ function: H.Type, _ password: String, _ salt: Strin
     return "\(Digest(key.bytes()))"
 }
 
-// RFC 6070's, of SHA-1, and RFC 7914's, of SHA-256.
+// RFC 6070's, of SHA-1.
+@test(arguments: [
+    ("password", "salt", 1, 20, "0c60c80f961f0e71f3a9b524af6012062fe037a6"),
+    ("password", "salt", 2, 20, "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957"),
+    ("password", "salt", 4096, 20, "4b007901b765489abead49d926f721d065a429c1"),
+    ("passwordPASSWORDpassword", "saltSALTsaltSALTsaltSALTsaltSALTsalt", 4096, 25, "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038"),
+])
+fn theStandardsCasesHaveTheirKeys(_ password: String, _ salt: String, _ iterations: Int, _ count: Int, _ key: String) {
+    expect(derive(Insecure.Sha1.self, password, salt, iterations, count) == key)
+}
+
+// RFC 7914's.
 @test
-fn theStandardsCasesHaveTheirKeys() {
-    assertEqual(derive(Insecure.Sha1.self, "password", "salt", 1, 20), "0c60c80f961f0e71f3a9b524af6012062fe037a6")
-    assertEqual(derive(Insecure.Sha1.self, "password", "salt", 2, 20), "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957")
-    assertEqual(derive(Insecure.Sha1.self, "password", "salt", 4096, 20), "4b007901b765489abead49d926f721d065a429c1")
-    assertEqual(derive(Insecure.Sha1.self, "passwordPASSWORDpassword", "saltSALTsaltSALTsaltSALTsaltSALTsalt", 4096, 25), "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038")
+fn theStandardsCaseOfSha256HasItsKey() {
     assertEqual(derive(Sha256.self, "passwd", "salt", 1, 64), "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783")
 }
 
@@ -40,8 +47,8 @@ fn everyFunctionHasItsKey() {
 @test
 fn noIterationsAndNoBytesAreRefused() {
     let secret = SymmetricKey([1])
-    expect((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 0, byteCount: 1)) == none)
-    expect((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: -1, byteCount: 1)) == none)
-    expect((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 1, byteCount: 0)) == none)
-    expect((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 1, byteCount: Int.max)) == none)
+    expectThrows(CryptoError.self) { _ = try Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 0, byteCount: 1) }
+    expectThrows(CryptoError.self) { _ = try Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: -1, byteCount: 1) }
+    expectThrows(CryptoError.self) { _ = try Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 1, byteCount: 0) }
+    expectThrows(CryptoError.self) { _ = try Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 1, byteCount: Int.max) }
 }

@@ -4,17 +4,11 @@ module EcdsaTests
 // what is refused. Run with tools/stdlib-coverage.sh Sable.Crypto; Wycheproof's
 // are tools/conformance/publickey.
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
 import Sable.Text
 
-fn hex(_ text: String) -> U8[>..] {
-    return try! Hex.decode(text)
-}
-
-fn text(_ text: String) -> U8[>..] {
-    return text.utf8.toArray()
-}
 let opensslP256: String = """
 -----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENLZmp6DPTKlA2FweGm7JD1JbG4j7
@@ -76,8 +70,8 @@ fn checkOwn<C: EllipticCurve>(_ curve: C.Type) {
     let key = EcdsaPrivateKey<C>.generate()
     for hash in [HashAlgorithm.Sha256, HashAlgorithm.Sha384, HashAlgorithm.Sha512, HashAlgorithm.Sha3_256, HashAlgorithm.Sha3_384, HashAlgorithm.Sha3_512, HashAlgorithm.Sha1] {
         let signature = key.sign(text("a message"), hash: hash)
-        assert(key.publicKey.isValid(signature, for: text("a message"), hash: hash))
-        assert(!key.publicKey.isValid(signature, for: text("another"), hash: hash))
+        expect(key.publicKey.isValid(signature, for: text("a message"), hash: hash), "\(hash)")
+        expect(!key.publicKey.isValid(signature, for: text("another"), hash: hash), "\(hash)")
         assertEqual(try! EcdsaSignature<C>(der: signature.der), signature)
         assertEqual(try! EcdsaSignature<C>(signature.bytes), signature)
     }
@@ -87,15 +81,19 @@ fn checkOwn<C: EllipticCurve>(_ curve: C.Type) {
     // Any digest, longer than the order or of nothing.
     for count in [0, 1, 20, 66, 100] {
         let digest = U8[>..](repeating: 0xFF, count: count)
-        assert(key.publicKey.isValid(key.sign(digest: digest), digest: digest))
+        expect(key.publicKey.isValid(key.sign(digest: digest), digest: digest), "\(count) bytes")
     }
 }
 
-@test
-fn ownSignaturesAreValid() {
-    checkOwn(P256.self)
-    checkOwn(P384.self)
-    checkOwn(P521.self)
+let curves: NamedCurve[>..] = [.P256, .P384, .P521]
+
+@test(arguments: curves)
+fn ownSignaturesAreValid(_ curve: NamedCurve) {
+    match curve {
+        case .P256 => checkOwn(P256.self)
+        case .P384 => checkOwn(P384.self)
+        case .P521 => checkOwn(P521.self)
+    }
 }
 
 @test
@@ -116,19 +114,20 @@ fn numbersASignatureDoesNotHaveAreNotValid() {
     expect(key.sign([1]).debugDescription().hasPrefix("EcdsaSignature<P256>("))
 }
 
+// A length in two bytes; a zero too many; negative; something after; a number
+// too long; three of them.
+@test(arguments: ["308106020101020101", "300702020001020101", "3006020181020101", "300602010102010100", "30060201010201", "3009020101020101020101"])
+fn derIsReadStrictly(_ der: String) {
+    expectThrows(CryptoError.self) { _ = try EcdsaSignature<P256>(der: hex(der)) }
+}
+
 @test
-fn derIsReadStrictly() {
-    // Right; a length in two bytes; a zero too many; negative; something after;
-    // a number too long; three of them.
-    let bad = ["308106020101020101", "300702020001020101", "3006020181020101", "300602010102010100", "30060201010201", "3009020101020101020101"]
-    expect((try? EcdsaSignature<P256>(der: hex("3006020101020101"))) != none)
-    for each in bad {
-        assert((try? EcdsaSignature<P256>(der: hex(each))) == none)
-    }
+fn derIsReadUpToTheCurvesLength() throws {
+    _ = try EcdsaSignature<P256>(der: hex("3006020101020101"))
     var long: U8[>..] = [0x30, 0x26, 0x02, 0x21, 0x01]
     long.append(repeating: 0, count: 32)
     long.append(contentsOf: [0x02, 0x01, 0x01])
-    expect((try? EcdsaSignature<P256>(der: long)) == none)
+    expectThrows(CryptoError.self) { _ = try EcdsaSignature<P256>(der: long) }
 }
 
 @test

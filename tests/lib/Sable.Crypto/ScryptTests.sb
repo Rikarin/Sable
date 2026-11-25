@@ -4,18 +4,9 @@ module ScryptTests
 // and those that are refused. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
-
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
 
 fn derive(_ password: String, _ salt: String, _ cost: Int, _ blockSize: Int, _ parallelism: Int) -> String {
     var secret: U8[>..] = []
@@ -46,31 +37,39 @@ fn manyParametersHaveTheirKeys() {
     assertEqual("\(all.finalize())", "27e5fe62b46c405313538d2dd27746de2fb7df4651959f85819da65536643cd1")
 }
 
-fn refused(_ cost: Int, _ blockSize: Int, _ parallelism: Int, _ maximumMemory: Int = 1_073_741_824) -> Bool {
-    return (try? Scrypt(cost: cost, blockSize: blockSize, parallelism: parallelism, maximumMemory: maximumMemory)) == none
+@test(arguments: [
+    (0, 8, 1),
+    (1, 8, 1),
+    (-1024, 8, 1),
+    (1000, 8, 1),
+    (1024, 0, 1),
+    (1024, 8, 0),
+    (1024, -8, -1),
+    (1024, 0x4000_0000, 1),
+    (1024, 0x10000, 0x10000),
+    (65536, 1, 1),
+])
+fn parametersItIsNotDefinedForAreRefused(_ cost: Int, _ blockSize: Int, _ parallelism: Int) {
+    expectThrows(CryptoError.self) { _ = try Scrypt(cost: cost, blockSize: blockSize, parallelism: parallelism) }
 }
 
 @test
-fn parametersItIsNotDefinedForAreRefused() {
-    expect(refused(0, 8, 1))
-    expect(refused(1, 8, 1))
-    expect(refused(-1024, 8, 1))
-    expect(refused(1000, 8, 1))
-    expect(refused(1024, 0, 1))
-    expect(refused(1024, 8, 0))
-    expect(refused(1024, -8, -1))
-    expect(refused(1024, 0x4000_0000, 1))
-    expect(refused(1024, 0x10000, 0x10000))
-    expect(refused(65536, 1, 1))
-    expect(!refused(32768, 1, 1))
+fn theLargestCostOfABlockSizeIsTaken() throws {
+    _ = try Scrypt(cost: 32768, blockSize: 1, parallelism: 1)
+}
+
+@test(arguments: [
+    (Int.max / 2 + 1, 8, 1, 1_073_741_824),
+    (1 << 62, 8, 1, 1_073_741_824),
+    (1 << 20, 8, 1, 1_073_741_824),
+    (1024, 8, 1, 1024 * 1024),
+    (16, 1, 0x3FFF_FFFF, 1_073_741_824),
+])
+fn moreMemoryThanTheLimitIsRefused(_ cost: Int, _ blockSize: Int, _ parallelism: Int, _ maximumMemory: Int) {
+    expectThrows(CryptoError.self) { _ = try Scrypt(cost: cost, blockSize: blockSize, parallelism: parallelism, maximumMemory: maximumMemory) }
 }
 
 @test
-fn moreMemoryThanTheLimitIsRefused() {
-    expect(refused(Int.max / 2 + 1, 8, 1))
-    expect(refused(1 << 62, 8, 1))
-    expect(refused(1 << 20, 8, 1))
-    expect(refused(1024, 8, 1, 1024 * 1024))
-    expect(!refused(1024, 8, 1, 1028 * 1024))
-    expect(refused(16, 1, 0x3FFF_FFFF))
+fn asMuchMemoryAsTheLimitIsTaken() throws {
+    _ = try Scrypt(cost: 1024, blockSize: 8, parallelism: 1, maximumMemory: 1028 * 1024)
 }

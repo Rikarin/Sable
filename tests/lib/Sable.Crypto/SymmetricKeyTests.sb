@@ -4,18 +4,9 @@ module SymmetricKeyTests
 // bytes. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
-
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
 
 @test
 fn aKeyKeepsItsBytes() {
@@ -34,7 +25,7 @@ fn keysAreEqualWhenTheirBytesAre() {
     while i < 20 {
         var other = message(20)
         other[i] = other[i] ^ 1
-        assert(SymmetricKey(message(20)) != SymmetricKey(other))
+        expect(SymmetricKey(message(20)) != SymmetricKey(other), "byte \(i)")
         i += 1
     }
 }

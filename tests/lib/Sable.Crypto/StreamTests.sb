@@ -70,11 +70,9 @@ fn aReaderIsHashedAfterWhatWasGiven() throws {
 @test
 fn aReadersErrorIsThrown() {
     var reader = Trickle(bytes: message(), fails: true)
-    let digest = try? Sha256.hash(reading: &reader)
-    expect(digest.isNone)
+    expectThrows(saying: "the stream ended before what was needed") { _ = try Sha256.hash(reading: &reader) }
     reader = Trickle(bytes: message(), fails: true)
-    let valid = try? Hmac<Sha256>.isValid([], reading: &reader, using: key)
-    expect(valid.isNone)
+    expectThrows(saying: "the stream ended before what was needed") { _ = try Hmac<Sha256>.isValid([], reading: &reader, using: key) }
 }
 
 @test

@@ -4,18 +4,9 @@ module HmacTests
 // checked. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
-
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
 
 fn digestOfAll<H: HashFunction>(_ function: H.Type) -> String {
     var all = Sha256()
@@ -69,7 +60,7 @@ fn aCodeIsValidForItsBytesAndKeyAlone() {
     while i < 32 {
         var wrong = code.bytes
         wrong[i] = wrong[i] ^ 0x80
-        assert(!Hmac<Sha256>.isValid(wrong, for: message(50), using: key))
+        expect(!Hmac<Sha256>.isValid(wrong, for: message(50), using: key), "byte \(i)")
         i += 1
     }
 }
@@ -101,20 +92,18 @@ fn aCodeInPartsIsCheckedAsItStands() {
     expect(!code.isValid(whole))
 }
 
-@test
-fn keysOfEveryLengthAroundABlockMakeTheCodeTheirPaddingDoes() {
-    for count in [0, 1, 63, 64, 65, 127, 128, 129, 200] {
-        // RFC 2104, written out.
-        var pad = count > 64 ? Sha256.hash(message(count)).bytes : message(count)
-        while pad.count < 64 {
-            pad.append(0)
-        }
-        var inner = Sha256()
-        inner.update(U8[>..](pad.map { $0 ^ 0x36 }))
-        inner.update(message(20))
-        var outer = Sha256()
-        outer.update(U8[>..](pad.map { $0 ^ 0x5C }))
-        outer.update(inner.finalize().bytes)
-        require(Hmac<Sha256>.authenticationCode(for: message(20), using: SymmetricKey(message(count))) == outer.finalize())
+@test(arguments: [0, 1, 63, 64, 65, 127, 128, 129, 200])
+fn keysOfEveryLengthAroundABlockMakeTheCodeTheirPaddingDoes(_ count: Int) {
+    // RFC 2104, written out.
+    var pad = count > 64 ? Sha256.hash(message(count)).bytes : message(count)
+    while pad.count < 64 {
+        pad.append(0)
     }
+    var inner = Sha256()
+    inner.update(U8[>..](pad.map { $0 ^ 0x36 }))
+    inner.update(message(20))
+    var outer = Sha256()
+    outer.update(U8[>..](pad.map { $0 ^ 0x5C }))
+    outer.update(inner.finalize().bytes)
+    expect(Hmac<Sha256>.authenticationCode(for: message(20), using: SymmetricKey(message(count))) == outer.finalize())
 }

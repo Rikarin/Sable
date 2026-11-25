@@ -4,17 +4,10 @@ module Ed25519Tests
 // with tools/stdlib-coverage.sh Sable.Crypto; Wycheproof's are
 // tools/conformance/publickey.
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
 import Sable.Text
-
-fn hex(_ text: String) -> U8[>..] {
-    return try! Hex.decode(text)
-}
-
-fn text(_ text: String) -> U8[>..] {
-    return text.utf8.toArray()
-}
 
 fn checkRfc(_ seed: String, _ key: String, _ message: String, _ signature: String) {
     let own = try! Ed25519PrivateKey(seed: hex(seed))
@@ -43,7 +36,7 @@ fn anythingChangedIsNotValid() {
     while i < 64 {
         var other = signature
         other[i] = other[i] ^ 1
-        assert(!key.publicKey.isValid(other, for: message))
+        expect(!key.publicKey.isValid(other, for: message), "byte \(i)")
         i += 7
     }
     expect(!key.publicKey.isValid(signature, for: text("a massage")))
@@ -69,16 +62,20 @@ fn aScalarOfTheOrderOrMoreIsNotValid() {
     expect(!key.publicKey.isValid(signature, for: [1]))
 }
 
+// No x has this y; y is the modulus; x is 0 and its sign is set; too few.
+@test(arguments: ["0200000000000000000000000000000000000000000000000000000000000000", "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "0100000000000000000000000000000000000000000000000000000000000080", "0102"])
+fn bytesThatAreNoPointAreNoKey(_ bytes: String) {
+    expectThrows(CryptoError.self) { _ = try Ed25519PublicKey(hex(bytes)) }
+}
+
 @test
-fn bytesThatAreNoPointAreNoKey() {
-    // No x has this y; y is the modulus; x is 0 and its sign is set; too few.
-    let bad = ["0200000000000000000000000000000000000000000000000000000000000000", "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "0100000000000000000000000000000000000000000000000000000000000080", "0102"]
-    for each in bad {
-        assert((try? Ed25519PublicKey(hex(each))) == none)
-    }
-    // The point that adds nothing is one.
-    expect((try? Ed25519PublicKey(hex("0100000000000000000000000000000000000000000000000000000000000000"))) != none)
-    expect((try? Ed25519PrivateKey(seed: [1, 2])) == none)
+fn thePointThatAddsNothingIsAKey() throws {
+    _ = try Ed25519PublicKey(hex("0100000000000000000000000000000000000000000000000000000000000000"))
+}
+
+@test
+fn aSeedHas32Bytes() {
+    expectThrows(CryptoError.self) { _ = try Ed25519PrivateKey(seed: [1, 2]) }
 }
 
 @test

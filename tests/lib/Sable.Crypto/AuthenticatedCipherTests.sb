@@ -5,33 +5,9 @@ module AuthenticatedCipherTests
 // Wycheproof's and NIST's vectors are run by tools/conformance/ciphers. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
-
-fn bytes(_ text: String) -> U8[>..] {
-    var made: U8[>..] = []
-    var high = -1
-    for byte in text.utf8 {
-        let digit = byte <= 0x39 ? Int(byte) - 0x30 : Int(byte) - 0x57
-        if high < 0 {
-            high = digit
-        } else {
-            made.append(U8(high * 16 + digit))
-            high = -1
-        }
-    }
-    return made
-}
-
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
 
 let key32: SymmetricKey = SymmetricKey(message(32))
 
@@ -44,16 +20,16 @@ fn chaCha() -> ChaCha20Poly1305 => try! ChaCha20Poly1305(key: key32)
 fn xChaCha() -> XChaCha20Poly1305 => try! XChaCha20Poly1305(key: key32)
 
 fn published<C: AuthenticatedCipher>(_ cipher: C, _ nonce: String, _ data: String, _ plaintext: String, _ ciphertext: String, _ tag: String) {
-    let box = try! cipher.seal(bytes(plaintext), nonce: bytes(nonce), associatedData: bytes(data))
+    let box = try! cipher.seal(hex(plaintext), nonce: hex(nonce), associatedData: hex(data))
     assertEqual("\(Digest(box.ciphertext))\(Digest(box.tag))", ciphertext + tag)
-    expect((try! cipher.open(box, associatedData: bytes(data))) == bytes(plaintext))
+    expect((try! cipher.open(box, associatedData: hex(data))) == hex(plaintext))
 }
 
 // McGrew and Viega's cases 4 and 16, and the one the standard begins with.
 @test
 fn gcmIsAsPublished() {
     published(
-        try! AesGcm(key: SymmetricKey(bytes("feffe9928665731c6d6a8f9467308308"))),
+        try! AesGcm(key: SymmetricKey(hex("feffe9928665731c6d6a8f9467308308"))),
         "cafebabefacedbaddecaf888",
         "feedfacedeadbeeffeedfacedeadbeefabaddad2",
         "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39",
@@ -61,7 +37,7 @@ fn gcmIsAsPublished() {
         "5bc94fbc3221a5db94fae95ae7121a47"
     )
     published(
-        try! AesGcm(key: SymmetricKey(bytes("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308"))),
+        try! AesGcm(key: SymmetricKey(hex("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308"))),
         "cafebabefacedbaddecaf888",
         "feedfacedeadbeeffeedfacedeadbeefabaddad2",
         "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39",
@@ -75,7 +51,7 @@ fn gcmIsAsPublished() {
 // Cases 5 and 6, whose nonces are of 8 and of 60 bytes.
 @test
 fn gcmTakesNoncesOfOtherLengths() {
-    let key = SymmetricKey(bytes("feffe9928665731c6d6a8f9467308308"))
+    let key = SymmetricKey(hex("feffe9928665731c6d6a8f9467308308"))
     let data = "feedfacedeadbeeffeedfacedeadbeefabaddad2"
     let plaintext = "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39"
     published(
@@ -99,7 +75,7 @@ fn gcmTakesNoncesOfOtherLengths() {
 // SP 800-38C's first two examples.
 @test
 fn ccmIsAsPublished() {
-    let key = SymmetricKey(bytes("404142434445464748494a4b4c4d4e4f"))
+    let key = SymmetricKey(hex("404142434445464748494a4b4c4d4e4f"))
     published(try! AesCcm(key: key, tagByteCount: 4, nonceByteCount: 7), "10111213141516", "0001020304050607", "20212223", "7162015b", "4dac255d")
     published(
         try! AesCcm(key: key, tagByteCount: 6, nonceByteCount: 8),
@@ -115,13 +91,13 @@ fn ccmIsAsPublished() {
 // is written in six.
 @test
 fn ccmTakesLongAssociatedData() {
-    let key = SymmetricKey(bytes("404142434445464748494a4b4c4d4e4f"))
+    let key = SymmetricKey(hex("404142434445464748494a4b4c4d4e4f"))
     var data: U8[>..] = []
     for i in 0..<65536 {
         data.append(U8(i & 0xFF))
     }
     let cipher = try! AesCcm(key: key, tagByteCount: 14, nonceByteCount: 13)
-    let box = try! cipher.seal(bytes("202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"), nonce: bytes("101112131415161718191a1b1c"), associatedData: data)
+    let box = try! cipher.seal(hex("202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"), nonce: hex("101112131415161718191a1b1c"), associatedData: data)
     assertEqual("\(Digest(box.ciphertext))", "69915dad1e84c6376a68c2967e4dab615ae0fd1faec44cc484828529463ccf72")
     assertEqual("\(Digest(box.tag))", "b4ac6bec93e8598e7f0dadbcea5b")
 }
@@ -131,7 +107,7 @@ let sunscreen: String = "4c616469657320616e642047656e746c656d656e206f66207468652
 // RFC 8439's, §2.8.2, and draft-irtf-cfrg-xchacha's, §A.3.1.
 @test
 fn chaChaIsAsPublished() {
-    let key = SymmetricKey(bytes("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f"))
+    let key = SymmetricKey(hex("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f"))
     published(
         try! ChaCha20Poly1305(key: key),
         "070000004041424344454647",
@@ -158,7 +134,7 @@ fn everyLength<C: AuthenticatedCipher>(_ cipher: C) {
         let plaintext = whole[..<count]
         let data = whole[..<count % 70]
         let box = try! cipher.seal(plaintext, nonce: nonce, associatedData: data)
-        assert(box.ciphertext.count == count && box.tag.count == cipher.tagByteCount)
+        assert(box.ciphertext.count == count && box.tag.count == cipher.tagByteCount, "\(count) bytes")
         assertEqual((try! cipher.open(box, associatedData: data)), plaintext.toArray())
 
         // In place, at an address that is no multiple of anything.
@@ -168,20 +144,31 @@ fn everyLength<C: AuthenticatedCipher>(_ cipher: C) {
             place[7 + i] = whole[i]
         }
         try! cipher.seal(inPlace: &place[7..<7 + count], nonce: nonce, associatedData: data, tag: &tag)
-        assert(place[7..<7 + count].toArray() == box.ciphertext && tag == box.tag)
-        assert(place[6] == 45 && place[7 + count] == U8(((7 + count) * 7 + 3) & 0xFF))
+        assert(place[7..<7 + count].toArray() == box.ciphertext && tag == box.tag, "\(count) bytes in place")
+        assert(place[6] == 45 && place[7 + count] == U8(((7 + count) * 7 + 3) & 0xFF), "what is beside \(count) bytes in place")
         try! cipher.open(inPlace: &place[7..<7 + count], nonce: nonce, associatedData: data, tag: tag)
         assertEqual(place[7..<7 + count].toArray(), plaintext.toArray())
         count += count < 300 ? 1 : 37
     }
 }
 
-@test
-fn everyLengthIsOpenedAsItWasSealed() {
-    everyLength(gcm())
-    everyLength(ccm())
-    everyLength(chaCha())
-    everyLength(xChaCha())
+enum Kind {
+    Gcm
+    Ccm
+    ChaCha
+    XChaCha
+}
+
+let kinds: Kind[>..] = [.Gcm, .Ccm, .ChaCha, .XChaCha]
+
+@test(arguments: kinds)
+fn everyLengthIsOpenedAsItWasSealed(_ kind: Kind) {
+    match kind {
+        case .Gcm     => everyLength(gcm())
+        case .Ccm     => everyLength(ccm())
+        case .ChaCha  => everyLength(chaCha())
+        case .XChaCha => everyLength(xChaCha())
+    }
 }
 
 // What the modes are made of, in the library's own others.
@@ -208,30 +195,15 @@ fn aLongMessageIsWhatItsPartsMake() {
 }
 
 fn refused<C: AuthenticatedCipher>(_ cipher: C, _ ciphertext: U8[:], _ nonce: U8[:], _ tag: U8[:], _ data: U8[:]) {
-    do {
-        _ = try cipher.open(ciphertext, nonce: nonce, tag: tag, associatedData: data)
-        fail("it was opened")
-    } catch {
-        assertEqual(error, .AuthenticationFailed)
-    }
+    expectThrows(CryptoError.AuthenticationFailed) { _ = try cipher.open(ciphertext, nonce: nonce, tag: tag, associatedData: data) }
     var place = ciphertext.toArray()
     var into = U8[>..](repeating: 0xAA, count: ciphertext.count)
-    do {
-        try cipher.open(inPlace: &place, nonce: nonce, associatedData: data, tag: tag)
-        fail("it was opened in place")
-    } catch {
-        assertEqual(error, .AuthenticationFailed)
-    }
-    do {
-        try cipher.open(ciphertext, into: &into, nonce: nonce, associatedData: data, tag: tag)
-        fail("it was opened into another")
-    } catch {
-        assertEqual(error, .AuthenticationFailed)
-    }
+    expectThrows(CryptoError.AuthenticationFailed) { try cipher.open(inPlace: &place, nonce: nonce, associatedData: data, tag: tag) }
+    expectThrows(CryptoError.AuthenticationFailed) { try cipher.open(ciphertext, into: &into, nonce: nonce, associatedData: data, tag: tag) }
 
     // Nothing of the plaintext is anywhere.
-    expect(constantTimeEquals(place, repeating: 0))
-    expect(constantTimeEquals(into, repeating: 0))
+    assert(constantTimeEquals(place, repeating: 0), "something was left in place")
+    assert(constantTimeEquals(into, repeating: 0), "something was written")
 }
 
 fn changed(_ bytes: U8[:], _ at: Int, _ bit: Int) -> U8[>..] {
@@ -284,13 +256,15 @@ fn whatIsChangedIsRefused<C: AuthenticatedCipher>(_ cipher: C, _ other: C) {
     }
 }
 
-@test
-fn whatIsChangedIsRefusedAndGivesNothing() {
+@test(arguments: kinds)
+fn whatIsChangedIsRefusedAndGivesNothing(_ kind: Kind) throws {
     let other = SymmetricKey(message(33)[1...])
-    whatIsChangedIsRefused(gcm(), try! AesGcm(key: other))
-    whatIsChangedIsRefused(ccm(), try! AesCcm(key: other))
-    whatIsChangedIsRefused(chaCha(), try! ChaCha20Poly1305(key: other))
-    whatIsChangedIsRefused(xChaCha(), try! XChaCha20Poly1305(key: other))
+    match kind {
+        case .Gcm     => whatIsChangedIsRefused(gcm(), try AesGcm(key: other))
+        case .Ccm     => whatIsChangedIsRefused(ccm(), try AesCcm(key: other))
+        case .ChaCha  => whatIsChangedIsRefused(chaCha(), try ChaCha20Poly1305(key: other))
+        case .XChaCha => whatIsChangedIsRefused(xChaCha(), try XChaCha20Poly1305(key: other))
+    }
 }
 
 // What is associated data, and what the message, cannot be moved from one to
@@ -319,68 +293,62 @@ fn reason<C: AuthenticatedCipher>(_ cipher: C, _ nonce: Int, text: Int, room: In
 @test
 fn wrongLengthsAreErrorsAndWriteNothing() {
     expect(reason(gcm(), 12, text: 20, room: 20, tag: 16) == none)
-    assertEqual(reason(gcm(), 11, text: 20, room: 20, tag: 16)!.description(), "a nonce of this cipher has 12 bytes, not 11")
-    assertEqual(reason(gcm(), 0, text: 20, room: 20, tag: 16)!.description(), "a nonce of this cipher has 12 bytes, not 0")
-    assertEqual(reason(xChaCha(), 12, text: 20, room: 20, tag: 16)!.description(), "a nonce of this cipher has 24 bytes, not 12")
-    assertEqual(reason(gcm(), 12, text: 20, room: 19, tag: 16)!.description(), "the plaintext and the ciphertext are as long as each other, not 20 and 19 bytes")
-    assertEqual(reason(chaCha(), 12, text: 20, room: 21, tag: 16)!.description(), "the plaintext and the ciphertext are as long as each other, not 20 and 21 bytes")
-    assertEqual(reason(ccm(), 12, text: 20, room: 20, tag: 15)!.description(), "a tag of this cipher has 16 bytes, not 15")
+    expect(reason(gcm(), 11, text: 20, room: 20, tag: 16)?.description() == "a nonce of this cipher has 12 bytes, not 11")
+    expect(reason(gcm(), 0, text: 20, room: 20, tag: 16)?.description() == "a nonce of this cipher has 12 bytes, not 0")
+    expect(reason(xChaCha(), 12, text: 20, room: 20, tag: 16)?.description() == "a nonce of this cipher has 24 bytes, not 12")
+    expect(reason(gcm(), 12, text: 20, room: 19, tag: 16)?.description() == "the plaintext and the ciphertext are as long as each other, not 20 and 19 bytes")
+    expect(reason(chaCha(), 12, text: 20, room: 21, tag: 16)?.description() == "the plaintext and the ciphertext are as long as each other, not 20 and 21 bytes")
+    expect(reason(ccm(), 12, text: 20, room: 20, tag: 15)?.description() == "a tag of this cipher has 16 bytes, not 15")
     var place = message(5)
     var tag = message(17)
-    do {
-        try gcm().seal(inPlace: &place, nonce: message(12), associatedData: [], tag: &tag)
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "a tag of this cipher has 16 bytes, not 17")
-        expect(place == message(5))
-    }
+    expectThrows(saying: "a tag of this cipher has 16 bytes, not 17") { try gcm().seal(inPlace: &place, nonce: message(12), associatedData: [], tag: &tag) }
+    expect(place == message(5))
     expectThrows(saying: "a nonce of this cipher has 12 bytes, not 13") { try gcm().open(inPlace: &place, nonce: message(13), associatedData: [], tag: message(16)) }
     expectThrows(saying: "the plaintext and the ciphertext are as long as each other, not 4 and 5 bytes") {
         try gcm().open(message(4), into: &place, nonce: message(12), associatedData: [], tag: message(16))
     }
 }
 
-fn wrongKey(_ count: Int) -> String {
-    do {
-        _ = try AesGcm(key: SymmetricKey(message(count)))
-        return ""
-    } catch {
-        return error.description()
-    }
+@test(arguments: [16, 24, 32])
+fn anAesKeyHasALengthOfThese(_ count: Int) throws {
+    _ = try AesGcm(key: SymmetricKey(message(count)))
+}
+
+@test(arguments: [0, 1, 15, 17, 31, 33, 64])
+fn keysHaveTheirLengths(_ count: Int) {
+    expectThrows(saying: "an AES key has 16, 24 or 32 bytes, not \(count)") { _ = try AesGcm(key: SymmetricKey(message(count))) }
+}
+
+@test(arguments: [0, 16, 31, 33])
+fn aChaChaKeyHasItsLength(_ count: Int) {
+    expectThrows(saying: "a ChaCha20 key has 32 bytes, not \(count)") { _ = try ChaCha20Poly1305(key: SymmetricKey(message(count))) }
+}
+
+@test(arguments: [0, 4, 11, 17])
+fn aGcmTagHasALengthOfThese(_ count: Int) {
+    expectThrows(saying: "an AES-GCM tag has 12 to 16 bytes, not \(count)") { _ = try AesGcm(key: key32, tagByteCount: count) }
 }
 
 @test
-fn keysHaveTheirLengths() {
-    for count in [16, 24, 32] {
-        assertEqual(wrongKey(count), "")
-    }
-    for count in [0, 1, 15, 17, 31, 33, 64] {
-        assertEqual(wrongKey(count), "an AES key has 16, 24 or 32 bytes, not \(count)")
-    }
-    for count in [0, 16, 31, 33] {
-        expectThrows(saying: "a ChaCha20 key has 32 bytes, not \(count)") { _ = try ChaCha20Poly1305(key: SymmetricKey(message(count))) }
-    }
-}
-
-@test
-fn tagsAndNoncesHaveTheirLengths() {
-    for tag in [0, 4, 11, 17] {
-        expectThrows(saying: "an AES-GCM tag has 12 to 16 bytes, not \(tag)") { _ = try AesGcm(key: key32, tagByteCount: tag) }
-    }
+fn aGcmNonceHasAByte() {
     expectThrows(saying: "an AES-GCM nonce has 1 byte or more, not 0") { _ = try AesGcm(key: key32, nonceByteCount: 0) }
-    for tag in [0, 2, 5, 15, 18] {
-        expectThrows(saying: "an AES-CCM tag has 4, 6, 8, 10, 12, 14 or 16 bytes, not \(tag)") { _ = try AesCcm(key: key32, tagByteCount: tag) }
-    }
-    for nonce in [6, 14] {
-        expectThrows(saying: "an AES-CCM nonce has 7 to 13 bytes, not \(nonce)") { _ = try AesCcm(key: key32, nonceByteCount: nonce) }
-    }
+}
 
-    // A shorter tag is the longer one's first bytes, in GCM.
-    let box = try! gcm().seal([1, 2, 3], nonce: message(12))
-    for tag in [12, 13, 14, 15] {
-        let cut = try! (try! AesGcm(key: key32, tagByteCount: tag)).seal([1, 2, 3], nonce: message(12))
-        require(cut.tag == box.tag[..<tag].toArray())
-    }
+@test(arguments: [0, 2, 5, 15, 18])
+fn aCcmTagHasALengthOfThese(_ count: Int) {
+    expectThrows(saying: "an AES-CCM tag has 4, 6, 8, 10, 12, 14 or 16 bytes, not \(count)") { _ = try AesCcm(key: key32, tagByteCount: count) }
+}
+
+@test(arguments: [6, 14])
+fn aCcmNonceHasALengthOfThese(_ count: Int) {
+    expectThrows(saying: "an AES-CCM nonce has 7 to 13 bytes, not \(count)") { _ = try AesCcm(key: key32, nonceByteCount: count) }
+}
+
+@test(arguments: [12, 13, 14, 15])
+fn aShorterGcmTagIsTheLongerOnesFirstBytes(_ count: Int) throws {
+    let box = try gcm().seal([1, 2, 3], nonce: message(12))
+    let cut = try AesGcm(key: key32, tagByteCount: count).seal([1, 2, 3], nonce: message(12))
+    expect(cut.tag == box.tag[..<count].toArray())
 }
 
 // A nonce of 13 bytes leaves two for the length.
@@ -390,12 +358,7 @@ fn aCcmMessageIsNoLongerThanItsLengthCanSay() {
     let longest = U8[>..](repeating: 1, count: 65535)
     let box = try! cipher.seal(longest, nonce: message(13))
     expect((try! cipher.open(box)) == longest)
-    do {
-        _ = try cipher.seal(U8[>..](repeating: 1, count: 65536), nonce: message(13))
-        assert(false)
-    } catch {
-        assertEqual(error, .LimitExceeded(reason: "a message of this cipher has at most 65535 bytes, not 65536"))
-    }
+    expectThrows(CryptoError.LimitExceeded(reason: "a message of this cipher has at most 65535 bytes, not 65536")) { _ = try cipher.seal(U8[>..](repeating: 1, count: 65536), nonce: message(13)) }
 }
 
 @test
@@ -406,24 +369,15 @@ fn randomNoncesAreCounted() {
         _ = try! (i % 2 == 0 ? cipher : copy).randomNonce()
     }
     for _ in 0..<2 {
-        do {
-            _ = try cipher.seal([1])
-            assert(false)
-        } catch {
-            assertEqual(error, .LimitExceeded(reason: "this key has had 4096 random nonces of 7 bytes, and one more could be one it has had"))
-        }
+        expectThrows(CryptoError.LimitExceeded(reason: "this key has had 4096 random nonces of 7 bytes, and one more could be one it has had")) { _ = try cipher.seal([1]) }
     }
 
     // The caller's own are still the caller's.
     _ = try! cipher.seal([1], nonce: message(7))
     let short = try! AesGcm(key: key32, nonceByteCount: 4)
     _ = try! short.seal([1])
-    do {
-        _ = try short.seal([1])
-        assert(false)
-    } catch {
-        expect(error != .AuthenticationFailed)
-    }
+    let error = expectThrows(CryptoError.self) { _ = try short.seal([1]) }
+    expect(error != CryptoError.AuthenticationFailed)
     expect((try! xChaCha().randomNonce()).count == 24)
     expect((try! gcm().randomNonce()).count == 12)
     expect((try! chaCha().randomNonce()) != (try! chaCha().randomNonce()))
@@ -473,25 +427,10 @@ fn aBoxIsItsParts() {
     let long = try! xChaCha().seal([])
     expect((try! SealedBox(combined: long.combined, nonceByteCount: 24)) == long)
     for count in [0, 11, 12, 27] {
-        do {
-            _ = try SealedBox(combined: box.combined[..<count])
-            assert(false)
-        } catch {
-            assertEqual(error, .AuthenticationFailed)
-        }
+        expectThrows(CryptoError.AuthenticationFailed) { _ = try SealedBox(combined: box.combined[..<count]) }
     }
-    do {
-        _ = try SealedBox(combined: box.combined, nonceByteCount: -1)
-        assert(false)
-    } catch {
-        assertEqual(error, .AuthenticationFailed)
-    }
-    do {
-        _ = try gcm().open(try SealedBox(combined: box.combined[..<30]), associatedData: [4])
-        assert(false)
-    } catch {
-        assertEqual(error, .AuthenticationFailed)
-    }
+    expectThrows(CryptoError.AuthenticationFailed) { _ = try SealedBox(combined: box.combined, nonceByteCount: -1) }
+    expectThrows(CryptoError.AuthenticationFailed) { _ = try gcm().open(try SealedBox(combined: box.combined[..<30]), associatedData: [4]) }
 }
 
 @test

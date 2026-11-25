@@ -4,25 +4,20 @@ module Sha3_512Tests
 // the blocks' ends, and every way of cutting a message in two. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
 
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
+let published: Published[>..] = [
+    Published("", "a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26"),
+    Published("abc", "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0"),
+    Published("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", "04a371e84ecfb5b8b77cb48610fca8182dd457ce6f326a0fd3d7ec2f1e91636dee691fbe0c985302ba1b0d8dc78c086346b533b49c030d99a27daf1139d6e75e"),
+    Published("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu", "afebb2ef542e6579c50cad06d2e578f9f8dd6881d7dc824d26360feebf18a4fa73e3261122948efcfd492e74e82e2189ed0fb440d187f382270cb455f21dd185"),
+]
 
-@test
-fn thePublishedMessagesHaveTheirDigests() {
-    assertEqual("\(Sha3_512.hash(utf8: ""))", "a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26")
-    assertEqual("\(Sha3_512.hash(utf8: "abc"))", "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0")
-    assertEqual("\(Sha3_512.hash(utf8: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))", "04a371e84ecfb5b8b77cb48610fca8182dd457ce6f326a0fd3d7ec2f1e91636dee691fbe0c985302ba1b0d8dc78c086346b533b49c030d99a27daf1139d6e75e")
-    assertEqual("\(Sha3_512.hash(utf8: "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"))", "afebb2ef542e6579c50cad06d2e578f9f8dd6881d7dc824d26360feebf18a4fa73e3261122948efcfd492e74e82e2189ed0fb440d187f382270cb455f21dd185")
+@test(arguments: published)
+fn thePublishedMessagesHaveTheirDigests(_ one: Published) {
+    expect("\(Sha3_512.hash(one.message))" == one.digest)
 }
 
 // Every length to past three blocks, its digest among those hashed here;
@@ -91,10 +86,4 @@ fn itsSizesAreTheStandards() {
     assertEqual(Sha3_512.digestByteCount, 64)
     assertEqual(Sha3_512.blockByteCount, 72)
     assertEqual(Sha3_512.hash(message(3)).count, 64)
-}
-
-fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
-    var bytes = a.toArray()
-    bytes.append(contentsOf: b)
-    return bytes
 }

@@ -6,11 +6,9 @@ module SecureRandomTests
 import Sable.Crypto
 import Sable.Testing
 
-@test
-fn itGivesAsManyBytesAsAreAskedFor() {
-    for count in [0, 1, 7, 255, 256, 257, 1000, 100_000] {
-        assertEqual(SecureRandom.bytes(count).count, count)
-    }
+@test(arguments: [0, 1, 7, 255, 256, 257, 1000, 100_000])
+fn itGivesAsManyBytesAsAreAskedFor(_ count: Int) {
+    expect(SecureRandom.bytes(count).count == count)
 }
 
 // Every byte of a long run is as likely as any: none is missing from 100,000.
@@ -30,7 +28,7 @@ fn fillingReplacesEveryByte() {
     // Each 100 bytes of zeros left has a chance of one in 2^800.
     var start = 0
     while start < 1000 {
-        assert(bytes[start..<start + 100] != U8[>..](repeating: 0, count: 100)[0...])
+        expect(bytes[start..<start + 100] != U8[>..](repeating: 0, count: 100)[0...], "from \(start)")
         start += 100
     }
     let before = bytes

@@ -4,25 +4,20 @@ module Sha1Tests
 // the blocks' ends, and every way of cutting a message in two. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
 
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
+let published: Published[>..] = [
+    Published("", "da39a3ee5e6b4b0d3255bfef95601890afd80709"),
+    Published("abc", "a9993e364706816aba3e25717850c26c9cd0d89d"),
+    Published("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", "84983e441c3bd26ebaae4aa1f95129e5e54670f1"),
+    Published(millionTimesADigest: "34aa973cd4c4daa4f61eeb2bdbad27316534016f"),
+]
 
-@test
-fn thePublishedMessagesHaveTheirDigests() {
-    assertEqual("\(Insecure.Sha1.hash(utf8: ""))", "da39a3ee5e6b4b0d3255bfef95601890afd80709")
-    assertEqual("\(Insecure.Sha1.hash(utf8: "abc"))", "a9993e364706816aba3e25717850c26c9cd0d89d")
-    assertEqual("\(Insecure.Sha1.hash(utf8: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))", "84983e441c3bd26ebaae4aa1f95129e5e54670f1")
-    assertEqual("\(Insecure.Sha1.hash(U8[>..](repeating: 0x61, count: 1_000_000)))", "34aa973cd4c4daa4f61eeb2bdbad27316534016f")
+@test(arguments: published)
+fn thePublishedMessagesHaveTheirDigests(_ one: Published) {
+    expect("\(Insecure.Sha1.hash(one.message))" == one.digest)
 }
 
 // Every length to past three blocks, its digest among those hashed here;
@@ -91,10 +86,4 @@ fn itsSizesAreTheStandards() {
     assertEqual(Insecure.Sha1.digestByteCount, 20)
     assertEqual(Insecure.Sha1.blockByteCount, 64)
     assertEqual(Insecure.Sha1.hash(message(3)).count, 20)
-}
-
-fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
-    var bytes = a.toArray()
-    bytes.append(contentsOf: b)
-    return bytes
 }

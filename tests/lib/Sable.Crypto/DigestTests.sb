@@ -3,19 +3,10 @@ module DigestTests
 // Digest (Sable.Crypto): its text, equality and hash. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Collections
 import Sable.Crypto
 import Sable.Testing
-
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
 
 @test
 fn aDigestIsWrittenInHexadecimal() {
@@ -75,7 +66,8 @@ fn resetsTo<H: HashFunction>(_ start: H) {
         hash.update(U8[>..](repeating: 9, count: count))
         let digest = hash.finalize()
         assertEqual(hash.finalizeAndReset(), digest)
-        assert(hash.finalize() == empty && start.finalize() == empty)
+        assertEqual(hash.finalize(), empty)
+        assertEqual(start.finalize(), empty)
     }
     hash.update([1])
     expect(hash.finalizeAndReset() != empty)

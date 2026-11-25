@@ -3,36 +3,27 @@ module ConstantTimeTests
 // constantTimeEquals and secureZero (Sable.Crypto). Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
-
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
 
 @test
 fn bytesAreEqualOnlyWhenEveryOneIs() {
     var count = 0
     while count < 40 {
-        assert(constantTimeEquals(message(count), message(count)))
+        assert(constantTimeEquals(message(count), message(count)), "\(count) bytes")
         var i = 0
         while i < count {
             var bit = 0
             while bit < 8 {
                 var other = message(count)
                 other[i] = other[i] ^ (1 << U8(bit))
-                assert(!constantTimeEquals(message(count), other))
+                assert(!constantTimeEquals(message(count), other), "\(count) bytes, bit \(bit) of byte \(i)")
                 bit += 1
             }
             i += 1
         }
-        assert(!constantTimeEquals(message(count), message(count + 1)))
+        assert(!constantTimeEquals(message(count), message(count + 1)), "\(count) bytes and one more")
         count += 1
     }
 }
@@ -78,12 +69,12 @@ fn zeroingACopyLeavesTheOriginal() {
 fn bytesAreAllOneOnlyWhenEveryOneIs() {
     var count = 0
     while count < 20 {
-        assert(constantTimeEquals(U8[>..](repeating: 7, count: count), repeating: 7))
+        expect(constantTimeEquals(U8[>..](repeating: 7, count: count), repeating: 7), "\(count) bytes")
         var i = 0
         while i < count {
             var other = U8[>..](repeating: 7, count: count)
             other[i] = 6
-            assert(!constantTimeEquals(other, repeating: 7))
+            expect(!constantTimeEquals(other, repeating: 7), "\(count) bytes, byte \(i)")
             i += 1
         }
         count += 1

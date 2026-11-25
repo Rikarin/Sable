@@ -4,23 +4,18 @@ module Blake2bTests
 // the blocks' ends, and every way of cutting a message in two. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
 
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
+let published: Published[>..] = [
+    Published("", "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"),
+    Published("abc", "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923"),
+]
 
-@test
-fn thePublishedMessagesHaveTheirDigests() {
-    assertEqual("\(Blake2b.hash(utf8: ""))", "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce")
-    assertEqual("\(Blake2b.hash(utf8: "abc"))", "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923")
+@test(arguments: published)
+fn thePublishedMessagesHaveTheirDigests(_ one: Published) {
+    expect("\(Blake2b.hash(one.message))" == one.digest)
 }
 
 // Every length to past three blocks, its digest among those hashed here;
@@ -89,12 +84,6 @@ fn itsSizesAreTheStandards() {
     assertEqual(Blake2b.digestByteCount, 64)
     assertEqual(Blake2b.blockByteCount, 128)
     assertEqual(Blake2b.hash(message(3)).count, 64)
-}
-
-fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
-    var bytes = a.toArray()
-    bytes.append(contentsOf: b)
-    return bytes
 }
 
 // Every size of digest with every size of key, from Python's hashlib.

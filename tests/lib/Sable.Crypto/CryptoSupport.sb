@@ -1,0 +1,57 @@
+module CryptoSupport
+
+// What several files of Sable.Crypto's tests use.
+
+import Sable.Crypto
+import Sable.Testing
+import Sable.Text
+
+/// Bytes that a copy of them out of place would not equal.
+public fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+/// The bytes that hexadecimal text is of.
+public fn hex(_ text: String) -> U8[>..] {
+    return try! Hex.decode(text)
+}
+
+/// Text's UTF-8.
+public fn text(_ text: String) -> U8[>..] {
+    return text.utf8.toArray()
+}
+
+public fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
+    var bytes = a.toArray()
+    bytes.append(contentsOf: b)
+    return bytes
+}
+
+/// A message whose digest a standard gives: what a test's case is called
+/// is the message, or the start of one that is long.
+public struct Published: Debug {
+    public let message: U8[>..]
+    public let digest: String
+    let name: String
+
+    public init(_ text: String, _ digest: String) {
+        message = text.utf8.toArray()
+        self.digest = digest
+        name = text.count > 20 ? "\(text.utf8.count) bytes, \(text.prefix(12))\u{2026}" : text
+    }
+
+    /// A million times the letter a.
+    public init(millionTimesADigest digest: String) {
+        message = U8[>..](repeating: 0x61, count: 1_000_000)
+        self.digest = digest
+        name = "a million a"
+    }
+
+    public fn debugDescription() -> String => "\"\(name)\""
+}

@@ -3,17 +3,11 @@ module KeyFormatTests
 // Keys in PEM, DER and JWK (Sable.Crypto): OpenSSL's, read and written as they
 // were, and what is refused. Run with tools/stdlib-coverage.sh Sable.Crypto.
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
 import Sable.Text
 
-fn hex(_ text: String) -> U8[>..] {
-    return try! Hex.decode(text)
-}
-
-fn text(_ text: String) -> U8[>..] {
-    return text.utf8.toArray()
-}
 let edKey: String = """
 -----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIP651k0vPSRylyANscky3bbiJvOEGbyfqUjE47Oz0qqS
@@ -251,14 +245,14 @@ fn check(_ secret: String, _ publicKey: String) {
     expect((try? PrivateKey.parse(pkcs8: longer)) == none)
 }
 
-@test
-fn opensslsKeysAreReadAndWrittenAsTheyWere() {
-    check(edKey, edPublic)
-    check(xKey, xPublic)
-    check(p256Key, p256Public)
-    check(p384Key, p384Public)
-    check(p521Key, p521Public)
-    check(rsaKey, rsaPublic)
+let opensslsKeys: [String: (String, String)] = [
+    "Ed25519": (edKey, edPublic), "X25519": (xKey, xPublic), "P-256": (p256Key, p256Public), "P-384": (p384Key, p384Public), "P-521": (p521Key, p521Public), "RSA": (rsaKey, rsaPublic)
+]
+
+@test(arguments: ["Ed25519", "X25519", "P-256", "P-384", "P-521", "RSA"])
+fn opensslsKeysAreReadAndWrittenAsTheyWere(_ name: String) {
+    let (secret, publicKey) = require(opensslsKeys[name])
+    check(secret, publicKey)
 }
 
 @test
@@ -303,9 +297,11 @@ fn typed<C: EllipticCurve>(_ curve: C.Type, _ secret: String, _ others: String[:
     expect(try! EcdsaPublicKey<C>.parse(pem: signs.publicKey.pem) == signs.publicKey)
     expect(try! EcdhPublicKey<C>.parse(jwk: signs.publicKey.jwk) == agrees.publicKey)
     for other in others {
-        assert((try? EcdsaPrivateKey<C>.parse(pem: other)) == none && (try? EcdhPrivateKey<C>.parse(pem: other)) == none)
+        expectThrows { _ = try EcdsaPrivateKey<C>.parse(pem: other) }
+        expectThrows { _ = try EcdhPrivateKey<C>.parse(pem: other) }
         let publicKey = try! PrivateKey.parse(pem: other).publicKey.pem
-        assert((try? EcdsaPublicKey<C>.parse(pem: publicKey)) == none && (try? EcdhPublicKey<C>.parse(pem: publicKey)) == none)
+        expectThrows { _ = try EcdsaPublicKey<C>.parse(pem: publicKey) }
+        expectThrows { _ = try EcdhPublicKey<C>.parse(pem: publicKey) }
     }
     expect((try? EcdhPrivateKey<C>([1])) == none && (try? EcdsaPublicKey<C>([4, 1])) == none)
     expect(signs.publicKey.compressed.count == C.curve.byteCount + 1 && signs.publicKey.debugDescription().hasPrefix("EcdsaPublicKey<\(C.curve)>("))
@@ -347,20 +343,23 @@ fn rfc8410sKeysAreRead() {
     expect((try? PrivateKey.parse(pem: "-----BEGIN PRIVATE KEY-----\nMHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\noB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrB\nZ9w7lshQhqowtrbLDFw4rXAxZuF=\n-----END PRIVATE KEY-----\n")) == none)
 }
 
+let badJwks: String[>..] = [
+    "", "[]", "{}", "{\"kty\":1}", "{\"kty\":\"oct\",\"k\":\"AA\"}", "{\"kty\":\"OKP\",\"crv\":\"Ed448\",\"x\":\"AA\"}", "{\"kty\":\"OKP\"}",
+    "{\"kty\":\"EC\",\"crv\":\"P-192\",\"x\":\"AA\",\"y\":\"AA\"}", "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"AA\",\"y\":\"AA\"}", "{\"kty\":\"EC\",\"crv\":\"P-256\"}",
+    "{\"kty\":\"OKP\",\"crv\":\"X25519\",\"x\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}", "{\"kty\":\"RSA\",\"n\":\"AQ\",\"e\":\"AQAB\"}", "{\"kty\":\"RSA\",\"n\":\"AQ\",\"e\":\"AQABAQABAQABAQAB\"}",
+]
+
+@test(arguments: badJwks)
+fn whatIsNoJwkIsRefused(_ jwk: String) {
+    expectThrows { _ = try PublicKey.parse(jwk: jwk) }
+    expectThrows { _ = try PrivateKey.parse(jwk: jwk) }
+}
+
 @test
 fn jwksAreReadStrictly() {
     // RFC 7517 A.1's first key.
     let key = try! PublicKey.parse(jwk: "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4\",\"y\":\"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM\",\"use\":\"enc\",\"kid\":\"1\"}")
     assertEqual(key.jwk, "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4\",\"y\":\"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM\"}")
-    let bad = [
-        "", "[]", "{}", "{\"kty\":1}", "{\"kty\":\"oct\",\"k\":\"AA\"}", "{\"kty\":\"OKP\",\"crv\":\"Ed448\",\"x\":\"AA\"}", "{\"kty\":\"OKP\"}",
-        "{\"kty\":\"EC\",\"crv\":\"P-192\",\"x\":\"AA\",\"y\":\"AA\"}", "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"AA\",\"y\":\"AA\"}", "{\"kty\":\"EC\",\"crv\":\"P-256\"}",
-        "{\"kty\":\"OKP\",\"crv\":\"X25519\",\"x\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}", "{\"kty\":\"RSA\",\"n\":\"AQ\",\"e\":\"AQAB\"}", "{\"kty\":\"RSA\",\"n\":\"AQ\",\"e\":\"AQABAQABAQABAQAB\"}",
-    ]
-    for each in bad {
-        assert((try? PublicKey.parse(jwk: each)) == none)
-        assert((try? PrivateKey.parse(jwk: each)) == none)
-    }
     // Without a private key, and with another's public one.
     expect((try? PrivateKey.parse(jwk: key.jwk)) == none)
     let one = Ed25519PrivateKey.generate()
@@ -368,14 +367,16 @@ fn jwksAreReadStrictly() {
     expect((try? PrivateKey.parse(jwk: one.jwk().replacing(Base64.encode(one.publicKey.bytes, alphabet: .UrlSafe, padding: false), with: Base64.encode(two.publicKey.bytes, alphabet: .UrlSafe, padding: false)))) == none)
 }
 
+@test(arguments: ["-----BEGIN A-----\nAQID\n", "-----BEGIN A-----\nAQID\n-----END B-----\n", "-----BEGIN A-----\n!\n-----END A-----\n", "-----BEGIN A-----\nProc-Type: 4,ENCRYPTED\n\nAQID\n-----END A-----\n", "-----BEGIN A-----\nAQI\n-----END A-----\n"])
+fn whatIsNoPemIsRefused(_ pem: String) {
+    expectThrows { _ = try PemBlock.parse(pem) }
+}
+
 @test
 fn pemIsReadStrictly() {
     let blocks = try! PemBlock.parse("a note\n-----BEGIN A B-----\r\nAQID\r\n-----END A B-----\r\n\r\n-----BEGIN C-----\n-----END C-----")
     expect(blocks == [PemBlock(label: "A B", bytes: [1, 2, 3]), PemBlock(label: "C", bytes: [])])
     expect(try! PemBlock.parse("").isEmpty)
-    for bad in ["-----BEGIN A-----\nAQID\n", "-----BEGIN A-----\nAQID\n-----END B-----\n", "-----BEGIN A-----\n!\n-----END A-----\n", "-----BEGIN A-----\nProc-Type: 4,ENCRYPTED\n\nAQID\n-----END A-----\n", "-----BEGIN A-----\nAQI\n-----END A-----\n"] {
-        require((try? PemBlock.parse(bad)) == none)
-    }
     let long = PemBlock(label: "X", bytes: U8[>..](repeating: 7, count: 100))
     assertEqual(long.text.split(separator: '\n').toArray()[1].utf8.count, 64)
     expect(try! PemBlock.parse(long.text) == [long])

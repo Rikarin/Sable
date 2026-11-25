@@ -4,17 +4,10 @@ module EcdhTests
 // point. Run with tools/stdlib-coverage.sh Sable.Crypto; Wycheproof's are
 // tools/conformance/publickey.
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
 import Sable.Text
-
-fn hex(_ text: String) -> U8[>..] {
-    return try! Hex.decode(text)
-}
-
-fn text(_ text: String) -> U8[>..] {
-    return text.utf8.toArray()
-}
 
 fn check<C: EllipticCurve>(_ curve: C.Type, _ i: String, _ r: String, _ gr: String, _ shared: String) {
     let mine = try! EcdhPrivateKey<C>(hex(i))
@@ -39,7 +32,8 @@ fn checkOwn<C: EllipticCurve>(_ curve: C.Type) {
     expect(mine.sharedSecret(with: yours.publicKey) == yours.sharedSecret(with: mine.publicKey))
     assertEqual(mine.sharedSecret(with: yours.publicKey).byteCount, C.curve.byteCount)
     for key in [mine.publicKey, yours.publicKey] {
-        assert(try! EcdhPublicKey<C>(key.compressed) == key && EcdhPublicKey<C>(key.bytes) == key)
+        expect(try! EcdhPublicKey<C>(key.compressed) == key)
+        expect(try! EcdhPublicKey<C>(key.bytes) == key)
     }
     // The other y, and one of no point.
     var other = mine.publicKey.compressed
@@ -70,11 +64,15 @@ fn checkOwn<C: EllipticCurve>(_ curve: C.Type) {
     expect(mine != yours && (try! EcdhPrivateKey<C>(mine.bytes())) == mine)
 }
 
-@test
-fn bothSidesAgreeOnEveryCurve() {
-    checkOwn(P256.self)
-    checkOwn(P384.self)
-    checkOwn(P521.self)
+let curves: NamedCurve[>..] = [.P256, .P384, .P521]
+
+@test(arguments: curves)
+fn bothSidesAgreeOnEveryCurve(_ curve: NamedCurve) {
+    match curve {
+        case .P256 => checkOwn(P256.self)
+        case .P384 => checkOwn(P384.self)
+        case .P521 => checkOwn(P521.self)
+    }
 }
 
 // The multiples of the base point by small scalars, and by those near the
@@ -93,7 +91,7 @@ fn smallScalarsAgree() {
         bytes[31] = bytes[31] - U8(scalar)
         let opposite = try! EcdhPrivateKey<P256>(bytes)
         assertEqual(opposite.sharedSecret(with: other.publicKey), key.sharedSecret(with: other.publicKey))
-        assert(opposite.publicKey != key.publicKey)
+        expect(opposite.publicKey != key.publicKey, "\(scalar)")
         scalar += 1
     }
 }

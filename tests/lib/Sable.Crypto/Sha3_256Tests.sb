@@ -4,25 +4,20 @@ module Sha3_256Tests
 // the blocks' ends, and every way of cutting a message in two. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
 
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
+let published: Published[>..] = [
+    Published("", "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"),
+    Published("abc", "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532"),
+    Published("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", "41c0dba2a9d6240849100376a8235e2c82e1b9998a999e21db32dd97496d3376"),
+    Published(millionTimesADigest: "5c8875ae474a3634ba4fd55ec85bffd661f32aca75c6d699d0cdcb6c115891c1"),
+]
 
-@test
-fn thePublishedMessagesHaveTheirDigests() {
-    assertEqual("\(Sha3_256.hash(utf8: ""))", "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a")
-    assertEqual("\(Sha3_256.hash(utf8: "abc"))", "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532")
-    assertEqual("\(Sha3_256.hash(utf8: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))", "41c0dba2a9d6240849100376a8235e2c82e1b9998a999e21db32dd97496d3376")
-    assertEqual("\(Sha3_256.hash(U8[>..](repeating: 0x61, count: 1_000_000)))", "5c8875ae474a3634ba4fd55ec85bffd661f32aca75c6d699d0cdcb6c115891c1")
+@test(arguments: published)
+fn thePublishedMessagesHaveTheirDigests(_ one: Published) {
+    expect("\(Sha3_256.hash(one.message))" == one.digest)
 }
 
 // Every length to past three blocks, its digest among those hashed here;
@@ -91,10 +86,4 @@ fn itsSizesAreTheStandards() {
     assertEqual(Sha3_256.digestByteCount, 32)
     assertEqual(Sha3_256.blockByteCount, 136)
     assertEqual(Sha3_256.hash(message(3)).count, 32)
-}
-
-fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
-    var bytes = a.toArray()
-    bytes.append(contentsOf: b)
-    return bytes
 }

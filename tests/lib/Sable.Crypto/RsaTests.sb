@@ -4,17 +4,11 @@ module RsaTests
 // with tools/stdlib-coverage.sh Sable.Crypto; Wycheproof's are
 // tools/conformance/publickey.
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
 import Sable.Text
 
-fn hex(_ text: String) -> U8[>..] {
-    return try! Hex.decode(text)
-}
-
-fn text(_ text: String) -> U8[>..] {
-    return text.utf8.toArray()
-}
 let opensslKey: String = """
 -----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC65MtLQOBeCx5W
@@ -67,17 +61,20 @@ fn opensslsSignaturesAreMadeAndValid() {
     expect(key.sign(text("a message"), padding: .PssParameters(.Sha512, maskHash: .Sha256, saltByteCount: 0)) == mixed)
 }
 
-@test
-fn everyPaddingIsValid() {
-    for hash in [HashAlgorithm.Sha1, HashAlgorithm.Sha256, HashAlgorithm.Sha384, HashAlgorithm.Sha512, HashAlgorithm.Sha3_256, HashAlgorithm.Sha3_384, HashAlgorithm.Sha3_512] {
-        for padding in [RsaSignaturePadding.Pkcs1(hash), RsaSignaturePadding.Pss(hash)] {
-            require(padding.hash == hash && padding == padding && padding.debugDescription().contains("Sha"))
-            let signature = key.sign(text("a message"), padding: padding)
-            require(key.publicKey.isValid(signature, for: text("a message"), padding: padding))
-            require(!key.publicKey.isValid(signature, for: text("another"), padding: padding))
-        }
+let hashes: HashAlgorithm[>..] = [.Sha1, .Sha256, .Sha384, .Sha512, .Sha3_256, .Sha3_384, .Sha3_512]
+
+@test(arguments: hashes)
+fn everyPaddingIsValid(_ hash: HashAlgorithm) {
+    for padding in [RsaSignaturePadding.Pkcs1(hash), RsaSignaturePadding.Pss(hash)] {
+        expect(padding.hash == hash && padding == padding && padding.debugDescription().contains("Sha"))
+        let signature = key.sign(text("a message"), padding: padding)
+        expect(key.publicKey.isValid(signature, for: text("a message"), padding: padding), "\(padding:?)")
+        expect(!key.publicKey.isValid(signature, for: text("another"), padding: padding), "\(padding:?)")
     }
-    // PSS has a salt, and a signature is never another.
+}
+
+@test
+fn pssHasASaltAndPkcs1HasNone() {
     expect(key.sign([1], padding: .Pss(.Sha256)) != key.sign([1], padding: .Pss(.Sha256)))
     expect(key.sign([1], padding: .Pkcs1(.Sha256)) == key.sign([1], padding: .Pkcs1(.Sha256)))
 }
@@ -98,7 +95,7 @@ fn anythingElseIsNotValid() {
     expect(!key.publicKey.isValid(signature, for: [1], padding: .PssParameters(.Sha256, maskHash: .Sha256, saltByteCount: 1000)))
 }
 
-@test
+@test(tags: ["slow"], timeout: .minutes(2))
 fn aMadeKeySignsAndIsReadBack() {
     let made = RsaPrivateKey.generate(bits: 2048)
     expect(made.publicKey.bitCount == 2048 && made.publicKey.signatureByteCount == 256)
@@ -120,24 +117,24 @@ fn numbersThatDoNotGoTogetherAreNoKey() {
         for place in [20, 60, 127] {
             var other = numbers
             other[i][place] = other[i][place] ^ 2
-            assert((try? RsaPrivateKey(modulus: other[0], exponent: 65537, privateExponent: other[1], prime1: other[2], prime2: other[3], exponent1: other[4], exponent2: other[5], coefficient: other[6])) == none)
+            expectThrows(CryptoError.self, "byte \(place) of number \(i)") { _ = try RsaPrivateKey(modulus: other[0], exponent: 65537, privateExponent: other[1], prime1: other[2], prime2: other[3], exponent1: other[4], exponent2: other[5], coefficient: other[6]) }
         }
         i += 1
     }
-    expect((try? RsaPrivateKey(modulus: numbers[0], exponent: 3, privateExponent: numbers[1], prime1: numbers[2], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6])) == none)
-    expect((try? RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: [], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6])) == none)
-    expect((try? RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: numbers[0], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6])) == none)
-    expect((try? RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: numbers[2], prime2: numbers[3], exponent1: numbers[0], exponent2: numbers[5], coefficient: numbers[6])) == none)
+    expectThrows(CryptoError.self) { _ = try RsaPrivateKey(modulus: numbers[0], exponent: 3, privateExponent: numbers[1], prime1: numbers[2], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6]) }
+    expectThrows(CryptoError.self) { _ = try RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: [], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6]) }
+    expectThrows(CryptoError.self) { _ = try RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: numbers[0], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6]) }
+    expectThrows(CryptoError.self) { _ = try RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: numbers[2], prime2: numbers[3], exponent1: numbers[0], exponent2: numbers[5], coefficient: numbers[6]) }
 }
 
 @test
 fn publicKeysAreOddAndOfALengthAllowed() {
-    expect((try? RsaPublicKey(modulus: [], exponent: 3)) == none)
-    expect((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 127), exponent: 3)) == none)
-    expect((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 2049), exponent: 3)) == none)
-    expect((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFE, count: 256), exponent: 3)) == none)
-    expect((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 256), exponent: 4)) == none)
-    expect((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 256), exponent: 1)) == none)
+    expectThrows(CryptoError.self) { _ = try RsaPublicKey(modulus: [], exponent: 3) }
+    expectThrows(CryptoError.self) { _ = try RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 127), exponent: 3) }
+    expectThrows(CryptoError.self) { _ = try RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 2049), exponent: 3) }
+    expectThrows(CryptoError.self) { _ = try RsaPublicKey(modulus: U8[>..](repeating: 0xFE, count: 256), exponent: 3) }
+    expectThrows(CryptoError.self) { _ = try RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 256), exponent: 4) }
+    expectThrows(CryptoError.self) { _ = try RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 256), exponent: 1) }
     var padded: U8[>..] = [0, 0]
     padded.append(repeating: 0xFF, count: 256)
     expect(try! RsaPublicKey(modulus: padded, exponent: 3) == RsaPublicKey(modulus: padded[2...], exponent: 3))

@@ -4,18 +4,9 @@ module Argon2idTests
 // (through Python's cryptography), and those that are refused. Run with
 //     tools/stdlib-coverage.sh Sable.Crypto
 
+import CryptoSupport
 import Sable.Crypto
 import Sable.Testing
-
-fn message(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8((i * 7 + 3) & 0xFF))
-        i += 1
-    }
-    return bytes
-}
 
 // RFC 9106 §5.3.
 @test
@@ -59,39 +50,47 @@ fn aMebibyteAndMoreHasItsKey() {
     assertEqual("\(Digest(key.bytes()))", "16357f7d084d8390193a91120d65f51358f9d7198a0060bccb94940f4b85fd7a")
 }
 
-fn refused(_ memoryKiB: Int, _ iterations: Int, _ parallelism: Int, _ maximumMemory: Int = 4_294_967_296) -> Bool {
-    return (try? Argon2id(memoryKiB: memoryKiB, iterations: iterations, parallelism: parallelism, maximumMemory: maximumMemory)) == none
+@test(arguments: [
+    (64, 1, 0),
+    (64, 1, -1),
+    (Int.max, 1, 0x100_0000),
+    (64, 0, 1),
+    (64, -1, 1),
+    (64, 0x1_0000_0000, 1),
+    (7, 1, 1),
+    (31, 1, 4),
+    (-1, 1, 1),
+])
+fn parametersItIsNotDefinedForAreRefused(_ memoryKiB: Int, _ iterations: Int, _ parallelism: Int) {
+    expectThrows(CryptoError.self) { _ = try Argon2id(memoryKiB: memoryKiB, iterations: iterations, parallelism: parallelism) }
 }
 
 @test
-fn parametersItIsNotDefinedForAreRefused() {
-    expect(refused(64, 1, 0))
-    expect(refused(64, 1, -1))
-    expect(refused(Int.max, 1, 0x100_0000))
-    expect(refused(64, 0, 1))
-    expect(refused(64, -1, 1))
-    expect(refused(64, 0x1_0000_0000, 1))
-    expect(refused(7, 1, 1))
-    expect(refused(31, 1, 4))
-    expect(refused(-1, 1, 1))
-    expect(!refused(8, 1, 1))
+fn theLeastParametersAreTaken() throws {
+    _ = try Argon2id(memoryKiB: 8, iterations: 1, parallelism: 1)
+}
+
+@test(arguments: [
+    (Int.max, 1, 1, 4_294_967_296),
+    (0x1_0000_0000, 1, 1, Int.max),
+    (4_194_305, 1, 1, 4_294_967_296),
+    (1025, 1, 1, 1024 * 1024),
+])
+fn moreMemoryThanTheLimitIsRefused(_ memoryKiB: Int, _ iterations: Int, _ parallelism: Int, _ maximumMemory: Int) {
+    expectThrows(CryptoError.self) { _ = try Argon2id(memoryKiB: memoryKiB, iterations: iterations, parallelism: parallelism, maximumMemory: maximumMemory) }
 }
 
 @test
-fn moreMemoryThanTheLimitIsRefused() {
-    expect(refused(Int.max, 1, 1))
-    expect(refused(0x1_0000_0000, 1, 1, Int.max))
-    expect(refused(4_194_305, 1, 1))
-    expect(refused(1025, 1, 1, 1024 * 1024))
-    expect(!refused(1024, 1, 1, 1024 * 1024))
+fn asMuchMemoryAsTheLimitIsTaken() throws {
+    _ = try Argon2id(memoryKiB: 1024, iterations: 1, parallelism: 1, maximumMemory: 1024 * 1024)
 }
 
 @test
 fn aShortSaltAndAShortKeyAreRefused() {
     let argon2 = try! Argon2id(memoryKiB: 8, iterations: 1, parallelism: 1)
     let secret = SymmetricKey([1])
-    expect((try? argon2.deriveKey(from: secret, salt: message(7), byteCount: 32)) == none)
-    expect((try? argon2.deriveKey(from: secret, salt: message(8), byteCount: 3)) == none)
-    expect((try? argon2.deriveKey(from: secret, salt: message(8), byteCount: 0x1_0000_0000)) == none)
+    expectThrows(CryptoError.self) { _ = try argon2.deriveKey(from: secret, salt: message(7), byteCount: 32) }
+    expectThrows(CryptoError.self) { _ = try argon2.deriveKey(from: secret, salt: message(8), byteCount: 3) }
+    expectThrows(CryptoError.self) { _ = try argon2.deriveKey(from: secret, salt: message(8), byteCount: 0x1_0000_0000) }
     assertEqual((try! argon2.deriveKey(from: secret, salt: message(8), byteCount: 4)).byteCount, 4)
 }

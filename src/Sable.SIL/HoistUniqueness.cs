@@ -10,6 +10,7 @@ namespace Sable.SIL;
 ///     variable are reading it and writing its elements, nothing in the loop
 ///     can share the buffer again: so it is made unique once, before the
 ///     loop, and every write inside stores in place (<c>array_set_unique</c>,
+///     <c>array_element_addr_unique</c> for a field of one,
 ///     and <c>simd_store_unique</c> for a vector's),
 ///     with no call that could change the variable — which lets LLVM keep the
 ///     buffer and its count in registers. The variable is a local slot or an
@@ -92,11 +93,24 @@ public sealed class HoistUniqueness : ISilPass {
 
     /// <summary>A write that first makes its array the only reference to its buffer: an element, or an integer as bytes.</summary>
     static bool IsCheckedWrite(string name) =>
-        name is "array_set" or "simd_store" || name.StartsWith("bytes_store_U", StringComparison.Ordinal) || name.StartsWith("bytes_store_array_U", StringComparison.Ordinal);
+        name is "array_set" or "array_element_addr" or "simd_store" || name.StartsWith("bytes_store_U", StringComparison.Ordinal) || name.StartsWith("bytes_store_array_U", StringComparison.Ordinal);
+
+    /// <summary>
+    ///     An element's address is a write only of what it is used for: a
+    ///     field stored or read where it is, as <c>a[i].x = v</c> does, and
+    ///     not a call it is lent to.
+    /// </summary>
+    static bool PartsOnly(SilInstruction address, Uses uses) =>
+        address.Type is not AddressType || uses.Of(address).All(user => user switch {
+            StructElementAddrInst or TupleElementAddrInst => PartsOnly(user, uses),
+            StoreInst store => ReferenceEquals(store.Address, address) && !ReferenceEquals(store.Value, address),
+            LoadInst { Kind: not LoadKind.Take } => true,
+            _ => false,
+        });
 
     /// <summary>The same write, of an array known to be that.</summary>
     static string InPlace(string name) =>
-        name is "array_set" or "simd_store" ? name + "_unique"
+        name is "array_set" or "array_element_addr" or "simd_store" ? name + "_unique"
         : name.StartsWith("bytes_store_array_", StringComparison.Ordinal) ? "bytes_store_array_unique_" + name["bytes_store_array_".Length..]
         : "bytes_store_unique_" + name["bytes_store_".Length..];
 
@@ -202,8 +216,8 @@ public sealed class HoistUniqueness : ISilPass {
                     made = true;
                     break;
 
-                case BuiltinInst { Name: var name } write when (name.StartsWith("bytes_store_", StringComparison.Ordinal) || name is "array_set" or "array_set_unique" or "simd_store" or "simd_store_unique")
-                    && ReferenceEquals(write.Operands[0], slot) && !write.Operands.Skip(1).Any(o => ReferenceEquals(o, slot)):
+                case BuiltinInst { Name: var name } write when (name.StartsWith("bytes_store_", StringComparison.Ordinal) || name is "array_set" or "array_set_unique" or "array_element_addr" or "array_element_addr_unique" or "simd_store" or "simd_store_unique")
+                    && PartsOnly(write, uses) && ReferenceEquals(write.Operands[0], slot) && !write.Operands.Skip(1).Any(o => ReferenceEquals(o, slot)):
                     break;
 
                 case LoadBorrowInst borrowed:
@@ -248,7 +262,8 @@ public sealed class HoistUniqueness : ISilPass {
             }
 
             switch (user) {
-                case BuiltinInst write when (IsCheckedWrite(write.Name) || write.Name is "array_set_unique" or "simd_store_unique" || write.Name.StartsWith("bytes_store_", StringComparison.Ordinal))
+                case BuiltinInst write when (IsCheckedWrite(write.Name) || write.Name is "array_set_unique" or "array_element_addr_unique" or "simd_store_unique" || write.Name.StartsWith("bytes_store_", StringComparison.Ordinal))
+                    && PartsOnly(write, uses)
                     && ReferenceEquals(write.Operands[0], address)
                     && !write.Operands.Skip(1).Any(o => ReferenceEquals(o, address)):
                     break;

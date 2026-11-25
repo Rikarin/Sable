@@ -1402,12 +1402,15 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "slice_of_take":
                 return operands[0] is HeapArray wholeArray ? new SliceValue(Alive(wholeArray), 0, wholeArray.Elements.Count) : SliceValue.Empty;
 
-            case "slice_of": {
+            case "slice_of" or "slice_of_borrowed": {
                 if (operands[0] is not HeapArray array || Alive(array).Elements.Count == 0) {
                     return SliceValue.Empty;
                 }
 
-                Retain(builtin.Operands[0].Type, array);
+                if (builtin.Name == "slice_of") {
+                    Retain(builtin.Operands[0].Type, array);
+                }
+
                 return new SliceValue(array, 0, array.Elements.Count);
             }
 
@@ -2162,7 +2165,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
             }
 
-            case "array_element_addr": {
+            case "array_element_addr" or "array_element_addr_unique": {
                 var (array, at) = Writable(builtin.Operands[0], (IReference)operands[0]!, (long)operands[1]!);
                 return new ArrayElement(array, at);
             }
@@ -3204,6 +3207,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 ("mul_Int", [long a, long b]) => Wrap(() => a * b),
                 ("div_Int", [long a, long b]) => b == 0 ? throw new SilTrap("division by zero") : Wrap(() => a / b),
                 ("rem_Int", [long a, long b]) => b == 0 ? throw new SilTrap("division by zero") : Wrap(() => a % b),
+                ("select_Int", [bool c, long a, long b]) => c ? a : b,
                 ("and_Int", [long a, long b]) => a & b,
                 ("or_Int", [long a, long b]) => a | b,
                 ("xor_Int", [long a, long b]) => a ^ b,

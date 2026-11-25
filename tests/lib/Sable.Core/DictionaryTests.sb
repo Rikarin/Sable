@@ -580,3 +580,37 @@ fn uniqueKeysWithValuesTrapsOnARepeatedKey() {
     let pairs: (Int, String)[>..] = [(1, "a"), (2, "b"), (2, "c")]
     let _ = Dictionary(uniqueKeysWithValues: pairs)
 }
+
+@test
+fn aDictionaryAgreesWithAModelAsItGrowsAndShrinks() {
+    // Many sizes of table, each with slots removed entries left.
+    var map: [Int: Int] = [:]
+    var model = Int?[>..](repeating: none, count: 3000)
+    var seed = 3
+    for step in 0..<60000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648
+        let key = seed / 7 % 3000
+        if seed / 3 % 100 < (step / 10000 % 2 == 0 ? 70 : 30) {
+            assert(map.updateValue(step, forKey: key) == model[key])
+            model[key] = step
+        } else {
+            assert(map.remove(key) == model[key])
+            model[key] = none
+        }
+    }
+    var held = 0
+    for key in 0..<3000 {
+        assert(map[key] == model[key])
+        assert(map.contains(key) == (model[key] != none))
+        held += model[key] == none ? 0 : 1
+    }
+    assertEqual(map.count, held)
+    map.shrinkToFit()
+    for (key, value) in map {
+        assert(model[key] == value)
+    }
+    map.removeAll(keepingCapacity: true)
+    assert(map.capacity > 0 && map[5] == none)
+    map[5] = 6
+    assertEqual(map[5], 6)
+}

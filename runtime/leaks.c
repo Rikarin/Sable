@@ -81,24 +81,40 @@ static void leaks_start(void) {
     tracking = getenv("SABLE_CHECK_LEAKS") != NULL;
 }
 
-// An object is alive: counted, and kept in the set when leaks are checked.
-static void object_born(SableObject *object) {
-    thread_count(&current_thread()->live_objects, 1);
-    if (tracking) {
-        spin_lock(&tracked_lock);
+// Into the set, or out of it: apart, as hardly any program runs with it.
+__attribute__((noinline)) static void track(SableObject *object, bool born) {
+    spin_lock(&tracked_lock);
+    if (born) {
         track_insert(object);
-        spin_unlock(&tracked_lock);
+    } else {
+        track_remove(object);
+    }
+
+    spin_unlock(&tracked_lock);
+}
+
+// An object is alive: counted, and kept in the set when leaks are checked.
+static inline void object_born_on(SableThread *thread, SableObject *object) {
+    thread_count(&thread->live_objects, 1);
+    if (tracking) {
+        track(object, true);
     }
 }
 
+static void object_born(SableObject *object) {
+    object_born_on(current_thread(), object);
+}
+
 // An object's memory is no longer the program's.
-static void object_gone(SableObject *object) {
-    thread_count(&current_thread()->live_objects, -1);
+static inline void object_gone_on(SableThread *thread, SableObject *object) {
+    thread_count(&thread->live_objects, -1);
     if (tracking) {
-        spin_lock(&tracked_lock);
-        track_remove(object);
-        spin_unlock(&tracked_lock);
+        track(object, false);
     }
+}
+
+static void object_gone(SableObject *object) {
+    object_gone_on(current_thread(), object);
 }
 
 // The walk: the leaked objects sorted by address, and the references found

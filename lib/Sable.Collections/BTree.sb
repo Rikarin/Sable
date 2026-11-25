@@ -26,21 +26,13 @@ const bTreeMostKeys = 2 * bTreeDegree - 1
 /// The item put at place i, those from i on moved one along.
 fn insertAt<T>(_ items: inout T[>..], _ item: T, _ i: Int) {
     items.append(item)
-    var j = items.count - 1
-    while j > i {
-        items.swapAt(j, j - 1)
-        j = j - 1
-    }
+    items.rotate(from: i, to: items.count, left: -1)
 }
 
 /// The item at place i taken out, those after it moved one back.
 @discardable
 fn removeAt<T>(_ items: inout T[>..], _ i: Int) -> T {
-    var j = i
-    while j + 1 < items.count {
-        items.swapAt(j, j + 1)
-        j = j + 1
-    }
+    items.rotate(from: i, to: items.count, left: 1)
     return items.removeLast()
 }
 
@@ -89,14 +81,18 @@ struct BTree<Key: Comparable, Value> {
     /// The first of the node's keys not below the key, and whether it is
     /// the key.
     fn locate(_ key: Key, _ n: Int) -> (Int, Bool) {
-        // A node's few keys in a row: read in order, the scan's branches
-        // foreseen, it is faster than halving them.
+        // The run of keys halved, stepping over its lower half or not with
+        // no branch on which: as many steps whatever the key, so that there
+        // is none for the machine to guess wrong.
         let keys = nodes[n].keys
-        var i = 0
-        while i < keys.count && keys[i] < key {
-            i = i + 1
+        var low = 0
+        var size = keys.count
+        while size > 0 {
+            let half = (size + 1) >> 1
+            low = (keys[low + half - 1] < key).selecting(low + half, low)
+            size = size - half
         }
-        return (i, i < keys.count && !(key < keys[i]))
+        return (low, low < keys.count && !(key < keys[low]))
     }
 
     // ---- Reading --------------------------------------------------------

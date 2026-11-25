@@ -323,14 +323,14 @@ static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t 
 
 // Made the only reference to its buffer, before a loop that writes it in
 // place: the empty array stays empty, and the loop's index checks trap.
-void sable_array_make_unique(SableArray **slot, const SableMetadata *type) {
+SABLE_SLOW void sable_array_make_unique(SableArray **slot, const SableMetadata *type) {
     if (*slot != NULL && !uniquely_held(*slot)) {
         unique(slot, type, 0);
     }
 }
 
 // Room for one more element at the end; the caller stores it.
-void *sable_array_append_slot(SableArray **slot, const SableMetadata *type) {
+SABLE_SLOW void *sable_array_append_slot(SableArray **slot, const SableMetadata *type) {
     SableArray *array = unique(slot, type, 1);
     if (array->count == array->capacity) {
         int64_t old = array->capacity * type->element_size;
@@ -341,7 +341,7 @@ void *sable_array_append_slot(SableArray **slot, const SableMetadata *type) {
     return array->elements + array->count++ * type->element_size;
 }
 
-void *sable_array_mutable_element(SableArray **slot, const SableMetadata *type, int64_t index) {
+SABLE_SLOW void *sable_array_mutable_element(SableArray **slot, const SableMetadata *type, int64_t index) {
     if (*slot == NULL || index < 0 || index >= (*slot)->count) {
         trap_here("array index out of range");
     }
@@ -510,7 +510,9 @@ void sable_array_append_repeating(SableArray **slot, const SableMetadata *type, 
 static void rotate_elements(char *base, int64_t length, int64_t by, int64_t size) {
     int64_t left = by * size, right = (length - by) * size;
     int64_t aside = left < right ? left : right;
-    char *scratch = buffer_alloc(aside);
+    // One element moved, as an insertion moves it, is set aside on the stack.
+    _Alignas(16) char small[64];
+    char *scratch = aside <= (int64_t)sizeof small ? small : buffer_alloc(aside);
     if (left <= right) {
         memcpy(scratch, base, (size_t)left);
         memmove(base, base + left, (size_t)right);
@@ -520,7 +522,10 @@ static void rotate_elements(char *base, int64_t length, int64_t by, int64_t size
         memmove(base + right, base, (size_t)left);
         memcpy(base, scratch, (size_t)right);
     }
-    buffer_free(scratch, aside);
+
+    if (scratch != small) {
+        buffer_free(scratch, aside);
+    }
 }
 
 // How far left a rotation of 'length' elements by 'by' moves them, 'by'
@@ -532,6 +537,10 @@ static int64_t rotation(int64_t from, int64_t to, int64_t by, int64_t count) {
     }
 
     int64_t length = to - from;
+    if (by >= -length && by <= length) {
+        return by < 0 ? by + length : by == length ? 0 : by;
+    }
+
     return length == 0 ? 0 : ((by % length) + length) % length;
 }
 
@@ -549,7 +558,7 @@ void sable_array_rotate(SableArray **slot, const SableMetadata *type, int64_t fr
 }
 
 // The last element, moved out: the caller loads it, and owns it.
-void *sable_array_remove_last(SableArray **slot, const SableMetadata *type) {
+SABLE_SLOW void *sable_array_remove_last(SableArray **slot, const SableMetadata *type) {
     if (*slot == NULL || (*slot)->count == 0) {
         trap_here("removeLast of an empty array");
     }

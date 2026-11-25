@@ -7,18 +7,21 @@ module Sable.Collections
 /// of its second. Elements that tie come out in no particular order.
 public class PriorityQueue<Element: Comparable> {
     var items: Element[>..] = []
-    var before: (Element, Element) -> Bool
+
+    // Whether one goes ahead of another; none when '<' says so, which is
+    // then compiled in rather than called through a closure.
+    let before: ((Element, Element) -> Bool)?
 
     /// Smallest first.
     public init() {
-        before = (a: Element, b: Element) => a < b
+        before = none
     }
 
     /// The sequence's values, smallest first, made a heap at once — in
     /// O(n), not a push at a time. What going through them throws, it
     /// throws.
     public init<S: Sequence>(_ values: S) throws(S.Failure) where S.Element == Element {
-        before = (a: Element, b: Element) => a < b
+        before = none
         items = try values.toArray()
         heapify()
     }
@@ -76,8 +79,12 @@ public class PriorityQueue<Element: Comparable> {
             return last
         }
         let first = items[0]
-        items[0] = last
-        siftDown(0)
+        if before == none {
+            PriorityQueue.sinkAscending(&items, last)
+        } else {
+            items[0] = last
+            siftDown(0)
+        }
         return first
     }
 
@@ -92,7 +99,7 @@ public class PriorityQueue<Element: Comparable> {
     /// assert(queue.sortedElements() == [4, 5])
     /// ```
     public fn pushPop(_ value: Element) -> Element {
-        if items.count == 0 || !before(items[0], value) {
+        if items.count == 0 || !goesAhead(items[0], value) {
             return value
         }
         let first = items[0]
@@ -178,14 +185,25 @@ public class PriorityQueue<Element: Comparable> {
     // The heap's order made where it was broken at one place: the element
     // there moved toward the root, or toward the leaves.
     fn reposition(_ at: Int) {
-        if at > 0 && before(items[at], items[(at - 1) / 2]) {
+        if at > 0 && goesAhead(items[at], items[(at - 1) / 2]) {
             siftUp(at)
         } else {
             siftDown(at)
         }
     }
 
+    fn goesAhead(_ a: Element, _ b: Element) -> Bool {
+        if let before = before {
+            return before(a, b)
+        }
+        return a < b
+    }
+
     fn siftUp(_ start: Int) {
+        guard let before = before else {
+            PriorityQueue.siftUpAscending(&items, start)
+            return
+        }
         let value = items[start]
         var child = start
         while child > 0 {
@@ -200,6 +218,10 @@ public class PriorityQueue<Element: Comparable> {
     }
 
     fn siftDown(_ start: Int) {
+        guard let before = before else {
+            PriorityQueue.siftDownAscending(&items, start)
+            return
+        }
         let value = items[start]
         let n = items.count
         var parent = start
@@ -220,6 +242,74 @@ public class PriorityQueue<Element: Comparable> {
         items[parent] = value
     }
 
+    // The same two, comparing with '<'. The array is theirs alone while they
+    // run, so that it is checked once for another reference to it, not at
+    // each element moved.
+    static fn siftUpAscending(_ items: inout Element[>..], _ start: Int) {
+        let value = items[start]
+        var child = start
+        while child > 0 {
+            let parent = (child - 1) >> 1
+            if !(value < items[parent]) {
+                break
+            }
+            items[child] = items[parent]
+            child = parent
+        }
+        items[child] = value
+    }
+
+    static fn siftDownAscending(_ items: inout Element[>..], _ start: Int) {
+        let value = items[start]
+        let n = items.count
+        var parent = start
+        while true {
+            var child = parent * 2 + 1
+            if child >= n {
+                break
+            }
+            if child + 1 < n && items[child + 1] < items[child] {
+                child = child + 1
+            }
+            if !(items[child] < value) {
+                break
+            }
+            items[parent] = items[child]
+            parent = child
+        }
+        items[parent] = value
+    }
+
+    // The root replaced by a value that was at the end, which belongs near it
+    // again: the gap goes all the way down, each time to the child that goes
+    // first, and the value comes up from there — one comparison a level, not
+    // two, and none whose answer the machine cannot guess.
+    static fn sinkAscending(_ items: inout Element[>..], _ value: Element) {
+        let n = items.count
+        var gap = 0
+        var child = 1
+        while child + 1 < n {
+            let right = items[child + 1] < items[child] ? 1 : 0
+            let first = child + right
+            items[gap] = items[first]
+            gap = first
+            child = gap * 2 + 1
+        }
+        if child < n {
+            items[gap] = items[child]
+            gap = child
+        }
+        while gap > 0 {
+            let parent = (gap - 1) >> 1
+            if !(value < items[parent]) {
+                break
+            }
+            items[gap] = items[parent]
+            gap = parent
+        }
+        items[gap] = value
+    }
+
     // Floyd's: each parent sifted down, the last first.
     fn heapify() {
         var at = items.count / 2 - 1
@@ -237,7 +327,11 @@ public class PriorityQueue<Element: Comparable> {
     /// The elements in the order they would come out, leaving the queue as it is.
     public fn sortedElements() -> Element[>..] {
         var result = items
-        result.sort(by: before)
+        if let before = before {
+            result.sort(by: before)
+        } else {
+            result.sort()
+        }
         return result
     }
 }

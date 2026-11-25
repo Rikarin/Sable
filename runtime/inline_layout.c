@@ -225,13 +225,20 @@ SableBlock *sable_inline_new_stack(void *memory, const SableInlineLayout *layout
 
 // The block at '*slot', made the only reference to its bytes, with room
 // for 'room' more: a copy of a shared one, a larger one for a full one.
-static SableBlock *unique_block(SableBlock **slot, int64_t room) {
+static SableBlock *unique_copy(SableBlock **slot, int64_t room);
+
+static inline SableBlock *unique_block(SableBlock **slot, int64_t room) {
     SableBlock *block = *slot;
-    int64_t needed = block->length + room;
-    if (strong_count(&block->header) == 1 && !(block->header.flags & SABLE_IMMORTAL) && needed <= block->capacity) {
+    if (strong_count(&block->header) == 1 && !(block->header.flags & SABLE_IMMORTAL) && block->length + room <= block->capacity) {
         return block;
     }
 
+    return unique_copy(slot, room);
+}
+
+__attribute__((noinline)) static SableBlock *unique_copy(SableBlock **slot, int64_t room) {
+    SableBlock *block = *slot;
+    int64_t needed = block->length + room;
     int64_t capacity = needed <= block->capacity ? block->capacity : needed < 2 * block->capacity ? 2 * block->capacity : needed;
     // Grown in place, by realloc, only when it came from malloc: one from a
     // size class is copied below, as a shared one is.
@@ -328,6 +335,31 @@ static InlineLinks collect_links(SableBlock *block, const SableInlineLayout *lay
     return links;
 }
 
+// The bytes from 'from' to the block's end moved to start at 'to', where
+// there is room for them.
+static inline void move_bytes(SableBlock *block, int64_t to, int64_t from) {
+    if (to != from && block->length > from) {
+        memmove(block->bytes + to, block->bytes + from, (size_t)(block->length - from));
+    }
+}
+
+// A few bytes copied without a call: a field's text and an element are short.
+static inline void copy_short(uint8_t *to, const uint8_t *from, int64_t count) {
+    if (count >= 8 && count <= 16) {
+        uint64_t first, last;
+        memcpy(&first, from, 8);
+        memcpy(&last, from + count - 8, 8);
+        memcpy(to, &first, 8);
+        memcpy(to + count - 8, &last, 8);
+    } else if (count < 8) {
+        for (int64_t i = 0; i < count; i++) {
+            to[i] = from[i];
+        }
+    } else {
+        memcpy(to, from, (size_t)count);
+    }
+}
+
 // Replaces 'removed' bytes at 'at' with 'inserted' ones, moving what
 // follows, and keeps every relative reference in 'links' pointing where it
 // did: one whose field or target moved is measured again; one whose target
@@ -339,11 +371,8 @@ static InlineLinks collect_links(SableBlock *block, const SableInlineLayout *lay
 static SableBlock *splice_links(SableBlock **slot, int64_t at, int64_t removed, const uint8_t *inserted, int64_t count, InlineLinks *links) {
     SableBlock *block = unique_block(slot, count > removed ? count - removed : 0);
     int64_t delta = count - removed;
-    if (block->length - at - removed > 0 && delta != 0) {
-        memmove(block->bytes + at + count, block->bytes + at + removed, (size_t)(block->length - at - removed));
-    }
-
-    memcpy(block->bytes + at, inserted, (size_t)count);
+    move_bytes(block, at + count, at + removed);
+    copy_short(block->bytes + at, inserted, count);
     block->length += delta;
 
     int64_t kept = 0;
@@ -377,7 +406,10 @@ static SableBlock *splice_links(SableBlock **slot, int64_t at, int64_t removed, 
 static SableBlock *splice_block(SableBlock **slot, const SableInlineLayout *layout, int64_t at, int64_t removed, const uint8_t *inserted, int64_t count) {
     InlineLinks links = collect_links(unique_block(slot, count > removed ? count - removed : 0), layout);
     SableBlock *block = splice_links(slot, at, removed, inserted, count, &links);
-    free(links.links);
+    if (links.links != NULL) {
+        free(links.links);
+    }
+
     return block;
 }
 
@@ -432,7 +464,9 @@ void sable_inline_append_at(SableBlock **slot, const SableInlineLayout *root, co
     // splices, with the links read once, before either.
     InlineLinks links = collect_links(unique_block(slot, size), root);
     block = splice_links(slot, end, 0, element, size, &links);
-    free(copy);
+    if (copy != NULL) {
+        free(copy);
+    }
 
     uint8_t encoded[10];
     int old_size = (int)(elements - array);
@@ -450,7 +484,9 @@ void sable_inline_append_at(SableBlock **slot, const SableInlineLayout *root, co
         splice_links(slot, at, old_size, encoded, new_size, &links);
     }
 
-    free(links.links);
+    if (links.links != NULL) {
+        free(links.links);
+    }
 }
 
 // Bytes as a bounded U8 array's elements: a string, as UTF-8.

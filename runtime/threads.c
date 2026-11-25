@@ -93,14 +93,21 @@ typedef struct SpinLock {
     int32_t held;
 } SpinLock;
 
-static inline void spin_lock(SpinLock *lock) {
-    for (int spins = 0; __atomic_exchange_n(&lock->held, 1, __ATOMIC_ACQUIRE); spins++) {
+__attribute__((noinline)) static void spin_lock_held(SpinLock *lock) {
+    int spins = 0;
+    do {
         while (__atomic_load_n(&lock->held, __ATOMIC_RELAXED)) {
             if (++spins > 64) {
                 thread_yield();
                 spins = 0;
             }
         }
+    } while (__atomic_exchange_n(&lock->held, 1, __ATOMIC_ACQUIRE));
+}
+
+static inline void spin_lock(SpinLock *lock) {
+    if (__builtin_expect(__atomic_exchange_n(&lock->held, 1, __ATOMIC_ACQUIRE), 0)) {
+        spin_lock_held(lock);
     }
 }
 
@@ -112,7 +119,7 @@ static SpinLock threads_lock;
 
 _Noreturn void sable_trap(const char *message);
 
-static SableThread *make_thread(void) {
+__attribute__((noinline)) static SableThread *make_thread(void) {
     SableThread *thread = calloc(1, sizeof(SableThread));
     if (thread == NULL) {
         sable_trap("out of memory");

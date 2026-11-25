@@ -5,6 +5,12 @@ extension Bool {
     @builtin("string_from_Bool")
     public fn toString() -> String
 
+    /// The first when true, the second when false, chosen with no branch:
+    /// for a choice the machine cannot guess, as a search's of which half to
+    /// go on in. Elsewhere `?:` is no slower, and lets it guess.
+    @builtin("select_Int")
+    package fn selecting(_ whenTrue: Int, _ whenFalse: Int) -> Int
+
     /// True or false, each as likely, drawn from the generator.
     ///
     /// ```sable

@@ -435,7 +435,7 @@ public sealed class BorrowLoads : ISilPass {
             UncheckedRefCastInst cast => KeptBy(cast.Value),
             StructExtractInst extract => KeptBy(extract.Value),
             TupleExtractInst extract => KeptBy(extract.Value),
-            BuiltinInst { Name: "array_get_borrowed" } element => KeptBy(element.Operands[0]),
+            BuiltinInst { Name: "array_get_borrowed" or "slice_of_borrowed" } element => KeptBy(element.Operands[0]),
             _ => reference,
         };
 
@@ -1077,7 +1077,7 @@ public sealed class ForwardCopies : ISilPass {
             _ when SilVerifier.OwnershipOf(value) == Ownership.Owned => value,
             LoadBorrowInst => value,
             SilArgument { IsGuaranteed: true } payload when SwitchedFrom(payload) is { } switched => Root(switched),
-            BuiltinInst { Name: "array_get_borrowed" } element => Root(element.Operands[0]),
+            BuiltinInst { Name: "array_get_borrowed" or "slice_of_borrowed" } element => Root(element.Operands[0]),
             StructExtractInst extract => Root(extract.Value),
             TupleExtractInst extract => Root(extract.Value),
             UpcastInst upcast => Root(upcast.Value),
@@ -1112,11 +1112,11 @@ public sealed class ForwardCopies : ISilPass {
     }
 
     /// <summary>True for a parameter, or something borrowed from one through fields and casts.</summary>
-    static bool IsParameterBorrow(SilValue value) =>
+    internal static bool IsParameterBorrow(SilValue value) =>
         value switch {
             SilArgument { IsGuaranteed: true } payload when SwitchedFrom(payload) is { } switched => IsParameterBorrow(switched),
             SilArgument argument => argument.Block == argument.Block.Function.Entry,
-            BuiltinInst { Name: "array_get_borrowed" } element => IsParameterBorrow(element.Operands[0]),
+            BuiltinInst { Name: "array_get_borrowed" or "slice_of_borrowed" } element => IsParameterBorrow(element.Operands[0]),
             StructExtractInst extract => IsParameterBorrow(extract.Value),
             TupleExtractInst extract => IsParameterBorrow(extract.Value),
             UpcastInst upcast => IsParameterBorrow(upcast.Value),

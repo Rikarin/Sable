@@ -5,7 +5,6 @@ module HostingSupport
 
 import Sable.Concurrency
 import Sable.Hosting
-import Sable.Testing
 import Sable.Time
 
 /// A clock a test sets: no time passes but what it says does.

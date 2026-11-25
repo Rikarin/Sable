@@ -525,7 +525,6 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
     let template = try File.read(Path.join(root, "template.html"))
     try prepare(output)
 
-    var pages: String[>..] = []
     var all: Page[>..] = []
     let source = Path.join(root, "pages")
     for name in try Directory.list(source) {

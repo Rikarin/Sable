@@ -7,7 +7,6 @@ module ElementaryFunctionsTests
 //     tools/stdlib-coverage.sh Sable.Math
 
 import Sable.Math
-import Sable.Testing
 import FloatAssertions
 
 /// Written once over the protocol, for every float that conforms.

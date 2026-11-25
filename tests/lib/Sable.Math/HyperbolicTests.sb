@@ -5,7 +5,6 @@ module HyperbolicTests
 // Reference values are correctly rounded (mpmath, 60 digits).
 
 import Sable.Math
-import Sable.Testing
 import FloatAssertions
 
 @test

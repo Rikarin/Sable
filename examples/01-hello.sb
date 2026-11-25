@@ -1,7 +1,5 @@
 module Examples.Hello
 
-import Sable.IO
-
 @main
 fn main() {
     let names = ["world", "Sable", "everyone"]

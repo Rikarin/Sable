@@ -292,7 +292,7 @@ fn main() -> Int {
         var bytes = seeds[seed]
         // One to three mutations, stacked.
         let rounds = state % 3 + 1
-        for round in 0..<rounds {
+        for _ in 0..<rounds {
             state = next(state)
             bytes = mutate(bytes, state)
             state = next(state)

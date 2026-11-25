@@ -1,7 +1,5 @@
 module Sable.Diagnostics
 
-import Sable.Time
-
 /// A key and its value, already text.
 public struct Field {
     public var key: String

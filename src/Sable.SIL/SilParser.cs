@@ -345,6 +345,13 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_superclass")) {
+                var derived = Expect(TokenKind.String, "a class's name").Text;
+                Expect("=");
+                module.SuperclassAccessors[derived] = Expect(TokenKind.Global, "an accessor's name").Text;
+                continue;
+            }
+
             if (Accept("sil_boxer")) {
                 var boxed = ParseType();
                 Expect("=");

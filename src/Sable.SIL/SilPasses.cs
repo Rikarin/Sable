@@ -119,6 +119,11 @@ public static class SilPassManager {
             }
         }
 
+        // What gives a class made at run time its superclass, and its vtable's entries.
+        foreach (var accessor in module.SuperclassAccessors.Values) {
+            pending.Push(accessor);
+        }
+
         // A template table's entries: for instances of its type made at run time.
         foreach (var table in module.WitnessTables.Where(static t => t.IsTemplate)) {
             foreach (var function in table.Entries.Select(static e => e.Function).OfType<string>().Concat(table.Accessors)) {

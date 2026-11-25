@@ -144,6 +144,10 @@ public static class SilPrinter {
             builder.Append("sil_generic_deinit ").Append(Quote(type)).Append(" = @").Append(function).Append('\n');
         }
 
+        foreach (var (type, function) in module.SuperclassAccessors.OrderBy(static d => d.Key, StringComparer.Ordinal)) {
+            builder.Append("sil_superclass ").Append(Quote(type)).Append(" = @").Append(function).Append('\n');
+        }
+
         foreach (var table in module.WitnessTables) {
             builder.Append(table.IsTemplate ? "sil_template_table $" : "sil_witness_table $").Append(table.Conformer).Append(" : ").Append(Quote(table.Protocol)).Append(" {\n");
             foreach (var (requirement, function, type) in table.Entries) {

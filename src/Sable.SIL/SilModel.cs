@@ -1790,6 +1790,13 @@ public sealed class SilModule {
         return _witnessTables[(table.Conformer.ToString(), table.Protocol)];
     }
 
+    /// <summary>
+    ///     For each generic class with a superclass whose objects code compiled
+    ///     once makes, by its name: the function that gives its superclass's
+    ///     metadata from its own (SilGen.Hierarchies.cs).
+    /// </summary>
+    public Dictionary<string, string> SuperclassAccessors { get; } = new(StringComparer.Ordinal);
+
     /// <summary>What each built-in type (<c>Int</c>, <c>String</c>, …) declares it conforms to, by the type's name: its conformance records.</summary>
     public Dictionary<string, List<string>> PrimitiveConformances { get; } = new(StringComparer.Ordinal);
 
@@ -2501,6 +2508,8 @@ public static class SilBuiltins {
                 return new([metadata, value], SilType.Unit) { Consumed = [1] };
             case "box_metadata" when operands is [ClassType box]:
                 return new([box], metadata);
+            case var ancestor when ancestor.StartsWith("object_metadata_as:", StringComparison.Ordinal) && operands is [ClassType ofClass]:
+                return new([ofClass], metadata);
             case "object_metadata" when operands is [ClassType type]:
                 return new([type], metadata);
             case "witness_table_exists" when operands is [var table] && table == SilType.WitnessTable:

@@ -195,14 +195,16 @@ public sealed partial class SilInterpreter {
                 return concrete;
             }
 
-            // A class laid out for its arguments: it has no superclass and no vtable, and its deinit is its generic class's.
+            // A class laid out for its arguments: its vtable is its generic class's, and so is its deinit.
             case ClassType { IsGenericInstance: true } classType: {
                 var concrete = new ClassType(name) {
                     DisplayName = display,
                     TypeArguments = [..arguments],
                     Deinit = display is null ? null : module.GenericDeinits.GetValueOrDefault(display[..display.IndexOf('<')]),
+                    Superclass = classType.Superclass is { } superclass ? (ClassType)Concrete(superclass) : null,
                 };
                 _concreteGenerics[name] = concrete;
+                concrete.VTable.AddRange(classType.VTable);
                 concrete.Fields.AddRange(classType.Fields.Select(f => (f.Name, Concrete(f.Type))));
                 concrete.Conformances.AddRange(classType.Conformances);
                 concrete.ConditionalConformances.AddRange(classType.ConditionalConformances);
@@ -457,6 +459,16 @@ public sealed partial class SilInterpreter {
                 return true;
 
             // An object's own class, from its header.
+            case var ancestor when ancestor.StartsWith("object_metadata_as:", StringComparison.Ordinal): {
+                var wanted = ancestor["object_metadata_as:".Length..] + "<";
+                var level = (ClassType?)Alive((HeapObject)operands[0]!).Type;
+                while (level is not null && !TypeMetadata.DisplayName(level).StartsWith(wanted, StringComparison.Ordinal)) {
+                    level = level.Superclass;
+                }
+
+                result = MetadataOf(level ?? throw new SilTrap("an object that is not of the class its method is of"));
+                return true;
+            }
             case "object_metadata":
                 result = MetadataOf(Alive((HeapObject)operands[0]!).Type);
                 return true;

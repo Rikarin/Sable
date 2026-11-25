@@ -884,6 +884,9 @@ typedef struct SableAggregateShape {
     int64_t conformance_count;     // what its declaration conforms it to
     const SableShapeConformance *conformances;
     const char *const *part_labels; // each case's payload's labels, 'width, height', or null; null for a type with none
+    int64_t vtable_count;           // a class's, in a hierarchy: its methods, in the convention of their slots
+    void *const *vtable;
+    const SableTypeMetadata *(*superclass)(const SableTypeMetadata *self); // and its superclass's metadata from its own; null for none
 } SableAggregateShape;
 
 // The conformance records of an instance of a generic type made at run time
@@ -1464,12 +1467,12 @@ const SableTypeMetadata *sable_tuple_type(void **cache, int64_t count, const Sab
 // identity to 'is' and 'as?', so there is one per set of arguments.
 typedef struct SableClassInstance {
     SableTypeMetadata type; // first: what the object metadata's 'type' points to
-    SableMetadata object;
     const SableAggregateShape *shape;
     const SableTypeMetadata **parts; // each field's, then each type argument's
     SableField *fields;
     void (*deinit)(void *object); // null: it has none
     struct SableClassInstance *next;
+    SableMetadata object; // and, after it, its vtable
 } SableClassInstance;
 
 static SableClassInstance *class_instances;
@@ -1563,9 +1566,9 @@ static void class_visit(void *object) {
     }
 }
 
-static SableClassInstance *class_make(const SableAggregateShape *shape, const SableTypeMetadata *const *parts) {
+static SableClassInstance *class_make(const SableAggregateShape *shape, const SableTypeMetadata *const *parts, const SableTypeMetadata *superclass) {
     int64_t field_count = shape->part_count, count = field_count + shape->argument_count;
-    SableClassInstance *made = calloc(1, sizeof *made);
+    SableClassInstance *made = calloc(1, sizeof *made + (size_t)shape->vtable_count * sizeof(void *));
     const SableTypeMetadata **kept = calloc((size_t)(count > 0 ? count : 1), sizeof *kept);
     SableField *fields = calloc((size_t)(field_count > 0 ? field_count : 1), sizeof *fields);
     if (made == NULL || kept == NULL || fields == NULL) {
@@ -1576,6 +1579,10 @@ static SableClassInstance *class_make(const SableAggregateShape *shape, const Sa
     made->shape = shape;
     made->parts = kept;
     made->fields = fields;
+    if (shape->vtable_count > 0) {
+        memcpy(&made->object + 1, shape->vtable, (size_t)shape->vtable_count * sizeof(void *));
+    }
+
     for (int64_t i = 0; i < generic_deinit_count && made->deinit == NULL; i++) {
         if (strcmp(generic_deinits[i].name, shape->name) == 0) {
             made->deinit = generic_deinits[i].deinit;
@@ -1625,6 +1632,7 @@ static SableClassInstance *class_make(const SableAggregateShape *shape, const Sa
 
     SableMetadata *object = &made->object;
     object->destroy = class_destroy;
+    object->copy_element = superclass == NULL ? NULL : (void (*)(void *, const void *))(void *)superclass->object;
     object->name = type->name;
     object->size = round_up(end, align);
     object->alignment = align;
@@ -1644,6 +1652,16 @@ const SableTypeMetadata *sable_class_type(void **cache, const SableAggregateShap
         return known;
     }
 
+    // Its superclass's, read from its own arguments, as they will be in its record.
+    const SableTypeMetadata *superclass = NULL;
+    if (shape->superclass != NULL) {
+        SableTypeMetadata own = {0};
+        own.kind = SABLE_KIND_CLASS;
+        own.argument_count = shape->argument_count;
+        own.arguments = arguments;
+        superclass = shape->superclass(&own);
+    }
+
     // Found or made under a lock: two threads asking at once for the same
     // arguments must get the one record, the class's identity.
     const SableTypeMetadata *found = NULL;
@@ -1661,7 +1679,7 @@ const SableTypeMetadata *sable_class_type(void **cache, const SableAggregateShap
     }
 
     if (found == NULL) {
-        SableClassInstance *made = class_make(shape, parts);
+        SableClassInstance *made = class_make(shape, parts, superclass);
         made->next = class_instances;
         class_instances = made;
         found = &made->type;
@@ -1674,6 +1692,20 @@ const SableTypeMetadata *sable_class_type(void **cache, const SableAggregateShap
     }
 
     return found;
+}
+
+// The class of an object, or the one it inherits from, that is an instance
+// of the generic class of this name: what a method in another's slot reads
+// its type arguments from.
+const SableTypeMetadata *sable_object_ancestor(const void *object, const char *name) {
+    size_t length = strlen(name);
+    for (const SableTypeMetadata *type = (*(const SableMetadata *const *)object)->type; type != NULL; type = superclass_of(type)) {
+        if (type->name != NULL && strncmp(type->name, name, length) == 0 && type->name[length] == '<') {
+            return type;
+        }
+    }
+
+    sable_trap("an object that is not of the class its method is of");
 }
 
 // A box for a value of a type no image boxes, an instance of a generic type

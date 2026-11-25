@@ -237,8 +237,25 @@ public sealed partial class LlvmEmitter {
             _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {{ ptr, i64, ptr }}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
         }
 
-        _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64, i64, ptr, ptr }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
-            .Append($"ptr {written}, i64 {type.TypeArguments.Length}, i64 {records.Count}, ptr {conformances}, ptr {labels} }}{Comdat(name, SharedLinkage)}\n");
+        // A class's, in a hierarchy: its vtable, and what gives its superclass's metadata from its own.
+        var vtable = "null";
+        var slots = 0;
+        var superclass = "null";
+        if (type is ClassType inherited && SilType.MentionsOpaque(inherited)) {
+            slots = inherited.VTable.Count;
+            if (slots > 0) {
+                vtable = $"@\"sable.shape.vtable.{Mangled(type)}\"";
+                var entries = string.Join(", ", inherited.VTable.Select(m => _reachable?.Contains(m.Function) == false ? "ptr null" : $"ptr @{Global(m.Function)}"));
+                _globals.Append($"{vtable} = {SharedLinkage} constant [{slots} x ptr] [{entries}]{Comdat(vtable, SharedLinkage)}\n");
+            }
+
+            if (_module?.SuperclassAccessors.TryGetValue(DeclaredName(type), out var accessor) == true) {
+                superclass = $"@{Global(accessor)}";
+            }
+        }
+
+        _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64, i64, ptr, ptr, i64, ptr, ptr }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
+            .Append($"ptr {written}, i64 {type.TypeArguments.Length}, i64 {records.Count}, ptr {conformances}, ptr {labels}, i64 {slots}, ptr {vtable}, ptr {superclass} }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 
@@ -572,6 +589,7 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_opaque_debug_describe(ptr, ptr)
                                         declare void @sable_register_debug_describer(ptr, ptr)
                                         declare ptr @sable_opaque_erase_error(ptr, ptr)
+                                        declare ptr @sable_object_ancestor(ptr, ptr)
                                         declare ptr @sable_structural_union_type(i64, ptr)
                                         declare void @sable_union_inject(ptr, ptr, ptr, ptr)
                                         declare ptr @sable_union_case_metadata(ptr, ptr)
@@ -708,6 +726,11 @@ public sealed partial class LlvmEmitter {
 
                 case "metadata_is_subtype":
                     Line($"{Result()} = call i1 @sable_metadata_is_subtype(ptr {operands[0]}, ptr {operands[1]})");
+                    return true;
+
+                // An object's class, or the one it inherits from of a generic class's name.
+                case var ancestor when ancestor.StartsWith("object_metadata_as:", StringComparison.Ordinal):
+                    Line($"{Result()} = call ptr @sable_object_ancestor(ptr {operands[0]}, ptr {module.TrapMessage(ancestor["object_metadata_as:".Length..])})");
                     return true;
 
                 // An object's own class: its header's object metadata's type metadata.

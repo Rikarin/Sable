@@ -558,4 +558,157 @@ public sealed partial class CompiledOnceTests {
         """,
         "Test.Order.first", "Test.Order.isPlain", "Test.sorted"
     );
+
+    /// <summary>
+    ///     Generic classes in a hierarchy: overridden by generic and other
+    ///     subclasses, made where their arguments are known only at run time,
+    ///     called through the vtable from code that knows them and code that
+    ///     does not, their initialisers and deinits chained.
+    /// </summary>
+    [Fact]
+    public void GenericClassHierarchiesAreCompiledOnce() => Prints(
+        "box 1\nint 2\nint 2!\npair x/7\npair x/7!\nlist of 2\nlist of 2\nbox a\npair b/b!\n9 10\ngone pair y\ngone box y\ngone box z\nbase 3 int 4\nmade 5 int\nswap 2\n0\nthrew\n",
+        """
+            module Test
+
+            struct Bad: Error { var n: Int }
+
+            open class Box<T> {
+                var value: T
+                var shown: Bool = true
+                init(_ value: T) {
+                    self.value = value
+                }
+
+                open fn name() -> String => "box \(value)"
+
+                open fn get() -> T => value
+
+                open fn swap(_ t: T) -> T {
+                    let old = value
+                    value = t
+                    return old
+                }
+
+                open fn check(_ t: T) throws -> T => t
+
+                open var label: String => name() + "!"
+
+                fn plain() -> T => self.get()
+            }
+
+            class IntBox: Box<Int> {
+                override fn name() -> String => "int \(value)"
+
+                override fn get() -> Int => value + 1
+
+                override fn check(_ t: Int) throws -> Int {
+                    throw Bad { n: t }
+                }
+            }
+
+            class Pair<A, B>: Box<A> {
+                var other: B
+                init(_ a: A, _ b: B) {
+                    other = b
+                    super.init(a)
+                }
+
+                override fn name() -> String => "pair \(value)/\(other)"
+            }
+
+            class Listing<E>: Box<E[>..]> {
+                override fn name() -> String => "list of \(value.count)"
+            }
+
+            open class Watched<T> {
+                let value: T
+                init(_ value: T) {
+                    self.value = value
+                }
+
+                deinit {
+                    print("gone box \(value)")
+                }
+            }
+
+            class WatchedPair<T>: Watched<T> {
+                deinit {
+                    print("gone pair \(value)")
+                }
+            }
+
+            class Base {
+                let n: Int
+                init(_ n: Int) {
+                    self.n = n
+                }
+
+                fn name() -> String => "base \(n)"
+            }
+
+            class Derived<T>: Base {
+                let t: T
+                init(_ t: T) {
+                    self.t = t
+                    super.init(4)
+                }
+
+                override fn name() -> String => "\(t) \(n)"
+            }
+
+            fn nameOf<T>(_ b: Box<T>) -> String => b.name()
+
+            fn labelOf<T>(_ b: Box<T>) -> String => b.label
+
+            fn getOf<T>(_ b: Box<T>) -> T => b.get()
+
+            fn swapped<T>(_ b: Box<T>, _ t: T) -> T => b.swap(t)
+
+            fn checked<T>(_ b: Box<T>, _ t: T) throws -> T => try b.check(t)
+
+            fn makeBox<T>(_ t: T) -> Box<T> => Box<T>(t)
+
+            fn makePair<A, B>(_ a: A, _ b: B) -> Box<A> => Pair<A, B>(a, b)
+
+            fn watch<T>(_ t: T, _ u: T) {
+                let a = Watched<T>(u)
+                let b = WatchedPair<T>(t)
+                _ = a.value
+                _ = b.value
+            }
+
+            fn derived<T>(_ t: T) -> Base => Derived<T>(t)
+
+            @main
+            fn main() {
+                print(nameOf(Box(1)))
+                let i: Box<Int> = IntBox(2)
+                print(nameOf(i))
+                print(labelOf(i))
+                let p: Box<String> = Pair("x" + "", 7)
+                print(p.name())
+                print(labelOf(p))
+                let all: Box<Int[>..]> = Listing([1, 2])
+                print(nameOf(all))
+                let bound = all.name
+                print(bound())
+                print(makeBox("a" + "").name())
+                print(labelOf(makePair("b" + "", "b" + "")))
+                print("\(getOf(Box(9))) \(i.plain() + 7)")
+                watch("y" + "", "z" + "")
+                print("\(Base(3).name()) \(derived("int").name())")
+                let made = makeBox(5)
+                print("made \(made.get()) \(makePair(1, "int").get() == 1 ? "int" : "?")")
+                print("swap \(swapped(i, 8))")
+                do {
+                    print("\(try checked(Box(3), 3) - 3)")
+                    _ = try checked(i, 1)
+                } catch {
+                    print("threw")
+                }
+            }
+        """,
+        "Test.nameOf", "Test.labelOf", "Test.getOf", "Test.swapped", "Test.checked", "Test.makeBox", "Test.makePair", "Test.watch", "Test.derived"
+    );
 }

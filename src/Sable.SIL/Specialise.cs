@@ -1237,6 +1237,9 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 Map(instruction, Emit(new UpcastInst(Value(upcast.Value), AsClass(Substitute(upcast.Type))), instruction));
                 return;
 
+            // One called in its slot's own convention, which no copy of the caller changes.
+            case ClassMethodInst { Type: FunctionType slot } when SilType.MentionsOpaque(slot):
+                throw new Refused("a call through a generic class's vtable");
             case ClassMethodInst method:
                 Map(instruction, Emit(new ClassMethodInst(Value(method.Reference), method.Method, (FunctionType)Substitute(method.Type)), instruction));
                 return;

@@ -1780,10 +1780,16 @@ public sealed partial class SilGen {
                 return;
             }
 
+            // One made at run time, of a hierarchy compiled once: as its definition's.
+            using var opaqueInstance = HierarchiesOnce && SilType.MentionsOpaque(type) ? Opaque(new GenericShape(symbol.OriginalDefinition.TypeParameters, [])) : null;
+            if (opaqueInstance is not null && !HasSlotsOnce(symbol.OriginalDefinition)) {
+                return;
+            }
+
             // A class of a type parameter's own, 'Rule<V>', was lowered to ask
             // what a closure may capture: no object is one, and its methods
             // have no instances.
-            if (symbol.TypeArguments.Any(a => a is not ValueTypeArgumentSymbol && !a.Equals(Core.Never) && Lower(a) is null)) {
+            if (opaqueInstance is null && symbol.TypeArguments.Any(a => a is not ValueTypeArgumentSymbol && !a.Equals(Core.Never) && Lower(a) is null)) {
                 return;
             }
 
@@ -1794,6 +1800,10 @@ public sealed partial class SilGen {
 
             if (!IsInherited(symbol) && type.Superclass is null) {
                 return;
+            }
+
+            if (opaqueInstance is not null) {
+                SuperclassAccessor(symbol.OriginalDefinition);
             }
 
             // A generic class's methods, for this class's type arguments:
@@ -1812,7 +1822,11 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                if (IsGeneric(method)) {
+                if (SlotEntry(type, symbol, method) is { } entry) {
+                    name = entry;
+                } else if (opaqueInstance is not null) {
+                    continue;
+                } else if (IsGeneric(method)) {
                     if (!method.TypeParameters.IsEmpty || method.DeclaringSyntax.FirstOrDefault() is not { } at
                         || Instance(method, arguments, at) is not { } instance) {
                         continue;
@@ -3300,8 +3314,14 @@ public sealed partial class SilGen {
     ///     the receiver, which it passes as <c>self</c> to the method, through
     ///     the vtable when a subclass may override it.
     /// </summary>
-    internal (string Name, FunctionType Type) BoundMethodThunk(FunctionSymbol method, string name, FunctionType type) {
+    internal (string Name, FunctionType Type) BoundMethodThunk(FunctionSymbol method, string name, FunctionType type, TypeSubstitution? owner = null) {
         var dynamic = IsDynamic(method);
+        // Through a slot in another convention: a function of this one that calls it.
+        if (dynamic && owner is not null && HierarchiesOnce && (DynamicRoot(method) is not null || IsSlotOnce(SlotRoot(method)))) {
+            name = DispatchShim(method, name, type, owner);
+            dynamic = false;
+        }
+
         var thunkName = $"{name}$bound{(dynamic ? "$dynamic" : "")}";
         var closure = new ThickFunctionType(new([..type.Parameters.Skip(1)], type.Result, type.Thrown));
         var code = closure.Implementation;
@@ -11160,6 +11180,13 @@ public sealed partial class SilGen {
                 return VariadicForeignCall(call, callee, cName);
             }
 
+            // A method that overrides one whose slot is in another convention: called as that one.
+            if (HasSelf(callee) && call.Receiver is not BoundSuperAccess && generator.IsDynamic(callee) && generator.DynamicRoot(callee) is { } root) {
+                var receiver = call.Receiver ?? new BoundSelfAccess(call.Syntax, SelfType(symbol, substitution), false);
+                callee = root;
+                call = new BoundCall(call.Syntax, receiver, root, call.Arguments, call.Type) { Substitution = call.Substitution };
+            }
+
             string name;
             FunctionType? type;
             GenericShape? genericShape = null;
@@ -11252,7 +11279,7 @@ public sealed partial class SilGen {
 
                 // A method a superclass declares takes the object as that class.
                 if (self.Type is ClassType selfClass && type.Parameters[0] is ClassType parameterClass && selfClass != parameterClass) {
-                    self = SilType.SameErasingOpaque(selfClass, parameterClass, opaqueOnly: true) ? Emit(new BuiltinInst("opaque_borrow_as", parameterClass, self)) : Emit(new UpcastInst(self, parameterClass));
+                    self = AsClass(self, selfClass, parameterClass);
                 }
 
                 // One unspecialised code knows only by its metadata (a protocol
@@ -11585,6 +11612,21 @@ public sealed partial class SilGen {
         ///     failing both, what they stand for here — a call from inside the
         ///     same generic type.
         /// </summary>
+        /// <summary>An object as a class it is of, or inherits from — seen as the one code compiled once for its arguments takes.</summary>
+        SilValue AsClass(SilValue value, ClassType from, ClassType to) {
+            if (SilType.SameErasingOpaque(from, to, opaqueOnly: true)) {
+                return Emit(new BuiltinInst("opaque_borrow_as", to, value));
+            }
+
+            for (var at = from.Superclass; at is not null; at = at.Superclass) {
+                if (at != to && SilType.SameErasingOpaque(at, to, opaqueOnly: true)) {
+                    return Emit(new BuiltinInst("opaque_borrow_as", to, Emit(new UpcastInst(value, at))));
+                }
+            }
+
+            return Emit(new UpcastInst(value, to));
+        }
+
         TypeSubstitution CallSubstitution(BoundCall call, FunctionSymbol callee) {
             // An array extension's member: what its element is, from the array's.
             // In a protocol's default implementation, 'first()' is called on
@@ -12325,7 +12367,7 @@ public sealed partial class SilGen {
                 return Missing(reference, $"'{callee.Name}' as a value of type '{reference.Type.ToDisplayString()}'");
             }
 
-            var thunk = generator.BoundMethodThunk(callee, name, type);
+            var thunk = generator.BoundMethodThunk(callee, name, type, Sub(receiver.Type) is NamedTypeSymbol boundOwner && ConstructedOwner(boundOwner, callee) is { } declaredIn ? TypeSubstitution.For(declaredIn) : TypeSubstitution.Empty);
             if (Expression(receiver) is not { } self) {
                 return null;
             }

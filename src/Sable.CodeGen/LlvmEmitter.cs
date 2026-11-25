@@ -1382,8 +1382,7 @@ public sealed partial class LlvmEmitter {
 
         // A generic class's, which metadata made at run time for the same
         // type arguments must be (GenericClassRegistration).
-        if (_module?.UnspecialisedGenerics == true && type.IsGenericInstance
-            && type.Superclass is null && type.VTable.Count == 0) {
+        if (_module?.UnspecialisedGenerics == true && type.IsGenericInstance) {
             _genericClasses.Add(type);
         }
 

@@ -8,23 +8,34 @@ module PipeTests
 import Sable.IO
 import Sable.Testing
 
-/// A random walk of numbers: xorshift.
-struct Walk {
-    var state: U64
+/// Lines of bytes 0...9, the last maybe without its newline, and how they
+/// are written and kept.
+struct Writing: Debug {
+    let lines: U8[>..][>..]
+    let isEnded: Bool
+    let takes: Int[>..]
+    let pause: Int
+    let resume: Int
+    let segment: Int
 
-    mutating fn next(_ below: Int) -> Int {
-        state = state ^ (state << 13)
-        state = state ^ (state >> 7)
-        state = state ^ (state << 17)
-        return Int(state % U64(below))
+    static fn made(_ choices: Choices) -> Writing {
+        // Both thresholds above the longest line, which the reader must
+        // have whole: a writer held back by a reader waiting for more
+        // than the writer may write waits for ever.
+        let pause = Gen<Int>.number(in: 41...104).value(from: choices)
+        return Writing {
+            lines: Gen.number(in: U8(0)...U8(9)).array(count: 0...39).array(count: 1...30).value(from: choices),
+            isEnded: Gen<Bool>.arbitrary(Bool.self).value(from: choices),
+            takes: Gen<Int>.number(in: 1...50).array(count: 1...10).value(from: choices),
+            pause: pause,
+            resume: Gen<Int>.number(in: 40...pause - 1).value(from: choices),
+            segment: Gen<Int>.number(in: 1...16).value(from: choices)
+        }
     }
-}
 
-fn nothing(_ result: ReadResult?) -> Bool {
-    if let _ = result {
-        return false
+    fn debugDescription() -> String {
+        return "\(lines:?), ended: \(isEnded), taken by \(takes:?), thresholds \(pause) and \(resume), segments of \(segment)"
     }
-    return true
 }
 
 @test
@@ -83,51 +94,38 @@ fn readLines(_ reader: PipeReader) async -> U8[>..][>..] {
 
 @test
 fn linesWrittenInRandomPiecesAreReadWhole() async {
-    var walk = Walk { state: 0x9E3779B97F4A7C15 }
-    var round = 0
-    while round < 20 {
-        // Lines of bytes 0...9, the last maybe without its newline.
+    await forAll(Gen(Writing.made), cases: 40) { (writing: Writing) in
         var all: U8[>..] = []
-        var expected: U8[>..][>..] = []
-        let count = 1 + walk.next(30)
-        var i = 0
-        while i < count {
-            var line: U8[>..] = []
-            let length = walk.next(40)
-            while line.count < length {
-                line.append(U8.truncating(walk.next(10)))
-            }
-            expected.append(line)
+        for line in writing.lines {
             all.append(contentsOf: line)
-            if i < count - 1 || walk.next(2) == 0 {
-                all.append(10)
-            } else if line.isEmpty {
+            all.append(10)
+        }
+        var expected = writing.lines
+        if !writing.isEnded {
+            all.removeLast()
+            // An empty last line with no ending is no line.
+            if expected[expected.count - 1].isEmpty {
                 expected.removeLast()
             }
-            i += 1
         }
-        // Both thresholds above the longest line, which the reader must
-        // have whole: a writer held back by a reader waiting for more
-        // than the writer may write waits for ever.
-        let pause = 41 + walk.next(64)
-        let pipe = Pipe(pauseWriterThreshold: pause, resumeWriterThreshold: 40 + walk.next(pause - 40), segmentSize: 1 + walk.next(16))
+        let pipe = Pipe(pauseWriterThreshold: writing.pause, resumeWriterThreshold: writing.resume, segmentSize: writing.segment)
         let pieces = all
-        let seed = U64(round + 1)
-        let writing = Task.spawn {
-            var cut = Walk { state: seed }
+        let takes = writing.takes
+        let task = Task.spawn {
             var from = 0
+            var writes = 0
             while from < pieces.count {
-                let take = 1 + cut.next(50)
+                let take = takes[writes % takes.count]
                 let end = from + take < pieces.count ? from + take : pieces.count
                 try! await pipe.writer.write(pieces[from..<end])
                 from = end
+                writes += 1
             }
             await pipe.writer.complete()
         }
         let got = await readLines(pipe.reader)
-        await writing.value
-        assertEqual(got, expected)
-        round += 1
+        await task.value
+        expect(got == expected)
     }
 }
 
@@ -174,7 +172,7 @@ fn aWriterWaitsWhileItsReaderIsBehind() async {
 }
 
 @test
-fn committedBuffersAndAsyncReadsAndWrites() async {
+fn committedBuffersAndAsyncReadsAndWrites() async throws {
     let pipe = Pipe()
     var buffer = await pipe.writer.rentBuffer(minimumCapacity: 10)
     expect(buffer.isEmpty && buffer.capacity >= 4096)
@@ -183,30 +181,26 @@ fn committedBuffersAndAsyncReadsAndWrites() async {
     await pipe.writer.commit([])
     await pipe.writer.buffer([4, 5])
     await pipe.writer.commit([6])
-    expect(nothing(await pipe.reader.tryRead()))
+    expect(await pipe.reader.tryRead() == none)
     let flushed = await pipe.writer.flush()
     expect(!flushed.isCompleted && !flushed.isCanceled)
     assertEqual(await pipe.length, 6)
 
-    let result = (await pipe.reader.tryRead())!
+    let result = require(await pipe.reader.tryRead())
     assertEqual(result.buffer.segmentCount, 3)
     assertEqual(result.buffer.toArray(), [1, 2, 3, 4, 5, 6])
     expect(!result.isCompleted && !result.isCanceled)
     // Looked at whole and consumed in part: a try waits for more.
     await pipe.reader.advance(consumed: 2, examined: 6)
-    expect(nothing(await pipe.reader.tryRead()))
+    expect(await pipe.reader.tryRead() == none)
 
     // As an AsyncReader and an AsyncWriter.
-    do {
-        try await pipe.writer.write([7])
-        assertEqual(try await pipe.reader.read(upTo: 3), [3, 4, 5])
-        assertEqual(try await pipe.reader.read(upTo: 10), [6, 7])
-        await pipe.writer.complete()
-        expect(try await pipe.reader.read(upTo: 10).isEmpty)
-    } catch {
-        fail(error.description())
-    }
-    expect((await pipe.reader.tryRead())!.isCompleted)
+    try await pipe.writer.write([7])
+    assertEqual(try await pipe.reader.read(upTo: 3), [3, 4, 5])
+    assertEqual(try await pipe.reader.read(upTo: 10), [6, 7])
+    await pipe.writer.complete()
+    expect(try await pipe.reader.read(upTo: 10).isEmpty)
+    expect(require(await pipe.reader.tryRead()).isCompleted)
 }
 
 @test
@@ -237,11 +231,6 @@ fn readsAndFlushesAreCanceledAndEndsComplete() async {
     await pipe.reader.complete()
     assertEqual(await pipe.length, 0)
     expect((await pipe.writer.flush()).isCompleted)
-    do {
-        try await pipe.writer.write([1])
-        fail("a write reached a completed reader")
-    } catch .Disconnected { } catch {
-        fail("not Disconnected: \(error.description())")
-    }
+    await expectThrows(saying: IoError.Disconnected.description()) { try await pipe.writer.write([1]) }
     await pipe.writer.complete()
 }

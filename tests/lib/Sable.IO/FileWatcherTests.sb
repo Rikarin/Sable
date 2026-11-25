@@ -2,6 +2,7 @@ module FileWatcherTests
 
 // FileWatcher, FileEvent and FileEventKind (Sable.IO).
 
+import IoSupport
 import Sable.Concurrency
 import Sable.IO
 import Sable.Testing
@@ -22,8 +23,7 @@ fn comes(_ watcher: FileWatcher, _ kind: FileEventKind, _ path: FilePath) async 
 }
 
 @test
-fn whatHappensInADirectoryComes() async throws {
-    let temp = try Temp.directory()
+fn whatHappensInADirectoryComes(temp: TemporaryFiles) async throws {
     let watcher = try FileWatcher.watch(temp.path)
     expect(watcher.path == temp.path)
     let path = temp.path.appending("file")
@@ -37,8 +37,7 @@ fn whatHappensInADirectoryComes() async throws {
 }
 
 @test
-fn aRenameIsARemovalAndAMaking() async throws {
-    let temp = try Temp.directory()
+fn aRenameIsARemovalAndAMaking(temp: TemporaryFiles) async throws {
     let path = temp.path.appending("file")
     try File.write(path, "one")
     let watcher = try FileWatcher.watch(temp.path)
@@ -49,8 +48,7 @@ fn aRenameIsARemovalAndAMaking() async throws {
 }
 
 @test
-fn directoriesMadeLaterAreWatchedToo() async throws {
-    let temp = try Temp.directory()
+fn directoriesMadeLaterAreWatchedToo(temp: TemporaryFiles) async throws {
     try Directory.create(temp.path.appending("there"))
     let watcher = try FileWatcher.watch(temp.path)
     try File.write(temp.path.appending("there/a"), "a")
@@ -63,16 +61,15 @@ fn directoriesMadeLaterAreWatchedToo() async throws {
 }
 
 @test
-fn aDirectoryAloneIsWatchedAlone() async throws {
-    let temp = try Temp.directory()
+fn aDirectoryAloneIsWatchedAlone(temp: TemporaryFiles) async throws {
     try Directory.create(temp.path.appending("inside"))
     let watcher = try FileWatcher.watch(temp.path, recursive: false)
     try File.write(temp.path.appending("inside/a"), "a")
     try File.write(temp.path.appending("b"), "b")
     var iterator = watcher.makeAsyncIterator()
     while true {
-        let event = (await iterator.next())!
-        assert(event.path != temp.path.appending("inside/a"))
+        let event = require(await iterator.next())
+        expect(event.path != temp.path.appending("inside/a"))
         if event.path == temp.path.appending("b") {
             break
         }
@@ -80,8 +77,7 @@ fn aDirectoryAloneIsWatchedAlone() async throws {
 }
 
 @test
-fn aFileIsWatched() async throws {
-    let temp = try Temp.directory()
+fn aFileIsWatched(temp: TemporaryFiles) async throws {
     let path = temp.path.appending("file")
     try File.write(path, "one")
     let watcher = try FileWatcher.watch(path)
@@ -93,8 +89,7 @@ fn aFileIsWatched() async throws {
 }
 
 @test
-fn aTaskWaitingIsCancelled() async throws {
-    let temp = try Temp.directory()
+fn aTaskWaitingIsCancelled(temp: TemporaryFiles) async throws {
     let watcher = try FileWatcher.watch(temp.path)
     let waiting = Task.spawn { () -> Bool in
         for await event in watcher {
@@ -110,17 +105,14 @@ fn aTaskWaitingIsCancelled() async throws {
 }
 
 @test
-fn nothingIsNotWatched() throws {
-    let temp = try Temp.directory()
-    do {
+fn nothingIsNotWatched(temp: TemporaryFiles) throws {
+    expectIoError("NotFound", "it is not there") {
         _ = try FileWatcher.watch(temp.path.appending("missing"))
-        fail("it is not there")
-    } catch IoError.NotFound(_) { }
+    }
 }
 
 @test
-fn twoWatchersBothHear() async throws {
-    let temp = try Temp.directory()
+fn twoWatchersBothHear(temp: TemporaryFiles) async throws {
     let one = try FileWatcher.watch(temp.path)
     let two = try FileWatcher.watch(temp.path)
     let path = temp.path.appending("file")
@@ -132,8 +124,7 @@ fn twoWatchersBothHear() async throws {
 }
 
 @test
-fn aFileReplacedIsStillWatched() async throws {
-    let temp = try Temp.directory()
+fn aFileReplacedIsStillWatched(temp: TemporaryFiles) async throws {
     let path = temp.path.appending("file")
     try File.write(path, "one")
     let watcher = try FileWatcher.watch(path)
@@ -161,8 +152,7 @@ fn aFileReplacedIsStillWatched() async throws {
 }
 
 @test
-fn whatIsMovedIsWatchedByItsNewName() async throws {
-    let temp = try Temp.directory()
+fn whatIsMovedIsWatchedByItsNewName(temp: TemporaryFiles) async throws {
     let inside = temp.path.appending("inside")
     try Directory.create(inside.appending("a"), recursive: true)
     let watcher = try FileWatcher.watch(inside)
@@ -183,7 +173,7 @@ fn whatIsMovedIsWatchedByItsNewName() async throws {
     try File.write(inside.appending("after"), "z")
     var iterator = watcher.makeAsyncIterator()
     while true {
-        let event = (await iterator.next())!
+        let event = require(await iterator.next())
         assert(event.path.fileName != "y", "\(event.path)")
         if event.path.fileName == "after" {
             break
@@ -198,8 +188,7 @@ fn whatIsMovedIsWatchedByItsNewName() async throws {
 }
 
 @test
-fn theRemovalOfWhatIsWatchedComes() async throws {
-    let temp = try Temp.directory()
+fn theRemovalOfWhatIsWatchedComes(temp: TemporaryFiles) async throws {
     let path = temp.path.appending("d")
     try Directory.create(path)
     let watcher = try FileWatcher.watch(path)
@@ -209,9 +198,8 @@ fn theRemovalOfWhatIsWatchedComes() async throws {
 
 // More happens than is kept: it is said that what is there must be looked
 // at again, and what happens after is told as before.
-@test
-fn whatIsNotTakenInTimeIsARescan() async throws {
-    let temp = try Temp.directory()
+@test(tags: ["slow"], timeout: .minutes(2))
+fn whatIsNotTakenInTimeIsARescan(temp: TemporaryFiles) async throws {
     let watcher = try FileWatcher.watch(temp.path)
     var i = 0
     while i < 10000 {

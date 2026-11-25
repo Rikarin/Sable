@@ -31,20 +31,17 @@ fn variablesAreListedSetAndRemoved() {
     expect(Environment.variables()[name] == none)
 }
 
-@test
-fn aVariableSetIsAChildsToo() {
-    if Platform.operatingSystem == .Windows || Platform.operatingSystem == .Wasi {
-        return
-    }
+@test(skip(if: Platform.operatingSystem == .Windows || Platform.operatingSystem == .Wasi, "there is no sh"))
+fn aVariableSetIsAChildsToo() throws {
     unsafe {
         Environment.set("SABLE_ENVIRONMENT_TEST_CHILD", "inherited")
     }
-    let done = try! Process.run("sh", ["-c", "printf %s \"$SABLE_ENVIRONMENT_TEST_CHILD\""])
+    let done = try Process.run("sh", ["-c", "printf %s \"$SABLE_ENVIRONMENT_TEST_CHILD\""])
     assertEqual(done.output, "inherited")
     unsafe {
         Environment.remove("SABLE_ENVIRONMENT_TEST_CHILD")
     }
-    let after = try! Process.run("sh", ["-c", "printf %s \"${SABLE_ENVIRONMENT_TEST_CHILD-unset}\""])
+    let after = try Process.run("sh", ["-c", "printf %s \"${SABLE_ENVIRONMENT_TEST_CHILD-unset}\""])
     assertEqual(after.output, "unset")
 }
 
@@ -66,7 +63,7 @@ fn theProgramsPlaces() {
     expect(here.isAbsolute)
     expect(Environment.changeCurrentDirectory(to: here))
     expect(!Environment.changeCurrentDirectory(to: FilePath("sable-no-such-directory")))
-    let home = Environment.homeDirectory!
+    let home = require(Environment.homeDirectory)
     expect(home.isAbsolute)
     expect(Directory.exists("\(home)"))
     let temporary = Environment.temporaryDirectory
@@ -75,9 +72,9 @@ fn theProgramsPlaces() {
     if let program = Environment.executablePath {
         expect(program.isAbsolute)
     }
-    expect(Environment.knownFolder(.Home)! == home)
-    expect(Environment.knownFolder(.Temporary)! == temporary)
-    let config = Environment.knownFolder(.Config)!
+    expect(Environment.knownFolder(.Home) == home)
+    expect(Environment.knownFolder(.Temporary) == temporary)
+    let config = require(Environment.knownFolder(.Config))
     expect(config.isAbsolute && config.starts(with: home) || Environment.variable("XDG_CONFIG_HOME") != none)
 }
 
@@ -89,67 +86,77 @@ fn folder(_ kind: KnownFolder, _ system: OperatingSystem, _ variables: Dictionar
     return "none"
 }
 
-@test
-fn knownFoldersFollowEachSystemsRules() {
-    let unset = Dictionary<String, String>()
-    // Linux: the XDG base and user directories.
-    assertEqual(folder(.Home, .Linux, unset), "/home/ana")
-    assertEqual(folder(.Config, .Linux, unset), "/home/ana/.config")
-    assertEqual(folder(.Cache, .Linux, unset), "/home/ana/.cache")
-    assertEqual(folder(.Data, .Linux, unset), "/home/ana/.local/share")
-    assertEqual(folder(.State, .Linux, unset), "/home/ana/.local/state")
-    assertEqual(folder(.Documents, .Linux, unset), "/home/ana/Documents")
-    assertEqual(folder(.Downloads, .Linux, unset), "/home/ana/Downloads")
-    assertEqual(folder(.Desktop, .Linux, unset), "/home/ana/Desktop")
-    assertEqual(folder(.Pictures, .Linux, unset), "/home/ana/Pictures")
-    assertEqual(folder(.Music, .Linux, unset), "/home/ana/Music")
-    assertEqual(folder(.Videos, .Linux, unset), "/home/ana/Videos")
-    assertEqual(folder(.Temporary, .Linux, unset), "/tmp")
-    var xdg = Dictionary<String, String>()
-    xdg["XDG_CONFIG_HOME"] = "/etc/ana"
-    xdg["XDG_CACHE_HOME"] = "relative/is/ignored"
-    xdg["XDG_DOWNLOAD_DIR"] = "/data/downloads"
-    xdg["TMPDIR"] = "/scratch"
-    assertEqual(folder(.Config, .Linux, xdg), "/etc/ana")
-    assertEqual(folder(.Cache, .Linux, xdg), "/home/ana/.cache")
-    assertEqual(folder(.Downloads, .Linux, xdg), "/data/downloads")
-    assertEqual(folder(.Temporary, .Linux, xdg), "/scratch")
+// Linux: the XDG base and user directories, and WASI its rules. macOS:
+// Apple's Library. Windows: the roaming and local application data, and the
+// user's.
+let folders: (KnownFolder, OperatingSystem, String)[>..] = [
+    (.Home, .Linux, "/home/ana"),
+    (.Config, .Linux, "/home/ana/.config"),
+    (.Cache, .Linux, "/home/ana/.cache"),
+    (.Data, .Linux, "/home/ana/.local/share"),
+    (.State, .Linux, "/home/ana/.local/state"),
+    (.Documents, .Linux, "/home/ana/Documents"),
+    (.Downloads, .Linux, "/home/ana/Downloads"),
+    (.Desktop, .Linux, "/home/ana/Desktop"),
+    (.Pictures, .Linux, "/home/ana/Pictures"),
+    (.Music, .Linux, "/home/ana/Music"),
+    (.Videos, .Linux, "/home/ana/Videos"),
+    (.Temporary, .Linux, "/tmp"),
+    (.Data, .MacOS, "/Users/ana/Library/Application Support"),
+    (.State, .MacOS, "/Users/ana/Library/Application Support"),
+    (.Cache, .MacOS, "/Users/ana/Library/Caches"),
+    (.Documents, .MacOS, "/Users/ana/Documents"),
+    (.Downloads, .MacOS, "/Users/ana/Downloads"),
+    (.Desktop, .MacOS, "/Users/ana/Desktop"),
+    (.Pictures, .MacOS, "/Users/ana/Pictures"),
+    (.Music, .MacOS, "/Users/ana/Music"),
+    (.Videos, .MacOS, "/Users/ana/Movies"),
+    (.Temporary, .MacOS, "/tmp"),
+    (.Config, .Windows, "C:\\Users\\ana\\AppData\\Roaming"),
+    (.Data, .Windows, "C:\\Users\\ana\\AppData\\Roaming"),
+    (.Cache, .Windows, "C:\\Users\\ana\\AppData\\Local"),
+    (.State, .Windows, "C:\\Users\\ana\\AppData\\Local"),
+    (.Documents, .Windows, "C:\\Users\\ana\\Documents"),
+    (.Downloads, .Windows, "C:\\Users\\ana\\Downloads"),
+    (.Desktop, .Windows, "C:\\Users\\ana\\Desktop"),
+    (.Pictures, .Windows, "C:\\Users\\ana\\Pictures"),
+    (.Music, .Windows, "C:\\Users\\ana\\Music"),
+    (.Videos, .Windows, "C:\\Users\\ana\\Videos"),
+    (.Temporary, .Windows, "C:\\Users\\ana\\AppData\\Local\\Temp"),
+    (.Config, .Wasi, "/home/ana/.config"),
+]
 
-    // macOS: Apple's Library, the XDG variables not asked.
-    assertEqual(folder(.Config, .MacOS, xdg), "/Users/ana/Library/Application Support")
-    assertEqual(folder(.Data, .MacOS, unset), "/Users/ana/Library/Application Support")
-    assertEqual(folder(.State, .MacOS, unset), "/Users/ana/Library/Application Support")
-    assertEqual(folder(.Cache, .MacOS, unset), "/Users/ana/Library/Caches")
-    assertEqual(folder(.Documents, .MacOS, unset), "/Users/ana/Documents")
-    assertEqual(folder(.Downloads, .MacOS, unset), "/Users/ana/Downloads")
-    assertEqual(folder(.Desktop, .MacOS, unset), "/Users/ana/Desktop")
-    assertEqual(folder(.Pictures, .MacOS, unset), "/Users/ana/Pictures")
-    assertEqual(folder(.Music, .MacOS, unset), "/Users/ana/Music")
-    assertEqual(folder(.Videos, .MacOS, unset), "/Users/ana/Movies")
-    assertEqual(folder(.Temporary, .MacOS, xdg), "/scratch")
-    assertEqual(folder(.Temporary, .MacOS, unset), "/tmp")
+@test(arguments: folders)
+fn knownFoldersFollowEachSystemsRules(_ kind: KnownFolder, _ system: OperatingSystem, _ path: String) {
+    expect(folder(kind, system, Dictionary<String, String>()) == path)
+}
 
-    // Windows: the roaming and local application data, and the user's.
-    assertEqual(folder(.Config, .Windows, unset), "C:\\Users\\ana\\AppData\\Roaming")
-    assertEqual(folder(.Data, .Windows, unset), "C:\\Users\\ana\\AppData\\Roaming")
-    assertEqual(folder(.Cache, .Windows, unset), "C:\\Users\\ana\\AppData\\Local")
-    assertEqual(folder(.State, .Windows, unset), "C:\\Users\\ana\\AppData\\Local")
-    assertEqual(folder(.Documents, .Windows, unset), "C:\\Users\\ana\\Documents")
-    assertEqual(folder(.Downloads, .Windows, unset), "C:\\Users\\ana\\Downloads")
-    assertEqual(folder(.Desktop, .Windows, unset), "C:\\Users\\ana\\Desktop")
-    assertEqual(folder(.Pictures, .Windows, unset), "C:\\Users\\ana\\Pictures")
-    assertEqual(folder(.Music, .Windows, unset), "C:\\Users\\ana\\Music")
-    assertEqual(folder(.Videos, .Windows, unset), "C:\\Users\\ana\\Videos")
-    assertEqual(folder(.Temporary, .Windows, unset), "C:\\Users\\ana\\AppData\\Local\\Temp")
-    var windows = Dictionary<String, String>()
-    windows["APPDATA"] = "D:\\Roaming"
-    windows["LOCALAPPDATA"] = "D:\\Local"
-    windows["TEMP"] = "D:\\Temp"
-    assertEqual(folder(.Config, .Windows, windows), "D:\\Roaming")
-    assertEqual(folder(.Cache, .Windows, windows), "D:\\Local")
-    assertEqual(folder(.Temporary, .Windows, windows), "D:\\Temp")
-    // WASI takes Linux's rules.
-    assertEqual(folder(.Config, .Wasi, unset), "/home/ana/.config")
+// A relative one is passed over, and macOS does not ask the XDG variables.
+let xdgFolders: (KnownFolder, OperatingSystem, String)[>..] = [
+    (.Config, .Linux, "/etc/ana"),
+    (.Cache, .Linux, "/home/ana/.cache"),
+    (.Downloads, .Linux, "/data/downloads"),
+    (.Temporary, .Linux, "/scratch"),
+    (.Config, .MacOS, "/Users/ana/Library/Application Support"),
+    (.Temporary, .MacOS, "/scratch"),
+]
+
+@test(arguments: xdgFolders)
+fn variablesSayWhereFoldersAre(_ kind: KnownFolder, _ system: OperatingSystem, _ path: String) {
+    let variables: [String: String] = ["XDG_CONFIG_HOME": "/etc/ana", "XDG_CACHE_HOME": "relative/is/ignored", "XDG_DOWNLOAD_DIR": "/data/downloads", "TMPDIR": "/scratch"]
+    expect(folder(kind, system, variables) == path)
+}
+
+let windowsFolders: (KnownFolder, String)[>..] = [
+    (.Config, "D:\\Roaming"),
+    (.Cache, "D:\\Local"),
+    (.Temporary, "D:\\Temp"),
+]
+
+@test(arguments: windowsFolders)
+fn windowsVariablesSayWhereFoldersAre(_ kind: KnownFolder, _ path: String) {
+    let variables: [String: String] = ["APPDATA": "D:\\Roaming", "LOCALAPPDATA": "D:\\Local", "TEMP": "D:\\Temp"]
+    expect(folder(kind, .Windows, variables) == path)
 }
 
 @test(traps: "'' is not an environment variable's name")

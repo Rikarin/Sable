@@ -1,0 +1,40 @@
+module IoSupport
+
+// What several files of Sable.IO's tests use.
+
+import Sable.IO
+import Sable.Testing
+
+/// Expects an IoError of the case so named, whatever it holds.
+public fn expectIoError(_ name: String, _ message: String = "", file: String = #file, line: Int = #line, _ body: () throws -> Void) {
+    guard let error = expectThrows(IoError.self, message, file: file, line: line, body) else {
+        return
+    }
+    let thrown = "\(error:?)"
+    if thrown != "IoError.\(name)" && !thrown.hasPrefix("IoError.\(name)(") {
+        recordFailure("\(thrown) was thrown, not IoError.\(name)\(message.isEmpty ? "" : ": " + message)", file: file, line: line)
+    }
+}
+
+/// A directory of the test's own, gone with all in it once the test ends.
+public final class TemporaryFiles: Fixture {
+    var directory: TempDirectory? = none
+
+    public init() { }
+
+    public var path: FilePath => directory!.path
+
+    public async fn setUp() throws {
+        directory = try Temp.directory()
+    }
+}
+
+/// Bytes that a copy of them out of place would not equal.
+public fn pattern(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    bytes.reserveCapacity(count)
+    for i in 0..<count {
+        bytes.append(U8.truncating(i * 7 + i / 256))
+    }
+    return bytes
+}

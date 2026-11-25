@@ -2,6 +2,7 @@ module TempTests
 
 // Temp, TempFile and TempDirectory (Sable.IO).
 
+import IoSupport
 import Sable.IO
 import Sable.Testing
 
@@ -24,8 +25,7 @@ fn aFileGoesAsItIsLetGo() throws {
 }
 
 @test
-fn aFileIsRemovedKeptOrRenamed() throws {
-    let temp = try Temp.directory()
+fn aFileIsRemovedKeptOrRenamed(temp: TemporaryFiles) throws {
     let removed = try Temp.file(in: temp.path)
     try removed.remove()
     try removed.remove()
@@ -43,10 +43,9 @@ fn aFileIsRemovedKeptOrRenamed() throws {
         let file = try Temp.file(in: temp.path)
         try file.file.write("new".utf8Bytes())
         try file.persist(to: target)
-        do {
+        expectIoError("InvalidInput", "it was renamed already") {
             try file.persist(to: target)
-            fail("it was renamed already")
-        } catch IoError.InvalidInput(_) { }
+        }
     }
     assertEqual(try File.read(target), "new")
     assertEqual(try Directory.list(temp.path).count, 2)
@@ -70,8 +69,7 @@ fn aDirectoryGoesWithAllInIt() throws {
 }
 
 @test
-fn aDirectoryIsRemovedOrKept() throws {
-    let temp = try Temp.directory()
+fn aDirectoryIsRemovedOrKept(temp: TemporaryFiles) throws {
     let removed = try Temp.directory(in: temp.path)
     try removed.remove()
     try removed.remove()
@@ -84,8 +82,7 @@ fn aDirectoryIsRemovedOrKept() throws {
 }
 
 @test
-fn noTwoHaveOneName() throws {
-    let temp = try Temp.directory()
+fn noTwoHaveOneName(temp: TemporaryFiles) throws {
     var files: TempFile[>..] = []
     var i = 0
     while i < 50 {
@@ -95,12 +92,10 @@ fn noTwoHaveOneName() throws {
     assertEqual(try Directory.list(temp.path).count, 50)
     files = []
     assertEqual(try Directory.list(temp.path).count, 0)
-    do {
+    expectIoError("NotFound", "there is nowhere to make it") {
         _ = try Temp.file(in: temp.path.appending("missing"))
-        fail("there is nowhere to make it")
-    } catch IoError.NotFound(_) { }
-    do {
+    }
+    expectIoError("NotFound", "there is nowhere to make it") {
         _ = try Temp.directory(in: temp.path.appending("missing"))
-        fail("there is nowhere to make it")
-    } catch IoError.NotFound(_) { }
+    }
 }

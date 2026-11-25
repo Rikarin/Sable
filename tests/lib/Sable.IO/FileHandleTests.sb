@@ -4,34 +4,9 @@ module FileHandleTests
 // files of their own beside the tests. Run with
 //     tools/stdlib-coverage.sh Sable.IO
 
+import IoSupport
 import Sable.IO
 import Sable.Testing
-
-fn pattern(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var x = 12345
-    var i = 0
-    while i < count {
-        x = (x * 1103515245 + 12345) % 2147483648
-        bytes.append(U8.truncating(x >> 16))
-        i += 1
-    }
-    return bytes
-}
-
-fn same(_ a: U8[:], _ b: U8[:]) -> Bool {
-    if a.count != b.count {
-        return false
-    }
-    var i = 0
-    while i < a.count {
-        if a[i] != b[i] {
-            return false
-        }
-        i += 1
-    }
-    return true
-}
 
 @test
 fn readingWritingSeekingAndPositions() throws {
@@ -45,14 +20,14 @@ fn readingWritingSeekingAndPositions() throws {
     try file.write([1, 2, 3, 4, 5, 6])
     assertEqual(try file.position(), 6)
     assertEqual(try file.seek(-4, from: .End), 2)
-    expect(same(try file.read(upTo: 2), [3, 4]))
+    expect(try file.read(upTo: 2) == [3, 4])
     assertEqual(try file.seek(1, from: .Current), 5)
-    expect(same(try file.read(upTo: 10), [6]))
+    expect(try file.read(upTo: 10) == [6])
     expect(try file.read(upTo: 10).isEmpty)
     try file.seek(0, from: .Start)
-    expect(same(try file.read(at: 4, upTo: 10), [5, 6]))
+    expect(try file.read(at: 4, upTo: 10) == [5, 6])
     try file.write(at: 1, [20, 30])
-    expect(same(try file.read(at: 0, upTo: 3), [1, 20, 30]))
+    expect(try file.read(at: 0, upTo: 3) == [1, 20, 30])
     expect(try file.read(at: 100, upTo: 3).isEmpty)
     try file.flush()
     try file.sync()
@@ -64,44 +39,28 @@ fn readingWritingSeekingAndPositions() throws {
     try file.setLength(2)
     assertEqual(try file.metadata().size, 2)
     try file.setLength(4)
-    expect(same(try file.read(at: 0, upTo: 10), [1, 20, 0, 0]))
+    expect(try file.read(at: 0, upTo: 10) == [1, 20, 0, 0])
 
     file.close()
     expect(!file.isOpen)
     file.close()
-    do {
-        _ = try file.read(upTo: 1)
-        fail("a closed handle read")
-    } catch IoError.InvalidInput(let what) {
-        assertEqual(what, path)
-    }
+    expectThrows(saying: "'\(path)' was given something the system does not take") { _ = try file.read(upTo: 1) }
     try File.remove(path)
 }
 
 @test
 fn openOptionsSayWhatHappens() throws {
     let path = "sable-test-handle-options.txt"
-    do {
-        _ = try File.open(path)
-        fail("a missing file opened")
-    } catch IoError.NotFound(let missing) {
-        assertEqual(missing, path)
-    }
+    expectThrows(saying: "nothing is at '\(path)'") { _ = try File.open(path) }
     try File.write(path, "hello")
 
     var fresh = OpenOptions.writing
     fresh.createNew = true
-    do {
-        _ = try File.open(path, options: fresh)
-        fail("createNew opened a file that is there")
-    } catch IoError.AlreadyExists(let there) {
-        assertEqual(there, path)
-    }
+    expectThrows(saying: "something is at '\(path)' already") { _ = try File.open(path, options: fresh) }
 
-    do {
+    expectIoError("IsDirectory", "a directory opened as a file") {
         _ = try File.open(".")
-        fail("a directory opened as a file")
-    } catch IoError.IsDirectory(_) { }
+    }
 
     // Appending goes at the end, wherever the position was put.
     let appending = try File.open(path, options: .appending)
@@ -128,7 +87,7 @@ fn wholeFilesAsBytesAndText() throws {
     let path = "sable-test-handle-whole.txt"
     let bytes = pattern(300000)
     try File.writeBytes(path, bytes)
-    expect(same(try File.readBytes(path), bytes))
+    expect(try File.readBytes(path) == bytes)
     try File.appendBytes(path, [0x0A])
     assertEqual(try File.readBytes(path).count, 300001)
 
@@ -143,10 +102,9 @@ fn wholeFilesAsBytesAndText() throws {
     try File.writeBytes(path, [0x61, 0xFF, 0x62])
     assertEqual(try File.read(path), "a\u{FFFD}b")
     try File.remove(path)
-    do {
+    expectIoError("NotFound", "a missing file removed") {
         try File.remove(path)
-        fail("a missing file removed")
-    } catch IoError.NotFound(_) { }
+    }
 }
 
 @test
@@ -157,7 +115,7 @@ fn copyingAFileCopiesEveryByte() throws {
     try File.writeBytes(source, bytes)
     try File.writeBytes(target, [1, 2, 3])
     try File.copy(from: source, to: target)
-    expect(same(try File.readBytes(target), bytes))
+    expect(try File.readBytes(target) == bytes)
     expectThrows { try File.copy(from: "sable-test-no-such-file", to: target) }
     try File.remove(source)
     try File.remove(target)
@@ -179,7 +137,7 @@ fn aBufferedWriterFlushesAsItGoes() throws {
     assertEqual(Int(written[5998]) | Int(written[5999]) << 8, 2999)
 
     var lines = BufferedReader(try File.open(path), capacity: 7)
-    expect(same(try lines.read(upTo: 4), [0, 0, 1, 0]))
+    expect(try lines.read(upTo: 4) == [0, 0, 1, 0])
     try File.remove(path)
 }
 

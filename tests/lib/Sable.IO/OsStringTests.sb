@@ -45,23 +45,34 @@ fn equalAndOrderedByBytes() {
     assertEqual(views[OsStr(bytes: [0x78])], 1)
 }
 
+let wideTexts: U16[>..][>..] = [[], [0x41], [0xE9, 0x20AC], [0xD83D, 0xDE00], [0xD800], [0xDC00, 0xD800], [0x61, 0xD83D, 0x62], [0xD83D, 0xD83D, 0xDE00]]
+
+@test(arguments: wideTexts)
+fn wideTextComesBackAsItWas(_ units: U16[>..]) {
+    expect(OsString(wide: units).wide == units)
+}
+
 @test
-fn wideTextComesBackAsItWas() {
-    for units in [[], [0x41], [0xE9, 0x20AC], [0xD83D, 0xDE00], [0xD800], [0xDC00, 0xD800], [0x61, 0xD83D, 0x62], [0xD83D, 0xD83D, 0xDE00]] as U16[>..][>..] {
-        assertEqual(OsString(wide: units).wide, units)
-    }
+fn wideTextIsTextsUtf16() {
     assertEqual(OsString(wide: [0xD83D, 0xDE00]).string, "😀")
     assertEqual(OsString("a😀é").wide, [0x61, 0xD83D, 0xDE00, 0xE9])
 }
 
-@test
-fn bytesThatAreNotUtf8AreReplacedInWideText() {
-    for bytes in [[0x80], [0xC0], [0xC1], [0xF5], [0xE2], [0xFF]] as U8[>..][>..] {
-        assertEqual(OsString(bytes: bytes).wide, [0xFFFD])
-    }
-    assertEqual(OsString(bytes: [0xC3, 0x28]).wide, [0xFFFD, 0x28])
-    assertEqual(OsString(bytes: [0xE0, 0x80, 0x80]).wide, [0xFFFD, 0xFFFD, 0xFFFD])
-    assertEqual(OsString(bytes: [0xF4, 0x90, 0x80, 0x80]).wide.count, 4)
+let badBytes: (U8[>..], U16[>..])[>..] = [
+    ([0x80], [0xFFFD]),
+    ([0xC0], [0xFFFD]),
+    ([0xC1], [0xFFFD]),
+    ([0xF5], [0xFFFD]),
+    ([0xE2], [0xFFFD]),
+    ([0xFF], [0xFFFD]),
+    ([0xC3, 0x28], [0xFFFD, 0x28]),
+    ([0xE0, 0x80, 0x80], [0xFFFD, 0xFFFD, 0xFFFD]),
+    ([0xF4, 0x90, 0x80, 0x80], [0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD]),
+]
+
+@test(arguments: badBytes)
+fn bytesThatAreNotUtf8AreReplacedInWideText(_ bytes: U8[>..], _ wide: U16[>..]) {
+    expect(OsString(bytes: bytes).wide == wide)
 }
 
 @test

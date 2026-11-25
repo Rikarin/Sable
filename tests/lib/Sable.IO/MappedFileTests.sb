@@ -3,33 +3,10 @@ module MappedFileTests
 // MappedFile (Sable.IO): reading, writing through and into a copied copy,
 // growing, flushing, advice, and JSON parsed from a mapping where it lies.
 
+import IoSupport
 import Sable.IO
 import Sable.Serialize
 import Sable.Testing
-
-fn pattern(_ count: Int) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var i = 0
-    while i < count {
-        bytes.append(U8.truncating(i * 7 + i / 256))
-        i += 1
-    }
-    return bytes
-}
-
-fn same(_ a: U8[:], _ b: U8[:]) -> Bool {
-    if a.count != b.count {
-        return false
-    }
-    var i = 0
-    while i < a.count {
-        if a[i] != b[i] {
-            return false
-        }
-        i += 1
-    }
-    return true
-}
 
 @test
 fn aMappingReadsTheWholeFile() throws {
@@ -40,7 +17,7 @@ fn aMappingReadsTheWholeFile() throws {
     expect(mapped.isOpen)
     expect(mapped.mode == .ReadOnly)
     assertEqual(mapped.count, 200000)
-    expect(same(mapped.bytes, bytes))
+    expect(mapped.bytes == bytes)
     mapped.advise(.Sequential)
     mapped.advise(.Random)
     mapped.advise(.WillNeed)
@@ -49,17 +26,15 @@ fn aMappingReadsTheWholeFile() throws {
     expect(MapAdvice.WillNeed != MapAdvice.Normal)
     assertEqual(MapAdvice.Sequential.hashValue, MapAdvice.Sequential.hashValue)
     expect(MapAdvice.Random.debugDescription().hasSuffix("Random"))
-    expect(same(mapped.bytes[1000..<1010], bytes[1000..<1010]))
+    expect(mapped.bytes[1000..<1010].toArray() == bytes[1000..<1010].toArray())
     // Read-only: writing through it is an error, and a flush does nothing.
-    do {
+    expectIoError("InvalidInput", "a read-only mapping was written") {
         try mapped.write([1], at: 0)
-        fail("a read-only mapping was written")
-    } catch IoError.InvalidInput(_) { }
+    }
     try mapped.flush()
-    do {
+    expectIoError("InvalidInput", "a read-only mapping grew") {
         try mapped.resize(to: 10)
-        fail("a read-only mapping grew")
-    } catch IoError.InvalidInput(_) { }
+    }
 
     // Changing the array changes a copy, never the file or the mapping.
     var copy = mapped.bytes
@@ -72,7 +47,7 @@ fn aMappingReadsTheWholeFile() throws {
     mapped.close()
     expect(!mapped.isOpen)
     assertEqual(mapped.count, 0)
-    expect(same(kept, bytes))
+    expect(kept == bytes)
     try File.remove(path)
 }
 
@@ -84,21 +59,19 @@ fn writesReachTheFileOrStayPrivate() throws {
     let shared = try MappedFile.open(path, mode: .ReadWrite)
     var seen = shared.bytes
     try shared.write([20, 30], at: 2)
-    expect(same(shared.bytes, [0, 1, 20, 30, 4, 5, 6, 7]))
+    expect(shared.bytes == [0, 1, 20, 30, 4, 5, 6, 7])
     // An array taken before the write is the mapping, and sees it.
     assertEqual(seen[3], 30)
     try shared.flush()
     try shared.flush(at: 2, count: 2)
     try shared.flush(at: 0, count: 0)
-    expect(same(try File.readBytes(path), [0, 1, 20, 30, 4, 5, 6, 7]))
-    do {
+    expect(try File.readBytes(path) == [0, 1, 20, 30, 4, 5, 6, 7])
+    expectIoError("InvalidInput", "a write went past the end") {
         try shared.write([1, 2], at: 7)
-        fail("a write went past the end")
-    } catch IoError.InvalidInput(_) { }
-    do {
+    }
+    expectIoError("InvalidInput", "a write went before the start") {
         try shared.write([1], at: -1)
-        fail("a write went before the start")
-    } catch IoError.InvalidInput(_) { }
+    }
     expectThrows { try shared.flush(at: 6, count: 5) }
 
     // Grown, the file has zeros after; the old array keeps the old mapping.
@@ -135,22 +108,20 @@ fn writesReachTheFileOrStayPrivate() throws {
     expect(shared.bytes.isEmpty)
     try shared.resize(to: 3)
     assertEqual(shared.count, 3)
-    do {
+    expectIoError("InvalidInput", "a mapping shrank below nothing") {
         try shared.resize(to: -1)
-        fail("a mapping shrank below nothing")
-    } catch IoError.InvalidInput(_) { }
+    }
     shared.close()
-    do {
+    expectIoError("InvalidInput", "a closed mapping was written") {
         try shared.write([1], at: 0)
-        fail("a closed mapping was written")
-    } catch IoError.InvalidInput(_) { }
+    }
 
     try File.writeBytes(path, [1, 2, 3])
     let copied = try MappedFile.open(FilePath(path), mode: .CopyOnWrite)
     try copied.write([7], at: 1)
-    expect(same(copied.bytes, [1, 7, 3]))
+    expect(copied.bytes == [1, 7, 3])
     try copied.flush()
-    expect(same(try File.readBytes(path), [1, 2, 3]))
+    expect(try File.readBytes(path) == [1, 2, 3])
     copied.close()
     try File.remove(path)
 }
@@ -164,10 +135,9 @@ fn anEmptyOrMissingFileMapsAsItShould() throws {
     expect(empty.bytes.isEmpty)
     empty.close()
     try File.remove(path)
-    do {
+    expectIoError("NotFound", "a missing file mapped") {
         _ = try MappedFile.open("sable-test-mapped-missing.bin")
-        fail("a missing file mapped")
-    } catch IoError.NotFound(_) { }
+    }
 }
 
 @test
@@ -188,12 +158,12 @@ fn jsonIsParsedFromAMappingWhereItLies() throws {
     try File.remove(path)
 
     // Ill-formed UTF-8 is an error where it is.
-    do {
-        _ = try parse(bytes: [0x5B, 0x22, 0xC3, 0xA9, 0xFF, 0x22, 0x5D])
-        fail("ill-formed UTF-8 parsed")
-    } catch ParseError.InvalidUnicode(let at, _) {
-        assertEqual(at.offset, 3)
-        assertEqual(at.column, 4)
+    let error = expectThrows(ParseError.self) { _ = try parse(bytes: [0x5B, 0x22, 0xC3, 0xA9, 0xFF, 0x22, 0x5D]) }
+    if case .Some(.InvalidUnicode(let at, _)) = error {
+        expect(at.offset == 3)
+        expect(at.column == 4)
+    } else {
+        fail("\(error:?) was thrown")
     }
     let lenient = try parseWith(bytes: [0x5B, 0x31, 0x2C, 0x5D], relaxed())
     assertEqual(render(lenient), "[1]")

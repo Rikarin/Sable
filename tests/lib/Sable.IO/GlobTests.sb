@@ -7,94 +7,127 @@ import Sable.Testing
 
 fn check(_ pattern: String, _ matching: String[>..], _ not: String[>..]) throws {
     let glob = try Glob(pattern)
-    assertEqual(glob.pattern, pattern)
+    expect(glob.pattern == pattern)
     for path in matching {
-        assert(glob.matches(path), "'\(pattern)' matches '\(path)'")
+        expect(glob.matches(path), "'\(pattern)' matches '\(path)'")
     }
     for path in not {
-        assert(!glob.matches(path), "'\(pattern)' does not match '\(path)'")
+        expect(!glob.matches(path), "'\(pattern)' does not match '\(path)'")
     }
 }
 
-@test
-fn aStarIsAnyRunInAName() throws {
-    try check("*.sb", ["a.sb", ".sb", "a.b.sb"], ["a.sc", "a.sb.", "d/a.sb"])
-    try check("a*b*c", ["abc", "axxbyyc", "abbc", "abcbc"], ["ab", "abd", "xabc", "ac"])
-    try check("*", ["a", ".hidden"], ["a/b"])
-    try check("**.sb", ["a.sb"], ["d/a.sb"])
-    try check("a*", ["a", "ab"], ["b"])
+let stars: (String, String[>..], String[>..])[>..] = [
+    ("*.sb", ["a.sb", ".sb", "a.b.sb"], ["a.sc", "a.sb.", "d/a.sb"]),
+    ("a*b*c", ["abc", "axxbyyc", "abbc", "abcbc"], ["ab", "abd", "xabc", "ac"]),
+    ("*", ["a", ".hidden"], ["a/b"]),
+    ("**.sb", ["a.sb"], ["d/a.sb"]),
+    ("a*", ["a", "ab"], ["b"]),
     // No more than the name's length times the pattern's.
-    try check("*a*a*a*a*a*a*a*a*a*a*b", [], ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+    ("*a*a*a*a*a*a*a*a*a*a*b", [], ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]),
+]
+
+@test(arguments: stars)
+fn aStarIsAnyRunInAName(_ pattern: String, _ matching: String[>..], _ not: String[>..]) throws {
+    try check(pattern, matching, not)
 }
 
-@test
-fn aQuestionMarkIsOneCharacter() throws {
-    try check("?.sb", ["a.sb", "é.sb"], [".sb", "ab.sb"])
-    try check("a??", ["abc"], ["ab", "abcd"])
+let questionMarks: (String, String[>..], String[>..])[>..] = [
+    ("?.sb", ["a.sb", "é.sb"], [".sb", "ab.sb"]),
+    ("a??", ["abc"], ["ab", "abcd"]),
+]
+
+@test(arguments: questionMarks)
+fn aQuestionMarkIsOneCharacter(_ pattern: String, _ matching: String[>..], _ not: String[>..]) throws {
+    try check(pattern, matching, not)
 }
 
-@test
-fn aClassIsOneOfItsCharacters() throws {
-    try check("[abc]", ["a", "c"], ["d", "ab", ""])
-    try check("[a-cx-z]1", ["a1", "b1", "z1"], ["d1", "a2"])
-    try check("[!a-c]", ["d", "-"], ["a"])
-    try check("[^a]", ["b"], ["a"])
-    try check("[]a]", ["]", "a"], ["b"])
-    try check("[!]a]", ["b"], ["]", "a"])
-    try check("[a-]", ["a", "-"], ["b"])
-    try check("[a\\]b]", ["]", "a", "b"], ["\\"])
-    try check("[\\--1]", ["-", "0", "1"], ["2"])
-    try check("[{,}]", ["{", ","], ["a"])
-    try check("[z-a]", [], ["a", "m", "z"])
+let classes: (String, String[>..], String[>..])[>..] = [
+    ("[abc]", ["a", "c"], ["d", "ab", ""]),
+    ("[a-cx-z]1", ["a1", "b1", "z1"], ["d1", "a2"]),
+    ("[!a-c]", ["d", "-"], ["a"]),
+    ("[^a]", ["b"], ["a"]),
+    ("[]a]", ["]", "a"], ["b"]),
+    ("[!]a]", ["b"], ["]", "a"]),
+    ("[a-]", ["a", "-"], ["b"]),
+    ("[a\\]b]", ["]", "a", "b"], ["\\"]),
+    ("[\\--1]", ["-", "0", "1"], ["2"]),
+    ("[{,}]", ["{", ","], ["a"]),
+    ("[z-a]", [], ["a", "m", "z"]),
+]
+
+@test(arguments: classes)
+fn aClassIsOneOfItsCharacters(_ pattern: String, _ matching: String[>..], _ not: String[>..]) throws {
+    try check(pattern, matching, not)
 }
 
-@test
-fn bracesAreEither() throws {
-    try check("*.{md,txt}", ["a.md", "a.txt"], ["a.mdx", "a."])
-    try check("{a,b{c,d}}e", ["ae", "bce", "bde"], ["be", "abe"])
-    try check("{src,tests/lib}/*", ["src/a", "tests/lib/a"], ["tests/a"])
-    try check("a{,b}", ["a", "ab"], ["b"])
-    try check("a}", ["a}"], ["a"])
-    try check("{a}", ["a"], ["b"])
+let braces: (String, String[>..], String[>..])[>..] = [
+    ("*.{md,txt}", ["a.md", "a.txt"], ["a.mdx", "a."]),
+    ("{a,b{c,d}}e", ["ae", "bce", "bde"], ["be", "abe"]),
+    ("{src,tests/lib}/*", ["src/a", "tests/lib/a"], ["tests/a"]),
+    ("a{,b}", ["a", "ab"], ["b"]),
+    ("a}", ["a}"], ["a"]),
+    ("{a}", ["a"], ["b"]),
+]
+
+@test(arguments: braces)
+fn bracesAreEither(_ pattern: String, _ matching: String[>..], _ not: String[>..]) throws {
+    try check(pattern, matching, not)
 }
 
-@test
-fn twoStarsAreAnyDirectories() throws {
-    try check("**/*.sb", ["a.sb", "d/a.sb", "d/e/a.sb"], ["a.txt", "a.sb/x"])
-    try check("a/**/b", ["a/b", "a/x/b", "a/x/y/b"], ["a/xb", "b", "a/b/c"])
-    try check("a/**", ["a/b", "a/b/c"], ["a", "b"])
-    try check("**", ["a", "a/b"], [""])
-    try check("**/a/**/b/**", ["a/b/c", "x/a/y/b/z/w"], ["a/b", "b/a/c"])
-    try check("**/**/a", ["a", "x/y/a"], ["b"])
+let twoStars: (String, String[>..], String[>..])[>..] = [
+    ("**/*.sb", ["a.sb", "d/a.sb", "d/e/a.sb"], ["a.txt", "a.sb/x"]),
+    ("a/**/b", ["a/b", "a/x/b", "a/x/y/b"], ["a/xb", "b", "a/b/c"]),
+    ("a/**", ["a/b", "a/b/c"], ["a", "b"]),
+    ("**", ["a", "a/b"], [""]),
+    ("**/a/**/b/**", ["a/b/c", "x/a/y/b/z/w"], ["a/b", "b/a/c"]),
+    ("**/**/a", ["a", "x/y/a"], ["b"]),
+]
+
+@test(arguments: twoStars)
+fn twoStarsAreAnyDirectories(_ pattern: String, _ matching: String[>..], _ not: String[>..]) throws {
+    try check(pattern, matching, not)
 }
 
+let backslashes: (String, String[>..], String[>..])[>..] = [
+    ("\\*", ["*"], ["a"]),
+    ("a\\{b\\}", ["a{b}"], ["ab"]),
+    ("\\[a]", ["[a]"], ["a"]),
+]
+
+@test(arguments: backslashes)
+fn aBackslashMakesACharacterItself(_ pattern: String, _ matching: String[>..], _ not: String[>..]) throws {
+    try check(pattern, matching, not)
+}
+
+#if !os(windows)
+// Where a backslash separates, no name has one.
 @test
-fn aBackslashMakesACharacterItself() throws {
-    try check("\\*", ["*"], ["a"])
-    try check("a\\{b\\}", ["a{b}"], ["ab"])
-    try check("\\[a]", ["[a]"], ["a"])
-    #if !os(windows)
-    // Where a backslash separates, no name has one.
+fn aBackslashMakesABackslashItself() throws {
     try check("\\?\\\\", ["?\\"], ["a\\"])
-    #endif
+}
+#endif
+
+let fromTheRoot: (String, String[>..], String[>..])[>..] = [
+    ("/usr/*", ["/usr/lib"], ["usr/lib", "/usr", "/usr/lib/x"]),
+    ("usr/*", ["usr/lib", "./usr/lib", "usr//lib"], ["/usr/lib"]),
+    ("./a", ["a"], ["b"]),
+    ("../a", ["../a"], ["a"]),
+]
+
+@test(arguments: fromTheRoot)
+fn aPatternFromTheRootMatchesPathsFromIt(_ pattern: String, _ matching: String[>..], _ not: String[>..]) throws {
+    try check(pattern, matching, not)
 }
 
 @test
-fn aPatternFromTheRootMatchesPathsFromIt() throws {
-    try check("/usr/*", ["/usr/lib"], ["usr/lib", "/usr", "/usr/lib/x"])
-    try check("usr/*", ["usr/lib", "./usr/lib", "usr//lib"], ["/usr/lib"])
-    try check("./a", ["a"], ["b"])
-    try check("../a", ["../a"], ["a"])
+fn caseCountsUnlessItIsSaidNotTo() throws {
     let glob = try Glob("**/*.TXT", caseSensitive: false)
     expect(glob.matches(FilePath("a/b.txt")) && glob.matches("A.Txt"))
     expect(!(try Glob("A")).matches("a"))
 }
 
-@test
-fn whatIsNoPatternIsAnError() {
-    for pattern in ["[a", "a[", "[!]", "{a", "{a,{b}", "[]", "{a,[}"] {
-        expectThrows { _ = try Glob(pattern) }
-    }
-    // Two to the twelfth ways through it.
-    expectThrows { _ = try Glob("{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}") }
+// The last would be two to the twelfth ways through it.
+@test(arguments: ["[a", "a[", "[!]", "{a", "{a,{b}", "[]", "{a,[}", "{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}"])
+fn whatIsNoPatternIsAnError(_ pattern: String) {
+    expectThrows { _ = try Glob(pattern) }
 }

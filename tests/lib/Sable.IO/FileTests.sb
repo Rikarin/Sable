@@ -4,6 +4,7 @@ module FileTests
 // all of it in directories the tests make. FileMetadata, FileKind and
 // FilePermissions with it.
 
+import IoSupport
 import Sable.IO
 import Sable.Process
 import Sable.Testing
@@ -24,8 +25,7 @@ fn linksMayBeMade(_ directory: FilePath) -> Bool {
 }
 
 @test
-fn aCopyHasTheBytesAndThePermissions() throws {
-    let temp = try Temp.directory()
+fn aCopyHasTheBytesAndThePermissions(temp: TemporaryFiles) throws {
     let from = temp.path.appending("from.bin")
     let to = temp.path.appending("to.bin")
     var bytes: U8[>..] = []
@@ -53,62 +53,53 @@ fn aCopyHasTheBytesAndThePermissions() throws {
 }
 
 @test
-fn aCopyThatMayNotReplaceIsAnError() throws {
-    let temp = try Temp.directory()
+fn aCopyThatMayNotReplaceIsAnError(temp: TemporaryFiles) throws {
     let from = temp.path.appending("from")
     let to = temp.path.appending("to")
     try File.write(from, "from")
     try File.write(to, "to")
-    do {
+    expectIoError("AlreadyExists", "it replaced one there") {
         try File.copy(from: from, to: to, overwrite: false)
-        fail("it replaced one there")
-    } catch IoError.AlreadyExists(_) { }
+    }
     assertEqual(text(to), "to")
     try File.copy(from: from, to: temp.path.appending("new"), overwrite: false)
     assertEqual(text(temp.path.appending("new")), "from")
 }
 
 @test
-fn aFileCopiedToItselfIsLeftAsItWas() throws {
-    let temp = try Temp.directory()
+fn aFileCopiedToItselfIsLeftAsItWas(temp: TemporaryFiles) throws {
     let path = temp.path.appending("one")
     let again = temp.path.appending("again")
     try File.write(path, "kept")
     try File.createHardLink(at: again, to: path)
     for target in [path, again] {
-        do {
+        expectIoError("InvalidInput", "it was copied to itself") {
             try File.copy(from: path, to: target)
-            fail("it was copied to itself")
-        } catch IoError.InvalidInput(_) { }
+        }
         assertEqual(text(path), "kept")
     }
 }
 
 @test
-fn whatIsNoFileIsNotCopied() throws {
-    let temp = try Temp.directory()
-    do {
+fn whatIsNoFileIsNotCopied(temp: TemporaryFiles) throws {
+    expectIoError("IsDirectory", "a directory was copied as a file") {
         try File.copy(from: temp.path, to: temp.path.appending("to"))
-        fail("a directory was copied as a file")
-    } catch IoError.IsDirectory(_) { }
-    do {
+    }
+    expectIoError("NotFound", "nothing was copied") {
         try File.copy(from: temp.path.appending("missing"), to: temp.path.appending("to"))
-        fail("nothing was copied")
-    } catch IoError.NotFound(_) { }
+    }
     expect(!File.exists(temp.path.appending("to")))
 }
 
 @test
-fn aRenameReplacesOrRefuses() throws {
-    let temp = try Temp.directory()
+fn aRenameReplacesOrRefuses(temp: TemporaryFiles) throws {
     let a = temp.path.appending("a")
     let b = temp.path.appending("b")
     try File.write(a, "a")
     try File.write(b, "b")
-    do {
+    expectIoError("AlreadyExists", "it replaced one there") {
         try File.rename(from: a, to: b, overwrite: false)
-        fail("it replaced one there")
-    } catch IoError.AlreadyExists(_) { }
+    }
     assertEqual(text(b), "b")
     try File.rename(from: a, to: b)
     assertEqual(text(b), "a")
@@ -119,32 +110,28 @@ fn aRenameReplacesOrRefuses() throws {
     try Directory.create(temp.path.appending("d/e"), recursive: true)
     try File.rename(from: temp.path.appending("d"), to: temp.path.appending("f"))
     expect(Directory.exists(temp.path.appending("f/e")))
-    do {
+    expectIoError("NotFound", "nothing was renamed") {
         try File.rename(from: temp.path.appending("missing"), to: a)
-        fail("nothing was renamed")
-    } catch IoError.NotFound(_) { }
+    }
 }
 
 @test
-fn aMoveIsARename() throws {
-    let temp = try Temp.directory()
+fn aMoveIsARename(temp: TemporaryFiles) throws {
     let a = temp.path.appending("a")
     let b = temp.path.appending("b")
     try File.write(a, "a")
     try File.move(from: a, to: b)
     assertEqual(text(b), "a")
     try File.write(a, "again")
-    do {
+    expectIoError("AlreadyExists", "it replaced one there") {
         try File.move(from: a, to: b, overwrite: false)
-        fail("it replaced one there")
-    } catch IoError.AlreadyExists(_) { }
+    }
     try File.move(from: a, to: b)
     assertEqual(text(b), "again")
 }
 
 @test
-fn metadataSaysWhatIsThere() throws {
-    let temp = try Temp.directory()
+fn metadataSaysWhatIsThere(temp: TemporaryFiles) throws {
     let path = temp.path.appending("file")
     let before = UtcDateTime.now().secondsSinceEpoch - 5
     try File.write(path, "twelve bytes")
@@ -174,15 +161,13 @@ fn metadataSaysWhatIsThere() throws {
     opened.close()
 
     expect((try File.metadata("\(temp.path)")).isDirectory)
-    do {
+    expectIoError("NotFound", "nothing has metadata") {
         _ = try File.metadata(temp.path.appending("missing"))
-        fail("nothing has metadata")
-    } catch IoError.NotFound(_) { }
+    }
 }
 
 @test
-fn timesAndPermissionsAreSet() throws {
-    let temp = try Temp.directory()
+fn timesAndPermissionsAreSet(temp: TemporaryFiles) throws {
     let path = temp.path.appending("file")
     try File.write(path, "x")
     let then = UtcDateTime { secondsSinceEpoch: 1234567890, nanosecond: 123456700 }
@@ -208,21 +193,21 @@ fn timesAndPermissionsAreSet() throws {
     #endif
 
     let missing = temp.path.appending("missing")
-    do {
+    expectIoError("NotFound", "nothing was written") {
         try File.setModified(missing, then)
-        fail("nothing was written")
-    } catch IoError.NotFound(_) { }
-    do {
+    }
+    expectIoError("NotFound", "nothing has permissions") {
         try File.setPermissions(missing, given)
-        fail("nothing has permissions")
-    } catch IoError.NotFound(_) { }
+    }
+}
+
+@test(arguments: [(0o644, "rw-r--r--"), (0o751, "rwxr-x--x"), (0, "---------")])
+fn permissionsAreWrittenAsLsWritesThem(_ mode: Int, _ text: String) {
+    expect("\(FilePermissions(mode: mode))" == text)
 }
 
 @test
-fn permissionsAreWrittenAsLsWritesThem() {
-    assertEqual("\(FilePermissions(mode: 0o644))", "rw-r--r--")
-    assertEqual("\(FilePermissions(mode: 0o751))", "rwxr-x--x")
-    assertEqual("\(FilePermissions(mode: 0))", "---------")
+fn permissionsAreGivenAndTaken() {
     assertEqual("\(FilePermissions(mode: 0o644):12)".count, 12)
     expect(FilePermissions(mode: 0o644).executable() == FilePermissions(mode: 0o755))
     expect(FilePermissions(mode: 0o444).writable() == FilePermissions(mode: 0o644))
@@ -232,8 +217,7 @@ fn permissionsAreWrittenAsLsWritesThem() {
 }
 
 @test
-fn aHardLinkIsTheFile() throws {
-    let temp = try Temp.directory()
+fn aHardLinkIsTheFile(temp: TemporaryFiles) throws {
     let path = temp.path.appending("file")
     let other = temp.path.appending("other")
     try File.write(path, "one")
@@ -242,22 +226,17 @@ fn aHardLinkIsTheFile() throws {
     assertEqual(text(path), "one more")
     try File.remove(path)
     assertEqual(text(other), "one more")
-    do {
+    expectIoError("NotFound", "nothing was linked") {
         try File.createHardLink(at: path, to: temp.path.appending("missing"))
-        fail("nothing was linked")
-    } catch IoError.NotFound(_) { }
-    do {
+    }
+    expectIoError("AlreadyExists", "one there was replaced") {
         try File.createHardLink(at: other, to: other)
-        fail("one there was replaced")
-    } catch IoError.AlreadyExists(_) { }
+    }
 }
 
 @test
-fn aSymbolicLinkLeadsToItsTarget() throws {
-    let temp = try Temp.directory()
-    if !linksMayBeMade(temp.path) {
-        return
-    }
+fn aSymbolicLinkLeadsToItsTarget(temp: TemporaryFiles) throws {
+    try skip(if: !linksMayBeMade(temp.path), "symbolic links may not be made here")
     let path = temp.path.appending("file")
     let link = temp.path.appending("link")
     try File.write(path, "text")
@@ -283,57 +262,48 @@ fn aSymbolicLinkLeadsToItsTarget() throws {
     assertEqual(text(inside.appending("x")), "x")
     try File.createSymlink(at: link, to: temp.path.appending("nowhere"))
     expect(!File.exists(link) && !Directory.exists(link))
-    do {
+    expectIoError("NotFound", "it leads nowhere") {
         _ = try File.metadata(link)
-        fail("it leads nowhere")
-    } catch IoError.NotFound(_) { }
+    }
     expect((try File.metadata(link, followLinks: false)).isSymlink)
-    do {
+    expectIoError("AlreadyExists", "one there was replaced") {
         try File.createSymlink(at: link, to: "file")
-        fail("one there was replaced")
-    } catch IoError.AlreadyExists(_) { }
+    }
     try File.rename(from: link, to: temp.path.appending("moved"))
     expect(try File.readLink(temp.path.appending("moved")) == temp.path.appending("nowhere"))
-    do {
+    expectIoError("InvalidInput", "a file is no link") {
         _ = try File.readLink(path)
-        fail("a file is no link")
-    } catch IoError.InvalidInput(_) { }
+    }
 }
 
 @test
-fn onlyWhatIsNamedIsRemoved() throws {
-    let temp = try Temp.directory()
+fn onlyWhatIsNamedIsRemoved(temp: TemporaryFiles) throws {
     let directory = temp.path.appending("d")
     try Directory.create(directory)
-    do {
+    expectIoError("IsDirectory", "a directory was removed as a file") {
         try File.remove(directory)
-        fail("a directory was removed as a file")
-    } catch IoError.IsDirectory(_) { }
-    do {
+    }
+    expectIoError("NotFound", "nothing was removed") {
         try File.remove(temp.path.appending("missing"))
-        fail("nothing was removed")
-    } catch IoError.NotFound(_) { }
+    }
     for path in ["", ".", "..", "\(directory)/.."] {
-        do {
+        expectIoError("InvalidInput", "'\(path)' was removed") {
             try File.remove(path)
-            fail("'\(path)' was removed")
-        } catch IoError.InvalidInput(_) { }
+        }
     }
     expect(Directory.exists(directory))
     // A NUL would cut the path short.
     let file = temp.path.appending("file")
     try File.write(file, "kept")
-    do {
+    expectIoError("InvalidInput", "a path with a NUL named something") {
         try File.remove("\(file)\0/inside")
-        fail("a path with a NUL named something")
-    } catch IoError.InvalidInput(_) { }
+    }
     assertEqual(text(file), "kept")
     expect(!File.exists("\(file)\0"))
 }
 
 @test
-fn aFileIsReadAndAddedTo() throws {
-    let temp = try Temp.directory()
+fn aFileIsReadAndAddedTo(temp: TemporaryFiles) throws {
     let path = temp.path.appending("file")
     try File.write(path, "one\r\ntwo\n")
     try File.append(path, "three")
@@ -341,20 +311,16 @@ fn aFileIsReadAndAddedTo() throws {
     try File.appendBytes("\(path)", [0xFF])
     assertEqual(try File.read(path), "one\r\ntwo\nthree\u{FFFD}")
     for missing in ["", "\(path)-missing", "\(path)/inside"] {
-        do {
+        expectIoError("NotFound", "nothing was read") {
             _ = try File.readBytes(missing)
-            fail("nothing was read")
-        } catch IoError.NotFound(_) { }
+        }
     }
 }
 
 // Across file systems, where a machine of most kinds has two.
 @test
-fn aMoveBetweenFileSystemsIsACopy() throws {
-    if !Directory.exists("/dev/shm") {
-        return
-    }
-    let temp = try Temp.directory()
+fn aMoveBetweenFileSystemsIsACopy(temp: TemporaryFiles) throws {
+    try skip(if: !Directory.exists("/dev/shm"), "there is no second file system")
     let other = try Temp.directory(in: FilePath("/dev/shm"))
     let a = temp.path.appending("a")
     let b = other.path.appending("b")
@@ -368,27 +334,24 @@ fn aMoveBetweenFileSystemsIsACopy() throws {
     assertEqual(metadata.permissions.mode, 0o640)
     expect(metadata.modified == UtcDateTime.fromUnix(1000))
     try File.write(a, "again")
-    do {
+    expectIoError("AlreadyExists", "it replaced one there") {
         try File.move(from: a, to: b, overwrite: false)
-        fail("it replaced one there")
-    } catch IoError.AlreadyExists(_) { }
+    }
     assertEqual(text(b), "a")
     expect(try Directory.list(other.path) == ["b"])
     try File.createSymlink(at: temp.path.appending("link"), to: "nowhere")
     try File.move(from: temp.path.appending("link"), to: other.path.appending("link"))
     expect(try File.readLink(other.path.appending("link")) == FilePath("nowhere"))
     try Directory.create(temp.path.appending("d"))
-    do {
+    expectIoError("CrossesFileSystems", "a directory was moved") {
         try File.move(from: temp.path.appending("d"), to: other.path.appending("d"))
-        fail("a directory was moved")
-    } catch IoError.CrossesFileSystems(_) { }
+    }
 }
 
 #if os(windows)
 // A link to a directory that anyone may make, and the system's own.
 @test
-fn aJunctionIsALink() async throws {
-    let temp = try Temp.directory()
+fn aJunctionIsALink(temp: TemporaryFiles) async throws {
     let outside = temp.path.appending("outside")
     let tree = temp.path.appending("tree")
     try Directory.create(outside)
@@ -401,7 +364,7 @@ fn aJunctionIsALink() async throws {
     expect(try File.readLink(link) == outside)
     for try entry in try Directory.walk(tree) {
         assertEqual(entry.name, "link")
-        assert(entry.isSymlink)
+        expect(entry.isSymlink, entry.name)
     }
     try Directory.remove(tree, recursive: true)
     expect(!Directory.exists(tree))
@@ -409,22 +372,19 @@ fn aJunctionIsALink() async throws {
 }
 #else
 @test
-fn aFifoIsNoFileToCopy() async throws {
-    let temp = try Temp.directory()
+fn aFifoIsNoFileToCopy(temp: TemporaryFiles) async throws {
     let fifo = temp.path.appending("fifo")
     expect((try await Command("mkfifo").argument("\(fifo)").status()).success)
     expect((try File.metadata(fifo)).kind == FileKind.Fifo)
     for try entry in try Directory.entries(temp.path) {
         assertEqual(entry.kind, FileKind.Fifo)
     }
-    do {
+    expectIoError("InvalidInput", "a FIFO was copied") {
         try File.copy(from: fifo, to: temp.path.appending("to"))
-        fail("a FIFO was copied")
-    } catch IoError.InvalidInput(_) { }
-    do {
+    }
+    expectIoError("InvalidInput", "a FIFO was copied with its directory") {
         try Directory.copy(from: temp.path, to: "\(temp.path)-copy")
-        fail("a FIFO was copied with its directory")
-    } catch IoError.InvalidInput(_) { }
+    }
     try Directory.remove("\(temp.path)-copy", recursive: true)
     try File.remove(fifo)
 }
@@ -435,10 +395,9 @@ fn aDeviceIsOne() throws {
 }
 
 @test
-fn aPathNeedNotBeUtf8() throws {
+fn aPathNeedNotBeUtf8(temp: TemporaryFiles) throws {
     // macOS's own file systems take no other.
     #if os(linux)
-    let temp = try Temp.directory()
     let path = temp.path.appending(FilePath(bytes: [0x61, 0xFF]))
     try File.write(path, "x")
     for try entry in try Directory.entries(temp.path) {

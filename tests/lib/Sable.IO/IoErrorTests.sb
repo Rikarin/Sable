@@ -21,41 +21,39 @@ fn anIoErrorIsAnError() {
 
 @test
 fn aBareThrowsCarriesAnIoError() {
-    var path = ""
-    do {
-        try failToRead("missing.txt")
-    } catch let error as IoError {
-        path = match error {
-            case .NotFound(let p) => p
-            default               => "another case"
-        }
-    } catch {
-        path = "another error"
+    let error = expectThrows(IoError.self) { try failToRead("missing.txt") }
+    if case .Some(.NotFound(let path)) = error {
+        expect(path == "missing.txt")
+    } else {
+        fail("\(error:?) was thrown")
     }
-    assertEqual(path, "missing.txt")
 }
 
-@test
-fn eachIoErrorSaysWhatWentWrong() {
-    assertEqual(IoError.NotFound(path: "a").description(), "nothing is at 'a'")
-    assertEqual(IoError.Failed(path: "a").description(), "'a' could not be read, written or changed")
-    assertEqual(IoError.Unreachable(address: "h:1").description(), "'h:1' could not be reached")
-    assertEqual(IoError.ConnectionRefused(address: "h:1").description(), "'h:1' refused the connection")
-    assertEqual(IoError.AddressInUse(address: "h:1").description(), "'h:1' is in use")
-    assertEqual(IoError.HostNotFound(host: "h").description(), "'h' has no address")
-    assertEqual(IoError.TimedOut.description(), "it took too long")
-    assertEqual(IoError.MessageTooLong.description(), "the message is too long")
-    assertEqual(IoError.Unsupported(what: "it").description(), "'it' is not supported here")
-    assertEqual(IoError.Disconnected.description(), "the connection failed or was closed")
-    assertEqual(IoError.Cancelled.description(), "the task was cancelled while it waited")
-    assertEqual(IoError.PermissionDenied(path: "a").description(), "'a' may not be used so")
-    assertEqual(IoError.AlreadyExists(path: "a").description(), "something is at 'a' already")
-    assertEqual(IoError.IsDirectory(path: "a").description(), "'a' is a directory")
-    assertEqual(IoError.Interrupted.description(), "the call was interrupted")
-    assertEqual(IoError.UnexpectedEof.description(), "the stream ended before what was needed")
-    assertEqual(IoError.InvalidInput(path: "a").description(), "'a' was given something the system does not take")
-    assertEqual(IoError.DirectoryNotEmpty(path: "a").description(), "'a' is not empty")
-    assertEqual(IoError.NotADirectory(path: "a").description(), "'a' is not a directory")
-    assertEqual(IoError.CrossesFileSystems(path: "a").description(), "'a' is on another file system")
-    assertEqual(IoError.Os(path: "a", code: 5).description(), "'a' failed with the system's error 5")
+let descriptions: (IoError, String)[>..] = [
+    (.NotFound(path: "a"), "nothing is at 'a'"),
+    (.Failed(path: "a"), "'a' could not be read, written or changed"),
+    (.Unreachable(address: "h:1"), "'h:1' could not be reached"),
+    (.ConnectionRefused(address: "h:1"), "'h:1' refused the connection"),
+    (.AddressInUse(address: "h:1"), "'h:1' is in use"),
+    (.HostNotFound(host: "h"), "'h' has no address"),
+    (.TimedOut, "it took too long"),
+    (.MessageTooLong, "the message is too long"),
+    (.Unsupported(what: "it"), "'it' is not supported here"),
+    (.Disconnected, "the connection failed or was closed"),
+    (.Cancelled, "the task was cancelled while it waited"),
+    (.PermissionDenied(path: "a"), "'a' may not be used so"),
+    (.AlreadyExists(path: "a"), "something is at 'a' already"),
+    (.IsDirectory(path: "a"), "'a' is a directory"),
+    (.Interrupted, "the call was interrupted"),
+    (.UnexpectedEof, "the stream ended before what was needed"),
+    (.InvalidInput(path: "a"), "'a' was given something the system does not take"),
+    (.DirectoryNotEmpty(path: "a"), "'a' is not empty"),
+    (.NotADirectory(path: "a"), "'a' is not a directory"),
+    (.CrossesFileSystems(path: "a"), "'a' is on another file system"),
+    (.Os(path: "a", code: 5), "'a' failed with the system's error 5"),
+]
+
+@test(arguments: descriptions)
+fn eachIoErrorSaysWhatWentWrong(_ error: IoError, _ text: String) {
+    expect(error.description() == text)
 }

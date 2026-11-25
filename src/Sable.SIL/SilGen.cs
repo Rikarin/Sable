@@ -2623,6 +2623,13 @@ public sealed partial class SilGen {
 
         var box = _module.AddType(new ClassType(name));
         box.Fields.Add(("value", type));
+
+        // Of a type only metadata knows: an instance of a generic class, laid out at run time (#297).
+        if (SilType.MentionsOpaque(type)) {
+            box.TypeArguments = [type];
+            box.DisplayName = $"$box<{TypeMetadata.DisplayName(type)}>";
+        }
+
         return box;
     }
 
@@ -12000,6 +12007,10 @@ public sealed partial class SilGen {
 
                 case ParameterSymbol parameter when closure?.Captures.TryGetValue(parameter, out var outerParameter) == true:
                     return Emit(new LoadInst(Emit(new RefElementAddrInst(_context!, outerParameter.Field))));
+
+                // One this closure unpacked from its own context into a slot (UnpackIndirectCaptures).
+                case ParameterSymbol parameter when _spilled.TryGetValue(parameter, out var unpacked):
+                    return Emit(new LoadInst(unpacked));
 
                 case FunctionSymbol local:
                     return LocalFunctionValue(local, at);

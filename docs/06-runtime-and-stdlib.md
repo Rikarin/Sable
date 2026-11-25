@@ -608,7 +608,8 @@ indirectly that it captures is kept in an array of one in the context,
 which sizes it at run time and destroys it through its witnesses, and is
 copied into a slot of its own where the closure's code starts. Such a
 closure captures by value (a `let`, a parameter, its own `self`), and may be inside
-another; one that shares a `var` of a type parameter's type
+another; a `var` it shares is in a box that is an instance of a generic class,
+laid out at run time as any is. One that changes a value's `self`
 keeps its function specialised, as does a function that returns a closure
 over its type parameters.
 
@@ -735,8 +736,7 @@ given where its conformance is required, has the conformance's template table
 
 What unspecialised code cannot serve yet — a structural union of `T`, a
 method of a generic class a subclass may override, `Task<T>`, an async
-closure's parameter, a `var` of a type parameter's type that a closure
-shares, an array of type parameters given where a conformance is required
+closure's parameter, an array of type parameters given where a conformance is required
 (`xs.map` of a `T[>..]`), or a generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised

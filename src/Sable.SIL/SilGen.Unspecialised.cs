@@ -1243,6 +1243,8 @@ public sealed partial class SilGen {
 
             return captures.All(c => !Mentions(c.Type) || c is { Boxed: false, Kind: CaptureKind.Default or CaptureKind.ByValue, Key: LocalSymbol or ParameterSymbol }
                 && (IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol || IsGenericFunction(V(c.Type), _own))
+                // A 'var' it shares, in a box laid out at run time.
+                || c is { Boxed: true, Kind: CaptureKind.Default, Key: LocalSymbol } && IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol
                 // Its self: an object, or a copy of a value.
                 || c is { Boxed: false, Kind: CaptureKind.Default or CaptureKind.ByValue, Key: SelfKey } && IsHeld(V(c.Type), _own));
         }

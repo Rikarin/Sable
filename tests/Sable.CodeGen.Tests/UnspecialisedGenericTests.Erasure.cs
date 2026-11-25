@@ -227,6 +227,70 @@ public sealed partial class UnspecialisedGenericTests {
     );
 
     [Fact]
+    public void AClosureSharesAVar() => Prints(
+        """
+        3 b q
+        y x 2 1 r
+        z z z 3 2
+        b 2
+
+        """,
+        """
+        struct Big { let a: String, let b: Int }
+        fn last<T>(_ xs: T[>..], _ each: @escaping (T) -> Void) -> T? {
+            var kept: T? = none
+            let keep = { (x: T) in
+                kept = x
+                each(x)
+            }
+            for x in xs {
+                keep(x)
+            }
+            return kept
+        }
+        fn swapped<T>(_ a: T, _ b: T) -> (T, T) {
+            var first = a
+            var second = b
+            let swap = {
+                let t = first
+                first = second
+                second = t
+            }
+            swap()
+            swap()
+            swap()
+            return (first, second)
+        }
+        fn collect<T>(_ x: T, _ n: Int) -> T[>..] {
+            var all: T[>..] = []
+            let add = { all.append(x) }
+            for _ in 0..<n {
+                add()
+            }
+            return all
+        }
+        fn nested<T>(_ x: T, _ y: T) -> T {
+            var v = x
+            let outer = {
+                let inner = { v = y }
+                inner()
+            }
+            outer()
+            return v
+        }
+        """,
+        """
+            print("\(last([1, 2, 3], { _x in })!) \(last(["a", "b"], { _x in })!) \(last([Big { a: "q", b: 1 }], { _x in })!.a)")
+            let s = swapped("x", "y")
+            let i = swapped(1, 2)
+            print("\(s.0) \(s.1) \(i.0) \(i.1) \(swapped(Big { a: "q", b: 1 }, Big { a: "r", b: 2 }).0.a)")
+            let zs = collect("z", 3)
+            print("\(zs[0]) \(zs[1]) \(zs[2]) \(zs.count) \(collect(4, 2).count)")
+            print("\(nested("a", "b")) \(nested(1, 2))")
+        """
+    );
+
+    [Fact]
     public void RawMemoryIsCompiledOnce() {
         var once = Unspecialised(
             "fn at<T>(_ value: T) -> T {\n    unsafe {\n        let p = RawPtr<T>.allocate(count: 1)\n        p.initialize(to: value)\n        let moved = p.move()\n        p.deallocate()\n        return moved\n    }\n}",

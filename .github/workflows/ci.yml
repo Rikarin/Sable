@@ -104,14 +104,19 @@ jobs:
 
       # The ```sable examples of the library's doc comments, each module's
       # run as its tests (sable test --doc). Once, on Linux x64: the
-      # library's code is the same everywhere.
+      # library's code is the same everywhere. Every module, whichever fail.
       - name: Standard library doc examples
         if: matrix.os == 'ubuntu-24.04'
         run: |
+          failed=()
           for module in lib/*/; do
             echo "== $module"
-            src/Sable.Driver/bin/Release/net11.0/sable test --doc "$module"
+            src/Sable.Driver/bin/Release/net11.0/sable test --doc "$module" || failed+=("$module")
           done
+          if [[ ${#failed[@]} -gt 0 ]]; then
+            echo "doc examples failed: ${failed[*]}" >&2
+            exit 1
+          fi
 
   # Sable.CodeGen.Tests — native code, the runtime, packages and the CLI —
   # split by test class into shards that run side by side

@@ -1,11 +1,11 @@
 module PercentEncodeBench
 
 import Sable.Net
+import Sable.Testing
 
 // Percent-encoding: 100,000 strings encoded as URL components and decoded.
 
-@main
-fn main() {
+fn run() -> String {
     var total = 0
     for i in 0..<100000 {
         let text = "name \(i) & value = 50% / größe ✓"
@@ -13,5 +13,10 @@ fn main() {
         total += encoded.count
         if PercentEncoding.decodeText(encoded) == text { total += 1 }
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

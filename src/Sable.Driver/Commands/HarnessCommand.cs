@@ -37,8 +37,19 @@ public abstract class HarnessCommand : Command {
     /// <summary>The counters of the harness just built, when it measures coverage.</summary>
     protected CoverageMap? CoverageCounters { get; private set; }
 
+    /// <summary>Whether a package's harness built before may be run again: not when the build itself is wanted, each benchmark in it a function of its own.</summary>
+    protected virtual bool KeepsHarness => true;
+
+    /// <summary>The harness just built, and how; null for one kept from before.</summary>
+    protected CompileResult? Built { get; private set; }
+
+    protected NativeOptions Native { get; private set; } = new();
+
     /// <summary>The directory of what is built: the workspace's root, or the first file's.</summary>
     protected string ProgramDirectory { get; private set; } = ".";
+
+    /// <summary>Where what is built of it goes: its <c>target/</c>.</summary>
+    protected string TargetDirectory { get; private set; } = "target";
 
     /// <summary>'--bless': what is compared with a file is written to it instead.</summary>
     protected bool Bless { get; private set; }
@@ -54,6 +65,12 @@ public abstract class HarnessCommand : Command {
         bool Bless = false) {
         /// <summary>'--harness-out': where to write the harness, built and not run (to debug a test with).</summary>
         public string? Output { get; init; }
+
+        /// <summary>'-O1' and the like, for a benchmark: clang's level and the SIL passes'; null for the command's own.</summary>
+        public string? OptLevel { get; init; }
+
+        /// <summary>What clang is asked for.</summary>
+        public NativeOptions Native => OptLevel is { } level ? new() { OptLevel = level, DebugInfo = Debug } : NativeOptions.Of(Optimise, Debug);
     }
 
     protected Options? Parse(IReadOnlyList<string> args) {
@@ -65,6 +82,7 @@ public abstract class HarnessCommand : Command {
         var bless = false;
         bool? exclusivity = null;
         string? output = null;
+        string? level = null;
         for (var i = 0; i < args.Count; i++) {
             var argument = args[i];
             switch (argument) {
@@ -74,7 +92,14 @@ public abstract class HarnessCommand : Command {
                     break;
                 case "--doc" when Kind == TestKind.Test: doc = true; break;
                 case "--bless" when Kind == TestKind.Test: bless = true; break;
-                case "-O0": optimise = false; break;
+                case "-O0":
+                    optimise = false;
+                    level = Kind == TestKind.Bench ? "0" : null;
+                    break;
+                case "-O1" or "-O2" or "-O3" or "-Os" or "-Oz" when Kind == TestKind.Bench:
+                    optimise = true;
+                    level = argument[2..];
+                    break;
                 case "--release": optimise = true; break;
                 case "-g": debug = true; break;
                 case "--exclusivity=checked": exclusivity = true; break;
@@ -118,7 +143,9 @@ public abstract class HarnessCommand : Command {
             }
         }
 
-        return new(files, harness, doc, optimise, debug, exclusivity, bless) { Output = output };
+        // A benchmark is of the code 'sable build' makes: every pass of its level.
+        level ??= Kind != TestKind.Bench ? null : optimise && !debug ? "2" : "0";
+        return new(files, harness, doc, optimise, debug, exclusivity, bless) { Output = output, OptLevel = level };
     }
 
     public override int Run(IReadOnlyList<string> arguments) {
@@ -141,6 +168,7 @@ public abstract class HarnessCommand : Command {
         // written there and kept, for a debugger to start.
         var executable = options.Output ?? Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}{NativeTarget.Host.ExecutableSuffix}");
         ProgramDirectory = program.Directory;
+        TargetDirectory = program.TargetDirectory;
         Bless = options.Bless;
         try {
             var code = Build(program.Trees, program.Directory, options, executable, program.Cache, program.Link, program.LinkInputs)
@@ -244,10 +272,10 @@ public abstract class HarnessCommand : Command {
         string? kept = null, record = null, key = null;
 
         // A build measured for coverage is not kept: its counters are this build's.
-        if (cache is not null && !options.Debug && !MeasureCoverage) {
+        if (cache is not null && !options.Debug && !MeasureCoverage && KeepsHarness) {
             kept = Path.Combine(cache, Name);
             record = kept + ".json";
-            key = ResultCache.Key(trees, $"{Name}|{Kind}|doc={options.DocExamples}|opt={options.Optimise}|exclusivity={options.Exclusivity}|link={string.Join(' ', link)}|{linkInputs}");
+            key = ResultCache.Key(trees, $"{Name}|{Kind}|doc={options.DocExamples}|opt={options.Optimise}{options.OptLevel}|exclusivity={options.Exclusivity}|link={string.Join(' ', link)}|{linkInputs}");
             if (File.Exists(kept) && ResultCache.Read(record, key) is { } hit) {
                 foreach (var warning in hit.Warnings) {
                     Console.Error.WriteLine(warning);
@@ -267,8 +295,12 @@ public abstract class HarnessCommand : Command {
             options.Debug ? directory : null,
             options.Exclusivity ?? (options.Debug || !options.Optimise),
             MeasureCoverage && CoveredLibrary is null ? file => IsUnder(file, directory) : null,
-            MeasureCoverage ? CoveredLibrary : null
+            MeasureCoverage ? CoveredLibrary : null,
+            options.OptLevel,
+            !KeepsHarness
         );
+        Built = result;
+        Native = options.Native;
         CoverageCounters = result.Coverage;
         foreach (var warning in result.Warnings) {
             Console.Error.WriteLine(warning);
@@ -290,7 +322,7 @@ public abstract class HarnessCommand : Command {
             return 1;
         }
 
-        var build = NativeBuild.Build(result.LlvmIr!, executable, NativeOptions.Of(options.Optimise, options.Debug) with { LinkArguments = link });
+        var build = NativeBuild.Build(result.LlvmIr!, executable, options.Native with { LinkArguments = link });
         if (!build.Succeeded) {
             Console.Error.WriteLine("internal error: the native build failed:");
             Console.Error.Write(build.Output);

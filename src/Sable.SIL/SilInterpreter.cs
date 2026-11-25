@@ -798,13 +798,17 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     /// <summary>An enum value: which case, and its payload.</summary>
     public sealed record EnumValue(int Case, object? Payload);
 
-    /// <summary>What <see cref="GlobalValue" /> gives for a part no literal can say: an object, an array, a function.</summary>
+    /// <summary>An array, as <see cref="GlobalValue" /> gives one: its elements.</summary>
+    public sealed record ArrayValue(IReadOnlyList<object?> Elements);
+
+    /// <summary>What <see cref="GlobalValue" /> gives for a part no literal can say: an object, a slice, a function.</summary>
     public static readonly object Opaque = new();
 
     /// <summary>
     ///     What the global holds, as plain values: numbers, <see cref="bool" />,
     ///     <see cref="Rune" />, strings as .NET strings, an array of parts for
-    ///     a struct or tuple, an <see cref="EnumValue" />; anything else is
+    ///     a struct or tuple, an <see cref="EnumValue" />, an
+    ///     <see cref="ArrayValue" /> (null, for an empty one); anything else is
     ///     <see cref="Opaque" />. Null when nothing is stored there.
     /// </summary>
     public object? GlobalValue(string name) {
@@ -814,6 +818,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 HeapString text => text.Value,
                 object?[] parts => parts.Select(Plain).ToArray(),
                 EnumValue e => e with { Payload = Plain(e.Payload) },
+                HeapArray array => new ArrayValue([..array.Elements.Select(Plain)]),
                 _ => Opaque,
             };
 
@@ -1468,11 +1473,18 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 Alive((HeapObject)operands[0]!).Unmade = true;
                 return null;
 
-            // The interpreter's storage has no addresses, nor its functions C entries.
-            case "address_begin" or "array_address" or "slice_address" or "c_address":
-                throw new SilTrap("a C pointer to a value or a function, which the interpreter has none of; build the program to run it");
+            // The interpreter's functions have no C entries.
+            case "c_address":
+                throw new SilTrap("a C pointer to a function, which the interpreter has none of; build the program to run it");
 
-            case "address_end" or "slice_end" or "forget":
+            case "address_begin" or "array_address" or "slice_address":
+                return Lend(builtin, operands);
+
+            case "address_end" or "slice_end":
+                EndLoan();
+                return null;
+
+            case "forget":
                 return null;
 
             // An actor's identity: the interpreter's hops never wait, so need none.
@@ -1649,6 +1661,13 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return at >= 0 && at <= bytes.Length - 8
                     ? System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan((int)at))
                     : throw new SilTrap("string index out of range");
+            }
+
+            case "string_utf8_last_U64": {
+                var bytes = Text(operands[0]).Utf8;
+                Span<byte> last = stackalloc byte[8];
+                bytes.AsSpan(Math.Max(0, bytes.Length - 8)).CopyTo(last);
+                return System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(last);
             }
 
             case "string_index_scalar":
@@ -2062,6 +2081,18 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     _ => 0L,
                 };
 
+            // Nothing is counted but what the machine itself does, and its
+            // time is this process's.
+            case "memory_counting":
+                return null;
+
+            case "measurement":
+                return (long)operands[0]! switch {
+                    0 => (long)Environment.CpuUsage.TotalTime.TotalNanoseconds,
+                    1 => 0L,
+                    _ => -1L,
+                };
+
             case "memory_statistic":
                 return (long)operands[0]! switch {
                     0 => Allocations,
@@ -2130,6 +2161,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             case "array_count":
                 return (long)ElementsOf(operands[0]).Count;
+
+            case "array_shares": {
+                var (one, oneStart, oneCount) = ElementsOf(operands[0]);
+                var (other, otherStart, otherCount) = ElementsOf(operands[1]);
+                return ReferenceEquals(one, other) && oneStart == otherStart && oneCount == otherCount;
+            }
 
             case "array_mismatch": {
                 if (!SilBuiltins.ComparesByBits(ArrayType.ElementOf(builtin.Operands[0].Type)!)) {
@@ -2467,6 +2504,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
         if (builtin.Name.StartsWith("inline_", StringComparison.Ordinal)) {
             return Inline(builtin, operands, depth);
+        }
+
+        if (builtin.Name.StartsWith("thread_", StringComparison.Ordinal) || builtin.Name.StartsWith("task_local_", StringComparison.Ordinal)) {
+            return ThreadBuiltin(builtin.Name, operands, depth);
         }
 
         if (builtin.Name.StartsWith("task_", StringComparison.Ordinal) || builtin.Name.StartsWith("async_", StringComparison.Ordinal)) {

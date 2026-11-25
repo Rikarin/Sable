@@ -35,9 +35,9 @@ static class LibraryComplexFft {
         }
     }
 
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
-            const int N = 65536;
+
             var signal = new Complex[N];
             var forward = new Complex[N / 2];
             var inverse = new Complex[N / 2];
@@ -49,7 +49,14 @@ static class LibraryComplexFft {
                 forward[i] = Complex.FromPolarCoordinates(1.0, -2.0 * Math.PI * i / N);
                 inverse[i] = Complex.Conjugate(forward[i]);
             }
+            return () => Run(signal, forward, inverse);
+        }
+    }
 
+    const int N = 65536;
+
+    static string Run(Complex[] signal, Complex[] forward, Complex[] inverse) {
+        checked {
             var values = (Complex[])signal.Clone();
             var peak = 0.0;
             for (var round = 0; round < 16; round++) {

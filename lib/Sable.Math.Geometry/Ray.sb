@@ -1,0 +1,157 @@
+module Sable.Math.Geometry
+
+/// Where a ray begins and which way it goes: for picking, lines of sight and
+/// casts. Distances along it are in units of the direction, which `init`
+/// makes 1. 24 bytes.
+///
+/// ```sable
+/// let down = Ray(Vector3(0, 5, 0), Vector3.down)
+/// assert(down.intersection(with: Plane(Vector3.up, 0)) == 5)
+/// assert(down.point(at: 2) == Vector3(0, 3, 0))
+/// ```
+public struct Ray: Hashable, Sendable {
+    /// Where it begins.
+    public var origin: Vector3
+
+    /// Which way it goes: of length 1.
+    public var direction: Vector3
+
+    /// The ray from the point, that way (and made unit).
+    public init(_ origin: Vector3, _ direction: Vector3) {
+        self.origin = origin
+        self.direction = direction.normalized()
+    }
+
+    /// The point so far along.
+    public fn point(at distance: F32) -> Vector3 => origin + direction * distance
+
+    /// How far along the ray meets the plane; none where it is parallel to
+    /// the plane or goes away from it.
+    public fn intersection(with plane: Plane) -> F32? {
+        let alignment = plane.dotNormal(direction)
+        if isNearZero(alignment) {
+            return none
+        }
+        let hit = -plane.dotCoordinate(origin) / alignment
+        return hit >= 0 ? hit : none
+    }
+
+    /// How far along the ray enters the sphere: 0 where it begins inside;
+    /// none where it misses.
+    ///
+    /// ```sable
+    /// let ray = Ray(Vector3(0, 0, -5), Vector3.unitZ)
+    /// assert(ray.intersection(with: BoundingSphere(Vector3.zero, 1)) == 4)
+    /// ```
+    public fn intersection(with sphere: BoundingSphere) -> F32? {
+        if sphere.isEmpty {
+            return none
+        }
+        let toCenter = sphere.center - origin
+        let distanceSquared = toCenter.lengthSquared
+        let radiusSquared = sphere.radius * sphere.radius
+        if distanceSquared <= radiusSquared {
+            return 0
+        }
+        let projection = toCenter.dot(direction)
+        if projection < 0 {
+            return none
+        }
+        let perpendicularSquared = distanceSquared - projection * projection
+        if perpendicularSquared > radiusSquared {
+            return none
+        }
+        return projection - (radiusSquared - perpendicularSquared).squareRoot()
+    }
+
+    /// How far along the ray enters the box: 0 where it begins inside; none
+    /// where it misses. A face is part of the box, so a ray along one meets it.
+    ///
+    /// ```sable
+    /// let box = BoundingBox(Vector3(-1, -1, -1), Vector3.one)
+    /// assert(Ray(Vector3(0, 0, -5), Vector3.unitZ).intersection(with: box) == 4)
+    /// assert(Ray(Vector3(0, 1, -5), Vector3.unitZ).intersection(with: box) == 4)
+    /// ```
+    public fn intersection(with box: BoundingBox) -> F32? {
+        var entry: F32 = 0
+        var exit = F32.infinity
+        if !clip(origin.x, direction.x, box.minimum.x, box.maximum.x, &entry, &exit) || !clip(origin.y, direction.y, box.minimum.y, box.maximum.y, &entry, &exit) || !clip(origin.z, direction.z, box.minimum.z, box.maximum.z, &entry, &exit) {
+            return none
+        }
+        return entry <= exit ? entry : none
+    }
+
+    // The part of the ray between two planes across an axis; false where
+    // that is none for being parallel to them.
+    fn clip(_ start: F32, _ step: F32, _ low: F32, _ high: F32, _ entry: inout F32, _ exit: inout F32) -> Bool {
+        if step == 0 {
+            // Dividing would make 0 × ∞ of a start on the face.
+            return start >= low && start <= high
+        }
+        let inverse = 1 / step
+        let one = (low - start) * inverse
+        let other = (high - start) * inverse
+        entry = entry.maximum(one.minimum(other))
+        exit = exit.minimum(one.maximum(other))
+        return true
+    }
+
+    /// How far along the ray meets the triangle, from either side of it;
+    /// none where it misses (Möller and Trumbore's).
+    ///
+    /// ```sable
+    /// let down = Ray(Vector3(0.25, 5, -0.25), Vector3.down)
+    /// assert(down.intersection(withTriangle: Vector3.zero, Vector3(0, 0, -1), Vector3(1, 0, 0)) == 5)
+    /// ```
+    public fn intersection(withTriangle a: Vector3, _ b: Vector3, _ c: Vector3) -> F32? {
+        let edge1 = b - a
+        let edge2 = c - a
+        let perpendicular = direction.cross(edge2)
+        let determinant = edge1.dot(perpendicular)
+        if isNearZero(determinant) {
+            return none
+        }
+        let inverse = 1 / determinant
+        let toVertex = origin - a
+        let u = toVertex.dot(perpendicular) * inverse
+        if u < 0 || u > 1 {
+            return none
+        }
+        let across = toVertex.cross(edge1)
+        let v = direction.dot(across) * inverse
+        if v < 0 || u + v > 1 {
+            return none
+        }
+        let hit = edge2.dot(across) * inverse
+        return hit >= 0 ? hit : none
+    }
+
+    /// The ray moved by the matrix, its direction made unit again.
+    public fn transformed(by matrix: Matrix4x4) -> Ray {
+        return Ray(matrix.transformPosition(origin), matrix.transformDirection(direction))
+    }
+
+    /// Whether the two are near the other's.
+    public fn nearEqual(_ other: Ray, tolerance: F32 = 0.000001) -> Bool {
+        return origin.nearEqual(other.origin, tolerance: tolerance) && direction.nearEqual(other.direction, tolerance: tolerance)
+    }
+
+    /// Whether the two are exactly equal, as IEEE has it.
+    public operator == (lhs: Ray, rhs: Ray) -> Bool => lhs.origin == rhs.origin && lhs.direction == rhs.direction
+
+    /// The two's hashes.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(origin)
+        hasher.combine(direction)
+    }
+}
+
+extension Ray: Formattable {
+    /// The origin and the direction, in parentheses.
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([origin, direction], spec, named: "Ray")
+}
+
+extension Ray: Debug {
+    /// As source writes it.
+    public fn debugDescription() -> String => "Ray(\(origin.debugDescription()), \(direction.debugDescription()))"
+}

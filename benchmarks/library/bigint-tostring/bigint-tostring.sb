@@ -4,10 +4,9 @@ module BigIntToString
 // 10⁵ digits (3^209590), five times over, each a little different.
 
 import Sable.Math
+import Sable.Testing
 
-@main
-fn main() {
-    let a = BigInt(3).pow(209590)
+fn run(_ a: BigInt) -> String {
     var total = 0
     var text = ""
     var i = 0
@@ -16,5 +15,11 @@ fn main() {
         total = total + text.count
         i = i + 1
     }
-    print("\(total) \(text.slice(from: 0, to: 12)) \(text.slice(from: text.count - 12, to: text.count))")
+    return "\(total) \(text.slice(from: 0, to: 12)) \(text.slice(from: text.count - 12, to: text.count))"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let a = BigInt(3).pow(209590)
+    b.check(b.iterate { run(a) })
 }

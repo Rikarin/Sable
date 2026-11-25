@@ -1,12 +1,12 @@
 module DateTimeBench
 
+import Sable.Testing
 import Sable.Time
 
 // Moments: 200,000 made from seconds, written as RFC 3339 text and read
 // back, and their parts read.
 
-@main
-fn main() {
+fn run() -> String {
     var total = 0
     for i in 0..<200000 {
         let moment = UtcDateTime.fromUnix(946684800 + i * 7919)
@@ -14,5 +14,10 @@ fn main() {
         let back = try! UtcDateTime.parse(text)
         total += back.secondsSinceEpoch % 1000 + back.year + back.month * 31 + back.day + back.dayOfYear
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

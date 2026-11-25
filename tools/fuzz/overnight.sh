@@ -7,7 +7,7 @@
 # failure for every distinct bug the night found, each with the seed that
 # reproduces it.
 #
-#     tools/fuzz/overnight.sh                 # 8 hours, all four fuzzers
+#     tools/fuzz/overnight.sh                 # 8 hours, all five fuzzers
 #     tools/fuzz/overnight.sh 2h parser compiler
 #     tools/fuzz/overnight.sh --summary       # the latest run's results so far
 #     tools/fuzz/overnight.sh --summary <dir> # a given run's
@@ -23,6 +23,9 @@
 #     parser     random token soup through the parser: text must round-trip
 #     compiler   mutated programs through binding, lowering and the verifier
 #     resolver   random registries through the package resolver
+#     differential
+#                generated programs, interpreted and native, optimised,
+#                unspecialised and compiled separately: all must agree
 #     frombytes  @inline_layout's fromBytes under AddressSanitizer and UBSan
 #
 # The duration takes s, m or h. Results go to artifacts/fuzz/<start time>/,
@@ -40,7 +43,8 @@
 # the checkout alone while a run goes.
 #
 # Round sizes are set so a round takes about five minutes; change them with
-# PARSER_SCALE, COMPILER_SCALE, RESOLVER_SCALE and FROMBYTES_CASES. Each test
+# PARSER_SCALE, COMPILER_SCALE, RESOLVER_SCALE, DIFFERENTIAL_SCALE and
+# FROMBYTES_CASES. Each test
 # process is capped at FUZZ_HEAP (default 4 GB) of managed heap.
 set -uo pipefail
 
@@ -58,7 +62,7 @@ fi
 duration=${1:-8h}
 [ $# -gt 0 ] && shift
 fuzzers=("$@")
-[ ${#fuzzers[@]} -eq 0 ] && fuzzers=(parser compiler resolver frombytes)
+[ ${#fuzzers[@]} -eq 0 ] && fuzzers=(parser compiler resolver differential frombytes)
 
 deadline=$(( $(date +%s) + $(seconds_of "$duration") ))
 
@@ -112,6 +116,12 @@ fuzz() {
                 SABLE_FUZZ_SEED=$seed SABLE_FUZZ_SCALE=${RESOLVER_SCALE:-300} timeout "$limit" \
                     dotnet test tests/Sable.CodeGen.Tests -c Release --no-build \
                     --filter "FullyQualifiedName~ResolverFuzzTests" --logger "console;verbosity=normal" >> "$log" 2>&1
+                status=$? ;;
+            differential)
+                echo "SABLE_FUZZ_SEED=$seed SABLE_FUZZ_SCALE=${DIFFERENTIAL_SCALE:-15}" > "$log"
+                SABLE_FUZZ_SEED=$seed SABLE_FUZZ_SCALE=${DIFFERENTIAL_SCALE:-15} timeout "$limit" \
+                    dotnet test tests/Sable.CodeGen.Tests -c Release --no-build \
+                    --filter "FullyQualifiedName~DifferentialFuzzTests" --logger "console;verbosity=normal" >> "$log" 2>&1
                 status=$? ;;
             frombytes)
                 echo "SABLE_FUZZ_SEED=$seed SABLE_FUZZ_CASES=${FROMBYTES_CASES:-20000000}" > "$log"

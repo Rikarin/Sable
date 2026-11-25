@@ -1,7 +1,7 @@
 // Port of sort.sb.
 [Benchmark("library/sort")]
 static class LibrarySort {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var numbers = new List<long>();
             long x = 42;
@@ -17,6 +17,12 @@ static class LibrarySort {
             }
 
             // Sable orders strings by Unicode scalar, as ordinal comparison does for these.
+            return () => Run(numbers, words);
+        }
+    }
+
+    static string Run(List<long> numbers, List<string> words) {
+        checked {
             var a = new List<long>(numbers);
             a.Sort();
             var b = new List<string>(words);

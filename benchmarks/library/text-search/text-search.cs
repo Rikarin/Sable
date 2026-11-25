@@ -1,7 +1,7 @@
 // Port of text-search.sb.
 [Benchmark("library/text-search")]
 static class LibraryTextSearch {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var builder = new System.Text.StringBuilder();
             for (var i = 0; i < 20000; i++) {
@@ -10,7 +10,12 @@ static class LibraryTextSearch {
 
             builder.Append("needle");
             var text = builder.ToString();
+            return () => Run(text);
+        }
+    }
 
+    static string Run(string text) {
+        checked {
             long found = 0;
             long pieces = 0;
             for (var round = 0; round < 200; round++) {

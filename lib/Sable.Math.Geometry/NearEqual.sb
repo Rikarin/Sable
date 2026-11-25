@@ -1,0 +1,58 @@
+module Sable.Math.Geometry
+
+// Comparing floats that were worked out: to a tolerance, spelled out where
+// it is meant. '==' is never approximate.
+
+/// What is taken for nothing: a length, or a difference from zero or one,
+/// below a millionth.
+const zeroTolerance: F32 = 0.000001
+
+/// The slack a test needs that compares two quantities rounded apart: eight
+/// times F32's unit roundoff of 2^-24, to be multiplied by the magnitudes
+/// that went into them (BoundingBox.side(of:) says how it is chosen).
+const roundingSlack: F32 = 0.000000476837158203125
+
+/// Whether two numbers are within the tolerance of each other, times the
+/// larger magnitude where that is above 1: absolute near zero, relative
+/// further out. Infinities of one sign are equal; a NaN is near nothing.
+///
+/// ```sable
+/// assert(nearEqual(1 as F32, 1.0000005 as F32))
+/// assert(nearEqual(1000000 as F32, 1000000.5 as F32))
+/// assert(!nearEqual(0 as F32, 0.00001 as F32))
+/// ```
+public fn nearEqual(_ left: F32, _ right: F32, tolerance: F32 = 0.000001) -> Bool {
+    if left == right {
+        return true
+    }
+    let difference = (left - right).abs()
+    // Without this an infinity is within an infinite tolerance of anything.
+    if !difference.isFinite {
+        return false
+    }
+    let scale = left.abs().maximum(right.abs()).maximum(1)
+    return difference <= tolerance * scale
+}
+
+/// Whether two numbers are within the tolerance of each other, times the
+/// larger magnitude where that is above 1.
+public fn nearEqual(_ left: F64, _ right: F64, tolerance: F64 = 0.000000000001) -> Bool {
+    if left == right {
+        return true
+    }
+    let difference = (left - right).abs()
+    if !difference.isFinite {
+        return false
+    }
+    let scale = left.abs().maximum(right.abs()).maximum(1)
+    return difference <= tolerance * scale
+}
+
+/// Whether the number is within a millionth of zero.
+fn isNearZero(_ value: F32) -> Bool => value.abs() < zeroTolerance
+
+/// The number held within 0...1.
+fn saturated(_ value: F32) -> F32 => value < 0 ? 0 : value > 1 ? 1 : value
+
+/// One over the number, or zero where it is near zero.
+fn safeReciprocal(_ value: F32) -> F32 => isNearZero(value) ? 0 : 1 / value

@@ -4,10 +4,9 @@ module Ed25519SignBench
 // checked. .NET has no Ed25519.
 
 import Sable.Crypto
+import Sable.Testing
 
-@main
-fn main() {
-    let key = Ed25519PrivateKey.generate()
+fn run(_ key: Ed25519PrivateKey) -> String {
     var message = U8[>..](repeating: 7, count: 64)
     var signature = key.sign(message)
     var round = 1
@@ -16,5 +15,11 @@ fn main() {
         signature = key.sign(message)
         round += 1
     }
-    print("\(key.publicKey.isValid(signature, for: message) ? 1 : 0)")
+    return "\(key.publicKey.isValid(signature, for: message) ? 1 : 0)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let key = Ed25519PrivateKey.generate()
+    b.check(b.iterate { run(key) })
 }

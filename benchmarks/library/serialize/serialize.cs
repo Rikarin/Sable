@@ -2,7 +2,7 @@
 // read back through System.Text.Json's source-generated serializers.
 [Benchmark("library/serialize")]
 static partial class LibrarySerialize {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var orders = new List<Order>();
             for (var i = 0; i < 100000; i++) {
@@ -13,7 +13,12 @@ static partial class LibrarySerialize {
 
                 orders.Add(new Order(i, $"customer {i % 5003}", i % 3 == 0, i % 4 == 0 ? "leave at the door" : null, items));
             }
+            return () => Run(orders);
+        }
+    }
 
+    static string Run(List<Order> orders) {
+        checked {
             var text = System.Text.Json.JsonSerializer.Serialize(orders, OrdersJson.Default.ListOrder);
             var back = System.Text.Json.JsonSerializer.Deserialize(text, OrdersJson.Default.ListOrder)!;
             long quantity = 0;

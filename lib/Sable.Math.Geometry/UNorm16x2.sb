@@ -1,0 +1,33 @@
+module Sable.Math.Geometry
+
+/// Two numbers of 0...1 in two `U16`s, as a vertex has a texture coordinate:
+/// 4 bytes. Vulkan's conversions: what is outside is held to the ends (NaN
+/// to 0), and rounded to the nearest.
+///
+/// ```sable
+/// assert(UNorm16x2(Vector2(1, 0)).vector == Vector2(1, 0))
+/// assert(MemoryLayout<UNorm16x2>.size == 4)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct UNorm16x2: Sendable {
+    /// The x component, in 65535ths.
+    public var x: U16
+
+    /// The y component, in 65535ths.
+    public var y: U16
+
+    /// The integers as they are stored.
+    public init(_ x: U16, _ y: U16) {
+        self.x = x
+        self.y = y
+    }
+
+    /// Each component rounded to the nearest there is.
+    public init(_ value: Vector2) {
+        x = U16((value.x.maximumNumber(0).minimum(1) * 65535).rounded(.ToNearestOrEven))
+        y = U16((value.y.maximumNumber(0).minimum(1) * 65535).rounded(.ToNearestOrEven))
+    }
+
+    /// The numbers they are.
+    public var vector: Vector2 => Vector2(F32(x) / 65535, F32(y) / 65535)
+}

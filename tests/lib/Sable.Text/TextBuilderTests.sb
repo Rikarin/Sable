@@ -205,6 +205,6 @@ fn buildingText(_ b: Bencher) {
             builder.append("piece")
             i = i + 1
         }
-        let built = builder.build()
+        return builder.build()
     })
 }

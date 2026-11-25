@@ -1,6 +1,6 @@
-module Bench
+module FanOut
 
-import Sable.Time
+import Sable.Testing
 
 // A CPU-bound fan-out: sixteen tasks of the same arithmetic, which the pool
 // spreads over the cores.
@@ -13,9 +13,7 @@ fn spin(_ seed: Int, _ rounds: Int) -> Int {
     return x
 }
 
-@main
-fn main() async {
-    let start = Instant.now()
+fn run() async -> String {
     var tasks: Task<Int>[>..] = []
     for i in 0..<16 {
         tasks.append(Task.spawn { spin(i, 25_000_000) })
@@ -24,5 +22,10 @@ fn main() async {
     for task in tasks {
         total = (total + await task.value) % 1000003
     }
-    print("fan-out of 16: \(start.elapsed.totalNanoseconds / 1_000_000) ms (\(total))")
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { await run() })
 }

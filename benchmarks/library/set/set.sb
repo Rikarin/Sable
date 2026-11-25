@@ -1,12 +1,12 @@
 module SetBench
 
 import Sable.Collections
+import Sable.Testing
 
 // Set<Int>: two sets of 300,000 pseudo-random numbers, their union,
 // intersection and difference, then every member looked up.
 
-@main
-fn main() {
+fn run() -> String {
     var a = Set<Int>()
     var b = Set<Int>()
     var x = 12345
@@ -26,5 +26,10 @@ fn main() {
         if common.contains(i) { hits += 1 }
         if only.contains(i) { hits += 1 }
     }
-    print("\(a.count) \(b.count) \(both.count) \(common.count) \(only.count) \(hits)")
+    return "\(a.count) \(b.count) \(both.count) \(common.count) \(only.count) \(hits)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

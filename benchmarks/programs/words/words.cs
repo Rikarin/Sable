@@ -1,6 +1,6 @@
 // Port of words.sb.
 [Benchmark("programs/words")]
-static class ProgramWords {
+static class ProgramsWords {
     record struct WordCount(string Word, long Count);
 
     static List<string> Corpus(int lines) {

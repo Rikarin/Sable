@@ -1,6 +1,6 @@
 // Port of sort.sb.
 [Benchmark("programs/sort")]
-static class ProgramSort {
+static class ProgramsSort {
     static List<T> Sorted<T>(ReadOnlySpan<T> items, Func<T, T, bool> before) {
         if (items.Length <= 1) {
             var copy = new List<T>();

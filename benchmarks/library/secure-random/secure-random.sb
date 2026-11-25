@@ -5,9 +5,9 @@ module SecureRandomBench
 // mean of the first bytes of the last in eighths of 256.
 
 import Sable.Crypto
+import Sable.Testing
 
-@main
-fn main() {
+fn run() -> String {
     var bytes = U8[>..](repeating: 0, count: 65536)
     for _ in 0..<200 {
         SecureRandom.fill(&bytes)
@@ -21,5 +21,10 @@ fn main() {
     for byte in bytes {
         total += Int(byte)
     }
-    print((total / 65536 + 16) / 32)
+    return "\((total / 65536 + 16) / 32)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

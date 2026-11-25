@@ -353,7 +353,7 @@ public static partial class InterfaceFingerprint {
             SyntaxNode? body = node switch {
                 // A 'const fn' runs wherever a constant calls it, while that unit compiles.
                 FunctionDeclarationSyntax { TypeParameters: null, Attributes.Count: 0 } f when !f.Modifiers.Any(SyntaxKind.ConstKeyword) => (SyntaxNode?)f.Body ?? f.ExpressionBody,
-                InitDeclarationSyntax { TypeParameters: null, Attributes.Count: 0 } i => i.Body,
+                InitDeclarationSyntax { TypeParameters: null, Attributes.Count: 0 } i when !i.Modifiers.Any(SyntaxKind.ConstKeyword) => i.Body,
                 DeinitDeclarationSyntax { Attributes.Count: 0 } d => d.Body,
                 OperatorDeclarationSyntax { Attributes.Count: 0 } o => (SyntaxNode?)o.Body ?? o.ExpressionBody,
                 AccessorSyntax { Attributes.Count: 0 } a when a.Keyword.Kind == SyntaxKind.GetKeyword => (SyntaxNode?)a.Body ?? a.ExpressionBody,

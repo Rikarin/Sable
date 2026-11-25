@@ -1,10 +1,11 @@
-module Bench
+module Sleepers
 
 import Sable.Time
 
 // A million tasks, each sleeping a second at once: how long it takes, and
 // (with SABLE_STATS, or /usr/bin/time) how much memory they hold. SLEEPERS
-// in the environment sets how many.
+// in the environment sets how many. A program, as what it holds is the
+// process's.
 
 @main
 fn main() async {

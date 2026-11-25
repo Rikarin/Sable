@@ -1,12 +1,12 @@
 module ConcurrentStackBench
 
 import Sable.Concurrency
+import Sable.Testing
 
 // ConcurrentStack<Int>: four tasks, each pushing and popping a quarter of a
 // million times, and the rest popped.
 
-@main
-fn main() async {
+fn run() async -> String {
     let stack = ConcurrentStack<Int>()
     let total = await withTaskGroup(of: Int.self) { group -> Int in
         for _ in 0..<4 {
@@ -31,5 +31,10 @@ fn main() async {
     while let value = stack.pop() {
         rest += value
     }
-    print(total + rest)
+    return "\(total + rest)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { await run() })
 }

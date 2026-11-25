@@ -35,7 +35,12 @@ typedef struct SableThread {
     int64_t tasks_spawned;
     struct SableThread *next; // every thread's, the latest first
     int32_t index;            // how many were made before it
+    int32_t local_count;      // the places of its table of thread-locals, and
+    int32_t last_local;       // the place last made in it, and one (parallel.c)
+    struct ThreadLocalValue *locals;
+    struct OsThread *os;      // what Thread.current is, once asked for; counted
     bool attached;            // its thread is one C may call into: foreign.c
+    bool ends;                // its thread may end while the program runs on (foreign.c)
 } SableThread;
 
 static SableThread *all_threads;
@@ -172,11 +177,17 @@ static inline void thread_count(int64_t *count, int64_t by) {
 // add, so that a program that does not ask shares no counter between cores.
 bool sable_counting;
 int64_t sable_retains, sable_releases;
+// Counted while sable_counting: the bytes asked for, objects' and buffers'.
+static int64_t bytes_allocated;
 
 static inline void count_retain(void) {
     if (sable_counting) {
         __atomic_fetch_add(&sable_retains, 1, __ATOMIC_RELAXED);
     }
+}
+
+__attribute__((noinline)) static void count_allocated(int64_t size) {
+    __atomic_fetch_add(&bytes_allocated, size, __ATOMIC_RELAXED);
 }
 
 static inline void count_release(void) {

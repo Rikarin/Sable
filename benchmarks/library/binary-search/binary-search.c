@@ -1,4 +1,5 @@
 // Port of binary-search.sb, with bsearch.
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
 static int by_value(const void *a, const void *b) {
@@ -6,9 +7,13 @@ static int by_value(const void *a, const void *b) {
     return (x > y) - (x < y);
 }
 
-int main(void) {
-    Ints values = {0};
+static Ints values;
+
+static void setup(void) {
     for (int64_t i = 0; i < 1000000; i++) ints_append(&values, i * 3);
+}
+
+static void run(void) {
     int64_t x = 12345, found = 0, total = 0;
     for (int i = 0; i < 2000000; i++) {
         x = next_random(x);
@@ -19,7 +24,7 @@ int main(void) {
             total = add_i(total, at - values.elements);
         }
     }
-    printf("%lld %lld\n", (long long)found, (long long)total);
-    free(values.elements);
-    return 0;
+    bench_printf("%lld %lld\n", (long long)found, (long long)total);
 }
+
+BENCH_MAIN_WITH(run, setup)

@@ -1,6 +1,7 @@
 // Port of complex-functions.sb, with <complex.h>.
 #include <complex.h>
 #include <math.h>
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
 // glibc leaves it out for a clang it does not know.
@@ -8,7 +9,7 @@
 #define CMPLX(x, y) __builtin_complex((double)(x), (double)(y))
 #endif
 
-int main(void) {
+static void run(void) {
     double complex total = 0.0;
     double magnitudes = 0.0;
     for (int row = 0; row < 480; row++) {
@@ -23,6 +24,7 @@ int main(void) {
             total += CMPLX(cabs(z) * cos(carg(z)), cabs(z) * sin(carg(z)));
         }
     }
-    printf("%.2f %.2f %.2f\n", creal(total), cimag(total), magnitudes);
-    return 0;
+    bench_printf("%.2f %.2f %.2f\n", creal(total), cimag(total), magnitudes);
 }
+
+BENCH_MAIN(run)

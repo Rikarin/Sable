@@ -1,11 +1,15 @@
 module ArrayAggregatesBench
 
+import Sable.Testing
+
 // The sum, the least and the greatest of arrays of 8-, 32- and 64-bit
 // integers: over 64 Ki elements, and over 24.
 
 fn work(_ words: I32[:], _ longs: Int[:], _ bytes: U8[:], _ rounds: Int) -> Int {
     var total = 0
     for round in 0..<rounds {
+        // Each round reads the input anew: nothing is kept from the last.
+        _ = blackBox(round)
         total += Int(words.sum()) + longs.sum()
         total += Int(words.min()!) + Int(words.max()!)
         total += longs.min()! + longs.max()!
@@ -14,8 +18,12 @@ fn work(_ words: I32[:], _ longs: Int[:], _ bytes: U8[:], _ rounds: Int) -> Int 
     return total
 }
 
-@main
-fn main() {
+fn run(_ words: I32[>..], _ longs: Int[>..], _ bytes: U8[>..]) -> String {
+    return "\(work(words, longs, bytes, 1000) + work(words[..<24], longs[..<24], bytes[..<24], 200000))"
+}
+
+@bench
+fn measure(_ b: Bencher) {
     var words: I32[>..] = []
     var longs: Int[>..] = []
     var bytes: U8[>..] = []
@@ -24,5 +32,5 @@ fn main() {
         longs.append(i * 104729 % 400001 - 200000)
         bytes.append(U8(i * 31 % 241 + 5))
     }
-    print(work(words, longs, bytes, 1000) + work(words[..<24], longs[..<24], bytes[..<24], 200000))
+    b.check(b.iterate { run(words, longs, bytes) })
 }

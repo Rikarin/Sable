@@ -8,9 +8,9 @@ module Kernels
 // eight times as long when this was written (docs/06 §SIMD).
 
 import Sable.Math
+import Sable.Testing
 
-@main
-fn main() {
+fn run() -> String {
     let n = 4096
     var x: F32[>..] = []
     var y: F32[>..] = []
@@ -30,5 +30,15 @@ fn main() {
         round = round + 1
     }
 
-    print("\(total:.1f)")
+    return "\(total:.1f)"
+}
+
+@main
+fn main() {
+    print(run())
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

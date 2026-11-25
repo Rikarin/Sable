@@ -1,5 +1,7 @@
 module BinaryTrees
 
+import Sable.Testing
+
 // The classic allocation benchmark: build complete binary trees of objects,
 // walk them, let them go. What it measures is allocation, reference counting
 // and teardown — the cost of a class.
@@ -32,8 +34,8 @@ fn check(_ node: Node) -> Int {
     return total
 }
 
-@main
-fn main() {
+fn run() -> String {
+    var lines: String[>..] = []
     let maxDepth = 16
     let longLived = build(maxDepth)
 
@@ -46,9 +48,20 @@ fn main() {
             sum = sum + check(build(depth))
             i = i + 1
         }
-        print("\(iterations) trees of depth \(depth): \(sum)")
+        lines.append("\(iterations) trees of depth \(depth): \(sum)")
         depth = depth + 2
     }
 
-    print("long lived tree of depth \(maxDepth): \(check(longLived))")
+    lines.append("long lived tree of depth \(maxDepth): \(check(longLived))")
+    return lines.joined(separator: "\n")
+}
+
+@main
+fn main() {
+    print(run())
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

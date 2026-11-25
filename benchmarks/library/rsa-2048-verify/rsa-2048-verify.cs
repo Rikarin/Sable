@@ -35,15 +35,21 @@ static class LibraryRsa2048Verify {
         -----END PRIVATE KEY-----
         """;
 
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
-            using var key = RSA.Create();
+            var key = RSA.Create();
             key.ImportFromPem(Pem);
             var message = new byte[64];
             Array.Fill(message, (byte)7);
             var other = new byte[64];
             Array.Fill(other, (byte)8);
             var signature = key.SignData(message, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            return () => Run(key, message, other, signature);
+        }
+    }
+
+    static string Run(RSA key, byte[] message, byte[] other, byte[] signature) {
+        checked {
             var valid = 0;
             for (var round = 0; round < 3000; round++) {
                 if (key.VerifyData(round % 4 == 3 ? other : message, signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1)) {

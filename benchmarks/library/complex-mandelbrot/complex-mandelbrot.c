@@ -1,5 +1,6 @@
 // Port of complex-mandelbrot.sb, with C's complex numbers.
 #include <complex.h>
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
 // glibc leaves it out for a clang it does not know.
@@ -9,7 +10,7 @@
 
 #pragma STDC FP_CONTRACT OFF
 
-int main(void) {
+static void run(void) {
     int64_t rounds = 0;
     for (int row = 0; row < 480; row++) {
         for (int column = 0; column < 640; column++) {
@@ -28,6 +29,7 @@ int main(void) {
         w = CMPLX(1.0, 0.5) / (w + CMPLX(2.0, i % 16 / 16.0));
         total += w;
     }
-    printf("%lld %.3f %.3f\n", (long long)rounds, creal(total), cimag(total));
-    return 0;
+    bench_printf("%lld %.3f %.3f\n", (long long)rounds, creal(total), cimag(total));
 }
+
+BENCH_MAIN(run)

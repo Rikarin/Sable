@@ -1,13 +1,10 @@
 module BinarySearchBench
 
+import Sable.Testing
+
 // Binary search: two million searches in a sorted array of a million.
 
-@main
-fn main() {
-    var values: Int[>..] = []
-    for i in 0..<1000000 {
-        values.append(i * 3)
-    }
+fn run(_ values: Int[>..]) -> String {
     var x = 12345
     var found = 0
     var total = 0
@@ -21,5 +18,14 @@ fn main() {
             default => { }
         }
     }
-    print("\(found) \(total)")
+    return "\(found) \(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    var values: Int[>..] = []
+    for i in 0..<1000000 {
+        values.append(i * 3)
+    }
+    b.check(b.iterate { run(values) })
 }

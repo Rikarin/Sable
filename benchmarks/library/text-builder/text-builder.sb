@@ -4,10 +4,10 @@ module TextBuilding
 // word, a number, a character, now and then a newline — built once; then
 // edits in the middle, a removal at the front and a replacement throughout.
 
+import Sable.Testing
 import Sable.Text
 
-@main
-fn main() {
+fn run() -> String {
     let builder = TextBuilder()
     var i = 0
     while i < 1000000 {
@@ -30,5 +30,10 @@ fn main() {
     _ = builder.replace("item", with: "it")
     let edited = builder.build()
 
-    print("\(built.count) \(edited.count)")
+    return "\(built.count) \(edited.count)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

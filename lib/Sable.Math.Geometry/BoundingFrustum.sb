@@ -1,0 +1,146 @@
+module Sable.Math.Geometry
+
+/// What a camera sees, as the six planes around it, facing inward: a point
+/// is inside where it is in front of them all. 96 bytes.
+///
+/// The planes are read off the columns of a view and projection (Gribb and
+/// Hartmann), whose depths are reversed unless it is said: near is then the
+/// plane of depth 1.
+///
+/// ```sable
+/// let view = Matrix4x4.lookAt(eye: Vector3.zero, target: Vector3.forward, up: Vector3.up)
+/// let projection = Matrix4x4.perspectiveFieldOfView(F32.pi / 2, aspectRatio: 1, near: 1, far: 100)
+/// let frustum = BoundingFrustum(view * projection)
+/// assert(frustum.contains(Vector3(0, 0, -50)))
+/// assert(!frustum.contains(Vector3(0, 0, 50)))
+/// assert(frustum.intersects(BoundingSphere(Vector3(0, 0, -100), 5)))
+/// ```
+public struct BoundingFrustum: Hashable, Sendable {
+    /// The plane nearest the camera, facing away from it.
+    public var near: Plane
+
+    /// The plane furthest from it, facing back. One of no normal, which
+    /// everything is in front of, where the projection goes to infinity.
+    public var far: Plane
+
+    /// The left plane, facing right.
+    public var left: Plane
+
+    /// The right plane, facing left.
+    public var right: Plane
+
+    /// The top plane, facing down.
+    public var top: Plane
+
+    /// The bottom plane, facing up.
+    public var bottom: Plane
+
+    /// What the view and projection together see.
+    public init(_ viewProjection: Matrix4x4, depth: DepthMapping = DepthMapping.Reversed) {
+        // A clip coordinate is the dot product of a point and a column, and
+        // each of its bounds (-w ≤ x ≤ w, 0 ≤ z ≤ w) a plane.
+        let x = viewProjection.column1
+        let y = viewProjection.column2
+        let z = viewProjection.column3
+        let w = viewProjection.column4
+        let one = Plane(w - z).normalized()
+        let zero = Plane(z).normalized()
+        near = depth == .Reversed ? one : zero
+        far = depth == .Reversed ? zero : one
+        left = Plane(w + x).normalized()
+        right = Plane(w - x).normalized()
+        top = Plane(w - y).normalized()
+        bottom = Plane(w + y).normalized()
+    }
+
+    /// Whether the point is inside, or on a plane.
+    public fn contains(_ point: Vector3) -> Bool {
+        return near.dotCoordinate(point) >= 0 && far.dotCoordinate(point) >= 0 && left.dotCoordinate(point) >= 0 && right.dotCoordinate(point) >= 0 && top.dotCoordinate(point) >= 0 && bottom.dotCoordinate(point) >= 0
+    }
+
+    /// How a box lies to what is seen. One outside that no single plane has
+    /// wholly behind it is said to intersect: something seen is never called
+    /// disjoint.
+    public fn contains(_ box: BoundingBox) -> ContainmentType {
+        return containment(box.side(of: near), box.side(of: far), box.side(of: left), box.side(of: right), box.side(of: top), box.side(of: bottom))
+    }
+
+    /// How a sphere lies to what is seen, as a box does.
+    public fn contains(_ sphere: BoundingSphere) -> ContainmentType {
+        return containment(sphere.side(of: near), sphere.side(of: far), sphere.side(of: left), sphere.side(of: right), sphere.side(of: top), sphere.side(of: bottom))
+    }
+
+    fn containment(_ a: PlaneIntersectionType, _ b: PlaneIntersectionType, _ c: PlaneIntersectionType, _ d: PlaneIntersectionType, _ e: PlaneIntersectionType, _ f: PlaneIntersectionType) -> ContainmentType {
+        if a == .Back || b == .Back || c == .Back || d == .Back || e == .Back || f == .Back {
+            return .Disjoint
+        }
+        let inside = a == .Front && b == .Front && c == .Front && d == .Front && e == .Front && f == .Front
+        return inside ? .Contains : .Intersects
+    }
+
+    /// Whether the box may be seen: false only where it certainly is not.
+    public fn intersects(_ box: BoundingBox) -> Bool {
+        return box.side(of: near) != .Back && box.side(of: far) != .Back && box.side(of: left) != .Back && box.side(of: right) != .Back && box.side(of: top) != .Back && box.side(of: bottom) != .Back
+    }
+
+    /// Whether the sphere may be seen: false only where it certainly is not.
+    public fn intersects(_ sphere: BoundingSphere) -> Bool {
+        return sphere.side(of: near) != .Back && sphere.side(of: far) != .Back && sphere.side(of: left) != .Back && sphere.side(of: right) != .Back && sphere.side(of: top) != .Back && sphere.side(of: bottom) != .Back
+    }
+
+    /// The eight corners, the near face's first: bottom left, bottom right,
+    /// top right, top left, as the camera sees them.
+    public var corners: Vector3[>..] {
+        get {
+            return [
+                BoundingFrustum.intersection(near, bottom, left), BoundingFrustum.intersection(near, bottom, right),
+                BoundingFrustum.intersection(near, top, right), BoundingFrustum.intersection(near, top, left),
+                BoundingFrustum.intersection(far, bottom, left), BoundingFrustum.intersection(far, bottom, right),
+                BoundingFrustum.intersection(far, top, right), BoundingFrustum.intersection(far, top, left)
+            ]
+        }
+    }
+
+    /// The point where three planes meet; zero where two are parallel.
+    public static fn intersection(_ a: Plane, _ b: Plane, _ c: Plane) -> Vector3 {
+        let across = b.normal.cross(c.normal)
+        let determinant = a.normal.dot(across)
+        if isNearZero(determinant) {
+            return Vector3.zero
+        }
+        let sum = across * -a.d - c.normal.cross(a.normal) * b.d - a.normal.cross(b.normal) * c.d
+        return sum / determinant
+    }
+
+    /// Whether each plane is near the other's.
+    public fn nearEqual(_ other: BoundingFrustum, tolerance: F32 = 0.000001) -> Bool {
+        return near.nearEqual(other.near, tolerance: tolerance) && far.nearEqual(other.far, tolerance: tolerance) && left.nearEqual(other.left, tolerance: tolerance) && right.nearEqual(other.right, tolerance: tolerance) && top.nearEqual(other.top, tolerance: tolerance) && bottom.nearEqual(other.bottom, tolerance: tolerance)
+    }
+
+    /// Whether the planes are exactly equal, as IEEE has it.
+    public operator == (lhs: BoundingFrustum, rhs: BoundingFrustum) -> Bool {
+        return lhs.near == rhs.near && lhs.far == rhs.far && lhs.left == rhs.left && lhs.right == rhs.right && lhs.top == rhs.top && lhs.bottom == rhs.bottom
+    }
+
+    /// The planes' hashes.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(near)
+        hasher.combine(far)
+        hasher.combine(left)
+        hasher.combine(right)
+        hasher.combine(top)
+        hasher.combine(bottom)
+    }
+}
+
+extension BoundingFrustum: Formattable {
+    /// The six planes, in parentheses.
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([near, far, left, right, top, bottom], spec, named: "BoundingFrustum")
+}
+
+extension BoundingFrustum: Debug {
+    /// The six planes by name.
+    public fn debugDescription() -> String {
+        return "BoundingFrustum(near: \(near.debugDescription()), far: \(far.debugDescription()), left: \(left.debugDescription()), right: \(right.debugDescription()), top: \(top.debugDescription()), bottom: \(bottom.debugDescription()))"
+    }
+}

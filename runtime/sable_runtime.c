@@ -58,6 +58,7 @@
 #include "process.c"
 #include "locks.c"
 #include "foreign.c"
+#include "parallel.c"
 
 // ---- Start-up --------------------------------------------------------------
 
@@ -76,6 +77,7 @@ void sable_runtime_start(void) {
     platform_start();
     leaks_start();
     sable_counting = getenv("SABLE_STATS") != NULL;
+    observing = tracking || sable_counting;
     hashing_start();
     tasks_start();
 }

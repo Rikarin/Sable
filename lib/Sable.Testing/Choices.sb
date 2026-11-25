@@ -23,6 +23,10 @@ public final class Choices {
     // What is said again, before anything is the simplest; none when drawing
     // at random.
     var script: U64[>..]?
+    // A fuzzer's bytes, which the choices are read from, and where the next
+    // one is; none when they are not.
+    var bytes: U8[>..]?
+    var at: Int
     var generator: SeededRandomNumberGenerator
     /// How large a value to make, 0 to 100: how long an array, how wide a
     /// number. A property's first cases are small ones.
@@ -35,6 +39,8 @@ public final class Choices {
         drawn = []
         spans = []
         script = none
+        bytes = none
+        at = 0
         generator = SeededRandomNumberGenerator(seed: seed)
         self.size = size
         isRejected = false
@@ -46,39 +52,49 @@ public final class Choices {
         drawn = []
         spans = []
         self.script = script
+        bytes = none
+        at = 0
         generator = SeededRandomNumberGenerator(seed: 0)
         self.size = size
         isRejected = false
     }
 
-    /// Choices from bytes, eight to each: what a fuzz target makes a value
-    /// of its own from.
+    /// Choices from bytes, which a fuzz target's values are made of: each
+    /// takes as many as its limit needs, the low one first — one for a choice
+    /// of up to 256, none where there is no choice — and what is past the
+    /// limit starts again from 0, so that any bytes say something and a
+    /// changed byte changes little else. After the last byte, the simplest.
     ///
     /// ```sable
-    /// let choices = Choices(bytes: [1, 0, 0, 0, 0, 0, 0, 0, 2])
+    /// let choices = Choices(bytes: [1, 2, 3, 4, 105])
     /// assert(choices.draw(upTo: 100) == 1)
-    /// assert(choices.draw(upTo: 100) == 2)
+    /// assert(choices.draw(upTo: 100_000) == 2 + 3 * 256 + 4 * 65536 - 2 * 100_001)
+    /// assert(choices.draw(upTo: 100) == 4)
     /// assert(choices.draw(upTo: 100) == 0)
     /// ```
     public init(bytes: U8[:]) {
         drawn = []
         spans = []
-        var script: U64[>..] = []
-        var at = 0
-        while at < bytes.count {
-            var value: U64 = 0
-            var i = 0
-            while i < 8 && at + i < bytes.count {
-                value = value | (U64(bytes[at + i]) << U64(8 * i))
-                i += 1
-            }
-            script.append(value)
-            at += 8
-        }
-        self.script = script
+        script = none
+        self.bytes = bytes.toArray()
+        at = 0
         generator = SeededRandomNumberGenerator(seed: 0)
         size = 100
         isRejected = false
+    }
+
+    // The next choice of the bytes'.
+    fn read(_ limit: U64, _ bytes: U8[>..]) -> U64 {
+        var value: U64 = 0
+        var shift: U64 = 0
+        var left = limit
+        while left > 0 && at < bytes.count {
+            value = value | (U64(bytes[at]) << shift)
+            at += 1
+            shift += 8
+            left = left >> 8
+        }
+        return limit == U64.max ? value : value % (limit + 1)
     }
 
     /// A choice from 0 to the limit, each as likely as every other.
@@ -99,6 +115,8 @@ public final class Choices {
             if drawn.count < script.count {
                 value = script[drawn.count]
             }
+        } else if let bytes = bytes {
+            value = read(limit, bytes)
         } else {
             value = atRandom()
         }

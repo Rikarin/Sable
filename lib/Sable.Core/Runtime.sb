@@ -123,6 +123,18 @@ public struct Runtime {
     @builtin("memory_statistic")
     public static fn memoryStatistic(_ which: Int) -> Int
 
+    /// Counts retains, releases and bytes allocated from now on, or no
+    /// longer, as SABLE_STATS does for a whole run (Sable.Testing's Bencher).
+    @builtin("memory_counting")
+    public static fn countMemory(_ on: Bool)
+
+    /// What a benchmark measures by besides the clock: 0 this process's
+    /// processor time in nanoseconds, 1 that of the processes it waited
+    /// for, 2 the instructions it has run, 3 the cycles it took; -1 where
+    /// the system does not say.
+    @builtin("measurement")
+    public static fn measurement(_ which: Int) -> Int
+
     // ---- Time ------------------------------------------------------------
     // A monotonic clock for measuring, the wall clock for dates, both in
     // nanoseconds; and sleeping, for at least as long as asked.
@@ -297,6 +309,109 @@ public struct Runtime {
 
     @builtin("fs_unwatch")
     public static fn unwatchPath(_ watch: Int)
+
+    // ---- Threads ------------------------------------------------------------
+    // The system's threads, by handle, for Sable.Concurrency's Thread: made,
+    // started, waited for until a time of the monotonic clock (or, negative,
+    // for as long as it takes). A handle is released by whoever has it.
+
+    /// A thread that 'startThread' starts: its name, the bytes of stack it is
+    /// to have (0: as many as the main thread) and its priority, -2 to 2.
+    @builtin("thread_new")
+    public static fn threadNew(_ name: String, _ stackSize: Int, _ priority: Int) -> Int
+
+    @builtin("thread_release")
+    public static fn threadRelease(_ thread: Int)
+
+    /// The calling thread, to release.
+    @builtin("thread_current")
+    public static fn threadCurrent() -> Int
+
+    @builtin("thread_id")
+    public static fn threadId(_ thread: Int) -> Int
+
+    @builtin("thread_name")
+    public static fn threadName(_ thread: Int) -> String
+
+    /// The work run on the thread made, on the system's own.
+    @intrinsic
+    public static fn startThread(_ thread: Int, _ work: () -> ())
+
+    /// Whether the thread has ended, having waited for it.
+    @builtin("thread_join")
+    public static fn threadJoin(_ thread: Int, until: Int) -> Bool
+
+    @builtin("thread_ended")
+    public static fn threadEnded(_ thread: Int) -> Bool
+
+    /// The calling thread's token taken: whether it had, or was given, one.
+    @builtin("thread_park")
+    public static fn threadPark(until: Int) -> Bool
+
+    @builtin("thread_unpark")
+    public static fn threadUnpark(_ thread: Int)
+
+    @builtin("thread_yield")
+    public static fn threadYield()
+
+    /// How many threads run tasks: 0 when the main thread runs every one.
+    @builtin("thread_workers")
+    public static fn workerCount() -> Int
+
+    /// What the calling thread blocks on until a task says that it is done.
+    /// Traps on a thread that runs tasks, other than the main one.
+    @builtin("thread_block_new")
+    public static fn blockNew() -> Int
+
+    @builtin("thread_block_done")
+    public static fn blockDone(_ block: Int)
+
+    @builtin("thread_block_wait")
+    public static fn blockWait(_ block: Int)
+
+    /// The work run by this thread and, at once, by as many of the pool's as
+    /// come, so that at most 'degree' run it (0: as many as there are
+    /// workers); it divides what there is to do, and returns once nothing is
+    /// left to take. This returns once every run of it has.
+    @intrinsic
+    public static fn runLoop(_ degree: Int, _ work: () -> ())
+
+    /// Said by a thread that takes another piece of what it runs in a loop.
+    @builtin("thread_loop_more")
+    public static fn loopMore()
+
+    // A value for each thread, by a key: where it is, 0 until the thread has
+    // one; put there, with what destroys it as the thread ends.
+
+    @builtin("thread_local_key")
+    public static fn threadLocalKey() -> Int
+
+    @builtin("thread_local_free")
+    public static fn threadLocalFree(_ key: Int)
+
+    @builtin("thread_local_find")
+    public static fn threadLocalFind(_ key: Int) -> Int
+
+    @intrinsic
+    public static fn setThreadLocal(_ key: Int, _ cell: Int, _ destroy: () -> ())
+
+    // A value bound where the running task is, and in the children it spawns
+    // there: where it is, or 0; bound, and the innermost binding ended. It is
+    // destroyed once neither that nor a child has it.
+
+    @builtin("task_local_key")
+    public static fn taskLocalKey() -> Int
+
+    @builtin("task_local_find")
+    public static fn taskLocalFind(_ key: Int) -> Int
+
+    @intrinsic
+    public static fn pushTaskLocal(_ key: Int, _ cell: Int, _ destroy: () -> ())
+
+    @builtin("task_local_pop")
+    public static fn popTaskLocal()
+
+    // ---- Locks, and reader/writer locks -------------------------------------
 
     @builtin("lock_new")
     public static fn lockNew() -> Int

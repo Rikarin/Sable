@@ -17,7 +17,7 @@ static class LibraryArrayAggregates {
         }
     }
 
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var words = new int[65536];
             var longs = new long[65536];
@@ -27,7 +27,12 @@ static class LibraryArrayAggregates {
                 longs[i] = (long)i * 104729 % 400001 - 200000;
                 bytes[i] = (byte)(i * 31 % 241 + 5);
             }
+            return () => Run(words, longs, bytes);
+        }
+    }
 
+    static string Run(int[] words, long[] longs, byte[] bytes) {
+        checked {
             return (Work(words, longs, bytes, 1000) + Work(words[..24], longs[..24], bytes[..24], 200000)).ToString();
         }
     }

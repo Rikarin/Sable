@@ -40,9 +40,13 @@ static class LibraryJsonRead {
         return Encoding.UTF8.GetBytes("[" + string.Join(",", parts) + "]");
     }
 
-    public static string Run() {
+    public static Func<string> Setup() {
         var compact = Document("");
         var pretty = Document("\n        ");
+        return () => Run(compact, pretty);
+    }
+
+    static string Run(byte[] compact, byte[] pretty) {
         var lines = new List<string>();
         for (var round = 0; round < 10; round++) {
             var (tokens, sum, price) = Read(compact);

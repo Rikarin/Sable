@@ -1,16 +1,21 @@
 module MathBench
 
 import Sable.Math
+import Sable.Testing
 
 // Elementary functions of F64: sine, cosine, exponential, logarithm, power
 // and hypotenuse, half a million of each.
 
-@main
-fn main() {
+fn run() -> String {
     var total = 0.0
     for i in 1..<500001 {
         let x = F64(i) / 1000.0
         total += F64.sin(x) + F64.cos(x) + F64.log(x) + F64.exp(-x) + F64.atan2(y: x, x: 3.0) + F64.hypot(x, 2.0)
     }
-    print("\(total:.4f)")
+    return "\(total:.4f)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

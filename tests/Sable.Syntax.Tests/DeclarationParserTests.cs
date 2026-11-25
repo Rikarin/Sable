@@ -616,6 +616,10 @@ public sealed class DeclarationParserTests {
             "const fn factorial(_ n: Int) -> Int => n <= 1 ? 1 : n * factorial(n - 1)"
         );
         Assert.Equal("const", constFn.Modifiers[0].Text);
+
+        var type = ParseMember<StructDeclarationSyntax>("struct Table {\n    public const init<S>(_ all: S) { }\n    const Most = 4\n}");
+        Assert.Equal("public const", string.Join(" ", Assert.IsType<InitDeclarationSyntax>(type.Members[0]).Modifiers.Select(static m => m.Text)));
+        Assert.IsType<ConstDeclarationSyntax>(type.Members[1]);
     }
 
     [Theory]

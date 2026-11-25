@@ -1,13 +1,18 @@
 // Port of linq.sb.
 [Benchmark("library/linq")]
 static class LibraryLinq {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var values = new List<long>();
             for (long i = 0; i < 10000000; i++) {
                 values.Add(i);
             }
+            return () => Run(values);
+        }
+    }
 
+    static string Run(List<long> values) {
+        checked {
             long chained = 0;
             for (long round = 0; round < 5; round++) {
                 var modulus = round + 3;

@@ -4,6 +4,7 @@ module HmacSha256Bench
 // messages of 64 bytes, two hundred thousand.
 
 import Sable.Crypto
+import Sable.Testing
 
 fn sample(_ count: Int) -> U8[>..] {
     var bytes: U8[>..] = []
@@ -17,10 +18,7 @@ fn sample(_ count: Int) -> U8[>..] {
     return bytes
 }
 
-@main
-fn main() {
-    let key = SymmetricKey(sample(32))
-    let long = sample(1_048_576)
+fn run(_ key: SymmetricKey, _ long: U8[>..]) -> String {
     var check = 0
     var round = 0
     while round < 200 {
@@ -40,5 +38,12 @@ fn main() {
     for byte in short {
         total = total * 31 % 1_000_003 + Int(byte)
     }
-    print("\(check) \(total)")
+    return "\(check) \(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let key = SymmetricKey(sample(32))
+    let long = sample(1_048_576)
+    b.check(b.iterate { run(key, long) })
 }

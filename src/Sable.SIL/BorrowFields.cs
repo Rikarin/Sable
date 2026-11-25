@@ -145,7 +145,7 @@ public sealed class BorrowFields : ISilPass {
                     case BuiltinInst builtin when SharedStorage.IsMarker(builtin.Name):
                         break;
 
-                    case BuiltinInst builtin when builtin.Operands.Any(static o => o.Type is AddressType && !LocalSlot(o)):
+                    case BuiltinInst builtin when SilBuiltins.RunsWork(builtin.Name) || builtin.Operands.Any(static o => o.Type is AddressType && !LocalSlot(o)):
                         return true;
 
                     case BuiltinInst builtin when SilVerifier.Consumed(builtin).Any(i => module.MayRunDeinit(builtin.Operands[i].Type)):

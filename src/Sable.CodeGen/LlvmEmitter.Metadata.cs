@@ -827,6 +827,12 @@ public sealed partial class LlvmEmitter {
                 case "opaque_borrow_as" or "opaque_take_as":
                     _names[builtin] = operands[0];
                     return true;
+                case "opaque_copy_as": {
+                    var known = Result();
+                    Line($"{known} = load {Type(builtin.Type)}, ptr {operands[0]}, align {Math.Max(TypeLayout.Align(builtin.Type), 1)}");
+                    Own(true, builtin.Type, known);
+                    return true;
+                }
                 case "opaque_type":
                     Line($"{Result()} = call ptr @sable_opaque_type(ptr {operands[0]}, ptr {operands[1]})");
                     return true;

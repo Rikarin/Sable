@@ -1,12 +1,12 @@
 module PipeBench
 
 import Sable.IO
+import Sable.Testing
 
 // Pipe: one task writes forty million bytes, a thousand at a time, and
 // another reads them, counting the lines.
 
-@main
-fn main() async throws {
+fn run() async throws -> String {
     let pipe = Pipe()
     let writing = Task.spawn {
         var bytes = U8[>..](repeating: 120, count: 1000)
@@ -37,5 +37,10 @@ fn main() async throws {
     }
     await pipe.reader.complete()
     await writing.value
-    print("\(count) \(lines)")
+    return "\(count) \(lines)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { try! await run() })
 }

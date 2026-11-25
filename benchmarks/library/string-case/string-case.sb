@@ -1,15 +1,10 @@
 module StringCaseBench
 
+import Sable.Testing
+
 // Strings in upper and lower case: ASCII, then text with Greek and Cyrillic.
 
-@main
-fn main() {
-    var ascii: String[>..] = []
-    var mixed: String[>..] = []
-    for i in 0..<20000 {
-        ascii.append("The Quick Brown Fox \(i) Jumps Over The Lazy Dog")
-        mixed.append("Привет Мир \(i) Καλημερα Κοσμε and plain words too")
-    }
+fn run(_ ascii: String[>..], _ mixed: String[>..]) -> String {
     var total = 0
     for _ in 0..<5 {
         for text in ascii {
@@ -21,5 +16,16 @@ fn main() {
             total += text.lowercased().count
         }
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    var ascii: String[>..] = []
+    var mixed: String[>..] = []
+    for i in 0..<20000 {
+        ascii.append("The Quick Brown Fox \(i) Jumps Over The Lazy Dog")
+        mixed.append("Привет Мир \(i) Καλημερα Κοσμε and plain words too")
+    }
+    b.check(b.iterate { run(ascii, mixed) })
 }

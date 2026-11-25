@@ -1,0 +1,197 @@
+module Sable.Math.Geometry
+
+import Sable.Math
+
+// Cameras, projections, and the transforms made of planes and directions:
+// right-handed, depths in 0...1 and reversed unless it is said.
+
+// Where billboards stop choosing an axis by the camera: the cosine of 3.4
+// degrees, .NET's number.
+const billboardLimit: F32 = 0.99825466
+
+extension Matrix4x4 {
+    /// The view of a camera: from the world to where the camera is the
+    /// origin, looking along -Z with +Y up.
+    ///
+    /// ```sable
+    /// let view = Matrix4x4.lookAt(eye: Vector3(0, 0, 5), target: Vector3.zero, up: Vector3.up)
+    /// assert(view.transformPosition(Vector3.zero) == Vector3(0, 0, -5))
+    /// ```
+    public static fn lookAt(eye: Vector3, target: Vector3, up: Vector3) -> Matrix4x4 => lookTo(eye: eye, direction: target - eye, up: up)
+
+    /// The view of a camera that looks in a direction.
+    public static fn lookTo(eye: Vector3, direction: Vector3, up: Vector3) -> Matrix4x4 {
+        let back = (-direction).normalized()
+        let right = up.cross(back).normalized()
+        let above = back.cross(right)
+        return Matrix4x4(
+            right.x, above.x, back.x, 0,
+            right.y, above.y, back.y, 0,
+            right.z, above.z, back.z, 0,
+            -right.dot(eye), -above.dot(eye), -back.dot(eye), 1
+        )
+    }
+
+    /// Where something is that stands at the position and faces forward: the
+    /// way back of `lookTo`.
+    public static fn world(position: Vector3, forward: Vector3, up: Vector3) -> Matrix4x4 {
+        let back = (-forward).normalized()
+        let right = up.cross(back).normalized()
+        return Matrix4x4(Vector4(right, 0), Vector4(back.cross(right), 0), Vector4(back, 0), Vector4(position, 1))
+    }
+
+    /// The perspective of a vertical field of view in radians, under pi, and
+    /// the width by the height, between the near plane and the far one,
+    /// which may be infinite. Traps where the numbers are none of a camera's.
+    ///
+    /// Depths are reversed (near is 1), unless they are to run forward as
+    /// .NET's do.
+    ///
+    /// ```sable
+    /// let m = Matrix4x4.perspectiveFieldOfView(F32.pi / 2, aspectRatio: 1, near: 1, far: 100)
+    /// assert(nearEqual(m.transformPosition(Vector3(0, 0, -1)).z, 1))
+    /// assert(nearEqual(m.transformPosition(Vector3(0, 0, -100)).z, 0))
+    /// ```
+    public static fn perspectiveFieldOfView(_ fieldOfView: F32, aspectRatio: F32, near: F32, far: F32, depth: DepthMapping = DepthMapping.Reversed) -> Matrix4x4 {
+        precondition(fieldOfView > 0 && fieldOfView < F32.pi, "a field of view is between 0 and pi")
+        precondition(aspectRatio > 0, "an aspect ratio is above 0")
+        let height = 1 / F32.tan(fieldOfView * 0.5)
+        return perspective(Vector4(height / aspectRatio, height, 0, 0), near, far, depth)
+    }
+
+    /// The perspective of a view so wide and high at the near plane.
+    public static fn perspective(width: F32, height: F32, near: F32, far: F32, depth: DepthMapping = DepthMapping.Reversed) -> Matrix4x4 {
+        precondition(width > 0 && height > 0, "a view's width and height are above 0")
+        return perspective(Vector4(2 * near / width, 2 * near / height, 0, 0), near, far, depth)
+    }
+
+    /// The perspective of a view between the edges at the near plane.
+    public static fn perspectiveOffCenter(left: F32, right: F32, bottom: F32, top: F32, near: F32, far: F32, depth: DepthMapping = DepthMapping.Reversed) -> Matrix4x4 {
+        let width = right - left
+        let height = top - bottom
+        return perspective(Vector4(2 * near / width, 2 * near / height, (left + right) / width, (top + bottom) / height), near, far, depth)
+    }
+
+    // The perspective whose scales are the parts' x and y, and whose
+    // third row's are z and w.
+    static fn perspective(_ parts: Vector4, _ near: F32, _ far: F32, _ depth: DepthMapping) -> Matrix4x4 {
+        precondition(near > 0, "the near plane is in front of the camera")
+        precondition(far > near, "the far plane is beyond the near one")
+        var scale: F32 = 0
+        var offset: F32 = 0
+        if depth == .Reversed {
+            scale = near / (far - near)
+            offset = far.isInfinite ? near : far * scale
+        } else {
+            scale = far.isInfinite ? -1 : far / (near - far)
+            offset = near * scale
+        }
+        return Matrix4x4(parts.x, 0, 0, 0, 0, parts.y, 0, 0, parts.z, parts.w, scale, -1, 0, 0, offset, 0)
+    }
+
+    /// The projection, along parallels, of a view so wide and high.
+    ///
+    /// ```sable
+    /// let m = Matrix4x4.orthographic(width: 20, height: 20, near: 1, far: 101)
+    /// assert(m.transformPosition(Vector3(10, -10, -51)) == Vector3(1, -1, 0.5))
+    /// ```
+    public static fn orthographic(width: F32, height: F32, near: F32, far: F32, depth: DepthMapping = DepthMapping.Reversed) -> Matrix4x4 {
+        precondition(width > 0 && height > 0, "a view's width and height are above 0")
+        return orthographicOffCenter(left: -width * 0.5, right: width * 0.5, bottom: -height * 0.5, top: height * 0.5, near: near, far: far, depth: depth)
+    }
+
+    /// The projection, along parallels, of what is between the edges.
+    public static fn orthographicOffCenter(left: F32, right: F32, bottom: F32, top: F32, near: F32, far: F32, depth: DepthMapping = DepthMapping.Reversed) -> Matrix4x4 {
+        precondition(far > near, "the far plane is beyond the near one")
+        let width = 1 / (right - left)
+        let height = 1 / (top - bottom)
+        let range = 1 / (far - near)
+        let scale = depth == .Reversed ? range : -range
+        let offset = depth == .Reversed ? far * range : -near * range
+        return Matrix4x4(2 * width, 0, 0, 0, 0, 2 * height, 0, 0, 0, 0, scale, 0, -(left + right) * width, -(top + bottom) * height, offset, 1)
+    }
+
+    /// From the projected cube, -1...1 by -1...1 by 0...1, to pixels from
+    /// the top left corner, y down, and depths from one to the other.
+    ///
+    /// ```sable
+    /// let m = Matrix4x4.viewport(x: 0, y: 0, width: 640, height: 480)
+    /// assert(m.transformPosition(Vector3(-1, 1, 0.5)) == Vector3(0, 0, 0.5))
+    /// ```
+    public static fn viewport(x: F32, y: F32, width: F32, height: F32, minDepth: F32 = 0, maxDepth: F32 = 1) -> Matrix4x4 {
+        let w = width * 0.5
+        let h = height * 0.5
+        return Matrix4x4(w, 0, 0, 0, 0, -h, 0, 0, 0, 0, maxDepth - minDepth, 0, x + w, y + h, minDepth, 1)
+    }
+
+    /// The projection offset by so much of the projected square, at every
+    /// depth: what antialiasing over time moves its samples by. Of a
+    /// projection, or of a view and projection.
+    public fn jittered(by offset: Vector2) -> Matrix4x4 {
+        var result = self
+        result.m11 += offset.x * m14
+        result.m21 += offset.x * m24
+        result.m31 += offset.x * m34
+        result.m41 += offset.x * m44
+        result.m12 += offset.y * m14
+        result.m22 += offset.y * m24
+        result.m32 += offset.y * m34
+        result.m42 += offset.y * m44
+        return result
+    }
+
+    /// Reflects in the plane.
+    ///
+    /// ```sable
+    /// let mirror = Matrix4x4(reflectionIn: Plane(Vector3.up, -1))
+    /// assert(mirror.transformPosition(Vector3(3, 5, 0)) == Vector3(3, -3, 0))
+    /// ```
+    public init(reflectionIn plane: Plane) {
+        let unit = plane.normalized()
+        let n = unit.normal
+        let f = n * -2
+        self = Matrix4x4(Vector4(f * n.x + Vector3.unitX, 0), Vector4(f * n.y + Vector3.unitY, 0), Vector4(f * n.z + Vector3.unitZ, 0), Vector4(f * unit.d, 1))
+    }
+
+    /// Flattens onto the plane along a light's direction, which is from the
+    /// plane to the light.
+    public init(shadowOn plane: Plane, light: Vector3) {
+        let unit = plane.normalized()
+        let n = -unit.normal
+        let d = unit.normal.dot(light)
+        self = Matrix4x4(
+            Vector4(light * n.x + Vector3.unitX * d, 0), Vector4(light * n.y + Vector3.unitY * d, 0), Vector4(light * n.z + Vector3.unitZ * d, 0),
+            Vector4(light * -unit.d, d)
+        )
+    }
+
+    /// Where something is that turns its back (its +Z) from the camera
+    /// whichever way it is seen; as the camera's forward has it where it is at the camera.
+    public static fn billboard(position: Vector3, camera: Vector3, up: Vector3, forward: Vector3) -> Matrix4x4 {
+        let away = facing(position, camera, forward)
+        let right = up.cross(away).normalized()
+        return Matrix4x4(Vector4(right, 0), Vector4(away.cross(right), 0), Vector4(away, 0), Vector4(position, 1))
+    }
+
+    /// A billboard that turns about an axis alone; `objectForward` is the
+    /// way it faces where the camera is along the axis.
+    public static fn constrainedBillboard(position: Vector3, camera: Vector3, axis: Vector3, cameraForward: Vector3, objectForward: Vector3) -> Matrix4x4 {
+        var away = facing(position, camera, cameraForward)
+        if axis.dot(away).abs() > billboardLimit {
+            away = objectForward
+            if axis.dot(away).abs() > billboardLimit {
+                away = axis.z.abs() > billboardLimit ? Vector3.unitX : Vector3.forward
+            }
+        }
+        let right = axis.cross(away).normalized()
+        let back = right.cross(axis).normalized()
+        return Matrix4x4(Vector4(right, 0), Vector4(axis, 0), Vector4(back, 0), Vector4(position, 1))
+    }
+
+    // From the camera to the position, or against its forward where they
+    // are a hundredth apart.
+    static fn facing(_ position: Vector3, _ camera: Vector3, _ forward: Vector3) -> Vector3 {
+        let away = position - camera
+        return away.lengthSquared < 0.0001 ? -forward : away.normalized()
+    }
+}

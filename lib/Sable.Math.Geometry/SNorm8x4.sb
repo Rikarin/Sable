@@ -1,0 +1,43 @@
+module Sable.Math.Geometry
+
+/// Four numbers of -1...1 in four `I8`s, as a vertex has a normal, a tangent:
+/// 4 bytes. Vulkan's conversions: what is outside is held to the ends (NaN
+/// to -1), and rounded to the nearest, and the least integer is -1 too.
+///
+/// ```sable
+/// assert(SNorm8x4(Vector4(1, -1, 1, -1)).vector == Vector4(1, -1, 1, -1))
+/// assert(MemoryLayout<SNorm8x4>.size == 4)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct SNorm8x4: Sendable {
+    /// The x component, in 127ths.
+    public var x: I8
+
+    /// The y component, in 127ths.
+    public var y: I8
+
+    /// The z component, in 127ths.
+    public var z: I8
+
+    /// The w component, in 127ths.
+    public var w: I8
+
+    /// The integers as they are stored.
+    public init(_ x: I8, _ y: I8, _ z: I8, _ w: I8) {
+        self.x = x
+        self.y = y
+        self.z = z
+        self.w = w
+    }
+
+    /// Each component rounded to the nearest there is.
+    public init(_ value: Vector4) {
+        x = I8((value.x.maximumNumber(-1).minimum(1) * 127).rounded(.ToNearestOrEven))
+        y = I8((value.y.maximumNumber(-1).minimum(1) * 127).rounded(.ToNearestOrEven))
+        z = I8((value.z.maximumNumber(-1).minimum(1) * 127).rounded(.ToNearestOrEven))
+        w = I8((value.w.maximumNumber(-1).minimum(1) * 127).rounded(.ToNearestOrEven))
+    }
+
+    /// The numbers they are.
+    public var vector: Vector4 => Vector4((F32(x) / 127).maximum(-1), (F32(y) / 127).maximum(-1), (F32(z) / 127).maximum(-1), (F32(w) / 127).maximum(-1))
+}

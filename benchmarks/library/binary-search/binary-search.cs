@@ -1,13 +1,18 @@
 // Port of binary-search.sb.
 [Benchmark("library/binary-search")]
 static class LibraryBinarySearch {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var values = new List<long>();
             for (long i = 0; i < 1000000; i++) {
                 values.Add(i * 3);
             }
+            return () => Run(values);
+        }
+    }
 
+    static string Run(List<long> values) {
+        checked {
             long x = 12345;
             long found = 0;
             long total = 0;

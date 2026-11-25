@@ -1,5 +1,6 @@
 module ValidateBench
 
+import Sable.Testing
 import Sable.Validation
 
 // Validators: 200,000 values held to a dozen rules, one in ten of them
@@ -22,9 +23,7 @@ struct Customer {
     var city: String?
 }
 
-@main
-fn main() {
-    let rules = Customer.validationRules()
+fn run(_ rules: Rules<Customer>) -> String {
     var failures = 0
     var text = 0
     for i in 0..<200000 {
@@ -38,5 +37,11 @@ fn main() {
             text += failure.path.count
         }
     }
-    print("\(failures) \(text)")
+    return "\(failures) \(text)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let rules = Customer.validationRules()
+    b.check(b.iterate { run(rules) })
 }

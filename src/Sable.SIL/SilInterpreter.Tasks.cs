@@ -50,6 +50,9 @@ public sealed partial class SilInterpreter {
         /// <summary>The wait list it is parked in so that its cancellation wakes it (WaitList.parkCancellably), if it is.</summary>
         public List<InterpretedTask>? ParkedIn;
 
+        /// <summary>The task-locals bound where it is, the innermost first.</summary>
+        public TaskLocal? Locals;
+
         /// <summary>The task's frames, the most recent last: pushed and popped as its calls begin and end.</summary>
         public Stack<HeapObject> Frames { get; } = new();
     }
@@ -223,8 +226,12 @@ public sealed partial class SilInterpreter {
     ///     The executor: resumes each task queued, in turn, until none can go
     ///     on — or, with <paramref name="until" />, until that task can.
     /// </summary>
-    void RunTasks(InterpretedTask? until) {
+    void RunTasks(InterpretedTask? until, Func<bool>? done = null) {
         while (true) {
+            if (done?.Invoke() == true) {
+                return;
+            }
+
             WakeSleepers();
             PollSockets(0);
             PollSources();
@@ -236,7 +243,7 @@ public sealed partial class SilInterpreter {
                 }
 
                 // A pipe, a child's end or a signal, with whatever else is waited for.
-                if (WaitForSources(draining: until is null)) {
+                if (WaitForSources(draining: until is null && done is null)) {
                     continue;
                 }
 
@@ -251,7 +258,7 @@ public sealed partial class SilInterpreter {
                     continue;
                 }
 
-                if (until is null) {
+                if (until is null && done is null) {
                     return;
                 }
 
@@ -299,6 +306,7 @@ public sealed partial class SilInterpreter {
 
     /// <summary>Finished, its children too: its waiters go on, its group hears, and a parent waiting only for it finishes.</summary>
     void Complete(InterpretedTask task) {
+        LeaveLocals(task);
         task.Done = true;
         task.Finishing = false;
         foreach (var waiter in task.Waiters) {
@@ -394,6 +402,7 @@ public sealed partial class SilInterpreter {
         }
 
         DroppedTasks++;
+        LeaveLocals(task);
         task.Done = true;
         task.Waiters.Clear();
         LeaveParent(task);
@@ -402,10 +411,12 @@ public sealed partial class SilInterpreter {
 
     /// <summary>As the entry point returns: every task run that can be, then each still waiting dropped, the earliest spawned first.</summary>
     void Drain() {
-        RunTasks(null);
-        foreach (var task in _tasks.OrderBy(static t => t.Key).Select(static t => t.Value).Where(static t => !t.Done).ToList()) {
-            DropTask(task);
-        }
+        do {
+            RunTasks(null);
+            foreach (var task in _tasks.OrderBy(static t => t.Key).Select(static t => t.Value).Where(static t => !t.Done).ToList()) {
+                DropTask(task);
+            }
+        } while (EndThreadLocals());
     }
 
     object? Task(string name, object?[] operands, int depth) {
@@ -420,6 +431,7 @@ public sealed partial class SilInterpreter {
                     Priority = priority >= 0 ? priority : parent?.Priority ?? MediumPriority,
                 };
                 task.Escalated = task.Priority;
+                task.Locals = Retained(parent?.Locals);
                 _spawnCancelled = false;
                 parent?.Children.Add(task);
                 var handle = ++_nextHandle;

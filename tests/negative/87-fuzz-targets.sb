@@ -1,7 +1,9 @@
 module Negative.FuzzTargets
 
 // '@fuzz' marks a function sable fuzz runs on the fuzzer's bytes: one
-// 'U8[:]' in, nothing out, not async, reachable from the harness.
+// 'U8[:]' in, or values made of them, nothing out, not async, reachable from
+// the harness. (Whether the values' types are Arbitrary is known where there
+// is Sable.Testing: FuzzCommandTests.)
 
 union Broken: Error { Badly }
 
@@ -14,15 +16,27 @@ fn mayThrow(_ data: U8[:]) throws(Broken) {
 }
 
 @fuzz
+fn takesValues(_ numbers: U8[>..], by name: String) {
+}
+
+@fuzz
 fn takesNothing() { //! S3104 one 'U8[:]'
 }
 
 @fuzz
-fn takesAnArray(_ data: U8[>..]) { //! S3104 one 'U8[:]'
+fn takesASlice(_ data: U8[:], _ more: Int) { //! S3104 a slice is not
 }
 
 @fuzz
-fn takesTwo(_ data: U8[:], _ more: Int) { //! S3104 one 'U8[:]'
+fn takesFive(_ a: Int, _ b: Int, _ c: Int, _ d: Int, _ e: Int) { //! S3104 4 at most
+}
+
+@fuzz
+fn changes(_ n: inout Int) { //! S3104 plain ones
+}
+
+@fuzz
+fn takesMany(_ all: Int...) { //! S3104 plain ones
 }
 
 @fuzz
@@ -38,7 +52,23 @@ fn answers(_ data: U8[:]) -> Bool { //! S3102 a fuzz target returns nothing
 fn generic<T>(_ data: U8[:]) { //! S3101 a fuzz target cannot be generic
 }
 
-@fuzz(often) //! S3107 '@fuzz' takes no arguments
+fn another(_ input: U8[:], _ seed: U64) -> U8[>..] {
+    return input.toArray()
+}
+
+fn notOne(_ input: U8[:]) -> U8[>..] {
+    return input.toArray()
+}
+
+@fuzz(mutator: another)
+fn mutated(_ data: U8[:]) {
+}
+
+@fuzz(mutator: notOne) //! S3107 'mutator: f' for a function of the module
+fn wrongMutator(_ data: U8[:]) {
+}
+
+@fuzz(often) //! S3107 '@fuzz' takes nothing, or 'mutator: f'
 fn withArguments(_ data: U8[:]) {
 }
 

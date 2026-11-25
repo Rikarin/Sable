@@ -4,6 +4,7 @@ module Rsa2048SignBench
 // PKCS #1 v1.5, the last of which is checked.
 
 import Sable.Crypto
+import Sable.Testing
 
 // A key of this benchmark's alone.
 let pem: String = """
@@ -37,9 +38,7 @@ Xr4BpNp+0xb+YeUA8TvmAdw=
 -----END PRIVATE KEY-----
 """
 
-@main
-fn main() {
-    let key = try! RsaPrivateKey.parse(pem: pem)
+fn run(_ key: RsaPrivateKey) -> String {
     var message = U8[>..](repeating: 7, count: 64)
     var signature: U8[>..] = []
     var round = 0
@@ -48,5 +47,11 @@ fn main() {
         signature = key.sign(message, padding: round % 2 == 0 ? .Pss(.Sha256) : .Pkcs1(.Sha256))
         round += 1
     }
-    print("\(key.publicKey.isValid(signature, for: message, padding: .Pkcs1(.Sha256)) ? 1 : 0)")
+    return "\(key.publicKey.isValid(signature, for: message, padding: .Pkcs1(.Sha256)) ? 1 : 0)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let key = try! RsaPrivateKey.parse(pem: pem)
+    b.check(b.iterate { run(key) })
 }

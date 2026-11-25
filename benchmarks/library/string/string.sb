@@ -1,11 +1,12 @@
 module Strings
 
+import Sable.Testing
+
 // String work against .NET's string: building lines by interpolation,
 // splitting them into words, comparing and measuring the words, joining
 // lines into blocks by concatenation, and slicing.
 
-@main
-fn main() {
+fn run() -> String {
     let names: String[>..] = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]
     var lines: String[>..] = []
     var i = 0
@@ -47,5 +48,10 @@ fn main() {
         }
     }
 
-    print("\(words) \(characters) \(matches) \(joinedLength) \(sliced)")
+    return "\(words) \(characters) \(matches) \(joinedLength) \(sliced)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

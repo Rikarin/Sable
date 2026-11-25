@@ -5,9 +5,9 @@ module ListEdit
 // list of 20,000, and removing every even element; three times.
 
 import Sable.Collections
+import Sable.Testing
 
-@main
-fn main() {
+fn run() -> String {
     var total = 0
     var round = 0
     while round < 3 {
@@ -41,5 +41,10 @@ fn main() {
         round = round + 1
     }
 
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

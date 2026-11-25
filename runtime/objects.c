@@ -550,6 +550,8 @@ static void report_tasks(void);
 static void forget_immortal_reach(void);
 static void trap_hook_forget(void);
 static bool tracking, checking_shared;
+// Whether an allocation is looked at: tracked, or its bytes counted.
+static bool observing;
 static void check_shared(SableObject *object);
 
 // What ARC did: the counts the benchmarks track, and what the ARC passes are

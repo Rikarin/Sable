@@ -1,0 +1,230 @@
+module Sable.Collections
+
+/// Keys to values that never change, made once and then looked up: .NET's
+/// FrozenDictionary, Rust's `phf`. Making one takes longer than making a
+/// `[Key: Value]`, as it looks for the quickest way to tell its keys apart —
+/// integers close together are an array's indices, strings may be told by
+/// their lengths or a few of their bytes, anything else by a hash chosen to
+/// put each key in a place of its own — and then a lookup is quicker.
+///
+/// Its entries are gone through in the order their keys were given; a key
+/// given again keeps its place, and the last value given it. A value: a copy
+/// shares it all. The keys it is made of should be ones the program trusts,
+/// as with keys chosen for it lookups may be made slow; those looked up may
+/// be anything.
+///
+/// A `const` of literals is made as the program is compiled, and costs nothing
+/// when it runs.
+///
+/// ```sable
+/// let ports = FrozenDictionary<String, Int>([("http", 80), ("https", 443), ("ssh", 22)])
+/// assert(ports["https"] == 443 && ports["ftp"] == none)
+/// let url = "http://example.com"
+/// assert(ports[url[..<url.firstIndex(of: ':')!]] == 80)
+///
+/// const Sizes = FrozenDictionary<Int, String>([(1, "small"), (2, "medium"), (3, "large")])
+/// assert(Sizes[2] == "medium")
+/// ```
+public struct FrozenDictionary<Key: Hashable, Value> {
+    var table: FrozenTable<Key>
+    var held: Value[>..]
+
+    /// An empty dictionary.
+    public const init() {
+        table = FrozenTable<Key>()
+        held = []
+    }
+
+    /// A dictionary of the pairs, each key with its value; a key that comes
+    /// again keeps its place, and the last value given it. What going through
+    /// them throws, it throws.
+    public const init<S: Sequence>(_ pairs: S) throws(S.Failure) where S.Element == (Key, Value) {
+        var keys: Key[>..] = []
+        var values: Value[>..] = []
+        for try (key, value) in pairs {
+            keys.append(key)
+            values.append(value)
+        }
+        table = FrozenTable<Key>(keys, foldingCase: false)
+        held = table.settled(keys, values)
+    }
+
+    /// How many keys it holds.
+    public var count: Int => table.keys.count
+
+    /// Whether it holds no keys.
+    public var isEmpty: Bool => table.keys.isEmpty
+
+    /// The keys, in the order they were given.
+    public var keys: Key[>..] => table.keys
+
+    /// The values, in their keys' order.
+    public var values: Value[>..] => held
+
+    /// The key's value, or none.
+    public subscript(key: Key) -> Value? {
+        get {
+            let position = table.find(key)
+            return position < 0 ? none : held[position]
+        }
+    }
+
+    /// The key's value, or the fallback when it has none.
+    public subscript(key: Key, default fallback: Value) -> Value {
+        get => self[key] ?? fallback
+    }
+
+    /// Whether the key has a value.
+    public fn contains(_ key: Key) -> Bool {
+        return table.find(key) >= 0
+    }
+
+    /// The same keys, in the same order, each with its value transformed:
+    /// found as they are here.
+    public fn mapValues<T>(_ transform: (Value) -> T) -> FrozenDictionary<Key, T> {
+        var mapped = FrozenDictionary<Key, T>()
+        mapped.table = table
+        mapped.held.reserveCapacity(held.count)
+        for value in held {
+            mapped.held.append(transform(value))
+        }
+        return mapped
+    }
+}
+
+extension FrozenDictionary where Key == String {
+    /// A dictionary of the pairs whose keys are the same whatever the case of
+    /// ASCII's letters, as the names of HTTP's headers are.
+    ///
+    /// ```sable
+    /// let headers = FrozenDictionary<String, Int>(ignoringAsciiCase: [("Content-Type", 1), ("Accept", 2)])
+    /// assert(headers["content-type"] == 1 && headers["ACCEPT"] == 2)
+    /// assert(headers.keys == ["Content-Type", "Accept"])
+    /// ```
+    public const init<S: Sequence>(ignoringAsciiCase pairs: S) throws(S.Failure) where S.Element == (String, Value) {
+        var keys: String[>..] = []
+        var values: Value[>..] = []
+        for try (key, value) in pairs {
+            keys.append(key)
+            values.append(value)
+        }
+        table = FrozenTable<String>(keys, foldingCase: true)
+        held = table.settled(keys, values)
+    }
+
+    /// The value of the key the piece spells, or none: found by the piece's
+    /// bytes, with no String made of them.
+    public subscript(key: Substring) -> Value? {
+        get {
+            let position = table.find(key)
+            return position < 0 ? none : held[position]
+        }
+    }
+
+    /// The value of the key the piece spells, or the fallback when it has none.
+    public subscript(key: Substring, default fallback: Value) -> Value {
+        get => self[key] ?? fallback
+    }
+
+    /// Whether the key the piece spells has a value.
+    public fn contains(_ key: Substring) -> Bool {
+        return table.find(key) >= 0
+    }
+}
+
+/// A position of an entry in a FrozenDictionary, in the order the keys were given.
+public struct FrozenDictionaryIndex: Comparable {
+    let offset: Int
+
+    public operator == (lhs: FrozenDictionaryIndex, rhs: FrozenDictionaryIndex) -> Bool {
+        return lhs.offset == rhs.offset
+    }
+
+    public operator < (lhs: FrozenDictionaryIndex, rhs: FrozenDictionaryIndex) -> Bool {
+        return lhs.offset < rhs.offset
+    }
+}
+
+extension FrozenDictionary: Collection, FromSequence<(Key, Value)> {
+    /// Each key with its value, in the order the keys were given.
+    public fn makeIterator() -> FrozenDictionaryIterator<Key, Value> {
+        return FrozenDictionaryIterator<Key, Value> { keys: table.keys, values: held, position: 0 }
+    }
+
+    public var startIndex: FrozenDictionaryIndex => FrozenDictionaryIndex { offset: 0 }
+
+    public var endIndex: FrozenDictionaryIndex => FrozenDictionaryIndex { offset: held.count }
+
+    public fn index(after position: FrozenDictionaryIndex) -> FrozenDictionaryIndex {
+        return FrozenDictionaryIndex { offset: position.offset + 1 }
+    }
+
+    public fn index(_ position: FrozenDictionaryIndex, offsetBy distance: Int) -> FrozenDictionaryIndex {
+        return FrozenDictionaryIndex { offset: position.offset + distance }
+    }
+
+    /// The entry at a position: its key with its value.
+    public subscript(position: FrozenDictionaryIndex) -> (Key, Value) {
+        get => (table.keys[position.offset], held[position.offset])
+    }
+}
+
+/// Gives a FrozenDictionary's keys with their values, in order.
+public struct FrozenDictionaryIterator<Key, Value>: Iterator {
+    let keys: Key[>..]
+    let values: Value[>..]
+    var position: Int
+
+    /// The next key with its value, or none after the last.
+    public mutating fn next() -> (Key, Value)? {
+        if position == keys.count {
+            return none
+        }
+        let at = position
+        position += 1
+        return (keys[at], values[at])
+    }
+}
+
+extension FrozenDictionary: Equatable where Value: Equatable {
+    /// Whether the two hold the same keys with equal values, in whatever order.
+    public operator == (lhs: FrozenDictionary<Key, Value>, rhs: FrozenDictionary<Key, Value>) -> Bool {
+        if lhs.count != rhs.count {
+            return false
+        }
+        for (key, value) in lhs {
+            let position = rhs.table.find(key)
+            if position < 0 || !(rhs.held[position] == value) {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+extension FrozenDictionary: Hashable where Value: Hashable {
+    /// Feeds the entries to the hasher, in no order: equal dictionaries hash
+    /// equal.
+    public fn hash(into hasher: inout Hasher) {
+        var sum = 0
+        for (key, value) in self {
+            var one = Hasher()
+            one.combine(table.hashOfMember(key))
+            one.combine(value)
+            sum = sum &+ one.finalize()
+        }
+        hasher.combine(held.count)
+        hasher.combine(sum)
+    }
+}
+
+extension FrozenDictionary: Debug where Key: Debug, Value: Debug {
+    /// `FrozenDictionary(["a": 1])`, in the order the keys were given.
+    public fn debugDescription() -> String {
+        var parts: String[>..] = []
+        for (key, value) in self {
+            parts.append(key.debugDescription() + ": " + value.debugDescription())
+        }
+        return parts.isEmpty ? "FrozenDictionary([:])" : described("FrozenDictionary", parts)
+    }
+}

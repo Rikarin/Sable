@@ -1,5 +1,8 @@
 // Port of nbody.sb.
 
+#[path = "../../support/rust/bench.rs"]
+mod bench;
+
 #[derive(Clone, Copy)]
 struct Body {
     x: f64,
@@ -66,16 +69,18 @@ fn advance(bodies: &mut Vec<Body>, dt: f64) {
 }
 
 fn main() {
-    let mut bodies = vec![
-        body(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 39.47),
-        body(4.84, -1.16, -0.10, 0.60, 2.81, -0.02, 0.037),
-        body(8.34, 4.12, -0.40, -1.01, 1.82, 0.008, 0.011),
-        body(12.89, -15.11, -0.22, 1.08, 0.86, -0.01, 0.0017),
-        body(15.37, -25.91, 0.17, 0.97, 0.59, -0.03, 0.002),
-    ];
-    println!("{:?}", energy(&bodies));
-    for _ in 0..200000 {
-        advance(&mut bodies, 0.01);
-    }
-    println!("{:?}", energy(&bodies));
+    bench::run(|| {
+        let mut bodies = vec![
+            body(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 39.47),
+            body(4.84, -1.16, -0.10, 0.60, 2.81, -0.02, 0.037),
+            body(8.34, 4.12, -0.40, -1.01, 1.82, 0.008, 0.011),
+            body(12.89, -15.11, -0.22, 1.08, 0.86, -0.01, 0.0017),
+            body(15.37, -25.91, 0.17, 0.97, 0.59, -0.03, 0.002),
+        ];
+        let before = energy(&bodies);
+        for _ in 0..200000 {
+            advance(&mut bodies, 0.01);
+        }
+        format!("{before:?}\n{:?}", energy(&bodies))
+    });
 }

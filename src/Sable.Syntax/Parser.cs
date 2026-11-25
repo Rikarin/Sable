@@ -135,6 +135,11 @@ internal sealed class Parser {
     readonly Dictionary<GreenNode, TokenExtent> _memberExtents = new(ReferenceEqualityComparer.Instance);
 
     void NoteRead(int index) {
+        // A lookahead that has given up reads only its own way out.
+        if (_gaveUp) {
+            return;
+        }
+
         if (index < _lowestRead) {
             _lowestRead = index;
         }
@@ -291,6 +296,8 @@ internal sealed class Parser {
 
     /// <summary>At the nesting limit: skips this level's text and says so.</summary>
     bool TooDeep() {
+        GiveUpIfWrong();
+        _deepest = Math.Max(_deepest, _nesting);
         if (_nesting < MaxNesting) {
             return false;
         }
@@ -332,6 +339,175 @@ internal sealed class Parser {
             }
 
             SkipCurrentToken();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Lookahead by parsing
+    // -----------------------------------------------------------------------
+
+    /// <summary>A question about the text ahead that is answered by parsing it.</summary>
+    enum LookaheadKind {
+        /// <summary>Whether a compound type is written here, <see cref="AtCompoundTypeExpression" />; any error says no.</summary>
+        CompoundType,
+
+        /// <summary>Whether a <c>where</c> item is a constraint, <see cref="ParseWhereItem" />; errors do not matter.</summary>
+        WhereConstraint
+    }
+
+    /// <summary>What an answer depends on besides the tokens and the nesting limit.</summary>
+    readonly record struct LookaheadKey(LookaheadKind Kind, int Index, bool NoBrace, bool NoArrow);
+
+    /// <param name="Lowest">The lowest index of a token the answer depends on.</param>
+    /// <param name="Highest">The highest.</param>
+    /// <param name="Nesting">How deeply nested the question was asked.</param>
+    /// <param name="Deepest">How deeply nested its parse went.</param>
+    /// <param name="TooDeep">Whether that reached the limit.</param>
+    /// <param name="Member">The member being parsed (<see cref="_member" />).</param>
+    readonly record struct LookaheadAnswer(bool Yes, int Lowest, int Highest, int Nesting, int Deepest, bool TooDeep, int Member) {
+        /// <summary>
+        ///     Whether the answer stands at another nesting: where the limit is
+        ///     not reached it would be the same. Where it was, the question is
+        ///     not asked again in the same member: a question is first asked
+        ///     deep within other lookaheads, and asking again at each of the
+        ///     nestings it then has would take a time that grows with their
+        ///     number. Across members it is, so that what one member makes of
+        ///     its tokens does not depend on another's lookahead.
+        /// </summary>
+        public bool HoldsAt(int nesting, int member) =>
+            TooDeep
+                ? nesting == Nesting || member == Member
+                : Deepest + (nesting - Nesting) < MaxNesting;
+    }
+
+    /// <summary>
+    ///     The answers so far. What a lookahead parses can ask the same
+    ///     question of the text within it, and that text is then parsed again
+    ///     — for an outer lookahead, or for real — and asks once more: without
+    ///     this, each level of nesting doubles the work.
+    /// </summary>
+    readonly Dictionary<LookaheadKey, LookaheadAnswer> _answers = [];
+
+    /// <summary>The splits made within a lookahead, with what each replaced.</summary>
+    readonly List<(int Index, GreenToken? Before)> _splitLog = [];
+
+    /// <summary>The innermost member being parsed, counted in the order they began, and how many have.</summary>
+    int _member;
+
+    int _memberCount;
+
+    /// <summary>How many lookaheads this parse is within.</summary>
+    int _lookahead;
+
+    /// <summary>The deepest nesting since the innermost lookahead began.</summary>
+    int _deepest;
+
+    /// <summary>The suppressed error count past which the innermost lookahead's answer is no, or -1 if errors do not matter to it.</summary>
+    int _errorLimit = -1;
+
+    /// <summary>Whether the innermost lookahead has met an error, and is only unwinding.</summary>
+    bool _gaveUp;
+
+    /// <summary>
+    ///     Ends a lookahead that an error has already answered, by moving it to
+    ///     the end of the file, where every production stops.
+    /// </summary>
+    void GiveUpIfWrong() {
+        if (_errorLimit >= 0 && !_gaveUp && _diagnostics.SuppressedErrors > _errorLimit) {
+            _gaveUp = true;
+            _index = _tokens.Length - 1;
+        }
+    }
+
+    /// <summary>
+    ///     Answers a question by parsing what is ahead, and puts everything
+    ///     back as it was. The answer must be a function of the tokens, of
+    ///     <see cref="LookaheadKey" /> and of the nesting limit alone, so that
+    ///     it is the same whenever it is asked again: in a full parse and in an
+    ///     incremental one too.
+    /// </summary>
+    bool Lookahead(LookaheadKind kind, Func<Parser, bool> parse) {
+        // The second half of a split token is not what the stream says is here.
+        var remembered = !_gaveUp && (_split is null || !_split.ContainsKey(_index));
+        var key = new LookaheadKey(kind, _index, _noBrace, _noArrow);
+        if (remembered && _answers.TryGetValue(key, out var known) && known.HoldsAt(_nesting, _member)) {
+            NoteRead(known.Lowest);
+            NoteRead(known.Highest);
+            _deepest = Math.Max(_deepest, known.Deepest + (_nesting - known.Nesting));
+            _tooDeepCount += known.TooDeep ? 1 : 0;
+            return known.Yes;
+        }
+
+        var index = _index;
+        var tokenPosition = _tokenPosition;
+        var splits = _splitLog.Count;
+        // A copy, not a count: the parse may attach the pending skipped text
+        // to a token it then throws away, which empties the list, and
+        // truncating would not bring that text back.
+        var skipped = _skipped.ToArray();
+        var endOfFileEaten = _endOfFileEaten;
+        var statementEnd = _statementEndReportedAt;
+        var reportedTooDeep = _reportedTooDeep;
+        var tooDeepCount = _tooDeepCount;
+        var errors = _diagnostics.SuppressedErrors;
+        var errorLimit = _errorLimit;
+        var gaveUp = _gaveUp;
+        var (deepest, lowest, highest) = (_deepest, _lowestRead, _highestRead);
+
+        _statementEndReportedAt = -1;
+        _reportedTooDeep = false;
+        _errorLimit = kind == LookaheadKind.CompoundType ? errors : -1;
+        _deepest = _nesting;
+        _lowestRead = int.MaxValue;
+        _highestRead = -1;
+        _lookahead++;
+
+        // The frames of a lookahead come on top of those of the levels it parses.
+        _nesting++;
+
+        using (_diagnostics.Suppress()) {
+            try {
+                var yes = parse(this) && (_errorLimit < 0 || _diagnostics.SuppressedErrors == errors);
+                if (remembered) {
+                    _answers[key] = new(
+                        yes,
+                        Math.Min(_lowestRead, index),
+                        Math.Max(_highestRead, index),
+                        _nesting - 1,
+                        _deepest,
+                        _tooDeepCount != tooDeepCount,
+                        _member
+                    );
+                }
+
+                return yes;
+            } finally {
+                _lookahead--;
+                _nesting--;
+                _index = index;
+                _tokenPosition = tokenPosition;
+                for (var i = _splitLog.Count - 1; i >= splits; i--) {
+                    var (at, before) = _splitLog[i];
+                    if (before is null) {
+                        _split!.Remove(at);
+                    } else {
+                        _split![at] = before;
+                    }
+                }
+
+                _splitLog.RemoveRange(splits, _splitLog.Count - splits);
+                _skipped.Clear();
+                _skipped.AddRange(skipped);
+                _endOfFileEaten = endOfFileEaten;
+                _statementEndReportedAt = statementEnd;
+                _reportedTooDeep = reportedTooDeep;
+                _diagnostics.ForgetSuppressedErrors(errors);
+                _errorLimit = errorLimit;
+                _gaveUp = gaveUp;
+                _deepest = Math.Max(deepest, _deepest);
+                _lowestRead = Math.Min(lowest, _lowestRead);
+                _highestRead = Math.Max(highest, _highestRead);
+            }
         }
     }
 
@@ -402,6 +578,10 @@ internal sealed class Parser {
             token.Trailing,
             terminatesStatement: token.TerminatesStatement
         );
+
+        if (_lookahead > 0) {
+            _splitLog.Add((_index, _split is not null && _split.TryGetValue(_index, out var before) ? before : null));
+        }
 
         (_split ??= [])[_index] = remainder;
         _tokenPosition += token.LeadingTriviaWidth + 1;
@@ -961,35 +1141,17 @@ internal sealed class Parser {
             return false;
         }
 
-        // Now parse it for real, and put the stream back.
-        var index = _index;
-        var tokenPosition = _tokenPosition;
-        var split = _split is null ? null : new Dictionary<int, GreenToken>(_split);
-        // A copy, not a count: the speculative parse may attach the pending
-        // skipped text to a token it then throws away, which empties the
-        // list, and truncating would not bring that text back.
-        var skipped = _skipped.ToArray();
-        var endOfFileEaten = _endOfFileEaten;
-
-        using (_diagnostics.Suppress()) {
-            try {
-                // A type must be one as written: '[missing] (x: Int) => x' is a
-                // capture list, and '[Dog.self, Cat.self]' an array literal,
-                // read as a type only by error recovery.
-                var errors = _diagnostics.SuppressedErrors;
-                var type = ParseType();
-                return _diagnostics.SuppressedErrors == errors
-                       && (At(SyntaxKind.DotToken) && Peek(1).Kind == SyntaxKind.SelfKeyword
-                           || At(SyntaxKind.OpenParenToken) && type.Kind is SyntaxKind.DictionaryType or SyntaxKind.GrowArrayType);
-            } finally {
-                _index = index;
-                _tokenPosition = tokenPosition;
-                _split = split;
-                _skipped.Clear();
-                _skipped.AddRange(skipped);
-                _endOfFileEaten = endOfFileEaten;
+        // A type must be one as written: '[missing] (x: Int) => x' is a
+        // capture list, and '[Dog.self, Cat.self]' an array literal, read as a
+        // type only by error recovery.
+        return Lookahead(
+            LookaheadKind.CompoundType,
+            static parser => {
+                var type = parser.ParseType();
+                return parser.At(SyntaxKind.DotToken) && parser.Peek(1).Kind == SyntaxKind.SelfKeyword
+                    || parser.At(SyntaxKind.OpenParenToken) && type.Kind is SyntaxKind.DictionaryType or SyntaxKind.GrowArrayType;
             }
-        }
+        );
     }
 
     /// <summary>How far ahead to look for the <c>.self</c> of a metatype.</summary>
@@ -3304,9 +3466,9 @@ internal sealed class Parser {
 
     /// <summary>
     ///     <c>const</c> declares a compile-time constant on its own, but modifies
-    ///     a function in <c>const fn</c>.
+    ///     a function in <c>const fn</c>, and an initialiser in <c>const init</c>.
     /// </summary>
-    bool IsConstFunctionModifier() => At(SyntaxKind.ConstKeyword) && Peek(1).Kind == SyntaxKind.FnKeyword;
+    bool IsConstFunctionModifier() => At(SyntaxKind.ConstKeyword) && Peek(1).Kind is SyntaxKind.FnKeyword or SyntaxKind.InitKeyword;
 
     /// <summary>
     ///     <c>unsafe</c> starts a block on its own, but modifies a function in
@@ -3406,7 +3568,10 @@ internal sealed class Parser {
             _statementEndReportedAt = -1;
 
             var before = _index;
+            var outerMember = _member;
+            _member = ++_memberCount;
             var member = parseMember(pending);
+            _member = outerMember;
             items.Add(member);
             if (clean && _tooDeepCount == tooDeepBefore && _highestRead >= 0) {
                 _memberExtents[member] = new(_lowestRead, _highestRead, _nesting);
@@ -3896,26 +4061,13 @@ internal sealed class Parser {
     ///     anything else is an expression.
     /// </remarks>
     GreenNode ParseWhereItem() {
-        var index = _index;
-        var tokenPosition = _tokenPosition;
-        var split = _split is null ? null : new Dictionary<int, GreenToken>(_split);
-        var skipped = _skipped.ToArray();
-        var endOfFileEaten = _endOfFileEaten;
-
-        bool isConstraint;
-        using (_diagnostics.Suppress()) {
-            try {
-                WithBracesSuppressed(() => ParsePostfixType());
-                isConstraint = Current.Kind is SyntaxKind.ColonToken or SyntaxKind.EqualsEqualsToken;
-            } finally {
-                _index = index;
-                _tokenPosition = tokenPosition;
-                _split = split;
-                _skipped.Clear();
-                _skipped.AddRange(skipped);
-                _endOfFileEaten = endOfFileEaten;
+        var isConstraint = Lookahead(
+            LookaheadKind.WhereConstraint,
+            static parser => {
+                parser.WithBracesSuppressed(() => parser.ParsePostfixType());
+                return parser.Current.Kind is SyntaxKind.ColonToken or SyntaxKind.EqualsEqualsToken;
             }
-        }
+        );
 
         return isConstraint
             ? ParseWhereConstraint()

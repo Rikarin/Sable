@@ -148,9 +148,14 @@ public sealed partial class SilGen {
         SilValue HopInto(SilValue? actor, IEnumerable<SilValue> arguments) {
             var back = Emit(new BuiltinInst("task_actor_current", SilType.Int));
             foreach (var argument in arguments) {
-                if (argument.Type is not AddressType && !argument.Type.IsTrivial && !ReferenceEquals(argument, actor)) {
-                    Emit(new BuiltinInst("share", SilType.Unit, argument));
+                if (argument.Type is not AddressType && !ReferenceEquals(argument, actor)) {
+                    ShareArgument(argument);
                 }
+            }
+
+            // Seen as the type a callee compiled once takes: the object is the one it is here.
+            while (actor is BuiltinInst { Name: "opaque_borrow_as", Operands: [var seen] }) {
+                actor = seen;
             }
 
             SilValue target;
@@ -162,6 +167,40 @@ public sealed partial class SilGen {
 
             Emit(new BuiltinInst("task_hop", SilType.Unit, target));
             return back;
+        }
+
+        /// <summary>
+        ///     An argument shared: one seen as a type parameter of the callee,
+        ///     which only the callee has the metadata of, as the type it is here.
+        /// </summary>
+        void ShareArgument(SilValue argument) {
+            switch (argument) {
+                case BuiltinInst { Name: "opaque_borrow_as", Operands: [var seen] } when seen.Type is not AddressType:
+                    ShareArgument(seen);
+                    return;
+
+                case LoadBorrowInst { Operands: [BuiltinInst { Name: "opaque_cast", Operands: [var place] }] }:
+                    if (place.Type is AddressType { Pointee: { IsTrivial: false } }) {
+                        var lent = Emit(new LoadBorrowInst(place));
+                        Emit(new BuiltinInst("share", SilType.Unit, lent));
+                        Emit(new EndBorrowInst(lent));
+                    }
+
+                    return;
+            }
+
+            if (!argument.Type.IsTrivial) {
+                Emit(new BuiltinInst("share", SilType.Unit, argument));
+            }
+        }
+
+        /// <summary>A result, or an error, a call into an actor wrote where it was told: shared, as one it returns is.</summary>
+        SilValue? ShareWritten(SilValue? written, SilValue? hoppedBack) {
+            if (hoppedBack is not null && written is not null and not UnitValue && _current is not null && written.Type is not AddressType && !written.Type.IsTrivial) {
+                Emit(new BuiltinInst("share", SilType.Unit, written));
+            }
+
+            return written;
         }
 
         /// <summary>After it: back where the task ran, and the result shared.</summary>

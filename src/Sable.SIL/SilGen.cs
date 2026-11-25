@@ -4781,7 +4781,7 @@ public sealed partial class SilGen {
 
             // A struct's initialiser builds 'self' in a slot of its own, field
             // by field.
-            if (symbol.FunctionKind == FunctionKind.Initializer && !_initializing) {
+            if (symbol.FunctionKind == FunctionKind.Initializer && !_initializing && Bridged is null) {
                 _selfAddress = NewSlot(_indirectResult is { Type: AddressType { Pointee: var made } } ? made : function.Type.Result, "self");
             }
 
@@ -4795,7 +4795,7 @@ public sealed partial class SilGen {
             // stores the initial value first, before its own body runs — but
             // one that hands the work to another, 'self.init(…)', leaves it
             // to that one.
-            if (symbol.FunctionKind == FunctionKind.Initializer && !Delegates(body)
+            if (symbol.FunctionKind == FunctionKind.Initializer && Bridged is null && !Delegates(body)
                 && (symbol.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : symbol.ContainingSymbol) is NamedTypeSymbol owner
                 && SelfType(symbol, substitution) is { } selfType) {
                 foreach (var field in owner.OriginalDefinition.Members.OfType<FieldSymbol>()) {
@@ -11450,7 +11450,7 @@ public sealed partial class SilGen {
                              && (callee.RethrownAlso is not { } also || ThrowsNothing(Sub(call.Substitution.Apply(also)))),
                 hopBack: back, errorSlot: genericError?.Slot);
             if (genericOut is { } written) {
-                return TakeOut(invoked, written.Slot);
+                return ShareWritten(TakeOut(invoked, written.Slot), back);
             }
 
             if (openedBuffer is not null) {
@@ -11545,7 +11545,7 @@ public sealed partial class SilGen {
                 Jump(new UnreachableInst());
             } else if (errorSlot is not null) {
                 // An error written where it was told, of a type known here: taken from there.
-                RouteError(Emit(new LoadInst(errorSlot, errorSlot.ElementType.IsTrivial ? LoadKind.Trivial : LoadKind.Take)), at);
+                RouteError(ShareWritten(Emit(new LoadInst(errorSlot, errorSlot.ElementType.IsTrivial ? LoadKind.Trivial : LoadKind.Take)), hopBack)!, at);
             } else {
                 RouteError(error, at);
             }

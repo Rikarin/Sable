@@ -1,0 +1,46 @@
+module Sable.Diagnostics
+
+/// A span's own: 8 random bytes, written as 16 lowercase hex digits (W3C
+/// Trace Context). All zeros is no span. .NET's `ActivitySpanId`.
+///
+/// ```sable
+/// let id = SpanId.parse(hex: "00f067aa0ba902b7")!
+/// assert(id.value == 0x00f067aa0ba902b7)
+/// assert(id.hex == "00f067aa0ba902b7")
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct SpanId {
+    public let value: U64
+
+    public init(value: U64) {
+        self.value = value
+    }
+
+    /// The id the 16 hex digits write, or none for anything else.
+    public static fn parse(hex: String) -> SpanId? {
+        let bytes = hex.utf8.toArray()
+        if bytes.count != 16 {
+            return none
+        }
+        guard let value = TraceId.number(bytes, 0, 16) else {
+            return none
+        }
+        return SpanId(value: value)
+    }
+
+    /// A new span's: random, never all zeros.
+    public static fn random() -> SpanId {
+        var system = SystemRandomNumberGenerator()
+        var value = system.next()
+        while value == 0 {
+            value = system.next()
+        }
+        return SpanId(value: value)
+    }
+
+    /// Whether it is a span's: not all zeros.
+    public var isValid: Bool => value != 0
+
+    /// The 16 lowercase hex digits.
+    public var hex: String => TraceId.digits(value, 16)
+}

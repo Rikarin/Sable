@@ -1,0 +1,86 @@
+module Sable.Diagnostics
+
+/// What of a span crosses to other spans, tasks and processes: its trace,
+/// its own id, whether it is sampled, and the vendors' trace state. W3C
+/// Trace Context's 'traceparent' and 'tracestate' headers carry it from
+/// one service to the next (`TraceContextPropagator`). .NET's
+/// `ActivityContext`.
+///
+/// ```sable
+/// let context = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")!
+/// assert(context.isSampled && context.isRemote)
+/// assert(context.spanId.hex == "00f067aa0ba902b7")
+/// assert(context.traceparent == "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+/// ```
+@derive(Equatable, Debug)
+public struct SpanContext {
+    public let traceId: TraceId
+    public let spanId: SpanId
+    /// The trace flags: bit 0, sampled — those who see it record the trace.
+    public let flags: Int
+    // None for none, so that a context with none copies no string.
+    let state: String?
+    /// Whether it came from another process (`parse`), rather than a span
+    /// of this one.
+    public let isRemote: Bool
+
+    public init(traceId: TraceId, spanId: SpanId, flags: Int = 1, traceState: String = "", isRemote: Bool = false) {
+        self.traceId = traceId
+        self.spanId = spanId
+        self.flags = flags & 0xFF
+        self.state = traceState.isEmpty ? none : traceState
+        self.isRemote = isRemote
+    }
+
+    // The context of no span, made with no call.
+    static var zero: SpanContext => SpanContext { traceId: TraceId(high: 0, low: 0), spanId: SpanId(value: 0), flags: 0, state: none, isRemote: false }
+
+    /// The 'tracestate' header, passed on as it came: vendors' own entries.
+    public var traceState: String => state ?? ""
+
+    /// Whether the trace is sampled: recorded by whoever sees it.
+    public var isSampled: Bool => (flags & 1) != 0
+
+    /// Whether it names a span: neither id all zeros.
+    public var isValid: Bool => traceId.isValid && spanId.isValid
+
+    /// The 'traceparent' header that carries it: version 00, the ids, the
+    /// flags.
+    public var traceparent: String => "00-\(traceId.hex)-\(spanId.hex)-\(TraceId.digits(U64(flags), 2))"
+
+    /// The context a 'traceparent' header carries, with the 'tracestate'
+    /// that came with it; none for a header that is not one, or names no
+    /// span. A later version's is read as far as version 00 says.
+    ///
+    /// ```sable
+    /// assert(SpanContext.parse(traceparent: "00-00000000000000000000000000000000-00f067aa0ba902b7-01") == none)
+    /// assert(SpanContext.parse(traceparent: "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01") == none)
+    /// assert(SpanContext.parse(traceparent: "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-more") != none)
+    /// ```
+    public static fn parse(traceparent: String, tracestate: String = "") -> SpanContext? {
+        let bytes = traceparent.trimmed().utf8.toArray()
+        if bytes.count < 55 || bytes[2] != 0x2D || bytes[35] != 0x2D || bytes[52] != 0x2D {
+            return none
+        }
+        guard let version = TraceId.number(bytes, 0, 2) else {
+            return none
+        }
+        if version == 0xFF || (version == 0 && bytes.count != 55) || (bytes.count > 55 && bytes[55] != 0x2D) {
+            return none
+        }
+        guard let high = TraceId.number(bytes, 3, 16) else {
+            return none
+        }
+        guard let low = TraceId.number(bytes, 19, 16) else {
+            return none
+        }
+        guard let span = TraceId.number(bytes, 36, 16) else {
+            return none
+        }
+        guard let flags = TraceId.number(bytes, 53, 2) else {
+            return none
+        }
+        let context = SpanContext(traceId: TraceId(high: high, low: low), spanId: SpanId(value: span), flags: Int(flags), traceState: tracestate.trimmed(), isRemote: true)
+        return context.isValid ? context : none
+    }
+}

@@ -1,0 +1,36 @@
+module Sable.Diagnostics
+
+import Sable.Concurrency
+
+/// An exporter that keeps the spans it is given, for a test to look at.
+/// OpenTelemetry's InMemoryExporter.
+///
+/// ```sable
+/// let exporter = InMemorySpanExporter()
+/// let listening = Tracing.addListener(SimpleSpanProcessor(exporter))
+/// Tracer("t").withSpan("outer") { _ in
+///     Tracer("t").withSpan("inner") { _ in }
+/// }
+/// listening.cancel()
+/// let spans = exporter.spans
+/// assert(spans.map { $0.name } == ["inner", "outer"])
+/// assert(spans[0].parentSpanId == spans[1].context.spanId)
+/// ```
+@immutable
+public final class InMemorySpanExporter: SpanExporter {
+    let kept: Mutex<SpanRecord[>..]> = Mutex([])
+
+    public init() { }
+
+    public fn export(_ spans: SpanRecord[>..]) {
+        kept.withLock { $0.append(contentsOf: spans) }
+    }
+
+    /// The spans given so far, in the order they ended.
+    public var spans: SpanRecord[>..] => kept.withLock { $0 }
+
+    /// Every span let go of.
+    public fn clear() {
+        kept.withLock { $0.removeAll() }
+    }
+}

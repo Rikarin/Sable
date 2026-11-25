@@ -1,0 +1,343 @@
+module MetricsTests
+
+// Meter, its instruments, MetricReader and the exporters (Sable.Diagnostics),
+// tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Diagnostics
+// Each test has a meter of its own, and shuts its reader down: the meters and
+// readers are the process's, and a process may run several tests.
+
+import Sable.Concurrency
+import Sable.Diagnostics
+import Sable.Testing
+import Sable.Time
+
+fn countSum(_ counts: Int[>..]) -> Int {
+    var sum = 0
+    for n in counts {
+        sum += n
+    }
+    return sum
+}
+
+fn data(_ reader: MetricReader, _ meter: Meter, _ name: String) -> MetricData {
+    for metric in reader.collect() {
+        if metric.meter == meter.name && metric.name == name {
+            return metric
+        }
+    }
+    fatalError("no metric \(name)")
+}
+
+@test
+fn withNoReaderNothingIsRecorded() {
+    let meter = Meter("quiet")
+    let count = meter.counter("count")
+    let made = Atomic<Int>(0)
+    fn attributes() -> KeyValue[>..] {
+        _ = made.add(1)
+        return [KeyValue("a", 1)]
+    }
+    count.add(5)
+    count.add(5, attributes())
+    expect(!Metrics.isCollecting)
+    expect(made.load() == 0)
+    let reader = MetricReader()
+    expect(data(reader, meter, "count").points.isEmpty)
+    reader.shutdown()
+    reader.shutdown()
+}
+
+@test
+fn aCounterSumsByItsAttributes() {
+    let reader = MetricReader()
+    let meter = Meter("counters", version: "2")
+    let requests = meter.counter("requests", unit: "{request}", description: "served")
+    requests.add(1)
+    requests.add(2)
+    requests.add(-5)
+    requests.add(3, [KeyValue("route", "/"), KeyValue("method", "GET")])
+    requests.add(4, [KeyValue("method", "GET"), KeyValue("route", "/")])
+    requests.add(10, [KeyValue("route", "/a")])
+    let metric = data(reader, meter, "requests")
+    reader.shutdown()
+    expect(metric.kind == .Counter && metric.isInteger)
+    expect(metric.unit == "{request}" && metric.description == "served" && metric.meterVersion == "2")
+    expect(requests.name == "requests")
+    expect(metric.points.count == 3)
+    expect(metric.point()!.number == 3.0)
+    expect(metric.point([KeyValue("method", "GET"), KeyValue("route", "/")])!.number == 7.0)
+    expect(metric.point([KeyValue("route", "/a")])!.number == 10.0)
+    expect(metric.point([KeyValue("route", "/b")]) == none)
+}
+
+@test
+fn countersOfNumbersSumNumbers() {
+    let reader = MetricReader()
+    let meter = Meter("numbers")
+    let seconds = meter.counter("seconds", of: F64.self)
+    seconds.add(0.25)
+    seconds.add(0.5, [KeyValue("k", "v")])
+    seconds.add(0.25)
+    let metric = data(reader, meter, "seconds")
+    reader.shutdown()
+    expect(!metric.isInteger)
+    expect(metric.point()!.number == 0.5)
+    expect(metric.point([KeyValue("k", "v")])!.number == 0.5)
+}
+
+@test
+fn anUpDownCounterGoesBothWays() {
+    let reader = MetricReader()
+    let meter = Meter("updown")
+    let connections = meter.upDownCounter("open")
+    let level = meter.upDownCounter("level", of: F64.self)
+    connections.add(3)
+    connections.add(-5)
+    connections.add(2, [KeyValue("pool", "a")])
+    level.add(-1.5)
+    expect(connections.name == "open")
+    let metric = data(reader, meter, "open")
+    let levels = data(reader, meter, "level")
+    reader.shutdown()
+    expect(metric.kind == .UpDownCounter)
+    expect(metric.point()!.number == -2.0)
+    expect(metric.point([KeyValue("pool", "a")])!.number == 2.0)
+    expect(levels.point()!.number == -1.5)
+}
+
+@test
+fn aGaugeKeepsTheLastValue() {
+    let reader = MetricReader()
+    let meter = Meter("gauges")
+    let temperature = meter.gauge("temperature", unit: "Cel", of: F64.self)
+    let level = meter.gauge("level", of: Int.self)
+    temperature.record(20.5)
+    temperature.record(21.0)
+    temperature.record(3.0, [KeyValue("room", "b")])
+    level.record(7)
+    expect(temperature.name == "temperature")
+    let metric = data(reader, meter, "temperature")
+    let levels = data(reader, meter, "level")
+    reader.shutdown()
+    expect(metric.kind == .Gauge)
+    expect(metric.point()!.number == 21.0)
+    expect(metric.point([KeyValue("room", "b")])!.number == 3.0)
+    expect(levels.point()!.number == 7.0)
+}
+
+@test
+fn aHistogramCountsInItsBuckets() {
+    let reader = MetricReader()
+    let meter = Meter("histograms")
+    let sizes = meter.histogram("sizes", buckets: .Explicit(boundaries: [1.0, 5.0, 10.0]))
+    for value in [0.5, 1.0, 3.0, 5.0, 7.0, 100.0, F64.nan, F64.infinity] {
+        sizes.record(value)
+    }
+    sizes.record(2.0, [KeyValue("k", 1)])
+    expect(sizes.name == "sizes")
+    let metric = data(reader, meter, "sizes")
+    reader.shutdown()
+    match metric.point()!.value {
+        case .Histogram(let h) => {
+            expect(h.count == 6)
+            expect(h.sum == 116.5)
+            expect(h.min == 0.5 && h.max == 100.0)
+            expect(h.boundaries == [1.0, 5.0, 10.0])
+            expect(h.counts == [2, 2, 1, 1])
+        }
+        default => expect(false, "not a histogram")
+    }
+    expect(metric.point([KeyValue("k", 1)])!.number == 2.0)
+}
+
+@test
+fn aHistogramOfIntegersHasTheDefaultBuckets() {
+    let reader = MetricReader()
+    let meter = Meter("int-histograms")
+    let items = meter.histogram("items", of: Int.self)
+    items.record(7)
+    let metric = data(reader, meter, "items")
+    reader.shutdown()
+    match metric.point()!.value {
+        case .Histogram(let h) => {
+            expect(h.boundaries.count == 15)
+            expect(h.counts[2] == 1)
+        }
+        default => expect(false, "not a histogram")
+    }
+}
+
+fn exponential(_ metric: MetricData, _ attributes: KeyValue[>..] = []) -> ExponentialHistogramData {
+    match metric.point(attributes)!.value {
+        case .ExponentialHistogram(let h) => {
+            return h
+        }
+        default => {
+            fatalError("not exponential")
+        }
+    }
+}
+
+@test
+fn anExponentialHistogramFollowsItsValues() {
+    let reader = MetricReader()
+    let meter = Meter("exponential")
+    let durations = meter.histogram("durations", unit: "s", buckets: .exponential)
+    durations.record(1.0)
+    durations.record(2.0)
+    durations.record(4.0)
+    durations.record(0.0)
+    durations.record(-1.0)
+    let h = exponential(data(reader, meter, "durations"))
+    reader.shutdown()
+    expect(h.count == 4 && h.zeroCount == 1)
+    expect(h.sum == 7.0 && h.min == 0.0 && h.max == 4.0)
+    // 1, 2 and 4 are the upper bounds of their buckets: at scale 6, buckets
+    // -1, 63 and 127.
+    expect(h.scale == 6, "\(h.scale)")
+    expect(h.offset == -1)
+    expect(h.counts.count == 129)
+    expect(h.counts[0] == 1 && h.counts[64] == 1 && h.counts[128] == 1)
+}
+
+@test
+fn anExponentialHistogramIsMadeCoarserToFit() {
+    let reader = MetricReader()
+    let meter = Meter("coarse")
+    let spread = meter.histogram("spread", buckets: .Exponential(maxSize: 4, maxScale: 20))
+    let narrow = meter.histogram("narrow", buckets: .Exponential(maxSize: 160, maxScale: 0))
+    spread.record(1.5)
+    spread.record(1000.0)
+    spread.record(0.001, [KeyValue("tiny", true)])
+    narrow.record(3.0)
+    narrow.record(5.0)
+    let h = exponential(data(reader, meter, "spread"))
+    let n = exponential(data(reader, meter, "narrow"))
+    let tiny = exponential(data(reader, meter, "spread"), [KeyValue("tiny", true)])
+    reader.shutdown()
+    expect(h.counts.count <= 4, "\(h.counts)")
+    expect(countSum(h.counts) == 2)
+    // At scale s, bucket i is (2^(i/2^s), 2^((i+1)/2^s)].
+    expect(h.scale <= 2)
+    expect(n.scale == 0)
+    expect(n.offset == 1 && n.counts == [1, 1])
+    expect(tiny.counts == [1] && tiny.offset < 0)
+}
+
+@test
+fn observableInstrumentsAreAskedAsTheyAreCollected() {
+    let reader = MetricReader()
+    let meter = Meter("observed")
+    let asked = Atomic<Int>(0)
+    let threads = meter.observableGauge("threads", unit: "{thread}") { () -> Measurement<Int>[>..] in
+        _ = asked.add(1)
+        return [Measurement(4), Measurement(2, [KeyValue("pool", "io")])]
+    }
+    meter.observableCounter("total") { () -> Measurement<F64>[>..] in [Measurement(1.5)] }
+    meter.observableUpDownCounter("queued") { () -> Measurement<Int>[>..] in [Measurement(-3)] }
+    expect(asked.load() == 0)
+    expect(threads.name == "threads" && threads.kind == InstrumentKind.ObservableGauge)
+    let gauge = data(reader, meter, "threads")
+    let total = data(reader, meter, "total")
+    let queued = data(reader, meter, "queued")
+    reader.shutdown()
+    expect(asked.load() == 3)
+    expect(gauge.point()!.number == 4.0)
+    expect(gauge.point([KeyValue("pool", "io")])!.number == 2.0)
+    expect(total.kind == .ObservableCounter && total.point()!.number == 1.5 && !total.isInteger)
+    expect(queued.kind == .ObservableUpDownCounter && queued.point()!.number == -3.0)
+}
+
+@test
+fn attributesPastTheLimitAreCountedTogether() {
+    let reader = MetricReader()
+    let meter = Meter("cardinality")
+    let hits = meter.counter("hits")
+    for i in 0..<2010 {
+        hits.add(1, [KeyValue("id", i)])
+    }
+    let metric = data(reader, meter, "hits")
+    reader.shutdown()
+    expect(metric.points.count == 2001)
+    expect(metric.point([KeyValue("otel.metric.overflow", true)])!.number == 10.0)
+    expect(metric.point([KeyValue("id", 1999)])!.number == 1.0)
+}
+
+@test
+fn manyTasksRecordWithoutLosingAny() async {
+    let reader = MetricReader()
+    let meter = Meter("concurrent")
+    let hits = meter.counter("hits")
+    let sizes = meter.histogram("sizes", buckets: .exponential)
+    let sum = meter.counter("sum", of: F64.self)
+    let tasks = (0..<8).map { n in
+        Task.spawn {
+            for i in 0..<2000 {
+                hits.add(1, [KeyValue("task", n % 2)])
+                sizes.record(F64(i + 1))
+                sum.add(0.5)
+            }
+        }
+    }
+    for task in tasks {
+        await task.value
+    }
+    let counted = data(reader, meter, "hits")
+    let h = exponential(data(reader, meter, "sizes"))
+    let total = data(reader, meter, "sum").point()!.number
+    reader.shutdown()
+    expect(counted.point([KeyValue("task", 0)])!.number == 8000.0)
+    expect(counted.point([KeyValue("task", 1)])!.number == 8000.0)
+    expect(h.count == 16000 && countSum(h.counts) == 16000 && h.max == 2000.0 && h.min == 1.0)
+    expect(total == 8000.0)
+}
+
+@test
+fn readersExportWhatTheyCollect() async {
+    let reader = MetricReader()
+    let meter = Meter("exported")
+    meter.counter("c").add(2, [KeyValue("a", "b")])
+    meter.histogram("h", unit: "ms", buckets: .Explicit(boundaries: [1.0])).record(0.5)
+    meter.histogram("e", buckets: .exponential).record(2.0)
+    meter.gauge("g", of: F64.self).record(1.5)
+    let lines = Mutex<String[>..]>([])
+    let exporter = ConsoleExporter { line in
+        lines.withLock { $0.append(line) }
+    }
+    let mine = InMemoryMetrics(meter: "exported")
+    reader.export(to: mine)
+    reader.export(to: exporter)
+    let periodic = reader.exportPeriodically(to: mine, every: Duration.milliseconds(1))
+    while mine.exports.load() < 3 {
+        await Task.yield()
+    }
+    periodic.cancel()
+    reader.shutdown()
+    let written = lines.withLock { $0 }.filter { !$0.hasPrefix("metric ") || $0.hasPrefix("metric exported/") }
+    expect(written.contains("metric exported/c counter"), "\(written)")
+    expect(written.contains("  {a=b} sum=2"), "\(written)")
+    expect(written.contains("metric exported/h (ms) histogram"), "\(written)")
+    expect(written.contains("  {} count=1 sum=0.5 min=0.5 max=0.5 buckets=[≤1.0:1 >:0]"), "\(written)")
+    expect(written.contains("  {} value=1.5"), "\(written)")
+    expect(written.contains("  {} count=1 sum=2.0 min=2.0 max=2.0 scale=6 zero=0 offset=63 buckets=[1]"), "\(written)")
+}
+
+@immutable
+final class InMemoryMetrics: MetricExporter {
+    let meter: String
+    let exports = Atomic<Int>(0)
+
+    init(meter: String) {
+        self.meter = meter
+    }
+
+    fn export(_ metrics: MetricData[>..]) {
+        _ = exports.add(1)
+    }
+}
+
+@test
+fn kindsHaveNames() {
+    let kinds: InstrumentKind[>..] = [.Counter, .UpDownCounter, .Histogram, .Gauge, .ObservableCounter, .ObservableUpDownCounter, .ObservableGauge]
+    expect(kinds.map { $0.name } == ["counter", "updowncounter", "histogram", "gauge", "observable_counter", "observable_updowncounter", "observable_gauge"])
+}

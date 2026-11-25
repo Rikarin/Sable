@@ -1,0 +1,103 @@
+module Sable.Diagnostics
+
+/// The exporter that writes spans and metrics as text, a line each and an
+/// indented line for each event or point: to standard error, or to where it
+/// is told. OpenTelemetry's console exporter, for development.
+///
+/// ```sable
+/// let kept = InMemorySpanExporter()
+/// let listening = Tracing.addListener(SimpleSpanProcessor(kept))
+/// Tracer("demo").withSpan("work", attributes: [KeyValue("n", 1)]) { _ in }
+/// listening.cancel()
+/// let lines = ConsoleExporter.lines(kept.spans[0])
+/// assert(lines[0].hasPrefix("span work ") && lines[0].hasSuffix("status=unset n=1"))
+/// ConsoleExporter().export(kept.spans)
+/// ```
+@immutable
+public final class ConsoleExporter: SpanExporter, MetricExporter {
+    let write: (String) -> Void
+
+    /// Writing each line to standard error.
+    public init() {
+        write = { (line: String) in Runtime.writeError(line + "\n") }
+    }
+
+    /// Giving each line, without its break, to the closure.
+    public init(_ write: @escaping @Sendable (String) -> Void) {
+        self.write = write
+    }
+
+    public fn export(_ spans: SpanRecord[>..]) {
+        for span in spans {
+            for line in ConsoleExporter.lines(span) {
+                write(line)
+            }
+        }
+    }
+
+    public fn export(_ metrics: MetricData[>..]) {
+        for metric in metrics {
+            for line in ConsoleExporter.lines(metric) {
+                write(line)
+            }
+        }
+    }
+
+    /// A span as written: "span NAME trace=… span=… parent=… kind=…
+    /// duration=…ms status=…", its attributes, and a line for each event.
+    public static fn lines(_ span: SpanRecord) -> String[>..] {
+        var line = "span \(span.name) trace=\(span.context.traceId.hex) span=\(span.context.spanId.hex)"
+        line = line + " parent=\(span.parentSpanId?.hex ?? "-") kind=\(span.kind.name)"
+        line = line + " duration=\(ConsoleExporter.milliseconds(span.duration))ms status=\(span.status.description())"
+        for attribute in span.attributes {
+            line = line + " " + attribute.description()
+        }
+        var lines: String[>..] = [line]
+        for event in span.events {
+            var text = "  event \(event.name)"
+            for attribute in event.attributes {
+                text = text + " " + attribute.description()
+            }
+            lines.append(text)
+        }
+        return lines
+    }
+
+    /// A metric as written: "metric METER/NAME (UNIT) KIND", and a line for
+    /// each point.
+    public static fn lines(_ metric: MetricData) -> String[>..] {
+        let unit = metric.unit.isEmpty ? "" : " (\(metric.unit))"
+        var lines: String[>..] = ["metric \(metric.meter)/\(metric.name)\(unit) \(metric.kind.name)"]
+        for point in metric.points {
+            var text = "  {" + point.attributes.map { $0.description() }.joined(separator: ",") + "}"
+            match point.value {
+                case .Sum(let n)   => { text = text + " sum=\(ConsoleExporter.number(n, metric.isInteger))" }
+                case .Gauge(let n) => { text = text + " value=\(ConsoleExporter.number(n, metric.isInteger))" }
+                case .Histogram(let h) => {
+                    var buckets: String[>..] = []
+                    for (i, count) in h.counts.enumerated() {
+                        buckets.append(i < h.boundaries.count ? "≤\(h.boundaries[i]):\(count)" : ">:\(count)")
+                    }
+                    text = text + " count=\(h.count) sum=\(h.sum) min=\(h.min) max=\(h.max) buckets=[" + buckets.joined(separator: " ") + "]"
+                }
+                case .ExponentialHistogram(let h) => {
+                    text = text + " count=\(h.count) sum=\(h.sum) min=\(h.min) max=\(h.max) scale=\(h.scale) zero=\(h.zeroCount) offset=\(h.offset) buckets=\(h.counts)"
+                }
+            }
+            lines.append(text)
+        }
+        return lines
+    }
+
+    static fn number(_ value: F64, _ isInteger: Bool) -> String {
+        return isInteger ? "\(Int(value))" : "\(value)"
+    }
+
+    // Milliseconds, to the microsecond.
+    static fn milliseconds(_ nanoseconds: Int) -> String {
+        let micro = nanoseconds / 1000
+        let fraction = micro % 1000
+        let digits = fraction < 10 ? "00\(fraction)" : fraction < 100 ? "0\(fraction)" : "\(fraction)"
+        return "\(micro / 1000).\(digits)"
+    }
+}

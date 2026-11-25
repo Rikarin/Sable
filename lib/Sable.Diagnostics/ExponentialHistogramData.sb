@@ -1,0 +1,17 @@
+module Sable.Diagnostics
+
+/// An exponential histogram's buckets: bucket i, from 'offset', holds the
+/// values above base^(offset+i) and up to base^(offset+i+1), the base
+/// 2^(2^-scale); those that are zero, or too small for the first bucket, are
+/// 'zeroCount'.
+@derive(Equatable, Debug)
+public struct ExponentialHistogramData {
+    public let count: Int
+    public let sum: F64
+    public let min: F64
+    public let max: F64
+    public let scale: Int
+    public let zeroCount: Int
+    public let offset: Int
+    public let counts: Int[>..]
+}

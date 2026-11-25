@@ -1,0 +1,45 @@
+module Sable.Diagnostics
+
+/// W3C Trace Context: a span's context carried in a request's or a
+/// message's headers, 'traceparent' and 'tracestate', from one service to
+/// the next. Given how to set and read a header, so that it fits any
+/// carrier — HTTP headers, a message's properties, a dictionary.
+/// OpenTelemetry's TraceContextPropagator, .NET's
+/// `DistributedContextPropagator`. B3, Jaeger and baggage are #249's.
+///
+/// ```sable
+/// var headers: [String: String] = [:]
+/// let context = SpanContext.parse(traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", tracestate: "congo=t61rcWkgMzE")!
+/// TraceContextPropagator.inject(context) { name, value in headers[name] = value }
+/// assert(headers["tracestate"] == "congo=t61rcWkgMzE")
+/// let received = TraceContextPropagator.extract { headers[$0] }
+/// assert(received == context)
+/// ```
+public struct TraceContextPropagator {
+    /// The context's headers set; nothing for a context that names no span.
+    public static fn inject(_ context: SpanContext, _ put: (String, String) -> Void) {
+        if !context.isValid {
+            return
+        }
+        put("traceparent", context.traceparent)
+        if !context.traceState.isEmpty {
+            put("tracestate", context.traceState)
+        }
+    }
+
+    /// The current span's context's headers set, if there is one.
+    public static fn injectCurrent(_ put: (String, String) -> Void) {
+        if let context = Tracing.currentContext {
+            TraceContextPropagator.inject(context, put)
+        }
+    }
+
+    /// The context the headers carry, 'header' asked for each by its name, in
+    /// lowercase; none where there is none, or it is not one.
+    public static fn extract(_ header: (String) -> String?) -> SpanContext? {
+        guard let parent = header("traceparent") else {
+            return none
+        }
+        return SpanContext.parse(traceparent: parent, tracestate: header("tracestate") ?? "")
+    }
+}

@@ -1,0 +1,185 @@
+module Sable.Diagnostics
+
+import Sable.Concurrency
+
+/// A piece of work in a trace: named, timed, described by attributes and
+/// events, and the parent of the spans started while it is current
+/// (`Tracer.withSpan`). OpenTelemetry's Span, .NET's `Activity`.
+///
+/// A span nothing listens for, or that a listener chose not to record, is
+/// not recording: what is said to it costs nothing and goes nowhere, though
+/// it still carries its context to the spans under it and to other
+/// processes. Ask `isRecording` before working out an attribute that costs.
+/// A value, shared by every copy; each may be given to another task.
+///
+/// ```sable
+/// let tracer = Tracer("shop")
+/// tracer.withSpan("checkout", kind: .Server) { span in
+///     span.setAttribute(KeyValue("cart.items", 3))
+///     span.addEvent("priced")
+///     if span.isRecording {
+///         span.setAttribute(KeyValue("cart.summary", "3 items"))
+///     }
+/// }
+/// ```
+public struct Span: Sendable {
+    /// Its trace, its id and its flags: none valid where it has no trace.
+    public let context: SpanContext
+    let state: SpanState?
+
+    init(context: SpanContext, state: SpanState?) {
+        self.context = context
+        self.state = state
+    }
+
+    /// The span that is none: no trace, not recording.
+    public static var invalid: Span => Span(context: SpanContext.zero, state: none)
+
+    /// Whether what is said to it is kept, for the listeners.
+    public var isRecording: Bool => state != none
+
+    /// The attribute set, or the one of its key replaced.
+    public fn setAttribute(_ attribute: KeyValue) {
+        if let state = state {
+            state.change { data in
+                data.setAttribute(attribute)
+            }
+        }
+    }
+
+    /// Each of the attributes set.
+    public fn setAttributes(_ attributes: KeyValue[>..]) {
+        if let state = state {
+            state.change { data in
+                for attribute in attributes {
+                    data.setAttribute(attribute)
+                }
+            }
+        }
+    }
+
+    /// An event at this moment.
+    public fn addEvent(_ name: String, _ attributes: KeyValue[>..] = []) {
+        if let state = state {
+            let event = SpanEvent(name: name, time: Runtime.wallClockNanoseconds(), attributes: attributes)
+            state.change { data in
+                data.events.append(event)
+            }
+        }
+    }
+
+    /// How its work went.
+    public fn setStatus(_ status: SpanStatus) {
+        if let state = state {
+            state.change { data in
+                data.status = status
+            }
+        }
+    }
+
+    /// The error noted, as OpenTelemetry has it: an "exception" event with
+    /// its type and message, and the status an error.
+    public fn recordError(_ error: any Error) {
+        if let state = state {
+            let message = "\(error)"
+            let event = SpanEvent(name: "exception", time: Runtime.wallClockNanoseconds(), attributes: [KeyValue("exception.message", message)])
+            state.change { data in
+                data.events.append(event)
+                data.status = .Error(message)
+            }
+        }
+    }
+
+    /// Named anew: a name only known once the work has begun.
+    public fn updateName(_ name: String) {
+        if let state = state {
+            state.change { data in
+                data.name = name
+            }
+        }
+    }
+
+    /// Ended now, and given to the listeners; ending it again does nothing.
+    /// `withSpan` ends the span it starts.
+    public fn end() {
+        if let state = state {
+            state.end()
+        }
+    }
+}
+
+// What a span says of itself until it ends.
+struct SpanData {
+    var name: String
+    var attributes: KeyValue[>..]
+    var events: SpanEvent[>..]
+    var status: SpanStatus
+    var ended: Bool
+
+    mutating fn setAttribute(_ attribute: KeyValue) {
+        for i in 0..<attributes.count {
+            if attributes[i].key == attribute.key {
+                attributes[i] = attribute
+                return
+            }
+        }
+        attributes.append(attribute)
+    }
+}
+
+// A recording span: what it says, behind a lock, as any task holding it may
+// say something; and the listeners that saw it start.
+@immutable
+final class SpanState {
+    let context: SpanContext
+    let parentSpanId: SpanId?
+    let kind: SpanKind
+    let tracer: Tracer
+    let startTime: Int
+    let started: Int
+    let listeners: (any SpanListener)[>..]
+    let data: Mutex<SpanData>
+
+    init(name: String, context: SpanContext, parentSpanId: SpanId?, kind: SpanKind, tracer: Tracer, attributes: KeyValue[>..], listeners: (any SpanListener)[>..]) {
+        self.context = context
+        self.parentSpanId = parentSpanId
+        self.kind = kind
+        self.tracer = tracer
+        self.startTime = Runtime.wallClockNanoseconds()
+        self.started = Runtime.monotonicNanoseconds()
+        self.listeners = listeners
+        self.data = Mutex(SpanData { name: name, attributes: attributes, events: [], status: .Unset, ended: false })
+    }
+
+    // Said to, unless it has ended.
+    fn change(_ body: (inout SpanData) -> Void) {
+        data.withLock { held in
+            if !held.ended {
+                body(&held)
+            }
+        }
+    }
+
+    fn end() {
+        let ended = Runtime.monotonicNanoseconds()
+        let finished: SpanData? = data.withLock { held in
+            if held.ended {
+                return none
+            }
+            held.ended = true
+            return held
+        }
+        guard let done = finished else {
+            return
+        }
+        let duration = ended - started
+        let record = SpanRecord {
+            name: done.name, context: context, parentSpanId: parentSpanId, kind: kind, tracer: tracer.name, tracerVersion: tracer.version,
+            startTime: startTime, endTime: startTime + duration, attributes: done.attributes, events: done.events, status: done.status,
+            duration: duration,
+        }
+        for listener in listeners {
+            listener.ended(record)
+        }
+    }
+}

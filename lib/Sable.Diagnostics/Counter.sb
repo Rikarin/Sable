@@ -1,0 +1,41 @@
+module Sable.Diagnostics
+
+/// A sum that only grows — requests served, bytes sent — added to from any
+/// task, without a lock (`Meter.counter`). A negative amount is left out.
+/// OpenTelemetry's Counter, .NET's `Counter<T>`.
+///
+/// With no reader collecting (`MetricReader`), adding is one atomic load,
+/// and the attributes, an autoclosure, are not made.
+///
+/// ```sable
+/// let meter = Meter("shop")
+/// let orders = meter.counter("orders.placed", unit: "{order}")
+/// orders.add(1)
+/// orders.add(2, [KeyValue("payment", "card")])
+/// ```
+@immutable
+public final class Counter<Value: MetricNumber> {
+    let instrument: Instrument
+
+    init(_ instrument: Instrument) {
+        self.instrument = instrument
+    }
+
+    public var name: String => instrument.name
+
+    /// The amount added to the sum of no attributes.
+    @inline(always)
+    public fn add(_ amount: Value) {
+        if Metrics.isCollecting && amount.metricNumber >= 0.0 {
+            instrument.add(amount.metricInteger, amount.metricNumber, instrument.plain)
+        }
+    }
+
+    /// The amount added to the sum of the attributes.
+    @inline(always)
+    public fn add(_ amount: Value, _ attributes: @autoclosure () -> KeyValue[>..]) {
+        if Metrics.isCollecting && amount.metricNumber >= 0.0 {
+            instrument.add(amount.metricInteger, amount.metricNumber, instrument.series(attributes()))
+        }
+    }
+}

@@ -1,0 +1,13 @@
+module Sable.Diagnostics
+
+/// A value an observable instrument's callback gives, with its attributes
+/// (`Meter.observableGauge`). .NET's `Measurement<T>`.
+public struct Measurement<Value: MetricNumber>: Sendable {
+    public let value: Value
+    public let attributes: KeyValue[>..]
+
+    public init(_ value: Value, _ attributes: KeyValue[>..] = []) {
+        self.value = value
+        self.attributes = attributes
+    }
+}

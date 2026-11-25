@@ -2763,6 +2763,9 @@ public static class SilBuiltins {
         Add("bytes_secure_zero", SilType.Unit, SilType.Address(new SliceType(SilType.U8)));
         Add("raw_random", SilType.Unit, SilType.Int, SilType.Int);
         Add("raw_secure_zero", SilType.Unit, SilType.Int, SilType.Int);
+        // The value, through a register the optimiser cannot see into: a mask
+        // made from a secret bit stays a mask, and no branch is made of it.
+        Add("value_barrier", SilType.U64, SilType.U64);
         // Blocks of Base64 or Hex (where they go, the codec, the source), by
         // the processor's own instructions: how much of the source was done.
         Add("codec_bytes_bytes", SilType.Int, SilType.Address(new SliceType(SilType.U8)), SilType.Int, new SliceType(SilType.U8), SilType.Int);

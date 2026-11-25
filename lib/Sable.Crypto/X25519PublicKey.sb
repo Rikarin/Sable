@@ -1,0 +1,34 @@
+module Sable.Crypto
+
+import Sable.Text
+
+/// An X25519 key to agree on a secret with its holder (RFC 7748): 32 bytes,
+/// a point's u-coordinate. Any 32 bytes are one; `sharedSecret` refuses
+/// those that give the same secret to everyone.
+///
+/// ```sable
+/// let key = X25519PrivateKey.generate().publicKey
+/// assert(try! X25519PublicKey(key.bytes) == key)
+/// ```
+@derive(Equatable, Hashable)
+public struct X25519PublicKey: Hashable, Debug, Sendable {
+    /// The key's 32 bytes.
+    public let bytes: U8[>..]
+
+    /// The key those 32 bytes are.
+    public init(_ bytes: U8[:]) throws(CryptoError) {
+        if bytes.count != 32 {
+            throw CryptoError.InvalidKey(reason: "an X25519 public key of \(bytes.count) bytes, not 32")
+        }
+        self.bytes = bytes.toArray()
+    }
+
+    init(checked bytes: consuming U8[>..]) {
+        self.bytes = bytes
+    }
+
+    /// The type and the key in hexadecimal.
+    public fn debugDescription() -> String {
+        return "X25519PublicKey(" + Hex.encode(bytes) + ")"
+    }
+}

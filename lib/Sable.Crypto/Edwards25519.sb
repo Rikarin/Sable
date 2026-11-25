@@ -1,0 +1,423 @@
+module Sable.Crypto
+
+/// The twisted Edwards curve -x² + y² = 1 + dx²y² over Field25519, which
+/// Ed25519 is on. A point is X, Y, Z and T at an address: x is X/Z, y is Y/Z
+/// and T is XY/Z. The sums are the curve's complete ones (Hisil, Wong,
+/// Carter and Dawson), right for every two points. A point to be added is
+/// cached as Y + X, Y - X, 2Z and 2dT; one of a table, whose Z is 1, as the
+/// first two and 2dxy.
+///
+/// What ends in 'Public' takes a time that depends on the points and
+/// scalars, for checking signatures, which are no secret.
+struct Edwards25519 {
+    static var pointBytes: Int => 160
+
+    static var entryBytes: Int => 120
+
+    /// How many bytes an operation's scratch has.
+    static var scratchBytes: Int => 480
+
+    static var d: Int => edwardsConstants
+
+    static var doubleD: Int => edwardsConstants &+ 40
+
+    static var rootOfMinusOne: Int => edwardsConstants &+ 80
+
+    static var basePoint: Int => edwardsConstants &+ 120
+
+    /// The point that adds nothing: (0, 1).
+    unsafe static fn setIdentity(_ r: Int) {
+        Wide.setSmall(r, 0, 20)
+        Wide.put(r, 5, 1)
+        Wide.put(r, 10, 1)
+    }
+
+    /// r = 2a. T is left out where what follows does not want it.
+    unsafe static fn double(_ r: Int, _ a: Int, withT: Bool, scratch: Int) {
+        let aa = scratch
+        let bb = scratch &+ 40
+        let cc = scratch &+ 80
+        let e = scratch &+ 120
+        let g = scratch &+ 160
+        let f = scratch &+ 200
+        let h = scratch &+ 240
+        Field25519.square(aa, a)
+        Field25519.square(bb, a &+ 40)
+        Field25519.square(cc, a &+ 80)
+        Field25519.add(cc, cc, cc)
+        Field25519.add(e, a, a &+ 40)
+        Field25519.square(e, e)
+        Field25519.add(h, aa, bb)
+        Field25519.sub(e, e, h)
+        Field25519.sub(g, bb, aa)
+        Field25519.sub(f, g, cc)
+        Field25519.negate(h, h)
+        Field25519.multiply(r, e, f)
+        Field25519.multiply(r &+ 40, g, h)
+        Field25519.multiply(r &+ 80, f, g)
+        if withT {
+            Field25519.multiply(r &+ 120, e, h)
+        }
+    }
+
+    /// r = the point cached, to be added; r lies apart from it.
+    unsafe static fn cache(_ r: Int, _ a: Int) {
+        Field25519.add(r, a &+ 40, a)
+        Field25519.sub(r &+ 40, a &+ 40, a)
+        Field25519.add(r &+ 80, a &+ 80, a &+ 80)
+        Field25519.multiply(r &+ 120, a &+ 120, doubleD)
+    }
+
+    /// The sum's second half: what is at the scratch's A, B, C and D (the
+    /// products of Y - X and Y + X, 2dT and 2Z), made the point.
+    @inline(always)
+    unsafe static fn finishSum(_ r: Int, withT: Bool, scratch: Int) {
+        let a = scratch
+        let b = scratch &+ 40
+        let c = scratch &+ 80
+        let d = scratch &+ 120
+        let e = scratch &+ 160
+        let f = scratch &+ 200
+        let g = scratch &+ 240
+        let h = scratch &+ 280
+        Field25519.sub(e, b, a)
+        Field25519.sub(f, d, c)
+        Field25519.add(g, d, c)
+        Field25519.add(h, b, a)
+        Field25519.multiply(r, e, f)
+        Field25519.multiply(r &+ 40, g, h)
+        Field25519.multiply(r &+ 80, f, g)
+        if withT {
+            Field25519.multiply(r &+ 120, e, h)
+        }
+    }
+
+    /// r = a + b, or a - b, b cached.
+    unsafe static fn addCached(_ r: Int, _ a: Int, _ b: Int, subtract: Bool, withT: Bool, scratch: Int) {
+        let plus = scratch &+ 320
+        let minus = scratch &+ 360
+        Field25519.add(plus, a &+ 40, a)
+        Field25519.sub(minus, a &+ 40, a)
+        Field25519.multiply(scratch, minus, subtract ? b : b &+ 40)
+        Field25519.multiply(scratch &+ 40, plus, subtract ? b &+ 40 : b)
+        Field25519.multiply(scratch &+ 80, a &+ 120, b &+ 120)
+        Field25519.multiply(scratch &+ 120, a &+ 80, b &+ 80)
+        if subtract {
+            Field25519.negate(scratch &+ 80, scratch &+ 80)
+        }
+        finishSum(r, withT: withT, scratch: scratch)
+    }
+
+    /// r = a + b, or a - b, b a table's.
+    unsafe static fn addEntry(_ r: Int, _ a: Int, _ b: Int, subtract: Bool, withT: Bool, scratch: Int) {
+        let plus = scratch &+ 320
+        let minus = scratch &+ 360
+        Field25519.add(plus, a &+ 40, a)
+        Field25519.sub(minus, a &+ 40, a)
+        Field25519.multiply(scratch, minus, subtract ? b : b &+ 40)
+        Field25519.multiply(scratch &+ 40, plus, subtract ? b &+ 40 : b)
+        Field25519.multiply(scratch &+ 80, a &+ 120, b &+ 80)
+        Field25519.add(scratch &+ 120, a &+ 80, a &+ 80)
+        if subtract {
+            Field25519.negate(scratch &+ 80, scratch &+ 80)
+        }
+        finishSum(r, withT: withT, scratch: scratch)
+    }
+
+    /// The points made entries of a table: each Z inverted, all at once.
+    unsafe static fn makeEntries(_ r: Int, _ points: Int, count: Int) {
+        let memory = SecretMemory(count: 40 * (count + 1) + 320)
+        let products = memory.address
+        let inverse = products + 40 * (count + 1)
+        let t = inverse + 40
+        Field25519.setSmall(products, 1)
+        var i = 0
+        while i < count {
+            Field25519.multiply(products + 40 * (i + 1), products + 40 * i, points + 160 * i + 80)
+            i += 1
+        }
+        Field25519.invert(inverse, products + 40 * count, scratch: t)
+        i = count - 1
+        while i >= 0 {
+            let point = points + 160 * i
+            let entry = r + 120 * i
+            let x = t
+            let y = t + 40
+            Field25519.multiply(x, inverse, products + 40 * i)
+            Field25519.multiply(inverse, inverse, point + 80)
+            Field25519.multiply(y, point + 40, x)
+            Field25519.multiply(x, point, x)
+            Field25519.add(entry, y, x)
+            Field25519.sub(entry + 40, y, x)
+            Field25519.multiply(entry + 80, x, y)
+            Field25519.multiply(entry + 80, entry + 80, doubleD)
+            i -= 1
+        }
+    }
+
+    /// The table a scalar's multiple of the base point is summed from: 1 to
+    /// 8 times the base point, and those times 256, and so on 32 times.
+    static fn makeBaseTable() -> Int {
+        unsafe {
+            let table = NativeMemory.allocate(byteCount: 256 * entryBytes, alignment: 16).address
+            let memory = SecretMemory(count: 256 * pointBytes + 3 * pointBytes + scratchBytes)
+            let points = memory.address
+            let base = points + 256 * pointBytes
+            let cached = base + pointBytes
+            let scratch = cached + 2 * pointBytes
+            Wide.copy(base, basePoint, 20)
+            var row = 0
+            while row < 32 {
+                let first = points + 8 * pointBytes * row
+                Wide.copy(first, base, 20)
+                cache(cached, base)
+                var k = 1
+                while k < 8 {
+                    addCached(first + pointBytes * k, first + pointBytes * (k - 1), cached, subtract: false, withT: true, scratch: scratch)
+                    k += 1
+                }
+                // 8 times, and then 256.
+                Wide.copy(base, first + pointBytes * 7, 20)
+                k = 0
+                while k < 5 {
+                    double(base, base, withT: true, scratch: scratch)
+                    k += 1
+                }
+                row += 1
+            }
+            makeEntries(table, points, count: 256)
+            return table
+        }
+    }
+
+    /// The odd multiples of the base point to the 127th, for checking.
+    static fn makeOddTable() -> Int {
+        unsafe {
+            let table = NativeMemory.allocate(byteCount: 64 * entryBytes, alignment: 16).address
+            let memory = SecretMemory(count: 64 * pointBytes + 2 * pointBytes + scratchBytes)
+            let points = memory.address
+            let twice = points + 64 * pointBytes
+            let scratch = twice + 2 * pointBytes
+            Wide.copy(points, basePoint, 20)
+            double(twice, basePoint, withT: true, scratch: scratch)
+            let step = twice + pointBytes
+            cache(step, twice)
+            var i = 1
+            while i < 64 {
+                addCached(points + pointBytes * i, points + pointBytes * (i - 1), step, subtract: false, withT: true, scratch: scratch)
+                i += 1
+            }
+            makeEntries(table, points, count: 64)
+            return table
+        }
+    }
+
+    /// The table entry that is a digit times a row's point, the digit from
+    /// -8 to 8: every entry of the row is looked at.
+    @inline(always)
+    unsafe static fn chooseEntry(_ r: Int, row: Int, digit: I64) {
+        let sign = (digit >> 63) unchecked as U64
+        let magnitude = ((digit unchecked as U64) ^ sign) &- sign
+        Wide.setSmall(r, 0, 15)
+        // 0 times it is y + x = 1, y - x = 1 and nothing.
+        let unit = maskIfZero(magnitude) & 1
+        Wide.put(r, 0, unit)
+        Wide.put(r, 5, unit)
+        var i = 1
+        while i <= 8 {
+            Wide.gather(r, maskIfZero(magnitude ^ (i unchecked as U64)), row &+ 120 &* (i &- 1), 15)
+            i = i &+ 1
+        }
+        let negative = maskOf(bit: sign & 1)
+        Field25519.swap(r, r &+ 40, negative)
+        let negated = r &+ 120
+        Field25519.negate(negated, r &+ 80)
+        Wide.select(r &+ 80, negative, negated, r &+ 80, 5)
+    }
+
+    /// r = the scalar's multiple of the base point, the scalar's four limbs
+    /// under 2^255.
+    unsafe static fn multiplyBase(_ r: Int, _ scalar: Int) {
+        let memory = SecretMemory(count: 64 * 8 + 160 + scratchBytes)
+        let digits = memory.address
+        let entry = digits + 64 * 8
+        let scratch = entry + 160
+        // Sixty-four digits of four bits, from -8 to 7, the last to 8.
+        var carry: U64 = 0
+        var i = 0
+        while i < 64 {
+            let nibble = (Wide.limb(scalar, i >> 4) >> ((4 &* (i & 15)) unchecked as U64)) & 15
+            let value = nibble &+ carry
+            carry = i == 63 ? 0 : (value &+ 8) >> 4
+            Wide.put(digits, i, value &- (carry << 4))
+            i = i &+ 1
+        }
+        let table = edwardsBaseTable
+        setIdentity(r)
+        i = 1
+        while i < 64 {
+            chooseEntry(entry, row: table &+ 960 &* (i >> 1), digit: Wide.limb(digits, i) unchecked as I64)
+            addEntry(r, r, entry, subtract: false, withT: true, scratch: scratch)
+            i = i &+ 2
+        }
+        double(r, r, withT: false, scratch: scratch)
+        double(r, r, withT: false, scratch: scratch)
+        double(r, r, withT: false, scratch: scratch)
+        double(r, r, withT: true, scratch: scratch)
+        i = 0
+        while i < 64 {
+            chooseEntry(entry, row: table &+ 960 &* (i >> 1), digit: Wide.limb(digits, i) unchecked as I64)
+            addEntry(r, r, entry, subtract: false, withT: true, scratch: scratch)
+            i = i &+ 2
+        }
+    }
+
+    /// The point's encoding, as four limbs: y, and x's sign in the top bit.
+    unsafe static fn pack(_ r: Int, _ a: Int) {
+        let memory = SecretMemory(count: 360)
+        let inverse = memory.address
+        let scratch = inverse + 120
+        Field25519.invert(inverse, a &+ 80, scratch: scratch)
+        Field25519.multiply(inverse &+ 40, a, inverse)
+        Field25519.multiply(inverse &+ 80, a &+ 40, inverse)
+        Field25519.pack(r, inverse &+ 80)
+        Wide.put(r, 3, Wide.limb(r, 3) | (Field25519.lowBit(inverse &+ 40, scratch: scratch) << 63))
+    }
+
+    /// The point encoded in four limbs, and whether they encode one: not if
+    /// y is the modulus or more, is no point's, or if x is 0 and its sign
+    /// set (RFC 8032 §5.1.3).
+    unsafe static fn unpackPublic(_ r: Int, _ a: Int) -> Bool {
+        let memory = SecretMemory(count: 800)
+        let u = memory.address
+        let v = u + 40
+        let t = u + 80
+        let w = u + 120
+        let scratch = u + 160
+        let sign = Wide.limb(a, 3) >> 63
+        let y = r &+ 40
+        Field25519.unpack(y, a)
+        // As it was, but for the sign, if it was under the modulus.
+        Field25519.pack(scratch, y)
+        Wide.put(scratch, 3, Wide.limb(scratch, 3) | (sign << 63))
+        if Wide.equalMask(scratch, a, 4) == 0 {
+            return false
+        }
+        let one = r &+ 80
+        Field25519.setSmall(one, 1)
+        Field25519.square(u, y)
+        Field25519.multiply(v, u, d)
+        let minusU = scratch &+ 560
+        Field25519.sub(minusU, one, u)
+        Field25519.sub(u, u, one)
+        Field25519.add(v, v, one)
+        // x = uv³(uv⁷)^((p-5)/8), or that times a root of -1.
+        Field25519.square(t, v)
+        Field25519.multiply(t, t, v)
+        Field25519.square(w, t)
+        Field25519.multiply(w, w, v)
+        Field25519.multiply(w, w, u)
+        Field25519.powerP58(w, w, scratch: scratch)
+        Field25519.multiply(t, t, u)
+        Field25519.multiply(r, w, t)
+        Field25519.square(t, r)
+        Field25519.multiply(t, t, v)
+        if Field25519.equalMask(t, u, scratch: scratch) == 0 {
+            if Field25519.equalMask(t, minusU, scratch: scratch) == 0 {
+                return false
+            }
+            Field25519.multiply(r, r, rootOfMinusOne)
+        }
+        let bit = Field25519.lowBit(r, scratch: scratch)
+        if bit != sign {
+            if Wide.zeroMask(scratch, 4) != 0 {
+                return false
+            }
+            Field25519.negate(r, r)
+        }
+        Field25519.multiply(r &+ 120, r, y)
+        return true
+    }
+
+    /// The scalar's digits, a bit each, odd or zero and under 2^(width - 1)
+    /// either way, at most one in 'width' of them not zero.
+    unsafe static fn slidePublic(_ scalar: Int, width: U64) -> Int[>..] {
+        var digits = Int[>..](repeating: 0, count: 256)
+        let window: Int = 1 << (width unchecked as Int)
+        var carry = 0
+        var bit = 0
+        while bit < 256 {
+            let shift = (bit & 63) unchecked as U64
+            let index = bit >> 6
+            var value = Wide.limb(scalar, index) >> shift
+            if shift != 0 && index < 3 {
+                value = value | (Wide.limb(scalar, index + 1) << (64 - shift))
+            }
+            let digit = Int(value & U64(window - 1)) + carry
+            if (digit & 1) == 0 {
+                bit += 1
+                continue
+            }
+            if digit >= window / 2 {
+                digits[bit] = digit - window
+                carry = 1
+            } else {
+                digits[bit] = digit
+                carry = 0
+            }
+            bit += width unchecked as Int
+        }
+        return digits
+    }
+
+    /// r = a·A + b·B, B the base point; the scalars' four limbs under 2^253.
+    unsafe static fn multiplyPublic(_ r: Int, _ a: Int, point: Int, _ b: Int) {
+        let memory = SecretMemory(count: 8 * 160 + 320 + scratchBytes)
+        let table = memory.address
+        let twice = table + 8 * 160
+        let scratch = twice + 320
+        cache(table, point)
+        double(twice, point, withT: true, scratch: scratch)
+        var i = 1
+        while i < 8 {
+            addCached(twice + 160, twice, table + 160 * (i - 1), subtract: false, withT: true, scratch: scratch)
+            cache(table + 160 * i, twice + 160)
+            i += 1
+        }
+        let aDigits = slidePublic(a, width: 5)
+        let bDigits = slidePublic(b, width: 8)
+        let odd = edwardsOddTable
+        setIdentity(r)
+        i = 255
+        while i >= 0 && aDigits[i] == 0 && bDigits[i] == 0 {
+            i -= 1
+        }
+        while i >= 0 {
+            let first = aDigits[i]
+            let second = bDigits[i]
+            double(r, r, withT: first != 0 || second != 0, scratch: scratch)
+            if first != 0 {
+                addCached(r, r, table + 160 * ((first < 0 ? -first : first) >> 1), subtract: first < 0, withT: second != 0, scratch: scratch)
+            }
+            if second != 0 {
+                addEntry(r, r, odd + 120 * ((second < 0 ? -second : second) >> 1), subtract: second < 0, withT: false, scratch: scratch)
+            }
+            i -= 1
+        }
+    }
+}
+
+/// d, 2d and a root of -1, then the base point.
+let edwardsConstants: Int = constantTable([
+    0x34DCA135978A3, 0x1A8283B156EBD, 0x5E7A26001C029, 0x739C663A03CBB, 0x52036CEE2B6FF,
+    0x69B9426B2F159, 0x35050762ADD7A, 0x3CF44C0038052, 0x6738CC7407977, 0x2406D9DC56DFF,
+    0x61B274A0EA0B0, 0xD5A5FC8F189D, 0x7EF5E9CBD0C60, 0x78595A6804C9E, 0x2B8324804FC1D,
+    0x62D608F25D51A, 0x412A4B4F6592A, 0x75B7171A4B31D, 0x1FF60527118FE, 0x216936D3CD6E5,
+    0x6666666666658, 0x4CCCCCCCCCCCC, 0x1999999999999, 0x3333333333333, 0x6666666666666,
+    1, 0, 0, 0, 0,
+    0x68AB3A5B7DDA3, 0xEEA2A5EADBB, 0x2AF8DF483C27E, 0x332B375274732, 0x67875F0FD78B7,
+] as U64[>..])
+
+let edwardsBaseTable: Int = Edwards25519.makeBaseTable()
+
+let edwardsOddTable: Int = Edwards25519.makeOddTable()

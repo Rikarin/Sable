@@ -1,7 +1,8 @@
 module Sable.Crypto
 
-/// Why a key could not be derived, or an encoded password hash not be read.
-/// A password that is merely wrong is not an error: `verify` says false.
+/// Why a key could not be derived or read, or an encoded password hash not
+/// be read. A password or a signature that is merely wrong is not an error:
+/// `verify` and `isValid` say false.
 ///
 /// ```sable
 /// do {
@@ -22,12 +23,17 @@ public union CryptoError: Error {
     /// of an algorithm or version that is not known.
     InvalidEncoding(reason: String)
 
+    /// Bytes or text that should be a key are not one, or are one that must
+    /// not be used.
+    InvalidKey(reason: String)
+
     /// What is wrong.
     public fn description() -> String {
         return match self {
             case .InvalidParameter(let reason) => reason
             case .LimitExceeded(let reason)    => reason
             case .InvalidEncoding(let reason)  => reason
+            case .InvalidKey(let reason)       => reason
         }
     }
 }

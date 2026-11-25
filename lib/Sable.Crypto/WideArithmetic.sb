@@ -1,0 +1,274 @@
+module Sable.Crypto
+
+// Numbers as runs of 64-bit limbs at an address, the least significant
+// limb first: what the public-key algorithms are worked in. Nothing here
+// branches on a limb or indexes by one; counts of limbs are not secret. A
+// choice between two values is made with a mask, all ones or all zeros,
+// that has come through 'Native.barrier', so that the optimiser cannot know
+// it for a bit and branch on it.
+
+/// A U64 as the low half of a U128.
+@inline(always)
+fn wide(_ value: U64) -> U128 {
+    return value unchecked as U128
+}
+
+/// A U128's low 64 bits.
+@inline(always)
+fn lowHalf(_ value: U128) -> U64 {
+    return value unchecked as U64
+}
+
+/// A U128's high 64 bits.
+@inline(always)
+fn highHalf(_ value: U128) -> U64 {
+    return (value >> 64) unchecked as U64
+}
+
+/// All ones for 1, all zeros for 0.
+@inline(always)
+fn maskOf(bit: U64) -> U64 {
+    return Native.barrier(0 &- bit)
+}
+
+/// All ones for 0, all zeros for anything else.
+@inline(always)
+fn maskIfZero(_ value: U64) -> U64 {
+    return Native.barrier(((value | (0 &- value)) >> 63) &- 1)
+}
+
+/// Arithmetic on limbs at addresses. A result may lie where an operand does,
+/// unless it says not.
+struct Wide {
+    /// The limb at an index.
+    @inline(always)
+    unsafe static fn limb(_ a: Int, _ index: Int) -> U64 {
+        return load64(a &+ 8 &* index)
+    }
+
+    @inline(always)
+    unsafe static fn put(_ a: Int, _ index: Int, _ value: U64) {
+        store64(value, a &+ 8 &* index)
+    }
+
+    @inline(always)
+    unsafe static fn copy(_ r: Int, _ a: Int, _ n: Int) {
+        var i = 0
+        while i < n {
+            put(r, i, limb(a, i))
+            i = i &+ 1
+        }
+    }
+
+    /// r = a number of one limb.
+    @inline(always)
+    unsafe static fn setSmall(_ r: Int, _ value: U64, _ n: Int) {
+        put(r, 0, value)
+        var i = 1
+        while i < n {
+            put(r, i, 0)
+            i = i &+ 1
+        }
+    }
+
+    /// r = a + b, and the carry out.
+    @inline(always)
+    unsafe static fn add(_ r: Int, _ a: Int, _ b: Int, _ n: Int) -> U64 {
+        var carry: U64 = 0
+        var i = 0
+        while i < n {
+            let t = wide(limb(a, i)) &+ wide(limb(b, i)) &+ wide(carry)
+            put(r, i, lowHalf(t))
+            carry = highHalf(t)
+            i = i &+ 1
+        }
+        return carry
+    }
+
+    /// r = a - b, and the borrow out.
+    @inline(always)
+    unsafe static fn sub(_ r: Int, _ a: Int, _ b: Int, _ n: Int) -> U64 {
+        var borrow: U64 = 0
+        var i = 0
+        while i < n {
+            let t = wide(limb(a, i)) &- wide(limb(b, i)) &- wide(borrow)
+            put(r, i, lowHalf(t))
+            borrow = highHalf(t) & 1
+            i = i &+ 1
+        }
+        return borrow
+    }
+
+    /// r += b where the mask is ones, and the carry out.
+    @inline(always)
+    unsafe static fn addMasked(_ r: Int, _ b: Int, _ mask: U64, _ n: Int) -> U64 {
+        var carry: U64 = 0
+        var i = 0
+        while i < n {
+            let t = wide(limb(r, i)) &+ wide(limb(b, i) & mask) &+ wide(carry)
+            put(r, i, lowHalf(t))
+            carry = highHalf(t)
+            i = i &+ 1
+        }
+        return carry
+    }
+
+    /// r = a where the mask is ones, b where it is zeros.
+    @inline(always)
+    unsafe static fn select(_ r: Int, _ mask: U64, _ a: Int, _ b: Int, _ n: Int) {
+        var i = 0
+        while i < n {
+            put(r, i, (limb(a, i) & mask) | (limb(b, i) & ~mask))
+            i = i &+ 1
+        }
+    }
+
+    /// r |= a where the mask is ones.
+    @inline(always)
+    unsafe static fn gather(_ r: Int, _ mask: U64, _ a: Int, _ n: Int) {
+        var i = 0
+        while i < n {
+            put(r, i, limb(r, i) | (limb(a, i) & mask))
+            i = i &+ 1
+        }
+    }
+
+    /// All ones if the number is zero.
+    @inline(always)
+    unsafe static fn zeroMask(_ a: Int, _ n: Int) -> U64 {
+        var bits: U64 = 0
+        var i = 0
+        while i < n {
+            bits = bits | limb(a, i)
+            i = i &+ 1
+        }
+        return maskIfZero(bits)
+    }
+
+    /// All ones if the two are equal.
+    @inline(always)
+    unsafe static fn equalMask(_ a: Int, _ b: Int, _ n: Int) -> U64 {
+        var bits: U64 = 0
+        var i = 0
+        while i < n {
+            bits = bits | (limb(a, i) ^ limb(b, i))
+            i = i &+ 1
+        }
+        return maskIfZero(bits)
+    }
+
+    /// 1 if a < b, else 0.
+    @inline(always)
+    unsafe static fn less(_ a: Int, _ b: Int, _ n: Int) -> U64 {
+        var borrow: U64 = 0
+        var i = 0
+        while i < n {
+            borrow = highHalf(wide(limb(a, i)) &- wide(limb(b, i)) &- wide(borrow)) & 1
+            i = i &+ 1
+        }
+        return borrow
+    }
+
+    /// r = a * b, of n and m limbs, in n + m that lie apart from both.
+    unsafe static fn multiply(_ r: Int, _ a: Int, _ n: Int, _ b: Int, _ m: Int) {
+        setSmall(r, 0, n)
+        var j = 0
+        while j < m {
+            let factor = wide(limb(b, j))
+            var carry: U64 = 0
+            var i = 0
+            while i < n {
+                let t = wide(limb(a, i)) &* factor &+ wide(limb(r, i &+ j)) &+ wide(carry)
+                put(r, i &+ j, lowHalf(t))
+                carry = highHalf(t)
+                i = i &+ 1
+            }
+            put(r, n &+ j, carry)
+            j = j &+ 1
+        }
+    }
+
+    /// r = a mod m, a of 'count' limbs and m of n: a bit of a at a time, so
+    /// that it takes as long whatever either is. The 2n limbs of 'scratch'
+    /// lie apart from all.
+    unsafe static fn remainder(_ r: Int, _ a: Int, _ count: Int, _ m: Int, _ n: Int, scratch: Int) {
+        let rest = scratch
+        let reduced = scratch &+ 8 &* n
+        setSmall(rest, 0, n)
+        var bit = 64 &* count &- 1
+        while bit >= 0 {
+            var carry = (limb(a, bit >> 6) >> ((bit & 63) unchecked as U64)) & 1
+            var i = 0
+            while i < n {
+                let value = limb(rest, i)
+                put(rest, i, (value << 1) | carry)
+                carry = value >> 63
+                i = i &+ 1
+            }
+            // It is under 2m: m is taken away if it is that much or more.
+            let borrow = sub(reduced, rest, m, n)
+            select(rest, maskOf(bit: carry | (1 &- borrow)), reduced, rest, n)
+            bit = bit &- 1
+        }
+        copy(r, rest, n)
+    }
+
+    /// The bytes, most significant first, as n limbs; what there is no room
+    /// for is left out.
+    unsafe static fn fromBigEndian(_ r: Int, _ bytes: U8[:], _ n: Int) {
+        setSmall(r, 0, n)
+        let count = bytes.count
+        var i = 0
+        while i < count && i < 8 &* n {
+            let shift = (8 &* (i & 7)) unchecked as U64
+            put(r, i >> 3, limb(r, i >> 3) | (U64(bytes[count &- 1 &- i]) << shift))
+            i = i &+ 1
+        }
+    }
+
+    /// The number's low 'count' bytes, most significant first, put at the
+    /// end of the array.
+    unsafe static fn appendBigEndian(to bytes: inout U8[>..], _ a: Int, count: Int) {
+        var i = count - 1
+        while i >= 0 {
+            bytes.append((limb(a, i >> 3) >> ((8 &* (i & 7)) unchecked as U64)) unchecked as U8)
+            i -= 1
+        }
+    }
+
+    /// The bytes, least significant first, as n limbs; what there is no room
+    /// for is left out.
+    unsafe static fn fromLittleEndian(_ r: Int, _ bytes: U8[:], _ n: Int) {
+        setSmall(r, 0, n)
+        var i = 0
+        while i < bytes.count && i < 8 &* n {
+            let shift = (8 &* (i & 7)) unchecked as U64
+            put(r, i >> 3, limb(r, i >> 3) | (U64(bytes[i]) << shift))
+            i = i &+ 1
+        }
+    }
+
+    /// The number's low 'count' bytes, least significant first, put at the
+    /// end of the array.
+    unsafe static fn appendLittleEndian(to bytes: inout U8[>..], _ a: Int, count: Int) {
+        var i = 0
+        while i < count {
+            bytes.append((limb(a, i >> 3) >> ((8 &* (i & 7)) unchecked as U64)) unchecked as U8)
+            i += 1
+        }
+    }
+
+    /// How many bits the number has, which is told: not for a secret whose
+    /// length is one.
+    unsafe static fn bitCount(_ a: Int, _ n: Int) -> Int {
+        var i = n - 1
+        while i >= 0 {
+            let value = limb(a, i)
+            if value != 0 {
+                return 64 * i + 64 - value.leadingZeroCount
+            }
+            i -= 1
+        }
+        return 0
+    }
+}

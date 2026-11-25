@@ -1476,6 +1476,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case SilBuiltins.BlackBox:
                 return null;
 
+            case "value_barrier":
+                return operands[0];
+
             case "string_count":
                 return (long)Text(operands[0]).Scalars.Count;
 

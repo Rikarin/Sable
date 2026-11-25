@@ -1,0 +1,171 @@
+module Sable.Crypto
+
+/// An X25519 key to agree on a secret with (RFC 7748): two people who each
+/// hold one and the other's public key work out the same 32 bytes. Those
+/// are no key yet: derive one from them, and from what both sides know, with
+/// `Hkdf`.
+///
+/// ```sable
+/// let mine = X25519PrivateKey.generate()
+/// let yours = X25519PrivateKey.generate()
+/// let secret = try! mine.sharedSecret(with: yours.publicKey)
+/// assert(try! yours.sharedSecret(with: mine.publicKey) == secret)
+/// let key = try! Hkdf<Sha256>.deriveKey(from: secret, salt: [], info: [], byteCount: 32)
+/// assert(key.byteCount == 32)
+/// ```
+public struct X25519PrivateKey: Equatable, Debug, Sendable {
+    let memory: SecretMemory
+
+    /// The key others agree on a secret with.
+    public let publicKey: X25519PublicKey
+
+    /// The key those 32 bytes are. Its bits that RFC 7748 fixes are fixed as
+    /// it is used, so that any bytes are a key, and read back as given.
+    public init(_ bytes: U8[:]) throws(CryptoError) {
+        if bytes.count != 32 {
+            throw CryptoError.InvalidKey(reason: "an X25519 private key of \(bytes.count) bytes, not 32")
+        }
+        self.init(checked: bytes)
+    }
+
+    init(checked bytes: U8[:]) {
+        memory = SecretMemory(bytes)
+        // On the Edwards curve, whose table makes it quick: u is
+        // (Z + Y)/(Z - Y).
+        let work = SecretMemory(count: 32 + 160 + 80 + 40 + 240)
+        let scalar = work.address
+        let point = scalar + 32
+        let sum = point + 160
+        let scratch = sum + 120
+        var encoded: U8[>..] = []
+        unsafe {
+            X25519PrivateKey.clamp(scalar, memory.address)
+            Edwards25519.multiplyBase(point, scalar)
+            Field25519.sub(sum, point + 80, point + 40)
+            Field25519.invert(sum, sum, scratch: scratch)
+            Field25519.add(sum + 40, point + 80, point + 40)
+            Field25519.multiply(sum, sum, sum + 40)
+            Field25519.pack(scalar, sum)
+            Wide.appendLittleEndian(to: &encoded, scalar, count: 32)
+        }
+        publicKey = X25519PublicKey(checked: encoded)
+    }
+
+    /// A new key from the system's random source.
+    public static fn generate() -> X25519PrivateKey {
+        var bytes = SecureRandom.bytes(32)
+        let key = X25519PrivateKey(checked: bytes)
+        bytes.zeroSecurely()
+        return key
+    }
+
+    /// The key's 32 bytes.
+    public fn bytes() -> U8[>..] {
+        return memory.bytes(from: 0, count: 32)
+    }
+
+    /// The bytes at an address as a scalar's four limbs, a multiple of 8
+    /// whose top bit is the 254th.
+    unsafe static fn clamp(_ r: Int, _ bytes: Int) {
+        var i = 0
+        while i < 4 {
+            let word = load64(bytes &+ 8 &* i)
+            Wide.put(r, i, Endian.native == .Little ? word : word.byteSwapped)
+            i += 1
+        }
+        Wide.put(r, 0, Wide.limb(r, 0) & ~7)
+        Wide.put(r, 3, (Wide.limb(r, 3) & 0x7FFFFFFFFFFFFFFF) | 0x4000000000000000)
+    }
+
+    /// The 32 bytes both sides come to. It throws where the other's key is a
+    /// point of small order, with which they would be zeros whatever this
+    /// key is (RFC 7748 §6.1).
+    public fn sharedSecret(with other: X25519PublicKey) throws(CryptoError) -> SymmetricKey {
+        let secret = SecretMemory(count: 32)
+        var zero: U64 = 0
+        unsafe {
+            let work = SecretMemory(count: 64 + 15 * 40)
+            X25519PrivateKey.clamp(work.address, memory.address)
+            Wide.fromLittleEndian(work.address + 32, other.bytes, 4)
+            X25519PrivateKey.ladder(secret.address, work.address, work.address + 32, work.address + 64)
+            zero = Wide.zeroMask(secret.address, 4)
+            if Endian.native != .Little {
+                var i = 0
+                while i < 4 {
+                    Wide.put(secret.address, i, Wide.limb(secret.address, i).byteSwapped)
+                    i += 1
+                }
+            }
+        }
+        if zero != 0 {
+            throw CryptoError.InvalidKey(reason: "an X25519 public key of small order")
+        }
+        return SymmetricKey(memory: secret)
+    }
+
+    /// The Montgomery ladder of RFC 7748 §5: at each bit of the scalar the
+    /// two points change places or not, by a mask.
+    unsafe static fn ladder(_ r: Int, _ scalar: Int, _ u: Int, _ work: Int) {
+        let x1 = work
+        let x2 = work &+ 40
+        let z2 = work &+ 80
+        let x3 = work &+ 120
+        let z3 = work &+ 160
+        let a = work &+ 200
+        let b = work &+ 240
+        let c = work &+ 280
+        let d = work &+ 320
+        let scratch = work &+ 360
+        Field25519.unpack(x1, u)
+        Field25519.setSmall(x2, 1)
+        Field25519.setSmall(z2, 0)
+        Field25519.copy(x3, x1)
+        Field25519.setSmall(z3, 1)
+        var swapped: U64 = 0
+        var bit = 254
+        while bit >= 0 {
+            let next = (Wide.limb(scalar, bit >> 6) >> ((bit & 63) unchecked as U64)) & 1
+            let mask = maskOf(bit: swapped ^ next)
+            Field25519.swap(x2, x3, mask)
+            Field25519.swap(z2, z3, mask)
+            swapped = next
+            Field25519.add(a, x2, z2)
+            Field25519.sub(b, x2, z2)
+            Field25519.add(c, x3, z3)
+            Field25519.sub(d, x3, z3)
+            Field25519.multiply(d, d, a)
+            Field25519.multiply(c, c, b)
+            Field25519.add(x3, d, c)
+            Field25519.square(x3, x3)
+            Field25519.sub(z3, d, c)
+            Field25519.square(z3, z3)
+            Field25519.multiply(z3, z3, x1)
+            Field25519.square(a, a)
+            Field25519.square(b, b)
+            Field25519.multiply(x2, a, b)
+            Field25519.sub(c, a, b)
+            Field25519.multiplySmall(d, c, 121665)
+            Field25519.add(d, d, a)
+            Field25519.multiply(z2, c, d)
+            bit = bit &- 1
+        }
+        let mask = maskOf(bit: swapped)
+        Field25519.swap(x2, x3, mask)
+        Field25519.swap(z2, z3, mask)
+        Field25519.invert(z2, z2, scratch: scratch)
+        Field25519.multiply(x2, x2, z2)
+        Field25519.pack(r, x2)
+    }
+
+    /// Whether the two are the same key, in constant time.
+    public operator == (lhs: X25519PrivateKey, rhs: X25519PrivateKey) -> Bool {
+        unsafe {
+            return Wide.equalMask(lhs.memory.address, rhs.memory.address, 4) != 0
+        }
+    }
+
+    /// What kind of key it is, and not what it is.
+    public fn debugDescription() -> String {
+        return "X25519PrivateKey"
+    }
+}

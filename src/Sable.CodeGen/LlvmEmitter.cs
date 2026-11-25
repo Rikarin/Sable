@@ -4838,6 +4838,12 @@ public sealed partial class LlvmEmitter {
                     Line($"call void asm sideeffect \"\", \"r,~{{memory}}\"(ptr {operands[0]})");
                     return;
 
+                // An empty assembly statement whose result is its operand, in a
+                // register: nothing is stored, and LLVM knows nothing of it.
+                case "value_barrier":
+                    Line($"{Result()} = call i64 asm \"\", \"=r,0\"(i64 {operands[0]})");
+                    return;
+
                 // The only reference, and not immortal: free to change in place.
                 case "ref_is_unique": {
                     var objectPointer = Fresh();

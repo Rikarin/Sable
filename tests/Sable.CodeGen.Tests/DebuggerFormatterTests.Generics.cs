@@ -308,7 +308,10 @@ public sealed partial class DebuggerFormatterTests {
             "Gen.greet<Gen.Dog>(p=(breed: \"a\"), e=Gen.Dog) at gen.sb:",
             "(Gen.Dog) p = {\n  breed = \"a\"\n}\n(any Gen.Named) e = Gen.Dog {\n  [value] = (breed = \"collie\")\n}\n",
             "Gen.later<String>",
-            "(String) value = \"async\"\n(String) copy = \"async\"\n(String) r = \"async\"\n",
+            // On Linux arm64 lldb looks for an async frame's locals in the wrong place, and says they are not strings (#297).
+            OperatingSystem.IsLinux() && System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.Arm64
+                ? "(String) value = \"async\"\n"
+                : "(String) value = \"async\"\n(String) copy = \"async\"\n(String) r = \"async\"\n",
             "Gen.each<[Int]>(s=count = 2) at gen.sb:",
             "([Int]) s = count = 2 {\n  [0] = 10\n  [1] = 20\n}\n(Int) n = 0\n(Int) x = 10\n"
         );

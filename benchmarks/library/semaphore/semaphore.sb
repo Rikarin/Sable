@@ -1,0 +1,33 @@
+module SemaphoreBench
+
+import Sable.Concurrency
+
+// AsyncSemaphore of two permits: eight tasks, each taking one and giving it
+// back ten thousand times.
+
+@main
+fn main() async {
+    let semaphore = AsyncSemaphore(permits: 2)
+    let inside = Atomic<Int>(0)
+    let total = await withTaskGroup(of: Int.self) { group -> Int in
+        for _ in 0..<8 {
+            group.spawn {
+                var most = 0
+                for _ in 0..<10000 {
+                    await semaphore.acquire()
+                    let now = inside.add(1, ordering: .Relaxed) + 1
+                    most = now > most ? now : most
+                    inside.add(-1, ordering: .Relaxed)
+                    await semaphore.release()
+                }
+                return most <= 2 ? 10000 : 0
+            }
+        }
+        var all = 0
+        for await part in group {
+            all += part
+        }
+        return all
+    }
+    print(total)
+}

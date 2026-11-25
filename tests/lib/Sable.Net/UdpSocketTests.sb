@@ -186,6 +186,8 @@ fn aSocketsOptionsAreWhatTheyWereSetTo() async {
         try a.setMulticastHopLimit(3)
         assertEqual(try a.multicastHopLimit(), 3)
         assert((await thrown { try a.setMulticastHopLimit(256) }) != "")
+        assert((await thrown { try a.setMulticastHopLimit(-1) }) != "")
+        assert((await thrown { try a.join(group: IpAddress.v4Loopback) }) != "")
         let six = try UdpSocket.bind(SocketAddress(.v6Loopback, port: 0))
         try six.setHopLimit(9)
         assertEqual(try six.hopLimit(), 9)

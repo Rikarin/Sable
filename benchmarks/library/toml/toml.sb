@@ -1,0 +1,51 @@
+module TomlBench
+
+import Sable.Serialize
+
+// TOML: two thousand packages of a lock file, derived both ways, written
+// and read back, four times over, then the text parsed to a table and
+// written from it. Sable only.
+
+@derive(Serializable)
+struct Package {
+    var name: String
+    var version: String
+    var size: Int
+    var weight: F64
+    var optional: Bool
+    var features: String[>..]
+    var source: Source
+}
+
+@derive(Serializable)
+struct Source {
+    var url: String
+    var checksum: String?
+}
+
+@derive(Serializable)
+struct Lock {
+    var title: String
+    var packages: Package[>..]
+}
+
+@main
+fn main() throws {
+    var lock = Lock(title: "lock \"file\"", packages: [])
+    for i in 0..<2000 {
+        let source = Source(url: "https://example.org/p/\(i)", checksum: i % 3 == 0 ? none : "c\(i * 7919)")
+        lock.packages.append(
+            Package(name: "package-\(i)", version: "\(i % 5).\(i % 11).\(i % 17)", size: i * 31, weight: F64(i) + 0.5, optional: i % 4 == 0, features: ["a\(i)", "b\(i % 13)"], source: source))
+    }
+    var length = 0
+    var size = 0
+    for _ in 0..<4 {
+        let text = try Toml.encode(lock)
+        length += text.utf8.count
+        for found in (try Toml.decode(Lock.self, from: text)).packages {
+            size += found.size
+        }
+        length += (try Toml.write(try Toml.parse(text))).utf8.count
+    }
+    print("\(length) \(size)")
+}

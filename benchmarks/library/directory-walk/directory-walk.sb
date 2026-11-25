@@ -1,0 +1,36 @@
+module DirectoryWalkBench
+
+import Sable.IO
+
+// A tree of two thousand empty files in a hundred directories: made,
+// walked twenty times, each entry's kind and path looked at, and removed.
+// The paths are absolute, as resolving a relative one is costly in .NET.
+
+@main
+fn main() throws(IoError) {
+    let root = FilePath("directory-walk-sable").absolute().string!
+    for i in 0..<10 {
+        for j in 0..<10 {
+            let directory = "\(root)/branch \(i)/leaf \(j)"
+            try Directory.create(directory, recursive: true)
+            for k in 0..<20 {
+                try File.writeBytes("\(directory)/file \(k).txt", [])
+            }
+        }
+    }
+    var files = 0
+    var directories = 0
+    var characters = 0
+    for _ in 0..<20 {
+        for try entry in try Directory.walk(root) {
+            if entry.isDirectory {
+                directories += 1
+            } else {
+                files += 1
+            }
+            characters += entry.path.string!.utf8.count - root.utf8.count
+        }
+    }
+    try Directory.remove(root, recursive: true)
+    print("\(files) \(directories) \(characters)")
+}

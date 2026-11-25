@@ -1,0 +1,26 @@
+module StackBench
+
+import Sable.Collections
+
+// Stack<Int>: five million numbers through a stack that stays a thousand
+// high, then through one that grows to two million.
+
+@main
+fn main() {
+    let stack = Stack<Int>()
+    var total = 0
+    for i in 0..<1000 {
+        stack.push(i)
+    }
+    for i in 0..<5000000 {
+        stack.push(i)
+        total += stack.pop()!
+    }
+    for i in 0..<2000000 {
+        stack.push(i)
+    }
+    while let value = stack.pop() {
+        total += value
+    }
+    print(total)
+}

@@ -1,0 +1,26 @@
+module ComplexFunctionsBench
+
+import Sable.Math
+
+// Complex<F64>'s elementary functions, thirteen of them, and the polar form
+// and back, at each of 72,000 points off the branch cuts. The sums are
+// printed to few enough places that a last bit does not show.
+
+@main
+fn main() {
+    var total = Complex<F64>.zero
+    var magnitudes = 0.0
+    for row in 0..<480 {
+        for column in 0..<150 {
+            let z = Complex(F64(column) / 60.0 - 1.246, F64(row) / 180.0 - 1.329)
+            let w = Complex(F64(column) / 150.0 + 0.5, 0.25)
+            total = total + exp(z) + log(z) + sqrt(z) + pow(z, w)
+            total = total + sin(z) + cos(z) + sinh(z) + cosh(z)
+            total = total + tan(z) + tanh(z)
+            total = total + asin(z) + acos(z) + atan(z)
+            magnitudes += z.magnitude + z.phase
+            total = total + Complex(magnitude: z.magnitude, phase: z.phase)
+        }
+    }
+    print("\(total.real:.2f) \(total.imaginary:.2f) \(magnitudes:.2f)")
+}

@@ -1,0 +1,40 @@
+module FileMetadataBench
+
+import Sable.IO
+import Sable.Time
+
+// File.metadata: the size, time and kind of each of two hundred files,
+// their times set first, two hundred times over, and as often whether a
+// file that is not there exists.
+// The paths are absolute, as resolving a relative one is costly in .NET.
+
+@main
+fn main() throws(IoError) {
+    let root = FilePath("file-metadata-sable").absolute().string!
+    try Directory.create(root)
+    var paths: String[>..] = []
+    for i in 0..<200 {
+        let path = "\(root)/file \(i).txt"
+        try File.writeBytes(path, U8[>..](repeating: 1, count: i))
+        try File.setModified(path, UtcDateTime.fromUnix(1700000000 + i))
+        paths.append(path)
+    }
+    var size = 0
+    var seconds = 0
+    var files = 0
+    for _ in 0..<200 {
+        for path in paths {
+            let metadata = try File.metadata(path)
+            size += metadata.size
+            seconds += metadata.modified.unixMilliseconds / 1000 - 1700000000
+            if metadata.isFile {
+                files += 1
+            }
+            if File.exists("\(path).gone") {
+                files += 1
+            }
+        }
+    }
+    try Directory.remove(root, recursive: true)
+    print("\(size) \(seconds) \(files)")
+}

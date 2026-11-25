@@ -141,6 +141,8 @@ fn aPortIsFreeAgainThoughItsConnectionsStillClose() async {
     }
 }
 
+// Windows has no such sharing: it is Unsupported there.
+#if !os(windows)
 @test
 fn severalListenersShareAPortThatAllSayTheyShare() {
     do {
@@ -151,6 +153,8 @@ fn severalListenersShareAPortThatAllSayTheyShare() {
         assert(false, error.description())
     }
 }
+
+#endif
 
 @test
 fn anIpv6ListenerTakesIpv6AloneUnlessTold() async {

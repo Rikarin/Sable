@@ -1,0 +1,18 @@
+module ProcessSpawnBench
+
+import Sable.Process
+
+// Command: a hundred runs of /bin/echo, what each printed read.
+// The time is the children's too.
+
+@main
+fn main() async throws {
+    var total = 0
+    for i in 0..<100 {
+        let done = try await Command("/bin/echo").argument("\(i)").output()
+        if done.succeeded {
+            total += try Int.parse(done.output.trimmed())
+        }
+    }
+    print(total)
+}

@@ -1,0 +1,20 @@
+module DistributionsBench
+
+import Sable.Math
+
+// NormalDistribution and ExponentialDistribution: five million of each,
+// their means in tenths. Sable only: .NET has none.
+
+@main
+fn main() {
+    var generator = SeededRandomNumberGenerator(seed: 1)
+    let normal = NormalDistribution(mean: 10.0, standardDeviation: 2.0)
+    let exponential = ExponentialDistribution(rate: 0.5)
+    var normals = 0.0
+    var exponentials = 0.0
+    for _ in 0..<5000000 {
+        normals += normal.sample(using: &generator)
+        exponentials += exponential.sample(using: &generator)
+    }
+    print("\((normals / 500000.0).rounded()) \((exponentials / 500000.0).rounded())")
+}

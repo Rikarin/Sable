@@ -1,0 +1,32 @@
+module ChannelBoundedBench
+
+import Sable.Concurrency
+
+// Channel<Int> with room for sixty-four: four tasks send twenty-five
+// thousand numbers each, waiting when it is full, and another receives them.
+
+@main
+fn main() async {
+    let channel = Channel<Int>(capacity: 64)
+    var producers: Task<Void>[>..] = []
+    for p in 0..<4 {
+        producers.append(
+            Task.spawn {
+                for i in 0..<25000 {
+                    await channel.send(i + p)
+                }
+            })
+    }
+    let consumer = Task.spawn {
+        var total = 0
+        for await value in channel {
+            total += value
+        }
+        return total
+    }
+    for producer in producers {
+        await producer.value
+    }
+    await channel.close()
+    print(await consumer.value)
+}

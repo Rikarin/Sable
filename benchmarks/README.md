@@ -9,7 +9,7 @@ A folder for each benchmark, with the Sable program and its ports side by side:
 
 - `library/` — the standard library, a benchmark for each type or function
   worth timing. A port exists where the language's own standard library has an
-  equal.
+  equal; where none has, the Sable program is alone, so that a slowdown is seen.
 - `programs/` — whole programs, for the language itself. The C ports follow
   [rules of their own](programs/README.md).
 - `concurrency/` — tasks, timed by the programs themselves

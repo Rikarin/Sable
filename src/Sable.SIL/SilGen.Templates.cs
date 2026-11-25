@@ -128,7 +128,8 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                if (type.TypeKind is TypeKind.Struct or TypeKind.Class or TypeKind.Union && IsPlainGeneric(type) && !type.TypeParameters.Any(static p => p.IsValue || p.AllowsNoncopyable)
+                // Optional's declaration carries members alone: 'T?' is laid out as no union of its is.
+                if (type is { ExtendedOptional: null, ExtendedArray: null, TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Union } && IsPlainGeneric(type) && !type.TypeParameters.Any(static p => p.IsValue || p.AllowsNoncopyable)
                     && DeclaredProtocols(type, conditional: true).Any(asked.Contains) && _programInstances.Add(type)) {
                     Opening();
                     using (Opaque(new GenericShape(type.TypeParameters, [])))
@@ -170,7 +171,7 @@ public sealed partial class SilGen {
 
     /// <summary>The template table of a generic type's conformance to a protocol, for its instance made at run time; none when an entry cannot be made.</summary>
     void TemplateTable(NamedTypeSymbol definition, NominalType instance, NamedTypeSymbol protocol, ImmutableArray<(TypeParameterSymbol, NamedTypeSymbol)> required) {
-        if (!IsTabledProtocol(protocol) || !protocol.TypeParameters.IsEmpty
+        if (!IsTabledProtocol(protocol) || !protocol.TypeParameters.IsEmpty || definition.ExtendedOptional is not null || definition.ExtendedArray is not null
             || Bases(protocol).Any(b => _module.FindWitnessTable(instance, QualifiedName(b)) is null)
             || (definition.DeclaringSyntax.FirstOrDefault() ?? protocol.DeclaringSyntax.FirstOrDefault()) is not { } at) {
             return;

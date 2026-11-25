@@ -93,6 +93,13 @@ and run it, natively and in the interpreter. What keeps it quicker:
   its own file of a library module has the whole library checked with it,
   as before; `SABLE_CHECK_LIBRARY=1` does that for every program, to compare
   against.
+- **Both ways of declaring the library.** A build against the cache takes the
+  standard library's declarations from its entry rather than its source
+  (docs/05 §5.4, "Declarations from the interface"); a compilation made in a
+  test declares them from source. `SABLE_LIBRARY_SYMBOLS=interface` makes every
+  compilation that can take them from symbols made in the process — CI runs
+  `Sable.Symbols.Tests` both ways — and `SABLE_LIBRARY_SYMBOLS=source` makes
+  builds declare the source, to compare against.
 - **Native builds where they matter.** A test that holds native code and the
   interpreter to the same answer (`Programs.AssertAgree`) builds the program
   natively only if it, or its class, is marked `[Native]`: tests of layout,

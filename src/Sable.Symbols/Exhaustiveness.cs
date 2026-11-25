@@ -649,8 +649,7 @@ internal sealed class Exhaustiveness(CoreTypes core) {
             return false;
         }
 
-        return union.OriginalDefinition.DeclaringSyntax is not [var declaration, ..]
-            || !Compilation.AttributesOf(declaration).Any(static a => Compilation.AttributeName(a) == "frozen");
+        return union.OriginalDefinition.GetAttribute("frozen") is not { FromExtension: false };
     }
 
     // ---- Witnesses ----------------------------------------------------------

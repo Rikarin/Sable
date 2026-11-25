@@ -358,8 +358,88 @@ public sealed partial class SilGen {
         }
     }
 
+    /// <summary>
+    ///     A function lowering may lower, where it is declared: its syntax, read
+    ///     from a library's file when that is first asked for when the library's
+    ///     declarations came from its interface.
+    /// </summary>
+    readonly struct FunctionSource(FunctionSymbol symbol, SyntaxNode? declared, SemanticModel model) {
+        public FunctionSymbol Symbol { get; } = symbol;
+        public SyntaxNode Syntax => declared ?? Symbol.DeclaringSyntax[0];
+
+        /// <summary>The syntax where it is known without reading a library's file for it, which a place to report something of the library's is not worth.</summary>
+        public SyntaxNode SyntaxOr(SyntaxNode other) => declared ?? other;
+
+        public SemanticModel Model { get; } = model;
+
+        public void Deconstruct(out SyntaxNode syntax, out SemanticModel model) => (syntax, model) = (Syntax, Model);
+    }
+
+    /// <summary>
+    ///     Whether a file's declarations are listed from a library's interface
+    ///     the compilation took them from: those of a file whose functions this
+    ///     lowering only declares. One it lowers has what is declared in its
+    ///     bodies too, which only its syntax says.
+    /// </summary>
+    bool TakesInterface(SyntaxTree tree) =>
+        _compilation.IsFromInterface(tree) && (_evaluation is not null ? _unchecked?.Invoke(tree) == true : _unit is not null && !_unit.Owns(tree));
+
+    /// <summary>
+    ///     The functions of a library's file whose declarations came from its
+    ///     interface: those its outline has (<see cref="SilProgram" />), in the
+    ///     same order, without reading the file.
+    /// </summary>
+    void AddFromInterface(SyntaxTree tree, SemanticModel model, List<FunctionSource> functions) {
+        var declarations = _compilation.InterfaceDeclarations(tree);
+        foreach (var declared in declarations) {
+            if (declared is FunctionSymbol { FunctionKind: FunctionKind.Ordinary or FunctionKind.Initializer or FunctionKind.Deinitializer or FunctionKind.Operator } symbol
+                && IsLowerable(symbol)) {
+                functions.Add(new(symbol, null, model));
+            }
+        }
+
+        foreach (var field in declarations.OfType<FieldSymbol>()) {
+            foreach (var (accessor, isRequirement) in _compilation.InterfaceAccessors(field)) {
+                if (isRequirement) {
+                    if (accessor.IsMutating) {
+                        _setters[field] = accessor;
+                    }
+                } else if (IsLowerable(accessor)) {
+                    (accessor.IsMutating ? _setters : _getters)[field] = accessor;
+                    functions.Add(new(accessor, null, model));
+                }
+            }
+        }
+
+        foreach (var subscript in declarations.OfType<FunctionSymbol>()) {
+            if (subscript is not { FunctionKind: FunctionKind.Subscript, IsStatic: false } || !IsLowerable(subscript)) {
+                continue;
+            }
+
+            var accessors = _compilation.InterfaceAccessors(subscript).ToList();
+            if (subscript.IsExpressionBodied) {
+                _subscriptGetters[subscript] = subscript;
+                functions.Add(new(subscript, null, model));
+                continue;
+            }
+
+            foreach (var (accessor, isRequirement) in accessors) {
+                if (isRequirement) {
+                    if (accessor.IsMutating) {
+                        _subscriptSetters[subscript] = accessor;
+                    }
+                } else {
+                    (accessor.IsMutating ? _subscriptSetters : _subscriptGetters)[subscript] = accessor;
+                    functions.Add(new(accessor, null, model));
+                }
+            }
+        }
+    }
+
     /// <summary>A file's declarations that lowering looks at — and perhaps other nodes, which each use filters out.</summary>
-    IEnumerable<SyntaxNode> Declarations(SyntaxTree tree) => _program?.Declarations(tree, _unit is null || _unit.Owns(tree)) ?? tree.Root.DescendantNodes();
+    IEnumerable<SyntaxNode> Declarations(SyntaxTree tree) =>
+        _program?.Declarations(tree, _evaluation is not null ? !(Unchecked(tree) && CoreLibrary.IsStandardLibrary(tree.Header.Module)) : _unit is null || _unit.Owns(tree))
+        ?? tree.Root.DescendantNodes();
 
     void LowerAll() {
         // Constants are computed, and comptime blocks run, before anything
@@ -368,7 +448,7 @@ public sealed partial class SilGen {
         if (_evaluation is null) {
             // What this lowering does not check, without this generator.
             var (unit, onDemand) = (_unit, _onDemand);
-            _constants = ConstantsOf(_compilation, tree => unit is not null && !unit.Owns(tree) || onDemand?.Invoke(tree) == true);
+            _constants = ConstantsOf(_compilation, tree => unit is not null && !unit.Owns(tree) || onDemand?.Invoke(tree) == true, _program);
             foreach (var (diagnostic, tree) in _constants.Diagnostics) {
                 if (diagnostic.Code is ErrorCode.ERR_ConstantEvaluationFailed or ErrorCode.ERR_ConstantOverflow or ErrorCode.ERR_CompileError && (_unit is null || _unit.Owns(tree))) {
                     _diagnostics.Add(diagnostic);
@@ -376,10 +456,15 @@ public sealed partial class SilGen {
             }
         }
 
-        var functions = new List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)>();
+        var functions = new List<FunctionSource>();
 
         foreach (var tree in _compilation.SyntaxTrees) {
             var model = _compilation.GetSemanticModel(tree);
+            if (TakesInterface(tree)) {
+                AddFromInterface(tree, model, functions);
+                continue;
+            }
+
             foreach (var declaration in Declarations(tree)) {
                 if (declaration is not (FunctionDeclarationSyntax or InitDeclarationSyntax or DeinitDeclarationSyntax or OperatorDeclarationSyntax)) {
                     continue;
@@ -389,7 +474,7 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                functions.Add((symbol, declaration, model));
+                functions.Add(new(symbol, declaration, model));
             }
 
             // A computed property's getter and setter: methods of the type,
@@ -404,7 +489,7 @@ public sealed partial class SilGen {
                 }
 
                 if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword or SyntaxKind.WillSetKeyword or SyntaxKind.DidSetKeyword)
-                    || (Binds(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
+                    || (Unchecked(tree) ? model.GetAccessorDeclaration(accessor) : model.GetAccessorSymbol(accessor))
                         is not { ContainingSymbol: FieldSymbol field } function
                     || !IsLowerable(function)) {
                     continue;
@@ -416,7 +501,7 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                functions.Add((function, accessor, model));
+                functions.Add(new(function, accessor, model));
             }
 
             // A subscript: its getter and setter, methods of the type taking
@@ -430,7 +515,7 @@ public sealed partial class SilGen {
 
                 if (declaration.ExpressionBody is not null) {
                     _subscriptGetters[subscript] = subscript;
-                    functions.Add((subscript, declaration, model));
+                    functions.Add(new(subscript, declaration, model));
                     continue;
                 }
 
@@ -442,13 +527,13 @@ public sealed partial class SilGen {
                     }
 
                     if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword)
-                        || (Binds(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
+                        || (Unchecked(tree) ? model.GetAccessorDeclaration(accessor) : model.GetAccessorSymbol(accessor))
                             is not { } function) {
                         continue;
                     }
 
                     (accessor.Keyword.Kind == SyntaxKind.GetKeyword ? _subscriptGetters : _subscriptSetters)[subscript] = function;
-                    functions.Add((function, accessor, model));
+                    functions.Add(new(function, accessor, model));
                 }
             }
         }
@@ -464,7 +549,7 @@ public sealed partial class SilGen {
         // The container is compared by reference, as a symbol is itself.
         var none = new object();
         var sharing = new Dictionary<object, Dictionary<string, int>>(ReferenceEqualityComparer.Instance);
-        foreach (var (symbol, _, _) in functions) {
+        foreach (var symbol in functions.Select(static f => f.Symbol)) {
             var container = (object?)symbol.ContainingSymbol ?? none;
             if (!sharing.TryGetValue(container, out var names)) {
                 sharing[container] = names = new(StringComparer.Ordinal);
@@ -473,7 +558,7 @@ public sealed partial class SilGen {
             names[symbol.Name] = names.GetValueOrDefault(symbol.Name) + 1;
         }
 
-        foreach (var (symbol, _, _) in functions) {
+        foreach (var symbol in functions.Select(static f => f.Symbol)) {
             var overloaded = sharing[(object?)symbol.ContainingSymbol ?? none][symbol.Name] > 1;
             _names[symbol] = Mangle(symbol, overloaded);
         }
@@ -497,8 +582,11 @@ public sealed partial class SilGen {
         // Which classes something inherits from: their methods dispatch
         // (and, compiled separately, those anything may: IsInherited).
         foreach (var tree in _compilation.SyntaxTrees) {
-            foreach (var declaration in Declarations(tree).OfType<ClassDeclarationSyntax>()) {
-                if (_compilation.GetDeclaredSymbol(declaration) is NamedTypeSymbol type && SuperclassOf(type) is { } superclass) {
+            var classes = TakesInterface(tree)
+                ? _compilation.InterfaceDeclarations(tree).Where(static s => s is NamedTypeSymbol { TypeKind: TypeKind.Class })
+                : Declarations(tree).OfType<ClassDeclarationSyntax>().Select(_compilation.GetDeclaredSymbol);
+            foreach (var declared in classes) {
+                if (declared is NamedTypeSymbol type && SuperclassOf(type) is { } superclass) {
                     for (var ancestor = (NamedTypeSymbol?)superclass; ancestor is not null; ancestor = SuperclassOf(ancestor)) {
                         _inherited.Add(ancestor.OriginalDefinition);
                     }
@@ -514,8 +602,8 @@ public sealed partial class SilGen {
             ).Symbol
             ?? functions.FirstOrDefault(static f => f.Symbol is { Name: "main", ContainingSymbol: ModuleSymbol }).Symbol;
 
-        foreach (var (symbol, syntax, model) in functions) {
-            _declarations[symbol] = (syntax, model);
+        foreach (var function in functions) {
+            _declarations[function.Symbol] = function;
         }
 
         // Separately, the unit the program starts in sets up every global;
@@ -531,8 +619,9 @@ public sealed partial class SilGen {
 
         // What is not generic is lowered as it is; what is, once for each set
         // of type arguments something calls it with.
-        foreach (var (symbol, syntax, model) in functions) {
+        foreach (var source in functions) {
             // A Sable.Core '@intrinsic' has the body each use is lowered to.
+            var (symbol, model) = (source.Symbol, source.Model);
             if (IsGeneric(symbol) || IsIntrinsic(symbol)) {
                 continue;
             }
@@ -544,7 +633,7 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                if (SignatureOf(symbol, syntax, TypeSubstitution.Empty) is { } signature) {
+                if (SignatureOf(symbol, source.Syntax, TypeSubstitution.Empty) is { } signature) {
                     _module.Foreign[_names[symbol]] = (foreign, signature);
                 }
 
@@ -552,9 +641,11 @@ public sealed partial class SilGen {
             }
 
             if (_unit is not null && !_unit.Owns(model.SyntaxTree)) {
-                DeclareExternal(symbol, syntax, _names[symbol]);
+                DeclareExternal(source, _names[symbol]);
                 continue;
             }
+
+            var syntax = source.Syntax;
 
             if (SignatureOf(symbol, syntax, TypeSubstitution.Empty) is not { } type) {
                 continue;
@@ -594,8 +685,9 @@ public sealed partial class SilGen {
         // that can be compiled once, for the units linked with it to call
         // rather than lower again (#297 stage 7).
         if (_unit is { CompilesGenerics: true } && _generics == GenericsMode.Unspecialised) {
-            foreach (var (symbol, syntax, model) in functions) {
-                if (IsGeneric(symbol) && !IsIntrinsic(symbol) && symbol.ForeignName is null && _unit.Owns(model.SyntaxTree) && !InsideBody(syntax)
+            foreach (var source in functions) {
+                var symbol = source.Symbol;
+                if (IsGeneric(symbol) && !IsIntrinsic(symbol) && symbol.ForeignName is null && _unit.Owns(source.Model.SyntaxTree) && source.Syntax is var syntax && !InsideBody(syntax)
                     && _declarations.ContainsKey(symbol) && UnspecialisedShape(symbol) is { } shape) {
                     UnspecialisedInstance(symbol, shape, syntax);
                 }
@@ -700,15 +792,19 @@ public sealed partial class SilGen {
     ///     define it — with the side effects lowering it would have had on the
     ///     types (a deinit), so that every unit lays them out alike.
     /// </summary>
-    void DeclareExternal(FunctionSymbol symbol, SyntaxNode syntax, string name) {
+    void DeclareExternal(FunctionSource source, string name) {
+        var symbol = source.Symbol;
+
         // LowerBody makes nothing of a declaration without a body.
-        if (!symbol.HasBody && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null
-            && _compilation.GetInheritedInitializerBody(symbol) is null) {
+        if (!symbol.HasBody && !(_compilation.IsFromInterface(source.Model.SyntaxTree)
+                ? _compilation.GetDerivation(symbol) is not null || _compilation.InheritedInitializers.ContainsKey(symbol)
+                : _compilation.GetDerivedBody(symbol) is not null || _compilation.GetLazyBody(symbol) is not null
+                    || _compilation.GetInheritedInitializerBody(symbol) is not null)) {
             return;
         }
 
         // As the first loop would: no signature, nothing lowered.
-        FunctionType? Signature() => SignatureOf(symbol, syntax, TypeSubstitution.Empty);
+        FunctionType? Signature() => SignatureOf(symbol, source.SyntaxOr(_compilation.SyntaxTrees[0].Root), TypeSubstitution.Empty);
         _external[name] = Signature;
 
         // A class's initialiser is two functions: the allocator, and the half that initialises.
@@ -808,7 +904,7 @@ public sealed partial class SilGen {
     ///     retype would leave its object with storage of the wrong size, and
     ///     their types' layouts in its records (docs/05 §5.4).
     /// </remarks>
-    readonly Dictionary<FieldSymbol, SyntaxNode> _otherGlobals = [];
+    readonly HashSet<FieldSymbol> _otherGlobals = [];
 
     /// <param name="all">
     ///     Declare every global of the program, as the whole program and the
@@ -818,39 +914,42 @@ public sealed partial class SilGen {
     void DeclareGlobals(bool all) {
         foreach (var tree in _compilation.SyntaxTrees) {
             var model = _compilation.GetSemanticModel(tree);
-            foreach (var declaration in Declarations(tree).Where(static d => d is FieldDeclarationSyntax or ConstDeclarationSyntax)) {
-                if (_compilation.GetDeclaredSymbol(declaration) is not FieldSymbol field || !IsGlobal(field)
+            var fields = TakesInterface(tree)
+                ? _compilation.InterfaceDeclarations(tree)
+                : Declarations(tree).Where(static d => d is FieldDeclarationSyntax or ConstDeclarationSyntax).Select(_compilation.GetDeclaredSymbol);
+            foreach (var declared in fields) {
+                if (declared is not FieldSymbol field || !IsGlobal(field)
                     || field.ContainingSymbol is NamedTypeSymbol { IsGenericDefinition: true }) {
                     continue;
                 }
 
                 if (!all && !_unit!.Owns(tree)) {
-                    _otherGlobals[field] = declaration;
+                    _otherGlobals.Add(field);
                     continue;
                 }
 
-                if (DeclareGlobal(field, declaration) is { } name) {
-                    _globalFields.Add((field, name, BodyModel(model, declaration)));
+                if (DeclareGlobal(field) is { } name) {
+                    _globalFields.Add((field, name, BodyModel(model, field.DeclaringSyntax[0])));
                 }
             }
         }
     }
 
     /// <summary>A global's storage, named for its owner; null for one that needs none, or cannot have it here.</summary>
-    string? DeclareGlobal(FieldSymbol field, SyntaxNode declaration) {
+    string? DeclareGlobal(FieldSymbol field) {
         if (Lower(field.Type) is not { } type) {
             return null;
         }
 
         // A constant written where it is read needs no storage, unless C reads it.
-        if (_evaluation is null && field.ExportName is null && ConstantRead(field) is not null) {
+        if (_evaluation is null && field.ExportName is null && (field.IsKnownLiteral || ConstantRead(field) is not null)) {
             return null;
         }
 
         // Separately, the unit the program starts in sets up every
         // global, and sees no other unit's bodies: a static of a type
         // declared in one is the whole program's to compile.
-        if (_unit is not null && InsideBody(declaration)) {
+        if (_unit is not null && !_compilation.IsTakenFromInterface(field) && field.DeclaringSyntax[0] is var declaration && InsideBody(declaration)) {
             Unsupported<object>(declaration, "a static stored property of a type declared in a function, compiled separately");
             return null;
         }
@@ -949,8 +1048,8 @@ public sealed partial class SilGen {
     }
 
     internal (string Name, SilType Type)? GlobalOf(FieldSymbol field) {
-        if (!_globalsByField.TryGetValue(field, out var global) && _otherGlobals.Remove(field, out var declaration)) {
-            DeclareGlobal(field, declaration);
+        if (!_globalsByField.TryGetValue(field, out var global) && _otherGlobals.Remove(field)) {
+            DeclareGlobal(field);
             _globalsByField.TryGetValue(field, out global);
         }
 
@@ -1030,7 +1129,7 @@ public sealed partial class SilGen {
     /// <summary>Each lowered function's source, for the diagnostics of checks run on the whole module.</summary>
     readonly Dictionary<SilFunction, SourceText> _sources = [];
 
-    readonly Dictionary<FunctionSymbol, (SyntaxNode Syntax, SemanticModel Model)> _declarations = [];
+    readonly Dictionary<FunctionSymbol, FunctionSource> _declarations = [];
     readonly Dictionary<string, FunctionType> _instances = new(StringComparer.Ordinal);
     readonly Queue<(FunctionSymbol Symbol, string Name, FunctionType Type, TypeSubstitution Substitution)> _pending = new();
 
@@ -4302,13 +4401,7 @@ public sealed partial class SilGen {
             return null;
         }
 
-        var root = syntax;
-        while (root.Parent is { } parent) {
-            root = parent;
-        }
-
-        var tree = _compilation.SyntaxTrees.FirstOrDefault(t => ReferenceEquals(t.Root, root));
-        return tree is null ? null : BodyModel(_compilation.GetSemanticModel(tree), syntax).GetFieldInitializer(field);
+        return _compilation.TreeOf(syntax) is { } tree ? BodyModel(_compilation.GetSemanticModel(tree), syntax).GetFieldInitializer(field) : null;
     }
 
     T? Unsupported<T>(SyntaxNode at, string what) where T : class {

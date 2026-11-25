@@ -547,9 +547,12 @@ internal sealed class TypeBinder(Compilation compilation) {
         }
     }
 
+    /// <summary>A constant's value when it is a whole number known while types are read, else null.</summary>
+    internal System.Numerics.BigInteger? ValueOf(FieldSymbol constant) => EvaluateConstant(constant, []);
+
     public void BindConstantType(FieldSymbol field, ConstDeclarationSyntax declaration) {
         var scope = compilation.CurrentScope;
-        field.ValueResolver = () => EvaluateConstant(field, []);
+        field.ValueResolver = () => ValueOf(field);
 
         field.TypeResolver = () => {
             if (declaration.TypeAnnotation is { } annotation) {

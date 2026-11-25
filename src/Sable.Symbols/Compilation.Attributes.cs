@@ -255,7 +255,11 @@ public sealed partial class Compilation {
 
     HashSet<string> FindAutoclosureCallees() {
         var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var tree in SyntaxTrees) {
+        foreach (var name in _interface?.AutoclosureCallees ?? []) {
+            names.Add(name);
+        }
+
+        foreach (var tree in SyntaxTrees.Where(t => !IsFromInterface(t))) {
             if (!tree.Text.Text.Contains("autoclosure", StringComparison.Ordinal)) {
                 continue;
             }
@@ -397,7 +401,7 @@ public sealed partial class Compilation {
     ///     no attribute (S3092).
     /// </summary>
     void CheckUserAttribute(SyntaxTree tree, AttributeSyntax attribute, string name) {
-        var scope = _fileScopes[tree];
+        var scope = GetFileScope(tree);
         var context = AttributeContext(attribute) ?? scope.Module;
         var found = attribute.Name is SimpleNameTypeSyntax { TypeArgumentList: null } simple
             ? TypeBinder.Lookup(simple.Identifier.Text, context, scope, simple.Span, report: false)
@@ -482,7 +486,8 @@ public sealed partial class Compilation {
     /// </summary>
     public IReadOnlyList<(NamedTypeSymbol Type, BoundExpression Value)> UserAttributesOf(Symbol symbol) {
         var definition = symbol is NamedTypeSymbol named ? named.OriginalDefinition : symbol;
-        if (definition.DeclaringSyntax is not [var declaration, ..]) {
+        // A library taken from its interface has none (LibrarySymbols).
+        if (IsTakenFromInterface(definition) || definition.DeclaringSyntax is not [var declaration, ..]) {
             return [];
         }
 
@@ -815,7 +820,7 @@ public sealed partial class Compilation {
 
         string? deprecation = null;
         ImmutableArray<string>? platforms = null;
-        if (definition.DeclaringSyntax is [var declaration, ..]) {
+        if ((definition.HasAttribute("deprecated") || definition.HasAttribute("available")) && definition.DeclaringSyntax is [var declaration, ..]) {
             foreach (var attribute in AttributesOf(declaration)) {
                 var arguments = attribute.ArgumentList?.Arguments.ToList() ?? [];
                 switch (AttributeName(attribute)) {

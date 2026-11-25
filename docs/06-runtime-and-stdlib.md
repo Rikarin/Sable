@@ -775,7 +775,8 @@ the compiler, and compiled once per target and profile into archives —
 `libsable_runtime.a` and `libsable_std.a` (`.lib` on Windows) — kept in the
 build cache, `$SABLE_HOME/cache/<key>/` (docs/05 §5.4), which a program links
 against instead of compiling the library again: the model of Rust's `.rlib`
-and Swift's `libswiftCore`. The source stays the unit of distribution — for
+and Swift's `libswiftCore`. Its declarations come from the entry too, so that
+building a small program reads none of the library's source. The source stays the unit of distribution — for
 go-to-definition, debug information (an archive's debug information carries
 each library file's text), `sable test --doc`, a program bringing its own
 copy of a library file, and `#if os(...)`/`#if DEBUG`, which decide what the

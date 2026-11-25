@@ -583,8 +583,7 @@ public sealed class BoundIndexAccess(
 
     /// <summary>True when a subscript declares a <c>set</c>.</summary>
     public static bool HasSetter(FunctionSymbol subscript) =>
-        subscript.DeclaringSyntax.FirstOrDefault() is SubscriptDeclarationSyntax { Accessors: { } accessors }
-        && accessors.Accessors.Any(static a => a.Keyword.Kind == SyntaxKind.SetKeyword);
+        subscript.HasSetter;
     public override IEnumerable<BoundNode> Children => Nodes([Receiver, ..Indices]);
 }
 

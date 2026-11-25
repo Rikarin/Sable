@@ -20,11 +20,10 @@ namespace Sable.Symbols;
 /// </remarks>
 public sealed class ExtensionSymbol(
     NamedTypeSymbol extendedType,
-    SyntaxNode? declaration) : Symbol {
+    SyntaxNode? declaration) : Symbol(declaration) {
     public override SymbolKind Kind => SymbolKind.Extension;
     public override string Name => ExtendedType.Name;
     public override Symbol? ContainingSymbol => ExtendedType;
-    public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } = declaration is null ? [] : [declaration];
     public override Accessibility DeclaredAccessibility => ExtendedType.DeclaredAccessibility;
 
     public NamedTypeSymbol ExtendedType { get; } = extendedType;

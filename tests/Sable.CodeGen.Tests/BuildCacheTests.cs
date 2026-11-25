@@ -342,6 +342,87 @@ public sealed class BuildCacheTests {
         Assert.NotEqual(0, SableProcess.Run(fixture.Root, fixture.Home, "cache", "warm", "--import", "Sable.Nothing").ExitCode);
     }
 
+    /// <summary>
+    ///     A small program built with the standard library in the cache reads
+    ///     none of the library's source (#182): its declarations come from the
+    ///     entry's symbols, its code from the archive. One extending a type of
+    ///     the library's, or told to with <c>SABLE_LIBRARY_SYMBOLS=source</c>,
+    ///     declares the library from its source, and builds the same.
+    /// </summary>
+    [Fact]
+    public void AWarmBuildParsesNoFileOfTheStandardLibrary() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var fixture = new PackageFixture();
+        const string program = "module App\n\nfn main() {\n    let name = \"world\"\n    print(\"hi \\(name) \\(1 + 2)\")\n}\n";
+        fixture.Package("first", "app", "0.1.0", "", ("src/main.sb", program));
+        fixture.Package("second", "app", "0.1.0", "", ("src/main.sb", program));
+        fixture.Package("extending", "app", "0.1.0", "", ("src/main.sb", "module App\n\nextension Int {\n    fn twice() -> Int => self * 2\n}\n\nfn main() { print(2.twice()) }\n"));
+        Built("first");
+
+        // In processes of their own, as a process parses each file once.
+        Assert.Equal(0, Parsed(Built("second")));
+        Directory.Delete(Path.Combine(fixture.Root, "second", "target"), true);
+        var source = Built("second", new() { ["SABLE_LIBRARY_SYMBOLS"] = "source" });
+        Assert.True(Parsed(source) > 100, source);
+
+        Built("extending");
+        Directory.Delete(Path.Combine(fixture.Root, "extending", "target"), true);
+        var extending = Built("extending");
+        Assert.True(Parsed(extending) > 100, extending);
+
+        string Built(string directory, Dictionary<string, string?>? environment = null) {
+            var built = SableProcess.Run(Path.Combine(fixture.Root, directory), fixture.Home, environment, "build", "--timings");
+            Assert.True(built.ExitCode == 0, built.Errors);
+            var output = PackageFixture.Execute(Path.Combine(fixture.Root, directory, "target", "dev", "app" + NativeTarget.Host.ExecutableSuffix)).Output;
+            Assert.Equal(directory == "extending" ? "4\n" : "hi world 3\n", output);
+            return built.Output + built.Errors;
+        }
+
+        static int Parsed(string timings) => int.Parse(Regex.Match(timings, @"library files parsed\s+(\d+)").Groups[1].Value);
+    }
+
+    /// <summary>
+    ///     <c>sable build --target</c> for another machine fills the cache for
+    ///     it on first use, beside the host's, and reuses it afterwards (#182).
+    ///     On macOS, whose SDK links for both of its architectures; elsewhere
+    ///     there is nothing to link another machine's program with.
+    /// </summary>
+    [Fact]
+    public void ABuildForAnotherTargetFillsTheCacheAndReusesIt() {
+        if (!CanBuild || !OperatingSystem.IsMacOS()) {
+            return;
+        }
+
+        var other = NativeTarget.Host.Triple.StartsWith("x86_64", StringComparison.Ordinal) ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+        using var fixture = new PackageFixture();
+        foreach (var name in (string[])["first", "second"]) {
+            fixture.Package(name, "app", "0.1.0", "", ("src/main.sb", "module App\n\nfn main() { print(Platform.arch) }\n"));
+        }
+
+        Assert.Equal((2, 0), Built("first", "--target", other));
+        var entries = fixture.Environment.BuildCache.Entries();
+        var std = Assert.Single(entries, static e => e is { Package: "sable-std", Kind: "library" });
+        Assert.Contains(entries, e => e.Kind == "runtime" && e.Target == std.Target);
+
+        // The host's is another entry; the other target's is found again.
+        Assert.Equal((2, 0), Built("second"));
+        Assert.Equal((1, 1), Built("second", "--target", other));
+        var libraries = fixture.Environment.BuildCache.Entries().Where(static e => e is { Package: "sable-std", Kind: "library" }).ToList();
+        Assert.Equal(2, libraries.Count);
+        Assert.Equal(2, libraries.Select(static e => e.Target).Distinct().Count());
+
+        (int Compiled, int Reused) Built(string directory, params string[] arguments) {
+            var built = SableProcess.Run(Path.Combine(fixture.Root, directory), fixture.Home, ["build", "--timings", ..arguments]);
+            Assert.True(built.ExitCode == 0, built.Errors);
+            var report = Regex.Match(built.Output + built.Errors, @"(\d+) unit\(s\) compiled, (\d+) reused");
+            Assert.True(report.Success, built.Output + built.Errors);
+            return (int.Parse(report.Groups[1].Value), int.Parse(report.Groups[2].Value));
+        }
+    }
+
     /// <summary>Builds a package's binary with timings; what it printed, and how many units it compiled and reused.</summary>
     static (string Output, int Compiled, int Reused) Build(PackageFixture fixture, string directory) {
         fixture.Errors.GetStringBuilder().Clear();

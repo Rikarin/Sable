@@ -116,7 +116,7 @@ public sealed partial class SilGen {
 
         var bodies = new List<BoundNode>();
         var (syntax, model) = _declarations.TryGetValue(function, out var declaration)
-            ? declaration
+            ? (declaration.Syntax, declaration.Model)
             : function.DeclaringSyntax is [var first, ..] && ModelOf(first) is { } found
                 ? (first, found)
                 : (null, null);

@@ -2190,7 +2190,7 @@ public sealed partial class SilGen {
             root = parent;
         }
 
-        return _compilation.SyntaxTrees.FirstOrDefault(t => ReferenceEquals(t.Root, root))?.Text;
+        return _compilation.TreeOf(root)?.Text;
     }
 
     /// <summary>

@@ -141,7 +141,7 @@ public sealed class SilProgram {
     public static SilProgram Index(Compilation compilation) {
         var trees = new Dictionary<SyntaxNode, SyntaxTree>(ReferenceEqualityComparer.Instance);
         var found = new Dictionary<SyntaxTree, List<SyntaxNode>>();
-        foreach (var tree in compilation.SyntaxTrees) {
+        foreach (var tree in compilation.SyntaxTrees.Where(t => !compilation.IsFromInterface(t))) {
             trees.TryAdd(tree.Root, tree);
             found.TryAdd(tree, []);
         }
@@ -168,6 +168,11 @@ public sealed class SilProgram {
 
         void Visit(Symbol symbol) {
             if (!visited.Add(symbol)) {
+                return;
+            }
+
+            // A library taken from its interface says its own (Compilation.InterfaceDeclarations).
+            if (compilation.IsTakenFromInterface(symbol)) {
                 return;
             }
 

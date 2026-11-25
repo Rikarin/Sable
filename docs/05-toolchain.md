@@ -634,9 +634,11 @@ the fresh times being JIT. Symbols read from a `.sbi` in place of declaring
 and binding the kept units would save at most the first two, about 0.25 s of
 the 2.8 s fresh and less warm; binding the kept units' signatures lazily
 instead saves nothing, since checking the bodies binds nearly all of them
-(0.54–0.62 s against 0.52–0.58 s eagerly). The standard library is not
-read from a `.sbi` at all: it is the embedded source, parsed whole (every
-module's, 247 files) on each build.
+(0.54–0.62 s against 0.52–0.58 s eagerly). The standard library was not
+read from a `.sbi` at all: it was the embedded source, parsed whole (every
+module's, 247 files) on each build — which this left out, and which by the
+time `lib/` had 100k lines was the largest part of a small build (below,
+"Declarations from the interface").
 
 Loading symbols without their source was blocked by what reads the source
 behind a symbol, not by the binder's tables alone. What lowering and binding
@@ -656,15 +658,15 @@ syntax (stage 3); a unit still walks its own files whole, for the
 declarations in its bodies. `SilProgramTests` holds the two to the same
 declarations in the same order.
 
-What still reads another unit's source, and so keeps
-`Compilation.Create` from taking a unit's symbols in place of its trees, is
-the bodies another unit lowers: a generic function's instances, `@inline`
-bodies, default arguments, `const fn`s, constants' values, field
-initialisers and, for the entry unit, every global's initialiser, and a
-type's reflected attribute values. They are bound from their file in its
-file scope. SIL cannot hold a generic body for an instance it does not know
-until generics are compiled once (#297); serialised bound trees are the
-other way, and neither is built.
+What still reads another unit's source is the bodies another unit lowers: a
+generic function's instances, `@inline` bodies, default arguments, `const
+fn`s, constants' values, field initialisers and, for the entry unit, every
+global's initialiser, and a type's reflected attribute values. They are bound
+from their file in its file scope, so a unit's symbols can stand in for its
+trees only where each such file can still be had when one of them is asked
+for — which the standard library's always can, since it comes with the
+compiler. Built unspecialised, its generics are compiled once (#297) and few
+of them are.
 
 **Library interfaces (`.sbi`), as built** (#182, stage 4). A library unit's
 interface — `LibraryInterface` in Sable.SIL, written for Sable.Core by
@@ -741,10 +743,88 @@ target and profile; reading the file back takes 5 ms, its symbols 10 ms,
 and it is 330 KB (the symbols 183 KB, the SIL 820 KB of text compressed to
 150 KB). A package build writes the standard library unit's interface
 (`std.sbi`) into its build cache entry, beside the archive (stage 5's
-`LibraryUnit.Write` hook). What is left is declaring the core from its
-source (`Compilation.Create`, about 60 ms warm) and lowering the instances
-of its generics the program uses; declaring from the interface's symbols
-instead waits on the bodies above.
+`LibraryUnit.Write` hook). `CompileAgainst` still declares the core from its
+source (`Compilation.Create`, about 60 ms warm); a build against the cache
+takes the declarations too (below).
+
+**Declarations from the interface** (#182). A build whose standard library
+unit is in the build cache takes the library's declarations from there
+rather than declaring them: its entry keeps, beside `std.sbi`, `std.symbols`
+(`LibrarySymbols` in Sable.Symbols) — the symbols in `SymbolInterface`'s form,
+and for each, what taking them in place of the files needs: the place of its
+declaration (file, offset, length, kind), whether a constant's value is a
+literal, each property's and subscript's accessors, and the array extensions,
+`@derive`d members, inherited initialisers and `@autoclosure` callees the
+compilation otherwise finds by declaring. It is written with the entry, from
+the library declared alone — the same for every program — and refused
+unless its SHA-256, version and files are right; the entry's key holds the
+compiler's identity, so a changed compiler has another.
+
+`Compilation.Create(trees, library: symbols)` reads the modules (fresh symbols
+for each compilation) and declares only the program's files. Nothing of the
+library is parsed: its trees are `SyntaxTree.Deferred`, whose text is parsed
+when something first asks for a node, and whose module and imports are read
+off the lines before its declarations (`SourceHeader`). What only a file says
+is found when asked for: `Symbol.DeclaringSyntax` parses the file and finds
+the declaration where the interface says it is (`SymbolSource`; `IsDeclared`
+answers without), `GetDeclaredSymbol` gives a parsed file's declarations
+their symbols, `GetFileScope` resolves its imports — so an instance bound from
+source, a default argument, a non-literal constant, a place a diagnostic points
+at come out as they do when the file was declared. Lowering lists the library's
+functions, accessors, globals and `@builtin`s from the symbols
+(`Compilation.InterfaceDeclarations`) rather than from the outline of its
+files. `--timings` says how many of the library's files a build parsed
+(`library files parsed`): for the program below, none.
+
+The library is declared from its source, as before, whenever that could differ
+or is not worth it: a program that brings a file of the library or declares
+in one of its modules, or extends one of its types (whose members then come in
+another order); a first build, which compiles the library; an optimised
+build of a single file and a fallback to compiling whole; `sable check`,
+`sable test`'s harness, the documentation, and the language server, whose
+hovers and navigation read the library's files all the time. A library with
+something the symbols do not hold — a generator, a lazy or observed property,
+a `comptime` block, a hidden `some`, an attribute of its own — has none;
+`LibrarySymbolsTests` fails when the standard library gains one.
+`SABLE_LIBRARY_SYMBOLS=source` turns them off, and `=interface` gives them to
+every compilation, made in the process: what the tests hold the two to each
+other with. `LibrarySymbolsTests` compares the diagnostics, SIL, layouts and
+external functions of the examples and the corpus both ways, and binds every
+body of the whole library against its own symbols.
+
+Measured on a package of the three-line program (`print("hi \(name) \(1 + 2)")`),
+warm cache, its `target/` removed before each build, `sable` built Release on an
+M1 Max under a load average of 10–150 from other builds, best of 7, fresh
+processes (so most of each phase is JIT):
+
+| Phase | Before | Files parsed as needed | Declarations from the interface |
+|---|---:|---:|---:|
+| the library's source: loading, parsing | 614 ms | 10 ms | 10 ms |
+| interface phase (names its extensions extend) | 16 ms | 13 ms | 15 ms |
+| bind: declare (parsing Core, in the second) | 131 ms | 202 ms | 37 ms |
+| bind: signatures | 90 ms | 91 ms | 2.5 ms |
+| bind: the program's bodies | 56 ms | 35 ms | 41 ms |
+| index | 13 ms | 13 ms | 1.5 ms |
+| SIL, verify, emit | 176 ms | 176 ms | 180 ms |
+| the whole build | 1.4–1.6 s | 0.82 s | 0.65 s |
+| user CPU time | 1.55 s | 1.07 s | 0.56 s |
+
+So of the 0.85 s a warm build spent on the library, about 0.05 s is left:
+reading its text (which the cache's key hashes) and its symbols. Parsing it
+was most: every module of `lib/`, 100k lines, one file after another, for a
+program that imports none. A program that instantiates the library's generics
+parses the files whose bodies it lowers: sorting, mapping and joining an array
+parses 4 built specialised and 3 built unspecialised; `examples/ssg` as a
+package (which imports three modules) 50.
+
+That package's warm build, its `target/` removed, the same machine at a load
+average of 15: 7.6 s before, 2.9 s with the library declared from source, and
+2.3 s from the interface (user CPU 10.3, 3.5 and 2.3 s). Declaring and binding
+signatures fell from 0.57 s to 0.08 s; the rest of the difference, 4.2 s, was
+compile-time evaluation, which a program importing a library constant that is
+computed runs: it bound every body of the library's files that have a property
+to name their accessors. It names those of a file it does not check from their
+declarations, as lowering a unit does.
 
 **Dependents only.** A unit depends on the units declaring a module it
 imports or names in full (`Shapes.Square` needs no import), on the units
@@ -1031,7 +1111,8 @@ lazily the first time a target and profile need it. `target/` keeps only the
 project's own units. An entry is a directory: the archive, the object it
 archives (a static library C links takes that whole), the library's `.abi`
 record of the types it laid out, the library's interface `<unit>.sbi`
-(its symbols and SIL, `LibraryInterface`), and `entry.txt`, the key it was
+(its symbols and SIL, `LibraryInterface`), for the standard library the
+declarations a program takes from it, `std.symbols`, and `entry.txt`, the key it was
 made for and the profile of the build that made it.
 
 A **dependency** from a registry or git — one whose own dependencies are too

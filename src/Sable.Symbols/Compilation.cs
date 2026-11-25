@@ -51,7 +51,7 @@ public sealed partial class Compilation {
     readonly Dictionary<SyntaxTree, SemanticModel> _semanticModels = [];
     readonly DiagnosticBag _declarationDiagnostics = new();
 
-    Compilation(ImmutableArray<SyntaxTree> syntaxTrees, ParseOptions options) {
+    Compilation(ImmutableArray<SyntaxTree> syntaxTrees, ParseOptions options, LibrarySymbols? library = null) {
         // Sable.Core's source comes with every compilation, after the files
         // given, so that those keep their places (CoreLibrary). A
         // compilation made from another passes the core's trees back in;
@@ -64,22 +64,51 @@ public sealed partial class Compilation {
         var brought = CoreLibrary.Brought(own, m => m == CoreLibrary.ModuleName ? CoreLibrary.TreesFor(target) : []);
         SyntaxTrees = [..own, ..CoreLibrary.TreesFor(target).Where(t => !CoreLibrary.IsBrought(t, brought))];
         Options = options;
-        SyntaxTree.ParseAll(SyntaxTrees);
+        _interface = library is not null && library.Covers(this) ? new(this, library) : null;
+        SyntaxTree.ParseAll(SyntaxTrees.Where(t => !IsFromInterface(t)));
 
-        var coreModule = new ModuleSymbol("Sable.Core");
+        var coreModule = _interface?.Modules.First(static m => m.Name == CoreLibrary.ModuleName) ?? new ModuleSymbol(CoreLibrary.ModuleName);
         _modules[coreModule.Name] = coreModule;
+        foreach (var module in _interface?.Modules ?? []) {
+            _modules.TryAdd(module.Name, module);
+        }
+
         Core = new(coreModule);
 
         TypeBinder = new(this);
+        _interface?.Attach();
 
         DeclareAll();
     }
 
+    /// <param name="library">
+    ///     The standard library's declarations as an interface has them
+    ///     (docs/05 §5.4): the compilation takes them from it, and leaves the
+    ///     library's files alone until something asks for what only they say
+    ///     — unless the program brings a file of the library, or extends one of
+    ///     its types, when they are declared from the source as ever.
+    /// </param>
     public static Compilation Create(
         IEnumerable<SyntaxTree> syntaxTrees,
-        ParseOptions? options = null
-    ) =>
-        new([..syntaxTrees], options ?? ParseOptions.Default);
+        ParseOptions? options = null,
+        LibrarySymbols? library = null
+    ) {
+        ImmutableArray<SyntaxTree> trees = [..syntaxTrees];
+        options ??= ParseOptions.Default;
+        return Create(trees, options, library, BindOptions.Default);
+    }
+
+    static Compilation Create(ImmutableArray<SyntaxTree> trees, ParseOptions options, LibrarySymbols? library, BindOptions bindOptions) {
+        library ??= LibrarySymbols.Forced(trees, options);
+        if (library is not null) {
+            var compilation = new Compilation(trees, options, library) { BindOptions = bindOptions };
+            if (compilation is { IsAgainstInterface: true, _extendsInterface: false }) {
+                return compilation;
+            }
+        }
+
+        return new(trees, options) { BindOptions = bindOptions };
+    }
 
     public static Compilation Create(params string[] sources) =>
         Create(
@@ -121,27 +150,20 @@ public sealed partial class Compilation {
         return GetModule(dottedName);
     }
 
-    public FileScope GetFileScope(SyntaxTree tree) => _fileScopes[tree];
+    public FileScope GetFileScope(SyntaxTree tree) =>
+        _fileScopes.TryGetValue(tree, out var scope) ? scope : _interface?.ScopeOf(tree) ?? throw new KeyNotFoundException(tree.Text.FileName);
 
     /// <summary>The scope of the file a node was parsed from, if it is one of this compilation's.</summary>
-    internal FileScope? FileScopeOf(SyntaxNode node) {
-        var root = node;
-        while (root.Parent is { } parent) {
-            root = parent;
-        }
+    internal FileScope? FileScopeOf(SyntaxNode node) =>
+        TreeOf(node) is { } tree && HasFileScope(tree) ? GetFileScope(tree) : null;
 
-        foreach (var (tree, scope) in _fileScopes) {
-            if (ReferenceEquals(tree.Root, root)) {
-                return scope;
-            }
-        }
-
-        return null;
-    }
+    bool HasFileScope(SyntaxTree tree) => _fileScopes.ContainsKey(tree) || IsFromInterface(tree);
 
     /// <summary>The symbol a declaration introduced, if it introduced one.</summary>
     public Symbol? GetDeclaredSymbol(SyntaxNode declaration) =>
-        _symbolsBySyntax.TryGetValue(declaration, out var symbol) ? symbol : null;
+        _symbolsBySyntax.TryGetValue(declaration, out var symbol) ? symbol
+        : _interface is { } library && library.Record(declaration) ? _symbolsBySyntax.GetValueOrDefault(declaration)
+        : null;
 
     /// <summary>The semantic model for a file, which binds its bodies on demand.</summary>
     public SemanticModel GetSemanticModel(SyntaxTree tree) {
@@ -160,7 +182,7 @@ public sealed partial class Compilation {
     public IReadOnlyList<Diagnostic> GetAllDiagnostics() {
         var all = new List<Diagnostic>();
 
-        foreach (var tree in SyntaxTrees) {
+        foreach (var tree in SyntaxTrees.Where(t => !IsFromInterface(t))) {
             all.AddRange(tree.Diagnostics);
         }
 
@@ -169,7 +191,7 @@ public sealed partial class Compilation {
         // declaration check may add to the declaration bag long after the
         // table was built.
         foreach (var tree in SyntaxTrees) {
-            if (!_fileScopes.ContainsKey(tree)) {
+            if (!HasFileScope(tree)) {
                 continue;
             }
 
@@ -192,10 +214,10 @@ public sealed partial class Compilation {
 
     /// <summary>Adds files, returning a new compilation.</summary>
     public Compilation AddSyntaxTrees(params SyntaxTree[] trees) =>
-        new([..SyntaxTrees, ..trees], Options) { BindOptions = BindOptions };
+        Create([..SyntaxTrees, ..trees], Options, null, BindOptions);
 
     /// <summary>Returns a compilation that binds under different limits.</summary>
-    public Compilation WithBindOptions(BindOptions options) => new([..SyntaxTrees], Options) { BindOptions = options };
+    public Compilation WithBindOptions(BindOptions options) => Create([..SyntaxTrees], Options, null, options);
 
     /// <summary>Looks a type up by its dotted path, such as <c>App.Shapes.Circle</c>.</summary>
     public NamedTypeSymbol? GetTypeByQualifiedName(string qualifiedName) {
@@ -245,7 +267,7 @@ public sealed partial class Compilation {
     public IReadOnlyList<Diagnostic> GetDiagnostics() {
         var all = new List<Diagnostic>();
 
-        foreach (var tree in SyntaxTrees) {
+        foreach (var tree in SyntaxTrees.Where(t => !IsFromInterface(t))) {
             all.AddRange(tree.Diagnostics);
         }
 
@@ -279,11 +301,13 @@ public sealed partial class Compilation {
     public IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> GetAllDiagnosticsByFile(Func<SyntaxTree, bool> bodiesOf) {
         var all = new List<(Diagnostic, SyntaxTree?)>();
         foreach (var tree in SyntaxTrees) {
-            all.AddRange(tree.Diagnostics.Select(d => (d, (SyntaxTree?)tree)));
+            if (!IsFromInterface(tree)) {
+                all.AddRange(tree.Diagnostics.Select(d => (d, (SyntaxTree?)tree)));
+            }
         }
 
         foreach (var tree in SyntaxTrees) {
-            if (_fileScopes.ContainsKey(tree) && bodiesOf(tree)) {
+            if (HasFileScope(tree) && bodiesOf(tree)) {
                 all.AddRange(GetSemanticModel(tree).GetDiagnostics().Select(d => (d, (SyntaxTree?)tree)));
             }
         }
@@ -384,23 +408,39 @@ public sealed partial class Compilation {
         }
 
         // Reported away from its file's pass, but with a node of that file.
-        if (diagnostic.Anchor is { } anchor && TreeOfRoot(anchor) is { } tree && diagnostic.Span.End <= tree.Text.Length) {
+        if (diagnostic.Anchor is { } anchor && TreeOf(anchor) is { } tree && diagnostic.Span.End <= tree.Text.Length) {
             return tree;
         }
 
         return null;
     }
 
-    /// <summary>The trees by their roots: which file a node is in.</summary>
-    Dictionary<SyntaxNode, SyntaxTree>? _treesByRoot;
+    /// <summary>The parsed trees by their roots: which file a node is in.</summary>
+    readonly Dictionary<SyntaxNode, SyntaxTree> _treesByRoot = new(ReferenceEqualityComparer.Instance);
 
-    SyntaxTree? TreeOfRoot(SyntaxNode node) {
+    /// <summary>The trees not parsed when <see cref="_treesByRoot" /> was last added to; null before it ever was.</summary>
+    List<SyntaxTree>? _unparsed;
+
+    /// <summary>The file a node was parsed from, if it is one of this compilation's. No file is parsed to tell.</summary>
+    public SyntaxTree? TreeOf(SyntaxNode node) {
         while (node.Parent is { } parent) {
             node = parent;
         }
 
-        var trees = LazyInitializer.EnsureInitialized(ref _treesByRoot, () => SyntaxTrees.ToDictionary(static SyntaxNode (t) => t.Root, static t => t, ReferenceEqualityComparer.Instance));
-        return trees.GetValueOrDefault(node);
+        lock (_treesByRoot) {
+            if (_treesByRoot.TryGetValue(node, out var known)) {
+                return known;
+            }
+
+            // A node's file is parsed: one parsed since the last time.
+            _unparsed ??= [..SyntaxTrees];
+            foreach (var tree in _unparsed.Where(static t => t.IsParsed)) {
+                _treesByRoot.TryAdd(tree.Root, tree);
+            }
+
+            _unparsed.RemoveAll(static t => t.IsParsed);
+            return _treesByRoot.GetValueOrDefault(node);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -424,7 +464,7 @@ public sealed partial class Compilation {
 
     void DeclareAll() {
         var modulePackages = new Dictionary<ModuleSymbol, string>(ReferenceEqualityComparer.Instance);
-        foreach (var tree in SyntaxTrees) {
+        foreach (var tree in SyntaxTrees.Where(t => !IsFromInterface(t))) {
             if (tree.Root is not CompilationUnitSyntax unit) {
                 continue;
             }
@@ -479,7 +519,7 @@ public sealed partial class Compilation {
         CurrentScope = null;
 
         // Imports resolve against the finished module set.
-        foreach (var tree in SyntaxTrees) {
+        foreach (var tree in SyntaxTrees.Where(t => !IsFromInterface(t))) {
             if (tree.Root is not CompilationUnitSyntax unit) {
                 continue;
             }
@@ -1751,6 +1791,7 @@ public sealed partial class Compilation {
             CurrentScope = scope;
 
             if (IsArrayExtension(declaration)) {
+                _extendsInterface |= IsAgainstInterface;
                 AttachArrayExtension(declaration, scope);
                 continue;
             }
@@ -1770,6 +1811,7 @@ public sealed partial class Compilation {
                 continue;
             }
 
+            _extendsInterface |= _interface?.Declares(extended) == true;
             var extension = new ExtensionSymbol(extended, declaration) { DeclaringModule = scope?.Module };
             extension.TypeParameterAliases = AliasTypeParameters(declaration, extension, extended);
             RecordDeclaration(declaration, extension);

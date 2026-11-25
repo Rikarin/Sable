@@ -856,9 +856,31 @@ public sealed partial class SemanticModel {
             return existing;
         }
 
-        var isGetter = accessor.Keyword.Kind == SyntaxKind.GetKeyword;
-        var name = accessor.Keyword.Text;
+        // A library's, read from its interface: its file, parsed since, has the same one.
+        var read = owner switch {
+            FieldSymbol field => field.InterfaceAccessors,
+            FunctionSymbol subscript => subscript.InterfaceAccessors,
+            _ => [],
+        };
+        if (read.FirstOrDefault(a => a.Source!.Start == accessor.Span.Start) is { } declared) {
+            return made[accessor] = declared;
+        }
 
+        var isGetter = accessor.Keyword.Kind == SyntaxKind.GetKeyword;
+        var parameterName = isGetter ? null
+            : accessor.ParameterName.IsNone ? DefaultParameterName(accessor.Keyword.Kind)
+            : accessor.ParameterName.Text;
+        return made[accessor] = Accessor(
+            _compilation, accessor.Keyword.Text, owner, accessor, isGetter && accessor.Modifiers.Any(SyntaxKind.AsyncKeyword), parameterName, () => valueType
+        );
+    }
+
+    /// <summary>A property's or a subscript's accessor.</summary>
+    /// <param name="valueName">What a setter calls its incoming value; null for a getter.</param>
+    /// <param name="valueType">The type of the value it reads or writes.</param>
+    internal static FunctionSymbol Accessor(
+        Compilation compilation, string name, Symbol owner, AccessorSyntax? accessor, bool isAsync, string? valueName, Func<TypeSymbol> valueType
+    ) {
         var function = new FunctionSymbol(
             name,
             owner,
@@ -867,9 +889,9 @@ public sealed partial class SemanticModel {
             FunctionKind.Accessor
         ) {
             // A setter writes the value it belongs to; a getter does not.
-            IsMutating = !isGetter,
+            IsMutating = valueName is not null,
             // 'async get' may await, as its readers do.
-            IsAsync = isGetter && accessor.Modifiers.Any(SyntaxKind.AsyncKeyword),
+            IsAsync = isAsync,
 
             // A static property's accessors have no value to belong to.
             IsStatic = owner is FieldSymbol { IsStatic: true },
@@ -880,21 +902,14 @@ public sealed partial class SemanticModel {
             ? sub.Parameters
             : [];
 
-        if (!isGetter) {
-            var parameterName = accessor.ParameterName.IsNone
-                ? DefaultParameterName(accessor.Keyword.Kind)
-                : accessor.ParameterName.Text;
-
-            var parameter = new ParameterSymbol(parameterName, null, function, accessor, parameters.Length);
-            parameter.TypeResolver = () => valueType;
+        if (valueName is not null) {
+            var parameter = new ParameterSymbol(valueName, null, function, accessor, parameters.Length);
+            parameter.TypeResolver = valueType;
             parameters = parameters.Add(parameter);
         }
 
         function.Parameters = parameters;
-
-        var returnType = isGetter ? valueType : _compilation.Core.Void;
-        function.ReturnTypeResolver = () => returnType;
-        made[accessor] = function;
+        function.ReturnTypeResolver = valueName is null ? valueType : () => compilation.Core.Void;
         return function;
     }
 

@@ -36,6 +36,7 @@ public sealed class LibraryUnit {
         Archive = Path.Combine(Directory, NativeBuild.LibraryFileName("sable_" + name, LibraryKind.Static, target));
         Abi = Path.Combine(Directory, name + ".abi");
         Interface = Path.Combine(Directory, name + ".sbi");
+        Symbols = Path.Combine(Directory, name + ".symbols");
     }
 
     /// <summary>The unit's entry; every file of it is there, or the directory is not.</summary>
@@ -56,6 +57,13 @@ public sealed class LibraryUnit {
     ///     through <see cref="Write" />'s <c>writeInterface</c> hook.
     /// </summary>
     public string Interface { get; }
+
+    /// <summary>
+    ///     Where the standard library's declarations go, beside its interface:
+    ///     what a program built against the entry takes in place of declaring
+    ///     the library's source (<see cref="Sable.Symbols.LibrarySymbols" />).
+    /// </summary>
+    public string Symbols { get; }
 
     public bool Exists => System.IO.Directory.Exists(Directory);
 

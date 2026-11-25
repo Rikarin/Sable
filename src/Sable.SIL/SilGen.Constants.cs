@@ -64,8 +64,9 @@ public sealed partial class SilGen {
         ConstantsOf(compilation, null).Diagnostics;
 
     /// <param name="unchecked">The files the lowering asking does not check: their constants are bound one at a time (<see cref="BodyModel" />).</param>
-    static ConstantTable ConstantsOf(Compilation compilation, Func<SyntaxTree, bool>? @unchecked) =>
-        s_constants.GetValue(compilation, c => new SilGen(c) { _evaluation = new(), _unchecked = @unchecked }.Evaluate());
+    /// <param name="program">The program's declarations where they are gathered: of the standard library's files it does not check, evaluation looks at those alone.</param>
+    static ConstantTable ConstantsOf(Compilation compilation, Func<SyntaxTree, bool>? @unchecked, SilProgram? program = null) =>
+        s_constants.GetValue(compilation, c => new SilGen(c) { _evaluation = new(), _unchecked = @unchecked, _program = program }.Evaluate());
 
     /// <summary>In the program's lowering: what compile-time evaluation found.</summary>
     ConstantTable? _constants;
@@ -106,6 +107,16 @@ public sealed partial class SilGen {
             // looked for by its keyword. The text is searched first: walking
             // every file's tree for either was most of a small edit's
             // lowering, the standard library's files having neither.
+            // A library taken from its interface has no block, and says which of
+            // its constants are computed.
+            if (_compilation.IsFromInterface(tree)) {
+                foreach (var computed in _compilation.InterfaceDeclarations(tree).OfType<FieldSymbol>().Where(static f => f is { IsConstant: true, IsKnownLiteral: false })) {
+                    constants.Add((computed, (ConstDeclarationSyntax)computed.DeclaringSyntax[0], _compilation.GetSemanticModel(tree)));
+                }
+
+                continue;
+            }
+
             var text = tree.Text.Text;
             var declarations = text.Contains("const", StringComparison.Ordinal)
                 ? tree.Root.DescendantNodes().OfType<ConstDeclarationSyntax>().ToList()
@@ -239,13 +250,7 @@ public sealed partial class SilGen {
     }
 
     SemanticModel? ModelOf(SyntaxNode syntax) {
-        var root = syntax;
-        while (root.Parent is { } parent) {
-            root = parent;
-        }
-
-        var tree = _compilation.SyntaxTrees.FirstOrDefault(t => ReferenceEquals(t.Root, root));
-        return tree is null ? null : BodyModel(_compilation.GetSemanticModel(tree), syntax);
+        return _compilation.TreeOf(syntax) is { } tree ? BodyModel(_compilation.GetSemanticModel(tree), syntax) : null;
     }
 
     /// <summary>Runs the function in the interpreter; false, having said why, when it traps.</summary>
@@ -345,7 +350,7 @@ public sealed partial class SilGen {
     ///     evaluation, it is computed first, and read from its global.
     /// </summary>
     internal object? ConstantRead(FieldSymbol field) {
-        if (field.DeclaringSyntax is not [ConstDeclarationSyntax]) {
+        if (!field.IsConstant) {
             return null;
         }
 

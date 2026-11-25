@@ -29,23 +29,15 @@ internal static class Visibility {
         return null;
     }
 
-    /// <summary>The syntax a symbol was written as, or its container's when the compiler made it.</summary>
-    static SyntaxNode? DeclarationOf(Symbol symbol) {
+    /// <summary>The file a symbol was written in, or its container when the compiler made it.</summary>
+    static SyntaxTree? FileOf(Symbol symbol, Compilation compilation) {
         for (var here = symbol; here is not null; here = here.ContainingSymbol) {
-            if (!here.DeclaringSyntax.IsEmpty) {
-                return here.DeclaringSyntax[0];
+            if (here.IsDeclared) {
+                return here.Source?.Tree ?? compilation.TreeOf(here.DeclaringSyntax[0]);
             }
         }
 
         return null;
-    }
-
-    static SyntaxNode RootOf(SyntaxNode node) {
-        while (node.Parent is { } parent) {
-            node = parent;
-        }
-
-        return node;
     }
 
     /// <summary>
@@ -66,12 +58,11 @@ internal static class Visibility {
             // The workspace a file belongs to is part of how it was parsed;
             // the files of one workspace see each other's package members.
             case Accessibility.Package:
-                return DeclarationOf(symbol) is not { } written
-                    || compilation.FileScopeOf(written) is not { } declared
-                    || string.Equals(declared.Tree.Options.Workspace, scope.Tree.Options.Workspace, StringComparison.Ordinal)
+                return FileOf(symbol, compilation) is not { } declared
+                    || string.Equals(declared.Options.Workspace, scope.Tree.Options.Workspace, StringComparison.Ordinal)
                     // The standard library's own, some of them read from disk
                     // in place of the embedded (CoreLibrary.Brought).
-                    || CoreLibrary.IsStandardLibrary(CoreLibrary.ModuleOf(declared.Tree)) && CoreLibrary.IsStandardLibrary(CoreLibrary.ModuleOf(scope.Tree));
+                    || CoreLibrary.IsStandardLibrary(CoreLibrary.ModuleOf(declared)) && CoreLibrary.IsStandardLibrary(CoreLibrary.ModuleOf(scope.Tree));
 
             case Accessibility.Internal:
                 return ModuleOf(symbol) is not { } module || ReferenceEquals(module, scope.Module);
@@ -79,8 +70,8 @@ internal static class Visibility {
             // At the top level the enclosing declaration is the file.
             default:
                 return symbol.ContainingSymbol is not ModuleSymbol
-                    || DeclarationOf(symbol) is not { } declaration
-                    || ReferenceEquals(RootOf(declaration), scope.Tree.Root);
+                    || FileOf(symbol, compilation) is not { } file
+                    || ReferenceEquals(file, scope.Tree);
         }
     }
 

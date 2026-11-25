@@ -11,7 +11,10 @@ namespace Sable.Symbols;
 /// </summary>
 public sealed partial class Compilation {
     /// <summary>An initialiser a subclass inherits: the superclass's it calls, and the class declaration it is lowered at.</summary>
-    public sealed record InheritedInitializer(FunctionSymbol Inherited, NamedTypeSymbol Superclass, SyntaxNode Declaration, SyntaxTree Tree);
+    public sealed record InheritedInitializer(FunctionSymbol Inherited, NamedTypeSymbol Superclass, NamedTypeSymbol Type, SyntaxTree Tree) {
+        /// <summary>The class's declaration.</summary>
+        public SyntaxNode Declaration => Type.DeclaringSyntax[0];
+    }
 
     readonly Dictionary<FunctionSymbol, InheritedInitializer> _inheritedInitializers = [];
     readonly Dictionary<FunctionSymbol, BoundBlock> _inheritedBodies = [];
@@ -107,7 +110,7 @@ public sealed partial class Compilation {
             ];
 
             type.AddMember(init);
-            _inheritedInitializers[init] = new(inherited, superclass, declaration, tree);
+            _inheritedInitializers[init] = new(inherited, superclass, type, tree);
         }
     }
 

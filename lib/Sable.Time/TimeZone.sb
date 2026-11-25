@@ -21,25 +21,16 @@ module Sable.Time
 /// assert(TimeZone.utc.offset(at: summer) == UtcOffset.utc)
 /// ```
 public struct TimeZone: Hashable {
-    /// The IANA id, "Europe/Prague"; for a fixed zone its offset, "+05:30",
-    /// or "UTC"; for a POSIX rule the rule.
-    public let id: String
-    /// When the clocks changed, in seconds since the epoch, in order.
-    let times: Int[>..]
-    /// The local time type each change was to.
-    let indices: Int[>..]
-    /// The local time types; the first is the one before the first change.
-    let types: LocalTimeType[>..]
-    /// The rule after the last change, or none to keep its type.
-    let rule: PosixRule?
+    /// What the zone is, which its copies share: a zone is one reference.
+    let data: TimeZoneData
 
     init(id: String, times: Int[>..], indices: Int[>..], types: LocalTimeType[>..], rule: PosixRule?) {
-        self.id = id
-        self.times = times
-        self.indices = indices
-        self.types = types
-        self.rule = rule
+        self.data = TimeZoneData(id: id, times: times, indices: indices, types: types, rule: rule)
     }
+
+    /// The IANA id, "Europe/Prague"; for a fixed zone its offset, "+05:30",
+    /// or "UTC"; for a POSIX rule the rule.
+    public var id: String => data.id
 
     /// UTC: an offset of zero, always.
     public static var utc: TimeZone {
@@ -77,28 +68,28 @@ public struct TimeZone: Hashable {
 
     /// The offset of the zone's clocks at the moment.
     public fn offset(at instant: UtcDateTime) -> UtcOffset {
-        return UtcOffset(seconds: typeAt(instant.secondsSinceEpoch).offset)
+        return UtcOffset(seconds: data.offset(at: instant.secondsSinceEpoch))
     }
 
     /// The abbreviation of the zone's time at the moment: "CET", "EDT",
     /// "+0530" where the database has none.
     public fn abbreviation(at instant: UtcDateTime) -> String {
-        return typeAt(instant.secondsSinceEpoch).abbreviation
+        return data.types[data.typeIndex(at: instant.secondsSinceEpoch)].abbreviation
     }
 
     /// Whether the zone keeps daylight saving time at the moment.
     public fn isDaylightSaving(at instant: UtcDateTime) -> Bool {
-        return typeAt(instant.secondsSinceEpoch).isDaylightSaving
+        return data.types[data.typeIndex(at: instant.secondsSinceEpoch)].isDaylightSaving
     }
 
     /// Whether the zone's offset never changes: UTC, a fixed one, a rule
     /// with no daylight saving.
     public var isFixed: Bool {
         get {
-            if !times.isEmpty {
+            if !data.times.isEmpty {
                 return false
             }
-            if let rule = self.rule {
+            if let rule = data.rule {
                 if let _ = rule.daylight {
                     return false
                 }
@@ -109,7 +100,8 @@ public struct TimeZone: Hashable {
 
     /// The moment the moment is in the zone.
     public fn at(_ instant: UtcDateTime) -> ZonedDateTime {
-        return ZonedDateTime(instant: instant, zone: self, offset: offset(at: instant))
+        let type = data.typeIndex(at: instant.secondsSinceEpoch)
+        return ZonedDateTime(instant: instant, zone: self, offset: UtcOffset(seconds: data.types[type].offset), type: type)
     }
 
     /// The offsets the zone has for the local date and time: one, or a gap
@@ -126,9 +118,9 @@ public struct TimeZone: Hashable {
         // began; the local time is at one of them where that offset is the
         // zone's at the moment it makes.
         var starts: Int[>..] = [l - 172800]
-        var offsets: Int[>..] = [typeAt(l - 172800).offset]
+        var offsets: Int[>..] = [data.offset(at: l - 172800)]
         var at = l - 172800
-        while let next = nextChange(after: at) {
+        while let next = data.nextChange(after: at) {
             if next.at > l + 172800 {
                 break
             }
@@ -138,7 +130,7 @@ public struct TimeZone: Hashable {
         }
         var valid: Int[>..] = []
         for offset in offsets {
-            if typeAt(l - offset).offset == offset && !valid.contains(offset) {
+            if data.offset(at: l - offset) == offset && !valid.contains(offset) {
                 valid.append(offset)
             }
         }
@@ -162,13 +154,13 @@ public struct TimeZone: Hashable {
             i += 1
         }
         // Not reached by a zone whose changes are days apart.
-        return .Unambiguous(offset: UtcOffset(seconds: typeAt(l).offset))
+        return .Unambiguous(offset: UtcOffset(seconds: data.offset(at: l)))
     }
 
     /// The first change of the zone's clocks after the moment; none when
     /// they never change again.
     public fn nextTransition(after instant: UtcDateTime) -> ZoneTransition? {
-        if let change = nextChange(after: instant.secondsSinceEpoch) {
+        if let change = data.nextChange(after: instant.secondsSinceEpoch) {
             return change.transition()
         }
         return none
@@ -185,22 +177,64 @@ public struct TimeZone: Hashable {
     /// ```
     public fn previousTransition(before instant: UtcDateTime) -> ZoneTransition? {
         let seconds = instant.nanosecond > 0 ? instant.secondsSinceEpoch + 1 : instant.secondsSinceEpoch
-        if let change = previousChange(before: seconds) {
+        if let change = data.previousChange(before: seconds) {
             return change.transition()
         }
         return none
     }
 
-    /// The local time type at seconds since the epoch.
-    fn typeAt(_ seconds: Int) -> LocalTimeType {
+    public operator == (a: TimeZone, b: TimeZone) -> Bool {
+        return a.id == b.id
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+/// What a TimeZone is.
+@immutable
+final class TimeZoneData {
+    let id: String
+    /// When the clocks changed, in seconds since the epoch, in order: what
+    /// the database says, and then what the rule does for some decades, so
+    /// that the rule is seldom worked out.
+    let times: Int[>..]
+    /// The local time type each change was to.
+    let indices: Int[>..]
+    /// The local time types; the first is the one before the first change,
+    /// and the last two, where there is a rule, its standard and daylight
+    /// saving time.
+    let types: LocalTimeType[>..]
+    /// The rule after the last change, or none to keep its type.
+    let rule: PosixRule?
+    let hasRule: Bool
+
+    init(id: String, times: Int[>..], indices: Int[>..], types: LocalTimeType[>..], rule: PosixRule?) {
+        self.id = id
+        self.rule = rule
+        self.hasRule = rule != none
+        var times = times
+        var indices = indices
+        var types = types
+        if let rule = rule {
+            types.append(rule.standard)
+            types.append(rule.daylight ?? rule.standard)
+            rule.extend(&times, &indices, standard: types.count - 2)
+        }
+        self.times = times
+        self.indices = indices
+        self.types = types
+    }
+
+    /// Where among the types the one at seconds since the epoch is.
+    fn typeIndex(at seconds: Int) -> Int {
         let n = times.count
-        if let rule = self.rule {
-            if n == 0 || seconds > times[n - 1] {
-                return rule.typeAt(seconds)
-            }
+        if hasRule && (n == 0 || seconds > times[n - 1]) {
+            return rule!.isDaylightSaving(at: seconds) ? types.count - 1 : types.count - 2
         }
         if n == 0 || seconds < times[0] {
-            return types[0]
+            return 0
         }
         // The last change at or before the moment.
         var low = 0
@@ -213,7 +247,12 @@ public struct TimeZone: Hashable {
                 high = middle
             }
         }
-        return types[indices[low]]
+        return indices[low]
+    }
+
+    /// The offset of the local time type at seconds since the epoch.
+    fn offset(at seconds: Int) -> Int {
+        return types[typeIndex(at: seconds)].offset
     }
 
     /// The first change after seconds since the epoch.
@@ -264,14 +303,6 @@ public struct TimeZone: Hashable {
             }
         }
         return ZoneChange { at: times[low], type: types[indices[low]] }
-    }
-
-    public operator == (a: TimeZone, b: TimeZone) -> Bool {
-        return a.id == b.id
-    }
-
-    public fn hash(into hasher: inout Hasher) {
-        hasher.combine(id)
     }
 }
 

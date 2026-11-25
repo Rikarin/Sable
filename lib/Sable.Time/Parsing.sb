@@ -20,35 +20,53 @@ struct IsoDateTime {
     let offsetAt: Int
 }
 
+/// Steps over a text's bytes: everything a date or a time is written in is
+/// ASCII, but for the minus sign an offset may have.
 struct IsoScanner {
-    var chars: Char[>..]
+    let text: String
+    let bytes: Utf8View
+    let count: Int
+    /// The byte it is at.
     var at: Int
 
     init(_ text: String) {
-        self.chars = text.toArray()
+        self.text = text
+        self.bytes = text.utf8
+        self.count = text.utf8.count
         self.at = 0
     }
 
-    var atEnd: Bool => at >= chars.count
+    var atEnd: Bool => at >= count
 
-    var current: Char? => at < chars.count ? chars[at] : none
+    /// Whether the ASCII character is next.
+    fn isAt(_ c: Char) -> Bool {
+        return at < count && Int(bytes[at]) == c.codePoint
+    }
+
+    /// Whether U+2212 is next: E2 88 92.
+    var isAtMinusSign: Bool => at + 2 < count && bytes[at] == 0xE2 && bytes[at + 1] == 0x88 && bytes[at + 2] == 0x92
+
+    /// Where a byte is in scalars, as an error says it.
+    fn position(_ byte: Int) -> Int {
+        return Runtime.countScalars(text, 0, byte)
+    }
 
     /// Steps over the character if it is next.
     mutating fn skip(_ c: Char) {
-        if at < chars.count && chars[at] == c {
+        if isAt(c) {
             at += 1
         }
     }
 
     /// Nothing may follow.
     fn end() throws(ParseError) {
-        if at < chars.count {
-            throw .Invalid(at: at)
+        if at < count {
+            throw .Invalid(at: position(at))
         }
     }
 
     fn isDigit(_ offset: Int) -> Bool {
-        return at + offset < chars.count && chars[at + offset].isDigit
+        return at + offset < count && bytes[at + offset] >= 48 && bytes[at + offset] <= 57
     }
 
     /// The digits from here on, at most 'most'.
@@ -60,22 +78,22 @@ struct IsoScanner {
         return n
     }
 
-    /// Exactly 'count' digits.
-    mutating fn digits(_ count: Int) throws(ParseError) -> Int {
-        if chars.count == 0 {
+    /// Exactly 'wanted' digits.
+    mutating fn digits(_ wanted: Int) throws(ParseError) -> Int {
+        if count == 0 {
             throw .Empty
         }
         var value = 0
         var i = 0
-        while i < count {
-            if at >= chars.count {
-                throw i == 0 ? ParseError.Invalid(at: at) : ParseError.InvalidDigit(at: at)
+        while i < wanted {
+            if at >= count {
+                throw i == 0 ? ParseError.Invalid(at: position(at)) : ParseError.InvalidDigit(at: position(at))
             }
-            let c = chars[at]
-            if !c.isDigit {
-                throw .InvalidDigit(at: at)
+            let byte = bytes[at]
+            if byte < 48 || byte > 57 {
+                throw .InvalidDigit(at: position(at))
             }
-            value = value * 10 + (c.codePoint - 48)
+            value = value * 10 + Int(byte) - 48
             at += 1
             i += 1
         }
@@ -83,21 +101,21 @@ struct IsoScanner {
     }
 
     mutating fn expect(_ c: Char) throws(ParseError) {
-        if at >= chars.count || chars[at] != c {
-            throw .Invalid(at: at)
+        if !isAt(c) {
+            throw .Invalid(at: position(at))
         }
         at += 1
     }
 
     /// A date: calendar, ordinal or week, extended or basic.
     mutating fn date() throws(ParseError) -> Date {
-        if chars.count == 0 {
+        if count == 0 {
             throw .Empty
         }
         var year = 0
-        if current == '+' || current == '-' {
+        if isAt('+') || isAt('-') {
             // An expanded year: its sign, and more than four digits.
-            let negative = current == '-'
+            let negative = isAt('-')
             at += 1
             let count = digitRun(9)
             if count < 4 {
@@ -109,41 +127,41 @@ struct IsoScanner {
             year = try digits(4)
         }
         var extended = false
-        if current == '-' {
+        if isAt('-') {
             extended = true
             at += 1
         }
-        if current == 'W' {
+        if isAt('W') {
             at += 1
             let weekAt = at
             let week = try digits(2)
             var weekday = 1
-            if extended && current == '-' || !extended && isDigit(0) {
+            if extended && isAt('-') || !extended && isDigit(0) {
                 if extended {
                     at += 1
                 }
                 let weekdayAt = at
                 weekday = try digits(1)
                 if weekday < 1 || weekday > 7 {
-                    throw .Invalid(at: weekdayAt)
+                    throw .Invalid(at: position(weekdayAt))
                 }
             }
             if let date = Date.of(isoWeekYear: year, week: week, weekday: Weekday.ofChecked(weekday)) {
                 return date
             }
-            throw .Invalid(at: weekAt)
+            throw .Invalid(at: position(weekAt))
         }
         let run = digitRun(5)
-        if run == 3 && !(extended && current == '-') && !isDigit(3) {
+        if run == 3 && !(extended && isAt('-')) && !isDigit(3) {
             let dayAt = at
             let day = try digits(3)
             if let date = Date.of(year: year, dayOfYear: day) {
                 return date
             }
-            throw .Invalid(at: dayAt)
+            throw .Invalid(at: position(dayAt))
         }
         if !extended && run != 4 {
-            throw run == 0 ? ParseError.Invalid(at: at) : ParseError.InvalidDigit(at: at + run)
+            throw run == 0 ? ParseError.Invalid(at: position(at)) : ParseError.InvalidDigit(at: position(at + run))
         }
         let monthAt = at
         let month = try digits(2)
@@ -153,10 +171,10 @@ struct IsoScanner {
         let dayAt = at
         let day = try digits(2)
         if month < 1 || month > 12 {
-            throw .Invalid(at: monthAt)
+            throw .Invalid(at: position(monthAt))
         }
         if day < 1 || day > daysInMonth(year, month) {
-            throw .Invalid(at: dayAt)
+            throw .Invalid(at: position(dayAt))
         }
         return Date(checkedYear: year, month: month, day: day)
     }
@@ -169,7 +187,7 @@ struct IsoScanner {
         var minute = 0
         var second = 0
         var nanos = 0
-        let extended = current == ':'
+        let extended = isAt(':')
         var minuteAt = at
         var secondAt = at
         // The unit the last part is in, in nanoseconds, for its fraction.
@@ -181,7 +199,7 @@ struct IsoScanner {
             minuteAt = at
             minute = try digits(2)
             unit = 60000000000
-            if extended && current == ':' && isDigit(1) || !extended && isDigit(0) {
+            if extended && isAt(':') && isDigit(1) || !extended && isDigit(0) {
                 if extended {
                     at += 1
                 }
@@ -190,7 +208,7 @@ struct IsoScanner {
                 unit = 1000000000
             }
         }
-        if current == '.' || current == ',' {
+        if isAt('.') || isAt(',') {
             at += 1
             // Each digit a tenth of the one before, down to the nanosecond;
             // the digits past it dropped.
@@ -199,56 +217,57 @@ struct IsoScanner {
             while isDigit(0) {
                 if step % 10 == 0 {
                     step /= 10
-                    nanos += (chars[at].codePoint - 48) * step
+                    nanos += (Int(bytes[at]) - 48) * step
                 }
                 places += 1
                 at += 1
             }
             if places == 0 {
-                throw .InvalidDigit(at: at)
+                throw .InvalidDigit(at: position(at))
             }
         }
         if hour == 24 && minute == 0 && second == 0 && nanos == 0 {
             return IsoTime { time: TimeOfDay.midnight, endOfDay: true }
         }
         if hour > 23 {
-            throw .Invalid(at: hourAt)
+            throw .Invalid(at: position(hourAt))
         }
         if minute > 59 {
-            throw .Invalid(at: minuteAt)
+            throw .Invalid(at: position(minuteAt))
         }
         if second > 59 {
-            throw .Invalid(at: secondAt)
+            throw .Invalid(at: position(secondAt))
         }
         let total = ((hour * 60 + minute) * 60 + second) * 1000000000 + nanos
         if total >= nanosecondsPerDay {
-            throw .Invalid(at: hourAt)
+            throw .Invalid(at: position(hourAt))
         }
         return IsoTime { time: TimeOfDay(nanosecondOfDay: total), endOfDay: false }
     }
 
     /// An offset: Z, or a sign and hh, hh:mm, hhmm, hh:mm:ss.
     mutating fn offset() throws(ParseError) -> UtcOffset {
-        if current == 'Z' || current == 'z' {
+        if isAt('Z') || isAt('z') {
             at += 1
             return UtcOffset.utc
         }
-        if current != '+' && current != '-' && current != '−' {
-            throw .Invalid(at: at)
+        if !isAt('+') && !isAt('-') && !isAtMinusSign {
+            throw .Invalid(at: position(at))
         }
-        let sign = current == '+' ? 1 : -1
-        let signAt = at
-        at += 1
+        let sign = isAt('+') ? 1 : -1
+        // The minus sign is three bytes.
+        at += isAtMinusSign ? 3 : 1
+        let hoursAt = at
         let hours = try digits(2)
         var minutes = 0
         var seconds = 0
-        let extended = current == ':'
+        let extended = isAt(':')
         if extended && isDigit(1) || !extended && isDigit(0) {
             if extended {
                 at += 1
             }
             minutes = try digits(2)
-            if extended && current == ':' && isDigit(1) || !extended && isDigit(0) {
+            if extended && isAt(':') && isDigit(1) || !extended && isDigit(0) {
                 if extended {
                     at += 1
                 }
@@ -256,7 +275,7 @@ struct IsoScanner {
             }
         }
         if hours > 25 || minutes > 59 || seconds > 59 {
-            throw .Invalid(at: signAt + 1)
+            throw .Invalid(at: position(hoursAt))
         }
         return UtcOffset(seconds: sign * (hours * 3600 + minutes * 60 + seconds))
     }
@@ -267,8 +286,8 @@ struct IsoScanner {
         if atEnd {
             return LocalDateTime(date: date, time: TimeOfDay.midnight)
         }
-        if current != 'T' && current != 't' && current != ' ' {
-            throw .Invalid(at: at)
+        if !isAt('T') && !isAt('t') && !isAt(' ') {
+            throw .Invalid(at: position(at))
         }
         at += 1
         let time = try self.time()
@@ -282,10 +301,10 @@ struct IsoScanner {
     mutating fn dateTime() throws(ParseError) -> IsoDateTime {
         let local = try localDateTime()
         let offsetAt = at
-        if current == 'Z' || current == 'z' || current == '+' || current == '-' || current == '−' {
-            return IsoDateTime { local: local, offset: try offset(), offsetAt: offsetAt }
+        if isAt('Z') || isAt('z') || isAt('+') || isAt('-') || isAtMinusSign {
+            return IsoDateTime { local: local, offset: try offset(), offsetAt: position(offsetAt) }
         }
-        return IsoDateTime { local: local, offset: none, offsetAt: offsetAt }
+        return IsoDateTime { local: local, offset: none, offsetAt: position(offsetAt) }
     }
 }
 
@@ -503,22 +522,22 @@ fn readRfc3339(_ text: String) throws(ParseError) -> OffsetDateTime {
     if scanner.at != 10 {
         throw .Invalid(at: 4)
     }
-    if scanner.current != 'T' && scanner.current != 't' && scanner.current != ' ' {
-        throw .Invalid(at: scanner.at)
+    if !scanner.isAt('T') && !scanner.isAt('t') && !scanner.isAt(' ') {
+        throw .Invalid(at: scanner.position(scanner.at))
     }
     scanner.at += 1
     let timeAt = scanner.at
     let time = try scanner.time()
-    if scanner.at < timeAt + 8 || scanner.chars[timeAt + 2] != ':' || time.endOfDay {
-        throw .Invalid(at: timeAt)
+    if scanner.at < timeAt + 8 || scanner.bytes[timeAt + 2] != 58 || time.endOfDay {
+        throw .Invalid(at: scanner.position(timeAt))
     }
-    if scanner.current != 'Z' && scanner.current != 'z' && scanner.current != '+' && scanner.current != '-' {
-        throw .Invalid(at: scanner.at)
+    if !scanner.isAt('Z') && !scanner.isAt('z') && !scanner.isAt('+') && !scanner.isAt('-') {
+        throw .Invalid(at: scanner.position(scanner.at))
     }
     let offsetAt = scanner.at
     let offset = try scanner.offset()
     if scanner.at != offsetAt + 1 && scanner.at != offsetAt + 6 {
-        throw .Invalid(at: offsetAt)
+        throw .Invalid(at: scanner.position(offsetAt))
     }
     try scanner.end()
     return OffsetDateTime(local: LocalDateTime(date: date, time: time.time), offset: offset)

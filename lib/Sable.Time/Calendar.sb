@@ -50,6 +50,14 @@ fn yearLength(_ year: Int) -> Int {
 
 /// Days since 1970-01-01 of the civil date.
 fn daysFromCivil(_ year: Int, _ month: Int, _ day: Int) -> Int {
+    if year > -32000 && year < 1000000 {
+        // As civilFromDays does it, the other way: nothing here overflows.
+        let early = month <= 2
+        let y = year &+ 32800 &- (early ? 1 : 0)
+        let m = early ? month &+ 12 : month
+        let century = y / 100
+        return 1461 &* y / 4 &- century &+ century / 4 &+ (979 &* m &- 2919) / 32 &+ day &- 12699423
+    }
     var y = year
     if month <= 2 {
         y -= 1
@@ -67,6 +75,26 @@ fn daysFromCivil(_ year: Int, _ month: Int, _ day: Int) -> Int {
 
 /// The civil date of the days since 1970-01-01, as a Date.
 fn civilFromDays(_ days: Int) -> Date {
+    if days > -11000000 && days < 300000000 {
+        // C. Neri and L. Schneider, "Euclidean affine functions and their
+        // application to calendar algorithms" (2022), counted from the first
+        // of March of year -32800: a year is split off with one
+        // multiplication, and a month with another. Nothing here overflows.
+        let n = 4 &* (days &+ 12699422) &+ 3
+        let century = n / 146097
+        let inCentury = n &- century &* 146097 | 3
+        let product = 2939745 &* inCentury
+        let yearOfCentury = product >> 32
+        let dayOfYear = (product & 0xFFFFFFFF) / 2939745 / 4
+        let monthAndDay = 2141 &* dayOfYear &+ 197913
+        let early = dayOfYear >= 306
+        let m = monthAndDay >> 16
+        return Date(
+            checkedYear: 100 &* century &+ yearOfCentury &- 32800 &+ (early ? 1 : 0),
+            month: early ? m &- 12 : m,
+            day: (monthAndDay & 0xFFFF) / 2141 &+ 1,
+        )
+    }
     let shiftedDays = days + 719468
     let era = floorDivide(shiftedDays, 146097)
     let dayOfEra = shiftedDays - era * 146097
@@ -109,18 +137,4 @@ fn padded(_ n: Int, _ width: Int) -> String {
 
 fn two(_ n: Int) -> String {
     return padded(n, 2)
-}
-
-/// The nine digits of the nanoseconds, the zeros after the last other
-/// digit left off: "5" for half a second, "" for none.
-fn fractionDigits(_ nanosecond: Int) -> String {
-    if nanosecond == 0 {
-        return ""
-    }
-    var digits = padded(nanosecond, 9)
-    var end = digits.count
-    while digits.at(end - 1) == '0' {
-        end -= 1
-    }
-    return digits.slice(from: 0, to: end)
 }

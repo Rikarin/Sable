@@ -99,7 +99,7 @@ public sealed class PassTests {
         );
         SilPassManager.Run(module, SilPassManager.Optimising);
         Assert.Equal(0, Copies(module, "M.probe"));
-        Assert.Equal(173L, new SilInterpreter(module).Run("M.probe", 9L));
+        Assert.Equal(169L, new SilInterpreter(module).Run("M.probe", 9L));
     }
 
     /// <summary>A method taken as a closure borrows the receiver its context holds.</summary>

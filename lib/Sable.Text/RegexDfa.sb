@@ -72,6 +72,12 @@ final class RegexDfa {
     // literal (searched for instead), or when most bytes start a match.
     var skippable: Bool[>..] = []
     var skippableKnown: Bool = false
+    // How a search by the places a match may start goes: those places, how
+    // far the last match tried was read, and how often it was given up.
+    var startsOf: RegexStarts? = none
+    var stoppedAt: Int = 0
+    var failures: Int = 0
+    var tooMany: Bool = false
 
     // Scratch for a step.
     var seenDense: Int[>..] = []
@@ -482,6 +488,129 @@ final class RegexDfa {
             flags = flags | contextNewline
         }
         return flags
+    }
+
+    /// The leftmost-first match that starts at or after 'from', found by
+    /// matching from each place one may start, as its start and its end —
+    /// when 'earliest', where the first match seen from there ends;
+    /// (-1, -1) where there is none. Where such places are many and match
+    /// nothing — so that a text could be read over and over — or the pattern
+    /// says nothing of how it starts, what is left to be searched: from
+    /// where, and -1.
+    fn findByStarts(_ text: String, _ start: Int, _ end: Int, _ from: Int, _ leading: String, _ inner: RegexInner?, earliest: Bool = false) -> (Int, Int) {
+        if tooMany {
+            return (from, -1)
+        }
+        // How much reading past a place that matched nothing is let go on.
+        var allowed = 64
+        var at = from
+        if let around = inner {
+            while true {
+                let found = Runtime.findUtf8(text, at, end, around.needle, 0, 1)
+                if found < 0 {
+                    return (-1, -1)
+                }
+                let first = around.before.findStart(text, start, end, found, limit: at)
+                if first >= 0 {
+                    let last = matchFrom(text, start, end, first, earliest)
+                    if last >= 0 {
+                        failures -= failures > 0 ? 1 : 0
+                        return (first, last)
+                    }
+                    allowed += 4 * (found - at) - (stoppedAt - found)
+                }
+                at = found + 1
+                if allowed < 0 {
+                    return givenUp(at)
+                }
+            }
+        }
+        let prefixed = leading.utf8Count > 0
+        if !prefixed && startsOf == none {
+            startsOf = RegexStarts(program)
+        }
+        let starts = prefixed ? none : startsOf
+        if !prefixed && !starts!.useful {
+            return (from, -1)
+        }
+        while true {
+            let before = at
+            if prefixed {
+                let found = Runtime.findUtf8(text, at, end, leading, 0, leading.utf8Count)
+                if found < 0 {
+                    return (-1, -1)
+                }
+                at = found
+            } else {
+                at = starts!.next(text, start, at, end)
+                if at >= end {
+                    return (-1, -1)
+                }
+            }
+            let last = matchFrom(text, start, end, at, earliest)
+            if last >= 0 {
+                failures -= failures > 0 ? 1 : 0
+                return (at, last)
+            }
+            allowed += 4 * (at + 1 - before) - (stoppedAt - at)
+            at += scalarAt(text, at) >> 21
+            if allowed < 0 {
+                return givenUp(at)
+            }
+        }
+    }
+
+    /// What 'findByStarts' gives having read too much: where to search from.
+    /// A pattern that does it again and again is not searched for so.
+    fn givenUp(_ at: Int) -> (Int, Int) {
+        failures += 1
+        tooMany = failures > 16
+        return (at, -1)
+    }
+
+    /// Where the leftmost-first match that starts at the place ends — or,
+    /// when 'earliest', where the first seen does — or -1, and 'stoppedAt' says how far it read.
+    fn matchFrom(_ text: String, _ start: Int, _ end: Int, _ from: Int, _ earliest: Bool) -> Int {
+        let classes = classOf
+        let width = stride
+        var row = startRow(flagMask == 0 ? 0 : from > start ? flagsOfCode(scalarBefore(text, from) & 0x1FFFFF) : contextStart, anchored: true) >> 2
+        var table = steps
+        var last = -1
+        var at = from
+        while at < end {
+            let byte = Int(text.utf8[at])
+            let position = at
+            var packed = 0
+            if byte < 128 {
+                packed = table[row + classes[byte]]
+                if packed < 0 {
+                    table = []
+                    packed = asciiStep(row / width, byte)
+                    table = steps
+                }
+                at += 1
+            } else {
+                let scalar = scalarAt(text, at)
+                table = []
+                packed = wideStep(row / width, scalar & 0x1FFFFF)
+                table = steps
+                at += scalar >> 21
+            }
+            if (packed & 1) != 0 {
+                last = position
+            }
+            row = packed >> 2
+            if row == 0 || earliest && last >= 0 {
+                stoppedAt = at
+                return last
+            }
+        }
+        table = []
+        if matchesAtEnd(row / width) {
+            last = end
+        }
+        stoppedAt = at
+        return last
     }
 
     /// Where the leftmost-first match in the text from 'start' to 'end'

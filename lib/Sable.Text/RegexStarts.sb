@@ -1,0 +1,183 @@
+module Sable.Text
+
+// What every match of a pattern must start with, or have in it, worked out
+// from the program or the tree before anything is matched: where a search
+// need not look is passed over unread by the automata.
+
+/// The bytes a match can start with. Only for a pattern no match of which
+/// is empty.
+final class RegexStarts {
+    /// For each byte, whether a match may start with it.
+    var table: Bool[>..] = []
+    /// The same as ranges of ASCII characters, two for each, where there are
+    /// few enough to be searched for at once and none past ASCII: else "".
+    var ranges: String = ""
+    /// Whether the table says anything: some byte starts no match.
+    var useful: Bool = false
+    /// Whether every match starts where a line does.
+    var atLines: Bool = false
+
+    init(_ program: RegexProgram) {
+        table = []
+        var b = 0
+        while b < 256 {
+            table.append(false)
+            b += 1
+        }
+        var first = regexAnchoredStart
+        while program.ops[first] == opSave {
+            first = program.ys[first]
+        }
+        atLines = program.ops[first] == opLook && program.xs[first] == lookStartLine
+        // Everything the anchored start leads to without taking a character,
+        // whatever the assertions say.
+        var seen: Bool[>..] = []
+        seen.append(repeating: false, count: program.count)
+        var stack: Int[>..] = [regexAnchoredStart]
+        while stack.count > 0 {
+            let pc = stack.removeLast()
+            if seen[pc] {
+                continue
+            }
+            seen[pc] = true
+            let op = program.ops[pc]
+            if op == opMatch {
+                // It can match nothing, anywhere.
+                return
+            }
+            if op == opSplit {
+                stack.append(program.ys[pc])
+                stack.append(program.xs[pc])
+            } else if op == opJump {
+                stack.append(program.xs[pc])
+            } else if op == opSave || op == opLook || op == opMark || op == opCheck {
+                stack.append(program.ys[pc])
+            } else if op <= opAnyButNewline {
+                b = 0
+                while b < 128 {
+                    if program.takes(pc, b) {
+                        table[b] = true
+                    }
+                    b += 1
+                }
+                if program.mayTakeWide(pc) {
+                    while b < 256 {
+                        table[b] = true
+                        b += 1
+                    }
+                }
+            }
+        }
+        var pairs: U8[>..] = []
+        b = 0
+        while b < 256 {
+            if !table[b] {
+                useful = true
+            } else if b == 0 || !table[b - 1] {
+                pairs.append(U8(b))
+                pairs.append(U8(b))
+            } else {
+                pairs[pairs.count - 1] = U8(b)
+            }
+            b += 1
+        }
+        if pairs.count > 0 && pairs.count <= 8 && pairs[pairs.count - 1] < 128 {
+            unsafe {
+                ranges = String.fromUtf8Unchecked(pairs)
+            }
+        }
+    }
+
+    /// Where the first byte a match may start with is, from the offset on;
+    /// 'end' where there is none. The text starts at 'start'.
+    @inline(always)
+    fn next(_ text: String, _ start: Int, _ from: Int, _ end: Int) -> Int {
+        var at = from
+        if atLines {
+            while true {
+                if at > start && at <= end && text.utf8[at - 1] != 0x0A {
+                    let found = Runtime.findUtf8(text, at, end, "\n", 0, 1)
+                    at = found < 0 ? end : found + 1
+                }
+                if at >= end || table[Int(text.utf8[at])] {
+                    return at
+                }
+                at += 1
+            }
+        }
+        // A few bytes on, or a long way.
+        let near = end - from > 16 && ranges.utf8Count > 0 ? from + 16 : end
+        while at < near {
+            if table[Int(text.utf8[at])] {
+                return at
+            }
+            at += 1
+        }
+        if at < end {
+            let found = Runtime.findAnyUtf8(text, at, end, ranges)
+            return found < 0 ? end : found
+        }
+        return at
+    }
+}
+
+/// An ASCII character that every match has in it, and that nothing a match
+/// has before it can be: the '@' of an address, the ':' of a pair. Searched
+/// for first, it has the match's start behind it, found by running what
+/// comes before it backwards, which never goes past the one before.
+final class RegexInner {
+    let needle: String
+    let before: RegexDfa
+
+    init(_ needle: String, _ before: RegexDfa) {
+        self.needle = needle
+        self.before = before
+    }
+}
+
+/// The inner character the pattern has, if it has one.
+fn innerLiteral(_ root: RegexNode, classes: RegexCharClass[>..], names: String[>..]) -> RegexInner? {
+    guard case .Concat(let items) = root else {
+        return none
+    }
+    var i = 1
+    while i < items.count {
+        if case .Literal(let code) = items[i] {
+            if code < 128 {
+                var before: RegexNode[>..] = []
+                for item in items[0..<i] {
+                    if mayHave(item, code, classes) {
+                        return none
+                    }
+                    before.append(item)
+                }
+                guard let program = try? RegexProgram.compile(.Concat(items: before), classes: classes, groupCount: 0, names: names, reverse: true) else {
+                    return none
+                }
+                return RegexInner(String.fromChar(Char.fromCodePoint(code)!), RegexDfa(program, longest: true))
+            }
+        }
+        i += 1
+    }
+    return none
+}
+
+/// Whether what the node matches can have the character in it, or depends on
+/// what is around it.
+fn mayHave(_ node: RegexNode, _ code: Int, _ classes: RegexCharClass[>..]) -> Bool {
+    return match node {
+        case .Empty                      => false
+        case .Literal(let other)         => other == code
+        case .Set(let index)             => classes[index].contains(code)
+        case .AnyChar                    => true
+        case .AnyButNewline              => code != 0x0A
+        case .Group(let inner, _)        => mayHave(inner, code, classes)
+        case .Concat(let items)          => items.contains(where: { (item: RegexNode) in mayHave(item, code, classes) })
+        case .Alternate(let items)       => items.contains(where: { (item: RegexNode) in mayHave(item, code, classes) })
+        case .Repeat(let inner, _, _, _) => mayHave(inner, code, classes)
+        case .Look(_)                    => true
+        case .Atomic(_)                  => true
+        case .LookAround(_, _, _)        => true
+        case .Backref(_, _, _, _)        => true
+    }
+}

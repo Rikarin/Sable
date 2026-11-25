@@ -1506,6 +1506,20 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return found < 0 ? -1L : (long)operands[1]! + found;
             }
 
+            case "string_utf8_find_any": {
+                var text = ByteRange(operands, 0);
+                var ranges = System.Text.Encoding.UTF8.GetBytes((string)operands[3]!);
+                for (var i = 0; i < text.Length; i++) {
+                    for (var k = 0; k + 1 < ranges.Length; k += 2) {
+                        if (text[i] >= ranges[k] && text[i] <= ranges[k + 1]) {
+                            return (long)operands[1]! + i;
+                        }
+                    }
+                }
+
+                return -1L;
+            }
+
             case "string_utf8_find_last_range": {
                 var text = ByteRange(operands, 0);
                 var part = ByteRange(operands, 3);

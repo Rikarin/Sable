@@ -2673,6 +2673,7 @@ public static class SilBuiltins {
         // inside it, counted, compared, searched and hashed where they lie.
         Add("string_count_range", SilType.Int, SilType.String, SilType.Int, SilType.Int);
         Add("string_compare_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("string_utf8_find_any", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.String);
         Add("string_utf8_find_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.String, SilType.Int, SilType.Int);
         Add("string_utf8_find_last_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.String, SilType.Int, SilType.Int);
         Add("string_hash_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.Int);

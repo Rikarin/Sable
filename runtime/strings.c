@@ -697,6 +697,53 @@ int64_t sable_string_utf8_find_range(const SableString *text, int64_t from, int6
     return found == NULL ? -1 : found - text->bytes;
 }
 
+// Where the first byte of the text's range is that is in one of the ranges of
+// bytes, each the least and the greatest of it: an offset in the text, or -1.
+// Up to four of them are tested at once, sixteen bytes at a time.
+int64_t sable_string_utf8_find_any(const SableString *text, int64_t from, int64_t to, const SableString *ranges) {
+    const char *bytes = text->bytes;
+    const uint8_t *pairs = (const uint8_t *)ranges->bytes;
+    int64_t count = ranges->length / 2;
+    if (count == 0 || from >= to) {
+        return -1;
+    }
+
+    if (count == 1 && pairs[0] == pairs[1]) {
+        const char *found = memchr(bytes + from, pairs[0], (size_t)(to - from));
+        return found == NULL ? -1 : found - bytes;
+    }
+
+    int64_t i = from;
+    if (count <= 4) {
+        sable_bytes16 low[4], span[4];
+        for (int k = 0; k < 4; k++) {
+            int64_t pair = k < count ? k : count - 1;
+            low[k] = (sable_bytes16){ 0 } + pairs[2 * pair];
+            span[k] = (sable_bytes16){ 0 } + (uint8_t)(pairs[2 * pair + 1] - pairs[2 * pair]);
+        }
+
+        for (; i + 16 <= to; i += 16) {
+            sable_bytes16 v = load16(bytes + i);
+            sable_mask16 in = (sable_mask16)((v - low[0] <= span[0]) | (v - low[1] <= span[1]) | (v - low[2] <= span[2]) | (v - low[3] <= span[3]));
+            uint64_t bits = mask16_bits(in);
+            if (bits != 0) {
+                return i + __builtin_ctzll(bits) / MASK16_LANE_BITS;
+            }
+        }
+    }
+
+    for (; i < to; i++) {
+        uint8_t byte = (uint8_t)bytes[i];
+        for (int64_t k = 0; k < count; k++) {
+            if ((uint8_t)(byte - pairs[2 * k]) <= (uint8_t)(pairs[2 * k + 1] - pairs[2 * k])) {
+                return i;
+            }
+        }
+    }
+
+    return -1;
+}
+
 // Where the part's range of bytes last occurs inside the text's range: a
 // byte offset in the text, or -1.
 int64_t sable_string_utf8_find_last_range(const SableString *text, int64_t from, int64_t to, const SableString *part, int64_t partFrom, int64_t partTo) {

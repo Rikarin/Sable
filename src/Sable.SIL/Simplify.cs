@@ -849,5 +849,6 @@ public sealed class Simplify : ISilPass {
             or "string_count" or "string_compare" or "string_hash" or "hash_seed" or "string_contains" or "string_index_of" or "string_find"
             or "string_utf8_count" or "string_utf8_find" or "string_utf8_find_last" or "utf8_validate"
             or "string_count_range" or "string_compare_range" or "string_utf8_find_range" or "string_utf8_find_last_range"
+            or "string_utf8_find_any"
             or "string_hash_range" or "metadata_equal" or "metadata_hash" or "metadata_is_subtype";
 }

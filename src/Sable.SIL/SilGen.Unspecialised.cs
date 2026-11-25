@@ -1267,7 +1267,7 @@ public sealed partial class SilGen {
 
     /// <summary>Its setter: compiled once as a method of the new value is, which changes self.</summary>
     bool IsSetter(FunctionSymbol symbol) =>
-        symbol is { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol property } && ReferenceEquals(SetterOf(property), symbol);
+        symbol is { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol property } && (ReferenceEquals(SetterOf(property), symbol) || symbol.Name is "willSet" or "didSet");
 
     /// <summary>A side of a same-type requirement unspecialised code can read: a type parameter, an associated type read through one, or a type that mentions none.</summary>
     static bool SameTypeSide(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> own) =>
@@ -1680,7 +1680,9 @@ public sealed partial class SilGen {
                 BoundFieldAccess access => PropertyAllowed(access),
                 BoundConversion { ConversionKind: ConversionKind.Identity } conversion when conversion.Type.Equals(conversion.Operand.Type) || Canonical(conversion.Type).Equals(Canonical(conversion.Operand.Type)) => true,
                 // A closure that throws nothing where one that may throw is taken.
-                BoundConversion { ConversionKind: ConversionKind.Upcast } upcast => IsGenericFunction(V(upcast.Type), _own) && IsGenericFunction(V(upcast.Operand.Type), _own),
+                BoundConversion { ConversionKind: ConversionKind.Upcast } upcast => IsGenericFunction(V(upcast.Type), _own) && IsGenericFunction(V(upcast.Operand.Type), _own)
+                    // An object as one of its superclasses.
+                    || upcast is { Type: NamedTypeSymbol { TypeKind: TypeKind.Class }, Operand.Type: NamedTypeSymbol { TypeKind: TypeKind.Class } } && Simple(upcast.Type) && Simple(upcast.Operand.Type),
                 // An array or a slice of them, seen as another kind of array of them.
                 BoundConversion { ConversionKind: ConversionKind.Identity } view when IsOwnArray(view.Type) && IsOwnArray(view.Operand.Type) => Produces(view.Operand),
                 BoundArray array => IsOwnArray(array.Type),
@@ -1720,7 +1722,7 @@ public sealed partial class SilGen {
                 BoundFieldAccess access => ReferenceEquals(child, access.Receiver) && PropertyAllowed(access),
                 BoundConditional conditional => !ReferenceEquals(child, conditional.Condition),
                 BoundConversion { ConversionKind: ConversionKind.Identity } => true,
-                BoundConversion { ConversionKind: ConversionKind.Upcast } upcast => IsGenericFunction(V(upcast.Type), _own),
+                BoundConversion { ConversionKind: ConversionKind.Upcast } upcast => IsGenericFunction(V(upcast.Type), _own) || upcast.Type is NamedTypeSymbol { TypeKind: TypeKind.Class } && Simple(upcast.Type),
                 BoundArray or BoundTuple or BoundMatchArm or BoundIf or BoundRecordExpression or BoundUnionCaseConstruction or BoundDictionary => true,
                 BoundTupleElementAccess element => ReferenceEquals(child, element.Receiver),
                 BoundMatch match => ReferenceEquals(child, match.Subject),
@@ -1739,7 +1741,7 @@ public sealed partial class SilGen {
                 // Not inside a protocol's own 'debugDescription' (Error's
                 // '"\(self)"'): a describer would call it back.
                 // One made of them, an array or an optional, is written by code made for each type.
-                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0 && IsOwn(child.Type)
+                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0 && (IsOwn(child.Type) || child.Type is MetatypeTypeSymbol)
                                                         && (interpolated.Formats[at] is null || interpolated.Formats[at]!.Specifier == DebugFormat && (DebugDescribes = true)) && !DescribesSelf && (Describes = true),
                 _ => false,
             };
@@ -2120,7 +2122,7 @@ public sealed partial class SilGen {
 
             // A stored field of a generic struct this function holds, where its metadata says.
             if (access.Receiver is { } holder && field is { IsStatic: false, IsComputed: false, Builtin: null }
-                && holder.Type is NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } && Simple(holder.Type) && Simple(access.Type)) {
+                && holder.Type is NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } owner && (owner.IsConstructed || owner.IsGenericDefinition) && Simple(holder.Type) && Simple(access.Type)) {
                 return true;
             }
 

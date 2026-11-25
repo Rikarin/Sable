@@ -711,4 +711,183 @@ public sealed partial class CompiledOnceTests {
         """,
         "Test.nameOf", "Test.labelOf", "Test.getOf", "Test.swapped", "Test.checked", "Test.makeBox", "Test.makePair", "Test.watch", "Test.derived"
     );
+
+    /// <summary>Setters, lazy and observed properties, and an inherited initialiser of generic types.</summary>
+    [Fact]
+    public void PropertiesTheCompilerWritesAreCompiledOnce() => Prints(
+        "2 2\nb 2\nmade\na a\nset b\nb\nx 1\nz\n",
+        """
+            module Test
+
+            struct Cell<T> {
+                var stored: T
+                var sets: Int = 0
+                init(_ t: T) {
+                    stored = t
+                }
+
+                var value: T {
+                    get { return stored }
+                    set {
+                        stored = newValue
+                        sets += 1
+                    }
+                }
+            }
+
+            class Lazy<T> {
+                let make: () -> T
+                init(_ make: @escaping () -> T) {
+                    self.make = make
+                }
+
+                lazy var value: T = make()
+            }
+
+            class Watching<T> {
+                var value: T {
+                    didSet { print("set \(value)") }
+                }
+
+                init(_ t: T) {
+                    value = t
+                }
+            }
+
+            open class Named<T> {
+                let t: T
+                var n: Int = 1
+                init(t: T) {
+                    self.t = t
+                }
+            }
+
+            class Inherits<T>: Named<T> { }
+
+            fn put<T>(_ cell: inout Cell<T>, _ t: T) -> Int {
+                cell.value = t
+                cell.value = t
+                return cell.sets
+            }
+
+            fn twice<T>(_ once: Lazy<T>) -> (T, T) => (once.value, once.value)
+
+            fn change<T>(_ w: Watching<T>, _ t: T) {
+                w.value = t
+            }
+
+            fn inherits<T>(_ t: T) -> Named<T> => Inherits<T>(t: t)
+
+            fn text<T>(_ n: Named<T>) -> String => "\(n.t) \(n.n)"
+
+            @main
+            fn main() {
+                var c = Cell(1)
+                print("\(put(&c, 2)) \(c.value)")
+                var d = Cell("a" + "")
+                let n = put(&d, "b" + "")
+                print("\(d.value) \(n)")
+                let once = Lazy<String>({
+                    print("made")
+                    return "a" + ""
+                })
+                let both = twice(once)
+                print("\(both.0) \(both.1)")
+                let w = Watching("a")
+                change(w, "b" + "")
+                print(w.value)
+                print(text(inherits("x" + "")))
+                print(Inherits(t: "z").t)
+            }
+        """,
+        "Test.put", "Test.twice", "Test.change", "Test.inherits", "Test.text"
+    );
+
+    /// <summary>Tasks and task groups over a type parameter, their results of every layout, their errors, and cancellation.</summary>
+    [Fact]
+    public void TasksAreCompiledOnce() => Prints(
+        "3 s! true\n[1, 4, 9]\nnothing\nbad 2\n6\nnone\nfirst\nab\n",
+        """
+            module Test
+
+            struct Bad: Error { var n: Int }
+
+            fn spawned<T: Sendable>(_ make: @Sendable @escaping async () -> T) async -> T {
+                let task = Task.spawn { await make() }
+                return await task.value
+            }
+
+            fn grouped<T: Sendable>(_ n: Int, _ make: @Sendable @escaping async (Int) -> T) async -> T[>..] {
+                return await withTaskGroup(of: (Int, T).self) { group in
+                    for i in 0..<n {
+                        group.spawn { (i, await make(i)) }
+                    }
+
+                    var found: (Int, T)[>..] = []
+                    for await each in group {
+                        found.append(each)
+                    }
+
+                    var ordered: T[>..] = []
+                    for i in 0..<n {
+                        for each in found {
+                            if each.0 == i {
+                                ordered.append(each.1)
+                            }
+                        }
+                    }
+
+                    return ordered
+                }
+            }
+
+            fn orNone<T: Sendable>(_ make: @Sendable @escaping async () throws -> T) async -> T? {
+                do {
+                    return try await withThrowingTaskGroup(of: T.self) { group in
+                        group.spawn { try await make() }
+                        return try await group.next()
+                    }
+                } catch {
+                    return none
+                }
+            }
+
+            fn failing() async throws -> String {
+                throw Bad { n: 1 }
+            }
+
+            @main
+            fn main() async {
+                let three = await spawned({ 1 + 2 })
+                let text = await spawned({ "s" + "!" })
+                let yes = await spawned({ true })
+                print("\(three) \(text) \(yes)")
+                let squares = await grouped(3, { i in
+                    await Task.yield()
+                    return (i + 1) * (i + 1)
+                })
+                print("\(squares)")
+                await spawned({ print("nothing") })
+                do {
+                    _ = try await withThrowingTaskGroup(of: Int.self) { group in
+                        group.spawn { throw Bad { n: 2 } }
+                        return try await group.next()
+                    }
+                } catch let bad as Bad {
+                    print("bad \(bad.n)")
+                } catch {
+                    print("other")
+                }
+
+                print("\((await orNone({ 6 })) ?? 0)")
+                let failed: String? = await orNone(failing)
+                print(failed ?? "none")
+                let task: Task<String> = Task.spawn { "fi" + "rst" }
+                print(await task.value)
+                let letters = await grouped(2, { i in i == 0 ? "a" + "" : "b" + "" })
+                print(letters.joined(separator: ""))
+            }
+        """,
+        "Test.spawned", "Test.grouped", "Test.orNone"
+    );
 }

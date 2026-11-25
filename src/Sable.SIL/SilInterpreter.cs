@@ -617,7 +617,8 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 // The deinits, the class's own and then its superclasses',
                 // see the object alive; they may not keep it.
                 for (var type = instance.Unmade ? null : instance.Type; type is not null; type = type.Superclass) {
-                    if (type.Deinit is not { } deinit) {
+                    // A class made at run time has its generic class's, which runs what it inherits too.
+                    if (type.Deinit is not { } deinit || type != instance.Type && _concreteGenerics.ContainsKey(instance.Type.Name)) {
                         continue;
                     }
 

@@ -64,6 +64,7 @@ public sealed partial class Compilation {
         var brought = CoreLibrary.Brought(own, m => m == CoreLibrary.ModuleName ? CoreLibrary.TreesFor(target) : []);
         SyntaxTrees = [..own, ..CoreLibrary.TreesFor(target).Where(t => !CoreLibrary.IsBrought(t, brought))];
         Options = options;
+        SyntaxTree.ParseAll(SyntaxTrees);
 
         var coreModule = new ModuleSymbol("Sable.Core");
         _modules[coreModule.Name] = coreModule;

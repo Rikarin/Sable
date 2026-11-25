@@ -15,63 +15,52 @@ namespace Sable.Driver;
 public static class Library {
     public const string Core = CoreLibrary.ModuleName;
 
-    static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Os, string Arch, string Profile), Lazy<IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>>>> Parsed = new();
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Os, string Arch, string Profile, string Module), Lazy<IReadOnlyList<SyntaxTree>>> Loaded = new();
 
-    /// <summary>The modules parsed for the machine running the compiler.</summary>
-    static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> Modules => ModulesFor(ParseOptions.Default);
-
-    /// <summary>
-    ///     The modules parsed for the target the options name and their build
-    ///     profile, once per target and profile: their <c>#if os(...)</c>
-    ///     follows the target, and <c>#if DEBUG</c> the profile. Only the files
-    ///     that test the profile are parsed for each (<see cref="CoreLibrary.ParseForProfile" />).
-    /// </summary>
-    static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> ModulesFor(ParseOptions options) =>
-        Parsed.GetOrAdd((options.TargetOs, options.TargetArch, CoreLibrary.ProfileOf(options)), static key => new(() => Load(key.Os, key.Arch, key.Profile))).Value;
+    /// <summary>The embedded files of each module but Sable.Core, by the module's name, in order: the resources they are.</summary>
+    static readonly Lazy<IReadOnlyDictionary<string, IReadOnlyList<string>>> Files = new(static () =>
+        // Named lib/<Module>/<File>.sb everywhere: built on Windows, the
+        // resource's name has MSBuild's '\\' between module and file. A
+        // module's directory is its name.
+        typeof(Library).Assembly.GetManifestResourceNames()
+            .Where(static n => n.StartsWith("lib/", StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal)
+            .GroupBy(static n => n.Replace('\\', '/').Split('/')[1], StringComparer.Ordinal)
+            .ToDictionary(static g => g.Key, static g => (IReadOnlyList<string>)[..g], StringComparer.Ordinal));
 
     /// <summary>The library modules there are, by name.</summary>
-    public static IReadOnlyCollection<string> ModuleNames => [..Modules.Keys];
+    public static IReadOnlyCollection<string> ModuleNames => [..Files.Value.Keys];
 
     /// <summary>A library module's source, every file of it in order: what a cache of anything built from it hashes.</summary>
-    public static string Source(string module) =>
-        Modules.TryGetValue(module, out var files) ? string.Join("\n", files.Select(static f => f.Text.Text)) : "";
+    public static string Source(string module) => string.Join("\n", ModuleFor(module, ParseOptions.Default).Select(static f => f.Text.Text));
 
-    static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> Load(string os, string arch, string profile) {
-        var modules = new Dictionary<string, List<SyntaxTree>>(StringComparer.Ordinal);
-        var assembly = typeof(Library).Assembly;
+    /// <summary>
+    ///     A module's files for the target the options name and their build
+    ///     profile, loaded once for each — their <c>#if os(...)</c> follows the
+    ///     target, and <c>#if DEBUG</c> the profile — and each parsed only when
+    ///     something asks for its nodes; none when there is no such module.
+    ///     Only the files that test the profile are parsed for each
+    ///     (<see cref="CoreLibrary.ParseForProfile" />).
+    /// </summary>
+    static IReadOnlyList<SyntaxTree> ModuleFor(string module, ParseOptions options) =>
+        Files.Value.ContainsKey(module)
+            ? Loaded.GetOrAdd((options.TargetOs, options.TargetArch, CoreLibrary.ProfileOf(options), module), static key => new(() => Load(key.Os, key.Arch, key.Profile, key.Module))).Value
+            : [];
 
+    static IReadOnlyList<SyntaxTree> Load(string os, string arch, string profile, string module) {
         // The standard library is a workspace of its own: what it marks
         // 'package' is shared between its modules, not with programs.
         var options = ParseOptions.Default.ForTarget(os, arch) with { Workspace = "sable" };
-        var plain = profile.Length > 0
-            ? ModulesFor(options).Values.SelectMany(static files => files).ToDictionary(static t => t.Text.FileName, StringComparer.Ordinal)
-            : null;
-        foreach (var resource in assembly.GetManifestResourceNames().Where(static n => n.StartsWith("lib/", StringComparison.Ordinal)).Order(StringComparer.Ordinal)) {
-            using var stream = assembly.GetManifestResourceStream(resource)!;
+        var plain = profile.Length > 0 ? ModuleFor(module, options) : null;
+        var trees = new List<SyntaxTree>();
+        foreach (var resource in Files.Value[module]) {
+            using var stream = typeof(Library).Assembly.GetManifestResourceStream(resource)!;
             using var reader = new StreamReader(stream);
-            // Named lib/<Module>/<File>.sb everywhere: built on Windows, the
-            // resource's name has MSBuild's '\' between module and file.
-            var fileName = resource.Replace('\\', '/');
-            var tree = CoreLibrary.ParseForProfile(
-                reader.ReadToEnd(),
-                fileName,
-                options,
-                profile,
-                plain is not null && plain.TryGetValue(fileName, out var shared) ? () => shared : null
-            );
-            if (tree.Root is not CompilationUnitSyntax { Module: { } declaration }) {
-                continue;
-            }
-
-            var name = NameOf(declaration.Name);
-            if (!modules.TryGetValue(name, out var files)) {
-                modules[name] = files = [];
-            }
-
-            files.Add(tree);
+            var index = trees.Count;
+            trees.Add(CoreLibrary.ParseForProfile(reader.ReadToEnd(), resource.Replace('\\', '/'), options, profile, plain is null ? null : () => plain[index]));
         }
 
-        return modules.ToDictionary(static m => m.Key, static m => (IReadOnlyList<SyntaxTree>)m.Value, StringComparer.Ordinal);
+        return trees;
     }
 
     /// <summary>
@@ -90,17 +79,17 @@ public static class Library {
     ///     module comes with it.
     /// </summary>
     public static IReadOnlyList<SyntaxTree> For(IReadOnlyList<SyntaxTree> program) {
-        var modules = program.Count > 0 ? ModulesFor(program[0].Options) : Modules;
+        var options = program.Count > 0 ? program[0].Options : ParseOptions.Default;
         var brought = Brought(program);
         var needed = new List<SyntaxTree>();
         var seen = new HashSet<string>(StringComparer.Ordinal) { Core };
         var pending = new Queue<string>([..program.SelectMany(ImportsOf), ..brought.Select(static b => b.Module)]);
         while (pending.TryDequeue(out var module)) {
-            if (!seen.Add(module) || !modules.TryGetValue(module, out var files)) {
+            if (!seen.Add(module)) {
                 continue;
             }
 
-            foreach (var file in files.Where(f => !CoreLibrary.IsBrought(f, brought))) {
+            foreach (var file in ModuleFor(module, options).Where(f => !CoreLibrary.IsBrought(f, brought))) {
                 needed.Add(file);
                 foreach (var imported in ImportsOf(file)) {
                     pending.Enqueue(imported);
@@ -113,11 +102,10 @@ public static class Library {
 
     /// <summary>The library files the program brings its own of (<see cref="CoreLibrary.Brought" />), against the embedded modules.</summary>
     public static HashSet<(string Module, string File)> Brought(IReadOnlyList<SyntaxTree> program) {
-        var modules = program.Count > 0 ? ModulesFor(program[0].Options) : Modules;
-        var core = program.Count > 0 ? CoreLibrary.TreesFor(program[0].Options) : CoreLibrary.Trees;
+        var options = program.Count > 0 ? program[0].Options : ParseOptions.Default;
         return CoreLibrary.Brought(
-            program.Where(t => !IsEmbedded(t, modules)),
-            m => m == Core ? core : modules.TryGetValue(m, out var files) ? files : []
+            program.Where(t => !IsEmbedded(t, options)),
+            m => m == Core ? CoreLibrary.TreesFor(options) : ModuleFor(m, options)
         );
     }
 
@@ -141,7 +129,6 @@ public static class Library {
 
         var ownSet = own.ToHashSet();
         var options = own.First().Options;
-        var modules = ModulesFor(options);
         var library = compilation.SyntaxTrees.Where(t => !ownSet.Contains(t)).ToList();
         if (library.Count == 0 || compilation.ReachesIntoLibrary(ownSet)) {
             return null;
@@ -153,8 +140,8 @@ public static class Library {
         // compiler's own hash, whose assemblies carry them. Any other file,
         // a dependency's, by its name, features and text: a dependency
         // edited, or another version of it, is another library.
-        var others = library.Where(t => !IsEmbedded(t, modules)).Select(ContentOf).Order(StringComparer.Ordinal).ToList();
-        var embedded = library.Where(t => IsEmbedded(t, modules)).ToList();
+        var others = library.Where(t => !IsEmbedded(t, options)).Select(ContentOf).Order(StringComparer.Ordinal).ToList();
+        var embedded = library.Where(t => IsEmbedded(t, options)).ToList();
         var key = $"{string.Join(",", embedded.Select(IdOf).Order())}|{string.Join(",", others)}|{compilation.BindOptions}";
         return new(library, key, LastingKey(embedded, others, options, compilation.BindOptions));
     }
@@ -194,8 +181,7 @@ public static class Library {
             return;
         }
 
-        var modules = ModulesFor(options);
-        if (!library.All(t => IsEmbedded(t, modules))) {
+        if (!library.All(t => IsEmbedded(t, options))) {
             return;
         }
 
@@ -267,13 +253,10 @@ public static class Library {
         return removed;
     }
 
-    static bool IsEmbedded(SyntaxTree tree, IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> modules) =>
-        CoreLibrary.Contains(tree) || CoreLibrary.ModuleOf(tree) is { } module && modules.TryGetValue(module, out var files) && files.Contains(tree);
+    static bool IsEmbedded(SyntaxTree tree, ParseOptions options) =>
+        CoreLibrary.Contains(tree) || CoreLibrary.ModuleOf(tree) is { } module && ModuleFor(module, options).Contains(tree);
 
-    static IEnumerable<string> ImportsOf(SyntaxTree tree) =>
-        tree.Root is CompilationUnitSyntax unit ? unit.Imports.Select(static i => NameOf(i.Name)) : [];
-
-    static string NameOf(SyntaxNode name) => name.ToString().Trim();
+    static IEnumerable<string> ImportsOf(SyntaxTree tree) => tree.Header.Imports;
 }
 
 /// <summary>

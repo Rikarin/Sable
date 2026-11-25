@@ -328,7 +328,11 @@ public static class IncrementalBuild {
             timings?.Count("files parsed from interfaces", sources.FromInterfaces);
         }
 
-        var library = Library.For(sources.Program);
+        IReadOnlyList<SyntaxTree> library;
+        using (BuildTimings.Of(timings, "library source")) {
+            library = Library.For(sources.Program);
+            CoreLibrary.TreesFor(sources.Trees[0][0].Options);
+        }
 
         var outcome = settings.Separate
             ? Separately(sources, known, fileHashes, library, settings, settingsKey, executable, cacheDirectory, cache, timings, log)
@@ -530,7 +534,12 @@ public static class IncrementalBuild {
         var interfaces = Path.Combine(cacheDirectory, "interfaces");
         var interfaceFiles = new string[own.Count];
         using (BuildTimings.Of(timings, "interface")) {
-            var concrete = InterfaceFingerprint.ConcreteTypeNames(units.SelectMany(static u => u.Trees));
+            // Only the names the program's extensions extend are asked about: a
+            // file of the standard library that has none of them is not read.
+            var extendedNames = own.SelectMany(static u => u.Trees).SelectMany(InterfaceFingerprint.ExtendedNames).ToHashSet(StringComparer.Ordinal);
+            var naming = standard.Trees.Where(t => extendedNames.Any(name => t.Text.Text.Contains(name, StringComparison.Ordinal))).ToList();
+            SyntaxTree.ParseAll(naming);
+            var concrete = InterfaceFingerprint.ConcreteTypeNames([..own.SelectMany(static u => u.Trees), ..naming]);
             var read = 0;
             Parallel.For(0, own.Count, GlobalOptions.Current.ParallelOptions, i => {
                 var unit = own[i];
@@ -658,8 +667,14 @@ public static class IncrementalBuild {
             Compilation compilation;
             List<string> errors;
             using (BuildTimings.Of(timings, "bind")) {
-                compilation = Compilation.Create([..program, ..library]);
-                compilation.GetDiagnostics();
+                using (BuildTimings.Of(timings, "bind: declare")) {
+                    compilation = Compilation.Create([..program, ..library]);
+                }
+
+                using (BuildTimings.Of(timings, "bind: signatures")) {
+                    compilation.GetDiagnostics();
+                }
+
                 var checking = stale.SelectMany(static u => u.Trees).ToHashSet();
                 errors = Diagnostics(compilation, program, checking, DiagnosticSeverity.Error);
 

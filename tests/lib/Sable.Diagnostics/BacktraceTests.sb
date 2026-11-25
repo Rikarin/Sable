@@ -16,7 +16,7 @@ fn aCapturedBacktraceHasFrames() {
 @test
 fn eachFrameIsNamedOrAnAddress() {
     for frame in Backtrace.capture().frames {
-        assert(frame.count > 0, "a frame is never blank")
+        expect(frame.count > 0, "a frame is never blank")
     }
 }
 

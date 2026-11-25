@@ -5,19 +5,10 @@ module Base64Bench
 // encoded to ASCII bytes and decoded from them (System.Buffers.Text.Base64's
 // EncodeToUtf8 and DecodeFromUtf8), forty times each.
 
+import Sable.Testing
 import Sable.Text
 
-@main
-fn main() {
-    var bytes: U8[>..] = []
-    var state = 1
-    var i = 0
-    while i < 1_048_576 {
-        state = (state * 75 + 74) % 65537
-        bytes.append(U8(state & 0xFF))
-        i = i + 1
-    }
-
+fn run(_ bytes: U8[>..]) -> String {
     var digits = 0
     var check = 0
     var round = 0
@@ -35,5 +26,18 @@ fn main() {
         round = round + 1
     }
 
-    print("\(digits) \(check)")
+    return "\(digits) \(check)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    var bytes: U8[>..] = []
+    var state = 1
+    var i = 0
+    while i < 1_048_576 {
+        state = (state * 75 + 74) % 65537
+        bytes.append(U8(state & 0xFF))
+        i = i + 1
+    }
+    b.check(b.iterate { run(bytes) })
 }

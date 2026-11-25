@@ -1,9 +1,10 @@
 module ShuffleBench
 
+import Sable.Testing
+
 // An array of a hundred thousand integers shuffled fifty times: its sum.
 
-@main
-fn main() {
+fn run() -> String {
     var generator = SeededRandomNumberGenerator(seed: 1)
     var values = (0..<100000).toArray()
     for _ in 0..<50 {
@@ -13,5 +14,10 @@ fn main() {
     for i in 0..<100000 {
         total += values[i]
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

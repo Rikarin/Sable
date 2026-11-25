@@ -1946,6 +1946,10 @@ awaited as the scope ends.
   (S3236). A closure parameter run as a task is declared `@Sendable`, and
   takes a closure written there, a named function, or another `@Sendable`
   parameter. In an `unsafe` block the programmer vouches for what is shared.
+  A thread's closure (`Thread.spawn`) and a parallel loop's are the same; one
+  spawned on a `Thread.scope`'s scope may name a `var` of the function around
+  it, if it is that thread's alone for the length of the scope. An `inout`
+  parameter, and `self` in a `mutating` member, are a `var` too.
 - `@MainActor` pins a declaration to the main executor: the main thread,
   which runs the program's entry.
 - `for await x in stream { }` iterates an `AsyncSequence`; `for try await`

@@ -1,6 +1,7 @@
 module JsonWriteBench
 
 import Sable.Serialize
+import Sable.Testing
 
 // JSON written a token at a time, compact and indented: keys, integers,
 // floats, strings with nothing to escape, and with something.
@@ -32,8 +33,7 @@ fn write(_ indented: Bool, _ round: Int) throws(SerializeError) -> (Int, Int) {
     return (bytes.count, Int(bytes[bytes.count / 2]))
 }
 
-@main
-fn main() throws(SerializeError) {
+fn run() throws(SerializeError) -> String {
     var total = 0
     var middle = 0
     for round in 0..<10 {
@@ -42,5 +42,10 @@ fn main() throws(SerializeError) {
         total += compactCount + prettyCount
         middle += compactByte + prettyByte
     }
-    print("\(total) \(middle)")
+    return "\(total) \(middle)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { try! run() })
 }

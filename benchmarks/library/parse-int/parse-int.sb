@@ -1,20 +1,28 @@
 module ParseIntBench
 
+import Sable.Testing
+
 // Int.parse: 200,000 numbers as text, parsed five times.
 
-@main
-fn main() {
+fn run(_ texts: String[>..]) -> String {
+    var total = 0
+    for _ in 0..<5 {
+        // Each round reads the input anew: nothing is kept from the last.
+        _ = blackBox(total)
+        for text in texts {
+            total += try! Int.parse(text)
+        }
+    }
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
     var texts: String[>..] = []
     var x = 12345
     for i in 0..<200000 {
         x = (x * 1103515245 + 12345) % 2147483648
         texts.append("\(i % 2 == 0 ? x : -x)")
     }
-    var total = 0
-    for _ in 0..<5 {
-        for text in texts {
-            total += try! Int.parse(text)
-        }
-    }
-    print(total)
+    b.check(b.iterate { run(texts) })
 }

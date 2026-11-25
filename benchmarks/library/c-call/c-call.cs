@@ -2,8 +2,8 @@ using System.Runtime.InteropServices;
 
 // Port of c-call.sb.
 [Benchmark("library/c-call")]
-static unsafe class CCallBench {
-    [DllImport("libc", EntryPoint = "labs"), SuppressGCTransition]
+static unsafe class LibraryCCall {
+    [DllImport("libc", EntryPoint = "imaxabs"), SuppressGCTransition]
     static extern nint Labs(nint n);
 
     [DllImport("libc", EntryPoint = "strlen", CharSet = CharSet.Ansi), SuppressGCTransition]
@@ -16,7 +16,7 @@ static unsafe class CCallBench {
         }
 
         // Looked up as the program runs: a call that says nothing of the collector.
-        var absolute = (delegate* unmanaged[Cdecl, SuppressGCTransition]<nint, nint>)NativeLibrary.GetExport(NativeLibrary.Load("libc", typeof(CCallBench).Assembly, null), "labs");
+        var absolute = (delegate* unmanaged[Cdecl, SuppressGCTransition]<nint, nint>)NativeLibrary.GetExport(NativeLibrary.Load("libc", typeof(LibraryCCall).Assembly, null), "imaxabs");
         for (nint i = 0; i < 20_000_000; i++) {
             total += absolute(i - 10_000_000);
         }

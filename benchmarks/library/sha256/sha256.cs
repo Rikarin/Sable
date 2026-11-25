@@ -3,9 +3,15 @@ using System.Security.Cryptography;
 // A megabyte two hundred times, then messages of 64 bytes two hundred thousand.
 [Benchmark("library/sha256")]
 static class LibrarySha256 {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var big = Sample(1_048_576);
+            return () => Run(big);
+        }
+    }
+
+    static string Run(byte[] big) {
+        checked {
             long check = 0;
             for (var round = 0; round < 200; round++) {
                 check += SHA256.HashData(big)[round % 32];

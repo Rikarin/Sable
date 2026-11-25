@@ -172,6 +172,32 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
+        ///     A closure given to the runtime, with the numbers before it, to
+        ///     run somewhere else or later: kept in an object, which the
+        ///     runtime holds from then on, and runs it through the function a
+        ///     cancellation handler is run by.
+        /// </summary>
+        SilValue? HandOver(BoundCall call, string builtin) {
+            var numbers = new List<SilValue>();
+            foreach (var argument in call.Arguments[..^1]) {
+                if (Expression(argument) is not { } number) {
+                    return null;
+                }
+
+                numbers.Add(number);
+            }
+
+            if (Expression(call.Arguments[^1]) is not { Type: ThickFunctionType } work) {
+                return null;
+            }
+
+            var made = Emit(new AllocRefInst(generator.CancellationHandler()));
+            Emit(new StoreInst(Owned(work), Emit(new RefElementAddrInst(made, 0)), StoreKind.Assign));
+            Emit(new BuiltinInst(builtin, SilType.Unit, [Emit(new FunctionRefInst(HandlerRunName, HandlerRunType)), made, ..numbers]));
+            return UnitValue.Instance;
+        }
+
+        /// <summary>
         ///     'Task.spawn { … }' and 'Task.detached { … }', with a priority
         ///     or not: a task made, its body kept in it, the runtime given it
         ///     to run — as a child of the running task, or detached.

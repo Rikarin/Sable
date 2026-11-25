@@ -1,0 +1,26 @@
+module Sable.Concurrency
+
+/// How soon a thread runs when there is more to run than there are cores:
+/// .NET's `ThreadPriority`. A hint, which the system may not take: Linux
+/// lets only a privileged program raise one above `Normal`.
+@derive(Equatable, Debug)
+public enum ThreadPriority {
+    Lowest
+    Low
+    Normal
+    High
+    Highest
+
+    // What the runtime takes: -2 to 2.
+    var level: Int {
+        get {
+            return match self {
+                case .Lowest  => -2
+                case .Low     => -1
+                case .Normal  => 0
+                case .High    => 1
+                case .Highest => 2
+            }
+        }
+    }
+}

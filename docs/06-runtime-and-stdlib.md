@@ -1009,6 +1009,10 @@ Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     buffering policy, onTermination), merge, debounce,
                     throttle, Mutex RwLock Condition Semaphore Barrier
                     CountdownLatch Once Lazy, AsyncMutex AsyncSemaphore,
+                    Thread (spawn, scope, park, blockOn), JoinHandle,
+                    ThreadLocal, TaskLocal, parallelFor parallelInvoke
+                    parallelForEach, an array's and a range's parallel,
+                    parallelModify parallelSort (§6.7),
                     ConcurrentDictionary (sharded)
                     ConcurrentQueue (two-lock) ConcurrentStack,
                     CancellationTokenSource/CancellationToken (handlers,
@@ -1064,7 +1068,8 @@ Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
 Sable.Testing       @test @bench; assert, assertEqual and the like; expect and
                     require, which show their expression's parts; expectThrows;
                     expectPanic and expectExit (death tests); assertSnapshot;
-                    forAll, Arbitrary and Gen (property tests); Bencher
+                    forAll, Arbitrary and Gen (property tests); Bencher,
+                    BenchStatistics, MannWhitney, BenchComparison
 Sable.Interop       C's types by name (CInt, CLong, CChar, CSize, CWChar),
                     CStr, CString, withCString, withWideCString,
                     withCStrings, CFunction and cFunction, CCallback,
@@ -1072,6 +1077,35 @@ Sable.Interop       C's types by name (CInt, CLong, CChar, CSize, CWChar),
                     variable), OwnedFd, OwnedHandle (Windows)
 Sable.Reflect       the reflection surface described above
 ```
+
+### Benchmarks
+
+A benchmark (`@bench`, docs/05 §5.1) takes a `Bencher` and gives its `iterate`
+what to measure; without one, its whole body is timed:
+
+```sable ignore
+@bench(arguments: [64, 65536], tags: ["hash"])
+fn digest(_ b: Bencher, _ size: Int) {
+    let bytes = U8[>..](repeating: 7, count: size)
+    b.bytesPerIteration = size
+    let last = b.iterate { Sha256.hash(bytes) }
+    b.check("\(last.bytes[0])")
+}
+```
+
+- `iterate(body)` and `iterateAsync(body)` give what the body returned last.
+  What it returns is kept from the optimiser by `blackBox`, as the body is;
+  a body that does the same thing to the same input many times over should
+  put a `blackBox` in its own loop too, or link-time optimisation may work a
+  pure function out once.
+- `iterate(setup:_:batch:cleanup:)` makes each iteration a value of its own,
+  given `inout`, `batch` of them at a time, untimed.
+- `bytesPerIteration` and `itemsPerIteration` add a throughput;
+  `operationsPerIteration` divides what is reported by what the body does.
+- `check(text)` says what was computed: the same wherever it is run.
+- `BenchStatistics` (Tukey's fences, Student's t), `MannWhitney` and
+  `BenchComparison` are the arithmetic, of any samples; `BenchSchedule` which
+  runs there are to be, without a clock.
 
 ### Tests
 
@@ -2391,3 +2425,82 @@ recover at the task boundary.
   A task waiting for a lower-priority one escalates it, what it waits for
   and its children, so it does not invert; one waiting for an actor
   escalates the task holding it.
+
+### Threads, locals and parallel loops
+
+`Sable.Concurrency`'s, over runtime/parallel.c.
+
+- **Threads.** `Thread.spawn(name:stackSize:priority:)` starts one of the
+  system's, and gives a `JoinHandle<T, E>`: `join()` and `join(atMost:)`
+  block, `await value()` suspends, `isFinished` and `detach()`; what the body
+  throws, the join throws, and a trap stops the program as on any thread. A
+  thread ends by returning, and a program waits for every one it started,
+  joined or not, as it does for its tasks (so a detached one runs to its end;
+  .NET's foreground threads). What its closure captures is Sendable, and
+  shared as a task's is. `Thread.current` (`id`, `name`: the main thread's is
+  `main`, a worker's `sable-worker-N`), `sleep`, `yield`, `park` and `unpark`
+  (one token a thread), `availableParallelism`: the processors the process is
+  bound to and, on Linux, its control groups' quota rounded up, which is also
+  how many workers the pool has. A stack is at least 256 KiB; a priority is a
+  hint (a quality-of-service class on Apple's systems, a nice value on Linux).
+- **A thread and tasks.** A thread has a task of its own to be running, as one
+  C made has (§6.4, "Calling C"): the tasks it spawns are that one's children,
+  which no one waits for or cancels once the thread ends. `Thread.blockOn`
+  runs an async body as a task and blocks until it has finished; it traps on a
+  worker, and on the main thread but where the program's own task runs, whose
+  loop it then runs meanwhile. A worker that blocks in a join keeps a core
+  from other tasks: async code awaits `value()`. With `SABLE_WORKERS=0` tasks
+  run on the main thread alone, so a thread that blocks on one while the main
+  thread blocks in a join waits for ever.
+- **Scopes.** `Thread.scope { s in s.spawn { … } }` ends once every thread
+  spawned on `s` has, whether its body returns or throws, so a thread may use a
+  `var` of the function around it where it is. The compiler holds that `var`
+  to be the one thread's alone (`ScopeChecker`, S3236): it is the calling
+  function's own, the thread is spawned in the scope's own closure and not in
+  a loop, nothing else in the scope mentions it, and no other closure of the
+  function does. It refuses more than Rust does: threads that only
+  read a `var` share it by a `let`, and the scope uses it again only once the
+  scope has ended, not once the thread is joined.
+- **`ThreadLocal<T>`** is a place in a table each thread's state has: a get is
+  the thread's state, from the register the system keeps it in, two loads and
+  a compare. Values are made when first asked for, and destroyed as the thread
+  ends, the last made first, before a join returns; as the thread C made ends;
+  and, for the main thread and the pool's, as the program does, once no task
+  runs. `withValue` takes a closure that cannot wait, so that no value is held
+  across an `await`, after which a task may be on another thread; `value` is a
+  copy. There is no `@threadLocal static var`: a `static let` of a
+  `ThreadLocal` is one.
+- **`TaskLocal<T>`** is bound by `withValue` for as long as its body runs, by a
+  node put before the running task's others, which its children begin with:
+  a task is given its parent's list as a pointer, which is all it costs, and
+  nothing where the list is empty. The nodes are counted, and last as long as
+  a child that has them. A detached task and a thread begin with none; a
+  worker in a parallel loop has those of the task that began it.
+- **Loops.** `parallelFor`, `parallelForChunks`, `parallelInvoke`, and
+  `parallel`'s operations are run by the thread that begins them and by the
+  workers that come: a loop is put where a worker that finds no task finds it
+  (`sable_thread_loop`), and what is left of it handed out a chunk at a time —
+  a fixed part of what is left, so a few large ones and then smaller — until
+  none is. Nothing is queued, so a loop no worker has time for, or one in a
+  loop, is done by its own thread, which waits at the end only for workers in
+  a chunk: none waits for one that waits for it. A worker runs its chunks as a
+  child of the task the loop was begun in, so `Task.checkCancellation()` in a
+  throwing body ends the loop with the task. The first error ends it: no more
+  chunks are handed out. `degree` is how many threads at most, `grain` the
+  least a chunk has. A thread whose last loops were each over in some
+  microseconds wakes no worker for the next until that has gone on for ten.
+  With no pool (`SABLE_WORKERS=0`, WASI, the interpreter) a loop is run in
+  order by its thread.
+- **`parallel`** on an array or a range of `Int` gives `map`, `filter`,
+  `compactMap`, `flatMap`, `forEach`, `reduce`, `sum`, `min`, `max`,
+  `count(where:)`, `first`, `contains`, `allSatisfy`, `sorted`: each an
+  operation of its own, whose result is not parallel. Results are in order;
+  `unordered` gives them as they are made. Chunks are the same each time and
+  combined in order, so a sum of floats is the same for a degree.
+  `array.parallelModify`, `parallelModifyChunks(of:)` and `parallelSort` change
+  the elements where they are, with no copy of an array that is no one else's;
+  a chunk is a class whose every access is checked, and which is empty once
+  its body returns. `parallelForEach` is the loop of an async body, with so
+  many children of a task group at once.
+- **The interpreter** has one thread: a spawned one runs to its end as it is
+  spawned, and a wait that another thread would have to end is a trap.

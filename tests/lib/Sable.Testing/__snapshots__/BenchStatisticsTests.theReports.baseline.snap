@@ -1,0 +1,4 @@
+# sable bench baseline 2: name, then each sample's wall and processor nanoseconds an operation
+M.f(1, 2)	50.000 100.000	51.000 101.000
+M.g	50.000 100.000	51.000 101.000
+

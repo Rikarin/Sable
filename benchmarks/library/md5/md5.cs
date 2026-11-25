@@ -3,9 +3,15 @@ using System.Security.Cryptography;
 // A megabyte two hundred times, then messages of 64 bytes two hundred thousand.
 [Benchmark("library/md5")]
 static class LibraryMd5 {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var big = Sample(1_048_576);
+            return () => Run(big);
+        }
+    }
+
+    static string Run(byte[] big) {
+        checked {
             long check = 0;
             for (var round = 0; round < 200; round++) {
                 check += MD5.HashData(big)[round % 16];

@@ -1,0 +1,180 @@
+module Sable.Testing
+
+import Sable.Math
+
+/// What is said of a benchmark's samples: their mean and how sure it is,
+/// once the outliers are out.
+///
+/// An outlier is a sample beyond Tukey's fences, one and a half
+/// interquartile ranges from the quartiles; those above are left out
+/// (something else ran), and those below are not, unless asked. The
+/// quartiles are interpolated between the samples either side (R's type 7,
+/// as 'quantile' has them). The confidence interval of the mean is Student's
+/// t's, at 99.9 %: the mean, give or take 'margin'.
+///
+/// ```sable
+/// let s = BenchStatistics([10.0, 11.0, 10.0, 11.0, 10.0, 11.0, 50.0])
+/// assertEqual(s.removed, 1)
+/// assertEqual(s.count, 6)
+/// assertEqual(s.mean, 10.5)
+/// assertEqual(s.median, 10.5)
+/// ```
+@derive(Equatable, Debug)
+public struct BenchStatistics {
+    /// How many samples count, and how many were left out.
+    public var count: Int = 0
+    public var removed: Int = 0
+    public var mean: F64 = 0.0
+    public var median: F64 = 0.0
+    /// The samples' standard deviation (of a sample: over n - 1).
+    public var deviation: F64 = 0.0
+    /// The mean's: the deviation over the root of their number.
+    public var standardError: F64 = 0.0
+    /// Half the width of the mean's 99.9 % confidence interval.
+    public var margin: F64 = 0.0
+    public var minimum: F64 = 0.0
+    public var maximum: F64 = 0.0
+    public var firstQuartile: F64 = 0.0
+    public var thirdQuartile: F64 = 0.0
+
+    /// The samples', without those 'outliers' leaves out.
+    public init(_ samples: F64[:], outliers: OutlierPolicy = .RemoveUpper) {
+        let kept = withoutOutliers(samples, outliers)
+        count = kept.count
+        removed = samples.count - kept.count
+        if kept.isEmpty {
+            return
+        }
+        mean = Sable.Math.mean(kept)
+        median = Sable.Math.median(kept)
+        minimum = Sable.Math.minimum(kept)
+        maximum = Sable.Math.maximum(kept)
+        firstQuartile = quantile(kept, 0.25)
+        thirdQuartile = quantile(kept, 0.75)
+        if kept.count > 1 {
+            deviation = standardDeviation(kept, .Sample)
+            standardError = deviation / F64(kept.count).squareRoot()
+            margin = standardError * studentQuantile(0.9995, kept.count - 1)
+        }
+    }
+
+    /// The margin over the mean: how far off the mean may be, of itself.
+    public var relativeMargin: F64 {
+        get => mean > 0.0 ? margin / mean : 0.0
+    }
+}
+
+/// Which samples beyond Tukey's fences are left out.
+@derive(Equatable, Debug)
+public union OutlierPolicy {
+    Keep
+    RemoveUpper
+    RemoveAll
+}
+
+/// The samples within Tukey's fences, in their order.
+///
+/// ```sable
+/// let samples = [9.0, 1.0, 10.0, 11.0, 10.0, 9.0, 100.0]
+/// assertEqual(withoutOutliers(samples, .RemoveUpper), [9.0, 1.0, 10.0, 11.0, 10.0, 9.0])
+/// assertEqual(withoutOutliers(samples, .RemoveAll), [9.0, 10.0, 11.0, 10.0, 9.0])
+/// ```
+public fn withoutOutliers(_ samples: F64[:], _ policy: OutlierPolicy) -> F64[>..] {
+    var kept: F64[>..] = []
+    var low = -F64.infinity
+    var high = F64.infinity
+    if policy != .Keep && samples.count >= 4 {
+        let first = quantile(samples, 0.25)
+        let third = quantile(samples, 0.75)
+        high = third + 1.5 * (third - first)
+        if policy == .RemoveAll {
+            low = first - 1.5 * (third - first)
+        }
+    }
+    for sample in samples {
+        if sample >= low && sample <= high {
+            kept.append(sample)
+        }
+    }
+    return kept
+}
+
+/// Student's t: the value a t-distributed one of so many degrees of freedom
+/// is under with the probability 'p', by bisection.
+///
+/// ```sable
+/// assert((studentQuantile(0.975, 10) - 2.228138851964939).abs() < 1e-9)
+/// assert((studentQuantile(0.9995, 14) - 4.140454112738).abs() < 1e-9)
+/// ```
+public fn studentQuantile(_ p: F64, _ degrees: Int) -> F64 {
+    if p < 0.5 {
+        return 0.0 - studentQuantile(1.0 - p, degrees)
+    }
+    var low = 0.0
+    var high = 1.0
+    while studentCumulative(high, degrees) < p && high < 1e12 {
+        low = high
+        high = high * 2.0
+    }
+    for _ in 0..<200 {
+        let middle = (low + high) / 2.0
+        if high - low <= 1e-12 * max(1.0, middle) {
+            break
+        }
+        if studentCumulative(middle, degrees) < p {
+            low = middle
+        } else {
+            high = middle
+        }
+    }
+    return (low + high) / 2.0
+}
+
+/// How likely a t-distributed value of so many degrees of freedom is at most 't'.
+///
+/// ```sable
+/// assertEqual(studentCumulative(0.0, 5), 0.5)
+/// assert((studentCumulative(1.0, 1) - 0.75).abs() < 1e-12)
+/// ```
+public fn studentCumulative(_ t: F64, _ degrees: Int) -> F64 {
+    let n = F64(degrees)
+    let tail = 0.5 * incompleteBeta(n / 2.0, 0.5, n / (n + t * t))
+    return t >= 0.0 ? 1.0 - tail : tail
+}
+
+// The regularised incomplete beta function, by its continued fraction
+// (Lentz's way of working one out).
+fn incompleteBeta(_ a: F64, _ b: F64, _ x: F64) -> F64 {
+    if x <= 0.0 {
+        return 0.0
+    }
+    if x >= 1.0 {
+        return 1.0
+    }
+    if x > (a + 1.0) / (a + b + 2.0) {
+        return 1.0 - incompleteBeta(b, a, 1.0 - x)
+    }
+    let front = exp(logGamma(a + b) - logGamma(a) - logGamma(b) + a * log(x) + b * log(1.0 - x)) / a
+    let tiny = 1e-300
+    var f = 1.0
+    var c = 1.0
+    var d = 0.0
+    for i in 0..<500 {
+        let m = F64(i / 2)
+        var term = 1.0
+        if i > 0 {
+            term = i % 2 == 0
+                ? m * (b - m) * x / ((a + 2.0 * m - 1.0) * (a + 2.0 * m))
+                : 0.0 - (a + m) * (a + b + m) * x / ((a + 2.0 * m) * (a + 2.0 * m + 1.0))
+        }
+        d = 1.0 + term * d
+        d = d.abs() < tiny ? 1.0 / tiny : 1.0 / d
+        c = 1.0 + term / c
+        c = c.abs() < tiny ? tiny : c
+        f = f * c * d
+        if (c * d - 1.0).abs() < 1e-15 {
+            break
+        }
+    }
+    return front * (f - 1.0)
+}

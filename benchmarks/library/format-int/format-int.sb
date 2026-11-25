@@ -1,14 +1,20 @@
 module FormatIntBench
 
+import Sable.Testing
+
 // Integers as text: two million of them, small and large.
 
-@main
-fn main() {
+fn run() -> String {
     var x = 12345
     var characters = 0
     for i in 0..<1000000 {
         x = (x * 1103515245 + 12345) % 2147483648
         characters += (x * x).toString().count + i.toString().count
     }
-    print(characters)
+    return "\(characters)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

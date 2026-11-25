@@ -1,12 +1,12 @@
 module OrderedDictionaryBench
 
 import Sable.Collections
+import Sable.Testing
 
 // OrderedDictionary<Int, Int>: 300,000 pseudo-random keys set, looked up
 // by key and read by position.
 
-@main
-fn main() {
+fn run() -> String {
     let dictionary = OrderedDictionary<Int, Int>()
     var keys: Int[>..] = []
     var x = 12345
@@ -24,5 +24,10 @@ fn main() {
     for i in 0..<dictionary.count {
         total = (total + dictionary.key(at: i) * 3 + dictionary.value(at: i)) % 1000000007
     }
-    print("\(dictionary.count) \(total)")
+    return "\(dictionary.count) \(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

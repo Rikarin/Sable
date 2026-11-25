@@ -6,6 +6,7 @@
 // Sable emits none), and printed the way Sable prints an F64: the shortest
 // %.Ng that reads back as the same double.
 
+#include "../../support/c/bench.h"
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -75,7 +76,7 @@ static void format_f64(double value, char *text, size_t size) {
 static void print_f64(double value) {
     char text[40];
     format_f64(value, text, sizeof text);
-    puts(text);
+    bench_printf("%s\n", text);
 }
 
 static double sqrtApprox(double v) {
@@ -138,7 +139,7 @@ static void advance(BodyArray *bodies, double dt) {
     }
 }
 
-int main(void) {
+static void program(void) {
     BodyArray *bodies = NULL;
     append(&bodies, (Body){ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 39.47 });
     append(&bodies, (Body){ 4.84, -1.16, -0.10, 0.60, 2.81, -0.02, 0.037 });
@@ -156,5 +157,6 @@ int main(void) {
 
     free(bodies->elements);
     free(bodies);
-    return 0;
 }
+
+BENCH_MAIN(program)

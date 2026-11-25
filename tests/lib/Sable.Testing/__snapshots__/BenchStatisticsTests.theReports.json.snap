@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "metric": "wall",
+  "benchmarks": [
+    {
+      "name": "M.f(1, 2)", "job": "", "location": "m.sb:3",
+      "check": "a\u0009b\u000a\\c", "operations": 2, "bytes": 4096, "items": 8,
+      "mean": 50.5, "margin": 318.3096243842738, "deviation": 0.7071067811865476, "median": 50.5,
+      "minimum": 50.0, "maximum": 51.0, "samples": 2, "outliers": 0,
+      "iterations": [10, 10],
+      "wall": [50.0, 51.0],
+      "processor": [100.0, 101.0],
+      "allocations": 2.0, "allocatedBytes": 50.0, "retains": 1.0, "releases": 3.0,
+      "instructions": 2500.0, "cycles": null
+    },
+    {
+      "name": "M.g", "job": "", "location": "m.sb:9",
+      "check": "a\u0009b\u000a\\c", "operations": 2, "bytes": 4096, "items": 8,
+      "mean": 50.5, "margin": 318.3096243842738, "deviation": 0.7071067811865476, "median": 50.5,
+      "minimum": 50.0, "maximum": 51.0, "samples": 2, "outliers": 0,
+      "iterations": [10, 10],
+      "wall": [50.0, 51.0],
+      "processor": [100.0, 101.0],
+      "allocations": 2.0, "allocatedBytes": 50.0, "retains": 1.0, "releases": 3.0,
+      "instructions": 2500.0, "cycles": null,
+      "ratio": 1.198019801980198, "p": 0.3333333333333333, "verdict": "within noise"
+    }
+  ]
+}
+

@@ -1,7 +1,7 @@
 // Port of sorted-set.sb.
 [Benchmark("library/sorted-set")]
 static class LibrarySortedSet {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var values = new List<long>();
             long x = 12345;
@@ -9,7 +9,12 @@ static class LibrarySortedSet {
                 x = (x * 1103515245 + 12345) % 2147483648;
                 values.Add(x);
             }
+            return () => Run(values);
+        }
+    }
 
+    static string Run(List<long> values) {
+        checked {
             var members = new SortedSet<long>();
             foreach (var value in values) {
                 members.Add(value);

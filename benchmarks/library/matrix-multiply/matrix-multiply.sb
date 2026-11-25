@@ -1,6 +1,7 @@
 module MatrixMultiplyBench
 
 import Sable.Math.Geometry
+import Sable.Testing
 
 // A hierarchy of 256 transforms, each its local times its parent's world,
 // forty thousand times over: what a scene does a frame.
@@ -12,8 +13,7 @@ fn update(_ world: inout Matrix4x4[:], _ local: Matrix4x4[:], _ parents: Int[:])
     }
 }
 
-@main
-fn main() {
+fn run() -> String {
     let count = 256
     var local: Matrix4x4[>..] = []
     var parents: Int[>..] = []
@@ -28,5 +28,10 @@ fn main() {
         update(&world, local, parents)
         sum += F64(world[255].m41)
     }
-    print("\(sum / 40000:.2)")
+    return "\(sum / 40000:.2)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

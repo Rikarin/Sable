@@ -1,0 +1,59 @@
+module Sable.Testing
+
+/// One '@bench' function, as the compiler's entry point lists it; or one
+/// case of a '@bench(arguments:)' function, which it makes a benchmark each
+/// of. Run with a Bencher, whose 'iterate' (or 'iterateAsync') does the
+/// timing. It is awaited, so an async benchmark can await what it measures.
+public struct BenchCase {
+    /// Qualified: 'Module.function'.
+    public var name: String
+    /// Where it is declared, 'file:line'.
+    public var location: String
+    /// '@bench(tags:)': what a filter may ask for it by.
+    public var tags: String[>..]
+    public var run: async (Bencher) -> Void
+    /// '@bench(arguments:)': its cases, worked out when asked; none for a
+    /// benchmark that is one.
+    public var cases: (() -> BenchArguments[>..])?
+
+    /// The benchmark's cases, each named after it and its arguments, as a
+    /// test's are — or the benchmark itself, when it takes none.
+    ///
+    /// ```sable
+    /// let cases: () -> BenchArguments[>..] = () => [BenchArguments("16", { b in }), BenchArguments("1024", { b in })]
+    /// let bench = BenchCase { name: "Copy.bytes", location: "copy.sb:1", tags: [], run: { b in }, cases: cases }
+    /// assertEqual(bench.expanded().map({ $0.name }), ["Copy.bytes(16)", "Copy.bytes(1024)"])
+    /// ```
+    public fn expanded() -> BenchCase[>..] {
+        guard let cases = cases else {
+            return [self]
+        }
+        var seen = Dictionary<String, Int>()
+        var expanded: BenchCase[>..] = []
+        for arguments in cases() {
+            var one = self
+            one.cases = none
+            one.run = arguments.run
+            one.name = "\(name)(\(nameable(arguments.description)))"
+            let times = (seen[one.name] ?? 0) + 1
+            seen[one.name] = times
+            if times > 1 {
+                one.name = "\(one.name)#\(times)"
+            }
+            expanded.append(one)
+        }
+        return expanded
+    }
+}
+
+/// One case of a '@bench(arguments:)' benchmark: the arguments, written out,
+/// and the benchmark run with them.
+public struct BenchArguments {
+    public var description: String
+    public var run: async (Bencher) -> Void
+
+    public init(_ description: String, _ run: @escaping async (Bencher) -> Void) {
+        self.description = description
+        self.run = run
+    }
+}

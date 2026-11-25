@@ -4,9 +4,11 @@ using System.IO.Enumeration;
 // entry's kind without asking the system again.
 [Benchmark("library/directory-walk")]
 static class LibraryDirectoryWalk {
-    public static string Run() {
+    static string Root => Path.GetFullPath("directory-walk-dotnet");
+
+    public static Func<string> Setup() {
         checked {
-            var root = Path.GetFullPath("directory-walk-dotnet");
+            var root = Root;
             for (var i = 0; i < 10; i++) {
                 for (var j = 0; j < 10; j++) {
                     var directory = $"{root}/branch {i}/leaf {j}";
@@ -17,6 +19,14 @@ static class LibraryDirectoryWalk {
                 }
             }
 
+            return () => Run(root);
+        }
+    }
+
+    public static void Cleanup() => Directory.Delete(Root, recursive: true);
+
+    static string Run(string root) {
+        checked {
             long files = 0;
             long directories = 0;
             long characters = 0;
@@ -37,7 +47,6 @@ static class LibraryDirectoryWalk {
                 }
             }
 
-            Directory.Delete(root, recursive: true);
             return $"{files} {directories} {characters}";
         }
     }

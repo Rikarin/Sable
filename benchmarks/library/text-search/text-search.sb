@@ -1,24 +1,18 @@
 module TextSearch
 
+import Sable.Testing
+
 // Searching text against .NET's string: finding a string in a long text,
 // as IndexOf(string, Ordinal) does, and splitting at a string separator, as
 // Split(string) does. The text is ASCII, so both count positions alike.
 
-@main
-fn main() {
-    var parts: String[>..] = []
-    var i = 0
-    while i < 20000 {
-        parts.append("lorem ipsum dolor sit amet, consectetur adipiscing elit, ")
-        i = i + 1
-    }
-    parts.append("needle")
-    let text = parts.joined()
-
+fn run(_ text: String) -> String {
     var found = 0
     var pieces = 0
     var round = 0
     while round < 200 {
+        // Each round reads the input anew: nothing is kept from the last.
+        _ = blackBox(round)
         if let at = text.firstIndex(of: "needle") {
             found = found + at.utf8Offset
         }
@@ -29,5 +23,18 @@ fn main() {
         round = round + 1
     }
 
-    print("\(found) \(pieces)")
+    return "\(found) \(pieces)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    var parts: String[>..] = []
+    var i = 0
+    while i < 20000 {
+        parts.append("lorem ipsum dolor sit amet, consectetur adipiscing elit, ")
+        i = i + 1
+    }
+    parts.append("needle")
+    let text = parts.joined()
+    b.check(b.iterate { run(text) })
 }

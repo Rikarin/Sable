@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Sable.Syntax;
 
 namespace Sable.Symbols;
@@ -51,6 +52,9 @@ public sealed partial record TestFunction(
     /// </summary>
     public IReadOnlyList<ExpressionSyntax> Arguments { get; init; } = [];
 
+    /// <summary>The parameters <c>arguments:</c> gives values for: all but a benchmark's <c>Bencher</c>, which comes first.</summary>
+    public IReadOnlyList<ParameterSymbol> ArgumentParameters => TakesBencher ? [..Symbol.Parameters.Skip(1)] : Symbol.Parameters;
+
     /// <summary>As the harness lists and filters it: <c>Module.function</c>, or <c>Module.Type.function</c>.</summary>
     public string QualifiedName => Module.Length == 0 ? CallPath : $"{Module}.{CallPath}";
 
@@ -69,10 +73,11 @@ public sealed partial record TestFunction(
 ///         error it throws fails it. One given <c>arguments:</c>, arrays, takes
 ///         parameters, and is a test for each value. A benchmark takes nothing, and its whole
 ///         body is timed, or takes a <c>Sable.Testing.Bencher</c>, and times
-///         what it hands the bencher's <c>iterate</c>. Either is a function of
+///         what it hands the bencher's <c>iterate</c>; given <c>arguments:</c>,
+///         it takes parameters for them after that. Either is a function of
 ///         a module or a static method of a type that is not generic, so that
-///         the harness has one thing to call; neither is generic, and a
-///         benchmark is not async. A test may be async, and is awaited.
+///         the harness has one thing to call, and is not generic; either may
+///         be async, and is awaited.
 ///     </para>
 ///     <para>
 ///         A fuzz target takes one <c>U8[:]</c>, the fuzzer's input, or values
@@ -96,6 +101,7 @@ public sealed partial record TestFunction(
 ///     </para>
 /// </remarks>
 public sealed partial class Compilation {
+    const string BenchTakes = "'@bench' takes nothing, or 'arguments: [...]', the values it is run with, and 'tags: [\"text\"]'";
     const string TestAttribute = "test", BenchAttribute = "bench", FuzzAttribute = "fuzz";
 
     /// <summary>Every well-formed <c>@test</c> (or <c>@bench</c>) function, in file and source order.</summary>
@@ -122,9 +128,9 @@ public sealed partial class Compilation {
         var diagnostics = new List<Diagnostic>();
         foreach (var declaration in tree.Root.DescendantNodes().OfType<FunctionDeclarationSyntax>()) {
             if (KindOf(declaration) is not null && Examine(declaration, tree, diagnostics) is { Arguments.Count: > 0 } test) {
-                var parameters = test.Symbol.Parameters;
+                var parameters = test.ArgumentParameters;
                 for (var i = 0; i < test.Arguments.Count; i++) {
-                    var element = test.Arguments.Count == 1 && parameters.Length > 1
+                    var element = test.Arguments.Count == 1 && parameters.Count > 1
                         ? new TupleTypeSymbol([..parameters.Select(static p => p.Type)], [..parameters.Select(static _ => (string?)null)])
                         : parameters[i].Type;
                     arguments.Add((test.Arguments[i], new ArrayTypeSymbol(element, ArrayKind.Grow), test.Symbol.ContainingSymbol!));
@@ -176,8 +182,12 @@ public sealed partial class Compilation {
                 if (mutator is null) {
                     Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, MutatorExpected);
                 }
-            } else if (attribute.Name.ToString().Trim() == BenchAttribute) {
-                Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, $"'@{attribute.Name.ToString().Trim()}' takes no arguments");
+            } else if (attribute.Name.ToString().Trim() is BenchAttribute) {
+                if (options.Read(attribute) is { } wrong) {
+                    Report(ErrorCode.ERR_TestAttributeArguments, wrong.Span, BenchTakes);
+                } else if (options.Trap is not null || options.Timeout is not null) {
+                    Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, BenchTakes);
+                }
             } else if (options.Read(attribute) is { } bad) {
                 Report(ErrorCode.ERR_TestAttributeArguments, bad.Span,
                     "'@test' takes nothing, or 'traps' for a test that must trap, or 'traps: \"text\"' for one whose trap must say that; "
@@ -200,7 +210,10 @@ public sealed partial class Compilation {
 
         var takesBencher = false;
         if (kind == TestKind.Test && options.Arguments.Count > 0) {
-            CheckTestArguments(function, declaration, options.Arguments, Report);
+            CheckTestArguments(function.Parameters, declaration, options.Arguments, Report);
+        } else if (kind == TestKind.Bench && options.Arguments.Count > 0) {
+            takesBencher = function.Parameters.Length > 0 && IsBencher(function.Parameters[0].Type);
+            CheckTestArguments(takesBencher ? function.Parameters.RemoveAt(0) : function.Parameters, declaration, options.Arguments, Report);
         } else if (kind == TestKind.Test) {
             if (function.Parameters.Length > 0) {
                 Report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test takes no parameters: the harness has nothing to pass it, unless '@test(arguments: [...])' says what");
@@ -210,7 +223,7 @@ public sealed partial class Compilation {
         } else if (function.Parameters.Length == 1 && IsBencher(function.Parameters[0].Type)) {
             takesBencher = true;
         } else if (function.Parameters.Length > 0) {
-            Report(ErrorCode.ERR_BenchParameters, declaration.Parameters.Span, "a benchmark takes nothing, or one 'Bencher' (from Sable.Testing) to call 'iterate' on");
+            Report(ErrorCode.ERR_BenchParameters, declaration.Parameters.Span, "a benchmark takes nothing, or one 'Bencher' (from Sable.Testing) to call 'iterate' on, unless '@bench(arguments: [...])' says what more");
         }
 
         if (kind == TestKind.Bench && function.ThrownType is not null) {
@@ -267,10 +280,9 @@ public sealed partial class Compilation {
     ///     each. Whether they are of what it takes is found as the file's
     ///     semantic model binds them, where the test is declared.
     /// </summary>
-    static void CheckTestArguments(FunctionSymbol function, FunctionDeclarationSyntax declaration, IReadOnlyList<ExpressionSyntax> arguments, Action<ErrorCode, TextSpan, string> report) {
-        var parameters = function.Parameters;
+    static void CheckTestArguments(ImmutableArray<ParameterSymbol> parameters, FunctionDeclarationSyntax declaration, IReadOnlyList<ExpressionSyntax> arguments, Action<ErrorCode, TextSpan, string> report) {
         if (parameters.Any(static p => p.Modifier is not ParameterModifier.None || p.IsVariadic || p.IsAutoclosure || p.IsByReference)) {
-            report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test's parameters are plain ones, each given a value of '@test(arguments: [...])'");
+            report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "its parameters are plain ones, each given a value of 'arguments: [...]'");
             return;
         }
 
@@ -279,8 +291,8 @@ public sealed partial class Compilation {
                 ErrorCode.ERR_TestTakesParameters,
                 declaration.Parameters.Span,
                 parameters.IsEmpty
-                    ? "a test given 'arguments:' takes a parameter for them"
-                    : $"'arguments:' is one array, of {(parameters.Length == 1 ? "what the test takes" : $"tuples of the {parameters.Length} values the test takes")}"
+                    ? "what is given 'arguments:' takes a parameter for them"
+                    : $"'arguments:' is one array, of {(parameters.Length == 1 ? "what it takes" : $"tuples of the {parameters.Length} values it takes")}"
                       + $"{(parameters.Length == 1 ? "" : $", or {parameters.Length} arrays, one for each")}; here are {arguments.Count}"
             );
         }

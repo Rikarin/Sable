@@ -1,0 +1,5 @@
+| benchmark | mean | ± 99.9 % | deviation | median | throughput | allocations | allocated | retains | releases | change | p | verdict |
+|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|
+| `M.f(1, 2)` | 50.5 ns | 318 ns | 0.71 ns | 50.5 ns | 40.55 GB/s, 79.21 Mitems/s | 2 | 50 B | 1 | 3 |  |  |  |
+| `M.g` | 50.5 ns | 318 ns | 0.71 ns | 50.5 ns | 40.55 GB/s, 79.21 Mitems/s | 2 | 50 B | 1 | 3 | +19.80% | 0.3333 | within noise |
+

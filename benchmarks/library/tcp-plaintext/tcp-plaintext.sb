@@ -2,6 +2,7 @@ module TcpPlaintextBench
 
 import Sable.IO
 import Sable.Net
+import Sable.Testing
 
 // TcpListener and TcpStream over loopback, as TechEmpower's plaintext test
 // uses them: 32 connections, each 100 times over sending 16 requests at once
@@ -79,8 +80,7 @@ fn ask(_ address: SocketAddress, _ requests: U8[>..], _ expected: Int) async -> 
     return total
 }
 
-@main
-fn main() async {
+fn run() async -> String {
     let request = "GET /plaintext HTTP/1.1\r\nHost: localhost\r\nAccept: text/plain\r\nConnection: keep-alive\r\n\r\n".utf8.toArray()
     let reply = "HTTP/1.1 200 OK\r\nServer: s\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, World!".utf8.toArray()
     var requests: U8[>..] = []
@@ -101,5 +101,10 @@ fn main() async {
     }
     listener.close()
     await server.value
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { await run() })
 }

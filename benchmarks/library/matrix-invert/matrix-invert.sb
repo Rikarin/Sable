@@ -1,11 +1,11 @@
 module MatrixInvertBench
 
 import Sable.Math.Geometry
+import Sable.Testing
 
 // 256 transforms composed, inverted and taken apart, four thousand times over.
 
-@main
-fn main() {
+fn run() -> String {
     let count = 256
     var matrices: Matrix4x4[>..] = []
     for i in 0..<count {
@@ -16,7 +16,7 @@ fn main() {
         matrices[0].m41 = F32(round % 16)
         sum += F64(total(matrices))
     }
-    print("\(sum / 1024000:.1)")
+    return "\(sum / 1024000:.1)"
 }
 
 fn total(_ matrices: Matrix4x4[:]) -> F32 {
@@ -30,4 +30,9 @@ fn total(_ matrices: Matrix4x4[:]) -> F32 {
         }
     }
     return sum
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

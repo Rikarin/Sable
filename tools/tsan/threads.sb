@@ -1,0 +1,84 @@
+module ThreadStress
+
+import Sable.Concurrency
+import Sable.Time
+
+// Threads, scopes, thread-locals and task-locals, many at once, for
+// ThreadSanitizer (tools/tsan/run.sh): started, joined by several, let go of,
+// parked; sharing what they capture, and what a scope's change where it is.
+
+final class Counted {
+    let gone: Atomic<Int>
+    var n: Int = 0
+    init(_ gone: Atomic<Int>) { self.gone = gone }
+    deinit { gone.add(1) }
+}
+
+@main
+fn main() async {
+    let gone = Atomic(0)
+    let local = ThreadLocal { Counted(gone) }
+    let request = TaskLocal("none")
+    let total = Atomic(0)
+    for round in 0..<20 {
+        let words = (0..<50).map { "word \($0) of \(round)" }
+        let threads = (0..<8).map { n in
+            Thread.spawn(name: "stress \(n)") {
+                local.withValue { $0.n += n }
+                let made = words.map { $0 + "!" }
+                total.add(made.count)
+                Thread.park(atMost: Duration.microseconds(50))
+                return made[n]
+            }
+        }
+        for thread in threads {
+            thread.thread.unpark()
+        }
+        let waiting = threads.map { thread in
+            Task.spawn { await thread.value().count }
+        }
+        for task in waiting {
+            total.add(await task.value)
+        }
+        for thread in threads {
+            total.add(thread.join().count)
+        }
+
+        var log: String[>..] = []
+        var table: [Int: String] = [:]
+        Thread.scope { s in
+            s.spawn {
+                for word in words {
+                    log.append(word)
+                }
+            }
+            s.spawn {
+                for n in 0..<50 {
+                    table[n] = words[n] + "."
+                }
+            }
+            s.spawn { total.add(words.count) }
+        }
+        total.add(log.count + table.count)
+        log.append("after")
+
+        let seen = await request.withValue("round \(round)") {
+            await withTaskGroup(of: Int.self) { group in
+            for _ in 0..<20 {
+                group.spawn {
+                    local.withValue { $0.n += 1 }
+                    return request.value.count
+                }
+            }
+            var sum = 0
+            for await count in group {
+                sum += count
+            }
+            return sum
+        }
+        }
+        total.add(seen)
+        total.add(await Thread.spawn { Thread.blockOn { await Task.spawn { 1 }.value } }.value())
+    }
+    print(total.load() > 0)
+}

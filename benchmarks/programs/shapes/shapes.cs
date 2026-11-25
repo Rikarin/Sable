@@ -2,7 +2,7 @@ using System.Globalization;
 
 // Port of shapes.sb.
 [Benchmark("programs/shapes")]
-static class ProgramShapes {
+static class ProgramsShapes {
     interface IShape {
         double Area();
         string Name();

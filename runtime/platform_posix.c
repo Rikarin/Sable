@@ -29,12 +29,16 @@
 
 #if defined(__linux__)
 #include <link.h>
+#include <linux/perf_event.h>
 #include <netpacket/packet.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/syscall.h>
 #else
+#include <libproc.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <pthread/qos.h>
 #include <net/if_dl.h>
 #include <sys/event.h>
 #include <sys/sysctl.h>
@@ -574,6 +578,59 @@ static int64_t peak_memory(void) {
 #endif
 }
 
+// The children's is in microseconds, as getrusage has it; the process's own
+// from its clock, which is finer.
+static int64_t processor_time(bool children) {
+    if (!children) {
+        struct timespec now;
+        return clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now) == 0 ? (int64_t)now.tv_sec * 1000000000 + now.tv_nsec : -1;
+    }
+
+    struct rusage usage;
+    if (getrusage(RUSAGE_CHILDREN, &usage) != 0) {
+        return -1;
+    }
+
+    return ((int64_t)usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000000000
+        + ((int64_t)usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) * 1000;
+}
+
+// macOS counts for every process, and says so to the process itself. Linux
+// counts what is asked for, from then on, with perf_event_open: user mode
+// only, which perf_event_paranoid allows up to 2 (a container, or a virtual
+// machine whose host does not pass the counters on, has none).
+static int64_t hardware_counter(bool cycles) {
+#if defined(__APPLE__)
+    struct rusage_info_v4 usage;
+    if (proc_pid_rusage(getpid(), RUSAGE_INFO_V4, (rusage_info_t *)&usage) != 0) {
+        return -1;
+    }
+
+    int64_t count = (int64_t)(cycles ? usage.ri_cycles : usage.ri_instructions);
+    return count > 0 ? count : -1;
+#elif defined(__linux__)
+    static int counters[2] = { -2, -2 };
+    int *counter = &counters[cycles];
+    if (*counter == -2) {
+        struct perf_event_attr attributes;
+        memset(&attributes, 0, sizeof attributes);
+        attributes.type = PERF_TYPE_HARDWARE;
+        attributes.size = sizeof attributes;
+        attributes.config = cycles ? PERF_COUNT_HW_CPU_CYCLES : PERF_COUNT_HW_INSTRUCTIONS;
+        attributes.exclude_kernel = 1;
+        attributes.exclude_hv = 1;
+        attributes.inherit = 1;
+        *counter = (int)syscall(SYS_perf_event_open, &attributes, 0, -1, -1, PERF_FLAG_FD_CLOEXEC);
+    }
+
+    uint64_t count;
+    return *counter >= 0 && read(*counter, &count, sizeof count) == sizeof count ? (int64_t)count : -1;
+#else
+    (void)cycles;
+    return -1;
+#endif
+}
+
 // ---- Time (Sable.Time's floor) ------------------------------------------
 
 int64_t sable_time_monotonic(void) {
@@ -694,12 +751,16 @@ static void *thread_main(void *pointer) {
     ThreadStart start = *(ThreadStart *)pointer;
     free(pointer);
     // A stack for the overflow handler, for as long as the thread runs.
-    watch_stack_on(malloc(SIGNAL_STACK));
+    char *memory = malloc(SIGNAL_STACK);
+    watch_stack_on(memory);
     start.run(start.argument);
+    stack_t none = { .ss_flags = SS_DISABLE, .ss_size = SIGNAL_STACK };
+    sigaltstack(&none, NULL);
+    free(memory);
     return NULL;
 }
 
-static bool thread_start(void (*run)(void *argument), void *argument) {
+static bool thread_start_sized(void (*run)(void *argument), void *argument, size_t stack) {
     ThreadStart *start = malloc(sizeof *start);
     if (start == NULL) {
         return false;
@@ -709,8 +770,11 @@ static bool thread_start(void (*run)(void *argument), void *argument) {
     start->argument = argument;
     pthread_attr_t attributes;
     pthread_attr_init(&attributes);
-    // As large as the main thread's usually is: a task's calls run here.
-    pthread_attr_setstacksize(&attributes, 8 * 1024 * 1024);
+    // Whole pages, and room for a handler's frames and the runtime's own.
+    enum { LEAST = 256 * 1024 };
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    stack = ((stack < LEAST ? LEAST : stack) + page - 1) / page * page;
+    pthread_attr_setstacksize(&attributes, stack);
     pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
     pthread_t thread;
     bool started = pthread_create(&thread, &attributes, thread_main, start) == 0;
@@ -722,10 +786,173 @@ static bool thread_start(void (*run)(void *argument), void *argument) {
     return started;
 }
 
+// As large as the main thread's usually is: a task's calls run here.
+static bool thread_start(void (*run)(void *argument), void *argument) {
+    return thread_start_sized(run, argument, THREAD_STACK);
+}
+
+#if defined(__APPLE__)
+static void thread_set_name(const char *name) {
+    pthread_setname_np(name);
+}
+
+static void thread_set_priority(int priority) {
+    static const qos_class_t classes[] = { QOS_CLASS_BACKGROUND, QOS_CLASS_UTILITY, QOS_CLASS_DEFAULT, QOS_CLASS_USER_INITIATED, QOS_CLASS_USER_INTERACTIVE };
+    pthread_set_qos_class_self_np(classes[priority + 2], 0);
+}
+
 static int processor_count(void) {
     long count = sysconf(_SC_NPROCESSORS_ONLN);
     return count > 0 ? (int)count : 1;
 }
+#else
+static void thread_set_name(const char *name) {
+    // Fifteen bytes, and a NUL: fewer where that would split a character.
+    char some[16];
+    size_t length = strlen(name);
+    if (length > 15) {
+        length = 15;
+        while (length > 0 && ((unsigned char)name[length] & 0xc0) == 0x80) {
+            length--;
+        }
+    }
+
+    memcpy(some, name, length);
+    some[length] = '\0';
+    pthread_setname_np(pthread_self(), some);
+}
+
+// Each thread's nice value is its own on Linux; to be nicer is always allowed.
+static void thread_set_priority(int priority) {
+    static const int nice[] = { 19, 10, 0, -5, -10 };
+    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), nice[priority + 2]);
+}
+
+// The processors a control group's quota comes to, rounded up: what the file
+// holds, "quota period" or, in version 1, the quota, with its period in
+// another. 0: no limit.
+static long quota_of(const char *directory, bool second) {
+    char path[4096 + 64], text[64];
+    long long quota = -1, period = 0;
+    snprintf(path, sizeof path, "%s/%s", directory, second ? "cpu.max" : "cpu.cfs_quota_us");
+    FILE *file = fopen(path, "re");
+    if (file == NULL) {
+        return 0;
+    }
+
+    char *read = fgets(text, sizeof text, file);
+    fclose(file);
+    if (read == NULL) {
+        return 0;
+    }
+
+    if (second) {
+        if (sscanf(text, "%lld %lld", &quota, &period) != 2) {
+            return 0;
+        }
+    } else {
+        quota = atoll(text);
+        snprintf(path, sizeof path, "%s/cpu.cfs_period_us", directory);
+        file = fopen(path, "re");
+        if (file != NULL) {
+            if (fgets(text, sizeof text, file) != NULL) {
+                period = atoll(text);
+            }
+
+            fclose(file);
+        }
+    }
+
+    return quota > 0 && period > 0 ? (long)((quota + period - 1) / period) : 0;
+}
+
+// The least of the limits on the program's control group and those it is in;
+// 0: none.
+static long group_limit(void) {
+    FILE *groups = fopen("/proc/self/cgroup", "re");
+    if (groups == NULL) {
+        return 0;
+    }
+
+    long least = 0;
+    char line[4096];
+    while (fgets(line, sizeof line, groups) != NULL) {
+        // "number:controllers:path", and "0::path" in version 2.
+        line[strcspn(line, "\n")] = '\0';
+        char *controllers = strchr(line, ':');
+        char *path = controllers != NULL ? strchr(controllers + 1, ':') : NULL;
+        if (path == NULL) {
+            continue;
+        }
+
+        *path++ = '\0';
+        controllers++;
+        bool second = controllers[0] == '\0';
+        bool cpu = false;
+        char *rest = NULL;
+        for (char *each = strtok_r(controllers, ",", &rest); each != NULL; each = strtok_r(NULL, ",", &rest)) {
+            cpu |= strcmp(each, "cpu") == 0;
+        }
+
+        if (!second && !cpu) {
+            continue;
+        }
+
+        char directory[4096 + 32];
+        const char *root = second ? "/sys/fs/cgroup" : "/sys/fs/cgroup/cpu";
+        for (;;) {
+            snprintf(directory, sizeof directory, "%s%s", root, strcmp(path, "/") == 0 ? "" : path);
+            long limit = quota_of(directory, second);
+            if (limit > 0 && (least == 0 || limit < least)) {
+                least = limit;
+            }
+
+            char *up = strrchr(path, '/');
+            if (up == NULL || path[0] == '\0') {
+                break;
+            }
+
+            *up = '\0';
+        }
+    }
+
+    fclose(groups);
+    return least;
+}
+
+static int processor_count(void) {
+    static int known;
+    int count = __atomic_load_n(&known, __ATOMIC_RELAXED);
+    if (count > 0) {
+        return count;
+    }
+
+    long most = sysconf(_SC_NPROCESSORS_ONLN);
+    for (int size = 1024; size <= 1 << 20; size *= 2) {
+        cpu_set_t *set = CPU_ALLOC((size_t)size);
+        if (set == NULL) {
+            break;
+        }
+
+        int failed = sched_getaffinity(0, CPU_ALLOC_SIZE((size_t)size), set);
+        int bound = failed ? 0 : CPU_COUNT_S(CPU_ALLOC_SIZE((size_t)size), set);
+        CPU_FREE(set);
+        if (bound > 0) {
+            most = bound;
+            break;
+        }
+    }
+
+    long limit = group_limit();
+    if (limit > 0 && limit < most) {
+        most = limit;
+    }
+
+    count = most > 0 ? (int)most : 1;
+    __atomic_store_n(&known, count, __ATOMIC_RELAXED);
+    return count;
+}
+#endif
 
 static void thread_yield(void) {
     sched_yield();

@@ -9,6 +9,7 @@
 // copies it only on its first write, as Sable's copy-on-write array does.
 // Int arithmetic and array indexing are checked.
 
+#include "../../support/c/bench.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -89,8 +90,8 @@ static bool string_equal(const String *a, const String *b) {
 }
 
 static void print_string(const String *s) {
-    fwrite(s->bytes, 1, (size_t)s->length, stdout);
-    fputc('\n', stdout);
+    bench_write(s->bytes, (size_t)s->length);
+    bench_write("\n", 1);
 }
 
 static int32_t decode(const char *bytes, int64_t *width) {
@@ -289,7 +290,7 @@ static CountArray *ranked(CountArray *items, bool (*before)(Count, Count)) {
 
 static bool by_count(Count a, Count b) { return a.count > b.count; }
 
-int main(void) {
+static void program(void) {
     EntryArray *counts = NULL;
     StringArray *seen = NULL; // borrows the dictionary's keys
     int64_t round = 0;
@@ -346,5 +347,6 @@ int main(void) {
         free(counts->elements[k].key);
     }
     EntryArray_free(counts);
-    return 0;
 }
+
+BENCH_MAIN(program)

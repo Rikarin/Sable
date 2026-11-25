@@ -1,10 +1,11 @@
 module RandomBytesBench
 
+import Sable.Testing
+
 // Arrays filled with random bytes: 64 KiB, a thousand times, the mean of
 // the first bytes of the last in eighths of 256.
 
-@main
-fn main() {
+fn run() -> String {
     var generator = SeededRandomNumberGenerator(seed: 1)
     var bytes = U8[>..](repeating: 0, count: 65536)
     for _ in 0..<1000 {
@@ -14,5 +15,10 @@ fn main() {
     for byte in bytes {
         total += Int(byte)
     }
-    print((total / 65536 + 16) / 32)
+    return "\((total / 65536 + 16) / 32)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

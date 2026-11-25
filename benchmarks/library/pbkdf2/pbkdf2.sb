@@ -4,9 +4,9 @@ module Pbkdf2Bench
 // two hundred thousand iterations of each.
 
 import Sable.Crypto
+import Sable.Testing
 
-@main
-fn main() {
+fn run() -> String {
     let password = SymmetricKey(U8[>..](repeating: 7, count: 20))
     let salt = U8[>..](repeating: 9, count: 16)
     let a = (try! Pbkdf2<Sha256>.deriveKey(from: password, salt: salt, iterations: 200_000, byteCount: 32)).bytes()
@@ -18,5 +18,10 @@ fn main() {
     for byte in b {
         total = total * 31 % 1_000_003 + Int(byte)
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

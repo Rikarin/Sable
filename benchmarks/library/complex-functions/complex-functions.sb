@@ -1,13 +1,13 @@
 module ComplexFunctionsBench
 
 import Sable.Math
+import Sable.Testing
 
 // Complex<F64>'s elementary functions, thirteen of them, and the polar form
 // and back, at each of 72,000 points off the branch cuts. The sums are
 // printed to few enough places that a last bit does not show.
 
-@main
-fn main() {
+fn run() -> String {
     var total = Complex<F64>.zero
     var magnitudes = 0.0
     for row in 0..<480 {
@@ -22,5 +22,10 @@ fn main() {
             total = total + Complex(magnitude: z.magnitude, phase: z.phase)
         }
     }
-    print("\(total.real:.2f) \(total.imaginary:.2f) \(magnitudes:.2f)")
+    return "\(total.real:.2f) \(total.imaginary:.2f) \(magnitudes:.2f)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

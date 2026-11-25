@@ -1,7 +1,8 @@
 // Port of list-edit.sb.
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
-int main(void) {
+static void run(void) {
     int64_t total = 0;
     for (int64_t round = 0; round < 3; round++) {
         Ints list = {0};
@@ -19,6 +20,7 @@ int main(void) {
         total = add_i(add_i(total, list.count), *ints_at(&list, list.count / 2));
         free(list.elements);
     }
-    printf("%lld\n", (long long)total);
-    return 0;
+    bench_printf("%lld\n", (long long)total);
 }
+
+BENCH_MAIN(run)

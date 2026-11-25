@@ -5,17 +5,9 @@ module ZipBench
 
 import Sable.IO
 import Sable.IO.Archives
+import Sable.Testing
 
-@main
-fn main() {
-    var text: U8[>..] = []
-    var state = 1
-    while text.count < 2000 {
-        state = (state * 75 + 74) % 65537
-        text.append(U8(0x61 + state % 7))
-    }
-    var options = ZipOptions()
-    options.level = 1
+fn run(_ text: U8[>..], _ options: ZipOptions) -> String {
     var total = 0
     var round = 0
     while round < 5 {
@@ -32,5 +24,18 @@ fn main() {
         }
         round += 1
     }
-    print("\(total)")
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    var text: U8[>..] = []
+    var state = 1
+    while text.count < 2000 {
+        state = (state * 75 + 74) % 65537
+        text.append(U8(0x61 + state % 7))
+    }
+    var options = ZipOptions()
+    options.level = 1
+    b.check(b.iterate { run(text, options) })
 }

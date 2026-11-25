@@ -2072,6 +2072,12 @@ public static class SilBuiltins {
             // Work run on the blocking pool while the task waits: a function and the object it is given, borrowed.
             case "task_blocking" when operands is [FunctionType, ClassType]:
                 return new([..operands], SilType.Unit);
+            // A thread, or a loop several share, given its work; a value of a
+            // thread's or a task's given what destroys it: a function and the
+            // object it is given, which the runtime then holds, and integers.
+            case "thread_start" or "thread_loop" when operands is [FunctionType, ClassType, var number] && number == SilType.Int:
+            case "thread_local_set" or "task_local_push" when operands is [FunctionType, ClassType, var key, var cell] && key == SilType.Int && cell == SilType.Int:
+                return new([..operands], SilType.Unit) { Consumed = [1] };
             case "task_wait" or "task_release" or "task_cancel" when operands is [var handle] && handle == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
             // Off the run queue for at least this many nanoseconds, while the other tasks run.
@@ -2360,7 +2366,16 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", "no_context", "object_unmade", Coverage.Builtin]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", "thread_start", "thread_loop", "thread_local_set", "task_local_push", "no_context", "object_unmade", Coverage.Builtin]);
+
+    /// <summary>
+    ///     True of a builtin that runs code of the program's — a loop's work, a
+    ///     thread-local's deinit — or waits for another thread that has: what
+    ///     that code changes is anything it could reach.
+    /// </summary>
+    public static bool RunsWork(string name) =>
+        name is "thread_start" or "thread_loop" or "thread_join" or "thread_park" or "thread_block_wait" or "thread_local_set" or "thread_local_free"
+            or "task_local_push" or "task_local_pop";
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 
@@ -2893,6 +2908,8 @@ public static class SilBuiltins {
         Add("system_text", SilType.String, SilType.Int);
         Add("system_number", SilType.Int, SilType.Int);
         Add("memory_statistic", SilType.Int, SilType.Int);
+        Add("memory_counting", SilType.Unit, SilType.Bool);
+        Add("measurement", SilType.Int, SilType.Int);
         Add("io_succeeded", SilType.Bool);
         // Files by handle (runtime/io.c, "File handles"): a call that fails
         // gives -1, nothing or false, and 'file_error' says why by IoError's
@@ -3121,6 +3138,32 @@ public static class SilBuiltins {
         Add("condition_wait", SilType.Unit, SilType.Int, SilType.Int, SilType.Int);
         Add("condition_signal", SilType.Unit, SilType.Int);
         Add("condition_broadcast", SilType.Unit, SilType.Int);
+
+        // Threads (runtime/parallel.c), by handle — made with a name, a stack's
+        // size and a priority, named, joined, parked — blocking on a task;
+        // thread-locals and task-locals, by key: where a value is, 0 for none.
+        // What runs a closure is below (RunsWork).
+        Add("thread_new", SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("thread_release", SilType.Unit, SilType.Int);
+        Add("thread_current", SilType.Int);
+        Add("thread_id", SilType.Int, SilType.Int);
+        Add("thread_name", SilType.String, SilType.Int);
+        Add("thread_join", SilType.Bool, SilType.Int, SilType.Int);
+        Add("thread_ended", SilType.Bool, SilType.Int);
+        Add("thread_park", SilType.Bool, SilType.Int);
+        Add("thread_unpark", SilType.Unit, SilType.Int);
+        Add("thread_yield", SilType.Unit);
+        Add("thread_workers", SilType.Int);
+        Add("thread_loop_more", SilType.Unit);
+        Add("thread_block_new", SilType.Int);
+        Add("thread_block_done", SilType.Unit, SilType.Int);
+        Add("thread_block_wait", SilType.Unit, SilType.Int);
+        Add("thread_local_key", SilType.Int);
+        Add("thread_local_free", SilType.Unit, SilType.Int);
+        Add("thread_local_find", SilType.Int, SilType.Int);
+        Add("task_local_key", SilType.Int);
+        Add("task_local_pop", SilType.Unit);
+        Add("task_local_find", SilType.Int, SilType.Int);
 
         // Emptying a region, all of it or back to a mark: what a 'region frame = pool' block took.
         Add("region_reset", SilType.Unit, SilType.Region);

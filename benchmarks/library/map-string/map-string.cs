@@ -1,14 +1,20 @@
 // Port of map-string.sb.
 [Benchmark("library/map-string")]
 static class LibraryMapString {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             const int n = 200000;
             var keys = new List<string>();
             for (long i = 0; i < n; i++) {
                 keys.Add($"key-{i * 7919 % 1000003}");
             }
+            return () => Run(keys);
+        }
+    }
 
+    static string Run(List<string> keys) {
+        checked {
+            var n = keys.Count;
             var map = new Dictionary<string, long>();
             for (var i = 0; i < n; i++) {
                 map[keys[i]] = i;

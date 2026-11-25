@@ -1,5 +1,8 @@
 // Port of map-int.sb: std's HashMap, SipHash and all.
 
+#[path = "../../support/rust/bench.rs"]
+mod bench;
+
 use std::collections::HashMap;
 
 fn main() {
@@ -11,34 +14,36 @@ fn main() {
         keys.push(x);
     }
 
-    let mut map: HashMap<i64, i64> = HashMap::new();
-    for i in 0..n {
-        map.insert(keys[i], i as i64);
-    }
+    bench::run(|| {
+        let mut map: HashMap<i64, i64> = HashMap::new();
+        for i in 0..n {
+            map.insert(keys[i], i as i64);
+        }
 
-    let mut sum: i64 = 0;
-    for _ in 0..3 {
+        let mut sum: i64 = 0;
+        for _ in 0..3 {
+            for key in &keys {
+                sum += map.get(key).copied().unwrap_or(0);
+            }
+        }
+
+        let mut misses: i64 = 0;
+        for i in 0..n {
+            if !map.contains_key(&(keys[i] + 2147483648)) {
+                misses += 1;
+            }
+        }
+
+        for i in (0..n).step_by(2) {
+            map.remove(&keys[i]);
+        }
+
+        let mut hits: i64 = 0;
         for key in &keys {
-            sum += map.get(key).copied().unwrap_or(0);
+            if map.contains_key(key) {
+                hits += 1;
+            }
         }
-    }
-
-    let mut misses: i64 = 0;
-    for i in 0..n {
-        if !map.contains_key(&(keys[i] + 2147483648)) {
-            misses += 1;
-        }
-    }
-
-    for i in (0..n).step_by(2) {
-        map.remove(&keys[i]);
-    }
-
-    let mut hits: i64 = 0;
-    for key in &keys {
-        if map.contains_key(key) {
-            hits += 1;
-        }
-    }
-    println!("{} {sum} {misses} {hits}", map.len());
+        format!("{} {sum} {misses} {hits}", map.len())
+    });
 }

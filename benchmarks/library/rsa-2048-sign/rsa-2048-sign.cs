@@ -35,10 +35,16 @@ static class LibraryRsa2048Sign {
         -----END PRIVATE KEY-----
         """;
 
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
-            using var key = RSA.Create();
+            var key = RSA.Create();
             key.ImportFromPem(Pem);
+            return () => Run(key);
+        }
+    }
+
+    static string Run(RSA key) {
+        checked {
             var message = new byte[64];
             Array.Fill(message, (byte)7);
             var signature = Array.Empty<byte>();

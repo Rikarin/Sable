@@ -29,8 +29,23 @@ static SpinLock foreign_lock;
 // As the thread ends: the platform calls it with what platform_at_thread_exit
 // was given. The thread may yet call Sable again, from another library's
 // clean-up: it is then one seen for the first time.
+static void os_thread_release(struct OsThread *thread);
+static bool locals_destroy(SableThread *thread);
+
 static void foreign_thread_end(void *pointer) {
     ForeignThread *thread = pointer;
+    SableThread *state = this_thread_get();
+    if (state != NULL && state == thread->state) {
+        locals_destroy(state);
+        if (state->os != NULL) {
+            os_thread_release(state->os);
+            state->os = NULL;
+        }
+    }
+
+    leave_locals(&thread->task);
+    leave_children(&thread->task);
+    thread->task.child_count = 0;
     free(accesses);
     accesses = NULL;
     access_capacity = 0;
@@ -51,7 +66,7 @@ static void foreign_thread_end(void *pointer) {
     spin_unlock(&foreign_lock);
 }
 
-SABLE_SLOW static void foreign_thread_begin(void) {
+static ForeignThread *foreign_thread_attach(void) {
     spin_lock(&foreign_lock);
     ForeignThread *thread = foreign_free;
     if (thread != NULL) {
@@ -79,8 +94,16 @@ SABLE_SLOW static void foreign_thread_begin(void) {
         thread->state = current_thread();
     }
 
+    if (this_thread_get() == thread->state) {
+        thread->state->ends = true;
+    }
+
     switch_to(&thread->task);
-    platform_at_thread_exit(thread);
+    return thread;
+}
+
+SABLE_SLOW static void foreign_thread_begin(void) {
+    platform_at_thread_exit(foreign_thread_attach());
 }
 
 SABLE_SLOW static void foreign_first_enter(void) {

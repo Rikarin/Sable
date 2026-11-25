@@ -1,0 +1,109 @@
+module Sable.Testing
+
+import Sable.Math
+
+/// The Mann-Whitney U test (Wilcoxon's rank sum): whether two lots of
+/// samples are of one distribution, by how often one's are above the
+/// other's. 'sable bench' compares by it rather than by Welch's t, as a
+/// benchmark's samples are not normal — they have a floor, and a tail of
+/// interruptions — and one far sample moves a mean but hardly a rank.
+///
+/// ```sable
+/// let same = MannWhitney([1.0, 2.0, 3.0, 4.0], [1.5, 2.5, 3.5, 4.5])
+/// assert(same.probability > 0.5)
+/// let apart = MannWhitney([1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0])
+/// assertEqual(apart.u, 0.0)
+/// assert((apart.probability - 1.0 / 35.0).abs() < 1e-12)
+/// ```
+public struct MannWhitney {
+    /// Of the pairs of a first and a second sample, how many have the first
+    /// above the second, a tie being half.
+    public var u: F64
+    /// How likely samples of one distribution are to differ by as much,
+    /// either way: exactly, of up to twenty samples each without ties, and
+    /// else by the normal approximation, corrected for ties and continuity.
+    public var probability: F64
+
+    public init(_ first: F64[:], _ second: F64[:]) {
+        let n = first.count
+        let m = second.count
+        u = 0.0
+        probability = 1.0
+        if n == 0 || m == 0 {
+            return
+        }
+        var all: (F64, Bool)[>..] = []
+        for x in first {
+            all.append((x, true))
+        }
+        for x in second {
+            all.append((x, false))
+        }
+        all.sort(by: { a, b in a.0 < b.0 })
+
+        // Ties share the mean of their ranks.
+        var ranks = 0.0
+        var ties = 0.0
+        var i = 0
+        while i < all.count {
+            var j = i
+            while j < all.count && all[j].0 == all[i].0 {
+                j += 1
+            }
+            let tied = F64(j - i)
+            ties += tied * tied * tied - tied
+            for k in i..<j {
+                if all[k].1 {
+                    ranks += F64(i + j + 1) / 2.0
+                }
+            }
+            i = j
+        }
+        u = ranks - F64(n * (n + 1)) / 2.0
+        let least = min(u, F64(n * m) - u)
+        if ties == 0.0 && n <= 20 && m <= 20 {
+            probability = min(1.0, 2.0 * MannWhitney.exactly(n, m, Int(least)))
+            return
+        }
+        let total = F64(n + m)
+        let variance = F64(n * m) / 12.0 * (total + 1.0 - ties / (total * (total - 1.0)))
+        if variance <= 0.0 {
+            return
+        }
+        let z = max(0.0, F64(n * m) / 2.0 - least - 0.5) / variance.squareRoot()
+        probability = min(1.0, erfc(z / 1.4142135623730951))
+    }
+
+    // How likely U is to be at most 'u', each order of the samples as likely
+    // as any other: of those of i and j samples, the greatest is one of the
+    // first lot, above all j others, or of the second, above none.
+    static fn exactly(_ n: Int, _ m: Int, _ u: Int) -> F64 {
+        var counts: F64[>..][>..] = []
+        for _ in 0...m {
+            counts.append([1.0])
+        }
+        for i in 1...n {
+            var next: F64[>..][>..] = [[1.0]]
+            for j in 1...m {
+                var row = F64[>..](repeating: 0.0, count: i * j + 1)
+                for k in 0..<counts[j].count {
+                    row[k + j] = row[k + j] + counts[j][k]
+                }
+                for k in 0..<next[j - 1].count {
+                    row[k] = row[k] + next[j - 1][k]
+                }
+                next.append(row)
+            }
+            counts = next
+        }
+        var below = 0.0
+        var all = 0.0
+        for k in 0..<counts[m].count {
+            all += counts[m][k]
+            if k <= u {
+                below += counts[m][k]
+            }
+        }
+        return below / all
+    }
+}

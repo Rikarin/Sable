@@ -1,7 +1,7 @@
 // Port of map-int.sb.
 [Benchmark("library/map-int")]
 static class LibraryMapInt {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             const int n = 1000000;
             var keys = new List<long>();
@@ -10,7 +10,13 @@ static class LibraryMapInt {
                 x = (x * 1103515245 + 12345) % 2147483648;
                 keys.Add(x);
             }
+            return () => Run(keys);
+        }
+    }
 
+    static string Run(List<long> keys) {
+        checked {
+            var n = keys.Count;
             var map = new Dictionary<long, long>();
             for (var i = 0; i < n; i++) {
                 map[keys[i]] = i;

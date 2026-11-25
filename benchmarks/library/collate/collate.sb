@@ -1,11 +1,18 @@
 module CollateBench
 
 import Sable.Globalization
+import Sable.Testing
 
 // Words in Swedish order: sorted by comparison, then by their sort keys.
 
-@main
-fn main() {
+fn run(_ words: String[>..], _ swedish: Collator) -> String {
+    let sorted = words.sorted(by: swedish.areInIncreasingOrder)
+    let keyed = words.map { (swedish.sortKey($0), $0) }.sorted { a, b in a.0 < b.0 }
+    return "\(sorted[0]) \(sorted[sorted.count - 1]) \(sorted[2500]) \(keyed[2500].1)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
     let letters = ["a", "b", "c", "e", "k", "l", "o", "r", "s", "t", "å", "ä", "ö"]
     var words: String[>..] = []
     var x = 42
@@ -18,7 +25,5 @@ fn main() {
         words.append(word)
     }
     let swedish = Collator(Locale.of("sv")!)
-    let sorted = words.sorted(by: swedish.areInIncreasingOrder)
-    let keyed = words.map { (swedish.sortKey($0), $0) }.sorted { a, b in a.0 < b.0 }
-    print("\(sorted[0]) \(sorted[sorted.count - 1]) \(sorted[2500]) \(keyed[2500].1)")
+    b.check(b.iterate { run(words, swedish) })
 }

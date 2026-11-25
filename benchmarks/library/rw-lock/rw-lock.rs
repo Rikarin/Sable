@@ -26,6 +26,7 @@ fn main() {
                 });
             }
         });
-        format!("{}", count.read().unwrap())
+        let total = *count.read().unwrap();
+        format!("{total}")
     });
 }

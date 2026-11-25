@@ -67,6 +67,9 @@ pub fn run<F: FnMut() -> String>(mut work: F) {
     let samples = option("--samples", 20.0) as usize;
     let budget = option("--budget-ms", 3000.0) * 1e6;
 
+    // Called through a pointer, so that nothing of one call is kept for the next.
+    let pointer: &mut dyn FnMut() -> String = &mut work;
+    let work = black_box(pointer);
     let mut check = String::new();
     let mut iterate = |iterations: u64| {
         let used = processor();

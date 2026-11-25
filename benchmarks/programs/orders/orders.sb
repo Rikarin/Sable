@@ -43,7 +43,7 @@ fn roundTrip(_ i: Int) -> U64 {
     var order = Order { id: U64(i), customer: "Bob", lines: [], parent: none }
     order.lines.append(OrderLine { sku: "Z-9", qty: 2, price: U32(i % 100) })
     return match Order.fromBytes(Bytes.of(order)) {
-        case .Ok(let copy) => total(copy)
+        case .Ok(let copy)     => total(copy)
         case .Invalid(let why) => 0
     }
 }

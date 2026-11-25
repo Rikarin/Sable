@@ -130,13 +130,13 @@ fn run(_ settings: BenchSettings, _ cost: (BenchPhase, Int) -> F64) -> (BenchSch
     var rounds = 0
     while schedule.phase != .Done && rounds < 10000 {
         let letter = match schedule.phase {
-            case .Pilot => "p"
-            case .WarmUp => "w"
+            case .Pilot    => "p"
+            case .WarmUp   => "w"
             case .Overhead => "o"
-            case .Measure => "m"
-            case .Memory => "a"
+            case .Measure  => "m"
+            case .Memory   => "a"
             case .Counters => "c"
-            default => "!"
+            default        => "!"
         }
         phases += letter
         let wall = cost(schedule.phase, schedule.iterations)
@@ -312,4 +312,58 @@ fn casesAndFilters() {
     let filter = try! TestFilter("tag:slow & file:s.sb & S.b")
     expect(filter.matches(name: bench.name, location: bench.location, tags: bench.tags))
     expect(!filter.matches(name: bench.name, location: "t.sb:1", tags: bench.tags))
+}
+
+@test
+fn theLinesOfTheReport() {
+    let s = BenchStatistics([50.0, 51.0, 50.0, 51.0, 90.0])
+    var m = measurement("a\"b,c")
+    m.counters = BenchCounters(instructions: 4001.0, cycles: 1.0)
+    let one = BenchResult { job: "O3", location: "m.sb:3", measurement: m, statistics: s, comparison: BenchComparison(spread(100.0, 5.0, 20), spread(130.0, 5.0, 20)) }
+    assertEqual(
+        benchLine(one),
+        "50.5 ns ± 3.73 ns (median 50.5 ns, 4 × 10 iterations, 1 outlier), allocations 2 (50 B), retains 1, releases 3, instructions 2000.50, cycles 0.50, 40.55 GB/s, 79.21 Mitems/s"
+    )
+    assertEqual(benchHistory([one], "2026-01-02\tabc"), "2026-01-02\tabc\ta\"b,c[O3]\t0.000051\t2\t1\t3\n")
+    expect(benchHistoryHeader.hasPrefix("date\tcommit\t"))
+    expect(benchCsv([one]).contains("\n\"a\"\"b,c\",O3,"))
+    expect(benchMarkdown([one]).contains("| `a\"b,c` | O3 | 50.5 ns |"))
+    expect(benchMarkdown([one]).contains("| REGRESSED |"))
+    expect(benchJson([one], processor: true).contains("\"metric\": \"processor\""))
+
+    // Nothing but a time, of none: no throughput, and nothing counted.
+    m = BenchMeasurement(name: "empty", samples: [], bytes: 1 << 20, items: 3)
+    var two = BenchResult { job: "", location: "m.sb:3", measurement: m, statistics: BenchStatistics([]), comparison: BenchComparison(spread(100.0, 5.0, 20), spread(60.0, 5.0, 20)) }
+    assertEqual(benchLine(two), "0.00 ns ± 0.00 ns (median 0.00 ns, 0 × 0 iterations), allocations 0 (0 B), retains 0, releases 0")
+    expect(benchCsv([two]).contains("improved"))
+    m.memory = BenchMemory(allocations: 0.25, bytes: 3.0 * 1048576.0, retains: 1e16, releases: 0.0)
+    m.counters = BenchCounters(instructions: -1.0, cycles: -1.0)
+    two.measurement = m
+    two.statistics = BenchStatistics([2e9])
+    two.comparison = none
+    assertEqual(benchLine(two), "2.00 s ± 0.00 ns (median 2.00 s, 1 × 0 iterations), allocations 0.25 (3.00 MiB), retains 10000000000000000.00, releases 0, 524.29 kB/s, 1.50 items/s")
+    m.bytes = 0
+    m.memory = BenchMemory(allocations: 1.0, bytes: 2.0 * 1073741824.0, retains: 0.0, releases: 0.0)
+    two.measurement = m
+    expect(benchLine(two).contains("(2.00 GiB)") && benchLine(two).hasSuffix(", 1.50 items/s"))
+    expect(benchJson([two], processor: false).contains("\"instructions\": null"))
+}
+
+@test
+async fn theProcessorsCounters() {
+    var settings = BenchSettings.quick
+    settings.countsInstructions = true
+    settings.usesProcessorTime = true
+    let b = Bencher("counted", settings)
+    b.iterate { blackBox(3) * 2 }
+    let counters = require(b.measurement).counters
+    // Where the system gives them, which a virtual machine's may not.
+    if let counters {
+        expect(counters.instructions > 0.0 || counters.cycles > 0.0)
+    }
+    let c = Bencher("counted", settings)
+    await c.iterateAsync { blackBox(3) * 2 }
+    expect(c.measurement != none)
+    b.operationsPerIteration = 0
+    assertEqual(require(b.measurement).operations, 1)
 }

@@ -8,7 +8,7 @@ import Sable.Text
 
 /// A result's line, after its name: '12.40 µs ± 0.10 µs (median 12.38 µs,
 /// 15 × 800 iterations, 1 outlier), allocations 3 (96 B), retains 4, releases 5'.
-fn benchLine(_ result: BenchResult) -> String {
+public fn benchLine(_ result: BenchResult) -> String {
     let s = result.statistics
     let m = result.measurement
     let memory = m.memoryPerOperation
@@ -130,7 +130,7 @@ public fn benchCsv(_ results: BenchResult[>..]) -> String {
     let rows = TextBuilder()
     rows.appendLine(
         "benchmark,job,mean_ns,margin_ns,deviation_ns,median_ns,minimum_ns,maximum_ns,samples,outliers,iterations,"
-            + "bytes_per_second,items_per_second,allocations,allocated_bytes,retains,releases,instructions,cycles,change,p,verdict"
+        + "bytes_per_second,items_per_second,allocations,allocated_bytes,retains,releases,instructions,cycles,change,p,verdict"
     )
     for r in results {
         let s = r.statistics
@@ -178,9 +178,9 @@ extension BenchVerdict {
     var text: String {
         get {
             match self {
-                case .Improved => { return "improved" }
+                case .Improved    => { return "improved" }
                 case .WithinNoise => { return "within noise" }
-                case .Regressed => { return "REGRESSED" }
+                case .Regressed   => { return "REGRESSED" }
             }
         }
     }
@@ -287,11 +287,11 @@ public fn parseBaseline(_ text: String) -> BenchMeasurement[>..] {
 }
 
 /// What a history begins with (benchmarks/history.tsv).
-let benchHistoryHeader: String = "date\tcommit\tbenchmark\tms\tallocations\tretains\treleases\n"
+public let benchHistoryHeader: String = "date\tcommit\tbenchmark\tms\tallocations\tretains\treleases\n"
 
 /// A row a benchmark: the stamp, its name, the median in milliseconds an
 /// operation and what an operation allocates and counts.
-fn benchHistory(_ results: BenchResult[>..], _ stamp: String) -> String {
+public fn benchHistory(_ results: BenchResult[>..], _ stamp: String) -> String {
     let rows = TextBuilder()
     for r in results {
         let memory = r.measurement.memoryPerOperation

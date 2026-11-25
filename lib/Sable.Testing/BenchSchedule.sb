@@ -146,9 +146,9 @@ public struct BenchSchedule {
                     phase = .Memory
                 }
             }
-            case .Memory => { phase = settings.countsInstructions ? .Counters : .Done }
+            case .Memory   => { phase = settings.countsInstructions ? .Counters : .Done }
             case .Counters => { phase = .Done }
-            case .Done => { }
+            case .Done     => { }
         }
     }
 

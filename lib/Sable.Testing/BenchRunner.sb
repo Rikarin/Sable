@@ -98,23 +98,23 @@ struct BenchOptions {
         let number = (try? F64.parse(value)) ?? -1.0
         var understood = true
         match option {
-            case "--list" => { list = true }
-            case "--describe" => { describe = true }
-            case "--exact" => { exact = true }
-            case "--in-process" => { inProcess = true }
-            case "--run-bench" => { only = value }
-            case "--save-baseline" => { saveBaseline = value }
-            case "--baseline" => { baseline = value }
-            case "--baseline-dir" => { directory = value }
-            case "--fail-on-regression" => { failOnRegression = true }
-            case "--markdown" => { markdown = value }
-            case "--csv" => { csv = value }
-            case "--json" => { json = value }
-            case "--history" => { history = value }
-            case "--stamp" => { stamp = value }
-            case "--launches" where number >= 1.0 => { launches = Int(number) }
+            case "--list"                          => { list = true }
+            case "--describe"                      => { describe = true }
+            case "--exact"                         => { exact = true }
+            case "--in-process"                    => { inProcess = true }
+            case "--run-bench"                     => { only = value }
+            case "--save-baseline"                 => { saveBaseline = value }
+            case "--baseline"                      => { baseline = value }
+            case "--baseline-dir"                  => { directory = value }
+            case "--fail-on-regression"            => { failOnRegression = true }
+            case "--markdown"                      => { markdown = value }
+            case "--csv"                           => { csv = value }
+            case "--json"                          => { json = value }
+            case "--history"                       => { history = value }
+            case "--stamp"                         => { stamp = value }
+            case "--launches" where number >= 1.0  => { launches = Int(number) }
             case "--threshold" where number >= 0.0 => { threshold = number / 100.0 }
-            case "--job" => { understood = readJob(value) }
+            case "--job"                           => { understood = readJob(value) }
             case "--filter" => {
                 do {
                     expression = try TestFilter(value)
@@ -134,16 +134,16 @@ struct BenchOptions {
     // What a benchmark's own process is given too.
     mutating fn readSetting(_ option: String, _ value: String, _ number: F64) -> Bool {
         match option {
-            case "--quick" => { settings = BenchSettings.quick }
-            case "--counters" => { settings.countsInstructions = true }
-            case "--samples" where number >= 1.0 => { settings.samples = Int(number) }
-            case "--sample-ms" where number > 0.0 => { settings.sampleNanoseconds = Int(number * 1e6) }
-            case "--warm-up-ms" where number >= 0.0 => { settings.warmUpNanoseconds = Int(number * 1e6) }
-            case "--budget-ms" where number > 0.0 => { settings.budgetNanoseconds = Int(number * 1e6) }
+            case "--quick"                                                => { settings = BenchSettings.quick }
+            case "--counters"                                             => { settings.countsInstructions = true }
+            case "--samples" where number >= 1.0                          => { settings.samples = Int(number) }
+            case "--sample-ms" where number > 0.0                         => { settings.sampleNanoseconds = Int(number * 1e6) }
+            case "--warm-up-ms" where number >= 0.0                       => { settings.warmUpNanoseconds = Int(number * 1e6) }
+            case "--budget-ms" where number > 0.0                         => { settings.budgetNanoseconds = Int(number * 1e6) }
             case "--metric" where value == "wall" || value == "processor" => { settings.usesProcessorTime = value == "processor" }
-            case "--outliers" where value == "keep" => { settings.outliers = .Keep }
-            case "--outliers" where value == "remove-upper" => { settings.outliers = .RemoveUpper }
-            case "--outliers" where value == "remove-all" => { settings.outliers = .RemoveAll }
+            case "--outliers" where value == "keep"                       => { settings.outliers = .Keep }
+            case "--outliers" where value == "remove-upper"               => { settings.outliers = .RemoveUpper }
+            case "--outliers" where value == "remove-all"                 => { settings.outliers = .RemoveAll }
             default => {
                 Runtime.writeError("unknown option '\(value.isEmpty ? option : option + " " + value)'\n\(BenchOptions.usage)")
                 return false
@@ -400,7 +400,9 @@ class BenchRun {
         for variable in job.variables {
             kept.append((name: variable.name, value: Runtime.environment(variable.name)))
             // Nothing else of this process reads or sets them: it has no other task.
-            unsafe { _ = Runtime.setEnvironment(variable.name, variable.value) }
+            unsafe {
+                _ = Runtime.setEnvironment(variable.name, variable.value)
+            }
         }
         var arguments: String[>..] = ["--run-bench", bench.name]
         arguments.append(contentsOf: options.passed)

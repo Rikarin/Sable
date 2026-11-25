@@ -45,8 +45,8 @@ public struct BenchComparison {
     /// '+10.00% vs main (REGRESSED, p = 0.0001)'.
     public fn description(of what: String) -> String {
         let said = match verdict {
-            case .Regressed => "REGRESSED"
-            case .Improved => "improved"
+            case .Regressed   => "REGRESSED"
+            case .Improved    => "improved"
             case .WithinNoise => "within noise"
         }
         return "\((ratio - 1.0) * 100.0:+.2f)% vs \(what) (\(said), p = \(probability:.4f))"

@@ -18,6 +18,7 @@ fn main() {
                 });
             }
         });
-        format!("{}", count.lock().unwrap())
+        let total = *count.lock().unwrap();
+        format!("{total}")
     });
 }

@@ -4174,10 +4174,8 @@ public sealed partial class Binder {
         };
 
         // A closure that names more or fewer parameters than the function
-        // has is for an overload that has as many; unless they are a tuple's parts.
-        static bool TakesOtherwise(int named, FunctionTypeSymbol function) =>
-            named != function.ParameterTypes.Length
-            && !(function.ParameterTypes is [TupleTypeSymbol { ElementTypes.Length: var parts }] && parts == named);
+        // has is for an overload that has as many.
+        static bool TakesOtherwise(int named, FunctionTypeSymbol function) => named != function.ParameterTypes.Length;
 
         bool LacksMember(ImplicitMemberAccessExpressionSyntax member) =>
             type is ArrayTypeSymbol

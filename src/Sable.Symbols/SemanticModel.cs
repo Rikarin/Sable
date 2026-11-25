@@ -193,8 +193,13 @@ public sealed partial class SemanticModel {
             : null;
     }
 
-    static BoundNode Unconverted(BoundNode node) =>
-        node is BoundConversion conversion ? Unconverted(conversion.Operand) : node;
+    /// <summary>What was written, without the conversions around it, nor what binds a call given <c>#expression</c>.</summary>
+    public static BoundNode Unconverted(BoundNode node) =>
+        node switch {
+            BoundConversion conversion => Unconverted(conversion.Operand),
+            BoundMatch { CapturedCall: { } call } => call,
+            _ => node,
+        };
 
     /// <summary>
     ///     What a statement does with the names around it: what it declares,
@@ -340,7 +345,11 @@ public sealed partial class SemanticModel {
         _compilation.TypeBinder.ForceAll();
 
         // '@test' and '@bench' functions the harness could not call.
-        _diagnostics.AddRange(_compilation.CheckTestFunctions(SyntaxTree));
+        var arguments = new List<(ExpressionSyntax Array, TypeSymbol Type, Symbol Owner)>();
+        _diagnostics.AddRange(_compilation.CheckTestFunctions(SyntaxTree, arguments));
+        foreach (var (array, type, owner) in arguments) {
+            BindInitializer(array, owner, type, scope);
+        }
     }
 
     void BindMember(SyntaxNode member, FileScope scope) {

@@ -43,43 +43,137 @@ async fn whatIsThrownIsGiven() {
     expect(got == 0)
 }
 
-// A failure of an expectation ends its process as a failed assertion does,
-// and says so: seen from a process started for it.
-@test(arguments: [
-    (0, "expectation failed: 1 + 1 == n: not so"),
-    (1, "expectation failed: some: there is no value"),
-    (2, "expectation failed: nothing was thrown"),
-    (3, "expectation failed: another error was thrown: Oops.Bad"),
-    (4, "expectation failed: an error was thrown: Oops.Bad"),
-    (5, "expectation failed: 'Oops.Bad' was thrown, and 'Oops.Worse(1)' was to be"),
-    (6, "expectation failed: the property does not hold of 10"),
-    (8, "expectation failed: first line (HarnessTests.sb"),
-    (9, "expectation failed: too few values were let through"),
-    (10, "expectation failed: the property does not hold of 3"),
-])
-fn whatAFailureSays(_ which: Int, _ said: String) {
-    let ended = expectPanic("'try!' caught an error") {
-        let n = 3
-        let some: Int? = none
-        switch which {
-            case 0: expect(1 + 1 == n, "not so")
-            case 1: _ = require(some)
-            case 2: expectThrows(Oops.self) { }
-            case 3: expectThrows(ParseError.self) { _ = try fail(1) }
-            case 4: expectNoThrow { _ = try fail(1) }
-            case 5: expectThrows(Oops.Worse(1)) { _ = try fail(1) }
-            case 6: forAll { (n: U16) in expect(n < 10) }
-            case 8: recordFailure("first line\nsecond line")
-            case 9: forAll(Gen.arbitrary(Bool.self).filter { _ in false }) { (b: Bool) in expect(b) }
-            default: forAll(Gen.number(in: 0...9)) { (n: Int) in
+// A test that fails in the way it is asked to, by a variable, and passes when
+// it is not asked: run by 'whatAFailureSays', in a process of its own.
+@test
+async fn fails() {
+    let n = 3
+    let missing: Int? = none
+    let numbers = [1, 2, 3]
+    switch Runtime.environment("SABLE_TESTING_FAILS") ?? "" {
+        case "expect": expect(1 + 1 == n, "not so")
+        case "tried": expect((try? fail(n - 3)) == n)
+        case "parts": expect(numbers.count > n || numbers[0] == 2)
+        case "require": _ = require(missing)
+        case "require that": require(n == 4, "why")
+        case "record": recordFailure("first line\nsecond line")
+        case "throws":
+            expectThrows(Oops.self, "why") { }
+        case "throws another":
+            expectThrows(ParseError.self) { _ = try fail(1) }
+        case "throws later":
+            await expectThrows(Oops.self) { await Task.yield() }
+        case "throws one":
+            expectThrows(Oops.Worse(1)) { _ = try fail(1) }
+        case "throws none":
+            expectThrows(Oops.Bad) { _ = try fail(0) }
+        case "throws none later":
+            await expectThrows(Oops.Bad) { await Task.yield() }
+        case "no throw":
+            expectNoThrow { _ = try fail(1) }
+        case "no throw later":
+            _ = await expectNoThrow {
+                await Task.yield()
+                return try fail(1)
+            }
+        case "returns":
+            expectPanic("that") { _ = numbers.count }
+        case "traps":
+            expectPanic("this") { fatalError("that") }
+        case "exits":
+            expectPanic { Runtime.exit(4) }
+        case "exits otherwise":
+            expectExit(5) { Runtime.exit(6) }
+        case "does not exit":
+            expectExit(5) { _ = numbers.count }
+        case "property":
+            forAll { (n: U16) in expect(n < 10) }
+        case "property throws":
+            forAll(Gen.number(in: 0...9)) { (n: Int) in
                 if n > 2 {
                     throw Oops.Worse(n)
                 }
             }
-        }
-        require(false, "a process for a trap ends in one")
+        case "property traps":
+            forAll { (xs: Int[>..], i: U8) in
+                if xs.count > 2 {
+                    _ = xs[Int(i)]
+                }
+            }
+        case "property later":
+            await forAll { (n: Int) in
+                await Task.yield()
+                expect(n < 99)
+            }
+        case "property of three":
+            forAll { (a: U8, b: Bool, s: String) in expect(a < 7 || b || s.count < 2) }
+        case "seeded":
+            forAll { (b: Bool) in expect(b) }
+        case "filtered out":
+            forAll(Gen.arbitrary(Bool.self).filter { b in b && !b }) { (b: Bool) in expect(b) }
+        case "flaky":
+            forAll { (b: Bool) in expect(timesRun() != 1) }
+        case "snapshot": assertSnapshot("x", function: "missing")
+        case "snapshot differs": assertSnapshot("a\nc", named: "ab", function: "kept")
+        default: break
     }
-    expect(ended == none || ended!.errors.contains(said), ended?.errors ?? "")
+}
+
+// How often it was called.
+let calls: Atomic<Int> = Atomic(0)
+
+fn timesRun() -> Int {
+    return calls.add(1) + 1
+}
+
+@test(arguments: [
+    ("expect", "expectation failed: 1 + 1 == n: not so ("),
+    ("expect", "       left: 2\n      right: 3\n"),
+    ("tried", "       left: 0\n      right: 3\n"),
+    ("parts", "    numbers: [1, 2, 3]\n    numbers.count: 3\n    n: 3\n    numbers.count > n: false\n    numbers[0]: 1\n    numbers[0] == 2: false\n"),
+    ("require", "expectation failed: missing: there is no value"),
+    ("require that", "expectation failed: n == 4: why"),
+    ("record", "expectation failed: first line ("),
+    ("throws", "expectation failed: nothing was thrown: why"),
+    ("throws another", "expectation failed: another error was thrown: Oops.Bad"),
+    ("throws later", "expectation failed: nothing was thrown"),
+    ("throws one", "expectation failed: 'Oops.Bad' was thrown, and 'Oops.Worse(1)' was to be"),
+    ("throws none", "expectation failed: nothing was thrown, and 'Oops.Bad' was to be"),
+    ("throws none later", "expectation failed: nothing was thrown, and 'Oops.Bad' was to be"),
+    ("no throw", "expectation failed: an error was thrown: Oops.Bad"),
+    ("no throw later", "expectation failed: an error was thrown: Oops.Bad"),
+    ("returns", "expectation failed: the body was to trap with 'that', and it returned"),
+    ("traps", "expectation failed: the body trapped, but not with 'this'"),
+    ("exits", "expectation failed: the body was to trap, and it ended the process with status 4"),
+    ("exits otherwise", "expectation failed: the body was to end the process with status 5, and it was 6"),
+    ("does not exit", "expectation failed: the body was to end the process with status 5, and it returned"),
+    ("property", "expectation failed: the property does not hold of 10"),
+    ("property throws", "expectation failed: the body threw an error: Oops.Worse(3)"),
+    ("property traps", "expectation failed: the property does not hold of [0, 0, 0], 3"),
+    ("property later", "expectation failed: the property does not hold of 99"),
+    ("property of three", "expectation failed: the property does not hold of 7, false, \"aa\""),
+    ("property", "of seed 42: 'sable test --seed 42' runs it again"),
+    ("seeded", "SABLE_TEST_SEED is 'none', which is not a number"),
+    ("filtered out", "expectation failed: too few values were let through"),
+    ("flaky", "it held when it was run again"),
+    ("snapshot", "there is no snapshot '__snapshots__/HarnessTests.missing.snap'"),
+    ("snapshot differs", "  a\n- b\n+ c"),
+])
+fn whatAFailureSays(_ which: String, _ said: String) {
+    let program = Runtime.executablePath()
+    if program.isEmpty {
+        return
+    }
+    // The test is a process's only one.
+    unsafe {
+        _ = Runtime.setEnvironment("SABLE_TESTING_FAILS", which)
+        _ = Runtime.setEnvironment("SABLE_UPDATE_SNAPSHOTS", "0")
+        _ = Runtime.setEnvironment("SABLE_TEST_SEED", which == "seeded" ? "none" : "42")
+    }
+    _ = require(Runtime.run(program, ["--run-test", "HarnessTests.fails"], ""))
+    let errors = Runtime.lastErrorOutput()
+    expect(Runtime.lastExitStatus() == 134, errors)
+    expect(errors.contains(said))
 }
 
 @test
@@ -109,7 +203,7 @@ fn aPropertyThatTraps() {
     let ended = expectPanic("integer overflow") {
         forAll(Gen.number(in: 0 as U8...255)) { (n: U8) in _ = n + 1 }
     }
-    expect(ended == none || ended!.errors.contains("the property does not hold of 255"), ended?.errors ?? "")
+    expect(ended == none || ended.errors.contains("the property does not hold of 255"))
 }
 
 @test(arguments: ["", "a b/c", "name"])

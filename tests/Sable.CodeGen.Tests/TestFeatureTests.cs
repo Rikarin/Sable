@@ -69,18 +69,18 @@ public sealed class TestFeatureTests {
     [Fact]
     public void ARequirementEndsTheTest() => Reports(
         """
-        fn some(_ n: Int) -> Int? { return n > 0 ? n : none }
+        fn maybe(_ n: Int) -> Int? { return n > 0 ? n : none }
         @test
         fn requires() {
-            let v = require(some(1))
+            let v = require(maybe(1))
             require(v == 2)
             print("not come to")
         }
         @test
-        fn noValue() { print("got \(require(some(0)))") }
+        fn noValue() { print("got \(require(maybe(0)))") }
         """,
         "    expectation failed: v == 2 (test.sb:7)\n",
-        "    expectation failed: some(0): there is no value (test.sb:11)\n");
+        "    expectation failed: maybe(0): there is no value (test.sb:11)\n");
 
     /// <summary>The parts are worked out once, in order, as without the capture; what is not evaluated is not told.</summary>
     [Fact]
@@ -160,8 +160,9 @@ public sealed class TestFeatureTests {
                 @test(arguments: all(), tags: ["slow"])
                 static fn member(_ n: Int?) throws(String) { if n == none { throw "none" } }
             }
-            @test(arguments: [0], traps: "division")
-            fn traps(_ n: Int) { print(1 / n) }
+            private fn zero() -> Int[>..] { return [0] }
+            @test(arguments: zero(), traps: "division")
+            private fn traps(_ n: Int) { print(1 / n) }
             """;
         var run = Runs(program);
         Assert.Equal(1, run.ExitCode);
@@ -244,10 +245,10 @@ public sealed class TestFeatureTests {
             expectExit(5) { Runtime.exit(6) }
         }
         """,
-        "---- M.deaths (test.sb:4) ----\n    expectation failed: the body was to trap, and it returned (test.sb:12)\n",
-        "    expectation failed: the body trapped, but not with 'this' (test.sb:13)\n        fatal error: that\n",
-        "    expectation failed: the body was to trap, and it ended the process with status 4 (test.sb:14)\n",
-        "    expectation failed: the body was to end the process with status 5, and it was 6 (test.sb:15)\n");
+        "---- M.deaths (test.sb:4) ----\n    expectation failed: the body was to trap, and it returned (test.sb:11)\n",
+        "    expectation failed: the body trapped, but not with 'this' (test.sb:12)\n        fatal error: that\n",
+        "    expectation failed: the body was to trap, and it ended the process with status 4 (test.sb:13)\n",
+        "    expectation failed: the body was to end the process with status 5, and it was 6 (test.sb:14)\n");
 
     /// <summary>A failing case is made simple, whether it fails an expectation, throws or traps, and its seed is shown.</summary>
     [Fact]

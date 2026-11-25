@@ -7,6 +7,11 @@ module ChoicesTests
 import Sable.Testing
 import Sable.Collections
 
+// What the choices make of the type.
+fn made<T: Arbitrary>(_ type: T.Type, _ choices: U64[>..]) -> T {
+    return T.arbitrary(from: Choices(replaying: choices))
+}
+
 @test
 fn choicesAreTheSeeds() {
     let one = Choices(seed: 5)
@@ -41,10 +46,10 @@ fn bytesAreChoices() {
 @test
 fn aCollectionIsAsLongAsItsChoicesSay() {
     // Each element is after a 1, and a 0 ends them.
-    assertEqual(Int[>..].arbitrary(from: Choices(replaying: [1, 3, 5, 0, 1, 2, 3, 1, 0])), [5, -4])
+    assertEqual(made(Int[>..].self, [1, 3, 5, 0, 1, 2, 3, 1, 0]), [5, -4])
     assertEqual(String.arbitrary(from: Choices(replaying: [1, 0, 2, 1, 1, 33, 1, 2, 0x161, 1, 3, 0xD801])), "cAš\u{E001}")
     assertEqual(Set<Bool>.arbitrary(from: Choices(replaying: [1, 1, 1, 1])).count, 1)
-    assertEqual([U8: Bool].arbitrary(from: Choices(replaying: [1, 2, 3, 1])), [3: true])
+    assertEqualText("\(made([U8: Bool].self, [1, 2, 3, 1]))", "[3: true]")
     var count = 0
     Choices(replaying: [1, 1, 1, 1, 1]).times(2, 4) { count += 1 }
     assertEqual(count, 4)
@@ -57,7 +62,7 @@ fn theSimplestValues() {
     assertEqual(F64.arbitrary(from: none0), 0.0)
     assertEqual(Char.arbitrary(from: none0), 'a')
     assertEqual(Bool.arbitrary(from: none0), false)
-    assertEqual(Int?.arbitrary(from: none0) == none, true)
+    assert(made(Int?.self, []) == none)
     assertEqual(UUID.arbitrary(from: none0), UUID(high: 0, low: 0))
     assertEqual(Outcome<Int, Bool>.arbitrary(from: none0).ok, 0)
     assert(Range<Int>.arbitrary(from: none0).isEmpty)
@@ -79,8 +84,8 @@ fn theEndsOfTheNumbersAreReached() {
 // Every size of every built-in type, made and made again from what it drew.
 @test
 fn aValueIsMadeAgainFromItsChoices() {
-    forAll { (seed: U64, size: U8) in
-        let size = Int(size % 101)
+    forAll { (seed: U64, part: U8) in
+        let size = Int(part % 101)
         fn same<T: Arbitrary>(_ type: T.Type) {
             let choices = Choices(seed: seed, size: size)
             let value = "\(T.arbitrary(from: choices):?)"
@@ -146,7 +151,7 @@ fn aValueOfItsOwnKindComesToAnEnd() {
     fn length(_ path: Path) -> Int {
         return match path {
             case .Then(let before, _) => 1 + length(before)
-            default => 0
+            default                   => 0
         }
     }
     forAll(cases: 300) { (path: Path) in expect(length(path) < 1000) }

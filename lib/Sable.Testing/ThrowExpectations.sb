@@ -7,7 +7,7 @@ module Sable.Testing
 ///
 /// ```sable
 /// let error = expectThrows(ParseError.self) { _ = try Int.parse("12x") }
-/// expect(error?.description() == "the text has no digit at 2")
+/// expect(error?.description() == "not a digit at 2")
 /// ```
 @discardable
 public fn expectThrows<E>(_ type: E.Type, _ message: String = "", file: String = #file, line: Int = #line, _ body: () throws -> Void) -> E? {

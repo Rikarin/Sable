@@ -96,7 +96,9 @@ public sealed partial class Binder {
             .SetItem(at, new BoundLocalAccess(call.Syntax, local));
         var made = new BoundCall(call.Syntax, call.Receiver, call.Function, arguments, call.Type) { Substitution = call.Substitution };
         var begin = new BoundCall(call.Syntax, new BoundTypeExpression(call.Syntax, type), members.Begin, [], type);
-        return new BoundMatch(call.Syntax, call.Type, begin, [new BoundMatchArm(call.Syntax, [new BoundBindingPattern(call.Syntax, type, local)], null, made)]);
+        return new BoundMatch(call.Syntax, call.Type, begin, [new BoundMatchArm(call.Syntax, [new BoundBindingPattern(call.Syntax, type, local)], null, made)]) {
+            CapturedCall = made,
+        };
     }
 
     /// <summary>Puts a note of its value around each part of an expression that has one worth telling.</summary>
@@ -107,6 +109,9 @@ public sealed partial class Binder {
         /// <summary>A part: noted, if its value is worth telling, with its own parts.</summary>
         BoundExpression Part(BoundExpression expression) =>
             expression switch {
+                // 'user?.name.count' is one step, which lowering takes whole.
+                _ when IsChain(expression) => Noted(expression, expression),
+
                 // A conversion the compiler put in is written as its operand.
                 BoundConversion { ConversionKind: ConversionKind.Explicit } => Noted(Parts(expression), expression),
                 BoundConversion { ConversionKind: ConversionKind.LiteralTyping } => expression,
@@ -114,9 +119,17 @@ public sealed partial class Binder {
                 _ => Noted(Parts(expression), expression),
             };
 
+        /// <summary>An optional chain, or what may be one: '?' in what it is written as, through a member, a call or an index.</summary>
+        static bool IsChain(BoundExpression expression) =>
+            expression is BoundCall or BoundIndirectCall or BoundFieldAccess or BoundIndexAccess or BoundConversion { ConversionKind: ConversionKind.OptionalWrap }
+            && expression.Syntax.ToString().Contains('?', StringComparison.Ordinal);
+
         /// <summary>The expression with its parts noted, and not itself.</summary>
         BoundExpression Parts(BoundExpression expression, bool whole = false) {
             switch (expression) {
+                case var chain when IsChain(chain):
+                    return chain;
+
                 case BoundBinaryOperator binary: {
                     // What the whole compares is told even when it is a literal.
                     var left = Operand(binary.Left, whole);

@@ -86,7 +86,7 @@ public final class CapturedExpression {
         get {
             // 'try f() == 3' is the sides' comparison, tried.
             var whole = text
-            for word in ["try! ", "try? ", "try ", "await ", "try "] {
+            for word in ["try! ", "try? ", "try ", "await "] {
                 if whole.hasPrefix(word) {
                     whole = whole.slice(from: word.count, to: whole.count)
                 }
@@ -95,7 +95,7 @@ public final class CapturedExpression {
             while right > 0 {
                 var left = right - 1
                 while left >= 0 {
-                    if whole == texts[left] + " == " + texts[right] {
+                    if CapturedExpression.isEquality(whole, texts[left], texts[right]) {
                         return (left, right)
                     }
                     left -= 1
@@ -104,6 +104,16 @@ public final class CapturedExpression {
             }
             return none
         }
+    }
+
+    // Either side may be written in parentheses, which are no part of it.
+    static fn isEquality(_ whole: String, _ left: String, _ right: String) -> Bool {
+        for first in [left, "(\(left))"] {
+            if whole == "\(first) == \(right)" || whole == "\(first) == (\(right))" {
+                return true
+            }
+        }
+        return false
     }
 
     // What a failed expectation says after what was to hold, a line each:

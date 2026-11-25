@@ -29,8 +29,8 @@ public struct Gen<T> {
     /// Values of a type as it makes them itself.
     ///
     /// ```sable
-    /// let some = Gen.arbitrary(Int.self).array(count: 1...5)
-    /// forAll(some) { (numbers: Int[>..]) in expect(!numbers.isEmpty) }
+    /// let few = Gen.arbitrary(Int.self).array(count: 1...5)
+    /// forAll(few) { (numbers: Int[>..]) in expect(!numbers.isEmpty) }
     /// ```
     public static fn arbitrary<V: Arbitrary>(_ type: V.Type) -> Gen<V> {
         return Gen<V>((choices) => V.arbitrary(from: choices))
@@ -108,7 +108,7 @@ public struct Gen<T> {
     /// let indexed = Gen.number(in: 0...99).array(count: 1...10).flatMap { (all: Int[>..]) in
     ///     Gen.number(in: 0...all.count - 1).map { (all, $0) }
     /// }
-    /// forAll(indexed) { (all, index) in expect(index < all.count) }
+    /// forAll(indexed) { pair in expect(pair.1 < pair.0.count) }
     /// ```
     public fn flatMap<U>(_ body: @escaping (T) -> Gen<U>) -> Gen<U> {
         let make = self.make

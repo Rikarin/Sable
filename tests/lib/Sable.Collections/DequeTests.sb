@@ -398,3 +398,75 @@ fn aDequeHoldsWhateverThereIs() {
     passesThrough((i: Int) => (i, "\(i)"), (pair: (Int, String), i: Int) => pair.0 == i && pair.1 == "\(i)")
     assertEqual(counter.alive, 0)
 }
+
+@derive(Debug, Arbitrary)
+union DequeStep {
+    Append(U8)
+    Prepend(U8)
+    RemoveFirst
+    RemoveLast
+    Rotate(by: I8)
+    Insert(U8, at: U8)
+    Remove(at: U8)
+    MakeContiguous
+}
+
+// The model's elements, those of a range put in place of others.
+fn replacing(_ model: U8[>..], _ range: Range<Int>, with values: U8[>..]) -> U8[>..] {
+    var all = model[..<range.lowerBound].toArray()
+    all.append(contentsOf: values)
+    all.append(contentsOf: model[range.upperBound...].toArray())
+    return all
+}
+
+// A deque is what an array the same is done to would be, whatever is done.
+@test
+fn aDequeIsWhatAnArrayWouldBe() {
+    forAll(cases: 300) { (steps: DequeStep[>..]) in
+        let deque = Deque<U8>()
+        var model: U8[>..] = []
+        for step in steps {
+            match step {
+                case .Append(let value) => {
+                    deque.append(value)
+                    model.append(value)
+                }
+                case .Prepend(let value) => {
+                    deque.prepend(value)
+                    model = replacing(model, 0..<0, with: [value])
+                }
+                case .RemoveFirst => {
+                    let first = model.first
+                    expect(deque.removeFirst() == first)
+                    model = replacing(model, 0..<(first == none ? 0 : 1), with: [])
+                }
+                case .RemoveLast => {
+                    let last = model.last
+                    expect(deque.removeLast() == last)
+                    model = replacing(model, (last == none ? 0 : model.count - 1)..<model.count, with: [])
+                }
+                case .Rotate(let places) => {
+                    deque.rotate(by: Int(places))
+                    if !model.isEmpty {
+                        let by = (Int(places) % model.count + model.count) % model.count
+                        model = replacing(model[by...].toArray(), model.count - by..<model.count - by, with: model[..<by].toArray())
+                    }
+                }
+                case .Insert(let value, let at) => {
+                    let place = Int(at) % (model.count + 1)
+                    deque.insert(value, at: place)
+                    model = replacing(model, place..<place, with: [value])
+                }
+                case .Remove(let at) => {
+                    if !model.isEmpty {
+                        let place = Int(at) % model.count
+                        expect(deque.remove(at: place) == model[place])
+                        model = replacing(model, place..<place + 1, with: [])
+                    }
+                }
+                case .MakeContiguous => deque.makeContiguous()
+            }
+            require(deque.toArray() == model)
+        }
+    }
+}

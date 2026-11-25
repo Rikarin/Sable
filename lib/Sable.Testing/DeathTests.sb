@@ -11,7 +11,7 @@ import Sable.Text
 ///
 /// ```sable
 /// let ended = expectPanic { fatalError("no more") }
-/// expect(ended == none || ended!.message == "no more")
+/// expect(ended == none || ended.message == "no more")
 /// ```
 public struct ProcessEnd {
     /// Its exit status: 134 for a trap.

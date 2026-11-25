@@ -1217,5 +1217,9 @@ public sealed class BoundMatch(
     : BoundExpression(syntax, type) {
     public BoundExpression Subject { get; } = subject;
     public ImmutableArray<BoundMatchArm> Arms { get; } = arms;
+
+    /// <summary>The call this was made of, when it is one given <c>#expression</c> (Binder.Expressions.cs); null for a match the program writes.</summary>
+    public BoundCall? CapturedCall { get; init; }
+
     public override IEnumerable<BoundNode> Children => Nodes([Subject, ..Arms]);
 }

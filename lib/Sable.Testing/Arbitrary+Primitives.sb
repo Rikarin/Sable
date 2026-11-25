@@ -19,11 +19,14 @@ fn arbitraryMagnitude(_ choices: Choices, bits: Int) -> U128 {
     if length == 0 {
         return 0
     }
-    if length <= 64 {
-        let all = length == 64 ? U64.max : (1 << length) - 1
-        return U128(arbitraryBits(choices, upTo: all))
+    // So many bits, set.
+    fn all(_ count: U64) -> U64 {
+        return count == 64 ? U64.max : (1 << count) - 1
     }
-    let high = arbitraryBits(choices, upTo: (1 << (length - 64)) - 1)
+    if length <= 64 {
+        return U128(arbitraryBits(choices, upTo: all(length)))
+    }
+    let high = arbitraryBits(choices, upTo: all(length - 64))
     return (U128(high) << 64) | U128(arbitraryBits(choices, upTo: U64.max))
 }
 
@@ -115,13 +118,13 @@ extension F64: Arbitrary {
         let chosen = arbitraryFloat(choices, special: [
             0x8000000000000000, 0x7FEFFFFFFFFFFFFF, 0x0010000000000000, 0x0000000000000001, 0x7FF0000000000000, 0xFFF0000000000000, 0x7FF8000000000000,
         ])
-        return chosen.kind < 2 ? chosen.value : F64.fromBits( chosen.bits)
+        return chosen.kind < 2 ? chosen.value : F64.fromBits(chosen.bits)
     }
 }
 extension F32: Arbitrary {
     public static fn arbitrary(from choices: Choices) -> F32 {
         let chosen = arbitraryFloat(choices, special: [0x80000000, 0x7F7FFFFF, 0x00800000, 0x00000001, 0x7F800000, 0xFF800000, 0x7FC00000])
-        return chosen.kind < 2 ? F32(chosen.value) : F32.fromBits( U32.truncating(chosen.bits))
+        return chosen.kind < 2 ? F32(chosen.value) : F32.fromBits(U32.truncating(chosen.bits))
     }
 }
 

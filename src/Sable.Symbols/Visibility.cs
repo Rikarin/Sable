@@ -67,9 +67,11 @@ internal static class Visibility {
             case Accessibility.Internal:
                 return ModuleOf(symbol) is not { } module || ReferenceEquals(module, scope.Module);
 
-            // At the top level the enclosing declaration is the file.
+            // At the top level the enclosing declaration is the file. A test
+            // harness's is written to call what its module's files declare.
             default:
                 return symbol.ContainingSymbol is not ModuleSymbol
+                    || scope.Tree.Text.FileName.StartsWith("<harness:", StringComparison.Ordinal)
                     || FileOf(symbol, compilation) is not { } file
                     || ReferenceEquals(file, scope.Tree);
         }

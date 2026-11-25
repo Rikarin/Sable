@@ -116,11 +116,18 @@ public sealed partial class Compilation {
     }
 
     /// <summary>What is wrong with the file's <c>@test</c>, <c>@bench</c> and <c>@fuzz</c> functions; its semantic model reports these.</summary>
-    internal IReadOnlyList<Diagnostic> CheckTestFunctions(SyntaxTree tree) {
+    /// <param name="arguments">Filled with the arrays of the tests' <c>arguments:</c>, each with its type and where it is bound, for the model to bind.</param>
+    internal IReadOnlyList<Diagnostic> CheckTestFunctions(SyntaxTree tree, List<(ExpressionSyntax Array, TypeSymbol Type, Symbol Owner)> arguments) {
         var diagnostics = new List<Diagnostic>();
         foreach (var declaration in tree.Root.DescendantNodes().OfType<FunctionDeclarationSyntax>()) {
-            if (KindOf(declaration) is not null) {
-                Examine(declaration, tree, diagnostics);
+            if (KindOf(declaration) is not null && Examine(declaration, tree, diagnostics) is { Arguments.Count: > 0 } test) {
+                var parameters = test.Symbol.Parameters;
+                for (var i = 0; i < test.Arguments.Count; i++) {
+                    var element = test.Arguments.Count == 1 && parameters.Length > 1
+                        ? new TupleTypeSymbol([..parameters.Select(static p => p.Type)], [..parameters.Select(static _ => (string?)null)])
+                        : parameters[i].Type;
+                    arguments.Add((test.Arguments[i], new ArrayTypeSymbol(element, ArrayKind.Grow), test.Symbol.ContainingSymbol!));
+                }
             }
         }
 
@@ -186,7 +193,7 @@ public sealed partial class Compilation {
 
         var takesBencher = false;
         if (kind == TestKind.Test && options.Arguments.Count > 0) {
-            CheckTestArguments(function, declaration, options.Arguments, tree, Report, diagnostics);
+            CheckTestArguments(function, declaration, options.Arguments, Report);
         } else if (kind == TestKind.Test) {
             if (function.Parameters.Length > 0) {
                 Report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test takes no parameters: the harness has nothing to pass it, unless '@test(arguments: [...])' says what");
@@ -254,13 +261,12 @@ public sealed partial class Compilation {
     }
 
     /// <summary>
-    ///     That the arrays a test's cases are made from are of what it takes:
-    ///     one array for one parameter, one of tuples for several, or one for
-    ///     each. They are bound where the test is declared, as the harness
-    ///     works them out there.
+    ///     That there are as many arrays to make a test's cases from as it
+    ///     takes: one for one parameter, one of tuples for several, or one for
+    ///     each. Whether they are of what it takes is found as the file's
+    ///     semantic model binds them, where the test is declared.
     /// </summary>
-    void CheckTestArguments(FunctionSymbol function, FunctionDeclarationSyntax declaration, IReadOnlyList<ExpressionSyntax> arguments, SyntaxTree tree,
-        Action<ErrorCode, TextSpan, string> report, List<Diagnostic>? diagnostics) {
+    static void CheckTestArguments(FunctionSymbol function, FunctionDeclarationSyntax declaration, IReadOnlyList<ExpressionSyntax> arguments, Action<ErrorCode, TextSpan, string> report) {
         var parameters = function.Parameters;
         if (parameters.Any(static p => p.Modifier is not ParameterModifier.None || p.IsVariadic || p.IsAutoclosure || p.IsByReference)) {
             report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test's parameters are plain ones, each given a value of '@test(arguments: [...])'");
@@ -276,26 +282,6 @@ public sealed partial class Compilation {
                     : $"'arguments:' is one array, of {(parameters.Length == 1 ? "what the test takes" : $"tuples of the {parameters.Length} values the test takes")}"
                       + $"{(parameters.Length == 1 ? "" : $", or {parameters.Length} arrays, one for each")}; here are {arguments.Count}"
             );
-            return;
-        }
-
-        if (GetFileScope(tree) is not { } scope || parameters.Any(static p => p.Type.IsError)) {
-            return;
-        }
-
-        for (var i = 0; i < arguments.Count; i++) {
-            var element = arguments.Count == 1 && parameters.Length > 1
-                ? new TupleTypeSymbol([..parameters.Select(static p => p.Type)], [..parameters.Select(static _ => (string?)null)])
-                : parameters[i].Type;
-            var binder = new Binder(this, scope, function.ContainingSymbol!);
-            binder.BindInitializer(arguments[i], new ArrayTypeSymbol(element, ArrayKind.Grow));
-            foreach (var diagnostic in binder.Diagnostics) {
-                if (diagnostic.Severity == DiagnosticSeverity.Error) {
-                    report(diagnostic.Code, diagnostic.Span, diagnostic.Message);
-                } else {
-                    diagnostics?.Add(diagnostic);
-                }
-            }
         }
     }
 

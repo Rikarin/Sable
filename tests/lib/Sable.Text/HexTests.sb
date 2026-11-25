@@ -153,3 +153,27 @@ fn everyByteThatIsNoDigitIsFoundAtEveryPosition() {
         }
     }
 }
+
+@test
+fn anyBytesRoundTrip() {
+    forAll { (bytes: U8[>..]) in
+        let text = Hex.encode(bytes)
+        expect(text.count == bytes.count * 2)
+        expect(try Hex.decode(text) == bytes)
+        expect(try Hex.decode(text.uppercased()) == bytes)
+    }
+}
+
+// What decoding says of text that is not hexadecimal is of a digit in it,
+// whatever the text is.
+@test
+fn anyTextDecodesOrSaysWhereNot() {
+    forAll(Gen.ascii()) { (text: String) in
+        do {
+            let bytes = try Hex.decode(text)
+            expect(Hex.encode(bytes) == text.lowercased())
+        } catch {
+            expect(text.count % 2 == 1 || text.contains(where: { !$0.isHexDigit }))
+        }
+    }
+}

@@ -210,6 +210,7 @@ final class PropertyRun {
         var mixer = SplitMix64(seed: TestState.seed ^ (U64(number) << 48) ^ (U64(ran) << 16) ^ U64(rejected))
         let choices = Choices(seed: mixer.next(), size: size)
         current = choices
+        arguments = () => "a value that was not made"
         return choices
     }
 

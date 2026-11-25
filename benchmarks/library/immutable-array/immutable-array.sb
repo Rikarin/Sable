@@ -1,0 +1,26 @@
+module ImmutableArrayBench
+
+// An array as .NET's ImmutableArray and its builder are used: built, frozen
+// by being kept, read, and changed in a copy.
+
+@main
+fn main() {
+    var total = 0
+    for round in 0..<20 {
+        var builder: Int[>..] = []
+        for i in 0..<100000 {
+            builder.append(i ^ round)
+        }
+        let array = builder
+        for element in array {
+            total += element
+        }
+        for i in 0..<50 {
+            var changed = array
+            changed[i * 1999] = i
+            changed.append(i)
+            total += changed[i * 1999] + changed.count
+        }
+    }
+    print("\(total)")
+}

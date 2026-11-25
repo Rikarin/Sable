@@ -725,7 +725,11 @@ A value of a type parameter's type becomes an existential — of the protocols
 it is known to conform to, or `any Any` — in a buffer of its own that its
 type's boxer boxes (`opaque_box`), or, of one that is an existential already,
 as the box it holds; `x as? any P`, `x as? Dog` and `x is P` ask the box or
-the value's dynamic type (`opaque_type`). Raw memory's values
+the value's dynamic type (`opaque_type`). A cast to a struct, an enum, a
+number or a string, `key as! String`, compares the metadata first and copies
+the value out where it is (`opaque_copy_as`), boxing it only where it may
+hold another's: an existential, an optional, a union. A specialised copy
+keeps the side its types take, and drops the other. Raw memory's values
 (`RawMemory.load`, `take`, `initialize`, so `RawPtr`, `OnceCell`, `Mutex` and
 the concurrent collections) and `Runtime.share` go through the value
 witnesses. `Never` given for an error's type parameter has a table with
@@ -859,7 +863,10 @@ Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec ArrayVec,
                     SortedDictionary SortedSet (B-trees, range queries),
                     LinkedList (an arena of nodes, constant-time handles,
-                    order-maintained comparable positions)
+                    order-maintained comparable positions),
+                    FrozenDictionary FrozenSet, ImmutableList
+                    ImmutableDictionary ImmutableSet
+                    ImmutableSortedDictionary ImmutableSortedSet (below)
 Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     (UTF-8 sixteen bytes a step) and transcoded a chunk at
                     a time (OperationStatus, Utf8Decoder, Utf16Decoder);
@@ -1192,6 +1199,81 @@ built-in types' default: a type of the program's own conforming to the
 protocol meets the requirement itself. Each type's own file
 (`Int.sb`, `U8.sb`, `F64.sb`, …) says only what differs: its limits and
 constants.
+
+### Frozen and persistent collections
+
+Two kinds of collection that do not change, in `Sable.Collections` (#26).
+Both are values. A list that is made once and read is neither's: that is an
+array, `T[>..]`, which is .NET's `ImmutableArray` and, while it is made, its
+builder.
+
+**Frozen.** `FrozenDictionary` and `FrozenSet` are made once, from a sequence,
+taking longer over it than `[Key: Value]` does, and are then only looked up.
+Their order is the order their keys were given. A key finds its place by a
+strategy chosen as the table is made (`FrozenTable.sb`):
+
+| Keys | Found |
+|---|---|
+| at most four | one after another |
+| integers, and `Char`s, in one run | by subtracting the first |
+| integers close together (ten slots for each key, at most) | in an array from the least to the greatest |
+| integers spread out | in an open-addressed table, hashed by one multiplication |
+| strings whose lengths all differ | in an array by length |
+| strings some eight bytes of tell apart, counted from the start or the end | in such a table, hashed by those bytes and the length; a length no key has is not looked for |
+| strings the first eight and the last eight tell apart | the same, by both |
+| any other strings | the same, by all of their bytes |
+| anything else | in such a table, by their own `hash(into:)` under a seed |
+
+The multiplier, or the seed, is the one that moves the fewest keys from their
+own slots, of as many as 256 tried, so that a lookup compares one key. The
+hashes are the same in every run, which lets a table be made while compiling
+and means that its keys, though not what is looked up, must be trusted.
+`FrozenDictionary(ignoringAsciiCase:)` folds ASCII's letters eight bytes at a
+time; `FrozenHashingDictionary` and `FrozenHashingSet` take any `Hashing`.
+A `Substring` is looked up by its own bytes. Which strategies there can be is
+known by the key's type where that is known: the tests of `Key.self` are
+constants, and code compiled once for every type asks them of the metadata.
+
+A **`const`** of one is a table in the program's read-only memory, with
+nothing to do as it starts: the initialisers are `const init`, the table is
+made in the compiler's interpreter, and its arrays are written as constant
+arrays are (`array_literal`). A constant with more than 256 elements in it is
+kept in a global, stored once as the program starts, and any other is written
+wherever it is read. A `static let` is made as the program starts, as ever.
+
+**Persistent.** `ImmutableList`, `ImmutableDictionary`, `ImmutableSet`,
+`ImmutableSortedDictionary` and `ImmutableSortedSet` share with the copies
+made of them all but what is changed: each keeps a tree, and a change copies
+the few nodes on the way to it.
+
+- **Nodes are structs of arrays**, not objects, and so are shared, changed in
+  place and counted as any array is: an array nothing else holds is changed
+  where it is, and one something does is copied first. So a list, or a
+  dictionary, that is held once is built and changed in place by its
+  `mutating` methods, with no builder beside it (a `var` is one); and one that
+  is shared, or crosses to another task, has the path copied. They are
+  Sendable when what they hold is, and nothing about them is unsafe. A lookup
+  goes down without counting a reference: the element a lent array's element
+  is of is read in place across a call (`TryBorrowedElement`), as what is
+  lent cannot change.
+- **`ImmutableList`** is a relaxed radix balanced tree of 32 ways
+  (`ListTreeNode.sb`): an index is five bits a level where the nodes before
+  are full, and looked for among the node's sizes from there where they are
+  not. Nodes but those at the right edge are kept half full, as a B-tree's
+  are, so that cutting, joining, inserting and removing anywhere are O(log n)
+  and leave it balanced. The last 32 elements at most are beside the tree, so
+  that appending is an array's.
+- **`ImmutableDictionary`** and **`ImmutableSet`** are a compressed
+  hash-array mapped trie (CHAMP, `HashTrieNode.sb`), five bits of the hash a
+  level, the hashes kept. Its shape is the keys' alone: equality compares
+  nodes in step and passes over those the two share, and `union`, `merge`,
+  `intersection`, `subtracting` and `changes(from:)` take time by what is not
+  shared. Keys whose whole hashes are equal are in a node of their own, and
+  looked through. The order is by hash: the same for equal dictionaries, but
+  not from one run to the next.
+- **`ImmutableSortedDictionary`** and **`ImmutableSortedSet`** are such a list
+  in order of the keys, searched by the last element of each node: a range of
+  keys is cut out of it, sharing the nodes.
 
 ### SIMD
 

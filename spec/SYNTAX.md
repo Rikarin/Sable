@@ -2002,17 +2002,18 @@ fn sizeTable<T>() -> Int => MemoryLayout<T>.size
 ```
 
 `const` declares a compile-time constant on its own (`const Pi = 3.14`) and
-modifies a function in `const fn`. Functions and types may also be declared
+modifies a function in `const fn`, and an initialiser in `const init`. Functions and types may also be declared
 inside a function body, where they are ordinary statements.
 
 `const fn` bodies run in the compiler's interpreter. They may allocate, loop,
 and call other `const fn`s; they may not do I/O or touch `unsafe`.
 
 A `const` is computed while the program is compiled and written, as a
-literal, wherever it is read; its type may be left out when its value is a
+literal, wherever it is read — an array of a great many elements once, in a
+global read there, and an object in a global set as the program starts; its type may be left out when its value is a
 literal, another constant, a call, or arithmetic on those. What a constant's
-value, a `const fn` or a `comptime` block calls must be a `const fn`,
-something the compiler wrote (a memberwise initialiser), or a member of
+value, a `const fn` or a `comptime` block calls must be a `const fn` or a
+`const init`, something the compiler wrote (a memberwise initialiser), or a member of
 `Sable.Core` that neither reads, writes nor waits (S3220). A trap while
 computing one — overflow, division by zero, a loop past the step limit — is
 an error at compile time (S3201 for arithmetic, S3221 otherwise), and so is reaching `compileError("...")`

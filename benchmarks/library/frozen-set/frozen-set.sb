@@ -1,0 +1,29 @@
+module FrozenSetBench
+
+// FrozenSet<String> and FrozenSet<Int>: whether words, and numbers, are among
+// a few hundred, most of them not.
+
+import Sable.Collections
+
+@inline(never)
+fn within<E: Hashable>(_ frozen: FrozenSet<E>, _ values: E[>..], _ rounds: Int) -> Int {
+    var total = 0
+    for _ in 0..<rounds {
+        for value in values {
+            if frozen.contains(value) {
+                total += 1
+            }
+        }
+    }
+    return total
+}
+
+@main
+fn main() {
+    let words = FrozenSet<String>((0..<300).map { "word-\($0 * 31)" })
+    let numbers = FrozenSet<Int>((0..<300).map { $0 * 104729 })
+    let texts = (0..<1000).map { "word-\($0 * 10)" }
+    let candidates = (0..<1000).map { $0 * 35000 }
+    let someNumbers = (0..<300).map { $0 * 104729 * 3 }
+    print("\(within(words, texts, 3000)) \(within(numbers, candidates, 4000)) \(within(numbers, someNumbers, 10000))")
+}

@@ -153,12 +153,8 @@ fn errorsSayWhere() {
     assertEqual(failure(Shape.self, "Circle: {}"), "$.Circle.radius: missing")
     assertEqual(failure(Shape.self, "[]: {}"), "$: expected a case's name, or a mapping of one entry, found a mapping")
     assertEqual(failure(Int.self, "[1"), "not YAML: line 1, column 3: the text ends inside '[' of line 1, column 1")
-    do {
-        _ = try Yaml.decodeAll(Int.self, from: "--- 1\n--- [")
-        fail("decoded")
-    } catch {
-        expect(error.description().hasPrefix("not YAML: line 2"))
-    }
+    let error = expectThrows(SerializeError.self) { _ = try Yaml.decodeAll(Int.self, from: "--- 1\n--- [") }
+    expect((error?.description() ?? "").hasPrefix("not YAML: line 2"))
 }
 
 @test

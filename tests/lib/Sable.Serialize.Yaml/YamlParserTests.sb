@@ -46,69 +46,88 @@ fn bad(_ text: String, _ expected: String) {
 }
 
 // The text is not YAML, at that line and column.
-fn badAt(_ text: String, _ line: Int, _ column: Int) {
+fn badAt(_ text: String, _ place: String) {
     do {
         let events = try suiteEvents(text)
         fail(text + "\nis " + events)
     } catch {
-        check("\(error.line):\(error.column)", "\(line):\(column)", text + "\n" + error.description())
+        check("\(error.line):\(error.column)", place, text + "\n" + error.description())
+    }
+}
+
+// One of those, by its name: the cases of a test.
+fn checks(_ kind: String, _ text: String, _ expected: String) {
+    if kind == "doc" {
+        doc(text, expected)
+    } else if kind == "stream" {
+        stream(text, expected)
+    } else if kind == "bad" {
+        bad(text, expected)
+    } else {
+        badAt(text, expected)
     }
 }
 
 // ---- Chapter 5: characters ---------------------------------------------------
 
-@test
-fn aCharacterThatIsNotPrintableIsAnError() {
-    bad("a: \u{1}", "line 1, column 4: the control character U+0001 must be written as an escape")
-    bad("é\n\u{0}", "line 2, column 1: the control character U+0000 must be written as an escape")
-    bad("a: b\u{7F}c", "line 1, column 5: a character that is not printable must be written as an escape")
-    badAt("# \u{80}\n", 1, 3)
-    badAt("a: |\n b\u{9F}\n", 2, 3)
-    badAt("a\u{FFFE}", 1, 2)
-    badAt("[a, \u{FFFF}]", 1, 5)
-    badAt("\"ok\u{7F}\": x\u{7F}", 1, 9)
-    doc("\"\u{7F}\u{85}\u{9F}\u{FFFE}\": '\u{80}'", "+MAP / =VAL \"\u{7F}\u{85}\u{9F}\u{FFFE} / =VAL '\u{80} / -MAP")
-    doc("a\u{85}\u{A0}\u{2028}\u{1F600}", "=VAL :a\u{85}\u{A0}\u{2028}\u{1F600}")
+@test(arguments: [
+    ("bad", "a: \u{1}", "line 1, column 4: the control character U+0001 must be written as an escape"),
+    ("bad", "é\n\u{0}", "line 2, column 1: the control character U+0000 must be written as an escape"),
+    ("bad", "a: b\u{7F}c", "line 1, column 5: a character that is not printable must be written as an escape"),
+    ("badAt", "# \u{80}\n", "1:3"),
+    ("badAt", "a: |\n b\u{9F}\n", "2:3"),
+    ("badAt", "a\u{FFFE}", "1:2"),
+    ("badAt", "[a, \u{FFFF}]", "1:5"),
+    ("badAt", "\"ok\u{7F}\": x\u{7F}", "1:9"),
+    ("doc", "\"\u{7F}\u{85}\u{9F}\u{FFFE}\": '\u{80}'", "+MAP / =VAL \"\u{7F}\u{85}\u{9F}\u{FFFE} / =VAL '\u{80} / -MAP"),
+    ("doc", "a\u{85}\u{A0}\u{2028}\u{1F600}", "=VAL :a\u{85}\u{A0}\u{2028}\u{1F600}"),
+])
+fn aCharacterThatIsNotPrintableIsAnError(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn aByteOrderMarkMayStartADocument() {
-    stream("\u{FEFF}a", "+STR / +DOC / =VAL :a / -DOC / -STR")
-    stream("\u{FEFF}# c\n---\na\n...\n\u{FEFF}b\n", "+STR / +DOC --- / =VAL :a / -DOC ... / +DOC / =VAL :b / -DOC / -STR")
-    stream("\u{FEFF}", "+STR / -STR")
-    badAt("a: b\u{FEFF}c", 1, 5)
-    doc("'\u{FEFF}'", "=VAL '\u{FEFF}")
+@test(arguments: [
+    ("stream", "\u{FEFF}a", "+STR / +DOC / =VAL :a / -DOC / -STR"),
+    ("stream", "\u{FEFF}# c\n---\na\n...\n\u{FEFF}b\n", "+STR / +DOC --- / =VAL :a / -DOC ... / +DOC / =VAL :b / -DOC / -STR"),
+    ("stream", "\u{FEFF}", "+STR / -STR"),
+    ("badAt", "a: b\u{FEFF}c", "1:5"),
+    ("doc", "'\u{FEFF}'", "=VAL '\u{FEFF}"),
+])
+fn aByteOrderMarkMayStartADocument(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn everyEncodingIsRead() throws {
-    let text = "é: 😀\n"
-    let units8: U8[>..] = [0xC3, 0xA9, 0x3A, 0x20, 0xF0, 0x9F, 0x98, 0x80, 0x0A]
-    let big16: U8[>..] = [0xFE, 0xFF, 0, 0xE9, 0, 0x3A, 0, 0x20, 0xD8, 0x3D, 0xDE, 0x00, 0, 0x0A]
-    let little16: U8[>..] = [0xFF, 0xFE, 0xE9, 0, 0x3A, 0, 0x20, 0, 0x3D, 0xD8, 0x00, 0xDE, 0x0A, 0]
-    let big32: U8[>..] = [0, 0, 0xFE, 0xFF, 0, 0, 0, 0xE9, 0, 0, 0, 0x3A, 0, 0, 0, 0x20, 0, 1, 0xF6, 0, 0, 0, 0, 0x0A]
-    let little32: U8[>..] = [0xFF, 0xFE, 0, 0, 0xE9, 0, 0, 0, 0x3A, 0, 0, 0, 0x20, 0, 0, 0, 0, 0xF6, 1, 0, 0x0A, 0, 0, 0]
-    let plain16: U8[>..] = [0, 0x61, 0, 0x3A]
-    let plainLittle16: U8[>..] = [0x61, 0, 0x3A, 0]
-    let plain32: U8[>..] = [0, 0, 0, 0x61]
-    let plainLittle32: U8[>..] = [0x61, 0, 0, 0]
-    let expected = try suiteEvents(text)
-    assertEqual(try of(units8), expected)
-    assertEqual(try of(big16), expected)
-    assertEqual(try of(little16), expected)
-    assertEqual(try of(big32), expected)
-    assertEqual(try of(little32), expected)
-    assertEqual(try of(plain16), try suiteEvents("a:"))
-    assertEqual(try of(plainLittle16), try suiteEvents("a:"))
-    assertEqual(try of(plain32), try suiteEvents("a"))
-    assertEqual(try of(plainLittle32), try suiteEvents("a"))
-    assertEqual(try of([]), try suiteEvents(""))
-    assertEqual(try of([0x61]), try suiteEvents("a"))
-    assertEqual(why([0x61, 0xFF]), "ill-formed UTF-8 at byte 1")
-    assertEqual(why([0xFE, 0xFF, 0]), "UTF-16 text of 3 bytes")
-    assertEqual(why([0xFE, 0xFF, 0xD8, 0x00]), "ill-formed UTF-16 at byte 2")
-    assertEqual(why([0xFE, 0xFF, 0xD8, 0x00, 0, 0x61]), "ill-formed UTF-16 at byte 2")
-    assertEqual(why([0xFF, 0xFE, 0, 0, 0, 0, 0x11, 0]), "ill-formed UTF-32 at byte 4")
+// UTF-8, UTF-16 and UTF-32 of each order, with a byte order mark and without.
+let encoded: (U8[>..], String)[>..] = [
+    ([0xC3, 0xA9, 0x3A, 0x20, 0xF0, 0x9F, 0x98, 0x80, 0x0A], "é: 😀\n"),
+    ([0xFE, 0xFF, 0, 0xE9, 0, 0x3A, 0, 0x20, 0xD8, 0x3D, 0xDE, 0x00, 0, 0x0A], "é: 😀\n"),
+    ([0xFF, 0xFE, 0xE9, 0, 0x3A, 0, 0x20, 0, 0x3D, 0xD8, 0x00, 0xDE, 0x0A, 0], "é: 😀\n"),
+    ([0, 0, 0xFE, 0xFF, 0, 0, 0, 0xE9, 0, 0, 0, 0x3A, 0, 0, 0, 0x20, 0, 1, 0xF6, 0, 0, 0, 0, 0x0A], "é: 😀\n"),
+    ([0xFF, 0xFE, 0, 0, 0xE9, 0, 0, 0, 0x3A, 0, 0, 0, 0x20, 0, 0, 0, 0, 0xF6, 1, 0, 0x0A, 0, 0, 0], "é: 😀\n"),
+    ([0, 0x61, 0, 0x3A], "a:"),
+    ([0x61, 0, 0x3A, 0], "a:"),
+    ([0, 0, 0, 0x61], "a"),
+    ([0x61, 0, 0, 0], "a"),
+    ([], ""),
+    ([0x61], "a"),
+]
+
+@test(arguments: encoded)
+fn everyEncodingIsRead(_ bytes: U8[>..], _ text: String) throws {
+    expect(try of(bytes) == (try suiteEvents(text)))
+}
+
+let illFormed: (U8[>..], String)[>..] = [
+    ([0x61, 0xFF], "ill-formed UTF-8 at byte 1"),
+    ([0xFE, 0xFF, 0], "UTF-16 text of 3 bytes"),
+    ([0xFE, 0xFF, 0xD8, 0x00], "ill-formed UTF-16 at byte 2"),
+    ([0xFE, 0xFF, 0xD8, 0x00, 0, 0x61], "ill-formed UTF-16 at byte 2"),
+    ([0xFF, 0xFE, 0, 0, 0, 0, 0x11, 0], "ill-formed UTF-32 at byte 4"),
+]
+
+@test(arguments: illFormed)
+fn whatIsInNoEncodingIsRefused(_ bytes: U8[>..], _ reason: String) {
+    expect(why(bytes) == reason)
 }
 
 fn of(_ bytes: U8[>..]) throws(YamlError) -> String {
@@ -128,347 +147,377 @@ fn why(_ bytes: U8[>..]) -> String {
     }
 }
 
-@test
-fn everyLineBreakIsANewline() {
-    let events = "+MAP / =VAL :a / =VAL |x\\ny\\n / =VAL :b / =VAL \"c d\\ne / -MAP"
-    doc("a: |\n x\n y\nb: \"c\n d\n\n e\"\n", events)
-    doc("a: |\r\n x\r\n y\r\nb: \"c\r\n d\r\n\r\n e\"\r\n", events)
-    doc("a: |\r x\r y\rb: \"c\r d\r\r e\"\r", events)
-    badAt("a: 1\r\nb: 2\r\n c: 3", 3, 3)
+let threeKindsOfScalar = "+MAP / =VAL :a / =VAL |x\\ny\\n / =VAL :b / =VAL \"c d\\ne / -MAP"
+
+@test(arguments: [
+    ("doc", "a: |\n x\n y\nb: \"c\n d\n\n e\"\n", threeKindsOfScalar),
+    ("doc", "a: |\r\n x\r\n y\r\nb: \"c\r\n d\r\n\r\n e\"\r\n", threeKindsOfScalar),
+    ("doc", "a: |\r x\r y\rb: \"c\r d\r\r e\"\r", threeKindsOfScalar),
+    ("badAt", "a: 1\r\nb: 2\r\n c: 3", "3:3"),
+])
+fn everyLineBreakIsANewline(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn anIndicatorThatStartsNothingIsAnError() {
-    bad("@a", "line 1, column 1: '@' cannot start a value")
-    bad("`a", "line 1, column 1: '`' cannot start a value")
-    badAt("a: %b", 1, 4)
-    badAt("a: ]", 1, 4)
-    badAt("a: }", 1, 4)
-    badAt("- ,a", 1, 3)
-    doc("a@b`c%d", "=VAL :a@b`c%d")
+@test(arguments: [
+    ("bad", "@a", "line 1, column 1: '@' cannot start a value"),
+    ("bad", "`a", "line 1, column 1: '`' cannot start a value"),
+    ("badAt", "a: %b", "1:4"),
+    ("badAt", "a: ]", "1:4"),
+    ("badAt", "a: }", "1:4"),
+    ("badAt", "- ,a", "1:3"),
+    ("doc", "a@b`c%d", "=VAL :a@b`c%d"),
+])
+fn anIndicatorThatStartsNothingIsAnError(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn everyEscape() {
-    doc(
-        "\"\\0\\a\\b\\t\\\t\\n\\v\\f\\r\\e\\ \\\"\\/\\\\\\N\\_\\L\\P\\x41\\u00e9\\U0001F600\"",
-        "=VAL \"\u{0}\u{7}\\b\\t\\t\\n\u{B}\u{C}\\r\u{1B} \"/\\\\\u{85}\u{A0}\u{2028}\u{2029}Aé😀"
-    )
-    doc("\"\\uD83D\\uDE00\"", "=VAL \"😀")
-    bad("\"\\c\"", "line 1, column 2: '\\' before 'c' is no escape")
-    bad("a: \"x\\xq1\"", "line 1, column 6: an escape of 2 hex digits has 'q' among them")
-    bad("\"\\uD83D\"", "line 1, column 2: U+D83D is not a character")
-    bad("\"\\uD83Dx\"", "line 1, column 2: U+D83D is not a character")
-    bad("\"\\uD83D\\u0041\"", "line 1, column 2: U+D83D is not a character")
-    bad("\"\\uDE00\"", "line 1, column 2: U+DE00 is not a character")
-    bad("\"\\U00110000\"", "line 1, column 2: U+110000 is not a character")
-    bad("\"\\u12\"", "line 1, column 2: an escape of 4 hex digits has '\"' among them")
-    bad("\"\\x4", "line 1, column 2: an escape of 2 hex digits has the end of the text among them")
-    doc("'\\n'", "=VAL '\\\\n")
-    doc("a\\nb", "=VAL :a\\\\nb")
+@test(arguments: [
+    ("doc", "\"\\0\\a\\b\\t\\\t\\n\\v\\f\\r\\e\\ \\\"\\/\\\\\\N\\_\\L\\P\\x41\\u00e9\\U0001F600\"", "=VAL \"\u{0}\u{7}\\b\\t\\t\\n\u{B}\u{C}\\r\u{1B} \"/\\\\\u{85}\u{A0}\u{2028}\u{2029}Aé😀"),
+    ("doc", "\"\\uD83D\\uDE00\"", "=VAL \"😀"),
+    ("bad", "\"\\c\"", "line 1, column 2: '\\' before 'c' is no escape"),
+    ("bad", "a: \"x\\xq1\"", "line 1, column 6: an escape of 2 hex digits has 'q' among them"),
+    ("bad", "\"\\uD83D\"", "line 1, column 2: U+D83D is not a character"),
+    ("bad", "\"\\uD83Dx\"", "line 1, column 2: U+D83D is not a character"),
+    ("bad", "\"\\uD83D\\u0041\"", "line 1, column 2: U+D83D is not a character"),
+    ("bad", "\"\\uDE00\"", "line 1, column 2: U+DE00 is not a character"),
+    ("bad", "\"\\U00110000\"", "line 1, column 2: U+110000 is not a character"),
+    ("bad", "\"\\u12\"", "line 1, column 2: an escape of 4 hex digits has '\"' among them"),
+    ("bad", "\"\\x4", "line 1, column 2: an escape of 2 hex digits has the end of the text among them"),
+    ("doc", "'\\n'", "=VAL '\\\\n"),
+    ("doc", "a\\nb", "=VAL :a\\\\nb"),
+])
+fn everyEscape(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
 // ---- Chapter 6: basic structures ---------------------------------------------
 
-@test
-fn indentationIsSpaces() {
-    doc("a:\n b:\n    c: 1\n    d: 2\n e: 3\n", "+MAP / =VAL :a / +MAP / =VAL :b / +MAP / =VAL :c / =VAL :1 / =VAL :d / =VAL :2 / -MAP / =VAL :e / =VAL :3 / -MAP / -MAP")
-    bad("a:\n\tb: 1\n", "line 2, column 2: indented with a tab: indentation is spaces")
-    bad("a:\n  b: 1\n  \tc: 2\n", "line 3, column 4: indented with a tab: indentation is spaces")
-    bad("\ta: 1\n", "line 1, column 3: a mapping after a tab: indentation is spaces")
-    bad("a: 1\n b: 2\n", "line 2, column 3: a mapping's key may not be here: a key is on one line, and a mapping in another starts on a line of its own")
-    bad("a:\n  b: 1\n   c: 2\n", "line 3, column 5: a mapping's key may not be here: a key is on one line, and a mapping in another starts on a line of its own")
-    bad("a:\n  b: \"1\"\n   c: 2\n", "line 3, column 4: indented 3 where the collection is indented 2")
-    bad("a:\n  b: 1\n c: 2\n", "line 3, column 2: indented 1 where the collection is indented 0")
-    badAt("- a\n - b: 1", 2, 5)
-    badAt("- [a]\n - b", 2, 2)
-    badAt("a:\n  - 1\n - 2\n", 3, 2)
-    badAt("a:\n  - 1\n  b: 2\n", 3, 3)
+@test(arguments: [
+    ("doc", "a:\n b:\n    c: 1\n    d: 2\n e: 3\n", "+MAP / =VAL :a / +MAP / =VAL :b / +MAP / =VAL :c / =VAL :1 / =VAL :d / =VAL :2 / -MAP / =VAL :e / =VAL :3 / -MAP / -MAP"),
+    ("bad", "a:\n\tb: 1\n", "line 2, column 2: indented with a tab: indentation is spaces"),
+    ("bad", "a:\n  b: 1\n  \tc: 2\n", "line 3, column 4: indented with a tab: indentation is spaces"),
+    ("bad", "\ta: 1\n", "line 1, column 3: a mapping after a tab: indentation is spaces"),
+    ("bad", "a: 1\n b: 2\n", "line 2, column 3: a mapping's key may not be here: a key is on one line, and a mapping in another starts on a line of its own"),
+    ("bad", "a:\n  b: 1\n   c: 2\n", "line 3, column 5: a mapping's key may not be here: a key is on one line, and a mapping in another starts on a line of its own"),
+    ("bad", "a:\n  b: \"1\"\n   c: 2\n", "line 3, column 4: indented 3 where the collection is indented 2"),
+    ("bad", "a:\n  b: 1\n c: 2\n", "line 3, column 2: indented 1 where the collection is indented 0"),
+    ("badAt", "- a\n - b: 1", "2:5"),
+    ("badAt", "- [a]\n - b", "2:2"),
+    ("badAt", "a:\n  - 1\n - 2\n", "3:2"),
+    ("badAt", "a:\n  - 1\n  b: 2\n", "3:3"),
+])
+fn indentationIsSpaces(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn tabsSeparate() {
-    doc("a:\tb", "+MAP / =VAL :a / =VAL :b / -MAP")
-    doc("a\t:\tb\t", "+MAP / =VAL :a / =VAL :b / -MAP")
-    doc("-\ta\n- \tb\n", "+SEQ / =VAL :a / =VAL :b / -SEQ")
-    doc("-\t-1", "+SEQ / =VAL :-1 / -SEQ")
-    doc("a:\n \tb", "+MAP / =VAL :a / =VAL :b / -MAP")
-    doc("\t[\n\t]", "+SEQ [] / -SEQ")
-    doc("\t{}", "+MAP {} / -MAP")
-    doc("a: 1\n\t\nb: 2\n \t # c\n\t# d\nc: 3", "+MAP / =VAL :a / =VAL :1 / =VAL :b / =VAL :2 / =VAL :c / =VAL :3 / -MAP")
-    doc("x:\n - x\n  \tx", "+MAP / =VAL :x / +SEQ / =VAL :x x / -SEQ / -MAP")
-    doc("a: \"b\n \t c\"", "+MAP / =VAL :a / =VAL \"b c / -MAP")
-    doc("a: b\tc\t\n  d", "+MAP / =VAL :a / =VAL :b\\tc d / -MAP")
-    doc("- [\n\t\n a\n ]", "+SEQ / +SEQ [] / =VAL :a / -SEQ / -SEQ")
-    bad("-\t-", "line 1, column 3: a sequence after a tab: indentation is spaces")
-    bad("- \t-", "line 1, column 4: a sequence after a tab: indentation is spaces")
-    bad("?\t-", "line 1, column 3: a sequence after a tab: indentation is spaces")
-    bad("? -\n:\t-", "line 2, column 3: a sequence after a tab: indentation is spaces")
-    bad("?\tk:", "line 1, column 4: a mapping after a tab: indentation is spaces")
-    badAt("? k:\n:\tk:", 2, 4)
-    badAt("- [\n\ta,\n b\n ]", 2, 2)
-    badAt("a: \"b\n\tc\"", 2, 2)
-    badAt("a:\n\t- b", 2, 2)
-    badAt("a: |\n\t\nb: 1", 2, 1)
+@test(arguments: [
+    ("doc", "a:\tb", "+MAP / =VAL :a / =VAL :b / -MAP"),
+    ("doc", "a\t:\tb\t", "+MAP / =VAL :a / =VAL :b / -MAP"),
+    ("doc", "-\ta\n- \tb\n", "+SEQ / =VAL :a / =VAL :b / -SEQ"),
+    ("doc", "-\t-1", "+SEQ / =VAL :-1 / -SEQ"),
+    ("doc", "a:\n \tb", "+MAP / =VAL :a / =VAL :b / -MAP"),
+    ("doc", "\t[\n\t]", "+SEQ [] / -SEQ"),
+    ("doc", "\t{}", "+MAP {} / -MAP"),
+    ("doc", "a: 1\n\t\nb: 2\n \t # c\n\t# d\nc: 3", "+MAP / =VAL :a / =VAL :1 / =VAL :b / =VAL :2 / =VAL :c / =VAL :3 / -MAP"),
+    ("doc", "x:\n - x\n  \tx", "+MAP / =VAL :x / +SEQ / =VAL :x x / -SEQ / -MAP"),
+    ("doc", "a: \"b\n \t c\"", "+MAP / =VAL :a / =VAL \"b c / -MAP"),
+    ("doc", "a: b\tc\t\n  d", "+MAP / =VAL :a / =VAL :b\\tc d / -MAP"),
+    ("doc", "- [\n\t\n a\n ]", "+SEQ / +SEQ [] / =VAL :a / -SEQ / -SEQ"),
+    ("bad", "-\t-", "line 1, column 3: a sequence after a tab: indentation is spaces"),
+    ("bad", "- \t-", "line 1, column 4: a sequence after a tab: indentation is spaces"),
+    ("bad", "?\t-", "line 1, column 3: a sequence after a tab: indentation is spaces"),
+    ("bad", "? -\n:\t-", "line 2, column 3: a sequence after a tab: indentation is spaces"),
+    ("bad", "?\tk:", "line 1, column 4: a mapping after a tab: indentation is spaces"),
+    ("badAt", "? k:\n:\tk:", "2:4"),
+    ("badAt", "- [\n\ta,\n b\n ]", "2:2"),
+    ("badAt", "a: \"b\n\tc\"", "2:2"),
+    ("badAt", "a:\n\t- b", "2:2"),
+    ("badAt", "a: |\n\t\nb: 1", "2:1"),
+])
+fn tabsSeparate(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn commentsAndBlankLinesAreSkipped() {
-    doc("# a\n\n  # b\na: # c\n  # d\n\n  b # e\n# f\n", "+MAP / =VAL :a / =VAL :b / -MAP")
-    doc("a: b#c", "+MAP / =VAL :a / =VAL :b#c / -MAP")
-    badAt("a: 'b' # c\n- d", 2, 1)
-    stream("# only\n", "+STR / -STR")
-    stream("", "+STR / -STR")
-    stream("\n \n\t\n", "+STR / -STR")
-    doc("[a, # c\nb # d\n, c]", "+SEQ [] / =VAL :a / =VAL :b / =VAL :c / -SEQ")
-    doc("- # c\n  # d\n  - a", "+SEQ / +SEQ / =VAL :a / -SEQ / -SEQ")
-    bad("a: \"b\"#c", "line 1, column 7: a comment needs white space before its '#'")
-    bad("[a]#c", "line 1, column 4: a comment needs white space before its '#'")
-    bad("[a,#c\nb]", "line 1, column 4: a comment needs white space before its '#'")
-    badAt("a\n# c\nb", 3, 1)
-    badAt("a: b\n# c\n  d", 3, 3)
+@test(arguments: [
+    ("doc", "# a\n\n  # b\na: # c\n  # d\n\n  b # e\n# f\n", "+MAP / =VAL :a / =VAL :b / -MAP"),
+    ("doc", "a: b#c", "+MAP / =VAL :a / =VAL :b#c / -MAP"),
+    ("badAt", "a: 'b' # c\n- d", "2:1"),
+    ("stream", "# only\n", "+STR / -STR"),
+    ("stream", "", "+STR / -STR"),
+    ("stream", "\n \n\t\n", "+STR / -STR"),
+    ("doc", "[a, # c\nb # d\n, c]", "+SEQ [] / =VAL :a / =VAL :b / =VAL :c / -SEQ"),
+    ("doc", "- # c\n  # d\n  - a", "+SEQ / +SEQ / =VAL :a / -SEQ / -SEQ"),
+    ("bad", "a: \"b\"#c", "line 1, column 7: a comment needs white space before its '#'"),
+    ("bad", "[a]#c", "line 1, column 4: a comment needs white space before its '#'"),
+    ("bad", "[a,#c\nb]", "line 1, column 4: a comment needs white space before its '#'"),
+    ("badAt", "a\n# c\nb", "3:1"),
+    ("badAt", "a: b\n# c\n  d", "3:3"),
+])
+fn commentsAndBlankLinesAreSkipped(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn directives() {
-    stream("%YAML 1.2\n---\na", "+STR / +DOC --- / =VAL :a / -DOC / -STR")
-    stream("%YAML \t 1.1 # old\n--- a", "+STR / +DOC --- / =VAL :a / -DOC / -STR")
-    stream("%FOO bar baz\n%YAMLL 9 9\n\t\n# c\n--- a", "+STR / +DOC --- / =VAL :a / -DOC / -STR")
-    stream("%YAML 1.2\n---\n...\n%YAML 1.2\n--- b\n", "+STR / +DOC --- / =VAL : / -DOC ... / +DOC --- / =VAL :b / -DOC / -STR")
-    bad("%YAML 1.2\n", "line 2, column 1: the text ends where '---' should follow the directives")
-    bad("%YAML 1.2\n...", "line 2, column 1: '...' where '---' should follow the directives")
-    bad("%YAML 1.2\na", "line 2, column 1: 'a' where '---' should follow the directives")
-    bad("%YAML 1.2\n%YAML 1.2\n---", "line 2, column 1: a second %YAML directive for one document")
-    bad("%YAML\n---", "line 1, column 6: %YAML takes one version, as in '%YAML 1.2'")
-    bad("%YAML 1.2 x\n---", "line 1, column 11: %YAML takes one version, as in '%YAML 1.2'")
-    bad("%YAML 1.1#x\n---", "line 1, column 7: '1.1#x' is not a YAML version")
-    bad("%YAML 12\n---", "line 1, column 7: '12' is not a YAML version")
-    bad("%YAML 2.0\n---", "line 1, column 7: YAML 2.0 is not a version this reads: 1.x")
-    bad("%\n---", "line 1, column 1: a directive with no name")
-    bad("%TAG !\n---", "line 1, column 7: %TAG takes a handle and a prefix, as in '%TAG !e! tag:example.com,2000:'")
-    bad("%TAG ! a b\n---", "line 1, column 10: %TAG takes a handle and a prefix, as in '%TAG !e! tag:example.com,2000:'")
-    bad("%TAG !e a\n---", "line 1, column 6: '!e' is not a tag handle: '!', '!!' or '!name!'")
-    bad("%TAG !e_! a\n---", "line 1, column 6: '!e_!' is not a tag handle: '!', '!!' or '!name!'")
-    bad("%TAG ! {a\n---", "line 1, column 8: '{a' is not a tag prefix")
-    bad("%TAG ! a{\n---", "line 1, column 8: 'a{' is not a tag prefix")
-    bad("%TAG !e! a\n%TAG !e! b\n---", "line 2, column 6: a second %TAG directive for '!e!'")
-    badAt("---\na: b\n%YAML 1.2\n---\n", 3, 1)
-    badAt("--- \"a\"\n%YAML 1.2\n---\n\"b\"\n", 2, 1)
-    badAt("a # c\n%YAML 1.2\n--- b", 2, 1)
+@test(arguments: [
+    ("stream", "%YAML 1.2\n---\na", "+STR / +DOC --- / =VAL :a / -DOC / -STR"),
+    ("stream", "%YAML \t 1.1 # old\n--- a", "+STR / +DOC --- / =VAL :a / -DOC / -STR"),
+    ("stream", "%FOO bar baz\n%YAMLL 9 9\n\t\n# c\n--- a", "+STR / +DOC --- / =VAL :a / -DOC / -STR"),
+    ("stream", "%YAML 1.2\n---\n...\n%YAML 1.2\n--- b\n", "+STR / +DOC --- / =VAL : / -DOC ... / +DOC --- / =VAL :b / -DOC / -STR"),
+    ("bad", "%YAML 1.2\n", "line 2, column 1: the text ends where '---' should follow the directives"),
+    ("bad", "%YAML 1.2\n...", "line 2, column 1: '...' where '---' should follow the directives"),
+    ("bad", "%YAML 1.2\na", "line 2, column 1: 'a' where '---' should follow the directives"),
+    ("bad", "%YAML 1.2\n%YAML 1.2\n---", "line 2, column 1: a second %YAML directive for one document"),
+    ("bad", "%YAML\n---", "line 1, column 6: %YAML takes one version, as in '%YAML 1.2'"),
+    ("bad", "%YAML 1.2 x\n---", "line 1, column 11: %YAML takes one version, as in '%YAML 1.2'"),
+    ("bad", "%YAML 1.1#x\n---", "line 1, column 7: '1.1#x' is not a YAML version"),
+    ("bad", "%YAML 12\n---", "line 1, column 7: '12' is not a YAML version"),
+    ("bad", "%YAML 2.0\n---", "line 1, column 7: YAML 2.0 is not a version this reads: 1.x"),
+    ("bad", "%\n---", "line 1, column 1: a directive with no name"),
+    ("bad", "%TAG !\n---", "line 1, column 7: %TAG takes a handle and a prefix, as in '%TAG !e! tag:example.com,2000:'"),
+    ("bad", "%TAG ! a b\n---", "line 1, column 10: %TAG takes a handle and a prefix, as in '%TAG !e! tag:example.com,2000:'"),
+    ("bad", "%TAG !e a\n---", "line 1, column 6: '!e' is not a tag handle: '!', '!!' or '!name!'"),
+    ("bad", "%TAG !e_! a\n---", "line 1, column 6: '!e_!' is not a tag handle: '!', '!!' or '!name!'"),
+    ("bad", "%TAG ! {a\n---", "line 1, column 8: '{a' is not a tag prefix"),
+    ("bad", "%TAG ! a{\n---", "line 1, column 8: 'a{' is not a tag prefix"),
+    ("bad", "%TAG !e! a\n%TAG !e! b\n---", "line 2, column 6: a second %TAG directive for '!e!'"),
+    ("badAt", "---\na: b\n%YAML 1.2\n---\n", "3:1"),
+    ("badAt", "--- \"a\"\n%YAML 1.2\n---\n\"b\"\n", "2:1"),
+    ("badAt", "a # c\n%YAML 1.2\n--- b", "2:1"),
+])
+fn directives(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn tagsAreResolved() {
-    doc("!!str a", "=VAL <tag:yaml.org,2002:str> :a")
-    doc("!local a", "=VAL <!local> :a")
-    doc("! a", "=VAL <!> :a")
-    doc("!<tag:x,2000:y> a", "=VAL <tag:x,2000:y> :a")
-    doc("!<!y> a", "=VAL <!y> :a")
-    doc("!!a%21%C3%A9 b", "=VAL <tag:yaml.org,2002:a!é> :b")
-    stream("%TAG !e! tag:e.com,2000:\n%TAG ! !x-\n%TAG !! tag:own,1:\n--- !e!a [!b c, !!d e, ! f]", "+STR / +DOC --- / +SEQ [] <tag:e.com,2000:a> / =VAL <!x-b> :c / =VAL <tag:own,1:d> :e / =VAL <!> :f / -SEQ / -DOC / -STR")
-    doc("- !!str\n- !!null\n", "+SEQ / =VAL <tag:yaml.org,2002:str> : / =VAL <tag:yaml.org,2002:null> : / -SEQ")
-    doc("[!!str, !a , !!b]", "+SEQ [] / =VAL <tag:yaml.org,2002:str> : / =VAL <!a> : / =VAL <tag:yaml.org,2002:b> : / -SEQ")
-    doc("{!!str : b, !a}", "+MAP {} / =VAL <tag:yaml.org,2002:str> : / =VAL :b / =VAL <!a> : / =VAL : / -MAP")
-    bad("!e!a b", "line 1, column 1: the tag handle '!e!' is not declared: '%TAG !e! …' before '---' does")
-    bad("%TAG !e! a\n--- a\n--- !e!b c", "line 3, column 5: the tag handle '!e!' is not declared: '%TAG !e! …' before '---' does")
-    bad("!! a", "line 1, column 1: the tag '!!' is a handle with nothing after it")
-    bad("!<> a", "line 1, column 1: '' is no tag: one is a URI, or starts with '!'")
-    bad("!<!> a", "line 1, column 1: '!' is no tag: one is a URI, or starts with '!'")
-    bad("!<$:?> a", "line 1, column 1: '$:?' is no tag: one is a URI, or starts with '!'")
-    bad("!<a> a", "line 1, column 1: 'a' is no tag: one is a URI, or starts with '!'")
-    bad("!<a b> c", "line 1, column 4: ' ' in a verbatim tag")
-    bad("!a{}b c", "line 1, column 3: '{' where white space should follow a tag")
-    bad("- !!str, a", "line 1, column 8: ',' where white space should follow a tag")
-    bad("!a%4 b", "line 1, column 3: '%' in a tag is followed by two hex digits")
-    bad("!a%FF b", "line 1, column 1: a tag that is not UTF-8")
-    bad("!a !b c", "line 1, column 4: a second tag for one node")
-    bad("!a\n!b c", "line 2, column 1: a second tag for one node")
+@test(arguments: [
+    ("doc", "!!str a", "=VAL <tag:yaml.org,2002:str> :a"),
+    ("doc", "!local a", "=VAL <!local> :a"),
+    ("doc", "! a", "=VAL <!> :a"),
+    ("doc", "!<tag:x,2000:y> a", "=VAL <tag:x,2000:y> :a"),
+    ("doc", "!<!y> a", "=VAL <!y> :a"),
+    ("doc", "!!a%21%C3%A9 b", "=VAL <tag:yaml.org,2002:a!é> :b"),
+    ("stream", "%TAG !e! tag:e.com,2000:\n%TAG ! !x-\n%TAG !! tag:own,1:\n--- !e!a [!b c, !!d e, ! f]", "+STR / +DOC --- / +SEQ [] <tag:e.com,2000:a> / =VAL <!x-b> :c / =VAL <tag:own,1:d> :e / =VAL <!> :f / -SEQ / -DOC / -STR"),
+    ("doc", "- !!str\n- !!null\n", "+SEQ / =VAL <tag:yaml.org,2002:str> : / =VAL <tag:yaml.org,2002:null> : / -SEQ"),
+    ("doc", "[!!str, !a , !!b]", "+SEQ [] / =VAL <tag:yaml.org,2002:str> : / =VAL <!a> : / =VAL <tag:yaml.org,2002:b> : / -SEQ"),
+    ("doc", "{!!str : b, !a}", "+MAP {} / =VAL <tag:yaml.org,2002:str> : / =VAL :b / =VAL <!a> : / =VAL : / -MAP"),
+    ("bad", "!e!a b", "line 1, column 1: the tag handle '!e!' is not declared: '%TAG !e! …' before '---' does"),
+    ("bad", "%TAG !e! a\n--- a\n--- !e!b c", "line 3, column 5: the tag handle '!e!' is not declared: '%TAG !e! …' before '---' does"),
+    ("bad", "!! a", "line 1, column 1: the tag '!!' is a handle with nothing after it"),
+    ("bad", "!<> a", "line 1, column 1: '' is no tag: one is a URI, or starts with '!'"),
+    ("bad", "!<!> a", "line 1, column 1: '!' is no tag: one is a URI, or starts with '!'"),
+    ("bad", "!<$:?> a", "line 1, column 1: '$:?' is no tag: one is a URI, or starts with '!'"),
+    ("bad", "!<a> a", "line 1, column 1: 'a' is no tag: one is a URI, or starts with '!'"),
+    ("bad", "!<a b> c", "line 1, column 4: ' ' in a verbatim tag"),
+    ("bad", "!a{}b c", "line 1, column 3: '{' where white space should follow a tag"),
+    ("bad", "- !!str, a", "line 1, column 8: ',' where white space should follow a tag"),
+    ("bad", "!a%4 b", "line 1, column 3: '%' in a tag is followed by two hex digits"),
+    ("bad", "!a%FF b", "line 1, column 1: a tag that is not UTF-8"),
+    ("bad", "!a !b c", "line 1, column 4: a second tag for one node"),
+    ("bad", "!a\n!b c", "line 2, column 1: a second tag for one node"),
+])
+fn tagsAreResolved(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn anchorsAndAliases() {
-    doc("- &a b\n- *a\n", "+SEQ / =VAL &a :b / =ALI *a / -SEQ")
-    doc("&a !!str b", "=VAL &a <tag:yaml.org,2002:str> :b")
-    doc("!!str &a b", "=VAL &a <tag:yaml.org,2002:str> :b")
-    doc("&a: b: &😁 c", "+MAP / =VAL &a: :b / =VAL &😁 :c / -MAP")
-    doc("- &a:b-*!x y\n- *a:b-*!x\n", "+SEQ / =VAL &a:b-*!x :y / =ALI *a:b-*!x / -SEQ")
-    doc("[&a b, *a , &c, {*a : d}]", "+SEQ [] / =VAL &a :b / =ALI *a / =VAL &c : / +MAP {} / =ALI *a / =VAL :d / -MAP / -SEQ")
-    doc("&a a: &b b\n*b : *a\n", "+MAP / =VAL &a :a / =VAL &b :b / =ALI *b / =ALI *a / -MAP")
-    doc("&a\n  &b c: d\n", "+MAP &a / =VAL &b :c / =VAL :d / -MAP")
-    doc("a: &a\n  !!map\n  b: c\n", "+MAP / =VAL :a / +MAP &a <tag:yaml.org,2002:map> / =VAL :b / =VAL :c / -MAP / -MAP")
-    doc("a: &a\n - b\nc: &c\n- d\ne:\n &e\n- f\n", "+MAP / =VAL :a / +SEQ &a / =VAL :b / -SEQ / =VAL :c / +SEQ &c / =VAL :d / -SEQ / =VAL :e / +SEQ &e / =VAL :f / -SEQ / -MAP")
-    doc("a: &a\nb: c\n", "+MAP / =VAL :a / =VAL &a : / =VAL :b / =VAL :c / -MAP")
-    doc("a: &a # c\n\n  b", "+MAP / =VAL :a / =VAL &a :b / -MAP")
-    doc("a: &a |\n b\n", "+MAP / =VAL :a / =VAL &a |b\\n / -MAP")
-    doc("a: &a\n  >\n b\n", "+MAP / =VAL :a / =VAL &a >b\\n / -MAP")
-    doc("&a\n*b : c", "+MAP &a / =ALI *b / =VAL :c / -MAP")
-    doc("- &a", "+SEQ / =VAL &a : / -SEQ")
-    bad("& a", "line 1, column 1: an anchor with no name")
-    bad("* a", "line 1, column 1: an alias with no name")
-    bad("[*, a]", "line 1, column 2: an alias with no name")
-    bad("&a &b c", "line 1, column 4: a second anchor for one node")
-    bad("a: &a\n  &b c", "line 2, column 3: a second anchor for one node")
-    bad("&a\n&b\nc", "line 2, column 1: a second anchor for one node")
-    bad("- &a b\n- &c *a", "line 2, column 3: an alias has the anchor and the tag of its node, and none of its own")
-    bad("&a\n*b", "line 1, column 1: an alias has the anchor and the tag of its node, and none of its own")
-    bad("a: 1\n&b *a : c", "line 2, column 1: an alias has the anchor and the tag of its node, and none of its own")
-    bad("[&b *a]", "line 1, column 2: an alias has the anchor and the tag of its node, and none of its own")
-    bad("&a,b c", "line 1, column 3: ',' where white space should follow an anchor")
-    bad("[&a[b]]", "line 1, column 4: '[' where white space should follow an anchor")
-    bad("&a - b", "line 1, column 4: a sequence may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own")
-    bad("&a ? b", "line 1, column 4: a mapping may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own")
-    badAt("--- &a b: c", 1, 9)
-    badAt("a:\n&a\n- b\n", 2, 3)
-    badAt("- a\n&b\n- c\n", 2, 1)
-    badAt("a: &a\n!!map\n  b: c", 2, 6)
-    bad("a: 1\n&b\n", "line 2, column 3: the end of the line where a mapping's key should be")
+@test(arguments: [
+    ("doc", "- &a b\n- *a\n", "+SEQ / =VAL &a :b / =ALI *a / -SEQ"),
+    ("doc", "&a !!str b", "=VAL &a <tag:yaml.org,2002:str> :b"),
+    ("doc", "!!str &a b", "=VAL &a <tag:yaml.org,2002:str> :b"),
+    ("doc", "&a: b: &😁 c", "+MAP / =VAL &a: :b / =VAL &😁 :c / -MAP"),
+    ("doc", "- &a:b-*!x y\n- *a:b-*!x\n", "+SEQ / =VAL &a:b-*!x :y / =ALI *a:b-*!x / -SEQ"),
+    ("doc", "[&a b, *a , &c, {*a : d}]", "+SEQ [] / =VAL &a :b / =ALI *a / =VAL &c : / +MAP {} / =ALI *a / =VAL :d / -MAP / -SEQ"),
+    ("doc", "&a a: &b b\n*b : *a\n", "+MAP / =VAL &a :a / =VAL &b :b / =ALI *b / =ALI *a / -MAP"),
+    ("doc", "&a\n  &b c: d\n", "+MAP &a / =VAL &b :c / =VAL :d / -MAP"),
+    ("doc", "a: &a\n  !!map\n  b: c\n", "+MAP / =VAL :a / +MAP &a <tag:yaml.org,2002:map> / =VAL :b / =VAL :c / -MAP / -MAP"),
+    ("doc", "a: &a\n - b\nc: &c\n- d\ne:\n &e\n- f\n", "+MAP / =VAL :a / +SEQ &a / =VAL :b / -SEQ / =VAL :c / +SEQ &c / =VAL :d / -SEQ / =VAL :e / +SEQ &e / =VAL :f / -SEQ / -MAP"),
+    ("doc", "a: &a\nb: c\n", "+MAP / =VAL :a / =VAL &a : / =VAL :b / =VAL :c / -MAP"),
+    ("doc", "a: &a # c\n\n  b", "+MAP / =VAL :a / =VAL &a :b / -MAP"),
+    ("doc", "a: &a |\n b\n", "+MAP / =VAL :a / =VAL &a |b\\n / -MAP"),
+    ("doc", "a: &a\n  >\n b\n", "+MAP / =VAL :a / =VAL &a >b\\n / -MAP"),
+    ("doc", "&a\n*b : c", "+MAP &a / =ALI *b / =VAL :c / -MAP"),
+    ("doc", "- &a", "+SEQ / =VAL &a : / -SEQ"),
+    ("bad", "& a", "line 1, column 1: an anchor with no name"),
+    ("bad", "* a", "line 1, column 1: an alias with no name"),
+    ("bad", "[*, a]", "line 1, column 2: an alias with no name"),
+    ("bad", "&a &b c", "line 1, column 4: a second anchor for one node"),
+    ("bad", "a: &a\n  &b c", "line 2, column 3: a second anchor for one node"),
+    ("bad", "&a\n&b\nc", "line 2, column 1: a second anchor for one node"),
+    ("bad", "- &a b\n- &c *a", "line 2, column 3: an alias has the anchor and the tag of its node, and none of its own"),
+    ("bad", "&a\n*b", "line 1, column 1: an alias has the anchor and the tag of its node, and none of its own"),
+    ("bad", "a: 1\n&b *a : c", "line 2, column 1: an alias has the anchor and the tag of its node, and none of its own"),
+    ("bad", "[&b *a]", "line 1, column 2: an alias has the anchor and the tag of its node, and none of its own"),
+    ("bad", "&a,b c", "line 1, column 3: ',' where white space should follow an anchor"),
+    ("bad", "[&a[b]]", "line 1, column 4: '[' where white space should follow an anchor"),
+    ("bad", "&a - b", "line 1, column 4: a sequence may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own"),
+    ("bad", "&a ? b", "line 1, column 4: a mapping may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own"),
+    ("badAt", "--- &a b: c", "1:9"),
+    ("badAt", "a:\n&a\n- b\n", "2:3"),
+    ("badAt", "- a\n&b\n- c\n", "2:1"),
+    ("badAt", "a: &a\n!!map\n  b: c", "2:6"),
+    ("bad", "a: 1\n&b\n", "line 2, column 3: the end of the line where a mapping's key should be"),
+])
+fn anchorsAndAliases(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
 // ---- Chapter 7: flow styles --------------------------------------------------
 
-@test
-fn emptyNodes() {
-    doc("a:\nb:\n", "+MAP / =VAL :a / =VAL : / =VAL :b / =VAL : / -MAP")
-    doc("-\n- \n-", "+SEQ / =VAL : / =VAL : / =VAL : / -SEQ")
-    doc("? a\n? b\n: c\n?\n", "+MAP / =VAL :a / =VAL : / =VAL :b / =VAL :c / =VAL : / =VAL : / -MAP")
-    doc(": a", "+MAP / =VAL : / =VAL :a / -MAP")
-    doc(":\n", "+MAP / =VAL : / =VAL : / -MAP")
-    doc("a: 1\n: 2\n", "+MAP / =VAL :a / =VAL :1 / =VAL : / =VAL :2 / -MAP")
-    doc("&a : b\n!!null : c\n", "+MAP / =VAL &a : / =VAL :b / =VAL <tag:yaml.org,2002:null> : / =VAL :c / -MAP")
-    doc("{a, b: , c: d, : e, ? f, ? , ?\n: g}", "+MAP {} / =VAL :a / =VAL : / =VAL :b / =VAL : / =VAL :c / =VAL :d / =VAL : / =VAL :e / =VAL :f / =VAL : / =VAL : / =VAL : / =VAL : / =VAL :g / -MAP")
-    doc("[: a, : , ? , ? b, a: , ? c : ]", "+SEQ [] / +MAP {} / =VAL : / =VAL :a / -MAP / +MAP {} / =VAL : / =VAL : / -MAP / +MAP {} / =VAL : / =VAL : / -MAP / +MAP {} / =VAL :b / =VAL : / -MAP / +MAP {} / =VAL :a / =VAL : / -MAP / +MAP {} / =VAL :c / =VAL : / -MAP / -SEQ")
-    stream("---", "+STR / +DOC --- / =VAL : / -DOC / -STR")
-    stream("--- !!str &a\n", "+STR / +DOC --- / =VAL &a <tag:yaml.org,2002:str> : / -DOC / -STR")
+@test(arguments: [
+    ("doc", "a:\nb:\n", "+MAP / =VAL :a / =VAL : / =VAL :b / =VAL : / -MAP"),
+    ("doc", "-\n- \n-", "+SEQ / =VAL : / =VAL : / =VAL : / -SEQ"),
+    ("doc", "? a\n? b\n: c\n?\n", "+MAP / =VAL :a / =VAL : / =VAL :b / =VAL :c / =VAL : / =VAL : / -MAP"),
+    ("doc", ": a", "+MAP / =VAL : / =VAL :a / -MAP"),
+    ("doc", ":\n", "+MAP / =VAL : / =VAL : / -MAP"),
+    ("doc", "a: 1\n: 2\n", "+MAP / =VAL :a / =VAL :1 / =VAL : / =VAL :2 / -MAP"),
+    ("doc", "&a : b\n!!null : c\n", "+MAP / =VAL &a : / =VAL :b / =VAL <tag:yaml.org,2002:null> : / =VAL :c / -MAP"),
+    ("doc", "{a, b: , c: d, : e, ? f, ? , ?\n: g}", "+MAP {} / =VAL :a / =VAL : / =VAL :b / =VAL : / =VAL :c / =VAL :d / =VAL : / =VAL :e / =VAL :f / =VAL : / =VAL : / =VAL : / =VAL : / =VAL :g / -MAP"),
+    ("doc", "[: a, : , ? , ? b, a: , ? c : ]", "+SEQ [] / +MAP {} / =VAL : / =VAL :a / -MAP / +MAP {} / =VAL : / =VAL : / -MAP / +MAP {} / =VAL : / =VAL : / -MAP / +MAP {} / =VAL :b / =VAL : / -MAP / +MAP {} / =VAL :a / =VAL : / -MAP / +MAP {} / =VAL :c / =VAL : / -MAP / -SEQ"),
+    ("stream", "---", "+STR / +DOC --- / =VAL : / -DOC / -STR"),
+    ("stream", "--- !!str &a\n", "+STR / +DOC --- / =VAL &a <tag:yaml.org,2002:str> : / -DOC / -STR"),
+])
+fn emptyNodes(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn doubleQuotedScalars() {
-    doc("\"\"", "=VAL \"")
-    doc("\"a 'b' # : , [ ] c\"", "=VAL \"a 'b' # : , [ ] c")
-    doc("\"a\n b  \n\n\n  c\"", "=VAL \"a b\\n\\nc")
-    doc("\" a\t\n\t\n \tb \"", "=VAL \" a\\nb ")
-    doc("\"a \\\n  b\"", "=VAL \"a b")
-    doc("\"a\\\n\\  b\\\n\n c\"", "=VAL \"a  b\\nc")
-    doc("\"a\\t\n b\"", "=VAL \"a\\t b")
-    doc("\"a\\t \n b\"", "=VAL \"a\\t b")
-    doc("\"\n  a\n\"", "=VAL \" a ")
-    doc("\"\n\n a\"", "=VAL \"\\na")
-    doc("\"a\n%b\n---c\n....\"", "=VAL \"a %b ---c ....")
-    bad("\"a", "line 1, column 3: the text ends inside the quoted scalar of line 1, column 1")
-    bad("a: \"b\n  ", "line 2, column 3: the text ends inside the quoted scalar of line 1, column 4")
-    bad("\"a\\", "line 1, column 3: '\\' before the end of the text is no escape")
-    bad("\"a\n---\nb\"", "line 2, column 1: a document's marker inside a quoted scalar")
-    bad("\"a\n... \nb\"", "line 2, column 1: a document's marker inside a quoted scalar")
-    bad("a: \"b\nc\"", "line 2, column 1: indented 0 inside a quoted scalar, which is indented at least 1")
-    bad("a: \"b\n\"", "line 2, column 1: indented 0 inside a quoted scalar, which is indented at least 1")
-    bad("\"a\" b", "line 1, column 5: 'b' after a value")
-    badAt("a: \"b\" c\n", 1, 8)
+@test(arguments: [
+    ("doc", "\"\"", "=VAL \""),
+    ("doc", "\"a 'b' # : , [ ] c\"", "=VAL \"a 'b' # : , [ ] c"),
+    ("doc", "\"a\n b  \n\n\n  c\"", "=VAL \"a b\\n\\nc"),
+    ("doc", "\" a\t\n\t\n \tb \"", "=VAL \" a\\nb "),
+    ("doc", "\"a \\\n  b\"", "=VAL \"a b"),
+    ("doc", "\"a\\\n\\  b\\\n\n c\"", "=VAL \"a  b\\nc"),
+    ("doc", "\"a\\t\n b\"", "=VAL \"a\\t b"),
+    ("doc", "\"a\\t \n b\"", "=VAL \"a\\t b"),
+    ("doc", "\"\n  a\n\"", "=VAL \" a "),
+    ("doc", "\"\n\n a\"", "=VAL \"\\na"),
+    ("doc", "\"a\n%b\n---c\n....\"", "=VAL \"a %b ---c ...."),
+    ("bad", "\"a", "line 1, column 3: the text ends inside the quoted scalar of line 1, column 1"),
+    ("bad", "a: \"b\n  ", "line 2, column 3: the text ends inside the quoted scalar of line 1, column 4"),
+    ("bad", "\"a\\", "line 1, column 3: '\\' before the end of the text is no escape"),
+    ("bad", "\"a\n---\nb\"", "line 2, column 1: a document's marker inside a quoted scalar"),
+    ("bad", "\"a\n... \nb\"", "line 2, column 1: a document's marker inside a quoted scalar"),
+    ("bad", "a: \"b\nc\"", "line 2, column 1: indented 0 inside a quoted scalar, which is indented at least 1"),
+    ("bad", "a: \"b\n\"", "line 2, column 1: indented 0 inside a quoted scalar, which is indented at least 1"),
+    ("bad", "\"a\" b", "line 1, column 5: 'b' after a value"),
+    ("badAt", "a: \"b\" c\n", "1:8"),
+])
+fn doubleQuotedScalars(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn singleQuotedScalars() {
-    doc("''", "=VAL '")
-    doc("'a''b\"c\\d''''e'", "=VAL 'a'b\"c\\\\d''e")
-    doc("' a\n  b\n\n  c '", "=VAL ' a b\\nc ")
-    doc("'a  \n'", "=VAL 'a ")
-    doc("'a''\n b'", "=VAL 'a' b")
-    bad("'a''", "line 1, column 5: the text ends inside the quoted scalar of line 1, column 1")
-    bad("- 'a\n  b\n...\n", "line 3, column 1: a document's marker inside a quoted scalar")
-    badAt("'a'b", 1, 4)
+@test(arguments: [
+    ("doc", "''", "=VAL '"),
+    ("doc", "'a''b\"c\\d''''e'", "=VAL 'a'b\"c\\\\d''e"),
+    ("doc", "' a\n  b\n\n  c '", "=VAL ' a b\\nc "),
+    ("doc", "'a  \n'", "=VAL 'a "),
+    ("doc", "'a''\n b'", "=VAL 'a' b"),
+    ("bad", "'a''", "line 1, column 5: the text ends inside the quoted scalar of line 1, column 1"),
+    ("bad", "- 'a\n  b\n...\n", "line 3, column 1: a document's marker inside a quoted scalar"),
+    ("badAt", "'a'b", "1:4"),
+])
+fn singleQuotedScalars(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn plainScalars() {
-    doc("- ::a\n- \": - ()\"\n- Up, up, and away!\n- -123\n- http://example.com/foo#bar\n- [ ::a, \": - ()\", \"Up, up, and away!\", -123, http://example.com/foo#bar ]", "+SEQ / =VAL :::a / =VAL \": - () / =VAL :Up, up, and away! / =VAL :-123 / =VAL :http://example.com/foo#bar / +SEQ [] / =VAL :::a / =VAL \": - () / =VAL \"Up, up, and away! / =VAL :-123 / =VAL :http://example.com/foo#bar / -SEQ / -SEQ")
-    doc("- -a\n- ?a\n- :a\n- --- b\n- a[]{},b\n- a:b\n- a #b\n- a# b\n- a:", "+SEQ / =VAL :-a / =VAL :?a / =VAL ::a / =VAL :--- b / =VAL :a[]{},b / =VAL :a:b / =VAL :a / =VAL :a# b / +MAP / =VAL :a / =VAL : / -MAP / -SEQ")
-    doc("a!\"b&c'*d|e>f%g@h`i", "=VAL :a!\"b&c'*d|e>f%g@h`i")
-    doc("a\n  b\n\n\n c  \n\td", "=VAL :a b\\n\\nc d")
-    doc("a: b\n c\n\n  d\ne:\n f\n  g\n", "+MAP / =VAL :a / =VAL :b c\\nd / =VAL :e / =VAL :f g / -MAP")
-    doc("- a\n - b\n- c\n  ? d\n  # e\n", "+SEQ / =VAL :a - b / =VAL :c ? d / -SEQ")
-    doc("a\n%b\n&c\n!d\n---e\n....\n", "=VAL :a %b &c !d ---e ....")
-    doc("{a\n% : 1}", "+MAP {} / =VAL :a % / =VAL :1 / -MAP")
-    doc("[a\n b\n\n c, d]", "+SEQ [] / =VAL :a b\\nc / =VAL :d / -SEQ")
-    doc("[a:b, c:, d]", "+SEQ [] / =VAL :a:b / +MAP {} / =VAL :c / =VAL : / -MAP / =VAL :d / -SEQ")
-    badAt("k: -\tb", 1, 4)
-    doc("1:\n  - é", "+MAP / =VAL :1 / +SEQ / =VAL :é / -SEQ / -MAP")
-    bad("a: b: c", "line 1, column 5: a mapping may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own")
-    bad("[-]", "line 1, column 2: a block sequence in a flow collection")
-    bad("[a, -, b]", "line 1, column 5: a block sequence in a flow collection")
-    badAt("[a, - b]", 1, 5)
-    badAt("[?]", 1, 2)
-    badAt("{a, ?}", 1, 5)
-    badAt("a\nb: 1", 2, 2)
-    badAt("a: 1\nb\nc: 2", 2, 2)
-    badAt("a: 1\nb\n  c\nd: 2", 2, 1)
-    badAt("- a\nb\n", 2, 1)
-    badAt("- a\nb: c\n", 2, 1)
+@test(arguments: [
+    ("doc", "- ::a\n- \": - ()\"\n- Up, up, and away!\n- -123\n- http://example.com/foo#bar\n- [ ::a, \": - ()\", \"Up, up, and away!\", -123, http://example.com/foo#bar ]", "+SEQ / =VAL :::a / =VAL \": - () / =VAL :Up, up, and away! / =VAL :-123 / =VAL :http://example.com/foo#bar / +SEQ [] / =VAL :::a / =VAL \": - () / =VAL \"Up, up, and away! / =VAL :-123 / =VAL :http://example.com/foo#bar / -SEQ / -SEQ"),
+    ("doc", "- -a\n- ?a\n- :a\n- --- b\n- a[]{},b\n- a:b\n- a #b\n- a# b\n- a:", "+SEQ / =VAL :-a / =VAL :?a / =VAL ::a / =VAL :--- b / =VAL :a[]{},b / =VAL :a:b / =VAL :a / =VAL :a# b / +MAP / =VAL :a / =VAL : / -MAP / -SEQ"),
+    ("doc", "a!\"b&c'*d|e>f%g@h`i", "=VAL :a!\"b&c'*d|e>f%g@h`i"),
+    ("doc", "a\n  b\n\n\n c  \n\td", "=VAL :a b\\n\\nc d"),
+    ("doc", "a: b\n c\n\n  d\ne:\n f\n  g\n", "+MAP / =VAL :a / =VAL :b c\\nd / =VAL :e / =VAL :f g / -MAP"),
+    ("doc", "- a\n - b\n- c\n  ? d\n  # e\n", "+SEQ / =VAL :a - b / =VAL :c ? d / -SEQ"),
+    ("doc", "a\n%b\n&c\n!d\n---e\n....\n", "=VAL :a %b &c !d ---e ...."),
+    ("doc", "{a\n% : 1}", "+MAP {} / =VAL :a % / =VAL :1 / -MAP"),
+    ("doc", "[a\n b\n\n c, d]", "+SEQ [] / =VAL :a b\\nc / =VAL :d / -SEQ"),
+    ("doc", "[a:b, c:, d]", "+SEQ [] / =VAL :a:b / +MAP {} / =VAL :c / =VAL : / -MAP / =VAL :d / -SEQ"),
+    ("badAt", "k: -\tb", "1:4"),
+    ("doc", "1:\n  - é", "+MAP / =VAL :1 / +SEQ / =VAL :é / -SEQ / -MAP"),
+    ("bad", "a: b: c", "line 1, column 5: a mapping may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own"),
+    ("bad", "[-]", "line 1, column 2: a block sequence in a flow collection"),
+    ("bad", "[a, -, b]", "line 1, column 5: a block sequence in a flow collection"),
+    ("badAt", "[a, - b]", "1:5"),
+    ("badAt", "[?]", "1:2"),
+    ("badAt", "{a, ?}", "1:5"),
+    ("badAt", "a\nb: 1", "2:2"),
+    ("badAt", "a: 1\nb\nc: 2", "2:2"),
+    ("badAt", "a: 1\nb\n  c\nd: 2", "2:1"),
+    ("badAt", "- a\nb\n", "2:1"),
+    ("badAt", "- a\nb: c\n", "2:1"),
+])
+fn plainScalars(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn flowSequences() {
-    doc("[]", "+SEQ [] / -SEQ")
-    doc("[ a , b,\n\n c,]", "+SEQ [] / =VAL :a / =VAL :b / =VAL :c / -SEQ")
-    doc("[[a], {b: c}, 'd', \"e\"]", "+SEQ [] / +SEQ [] / =VAL :a / -SEQ / +MAP {} / =VAL :b / =VAL :c / -MAP / =VAL 'd / =VAL \"e / -SEQ")
-    doc("[a: b, \"c\":d, [e]:f, {g: h}:i, j : k, 'l' : m, ? n\n o : p]", "+SEQ [] / +MAP {} / =VAL :a / =VAL :b / -MAP / +MAP {} / =VAL \"c / =VAL :d / -MAP / +MAP {} / +SEQ [] / =VAL :e / -SEQ / =VAL :f / -MAP / +MAP {} / +MAP {} / =VAL :g / =VAL :h / -MAP / =VAL :i / -MAP / +MAP {} / =VAL :j / =VAL :k / -MAP / +MAP {} / =VAL 'l / =VAL :m / -MAP / +MAP {} / =VAL :n o / =VAL :p / -MAP / -SEQ")
-    doc("[a: # c\n  b, d:\n e]", "+SEQ [] / +MAP {} / =VAL :a / =VAL :b / -MAP / +MAP {} / =VAL :d / =VAL :e / -MAP / -SEQ")
-    doc("[&a b: !!str c]", "+SEQ [] / +MAP {} / =VAL &a :b / =VAL <tag:yaml.org,2002:str> :c / -MAP / -SEQ")
-    doc("[ ? \"a\":b, ? c:d ]", "+SEQ [] / +MAP {} / =VAL \"a / =VAL :b / -MAP / +MAP {} / =VAL :c:d / =VAL : / -MAP / -SEQ")
-    doc("[\na,\n---b\n]", "+SEQ [] / =VAL :a / =VAL :---b / -SEQ")
-    bad("[a", "line 1, column 3: the text ends inside '[' of line 1, column 1")
-    bad("[a b, c d", "line 1, column 10: the text ends inside '[' of line 1, column 1")
-    bad("[a, , b]", "line 1, column 5: ',' with no value before it")
-    bad("[,]", "line 1, column 2: ',' with no value before it")
-    bad("[a}]", "line 1, column 3: '}' where ',' or ']' should be")
-    bad("[a ['b']]", "line 1, column 4: '[' where ',' or ']' should be")
-    bad("['a' 'b']", "line 1, column 6: ''' where ',' or ']' should be")
-    bad("[a]]", "line 1, column 4: ']' after a value")
-    bad("[a\n]: b", "line 2, column 2: a mapping's key may not be here: a key is on one line, and a mapping in another starts on a line of its own")
-    bad("[\"a\"\n: b]", "line 2, column 1: ':' where ',' or ']' should be")
-    bad("[a\n b: c]", "line 2, column 3: ':' where ',' or ']' should be")
-    bad("[a,\n---\nb]", "line 2, column 1: a document's marker inside '['")
-    bad("[a,\n...\nb]", "line 2, column 1: a document's marker inside '['")
-    bad("a: [b,\nc]", "line 2, column 1: indented 0 inside '[', which is indented at least 1")
-    bad("a: [\n b\n]", "line 3, column 1: indented 0 inside '[', which is indented at least 1")
-    badAt("- [a,\nb]", 2, 1)
+@test(arguments: [
+    ("doc", "[]", "+SEQ [] / -SEQ"),
+    ("doc", "[ a , b,\n\n c,]", "+SEQ [] / =VAL :a / =VAL :b / =VAL :c / -SEQ"),
+    ("doc", "[[a], {b: c}, 'd', \"e\"]", "+SEQ [] / +SEQ [] / =VAL :a / -SEQ / +MAP {} / =VAL :b / =VAL :c / -MAP / =VAL 'd / =VAL \"e / -SEQ"),
+    ("doc", "[a: b, \"c\":d, [e]:f, {g: h}:i, j : k, 'l' : m, ? n\n o : p]", "+SEQ [] / +MAP {} / =VAL :a / =VAL :b / -MAP / +MAP {} / =VAL \"c / =VAL :d / -MAP / +MAP {} / +SEQ [] / =VAL :e / -SEQ / =VAL :f / -MAP / +MAP {} / +MAP {} / =VAL :g / =VAL :h / -MAP / =VAL :i / -MAP / +MAP {} / =VAL :j / =VAL :k / -MAP / +MAP {} / =VAL 'l / =VAL :m / -MAP / +MAP {} / =VAL :n o / =VAL :p / -MAP / -SEQ"),
+    ("doc", "[a: # c\n  b, d:\n e]", "+SEQ [] / +MAP {} / =VAL :a / =VAL :b / -MAP / +MAP {} / =VAL :d / =VAL :e / -MAP / -SEQ"),
+    ("doc", "[&a b: !!str c]", "+SEQ [] / +MAP {} / =VAL &a :b / =VAL <tag:yaml.org,2002:str> :c / -MAP / -SEQ"),
+    ("doc", "[ ? \"a\":b, ? c:d ]", "+SEQ [] / +MAP {} / =VAL \"a / =VAL :b / -MAP / +MAP {} / =VAL :c:d / =VAL : / -MAP / -SEQ"),
+    ("doc", "[\na,\n---b\n]", "+SEQ [] / =VAL :a / =VAL :---b / -SEQ"),
+    ("bad", "[a", "line 1, column 3: the text ends inside '[' of line 1, column 1"),
+    ("bad", "[a b, c d", "line 1, column 10: the text ends inside '[' of line 1, column 1"),
+    ("bad", "[a, , b]", "line 1, column 5: ',' with no value before it"),
+    ("bad", "[,]", "line 1, column 2: ',' with no value before it"),
+    ("bad", "[a}]", "line 1, column 3: '}' where ',' or ']' should be"),
+    ("bad", "[a ['b']]", "line 1, column 4: '[' where ',' or ']' should be"),
+    ("bad", "['a' 'b']", "line 1, column 6: ''' where ',' or ']' should be"),
+    ("bad", "[a]]", "line 1, column 4: ']' after a value"),
+    ("bad", "[a\n]: b", "line 2, column 2: a mapping's key may not be here: a key is on one line, and a mapping in another starts on a line of its own"),
+    ("bad", "[\"a\"\n: b]", "line 2, column 1: ':' where ',' or ']' should be"),
+    ("bad", "[a\n b: c]", "line 2, column 3: ':' where ',' or ']' should be"),
+    ("bad", "[a,\n---\nb]", "line 2, column 1: a document's marker inside '['"),
+    ("bad", "[a,\n...\nb]", "line 2, column 1: a document's marker inside '['"),
+    ("bad", "a: [b,\nc]", "line 2, column 1: indented 0 inside '[', which is indented at least 1"),
+    ("bad", "a: [\n b\n]", "line 3, column 1: indented 0 inside '[', which is indented at least 1"),
+    ("badAt", "- [a,\nb]", "2:1"),
+])
+fn flowSequences(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn flowMappings() {
-    doc("{}", "+MAP {} / -MAP")
-    doc("{ a : b, \"c\":d, 'e': f , g: {h: i},}", "+MAP {} / =VAL :a / =VAL :b / =VAL \"c / =VAL :d / =VAL 'e / =VAL :f / =VAL :g / +MAP {} / =VAL :h / =VAL :i / -MAP / -MAP")
-    doc("{a\n : b, \"c\"\n  :d, \"e\" # f\n  :g}", "+MAP {} / =VAL :a / =VAL :b / =VAL \"c / =VAL :d / =VAL \"e / =VAL :g / -MAP")
-    doc("{a: :b, c: ::d, http://x: y}", "+MAP {} / =VAL :a / =VAL ::b / =VAL :c / =VAL :::d / =VAL :http://x / =VAL :y / -MAP")
-    badAt("{a: ::, b}", 1, 6)
-    doc("{[a]: b, {c: d}:e, ? [f] : g}", "+MAP {} / +SEQ [] / =VAL :a / -SEQ / =VAL :b / +MAP {} / =VAL :c / =VAL :d / -MAP / =VAL :e / +SEQ [] / =VAL :f / -SEQ / =VAL :g / -MAP")
-    doc("{multi\n  line: value, a b: c}", "+MAP {} / =VAL :multi line / =VAL :value / =VAL :a b / =VAL :c / -MAP")
-    doc("{ &a [a, &b b]: *b, *a : [c, *b , d]}", "+MAP {} / +SEQ [] &a / =VAL :a / =VAL &b :b / -SEQ / =ALI *b / =ALI *a / +SEQ [] / =VAL :c / =ALI *b / =VAL :d / -SEQ / -MAP")
-    doc("{ ? a, b: c }", "+MAP {} / =VAL :a / =VAL : / =VAL :b / =VAL :c / -MAP")
-    doc("{a: b,\n}", "+MAP {} / =VAL :a / =VAL :b / -MAP")
-    bad("{a: b", "line 1, column 6: the text ends inside '{' of line 1, column 1")
-    bad("{, a}", "line 1, column 2: ',' with no entry before it")
-    bad("{a: b,, c}", "line 1, column 7: ',' with no entry before it")
-    bad("{\n a: 1\n b: 2}", "line 3, column 3: ':' where ',' or '}' should be")
-    bad("{a: b]", "line 1, column 6: ']' where ',' or '}' should be")
-    bad("a: {b: c}d: e", "line 1, column 10: 'd' after a value")
-    bad("- { y: z }- x", "line 1, column 11: '-' after a value")
-    bad("k: {\nk\n:\nv\n}", "line 2, column 1: indented 0 inside '{', which is indented at least 1")
-    doc("k: {\n k\n :\n v\n }", "+MAP / =VAL :k / +MAP {} / =VAL :k / =VAL :v / -MAP / -MAP")
-    badAt("{a: 'b' c: d}", 1, 9)
+@test(arguments: [
+    ("doc", "{}", "+MAP {} / -MAP"),
+    ("doc", "{ a : b, \"c\":d, 'e': f , g: {h: i},}", "+MAP {} / =VAL :a / =VAL :b / =VAL \"c / =VAL :d / =VAL 'e / =VAL :f / =VAL :g / +MAP {} / =VAL :h / =VAL :i / -MAP / -MAP"),
+    ("doc", "{a\n : b, \"c\"\n  :d, \"e\" # f\n  :g}", "+MAP {} / =VAL :a / =VAL :b / =VAL \"c / =VAL :d / =VAL \"e / =VAL :g / -MAP"),
+    ("doc", "{a: :b, c: ::d, http://x: y}", "+MAP {} / =VAL :a / =VAL ::b / =VAL :c / =VAL :::d / =VAL :http://x / =VAL :y / -MAP"),
+    ("badAt", "{a: ::, b}", "1:6"),
+    ("doc", "{[a]: b, {c: d}:e, ? [f] : g}", "+MAP {} / +SEQ [] / =VAL :a / -SEQ / =VAL :b / +MAP {} / =VAL :c / =VAL :d / -MAP / =VAL :e / +SEQ [] / =VAL :f / -SEQ / =VAL :g / -MAP"),
+    ("doc", "{multi\n  line: value, a b: c}", "+MAP {} / =VAL :multi line / =VAL :value / =VAL :a b / =VAL :c / -MAP"),
+    ("doc", "{ &a [a, &b b]: *b, *a : [c, *b , d]}", "+MAP {} / +SEQ [] &a / =VAL :a / =VAL &b :b / -SEQ / =ALI *b / =ALI *a / +SEQ [] / =VAL :c / =ALI *b / =VAL :d / -SEQ / -MAP"),
+    ("doc", "{ ? a, b: c }", "+MAP {} / =VAL :a / =VAL : / =VAL :b / =VAL :c / -MAP"),
+    ("doc", "{a: b,\n}", "+MAP {} / =VAL :a / =VAL :b / -MAP"),
+    ("bad", "{a: b", "line 1, column 6: the text ends inside '{' of line 1, column 1"),
+    ("bad", "{, a}", "line 1, column 2: ',' with no entry before it"),
+    ("bad", "{a: b,, c}", "line 1, column 7: ',' with no entry before it"),
+    ("bad", "{\n a: 1\n b: 2}", "line 3, column 3: ':' where ',' or '}' should be"),
+    ("bad", "{a: b]", "line 1, column 6: ']' where ',' or '}' should be"),
+    ("bad", "a: {b: c}d: e", "line 1, column 10: 'd' after a value"),
+    ("bad", "- { y: z }- x", "line 1, column 11: '-' after a value"),
+    ("bad", "k: {\nk\n:\nv\n}", "line 2, column 1: indented 0 inside '{', which is indented at least 1"),
+    ("doc", "k: {\n k\n :\n v\n }", "+MAP / =VAL :k / +MAP {} / =VAL :k / =VAL :v / -MAP / -MAP"),
+    ("badAt", "{a: 'b' c: d}", "1:9"),
+])
+fn flowMappings(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn flowNodesAsBlockKeys() {
-    doc("[a, b]: c\n{d: e}: f\n\"g\": h\n'i' : j\n*k : l\n", "+MAP / +SEQ [] / =VAL :a / =VAL :b / -SEQ / =VAL :c / +MAP {} / =VAL :d / =VAL :e / -MAP / =VAL :f / =VAL \"g / =VAL :h / =VAL 'i / =VAL :j / =ALI *k / =VAL :l / -MAP")
-    doc("- [a]: b\n  c: d\n", "+SEQ / +MAP / +SEQ [] / =VAL :a / -SEQ / =VAL :b / =VAL :c / =VAL :d / -MAP / -SEQ")
-    bad("a: 1\n\"b\":c", "line 2, column 5: white space must follow the ':' of a mapping")
-    bad("\"a\":b", "line 1, column 4: ':' after a value")
-    bad("\"a\n b\": c", "line 2, column 4: a mapping's key may not be here: a key is on one line, and a mapping in another starts on a line of its own")
-    bad("a: 1\n\"b\n  c\": d", "line 2, column 1: a key must be on one line, or have a '?' before it")
-    bad("--- a: b", "line 1, column 6: a mapping may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own")
-    bad("--- - a", "line 1, column 5: a sequence may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own")
-    bad("--- ? a", "line 1, column 5: a mapping may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own")
-    bad("a: - b", "line 1, column 4: a sequence may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own")
-    bad("a: 'b': c", "line 1, column 7: a mapping may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own")
+@test(arguments: [
+    ("doc", "[a, b]: c\n{d: e}: f\n\"g\": h\n'i' : j\n*k : l\n", "+MAP / +SEQ [] / =VAL :a / =VAL :b / -SEQ / =VAL :c / +MAP {} / =VAL :d / =VAL :e / -MAP / =VAL :f / =VAL \"g / =VAL :h / =VAL 'i / =VAL :j / =ALI *k / =VAL :l / -MAP"),
+    ("doc", "- [a]: b\n  c: d\n", "+SEQ / +MAP / +SEQ [] / =VAL :a / -SEQ / =VAL :b / =VAL :c / =VAL :d / -MAP / -SEQ"),
+    ("bad", "a: 1\n\"b\":c", "line 2, column 5: white space must follow the ':' of a mapping"),
+    ("bad", "\"a\":b", "line 1, column 4: ':' after a value"),
+    ("bad", "\"a\n b\": c", "line 2, column 4: a mapping's key may not be here: a key is on one line, and a mapping in another starts on a line of its own"),
+    ("bad", "a: 1\n\"b\n  c\": d", "line 2, column 1: a key must be on one line, or have a '?' before it"),
+    ("bad", "--- a: b", "line 1, column 6: a mapping may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own"),
+    ("bad", "--- - a", "line 1, column 5: a sequence may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own"),
+    ("bad", "--- ? a", "line 1, column 5: a mapping may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own"),
+    ("bad", "a: - b", "line 1, column 4: a sequence may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own"),
+    ("bad", "a: 'b': c", "line 1, column 7: a mapping may not start here: in a mapping, or after '---', an anchor or a tag, it starts on a line of its own"),
+])
+fn flowNodesAsBlockKeys(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
 @test
@@ -485,134 +534,148 @@ fn anImplicitKeyIsAtMost1024Characters() {
 
 // ---- Chapter 8: block styles -------------------------------------------------
 
-@test
-fn literalScalars() {
-    doc("a: |\n  b\n   c\n\n  d\ne: f", "+MAP / =VAL :a / =VAL |b\\n c\\n\\nd\\n / =VAL :e / =VAL :f / -MAP")
-    doc("|\na\n b\n", "=VAL |a\\n b\\n")
-    doc("|\n \n  \n  a\n   \n   \n  b\n\n # comment\n", "=VAL |\\n\\na\\n \\n \\nb\\n")
-    doc("|\n\n\n  a\n\n # c\n", "=VAL |\\n\\na\\n")
-    doc("- |\n a\n- b", "+SEQ / =VAL |a\\n / =VAL :b / -SEQ")
-    doc("a:\n  |\n b\n", "+MAP / =VAL :a / =VAL |b\\n / -MAP")
-    doc("|\n\ta\n", "=VAL |\\ta\\n")
-    doc("a: |\n \t\nb: 1", "+MAP / =VAL :a / =VAL |\\t\\n / =VAL :b / =VAL :1 / -MAP")
-    doc("a: |\n  \tb\n\n   c\t \n", "+MAP / =VAL :a / =VAL |\\tb\\n\\n c\\t \\n / -MAP")
-    doc("a: |\n\nb: |\n    \nc: |\n", "+MAP / =VAL :a / =VAL | / =VAL :b / =VAL | / =VAL :c / =VAL | / -MAP")
-    doc("- | # comment\n a\n # b\n# c\n", "+SEQ / =VAL |a\\n# b\\n / -SEQ")
-    doc("a: |\n  # b\n # c\nd: e", "+MAP / =VAL :a / =VAL |# b\\n / =VAL :d / =VAL :e / -MAP")
-    stream("--- |\n%!PS-Adobe\na\n...\n---\n# c\n...\n", "+STR / +DOC --- / =VAL |%!PS-Adobe\\na\\n / -DOC ... / +DOC --- / =VAL : / -DOC ... / -STR")
-    stream("--- |\na\n--- |\n ---\n ...\n", "+STR / +DOC --- / =VAL |a\\n / -DOC / +DOC --- / =VAL |---\\n...\\n / -DOC / -STR")
-    bad("a: |x\n b", "line 1, column 5: 'x' in a block scalar's header")
-    bad("a: | x\n b", "line 1, column 6: 'x' after a value")
-    bad("a: |# c\n b", "line 1, column 5: '#' in a block scalar's header")
-    bad("a: |0\n b", "line 1, column 5: '0' in a block scalar's header")
-    bad("a: |10\n b", "line 1, column 6: '0' in a block scalar's header")
-    bad("a: |++\n b", "line 1, column 6: '+' in a block scalar's header")
-    bad("a: |\n   \n  b\n", "line 2, column 4: a blank line indented more than the block scalar's first line of text")
-    bad("a: |\n  b\n c\n", "line 3, column 2: indented 1 where the collection is indented 0")
-    badAt("- |\n  a\n b\n", 3, 2)
+@test(arguments: [
+    ("doc", "a: |\n  b\n   c\n\n  d\ne: f", "+MAP / =VAL :a / =VAL |b\\n c\\n\\nd\\n / =VAL :e / =VAL :f / -MAP"),
+    ("doc", "|\na\n b\n", "=VAL |a\\n b\\n"),
+    ("doc", "|\n \n  \n  a\n   \n   \n  b\n\n # comment\n", "=VAL |\\n\\na\\n \\n \\nb\\n"),
+    ("doc", "|\n\n\n  a\n\n # c\n", "=VAL |\\n\\na\\n"),
+    ("doc", "- |\n a\n- b", "+SEQ / =VAL |a\\n / =VAL :b / -SEQ"),
+    ("doc", "a:\n  |\n b\n", "+MAP / =VAL :a / =VAL |b\\n / -MAP"),
+    ("doc", "|\n\ta\n", "=VAL |\\ta\\n"),
+    ("doc", "a: |\n \t\nb: 1", "+MAP / =VAL :a / =VAL |\\t\\n / =VAL :b / =VAL :1 / -MAP"),
+    ("doc", "a: |\n  \tb\n\n   c\t \n", "+MAP / =VAL :a / =VAL |\\tb\\n\\n c\\t \\n / -MAP"),
+    ("doc", "a: |\n\nb: |\n    \nc: |\n", "+MAP / =VAL :a / =VAL | / =VAL :b / =VAL | / =VAL :c / =VAL | / -MAP"),
+    ("doc", "- | # comment\n a\n # b\n# c\n", "+SEQ / =VAL |a\\n# b\\n / -SEQ"),
+    ("doc", "a: |\n  # b\n # c\nd: e", "+MAP / =VAL :a / =VAL |# b\\n / =VAL :d / =VAL :e / -MAP"),
+    ("stream", "--- |\n%!PS-Adobe\na\n...\n---\n# c\n...\n", "+STR / +DOC --- / =VAL |%!PS-Adobe\\na\\n / -DOC ... / +DOC --- / =VAL : / -DOC ... / -STR"),
+    ("stream", "--- |\na\n--- |\n ---\n ...\n", "+STR / +DOC --- / =VAL |a\\n / -DOC / +DOC --- / =VAL |---\\n...\\n / -DOC / -STR"),
+    ("bad", "a: |x\n b", "line 1, column 5: 'x' in a block scalar's header"),
+    ("bad", "a: | x\n b", "line 1, column 6: 'x' after a value"),
+    ("bad", "a: |# c\n b", "line 1, column 5: '#' in a block scalar's header"),
+    ("bad", "a: |0\n b", "line 1, column 5: '0' in a block scalar's header"),
+    ("bad", "a: |10\n b", "line 1, column 6: '0' in a block scalar's header"),
+    ("bad", "a: |++\n b", "line 1, column 6: '+' in a block scalar's header"),
+    ("bad", "a: |\n   \n  b\n", "line 2, column 4: a blank line indented more than the block scalar's first line of text"),
+    ("bad", "a: |\n  b\n c\n", "line 3, column 2: indented 1 where the collection is indented 0"),
+    ("badAt", "- |\n  a\n b\n", "3:2"),
+])
+fn literalScalars(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn indentationIndicators() {
-    doc("- |1\n  a\n b\n", "+SEQ / =VAL | a\\nb\\n / -SEQ")
-    doc("- >2\n   a\n  b\n", "+SEQ / =VAL > a\\nb\\n / -SEQ")
-    doc("a: |2-\n    b\n   c\n", "+MAP / =VAL :a / =VAL |  b\\n c / -MAP")
-    doc("a: |-2\n    b\n", "+MAP / =VAL :a / =VAL |  b / -MAP")
-    doc("a:\n  b: |1\n    c\n", "+MAP / =VAL :a / +MAP / =VAL :b / =VAL | c\\n / -MAP / -MAP")
-    stream("--- |1\n  a\n", "+STR / +DOC --- / =VAL | a\\n / -DOC / -STR")
-    doc("|2\n\n\n  a\n", "=VAL |\\n\\na\\n")
-    badAt("a: |2\n b\n", 2, 2)
+@test(arguments: [
+    ("doc", "- |1\n  a\n b\n", "+SEQ / =VAL | a\\nb\\n / -SEQ"),
+    ("doc", "- >2\n   a\n  b\n", "+SEQ / =VAL > a\\nb\\n / -SEQ"),
+    ("doc", "a: |2-\n    b\n   c\n", "+MAP / =VAL :a / =VAL |  b\\n c / -MAP"),
+    ("doc", "a: |-2\n    b\n", "+MAP / =VAL :a / =VAL |  b / -MAP"),
+    ("doc", "a:\n  b: |1\n    c\n", "+MAP / =VAL :a / +MAP / =VAL :b / =VAL | c\\n / -MAP / -MAP"),
+    ("stream", "--- |1\n  a\n", "+STR / +DOC --- / =VAL | a\\n / -DOC / -STR"),
+    ("doc", "|2\n\n\n  a\n", "=VAL |\\n\\na\\n"),
+    ("badAt", "a: |2\n b\n", "2:2"),
+])
+fn indentationIndicators(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn chomping() {
-    doc("- |-\n a\n\n- |\n b\n\n- |+\n c\n\n- d\n", "+SEQ / =VAL |a / =VAL |b\\n / =VAL |c\\n\\n / =VAL :d / -SEQ")
-    doc("a: >-\n\n\nb: >\n\nc: |+\n\n\n", "+MAP / =VAL :a / =VAL > / =VAL :b / =VAL > / =VAL :c / =VAL |\\n\\n / -MAP")
-    doc("- |+\n   \n", "+SEQ / =VAL |\\n / -SEQ")
-    doc("- |+\n   ", "+SEQ / =VAL |\\n / -SEQ")
-    doc("- |+", "+SEQ / =VAL | / -SEQ")
-    doc("a: |\n b", "+MAP / =VAL :a / =VAL |b\\n / -MAP")
-    doc("a: |+\n b", "+MAP / =VAL :a / =VAL |b\\n / -MAP")
-    doc("a: |-\n b", "+MAP / =VAL :a / =VAL |b / -MAP")
+@test(arguments: [
+    ("doc", "- |-\n a\n\n- |\n b\n\n- |+\n c\n\n- d\n", "+SEQ / =VAL |a / =VAL |b\\n / =VAL |c\\n\\n / =VAL :d / -SEQ"),
+    ("doc", "a: >-\n\n\nb: >\n\nc: |+\n\n\n", "+MAP / =VAL :a / =VAL > / =VAL :b / =VAL > / =VAL :c / =VAL |\\n\\n / -MAP"),
+    ("doc", "- |+\n   \n", "+SEQ / =VAL |\\n / -SEQ"),
+    ("doc", "- |+\n   ", "+SEQ / =VAL |\\n / -SEQ"),
+    ("doc", "- |+", "+SEQ / =VAL | / -SEQ"),
+    ("doc", "a: |\n b", "+MAP / =VAL :a / =VAL |b\\n / -MAP"),
+    ("doc", "a: |+\n b", "+MAP / =VAL :a / =VAL |b\\n / -MAP"),
+    ("doc", "a: |-\n b", "+MAP / =VAL :a / =VAL |b / -MAP"),
     // yaml-test-suite L24T/01.
-    doc("foo: |\n  x\n   ", "+MAP / =VAL :foo / =VAL |x\\n \\n / -MAP")
-    doc("|-\n a\n \n \n", "=VAL |a")
-    doc("a: |+\n b\n\n# c\nd: e\n", "+MAP / =VAL :a / =VAL |b\\n\\n / =VAL :d / =VAL :e / -MAP")
+    ("doc", "foo: |\n  x\n   ", "+MAP / =VAL :foo / =VAL |x\\n \\n / -MAP"),
+    ("doc", "|-\n a\n \n \n", "=VAL |a"),
+    ("doc", "a: |+\n b\n\n# c\nd: e\n", "+MAP / =VAL :a / =VAL |b\\n\\n / =VAL :d / =VAL :e / -MAP"),
+])
+fn chomping(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn foldedScalars() {
-    doc(">\n a\n b\n\n c\n\n\n d\n", "=VAL >a b\\nc\\n\\nd\\n")
-    doc(">\n\n a\n b\n\n   * x\n   * y\n\n c\n d\n", "=VAL >\\na b\\n\\n  * x\\n  * y\\n\\nc d\\n")
-    bad(">\n a\n\tb\n c\n", "line 3, column 1: a tab where a block scalar's indentation, or its end, should be")
-    doc("a: >\n b\n \tc\n d\n", "+MAP / =VAL :a / =VAL >b\\n\\tc\\nd\\n / -MAP")
-    doc(">-\n  a\n   b\n  c\n", "=VAL >a\\n b\\nc")
-    doc(">\n\n\n a\n", "=VAL >\\n\\na\\n")
-    doc(">+\n a\n\n", "=VAL >a\\n\\n")
-    doc("a: >\n b\n c # d\n# e\n", "+MAP / =VAL :a / =VAL >b c # d\\n / -MAP")
+@test(arguments: [
+    ("doc", ">\n a\n b\n\n c\n\n\n d\n", "=VAL >a b\\nc\\n\\nd\\n"),
+    ("doc", ">\n\n a\n b\n\n   * x\n   * y\n\n c\n d\n", "=VAL >\\na b\\n\\n  * x\\n  * y\\n\\nc d\\n"),
+    ("bad", ">\n a\n\tb\n c\n", "line 3, column 1: a tab where a block scalar's indentation, or its end, should be"),
+    ("doc", "a: >\n b\n \tc\n d\n", "+MAP / =VAL :a / =VAL >b\\n\\tc\\nd\\n / -MAP"),
+    ("doc", ">-\n  a\n   b\n  c\n", "=VAL >a\\n b\\nc"),
+    ("doc", ">\n\n\n a\n", "=VAL >\\n\\na\\n"),
+    ("doc", ">+\n a\n\n", "=VAL >a\\n\\n"),
+    ("doc", "a: >\n b\n c # d\n# e\n", "+MAP / =VAL :a / =VAL >b c # d\\n / -MAP"),
+])
+fn foldedScalars(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn blockSequences() {
-    doc("- a\n- - b\n  - c\n-\n  - d\n-   - e\n    - f\n", "+SEQ / =VAL :a / +SEQ / =VAL :b / =VAL :c / -SEQ / +SEQ / =VAL :d / -SEQ / +SEQ / =VAL :e / =VAL :f / -SEQ / -SEQ")
-    doc("a:\n- b\n-\n  - c\nd:\n - e\n", "+MAP / =VAL :a / +SEQ / =VAL :b / +SEQ / =VAL :c / -SEQ / -SEQ / =VAL :d / +SEQ / =VAL :e / -SEQ / -MAP")
-    doc("- - - a\n    - b\n  - c\n", "+SEQ / +SEQ / +SEQ / =VAL :a / =VAL :b / -SEQ / =VAL :c / -SEQ / -SEQ")
-    doc("- - - - a", "+SEQ / +SEQ / +SEQ / +SEQ / =VAL :a / -SEQ / -SEQ / -SEQ / -SEQ")
-    doc("- !!seq\n - a\n", "+SEQ / +SEQ <tag:yaml.org,2002:seq> / =VAL :a / -SEQ / -SEQ")
-    doc("- !!seq\n  - a\n- &b\n  c: d\n", "+SEQ / +SEQ <tag:yaml.org,2002:seq> / =VAL :a / -SEQ / +MAP &b / =VAL :c / =VAL :d / -MAP / -SEQ")
-    doc("-a", "=VAL :-a")
+@test(arguments: [
+    ("doc", "- a\n- - b\n  - c\n-\n  - d\n-   - e\n    - f\n", "+SEQ / =VAL :a / +SEQ / =VAL :b / =VAL :c / -SEQ / +SEQ / =VAL :d / -SEQ / +SEQ / =VAL :e / =VAL :f / -SEQ / -SEQ"),
+    ("doc", "a:\n- b\n-\n  - c\nd:\n - e\n", "+MAP / =VAL :a / +SEQ / =VAL :b / +SEQ / =VAL :c / -SEQ / -SEQ / =VAL :d / +SEQ / =VAL :e / -SEQ / -MAP"),
+    ("doc", "- - - a\n    - b\n  - c\n", "+SEQ / +SEQ / +SEQ / =VAL :a / =VAL :b / -SEQ / =VAL :c / -SEQ / -SEQ"),
+    ("doc", "- - - - a", "+SEQ / +SEQ / +SEQ / +SEQ / =VAL :a / -SEQ / -SEQ / -SEQ / -SEQ"),
+    ("doc", "- !!seq\n - a\n", "+SEQ / +SEQ <tag:yaml.org,2002:seq> / =VAL :a / -SEQ / -SEQ"),
+    ("doc", "- !!seq\n  - a\n- &b\n  c: d\n", "+SEQ / +SEQ <tag:yaml.org,2002:seq> / =VAL :a / -SEQ / +MAP &b / =VAL :c / =VAL :d / -MAP / -SEQ"),
+    ("doc", "-a", "=VAL :-a"),
+])
+fn blockSequences(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
-@test
-fn blockMappings() {
-    doc("a: b\nc : d\n  \ne:\n  f: g\n", "+MAP / =VAL :a / =VAL :b / =VAL :c / =VAL :d / =VAL :e / +MAP / =VAL :f / =VAL :g / -MAP / -MAP")
-    doc("a: b\n - c\n", "+MAP / =VAL :a / =VAL :b - c / -MAP")
-    doc("? a\n: b\n? |\n  c\n: - d\n  - e\n? - f\n: g: h\n", "+MAP / =VAL :a / =VAL :b / =VAL |c\\n / +SEQ / =VAL :d / =VAL :e / -SEQ / +SEQ / =VAL :f / -SEQ / +MAP / =VAL :g / =VAL :h / -MAP / -MAP")
-    doc("?\n- a\n- b\n:\n- c\n- d\n", "+MAP / +SEQ / =VAL :a / =VAL :b / -SEQ / +SEQ / =VAL :c / =VAL :d / -SEQ / -MAP")
-    doc("? a: b\n  c: d\n: e: f\n  g: h\n", "+MAP / +MAP / =VAL :a / =VAL :b / =VAL :c / =VAL :d / -MAP / +MAP / =VAL :e / =VAL :f / =VAL :g / =VAL :h / -MAP / -MAP")
-    doc("? a\n  b\n# c\n: d\n e\n", "+MAP / =VAL :a b / =VAL :d e / -MAP")
-    doc("? &a a\n: &b b\n: c\n", "+MAP / =VAL &a :a / =VAL &b :b / =VAL : / =VAL :c / -MAP")
-    doc("- a: b\n  c: d\n- e:\n  - f\n- ? g\n  : h\n", "+SEQ / +MAP / =VAL :a / =VAL :b / =VAL :c / =VAL :d / -MAP / +MAP / =VAL :e / +SEQ / =VAL :f / -SEQ / -MAP / +MAP / =VAL :g / =VAL :h / -MAP / -SEQ")
-    doc("- &a b: c\n- !!str d: e\n  f: g", "+SEQ / +MAP / =VAL &a :b / =VAL :c / -MAP / +MAP / =VAL <tag:yaml.org,2002:str> :d / =VAL :e / =VAL :f / =VAL :g / -MAP / -SEQ")
-    doc("a:\n  - b\n\n  -  c: d\n     e: f\n", "+MAP / =VAL :a / +SEQ / =VAL :b / +MAP / =VAL :c / =VAL :d / =VAL :e / =VAL :f / -MAP / -SEQ / -MAP")
-    doc("a:    \n  b:    c   \n", "+MAP / =VAL :a / +MAP / =VAL :b / =VAL :c / -MAP / -MAP")
-    doc("? - a\n  - b\n: c\n", "+MAP / +SEQ / =VAL :a / =VAL :b / -SEQ / =VAL :c / -MAP")
-    doc("a: !!map {b: c}\n", "+MAP / =VAL :a / +MAP {} <tag:yaml.org,2002:map> / =VAL :b / =VAL :c / -MAP / -MAP")
-    badAt("? a\n- b\n", 2, 1)
-    bad("a: 1\n- b\n", "line 2, column 1: a sequence's entry where a mapping's key should be")
-    bad("a: 1\nb\n", "line 2, column 2: the end of the line where the ':' after a mapping's key should be")
-    bad("a: 1\n[b] c: 2\n", "line 2, column 5: 'c' where the ':' after a mapping's key should be")
-    badAt("a:\n - b\n - c\nd\n", 4, 2)
-    badAt(" a: 1\nb: 2\n", 2, 1)
-    badAt("- a: 1\n b: 2\n", 2, 2)
-    badAt("- a: \"b\"\n - c\n", 2, 2)
-    badAt("a: b\n? c\n : d\n", 3, 2)
+@test(arguments: [
+    ("doc", "a: b\nc : d\n  \ne:\n  f: g\n", "+MAP / =VAL :a / =VAL :b / =VAL :c / =VAL :d / =VAL :e / +MAP / =VAL :f / =VAL :g / -MAP / -MAP"),
+    ("doc", "a: b\n - c\n", "+MAP / =VAL :a / =VAL :b - c / -MAP"),
+    ("doc", "? a\n: b\n? |\n  c\n: - d\n  - e\n? - f\n: g: h\n", "+MAP / =VAL :a / =VAL :b / =VAL |c\\n / +SEQ / =VAL :d / =VAL :e / -SEQ / +SEQ / =VAL :f / -SEQ / +MAP / =VAL :g / =VAL :h / -MAP / -MAP"),
+    ("doc", "?\n- a\n- b\n:\n- c\n- d\n", "+MAP / +SEQ / =VAL :a / =VAL :b / -SEQ / +SEQ / =VAL :c / =VAL :d / -SEQ / -MAP"),
+    ("doc", "? a: b\n  c: d\n: e: f\n  g: h\n", "+MAP / +MAP / =VAL :a / =VAL :b / =VAL :c / =VAL :d / -MAP / +MAP / =VAL :e / =VAL :f / =VAL :g / =VAL :h / -MAP / -MAP"),
+    ("doc", "? a\n  b\n# c\n: d\n e\n", "+MAP / =VAL :a b / =VAL :d e / -MAP"),
+    ("doc", "? &a a\n: &b b\n: c\n", "+MAP / =VAL &a :a / =VAL &b :b / =VAL : / =VAL :c / -MAP"),
+    ("doc", "- a: b\n  c: d\n- e:\n  - f\n- ? g\n  : h\n", "+SEQ / +MAP / =VAL :a / =VAL :b / =VAL :c / =VAL :d / -MAP / +MAP / =VAL :e / +SEQ / =VAL :f / -SEQ / -MAP / +MAP / =VAL :g / =VAL :h / -MAP / -SEQ"),
+    ("doc", "- &a b: c\n- !!str d: e\n  f: g", "+SEQ / +MAP / =VAL &a :b / =VAL :c / -MAP / +MAP / =VAL <tag:yaml.org,2002:str> :d / =VAL :e / =VAL :f / =VAL :g / -MAP / -SEQ"),
+    ("doc", "a:\n  - b\n\n  -  c: d\n     e: f\n", "+MAP / =VAL :a / +SEQ / =VAL :b / +MAP / =VAL :c / =VAL :d / =VAL :e / =VAL :f / -MAP / -SEQ / -MAP"),
+    ("doc", "a:    \n  b:    c   \n", "+MAP / =VAL :a / +MAP / =VAL :b / =VAL :c / -MAP / -MAP"),
+    ("doc", "? - a\n  - b\n: c\n", "+MAP / +SEQ / =VAL :a / =VAL :b / -SEQ / =VAL :c / -MAP"),
+    ("doc", "a: !!map {b: c}\n", "+MAP / =VAL :a / +MAP {} <tag:yaml.org,2002:map> / =VAL :b / =VAL :c / -MAP / -MAP"),
+    ("badAt", "? a\n- b\n", "2:1"),
+    ("bad", "a: 1\n- b\n", "line 2, column 1: a sequence's entry where a mapping's key should be"),
+    ("bad", "a: 1\nb\n", "line 2, column 2: the end of the line where the ':' after a mapping's key should be"),
+    ("bad", "a: 1\n[b] c: 2\n", "line 2, column 5: 'c' where the ':' after a mapping's key should be"),
+    ("badAt", "a:\n - b\n - c\nd\n", "4:2"),
+    ("badAt", " a: 1\nb: 2\n", "2:1"),
+    ("badAt", "- a: 1\n b: 2\n", "2:2"),
+    ("badAt", "- a: \"b\"\n - c\n", "2:2"),
+    ("badAt", "a: b\n? c\n : d\n", "3:2"),
+])
+fn blockMappings(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
 // ---- Chapter 9: documents ----------------------------------------------------
 
-@test
-fn documentsAndTheirMarkers() {
-    stream("a\n---\nb\n...\nc\n", "+STR / +DOC / =VAL :a / -DOC / +DOC --- / =VAL :b / -DOC ... / +DOC / =VAL :c / -DOC / -STR")
-    stream("---\n---\n", "+STR / +DOC --- / =VAL : / -DOC / +DOC --- / =VAL : / -DOC / -STR")
-    stream("...\n...\n", "+STR / -STR")
-    stream("# c\n... # d\n# e\n", "+STR / -STR")
-    stream("--- # c\na\n... # d\n", "+STR / +DOC --- / =VAL :a / -DOC ... / -STR")
-    stream("---\ta\n", "+STR / +DOC --- / =VAL :a / -DOC / -STR")
-    stream("--- [a,\nb]\n--- \"c\n d\"\n--- 'e'\n", "+STR / +DOC --- / +SEQ [] / =VAL :a / =VAL :b / -SEQ / -DOC / +DOC --- / =VAL \"c d / -DOC / +DOC --- / =VAL 'e / -DOC / -STR")
-    stream("--- !!map\na: b\n--- &a\n- c\n", "+STR / +DOC --- / +MAP <tag:yaml.org,2002:map> / =VAL :a / =VAL :b / -MAP / -DOC / +DOC --- / +SEQ &a / =VAL :c / -SEQ / -DOC / -STR")
-    stream("a: 1\n---\nb: 2\n", "+STR / +DOC / +MAP / =VAL :a / =VAL :1 / -MAP / -DOC / +DOC --- / +MAP / =VAL :b / =VAL :2 / -MAP / -DOC / -STR")
-    stream("--- >\n a\n---\n...\n", "+STR / +DOC --- / =VAL >a\\n / -DOC / +DOC --- / =VAL : / -DOC ... / -STR")
-    doc("---a", "=VAL :---a")
-    doc("...a", "=VAL :...a")
-    doc(" --- a", "=VAL :--- a")
-    doc("a: ---\n", "+MAP / =VAL :a / =VAL :--- / -MAP")
-    doc("a:\n  ---\n  ...\n", "+MAP / =VAL :a / =VAL :--- ... / -MAP")
-    bad("a: 1\n... b\n", "line 2, column 5: 'b' after a value")
-    stream("--- a\n\"b\"\n", "+STR / +DOC --- / =VAL :a \"b\" / -DOC / -STR")
-    bad("[a]\n[b]\n", "line 2, column 1: '[' after the document's value: another document starts with '---'")
-    bad("\"a\"\nb: c\n", "line 2, column 1: 'b' after the document's value: another document starts with '---'")
-    bad("- a\n\"b\"", "line 2, column 1: '\"' after the document's value: another document starts with '---'")
+@test(arguments: [
+    ("stream", "a\n---\nb\n...\nc\n", "+STR / +DOC / =VAL :a / -DOC / +DOC --- / =VAL :b / -DOC ... / +DOC / =VAL :c / -DOC / -STR"),
+    ("stream", "---\n---\n", "+STR / +DOC --- / =VAL : / -DOC / +DOC --- / =VAL : / -DOC / -STR"),
+    ("stream", "...\n...\n", "+STR / -STR"),
+    ("stream", "# c\n... # d\n# e\n", "+STR / -STR"),
+    ("stream", "--- # c\na\n... # d\n", "+STR / +DOC --- / =VAL :a / -DOC ... / -STR"),
+    ("stream", "---\ta\n", "+STR / +DOC --- / =VAL :a / -DOC / -STR"),
+    ("stream", "--- [a,\nb]\n--- \"c\n d\"\n--- 'e'\n", "+STR / +DOC --- / +SEQ [] / =VAL :a / =VAL :b / -SEQ / -DOC / +DOC --- / =VAL \"c d / -DOC / +DOC --- / =VAL 'e / -DOC / -STR"),
+    ("stream", "--- !!map\na: b\n--- &a\n- c\n", "+STR / +DOC --- / +MAP <tag:yaml.org,2002:map> / =VAL :a / =VAL :b / -MAP / -DOC / +DOC --- / +SEQ &a / =VAL :c / -SEQ / -DOC / -STR"),
+    ("stream", "a: 1\n---\nb: 2\n", "+STR / +DOC / +MAP / =VAL :a / =VAL :1 / -MAP / -DOC / +DOC --- / +MAP / =VAL :b / =VAL :2 / -MAP / -DOC / -STR"),
+    ("stream", "--- >\n a\n---\n...\n", "+STR / +DOC --- / =VAL >a\\n / -DOC / +DOC --- / =VAL : / -DOC ... / -STR"),
+    ("doc", "---a", "=VAL :---a"),
+    ("doc", "...a", "=VAL :...a"),
+    ("doc", " --- a", "=VAL :--- a"),
+    ("doc", "a: ---\n", "+MAP / =VAL :a / =VAL :--- / -MAP"),
+    ("doc", "a:\n  ---\n  ...\n", "+MAP / =VAL :a / =VAL :--- ... / -MAP"),
+    ("bad", "a: 1\n... b\n", "line 2, column 5: 'b' after a value"),
+    ("stream", "--- a\n\"b\"\n", "+STR / +DOC --- / =VAL :a \"b\" / -DOC / -STR"),
+    ("bad", "[a]\n[b]\n", "line 2, column 1: '[' after the document's value: another document starts with '---'"),
+    ("bad", "\"a\"\nb: c\n", "line 2, column 1: 'b' after the document's value: another document starts with '---'"),
+    ("bad", "- a\n\"b\"", "line 2, column 1: '\"' after the document's value: another document starts with '---'"),
+])
+fn documentsAndTheirMarkers(_ kind: String, _ text: String, _ expected: String) {
+    checks(kind, text, expected)
 }
 
 // ---- Errors and limits -------------------------------------------------------
@@ -643,14 +706,10 @@ fn theEventsBeforeAnErrorComeFirst() throws {
 
 @test
 fn errorsAreSaid() {
-    do {
-        _ = try Yaml.parse("a: [")
-        fail("parsed")
-    } catch {
-        assertEqual(error.description(), "line 1, column 5: the text ends inside '[' of line 1, column 4")
-        assertEqual("\(error.offset)", "4")
-        expect(error == error && error.debugDescription().hasPrefix("YamlError"))
-    }
+    let error = require(expectThrows(YamlError.self) { _ = try Yaml.parse("a: [") })
+    assertEqual(error.description(), "line 1, column 5: the text ends inside '[' of line 1, column 4")
+    assertEqual("\(error.offset)", "4")
+    expect(error == error && error.debugDescription().hasPrefix("YamlError"))
 }
 
 @test
@@ -668,27 +727,27 @@ fn eventsHaveTheirPlaces() throws {
     assertEqual("\(last.offset) \(last.line) \(last.column)", "19 4 1")
 }
 
-@test
-fn depthIsLimited() {
-    let shallow = YamlOptions(maxDepth: 3)
-    for text in ["[[[a]]]", "{a: {b: {c: d}}}", "- - - a", "a:\n b:\n  c: d", "- a:\n  - b", "[a: [b]]", "[? a : [b]]"] {
-        require((try? Yaml.events(text, shallow)) != none, text)
-    }
-    for text in ["[[[[a]]]]", "{a: {b: {c: {d: e}}}}", "- - - - a", "a:\n b:\n  c:\n   d: e", "- a:\n  - b:\n    - c", "[[[a: b]]]", "[[[? a : b]]]", "? ? ? ? a", "- - - ? a", "- - - : a"] {
-        do {
-            _ = try Yaml.events(text, shallow)
-            fail(text)
-        } catch {
-            require(error.kind == .TooDeep, error.description())
-        }
-    }
+@test(arguments: [
+    "[[[a]]]", "{a: {b: {c: d}}}", "- - - a", "a:\n b:\n  c: d", "- a:\n  - b", "[a: [b]]", "[? a : [b]]",
+])
+fn depthIsLimited(_ text: String) {
+    expect((try? Yaml.events(text, YamlOptions(maxDepth: 3))) != none)
+}
+
+@test(arguments: [
+    "[[[[a]]]]", "{a: {b: {c: {d: e}}}}", "- - - - a", "a:\n b:\n  c:\n   d: e", "- a:\n  - b:\n    - c", "[[[a: b]]]",
+    "[[[? a : b]]]", "? ? ? ? a", "- - - ? a", "- - - : a",
+])
+fn deeperThanAllowedIsRefused(_ text: String) {
+    let error = expectThrows(YamlError.self) { _ = try Yaml.events(text, YamlOptions(maxDepth: 3)) }
+    expect(error?.kind == .TooDeep)
 }
 
 // Each input is one a parser that reads back over its text is slow on: a
 // hundred thousand of something takes about a hundred times as long as a
 // thousand, not ten thousand times. What is asserted is the events, which a
 // quadratic parser would not get to in a test's time.
-@test
+@test(tags: ["slow"], timeout: .minutes(1))
 fn pathologicalInputsAreReadInLinearTime() throws {
     let n = 100000
     assertEqual(try Yaml.events("[" + "a,".repeated(n) + "]").count, n + 6)
@@ -711,12 +770,12 @@ fn pathologicalInputsAreReadInLinearTime() throws {
     assertEqual(try Yaml.events(("- ".repeated(200) + "a\n").repeated(500)).count, 500 * 399 + 6)
     assertEqual(try Yaml.events(("[".repeated(200) + "]".repeated(200) + ": a\n").repeated(500)).count, 500 * 401 + 6)
     // Those that are errors are found as fast.
-    badAt("a ".repeated(n) + "\n" + ": b", 2, 1)
-    badAt("[".repeated(n), 1, 257)
-    badAt("- ".repeated(n), 1, 513)
-    badAt("{a: ".repeated(n), 1, 1025)
-    badAt("\"" + "\\".repeated(n * 2), 1, n * 2 + 2)
-    badAt("[a, " + "b\n".repeated(n), n + 1, 1)
-    badAt("x: 'a\n" + " \n".repeated(n), n + 2, 1)
-    badAt("! ".repeated(n), 1, 3)
+    badAt("a ".repeated(n) + "\n" + ": b", "2:1")
+    badAt("[".repeated(n), "1:257")
+    badAt("- ".repeated(n), "1:513")
+    badAt("{a: ".repeated(n), "1:1025")
+    badAt("\"" + "\\".repeated(n * 2), "1:\(n * 2 + 2)")
+    badAt("[a, " + "b\n".repeated(n), "\(n + 1):1")
+    badAt("x: 'a\n" + " \n".repeated(n), "\(n + 2):1")
+    badAt("! ".repeated(n), "1:3")
 }

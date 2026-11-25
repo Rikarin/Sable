@@ -37,21 +37,18 @@ tail: ~
 
 """
 
-@test
-fn anUneditedTextIsTheSameByteForByte() throws {
-    let texts = [
-        "", "\n", "# only\n", "a", "a: 1", config, "\u{FEFF}a: b\r\n\r\n# c\r\nd:  e\r\n", "a: 1\rb: |\r x\r",
-        "%YAML 1.2\n%TAG ! !x\n---   # c\n!a b\n...  # d\n\n# e\n--- |+\n x\n\n\n--- >-\n\n y\n...\nz", "--- a\n--- b\n---\n---\n...\n# t", "? a\n:   b\n? c\n",
-        "[a,\n  b ,\t\"c\\\n   d\"  , # e\n{f: g}: h]\n", "- - - a\n-\n  - b\n- &x !!str 'c'\n- *x\n", "a:    \n  - \tb\n\n\n\n  -   c:   d\n      e:  f",
-    ]
-    for text in texts {
-        let stream = try YamlStream(text)
-        assertEqual(try stream.text(), text)
-        for document in stream.documents {
-            _ = try document.text()
-        }
+@test(arguments: [
+    "", "\n", "# only\n", "a", "a: 1", config, "\u{FEFF}a: b\r\n\r\n# c\r\nd:  e\r\n", "a: 1\rb: |\r x\r",
+    "%YAML 1.2\n%TAG ! !x\n---   # c\n!a b\n...  # d\n\n# e\n--- |+\n x\n\n\n--- >-\n\n y\n...\nz",
+    "--- a\n--- b\n---\n---\n...\n# t", "? a\n:   b\n? c\n", "[a,\n  b ,\t\"c\\\n   d\"  , # e\n{f: g}: h]\n",
+    "- - - a\n-\n  - b\n- &x !!str 'c'\n- *x\n", "a:    \n  - \tb\n\n\n\n  -   c:   d\n      e:  f",
+])
+fn anUneditedTextIsTheSameByteForByte(_ text: String) throws {
+    let stream = try YamlStream(text)
+    assertEqual(try stream.text(), text)
+    for document in stream.documents {
+        _ = try document.text()
     }
-    assertEqual((try YamlStream(texts[8])).documents.count, 4)
 }
 
 @test
@@ -213,6 +210,7 @@ fn collectionsTakeAnothersPlace() throws {
 
 @test
 fn documentsAreAddedAndTakenOut() throws {
+    assertEqual((try YamlStream("%YAML 1.2\n%TAG ! !x\n---   # c\n!a b\n...  # d\n\n# e\n--- |+\n x\n\n\n--- >-\n\n y\n...\nz")).documents.count, 4)
     let stream = try YamlStream("a: 1")
     stream.documents.append(YamlDocument(YamlNode.string("b")))
     assertEqual(try stream.text(), "a: 1\n---\nb\n")
@@ -230,18 +228,18 @@ fn documentsAreAddedAndTakenOut() throws {
 // ---- Properties --------------------------------------------------------------
 
 struct Edits {
-    var random: SeededRandomNumberGenerator
+    let choices: Choices
 
-    mutating fn below(_ n: Int) -> Int {
-        return Int.random(in: 0..<n, using: &random)
+    fn below(_ n: Int) -> Int {
+        return choices.below(n)
     }
 
-    mutating fn scalar() -> YamlNode {
+    fn scalar() -> YamlNode {
         let texts = ["a", "", "no", "x: y", "two\nlines\n", " s", "1", "#", "'", "é", "k\n\n", "\n z"]
         return below(2) == 0 ? YamlNode.int(below(100)) : YamlNode.string(texts[below(texts.count)])
     }
 
-    mutating fn made(_ depth: Int) -> YamlNode {
+    fn made(_ depth: Int) -> YamlNode {
         let choice = below(depth > 2 ? 1 : 3)
         let style: YamlCollectionStyle = below(3) == 0 ? .Flow : .Block
         let node = choice == 0 ? scalar() : choice == 1 ? YamlNode.sequence(style: style) : YamlNode.mapping(style: style)
@@ -258,7 +256,7 @@ struct Edits {
     }
 
     // A random node of the tree, a collection if it can be.
-    mutating fn pick(_ node: YamlNode) -> YamlNode {
+    fn pick(_ node: YamlNode) -> YamlNode {
         var at = node
         while true {
             if at.kind == .Scalar || at.count == 0 || below(3) == 0 {
@@ -269,7 +267,7 @@ struct Edits {
         }
     }
 
-    mutating fn change(_ root: YamlNode) {
+    fn change(_ root: YamlNode) {
         let node = pick(root)
         let choice = below(5)
         if node.kind == .Scalar {
@@ -302,33 +300,28 @@ struct Edits {
 // Whatever is changed, what is written is the nodes; and it is written by
 // changing the text, not from nothing: the comment at its top stays.
 @test
-fn anyEditsReadBackAsTheyWereMade() throws {
-    var edits = Edits { random: SeededRandomNumberGenerator(seed: 79) }
+fn anyEditsReadBackAsTheyWereMade() {
     let layouts = [YamlPrintOptions(), YamlPrintOptions(indent: 4), YamlPrintOptions(indentSequences: false), YamlPrintOptions(flow: true)]
-    var rounds = 0
-    var kept = 0
-    while rounds < 600 {
+    // The text, and the choices its edits are made by.
+    let texts: Gen<(String, U64[>..])> = Gen((choices) => {
+        let edits = Edits { choices: choices }
         let tree = YamlNode.mapping([YamlEntry(YamlNode.string("first"), edits.made(0)), YamlEntry(YamlNode.string("second"), edits.made(0)), YamlEntry(YamlNode.string("third"), edits.made(0))])
-        let text = "# top\n\n" + (try Yaml.print(tree, layouts[edits.below(4)])) + "# bottom\n"
+        let text = "# top\n\n" + (try! Yaml.print(tree, layouts[edits.below(4)])) + "# bottom\n"
+        var script: U64[>..] = []
+        for _ in 0...edits.below(4) {
+            script.append(choices.draw(upTo: U64.max))
+        }
+        return (text, script)
+    })
+    forAll(texts, cases: 600) { (edited: (String, U64[>..])) in
+        let text = edited.0
         let stream = try YamlStream(text)
         assertEqual(try stream.text(), text)
-        var n = 1 + edits.below(4)
-        while n > 0 {
-            edits.change(stream.documents[0].root)
-            n -= 1
+        for seed in edited.1 {
+            Edits { choices: Choices(seed: seed) }.change(stream.documents[0].root)
         }
         let after = try stream.text()
-        do {
-            if (try Yaml.parse(after)) != stream.documents[0].root {
-                fail(text + "\nbecame\n" + after)
-            }
-        } catch {
-            fail(text + "\nbecame\n" + after + error.description())
-        }
-        if after.hasPrefix("# top\n") {
-            kept += 1
-        }
-        rounds += 1
+        expect((try Yaml.parse(after)) == stream.documents[0].root, text + "\nbecame\n" + after)
+        expect(after.hasPrefix("# top\n"), after)
     }
-    assertEqual(kept, rounds)
 }

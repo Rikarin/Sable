@@ -426,3 +426,164 @@ fn parsingFloats(_ b: Bencher) {
         }
     })
 }
+
+// ---- The quick ways against the long ones --------------------------------------
+
+@test
+fn textWithAndWithoutSpaceAroundIsOneNumber() {
+    // Space around it takes a number the long way.
+    var random = Lcg(state: 4242)
+    for _ in 0..<500 {
+        let bits = random.next()
+        let value = Int(bits >> (bits % 64) & 0x7FFFFFFFFFFFFFFF) * (bits % 3 == 0 ? -1 : 1)
+        for radix in [2, 7, 8, 10, 16, 36] {
+            let text = written(value, radix: radix)
+            assertEqual(try! Int.parse(text, radix: radix), value)
+            assertEqual(try! Int.parse(" " + text, radix: radix, styles: .Any), value)
+            assertEqual(try? I16.parse(text, radix: radix), try? I16.parse(" " + text, radix: radix, styles: .Any))
+            assertEqual(try? U8.parse(text, radix: radix), try? U8.parse(" " + text, radix: radix, styles: .Any))
+            assertEqual(try? U64.parse(text, radix: radix), try? U64.parse(" " + text, radix: radix, styles: .Any))
+            assertEqual(try? I128.parse(text, radix: radix), try? I128.parse(" " + text, radix: radix, styles: .Any))
+        }
+        let float = F64.fromBits(bits)
+        if float - float == 0.0 {
+            let text = "\(float)"
+            assertEqual(try! F64.parse(text).bits, bits)
+            assertEqual(try! F64.parse(" " + text, styles: .Any).bits, bits)
+            assertEqual(try! F32.parse(text), try! F32.parse(" " + text, styles: .Any))
+        }
+    }
+}
+
+/// An integer's digits in a radix, with a '-' for a negative one.
+fn written(_ value: Int, radix: Int) -> String {
+    let symbols = "0123456789abcdefghijklmnopqrstuvwxyz"
+    var rest = value < 0 ? -value : value
+    var text = ""
+    while true {
+        text = symbols.slice(from: rest % radix, to: rest % radix + 1) + text
+        rest = rest / radix
+        if rest == 0 {
+            return value < 0 ? "-" + text : text
+        }
+    }
+}
+
+@test
+fn charactersBesideTheDigitsAreNoDigits() {
+    for text in ["/", ":", "@", "[", "`", "{", "1/", "1:", "a", "1 ", " 1", "+", "-", "--1", "+-1", "1é", "é"] {
+        assertEqual(try? Int.parse(text), none)
+        assertEqual(try? F64.parse(text), none)
+    }
+    assertEqual(try? Int.parse("G", radix: 16), none)
+    assertEqual(try? Int.parse("@", radix: 36), none)
+    assertEqual(try? Int.parse("{", radix: 36), none)
+    assertEqual(try? Int.parse("5", radix: 5), none)
+    assertEqual(try? Int.parse("-1", radix: 10, styles: NumberStyles.None), none)
+    assertEqual(try? U8.parse("256"), none)
+    assertEqual(try? U8.parse("-1"), none)
+    assertEqual(try! U8.parse("-0"), 0)
+    assertEqual(try! U64.parse("18446744073709551615"), 18446744073709551615)
+}
+
+fn zeros(_ count: Int) -> String {
+    var text = ""
+    for _ in 0..<count {
+        text += "0"
+    }
+    return text
+}
+
+@test
+fn floatsHardToReadAreNearest() {
+    // Halfway between two doubles, and a digit to either side of it.
+    assertEqual(try! F64.parse("9007199254740993"), 9007199254740992.0)
+    assertEqual(try! F64.parse("9007199254740993.000000000000000000000000000001"), 9007199254740994.0)
+    assertEqual(try! F64.parse("9007199254740992.999999999999999999999999999999"), 9007199254740992.0)
+    assertEqual(try! F64.parse("1.00000000000000011102230246251565404236316680908203125"), 1.0)
+    assertEqual(try! F64.parse("1.00000000000000011102230246251565404236316680908203126"), 1.0000000000000002)
+    // The least subnormal, and half of it, which rounds to even: to zero.
+    assertEqual(try! F64.parse("4.9e-324").bits, 1)
+    assertEqual(try! F64.parse("2.4703282292062327e-324").bits, 0)
+    assertEqual(try! F64.parse("2.4703282292062328e-324").bits, 1)
+    assertEqual(try! F64.parse("2.2250738585072011e-308").bits, 0xFFFFFFFFFFFFF)
+    assertEqual(try! F64.parse("2.2250738585072012e-308").bits, 0x10000000000000)
+    // The greatest, and what rounds past it.
+    assertEqual(try! F64.parse("1.7976931348623158e308"), 1.7976931348623157e308)
+    assert(try! F64.parse("1.7976931348623159e308") > 1.7976931348623157e308)
+    assert(try! F64.parse("-1e99999999999999999999") < -1.7976931348623157e308)
+    assertEqual(try! F64.parse("1e-99999999999999999999"), 0.0)
+    assertEqual(try! F64.parse("0e99999999999999999999"), 0.0)
+    assertEqual(try! F64.parse("1" + zeros(400) + "e-400"), 1.0)
+    assertEqual(try! F64.parse("0." + zeros(400) + "1e401"), 1.0)
+    // Rounded once: as a double this is the midpoint of two floats.
+    assertEqual(try! F32.parse("1.000000059604644775390625"), 1.0)
+    assertEqual(try! F32.parse("1.000000059604644775390625000000000001"), 1.0000001)
+    assertEqual(try! F32.parse("7.0064923216240853e-46").bits, 0)
+    assertEqual(try! F32.parse("7.0064923216240854e-46").bits, 1)
+}
+
+@test
+fn floatsAreWrittenAsTheirShortestDigits() {
+    let pairs: (F64, String)[>..] = [
+        (0.0, "0.0"),
+        (-0.0, "-0.0"),
+        (1.0, "1.0"),
+        (-100.0, "-100.0"),
+        (0.1, "0.1"),
+        (0.0001, "0.0001"),
+        (0.00001, "1e-05"),
+        (123456.789, "123456.789"),
+        (1e15, "1000000000000000.0"),
+        (1e16, "1e+16"),
+        (1.5e16, "1.5e+16"),
+        (1e100, "1e+100"),
+        (9007199254740991.0, "9007199254740991.0"),
+        (9007199254740992.0, "9007199254740992.0"),
+        (1e23, "1e+23"),
+        (9.5e-320, "9.5e-320"),
+        (4.9e-324, "5e-324"),
+        (1.7976931348623157e308, "1.7976931348623157e+308"),
+        (2.2250738585072014e-308, "2.2250738585072014e-308"),
+        (0.30000000000000004, "0.30000000000000004"),
+        (12345678901234568.0, "1.2345678901234568e+16"),
+        (1.2345678901234566e-7, "1.2345678901234566e-07"),
+        // A power of two, 2^-44: the nearest of sixteen digits does not read back as it.
+        (5.6843418860808015e-14, "5.6843418860808015e-14"),
+        (18014398509481984.0, "1.8014398509481984e+16"),
+    ]
+    for (value, text) in pairs {
+        assertEqual("\(value)", text)
+    }
+    let singles: (F32, String)[>..] = [
+        (1.1, "1.1"),
+        (16777216.0, "16777216.0"),
+        (33554432.0, "33554432.0"),
+        (3.4028235e38, "3.4028235e+38"),
+        (1e-45, "1e-45"),
+        (1.1754944e-38, "1.1754944e-38"),
+        (0.3, "0.3"),
+    ]
+    for (value, text) in singles {
+        assertEqual("\(value)", text)
+    }
+}
+
+@test
+fn wideIntegersAreWrittenInFull() {
+    let nines: U128 = 9999999999999999999
+    assertEqual("\(nines)", "9999999999999999999")
+    assertEqual("\(nines + 1)", "10000000000000000000")
+    assertEqual("\(nines * 10)", "99999999999999999990")
+    assertEqual("\((nines + 1) * (nines + 1) * 3 + 7)", "300000000000000000000000000000000000007")
+    assertEqual("\(U128.max)", "340282366920938463463374607431768211455")
+    assertEqual("\(I128.min)", "-170141183460469231731687303715884105728")
+    assertEqual("\(U64.max) \(Int.min) \(Int.max)", "18446744073709551615 -9223372036854775808 9223372036854775807")
+    var power = 1
+    for count in 1..<19 {
+        power = power * 10
+        assertEqual("\(power - 1)".count, count)
+        assertEqual("\(power)".count, count + 1)
+        assertEqual("\(-power)", "-1" + zeros(count))
+    }
+}

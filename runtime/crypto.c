@@ -14,7 +14,7 @@
 #if defined(__ARM_FEATURE_SHA512) || (defined(__clang_major__) && __clang_major__ >= 16) || (!defined(__clang__) && defined(__GNUC__) && __GNUC__ >= 9)
 #define SABLE_CRYPTO_ARM64 1
 #endif
-#elif defined(__x86_64__) || defined(_M_X64)
+#elif defined(SABLE_X64)
 #define SABLE_CRYPTO_X64 1
 #endif
 
@@ -73,11 +73,7 @@ static const uint32_t sha256_constants[64] __attribute__((aligned(16))) = {
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 };
 
-#endif
-
-#if defined(SABLE_CRYPTO_ARM64)
-
-static const uint64_t sha512_constants[80] __attribute__((aligned(16))) = {
+static const uint64_t sha512_constants[80] __attribute__((aligned(32))) = {
     0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc, 0x3956c25bf348b538, 0x59f111f1b605d019, 0x923f82a4af194f9b, 0xab1c5ed5da6d8118,
     0xd807aa98a3030242, 0x12835b0145706fbe, 0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2, 0x72be5d74f27b896f, 0x80deb1fe3b1696b1, 0x9bdc06a725c71235, 0xc19bf174cf692694,
     0xe49b69c19ef14ad2, 0xefbe4786384f25e3, 0x0fc19dc68b8cd5b5, 0x240ca1cc77ac9c65, 0x2de92c6f592b0275, 0x4a7484aa6ea6e483, 0x5cb0a9dcbd41fbd4, 0x76f988da831153b5,
@@ -89,6 +85,10 @@ static const uint64_t sha512_constants[80] __attribute__((aligned(16))) = {
     0xca273eceea26619c, 0xd186b8c721c0c207, 0xeada7dd6cde0eb1e, 0xf57d4f7fee6ed178, 0x06f067aa72176fba, 0x0a637dc5a2c898a6, 0x113f9804bef90dae, 0x1b710b35131c471b,
     0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c, 0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817,
 };
+
+#endif
+
+#if defined(SABLE_CRYPTO_ARM64)
 
 static const uint64_t keccak_constants[24] = {
     0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000, 0x000000000000808b, 0x0000000080000001,
@@ -301,7 +301,8 @@ static int crypto_features(void) {
     }
 
     bool vectors = (c >> 9 & 1) && (c >> 19 & 1);   // SSSE3 and SSE4.1
-    return vectors && __get_cpuid_count(7, 0, &a, &b, &c, &d) && (b >> 29 & 1) ? 1 : 0;
+    int sha = vectors && __get_cpuid_count(7, 0, &a, &b, &c, &d) && (b >> 29 & 1) ? 1 : 0;
+    return sha | (processor_has_avx2() ? 2 : 0);
 }
 
 // ---- SHA-256, by the SHA extensions ------------------------------------------
@@ -347,6 +348,93 @@ SABLE_TARGET_SHANI static void sha256_blocks(uint32_t *state, const uint8_t *dat
     _mm_storeu_si128((__m128i *)(state + 4), _mm_alignr_epi8(high, low, 8));
 }
 
+void sable_secure_zero(void *bytes, int64_t count);
+
+// ---- SHA-512, by AVX2 and BMI2 -------------------------------------------------
+
+#define SABLE_ROTATE_LANES(x, n) _mm256_or_si256(_mm256_srli_epi64(x, n), _mm256_slli_epi64(x, 64 - (n)))
+#define SABLE_ROTATE(x, n) ((x) >> (n) | (x) << (64 - (n)))
+
+// A round, its message word and constant added already. The words take each
+// other's names from one to the next rather than move.
+#define SABLE_SHA512_ROUND(a, b, c, d, e, f, g, h, wk)                                                      \
+    do {                                                                                                    \
+        h += (wk) + (SABLE_ROTATE(e, 14) ^ SABLE_ROTATE(e, 18) ^ SABLE_ROTATE(e, 41)) + ((e & f) + (~e & g)); \
+        d += h;                                                                                             \
+        h += (SABLE_ROTATE(a, 28) ^ SABLE_ROTATE(a, 34) ^ SABLE_ROTATE(a, 39)) + ((a & b) | (c & (a | b))); \
+    } while (0)
+
+// The eighty rounds, over message words with their constants, which are two
+// in four: those of one block of a pair.
+SABLE_TARGET_AVX2 static void sha512_rounds(uint64_t *state, const uint64_t *wk) {
+    uint64_t a = state[0], b = state[1], c = state[2], d = state[3];
+    uint64_t e = state[4], f = state[5], g = state[6], h = state[7];
+    for (int t = 0; t < 80; t += 8, wk += 16) {
+        SABLE_SHA512_ROUND(a, b, c, d, e, f, g, h, wk[0]);
+        SABLE_SHA512_ROUND(h, a, b, c, d, e, f, g, wk[1]);
+        SABLE_SHA512_ROUND(g, h, a, b, c, d, e, f, wk[4]);
+        SABLE_SHA512_ROUND(f, g, h, a, b, c, d, e, wk[5]);
+        SABLE_SHA512_ROUND(e, f, g, h, a, b, c, d, wk[8]);
+        SABLE_SHA512_ROUND(d, e, f, g, h, a, b, c, wk[9]);
+        SABLE_SHA512_ROUND(c, d, e, f, g, h, a, b, wk[12]);
+        SABLE_SHA512_ROUND(b, c, d, e, f, g, h, a, wk[13]);
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+    state[5] += f;
+    state[6] += g;
+    state[7] += h;
+}
+
+// The schedules of two blocks at once, one in each half of the registers (the
+// same one in both, for a block that is left), and then the rounds of each.
+SABLE_TARGET_AVX2 static void sha512_blocks(uint64_t *state, const uint8_t *data, int64_t count) {
+    const __m256i big = _mm256_broadcastsi128_si256(_mm_set_epi64x(0x08090a0b0c0d0e0fll, 0x0001020304050607ll));
+    uint64_t wk[160] __attribute__((aligned(32)));
+    while (count >= 128) {
+        const uint8_t *next = count >= 256 ? data + 128 : data;
+        __m256i w[8];
+        SABLE_UNROLL
+        for (int i = 0; i < 8; i++) {
+            __m256i pair = _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)(data + 16 * i)));
+            pair = _mm256_inserti128_si256(pair, _mm_loadu_si128((const __m128i *)(next + 16 * i)), 1);
+            w[i] = _mm256_shuffle_epi8(pair, big);
+        }
+
+        // Two words of each block a step.
+        SABLE_UNROLL
+        for (int i = 0; i < 40; i++) {
+            if (i >= 8) {
+                __m256i one = _mm256_alignr_epi8(w[(i + 1) & 7], w[i & 7], 8);
+                __m256i nine = _mm256_alignr_epi8(w[(i + 5) & 7], w[(i + 4) & 7], 8);
+                __m256i fourteen = w[(i + 7) & 7];
+                __m256i s0 = _mm256_xor_si256(_mm256_xor_si256(SABLE_ROTATE_LANES(one, 1), SABLE_ROTATE_LANES(one, 8)), _mm256_srli_epi64(one, 7));
+                __m256i s1 = _mm256_xor_si256(_mm256_xor_si256(SABLE_ROTATE_LANES(fourteen, 19), SABLE_ROTATE_LANES(fourteen, 61)), _mm256_srli_epi64(fourteen, 6));
+                w[i & 7] = _mm256_add_epi64(_mm256_add_epi64(w[i & 7], s0), _mm256_add_epi64(nine, s1));
+            }
+
+            __m256i k = _mm256_broadcastsi128_si256(_mm_load_si128((const __m128i *)(sha512_constants + 2 * i)));
+            _mm256_store_si256((__m256i *)(wk + 4 * i), _mm256_add_epi64(w[i & 7], k));
+        }
+
+        sha512_rounds(state, wk);
+        if (count >= 256) {
+            sha512_rounds(state, wk + 2);
+            count -= 256;
+            data += 256;
+        } else {
+            count -= 128;
+        }
+    }
+
+    // What is hashed may be a secret.
+    sable_secure_zero(wk, sizeof wk);
+}
+
 #endif
 
 // ---- Choosing ------------------------------------------------------------------
@@ -383,13 +471,13 @@ static bool crypto_blocks(int64_t kind, void *state, const uint8_t *data, int64_
                 return true;
             }
             break;
-#if defined(SABLE_CRYPTO_ARM64)
         case SABLE_CRYPTO_SHA512:
             if (available & 2) {
                 sha512_blocks(state, data, count);
                 return true;
             }
             break;
+#if defined(SABLE_CRYPTO_ARM64)
         case SABLE_CRYPTO_KECCAK:
             if (available & 4) {
                 keccak_blocks(state, data, count, kind >> 8);

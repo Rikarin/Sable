@@ -922,230 +922,35 @@ SableString *sable_string_from_char(int32_t scalar) {
     return make_string(bytes, encode(scalar, bytes));
 }
 
-// Digits written backwards into a buffer, not through snprintf: an
+// Digits written straight into the string, not through snprintf: an
 // interpolated number is common, and the format machinery is most of its cost.
+static SableString *string_from_magnitude(uint64_t magnitude, bool negative) {
+    int length = count_digits(magnitude) + negative;
+    SableString *string = new_string(length, length);
+    write_digits(magnitude, string->bytes + length);
+    if (negative) {
+        string->bytes[0] = '-';
+    }
+
+    return string;
+}
+
 SableString *sable_string_from_int(int64_t value) {
-    char text[24];
-    char *end = text + sizeof text, *start = end;
-    uint64_t magnitude = value < 0 ? 0 - (uint64_t)value : (uint64_t)value;
-    do {
-        *--start = (char)('0' + magnitude % 10);
-        magnitude /= 10;
-    } while (magnitude != 0);
-
-    if (value < 0) {
-        *--start = '-';
-    }
-
-    return make_counted(start, end - start, end - start);
+    return string_from_magnitude(value < 0 ? 0 - (uint64_t)value : (uint64_t)value, value < 0);
 }
 
-// A float is written as its shortest round-tripping digits — 0.1, not
-// 0.10000000000000001 — laid out the way Python's repr does: plain decimal
-// with a point for exponents -4 through 15 (100.0, 4.0, -0.0, 0.0001), and
-// scientific outside them (1e+20, 1.5e-07). The point keeps a whole float
-// from reading as an integer. The interpreter formats the same way.
-//
-// 'scientific' is printf's %.Ne of the value, whose digits are already the
-// shortest that round-trip; this only moves the point.
-static void layout_float(const char *scientific, char *text, size_t size) {
-    const char *p = scientific;
-    bool negative = *p == '-';
-    if (negative) {
-        p++;
-    }
-
-    char digits[32];
-    int count = 0;
-    for (; *p != 'e' && *p != '\0'; p++) {
-        if (*p != '.' && count < (int)sizeof digits - 1) {
-            digits[count++] = *p;
-        }
-    }
-
-    int exponent = *p == 'e' ? atoi(p + 1) : 0;
-
-    // %.Ne pads with zeros the shortest digits never need.
-    while (count > 1 && digits[count - 1] == '0') {
-        count--;
-    }
-
-    digits[count] = '\0';
-
-    char *out = text, *limit = text + size - 1;
-#define PUT(c) do { if (out < limit) *out++ = (c); } while (0)
-    if (negative) {
-        PUT('-');
-    }
-
-    if (exponent < -4 || exponent >= 16) {
-        PUT(digits[0]);
-        if (count > 1) {
-            PUT('.');
-            for (int i = 1; i < count; i++) {
-                PUT(digits[i]);
-            }
-        }
-
-        char tail[8];
-        snprintf(tail, sizeof tail, "e%c%02d", exponent < 0 ? '-' : '+', exponent < 0 ? -exponent : exponent);
-        for (char *t = tail; *t != '\0'; t++) {
-            PUT(*t);
-        }
-    } else if (exponent < 0) {
-        PUT('0');
-        PUT('.');
-        for (int i = -1; i > exponent; i--) {
-            PUT('0');
-        }
-
-        for (int i = 0; i < count; i++) {
-            PUT(digits[i]);
-        }
-    } else {
-        for (int i = 0; i <= exponent; i++) {
-            PUT(i < count ? digits[i] : '0');
-        }
-
-        PUT('.');
-        if (count > exponent + 1) {
-            for (int i = exponent + 1; i < count; i++) {
-                PUT(digits[i]);
-            }
-        } else {
-            PUT('0');
-        }
-    }
-#undef PUT
-
-    *out = '\0';
-}
-
-static bool format_special(double value, char *text, size_t size) {
-    if (isnan(value)) {
-        snprintf(text, size, "nan");
-        return true;
-    }
-
-    if (isinf(value)) {
-        snprintf(text, size, value > 0 ? "inf" : "-inf");
-        return true;
-    }
-
-    return false;
-}
-
-// The shortest decimal that round-trips, as printf's %.Ne would write it,
-// when it has at most 15 digits: an integer n and the fewest decimal places k
-// with n / 10^k the value. Both are exact doubles and division rounds
-// correctly, so the quotient is the double the decimal names. Two decimals of
-// 15 digits are never the same double, so there is one n at most for a k; and
-// the value times 10^k, each rounding a part in 2^53 of it, is within half of
-// that n. False when there is none.
-static bool decimal_f64(double value, char *scientific) {
-    static const double powers[] = {
-        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
-        1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
-    };
-
-    double magnitude = fabs(value);
-    for (int places = 0; places <= 22; places++) {
-        double scaled = magnitude * powers[places];
-        if (scaled >= 1e15) {
-            return false;
-        }
-
-        uint64_t n = (uint64_t)(scaled + 0.5);
-        if ((double)n / powers[places] != magnitude) {
-            continue;
-        }
-
-        char digits[20];
-        int count = 0;
-        for (; n != 0; n /= 10) {
-            digits[count++] = (char)('0' + n % 10);
-        }
-
-        char *out = scientific;
-        if (value < 0) {
-            *out++ = '-';
-        }
-
-        for (int i = count - 1; i >= 0; i--) {
-            *out++ = digits[i];
-        }
-
-        int exponent = count - 1 - places;
-        *out++ = 'e';
-        if (exponent < 0) {
-            *out++ = '-';
-            exponent = -exponent;
-        }
-
-        if (exponent >= 10) {
-            *out++ = (char)('0' + exponent / 10);
-        }
-
-        *out++ = (char)('0' + exponent % 10);
-        *out = '\0';
-        return true;
-    }
-
-    return false;
-}
-
-static void format_f64(double value, char *text, size_t size) {
-    if (format_special(value, text, size)) {
-        return;
-    }
-
-    // Between these, every decimal of 15 digits or fewer is one that
-    // decimal_f64 tries: what it does not find has 16 or 17.
-    char scientific[40];
-    double magnitude = fabs(value);
-    bool tried = magnitude >= 1e-7 && magnitude < 1e15;
-    if (tried && decimal_f64(value, scientific)) {
-        layout_float(scientific, text, size);
-        return;
-    }
-
-    for (int precision = tried ? 16 : 1; precision <= 17; precision++) {
-        snprintf(scientific, sizeof scientific, "%.*e", precision - 1, value);
-        if (precision == 17 || strtod(scientific, NULL) == value) {
-            break;
-        }
-    }
-
-    layout_float(scientific, text, size);
+static SableString *make_ascii(const char *text, int length) {
+    return make_counted(text, length, length);
 }
 
 SableString *sable_string_from_f64(double value) {
-    char text[40];
-    format_f64(value, text, sizeof text);
-    return make_cstring(text);
-}
-
-// F32 the same way, against a float: 1.1, not 1.10000002.
-static void format_f32(float value, char *text, size_t size) {
-    if (format_special(value, text, size)) {
-        return;
-    }
-
-    char scientific[40];
-    for (int precision = 1; precision <= 9; precision++) {
-        snprintf(scientific, sizeof scientific, "%.*e", precision - 1, (double)value);
-        if (precision == 9 || strtof(scientific, NULL) == value) {
-            break;
-        }
-    }
-
-    layout_float(scientific, text, size);
+    char text[FLOAT_TEXT];
+    return make_ascii(text, format_f64(value, text));
 }
 
 SableString *sable_string_from_f32(float value) {
-    char text[40];
-    format_f32(value, text, sizeof text);
-    return make_cstring(text);
+    char text[FLOAT_TEXT];
+    return make_ascii(text, format_f32(value, text));
 }
 
 // A finite float rounded to the nearest half (ties to even) and widened
@@ -1175,12 +980,13 @@ static float round_to_half(float value) {
 // F16 the same way, against a half: 0.1, not 0.0999755859375. It comes as
 // the float it widens to exactly; the digits are the fewest that round back
 // to it as a half, and five always do.
-static void format_f16(float value, char *text, size_t size) {
-    if (format_special(value, text, size)) {
-        return;
+static int format_f16(float value, char *text) {
+    int special = format_special(value, text);
+    if (special != 0) {
+        return special;
     }
 
-    char scientific[40];
+    char scientific[FLOAT_TEXT];
     for (int precision = 1; precision <= 5; precision++) {
         snprintf(scientific, sizeof scientific, "%.*e", precision - 1, (double)value);
         if (precision == 5 || round_to_half(strtof(scientific, NULL)) == value) {
@@ -1188,13 +994,12 @@ static void format_f16(float value, char *text, size_t size) {
         }
     }
 
-    layout_float(scientific, text, size);
+    return layout_float(value < 0, decimal_of_scientific(scientific), text);
 }
 
 SableString *sable_string_from_f16(float value) {
-    char text[40];
-    format_f16(value, text, sizeof text);
-    return make_cstring(text);
+    char text[FLOAT_TEXT];
+    return make_ascii(text, format_f16(value, text));
 }
 
 // A 128-bit integer arrives as its two halves, low first, and is written in
@@ -1208,11 +1013,20 @@ static void format_128(uint64_t low, uint64_t high, bool is_signed, char *text, 
 
     char digits[48];
     char *end = digits + sizeof digits, *start = end;
-    do {
-        *--start = (char)('0' + (int)(magnitude % 10));
-        magnitude /= 10;
-    } while (magnitude != 0);
 
+    // Nineteen digits at a time, as many as 64 bits hold.
+    const uint64_t power = 10000000000000000000u;
+    while (magnitude >= power) {
+        end -= 19;
+        start = write_digits((uint64_t)(magnitude % power), start);
+        magnitude /= power;
+        while (start > end) {
+            *--start = '0';
+        }
+    }
+
+    start = write_digits((uint64_t)magnitude, start);
+    end = digits + sizeof digits;
     if (negative) {
         *--start = '-';
     }
@@ -1233,9 +1047,7 @@ SableString *sable_string_from_u128(uint64_t low, uint64_t high) {
 }
 
 SableString *sable_string_from_uint(uint64_t value) {
-    char text[32];
-    snprintf(text, sizeof text, "%llu", (unsigned long long)value);
-    return make_cstring(text);
+    return string_from_magnitude(value, false);
 }
 
 SableString *sable_string_from_bool(bool value) {
@@ -1268,96 +1080,13 @@ bool sable_string_to_int(const SableString *s, int64_t *out) {
     return true;
 }
 
-// Whether the string is a decimal number — sign, digits, fraction, exponent —
-// and nothing else: no infinities, NaN, hex or surrounding space, which
-// strtod and strtof would also take.
-static bool is_decimal(const char *b, int64_t n) {
-    int64_t i = 0, digits = 0;
-    if (i < n && (b[i] == '+' || b[i] == '-')) {
-        i++;
-    }
-
-    while (i < n && b[i] >= '0' && b[i] <= '9') {
-        i++;
-        digits++;
-    }
-
-    if (i < n && b[i] == '.') {
-        i++;
-        while (i < n && b[i] >= '0' && b[i] <= '9') {
-            i++;
-            digits++;
-        }
-    }
-
-    if (digits == 0) {
-        return false;
-    }
-
-    if (i < n && (b[i] == 'e' || b[i] == 'E')) {
-        i++;
-        if (i < n && (b[i] == '+' || b[i] == '-')) {
-            i++;
-        }
-
-        int64_t exponent = 0;
-        while (i < n && b[i] >= '0' && b[i] <= '9') {
-            i++;
-            exponent++;
-        }
-
-        if (exponent == 0) {
-            return false;
-        }
-    }
-
-    return i == n;
-}
-
 // A decimal number that is finite as a double, rounded to the nearest one.
 bool sable_string_to_f64(const SableString *s, int64_t from, int64_t to, double *out) {
-    int64_t length = to - from;
-    if (!is_decimal(s->bytes + from, length)) {
-        return false;
-    }
-
-    char *text = malloc((size_t)length + 1);
-    memcpy(text, s->bytes + from, (size_t)length);
-    text[length] = '\0';
-    double value = strtod(text, NULL);
-    free(text);
-
-    // Too large for a double does not fit, as for sable_string_to_int.
-    if (isinf(value)) {
-        return false;
-    }
-
-    *out = value;
-    return true;
+    return parse_f64(s->bytes + from, to - from, out);
 }
 
-// The same for a float, rounded once, from the decimal digits to the nearest
-// float: through a double it would be rounded twice, and a decimal just past
-// a midpoint between two floats can land on the midpoint as a double and
-// then go the wrong way.
 bool sable_string_to_f32(const SableString *s, int64_t from, int64_t to, float *out) {
-    int64_t length = to - from;
-    if (!is_decimal(s->bytes + from, length)) {
-        return false;
-    }
-
-    char *text = malloc((size_t)length + 1);
-    memcpy(text, s->bytes + from, (size_t)length);
-    text[length] = '\0';
-    float value = strtof(text, NULL);
-    free(text);
-
-    if (isinf(value)) {
-        return false;
-    }
-
-    *out = value;
-    return true;
+    return parse_f32(s->bytes + from, to - from, out);
 }
 
 int64_t sable_char_to_int(int32_t c) {
@@ -1400,8 +1129,8 @@ void sable_print_u128(uint64_t low, uint64_t high) {
 }
 
 void sable_print_f16(float value) {
-    char text[40];
-    format_f16(value, text, sizeof text);
+    char text[FLOAT_TEXT];
+    text[format_f16(value, text)] = '\0';
     puts(text);
 }
 
@@ -1413,14 +1142,14 @@ void sable_print_char(int32_t scalar) {
 }
 
 void sable_print_f32(float value) {
-    char text[40];
-    format_f32(value, text, sizeof text);
+    char text[FLOAT_TEXT];
+    text[format_f32(value, text)] = '\0';
     puts(text);
 }
 
 void sable_print_f64(double value) {
-    char text[40];
-    format_f64(value, text, sizeof text);
+    char text[FLOAT_TEXT];
+    text[format_f64(value, text)] = '\0';
     puts(text);
 }
 
@@ -1444,12 +1173,13 @@ static float round_to_bf16(float value) {
 
 // BF16 the way F16 is written: the fewest digits that round back to it as a
 // bfloat, which four always are. It comes as the float it widens to exactly.
-static void format_bf16(float value, char *text, size_t size) {
-    if (format_special(value, text, size)) {
-        return;
+static int format_bf16(float value, char *text) {
+    int special = format_special(value, text);
+    if (special != 0) {
+        return special;
     }
 
-    char scientific[40];
+    char scientific[FLOAT_TEXT];
     for (int precision = 1; precision <= 4; precision++) {
         snprintf(scientific, sizeof scientific, "%.*e", precision - 1, (double)value);
         if (precision == 4 || round_to_bf16(strtof(scientific, NULL)) == value) {
@@ -1457,17 +1187,16 @@ static void format_bf16(float value, char *text, size_t size) {
         }
     }
 
-    layout_float(scientific, text, size);
+    return layout_float(value < 0, decimal_of_scientific(scientific), text);
 }
 
 SableString *sable_string_from_bf16(float value) {
-    char text[40];
-    format_bf16(value, text, sizeof text);
-    return make_cstring(text);
+    char text[FLOAT_TEXT];
+    return make_ascii(text, format_bf16(value, text));
 }
 
 void sable_print_bf16(float value) {
-    char text[40];
-    format_bf16(value, text, sizeof text);
+    char text[FLOAT_TEXT];
+    text[format_bf16(value, text)] = '\0';
     puts(text);
 }

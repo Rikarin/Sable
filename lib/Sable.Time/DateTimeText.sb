@@ -1,0 +1,110 @@
+module Sable.Time
+
+/// The text of a date or a time as it is written, a byte at a time: every
+/// piece of one is ASCII.
+struct DateTimeText {
+    var bytes: U8[>..] = []
+
+    init() {
+        bytes.reserveCapacity(40)
+    }
+
+    mutating fn add(_ c: Char) {
+        bytes.append(U8.truncating(c.codePoint))
+    }
+
+    mutating fn add(_ text: String) {
+        bytes.append(utf8: text)
+    }
+
+    /// The number in two digits, as `padded` writes it.
+    mutating fn addTwo(_ n: Int) {
+        if n < 0 || n > 99 {
+            addPadded(n, 2)
+            return
+        }
+        bytes.append(U8(48 + n / 10))
+        bytes.append(U8(48 + n % 10))
+    }
+
+    /// The number in at least so many digits, after its sign.
+    mutating fn addPadded(_ n: Int, _ width: Int) {
+        if n < 0 {
+            bytes.append(45)
+        }
+        let digits = n.magnitude.toString()
+        var missing = width - digits.utf8.count
+        while missing > 0 {
+            bytes.append(48)
+            missing -= 1
+        }
+        bytes.append(utf8: digits)
+    }
+
+    /// The year as ISO 8601 writes it: four digits, or with a sign outside 0
+    /// to 9999.
+    mutating fn addYear(_ year: Int) {
+        if year < 0 || year > 9999 {
+            if year > 9999 {
+                bytes.append(43)
+            }
+            addPadded(year, 4)
+            return
+        }
+        addTwo(year / 100)
+        addTwo(year % 100)
+    }
+
+    /// "2026-11-17".
+    mutating fn addDate(_ date: Date) {
+        addYear(date.y)
+        bytes.append(45)
+        addTwo(date.m)
+        bytes.append(45)
+        addTwo(date.d)
+    }
+
+    /// "09:05:03".
+    mutating fn addTime(_ secondOfDay: Int) {
+        addTwo(secondOfDay / 3600)
+        bytes.append(58)
+        addTwo(secondOfDay / 60 % 60)
+        bytes.append(58)
+        addTwo(secondOfDay % 60)
+    }
+
+    /// A point and the digits of a fraction of a second, its zeros after the
+    /// last other digit left off; nothing for none.
+    mutating fn addFraction(_ nanosecond: Int) {
+        if nanosecond == 0 {
+            return
+        }
+        bytes.append(46)
+        var rest = nanosecond
+        var place = 100000000
+        while rest > 0 {
+            bytes.append(U8(48 + rest / place))
+            rest = rest % place
+            place = place / 10
+        }
+    }
+
+    /// "+05:30", and its seconds where there are any.
+    mutating fn addOffset(_ offset: UtcOffset) {
+        let magnitude = offset.totalSeconds < 0 ? -offset.totalSeconds : offset.totalSeconds
+        add(offset.totalSeconds < 0 ? '-' : '+')
+        addTwo(magnitude / 3600)
+        bytes.append(58)
+        addTwo(magnitude / 60 % 60)
+        if magnitude % 60 != 0 {
+            bytes.append(58)
+            addTwo(magnitude % 60)
+        }
+    }
+
+    fn toString() -> String {
+        unsafe {
+            return Runtime.stringFromValidUtf8(bytes)
+        }
+    }
+}

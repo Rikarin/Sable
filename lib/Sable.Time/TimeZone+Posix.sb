@@ -31,18 +31,18 @@ struct PosixRule {
         return none
     }
 
-    /// The type at seconds since the epoch.
-    fn typeAt(_ seconds: Int) -> LocalTimeType {
+    /// Whether the type at seconds since the epoch is daylight saving time.
+    fn isDaylightSaving(at seconds: Int) -> Bool {
         if let daylight = self.daylight {
             let year = civilFromDays(floorDivide(seconds + standard.offset, 86400)).y
             let begins = startOf(year, daylight)
             let ends = endOf(year, daylight)
             if begins < ends {
-                return begins <= seconds && seconds < ends ? daylight : standard
+                return begins <= seconds && seconds < ends
             }
-            return ends <= seconds && seconds < begins ? standard : daylight
+            return seconds < ends || begins <= seconds
         }
-        return standard
+        return false
     }
 
     /// When daylight saving begins in the year, in seconds since the epoch.
@@ -53,6 +53,26 @@ struct PosixRule {
     /// When daylight saving ends in the year, in seconds since the epoch.
     fn endOf(_ year: Int, _ daylight: LocalTimeType) -> Int {
         return end.day(in: year) * 86400 + endTime - daylight.offset
+    }
+
+    /// Adds the changes the rule makes after the last of a zone's own, to
+    /// 2037 — where the files of a database that writes them out stop — as
+    /// changes of the zone's: what says the same as the rule, in a search.
+    /// 'standard' is where its type is among the zone's, its daylight saving
+    /// time's after it.
+    fn extend(_ times: inout Int[>..], _ indices: inout Int[>..], standard: Int) {
+        guard var at = times.last else {
+            return
+        }
+        while let change = nextChange(after: at) {
+            at = change.at
+            // A rule whose changes do not say what it does is kept to.
+            if at > 2145916800 || isDaylightSaving(at: at) != change.type.isDaylightSaving {
+                return
+            }
+            times.append(at)
+            indices.append(change.type.isDaylightSaving ? standard + 1 : standard)
+        }
     }
 
     /// The first change after seconds since the epoch.
@@ -125,18 +145,17 @@ struct PosixDate {
 
     /// The day in the year, in days since the epoch.
     fn day(in year: Int) -> Int {
-        let january1 = daysFromCivil(year, 1, 1)
         if kind == 0 {
-            return january1 + day - 1 + (isLeapYear(year) && day >= 60 ? 1 : 0)
+            return daysFromCivil(year, 1, 1) + day - 1 + (isLeapYear(year) && day >= 60 ? 1 : 0)
         }
         if kind == 1 {
-            return january1 + day
+            return daysFromCivil(year, 1, 1) + day
         }
         let first = daysFromCivil(year, month, 1)
         // Sunday is 0, as the rule counts.
         let firstWeekday = weekdayNumber(first) % 7
         var dayOfMonth = 1 + floorModulo(day - firstWeekday, 7) + (week - 1) * 7
-        while dayOfMonth > daysInMonth(year, month) {
+        if dayOfMonth > 28 && dayOfMonth > daysInMonth(year, month) {
             dayOfMonth -= 7
         }
         return first + dayOfMonth - 1

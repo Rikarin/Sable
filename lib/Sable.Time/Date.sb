@@ -247,7 +247,9 @@ public struct Date: Comparable, Hashable {
     /// ISO 8601's extended form: "2026-11-17"; a year past 9999 or before
     /// 0 with its sign, "+10000-01-01", "-0001-01-01".
     public fn toString() -> String {
-        return isoYear(y) + "-" + two(m) + "-" + two(d)
+        var text = DateTimeText()
+        text.addDate(self)
+        return text.toString()
     }
 
     /// The date as the pattern writes it: .NET's custom and standard date
@@ -301,15 +303,6 @@ public struct Date: Comparable, Hashable {
 fn isoWeeksInYear(_ year: Int) -> Int {
     let january1 = weekdayNumber(daysFromCivil(year, 1, 1))
     return january1 == 4 || january1 == 3 && isLeapYear(year) ? 53 : 52
-}
-
-/// The year as ISO 8601 writes it: four digits, or with a sign outside 0
-/// to 9999.
-fn isoYear(_ year: Int) -> String {
-    if year > 9999 {
-        return "+" + year.toString()
-    }
-    return padded(year, 4)
 }
 
 extension Date: Parsable {

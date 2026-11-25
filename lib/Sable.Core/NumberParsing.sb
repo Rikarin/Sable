@@ -62,6 +62,61 @@ fn isSeparator(_ c: Char, _ styles: NumberStyles, _ thousands: Bool) -> Bool {
     return c == '_' && styles.contains(.Separators) || c == ',' && thousands && styles.contains(.Thousands)
 }
 
+/// How many digits of a radix an Int always holds.
+fn sureDigits(_ radix: Int) -> Int {
+    return radix <= 10 ? 18 : radix <= 16 ? 15 : 12
+}
+
+/// The number, where the text is nothing but digits, with a sign the styles
+/// allow, and few enough to fit an Int: what most texts are, read at their
+/// bytes without parseInteger's steps. None otherwise, whatever the reason;
+/// parseInteger then reads the text again.
+fn shortInteger(_ text: Substring, _ radix: Int, _ styles: NumberStyles) -> Int? {
+    let bytes = text.base
+    let end = text.end
+    var i = text.start
+    if i >= end || radix < 2 || radix > 36 {
+        return none
+    }
+    let first = bytes.utf8Byte(i)
+    if first == 45 || first == 43 {
+        if !styles.contains(.Sign) {
+            return none
+        }
+        i += 1
+    }
+    if i >= end || end - i > sureDigits(radix) {
+        return none
+    }
+    var magnitude = 0
+    if radix == 10 {
+        while i < end {
+            let digit = bytes.utf8Byte(i) &- 48
+            if digit > 9 {
+                return none
+            }
+            magnitude = magnitude &* 10 &+ Int(digit)
+            i &+= 1
+        }
+        return first == 45 ? -magnitude : magnitude
+    }
+    while i < end {
+        let byte = Int(bytes.utf8Byte(i))
+        var digit = byte - 48
+        if byte > 57 {
+            // A letter of either case; what is neither has no digit below 36.
+            let letter = byte | 32
+            digit = letter >= 97 && letter <= 122 ? letter - 87 : 99
+        }
+        if digit < 0 || digit >= radix {
+            return none
+        }
+        magnitude = magnitude * radix + digit
+        i += 1
+    }
+    return first == 45 ? -magnitude : magnitude
+}
+
 /// An integer's sign and distance from zero, as the text writes it in the
 /// radix under the styles. Every scalar is checked before a magnitude past
 /// U128's greatest is reported, so a stray letter is the error a long

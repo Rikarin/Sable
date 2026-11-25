@@ -399,11 +399,68 @@ public sealed class SliceLoweringTests {
         Assert.Empty(SilVerifier.Verify(module));
 
         var put = SilPrinter.Print(module.Functions.Single(static f => f.Name == "M.put"));
-        Assert.Contains("builtin \"bytes_store_unique_U64\"", put, StringComparison.Ordinal);
-        Assert.DoesNotContain("builtin \"bytes_store_U64\"", put, StringComparison.Ordinal);
+        // One store of an integer is of the array where it is, with no view.
+        Assert.Contains("builtin \"bytes_store_array_U64\"", put, StringComparison.Ordinal);
 
         var interpreter = new SilInterpreter(module);
         Assert.Equal(7217L, interpreter.Run("M.wrote"));
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
+
+    /// <summary>
+    ///     A loop that reads and writes integers of an array's bytes makes it
+    ///     unique once, before the loop, and views it nowhere; one that
+    ///     shares the array in the loop keeps its checks.
+    /// </summary>
+    [Fact]
+    public void ALoopOfBytesReadAndWrittenMakesNoViews() {
+        var compilation = Compilation.Create(
+            """
+            module M
+
+            fn run() -> Int {
+                var bytes: U8[>..] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+                let before = bytes
+                var at = 0
+                while at + 8 <= bytes.count {
+                    bytes.writeU32(U32(at + 7), at: at, endian: .Little)
+                    bytes.writeU16(bytes.readU16(at: at, endian: .Little) + 1, at: at + 4, endian: .Big)
+                    at = at + 8
+                }
+                return Int(bytes[0]) * 1000 + Int(bytes[5]) * 100 + Int(bytes[13]) * 10 + Int(before[0])
+            }
+
+            fn shares() -> Int {
+                var bytes: U8[>..] = [1, 1, 1, 1]
+                var kept: U8[>..] = []
+                var at = 0
+                while at < 2 {
+                    kept = bytes
+                    bytes.writeU16(0x0909, at: at * 2, endian: .Little)
+                    at = at + 1
+                }
+                return Int(kept[0]) * 100 + Int(kept[2]) * 10 + Int(bytes[2])
+            }
+            """
+        );
+        var (module, diagnostics) = SilGen.Lower(compilation);
+        Assert.True(diagnostics.Count == 0, string.Join("\n", diagnostics.Select(static d => $"{d.Id}: {d.Message}")));
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        Assert.Empty(SilVerifier.Verify(module));
+
+        var run = SilPrinter.Print(module.Functions.Single(static f => f.Name == "M.run"));
+        Assert.Contains("builtin \"bytes_store_array_unique_U32\"", run, StringComparison.Ordinal);
+        Assert.Contains("builtin \"bytes_store_array_unique_U16\"", run, StringComparison.Ordinal);
+        Assert.Contains("builtin \"bytes_load_array_U16\"", run, StringComparison.Ordinal);
+        Assert.DoesNotContain("slice_of", run, StringComparison.Ordinal);
+        Assert.Equal(1, run.Split("builtin \"array_make_unique\"").Length - 1);
+
+        var shares = SilPrinter.Print(module.Functions.Single(static f => f.Name == "M.shares"));
+        Assert.Contains("builtin \"bytes_store_array_U16\"", shares, StringComparison.Ordinal);
+
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(7960L, interpreter.Run("M.run"));
+        Assert.Equal(911L + 8, interpreter.Run("M.shares"));
         Assert.Equal(0, interpreter.LiveObjects);
     }
 }

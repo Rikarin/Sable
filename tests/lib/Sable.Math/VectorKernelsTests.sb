@@ -138,3 +138,64 @@ fn softmaxIsPositiveAndSumsToOne() {
     TensorPrimitives.softmax(rampF64(11), into: &big)
     assertClose(TensorPrimitives.sum(big), 1.0)
 }
+
+@test
+fn softmaxIsCloseToTheExponentialsOfEachElement() {
+    for count in [1, 2, 7, 15, 16, 17, 31, 32, 33, 100] {
+        var x: F32[>..] = []
+        var wide: F64[>..] = []
+        for i in 0..<count {
+            x.append(F32(i * 37 % 101) / 7.0 - 9.0)
+            wide.append(F64(i * 37 % 101) * 5.9 - 99.0)
+        }
+        var total = 0.0
+        var wideTotal = 0.0
+        let greatest = wide.max()!
+        for i in 0..<count {
+            total += F64.exp(F64(x[i]))
+            wideTotal += F64.exp(wide[i] - greatest)
+        }
+        var result = F32[>..](repeating: 0, count: count)
+        var wideResult = F64[>..](repeating: 0, count: count)
+        TensorPrimitives.softmax(x, into: &result)
+        TensorPrimitives.softmax(wide, into: &wideResult)
+        for i in 0..<count {
+            assertClose(F64(result[i]) / (F64.exp(F64(x[i])) / total), 1.0, tolerance: 1e-6)
+            assertClose(wideResult[i] / (F64.exp(wide[i] - greatest) / wideTotal), 1.0, tolerance: 2e-15)
+        }
+    }
+}
+
+@test
+fn softmaxOfTheExtremes() {
+    // Below the least exponential is zero, and down to it is not.
+    var result: F32[>..] = [0, 0, 0, 0]
+    TensorPrimitives.softmax([0, -100, -1000, -F32.infinity], into: &result)
+    assertEqual(result[0], 1)
+    assert(result[1] > 3.7e-44 && result[1] < 4e-44)
+    assertEqual(result[2], 0)
+    assertEqual(result[3], 0)
+    var wide: F64[>..] = [0, 0, 0, 0]
+    TensorPrimitives.softmax([0, -740, -10000, -F64.infinity], into: &wide)
+    assertEqual(wide[0], 1.0)
+    assert(wide[1] > 4.1e-322 && wide[1] < 4.3e-322)
+    assertEqual(wide[2], 0.0)
+    assertEqual(wide[3], 0.0)
+    // In a vector's lanes, and past them.
+    for count in [5, 40] {
+        var x = F32[>..](repeating: 1, count: count)
+        x[count - 2] = F32.nan
+        var lost = F32[>..](repeating: 0, count: count)
+        TensorPrimitives.softmax(x, into: &lost)
+        for value in lost {
+            assert(value.isNaN)
+        }
+    }
+    // Into the array it is of.
+    var same: F64[>..] = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    let copy = same
+    TensorPrimitives.softmax(copy, into: &same)
+    for value in same {
+        assertClose(value, 0.1)
+    }
+}

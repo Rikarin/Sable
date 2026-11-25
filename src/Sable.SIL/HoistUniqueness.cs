@@ -59,6 +59,7 @@ public sealed class HoistUniqueness : ISilPass {
 
         var uses = new Uses(function);
         UniqueViews(function, uses);
+        uses = new Uses(function);
 
         // Outermost first: a whole nest made unique once, before all of it.
         foreach (var (header, body) in loops.OrderByDescending(static l => l.Value.Count)) {
@@ -90,10 +91,14 @@ public sealed class HoistUniqueness : ISilPass {
     }
 
     /// <summary>A write that first makes its array the only reference to its buffer: an element, or an integer as bytes.</summary>
-    static bool IsCheckedWrite(string name) => name is "array_set" or "simd_store" || name.StartsWith("bytes_store_U", StringComparison.Ordinal);
+    static bool IsCheckedWrite(string name) =>
+        name is "array_set" or "simd_store" || name.StartsWith("bytes_store_U", StringComparison.Ordinal) || name.StartsWith("bytes_store_array_U", StringComparison.Ordinal);
 
     /// <summary>The same write, of an array known to be that.</summary>
-    static string InPlace(string name) => name is "array_set" or "simd_store" ? name + "_unique" : "bytes_store_unique_" + name["bytes_store_".Length..];
+    static string InPlace(string name) =>
+        name is "array_set" or "simd_store" ? name + "_unique"
+        : name.StartsWith("bytes_store_array_", StringComparison.Ordinal) ? "bytes_store_array_unique_" + name["bytes_store_array_".Length..]
+        : "bytes_store_unique_" + name["bytes_store_".Length..];
 
     /// <summary>
     ///     An array's place viewed whole for a mutating member of
@@ -108,12 +113,84 @@ public sealed class HoistUniqueness : ISilPass {
                 continue;
             }
 
+            if (StoredInPlace(slot, uses)) {
+                continue;
+            }
+
             foreach (var write in uses.Of(slot).OfType<BuiltinInst>().ToList()) {
                 if (IsCheckedWrite(write.Name)) {
                     write.Rename(InPlace(write.Name));
                 }
             }
         }
+    }
+
+    /// <summary>
+    ///     A view made for one store of an integer's bytes — what
+    ///     <c>bytes.writeU32(…)</c> comes to — is not made: the store is of the
+    ///     array in its place, which a loop of them can then make unique once,
+    ///     where a view in each step moves the array out and back.
+    /// </summary>
+    static bool StoredInPlace(AllocStackInst slot, Uses uses) {
+        StoreInst? made = null;
+        BuiltinInst? written = null;
+        LoadInst? taken = null;
+        foreach (var user in uses.Of(slot)) {
+            switch (user) {
+                case StoreInst store when made is null:
+                    made = store;
+                    break;
+
+                case BuiltinInst write when written is null && write.Name.StartsWith("bytes_store_U", StringComparison.Ordinal):
+                    written = write;
+                    break;
+
+                case LoadInst { Kind: LoadKind.Take } take when taken is null:
+                    taken = take;
+                    break;
+
+                case DestroyAddrInst or DeallocStackInst:
+                    break;
+
+                default:
+                    return false;
+            }
+        }
+
+        // All of it in one block, the array taken from a place of its own and
+        // put back there, and nothing else of the place's between.
+        if (made is not { Value: BuiltinInst { Name: "slice_of_take", Operands: [LoadInst { Address: var place } array] } view }
+            || written is null || taken is null
+            || place is not (AllocStackInst or SilArgument)
+            || uses.Of(taken) is not [BuiltinInst { Name: "array_of_slice_take" } back]
+            || uses.Of(back) is not [StoreInst { Kind: StoreKind.Init } put]
+            || !ReferenceEquals(put.Address, place)) {
+            return false;
+        }
+
+        var block = array.Block!;
+        var instructions = block.Instructions;
+        var first = instructions.IndexOf(array) - 1;
+        var last = instructions.IndexOf(put);
+        if (written.Block != block || last < first
+            || uses.Of(place).Any(u => u.Block == block && instructions.IndexOf(u) is var at && at > first + 1 && at < last)) {
+            return false;
+        }
+
+        written.Rename("bytes_store_array_" + written.Name["bytes_store_".Length..]);
+        written.SetOperand(0, place);
+        HashSet<SilInstruction> gone = [instructions[first], array, view, made, taken, back, put, slot];
+        foreach (var user in uses.Of(slot)) {
+            if (user is DestroyAddrInst or DeallocStackInst) {
+                gone.Add(user);
+            }
+        }
+
+        foreach (var holder in gone.Select(static i => i.Block!).Distinct().ToList()) {
+            holder.Instructions.RemoveAll(gone.Contains);
+        }
+
+        return true;
     }
 
     static bool IsUniqueView(AllocStackInst slot, Uses uses) {
@@ -171,7 +248,7 @@ public sealed class HoistUniqueness : ISilPass {
             }
 
             switch (user) {
-                case BuiltinInst write when (IsCheckedWrite(write.Name) || write.Name is "array_set_unique" or "simd_store_unique" || write.Name.StartsWith("bytes_store_unique_", StringComparison.Ordinal))
+                case BuiltinInst write when (IsCheckedWrite(write.Name) || write.Name is "array_set_unique" or "simd_store_unique" || write.Name.StartsWith("bytes_store_", StringComparison.Ordinal))
                     && ReferenceEquals(write.Operands[0], address)
                     && !write.Operands.Skip(1).Any(o => ReferenceEquals(o, address)):
                     break;

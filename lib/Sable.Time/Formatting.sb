@@ -181,18 +181,19 @@ fn offsetInHours(_ offset: UtcOffset, _ count: Int) -> String {
 /// RFC 3339's form: "2026-11-17T09:05:03+01:00", the fraction of the
 /// second where there is one, "Z" for UTC.
 fn formatRfc3339(_ local: LocalDateTime, _ offset: UtcOffset, _ utc: Bool) -> String {
-    let fraction = fractionDigits(local.nanosecond)
-    var text = isoYear(local.year) + "-" + two(local.month) + "-" + two(local.day) + "T" + two(local.hour) + ":" + two(local.minute)
-        + ":" + two(local.second)
-    if !fraction.isEmpty {
-        text += "." + fraction
-    }
+    var text = DateTimeText()
+    text.addDate(local.date)
+    text.add('T')
+    text.addTime(local.time.secondOfDay)
+    text.addFraction(local.nanosecond)
     if utc {
-        return text + "Z"
+        text.add('Z')
+    } else {
+        // RFC 3339 has no seconds in an offset: they are rounded off.
+        let minutes = floorDivide(offset.totalSeconds + 30, 60)
+        text.addOffset(UtcOffset(seconds: minutes * 60))
     }
-    // RFC 3339 has no seconds in an offset: they are rounded off.
-    let minutes = floorDivide(offset.totalSeconds + 30, 60)
-    return text + UtcOffset(seconds: minutes * 60).toString()
+    return text.toString()
 }
 
 /// RFC 2822's form, as mail headers write it: "Tue, 17 Nov 2026 09:05:03

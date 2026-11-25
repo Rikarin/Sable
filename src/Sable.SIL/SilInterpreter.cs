@@ -1521,7 +1521,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return HashSeed;
 
             // The library's portable code is what the interpreter runs.
-            case "crypto_blocks" or "crypto_blocks_raw":
+            case "crypto_blocks" or "crypto_blocks_raw" or "vector_available":
                 return false;
 
             case "random_bits":

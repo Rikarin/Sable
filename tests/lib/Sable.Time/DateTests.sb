@@ -203,3 +203,62 @@ fn datesWriteAndReadPatterns() {
     assertEqual(patternError("17/13/2026", "dd/MM/yyyy"), ParseError.Invalid(at: 3))
     assertEqual(patternError("", "dd/MM/yyyy"), ParseError.Empty)
 }
+
+@test
+fn datesCountAcrossManyThousandYears() {
+    // Each way against a count of the days: past the years the quick
+    // arithmetic is for, on either side.
+    for start in [-40000, -32810, -32100, -400, 1500, 820000, 999990, 1000400] {
+        var year = start
+        var days = Date.of(year: year, month: 1, day: 1)!.daysSinceEpoch
+        while year < start + 130 {
+            var month = 1
+            while month <= 12 {
+                let length = daysInMonth(year, month)
+                for day in [1, 15, length] {
+                    let date = Date.of(year: year, month: month, day: day)!
+                    assertEqual(date.daysSinceEpoch, days + day - 1)
+                    assertEqual(Date.fromDaysSinceEpoch(days + day - 1), date)
+                }
+                days += length
+                month += 1
+            }
+            year += 1
+        }
+    }
+    assertEqual(Date.of(year: 1970, month: 1, day: 1)!.daysSinceEpoch, 0)
+}
+
+@test
+fn datesWriteEveryYear() {
+    assertEqual(Date.of(year: 5, month: 1, day: 2)!.toString(), "0005-01-02")
+    assertEqual(Date.of(year: 0, month: 12, day: 31)!.toString(), "0000-12-31")
+    assertEqual(Date.of(year: -7, month: 10, day: 31)!.toString(), "-0007-10-31")
+    assertEqual(Date.of(year: -12345, month: 10, day: 31)!.toString(), "-12345-10-31")
+    assertEqual(Date.of(year: 12345, month: 10, day: 31)!.toString(), "+12345-10-31")
+    assertEqual(Date.of(year: 9999, month: 10, day: 31)!.toString(), "9999-10-31")
+}
+
+@test
+fn errorsCountScalarsNotBytes() {
+    for (text, at) in [("2026-11-17é", 10), ("2026-1é-17", 6), ("é2026", 0)] {
+        do {
+            let _ = try Date.parse(text)
+            assert(false)
+        } catch {
+            match error {
+                case .Invalid(let place)      => assertEqual(place, at)
+                case .InvalidDigit(let place) => assertEqual(place, at)
+                case _                        => assert(false)
+            }
+        }
+    }
+    // After the minus sign of three bytes.
+    do {
+        let _ = try OffsetDateTime.parse("2026-11-17T01:02:03−01:0x")
+        assert(false)
+    } catch {
+        assertEqual(error, ParseError.InvalidDigit(at: 24))
+    }
+    assertEqual(try! OffsetDateTime.parse("2026-11-17T01:02:03−01:00").offset.totalSeconds, -3600)
+}

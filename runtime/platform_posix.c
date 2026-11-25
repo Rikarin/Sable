@@ -1769,11 +1769,17 @@ static char *executable_path(int argc, char **argv) {
 // ---- Randomness ----------------------------------------------------------
 
 static bool random_bytes(void *buffer, size_t length) {
-    // getentropy gives at most 256 bytes a call, all of them or none.
+#if defined(__APPLE__)
+    // The system library's cryptographic generator, seeded by the kernel and
+    // again after a fork. It asks the kernel only now and then, where
+    // getentropy does for every 256 bytes; it cannot fail.
+    arc4random_buf(buffer, length);
+    return true;
+#else
     char *next = buffer;
     while (length > 0) {
-        size_t part = length < 256 ? length : 256;
-        if (getentropy(next, part) != 0) {
+        ssize_t part = getrandom(next, length, 0);
+        if (part < 0) {
             if (errno == EINTR) {
                 continue;
             }
@@ -1782,10 +1788,11 @@ static bool random_bytes(void *buffer, size_t length) {
         }
 
         next += part;
-        length -= part;
+        length -= (size_t)part;
     }
 
     return true;
+#endif
 }
 
 // ---- File handles ---------------------------------------------------------

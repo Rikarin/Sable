@@ -47,7 +47,7 @@ fn twoGeneratorsDoNotRepeatEachOther() {
 @test
 fn fillGivesEveryByteRandomBits() {
     var system = SystemRandomNumberGenerator()
-    // Past the 256 bytes getentropy gives at once.
+    // Past the 256 bytes some systems give at once.
     var bytes = U8[>..](repeating: 0, count: 1000)
     var everSet = bytes
     for _ in 0..<64 {

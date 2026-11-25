@@ -1459,8 +1459,9 @@ for tests. x86's SHA-512 and SHA-3, and everything else, are portable only.
 - **`secureZero`** is a call of the runtime's whose memset is kept by an
   assembly barrier, in the link's optimiser too.
 - **Randomness** is one source, `random_bytes` of the platform layer, for
-  `SecureRandom`, `SystemRandomNumberGenerator` and UUIDs: getentropy 256
-  bytes at a time (again on EINTR), BCryptGenRandom, or WASI's random_get.
+  `SecureRandom`, `SystemRandomNumberGenerator` and UUIDs:
+  arc4random_buf on macOS, getrandom on Linux (again on EINTR, and for what
+  it left), BCryptGenRandom, or WASI's random_get.
   When it fails the program traps.
 - **Passwords.** Argon2id fills its lanes one after another. Verifying reads
   a PHC string strictly — one spelling of each number, the parameters in

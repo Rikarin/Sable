@@ -1,0 +1,39 @@
+module NativeMemoryCopyTests
+
+import Sable.Testing
+
+@test
+fn bytesGoToMemoryAndBack() {
+    unsafe {
+        let memory = NativeMemory.allocate(byteCount: 8, zeroed: true)
+        defer {
+            NativeMemory.deallocate(memory)
+        }
+        NativeMemory.copy(from: [1, 2, 3, 4], to: memory)
+        NativeMemory.copy(from: [] as U8[>..], to: memory)
+        assertEqual(memory.load(at: 3), 4)
+        assertEqual(memory.load(at: 4), 0)
+
+        var bytes: U8[>..] = [9, 9, 9, 9, 9, 9]
+        let shared = bytes
+        NativeMemory.copy(from: memory, to: &bytes, at: 1, byteCount: 4)
+        assertEqual(bytes, [9, 1, 2, 3, 4, 9])
+        assertEqual(shared, [9, 9, 9, 9, 9, 9])
+        NativeMemory.copy(from: memory, to: &bytes, at: 6, byteCount: 0)
+        assertEqual(bytes.count, 6)
+
+        var grown: U8[>..] = []
+        NativeMemory.append(from: memory, byteCount: 5, to: &grown)
+        NativeMemory.append(from: memory, byteCount: 0, to: &grown)
+        assertEqual(grown, [1, 2, 3, 4, 0])
+    }
+}
+
+@test(traps: "3 bytes from 4 of 6")
+fn copyingPastTheEndTraps() {
+    unsafe {
+        let memory = NativeMemory.allocate(byteCount: 8, zeroed: true)
+        var bytes = U8[>..](repeating: 0, count: 6)
+        NativeMemory.copy(from: memory, to: &bytes, at: 4, byteCount: 3)
+    }
+}

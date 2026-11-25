@@ -82,8 +82,36 @@ public sealed class CompileTimeLoweringTests {
     }
 
     [Fact]
-    public void AConstantNoLiteralCanSayIsKeptInAGlobal() {
+    public void AnArrayIsWrittenWhereItIsRead() {
         var module = Lower("const fn table() -> Int[] => [1, 2, 3]\nconst Table = table()\nfn second() -> Int => Table[1]");
+        Assert.Empty(module.Globals);
+        Assert.Equal(2L, Run(module, "second"));
+    }
+
+    [Fact]
+    public void OneOfManyElementsIsKeptInAGlobalWrittenWhole() {
+        var module = Lower(
+            """
+            const fn table() -> Int[>..] {
+                var all: Int[>..] = []
+                for i in 0..<300 {
+                    all.append(i * 2)
+                }
+                return all
+            }
+            const Table = table()
+            fn read() -> Int => Table[299]
+            fn main() { print(read()) }
+            """
+        );
+        Assert.Single(module.Globals);
+        Assert.Contains(module.Functions.SelectMany(static f => f.Blocks).SelectMany(static b => b.Instructions),
+            static i => i is BuiltinInst { Name: "array_literal", Operands.Count: 300 });
+    }
+
+    [Fact]
+    public void AConstantNoLiteralCanSayIsKeptInAGlobal() {
+        var module = Lower("final class Box {\n    let n: Int\n    const init(_ n: Int) { self.n = n }\n}\nconst Three = Box(3)\nfn read() -> Int => Three.n");
         Assert.Single(module.Globals);
     }
 

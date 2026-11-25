@@ -1,0 +1,158 @@
+module Sable.Collections
+
+/// Distinct values that never change, made once and then asked after: .NET's
+/// FrozenSet. Making one takes longer than making a Set, as it looks for the
+/// quickest way to tell its values apart, as FrozenDictionary does; asking
+/// whether it holds one is then quicker.
+///
+/// It is gone through in the order the values were given. A value: a copy
+/// shares it all. A `const` of literals is made as the program is compiled.
+///
+/// ```sable
+/// let vowels = FrozenSet<Char>(['a', 'e', 'i', 'o', 'u'])
+/// assert(vowels.contains('e') && !vowels.contains('y'))
+///
+/// const Reserved = FrozenSet<String>(["con", "prn", "aux", "nul", "clock$"])
+/// assert(Reserved.contains("aux"))
+/// ```
+public struct FrozenSet<Element: Hashable> {
+    var table: FrozenTable<Element>
+
+    /// An empty set.
+    public const init() {
+        table = FrozenTable<Element>()
+    }
+
+    /// The distinct values among the sequence's, in the order each first
+    /// comes. What going through them throws, it throws.
+    public const init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        var all: Element[>..] = []
+        for try element in elements {
+            all.append(element)
+        }
+        table = FrozenTable<Element>(all, foldingCase: false)
+    }
+
+    /// How many values it holds.
+    public var count: Int => table.keys.count
+
+    /// Whether it holds no values.
+    public var isEmpty: Bool => table.keys.isEmpty
+
+    /// Whether the value is in the set.
+    public fn contains(_ value: Element) -> Bool {
+        return table.find(value) >= 0
+    }
+
+    /// The member equal to the value, as it was given, or none.
+    public fn member(equalTo value: Element) -> Element? {
+        let position = table.find(value)
+        return position < 0 ? none : table.keys[position]
+    }
+
+    /// The members in a grow-only array, in the order they were given.
+    public fn toArray() -> Element[>..] {
+        return table.keys
+    }
+
+    /// Whether every value of this set is in the other.
+    public fn isSubset(of other: FrozenSet<Element>) -> Bool {
+        if count > other.count {
+            return false
+        }
+        for value in table.keys {
+            if !other.contains(value) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Whether every value of the other set is in this one.
+    public fn isSuperset(of other: FrozenSet<Element>) -> Bool {
+        return other.isSubset(of: self)
+    }
+
+    /// Whether the two sets have no value in common.
+    public fn isDisjoint(with other: FrozenSet<Element>) -> Bool {
+        for value in table.keys {
+            if other.contains(value) {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+extension FrozenSet where Element == String {
+    /// The values among the sequence's that differ in more than the case of
+    /// ASCII's letters, told apart by no more than that.
+    ///
+    /// ```sable
+    /// let verbs = FrozenSet<String>(ignoringAsciiCase: ["GET", "PUT", "POST"])
+    /// assert(verbs.contains("get") && verbs.member(equalTo: "Put") == "PUT")
+    /// ```
+    public const init<S: Sequence>(ignoringAsciiCase elements: S) throws(S.Failure) where S.Element == String {
+        var all: String[>..] = []
+        for try element in elements {
+            all.append(element)
+        }
+        table = FrozenTable<String>(all, foldingCase: true)
+    }
+
+    /// Whether the string the piece spells is a member: found by the piece's
+    /// bytes, with no String made of them.
+    public fn contains(_ value: Substring) -> Bool {
+        return table.find(value) >= 0
+    }
+}
+
+extension FrozenSet: RandomAccessCollection, FromSequence<Element> {
+    /// The members, in the order they were given.
+    public fn makeIterator() -> ArrayIterator<Element> {
+        return table.keys.makeIterator()
+    }
+
+    public var startIndex: Int => 0
+
+    public var endIndex: Int => table.keys.count
+
+    public fn index(after position: Int) -> Int => position + 1
+
+    public fn index(before position: Int) -> Int => position - 1
+
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+
+    public fn distance(from start: Int, to end: Int) -> Int => end - start
+
+    /// The member at a position, in the order they were given.
+    public subscript(position: Int) -> Element {
+        get => table.keys[position]
+    }
+}
+
+extension FrozenSet: Equatable {
+    /// Whether the two sets hold the same values, in whatever order.
+    public operator == (lhs: FrozenSet<Element>, rhs: FrozenSet<Element>) -> Bool {
+        return lhs.count == rhs.count && lhs.isSubset(of: rhs)
+    }
+}
+
+extension FrozenSet: Hashable {
+    /// Feeds the members to the hasher, in no order: equal sets hash equal.
+    public fn hash(into hasher: inout Hasher) {
+        var sum = 0
+        for member in table.keys {
+            sum = sum &+ table.hashOfMember(member)
+        }
+        hasher.combine(table.keys.count)
+        hasher.combine(sum)
+    }
+}
+
+extension FrozenSet: Debug where Element: Debug {
+    /// `FrozenSet([1, 2])`, in the order the values were given.
+    public fn debugDescription() -> String {
+        return described("FrozenSet", descriptions(table.keys))
+    }
+}

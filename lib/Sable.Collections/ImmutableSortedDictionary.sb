@@ -1,0 +1,304 @@
+module Sable.Collections
+
+// Kept as a list in order of the keys, whose tree finds a key as a B+ tree
+// does (ListTreeNode's partition), and whose cutting and joining are this
+// dictionary's.
+
+/// A dictionary in the order of its keys, kept so that copies of it stay
+/// cheap as they change: .NET's ImmutableSortedDictionary. A copy shares
+/// everything with the dictionary it was made from, and a change to either
+/// copies only the nodes on the way to the key. Each operation on a key, or a
+/// place in the order, is O(log n); so is cutting out a range of keys, as a
+/// dictionary of its own that shares the nodes.
+///
+/// A value, changed by the methods SortedDictionary has, in place where
+/// nothing else holds it: a `var` is its own builder.
+///
+/// ```sable
+/// let before = ImmutableSortedDictionary<String, Int>([("carol", 7), ("alice", 9), ("bob", 4)])
+/// let after = before.setting("dave", to: 1).removing("alice")
+/// assert(before.keys == ["alice", "bob", "carol"])
+/// assert(after.keys == ["bob", "carol", "dave"])
+/// assert(after.ceiling("c")!.key == "carol")
+/// assert(before.range("b"..<"c").keys == ["bob"])
+/// ```
+public struct ImmutableSortedDictionary<Key: Comparable, Value> {
+    public alias Element = (key: Key, value: Value)
+
+    var entries: ImmutableList<(key: Key, value: Value)> = ImmutableList<Element>()
+
+    /// An empty dictionary.
+    public init() { }
+
+    /// A dictionary of the pairs, each key with its value; a key that comes
+    /// again keeps the last value given it. What going through them throws,
+    /// it throws.
+    public init<S: Sequence>(_ pairs: S) throws(S.Failure) where S.Element == (Key, Value) {
+        for try (key, value) in pairs {
+            updateValue(value, forKey: key)
+        }
+    }
+
+    /// How many keys it holds.
+    public var count: Int => entries.count
+
+    /// Whether it holds no keys.
+    public var isEmpty: Bool => entries.isEmpty
+
+    /// The entry of the least key, or none.
+    public var first: (key: Key, value: Value)? => entries.first
+
+    /// The entry of the greatest key, or none.
+    public var last: (key: Key, value: Value)? => entries.last
+
+    // ---- Looking up --------------------------------------------------------
+
+    /// How many keys come before the key: where it is, or would be put.
+    public fn rank(of key: Key) -> Int {
+        return entries.partition { $0.key < key }
+    }
+
+    /// How many keys come before the key, or are it.
+    fn rank(past key: Key) -> Int {
+        return entries.partition { !(key < $0.key) }
+    }
+
+    // Where the key's entry is, or -1.
+    fn find(_ key: Key) -> Int {
+        let rank = rank(of: key)
+        return rank < entries.count && !(key < entries[rank].key) ? rank : -1
+    }
+
+    /// The key's value, or none; set to none, the key is removed.
+    public subscript(key: Key) -> Value? {
+        get {
+            let rank = rank(of: key)
+            if rank < entries.count {
+                let found = entries[rank]
+                if !(key < found.key) {
+                    return found.value
+                }
+            }
+            return none
+        }
+        set {
+            if let value = newValue {
+                updateValue(value, forKey: key)
+            } else {
+                remove(key)
+            }
+        }
+    }
+
+    /// Whether the key has a value.
+    public fn contains(_ key: Key) -> Bool {
+        return find(key) >= 0
+    }
+
+    /// The entry of the greatest key not above the key, or none.
+    public fn floor(_ key: Key) -> (key: Key, value: Value)? {
+        let rank = rank(past: key)
+        return rank == 0 ? none : entries[rank - 1]
+    }
+
+    /// The entry of the least key not below the key, or none.
+    public fn ceiling(_ key: Key) -> (key: Key, value: Value)? {
+        let rank = rank(of: key)
+        return rank == entries.count ? none : entries[rank]
+    }
+
+    // ---- Changing ----------------------------------------------------------
+
+    /// Sets the key's value, and gives the one it replaced, if any.
+    @discardable
+    public mutating fn updateValue(_ value: Value, forKey key: Key) -> Value? {
+        let rank = rank(of: key)
+        if rank < entries.count {
+            let found = entries[rank]
+            if !(key < found.key) {
+                entries[rank] = (key: key, value: value)
+                return found.value
+            }
+        }
+        entries.insert((key: key, value: value), at: rank)
+        return none
+    }
+
+    /// Removes the key, and gives the value it had, if any.
+    @discardable
+    public mutating fn remove(_ key: Key) -> Value? {
+        let at = find(key)
+        return at < 0 ? none : entries.remove(at: at).value
+    }
+
+    /// Removes every entry.
+    public mutating fn removeAll() {
+        entries.removeAll()
+    }
+
+    /// The entry of the least key, taken out; none when there is none.
+    @discardable
+    public mutating fn popFirst() -> (key: Key, value: Value)? {
+        return isEmpty ? none : entries.remove(at: 0)
+    }
+
+    /// The entry of the greatest key, taken out; none when there is none.
+    @discardable
+    public mutating fn popLast() -> (key: Key, value: Value)? {
+        return entries.popLast()
+    }
+
+    /// This dictionary with the key's value set: the rest shared with this one.
+    public fn setting(_ key: Key, to value: Value) -> ImmutableSortedDictionary<Key, Value> {
+        var changed = self
+        changed.updateValue(value, forKey: key)
+        return changed
+    }
+
+    /// This dictionary without the key: the rest shared with this one.
+    public fn removing(_ key: Key) -> ImmutableSortedDictionary<Key, Value> {
+        var changed = self
+        changed.remove(key)
+        return changed
+    }
+
+    // ---- Ranges ------------------------------------------------------------
+
+    /// The entries whose keys are in the range, as a dictionary of their own,
+    /// the nodes shared: O(log n).
+    public fn range(_ keys: Range<Key>) -> ImmutableSortedDictionary<Key, Value> {
+        return piece(rank(of: keys.lowerBound), rank(of: keys.upperBound))
+    }
+
+    /// The entries whose keys are in the range, both ends included.
+    public fn range(_ keys: ClosedRange<Key>) -> ImmutableSortedDictionary<Key, Value> {
+        return piece(rank(of: keys.lowerBound), rank(past: keys.upperBound))
+    }
+
+    /// The entries whose keys are not below the bound.
+    public fn range(_ keys: PartialRangeFrom<Key>) -> ImmutableSortedDictionary<Key, Value> {
+        return piece(rank(of: keys.lowerBound), count)
+    }
+
+    /// The entries whose keys are below the bound.
+    public fn range(_ keys: PartialRangeUpTo<Key>) -> ImmutableSortedDictionary<Key, Value> {
+        return piece(0, rank(of: keys.upperBound))
+    }
+
+    /// The entries whose keys are not above the bound.
+    public fn range(_ keys: PartialRangeThrough<Key>) -> ImmutableSortedDictionary<Key, Value> {
+        return piece(0, rank(past: keys.upperBound))
+    }
+
+    fn piece(_ from: Int, _ to: Int) -> ImmutableSortedDictionary<Key, Value> {
+        var made = ImmutableSortedDictionary<Key, Value>()
+        made.entries = entries[from..<to]
+        return made
+    }
+
+    /// The entries from the key on taken out, as a dictionary of their own:
+    /// this one keeps those below it.
+    public mutating fn split(at key: Key) -> ImmutableSortedDictionary<Key, Value> {
+        let rank = rank(of: key)
+        let high = piece(rank, count)
+        self = piece(0, rank)
+        return high
+    }
+
+    /// The keys, in order.
+    public var keys: Key[>..] {
+        get {
+            var all: Key[>..] = []
+            all.reserveCapacity(count)
+            for entry in entries {
+                all.append(entry.key)
+            }
+            return all
+        }
+    }
+
+    /// The values, in the order of their keys.
+    public var values: Value[>..] {
+        get {
+            var all: Value[>..] = []
+            all.reserveCapacity(count)
+            for entry in entries {
+                all.append(entry.value)
+            }
+            return all
+        }
+    }
+}
+
+extension ImmutableSortedDictionary: BidirectionalCollection, FromSequence<(Key, Value)> {
+    public alias Index = SortedIndex
+    public alias Iter = ImmutableListIterator<(key: Key, value: Value)>
+
+    /// The entries in the order of their keys.
+    public fn makeIterator() -> ImmutableListIterator<(key: Key, value: Value)> {
+        return entries.makeIterator()
+    }
+
+    public var startIndex: SortedIndex => SortedIndex { rank: 0 }
+
+    public var endIndex: SortedIndex => SortedIndex { rank: entries.count }
+
+    /// The entry at a position, found in O(log n); one not an entry's traps.
+    public subscript(position: SortedIndex) -> (key: Key, value: Value) {
+        get => entries[position.rank]
+    }
+
+    public fn index(after position: SortedIndex) -> SortedIndex => SortedIndex { rank: position.rank + 1 }
+
+    public fn index(before position: SortedIndex) -> SortedIndex => SortedIndex { rank: position.rank - 1 }
+
+    public fn index(_ position: SortedIndex, offsetBy distance: Int) -> SortedIndex => SortedIndex { rank: position.rank + distance }
+
+    /// The position of the key's entry, or none.
+    public fn index(forKey key: Key) -> SortedIndex? {
+        let at = find(key)
+        return at < 0 ? none : SortedIndex { rank: at }
+    }
+}
+
+extension ImmutableSortedDictionary: Equatable where Value: Equatable {
+    /// The same keys with equal values.
+    public operator == (lhs: ImmutableSortedDictionary<Key, Value>, rhs: ImmutableSortedDictionary<Key, Value>) -> Bool {
+        if lhs.count != rhs.count {
+            return false
+        }
+        if lhs.entries.isIdentical(to: rhs.entries) {
+            return true
+        }
+        var right = rhs.makeIterator()
+        for a in lhs {
+            let b = right.next()!
+            if a.key < b.key || b.key < a.key || a.value != b.value {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+extension ImmutableSortedDictionary: Hashable where Key: Hashable, Value: Hashable {
+    /// Feeds the count and then each key and value, in order.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(count)
+        for entry in entries {
+            hasher.combine(entry.key)
+            hasher.combine(entry.value)
+        }
+    }
+}
+
+extension ImmutableSortedDictionary: Debug where Key: Debug, Value: Debug {
+    /// `ImmutableSortedDictionary(["a": 1])`, in order.
+    public fn debugDescription() -> String {
+        var parts: String[>..] = []
+        for entry in entries {
+            parts.append(entry.key.debugDescription() + ": " + entry.value.debugDescription())
+        }
+        return parts.isEmpty ? "ImmutableSortedDictionary([:])" : described("ImmutableSortedDictionary", parts)
+    }
+}

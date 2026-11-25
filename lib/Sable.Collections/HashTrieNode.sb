@@ -1,0 +1,708 @@
+module Sable.Collections
+
+// The tree ImmutableDictionary and ImmutableSet are made of: a compressed
+// hash-array mapped prefix tree (CHAMP, Steindorfer and Vinju, 2015). A key's
+// hash is cut into pieces of five bits, and each level of the tree uses one:
+// a node has room for 32 of them, and keeps only those there are. A piece
+// one key alone has is that key's entry, in the node; one that several have
+// is a node below, where the next piece tells them apart. 'dataMap' has a bit
+// for each piece of the first kind and 'nodeMap' for each of the second, so
+// that a piece's place among the node's entries, or its children, is how many
+// bits are below its own.
+//
+// Keys whose whole hashes are equal, all 64 bits, are told apart by nothing:
+// they are the entries of a node with neither map, below the last piece.
+//
+// The shape is what it is by the keys alone, however they were added and
+// whatever was removed: a node below the root never holds a single key, which
+// is its parent's entry instead. (Only keys of one hash are in the order they
+// came in.) So two trees of the same keys are the same node by node, and a
+// node both hold is equal to itself without a look inside.
+//
+// A node is a struct of two arrays, and those are what is shared: copying a
+// tree copies its root's two references. A 'mutating' call changes the arrays
+// on the way to the key, and an array is changed in place when nothing else
+// holds it and copied when something does — so a tree held once is built and
+// changed in place, with no builder beside it, and one that is shared has the
+// path to the key copied, and shares the rest.
+
+/// A key, its value, and the key's hash, so that a key is hashed once.
+struct HashTrieEntry<Key, Value> {
+    let key: Key
+    var value: Value
+    let hash: Int
+}
+
+/// The bits of the hash a level tells keys apart by.
+const hashTrieBits = 5
+
+/// The first shift past every bit of a hash: where keys of one hash are.
+const hashTrieEnd = 65
+
+struct HashTrieNode<Key: Hashable, Value> {
+    var dataMap: U32 = 0
+    var nodeMap: U32 = 0
+    /// How many keys are in this node and those below it.
+    var size: Int = 0
+    var entries: HashTrieEntry<Key, Value>[>..] = []
+    var children: HashTrieNode<Key, Value>[>..] = []
+
+    static fn hash(of key: Key) -> Int {
+        var hasher = Hasher()
+        key.hash(into: &hasher)
+        return hasher.finalize()
+    }
+
+    /// The bit of the piece of the hash a level looks at.
+    @inline(always)
+    static fn bit(_ hash: Int, _ shift: Int) -> U32 {
+        return (1 as U32) << U32((hash >> shift) & 31)
+    }
+
+    /// How many of the map's bits are below the one given.
+    @inline(always)
+    static fn place(_ map: U32, _ bit: U32) -> Int {
+        return Int((map & (bit &- 1)).popCount)
+    }
+
+    /// Whether it holds one key alone, which its parent should hold instead.
+    var isSingle: Bool => size == 1 && children.isEmpty
+
+    /// Whether the two are one tree: the same arrays.
+    fn isSame(as other: HashTrieNode<Key, Value>) -> Bool {
+        return size == other.size && entries.sharesElements(with: other.entries) && children.sharesElements(with: other.children)
+    }
+
+    // ---- Looking up ------------------------------------------------------
+
+    fn find(_ key: Key, _ hash: Int, _ shift: Int) -> Value? {
+        if shift < hashTrieEnd {
+            let bit = HashTrieNode.bit(hash, shift)
+            if (dataMap & bit) != 0 {
+                let at = HashTrieNode.place(dataMap, bit)
+                if entries[at].hash == hash && entries[at].key == key {
+                    return entries[at].value
+                }
+                return none
+            }
+            if (nodeMap & bit) != 0 {
+                return children[HashTrieNode.place(nodeMap, bit)].find(key, hash, shift + hashTrieBits)
+            }
+            return none
+        }
+        let at = indexOfCollision(key)
+        return at < 0 ? none : entries[at].value
+    }
+
+    fn contains(_ key: Key, _ hash: Int, _ shift: Int) -> Bool {
+        if shift < hashTrieEnd {
+            let bit = HashTrieNode.bit(hash, shift)
+            if (dataMap & bit) != 0 {
+                let at = HashTrieNode.place(dataMap, bit)
+                return entries[at].hash == hash && entries[at].key == key
+            }
+            if (nodeMap & bit) != 0 {
+                return children[HashTrieNode.place(nodeMap, bit)].contains(key, hash, shift + hashTrieBits)
+            }
+            return false
+        }
+        return indexOfCollision(key) >= 0
+    }
+
+    /// The entry of the key of the one given, as it is here.
+    fn entry(like other: HashTrieEntry<Key, Value>, _ shift: Int) -> HashTrieEntry<Key, Value>? {
+        if shift < hashTrieEnd {
+            let bit = HashTrieNode.bit(other.hash, shift)
+            if (dataMap & bit) != 0 {
+                let at = HashTrieNode.place(dataMap, bit)
+                return entries[at].hash == other.hash && entries[at].key == other.key ? entries[at] : none
+            }
+            if (nodeMap & bit) != 0 {
+                return children[HashTrieNode.place(nodeMap, bit)].entry(like: other, shift + hashTrieBits)
+            }
+            return none
+        }
+        let at = indexOfCollision(other.key)
+        return at < 0 ? none : entries[at]
+    }
+
+    /// Of a node of keys of one hash: where the key is, or -1.
+    fn indexOfCollision(_ key: Key) -> Int {
+        var at = 0
+        while at < entries.count {
+            if entries[at].key == key {
+                return at
+            }
+            at += 1
+        }
+        return -1
+    }
+
+    /// The entry so many entries on from the tree's first.
+    fn entry(rank: Int) -> HashTrieEntry<Key, Value> {
+        if rank < entries.count {
+            return entries[rank]
+        }
+        var left = rank - entries.count
+        var at = 0
+        while left >= children[at].size {
+            left -= children[at].size
+            at += 1
+        }
+        return children[at].entry(rank: left)
+    }
+
+    // ---- Changing --------------------------------------------------------
+
+    /// The entry put in, in place of the one of its key: the value that had.
+    mutating fn put(_ entry: HashTrieEntry<Key, Value>, _ shift: Int) -> Value? {
+        if shift >= hashTrieEnd {
+            let at = indexOfCollision(entry.key)
+            if at >= 0 {
+                let old = entries[at].value
+                entries[at].value = entry.value
+                return old
+            }
+            entries.append(entry)
+            size += 1
+            return none
+        }
+        let bit = HashTrieNode.bit(entry.hash, shift)
+        if (dataMap & bit) != 0 {
+            let at = HashTrieNode.place(dataMap, bit)
+            if entries[at].hash == entry.hash && entries[at].key == entry.key {
+                let old = entries[at].value
+                entries[at].value = entry.value
+                return old
+            }
+            pushDown(at, bit, HashTrieNode.pair(entries[at], entry, shift + hashTrieBits))
+            return none
+        }
+        if (nodeMap & bit) != 0 {
+            let at = HashTrieNode.place(nodeMap, bit)
+            if let old = children[at].put(entry, shift + hashTrieBits) {
+                return old
+            }
+            size += 1
+            return none
+        }
+        insertEntry(entry, bit)
+        return none
+    }
+
+    /// The value of the key, which is here, changed where it is.
+    mutating fn modify(_ key: Key, _ hash: Int, _ shift: Int, _ change: (inout Value) -> Void) {
+        if shift >= hashTrieEnd {
+            change(&entries[indexOfCollision(key)].value)
+            return
+        }
+        let bit = HashTrieNode.bit(hash, shift)
+        if (dataMap & bit) != 0 {
+            change(&entries[HashTrieNode.place(dataMap, bit)].value)
+        } else {
+            children[HashTrieNode.place(nodeMap, bit)].modify(key, hash, shift + hashTrieBits, change)
+        }
+    }
+
+    /// The key, which is here, taken out: its value.
+    mutating fn remove(_ key: Key, _ hash: Int, _ shift: Int) -> Value {
+        size -= 1
+        if shift >= hashTrieEnd {
+            return entries.takeOut(indexOfCollision(key)).value
+        }
+        let bit = HashTrieNode.bit(hash, shift)
+        if (dataMap & bit) != 0 {
+            let at = HashTrieNode.place(dataMap, bit)
+            dataMap = dataMap ^ bit
+            return entries.takeOut(at).value
+        }
+        let at = HashTrieNode.place(nodeMap, bit)
+        let removed = children[at].remove(key, hash, shift + hashTrieBits)
+        if children[at].isSingle {
+            let left = children.takeOut(at).entries[0]
+            nodeMap = nodeMap ^ bit
+            dataMap = dataMap | bit
+            entries.putIn(left, HashTrieNode.place(dataMap, bit))
+        }
+        return removed
+    }
+
+    /// An entry put in for a piece nothing has.
+    mutating fn insertEntry(_ entry: HashTrieEntry<Key, Value>, _ bit: U32) {
+        entries.putIn(entry, HashTrieNode.place(dataMap, bit))
+        dataMap = dataMap | bit
+        size += 1
+    }
+
+    /// The entry at the place replaced by a node of it and others.
+    mutating fn pushDown(_ at: Int, _ bit: U32, _ child: HashTrieNode<Key, Value>) {
+        _ = entries.takeOut(at)
+        dataMap = dataMap ^ bit
+        children.putIn(child, HashTrieNode.place(nodeMap, bit))
+        nodeMap = nodeMap | bit
+        size += child.size - 1
+    }
+
+    /// A node of two entries of different keys, at a level.
+    static fn pair(_ a: HashTrieEntry<Key, Value>, _ b: HashTrieEntry<Key, Value>, _ shift: Int) -> HashTrieNode<Key, Value> {
+        var node = HashTrieNode<Key, Value>()
+        node.size = 2
+        if shift >= hashTrieEnd {
+            node.entries = [a, b]
+            return node
+        }
+        let first = HashTrieNode.bit(a.hash, shift)
+        let second = HashTrieNode.bit(b.hash, shift)
+        if first == second {
+            node.nodeMap = first
+            node.children = [HashTrieNode.pair(a, b, shift + hashTrieBits)]
+            return node
+        }
+        node.dataMap = first | second
+        node.entries = first < second ? [a, b] : [b, a]
+        return node
+    }
+
+    /// An entry for the next piece of a node being made, pieces in order.
+    mutating fn add(_ entry: HashTrieEntry<Key, Value>, _ bit: U32) {
+        dataMap = dataMap | bit
+        entries.append(entry)
+        size += 1
+    }
+
+    /// What is left of a child for the next piece of a node being made: a
+    /// node, the one entry left, or nothing.
+    mutating fn add(child: HashTrieNode<Key, Value>, _ bit: U32) {
+        if child.size == 0 {
+            return
+        }
+        if child.isSingle {
+            add(child.entries[0], bit)
+            return
+        }
+        nodeMap = nodeMap | bit
+        children.append(child)
+        size += child.size
+    }
+
+    // ---- Whole trees -----------------------------------------------------
+
+    /// The other's keys added: one both have keeps what 'combine' makes of
+    /// the values, or with 'keeping' its own.
+    mutating fn merge(_ other: HashTrieNode<Key, Value>, _ shift: Int, keeping: Bool, _ combine: (Value, Value) -> Value) {
+        if other.size == 0 || keeping && isSame(as: other) {
+            return
+        }
+        if size == 0 {
+            self = other
+            return
+        }
+        if shift >= hashTrieEnd {
+            for entry in other.entries {
+                merge(entry: entry, shift, keeping: keeping, combine)
+            }
+            return
+        }
+        var bits = other.dataMap
+        for entry in other.entries {
+            bits = bits & (bits &- 1)
+            merge(entry: entry, shift, keeping: keeping, combine)
+        }
+        bits = other.nodeMap
+        for child in other.children {
+            let bit = bits ^ (bits & (bits &- 1))
+            bits = bits ^ bit
+            if (nodeMap & bit) != 0 {
+                let at = HashTrieNode.place(nodeMap, bit)
+                if keeping && children[at].isSame(as: child) {
+                    continue
+                }
+                let before = children[at].size
+                children[at].merge(child, shift + hashTrieBits, keeping: keeping, combine)
+                size += children[at].size - before
+            } else if (dataMap & bit) != 0 {
+                let at = HashTrieNode.place(dataMap, bit)
+                var mine = entries[at]
+                var below = child
+                if !keeping {
+                    if let theirs = child.entry(like: mine, shift + hashTrieBits) {
+                        mine.value = combine(mine.value, theirs.value)
+                    }
+                }
+                _ = below.put(mine, shift + hashTrieBits)
+                pushDown(at, bit, below)
+            } else {
+                children.putIn(child, HashTrieNode.place(nodeMap, bit))
+                nodeMap = nodeMap | bit
+                size += child.size
+            }
+        }
+    }
+
+    mutating fn merge(entry: HashTrieEntry<Key, Value>, _ shift: Int, keeping: Bool, _ combine: (Value, Value) -> Value) {
+        if let mine = find(entry.key, entry.hash, shift) {
+            if !keeping {
+                _ = put(HashTrieEntry<Key, Value> { key: entry.key, value: combine(mine, entry.value), hash: entry.hash }, shift)
+            }
+        } else {
+            _ = put(entry, shift)
+        }
+    }
+
+    /// The entries whose keys the other has, or with 'present: false' those
+    /// whose keys it does not have: the same tree where that is all of them.
+    fn select(keysIn other: HashTrieNode<Key, Value>, present: Bool, _ shift: Int) -> HashTrieNode<Key, Value> {
+        var kept = HashTrieNode<Key, Value>()
+        if size == 0 || other.size == 0 {
+            return present ? kept : self
+        }
+        if isSame(as: other) {
+            return present ? self : kept
+        }
+        if shift >= hashTrieEnd {
+            for entry in entries {
+                if (other.indexOfCollision(entry.key) >= 0) == present {
+                    kept.entries.append(entry)
+                }
+            }
+            kept.size = kept.entries.count
+            return kept.size == size ? self : kept
+        }
+        var bits = dataMap | nodeMap
+        if present {
+            bits = bits & (other.dataMap | other.nodeMap)
+        }
+        while bits != 0 {
+            let bit = bits ^ (bits & (bits &- 1))
+            bits = bits ^ bit
+            if (dataMap & bit) != 0 {
+                let entry = entries[HashTrieNode.place(dataMap, bit)]
+                if other.contains(entry.key, entry.hash, shift) == present {
+                    kept.add(entry, bit)
+                }
+                continue
+            }
+            let at = HashTrieNode.place(nodeMap, bit)
+            if (other.nodeMap & bit) != 0 {
+                let theirs = HashTrieNode.place(other.nodeMap, bit)
+                kept.add(child: children[at].select(keysIn: other.children[theirs], present: present, shift + hashTrieBits), bit)
+            } else if (other.dataMap & bit) != 0 {
+                let theirs = other.entries[HashTrieNode.place(other.dataMap, bit)]
+                if let mine = children[at].entry(like: theirs, shift + hashTrieBits) {
+                    if present {
+                        kept.add(mine, bit)
+                    } else {
+                        var below = children[at]
+                        _ = below.remove(theirs.key, theirs.hash, shift + hashTrieBits)
+                        kept.add(child: below, bit)
+                    }
+                } else if !present {
+                    kept.add(child: children[at], bit)
+                }
+            } else {
+                kept.add(child: children[at], bit)
+            }
+        }
+        return kept.size == size ? self : kept
+    }
+
+    /// Whether any key is one of the other's, or with 'present: false'
+    /// whether any is not.
+    fn hasKey(in other: HashTrieNode<Key, Value>, present: Bool, _ shift: Int) -> Bool {
+        if size == 0 || isSame(as: other) {
+            return present && size > 0
+        }
+        if !present && size > other.size {
+            return true
+        }
+        if shift >= hashTrieEnd {
+            for entry in entries {
+                if (other.indexOfCollision(entry.key) >= 0) == present {
+                    return true
+                }
+            }
+            return false
+        }
+        for entry in entries {
+            if other.contains(entry.key, entry.hash, shift) == present {
+                return true
+            }
+        }
+        var bits = nodeMap
+        for child in children {
+            let bit = bits ^ (bits & (bits &- 1))
+            bits = bits ^ bit
+            if (other.nodeMap & bit) != 0 {
+                if child.hasKey(in: other.children[HashTrieNode.place(other.nodeMap, bit)], present: present, shift + hashTrieBits) {
+                    return true
+                }
+            } else if !present {
+                // At least two keys here, at most one there.
+                return true
+            } else if (other.dataMap & bit) != 0 {
+                let theirs = other.entries[HashTrieNode.place(other.dataMap, bit)]
+                if child.contains(theirs.key, theirs.hash, shift + hashTrieBits) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /// The entries the closure says to keep: the same tree where that is all.
+    fn filter(_ shift: Int, _ isIncluded: (Key, Value) -> Bool) -> HashTrieNode<Key, Value> {
+        var kept = HashTrieNode<Key, Value>()
+        if shift >= hashTrieEnd {
+            for entry in entries {
+                if isIncluded(entry.key, entry.value) {
+                    kept.entries.append(entry)
+                }
+            }
+            kept.size = kept.entries.count
+            return kept.size == size ? self : kept
+        }
+        var bits = dataMap | nodeMap
+        while bits != 0 {
+            let bit = bits ^ (bits & (bits &- 1))
+            bits = bits ^ bit
+            if (dataMap & bit) != 0 {
+                let entry = entries[HashTrieNode.place(dataMap, bit)]
+                if isIncluded(entry.key, entry.value) {
+                    kept.add(entry, bit)
+                }
+            } else {
+                kept.add(child: children[HashTrieNode.place(nodeMap, bit)].filter(shift + hashTrieBits, isIncluded), bit)
+            }
+        }
+        return kept.size == size ? self : kept
+    }
+
+    /// The same keys, each with its value transformed.
+    fn mapValues<T>(_ transform: (Value) -> T) -> HashTrieNode<Key, T> {
+        var mapped = HashTrieNode<Key, T>()
+        mapped.dataMap = dataMap
+        mapped.nodeMap = nodeMap
+        mapped.size = size
+        mapped.entries.reserveCapacity(entries.count)
+        for entry in entries {
+            mapped.entries.append(HashTrieEntry<Key, T> { key: entry.key, value: transform(entry.value), hash: entry.hash })
+        }
+        mapped.children.reserveCapacity(children.count)
+        for child in children {
+            mapped.children.append(child.mapValues(transform))
+        }
+        return mapped
+    }
+
+    /// Whether the two hold the same keys, whose values the closure says
+    /// are equal.
+    fn isEqual(to other: HashTrieNode<Key, Value>, _ shift: Int, _ equal: (Value, Value) -> Bool) -> Bool {
+        if size != other.size || dataMap != other.dataMap || nodeMap != other.nodeMap {
+            return false
+        }
+        if isSame(as: other) {
+            return true
+        }
+        var i = 0
+        if shift >= hashTrieEnd {
+            while i < entries.count {
+                let at = other.indexOfCollision(entries[i].key)
+                if at < 0 || !equal(entries[i].value, other.entries[at].value) {
+                    return false
+                }
+                i += 1
+            }
+            return true
+        }
+        while i < entries.count {
+            if entries[i].hash != other.entries[i].hash || !(entries[i].key == other.entries[i].key) || !equal(entries[i].value, other.entries[i].value) {
+                return false
+            }
+            i += 1
+        }
+        i = 0
+        while i < children.count {
+            if !children[i].isEqual(to: other.children[i], shift + hashTrieBits, equal) {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    /// What differs from an older tree, told to the closure: each key with
+    /// the value it had there, or none, and the value it has here, or none.
+    /// Nodes the two share are not looked into.
+    fn changes(from old: HashTrieNode<Key, Value>, _ shift: Int, _ equal: (Value, Value) -> Bool, _ body: (Key, Value?, Value?) -> Void) {
+        if isSame(as: old) {
+            return
+        }
+        var common: U32 = 0
+        if shift < hashTrieEnd {
+            common = nodeMap & old.nodeMap
+        }
+        var bits = common
+        while bits != 0 {
+            let bit = bits ^ (bits & (bits &- 1))
+            bits = bits ^ bit
+            let theirs = HashTrieNode.place(old.nodeMap, bit)
+            children[HashTrieNode.place(nodeMap, bit)].changes(from: old.children[theirs], shift + hashTrieBits, equal, body)
+        }
+        // The rest, which are few where the two are alike: keys that are an
+        // entry on one side at least.
+        var before = HashTrieIterator<Key, Value>(old, apartFrom: common)
+        while let entry = before.next() {
+            if let now = find(entry.key, entry.hash, shift) {
+                if !equal(entry.value, now) {
+                    body(entry.key, entry.value, now)
+                }
+            } else {
+                body(entry.key, entry.value, none)
+            }
+        }
+        var after = HashTrieIterator<Key, Value>(self, apartFrom: common)
+        while let entry = after.next() {
+            if !old.contains(entry.key, entry.hash, shift) {
+                body(entry.key, none, entry.value)
+            }
+        }
+    }
+
+    /// What is wrong with the tree's shape, for the tests: none when nothing is.
+    fn fault(_ shift: Int) -> String? {
+        if shift >= hashTrieEnd {
+            if !children.isEmpty || dataMap != 0 || nodeMap != 0 || size != entries.count || size < 2 {
+                return "a node of equal hashes"
+            }
+            for entry in entries {
+                if entry.hash != entries[0].hash {
+                    return "a hash among equal ones"
+                }
+            }
+            return none
+        }
+        if (dataMap & nodeMap) != 0 || Int(dataMap.popCount) != entries.count || Int(nodeMap.popCount) != children.count {
+            return "a node's maps"
+        }
+        if shift > 0 && (size == 0 || isSingle) {
+            return "a node of one key"
+        }
+        var total = entries.count
+        var bits = dataMap
+        for entry in entries {
+            let bit = bits ^ (bits & (bits &- 1))
+            bits = bits ^ bit
+            if HashTrieNode.bit(entry.hash, shift) != bit || entry.hash != HashTrieNode.hash(of: entry.key) {
+                return "an entry's place"
+            }
+        }
+        bits = nodeMap
+        for child in children {
+            let bit = bits ^ (bits & (bits &- 1))
+            bits = bits ^ bit
+            if let fault = child.fault(shift + hashTrieBits) {
+                return fault
+            }
+            var below = HashTrieIterator<Key, Value>(child)
+            while let entry = below.next() {
+                if HashTrieNode.bit(entry.hash, shift) != bit {
+                    return "a child's place"
+                }
+            }
+            total += child.size
+        }
+        return total == size ? none : "a node's size"
+    }
+}
+
+extension HashTrieNode where Key == String {
+    /// `find` with the piece's hash and bytes.
+    fn find(piece: Substring, _ hash: Int, _ shift: Int) -> Value? {
+        if shift < hashTrieEnd {
+            let bit = HashTrieNode.bit(hash, shift)
+            if (dataMap & bit) != 0 {
+                let at = HashTrieNode.place(dataMap, bit)
+                return entries[at].hash == hash && piece == entries[at].key ? entries[at].value : none
+            }
+            if (nodeMap & bit) != 0 {
+                return children[HashTrieNode.place(nodeMap, bit)].find(piece: piece, hash, shift + hashTrieBits)
+            }
+            return none
+        }
+        for entry in entries {
+            if piece == entry.key {
+                return entry.value
+            }
+        }
+        return none
+    }
+}
+
+/// Goes through a tree's entries: a node's own, then its children's.
+struct HashTrieIterator<Key: Hashable, Value>: Iterator {
+    var entries: HashTrieEntry<Key, Value>[>..]
+    var position: Int = 0
+    // The nodes on the way down, each with the next of its children to go
+    // into and, as bits still set, the pieces of the children left.
+    var waiting: HashTrieStep<Key, Value>[>..] = []
+
+    /// The tree's, but for the root's children of the pieces given.
+    init(_ root: HashTrieNode<Key, Value>, apartFrom pieces: U32 = 0) {
+        entries = root.entries
+        if !root.children.isEmpty {
+            waiting.append(HashTrieStep<Key, Value> { children: root.children, next: 0, pieces: root.nodeMap, passedOver: pieces })
+        }
+    }
+
+    mutating fn next() -> HashTrieEntry<Key, Value>? {
+        while position >= entries.count {
+            let top = waiting.count - 1
+            if top < 0 {
+                return none
+            }
+            let at = waiting[top].next
+            if at == waiting[top].children.count {
+                _ = waiting.removeLast()
+                continue
+            }
+            let pieces = waiting[top].pieces
+            let rest = pieces & (pieces &- 1)
+            waiting[top].next = at + 1
+            waiting[top].pieces = rest
+            if ((pieces ^ rest) & waiting[top].passedOver) != 0 {
+                continue
+            }
+            let node = waiting[top].children[at]
+            if !node.children.isEmpty {
+                waiting.append(HashTrieStep<Key, Value> { children: node.children, next: 0, pieces: node.nodeMap, passedOver: 0 })
+            }
+            entries = node.entries
+            position = 0
+        }
+        let entry = entries[position]
+        position += 1
+        return entry
+    }
+}
+
+/// A node an iterator is in the children of.
+struct HashTrieStep<Key: Hashable, Value> {
+    let children: HashTrieNode<Key, Value>[>..]
+    var next: Int
+    var pieces: U32
+    let passedOver: U32
+}
+
+extension<Element> Element[>..] {
+    /// The element put at the place, those from there on moved up one.
+    mutating fn putIn(_ element: Element, _ place: Int) {
+        self.append(element)
+        self.rotate(from: place, to: self.count, left: -1)
+    }
+
+    /// The element at the place taken out, those after it moved down one.
+    mutating fn takeOut(_ place: Int) -> Element {
+        self.rotate(from: place, to: self.count, left: 1)
+        return self.removeLast()
+    }
+}

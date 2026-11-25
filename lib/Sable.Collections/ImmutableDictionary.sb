@@ -1,0 +1,382 @@
+module Sable.Collections
+
+/// Keys to values, by hash, kept so that copies of it stay cheap as they
+/// change: .NET's ImmutableDictionary, Rust's `im::HashMap`, Clojure's map.
+/// A copy shares everything with the dictionary it was made from, and a
+/// change to either copies only the few nodes on the way to the key, O(log n)
+/// of them with 32 ways at each — where changing a shared `[Key: Value]`
+/// copies all of it. So versions can be kept — an undo history, a snapshot
+/// handed to another task — at the cost of what differs between them.
+///
+/// A value, as `[Key: Value]` is, and changed by the same methods. Where
+/// nothing else holds it, it is changed in place, so there is no builder to
+/// make one with: a `var` is. `setting`, `removing` and `merging` give a
+/// changed copy and leave this one as it is.
+///
+/// The order it is gone through in is by the keys' hashes: the same for equal
+/// dictionaries, however they were made, for as long as the program runs,
+/// and different from one run to the next (`Hasher`). Keys whose whole
+/// hashes are equal are an exception, and in the order they were added.
+///
+/// ```sable
+/// let before = ImmutableDictionary<String, Int>([("ann", 31), ("bob", 27)])
+/// let after = before.setting("cid", to: 40).removing("ann")
+/// assert(before.count == 2 && before["ann"] == 31 && before["cid"] == none)
+/// assert(after["cid"] == 40 && after["ann"] == none)
+/// assert(after.removing("cid").setting("ann", to: 31) == before)
+/// ```
+public struct ImmutableDictionary<Key: Hashable, Value> {
+    var root: HashTrieNode<Key, Value> = HashTrieNode<Key, Value>()
+
+    /// An empty dictionary.
+    public init() { }
+
+    /// A dictionary of the pairs, each key with its value; a key that comes
+    /// again keeps the last value given it. What going through them throws,
+    /// it throws.
+    public init<S: Sequence>(_ pairs: S) throws(S.Failure) where S.Element == (Key, Value) {
+        for try (key, value) in pairs {
+            _ = root.put(ImmutableDictionary.entry(key, value), 0)
+        }
+    }
+
+    static fn of(_ root: HashTrieNode<Key, Value>) -> ImmutableDictionary<Key, Value> {
+        var made = ImmutableDictionary<Key, Value>()
+        made.root = root
+        return made
+    }
+
+    static fn entry(_ key: Key, _ value: Value) -> HashTrieEntry<Key, Value> {
+        return HashTrieEntry<Key, Value> { key: key, value: value, hash: HashTrieNode<Key, Value>.hash(of: key) }
+    }
+
+    /// How many keys it holds.
+    public var count: Int => root.size
+
+    /// Whether it holds no keys.
+    public var isEmpty: Bool => root.size == 0
+
+    // ---- Looking up and changing ------------------------------------------
+
+    /// The key's value, or none; set to none, the key is removed.
+    public subscript(key: Key) -> Value? {
+        get => root.find(key, HashTrieNode<Key, Value>.hash(of: key), 0)
+        set {
+            if let value = newValue {
+                _ = root.put(ImmutableDictionary.entry(key, value), 0)
+            } else {
+                remove(key)
+            }
+        }
+    }
+
+    /// The key's value, or the fallback when it has none; setting it sets
+    /// the key's value.
+    public subscript(key: Key, default fallback: Value) -> Value {
+        get => self[key] ?? fallback
+        set {
+            _ = root.put(ImmutableDictionary.entry(key, newValue), 0)
+        }
+    }
+
+    /// Whether the key has a value.
+    public fn contains(_ key: Key) -> Bool {
+        return root.contains(key, HashTrieNode<Key, Value>.hash(of: key), 0)
+    }
+
+    /// Sets the key's value, adding the key if it is new; gives the value it
+    /// replaced, or none when the key is new.
+    @discardable
+    public mutating fn updateValue(_ value: Value, forKey key: Key) -> Value? {
+        return root.put(ImmutableDictionary.entry(key, value), 0)
+    }
+
+    /// Adds the key with the value, unless the key is there already, whose
+    /// value is then left as it is; true if it was added.
+    @discardable
+    public mutating fn insert(_ value: Value, forKey key: Key) -> Bool {
+        let entry = ImmutableDictionary.entry(key, value)
+        if root.contains(key, entry.hash, 0) {
+            return false
+        }
+        _ = root.put(entry, 0)
+        return true
+    }
+
+    /// The key's value, taken out: none when it had none.
+    @discardable
+    public mutating fn remove(_ key: Key) -> Value? {
+        let hash = HashTrieNode<Key, Value>.hash(of: key)
+        // Looked for first, so that nothing is copied for a key not there.
+        if !root.contains(key, hash, 0) {
+            return none
+        }
+        return root.remove(key, hash, 0)
+    }
+
+    /// Every key and its value, taken out.
+    public mutating fn removeAll() {
+        root = HashTrieNode<Key, Value>()
+    }
+
+    /// Changes the key's value where it is, when the key has one; true if it
+    /// had. The closure is given the value 'inout'.
+    ///
+    /// ```sable
+    /// var tags = ImmutableDictionary<String, String[>..]>()
+    /// tags["a"] = ["x"]
+    /// assert(tags.modify("a") { $0.append("y") })
+    /// assert(tags["a"]! == ["x", "y"])
+    /// ```
+    @discardable
+    public mutating fn modify(_ key: Key, _ change: (inout Value) -> Void) -> Bool {
+        let hash = HashTrieNode<Key, Value>.hash(of: key)
+        if !root.contains(key, hash, 0) {
+            return false
+        }
+        root.modify(key, hash, 0, change)
+        return true
+    }
+
+    /// Changes the key's value where it is, the key first set to the
+    /// fallback if it had no value: `counts.modify(word, default: 0) { $0 += 1 }`.
+    public mutating fn modify(_ key: Key, default fallback: Value, _ change: (inout Value) -> Void) {
+        let hash = HashTrieNode<Key, Value>.hash(of: key)
+        if root.contains(key, hash, 0) {
+            root.modify(key, hash, 0, change)
+            return
+        }
+        var value = fallback
+        change(&value)
+        _ = root.put(HashTrieEntry<Key, Value> { key: key, value: value, hash: hash }, 0)
+    }
+
+    /// This dictionary with the key's value set: the rest shared with this one.
+    public fn setting(_ key: Key, to value: Value) -> ImmutableDictionary<Key, Value> {
+        var changed = self
+        _ = changed.root.put(ImmutableDictionary.entry(key, value), 0)
+        return changed
+    }
+
+    /// This dictionary without the key: the rest shared with this one.
+    public fn removing(_ key: Key) -> ImmutableDictionary<Key, Value> {
+        var changed = self
+        changed.remove(key)
+        return changed
+    }
+
+    // ---- Whole dictionaries -----------------------------------------------
+
+    /// Adds the other's keys: a key both have gets what `combine` makes of
+    /// this one's value and the other's, in that order. Nodes only the other
+    /// has are shared with it.
+    public mutating fn merge(_ other: ImmutableDictionary<Key, Value>, uniquingKeysWith combine: (Value, Value) -> Value) {
+        root.merge(other.root, 0, keeping: false, combine)
+    }
+
+    /// This dictionary with the other's keys added, as `merge` adds them.
+    ///
+    /// ```sable
+    /// let a = ImmutableDictionary<String, Int>([("x", 1), ("y", 2)])
+    /// let b = ImmutableDictionary<String, Int>([("y", 10), ("z", 20)])
+    /// let both = a.merging(b) { $0 + $1 }
+    /// assert(both["x"] == 1 && both["y"] == 12 && both["z"] == 20)
+    /// ```
+    public fn merging(
+        _ other: ImmutableDictionary<Key, Value>,
+        uniquingKeysWith combine: (Value, Value) -> Value
+    ) -> ImmutableDictionary<Key, Value> {
+        var merged = self
+        merged.merge(other, uniquingKeysWith: combine)
+        return merged
+    }
+
+    /// The same keys, each with its value transformed. No key is hashed again.
+    public fn mapValues<T>(_ transform: (Value) -> T) -> ImmutableDictionary<Key, T> {
+        return ImmutableDictionary<Key, T>.of(root.mapValues(transform))
+    }
+
+    /// The keys whose values `transform` makes something of, each with what
+    /// it made; the rest are left out.
+    public fn compactMapValues<T>(_ transform: (Value) -> T?) -> ImmutableDictionary<Key, T> {
+        var made = HashTrieNode<Key, T>()
+        var entries = HashTrieIterator<Key, Value>(root)
+        while let entry = entries.next() {
+            if let value = transform(entry.value) {
+                _ = made.put(HashTrieEntry<Key, T> { key: entry.key, value: value, hash: entry.hash }, 0)
+            }
+        }
+        return ImmutableDictionary<Key, T>.of(made)
+    }
+
+    /// The keys and values `isIncluded` says to keep: parts it keeps all of
+    /// are shared with this one.
+    public fn filter(_ isIncluded: (Key, Value) -> Bool) -> ImmutableDictionary<Key, Value> {
+        return ImmutableDictionary.of(root.filter(0, isIncluded))
+    }
+
+    /// The keys, in the order they are gone through.
+    public var keys: Key[>..] {
+        get {
+            var all: Key[>..] = []
+            all.reserveCapacity(count)
+            for (key, _) in self {
+                all.append(key)
+            }
+            return all
+        }
+    }
+
+    /// The values, in their keys' order.
+    public var values: Value[>..] {
+        get {
+            var all: Value[>..] = []
+            all.reserveCapacity(count)
+            for (_, value) in self {
+                all.append(value)
+            }
+            return all
+        }
+    }
+
+    /// Whether the two are one tree, all of it shared: copies of one another,
+    /// neither changed since. Constant time; two that are equal need not be
+    /// identical.
+    public fn isIdentical(to other: ImmutableDictionary<Key, Value>) -> Bool => root.isSame(as: other.root)
+
+    /// What is wrong with its tree, or none: what the library's own tests ask.
+    public fn structuralFault() -> String? => root.fault(0)
+}
+
+extension ImmutableDictionary where Value: Equatable {
+    /// The keys whose values differ from what they were in an older
+    /// dictionary, in no order: each with its value then, or none where it
+    /// was added, and its value now, or none where it was removed. Parts the
+    /// two share are passed over, so it takes time by what changed since.
+    ///
+    /// ```sable
+    /// let old = ImmutableDictionary<String, Int>([("a", 1), ("b", 2)])
+    /// let new = old.setting("b", to: 3).removing("a")
+    /// let changes = new.changes(from: old)
+    /// assert(changes.count == 2)
+    /// for change in changes {
+    ///     assert(change.key == "a" ? change.old == 1 && change.new == none : change.old == 2 && change.new == 3)
+    /// }
+    /// ```
+    public fn changes(from older: ImmutableDictionary<Key, Value>) -> (key: Key, old: Value?, new: Value?)[>..] {
+        var all: (key: Key, old: Value?, new: Value?)[>..] = []
+        root.changes(from: older.root, 0, (a: Value, b: Value) => a == b) { (key: Key, old: Value?, new: Value?) in
+            all.append((key: key, old: old, new: new))
+        }
+        return all
+    }
+}
+
+/// A position of an entry in an ImmutableDictionary, or of a member of an
+/// ImmutableSet, in the order it is gone through.
+public struct ImmutableDictionaryIndex: Comparable {
+    let offset: Int
+
+    public operator == (lhs: ImmutableDictionaryIndex, rhs: ImmutableDictionaryIndex) -> Bool {
+        return lhs.offset == rhs.offset
+    }
+
+    public operator < (lhs: ImmutableDictionaryIndex, rhs: ImmutableDictionaryIndex) -> Bool {
+        return lhs.offset < rhs.offset
+    }
+}
+
+extension ImmutableDictionary: Collection, FromSequence<(Key, Value)> {
+    /// Each key with its value, in the order of the keys' hashes.
+    public fn makeIterator() -> ImmutableDictionaryIterator<Key, Value> {
+        return ImmutableDictionaryIterator<Key, Value> { entries: HashTrieIterator<Key, Value>(root) }
+    }
+
+    public var startIndex: ImmutableDictionaryIndex => ImmutableDictionaryIndex { offset: 0 }
+
+    public var endIndex: ImmutableDictionaryIndex => ImmutableDictionaryIndex { offset: root.size }
+
+    public fn index(after position: ImmutableDictionaryIndex) -> ImmutableDictionaryIndex {
+        return ImmutableDictionaryIndex { offset: position.offset + 1 }
+    }
+
+    public fn index(_ position: ImmutableDictionaryIndex, offsetBy distance: Int) -> ImmutableDictionaryIndex {
+        return ImmutableDictionaryIndex { offset: position.offset + distance }
+    }
+
+    /// The entry at a position, found in O(log n); one not an entry's traps.
+    public subscript(position: ImmutableDictionaryIndex) -> (Key, Value) {
+        get {
+            precondition(index: position.offset, inBounds: root.size)
+            let entry = root.entry(rank: position.offset)
+            return (entry.key, entry.value)
+        }
+    }
+}
+
+/// Gives an ImmutableDictionary's keys with their values.
+public struct ImmutableDictionaryIterator<Key: Hashable, Value>: Iterator {
+    var entries: HashTrieIterator<Key, Value>
+
+    /// The next key with its value, or none after the last.
+    public mutating fn next() -> (Key, Value)? {
+        guard let entry = entries.next() else {
+            return none
+        }
+        return (entry.key, entry.value)
+    }
+}
+
+extension ImmutableDictionary where Key == String {
+    /// The value of the key the piece spells, or none: found by the piece's
+    /// bytes, with no String made of them.
+    ///
+    /// ```sable
+    /// let ports = ImmutableDictionary<String, Int>([("http", 80), ("https", 443)])
+    /// let url = "https://example.com"
+    /// assert(ports[url[..<url.firstIndex(of: ':')!]] == 443)
+    /// ```
+    public subscript(key: Substring) -> Value? {
+        get => root.find(piece: key, key.hashValue, 0)
+    }
+
+    /// Whether the key the piece spells has a value.
+    public fn contains(_ key: Substring) -> Bool {
+        return self[key] != none
+    }
+}
+
+extension ImmutableDictionary: Debug where Key: Debug, Value: Debug {
+    /// `ImmutableDictionary(["a": 1])`, in the order it is gone through.
+    public fn debugDescription() -> String {
+        var parts: String[>..] = []
+        for (key, value) in self {
+            parts.append(key.debugDescription() + ": " + value.debugDescription())
+        }
+        return parts.isEmpty ? "ImmutableDictionary([:])" : described("ImmutableDictionary", parts)
+    }
+}
+
+extension ImmutableDictionary: Equatable where Value: Equatable {
+    /// Whether the two hold the same keys with equal values: parts they
+    /// share are not compared.
+    public operator == (lhs: ImmutableDictionary<Key, Value>, rhs: ImmutableDictionary<Key, Value>) -> Bool {
+        return lhs.root.isEqual(to: rhs.root, 0, (a: Value, b: Value) => a == b)
+    }
+}
+
+extension ImmutableDictionary: Hashable where Value: Hashable {
+    /// Feeds the entries to the hasher, in no order: equal dictionaries hash
+    /// equal.
+    public fn hash(into hasher: inout Hasher) {
+        var sum = 0
+        for (key, value) in self {
+            var one = Hasher()
+            one.combine(key)
+            one.combine(value)
+            sum = sum &+ one.finalize()
+        }
+        hasher.combine(root.size)
+        hasher.combine(sum)
+    }
+}

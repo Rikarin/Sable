@@ -1088,6 +1088,11 @@ public sealed partial class SilGen {
         foreach (var (field, _, model) in ordered) {
             if (model.GetFieldInitializer(field) is { } initial) {
                 var target = new BoundFieldAccess(initial.Syntax, null, field);
+                // A constant, computed already, reads as what it came to.
+                if (IsWrittenConstant(field)) {
+                    initial = target;
+                }
+
                 statements.Add(new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, target, initial)));
             }
         }
@@ -1115,7 +1120,9 @@ public sealed partial class SilGen {
         var source = _globalFields[0].Model.SyntaxTree.Text;
         var syntax = _globalFields[0].Field.DeclaringSyntax[0];
         var init = new SilFunction(GlobalsInit, unit);
+        _writingGlobals = true;
         new FunctionLowering(this, initSymbol, init, source, TypeSubstitution.Empty).Lower(new BoundBlock(syntax, [], [..statements]));
+        _writingGlobals = false;
         init.RemoveUnreachableBlocks();
         MakeImmortal(init, ordered.Select(static g => g.Field));
         _module.Add(init);

@@ -1,0 +1,34 @@
+module FrozenIntBench
+
+// FrozenDictionary<Int, Int>: keys close together, spread out, and many,
+// looked up, half of them not there.
+
+import Sable.Collections
+
+@inline(never)
+fn look(_ frozen: FrozenDictionary<Int, Int>, _ keys: Int[>..], _ rounds: Int) -> Int {
+    var total = 0
+    for _ in 0..<rounds {
+        for key in keys {
+            total += frozen[key] ?? 1
+        }
+    }
+    return total
+}
+
+@inline(never)
+fn run(_ count: Int, _ spread: Int) -> Int {
+    var pairs: (Int, Int)[>..] = []
+    var keys: Int[>..] = []
+    for i in 0..<count {
+        pairs.append((i * spread * 2, i))
+        keys.append(i * spread * 2)
+        keys.append(i * spread * 2 + 1)
+    }
+    return look(FrozenDictionary<Int, Int>(pairs), keys, 5000000 / count)
+}
+
+@main
+fn main() {
+    print("\(run(100, 1)) \(run(100, 104729)) \(run(10000, 1299709))")
+}

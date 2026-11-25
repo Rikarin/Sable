@@ -453,6 +453,10 @@ public sealed partial class SilInterpreter {
             case "opaque_cast" or "opaque_borrow_as" or "opaque_take_as":
                 result = operands[0];
                 return true;
+            case "opaque_copy_as":
+                Retain(Concrete(builtin.Type), operands[0]);
+                result = operands[0];
+                return true;
             case "metadata_array":
                 result = MetadataOf(new ArrayType(((MetadataModel)operands[0]!).Type));
                 return true;

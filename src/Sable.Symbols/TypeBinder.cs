@@ -542,6 +542,11 @@ internal sealed class TypeBinder(Compilation compilation) {
                 when Lookup(callee.Identifier.Text, context, scope, callee.Span) is NamedTypeSymbol { IsGenericDefinition: false } type:
                 return type;
 
+            // 'Set<Int>()': of a generic one, its arguments written.
+            case InvocationExpressionSyntax { Expression: GenericNameSyntax callee }
+                when Lookup(callee.Identifier.Text, context, scope, callee.Span) is NamedTypeSymbol { IsGenericDefinition: true }:
+                return BindGenericName(callee, context, scope);
+
             default:
                 return null;
         }

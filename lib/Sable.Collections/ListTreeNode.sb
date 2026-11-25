@@ -1,0 +1,487 @@
+module Sable.Collections
+
+// The tree ImmutableList is made of: a relaxed radix balanced tree (RRB,
+// Bagwell and Rompf, 2011), kept balanced as a B-tree is. The elements are
+// in leaves of up to 32 of them, and a node above has up to 32 children, all
+// of one height. Where every child but the last is full, all the way down, an
+// element's place among them is five bits of its index, as in a radix tree;
+// elsewhere a node keeps where each child's elements end, and the five bits
+// are where to start looking.
+//
+// A node but the root has at least half as many children, or elements, as it
+// may, so the tree is as shallow as it should be whatever is cut and joined.
+// The nodes at the tree's right edge are let off, those above the leaves: a
+// tree that has been appended to has them part filled.
+//
+// As HashTrieNode's, a node is a struct of arrays, shared as they are, changed
+// in place by whoever alone holds them and copied by anyone else.
+
+/// The most children, or elements, of a node.
+const listTreeWidth = 32
+
+/// The bits of an index that choose one of them.
+const listTreeBits = 5
+
+/// The least of a node that is not at the right edge.
+const listTreeLeast = 16
+
+struct ListTreeNode<Element> {
+    // A leaf's.
+    var elements: Element[>..] = []
+    // Any other's, and how many elements each, and those before it, holds:
+    // none where every child but the last is full.
+    var children: ListTreeNode<Element>[>..] = []
+    var sizes: Int[>..] = []
+
+    static fn leaf(_ elements: Element[>..]) -> ListTreeNode<Element> {
+        var made = ListTreeNode<Element>()
+        made.elements = elements
+        return made
+    }
+
+    /// A node of children a level below its height.
+    static fn of(_ children: ListTreeNode<Element>[>..], _ height: Int) -> ListTreeNode<Element> {
+        var made = ListTreeNode<Element>()
+        made.children = children
+        made.measure(height)
+        return made
+    }
+
+    /// Nodes one to a level down to the one given, which is a leaf.
+    static fn path(to leaf: ListTreeNode<Element>, _ height: Int) -> ListTreeNode<Element> {
+        var node = leaf
+        var level = 0
+        while level < height {
+            level += 1
+            node = ListTreeNode.of([node], level)
+        }
+        return node
+    }
+
+    // ---- Size ------------------------------------------------------------
+
+    /// Its children, or a leaf's elements: one of the two is empty.
+    var width: Int => elements.count + children.count
+
+    /// How many elements a full node of the height has.
+    @inline(always)
+    static fn full(_ height: Int) -> Int {
+        return listTreeWidth << (listTreeBits * height)
+    }
+
+    /// How many elements it has.
+    fn count(_ height: Int) -> Int {
+        if height == 0 {
+            return elements.count
+        }
+        let last = children.count - 1
+        if !sizes.isEmpty {
+            return sizes[last]
+        }
+        return last * ListTreeNode<Element>.full(height - 1) + children[last].count(height - 1)
+    }
+
+    /// The sizes made again from the children's.
+    mutating fn measure(_ height: Int) {
+        var all: Int[>..] = []
+        var regular = true
+        var total = 0
+        var i = 0
+        while i < children.count {
+            let size = children[i].count(height - 1)
+            if i < children.count - 1 && size != ListTreeNode<Element>.full(height - 1) {
+                regular = false
+            }
+            total += size
+            all.append(total)
+            i += 1
+        }
+        sizes = regular ? [] : all
+    }
+
+    /// The child an index is in. Of an index past the end, the last.
+    @inline(always)
+    fn child(of index: Int, _ height: Int) -> Int {
+        var at = index >> (listTreeBits * height)
+        if !sizes.isEmpty {
+            while sizes[at] <= index {
+                at += 1
+            }
+        }
+        return at
+    }
+
+    /// How many elements come before a child's.
+    @inline(always)
+    fn start(of child: Int, _ height: Int) -> Int {
+        if sizes.isEmpty {
+            return child << (listTreeBits * height)
+        }
+        return child == 0 ? 0 : sizes[child - 1]
+    }
+
+    // ---- Elements --------------------------------------------------------
+
+    fn element(at index: Int, _ height: Int) -> Element {
+        if height == 0 {
+            return elements[index]
+        }
+        let at = child(of: index, height)
+        return children[at].element(at: index - start(of: at, height), height - 1)
+    }
+
+    mutating fn replace(at index: Int, _ height: Int, with element: Element) {
+        if height == 0 {
+            elements[index] = element
+            return
+        }
+        let at = child(of: index, height)
+        children[at].replace(at: index - start(of: at, height), height - 1, with: element)
+    }
+
+    mutating fn modify(at index: Int, _ height: Int, _ change: (inout Element) -> Void) {
+        if height == 0 {
+            change(&elements[index])
+            return
+        }
+        let at = child(of: index, height)
+        children[at].modify(at: index - start(of: at, height), height - 1, change)
+    }
+
+    /// The leaf an index is in, and the index of its first element.
+    fn leaf(at index: Int, _ height: Int, from first: Int) -> (Element[>..], Int) {
+        if height == 0 {
+            return (elements, first)
+        }
+        let at = child(of: index, height)
+        let before = start(of: at, height)
+        return children[at].leaf(at: index - before, height - 1, from: first + before)
+    }
+
+    /// The last element.
+    fn last(_ height: Int) -> Element {
+        return height == 0 ? elements[elements.count - 1] : children[children.count - 1].last(height - 1)
+    }
+
+    /// Where the first element is that does not come before, of elements
+    /// those that do come first of: the count, when all do.
+    fn partition(_ height: Int, _ isBefore: (Element) -> Bool) -> Int {
+        var low = 0
+        var high = width
+        while low < high {
+            let middle = (low + high) >> 1
+            let before = height == 0 ? isBefore(elements[middle]) : isBefore(children[middle].last(height - 1))
+            if before {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        if height == 0 {
+            return low
+        }
+        if low == children.count {
+            return count(height)
+        }
+        return start(of: low, height) + children[low].partition(height - 1, isBefore)
+    }
+
+    // ---- The right edge --------------------------------------------------
+
+    /// How many elements the last leaf has.
+    fn lastLeafCount(_ height: Int) -> Int {
+        return height == 0 ? elements.count : children[children.count - 1].lastLeafCount(height - 1)
+    }
+
+    /// Whether a leaf can be added at the end, the height as it is.
+    fn hasRoom(_ height: Int) -> Bool {
+        if children.count < listTreeWidth {
+            return true
+        }
+        return height > 1 && children[children.count - 1].hasRoom(height - 1)
+    }
+
+    /// The leaf added at the end, of a node that has room for it.
+    mutating fn append(leaf: ListTreeNode<Element>, _ height: Int) {
+        let last = children.count - 1
+        if height > 1 && children[last].hasRoom(height - 1) {
+            children[last].append(leaf: leaf, height - 1)
+            if !sizes.isEmpty {
+                sizes[last] += leaf.elements.count
+            }
+            return
+        }
+        let before = count(height)
+        children.append(ListTreeNode.path(to: leaf, height - 1))
+        if !sizes.isEmpty {
+            sizes.append(before + leaf.elements.count)
+        } else if before != (last + 1) << (listTreeBits * height) {
+            // What was last may be part filled, and is no longer last.
+            measure(height)
+        }
+    }
+
+    /// The last leaf's elements, taken out: a node left with none is empty.
+    mutating fn removeLastLeaf(_ height: Int) -> Element[>..] {
+        let last = children.count - 1
+        var leaf: Element[>..] = []
+        if height == 1 {
+            leaf = children.removeLast().elements
+        } else {
+            leaf = children[last].removeLastLeaf(height - 1)
+            if children[last].children.isEmpty {
+                _ = children.removeLast()
+            }
+        }
+        if !sizes.isEmpty {
+            if children.count == last {
+                _ = sizes.removeLast()
+            } else {
+                sizes[last] -= leaf.count
+            }
+        }
+        return leaf
+    }
+
+    /// The elements but the first so many, of which there is one at least,
+    /// taken out.
+    mutating fn truncate(to count: Int, _ height: Int) {
+        if height == 0 {
+            elements.removeLast(elements.count - count)
+            return
+        }
+        let at = child(of: count - 1, height)
+        children.removeLast(children.count - at - 1)
+        let inside = count - start(of: at, height)
+        if !sizes.isEmpty {
+            sizes.removeLast(sizes.count - at - 1)
+            sizes[at] = count
+        }
+        if inside < children[at].count(height - 1) {
+            children[at].truncate(to: inside, height - 1)
+        }
+    }
+
+    // ---- Inserting and removing ------------------------------------------
+
+    /// The element put in before the one at the index. A node it makes too
+    /// wide is cut in two: the second half, for who holds this to put after it.
+    mutating fn insert(_ element: Element, at index: Int, _ height: Int) -> ListTreeNode<Element>? {
+        if height == 0 {
+            elements.putIn(element, index)
+            if elements.count <= listTreeWidth {
+                return none
+            }
+            let half = ListTreeNode.leaf(elements[listTreeLeast...].toArray())
+            elements.removeLast(elements.count - listTreeLeast)
+            return half
+        }
+        var at = child(of: index, height)
+        if let half = children[at].insert(element, at: index - start(of: at, height), height - 1) {
+            children.putIn(half, at + 1)
+            if children.count <= listTreeWidth {
+                measure(height)
+                return none
+            }
+            let rest = ListTreeNode.of(children[listTreeLeast...].toArray(), height)
+            children.removeLast(children.count - listTreeLeast)
+            measure(height)
+            return rest
+        }
+        // With no sizes, a child that has room is the last: they stay right.
+        while at < sizes.count {
+            sizes[at] += 1
+            at += 1
+        }
+        return none
+    }
+
+    /// The element at the index, taken out. A child left too narrow is made
+    /// one with the one beside it, or given some of its.
+    mutating fn remove(at index: Int, _ height: Int) -> Element {
+        if height == 0 {
+            return elements.takeOut(index)
+        }
+        var at = child(of: index, height)
+        let removed = children[at].remove(at: index - start(of: at, height), height - 1)
+        if children[at].width < listTreeLeast && children.count > 1 {
+            ListTreeNode.widen(&children, at, height - 1)
+            measure(height)
+        } else if sizes.isEmpty {
+            if at < children.count - 1 {
+                measure(height)
+            }
+        } else {
+            while at < sizes.count {
+                sizes[at] -= 1
+                at += 1
+            }
+        }
+        return removed
+    }
+
+    /// Of nodes of a height side by side, the one at the place, if it is too
+    /// narrow, made one with the one before it (or after it, the first), or
+    /// the two given half each of what they hold.
+    static fn widen(_ nodes: inout ListTreeNode<Element>[>..], _ place: Int, _ height: Int) {
+        if nodes.count == 1 || place >= nodes.count || nodes[place].width >= listTreeLeast {
+            return
+        }
+        let left = place == 0 ? 0 : place - 1
+        let halves = ListTreeNode.fuse(nodes[left], nodes[left + 1], height)
+        nodes[left] = halves[0]
+        if halves.count == 1 {
+            _ = nodes.takeOut(left + 1)
+        } else {
+            nodes[left + 1] = halves[1]
+        }
+    }
+
+    /// What two nodes of a height hold, in one, or two of half each.
+    static fn fuse(_ a: ListTreeNode<Element>, _ b: ListTreeNode<Element>, _ height: Int) -> ListTreeNode<Element>[>..] {
+        if height == 0 {
+            var all = a.elements
+            all.append(contentsOf: b.elements)
+            if all.count <= listTreeWidth {
+                return [ListTreeNode.leaf(all)]
+            }
+            let half = all.count / 2
+            return [ListTreeNode.leaf(all[..<half].toArray()), ListTreeNode.leaf(all[half...].toArray())]
+        }
+        var all = a.children
+        all.append(contentsOf: b.children)
+        // The right edge of the first is inside the two.
+        let seam = a.children.count
+        ListTreeNode.widen(&all, seam, height - 1)
+        ListTreeNode.widen(&all, seam - 1, height - 1)
+        return ListTreeNode.cut(all, height)
+    }
+
+    /// The children in one node, or in two of half each.
+    static fn cut(_ children: ListTreeNode<Element>[>..], _ height: Int) -> ListTreeNode<Element>[>..] {
+        if children.count <= listTreeWidth {
+            return [ListTreeNode.of(children, height)]
+        }
+        let half = children.count / 2
+        return [ListTreeNode.of(children[..<half].toArray(), height), ListTreeNode.of(children[half...].toArray(), height)]
+    }
+
+    // ---- Joining and cutting ---------------------------------------------
+
+    /// The first's elements and then the second's, of whatever heights, in
+    /// one node or two of the greater's: the edges that meet are put
+    /// together from the leaves up, the rest of both as they were.
+    static fn meet(_ a: ListTreeNode<Element>, _ aHeight: Int, _ b: ListTreeNode<Element>, _ bHeight: Int) -> ListTreeNode<Element>[>..] {
+        if aHeight == 0 && bHeight == 0 {
+            if a.elements.count >= listTreeLeast && b.elements.count >= listTreeLeast {
+                return [a, b]
+            }
+            return ListTreeNode.fuse(a, b, 0)
+        }
+        var all: ListTreeNode<Element>[>..] = []
+        var first = 0
+        if aHeight >= bHeight {
+            all = a.children
+            _ = all.removeLast()
+            first = all.count
+        }
+        let height = aHeight >= bHeight ? aHeight : bHeight
+        let middle = ListTreeNode.meet(
+            aHeight >= bHeight ? a.children[a.children.count - 1] : a, aHeight >= bHeight ? aHeight - 1 : aHeight,
+            bHeight >= aHeight ? b.children[0] : b, bHeight >= aHeight ? bHeight - 1 : bHeight
+        )
+        all.append(contentsOf: middle)
+        if bHeight >= aHeight {
+            all.append(contentsOf: b.children[1...])
+        }
+        var place = first + middle.count - 1
+        while place >= first {
+            ListTreeNode.widen(&all, place, height - 1)
+            place -= 1
+        }
+        return ListTreeNode.cut(all, height)
+    }
+
+    /// The first's elements and then the second's, as a tree: its root and
+    /// its height.
+    static fn join(_ a: ListTreeNode<Element>, _ aHeight: Int, _ b: ListTreeNode<Element>, _ bHeight: Int) -> (ListTreeNode<Element>, Int) {
+        let met = ListTreeNode.meet(a, aHeight, b, bHeight)
+        let height = aHeight >= bHeight ? aHeight : bHeight
+        if met.count == 1 {
+            return ListTreeNode.shortest(met[0], height)
+        }
+        return (ListTreeNode.of(met, height + 1), height + 1)
+    }
+
+    /// The tree with no root of one child.
+    static fn shortest(_ root: ListTreeNode<Element>, _ height: Int) -> (ListTreeNode<Element>, Int) {
+        var node = root
+        var level = height
+        while level > 0 && node.children.count == 1 {
+            node = node.children[0]
+            level -= 1
+        }
+        return (node, level)
+    }
+
+    /// The elements from the index on, as a tree.
+    fn from(_ index: Int, _ height: Int) -> (ListTreeNode<Element>, Int) {
+        if height == 0 {
+            return (index == 0 ? self : ListTreeNode.leaf(elements[index...].toArray()), 0)
+        }
+        let at = child(of: index, height)
+        let inside = index - start(of: at, height)
+        if inside == 0 {
+            return ListTreeNode.shortest(at == 0 ? self : ListTreeNode.of(children[at...].toArray(), height), height)
+        }
+        let (edge, edgeHeight) = children[at].from(inside, height - 1)
+        if at == children.count - 1 {
+            return (edge, edgeHeight)
+        }
+        let (rest, restHeight) = ListTreeNode.shortest(ListTreeNode.of(children[at + 1...].toArray(), height), height)
+        return ListTreeNode.join(edge, edgeHeight, rest, restHeight)
+    }
+
+    // ---- Tests -----------------------------------------------------------
+
+    /// What is wrong with the node, for the tests: none when nothing is.
+    fn fault(_ height: Int, isRoot: Bool, isLast: Bool) -> String? {
+        if width > listTreeWidth || width == 0 {
+            return "a node's width"
+        }
+        if height == 0 {
+            if !children.isEmpty || !sizes.isEmpty {
+                return "a leaf's children"
+            }
+            return elements.count < listTreeLeast ? "a leaf of \(elements.count)" : none
+        }
+        if !elements.isEmpty {
+            return "elements above the leaves"
+        }
+        if !isRoot && !isLast && children.count < listTreeLeast {
+            return "a node of \(children.count)"
+        }
+        var total = 0
+        var regular = true
+        var i = 0
+        while i < children.count {
+            let last = i == children.count - 1
+            if let fault = children[i].fault(height - 1, isRoot: false, isLast: isLast && last) {
+                return fault
+            }
+            let size = children[i].count(height - 1)
+            total += size
+            if !last && size != ListTreeNode<Element>.full(height - 1) {
+                regular = false
+            }
+            if !sizes.isEmpty && sizes[i] != total {
+                return "a node's sizes"
+            }
+            i += 1
+        }
+        if sizes.isEmpty ? !regular : sizes.count != children.count {
+            return "a node's sizes"
+        }
+        return none
+    }
+}

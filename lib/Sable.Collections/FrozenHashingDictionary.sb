@@ -1,0 +1,155 @@
+module Sable.Collections
+
+// Frozen tables whose keys are told apart by a Hashing, as HashingDictionary
+// and HashingSet are made of Dictionary: types of their own, so that those
+// without one carry nothing of it.
+
+/// Keys to values that never change, the keys told apart by a Hashing: keys
+/// equal by it are one key, and the first one given is the one kept, with the
+/// last value given for it. Its entries are gone through in the order their
+/// keys were given. The keys need not be Hashable.
+///
+/// For strings told apart but for the case of ASCII's letters,
+/// `FrozenDictionary(ignoringAsciiCase:)` is quicker.
+///
+/// ```sable
+/// let titles = FrozenHashingDictionary<String, Int>([("Über", 1), ("Unter", 2)], hashing: .by { $0.lowercased() })
+/// assert(titles["über"] == 1 && titles["ober"] == none)
+/// ```
+public struct FrozenHashingDictionary<Key, Value>: Sequence {
+    let box: HashingBox<Key>
+    let entries: FrozenDictionary<HashedKey<Key>, Value>
+
+    /// A dictionary of the pairs that tells its keys apart by the hashing.
+    /// What going through them throws, it throws.
+    public init<S: Sequence>(_ pairs: S, hashing: Hashing<Key>) throws(S.Failure) where S.Element == (Key, Value) {
+        let box = HashingBox<Key>(hashing)
+        var hashed: (HashedKey<Key>, Value)[>..] = []
+        for try (key, value) in pairs {
+            hashed.append((HashedKey<Key> { key: key, box: box }, value))
+        }
+        self.box = box
+        entries = FrozenDictionary<HashedKey<Key>, Value>(hashed)
+    }
+
+    /// The hashing it tells its keys apart by.
+    public var hashing: Hashing<Key> => box.hashing
+
+    /// How many keys it holds.
+    public var count: Int => entries.count
+
+    /// Whether it holds no keys.
+    public var isEmpty: Bool => entries.isEmpty
+
+    /// The keys, in the order they were given.
+    public var keys: Key[>..] {
+        get {
+            var keys: Key[>..] = []
+            for hashed in entries.keys {
+                keys.append(hashed.key)
+            }
+            return keys
+        }
+    }
+
+    /// The values, in their keys' order.
+    public var values: Value[>..] => entries.values
+
+    /// The key's value, or none.
+    public subscript(key: Key) -> Value? {
+        get => entries[HashedKey<Key> { key: key, box: box }]
+    }
+
+    /// Whether the dictionary holds the key.
+    public fn contains(_ key: Key) -> Bool {
+        return entries.contains(HashedKey<Key> { key: key, box: box })
+    }
+
+    /// Each key with its value, in the order the keys were given.
+    public fn makeIterator() -> FrozenHashingDictionaryIterator<Key, Value> {
+        return FrozenHashingDictionaryIterator<Key, Value> { entries: entries.makeIterator() }
+    }
+}
+
+/// Gives a FrozenHashingDictionary's keys with their values, in order.
+public struct FrozenHashingDictionaryIterator<Key, Value>: Iterator {
+    var entries: FrozenDictionaryIterator<HashedKey<Key>, Value>
+
+    /// The next key with its value, or none after the last.
+    public mutating fn next() -> (Key, Value)? {
+        guard let (hashed, value) = entries.next() else {
+            return none
+        }
+        return (hashed.key, value)
+    }
+}
+
+extension FrozenHashingDictionary: Debug where Key: Debug, Value: Debug {
+    /// `FrozenHashingDictionary(["a": 1])`, in the order the keys were given.
+    public fn debugDescription() -> String {
+        var parts: String[>..] = []
+        for (key, value) in self {
+            parts.append(key.debugDescription() + ": " + value.debugDescription())
+        }
+        return parts.isEmpty ? "FrozenHashingDictionary([:])" : described("FrozenHashingDictionary", parts)
+    }
+}
+
+/// Distinct values that never change, told apart by a Hashing: values equal
+/// by it are one, and the first one given is the one kept.
+///
+/// ```sable
+/// let tags = FrozenHashingSet<String>(["Ärger", "ÄRGER"], hashing: .by { $0.lowercased() })
+/// assert(tags.count == 1 && tags.contains("ärger"))
+/// ```
+public struct FrozenHashingSet<Element>: Sequence {
+    let box: HashingBox<Element>
+    let members: FrozenSet<HashedKey<Element>>
+
+    /// A set of the values that tells them apart by the hashing. What going
+    /// through them throws, it throws.
+    public init<S: Sequence>(_ elements: S, hashing: Hashing<Element>) throws(S.Failure) where S.Element == Element {
+        let box = HashingBox<Element>(hashing)
+        var hashed: HashedKey<Element>[>..] = []
+        for try element in elements {
+            hashed.append(HashedKey<Element> { key: element, box: box })
+        }
+        self.box = box
+        members = FrozenSet<HashedKey<Element>>(hashed)
+    }
+
+    /// The hashing it tells its values apart by.
+    public var hashing: Hashing<Element> => box.hashing
+
+    /// How many values it holds.
+    public var count: Int => members.count
+
+    /// Whether it holds no values.
+    public var isEmpty: Bool => members.isEmpty
+
+    /// Whether the set holds a value equal to this one.
+    public fn contains(_ value: Element) -> Bool {
+        return members.contains(HashedKey<Element> { key: value, box: box })
+    }
+
+    /// The members in a grow-only array, in the order they were given.
+    public fn toArray() -> Element[>..] {
+        var all: Element[>..] = []
+        for hashed in members {
+            all.append(hashed.key)
+        }
+        return all
+    }
+
+    /// The values, in the order they were given.
+    public fn makeIterator() -> ArrayIterator<Element> {
+        return toArray().makeIterator()
+    }
+}
+
+extension FrozenHashingSet: Debug where Element: Debug {
+    /// `FrozenHashingSet(["a"])`, in the order the values were given.
+    public fn debugDescription() -> String {
+        return described("FrozenHashingSet", descriptions(self))
+    }
+}

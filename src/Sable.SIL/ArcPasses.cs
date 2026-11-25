@@ -765,15 +765,19 @@ public sealed class ForwardCopies : ISilPass {
     ///     Anything that could change the array an element is read from in
     ///     place. An owned array is ours alone; one borrowed from a local slot
     ///     changes only through the slot's address — reading it again, by a
-    ///     borrow, does not; one borrowed from a parameter, through anything
-    ///     that calls out or is given an address.
+    ///     borrow, does not; one borrowed from any other storage, through
+    ///     anything that calls out or is given an address. One a parameter
+    ///     lends does not change: who lends it holds a reference to it, in
+    ///     nothing that is written while it is lent (<see cref="BorrowLoads" />),
+    ///     and a change anywhere else is to a copy; an async function's is
+    ///     left to the rule, as what it holds across a suspension its frame keeps.
     /// </summary>
     static bool MayChangeArray(SilInstruction instruction, SilValue? root) {
         if (root is LoadBorrowInst { Address: AllocStackInst slot }) {
             return instruction is not LoadBorrowInst && instruction.Operands.Any(o => ReferenceEquals(o, slot));
         }
 
-        return (root is null || root is LoadBorrowInst)
+        return (root is LoadBorrowInst || root is null && instruction.Block.Function.Type.IsAsync)
             && (instruction is ApplyInst or TryApplyInst || instruction is BuiltinInst builtin && !SharedStorage.IsMarker(builtin.Name)
                 && (SilBuiltins.RunsWork(builtin.Name) || builtin.Operands.Any(static o => o.Type is AddressType)));
     }

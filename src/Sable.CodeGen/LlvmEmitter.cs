@@ -3711,6 +3711,37 @@ public sealed partial class LlvmEmitter {
             return split ? from : label;
         }
 
+        /// <summary>A literal, or a struct or tuple of them, as a constant's element; null where its layout is not its parts in order.</summary>
+        string? ConstantText(SilValue value) {
+            switch (value) {
+                case IntegerLiteralInst or FloatLiteralInst:
+                    return Name(value);
+                case StringLiteralInst text:
+                    return module.StringConstant(text.Value);
+                case StructInst or TupleInst: {
+                    var layout = value.Type is StructType structType ? LayoutOf(structType) : LayoutOf((TupleType)value.Type);
+                    var operands = ((SilInstruction)value).Operands;
+                    if (layout.Explicit || operands.Count == 0) {
+                        return null;
+                    }
+
+                    var parts = new List<string>();
+                    foreach (var operand in operands) {
+                        if (ConstantText(operand) is not { } part) {
+                            return null;
+                        }
+
+                        parts.Add($"{PartType(operand.Type)} {part}");
+                    }
+
+                    return $"{{ {string.Join(", ", parts)} }}";
+                }
+
+                default:
+                    return null;
+            }
+        }
+
         /// <summary>An aggregate built by inserting each part into the previous, from poison.</summary>
         string Aggregate(string type, IReadOnlyList<SilValue> parts, int[]? slots = null) {
             if (parts.Count == 0) {
@@ -5325,6 +5356,40 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
+                // The last eight bytes, or all of them where there are fewer: a
+                // load that ends where they do, and starts in the header before
+                // them, what it read of which is shifted out.
+                case "string_utf8_last_U64": {
+                    var field = Fresh();
+                    var length = Fresh();
+                    var bytes = Fresh();
+                    var from = Fresh();
+                    var at = Fresh();
+                    var loaded = Fresh();
+                    var missing = Fresh();
+                    var isShort = Fresh();
+                    var missingBits = Fresh();
+                    var shift = Fresh();
+                    var shifted = Fresh();
+                    var isEmpty = Fresh();
+                    Line($"{field} = getelementptr inbounds %SableStringHeader, ptr {operands[0]}, i32 0, i32 1");
+                    Line($"{length} = load i64, ptr {field}, !tbaa {TbaaHeader}");
+                    Line($"{bytes} = getelementptr inbounds %SableStringHeader, ptr {operands[0]}, i64 1");
+                    Line($"{from} = sub i64 {length}, 8");
+                    Line($"{at} = getelementptr i8, ptr {bytes}, i64 {from}");
+                    Line($"{loaded} = load i64, ptr {at}, align 1");
+                    Line($"{missing} = sub i64 8, {length}");
+                    Line($"{isShort} = icmp slt i64 {length}, 8");
+                    Line($"{missingBits} = and i64 {missing}, 7");
+                    var bits = Fresh();
+                    Line($"{bits} = shl i64 {missingBits}, 3");
+                    Line($"{shift} = select i1 {isShort}, i64 {bits}, i64 0");
+                    Line($"{shifted} = lshr i64 {loaded}, {shift}");
+                    Line($"{isEmpty} = icmp eq i64 {length}, 0");
+                    Line($"{Result()} = select i1 {isEmpty}, i64 0, i64 {shifted}");
+                    return;
+                }
+
                 // A string written in place, by the address of its bytes.
                 case "string_buffer_make" or "string_buffer_grow": {
                     var made = Fresh();
@@ -5806,8 +5871,9 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 // An array of constants: the immortal one in read-only memory.
-                case "array_literal" when SilBuiltins.IsConstantArray(builtin):
-                    _names[builtin] = module.ArrayConstant((ArrayType)builtin.Type, [..operands]);
+                case "array_literal" when SilBuiltins.IsConstantArray(builtin) && builtin.Operands.Select(ConstantText).ToList() is var texts
+                    && texts.TrueForAll(static t => t is not null):
+                    _names[builtin] = module.ArrayConstant((ArrayType)builtin.Type, texts!);
                     return;
 
                 // An array literal that does not escape its frame: made there,
@@ -6016,6 +6082,27 @@ public sealed partial class LlvmEmitter {
                     Line(opaque
                         ? $"{Result()} = call i64 @sable_opaque_mismatch({runs}, ptr {OpaqueMetadata(element)})"
                         : $"{Result()} = call i64 @sable_array_mismatch({runs}, i64 {Size(element)})");
+                    return;
+                }
+
+                // An array is its buffer, all of it: the same one, or the same part of one.
+                case "array_shares": {
+                    string Buffer(int operand) => builtin.Operands[operand].Type is SliceType type ? SlicePart(operands[operand], type, 0) : operands[operand];
+                    string[] Span(int operand) => builtin.Operands[operand].Type is SliceType type
+                        ? [SlicePart(operands[operand], type, 1), SlicePart(operands[operand], type, 2)]
+                        : ["0", Count(operands[operand])];
+
+                    var same = Fresh();
+                    Line($"{same} = icmp eq ptr {Buffer(0)}, {Buffer(1)}");
+                    foreach (var (one, other) in Span(0).Zip(Span(1)).ToList()) {
+                        var part = Fresh();
+                        var both = Fresh();
+                        Line($"{part} = icmp eq i64 {one}, {other}");
+                        Line($"{both} = and i1 {same}, {part}");
+                        same = both;
+                    }
+
+                    Line($"{Result()} = and i1 {same}, true");
                     return;
                 }
 

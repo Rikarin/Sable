@@ -1,0 +1,43 @@
+module ImmutableListBench
+
+// ImmutableList<Int>: built in place, read by index and in order, changed
+// with the old versions kept for a while, inserted into, cut and joined.
+
+import Sable.Collections
+
+@main
+fn main() {
+    var list = ImmutableList<Int>()
+    for i in 0..<300000 {
+        list.append(i)
+    }
+    var total = 0
+    for i in 0..<600000 {
+        total += list[(i * 7919) % 300000]
+    }
+    for element in list {
+        total += element
+    }
+    var versions: ImmutableList<Int>[>..] = []
+    var current = list
+    for i in 0..<60000 {
+        current = current.replacing(at: (i * 7919) % 300000, with: i)
+        if i % 1000 == 0 {
+            versions.append(current)
+        }
+    }
+    for version in versions {
+        total += version[7919]
+    }
+    for i in 0..<60000 {
+        list.insert(i, at: (i * 104729) % list.count)
+    }
+    for i in 0..<60000 {
+        total += list.remove(at: (i * 104729) % list.count)
+    }
+    for i in 0..<20 {
+        let cut = (i * 7919) % 200000
+        list = list[cut...] + list[..<cut]
+    }
+    print("\(total) \(list.count) \(list[12345])")
+}

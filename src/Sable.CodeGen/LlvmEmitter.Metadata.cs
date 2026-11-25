@@ -412,7 +412,7 @@ public sealed partial class LlvmEmitter {
                 _globals.Append($"{associated} = {SharedLinkage} constant [{table.Accessors.Count} x ptr] [{string.Join(", ", table.Accessors.Select(a => $"ptr @{Global(a)}"))}]{Comdat(associated, SharedLinkage)}\n");
             }
 
-            if (TypeMetadata.KindOf(table.Conformer) is (MetadataKind.Array or MetadataKind.Slice or MetadataKind.Optional) and var kind) {
+            if ((table.Conformer == SilGen.UnionConformer ? MetadataKind.Union : TypeMetadata.KindOf(table.Conformer)) is var kind && (table.Conformer == SilGen.UnionConformer || kind is MetadataKind.Array or MetadataKind.Slice or MetadataKind.Optional)) {
                 // Every array's, slice's or optional's, whose element conforms to what the extension asks.
                 var required = "null";
                 if (table.Required.Count > 0) {
@@ -572,6 +572,10 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_opaque_debug_describe(ptr, ptr)
                                         declare void @sable_register_debug_describer(ptr, ptr)
                                         declare ptr @sable_opaque_erase_error(ptr, ptr)
+                                        declare ptr @sable_structural_union_type(i64, ptr)
+                                        declare void @sable_union_inject(ptr, ptr, ptr, ptr)
+                                        declare ptr @sable_union_case_metadata(ptr, ptr)
+                                        declare ptr @sable_union_case_payload(ptr, ptr)
                                         declare void @sable_register_error_eraser(ptr, ptr)
                                         declare ptr @sable_opaque_alloc(ptr)
                                         declare ptr @sable_opaque_box(ptr, ptr)
@@ -804,6 +808,12 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call ptr @sable_opaque_type(ptr {operands[0]}, ptr {operands[1]})");
                     return true;
                 // An error of one, boxed as 'any Error' by its type's eraser, which the runtime finds.
+                case "union_inject":
+                    Line($"call void @sable_union_inject(ptr {operands[0]}, ptr {OpaqueMetadata(builtin.Operands[0].Type)}, ptr {operands[1]}, ptr {OpaqueMetadata(((AddressType)builtin.Operands[1].Type).Pointee)})");
+                    return true;
+                case "union_case_metadata" or "union_case_payload":
+                    Line($"{Result()} = call ptr @sable_{builtin.Name}(ptr {operands[0]}, ptr {operands[1]})");
+                    return true;
                 case "opaque_erase_error":
                     Line($"{Result()} = call ptr @sable_opaque_erase_error(ptr {operands[0]}, ptr {OpaqueMetadata(builtin.Operands[0].Type)})");
                     return true;

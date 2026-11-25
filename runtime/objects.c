@@ -36,6 +36,7 @@ enum {
     SABLE_TYPE_FIELD_TYPES = 16, // and each names its field's type's metadata
     SABLE_TYPE_NULLABLE = 32,    // one counted reference, never null: an optional of it is null for none
     SABLE_TYPE_BOOL = 64,        // a Bool: an enum of it and empty cases takes its spare values, 2 on
+    SABLE_TYPE_STRUCTURAL = 256, // a structural union, 'A | B': its arguments its cases' types, by name
     SABLE_TYPE_CHAR = 128,       // a Char: an enum of it and empty cases takes the values past U+10FFFF
 };
 
@@ -305,7 +306,7 @@ static const SableWitnessTable *template_instance(const SableTypeMetadata *type,
 static const SableWitnessTable *template_table(const SableTypeMetadata *type, const SableProtocol *protocol) {
     for (int64_t i = 0; i < template_count; i++) {
         if (templates[i].kind != 0) {
-            if (templates[i].kind != type->kind || type->argument_count == 0 || !same_protocol(templates[i].table->protocol, protocol)) {
+            if (templates[i].kind != type->kind || (type->kind == SABLE_KIND_UNION && (type->flags & SABLE_TYPE_STRUCTURAL) == 0) || type->argument_count == 0 || !same_protocol(templates[i].table->protocol, protocol)) {
                 continue;
             }
 
@@ -370,7 +371,8 @@ const SableWitnessTable *sable_witness_table(const SableTypeMetadata *type, cons
         }
 
         const SableWitnessTable *table = registered_table(type, protocol);
-        bool structural = type->kind == SABLE_KIND_ARRAY || type->kind == SABLE_KIND_SLICE || type->kind == SABLE_KIND_OPTIONAL;
+        bool structural = type->kind == SABLE_KIND_ARRAY || type->kind == SABLE_KIND_SLICE || type->kind == SABLE_KIND_OPTIONAL
+                          || (type->flags & SABLE_TYPE_STRUCTURAL) != 0;
         if (table == NULL && (conforms || structural) && type->argument_count > 0 && type->name != NULL) {
             table = template_table(type, protocol);
         }

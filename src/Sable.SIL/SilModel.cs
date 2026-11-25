@@ -2536,6 +2536,14 @@ public static class SilBuiltins {
             // An error of one, boxed as 'any Error' by its type's eraser: taken.
             case "opaque_erase_error" when operands is [OpaqueType erased] && result is ClassType:
                 return new([erased], result) { Consumed = [0] };
+            // An error of a type only its metadata knows put in a union of it
+            // and others, where that goes; and which case a union holds.
+            case "union_inject" when operands is [OpaqueType member, AddressType { Pointee: OpaqueType }]:
+                return new([member, operands[1]], SilType.Unit) { Consumed = [0] };
+            case "union_case_metadata" when operands is [OpaqueType union, var m] && m == metadata:
+                return new([union, metadata], metadata);
+            case "union_case_payload" when operands is [OpaqueType union, var m] && m == metadata && result == union:
+                return new([union, metadata], result);
             // A call that opens a Type (#297 stage 6): a buffer its metadata
             // sizes for a result of it; that result, boxed by its type's
             // boxer, the buffer let go; and the buffer let go unwritten.

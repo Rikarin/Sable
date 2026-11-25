@@ -352,6 +352,14 @@ SableString *sable_opaque_debug_describe(void *value, const SableTypeMetadata *t
     sable_trap("a value with no description");
 }
 
+int64_t sable_enum_tag(const void *value, const SableTypeMetadata *type);
+void *sable_enum_payload(void *value, const SableTypeMetadata *type);
+void sable_enum_inject(void *value, int64_t tag, const SableTypeMetadata *type);
+void *sable_opaque_erase_error(void *value, const SableTypeMetadata *type);
+static bool is_any_error(const SableTypeMetadata *type);
+const SableTypeMetadata *sable_union_case_metadata(const void *value, const SableTypeMetadata *type);
+void *sable_union_case_payload(void *value, const SableTypeMetadata *type);
+
 // What boxes an error of each type unspecialised code may throw on as
 // 'any Error' (#297): registered by each image as it starts, as describers
 // are. The eraser copies the value into a box of its type; the value, which
@@ -379,6 +387,15 @@ void sable_register_error_eraser(const SableTypeMetadata *type, SableErrorEraser
 }
 
 void *sable_opaque_erase_error(void *value, const SableTypeMetadata *type) {
+    // One that is an 'any Error' already, and a union's case.
+    if (is_any_error(type)) {
+        return *(void **)value;
+    }
+
+    if ((type->flags & SABLE_TYPE_STRUCTURAL) != 0) {
+        return sable_opaque_erase_error(sable_union_case_payload(value, type), sable_union_case_metadata(value, type));
+    }
+
     SableErrorEraser erase = NULL;
     for (int64_t i = 0; i < eraser_count && erase == NULL; i++) {
         if (erasers[i].type == type) {
@@ -399,6 +416,133 @@ void *sable_opaque_erase_error(void *value, const SableTypeMetadata *type) {
     void *boxed = erase(value, type);
     type->witnesses->destroy(value, type);
     return boxed;
+}
+
+// ---- Structural unions of types known only at run time --------------------
+
+// 'A | B' where A and B are type parameters or associated types (#297): the
+// union the compiler makes of the types they are, as a symbol's is
+// normalised — Never adds no case, two alike are one, a union's cases are
+// its own, and with 'any Error' among them it is that — its cases in the
+// order of their types' names, as the compiler lays one out it knows.
+typedef struct SableStructuralUnion {
+    int64_t count;
+    const SableTypeMetadata **cases;
+    const SableTypeMetadata *type; // an aggregate made at run time
+    struct SableStructuralUnion *next;
+} SableStructuralUnion;
+
+static SableStructuralUnion *structural_unions;
+
+static const SableTypeMetadata *structural_union_made(const SableTypeMetadata *const *cases, int64_t count);
+
+// Never's metadata is '()'s.
+static bool is_never(const SableTypeMetadata *type) {
+    return type->name != NULL && strcmp(type->name, "()") == 0;
+}
+
+static bool is_any_error(const SableTypeMetadata *type) {
+    return type->kind == SABLE_KIND_CLASS && type->name != NULL && strcmp(type->name, "any$Error") == 0;
+}
+
+enum { UNION_CASES = 64 };
+
+static void union_add(const SableTypeMetadata *type, const SableTypeMetadata **cases, int64_t *count) {
+    if ((type->flags & SABLE_TYPE_STRUCTURAL) != 0) {
+        for (int64_t i = 0; i < type->argument_count; i++) {
+            union_add(type->arguments[i], cases, count);
+        }
+
+        return;
+    }
+
+    if (is_never(type)) {
+        return;
+    }
+
+    int64_t at = 0;
+    for (; at < *count; at++) {
+        if (sable_metadata_equal(cases[at], type)) {
+            return;
+        }
+
+        if (strcmp(cases[at]->name, type->name) > 0) {
+            break;
+        }
+    }
+
+    for (int64_t i = at; i < *count; i++) {
+        if (sable_metadata_equal(cases[i], type)) {
+            return;
+        }
+    }
+
+    if (*count == UNION_CASES) {
+        sable_trap("a union of too many types");
+    }
+
+    memmove(cases + at + 1, cases + at, (size_t)(*count - at) * sizeof *cases);
+    cases[at] = type;
+    (*count)++;
+}
+
+const SableTypeMetadata *sable_structural_union_type(int64_t count, const SableTypeMetadata *const *members) {
+    const SableTypeMetadata *cases[UNION_CASES];
+    int64_t found = 0;
+    for (int64_t i = 0; i < count; i++) {
+        union_add(members[i], cases, &found);
+    }
+
+    for (int64_t i = 0; i < found; i++) {
+        if (is_any_error(cases[i])) {
+            return cases[i];
+        }
+    }
+
+    return found == 0 ? members[0] : found == 1 ? cases[0] : structural_union_made(cases, found);
+}
+
+// A structural union as one made at run time, whoever made its metadata.
+static const SableTypeMetadata *union_instance(const SableTypeMetadata *type) {
+    return structural_union_made(type->arguments, type->argument_count);
+}
+
+const SableTypeMetadata *sable_union_case_metadata(const void *value, const SableTypeMetadata *type) {
+    return type->arguments[sable_enum_tag(value, union_instance(type))];
+}
+
+void *sable_union_case_payload(void *value, const SableTypeMetadata *type) {
+    return sable_enum_payload(value, union_instance(type));
+}
+
+// A value moved into a union it is a member of, or whose cases all are.
+void sable_union_inject(void *value, const SableTypeMetadata *type, void *into, const SableTypeMetadata *to) {
+    if (sable_metadata_equal(type, to)) {
+        memcpy(into, value, (size_t)type->size);
+        return;
+    }
+
+    if (is_any_error(to)) {
+        *(void **)into = sable_opaque_erase_error(value, type);
+        return;
+    }
+
+    if ((type->flags & SABLE_TYPE_STRUCTURAL) != 0) {
+        sable_union_inject(sable_union_case_payload(value, type), sable_union_case_metadata(value, type), into, to);
+        return;
+    }
+
+    for (int64_t i = 0; i < to->argument_count; i++) {
+        if (sable_metadata_equal(to->arguments[i], type)) {
+            const SableTypeMetadata *instance = union_instance(to);
+            memset(into, 0, (size_t)to->size);
+            memcpy(sable_enum_payload(into, instance), value, (size_t)type->size);
+            sable_enum_inject(into, i, instance);
+            return;
+        }
+    }
+
+    sable_trap("an error that is no case of the union thrown");
 }
 
 // ---- Opening a Type (#297 stage 6) -------------------------------------------
@@ -600,6 +744,22 @@ bool sable_existential_cast(void *box, const SableTypeMetadata *to, void *into) 
     }
 
     const SableTypeMetadata *held = sable_box_value_metadata(box);
+    // To a structural union: one of its cases' types, put in it.
+    if ((to->flags & SABLE_TYPE_STRUCTURAL) != 0) {
+        for (int64_t i = 0; i < to->argument_count; i++) {
+            if (sable_metadata_is_subtype(held, to->arguments[i])) {
+                const SableTypeMetadata *instance = union_instance(to), *type = to->arguments[i];
+                int64_t from = type->alignment > (int64_t)sizeof(SableObject) ? type->alignment : (int64_t)sizeof(SableObject);
+                memset(into, 0, (size_t)to->size);
+                type->witnesses->initialize_with_copy(sable_enum_payload(into, instance), (char *)box + from, type);
+                sable_enum_inject(into, i, instance);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     if (to->kind == SABLE_KIND_EXISTENTIAL && to->name != NULL && strncmp(to->name, "any ", 4) == 0) {
         for (int64_t i = 0; i < caster_count; i++) {
             if (casters[i].type == to) {
@@ -1228,6 +1388,58 @@ static const SableTypeMetadata *aggregate_instance(void **cache, const SableAggr
 // case without a payload), then its type arguments'.
 const SableTypeMetadata *sable_aggregate_type(void **cache, const SableAggregateShape *shape, const SableTypeMetadata *const *parts) {
     return aggregate_instance(cache, shape, shape->part_count + shape->argument_count, parts);
+}
+
+static const SableTypeMetadata *structural_union_made(const SableTypeMetadata *const *cases, int64_t count) {
+    for (SableStructuralUnion *at = __atomic_load_n(&structural_unions, __ATOMIC_ACQUIRE); at != NULL; at = at->next) {
+        if (at->count == count && memcmp(at->cases, cases, (size_t)count * sizeof *cases) == 0) {
+            return at->type;
+        }
+    }
+
+    SableStructuralUnion *made = calloc(1, sizeof *made);
+    const SableTypeMetadata **kept = calloc((size_t)count, sizeof *kept);
+    SableAggregateShape *shape = calloc(1, sizeof *shape);
+    const char **names = calloc((size_t)count, sizeof *names);
+    if (made == NULL || kept == NULL || shape == NULL || names == NULL) {
+        sable_trap("out of memory");
+    }
+
+    size_t length = 1;
+    for (int64_t i = 0; i < count; i++) {
+        kept[i] = cases[i];
+        names[i] = name_of(cases[i]);
+        length += strlen(names[i]) + 3;
+    }
+
+    char *name = calloc(1, length);
+    if (name == NULL) {
+        sable_trap("out of memory");
+    }
+
+    for (int64_t i = 0; i < count; i++) {
+        strcat(name, i == 0 ? "" : " | ");
+        strcat(name, names[i]);
+    }
+
+    shape->kind = SABLE_KIND_UNION;
+    shape->part_count = count;
+    shape->part_names = names;
+    shape->name = name;
+    SableAggregateInstance *instance = aggregate_make(shape, count, kept);
+    instance->type.flags |= SABLE_TYPE_STRUCTURAL;
+    instance->type.argument_count = count;
+    instance->type.arguments = kept;
+    made->count = count;
+    made->cases = kept;
+    made->type = &instance->type;
+
+    // Another thread may have made one meanwhile: either serves, and both are kept.
+    made->next = __atomic_load_n(&structural_unions, __ATOMIC_ACQUIRE);
+    while (!__atomic_compare_exchange_n(&structural_unions, &made->next, made, true, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+    }
+
+    return made->type;
 }
 
 const SableTypeMetadata *sable_tuple_type(void **cache, int64_t count, const SableTypeMetadata *const *elements) {

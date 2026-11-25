@@ -124,7 +124,11 @@ public sealed partial class SilGen {
     }
 
     /// <summary>True for a type parameter of the unspecialised code being lowered, or an associated type read through one.</summary>
-    internal bool IsOpaque(TypeSymbol type) => type is TypeParameterSymbol parameter && _opaque.Contains(parameter) || IsAssociatedOf(type, _opaque);
+    internal bool IsOpaque(TypeSymbol type) =>
+        type is TypeParameterSymbol parameter && _opaque.Contains(parameter) || IsAssociatedOf(type, _opaque) || type is StructuralUnionTypeSymbol union && union.Cases.All(IsOpaque);
+
+    /// <summary>Between the names of the members of a union of opaque types, in its own.</summary>
+    public const string UnionName = "__or__";
 
     /// <summary>
     ///     True for an associated type read through one of the type
@@ -161,6 +165,7 @@ public sealed partial class SilGen {
             DependentMemberTypeSymbol member => $"{OpaqueName(member.BaseType)}.{member.Associated.Name}",
             TypeParameterSymbol parameter when !_opaque.Contains(parameter) && AssociatedSelf(parameter, _opaque) is { } self => $"{self.Name}.{parameter.Name}",
             TypeParameterSymbol parameter => ParameterName(parameter),
+            StructuralUnionTypeSymbol union => string.Join(UnionName, union.Cases.Select(OpaqueName).Order(StringComparer.Ordinal)),
             _ => type.Name,
         };
 
@@ -322,6 +327,12 @@ public sealed partial class SilGen {
             }
         }
 
+        // A union's are its members'.
+        foreach (var union in names.Where(static n => n.Contains(UnionName, StringComparison.Ordinal)).ToList()) {
+            names.Remove(union);
+            names.UnionWith(union.Split(UnionName).Where(static n => n.Contains('.')));
+        }
+
         var made = new HashSet<string>(StringComparer.Ordinal);
         foreach (var name in names) {
             var steps = name.Split('.');
@@ -389,7 +400,9 @@ public sealed partial class SilGen {
     }
 
     /// <summary>A type as the same-type requirements in force where it is lowered make it: <c>S.Iter.Element</c> as <c>S.Element</c>.</summary>
-    internal TypeSymbol Canonical(TypeSymbol type) => _associatedContext is { } context ? _compilation.CanonicalType(context, Bare(type)) : type;
+    internal TypeSymbol Canonical(TypeSymbol type) =>
+        type is StructuralUnionTypeSymbol union ? StructuralUnionTypeSymbol.Create(union.Cases.Select(Canonical))
+        : _associatedContext is { } context ? _compilation.CanonicalType(context, Bare(type)) : type;
 
     /// <summary>An associated type of a protocol's own Self as the protocol's code names it: <c>Failure</c> for <c>Self.Failure</c>.</summary>
     static TypeSymbol Bare(TypeSymbol type) =>
@@ -611,6 +624,8 @@ public sealed partial class SilGen {
         type switch {
             TypeParameterSymbol parameter => parameters.Contains(parameter) || IsAssociatedOf(parameter, parameters),
             DependentMemberTypeSymbol => IsAssociatedOf(type, parameters),
+            // A union of them: what one of them it is, and how it is laid out, its metadata's.
+            StructuralUnionTypeSymbol union => union.Cases.All(c => c is TypeParameterSymbol or DependentMemberTypeSymbol && IsHeld(c, parameters)),
             MetatypeTypeSymbol { InstanceType: var instance } => instance is TypeParameterSymbol p && parameters.Contains(p) || IsAssociatedOf(instance, parameters),
             ArrayTypeSymbol => IsArrayOf(type, parameters),
             OptionalTypeSymbol optional => IsHeld(optional.UnderlyingType, parameters) && optional.UnderlyingType is not MetatypeTypeSymbol,
@@ -1280,12 +1295,17 @@ public sealed partial class SilGen {
 
         bool Mentions(TypeSymbol type) => SilGen.Mentions(V(type), _own);
 
-        bool IsOwn(TypeSymbol type) => V(type) is var seen && (seen is TypeParameterSymbol parameter && _own.Contains(parameter) || IsAssociatedOf(seen, _own));
+        bool IsOwn(TypeSymbol type) =>
+            V(type) is var seen && (seen is TypeParameterSymbol parameter && _own.Contains(parameter) || IsAssociatedOf(seen, _own) || seen is StructuralUnionTypeSymbol union && union.Cases.All(IsOwn));
 
         /// <summary>The protocols, with those they refine, a type parameter or an associated type is known here to conform to.</summary>
         List<NamedTypeSymbol> Known(TypeSymbol type) => ProtocolClosure(generator.ProtocolsKnown(checkedSymbol, shape, V(type)));
 
-        TypeSymbol Canonical(TypeSymbol type) => generator._compilation.CanonicalType(checkedSymbol, Bare(V(type)));
+        TypeSymbol Canonical(TypeSymbol type) =>
+            V(type) is StructuralUnionTypeSymbol union ? StructuralUnionTypeSymbol.Create(union.Cases.Select(Canonical)) : generator._compilation.CanonicalType(checkedSymbol, Bare(V(type)));
+
+        /// <summary>The members of a union, or the type itself.</summary>
+        static ImmutableArray<TypeSymbol> Members(TypeSymbol type) => type is StructuralUnionTypeSymbol union ? union.Cases : [type];
 
         /// <summary>Whether a requirement's type, read through the type it is called on, is the type given, as the requirements in force here read both.</summary>
         bool SameThrough(TypeSymbol declared, NamedTypeSymbol protocol, TypeSymbol on, TypeSymbol given) {
@@ -1533,7 +1553,9 @@ public sealed partial class SilGen {
             // Thrown on as it is, written where this function's caller says;
             // or, of a type parameter's or an associated type's, boxed as the
             // 'any Error' this function throws, by its type's eraser.
+            // One of the union this function throws, or some of it: put in it there.
             return Canonical(own).Equals(Canonical(thrown))
+                   || IsOwn(Canonical(thrown)) && Members(Canonical(thrown)).All(Members(Canonical(own)).Contains)
                    || IsOwn(Canonical(thrown)) && own is ExistentialTypeSymbol { Constraint: var constraint } && constraint.Equals(generator.Core.Error);
         }
 
@@ -1573,7 +1595,7 @@ public sealed partial class SilGen {
                 // An await of a call: the call, which the task may suspend in.
                 BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Await, Operand: var awaited } => Produces(awaited),
                 BoundFieldAccess access => PropertyAllowed(access),
-                BoundConversion { ConversionKind: ConversionKind.Identity } conversion when conversion.Type.Equals(conversion.Operand.Type) => true,
+                BoundConversion { ConversionKind: ConversionKind.Identity } conversion when conversion.Type.Equals(conversion.Operand.Type) || Canonical(conversion.Type).Equals(Canonical(conversion.Operand.Type)) => true,
                 // A closure that throws nothing where one that may throw is taken.
                 BoundConversion { ConversionKind: ConversionKind.Upcast } upcast => IsGenericFunction(V(upcast.Type), _own) && IsGenericFunction(V(upcast.Operand.Type), _own),
                 // An array or a slice of them, seen as another kind of array of them.
@@ -2342,6 +2364,11 @@ public sealed partial class SilGen {
     ///     does not declare each conformance itself, or it cannot be lowered.
     /// </summary>
     internal bool GenericTable(TypeSymbol concrete, NamedTypeSymbol protocol, SyntaxNode at, bool describe = true, bool debugDescribe = false) {
+        // A union of errors is one through its template.
+        if (concrete is StructuralUnionTypeSymbol errors) {
+            return Lower(errors) is not null && errors.Cases.All(c => GenericTable(c, protocol, at, describe, debugDescribe)) && HasUnionTemplate(protocol.OriginalDefinition);
+        }
+
         // 'any Error' is an error itself.
         var self = concrete.Equals(Core.AnyError) && ProtocolClosure([Core.Error]).Any(p => ReferenceEquals(p, protocol.OriginalDefinition));
         if (Lower(concrete) is not { } value || !self && concrete is not (NamedTypeSymbol or ArrayTypeSymbol or OptionalTypeSymbol)) {
@@ -3062,6 +3089,13 @@ public sealed partial class SilGen {
                 error = Unerased(Owned(error), named, thrownHere);
             }
 
+            // One of a union's members, or a part of it, put in the union there.
+            if (error.Type is OpaqueType given && into.Type is AddressType { Pointee: OpaqueType { Name: var union } } && union != given.Name && union.Contains(UnionName, StringComparison.Ordinal)) {
+                Emit(new BuiltinInst("union_inject", SilType.Unit, Owned(error), into));
+                error = into;
+                return true;
+            }
+
             // A callee's, written where it was told: this function's own place.
             if (error.Type is not AddressType) {
                 Emit(new StoreInst(Owned(error), Emit(new BuiltinInst("opaque_cast", SilType.Address(error.Type), into)), StoreKind.Init));
@@ -3085,7 +3119,9 @@ public sealed partial class SilGen {
             }
 
             if (IsOpaqueHere(canonical) || LowerType(canonical) is { } held && SilType.IsIndirect(held)) {
-                if (_errorOut is { } own && _handlers.Count == 0) {
+                // The same error, or one a witness throws as its protocol names it.
+                if (_errorOut is { } own && _handlers.Count == 0
+                    && !(own.Type is AddressType { Pointee: OpaqueType { Name: var union } } && union.Contains(UnionName, StringComparison.Ordinal) && LowerType(canonical) is OpaqueType { Name: var part } && part != union)) {
                     return (own.Type == expected ? own : Emit(new BuiltinInst("opaque_cast", expected, own)), null, false);
                 }
 
@@ -3116,7 +3152,9 @@ public sealed partial class SilGen {
         bool IsOpaqueHere(TypeSymbol type) =>
             type is TypeParameterSymbol parameter && _genericMetadata.ContainsKey(parameter)
             || _genericMetadata.Count > 0 && IsAssociatedOf(type, [.._genericMetadata.Keys]) && generator.Canonical(type) is var canonical
-            && (canonical.Equals(type) ? true : IsOpaqueHere(canonical));
+            && (canonical.Equals(type) ? true : IsOpaqueHere(canonical))
+            || _genericMetadata.Count > 0 && type is StructuralUnionTypeSymbol && generator.Canonical(type) is var made
+            && (made is StructuralUnionTypeSymbol union ? union.Cases.All(IsOpaqueHere) : IsOpaqueHere(made));
 
         /// <summary>Names the entry block's newest argument, for the debugger and for finding a type parameter's metadata (<c>$metadata.T</c>).</summary>
         void NameArgument(string name) {
@@ -3318,6 +3356,12 @@ public sealed partial class SilGen {
             // An associated type's: found where the function starts, from the table of its base's conformance.
             if (_genericMetadata.Count > 0 && IsAssociatedOf(type, [.._genericMetadata.Keys])) {
                 return generator.Canonical(type) is var canonical && !canonical.Equals(type) ? MetadataOf(canonical)
+                    : Emit(new BuiltinInst($"opaque_metadata:{generator.OpaqueName(type)}", SilType.Metadata));
+            }
+
+            // A union of them: made at run time from its members'.
+            if (type is StructuralUnionTypeSymbol && IsOpaqueHere(type)) {
+                return generator.Canonical(type) is var canonicalUnion && !canonicalUnion.Equals(type) ? MetadataOf(canonicalUnion)
                     : Emit(new BuiltinInst($"opaque_metadata:{generator.OpaqueName(type)}", SilType.Metadata));
             }
 

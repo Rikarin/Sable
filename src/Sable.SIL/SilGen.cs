@@ -2066,6 +2066,11 @@ public sealed partial class SilGen {
             return Lower(canonical);
         }
 
+        // A union of them, with what the requirements in force make one type collapsed.
+        if (_opaque.Count > 0 && type is StructuralUnionTypeSymbol && Canonical(type) is var union && !union.Equals(type)) {
+            return Lower(union);
+        }
+
         if (IsOpaque(type)) {
             return new OpaqueType(OpaqueName(type));
         }
@@ -2953,12 +2958,15 @@ public sealed partial class SilGen {
             cases.Add(lowered);
         }
 
+        // In the order of their types' names, as a union of types known only at
+        // run time orders them (sable_structural_union_type, #297).
+        cases.Sort(static (a, b) => string.CompareOrdinal(TypeMetadata.DisplayName(a), TypeMetadata.DisplayName(b)));
         var name = "Union$" + string.Join("$or$", cases.Select(static c => Sanitise(c.ToString())));
         if (_module.FindType(name) is EnumType existing) {
             return existing;
         }
 
-        var enumType = Begin(union, new EnumType(name) { IsUnion = true });
+        var enumType = Begin(union, new EnumType(name) { IsUnion = true, DisplayName = string.Join(" | ", cases.Select(TypeMetadata.DisplayName)) });
         foreach (var lowered in cases) {
             enumType.Cases.Add((UnionCaseName(lowered), lowered));
         }

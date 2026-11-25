@@ -116,6 +116,10 @@ public sealed partial class SilGen {
     ///     type's conformance can have one.
     /// </summary>
     internal bool HasTemplate(TypeSymbol type, NamedTypeSymbol protocol) {
+        if (type is StructuralUnionTypeSymbol) {
+            return HasUnionTemplate(protocol.OriginalDefinition);
+        }
+
         if (type is ArrayTypeSymbol or OptionalTypeSymbol) {
             return HasStructuralTemplate(type, protocol.OriginalDefinition);
         }
@@ -179,6 +183,62 @@ public sealed partial class SilGen {
 
         _structuralAsked[(family, protocol)] = true;
         return _structuralAsked[(family, protocol)] = MakeStructuralTemplate(type, family, protocol);
+    }
+
+    /// <summary>The conformer of the template every structural union of errors has.</summary>
+    public static readonly OpaqueType UnionConformer = new("union");
+
+    /// <summary>
+    ///     Whether every structural union, <c>A | B</c> of types known at run
+    ///     time, has a table of a conformance — to Error, as each of its cases
+    ///     does: its entries ask which case a value holds, and call the
+    ///     case's own (<c>union_case_metadata</c>, <c>union_case_payload</c>).
+    /// </summary>
+    internal bool HasUnionTemplate(NamedTypeSymbol protocol) {
+        if (!CompilesOnce || !ProtocolClosure([Core.Error]).Any(p => ReferenceEquals(p, protocol)) || !protocol.AssociatedTypes.IsEmpty) {
+            return false;
+        }
+
+        if (_structuralAsked.TryGetValue(("union", protocol), out var has)) {
+            return has;
+        }
+
+        _structuralAsked[("union", protocol)] = true;
+        return _structuralAsked[("union", protocol)] = MakeUnionTemplate(protocol);
+    }
+
+    bool MakeUnionTemplate(NamedTypeSymbol protocol) {
+        if (!Bases(protocol).All(b => HasUnionTemplate(b.OriginalDefinition))) {
+            return false;
+        }
+
+        var table = new SilWitnessTable(UnionConformer, QualifiedName(protocol)) { IsTemplate = true };
+        table.Bases.AddRange(Bases(protocol).Select(QualifiedName));
+        foreach (var (key, member) in GenericRequirements(protocol)) {
+            if (GenericEntryType(protocol, member) is not { Thrown: null, IsAsync: false } type || type.Parameters[0] is not OpaqueType) {
+                return false;
+            }
+
+            var stem = $"$template$witness$union${Sanitise(QualifiedName(protocol))}${table.Entries.Count}";
+            if (_module.Find(stem) is null) {
+                var thunk = new SilFunction(stem, type);
+                thunk.ParameterNames.AddRange([..Enumerable.Range(0, type.Parameters.Length - 1).Select(static i => $"$argument{i}"), "$metadata.Self"]);
+                var entry = thunk.AddBlock();
+                var given = type.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
+                var held = entry.Append(new BuiltinInst("union_case_metadata", SilType.Metadata, given[0], given[^1]));
+                var payload = entry.Append(new BuiltinInst("union_case_payload", given[0].Type, given[0], given[^1]));
+                var asked = entry.Append(new BuiltinInst($"witness_table_required:{QualifiedName(protocol)}", SilType.WitnessTable, held));
+                var code = entry.Append(new BuiltinInst($"witness_generic:{table.Entries.Count}", type, asked));
+                var result = entry.Append(new ApplyInst(code, type.Result, [payload, ..given.Skip(1).SkipLast(1), held]));
+                entry.Append(new ReturnInst(type.Result == SilType.Unit ? null : result));
+                _module.Add(thunk);
+            }
+
+            table.Entries.Add((key, stem, type));
+        }
+
+        _module.AddWitnessTable(table);
+        return true;
     }
 
     bool MakeStructuralTemplate(TypeSymbol type, string family, NamedTypeSymbol protocol) {
@@ -408,6 +468,7 @@ public sealed partial class SilGen {
             SilValue? Metadata(TypeSymbol? type) =>
                 type switch {
                     TypeParameterSymbol parameter when shape.Parameters.IndexOf(parameter) is var i and >= 0 => given[i],
+                    StructuralUnionTypeSymbol when Canonical(type) is var union && IsOpaque(union) => block.Append(new BuiltinInst($"opaque_metadata:{OpaqueName(union)}", SilType.Metadata)),
                     not null when IsAssociatedOf(type, shape.Parameters) => block.Append(new BuiltinInst($"opaque_metadata:{OpaqueName(Canonical(type))}", SilType.Metadata)),
                     ArrayTypeSymbol array when Mentions(array, shape.Parameters) => IsArrayOf(array, shape.Parameters) && Metadata(array.ElementType) is { } element
                         ? block.Append(new BuiltinInst(array.ArrayKind == ArrayKind.Slice ? "metadata_slice" : "metadata_array", SilType.Metadata, element))

@@ -123,7 +123,9 @@ public sealed partial class SilGen {
             if (_templated.Add((QualifiedName(definition), name)) && protocols.TryGetValue(name, out var protocol)
                 && requirements.All(r => r.Item1 < definition.TypeParameters.Length && protocols.ContainsKey(r.Item2))) {
                 made = true;
+                _templatesMade.Add((definition, protocol));
                 TemplateTable(definition, type, protocol, [..requirements.Select(r => (definition.TypeParameters[r.Item1], protocols[r.Item2]))]);
+                _templatesMade.Remove((definition, protocol));
             }
         }
 
@@ -131,6 +133,9 @@ public sealed partial class SilGen {
     }
 
     readonly Dictionary<(NamedTypeSymbol, NamedTypeSymbol), bool> _templatesAsked = [];
+
+    /// <summary>The conformances whose templates' entries are being made: each is taken to have one, as a function's own body takes it to be compiled once.</summary>
+    readonly HashSet<(NamedTypeSymbol, NamedTypeSymbol)> _templatesMade = [];
 
     /// <summary>
     ///     Whether a type made of type parameters, <c>Pair&lt;T&gt;</c>, has a
@@ -145,6 +150,11 @@ public sealed partial class SilGen {
         }
 
         protocol = protocol.OriginalDefinition;
+        // A witness of the conformance being made — a requirement left to the protocol's default — asks for the conformance itself.
+        if (_templatesMade.Contains((definition, protocol))) {
+            return true;
+        }
+
         if (_templatesAsked.TryGetValue((definition, protocol), out var has)) {
             return has;
         }

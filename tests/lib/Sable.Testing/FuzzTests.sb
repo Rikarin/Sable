@@ -34,7 +34,7 @@ fn aTrapSaysWhatTheTargetWasCalledWith() {
         if m == 1 { fatalError("too many") }
     }
     }
-    if let ended = ended {
+    if let ended {
         expect(ended.errors.contains("called with 1, 1"))
     }
 }
@@ -85,7 +85,7 @@ struct TemporaryDirectory {
 }
 
 @test
-async fn savedInputsAreCases() {
+async fn savedInputsAreCases() throws {
     let seen = Seen()
     var cases: TestArguments[>..] = []
     listing("FuzzTests.saved", "crash\t/x/crash-1\t0aff\ncorpus\t/x/a\t\ncorpus\t/x/b\t01\n") {
@@ -95,9 +95,9 @@ async fn savedInputsAreCases() {
     }
     }
     assertEqual(cases.map({ $0.description }), ["crash-1", "corpus"])
-    assert(await cases[0].run() == none)
+    try await cases[0].run(FixtureScope())
     assertEqual(seen.text, "[10, 255]")
-    assert(await cases[1].run() == none)
+    try await cases[1].run(FixtureScope())
     assertEqual(seen.text, "[10, 255][][1]")
     assertEqual(fuzzReplays("FuzzTests.saved", { data in }).count, 0)
 }
@@ -109,8 +109,8 @@ async fn aSavedInputThatFailsIsNamed() {
         cases = fuzzReplays("FuzzTests.fails") { data in fatalError("wrong") }
     }
     let one = cases[0].run
-    let ended = await expectPanic("wrong") { _ = await one() }
-    if let ended = ended {
+    let ended = await expectPanic("wrong") { try! await one(FixtureScope()) }
+    if let ended {
         expect(ended.errors.contains("with the saved input /x/a"))
     }
 }

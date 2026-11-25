@@ -107,6 +107,21 @@ public sealed partial class SilGen {
         return true;
     }
 
+    /// <summary>What stands in a slot of a class no object is made of at run time, as its method is not compiled once.</summary>
+    string MissingSlot(ClassType type) {
+        var name = $"$slot$missing${Sanitise(type.Name)}";
+        if (_module.Find(name) is null) {
+            var function = new SilFunction(name, new FunctionType([type], SilType.Unit));
+            var entry = function.AddBlock();
+            entry.AddArgument(type);
+            entry.Append(new CondFailInst(entry.Append(new IntegerLiteralInst(SilType.Bool, 1)), $"a method of '{TypeMetadata.DisplayName(type)}' that is copied for each type"));
+            entry.Append(new UnreachableInst());
+            _module.Add(function);
+        }
+
+        return name;
+    }
+
     IEnumerable<FunctionSymbol> VirtualMembers(NamedTypeSymbol definition) =>
         definition.Members.OfType<FunctionSymbol>()
             .Concat(definition.Members.OfType<FieldSymbol>().Where(static f => f is { IsStatic: false, IsComputed: true }).SelectMany(f => new[] { GetterOf(f), SetterOf(f) }).OfType<FunctionSymbol>())
@@ -159,6 +174,15 @@ public sealed partial class SilGen {
         }
 
         if (UnspecialisedShape(method) is { } shape && UnspecialisedInstance(method, shape, at) is var (once, onceType)) {
+            // It reads its type arguments from the object's class, and may write values of them out.
+            if (!opaque && symbol.IsConstructed) {
+                foreach (var argument in symbol.TypeArguments) {
+                    if (Lower(argument) is { } described && !SilType.MentionsOpaque(described)) {
+                        Describer(argument, described, at, true);
+                    }
+                }
+            }
+
             return SlotThunk(once, onceType, slot, rootShape, shape, at);
         }
 

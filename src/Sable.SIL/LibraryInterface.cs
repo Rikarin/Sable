@@ -46,7 +46,7 @@ namespace Sable.SIL;
 /// </remarks>
 public sealed class LibraryInterface {
     /// <summary>The format's version: bump when what is written, or what it means, changes.</summary>
-    public const int Version = 2;
+    public const int Version = 3;
 
     static ReadOnlySpan<byte> Magic => "SBIL"u8;
 
@@ -61,7 +61,8 @@ public sealed class LibraryInterface {
         string sil,
         IReadOnlyDictionary<string, bool> generics,
         IReadOnlySet<string> inlinable,
-        IReadOnlySet<string>? debugDescribing = null
+        IReadOnlySet<string>? debugDescribing = null,
+        IReadOnlySet<string>? prepared = null
     ) {
         Unit = unit;
         Compiler = compiler;
@@ -74,6 +75,7 @@ public sealed class LibraryInterface {
         Generics = generics;
         Inlinable = inlinable;
         DebugDescribing = debugDescribing ?? new SortedSet<string>(StringComparer.Ordinal);
+        Prepared = prepared ?? new SortedSet<string>(StringComparer.Ordinal);
     }
 
     /// <summary>The unit's name: <c>Sable.Core</c>, a package's library.</summary>
@@ -121,8 +123,11 @@ public sealed class LibraryInterface {
     /// <summary>Of <see cref="Generics" />, those that write a value out with <c>?</c> (<see cref="SilUnitInfo.DebugDescribing" />).</summary>
     public IReadOnlySet<string> DebugDescribing { get; }
 
+    /// <summary>The instances of its generic functions kept copied that its archive has (<see cref="SilUnitInfo.Prepared" />).</summary>
+    public IReadOnlySet<string> Prepared { get; }
+
     /// <summary>What a unit lowered against this library is told of the generic code its archive holds.</summary>
-    public CompiledGenerics CompiledGenerics() => new(Covers, Generics, Inlinable, DebugDescribing);
+    public CompiledGenerics CompiledGenerics() => new(Covers, Generics, Inlinable, DebugDescribing, Prepared);
 
     /// <summary>
     ///     The identity of a compiler made of these assemblies: the SHA-256 of
@@ -202,7 +207,8 @@ public sealed class LibraryInterface {
             sil,
             lowered?.Generics ?? new SortedDictionary<string, bool>(StringComparer.Ordinal),
             lowered?.Inlinable ?? new SortedSet<string>(StringComparer.Ordinal),
-            lowered?.DebugDescribing
+            lowered?.DebugDescribing,
+            lowered?.Prepared
         );
     }
 
@@ -612,6 +618,8 @@ public sealed class LibraryInterface {
                 writer.Write(name);
                 writer.Write((byte)((describes ? 1 : 0) | (Inlinable.Contains(name) ? 2 : 0) | (DebugDescribing.Contains(name) ? 4 : 0)));
             }
+
+            WriteList(writer, [..Prepared.Order(StringComparer.Ordinal)]);
         }
 
         var body = payload.ToArray();
@@ -685,11 +693,12 @@ public sealed class LibraryInterface {
                 }
             }
 
+            var prepared = new SortedSet<string>(ReadList(reader, body.Length), StringComparer.Ordinal);
             if (reader.BaseStream.Position != reader.BaseStream.Length) {
                 return null;
             }
 
-            return new(unit, compiler, settings, sources, modules, extensions, symbols, Encoding.UTF8.GetString(Decompress(sil)), generics, inlinable, debugDescribing);
+            return new(unit, compiler, settings, sources, modules, extensions, symbols, Encoding.UTF8.GetString(Decompress(sil)), generics, inlinable, debugDescribing, prepared);
         } catch (Exception failure) when (failure is EndOfStreamException or IOException or InvalidDataException or ArgumentException
                                               or DecoderFallbackException or OverflowException) {
             return null;

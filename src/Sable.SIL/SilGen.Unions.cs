@@ -48,8 +48,8 @@ public sealed partial class SilGen {
             // 'String | Vec3': each of those is a case of the declared union.
             var narrowed = Sub(expression.Type);
             ImmutableArray<int> cases = narrowed is StructuralUnionTypeSymbol left
-                ? [..left.Cases.Select(c => UnionCase(union, c))]
-                : [UnionCase(union, narrowed)];
+                ? [..left.Cases.Select(c => UnionCase(Sub(declared!), union, c))]
+                : [UnionCase(Sub(declared!), union, narrowed)];
             return cases.Contains(-1) ? null : (whole, cases);
         }
 
@@ -119,8 +119,8 @@ public sealed partial class SilGen {
         }
 
         /// <summary>Where a member of a union is among the cases it is lowered with, which are in the order of their types' names (<see cref="SilGen.LowerUnion" />); -1 when it is none.</summary>
-        int UnionCase(StructuralUnionTypeSymbol union, TypeSymbol member) =>
-            union.Cases.Contains(member) && LowerType(union) is EnumType lowered && LowerType(member) is { } payload ? lowered.Cases.FindIndex(c => c.Payload == payload) : -1;
+        int UnionCase(TypeSymbol type, StructuralUnionTypeSymbol union, TypeSymbol member) =>
+            union.Cases.Contains(member) && LowerType(type) is EnumType lowered && LowerType(member) is { } payload ? lowered.Cases.FindIndex(c => c.Payload == payload) : -1;
 
         /// <summary>A value where a union of its type is wanted: the case for its type, carrying it.</summary>
         SilValue? Inject(BoundConversion conversion) {
@@ -134,7 +134,7 @@ public sealed partial class SilGen {
                 operandType = union.Cases.FirstOrDefault(c => Core.IsNumeric(operandType) && Core.IsNumeric(c)) ?? operandType;
             }
 
-            var index = UnionCase(union, operandType);
+            var index = UnionCase(Sub(conversion.Type), union, operandType);
 
             if (index < 0) {
                 return Missing(conversion, $"'{operandType.ToDisplayString()}' as the union '{conversion.Type.ToDisplayString()}'");
@@ -148,7 +148,7 @@ public sealed partial class SilGen {
 
         /// <summary><c>d is String</c> on a union: whether it holds that case.</summary>
         SilValue? UnionTypeTest(BoundTypeTest test, StructuralUnionTypeSymbol union) {
-            var index = UnionCase(union, Sub(test.TestedType));
+            var index = UnionCase(Sub(test.Operand.Type), union, Sub(test.TestedType));
             if (index < 0 || Borrow(test.Operand) is not { Type: EnumType enumType } value) {
                 return Missing(test, $"'is {test.TestedType.ToDisplayString()}' on '{test.Operand.Type.ToDisplayString()}'");
             }

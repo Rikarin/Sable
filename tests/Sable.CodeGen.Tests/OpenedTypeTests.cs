@@ -1168,16 +1168,16 @@ public sealed partial class OpenedTypeTests {
         var execution = Runs(
             """
             protocol Takes {
-                associatedtype Items: Sequence
                 static fn name() -> String
+                fn take<U>(_ u: U) -> Int
             }
 
             struct Plain {}
 
             struct Box<T>: Takes {
-                alias Items = T[]
                 var item: T
                 static fn name() -> String => "box"
+                fn take<U>(_ u: U) -> Int => 1
             }
 
             fn boxOf<T>(_ type: T.Type) -> Type => Box<T>.self

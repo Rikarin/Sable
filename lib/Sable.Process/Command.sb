@@ -56,8 +56,6 @@ public struct Command {
     /// system has it.
     ///
     /// ```sable
-    /// import Sable.IO
-    ///
     /// let command = Command("cat").argument(FilePath("notes.txt").osString)
     /// assert(command.argumentList == ["notes.txt"])
     /// ```

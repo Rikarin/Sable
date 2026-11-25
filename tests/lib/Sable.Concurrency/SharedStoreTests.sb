@@ -1,0 +1,405 @@
+module SharedStoreTests
+
+import Sable.Concurrency
+import Sable.Testing
+
+// A reference stored out of sight — through an inout parameter, a closure, a
+// witness, a generic function, an array operation — in an object several
+// threads reach is counted atomically from then on: each is made on one thread,
+// and retained and released on four.
+
+@immutable
+final class Held {
+    let live: Atomic<Int>
+    let n: Int
+
+    init(_ live: Atomic<Int>, _ n: Int = 0) {
+        self.live = live
+        self.n = n
+        live.add(1)
+    }
+
+    deinit {
+        live.subtract(1)
+    }
+}
+
+protocol Keeper {
+    mutating fn keep(_ held: Held)
+    fn kept() -> Held?
+}
+
+struct Plain: Keeper {
+    var held: Held?
+
+    mutating fn keep(_ held: Held) {
+        self.held = held
+    }
+
+    fn kept() -> Held? {
+        return held
+    }
+}
+
+struct Pair {
+    var first: Held?
+    var list: Held[>..]
+
+    @inline(never)
+    mutating fn put(_ held: Held) {
+        first = held
+        list = [held]
+    }
+}
+
+union Either {
+    Nothing
+    One(Held)
+    Two(Held, Held)
+}
+
+class Parent {
+    var held: Held?
+    init() { held = none }
+    fn replace(_ slot: inout Held?, _ value: Held) { slot = value }
+}
+
+final class Child: Parent {
+    override fn replace(_ slot: inout Held?, _ value: Held) { slot = value }
+}
+
+final class Generic<T> {
+    var value: T
+    init(_ value: T) { self.value = value }
+}
+
+final class Node {
+    unowned let target: Held
+    init(_ target: Held) { self.target = target }
+}
+
+final class Owner {
+    var held: Held
+    var node: Node
+    init(_ held: Held) {
+        self.held = held
+        node = Node(held)
+    }
+}
+
+final class Box {
+    var one: Held?
+    var list: Held[>..] = []
+    var lists: Held[>..][>..] = [[], [], [], []]
+    var pair: Pair = Pair { first: none, list: [] }
+    var pairs: Pair[>..] = [Pair { first: none, list: [] }]
+    var either: Either = .Nothing
+    var table: [Int: Held] = [:]
+    var keeper: any Keeper = Plain { held: none }
+    var names: String[>..] = ["a", "b", "c", "d"]
+    var tuple: (Held?, Int) = (none, 0)
+    var parent: Parent = Child()
+    var generic: Generic<Held?> = Generic(none)
+    var function: (() -> Held?)? = none
+    var fixed: InlineFour = InlineFour { a: none, b: none }
+    var owner: Owner? = none
+    init() { one = none }
+}
+
+struct InlineFour {
+    var a: Held?
+    var b: Held?
+}
+
+@inline(never)
+fn append(_ slot: inout Held[>..], _ held: Held) {
+    if slot.count > 20 {
+        slot = []
+    }
+    slot.append(held)
+}
+
+@inline(never)
+fn assign(_ slot: inout Held?, _ held: Held) { slot = held }
+
+@inline(never)
+fn assignAny<T>(_ slot: inout T, _ value: T) { slot = value }
+
+@inline(never)
+fn exchange<T>(_ a: inout T, _ b: inout T) {
+    let t = a
+    a = b
+    b = t
+}
+
+@inline(never)
+fn with<T>(_ slot: inout T, _ body: (inout T) -> Void) { body(&slot) }
+
+@inline(never)
+fn run(_ body: () -> Void) { body() }
+
+struct Failure: Error {
+    fn debugDescription() -> String { return "Failure" }
+}
+
+@inline(never)
+fn throwing(_ slot: inout Held?, _ held: Held) throws(Failure) {
+    slot = held
+    throw Failure()
+}
+
+extension Pair {
+    @inline(never)
+    mutating fn throughClosure(_ held: Held) {
+        run { first = held }
+    }
+    mutating fn inlinedClosure(_ held: Held) {
+        run { self.first = held }
+    }
+}
+
+@inline(never)
+fn setName(_ slot: inout String, _ i: Int) { slot = "name \(i)" }
+
+@inline(never)
+fn addNames(_ slot: inout String[>..], _ i: Int) {
+    if slot.count > 10 {
+        slot = []
+    }
+    slot.append("x \(i)")
+}
+
+@inline(never)
+fn fillSlice(_ slice: inout Held[>..][:], _ held: Held) { slice[0] = [held] }
+
+@inline(never)
+async fn assignLater(_ slot: inout Held?, _ held: Held) {
+    slot = held
+    await Task.yield()
+}
+
+async fn hammer(_ box: Mutex<Box>, _ live: Atomic<Int>, _ store: (Box, Held, Int) -> Void, _ load: (Box) -> Held?) {
+    await withTaskGroup(of: Int.self) { group in
+        for task in 0..<4 {
+            unsafe {
+                group.spawn {
+                    var kept: Held[>..] = []
+                    for i in 0..<800 {
+                        if i % 5 == 0 {
+                            box.withLock { store($0, Held(live, i), i) }
+                        }
+                        if let held = box.withLock({ load($0) }) {
+                            for _ in 0..<8 {
+                                kept.append(held)
+                            }
+                        }
+                        if kept.count > 50 {
+                            kept = []
+                        }
+                    }
+                    return kept.count + task
+                }
+            }
+        }
+        await group.waitForAll()
+    }
+}
+
+// An actor's state, through an inout over an await in between.
+actor Cell {
+    var one: Held?
+    var list: Held[>..] = []
+    init() { one = none }
+    fn set(_ held: Held) { assign(&one, held) }
+    fn add(_ held: Held) { append(&list, held) }
+    fn get() -> Held? { return one }
+    fn first() -> Held? { return list.first }
+}
+
+async fn hammerActor(_ live: Atomic<Int>) {
+    let cell = Cell()
+    await withTaskGroup(of: Int.self) { group in
+        for task in 0..<4 {
+            group.spawn {
+                var kept: Held[>..] = []
+                for i in 0..<400 {
+                    if i % 5 == 0 {
+                        await cell.set(Held(live, i))
+                        await cell.add(Held(live, i))
+                    }
+                    if let held = await cell.get() {
+                        for _ in 0..<8 {
+                            kept.append(held)
+                        }
+                    }
+                    if let held = await cell.first() {
+                        kept.append(held)
+                    }
+                    if kept.count > 50 {
+                        kept = []
+                    }
+                }
+                return kept.count + task
+            }
+        }
+        await group.waitForAll()
+    }
+}
+
+fn eitherHeld(_ either: Either) -> Held? {
+    match either {
+        case .One(let h)    => { return h }
+        case .Two(let h, _) => { return h }
+        case .Nothing       => { return none }
+    }
+}
+
+fn called(_ b: Box) -> Held? {
+    if let f = b.function {
+        return f()
+    }
+    return none
+}
+
+fn unownedOf(_ b: Box) -> Held? {
+    if let o = b.owner {
+        return o.node.target
+    }
+    return none
+}
+
+async fn store(_ which: Int) {
+    let live = Atomic<Int>(0)
+    if true {
+        let box = Mutex(Box())
+        if which == 0 {
+            await hammer(box, live, { b, h, i in append(&b.list, h) }, { $0.list.first })
+        }
+        if which == 1 {
+            await hammer(box, live, { b, h, i in assign(&b.one, h) }, { $0.one })
+        }
+        if which == 2 {
+            await hammer(box, live, { b, h, i in assignAny(&b.one, h) }, { $0.one })
+        }
+        if which == 3 {
+            await hammer(box, live, { b, h, i in append(&b.lists[i % 4], h) }, { $0.lists[0].first })
+        }
+        if which == 4 {
+            await hammer(box, live, { b, h, i in b.pair.put(h) }, { $0.pair.first })
+        }
+        if which == 5 {
+            await hammer(box, live, { b, h, i in b.pairs[0].put(h) }, { $0.pairs[0].list.first })
+        }
+        if which == 6 {
+            await hammer(box, live, { b, h, i in assignAny(&b.either, i % 2 == 0 ? Either.One(h) : Either.Two(h, h)) }, { eitherHeld($0.either) })
+        }
+        if which == 7 {
+            await hammer(box, live, { b, h, i in
+                with(&b.table) { $0[i % 10] = h }
+            }, { $0.table[0] })
+        }
+        if which == 8 {
+            await hammer(box, live, { b, h, i in b.keeper.keep(h) }, { $0.keeper.kept() })
+        }
+        if which == 9 {
+            await hammer(box, live, { b, h, i in
+                var fresh: Held? = h
+                exchange(&b.one, &fresh)
+            }, { $0.one })
+        }
+        if which == 10 {
+            await hammer(box, live, { b, h, i in
+                with(&b.one) { $0 = h }
+            }, { $0.one })
+        }
+        if which == 11 {
+            await hammer(box, live, { b, h, i in b.pair.throughClosure(h) }, { $0.pair.first })
+        }
+        if which == 12 {
+            await hammer(box, live, { b, h, i in b.pair.inlinedClosure(h) }, { $0.pair.first })
+        }
+        if which == 13 {
+            await hammer(box, live, { b, h, i in
+                do {
+                    try throwing(&b.one, h)
+                } catch { }
+            }, { $0.one })
+        }
+        if which == 14 {
+            await hammer(box, live, { b, h, i in assign(&b.tuple.0, h) }, { $0.tuple.0 })
+        }
+        if which == 15 {
+            await hammer(box, live, { b, h, i in b.parent.replace(&b.one, h) }, { $0.one })
+        }
+        if which == 16 {
+            await hammer(box, live, { b, h, i in assign(&b.generic.value, h) }, { $0.generic.value })
+        }
+        if which == 17 {
+            await hammer(box, live, { b, h, i in
+                assignAny(&b.function, { h })
+            }, { called($0) })
+        }
+        if which == 18 {
+            await hammer(box, live, { b, h, i in b.owner = Owner(h) }, { unownedOf($0) })
+        }
+        if which == 19 {
+            await hammer(box, live, { b, h, i in assignAny(&b.owner, Owner(h)) }, { unownedOf($0) })
+        }
+        if which == 20 {
+            await hammer(box, live, { b, h, i in b.lists[i % 4] = [h] }, { $0.lists[0].first })
+        }
+        if which == 21 {
+            await hammer(box, live, { b, h, i in
+                var fresh: Held[>..] = [h]
+                exchange(&b.lists[0], &fresh)
+            }, { $0.lists[0].first })
+        }
+        if which == 22 {
+            await hammer(box, live, { b, h, i in
+                b.lists.append([h])
+                b.lists.swapAt(0, 4)
+                let _ = b.lists.removeLast()
+            }, { $0.lists[0].first })
+        }
+        if which == 23 {
+            await hammer(box, live, { b, h, i in b.lists[0..<1] = [[h]] }, { $0.lists[0].first })
+        }
+        if which == 24 {
+            await hammer(box, live, { b, h, i in assign(&b.fixed.b, h) }, { $0.fixed.b })
+        }
+        if which == 25 {
+            await hammer(box, live, { b, h, i in b.fixed.a = h }, { $0.fixed.a })
+        }
+        if which == 26 {
+            await hammer(box, live, { b, h, i in fillSlice(&b.lists[0..<2], h) }, { $0.lists[0].first })
+        }
+        if which == 27 { await hammerActor(live) }
+        if which == 28 {
+            await hammer(box, live, { b, h, i in
+                unsafe {
+                    let p = RawPtr<Held?>.allocate(count: 1)
+                    p.initialize(to: h)
+                    b.one = p.move()
+                    p.deallocate()
+                }
+            }, { $0.one })
+        }
+        if which == 29 {
+            await hammer(box, live, { b, h, i in addNames(&b.names, i) }, { b in b.names.count > 100 ? b.one : none })
+        }
+        if which == 30 {
+            await hammer(box, live, { b, h, i in
+                b.lists.swapAt(0, 1);
+                append(&b.lists[0], h)
+            }, { $0.lists[0].first })
+        }
+    }
+    assertEqual(live.load(), 0)
+}
+
+@test
+fn whatIsStoredOutOfSightIsCountedOnEveryThread() async {
+    for i in 0..<31 {
+        await store(i)
+    }
+}

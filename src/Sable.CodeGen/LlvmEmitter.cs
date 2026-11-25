@@ -3755,39 +3755,51 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>
-        ///     Goes to <paramref name="yes" /> where the object's count is one,
-        ///     so that what it holds may be changed in place, else to
-        ///     <paramref name="no" />. The releases of the other references to
-        ///     an object several threads reach are read by an acquire, so that
-        ///     what their threads read of it was read before it is changed; they
-        ///     are its other half (acquire and release). One only this thread
-        ///     reaches has no other thread's to see, and the code after it
-        ///     stays free to be moved.
+        ///     Goes to <paramref name="yes" /> where <paramref name="also" />
+        ///     holds and the object's count is one, so that what it holds may
+        ///     be changed in place, else to <paramref name="no" />, the
+        ///     runtime's. An object several threads reach is looked at by an
+        ///     acquire, so that what the threads that held it read of it was
+        ///     read before it is changed: their releases are the other half. An
+        ///     acquire, even on a path hardly taken, keeps LLVM from holding
+        ///     the buffer and its count in registers round a loop: without
+        ///     <paramref name="shared" />, as for an append, the runtime makes it.
+        ///     The count and the flags are two loads: one of both would wait for
+        ///     a retain's store of the count alone.
         /// </summary>
-        void BranchIfSole(string unique, string strongField, string array, string yes, string no) {
-            var look = NewLabel("sole");
-            var several = NewLabel("shared");
+        void BranchIfSole(string also, string strongField, string yes, string no, bool shared) {
+            var count = Fresh();
+            var one = Fresh();
             var flagsField = Fresh();
             var flags = Fresh();
             var bit = Fresh();
-            var one = Fresh();
-            var again = Fresh();
-            var still = Fresh();
-            Line($"br i1 {unique}, label %{look}, label %{no}");
-            Continue(look);
-            Line($"{flagsField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 2");
+            var alone = Fresh();
+            var sole = Fresh();
+            var both = Fresh();
+            Line($"{count} = load atomic i32, ptr {strongField} unordered, align 4, !tbaa {TbaaCount}");
+            Line($"{one} = icmp eq i32 {count}, 1");
+            Line($"{flagsField} = getelementptr inbounds i8, ptr {strongField}, i64 4");
             Line($"{flags} = load atomic i32, ptr {flagsField} unordered, align 4");
             Line($"{bit} = and i32 {flags}, 512");
-            Line($"{one} = icmp eq i32 {bit}, 0");
-            Line($"br i1 {one}, label %{yes}, label %{several}");
-            Continue(several);
+            Line($"{alone} = icmp eq i32 {bit}, 0");
+            Line($"{sole} = and i1 {one}, {alone}");
+            Line($"{both} = and i1 {also}, {sole}");
+            if (!shared) {
+                Line($"br i1 {both}, label %{yes}, label %{no}");
+                return;
+            }
+
+            var look = NewLabel("look");
+            var again = Fresh();
+            var last = Fresh();
+            var still = Fresh();
+            Line($"br i1 {both}, label %{yes}, label %{look}, !prof !{{!\"branch_weights\", i32 1000, i32 1}}");
+            Continue(look);
             Line($"{again} = load atomic i32, ptr {strongField} acquire, align 4");
-            Line($"{still} = icmp eq i32 {again}, 1");
+            Line($"{last} = icmp eq i32 {again}, 1");
+            Line($"{still} = and i1 {also}, {last}");
             Line($"br i1 {still}, label %{yes}, label %{no}");
         }
-
-        /// <summary>The count, as <see cref="BranchIfSole" /> first looks at it.</summary>
-        static string CountForUniqueness(string strongField) => $"load atomic i32, ptr {strongField} {Environment.GetEnvironmentVariable("SABLE_UNIQ") switch { "acquire" => "acquire", _ => "unordered" }}, align 4";
 
         /// <summary>The type of what one of <see cref="ShareStores" />' builtins shares: the value, or what is at the address.</summary>
         static SilType Shareable(BuiltinInst share) =>
@@ -4800,7 +4812,7 @@ public sealed partial class LlvmEmitter {
                     var mortal = Fresh();
                     Line($"{objectPointer} = load ptr, ptr {operands[0]}");
                     Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {objectPointer}, i32 0, i32 1");
-                    Line($"{strong} = {CountForUniqueness(strongField)}");
+                    Line($"{strong} = load atomic i32, ptr {strongField} acquire, align 4");
                     Line($"{flagsField} = getelementptr inbounds %SableObjectHeader, ptr {objectPointer}, i32 0, i32 2");
                     Line($"{flags} = load atomic i32, ptr {flagsField} monotonic, align 4");
                     Line($"{immortal} = and i32 {flags}, 1");
@@ -6107,7 +6119,7 @@ public sealed partial class LlvmEmitter {
                     var done = NewLabel("unique");
                     Line($"{block} = load ptr, ptr {operands[0]}");
                     Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {block}, i32 0, i32 1");
-                    Line($"{strong} = {CountForUniqueness(strongField)}");
+                    Line($"{strong} = load atomic i32, ptr {strongField} acquire, align 4");
                     Line($"{flagsField} = getelementptr inbounds %SableObjectHeader, ptr {block}, i32 0, i32 2");
                     Line($"{flags} = load atomic i32, ptr {flagsField} monotonic, align 4");
                     Line($"{immortal} = and i32 {flags}, 1");
@@ -7039,20 +7051,14 @@ public sealed partial class LlvmEmitter {
             var capacityField = Fresh();
             var capacity = Fresh();
             var strongField = Fresh();
-            var strong = Fresh();
             var room = Fresh();
-            var unique = Fresh();
-            var both = Fresh();
             Line($"{countField} = getelementptr inbounds %SableArrayHeader, ptr {array}, i32 0, i32 1");
             Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
             Line($"{capacityField} = getelementptr inbounds %SableArrayHeader, ptr {array}, i32 0, i32 2");
             Line($"{capacity} = load i64, ptr {capacityField}, !tbaa {TbaaHeader}");
             Line($"{room} = icmp ult i64 {count}, {capacity}");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-            Line($"{strong} = {CountForUniqueness(strongField)}, !tbaa {TbaaCount}");
-            Line($"{unique} = icmp eq i32 {strong}, 1");
-            Line($"{both} = and i1 {room}, {unique}");
-            BranchIfSole(both, strongField, array, fast, slow);
+            BranchIfSole(room, strongField, fast, slow, shared: false);
 
             Continue(fast);
             var elementsField = Fresh();
@@ -7099,18 +7105,12 @@ public sealed partial class LlvmEmitter {
             var countField = Fresh();
             var count = Fresh();
             var strongField = Fresh();
-            var strong = Fresh();
             var some = Fresh();
-            var unique = Fresh();
-            var both = Fresh();
             Line($"{countField} = getelementptr inbounds %SableArrayHeader, ptr {array}, i32 0, i32 1");
             Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
             Line($"{some} = icmp sgt i64 {count}, 0");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-            Line($"{strong} = {CountForUniqueness(strongField)}, !tbaa {TbaaCount}");
-            Line($"{unique} = icmp eq i32 {strong}, 1");
-            Line($"{both} = and i1 {some}, {unique}");
-            BranchIfSole(both, strongField, array, fast, slow);
+            BranchIfSole(some, strongField, fast, slow, shared: false);
 
             Continue(fast);
             var elementsField = Fresh();
@@ -7223,18 +7223,12 @@ public sealed partial class LlvmEmitter {
             var typeField = Fresh();
             var type = Fresh();
             var strongField = Fresh();
-            var strong = Fresh();
             var own = Fresh();
-            var one = Fresh();
-            var unique = Fresh();
             Line($"{typeField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 0");
             Line($"{type} = load ptr, ptr {typeField}, !tbaa {TbaaHeader}");
             Line($"{own} = icmp eq ptr {type}, {metadata}");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-            Line($"{strong} = {CountForUniqueness(strongField)}, !tbaa {TbaaCount}");
-            Line($"{one} = icmp eq i32 {strong}, 1");
-            Line($"{unique} = and i1 {own}, {one}");
-            BranchIfSole(unique, strongField, array, done, copy);
+            BranchIfSole(own, strongField, done, copy, shared: false);
             Continue(copy);
             Line($"call void @sable_array_make_unique(ptr {slot}, ptr {metadata})");
             Line($"br label %{done}");
@@ -7281,18 +7275,12 @@ public sealed partial class LlvmEmitter {
             var countField = Fresh();
             var count = Fresh();
             var strongField = Fresh();
-            var strong = Fresh();
             var inRange = Fresh();
-            var unique = Fresh();
-            var both = Fresh();
             Line($"{countField} = getelementptr inbounds %SableArrayHeader, ptr {array}, i32 0, i32 1");
             Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
             Line($"{inRange} = icmp ult i64 {index}, {count}");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-            Line($"{strong} = {CountForUniqueness(strongField)}, !tbaa {TbaaCount}");
-            Line($"{unique} = icmp eq i32 {strong}, 1");
-            Line($"{both} = and i1 {inRange}, {unique}");
-            BranchIfSole(both, strongField, array, fast, slow);
+            BranchIfSole(inRange, strongField, fast, slow, shared: true);
 
             Continue(fast);
             var elementsField = Fresh();

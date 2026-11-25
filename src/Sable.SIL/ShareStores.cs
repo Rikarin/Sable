@@ -215,18 +215,11 @@ static class ShareStores {
 
                             break;
 
-                        // A call, or a builtin, that may store there; what it
-                        // returns may hold the address too.
+                        // A call, or a builtin, that may store there. What it
+                        // returns does not hold the address: an inout parameter
+                        // and a closure that does not escape are not returned.
                         default:
                             After(use, root);
-                            if (use.HasResult) {
-                                Holds(use);
-                            } else if (use is TryApplyInst call) {
-                                foreach (var result in call.Normal.Arguments) {
-                                    Holds(result);
-                                }
-                            }
-
                             break;
                     }
                 }

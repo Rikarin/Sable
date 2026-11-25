@@ -1755,7 +1755,9 @@ object dropped by its spawner while the task ran looked like a race.
 - *What is reached later.* A value stored into a field of an object that
   is shared already is shared as it is stored (`share_into`, a test of the
   header's bit, before every store of a value holding references into a
-  class's field), and an object a weak reference names is shared as the
+  class's field or an array's element; `share_into_at`, after a call lent such
+  a place, for what it left there; docs/02 §2.7 has the whole of it), and an
+  object a weak reference names is shared as the
   first one is made, so a load through it on another thread never races a
   plain count.
 - *Actor state from closures.* An assignment to an actor's state from an

@@ -131,6 +131,7 @@ typedef struct SableTask {
     int64_t serial;                  // how many were spawned before it
     SableGroup *group;               // the group it was spawned in, until taken from it
     struct SableTask *next_done;     // among its group's finished children
+    SableAccesses accesses;          // those in progress as it waits (exclusivity.c)
     SableHandler *handlers;          // its cancellation handlers, the latest first
     void *actor;                     // where it runs: NULL (anywhere), MAIN_ACTOR, or an actor's executor
     void *held;                      // the actor's executor it holds, or NULL
@@ -1839,6 +1840,7 @@ static void free_task(SableTask *task) {
 
     spin_unlock(&list->lock);
     slab_destroy(&task->frames);
+    free(task->accesses.list);
     free(task);
     if (sable_counting) {
         __atomic_fetch_sub(&tasks_alive, 1, __ATOMIC_RELAXED);
@@ -2071,7 +2073,18 @@ static void step(SableTask *task) {
         task->frame = task->start(task->context);
     }
 
+    // The task's accesses in progress are the thread's while it runs; with
+    // none on either side, as nearly always, there are none to swap.
+    bool apart = sable_access_count > 0 || task->accesses.count > 0;
+    if (apart) {
+        accesses_swap(&task->accesses);
+    }
+
     bool finished = task->resume(task->frame) & 1;
+    if (apart || sable_access_count > 0) {
+        accesses_swap(&task->accesses);
+    }
+
     if (finished) {
         // Its body is done, and its frames go; it is done once its children are.
         slab_pop(&task->frames, task->frame);

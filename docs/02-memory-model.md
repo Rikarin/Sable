@@ -474,6 +474,64 @@ the churn** — is the idiom the language is designed to make natural.
 - `actor` types get a serial executor and `await`-mediated access, Swift-style.
   Data races on actor state are a compile error, not a runtime hazard.
 
+### Which counts are atomic
+
+An object's counts are atomic once it is *shared* (SABLE_SHARED, in its
+header): marked as it first crosses to another task, with all it reaches. The
+mark is what the counts are sound by, so one invariant holds whenever another
+thread can look:
+
+> **What a shared or immortal object holds, and what a global holds once a
+> second thread runs, is shared or immortal** — through a strong reference or
+> an unowned one. (A weak reference's object is shared as the reference is made.)
+
+Two things follow. `sable_share`'s walk may stop at an object already marked;
+and the mark need only be read by the thread that has the object: it was set
+before the object could be reached from another, and is never cleared, so a
+thread that came by the object properly — a lock, a queue, an actor's hand-over
+— sees it.
+
+Every way a reference is put where another thread may find it keeps it
+(`ShareStores`, src/Sable.SIL, over the code as it is built; after every pass,
+so nothing is stored later):
+
+- *A store* into an object's field, an array's element or an existential's box,
+  by an address whose owner the code shows, shares the value first, if the
+  owner is shared: a test of its flags. An array's operations do the same by
+  the buffer's own mark, and a buffer that takes another's place is marked as
+  it was.
+- *An address lent* — an `inout` argument, a mutating method's `self`, a
+  closure that captures either, a witness's or a virtual method's, a
+  coroutine's across its waits — is stored through where the owner is not
+  known. The caller knows it: as the call returns, or throws, what the storage
+  then holds is shared, if the owner is (`share_into_at`). Nothing can have
+  looked in between: for the length of the access the storage is the caller's
+  alone, by the law of exclusivity (§2.3) and by what keeps other threads from
+  the owner meanwhile — the lock held around `withLock`'s body, the actor the
+  call runs on. Code that reads it anyway is a data race whatever is counted.
+  What the callee itself gives another task crosses as anything does, and is
+  shared there. An address inside an address is taken care of by the innermost
+  function that sees an owner; the outermost sees the rest.
+- *A global* is tested for by whether a second thread has been started: as the
+  first is, what every global holds is shared (`sable_threads_begin`). A
+  program of one thread counts nothing atomically for being in a global.
+- *Raw memory* has no owner to look at: what is moved into it is shared.
+- *A frame* — an async function's, on its task's slab — is its task's alone,
+  which runs on one thread at a time, handed over with a release and an
+  acquire; its fields are not looked at. A generator's, a closure's context and
+  a captured variable's box are objects like any other.
+- *An object just made* that nothing else has seen (`InitFields`) is not
+  shared, whatever is stored in it.
+
+Changing an object in place because its count is one is sound if what the
+threads that held the others read of it was read before. Each release of a
+shared object's is an acquire and a release; the count is read with an acquire
+when the object is shared, and by compiled code only when it is not — a shared
+array is the runtime's to look at.
+
+`SABLE_CHECK_SHARED=1` holds a program to the invariant: a shared object that
+goes while it holds one counted by one thread stops the program.
+
 ---
 
 ## 2.8 Open questions to settle before Phase 3

@@ -84,6 +84,11 @@ public final class TerminalRun {
         type(text.utf8.toArray())
     }
 
+    /// The signal sent to the test's process.
+    public fn send(_ signal: Signal) {
+        _ = try? child.signal(signal)
+    }
+
     /// The terminal's size set, as a window resized.
     public fn resize(columns: Int, rows: Int) {
         _ = Runtime.ptyCall(pty, 3, (columns << 32) | rows)

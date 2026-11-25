@@ -340,8 +340,11 @@ static int pty_mode(const Pty *pty) {
     return (mode.c_lflag & ICANON ? PTY_LINES : 0) | (mode.c_lflag & ECHO ? PTY_ECHO : 0) | (mode.c_lflag & ISIG ? PTY_SIGNALS : 0);
 }
 
+// Not the terminal's own, the program is put in a process group of its own,
+// as a shell puts a job: a group whose parent is in another of the same
+// session is not orphaned, and is stopped by SIGTSTP, as at a terminal.
 static bool pty_attach(const char *name, bool controlling) {
-    if (controlling && setsid() < 0) {
+    if (controlling ? setsid() < 0 : setpgid(0, 0) != 0) {
         return false;
     }
 

@@ -355,3 +355,41 @@ fn ctrlCCanBeHandled() async throws {
     expect(run.waitFor("handled INT true"), run.output)
     expect((await run.finish()).success)
 }
+
+// SIGTSTP, as Ctrl+Z sends it: not among Signal's names.
+#if os(macos)
+let stopNumber = 18
+#else
+let stopNumber = 20
+#endif
+
+@test(skip(if: noTerminal(), "no pseudoterminal: none on Windows, whose ConPTY has no file a program's streams can be, nor on WASI or in the interpreter"))
+fn rawModeIsUndoneWhileStoppedAndPutBackAfter() async throws {
+    if isUnderTerminal() {
+        Console.withRawMode {
+            Console.writeLine("stopping")
+            _ = Runtime.raiseSignal(stopNumber)
+            Console.writeLine("resumed")
+            _ = try? Console.readKey()
+        }
+        return
+    }
+    let run = try runUnderTerminal("ConsoleTests.rawModeIsUndoneWhileStoppedAndPutBackAfter")
+    expect(run.waitFor("stopping"), run.output)
+    var cooked = false
+    for _ in 0..<500 {
+        if run.isCooked {
+            cooked = true
+            break
+        }
+        try? await Task.sleep(for: Duration.milliseconds(10))
+    }
+    expect(cooked)
+    expect(!run.output.contains("resumed"))
+    run.send(.Continue)
+    expect(run.waitFor("resumed"), run.output)
+    expect(run.isRaw)
+    run.type("q")
+    expect((await run.finish()).success)
+    expect(run.isCooked)
+}

@@ -142,6 +142,10 @@ public sealed partial class LlvmEmitter {
             constructors.Add(registration);
         }
 
+        if (GlobalsRegistration(module) is { } globals) {
+            constructors.Add(globals);
+        }
+
         if (TemplateRegistration(module) is { } templates) {
             constructors.Add(templates);
         }
@@ -308,6 +312,7 @@ public sealed partial class LlvmEmitter {
                 @sable_retains = external global i64
                 @sable_releases = external global i64
                 @sable_counting = external global i8
+                @sable_threaded = external global i8
                 declare void @sable_release_last(ptr) cold
                 {(check ? "declare void @sable_arc_dead(ptr, i32) cold noreturn" : "")}
 
@@ -482,6 +487,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_release(ptr)
                                 declare void @sable_destroy_uncounted(ptr)
                                 declare void @sable_heap_visit(ptr)
+                                declare void @sable_heap_visit_unowned(ptr)
                                 declare void @sable_make_immortal(ptr)
                                 declare void @sable_array_destroy(ptr)
                                 declare void @sable_unowned_retain(ptr)
@@ -688,6 +694,8 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_task_yield()
                                 declare zeroext i1 @sable_task_sleep(i64)
                                 declare void @sable_share(ptr)
+                                declare void @sable_register_globals(ptr)
+                                declare void @sable_threads_begin()
                                 declare void @sable_object_unmade(ptr)
                                 declare void @sable_task_spawn_cancelled()
                                 declare zeroext i1 @sable_actor_hop(ptr)
@@ -900,7 +908,7 @@ public sealed partial class LlvmEmitter {
             || _target.Platform == NativePlatform.Linux && !_target.Triple.Contains("musl", StringComparison.Ordinal);
         var text = new StringBuilder();
         text.Append("declare void @sable_runtime_start()\ndeclare void @sable_runtime_at_exit(ptr)\n\n")
-            .Append("define internal void @\"sable.library.start\"(i32 %argc, ptr %argv) {\nentry:\n  call void @sable_runtime_start()\n")
+            .Append("define internal void @\"sable.library.start\"(i32 %argc, ptr %argv) {\nentry:\n  call void @sable_runtime_start()\n  call void @sable_threads_begin()\n")
             .Append(takesArguments ? "  call void @sable_set_arguments(i32 %argc, ptr %argv)\n" : "  call void @sable_set_arguments(i32 0, ptr null)\n");
         if (module.Find(init) is not null && (_reachable?.Contains(init) ?? true)) {
             text.Append($"  call void @{Global(init)}()\n");
@@ -912,6 +920,36 @@ public sealed partial class LlvmEmitter {
 
         text.Append("  ret void\n}\n\n");
         return text.ToString();
+    }
+
+    /// <summary>
+    ///     A constructor that gives the runtime a function which shares what
+    ///     the module's globals hold, as the first thread is started
+    ///     (<c>sable_threads_begin</c>): every thread reaches them. A program
+    ///     C may call into is called on threads it did not start. Null when
+    ///     no global holds a reference.
+    /// </summary>
+    string? GlobalsRegistration(SilModule module) {
+        var held = module.Globals.Where(static g => !g.Type.IsTrivial).ToList();
+        if (held.Count == 0) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.globals.share\"() {\nentry:\n");
+        foreach (var (name, type) in held) {
+            var value = $"%v{held.FindIndex(g => g.Name == name)}";
+            body.Append($"  {value} = load {Type(type)}, ptr {GlobalStorage(name)}{StorageAlign(type)}\n");
+            Ownership(body, "  ", Witnessing.Share, type, value);
+        }
+
+        body.Append("  ret void\n}\n\ndefine internal void @\"sable.globals.register\"() {\nentry:\n")
+            .Append("  call void @sable_register_globals(ptr @\"sable.globals.share\")\n");
+        if (module.Exports.Count > 0 && !module.IsLibrary) {
+            body.Append("  call void @sable_threads_begin()\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.globals.register\"";
     }
 
     /// <summary>
@@ -1146,7 +1184,14 @@ public sealed partial class LlvmEmitter {
 
         // A weak or unowned reference keeps nothing alive.
         if (type is WeakStorageType or UnownedStorageType) {
+            // But another thread may read it, and retain the object: an unowned
+            // one's object is shared with what holds the reference (a weak
+            // one's is as the reference is made, sable_weak_entry).
             if (what is Witnessing.Visit or Witnessing.Immortal or Witnessing.Share) {
+                if (type is UnownedStorageType) {
+                    output.Append(indent).Append($"call void @{(what == Witnessing.Visit ? "sable_heap_visit_unowned" : "sable_share")}(ptr {value}){dbg}\n");
+                }
+
                 return;
             }
 
@@ -2912,10 +2957,6 @@ public sealed partial class LlvmEmitter {
                 }
 
                 case StoreInst { Value.Type: var opaqueStore } store when SilType.IsIndirect(opaqueStore): {
-                    if (Holder(store.Address) is BuiltinInst) {
-                        ShareAt(store.Address, opaqueStore, () => Name(store.Value));
-                    }
-
                     if (store.Kind == StoreKind.Assign && store.Address is not AllocStackInst { Unmanaged: true }) {
                         OpaqueWitness(opaqueStore, AssignWithTakeWitness, Name(store.Address), Name(store.Value));
                     } else {
@@ -2942,12 +2983,6 @@ public sealed partial class LlvmEmitter {
                 }
 
                 case StoreInst store: {
-                    // Into an array's element; a class's field has its own
-                    // share_into (AsyncLowering), unless it is in a struct's.
-                    if (store.Address is not RefElementAddrInst) {
-                        ShareAt(store.Address, store.Value.Type, () => Name(store.Value));
-                    }
-
                     // Assigning destroys what was there, after the new value is in.
                     string? old = null;
                     if (store.Kind == StoreKind.Assign && !store.Value.Type.IsTrivial && store.Address is not AllocStackInst { Unmanaged: true }) {
@@ -3601,34 +3636,58 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>
-        ///     Shares a value about to be stored where the object that will hold
-        ///     it is reachable from more than one thread already: what a shared
+        ///     The count read to see whether a reference is the only one, so
+        ///     that what it names may be changed in place: an acquire, so that
+        ///     what the threads that held the others read of it was read
+        ///     before it is changed. Their releases are the other half (a
+        ///     shared object's are acquire and release).
+        /// </summary>
+        static string CountForUniqueness(string strongField) => $"load atomic i32, ptr {strongField} acquire, align 4";
+
+        /// <summary>The type of what one of <see cref="ShareStores" />' builtins shares: the value, or what is at the address.</summary>
+        static SilType Shareable(BuiltinInst share) =>
+            share.Operands[^1].Type is AddressType at && share.Name.EndsWith("_at", StringComparison.Ordinal) ? at.Pointee : share.Operands[^1].Type;
+
+        /// <summary>What it shares: the value, or the storage's, read — or, of a type known only by its metadata, where it is.</summary>
+        string ShareValue(BuiltinInst share, string operand) {
+            var type = Shareable(share);
+            if (!share.Name.EndsWith("_at", StringComparison.Ordinal) || SilType.IsIndirect(type)) {
+                return operand;
+            }
+
+            var held = Fresh();
+            Line($"{held} = load {Type(type)}, ptr {operand}{AccessAlign(share.Operands[^1], type)}");
+            return held;
+        }
+
+        /// <summary>
+        ///     Shares a value where the object that holds it, or will, is
+        ///     reachable from more than one thread already: what a shared
         ///     object reaches is shared (runtime/tasks.c's sable_share), and its
         ///     walk stops at one that is. Null owns nothing.
         /// </summary>
-        void ShareInto(string owner, SilType type, string value) {
-            if (type.IsTrivial) {
-                return;
+        void ShareInto(string owner, Action share, bool mayBeNull) {
+            var sharing = NewLabel("share");
+            var after = NewLabel("stored");
+            if (mayBeNull) {
+                var isNull = Fresh();
+                var look = NewLabel("owner");
+                Line($"{isNull} = icmp eq ptr {owner}, null");
+                Line($"br i1 {isNull}, label %{after}, label %{look}");
+                Continue(look);
             }
 
-            var isNull = Fresh();
             var at = Fresh();
             var flags = Fresh();
             var bit = Fresh();
             var shared = Fresh();
-            var look = NewLabel("owner");
-            var share = NewLabel("share");
-            var after = NewLabel("stored");
-            Line($"{isNull} = icmp eq ptr {owner}, null");
-            Line($"br i1 {isNull}, label %{after}, label %{look}");
-            Continue(look);
             Line($"{at} = getelementptr inbounds i8, ptr {owner}, i64 12");
             Line($"{flags} = load atomic i32, ptr {at} monotonic, align 4");
-            Line($"{bit} = and i32 {flags}, 512");
+            Line($"{bit} = and i32 {flags}, 513");
             Line($"{shared} = icmp ne i32 {bit}, 0");
-            Line($"br i1 {shared}, label %{share}, label %{after}, !prof !{{!\"branch_weights\", i32 1, i32 1000}}");
-            Continue(share);
-            Share(type, value);
+            Line($"br i1 {shared}, label %{sharing}, label %{after}, !prof !{{!\"branch_weights\", i32 1, i32 1000}}");
+            Continue(sharing);
+            share();
             Line($"br label %{after}");
             Continue(after);
         }
@@ -3641,50 +3700,7 @@ public sealed partial class LlvmEmitter {
 
             var buffer = Fresh();
             Line($"{buffer} = load ptr, ptr {slot}");
-            ShareInto(buffer, element, value);
-        }
-
-        /// <summary>
-        ///     The object an address is inside, where the code says so — an
-        ///     element of an array, or a field of it, or a class's field — as
-        ///     the instruction that gives it: the element's or the field's address.
-        /// </summary>
-        static SilValue? Holder(SilValue address) => address switch {
-            StructElementAddrInst field => Holder(field.Address),
-            TupleElementAddrInst element => Holder(element.Address),
-            BuiltinInst { Name: "array_element_addr" } => address,
-            RefElementAddrInst { Reference.Type: ClassType { IsCoroutineFrame: false } } => address,
-            _ => null,
-        };
-
-        /// <summary>Shares what is at an address inside an object, the object being shared: an array's buffer just made there.</summary>
-        void ShareAt(SilValue address, SilType type, Func<string> value) {
-            if (type.IsTrivial) {
-                return;
-            }
-
-            switch (Holder(address)) {
-                case BuiltinInst element:
-                    var buffer = Fresh();
-                    Line($"{buffer} = load ptr, ptr {Name(element.Operands[0])}");
-                    ShareInto(buffer, type, value());
-                    return;
-
-                case RefElementAddrInst field:
-                    ShareInto(Name(field.Reference), type, value());
-                    return;
-            }
-        }
-
-        /// <summary>As <see cref="ShareAt"/>, the array at the address: its buffer may be a new one.</summary>
-        void ShareBufferAt(SilValue address, ArrayType array) {
-            if (Holder(address) is null) {
-                return;
-            }
-
-            var buffer = Fresh();
-            Line($"{buffer} = load ptr, ptr {Name(address)}");
-            ShareAt(address, array, () => buffer);
+            ShareInto(buffer, () => Share(element, value), mayBeNull: true);
         }
 
         /// <summary>A struct or a tuple made in a buffer of its own, each field moved or stored where the metadata says.</summary>
@@ -4166,22 +4182,40 @@ public sealed partial class LlvmEmitter {
                     Share(builtin.Operands[0].Type, operands[0]);
                     return;
 
-                // A value stored into an object: shared too, if the object
-                // is — its header's flag word, at 12, has SABLE_SHARED (512).
-                case "share_into": {
-                    var at = Fresh();
-                    var flags = Fresh();
-                    var bit = Fresh();
-                    var shared = Fresh();
-                    Line($"{at} = getelementptr inbounds i8, ptr {operands[0]}, i64 12");
-                    Line($"{flags} = load atomic i32, ptr {at} monotonic, align 4");
-                    Line($"{bit} = and i32 {flags}, 512");
-                    Line($"{shared} = icmp ne i32 {bit}, 0");
+                // A value about to be stored into an object, or what storage
+                // inside it holds now: shared too, if the object is — its
+                // header's flag word, at 12, has SABLE_SHARED (512), or
+                // SABLE_IMMORTAL (1), which any thread reaches. The object
+                // itself, or the array's buffer or the box in a slot.
+                case "share_into" or "share_into_at": {
+                    var owner = operands[0];
+                    var inSlot = builtin.Operands[0].Type is AddressType;
+                    if (inSlot) {
+                        owner = Fresh();
+                        Line($"{owner} = load ptr, ptr {operands[0]}");
+                    }
+
+                    if (builtin.Operands is [_, _, var described]) {
+                        ShareInto(owner, () => Line($"call void @sable_opaque_share(ptr {operands[1]}, ptr {Name(described)})"), mayBeNull: true);
+                        return;
+                    }
+
+                    ShareInto(owner, () => Share(Shareable(builtin), ShareValue(builtin, operands[1])), mayBeNull: inSlot);
+                    return;
+                }
+
+                // Into a global, which every thread reaches: if there are any
+                // but the first (threads.c), which shares them as it starts one.
+                case "share_global" or "share_global_at": {
+                    var threads = Fresh();
+                    var several = Fresh();
                     var share = NewLabel("share");
                     var after = NewLabel("shared");
-                    Line($"br i1 {shared}, label %{share}, label %{after}");
+                    Line($"{threads} = load atomic i8, ptr @sable_threaded monotonic, align 1");
+                    Line($"{several} = icmp ne i8 {threads}, 0");
+                    Line($"br i1 {several}, label %{share}, label %{after}");
                     Continue(share);
-                    Share(builtin.Operands[1].Type, operands[1]);
+                    Share(Shareable(builtin), ShareValue(builtin, operands[0]));
                     Line($"br label %{after}");
                     Continue(after);
                     return;
@@ -4239,6 +4273,11 @@ public sealed partial class LlvmEmitter {
                 case "raw_init" or "raw_init_unaligned": {
                     var at = RawAddress(operands[0]);
                     var type = builtin.Operands[1].Type;
+                    // Whose the memory is, and which threads reach it, no one knows: shared.
+                    if (!type.IsTrivial) {
+                        Share(type, operands[1]);
+                    }
+
                     if (SilType.IsIndirect(type)) {
                         OpaqueMove(type, at, operands[1]);
                         return;
@@ -4611,9 +4650,9 @@ public sealed partial class LlvmEmitter {
                     var mortal = Fresh();
                     Line($"{objectPointer} = load ptr, ptr {operands[0]}");
                     Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {objectPointer}, i32 0, i32 1");
-                    Line($"{strong} = load i32, ptr {strongField}");
+                    Line($"{strong} = {CountForUniqueness(strongField)}");
                     Line($"{flagsField} = getelementptr inbounds %SableObjectHeader, ptr {objectPointer}, i32 0, i32 2");
-                    Line($"{flags} = load i32, ptr {flagsField}");
+                    Line($"{flags} = load atomic i32, ptr {flagsField} monotonic, align 4");
                     Line($"{immortal} = and i32 {flags}, 1");
                     Line($"{mortal} = icmp eq i32 {immortal}, 0");
                     Line($"{sole} = icmp eq i32 {strong}, 1");
@@ -5336,7 +5375,6 @@ public sealed partial class LlvmEmitter {
                     var element = AppendSlot(operands[0], arrayType);
                     ShareIntoArray(operands[0], arrayType.Element, operands[1]);
                     StoreElement(arrayType.Element, operands[1], element);
-                    ShareBufferAt(builtin.Operands[0], arrayType);
                     return;
                 }
 
@@ -5497,7 +5535,6 @@ public sealed partial class LlvmEmitter {
                     var source = (SliceType)builtin.Operands[1].Type;
                     var (buffer, start, count) = (SlicePart(operands[1], source, 0), SlicePart(operands[1], source, 1), SlicePart(operands[1], source, 2));
                     Line($"call void @sable_array_append_all(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {buffer}, i64 {start}, i64 {count})");
-                    ShareBufferAt(builtin.Operands[0], arrayType);
                     return;
                 }
 
@@ -5512,21 +5549,18 @@ public sealed partial class LlvmEmitter {
 
                     SiteForRuntime();
                     Line($"call void @sable_array_append_repeating(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {value}, i64 {operands[2]})");
-                    ShareBufferAt(builtin.Operands[0], arrayType);
                     return;
                 }
 
                 case "array_append_utf8": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     Line($"call void @sable_array_append_utf8(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {operands[1]}, i64 {operands[2]}, i64 {operands[3]})");
-                    ShareBufferAt(builtin.Operands[0], arrayType);
                     return;
                 }
 
                 case "array_reserve": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     Line($"call void @sable_array_reserve(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, i64 {operands[1]})");
-                    ShareBufferAt(builtin.Operands[0], arrayType);
                     return;
                 }
 
@@ -5799,9 +5833,9 @@ public sealed partial class LlvmEmitter {
                     var done = NewLabel("unique");
                     Line($"{block} = load ptr, ptr {operands[0]}");
                     Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {block}, i32 0, i32 1");
-                    Line($"{strong} = load i32, ptr {strongField}");
+                    Line($"{strong} = {CountForUniqueness(strongField)}");
                     Line($"{flagsField} = getelementptr inbounds %SableObjectHeader, ptr {block}, i32 0, i32 2");
-                    Line($"{flags} = load i32, ptr {flagsField}");
+                    Line($"{flags} = load atomic i32, ptr {flagsField} monotonic, align 4");
                     Line($"{immortal} = and i32 {flags}, 1");
                     Line($"{isImmortal} = icmp ne i32 {immortal}, 0");
                     Line($"{sole} = icmp eq i32 {strong}, 1");
@@ -6741,7 +6775,7 @@ public sealed partial class LlvmEmitter {
             Line($"{capacity} = load i64, ptr {capacityField}, !tbaa {TbaaHeader}");
             Line($"{room} = icmp ult i64 {count}, {capacity}");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+            Line($"{strong} = {CountForUniqueness(strongField)}, !tbaa {TbaaHeader}");
             Line($"{unique} = icmp eq i32 {strong}, 1");
             Line($"{both} = and i1 {room}, {unique}");
             Line($"br i1 {both}, label %{fast}, label %{slow}");
@@ -6799,7 +6833,7 @@ public sealed partial class LlvmEmitter {
             Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
             Line($"{some} = icmp sgt i64 {count}, 0");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+            Line($"{strong} = {CountForUniqueness(strongField)}, !tbaa {TbaaHeader}");
             Line($"{unique} = icmp eq i32 {strong}, 1");
             Line($"{both} = and i1 {some}, {unique}");
             Line($"br i1 {both}, label %{fast}, label %{slow}");
@@ -6923,7 +6957,7 @@ public sealed partial class LlvmEmitter {
             Line($"{type} = load ptr, ptr {typeField}, !tbaa {TbaaHeader}");
             Line($"{own} = icmp eq ptr {type}, {metadata}");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+            Line($"{strong} = {CountForUniqueness(strongField)}, !tbaa {TbaaHeader}");
             Line($"{one} = icmp eq i32 {strong}, 1");
             Line($"{unique} = and i1 {own}, {one}");
             Line($"br i1 {unique}, label %{done}, label %{copy}");
@@ -6981,7 +7015,7 @@ public sealed partial class LlvmEmitter {
             Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
             Line($"{inRange} = icmp ult i64 {index}, {count}");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+            Line($"{strong} = {CountForUniqueness(strongField)}, !tbaa {TbaaHeader}");
             Line($"{unique} = icmp eq i32 {strong}, 1");
             Line($"{both} = and i1 {inRange}, {unique}");
             Line($"br i1 {both}, label %{fast}, label %{slow}");

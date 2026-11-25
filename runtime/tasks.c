@@ -309,6 +309,58 @@ static void share_one(void *pointer) {
     sable_share(pointer);
 }
 
+// Every thread reaches the globals: what they hold is shared as the first
+// thread but the main one is started, and what is put in them after that as
+// it is put there (compiled code tests sable_threaded before it stores to a
+// global). Until then there is one thread, and nothing is counted atomically
+// for being in a global. Each image registers a function that shares what
+// its globals hold, before its code runs.
+bool sable_threaded;
+
+typedef struct SableGlobals {
+    void (*share)(void);
+    struct SableGlobals *next;
+} SableGlobals;
+
+static SableGlobals *all_globals;
+static SpinLock globals_lock;
+
+void sable_register_globals(void (*share)(void)) {
+    SableGlobals *globals = malloc(sizeof *globals);
+    if (globals == NULL) {
+        sable_trap("out of memory");
+    }
+
+    globals->share = share;
+    spin_lock(&globals_lock);
+    globals->next = all_globals;
+    all_globals = globals;
+    spin_unlock(&globals_lock);
+}
+
+// Before a thread that runs the program's code is started, by the only one
+// that does; or by a library as it is loaded, whose callers' threads it does
+// not know.
+void sable_threads_begin(void) {
+    if (__atomic_exchange_n(&sable_threaded, true, __ATOMIC_RELAXED)) {
+        return;
+    }
+
+    for (SableGlobals *globals = all_globals; globals != NULL; globals = globals->next) {
+        globals->share();
+    }
+}
+
+// What an unowned reference names, for a walk that comes to one: with the
+// rest, if the walk shares.
+static void share_unowned(void *pointer) {
+    if (visit_hook == share_push) {
+        share_push(pointer);
+    } else {
+        sable_share(pointer);
+    }
+}
+
 // Shares each object so many elements of an array of the type hold.
 static void share_run(const SableMetadata *type, char *elements, int64_t count) {
     void (*saved)(void *) = visit_hook;
@@ -1617,6 +1669,10 @@ static void blocking_submit(SableTask *task) {
 
     condition_signal(&blocking_condition);
     mutex_unlock(&blocking_lock);
+    if (more) {
+        sable_threads_begin();
+    }
+
     if (more && !thread_start(blocking_main, NULL)) {
         sable_trap("cannot start a thread for blocking work");
     }
@@ -2224,6 +2280,7 @@ static void pool_start(void) {
     }
 
     if (count > 0) {
+        sable_threads_begin();
         workers = calloc((size_t)count, sizeof(Worker));
         if (workers == NULL) {
             sable_trap("out of memory");

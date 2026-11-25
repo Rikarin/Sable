@@ -1458,7 +1458,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
 
             // One thread runs every task here: nothing is shared between threads.
-            case "share" or "share_into":
+            case "share" or "share_into" or "share_into_at" or "share_global" or "share_global_at":
                 return null;
 
             case "object_unmade":

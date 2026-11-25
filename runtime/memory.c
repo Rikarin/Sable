@@ -545,6 +545,16 @@ void sable_release_last(void *pointer) {
         sable_weak_object_died(object);
     }
 
+    if (checking_shared && (object_flags(object) & SABLE_SHARED)) {
+        check_shared(object);
+    }
+
+    // An unowned reference may lead a walk that shares (tasks.c) here as the
+    // fields go: it stops at an object that is shared.
+    if ((object_flags(object) >> SABLE_UNOWNED_SHIFT) > 0) {
+        flags_set(object, SABLE_SHARED);
+    }
+
     // The deinit, and the destruction of the fields, see the object alive.
     object->strong = 1;
     if (object->type->destroy != NULL) {

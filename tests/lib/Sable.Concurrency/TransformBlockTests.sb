@@ -484,3 +484,103 @@ fn aFaultedTargetFaultsTheJoin() async {
     join.second.fault(Refused { item: 2 })
     await expectThrows(Refused { item: 2 }) { try await join.completion() }
 }
+
+// ---- What each block says of itself ------------------------------------------
+
+@test
+fn aTransformManyBlockCanBeFaultedAndLinked() async throws {
+    let split = TransformManyBlock<Int, Int>(capacity: 4) { n in [n, n] }
+    expect(split.trySend(1) == .Sent)
+    await Task.settle()
+    assertEqual(split.inputCount, 0)
+    assertEqual(split.outputCount, 2)
+    expect(split.tryReceive() == 1)
+    let rest = BufferBlock<Int>()
+    split.link(to: rest, propagateCompletion: true)
+    await split.send(2)
+    split.complete()
+    try await split.completion()
+    var linked: Int[>..] = []
+    for try await value in rest {
+        linked.append(value)
+    }
+    expect(linked == [1, 2, 2])
+    try await rest.completion()
+    expect(split.failure == none)
+    let broken = TransformManyBlock<Int, Int> { n in [n] }
+    broken.fault(Refused { item: 0 })
+    expect(broken.failure != none)
+    await expectThrows(Refused { item: 0 }) { try await broken.completion() }
+    await expectThrows(Refused { item: 0 }) { _ = try await broken.receive() }
+}
+
+@test
+fn aTransformBlockCountsWhatItHolds() async {
+    let gate = Gate()
+    let block = TransformBlock<Int, Int>(capacity: 4) { n in
+        await gate.pass()
+        return n
+    }
+    for i in 0..<3 {
+        _ = block.trySend(i)
+    }
+    await Task.settle()
+    assertEqual(block.inputCount, 2)
+    assertEqual(block.outputCount, 0)
+    gate.openUp()
+    await Task.settle()
+    assertEqual(block.outputCount, 3)
+}
+
+@test
+fn aBroadcastBlockCanBeReceivedFromAndFaulted() async {
+    let fanOut = BroadcastBlock<Int>(capacity: 2)
+    expect(fanOut.trySend(1) == .Sent)
+    expect(fanOut.trySend(2) == .Sent)
+    expect(fanOut.trySend(3) == .Full)
+    assertEqual(fanOut.count, 2)
+    expect(fanOut.tryReceive() == 1)
+    expect(try! await fanOut.receive() == 2)
+    fanOut.fault(Refused { item: 9 })
+    expect(fanOut.failure != none)
+    assertEqual(await fanOut.send(4), SendResult.Closed)
+    await expectThrows(Refused { item: 9 }) { try await fanOut.completion() }
+    var iterator = fanOut.makeAsyncIterator()
+    await expectThrows(Refused { item: 9 }) { _ = try await iterator.next() }
+    // Unbounded, and faulted twice: the second fault changes nothing.
+    let unbounded = BroadcastBlock<Int>()
+    for i in 0..<5 {
+        expect(unbounded.trySend(i) == .Sent)
+    }
+    unbounded.fault(Refused { item: 1 })
+    unbounded.fault(Refused { item: 2 })
+    assertEqual(unbounded.count, 0)
+    await expectThrows(Refused { item: 1 }) { try await unbounded.completion() }
+}
+
+@test
+fn aBatchBlockCanBeFaultedAndLinked() async throws {
+    let batches = BatchBlock<Int>(size: 2, capacity: 2)
+    expect(batches.trySend(1) == .Sent)
+    let sink = BufferBlock<Int[>..]>()
+    batches.link(to: sink, propagateCompletion: true)
+    await batches.send(2)
+    batches.complete()
+    try await batches.completion()
+    expect(try await sink.receive() == [1, 2])
+    expect(batches.failure == none && sink.failure == none)
+    let broken = BatchBlock<Int>(size: 2)
+    broken.fault(Refused { item: 1 })
+    expect(broken.failure != none)
+    await expectThrows(Refused { item: 1 }) { try await broken.completion() }
+}
+
+@test
+fn aJoinBlockCanBeFaulted() async {
+    let join = JoinBlock<Int, Int>()
+    join.fault(Refused { item: 4 })
+    await expectThrows(Refused { item: 4 }) { try await join.completion() }
+    expect(join.failure != none)
+    var iterator = join.makeAsyncIterator()
+    await expectThrows(Refused { item: 4 }) { _ = try await iterator.next() }
+}

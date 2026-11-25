@@ -53,6 +53,10 @@ fn aPairIsGivenOnceEachHasGivenOne() async {
     await texts.send("a")
     await Task.settle()
     expect(combined.all == ["2a"])
+    await numbers.close()
+    await texts.close()
+    await Task.settle()
+    expect(combined.ended.load())
 }
 
 @test

@@ -305,3 +305,16 @@ fn aBufferGrowsByHalfAtLeast() {
         assertEqual(lots.finish(asciiCount: 8), "abcdefgh")
     }
 }
+
+@test
+fn aWriterCopiedGoesOnWithItsRoom() {
+    unsafe {
+        var writer = StringWriter.allocate(capacity: 16)
+        writer.append(utf8: "café", from: 0, to: 5)
+        assertEqual(writer.copied(), "café")
+        let room = writer.capacity
+        writer.append(byte: 0x21)
+        assertEqual(writer.capacity, room)
+        assertEqual(writer.finish(), "café!")
+    }
+}

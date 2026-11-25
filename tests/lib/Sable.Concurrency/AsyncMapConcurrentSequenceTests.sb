@@ -165,7 +165,7 @@ fn flatMapConcurrentGoesThroughAtMostSoManyAtOnce() async {
         started.add(1)
         return channels[n]
     }
-    _ = Task.spawn {
+    let consumer = Task.spawn {
         do {
             for try await value in flattened {
                 seen.withLock { $0.append(value) }
@@ -179,6 +179,9 @@ fn flatMapConcurrentGoesThroughAtMostSoManyAtOnce() async {
     await Task.settle()
     assertEqual(started.load(), 3)
     expect(seen.withLock { $0 } == [5])
+    await channels[1].close()
+    await channels[2].close()
+    await consumer.value
 }
 
 @test

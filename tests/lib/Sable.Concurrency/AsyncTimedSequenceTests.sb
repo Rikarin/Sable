@@ -29,6 +29,15 @@ final class Gathered<T: Sendable> {
     }
 
     var all: T[>..] => elements.withLock { $0 }
+
+    /// The task going through the sequence stopped, and waited for: a test
+    /// leaves no task of its behind.
+    fn finish() async {
+        if let running = task {
+            running.cancel()
+            await running.value
+        }
+    }
 }
 
 fn gather<S: AsyncSequence>(_ sequence: S) -> Gathered<S.Element> where S: Sendable, S.Element: Sendable {
@@ -71,6 +80,7 @@ fn debounceGivesTheLastOfABurstOnceItIsQuiet() async {
     expect(seen.all == [])
     await clock.advance(by: Duration.milliseconds(1))
     expect(seen.all == [5])
+    await seen.finish()
 }
 
 @test
@@ -90,6 +100,7 @@ fn debounceStartsTheIntervalAgainForEachElement() async {
     await Task.settle()
     // The last is given as the sequence ends, without waiting.
     expect(seen.all == [2, 3] && seen.ended.load())
+    await seen.finish()
 }
 
 @test
@@ -154,6 +165,7 @@ fn throttleGivesTheFirstAtOnceAndTheNewestAtTheIntervalsEnd() async {
     await input.close()
     await Task.settle()
     expect(seen.ended.load())
+    await seen.finish()
 }
 
 @test
@@ -167,6 +179,7 @@ fn throttleCanKeepTheFirstOfAnInterval() async {
     await Task.settle()
     await clock.advance(by: Duration.seconds(1))
     expect(seen.all == [1, 2])
+    await seen.finish()
 }
 
 @test
@@ -202,6 +215,7 @@ fn timeoutPassesElementsThatComeInTime() async {
     await input.close()
     await Task.settle()
     expect(seen.all == [1, 2, 3] && seen.ended.load() && !seen.timedOut.load())
+    await seen.finish()
 }
 
 @test
@@ -215,6 +229,7 @@ fn timeoutEndsTheSequenceWhenAnElementIsLate() async {
     await clock.advance(by: Duration.milliseconds(1))
     expect(seen.timedOut.load())
     expect(seen.all == [1])
+    await seen.finish()
 }
 
 @test
@@ -244,6 +259,7 @@ fn aFullChunkIsGivenAtOnce() async {
     await Task.settle()
     // What is left, as the sequence ends.
     expect(seen.all == [[1, 2, 3], [4, 5, 6], [7]] && seen.ended.load())
+    await seen.finish()
 }
 
 @test
@@ -264,6 +280,7 @@ fn aChunkIsGivenTheIntervalAfterItsFirstElement() async {
     await input.send(3)
     await clock.advance(by: Duration.seconds(10))
     expect(seen.all == [[1, 2], [3]])
+    await seen.finish()
 }
 
 @test
@@ -297,6 +314,7 @@ fn sampleGivesTheNewestElementAtEachTick() async {
     await Task.settle()
     await clock.advance(by: Duration.seconds(1))
     expect(seen.all == [2, 3])
+    await seen.finish()
 }
 
 @test
@@ -308,6 +326,7 @@ fn sampleGivesTheOneWaitingAsTheSequenceEnds() async {
     await input.close()
     await Task.settle()
     expect(seen.all == [7] && seen.ended.load())
+    await seen.finish()
 }
 
 @test

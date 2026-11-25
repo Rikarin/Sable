@@ -7,6 +7,16 @@ public enum Broken: Error {
     Down
 }
 
+/// An error that says where it was thrown.
+@derive(Equatable, Debug)
+public struct Bad: Error {
+    public let number: Int
+
+    public init(_ number: Int) {
+        self.number = number
+    }
+}
+
 /// Lets every task queued run, a few times over, so that those that can
 /// get as far as they can go.
 public fn settle() async {

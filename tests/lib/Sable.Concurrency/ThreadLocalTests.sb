@@ -5,8 +5,7 @@ module ThreadLocalTests
 import Sable.Concurrency
 import Sable.Interop
 import Sable.Testing
-
-struct Failed: Error { }
+import ConcurrencySupport
 
 // Says it is gone, in order.
 final class Marked {
@@ -118,12 +117,12 @@ fn aPlaceIsAnothersOnceItsThreadLocalIsGone() {
 @test
 fn whatTheClosureLeavesIsKeptWhenItThrows() {
     let local = ThreadLocal { 1 }
-    assert(thrown {
+    expectThrows(Broken.Down) {
         try local.withValue { (n: inout Int) throws -> Void in
         n = 7
-        throw Failed()
+        throw Broken.Down
     }
-    } is Failed)
+    }
     assertEqual(local.value, 7)
 }
 
@@ -182,10 +181,12 @@ async fn aWorkersValuesAreThere() {
     let local = ThreadLocal { 0 }
     let total = await withTaskGroup(of: Int.self) { group in
         for _ in 0..<200 {
-            group.spawn { local.withValue {
-                $0 += 1;
+            group.spawn {
+                local.withValue {
+                $0 += 1
                 return $0
-            } }
+            }
+            }
         }
         var greatest = 0
         for await count in group {
@@ -195,18 +196,6 @@ async fn aWorkersValuesAreThere() {
     }
     // However many workers ran them.
     expect(total >= 1 && total <= 200)
-}
-
-// What the body throws; an error of no other, if it throws nothing.
-struct Nothing: Error { }
-
-fn thrown(_ body: () throws -> Void) -> any Error {
-    do {
-        try body()
-        return Nothing()
-    } catch {
-        return error
-    }
 }
 
 // A thread C made destroys its values as it ends, too.

@@ -5,40 +5,33 @@ module ParallelForTests
 
 import Sable.Concurrency
 import Sable.Testing
+import ConcurrencySupport
 import Sable.Time
 
-struct Bad: Error {
-    let number: Int
+@test(arguments: [0, 1, 2, 3, 17, 1000, 10_000])
+fn eachNumberIsDoneOnce(_ count: Int) {
+    let done: Mutex<Int[>..]> = Mutex([])
+    parallelFor(5..<5 + count) { i in
+        done.withLock { $0.append(i) }
+    }
+    assertEqual(done.withLock { $0.sorted() }, (5..<5 + count).toArray())
 }
 
-@test
-fn eachNumberIsDoneOnce() {
-    for count in [0, 1, 2, 3, 17, 1000, 10_000] {
-        let done: Mutex<Int[>..]> = Mutex([])
-        parallelFor(5..<5 + count) { i in
-            done.withLock { $0.append(i) }
-        }
-        assertEqual(done.withLock { $0.sorted() }, (5..<5 + count).toArray())
+@test(arguments: [1, 2, 3, 4])
+fn theDegreeAndTheGrainAreKeptTo(_ degree: Int) {
+    let running = Atomic(0)
+    let most = Atomic(0)
+    let total = Atomic(0)
+    parallelForChunks(0..<200, degree: degree, grain: 7) { chunk in
+        let now = running.add(1) + 1
+        most.max(now)
+        expect(chunk.count >= 7 || chunk.upperBound == 200)
+        Thread.`yield`()
+        total.add(chunk.count)
+        running.subtract(1)
     }
-}
-
-@test
-fn theDegreeAndTheGrainAreKeptTo() {
-    for degree in 1...4 {
-        let running = Atomic(0)
-        let most = Atomic(0)
-        let total = Atomic(0)
-        parallelForChunks(0..<200, degree: degree, grain: 7) { chunk in
-            let now = running.add(1) + 1
-            most.max(now)
-            require(chunk.count >= 7 || chunk.upperBound == 200)
-            Thread.`yield`()
-            total.add(chunk.count)
-            running.subtract(1)
-        }
-        assertEqual(total.load(), 200)
-        require(most.load() <= degree, "\(most.load()) ran at once")
-    }
+    assertEqual(total.load(), 200)
+    expect(most.load() <= degree, "\(most.load()) ran at once")
 }
 
 @test
@@ -53,26 +46,24 @@ fn oneThreadGoesThroughARangeInOrder() {
 @test
 fn anErrorStopsTheLoop() {
     let done = Atomic(0)
-    let error = thrown {
+    expectThrows(Bad(100)) {
         try parallelFor(0..<1_000_000) { (i: Int) throws -> Void in
         done.add(1)
         if i == 100 {
-            throw Bad { number: i }
+            throw Bad(i)
         }
     }
-    } as? Bad
-    assertEqual(error?.number, 100)
+    }
     expect(done.load() < 1_000_000)
 }
 
 @test
 fn oneOfSeveralErrorsIsThrown() {
-    let error = thrown {
+    expectThrows(Bad.self) {
         try parallelFor(0..<100) { (i: Int) throws -> Void in
-        throw Bad { number: i }
+        throw Bad(i)
     }
-    } as? Bad
-    expect(error != none)
+    }
 }
 
 @test
@@ -121,26 +112,21 @@ fn loopsRunOnThreadsThatAreNotThePools() {
 async fn aLoopIsCancelledWithItsTask() {
     let started = CountdownLatch(count: 1)
     let done = Atomic(0)
-    let task = Task.spawn { () -> Bool in
-        do {
+    let task = Task.spawn { () -> Void in
+        expectThrows(CancellationError.self) {
             try parallelFor(0..<10_000_000) { (i: Int) throws -> Void in
-                started.countDown()
-                try Task.checkCancellation()
-                done.add(1)
-                Thread.sleep(Duration.microseconds(10))
-            }
-            return false
-        } catch {
-            return error is CancellationError
+            started.countDown()
+            try Task.checkCancellation()
+            done.add(1)
+            Thread.sleep(Duration.microseconds(10))
+        }
         }
     }
     if Runtime.workerCount() > 0 {
         await Task.blocking { started.wait() }
-        task.cancel()
-    } else {
-        task.cancel()
     }
-    expect(await task.value)
+    task.cancel()
+    await task.value
     expect(done.load() < 10_000_000)
 }
 
@@ -180,12 +166,11 @@ fn aDivisionIsInvokedAgain() {
 
 @test
 fn anInvokedErrorIsThrown() {
-    let error = thrown {
+    expectThrows(Bad(4)) {
         _ = try parallelInvoke({ () throws -> Int in
-            throw Bad { number: 4 }
+            throw Bad(4)
         }, { 5 })
-    } as? Bad
-    assertEqual(error?.number, 4)
+    }
 }
 
 @test
@@ -208,24 +193,19 @@ async fn eachElementIsAwaitedByNoMoreThanTheDegree() throws {
 async fn anAsyncBodysErrorCancelsTheOthers() {
     let cancelled = Atomic(0)
     let begun = Atomic(0)
-    do {
+    await expectThrows(Bad(3)) {
         try await parallelForEach(0..<1000, degree: 4) { n in
-            begun.add(1)
-            if n == 3 {
-                throw Bad { number: n }
-            }
-            do {
-                try await Task.sleep(nanoseconds: 60_000_000_000)
-            } catch {
-                cancelled.add(1)
-                throw error
-            }
+        begun.add(1)
+        if n == 3 {
+            throw Bad(n)
         }
-        fail("it threw")
-    } catch let bad as Bad {
-        assertEqual(bad.number, 3)
-    } catch {
-        fail("another error")
+        do {
+            try await Task.sleep(nanoseconds: 60_000_000_000)
+        } catch {
+            cancelled.add(1)
+            throw error
+        }
+    }
     }
     assertEqual(cancelled.load(), 3)
     assertEqual(begun.load(), 4)
@@ -234,20 +214,17 @@ async fn anAsyncBodysErrorCancelsTheOthers() {
 @test
 async fn anAsyncLoopIsCancelledWithItsTask() {
     let begun = AsyncSemaphore(permits: 0)
-    let task = Task.spawn { () -> Bool in
-        do {
+    let task = Task.spawn { () -> Void in
+        await expectThrows(CancellationError.self) {
             try await parallelForEach(0..<100, degree: 2) { n in
-                await begun.release()
-                try await Task.sleep(nanoseconds: 60_000_000_000)
-            }
-            return false
-        } catch {
-            return error is CancellationError
+            await begun.release()
+            try await Task.sleep(nanoseconds: 60_000_000_000)
+        }
         }
     }
     await begun.acquire()
     task.cancel()
-    expect(await task.value)
+    await task.value
 }
 
 @test
@@ -266,16 +243,4 @@ async fn anAsyncSequencesElementsAreTakenAsPlacesComeFree() throws {
     }
     await sending.value
     assertEqual(total.load(), 4950)
-}
-
-// What the body throws; an error of no other, if it throws nothing.
-struct Nothing: Error { }
-
-fn thrown(_ body: () throws -> Void) -> any Error {
-    do {
-        try body()
-        return Nothing()
-    } catch {
-        return error
-    }
 }

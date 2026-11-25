@@ -4,9 +4,8 @@ module ThreadScopeTests
 
 import Sable.Concurrency
 import Sable.Testing
+import ConcurrencySupport
 import Sable.Time
-
-struct Stopped: Error { }
 
 @test
 fn aScopesThreadsChangeTheVariablesAroundIt() {
@@ -42,6 +41,8 @@ fn aScopeGivesWhatItsBodyGives() {
 fn everyThreadHasEndedWhenAScopeThrows() {
     let ended = Atomic(false)
     var changed = 0
+    // (Not 'expectThrows': a scope's threads change the variables of the
+    // function that has the scope, and no other's.)
     do {
         try Thread.scope { (s: ThreadScope) throws -> Void in
             s.spawn {
@@ -49,11 +50,11 @@ fn everyThreadHasEndedWhenAScopeThrows() {
                 changed = 5
                 ended.store(true)
             }
-            throw Stopped()
+            throw Broken.Down
         }
-        fail("it threw")
+        fail("nothing was thrown")
     } catch {
-        expect(ended.load())
+        expect(ended.load() && error is Broken)
     }
     assertEqual(changed, 5)
 }
@@ -62,7 +63,7 @@ fn everyThreadHasEndedWhenAScopeThrows() {
 fn anErrorNoOneJoinsIsDropped() {
     let result = Thread.scope { s in
         s.spawn { () throws -> Void in
-            throw Stopped()
+            throw Broken.Down
         }
         return 3
     }
@@ -71,14 +72,14 @@ fn anErrorNoOneJoinsIsDropped() {
 
 @test
 fn anErrorJoinedIsThrown() {
-    assert(thrown {
+    expectThrows(Broken.Down) {
         try Thread.scope { (s: ThreadScope) throws -> Void in
         let thread = s.spawn { () throws -> Int in
-            throw Stopped()
+            throw Broken.Down
         }
         _ = try thread.join()
     }
-    } is Stopped)
+    }
 }
 
 @test
@@ -178,16 +179,4 @@ fn whatAThreadMadeIsUsedAfter() {
     assertEqual(table["key 49"]!, ["49", "50"])
     assertEqual(table["kept"]!, ["a", "b"])
     assertEqual(kept, ["a"])
-}
-
-// What the body throws; an error of no other, if it throws nothing.
-struct Nothing: Error { }
-
-fn thrown(_ body: () throws -> Void) -> any Error {
-    do {
-        try body()
-        return Nothing()
-    } catch {
-        return error
-    }
 }

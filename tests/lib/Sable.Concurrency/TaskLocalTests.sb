@@ -4,9 +4,8 @@ module TaskLocalTests
 
 import Sable.Concurrency
 import Sable.Testing
+import ConcurrencySupport
 import Sable.Time
-
-struct Failed: Error { }
 
 @immutable
 final class Tracked {
@@ -36,11 +35,11 @@ fn aValueIsBoundForAsLongAsTheBodyRuns() {
 @test
 fn whatAnErrorLeavesIsUnbound() {
     let local = TaskLocal("none")
-    assert(thrown {
+    expectThrows(Broken.Down) {
         try local.withValue("bound") { () throws -> Void in
-        throw Failed()
+        throw Broken.Down
     }
-    } is Failed)
+    }
     assertEqual(local.value, "none")
 }
 
@@ -166,16 +165,4 @@ async fn aTaskThatNeverEndsLetsGoOfItsValue() {
     }
     await Task.settle()
     assertEqual(gone.load(), 0)
-}
-
-// What the body throws; an error of no other, if it throws nothing.
-struct Nothing: Error { }
-
-fn thrown(_ body: () throws -> Void) -> any Error {
-    do {
-        try body()
-        return Nothing()
-    } catch {
-        return error
-    }
 }

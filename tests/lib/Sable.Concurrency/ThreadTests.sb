@@ -4,11 +4,8 @@ module ThreadTests
 
 import Sable.Concurrency
 import Sable.Testing
+import ConcurrencySupport
 import Sable.Time
-
-struct Refused: Error {
-    let code: Int
-}
 
 final class Counted {
     let gone: Atomic<Int>
@@ -28,17 +25,17 @@ fn aThreadGivesWhatItsBodyGives() {
 
 @test
 fn aThreadsErrorIsThrownWhereItIsJoined() throws {
-    let refused = Thread.spawn { () throws(Refused) -> Int in
-        throw Refused { code: 7 }
+    let refused = Thread.spawn { () throws(Bad) -> Int in
+        throw Bad(7)
     }
-    let error = thrown { _ = try refused.join() } as? Refused
-    assertEqual(error?.code, 7)
-    let typed: JoinHandle<Int, Refused> = refused
+    expectThrows(Bad(7)) { _ = try refused.join() }
+    // The error's type is known where it is caught.
+    let typed: JoinHandle<Int, Bad> = refused
     do {
         _ = try typed.join()
-        fail("it threw")
+        fail("nothing was thrown")
     } catch {
-        assertEqual(error.code, 7)
+        assertEqual(error.number, 7)
     }
 }
 
@@ -53,14 +50,14 @@ fn aThreadsOutcomeMayBeAwaited() async throws {
     parked.thread.unpark()
     assertEqual(await waiting.value, 42)
     assertEqual(await parked.value(), 42)
-    let refused = Thread.spawn { () throws(Refused) -> Int in
-        throw Refused { code: 1 }
+    let refused = Thread.spawn { () throws(Bad) -> Int in
+        throw Bad(1)
     }
     do {
         _ = try await refused.value()
-        fail("it threw")
+        fail("nothing was thrown")
     } catch {
-        assertEqual(error.code, 1)
+        assertEqual(error.number, 1)
     }
 }
 
@@ -139,25 +136,26 @@ async fn aWorkerIsNamedForItsNumber() {
     expect(name == "main" || name!.hasPrefix("sable-worker-"))
 }
 
-@test
-fn aThreadHasTheStackItIsGiven() {
+// Some of 64 MiB, which eight would not hold; and the least there is, for a
+// size too small.
+@test(arguments: [(64 * 1024 * 1024, 100_000), (1, 100)])
+fn aThreadHasTheStackItIsGiven(_ size: Int, _ calls: Int) {
     fn depth(_ n: Int) -> Int {
         return n == 0 ? 0 : 1 + depth(n - 1)
     }
-    // Some of 64 MiB, which eight would not hold.
-    assertEqual(Thread.spawn(stackSize: 64 * 1024 * 1024) { depth(100_000) }.join(), 100_000)
-    // The least there is, for a size too small.
-    assertEqual(Thread.spawn(stackSize: 1) { depth(100) }.join(), 100)
+    assertEqual(Thread.spawn(stackSize: size) { depth(calls) }.join(), calls)
+}
+
+// Not the lowest, which may not run while the machine is busy.
+@test(arguments: [ThreadPriority.Low, ThreadPriority.Normal, ThreadPriority.High, ThreadPriority.Highest])
+fn aThreadRunsAtWhatPriorityTheSystemAllows(_ priority: ThreadPriority) {
+    assertEqual(Thread.spawn(priority: priority) { 5 }.join(), 5)
 }
 
 @test
-fn aThreadRunsAtWhatPriorityTheSystemAllows() {
-    // Not the lowest, which may not run while the machine is busy.
+fn prioritiesAreComparedAndWritten() {
     expect(ThreadPriority.Low != ThreadPriority.High)
     expect(ThreadPriority.Lowest.debugDescription().hasSuffix("Lowest"))
-    for priority in [ThreadPriority.Low, ThreadPriority.Normal, ThreadPriority.High, ThreadPriority.Highest] {
-        assertEqual(Thread.spawn(priority: priority) { 5 }.join(), 5)
-    }
 }
 
 @test
@@ -227,12 +225,11 @@ fn theMainThreadBlocksOnATask() throws {
         return 8
     }
     assertEqual(slept, 8)
-    let error = thrown {
-        _ = try Thread.blockOn { () throws(Refused) -> Int in
-        throw Refused { code: 2 }
+    expectThrows(Bad(2)) {
+        _ = try Thread.blockOn { () throws(Bad) -> Int in
+        throw Bad(2)
     }
-    } as? Refused
-    assertEqual(error?.code, 2)
+    }
 }
 
 @test
@@ -287,16 +284,4 @@ fn manyThreadsMayRunAtOnce() {
 @test
 fn thereIsAtLeastOneProcessor() {
     expect(Thread.availableParallelism >= 1)
-}
-
-// What the body throws; an error of no other, if it throws nothing.
-struct Nothing: Error { }
-
-fn thrown(_ body: () throws -> Void) -> any Error {
-    do {
-        try body()
-        return Nothing()
-    } catch {
-        return error
-    }
 }

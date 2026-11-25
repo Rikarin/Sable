@@ -5,11 +5,8 @@ module ParallelTests
 
 import Sable.Concurrency
 import Sable.Testing
+import ConcurrencySupport
 import Sable.Time
-
-struct Bad: Error {
-    let number: Int
-}
 
 struct Person: Sendable {
     let name: String
@@ -22,29 +19,27 @@ fn numbers(_ count: Int) -> Int[>..] {
     return (0..<count).map { ($0 &* 7919 &+ 13) % 10_007 }
 }
 
-@test
-fn everyOperationIsTheSequentialOne() {
-    for count in sizes {
-        let xs = numbers(count)
-        assertEqual(xs.parallel.count, count)
-        assertEqual(xs.parallel.map { $0 * 2 }, xs.map { $0 * 2 })
-        assertEqual(xs.parallel.filter { $0 % 3 == 0 }, xs.filter { $0 % 3 == 0 })
-        assertEqual(xs.parallel.compactMap { $0 % 2 == 0 ? "\($0)" : none }, xs.compactMap { $0 % 2 == 0 ? "\($0)" : none })
-        assertEqual(xs.parallel.flatMap { [$0, -$0] }, xs.flatMap { [$0, -$0] })
-        assertEqual(xs.parallel.sum(), xs.sum())
-        assertEqual(xs.parallel.sum { $0 / 2 }, xs.map { $0 / 2 }.sum())
-        assertEqual(xs.parallel.reduce(0) { $0 ^ $1 }, xs.reduce(0) { $0 ^ $1 })
-        assertEqual(xs.parallel.min(), xs.min())
-        assertEqual(xs.parallel.max(), xs.max())
-        assertEqual(xs.parallel.count { $0 > 5000 }, xs.filter { $0 > 5000 }.count)
-        assertEqual(xs.parallel.sorted(), xs.sorted())
-        assertEqual(xs.parallel.first { $0 > 9000 }, xs.first(where: { $0 > 9000 }))
-        assertEqual(xs.parallel.contains { $0 == 13 }, xs.contains(13))
-        assertEqual(xs.parallel.allSatisfy { $0 < 10_007 }, true)
-        let seen = Atomic(0)
-        xs.parallel.forEach { seen.add($0) }
-        assertEqual(seen.load(), xs.sum())
-    }
+@test(arguments: sizes)
+fn everyOperationIsTheSequentialOne(_ count: Int) {
+    let xs = numbers(count)
+    assertEqual(xs.parallel.count, count)
+    assertEqual(xs.parallel.map { $0 * 2 }, xs.map { $0 * 2 })
+    assertEqual(xs.parallel.filter { $0 % 3 == 0 }, xs.filter { $0 % 3 == 0 })
+    assertEqual(xs.parallel.compactMap { $0 % 2 == 0 ? "\($0)" : none }, xs.compactMap { $0 % 2 == 0 ? "\($0)" : none })
+    assertEqual(xs.parallel.flatMap { [$0, -$0] }, xs.flatMap { [$0, -$0] })
+    assertEqual(xs.parallel.sum(), xs.sum())
+    assertEqual(xs.parallel.sum { $0 / 2 }, xs.map { $0 / 2 }.sum())
+    assertEqual(xs.parallel.reduce(0) { $0 ^ $1 }, xs.reduce(0) { $0 ^ $1 })
+    assertEqual(xs.parallel.min(), xs.min())
+    assertEqual(xs.parallel.max(), xs.max())
+    assertEqual(xs.parallel.count { $0 > 5000 }, xs.filter { $0 > 5000 }.count)
+    assertEqual(xs.parallel.sorted(), xs.sorted())
+    assertEqual(xs.parallel.first { $0 > 9000 }, xs.first(where: { $0 > 9000 }))
+    assertEqual(xs.parallel.contains { $0 == 13 }, xs.contains(13))
+    assertEqual(xs.parallel.allSatisfy { $0 < 10_007 }, true)
+    let seen = Atomic(0)
+    xs.parallel.forEach { seen.add($0) }
+    assertEqual(seen.load(), xs.sum())
 }
 
 @test
@@ -76,7 +71,7 @@ fn unorderedResultsAreAllThere() {
     let found = xs.parallel.unordered.filter { $0 % 7 == 0 }
     assertEqual(found.sorted(), xs.filter { $0 % 7 == 0 }.sorted())
     let first = xs.parallel.unordered.first { $0 % 7 == 0 }
-    expect(first! % 7 == 0)
+    expect(require(first) % 7 == 0)
     expect(xs.parallel.unordered.firstIndex { $0 > 20_000 } == none)
 }
 
@@ -102,14 +97,21 @@ fn theFirstIsFoundWithoutTheRest() {
     }
     assertEqual(found, 1000)
     expect(looked.load() < 10_000_000)
-    for target in [0, 1, 777, 29_999] {
-        assertEqual((0..<30_000).parallel.firstIndex { $0 >= target }, target)
-    }
+}
+
+@test(arguments: [0, 1, 777, 29_999])
+fn itIsTheFirstThatIsFound(_ target: Int) {
+    assertEqual((0..<30_000).parallel.firstIndex { $0 >= target }, target)
+}
+
+@test
+fn whetherThereIsOneIsSaidWithoutTheRest() {
     let checked = Atomic(0)
-    assert((0..<10_000_000).parallel.contains { n in
+    let contained = (0..<10_000_000).parallel.contains { n in
         checked.add(1)
         return n % 1000 == 999
-    })
+    }
+    expect(contained)
     expect(checked.load() < 10_000_000)
     expect(!(0..<10_000_000).parallel.allSatisfy { $0 < 10 })
 }
@@ -117,48 +119,45 @@ fn theFirstIsFoundWithoutTheRest() {
 @test
 fn anErrorIsThrownAndNothingIsLeftBehind() {
     let xs = numbers(20_000)
-    let error = thrown {
+    expectThrows(Bad(5000)) {
         _ = try xs.parallel.map { (n: Int) throws -> String in
         if n == 5000 {
-            throw Bad { number: n }
+            throw Bad(n)
         }
         return "text \(n)"
     }
-    } as? Bad
-    assertEqual(error?.number, 5000)
-    assert(thrown {
+    }
+    expectThrows(Bad.self) {
         _ = try xs.parallel.filter { (n: Int) throws -> Bool in
-        throw Bad { number: n }
+        throw Bad(n)
     }
-    } is Bad)
-    assert(thrown {
+    }
+    expectThrows(Bad.self) {
         _ = try xs.parallel.reduce(0, { (total: Int, n: Int) throws -> Int in
-            throw Bad { number: n }
+            throw Bad(n)
         }, combine: { $0 + $1 })
-    } is Bad)
-    assert(thrown {
+    }
+    expectThrows(Bad.self) {
         _ = try xs.parallel.first { (n: Int) throws -> Bool in
-        throw Bad { number: n }
+        throw Bad(n)
     }
-    } is Bad)
-    assert(thrown {
+    }
+    expectThrows(Bad.self) {
         try xs.parallel.forEach { (n: Int) throws -> Void in
-        throw Bad { number: n }
+        throw Bad(n)
     }
-    } is Bad)
+    }
 }
 
-@test
-fn anArrayIsChangedWhereItIs() {
-    for count in sizes {
-        var xs = numbers(count)
-        let before = xs
-        xs.parallelModify { $0 += 1 }
-        assertEqual(xs, before.map { $0 + 1 })
-        var texts = before.map { "\($0)" }
-        texts.parallelModify { $0 += "!" }
-        assertEqual(texts, before.map { "\($0)!" })
-    }
+@test(arguments: sizes)
+fn anArrayIsChangedWhereItIs(_ count: Int) {
+    var xs = numbers(count)
+    let before = xs
+    xs.parallelModify { $0 += 1 }
+    assertEqual(xs, before.map { $0 + 1 })
+    var texts = before.map { "\($0)" }
+    texts.parallelModify { $0 += "!" }
+    assertEqual(texts, before.map { "\($0)!" })
 }
 
 @test
@@ -214,51 +213,46 @@ fn aChunkKeptIsEmpty() {
 @test
 fn anErrorLeavesEveryElementThere() {
     var texts = (0..<2000).map { "text \($0)" }
-    let error = thrown {
+    expectThrows(Bad(1500)) {
         try texts.parallelModify { (text: inout String) throws -> Void in
         text += "."
         if text == "text 1500." {
-            throw Bad { number: 1500 }
+            throw Bad(1500)
         }
     }
-    } as? Bad
-    assertEqual(error?.number, 1500)
+    }
     expect(texts.enumerated().allSatisfy { $0.1 == "text \($0.0)" || $0.1 == "text \($0.0)." })
 }
 
+@test(arguments: [0, 1, 2, 3, 4, 8], [0, 1, 4095, 4096, 10_000, 100_000])
+fn anArrayIsSortedByHoweverManyThreads(_ degree: Int, _ count: Int) {
+    let xs = numbers(count)
+    var sorted = xs
+    sorted.parallelSort(degree: degree)
+    assertEqual(sorted, xs.sorted())
+    var down = xs
+    down.parallelSort(degree: degree, by: { $0 / 10 > $1 / 10 })
+    assertEqual(down, xs.sorted(by: { $0 / 10 > $1 / 10 }))
+}
+
 @test
-fn anArrayIsSortedByHoweverManyThreads() {
-    for degree in [0, 1, 2, 3, 4, 8] {
-        for count in [0, 1, 4095, 4096, 10_000, 100_000] {
-            let xs = numbers(count)
-            var sorted = xs
-            sorted.parallelSort(degree: degree)
-            assertEqual(sorted, xs.sorted())
-            var down = xs
-            down.parallelSort(degree: degree, by: { $0 / 10 > $1 / 10 })
-            assertEqual(down, xs.sorted(by: { $0 / 10 > $1 / 10 }))
-        }
-    }
+fn anArrayInOrderIsSorted() {
     var ordered = (0..<50_000).toArray()
     ordered.parallelSort(degree: 4)
     expect(ordered.isSorted())
+}
+
+@test
+fn anArrayTheWrongWayRoundIsSorted() {
     var reversed = (0..<50_000).map { 50_000 - $0 }
     reversed.parallelSort(degree: 4)
     expect(reversed.isSorted())
+}
+
+@test
+fn textsAreSorted() {
     var texts = numbers(20_000).map { "\($0)" }
     let expected = texts.sorted()
     texts.parallelSort(degree: 4)
     assertEqual(texts, expected)
-}
-
-// What the body throws; an error of no other, if it throws nothing.
-struct Nothing: Error { }
-
-fn thrown(_ body: () throws -> Void) -> any Error {
-    do {
-        try body()
-        return Nothing()
-    } catch {
-        return error
-    }
 }

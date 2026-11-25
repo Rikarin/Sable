@@ -1,0 +1,48 @@
+module Sable.Crypto
+
+import Sable.Text
+
+/// A key of a NIST curve to agree on a secret with its holder: a point of
+/// the curve, checked to be one when the key is made.
+///
+/// ```sable
+/// let key = EcdhPrivateKey<P521>.generate().publicKey
+/// assert(key.bytes.count == 133 && key.compressed.count == 67)
+/// ```
+@derive(Equatable, Hashable)
+public struct EcdhPublicKey<Curve: EllipticCurve>: Hashable, Debug, Sendable {
+    /// The point, uncompressed: a byte 4, x and y.
+    public let bytes: U8[>..]
+
+    /// The key those bytes are, uncompressed or compressed (SEC 1 §2.3.4),
+    /// if they are a point of the curve and not infinity.
+    ///
+    /// ```sable
+    /// let key = EcdhPrivateKey<P256>.generate().publicKey
+    /// assert(try! EcdhPublicKey<P256>(key.compressed) == key)
+    /// ```
+    public init(_ bytes: U8[:]) throws(CryptoError) {
+        guard let point = Curve.curve.decode(bytes) else {
+            throw CryptoError.InvalidKey(reason: "a public key that is no point of \(Curve.curve)")
+        }
+        self.bytes = point
+    }
+
+    init(checked bytes: consuming U8[>..]) {
+        self.bytes = bytes
+    }
+
+    /// The point, compressed: a byte 2, or 3 where y is odd, and x.
+    public var compressed: U8[>..] {
+        get {
+            var made: U8[>..] = [2 | (bytes[bytes.count - 1] & 1)]
+            made.append(contentsOf: bytes[1..<Curve.curve.byteCount + 1])
+            return made
+        }
+    }
+
+    /// The type and the key in hexadecimal.
+    public fn debugDescription() -> String {
+        return "EcdhPublicKey<\(Curve.curve)>(" + Hex.encode(bytes) + ")"
+    }
+}

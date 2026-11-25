@@ -1,0 +1,59 @@
+module Sable.Crypto
+
+import Sable.Serialize.Asn1
+
+extension RsaPrivateKey: AsymmetricPrivateKey {
+    public init(_ key: PrivateKey) throws(CryptoError) {
+        guard case .Rsa(let own) = key else {
+            throw CryptoError.InvalidKey(reason: "not an RSA key")
+        }
+        self = own
+    }
+
+    public var anyKey: PrivateKey => .Rsa(self)
+
+    /// The key of a PKCS #1 RSAPrivateKey (RFC 8017 A.1.2), in DER, of two
+    /// primes.
+    ///
+    /// ```sable
+    /// let key = RsaPrivateKey.generate(bits: 2048)
+    /// assert(try! RsaPrivateKey.parse(pkcs1: key.pkcs1()) == key)
+    /// ```
+    public static fn parse(pkcs1: U8[:]) throws(CryptoError) -> RsaPrivateKey {
+        let numbers = try KeyIdentifiers.der("an RSA private key") { () throws(AsnError) in try RsaPrivateKey.parts(pkcs1) }
+        return try RsaPrivateKey(modulus: numbers[0], exponent: try rsaExponent(numbers[1]), privateExponent: numbers[2], prime1: numbers[3], prime2: numbers[4], exponent1: numbers[5], exponent2: numbers[6], coefficient: numbers[7])
+    }
+
+    static fn parts(_ pkcs1: U8[:]) throws(AsnError) -> U8[:][>..] {
+        var reader = AsnReader(pkcs1, rules: .Der)
+        var sequence = try reader.readSequence()
+        try reader.finish()
+        let version = try sequence.readInt()
+        if version != 0 {
+            throw AsnError.OutOfRange(at: sequence.position, reason: "an RSA key of more than two primes, or another version")
+        }
+        var numbers: U8[:][>..] = []
+        while numbers.count < 8 {
+            numbers.append(try KeyIdentifiers.unsigned(&sequence))
+        }
+        try sequence.finish()
+        return numbers
+    }
+
+    /// The key as a PKCS #1 RSAPrivateKey, in DER.
+    public fn pkcs1() -> U8[>..] {
+        return writeDer { (writer: AsnWriter) throws(AsnError) in
+            try writer.beginSequence()
+            try writer.writeInt(0)
+            try writer.writeUnsignedInteger(publicKey.modulus)
+            try writer.writeUInt(publicKey.exponent)
+            try writer.writeUnsignedInteger(self.privateExponent())
+            try writer.writeUnsignedInteger(self.prime1())
+            try writer.writeUnsignedInteger(self.prime2())
+            try writer.writeUnsignedInteger(self.exponent1())
+            try writer.writeUnsignedInteger(self.exponent2())
+            try writer.writeUnsignedInteger(self.coefficient())
+            try writer.endSequence()
+        }
+    }
+}

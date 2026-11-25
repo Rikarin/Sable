@@ -8,6 +8,8 @@ its own, and give that directory to the suite's script, from a built tree
 ```bash
 python3 -I tools/conformance/crypto/run.py data/
 python3 -I tools/conformance/ciphers/run.py data/
+python3 -I tools/conformance/publickey/run.py data/wycheproof
+python3 -I tools/conformance/x509/run.py data/limbo.json
 python3 -I tools/conformance/toml/run.py data/toml-test
 python3 -I tools/conformance/yaml/run.py data/yaml-test-suite
 python3 -I tools/conformance/json/run.py data/JSONTestSuite
@@ -62,6 +64,23 @@ wrap by the inverse cipher, CFB1 and OFB, counters that are not a sequence, and
 what is not of whole bytes. Every vector is sealed and opened into another
 array and in place, and what does not open must leave nothing but zeros. With
 `SABLE_CRYPTO_PORTABLE=1` the same is asked of the portable code.
+
+## publickey: Wycheproof
+
+The same `data/wycheproof/`: ECDSA and ECDH on P-256, P-384 and P-521, Ed25519,
+X25519, RSA signatures (PSS and PKCS #1 v1.5) and the keys of each in PEM, DER
+and JWK. What is valid must be taken and what is invalid refused; what is
+"acceptable" may be either. What the library has nothing for is counted as
+skipped, with what it is.
+
+## x509: x509-limbo
+
+`data/limbo.json`, https://github.com/C2SP/x509-limbo's `limbo.json`
+(SHA-256 `56799cef…9654fca`, 9807 cases): Apache-2.0. Each part is run by the
+profile it is of: `rfc5280`, `crl`, `pathlen` and `pathological` by
+`CertificateProfile.Rfc5280`, `webpki` by `.WebPki`, and `bettertls`, `cve` and
+`online`, whose certificates are made by neither's rules, by `.Compatible`;
+`--profile` runs all by one.
 
 ## toml: toml-test
 

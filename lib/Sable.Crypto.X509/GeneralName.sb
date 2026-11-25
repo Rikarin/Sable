@@ -1,0 +1,128 @@
+module Sable.Crypto.X509
+
+import Sable.Serialize.Asn1
+import Sable.Text
+
+/// A name of any kind a certificate has (RFC 5280 §4.2.1.6): what it is for
+/// is in its subject alternative names.
+///
+/// ```sable
+/// assert("\(GeneralName.Dns("example.com"))" == "DNS:example.com")
+/// assert("\(GeneralName.Ip([127, 0, 0, 1]))" == "IP:127.0.0.1")
+/// ```
+@derive(Equatable, Debug)
+public union GeneralName: Formattable, Sendable {
+    /// A domain's name, perhaps with a '*' for its first label.
+    Dns(String)
+
+    /// An address's bytes, four or sixteen.
+    Ip(U8[>..])
+
+    /// A mailbox.
+    Email(String)
+
+    Uri(String)
+
+    Directory(DistinguishedName)
+
+    /// A name of a kind of its own, and its value as it is encoded.
+    Other(ObjectIdentifier, U8[>..])
+
+    RegisteredId(ObjectIdentifier)
+
+    /// One of the kinds no one uses (x400Address, ediPartyName), as it is encoded.
+    Unknown(U8[>..])
+
+    init(reading reader: inout AsnReader, constraint: Bool = false) throws(AsnError) {
+        let at = reader.position
+        let tag = try reader.peekTag()
+        if tag.tagClass != .ContextSpecific {
+            throw AsnError.Malformed(at: at, reason: "not a name")
+        }
+        match tag.number {
+            case 0 => {
+                var value = try reader.readSequence(tag: .context(0))
+                let type = try value.readObjectIdentifier()
+                var content = try value.readExplicit(.context(0))
+                let encoded = try content.readEncoded()
+                try content.finish()
+                try value.finish()
+                self = .Other(type, encoded.toArray())
+            }
+            case 1 => { self = .Email(try reader.readString(.Ia5, tag: .context(1))) }
+            case 2 => { self = .Dns(try reader.readString(.Ia5, tag: .context(2))) }
+            case 4 => {
+                // A choice, and so in a tag of its own.
+                var content = try reader.readExplicit(.context(4))
+                let name = try content.readEncoded()
+                try content.finish()
+                self = .Directory(try DistinguishedName(read: name))
+            }
+            case 6 => { self = .Uri(try reader.readString(.Ia5, tag: .context(6))) }
+            case 7 => {
+                let bytes = try reader.readOctetString(tag: .context(7))
+                // A constraint has a mask after the address.
+                let unit = constraint ? 8 : 4
+                if bytes.count != unit && bytes.count != 4 * unit {
+                    throw AsnError.Malformed(at: at, reason: "an address of \(bytes.count) bytes")
+                }
+                self = .Ip(bytes.toArray())
+            }
+            case 8    => { self = .RegisteredId(try reader.readObjectIdentifier(tag: .context(8))) }
+            case 3, 5 => { self = .Unknown(try reader.readEncoded().toArray()) }
+            case _    => { throw AsnError.Malformed(at: at, reason: "a name of kind \(tag.number)") }
+        }
+    }
+
+    /// GeneralNames: one or more.
+    static fn readAll(_ reader: inout AsnReader, tag: AsnTag = .sequence) throws(AsnError) -> GeneralName[>..] {
+        var sequence = try reader.readSequence(tag: tag)
+        var names: GeneralName[>..] = []
+        while !sequence.isAtEnd {
+            names.append(try GeneralName(reading: &sequence))
+        }
+        if names.isEmpty {
+            throw AsnError.Malformed(at: reader.position, reason: "no names")
+        }
+        return names
+    }
+
+    fn write(_ writer: AsnWriter) throws(AsnError) {
+        match self {
+            case .Other(let type, let value) => {
+                try writer.beginSequence(tag: .context(0))
+                try writer.writeObjectIdentifier(type)
+                try writer.beginExplicit(.context(0))
+                try writer.writeEncoded(value)
+                try writer.endExplicit()
+                try writer.endSequence()
+            }
+            case .Email(let text) => try writer.writeString(text, .Ia5, tag: .context(1))
+            case .Dns(let text)   => try writer.writeString(text, .Ia5, tag: .context(2))
+            case .Directory(let name) => {
+                try writer.beginExplicit(.context(4))
+                try writer.writeEncoded(name.der)
+                try writer.endExplicit()
+            }
+            case .Uri(let text)        => try writer.writeString(text, .Ia5, tag: .context(6))
+            case .Ip(let bytes)        => try writer.writeOctetString(bytes, tag: .context(7))
+            case .RegisteredId(let id) => try writer.writeObjectIdentifier(id, tag: .context(8))
+            case .Unknown(let encoded) => try writer.writeEncoded(encoded)
+        }
+    }
+
+    /// What kind of name it is, and the name.
+    public fn format(_ spec: FormatSpec) -> String {
+        let text: String = match self {
+            case .Dns(let name)          => "DNS:" + name
+            case .Ip(let bytes)          => "IP:" + IpText.write(bytes)
+            case .Email(let name)        => "email:" + name
+            case .Uri(let name)          => "URI:" + name
+            case .Directory(let name)    => "directory:\(name)"
+            case .Other(let type, _)     => "other:\(type)"
+            case .RegisteredId(let type) => "registered:\(type)"
+            case .Unknown(let encoded)   => "unknown:" + Hex.encode(encoded)
+        }
+        return spec.padded(text)
+    }
+}

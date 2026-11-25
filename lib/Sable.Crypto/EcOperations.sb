@@ -1,0 +1,199 @@
+module Sable.Crypto
+
+// What the elliptic curve keys do, on the curve a key names.
+
+/// A scalar or a point of one curve, worked on as that curve's field says.
+struct EcOperations<F: CurveField> {
+    /// The scalar those bytes are, most significant first, in limbs; none if
+    /// it is zero or the order or more.
+    static fn scalar(_ bytes: U8[:]) -> SecretMemory? {
+        if bytes.count != F.byteCount {
+            return none
+        }
+        let memory = SecretMemory(count: F.size)
+        unsafe {
+            Wide.fromBigEndian(memory.address, bytes, F.limbs)
+            let isZero = Wide.zeroMask(memory.address, F.limbs) & 1
+            if (isZero | (1 &- Wide.less(memory.address, F.order.address, F.limbs))) != 0 {
+                return none
+            }
+        }
+        return memory
+    }
+
+    /// A random scalar: as many bits as the order has, until they are one.
+    static fn randomScalar() -> SecretMemory {
+        while true {
+            var bytes = SecureRandom.bytes(F.byteCount)
+            bytes[0] = bytes[0] & (F.bits % 8 == 0 ? 0xFF : 1)
+            let made = scalar(bytes)
+            bytes.zeroSecurely()
+            if let memory = made {
+                return memory
+            }
+        }
+    }
+
+    /// The public key of a scalar, encoded uncompressed.
+    static fn publicKey(_ scalar: SecretMemory) -> U8[>..] {
+        let work = SecretMemory(count: 2 * Weierstrass<F>.pointBytes)
+        let point = work.address
+        unsafe {
+            Weierstrass<F>.multiplyBase(point, scalar.address)
+            return encode(point, work: point + Weierstrass<F>.pointBytes)
+        }
+    }
+
+    /// The point encoded uncompressed.
+    unsafe static fn encode(_ point: Int, work: Int) -> U8[>..] {
+        _ = Weierstrass<F>.leave(work, point)
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(2 * F.byteCount + 1)
+        bytes.append(4)
+        Wide.appendBigEndian(to: &bytes, work, count: F.byteCount)
+        Wide.appendBigEndian(to: &bytes, work + F.size, count: F.byteCount)
+        return bytes
+    }
+
+    /// The point's bytes, compressed or not, uncompressed; none if they are
+    /// no point of the curve's.
+    static fn decode(_ bytes: U8[:]) -> U8[>..]? {
+        let work = SecretMemory(count: 2 * Weierstrass<F>.pointBytes)
+        unsafe {
+            if !Weierstrass<F>.decode(work.address, bytes) {
+                return none
+            }
+            if bytes[0] == 4 {
+                return bytes.toArray()
+            }
+            return encode(work.address, work: work.address + Weierstrass<F>.pointBytes)
+        }
+    }
+
+    /// The x-coordinate of the scalar's multiple of a point, most
+    /// significant byte first.
+    static fn agree(_ scalar: SecretMemory, _ point: U8[:]) -> SecretMemory {
+        let work = SecretMemory(count: 2 * Weierstrass<F>.pointBytes)
+        let secret = SecretMemory(count: F.byteCount)
+        unsafe {
+            // A public key's bytes are a point's, checked as it was made.
+            _ = Weierstrass<F>.decode(work.address, point)
+            Weierstrass<F>.multiply(work.address, scalar.address, point: work.address)
+            let affine = work.address + Weierstrass<F>.pointBytes
+            _ = Weierstrass<F>.leave(affine, work.address)
+            var i = 0
+            while i < F.byteCount {
+                let at = F.byteCount &- 1 &- i
+                store8((Wide.limb(affine, i >> 3) >> ((8 &* (i & 7)) unchecked as U64)) unchecked as U8, secret.address &+ at)
+                i = i &+ 1
+            }
+        }
+        return secret
+    }
+
+    /// A digest as a scalar: as many of its first bits as the order has.
+    unsafe static fn digestScalar(_ r: Int, _ digest: U8[:]) {
+        let taken = digest.count < F.byteCount ? digest.count : F.byteCount
+        Wide.fromBigEndian(r, digest[..<taken], F.limbs)
+        // Only P-521's order is not of whole bytes, and no digest the
+        // library has is as long; one given as bytes may be.
+        if taken == F.byteCount && F.bits % 8 != 0 {
+            var i = F.bits % 8
+            while i < 8 {
+                Wide.halve(r, r, top: 0, F.limbs)
+                i += 1
+            }
+        }
+    }
+
+    /// The signature of a digest, r and s as they are encoded: with a nonce
+    /// of RFC 6979's, worked out from the key, the digest and the bytes
+    /// added.
+    static fn sign(_ scalar: SecretMemory, digest: U8[:], hash: HashAlgorithm, added: U8[:]) -> U8[>..] {
+        let order = F.order
+        let n = F.limbs
+        let work = SecretMemory(count: 6 * F.size + 2 * Weierstrass<F>.pointBytes + order.powerScratchBytes)
+        let k = work.address
+        let r = k + F.size
+        let s = r + F.size
+        let e = s + F.size
+        let rScalar = e + F.size
+        let point = rScalar + 2 * F.size
+        let scratch = point + 2 * Weierstrass<F>.pointBytes
+        unsafe {
+            digestScalar(e, digest)
+            order.enter(e, e, scratch: scratch)
+            order.leave(rScalar, e, scratch: scratch)
+            var key = U8[>..]()
+            var reduced = U8[>..]()
+            Wide.appendBigEndian(to: &key, scalar.address, count: F.byteCount)
+            Wide.appendBigEndian(to: &reduced, rScalar, count: F.byteCount)
+            var nonces = DeterministicNonces(hash, key: key, digest: reduced, added: added)
+            key.zeroSecurely()
+            while true {
+                var candidate = nonces.next(count: F.byteCount)
+                digestScalar(k, candidate)
+                candidate.zeroSecurely()
+                if ((Wide.zeroMask(k, n) & 1) | (1 &- Wide.less(k, order.address, n))) != 0 {
+                    continue
+                }
+                Weierstrass<F>.multiplyBase(point, k)
+                _ = Weierstrass<F>.leave(point + Weierstrass<F>.pointBytes, point)
+                order.enter(r, point + Weierstrass<F>.pointBytes, scratch: scratch)
+                // s = k⁻¹(e + r·d).
+                order.enter(k, k, scratch: scratch)
+                order.invert(k, k, scratch: scratch)
+                order.enter(s, scalar.address, scratch: scratch)
+                order.multiply(s, s, r, scratch: scratch)
+                order.add(s, s, e)
+                order.multiply(s, s, k, scratch: scratch)
+                order.leave(s, s, scratch: scratch)
+                order.leave(r, r, scratch: scratch)
+                if (Wide.zeroMask(r, n) | Wide.zeroMask(s, n)) != 0 {
+                    continue
+                }
+                var signature: U8[>..] = []
+                signature.reserveCapacity(2 * F.byteCount)
+                Wide.appendBigEndian(to: &signature, r, count: F.byteCount)
+                Wide.appendBigEndian(to: &signature, s, count: F.byteCount)
+                return signature
+            }
+        }
+    }
+
+    /// Whether r and s, as they are encoded, are a signature of the digest.
+    static fn isValid(_ signature: U8[:], digest: U8[:], point encoded: U8[:]) -> Bool {
+        if signature.count != 2 * F.byteCount {
+            return false
+        }
+        let order = F.order
+        let n = F.limbs
+        let work = SecretMemory(count: 4 * F.size + 2 * Weierstrass<F>.pointBytes + order.powerScratchBytes)
+        let r = work.address
+        let s = r + F.size
+        let u1 = s + F.size
+        let u2 = u1 + F.size
+        let point = u2 + F.size
+        let sum = point + Weierstrass<F>.pointBytes
+        let scratch = sum + Weierstrass<F>.pointBytes
+        unsafe {
+            Wide.fromBigEndian(r, signature[..<F.byteCount], n)
+            Wide.fromBigEndian(s, signature[F.byteCount...], n)
+            if (Wide.zeroMask(r, n) | Wide.zeroMask(s, n)) != 0 || Wide.less(r, order.address, n) == 0 || Wide.less(s, order.address, n) == 0 {
+                return false
+            }
+            _ = Weierstrass<F>.decode(point, encoded)
+            digestScalar(u1, digest)
+            order.enter(u1, u1, scratch: scratch)
+            order.enter(s, s, scratch: scratch)
+            order.invert(s, s, scratch: scratch)
+            order.enter(u2, r, scratch: scratch)
+            order.multiply(u1, u1, s, scratch: scratch)
+            order.multiply(u2, u2, s, scratch: scratch)
+            order.leave(u1, u1, scratch: scratch)
+            order.leave(u2, u2, scratch: scratch)
+            Weierstrass<F>.multiplyPublic(sum, u1, u2, point: point)
+            return Weierstrass<F>.hasX(sum, r)
+        }
+    }
+}

@@ -1,0 +1,278 @@
+module Sable.Crypto
+
+/// An odd modulus of any number of limbs, and Montgomery arithmetic modulo
+/// it: a number x is kept as x·R, R being 2^64 to the number of limbs, whose
+/// products need no division. The curves' group orders, RSA's modulus and
+/// its primes. Everything takes as long whatever the numbers are, but for
+/// what says otherwise. An operand is under the modulus, and so is a result,
+/// which may lie where an operand does.
+@immutable
+final class MontgomeryModulus {
+    /// How many limbs the modulus has.
+    let count: Int
+
+    /// How many bits it has.
+    let bitCount: Int
+
+    /// The modulus; R and R² modulo it.
+    let memory: SecretMemory
+
+    /// What the product's lowest limb is multiplied by to say how often the
+    /// modulus must be added for it to be zero: -m⁻¹ modulo 2^64.
+    let factor: U64
+
+    /// The modulus of 'count' limbs at an address, odd and over 1, its top
+    /// limb not zero.
+    init(at modulus: Int, count n: Int) {
+        count = n
+        let memory = SecretMemory(count: 24 * n)
+        let m = memory.address
+        self.memory = memory
+        unsafe {
+            Wide.copy(m, modulus, n)
+            bitCount = Wide.bitCount(m, n)
+            // Newton's iteration, each step of which doubles how many low bits
+            // are right, from the three that m itself is right in.
+            let low = Wide.limb(m, 0)
+            var inverse = low
+            var step = 0
+            while step < 5 {
+                inverse = inverse &* (2 &- low &* inverse)
+                step += 1
+            }
+            factor = 0 &- inverse
+
+            // R modulo m, from the highest power of two under m, by doubling.
+            let one = m + 8 * n
+            Wide.setSmall(one, 0, n)
+            let top = bitCount - 1
+            Wide.put(one, top / 64, 1 << ((top % 64) unchecked as U64))
+            var bit = top
+            while bit < 64 * n {
+                double(one)
+                bit += 1
+            }
+            // R² is R as a Montgomery number: 2^(64n), by squaring and doubling.
+            let square = m + 16 * n
+            Wide.copy(square, one, n)
+            let scratch = SecretMemory(count: 8 * (n + 2))
+            var at = 63 - (64 * n).leadingZeroCount
+            while at >= 0 {
+                multiply(square, square, square, scratch: scratch.address)
+                if (((64 * n) >> at) & 1) == 1 {
+                    double(square)
+                }
+                at -= 1
+            }
+        }
+    }
+
+    /// The modulus those bytes are, most significant first.
+    convenience init(bigEndian bytes: U8[:]) {
+        let n = (bytes.count + 7) / 8
+        let copy = SecretMemory(count: 8 * n)
+        unsafe {
+            Wide.fromBigEndian(copy.address, bytes, n)
+            self.init(at: copy.address, count: n)
+        }
+    }
+
+    /// The modulus's address.
+    var address: Int => memory.address
+
+    /// The address of one, as a Montgomery number.
+    var one: Int => memory.address &+ 8 &* count
+
+    /// The address of R².
+    var squaredR: Int => memory.address &+ 16 &* count
+
+    /// How many bytes 'scratch' has for a product.
+    var scratchBytes: Int => 8 * (count + 2)
+
+    /// How many bytes 'scratch' has for a power.
+    var powerScratchBytes: Int => 8 * (count + 2) + 8 * count * 34
+
+    /// r = a·b/R.
+    unsafe fn multiply(_ r: Int, _ a: Int, _ b: Int, scratch: Int) {
+        // The counts the curves have are written out, for the loops to be
+        // unrolled.
+        match count {
+            case 4 => MontgomeryModulus.multiply(r, a, b, memory.address, factor, scratch, 4)
+            case 6 => MontgomeryModulus.multiply(r, a, b, memory.address, factor, scratch, 6)
+            case 9 => MontgomeryModulus.multiply(r, a, b, memory.address, factor, scratch, 9)
+            case _ => MontgomeryModulus.multiply(r, a, b, memory.address, factor, scratch, count)
+        }
+    }
+
+    /// Multiplies and reduces a limb of b at a time, in one loop: t is under
+    /// 2m before each, so n + 1 limbs hold it.
+    @inline(always)
+    unsafe static fn multiply(_ r: Int, _ a: Int, _ b: Int, _ m: Int, _ factor: U64, _ t: Int, _ n: Int) {
+        Wide.setSmall(t, 0, n &+ 1)
+        let first = wide(Wide.limb(m, 0))
+        var i = 0
+        while i < n {
+            let digit = wide(Wide.limb(b, i))
+            let x = wide(Wide.limb(a, 0)) &* digit &+ wide(Wide.limb(t, 0))
+            let q = wide(lowHalf(x) &* factor)
+            var c = highHalf(x)
+            var d = highHalf(q &* first &+ wide(lowHalf(x)))
+            var j = 1
+            while j < n {
+                let product = wide(Wide.limb(a, j)) &* digit &+ wide(Wide.limb(t, j)) &+ wide(c)
+                c = highHalf(product)
+                let reduced = q &* wide(Wide.limb(m, j)) &+ wide(lowHalf(product)) &+ wide(d)
+                d = highHalf(reduced)
+                Wide.put(t, j &- 1, lowHalf(reduced))
+                j = j &+ 1
+            }
+            let top = wide(Wide.limb(t, n)) &+ wide(c) &+ wide(d)
+            Wide.put(t, n &- 1, lowHalf(top))
+            Wide.put(t, n, highHalf(top))
+            i = i &+ 1
+        }
+        // Taken away, and kept if that left nothing to borrow from.
+        let over = Wide.limb(t, n)
+        let borrow = Wide.sub(r, t, m, n)
+        Wide.select(r, maskOf(bit: borrow & (1 &- over)), t, r, n)
+    }
+
+    /// r = a + b.
+    unsafe fn add(_ r: Int, _ a: Int, _ b: Int) {
+        let carry = Wide.add(r, a, b, count)
+        let borrow = Wide.sub(r, r, address, count)
+        _ = Wide.addMasked(r, address, maskOf(bit: borrow & (1 &- carry)), count)
+    }
+
+    /// r = a - b.
+    unsafe fn sub(_ r: Int, _ a: Int, _ b: Int) {
+        let borrow = Wide.sub(r, a, b, count)
+        _ = Wide.addMasked(r, address, maskOf(bit: borrow), count)
+    }
+
+    /// r = -a.
+    unsafe fn negate(_ r: Int, _ a: Int) {
+        let zero = Wide.zeroMask(a, count)
+        _ = Wide.sub(r, address, a, count)
+        var i = 0
+        while i < count {
+            Wide.put(r, i, Wide.limb(r, i) & ~zero)
+            i = i &+ 1
+        }
+    }
+
+    unsafe fn double(_ r: Int) {
+        add(r, r, r)
+    }
+
+    /// r = a·R: a as a Montgomery number. It may be any that fits in the
+    /// limbs, and is reduced.
+    unsafe fn enter(_ r: Int, _ a: Int, scratch: Int) {
+        multiply(r, a, squaredR, scratch: scratch)
+    }
+
+    /// r = a/R: what number the Montgomery number a is.
+    unsafe fn leave(_ r: Int, _ a: Int, scratch: Int) {
+        let unit = scratch &+ 8 &* (count &+ 2)
+        Wide.setSmall(unit, 1, count)
+        multiply(r, a, unit, scratch: scratch)
+    }
+
+    /// r = a modulo the modulus, as a Montgomery number, a having up to
+    /// twice the modulus's limbs. 'scratch' is a power's.
+    unsafe fn reduce(_ r: Int, _ a: Int, _ limbs: Int, scratch: Int) {
+        let low = scratch &+ 8 &* (count &+ 2)
+        let high = low &+ 8 &* count
+        Wide.setSmall(low, 0, count)
+        Wide.setSmall(high, 0, count)
+        Wide.copy(low, a, limbs < count ? limbs : count)
+        if limbs > count {
+            Wide.copy(high, a &+ 8 &* count, limbs &- count)
+        }
+        // high·R + low, as Montgomery numbers.
+        enter(high, high, scratch: scratch)
+        enter(high, high, scratch: scratch)
+        enter(low, low, scratch: scratch)
+        add(r, high, low)
+    }
+
+    /// r = a to the power at an address, of so many bits, a and r Montgomery
+    /// numbers: five bits at a time, each multiplied by a power of a chosen
+    /// by looking at every one.
+    unsafe fn power(_ r: Int, _ a: Int, _ exponent: Int, bits: Int, scratch: Int) {
+        let n = count
+        let table = scratch &+ 8 &* (n &+ 2)
+        let result = table &+ 8 &* n &* 32
+        let chosen = result &+ 8 &* n
+        Wide.copy(table, one, n)
+        Wide.copy(table &+ 8 &* n, a, n)
+        var i = 2
+        while i < 32 {
+            multiply(table &+ 8 &* n &* i, table &+ 8 &* n &* (i &- 1), a, scratch: scratch)
+            i = i &+ 1
+        }
+        Wide.copy(result, one, n)
+        var bit = (bits + 4) / 5 * 5
+        var isFirst = true
+        while bit > 0 {
+            bit = bit &- 5
+            if !isFirst {
+                var k = 0
+                while k < 5 {
+                    multiply(result, result, result, scratch: scratch)
+                    k = k &+ 1
+                }
+            }
+            isFirst = false
+            let digit = MontgomeryModulus.bits(exponent, at: bit, of: bits)
+            Wide.setSmall(chosen, 0, n)
+            i = 0
+            while i < 32 {
+                Wide.gather(chosen, maskIfZero(digit ^ (i unchecked as U64)), table &+ 8 &* n &* i, n)
+                i = i &+ 1
+            }
+            multiply(result, result, chosen, scratch: scratch)
+        }
+        Wide.copy(r, result, n)
+    }
+
+    /// Five bits of a number of so many bits, from one on.
+    @inline(always)
+    unsafe static fn bits(_ a: Int, at bit: Int, of count: Int) -> U64 {
+        let index = bit >> 6
+        let shift = (bit & 63) unchecked as U64
+        let limbs = (count + 63) >> 6
+        var value = Wide.limb(a, index) >> shift
+        if shift > 59 && index + 1 < limbs {
+            value = value | (Wide.limb(a, index + 1) << (64 - shift))
+        }
+        return value & 31
+    }
+
+    /// r = a⁻¹, where there is one; 0 for 0. 'scratch' is a power's.
+    unsafe fn invert(_ r: Int, _ a: Int, scratch: Int) {
+        ModularInverse.invert(r, a, modulus: address, factor: factor, bits: bitCount, count, scratch: scratch)
+        // Of a·R, that is, and what is wanted is over R².
+        enter(r, r, scratch: scratch)
+        enter(r, r, scratch: scratch)
+    }
+
+    /// r = a to a power that is not secret.
+    unsafe fn power(_ r: Int, _ a: Int, publicExponent exponent: U64, scratch: Int) {
+        let base = scratch &+ 8 &* (count &+ 2)
+        Wide.copy(base, a, count)
+        if exponent == 0 {
+            Wide.copy(r, one, count)
+            return
+        }
+        Wide.copy(r, base, count)
+        var bit = 63 - exponent.leadingZeroCount - 1
+        while bit >= 0 {
+            multiply(r, r, r, scratch: scratch)
+            if ((exponent >> (bit unchecked as U64)) & 1) == 1 {
+                multiply(r, r, base, scratch: scratch)
+            }
+            bit -= 1
+        }
+    }
+}

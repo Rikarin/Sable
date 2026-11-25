@@ -1,0 +1,94 @@
+module Sable.Crypto.X509
+
+/// What a server is asked for by: a domain's name or an address.
+struct HostName {
+    // The name in lower case, without a dot at its end; empty for an address.
+    let name: String
+    let address: U8[>..]
+
+    /// The host of the text, if it is one's. A name that is not ASCII must
+    /// be given as its A-labels.
+    static fn of(_ text: String) -> HostName? {
+        var bare = text
+        if text.hasPrefix("[") && text.hasSuffix("]") {
+            bare = text.replacing("[", with: "").replacing("]", with: "")
+        }
+        if let address = IpText.read(bare) {
+            return HostName(name: "", address: address)
+        }
+        var name = text.lowercased()
+        if name.hasSuffix(".") {
+            name = "\(name[..<^1])"
+        }
+        return isName(name) ? HostName(name: name, address: []) : none
+    }
+
+    /// Whether it is a domain's name, in lower case: labels of letters,
+    /// digits and hyphens, not at their ends, the last not a number, which
+    /// would be an address's.
+    static fn isName(_ name: String) -> Bool {
+        let bytes = name.utf8.toArray()
+        if bytes.isEmpty || bytes.count > 253 {
+            return false
+        }
+        var start = 0
+        var digitsOnly = true
+        var i = 0
+        while i <= bytes.count {
+            if i == bytes.count || bytes[i] == 0x2E {
+                let count = i - start
+                if count == 0 || count > 63 || bytes[start] == 0x2D || bytes[i - 1] == 0x2D {
+                    return false
+                }
+                if i == bytes.count && digitsOnly {
+                    return false
+                }
+                start = i + 1
+                digitsOnly = true
+            } else {
+                let c = bytes[i]
+                let isDigit = c >= 0x30 && c <= 0x39
+                if !isDigit && !(c >= 0x61 && c <= 0x7A) && c != 0x2D {
+                    return false
+                }
+                digitsOnly = digitsOnly && isDigit
+            }
+            i += 1
+        }
+        return true
+    }
+
+    /// What is after the first label, if there is something.
+    static fn parent(_ name: String) -> String? {
+        guard let dot = name.firstIndex(of: '.') else {
+            return none
+        }
+        return "\(name[name.index(after: dot)...])"
+    }
+
+    /// Whether a certificate with the name is of the host. "*." stands for
+    /// one label, before two or more.
+    fn matches(_ general: GeneralName) -> Bool {
+        match general {
+            case .Ip(let bytes) => {
+                return !address.isEmpty && bytes == address
+            }
+            case .Dns(let written) => {
+                if !address.isEmpty {
+                    return false
+                }
+                let pattern = written.lowercased()
+                if pattern.hasPrefix("*.") {
+                    guard let wanted = HostName.parent(name) else {
+                        return false
+                    }
+                    return wanted.contains('.') && pattern == "*." + wanted
+                }
+                return pattern == name
+            }
+            default => {
+                return false
+            }
+        }
+    }
+}

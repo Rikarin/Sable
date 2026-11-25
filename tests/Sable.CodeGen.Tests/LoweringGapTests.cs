@@ -460,4 +460,40 @@ public sealed class LoweringGapTests {
                 print(d.render())
             """
         );
+
+    // ---- Overloads that meet requirements --------------------------------------
+
+    [Fact]
+    public void ARequirementIsNotMetByAnOverloadThatTakesAnArray() =>
+        Prints(
+            "key 7\nbytes 2\nkey 3\n",
+            """
+            struct Any { let number: Int }
+
+            protocol Keyed {
+                init(_ key: Any)
+            }
+
+            extension Keyed {
+                static fn make(_ number: Int) -> Self { return Self(Any(number: number)) }
+            }
+
+            struct Key: Keyed {
+                let text: String
+                init(_ bytes: U8[:]) { text = "bytes \(bytes.count)" }
+            }
+
+            extension Key {
+                init(_ key: Any) { self = Key(text: "key \(key.number)") }
+                init(text: String) { self.text = text }
+            }
+
+            fn generic<K: Keyed>(_ type: K.Type) -> K { return K(Any(number: 3)) }
+            """,
+            """
+                print(Key.make(7).text)
+                print(Key([1, 2]).text)
+                print(generic(Key.self).text)
+            """
+        );
 }

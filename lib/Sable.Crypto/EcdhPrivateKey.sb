@@ -1,0 +1,76 @@
+module Sable.Crypto
+
+/// A key of a NIST curve to agree on a secret with (SP 800-56A): two people
+/// who each hold one and the other's public key work out the same bytes.
+/// Those are no key yet: derive one from them, and from what both sides
+/// know, with `Hkdf`.
+///
+/// ```sable
+/// let mine = EcdhPrivateKey<P256>.generate()
+/// let yours = EcdhPrivateKey<P256>.generate()
+/// let secret = mine.sharedSecret(with: yours.publicKey)
+/// assert(yours.sharedSecret(with: mine.publicKey) == secret)
+/// ```
+public struct EcdhPrivateKey<Curve: EllipticCurve>: Equatable, Debug, Sendable {
+    let scalar: SecretMemory
+
+    /// The key others agree on a secret with.
+    public let publicKey: EcdhPublicKey<Curve>
+
+    /// The key those bytes are: a number from 1 to the curve's order, most
+    /// significant byte first, of as many bytes as the curve has.
+    ///
+    /// ```sable
+    /// let key = EcdhPrivateKey<P256>.generate()
+    /// assert(try! EcdhPrivateKey<P256>(key.bytes()) == key)
+    /// ```
+    public init(_ bytes: U8[:]) throws(CryptoError) {
+        guard let scalar = Curve.curve.scalar(bytes) else {
+            throw CryptoError.InvalidKey(reason: "no private key of \(Curve.curve), which are \(Curve.curve.byteCount) bytes and under the order")
+        }
+        self.init(scalar: scalar)
+    }
+
+    init(scalar: SecretMemory) {
+        self.scalar = scalar
+        publicKey = EcdhPublicKey<Curve>(checked: Curve.curve.publicKey(scalar))
+    }
+
+    init(scalar: SecretMemory, publicKey: EcdhPublicKey<Curve>) {
+        self.scalar = scalar
+        self.publicKey = publicKey
+    }
+
+    /// A new key from the system's random source.
+    public static fn generate() -> EcdhPrivateKey<Curve> {
+        return EcdhPrivateKey<Curve>(scalar: Curve.curve.randomScalar())
+    }
+
+    /// The key's bytes.
+    public fn bytes() -> U8[>..] {
+        return Curve.curve.bytes(scalar)
+    }
+
+    /// What both sides come to: the x-coordinate of the one's multiple of
+    /// the other's point.
+    ///
+    /// ```sable
+    /// let key = EcdhPrivateKey<P384>.generate()
+    /// assert(key.sharedSecret(with: key.publicKey).byteCount == 48)
+    /// ```
+    public fn sharedSecret(with other: EcdhPublicKey<Curve>) -> SymmetricKey {
+        return SymmetricKey(memory: Curve.curve.agree(scalar, other.bytes))
+    }
+
+    /// Whether the two are the same key, in constant time.
+    public operator == (lhs: EcdhPrivateKey<Curve>, rhs: EcdhPrivateKey<Curve>) -> Bool {
+        unsafe {
+            return Wide.equalMask(lhs.scalar.address, rhs.scalar.address, lhs.scalar.count / 8) != 0
+        }
+    }
+
+    /// What kind of key it is, and not what it is.
+    public fn debugDescription() -> String {
+        return "EcdhPrivateKey<\(Curve.curve)>"
+    }
+}

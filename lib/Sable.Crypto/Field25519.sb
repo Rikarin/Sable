@@ -1,0 +1,270 @@
+module Sable.Crypto
+
+/// Arithmetic modulo 2^255 - 19. An element is five U64s at an address, of
+/// 51 bits each and a little more: a product's are under 2^51 + 2^18, and no
+/// other takes a carry. Two may be multiplied where the one's bound times
+/// the other's is under 2^108, of which a limb of the product is at most 77
+/// times as much, and the last five times: so that its carry, and 19 times
+/// the last one's, fit in 64 bits. Edwards's sums and the ladder multiply
+/// nothing over 2^53.4 with anything over 2^54.2. What 'sub' and 'negate'
+/// take away is under 2^53 - 76, or what 'negate' gave. A result may lie
+/// where an operand does, and nothing depends on the values but the results.
+struct Field25519 {
+    /// How many bytes an element has.
+    static var size: Int => 40
+
+    static var mask: U64 => 0x7FFFFFFFFFFFF
+
+    @inline(always)
+    unsafe static fn copy(_ r: Int, _ a: Int) {
+        Wide.copy(r, a, 5)
+    }
+
+    @inline(always)
+    unsafe static fn setSmall(_ r: Int, _ value: U64) {
+        Wide.setSmall(r, value, 5)
+    }
+
+    /// r = a + b.
+    @inline(always)
+    unsafe static fn add(_ r: Int, _ a: Int, _ b: Int) {
+        var i = 0
+        while i < 5 {
+            Wide.put(r, i, Wide.limb(a, i) &+ Wide.limb(b, i))
+            i = i &+ 1
+        }
+    }
+
+    /// r = a - b, with four times the modulus added so that no limb is
+    /// negative.
+    @inline(always)
+    unsafe static fn sub(_ r: Int, _ a: Int, _ b: Int) {
+        Wide.put(r, 0, Wide.limb(a, 0) &+ 0x1FFFFFFFFFFFB4 &- Wide.limb(b, 0))
+        var i = 1
+        while i < 5 {
+            Wide.put(r, i, Wide.limb(a, i) &+ 0x1FFFFFFFFFFFFC &- Wide.limb(b, i))
+            i = i &+ 1
+        }
+    }
+
+    @inline(always)
+    unsafe static fn negate(_ r: Int, _ a: Int) {
+        Wide.put(r, 0, 0x1FFFFFFFFFFFB4 &- Wide.limb(a, 0))
+        var i = 1
+        while i < 5 {
+            Wide.put(r, i, 0x1FFFFFFFFFFFFC &- Wide.limb(a, i))
+            i = i &+ 1
+        }
+    }
+
+    /// r = a·b.
+    unsafe static fn multiply(_ r: Int, _ a: Int, _ b: Int) {
+        let a0 = wide(Wide.limb(a, 0))
+        let a1 = wide(Wide.limb(a, 1))
+        let a2 = wide(Wide.limb(a, 2))
+        let a3 = wide(Wide.limb(a, 3))
+        let a4 = wide(Wide.limb(a, 4))
+        let b0 = wide(Wide.limb(b, 0))
+        let b1 = wide(Wide.limb(b, 1))
+        let b2 = wide(Wide.limb(b, 2))
+        let b3 = wide(Wide.limb(b, 3))
+        let b4 = wide(Wide.limb(b, 4))
+        // What is past 2^255 is worth 19 times as much at the bottom.
+        let c1 = wide(19 &* Wide.limb(b, 1))
+        let c2 = wide(19 &* Wide.limb(b, 2))
+        let c3 = wide(19 &* Wide.limb(b, 3))
+        let c4 = wide(19 &* Wide.limb(b, 4))
+        let t0 = a0 &* b0 &+ a1 &* c4 &+ a2 &* c3 &+ a3 &* c2 &+ a4 &* c1
+        let t1 = a0 &* b1 &+ a1 &* b0 &+ a2 &* c4 &+ a3 &* c3 &+ a4 &* c2
+        let t2 = a0 &* b2 &+ a1 &* b1 &+ a2 &* b0 &+ a3 &* c4 &+ a4 &* c3
+        let t3 = a0 &* b3 &+ a1 &* b2 &+ a2 &* b1 &+ a3 &* b0 &+ a4 &* c4
+        let t4 = a0 &* b4 &+ a1 &* b3 &+ a2 &* b2 &+ a3 &* b1 &+ a4 &* b0
+        carry(r, t0, t1, t2, t3, t4)
+    }
+
+    /// r = a².
+    unsafe static fn square(_ r: Int, _ a: Int) {
+        let a0 = wide(Wide.limb(a, 0))
+        let a1 = wide(Wide.limb(a, 1))
+        let a2 = wide(Wide.limb(a, 2))
+        let a3 = wide(Wide.limb(a, 3))
+        let a4 = wide(Wide.limb(a, 4))
+        let d0 = wide(2 &* Wide.limb(a, 0))
+        let d1 = wide(2 &* Wide.limb(a, 1))
+        let d2 = wide(2 &* Wide.limb(a, 2))
+        let c3 = wide(19 &* Wide.limb(a, 3))
+        let c4 = wide(19 &* Wide.limb(a, 4))
+        let t0 = a0 &* a0 &+ d1 &* c4 &+ d2 &* c3
+        let t1 = d0 &* a1 &+ d2 &* c4 &+ a3 &* c3
+        let t2 = d0 &* a2 &+ a1 &* a1 &+ wide(2 &* Wide.limb(a, 3)) &* c4
+        let t3 = d0 &* a3 &+ d1 &* a2 &+ a4 &* c4
+        let t4 = d0 &* a4 &+ d1 &* a3 &+ a2 &* a2
+        carry(r, t0, t1, t2, t3, t4)
+    }
+
+    /// The carries of a product's limbs, each under 2^115 and the last under
+    /// 2^111: all five at once, and once more.
+    @inline(always)
+    unsafe static fn carry(_ r: Int, _ t0: U128, _ t1: U128, _ t2: U128, _ t3: U128, _ t4: U128) {
+        let s0 = (lowHalf(t0) & mask) &+ 19 &* lowHalf(t4 >> 51)
+        let s1 = (lowHalf(t1) & mask) &+ lowHalf(t0 >> 51)
+        let s2 = (lowHalf(t2) & mask) &+ lowHalf(t1 >> 51)
+        let s3 = (lowHalf(t3) & mask) &+ lowHalf(t2 >> 51)
+        let s4 = (lowHalf(t4) & mask) &+ lowHalf(t3 >> 51)
+        Wide.put(r, 0, (s0 & mask) &+ 19 &* (s4 >> 51))
+        Wide.put(r, 1, (s1 & mask) &+ (s0 >> 51))
+        Wide.put(r, 2, (s2 & mask) &+ (s1 >> 51))
+        Wide.put(r, 3, (s3 & mask) &+ (s2 >> 51))
+        Wide.put(r, 4, (s4 & mask) &+ (s3 >> 51))
+    }
+
+    /// r = a·k, k under 2^32.
+    unsafe static fn multiplySmall(_ r: Int, _ a: Int, _ k: U64) {
+        let factor = wide(k)
+        carry(r, wide(Wide.limb(a, 0)) &* factor, wide(Wide.limb(a, 1)) &* factor, wide(Wide.limb(a, 2)) &* factor, wide(Wide.limb(a, 3)) &* factor, wide(Wide.limb(a, 4)) &* factor)
+    }
+
+    /// r = a to the power 2^count.
+    unsafe static fn square(_ r: Int, _ a: Int, times count: Int) {
+        square(r, a)
+        var i = 1
+        while i < count {
+            square(r, r)
+            i = i &+ 1
+        }
+    }
+
+    /// r = a^(2^250 - 1), and a^11 at 'eleventh'; four elements of scratch.
+    unsafe static fn powerRun(_ r: Int, _ a: Int, eleventh: Int, scratch: Int) {
+        let t0 = scratch
+        let t1 = scratch &+ 40
+        let t2 = scratch &+ 80
+        let t3 = scratch &+ 120
+        square(t0, a)
+        square(t1, t0, times: 2)
+        multiply(t1, a, t1)
+        multiply(eleventh, t0, t1)
+        square(t2, eleventh)
+        multiply(t1, t1, t2)
+        // t1 = a^(2^5 - 1).
+        square(t2, t1, times: 5)
+        multiply(t1, t2, t1)
+        square(t2, t1, times: 10)
+        multiply(t2, t2, t1)
+        square(t3, t2, times: 20)
+        multiply(t2, t3, t2)
+        square(t2, t2, times: 10)
+        multiply(t1, t2, t1)
+        square(t2, t1, times: 50)
+        multiply(t2, t2, t1)
+        square(t3, t2, times: 100)
+        multiply(t2, t3, t2)
+        square(t2, t2, times: 50)
+        multiply(r, t2, t1)
+    }
+
+    /// r = 1/a, or 0 for 0; six elements of scratch.
+    unsafe static fn invert(_ r: Int, _ a: Int, scratch: Int) {
+        let run = scratch &+ 160
+        let eleventh = scratch &+ 200
+        powerRun(run, a, eleventh: eleventh, scratch: scratch)
+        square(run, run, times: 5)
+        multiply(r, run, eleventh)
+    }
+
+    /// r = a^((p - 5) / 8), which square roots are found with; six elements
+    /// of scratch.
+    unsafe static fn powerP58(_ r: Int, _ a: Int, scratch: Int) {
+        let run = scratch &+ 160
+        let saved = scratch &+ 200
+        // 'a' is wanted after r may be written.
+        powerRun(run, a, eleventh: saved, scratch: scratch)
+        square(run, run, times: 2)
+        multiply(r, run, a)
+    }
+
+    /// The four limbs at an address, their top bit left out, as an element.
+    unsafe static fn unpack(_ r: Int, _ a: Int) {
+        let w0 = Wide.limb(a, 0)
+        let w1 = Wide.limb(a, 1)
+        let w2 = Wide.limb(a, 2)
+        let w3 = Wide.limb(a, 3)
+        Wide.put(r, 0, w0 & mask)
+        Wide.put(r, 1, ((w0 >> 51) | (w1 << 13)) & mask)
+        Wide.put(r, 2, ((w1 >> 38) | (w2 << 26)) & mask)
+        Wide.put(r, 3, ((w2 >> 25) | (w3 << 39)) & mask)
+        Wide.put(r, 4, (w3 >> 12) & mask)
+    }
+
+    /// The element's one value under the modulus, as four limbs.
+    unsafe static fn pack(_ r: Int, _ a: Int) {
+        var h0 = Wide.limb(a, 0)
+        var h1 = Wide.limb(a, 1)
+        var h2 = Wide.limb(a, 2)
+        var h3 = Wide.limb(a, 3)
+        var h4 = Wide.limb(a, 4)
+        // Twice round, after which it is under 2^255 + 2^51.
+        var i = 0
+        while i < 2 {
+            h1 = h1 &+ (h0 >> 51)
+            h0 = h0 & mask
+            h2 = h2 &+ (h1 >> 51)
+            h1 = h1 & mask
+            h3 = h3 &+ (h2 >> 51)
+            h2 = h2 & mask
+            h4 = h4 &+ (h3 >> 51)
+            h3 = h3 & mask
+            h0 = h0 &+ 19 &* (h4 >> 51)
+            h4 = h4 & mask
+            i = i &+ 1
+        }
+        // Whether it is the modulus or more: whether adding 19 reaches 2^255.
+        var q = (h0 &+ 19) >> 51
+        q = (h1 &+ q) >> 51
+        q = (h2 &+ q) >> 51
+        q = (h3 &+ q) >> 51
+        q = (h4 &+ q) >> 51
+        h0 = h0 &+ 19 &* q
+        h1 = h1 &+ (h0 >> 51)
+        h0 = h0 & mask
+        h2 = h2 &+ (h1 >> 51)
+        h1 = h1 & mask
+        h3 = h3 &+ (h2 >> 51)
+        h2 = h2 & mask
+        h4 = h4 &+ (h3 >> 51)
+        h3 = h3 & mask
+        h4 = h4 & mask
+        Wide.put(r, 0, h0 | (h1 << 51))
+        Wide.put(r, 1, (h1 >> 13) | (h2 << 38))
+        Wide.put(r, 2, (h2 >> 26) | (h3 << 25))
+        Wide.put(r, 3, (h3 >> 39) | (h4 << 12))
+    }
+
+    /// All ones if the two are the same element; eight limbs of scratch.
+    unsafe static fn equalMask(_ a: Int, _ b: Int, scratch: Int) -> U64 {
+        pack(scratch, a)
+        pack(scratch &+ 32, b)
+        return Wide.equalMask(scratch, scratch &+ 32, 4)
+    }
+
+    /// The low bit of the element's value, which is its sign in an encoded
+    /// point; four limbs of scratch.
+    unsafe static fn lowBit(_ a: Int, scratch: Int) -> U64 {
+        pack(scratch, a)
+        return Wide.limb(scratch, 0) & 1
+    }
+
+    /// a and b exchanged where the mask is ones.
+    @inline(always)
+    unsafe static fn swap(_ a: Int, _ b: Int, _ mask: U64) {
+        var i = 0
+        while i < 5 {
+            let x = Wide.limb(a, i)
+            let y = Wide.limb(b, i)
+            let t = (x ^ y) & mask
+            Wide.put(a, i, x ^ t)
+            Wide.put(b, i, y ^ t)
+            i = i &+ 1
+        }
+    }
+}

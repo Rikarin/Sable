@@ -42,6 +42,7 @@
 #include "vectors.c"
 #include "crypto.c"
 #include "ciphers.c"
+#include "trust.c"
 #include "codecs.c"
 #include "leaks.c"
 #include "metadata.c"

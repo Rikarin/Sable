@@ -1,0 +1,27 @@
+module Sable.Crypto.X509
+
+import Sable.Time
+
+/// A certificate that its issuer says does not hold.
+///
+/// ```sable
+/// let revoked = RevokedCertificate(serialNumber: [1, 2], date: UtcDateTime.fromUnix(0))
+/// assert(revoked.serialNumber == [1, 2])
+/// ```
+@derive(Equatable, Debug)
+public struct RevokedCertificate: Sendable {
+    /// The certificate's number.
+    public let serialNumber: U8[>..]
+
+    /// Since when it does not hold.
+    public let date: UtcDateTime
+
+    /// Why, by RFC 5280 §5.3.1's numbers: 1 is a key that others have.
+    public let reason: Int?
+
+    public init(serialNumber: U8[:], date: UtcDateTime, reason: Int? = none) {
+        self.serialNumber = serialNumber.toArray()
+        self.date = date
+        self.reason = reason
+    }
+}

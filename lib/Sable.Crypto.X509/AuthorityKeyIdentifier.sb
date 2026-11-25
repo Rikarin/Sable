@@ -1,0 +1,48 @@
+module Sable.Crypto.X509
+
+import Sable.Serialize.Asn1
+
+/// Which of an issuer's keys a certificate is signed with (RFC 5280
+/// §4.2.1.1).
+///
+/// ```sable
+/// let identifier = AuthorityKeyIdentifier(keyIdentifier: [1, 2, 3])
+/// assert(identifier.keyIdentifier == [1, 2, 3] && identifier.serialNumber == none)
+/// ```
+@derive(Equatable, Debug)
+public struct AuthorityKeyIdentifier: Sendable {
+    /// The issuer's subject key identifier.
+    public let keyIdentifier: U8[>..]?
+
+    /// Who issued the issuer's certificate.
+    public let issuer: GeneralName[>..]?
+
+    /// The issuer's certificate's serial number.
+    public let serialNumber: U8[>..]?
+
+    public init(keyIdentifier: U8[:]) {
+        self.keyIdentifier = keyIdentifier.toArray()
+        issuer = none
+        serialNumber = none
+    }
+
+    init(reading reader: inout AsnReader) throws(AsnError) {
+        var sequence = try reader.readSequence()
+        var key: U8[>..]? = none
+        var names: GeneralName[>..]? = none
+        var serial: U8[>..]? = none
+        if sequence.isNext(.context(0)) {
+            key = try sequence.readOctetString(tag: .context(0)).toArray()
+        }
+        if sequence.isNext(.context(1)) {
+            names = try GeneralName.readAll(&sequence, tag: .context(1))
+        }
+        if sequence.isNext(.context(2)) {
+            serial = try sequence.readIntegerBytes(tag: .context(2)).toArray()
+        }
+        try sequence.finish()
+        keyIdentifier = key
+        issuer = names
+        serialNumber = serial
+    }
+}

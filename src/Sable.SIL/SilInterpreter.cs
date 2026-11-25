@@ -1476,6 +1476,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case SilBuiltins.BlackBox:
                 return null;
 
+            case "value_barrier":
+                return operands[0];
+
             case "string_count":
                 return (long)Text(operands[0]).Scalars.Count;
 
@@ -1540,6 +1543,13 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             // The library's portable code is what the interpreter runs.
             case "codec_bytes_bytes" or "codec_string_bytes" or "codec_bytes_raw" or "utf8_to_utf16" or "utf16_to_utf8":
                 return 0L;
+
+            // The library reads the system's files, as where the runtime has nothing.
+            case "trust_load":
+                return 0L;
+
+            case "trust_free":
+                return null;
 
             case "crypto_blocks" or "crypto_blocks_raw" or "crypto_cipher" or "crypto_cipher_in_place" or "crypto_cipher_raw" or "vector_available":
                 return false;

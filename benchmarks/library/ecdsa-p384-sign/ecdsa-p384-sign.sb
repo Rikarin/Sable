@@ -1,0 +1,20 @@
+module EcdsaP384SignBench
+
+// ECDSA on P384 against .NET's ECDsa.SignData: 500 signatures of a message
+// of 64 bytes, the last of which is checked.
+
+import Sable.Crypto
+
+@main
+fn main() {
+    let key = EcdsaPrivateKey<P384>.generate()
+    var message = U8[>..](repeating: 7, count: 64)
+    var signature = key.sign(message)
+    var round = 1
+    while round < 500 {
+        message[round % 64] = U8(round % 256)
+        signature = key.sign(message)
+        round += 1
+    }
+    print("\(key.publicKey.isValid(signature, for: message) ? 1 : 0)")
+}

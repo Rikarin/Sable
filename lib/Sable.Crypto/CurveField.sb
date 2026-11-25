@@ -1,0 +1,132 @@
+module Sable.Crypto
+
+/// The field a NIST curve is over, and the curve's constants. An element is
+/// so many limbs at an address, and is the number times some R modulo the
+/// prime, always under it. A result may lie where an operand does, and
+/// nothing depends on the values but the results.
+protocol CurveField {
+    /// How many limbs an element has.
+    static var limbs: Int { get }
+
+    /// How many bytes an encoded element, or scalar, has.
+    static var byteCount: Int { get }
+
+    /// How many bits an element, or scalar, has.
+    static var bits: Int { get }
+
+    /// How many bits of a scalar the base point's table takes at a time.
+    static var tableBits: Int { get }
+
+    /// The modulus; 1 and the square of R, and b, and the base point's x and
+    /// y, as elements.
+    static var constants: Int { get }
+
+    /// What times the modulus is -1 modulo 2^64.
+    static var factor: U64 { get }
+
+    /// The base point's order.
+    static var order: MontgomeryModulus { get }
+
+    /// The base point's table (Weierstrass.makeBaseTable).
+    static var baseTable: Int { get }
+
+    /// r = a·b.
+    unsafe static fn multiply(_ r: Int, _ a: Int, _ b: Int)
+
+    /// r = a².
+    unsafe static fn square(_ r: Int, _ a: Int)
+
+    /// r = a + b.
+    unsafe static fn add(_ r: Int, _ a: Int, _ b: Int)
+
+    /// r = a - b.
+    unsafe static fn sub(_ r: Int, _ a: Int, _ b: Int)
+}
+
+extension CurveField {
+    /// How many bytes an element has in memory.
+    static var size: Int => 8 &* limbs
+
+    static var modulus: Int => constants
+
+    static var one: Int => constants &+ size
+
+    static var squaredR: Int => constants &+ 2 &* size
+
+    static var b: Int => constants &+ 3 &* size
+
+    static var baseX: Int => constants &+ 4 &* size
+
+    static var baseY: Int => constants &+ 5 &* size
+
+    /// r = -a.
+    @inline(always)
+    unsafe static fn negate(_ r: Int, _ a: Int) {
+        let zero = Wide.zeroMask(a, limbs)
+        _ = Wide.sub(r, modulus, a, limbs)
+        var i = 0
+        while i < limbs {
+            Wide.put(r, i, Wide.limb(r, i) & ~zero)
+            i = i &+ 1
+        }
+    }
+
+    /// r = the element a number under the modulus is.
+    unsafe static fn enter(_ r: Int, _ a: Int) {
+        multiply(r, a, squaredR)
+    }
+
+    /// r = the number an element is; an element of scratch.
+    unsafe static fn leave(_ r: Int, _ a: Int, scratch: Int) {
+        Wide.setSmall(scratch, 1, limbs)
+        multiply(r, a, scratch)
+    }
+
+    /// r = a to the power at an address, which is not secret: a is, or may
+    /// be. Eighteen elements of scratch.
+    unsafe static fn power(_ r: Int, _ a: Int, publicExponent exponent: Int, scratch: Int) {
+        let table = scratch
+        let result = scratch &+ 16 &* size
+        Wide.copy(table, one, limbs)
+        Wide.copy(table &+ size, a, limbs)
+        var i = 2
+        while i < 16 {
+            multiply(table &+ i &* size, table &+ (i &- 1) &* size, a)
+            i += 1
+        }
+        Wide.copy(result, one, limbs)
+        i = 16 * limbs - 1
+        while i >= 0 {
+            var k = 0
+            while k < 4 {
+                square(result, result)
+                k += 1
+            }
+            let digit = (Wide.limb(exponent, i >> 4) >> ((4 &* (i & 15)) unchecked as U64)) & 15
+            multiply(result, result, table &+ (digit unchecked as Int) &* size)
+            i -= 1
+        }
+        Wide.copy(r, result, limbs)
+    }
+
+    /// r = 1/a, or 0 for 0; nineteen elements of scratch.
+    unsafe static fn invert(_ r: Int, _ a: Int, scratch: Int) {
+        ModularInverse.invert(r, a, modulus: modulus, factor: factor, bits: bits, limbs, scratch: scratch)
+        // Of a·R, that is, and what is wanted is over R².
+        enter(r, r)
+        enter(r, r)
+    }
+
+    /// r = what squared is a, if anything is: each of the moduli is 3 modulo
+    /// 4, so a to the power (p + 1)/4. Nineteen elements of scratch.
+    unsafe static fn squareRoot(_ r: Int, _ a: Int, scratch: Int) {
+        let exponent = scratch &+ 18 &* size
+        // That is (p >> 2) + 1.
+        Wide.halve(exponent, modulus, top: 0, limbs)
+        Wide.halve(exponent, exponent, top: 0, limbs)
+        let unit = scratch
+        Wide.setSmall(unit, 1, limbs)
+        _ = Wide.add(exponent, exponent, unit, limbs)
+        power(r, a, publicExponent: exponent, scratch: scratch)
+    }
+}

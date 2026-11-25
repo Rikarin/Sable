@@ -1,0 +1,376 @@
+module Sable.Crypto
+
+/// P-521's field, modulo 2^521 - 1, its elements the numbers themselves, of
+/// nine limbs under the modulus: R is 1, as a product's bits past the 521st
+/// are only added to the rest.
+struct P521Field: CurveField {
+    static var limbs: Int => 9
+
+    static var byteCount: Int => 66
+
+    static var bits: Int => 521
+
+    static var tableBits: Int => 4
+
+    static var constants: Int => p521Constants
+
+    static var baseTable: Int => p521BaseTable.get(Weierstrass<P521Field>.makeBaseTable)
+
+    static var factor: U64 => 1
+
+    static var order: MontgomeryModulus => p521Order
+
+    unsafe static fn multiply(_ r: Int, _ a: Int, _ b: Int) {
+        let a0 = wide(Wide.limb(a, 0))
+        let a1 = wide(Wide.limb(a, 1))
+        let a2 = wide(Wide.limb(a, 2))
+        let a3 = wide(Wide.limb(a, 3))
+        let a4 = wide(Wide.limb(a, 4))
+        let a5 = wide(Wide.limb(a, 5))
+        let a6 = wide(Wide.limb(a, 6))
+        let a7 = wide(Wide.limb(a, 7))
+        let a8 = wide(Wide.limb(a, 8))
+        let b0 = wide(Wide.limb(b, 0))
+        let b1 = wide(Wide.limb(b, 1))
+        let b2 = wide(Wide.limb(b, 2))
+        let b3 = wide(Wide.limb(b, 3))
+        let b4 = wide(Wide.limb(b, 4))
+        let b5 = wide(Wide.limb(b, 5))
+        let b6 = wide(Wide.limb(b, 6))
+        let b7 = wide(Wide.limb(b, 7))
+        let b8 = wide(Wide.limb(b, 8))
+        let x0 = a0 &* b0
+        let x1 = a1 &* b0 &+ wide(highHalf(x0))
+        let x2 = a2 &* b0 &+ wide(highHalf(x1))
+        let x3 = a3 &* b0 &+ wide(highHalf(x2))
+        let x4 = a4 &* b0 &+ wide(highHalf(x3))
+        let x5 = a5 &* b0 &+ wide(highHalf(x4))
+        let x6 = a6 &* b0 &+ wide(highHalf(x5))
+        let x7 = a7 &* b0 &+ wide(highHalf(x6))
+        let x8 = a8 &* b0 &+ wide(highHalf(x7))
+        let h0 = highHalf(x8)
+        let x9 = a0 &* b1 &+ wide(lowHalf(x1))
+        let x10 = a1 &* b1 &+ wide(lowHalf(x2)) &+ wide(highHalf(x9))
+        let x11 = a2 &* b1 &+ wide(lowHalf(x3)) &+ wide(highHalf(x10))
+        let x12 = a3 &* b1 &+ wide(lowHalf(x4)) &+ wide(highHalf(x11))
+        let x13 = a4 &* b1 &+ wide(lowHalf(x5)) &+ wide(highHalf(x12))
+        let x14 = a5 &* b1 &+ wide(lowHalf(x6)) &+ wide(highHalf(x13))
+        let x15 = a6 &* b1 &+ wide(lowHalf(x7)) &+ wide(highHalf(x14))
+        let x16 = a7 &* b1 &+ wide(lowHalf(x8)) &+ wide(highHalf(x15))
+        let x17 = a8 &* b1 &+ wide(h0) &+ wide(highHalf(x16))
+        let h1 = highHalf(x17)
+        let x18 = a0 &* b2 &+ wide(lowHalf(x10))
+        let x19 = a1 &* b2 &+ wide(lowHalf(x11)) &+ wide(highHalf(x18))
+        let x20 = a2 &* b2 &+ wide(lowHalf(x12)) &+ wide(highHalf(x19))
+        let x21 = a3 &* b2 &+ wide(lowHalf(x13)) &+ wide(highHalf(x20))
+        let x22 = a4 &* b2 &+ wide(lowHalf(x14)) &+ wide(highHalf(x21))
+        let x23 = a5 &* b2 &+ wide(lowHalf(x15)) &+ wide(highHalf(x22))
+        let x24 = a6 &* b2 &+ wide(lowHalf(x16)) &+ wide(highHalf(x23))
+        let x25 = a7 &* b2 &+ wide(lowHalf(x17)) &+ wide(highHalf(x24))
+        let x26 = a8 &* b2 &+ wide(h1) &+ wide(highHalf(x25))
+        let h2 = highHalf(x26)
+        let x27 = a0 &* b3 &+ wide(lowHalf(x19))
+        let x28 = a1 &* b3 &+ wide(lowHalf(x20)) &+ wide(highHalf(x27))
+        let x29 = a2 &* b3 &+ wide(lowHalf(x21)) &+ wide(highHalf(x28))
+        let x30 = a3 &* b3 &+ wide(lowHalf(x22)) &+ wide(highHalf(x29))
+        let x31 = a4 &* b3 &+ wide(lowHalf(x23)) &+ wide(highHalf(x30))
+        let x32 = a5 &* b3 &+ wide(lowHalf(x24)) &+ wide(highHalf(x31))
+        let x33 = a6 &* b3 &+ wide(lowHalf(x25)) &+ wide(highHalf(x32))
+        let x34 = a7 &* b3 &+ wide(lowHalf(x26)) &+ wide(highHalf(x33))
+        let x35 = a8 &* b3 &+ wide(h2) &+ wide(highHalf(x34))
+        let h3 = highHalf(x35)
+        let x36 = a0 &* b4 &+ wide(lowHalf(x28))
+        let x37 = a1 &* b4 &+ wide(lowHalf(x29)) &+ wide(highHalf(x36))
+        let x38 = a2 &* b4 &+ wide(lowHalf(x30)) &+ wide(highHalf(x37))
+        let x39 = a3 &* b4 &+ wide(lowHalf(x31)) &+ wide(highHalf(x38))
+        let x40 = a4 &* b4 &+ wide(lowHalf(x32)) &+ wide(highHalf(x39))
+        let x41 = a5 &* b4 &+ wide(lowHalf(x33)) &+ wide(highHalf(x40))
+        let x42 = a6 &* b4 &+ wide(lowHalf(x34)) &+ wide(highHalf(x41))
+        let x43 = a7 &* b4 &+ wide(lowHalf(x35)) &+ wide(highHalf(x42))
+        let x44 = a8 &* b4 &+ wide(h3) &+ wide(highHalf(x43))
+        let h4 = highHalf(x44)
+        let x45 = a0 &* b5 &+ wide(lowHalf(x37))
+        let x46 = a1 &* b5 &+ wide(lowHalf(x38)) &+ wide(highHalf(x45))
+        let x47 = a2 &* b5 &+ wide(lowHalf(x39)) &+ wide(highHalf(x46))
+        let x48 = a3 &* b5 &+ wide(lowHalf(x40)) &+ wide(highHalf(x47))
+        let x49 = a4 &* b5 &+ wide(lowHalf(x41)) &+ wide(highHalf(x48))
+        let x50 = a5 &* b5 &+ wide(lowHalf(x42)) &+ wide(highHalf(x49))
+        let x51 = a6 &* b5 &+ wide(lowHalf(x43)) &+ wide(highHalf(x50))
+        let x52 = a7 &* b5 &+ wide(lowHalf(x44)) &+ wide(highHalf(x51))
+        let x53 = a8 &* b5 &+ wide(h4) &+ wide(highHalf(x52))
+        let h5 = highHalf(x53)
+        let x54 = a0 &* b6 &+ wide(lowHalf(x46))
+        let x55 = a1 &* b6 &+ wide(lowHalf(x47)) &+ wide(highHalf(x54))
+        let x56 = a2 &* b6 &+ wide(lowHalf(x48)) &+ wide(highHalf(x55))
+        let x57 = a3 &* b6 &+ wide(lowHalf(x49)) &+ wide(highHalf(x56))
+        let x58 = a4 &* b6 &+ wide(lowHalf(x50)) &+ wide(highHalf(x57))
+        let x59 = a5 &* b6 &+ wide(lowHalf(x51)) &+ wide(highHalf(x58))
+        let x60 = a6 &* b6 &+ wide(lowHalf(x52)) &+ wide(highHalf(x59))
+        let x61 = a7 &* b6 &+ wide(lowHalf(x53)) &+ wide(highHalf(x60))
+        let x62 = a8 &* b6 &+ wide(h5) &+ wide(highHalf(x61))
+        let h6 = highHalf(x62)
+        let x63 = a0 &* b7 &+ wide(lowHalf(x55))
+        let x64 = a1 &* b7 &+ wide(lowHalf(x56)) &+ wide(highHalf(x63))
+        let x65 = a2 &* b7 &+ wide(lowHalf(x57)) &+ wide(highHalf(x64))
+        let x66 = a3 &* b7 &+ wide(lowHalf(x58)) &+ wide(highHalf(x65))
+        let x67 = a4 &* b7 &+ wide(lowHalf(x59)) &+ wide(highHalf(x66))
+        let x68 = a5 &* b7 &+ wide(lowHalf(x60)) &+ wide(highHalf(x67))
+        let x69 = a6 &* b7 &+ wide(lowHalf(x61)) &+ wide(highHalf(x68))
+        let x70 = a7 &* b7 &+ wide(lowHalf(x62)) &+ wide(highHalf(x69))
+        let x71 = a8 &* b7 &+ wide(h6) &+ wide(highHalf(x70))
+        let h7 = highHalf(x71)
+        let x72 = a0 &* b8 &+ wide(lowHalf(x64))
+        let x73 = a1 &* b8 &+ wide(lowHalf(x65)) &+ wide(highHalf(x72))
+        let x74 = a2 &* b8 &+ wide(lowHalf(x66)) &+ wide(highHalf(x73))
+        let x75 = a3 &* b8 &+ wide(lowHalf(x67)) &+ wide(highHalf(x74))
+        let x76 = a4 &* b8 &+ wide(lowHalf(x68)) &+ wide(highHalf(x75))
+        let x77 = a5 &* b8 &+ wide(lowHalf(x69)) &+ wide(highHalf(x76))
+        let x78 = a6 &* b8 &+ wide(lowHalf(x70)) &+ wide(highHalf(x77))
+        let x79 = a7 &* b8 &+ wide(lowHalf(x71)) &+ wide(highHalf(x78))
+        let x80 = a8 &* b8 &+ wide(h7) &+ wide(highHalf(x79))
+        let h8 = highHalf(x80)
+        P521Field.reduce(r, lowHalf(x0), lowHalf(x9), lowHalf(x18), lowHalf(x27), lowHalf(x36), lowHalf(x45), lowHalf(x54), lowHalf(x63), lowHalf(x72), lowHalf(x73), lowHalf(x74), lowHalf(x75), lowHalf(x76), lowHalf(x77), lowHalf(x78), lowHalf(x79), lowHalf(x80), h8)
+    }
+
+    unsafe static fn square(_ r: Int, _ a: Int) {
+        let a0 = wide(Wide.limb(a, 0))
+        let a1 = wide(Wide.limb(a, 1))
+        let a2 = wide(Wide.limb(a, 2))
+        let a3 = wide(Wide.limb(a, 3))
+        let a4 = wide(Wide.limb(a, 4))
+        let a5 = wide(Wide.limb(a, 5))
+        let a6 = wide(Wide.limb(a, 6))
+        let a7 = wide(Wide.limb(a, 7))
+        let a8 = wide(Wide.limb(a, 8))
+        // The products of two different limbs, once.
+        let x0 = a1 &* a0
+        let x1 = a2 &* a0 &+ wide(highHalf(x0))
+        let x2 = a3 &* a0 &+ wide(highHalf(x1))
+        let x3 = a4 &* a0 &+ wide(highHalf(x2))
+        let x4 = a5 &* a0 &+ wide(highHalf(x3))
+        let x5 = a6 &* a0 &+ wide(highHalf(x4))
+        let x6 = a7 &* a0 &+ wide(highHalf(x5))
+        let x7 = a8 &* a0 &+ wide(highHalf(x6))
+        let h0 = highHalf(x7)
+        let x8 = a2 &* a1 &+ wide(lowHalf(x2))
+        let x9 = a3 &* a1 &+ wide(lowHalf(x3)) &+ wide(highHalf(x8))
+        let x10 = a4 &* a1 &+ wide(lowHalf(x4)) &+ wide(highHalf(x9))
+        let x11 = a5 &* a1 &+ wide(lowHalf(x5)) &+ wide(highHalf(x10))
+        let x12 = a6 &* a1 &+ wide(lowHalf(x6)) &+ wide(highHalf(x11))
+        let x13 = a7 &* a1 &+ wide(lowHalf(x7)) &+ wide(highHalf(x12))
+        let x14 = a8 &* a1 &+ wide(h0) &+ wide(highHalf(x13))
+        let h1 = highHalf(x14)
+        let x15 = a3 &* a2 &+ wide(lowHalf(x10))
+        let x16 = a4 &* a2 &+ wide(lowHalf(x11)) &+ wide(highHalf(x15))
+        let x17 = a5 &* a2 &+ wide(lowHalf(x12)) &+ wide(highHalf(x16))
+        let x18 = a6 &* a2 &+ wide(lowHalf(x13)) &+ wide(highHalf(x17))
+        let x19 = a7 &* a2 &+ wide(lowHalf(x14)) &+ wide(highHalf(x18))
+        let x20 = a8 &* a2 &+ wide(h1) &+ wide(highHalf(x19))
+        let h2 = highHalf(x20)
+        let x21 = a4 &* a3 &+ wide(lowHalf(x17))
+        let x22 = a5 &* a3 &+ wide(lowHalf(x18)) &+ wide(highHalf(x21))
+        let x23 = a6 &* a3 &+ wide(lowHalf(x19)) &+ wide(highHalf(x22))
+        let x24 = a7 &* a3 &+ wide(lowHalf(x20)) &+ wide(highHalf(x23))
+        let x25 = a8 &* a3 &+ wide(h2) &+ wide(highHalf(x24))
+        let h3 = highHalf(x25)
+        let x26 = a5 &* a4 &+ wide(lowHalf(x23))
+        let x27 = a6 &* a4 &+ wide(lowHalf(x24)) &+ wide(highHalf(x26))
+        let x28 = a7 &* a4 &+ wide(lowHalf(x25)) &+ wide(highHalf(x27))
+        let x29 = a8 &* a4 &+ wide(h3) &+ wide(highHalf(x28))
+        let h4 = highHalf(x29)
+        let x30 = a6 &* a5 &+ wide(lowHalf(x28))
+        let x31 = a7 &* a5 &+ wide(lowHalf(x29)) &+ wide(highHalf(x30))
+        let x32 = a8 &* a5 &+ wide(h4) &+ wide(highHalf(x31))
+        let h5 = highHalf(x32)
+        let x33 = a7 &* a6 &+ wide(lowHalf(x32))
+        let x34 = a8 &* a6 &+ wide(h5) &+ wide(highHalf(x33))
+        let h6 = highHalf(x34)
+        let x35 = a8 &* a7 &+ wide(h6)
+        let h7 = highHalf(x35)
+        let m1 = lowHalf(x0)
+        let m2 = lowHalf(x1)
+        let m3 = lowHalf(x8)
+        let m4 = lowHalf(x9)
+        let m5 = lowHalf(x15)
+        let m6 = lowHalf(x16)
+        let m7 = lowHalf(x21)
+        let m8 = lowHalf(x22)
+        let m9 = lowHalf(x26)
+        let m10 = lowHalf(x27)
+        let m11 = lowHalf(x30)
+        let m12 = lowHalf(x31)
+        let m13 = lowHalf(x33)
+        let m14 = lowHalf(x34)
+        let m15 = lowHalf(x35)
+        let m16 = h7
+        // Doubled, and the squares added.
+        let s0 = a0 &* a0
+        let s1 = a1 &* a1
+        let s2 = a2 &* a2
+        let s3 = a3 &* a3
+        let s4 = a4 &* a4
+        let s5 = a5 &* a5
+        let s6 = a6 &* a6
+        let s7 = a7 &* a7
+        let s8 = a8 &* a8
+        let y1 = wide(m1 << 1) &+ wide(highHalf(s0))
+        let y2 = wide((m2 << 1) | (m1 >> 63)) &+ wide(lowHalf(s1)) &+ wide(highHalf(y1))
+        let y3 = wide((m3 << 1) | (m2 >> 63)) &+ wide(highHalf(s1)) &+ wide(highHalf(y2))
+        let y4 = wide((m4 << 1) | (m3 >> 63)) &+ wide(lowHalf(s2)) &+ wide(highHalf(y3))
+        let y5 = wide((m5 << 1) | (m4 >> 63)) &+ wide(highHalf(s2)) &+ wide(highHalf(y4))
+        let y6 = wide((m6 << 1) | (m5 >> 63)) &+ wide(lowHalf(s3)) &+ wide(highHalf(y5))
+        let y7 = wide((m7 << 1) | (m6 >> 63)) &+ wide(highHalf(s3)) &+ wide(highHalf(y6))
+        let y8 = wide((m8 << 1) | (m7 >> 63)) &+ wide(lowHalf(s4)) &+ wide(highHalf(y7))
+        let y9 = wide((m9 << 1) | (m8 >> 63)) &+ wide(highHalf(s4)) &+ wide(highHalf(y8))
+        let y10 = wide((m10 << 1) | (m9 >> 63)) &+ wide(lowHalf(s5)) &+ wide(highHalf(y9))
+        let y11 = wide((m11 << 1) | (m10 >> 63)) &+ wide(highHalf(s5)) &+ wide(highHalf(y10))
+        let y12 = wide((m12 << 1) | (m11 >> 63)) &+ wide(lowHalf(s6)) &+ wide(highHalf(y11))
+        let y13 = wide((m13 << 1) | (m12 >> 63)) &+ wide(highHalf(s6)) &+ wide(highHalf(y12))
+        let y14 = wide((m14 << 1) | (m13 >> 63)) &+ wide(lowHalf(s7)) &+ wide(highHalf(y13))
+        let y15 = wide((m15 << 1) | (m14 >> 63)) &+ wide(highHalf(s7)) &+ wide(highHalf(y14))
+        let y16 = wide((m16 << 1) | (m15 >> 63)) &+ wide(lowHalf(s8)) &+ wide(highHalf(y15))
+        let y17 = (m16 >> 63) &+ highHalf(s8) &+ highHalf(y16)
+        P521Field.reduce(r, lowHalf(s0), lowHalf(y1), lowHalf(y2), lowHalf(y3), lowHalf(y4), lowHalf(y5), lowHalf(y6), lowHalf(y7), lowHalf(y8), lowHalf(y9), lowHalf(y10), lowHalf(y11), lowHalf(y12), lowHalf(y13), lowHalf(y14), lowHalf(y15), lowHalf(y16), y17)
+    }
+
+    unsafe static fn add(_ r: Int, _ a: Int, _ b: Int) {
+        let x0 = wide(Wide.limb(a, 0)) &+ wide(Wide.limb(b, 0))
+        let x1 = wide(Wide.limb(a, 1)) &+ wide(Wide.limb(b, 1)) &+ wide(highHalf(x0))
+        let x2 = wide(Wide.limb(a, 2)) &+ wide(Wide.limb(b, 2)) &+ wide(highHalf(x1))
+        let x3 = wide(Wide.limb(a, 3)) &+ wide(Wide.limb(b, 3)) &+ wide(highHalf(x2))
+        let x4 = wide(Wide.limb(a, 4)) &+ wide(Wide.limb(b, 4)) &+ wide(highHalf(x3))
+        let x5 = wide(Wide.limb(a, 5)) &+ wide(Wide.limb(b, 5)) &+ wide(highHalf(x4))
+        let x6 = wide(Wide.limb(a, 6)) &+ wide(Wide.limb(b, 6)) &+ wide(highHalf(x5))
+        let x7 = wide(Wide.limb(a, 7)) &+ wide(Wide.limb(b, 7)) &+ wide(highHalf(x6))
+        let x8 = wide(Wide.limb(a, 8)) &+ wide(Wide.limb(b, 8)) &+ wide(highHalf(x7))
+        // Less the modulus, if that leaves nothing to borrow from.
+        let z0 = wide(lowHalf(x0)) &- 0xFFFFFFFFFFFFFFFF
+        let z1 = wide(lowHalf(x1)) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z0) & 1)
+        let z2 = wide(lowHalf(x2)) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z1) & 1)
+        let z3 = wide(lowHalf(x3)) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z2) & 1)
+        let z4 = wide(lowHalf(x4)) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z3) & 1)
+        let z5 = wide(lowHalf(x5)) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z4) & 1)
+        let z6 = wide(lowHalf(x6)) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z5) & 1)
+        let z7 = wide(lowHalf(x7)) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z6) & 1)
+        let z8 = wide(lowHalf(x8)) &- 0x1FF &- wide(highHalf(z7) & 1)
+        let keep = maskOf(bit: (highHalf(z8) & 1) & (1 &- highHalf(x8)))
+        Wide.put(r, 0, (lowHalf(x0) & keep) | (lowHalf(z0) & ~keep))
+        Wide.put(r, 1, (lowHalf(x1) & keep) | (lowHalf(z1) & ~keep))
+        Wide.put(r, 2, (lowHalf(x2) & keep) | (lowHalf(z2) & ~keep))
+        Wide.put(r, 3, (lowHalf(x3) & keep) | (lowHalf(z3) & ~keep))
+        Wide.put(r, 4, (lowHalf(x4) & keep) | (lowHalf(z4) & ~keep))
+        Wide.put(r, 5, (lowHalf(x5) & keep) | (lowHalf(z5) & ~keep))
+        Wide.put(r, 6, (lowHalf(x6) & keep) | (lowHalf(z6) & ~keep))
+        Wide.put(r, 7, (lowHalf(x7) & keep) | (lowHalf(z7) & ~keep))
+        Wide.put(r, 8, (lowHalf(x8) & keep) | (lowHalf(z8) & ~keep))
+    }
+
+    unsafe static fn sub(_ r: Int, _ a: Int, _ b: Int) {
+        let x0 = wide(Wide.limb(a, 0)) &- wide(Wide.limb(b, 0))
+        let x1 = wide(Wide.limb(a, 1)) &- wide(Wide.limb(b, 1)) &- wide(highHalf(x0) & 1)
+        let x2 = wide(Wide.limb(a, 2)) &- wide(Wide.limb(b, 2)) &- wide(highHalf(x1) & 1)
+        let x3 = wide(Wide.limb(a, 3)) &- wide(Wide.limb(b, 3)) &- wide(highHalf(x2) & 1)
+        let x4 = wide(Wide.limb(a, 4)) &- wide(Wide.limb(b, 4)) &- wide(highHalf(x3) & 1)
+        let x5 = wide(Wide.limb(a, 5)) &- wide(Wide.limb(b, 5)) &- wide(highHalf(x4) & 1)
+        let x6 = wide(Wide.limb(a, 6)) &- wide(Wide.limb(b, 6)) &- wide(highHalf(x5) & 1)
+        let x7 = wide(Wide.limb(a, 7)) &- wide(Wide.limb(b, 7)) &- wide(highHalf(x6) & 1)
+        let x8 = wide(Wide.limb(a, 8)) &- wide(Wide.limb(b, 8)) &- wide(highHalf(x7) & 1)
+        // More by the modulus, if it is negative.
+        let under = maskOf(bit: highHalf(x8) & 1)
+        let z0 = wide(lowHalf(x0)) &+ wide(under)
+        let z1 = wide(lowHalf(x1)) &+ wide(under) &+ wide(highHalf(z0))
+        let z2 = wide(lowHalf(x2)) &+ wide(under) &+ wide(highHalf(z1))
+        let z3 = wide(lowHalf(x3)) &+ wide(under) &+ wide(highHalf(z2))
+        let z4 = wide(lowHalf(x4)) &+ wide(under) &+ wide(highHalf(z3))
+        let z5 = wide(lowHalf(x5)) &+ wide(under) &+ wide(highHalf(z4))
+        let z6 = wide(lowHalf(x6)) &+ wide(under) &+ wide(highHalf(z5))
+        let z7 = wide(lowHalf(x7)) &+ wide(under) &+ wide(highHalf(z6))
+        let z8 = wide(lowHalf(x8)) &+ wide(under & 0x1FF) &+ wide(highHalf(z7))
+        Wide.put(r, 0, lowHalf(z0))
+        Wide.put(r, 1, lowHalf(z1))
+        Wide.put(r, 2, lowHalf(z2))
+        Wide.put(r, 3, lowHalf(z3))
+        Wide.put(r, 4, lowHalf(z4))
+        Wide.put(r, 5, lowHalf(z5))
+        Wide.put(r, 6, lowHalf(z6))
+        Wide.put(r, 7, lowHalf(z7))
+        Wide.put(r, 8, lowHalf(z8))
+    }
+
+    /// A product of eighteen limbs, its low 521 bits and the rest added:
+    /// under twice the modulus.
+    @inline(always)
+    unsafe static fn reduce(_ r: Int, _ t0: U64, _ t1: U64, _ t2: U64, _ t3: U64, _ t4: U64, _ t5: U64, _ t6: U64, _ t7: U64, _ t8: U64, _ t9: U64, _ t10: U64, _ t11: U64, _ t12: U64, _ t13: U64, _ t14: U64, _ t15: U64, _ t16: U64, _ t17: U64) {
+        let x0 = wide(t0) &+ wide((t8 >> 9) | (t9 << 55))
+        let x1 = wide(t1) &+ wide((t9 >> 9) | (t10 << 55)) &+ wide(highHalf(x0))
+        let x2 = wide(t2) &+ wide((t10 >> 9) | (t11 << 55)) &+ wide(highHalf(x1))
+        let x3 = wide(t3) &+ wide((t11 >> 9) | (t12 << 55)) &+ wide(highHalf(x2))
+        let x4 = wide(t4) &+ wide((t12 >> 9) | (t13 << 55)) &+ wide(highHalf(x3))
+        let x5 = wide(t5) &+ wide((t13 >> 9) | (t14 << 55)) &+ wide(highHalf(x4))
+        let x6 = wide(t6) &+ wide((t14 >> 9) | (t15 << 55)) &+ wide(highHalf(x5))
+        let x7 = wide(t7) &+ wide((t15 >> 9) | (t16 << 55)) &+ wide(highHalf(x6))
+        let x8 = wide(t8 & 0x1FF) &+ wide((t16 >> 9) | (t17 << 55)) &+ wide(highHalf(x7))
+        let r0 = lowHalf(x0)
+        let r1 = lowHalf(x1)
+        let r2 = lowHalf(x2)
+        let r3 = lowHalf(x3)
+        let r4 = lowHalf(x4)
+        let r5 = lowHalf(x5)
+        let r6 = lowHalf(x6)
+        let r7 = lowHalf(x7)
+        let r8 = lowHalf(x8)
+        // Less the modulus, if that leaves nothing to borrow from.
+        let z0 = wide(r0) &- 0xFFFFFFFFFFFFFFFF
+        let z1 = wide(r1) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z0) & 1)
+        let z2 = wide(r2) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z1) & 1)
+        let z3 = wide(r3) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z2) & 1)
+        let z4 = wide(r4) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z3) & 1)
+        let z5 = wide(r5) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z4) & 1)
+        let z6 = wide(r6) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z5) & 1)
+        let z7 = wide(r7) &- 0xFFFFFFFFFFFFFFFF &- wide(highHalf(z6) & 1)
+        let z8 = wide(r8) &- 0x1FF &- wide(highHalf(z7) & 1)
+        let keep = maskOf(bit: (highHalf(z8) & 1))
+        Wide.put(r, 0, (r0 & keep) | (lowHalf(z0) & ~keep))
+        Wide.put(r, 1, (r1 & keep) | (lowHalf(z1) & ~keep))
+        Wide.put(r, 2, (r2 & keep) | (lowHalf(z2) & ~keep))
+        Wide.put(r, 3, (r3 & keep) | (lowHalf(z3) & ~keep))
+        Wide.put(r, 4, (r4 & keep) | (lowHalf(z4) & ~keep))
+        Wide.put(r, 5, (r5 & keep) | (lowHalf(z5) & ~keep))
+        Wide.put(r, 6, (r6 & keep) | (lowHalf(z6) & ~keep))
+        Wide.put(r, 7, (r7 & keep) | (lowHalf(z7) & ~keep))
+        Wide.put(r, 8, (r8 & keep) | (lowHalf(z8) & ~keep))
+    }
+}
+
+/// The modulus, 1 and the square of R; b, and the base point's x and y.
+let p521Constants: Int = constantTable([
+    0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF,
+    0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF,
+    0x00000000000001FF,
+    0x0000000000000001, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+    0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+    0x0000000000000000,
+    0x0000000000000001, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+    0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+    0x0000000000000000,
+    0xEF451FD46B503F00, 0x3573DF883D2C34F1, 0x1652C0BD3BB1BF07, 0x56193951EC7E937B,
+    0xB8B489918EF109E1, 0xA2DA725B99B315F3, 0x929A21A0B68540EE, 0x953EB9618E1C9A1F,
+    0x0000000000000051,
+    0xF97E7E31C2E5BD66, 0x3348B3C1856A429B, 0xFE1DC127A2FFA8DE, 0xA14B5E77EFE75928,
+    0xF828AF606B4D3DBA, 0x9C648139053FB521, 0x9E3ECB662395B442, 0x858E06B70404E9CD,
+    0x00000000000000C6,
+    0x88BE94769FD16650, 0x353C7086A272C240, 0xC550B9013FAD0761, 0x97EE72995EF42640,
+    0x17AFBD17273E662C, 0x98F54449579B4468, 0x5C8A5FB42C7D1BD9, 0x39296A789A3BC004,
+    0x0000000000000118,
+] as U64[>..])
+
+/// The base point's order.
+let p521Order = MontgomeryModulus(bigEndian: [
+    0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFA, 0x51, 0x86, 0x87, 0x83, 0xBF, 0x2F, 0x96, 0x6B, 0x7F, 0xCC, 0x01, 0x48, 0xF7, 0x09,
+    0xA5, 0xD0, 0x3B, 0xB5, 0xC9, 0xB8, 0x89, 0x9C, 0x47, 0xAE, 0xBB, 0x6F, 0xB7, 0x1E, 0x91, 0x38,
+    0x64, 0x09,
+])
+
+let p521BaseTable = LazyTable()

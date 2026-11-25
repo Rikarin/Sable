@@ -1,0 +1,99 @@
+module EcdhTests
+
+// ECDH on NIST's curves (Sable.Crypto): RFC 5903's agreements, and what is no
+// point. Run with tools/stdlib-coverage.sh Sable.Crypto; Wycheproof's are
+// tools/conformance/publickey.
+
+import Sable.Crypto
+import Sable.Testing
+import Sable.Text
+
+fn hex(_ text: String) -> U8[>..] {
+    return try! Hex.decode(text)
+}
+
+fn text(_ text: String) -> U8[>..] {
+    return text.utf8.toArray()
+}
+
+fn check<C: EllipticCurve>(_ curve: C.Type, _ i: String, _ r: String, _ gr: String, _ shared: String) {
+    let mine = try! EcdhPrivateKey<C>(hex(i))
+    let yours = try! EcdhPrivateKey<C>(hex(r))
+    assertEqual(Hex.encode(yours.publicKey.bytes), "04" + gr)
+    assertEqual(Hex.encode(mine.sharedSecret(with: yours.publicKey).bytes()), shared)
+    assertEqual(Hex.encode(yours.sharedSecret(with: mine.publicKey).bytes()), shared)
+}
+
+// RFC 5903 §8.
+@test
+fn theRfcsAgreementsAreMade() {
+    check(P256.self, "c88f01f510d9ac3f70a292daa2316de544e9aab8afe84049c62a9c57862d1433", "c6ef9c5d78ae012a011164acb397ce2088685d8f06bf9be0b283ab46476bee53",
+        "d12dfb5289c8d4f81208b70270398c342296970a0bccb74c736fc7554494bf6356fbf3ca366cc23e8157854c13c58d6aac23f046ada30f8353e74f33039872ab", "d6840f6b42f6edafd13116e0e12565202fef8e9ece7dce03812464d04b9442de")
+    check(P384.self, "099f3c7034d4a2c699884d73a375a67f7624ef7c6b3c0f160647b67414dce655e35b538041e649ee3faef896783ab194", "41cb0779b4bdb85d47846725fbec3c9430fab46cc8dc5060855cc9bda0aa2942e0308312916b8ed2960e4bd55a7448fc",
+        "e558dbef53eecde3d3fccfc1aea08a89a987475d12fd950d83cfa41732bc509d0d1ac43a0336def96fda41d0774a3571dcfbec7aacf3196472169e838430367f66eebe3c6e70c416dd5f0c68759dd1fff83fa40142209dff5eaad96db9e6386c", "11187331c279962d93d604243fd592cb9d0a926f422e47187521287e7156c5c4d603135569b9e9d09cf5d4a270f59746")
+}
+
+fn checkOwn<C: EllipticCurve>(_ curve: C.Type) {
+    let mine = EcdhPrivateKey<C>.generate()
+    let yours = EcdhPrivateKey<C>.generate()
+    assert(mine.sharedSecret(with: yours.publicKey) == yours.sharedSecret(with: mine.publicKey))
+    assertEqual(mine.sharedSecret(with: yours.publicKey).byteCount, C.curve.byteCount)
+    for key in [mine.publicKey, yours.publicKey] {
+        assert(try! EcdhPublicKey<C>(key.compressed) == key && EcdhPublicKey<C>(key.bytes) == key)
+    }
+    // The other y, and one of no point.
+    var other = mine.publicKey.compressed
+    other[0] = other[0] ^ 1
+    assert(try! EcdhPublicKey<C>(other) != mine.publicKey)
+    assert(try! yours.sharedSecret(with: EcdhPublicKey<C>(other)) == yours.sharedSecret(with: mine.publicKey))
+    var wrong = mine.publicKey.bytes
+    wrong[wrong.count - 1] = wrong[wrong.count - 1] ^ 1
+    assert((try? EcdhPublicKey<C>(wrong)) == none)
+    // Infinity, nothing, too few, another form, and coordinates over the modulus.
+    assert((try? EcdhPublicKey<C>([0])) == none && (try? EcdhPublicKey<C>([])) == none)
+    assert((try? EcdhPublicKey<C>(mine.publicKey.bytes[..<^1])) == none)
+    wrong = mine.publicKey.bytes
+    wrong[0] = 6
+    assert((try? EcdhPublicKey<C>(wrong)) == none)
+    var i = 1
+    while i < wrong.count {
+        wrong[i] = 0xFF
+        i += 1
+    }
+    wrong[0] = 4
+    assert((try? EcdhPublicKey<C>(wrong)) == none)
+    wrong = wrong[..<C.curve.byteCount + 1].toArray()
+    wrong[0] = 2
+    assert((try? EcdhPublicKey<C>(wrong)) == none)
+    assertEqual(mine.debugDescription(), "EcdhPrivateKey<\(C.curve)>")
+    assert(mine.publicKey.debugDescription().hasPrefix("EcdhPublicKey<\(C.curve)>(04"))
+    assert(mine != yours && (try! EcdhPrivateKey<C>(mine.bytes())) == mine)
+}
+
+@test
+fn bothSidesAgreeOnEveryCurve() {
+    checkOwn(P256.self)
+    checkOwn(P384.self)
+    checkOwn(P521.self)
+}
+
+// The multiples of the base point by small scalars, and by those near the
+// order, are the sums they should be: where the windows' digits are zero,
+// negative and at their ends.
+@test
+fn smallScalarsAgree() {
+    let other = EcdhPrivateKey<P256>.generate()
+    var scalar = 1
+    while scalar < 70 {
+        var bytes = U8[>..](repeating: 0, count: 32)
+        bytes[31] = U8(scalar)
+        let key = try! EcdhPrivateKey<P256>(bytes)
+        assert(key.sharedSecret(with: other.publicKey) == other.sharedSecret(with: key.publicKey))
+        bytes = hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551")
+        bytes[31] = bytes[31] - U8(scalar)
+        let opposite = try! EcdhPrivateKey<P256>(bytes)
+        assert(opposite.sharedSecret(with: other.publicKey) == key.sharedSecret(with: other.publicKey))
+        assert(opposite.publicKey != key.publicKey)
+        scalar += 1
+    }
+}

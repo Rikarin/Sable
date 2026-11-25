@@ -1,0 +1,19 @@
+module X25519Bench
+
+// X25519 against .NET's X25519DiffieHellman: 2000 agreements.
+
+import Sable.Crypto
+
+@main
+fn main() {
+    let mine = X25519PrivateKey.generate()
+    let yours = X25519PrivateKey.generate()
+    let theirs = yours.publicKey
+    var count = 0
+    var round = 0
+    while round < 2000 {
+        count += try! mine.sharedSecret(with: theirs).byteCount
+        round += 1
+    }
+    print("\(count)")
+}

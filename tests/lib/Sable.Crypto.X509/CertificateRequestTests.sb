@@ -1,0 +1,130 @@
+module CertificateRequestTests
+
+// CertificateRequest, CertificateBuilder and SignatureAlgorithm
+// (Sable.Crypto.X509). Run with tools/stdlib-coverage.sh Sable.Crypto.X509.
+
+import Sable.Crypto
+import Sable.Crypto.X509
+import Sable.Serialize.Asn1
+import Sable.Testing
+import Sable.Time
+
+let opensslRequest: String = """
+-----BEGIN CERTIFICATE REQUEST-----
+MIIBMzCBugIBADAOMQwwCgYDVQQDDANhc2swdjAQBgcqhkjOPQIBBgUrgQQAIgNi
+AATBHpJx7VFo2nM1SMny1rlgGKXOYRr9jU61jhMkzmxKoFxW37Bj2ISK/o+0UrLp
+Kqe90pB02O3OLds9fo8KuC7A1a0aQHfORtp0vFRcFLfCM1O+wYJr/yp813mvWkvO
+T4CgLTArBgkqhkiG9w0BCQ4xHjAcMBoGA1UdEQQTMBGCD2Fzay5leGFtcGxlLmNv
+bTAKBggqhkjOPQQDAgNoADBlAjBE+YvRuOPdy3P1aDtBvsPOYVITXVto5cUxE29p
+yIJaZJd5hMB+m0GGMHPeLmATuisCMQDD+MQe0q93+U8Aq9ZZFMe57P2xAmPMmfEq
+lQFBHT0ZBY9xcQsyp9tRW60n0UdFf7A=
+-----END CERTIFICATE REQUEST-----
+"""
+let rsaPem: String = """
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC65MtLQOBeCx5W
+vZGBNZ1bOztPwvFP/DsDlUX7BqAabc2eFZDsAYEd1M4crZhZdTD+egAB/kYQFRSa
+vAp3NNgIe+yeeuR55klscOC8bf8e2Ro+FBoxSI7xBXCXrrVJOtWXK7yVLO7E6/Ud
+Q+4oAltd4ZPH7liumXOIJPsjUo9oNx+q2JC9UgV+mtxKCbp0DpIgV7VtyOMJnfxz
+Sv4VVeek8txtXAtncUT9FVygKBTzIFEjcwU3sTUqxcVKUSUKMQtoUkY6PebwNpkk
+Ohs9lCyRvz+JhD+W+bHiyZ9al0/yROkJEPpLkT/tMV1uJTmVehMMhyG1a9598/g3
+DFTPqzjZAgMBAAECggEAAJwxITVsrE9ndEeolbpP/fqN7R789kmvhltanT9LIxgi
+wX03v1kfE2bqYMQivWpbU6sNgUJiFcEfyhA2p40zz6jfNHe+MSN7AsMVxy4R/Tj0
+LBNGKQFCZhdbJRRv1VImbYzXiN7SgENvZfeevDn9MAus2l9q6Rh0EPnbvslc8sGZ
+58/VhUMWIrTbq0EJE4jVNnDwessE1qyZLUZKpVMcsQKQoxr31qK+x02yvkwK0+We
+eyN8z5tfyCcWkLBzivwvZUGi20iLTAK+TZoAkVRYBFJne7GMbOmu7SDAw3x6oqgD
+n2Z2tzPiXU3uRjrjQ2Cwfvi3EfXMsFHOaG0qxkWLUQKBgQD+JSNvA08JZymY7TD0
+M4BMkLXnpJEUHUA8dIQlXpZnPJQ49rr4IMZQdEFwU6UwYSk8GoKg1cWKTL920dtZ
+E0SRPdqysaQOo+I2OU1elR9uegpX3w/lDIHGcCZgai+ks4suHqVpoc4XhczPDQwf
+mwxwdOxgeiif+fz+LYGlNSsY6QKBgQC8Qf+yBzGcpK/TlBvP8h/cR9Fn6YmdPv4I
+YhsPZPJpwRyDj+s2Tk51WqwanYYKI+Qji3/7jKtkWYecWgzgYy6be/z7xKhq6MCF
+GA+3WPmWg3fThfdZdmxvUOAlCEc3dhNA7+lprQy3BuZ+ABKOaDDGA3ILY/UE4iHb
+lbVSX7cqcQKBgC+qv46ezEAzPTYVpszmq/WwXq3ny9497kJoiDCKISOT1Skp/b90
+Rj3o0C1FQwJj9tvzDPUlozthUbfzfHSkjIPBWjeR4fds/Yy2CrDmv1J1SWNZzx1i
+zyRs/IWw5Oa7Vit8TAIX+xOmYNek1tVGu3qMM5mUz/HRbYYu+tYFtuOhAoGAcnw0
+cmCblCY24xVsAH6/T2fBek70qFL5i8GVsTvzi8qre3qXURQ39Hgqt5jaPeprwA4C
+y8hVJpanuLauo/rNCjNRuw5yWWmoQohKbnbGefkDcvhCXv58nQly9jJdlOXSeags
+q15YoCmrHC8RGddU6eaIgVLNW6XlbzNQ7IJW0pECgYEAlGydPaK+OfCl2wXhBPv8
+kvDwvi+746ZUccBnKvlJHDiGe/sJJ8BBvHPexoBQV08zTc1jbYR2jgjzZkSwT2sL
+sWYzfyYtfgreZPLAF9YUkTJ6zP2FOUf+DkefXogiKZEISAccpyhmkuMn1dWWuhm0
+Xr4BpNp+0xb+YeUA8TvmAdw=
+-----END PRIVATE KEY-----
+"""
+
+@test
+fn opensslsRequestIsRead() {
+    let request = try! CertificateRequest.parse(pem: opensslRequest)
+    assertEqual(request.debugDescription(), "CertificateRequest(CN=ask)")
+    assert(request.isSigned && request.alternativeNames == [.Dns("ask.example.com")] && request.extensions.count == 1)
+    assertEqual(request.pem.trimmed(), opensslRequest.trimmed())
+    var der = request.der
+    der[der.count - 1] = der[der.count - 1] ^ 1
+    assert(!(try! CertificateRequest.parse(der: der)).isSigned)
+    assert((try? CertificateRequest.parse(der: der[..<^1])) == none && (try? CertificateRequest.parse(pem: rsaPem)) == none)
+}
+
+@test
+fn everyKeysRequestIsSigned() {
+    let keys = [EcdsaPrivateKey<P256>.generate().anyKey, EcdsaPrivateKey<P384>.generate().anyKey, EcdsaPrivateKey<P521>.generate().anyKey, Ed25519PrivateKey.generate().anyKey, try! PrivateKey.parse(pem: rsaPem)]
+    for key in keys {
+        let request = try! CertificateRequest.make(subject: DistinguishedName(commonName: "x"), names: [.Dns("a.example"), .Uri("https://a.example/")], key: key)
+        assert(request.isSigned && request.subject.first(.commonName) == "x" && request.alternativeNames.count == 2)
+        assert(try! request.publicKey() == key.publicKey)
+        let empty = try! CertificateRequest.make(subject: DistinguishedName([]), names: [], key: key)
+        assert(empty.isSigned && empty.extensions.isEmpty)
+        let certificate = try! CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: key)
+        assert(certificate.isSigned(by: key.publicKey) && certificate.alternativeNames.isEmpty)
+    }
+    assert((try? CertificateRequest.make(subject: DistinguishedName([]), names: [], key: X25519PrivateKey.generate().anyKey)) == none)
+    assert((try? CertificateRequest.make(subject: DistinguishedName([]), names: [], key: keys[3], algorithm: .Ecdsa(.Sha256))) == none)
+}
+
+// A byte of it changed is another request, or none, and never traps.
+@test
+fn whatIsNoRequestIsRefused() {
+    let request = try! CertificateRequest.parse(pem: opensslRequest)
+    var i = 0
+    var signed = 0
+    while i < request.der.count {
+        var der = request.der
+        der[i] = der[i] ^ 0x21
+        if let other = try? CertificateRequest.parse(der: der) {
+            signed += other.isSigned ? 1 : 0
+        }
+        i += 1
+    }
+    assertEqual(signed, 0)
+}
+
+@test
+fn otherAlgorithmsAreWrittenAndRead() {
+    let rsa = try! PrivateKey.parse(pem: rsaPem)
+    for algorithm in [SignatureAlgorithm.RsaPkcs1(.Sha384), SignatureAlgorithm.RsaPkcs1(.Sha512), SignatureAlgorithm.RsaPss(.Sha384, maskHash: .Sha256, saltByteCount: 20)] {
+        let certificate = try! CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: rsa, algorithm: algorithm)
+        assert(certificate.signatureAlgorithm == algorithm && certificate.isSigned(by: rsa.publicKey))
+    }
+    let key = EcdsaPrivateKey<P256>.generate().anyKey
+    let certificate = try! CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: key, algorithm: .Ecdsa(.Sha512))
+    assert(certificate.signatureAlgorithm == .Ecdsa(.Sha512) && certificate.isSigned(by: key.publicKey) && !certificate.isSigned(by: rsa.publicKey))
+}
+
+@test
+fn whatABuilderIsGivenIsWritten() {
+    let key = Ed25519PrivateKey.generate().anyKey
+    var builder = CertificateBuilder(subject: DistinguishedName(commonName: "x"), isAuthority: true)
+    builder.notBefore = UtcDateTime.of(year: 2049, month: 12, day: 31, hour: 23, minute: 59, second: 59)!
+    builder.notAfter = UtcDateTime.of(year: 2050, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+    builder.basicConstraints = BasicConstraints(isAuthority: true, pathLength: 3)
+    builder.keyUsage = [.KeyCertSign, .CrlSign, .DecipherOnly]
+    builder.nameConstraints = NameConstraints(permitted: [.Dns("example.com"), .Ip([10, 0, 0, 0, 255, 0, 0, 0])], excluded: [.Email("x@example.com")])
+    builder.alternativeNames = [.Dns("a"), .Ip([1, 2, 3, 4]), .Email("a@b"), .Uri("x:y"), .Directory(DistinguishedName(commonName: "n")), .Other(ObjectIdentifier([1, 2, 3]), [5, 0]), .RegisteredId(ObjectIdentifier([1, 2])), .Unknown([0xA3, 0x00])]
+    builder.purposes = [KeyPurpose.timeStamping, KeyPurpose.ocspSigning, KeyPurpose.emailProtection]
+    builder.serialNumber = [0xFF, 1]
+    let made = try! builder.selfSigned(with: key)
+    assert(made.notBefore == builder.notBefore && made.notAfter == builder.notAfter)
+    assert(made.basicConstraints == builder.basicConstraints && made.keyUsage == builder.keyUsage)
+    assert(made.nameConstraints == builder.nameConstraints && made.alternativeNames == builder.alternativeNames)
+    assert(made.purposes! == builder.purposes && made.serialNumber == [0, 0xFF, 1])
+    builder.keyUsage = .None
+    assert((try! builder.selfSigned(with: key)).keyUsage == none)
+}

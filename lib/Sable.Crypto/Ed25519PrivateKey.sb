@@ -1,0 +1,123 @@
+module Sable.Crypto
+
+/// An Ed25519 key to sign with (RFC 8032): 32 bytes, the seed, from which
+/// the rest is derived. A signature is of 64 bytes, and the same for the
+/// same message, as its nonce comes from the key and the message.
+///
+/// ```sable
+/// let key = Ed25519PrivateKey.generate()
+/// let signature = key.sign("a message".utf8.toArray())
+/// assert(key.publicKey.isValid(signature, for: "a message".utf8.toArray()))
+/// assert(!key.publicKey.isValid(signature, for: "another".utf8.toArray()))
+/// ```
+public struct Ed25519PrivateKey: Equatable, Debug, Sendable {
+    // The seed, the scalar and the prefix nonces are hashed from, 32 bytes each.
+    let memory: SecretMemory
+
+    /// The key others check the signatures with.
+    public let publicKey: Ed25519PublicKey
+
+    /// The key of a seed of 32 bytes.
+    ///
+    /// ```sable
+    /// let key = try! Ed25519PrivateKey(seed: U8[>..](repeating: 7, count: 32))
+    /// assert(key.seed() == U8[>..](repeating: 7, count: 32))
+    /// ```
+    public init(seed: U8[:]) throws(CryptoError) {
+        if seed.count != 32 {
+            throw CryptoError.InvalidKey(reason: "an Ed25519 seed of \(seed.count) bytes, not 32")
+        }
+        self.init(checked: seed)
+    }
+
+    init(checked seed: U8[:]) {
+        let memory = SecretMemory(count: 96)
+        var digest = Sha512.hash(seed).bytes
+        digest[0] = digest[0] & 248
+        digest[31] = (digest[31] & 127) | 64
+        var encoded: U8[>..] = []
+        unsafe {
+            store(seed, at: memory.address)
+            Wide.fromLittleEndian(memory.address + 32, digest[..<32], 4)
+            store(digest[32...], at: memory.address + 64)
+            let point = SecretMemory(count: 192)
+            Edwards25519.multiplyBase(point.address, memory.address + 32)
+            Edwards25519.pack(point.address + 160, point.address)
+            Wide.appendLittleEndian(to: &encoded, point.address + 160, count: 32)
+        }
+        digest.zeroSecurely()
+        self.memory = memory
+        publicKey = Ed25519PublicKey(checked: encoded)
+    }
+
+    /// A new key from the system's random source.
+    public static fn generate() -> Ed25519PrivateKey {
+        var seed = SecureRandom.bytes(32)
+        let key = Ed25519PrivateKey(checked: seed)
+        seed.zeroSecurely()
+        return key
+    }
+
+    /// The seed the key is derived from: the private key as RFC 8032 has it.
+    public fn seed() -> U8[>..] {
+        return memory.bytes(from: 0, count: 32)
+    }
+
+    /// The message's signature, of 64 bytes.
+    public fn sign(_ message: U8[:]) -> U8[>..] {
+        var nonceHash = Sha512()
+        var secret = memory.bytes(from: 64, count: 32)
+        nonceHash.update(secret)
+        secret.zeroSecurely()
+        nonceHash.update(message)
+        var nonce = nonceHash.finalizeAndReset().bytes
+        let order = ed25519Order
+        let work = SecretMemory(count: 64 + 32 + 32 + 32 + 192 + order.powerScratchBytes)
+        let wideScalar = work.address
+        let r = wideScalar + 64
+        let k = r + 32
+        let a = k + 32
+        let point = a + 32
+        let scratch = point + 192
+        var signature: U8[>..] = []
+        unsafe {
+            Wide.fromLittleEndian(wideScalar, nonce, 8)
+            order.reduce(r, wideScalar, 8, scratch: scratch)
+            order.leave(k, r, scratch: scratch)
+            Edwards25519.multiplyBase(point, k)
+            Edwards25519.pack(point + 160, point)
+            Wide.appendLittleEndian(to: &signature, point + 160, count: 32)
+            var challenge = Sha512()
+            challenge.update(signature)
+            challenge.update(publicKey.bytes)
+            challenge.update(message)
+            Wide.fromLittleEndian(wideScalar, challenge.finalizeAndReset().bytes, 8)
+            order.reduce(k, wideScalar, 8, scratch: scratch)
+            order.enter(a, memory.address + 32, scratch: scratch)
+            order.multiply(k, k, a, scratch: scratch)
+            order.add(r, r, k)
+            order.leave(r, r, scratch: scratch)
+            Wide.appendLittleEndian(to: &signature, r, count: 32)
+        }
+        nonce.zeroSecurely()
+        return signature
+    }
+
+    /// Whether the two are the same key, in constant time.
+    public operator == (lhs: Ed25519PrivateKey, rhs: Ed25519PrivateKey) -> Bool {
+        unsafe {
+            return Wide.equalMask(lhs.memory.address, rhs.memory.address, 4) != 0
+        }
+    }
+
+    /// What kind of key it is, and not what it is.
+    public fn debugDescription() -> String {
+        return "Ed25519PrivateKey"
+    }
+}
+
+/// The order of the base point: 2^252 + 27742317777372353535851937790883648493.
+let ed25519Order = MontgomeryModulus(bigEndian: [
+    0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x14, 0xDE, 0xF9, 0xDE, 0xA2, 0xF7, 0x9C, 0xD6, 0x58, 0x12, 0x63, 0x1A, 0x5C, 0xF5, 0xD3, 0xED,
+])

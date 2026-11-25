@@ -2776,6 +2776,9 @@ public static class SilBuiltins {
         Add("bytes_secure_zero", SilType.Unit, SilType.Address(new SliceType(SilType.U8)));
         Add("raw_random", SilType.Unit, SilType.Int, SilType.Int);
         Add("raw_secure_zero", SilType.Unit, SilType.Int, SilType.Int);
+        // The value, through a register the optimiser cannot see into: a mask
+        // made from a secret bit stays a mask, and no branch is made of it.
+        Add("value_barrier", SilType.U64, SilType.U64);
         // Blocks of Base64 or Hex (where they go, the codec, the source), by
         // the processor's own instructions: how much of the source was done.
         Add("codec_bytes_bytes", SilType.Int, SilType.Address(new SliceType(SilType.U8)), SilType.Int, new SliceType(SilType.U8), SilType.Int);
@@ -2788,6 +2791,10 @@ public static class SilBuiltins {
         Add("crypto_cipher", SilType.Bool, SilType.Address(new SliceType(SilType.U8)), SilType.Int, SilType.Int, SilType.Int, new SliceType(SilType.U8), new SliceType(SilType.U8));
         Add("crypto_cipher_in_place", SilType.Bool, SilType.Address(new SliceType(SilType.U8)), SilType.Int, SilType.Int, SilType.Int, new SliceType(SilType.U8));
         Add("crypto_cipher_raw", SilType.Bool, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        // Sable.Crypto.X509's: the system's trusted certificates, in a block
+        // at an address, or 0; and the block freed.
+        Add("trust_load", SilType.Int);
+        Add("trust_free", SilType.Unit, SilType.Int);
         // Sable.Math's kernels over arrays of floats, where the processor has
         // more than the target's baseline: whether it has, a reduction of one
         // slice or two by its number (the sum, dot product or cosine), and an

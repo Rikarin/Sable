@@ -1,0 +1,53 @@
+module Sable.Crypto
+
+/// A private key of one algorithm, read and written in the formats they all
+/// have: PKCS #8 (RFC 5958), as DER or PEM, and JWK (RFC 7517). What is
+/// written is the secret, in an array or text that nothing zeroes.
+///
+/// ```sable
+/// let key = Ed25519PrivateKey.generate()
+/// assert(key.pem().hasPrefix("-----BEGIN PRIVATE KEY-----"))
+/// assert(try! Ed25519PrivateKey.parse(pem: key.pem()) == key)
+/// assert(try! Ed25519PrivateKey.parse(pkcs8: key.pkcs8()) == key)
+/// assert(try! Ed25519PrivateKey.parse(jwk: key.jwk()) == key)
+/// ```
+public protocol AsymmetricPrivateKey: Sendable {
+    /// The key of any algorithm, if it is of this one.
+    init(_ key: PrivateKey) throws(CryptoError)
+
+    /// The key as one of any algorithm.
+    var anyKey: PrivateKey { get }
+}
+
+extension AsymmetricPrivateKey {
+    /// The key of a PKCS #8 PrivateKeyInfo, in DER.
+    public static fn parse(pkcs8: U8[:]) throws(CryptoError) -> Self {
+        return try Self(PrivateKey.parse(pkcs8: pkcs8))
+    }
+
+    /// The key of a PKCS #8 PrivateKeyInfo, in PEM; of an RSA key, a PKCS #1
+    /// one too, and of a NIST curve's, a SEC 1 one.
+    public static fn parse(pem: String) throws(CryptoError) -> Self {
+        return try Self(PrivateKey.parse(pem: pem))
+    }
+
+    /// The key of a JWK.
+    public static fn parse(jwk: String) throws(CryptoError) -> Self {
+        return try Self(PrivateKey.parse(jwk: jwk))
+    }
+
+    /// The key as a PKCS #8 PrivateKeyInfo, in DER.
+    public fn pkcs8() -> U8[>..] {
+        return anyKey.pkcs8()
+    }
+
+    /// The key as a PKCS #8 PrivateKeyInfo, in PEM.
+    public fn pem() -> String {
+        return anyKey.pem()
+    }
+
+    /// The key as a JWK.
+    public fn jwk() -> String {
+        return anyKey.jwk()
+    }
+}

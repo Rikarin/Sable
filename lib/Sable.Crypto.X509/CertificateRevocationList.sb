@@ -1,0 +1,185 @@
+module Sable.Crypto.X509
+
+import Sable.Crypto
+import Sable.Serialize.Asn1
+import Sable.Time
+
+/// The certificates an issuer says hold no longer (RFC 5280 §5).
+///
+/// ```sable
+/// do {
+///     _ = try CertificateRevocationList.parse(der: [0x30, 0x00])
+/// } catch {
+///     assert(error.description().hasPrefix("not a revocation list"))
+/// }
+/// ```
+public struct CertificateRevocationList: Sendable {
+    /// Whose certificates they are.
+    public let issuer: DistinguishedName
+
+    /// When the list was made.
+    public let thisUpdate: UtcDateTime
+
+    /// By when there is to be another.
+    public let nextUpdate: UtcDateTime?
+
+    /// The certificates.
+    public let revoked: RevokedCertificate[>..]
+
+    /// The list's extensions.
+    public let extensions: CertificateExtension[>..]
+
+    /// The list in DER.
+    public let der: U8[>..]
+
+    let signed: U8[>..]
+    let signatureAlgorithm: SignatureAlgorithm
+    let signature: U8[>..]
+    let bySerial: [U8[>..]: Int]
+
+    /// The list encoded in DER.
+    public static fn parse(der encoded: U8[:]) throws(CertificateError) -> CertificateRevocationList {
+        do {
+            return try CertificateRevocationList(reading: encoded)
+        } catch {
+            throw CertificateError.Malformed(reason: "not a revocation list: \(error.description())")
+        }
+    }
+
+    /// The text's first list in PEM.
+    public static fn parse(pem: String) throws(CertificateError) -> CertificateRevocationList {
+        return try CertificateRevocationList.parse(der: try PemText.first(pem, "X509 CRL").bytes)
+    }
+
+    init(reading encoded: U8[:]) throws(AsnError) {
+        var reader = AsnReader(encoded, rules: .Der)
+        var outer = try reader.readSequence()
+        try reader.finish()
+        let signed = try outer.peekEncoded()
+        var body = try outer.readSequence()
+        let algorithmBytes = try outer.peekEncoded()
+        let algorithm = try SignatureAlgorithm(reading: &outer)
+        let bits = try outer.readBitString()
+        if bits.unusedBits != 0 {
+            throw AsnError.Malformed(at: outer.position, reason: "a signature that is not whole bytes")
+        }
+        try outer.finish()
+
+        if body.isNext(.integer) {
+            if try body.readInt() != 1 {
+                throw AsnError.OutOfRange(at: body.position, reason: "another version")
+            }
+        }
+        if try body.peekEncoded() != algorithmBytes {
+            throw AsnError.Malformed(at: body.position, reason: "two signature algorithms")
+        }
+        _ = try body.readEncoded()
+        issuer = try DistinguishedName(read: try body.readEncoded())
+        thisUpdate = try CertificateContents.readTime(&body)
+        var next: UtcDateTime? = none
+        if body.isNext(.utcTime) || body.isNext(.generalizedTime) {
+            next = try CertificateContents.readTime(&body)
+        }
+        var revoked: RevokedCertificate[>..] = []
+        var bySerial: [U8[>..]: Int] = [:]
+        if body.isNext(.sequence) {
+            var sequence = try body.readSequence()
+            while !sequence.isAtEnd {
+                let one = try CertificateRevocationList.readRevoked(&sequence)
+                if bySerial[one.serialNumber] != none {
+                    throw AsnError.Malformed(at: sequence.position, reason: "a certificate twice")
+                }
+                bySerial[one.serialNumber] = revoked.count
+                revoked.append(one)
+            }
+            if revoked.isEmpty {
+                throw AsnError.Malformed(at: body.position, reason: "an empty list that is written")
+            }
+        }
+        var extensions: CertificateExtension[>..] = []
+        if body.isNext(.context(0)) {
+            var explicit = try body.readExplicit(.context(0))
+            extensions = try CertificateExtension.readAll(&explicit)
+            try explicit.finish()
+        }
+        try body.finish()
+        nextUpdate = next
+        self.revoked = revoked
+        self.bySerial = bySerial
+        self.extensions = extensions
+        der = encoded.toArray()
+        self.signed = signed.toArray()
+        signatureAlgorithm = algorithm
+        signature = bits.bytes.toArray()
+    }
+
+    static fn readRevoked(_ reader: inout AsnReader) throws(AsnError) -> RevokedCertificate {
+        var entry = try reader.readSequence()
+        let serial = try entry.readIntegerBytes()
+        let date = try CertificateContents.readTime(&entry)
+        var reason: Int? = none
+        if !entry.isAtEnd {
+            for each in try CertificateExtension.readAll(&entry) {
+                if each.identifier == KnownExtensions.reasonCode {
+                    var value = AsnReader(each.value, rules: .Der)
+                    reason = try value.readEnumerated()
+                    try value.finish()
+                } else if each.isCritical && each.identifier != KnownExtensions.invalidityDate {
+                    throw AsnError.Malformed(at: entry.position, reason: "a critical extension that is not known: \(each.identifier)")
+                }
+            }
+        }
+        try entry.finish()
+        return RevokedCertificate(serialNumber: serial, date: date, reason: reason)
+    }
+
+    /// Whether the key signed it.
+    public fn isSigned(by key: PublicKey) -> Bool {
+        return signatureAlgorithm.isValid(signature, for: signed, key: key)
+    }
+
+    /// The certificate's entry, if the list has it. Whether the list is of
+    /// its issuer is not asked.
+    public fn entry(for certificate: Certificate) -> RevokedCertificate? {
+        guard let index = bySerial[certificate.serialNumber] else {
+            return none
+        }
+        return revoked[index]
+    }
+
+    /// That the list holds, and says nothing of the certificate.
+    fn check(_ certificate: Certificate, issuer by: Certificate, at time: UtcDateTime, profile: CertificateProfile) throws(CertificateError) {
+        if let usage = by.keyUsage {
+            if !usage.contains(.CrlSign) {
+                throw CertificateError.NotForPurpose(reason: "the key of \(issuer) is not for signing revocation lists")
+            }
+        }
+        if !self.isSigned(by: try by.publicKey()) {
+            throw CertificateError.Invalid(reason: "the revocation list of \(issuer) is not signed with its key")
+        }
+        var isNumbered = false
+        for each in extensions {
+            if each.identifier == KnownExtensions.crlNumber {
+                isNumbered = !each.isCritical
+            } else if each.isCritical {
+                throw CertificateError.Invalid(reason: "the revocation list of \(issuer) has a critical extension that is not known: \(each.identifier)")
+            }
+        }
+        if profile != .Compatible && !isNumbered {
+            throw CertificateError.Invalid(reason: "the revocation list of \(issuer) has no number, or a critical one")
+        }
+        if time.secondsSinceEpoch < thisUpdate.secondsSinceEpoch {
+            throw CertificateError.Invalid(reason: "the revocation list of \(issuer) does not hold yet")
+        }
+        if let nextUpdate {
+            if time.secondsSinceEpoch > nextUpdate.secondsSinceEpoch {
+                throw CertificateError.Invalid(reason: "the revocation list of \(issuer) is out of date")
+            }
+        } else if profile != .Compatible {
+            throw CertificateError.Invalid(reason: "the revocation list of \(issuer) does not say when it is out of date")
+        }
+        if self.entry(for: certificate) != none {
+            throw CertificateError.Revoked(subject: "\(certificate.subject)")
+        }
+    }
+}

@@ -1,0 +1,90 @@
+module Sable.Crypto.X509
+
+import Sable.Serialize.Asn1
+
+/// An extension of a certificate's (RFC 5280 §4.2): what it is, and its
+/// value as it is encoded. A verifier that does not know a critical one does
+/// not take the certificate.
+///
+/// ```sable
+/// let mark = CertificateExtension(ObjectIdentifier([1, 3, 6, 1, 4, 1, 99999, 1]), isCritical: false, value: [0x05, 0x00])
+/// assert(!mark.isCritical && mark.value == [0x05, 0x00])
+/// ```
+@derive(Equatable, Debug)
+public struct CertificateExtension: Sendable {
+    /// What it is.
+    public let identifier: ObjectIdentifier
+
+    /// Whether a certificate is not to be taken without knowing it.
+    public let isCritical: Bool
+
+    /// Its value, in DER.
+    public let value: U8[>..]
+
+    public init(_ identifier: ObjectIdentifier, isCritical: Bool, value: U8[:]) {
+        self.identifier = identifier
+        self.isCritical = isCritical
+        self.value = value.toArray()
+    }
+
+    init(reading reader: inout AsnReader) throws(AsnError) {
+        var sequence = try reader.readSequence()
+        identifier = try sequence.readObjectIdentifier()
+        var critical = false
+        if sequence.isNext(.bool) {
+            critical = try sequence.readBool()
+            if !critical {
+                throw AsnError.NotCanonical(at: sequence.position, reason: "a default that is written")
+            }
+        }
+        isCritical = critical
+        value = try sequence.readOctetString().toArray()
+        try sequence.finish()
+    }
+
+    /// Extensions: one or more, none of them twice.
+    static fn readAll(_ reader: inout AsnReader) throws(AsnError) -> CertificateExtension[>..] {
+        var sequence = try reader.readSequence()
+        var all: CertificateExtension[>..] = []
+        while !sequence.isAtEnd {
+            let one = try CertificateExtension(reading: &sequence)
+            for other in all {
+                if other.identifier == one.identifier {
+                    throw AsnError.Malformed(at: sequence.position, reason: "the extension \(one.identifier) twice")
+                }
+            }
+            all.append(one)
+        }
+        if all.isEmpty {
+            throw AsnError.Malformed(at: reader.position, reason: "no extensions, where some are said to be")
+        }
+        return all
+    }
+
+    fn write(_ writer: AsnWriter) throws(AsnError) {
+        try writer.beginSequence()
+        try writer.writeObjectIdentifier(identifier)
+        if isCritical {
+            try writer.writeBool(true)
+        }
+        try writer.writeOctetString(value)
+        try writer.endSequence()
+    }
+}
+
+/// The extensions the library knows.
+struct KnownExtensions {
+    static let subjectKeyIdentifier: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 14])
+    static let keyUsage: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 15])
+    static let subjectAlternativeName: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 17])
+    static let basicConstraints: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 19])
+    static let crlNumber: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 20])
+    static let reasonCode: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 21])
+    static let invalidityDate: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 24])
+    static let nameConstraints: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 30])
+    static let certificatePolicies: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 32])
+    static let authorityKeyIdentifier: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 35])
+    static let policyConstraints: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 36])
+    static let extendedKeyUsage: ObjectIdentifier = ObjectIdentifier([2, 5, 29, 37])
+    static let authorityInformation: ObjectIdentifier = ObjectIdentifier([1, 3, 6, 1, 5, 5, 7, 1, 1])
+}

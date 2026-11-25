@@ -654,6 +654,8 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_crypto_blocks_raw(i64, ptr, ptr, i64)
                                 declare zeroext i1 @sable_crypto_cipher(i64, ptr, ptr, ptr, i64, i64, ptr, i64, i64, ptr)
                                 declare zeroext i1 @sable_cipher(i64, ptr, ptr, ptr, i64, ptr, ptr, i64)
+                                declare i64 @sable_trust_load()
+                                declare void @sable_trust_free(i64)
                                 declare zeroext i1 @sable_vector_available()
                                 @sable_processor_known = external global i32
                                 declare float @sable_vector_reduce_F32(i64, ptr, i64, i64, ptr, i64)
@@ -4855,6 +4857,12 @@ public sealed partial class LlvmEmitter {
                     Line($"call void asm sideeffect \"\", \"r,~{{memory}}\"(ptr {operands[0]})");
                     return;
 
+                // An empty assembly statement whose result is its operand, in a
+                // register: nothing is stored, and LLVM knows nothing of it.
+                case "value_barrier":
+                    Line($"{Result()} = call i64 asm \"\", \"=r,0\"(i64 {operands[0]})");
+                    return;
+
                 // The only reference, and not immortal: free to change in place.
                 case "ref_is_unique": {
                     var objectPointer = Fresh();
@@ -5049,6 +5057,14 @@ public sealed partial class LlvmEmitter {
 
                 case "crypto_blocks_raw":
                     Line($"{Result()} = call zeroext i1 @sable_crypto_blocks_raw(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");
+                    return;
+
+                case "trust_load":
+                    Line($"{Result()} = call i64 @sable_trust_load()");
+                    return;
+
+                case "trust_free":
+                    Line($"call void @sable_trust_free(i64 {operands[0]})");
                     return;
 
                 // Only an x86-64 processor has kernels to be asked for: elsewhere

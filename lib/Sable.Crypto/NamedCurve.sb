@@ -1,0 +1,102 @@
+module Sable.Crypto
+
+/// NIST's curves over prime fields (FIPS 186-5, SP 800-186), one of which is
+/// chosen as the program runs: what a key of any curve says it is of.
+///
+/// ```sable
+/// assert(NamedCurve.P384.byteCount == 48)
+/// assert(P384.curve == NamedCurve.P384)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public enum NamedCurve: Sendable {
+    P256
+    P384
+    P521
+
+    /// How many bytes a private key, or a coordinate, has.
+    public var byteCount: Int => match self {
+        case .P256 => 32
+        case .P384 => 48
+        case .P521 => 66
+    }
+
+    /// The hash function its signatures are usually of.
+    public var defaultHash: HashAlgorithm => match self {
+        case .P256 => .Sha256
+        case .P384 => .Sha384
+        case .P521 => .Sha512
+    }
+
+    /// The scalar those bytes are, if they are one.
+    fn scalar(_ bytes: U8[:]) -> SecretMemory? {
+        return match self {
+            case .P256 => EcOperations<P256Field>.scalar(bytes)
+            case .P384 => EcOperations<P384Field>.scalar(bytes)
+            case .P521 => EcOperations<P521Field>.scalar(bytes)
+        }
+    }
+
+    /// A random scalar.
+    fn randomScalar() -> SecretMemory {
+        return match self {
+            case .P256 => EcOperations<P256Field>.randomScalar()
+            case .P384 => EcOperations<P384Field>.randomScalar()
+            case .P521 => EcOperations<P521Field>.randomScalar()
+        }
+    }
+
+    /// The scalar's public key, uncompressed.
+    fn publicKey(_ scalar: SecretMemory) -> U8[>..] {
+        return match self {
+            case .P256 => EcOperations<P256Field>.publicKey(scalar)
+            case .P384 => EcOperations<P384Field>.publicKey(scalar)
+            case .P521 => EcOperations<P521Field>.publicKey(scalar)
+        }
+    }
+
+    /// The point, uncompressed, if it is one.
+    fn decode(_ bytes: U8[:]) -> U8[>..]? {
+        return match self {
+            case .P256 => EcOperations<P256Field>.decode(bytes)
+            case .P384 => EcOperations<P384Field>.decode(bytes)
+            case .P521 => EcOperations<P521Field>.decode(bytes)
+        }
+    }
+
+    /// The x-coordinate of the point's multiple.
+    fn agree(_ scalar: SecretMemory, _ point: U8[:]) -> SecretMemory {
+        return match self {
+            case .P256 => EcOperations<P256Field>.agree(scalar, point)
+            case .P384 => EcOperations<P384Field>.agree(scalar, point)
+            case .P521 => EcOperations<P521Field>.agree(scalar, point)
+        }
+    }
+
+    /// The digest's signature.
+    fn sign(_ scalar: SecretMemory, digest: U8[:], hash: HashAlgorithm, added: U8[:]) -> U8[>..] {
+        return match self {
+            case .P256 => EcOperations<P256Field>.sign(scalar, digest: digest, hash: hash, added: added)
+            case .P384 => EcOperations<P384Field>.sign(scalar, digest: digest, hash: hash, added: added)
+            case .P521 => EcOperations<P521Field>.sign(scalar, digest: digest, hash: hash, added: added)
+        }
+    }
+
+    /// Whether it is the digest's signature.
+    fn isValid(_ signature: U8[:], digest: U8[:], point: U8[:]) -> Bool {
+        return match self {
+            case .P256 => EcOperations<P256Field>.isValid(signature, digest: digest, point: point)
+            case .P384 => EcOperations<P384Field>.isValid(signature, digest: digest, point: point)
+            case .P521 => EcOperations<P521Field>.isValid(signature, digest: digest, point: point)
+        }
+    }
+
+    /// The scalar's bytes, most significant first, in an array nothing zeroes.
+    fn bytes(_ scalar: SecretMemory) -> U8[>..] {
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(byteCount)
+        unsafe {
+            Wide.appendBigEndian(to: &bytes, scalar.address, count: byteCount)
+        }
+        return bytes
+    }
+}

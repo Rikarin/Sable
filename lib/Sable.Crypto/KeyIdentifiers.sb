@@ -1,0 +1,54 @@
+module Sable.Crypto
+
+import Sable.Serialize.Asn1
+
+/// The object identifiers of the keys.
+struct KeyIdentifiers {
+    static let rsa: ObjectIdentifier = ObjectIdentifier([1, 2, 840, 113549, 1, 1, 1])
+    static let ec: ObjectIdentifier = ObjectIdentifier([1, 2, 840, 10045, 2, 1])
+    static let ed25519: ObjectIdentifier = ObjectIdentifier([1, 3, 101, 112])
+    static let x25519: ObjectIdentifier = ObjectIdentifier([1, 3, 101, 110])
+    static let p256: ObjectIdentifier = ObjectIdentifier([1, 2, 840, 10045, 3, 1, 7])
+    static let p384: ObjectIdentifier = ObjectIdentifier([1, 3, 132, 0, 34])
+    static let p521: ObjectIdentifier = ObjectIdentifier([1, 3, 132, 0, 35])
+
+    static fn of(_ curve: NamedCurve) -> ObjectIdentifier {
+        return match curve {
+            case .P256 => p256
+            case .P384 => p384
+            case .P521 => p521
+        }
+    }
+
+    static fn curve(_ identifier: ObjectIdentifier) throws(CryptoError) -> NamedCurve {
+        if identifier == p256 {
+            return .P256
+        }
+        if identifier == p384 {
+            return .P384
+        }
+        if identifier == p521 {
+            return .P521
+        }
+        throw CryptoError.InvalidKey(reason: "a key of a curve the library does not have: \(identifier)")
+    }
+
+    /// What reading DER gave, its error the library's.
+    static fn der<T>(_ what: String, _ body: () throws(AsnError) -> T) throws(CryptoError) -> T {
+        do {
+            return try body()
+        } catch {
+            throw CryptoError.InvalidEncoding(reason: "\(what): \(error.description())")
+        }
+    }
+
+    /// An INTEGER that is not negative, as its magnitude.
+    static fn unsigned(_ reader: inout AsnReader) throws(AsnError) -> U8[:] {
+        let at = reader.position
+        let bytes = try reader.readIntegerBytes()
+        if bytes[0] >= 0x80 {
+            throw AsnError.OutOfRange(at: at, reason: "a negative number")
+        }
+        return stripped(bytes)
+    }
+}

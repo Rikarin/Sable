@@ -1,0 +1,92 @@
+// Answers what run.py asks of Sable.Crypto.X509: a path to verify a line, its
+// words apart by spaces, texts in hexadecimal, lists apart by commas, and "-"
+// for nothing.
+
+module X509Conformance
+
+import Sable.Crypto.X509
+import Sable.IO
+import Sable.Serialize.Asn1
+import Sable.Text
+import Sable.Time
+
+fn text(_ word: String) -> String {
+    return word == "-" ? "" : String.fromUtf8Lossy(try! Hex.decode(word))
+}
+
+fn texts(_ word: String) -> String[>..] {
+    var all: String[>..] = []
+    if word == "-" {
+        return all
+    }
+    for each in word.split(separator: ',') {
+        all.append(text("\(each)"))
+    }
+    return all
+}
+
+// verify <profile> <time> <host> <names> <purposes> <depth> <leaf> <intermediates> <roots> <lists>
+fn verify(_ words: String[>..]) throws -> String {
+    let certificate = try Certificate.parse(pem: text(words[7]))
+    var intermediates: Certificate[>..] = []
+    for pem in texts(words[8]) {
+        // One that cannot be read is in no path.
+        if let each = try? Certificate.parse(pem: pem) {
+            intermediates.append(each)
+        }
+    }
+    var roots: Certificate[>..] = []
+    for pem in texts(words[9]) {
+        if let each = try? Certificate.parse(pem: pem) {
+            roots.append(each)
+        }
+    }
+    var verifier = CertificateVerifier(roots: TrustStore(roots))
+    verifier.profile = words[1] == "webpki" ? .WebPki : words[1] == "rfc5280" ? .Rfc5280 : .Compatible
+    if words[6] != "-" {
+        verifier.maximumDepth = try Int.parse(words[6])
+    }
+    for pem in texts(words[10]) {
+        verifier.revocationLists.append(try CertificateRevocationList.parse(pem: pem))
+    }
+    let time = words[2] == "-" ? UtcDateTime.now() : try OffsetDateTime.parseRfc3339(text(words[2])).instant
+    let host: String? = words[3] == "-" ? none : text(words[3])
+    var purposes: KeyPurpose[>..] = []
+    for each in texts(words[5]) {
+        purposes.append(KeyPurpose(try ObjectIdentifier.parse(each)))
+    }
+    for purpose in purposes {
+        _ = try verifier.verify(certificate, intermediates: intermediates, host: host, purpose: purpose, at: time)
+    }
+    for each in texts(words[4]) {
+        var isNamed = false
+        for name in certificate.alternativeNames {
+            if "\(name)" == each {
+                isNamed = true
+            }
+        }
+        if !isNamed {
+            return "invalid no \(each)"
+        }
+    }
+    return "valid"
+}
+
+fn answer(_ words: String[>..]) -> String {
+    do {
+        return try verify(words)
+    } catch {
+        return "invalid \(error.description())"
+    }
+}
+
+fn main() {
+    var input = BufferedReader(Console.standardInput)
+    let written = BufferedWriter(Console.standardOutput)
+    while let line = try! input.readLine() {
+        var said: U8[>..] = []
+        said.append(utf8: answer(line.split(separator: ' ')) + "\n")
+        try! written.write(said)
+    }
+    try! written.flush()
+}

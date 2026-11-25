@@ -3796,7 +3796,13 @@ public sealed partial class SilGen {
     ///     requirement. A type parameter, or Self, may be any type.
     /// </summary>
     static bool ParametersFit(FunctionSymbol candidate, FunctionSymbol requirement) {
+        // An array is not a type with a name: 'init(_ bytes: U8[:])' is not
+        // the 'init(_ key: PublicKey)' it is declared beside.
         static bool Fits(TypeSymbol given, TypeSymbol wanted) =>
+            (given, wanted) is not ((ArrayTypeSymbol, NamedTypeSymbol { TypeKind: not TypeKind.Protocol }) or (NamedTypeSymbol { TypeKind: not TypeKind.Protocol }, ArrayTypeSymbol))
+            && FitsNamed(given, wanted);
+
+        static bool FitsNamed(TypeSymbol given, TypeSymbol wanted) =>
             given is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } g
             || wanted is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } w
             || ReferenceEquals(g.OriginalDefinition, w.OriginalDefinition)

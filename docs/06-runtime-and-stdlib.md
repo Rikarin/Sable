@@ -1033,7 +1033,12 @@ Sable.Crypto        HashFunction and Digest: SHA-2, SHA-3, BLAKE2b, BLAKE3,
                     (AuthenticatedCipher, SealedBox); AesKeyWrap;
                     Hazmat.AesCbc, AesCtr, AesCfb and AesEcb;
                     SymmetricKey, SecureRandom, constantTimeEquals,
-                    secureZero
+                    secureZero; Ed25519, ECDSA (P-256, P-384, P-521) and RSA
+                    (PSS, PKCS #1 v1.5) signatures, X25519 and ECDH, keys in
+                    PEM, DER (SPKI, PKCS #8, PKCS #1, SEC 1) and JWK
+Sable.Crypto.X509   Certificate, CertificateVerifier (RFC 5280 paths, name
+                    constraints, host names, revocation lists), TrustStore
+                    (the system's), CertificateBuilder, CertificateRequest
 Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
 Sable.Testing       @test @bench; assert, assertEqual and the like; expect and
                     require, which show their expression's parts; expectThrows;
@@ -1632,6 +1637,45 @@ by limbs: no table is indexed by a secret anywhere.
   12 bytes unless the cipher is made for others. CBC, CTR, CFB and ECB are
   under `Hazmat`, where `InvalidPadding` is an oracle for whoever does not
   authenticate first; the padding itself is checked without branches.
+- **Public keys** are the library's own mathematics too (issue #65 proposed
+  the operating system's), so that a key, a signature and an error are the
+  same everywhere, in the interpreter and on WASI as well. What that gives up
+  is the vendors' assembly: benchmarks/library's `ecdsa-*`, `ecdh-*`,
+  `x25519` and `rsa-*` measure it against .NET, which calls the system's.
+  There is no `BigInt` in it: numbers are 64-bit limbs at an address in
+  `SecretMemory` (`Wide`), so that they are zeroed, and 25519's field has five
+  of 51 bits, the P curves' 4, 6 and 9 with a reduction of their own, and RSA
+  and the group orders any number, by Montgomery's multiplication
+  (`MontgomeryModulus`).
+- **Nothing secret is a branch, an index or a divisor there.** A choice is
+  made with a mask that has been through `Native.barrier`, a builtin
+  (`value_barrier`) that is an empty assembly statement giving back its
+  operand, as LLVM would otherwise know the mask for a bit and may branch on
+  it. A scalar's windows look at every entry of their table; the P curves'
+  sums are the complete ones of Renes, Costello and Batina and Edwards's
+  curve's are complete, so no point is a special case; inverses are Pornin's
+  binary algorithm, of a fixed number of steps; RSA is by the Chinese
+  remainder theorem on a number blinded by a random one, checked before it is
+  given out. `sharedSecret` refuses X25519 points of small order, and a P
+  curve's key is checked to be on its curve when it is made. What ends in
+  `Public` — the sums that check signatures — takes a time that depends on
+  its numbers, which are not secret. Making an RSA key tells which candidates
+  were not prime. Reading and writing keys as text (Base64, JSON) is not in
+  constant time.
+- **The compiled code** was read for arm64 and x86-64 (LLVM 21, `-O2`): the
+  fields' functions and the points' sums have no conditional branch and no
+  division, and those of `multiplyBase`, `power`, `invert` and the ladder are
+  on loop counters, limb counts, allocations and reference counts. It is to be
+  looked at again when the barrier or the fields change: `objdump -d` on a
+  program that signs shows it.
+- **ECDSA's nonces** are RFC 6979's with 32 random bytes added (§3.6): neither
+  a bad random source nor a glitch in the hashing gives the key away.
+  `deterministic: true` is the RFC's.
+- **Key formats.** `PublicKey` and `PrivateKey` are keys of any algorithm, and
+  `AsymmetricPublicKey`'s and `AsymmetricPrivateKey`'s conformers those of
+  one. DER is read by its own rules alone. Encrypted PKCS #8 is not read, nor
+  curves by their parameters, nor RSA keys of more than two primes or without
+  them.
 - **Randomness** is one source, `random_bytes` of the platform layer, for
   `SecureRandom`, `SystemRandomNumberGenerator` and UUIDs: arc4random_buf on
   Apple's systems, getrandom on Linux (again on EINTR), BCryptGenRandom, or
@@ -1687,6 +1731,40 @@ other libraries, differ:
 - *SIGPIPE* is never raised and every descriptor is closed on exec.
 
 `IoError` says why, in cases the systems' codes are sorted into.
+
+### X.509
+
+`Sable.Crypto.X509` reads certificates with `Sable.Serialize.Asn1` by DER's
+rules and verifies paths as RFC 5280 §6 has it, with this library's
+mathematics; only which roots are trusted is the system's (`TrustStore.system`).
+
+- **The path** is searched for depth first, trusted issuers before
+  intermediates and those whose key identifier is the one named before those,
+  with backtracking; a subject with its key is in a path once. What it takes
+  is limited: a hundred signatures, ten thousand candidates, 250,000
+  comparisons of names.
+- **Asked of every certificate:** its time, in whole seconds (the caller's
+  clock: `at:`), no critical extension that is not known, a key and a
+  signature the library has (RSA of 2048 bits or more, SHA-2). Of one that
+  issued another: basic constraints, the path's length, the key's usage, the
+  purpose, where it says one, and the names it permits and excludes, of
+  domains, addresses, mailboxes, URIs and directories; a name of another kind
+  that is constrained is refused. Policies are not processed: any is taken,
+  and a critical `policyConstraints` is an extension that is not known.
+- **Profiles.** `.Compatible`, the default, is that. `.Rfc5280` also asks for
+  what RFC 5280 asks of who issues certificates, and `.WebPki` for the
+  CA/Browser Forum's. The public suffix list is in none of them.
+- **Hosts** are matched by RFC 9525: alternative names alone, "*." for one
+  label before two or more. A name is ASCII: Sable.Net's `Idna` makes one.
+  Sable.Net is not imported, so that what makes connections can use this.
+- **Revocation** is by the lists a verifier is given; there is no OCSP, and
+  nothing is fetched.
+- **The system's roots.** macOS: the Security framework's anchors and the TLS
+  trust settings of the user and the administrator; Windows: the ROOT store,
+  for servers, without the Disallowed one. Both libraries are loaded when
+  asked for (runtime/trust.c), so no program links with them. Elsewhere, and in
+  the interpreter, the distribution's bundle is read. SSL_CERT_FILE and
+  SSL_CERT_DIR, where they are set, are read instead on every system.
 
 ### Source layout
 

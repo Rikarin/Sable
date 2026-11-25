@@ -1,0 +1,12 @@
+module Sable.Crypto
+
+extension X25519PrivateKey: AsymmetricPrivateKey {
+    public init(_ key: PrivateKey) throws(CryptoError) {
+        guard case .X25519(let own) = key else {
+            throw CryptoError.InvalidKey(reason: "not an X25519 key")
+        }
+        self = own
+    }
+
+    public var anyKey: PrivateKey => .X25519(self)
+}

@@ -1,0 +1,23 @@
+module Sable.Crypto.X509
+
+import Sable.Crypto
+import Sable.Serialize.Asn1
+
+/// What certificates and requests are alike in: bytes, how they are signed,
+/// and the signature.
+struct SignedDer {
+    static fn write(_ signed: U8[:], _ algorithm: SignatureAlgorithm, _ key: PrivateKey) throws(CertificateError) -> U8[>..] {
+        let signature = try algorithm.sign(signed, with: key)
+        let writer = AsnWriter(rules: .Der)
+        do {
+            try writer.beginSequence()
+            try writer.writeEncoded(signed)
+            try algorithm.write(writer)
+            try writer.writeBitString(AsnBitString(bytes: signature))
+            try writer.endSequence()
+            return try writer.bytes()
+        } catch {
+            throw CertificateError.Invalid(reason: error.description())
+        }
+    }
+}

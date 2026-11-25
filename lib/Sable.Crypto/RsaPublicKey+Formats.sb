@@ -1,0 +1,60 @@
+module Sable.Crypto
+
+import Sable.Serialize.Asn1
+
+extension RsaPublicKey: AsymmetricPublicKey {
+    public init(_ key: PublicKey) throws(CryptoError) {
+        guard case .Rsa(let own) = key else {
+            throw CryptoError.InvalidKey(reason: "not an RSA key")
+        }
+        self = own
+    }
+
+    public var anyKey: PublicKey => .Rsa(self)
+
+    /// The key of a PKCS #1 RSAPublicKey (RFC 8017 A.1.1), in DER.
+    ///
+    /// ```sable
+    /// let key = RsaPrivateKey.generate(bits: 2048).publicKey
+    /// assert(try! RsaPublicKey.parse(pkcs1: key.pkcs1) == key)
+    /// ```
+    public static fn parse(pkcs1: U8[:]) throws(CryptoError) -> RsaPublicKey {
+        let (modulus, exponent) = try KeyIdentifiers.der("an RSA public key") { () throws(AsnError) in try RsaPublicKey.parts(pkcs1) }
+        return try RsaPublicKey(modulus: modulus, exponent: try rsaExponent(exponent))
+    }
+
+    static fn parts(_ pkcs1: U8[:]) throws(AsnError) -> (U8[:], U8[:]) {
+        var reader = AsnReader(pkcs1, rules: .Der)
+        var numbers = try reader.readSequence()
+        try reader.finish()
+        let modulus = try KeyIdentifiers.unsigned(&numbers)
+        let exponent = try KeyIdentifiers.unsigned(&numbers)
+        try numbers.finish()
+        return (modulus, exponent)
+    }
+
+    /// The key as a PKCS #1 RSAPublicKey, in DER.
+    public var pkcs1: U8[>..] {
+        get {
+            return writeDer { (writer: AsnWriter) throws(AsnError) in
+                try writer.beginSequence()
+                try writer.writeUnsignedInteger(modulus)
+                try writer.writeUInt(exponent)
+                try writer.endSequence()
+            }
+        }
+    }
+}
+
+/// An exponent's bytes, most significant first, as a U64.
+fn rsaExponent(_ bytes: U8[:]) throws(CryptoError) -> U64 {
+    let digits = stripped(bytes)
+    if digits.count > 8 {
+        throw CryptoError.InvalidKey(reason: "an RSA exponent of \(digits.count) bytes")
+    }
+    var value: U64 = 0
+    for byte in digits {
+        value = (value << 8) | U64(byte)
+    }
+    return value
+}

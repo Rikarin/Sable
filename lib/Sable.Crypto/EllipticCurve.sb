@@ -1,0 +1,13 @@
+module Sable.Crypto
+
+/// A curve chosen as the program is compiled, so that a key of one is of
+/// another type than a key of another: `P256`, `P384` and `P521`.
+///
+/// ```sable
+/// fn name<Curve: EllipticCurve>(_ key: EcdhPublicKey<Curve>) -> String => "\(Curve.curve)"
+/// assert(name(EcdhPrivateKey<P256>.generate().publicKey) == "P256")
+/// ```
+public protocol EllipticCurve: Sendable {
+    /// Which curve it is.
+    static var curve: NamedCurve { get }
+}

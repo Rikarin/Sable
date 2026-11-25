@@ -1,0 +1,310 @@
+module Sable.Crypto
+
+/// An RSA key to sign with (RFC 8017), of two primes.
+///
+/// ```sable
+/// let key = RsaPrivateKey.generate(bits: 2048)
+/// let signature = key.sign([1, 2, 3], padding: .Pkcs1(.Sha256))
+/// assert(signature.count == 256)
+/// assert(key.publicKey.isValid(signature, for: [1, 2, 3], padding: .Pkcs1(.Sha256)))
+/// ```
+///
+/// A signature is worked out modulo each prime and checked before it is
+/// given, on a number blinded by a random one, in a time that depends on the
+/// key's length alone.
+public struct RsaPrivateKey: Equatable, Debug, Sendable {
+    /// The key others check the signatures with.
+    public let publicKey: RsaPublicKey
+
+    let p: MontgomeryModulus
+    let q: MontgomeryModulus
+
+    // d; d modulo p - 1 and modulo q - 1; q⁻¹ modulo p, as a Montgomery
+    // number: d as long as the modulus, the others as long as a prime.
+    let memory: SecretMemory
+
+    init(publicKey: RsaPublicKey, p: MontgomeryModulus, q: MontgomeryModulus, memory: SecretMemory) {
+        self.publicKey = publicKey
+        self.p = p
+        self.q = q
+        self.memory = memory
+    }
+
+    /// The key of its numbers, as PKCS #1 and JWK list them, each with the
+    /// most significant byte first: the modulus, the exponents, the primes,
+    /// the private exponent modulo each prime less one, and the second
+    /// prime's inverse modulo the first. Whether they go together is checked;
+    /// whether the primes are is not.
+    public init(modulus: U8[:], exponent: U64, privateExponent: U8[:], prime1: U8[:], prime2: U8[:], exponent1: U8[:], exponent2: U8[:], coefficient: U8[:]) throws(CryptoError) {
+        let publicKey = try RsaPublicKey(modulus: modulus, exponent: exponent)
+        let first = stripped(prime1)
+        let second = stripped(prime2)
+        let half = (first.count + 7) / 8
+        if first.isEmpty || second.isEmpty || (second.count + 7) / 8 != half || (first[first.count - 1] & second[second.count - 1] & 1) == 0 {
+            throw CryptoError.InvalidKey(reason: "RSA primes that are not odd, or not as long as each other")
+        }
+        let n = publicKey.number.count
+        if stripped(privateExponent).count > 8 * n || 2 * half < n || stripped(exponent1).count > 8 * half || stripped(exponent2).count > 8 * half || stripped(coefficient).count > 8 * half {
+            throw CryptoError.InvalidKey(reason: "an RSA key's numbers longer than its modulus")
+        }
+        let p = MontgomeryModulus(bigEndian: first)
+        let q = MontgomeryModulus(bigEndian: second)
+        let memory = SecretMemory(count: 8 * (n + 3 * half))
+        unsafe {
+            let d = memory.address
+            Wide.fromBigEndian(d, privateExponent, n)
+            Wide.fromBigEndian(d + 8 * n, exponent1, half)
+            Wide.fromBigEndian(d + 8 * (n + half), exponent2, half)
+            Wide.fromBigEndian(d + 8 * (n + 2 * half), coefficient, half)
+            if !RsaPrivateKey.agree(publicKey, p, q, memory) {
+                throw CryptoError.InvalidKey(reason: "an RSA key whose numbers do not go together")
+            }
+            let work = SecretMemory(count: p.scratchBytes)
+            p.enter(d + 8 * (n + 2 * half), d + 8 * (n + 2 * half), scratch: work.address)
+        }
+        self.init(publicKey: publicKey, p: p, q: q, memory: memory)
+        if !self.works() {
+            throw CryptoError.InvalidKey(reason: "an RSA key whose signatures its public key does not check")
+        }
+    }
+
+    /// Whether the primes' product is the modulus, the exponents each the
+    /// inverse of the public one, and the coefficient the prime's.
+    unsafe static fn agree(_ publicKey: RsaPublicKey, _ p: MontgomeryModulus, _ q: MontgomeryModulus, _ memory: SecretMemory) -> Bool {
+        let n = publicKey.number.count
+        let half = p.count
+        let d = memory.address
+        let work = SecretMemory(count: 8 * (2 * half + 2 + 2 * half + n + 4))
+        let product = work.address
+        let less = product + 8 * (2 * half + 2)
+        let scratch = less + 8 * half
+        Wide.multiply(product, p.address, half, q.address, half)
+        var bad = ~Wide.equalMask(product, publicKey.number.address, n)
+        if 2 * half > n {
+            bad = bad | ~Wide.zeroMask(product + 8 * n, 2 * half - n)
+        }
+        let one = SecretMemory(count: 8 * half + 8)
+        Wide.setSmall(one.address, 1, half + 1)
+        let e = SecretMemory(count: 8)
+        Wide.put(e.address, 0, publicKey.exponent)
+        var i = 0
+        while i < 2 {
+            let prime = i == 0 ? p : q
+            let exponent = d + 8 * (n + i * half)
+            _ = Wide.sub(less, prime.address, one.address, half)
+            bad = bad | maskOf(bit: 1 &- Wide.less(exponent, prime.address, half))
+            // e·dp is 1 modulo p - 1, and so is d the same as dp.
+            Wide.multiply(product, exponent, half, e.address, 1)
+            Wide.remainder(product, product, half + 1, less, half, scratch: scratch)
+            bad = bad | ~Wide.equalMask(product, one.address, half)
+            Wide.remainder(product, d, n, less, half, scratch: scratch)
+            let whole = SecretMemory(count: 8 * half)
+            Wide.remainder(whole.address, exponent, half, less, half, scratch: scratch)
+            bad = bad | ~Wide.equalMask(product, whole.address, half)
+            i += 1
+        }
+        let coefficient = d + 8 * (n + 2 * half)
+        bad = bad | maskOf(bit: 1 &- Wide.less(coefficient, p.address, half))
+        Wide.multiply(product, coefficient, half, q.address, half)
+        Wide.remainder(product, product, 2 * half, p.address, half, scratch: scratch)
+        bad = bad | ~Wide.equalMask(product, one.address, half)
+        return bad == 0
+    }
+
+    /// A new key of so many bits, a multiple of 128 from 2048 to 16384, whose
+    /// exponent is 65537. The primes are random ones of half as many bits.
+    ///
+    /// ```sable
+    /// let key = RsaPrivateKey.generate(bits: 2048)
+    /// assert(key.publicKey.bitCount == 2048 && key.publicKey.exponent == 65537)
+    /// ```
+    public static fn generate(bits: Int) -> RsaPrivateKey {
+        precondition(bits >= 2048 && bits <= 16384 && bits % 128 == 0, "an RSA key of \(bits) bits")
+        while true {
+            if let key = RsaPrimes.key(bits: bits) {
+                return key
+            }
+        }
+    }
+
+    /// The message's signature, as long as the modulus.
+    public fn sign(_ message: U8[:], padding: RsaSignaturePadding) -> U8[>..] {
+        return self.sign(digest: padding.hash.digest(of: message).bytes, padding: padding)
+    }
+
+    /// The signature of a message's digest, by the padding's function, or a
+    /// trap if the modulus has no room for the padding: not for a modulus of
+    /// 1024 bits or more, but with a longer digest or salt.
+    public fn sign(digest value: U8[:], padding: RsaSignaturePadding) -> U8[>..] {
+        let encoded: U8[>..]? = match padding {
+            case .Pkcs1(let hash)                                          => RsaEncoding.pkcs1(value, hash, count: publicKey.modulus.count)
+            case .Pss(let hash)                                            => self.pss(value, hash, hash, hash.digestByteCount)
+            case .PssParameters(let hash, let maskHash, let saltByteCount) => self.pss(value, hash, maskHash, saltByteCount)
+        }
+        guard let number = encoded else {
+            preconditionFailure("an RSA key of \(publicKey.bitCount) bits has no room for the padding, or the digest is not of its function")
+        }
+        return self.power(number)
+    }
+
+    fn pss(_ digest: U8[:], _ hash: HashAlgorithm, _ maskHash: HashAlgorithm, _ saltByteCount: Int) -> U8[>..]? {
+        if saltByteCount < 0 || saltByteCount > publicKey.modulus.count {
+            return none
+        }
+        return RsaEncoding.pss(digest, hash, maskHash: maskHash, salt: SecureRandom.bytes(saltByteCount), bits: publicKey.bitCount - 1)
+    }
+
+    /// The number those bytes are, to the private exponent.
+    fn power(_ bytes: U8[:]) -> U8[>..] {
+        let n = publicKey.number.count
+        let x = SecretMemory(count: 16 * n)
+        var made: U8[>..] = []
+        unsafe {
+            Wide.fromBigEndian(x.address, bytes, n)
+            if !self.power(x.address + 8 * n, x.address) {
+                fatalError("an RSA signature that its own key does not check: the processor erred, or the key's memory was changed")
+            }
+            Wide.appendBigEndian(to: &made, x.address + 8 * n, count: publicKey.modulus.count)
+        }
+        return made
+    }
+
+    /// Whether a random number comes back from the two exponents.
+    fn works() -> Bool {
+        let number = publicKey.number
+        let x = SecretMemory(count: 16 * number.count + number.powerScratchBytes)
+        unsafe {
+            Native.random(x.address, 8 * number.count)
+            number.enter(x.address, x.address, scratch: x.address + 16 * number.count)
+            return self.power(x.address + 8 * number.count, x.address)
+        }
+    }
+
+    /// r = x to the private exponent modulo the modulus, x under it, and
+    /// whether it is: whether r to the public one is x.
+    unsafe fn power(_ r: Int, _ x: Int) -> Bool {
+        let number = publicKey.number
+        let n = number.count
+        let half = p.count
+        let halfBytes = 8 * half
+        let work = SecretMemory(count: 8 * n * 3 + 8 * (2 * half + 2) + 6 * halfBytes + number.powerScratchBytes)
+        let blind = work.address
+        let unblind = blind + 8 * n
+        let blinded = unblind + 8 * n
+        let product = blinded + 8 * n
+        let c = product + 8 * (2 * half + 2)
+        let m1 = c + halfBytes
+        let m2 = m1 + halfBytes
+        let m2InP = m2 + halfBytes
+        let h = m2InP + halfBytes
+        let scratch = h + halfBytes
+
+        // x·b^e, b a random number, whose inverse takes b away at the end.
+        Native.random(blind, 8 * n)
+        number.enter(blind, blind, scratch: scratch)
+        number.invert(unblind, blind, scratch: scratch)
+        number.power(blind, blind, publicExponent: publicKey.exponent, scratch: scratch)
+        number.multiply(blinded, x, blind, scratch: scratch)
+
+        // To each exponent modulo its prime.
+        let d1 = memory.address + 8 * n
+        let d2 = d1 + halfBytes
+        let coefficient = d2 + halfBytes
+        p.reduce(c, blinded, n, scratch: scratch)
+        p.power(m1, c, d1, bits: p.bitCount, scratch: scratch)
+        q.reduce(c, blinded, n, scratch: scratch)
+        q.power(m2, c, d2, bits: q.bitCount, scratch: scratch)
+        q.leave(m2, m2, scratch: scratch)
+
+        // m2 + q·((m1 - m2)·q⁻¹ modulo p).
+        p.enter(m2InP, m2, scratch: scratch)
+        p.sub(h, m1, m2InP)
+        p.multiply(h, h, coefficient, scratch: scratch)
+        p.leave(h, h, scratch: scratch)
+        Wide.multiply(product, h, half, q.address, half)
+        var carry = Wide.add(product, product, m2, half)
+        var i = half
+        while i < 2 * half {
+            let sum = wide(Wide.limb(product, i)) &+ wide(carry)
+            Wide.put(product, i, lowHalf(sum))
+            carry = highHalf(sum)
+            i = i &+ 1
+        }
+        number.multiply(r, product, unblind, scratch: scratch)
+
+        number.enter(blinded, r, scratch: scratch)
+        number.power(blinded, blinded, publicExponent: publicKey.exponent, scratch: scratch)
+        number.leave(blinded, blinded, scratch: scratch)
+        return Wide.equalMask(blinded, x, n) != 0
+    }
+
+    /// The number of one of the key's parts, in an array nothing zeroes.
+    fn bytes(_ address: Int, count: Int) -> U8[>..] {
+        var made: U8[>..] = []
+        made.reserveCapacity(count)
+        unsafe {
+            Wide.appendBigEndian(to: &made, address, count: count)
+        }
+        return made
+    }
+
+    /// The private exponent's bytes, as many as the modulus has. This and
+    /// the other numbers are for writing the key out, in arrays nothing
+    /// zeroes but `secureZero`.
+    public fn privateExponent() -> U8[>..] {
+        return self.bytes(memory.address, count: publicKey.modulus.count)
+    }
+
+    /// The first prime.
+    public fn prime1() -> U8[>..] {
+        return self.bytes(p.address, count: (p.bitCount + 7) / 8)
+    }
+
+    /// The second prime.
+    public fn prime2() -> U8[>..] {
+        return self.bytes(q.address, count: (q.bitCount + 7) / 8)
+    }
+
+    /// The private exponent modulo the first prime less one.
+    public fn exponent1() -> U8[>..] {
+        return self.bytes(memory.address + 8 * publicKey.number.count, count: (p.bitCount + 7) / 8)
+    }
+
+    /// The private exponent modulo the second prime less one.
+    public fn exponent2() -> U8[>..] {
+        return self.bytes(memory.address + 8 * (publicKey.number.count + p.count), count: (q.bitCount + 7) / 8)
+    }
+
+    /// The second prime's inverse modulo the first.
+    public fn coefficient() -> U8[>..] {
+        let work = SecretMemory(count: 8 * p.count + p.powerScratchBytes)
+        unsafe {
+            p.leave(work.address, memory.address + 8 * (publicKey.number.count + 2 * p.count), scratch: work.address + 8 * p.count)
+        }
+        return self.bytes(work.address, count: (p.bitCount + 7) / 8)
+    }
+
+    /// Whether the two are the same key, in constant time.
+    public operator == (lhs: RsaPrivateKey, rhs: RsaPrivateKey) -> Bool {
+        if lhs.publicKey != rhs.publicKey || lhs.memory.count != rhs.memory.count {
+            return false
+        }
+        unsafe {
+            return Wide.equalMask(lhs.p.address, rhs.p.address, lhs.p.count) != 0
+        }
+    }
+
+    /// What kind of key it is, and not what it is.
+    public fn debugDescription() -> String {
+        return "RsaPrivateKey(\(publicKey.bitCount) bits)"
+    }
+}
+
+/// The bytes without the zeros before them.
+fn stripped(_ bytes: U8[:]) -> U8[:] {
+    var start = 0
+    while start < bytes.count && bytes[start] == 0 {
+        start += 1
+    }
+    return bytes[start...]
+}

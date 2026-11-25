@@ -1,0 +1,59 @@
+module Sable.Crypto.X509
+
+import Sable.Time
+
+/// Whether a certificate is to be believed (RFC 5280 §6): whether a path of
+/// certificates, each signed with the key of the next, leads from it to one
+/// that is trusted, and every one of them holds, may do what it did and
+/// permits the names below it.
+///
+/// ```sable
+/// let rootKey = EcdsaPrivateKey<P256>.generate().anyKey
+/// let root = try! CertificateBuilder(subject: DistinguishedName(commonName: "Root"), isAuthority: true).selfSigned(with: rootKey)
+/// let key = EcdsaPrivateKey<P256>.generate().anyKey
+/// let certificate = try! CertificateBuilder(subject: DistinguishedName([]), host: "test.example").issued(to: key.publicKey, by: root, signingKey: rootKey)
+///
+/// let verifier = CertificateVerifier(roots: TrustStore([root]))
+/// let path = try! verifier.verify(certificate, host: "test.example")
+/// assert(path == [certificate, root])
+/// assert((try? verifier.verify(certificate, host: "other.example")) == none)
+/// ```
+///
+/// Policies are not processed: any is taken, and a certificate with a
+/// critical extension that constrains them is not. Keys and signatures are
+/// those the library has, RSA keys of 2048 bits or more, and no SHA-1.
+public struct CertificateVerifier: Sendable {
+    /// What is trusted.
+    public let roots: TrustStore
+
+    /// How much is asked of the certificates.
+    public var profile: CertificateProfile = .Compatible
+
+    /// How many authorities there may be between a certificate and one that
+    /// is trusted, not counting those that have issued themselves.
+    public var maximumDepth: Int = 8
+
+    /// Which certificates their issuers say hold no longer. A list is asked
+    /// about the certificates of the issuer it is from, and one that does
+    /// not hold is an error.
+    public var revocationLists: CertificateRevocationList[>..] = []
+
+    public init(roots: TrustStore) {
+        self.roots = roots
+    }
+
+    /// The path from the certificate to one that is trusted, both in it, or
+    /// why there is none. `intermediates` are certificates that may be on the
+    /// way, in any order. The certificate must be of the host, if one is
+    /// given, and for the purpose; none is any. The time is the system's, or
+    /// another clock's now.
+    public fn verify(_ certificate: Certificate, intermediates: Certificate[:] = [], host: String? = none, purpose: KeyPurpose? = .serverAuth, at time: UtcDateTime = UtcDateTime.now()) throws(CertificateError) -> Certificate[>..] {
+        if let host {
+            if !certificate.isFor(host: host) {
+                throw CertificateError.HostMismatch(host: host)
+            }
+        }
+        let search = PathSearch(self, intermediates, purpose, time)
+        return try search.run(certificate)
+    }
+}

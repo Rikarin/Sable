@@ -1,0 +1,13 @@
+module Sable.Crypto
+
+/// NIST's P-256, secp256r1 or prime256v1 elsewhere: the curve of an
+/// `EcdsaPrivateKey<P256>` or an `EcdhPrivateKey<P256>`.
+///
+/// ```sable
+/// assert(P256.curve.byteCount == 32)
+/// ```
+public struct P256: EllipticCurve {
+    private init() { }
+
+    public static var curve: NamedCurve => .P256
+}

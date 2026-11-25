@@ -1,0 +1,127 @@
+module Sable.Crypto
+
+/// An RSA key to check signatures with (RFC 8017): a modulus of 1024 to
+/// 16384 bits, and an exponent.
+///
+/// ```sable
+/// let key = RsaPrivateKey.generate(bits: 2048)
+/// let signature = key.sign([1, 2, 3], padding: .Pss(.Sha256))
+/// let received = try! RsaPublicKey(modulus: key.publicKey.modulus, exponent: key.publicKey.exponent)
+/// assert(received.isValid(signature, for: [1, 2, 3], padding: .Pss(.Sha256)))
+/// assert(!received.isValid(signature, for: [1, 2, 4], padding: .Pss(.Sha256)))
+/// ```
+public struct RsaPublicKey: Hashable, Debug, Sendable {
+    let number: MontgomeryModulus
+
+    /// The modulus's bytes, most significant first, with no zeros before.
+    public let modulus: U8[>..]
+
+    /// The exponent, usually 65537.
+    public let exponent: U64
+
+    /// The key of a modulus, whose bytes are most significant first, and an
+    /// exponent: both odd, the modulus of 1024 to 16384 bits and the
+    /// exponent 3 or more.
+    public init(modulus: U8[:], exponent: U64) throws(CryptoError) {
+        var start = 0
+        while start < modulus.count && modulus[start] == 0 {
+            start += 1
+        }
+        let bytes = modulus[start...].toArray()
+        let bits = bytes.isEmpty ? 0 : 8 * bytes.count - bytes[0].leadingZeroCount
+        if bits < 1024 || bits > 16384 {
+            throw CryptoError.InvalidKey(reason: "an RSA modulus of \(bits) bits, not 1024 to 16384")
+        }
+        if (bytes[bytes.count - 1] & 1) == 0 {
+            throw CryptoError.InvalidKey(reason: "an even RSA modulus")
+        }
+        if exponent < 3 || (exponent & 1) == 0 {
+            throw CryptoError.InvalidKey(reason: "an RSA exponent of \(exponent)")
+        }
+        self.modulus = bytes
+        self.exponent = exponent
+        number = MontgomeryModulus(bigEndian: bytes)
+    }
+
+    /// How many bits the modulus has.
+    public var bitCount: Int => number.bitCount
+
+    /// How many bytes a signature has.
+    public var signatureByteCount: Int => modulus.count
+
+    /// Whether it is this key's signature of the message.
+    public fn isValid(_ signature: U8[:], for message: U8[:], padding: RsaSignaturePadding) -> Bool {
+        return self.isValid(signature, digest: padding.hash.digest(of: message).bytes, padding: padding)
+    }
+
+    /// Whether it is this key's signature of a message's digest, by the
+    /// padding's function.
+    public fn isValid(_ signature: U8[:], digest value: U8[:], padding: RsaSignaturePadding) -> Bool {
+        guard let encoded = self.power(signature) else {
+            return false
+        }
+        match padding {
+            case .Pkcs1(let hash) => {
+                // Encoded and compared whole, so that nothing is parsed.
+                guard let expected = RsaEncoding.pkcs1(value, hash, count: modulus.count) else {
+                    return false
+                }
+                return encoded == expected
+            }
+            case .Pss(let hash) => {
+                return self.isPss(encoded, value, hash, hash, hash.digestByteCount)
+            }
+            case .PssParameters(let hash, let maskHash, let saltByteCount) => {
+                return self.isPss(encoded, value, hash, maskHash, saltByteCount)
+            }
+        }
+    }
+
+    fn isPss(_ encoded: U8[:], _ digest: U8[:], _ hash: HashAlgorithm, _ maskHash: HashAlgorithm, _ saltByteCount: Int) -> Bool {
+        let bits = bitCount - 1
+        // Where the modulus has a bit more than whole bytes, a byte is over.
+        let over = encoded.count - (bits + 7) / 8
+        if over > 0 && encoded[0] != 0 {
+            return false
+        }
+        return RsaEncoding.isPss(encoded[over...], digest, hash, maskHash: maskHash, saltByteCount: saltByteCount, bits: bits)
+    }
+
+    /// The signature to the exponent, as bytes; none if it is not as long as
+    /// the modulus, or not under it.
+    fn power(_ signature: U8[:]) -> U8[>..]? {
+        if signature.count != modulus.count {
+            return none
+        }
+        let n = number.count
+        let work = SecretMemory(count: 8 * n + number.powerScratchBytes)
+        var made: U8[>..] = []
+        unsafe {
+            let x = work.address
+            let scratch = x + 8 * n
+            Wide.fromBigEndian(x, signature, n)
+            if Wide.less(x, number.address, n) == 0 {
+                return none
+            }
+            number.enter(x, x, scratch: scratch)
+            number.power(x, x, publicExponent: exponent, scratch: scratch)
+            number.leave(x, x, scratch: scratch)
+            Wide.appendBigEndian(to: &made, x, count: modulus.count)
+        }
+        return made
+    }
+
+    public operator == (lhs: RsaPublicKey, rhs: RsaPublicKey) -> Bool {
+        return lhs.exponent == rhs.exponent && lhs.modulus == rhs.modulus
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(modulus)
+        exponent.hash(into: &hasher)
+    }
+
+    /// The type, how many bits the modulus has, and the exponent.
+    public fn debugDescription() -> String {
+        return "RsaPublicKey(\(bitCount) bits, exponent \(exponent))"
+    }
+}

@@ -1,0 +1,86 @@
+module Sable.Crypto
+
+import Sable.Text
+
+/// An Ed25519 key to check signatures with (RFC 8032): 32 bytes, a point of
+/// the curve. A point no signature can be checked with is refused when the
+/// key is made.
+///
+/// ```sable
+/// let key = Ed25519PrivateKey.generate()
+/// let sent = key.publicKey.bytes
+/// let received = try! Ed25519PublicKey(sent)
+/// assert(received == key.publicKey)
+/// assert(received.isValid(key.sign([1, 2, 3]), for: [1, 2, 3]))
+/// ```
+@derive(Equatable, Hashable)
+public struct Ed25519PublicKey: Hashable, Debug, Sendable {
+    /// The key's 32 bytes.
+    public let bytes: U8[>..]
+
+    /// The key those 32 bytes are, if they are a point of the curve.
+    public init(_ bytes: U8[:]) throws(CryptoError) {
+        if bytes.count != 32 {
+            throw CryptoError.InvalidKey(reason: "an Ed25519 public key of \(bytes.count) bytes, not 32")
+        }
+        let work = SecretMemory(count: 192)
+        unsafe {
+            Wide.fromLittleEndian(work.address, bytes, 4)
+            if !Edwards25519.unpackPublic(work.address + 32, work.address) {
+                throw CryptoError.InvalidKey(reason: "an Ed25519 public key that is no point of the curve")
+            }
+        }
+        self.bytes = bytes.toArray()
+    }
+
+    init(checked bytes: consuming U8[>..]) {
+        self.bytes = bytes
+    }
+
+    /// Whether the 64 bytes are this key's signature of the message. It is
+    /// the check of RFC 8032 §5.1.7, with the encodings it allows alone and
+    /// without the cofactor, as most implementations do it.
+    public fn isValid(_ signature: U8[:], for message: U8[:]) -> Bool {
+        if signature.count != 64 {
+            return false
+        }
+        let order = ed25519Order
+        let work = SecretMemory(count: 64 + 32 + 32 + 32 + 160 + 192 + order.powerScratchBytes)
+        let wideScalar = work.address
+        let s = wideScalar + 64
+        let k = s + 32
+        let encoded = k + 32
+        let point = encoded + 32
+        let result = point + 160
+        let scratch = result + 192
+        unsafe {
+            Wide.fromLittleEndian(s, signature[32...], 4)
+            if Wide.less(s, order.address, 4) == 0 {
+                return false
+            }
+            Wide.fromLittleEndian(encoded, bytes, 4)
+            if !Edwards25519.unpackPublic(point, encoded) {
+                return false
+            }
+            var challenge = Sha512()
+            challenge.update(signature[..<32])
+            challenge.update(bytes)
+            challenge.update(message)
+            Wide.fromLittleEndian(wideScalar, challenge.finalizeAndReset().bytes, 8)
+            order.reduce(k, wideScalar, 8, scratch: scratch)
+            order.leave(k, k, scratch: scratch)
+            // R should be S·B - k·A.
+            Field25519.negate(point, point)
+            Field25519.negate(point + 120, point + 120)
+            Edwards25519.multiplyPublic(result, k, point: point, s)
+            Edwards25519.pack(result + 160, result)
+            Wide.fromLittleEndian(encoded, signature[..<32], 4)
+            return Wide.equalMask(result + 160, encoded, 4) != 0
+        }
+    }
+
+    /// The type and the key in hexadecimal.
+    public fn debugDescription() -> String {
+        return "Ed25519PublicKey(" + Hex.encode(bytes) + ")"
+    }
+}

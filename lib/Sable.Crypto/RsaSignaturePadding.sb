@@ -1,0 +1,28 @@
+module Sable.Crypto
+
+/// How a message's digest is made the number an RSA key signs (RFC 8017):
+/// PSS, which is the one to choose, or the older PKCS #1 v1.5.
+///
+/// ```sable
+/// assert(RsaSignaturePadding.Pss(.Sha256) != .Pkcs1(.Sha256))
+/// ```
+@derive(Equatable, Debug)
+public union RsaSignaturePadding: Sendable {
+    /// RSASSA-PKCS1-v1_5, of a digest by the function.
+    Pkcs1(HashAlgorithm)
+
+    /// RSASSA-PSS, of a digest by the function, which makes the mask too,
+    /// and with a salt as long as a digest.
+    Pss(HashAlgorithm)
+
+    /// RSASSA-PSS with a mask of another function's, or a salt of another
+    /// length.
+    PssParameters(HashAlgorithm, maskHash: HashAlgorithm, saltByteCount: Int)
+
+    /// The function the message is hashed by.
+    public var hash: HashAlgorithm => match self {
+        case .Pkcs1(let hash)               => hash
+        case .Pss(let hash)                 => hash
+        case .PssParameters(let hash, _, _) => hash
+    }
+}

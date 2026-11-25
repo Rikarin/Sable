@@ -45,10 +45,9 @@ public class OrderedSet<Element: Hashable> {
 
     /// Adds the value at the end, unless it is there: whether it was added.
     public fn append(_ value: Element) -> Bool {
-        if positions.contains(value) {
+        if !positions.insert(elements.count, forKey: value) {
             return false
         }
-        positions[value] = elements.count
         elements.append(value)
         return true
     }

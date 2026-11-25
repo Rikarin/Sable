@@ -1085,6 +1085,15 @@ public sealed class StoreInst(SilValue value, SilValue address, StoreKind kind) 
     public SilValue Value => Operands[0];
     public SilValue Address => Operands[1];
     public StoreKind Kind { get; } = kind;
+
+    /// <summary>
+    ///     Stores into an object just made, which nothing else has seen
+    ///     (<see cref="InitFields" />): it is not shared with another task, so
+    ///     neither need the value be. Known within a build alone; SIL read as
+    ///     text does not say so.
+    /// </summary>
+    public bool IntoFresh { get; set; }
+
     public override bool HasResult => false;
     public override string Opcode => "store";
 }
@@ -1311,7 +1320,7 @@ public static class SharedStorage {
             LoadUnownedInst unowned => (unowned.Address, false),
             StoreUnownedInst unowned => (unowned.Address, true),
             // An array changed where it is: its count, its buffer, an element.
-            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve" or "array_rotate" or "array_store_slice" or "array_append_utf8" or "array_append_repeating" or "array_append_all" or "array_element_addr" } array
+            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve" or "array_rotate" or "array_store_slice" or "array_append_utf8" or "array_append_repeating" or "array_append_all" or "array_element_addr" or "array_element_addr_unique" } array
                 => (array.Operands[0], true),
             _ => null,
         };
@@ -1985,7 +1994,7 @@ public static class SilBuiltins {
     ///     count work on an array alone.
     /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_all", "array_mismatch", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_element_addr_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "slice_of_borrowed", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_all", "array_mismatch", "region_alloc"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
@@ -2186,7 +2195,7 @@ public static class SilBuiltins {
             // array made the only reference to its buffer, the index checked.
             // Good until the array next changes, which the access to it, for
             // the length of the call, rules out.
-            case "array_element_addr" when Element(0, true) is { } element:
+            case "array_element_addr" or "array_element_addr_unique" when Element(0, true) is { } element:
                 return new([operands[0], SilType.Int], SilType.Address(element));
 
             case "array_remove_last" when Element(0, true, arrayOnly: true) is { } element:
@@ -2250,7 +2259,9 @@ public static class SilBuiltins {
                 return new([operands[0], SilType.Int, SilType.Int], new SliceType(element));
 
             // The whole of an array, as a slice: 'sum(xs)' of a 'sum(_: Int[:])'.
-            case "slice_of" when Element(0, false, arrayOnly: true) is { } element:
+            // 'slice_of_borrowed' is the same, borrowed from the array rather
+            // than holding its buffer.
+            case "slice_of" or "slice_of_borrowed" when Element(0, false, arrayOnly: true) is { } element:
                 return new([operands[0]], new SliceType(element));
 
             // A slice as an array again: its buffer, when the slice is the
@@ -2714,6 +2725,7 @@ public static class SilBuiltins {
         }
 
         Add("string_from_Bool", SilType.String, SilType.Bool);
+        Add("select_Int", SilType.Int, SilType.Bool, SilType.Int, SilType.Int);
 
         // Parsing gives whether it worked, and the value when it did.
         Add("string_to_Int", SilType.Tuple([SilType.Bool, SilType.Int]), SilType.String);

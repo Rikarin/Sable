@@ -21,7 +21,7 @@ extension Dictionary where Key == String {
             if at < 0 {
                 return none
             }
-            return entries[slots[at] & 4294967295]!.value
+            return entries[position(at)]!.value
         }
     }
 
@@ -48,14 +48,15 @@ extension Dictionary where Key == String {
         piece.hash(into: &hasher)
         let hash = hasher.finalize()
         let mask = slots.count - 1
-        let tag = Dictionary.tagOf(hash)
+        let tagMask = -1 ^ indexMask
+        let tag = Dictionary.tagOf(hash) & tagMask
         var at = hash & mask
         while true {
-            let slot = slots[at]
+            let slot = Int(slots[at])
             if slot == -1 {
                 return -1
             }
-            if slot >= 0 && slot >> 32 == tag && piece == entries[slot & 4294967295]!.key {
+            if (slot & tagMask) == tag && piece == entries[slot & indexMask]!.key {
                 return at
             }
             at = (at + 1) & mask

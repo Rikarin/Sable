@@ -1,9 +1,9 @@
 module Sable.Collections
 
 /// Distinct values, by hash: .NET's HashSet<T>, Swift's Set, Rust's
-/// HashSet. A `[Element: Bool]` underneath, so a value is added, found and
-/// removed in constant time on average, and iteration is in the order values
-/// were first inserted.
+/// HashSet. A dictionary of its members underneath, so a value is added,
+/// found and removed in constant time on average, and iteration is in the
+/// order values were first inserted.
 ///
 /// A value, as a dictionary is: a copy is a set of its own, and the two
 /// share their storage until one of them changes.
@@ -18,7 +18,7 @@ module Sable.Collections
 /// assert(odd.contains(9))
 /// ```
 public struct Set<Element: Hashable> {
-    var map: [Element: Bool] = [:]
+    var map: [Element: SetMember] = [:]
 
     /// An empty set.
     public init() { }
@@ -27,7 +27,7 @@ public struct Set<Element: Hashable> {
     /// appears. What going through them throws, it throws.
     public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
         for try element in elements {
-            map.insert(true, forKey: element)
+            map.insert(SetMember { }, forKey: element)
         }
     }
 
@@ -66,7 +66,7 @@ public struct Set<Element: Hashable> {
     /// there keeps its place in the order.
     @discardable
     public mutating fn insert(_ value: Element) -> Bool {
-        return map.insert(true, forKey: value)
+        return map.insert(SetMember { }, forKey: value)
     }
 
     /// Takes the value out; true if it was there.
@@ -91,7 +91,7 @@ public struct Set<Element: Hashable> {
     /// Keeps only the values that pass the test, in their order (Rust's
     /// retain).
     public mutating fn retain(where shouldKeep: (Element) -> Bool) {
-        map.retain(where: (member: Element, kept: Bool) => shouldKeep(member))
+        map.retain(where: (member: Element, kept: SetMember) => shouldKeep(member))
     }
 
     /// The value put in, in place of one equal to it if there is one: the
@@ -106,29 +106,14 @@ public struct Set<Element: Hashable> {
     /// assert(numbers.count == 3)
     /// ```
     public mutating fn update(with value: Element) -> Element? {
-        var replaced: Element? = none
-        for (member, _) in map {
-            if member == value {
-                replaced = member
-                break
-            }
-        }
-        if replaced != none {
-            map.remove(value)
-        }
-        map.insert(true, forKey: value)
+        let replaced = map.removeKey(value)
+        map.insert(SetMember { }, forKey: value)
         return replaced
     }
 
     /// The values that pass the test, as a set of their own.
     public fn filter(_ isIncluded: (Element) -> Bool) -> Set<Element> {
-        var kept = Set<Element>()
-        for (member, _) in map {
-            if isIncluded(member) {
-                kept.map.insert(true, forKey: member)
-            }
-        }
-        return kept
+        return Set<Element> { map: map.filter((member: Element, kept: SetMember) => isIncluded(member)) }
     }
 
     // ---- Combining ---------------------------------------------------------
@@ -143,36 +128,30 @@ public struct Set<Element: Hashable> {
 
     /// The values in both sets, in this set's order.
     public fn intersection(_ other: Set<Element>) -> Set<Element> {
-        return self.filter((member: Element) => other.contains(member))
+        return Set<Element> { map: map.entries(whoseKeysIn: other.map, present: true) }
     }
 
     /// The values of this set that are not in the other.
     public fn subtracting(_ other: Set<Element>) -> Set<Element> {
-        return self.filter((member: Element) => !other.contains(member))
+        return Set<Element> { map: map.entries(whoseKeysIn: other.map, present: false) }
     }
 
     /// The values in one set but not both: this set's in their order, then
     /// the other's.
     public fn symmetricDifference(_ other: Set<Element>) -> Set<Element> {
         var result = self.subtracting(other)
-        for (member, _) in other.map {
-            if !map.contains(member) {
-                result.map.insert(true, forKey: member)
-            }
-        }
+        result.formUnion(other.subtracting(self))
         return result
     }
 
     /// Adds every value of the other set.
     public mutating fn formUnion(_ other: Set<Element>) {
-        for (member, _) in other.map {
-            map.insert(true, forKey: member)
-        }
+        map.formUnion(other.map)
     }
 
     /// Keeps only the values that are also in the other set.
     public mutating fn formIntersection(_ other: Set<Element>) {
-        map.retain(where: (member: Element, kept: Bool) => other.contains(member))
+        map = map.entries(whoseKeysIn: other.map, present: true)
     }
 
     /// Takes out every value that is in the other set.
@@ -191,15 +170,7 @@ public struct Set<Element: Hashable> {
 
     /// Whether every value of this set is in the other.
     public fn isSubset(of other: Set<Element>) -> Bool {
-        if map.count > other.count {
-            return false
-        }
-        for (member, _) in map {
-            if !other.contains(member) {
-                return false
-            }
-        }
-        return true
+        return map.count <= other.count && !map.hasKey(in: other.map, present: false)
     }
 
     /// Whether every value of the other set is in this one.
@@ -220,14 +191,12 @@ public struct Set<Element: Hashable> {
     /// Whether the two sets have no value in common.
     public fn isDisjoint(with other: Set<Element>) -> Bool {
         let (smaller, larger) = if map.count <= other.count { (self, other) } else { (other, self) }
-        for (member, _) in smaller.map {
-            if larger.contains(member) {
-                return false
-            }
-        }
-        return true
+        return !smaller.map.hasKey(in: larger.map, present: true)
     }
 }
+
+/// What a member's entry holds beside it: nothing, which takes no room.
+struct SetMember { }
 
 extension Set: Equatable {
     /// Whether the two sets hold the same values, in whatever order.
@@ -245,7 +214,7 @@ extension Set: Sequence, FromSequence<Element> {
 
 /// Gives a set's members in the order they were first inserted.
 public struct SetIterator<Element>: Iterator {
-    var entries: DictionaryIterator<Element, Bool>
+    var entries: DictionaryIterator<Element, SetMember>
 
     /// The next member, or none past the last.
     public mutating fn next() -> Element? {

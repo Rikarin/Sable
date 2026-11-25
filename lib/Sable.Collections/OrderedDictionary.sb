@@ -51,11 +51,12 @@ public class OrderedDictionary<Key: Hashable, Value> {
     /// Sets the key's value: a new key goes at the end, a key already there
     /// keeps its place.
     public fn set(_ key: Key, _ value: Value) {
-        if let position = positions[key] {
+        // Looked up and, when it is new, added: at the end.
+        let position = positions.orInsert(key, orderedKeys.count)
+        if position < orderedKeys.count {
             orderedValues[position] = value
             return
         }
-        positions[key] = orderedKeys.count
         orderedKeys.append(key)
         orderedValues.append(value)
     }

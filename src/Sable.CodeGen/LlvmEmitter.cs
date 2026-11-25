@@ -92,8 +92,36 @@ public sealed partial class LlvmEmitter {
     bool _checkExclusivity = true;
 
     // Numbered high, clear of the debug information's nodes.
-    const string TbaaRoot = "!9000000", TbaaHeaderType = "!9000001", TbaaElementType = "!9000002";
-    const string TbaaHeader = "!9000003", TbaaElement = "!9000004";
+    const string Unpredictable = "!9000011";
+    const string TbaaRoot = "!9000000", TbaaHeaderType = "!9000001", TbaaCountType = "!9000002", TbaaValueType = "!9000003", TbaaScalarType = "!9000004", TbaaReferenceType = "!9000005";
+    const string TbaaHeader = "!9000006", TbaaCount = "!9000007", TbaaValue = "!9000008", TbaaScalar = "!9000009", TbaaReference = "!9000010";
+
+    /// <summary>
+    ///     What an access of a value of the type says of what it may alias: a
+    ///     number is never where a reference is, and an aggregate may hold
+    ///     either. Storage has one type for as long as it lasts.
+    /// </summary>
+    static string TbaaOf(string type) =>
+        type switch {
+            "ptr" => TbaaReference,
+            "half" or "bfloat" or "float" or "double" => TbaaScalar,
+            _ when type[0] == 'i' && type.AsSpan(1).IndexOfAnyExceptInRange('0', '9') < 0 => TbaaScalar,
+            _ => TbaaValue,
+        };
+
+    /// <summary>The same, after an access's alignment: for storage that is a value's own — a local's, a field's, an element's, a caller's — and nothing for what may be anything's bits.</summary>
+    static string TbaaAt(SilValue address, SilType type) => IsTyped(address) ? $", !tbaa {TbaaOf(Type(type))}" : "";
+
+    static bool IsTyped(SilValue address) =>
+        address switch {
+            AllocStackInst => true,
+            SilArgument argument => argument.Block == argument.Block.Function.Entry,
+            RefElementAddrInst { Reference.Type: ClassType { IsCoroutineFrame: false } } => true,
+            StructElementAddrInst { Address.Type: AddressType { Pointee: StructType { IsInline: false } } } element => IsTyped(element.Address),
+            TupleElementAddrInst element => IsTyped(element.Address),
+            BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique" } => true,
+            _ => false,
+        };
 
     SilModule? _module;
     HashSet<string>? _reachable;
@@ -234,13 +262,20 @@ public sealed partial class LlvmEmitter {
         }
 
         // Type-based alias information (docs/04 §3.8): an array's header —
-        // its count, its buffer, its strong count — is never an element, so a
-        // store to an element leaves them where LLVM last read them.
-        output.Append($"\n{TbaaRoot} = !{{!\"Sable TBAA\"}}\n")
+        // its count, its buffer — is never a value, and an object's count of
+        // references is neither, so a store to an element or a field, or a
+        // retain, leaves them where LLVM last read them; and a number is
+        // never a reference, so a store of one leaves the array or the object
+        // a variable holds.
+        output.Append($"\n{Unpredictable} = !{{}}\n{TbaaRoot} = !{{!\"Sable TBAA\"}}\n")
             .Append($"{TbaaHeaderType} = !{{!\"array header\", {TbaaRoot}, i64 0}}\n")
-            .Append($"{TbaaElementType} = !{{!\"array element\", {TbaaRoot}, i64 0}}\n")
-            .Append($"{TbaaHeader} = !{{{TbaaHeaderType}, {TbaaHeaderType}, i64 0}}\n")
-            .Append($"{TbaaElement} = !{{{TbaaElementType}, {TbaaElementType}, i64 0}}\n");
+            .Append($"{TbaaCountType} = !{{!\"reference count\", {TbaaRoot}, i64 0}}\n")
+            .Append($"{TbaaValueType} = !{{!\"value\", {TbaaRoot}, i64 0}}\n")
+            .Append($"{TbaaScalarType} = !{{!\"number\", {TbaaValueType}, i64 0}}\n")
+            .Append($"{TbaaReferenceType} = !{{!\"reference\", {TbaaValueType}, i64 0}}\n");
+        foreach (var (tag, type) in new[] { (TbaaHeader, TbaaHeaderType), (TbaaCount, TbaaCountType), (TbaaValue, TbaaValueType), (TbaaScalar, TbaaScalarType), (TbaaReference, TbaaReferenceType) }) {
+            output.Append($"{tag} = !{{{type}, {type}, i64 0}}\n");
+        }
 
         foreach (var name in _comdatNames.Distinct(StringComparer.Ordinal)) {
             output.Append('$').Append(name[1..]).Append(" = comdat any\n");
@@ -317,15 +352,15 @@ public sealed partial class LlvmEmitter {
                   br i1 %none, label %done, label %present
                 present:
                   %flagsField = getelementptr inbounds {"{"} ptr, i32, i32 {"}"}, ptr %object, i32 0, i32 2
-                  %flags = load atomic i32, ptr %flagsField monotonic, align 4
+                  %flags = load atomic i32, ptr %flagsField unordered, align 4
                   %special = and i32 %flags, 513
                   %ordinary = icmp eq i32 %special, 0
                   %strongField = getelementptr inbounds {"{"} ptr, i32, i32 {"}"}, ptr %object, i32 0, i32 1
                   br i1 %ordinary, label %local, label %unusual, !prof !{"{"}!"branch_weights", i32 1000, i32 1{"}"}
                 local:
-                  %strong = load i32, ptr %strongField
+                  %strong = load i32, ptr %strongField, !tbaa {TbaaCount}
                 {Dead(0)}  %more = add i32 %strong, 1
-                  store i32 %more, ptr %strongField
+                  store i32 %more, ptr %strongField, !tbaa {TbaaCount}
                   br label %counted
                 unusual:
                   %immortalBit = and i32 %flags, 1
@@ -351,7 +386,7 @@ public sealed partial class LlvmEmitter {
                   br i1 %none, label %done, label %present
                 present:
                   %flagsField = getelementptr inbounds {"{"} ptr, i32, i32 {"}"}, ptr %object, i32 0, i32 2
-                  %flags = load atomic i32, ptr %flagsField monotonic, align 4
+                  %flags = load atomic i32, ptr %flagsField unordered, align 4
                   %special = and i32 %flags, 513
                   %ordinary = icmp eq i32 %special, 0
                   %strongField = getelementptr inbounds {"{"} ptr, i32, i32 {"}"}, ptr %object, i32 0, i32 1
@@ -359,9 +394,9 @@ public sealed partial class LlvmEmitter {
                   %counts = icmp ne i8 %counting, 0
                   br i1 %ordinary, label %local, label %unusual, !prof !{"{"}!"branch_weights", i32 1000, i32 1{"}"}
                 local:
-                  %strong = load i32, ptr %strongField
+                  %strong = load i32, ptr %strongField, !tbaa {TbaaCount}
                 {Dead(1)}  %less = sub i32 %strong, 1
-                  store i32 %less, ptr %strongField
+                  store i32 %less, ptr %strongField, !tbaa {TbaaCount}
                   %gone = icmp eq i32 %less, 0
                   br i1 %gone, label %last, label %counted, !prof !{"{"}!"branch_weights", i32 1, i32 1000{"}"}
                 unusual:
@@ -461,6 +496,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @llvm.debugtrap()
                                 @sable_trap_site = external thread_local global ptr
                                 declare ptr @sable_alloc(ptr, i64)
+                                declare ptr @sable_alloc_uninitialised(ptr, i64)
                                 declare void @sable_retain(ptr)
                                 declare void @sable_release(ptr)
                                 declare void @sable_destroy_uncounted(ptr)
@@ -596,9 +632,9 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_char_from_int(i64, ptr)
                                 declare i64 @sable_array_count(ptr)
                                 declare ptr @sable_array_element(ptr, i64)
-                                declare ptr @sable_array_append_slot(ptr nocapture, ptr)
-                                declare ptr @sable_array_mutable_element(ptr nocapture, ptr, i64)
-                                declare ptr @sable_array_remove_last(ptr nocapture, ptr)
+                                declare ptr @sable_array_append_slot(ptr nocapture, ptr) cold
+                                declare ptr @sable_array_mutable_element(ptr nocapture, ptr, i64) cold
+                                declare ptr @sable_array_remove_last(ptr nocapture, ptr) cold
                                 declare i64 @sable_array_capacity(ptr)
                                 declare void @sable_array_reserve(ptr nocapture, ptr, i64)
                                 declare void @sable_array_truncate(ptr nocapture, ptr, i64)
@@ -664,7 +700,7 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_task_is_cancelled()
                                 declare zeroext i1 @sable_task_yield()
                                 declare zeroext i1 @sable_task_sleep(i64)
-                                declare void @sable_share(ptr)
+                                declare void @sable_share(ptr) cold
                                 declare void @sable_object_unmade(ptr)
                                 declare void @sable_task_spawn_cancelled()
                                 declare zeroext i1 @sable_actor_hop(ptr)
@@ -722,7 +758,7 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_frame_alloc(i64)
                                 declare void @sable_frame_free(ptr)
                                 declare void @sable_coverage_hit(i64)
-                                declare void @sable_array_make_unique(ptr nocapture, ptr)
+                                declare void @sable_array_make_unique(ptr nocapture, ptr) cold
                                 @sable_empty_array_count = internal constant %SableArrayHeader zeroinitializer
                                 declare void @sable_access_begin(ptr, i64, i32)
                                 declare void @sable_access_check(ptr, i64, i32)
@@ -1256,7 +1292,7 @@ public sealed partial class LlvmEmitter {
             if (!deinits) {
                 deinits = true;
                 body.Append("  %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %o, i32 0, i32 2\n")
-                    .Append("  %flags = load atomic i32, ptr %flagsField monotonic, align 4\n")
+                    .Append("  %flags = load atomic i32, ptr %flagsField unordered, align 4\n")
                     .Append("  %unmadeBit = and i32 %flags, 1024\n")
                     .Append("  %made = icmp eq i32 %unmadeBit, 0\n")
                     .Append("  br i1 %made, label %deinit, label %fields\n")
@@ -1902,7 +1938,7 @@ public sealed partial class LlvmEmitter {
             if (SilType.IsIndirect(element)) {
                 OpaqueMove(element, at, value);
             } else {
-                Line($"store {Type(element)} {value}, ptr {at}, !tbaa {TbaaElement}");
+                Line($"store {Type(element)} {value}, ptr {at}, !tbaa {TbaaOf(Type(element))}");
             }
         }
 
@@ -2326,6 +2362,23 @@ public sealed partial class LlvmEmitter {
 
         DebugInfo? Debug => module._debug;
 
+        /// <summary>
+        ///     What a parameter's pointer is known to point to for the whole
+        ///     call: storage the caller lends, or an object it keeps alive.
+        ///     Read before it is known to be needed, it faults no more than
+        ///     when it is: what lets LLVM load an array's buffer once before
+        ///     a loop that may not go round.
+        /// </summary>
+        static string Dereferenceable(SilArgument argument) {
+            var (size, align) = argument.Type switch {
+                AddressType { Pointee: var pointee } when !SilType.IsIndirect(pointee) && !SilType.MentionsOpaque(pointee) => (TypeLayout.Size(pointee), TypeLayout.Align(pointee)),
+                ClassType { IsCoroutineFrame: false } held when !SilType.MentionsOpaque(held) && SilVerifier.OwnershipOf(argument) == SIL.Ownership.Guaranteed
+                    => (TypeLayout.Object(held).Size, TypeLayout.PointerBytes),
+                _ => (0, 1),
+            };
+            return size > 0 ? $" dereferenceable({size}) align {Math.Min(align, HeapAlign)}" : "";
+        }
+
         public string Emit() {
             // Every function has a subprogram; one the compiler made, with no
             // source of its own, is artificial, its code all at line 0.
@@ -2348,7 +2401,7 @@ public sealed partial class LlvmEmitter {
                 // §2.3): nothing else the callee can reach is the same storage.
                 // That is LLVM's noalias, and what lets it keep an array's
                 // buffer and count in registers across writes to elements.
-                parameters.Add(argument.Type is AddressType ? $"ptr noalias %p{i}" : $"{ArgumentType(argument.Type)} %p{i}");
+                parameters.Add(argument.Type is AddressType ? $"ptr noalias{Dereferenceable(argument)} %p{i}" : $"{ArgumentType(argument.Type)}{Dereferenceable(argument)} %p{i}");
             }
 
             // Unspecialised code's metadata (#297): what its opaque values are
@@ -2894,13 +2947,13 @@ public sealed partial class LlvmEmitter {
                 case LoadInst load: {
                     var name = Fresh();
                     _names[load] = name;
-                    Line($"{name} = load {Type(load.Type)}, ptr {Name(load.Address)}{AccessAlign(load.Address, load.Type)}");
+                    Line($"{name} = load {Type(load.Type)}, ptr {Name(load.Address)}{AccessAlign(load.Address, load.Type)}{TbaaAt(load.Address, load.Type)}");
                     switch (load.Kind) {
                         case LoadKind.Copy:
                             Own(true, load.Type, name);
                             break;
                         case LoadKind.Take:
-                            Line($"store {Type(load.Type)} zeroinitializer, ptr {Name(load.Address)}{AccessAlign(load.Address, load.Type)}");
+                            Line($"store {Type(load.Type)} zeroinitializer, ptr {Name(load.Address)}{AccessAlign(load.Address, load.Type)}{TbaaAt(load.Address, load.Type)}");
                             break;
                     }
 
@@ -2912,10 +2965,10 @@ public sealed partial class LlvmEmitter {
                     string? old = null;
                     if (store.Kind == StoreKind.Assign && !store.Value.Type.IsTrivial && store.Address is not AllocStackInst { Unmanaged: true }) {
                         old = Fresh();
-                        Line($"{old} = load {Type(store.Value.Type)}, ptr {Name(store.Address)}{AccessAlign(store.Address, store.Value.Type)}");
+                        Line($"{old} = load {Type(store.Value.Type)}, ptr {Name(store.Address)}{AccessAlign(store.Address, store.Value.Type)}{TbaaAt(store.Address, store.Value.Type)}");
                     }
 
-                    Line($"store {Type(store.Value.Type)} {Name(store.Value)}, ptr {Name(store.Address)}{AccessAlign(store.Address, store.Value.Type)}");
+                    Line($"store {Type(store.Value.Type)} {Name(store.Value)}, ptr {Name(store.Address)}{AccessAlign(store.Address, store.Value.Type)}{TbaaAt(store.Address, store.Value.Type)}");
                     if (old is not null) {
                         Own(false, store.Value.Type, old);
                     }
@@ -2998,7 +3051,7 @@ public sealed partial class LlvmEmitter {
                 case LoadBorrowInst borrow: {
                     var name = Fresh();
                     _names[borrow] = name;
-                    Line($"{name} = load {Type(borrow.Type)}, ptr {Name(borrow.Address)}{AccessAlign(borrow.Address, borrow.Type)}");
+                    Line($"{name} = load {Type(borrow.Type)}, ptr {Name(borrow.Address)}{AccessAlign(borrow.Address, borrow.Type)}{TbaaAt(borrow.Address, borrow.Type)}");
                     return;
                 }
 
@@ -3042,8 +3095,8 @@ public sealed partial class LlvmEmitter {
                 case DestroyAddrInst destroy: {
                     var type = ((AddressType)destroy.Address.Type).Pointee;
                     var old = Fresh();
-                    Line($"{old} = load {Type(type)}, ptr {Name(destroy.Address)}{AccessAlign(destroy.Address, type)}");
-                    Line($"store {Type(type)} zeroinitializer, ptr {Name(destroy.Address)}{AccessAlign(destroy.Address, type)}");
+                    Line($"{old} = load {Type(type)}, ptr {Name(destroy.Address)}{AccessAlign(destroy.Address, type)}{TbaaAt(destroy.Address, type)}");
+                    Line($"store {Type(type)} zeroinitializer, ptr {Name(destroy.Address)}{AccessAlign(destroy.Address, type)}{TbaaAt(destroy.Address, type)}");
                     if (destroy.Uncounted && Type(type) == "ptr") {
                         Line($"call void @sable_destroy_uncounted(ptr {old})");
                     } else {
@@ -3126,7 +3179,12 @@ public sealed partial class LlvmEmitter {
                         return;
                     }
 
-                    Line($"{name} = call ptr @sable_alloc(ptr {module.ClassMetadata(alloc.ClassType)}, i64 {size})");
+                    // Its fields cleared here, where LLVM sees the stores that
+                    // follow to them and drops what they make pointless.
+                    Line($"{name} = call ptr @sable_alloc_uninitialised(ptr {module.ClassMetadata(alloc.ClassType)}, i64 {size})");
+                    var fields = Fresh();
+                    Line($"{fields} = getelementptr inbounds i8, ptr {name}, i64 16");
+                    Line($"call void @llvm.memset.p0.i64(ptr align 16 {fields}, i8 0, i64 sub (i64 {size}, i64 16), i1 false)");
                     return;
                 }
 
@@ -4033,7 +4091,7 @@ public sealed partial class LlvmEmitter {
                     var bit = Fresh();
                     var shared = Fresh();
                     Line($"{at} = getelementptr inbounds i8, ptr {operands[0]}, i64 12");
-                    Line($"{flags} = load atomic i32, ptr {at} monotonic, align 4");
+                    Line($"{flags} = load atomic i32, ptr {at} unordered, align 4");
                     Line($"{bit} = and i32 {flags}, 512");
                     Line($"{shared} = icmp ne i32 {bit}, 0");
                     var share = NewLabel("share");
@@ -4362,6 +4420,11 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = {op} i64 {operands[0]}, {operands[1]}");
                     return;
                 }
+
+                // Which is never made a branch of: said to be one no guess would serve.
+                case "select_Int":
+                    Line($"{Result()} = select i1 {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, !unpredictable {Unpredictable}");
+                    return;
 
                 case "and_Int" or "or_Int" or "xor_Int":
                     Line($"{Result()} = {builtin.Name[..builtin.Name.IndexOf('_')]} i64 {operands[0]}, {operands[1]}");
@@ -5088,7 +5151,7 @@ public sealed partial class LlvmEmitter {
                     for (var i = 0; i < operands.Length; i++) {
                         var element = Fresh();
                         Line($"{element} = getelementptr inbounds {layout}, ptr {memory}, i32 0, i32 1, i64 {i}");
-                        Line($"store {Type(arrayType.Element)} {operands[i]}, ptr {element}, !tbaa {TbaaElement}");
+                        Line($"store {Type(arrayType.Element)} {operands[i]}, ptr {element}, !tbaa {TbaaOf(Type(arrayType.Element))}");
                     }
 
                     return;
@@ -5134,7 +5197,7 @@ public sealed partial class LlvmEmitter {
                     }
 
                     var value = Result();
-                    Line($"{value} = load {Type(builtin.Type)}, ptr {element}, !tbaa {TbaaElement}");
+                    Line($"{value} = load {Type(builtin.Type)}, ptr {element}, !tbaa {TbaaOf(Type(builtin.Type))}");
                     if (builtin.Name == "array_get") {
                         Own(true, builtin.Type, value);
                     }
@@ -5169,8 +5232,8 @@ public sealed partial class LlvmEmitter {
                     }
 
                     var old = Fresh();
-                    Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaElement}");
-                    Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaElement}");
+                    Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaOf(elementType)}");
+                    Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaOf(elementType)}");
                     Own(false, unique.Element, old);
                     return;
                 }
@@ -5184,9 +5247,25 @@ public sealed partial class LlvmEmitter {
                     }
 
                     var old = Fresh();
-                    Line($"{old} = load {elementType}, ptr {element}");
-                    Line($"store {elementType} {operands[2]}, ptr {element}");
+                    Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaOf(elementType)}");
+                    Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaOf(elementType)}");
                     Own(false, written.Element, old);
+                    return;
+                }
+
+                // Unique already, the element's address is where it is.
+                case "array_element_addr_unique" when builtin.Operands[0].Type is AddressType { Pointee: SliceType addressedUnique }: {
+                    var slice = Fresh();
+                    Line($"{slice} = load {Type(addressedUnique)}, ptr {operands[0]}");
+                    _names[builtin] = SliceElement(slice, operands[1], addressedUnique, check: !builtin.InBounds);
+                    return;
+                }
+
+                case "array_element_addr_unique": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var array = Fresh();
+                    Line($"{array} = load ptr, ptr {operands[0]}, !tbaa {TbaaReference}");
+                    _names[builtin] = InlineElement(array, operands[1], arrayType.Element, check: !builtin.InBounds);
                     return;
                 }
 
@@ -5203,7 +5282,7 @@ public sealed partial class LlvmEmitter {
                     var metadata = ArrayMetadataOf(arrayType);
                     var array = Fresh();
                     var isNull = Fresh();
-                    Line($"{array} = load ptr, ptr {operands[0]}");
+                    Line($"{array} = load ptr, ptr {operands[0]}, !tbaa {TbaaReference}");
                     Line($"{isNull} = icmp eq ptr {array}, null");
                     var check = NewLabel("shared");
                     var copy = NewLabel("copy");
@@ -5221,7 +5300,7 @@ public sealed partial class LlvmEmitter {
                     Line($"{type} = load ptr, ptr {typeField}, !tbaa {TbaaHeader}");
                     Line($"{own} = icmp eq ptr {type}, {metadata}");
                     Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-                    Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+                    Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaCount}");
                     Line($"{one} = icmp eq i32 {strong}, 1");
                     Line($"{unique} = and i1 {own}, {one}");
                     Line($"br i1 {unique}, label %{done}, label %{copy}");
@@ -5237,7 +5316,7 @@ public sealed partial class LlvmEmitter {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var elementType = Type(arrayType.Element);
                     var array = Fresh();
-                    Line($"{array} = load ptr, ptr {operands[0]}");
+                    Line($"{array} = load ptr, ptr {operands[0]}, !tbaa {TbaaReference}");
                     var element = InlineElement(array, operands[1], arrayType.Element, check: !builtin.InBounds);
                     if (arrayType.Element is var replacedUnique && SilType.IsIndirect(replacedUnique)) {
                         OpaqueWitness(replacedUnique, AssignWithTakeWitness, element, operands[2]);
@@ -5245,8 +5324,8 @@ public sealed partial class LlvmEmitter {
                     }
 
                     var old = Fresh();
-                    Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaElement}");
-                    Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaElement}");
+                    Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaOf(elementType)}");
+                    Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaOf(elementType)}");
                     Own(false, arrayType.Element, old);
                     return;
                 }
@@ -5261,8 +5340,8 @@ public sealed partial class LlvmEmitter {
                     }
 
                     var old = Fresh();
-                    Line($"{old} = load {elementType}, ptr {element}");
-                    Line($"store {elementType} {operands[2]}, ptr {element}");
+                    Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaOf(elementType)}");
+                    Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaOf(elementType)}");
                     Own(false, arrayType.Element, old);
                     return;
                 }
@@ -5395,10 +5474,14 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                // The whole of an array, viewed: its buffer retained, from 0 for its count.
-                case "slice_of": {
+                // The whole of an array, viewed: its buffer retained, or borrowed from
+                // the array, from 0 for its count.
+                case "slice_of" or "slice_of_borrowed": {
                     var count = Count(operands[0]);
-                    RetainBuffer(operands[0]);
+                    if (builtin.Name == "slice_of") {
+                        RetainBuffer(operands[0]);
+                    }
+
                     _names[builtin] = MakeSlice((SliceType)builtin.Type, operands[0], "0", count);
                     return;
                 }
@@ -6552,7 +6635,7 @@ public sealed partial class LlvmEmitter {
         string AppendSlot(string slot, ArrayType arrayType) {
             var array = Fresh();
             var isNull = Fresh();
-            Line($"{array} = load ptr, ptr {slot}");
+            Line($"{array} = load ptr, ptr {slot}, !tbaa {TbaaReference}");
             Line($"{isNull} = icmp eq ptr {array}, null");
             var check = NewLabel("room");
             var fast = NewLabel("append");
@@ -6576,7 +6659,7 @@ public sealed partial class LlvmEmitter {
             Line($"{capacity} = load i64, ptr {capacityField}, !tbaa {TbaaHeader}");
             Line($"{room} = icmp ult i64 {count}, {capacity}");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaCount}");
             Line($"{unique} = icmp eq i32 {strong}, 1");
             Line($"{both} = and i1 {room}, {unique}");
             Line($"br i1 {both}, label %{fast}, label %{slow}");
@@ -6614,7 +6697,7 @@ public sealed partial class LlvmEmitter {
         string LastSlot(string slot, ArrayType arrayType) {
             var array = Fresh();
             var isNull = Fresh();
-            Line($"{array} = load ptr, ptr {slot}");
+            Line($"{array} = load ptr, ptr {slot}, !tbaa {TbaaReference}");
             Line($"{isNull} = icmp eq ptr {array}, null");
             var check = NewLabel("last");
             var fast = NewLabel("pop");
@@ -6634,7 +6717,7 @@ public sealed partial class LlvmEmitter {
             Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
             Line($"{some} = icmp sgt i64 {count}, 0");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaCount}");
             Line($"{unique} = icmp eq i32 {strong}, 1");
             Line($"{both} = and i1 {some}, {unique}");
             Line($"br i1 {both}, label %{fast}, label %{slow}");
@@ -6754,7 +6837,7 @@ public sealed partial class LlvmEmitter {
         string MutableElement(string slot, string index, ArrayType arrayType) {
             var array = Fresh();
             var isNull = Fresh();
-            Line($"{array} = load ptr, ptr {slot}");
+            Line($"{array} = load ptr, ptr {slot}, !tbaa {TbaaReference}");
             Line($"{isNull} = icmp eq ptr {array}, null");
             var check = NewLabel("unique");
             var fast = NewLabel("inplace");
@@ -6774,7 +6857,7 @@ public sealed partial class LlvmEmitter {
             Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
             Line($"{inRange} = icmp ult i64 {index}, {count}");
             Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaCount}");
             Line($"{unique} = icmp eq i32 {strong}, 1");
             Line($"{both} = and i1 {inRange}, {unique}");
             Line($"br i1 {both}, label %{fast}, label %{slow}");

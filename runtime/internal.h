@@ -62,4 +62,9 @@ static inline void buffer_add(Buffer *buffer, const char *bytes, size_t length) 
     buffer->length += length;
 }
 
+// What compiled code calls when its own inline path does not do: kept a call
+// by link-time optimisation, which would otherwise copy it into the function
+// beside that path, and the registers it saves with it.
+#define SABLE_SLOW __attribute__((noinline, cold))
+
 #endif

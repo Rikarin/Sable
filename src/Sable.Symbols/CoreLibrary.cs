@@ -63,7 +63,8 @@ public static class CoreLibrary {
     static IReadOnlyList<SyntaxTree> Load(string os, string arch, string profile) {
         var assembly = typeof(CoreLibrary).Assembly;
         var trees = new List<SyntaxTree>();
-        var options = ParseOptions.Default.ForTarget(os, arch);
+        // The standard library is one workspace, with the modules beside this one (the driver's Library).
+        var options = ParseOptions.Default.ForTarget(os, arch) with { Workspace = "sable" };
         var plain = profile.Length > 0 ? TreesFor(options) : null;
         foreach (var resource in assembly.GetManifestResourceNames()
                      .Where(static n => n.StartsWith("lib/Sable.Core/", StringComparison.Ordinal))

@@ -451,6 +451,8 @@ static void sable_weak_object_died(SableObject *object);
 
 static void object_born(SableObject *object);
 static void object_gone(SableObject *object);
+static inline void object_born_on(SableThread *thread, SableObject *object);
+static inline void object_gone_on(SableThread *thread, SableObject *object);
 static void report_leaks(void);
 static void report_frames(void);
 static void report_tasks(void);

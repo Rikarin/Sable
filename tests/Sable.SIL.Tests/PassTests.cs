@@ -236,7 +236,9 @@ public sealed class PassTests {
             Assert.DoesNotContain(Instructions(function).OfType<BuiltinInst>(), static b => b.Name == "array_get");
         }
 
-        Assert.Single(Instructions(module.Find("M.keyAfterCall")!).OfType<CopyValueInst>());
+        // The array is the caller's, and stays as it is for the call: the key
+        // is read where it is even across another call, its slot unowned.
+        Assert.Empty(Instructions(module.Find("M.keyAfterCall")!).OfType<CopyValueInst>());
         var interpreter = new SilInterpreter(module);
         Assert.Equal(324L, interpreter.Run("M.run"));
     }

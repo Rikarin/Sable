@@ -115,9 +115,9 @@ fn sortedOfASliceSortsItsRun() {
 }
 
 @bench
-fn sortAThousand() {
-    var values = scrambled(1000, 1000000)
-    values.sort()
+fn sortAThousand(_ b: Bencher) {
+    let values = scrambled(1000, 1000000)
+    b.iterate(setup: { values }, { (copy: inout Int[>..]) in copy.sort() })
 }
 
 /// Whether the array is in ascending order.

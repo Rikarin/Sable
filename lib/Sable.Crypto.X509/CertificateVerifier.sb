@@ -1,5 +1,6 @@
 module Sable.Crypto.X509
 
+import Sable.Crypto
 import Sable.Time
 
 /// Whether a certificate is to be believed (RFC 5280 §6): whether a path of

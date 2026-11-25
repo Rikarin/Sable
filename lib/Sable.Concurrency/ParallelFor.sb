@@ -1,0 +1,210 @@
+module Sable.Concurrency
+
+// Loops whose rounds run at once, on the pool's threads and the one that
+// begins them: .NET's Parallel.For and Parallel.Invoke, Rayon's for_each and
+// join, GCD's concurrentPerform.
+
+/// Runs the body for each number of the range, several at a time and in no
+/// order, and returns once all have: .NET's `Parallel.For`. At most `degree`
+/// threads run it, this one among them (0: as many as there are workers), and
+/// each takes at least `grain` numbers at a time.
+///
+/// The body is called alongside itself, so what it captures is Sendable: what
+/// each round makes goes into an atomic, a mutex, or — better — a result of
+/// its own, as the range's `parallel.map` and `reduce` give.
+///
+/// ```sable
+/// let total = Atomic(0)
+/// parallelFor(1..<101) { total.add($0) }
+/// assert(total.load() == 5050)
+/// ```
+///
+/// When a round throws, no thread begins another, and the error is thrown
+/// once those going on have ended: the first, if several throw. A round of a
+/// loop begun in a task is cancelled with it, and stops the loop by throwing:
+///
+/// ```sable
+/// do {
+///     try parallelFor(0..<1_000_000) { i in
+///         try Task.checkCancellation()
+///         if i == 500 {
+///             throw CancellationError()
+///         }
+///     }
+///     assert(false)
+/// } catch { }
+/// ```
+///
+/// This thread helps, so a loop inside a loop, or begun where every worker is
+/// in one, goes on. With `SABLE_WORKERS=0`, on WASI, and in the interpreter
+/// it runs alone, in order.
+public fn parallelFor<E: Error>(_ range: Range<Int>, degree: Int = 0, grain: Int = 1, _ body: @Sendable (Int) throws(E) -> Void) throws(E) {
+    try parallelForChunks(range, degree: degree, grain: grain) { (chunk: Range<Int>) throws(E) -> Void in
+        var i = chunk.lowerBound
+        while i < chunk.upperBound {
+            try body(i)
+            i += 1
+        }
+    }
+}
+
+/// As `parallelFor`, the body called for each chunk of the range that a
+/// thread takes, rather than each number: for a small body, whose loop is
+/// then the program's own, with what it adds up in a variable of its own.
+/// .NET's `Parallel.ForEach` over a range partitioner.
+///
+/// ```sable
+/// let total = Atomic(0)
+/// parallelForChunks(0..<1000) { chunk in
+///     var sum = 0
+///     for i in chunk {
+///         sum += i
+///     }
+///     total.add(sum)
+/// }
+/// assert(total.load() == 499_500)
+/// ```
+public fn parallelForChunks<E: Error>(_ range: Range<Int>, degree: Int = 0, grain: Int = 1, _ body: @Sendable (Range<Int>) throws(E) -> Void) throws(E) {
+    let lower = range.lowerBound
+    let loop = ParallelLoop(range.upperBound - lower, degree: degree, grain: grain)
+    let failure = OnceCell<E>()
+    loop.run {
+        do {
+            while true {
+                let chunk = loop.claim()
+                if chunk.isEmpty {
+                    return
+                }
+                try body(lower + chunk.lowerBound..<lower + chunk.upperBound)
+            }
+        } catch {
+            loop.stop()
+            _ = failure.getOrInit { error }
+        }
+    }
+    if let error = failure.get() {
+        throw error
+    }
+}
+
+/// Runs the two at once, if a worker is free to, and gives what each gave:
+/// Rayon's `join`, .NET's `Parallel.Invoke`. A part of a problem and the rest
+/// of it, each divided again.
+///
+/// ```sable
+/// fn sum(_ xs: Int[:]) -> Int {
+///     if xs.count < 1000 {
+///         return xs.sum()
+///     }
+///     let middle = xs.count / 2
+///     let (low, high) = parallelInvoke({ sum(xs[..<middle]) }, { sum(xs[middle...]) })
+///     return low + high
+/// }
+/// assert(sum((0..<10_000).toArray()) == 49_995_000)
+/// ```
+///
+/// If one throws, its error is thrown once the other has ended, which is not
+/// begun if it has not been.
+public fn parallelInvoke<A: Sendable, B: Sendable, E: Error>(_ first: @Sendable () throws(E) -> A, _ second: @Sendable () throws(E) -> B) throws(E) -> (A, B) {
+    let a = OnceCell<A>()
+    let b = OnceCell<B>()
+    try parallelFor(0..<2) { (i: Int) throws(E) -> Void in
+        if i == 0 {
+            let value = try first()
+            _ = a.getOrInit { value }
+        } else {
+            let value = try second()
+            _ = b.getOrInit { value }
+        }
+    }
+    return (a.get()!, b.get()!)
+}
+
+/// Runs the three at once, as workers are free to.
+public fn parallelInvoke<A: Sendable, B: Sendable, C: Sendable, E: Error>(_ first: @Sendable () throws(E) -> A, _ second: @Sendable () throws(E) -> B, _ third: @Sendable () throws(E) -> C) throws(E) -> (A, B, C) {
+    let (a, rest) = try parallelInvoke(first, { () throws(E) -> (B, C) in try parallelInvoke(second, third) })
+    return (a, rest.0, rest.1)
+}
+
+/// Runs the four at once, as workers are free to.
+public fn parallelInvoke<A: Sendable, B: Sendable, C: Sendable, D: Sendable, E: Error>(_ first: @Sendable () throws(E) -> A, _ second: @Sendable () throws(E) -> B, _ third: @Sendable () throws(E) -> C, _ fourth: @Sendable () throws(E) -> D) throws(E) -> (A, B, C, D) {
+    let (low, high) = try parallelInvoke({ () throws(E) -> (A, B) in try parallelInvoke(first, second) }, { () throws(E) -> (C, D) in try parallelInvoke(third, fourth) })
+    return (low.0, low.1, high.0, high.1)
+}
+
+/// Runs the async body for each element, at most `degree` at a time (0: one
+/// for each worker), each in a task of its own turn: .NET's
+/// `Parallel.ForEachAsync`. For work that waits — requests, files — rather
+/// than keeps a core busy. The elements are taken in order, as a place comes
+/// free. If a body throws no more are begun, those going on are cancelled, and
+/// the first error is thrown once they have ended; cancelling the task that
+/// awaits this does the same, and throws CancellationError.
+///
+/// ```sable
+/// let total = Atomic(0)
+/// try! await parallelForEach([1, 2, 3, 4], degree: 2) { n in
+///     await Task.yield()
+///     total.add(n)
+/// }
+/// assert(total.load() == 10)
+/// ```
+public fn parallelForEach<S: Sequence>(_ elements: S, degree: Int = 0, _ body: @Sendable async (S.Element) throws -> Void) async throws where S.Element: Sendable {
+    precondition(degree >= 0, "a loop cannot be run by \(degree) tasks")
+    let workers = degree == 0 ? Runtime.workerCount() : degree
+    let most = workers < 1 ? 1 : workers
+    var iterator = elements.makeIterator()
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        var running = 0
+        while let element = try iterator.next() {
+            if running == most {
+                try await group.next()
+                running -= 1
+            }
+            try Task.checkCancellation()
+            group.spawn { try await body(element) }
+            running += 1
+        }
+        while running > 0 {
+            try await group.next()
+            running -= 1
+        }
+    }
+}
+
+/// As `parallelForEach` of a sequence, of an async one: each element is asked
+/// for once a place is free.
+///
+/// ```sable
+/// let channel = Channel<Int>()
+/// await channel.send(20)
+/// await channel.send(22)
+/// await channel.close()
+/// let total = Atomic(0)
+/// try! await parallelForEach(channel, degree: 4) { total.add($0) }
+/// assert(total.load() == 42)
+/// ```
+public fn parallelForEach<S: AsyncSequence>(_ elements: S, degree: Int = 0, _ body: @Sendable async (S.Element) throws -> Void) async throws where S.Element: Sendable {
+    precondition(degree >= 0, "a loop cannot be run by \(degree) tasks")
+    let workers = degree == 0 ? Runtime.workerCount() : degree
+    let most = workers < 1 ? 1 : workers
+    var iterator = elements.makeAsyncIterator()
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        var running = 0
+        while true {
+            if running == most {
+                try await group.next()
+                running -= 1
+            }
+            guard let element = try await iterator.next() else {
+                break
+            }
+            try Task.checkCancellation()
+            group.spawn { try await body(element) }
+            running += 1
+        }
+        while running > 0 {
+            try await group.next()
+            running -= 1
+        }
+    }
+}

@@ -75,6 +75,18 @@ fn missingSelfOutsideAType() -> Int {
     return Self.something               //! S3019
 }
 
+struct StaticReaches {
+    var size: Int
+    fn next(_ i: Int) -> Int { return size + i }
+
+    static fn call() -> Int { return next(1) }                      //! S3019 'next' is a member of a value
+    static fn read() -> Int { return size }                         //! S3019 'size' is a member of a value
+    static fn me() -> Int { return self.size }                      //! S3019 a static member of 'StaticReaches' has no 'self'
+    static fn mapped(_ xs: Int[]) -> Int[] {
+        return xs.map { x in next(x) }                              //! S3019 reach it through a value
+    }
+}
+
 fn aUnionCaseNeedsItsPayload() -> Shape {
     return Shape.Circle                 //! S6002 so it needs them here
 }

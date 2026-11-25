@@ -405,6 +405,45 @@ public static class NativeBuild {
         }
     }
 
+    /// <summary>The program's IR as assembly, optimised as the options say; in what is given back where it succeeded.</summary>
+    public static NativeBuildResult CompileToAssembly(string llvmIr, NativeOptions options) {
+        var target = options.TargetOrHost;
+        var directory = Directory.CreateTempSubdirectory("sable-assembly-");
+        try {
+            var irPath = Path.Combine(directory.FullName, "program.ll");
+            var output = Path.Combine(directory.FullName, "program.s");
+            File.WriteAllText(irPath, ForTarget(llvmIr, target));
+            var (exitCode, said) = Run(CompilerPath, [..target.ClangFlags, ..SysrootFlags(options), $"-O{options.OptLevel}", ..target.IrFlags, "-S", irPath, "-o", output]);
+            return exitCode == 0 ? new(true, File.ReadAllText(output)) : new(false, said);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>The functions of an assembly file, as clang writes one: each symbol, without the platform's underscore, and its lines.</summary>
+    public static IEnumerable<(string Symbol, string Text)> FunctionsOf(string assembly) {
+        string? symbol = null;
+        var text = new System.Text.StringBuilder();
+        foreach (var line in assembly.Split('\n')) {
+            // A label in the first column, quoted where its name needs it, starts one.
+            if (symbol is null && line.Length > 0 && line[0] is not (' ' or '\t' or '.' or '#' or ';' or '/') && line.LastIndexOf(':') is var colon and > 0) {
+                var name = line[..colon].Trim('"');
+                symbol = name.StartsWith("_sable.", StringComparison.Ordinal) ? name[1..] : name;
+            }
+
+            if (symbol is null) {
+                continue;
+            }
+
+            text.Append(line).Append('\n');
+            if (line.Contains(".cfi_endproc", StringComparison.Ordinal) || line.Contains(".seh_endproc", StringComparison.Ordinal) || line.Contains("-- End function", StringComparison.Ordinal)) {
+                yield return (symbol, text.ToString());
+                symbol = null;
+                text.Clear();
+            }
+        }
+    }
+
     /// <summary>
     ///     What makes a static library of <paramref name="objects" />: <c>$AR</c>
     ///     when it is set; for Windows, LLVM's <c>llvm-lib</c>, which writes the
@@ -456,7 +495,8 @@ public static class NativeBuild {
     ///     public symbols) leaves out: there they are kept external. Nothing
     ///     else links with the program, so no name can clash.
     /// </param>
-    public static string ForTarget(string llvmIr, NativeTarget target, bool inlinesRuntime = false, bool namesFrames = false) {
+    /// <param name="extraAttributes">More attributes for every function.</param>
+    public static string ForTarget(string llvmIr, NativeTarget target, bool inlinesRuntime = false, bool namesFrames = false, string? extraAttributes = null) {
         if (namesFrames && target.Platform is NativePlatform.Linux or NativePlatform.Windows) {
             llvmIr = llvmIr.Replace("\ndefine internal ", "\ndefine ", StringComparison.Ordinal);
         }
@@ -468,6 +508,10 @@ public static class NativeBuild {
 
         if (PlatformAttributesFor(target) is { } platform) {
             attributes.Add(platform);
+        }
+
+        if (extraAttributes is not null) {
+            attributes.Add(extraAttributes);
         }
 
         var ir = attributes.Count > 0 ? WithHostAttributes(llvmIr, string.Join(' ', attributes)) : llvmIr;

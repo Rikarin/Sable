@@ -1,13 +1,13 @@
 module SleepCancelBench
 
 import Sable.Concurrency
+import Sable.Testing
 import Sable.Time
 
 // Sleeps cut short: fifty thousand tasks, each to sleep an hour, all
 // cancelled one by one and awaited.
 
-@main
-fn main() async {
+fn run() async -> String {
     var tasks: Task<Int>[>..] = []
     for _ in 0..<50000 {
         tasks.append(
@@ -27,5 +27,10 @@ fn main() async {
     for task in tasks {
         total += await task.value
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { await run() })
 }

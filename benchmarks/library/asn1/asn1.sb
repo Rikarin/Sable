@@ -1,6 +1,7 @@
 module Asn1Bench
 
 import Sable.Serialize.Asn1
+import Sable.Testing
 import Sable.Time
 
 // ASN.1 by DER: twenty thousand certificates of X.509's shape written, and
@@ -136,8 +137,7 @@ fn readCertificate(_ reader: inout AsnReader) throws(AsnError) -> Int {
     return sum
 }
 
-@main
-fn main() throws(AsnError) {
+fn run() throws(AsnError) -> String {
     var modulus: U8[>..] = []
     for i in 0..<256 {
         modulus.append(U8.truncating(i * 7 + 193))
@@ -158,5 +158,10 @@ fn main() throws(AsnError) {
         sum += try readCertificate(&reader)
         try reader.finish()
     }
-    print("\(size) \(sum) \(check)")
+    return "\(size) \(sum) \(check)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { try! run() })
 }

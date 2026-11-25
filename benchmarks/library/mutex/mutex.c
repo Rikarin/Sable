@@ -1,5 +1,6 @@
 // Port of mutex.sb: four threads and a pthread mutex.
 #include <pthread.h>
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
 static pthread_mutex_t gate = PTHREAD_MUTEX_INITIALIZER;
@@ -15,12 +16,14 @@ static void *work(void *unused) {
     return NULL;
 }
 
-int main(void) {
+static void run(void) {
+    count = 0;
     pthread_t threads[4];
     for (int t = 0; t < 4; t++) {
         if (pthread_create(&threads[t], NULL, work, NULL) != 0) trap("pthread_create");
     }
     for (int t = 0; t < 4; t++) pthread_join(threads[t], NULL);
-    printf("%lld\n", (long long)count);
-    return 0;
+    bench_printf("%lld\n", (long long)count);
 }
+
+BENCH_MAIN(run)

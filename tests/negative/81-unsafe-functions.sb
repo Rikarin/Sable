@@ -35,3 +35,12 @@ fn inside() -> Int {
         return f(later())
     }
 }
+
+struct Vouched {
+    let n: Int
+    unsafe init(trusting n: Int) { self.n = n }
+}
+
+fn makes() -> Vouched {
+    return Vouched(trusting: 1) //! S3470 'Vouched.init' is an 'unsafe init'
+}

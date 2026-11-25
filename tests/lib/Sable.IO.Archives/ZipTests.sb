@@ -286,12 +286,13 @@ fn nothingIsWrittenOutside() throws {
     let names = ["../up", "a/../../up", "/root", "..", "a/..", "..\\up", "a\\..\\..\\up", "C:\\x", "c:x", "\\x", "a\0b"]
     for name in names {
         // Written with another name, and then changed, as the writer refuses
-        // some of them.
+        // some of them: in the local header, and in the central one. What else
+        // is in a header, the time, may be the same byte.
         let raw = name.utf8Bytes()
         var made = archive { writer throws(IoError) in try writer.add(repeated("\u{7E}", raw.count), [1]) }
         var i = 0
         while i + raw.count <= made.count {
-            if made[i] == 0x7E && (i == 30 || made[i - 1] != 0x7E) {
+            if i == 30 || i >= 46 && made[i - 46] == 0x50 && made[i - 45] == 0x4B && made[i - 44] == 1 && made[i - 43] == 2 {
                 var j = 0
                 while j < raw.count {
                     made[i + j] = raw[j]
@@ -338,7 +339,9 @@ fn anArchiveCutMeanwhileIsAnError() throws {
     let read = try ZipArchive.open(path)
     var reader = try read.reader(for: read.entries[0])
     assert(reader.entry.name == "a" && (try reader.read(upTo: 0)).isEmpty && (try reader.read(upTo: 10)).count == 10)
-    let file = try File.open(path, options: .appending)
+    var cut = OpenOptions()
+    cut.write = true
+    let file = try File.open(path, options: cut)
     try file.setLength(5000)
     assertEqualText(problem { try reader.readToEnd() }, "the stream ended before what was needed")
 }
@@ -379,12 +382,14 @@ fn linksAreNoWayOut() throws {
     try ZipArchive(same).extract(to: there, options: options)
     assert((try File.metadata(there.appending("link"), followLinks: false)).isFile)
     assert((try Directory.list(temp.path.appending("secret"))).isEmpty)
+    #if !os(windows)
     // Permissions that a new file should not have.
     var bold = ZipOptions()
     bold.mode = 0o6777
     let setuid = archive { writer throws(IoError) in try writer.add("setuid", [1], options: bold) }
     try ZipArchive(setuid).extract(to: there)
     assert(((try File.metadata(there.appending("setuid"))).permissions.mode & 0o7777) == 0o777)
+    #endif
 }
 
 @test

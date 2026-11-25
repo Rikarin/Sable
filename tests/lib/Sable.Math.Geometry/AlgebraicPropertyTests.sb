@@ -1,0 +1,208 @@
+module AlgebraicPropertyTests
+
+// The laws of the algebra, over generated values: transforms are made of a
+// scale, a rotation and a translation, as an arbitrary matrix is usually so
+// near singular that its inverse measures the conditioning.
+
+import Sable.Math.Geometry
+import Sable.Testing
+
+const tolerance: F32 = 0.001
+
+fn scalars(_ low: F64, _ high: F64) -> Gen<F32> => Gen<F32>.float(in: low...high).map { F32($0) }
+
+let vectors: Gen<Vector3> = scalars(-10, 10).array(count: 3...3).map { Vector3($0[0], $0[1], $0[2]) }
+let directions: Gen<Vector3> = vectors.filter { $0.lengthSquared > 0.01 }
+let rotations: Gen<Quaternion> = directions.zip(scalars(-3.14, 3.14)).map { Quaternion(axis: $0.0, angle: $0.1) }
+let scales: Gen<Vector3> = scalars(0.25, 4).array(count: 3...3).map { Vector3($0[0], $0[1], $0[2]) }
+let transforms: Gen<Transform> = scales.zip(rotations).zip(vectors).map { Transform(translation: $0.1, rotation: $0.0.1, scale: $0.0.0) }
+let matrices: Gen<Matrix4x4> = transforms.map { $0.matrix }
+
+@test
+fn normalisingGivesLengthOne() {
+    forAll(directions) { v in expect(nearEqual(v.normalized().length, 1, tolerance: tolerance)) }
+}
+
+@test
+fn theDotProductCommutesAndTheCrossProductAnticommutes() {
+    forAll(vectors, vectors) { (a, b) in
+        expect(a.dot(b) == b.dot(a))
+        expect(a.cross(b) == -b.cross(a))
+        let across = a.cross(b)
+        let scale = (across.length * a.length.maximum(b.length)).maximum(1)
+        expect(across.dot(a).abs() <= tolerance * scale && across.dot(b).abs() <= tolerance * scale)
+    }
+}
+
+@test
+fn multiplicationIsAssociativeAndTheIdentityChangesNothing() {
+    forAll(matrices, matrices, matrices) { (a, b, c) in
+        expect((a * b * c).nearEqual(a * (b * c), tolerance: tolerance))
+        expect(a * Matrix4x4.identity == a && Matrix4x4.identity * a == a)
+    }
+}
+
+@test
+fn aMatrixTimesItsInverseIsTheIdentity() {
+    forAll(matrices) { m in
+        let inverse = m.inverted()!
+        expect((m * inverse).nearEqual(Matrix4x4.identity, tolerance: tolerance))
+        expect((inverse * m).nearEqual(Matrix4x4.identity, tolerance: tolerance))
+        let linear = m.linear
+        expect((linear * linear.inverted()!).nearEqual(Matrix3x3.identity, tolerance: tolerance))
+    }
+}
+
+@test
+fn transposingTwiceGivesTheMatrix() {
+    forAll(matrices) { m in expect(m.transposed().transposed() == m && m.linear.transposed().transposed() == m.linear) }
+}
+
+@test
+fn theDeterminantOfAProductIsTheProductOfTheDeterminants() {
+    forAll(matrices, matrices) { (a, b) in
+        expect(nearEqual((a * b).determinant, a.determinant * b.determinant, tolerance: tolerance))
+        expect(nearEqual(a.linear.determinant, a.determinant, tolerance: tolerance))
+    }
+}
+
+@test
+fn movingByAProductIsMovingTwice() {
+    forAll(matrices, matrices, vectors) { (a, b, v) in
+        expect((a * b).transformPosition(v).nearEqual(b.transformPosition(a.transformPosition(v)), tolerance: tolerance))
+        expect((a * b).transformDirection(v).nearEqual(b.transformDirection(a.transformDirection(v)), tolerance: tolerance))
+    }
+}
+
+@test
+fn slicesAreMovedAsTheirElementsAre() {
+    forAll(matrices, vectors.array(count: 1...32), rotations) { (m, points, q) in
+        var moved = points
+        m.transformPositions(points, into: &moved)
+        expect(moved == points.map { m.transformAffine($0) })
+        m.transformDirections(points, into: &moved)
+        expect(moved == points.map { m.transformDirection($0) })
+        q.transform(points, into: &moved)
+        expect(moved == points.map { q.transform($0) })
+        var same = points
+        m.transformPositions(&same)
+        expect(same == points.map { m.transformAffine($0) })
+    }
+}
+
+@test
+fn aQuaternionIsTheOneOfItsMatrix() {
+    forAll(rotations) { q in expect(Quaternion(rotation: Matrix4x4(rotation: q)).sameRotation(as: q, tolerance: tolerance)) }
+}
+
+@test
+fn aQuaternionTimesItsInverseIsTheIdentity() {
+    forAll(rotations) { q in
+        expect((q * q.inverted()).sameRotation(as: Quaternion.identity, tolerance: tolerance))
+        expect((q.conjugate * q).sameRotation(as: Quaternion.identity, tolerance: tolerance))
+    }
+}
+
+@test
+fn turningKeepsLengthsAndComposesAsMatricesDo() {
+    forAll(rotations, rotations, vectors) { (a, b, v) in
+        expect(nearEqual(a.transform(v).length, v.length, tolerance: tolerance))
+        expect(Matrix4x4(rotation: a * b).nearEqual(Matrix4x4(rotation: a) * Matrix4x4(rotation: b), tolerance: tolerance))
+    }
+}
+
+@test
+fn interpolationIsOfLengthOneAndMeetsBothEnds() {
+    forAll(rotations, rotations, scalars(0, 1)) { (a, b, t) in
+        expect(a.slerp(to: b, 0).sameRotation(as: a, tolerance: tolerance))
+        expect(a.slerp(to: b, 1).sameRotation(as: b, tolerance: tolerance))
+        expect(nearEqual(a.slerp(to: b, t).length, 1, tolerance: 0.00001))
+        expect(nearEqual(a.nlerp(to: b, t).length, 1, tolerance: 0.00001))
+        // At a steady speed: the angle from the start is so much of the whole.
+        let whole = (a.conjugate * b).angle
+        let part = (a.conjugate * a.slerp(to: b, t)).angle
+        expect((part - whole * t).abs() < 0.003)
+    }
+}
+
+@test
+fn composingAndDecomposingAreInverses() {
+    forAll(transforms) { t in
+        let parts = t.matrix.decomposed()!
+        expect(parts.scale.nearEqual(t.scale, tolerance: tolerance))
+        expect(parts.translation == t.translation)
+        expect(parts.rotation.sameRotation(as: t.rotation, tolerance: tolerance))
+        expect(parts.matrix.nearEqual(t.matrix, tolerance: tolerance))
+    }
+}
+
+@test
+fn aTransformMovesPointsAsItsMatrixDoes() {
+    forAll(transforms, transforms, vectors) { (a, b, v) in
+        expect(a.transformPosition(v).nearEqual(a.matrix.transformPosition(v), tolerance: tolerance))
+        expect(a.transformDirection(v).nearEqual(a.matrix.transformDirection(v), tolerance: tolerance))
+        // Composed as matrices where the scales are uniform.
+        var parent = b
+        parent.scale = Vector3(repeating: b.scale.x)
+        expect((a * parent).matrix.nearEqual(a.matrix * parent.matrix, tolerance: 0.01))
+        expect((parent * parent.inverted()).transformPosition(v).nearEqual(v, tolerance: 0.01))
+        expect(a.lerp(to: b, 0).nearEqual(a, tolerance: tolerance))
+        expect(b.adding(a.difference(from: b), weight: 1).transformPosition(v).nearEqual(a.transformPosition(v), tolerance: 0.01))
+        expect(b.adding(a, weight: 0).nearEqual(b, tolerance: tolerance))
+    }
+}
+
+@test
+fn normalsStayAcrossTheirSurfaceUnderUnevenScale() {
+    forAll(matrices, directions) { (m, tangent) in
+        let other = tangent.cross(Vector3.unitY)
+        let normal = other.lengthSquared < 0.01 ? tangent.cross(Vector3.unitX) : other
+        let moved = m.transformDirection(tangent).normalized().dot(m.normalMatrix.transform(normal).normalized())
+        expect(moved.abs() < 0.01)
+    }
+}
+
+@test
+fn aFrustumAgreesWithTheClipSpaceInequalities() {
+    let view = Matrix4x4.lookAt(eye: Vector3.zero, target: Vector3.forward, up: Vector3.up)
+    let whole = view * Matrix4x4.perspectiveFieldOfView(1.5707964, aspectRatio: 1, near: 1, far: 100)
+    let frustum = BoundingFrustum(whole)
+    let planes = [frustum.near, frustum.far, frustum.left, frustum.right, frustum.top, frustum.bottom]
+    let points = scalars(-150, 150).array(count: 3...3).map { Vector3($0[0], $0[1], $0[2]) }
+    forAll(points) { point in
+        // On a plane the two round their own ways.
+        if planes.allSatisfy({ $0.dotCoordinate(point).abs() >= 0.01 }) {
+            let clip = Vector4(point, 1) * whole
+            let visible = clip.x >= -clip.w && clip.x <= clip.w && clip.y >= -clip.w && clip.y <= clip.w && clip.z >= 0 && clip.z <= clip.w
+            expect(frustum.contains(point) == visible)
+        }
+    }
+}
+
+@test
+fn aFrustumNeverCullsWhatHoldsSomethingSeen() {
+    let view = Matrix4x4.lookAt(eye: Vector3.zero, target: Vector3.forward, up: Vector3.up)
+    let frustum = BoundingFrustum(view * Matrix4x4.perspectiveFieldOfView(1.5707964, aspectRatio: 1, near: 1, far: 100))
+    forAll(vectors, scalars(0.1, 20)) { (near, size) in
+        let center = near * Vector3(6, 6, 7) - Vector3(0, 0, 50)
+        let box = BoundingBox(center - Vector3(repeating: size), center + Vector3(repeating: size))
+        if (0..<8).contains(where: { frustum.contains(box.corner($0)) }) {
+            expect(frustum.intersects(box) && frustum.contains(box) != .Disjoint)
+            expect(frustum.intersects(BoundingSphere(containing: box)))
+        }
+    }
+}
+
+@test
+fn boundsHoldWhatTheyAreMadeOf() {
+    forAll(vectors.array(count: 1...20), matrices) { (points, m) in
+        let box = BoundingBox(containing: points)
+        let sphere = BoundingSphere(containing: points)
+        let grown = BoundingBox(box.minimum - Vector3(repeating: 0.001), box.maximum + Vector3(repeating: 0.001)).transformed(by: m)
+        for point in points {
+            expect(box.contains(point) && sphere.contains(point))
+            expect(grown.contains(m.transformPosition(point)))
+        }
+        expect(box.contains(box) == .Contains && box.intersects(sphere))
+    }
+}

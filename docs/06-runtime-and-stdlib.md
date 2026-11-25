@@ -312,6 +312,12 @@ requirement: the existential-convention slots, their thunks and the thunks
 bridging the two conventions of before #299 are gone, in specialised builds
 as in unspecialised ones.
 
+A type that conforms to several instances of a generic protocol has a table
+for each, known by the protocol's name and the instance's arguments
+(`M.Handles$of$Int`). What an extension of a generic protocol adds, used on
+an existential of an instance of it, is the copy made for the existential as
+`Self`: code compiled once is given no tables of generic protocols.
+
 An instance of a generic protocol, `any Producer<Animal>`, holds the table
 of the conformer's own instance, `Producer<Dog>`: its entries take and give
 what the existential's entries are declared to, as an upcast of a class
@@ -695,7 +701,25 @@ that must itself conform has no template. A value of such an instance is
 boxed in a class the runtime makes for it (`sable_opaque_box`). In a program
 built in units, one unit may make the instance and another open it: the unit
 that opens a type as a protocol, or casts to it, makes the templates of every
-generic type of the program that conforms.
+generic type of the program that conforms. An entry for a requirement generic
+over parameters of its own is compiled once for those too: their metadata and
+tables come among the type arguments'. A witness that asks for the conformance
+itself — a requirement left to the protocol's default, whose `Self` it is —
+takes it to have the template being made.
+
+**Arrays, slices and optionals** conform by their extensions, where the type
+they are of does. Their metadata, made alike in every unit and as the program
+runs, has no records: a module that asks the registry gives it the list
+(`sable_register_structural`: the kind, the protocol, what is required of the
+one argument), which a lookup of such a type consults after its records.
+Their tables are templates as a generic type's are, known by the kind (`[]`,
+`[:]`, `?`), and the one a program makes for a type it names is registered
+for it, in a whole program as in units. Tuples, functions and enums conform
+to nothing but what an enum declares.
+
+A **static member of an `any P.Type`** is one of the type the value holds,
+opened as `P`'s `Self` for the one use: a requirement through the registry's
+table, a member of an extension of `P` compiled once.
 
 A specialised build compiles generic code once too, from the first call
 that opens a Type: such a call, and the code compiled once it reaches,
@@ -735,7 +759,11 @@ A value of a type parameter's type becomes an existential — of the protocols
 it is known to conform to, or `any Any` — in a buffer of its own that its
 type's boxer boxes (`opaque_box`), or, of one that is an existential already,
 as the box it holds; `x as? any P`, `x as? Dog` and `x is P` ask the box or
-the value's dynamic type (`opaque_type`). Raw memory's values
+the value's dynamic type (`opaque_type`). A cast to a struct, an enum, a
+number or a string, `key as! String`, compares the metadata first and copies
+the value out where it is (`opaque_copy_as`), boxing it only where it may
+hold another's: an existential, an optional, a union. A specialised copy
+keeps the side its types take, and drops the other. Raw memory's values
 (`RawMemory.load`, `take`, `initialize`, so `RawPtr`, `OnceCell`, `Mutex` and
 the concurrent collections) and `Runtime.share` go through the value
 witnesses. `Never` given for an error's type parameter has a table with
@@ -968,7 +996,10 @@ Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec ArrayVec,
                     SortedDictionary SortedSet (B-trees, range queries),
                     LinkedList (an arena of nodes, constant-time handles,
-                    order-maintained comparable positions)
+                    order-maintained comparable positions),
+                    FrozenDictionary FrozenSet, ImmutableList
+                    ImmutableDictionary ImmutableSet
+                    ImmutableSortedDictionary ImmutableSortedSet (below)
 Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     (UTF-8 sixteen bytes a step) and transcoded a chunk at
                     a time (OperationStatus, Utf8Decoder, Utf16Decoder);
@@ -1008,7 +1039,6 @@ Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     Karatsuba and Toom-3 products, Burnikel–Ziegler
                     division, text in any radix by halves; pow, powMod,
                     gcd, isqrt, two's-complement bits, bytes),
-                    Matrix, Quaternion,
                     statistics generic over every number type (mean,
                     median, mode, quantiles, variance, covariance,
                     correlation, histogram; compensated and two-pass;
@@ -1017,6 +1047,11 @@ Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     exponential, Bernoulli, weighted index): here rather
                     than beside the generators, as the core has no
                     functions of them
+Sable.Math.Geometry Vector2, Vector3, Vector4, Matrix3x2, Matrix3x3, Matrix4x4,
+                    Quaternion, Plane and Transform of F32s, Int2 to Int4,
+                    Vector3D (F64); Ray, BoundingBox, BoundingSphere,
+                    BoundingFrustum and their tests; Half2, Half4, UNorm8x4
+                    and the like, PackedQuaternion (below)
 Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     OpenOptions (positional reads and writes, metadata,
                     setLength, sync), BufferedReader BufferedWriter
@@ -1114,6 +1149,10 @@ Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     buffering policy, onTermination), merge, debounce,
                     throttle, Mutex RwLock Condition Semaphore Barrier
                     CountdownLatch Once Lazy, AsyncMutex AsyncSemaphore,
+                    Thread (spawn, scope, park, blockOn), JoinHandle,
+                    ThreadLocal, TaskLocal, parallelFor parallelInvoke
+                    parallelForEach, an array's and a range's parallel,
+                    parallelModify parallelSort (§6.7),
                     ConcurrentDictionary (sharded)
                     ConcurrentQueue (two-lock) ConcurrentStack,
                     CancellationTokenSource/CancellationToken (handlers,
@@ -1169,7 +1208,8 @@ Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
 Sable.Testing       @test @bench; assert, assertEqual and the like; expect and
                     require, which show their expression's parts; expectThrows;
                     expectPanic and expectExit (death tests); assertSnapshot;
-                    forAll, Arbitrary and Gen (property tests); Bencher
+                    forAll, Arbitrary and Gen (property tests); Bencher,
+                    BenchStatistics, MannWhitney, BenchComparison
 Sable.Interop       C's types by name (CInt, CLong, CChar, CSize, CWChar),
                     CStr, CString, withCString, withWideCString,
                     withCStrings, CFunction and cFunction, CCallback,
@@ -1177,6 +1217,35 @@ Sable.Interop       C's types by name (CInt, CLong, CChar, CSize, CWChar),
                     variable), OwnedFd, OwnedHandle (Windows)
 Sable.Reflect       the reflection surface described above
 ```
+
+### Benchmarks
+
+A benchmark (`@bench`, docs/05 §5.1) takes a `Bencher` and gives its `iterate`
+what to measure; without one, its whole body is timed:
+
+```sable ignore
+@bench(arguments: [64, 65536], tags: ["hash"])
+fn digest(_ b: Bencher, _ size: Int) {
+    let bytes = U8[>..](repeating: 7, count: size)
+    b.bytesPerIteration = size
+    let last = b.iterate { Sha256.hash(bytes) }
+    b.check("\(last.bytes[0])")
+}
+```
+
+- `iterate(body)` and `iterateAsync(body)` give what the body returned last.
+  What it returns is kept from the optimiser by `blackBox`, as the body is;
+  a body that does the same thing to the same input many times over should
+  put a `blackBox` in its own loop too, or link-time optimisation may work a
+  pure function out once.
+- `iterate(setup:_:batch:cleanup:)` makes each iteration a value of its own,
+  given `inout`, `batch` of them at a time, untimed.
+- `bytesPerIteration` and `itemsPerIteration` add a throughput;
+  `operationsPerIteration` divides what is reported by what the body does.
+- `check(text)` says what was computed: the same wherever it is run.
+- `BenchStatistics` (Tukey's fences, Student's t), `MannWhitney` and
+  `BenchComparison` are the arithmetic, of any samples; `BenchSchedule` which
+  runs there are to be, without a clock.
 
 ### Tests
 
@@ -1220,7 +1289,9 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
   arrays, dictionaries, sets, ranges and `Outcome` are Arbitrary; `Gen` is for
   anything else (`Gen.number(in: 0...9).array(count: 1...5)`). A body that
   traps is shrunk by running the test again, a process for each case.
-  `Choices(bytes:)` makes a fuzz target a value of its input.
+  `Choices(bytes:)` makes a fuzz target's values of its input, each choice
+  of as many bytes as it needs: a `@fuzz` function may take any `Arbitrary`
+  values (docs/05 §5.1).
 
 ### Dictionaries and hashing
 
@@ -1301,6 +1372,81 @@ built-in types' default: a type of the program's own conforming to the
 protocol meets the requirement itself. Each type's own file
 (`Int.sb`, `U8.sb`, `F64.sb`, …) says only what differs: its limits and
 constants.
+
+### Frozen and persistent collections
+
+Two kinds of collection that do not change, in `Sable.Collections` (#26).
+Both are values. A list that is made once and read is neither's: that is an
+array, `T[>..]`, which is .NET's `ImmutableArray` and, while it is made, its
+builder.
+
+**Frozen.** `FrozenDictionary` and `FrozenSet` are made once, from a sequence,
+taking longer over it than `[Key: Value]` does, and are then only looked up.
+Their order is the order their keys were given. A key finds its place by a
+strategy chosen as the table is made (`FrozenTable.sb`):
+
+| Keys | Found |
+|---|---|
+| at most four | one after another |
+| integers, and `Char`s, in one run | by subtracting the first |
+| integers close together (ten slots for each key, at most) | in an array from the least to the greatest |
+| integers spread out | in an open-addressed table, hashed by one multiplication |
+| strings whose lengths all differ | in an array by length |
+| strings some eight bytes of tell apart, counted from the start or the end | in such a table, hashed by those bytes and the length; a length no key has is not looked for |
+| strings the first eight and the last eight tell apart | the same, by both |
+| any other strings | the same, by all of their bytes |
+| anything else | in such a table, by their own `hash(into:)` under a seed |
+
+The multiplier, or the seed, is the one that moves the fewest keys from their
+own slots, of as many as 64 tried, so that a lookup compares one key. The
+hashes are the same in every run, which lets a table be made while compiling
+and means that its keys, though not what is looked up, must be trusted.
+`FrozenDictionary(ignoringAsciiCase:)` folds ASCII's letters eight bytes at a
+time; `FrozenHashingDictionary` and `FrozenHashingSet` take any `Hashing`.
+A `Substring` is looked up by its own bytes. Which strategies there can be is
+known by the key's type where that is known: the tests of `Key.self` are
+constants, and code compiled once for every type asks them of the metadata.
+
+A **`const`** of one is a table in the program's read-only memory, with
+nothing to do as it starts: the initialisers are `const init`, the table is
+made in the compiler's interpreter, and its arrays are written as constant
+arrays are (`array_literal`). A constant with more than 256 elements in it is
+kept in a global, stored once as the program starts, and any other is written
+wherever it is read. A `static let` is made as the program starts, as ever.
+
+**Persistent.** `ImmutableList`, `ImmutableDictionary`, `ImmutableSet`,
+`ImmutableSortedDictionary` and `ImmutableSortedSet` share with the copies
+made of them all but what is changed: each keeps a tree, and a change copies
+the few nodes on the way to it.
+
+- **Nodes are structs of arrays**, not objects, and so are shared, changed in
+  place and counted as any array is: an array nothing else holds is changed
+  where it is, and one something does is copied first. So a list, or a
+  dictionary, that is held once is built and changed in place by its
+  `mutating` methods, with no builder beside it (a `var` is one); and one that
+  is shared, or crosses to another task, has the path copied. They are
+  Sendable when what they hold is, and nothing about them is unsafe. A lookup
+  goes down without counting a reference: the element a lent array's element
+  is of is read in place across a call (`TryBorrowedElement`), as what is
+  lent cannot change.
+- **`ImmutableList`** is a relaxed radix balanced tree of 32 ways
+  (`ListTreeNode.sb`): an index is five bits a level where the nodes before
+  are full, and looked for among the node's sizes from there where they are
+  not. Nodes but those at the right edge are kept half full, as a B-tree's
+  are, so that cutting, joining, inserting and removing anywhere are O(log n)
+  and leave it balanced. The last 32 elements at most are beside the tree, so
+  that appending is an array's.
+- **`ImmutableDictionary`** and **`ImmutableSet`** are a compressed
+  hash-array mapped trie (CHAMP, `HashTrieNode.sb`), five bits of the hash a
+  level, the hashes kept. Its shape is the keys' alone: equality compares
+  nodes in step and passes over those the two share, and `union`, `merge`,
+  `intersection`, `subtracting` and `changes(from:)` take time by what is not
+  shared. Keys whose whole hashes are equal are in a node of their own, and
+  looked through. The order is by hash: the same for equal dictionaries, but
+  not from one run to the next.
+- **`ImmutableSortedDictionary`** and **`ImmutableSortedSet`** are such a list
+  in order of the keys, searched by the last element of each node: a range of
+  keys is cut out of it, sharing the nodes.
 
 ### SIMD
 
@@ -1501,6 +1647,82 @@ as good as `zstd --train`'s.
   tar's, as the format asks. Nothing is said of owners as files are made.
 - Not there: encryption, archives in parts, other methods of zip's, and
   zlib-wrapped or brotli tars known by their bytes.
+
+### Geometry
+
+`Sable.Math.Geometry` is what System.Numerics has of vectors, matrices,
+quaternions and planes, and the bounds and rays a game engine asks with them.
+Its conventions are stated once, here, and each is asserted by
+`tests/lib/Sable.Math.Geometry/ConventionTests.sb`:
+
+| | |
+|---|---|
+| Handedness | right-handed: X × Y is Z |
+| Up, forward | +Y, -Z (+X is right) |
+| Vectors | rows: a point is moved as `v * m` |
+| Storage | by rows: `m11 m12 m13 m14 m21 …` |
+| Translation | the last row, `m41 m42 m43`: bytes 48 to 60 |
+| Composition | `local * parent`, left to right, of quaternions too |
+| Angles | radians, counter-clockwise with the axis pointing at one |
+| Euler angles | yaw (y), pitch (x), roll (z) of the body, in that order |
+| Quaternions | x, y, z, then the scalar w; `q` and `-q` turn alike |
+| Depth | 0...1, reversed: the near plane is 1, the far plane 0 |
+| Winding | counter-clockwise seen from a plane's front |
+| Planes | `normal · p + d` is 0; the front is where it is above 0 |
+| Textures, pixels | from the top left, y down |
+
+A matrix of row vectors by rows is, byte for byte, the matrix of column vectors
+by columns that does the same, which is what GLSL, HLSL and SPIR-V read by
+default: it is uploaded as it is. .NET's Matrix4x4 is the same bytes.
+
+- **Where .NET differs.** .NET's projections run depth forward; here they take
+  `depth: .Forward` for that. .NET's `Quaternion *` is Hamilton's product,
+  which turns by the right first; `a * b` here is its `Concatenate(a, b)`. A
+  vector too short to have a direction normalises to zero, and a quaternion to
+  the identity, where .NET's are NaN. `inverted()` is an optional, where .NET
+  gives a matrix of NaNs and false; so is `decomposed()`, whose mirror is in
+  the scale's x where .NET's is in the greatest. `slerp` and `nlerp` hold the
+  amount to 0...1. `Plane.transformed(by:)` normalises. `viewport` is .NET's
+  left-handed one, the one that keeps depths as they are. There is no
+  left-handed camera.
+  For all else the two are near each other, not the same bits: .NET fuses and
+  estimates as its processor can. `DotNetTests.sb` holds them to a relative
+  2e-5 on results that .NET gave (`tools/conformance/geometry/reference.cs`).
+- **The same bits everywhere.** What is made of `+`, `-`, `*`, `/` and the
+  square root is the same on every processor, at every level of optimisation
+  and in the interpreter: nothing is fused, estimated or reassociated
+  (`DeterminismTests.sb` has the bits). So is `slerp`, which has a sine and
+  an arc cosine of its own for that. The exceptions are what takes the
+  platform's sine, cosine or tangent: rotations and quaternions of an angle,
+  a quaternion's `angle`, skews, and the perspective of a field of view.
+  A simulation that must agree across machines makes those once, or not.
+- **Equality** is exact and IEEE's (`-0 == 0`, a NaN equals nothing), hashes
+  agree with it, and what is near is `nearEqual(_:tolerance:)`: relative above
+  1 and absolute below.
+- **Layout.** Plain structs of their components, aligned to 4 as C's: 8, 12,
+  16, 24, 36 and 64 bytes. `@inline_layout` is not for them (it makes a counted
+  block of a value); a struct is already its bytes. They are not aligned to 16, so that
+  an array of Vector3 is a tight vertex buffer and a field costs no padding;
+  loads of four lanes need no alignment on either processor. std140 and std430
+  align a `vec3` and a `mat3`'s columns to 16, which is the buffer's padding
+  to lay out: a `Vector4` or a `Matrix4x4`, or an `@align(16)` struct around
+  the field. `withComponents` views an array of them as `F32`s and `withBytes`
+  as bytes, with no copy; `simd` and `init(_: SIMD)` go to and from a register.
+- **Scalars, and F64.** The types are of `F32`, not generic: generics cost
+  nothing specialised, but a build compiled once for every type
+  (`SABLE_GENERICS=unspecialised`) would call an addition through a witness,
+  and every signature and message would say `Vector3<F32>`. What an engine
+  wants in `F64` is positions in a large world, which is `Vector3D`, and
+  `relative(to:)` makes them `F32`s from a camera; rotations, scales and the
+  matrices then made are `F32`.
+- **Speed.** The arithmetic is written out by component, which LLVM makes the
+  vector instructions of (as fast as `SIMD<F32, 4>` written by hand, and
+  quicker in the interpreter); only `slerp` takes lanes itself. Slices are
+  moved by `transformPositions(_:into:)` and its kin. Nothing allocates but
+  `corners` and `toArray()`, which are arrays: `corner(_:)` is not. See
+  `benchmarks/library/{matrix-multiply,matrix-invert,transform-points,quaternion-blend,frustum-cull,vector-particles}`.
+- **Others' conformances.** Serializable is in Sable.Serialize and Arbitrary in
+  Sable.Testing, so that a program of vectors has neither module.
 
 ### Decimal
 
@@ -2418,3 +2640,82 @@ recover at the task boundary.
   A task waiting for a lower-priority one escalates it, what it waits for
   and its children, so it does not invert; one waiting for an actor
   escalates the task holding it.
+
+### Threads, locals and parallel loops
+
+`Sable.Concurrency`'s, over runtime/parallel.c.
+
+- **Threads.** `Thread.spawn(name:stackSize:priority:)` starts one of the
+  system's, and gives a `JoinHandle<T, E>`: `join()` and `join(atMost:)`
+  block, `await value()` suspends, `isFinished` and `detach()`; what the body
+  throws, the join throws, and a trap stops the program as on any thread. A
+  thread ends by returning, and a program waits for every one it started,
+  joined or not, as it does for its tasks (so a detached one runs to its end;
+  .NET's foreground threads). What its closure captures is Sendable, and
+  shared as a task's is. `Thread.current` (`id`, `name`: the main thread's is
+  `main`, a worker's `sable-worker-N`), `sleep`, `yield`, `park` and `unpark`
+  (one token a thread), `availableParallelism`: the processors the process is
+  bound to and, on Linux, its control groups' quota rounded up, which is also
+  how many workers the pool has. A stack is at least 256 KiB; a priority is a
+  hint (a quality-of-service class on Apple's systems, a nice value on Linux).
+- **A thread and tasks.** A thread has a task of its own to be running, as one
+  C made has (§6.4, "Calling C"): the tasks it spawns are that one's children,
+  which no one waits for or cancels once the thread ends. `Thread.blockOn`
+  runs an async body as a task and blocks until it has finished; it traps on a
+  worker, and on the main thread but where the program's own task runs, whose
+  loop it then runs meanwhile. A worker that blocks in a join keeps a core
+  from other tasks: async code awaits `value()`. With `SABLE_WORKERS=0` tasks
+  run on the main thread alone, so a thread that blocks on one while the main
+  thread blocks in a join waits for ever.
+- **Scopes.** `Thread.scope { s in s.spawn { … } }` ends once every thread
+  spawned on `s` has, whether its body returns or throws, so a thread may use a
+  `var` of the function around it where it is. The compiler holds that `var`
+  to be the one thread's alone (`ScopeChecker`, S3236): it is the calling
+  function's own, the thread is spawned in the scope's own closure and not in
+  a loop, nothing else in the scope mentions it, and no other closure of the
+  function does. It refuses more than Rust does: threads that only
+  read a `var` share it by a `let`, and the scope uses it again only once the
+  scope has ended, not once the thread is joined.
+- **`ThreadLocal<T>`** is a place in a table each thread's state has: a get is
+  the thread's state, from the register the system keeps it in, two loads and
+  a compare. Values are made when first asked for, and destroyed as the thread
+  ends, the last made first, before a join returns; as the thread C made ends;
+  and, for the main thread and the pool's, as the program does, once no task
+  runs. `withValue` takes a closure that cannot wait, so that no value is held
+  across an `await`, after which a task may be on another thread; `value` is a
+  copy. There is no `@threadLocal static var`: a `static let` of a
+  `ThreadLocal` is one.
+- **`TaskLocal<T>`** is bound by `withValue` for as long as its body runs, by a
+  node put before the running task's others, which its children begin with:
+  a task is given its parent's list as a pointer, which is all it costs, and
+  nothing where the list is empty. The nodes are counted, and last as long as
+  a child that has them. A detached task and a thread begin with none; a
+  worker in a parallel loop has those of the task that began it.
+- **Loops.** `parallelFor`, `parallelForChunks`, `parallelInvoke`, and
+  `parallel`'s operations are run by the thread that begins them and by the
+  workers that come: a loop is put where a worker that finds no task finds it
+  (`sable_thread_loop`), and what is left of it handed out a chunk at a time —
+  a fixed part of what is left, so a few large ones and then smaller — until
+  none is. Nothing is queued, so a loop no worker has time for, or one in a
+  loop, is done by its own thread, which waits at the end only for workers in
+  a chunk: none waits for one that waits for it. A worker runs its chunks as a
+  child of the task the loop was begun in, so `Task.checkCancellation()` in a
+  throwing body ends the loop with the task. The first error ends it: no more
+  chunks are handed out. `degree` is how many threads at most, `grain` the
+  least a chunk has. A thread whose last loops were each over in some
+  microseconds wakes no worker for the next until that has gone on for ten.
+  With no pool (`SABLE_WORKERS=0`, WASI, the interpreter) a loop is run in
+  order by its thread.
+- **`parallel`** on an array or a range of `Int` gives `map`, `filter`,
+  `compactMap`, `flatMap`, `forEach`, `reduce`, `sum`, `min`, `max`,
+  `count(where:)`, `first`, `contains`, `allSatisfy`, `sorted`: each an
+  operation of its own, whose result is not parallel. Results are in order;
+  `unordered` gives them as they are made. Chunks are the same each time and
+  combined in order, so a sum of floats is the same for a degree.
+  `array.parallelModify`, `parallelModifyChunks(of:)` and `parallelSort` change
+  the elements where they are, with no copy of an array that is no one else's;
+  a chunk is a class whose every access is checked, and which is empty once
+  its body returns. `parallelForEach` is the loop of an async body, with so
+  many children of a task group at once.
+- **The interpreter** has one thread: a spawned one runs to its end as it is
+  spawned, and a wait that another thread would have to end is a trap.

@@ -1,13 +1,13 @@
 module ProcessPipeBench
 
 import Sable.Process
+import Sable.Testing
 
 // A child's pipes: sixty-four million bytes written to cat's input by one
 // task and read back from its output by another. The time is the child's
 // too.
 
-@main
-fn main() async throws {
+fn run() async throws -> String {
     let child = try Command("cat").stdin(Stdio.Piped).stdout(Stdio.Piped).spawn()
     let input = child.stdin!
     let writing = Task.spawn {
@@ -31,5 +31,10 @@ fn main() async throws {
     }
     await writing.value
     let status = try await child.wait()
-    print("\(count) \(total) \(status.success)")
+    return "\(count) \(total) \(status.success)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { try! await run() })
 }

@@ -199,6 +199,10 @@ public static class SilPassManager {
                     }
                 }
 
+                if (readsArguments && SilModule.StructuralElement(type) is { } element) {
+                    Witnesses(element);
+                }
+
                 foreach (var table in tables[type.ToString()]) {
                     // In a program compiled whole, only a table code asks for by its protocol.
                     if (whole && !asked.Contains(table.Protocol)) {

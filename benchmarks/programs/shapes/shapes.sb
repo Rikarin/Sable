@@ -1,5 +1,7 @@
 module Shapes
 
+import Sable.Testing
+
 // Dynamic dispatch both ways: existentials of structs, and a class hierarchy
 // whose overrides are reached through the base class.
 
@@ -43,8 +45,8 @@ class Dog: Animal {
     override fn weight() -> Int { return 20 }
 }
 
-@main
-fn main() {
+fn run() -> String {
+    var lines: String[>..] = []
     var shapes: (any Shape)[>..] = []
     var animals: Animal[>..] = []
     var i = 0
@@ -74,7 +76,18 @@ fn main() {
         round = round + 1
     }
 
-    print(area)
-    print(letters)
-    print(weight)
+    lines.append("\(area)")
+    lines.append("\(letters)")
+    lines.append("\(weight)")
+    return lines.joined(separator: "\n")
+}
+
+@main
+fn main() {
+    print(run())
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

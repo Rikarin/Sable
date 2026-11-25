@@ -1,6 +1,6 @@
 // Port of binary-trees.sb.
 [Benchmark("programs/binary-trees")]
-static class ProgramBinaryTrees {
+static class ProgramsBinaryTrees {
     sealed class Node(Node? left, Node? right) {
         public readonly Node? Left = left;
         public readonly Node? Right = right;

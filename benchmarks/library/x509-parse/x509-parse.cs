@@ -24,10 +24,16 @@ static class LibraryX509Parse {
         -----END CERTIFICATE-----
         """;
 
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var fields = PemEncoding.Find(Pem);
             var der = Convert.FromBase64String(Pem[fields.Base64Data]);
+            return () => Run(der);
+        }
+    }
+
+    static string Run(byte[] der) {
+        checked {
             var count = 0;
             for (var round = 0; round < 5000; round++) {
                 using var certificate = X509CertificateLoader.LoadCertificate(der);

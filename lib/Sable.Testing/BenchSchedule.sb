@@ -1,0 +1,195 @@
+module Sable.Testing
+
+import Sable.Math
+
+/// How long a benchmark is run, and what its samples are taken to be.
+public struct BenchSettings {
+    /// How many samples to take, unless the time for them is over; none for
+    /// as many as the mean needs, of 15 to 100.
+    public var samples: Int? = none
+    /// How long a sample lasts at least: its iterations are chosen for that.
+    public var sampleNanoseconds: Int = 10_000_000
+    /// How long the body is run before any sample is kept.
+    public var warmUpNanoseconds: Int = 100_000_000
+    /// How long to sample for, at most, once there are five.
+    public var budgetNanoseconds: Int = 3_000_000_000
+    /// With no number of samples asked for, they are enough when the mean's
+    /// 99.9 % margin is this much of it.
+    public var precision: F64 = 0.02
+    /// Processor time, of every thread and of the processes waited for, in
+    /// place of the clock's.
+    public var usesProcessorTime: Bool = false
+    public var outliers: OutlierPolicy = .RemoveUpper
+
+    /// The processor's counters too, in a run of their own after the samples.
+    public var countsInstructions: Bool = false
+
+    public init() { }
+
+    /// A few short samples: to see that a benchmark runs, not to time it.
+    public static var quick: BenchSettings {
+        get {
+            var settings = BenchSettings()
+            settings.samples = 3
+            settings.sampleNanoseconds = 100_000
+            settings.warmUpNanoseconds = 100_000
+            return settings
+        }
+    }
+}
+
+/// A run of so many iterations: the nanoseconds it took by the clock, and
+/// those of processor time.
+@derive(Equatable, Debug)
+public struct BenchSample {
+    public var iterations: Int
+    public var wall: F64
+    public var processor: F64
+
+    public init(iterations: Int, wall: F64, processor: F64) {
+        self.iterations = iterations
+        self.wall = wall
+        self.processor = processor
+    }
+}
+
+/// What a benchmark's next run is for.
+@derive(Equatable, Debug)
+public union BenchPhase {
+    /// To learn how many iterations make a sample.
+    Pilot
+    /// Until its time is steady.
+    WarmUp
+    /// Of an empty body, to learn what the loop itself costs.
+    Overhead
+    Measure
+    /// With its allocations counted, which takes time: not a sample.
+    Memory
+    /// With the processor's counters read either side.
+    Counters
+    Done
+}
+
+/// Which runs of a benchmark there are to be, worked out from how long each
+/// took: the pilot's, doubling until they take an eighth of a sample's time;
+/// the warm-up's, until the warm-up's time has passed and their times have
+/// stopped falling; the overhead's, five of an empty body, when an iteration
+/// takes under a microsecond; and the samples. It does no timing, so a test
+/// may give it any times at all.
+///
+/// ```sable
+/// var settings = BenchSettings()
+/// settings.samples = 3
+/// var schedule = BenchSchedule(settings)
+/// while schedule.phase != .Done {
+///     // An iteration that takes a millisecond.
+///     schedule.record(wall: F64(schedule.iterations) * 1e6, processor: 0.0)
+/// }
+/// assertEqual(schedule.samples.count, 3)
+/// assertEqual(schedule.samples[0].iterations, 10)
+/// ```
+public struct BenchSchedule {
+    let settings: BenchSettings
+    public var phase: BenchPhase = .Pilot
+    /// How many iterations the next run is of.
+    public var iterations: Int = 1
+    public var samples: BenchSample[>..] = []
+    /// The empty body's runs.
+    public var overheads: BenchSample[>..] = []
+    // The warm-up's so far: its time, its runs, the last one's and how often
+    // a run was no faster than the one before.
+    var warmed: F64 = 0.0
+    var warmRuns: Int = 0
+    var lastRun: F64 = 0.0
+    var rises: Int = 0
+    var measured: F64 = 0.0
+
+    public init(_ settings: BenchSettings) {
+        self.settings = settings
+    }
+
+    /// The run that 'phase' and 'iterations' asked for took so long.
+    public mutating fn record(wall: F64, processor: F64) {
+        let sample = BenchSample(iterations: iterations, wall: wall, processor: processor)
+        match phase {
+            case .Pilot => {
+                warmed += wall
+                if wall * 8.0 >= F64(settings.sampleNanoseconds) || iterations >= 1 << 40 {
+                    choose(wall / F64(iterations))
+                    phase = .WarmUp
+                    warmIfDone()
+                } else {
+                    iterations *= 2
+                }
+            }
+            case .WarmUp => {
+                warmed += wall
+                warmRuns += 1
+                let per = wall / F64(iterations)
+                if warmRuns > 1 && per >= lastRun {
+                    rises += 1
+                }
+                lastRun = per
+                choose(per)
+                warmIfDone()
+            }
+            case .Overhead => {
+                overheads.append(sample)
+                if overheads.count == 5 {
+                    phase = .Measure
+                }
+            }
+            case .Measure => {
+                samples.append(sample)
+                measured += wall
+                if enough() {
+                    phase = .Memory
+                }
+            }
+            case .Memory   => { phase = settings.countsInstructions ? .Counters : .Done }
+            case .Counters => { phase = .Done }
+            case .Done     => { }
+        }
+    }
+
+    // A sample's iterations, at so many nanoseconds each.
+    mutating fn choose(_ per: F64) {
+        let wanted = F64(settings.sampleNanoseconds) / max(per, 0.01)
+        iterations = wanted <= 1.0 ? 1 : wanted >= 1e12 ? 1_000_000_000_000 : Int(wanted.rounded(.Up))
+    }
+
+    mutating fn warmIfDone() {
+        let wanted = F64(settings.warmUpNanoseconds)
+        if (warmed < wanted && warmRuns < 1000) || (rises < 2 && warmRuns < 50 && warmed < 3.0 * wanted) {
+            return
+        }
+        let per = warmRuns > 0 ? lastRun : 0.0
+        phase = warmRuns > 0 && per < 1000.0 ? .Overhead : .Measure
+    }
+
+    // Whether there are samples enough.
+    fn enough() -> Bool {
+        if samples.count >= (settings.samples ?? 100) || (samples.count >= 5 && measured >= F64(settings.budgetNanoseconds)) {
+            return true
+        }
+        if settings.samples != none {
+            return false
+        }
+        return samples.count >= 15 && BenchStatistics(nanoseconds(processor: settings.usesProcessorTime), outliers: settings.outliers).relativeMargin <= settings.precision
+    }
+
+    /// What the loop costs an iteration, in nanoseconds: the median of the
+    /// empty body's runs; 0 when there were none.
+    public fn overhead(processor: Bool) -> F64 {
+        if overheads.isEmpty {
+            return 0.0
+        }
+        return median(overheads.map { (processor ? $0.processor : $0.wall) / F64($0.iterations) })
+    }
+
+    /// The samples, as nanoseconds an iteration without the overhead.
+    public fn nanoseconds(processor: Bool) -> F64[>..] {
+        let loop = overhead(processor: processor)
+        return samples.map { max(0.0, (processor ? $0.processor : $0.wall) / F64($0.iterations) - loop) }
+    }
+}

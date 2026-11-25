@@ -359,6 +359,18 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_structural")) {
+                var kind = Enum.Parse<MetadataKind>(Expect(TokenKind.String, "a kind of type").Text);
+                var conformed = Expect(TokenKind.String, "a protocol's name").Text;
+                var requirements = ImmutableArray.CreateBuilder<string>();
+                while (Current.Kind == TokenKind.String) {
+                    requirements.Add(Expect(TokenKind.String, "a protocol's name").Text);
+                }
+
+                module.StructuralConformances.Add((kind, conformed, requirements.ToImmutable()));
+                continue;
+            }
+
             if (Accept("sil_callable")) {
                 var callable = ParseType();
                 Expect("=");
@@ -416,8 +428,6 @@ public sealed class SilParser {
                 var name = Expect(TokenKind.String, "an associated type's name").Text;
                 Expect(":");
                 table.AssociatedTypes.Add((name, ParseType()));
-            } else if (Accept("requires")) {
-                table.Required.Add(Expect(TokenKind.String, "a protocol's name").Text);
             } else if (Accept("accessor")) {
                 table.Accessors.Add(Expect(TokenKind.Global, "an accessor's name").Text);
             } else if (Accept("conforms")) {

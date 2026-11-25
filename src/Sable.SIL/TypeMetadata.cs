@@ -361,15 +361,6 @@ public sealed class SilWitnessTable(SilType conformer, string protocol) {
     public List<string> Accessors { get; } = [];
 
     /// <summary>
-    ///     What a template for arrays, slices or optionals of a type known at
-    ///     run time asks of the element's or wrapped type
-    ///     (<c>extension&lt;Element: Equatable&gt; Element[:]: Equatable</c>): one
-    ///     that does not conform gives none. A generic type's own template
-    ///     has none: its metadata's conformance records say which hold.
-    /// </summary>
-    public List<string> Required { get; } = [];
-
-    /// <summary>
     ///     Each requirement the protocol itself declares, in declaration order,
     ///     with its witness in the generic calling convention (#297, #299):
     ///     <c>self</c> (its storage's address, for one that changes it) unless

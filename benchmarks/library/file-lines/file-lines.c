@@ -1,9 +1,12 @@
 // Port of file-lines.sb, with getline.
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
-int main(void) {
-    char *text = NULL;
-    size_t length = 0, capacity = 0;
+static char *text;
+static size_t length;
+
+static void setup(void) {
+    size_t capacity = 0;
     for (int i = 0; i < 300000; i++) {
         char line[80];
         size_t n = (size_t)snprintf(line, sizeof line, "line %d of the file, with some more text after it\n", i);
@@ -14,9 +17,11 @@ int main(void) {
         memcpy(text + length, line, n);
         length += n;
     }
+}
+
+static void run(void) {
     FILE *file = fopen("file-lines-c.txt", "w");
     if (file == NULL || fwrite(text, 1, length, file) != length || fclose(file) != 0) trap("cannot write");
-    free(text);
 
     file = fopen("file-lines-c.txt", "r");
     if (file == NULL) trap("cannot read");
@@ -31,6 +36,7 @@ int main(void) {
     free(line);
     fclose(file);
     remove("file-lines-c.txt");
-    printf("%lld %lld\n", (long long)count, (long long)characters);
-    return 0;
+    bench_printf("%lld %lld\n", (long long)count, (long long)characters);
 }
+
+BENCH_MAIN_WITH(run, setup)

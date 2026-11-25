@@ -1,5 +1,8 @@
 // Port of file-metadata.sb.
 
+#[path = "../../support/rust/bench.rs"]
+mod bench;
+
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::Path;
@@ -18,23 +21,29 @@ fn main() -> io::Result<()> {
         file.set_modified(time)?;
         paths.push(path);
     }
-    let mut size: u64 = 0;
-    let mut seconds: u64 = 0;
-    let mut files: u64 = 0;
-    for _ in 0..200 {
-        for path in &paths {
-            let metadata = fs::metadata(path)?;
-            size += metadata.len();
-            seconds += metadata.modified()?.duration_since(UNIX_EPOCH).unwrap().as_secs() - 1700000000;
-            if metadata.is_file() {
-                files += 1;
+
+    bench::run(|| {
+        let work = || -> io::Result<String> {
+            let mut size: u64 = 0;
+            let mut seconds: u64 = 0;
+            let mut files: u64 = 0;
+            for _ in 0..200 {
+                for path in &paths {
+                    let metadata = fs::metadata(path)?;
+                    size += metadata.len();
+                    seconds += metadata.modified()?.duration_since(UNIX_EPOCH).unwrap().as_secs() - 1700000000;
+                    if metadata.is_file() {
+                        files += 1;
+                    }
+                    if Path::new(&format!("{path}.gone")).exists() {
+                        files += 1;
+                    }
+                }
             }
-            if Path::new(&format!("{path}.gone")).exists() {
-                files += 1;
-            }
-        }
-    }
+            Ok(format!("{size} {seconds} {files}"))
+        };
+        work().unwrap()
+    });
     fs::remove_dir_all(root)?;
-    println!("{size} {seconds} {files}");
     Ok(())
 }

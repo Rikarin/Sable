@@ -32,6 +32,20 @@
 // Classes up to a kilobyte: an array of a hundred numbers is as common as a
 // small object. Each step is at most half again the one before, so no more
 // than a third of a block is ever wasted.
+// Built with AddressSanitizer ('sable fuzz'), every block is malloc's: ASan
+// knows nothing of the blocks of a slab, and would see neither a read past
+// one's end nor one after it was freed.
+#if defined(__SANITIZE_ADDRESS__)
+#define SABLE_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define SABLE_ASAN 1
+#endif
+#endif
+#ifndef SABLE_ASAN
+#define SABLE_ASAN 0
+#endif
+
 enum { SMALL_TABLED = 256, SMALL_LARGEST = 1024 };
 
 // How many free blocks of a class a thread keeps before giving a batch back.
@@ -72,7 +86,7 @@ _Noreturn void sable_trap(const char *message);
 
 // The class for 'size' bytes, or zero: too large, or nothing at all.
 static inline unsigned small_class(int64_t size) {
-    if (size <= 0 || size > SMALL_LARGEST) {
+    if (SABLE_ASAN || size <= 0 || size > SMALL_LARGEST) {
         return 0;
     }
 
@@ -303,7 +317,8 @@ static void cache_flush(SableThread *thread) {
 // same memory afresh each time, which costs more than filling it. A
 // collected heap keeps its memory the same way. Its size is what its last
 // owner asked for: the block may be larger, never smaller.
-enum { LARGE_BUFFER = 1 << 20 };
+// Not with AddressSanitizer, which would not see it freed.
+enum { LARGE_BUFFER = SABLE_ASAN ? 0x7fffffff : 1 << 20 };
 static void *large_spare;
 static int64_t large_spare_size;
 static SpinLock spare_lock;
@@ -338,6 +353,10 @@ static void keep_spare(void *buffer, int64_t size) {
 // An array's elements: 'size' bytes, uninitialised.
 static void *buffer_alloc(int64_t size) {
     unsigned class = small_class(size);
+    if (__builtin_expect(sable_counting, 0)) {
+        count_allocated(class != 0 ? small_sizes[class] : size);
+    }
+
     if (class != 0) {
         return small_alloc(current_thread(), class);
     }
@@ -373,6 +392,10 @@ static void buffer_free(void *buffer, int64_t size) {
 static void *buffer_resize(void *buffer, int64_t old, int64_t size) {
     unsigned from = buffer == NULL ? 0 : small_class(old), to = small_class(size);
     if (buffer != NULL && from == 0 && to == 0) {
+        if (__builtin_expect(sable_counting, 0)) {
+            count_allocated(size);
+        }
+
         // Into the spare, when it fits: its pages are already the program's.
         void *spare = size >= LARGE_BUFFER ? take_spare(size) : NULL;
         if (spare != NULL) {
@@ -421,14 +444,26 @@ static inline void object_free(SableThread *thread, SableObject *object) {
     }
 }
 
+// What is asked of an allocation but the memory: leaks' list, and the bytes
+// (a large object's counted by its maker, who knows its size).
+__attribute__((noinline)) static void observe_born(SableObject *object, unsigned class) {
+    if (tracking) {
+        track(object, true);
+    }
+
+    if (sable_counting && class != 0) {
+        count_allocated(small_sizes[class]);
+    }
+}
+
 // A new object's header, the rest being as it is: counted, and alive.
 static inline void *object_begin(SableThread *thread, SableObject *object, const SableMetadata *type, unsigned class) {
     object->type = type;
     object->strong = 1;
     object->flags = class << SABLE_CLASS_SHIFT;
     thread_count(&thread->allocations, 1);
-    if (__builtin_expect(tracking, 0)) {
-        track(object, true);
+    if (__builtin_expect(observing, 0)) {
+        observe_born(object, class);
     }
 
     return object;
@@ -439,6 +474,10 @@ __attribute__((noinline)) static void *large_object(const SableMetadata *type, i
     SableObject *object = zero ? calloc(1, (size_t)size) : malloc((size_t)size);
     if (object == NULL) {
         sable_trap("out of memory");
+    }
+
+    if (__builtin_expect(sable_counting, 0)) {
+        count_allocated(size);
     }
 
     return object_begin(current_thread(), object, type, 0);
@@ -709,6 +748,18 @@ void *sable_raw_alloc(int64_t size, int64_t alignment) {
     if (size > INT64_MAX - alignment - (int64_t)sizeof(void *)) {
         sable_trap("out of memory");
     }
+
+#if SABLE_ASAN
+    // Nothing after the room, which ASan would take for part of it.
+    void *start = NULL;
+    if (posix_memalign(&start, (size_t)alignment, (size_t)(alignment + size)) != 0) {
+        sable_trap("out of memory");
+    }
+
+    void *place = (char *)start + alignment;
+    ((void **)place)[-1] = start;
+    return place;
+#endif
 
     char *block = malloc((size_t)(size + alignment + (int64_t)sizeof(void *)));
     if (block == NULL) {

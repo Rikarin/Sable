@@ -1,0 +1,43 @@
+module Sable.Math.Geometry
+
+/// Four numbers of 0...1 in four `U8`s, as a vertex has a colour, the weights of bones:
+/// 4 bytes. Vulkan's conversions: what is outside is held to the ends (NaN
+/// to 0), and rounded to the nearest.
+///
+/// ```sable
+/// assert(UNorm8x4(Vector4(1, 0, 1, 0)).vector == Vector4(1, 0, 1, 0))
+/// assert(MemoryLayout<UNorm8x4>.size == 4)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct UNorm8x4: Sendable {
+    /// The x component, in 255ths.
+    public var x: U8
+
+    /// The y component, in 255ths.
+    public var y: U8
+
+    /// The z component, in 255ths.
+    public var z: U8
+
+    /// The w component, in 255ths.
+    public var w: U8
+
+    /// The integers as they are stored.
+    public init(_ x: U8, _ y: U8, _ z: U8, _ w: U8) {
+        self.x = x
+        self.y = y
+        self.z = z
+        self.w = w
+    }
+
+    /// Each component rounded to the nearest there is.
+    public init(_ value: Vector4) {
+        x = U8((value.x.maximumNumber(0).minimum(1) * 255).rounded(.ToNearestOrEven))
+        y = U8((value.y.maximumNumber(0).minimum(1) * 255).rounded(.ToNearestOrEven))
+        z = U8((value.z.maximumNumber(0).minimum(1) * 255).rounded(.ToNearestOrEven))
+        w = U8((value.w.maximumNumber(0).minimum(1) * 255).rounded(.ToNearestOrEven))
+    }
+
+    /// The numbers they are.
+    public var vector: Vector4 => Vector4(F32(x) / 255, F32(y) / 255, F32(z) / 255, F32(w) / 255)
+}

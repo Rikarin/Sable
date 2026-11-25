@@ -1,0 +1,179 @@
+module Vector4Tests
+
+import Sable.Math.Geometry
+import Sable.Serialize
+import Sable.Testing
+
+let a: Vector4 = Vector4(1, 5, -3, 8)
+let b: Vector4 = Vector4(4, 2, 0.5, -2)
+
+@test
+fn itsLayoutIsItsComponentsInOrder() {
+    assertEqual(MemoryLayout<Vector4>.size, 16)
+    assertEqual(MemoryLayout<Vector4>.stride, 16)
+    assertEqual(MemoryLayout<Vector4>.alignment, 4)
+    assertEqual(Vector4.componentCount, 4)
+    let all: F32[>..] = [a.x, a.y, a.z, a.w]
+    assertEqual(all, [1, 5, -3, 8])
+}
+
+@test
+fn itsComponentsAreReadAndWrittenByIndex() {
+    var v = a
+    for i in 0..<4 {
+        assertEqual(v[i], a[i])
+        v[i] = b[i]
+    }
+    assertEqual(v, b)
+    expectPanic("has no component 4") {
+        _ = a[4]
+    }
+    expectPanic("has no component -1") {
+        var v = a
+        v[-1] = 0
+    }
+}
+
+@test
+fn arithmeticIsByComponent() {
+    assertEqual(a + b, Vector4(5, 7, -2.5, 6))
+    assertEqual(a - b, Vector4(-3, 3, -3.5, 10))
+    assertEqual(a * b, Vector4(4, 10, -1.5, -16))
+    assertEqual(a / b, Vector4(0.25, 2.5, -6.0, -4.0))
+    assertEqual(a * 2, Vector4(2, 10, -6, 16))
+    assertEqual(2 * a, Vector4(2, 10, -6, 16))
+    assertEqual(a / 2, Vector4(0.5, 2.5, -1.5, 4.0))
+    assertEqual(-a, Vector4(-1, -5, 3, -8))
+    var v = a
+    v += b
+    v -= b
+    v *= 2
+    assertEqual(v, a * 2)
+    assertEqual([a, b].reduce(Vector4.zero) { $0 + $1 }, a + b)
+}
+
+@test
+fn lengthsAndDistancesAgreeWithTheirSquares() {
+    let v = Vector4(3, 4, 12, 84)
+    assertEqual(v.length, 85)
+    assertEqual(v.lengthSquared, 7225)
+    assertEqual(Vector4.zero.distance(to: v), 85)
+    assertEqual(Vector4.zero.distanceSquared(to: v), 7225)
+    assertEqual(a.dot(b), -3.5)
+    assertEqual(a.sum, 11)
+}
+
+@test
+fn aVectorIsMadeUnitAndAVanishingOneZero() {
+    assert(nearEqual(a.normalized().length, 1))
+    assertEqual(Vector4.zero.normalized(), Vector4.zero)
+    assertEqual((a * 1e-9).normalized(), Vector4.zero)
+    assert(!Vector4.zero.normalized().isNaN)
+}
+
+@test
+fn theLeastTheGreatestAndTheBoundsAreByComponent() {
+    assertEqual(a.min(b), Vector4(1, 2, -3, -2))
+    assertEqual(a.max(b), Vector4(4, 5, 0.5, 8))
+    assertEqual(a.abs(), Vector4(1, 5, 3, 8))
+    assertEqual(a.clamped(lower: Vector4.zero, upper: Vector4(repeating: 3)), Vector4(1, 3, 0, 3))
+    assertEqual(a.minComponent, -3)
+    assertEqual(a.maxComponent, 8)
+    let nan = Vector4(repeating: F32.nan)
+    assert(a.min(nan).isNaN && a.max(nan).isNaN && nan.minComponent.isNaN)
+    assert(Vector4.zero.min(-Vector4.zero).x.isSignMinus)
+    assert(!(-Vector4.zero).max(Vector4.zero).x.isSignMinus)
+}
+
+@test
+fn roundingIsByComponent() {
+    let v = Vector4(1.5, -2.5, 0.25, -0.75)
+    assertEqual(v.floor(), Vector4(1, -3, 0, -1))
+    assertEqual(v.ceil(), Vector4(2, -2, 1, 0))
+    assertEqual(v.truncated(), Vector4(1, -2, 0, 0))
+    assertEqual(v.rounded(), Vector4(2, -2, 0, -1))
+    assertEqual(Vector4(4, 9, 16, 25).squareRoot(), Vector4(2, 3, 4, 5))
+    assertEqual(a.map { $0 + 1 }, a + Vector4.one)
+}
+
+@test
+fn itIsInterpolatedInALine() {
+    assertEqual(a.lerp(to: b, 0), a)
+    assertEqual(Vector4.zero.lerp(to: Vector4.one * 4, 0.5), Vector4.one * 2)
+    assertEqual(Vector4.zero.lerp(to: Vector4.one, 2), Vector4.one * 2)
+}
+
+@test
+fn itIsReflectedAndProjected() {
+    let up = Vector4.unitY
+    assertEqual(Vector4(1, -1, 0, 0).reflected(normal: up), Vector4(1, 1, 0, 0))
+    assertEqual(Vector4(3, 4, 0, 0).projected(onto: Vector4.unitX), Vector4(3, 0, 0, 0))
+    assertEqual(a.projected(onto: Vector4.zero), Vector4.zero)
+}
+
+@test
+fn equalityIsExactAndNearEqualIsNot() {
+    let almost = Vector4.one
+    var nudged = almost
+    nudged.x = 1.0000005
+    assert(almost != nudged)
+    assert(almost.nearEqual(nudged))
+    for i in 0..<4 {
+        var other = almost
+        other[i] = 1.5
+        assert(almost != other)
+        assert(!almost.nearEqual(other))
+        assert(almost.nearEqual(other, tolerance: 0.5))
+    }
+    let nan = Vector4(repeating: F32.nan)
+    assert(nan != nan && nan.isNaN && !nan.isFinite)
+    assert(-Vector4.zero == Vector4.zero)
+    assertEqual((-Vector4.zero).hashValue, Vector4.zero.hashValue)
+    assertEqual(a.hashValue, Vector4(1, 5, -3, 8).hashValue)
+    assert(Vector4.zero.isZero && !a.isZero && !a.isNaN && a.isFinite)
+    assert(!Vector4(repeating: F32.infinity).isFinite)
+}
+
+@test
+fn itIsWrittenAsItsComponents() {
+    let v = Vector4(1.5, -2.25, 0, 4)
+    assertEqual("\(v)", "(1.5, -2.25, 0.0, 4.0)")
+    assertEqual("\(v:.2)", "(1.50, -2.25, 0.00, 4.00)")
+    assertEqual("\(v:>40.0)".count, 40)
+    assertEqual("\(v:?)", "Vector4(1.5, -2.25, 0.0, 4.0)")
+    assertEqual(v.debugDescription(), "Vector4(1.5, -2.25, 0.0, 4.0)")
+}
+
+@test
+fn itIsSerialisedByName() {
+    let v = Vector4(1.5, -2.25, 0, 4)
+    assertEqual(try! Json.decode(Vector4.self, from: try! Json.encode(v)), v)
+    assert(try! Json.encode(v).contains("\"y\":-2.25"))
+}
+
+@test
+fn itIsMadeFromFloatsIntegersAndLanes() {
+    let floats: F32[>..] = [9, 1, 5, -3, 8, 9]
+    assertEqual(Vector4(from: floats, at: 1), a)
+    var into: F32[>..] = [0, 0, 0, 0, 0, 0]
+    a.copy(to: &into, at: 1)
+    assertEqual(Vector4(from: into, at: 1), a)
+    assertEqual(into[0], 0)
+    expectPanic("") {
+        var short: F32[>..] = [0]
+        a.copy(to: &short)
+    }
+    assertEqual(Vector4(Int4(1, 5, -3, 8)), a)
+    assertEqual(Vector4(a.simd), a)
+    assertEqual(a.simd[3], 8)
+    assertEqual(a.toArray(), [1, 5, -3, 8])
+    assertEqual(Vector4(repeating: 2), Vector4.one * 2)
+}
+
+@test
+fn itIsMadeOfAShorterOneAndHoldsIt() {
+    assertEqual(Vector4(Vector3(1, 5, -3), 8), a)
+    assertEqual(a.xy, Vector2(1, 5))
+    assertEqual(a.xyz, Vector3(1, 5, -3))
+    assertEqual(Vector4.unitZ + Vector4.unitW + Vector4.unitX, Vector4(1, 0, 1, 1))
+}

@@ -55,6 +55,43 @@ fn ringSize<T, N: Int>(_ ring: Ring<T, N>) -> Int {
     return N
 }
 
+// Every operator the other programs leave out.
+fn operators(_ a: Int, _ b: Int, _ maybe: Int?) -> Int {
+    var n = (a >> 1) &+ b &- 2 &* a
+    n &= 255
+    n |= 1
+    n ^= 3
+    n <<= 2
+    n >>= 1
+    n &+= b
+    n &-= 1
+    n &*= 3
+    var other = maybe
+    other ??= n
+    let one = Box()
+    return one !== Box() ? other! : 0
+}
+
+class Box {
+    var watched: Int = 0 {
+        willSet { print("to \(newValue)") }
+        didSet { print("from \(oldValue)") }
+    }
+}
+
+struct Bits {
+    var all: Int
+
+    package nonmutating fn taken() -> Bits {
+        let copy = self
+        return move copy
+    }
+
+    postfix operator ~ (m: Bits) -> Bits {
+        return Bits { all: ~m.all }
+    }
+}
+
 fn main() {
     let ring = Ring<Int, 2> { slots: [1, 2] }
     print(ringSize(ring))

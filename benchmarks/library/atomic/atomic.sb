@@ -1,10 +1,11 @@
 module AtomicBench
 
+import Sable.Testing
+
 // Atomic<Int>: four tasks on the pool, each adding one to a shared count
 // half a million times, then as often by compare-and-exchange.
 
-@main
-fn main() async {
+fn run() async -> String {
     let count = Atomic<Int>(0)
     await withTaskGroup(of: Int.self) { group in
         for _ in 0..<4 {
@@ -25,5 +26,10 @@ fn main() async {
         }
         await group.waitForAll()
     }
-    print(count.load())
+    return "\(count.load())"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { await run() })
 }

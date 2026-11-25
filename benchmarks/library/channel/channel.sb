@@ -1,11 +1,11 @@
 module ChannelBench
 
 import Sable.Concurrency
+import Sable.Testing
 
 // Channel<Int>: one task sends half a million numbers, another receives them.
 
-@main
-fn main() async {
+fn run() async -> String {
     let channel = Channel<Int>()
     let producer = Task.spawn {
         for i in 0..<500000 {
@@ -18,5 +18,10 @@ fn main() async {
         total += value
     }
     await producer.value
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) async {
+    b.check(await b.iterateAsync { await run() })
 }

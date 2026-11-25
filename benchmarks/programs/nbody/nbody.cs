@@ -2,7 +2,7 @@ using System.Globalization;
 
 // Port of nbody.sb.
 [Benchmark("programs/nbody")]
-static class ProgramNbody {
+static class ProgramsNbody {
     struct Body(double x, double y, double z, double vx, double vy, double vz, double mass) {
         public double X = x, Y = y, Z = z, Vx = vx, Vy = vy, Vz = vz, Mass = mass;
     }

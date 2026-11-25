@@ -1,5 +1,7 @@
 module ArraySearchBench
 
+import Sable.Testing
+
 // Searching and comparing arrays of 32- and 64-bit integers and of bytes:
 // the first and the last of a value near the far end, how many of one, any
 // of three, and whether two arrays are equal, over 64 Ki elements and, as
@@ -8,6 +10,8 @@ module ArraySearchBench
 fn work(_ words: I32[:], _ others: I32[:], _ longs: Int[:], _ bytes: U8[:], _ rounds: Int) -> Int {
     var total = 0
     for _ in 0..<rounds {
+        // Each round reads the input anew: nothing is kept from the last.
+        _ = blackBox(total)
         total += words.firstIndex(of: 999) ?? 0
         total += words.lastIndex(of: 998) ?? 0
         total += words.count(of: 7)
@@ -20,8 +24,12 @@ fn work(_ words: I32[:], _ others: I32[:], _ longs: Int[:], _ bytes: U8[:], _ ro
     return total
 }
 
-@main
-fn main() {
+fn run(_ words: I32[>..], _ others: I32[>..], _ longs: Int[>..], _ bytes: U8[>..]) -> String {
+    return "\(work(words, others, longs, bytes, 1000) + work(words[..<24], others[..<24], longs[..<24], bytes[..<24], 200000))"
+}
+
+@bench
+fn measure(_ b: Bencher) {
     var words: I32[>..] = []
     var longs: Int[>..] = []
     var bytes: U8[>..] = []
@@ -39,5 +47,5 @@ fn main() {
     for word in words {
         others.append(word)
     }
-    print(work(words, others, longs, bytes, 1000) + work(words[..<24], others[..<24], longs[..<24], bytes[..<24], 200000))
+    b.check(b.iterate { run(words, others, longs, bytes) })
 }

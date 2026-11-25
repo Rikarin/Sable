@@ -1,19 +1,27 @@
 module ByteSearchBench
 
+import Sable.Testing
+
 // Finding a byte in a megabyte of bytes: near the end, and counting one
 // that is everywhere.
 
-@main
-fn main() {
+fn run(_ bytes: U8[>..]) -> String {
+    var total = 0
+    for _ in 0..<1000 {
+        // Each round reads the input anew: nothing is kept from the last.
+        _ = blackBox(total)
+        total += bytes.firstIndex(of: 200)!
+        total += bytes.count(of: 42)
+    }
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
     var bytes: U8[>..] = []
     for i in 0..<1048576 {
         bytes.append(U8(i % 97))
     }
     bytes[1048570] = 200
-    var total = 0
-    for _ in 0..<1000 {
-        total += bytes.firstIndex(of: 200)!
-        total += bytes.count(of: 42)
-    }
-    print(total)
+    b.check(b.iterate { run(bytes) })
 }

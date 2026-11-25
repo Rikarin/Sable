@@ -1,0 +1,118 @@
+module Sable.Serialize
+
+import Sable.Collections
+
+// The frozen and the persistent collections, as Set and Dictionary are: a
+// list or a set as a sequence, a dictionary with String keys as a map.
+
+/// The elements as a sequence, in the collection's order.
+fn encodeElements<C: Collection, E: Encoder>(_ elements: C, to encoder: E) throws(SerializeError) where C.Element: Serializable {
+    try encoder.beginSequence(count: elements.count)
+    for element in elements {
+        try element.encode(to: encoder)
+    }
+    try encoder.endSequence()
+}
+
+/// A sequence's elements, in order.
+fn decodeElements<Element: Serializable, D: Decoder>(from decoder: D) throws(SerializeError) -> Element[>..] {
+    var all: Element[>..] = []
+    for element in try decoder.decodeSequence() {
+        all.append(try Element.decode(from: element))
+    }
+    return all
+}
+
+extension ImmutableList: Serializable where Element: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encodeElements(self, to: encoder)
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> ImmutableList<Element> {
+        let all: Element[>..] = try decodeElements(from: decoder)
+        return ImmutableList<Element>(all)
+    }
+}
+
+extension ImmutableSet: Serializable where Element: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encodeElements(self, to: encoder)
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> ImmutableSet<Element> {
+        let all: Element[>..] = try decodeElements(from: decoder)
+        return ImmutableSet<Element>(all)
+    }
+}
+
+extension ImmutableSortedSet: Serializable where Element: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encodeElements(self, to: encoder)
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> ImmutableSortedSet<Element> {
+        let all: Element[>..] = try decodeElements(from: decoder)
+        return ImmutableSortedSet<Element>(all)
+    }
+}
+
+extension FrozenSet: Serializable where Element: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encodeElements(self, to: encoder)
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> FrozenSet<Element> {
+        let all: Element[>..] = try decodeElements(from: decoder)
+        return FrozenSet<Element>(all)
+    }
+}
+
+extension ImmutableDictionary: Serializable where Key == String, Value: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginMap(count: self.count)
+        for (key, value) in self {
+            try encoder.encodeKey(key)
+            try value.encode(to: encoder)
+        }
+        try encoder.endMap()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> ImmutableDictionary<Key, Value> {
+        var all = ImmutableDictionary<Key, Value>()
+        for member in try decoder.decodeMap() {
+            all[member.key] = try Value.decode(from: member.value)
+        }
+        return all
+    }
+}
+
+extension ImmutableSortedDictionary: Serializable where Key == String, Value: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginMap(count: self.count)
+        for entry in self {
+            try encoder.encodeKey(entry.key)
+            try entry.value.encode(to: encoder)
+        }
+        try encoder.endMap()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> ImmutableSortedDictionary<Key, Value> {
+        var all = ImmutableSortedDictionary<Key, Value>()
+        for member in try decoder.decodeMap() {
+            all[member.key] = try Value.decode(from: member.value)
+        }
+        return all
+    }
+}
+
+extension FrozenDictionary: Serializable where Key == String, Value: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginMap(count: self.count)
+        for (key, value) in self {
+            try encoder.encodeKey(key)
+            try value.encode(to: encoder)
+        }
+        try encoder.endMap()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> FrozenDictionary<Key, Value> {
+        var all: (Key, Value)[>..] = []
+        for member in try decoder.decodeMap() {
+            all.append((member.key, try Value.decode(from: member.value)))
+        }
+        return FrozenDictionary<Key, Value>(all)
+    }
+}

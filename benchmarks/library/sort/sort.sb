@@ -1,10 +1,30 @@
-module Sort
+module SortBench
+
+import Sable.Testing
 
 // Sorting against .NET's List.Sort: a million pseudo-random Ints, then
 // 200,000 Strings, each sorted and checked.
 
-@main
-fn main() {
+fn run(_ numbers: Int[>..], _ words: String[>..]) -> String {
+    let a = numbers.sorted()
+    let b = words.sorted()
+    var ordered = true
+    var i = 1
+    while i < a.count {
+        if a[i] < a[i - 1] { ordered = false }
+        i = i + 1
+    }
+    i = 1
+    while i < b.count {
+        if b[i] < b[i - 1] { ordered = false }
+        i = i + 1
+    }
+
+    return "\(ordered) \(a[0]) \(a[a.count / 2]) \(b[0]) \(b[b.count - 1])"
+}
+
+@bench
+fn measure(_ b: Bencher) {
     var numbers: Int[>..] = []
     var x = 42
     var i = 0
@@ -21,20 +41,5 @@ fn main() {
         words.append("w\(x % 1000000)")
         i = i + 1
     }
-
-    let a = numbers.sorted()
-    let b = words.sorted()
-    var ordered = true
-    i = 1
-    while i < a.count {
-        if a[i] < a[i - 1] { ordered = false }
-        i = i + 1
-    }
-    i = 1
-    while i < b.count {
-        if b[i] < b[i - 1] { ordered = false }
-        i = i + 1
-    }
-
-    print("\(ordered) \(a[0]) \(a[a.count / 2]) \(b[0]) \(b[b.count - 1])")
+    b.check(b.iterate { run(numbers, words) })
 }

@@ -93,18 +93,29 @@ extension String {
     }
 
     /// The same of the last fewer than eight bytes.
-    @inline(never)
-    fn utf8Tail(_ offset: Int) -> U64 {
+    @inline(always)
+    package fn utf8Tail(_ offset: Int) -> U64 {
         let count = self.utf8Count
         if count >= 8 {
-            return self.utf8Word(count - 8) >> U64(64 - 8 * (count - offset))
+            return self.utf8Word(count &- 8) >> U64.truncating(64 &- 8 &* (count &- offset))
         }
-        var word: U64 = 0
-        var at = count
-        while at > offset {
-            at -= 1
-            word = word << 8 | U64(self.utf8Byte(at))
-        }
-        return word
+        return self.utf8Last >> U64.truncating(8 &* offset)
     }
+
+    /// Whether the bytes of the UTF-8 encoding from one offset up to another
+    /// are the other string's.
+    @inline(always)
+    package fn hasUtf8(from: Int, to: Int, equalTo other: String) -> Bool {
+        return to &- from == other.utf8Count && Runtime.compareStrings(self, from, to, other, 0, other.utf8Count) == 0
+    }
+
+    /// The same bytes' hash under a key, which is one string's in every run.
+    package fn hash(utf8From from: Int, to: Int, key: U64) -> U64 {
+        return Runtime.hashString(self, from, to, key: key unchecked as Int) unchecked as U64
+    }
+
+    /// The last eight bytes of the UTF-8 encoding, the first of them the
+    /// lowest; or all of them, and zeros, where there are fewer.
+    @builtin("string_utf8_last_U64")
+    package var utf8Last: U64 { get }
 }

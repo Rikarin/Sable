@@ -21,11 +21,26 @@ public enum FuzzEngine {
 ///     IR — a library, whose <c>@export</c> functions take an input a byte at a
 ///     time and run a target on it (<c>TestHarness</c>) — the runtime, and a C
 ///     shim, <see cref="Shim" />, that is libFuzzer's entry point. Everything
-///     is compiled with AddressSanitizer and UndefinedBehaviorSanitizer, which
-///     reach what Sable's own checks do not: the C runtime, and what crosses
-///     to C. The Sable code is held to its own checks, whose traps abort.
+///     is compiled with AddressSanitizer, the C with
+///     UndefinedBehaviorSanitizer too: they reach what Sable's own checks do
+///     not — the runtime, <c>unsafe</c> code, what crosses to C, and what the
+///     compiler itself gets wrong.
 /// </summary>
 /// <remarks>
+///     <para>
+///         ASan instruments the functions that ask for it
+///         (<c>sanitize_address</c>), as clang marks C's: the program's are
+///         marked as they are handed to clang (<see cref="ProgramAttributes" />),
+///         so every load and store of Sable code is checked too. The runtime
+///         built so takes every block from malloc, rather than from slabs
+///         ASan cannot see into (memory.c). UBSan is made in clang's C front
+///         end, from C's types, and has nothing to add to IR: what it would
+///         check of Sable code — overflow, a shift too far, an index out of
+///         range, a cast that does not fit — is what Sable traps on itself.
+///     </para>
+///     <para>
+///         Nothing is suppressed: no function is left out, and no report.
+///     </para>
 ///     <para>
 ///         Coverage needs no rewriting of the program: clang's
 ///         <c>-fsanitize=fuzzer</c> instruments the IR it compiles, Sable's as
@@ -83,6 +98,31 @@ public static class FuzzBuild {
             return 0;
         }
 
+        #ifdef SABLE_FUZZ_MUTATOR
+        /* '@fuzz(mutator:)': the target's own changes three times in four,
+           libFuzzer's otherwise, and for a target with none. */
+        int64_t sable_harness_fuzz_mutate(int64_t target, uint64_t seed);
+        uint8_t sable_harness_fuzz_mutated(int64_t at);
+        size_t LLVMFuzzerMutate(uint8_t *data, size_t size, size_t max_size);
+
+        size_t LLVMFuzzerCustomMutator(uint8_t *data, size_t size, size_t max_size, unsigned int seed) {
+            if (seed % 4 != 0) {
+                sable_harness_fuzz_begin();
+                for (size_t i = 0; i < size; i++) {
+                    sable_harness_fuzz_push(data[i]);
+                }
+                int64_t length = sable_harness_fuzz_mutate(sable_fuzz_target(), seed);
+                if (length > 0 && (uint64_t)length <= max_size) {
+                    for (int64_t i = 0; i < length; i++) {
+                        data[i] = sable_harness_fuzz_mutated(i);
+                    }
+                    return (size_t)length;
+                }
+            }
+            return LLVMFuzzerMutate(data, size, max_size);
+        }
+        #endif
+
         #ifdef SABLE_FUZZ_REPLAY
         int main(int argc, char **argv) {
             for (int i = 1; i < argc; i++) {
@@ -123,20 +163,29 @@ public static class FuzzBuild {
     ///     wants it, frames kept for the sanitizers' reports, and the engine's
     ///     sanitizers.
     /// </summary>
-    public static IReadOnlyList<string> Flags(FuzzEngine engine) => [
+    /// <param name="mutates">Whether a target has a mutator of its own (<c>@fuzz(mutator:)</c>).</param>
+    public static IReadOnlyList<string> Flags(FuzzEngine engine, bool mutates = false) => [
         "-O1", "-g", "-fno-omit-frame-pointer",
         engine == FuzzEngine.LibFuzzer ? "-fsanitize=fuzzer,address,undefined" : "-fsanitize=address,undefined",
         "-fno-sanitize-recover=all", "-Wno-override-module",
-        ..(engine == FuzzEngine.Replay ? ["-DSABLE_FUZZ_REPLAY"] : Array.Empty<string>()),
+        ..(engine == FuzzEngine.Replay ? ["-DSABLE_FUZZ_REPLAY"] : mutates ? ["-DSABLE_FUZZ_MUTATOR"] : Array.Empty<string>()),
     ];
+
+    /// <summary>
+    ///     What every function of the program is given, as clang gives C's:
+    ///     that AddressSanitizer instruments it; and, for libFuzzer, that the
+    ///     optimiser keeps its branches apart — <c>a &amp;&amp; b &amp;&amp; c</c> made one
+    ///     branch is one edge, which nothing leads up to.
+    /// </summary>
+    public const string ProgramAttributes = "sanitize_address optforfuzzing";
 
     /// <summary>
     ///     The whole command line after clang's name: the IR, the runtime and
     ///     the shim, built for this machine into <paramref name="output" />,
     ///     with what the package's build scripts add to the link.
     /// </summary>
-    public static IReadOnlyList<string> Arguments(string ir, string runtime, string shim, string output, FuzzEngine engine, NativeTarget host, IReadOnlyList<string>? link = null) =>
-        [..host.ClangFlags, ..Flags(engine), ir, runtime, shim, "-o", output, ..NativeBuild.PlatformLinkFlags(host.Platform), ..link ?? []];
+    public static IReadOnlyList<string> Arguments(string ir, string runtime, string shim, string output, FuzzEngine engine, NativeTarget host, IReadOnlyList<string>? link = null, bool mutates = false) =>
+        [..host.ClangFlags, ..Flags(engine, mutates), ir, runtime, shim, "-o", output, ..NativeBuild.PlatformLinkFlags(host.Platform), ..link ?? []];
 
     /// <summary>
     ///     Builds the harness's IR into <paramref name="output" />, unless what
@@ -152,7 +201,7 @@ public static class FuzzBuild {
 
         var keyFile = output + ".key";
         var key = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
-            $"sable-fuzz-1\n{NativeObjects.CompilerIdentity}\n{engine}\n{string.Join(' ', link ?? [])}\n{Shim}\n{NativeBuild.RuntimeSource}\n{llvmIr}")));
+            $"sable-fuzz-2\n{NativeObjects.CompilerIdentity}\n{engine}\n{string.Join(' ', link ?? [])}\n{Shim}\n{NativeBuild.RuntimeSource}\n{llvmIr}")));
         if (File.Exists(output) && File.Exists(keyFile) && File.ReadAllText(keyFile) == key) {
             return new(true, "");
         }
@@ -160,13 +209,13 @@ public static class FuzzBuild {
         var directory = Directory.CreateTempSubdirectory("sable-fuzz-");
         try {
             var ir = Path.Combine(directory.FullName, "harness.ll");
-            File.WriteAllText(ir, NativeBuild.ForTarget(llvmIr, host, namesFrames: true));
+            File.WriteAllText(ir, NativeBuild.ForTarget(llvmIr, host, namesFrames: true, extraAttributes: ProgramAttributes));
             var runtime = NativeBuild.WriteRuntime(Path.Combine(directory.FullName, "runtime"));
             var shim = Path.Combine(directory.FullName, "fuzz.c");
             File.WriteAllText(shim, Shim);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
             File.Delete(keyFile);
-            var (exitCode, text) = NativeBuild.Run(NativeBuild.CompilerPath, Arguments(ir, runtime, shim, output, engine, host, link));
+            var (exitCode, text) = NativeBuild.Run(NativeBuild.CompilerPath, Arguments(ir, runtime, shim, output, engine, host, link, llvmIr.Contains("@\"sable_harness_fuzz_mutate\"(", StringComparison.Ordinal)));
             if (exitCode == 0) {
                 File.WriteAllText(keyFile, key);
             }

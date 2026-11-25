@@ -1,12 +1,12 @@
 module BitSetBench
 
 import Sable.Collections
+import Sable.Testing
 
 // BitSet: the primes under five million sieved, then two sets of a million
 // bits crossed and counted a hundred times.
 
-@main
-fn main() {
+fn run() -> String {
     let limit = 5000000
     let composite = BitSet()
     var primes = 0
@@ -31,5 +31,10 @@ fn main() {
     for _ in 0..<100 {
         counted += thirds.intersection(fifths).count + thirds.union(fifths).count
     }
-    print("\(primes) \(counted)")
+    return "\(primes) \(counted)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

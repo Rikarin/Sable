@@ -1,395 +1,260 @@
 module Sable.Testing
 
-import Sable.Text
 import Sable.Math
-import Sable.Collections
-
-/// One '@bench' function, as the compiler's entry point lists it: run with
-/// a Bencher, whose 'iterate' (or 'iterateAsync') does the timing. It is
-/// awaited, so an async benchmark can await what it measures.
-public struct BenchCase {
-    public var name: String
-    public var location: String
-    public var run: async (Bencher) -> Void
-}
-
-/// What one benchmark measured: nanoseconds per iteration.
-public struct BenchResult {
-    public var name: String
-    public var mean: F64
-    public var median: F64
-    public var deviation: F64
-    public var iterations: Int
-}
 
 /// Times a body: a '@bench' function that takes one calls 'iterate' with
 /// what to measure, set-up kept outside it.
+///
+/// What the body returns is kept from the optimiser ('blackBox'), as is the
+/// body; what it is given is the benchmark's to keep ('blackBox(input)').
+///
+/// ```sable
+/// let b = Bencher("sum", BenchSettings.quick)
+/// let values = [1, 2, 3]
+/// let sum = b.iterate { values.sum() }
+/// b.check("\(sum)")
+/// b.itemsPerIteration = values.count
+/// assertEqual(b.measurement!.check, "6")
+/// ```
 public class Bencher {
-    /// How many samples to take, and how long each should last at least.
-    var samples: Int
-    var sampleNanoseconds: Int
-    var warmUpNanoseconds: Int
+    /// What the body works on in an iteration, for a throughput beside the
+    /// time: bytes, or things of any kind; 0 for none.
+    public var bytesPerIteration: Int = 0
+    public var itemsPerIteration: Int = 0
+    /// How many times the body does what is measured: its times and counts
+    /// are divided by it.
+    public var operationsPerIteration: Int = 1
 
-    /// What 'iterate' measured; none until it has.
-    var measured: BenchResult? = none
-    /// How many objects an iteration allocated, on average: counted over a
-    /// pass of its own, after the timed ones, so that nothing of the
-    /// bencher's is counted. Exact for 'iterate'; for 'iterateAsync' only
-    /// as far as the task stays on one thread, which the count is kept by.
-    public var allocationsPerIteration: F64 = 0.0
-    var name: String
+    let name: String
+    let settings: BenchSettings
+    var schedule: BenchSchedule
+    var memory: BenchMemory? = none
+    var counters: BenchCounters? = none
+    var checked: String = ""
 
-    public init(name: String, samples: Int, sampleNanoseconds: Int, warmUpNanoseconds: Int) {
+    // The run going on: what it has taken, and where the clocks, the counts
+    // and the processor's counters were as its present part began.
+    var wall: Int = 0
+    var processor: Int = 0
+    var instructions: Int = 0
+    var cycles: Int = 0
+    var counted: Int = 0
+    var memoryTotal: BenchMemory = BenchMemory()
+    var begunWall: Int = 0
+    var begunProcessor: Int = 0
+    var begunInstructions: Int = 0
+    var begunCycles: Int = 0
+    var begunMemory: BenchMemory = BenchMemory()
+
+    public init(_ name: String, _ settings: BenchSettings = BenchSettings()) {
         self.name = name
-        self.samples = samples
-        self.sampleNanoseconds = sampleNanoseconds
-        self.warmUpNanoseconds = warmUpNanoseconds
+        self.settings = settings
+        self.schedule = BenchSchedule(settings)
     }
 
-    /// Runs the body over and over: first to warm up, and to learn how many
-    /// iterations make a sample last long enough to time; then for each
-    /// sample, that many times.
-    public fn iterate(_ body: () -> Void) {
-        // Warm-up, doubling the batch until it takes long enough: what it
-        // took per iteration sets the sample's size.
-        var batch = 1
-        var spent = 0
-        var perIteration = 1.0
-        while true {
-            let begun = Runtime.monotonicNanoseconds()
-            var k = 0
-            while k < batch {
-                body()
-                k = k + 1
+    /// What 'iterate' measured; none until it has.
+    public var measurement: BenchMeasurement? {
+        get {
+            if schedule.phase != .Done {
+                return none
             }
-            let took = Runtime.monotonicNanoseconds() - begun
-            spent = spent + took
-            perIteration = F64(took) / F64(batch)
-            if spent >= warmUpNanoseconds || batch >= 1073741824 {
-                break
-            }
-            batch = batch * 2
+            return BenchMeasurement(
+                name: name, samples: schedule.samples, wallOverhead: schedule.overhead(processor: false),
+                processorOverhead: schedule.overhead(processor: true), memory: memory ?? BenchMemory(), counters: counters, check: checked,
+                operations: max(operationsPerIteration, 1), bytes: bytesPerIteration, items: itemsPerIteration
+            )
         }
-        var iterations = Int(F64(sampleNanoseconds) / (perIteration > 1.0 ? perIteration : 1.0))
-        if iterations < 1 {
-            iterations = 1
-        }
+    }
 
-        var times: F64[>..] = []
-        var s = 0
-        while s < samples {
-            let begun = Runtime.monotonicNanoseconds()
-            var k = 0
-            while k < iterations {
-                body()
-                k = k + 1
+    /// What the benchmark computed, to be the same wherever it is run: in
+    /// each of its processes, each job's, and the ports to other languages
+    /// (tools/bench/compare.py).
+    public fn check(_ text: String) {
+        checked = text
+    }
+
+    /// Runs the body over and over, as the settings say, and gives what it
+    /// returned last.
+    @discardable
+    public fn iterate<R>(_ body: @escaping () -> R) -> R {
+        let body = blackBox(body)
+        let empty: () -> Void = blackBox({ })
+        var last: R? = none
+        while schedule.phase != .Done {
+            let count = schedule.iterations
+            begin()
+            if schedule.phase == .Overhead {
+                for _ in 0..<count {
+                    blackBox(empty())
+                }
+            } else {
+                for _ in 1..<count {
+                    _ = blackBox(body())
+                }
+                last = blackBox(body())
             }
-            let took = Runtime.monotonicNanoseconds() - begun
-            times.append(F64(took) / F64(iterations))
-            s = s + 1
+            end()
         }
-        measured = summarise(name, times, iterations)
-        let before = Runtime.allocationCount()
-        var k = 0
-        while k < iterations {
-            body()
-            k = k + 1
-        }
-        allocationsPerIteration = F64(Runtime.allocationCount() - before) / F64(iterations)
+        return last!
     }
 
     /// As 'iterate', for a body that awaits: each iteration is awaited
     /// before the next, and the time it spends suspended is part of its time.
-    public async fn iterateAsync(_ body: async () -> Void) {
-        // Warm-up, doubling the batch until it takes long enough: what it
-        // took per iteration sets the sample's size.
-        var batch = 1
-        var spent = 0
-        var perIteration = 1.0
-        while true {
-            let begun = Runtime.monotonicNanoseconds()
-            var k = 0
-            while k < batch {
-                await body()
-                k = k + 1
-            }
-            let took = Runtime.monotonicNanoseconds() - begun
-            spent = spent + took
-            perIteration = F64(took) / F64(batch)
-            if spent >= warmUpNanoseconds || batch >= 1073741824 {
-                break
-            }
-            batch = batch * 2
-        }
-        var iterations = Int(F64(sampleNanoseconds) / (perIteration > 1.0 ? perIteration : 1.0))
-        if iterations < 1 {
-            iterations = 1
-        }
-
-        var times: F64[>..] = []
-        var s = 0
-        while s < samples {
-            let begun = Runtime.monotonicNanoseconds()
-            var k = 0
-            while k < iterations {
-                await body()
-                k = k + 1
-            }
-            let took = Runtime.monotonicNanoseconds() - begun
-            times.append(F64(took) / F64(iterations))
-            s = s + 1
-        }
-        measured = summarise(name, times, iterations)
-        let before = Runtime.allocationCount()
-        var k = 0
-        while k < iterations {
-            await body()
-            k = k + 1
-        }
-        allocationsPerIteration = F64(Runtime.allocationCount() - before) / F64(iterations)
-    }
-}
-
-/// Allocations per iteration: a whole number as one, else to a hundredth.
-fn formatAllocations(_ value: F64) -> String {
-    if value.rounded(.ToNearestOrEven) == value {
-        return "\(Int(value))"
-    }
-    return "\(value:.2)"
-}
-
-/// The mean, median and standard deviation of the samples (Sable.Math's
-/// statistics), each 0 where there are too few samples for it.
-public fn summarise(_ name: String, _ times: F64[>..], _ iterations: Int) -> BenchResult {
-    let average = times.isEmpty ? 0.0 : mean(times)
-    let middle = times.isEmpty ? 0.0 : median(times)
-    let deviation = times.count < 2 ? 0.0 : standardDeviation(times, .Sample)
-    return BenchResult { name: name, mean: average, median: middle, deviation: deviation, iterations: iterations }
-}
-
-struct BenchOptions {
-    var filters: String[>..]
-    var list: Bool
-    var saveBaseline: String?
-    var baseline: String?
-    var directory: String
-    var samples: Int
-    var sampleNanoseconds: Int
-    var warmUpNanoseconds: Int
-}
-
-fn parseBenchOptions() -> BenchOptions? {
-    var options = BenchOptions {
-        filters: [], list: false, saveBaseline: none, baseline: none, directory: "target/bench",
-        samples: 20, sampleNanoseconds: 5000000, warmUpNanoseconds: 50000000
-    }
-    var i = 0
-    let count = Runtime.argumentCount()
-    while i < count {
-        let argument = Runtime.argument(i)
-        let hasValue = i + 1 < count
-        if argument == "--list" {
-            options.list = true
-        } else if argument == "--save-baseline" && hasValue {
-            options.saveBaseline = Runtime.argument(i + 1)
-            i = i + 1
-        } else if argument == "--baseline" && hasValue {
-            options.baseline = Runtime.argument(i + 1)
-            i = i + 1
-        } else if argument == "--baseline-dir" && hasValue {
-            options.directory = Runtime.argument(i + 1)
-            i = i + 1
-        } else if argument == "--quick" {
-            // A few short samples: to see that benchmarks run, not to time them.
-            options.samples = 3
-            options.sampleNanoseconds = 100000
-            options.warmUpNanoseconds = 100000
-        } else if argument == "--samples" && hasValue && Runtime.argument(i + 1).toInt() != none {
-            options.samples = max(Runtime.argument(i + 1).toInt()!, 1)
-            i = i + 1
-        } else if argument.hasPrefix("--") {
-            Runtime.writeError("unknown option '\(argument)'\nusage: <harness> [filter...] [--list] [--quick] [--samples <n>] [--save-baseline <name>] [--baseline <name>] [--baseline-dir <path>]\n")
-            return none
-        } else {
-            options.filters.append(argument)
-        }
-        i = i + 1
-    }
-    return options
-}
-
-/// The entry point of a bench build: runs the benchmarks the arguments
-/// select and reports each one's time per iteration; with
-/// '--save-baseline <name>', keeps the results under that name, and with
-/// '--baseline <name>' (or when one called 'default' exists), compares
-/// with what was kept. Gives the exit code: 0, or 2 for arguments it does
-/// not understand or a baseline it cannot read or write.
-public async fn runBenchmarks(_ benches: BenchCase[>..]) -> Int {
-    guard let options = parseBenchOptions() else {
-        return 2
-    }
-
-    var chosen: BenchCase[>..] = []
-    for bench in benches {
-        if selectedByName(bench.name, options.filters) {
-            chosen.append(bench)
-        }
-    }
-
-    if options.list {
-        for bench in chosen {
-            print("\(bench.name): bench (\(bench.location))")
-        }
-        print("\(chosen.count) benchmark\(plural(chosen.count))")
-        return 0
-    }
-
-    // What to compare with: the baseline named, else the default one if
-    // there is one.
-    var against: BenchResult[>..] = []
-    var comparing = false
-    let baselineName = options.baseline ?? "default"
-    let baselinePath = options.directory + "/" + baselineName + ".txt"
-    if let text = Runtime.readFile(baselinePath) {
-        against = parseBaseline(text)
-        comparing = true
-    } else if options.baseline != none {
-        Runtime.writeError("no baseline '\(baselineName)' at \(baselinePath)\n")
-        return 2
-    }
-
-    print("running \(chosen.count) benchmark\(plural(chosen.count))\(comparing ? " against baseline '" + baselineName + "'" : "")")
-    var results: BenchResult[>..] = []
-    var regressions = 0
-    for bench in chosen {
-        let bencher = Bencher(name: bench.name, samples: options.samples, sampleNanoseconds: options.sampleNanoseconds, warmUpNanoseconds: options.warmUpNanoseconds)
-        await bench.run(bencher)
-        guard let result = bencher.measured else {
-            print("bench \(bench.name) ... did not call 'iterate'")
-            continue
-        }
-        results.append(result)
-        var line = "bench \(bench.name) ... mean \(formatNanoseconds(result.mean)) / iter, median \(formatNanoseconds(result.median)), ± \(formatNanoseconds(result.deviation)) (\(options.samples) × \(result.iterations) iterations), \(formatAllocations(bencher.allocationsPerIteration)) allocations / iter"
-        if comparing {
-            if let old = findResult(against, bench.name) {
-                let (text, regressed) = comparison(old, result)
-                line = line + "; " + text
-                if regressed {
-                    regressions = regressions + 1
+    @discardable
+    public async fn iterateAsync<R>(_ body: @escaping async () -> R) -> R {
+        let body = blackBox(body)
+        var last: R? = none
+        while schedule.phase != .Done {
+            let count = schedule.iterations
+            begin()
+            if schedule.phase != .Overhead {
+                for _ in 1..<count {
+                    _ = blackBox(await body())
                 }
-            } else {
-                line = line + "; new"
+                last = blackBox(await body())
             }
+            end()
         }
-        print(line)
+        return last!
     }
 
-    print("")
-    var summary = "bench result: \(results.count) measured"
-    if comparing {
-        summary = summary + "; \(regressions) regressed"
+    /// As 'iterate', each iteration given a value of its own that 'setup'
+    /// makes, and 'cleanup' is given after it, neither of them timed. The
+    /// values are made 'batch' at a time, all of them alive at once: fewer
+    /// for large ones.
+    ///
+    /// ```sable
+    /// let b = Bencher("sorted", BenchSettings.quick)
+    /// let values = [3, 1, 2]
+    /// b.iterate(setup: { values }, { (copy: inout Int[]) in copy.sort() })
+    /// assert(b.measurement != none)
+    /// ```
+    @discardable
+    public fn iterate<T, R>(
+        setup: () -> T,
+        _ body: @escaping (inout T) -> R,
+        batch: Int = 16,
+        cleanup: (inout T) -> Void = { (value: inout T) in }
+    ) -> R {
+        let body = blackBox(body)
+        let empty: (inout T) -> Void = blackBox({ (value: inout T) in })
+        var last: R? = none
+        while schedule.phase != .Done {
+            var left = schedule.iterations
+            let overhead = schedule.phase == .Overhead
+            while left > 0 {
+                let count = min(left, max(batch, 1))
+                left -= count
+                var values: T[>..] = []
+                values.reserveCapacity(count)
+                for _ in 0..<count {
+                    values.append(setup())
+                }
+                begin()
+                if overhead {
+                    for i in 0..<count {
+                        empty(&values[i])
+                    }
+                } else {
+                    for i in 1..<count {
+                        _ = blackBox(body(&values[i - 1]))
+                    }
+                    last = blackBox(body(&values[count - 1]))
+                }
+                pause()
+                for i in 0..<count {
+                    cleanup(&values[i])
+                }
+            }
+            finish()
+        }
+        return last!
     }
-    print(summary)
 
-    if let name = options.saveBaseline {
-        let path = options.directory + "/" + name + ".txt"
-        if !makeDirectories(options.directory) || !Runtime.writeFile(path, formatBaseline(results), false) {
-            Runtime.writeError("cannot write the baseline to \(path)\n")
-            return 2
+    /// As 'iterateAsync', each iteration given a value of its own, as
+    /// 'iterate(setup:)' gives it.
+    @discardable
+    public async fn iterateAsync<T, R>(
+        setup: @escaping async () -> T,
+        _ body: @escaping async (T) -> R,
+        batch: Int = 16,
+        cleanup: @escaping async (T) -> Void = { (value: T) in }
+    ) -> R {
+        let body = blackBox(body)
+        var last: R? = none
+        while schedule.phase != .Done {
+            var left = schedule.iterations
+            let overhead = schedule.phase == .Overhead
+            while left > 0 {
+                let count = min(left, max(batch, 1))
+                left -= count
+                var values: T[>..] = []
+                values.reserveCapacity(count)
+                for _ in 0..<count {
+                    values.append(await setup())
+                }
+                begin()
+                if !overhead {
+                    for i in 0..<count {
+                        last = blackBox(await body(values[i]))
+                    }
+                }
+                pause()
+                for i in 0..<count {
+                    await cleanup(values[i])
+                }
+            }
+            finish()
         }
-        print("saved baseline '\(name)' to \(path)")
+        return last!
     }
-    return 0
-}
 
-/// How the new result compares with the old: the change in the mean, and
-/// whether it is a regression — slower by more than the noise, which is
-/// taken as twice the two runs' deviations together, and never under 5%.
-public fn comparison(_ old: BenchResult, _ new: BenchResult) -> (String, Bool) {
-    if old.mean <= 0.0 {
-        return ("no change measurable", false)
+    // A part of a run begins: the last thing it does is to read the clock.
+    fn begin() {
+        if schedule.phase == .Counters {
+            begunInstructions = Runtime.measurement(2)
+            begunCycles = Runtime.measurement(3)
+        } else if schedule.phase == .Memory {
+            Runtime.countMemory(true)
+            begunMemory = BenchMemory.now
+        }
+        begunProcessor = processorTime()
+        begunWall = Runtime.monotonicNanoseconds()
     }
-    let change = (new.mean - old.mean) / old.mean * 100.0
-    let noise = max(5.0, 200.0 * (old.deviation + new.deviation) / old.mean)
-    let text = "\(change:+.2f)% vs baseline"
-    if change > noise {
-        return (text + " (REGRESSED)", true)
-    }
-    if change < 0.0 - noise {
-        return (text + " (improved)", false)
-    }
-    return (text + " (within noise)", false)
-}
 
-fn findResult(_ results: BenchResult[>..], _ name: String) -> BenchResult? {
-    for result in results {
-        if result.name == name {
-            return result
+    // And ends, the clock read first.
+    fn pause() {
+        wall += Runtime.monotonicNanoseconds() - begunWall
+        processor += processorTime() - begunProcessor
+        if schedule.phase == .Memory {
+            memoryTotal = memoryTotal.adding(BenchMemory.now, less: begunMemory)
+            Runtime.countMemory(false)
+        } else if schedule.phase == .Counters {
+            instructions = begunInstructions < 0 ? -1 : instructions + Runtime.measurement(2) - begunInstructions
+            cycles = begunCycles < 0 ? -1 : cycles + Runtime.measurement(3) - begunCycles
         }
     }
-    return none
-}
 
-/// A baseline, one line per benchmark: its name, then mean, median and
-/// deviation in picoseconds per iteration, then the iterations per sample,
-/// tab-separated.
-public fn formatBaseline(_ results: BenchResult[>..]) -> String {
-    let report = TextBuilder()
-    report.appendLine("# sable bench baseline: name, mean ps, median ps, deviation ps, iterations")
-    for result in results {
-        report.appendLine("\(result.name)\t\(Int(result.mean * 1000.0))\t\(Int(result.median * 1000.0))\t\(Int(result.deviation * 1000.0))\t\(result.iterations)")
+    // The run is over.
+    fn finish() {
+        if schedule.phase == .Memory {
+            memory = memoryTotal.divided(by: F64(schedule.iterations))
+        } else if schedule.phase == .Counters && (instructions >= 0 || cycles >= 0) {
+            let count = F64(schedule.iterations)
+            counters = BenchCounters(instructions: instructions < 0 ? -1.0 : F64(instructions) / count, cycles: cycles < 0 ? -1.0 : F64(cycles) / count)
+        }
+        schedule.record(wall: F64(wall), processor: F64(processor))
+        wall = 0
+        processor = 0
     }
-    return report.build()
-}
 
-public fn parseBaseline(_ text: String) -> BenchResult[>..] {
-    var results: BenchResult[>..] = []
-    // Lines and fields are pieces of the text, the numbers read where they
-    // lie: only a result's name is copied out.
-    for line in text.asSubstring.lines() {
-        if line.hasPrefix("#") {
-            continue
-        }
-        let fields = line.split('\t')
-        if fields.count != 5 {
-            continue
-        }
-        if let mean = fields[1].toInt(), let median = fields[2].toInt(), let deviation = fields[3].toInt(), let iterations = fields[4].toInt() {
-            results.append(BenchResult {
-                name: fields[0].toString(), mean: F64(mean) / 1000.0, median: F64(median) / 1000.0,
-                deviation: F64(deviation) / 1000.0, iterations: iterations
-            })
-        }
+    fn end() {
+        pause()
+        finish()
     }
-    return results
-}
 
-/// Makes the directory and those above it that are missing; whether it is there now.
-fn makeDirectories(_ path: String) -> Bool {
-    if Runtime.isDirectory(path) {
-        return true
+    // Of this process and of those it has waited for.
+    fn processorTime() -> Int {
+        return Runtime.measurement(0) + Runtime.measurement(1)
     }
-    let parts = path.split('/')
-    var built = path.hasPrefix("/") ? "/" : ""
-    for part in parts {
-        if part.count == 0 {
-            continue
-        }
-        built = built.count == 0 || built == "/" ? built + part : built + "/" + part
-        if !Runtime.isDirectory(built) && !Runtime.makeDirectory(built) {
-            return false
-        }
-    }
-    return Runtime.isDirectory(path)
-}
-
-/// Whether the name is selected: by any of the filters, as a part of it;
-/// every name is, with none.
-fn selectedByName(_ name: String, _ filters: String[>..]) -> Bool {
-    for filter in filters {
-        if name.contains(filter) {
-            return true
-        }
-    }
-    return filters.isEmpty
 }

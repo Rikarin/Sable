@@ -1,0 +1,167 @@
+module Sable.Math.Geometry
+
+/// Four `I32`s: bone indices, an index with three more. 16 bytes, aligned to 4, as
+/// C's `int32_t[4]` and GLSL's `ivec4`. Arithmetic traps where a component
+/// overflows, as `I32`'s does, and division truncates toward zero.
+///
+/// ```sable
+/// let v = Int4(repeating: 7) / 2
+/// assert(v == Int4(repeating: 3) && v.x == v[0])
+/// ```
+public struct Int4: Hashable, AdditiveArithmetic, Sendable {
+    /// The x component.
+    public var x: I32
+
+    /// The y component.
+    public var y: I32
+
+    /// The z component.
+    public var z: I32
+
+    /// The w component.
+    public var w: I32
+
+    /// The vector of the components.
+    public init(_ x: I32, _ y: I32, _ z: I32, _ w: I32) {
+        self.x = x
+        self.y = y
+        self.z = z
+        self.w = w
+    }
+
+    /// Every component the value.
+    public init(repeating value: I32) {
+        x = value
+        y = value
+        z = value
+        w = value
+    }
+
+    /// Each component toward zero to an integer. Traps where one is NaN or out of range.
+    public init(truncating value: Vector4) {
+        x = I32(value.x)
+        y = I32(value.y)
+        z = I32(value.z)
+        w = I32(value.w)
+    }
+
+    /// Every component zero.
+    public static var zero: Int4 => Int4(0, 0, 0, 0)
+
+    /// Every component one.
+    public static var one: Int4 => Int4(1, 1, 1, 1)
+
+    /// The x axis.
+    public static var unitX: Int4 => Int4(1, 0, 0, 0)
+
+    /// The y axis.
+    public static var unitY: Int4 => Int4(0, 1, 0, 0)
+
+    /// The z axis.
+    public static var unitZ: Int4 => Int4(0, 0, 1, 0)
+
+    /// The w axis.
+    public static var unitW: Int4 => Int4(0, 0, 0, 1)
+
+    /// x and y.
+    public var xy: Int2 => Int2(x, y)
+
+    /// x, y and z.
+    public var xyz: Int3 => Int3(x, y, z)
+
+    /// The components as lanes of a vector register.
+    public var simd: SIMD<I32, 4> {
+        get {
+            var lanes = SIMD<I32, 4>()
+            lanes[0] = x
+            lanes[1] = y
+            lanes[2] = z
+            lanes[3] = w
+            return lanes
+        }
+    }
+
+    /// The component at the index, x first; outside 0..<4 traps.
+    public subscript(index: Int) -> I32 {
+        get {
+            switch index {
+                case 0: return x
+                case 1: return y
+                case 2: return z
+                case 3: return w
+                default: preconditionFailure("an Int4 has no component \(index)")
+            }
+        }
+        set {
+            switch index {
+                case 0: x = newValue
+                case 1: y = newValue
+                case 2: z = newValue
+                case 3: w = newValue
+                default: preconditionFailure("an Int4 has no component \(index)")
+            }
+        }
+    }
+
+    /// The smaller of each pair of components.
+    public fn min(_ other: Int4) -> Int4 => Int4((x < other.x ? x : other.x), (y < other.y ? y : other.y), (z < other.z ? z : other.z), (w < other.w ? w : other.w))
+
+    /// The larger of each pair of components.
+    public fn max(_ other: Int4) -> Int4 => Int4((x > other.x ? x : other.x), (y > other.y ? y : other.y), (z > other.z ? z : other.z), (w > other.w ? w : other.w))
+
+    /// Each component held within the bounds'.
+    public fn clamped(lower: Int4, upper: Int4) -> Int4 => self.max(lower).min(upper)
+
+    /// Each component's magnitude; traps on the least I32.
+    public fn abs() -> Int4 => Int4((x < 0 ? -x : x), (y < 0 ? -y : y), (z < 0 ? -z : z), (w < 0 ? -w : w))
+
+    /// The sum, component by component.
+    public operator + (lhs: Int4, rhs: Int4) -> Int4 => Int4(lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z, lhs.w + rhs.w)
+
+    /// The difference, component by component.
+    public operator - (lhs: Int4, rhs: Int4) -> Int4 => Int4(lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z, lhs.w - rhs.w)
+
+    /// The product, component by component.
+    public operator * (lhs: Int4, rhs: Int4) -> Int4 => Int4(lhs.x * rhs.x, lhs.y * rhs.y, lhs.z * rhs.z, lhs.w * rhs.w)
+
+    /// The quotient, component by component, toward zero.
+    public operator / (lhs: Int4, rhs: Int4) -> Int4 => Int4(lhs.x / rhs.x, lhs.y / rhs.y, lhs.z / rhs.z, lhs.w / rhs.w)
+
+    /// Every component negated.
+    public prefix operator - (operand: Int4) -> Int4 => Int4(-operand.x, -operand.y, -operand.z, -operand.w)
+
+    /// Every component times the number.
+    public operator * (lhs: Int4, rhs: I32) -> Int4 => Int4(lhs.x * rhs, lhs.y * rhs, lhs.z * rhs, lhs.w * rhs)
+
+    /// Every component times the number.
+    public operator * (lhs: I32, rhs: Int4) -> Int4 => rhs * lhs
+
+    /// Every component divided by the number, toward zero.
+    public operator / (lhs: Int4, rhs: I32) -> Int4 => Int4(lhs.x / rhs, lhs.y / rhs, lhs.z / rhs, lhs.w / rhs)
+
+    /// Whether the components are equal.
+    public operator == (lhs: Int4, rhs: Int4) -> Bool => lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.w == rhs.w
+
+    /// The components' hashes.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(x)
+        hasher.combine(y)
+        hasher.combine(z)
+        hasher.combine(w)
+    }
+}
+
+extension Int4: Formattable {
+    /// The components in parentheses, each written as the spec says, the
+    /// whole padded to the width.
+    ///
+    /// ```sable
+    /// assert("\(Int4.unitX:.1)" == "(1, 0, 0, 0)")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([x, y, z, w], spec, named: "Int4")
+}
+
+extension Int4: Debug {
+    /// As source writes it: `Int4(1, 1, 1, 1)`.
+    public fn debugDescription() -> String => "Int4(\(x.debugDescription()), \(y.debugDescription()), \(z.debugDescription()), \(w.debugDescription()))"
+}

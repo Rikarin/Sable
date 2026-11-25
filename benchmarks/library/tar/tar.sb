@@ -5,9 +5,9 @@ module TarBench
 
 import Sable.IO
 import Sable.IO.Archives
+import Sable.Testing
 
-@main
-fn main() {
+fn run() -> String {
     let text = U8[>..](repeating: 0x61, count: 3000)
     var total = 0
     var round = 0
@@ -25,5 +25,10 @@ fn main() {
         }
         round += 1
     }
-    print("\(total)")
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

@@ -7,6 +7,7 @@
 // Arrays are a header and an element buffer, indexed with bounds checks;
 // Int arithmetic is checked.
 
+#include "../../support/c/bench.h"
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -159,7 +160,7 @@ static void format_f64(double value, char *text, size_t size) {
     snprintf(text, size, "%.17g", value);
 }
 
-int main(void) {
+static void program(void) {
     ShapeArray *shapes = NULL;
     AnimalArray *animals = NULL;
     int64_t i = 0;
@@ -193,9 +194,9 @@ int main(void) {
 
     char text[40];
     format_f64(area, text, sizeof text);
-    puts(text);
-    printf("%lld\n", (long long)letters);
-    printf("%lld\n", (long long)weight);
+    bench_printf("%s\n", text);
+    bench_printf("%lld\n", (long long)letters);
+    bench_printf("%lld\n", (long long)weight);
 
     for (int64_t k = 0; k < shapes->count; k++) {
         shapes->elements[k].witness->destroy(shapes->elements[k].box);
@@ -207,5 +208,6 @@ int main(void) {
     }
     free(animals->elements);
     free(animals);
-    return 0;
 }
+
+BENCH_MAIN(program)

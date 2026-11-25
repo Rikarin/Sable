@@ -1,6 +1,7 @@
 module ComplexFftBench
 
 import Sable.Math
+import Sable.Testing
 
 // Arrays of Complex<F64>: a radix-2 FFT of 65,536 points and its inverse,
 // sixteen times over, and how near the signal comes back.
@@ -37,20 +38,8 @@ fn transform(_ values: inout Complex<F64>[>..], _ roots: Complex<F64>[>..]) {
     }
 }
 
-@main
-fn main() {
-    let n = 65536
-    var signal: Complex<F64>[>..] = []
-    var forward: Complex<F64>[>..] = []
-    var inverse: Complex<F64>[>..] = []
-    for i in 0..<n {
-        signal.append(Complex(F64(i * 7919 % 1009) / 1009.0, F64(i * 104729 % 757) / 757.0))
-    }
-    for i in 0..<n / 2 {
-        let root = Complex(magnitude: 1.0, phase: -2.0 * F64.pi * F64(i) / F64(n))
-        forward.append(root)
-        inverse.append(root.conjugate)
-    }
+fn run(_ signal: Complex<F64>[>..], _ forward: Complex<F64>[>..], _ inverse: Complex<F64>[>..]) -> String {
+    let n = signal.count
     var values = signal
     var peak = 0.0
     for _ in 0..<16 {
@@ -65,5 +54,22 @@ fn main() {
     for i in 0..<n {
         error += (values[i] - signal[i]).magnitude
     }
-    print("\(peak:.3f) \(error < 0.000001)")
+    return "\(peak:.3f) \(error < 0.000001)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let n = 65536
+    var signal: Complex<F64>[>..] = []
+    var forward: Complex<F64>[>..] = []
+    var inverse: Complex<F64>[>..] = []
+    for i in 0..<n {
+        signal.append(Complex(F64(i * 7919 % 1009) / 1009.0, F64(i * 104729 % 757) / 757.0))
+    }
+    for i in 0..<n / 2 {
+        let root = Complex(magnitude: 1.0, phase: -2.0 * F64.pi * F64(i) / F64(n))
+        forward.append(root)
+        inverse.append(root.conjugate)
+    }
+    b.check(b.iterate { run(signal, forward, inverse) })
 }

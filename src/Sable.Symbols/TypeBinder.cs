@@ -461,6 +461,7 @@ internal sealed class TypeBinder(Compilation compilation) {
         var scope = compilation.CurrentScope;
 
         parameter.TypeResolver = () => {
+            using var _ = _diagnostics.AnchoredAt(syntax);
             var written = BindType(syntax.Type, parameter.ContainingSymbol ?? parameter, scope);
 
             // 'values: Int...' is written as the element type and is a
@@ -484,7 +485,10 @@ internal sealed class TypeBinder(Compilation compilation) {
 
         // A computed property's 'some P' is the property's own: the type its
         // getter returns, hidden, as a function's result is.
-        field.TypeResolver = () => declaration.Declarator.TypeAnnotation is { } annotation
+        // Read first wherever something asks for it: what is wrong is said here.
+        field.TypeResolver = () => {
+            using var _ = _diagnostics.AnchoredAt(declaration);
+            return declaration.Declarator.TypeAnnotation is { } annotation
             ? BindType(annotation.Type, field, scope) is var annotated && annotated is OpaqueTypeSymbol { Origin: null } opaque && field.IsComputed
                 ? opaque.WithOrigin(field)
                 : annotated
@@ -498,6 +502,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                     $"'{field.Name}' needs a type annotation: its type can be left out only when its initial value is a literal, "
                     + "an array of literals, or a call to a type's initialiser"
                 );
+        };
 
         Defer(() => _ = field.Type);
 
@@ -541,6 +546,11 @@ internal sealed class TypeBinder(Compilation compilation) {
             case InvocationExpressionSyntax { Expression: IdentifierNameSyntax callee }
                 when Lookup(callee.Identifier.Text, context, scope, callee.Span) is NamedTypeSymbol { IsGenericDefinition: false } type:
                 return type;
+
+            // 'Set<Int>()': of a generic one, its arguments written.
+            case InvocationExpressionSyntax { Expression: GenericNameSyntax callee }
+                when Lookup(callee.Identifier.Text, context, scope, callee.Span) is NamedTypeSymbol { IsGenericDefinition: true }:
+                return BindGenericName(callee, context, scope);
 
             default:
                 return null;
@@ -857,7 +867,66 @@ internal sealed class TypeBinder(Compilation compilation) {
                 continue;
             }
 
-            parameter.Constraints = [..bound];
+            // One at a time, so that a ring of them is reported where it closes.
+            parameter.Constraints = [];
+            foreach (var constraint in bound) {
+                if (!IsCircular(parameter, constraint, context, syntax.Constraint)) {
+                    parameter.Constraints = parameter.Constraints.Add(constraint);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Reports a constraint that leads back to what it constrains, as
+    ///     <c>S: S</c> does, and <c>A: B, B: A</c>, and <c>S: S[]</c>, whose
+    ///     conformances are its element's. It says nothing of the type that
+    ///     something else does not, and is left out, so that what asks for a
+    ///     type's constraints never comes back round to it.
+    /// </summary>
+    internal bool IsCircular(TypeSymbol subject, TypeSymbol constraint, Symbol context, SyntaxNode written) {
+        var requirements = context switch {
+            FunctionSymbol function => function.ConformanceRequirements,
+            NamedTypeSymbol type => type.ConformanceRequirements,
+            ExtensionSymbol extension => extension.ConformanceRequirements,
+            _ => [],
+        };
+
+        var seen = new HashSet<TypeSymbol>();
+        if (!LeadsBack(constraint)) {
+            return false;
+        }
+
+        using var _ = _diagnostics.AnchoredAt(written);
+        Error(
+            ErrorCode.ERR_CircularConstraint,
+            written.Span,
+            $"'{subject.ToDisplayString()}' is constrained by itself: '{subject.ToDisplayString()}: {constraint.ToDisplayString()}' leads back to '{subject.ToDisplayString()}'"
+        );
+        return true;
+
+        bool LeadsBack(TypeSymbol type) {
+            if (type.Equals(subject)) {
+                return true;
+            }
+
+            if (!seen.Add(type)) {
+                return false;
+            }
+
+            return type switch {
+                TypeParameterSymbol or DependentMemberTypeSymbol =>
+                    AssociatedTypes.ConstraintsOf(type).Any(LeadsBack)
+                    || requirements.Any(r => r.Subject.Equals(type) && LeadsBack(r.Constraint)),
+                CompositionTypeSymbol composition => composition.Parts.Any(LeadsBack),
+                ArrayTypeSymbol array => LeadsBack(array.ElementType),
+                OptionalTypeSymbol optional => LeadsBack(optional.UnderlyingType),
+                TupleTypeSymbol tuple => tuple.ElementTypes.Any(LeadsBack),
+                StructuralUnionTypeSymbol union => union.Cases.Any(LeadsBack),
+                ExistentialTypeSymbol existential => LeadsBack(existential.Constraint),
+                OpaqueTypeSymbol opaque => LeadsBack(opaque.Constraint),
+                _ => false,
+            };
         }
     }
 
@@ -933,7 +1002,9 @@ internal sealed class TypeBinder(Compilation compilation) {
                 && constraint.Right is SuppressedTypeSyntax or CompositionTypeSyntax) {
                 var parts = Constraints(constraint.Right, lifted);
                 if (parts is not [var whole] || !ReferenceEquals(whole, constraint.Right)) {
-                    lifted.Constraints = lifted.Constraints.AddRange(parts.Select(p => BindType(p, context, scope)).Where(static t => !t.IsError));
+                    lifted.Constraints = lifted.Constraints.AddRange(
+                        parts.Select(p => BindType(p, context, scope)).Where(t => !t.IsError && !IsCircular(lifted, t, context, constraint.Right))
+                    );
                     continue;
                 }
             }
@@ -961,6 +1032,10 @@ internal sealed class TypeBinder(Compilation compilation) {
                         break;
                 }
 
+                continue;
+            }
+
+            if (CompositionTypeSymbol.PartsOf(right).Any(part => IsCircular(left, part, context, constraint.Right))) {
                 continue;
             }
 

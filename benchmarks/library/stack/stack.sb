@@ -1,12 +1,12 @@
 module StackBench
 
 import Sable.Collections
+import Sable.Testing
 
 // Stack<Int>: five million numbers through a stack that stays a thousand
 // high, then through one that grows to two million.
 
-@main
-fn main() {
+fn run() -> String {
     let stack = Stack<Int>()
     var total = 0
     for i in 0..<1000 {
@@ -22,5 +22,10 @@ fn main() {
     while let value = stack.pop() {
         total += value
     }
-    print(total)
+    return "\(total)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

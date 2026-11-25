@@ -3,10 +3,16 @@ using System.Security.Cryptography;
 // A megabyte two hundred times, then messages of 64 bytes two hundred thousand.
 [Benchmark("library/hmac-sha256")]
 static class LibraryHmacSha256 {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var key = Sample(32);
             var big = Sample(1_048_576);
+            return () => Run(key, big);
+        }
+    }
+
+    static string Run(byte[] key, byte[] big) {
+        checked {
             long check = 0;
             for (var round = 0; round < 200; round++) {
                 check += HMACSHA256.HashData(key, big)[round % 32];

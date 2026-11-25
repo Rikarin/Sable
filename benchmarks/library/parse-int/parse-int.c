@@ -1,15 +1,21 @@
 // Port of parse-int.sb, with strtoll.
 #include <errno.h>
+#include "../../support/c/bench.h"
 #include "../../support/c/checked.h"
 
-int main(void) {
-    enum { COUNT = 200000 };
-    static char texts[COUNT][32];
+enum { COUNT = 200000 };
+
+static char texts[COUNT][32];
+
+static void setup(void) {
     int64_t x = 12345;
     for (int64_t i = 0; i < COUNT; i++) {
         x = next_random(x);
         snprintf(texts[i], sizeof texts[i], "%lld", (long long)(i % 2 == 0 ? x : -x));
     }
+}
+
+static void run(void) {
     int64_t total = 0;
     for (int round = 0; round < 5; round++) {
         for (int64_t i = 0; i < COUNT; i++) {
@@ -20,6 +26,7 @@ int main(void) {
             total = add_i(total, value);
         }
     }
-    printf("%lld\n", (long long)total);
-    return 0;
+    bench_printf("%lld\n", (long long)total);
 }
+
+BENCH_MAIN_WITH(run, setup)

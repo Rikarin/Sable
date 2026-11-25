@@ -1,6 +1,7 @@
 module JsonReadBench
 
 import Sable.Serialize
+import Sable.Testing
 
 // JSON's tokens, with no tree: a document of some megabytes, and the same
 // indented, read a token at a time, the numbers' values taken and the keys
@@ -40,13 +41,19 @@ fn document(_ inner: String) -> U8[>..] {
     return bytes
 }
 
-@main
-fn main() throws(ParseError) {
-    let compact = document("")
-    let pretty = document("\n        ")
+fn run(_ compact: U8[>..], _ pretty: U8[>..]) throws(ParseError) -> String {
+    var lines: String[>..] = []
     for _ in 0..<10 {
         let (tokens, sum, price) = try read(compact)
         let (others, sums, prices) = try read(pretty)
-        print("\(tokens + others) \(sum + sums) \(price + prices:.2f)")
+        lines.append("\(tokens + others) \(sum + sums) \(price + prices:.2f)")
     }
+    return lines.joined(separator: "\n")
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let compact = document("")
+    let pretty = document("\n        ")
+    b.check(b.iterate { try! run(compact, pretty) })
 }

@@ -1,0 +1,91 @@
+module Negative.UninferredArguments
+
+// A type argument nothing says: a literal that takes its type from the
+// parameter, given a parameter still to be inferred, says nothing of it
+// (#303). Reported at the call, with the parameter and what to write.
+
+fn first<T>(_ values: T[:]) -> Int {
+    return values.count
+}
+
+fn equatable<T: Equatable>(_ values: T[:]) -> T? {
+    return none
+}
+
+fn optional<T>(_ value: T?) -> Int {
+    return 1
+}
+
+fn called<T>(_ body: () -> T) -> Int {
+    return 1
+}
+
+fn maybe<T>(_ body: () -> T?) -> Int {
+    return 1
+}
+
+fn later<T>(_ body: @autoclosure () -> T[>..]) -> Int {
+    return 1
+}
+
+fn both<T>(_ left: T[:], _ right: T[:]) -> Int {
+    return 1
+}
+
+struct Box<T> {
+    let items: T[>..]
+
+    init(_ items: T[>..]) {
+        self.items = items
+    }
+
+    fn other<U>(_ values: U[:]) -> Int {
+        return 1
+    }
+}
+
+// A function's own parameters are types like any other in it.
+fn recursive<T>(_ values: T[:]) -> Int {
+    return values.isEmpty ? 0 : recursive(values[0..<0]) + first([]) //! S3022 cannot infer 'T' of 'first'
+}
+
+fn empty(_ flag: Bool) {
+    print(first([])) //! S3022 '[]' alone does not say what its elements are, so give it a type, as in 'let xs: Int[>..] = []'
+    let a = equatable([]) //! S3022 cannot infer 'T' of 'equatable'
+    let b = both([], []) //! S3022 cannot infer 'T' of 'both'
+    let c = later([]) //! S3022 cannot infer 'T' of 'later'
+    let d = Box([]) //! S3022 cannot infer 'T' of 'Box'
+    let e = Box([1]).other([]) //! S3022 cannot infer 'U' of 'other'
+    let f = first(flag ? [] : []) //! S3022 cannot infer 'T' of 'first'
+    let g = "\(first([]))" //! S3022 cannot infer 'T' of 'first'
+    let h = first([[]]) //! S3005 an empty array needs a type annotation
+}
+
+fn missing() {
+    print(optional(none)) //! S3022 'none' alone does not say what it is optional of, so give it a type, as in 'let x: Int? = none'
+    let a = first([none]) //! S3022 cannot infer 'T' of 'first'
+}
+
+fn closures() {
+    print(maybe({ none })) //! S3022 cannot infer 'T' of 'maybe' from these arguments: the closure does not say what it is, so write its type
+    let a = called({ none }) //! S3022 cannot infer 'T' of 'called'
+    let b = called { //! S3022 cannot infer 'T' of 'called'
+        return none
+    }
+    let c = called({ [] }) //! S3005 an empty array needs a type annotation
+    let e = { none } //! S3005 'none' alone does not say what it is optional of
+    let d = [1, 2].map { x in none } //! S3022 of 'map'
+}
+
+// Said by something else, they are what it says.
+fn said() {
+    let a: Int? = equatable([])
+    let b = both([], [1])
+    let c: Box<Int> = Box([])
+    let d = maybe({ () -> Int? in none })
+    let e = Box<Int>([])
+    let xs: Int[>..] = []
+    let f = first(xs)
+    let x: Int? = none
+    let g = optional(x)
+}

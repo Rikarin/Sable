@@ -278,12 +278,7 @@ public sealed partial class SilInterpreter {
             }
         }
 
-        // A structural type's, which has no records: one made for it, or its kind's template.
-        if (TypeMetadata.KindOf(type) is MetadataKind.Array or MetadataKind.Slice or MetadataKind.Optional || TypeMetadata.IsStructuralUnion(type)) {
-            return module.FindWitnessTable(type, protocol) ?? TemplateInstance(type, protocol);
-        }
-
-        return null;
+        return module.HasStructuralConformance(type, protocol) ? module.FindWitnessTable(type, protocol) ?? TemplateInstance(type, protocol) : null;
     }
 
     readonly Dictionary<(string Type, string Protocol), SilWitnessTable> _templateInstances = [];
@@ -298,26 +293,19 @@ public sealed partial class SilInterpreter {
             return made;
         }
 
-        // An array's, a slice's or an optional's: its kind's, when its element conforms to what the extension requires.
-        SilWitnessTable? template;
-        if (TypeMetadata.IsStructuralUnion(type)) {
-            template = module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && t.Conformer == SilGen.UnionConformer);
-            if (template is null) {
-                return null;
-            }
-        } else if (TypeMetadata.KindOf(type) is (MetadataKind.Array or MetadataKind.Slice or MetadataKind.Optional) and var kind) {
-            var element = TypeMetadata.ArgumentsOf(type)[0];
-            template = module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && TypeMetadata.KindOf(t.Conformer) == kind
-                                                                && t.Required.TrueForAll(r => WitnessTableOf(element, r) is not null));
-            if (template is null) {
-                return null;
-            }
-        } else if (type is not NominalType { TypeArguments.IsEmpty: false, DisplayName: { } display } || display.IndexOf('<') is not (> 0 and var open)
-            || (template = module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && t.Conformer is NominalType { DisplayName: { } generic }
-                                                       && generic.IndexOf('<') == open && generic.AsSpan(0, open).SequenceEqual(display.AsSpan(0, open)))) is null) {
+        if (TypeMetadata.IsStructuralUnion(type) || SilModule.StructuralElement(type) is not null) {
+            return module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && SilModule.TemplateKind(t) == TypeMetadata.KindOf(type)) is { } structural ? InstanceOf(structural) : null;
+        }
+
+        if (type is not NominalType { TypeArguments.IsEmpty: false, DisplayName: { } display } || display.IndexOf('<') is not (> 0 and var open)
+            || module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && t.Conformer is NominalType { DisplayName: { } generic }
+                                                       && generic.IndexOf('<') == open && generic.AsSpan(0, open).SequenceEqual(display.AsSpan(0, open))) is not { } template) {
             return null;
         }
 
+        return InstanceOf(template);
+
+        SilWitnessTable InstanceOf(SilWitnessTable template) {
         made = new SilWitnessTable(type, protocol);
         _templateInstances[(type.ToString(), protocol)] = made;
         made.Entries.AddRange(template.Entries);
@@ -329,6 +317,7 @@ public sealed partial class SilInterpreter {
         }
 
         return made;
+        }
     }
 
     /// <summary>The box class made for each type no code boxes, by the type's name.</summary>
@@ -368,7 +357,7 @@ public sealed partial class SilInterpreter {
             }
         }
 
-        return false;
+        return module.HasStructuralConformance(type, protocol);
     }
 
     /// <summary>
@@ -548,6 +537,10 @@ public sealed partial class SilInterpreter {
             // is: an address seen as another type is the same storage, and a
             // value's own storage is the value.
             case "opaque_cast" or "opaque_borrow_as" or "opaque_take_as":
+                result = operands[0];
+                return true;
+            case "opaque_copy_as":
+                Retain(Concrete(builtin.Type), operands[0]);
                 result = operands[0];
                 return true;
             case "metadata_array":

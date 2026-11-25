@@ -1,5 +1,7 @@
 module Sort
 
+import Sable.Testing
+
 // A generic merge sort over arrays, ordered by a closure: what arrays copy,
 // slice and append, and what calling a closure in an inner loop costs.
 
@@ -38,8 +40,8 @@ fn sorted<T>(_ items: T[:], _ before: (T, T) -> Bool) -> T[>..] {
     return result
 }
 
-@main
-fn main() {
+fn run() -> String {
+    var lines: String[>..] = []
     var numbers: Int[>..] = []
     var seed = 42
     var i = 0
@@ -58,8 +60,19 @@ fn main() {
     }
     let byLabel = sorted(labels.slice(from: 0, to: labels.count), (a: String, b: String) => a.count < b.count)
 
-    print(ascending[0])
-    print(ascending[199999])
-    print(byLabel[0])
-    print(byLabel[19999])
+    lines.append("\(ascending[0])")
+    lines.append("\(ascending[199999])")
+    lines.append("\(byLabel[0])")
+    lines.append("\(byLabel[19999])")
+    return lines.joined(separator: "\n")
+}
+
+@main
+fn main() {
+    print(run())
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
 }

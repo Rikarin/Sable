@@ -184,6 +184,7 @@ public enum ErrorCode {
     ERR_MissingSuperInit = 3143,
     ERR_OpenExistentialInUnion = 3150,
     ERR_ConstGenericPredicate = 3160,
+    ERR_CircularConstraint = 3170,
     ERR_ValueGenericArgument = 3420,
     ERR_ConstGenericPredicateFails = 3421,
     ERR_SelfRequirementOnExistential = 3161,
@@ -464,6 +465,9 @@ public sealed class DiagnosticBag : IReadOnlyCollection<Diagnostic> {
 
     /// <summary>How many errors were held back while suppressed: whether a speculative parse went wrong.</summary>
     public int SuppressedErrors { get; private set; }
+
+    /// <summary>Goes back to a count from before a question whose errors were only its own.</summary>
+    internal void ForgetSuppressedErrors(int count) => SuppressedErrors = count;
 
     public void Add(Diagnostic diagnostic) {
         if (_suppressed == 0) {

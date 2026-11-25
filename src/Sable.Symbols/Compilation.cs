@@ -1584,7 +1584,9 @@ public sealed partial class Compilation {
             AccessibilityOf(declaration.Modifiers, container),
             FunctionKind.Initializer
         ) {
-            IsAsync = declaration.Modifiers.Any(SyntaxKind.AsyncKeyword)
+            IsAsync = declaration.Modifiers.Any(SyntaxKind.AsyncKeyword),
+            IsUnsafe = declaration.Modifiers.Any(SyntaxKind.UnsafeKeyword),
+            IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword)
         };
 
         // 'init<S: Sequence>(contentsOf s: S) where S.Element == T': an
@@ -1743,7 +1745,10 @@ public sealed partial class Compilation {
         // file's deferred work runs; the deferral only makes sure they do.
         if (declaration.BaseTypes is { } constraints) {
             parameter.ConstraintsResolver = () => [
-                ..constraints.Types.SelectMany(syntax => CompositionTypeSymbol.PartsOf(TypeBinder.BindType(syntax, protocol, scope)))
+                ..constraints.Types.SelectMany(syntax =>
+                    CompositionTypeSymbol.PartsOf(TypeBinder.BindType(syntax, protocol, scope))
+                        .Where(part => !TypeBinder.IsCircular(parameter, part, protocol, syntax))
+                )
             ];
         }
 
@@ -1842,9 +1847,13 @@ public sealed partial class Compilation {
             // self its value — by 'self.init(…)', 'self = …', or, a
             // struct's, field by field — as one in the type's body does
             // (SYNTAX.md §11). A class's would be a designated one.
+            // (A class's may be a convenience one, which delegates to one of the class's.)
             var initializers = extended.TypeKind is TypeKind.Struct or TypeKind.Enum or TypeKind.Union or TypeKind.Builtin;
+            var convenience = extended.TypeKind is TypeKind.Class or TypeKind.Actor;
             foreach (var member in declaration.Members) {
-                if (!(initializers && member is InitDeclarationSyntax) && RejectInExtension(member)) {
+                if (!(initializers && member is InitDeclarationSyntax)
+                    && !(convenience && member is InitDeclarationSyntax { Body: not null } init && init.Modifiers.Any(SyntaxKind.ConvenienceKeyword))
+                    && RejectInExtension(member)) {
                     continue;
                 }
 

@@ -1,0 +1,168 @@
+module FuzzSerialize
+
+// The readers of Sable.Serialize, on any bytes: what reads writes back as
+// what reads as the same again.
+
+import Sable.Testing
+import Sable.Serialize
+import Sable.Serialize.Yaml
+import Sable.Text
+
+/// JSON: what parses is written as text that parses as the same; and the
+/// reader of tokens, given the bytes whole or a few at a time, takes what the
+/// parser takes.
+@fuzz
+fn json(_ data: U8[:]) {
+    _ = try? parseWith(bytes: data, relaxed())
+    let parsed = try? parse(bytes: data)
+    if let value = parsed {
+        let text = render(value)
+        if let again = try? parse(text) {
+            assert(render(again) == text, "JSON written and read is written otherwise")
+        } else {
+            fatalError("JSON written does not read")
+        }
+    }
+    let tokens = tokensOf(data)
+    assert((tokens == none) == (parsed == none), "the parser and the reader of tokens disagree on what JSON is")
+    let parts = tokensInParts(data, data.count % 7 + 1)
+    assert(tokens == parts, "JSON read in parts has other tokens")
+}
+
+// How many tokens there are; none when it is not JSON.
+fn tokensOf(_ data: U8[:]) -> Int? {
+    var reader = JsonReader(data)
+    var count = 0
+    do {
+        while let token = try reader.next() {
+            count += 1
+            // A number too large to be one is the parser's to refuse.
+            if token == .Number {
+                _ = try reader.float()
+            }
+        }
+        return count
+    } catch {
+        return none
+    }
+}
+
+fn tokensInParts(_ data: U8[:], _ length: Int) -> Int? {
+    var reader = JsonReader.streaming()
+    var at = 0
+    var count = 0
+    var ended = false
+    do {
+        while true {
+            while let token = try reader.next() {
+                count += 1
+                if token == .Number {
+                    _ = try reader.float()
+                }
+            }
+            if at < data.count {
+                let end = at + length < data.count ? at + length : data.count
+                reader.append(data[at..<end])
+                at = end
+            } else if !ended {
+                reader.finish()
+                ended = true
+            } else {
+                return count
+            }
+        }
+    } catch {
+        return none
+    }
+}
+
+/// TOML: a table writes back as one that writes the same; a document gives
+/// back its text.
+@fuzz
+fn toml(_ data: U8[:]) {
+    let text = String.fromUtf8Lossy(data)
+    if let table = try? Toml.parse(text) {
+        if let written = try? Toml.write(table) {
+            if let again = try? Toml.parse(written) {
+                assert((try? Toml.write(again)) == written, "TOML written and read is written otherwise")
+            } else {
+                fatalError("TOML written does not read")
+            }
+        }
+    }
+    if let document = try? TomlDocument.parse(text) {
+        assert(document.text() == text, "a TOML document does not give back its text")
+    }
+}
+
+/// YAML: what parses and can be printed parses again, and prints the same.
+@fuzz
+fn yaml(_ data: U8[:]) {
+    let text = String.fromUtf8Lossy(data)
+    _ = try? Yaml.events(text)
+    if let nodes = try? Yaml.parseAll(text, YamlOptions(maxDepth: 64, maxAliasExpansion: 10000)) {
+        if let printed = try? Yaml.printAll(nodes) {
+            if let again = try? Yaml.parseAll(printed) {
+                assert((try? Yaml.printAll(again)) == printed, "YAML printed and read is printed otherwise")
+            } else {
+                fatalError("YAML printed does not read")
+            }
+        }
+    }
+}
+
+/// CBOR: a value's bytes are those of the value they read as, and every
+/// value has a diagnostic notation.
+@fuzz
+fn cbor(_ data: U8[:]) {
+    if let value = try? CborValue.parse(data.toArray()) {
+        _ = value.diagnostic()
+        if let bytes = try? value.bytes() {
+            if let again = try? CborValue.parse(bytes) {
+                assert((try? again.bytes()) == bytes, "CBOR written and read is written otherwise")
+            } else {
+                fatalError("CBOR written does not read")
+            }
+        }
+    }
+}
+
+/// MessagePack: the same.
+@fuzz
+fn messagePack(_ data: U8[:]) {
+    if let value = try? MessagePackValue.parse(data.toArray()) {
+        if let bytes = try? value.bytes() {
+            if let again = try? MessagePackValue.parse(bytes) {
+                assert((try? again.bytes()) == bytes, "MessagePack written and read is written otherwise")
+            } else {
+                fatalError("MessagePack written does not read")
+            }
+        }
+    }
+}
+
+/// A record of the kinds of field there are, through every format and back.
+@derive(Serializable, Arbitrary, Equatable, Debug)
+struct Record {
+    var name: String
+    var count: Int
+    var small: U8?
+    var tags: String[>..]
+    var isDone: Bool
+    var nested: Inner[>..]
+}
+
+@derive(Serializable, Arbitrary, Equatable, Debug)
+struct Inner {
+    var x: I32
+    var y: String?
+}
+
+@fuzz
+fn records(_ record: Record) throws {
+    assert(try Json.decode(Record.self, from: try Json.encode(record)) == record, "JSON")
+    assert(try Toml.decode(Record.self, from: try Toml.encode(record)) == record, "TOML")
+    assert(try Yaml.decode(Record.self, from: try Yaml.encode(record)) == record, "YAML")
+    assert(try Cbor.decode(Record.self, from: try Cbor.encode(record)) == record, "CBOR")
+    assert(try MessagePack.decode(Record.self, from: try MessagePack.encode(record)) == record, "MessagePack")
+}

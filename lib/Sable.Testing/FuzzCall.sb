@@ -1,0 +1,75 @@
+module Sable.Testing
+
+// How a '@fuzz' target that takes arbitrary values is called: the harness
+// 'sable fuzz' is built with, and the replay of 'sable test', hand the
+// fuzzer's bytes and the target to 'fuzzCall', which makes the values of
+// them. A value a 'filter' gave up on is not tried.
+
+/// Calls the fuzz target of the name with a value made of the bytes. What it
+/// throws is a trap; a trap says what the target was called with.
+///
+/// ```sable
+/// fuzzCall("M.halves", [7, 0]) { (n: U8) in assert(n / 2 <= 127) }
+/// ```
+public fn fuzzCall<A: Arbitrary>(_ name: String, _ data: U8[:], _ target: @escaping (A) throws -> Void) {
+    let call = FuzzCall(name, data)
+    let a = A.arbitrary(from: call.choices)
+    call.run(() => "\(a:?)") { try target(a) }
+}
+
+/// The same, with two values.
+public fn fuzzCall<A: Arbitrary, B: Arbitrary>(_ name: String, _ data: U8[:], _ target: @escaping (A, B) throws -> Void) {
+    let call = FuzzCall(name, data)
+    let a = A.arbitrary(from: call.choices)
+    let b = B.arbitrary(from: call.choices)
+    call.run(() => "\(a:?), \(b:?)") { try target(a, b) }
+}
+
+/// The same, with three values.
+public fn fuzzCall<A: Arbitrary, B: Arbitrary, C: Arbitrary>(_ name: String, _ data: U8[:], _ target: @escaping (A, B, C) throws -> Void) {
+    let call = FuzzCall(name, data)
+    let a = A.arbitrary(from: call.choices)
+    let b = B.arbitrary(from: call.choices)
+    let c = C.arbitrary(from: call.choices)
+    call.run(() => "\(a:?), \(b:?), \(c:?)") { try target(a, b, c) }
+}
+
+/// The same, with four values.
+public fn fuzzCall<A: Arbitrary, B: Arbitrary, C: Arbitrary, D: Arbitrary>(_ name: String, _ data: U8[:], _ target: @escaping (A, B, C, D) throws -> Void) {
+    let call = FuzzCall(name, data)
+    let a = A.arbitrary(from: call.choices)
+    let b = B.arbitrary(from: call.choices)
+    let c = C.arbitrary(from: call.choices)
+    let d = D.arbitrary(from: call.choices)
+    call.run(() => "\(a:?), \(b:?), \(c:?), \(d:?)") { try target(a, b, c, d) }
+}
+
+/// One call of a target: the choices its values are made of.
+final class FuzzCall {
+    let name: String
+    let choices: Choices
+
+    init(_ name: String, _ data: U8[:]) {
+        self.name = name
+        choices = Choices(bytes: data)
+    }
+
+    fn run(_ arguments: @escaping () -> String, _ body: () throws -> Void) {
+        if choices.isRejected {
+            return
+        }
+        Runtime.setTrapHook({ message, site, frames in
+            Runtime.writeError("fatal error: \(message)\n\(site.isEmpty ? "" : "  at \(site)\n")")
+            Runtime.writeError("  called with \(arguments())\n\(FuzzReplay.saying)")
+            for frame in frames {
+                Runtime.writeError("  in \(frame)\n")
+            }
+        })
+        do {
+            try body()
+        } catch {
+            fatalError("\(name) threw: \(error)")
+        }
+        _ = Runtime.takeTrapHook(otherwise: { message, site, frames in })
+    }
+}

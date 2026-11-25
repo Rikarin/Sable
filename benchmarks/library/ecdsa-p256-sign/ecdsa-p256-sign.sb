@@ -4,10 +4,9 @@ module EcdsaP256SignBench
 // of 64 bytes, the last of which is checked.
 
 import Sable.Crypto
+import Sable.Testing
 
-@main
-fn main() {
-    let key = EcdsaPrivateKey<P256>.generate()
+fn run(_ key: EcdsaPrivateKey<P256>) -> String {
     var message = U8[>..](repeating: 7, count: 64)
     var signature = key.sign(message)
     var round = 1
@@ -16,5 +15,11 @@ fn main() {
         signature = key.sign(message)
         round += 1
     }
-    print("\(key.publicKey.isValid(signature, for: message) ? 1 : 0)")
+    return "\(key.publicKey.isValid(signature, for: message) ? 1 : 0)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let key = EcdsaPrivateKey<P256>.generate()
+    b.check(b.iterate { run(key) })
 }

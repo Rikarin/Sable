@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 // Port of json-dom.sb, with JsonNode.
 [Benchmark("library/json-dom")]
 static class LibraryJsonDom {
-    public static string Run() {
+    public static Func<string> Setup() {
         checked {
             var parts = new List<string>();
             for (var i = 0; i < 30000; i++) {
@@ -11,6 +11,12 @@ static class LibraryJsonDom {
             }
 
             var text = "[" + string.Join(", ", parts) + "]";
+            return () => Run(text);
+        }
+    }
+
+    static string Run(string text) {
+        checked {
             var total = 0.0;
             long count = 0;
             for (var round = 0; round < 3; round++) {

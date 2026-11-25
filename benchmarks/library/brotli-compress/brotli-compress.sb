@@ -5,6 +5,7 @@ module BrotliCompressBench
 // fastest.
 
 import Sable.IO.Compression
+import Sable.Testing
 
 // Two megabytes of words, the commoner ones oftener, in lines, with numbers.
 fn textSample() -> U8[>..] {
@@ -44,9 +45,7 @@ fn textSample() -> U8[>..] {
     return bytes
 }
 
-@main
-fn main() {
-    let text = textSample()
+fn run(_ text: U8[>..]) -> String {
     var total = 0
     var round = 0
     while round < 3 {
@@ -55,5 +54,11 @@ fn main() {
     }
     total += Brotli.compress(text, quality: 1).count
     assert(total > text.count)
-    print("\(text.count)")
+    return "\(text.count)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    let text = textSample()
+    b.check(b.iterate { run(text) })
 }

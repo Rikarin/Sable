@@ -1,0 +1,46 @@
+module Sable.Concurrency
+
+/// What `Thread.scope` gives its body: the threads spawned on it end before
+/// the scope does. It is of no use after: a thread spawned then traps.
+///
+/// ```sable
+/// let words = ["one", "two", "three"]
+/// let count = Thread.scope { s in
+///     let lengths = s.spawn { words.map { $0.count } }
+///     return lengths.join().reduce(0) { $0 + $1 }
+/// }
+/// assert(count == 11)
+/// ```
+public final class ThreadScope {
+    var threads: Thread[>..] = []
+    var accepting: Bool = true
+
+    init() { }
+
+    /// Starts a thread that ends before the scope does, as `Thread.spawn`
+    /// starts one. It may name a `var` of the function around the scope, which
+    /// is then its alone until the scope ends. What it throws, if no one joins
+    /// it, is dropped.
+    ///
+    /// ```sable
+    /// var log: String[>..] = []
+    /// Thread.scope { s in
+    ///     s.spawn(name: "writer") { log.append("from a thread") }
+    /// }
+    /// assert(log == ["from a thread"])
+    /// ```
+    @discardable
+    public fn spawn<T: Sendable, E: Error>(name: String? = none, stackSize: Int = 0, priority: ThreadPriority = .Normal, _ body: @Sendable () throws(E) -> T) -> JoinHandle<T, E> {
+        precondition(accepting, "a scope's threads are spawned within it")
+        let handle = JoinHandle<T, E>(Thread.made(name, stackSize, priority), body)
+        threads.append(handle.thread)
+        return handle
+    }
+
+    fn close() {
+        accepting = false
+        for thread in threads {
+            _ = Runtime.threadJoin(thread.handle, until: -1)
+        }
+    }
+}

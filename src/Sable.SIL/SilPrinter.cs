@@ -152,6 +152,16 @@ public static class SilPrinter {
             builder.Append("sil_superclass ").Append(Quote(type)).Append(" = @").Append(function).Append('\n');
         }
 
+        // What says which structural types have the templates below: the rest the declarations say, where the module was lowered.
+        foreach (var (kind, protocol, requirements) in module.StructuralConformances.Where(c => module.WitnessTables.Any(t => t.IsTemplate && t.Protocol == c.Protocol && SilModule.TemplateKind(t) == c.Kind))) {
+            builder.Append("sil_structural ").Append(Quote(kind.ToString())).Append(' ').Append(Quote(protocol));
+            foreach (var requirement in requirements) {
+                builder.Append(' ').Append(Quote(requirement));
+            }
+
+            builder.Append('\n');
+        }
+
         foreach (var table in module.WitnessTables) {
             builder.Append(table.IsTemplate ? "sil_template_table $" : "sil_witness_table $").Append(table.Conformer).Append(" : ").Append(Quote(table.Protocol)).Append(" {\n");
             foreach (var (requirement, function, type) in table.Entries) {
@@ -161,10 +171,6 @@ public static class SilPrinter {
 
             foreach (var (name, type) in table.AssociatedTypes) {
                 builder.Append("  associated ").Append(Quote(name)).Append(": $").Append(type).Append('\n');
-            }
-
-            foreach (var required in table.Required) {
-                builder.Append("  requires ").Append(Quote(required)).Append('\n');
             }
 
             foreach (var accessor in table.Accessors) {

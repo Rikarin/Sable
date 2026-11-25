@@ -1,0 +1,49 @@
+module VectorParticlesBench
+
+import Sable.Math.Geometry
+import Sable.Testing
+
+// 4,096 particles pulled to a point, moved and bounced off the ground, two
+// thousand steps.
+
+struct Particle {
+    var position: Vector3
+    var velocity: Vector3
+}
+
+fn step(_ particles: inout Particle[:], _ dt: F32) {
+    let gravity = Vector3(0, -9.8, 0)
+    let center = Vector3(0, 10, 0)
+    for i in 0..<particles.count {
+        var p = particles[i]
+        let toward = center - p.position
+        let pull = toward * (4 / (1 + toward.lengthSquared))
+        p.velocity = (p.velocity + (gravity + pull) * dt).clamped(lower: Vector3(repeating: -50), upper: Vector3(repeating: 50))
+        p.position += p.velocity * dt
+        if p.position.y < 0 {
+            p.position.y = -p.position.y
+            p.velocity = p.velocity.reflected(normal: Vector3.up) * 0.9
+        }
+        particles[i] = p
+    }
+}
+
+fn run() -> String {
+    var particles: Particle[>..] = []
+    for i in 0..<4096 {
+        particles.append(Particle { position: Vector3(F32(i % 64) - 32, F32(i % 10), F32(i / 64) - 32), velocity: Vector3.zero })
+    }
+    for _ in 0..<2000 {
+        step(&particles, 0.002)
+    }
+    var sum: F64 = 0
+    for p in particles {
+        sum += F64(p.position.length)
+    }
+    return "\(sum / 4096:.1)"
+}
+
+@bench
+fn measure(_ b: Bencher) {
+    b.check(b.iterate { run() })
+}

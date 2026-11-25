@@ -422,12 +422,12 @@ public sealed partial class SemanticModel {
     }
 
     /// <summary>
-    ///     <c>unsafe</c> modifies a function alone (S3471): what a caller must
+    ///     <c>unsafe</c> modifies a function or an initialiser alone (S3471): what a caller must
     ///     vouch for is a call. Not the <c>unsafe</c> of <c>unowned(unsafe)</c>,
     ///     which follows a parenthesis.
     /// </summary>
     void CheckUnsafeModifier(SyntaxNode member) {
-        if (member is FunctionDeclarationSyntax) {
+        if (member is FunctionDeclarationSyntax or InitDeclarationSyntax) {
             return;
         }
 

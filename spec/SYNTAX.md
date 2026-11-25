@@ -98,12 +98,23 @@ let (a, b) = pair          // tuple destructuring
 let { name, age } = person // record destructuring by field name
 let { name: n } = person   // ...with rename
 
-static let MaxUsers = 10_000      // module-level, lazily initialised once
+static let MaxUsers = 10_000      // module-level, set once, as the program starts
 const Pi: F64 = 3.14159265358979  // compile-time constant, inlined
 ```
 
 Definite-assignment analysis is enforced: reading `total` before assignment is
 an error, not a zero.
+
+Module-level `let`s and `var`s, and types' static stored properties, are given
+their initial values once, on one thread, before `main` begins (and before a
+library's first function runs): each after the ones its initial value reads,
+itself or through the functions it calls, and otherwise in the order they are
+written, the standard library's first. Reading one costs nothing but the read.
+Two that need each other have no order, which is an error (S3411). A call
+through a protocol, or of a method subclasses override, may go to any of the
+program's types: what their own members read comes first too, where that leaves
+an order. For a value worked out when it is first asked for, a type has `lazy`
+properties (§13).
 
 Shadowing in a nested scope is allowed; shadowing in the same scope is an error.
 
@@ -456,7 +467,9 @@ copies share it.
 
 Overloading on parameter types, counts and labels is allowed. Overloading on
 return type alone is not. Resolution order: exact match → label match →
-implicit widening → protocol conformance → generic.
+implicit widening → protocol conformance → generic. A label left out of a call
+is a worse match than no label: `find(x)` is `find(_ x: Int)` rather than
+`find(x: Int)`.
 
 Two overloads that differ only in whether a closure they take is async are
 told apart by the closure: one that awaits is passed to the async one,
@@ -818,8 +831,10 @@ or designated initialisers. A struct's, an enum's, a union's or a built-in
 type's extension may add an initialiser that gives `self` its value on every
 path — a struct's field by field, any of them by `self.init(…)` or by
 `self = …` — as `extension String { init(twice s: String) { self = s + s } }`
-does (S3028); a class's may not (S3030). An extension of every growable array
-of a kind may add initialisers too (below).
+does (S3028); a class's may add a `convenience init`, which hands the work to
+one of the class's by `self.init(…)` (S3141), is not inherited, and no other
+(S3030). An extension of every growable array of a kind may add initialisers
+too (below). A protocol's may not: a static function does what one would.
 
 ### Array extensions
 
@@ -1365,6 +1380,13 @@ if let zero = t as? any Zero.Type {
 }
 ```
 
+The static members of `P` — its requirements, and what extensions of it add —
+are reached on an `any P.Type` itself, which opens it the same way:
+
+```sable
+let made = zero.zero()                 // an 'any Zero'
+```
+
 What the call gives back is what code that does not know `T` can hold: a
 result of `T` is erased to the existential of `T`'s protocols (`any Zero`,
 `any Zero & Named`, and `any Any` when it has none), a `T?` to an optional of
@@ -1442,7 +1464,10 @@ type it gives back or throws has no existential to be erased to —
 constrained to a generic protocol, or to `Error` (S3165) — and when it is async and gives back
 `Self` or an associated type (S3161). A requirement generic over type
 parameters of its own, `fn visit<T: Named>(_ item: T)`, is called through
-it as any other.
+it as any other. A member of an extension of a generic protocol, used on an
+`any Validator<Int>`, is its copy for the existential, whose `Self` is
+`any Validator<Int>`; a type that conforms to several instances of the
+protocol is an existential of each by that one's members.
 
 **Generic code given it.** A call of a generic function that gives an
 existential for a type parameter opens it, and runs the callee compiled
@@ -1946,6 +1971,10 @@ awaited as the scope ends.
   (S3236). A closure parameter run as a task is declared `@Sendable`, and
   takes a closure written there, a named function, or another `@Sendable`
   parameter. In an `unsafe` block the programmer vouches for what is shared.
+  A thread's closure (`Thread.spawn`) and a parallel loop's are the same; one
+  spawned on a `Thread.scope`'s scope may name a `var` of the function around
+  it, if it is that thread's alone for the length of the scope. An `inout`
+  parameter, and `self` in a `mutating` member, are a `var` too.
 - `@MainActor` pins a declaration to the main executor: the main thread,
   which runs the program's entry.
 - `for await x in stream { }` iterates an `AsyncSequence`; `for try await`
@@ -2002,17 +2031,18 @@ fn sizeTable<T>() -> Int => MemoryLayout<T>.size
 ```
 
 `const` declares a compile-time constant on its own (`const Pi = 3.14`) and
-modifies a function in `const fn`. Functions and types may also be declared
+modifies a function in `const fn`, and an initialiser in `const init`. Functions and types may also be declared
 inside a function body, where they are ordinary statements.
 
 `const fn` bodies run in the compiler's interpreter. They may allocate, loop,
 and call other `const fn`s; they may not do I/O or touch `unsafe`.
 
 A `const` is computed while the program is compiled and written, as a
-literal, wherever it is read; its type may be left out when its value is a
+literal, wherever it is read — an array of a great many elements once, in a
+global read there, and an object in a global set as the program starts; its type may be left out when its value is a
 literal, another constant, a call, or arithmetic on those. What a constant's
-value, a `const fn` or a `comptime` block calls must be a `const fn`,
-something the compiler wrote (a memberwise initialiser), or a member of
+value, a `const fn` or a `comptime` block calls must be a `const fn` or a
+`const init`, something the compiler wrote (a memberwise initialiser), or a member of
 `Sable.Core` that neither reads, writes nor waits (S3220). A trap while
 computing one — overflow, division by zero, a loop past the step limit — is
 an error at compile time (S3201 for arithmetic, S3221 otherwise), and so is reaching `compileError("...")`
@@ -2051,7 +2081,7 @@ an optimised one; never both. A package's profile may choose with
 | `@export("name")` | fn, var | Foreign export |
 | `@packed` / `@align(16)` | struct | Layout control |
 | `@test` / `@bench` | fn | Collected by `sable test` / `sable bench`; `@test` may say `arguments: [...]`, `tags: [...]`, `timeout: .seconds(5)` and `traps` (docs/05 §5.1) |
-| `@fuzz` | fn taking `U8[:]` | A fuzz target, run by `sable fuzz` under libFuzzer: it fails by trapping or throwing |
+| `@fuzz` | fn taking `U8[:]`, or one to four `Arbitrary` values | A fuzz target, run by `sable fuzz` under libFuzzer: it fails by trapping or throwing. `@fuzz(mutator: f)`: `f`, a function of the module taking an input and a `U64` seed, makes other inputs of one |
 | `@main` | fn | Program entry point: a module-level fn taking nothing and returning nothing or an `Int` exit status, one per module (S3514) |
 | `@generator("name", members: [...], always: true)` | fn in `generators/` | A source generator, run for declarations marked `@name`; `members` are the attributes it reads on fields, cases and parameters; `always` runs a package generator for every package (docs/08) |
 | `@discardable` | fn | Result may be ignored without `_ =` |
@@ -2130,7 +2160,7 @@ incompatible layouts, and FFI with non-`@safe`-annotated signatures. Inside an
 `unsafe.assumeRoot(p, as: x)`.
 
 A function that is safe only when its caller keeps a promise the compiler
-cannot check is declared `unsafe fn` — `unsafe static fn`, `unsafe mutating
+cannot check is declared `unsafe fn` — `unsafe static fn`, `unsafe init`, `unsafe mutating
 fn` and so on; `unsafe` before a brace starts a block, before `fn` or another
 modifier it modifies a function. Its documentation states the promise:
 

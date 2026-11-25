@@ -1,0 +1,530 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+// An async pool keeps its objects as an object pool does, each in a cell of
+// raw memory of its own, and counts them: those idle, those leased and
+// those being made, which together never pass the maximum. A rent with
+// none idle and the maximum reached waits in a queue, first come first
+// served; what comes back — an object, or the room to make one, as one is
+// dropped — goes to the first waiting, handed over under the lock, so that
+// no rent that comes by meanwhile takes it. Each waiter parks on a wait
+// list of its own, and is woken once it has been given something.
+
+/// Objects that are made asynchronously and are dear to hold — connections,
+/// sessions, handles to a remote service — of which there may be at most so
+/// many: deadpool's and .NET's connection pools' shape. `rent()` gives an
+/// idle one, or makes one while there is room, or else waits, in turn, for
+/// one to come back; the lease gives it back, recycled, as it goes. An
+/// object idle for longer than the idle timeout is dropped as the pool
+/// comes upon it; one the validation finds broken as it is rented is
+/// dropped, and another rented in its place.
+///
+/// The idle timeout is measured on the clock given, so a test passes it a
+/// `TestClock`.
+///
+/// ```sable
+/// final class Connection {
+///     let id: Int
+///     init(_ id: Int) { self.id = id }
+/// }
+/// let opened = Atomic(0)
+/// let pool = AsyncPool<Connection>(maximumCount: 2, create: {
+///     Connection(opened.add(1) + 1)
+/// })
+/// let first = try! await pool.rent()
+/// assert(first.value.id == 1)
+/// let reply = try! await pool.with { connection in connection.id * 10 }
+/// assert(reply == 20)
+/// ```
+@immutable
+public final class AsyncPool<T> {
+    let core: AsyncPoolCore<T>
+
+    /// The most objects there may be at once, idle, leased and being made.
+    public let maximumCount: Int
+
+    /// A pool of at most so many objects, which 'create' makes as they are
+    /// needed; 'recycle' readies each that comes back (false drops it), and
+    /// 'validate' checks one idle as it is rented (false drops it). One idle
+    /// for longer than the idle timeout, on the clock, is dropped.
+    public init<C: Clock>(
+        maximumCount: Int, idleTimeout: Duration? = none, clock: C,
+        create: @escaping @Sendable async () throws -> T,
+        recycle: @escaping @Sendable (inout T) -> Bool = { _ in true },
+        validate: @escaping @Sendable async (inout T) -> Bool = { _ in true }
+    ) {
+        precondition(maximumCount > 0, "a pool of at most \(maximumCount) objects")
+        if let timeout = idleTimeout {
+            precondition(timeout > Duration.zero, "an idle timeout of \(timeout)")
+        }
+        self.maximumCount = maximumCount
+        let start = clock.now()
+        core = AsyncPoolCore<T>(maximumCount, idleTimeout, { clock.now().durationSince(start) }, create, recycle, validate)
+    }
+
+    /// As `init(maximumCount:idleTimeout:clock:create:recycle:validate:)`,
+    /// on the monotonic clock.
+    public convenience init(
+        maximumCount: Int, idleTimeout: Duration? = none,
+        create: @escaping @Sendable async () throws -> T,
+        recycle: @escaping @Sendable (inout T) -> Bool = { _ in true },
+        validate: @escaping @Sendable async (inout T) -> Bool = { _ in true }
+    ) {
+        self.init(maximumCount: maximumCount, idleTimeout: idleTimeout, clock: MonotonicClock(), create: create, recycle: recycle, validate: validate)
+    }
+
+    deinit {
+        core.close()
+    }
+
+    /// An object for the caller alone until the lease goes: an idle one,
+    /// or one made now if there is room, or else the first to come back
+    /// after those that waited before. Throws what making one throws,
+    /// `CancellationError` if the task is cancelled while it waits, and
+    /// `PoolClosedError` once the pool is closed.
+    public fn rent() async throws -> AsyncLease<T> {
+        return AsyncLease<T>(core, try await core.take())
+    }
+
+    /// An idle object, if there is one now; none otherwise, without making
+    /// one or waiting. Not validated.
+    public fn tryRent() -> AsyncLease<T>? {
+        let cell = core.takeIdle()
+        if cell == 0 {
+            return none
+        }
+        return AsyncLease<T>(core, cell)
+    }
+
+    /// What the closure makes of an object rented for it, which comes back
+    /// as the closure returns or throws.
+    public fn with<R>(_ body: async (inout T) throws -> R) async throws -> R {
+        let cell = try await core.take()
+        unsafe {
+            var value = RawPtr<T>(address: cell).move()
+            do {
+                let result = try await body(&value)
+                core.put(cell, move value, recycling: true)
+                return result
+            } catch {
+                core.put(cell, move value, recycling: true)
+                throw error
+            }
+        }
+    }
+
+    /// The object leased dropped rather than given back — it is broken, or
+    /// was closed — and its room given to the next to rent.
+    public fn discard(_ lease: consuming AsyncLease<T>) {
+        var taken = move lease
+        let cell = taken.cell
+        taken.cell = 0
+        core.drop(cell)
+    }
+
+    /// No more rents: the idle objects are dropped now, and the leased ones
+    /// as they come back; rents waiting, and those to come, throw
+    /// `PoolClosedError`.
+    public fn close() {
+        core.close()
+    }
+
+    /// The idle objects dropped.
+    public fn trim() {
+        core.trim()
+    }
+
+    /// How many objects there are: idle, leased and being made.
+    public var count: Int => core.state.withLock { $0.total }
+
+    /// How many are idle.
+    public var idleCount: Int => core.state.withLock { $0.idle.count }
+
+    /// How many rents wait for an object.
+    public var waitingCount: Int => core.state.withLock { $0.waiters.count }
+
+    /// Whether it has been closed.
+    public var isClosed: Bool => core.state.withLock { $0.closed }
+}
+
+/// What a rent from a closed pool throws.
+@derive(Equatable, Debug)
+public struct PoolClosedError: Error {
+    public init() { }
+
+    public fn description() -> String {
+        return "the pool is closed"
+    }
+}
+
+/// An object rented from an `AsyncPool`, the holder's alone: it goes back
+/// to the pool, recycled, as the lease goes — to the first rent waiting,
+/// if one is. Moved, never copied.
+@noncopy
+public struct AsyncLease<T> {
+    let core: AsyncPoolCore<T>
+    var cell: Int
+
+    init(_ core: AsyncPoolCore<T>, _ cell: Int) {
+        self.core = core
+        self.cell = cell
+    }
+
+    deinit {
+        if cell != 0 {
+            unsafe {
+                let value = RawPtr<T>(address: cell).move()
+                core.put(cell, move value, recycling: true)
+            }
+        }
+    }
+
+    /// The object: for a value type, a copy of it; set, replaced.
+    public var value: T {
+        get {
+            unsafe {
+                return RawPtr<T>(address: cell).load()
+            }
+        }
+        set {
+            unsafe {
+                RawPtr<T>(address: cell).store(newValue)
+            }
+        }
+    }
+
+    /// What the closure makes of the object, which it may change where it
+    /// is.
+    public mutating fn withValue<R, E: Error>(_ body: (inout T) throws(E) -> R) throws(E) -> R {
+        unsafe {
+            let place = RawPtr<T>(address: cell)
+            var value = place.move()
+            do {
+                let result = try body(&value)
+                place.initialize(to: move value)
+                return result
+            } catch {
+                place.initialize(to: move value)
+                throw error
+            }
+        }
+    }
+}
+
+// A rent waiting: what it is given, under the pool's lock — a cell, the
+// room to make one, or the news that the pool closed.
+final class AsyncPoolWaiter {
+    let woken: WaitList
+    var given: Int = 0
+
+    init() {
+        woken = WaitList()
+    }
+}
+
+// What a waiter is given besides a cell.
+const poolRoom = -1
+const poolClosed = -2
+
+struct AsyncPoolIdle {
+    let cell: Int
+    let since: Duration
+}
+
+struct AsyncPoolState {
+    var idle: AsyncPoolIdle[>..] = []
+    var total: Int = 0
+    var waiters: ValueQueue<AsyncPoolWaiter> = ValueQueue<AsyncPoolWaiter>()
+    var closed: Bool = false
+
+    init() { }
+
+    // The first waiter given what came back, if one waits.
+    mutating fn handOver(_ what: Int) -> AsyncPoolWaiter? {
+        if waiters.isEmpty {
+            return none
+        }
+        let first = waiters.removeFirst()
+        first.given = what
+        return first
+    }
+}
+
+// What a rent does next.
+union AsyncPoolStep {
+    Take(Int)
+    Make
+    Wait(AsyncPoolWaiter, Int)
+    Closed
+}
+
+@immutable
+final class AsyncPoolCore<T> {
+    let state: Mutex<AsyncPoolState>
+    let maximum: Int
+    let idleTimeout: Duration?
+    let elapsed: () -> Duration
+    let create: async () throws -> T
+    let recycle: (inout T) -> Bool
+    let validate: async (inout T) -> Bool
+
+    init(_ maximum: Int, _ idleTimeout: Duration?, _ elapsed: @escaping @Sendable () -> Duration, _ create: @escaping @Sendable async () throws -> T, _ recycle: @escaping @Sendable (inout T) -> Bool, _ validate: @escaping @Sendable async (inout T) -> Bool) {
+        state = Mutex(AsyncPoolState())
+        self.maximum = maximum
+        self.idleTimeout = idleTimeout
+        self.elapsed = elapsed
+        self.create = create
+        self.recycle = recycle
+        self.validate = validate
+    }
+
+    fn take() async throws -> Int {
+        while true {
+            try Task.checkCancellation()
+            var step = next()
+            match step {
+                case .Wait(let waiter, let ticket) => {
+                    step = try await wait(waiter, ticket)
+                }
+                case _ => { }
+            }
+            match step {
+                case .Take(let cell) => {
+                    if await valid(cell) {
+                        return cell
+                    }
+                    drop(cell)
+                }
+                case .Make => {
+                    return try await made()
+                }
+                case .Closed => {
+                    throw PoolClosedError()
+                }
+                case .Wait(_, _) => { }
+            }
+        }
+    }
+
+    // An idle cell, room to make one, or a place in the queue; those idle
+    // too long dropped on the way.
+    fn next() -> AsyncPoolStep {
+        let now = elapsed()
+        let timeout = idleTimeout
+        let maximum = self.maximum
+        var expired: Int[>..] = []
+        let step = state.withLock { (state: inout AsyncPoolState) -> AsyncPoolStep in
+            if state.closed {
+                return .Closed
+            }
+            if let limit = timeout {
+                var kept: AsyncPoolIdle[>..] = []
+                for idle in state.idle {
+                    if now - idle.since >= limit {
+                        expired.append(idle.cell)
+                    } else {
+                        kept.append(idle)
+                    }
+                }
+                if !expired.isEmpty {
+                    state.idle = kept
+                    state.total -= expired.count
+                }
+            }
+            if !state.idle.isEmpty {
+                return .Take(state.idle.removeLast().cell)
+            }
+            if state.total < maximum {
+                state.total += 1
+                return .Make
+            }
+            let waiter = AsyncPoolWaiter()
+            let ticket = waiter.woken.ticket
+            state.waiters.append(waiter)
+            return .Wait(waiter, ticket)
+        }
+        for cell in expired {
+            destroy(cell)
+        }
+        return step
+    }
+
+    // Waits until the waiter is given something: what it is to do with it.
+    // Cancelled first, it leaves the queue; cancelled once given something,
+    // it passes that on.
+    fn wait(_ waiter: AsyncPoolWaiter, _ ticket: Int) async throws -> AsyncPoolStep {
+        var since = ticket
+        while true {
+            await waiter.woken.parkCancellably(since: since)
+            since = waiter.woken.ticket
+            let cancelled = Task.isCancelled
+            let given = state.withLock { (state: inout AsyncPoolState) -> Int in
+                if waiter.given == 0 && cancelled {
+                    var kept = ValueQueue<AsyncPoolWaiter>()
+                    while !state.waiters.isEmpty {
+                        let other = state.waiters.removeFirst()
+                        if other !== waiter {
+                            kept.append(other)
+                        }
+                    }
+                    state.waiters = kept
+                }
+                return waiter.given
+            }
+            if given == 0 {
+                if cancelled {
+                    throw CancellationError()
+                }
+                continue
+            }
+            if given == poolClosed {
+                return .Closed
+            }
+            if cancelled {
+                if given == poolRoom {
+                    giveRoomBack()
+                } else {
+                    unsafe {
+                        let value = RawPtr<T>(address: given).move()
+                        put(given, move value, recycling: false)
+                    }
+                }
+                throw CancellationError()
+            }
+            return given == poolRoom ? .Make : .Take(given)
+        }
+    }
+
+    fn valid(_ cell: Int) async -> Bool {
+        unsafe {
+            let place = RawPtr<T>(address: cell)
+            var value = place.move()
+            let ok = await validate(&value)
+            place.initialize(to: move value)
+            return ok
+        }
+    }
+
+    // A new object in a new cell, in the room taken for it; the room given
+    // back if making it throws.
+    fn made() async throws -> Int {
+        do {
+            let value = try await create()
+            Runtime.share(value)
+            unsafe {
+                let cell = RawPtr<T>.allocate(count: 1)
+                cell.initialize(to: value)
+                return cell.address
+            }
+        } catch {
+            giveRoomBack()
+            throw error
+        }
+    }
+
+    fn takeIdle() -> Int {
+        return state.withLock { (state: inout AsyncPoolState) -> Int in
+            if state.closed || state.idle.isEmpty {
+                return 0
+            }
+            return state.idle.removeLast().cell
+        }
+    }
+
+    // The value back in its cell, recycled if asked; the cell to the first
+    // waiting, or idle — or dropped, and its room passed on.
+    fn put(_ cell: Int, _ value: consuming T, recycling: Bool) {
+        var kept = move value
+        let keep = recycling ? recycle(&kept) : true
+        unsafe {
+            RawPtr<T>(address: cell).initialize(to: move kept)
+        }
+        if !keep {
+            drop(cell)
+            return
+        }
+        let now = elapsed()
+        var closed = false
+        let woken = state.withLock { (state: inout AsyncPoolState) -> AsyncPoolWaiter? in
+            if state.closed {
+                state.total -= 1
+                closed = true
+                return none
+            }
+            if let waiter = state.handOver(cell) {
+                return waiter
+            }
+            state.idle.append(AsyncPoolIdle { cell: cell, since: now })
+            return none
+        }
+        if closed {
+            destroy(cell)
+        }
+        if let waiter = woken {
+            waiter.woken.wakeAll()
+        }
+    }
+
+    // The object dropped, and its room passed on.
+    fn drop(_ cell: Int) {
+        destroy(cell)
+        giveRoomBack()
+    }
+
+    // Room for one more: to the first waiting, who makes it, or counted.
+    fn giveRoomBack() {
+        let woken = state.withLock { (state: inout AsyncPoolState) -> AsyncPoolWaiter? in
+            if !state.closed {
+                if let waiter = state.handOver(poolRoom) {
+                    return waiter
+                }
+            }
+            state.total -= 1
+            return none
+        }
+        if let waiter = woken {
+            waiter.woken.wakeAll()
+        }
+    }
+
+    fn destroy(_ cell: Int) {
+        unsafe {
+            let place = RawPtr<T>(address: cell)
+            place.deinitialize()
+            place.deallocate()
+        }
+    }
+
+    fn trim() {
+        let cells = state.withLock { (state: inout AsyncPoolState) -> Int[>..] in
+            var all: Int[>..] = []
+            for idle in state.idle {
+                all.append(idle.cell)
+            }
+            state.total -= all.count
+            state.idle = []
+            return all
+        }
+        for cell in cells {
+            destroy(cell)
+        }
+    }
+
+    fn close() {
+        let waiters = state.withLock { (state: inout AsyncPoolState) -> AsyncPoolWaiter[>..] in
+            state.closed = true
+            var all: AsyncPoolWaiter[>..] = []
+            while !state.waiters.isEmpty {
+                let waiter = state.waiters.removeFirst()
+                waiter.given = poolClosed
+                all.append(waiter)
+            }
+            return all
+        }
+        for waiter in waiters {
+            waiter.woken.wakeAll()
+        }
+        trim()
+    }
+}

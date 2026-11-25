@@ -616,4 +616,35 @@ public sealed class MoveTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     An optional move-only value is move-only: comparing it with
+    ///     'none' borrows it where it is, and its deinit runs once, as it
+    ///     goes.
+    /// </summary>
+    [Fact]
+    public void AnOptionalMoveOnlyValueIsComparedWithNoneInPlace() =>
+        Assert.Equal(
+            "true\nopened 1\ntrue\nfalse\nend\nclosed 1\n",
+            AssertAgree(
+                Program(
+                    Handle + """
+
+                             fn maybe(_ id: Int) -> Handle? {
+                                 if id == 0 {
+                                     return none
+                                 }
+                                 return acquire(id)
+                             }
+                             """,
+                    """
+                        print(maybe(0) == none)
+                        let h = maybe(1)
+                        print(h != none)
+                        print(h == none)
+                        print("end")
+                    """
+                )
+            ).Stdout
+        );
 }

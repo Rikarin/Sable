@@ -9,8 +9,8 @@ module Fuzz
 // write back out as exactly the bytes it was read from. tools/fuzz/run.sh
 // builds this with AddressSanitizer and UndefinedBehaviorSanitizer over the
 // runtime, so a read outside the block is a crash, not a quiet pass. The
-// @export functions below are the same check for libFuzzer, which
-// tools/fuzz/coverage.sh drives instead of main's random mutations.
+// @fuzz function below is the same check for libFuzzer, which 'sable fuzz'
+// drives instead of main's random mutations.
 
 @inline_layout
 struct OrderLine {
@@ -214,51 +214,6 @@ fn fromBytes(_ data: U8[:]) {
     if check(bytes, data[0] % 2 == 0) < 0 {
         fatalError("fromBytes accepted a record that does not write back as it was read")
     }
-}
-
-// The coverage-guided harness (tools/fuzz/from_bytes.c, built by
-// tools/fuzz/coverage.sh): libFuzzer chooses the bytes, and C hands them
-// over one at a time, as only integers cross to C, then asks for the check.
-// The first byte says which record they are read as; the rest are the record.
-
-var input: U8[>..] = []
-
-@export("c", "sable_fuzz_begin")
-fn begin() {
-    input = []
-}
-
-@export("c", "sable_fuzz_push")
-fn push(_ byte: U8) {
-    input.append(byte)
-}
-
-/// The input C pushed: what check says of it.
-@export("c", "sable_fuzz_check")
-fn checkInput() -> Int {
-    if input.count == 0 {
-        return 0
-    }
-    var bytes: U8[>..] = []
-    for i in 1..<input.count {
-        bytes.append(input[i])
-    }
-    return check(bytes, input[0] % 2 == 0)
-}
-
-/// Seed n of the corpus, as C reads it a byte at a time: the selector
-/// byte, then the record. Its length, and its byte at an index.
-@export("c", "sable_fuzz_seed_count")
-fn seedCount(_ n: Int) -> Int {
-    return 1 + (n % 2 == 0 ? seedOrder(n) : seedTree(n)).count
-}
-
-@export("c", "sable_fuzz_seed_byte")
-fn seedByte(_ n: Int, _ at: Int) -> U8 {
-    if at == 0 {
-        return U8(n % 2)
-    }
-    return (n % 2 == 0 ? seedOrder(n) : seedTree(n))[at - 1]
 }
 
 /// A whole number from the environment, or the default when it is unset or not one.

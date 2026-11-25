@@ -267,10 +267,82 @@ public sealed class FuzzCommandTests {
             var outcomes = FuzzCommand.Replay(replay, 0, [passes, fails]);
             Assert.Null(outcomes[0].Report);
             Assert.Equal("fatal error: two lines at test.sb:11:9", FuzzCommand.Signature(outcomes[1].Report!));
-            Assert.Contains("called with Order { id: 0, lines: [\"\", \"\"] }, 9", outcomes[1].Report!, StringComparison.Ordinal);
+            Assert.Contains("called with Order(id: 0, lines: [\"\", \"\"]), 9", outcomes[1].Report!, StringComparison.Ordinal);
         } finally {
             Directory.Delete(directory, true);
         }
+    }
+
+    /// <summary>AddressSanitizer sees what Sable code itself does with memory, where nothing of C's is called.</summary>
+    [Fact]
+    public void TheProgramsOwnCodeIsUnderAddressSanitizer() {
+        if (!CanBuild || !FuzzBuild.HasSanitizers || NativeTarget.Host.Platform is not (NativePlatform.Linux or NativePlatform.MacOS)) {
+            return;
+        }
+
+        var result = Compile("""
+            module Raw
+
+            @fuzz
+            fn pastTheEnd(_ data: U8[:]) {
+                unsafe {
+                    let p = RawPtr<Int>.allocate(count: 2)
+                    p.store(1, at: 0)
+                    p.store(2, at: 1)
+                    let read = p.load(at: 1 + data.count)
+                    p.deallocate()
+                    if read == 77 { fatalError("unlikely") }
+                }
+            }
+
+            @fuzz
+            fn afterwards(_ data: U8[:]) {
+                unsafe {
+                    let p = RawPtr<Int>.allocate(count: 1)
+                    p.store(data.count, at: 0)
+                    if data.count == 1 { p.deallocate() }
+                    let read = p.load(at: 0)
+                    if data.count != 1 { p.deallocate() }
+                    if read == 77 { fatalError("unlikely") }
+                }
+            }
+            """, TestKind.Fuzz);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        var directory = Directory.CreateTempSubdirectory("sable-fuzz-asan-").FullName;
+        try {
+            var replay = Path.Combine(directory, "replay");
+            var build = FuzzBuild.Build(result.LlvmIr!, replay, FuzzEngine.Replay);
+            Assert.True(build.Succeeded, build.Output);
+            var fine = Path.Combine(directory, "fine");
+            File.WriteAllBytes(fine, []);
+            var fails = Path.Combine(directory, "fails");
+            File.WriteAllBytes(fails, [1]);
+            foreach (var (target, kind) in new[] { (0, "heap-buffer-overflow"), (1, "heap-use-after-free") }) {
+                var outcomes = FuzzCommand.Replay(replay, target, [fine, fails]);
+                Assert.Null(outcomes[0].Report);
+                Assert.StartsWith($"SUMMARY: AddressSanitizer: {kind}", FuzzCommand.Signature(outcomes[1].Report!), StringComparison.Ordinal);
+            }
+        } finally {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    /// <summary>A type with no arbitrary values is refused by name.</summary>
+    [Fact]
+    public void AValueOfATypeThatIsNotArbitraryIsRefused() {
+        var result = Compile("""
+            module Shop
+
+            import Sable.Testing
+
+            struct Order { var id: Int }
+
+            @fuzz
+            fn orders(_ n: Int, _ order: Order) {
+            }
+            """, TestKind.Fuzz);
+        Assert.Contains("S3104", Assert.Single(result.Errors), StringComparison.Ordinal);
+        Assert.Contains("'Order' is not ('@derive(Arbitrary)'", result.Errors[0], StringComparison.Ordinal);
     }
 
     /// <summary>'sable test' runs what 'sable fuzz' kept: each failure a test, the corpus and the seeds one more.</summary>
@@ -419,6 +491,6 @@ public sealed class FuzzCommandTests {
     [Fact]
     public void TheCommandIsListed() {
         Assert.NotNull(Command.Find("fuzz"));
-        Assert.Contains("usage: sable fuzz [<file.sb>...] [<target>] [--duration <time>]", new FuzzCommand().Usage, StringComparison.Ordinal);
+        Assert.Contains("usage: sable fuzz [<file.sb>|<directory>...] [<target>] [--duration <time>]", new FuzzCommand().Usage, StringComparison.Ordinal);
     }
 }

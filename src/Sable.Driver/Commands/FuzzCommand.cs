@@ -86,7 +86,7 @@ public sealed partial class FuzzCommand : HarnessCommand {
     public override string Summary => "fuzz the @fuzz functions with libFuzzer";
 
     public override string Usage => """
-        usage: sable fuzz [<file.sb>...] [<target>] [--duration <time>] [--runs <n>] [-j <n>] [--seeds <dir>] [--dict <file>] [--list] [--replay [<input>...]] [--minimise <input>] [-- <libFuzzer option>...]
+        usage: sable fuzz [<file.sb>|<directory>...] [<target>] [--duration <time>] [--runs <n>] [-j <n>] [--seeds <dir>] [--dict <file>] [--list] [--replay [<input>...]] [--minimise <input>] [-- <libFuzzer option>...]
 
         Without a file, fuzzes the package in this directory or the nearest above it: its library with
         the files under tests/ and benches/. A target is a @fuzz function, Module.function; a word
@@ -186,6 +186,9 @@ public sealed partial class FuzzCommand : HarnessCommand {
 
             if (argument.EndsWith(".sb", StringComparison.Ordinal)) {
                 files.Add(argument);
+            } else if (Directory.Exists(argument) && Directory.GetFiles(argument, "*.sb") is { Length: > 0 } inside) {
+                // A directory stands for the source files in it.
+                files.AddRange(inside.Order(StringComparer.Ordinal));
             } else if (target is null && !(replay && File.Exists(argument))) {
                 target = argument;
             } else if (replay) {

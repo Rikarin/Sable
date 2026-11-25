@@ -1,0 +1,129 @@
+module FuzzCompression
+
+// The decoders of Sable.IO.Compression on any bytes, whole and a few at a
+// time, and everything compressed and decompressed again; and the readers of
+// archives.
+
+import Sable.Testing
+import Sable.IO
+import Sable.IO.Compression
+import Sable.IO.Archives
+
+// No input may make more than this.
+fn limits() -> DecompressionLimits {
+    return DecompressionLimits(maximumLength: 1 << 20)
+}
+
+// What the decoder makes of the bytes given a few at a time: none when they
+// are refused, or are not the whole of a stream.
+fn inParts<D: Decompressor>(_ given: D, _ data: U8[:]) -> U8[>..]? {
+    var decoder = given
+    let length = data.count % 13 + 1
+    var made = ByteBuffer()
+    var at = 0
+    var end = 0
+    var stuck = 0
+    do {
+        while !decoder.isFinished {
+            let step = try decoder.decompress(data[at..<end], into: &made, limit: 512)
+            at += step.consumed
+            if step.consumed == 0 && step.produced == 0 && !decoder.isFinished {
+                if end == data.count {
+                    stuck += 1
+                    if stuck > 2 {
+                        return none
+                    }
+                }
+                end = end + length < data.count ? end + length : data.count
+            }
+        }
+    } catch {
+        return none
+    }
+    return made.bytes.toArray()
+}
+
+fn check<D: Decompressor>(_ whole: U8[>..]?, _ decoder: D, _ data: U8[:], _ name: String) {
+    if let whole = whole {
+        guard let parts = inParts(decoder, data) else {
+            fatalError("\(name): refused in parts, and not whole")
+        }
+        // What follows the first stream, where others may, is not in parts.
+        assert(D.isConcatenable ? parts.count <= whole.count : parts == whole, "\(name): other bytes in parts")
+    }
+}
+
+@fuzz
+fn inflate(_ data: U8[:]) {
+    check(try? Deflate.decompress(data, limits: limits()), DeflateDecoder(limits: limits()), data, "deflate")
+}
+
+@fuzz
+fn gzip(_ data: U8[:]) {
+    check(try? Gzip.decompress(data, limits: limits()), GzipDecoder(limits: limits()), data, "gzip")
+}
+
+@fuzz
+fn zlib(_ data: U8[:]) {
+    _ = try? Zlib.decompress(data, limits: limits())
+}
+
+@fuzz
+fn zstd(_ data: U8[:]) {
+    check(try? Zstd.decompress(data, limits: limits()), ZstdDecoder(limits: limits(), maximumWindow: 1 << 22), data, "zstd")
+}
+
+@fuzz
+fn brotli(_ data: U8[:]) {
+    check(try? Brotli.decompress(data, limits: limits()), BrotliDecoder(limits: limits()), data, "brotli")
+}
+
+/// Any bytes, repeated so that there is something to find, through every
+/// compressor and back.
+@fuzz
+fn compressed(_ part: U8[>..], _ times: U8, _ level: U8) throws {
+    var bytes: U8[>..] = []
+    for _ in 0...Int(times % 16) {
+        for byte in part {
+            bytes.append(byte)
+        }
+    }
+    let n = Int(level)
+    assert(try Deflate.decompress(Deflate.compress(bytes, level: n % 10)) == bytes, "deflate")
+    assert(try Gzip.decompress(Gzip.compress(bytes, level: n % 10)) == bytes, "gzip")
+    assert(try Zlib.decompress(Zlib.compress(bytes, level: n % 10)) == bytes, "zlib")
+    assert(try Zstd.decompress(Zstd.compress(bytes, level: n % 12 + 1)) == bytes, "zstd")
+    assert(try Brotli.decompress(Brotli.compress(bytes, quality: n % 10)) == bytes, "brotli")
+}
+
+/// A zip archive: every entry listed and read, or refused.
+@fuzz
+fn zip(_ data: U8[:]) {
+    guard let archive = try? ZipArchive(data.toArray()) else {
+        return
+    }
+    for entry in archive.entries {
+        if let bytes = try? archive.read(entry, limit: 1 << 18) {
+            assert(bytes.count <= 1 << 18, "more was read than the limit")
+        }
+    }
+}
+
+/// A tar archive, the same.
+@fuzz
+fn tar(_ data: U8[:]) {
+    var reader = TarReader(MemoryStream(data.toArray()))
+    var entries = 0
+    do {
+        while try reader.next() != none {
+            entries += 1
+            var chunk = try reader.read(upTo: 4096)
+            while !chunk.isEmpty {
+                chunk = try reader.read(upTo: 4096)
+            }
+        }
+    } catch {
+        return
+    }
+    assert(entries <= data.count / 512, "more entries than there is room for")
+}

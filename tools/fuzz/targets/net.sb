@@ -1,0 +1,78 @@
+module FuzzNet
+
+// What Sable.Net reads from text: URLs, names and addresses.
+
+import Sable.Testing
+import Sable.Net
+import Sable.Text
+
+/// A URL, on its own and relative to another: what it is written as parses as
+/// it, and is written the same.
+@fuzz
+fn url(_ data: U8[:]) {
+    let text = String.fromUtf8Lossy(data)
+    if let url = try? Url.parse(text) {
+        same(url)
+        _ = url.origin
+        _ = url.queryItems
+        _ = url.pathSegments
+    }
+    if let base = try? Url.parse("https://user@example.com:8080/a/b?q#f") {
+        if let url = try? base.resolve(text) {
+            same(url)
+        }
+    }
+}
+
+fn same(_ url: Url) {
+    guard let again = try? Url.parse(url.href) else {
+        fatalError("a URL does not parse as it is written: \(url.href)")
+    }
+    assert(again.href == url.href, "a URL is written otherwise the second time")
+}
+
+/// The parts of a URL set to anything.
+@fuzz
+fn urlParts(_ scheme: String, _ host: String, _ path: String, _ query: String) throws {
+    var url = try Url.parse("https://example.com/")
+    _ = url.setScheme(scheme)
+    _ = url.setHost(host)
+    _ = url.setPath(path)
+    url.setQuery(query)
+    url.setFragment(scheme)
+    same(url)
+}
+
+/// IDNA and punycode.
+@fuzz
+fn names(_ data: U8[:]) {
+    let text = String.fromUtf8Lossy(data)
+    if let ascii = Idna.toAscii(text) {
+        // As ASCII it is as it is.
+        assert(Idna.toAscii(ascii) == ascii, "a name in ASCII has another")
+    }
+    _ = Idna.toUnicode(text)
+    if let points = Punycode.decode(text) {
+        if let encoded = Punycode.encode(points) {
+            assert(Punycode.decode(encoded) == points, "punycode decodes otherwise the second time")
+        }
+    }
+    _ = Host.parse(text, special: true)
+    _ = Host.parse(text, special: false)
+    _ = PercentEncoding.decodeText(text)
+}
+
+/// Addresses, of a machine, a service and a network.
+@fuzz
+fn addresses(_ data: U8[:]) {
+    let text = String.fromUtf8Lossy(data)
+    if let address = try? IpAddress.parse(text) {
+        assert((try? IpAddress.parse(address.toString())) == address, "an address does not parse as it is written")
+    }
+    if let address = try? SocketAddress.parse(text) {
+        assert((try? SocketAddress.parse(address.toString())) == address, "an address and port do not parse as they are written")
+    }
+    if let network = try? IpNetwork.parse(text) {
+        assert((try? IpNetwork.parse(network.toString())) == network, "a network does not parse as it is written")
+    }
+}

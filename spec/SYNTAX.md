@@ -2050,7 +2050,7 @@ an optimised one; never both. A package's profile may choose with
 | `@export("name")` | fn, var | Foreign export |
 | `@packed` / `@align(16)` | struct | Layout control |
 | `@test` / `@bench` | fn | Collected by `sable test` / `sable bench`; `@test` may say `arguments: [...]`, `tags: [...]`, `timeout: .seconds(5)` and `traps` (docs/05 §5.1) |
-| `@fuzz` | fn taking `U8[:]` | A fuzz target, run by `sable fuzz` under libFuzzer: it fails by trapping or throwing |
+| `@fuzz` | fn taking `U8[:]`, or one to four `Arbitrary` values | A fuzz target, run by `sable fuzz` under libFuzzer: it fails by trapping or throwing. `@fuzz(mutator: f)`: `f`, a function of the module taking an input and a `U64` seed, makes other inputs of one |
 | `@main` | fn | Program entry point: a module-level fn taking nothing and returning nothing or an `Int` exit status, one per module (S3514) |
 | `@generator("name", members: [...], always: true)` | fn in `generators/` | A source generator, run for declarations marked `@name`; `members` are the attributes it reads on fields, cases and parameters; `always` runs a package generator for every package (docs/08) |
 | `@discardable` | fn | Result may be ignored without `_ =` |

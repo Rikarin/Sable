@@ -1,0 +1,130 @@
+module FuzzCrypto
+
+// ASN.1, certificates and keys as others write them: refused, or read whole,
+// and written back as they were.
+
+import Sable.Testing
+import Sable.Crypto
+import Sable.Crypto.X509
+import Sable.Serialize.Asn1
+import Sable.Text
+
+// Every value there, and those in them.
+fn walk(_ values: AsnReader, _ depth: Int) -> Int {
+    var reader = values
+    var count = 0
+    while !reader.isAtEnd && depth < 32 {
+        var here = reader
+        guard let tag = try? reader.peekTag() else {
+            return count
+        }
+        guard let encoded = try? reader.readEncoded() else {
+            return count
+        }
+        count += 1
+        assert(!encoded.isEmpty, "a value of no bytes")
+        // Read as each kind there is: what it is not is refused.
+        var one = here
+        _ = try? one.readBigInt()
+        one = here
+        _ = try? one.readBool()
+        one = here
+        _ = try? one.readReal()
+        one = here
+        _ = try? one.readObjectIdentifier()
+        one = here
+        _ = try? one.readNamedBits()
+        one = here
+        _ = try? one.readOctetString()
+        one = here
+        _ = try? one.readString(.Utf8)
+        one = here
+        _ = try? one.readString(.Printable)
+        one = here
+        _ = try? one.readUtcTime()
+        one = here
+        _ = try? one.readGeneralizedTime()
+        if tag.isConstructed {
+            if let inner = try? here.readSequence(tag: tag) {
+                count += walk(inner, depth + 1)
+            }
+        }
+    }
+    return count
+}
+
+@fuzz
+fn asn1(_ data: U8[:]) {
+    for rules in [AsnEncodingRules.Ber, AsnEncodingRules.Cer, AsnEncodingRules.Der] {
+        _ = walk(AsnReader(data, rules: rules), 0)
+    }
+    if let identifier = try? ObjectIdentifier.decode(data) {
+        assert((try? ObjectIdentifier.parse(identifier.toString())) == identifier, "an object identifier does not read as it is written")
+    }
+}
+
+/// A certificate, a request and a revocation list, in DER.
+@fuzz
+fn certificates(_ data: U8[:]) {
+    if let certificate = try? Certificate.parse(der: data) {
+        assert(certificate.der == data.toArray(), "a certificate is not the bytes it was read from")
+        _ = "\(certificate:?)"
+        _ = certificate.isFor(host: "www.example.com")
+        if let key = try? certificate.publicKey() {
+            _ = certificate.isSigned(by: key)
+        }
+        if let again = try? Certificate.parse(pem: certificate.pem) {
+            assert(again == certificate, "a certificate in PEM is another")
+        } else {
+            fatalError("a certificate does not read from its PEM")
+        }
+    }
+    if let request = try? CertificateRequest.parse(der: data) {
+        _ = "\(request:?)"
+        _ = try? request.publicKey()
+    }
+    _ = try? CertificateRevocationList.parse(der: data)
+}
+
+/// Keys in DER: what reads writes back as the same key.
+@fuzz
+fn keys(_ data: U8[:]) {
+    if let key = try? PublicKey.parse(spki: data) {
+        _ = "\(key:?)"
+    }
+    if let key = try? PrivateKey.parse(pkcs8: data) {
+        assert((try? PrivateKey.parse(pkcs8: key.pkcs8())) == key, "a key is another after PKCS#8")
+    }
+    if let key = try? PrivateKey.parse(sec1: data) {
+        if let written = key.sec1() {
+            assert((try? PrivateKey.parse(sec1: written)) == key, "a key is another after SEC 1")
+        }
+    }
+    for curve in [NamedCurve.P256, NamedCurve.P384, NamedCurve.P521] {
+        _ = try? PublicKey(curve: curve, point: data)
+    }
+}
+
+/// PEM and JWK: the same, of text.
+@fuzz
+fn pem(_ data: U8[:]) {
+    let text = String.fromUtf8Lossy(data)
+    if let blocks = try? PemBlock.parse(text) {
+        for block in blocks {
+            assert((try? PemBlock.parse(block.text)) == [block], "a PEM block does not read as it is written")
+        }
+    }
+    _ = try? PublicKey.parse(pem: text)
+    _ = try? PrivateKey.parse(pem: text)
+    _ = try? TrustStore.parse(bundle: text)
+    _ = try? Certificate.parseAll(pem: text)
+}
+
+@fuzz
+fn jwk(_ data: U8[:]) {
+    let text = String.fromUtf8Lossy(data)
+    _ = try? PublicKey.parse(jwk: text)
+    if let key = try? PrivateKey.parse(jwk: text) {
+        assert((try? PrivateKey.parse(jwk: key.jwk())) == key, "a key is another after JWK")
+    }
+}

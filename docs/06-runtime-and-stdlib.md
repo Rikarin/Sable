@@ -1111,7 +1111,9 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
   arrays, dictionaries, sets, ranges and `Outcome` are Arbitrary; `Gen` is for
   anything else (`Gen.number(in: 0...9).array(count: 1...5)`). A body that
   traps is shrunk by running the test again, a process for each case.
-  `Choices(bytes:)` makes a fuzz target a value of its input.
+  `Choices(bytes:)` makes a fuzz target's values of its input, each choice
+  of as many bytes as it needs: a `@fuzz` function may take any `Arbitrary`
+  values (docs/05 §5.1).
 
 ### Dictionaries and hashing
 

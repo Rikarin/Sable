@@ -39,7 +39,7 @@ public abstract class Target {
     /// <summary>The mutator a target that reads Sable source has, its fragments the target's seeds'.</summary>
     protected SyntaxMutator SourceMutator(string root) => new(Seeds(root).Select(static s => Encoding.UTF8.GetString(s.Data)));
 
-    public static readonly IReadOnlyList<Target> All = [new ParserTarget(), new EditorTarget(), new FrontEndTarget(), new SilTarget(), new ResolverTarget(), new PackageFilesTarget(), new InterfaceTarget()];
+    public static readonly IReadOnlyList<Target> All = [new ParserTarget(), new EditorTarget(), new FrontEndTarget(), new SilTarget(), new ResolverTarget(), new PackageFilesTarget(), new InterfaceTarget(), new DifferentialTarget()];
 
     public static Target? Named(string name) => All.FirstOrDefault(t => t.Name == name);
 

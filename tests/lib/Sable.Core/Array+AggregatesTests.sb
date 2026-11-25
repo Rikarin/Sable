@@ -168,3 +168,35 @@ fn blocksOfALongArrayAddUp() {
     }
     assertEqual(words.sum(), scalarSum(words)!)
 }
+
+// Sums of elements small enough to be added with no check in lanes, of some
+// that are not, and of totals close to the ends of the type.
+@test
+fn sumsOfThirtyTwoBitsTakeTheSameWayAsTheLoop() {
+    var generator = SeededRandomNumberGenerator(seed: 7)
+    for bits in 1...31 {
+        for count in [16, 17, 100, 4096, 4097, 9000] {
+            var xs: I32[>..] = []
+            var us: U32[>..] = []
+            for _ in 0..<count {
+                let magnitude = I32.truncating(generator.next() >> U64(64 - bits))
+                xs.append(generator.next() % 2 == 0 ? magnitude : -magnitude)
+                us.append(U32.truncating(generator.next() >> U64(64 - bits)))
+            }
+            if let sum = scalarSum(xs) {
+                assertEqual(xs.sum(), sum)
+            }
+            if let sum = scalarSum(us) {
+                assertEqual(us.sum(), sum)
+            }
+            xs[0] = I32.max
+            if let sum = scalarSum(xs) {
+                assertEqual(xs.sum(), sum)
+            }
+            xs[0] = I32.min
+            if let sum = scalarSum(xs) {
+                assertEqual(xs.sum(), sum)
+            }
+        }
+    }
+}

@@ -1,0 +1,102 @@
+module Sable.Core
+
+// What an OrderedDictionary is made of: a dictionary none of whose entries
+// has been removed but by these, so that each entry's place in the array of
+// them is its position in the order, and the hash slots say it.
+
+extension Dictionary {
+    /// Where the key's entry is, or -1.
+    package fn order(of key: Key) -> Int {
+        let at = find(key, Dictionary.hashOf(key))
+        return at < 0 ? -1 : position(at)
+    }
+
+    /// The key of the entry at the position; traps outside 0..<count.
+    package fn orderedKey(at index: Int) -> Key => entries[index]!.key
+
+    /// The value of the entry at the position; traps outside 0..<count.
+    package fn orderedValue(at index: Int) -> Value => entries[index]!.value
+
+    /// The slot of the entry at the index.
+    fn slot(ofEntry index: Int) -> Int {
+        let mask = slots.count &- 1
+        var at = entries[index]!.hash & mask
+        while slots[at] == -1 || position(at) != index {
+            at = (at &+ 1) & mask
+        }
+        return at
+    }
+
+    /// The slot made that of the entry at the index, its tag kept.
+    mutating fn setPosition(_ at: Int, _ index: Int) {
+        let tagMask = -1 ^ indexMask
+        slots[at] = ((Int(slots[at]) & tagMask) | index) unchecked as I32
+    }
+
+    /// The entry at the position, taken out, those after it moved up.
+    package mutating fn closeUp(at index: Int) -> (Key, Value) {
+        let entry = entries[index]!
+        // The slots after it that its own was in the way of move back over
+        // it, so that no mark need be left where it was.
+        let mask = slots.count &- 1
+        var hole = slot(ofEntry: index)
+        var at = (hole + 1) & mask
+        while slots[at] != -1 {
+            let home = entries[position(at)]!.hash & mask
+            if ((at - home) & mask) >= ((at - hole) & mask) {
+                slots[hole] = slots[at]
+                hole = at
+            }
+            at = (at &+ 1) & mask
+        }
+        slots[hole] = -1
+
+        var i = index + 1
+        while i < entries.count {
+            setPosition(slot(ofEntry: i), i - 1)
+            i += 1
+        }
+        entries.rotate(from: index, to: entries.count, left: 1)
+        let _ = entries.removeLast()
+        live = live - 1
+        return (entry.key, entry.value)
+    }
+
+    /// The last entry moved to the position, those from there on moved down.
+    package mutating fn moveLast(to index: Int) {
+        let last = entries.count - 1
+        let moved = slot(ofEntry: last)
+        var i = last - 1
+        while i >= index {
+            setPosition(slot(ofEntry: i), i + 1)
+            i -= 1
+        }
+        setPosition(moved, index)
+        entries.rotate(from: index, to: entries.count, left: -1)
+    }
+
+    /// The entries at the two positions exchanged.
+    package mutating fn exchange(_ i: Int, _ j: Int) {
+        let mine = slot(ofEntry: i)
+        let other = slot(ofEntry: j)
+        setPosition(mine, j)
+        setPosition(other, i)
+        let held = entries[i]
+        entries[i] = entries[j]
+        entries[j] = held
+    }
+
+    /// The entries put in the order their positions are given in, which
+    /// names each once.
+    package mutating fn reorder(_ order: Int[:]) {
+        var ordered: DictionaryEntry<Key, Value>?[>..] = []
+        ordered.reserveCapacity(order.count)
+        for index in order {
+            ordered.append(entries[index])
+        }
+        entries = ordered
+        if !order.isEmpty {
+            rebuild(slots.count)
+        }
+    }
+}

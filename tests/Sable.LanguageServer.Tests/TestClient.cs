@@ -89,6 +89,8 @@ internal sealed class TestClient : IAsyncDisposable {
         _reading = Task.Run(ReadAsync);
     }
 
+    volatile bool _closing;
+
     async Task ReadAsync() {
         while (await _channel.ReadAsync(CancellationToken.None) is { } message) {
             if (message.Get("id") is { ValueKind: JsonValueKind.Number } id && message.GetString("method") is null) {
@@ -106,11 +108,15 @@ internal sealed class TestClient : IAsyncDisposable {
             // A request of the server's — to make a progress token, to watch
             // files, to pull again — is agreed to, as an editor would.
             if (message.Get("id") is { } request && message.GetString("method") is not null) {
-                await _channel.WriteAsync(new JsonObject {
-                    ["jsonrpc"] = "2.0",
-                    ["id"] = JsonNode.Parse(request.GetRawText()),
-                    ["result"] = null
-                });
+                try {
+                    await _channel.WriteAsync(new JsonObject {
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = JsonNode.Parse(request.GetRawText()),
+                        ["result"] = null
+                    });
+                } catch (InvalidOperationException) when (_closing) {
+                    // Asked as the client went: no one waits for the answer.
+                }
             }
 
             _notified.Release();
@@ -302,6 +308,7 @@ internal sealed class TestClient : IAsyncDisposable {
             }
         }
 
+        _closing = true;
         await _toServer.DisposeAsync();
         await _toClient.DisposeAsync();
         try {

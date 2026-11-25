@@ -1515,7 +1515,7 @@ public sealed partial class SilGen {
                 return call.Arguments.All(a => Simple(a.Type));
             }
 
-            if (callee.Builtin is "array_append" or "array_append_repeating" or "array_append_all" or "array_remove_last" or "array_rotate" or "array_reserve" or "array_clear" or "array_truncate" && call.Receiver is { } array && IsOwnArray(array.Type)) {
+            if (callee.Builtin is "array_append" or "array_append_repeating" or "array_append_holes" or "array_take" or "array_append_all" or "array_remove_last" or "array_rotate" or "array_reserve" or "array_clear" or "array_truncate" && call.Receiver is { } array && IsOwnArray(array.Type)) {
                 return (call.Receiver is BoundLocalAccess { Local.IsMutable: true }
                         || call.Receiver is BoundSelfAccess && OwnMutating
                         || call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0

@@ -1136,9 +1136,13 @@ several starts, at every position:
 - in the runtime's C: substring search, UTF-8 validation, counting a
   string's scalars, and a byte's search and count.
 
-Sable code is not dispatched on what the processor has beyond its baseline
-(SSE2, NEON), which has no byte shuffle on x86-64; the runtime's C is, where
-that is what the work is: Base64 and Hex in blocks (`runtime/codecs.c`: SSSE3
+Sable code is compiled for the processor's baseline (SSE2, NEON), and a
+function marked `@vectorised` for AVX2 as well
+(`src/Sable.CodeGen/LlvmEmitter.Vectorised.cs`): its name is then a function
+that calls the one this processor can run, which the runtime has asked it
+once (`sable_processor_known`). Array searches, sums and extremes are, a bit
+set's count and `softmax`. SSE2 has no byte shuffle, and the runtime's C is
+dispatched too where that is what the work is: Base64 and Hex in blocks (`runtime/codecs.c`: SSSE3
 or AVX2, or NEON's table lookups) and the check that UTF-8 is well-formed
 (SSSE3), each asked for as the program runs. So are the kernels of
 `TensorPrimitives` (`runtime/vectors.c`), SHA-512 and a byte's count, which

@@ -47,7 +47,7 @@ public sealed class ArrayExtensionTests {
 
         // 'append' is three builtins; 'contains' is Sable.
         Assert.Equal("array_count", members.OfType<FieldSymbol>().Single(m => m.Name == "count").Builtin);
-        Assert.Equal(["array_append", "array_append_all", "array_append_repeating"], members.Where(m => m.Name == "append").Select(static m => ((FunctionSymbol)m).Builtin).Order());
+        Assert.Equal(["array_append", "array_append_all", "array_append_repeating"], members.Where(m => m.Name == "append" && m.DeclaredAccessibility == Accessibility.Public).Select(static m => ((FunctionSymbol)m).Builtin).Order());
         Assert.All(members.Where(static m => m.Name == "contains"), static m => Assert.Null(Assert.IsType<FunctionSymbol>(m).Builtin));
     }
 
@@ -56,7 +56,7 @@ public sealed class ArrayExtensionTests {
         var compilation = Compile("fn f() { }");
         var model = compilation.GetSemanticModel(compilation.SyntaxTrees[0]);
         string[] Names(ArrayKind kind, TypeSymbol? element = null) =>
-            [..model.GetMembersOf(new ArrayTypeSymbol(element ?? compilation.Core.Int, kind)).Select(static m => m.Name).Order(StringComparer.Ordinal)];
+            [..model.GetMembersOf(new ArrayTypeSymbol(element ?? compilation.Core.Int, kind)).Where(static m => m.DeclaredAccessibility == Accessibility.Public).Select(static m => m.Name).Order(StringComparer.Ordinal)];
 
         // A slice's members are every kind's; the growable kinds add their
         // own, an Int's numeric ones ("sum", "product") among the first;
@@ -71,7 +71,7 @@ public sealed class ArrayExtensionTests {
         Assert.Equal(everyArray, Names(ArrayKind.Fixed));
         Assert.Equal(Names(ArrayKind.Grow), Names(ArrayKind.GrowShrink));
         Assert.Equal(
-            ["append", "append", "append", "capacity", "clear", "init", "init", "removeAll", "removeLast", "removeLast", "reserveCapacity", "truncate"],
+            ["append", "append", "append", "capacity", "clear", "init", "init", "removeAll", "removeLast", "removeLast", "reserveCapacity"],
             Names(ArrayKind.Grow).Where(n => !everyArray.Contains(n))
         );
         foreach (var name in (string[])["append", "clear", "removeLast"]) {

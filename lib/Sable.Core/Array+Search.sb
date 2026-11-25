@@ -39,7 +39,7 @@ extension<Element> Element[:] {
         var size = self.count
         while size > 0 {
             let half = size >> 1
-            low = predicate(self[low + half]).selecting(low + size - half, low)
+            low = predicate(self[low &+ half]).selecting(low &+ size &- half, low)
             size = half
         }
         return low
@@ -68,9 +68,9 @@ extension<Element> Element[:] {
         }
         while size > 1 {
             let half = size >> 1
-            let middle = low + half
+            let middle = low &+ half
             low = (compare(self[middle]) == .Greater).selecting(low, middle)
-            size = size - half
+            size = size &- half
         }
         let order = compare(self[low])
         if order == .Equal {
@@ -179,6 +179,21 @@ extension<Element: Comparable> Element[:] {
     /// assert(xs.binarySearch(for: 9) == .Err(4))
     /// ```
     public fn binarySearch(for value: Element) -> Outcome<Int, Int> {
-        return self.binarySearch(by: (element: Element) => element.compare(value))
+        // 'binarySearch(by:)', with no closure to make for each search, and
+        // nothing to guess wrong but whether it was there.
+        var low = 0
+        var size = self.count
+        if size == 0 {
+            return .Err(0)
+        }
+        while size > 1 {
+            let half = size >> 1
+            let middle = low &+ half
+            low = (self[middle].compare(value) == .Greater).selecting(low, middle)
+            size = size &- half
+        }
+        let order = self[low].compare(value)
+        let place = low &+ (order == .Less).selecting(1, 0)
+        return order == .Equal ? .Ok(low) : .Err(place)
     }
 }

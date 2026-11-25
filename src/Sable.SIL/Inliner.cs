@@ -103,7 +103,7 @@ public sealed class Inliner : ISilPass {
     ///     callee's cost decides.
     /// </summary>
     static bool Inlinable(SilFunction callee, SilFunction caller, SilInstruction call, Dictionary<string, int>? references) {
-        if (callee == caller || callee.Inline == SilInline.Never || callee.Blocks.Count == 0 || callee.IsUnspecialised) {
+        if (callee == caller || callee.Inline == SilInline.Never || callee.Vectorised || callee.Blocks.Count == 0 || callee.IsUnspecialised) {
             return false;
         }
 
@@ -170,7 +170,7 @@ public sealed class Inliner : ISilPass {
     ///     for the inliner's sake.
     /// </summary>
     public static bool WouldInline(SilFunction callee) =>
-        callee.Inline != SilInline.Never
+        callee.Inline != SilInline.Never && !callee.Vectorised
         && callee.Blocks.Count > 0 && !callee.IsUnspecialised
         && (callee.Inline == SilInline.Always || Cost(callee, Threshold) <= Threshold && !Loops(callee));
 

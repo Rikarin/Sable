@@ -182,3 +182,84 @@ fn anOrderedDictionaryChangesByPosition() {
     assert(ordered.keys == ["c", "a"])
     assertEqual(ordered.get("a"), 1)
 }
+
+// Keys that collide, as their hash has three bits: the slots of one are
+// moved over by taking out another's.
+struct Crowded: Hashable {
+    let id: Int
+
+    operator == (lhs: Crowded, rhs: Crowded) -> Bool => lhs.id == rhs.id
+
+    fn hash(into hasher: inout Hasher) {
+        hasher.combine(id % 8)
+    }
+}
+
+struct Entry {
+    let id: Int
+    let text: String
+}
+
+@test
+fn anOrderedDictionaryAgreesWithAnArrayUnderRandomChanges() {
+    var generator = SeededRandomNumberGenerator(seed: 42)
+    let ordered = OrderedDictionary<Crowded, String>()
+    var model = List<Entry>()
+    for step in 0..<3000 {
+        let id = Int(generator.next() % 60)
+        let at = model.firstIndex(where: { $0.id == id })
+        match generator.next() % 6 {
+            case 0, 1 => {
+                ordered.set(Crowded { id: id }, "v\(step)")
+                if let at = at {
+                    model[at] = Entry { id: id, text: "v\(step)" }
+                } else {
+                    model.append(Entry { id: id, text: "v\(step)" })
+                }
+            }
+            case 2 => {
+                let removed = ordered.remove(Crowded { id: id })
+                if let at = at {
+                    assertEqual(removed ?? "", model[at].text)
+                    let _ = model.remove(at: at)
+                } else {
+                    assert(removed == none)
+                }
+            }
+            case 3 => {
+                let place = Int(generator.next() % U64(model.count + 1))
+                let added = ordered.insert("i\(step)", forKey: Crowded { id: id }, at: place)
+                assertEqual(added, at == none)
+                if added {
+                    model.insert(Entry { id: id, text: "i\(step)" }, at: place)
+                }
+            }
+            case 4 => {
+                if model.count > 1 {
+                    let i = Int(generator.next() % U64(model.count))
+                    let j = Int(generator.next() % U64(model.count))
+                    ordered.swapAt(i, j)
+                    let held = model[i]
+                    model[i] = model[j]
+                    model[j] = held
+                }
+            }
+            default => {
+                if step % 10 == 0 {
+                    ordered.sort(by: { $0.0.id < $1.0.id })
+                    model.sort(by: { $0.id < $1.id })
+                } else if model.count > 0 {
+                    let (key, value) = ordered.remove(at: model.count / 2)
+                    let wanted = model.remove(at: model.count / 2)
+                    assert(key.id == wanted.id && value == wanted.text)
+                }
+            }
+        }
+        assertEqual(ordered.count, model.count)
+        for i in 0..<model.count {
+            assert(ordered.key(at: i).id == model[i].id && ordered.value(at: i) == model[i].text)
+            assertEqual(ordered.index(of: Crowded { id: model[i].id }) ?? -1, i)
+        }
+        assert(ordered.contains(Crowded { id: id }) == (model.firstIndex(where: { $0.id == id }) != none))
+    }
+}

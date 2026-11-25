@@ -149,10 +149,9 @@ fn hexDigitValue(_ byte: U8) -> U8 {
 /// The first of the text's bytes from one offset up to another that the set
 /// holds, or the end.
 fn firstByte(_ text: String, _ start: Int, _ end: Int, among stops: ByteSet) -> Int {
-    let bytes = text.utf8
     var i = start
-    while i < end && !stops.contains(bytes[i]) {
-        i += 1
+    while i < end && !stops.contains(text.utf8[i]) {
+        i = i &+ 1
     }
     return i
 }
@@ -160,10 +159,9 @@ fn firstByte(_ text: String, _ start: Int, _ end: Int, among stops: ByteSet) -> 
 /// The first of the text's bytes from one offset up to another that is the
 /// one given, or the end.
 fn firstByte(_ text: String, _ start: Int, _ end: Int, equalTo byte: U8) -> Int {
-    let bytes = text.utf8
     var i = start
-    while i < end && bytes[i] != byte {
-        i += 1
+    while i < end && text.utf8[i] != byte {
+        i = i &+ 1
     }
     return i
 }

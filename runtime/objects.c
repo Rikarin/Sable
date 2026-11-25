@@ -449,9 +449,9 @@ _Noreturn void sable_trap(const char *message);
 _Noreturn static void trap_here(const char *message);
 static void sable_weak_object_died(SableObject *object);
 
+static void track(SableObject *object, bool born);
 static void object_born(SableObject *object);
 static void object_gone(SableObject *object);
-static inline void object_born_on(SableThread *thread, SableObject *object);
 static inline void object_gone_on(SableThread *thread, SableObject *object);
 static void report_leaks(void);
 static void report_frames(void);
@@ -483,7 +483,7 @@ static int64_t thread_sum(size_t offset) {
 static bool process_exiting;
 
 static int64_t live_object_count(void) {
-    return thread_sum(offsetof(SableThread, live_objects));
+    return thread_sum(offsetof(SableThread, allocations)) - thread_sum(offsetof(SableThread, gone_objects));
 }
 
 // What a library does as the process exits — destroy its globals — given by

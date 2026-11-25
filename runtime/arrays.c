@@ -475,6 +475,31 @@ void sable_array_append_all(SableArray **slot, const SableMetadata *type, const 
     array->count += count;
 }
 
+// 'count' holes added at the end at once: zeros, which destroying, copying
+// and sharing an element pass over, as they do an object's field not set yet.
+void sable_array_append_holes(SableArray **slot, const SableMetadata *type, int64_t count) {
+    if (count < 0) {
+        trap_here("cannot append a negative number of elements");
+    }
+
+    if (count == 0) {
+        return;
+    }
+
+    int64_t size = type->element_size;
+    int64_t held = *slot == NULL ? 0 : (*slot)->count;
+    if (count > INT64_MAX / 4 / (size > 0 ? size : 1) - held) {
+        trap_here("cannot append so many elements");
+    }
+
+    SableArray *array = with_room(slot, type, count);
+    if (type->copy_element != NULL) {
+        memset(array->elements + array->count * size, 0, (size_t)(count * size));
+    }
+
+    array->count += count;
+}
+
 // 'count' copies of the element at 'value' added at the end at once: the
 // array made the only reference to its buffer, grown as appending them one
 // at a time grows it. A trivial element is copied as bytes — by memset when
@@ -803,11 +828,38 @@ int64_t sable_utf8_validate(const SableArray *buffer, int64_t start, int64_t cou
 
 // ---- Comparing elements by their bits
 
+#if defined(SABLE_X64)
+SABLE_TARGET_AVX2 static inline __m256i differing_avx2(const uint8_t *a, const uint8_t *b) {
+    return _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)a), _mm256_loadu_si256((const __m256i *)b));
+}
+
+// How many of the bytes, a multiple of 128, are in blocks equal in both.
+SABLE_TARGET_AVX2 static int64_t equal_blocks_avx2(const uint8_t *a, const uint8_t *b, int64_t length) {
+    int64_t i = 0;
+    for (; i + 128 <= length; i += 128) {
+        __m256i low = _mm256_or_si256(differing_avx2(a + i, b + i), differing_avx2(a + i + 32, b + i + 32));
+        __m256i high = _mm256_or_si256(differing_avx2(a + i + 64, b + i + 64), differing_avx2(a + i + 96, b + i + 96));
+        __m256i differs = _mm256_or_si256(low, high);
+        if (!_mm256_testz_si256(differs, differs)) {
+            break;
+        }
+    }
+
+    return i;
+}
+#endif
+
 // Where the two runs of bytes first differ, or their length: sixty-four and
 // then sixteen at a time, the last sixteen over again in place of a scalar
 // tail, so that only a run of fewer is walked by eight and by one.
 static int64_t first_difference(const uint8_t *a, const uint8_t *b, int64_t length) {
     int64_t i = 0;
+#if defined(SABLE_X64)
+    if (length >= 256 && processor_has_avx2()) {
+        i = equal_blocks_avx2(a, b, length);
+    }
+#endif
+
     while (i + 64 <= length) {
         const char *x = (const char *)a + i, *y = (const char *)b + i;
         if (any16((sable_mask16)((load16(x) ^ load16(y)) | (load16(x + 16) ^ load16(y + 16)) | (load16(x + 32) ^ load16(y + 32)) | (load16(x + 48) ^ load16(y + 48))))) {
@@ -995,6 +1047,32 @@ static const SableMetadata string_array_metadata = {
     sizeof(SableArray), _Alignof(SableArray), NULL, NULL,
 };
 
+// The first of the byte from 'at' up to 'end', or NULL: what memchr finds, and
+// is asked to where it is far off, without a call for each of the many short
+// pieces a text splits into.
+static inline const char *next_byte(const char *at, const char *end, char byte) {
+    sable_bytes16 wanted;
+    memset(&wanted, byte, sizeof wanted);
+    for (const char *distant = at + 64; end - at >= 16; at += 16) {
+        if (at == distant) {
+            return memchr(at, byte, (size_t)(end - at));
+        }
+
+        sable_mask16 found = (sable_mask16)(load16(at) == wanted);
+        if (any16(found)) {
+            return at + (int64_t)(__builtin_ctzll(mask16_bits(found)) / MASK16_LANE_BITS);
+        }
+    }
+
+    for (; at < end; at++) {
+        if (*at == byte) {
+            return at;
+        }
+    }
+
+    return NULL;
+}
+
 SableArray *sable_string_split(const SableString *s, int32_t separator) {
     // An ASCII separator is a byte that never occurs inside another scalar's
     // encoding: the parts are found with memchr, counted first so that the
@@ -1003,7 +1081,7 @@ SableArray *sable_string_split(const SableString *s, int32_t separator) {
     if (separator < 0x80) {
         int64_t n = 1;
         for (const char *at = s->bytes, *end = s->bytes + s->length;
-             (at = memchr(at, separator, (size_t)(end - at))) != NULL; at++) {
+             (at = next_byte(at, end, (char)separator)) != NULL; at++) {
             n++;
         }
 
@@ -1013,7 +1091,7 @@ SableArray *sable_string_split(const SableString *s, int32_t separator) {
         bool ascii = s->count == s->length;
         const char *start = s->bytes, *end = s->bytes + s->length;
         for (int64_t i = 0; i < n; i++) {
-            const char *stop = i + 1 < n ? memchr(start, separator, (size_t)(end - start)) : end;
+            const char *stop = i + 1 < n ? next_byte(start, end, (char)separator) : end;
             int64_t length = stop - start;
             ((SableString **)parts->elements)[i] = ascii ? make_counted(start, length, length) : make_string(start, length);
             parts->count = i + 1;

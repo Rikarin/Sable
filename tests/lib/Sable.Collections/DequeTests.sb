@@ -268,3 +268,133 @@ fn aDequeAgreesWithAnArrayUnderRandomChanges() {
     assert(deque.capacity >= 5000)
     assert(deque.toArray() == expected)
 }
+
+class Counter {
+    var alive = 0
+}
+
+class Item {
+    let counter: Counter
+    let value: Int
+
+    init(_ counter: Counter, _ value: Int) {
+        self.counter = counter
+        self.value = value
+        counter.alive += 1
+    }
+
+    deinit {
+        counter.alive -= 1
+    }
+}
+
+@test
+fn anElementIsLetGoOfWhenItIsRemoved() {
+    let counter = Counter()
+    let deque = Deque<Item>()
+    for i in 0..<100 {
+        deque.append(Item(counter, i))
+        deque.prepend(Item(counter, -i))
+        assertEqual(counter.alive, deque.count)
+    }
+    for i in 0..<60 {
+        let _ = deque.removeFirst()
+        let _ = deque.remove(at: deque.count / 2)
+        assertEqual(counter.alive, deque.count)
+        deque.insert(Item(counter, i), at: deque.count / 3)
+        assertEqual(counter.alive, deque.count)
+    }
+    // A copy of the slots, holes and all, made as the deque changes under an iterator.
+    var seen = 0
+    for item in deque {
+        deque.append(item)
+        let _ = deque.removeLast()
+        seen += 1
+    }
+    assertEqual(seen, deque.count)
+    while deque.removeLast() != none { }
+    assertEqual(counter.alive, 0)
+    deque.append(Item(counter, 1))
+    deque.removeAll()
+    assertEqual(counter.alive, 0)
+}
+
+protocol Named {
+    var name: String { get }
+}
+
+struct Pair: Named {
+    let name: String
+    let other: Item?
+}
+
+union Held {
+    Nothing
+    Text(String)
+    Both(Item, String)
+}
+
+fn maybe(_ counter: Counter, _ i: Int) -> Item? => i % 3 == 0 ? none : Item(counter, i)
+
+fn named(_ i: Int) -> any Named => Pair { name: "\(i)", other: none }
+
+fn array(_ i: Int) -> Int[>..] => [i, i + 1]
+
+fn held(_ counter: Counter, _ i: Int) -> Held => i % 2 == 0 ? Held.Text("\(i)") : Held.Both(Item(counter, i), "b")
+
+fn holds(_ held: Held, _ i: Int) -> Bool {
+    match held {
+        case .Nothing           => { return false }
+        case .Text(let text)    => { return text == "\(i)" }
+        case .Both(let item, _) => { return item.value == i }
+    }
+}
+
+struct Making {
+    let make: () -> Int
+}
+
+fn making(_ i: Int) -> Making => Making { make: () => i }
+
+// One of each kind of thing a slot can hold, put in and taken out again.
+fn passesThrough<T>(_ make: (Int) -> T, _ isRight: (T, Int) -> Bool) {
+    let deque = Deque<T>()
+    var next = 0
+    var first = 0
+    for round in 0..<40 {
+        for _ in 0..<(round % 7 + 1) {
+            deque.append(make(next))
+            next += 1
+        }
+        let copy = deque.makeIterator()
+        for _ in 0..<(round % 5) {
+            if let value = deque.removeFirst() {
+                assert(isRight(value, first))
+                first += 1
+            }
+        }
+        var left = copy
+        while let _ = left.next() { }
+    }
+    deque.makeContiguous()
+    for value in deque {
+        assert(isRight(value, first))
+        first += 1
+    }
+    assertEqual(first, next)
+}
+
+@test
+fn aDequeHoldsWhateverThereIs() {
+    let counter = Counter()
+    passesThrough((i: Int) => "text \(i)", (text: String, i: Int) => text == "text \(i)")
+    passesThrough((i: Int) => Item(counter, i), (item: Item, i: Int) => item.value == i)
+    passesThrough((i: Int) => maybe(counter, i), (item: Item?, i: Int) => (item?.value ?? -1) == (i % 3 == 0 ? -1 : i))
+    passesThrough((i: Int) => Pair { name: "\(i)", other: Item(counter, i) }, (pair: Pair, i: Int) => pair.name == "\(i)" && pair.other!.value == i)
+    passesThrough((i: Int) => named(i), (named: any Named, i: Int) => named.name == "\(i)")
+    passesThrough((i: Int) => array(i), (array: Int[>..], i: Int) => array == [i, i + 1])
+    passesThrough((i: Int) => held(counter, i), (held: Held, i: Int) => holds(held, i))
+    passesThrough((i: Int) => making(i), (making: Making, i: Int) => making.make() == i)
+    passesThrough((i: Int) => (i, "\(i)"), (pair: (Int, String), i: Int) => pair.0 == i && pair.1 == "\(i)")
+    assertEqual(counter.alive, 0)
+}

@@ -150,8 +150,8 @@ extension Complex {
         } else if u < T.leastNormalMagnitude * T.converting(4) {
             power = 0 - (T.significandBitCount + 1)
         }
-        x = x.scaled(byPowerOfTwo: 0 - 2 * power)
-        y = y.scaled(byPowerOfTwo: 0 - 2 * power)
+        x = timesPowerOfTwo(x, 0 - 2 * power)
+        y = timesPowerOfTwo(y, 0 - 2 * power)
         let r = T.hypot(x, y)
         var re = T.zero
         var im = T.zero
@@ -162,7 +162,7 @@ extension Complex {
             im = ((r - x) / T.converting(2)).squareRoot().copySign(y)
             re = y.abs() / (im.abs() + im.abs())
         }
-        return Complex(re.scaled(byPowerOfTwo: power), im.scaled(byPowerOfTwo: power))
+        return Complex(timesPowerOfTwo(re, power), timesPowerOfTwo(im, power))
     }
 
     /// The sine: `sin x cosh y + i cos x sinh y`, which is -i sinh(iz).
@@ -268,7 +268,7 @@ extension Complex {
         let t = Complex.sqrt(Complex(T.one + x, y))
         let re = likeSignedSum(s.real, t.real, -s.imaginary, t.imaginary)
         let im = likeSignedSum(s.real, t.imaginary, -s.imaginary, t.real)
-        return Complex(T.atan2(y: x.scaled(byPowerOfTwo: 0 - re.power), x: re.value), asinhScaled(im))
+        return Complex(T.atan2(y: timesPowerOfTwo(x, 0 - re.power), x: re.value), asinhScaled(im))
     }
 
     /// The inverse cosine's principal value, its real part in [0, pi], with
@@ -493,3 +493,7 @@ fn atanhOfRightHalf<T: ElementaryFunctions>(_ x: T, _ y: T) -> Complex<T> {
     let im = T.atan2(y: y + y, x: (-y).fusedMultiplyAdd(y, oneMinus * onePlus)) / T.converting(2)
     return Complex(re, im)
 }
+
+/// The number times a power of two, which is nearly always the first: that
+/// one costs no call to scale by.
+fn timesPowerOfTwo<T: ElementaryFunctions>(_ x: T, _ power: Int) -> T => power == 0 ? x : x.scaled(byPowerOfTwo: power)

@@ -97,10 +97,35 @@ static SableString *new_string(int64_t length, int64_t count) {
     return string;
 }
 
+// Bytes copied to a new string's: most strings are short, and copied by a
+// word at each end, which meet or overlap, with no call to make.
+static inline void copy_bytes_to(char *to, const char *from, int64_t length) {
+    if (length > 16) {
+        memcpy(to, from, (size_t)length);
+    } else if (length >= 8) {
+        uint64_t first, last;
+        memcpy(&first, from, 8);
+        memcpy(&last, from + length - 8, 8);
+        memcpy(to, &first, 8);
+        memcpy(to + length - 8, &last, 8);
+    } else if (length >= 4) {
+        uint32_t first, last;
+        memcpy(&first, from, 4);
+        memcpy(&last, from + length - 4, 4);
+        memcpy(to, &first, 4);
+        memcpy(to + length - 4, &last, 4);
+    } else if (length > 0) {
+        char middle = from[length >> 1], last = from[length - 1];
+        to[0] = from[0];
+        to[length >> 1] = middle;
+        to[length - 1] = last;
+    }
+}
+
 // A string of bytes whose scalars are known to number 'count'.
 static SableString *make_counted(const char *bytes, int64_t length, int64_t count) {
     SableString *string = new_string(length, count);
-    memcpy(string->bytes, bytes, (size_t)length);
+    copy_bytes_to(string->bytes, bytes, length);
     return string;
 }
 
@@ -379,8 +404,36 @@ void sable_print_string(const SableString *s) {
 }
 
 // Byte-for-byte equality: strings compare by content, not identity.
+// The bytes of two short runs compared a word at each end, which meet or
+// overlap: most strings that are compared are short, and have no call to make.
+static inline bool same_bytes(const char *a, const char *b, int64_t length) {
+    if (length > 16) {
+        return memcmp(a, b, (size_t)length) == 0;
+    }
+
+    if (length >= 8) {
+        uint64_t x, y, u, v;
+        memcpy(&x, a, 8);
+        memcpy(&y, b, 8);
+        memcpy(&u, a + length - 8, 8);
+        memcpy(&v, b + length - 8, 8);
+        return ((x ^ y) | (u ^ v)) == 0;
+    }
+
+    if (length >= 4) {
+        uint32_t x, y, u, v;
+        memcpy(&x, a, 4);
+        memcpy(&y, b, 4);
+        memcpy(&u, a + length - 4, 4);
+        memcpy(&v, b + length - 4, 4);
+        return ((x ^ y) | (u ^ v)) == 0;
+    }
+
+    return length == 0 || (a[0] == b[0] && a[length >> 1] == b[length >> 1] && a[length - 1] == b[length - 1]);
+}
+
 bool sable_string_equal(const SableString *a, const SableString *b) {
-    return a->length == b->length && memcmp(a->bytes, b->bytes, (size_t)a->length) == 0;
+    return a->length == b->length && same_bytes(a->bytes, b->bytes, a->length);
 }
 
 // The pieces end to end, in one allocation: an interpolation, or 'a + b + c',
@@ -395,7 +448,7 @@ SableString *sable_string_concat_many(int64_t n, SableString *const *pieces) {
     SableString *s = new_string(length, count);
     char *end = s->bytes;
     for (int64_t i = 0; i < n; i++) {
-        memcpy(end, pieces[i]->bytes, (size_t)pieces[i]->length);
+        copy_bytes_to(end, pieces[i]->bytes, pieces[i]->length);
         end += pieces[i]->length;
     }
 
@@ -518,8 +571,8 @@ int64_t sable_string_find(const SableString *text, const SableString *part, int6
 
 SableString *sable_string_concat(const SableString *a, const SableString *b) {
     SableString *s = new_string(a->length + b->length, a->count + b->count);
-    memcpy(s->bytes, a->bytes, (size_t)a->length);
-    memcpy(s->bytes + a->length, b->bytes, (size_t)b->length);
+    copy_bytes_to(s->bytes, a->bytes, a->length);
+    copy_bytes_to(s->bytes + a->length, b->bytes, b->length);
     return s;
 }
 

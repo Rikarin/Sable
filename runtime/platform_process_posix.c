@@ -256,7 +256,7 @@ typedef struct StartFailure {
 // What the child does, every call safe after a fork of a program with many
 // threads: no memory made, no lock taken. 'failed' is closed by the exec,
 // which is how the parent hears it was done.
-_Noreturn static void child_start(const ProcessSpec *spec, const char *program, char **environment, const int streams[3], int failed) {
+__attribute__((noinline)) _Noreturn static void child_start(const ProcessSpec *spec, const char *program, char **environment, const int streams[3], int failed) {
     StartFailure failure = { 0, 0 };
 
     // This program's handlers are not the new one's, and are not to run
@@ -318,6 +318,18 @@ stopped:
     _exit(127);
 }
 
+// On Linux the child runs in this program's memory, this thread waiting, until
+// its exec: no page table is copied, nor page written to copied after. What
+// it does until then is what may be: it writes to its own frames alone, with
+// signals blocked until no handler of this program's is left, its signal
+// actions and its directory being its own. (A macro, as a function may not
+// return from a vfork.)
+#if defined(__linux__)
+#define fork_to_exec vfork
+#else
+#define fork_to_exec fork
+#endif
+
 // Under the spawn lock: the child forked, and its exec waited for.
 static bool start_child(const ProcessSpec *spec, const char *program, char **environment, const int streams[3], pid_t *pid, ProcessError *error) {
     int failed[2];
@@ -329,7 +341,7 @@ static bool start_child(const ProcessSpec *spec, const char *program, char **env
     sigset_t all, before;
     sigfillset(&all);
     pthread_sigmask(SIG_SETMASK, &all, &before);
-    pid_t child = failed[1] < 0 ? -1 : fork();
+    pid_t child = failed[1] < 0 ? -1 : fork_to_exec();
     if (child == 0) {
         child_start(spec, program, environment, streams, failed[1]);
     }

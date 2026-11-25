@@ -32,6 +32,17 @@ void sable_lock_free(void *mutex) {
 // nanoseconds — a collection's shard, a queue's end — so a thread tries
 // again a few times before it asks the system to put it to sleep, which
 // costs the sleeper and the thread that wakes it each a call into the kernel.
+// The pause between is short on ARM ('yield'): a thread that waits out the
+// holder awake there only passes the lock to and fro, where asleep it leaves
+// the holder to take it again and again.
+static inline void lock_pause(void) {
+#if defined(__aarch64__)
+    __asm__ __volatile__("yield");
+#else
+    spin_pause();
+#endif
+}
+
 enum { LOCK_SPINS = 40 };
 
 void sable_lock_acquire(void *mutex) {
@@ -41,7 +52,7 @@ void sable_lock_acquire(void *mutex) {
 
     for (int spin = 0; spin < LOCK_SPINS; spin++) {
         for (int pause = 0; pause < 8; pause++) {
-            spin_pause();
+            lock_pause();
         }
 
         if (mutex_try_lock(mutex)) {

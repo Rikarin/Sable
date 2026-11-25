@@ -219,7 +219,7 @@ public union PrivateKey: Equatable, Debug, Sendable {
     }
 
     static fn info(_ identifier: ObjectIdentifier, _ curve: ObjectIdentifier?, _ content: U8[:]) -> U8[>..] {
-        return Der.write { (writer: AsnWriter) throws(AsnError) in
+        return writeDer { (writer: AsnWriter) throws(AsnError) in
             try writer.beginSequence()
             try writer.writeInt(0)
             try PublicKey.writeAlgorithm(writer, identifier, curve)
@@ -229,14 +229,14 @@ public union PrivateKey: Equatable, Debug, Sendable {
     }
 
     static fn octetString(_ bytes: U8[:]) -> U8[>..] {
-        return Der.write { (writer: AsnWriter) throws(AsnError) in
+        return writeDer { (writer: AsnWriter) throws(AsnError) in
             try writer.writeOctetString(bytes)
         }
     }
 
     /// A SEC 1 ECPrivateKey.
     static fn sec1(_ curve: NamedCurve, _ scalar: U8[:], _ point: U8[:], named: Bool) -> U8[>..] {
-        return Der.write { (writer: AsnWriter) throws(AsnError) in
+        return writeDer { (writer: AsnWriter) throws(AsnError) in
             try writer.beginSequence()
             try writer.writeInt(1)
             try writer.writeOctetString(scalar)

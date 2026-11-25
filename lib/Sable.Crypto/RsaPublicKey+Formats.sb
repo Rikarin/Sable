@@ -36,7 +36,7 @@ extension RsaPublicKey: AsymmetricPublicKey {
     /// The key as a PKCS #1 RSAPublicKey, in DER.
     public var pkcs1: U8[>..] {
         get {
-            return Der.write { (writer: AsnWriter) throws(AsnError) in
+            return writeDer { (writer: AsnWriter) throws(AsnError) in
                 try writer.beginSequence()
                 try writer.writeUnsignedInteger(modulus)
                 try writer.writeUInt(exponent)

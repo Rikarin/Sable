@@ -7,6 +7,8 @@ its own, and give that directory to the suite's script, from a built tree
 
 ```bash
 python3 -I tools/conformance/crypto/run.py data/
+python3 -I tools/conformance/publickey/run.py data/wycheproof
+python3 -I tools/conformance/x509/run.py data/limbo.json
 python3 -I tools/conformance/toml/run.py data/toml-test
 python3 -I tools/conformance/yaml/run.py data/yaml-test-suite
 python3 -I tools/conformance/net/run.py data/iana
@@ -43,6 +45,23 @@ Messages, keys and outputs that are not of whole bytes are skipped: the library
 takes bytes. So are SHA-224, SHA3-224 and SHA-512/t, which it has not.
 ChaCha20-Poly1305's vectors test the ChaCha generator's keystream. Neither
 source has vectors for BLAKE2b, BLAKE3, Argon2id, scrypt or MD5.
+
+## publickey: Wycheproof
+
+The same `data/wycheproof/`: ECDSA and ECDH on P-256, P-384 and P-521, Ed25519,
+X25519, RSA signatures (PSS and PKCS #1 v1.5) and the keys of each in PEM, DER
+and JWK. What is valid must be taken and what is invalid refused; what is
+"acceptable" may be either. What the library has nothing for is counted as
+skipped, with what it is.
+
+## x509: x509-limbo
+
+`data/limbo.json`, https://github.com/C2SP/x509-limbo's `limbo.json`
+(SHA-256 `56799cef…9654fca`, 9807 cases): Apache-2.0. Each part is run by the
+profile it is of: `rfc5280`, `crl`, `pathlen` and `pathological` by
+`CertificateProfile.Rfc5280`, `webpki` by `.WebPki`, and `bettertls`, `cve` and
+`online`, whose certificates are made by neither's rules, by `.Compatible`;
+`--profile` runs all by one.
 
 ## toml: toml-test
 

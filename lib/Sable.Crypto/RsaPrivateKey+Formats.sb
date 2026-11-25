@@ -42,7 +42,7 @@ extension RsaPrivateKey: AsymmetricPrivateKey {
 
     /// The key as a PKCS #1 RSAPrivateKey, in DER.
     public fn pkcs1() -> U8[>..] {
-        return Der.write { (writer: AsnWriter) throws(AsnError) in
+        return writeDer { (writer: AsnWriter) throws(AsnError) in
             try writer.beginSequence()
             try writer.writeInt(0)
             try writer.writeUnsignedInteger(publicKey.modulus)

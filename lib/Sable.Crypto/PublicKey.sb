@@ -107,7 +107,7 @@ public union PublicKey: Hashable, Debug, Sendable {
     }
 
     static fn info(_ identifier: ObjectIdentifier, _ curve: ObjectIdentifier?, _ bytes: U8[:]) -> U8[>..] {
-        return Der.write { (writer: AsnWriter) throws(AsnError) in
+        return writeDer { (writer: AsnWriter) throws(AsnError) in
             try writer.beginSequence()
             try PublicKey.writeAlgorithm(writer, identifier, curve)
             try writer.writeBitString(AsnBitString(bytes: bytes))

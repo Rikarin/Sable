@@ -75,7 +75,7 @@ public struct EcdsaSignature<Curve: EllipticCurve>: Hashable, Debug, Sendable {
     public var der: U8[>..] {
         get {
             let count = Curve.curve.byteCount
-            return Der.write { (writer: AsnWriter) throws(AsnError) in
+            return writeDer { (writer: AsnWriter) throws(AsnError) in
                 try writer.beginSequence()
                 try writer.writeUnsignedInteger(bytes[..<count])
                 try writer.writeUnsignedInteger(bytes[count...])

@@ -33,11 +33,26 @@ public fn fail(_ message: String, file: String = #file, line: Int = #line) {
     try! stopTest()
 }
 
-/// Fails the test and ends it, saying why, unless the condition holds. What
-/// the condition was, and its parts, 'expect' and 'require' say too.
-public fn assert(_ condition: Bool, _ message: String = "the condition was false", file: String = #file, line: Int = #line) {
+/// Fails the test and ends it unless the condition holds. What the
+/// condition was, and its parts, 'expect' and 'require' say too.
+public fn assert(_ condition: Bool, file: String = #file, line: Int = #line) {
     if !condition {
-        fail(message, file: file, line: line)
+        fail("the condition was false", file: file, line: line)
+    }
+}
+
+/// Fails the test and ends it, saying why, unless the condition holds. The
+/// message is worked out only where it does not.
+///
+/// ```sable
+/// let sizes = [1, 2, 3]
+/// for size in sizes {
+///     assert(size > 0, "a size of \(size) among \(sizes)")
+/// }
+/// ```
+public fn assert(_ condition: Bool, _ message: @autoclosure () -> String, file: String = #file, line: Int = #line) {
+    if !condition {
+        fail(message(), file: file, line: line)
     }
 }
 

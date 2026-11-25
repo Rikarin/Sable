@@ -1,0 +1,47 @@
+module AssertionsTests
+
+// 'assert' and what it says (Sable.Testing). Run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Testing
+
+// A message that counts how often it was worked out.
+final class Message {
+    var made: Int = 0
+
+    fn text(_ n: Int) -> String {
+        made += 1
+        return "n is \(n)"
+    }
+}
+
+@test
+fn aMessageIsWorkedOutOnlyWhereTheConditionDoesNotHold() {
+    let message = Message()
+    for n in 0..<100 {
+        assert(n >= 0, message.text(n))
+        assert(n >= 0, "\(message.text(n)) of 100")
+    }
+    assert(true)
+    expect(message.made == 0)
+    expectPanic("n is 3 of 4") { assert(message.made > 0, "\(message.text(3)) of 4") }
+}
+
+@test
+fn aFailedAssertionSaysWhereItWasWritten() {
+    let n = 3
+    expectPanic("assertion failed: n is 3 (\(#file):\(#line))") { assert(n == 4, "n is \(n)") }
+    expectPanic("assertion failed: the condition was false (\(#file):\(#line))") { assert(n == 4) }
+    expectPanic("assertion failed: else (there.sb:7)") { assert(n == 4, "else", file: "there.sb", line: 7) }
+    expectPanic("assertion failed: the condition was false (there.sb:7)") { assert(n == 4, file: "there.sb", line: 7) }
+}
+
+@test
+fn aMessageMayReadAVariableThatChanges() {
+    var sum = 0
+    for n in 1...10 {
+        sum += n
+        assert(sum >= n, "a sum of \(sum) at \(n)")
+    }
+    expect(sum == 55)
+}

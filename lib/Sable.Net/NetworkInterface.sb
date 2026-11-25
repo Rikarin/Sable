@@ -27,6 +27,23 @@ public struct NetworkInterface {
 
     let flags: Int
 
+    /// An interface as the system would list it: for comparing lists
+    /// (`NetworkChange.differences`), and tests.
+    public init(name: String, index: Int, isUp: Bool, addresses: InterfaceAddress[>..] = [], mtu: Int? = none) {
+        self.name = name
+        self.index = index
+        self.addresses = addresses
+        self.mtu = mtu
+        self.flags = isUp ? 3 : 0
+    }
+
+    init(name: String, index: Int, mtu: Int?, flags: Int) {
+        self.name = name
+        self.index = index
+        self.mtu = mtu
+        self.flags = flags
+    }
+
     /// Whether it is on.
     public var isUp: Bool => (flags & 1) != 0
 
@@ -59,7 +76,7 @@ public struct NetworkInterface {
             if at < 0 {
                 let mtu = Runtime.interfacePart(row, 2)
                 at = all.count
-                all.append(NetworkInterface { name: name, index: index, mtu: mtu > 0 ? mtu : none, flags: Runtime.interfacePart(row, 1) })
+                all.append(NetworkInterface(name: name, index: index, mtu: mtu > 0 ? mtu : none, flags: Runtime.interfacePart(row, 1)))
             }
             let hardware = Runtime.interfacePart(row, 3)
             if hardware >= 0 {
@@ -71,7 +88,7 @@ public struct NetworkInterface {
             }
             if Runtime.interfacePart(row, 5) != 0 {
                 if let address = SocketAddress.ofLastCall() {
-                    all[at].addresses.append(InterfaceAddress { address: address.ip, prefixLength: Runtime.interfacePart(row, 4) })
+                    all[at].addresses.append(InterfaceAddress(address: address.ip, prefixLength: Runtime.interfacePart(row, 4)))
                 }
             }
         }

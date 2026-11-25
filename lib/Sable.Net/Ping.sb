@@ -1,0 +1,168 @@
+module Sable.Net
+
+import Sable.IO
+import Sable.Time
+
+/// An ICMP echo — a ping — sent to an address, and its answer waited for:
+/// .NET's `Ping.SendPingAsync`. On macOS and Linux by an ICMP socket that
+/// needs no privilege where the system allows it (Linux's
+/// `net.ipv4.ping_group_range`), else a raw one, which needs root:
+/// PermissionDenied with neither. On Windows by the system's own ICMP
+/// service (`IcmpSendEcho2`), which needs nothing. IPv4 and IPv6 alike.
+///
+/// ```sable
+/// fn isUp(_ host: IpAddress) async -> Bool {
+///     let reply = try? await Ping.send(to: host, timeout: Duration.seconds(2))
+///     return reply?.status == PingStatus.Success
+/// }
+/// ```
+public struct Ping {
+    /// One echo sent, and its answer waited for, as long as the timeout:
+    /// `.TimedOut` when none came, an error's status when a router said
+    /// why, `.Success` when the address answered. What could not be sent
+    /// at all throws, as Unreachable where the system has no route.
+    public static async fn send(to address: IpAddress, timeout: Duration = Duration.seconds(5), options: PingOptions = PingOptions()) throws(IoError) -> PingReply {
+        if options.payloadSize < 0 || options.payloadSize > 65000 || options.ttl < 1 || options.ttl > 255 || timeout.totalNanoseconds <= 0 {
+            throw IoError.InvalidInput(path: "a ping's options")
+        }
+        var payload: U8[>..] = []
+        for i in 0..<options.payloadSize {
+            payload.append(U8(0x61 + i % 23))
+        }
+        #if os(windows)
+        return try await Ping.bySystem(address, timeout, options, payload)
+        #else
+        let family: IpFamily = address.isV4 ? .V4 : .V6
+        let socket = try Ping.socket(family)
+        defer {
+            socket.close()
+        }
+        try socket.setHopLimit(options.ttl)
+        // No router breaks up an IPv6 datagram: only its sender may.
+        if options.dontFragment && family == .V4 {
+            try socket.setDontFragment(true)
+        }
+        let identifier = Int.random(in: 0..<65536)
+        let sequence = (pingSequences.add(1) + 1) & 0xFFFF
+        let request = IcmpMessage.echoRequest(family, identifier: identifier, sequence: sequence, payload: payload)
+        let start = Instant.now()
+        try await socket.send(request.bytes(), to: address)
+        // Linux gives a ping socket's echoes an identifier of its own.
+        #if os(linux)
+        let anyIdentifier = socket.isDatagram
+        #else
+        let anyIdentifier = false
+        #endif
+        let waited = await Task.limited(nanoseconds: timeout.totalNanoseconds) { () -> PingAnswer in
+            return await Ping.answer(socket, address, identifier: anyIdentifier ? none : identifier, sequence: sequence)
+        }
+        let roundTrip = start.elapsed
+        guard let answer = waited else {
+            return PingReply { status: .TimedOut, address: address, roundTrip: roundTrip, payloadSize: 0 }
+        }
+        return match answer {
+            case .Came(let status, let from, let size) => PingReply { status: status, address: from, roundTrip: roundTrip, payloadSize: size }
+            case .Failed(let error)                    => throw error
+        }
+        #endif
+    }
+
+    // An ICMP socket where the system gives one, else a raw one.
+    static fn socket(_ family: IpFamily) throws(IoError) -> RawSocket {
+        do {
+            return try RawSocket.icmp(family)
+        } catch {
+            do {
+                return try RawSocket.open(family, protocol: family == .V4 ? IpProtocol.icmp : IpProtocol.icmpV6)
+            } catch {
+                throw IoError.PermissionDenied(path: "ping")
+            }
+        }
+    }
+
+    // What came for the echo of the sequence: its reply, or an error about
+    // it. Other messages a raw socket sees are passed over.
+    static async fn answer(_ socket: RawSocket, _ address: IpAddress, identifier: Int?, sequence: Int) async -> PingAnswer {
+        var failures = 0
+        while true {
+            let bytes = Runtime.receiveDatagram(socket.handle, 65535)
+            let result = Runtime.socketStatus()
+            if result == 0 {
+                let from = SocketAddress.ofLastCall()?.ip ?? address
+                if let status = PingStatus.of(bytes, family: socket.family, from: from, identifier: identifier, sequence: sequence) {
+                    return .Came(status: status, from: from, size: status == PingStatus.Success ? Ping.payloadSize(bytes, socket.family) : 0)
+                }
+                continue
+            }
+            if result == 2 {
+                // Linux keeps the error a ping socket was sent for it.
+                if let error = socket.takeError() {
+                    if let status = PingStatus.ofError(socket.family, type: error.type, code: error.code, from: error.from) {
+                        let echo = IcmpMessage.parse(error.echo)
+                        if echo == none || echo.sequence == sequence {
+                            return .Came(status: status, from: error.from, size: 0)
+                        }
+                    }
+                    continue
+                }
+                failures += 1
+                if Runtime.socketError() == 12 || failures > 100 {
+                    return .Failed(error: socketError("ping"))
+                }
+                continue
+            }
+            if Task.isCancelled {
+                return .Failed(error: IoError.Cancelled)
+            }
+            await Runtime.waitForSocket(socket.handle, writable: false)
+        }
+    }
+
+    // How many bytes an echo reply carried after its header.
+    static fn payloadSize(_ bytes: U8[>..], _ family: IpFamily) -> Int {
+        let skip = family == .V4 && bytes.count >= 20 && bytes[0] >> 4 == 4 ? Int(bytes[0] & 0xF) * 4 : 0
+        return bytes.count - skip - 8 < 0 ? 0 : bytes.count - skip - 8
+    }
+
+    // ---- Windows -------------------------------------------------------------------
+
+    static async fn bySystem(_ address: IpAddress, _ timeout: Duration, _ options: PingOptions, _ payload: U8[>..]) async throws(IoError) -> PingReply {
+        let to = SocketAddress(address, port: 0)
+        let milliseconds = timeout.totalNanoseconds / 1_000_000 < 1 ? 1 : timeout.totalNanoseconds / 1_000_000
+        let start = Instant.now()
+        let results = await Task.blocking { () -> Int[>..] in
+            var parts: Int[>..] = [0, 0, 0, 0, 0, 0, 0, 0]
+            let sent = payload.withPointer { (bytes: RawPtr<U8>) -> Bool in
+                return parts.withMutablePointer { (into: RawPtr<Int>) -> Bool in
+                    unsafe {
+                        return pingBySystem(to.familyNumber, to.highBits, to.lowBits, to.scopeNumber, milliseconds, options.ttl, options.dontFragment, bytes,
+                            payload.count, into)
+                    }
+                }
+            }
+            if !sent {
+                parts[6] = -1
+                parts[7] = Runtime.socketErrorCode()
+            }
+            return parts
+        }
+        if results[6] == -1 {
+            throw IoError.Os(path: "ping", code: results[7])
+        }
+        let from = results[2] == 4 ? IpAddress(v4: results[4] unchecked as U32)
+            : results[2] == 6 ? IpAddress(high: results[3] unchecked as U64, low: results[4] unchecked as U64, scope: U32(results[5])) : address
+        let status = PingStatus.ofIpStatus(results[0], six: address.isV6, from: from)
+        let roundTrip = status == PingStatus.TimedOut ? start.elapsed : Duration.milliseconds(results[1])
+        return PingReply { status: status, address: status == PingStatus.TimedOut ? address : from, roundTrip: roundTrip,
+            payloadSize: status == PingStatus.Success ? payload.count : 0 }
+    }
+}
+
+// The sequence numbers of this program's echoes.
+let pingSequences = Atomic<Int>(0)
+
+// What a ping's wait came to.
+union PingAnswer {
+    Came(status: PingStatus, from: IpAddress, size: Int)
+    Failed(error: IoError)
+}

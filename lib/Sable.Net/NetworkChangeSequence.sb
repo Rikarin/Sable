@@ -1,0 +1,65 @@
+module Sable.Net
+
+/// The changes to the interfaces as they come, for 'for await'
+/// (`NetworkChange.events`): without end, until the task going through it
+/// is cancelled. Watching lasts as long as it does. One task at a time may
+/// wait for the next.
+@immutable
+public final class NetworkChangeSequence: AsyncSequence {
+    public alias Element = NetworkChangeEvent
+    public alias Iter = NetworkChangeIterator
+
+    let watch: Int
+    let first: NetworkInterface[>..]
+
+    init(watch: Int, first: NetworkInterface[>..]) {
+        self.watch = watch
+        self.first = first
+    }
+
+    deinit {
+        closeChanges(watch)
+    }
+
+    /// What goes through them, from the interfaces as they were when the
+    /// watch began.
+    public fn makeAsyncIterator() -> NetworkChangeIterator {
+        return NetworkChangeIterator(changes: self, known: first)
+    }
+}
+
+/// What goes through the changes as they come.
+public struct NetworkChangeIterator: AsyncIterator {
+    public alias Element = NetworkChangeEvent
+
+    let changes: NetworkChangeSequence
+    var known: NetworkInterface[>..]
+    // The changes not yet given, the next last.
+    var pending: NetworkChangeEvent[>..]
+
+    init(changes: NetworkChangeSequence, known: NetworkInterface[>..]) {
+        self.changes = changes
+        self.known = known
+        self.pending = []
+    }
+
+    /// The next change, waiting for it; none once the task is cancelled.
+    public mutating fn next() async -> NetworkChangeEvent? {
+        while pending.isEmpty {
+            if Task.isCancelled {
+                return none
+            }
+            // What the system said is taken before the interfaces are
+            // listed: a change after it is said again.
+            drainChanges(changes.watch)
+            if let now = try? NetworkInterface.all() {
+                pending = NetworkChange.differences(from: known, to: now).reversed().toArray()
+                known = now
+            }
+            if pending.isEmpty {
+                await Runtime.waitForSocket(changesEvent(changes.watch), writable: false)
+            }
+        }
+        return pending.removeLast()
+    }
+}

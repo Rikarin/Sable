@@ -1,0 +1,77 @@
+module Sable.Net
+
+import Sable.IO
+
+/// Changes to this machine's network interfaces as they come: an interface
+/// up or down, added or removed, an address added or removed. .NET's
+/// `NetworkChange`. The system says something changed — a routing socket on
+/// macOS, netlink on Linux, NotifyIpInterfaceChange and
+/// NotifyUnicastIpAddressChange on Windows — and the interfaces are listed
+/// again and compared with those before (`differences`).
+///
+/// ```sable
+/// fn watch() async throws(IoError) {
+///     for await change in try NetworkChange.events() {
+///         print("\(change.interfaceName) changed")
+///     }
+/// }
+/// ```
+public struct NetworkChange {
+    /// The changes from now on, without end, until the task going through
+    /// them is cancelled. Waiting for one keeps no program going once its
+    /// main has returned.
+    public static fn events() throws(IoError) -> NetworkChangeSequence {
+        let watch = openChanges()
+        if watch == 0 {
+            throw socketError("the network's changes")
+        }
+        return NetworkChangeSequence(watch: watch, first: (try? NetworkInterface.all()) ?? [])
+    }
+
+    /// What changed from the interfaces as they were to as they are, each
+    /// by its name: those removed, those added, those up or down, and the
+    /// addresses each lost and gained.
+    ///
+    /// ```sable
+    /// let before = NetworkInterface(name: "en9", index: 9, isUp: false)
+    /// var after = NetworkInterface(name: "en9", index: 9, isUp: true)
+    /// after.addresses = [InterfaceAddress(address: IpAddress(192, 0, 2, 1), prefixLength: 24)]
+    /// let changes = NetworkChange.differences(from: [before], to: [after])
+    /// assert(changes == [.InterfaceUp(name: "en9"), .AddressAdded(interface: "en9", address: after.addresses[0])])
+    /// ```
+    public static fn differences(from before: NetworkInterface[:], to after: NetworkInterface[:]) -> NetworkChangeEvent[>..] {
+        var changes: NetworkChangeEvent[>..] = []
+        for old in before {
+            if after.firstIndex(where: { $0.name == old.name }) == none {
+                changes.append(.InterfaceRemoved(name: old.name))
+            }
+        }
+        for new in after {
+            guard let at = before.firstIndex(where: { $0.name == new.name }) else {
+                changes.append(.InterfaceAdded(name: new.name))
+                if new.isUp {
+                    changes.append(.InterfaceUp(name: new.name))
+                }
+                for address in new.addresses {
+                    changes.append(.AddressAdded(interface: new.name, address: address))
+                }
+                continue
+            }
+            let old = before[at]
+            if old.isUp != new.isUp {
+                changes.append(new.isUp ? .InterfaceUp(name: new.name) : .InterfaceDown(name: new.name))
+            }
+            for address in old.addresses {
+                if !new.addresses.contains(address) {
+                    changes.append(.AddressRemoved(interface: new.name, address: address))
+                }
+            }
+            for address in new.addresses {
+                if !old.addresses.contains(address) {
+                    changes.append(.AddressAdded(interface: new.name, address: address))
+                }
+            }
+        }
+        return changes
+    }
+}

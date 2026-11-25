@@ -808,15 +808,18 @@ static int connections_list(int protocol, PlatformConnection **rows) {
             break;
         }
 
-        if (kind == XSO_INPCB && record >= 84) {
+        // xinpcb_n: its 64-bit fields aligned to 4 bytes, the ports at 16,
+        // inp_vflag at 44, the foreign address at 48 and the local at 64.
+        if (kind == XSO_INPCB && record >= 80) {
             uint16_t ports[2];
             memcpy(ports, list + at + 16, 4);
-            bool six = (list[at + 48] & 0x2) != 0; // INP_IPV6
+            bool six = (list[at + 44] & 0x2) != 0; // INP_IPV6
             pending = connections_add(rows, &count, &capacity);
             PlatformConnection *row = &(*rows)[pending];
             row->process = -1;
-            pcb_address(list + at + 68, six, ntohs(ports[1]), &row->local);
-            pcb_address(list + at + 52, six, ntohs(ports[0]), &row->remote);
+            pcb_address(list + at + 64, six, ntohs(ports[1]), &row->local);
+            pcb_address(list + at + 48, six, ntohs(ports[0]), &row->remote);
+        // xtcpcb_n: t_state at 36.
         } else if (kind == XSO_TCPCB && pending >= 0 && record >= 40) {
             int32_t state;
             memcpy(&state, list + at + 36, 4);

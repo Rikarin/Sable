@@ -1,0 +1,60 @@
+module Sable.Net
+
+/// An IPv6 header (RFC 8200): its fixed forty bytes, before any extension
+/// header. A raw IPv6 socket neither gives nor takes one; it is what an
+/// ICMPv6 error carries of the datagram it is about.
+///
+/// ```sable
+/// let header = Ipv6Header(nextHeader: .icmpV6, source: .v6Loopback, destination: .v6Loopback, payloadLength: 8)
+/// let bytes = header.bytes()
+/// assert(bytes.count == 40 && bytes[0] >> 4 == 6 && bytes[6] == 58)
+/// assert(Ipv6Header.parse(bytes)! == header)
+/// ```
+@derive(Equatable, Debug)
+public struct Ipv6Header {
+    /// Differentiated services and congestion's bits.
+    public var trafficClass: Int = 0
+    /// What the sender says its datagrams of one flow share: 20 bits.
+    public var flowLabel: Int = 0
+    /// How many bytes follow this header.
+    public var payloadLength: Int
+    /// What follows: a protocol, or an extension header.
+    public var nextHeader: IpProtocol
+    /// How many routers it may yet pass.
+    public var hopLimit: Int = 64
+    /// Who sent it.
+    public var source: IpAddress
+    /// Whom it is for.
+    public var destination: IpAddress
+
+    public init(nextHeader: IpProtocol, source: IpAddress, destination: IpAddress, payloadLength: Int, hopLimit: Int = 64) {
+        self.nextHeader = nextHeader
+        self.source = source
+        self.destination = destination
+        self.payloadLength = payloadLength
+        self.hopLimit = hopLimit
+    }
+
+    /// The header as it is sent.
+    public fn bytes() -> U8[>..] {
+        var all: U8[>..] = [U8(0x60 | (trafficClass >> 4 & 0xF)), U8((trafficClass & 0xF) << 4 | (flowLabel >> 16 & 0xF)), U8(flowLabel >> 8 & 0xFF),
+            U8(flowLabel & 0xFF), U8(payloadLength >> 8 & 0xFF), U8(payloadLength & 0xFF), U8(nextHeader.number), U8(hopLimit & 0xFF)]
+        all.append(contentsOf: source.bytes)
+        all.append(contentsOf: destination.bytes)
+        return all
+    }
+
+    /// The header the bytes begin with; none for what is not IPv6's.
+    public static fn parse(_ bytes: U8[:]) -> Ipv6Header? {
+        if bytes.count < 40 || bytes[0] >> 4 != 6 {
+            return none
+        }
+        let source = IpAddress.fromBytes(bytes[8..<24])!
+        let destination = IpAddress.fromBytes(bytes[24..<40])!
+        var header = Ipv6Header(nextHeader: IpProtocol(number: Int(bytes[6])), source: source, destination: destination,
+            payloadLength: Int(bytes[4]) << 8 | Int(bytes[5]), hopLimit: Int(bytes[7]))
+        header.trafficClass = Int(bytes[0] & 0xF) << 4 | Int(bytes[1] >> 4)
+        header.flowLabel = Int(bytes[1] & 0xF) << 16 | Int(bytes[2]) << 8 | Int(bytes[3])
+        return header
+    }
+}

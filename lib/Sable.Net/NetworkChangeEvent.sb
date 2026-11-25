@@ -1,0 +1,33 @@
+module Sable.Net
+
+/// A change to this machine's network interfaces (`NetworkChange`): .NET's
+/// `NetworkAddressChanged` and `NetworkAvailabilityChanged`, by interface.
+@derive(Equatable, Debug)
+public union NetworkChangeEvent {
+    /// An interface came to be.
+    InterfaceAdded(name: String)
+    /// An interface went.
+    InterfaceRemoved(name: String)
+    /// An interface went up (`NetworkInterface.isUp`).
+    InterfaceUp(name: String)
+    /// An interface went down.
+    InterfaceDown(name: String)
+    /// An interface has an address it had not.
+    AddressAdded(interface: String, address: InterfaceAddress)
+    /// An interface no longer has an address.
+    AddressRemoved(interface: String, address: InterfaceAddress)
+
+    /// The interface it is of.
+    public var interfaceName: String {
+        get {
+            return match self {
+                case .InterfaceAdded(let name)    => name
+                case .InterfaceRemoved(let name)  => name
+                case .InterfaceUp(let name)       => name
+                case .InterfaceDown(let name)     => name
+                case .AddressAdded(let name, _)   => name
+                case .AddressRemoved(let name, _) => name
+            }
+        }
+    }
+}

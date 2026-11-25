@@ -1,0 +1,14 @@
+module Sable.Net
+
+/// UDP's counters since the system started (`NetworkStatistics.udp`):
+/// .NET's `UdpStatistics`. Each is none where the system does not count it.
+public struct UdpStatistics {
+    /// Datagrams delivered.
+    public let datagramsReceived: Int?
+    /// Datagrams sent.
+    public let datagramsSent: Int?
+    /// Datagrams to a port no socket had.
+    public let noPort: Int?
+    /// Datagrams dropped for an error in them.
+    public let receiveErrors: Int?
+}

@@ -1,0 +1,20 @@
+module Sable.Net
+
+/// How a ping is sent (`Ping.send`): .NET's `PingOptions`, and the size of
+/// its payload.
+///
+/// ```sable
+/// let options = PingOptions { ttl: 3, dontFragment: true }
+/// assert(options.payloadSize == 32)
+/// ```
+public struct PingOptions {
+    /// How many routers it may pass (IPv6's hop limit).
+    public var ttl: Int = 64
+
+    /// Whether it may not be broken up on the way: one too long for a link
+    /// then comes back as `PingStatus.PacketTooBig`.
+    public var dontFragment: Bool = false
+
+    /// How many bytes it carries, after its header.
+    public var payloadSize: Int = 32
+}

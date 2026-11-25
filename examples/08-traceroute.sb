@@ -1,0 +1,72 @@
+module Examples.Traceroute
+
+import Sable.IO
+import Sable.Net
+import Sable.Time
+
+// ---------------------------------------------------------------------------
+// traceroute: the routers on the way to an address, found as the real one
+// finds them. An ICMP echo is sent with a time to live of 1, then 2, and so
+// on: the router at which it runs out says so (time exceeded), and the
+// address itself answers once the echo reaches it.
+//
+//     sudo sable run examples/08-traceroute.sb -- 192.0.2.1
+//
+// A raw socket needs root (or CAP_NET_RAW). Without it the ICMP socket macOS
+// gives anyone is used, which sees the routers' answers too; Linux's keeps
+// them in its error queue, where this program does not look, so there each
+// router is a '*'. With no address it traces the loopback address: one hop.
+// ---------------------------------------------------------------------------
+
+/// The socket to send by: a raw one if the program may have it.
+fn openSocket() throws(IoError) -> RawSocket {
+    do {
+        return try RawSocket.open(.V4, protocol: .icmp)
+    } catch {
+        return try RawSocket.icmp(.V4)
+    }
+}
+
+/// What came back for the echo of the sequence, waiting no longer than the
+/// limit: who answered, and whether it was the address itself.
+fn probe(_ socket: RawSocket, to address: IpAddress, hops: Int, identifier: Int, sequence: Int, limit: Duration) async throws(IoError) -> (IpAddress, Bool)? {
+    try socket.setHopLimit(hops)
+    let echo = IcmpMessage.echoRequest(.V4, identifier: identifier, sequence: sequence, payload: U8[>..](repeating: 0x5A, count: 24))
+    try await socket.send(echo.bytes(), to: address)
+    // Linux gives an ICMP socket's echoes an identifier of its own.
+    #if os(linux)
+    let anyIdentifier = socket.isDatagram
+    #else
+    let anyIdentifier = false
+    #endif
+    return await Task.limited(nanoseconds: limit.totalNanoseconds) { () -> (IpAddress, Bool)? in
+        while true {
+            guard let datagram = try? await socket.receive() else {
+                return none
+            }
+            let from = datagram.source.ip
+            if let status = PingStatus.of(datagram.bytes, family: .V4, from: from, identifier: anyIdentifier ? none : identifier, sequence: sequence) {
+                return (from, status == PingStatus.Success)
+            }
+        }
+    } ?? none
+}
+
+fn main() async throws {
+    let target = Environment.arguments().first ?? "127.0.0.1"
+    let address = try IpAddress.parse(target)
+    let socket = try openSocket()
+    print("traceroute to \(address), 30 hops at most\(socket.isDatagram ? ", by an ICMP socket" : "")")
+    let identifier = Int.random(in: 0..<65536)
+    for hops in 1...30 {
+        let start = Instant.now()
+        guard let (from, arrived) = try await probe(socket, to: address, hops: hops, identifier: identifier, sequence: hops, limit: Duration.seconds(1)) else {
+            print("\(hops)  *")
+            continue
+        }
+        print("\(hops)  \(from)  \(start.elapsed)")
+        if arrived {
+            return
+        }
+    }
+}

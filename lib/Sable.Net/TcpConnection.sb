@@ -1,0 +1,17 @@
+module Sable.Net
+
+/// A TCP connection, or listener, of this machine's, as the system listed
+/// it (`NetworkStatistics.tcpConnections`): .NET's `TcpConnectionInformation`.
+public struct TcpConnection {
+    /// This end.
+    public let local: SocketAddress
+
+    /// The other end: any address and port 0 for a listener.
+    public let remote: SocketAddress
+
+    /// Where it is in its life.
+    public let state: TcpState
+
+    /// The process it is of, where the system says (Windows).
+    public let processId: Int?
+}

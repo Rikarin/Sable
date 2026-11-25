@@ -50,18 +50,18 @@ public union CertificateError: Error {
     /// What is wrong.
     public fn description() -> String {
         return match self {
-            case .Malformed(let reason)        => reason
-            case .Unsupported(let reason)      => reason
-            case .Expired(let subject)         => "the certificate of \(subject) has expired"
-            case .NotYetValid(let subject)     => "the certificate of \(subject) is not valid yet"
-            case .HostMismatch(let host)       => "the certificate is not for \(host)"
-            case .NotForPurpose(let reason)    => reason
-            case .UnknownIssuer(let issuer)    => "nothing trusted has issued a certificate of \(issuer)"
+            case .Malformed(let reason)         => reason
+            case .Unsupported(let reason)       => reason
+            case .Expired(let subject)          => "the certificate of \(subject) has expired"
+            case .NotYetValid(let subject)      => "the certificate of \(subject) is not valid yet"
+            case .HostMismatch(let host)        => "the certificate is not for \(host)"
+            case .NotForPurpose(let reason)     => reason
+            case .UnknownIssuer(let issuer)     => "nothing trusted has issued a certificate of \(issuer)"
             case .InvalidSignature(let subject) => "the signature of the certificate of \(subject) is not its issuer's"
-            case .NameNotPermitted(let reason) => reason
-            case .Invalid(let reason)          => reason
-            case .Revoked(let subject)         => "the certificate of \(subject) has been revoked"
-            case .LimitExceeded(let reason)    => reason
+            case .NameNotPermitted(let reason)  => reason
+            case .Invalid(let reason)           => reason
+            case .Revoked(let subject)          => "the certificate of \(subject) has been revoked"
+            case .LimitExceeded(let reason)     => reason
         }
     }
 }

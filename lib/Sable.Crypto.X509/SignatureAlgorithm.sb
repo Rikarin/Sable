@@ -130,7 +130,7 @@ public union SignatureAlgorithm: Sendable {
     fn write(_ writer: AsnWriter) throws(AsnError) {
         try writer.beginSequence()
         match self {
-            case .Ecdsa(let hash)    => try writer.writeObjectIdentifier(SignatureIdentifiers.ecdsa[SignatureIdentifiers.index(hash)])
+            case .Ecdsa(let hash) => try writer.writeObjectIdentifier(SignatureIdentifiers.ecdsa[SignatureIdentifiers.index(hash)])
             case .RsaPkcs1(let hash) => {
                 try writer.writeObjectIdentifier(SignatureIdentifiers.rsa[SignatureIdentifiers.index(hash)])
                 try writer.writeNull()
@@ -205,10 +205,10 @@ public union SignatureAlgorithm: Sendable {
     /// The message's signature by a key of the algorithm.
     fn sign(_ message: U8[:], with key: PrivateKey) throws(CertificateError) -> U8[>..] {
         match (self, key) {
-            case (.Ecdsa(let hash), .P256(let own))     => { return own.sign(message, hash: hash).der }
-            case (.Ecdsa(let hash), .P384(let own))     => { return own.sign(message, hash: hash).der }
-            case (.Ecdsa(let hash), .P521(let own))     => { return own.sign(message, hash: hash).der }
-            case (.RsaPkcs1(let hash), .Rsa(let own))   => { return own.sign(message, padding: .Pkcs1(hash)) }
+            case (.Ecdsa(let hash), .P256(let own))   => { return own.sign(message, hash: hash).der }
+            case (.Ecdsa(let hash), .P384(let own))   => { return own.sign(message, hash: hash).der }
+            case (.Ecdsa(let hash), .P521(let own))   => { return own.sign(message, hash: hash).der }
+            case (.RsaPkcs1(let hash), .Rsa(let own)) => { return own.sign(message, padding: .Pkcs1(hash)) }
             case (.RsaPss(let hash, let maskHash, let saltByteCount), .Rsa(let own)) => {
                 return own.sign(message, padding: .PssParameters(hash, maskHash: maskHash, saltByteCount: saltByteCount))
             }

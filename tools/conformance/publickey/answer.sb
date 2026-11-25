@@ -176,7 +176,7 @@ fn answer(_ words: String[>..]) -> String {
                     case _           => ecdh(P521.self, words)
                 }
             }
-            case "x25519"  => { return x25519(words) }
+            case "x25519" => { return x25519(words) }
             case "ed25519" => {
                 // ed25519 <key> <message> <signature>
                 let key = try Ed25519PublicKey(bytes(words[1]))

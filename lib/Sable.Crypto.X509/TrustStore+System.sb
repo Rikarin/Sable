@@ -1,0 +1,126 @@
+module Sable.Crypto.X509
+
+import Sable.IO
+
+extension TrustStore {
+    /// What the system trusts, read anew at each call: on macOS the
+    /// Security framework's roots and what the user and the administrator
+    /// have set, on Windows the ROOT store without the Disallowed one, and
+    /// elsewhere the bundle of certificates the distribution has, or that
+    /// SSL_CERT_FILE or SSL_CERT_DIR names. Those are asked for wherever they
+    /// are set, instead of the system's.
+    ///
+    /// The certificates alone are the system's: what is asked of a path, and
+    /// the mathematics, are this module's on every system.
+    ///
+    /// ```sable
+    /// let roots = TrustStore.system()
+    /// _ = CertificateVerifier(roots: roots)
+    /// ```
+    public static fn system() -> TrustStore {
+        if let file = Environment.variable("SSL_CERT_FILE") {
+            return TrustStore(readFile(file))
+        }
+        if let directory = Environment.variable("SSL_CERT_DIR") {
+            return TrustStore(readDirectory(directory))
+        }
+        if let store = native() {
+            return store
+        }
+        for file in trustFiles {
+            let found = readFile(file)
+            if !found.isEmpty {
+                return TrustStore(found)
+            }
+        }
+        return TrustStore(readDirectory("/etc/ssl/certs"))
+    }
+
+    static fn readFile(_ path: String) -> Certificate[>..] {
+        guard let text = try? File.read(path), let store = try? TrustStore.parse(bundle: text) else {
+            return []
+        }
+        return store.certificates
+    }
+
+    static fn readDirectory(_ path: String) -> Certificate[>..] {
+        var all: Certificate[>..] = []
+        guard let names = try? Directory.list(path) else {
+            return all
+        }
+        for name in names {
+            for certificate in readFile(path + "/" + name) {
+                // A directory has each by its name and by its hash.
+                if !all.contains(certificate) {
+                    all.append(certificate)
+                }
+            }
+        }
+        return all
+    }
+
+    /// The runtime's, if it has any: what is trusted and not distrusted.
+    static fn native() -> TrustStore? {
+        let address = NativeTrust.load()
+        if address == 0 {
+            return none
+        }
+        var trusted: Certificate[>..] = []
+        var distrusted: Certificate[>..] = []
+        unsafe {
+            defer {
+                NativeTrust.free(address)
+            }
+            let count = RawPtr<U8>(address: address).load(as: U64.self) unchecked as Int
+            var at = address + 8
+            let end = at + count
+            while at < end {
+                let isTrusted = RawPtr<U8>(address: at).load() == 1
+                let size = Int(RawPtr<U8>(address: at + 1).load(as: U32.self))
+                var der = U8[>..]()
+                der.reserveCapacity(size)
+                var i = 0
+                while i < size {
+                    der.append(RawPtr<U8>(address: at + 5).load(at: i))
+                    i += 1
+                }
+                at += 5 + size
+                if let certificate = try? Certificate.parse(der: der) {
+                    if isTrusted {
+                        trusted.append(certificate)
+                    } else {
+                        distrusted.append(certificate)
+                    }
+                }
+            }
+        }
+        if !distrusted.isEmpty {
+            let refused = TrustStore(distrusted)
+            var rest: Certificate[>..] = []
+            for certificate in trusted {
+                if !refused.contains(certificate) {
+                    rest.append(certificate)
+                }
+            }
+            trusted = rest
+        }
+        return TrustStore(trusted)
+    }
+}
+
+/// The runtime's part (runtime/trust.c).
+struct NativeTrust {
+    /// The address of the system's certificates, to be freed, or 0 where the
+    /// runtime has none.
+    @builtin("trust_load")
+    static fn load() -> Int
+
+    @builtin("trust_free")
+    unsafe static fn free(_ address: Int)
+}
+
+// Debian's and Alpine's, Fedora's and RHEL's, openSUSE's, and others'.
+let trustFiles: String[>..] = [
+    "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", "/etc/pki/tls/cacert.pem", "/etc/ssl/cert.pem",
+]

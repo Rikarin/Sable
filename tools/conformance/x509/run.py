@@ -29,6 +29,10 @@ FEATURES = {
 CASES = {
     "rfc5280::nc::permitted-dns-match-noncritical": "a name constraint that is not critical is taken, as webpki::nc::permitted-dns-match-noncritical has it",
 }
+# A common name that is no alternative one, with which limbo's own
+# webpki::cn::not-in-san and its neighbours are to be refused.
+for each in ("webpki::nc::nc-permits-dns-san-pattern", "webpki::san::exact-localhost-ip-san", "webpki::san::leftmost-wildcard-san"):
+    CASES[each] = "a common name that is no alternative one, which webpki::cn::not-in-san refuses"
 
 # The profile each part is of, where none is asked for.
 PROFILES = {"webpki": "webpki", "bettertls": "compatible", "online": "compatible", "cve": "compatible"}

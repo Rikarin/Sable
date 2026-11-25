@@ -68,9 +68,9 @@ public union GeneralName: Formattable, Sendable {
                 }
                 self = .Ip(bytes.toArray())
             }
-            case 8 => { self = .RegisteredId(try reader.readObjectIdentifier(tag: .context(8))) }
+            case 8    => { self = .RegisteredId(try reader.readObjectIdentifier(tag: .context(8))) }
             case 3, 5 => { self = .Unknown(try reader.readEncoded().toArray()) }
-            case _ => { throw AsnError.Malformed(at: at, reason: "a name of kind \(tag.number)") }
+            case _    => { throw AsnError.Malformed(at: at, reason: "a name of kind \(tag.number)") }
         }
     }
 
@@ -97,17 +97,17 @@ public union GeneralName: Formattable, Sendable {
                 try writer.endExplicit()
                 try writer.endSequence()
             }
-            case .Email(let text)     => try writer.writeString(text, .Ia5, tag: .context(1))
-            case .Dns(let text)       => try writer.writeString(text, .Ia5, tag: .context(2))
+            case .Email(let text) => try writer.writeString(text, .Ia5, tag: .context(1))
+            case .Dns(let text)   => try writer.writeString(text, .Ia5, tag: .context(2))
             case .Directory(let name) => {
                 try writer.beginExplicit(.context(4))
                 try writer.writeEncoded(name.der)
                 try writer.endExplicit()
             }
-            case .Uri(let text)         => try writer.writeString(text, .Ia5, tag: .context(6))
-            case .Ip(let bytes)         => try writer.writeOctetString(bytes, tag: .context(7))
-            case .RegisteredId(let id)  => try writer.writeObjectIdentifier(id, tag: .context(8))
-            case .Unknown(let encoded)  => try writer.writeEncoded(encoded)
+            case .Uri(let text)        => try writer.writeString(text, .Ia5, tag: .context(6))
+            case .Ip(let bytes)        => try writer.writeOctetString(bytes, tag: .context(7))
+            case .RegisteredId(let id) => try writer.writeObjectIdentifier(id, tag: .context(8))
+            case .Unknown(let encoded) => try writer.writeEncoded(encoded)
         }
     }
 

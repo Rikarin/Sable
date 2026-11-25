@@ -108,7 +108,7 @@ the same (`sable bench benchmarks/library`), a module has a name of its own.
 
 Then its ports, named the same. They compute the same line, keep the checks
 (integer overflow and bounds), and use nothing outside their language's
-standard library, where .NET's includes `System.Numerics.Tensors`. What they
+standard library, where .NET's includes `System.Numerics.Tensors` and `System.IO.Hashing`. What they
 write, they write in the directory they are run in, and remove.
 
 - .NET: a static class named after the folder (`LibraryMapInt`) with

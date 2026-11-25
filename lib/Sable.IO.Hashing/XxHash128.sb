@@ -1,0 +1,71 @@
+module Sable.IO.Hashing
+
+/// XXH3's 128-bit hash, with a seed: as XxHash3, with a second half, for
+/// fingerprints that must not collide among billions.
+///
+/// ```sable
+/// assert(XxHash128.hash([]) == 0x99AA06D3014798D86001C324468D497F)
+/// assert(XxHash128.hash("123456789".utf8Bytes()) == 0x33119477EDE5DCD5E9716427681D5860)
+/// var hash = XxHash128(seed: 7)
+/// hash.update(utf8: "1234")
+/// hash.update(utf8: "56789")
+/// assert(hash.value == XxHash128.hash("123456789".utf8Bytes(), seed: 7))
+/// ```
+public struct XxHash128: NonCryptographicHash {
+    var stream: Xxh3Stream
+
+    /// With a seed of zero, nothing given yet.
+    public init() {
+        self.init(seed: 0)
+    }
+
+    /// With the seed, nothing given yet.
+    public init(seed: U64) {
+        stream = Xxh3Stream(seed: seed)
+    }
+
+    /// The seed it hashes with.
+    public var seed: U64 => stream.seed
+
+    /// Sixteen bytes.
+    public static var hashByteCount: Int => 16
+
+    /// The hash of the bytes, at once: the high 64 bits xxHash's 'high64'.
+    public static fn hash(_ bytes: U8[:], seed: U64 = 0) -> U128 {
+        let count = bytes.count
+        if count > xxh3MidSizeMax && seed != 0 {
+            let secret = xxh3Secret(seed: seed)
+            return secret.withPointer { (key: RawPtr<U8>) -> U128 in
+                bytes.withPointer { (start: RawPtr<U8>) -> U128 in
+                    unsafe {
+                        return xxh3Finish128(xxh3Long(start.address, count, key.address), key.address, count unchecked as U64)
+                    }
+                }
+            }
+        }
+        return bytes.withPointer { (start: RawPtr<U8>) -> U128 in
+            unsafe {
+                if count <= xxh3MidSizeMax {
+                    return xxh3Short128(start.address, count, seed)
+                }
+                let key = xxh3DefaultSecret()
+                return xxh3Finish128(xxh3Long(start.address, count, key), key, count unchecked as U64)
+            }
+        }
+    }
+
+    public mutating fn update(_ bytes: U8[:]) {
+        stream.update(bytes)
+    }
+
+    public mutating fn reset() {
+        stream.reset()
+    }
+
+    /// The hash of every byte given so far.
+    public var value: U128 => stream.digest128()
+
+    /// The hash as sixteen bytes, the most significant first, as xxHash's
+    /// canonical form is.
+    public fn hashBytes() -> U8[>..] => value.bigEndianBytes()
+}

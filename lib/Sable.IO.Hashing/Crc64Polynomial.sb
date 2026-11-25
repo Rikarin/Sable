@@ -1,0 +1,14 @@
+module Sable.IO.Hashing
+
+/// Which CRC-64 a `Crc64` is, as .NET's `Crc64ParameterSet`s are.
+@derive(Equatable, Hashable, Debug)
+public enum Crc64Polynomial {
+    /// ECMA-182's, 0x42F0E1EBA9EA3693, not reflected, from a state of zero
+    /// and not complemented (CRC-64/ECMA-182): .NET's `Crc64` by default.
+    /// Of "123456789", 0x6C40DF5F0B497347.
+    Ecma182
+    /// NVM Express's, 0xAD93D23594C93659, reflected, from all ones and
+    /// complemented at the end (CRC-64/NVME). Of "123456789",
+    /// 0xAE8B14860A799888.
+    Nvme
+}

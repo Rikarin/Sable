@@ -1,0 +1,210 @@
+module Sable.IO.Hashing
+
+/// XXH32, xxHash's 32-bit hash, with a seed: four lanes of 32-bit words, 16
+/// bytes a step, for formats that name it (LZ4's frames).
+///
+/// ```sable
+/// assert(XxHash32.hash([]) == 0x02CC5D05)
+/// assert(XxHash32.hash("123456789".utf8Bytes()) == 0x937BAD67)
+/// var hash = XxHash32(seed: 7)
+/// hash.update(utf8: "1234")
+/// hash.update(utf8: "56789")
+/// assert(hash.value == XxHash32.hash("123456789".utf8Bytes(), seed: 7))
+/// ```
+public struct XxHash32: NonCryptographicHash {
+    var lanes: Xxh32Lanes
+    /// Fewer than 16 bytes that do not fill a stripe yet.
+    var held: U8[>..]
+    var heldCount: Int
+    var length: U64
+
+    /// The seed it hashes with.
+    public let seed: U32
+
+    /// With a seed of zero, nothing given yet.
+    public init() {
+        self.init(seed: 0)
+    }
+
+    /// With the seed, nothing given yet.
+    public init(seed: U32) {
+        self.seed = seed
+        lanes = Xxh32Lanes(seed: seed)
+        held = []
+        heldCount = 0
+        length = 0
+    }
+
+    /// Four bytes.
+    public static var hashByteCount: Int => 4
+
+    /// The hash of the bytes, at once.
+    public static fn hash(_ bytes: U8[:], seed: U32 = 0) -> U32 {
+        return bytes.withPointer { (start: RawPtr<U8>) -> U32 in
+            unsafe {
+                let count = bytes.count
+                var lanes = Xxh32Lanes(seed: seed)
+                let whole = start.address &+ (count & ~15)
+                if count >= 16 {
+                    lanes.stripes(start.address, whole)
+                }
+                return xxh32Finish(lanes, count >= 16, seed, count unchecked as U64, whole, start.address &+ count)
+            }
+        }
+    }
+
+    public mutating fn update(_ bytes: U8[:]) {
+        if bytes.count == 0 {
+            return
+        }
+        length = length &+ (bytes.count unchecked as U64)
+        var at = 0
+        if heldCount > 0 || bytes.count < 16 {
+            if held.count == 0 {
+                held = U8[>..](repeating: 0, count: 16)
+            }
+            let taken = 16 - heldCount < bytes.count ? 16 - heldCount : bytes.count
+            var i = 0
+            while i < taken {
+                held[heldCount + i] = bytes[i]
+                i += 1
+            }
+            heldCount += taken
+            at = taken
+            if heldCount < 16 {
+                return
+            }
+            var lanes = self.lanes
+            held.withPointer { (room: RawPtr<U8>) in
+                unsafe {
+                    lanes.stripes(room.address, room.address &+ 16)
+                }
+            }
+            self.lanes = lanes
+            heldCount = 0
+        }
+        let whole = at + (bytes.count - at) / 16 * 16
+        if whole > at {
+            var lanes = self.lanes
+            bytes.withPointer { (start: RawPtr<U8>) in
+                unsafe {
+                    lanes.stripes(start.address &+ at, start.address &+ whole)
+                }
+            }
+            self.lanes = lanes
+        }
+        if whole < bytes.count {
+            if held.count == 0 {
+                held = U8[>..](repeating: 0, count: 16)
+            }
+            var i = whole
+            while i < bytes.count {
+                held[i - whole] = bytes[i]
+                i += 1
+            }
+            heldCount = bytes.count - whole
+        }
+    }
+
+    public mutating fn reset() {
+        lanes = Xxh32Lanes(seed: seed)
+        heldCount = 0
+        length = 0
+    }
+
+    /// The hash of every byte given so far.
+    public var value: U32 {
+        get {
+            let lanes = self.lanes
+            let seed = self.seed
+            let length = self.length
+            let count = heldCount
+            if count == 0 {
+                unsafe {
+                    return xxh32Finish(lanes, length >= 16, seed, length, 0, 0)
+                }
+            }
+            return held.withPointer { (room: RawPtr<U8>) -> U32 in
+                unsafe {
+                    return xxh32Finish(lanes, length >= 16, seed, length, room.address, room.address &+ count)
+                }
+            }
+        }
+    }
+
+    /// The hash as four bytes, the most significant first, as xxHash's
+    /// canonical form is.
+    public fn hashBytes() -> U8[>..] => value.bigEndianBytes()
+}
+
+const xxPrime32a: U32 = 0x9E37_79B1
+
+const xxPrime32b: U32 = 0x85EB_CA77
+
+const xxPrime32c: U32 = 0xC2B2_AE3D
+
+const xxPrime32d: U32 = 0x27D4_EB2F
+
+const xxPrime32e: U32 = 0x1656_67B1
+
+/// XXH32's four lanes.
+struct Xxh32Lanes {
+    var a: U32
+    var b: U32
+    var c: U32
+    var d: U32
+
+    init(seed: U32) {
+        a = seed &+ xxPrime32a &+ xxPrime32b
+        b = seed &+ xxPrime32b
+        c = seed
+        d = seed &- xxPrime32a
+    }
+
+    /// The 16-byte stripes from an address to another.
+    @inline(always)
+    unsafe mutating fn stripes(_ address: Int, _ end: Int) {
+        var a = self.a
+        var b = self.b
+        var c = self.c
+        var d = self.d
+        var at = address
+        while at < end {
+            a = xxh32Round(a, load32(at))
+            b = xxh32Round(b, load32(at &+ 4))
+            c = xxh32Round(c, load32(at &+ 8))
+            d = xxh32Round(d, load32(at &+ 12))
+            at = at &+ 16
+        }
+        self.a = a
+        self.b = b
+        self.c = c
+        self.d = d
+    }
+}
+
+@inline(always)
+fn xxh32Round(_ lane: U32, _ word: U32) -> U32 {
+    return (lane &+ word &* xxPrime32b).rotatedLeft(by: 13) &* xxPrime32a
+}
+
+/// The hash, from the lanes (if 16 bytes or more were given) and the bytes
+/// after the last stripe, from one address to another.
+unsafe fn xxh32Finish(_ lanes: Xxh32Lanes, _ striped: Bool, _ seed: U32, _ length: U64, _ address: Int, _ end: Int) -> U32 {
+    var hash: U32 = striped
+        ? lanes.a.rotatedLeft(by: 1) &+ lanes.b.rotatedLeft(by: 7) &+ lanes.c.rotatedLeft(by: 12) &+ lanes.d.rotatedLeft(by: 18)
+        : seed &+ xxPrime32e
+    hash = hash &+ (length unchecked as U32)
+    var at = address
+    while at &+ 4 <= end {
+        hash = (hash &+ load32(at) &* xxPrime32c).rotatedLeft(by: 17) &* xxPrime32d
+        at = at &+ 4
+    }
+    while at < end {
+        hash = (hash &+ (load8(at) unchecked as U32) &* xxPrime32e).rotatedLeft(by: 11) &* xxPrime32a
+        at = at &+ 1
+    }
+    hash = (hash ^ (hash >> 15)) &* xxPrime32b
+    hash = (hash ^ (hash >> 13)) &* xxPrime32c
+    return hash ^ (hash >> 16)
+}

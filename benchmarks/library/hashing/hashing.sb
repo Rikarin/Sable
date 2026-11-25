@@ -1,0 +1,68 @@
+module HashingBench
+
+// Sable.IO.Hashing against .NET's System.IO.Hashing: each hash of a megabyte,
+// two hundred times, and of 256 bytes and of 16, a hundred thousand times,
+// the input changed by what the last gave. What it comes to is the sum of the
+// hashes' low bytes.
+
+import Sable.IO.Hashing
+import Sable.Testing
+
+fn sample(_ count: Int) -> U8[>..] {
+    var bytes = U8[>..](repeating: 0, count: count)
+    var state: U64 = 1
+    var i = 0
+    while i < count {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        bytes[i] = U8(state >> 56)
+        i += 1
+    }
+    return bytes
+}
+
+let names = ["crc32", "crc32c", "crc64", "crc64nvme", "adler32", "xxh32", "xxh64", "xxh3", "xxh128"]
+
+fn once(_ hash: Int, _ bytes: U8[:]) -> U64 {
+    return match hash {
+        case 0 => U64(Crc32.hash(bytes))
+        case 1 => U64(Crc32.hash(bytes, polynomial: .Castagnoli))
+        case 2 => Crc64.hash(bytes)
+        case 3 => Crc64.hash(bytes, polynomial: .Nvme)
+        case 4 => U64(Adler32.hash(bytes))
+        case 5 => U64(XxHash32.hash(bytes))
+        case 6 => XxHash64.hash(bytes)
+        case 7 => XxHash3.hash(bytes)
+        case _ => U64.truncating(XxHash128.hash(bytes))
+    }
+}
+
+fn run(_ name: String, _ input: U8[>..], _ rounds: Int) -> String {
+    let hash = names.firstIndex(of: name)!
+    var bytes = input
+    var total: U64 = 0
+    var round = 0
+    while round < rounds {
+        let value = once(hash, bytes)
+        total = total &+ (value & 0xFF)
+        bytes[round % bytes.count] = U8(value & 0xFF)
+        round += 1
+    }
+    return "\(total)"
+}
+
+@bench(arguments: [
+    ("crc32", 1_048_576, 200), ("crc32", 256, 100_000), ("crc32", 16, 100_000),
+    ("crc32c", 1_048_576, 200),
+    ("crc64", 1_048_576, 200), ("crc64", 256, 100_000), ("crc64", 16, 100_000),
+    ("crc64nvme", 1_048_576, 200),
+    ("adler32", 1_048_576, 200), ("adler32", 256, 100_000), ("adler32", 16, 100_000),
+    ("xxh32", 1_048_576, 200), ("xxh32", 256, 100_000), ("xxh32", 16, 100_000),
+    ("xxh64", 1_048_576, 200), ("xxh64", 256, 100_000), ("xxh64", 16, 100_000),
+    ("xxh3", 1_048_576, 200), ("xxh3", 256, 100_000), ("xxh3", 16, 100_000),
+    ("xxh128", 1_048_576, 200), ("xxh128", 256, 100_000), ("xxh128", 16, 100_000),
+])
+fn measure(_ b: Bencher, _ name: String, _ size: Int, _ rounds: Int) {
+    let input = sample(size)
+    b.bytesPerIteration = size * rounds
+    b.check(b.iterate { run(name, input, rounds) })
+}

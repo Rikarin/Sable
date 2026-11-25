@@ -63,6 +63,7 @@ lib/Sable.Crypto/PortableGhash.sb                   0   0   # run only where the
 lib/Sable.Crypto/PortableModes.sb                   0   0   # run only where the processor has no AES of its own; CryptoTests runs it everywhere
 lib/Sable.Crypto/PortablePoly1305.sb                0   0   # run only where the runtime has no kernel; CryptoTests runs it everywhere
 lib/Sable.Crypto/PortableChaCha.sb                 60  20   # run whole only where the runtime has no kernel; CryptoTests runs it everywhere
+lib/Sable.IO.Hashing/CrcKernels.sb                10   0   # its tables run only where the runtime has no CRC kernel; HashingTests runs them everywhere
 lib/Sable.Crypto/Cipher.sb                         20  10   # the portable half is run only where there is no kernel; CryptoTests runs it everywhere
 lib/Sable.Crypto/AesKey.sb                         55  50   # the portable half is run only where there is no kernel; CryptoTests runs it everywhere
 lib/Sable.Crypto/LazyTable.sb                     80  70   # the rest is the thread that lost a race to make a table

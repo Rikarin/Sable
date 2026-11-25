@@ -1,0 +1,52 @@
+module XxHash3Tests
+
+// XxHash3 (Sable.IO.Hashing), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.IO.Hashing
+
+import HashingSupport
+import Sable.IO.Hashing
+import Sable.Testing
+
+@test
+fn knownValues() {
+    expect(XxHash3.hash([]) == 0x2D06800538D394C2)
+    expect(XxHash3.hash("123456789".utf8Bytes()) == 0x72DCB18B67A17DFF)
+}
+
+@test(arguments: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+fn eachLengthOfTheSanityBuffer(_ index: Int) {
+    let bytes = sanityBuffer(vectorLengths[index])
+    expect("\(XxHash3.hash(bytes):x)" == vectors["xxh3"]![index])
+    expect("\(XxHash3.hash(bytes, seed: vectorSeed):x)" == seededVectors["xxh3"]![index])
+}
+
+@test(arguments: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+fn eachLengthInPieces(_ index: Int) {
+    let bytes = sanityBuffer(vectorLengths[index])
+    for sizes in pieceSizes {
+        expect(inPieces(XxHash3(), bytes, sizes) { "\($0.value:x)" } == vectors["xxh3"]![index])
+        expect(inPieces(XxHash3(seed: vectorSeed), bytes, sizes) { "\($0.value:x)" } == seededVectors["xxh3"]![index])
+    }
+}
+
+@test
+fn theBytesAreTheMostSignificantFirst() {
+    expect(XxHash3.hashBytes("123456789".utf8Bytes()) == [0x72, 0xDC, 0xB1, 0x8B, 0x67, 0xA1, 0x7D, 0xFF])
+    expect(XxHash3.hashByteCount == 8)
+}
+
+@test
+fn aCopyGoesOnFromWhereItWasMadeAndResetKeepsTheSeed() {
+    let bytes = sanityBuffer(1000)
+    var hash = XxHash3(seed: 7)
+    hash.update(bytes[..<300])
+    var copy = hash
+    hash.update(bytes[300...])
+    expect(hash.value == XxHash3.hash(bytes, seed: 7))
+    expect(copy.seed == 7)
+    copy.update(bytes[300..<400])
+    expect(copy.value == XxHash3.hash(bytes[..<400], seed: 7))
+    copy.reset()
+    copy.update(bytes)
+    expect(copy.value == hash.value)
+}

@@ -1082,6 +1082,10 @@ Sable.IO.Compression Deflate Zlib Gzip Zstd Brotli (below), all at once, as they
                     (Compressor, Decompressor) and as readers and writers
                     that compress, async ones too, with limits on what is
                     decompressed
+Sable.IO.Hashing    the non-cryptographic hashes, System.IO.Hashing's: Crc32
+                    (IEEE 802.3 and Castagnoli), Crc64 (ECMA-182 and NVMe),
+                    Adler32, XxHash32, XxHash64, XxHash3 and XxHash128, at
+                    once and as they come (NonCryptographicHash; below)
 Sable.IO.Archives   ZipArchive (random access by the central directory,
                     Zip64) ZipWriter (to anything, with descriptors) Zip
                     (create, extract, update), TarReader TarWriter (old,
@@ -1585,6 +1589,47 @@ busy machine, Sable's over .NET's; "before" is the same without these):
 | utf16 | 2.76 | 1.32 |
 | utf8-validate (as it was) | — | 0.30 |
 
+### Hashing
+
+`Sable.IO.Hashing` is .NET's System.IO.Hashing: hashes that find accidental
+changes and spread keys, none of them for what an adversary chooses (that is
+Sable.Crypto). Each is a struct that is a `NonCryptographicHash` — `init()`,
+`update(_:)`, `reset()`, `hashBytes()` in its format's byte order, as .NET's
+`GetCurrentHash` writes it — with its result as a number, `value`, and a static
+`hash(_:)` of bytes at once; a copy goes on from where it was made.
+
+| | | bytes |
+|:--|:--|:--|
+| `Crc32` | `.Ieee` (gzip, zip, PNG; the default) or `.Castagnoli` (CRC-32C) | little-endian |
+| `Crc64` | `.Ecma182` (.NET's `Crc64`; the default) or `.Nvme` | big-endian |
+| `Adler32` | zlib's | big-endian |
+| `XxHash32`, `XxHash64` | a seed | big-endian |
+| `XxHash3`, `XxHash128` | XXH3, a seed (no secret of one's own, as in .NET) | big-endian |
+
+- **CRCs.** Where the processor multiplies without carries (x86-64's
+  PCLMULQDQ with SSE4.2, AArch64's PMULL with CRC32) `runtime/checksums.c`
+  does them: sixty-four bytes a step folded into four lanes, by constants
+  for each polynomial, reflected or not (one kernel); the sixteen bytes that
+  stand for the folded ones, and what is short of sixty-four, by the CRC
+  instructions where the polynomial has them (AArch64's CRC-32 and CRC-32C,
+  SSE4.2's CRC-32C) and by tables eight bytes a step where not.
+  Elsewhere, under `SABLE_PORTABLE=1` and in the interpreter, the same tables
+  in Sable. `tools/conformance/hashing/` holds every CRC, and Adler-32, to one
+  computed a bit at a time from the catalogue's parameters at each length to
+  4160, and the xxHashes to xxHash's sanity vectors (`README`).
+- **Adler-32** keeps 32 lanes of sums a vector at a time, and reduces them
+  modulo 65521 every 5536 bytes.
+- **XXH3** accumulates eight 64-bit lanes as one `SIMD<U64, 8>`, 64 bytes a
+  stripe: on NEON, four `umlal`s and an `ext` a stripe. A seed other than zero
+  makes a secret of 192 bytes for an input past 240 (allocated, where .NET
+  keeps it on the stack).
+
+Against .NET 11's System.IO.Hashing 11.0 (`benchmarks/library/hashing`, Apple
+M1 Max): a megabyte is hashed in 0.50 (Adler-32) to 1.0 (XXH32, XXH64) of
+.NET's time, and the CRCs and XXH3 in 0.75 to 0.85; 256 bytes in 0.95 to 1.16.
+Sixteen bytes take 1.2 to 3 times as long: what a call costs around the work,
+the slice's pointer taken in a closure among it, is most of it there.
+
 ### Compression
 
 `Sable.IO.Compression` is written in Sable, not bound to zlib. A codec works
@@ -1629,8 +1674,8 @@ runs the codecs in `CompressionTests`.
 - A decoder says how much it consumed, exactly, so what follows a stream can
   be read; a gzip decoder reads every member. `DecompressionLimits` bound
   the length and the ratio.
-- CRC-32 is the processor's where it has the instructions
-  (`runtime/checksums.c`: ARM's, or PCLMULQDQ), eight bytes by tables else.
+- Their checksums, CRC-32, Adler-32 and XXH64, are Sable.IO.Hashing's (below),
+  given the codecs' memory by address (`update(at:count:)`, `package`).
 
 Against .NET 11's, which are zlib-ng, zstd 1.5.7 and brotli, all C, on an
 Apple M1 Max that was busy (the best of three runs; MB/s, and the ratio):

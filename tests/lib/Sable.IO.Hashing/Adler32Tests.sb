@@ -1,0 +1,49 @@
+module Adler32Tests
+
+// Adler32 (Sable.IO.Hashing), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.IO.Hashing
+
+import HashingSupport
+import Sable.IO.Hashing
+import Sable.Testing
+
+@test
+fn knownValues() {
+    expect(Adler32.hash([]) == 1)
+    expect(Adler32.hash("Wikipedia".utf8Bytes()) == 0x11E60398)
+    expect(Adler32.hash("123456789".utf8Bytes()) == 0x091E01DE)
+}
+
+@test(arguments: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+fn eachLengthOfTheSanityBuffer(_ index: Int) {
+    expect("\(Adler32.hash(sanityBuffer(vectorLengths[index])):x)" == vectors["adler32"]![index])
+}
+
+@test
+fn theSumsAreReducedBeforeTheyOverflow() {
+    // All 0xFF, the most each byte adds: zlib's adler32 of 100,000 of them.
+    let ones = U8[>..](repeating: 0xFF, count: 100_000)
+    expect(Adler32.hash(ones) == 0x149A_302C)
+    var adler = Adler32()
+    adler.update(ones[..<5551])
+    adler.update(ones[5551...])
+    expect(adler.value == 0x149A_302C)
+}
+
+@test
+fn piecesOfAnySizeGiveTheSame() {
+    let bytes = sanityBuffer(4160)
+    for sizes in pieceSizes {
+        expect(inPieces(Adler32(), bytes, sizes) { "\($0.value:x)" } == vectors["adler32"]![17])
+    }
+}
+
+@test
+fn theBytesAreTheMostSignificantFirst() {
+    expect(Adler32.hashBytes("Wikipedia".utf8Bytes()) == [0x11, 0xE6, 0x03, 0x98])
+    expect(Adler32.hashByteCount == 4)
+    var adler = Adler32()
+    adler.update("x".utf8Bytes())
+    adler.reset()
+    expect(adler.value == 1)
+}

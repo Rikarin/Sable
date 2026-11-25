@@ -1,5 +1,7 @@
 module Sable.IO.Compression
 
+import Sable.IO.Hashing
+
 /// Bytes compressed to Zstandard (RFC 8878) as they come, one frame of them.
 /// .NET's `ZstandardEncoder`.
 ///

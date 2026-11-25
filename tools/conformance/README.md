@@ -14,6 +14,7 @@ python3 -I tools/conformance/toml/run.py data/toml-test
 python3 -I tools/conformance/yaml/run.py data/yaml-test-suite
 python3 -I tools/conformance/json/run.py data/JSONTestSuite
 python3 -I tools/conformance/compression/run.py data/compression [corpus file ...]
+python3 -I tools/conformance/hashing/run.py data/xxhash
 python3 -I tools/conformance/net/run.py data/iana
 python3 -I tools/conformance/random/run.py data/practrand/RNG_test --size 8GB
 ```
@@ -98,6 +99,25 @@ of https://github.com/google/brotli v1.0.9, file by file, as its archives leave
 it out: MIT. Python's zlib is the third. Corpus files (Silesia's, say) are
 compressed at every level and read by the `gzip`, `zstd` and `brotli` commands
 that are there, and theirs here.
+
+## hashing: xxHash's sanity vectors, and the CRC catalogue
+
+`data/xxhash/sanity_test_vectors.h`, `tests/sanity_test_vectors.h` of
+https://github.com/Cyan4973/xxHash at `2ec67caeb18ec15ae60c0853174331089acddfc0`
+(SHA-256 `e81b5f30…589af7`): BSD 2-clause. Its XXH32, XXH64, XXH3 and XXH128
+vectors, every length to 4160 of its sanity buffer with a seed of zero and
+another, are asked at once and in pieces of three patterns of sizes; those
+with a secret of their own are skipped, as the library, as .NET's, takes a
+seed alone. CRC-32 (ISO-HDLC), CRC-32C (ISCSI), CRC-64 (ECMA-182, as .NET's
+`Crc64`) and CRC-64 (NVME) are held at each length to 4160 and some longer
+to one the script computes a bit at a time from Greg Cook's catalogue of
+parametrised CRC algorithms, each first held to its check value; CRC-32 and
+Adler-32 also to Python's zlib. Run it again with `SABLE_PORTABLE=1` for the
+CRCs' portable code.
+
+`tools/conformance/hashing/constants.py` works out `runtime/checksums.c`'s
+folding constants and checks the folding, for each polynomial, against a CRC
+computed a bit at a time; it needs no data.
 
 ## toml: toml-test
 

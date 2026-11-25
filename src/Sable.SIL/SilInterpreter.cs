@@ -1564,8 +1564,8 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "codec_bytes_bytes" or "codec_string_bytes" or "codec_bytes_raw" or "utf8_to_utf16" or "utf16_to_utf8":
                 return 0L;
 
-            case "crc32_raw":
-                return operands[0];
+            case "crc_available":
+                return false;
 
             // The library reads the system's files, as where the runtime has nothing.
             case "trust_load":

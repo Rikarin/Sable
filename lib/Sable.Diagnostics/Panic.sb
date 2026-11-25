@@ -18,7 +18,7 @@ module Sable.Diagnostics
 /// }
 /// let previous = Panic.takeHook()
 /// Panic.setHook(previous)
-/// let _ = Panic.takeHook()
+/// _ = Panic.takeHook()
 /// ```
 public struct Panic {
     /// Has every trap from now on said by the hook, in place of the

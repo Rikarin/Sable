@@ -305,13 +305,13 @@ fn errorsSayWhereAndWhy() {
         assertEqual(read(text), "error: " + message)
     }
     do {
-        let _ = try Toml.decode(Dictionary<String, Int>.self, from: "a = ")
+        _ = try Toml.decode(Dictionary<String, Int>.self, from: "a = ")
         fail("read")
     } catch {
         assertEqual(error.description(), "not TOML: line 1, column 5: expected a value, found the end")
     }
     do {
-        let _ = try TomlDecoder.parse(bytes: [0x61, 0x3D, 0x22, 0xFF, 0x22])
+        _ = try TomlDecoder.parse(bytes: [0x61, 0x3D, 0x22, 0xFF, 0x22])
         fail("read")
     } catch {
         assertEqual(error.description(), "not TOML: line 1, column 4: ill-formed UTF-8")
@@ -438,7 +438,7 @@ fn writingPutsValuesBeforeTables() throws {
     var tables = TomlTable()
     tables["x"] = .Array(items: [late])
     do {
-        let _ = try Toml.write(tables)
+        _ = try Toml.write(tables)
         fail("written")
     } catch {
         assertEqual(error.description(), "$: TOML has no year 10000")
@@ -600,49 +600,49 @@ fn decodersSayWhereAndWhatIsWrong() throws {
     var messages: String[>..] = []
     let attempts: (() throws(SerializeError) -> Void)[>..] = [
         {
-            let _ = try root.field("zz").decodeInt()
+            _ = try root.field("zz").decodeInt()
         },
         {
-            let _ = try root.field("zz").decodeValue()
+            _ = try root.field("zz").decodeValue()
         },
         {
-            let _ = try root.decodeInt()
+            _ = try root.decodeInt()
         },
         {
-            let _ = try root.field("a").decodeString()
+            _ = try root.field("a").decodeString()
         },
         {
-            let _ = try root.field("a").element(1).decodeBool()
+            _ = try root.field("a").element(1).decodeBool()
         },
         {
-            let _ = try root.field("a").element(0).decodeBytes()
+            _ = try root.field("a").element(0).decodeBytes()
         },
         {
-            let _ = try root.field("a").element(0).decodeSequence()
+            _ = try root.field("a").element(0).decodeSequence()
         },
         {
-            let _ = try root.field("a").element(1).decodeFloat()
+            _ = try root.field("a").element(1).decodeFloat()
         },
         {
-            let _ = try root.field("a").element(1).decodeUInt()
+            _ = try root.field("a").element(1).decodeUInt()
         },
         {
-            let _ = try root.field("b c").field("d").decodeUInt()
+            _ = try root.field("b c").field("d").decodeUInt()
         },
         {
-            let _ = try root.field("b c").field("f").decodeBytes()
+            _ = try root.field("b c").field("f").decodeBytes()
         },
         {
-            let _ = try root.field("g").decodeInt()
+            _ = try root.field("g").decodeInt()
         },
         {
-            let _ = try root.field("h").decodeMap()
+            _ = try root.field("h").decodeMap()
         },
         {
-            let _ = try root.field("a").caseName()
+            _ = try root.field("a").caseName()
         },
         {
-            let _ = try root.field("b c").caseName()
+            _ = try root.field("b c").caseName()
         },
         { try root.field("a").beginStruct("T") },
         { try root.field("zz").beginStruct("T") },

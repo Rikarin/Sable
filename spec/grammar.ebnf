@@ -423,7 +423,8 @@ TypeTestPattern   = "is" Type
 
 Expression        = AssignExpr ;
 
-AssignExpr        = TernaryExpr [ AssignOp AssignExpr ] ;        (* right assoc *)
+AssignExpr        = TernaryExpr [ AssignOp AssignExpr ]          (* right assoc *)
+                  | "_" "=" AssignExpr ;                         (* dropped *)
 AssignOp          = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|="
                   | "^=" | "<<=" | ">>=" | "??=" | "&+=" | "&-=" | "&*=" ;
 

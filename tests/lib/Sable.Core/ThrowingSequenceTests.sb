@@ -25,7 +25,7 @@ fn numbers(upTo n: Int, failAt: Int = 0) throws(Broken) -> some Sequence<Int> {
 /// The error a call threw, or none.
 fn failure<T>(_ body: () throws(Broken) -> T) -> Int? {
     do {
-        let _ = try body()
+        _ = try body()
         return none
     } catch .At(let at) {
         return at

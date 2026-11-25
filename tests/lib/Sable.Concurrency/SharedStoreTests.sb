@@ -358,7 +358,7 @@ async fn store(_ which: Int) {
             await hammer(box, live, { b, h, i in
                 b.lists.append([h])
                 b.lists.swapAt(0, 4)
-                let _ = b.lists.removeLast()
+                _ = b.lists.removeLast()
             }, { $0.lists[0].first })
         }
         if which == 23 {

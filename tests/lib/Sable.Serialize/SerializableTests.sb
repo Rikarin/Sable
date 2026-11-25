@@ -214,7 +214,7 @@ fn enumsAndUnionsInEachTagging() throws {
 
 fn failure<T: Serializable>(_ type: T.Type, _ text: String) -> String {
     do {
-        let _ = try Json.decode(type, from: text)
+        _ = try Json.decode(type, from: text)
         return "decoded"
     } catch {
         return error.description()
@@ -238,7 +238,7 @@ fn errorsSayWhere() {
     assertEqual(failure(Item.self, "{\"name\":\"a\" \"price\":1}"), "not JSON: no ',' or end between values at byte 12")
     assertEqual(failure(Item.self, "{\"weird key\":1}"), "$.name: missing")
     do {
-        let _ = try Json.encode(Item { name: "nan", price: 0.0 / 0.0 })
+        _ = try Json.encode(Item { name: "nan", price: 0.0 / 0.0 })
         fail("a NaN was written")
     } catch {
         assertEqual(error.description(), "$: JSON has no nan")
@@ -283,7 +283,7 @@ fn theDecoderAndJsonValuesDirectly() throws {
     let value = try Json.decode(JsonValue.self, from: "{\"x\":[1,true,null,\"s\"]}")
     assertEqual(try Json.encode(value), "{\"x\":[1.0,true,null,\"s\"]}")
     do {
-        let _ = try JsonValue.decode(from: root.field("absent"))
+        _ = try JsonValue.decode(from: root.field("absent"))
         fail("nothing decoded as a value")
     } catch { }
 
@@ -400,7 +400,7 @@ fn whatIsFlattenedIsAnyStruct() throws {
     // Only running tells that a type parameter's value is not a struct.
     let number: Logged<Int> = Logged(at: 7, what: 3)
     do {
-        let _ = try Json.encode(number)
+        _ = try Json.encode(number)
         fail("a number was flattened")
     } catch {
         assertEqual(error.description(), "$: only a struct or a map can be flattened")
@@ -448,7 +448,7 @@ fn anUntaggedUnionIsItsFirstCaseThatDecodes() throws {
 @test
 fn aSetIsASequence() throws {
     var unique = Set<Int>()
-    let _ = unique.insert(3)
+    _ = unique.insert(3)
     assertEqual(try Json.encode(unique), "[3]")
     let back = try Json.decode(Set<String>.self, from: "[\"a\",\"b\",\"a\"]")
     assert(back.count == 2 && back.contains("a") && back.contains("b"))
@@ -477,7 +477,7 @@ fn aDateTimeIsIso8601() throws {
     assert((try Json.decode(UtcDateTime.self, from: "\"2023-11-15T00:13:20+02:00\"")) == whole)
     assertEqual(failure(UtcDateTime.self, "\"soon\""), "$: 'soon' is not an ISO 8601 date and time")
     do {
-        let _ = try Json.encode(UtcDateTime.fromUnix(400000000000))
+        _ = try Json.encode(UtcDateTime.fromUnix(400000000000))
         fail("a year of five digits was written")
     } catch {
         assert(error.description().hasPrefix("$: ISO 8601 has no year 14"))

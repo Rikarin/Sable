@@ -21,7 +21,7 @@ public final class Once {
     /// Runs the closure, unless this or another closure given has run
     /// already; another thread asking meanwhile waits until it has.
     public fn run(_ body: () -> Void) {
-        let _ = done.getOrInit {
+        _ = done.getOrInit {
             body()
             return true
         }

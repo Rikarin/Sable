@@ -12,7 +12,7 @@ fn ns(_ count: Int) -> Duration {
 
 fn parseError(_ text: String) -> ParseError? {
     do {
-        let _ = try Duration.parse(text)
+        _ = try Duration.parse(text)
         return none
     } catch {
         return error
@@ -21,7 +21,7 @@ fn parseError(_ text: String) -> ParseError? {
 
 fn isoError(_ text: String) -> ParseError? {
     do {
-        let _ = try Duration.parse(iso8601: text)
+        _ = try Duration.parse(iso8601: text)
         return none
     } catch {
         return error
@@ -74,7 +74,7 @@ fn componentsShareTheSign() {
 
 @test(traps: "overflow")
 fn aUnitThatDoesNotFitTraps() {
-    let _ = Duration.hours(2562048)
+    _ = Duration.hours(2562048)
 }
 
 // ---- Fractions --------------------------------------------------------------
@@ -125,12 +125,12 @@ fn fractionsAreExactAtTheLimits() {
 
 @test(traps: "does not fit")
 fn aFractionThatDoesNotFitTraps() {
-    let _ = Duration.seconds(1.0e10)
+    _ = Duration.seconds(1.0e10)
 }
 
 @test(traps: "does not fit")
 fn aNaNOfAUnitTraps() {
-    let _ = Duration.seconds(F64.nan)
+    _ = Duration.seconds(F64.nan)
 }
 
 // ---- Operators --------------------------------------------------------------
@@ -157,32 +157,32 @@ fn operatorsAreTheIntegersOwn() {
 
 @test(traps: "overflow")
 fn aSumThatDoesNotFitTraps() {
-    let _ = Duration.max + ns(1)
+    _ = Duration.max + ns(1)
 }
 
 @test(traps: "overflow")
 fn aDifferenceThatDoesNotFitTraps() {
-    let _ = Duration.min - ns(1)
+    _ = Duration.min - ns(1)
 }
 
 @test(traps: "overflow")
 fn aProductThatDoesNotFitTraps() {
-    let _ = Duration.max * 2
+    _ = Duration.max * 2
 }
 
 @test(traps: "overflow")
 fn theNegationOfTheLeastTraps() {
-    let _ = -Duration.min
+    _ = -Duration.min
 }
 
 @test(traps)
 fn aQuotientThatDoesNotFitTraps() {
-    let _ = Duration.min / -1
+    _ = Duration.min / -1
 }
 
 @test(traps: "zero")
 fn aDivisionByZeroTraps() {
-    let _ = Duration.max / 0
+    _ = Duration.max / 0
 }
 
 // ---- Checked and saturating -------------------------------------------------
@@ -269,12 +269,12 @@ fn roundingAtTheLimits() {
 
 @test(traps: "does not fit")
 fn aRoundingThatDoesNotFitTraps() {
-    let _ = Duration.max.rounded(to: Duration.seconds(1), .Up)
+    _ = Duration.max.rounded(to: Duration.seconds(1), .Up)
 }
 
 @test(traps: "above zero")
 fn aUnitOfNoTimeIsRefused() {
-    let _ = Duration.max.truncated(to: Duration.zero)
+    _ = Duration.max.truncated(to: Duration.zero)
 }
 
 // ---- Text -------------------------------------------------------------------

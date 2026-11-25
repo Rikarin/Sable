@@ -171,7 +171,7 @@ public final class Recorded: HostedService {
             throw TestError("no start")
         }
         if failing == "slow start" {
-            let _ = await cancellation.cancellationRequested()
+            _ = await cancellation.cancellationRequested()
             throw CancellationError()
         }
         if failing == "stuck start" {
@@ -187,7 +187,7 @@ public final class Recorded: HostedService {
         if failing == "run stuck" {
             await forever()
         }
-        let _ = await cancellation.cancellationRequested()
+        _ = await cancellation.cancellationRequested()
         record.add("end-\(name)")
         if failing == "end" {
             throw TestError("no end")
@@ -203,7 +203,7 @@ public final class Recorded: HostedService {
             throw TestError("no stop")
         }
         if failing == "stop waits" {
-            let _ = await cancellation.cancellationRequested()
+            _ = await cancellation.cancellationRequested()
             record.add("hurried-\(name)")
         }
     }

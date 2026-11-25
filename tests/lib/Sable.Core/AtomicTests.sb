@@ -125,12 +125,12 @@ fn anAtomicTakesEveryOrdering() {
 
 @test(traps: "a load cannot release")
 fn aReleaseLoadTraps() {
-    let _ = Atomic<Int>(0).load(ordering: .Release)
+    _ = Atomic<Int>(0).load(ordering: .Release)
 }
 
 @test(traps: "a load cannot release")
 fn anAcquireReleaseLoadTraps() {
-    let _ = Atomic<Int>(0).load(ordering: .AcquireRelease)
+    _ = Atomic<Int>(0).load(ordering: .AcquireRelease)
 }
 
 @test(traps: "a store cannot acquire")
@@ -184,7 +184,7 @@ fn aOnceCellLetsItsValueGoIfItMadeOne() {
     assertEqual(gone.load(), 0)
     do {
         let cell = OnceCell<Counted>()
-        let _ = cell.getOrInit { Counted(gone) }
+        _ = cell.getOrInit { Counted(gone) }
         assertEqual(gone.load(), 0)
     }
     assertEqual(gone.load(), 1)

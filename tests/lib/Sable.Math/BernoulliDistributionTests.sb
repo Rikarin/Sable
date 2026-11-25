@@ -56,20 +56,20 @@ fn aHalfIsExactlyHalfTheDraws() {
 
 @test(traps: "a probability must be from 0 to 1")
 fn aProbabilityOverOneTraps() {
-    let _ = BernoulliDistribution(probability: 1.5)
+    _ = BernoulliDistribution(probability: 1.5)
 }
 
 @test(traps: "a probability must be from 0 to 1")
 fn aNegativeProbabilityTraps() {
-    let _ = BernoulliDistribution(probability: -0.1)
+    _ = BernoulliDistribution(probability: -0.1)
 }
 
 @test(traps: "a probability must be from 0 to 1")
 fn aProbabilityThatIsNoNumberTraps() {
-    let _ = BernoulliDistribution(probability: F64.nan)
+    _ = BernoulliDistribution(probability: F64.nan)
 }
 
 @test(traps: "a probability must be from 0 to 1")
 fn moreTimesThanThereAreTraps() {
-    let _ = BernoulliDistribution(times: 3, outOf: 2)
+    _ = BernoulliDistribution(times: 3, outOf: 2)
 }

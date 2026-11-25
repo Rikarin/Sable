@@ -178,12 +178,12 @@ fn wakingOneWakesTheFirstParked() async {
     let woken = Atomic(0)
     let first = Task.spawn {
         await list.park()
-        let _ = woken.add(1)
+        _ = woken.add(1)
     }
     await Task.settle()
     let second = Task.spawn {
         await list.park()
-        let _ = woken.add(1)
+        _ = woken.add(1)
     }
     await Task.settle()
     list.wakeOne()

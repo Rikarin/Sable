@@ -113,7 +113,7 @@ public final class Pipe {
 
     fn completeWriting() {
         state.withLock { (state: inout PipeState) in
-            let _ = state.publish()
+            _ = state.publish()
             state.writerCompleted = true
         }
         readers.wakeAll()

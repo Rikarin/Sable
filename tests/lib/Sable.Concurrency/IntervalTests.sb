@@ -15,7 +15,7 @@ fn seconds(_ tick: Instant?) -> Int {
 fn ticks(_ missed: MissedTicks, _ busy: Int[], until end: Int) async -> String {
     let clock = TestClock()
     let lines: Mutex<String[>..]> = Mutex([])
-    let _ = Task.spawn {
+    _ = Task.spawn {
         var iterator = Interval(every: Duration.seconds(10), clock: clock, missed: missed).makeAsyncIterator()
         for work in busy {
             let tick = await iterator.next()
@@ -113,5 +113,5 @@ fn intervalsAreOnTheMonotonicClockUnlessTold() async {
 
 @test(traps: "above zero")
 fn aPeriodOfNoTimeIsRefused() {
-    let _ = Interval(every: Duration.zero)
+    _ = Interval(every: Duration.zero)
 }

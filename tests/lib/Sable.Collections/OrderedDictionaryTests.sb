@@ -56,7 +56,7 @@ fn keysAndValuesCanBeReadByPosition() {
 fn aPositionPastTheEndTraps() {
     let dictionary = OrderedDictionary<Int, Int>()
     dictionary.set(1, 1)
-    let _ = dictionary.key(at: 1)
+    _ = dictionary.key(at: 1)
 }
 
 @test
@@ -81,7 +81,7 @@ fn aRemovedKeyAddedAgainGoesAtTheEnd() {
     let dictionary = OrderedDictionary<String, Int>()
     dictionary.set("a", 1)
     dictionary.set("b", 2)
-    let _ = dictionary.remove("a")
+    _ = dictionary.remove("a")
     dictionary.set("a", 3)
     assert(dictionary.map({ entry in entry.0 }) == ["b", "a"])
     assert(dictionary.map({ entry in entry.1 }) == [2, 3])
@@ -221,7 +221,7 @@ fn anOrderedDictionaryAgreesWithAnArrayUnderRandomChanges() {
                 let removed = ordered.remove(Crowded { id: id })
                 if let at = at {
                     assertEqual(removed ?? "", model[at].text)
-                    let _ = model.remove(at: at)
+                    _ = model.remove(at: at)
                 } else {
                     assert(removed == none)
                 }

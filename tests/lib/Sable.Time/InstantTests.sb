@@ -26,5 +26,5 @@ fn instantsAreAddedToAndSubtracted() {
 
 @test(traps: "overflow")
 fn anInstantPastTheClocksEndTraps() {
-    let _ = Instant.origin + Duration.seconds(1) + Duration.max
+    _ = Instant.origin + Duration.seconds(1) + Duration.max
 }

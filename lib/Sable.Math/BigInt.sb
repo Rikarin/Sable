@@ -147,7 +147,7 @@ public struct BigInt {
     /// over, which is what Toom-3's interpolation divides by.
     fn dividedExactly(by divisor: U64) -> BigInt {
         var limbs = limbView
-        let _ = divideSmallInPlace(&limbs, divisor)
+        _ = divideSmallInPlace(&limbs, divisor)
         return BigInt.make(negative, limbs)
     }
 

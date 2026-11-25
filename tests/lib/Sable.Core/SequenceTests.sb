@@ -239,12 +239,12 @@ fn chunksSplitIntoArraysOfTheSize() {
 
 @test(traps: "a chunk's size must be at least 1, not 0")
 fn chunksOfNothingTraps() {
-    let _ = Countdown { from: 3 }.chunks(of: 0)
+    _ = Countdown { from: 3 }.chunks(of: 0)
 }
 
 @test(traps: "a window's size must be at least 1, not 0")
 fn windowsOfNothingTraps() {
-    let _ = Countdown { from: 3 }.windows(of: 0)
+    _ = Countdown { from: 3 }.windows(of: 0)
 }
 
 @test

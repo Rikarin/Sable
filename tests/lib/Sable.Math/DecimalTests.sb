@@ -306,17 +306,17 @@ fn roundingToMorePlacesThanAValueHasChangesNothing() {
 
 @test(traps: "a decimal's scale must be from 0 to 28, not -1")
 fn roundingToANegativeScaleTraps() {
-    let _ = d("1.5").rounded(scale: -1)
+    _ = d("1.5").rounded(scale: -1)
 }
 
 @test(traps: "a decimal's scale must be from 0 to 28, not 29")
 fn quantizingPastTwentyEightPlacesTraps() {
-    let _ = d("1.5").quantized(scale: 29)
+    _ = d("1.5").quantized(scale: 29)
 }
 
 @test(traps: "decimal overflow")
 fn quantizingPastNinetySixBitsTraps() {
-    let _ = Decimal.max.quantized(scale: 1)
+    _ = Decimal.max.quantized(scale: 1)
 }
 
 @test
@@ -350,17 +350,17 @@ fn aDecimalIsMadeFromACoefficientAndAScale() {
 
 @test(traps: "a decimal's scale must be from 0 to 28, not 29")
 fn aScalePastTwentyEightTraps() {
-    let _ = Decimal(1, scale: 29)
+    _ = Decimal(1, scale: 29)
 }
 
 @test(traps: "decimal overflow")
 fn aCoefficientPastNinetySixBitsTraps() {
-    let _ = Decimal(U128.max, scale: 0)
+    _ = Decimal(U128.max, scale: 0)
 }
 
 @test(traps: "decimal overflow")
 fn anIntegerPastNinetySixBitsTraps() {
-    let _ = Decimal(I128.min)
+    _ = Decimal(I128.min)
 }
 
 @test
@@ -540,32 +540,32 @@ fn theCheckedFormsGiveNoneForWhatTraps() {
 
 @test(traps: "decimal overflow")
 fn aSumPastTheGreatestTraps() {
-    let _ = Decimal.max + d("1")
+    _ = Decimal.max + d("1")
 }
 
 @test(traps: "decimal overflow")
 fn aDifferencePastTheLeastTraps() {
-    let _ = Decimal.min - d("1")
+    _ = Decimal.min - d("1")
 }
 
 @test(traps: "decimal overflow")
 fn aProductPastTheGreatestTraps() {
-    let _ = Decimal.max * d("1.5")
+    _ = Decimal.max * d("1.5")
 }
 
 @test(traps: "decimal overflow")
 fn aQuotientPastTheGreatestTraps() {
-    let _ = Decimal.max / d("0.1")
+    _ = Decimal.max / d("0.1")
 }
 
 @test(traps: "division by zero")
 fn dividingByZeroTraps() {
-    let _ = d("1") / d("0.00")
+    _ = d("1") / d("0.00")
 }
 
 @test(traps: "division by zero")
 fn aRemainderByZeroTraps() {
-    let _ = d("1") % Decimal.zero
+    _ = d("1") % Decimal.zero
 }
 
 // ---- Text ----------------------------------------------------------------------------
@@ -631,7 +631,7 @@ fn parsingRoundsWhatDoesNotFit() {
 /// The error parsing the text throws, or none.
 fn parseError(_ text: String) -> ParseError? {
     do {
-        let _ = try Decimal.parse(text)
+        _ = try Decimal.parse(text)
         return none
     } catch {
         return error
@@ -726,17 +726,17 @@ fn aFloatConvertsToItsShortestDecimal() {
 
 @test(traps: "nan is not a decimal")
 fn aNaNIsNoDecimal() {
-    let _ = Decimal.converting(F64.nan)
+    _ = Decimal.converting(F64.nan)
 }
 
 @test(traps: "inf is not a decimal")
 fn anInfiniteF32IsNoDecimal() {
-    let _ = Decimal.converting(F32.infinity)
+    _ = Decimal.converting(F32.infinity)
 }
 
 @test(traps: "decimal overflow")
 fn aFloatPastTheGreatestTraps() {
-    let _ = Decimal.converting(1e30)
+    _ = Decimal.converting(1e30)
 }
 
 @test

@@ -25,7 +25,7 @@ fn sample(_ count: Int) -> U8[>..] {
 
 fn decodeError(_ text: String, alphabet: Base32.Alphabet = .Standard, padding: Padding = .Either) -> DecodeError? {
     do {
-        let _ = try Base32.decode(text, alphabet: alphabet, padding: padding)
+        _ = try Base32.decode(text, alphabet: alphabet, padding: padding)
     } catch {
         return error
     }

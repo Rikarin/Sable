@@ -49,9 +49,9 @@ final class ServiceStep {
         let running = Task.detached {
             do {
                 try await body()
-                let _ = ended.succeed(StepEnd.Done)
+                _ = ended.succeed(StepEnd.Done)
             } catch {
-                let _ = ended.succeed(StepEnd.Failed(error: error))
+                _ = ended.succeed(StepEnd.Failed(error: error))
             }
             held.withLock { (step: inout StepTask) -> Void in
                 step.task = none

@@ -5,7 +5,7 @@ import Sable.Time
 
 fn offsetError(_ text: String) -> ParseError? {
     do {
-        let _ = try UtcOffset.parse(text)
+        _ = try UtcOffset.parse(text)
         return none
     } catch {
         return error

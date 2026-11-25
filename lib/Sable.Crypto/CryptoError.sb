@@ -5,7 +5,7 @@ module Sable.Crypto
 ///
 /// ```sable
 /// do {
-///     let _ = try Argon2id(memoryKiB: 7, iterations: 1, parallelism: 1)
+///     _ = try Argon2id(memoryKiB: 7, iterations: 1, parallelism: 1)
 /// } catch {
 ///     assert("\(error.description())" == "Argon2id needs at least 8 KiB of memory for each lane: 7 KiB for 1")
 /// }

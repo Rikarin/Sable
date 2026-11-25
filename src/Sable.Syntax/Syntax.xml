@@ -333,6 +333,11 @@
     <Field Name="Right" Type="ExpressionSyntax" />
   </Node>
 
+  <Node Name="DiscardExpressionSyntax" Base="ExpressionSyntax" Kind="DiscardExpression"
+        Doc="The `_` of `_ = f()`: what is assigned to it is dropped. Only ever an assignment's left side.">
+    <Field Name="UnderscoreToken" Type="Token" />
+  </Node>
+
   <Node Name="ConditionalExpressionSyntax" Base="ExpressionSyntax" Kind="ConditionalExpression"
         Doc="`c ? a : b`.">
     <Field Name="Condition" Type="ExpressionSyntax" />

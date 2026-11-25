@@ -10,7 +10,7 @@ import Sable.Testing
 /// Why the text is not an Int in the radix under the styles, or none when it is one.
 fn intError(_ text: String, radix: Int = 10, styles: NumberStyles = .Sign) -> ParseError? {
     do {
-        let _ = try Int.parse(text, radix: radix, styles: styles)
+        _ = try Int.parse(text, radix: radix, styles: styles)
         return none
     } catch {
         return error
@@ -20,7 +20,7 @@ fn intError(_ text: String, radix: Int = 10, styles: NumberStyles = .Sign) -> Pa
 /// Why the text is not an F64 under the styles, or none.
 fn floatError(_ text: String, styles: NumberStyles = .Sign) -> ParseError? {
     do {
-        let _ = try F64.parse(text, styles: styles)
+        _ = try F64.parse(text, styles: styles)
         return none
     } catch {
         return error
@@ -74,25 +74,25 @@ fn eachTypeParsesItsExtremes() {
 @test
 fn oneOutsideATypeIsOverflowOrUnderflow() {
     do {
-        let _ = try I8.parse("128")
+        _ = try I8.parse("128")
         fail("128 is no I8")
     } catch {
         assertEqual(error, .Overflow)
     }
     do {
-        let _ = try I8.parse("-129")
+        _ = try I8.parse("-129")
         fail("-129 is no I8")
     } catch {
         assertEqual(error, .Underflow)
     }
     do {
-        let _ = try U8.parse("256")
+        _ = try U8.parse("256")
         fail("256 is no U8")
     } catch {
         assertEqual(error, .Overflow)
     }
     do {
-        let _ = try U32.parse("-1")
+        _ = try U32.parse("-1")
         fail("-1 is no U32")
     } catch {
         assertEqual(error, .Underflow)
@@ -164,12 +164,12 @@ fn anyRadixFromTwoToThirtySix() {
 
 @test(traps: "precondition failed: a radix must be 2 to 36, not 37")
 fn aRadixOutsideTwoToThirtySixTraps() {
-    let _ = try? Int.parse("1", radix: 37)
+    _ = try? Int.parse("1", radix: 37)
 }
 
 @test(traps: "precondition failed: a radix must be 2 to 36, not 1")
 fn aRadixBelowTwoTraps() {
-    let _ = try? Int.parse("1", radix: 1)
+    _ = try? Int.parse("1", radix: 1)
 }
 
 @test

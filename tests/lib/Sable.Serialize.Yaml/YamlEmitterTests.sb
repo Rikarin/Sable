@@ -113,10 +113,10 @@ fn blockScalarsHoldAnyLines() throws {
         for style in [YamlScalarStyle.Literal, YamlScalarStyle.Folded] {
             let scalar = YamlEvent.scalar(text, style: style)
             for options in [YamlPrintOptions(), YamlPrintOptions(indent: 1), YamlPrintOptions(indent: 9, indentSequences: false)] {
-                let _ = try written([scalar], options)
-                let _ = try written([YamlEvent.mappingStart(), plain("k"), scalar, plain("l"), scalar, YamlEvent.mappingEnd()], options)
-                let _ = try written([YamlEvent.sequenceStart(), scalar, YamlEvent.sequenceStart(), scalar, scalar, YamlEvent.sequenceEnd(), YamlEvent.sequenceEnd()], options)
-                let _ = try written([YamlEvent.mappingStart(), scalar, scalar, plain("s"), YamlEvent.sequenceStart(), scalar, YamlEvent.sequenceEnd(), YamlEvent.mappingEnd()], options)
+                _ = try written([scalar], options)
+                _ = try written([YamlEvent.mappingStart(), plain("k"), scalar, plain("l"), scalar, YamlEvent.mappingEnd()], options)
+                _ = try written([YamlEvent.sequenceStart(), scalar, YamlEvent.sequenceStart(), scalar, scalar, YamlEvent.sequenceEnd(), YamlEvent.sequenceEnd()], options)
+                _ = try written([YamlEvent.mappingStart(), scalar, scalar, plain("s"), YamlEvent.sequenceStart(), scalar, YamlEvent.sequenceEnd(), YamlEvent.mappingEnd()], options)
             }
             let text = try written([scalar])
             let style = try Yaml.events(text)[2].style
@@ -256,7 +256,7 @@ fn commentsAreWritten() throws {
     try emitter.emit(YamlEvent.streamEnd())
     assertEqual(emitter.text(), "# top\n#\n# two\na: # list\n  # first\n  - 1 # one\n  - # in\n    x: | # y\n      y\n  - [] # empty\n  - [z]\n  - # null\n")
     assertEqual(emitter.bytes().count, emitter.text().utf8Count)
-    let _ = try Yaml.parse(emitter.text())
+    _ = try Yaml.parse(emitter.text())
 }
 
 // ---- Properties --------------------------------------------------------------

@@ -62,7 +62,7 @@ fn theCounterCarriesPast32Bits() {
     var generator = ChaCha(key: countingKey(), stream: 5)
     generator.seek(toBlock: 0xFFFFFFFF)
     for _ in 0..<7 {
-        let _ = generator.next()
+        _ = generator.next()
     }
     assert(generator.next() == 0xA602E8EB78214425)
     assert(generator.next() == 0x5BA94553A0D82E2B)
@@ -83,7 +83,7 @@ fn seekingGoesForwardsAndBack() {
     var ahead = generator
     ahead.seek(toBlock: 3)
     for _ in 0..<23 {
-        let _ = generator.next()
+        _ = generator.next()
     }
     assertEqual(ahead.next(), generator.next())
     generator.seek(toBlock: 0)
@@ -93,7 +93,7 @@ fn seekingGoesForwardsAndBack() {
 @test
 fn aCopyGoesOnByItself() {
     var generator = ChaCha(seed: 4)
-    let _ = generator.next()
+    _ = generator.next()
     var copy = generator
     let a = generator.next()
     assertEqual(copy.next(), a)

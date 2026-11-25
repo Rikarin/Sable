@@ -278,7 +278,7 @@ public struct Url {
         let input = text.hasPrefix("?") ? text[text.index(after: text.startIndex)...].toString() : text
         query = ""
         var parser = UrlParser(input, none)
-        let _ = parser.override(&self, .Query)
+        _ = parser.override(&self, .Query)
     }
 
     /// The query made of the items, as a form would write them; none
@@ -300,7 +300,7 @@ public struct Url {
         let input = text.hasPrefix("#") ? text[text.index(after: text.startIndex)...].toString() : text
         fragment = ""
         var parser = UrlParser(input, none)
-        let _ = parser.override(&self, .Fragment)
+        _ = parser.override(&self, .Fragment)
     }
 
     // ---- Schemes -------------------------------------------------------------

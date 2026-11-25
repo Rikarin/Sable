@@ -350,7 +350,7 @@ class Renderer {
             id = slugged(text) + "-" + n.toString()
             n += 1
         }
-        let _ = ids.insert(id)
+        _ = ids.insert(id)
         headings += 1
         html.appendLine("<h\(level) id=\"\(id)\">\(renderInline(text))</h\(level)>")
     }
@@ -623,7 +623,7 @@ fn main() -> Int {
         return 2
     }
     do {
-        let _ = try build(arguments[0], arguments[1])
+        _ = try build(arguments[0], arguments[1])
         return 0
     } catch .NotFound(let path) {
         Console.writeErrorLine("ssg: no such file or directory: " + path)

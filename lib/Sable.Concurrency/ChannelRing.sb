@@ -22,7 +22,7 @@ struct ChannelRing<Element> {
 
     unsafe fn destroy() {
         while count() > 0 {
-            let _ = removeFirst()
+            _ = removeFirst()
         }
         if words.load(at: ringMask) >= 0 {
             RawPtr<Element>(address: words.load(at: ringValues)).deallocate()

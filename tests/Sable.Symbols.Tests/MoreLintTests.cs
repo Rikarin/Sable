@@ -178,7 +178,7 @@ public sealed class MoreLintTests {
         Assert.Contains("fn area(width _width: Int, _ _height: Int)", fixedSource, StringComparison.Ordinal);
         Assert.Contains("let _perimeter = 2", fixedSource, StringComparison.Ordinal);
         Assert.Contains("let unchanged = 3", fixedSource, StringComparison.Ordinal);
-        Assert.Contains("let _ = twice(unchanged)", fixedSource, StringComparison.Ordinal);
+        Assert.Contains("_ = twice(unchanged)", fixedSource, StringComparison.Ordinal);
 
         // Fixed, the file lints clean.
         Assert.Empty(Lint(fixedSource));

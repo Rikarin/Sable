@@ -45,14 +45,14 @@ fn assertionsAndOptionsApplyToEachPattern() {
 @test
 fn aMistakeSaysWhichPattern() {
     do {
-        let _ = try RegexSet(["a", "b(", "c"])
+        _ = try RegexSet(["a", "b(", "c"])
         fail("unclosed group")
     } catch {
         assert(error.kind == .UnclosedGroup && error.offset == 1)
         assertEqual(error.message, "pattern 1: unclosed group")
     }
     do {
-        let _ = try RegexSet([#"(a)\1"#], options: .Backtracking)
+        _ = try RegexSet([#"(a)\1"#], options: .Backtracking)
         fail("a set cannot backtrack")
     } catch {
         assert(error.kind == .NeedsBacktracking)

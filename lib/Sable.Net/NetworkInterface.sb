@@ -49,7 +49,7 @@ public struct NetworkInterface {
             throw socketError("the network interfaces")
         }
         defer {
-            let _ = Runtime.interfaces(list: false)
+            _ = Runtime.interfaces(list: false)
         }
         var all: NetworkInterface[>..] = []
         for row in 0..<rows {

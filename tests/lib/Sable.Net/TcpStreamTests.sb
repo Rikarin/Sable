@@ -89,7 +89,7 @@ fn connectingWhereNothingListensThrows() async {
         let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
         port = listener.port
         listener.close()
-        let _ = try await TcpStream.connect(host: "127.0.0.1", port: port)
+        _ = try await TcpStream.connect(host: "127.0.0.1", port: port)
         assert(false, "connected")
     } catch {
         assertEqual(error.description(), "'127.0.0.1:\(port)' refused the connection")
@@ -105,7 +105,7 @@ fn usingAClosedStreamThrows() async {
         stream.close()
         var said = ""
         do {
-            let _ = try await stream.read(upTo: 1)
+            _ = try await stream.read(upTo: 1)
         } catch {
             said = error.description()
         }
@@ -117,7 +117,7 @@ fn usingAClosedStreamThrows() async {
             said = error.description()
         }
         assertEqual(said, "the connection failed or was closed")
-        let _ = await server.value
+        _ = await server.value
     } catch {
         assert(false, error.description())
     }
@@ -174,7 +174,7 @@ fn closingWakesAReadAndAWriteOnOtherTasks() async {
     do {
         let (client, server) = try await pair()
         let reading = Task.spawn { await thrown {
-            let _ = try await client.read(upTo: 1)
+            _ = try await client.read(upTo: 1)
         } }
         let writing = Task.spawn { await thrown {
             let block = U8[>..](repeating: 7, count: 1 << 20)
@@ -204,7 +204,7 @@ fn closingRacesWithCallsAndMixesNoConnections() async {
             while let connection = try? await listener.accept() {
                 number += 1
                 let mark = U8(number % 256)
-                let _ = Task.spawn { () -> Bool in
+                _ = Task.spawn { () -> Bool in
                     let block = U8[>..](repeating: mark, count: 4096)
                     while (try? await connection.write(block)) != none { }
                     return true
@@ -380,16 +380,16 @@ fn connectingTimesOutAndIsCancelled() async {
         let silent = SocketAddress(IpAddress(127, 0, 0, 2), port: listener.port)
         let start = Instant.now()
         said.append(await thrown {
-            let _ = try await TcpStream.connect(silent, timeout: Duration.milliseconds(60))
+            _ = try await TcpStream.connect(silent, timeout: Duration.milliseconds(60))
         })
         assert(said.contains("it took too long"), said.joined(separator: "; "))
         assert(start.elapsed < Duration.seconds(10))
         let nowhere = said[0] == "it took too long" ? full : silent
         let waiting = Task.spawn { await thrown {
-            let _ = try await TcpStream.connect(nowhere, timeout: Duration.seconds(60))
+            _ = try await TcpStream.connect(nowhere, timeout: Duration.seconds(60))
         } }
         let untimed = Task.spawn { await thrown {
-            let _ = try await TcpStream.connect(nowhere)
+            _ = try await TcpStream.connect(nowhere)
         } }
         try? await Task.sleep(nanoseconds: 5_000_000)
         waiting.cancel()
@@ -397,7 +397,7 @@ fn connectingTimesOutAndIsCancelled() async {
         assertEqual(await waiting.value, "the task was cancelled while it waited")
         assertEqual(await untimed.value, "the task was cancelled while it waited")
         assertEqual(await thrown {
-            let _ = try await TcpStream.connect(host: nowhere.ip.toString(), port: nowhere.port, timeout: Duration.milliseconds(30))
+            _ = try await TcpStream.connect(host: nowhere.ip.toString(), port: nowhere.port, timeout: Duration.milliseconds(30))
         }, "it took too long")
     } catch {
         assert(false, error.description())
@@ -436,7 +436,7 @@ fn aConnectionsOptionsAreWhatTheyWereSetTo() async {
         client.close()
         assertEqual(await thrown { try client.setNoDelay(true) }, "the connection failed or was closed")
         assertEqual(await thrown {
-            let _ = try client.noDelay()
+            _ = try client.noDelay()
         }, "the connection failed or was closed")
     } catch {
         assert(false, error.description())

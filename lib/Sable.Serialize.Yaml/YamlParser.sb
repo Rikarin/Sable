@@ -568,7 +568,7 @@ public final class YamlParser {
         var place = YamlEvent(.MappingStart)
         place.isPlaceholder = true
         events.append(place)
-        let _ = try flowContent(n + 1, flow: false, YamlProperties(), depth)
+        _ = try flowContent(n + 1, flow: false, YamlProperties(), depth)
         let end = at
         if lineStart == line {
             skipWhite()
@@ -740,7 +740,7 @@ public final class YamlParser {
             if byte(at) == 0x2D && isBlank(at + 1) {
                 throw error(at, "a sequence's entry where a mapping's key should be")
             }
-            let _ = try flowContent(column + 1, flow: false, properties, depth)
+            _ = try flowContent(column + 1, flow: false, properties, depth)
             let end = at
             if lineStart != line {
                 throw error(start, "a key must be on one line, or have a '?' before it")
@@ -1039,7 +1039,7 @@ public final class YamlParser {
             empty = at
             try flowSkip(m, opener)
             if byte(at) != 0x2C && byte(at) != 0x5D && byte(at) != 0x7D {
-                let _ = try flowNode(m, opener, depth)
+                _ = try flowNode(m, opener, depth)
                 return
             }
         }
@@ -1206,7 +1206,7 @@ public final class YamlParser {
                 floor = written.count
             } else {
                 while written.count > floor && (written[written.count - 1] == 0x20 || written[written.count - 1] == 0x09) {
-                    let _ = written.removeLast()
+                    _ = written.removeLast()
                 }
                 let blank = try foldedBreaks(m, start)
                 if blank == 0 {

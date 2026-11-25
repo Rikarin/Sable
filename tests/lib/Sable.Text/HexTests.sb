@@ -13,7 +13,7 @@ fn assertBytes(_ actual: U8[:], _ expected: U8[:]) {
 
 fn decodeError(_ text: String) -> DecodeError? {
     do {
-        let _ = try Hex.decode(text)
+        _ = try Hex.decode(text)
     } catch {
         return error
     }
@@ -139,7 +139,7 @@ fn everyByteThatIsNoDigitIsFoundAtEveryPosition() {
                 text[at] = U8(value)
                 var thrown: DecodeError? = none
                 do {
-                    let _ = try Hex.decode(bytes: text)
+                    _ = try Hex.decode(bytes: text)
                 } catch {
                     thrown = error
                 }

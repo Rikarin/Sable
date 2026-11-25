@@ -10,7 +10,7 @@ import Sable.Concurrency
 /// let builder = ApplicationBuilder()
 /// builder.options.handleSignals = false
 /// let host = try! builder.build()
-/// let _ = host.lifetime.started.register { host.lifetime.requestStop() }
+/// _ = host.lifetime.started.register { host.lifetime.requestStop() }
 /// try! await host.run()
 /// assert(host.lifetime.stopped.isCancellationRequested)
 /// ```

@@ -118,7 +118,7 @@ fn anIpv6SocketTakesIpv6AloneUnlessTold() async {
 
         let alone = try UdpSocket.bind(SocketAddress(.v6Any, port: 0))
         // IPv4's port of that number is free.
-        let _ = try UdpSocket.bind(SocketAddress(.v4Any, port: alone.localAddress.port))
+        _ = try UdpSocket.bind(SocketAddress(.v4Any, port: alone.localAddress.port))
 
         let both = try UdpSocket.bind(SocketAddress(.v6Any, port: 0), dualStack: true)
         let four = try loopback()
@@ -137,13 +137,13 @@ fn closingAndCancellingWakeAReceive() async {
     do {
         let a = try loopback()
         let waiting = Task.spawn { await thrown {
-            let _ = try await a.receive()
+            _ = try await a.receive()
         } }
         await Task.yield()
         waiting.cancel()
         assertEqual(await waiting.value, "the task was cancelled while it waited")
         let again = Task.spawn { await thrown {
-            let _ = try await a.receive()
+            _ = try await a.receive()
         } }
         await Task.yield()
         a.close()
@@ -159,7 +159,7 @@ fn aPortInUseIsSaidToBe() async {
     do {
         let a = try loopback()
         assertEqual(await thrown {
-            let _ = try UdpSocket.bind(a.localAddress)
+            _ = try UdpSocket.bind(a.localAddress)
         }, "'\(a.localAddress)' is in use")
     } catch {
         assert(false, error.description())
@@ -223,7 +223,7 @@ fn aGroupsDatagramsReachThoseInIt() async {
         try await sender.send([3], to: to)
         assertEqual((try await first.receive()).bytes, [3])
         let left = Task.spawn { await thrown {
-            let _ = try await second.receive()
+            _ = try await second.receive()
         } }
         try? await Task.sleep(nanoseconds: 30_000_000)
         left.cancel()
@@ -262,22 +262,22 @@ fn aClosedSocketsCallsThrow() async {
         a.close()
         let closed = "the connection failed or was closed"
         assertEqual(await thrown {
-            let _ = try a.hopLimit()
+            _ = try a.hopLimit()
         }, closed)
         assertEqual(await thrown {
-            let _ = try a.broadcast()
+            _ = try a.broadcast()
         }, closed)
         assertEqual(await thrown {
-            let _ = try a.multicastLoop()
+            _ = try a.multicastLoop()
         }, closed)
         assertEqual(await thrown {
-            let _ = try a.multicastHopLimit()
+            _ = try a.multicastHopLimit()
         }, closed)
         assertEqual(await thrown {
-            let _ = try a.receiveBufferSize()
+            _ = try a.receiveBufferSize()
         }, closed)
         assertEqual(await thrown {
-            let _ = try a.sendBufferSize()
+            _ = try a.sendBufferSize()
         }, closed)
         assertEqual(await thrown { try a.setMulticastInterface(0) }, closed)
         assertEqual(await thrown { try a.connect(to: b.localAddress) }, closed)
@@ -300,31 +300,31 @@ fn aClosedSocketSaysSoWhateverIsAsked() async {
     assert((await thrown { try a.connect(to: SocketAddress(IpAddress.v4Loopback, port: 9)) }) != "")
     assert((await thrown { try await a.send([1]) }) != "")
     assert((await thrown {
-        let _ = try await a.receive()
+        _ = try await a.receive()
     }) != "")
     assert((await thrown { try a.setMulticastInterface(1) }) != "")
     assert((await thrown {
-        let _ = try a.multicastLoop()
+        _ = try a.multicastLoop()
     }) != "")
     assert((await thrown { try a.setMulticastLoop(true) }) != "")
     assert((await thrown {
-        let _ = try a.multicastHopLimit()
+        _ = try a.multicastHopLimit()
     }) != "")
     assert((await thrown { try a.setMulticastHopLimit(1) }) != "")
     assert((await thrown {
-        let _ = try a.broadcast()
+        _ = try a.broadcast()
     }) != "")
     assert((await thrown { try a.setBroadcast(true) }) != "")
     assert((await thrown {
-        let _ = try a.receiveBufferSize()
+        _ = try a.receiveBufferSize()
     }) != "")
     assert((await thrown { try a.setReceiveBufferSize(4096) }) != "")
     assert((await thrown {
-        let _ = try a.sendBufferSize()
+        _ = try a.sendBufferSize()
     }) != "")
     assert((await thrown { try a.setSendBufferSize(4096) }) != "")
     assert((await thrown {
-        let _ = try a.hopLimit()
+        _ = try a.hopLimit()
     }) != "")
     assert((await thrown { try a.setHopLimit(1) }) != "")
     assert((await thrown { try a.join(group: group) }) != "")

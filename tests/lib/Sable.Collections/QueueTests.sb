@@ -12,7 +12,7 @@ fn aQueueIsGoneThroughFromTheFront() {
     queue.enqueue(1)
     queue.enqueue(2)
     queue.enqueue(3)
-    let _ = queue.dequeue()
+    _ = queue.dequeue()
     queue.enqueue(4)
     queue.enqueue(5)
 

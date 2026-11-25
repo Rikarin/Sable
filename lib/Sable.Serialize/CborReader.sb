@@ -127,9 +127,9 @@ public struct CborReader {
     }
 
     mutating fn pop() {
-        let _ = majors.removeLast()
-        let _ = left.removeLast()
-        let _ = counts.removeLast()
+        _ = majors.removeLast()
+        _ = left.removeLast()
+        _ = counts.removeLast()
     }
 
     mutating fn endIndefinite(_ start: Int) throws(SerializeError) {

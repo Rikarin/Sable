@@ -8,7 +8,7 @@ struct HandClock: Clock {
     let seconds: Atomic<Int>
 
     fn pass(_ count: Int) {
-        let _ = seconds.update { $0 + count }
+        _ = seconds.update { $0 + count }
     }
 
     fn now() -> Instant {

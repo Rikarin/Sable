@@ -94,7 +94,7 @@ fn mergeEndsWithTheFirstError() async {
     await first.close(error: .Down)
     var iterator = merge(first, second).makeAsyncIterator()
     do {
-        let _ = try await iterator.next()
+        _ = try await iterator.next()
         assert(false)
     } catch {
         assert(error == .Down)

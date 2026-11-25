@@ -48,10 +48,10 @@ fn theTailFollowsTheDistribution() {
 
 @test(traps: "the rate must be positive and finite")
 fn aRateOfZeroTraps() {
-    let _ = ExponentialDistribution(rate: 0.0)
+    _ = ExponentialDistribution(rate: 0.0)
 }
 
 @test(traps: "the rate must be positive and finite")
 fn aRateThatIsNoNumberTraps() {
-    let _ = ExponentialDistribution(rate: F64.nan)
+    _ = ExponentialDistribution(rate: F64.nan)
 }

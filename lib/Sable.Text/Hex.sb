@@ -68,7 +68,7 @@ public struct Hex {
     /// ```sable
     /// assert(try! Hex.decode("00ff") == [0x00, 0xFF])
     /// do {
-    ///     let _ = try Hex.decode("abc")
+    ///     _ = try Hex.decode("abc")
     /// } catch {
     ///     assert(error == .InvalidLength(at: 2))
     /// }

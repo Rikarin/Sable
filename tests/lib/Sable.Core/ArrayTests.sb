@@ -123,19 +123,19 @@ fn bytesThatAreNotUtf8ReadAsReplacements() {
 @test(traps: "array index out of range")
 fn indexingPastTheEndTraps() {
     let xs: Int[>..] = [1, 2]
-    let _ = xs[2]
+    _ = xs[2]
 }
 
 @test(traps: "array slice out of range")
 fn slicingPastTheEndTraps() {
     let xs: Int[>..] = [1, 2]
-    let _ = xs.slice(from: 1, to: 3)
+    _ = xs.slice(from: 1, to: 3)
 }
 
 @test(traps: "removeLast of an empty array")
 fn removeLastOfAnEmptyArrayTraps() {
     var xs: Int[>..] = []
-    let _ = xs.removeLast()
+    _ = xs.removeLast()
 }
 
 @test
@@ -254,7 +254,7 @@ fn anArrayOfElementsOfNoSizeGrowsAsAnyDoes() {
     nothings.append(repeating: Nothing { }, count: 24)
     assertEqual(nothings.count, 1024)
     nothings.removeLast(24)
-    let _ = nothings.removeLast()
+    _ = nothings.removeLast()
     assertEqual(nothings.count, 999)
     var copy = nothings
     copy.rotate(left: 3)

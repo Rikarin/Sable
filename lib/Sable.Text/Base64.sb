@@ -133,7 +133,7 @@ public struct Base64 {
     /// assert(try! Base64.decode("+/8=") == [0xFB, 0xFF])
     /// assert(try! Base64.decode("-_8", alphabet: .UrlSafe) == [0xFB, 0xFF])
     /// do {
-    ///     let _ = try Base64.decode("-_8=")
+    ///     _ = try Base64.decode("-_8=")
     /// } catch {
     ///     assert(error == .InvalidCharacter(at: 0, byte: 0x2D))
     /// }

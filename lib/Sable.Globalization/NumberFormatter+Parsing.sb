@@ -325,7 +325,7 @@ extension NumberFormatter {
             }
         }
         do {
-            let _ = try plainBody(body)
+            _ = try plainBody(body)
             return .Invalid(at: body[0].at)
         } catch {
             return error

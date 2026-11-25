@@ -155,7 +155,7 @@ public struct TomlDocument {
                 } else if find(path[0..<(path.count - 1)].toArray())!.isTableArray {
                     throw fault(path, "is a table under its own header: set its values, or take it out and add another")
                 } else {
-                    let _ = try remove(path)
+                    _ = try remove(path)
                     try insert(path, value)
                 }
             } else {

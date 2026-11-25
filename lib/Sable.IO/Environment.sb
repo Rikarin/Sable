@@ -61,7 +61,7 @@ public struct Environment {
     public unsafe static fn remove(_ name: String) {
         Environment.checkName(name)
         unsafe {
-            let _ = Runtime.removeEnvironment(name)
+            _ = Runtime.removeEnvironment(name)
         }
     }
 

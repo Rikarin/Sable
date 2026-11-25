@@ -12,7 +12,7 @@ fn bytes(_ text: String) -> U8[>..] {
 
 fn intError(_ text: String, radix: Int, styles: NumberStyles = .Sign) -> ParseError? {
     do {
-        let _ = try Int.parse(utf8: bytes(text), radix: radix, styles: styles)
+        _ = try Int.parse(utf8: bytes(text), radix: radix, styles: styles)
         return none
     } catch {
         return error
@@ -21,7 +21,7 @@ fn intError(_ text: String, radix: Int, styles: NumberStyles = .Sign) -> ParseEr
 
 fn floatError(_ text: String, styles: NumberStyles) -> ParseError? {
     do {
-        let _ = try F64.parse(text, styles: styles)
+        _ = try F64.parse(text, styles: styles)
         return none
     } catch {
         return error
@@ -53,7 +53,7 @@ fn aByteThatIsNotADigitIsReportedWhereItIs() {
 @test
 fn anUnsignedIntegerRefusesANegative() {
     do {
-        let _ = try U8.parse(utf8: bytes("-1"), radix: 10)
+        _ = try U8.parse(utf8: bytes("-1"), radix: 10)
         fail("parsed -1 as a U8")
     } catch {
         assertEqual(error, .Underflow)
@@ -69,7 +69,7 @@ fn anyParsableIsReadFromItsBytes() {
     assertEqual(try! String.parse(utf8: bytes("héllo")), "héllo")
     let invalid: U8[>..] = [0xFF, 0x31]
     do {
-        let _ = try Int.parse(utf8: invalid)
+        _ = try Int.parse(utf8: invalid)
         fail("parsed bytes that are not UTF-8")
     } catch {
         assertEqual(error, .Invalid(at: 0))

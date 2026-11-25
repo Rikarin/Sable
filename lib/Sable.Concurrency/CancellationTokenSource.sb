@@ -16,7 +16,7 @@ import Sable.Time
 /// let source = CancellationTokenSource()
 /// let token = source.token
 /// let stopped = Atomic(false)
-/// let _ = token.register { stopped.store(true) }
+/// _ = token.register { stopped.store(true) }
 /// source.cancel()
 /// assert(token.isCancellationRequested && stopped.load())
 /// ```
@@ -66,7 +66,7 @@ public final class CancellationTokenSource {
             cancel()
             return
         }
-        let _ = Task.detached {
+        _ = Task.detached {
             try? await clock.sleep(for: duration)
             self.cancel()
         }
@@ -77,7 +77,7 @@ public final class CancellationTokenSource {
     public static fn linked(_ tokens: CancellationToken[>..]) -> CancellationTokenSource {
         let source = CancellationTokenSource()
         for token in tokens {
-            let _ = token.register { source.cancel() }
+            _ = token.register { source.cancel() }
         }
         return source
     }

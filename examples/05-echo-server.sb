@@ -66,7 +66,7 @@ fn main() async throws {
     if let wanted = Environment.arguments().first {
         let listener = try TcpListener.bind(try SocketAddress.parse(wanted))
         print("serving \(listener.localAddress)")
-        let _ = await serve(listener)
+        _ = await serve(listener)
         return
     }
 

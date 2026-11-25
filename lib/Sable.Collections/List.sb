@@ -129,7 +129,7 @@ public struct List<Element> {
     /// traps.
     public mutating fn insert(_ element: Element, at index: Int) {
         // The range is checked before anything moves: a slice past the end traps.
-        let _ = storage[index..<storage.count]
+        _ = storage[index..<storage.count]
         storage.append(element)
         // Right by one: the new last element comes round to 'index'.
         storage.rotate(from: index, to: storage.count, left: -1)
@@ -146,7 +146,7 @@ public struct List<Element> {
     /// Takes out the element at 'index' and gives it back, moving those
     /// after it down one; outside 0..<count traps.
     public mutating fn remove(at index: Int) -> Element {
-        let _ = storage[index]
+        _ = storage[index]
         storage.rotate(from: index, to: storage.count, left: 1)
         return storage.removeLast()
     }
@@ -218,9 +218,9 @@ public struct List<Element> {
             return
         }
         // A negative count is a range the wrong way round: the slice traps.
-        let _ = storage[0..<count]
+        _ = storage[0..<count]
         while storage.count > count {
-            let _ = storage.removeLast()
+            _ = storage.removeLast()
         }
     }
 
@@ -251,7 +251,7 @@ public struct List<Element> {
     /// ```
     public mutating fn replaceSubrange<C: Collection>(_ range: Range<Int>, with elements: C) where C.Element == Element {
         // Slicing checks the range, before anything changes.
-        let _ = storage[range]
+        _ = storage[range]
         let tail = storage.count - range.upperBound
         // The range's elements go round to the end, and are dropped there;
         // the new ones go on the end, and round to the front of the tail.

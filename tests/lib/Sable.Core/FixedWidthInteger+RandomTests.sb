@@ -57,8 +57,8 @@ fn theWholeOfATypeIsARange() {
     var i = 0
     while i < 100 {
         everSet = everSet | U8.random(in: U8.min...U8.max, using: &generator)
-        let _ = I64.random(in: I64.min...I64.max, using: &generator)
-        let _ = U128.random(in: U128.min...U128.max, using: &generator)
+        _ = I64.random(in: I64.min...I64.max, using: &generator)
+        _ = U128.random(in: U128.min...U128.max, using: &generator)
         i += 1
     }
     assert(everSet == 255)
@@ -95,13 +95,13 @@ fn theSystemsGeneratorIsTheDefault() {
 
 @test(traps: "a random value of an empty range")
 fn anEmptyHalfOpenRangeTraps() {
-    let _ = Int.random(in: 3..<3)
+    _ = Int.random(in: 3..<3)
 }
 
 @test(traps: "a random value of an empty range")
 fn anUpsideDownClosedRangeTraps() {
     var generator = SeededRandomNumberGenerator(seed: 1)
-    let _ = Int.random(in: ClosedRange(lowerBound: 3, upperBound: 2), using: &generator)
+    _ = Int.random(in: ClosedRange(lowerBound: 3, upperBound: 2), using: &generator)
 }
 
 // Every value of the range as often as every other.
@@ -153,7 +153,7 @@ fn aRangeOfA64BitTypeTakesOneDraw() {
     var generator = Pcg64(seed: 1)
     var ahead = generator
     ahead.advance(by: 2)
-    let _ = I64.random(in: I64.min...I64.max, using: &generator)
-    let _ = U64.random(in: 0...9, using: &generator)
+    _ = I64.random(in: I64.min...I64.max, using: &generator)
+    _ = U64.random(in: 0...9, using: &generator)
     assertEqual(generator.next(), ahead.next())
 }

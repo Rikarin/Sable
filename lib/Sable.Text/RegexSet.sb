@@ -68,7 +68,7 @@ public class RegexSet {
     /// The indexes of the patterns that match somewhere in the text, in
     /// order.
     public fn matches(_ text: some StringProtocol) -> Int[>..] {
-        let _ = run(text.asSubstring, stopAtFirst: false)
+        _ = run(text.asSubstring, stopAtFirst: false)
         var found: Int[>..] = []
         var i = 0
         while i < matched.count {

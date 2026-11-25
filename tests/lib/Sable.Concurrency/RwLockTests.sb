@@ -28,7 +28,7 @@ fn readersShareAndAWriterIsAlone() async {
                             inside.subtract(1)
                         }
                     } else {
-                        let _ = table.read { value in
+                        _ = table.read { value in
                             let now = inside.add(1) + 1
                             mostReaders.max(now)
                             inside.subtract(1)

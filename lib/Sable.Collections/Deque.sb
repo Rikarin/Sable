@@ -156,7 +156,7 @@ public class Deque<Element> {
             if positions.lowerBound < 0 || positions.upperBound > used || positions.upperBound < positions.lowerBound {
                 // Out of range: the trap an array's slice gives.
                 let nothing: Int[>..] = []
-                let _ = nothing[positions.lowerBound..<positions.upperBound]
+                _ = nothing[positions.lowerBound..<positions.upperBound]
             }
             var elements: Element[>..] = []
             elements.reserveCapacity(positions.upperBound - positions.lowerBound)
@@ -247,7 +247,7 @@ public class Deque<Element> {
     public fn insert(_ value: Element, at position: Int) {
         if position < 0 || position > used {
             let nothing: Int[>..] = []
-            let _ = nothing[position]
+            _ = nothing[position]
         }
         if position == used {
             append(value)

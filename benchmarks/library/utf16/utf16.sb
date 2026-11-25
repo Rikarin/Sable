@@ -10,9 +10,9 @@ fn main() {
     var total = 0
     for _ in 0..<50 {
         var units: U16[>..] = []
-        let _ = Utf8.toUtf16(bytes, into: &units)
+        _ = Utf8.toUtf16(bytes, into: &units)
         var back: U8[>..] = []
-        let _ = Utf8.fromUtf16(units, into: &back)
+        _ = Utf8.fromUtf16(units, into: &back)
         total += units.count + back.count
     }
     print(total)

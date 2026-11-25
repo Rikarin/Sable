@@ -372,7 +372,7 @@ final class YamlEditor: YamlLayout {
                 return true
             }
             while splices.count > mark {
-                let _ = splices.removeLast()
+                _ = splices.removeLast()
             }
         }
         let kept = origin(before)
@@ -538,7 +538,7 @@ final class YamlEditor: YamlLayout {
                 return true
             }
             while splices.count > mark {
-                let _ = splices.removeLast()
+                _ = splices.removeLast()
             }
         }
         var level = YamlLevel(isMap: map, isFlow: true, column: 0, compact: false)

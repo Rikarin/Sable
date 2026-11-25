@@ -84,7 +84,7 @@ extension String {
     /// made U+FFFD.
     public static fn fromUtf16Lossy(_ units: U16[:]) -> String {
         var bytes: U8[>..] = []
-        let _ = Utf8.fromUtf16(units, into: &bytes)
+        _ = Utf8.fromUtf16(units, into: &bytes)
         // The encoder's own bytes, which need no check.
         unsafe {
             return String.fromUtf8Unchecked(bytes)

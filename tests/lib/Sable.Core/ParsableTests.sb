@@ -8,7 +8,7 @@ import Sable.Testing
 
 fn boolError(_ text: String) -> ParseError? {
     do {
-        let _ = try Bool.parse(text)
+        _ = try Bool.parse(text)
         return none
     } catch {
         return error
@@ -17,7 +17,7 @@ fn boolError(_ text: String) -> ParseError? {
 
 fn charError(_ text: String) -> ParseError? {
     do {
-        let _ = try Char.parse(text)
+        _ = try Char.parse(text)
         return none
     } catch {
         return error

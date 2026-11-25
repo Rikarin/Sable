@@ -14,8 +14,8 @@ fn aDequeIsGoneThroughFrontToBack() {
         deque.append(i)
         i = i + 1
     }
-    let _ = deque.removeFirst()
-    let _ = deque.removeFirst()
+    _ = deque.removeFirst()
+    _ = deque.removeFirst()
     deque.append(6)
     deque.append(7)
     deque.prepend(1)
@@ -110,7 +110,7 @@ fn theSubscriptReplacesAnElementByPosition() {
 @test(traps: "array index out of range")
 fn readingPastTheEndTraps() {
     let deque = Deque<Int>([1, 2])
-    let _ = deque[2]
+    _ = deque[2]
 }
 
 @test(traps: "array index out of range")
@@ -186,7 +186,7 @@ fn aDequeIsWrittenFromTheEndRoundTheEndOfItsSlots() {
 @test(traps: "array slice out of range")
 fn aDequeSlicedPastItsEndTraps() {
     let deque = Deque<Int>([1, 2, 3])
-    let _ = deque[1..<blackBox(5)]
+    _ = deque[1..<blackBox(5)]
 }
 
 @test
@@ -298,8 +298,8 @@ fn anElementIsLetGoOfWhenItIsRemoved() {
         assertEqual(counter.alive, deque.count)
     }
     for i in 0..<60 {
-        let _ = deque.removeFirst()
-        let _ = deque.remove(at: deque.count / 2)
+        _ = deque.removeFirst()
+        _ = deque.remove(at: deque.count / 2)
         assertEqual(counter.alive, deque.count)
         deque.insert(Item(counter, i), at: deque.count / 3)
         assertEqual(counter.alive, deque.count)
@@ -308,7 +308,7 @@ fn anElementIsLetGoOfWhenItIsRemoved() {
     var seen = 0
     for item in deque {
         deque.append(item)
-        let _ = deque.removeLast()
+        _ = deque.removeLast()
         seen += 1
     }
     assertEqual(seen, deque.count)

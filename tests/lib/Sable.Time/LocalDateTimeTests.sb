@@ -9,7 +9,7 @@ fn local(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int, _ se
 
 fn localError(_ text: String) -> ParseError? {
     do {
-        let _ = try LocalDateTime.parse(text)
+        _ = try LocalDateTime.parse(text)
         return none
     } catch {
         return error
@@ -18,7 +18,7 @@ fn localError(_ text: String) -> ParseError? {
 
 fn patternError(_ text: String, _ pattern: String) -> ParseError? {
     do {
-        let _ = try LocalDateTime.parse(text, pattern: pattern)
+        _ = try LocalDateTime.parse(text, pattern: pattern)
         return none
     } catch {
         return error

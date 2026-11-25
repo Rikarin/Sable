@@ -96,7 +96,7 @@ public struct SeededRandomNumberGenerator: RandomNumberGenerator {
                     t2 = t2 ^ s2
                     t3 = t3 ^ s3
                 }
-                let _ = next()
+                _ = next()
                 bit += 1
             }
         }

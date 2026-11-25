@@ -112,12 +112,12 @@ fn pair() -> UnsafeBuffer<Int> {
 
 @test(traps: "index 2 is out of range for count 2")
 fn readingPastTheBufferTraps() {
-    let _ = pair()[2]
+    _ = pair()[2]
 }
 
 @test(traps: "index -1 is out of range for count 2")
 fn readingBeforeTheBufferTraps() {
-    let _ = pair()[-1]
+    _ = pair()[-1]
 }
 
 @test(traps: "index 2 is out of range for count 2")
@@ -135,6 +135,6 @@ fn writingBeforeTheBufferTraps() {
 @test(traps: "a buffer of -1 values")
 fn aBufferOfANegativeCountTraps() {
     unsafe {
-        let _ = UnsafeBuffer<Int>.viewing(RawPtr<Int>.null, count: -1)
+        _ = UnsafeBuffer<Int>.viewing(RawPtr<Int>.null, count: -1)
     }
 }

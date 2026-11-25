@@ -412,8 +412,9 @@ module.exports = grammar({
         prec(PREC.range - 1, seq(field("start", $._expression), field("operator", "..."))),
       ),
 
+    // A target of "_" drops what it is given.
     assignment_expression: ($) =>
-      prec.right(PREC.assign, seq(field("target", $._expression), field("operator", choice("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "??=")), field("value", $._expression))),
+      prec.right(PREC.assign, seq(field("target", choice($._expression, alias("_", $.discard))), field("operator", choice("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "??=")), field("value", $._expression))),
 
     ternary_expression: ($) => prec.right(PREC.ternary, seq(field("condition", $._expression), "?", field("consequence", $._expression), ":", field("alternative", $._expression))),
 

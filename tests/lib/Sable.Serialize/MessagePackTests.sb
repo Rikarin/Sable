@@ -52,7 +52,7 @@ fn wrote(_ body: (MessagePackEncoder) throws(SerializeError) -> Void) -> String 
 // The error the bytes do not parse by; "" when they parse.
 fn refusal(_ bytes: U8[>..], depth: Int = 128) -> String {
     do {
-        let _ = try MessagePackValue.parse(bytes, maximumDepth: depth)
+        _ = try MessagePackValue.parse(bytes, maximumDepth: depth)
         return ""
     } catch {
         return error.description()
@@ -210,7 +210,7 @@ fn aTimestampIsAUtcDateTimeOfAnyType() throws {
         assert((try? MessagePack.decode(UtcDateTime.self, from: bytes)) == none)
     }
     do {
-        let _ = try MessagePackDecoder.parse([0xD4, 5, 0]).decodeTimestamp()
+        _ = try MessagePackDecoder.parse([0xD4, 5, 0]).decodeTimestamp()
         fail("not a timestamp")
     } catch {
         assertEqual(error.description(), "$: the extension of type 5 is not a timestamp")
@@ -283,34 +283,34 @@ fn decodersSayWhereAndWhatIsWrong() throws {
     var messages: String[>..] = []
     let attempts: (() throws(SerializeError) -> Void)[>..] = [
         {
-            let _ = try root.field("zz").decodeInt()
+            _ = try root.field("zz").decodeInt()
         },
         {
-            let _ = try root.decodeInt()
+            _ = try root.decodeInt()
         },
         {
-            let _ = try root.field("a").decodeString()
+            _ = try root.field("a").decodeString()
         },
         {
-            let _ = try root.field("a").element(1).decodeBool()
+            _ = try root.field("a").element(1).decodeBool()
         },
         {
-            let _ = try root.field("a").element(0).decodeBytes()
+            _ = try root.field("a").element(0).decodeBytes()
         },
         {
-            let _ = try root.field("a").element(0).decodeSequence()
+            _ = try root.field("a").element(0).decodeSequence()
         },
         {
-            let _ = try root.field("a").element(0).decodeExtension()
+            _ = try root.field("a").element(0).decodeExtension()
         },
         {
-            let _ = try root.field("b c").decodeMap()
+            _ = try root.field("b c").decodeMap()
         },
         {
-            let _ = try root.field("a").caseName()
+            _ = try root.field("a").caseName()
         },
         {
-            let _ = try root.field("b c").caseName()
+            _ = try root.field("b c").caseName()
         },
         { try root.field("a").beginStruct("T") },
         {

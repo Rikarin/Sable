@@ -317,12 +317,12 @@ fn knuthsRareCorrectionsAreRight() {
 
 @test(traps: "division by zero")
 fn dividingByZeroTraps() {
-    let _ = BigInt(2).pow(100) / BigInt(0)
+    _ = BigInt(2).pow(100) / BigInt(0)
 }
 
 @test(traps: "division by zero")
 fn aSmallRemainderByZeroTraps() {
-    let _ = BigInt(7) % BigInt(0)
+    _ = BigInt(7) % BigInt(0)
 }
 
 @test
@@ -410,13 +410,13 @@ fn parsingSaysWhereTheTextIsWrong() {
     assertEqual(parseError("1__0"), ParseError.InvalidDigit(at: 2))
     assertEqual(parseError("+ 1"), ParseError.InvalidDigit(at: 1))
     do {
-        let _ = try BigInt.parse("12", radix: 2)
+        _ = try BigInt.parse("12", radix: 2)
         assert(false)
     } catch {
         assertEqual(error, ParseError.InvalidDigit(at: 1))
     }
     do {
-        let _ = try BigInt.parse("  ", radix: 10, styles: .Whitespace)
+        _ = try BigInt.parse("  ", radix: 10, styles: .Whitespace)
         assert(false)
     } catch {
         assertEqual(error, ParseError.Empty)
@@ -425,7 +425,7 @@ fn parsingSaysWhereTheTextIsWrong() {
 
 fn parseError(_ text: String) -> ParseError {
     do {
-        let _ = try BigInt.parse(text, radix: 10, styles: [.Sign, .Separators])
+        _ = try BigInt.parse(text, radix: 10, styles: [.Sign, .Separators])
     } catch {
         return error
     }
@@ -434,7 +434,7 @@ fn parseError(_ text: String) -> ParseError {
 
 @test(traps: "a radix must be 2 to 36, not 37")
 fn aRadixPast36Traps() {
-    let _ = BigInt(5).toString(radix: 37)
+    _ = BigInt(5).toString(radix: 37)
 }
 
 // ---- Bits and bytes ---------------------------------------------------------------
@@ -467,12 +467,12 @@ fn bitsActAsAnInfiniteTwosComplement() {
 
 @test(traps: "shift out of range")
 fn aNegativeShiftTraps() {
-    let _ = BigInt(1) << -1
+    _ = BigInt(1) << -1
 }
 
 @test(traps: "shift out of range")
 fn aShiftByAHugeBigIntTraps() {
-    let _ = BigInt(1) >> BigInt(2).pow(70)
+    _ = BigInt(1) >> BigInt(2).pow(70)
 }
 
 @test
@@ -510,7 +510,7 @@ fn powersMultiplyOut() {
 
 @test(traps: "the exponent must not be negative, but is -1")
 fn aNegativePowerTraps() {
-    let _ = BigInt(2).pow(-1)
+    _ = BigInt(2).pow(-1)
 }
 
 @test
@@ -535,12 +535,12 @@ fn modularPowersStayBelowTheModulus() {
 
 @test(traps: "the modulus must be positive, not 0")
 fn aZeroModulusTraps() {
-    let _ = BigInt(2).powMod(BigInt(3), BigInt(0))
+    _ = BigInt(2).powMod(BigInt(3), BigInt(0))
 }
 
 @test(traps: "the exponent must not be negative, but is -3")
 fn aNegativeModularExponentTraps() {
-    let _ = BigInt(2).powMod(BigInt(-3), BigInt(7))
+    _ = BigInt(2).powMod(BigInt(-3), BigInt(7))
 }
 
 @test
@@ -579,7 +579,7 @@ fn integerSquareRootsAreTheFloor() {
 
 @test(traps: "isqrt's argument must not be negative, but is -4")
 fn aNegativeSquareRootTraps() {
-    let _ = isqrt(BigInt(-4))
+    _ = isqrt(BigInt(-4))
 }
 
 @test

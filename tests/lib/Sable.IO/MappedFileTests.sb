@@ -168,7 +168,7 @@ fn anEmptyOrMissingFileMapsAsItShould() throws {
     empty.close()
     try File.remove(path)
     do {
-        let _ = try MappedFile.open("sable-test-mapped-missing.bin")
+        _ = try MappedFile.open("sable-test-mapped-missing.bin")
         fail("a missing file mapped")
     } catch IoError.NotFound(_) { }
 }
@@ -192,7 +192,7 @@ fn jsonIsParsedFromAMappingWhereItLies() throws {
 
     // Ill-formed UTF-8 is an error where it is.
     do {
-        let _ = try parse(bytes: [0x5B, 0x22, 0xC3, 0xA9, 0xFF, 0x22, 0x5D])
+        _ = try parse(bytes: [0x5B, 0x22, 0xC3, 0xA9, 0xFF, 0x22, 0x5D])
         fail("ill-formed UTF-8 parsed")
     } catch ParseError.InvalidUnicode(let at, _) {
         assertEqual(at.offset, 3)

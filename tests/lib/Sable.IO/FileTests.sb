@@ -166,7 +166,7 @@ fn metadataSaysWhatIsThere() throws {
 
     assert((try File.metadata("\(temp.path)")).isDirectory)
     do {
-        let _ = try File.metadata(temp.path.appending("missing"))
+        _ = try File.metadata(temp.path.appending("missing"))
         fail("nothing has metadata")
     } catch IoError.NotFound(_) { }
 }
@@ -275,7 +275,7 @@ fn aSymbolicLinkLeadsToItsTarget() throws {
     try File.createSymlink(at: link, to: temp.path.appending("nowhere"))
     assert(!File.exists(link) && !Directory.exists(link))
     do {
-        let _ = try File.metadata(link)
+        _ = try File.metadata(link)
         fail("it leads nowhere")
     } catch IoError.NotFound(_) { }
     assert((try File.metadata(link, followLinks: false)).isSymlink)
@@ -286,7 +286,7 @@ fn aSymbolicLinkLeadsToItsTarget() throws {
     try File.rename(from: link, to: temp.path.appending("moved"))
     assert(try File.readLink(temp.path.appending("moved")) == temp.path.appending("nowhere"))
     do {
-        let _ = try File.readLink(path)
+        _ = try File.readLink(path)
         fail("a file is no link")
     } catch IoError.InvalidInput(_) { }
 }
@@ -333,7 +333,7 @@ fn aFileIsReadAndAddedTo() throws {
     assertEqual(try File.read(path), "one\r\ntwo\nthree\u{FFFD}")
     for missing in ["", "\(path)-missing", "\(path)/inside"] {
         do {
-            let _ = try File.readBytes(missing)
+            _ = try File.readBytes(missing)
             fail("nothing was read")
         } catch IoError.NotFound(_) { }
     }

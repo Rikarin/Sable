@@ -126,7 +126,7 @@ fn removeAllAndShrinkToFitComeBackInline() {
     small.append(contentsOf: [1, 2, 3])
     small.shrinkToFit()
     assert(small.isSpilled, "three do not fit inline")
-    let _ = small.removeLast()
+    _ = small.removeLast()
     small.shrinkToFit()
     assert(!small.isSpilled)
     assert(small.toArray() == [1, 2])
@@ -266,15 +266,15 @@ fn aSmallVecWithinItsRoomAllocatesOnceAtMost() {
             i += 1
         }
         v[0] = 5
-        let _ = v.remove(at: 2)
+        _ = v.remove(at: 2)
         v.insert(7, at: 0)
         var total = 0
         for x in v {
             total += x
         }
-        let _ = v.contains(total)
-        let _ = v.first
-        let _ = v.popLast()
+        _ = v.contains(total)
+        _ = v.first
+        _ = v.popLast()
         v.truncate(to: 3)
     })
     assert(made <= 1, "\(made) allocations")

@@ -142,7 +142,7 @@ extension<Element> Element[:] {
     /// the median of three: linear on average.
     public mutating fn selectNth(_ index: Int, by before: (Element, Element) -> Bool) {
         // Traps for an index outside the array, as indexing does.
-        let _ = self[index]
+        _ = self[index]
         var low = 0
         var high = self.count - 1
         while low < high {

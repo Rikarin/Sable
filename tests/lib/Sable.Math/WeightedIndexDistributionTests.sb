@@ -79,35 +79,35 @@ fn weightsFarApartOrOutOfRangeOfTheirSumAreHeld() {
 @test(traps: "a weight must be positive")
 fn noWeightsTrap() {
     let nothing: Int[>..] = []
-    let _ = WeightedIndexDistribution(weights: nothing)
+    _ = WeightedIndexDistribution(weights: nothing)
 }
 
 @test(traps: "a weight must be positive")
 fn weightsAllZeroTrap() {
-    let _ = WeightedIndexDistribution(weights: [0.0, 0.0])
+    _ = WeightedIndexDistribution(weights: [0.0, 0.0])
 }
 
 @test(traps: "a weight")
 fn aNegativeWholeWeightTraps() {
-    let _ = WeightedIndexDistribution(weights: [1, -1])
+    _ = WeightedIndexDistribution(weights: [1, -1])
 }
 
 @test(traps: "a weight must be finite and not negative")
 fn aNegativeWeightTraps() {
-    let _ = WeightedIndexDistribution(weights: [1.0, -1.0])
+    _ = WeightedIndexDistribution(weights: [1.0, -1.0])
 }
 
 @test(traps: "a weight must be finite and not negative")
 fn aWeightThatIsNoNumberTraps() {
-    let _ = WeightedIndexDistribution(weights: [1.0, F64.nan])
+    _ = WeightedIndexDistribution(weights: [1.0, F64.nan])
 }
 
 @test(traps: "a weight must be finite and not negative")
 fn anInfiniteWeightTraps() {
-    let _ = WeightedIndexDistribution(weights: [1.0, F64.infinity])
+    _ = WeightedIndexDistribution(weights: [1.0, F64.infinity])
 }
 
 @test(traps: "overflow")
 fn aSumPastAU64Traps() {
-    let _ = WeightedIndexDistribution(weights: [Int.max, Int.max, 2])
+    _ = WeightedIndexDistribution(weights: [Int.max, Int.max, 2])
 }

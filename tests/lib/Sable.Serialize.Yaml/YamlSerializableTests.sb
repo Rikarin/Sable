@@ -93,7 +93,7 @@ fn theLibrarysConformancesRoundTrip() throws {
     assertEqual(back["1"] ?? 0, 2)
     assertEqual((try Yaml.decode(Dictionary<String, Int>.self, from: "1: 1\ntrue: 2\n"))["true"] ?? 0, 2)
     var unique = Set<Int>()
-    let _ = unique.insert(4)
+    _ = unique.insert(4)
     assert((try Yaml.decode(Set<Int>.self, from: try Yaml.encode(unique))) == unique)
     assert((try Yaml.decode(Duration.self, from: try Yaml.encode(Duration.seconds(2)))) == Duration.seconds(2))
     let moment = UtcDateTime.fromUnix(1700000000)
@@ -123,7 +123,7 @@ fn bytesAreBinary() throws {
 
 fn failure<T: Serializable>(_ type: T.Type, _ text: String) -> String {
     do {
-        let _ = try Yaml.decode(type, from: text)
+        _ = try Yaml.decode(type, from: text)
         return "decoded"
     } catch {
         return error.description()
@@ -154,7 +154,7 @@ fn errorsSayWhere() {
     assertEqual(failure(Shape.self, "[]: {}"), "$: expected a case's name, or a mapping of one entry, found a mapping")
     assertEqual(failure(Int.self, "[1"), "not YAML: line 1, column 3: the text ends inside '[' of line 1, column 1")
     do {
-        let _ = try Yaml.decodeAll(Int.self, from: "--- 1\n--- [")
+        _ = try Yaml.decodeAll(Int.self, from: "--- 1\n--- [")
         fail("decoded")
     } catch {
         assert(error.description().hasPrefix("not YAML: line 2"))
@@ -195,7 +195,7 @@ fn theDecoderDirectly() throws {
         assertEqual(error.description(), "$: only a struct or a map can be flattened")
     }
     do {
-        let _ = try YamlEncoder().text()
+        _ = try YamlEncoder().text()
         fail("nothing was written")
     } catch {
         assertEqual(error.description(), "$: a document ends before its value does")

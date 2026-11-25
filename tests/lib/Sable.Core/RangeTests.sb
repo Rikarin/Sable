@@ -181,10 +181,10 @@ fn aClosedRangeIsARandomAccessCollection() {
 
 @test(traps: "position 4 is out of range for count 4")
 fn aPositionPastAClosedRangeTraps() {
-    let _ = (5...8)[4]
+    _ = (5...8)[4]
 }
 
 @test(traps: "position -1 is out of range for count 4")
 fn aNegativePositionOfAClosedRangeTraps() {
-    let _ = (5...8)[-1]
+    _ = (5...8)[-1]
 }

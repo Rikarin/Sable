@@ -310,7 +310,7 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
 
         // Each binding at the top level becomes a global, its type written
         // out (a global's is not inferred from a call), set up where the
-        // binding was: 'let _ = x' reaches it, and reaching it sets it up.
+        // binding was: '_ = x' reaches it, and reaching it sets it up.
         var model = compilation!.GetSemanticModel(tree!);
         var globals = new List<(string Name, string Text)>();
         var body = new StringBuilder();
@@ -332,7 +332,7 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
 
             var typeText = declarator.TypeAnnotation is { } annotation ? annotation.Type.ToString().Trim() : symbol.Type.ToDisplayString();
             globals.Add((name, $"{local.LetOrVarKeyword.Text} {name}: {typeText} = {initializer.Value.ToString().Trim()}"));
-            body.Append(program, copied, local.Span.Start - copied).Append("let _ = ").Append(name);
+            body.Append(program, copied, local.Span.Start - copied).Append("_ = ").Append(name);
             copied = local.Span.End;
         }
 

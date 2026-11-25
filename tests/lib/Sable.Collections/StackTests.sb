@@ -49,7 +49,7 @@ fn countFollowsPushesAndPops() {
     stack.push("b")
     assertEqual(stack.count, 2)
     assert(!stack.isEmpty)
-    let _ = stack.pop()
+    _ = stack.pop()
     assertEqual(stack.count, 1)
     assertEqual(stack.peek() ?? "", "a")
 }

@@ -47,7 +47,7 @@ public struct Base64Decoder {
     /// let digits: U8[>..] = [0x54, 0x57, 0x45]
     /// assert(try! decoder.decode(bytes: digits).count == 0)
     /// do {
-    ///     let _ = try decoder.finish()
+    ///     _ = try decoder.finish()
     /// } catch {
     ///     assert(error == .InvalidPadding(at: 3))
     /// }

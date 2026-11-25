@@ -250,7 +250,7 @@ async fn store(_ which: Int) {
         }
         if which == 4 {
             await hammer(live, box, { b, h, i in
-                let _ = Statics.names
+                _ = Statics.names
             }, { b in Statics.names.count > 3 ? none : fixedList[0] })
         }
         if which == 5 {
@@ -343,7 +343,7 @@ async fn store(_ which: Int) {
         }
         if which == 16 {
             await hammer(live, box, { b, h, i in
-                let _ = h
+                _ = h
             }, { b in fixed })
         }
         globalOne = none
@@ -424,7 +424,7 @@ async fn readUnowned(_ k: Int) {
                 }
             }
         }
-        let _ = spin { parent }
+        _ = spin { parent }
         await group.waitForAll()
     }
 }

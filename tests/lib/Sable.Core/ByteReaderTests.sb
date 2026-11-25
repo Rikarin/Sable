@@ -87,7 +87,7 @@ fn peekLooksWithoutReading() throws(ByteReadError) {
     var reader = ByteReader(bytes)
     assertEqual(reader.peekU8() ?? 0, 7)
     assertEqual(reader.position, 0)
-    let _ = try reader.readU8()
+    _ = try reader.readU8()
     assert(reader.peekU8() == none, "nothing left to peek at")
 }
 
@@ -126,9 +126,9 @@ fn seekingOutsideTheBytesFailsAndStays() {
 fn aReadPastTheEndFailsAndMovesNothing() throws(ByteReadError) {
     let bytes: U8[>..] = [1, 2, 3]
     var reader = ByteReader(bytes)
-    let _ = try reader.readU8()
+    _ = try reader.readU8()
     do {
-        let _ = try reader.readU32()
+        _ = try reader.readU32()
         fail("a U32 was read from two bytes")
     } catch {
         assertEqual(failure(error), "end of data at 1: needed 4, 2 left")
@@ -159,7 +159,7 @@ fn aNegativeCountFails() {
     let bytes: U8[>..] = [1, 2]
     var reader = ByteReader(bytes)
     do {
-        let _ = try reader.readBytes(-1)
+        _ = try reader.readBytes(-1)
         fail("read -1 bytes")
     } catch {
         assertEqual(failure(error), "end of data at 0: needed -1, 2 left")
@@ -172,7 +172,7 @@ fn aVarIntCutShortIsEndOfData() {
     var reader = ByteReader(bytes)
     do {
         assertEqual(try reader.readVarUInt(), 5)
-        let _ = try reader.readVarUInt()
+        _ = try reader.readVarUInt()
         fail("a cut-short varint was read")
     } catch {
         assertEqual(failure(error), "end of data at 1: needed 3, 2 left")
@@ -185,7 +185,7 @@ fn aVarIntPastSixtyFourBitsIsTooLong() {
     let eleven: U8[>..] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01]
     var reader = ByteReader(eleven)
     do {
-        let _ = try reader.readVarUInt()
+        _ = try reader.readVarUInt()
         fail("an eleven-byte varint was read")
     } catch {
         assertEqual(failure(error), "varint too long at 0")
@@ -194,7 +194,7 @@ fn aVarIntPastSixtyFourBitsIsTooLong() {
     let tooWide: U8[>..] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02]
     var wide = ByteReader(tooWide)
     do {
-        let _ = try wide.readVarInt()
+        _ = try wide.readVarInt()
         fail("a 65-bit varint was read")
     } catch {
         assertEqual(failure(error), "varint too long at 0")

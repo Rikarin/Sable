@@ -55,5 +55,5 @@ fn noSamplesAreNone() {
 
 @test(traps: "a random value of an empty range")
 fn anEmptyRangeTraps() {
-    let _ = UniformDistribution(in: 3..<3).sample()
+    _ = UniformDistribution(in: 3..<3).sample()
 }

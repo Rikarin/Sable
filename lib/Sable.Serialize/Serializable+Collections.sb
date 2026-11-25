@@ -53,7 +53,7 @@ extension Set: Serializable where Element: Serializable {
         let elements = try decoder.decodeSequence()
         var all = Set<Element>(minimumCapacity: elements.count)
         for element in elements {
-            let _ = all.insert(try Element.decode(from: element))
+            _ = all.insert(try Element.decode(from: element))
         }
         return all
     }

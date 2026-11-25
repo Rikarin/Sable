@@ -66,13 +66,13 @@ fn referencesResolveAgainstABase() throws {
     assert(Url.canParse("g", relativeTo: base))
     assert(!Url.canParse("g"))
     do {
-        let _ = try Url.parse("g")
+        _ = try Url.parse("g")
         fail("a relative URL parsed with no base")
     } catch {
         assertEqual(error.description(), "'g' is not a URL: a relative URL with no base")
     }
     do {
-        let _ = try Url.parse("http://exa mple.com")
+        _ = try Url.parse("http://exa mple.com")
         fail("a space in a host parsed")
     } catch .Invalid(let input, let reason) {
         assertEqual(input, "http://exa mple.com")
@@ -180,7 +180,7 @@ fn urlsAreValues() throws {
     // Parsable, from any StringProtocol: a Substring of a larger text.
     let bad = "<not a url>"
     do {
-        let _ = try Url.parse(bad[bad.index(after: bad.startIndex)..<bad.index(before: bad.endIndex)])
+        _ = try Url.parse(bad[bad.index(after: bad.startIndex)..<bad.index(before: bad.endIndex)])
         fail("parsed")
     } catch { }
     let good = "<http://x.example/>"

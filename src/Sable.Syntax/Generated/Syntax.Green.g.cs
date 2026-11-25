@@ -1393,6 +1393,30 @@ internal sealed class AssignmentExpressionGreen : GreenNode
         new AssignmentExpressionSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="DiscardExpressionSyntax"/>.</summary>
+internal sealed class DiscardExpressionGreen : GreenNode
+{
+    private readonly GreenToken? _underscoreToken;
+
+    public DiscardExpressionGreen(GreenToken? underscoreToken)
+        : base(SyntaxKind.DiscardExpression, 0)
+    {
+        _underscoreToken = underscoreToken;
+        FullWidth = (underscoreToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _underscoreToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new DiscardExpressionSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="ConditionalExpressionSyntax"/>.</summary>
 internal sealed class ConditionalExpressionGreen : GreenNode
 {

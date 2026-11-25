@@ -25,7 +25,7 @@ fn offset(_ text: String) -> UtcOffset {
 
 fn zonedError(_ text: String) -> ParseError? {
     do {
-        let _ = try ZonedDateTime.parse(text)
+        _ = try ZonedDateTime.parse(text)
         return none
     } catch {
         return error
@@ -34,7 +34,7 @@ fn zonedError(_ text: String) -> ParseError? {
 
 fn strictError(_ at: LocalDateTime, _ zone: TimeZone) -> TimeZoneError? {
     do {
-        let _ = try at.zonedStrictly(in: zone)
+        _ = try at.zonedStrictly(in: zone)
         return none
     } catch {
         return error

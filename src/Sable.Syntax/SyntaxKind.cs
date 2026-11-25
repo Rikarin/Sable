@@ -302,6 +302,7 @@ public enum SyntaxKind : ushort {
     LabeledClosure = 1160,
     IfExpression = 1161,
     ThrowExpression = 1162,
+    DiscardExpression = 1163,
 
     // ---- Pattern nodes (1200-1299) ----------------------------------------
     WildcardPattern = 1200,

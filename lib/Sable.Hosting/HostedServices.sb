@@ -12,7 +12,7 @@ import Sable.Time
 /// let builder = ApplicationBuilder()
 /// builder.services.addWorker("greeter") { context, cancellation in
 ///     context.logging.logger("greeter").info("in \(context.environment.name)")
-///     let _ = await cancellation.cancellationRequested()
+///     _ = await cancellation.cancellationRequested()
 /// }
 /// assert(builder.services.names == ["greeter"])
 /// ```

@@ -85,7 +85,7 @@ public class OrderedDictionary<Key: Hashable, Value> {
         }
         if position < 0 || position > map.count {
             let nothing: Int[>..] = []
-            let _ = nothing[position]
+            _ = nothing[position]
         }
         map.updateValue(value, forKey: key)
         map.moveLast(to: position)

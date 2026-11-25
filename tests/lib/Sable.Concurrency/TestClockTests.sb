@@ -45,7 +45,7 @@ fn sleepersWakeInTheOrderOfTheirDeadlines() async {
     let clock = TestClock()
     let log = Log(clock)
     for seconds in [5, 1, 4, 2, 3] {
-        let _ = Task.spawn {
+        _ = Task.spawn {
             try! await clock.sleep(for: Duration.seconds(seconds))
             log.add("woke")
         }
@@ -60,7 +60,7 @@ fn sleepersOfOneDeadlineWakeInTheOrderTheyBegan() async {
     let clock = TestClock()
     let log = Log(clock)
     for i in 0..<20 {
-        let _ = Task.spawn {
+        _ = Task.spawn {
             try! await clock.sleep(until: Instant.origin + Duration.seconds(1))
             log.add("\(i)")
         }
@@ -79,13 +79,13 @@ fn sleepersOfOneDeadlineWakeInTheOrderTheyBegan() async {
 fn aSleeperThatSleepsAgainIsWokenAgain() async {
     let clock = TestClock()
     let log = Log(clock)
-    let _ = Task.spawn {
+    _ = Task.spawn {
         for i in 1...4 {
             try! await clock.sleep(for: Duration.seconds(2))
             log.add("a\(i)")
         }
     }
-    let _ = Task.spawn {
+    _ = Task.spawn {
         try! await clock.sleep(for: Duration.seconds(3))
         log.add("b")
         let child = Task.spawn {
@@ -109,15 +109,15 @@ fn whatAWokenTaskSetsOffHasHappened() async {
     let clock = TestClock()
     let channel = Channel<Int>()
     let total = Atomic(0)
-    let _ = Task.spawn {
+    _ = Task.spawn {
         for await value in channel {
             for _ in 0..<10 {
                 await Task.yield()
             }
-            let _ = total.update { $0 + value }
+            _ = total.update { $0 + value }
         }
     }
-    let _ = Task.spawn {
+    _ = Task.spawn {
         for i in 1...100 {
             try! await clock.sleep(for: Duration.seconds(1))
             await channel.send(i)
@@ -174,7 +174,7 @@ fn aDeadlineThatHasPassedIsNotSleptFor() async {
 @test
 fn sleepersCanBeWaitedFor() async {
     let clock = TestClock()
-    let _ = Task.spawn {
+    _ = Task.spawn {
         // Work that advancing does not wait for.
         try! await Task.sleep(nanoseconds: 1_000_000)
         try! await clock.sleep(for: Duration.seconds(1))
@@ -204,7 +204,7 @@ fn theWallClockCanBeStoodInFor() async {
 fn twoCanAdvanceOneClock() async {
     let clock = TestClock()
     let log = Log(clock)
-    let _ = Task.spawn {
+    _ = Task.spawn {
         for i in 1...4 {
             try! await clock.sleep(for: Duration.seconds(1))
             log.add("\(i)")
@@ -229,7 +229,7 @@ fn aClockDoesNotGoBack() async {
 fn sleepsAndTimersAreOnTheClock() async {
     let clock = TestClock()
     let log = Log(clock)
-    let _ = Task.spawn {
+    _ = Task.spawn {
         try! await sleep(Duration.seconds(1), clock: clock)
         log.add("a")
         try! await Task.sleep(for: Duration.seconds(1), clock: clock)
@@ -262,7 +262,7 @@ fn timeoutsAreOnTheClock() async {
     let clock = TestClock()
     let slow = Task.spawn {
         do {
-            let _ = try await withTimeout(Duration.minutes(1), clock: clock) {
+            _ = try await withTimeout(Duration.minutes(1), clock: clock) {
                 try await clock.sleep(for: Duration.hours(1))
                 return 1
             }
@@ -311,7 +311,7 @@ fn debouncingIsOnTheClock() async {
     let clock = TestClock()
     let log = Log(clock)
     let input = Channel<Int>()
-    let _ = Task.spawn {
+    _ = Task.spawn {
         for await value in input.debounce(for: Duration.seconds(3), clock: clock) {
             log.add("\(value)")
         }
@@ -334,7 +334,7 @@ fn throttlingIsOnTheClock() async {
     let clock = TestClock()
     let log = Log(clock)
     let input = Channel<Int>()
-    let _ = Task.spawn {
+    _ = Task.spawn {
         for await value in input.throttle(for: Duration.seconds(10), clock: clock) {
             log.add("\(value)")
         }

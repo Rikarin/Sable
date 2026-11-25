@@ -268,7 +268,7 @@ fn aCancelledConnectStopsEveryAttempt() async {
 fn aPortThatIsNoneIsRefused() async {
     var said = ""
     do {
-        let _ = try await TcpStream.connect(host: "localhost", port: 70_000)
+        _ = try await TcpStream.connect(host: "localhost", port: 70_000)
     } catch {
         said = error.description()
     }

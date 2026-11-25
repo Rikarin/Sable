@@ -91,6 +91,32 @@ public sealed class LintTests {
     }
 
     [Fact]
+    public void ADiscardNeedsNoLet() {
+        const string source = """
+            module M
+            fn make() -> Int { return 1 }
+            async fn f(_ xs: Int?) {
+                let _ = make()
+                _ = make()
+                let _: I8 = 5
+                async let _ = make()
+                if let _ = xs { }
+            }
+            """;
+        var found = Assert.Single(Lint(source));
+        Assert.Equal(ErrorCode.LNT_LetDiscard, found.Code);
+    }
+
+    [Fact]
+    public void ADiscardIsOnlyAnAssignmentsTarget() {
+        var compilation = Compilation.Create("module M\nfn f() {\n    _ = none\n}\n");
+        Assert.Contains(compilation.GetAllDiagnostics(), static d => d.Code == ErrorCode.ERR_CannotInferType);
+        Assert.NotEmpty(SyntaxTree.Parse("module M\nfn f() {\n    let x = _\n}\n").Diagnostics);
+        Assert.NotEmpty(SyntaxTree.Parse("module M\nfn f() {\n    _ += 1\n}\n").Diagnostics);
+        Assert.Empty(SyntaxTree.Parse("module M\nfn f() {\n    _ = 1\n    let g = (n: Int) => _ = n\n}\n").Diagnostics);
+    }
+
+    [Fact]
     public void VarNeverMutated() {
         const string source = """
             module M

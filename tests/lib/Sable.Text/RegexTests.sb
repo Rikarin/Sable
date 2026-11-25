@@ -407,7 +407,7 @@ fn errorsSayWhatAndWhere() {
     ]
     for (pattern, kind, offset) in cases {
         do {
-            let _ = try Regex(pattern)
+            _ = try Regex(pattern)
             fail("/\(pattern)/ should not compile")
         } catch {
             if error.kind != kind || error.offset != offset {
@@ -422,7 +422,7 @@ fn errorsSayWhatAndWhere() {
     ]
     for (pattern, kind, offset) in backtrackingCases {
         do {
-            let _ = try Regex(pattern, options: .Backtracking)
+            _ = try Regex(pattern, options: .Backtracking)
             fail("/\(pattern)/ should not compile")
         } catch {
             if error.kind != kind || error.offset != offset {
@@ -435,7 +435,7 @@ fn errorsSayWhatAndWhere() {
 @test
 fn anErrorDescribesItself() {
     do {
-        let _ = try Regex("ab[c")
+        _ = try Regex("ab[c")
         fail("unclosed class")
     } catch {
         assertEqual(error.description(), "regex error at 2: unclosed character class")
@@ -447,7 +447,7 @@ fn anErrorDescribesItself() {
     }
     // Offsets count UTF-8 bytes.
     do {
-        let _ = try Regex("é(")
+        _ = try Regex("é(")
         fail("unclosed group")
     } catch {
         assertEqual(error.offset, 2)

@@ -14,7 +14,7 @@ import HostingSupport
 
 fn stopWhenStarted(_ host: Host) {
     let lifetime = host.lifetime
-    let _ = lifetime.started.register { lifetime.requestStop() }
+    _ = lifetime.started.register { lifetime.requestStop() }
 }
 
 @test
@@ -27,7 +27,7 @@ fn servicesStartInOrderAndStopInReverse() async {
     let host = try! builder.build()
     let lifetime = host.lifetime
     let running = Task.spawn { await outcome(host) }
-    let _ = await lifetime.started.cancellationRequested()
+    _ = await lifetime.started.cancellationRequested()
     await record.awaitLine("run-a")
     await record.awaitLine("run-b")
     await record.awaitLine("run-c")
@@ -46,9 +46,9 @@ fn theEventsComeInOrder() async {
     let builder = quietBuilder(FakeHostClock())
     builder.services.add("a", Recorded("a", record))
     let host = try! builder.build()
-    let _ = host.lifetime.started.register { record.add("started") }
-    let _ = host.lifetime.stopping.register { record.add("stopping") }
-    let _ = host.lifetime.stopped.register { record.add("stopped") }
+    _ = host.lifetime.started.register { record.add("started") }
+    _ = host.lifetime.stopping.register { record.add("stopping") }
+    _ = host.lifetime.stopped.register { record.add("stopped") }
     let running = Task.spawn { await outcome(host) }
     await record.awaitLine("started")
     await record.awaitLine("run-a")
@@ -314,7 +314,7 @@ fn aHangupMayStop() async {
     builder.options.handleSignals = true
     builder.options.onHangup = HangupPolicy.Stop
     let host = try! builder.build()
-    let _ = host.lifetime.started.register { Signals.raise(.Hangup) }
+    _ = host.lifetime.started.register { Signals.raise(.Hangup) }
     assertEqual(await outcome(host), "")
 }
 

@@ -5,7 +5,7 @@ import Sable.Time
 
 fn timeError(_ text: String) -> ParseError? {
     do {
-        let _ = try TimeOfDay.parse(text)
+        _ = try TimeOfDay.parse(text)
         return none
     } catch {
         return error

@@ -107,8 +107,8 @@ struct CborParser {
     mutating fn close() throws(SerializeError) {
         let node = nodes.removeLast()
         let major = majors.removeLast()
-        let _ = left.removeLast()
-        let _ = counts.removeLast()
+        _ = left.removeLast()
+        _ = counts.removeLast()
         afters[node] = starts.count
         if deterministic && major == 5 {
             try checkOrder(node)

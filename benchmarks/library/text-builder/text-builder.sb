@@ -27,7 +27,7 @@ fn main() {
         j = j + 1
     }
     builder.remove(0..<5)
-    let _ = builder.replace("item", with: "it")
+    _ = builder.replace("item", with: "it")
     let edited = builder.build()
 
     print("\(built.count) \(edited.count)")

@@ -30,7 +30,7 @@ fn advancingIsAsManyDraws() {
     var stepped = Pcg64(seed: 3)
     var advanced = stepped
     for _ in 0..<1000 {
-        let _ = stepped.next()
+        _ = stepped.next()
     }
     advanced.advance(by: 1000)
     assertEqual(advanced.next(), stepped.next())
@@ -49,7 +49,7 @@ fn advancingByAWrappedDistanceGoesBack() {
     var generator = Pcg64(seed: 9)
     let first = generator.next()
     for _ in 0..<9 {
-        let _ = generator.next()
+        _ = generator.next()
     }
     generator.advance(by: U128.zero.wrappingSub(10))
     assertEqual(generator.next(), first)

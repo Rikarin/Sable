@@ -283,7 +283,7 @@ fn closingWithAnErrorThrowsItOnceDrained() async {
     var threw = 0
     for _ in 0..<2 {
         do {
-            let _ = try await channel.receive()
+            _ = try await channel.receive()
         } catch {
             assert(error == .Down)
             threw += 1
@@ -297,7 +297,7 @@ fn aWaitingReceiverGetsTheError() async {
     let channel = ThrowingChannel<Int, Broken>()
     let receiver = Task.spawn {
         do {
-            let _ = try await channel.receive()
+            _ = try await channel.receive()
             return false
         } catch {
             return true
@@ -397,7 +397,7 @@ fn manySendersAndReceiversLoseNothing() async {
         })
     }
     for sender in senders {
-        let _ = await sender.value
+        _ = await sender.value
     }
     await channel.close()
     var total = 0

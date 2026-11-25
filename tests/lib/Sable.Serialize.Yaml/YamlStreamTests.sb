@@ -48,7 +48,7 @@ fn anUneditedTextIsTheSameByteForByte() throws {
         let stream = try YamlStream(text)
         assertEqual(try stream.text(), text)
         for document in stream.documents {
-            let _ = try document.text()
+            _ = try document.text()
         }
     }
     assertEqual((try YamlStream(texts[8])).documents.count, 4)

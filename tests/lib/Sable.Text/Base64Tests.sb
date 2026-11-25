@@ -26,7 +26,7 @@ fn sample(_ count: Int) -> U8[>..] {
 
 fn decodeError(_ text: String, alphabet: Base64.Alphabet = .Standard, padding: Padding = .Either) -> DecodeError? {
     do {
-        let _ = try Base64.decode(text, alphabet: alphabet, padding: padding)
+        _ = try Base64.decode(text, alphabet: alphabet, padding: padding)
     } catch {
         return error
     }
@@ -308,7 +308,7 @@ fn everyByteThatIsNoDigitIsFoundAtEveryPositionOfALongText() {
                 text[at] = byte
                 var thrown: DecodeError? = none
                 do {
-                    let _ = try Base64.decode(bytes: text, alphabet: alphabet)
+                    _ = try Base64.decode(bytes: text, alphabet: alphabet)
                 } catch {
                     thrown = error
                 }

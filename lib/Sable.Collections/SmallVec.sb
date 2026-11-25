@@ -177,7 +177,7 @@ public struct SmallVec<Element, N: Int> where N > 0 {
     /// Takes out the element at 'index' and gives it back, moving those
     /// after it down one; outside 0..<count traps.
     public mutating fn remove(at index: Int) -> Element {
-        let _ = self[index]
+        _ = self[index]
         if spilled {
             heap.rotate(from: index, to: heap.count, left: 1)
         } else {
@@ -191,7 +191,7 @@ public struct SmallVec<Element, N: Int> where N > 0 {
     public mutating fn truncate(to count: Int) {
         precondition(count >= 0, "SmallVec.truncate: negative count")
         while self.count > count {
-            let _ = removeLast()
+            _ = removeLast()
         }
     }
 

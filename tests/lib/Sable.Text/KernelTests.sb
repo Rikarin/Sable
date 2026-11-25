@@ -63,7 +63,7 @@ fn aWrongBase64DigitIsSaidToBeWhereItIs() {
             let before = text[..<text.index(atScalar: at)].toString()
             let after = text[text.index(atScalar: at + 1)...].toString()
             do {
-                let _ = try Base64.decode(before + wrong + after)
+                _ = try Base64.decode(before + wrong + after)
                 assert(false, "\(wrong) at \(at) decoded")
             } catch {
                 assert(error == .InvalidCharacter(at: at, byte: wrong.utf8[0]), "\(error) for \(wrong) at \(at)")
@@ -71,7 +71,7 @@ fn aWrongBase64DigitIsSaidToBeWhereItIs() {
         }
     }
     do {
-        let _ = try Base64.decode(text[..<text.index(atScalar: 100)].toString() + "é" + text)
+        _ = try Base64.decode(text[..<text.index(atScalar: 100)].toString() + "é" + text)
         assert(false)
     } catch {
         assert(error == .InvalidCharacter(at: 100, byte: 0xC3))
@@ -103,7 +103,7 @@ fn aWrongHexDigitIsSaidToBeWhereItIs() {
             let before = text[..<text.index(atScalar: at)].toString()
             let after = text[text.index(atScalar: at + 1)...].toString()
             do {
-                let _ = try Hex.decode(before + wrong + after)
+                _ = try Hex.decode(before + wrong + after)
                 assert(false, "\(wrong) at \(at) decoded")
             } catch {
                 assert(error == .InvalidCharacter(at: at, byte: wrong.utf8[0]), "\(error) for \(wrong) at \(at)")

@@ -7,7 +7,7 @@ module Sable.Text
 ///
 /// ```sable
 /// do {
-///     let _ = try Regex("ab(c")
+///     _ = try Regex("ab(c")
 /// } catch {
 ///     assert(error.kind == .UnclosedGroup && error.offset == 2)
 ///     assert(error.description() == "regex error at 2: unclosed group")

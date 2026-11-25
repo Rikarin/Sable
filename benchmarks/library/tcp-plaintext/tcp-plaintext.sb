@@ -55,7 +55,7 @@ fn answer(_ connection: TcpStream, _ reply: U8[>..]) async {
 
 fn serve(_ listener: TcpListener, _ reply: U8[>..]) async {
     while let connection = try? await listener.accept() {
-        let _ = Task.spawn { await answer(connection, reply) }
+        _ = Task.spawn { await answer(connection, reply) }
     }
 }
 

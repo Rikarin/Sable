@@ -33,7 +33,7 @@ final class Intake: HostedService {
 
     async fn run(cancellation: CancellationToken) throws {
         // Once every service is there.
-        let _ = await lifetime.started.cancellationRequested()
+        _ = await lifetime.started.cancellationRequested()
         let items: String[>..] = ["tea", "cups", "a kettle"]
         var id = 1
         for item in items {

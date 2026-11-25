@@ -23,10 +23,10 @@ import Sable.Time
 /// let builder = ApplicationBuilder()
 /// builder.options.handleSignals = false
 /// builder.services.addWorker("work") { _context, cancellation in
-///     let _ = await cancellation.cancellationRequested()
+///     _ = await cancellation.cancellationRequested()
 /// }
 /// let host = try! builder.build()
-/// let _ = host.lifetime.started.register { host.lifetime.requestStop() }
+/// _ = host.lifetime.started.register { host.lifetime.requestStop() }
 /// try! await host.run()
 /// ```
 @immutable
@@ -128,7 +128,7 @@ public final class Host {
             log(Level.Info, "started", [field("environment", environment.name)])
             await notify(Systemd.ready)
             lifetime.startedSource.cancel()
-            let _ = await stopping.cancellationRequested()
+            _ = await stopping.cancellationRequested()
         }
         lifetime.requestStop()
         log(Level.Info, "stopping", [])
@@ -136,7 +136,7 @@ public final class Host {
 
         let late = await stop(started, current, deadline, failure)
         timer.cancel()
-        let _ = await timer.value
+        _ = await timer.value
         if !late.isEmpty {
             failure.set(HostError.ShutdownTimedOut(services: late))
             log(Level.Error, "not stopped in time", [field("services", late.joined(separator: ", "))])
@@ -303,7 +303,7 @@ public final class Host {
     /// Reloads the configuration, then runs `ApplicationLifetime.onReload`'s
     /// handlers, in a task of its own: what a SIGHUP does.
     public fn reload() {
-        let _ = Task.detached {
+        _ = Task.detached {
             await self.lifetime.reload {
                 self.log(Level.Info, "reloading", [])
                 await self.notify(Systemd.reloading)

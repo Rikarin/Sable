@@ -16,7 +16,7 @@ fn moment(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0)
 
 fn findError(_ id: String) -> TimeZoneError? {
     do {
-        let _ = try TimeZone.find(id)
+        _ = try TimeZone.find(id)
         return none
     } catch {
         return error
@@ -25,7 +25,7 @@ fn findError(_ id: String) -> TimeZoneError? {
 
 fn posixError(_ rule: String) -> TimeZoneError? {
     do {
-        let _ = try TimeZone.posix(rule)
+        _ = try TimeZone.posix(rule)
         return none
     } catch {
         return error
@@ -34,7 +34,7 @@ fn posixError(_ rule: String) -> TimeZoneError? {
 
 fn tzifError(_ bytes: U8[>..]) -> TimeZoneError? {
     do {
-        let _ = try TimeZone.fromTZif(id: "Test/Zone", bytes: bytes)
+        _ = try TimeZone.fromTZif(id: "Test/Zone", bytes: bytes)
         return none
     } catch {
         return error
@@ -209,7 +209,7 @@ fn aMalformedTZifFileIsSaidToBe() {
     bad = tzif(version: 0x32, at: 0, footer: "not a rule")
     assert(tzifError(bad) != none)
     bad = tzif(version: 0x32, at: 0, footer: "BBB-2")
-    let _ = bad.removeLast()
+    _ = bad.removeLast()
     assert(tzifError(bad) != none)
     bad = tzif(version: 0x32, at: 0, footer: "BBB-2")
     var truncated: U8[>..] = []
@@ -273,28 +273,28 @@ fn theDatabaseListsItsZones() {
 @test
 fn theSystemZoneIsTheOneTZNames() {
     unsafe {
-        let _ = Runtime.setEnvironment("TZ", "Asia/Tokyo")
+        _ = Runtime.setEnvironment("TZ", "Asia/Tokyo")
     }
     if hasDatabase() {
         assertEqual(TimeZone.system().id, "Asia/Tokyo")
         unsafe {
-            let _ = Runtime.setEnvironment("TZ", ":/usr/share/zoneinfo/Europe/Prague")
+            _ = Runtime.setEnvironment("TZ", ":/usr/share/zoneinfo/Europe/Prague")
         }
         if Runtime.fileExists(path: "/usr/share/zoneinfo/Europe/Prague") {
             assertEqual(TimeZone.system().id, "Europe/Prague")
         }
     }
     unsafe {
-        let _ = Runtime.setEnvironment("TZ", "JST-9")
+        _ = Runtime.setEnvironment("TZ", "JST-9")
     }
     assertEqual(TimeZone.system().id, "JST-9")
     assertEqual(TimeZone.system().offset(at: moment(2026, 1, 1, 0)).toString(), "+09:00")
     unsafe {
-        let _ = Runtime.setEnvironment("TZ", "not a zone at all")
+        _ = Runtime.setEnvironment("TZ", "not a zone at all")
     }
     assertEqual(TimeZone.system(), TimeZone.utc)
     unsafe {
-        let _ = Runtime.removeEnvironment("TZ")
+        _ = Runtime.removeEnvironment("TZ")
     }
     assert(!TimeZone.system().id.isEmpty)
 }
@@ -302,12 +302,12 @@ fn theSystemZoneIsTheOneTZNames() {
 @test
 fn tzdirIsWhereTheDatabaseIs() {
     unsafe {
-        let _ = Runtime.setEnvironment("TZDIR", "/nowhere/at/all")
+        _ = Runtime.setEnvironment("TZDIR", "/nowhere/at/all")
     }
     // The directory TZDIR names first, then the system's.
     assertEqual(try! TimeZone.find("UTC").id, "UTC")
     unsafe {
-        let _ = Runtime.removeEnvironment("TZDIR")
+        _ = Runtime.removeEnvironment("TZDIR")
     }
 }
 

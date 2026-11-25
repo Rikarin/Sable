@@ -233,7 +233,7 @@ public final class YamlDecoder: Decoder {
     }
 
     public fn beginStruct(_ name: String) throws(SerializeError) {
-        let _ = try take(.Mapping, "a mapping (\(name))")
+        _ = try take(.Mapping, "a mapping (\(name))")
     }
 
     public fn field(_ key: String) -> YamlDecoder {

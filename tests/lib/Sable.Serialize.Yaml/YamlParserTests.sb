@@ -633,15 +633,15 @@ fn theEventsBeforeAnErrorComeFirst() throws {
     }
     assertEqual(seen.joined(separator: " "), "+STR +DOC =VAL :a -DOC +DOC --- +SEQ []")
     let finished = YamlParser("")
-    let _ = try finished.next()
-    let _ = try finished.next()
+    _ = try finished.next()
+    _ = try finished.next()
     assert((try finished.next()) == none && (try finished.next()) == none)
 }
 
 @test
 fn errorsAreSaid() {
     do {
-        let _ = try Yaml.parse("a: [")
+        _ = try Yaml.parse("a: [")
         fail("parsed")
     } catch {
         assertEqual(error.description(), "line 1, column 5: the text ends inside '[' of line 1, column 4")
@@ -673,7 +673,7 @@ fn depthIsLimited() {
     }
     for text in ["[[[[a]]]]", "{a: {b: {c: {d: e}}}}", "- - - - a", "a:\n b:\n  c:\n   d: e", "- a:\n  - b:\n    - c", "[[[a: b]]]", "[[[? a : b]]]", "? ? ? ? a", "- - - ? a", "- - - : a"] {
         do {
-            let _ = try Yaml.events(text, shallow)
+            _ = try Yaml.events(text, shallow)
             fail(text)
         } catch {
             assert(error.kind == .TooDeep, error.description())

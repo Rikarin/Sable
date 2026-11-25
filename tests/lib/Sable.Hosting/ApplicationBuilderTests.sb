@@ -27,7 +27,7 @@ fn servicesAreMadeInOrderFromTheContext() {
     })
     assert(builder.services.names == ["a", "b"])
     assertEqual(made.all, "")
-    let _ = try! builder.build()
+    _ = try! builder.build()
     assertEqual(made.all, "a:app b")
 }
 
@@ -38,7 +38,7 @@ fn whatMakingAServiceThrowsBuildThrows() {
         throw TestError("not made")
     })
     do {
-        let _ = try builder.build()
+        _ = try builder.build()
         assert(false)
     } catch {
         assertEqual(error.description(), "not made")
@@ -52,7 +52,7 @@ fn aWorkerIsGivenTheContext() async {
     builder.services.addWorker("w") { context, cancellation in
         record.add(context.environment.isProduction || true ? "ran" : "")
         context.lifetime.requestStop()
-        let _ = await cancellation.cancellationRequested()
+        _ = await cancellation.cancellationRequested()
     }
     assertEqual(await outcome(try! builder.build()), "")
     assertEqual(record.all, "ran")

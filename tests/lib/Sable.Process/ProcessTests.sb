@@ -54,7 +54,7 @@ fn aProgramASignalEndedSaysWhich() {
 @test
 fn whatIsNoProgramIsNotFound() {
     do {
-        let _ = try Process.run("surely-not-a-program-here", [])
+        _ = try Process.run("surely-not-a-program-here", [])
         assert(false)
     } catch .NotFound(let program) {
         assertEqual(program, "surely-not-a-program-here")
@@ -66,7 +66,7 @@ fn whatIsNoProgramIsNotFound() {
 @test
 fn aNulInAnArgumentIsRefused() {
     do {
-        let _ = try Process.run("echo", ["a\u{0}b"])
+        _ = try Process.run("echo", ["a\u{0}b"])
         assert(false)
     } catch .InvalidArgument(let text) {
         assertEqual(text.count, 3)

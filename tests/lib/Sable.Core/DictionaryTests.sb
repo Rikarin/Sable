@@ -578,7 +578,7 @@ fn uniqueKeysWithValuesTakesAnySequence() {
 @test(traps: "Dictionary(uniqueKeysWithValues:) was given the key 2 twice")
 fn uniqueKeysWithValuesTrapsOnARepeatedKey() {
     let pairs: (Int, String)[>..] = [(1, "a"), (2, "b"), (2, "c")]
-    let _ = Dictionary(uniqueKeysWithValues: pairs)
+    _ = Dictionary(uniqueKeysWithValues: pairs)
 }
 
 @test

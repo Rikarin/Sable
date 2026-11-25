@@ -41,7 +41,7 @@ public final class Continuation<T: Sendable, E: Error> {
     /// The task given the outcome, and on its way.
     public fn resume(with outcome: Outcome<T, E>) {
         precondition(!resumed.exchange(true), "a continuation resumed twice")
-        let _ = promise.complete(with: outcome)
+        _ = promise.complete(with: outcome)
     }
 
     deinit {

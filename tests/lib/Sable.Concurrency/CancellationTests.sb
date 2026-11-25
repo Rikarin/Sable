@@ -32,7 +32,7 @@ fn cancellingAGroupReachesItsGrandchildren() async {
                 await withTaskGroup(of: Void.self) { inner in
                 inner.spawn {
                     if await sleepsUntilCancelled() {
-                        let _ = reached.update { $0 + 1 }
+                        _ = reached.update { $0 + 1 }
                     }
                 }
             }
@@ -49,7 +49,7 @@ fn cancellingAGroupReachesItsGrandchildren() async {
 fn aTimeoutCancelsTheBodysChildren() async {
     let stopped = Atomic<Bool>(false)
     do {
-        let _ = try await withTimeout(Duration.milliseconds(20)) {
+        _ = try await withTimeout(Duration.milliseconds(20)) {
             await withTaskGroup(of: Void.self) { group in
             group.spawn {
                 if await sleepsUntilCancelled() {
@@ -83,7 +83,7 @@ fn aBodyInTimeGivesItsValue() async {
 fn aBodyTooSlowTimesOutPromptly() async {
     let started = Instant.now()
     do {
-        let _ = try await withTimeout(Duration.milliseconds(20)) {
+        _ = try await withTimeout(Duration.milliseconds(20)) {
             try await Task.sleep(for: Duration.seconds(60))
             return 1
         }
@@ -107,7 +107,7 @@ struct Broken: Error {
 @test
 fn aBodysOwnErrorPassesThrough() async {
     do {
-        let _ = try await withTimeout(Duration.seconds(30)) { () throws -> Int in
+        _ = try await withTimeout(Duration.seconds(30)) { () throws -> Int in
             throw Broken()
         }
         fail("did not throw")
@@ -119,7 +119,7 @@ fn aBodysOwnErrorPassesThrough() async {
 @test
 fn timeoutsNest() async {
     do {
-        let _ = try await withTimeout(Duration.seconds(30)) {
+        _ = try await withTimeout(Duration.seconds(30)) {
             try await withTimeout(Duration.milliseconds(10)) {
             try await Task.sleep(for: Duration.seconds(60))
             return 0
@@ -137,7 +137,7 @@ fn timeoutsNest() async {
 fn aCancelledTasksTimeoutThrowsCancellation() async {
     let task = Task.spawn { () -> String in
         do {
-            let _ = try await withTimeout(Duration.seconds(30)) {
+            _ = try await withTimeout(Duration.seconds(30)) {
                 try await Task.sleep(for: Duration.seconds(60))
                 return 0
             }
@@ -160,9 +160,9 @@ fn handlersRunOnceInOrderAndLateOnesAtOnce() {
     let source = CancellationTokenSource()
     let token = source.token
     let log = Mutex<String>("")
-    let _ = token.register { log.withLock { $0 += "a" } }
+    _ = token.register { log.withLock { $0 += "a" } }
     let undone = token.register { log.withLock { $0 += "x" } }
-    let _ = token.register { log.withLock { $0 += "b" } }
+    _ = token.register { log.withLock { $0 += "b" } }
     assert(undone.unregister())
     assert(!undone.unregister())
     assert(!token.isCancellationRequested && !source.isCancellationRequested)
@@ -170,7 +170,7 @@ fn handlersRunOnceInOrderAndLateOnesAtOnce() {
     source.cancel()
     assert(token.isCancellationRequested)
     assertEqual(log.withLock { $0 }, "ab")
-    let _ = token.register { log.withLock { $0 += "c" } }
+    _ = token.register { log.withLock { $0 += "c" } }
     assertEqual(log.withLock { $0 }, "abc")
     do {
         try token.throwIfCancellationRequested()
@@ -220,7 +220,7 @@ fn aTokenStopsStructuredWork() async {
     let source = CancellationTokenSource()
     source.cancel(after: Duration.milliseconds(10))
     do {
-        let _ = try await withCancellation(source.token) {
+        _ = try await withCancellation(source.token) {
             try await Task.sleep(for: Duration.seconds(60))
             return 1
         }
@@ -269,7 +269,7 @@ fn aPromiseCarriesAnError() async {
     assert(promise.fail(Broken()))
     assert(!promise.complete(with: .Ok(1)))
     do {
-        let _ = try await promise.value()
+        _ = try await promise.value()
         fail("did not throw")
     } catch {
         assertEqual("\(error)", "Broken()")
@@ -279,14 +279,14 @@ fn aPromiseCarriesAnError() async {
 @test
 fn aContinuationIsResumedFromElsewhere() async {
     let value = await withContinuation(returning: Int.self) { continuation in
-        let _ = Task.detached {
+        _ = Task.detached {
             try? await Task.sleep(for: Duration.milliseconds(5))
             continuation.resume(returning: 42)
         }
     }
     assertEqual(value, 42)
     do {
-        let _ = try await withContinuation(returning: Int.self, throwing: Broken.self) { continuation in
+        _ = try await withContinuation(returning: Int.self, throwing: Broken.self) { continuation in
             continuation.resume(throwing: Broken())
         }
         fail("did not throw")
@@ -301,7 +301,7 @@ fn aContinuationIsResumedFromElsewhere() async {
 
 @test(traps: "a continuation resumed twice")
 fn resumingTwiceTraps() async {
-    let _ = await withContinuation(returning: Int.self) { continuation in
+    _ = await withContinuation(returning: Int.self) { continuation in
         continuation.resume(returning: 1)
         continuation.resume(returning: 2)
     }
@@ -309,7 +309,7 @@ fn resumingTwiceTraps() async {
 
 @test(traps: "a continuation was let go without being resumed: its task would wait for ever")
 fn aLeakedContinuationTrapsInADebugBuild() async {
-    let _ = await withContinuation(returning: Int.self) { continuation in
+    _ = await withContinuation(returning: Int.self) { continuation in
     }
 }
 
@@ -339,7 +339,7 @@ fn theFirstToFinishWinsAndTheRestAreCancelled() async {
         fail("threw \(error)")
     }
     do {
-        let _ = try await race({ () throws -> Int in
+        _ = try await race({ () throws -> Int in
             throw Broken()
         }, {
             try await Task.sleep(for: Duration.seconds(60))

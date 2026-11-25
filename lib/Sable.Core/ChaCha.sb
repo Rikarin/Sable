@@ -86,7 +86,7 @@ public struct ChaCha: RandomNumberGenerator {
     /// var a = ChaCha(seed: 5)
     /// var b = a
     /// for _ in 0..<16 {
-    ///     let _ = a.next()
+    ///     _ = a.next()
     /// }
     /// b.seek(toBlock: 2)
     /// assert(a.next() == b.next())

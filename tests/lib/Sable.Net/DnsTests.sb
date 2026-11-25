@@ -40,7 +40,7 @@ fn anAddressIsItself() async {
         assertEqual(try await Dns.resolve("192.0.2.1"), [IpAddress(192, 0, 2, 1)])
         assertEqual(try await Dns.resolve("2001:db8::1", family: .V6), [try! IpAddress.parse("2001:db8::1")])
         assertEqual(await thrown {
-            let _ = try await Dns.resolve("192.0.2.1", family: .V6)
+            _ = try await Dns.resolve("192.0.2.1", family: .V6)
         }, "'192.0.2.1' has no address")
     } catch {
         assert(false, error.description())
@@ -53,7 +53,7 @@ fn textThatIsNoNameIsRefused() async {
     for host in ["", "127.1", "0x7f.1", "0177.0.0.1", "2130706433", "0x7f000001", "127.0.0.01", "127.0.0.1.", "１２７.0.0.1", "a b", "a/b", "a:b", "[::1]", "::g",
         "a\0.b", "a@b", "a%b"] {
         assert((await thrown {
-            let _ = try await Dns.resolve(host)
+            _ = try await Dns.resolve(host)
         }).hasSuffix("was given something the system does not take"), host)
     }
 }
@@ -62,7 +62,7 @@ fn textThatIsNoNameIsRefused() async {
 fn aCancelledLookupThrows() async {
     let task = Task.spawn { await thrown {
         while true {
-            let _ = try await Dns.resolve("localhost")
+            _ = try await Dns.resolve("localhost")
             if Task.isCancelled {
                 throw IoError.Cancelled
             }
@@ -76,7 +76,7 @@ fn aCancelledLookupThrows() async {
 @test
 fn aLookupWithNoTimeTimesOutOrIsDone() async {
     let said = await thrown {
-        let _ = try await Dns.resolve("localhost", timeout: Duration.zero)
+        _ = try await Dns.resolve("localhost", timeout: Duration.zero)
     }
     assert(said == "" || said == "it took too long", said)
 }

@@ -5,7 +5,7 @@ import Sable.Time
 
 fn rfc3339Error(_ text: String) -> ParseError? {
     do {
-        let _ = try OffsetDateTime.parseRfc3339(text)
+        _ = try OffsetDateTime.parseRfc3339(text)
         return none
     } catch {
         return error
@@ -14,7 +14,7 @@ fn rfc3339Error(_ text: String) -> ParseError? {
 
 fn rfc2822Error(_ text: String) -> ParseError? {
     do {
-        let _ = try OffsetDateTime.parseRfc2822(text)
+        _ = try OffsetDateTime.parseRfc2822(text)
         return none
     } catch {
         return error
@@ -23,7 +23,7 @@ fn rfc2822Error(_ text: String) -> ParseError? {
 
 fn isoError(_ text: String) -> ParseError? {
     do {
-        let _ = try OffsetDateTime.parse(text)
+        _ = try OffsetDateTime.parse(text)
         return none
     } catch {
         return error

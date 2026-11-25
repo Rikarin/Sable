@@ -243,6 +243,7 @@ public enum ErrorCode {
     LNT_VarNeverMutated = 3303,
     LNT_ShadowedParameter = 3304,
     LNT_UnusedResult = 3308,
+    LNT_LetDiscard = 3309,
     LNT_ShadowedLocal = 3390,
     LNT_SelfAssignment = 3391,
     LNT_UnusedPrivate = 3392,

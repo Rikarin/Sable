@@ -196,7 +196,7 @@ fn aRunEndedByItsCancellationHasNotFailed() async {
     let builder = quietBuilder(clock)
     builder.services.addRecurring(every: Duration.minutes(1), options: RecurringOptions(onFailure: ServiceFailurePolicy.StopHost)) { cancellation in
         record.add("run")
-        let _ = await cancellation.cancellationRequested()
+        _ = await cancellation.cancellationRequested()
         throw CancellationError()
     }
     let host = try! builder.build()

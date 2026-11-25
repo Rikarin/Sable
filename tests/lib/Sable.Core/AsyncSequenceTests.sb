@@ -180,13 +180,13 @@ fn collectGathersEveryElement() async {
 @test
 fn anOperatorPassesTheFailureOn() async {
     do {
-        let _ = try await counting(2, fails: true).map { $0 * 10 }.collect()
+        _ = try await counting(2, fails: true).map { $0 * 10 }.collect()
         assert(false)
     } catch {
         assert(error == .Down)
     }
     do {
-        let _ = try await counting(2, fails: true).reduce(0) { $0 + $1 }
+        _ = try await counting(2, fails: true).reduce(0) { $0 + $1 }
         assert(false)
     } catch {
         assert(error == .Down)
@@ -228,8 +228,8 @@ fn zipStopsOnceTheFirstEnds() async {
 fn zipThrowsWhatEitherThrows() async {
     var iterator = zip(counting(1, fails: true), [1, 2].async).makeAsyncIterator()
     do {
-        let _ = try await iterator.next()
-        let _ = try await iterator.next()
+        _ = try await iterator.next()
+        _ = try await iterator.next()
         assert(false)
     } catch {
         assert(error == .Down)

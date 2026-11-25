@@ -10,7 +10,7 @@ module Sable.IO
 /// var buffer = await pipe.writer.rentBuffer(minimumCapacity: 100)
 /// buffer.append(42)
 /// await pipe.writer.commit(move buffer)
-/// let _ = await pipe.writer.flush()
+/// _ = await pipe.writer.flush()
 /// assert(await pipe.reader.read().buffer[0] == 42)
 /// ```
 public struct PipeWriter: AsyncWriter {

@@ -48,7 +48,7 @@ public class BitSet {
     fn extend(to count: Int) {
         if count <= 0 {
             let nothing: Int[>..] = []
-            let _ = nothing[count - 1]
+            _ = nothing[count - 1]
         }
         while words.count < count {
             words.append(0)

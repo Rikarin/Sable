@@ -33,7 +33,7 @@ fn aConnectionIsMadeAtAPath() async {
     do {
         let listener = try UnixListener.bind(at)
         defer {
-            let _ = try? File.remove(at)
+            _ = try? File.remove(at)
         }
         assertEqual(listener.path, at)
         let client = try await UnixStream.connect(at, timeout: Duration.seconds(10))
@@ -56,22 +56,22 @@ fn aPathInUseIsSaidToBeAndMayBeReplaced() async {
     do {
         let first = try UnixListener.bind(at)
         defer {
-            let _ = try? File.remove(at)
+            _ = try? File.remove(at)
         }
         assertEqual(await thrown {
-            let _ = try UnixListener.bind(at)
+            _ = try UnixListener.bind(at)
         }, "'\(at)' is in use")
         first.close()
         // Its file stays, and no one listens by it.
         assertEqual(await thrown {
-            let _ = try UnixListener.bind(at)
+            _ = try UnixListener.bind(at)
         }, "'\(at)' is in use")
         assertEqual(await thrown {
-            let _ = try await UnixStream.connect(at)
+            _ = try await UnixStream.connect(at)
         }, "'\(at)' refused the connection")
         let second = try UnixListener.bind(at, replacing: true)
-        let _ = try await UnixStream.connect(at)
-        let _ = try await second.accept()
+        _ = try await UnixStream.connect(at)
+        _ = try await second.accept()
     } catch {
         assert(false, error.description())
     }
@@ -83,10 +83,10 @@ fn aFileThatIsNoSocketIsNotReplaced() async {
     do {
         try File.write(at, "kept")
         defer {
-            let _ = try? File.remove(at)
+            _ = try? File.remove(at)
         }
         assertEqual(await thrown {
-            let _ = try UnixListener.bind(at, replacing: true)
+            _ = try UnixListener.bind(at, replacing: true)
         }, "'\(at)' is in use")
         assertEqual(try File.read(at), "kept")
     } catch {
@@ -101,20 +101,20 @@ fn aPathTheSystemHasNoRoomForIsRefused() async {
         long += "0123456789"
     }
     assert((await thrown {
-        let _ = try UnixListener.bind(long)
+        _ = try UnixListener.bind(long)
     }) != "")
     assert((await thrown {
-        let _ = try await UnixStream.connect(long)
+        _ = try await UnixStream.connect(long)
     }) != "")
     assert((await thrown {
-        let _ = try UnixListener.bind("")
+        _ = try UnixListener.bind("")
     }) != "")
     assert((await thrown {
-        let _ = try UnixListener.bind("/tmp/a\0b")
+        _ = try UnixListener.bind("/tmp/a\0b")
     }) != "")
     let missing = path("missing")
     assertEqual(await thrown {
-        let _ = try await UnixStream.connect(missing)
+        _ = try await UnixStream.connect(missing)
     }, "nothing is at '\(missing)'")
 }
 
@@ -124,16 +124,16 @@ fn closingAndCancellingWakeAnAccept() async {
     do {
         let listener = try UnixListener.bind(at)
         defer {
-            let _ = try? File.remove(at)
+            _ = try? File.remove(at)
         }
         let cancelled = Task.spawn { await thrown {
-            let _ = try await listener.accept()
+            _ = try await listener.accept()
         } }
         await Task.yield()
         cancelled.cancel()
         assertEqual(await cancelled.value, "the task was cancelled while it waited")
         let closed = Task.spawn { await thrown {
-            let _ = try await listener.accept()
+            _ = try await listener.accept()
         } }
         await Task.yield()
         listener.close()
@@ -149,12 +149,12 @@ fn closingAStreamWakesItsRead() async {
     do {
         let listener = try UnixListener.bind(at)
         defer {
-            let _ = try? File.remove(at)
+            _ = try? File.remove(at)
         }
         let client = try await UnixStream.connect(at)
         let server = try await listener.accept()
         let reading = Task.spawn { await thrown {
-            let _ = try await client.read(upTo: 1)
+            _ = try await client.read(upTo: 1)
         } }
         await Task.yield()
         client.close()
@@ -171,7 +171,7 @@ fn datagramsAreSentToAPath() async {
     do {
         let receiver = try UnixDatagramSocket.bind(at)
         defer {
-            let _ = try? File.remove(at)
+            _ = try? File.remove(at)
         }
         let sender = try UnixDatagramSocket.unbound()
         try await sender.send([1, 2], to: at)
@@ -179,16 +179,16 @@ fn datagramsAreSentToAPath() async {
         assertEqual(try await receiver.receive(), [1, 2])
         assertEqual(try await receiver.receive(), [3])
         assert((await thrown {
-            let _ = try UnixDatagramSocket.bind("")
+            _ = try UnixDatagramSocket.bind("")
         }) != "")
         assert((await thrown {
-            let _ = try UnixDatagramSocket.bind(at)
+            _ = try UnixDatagramSocket.bind(at)
         }) != "")
         let missing = path("no-one")
         assertEqual(await thrown { try await sender.send([1], to: missing) }, "nothing is at '\(missing)'")
         receiver.close()
         assertEqual(await thrown {
-            let _ = try await receiver.receive()
+            _ = try await receiver.receive()
         }, "the connection failed or was closed")
         let again = try UnixDatagramSocket.bind(at, replacing: true)
         try await sender.send([4], to: at)
@@ -205,7 +205,7 @@ fn aSenderWaitsForAReceiverThatIsFull() async {
     do {
         let receiver = try UnixDatagramSocket.bind(at)
         defer {
-            let _ = try? File.remove(at)
+            _ = try? File.remove(at)
         }
         let sending = Task.spawn { await thrown {
             let sender = try UnixDatagramSocket.unbound()

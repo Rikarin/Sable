@@ -37,12 +37,12 @@ public struct CancellationToken: Sendable {
     public fn cancellationRequested() async -> Bool {
         let heard = Promise<Bool, Never>()
         let registration = register {
-            let _ = heard.succeed(true)
+            _ = heard.succeed(true)
         }
         let byToken = await withTaskCancellationHandler(operation: { await heard.value() }, onCancel: {
-            let _ = heard.succeed(false)
+            _ = heard.succeed(false)
         })
-        let _ = registration.unregister()
+        _ = registration.unregister()
         return byToken
     }
 }
@@ -85,7 +85,7 @@ public fn withCancellation<T: Sendable>(_ token: CancellationToken, _ body: @Sen
     let raced = try await withThrowingTaskGroup(of: Raced<T>.self) { group in
         group.spawn { Raced<T>.Finished(try await body()) }
         group.spawn {
-            let _ = await token.cancellationRequested()
+            _ = await token.cancellationRequested()
             return Raced<T>.Stopped
         }
         let first = try await group.next()!

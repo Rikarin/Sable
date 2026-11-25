@@ -7,7 +7,7 @@ import Sable.Time
 
 fn localeError(_ text: String) -> ParseError? {
     do {
-        let _ = try Locale.parse(text)
+        _ = try Locale.parse(text)
         return none
     } catch {
         return error

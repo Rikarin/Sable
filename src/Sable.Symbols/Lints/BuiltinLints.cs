@@ -503,7 +503,7 @@ internal sealed class UnusedResultLint : Lint {
     public override string Name => "unused_result";
     public override ErrorCode Code => ErrorCode.LNT_UnusedResult;
     public override LintLevel DefaultLevel => LintLevel.Warn;
-    public override string Description => "a call's result left unused, where the function is not '@discardable'; write 'let _ = f()' if that is meant";
+    public override string Description => "a call's result left unused, where the function is not '@discardable'; write '_ = f()' if that is meant";
 
     public override void Check(LintContext context) {
         foreach (var body in context.Bodies) {
@@ -519,8 +519,8 @@ internal sealed class UnusedResultLint : Lint {
             }
 
             if (expression is BoundCall call && Discards(context.Compilation, call)) {
-                context.Report(call.Syntax, $"the result of '{call.Function.Name}' is unused; write 'let _ = ...' if that is meant, or mark '{call.Function.Name}' '@discardable'",
-                    LintContext.Fix("Drop the result with 'let _ ='", TextChange.Insert(node.Syntax.Span.Start, "let _ = ")));
+                context.Report(call.Syntax, $"the result of '{call.Function.Name}' is unused; write '_ = ...' if that is meant, or mark '{call.Function.Name}' '@discardable'",
+                    LintContext.Fix("Drop the result with '_ ='", TextChange.Insert(node.Syntax.Span.Start, "_ = ")));
             }
         }
 
@@ -540,5 +540,27 @@ internal sealed class UnusedResultLint : Lint {
 
         return call.Function.DeclaringSyntax is not [var declaration, ..]
             || !Compilation.AttributesOf(declaration).Any(static a => Compilation.AttributeName(a) == "discardable");
+    }
+}
+
+/// <summary><c>let_discard</c>: <c>let _ = f()</c>, which <c>_ = f()</c> says as well.</summary>
+internal sealed class LetDiscardLint : Lint {
+    public override string Name => "let_discard";
+    public override ErrorCode Code => ErrorCode.LNT_LetDiscard;
+    public override LintLevel DefaultLevel => LintLevel.Warn;
+    public override string Description => "'let _ = f()', which declares nothing; write '_ = f()'";
+
+    public override void Check(LintContext context) {
+        foreach (var statement in context.Tree.Root.DescendantNodes().OfType<LocalDeclarationStatementSyntax>()) {
+            // 'async let _' starts a child task, 'using' closes what it is
+            // given at the end of the scope, and a type says what the value is made as.
+            if (statement is {
+                    AsyncKeyword.IsNone: true, UsingKeyword.IsNone: true,
+                    Declarator: { Pattern: WildcardPatternSyntax wildcard, TypeAnnotation: null, Initializer: not null },
+                }) {
+                context.Report(wildcard, $"'{statement.LetOrVarKeyword.Text}' declares nothing here; write '_ = ...'",
+                    LintContext.Fix("Discard with '_ ='", TextChange.Delete(TextSpan.FromBounds(statement.LetOrVarKeyword.Span.Start, wildcard.Span.Start))));
+            }
+        }
     }
 }

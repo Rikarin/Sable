@@ -49,7 +49,7 @@ public final class UnixDatagramSocket {
     public fn send(_ bytes: U8[:], to path: String) async throws(IoError) {
         var times = 0
         while true {
-            let _ = Runtime.sendDatagram(handle, bytes, 1, 0, 0, 0, 0, path)
+            _ = Runtime.sendDatagram(handle, bytes, 1, 0, 0, 0, 0, path)
             if Runtime.socketStatus() == 0 {
                 return
             }

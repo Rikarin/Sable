@@ -51,7 +51,7 @@ public struct ByteReader {
 
     /// Moves past the next 'count' bytes, reading nothing.
     public mutating fn skip(_ count: Int) throws(ByteReadError) {
-        let _ = try self.take(count)
+        _ = try self.take(count)
     }
 
     /// The next byte, without reading it: none at the end.

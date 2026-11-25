@@ -8,7 +8,7 @@ import Sable.Time
 
 fn dateError(_ text: String) -> ParseError? {
     do {
-        let _ = try UtcDateTime.parse(text)
+        _ = try UtcDateTime.parse(text)
         return none
     } catch {
         return error
@@ -17,7 +17,7 @@ fn dateError(_ text: String) -> ParseError? {
 
 fn durationError(_ text: String) -> ParseError? {
     do {
-        let _ = try Duration.parse(text)
+        _ = try Duration.parse(text)
         return none
     } catch {
         return error

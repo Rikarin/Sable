@@ -55,7 +55,7 @@ fn aStringsOwnBytesComeBackUnchecked() {
 fn illFormedUtf8ThrowsWhereItIs() {
     var caught = false
     do {
-        let _ = try String.fromUtf8(bytes([0x61, 0xE2, 0x82, 0x28]))
+        _ = try String.fromUtf8(bytes([0x61, 0xE2, 0x82, 0x28]))
     } catch {
         caught = true
         assertEqual(error.validUpTo, 1)
@@ -87,7 +87,7 @@ fn utf16BecomesText() {
 fn anUnpairedSurrogateThrowsWhereItIs() {
     var index = -1
     do {
-        let _ = try String.fromUtf16(units([0x61, 0x62, 0xDE00]))
+        _ = try String.fromUtf16(units([0x61, 0x62, 0xDE00]))
     } catch {
         index = error.index
         assertEqual(error.debugDescription(), "unpaired surrogate at code unit 2")

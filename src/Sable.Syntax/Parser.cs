@@ -993,6 +993,10 @@ internal sealed class Parser {
             case SyntaxKind.NoneKeyword:
                 return new LiteralExpressionGreen(EatToken());
 
+            // '_ = f()' drops what it is given; '_' is no expression elsewhere.
+            case SyntaxKind.UnderscoreToken when Peek(1).Kind == SyntaxKind.EqualsToken:
+                return new DiscardExpressionGreen(EatToken());
+
             // 'self' and 'Self' both stand for a value here; the token says
             // which, and 'Self.self' is how a metatype is written.
             case SyntaxKind.SelfKeyword:
@@ -2903,6 +2907,7 @@ internal sealed class Parser {
     /// </summary>
     bool CanStartExpressionStatement() =>
         CanStartExpression(Current.Kind)
+        || At(SyntaxKind.UnderscoreToken) && Peek(1).Kind == SyntaxKind.EqualsToken
         || IsPrefixOperator(Current.Kind)
         || IsRangeOperator(Current.Kind)
         || AtCompoundTypeExpression();

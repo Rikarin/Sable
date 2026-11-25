@@ -100,11 +100,11 @@ fn entriesAreReadOneAtATime() throws {
     var ended = entries.makeIterator()
     assert(try ended.next() == none)
     do {
-        let _ = try Directory.entries(temp.path.appending("missing"))
+        _ = try Directory.entries(temp.path.appending("missing"))
         fail("it is not there")
     } catch IoError.NotFound(_) { }
     do {
-        let _ = try Directory.list(temp.path.appending("a"))
+        _ = try Directory.list(temp.path.appending("a"))
         fail("it is a file")
     } catch IoError.NotADirectory(_) { }
 }
@@ -135,11 +135,11 @@ fn aWalkFindsEverythingBelow() throws {
     iterator.skipDescendants()
     assertEqual((try iterator.next())!.name, "e")
     do {
-        let _ = try Directory.walk(temp.path.appending("e"))
+        _ = try Directory.walk(temp.path.appending("e"))
         fail("a file was walked")
     } catch IoError.NotADirectory(_) { }
     do {
-        let _ = try Directory.walk(temp.path.appending("missing"))
+        _ = try Directory.walk(temp.path.appending("missing"))
         fail("nothing was walked")
     } catch IoError.NotFound(_) { }
 }
@@ -210,7 +210,7 @@ fn aGlobFindsWhatItMatches() throws {
     options.maxDepth = 1
     assert(try walked(try Directory.glob(root, "**/*.sb", options: options), root) == ["a.sb"])
     do {
-        let _ = try Directory.glob(root, "[a")
+        _ = try Directory.glob(root, "[a")
         fail("it is no pattern")
     } catch IoError.InvalidInput(_) { }
 }
@@ -426,10 +426,10 @@ fn aDirectorySwappedForALinkIsNotFollowed() async throws {
         let swapping = Task.detached {
             var i = 0
             while i < 20 {
-                let _ = try? File.rename(from: tree.appending("x"), to: spare)
-                let _ = try? File.createSymlink(at: tree.appending("x"), to: outside)
-                let _ = try? File.remove(tree.appending("x"))
-                let _ = try? File.rename(from: spare, to: tree.appending("x"))
+                _ = try? File.rename(from: tree.appending("x"), to: spare)
+                _ = try? File.createSymlink(at: tree.appending("x"), to: outside)
+                _ = try? File.remove(tree.appending("x"))
+                _ = try? File.rename(from: spare, to: tree.appending("x"))
                 i += 1
             }
         }
@@ -460,8 +460,8 @@ fn aTreeWrittenToAsItIsRemovedIsRemovedOrSaidNotToBe() async throws {
     let writing = Task.detached {
         var i = 0
         while i < 300 {
-            let _ = try? File.write(tree.appending("a").appending("n\(i)"), "n")
-            let _ = try? Directory.create(tree.appending("e\(i)"))
+            _ = try? File.write(tree.appending("a").appending("n\(i)"), "n")
+            _ = try? Directory.create(tree.appending("e\(i)"))
             i += 1
         }
     }

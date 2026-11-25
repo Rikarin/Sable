@@ -1037,6 +1037,10 @@ A compound assignment evaluates what its target is made of once, before the
 right side: `xs[next()] += f()` calls `next` once, then reads the element,
 calls `f`, and stores where it read.
 
+`_ = f()` drops what `f` gives: the value is made and destroyed, and the
+expression gives nothing. It is how the result of a function that is not
+`@discardable` is left unused on purpose. `_` is no expression anywhere else.
+
 Custom operators are **not** supported. Precedence is fixed by the grammar.
 
 ---

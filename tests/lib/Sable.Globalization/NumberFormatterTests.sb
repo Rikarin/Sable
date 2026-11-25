@@ -14,7 +14,7 @@ fn spec(_ text: String) -> FormatSpec {
 
 fn readError(_ text: String, _ tag: String, _ format: NumberFormat = .decimal) -> ParseError? {
     do {
-        let _ = try F64.parse(text, format: format, locale: locale(tag))
+        _ = try F64.parse(text, format: format, locale: locale(tag))
         return none
     } catch {
         return error

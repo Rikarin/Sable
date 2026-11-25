@@ -107,7 +107,7 @@ fn aDictionaryIsASequenceOfItsEntries() {
 @test
 fn aDictionaryIsACollectionOfItsEntries() {
     var ages: [String: Int] = ["ann": 31, "bo": 40, "cy": 7]
-    let _ = ages.remove("bo")
+    _ = ages.remove("bo")
     var seen: String[>..] = []
     var position = ages.startIndex
     while position < ages.endIndex {
@@ -124,7 +124,7 @@ fn aDictionaryIsACollectionOfItsEntries() {
 @test(traps: "out of range")
 fn aDictionaryPositionPastTheEndTraps() {
     let ages: [String: Int] = ["ann": 31]
-    let _ = ages[ages.endIndex]
+    _ = ages[ages.endIndex]
 }
 
 @test

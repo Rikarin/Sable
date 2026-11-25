@@ -145,7 +145,7 @@ public struct ArrayVec<Element, N: Int> where N > 0 {
     /// Takes out the element at 'index' and gives it back, moving those
     /// after it down one; outside 0..<count traps.
     public mutating fn remove(at index: Int) -> Element {
-        let _ = storage[index]
+        _ = storage[index]
         storage.rotate(from: index, to: storage.count, left: 1)
         return storage.removeLast()
     }
@@ -158,7 +158,7 @@ public struct ArrayVec<Element, N: Int> where N > 0 {
         if index != last {
             storage[index] = storage[last]
         }
-        let _ = storage.removeLast()
+        _ = storage.removeLast()
         return removed
     }
 
@@ -167,7 +167,7 @@ public struct ArrayVec<Element, N: Int> where N > 0 {
     public mutating fn truncate(to count: Int) {
         precondition(count >= 0, "ArrayVec.truncate: negative count")
         while storage.count > count {
-            let _ = storage.removeLast()
+            _ = storage.removeLast()
         }
     }
 

@@ -47,7 +47,7 @@ public final class Promise<T: Sendable, E: Error> {
         // Handed to the state from a task of its own, so that any code may
         // complete a promise, synchronous or not, on any thread.
         let state = self.state
-        let _ = Task.detached {
+        _ = Task.detached {
             await state.deliver(outcome)
         }
         return true

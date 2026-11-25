@@ -1369,7 +1369,7 @@ public sealed partial class SilGen {
                 BoundParameterAccess { IsNarrowed: false } or BoundLocalAccess { IsNarrowed: false } or BoundSelfAccess => true,
                 // A 'for' loop's iterator, named with the type it has.
                 BoundLocalAccess local => local.Type.Equals(local.Local.Type),
-                BoundCall or BoundMetatype or BoundTypeExpression or BoundConditional or BoundAssignment or BoundTry => true,
+                BoundCall or BoundMetatype or BoundTypeExpression or BoundConditional or BoundAssignment or BoundDiscard or BoundTry => true,
                 // A call of a function of them, in the generic convention.
                 BoundIndirectCall { Callee.Type: var calleeType } => IsGenericFunction(V(calleeType), _own),
                 BoundBinaryOperator { Method: not null } or BoundUnaryOperator { Method: not null } => true,
@@ -1402,7 +1402,7 @@ public sealed partial class SilGen {
 
         bool Consumes(BoundNode parent, BoundExpression child) =>
             parent switch {
-                BoundLocalDeclaration or BoundPatternDeclaration or BoundExpressionStatement or BoundReturn => true,
+                BoundLocalDeclaration or BoundPatternDeclaration or BoundExpressionStatement or BoundDiscard or BoundReturn => true,
                 BoundAssignment assignment => ReferenceEquals(child, assignment.Value)
                                               || assignment.Target is BoundLocalAccess or BoundParameterAccess && ReferenceEquals(child, assignment.Target)
                                               || assignment.Target is BoundFieldAccess { Receiver: BoundSelfAccess or BoundLocalAccess { Local.IsMutable: true } } stored

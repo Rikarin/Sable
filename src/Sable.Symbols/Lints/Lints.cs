@@ -17,6 +17,7 @@ public static class Lints {
         new VarNeverMutatedLint(),
         new ShadowedParameterLint(),
         new UnusedResultLint(),
+        new LetDiscardLint(),
         new ShadowedLocalLint(),
         new SelfAssignmentLint(),
         new UnusedPrivateLint(),

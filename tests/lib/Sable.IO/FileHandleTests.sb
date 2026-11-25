@@ -70,7 +70,7 @@ fn readingWritingSeekingAndPositions() throws {
     assert(!file.isOpen)
     file.close()
     do {
-        let _ = try file.read(upTo: 1)
+        _ = try file.read(upTo: 1)
         fail("a closed handle read")
     } catch IoError.InvalidInput(let what) {
         assertEqual(what, path)
@@ -82,7 +82,7 @@ fn readingWritingSeekingAndPositions() throws {
 fn openOptionsSayWhatHappens() throws {
     let path = "sable-test-handle-options.txt"
     do {
-        let _ = try File.open(path)
+        _ = try File.open(path)
         fail("a missing file opened")
     } catch IoError.NotFound(let missing) {
         assertEqual(missing, path)
@@ -92,14 +92,14 @@ fn openOptionsSayWhatHappens() throws {
     var fresh = OpenOptions.writing
     fresh.createNew = true
     do {
-        let _ = try File.open(path, options: fresh)
+        _ = try File.open(path, options: fresh)
         fail("createNew opened a file that is there")
     } catch IoError.AlreadyExists(let there) {
         assertEqual(there, path)
     }
 
     do {
-        let _ = try File.open(".")
+        _ = try File.open(".")
         fail("a directory opened as a file")
     } catch IoError.IsDirectory(_) { }
 
@@ -116,7 +116,7 @@ fn openOptionsSayWhatHappens() throws {
     let emptied = try File.open(path, options: emptying)
     assertEqual(try emptied.metadata().size, 0)
     do {
-        let _ = try emptied.read(upTo: 1)
+        _ = try emptied.read(upTo: 1)
         fail("a handle opened to write was read")
     } catch { }
     emptied.close()

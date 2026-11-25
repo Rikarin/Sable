@@ -19,7 +19,7 @@ fn at(_ pattern: String, _ seconds: Int, _ tag: String = "en") -> String {
 
 fn dateError(_ text: String, _ pattern: String, _ tag: String = "en") -> ParseError? {
     do {
-        let _ = try DateTimeFormatter(pattern: pattern, locale: Locale.of(tag)!).parseDateTime(text)
+        _ = try DateTimeFormatter(pattern: pattern, locale: Locale.of(tag)!).parseDateTime(text)
         return none
     } catch {
         return error

@@ -125,7 +125,7 @@ public struct StringBuffer {
 
     /// The room given back, nothing made of it: the buffer is done with.
     public unsafe fn discard() {
-        let _ = StringBuffer.take(address, 0, 0)
+        _ = StringBuffer.take(address, 0, 0)
     }
 
     @builtin("string_buffer_make")

@@ -90,41 +90,41 @@ fn aPieceIsASequenceOfItsScalars() {
 fn readingAtAPiecesEndTraps() {
     let text = "abc"
     let piece = text[..<text.index(atScalar: 2)]
-    let _ = piece[piece.endIndex]
+    _ = piece[piece.endIndex]
 }
 
 @test(traps: "string index out of range")
 fn readingBeforeAPiecesStartTraps() {
     let text = "abc"
     let piece = text[text.index(atScalar: 1)...]
-    let _ = piece[text.startIndex]
+    _ = piece[text.startIndex]
 }
 
 @test(traps: "string index out of range")
 fn steppingPastAPiecesEndTraps() {
     let text = "abc"
     let piece = text[..<text.index(atScalar: 1)]
-    let _ = piece.index(after: piece.endIndex)
+    _ = piece.index(after: piece.endIndex)
 }
 
 @test(traps: "string index out of range")
 fn steppingBackFromAPiecesStartTraps() {
     let text = "abc"
     let piece = text[text.index(atScalar: 1)...]
-    let _ = piece.index(before: piece.startIndex)
+    _ = piece.index(before: piece.startIndex)
 }
 
 @test(traps: "string slice out of range")
 fn slicingPastAPiecesEndTraps() {
     let text = "abcdef"
     let piece = text[..<text.index(atScalar: 3)]
-    let _ = piece[piece.startIndex..<text.endIndex]
+    _ = piece[piece.startIndex..<text.endIndex]
 }
 
 @test(traps: "string index not on a character boundary")
 fn slicingInsideAScalarTraps() {
     let text = "aé"
-    let _ = text[String.Index(utf8Offset: 0)..<String.Index(utf8Offset: 2)]
+    _ = text[String.Index(utf8Offset: 0)..<String.Index(utf8Offset: 2)]
 }
 
 @test

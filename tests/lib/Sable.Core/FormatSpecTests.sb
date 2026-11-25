@@ -13,7 +13,7 @@ fn spec(_ text: String) -> FormatSpec {
 
 fn parseError(_ text: String) -> ParseError? {
     do {
-        let _ = try FormatSpec.parse(text)
+        _ = try FormatSpec.parse(text)
         return none
     } catch {
         return error

@@ -39,6 +39,6 @@ fn integers(_ data: U8[:]) {
         assert((try? Int.parse("\(n)")) == n, "a parsed integer does not print as itself")
     }
     for radix in [2, 8, 16, 36] {
-        let _ = try? Int.parse(text, radix: radix)
+        _ = try? Int.parse(text, radix: radix)
     }
 }

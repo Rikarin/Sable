@@ -98,7 +98,7 @@ fn aTaskCancelledHearsNoMore() async {
 fn aHandlerRunsEachTime() async {
     let counted = Atomic(0)
     let registration = try! Signals.handle(.User1) { _signal in
-        let _ = counted.update { $0 + 1 }
+        _ = counted.update { $0 + 1 }
     }
     Signals.raise(.User1)
     while counted.load() < 1 {
@@ -125,14 +125,14 @@ fn aSignalNoOneListensForDoesWhatItDid() async {
     let child = try! Command("sleep").argument("60").spawn()
     assert(try! child.signal(.Terminate))
     assert(try! await child.wait() == ExitStatus(signal: .Terminate))
-    let _ = listening
+    _ = listening
 }
 
 @test
 fn whatCannotBeCaughtIsRefused() {
     for signal in [Signal.Kill, Signal.Stop, Signal.SegmentationFault, Signal.Other(number: 0), Signal.Other(number: 63)] {
         do {
-            let _ = try Signals.on([.User1, signal])
+            _ = try Signals.on([.User1, signal])
             assert(false, signal.name)
         } catch {
             assertEqual(error.description(), ProcessError.Unsupported.description())
@@ -145,7 +145,7 @@ fn whatCannotBeCaughtIsRefused() {
 fn waitingForASignalKeepsNoProgramGoing() async {
     // The test ends, though its task never does.
     let signals = try! Signals.on(.User2)
-    let _ = Task.detached {
+    _ = Task.detached {
         for await _ in signals { }
     }
     try? await Task.sleep(for: Duration.milliseconds(10))

@@ -31,17 +31,17 @@ fn theElementOffsetIsTheCountLessN() {
 
 @test(traps: "index ^4 is out of range for count 3")
 fn anOffsetPastTheStartTraps() {
-    let _ = FromEnd(blackBox(4)).elementOffset(in: 3)
+    _ = FromEnd(blackBox(4)).elementOffset(in: 3)
 }
 
 @test(traps: "index ^0 is out of range for count 3")
 fn theEndIsNoElement() {
-    let _ = FromEnd(blackBox(0)).elementOffset(in: 3)
+    _ = FromEnd(blackBox(0)).elementOffset(in: 3)
 }
 
 @test(traps: "index ^-1 is out of range for count 3")
 fn aNegativeCountTrapsRatherThanCountingFromTheStart() {
-    let _ = FromEnd(blackBox(-1)).elementOffset(in: 3)
+    _ = FromEnd(blackBox(-1)).elementOffset(in: 3)
 }
 
 @test
@@ -74,18 +74,18 @@ fn aStringIsReadFromTheEndByCharacter() {
 
 @test(traps: "index ^6 is out of range for count 5")
 fn aStringPastItsStartTraps() {
-    let _ = "naïve"[^blackBox(6)]
+    _ = "naïve"[^blackBox(6)]
 }
 
 @test(traps: "index ^0 is out of range for count 5")
 fn theEndOfAStringIsNoCharacter() {
-    let _ = "naïve"[^blackBox(0)]
+    _ = "naïve"[^blackBox(0)]
 }
 
 @test(traps: "index ^3 is out of range for count 2")
 fn anArrayPastItsStartTraps() {
     let xs = [1, 2]
-    let _ = xs[^blackBox(3)]
+    _ = xs[^blackBox(3)]
 }
 
 fn lastOf<C: BidirectionalCollection>(_ c: C) -> C.Element {

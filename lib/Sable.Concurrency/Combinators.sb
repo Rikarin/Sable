@@ -22,7 +22,7 @@ union Raced<T> {
 /// let quick = try! await withTimeout(Duration.seconds(5)) { 42 }
 /// assert(quick == 42)
 /// do {
-///     let _ = try await withTimeout(Duration.milliseconds(10)) {
+///     _ = try await withTimeout(Duration.milliseconds(10)) {
 ///         try await Task.sleep(nanoseconds: 10_000_000_000)
 ///     }
 ///     assert(false)
@@ -40,7 +40,7 @@ public fn withTimeout<T: Sendable>(_ duration: Duration, _ body: @Sendable async
 /// let clock = TestClock()
 /// let timed = Task.spawn {
 ///     do {
-///         let _ = try await withTimeout(Duration.minutes(1), clock: clock) {
+///         _ = try await withTimeout(Duration.minutes(1), clock: clock) {
 ///             try await clock.sleep(for: Duration.hours(1))
 ///         }
 ///         return false
@@ -130,9 +130,9 @@ public fn whenAny<T: Sendable>(_ tasks: Task<T>[>..]) async -> Finished<T> {
     var i = 0
     for task in tasks {
         let index = i
-        let _ = Task.detached {
+        _ = Task.detached {
             let value = await task.value
-            let _ = first.succeed(Finished<T> { index: index, value: value })
+            _ = first.succeed(Finished<T> { index: index, value: value })
         }
         i += 1
     }
@@ -158,13 +158,13 @@ public fn whenEach<T: Sendable>(_ tasks: Task<T>[>..]) -> Channel<Finished<T>> {
     let finished = Channel<Finished<T>>()
     let remaining = Atomic(tasks.count)
     if tasks.isEmpty {
-        let _ = Task.detached { await finished.close() }
+        _ = Task.detached { await finished.close() }
         return finished
     }
     var i = 0
     for task in tasks {
         let index = i
-        let _ = Task.detached {
+        _ = Task.detached {
             let value = await task.value
             await finished.send(Finished<T> { index: index, value: value })
             let before = remaining.update { $0 - 1 }

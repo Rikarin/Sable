@@ -17,7 +17,7 @@ fn aCollectionThatCannotGoBackStepsForwards() {
 @test(traps: "distance must not be negative, but is -1")
 fn aCollectionThatCannotGoBackTrapsGoingBack() {
     let counts = ["a": 1]
-    let _ = counts.index(counts.endIndex, offsetBy: blackBox(-1))
+    _ = counts.index(counts.endIndex, offsetBy: blackBox(-1))
 }
 
 fn stepBack<C: BidirectionalCollection>(_ c: C, _ n: Int) -> C.Element {
@@ -33,12 +33,12 @@ fn aBidirectionalCollectionStepsBackFromItsEnd() {
 
 @test(traps: "index ^4 is out of range for count 3")
 fn steppingBackPastTheStartTraps() {
-    let _ = stepBack([1, 2, 3], blackBox(4))
+    _ = stepBack([1, 2, 3], blackBox(4))
 }
 
 @test(traps: "index ^0 is out of range for count 3")
 fn steppingBackNoneTraps() {
-    let _ = stepBack([1, 2, 3], blackBox(0))
+    _ = stepBack([1, 2, 3], blackBox(0))
 }
 
 struct Point {

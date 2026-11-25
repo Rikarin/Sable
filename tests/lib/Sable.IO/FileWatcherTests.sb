@@ -113,7 +113,7 @@ fn aTaskWaitingIsCancelled() async throws {
 fn nothingIsNotWatched() throws {
     let temp = try Temp.directory()
     do {
-        let _ = try FileWatcher.watch(temp.path.appending("missing"))
+        _ = try FileWatcher.watch(temp.path.appending("missing"))
         fail("it is not there")
     } catch IoError.NotFound(_) { }
 }

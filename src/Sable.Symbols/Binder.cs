@@ -8564,6 +8564,15 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindAssignment(AssignmentExpressionSyntax syntax) {
+        if (syntax.Left is DiscardExpressionSyntax) {
+            var dropped = AsValue(BindExpression(syntax.Right));
+            if (IsNone(dropped) && dropped.Type is OptionalTypeSymbol { UnderlyingType.IsError: true }) {
+                _diagnostics.Error(ErrorCode.ERR_CannotInferType, syntax.Right.Span, "'none' alone does not say what it is optional of");
+            }
+
+            return new BoundDiscard(syntax, Core.Void, dropped);
+        }
+
         var spine = Spine(syntax.Left).ToList();
         _assignedSpine.UnionWith(spine);
         var outerTarget = _storeTarget;

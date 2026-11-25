@@ -5,7 +5,7 @@ module Sable.Time
 ///
 /// ```sable
 /// do {
-///     let _ = try TimeZone.find("Mars/Olympus_Mons")
+///     _ = try TimeZone.find("Mars/Olympus_Mons")
 /// } catch {
 ///     assert(error == .NotFound(id: "Mars/Olympus_Mons"))
 /// }

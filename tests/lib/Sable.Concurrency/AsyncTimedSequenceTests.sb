@@ -116,7 +116,7 @@ fn throttlePassesTheErrorOn() async {
     await input.close(error: .Down)
     var iterator = input.throttle(for: Duration.seconds(1)).makeAsyncIterator()
     do {
-        let _ = try await iterator.next()
+        _ = try await iterator.next()
         assert(false)
     } catch {
         assert(error == .Down)

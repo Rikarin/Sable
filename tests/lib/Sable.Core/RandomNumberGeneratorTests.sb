@@ -176,7 +176,7 @@ fn everyNarrowTypeCanBeABound() {
 @test(traps: "the upper bound must be positive")
 fn aBoundOfZeroTraps() {
     var generator = SeededRandomNumberGenerator(seed: 3)
-    let _ = generator.next(upperBound: 0)
+    _ = generator.next(upperBound: 0)
 }
 
 @test

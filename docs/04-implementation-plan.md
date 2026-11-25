@@ -2473,7 +2473,7 @@ loaded in any test.
   `do` throws nothing has its body reported unreachable (S6005). A lint's
   report can carry a fix (`Diagnostic.Fixes`, text edits): prefixing `_`,
   renaming a parameter but keeping its label, removing an import or a
-  self-assignment, `var` to `let`, `let _ =` before a dropped result.
+  self-assignment, `var` to `let`, `_ =` before a dropped result.
   **`sable fix`** applies them to the package's own files (or to loose
   files, with `sable lint`'s options), compiling and linting again after
   each round until nothing is left, putting the files back if a round ever
@@ -2485,7 +2485,7 @@ loaded in any test.
   ones, and one that throws is reported (S3398) while the rest run. Not
   yet: plugins written in Sable (they would need the semantic model exposed
   to Sable code), and `_ = f()` (SYNTAX.md's discard) does not parse, so
-  the fix writes `let _ =`.
+  the fix writes `_ =`.
 
 ### Debugging, as implemented
 

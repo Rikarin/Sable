@@ -25,7 +25,7 @@ struct JsonParser {
         }
         var parser = JsonParser(bytes)
         parser.skipSpace()
-        let _ = try parser.value(0)
+        _ = try parser.value(0)
         parser.skipSpace()
         if parser.at < bytes.count {
             throw parser.error("text after the value")

@@ -7170,6 +7170,16 @@ public sealed partial class SilGen {
                 case BoundAssignment assignment:
                     return AssignmentValue(assignment);
 
+                // '_ = f()': nothing is left of it once the value is made.
+                case BoundDiscard discard: {
+                    if (Expression(discard.Value) is not { } dropped) {
+                        return null;
+                    }
+
+                    Destroy(dropped);
+                    return Emit(new TupleInst(new TupleType([])));
+                }
+
                 // 'task.value', Sable.Core's @intrinsic async getter.
                 case BoundFieldAccess { Field: { Name: "value", IsAsyncGetter: true, ContainingSymbol: var task } } taskValue
                     when task is not null && ReferenceEquals(task, Core.Task):

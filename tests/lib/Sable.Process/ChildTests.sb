@@ -70,7 +70,7 @@ fn manyMayWaitForOne() async {
 fn aWaitCanHaveALimit() async {
     let child = try! Command("sleep").argument("60").spawn()
     do {
-        let _ = try await withTimeout(Duration.milliseconds(30)) { try await child.wait() }
+        _ = try await withTimeout(Duration.milliseconds(30)) { try await child.wait() }
         assert(false)
     } catch let error as TimeoutError {
         assert(error.duration == Duration.milliseconds(30))
@@ -91,7 +91,7 @@ fn aTaskCancelledBeforeItWaitsThrows() async {
             await Task.yield()
         }
         do {
-            let _ = try await child.wait()
+            _ = try await child.wait()
             return "ended"
         } catch {
             return error.description()
@@ -100,7 +100,7 @@ fn aTaskCancelledBeforeItWaitsThrows() async {
     waiting.cancel()
     assertEqual(await waiting.value, ProcessError.Cancelled.description())
     child.kill()
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
 }
 
 @test
@@ -126,7 +126,7 @@ fn killedItSaysSo() async {
 @test
 fn oneThatHasEndedIsNotSignalled() async {
     let child = try! Command("true").spawn()
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
     assert(!child.kill())
     assert(!child.kill(tree: true))
     assert(try! !child.signal(.Terminate))
@@ -140,7 +140,7 @@ fn killingAsItEndsIsNoTrouble() async {
         while child.kill() && child.tryWait() == none {
             await Task.yield()
         }
-        let _ = try! await child.wait()
+        _ = try! await child.wait()
         i += 1
     }
 }
@@ -179,7 +179,7 @@ fn whatIsNoSignalIsRefused() async {
     }
     assert(child.tryWait() == none)
     child.stdin!.close()
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
 }
 
 @test
@@ -200,7 +200,7 @@ fn killingItAloneLeavesWhatItStarted() async {
     var lines = child.stdout!.lines().makeAsyncIterator()
     let started = try! await lines.next()
     assert(child.kill())
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
     let alive = try! await sh("kill \(started!)").status()
     assert(alive.success)
 }
@@ -211,7 +211,7 @@ fn killingItAloneLeavesWhatItStarted() async {
 fn onlyStreamsPipedAreThere() async {
     let child = try! Command("true").stdin(.Null).stdout(.Piped).stderr(.Null).spawn()
     assert(child.stdin == none && child.stderr == none && child.stdout != none)
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
 }
 
 @test
@@ -236,14 +236,14 @@ fn aReadGivesNoMoreThanIsAskedFor() async {
     let two = try! await child.stdout!.read(upTo: 2)
     assert(two == [0x61, 0x62])
     assertEqual(try! await child.stdout!.readText(), "cdef")
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
 }
 
 @test
 fn writingToOneThatReadsNoMoreThrows() async {
     // And does not end this program, as a SIGPIPE would.
     let child = try! Command("true").stdin(.Piped).spawn()
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
     do {
         try await child.stdin!.write("no one reads this")
         assert(false)
@@ -262,7 +262,7 @@ fn writingMoreThanAPipeHoldsWaitsForItsReader() async {
     try! await child.stdin!.write(bytes)
     child.stdin!.close()
     assertEqual(try! await child.stdout!.readText().trimmed(), "500000")
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
 }
 
 @test
@@ -284,7 +284,7 @@ fn aWriteWaitingIsCancelled() async {
     writing.cancel()
     assertEqual(await writing.value, IoError.Cancelled.description())
     child.kill()
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
 }
 
 @test
@@ -292,7 +292,7 @@ fn aReadWaitingIsCancelledOrClosed() async {
     let child = try! Command("sleep").argument("60").stdout(.Piped).stderr(.Piped).spawn()
     let cancelled = Task.spawn {
         do {
-            let _ = try await child.stdout!.read(upTo: 1)
+            _ = try await child.stdout!.read(upTo: 1)
             return "read"
         } catch {
             return error.description()
@@ -300,7 +300,7 @@ fn aReadWaitingIsCancelledOrClosed() async {
     }
     let closed = Task.spawn {
         do {
-            let _ = try await child.stderr!.read(upTo: 1)
+            _ = try await child.stderr!.read(upTo: 1)
             return "read"
         } catch {
             return error.description()
@@ -312,7 +312,7 @@ fn aReadWaitingIsCancelledOrClosed() async {
     assertEqual(await cancelled.value, IoError.Cancelled.description())
     assertEqual(await closed.value, IoError.Disconnected.description())
     child.kill()
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
 }
 
 @test
@@ -323,7 +323,7 @@ fn itsLinesComeAsItWritesThem() async throws {
         lines.append(line)
     }
     assert(lines == ["one", "two", "", "four", "last"])
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
 }
 
 @test
@@ -334,7 +334,7 @@ fn aLineLongerThanAReadIsWhole() async {
     assert(try! await lines.next() == "end")
     assert(try! await lines.next() == none)
     assert(try! await lines.next() == none)
-    let _ = try! await child.wait()
+    _ = try! await child.wait()
 }
 
 #endif

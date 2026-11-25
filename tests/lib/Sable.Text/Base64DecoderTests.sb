@@ -34,7 +34,7 @@ fn decodeInTwo(_ text: U8[:], cut: Int, padding: Padding = .Either) throws(Decod
 
 fn errorInTwo(_ text: String, cut: Int, padding: Padding = .Either) -> DecodeError? {
     do {
-        let _ = try decodeInTwo(text.utf8Bytes(), cut: cut, padding: padding)
+        _ = try decodeInTwo(text.utf8Bytes(), cut: cut, padding: padding)
     } catch {
         return error
     }

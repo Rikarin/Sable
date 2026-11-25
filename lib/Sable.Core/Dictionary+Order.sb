@@ -57,7 +57,7 @@ extension Dictionary {
             i += 1
         }
         entries.rotate(from: index, to: entries.count, left: 1)
-        let _ = entries.removeLast()
+        _ = entries.removeLast()
         live = live - 1
         return (entry.key, entry.value)
     }

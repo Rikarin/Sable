@@ -31,7 +31,7 @@ fn aListenerOnPortZeroIsGivenAFreePort() {
 fn listeningOnAnAddressThatIsNotOursThrows() {
     var thrown = ""
     do {
-        let _ = try TcpListener.bind(SocketAddress(IpAddress(192, 0, 2, 1), port: 0))
+        _ = try TcpListener.bind(SocketAddress(IpAddress(192, 0, 2, 1), port: 0))
     } catch {
         thrown = error.description()
     }
@@ -63,7 +63,7 @@ fn closingAListenerWakesItsAccept() async {
         let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
         let waiting = Task.spawn { () -> String in
             do {
-                let _ = try await listener.accept()
+                _ = try await listener.accept()
                 return "accepted"
             } catch {
                 return error.description()
@@ -83,7 +83,7 @@ fn cancellingATaskWakesItsAccept() async {
         let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
         let waiting = Task.spawn { () -> String in
             do {
-                let _ = try await listener.accept()
+                _ = try await listener.accept()
                 return "accepted"
             } catch {
                 return error.description()
@@ -113,10 +113,10 @@ fn aPortInUseIsSaidToBe() async {
         let first = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
         let address = first.localAddress
         assertEqual(await thrown {
-            let _ = try TcpListener.bind(address)
+            _ = try TcpListener.bind(address)
         }, "'\(address)' is in use")
         first.close()
-        let _ = try TcpListener.bind(address)
+        _ = try TcpListener.bind(address)
     } catch {
         assert(false, error.description())
     }
@@ -165,9 +165,9 @@ fn anIpv6ListenerTakesIpv6AloneUnlessTold() async {
         four.close()
         let port = six.port
         assert((await thrown {
-            let _ = try await TcpStream.connect(SocketAddress(.v4Loopback, port: port))
+            _ = try await TcpStream.connect(SocketAddress(.v4Loopback, port: port))
         }) != "")
-        let _ = try await TcpStream.connect(SocketAddress(.v6Loopback, port: port))
+        _ = try await TcpStream.connect(SocketAddress(.v6Loopback, port: port))
 
         let both = try TcpListener.bind(SocketAddress(.v6Any, port: 0), dualStack: true)
         let client = try await TcpStream.connect(SocketAddress(.v4Loopback, port: both.port))
@@ -236,7 +236,7 @@ fn theReceiveBufferIsWhatItsConnectionsHave() async {
     do {
         let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
         try listener.setReceiveBufferSize(262_144)
-        let _ = try await TcpStream.connect(listener.localAddress)
+        _ = try await TcpStream.connect(listener.localAddress)
         let accepted = try await listener.accept()
         assert((try accepted.receiveBufferSize()) >= 262_144)
         listener.close()

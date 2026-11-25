@@ -41,7 +41,7 @@ fn theSameSeedRepeatsAndAnotherDiffers() {
 @test
 fn aCopyGoesOnFromWhereItWasCopied() {
     var original = SeededRandomNumberGenerator(seed: 5)
-    let _ = original.next()
+    _ = original.next()
     var copy = original
     assert(copy.next() == original.next())
 }
@@ -79,5 +79,5 @@ fn aLongJumpIsTwoToThe192Draws() {
 
 @test(traps: "the state must not be all zeros")
 fn aStateOfZerosTraps() {
-    let _ = SeededRandomNumberGenerator(state: [0, 0, 0, 0])
+    _ = SeededRandomNumberGenerator(state: [0, 0, 0, 0])
 }

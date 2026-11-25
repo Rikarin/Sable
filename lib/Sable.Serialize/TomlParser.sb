@@ -390,7 +390,7 @@ struct TomlParser {
             if lineBreak() > 0 || peek() == 0x23 {
                 throw error("an inline table is written on one line")
             }
-            let _ = try keyValue(node)
+            _ = try keyValue(node)
             node.itemStarts.append(start)
             node.itemEnds.append(at)
             skipSpace()

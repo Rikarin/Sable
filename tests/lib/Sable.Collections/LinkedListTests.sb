@@ -90,7 +90,7 @@ fn randomChangesAgreeWithAnArray() {
             let spot = walk.next(model.count)
             let gone = all[spot]
             assertEqual(list.remove(at: gone), model[spot])
-            let _ = model.remove(at: spot)
+            _ = model.remove(at: spot)
             removed.append(gone)
         } else if choice < 9 {
             // Move a random node before another, or to the back.
@@ -101,7 +101,7 @@ fn randomChangesAgreeWithAnArray() {
             let moved = list.move(all[from], before: target)
             assertEqual(list[moved], value)
             if from != to {
-                let _ = model.remove(at: from)
+                _ = model.remove(at: from)
                 model.insert(value, at: to > from ? to - 1 : to)
             }
         } else {

@@ -275,7 +275,7 @@ fn anyEditsLeaveTomlWithTheRestAsItWas() throws {
                 let value: TomlValue = step % 3 == 0 ? table("v = \(step)\nt.u = 1") : .Integer(value: step)
                 do {
                     if step % 4 == 0 {
-                        let _ = try document.remove(path)
+                        _ = try document.remove(path)
                         if (path.last ?? "") != "0" && (path.last ?? "") != "1" {
                             assert(document.get(path) == none)
                         }

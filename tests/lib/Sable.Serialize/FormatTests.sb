@@ -58,7 +58,7 @@ final class TreeEncoder: Encoder {
     }
     fn end() {
         if !flattened.removeLast() {
-            let _ = stack.removeLast()
+            _ = stack.removeLast()
         }
     }
     fn encodeNull() throws(SerializeError) {
@@ -359,7 +359,7 @@ fn theLibrarysConformancesDoToo() throws {
     assertEqual(try written(counts), "map 1(key one, int 1)")
     assertEqual((try back(counts))["one"] ?? 0, 1)
     var unique = Set<Int>()
-    let _ = unique.insert(4)
+    _ = unique.insert(4)
     assertEqual(try written(unique), "seq 1(int 4)")
     assert((try back(unique)) == unique)
     assert((try back(Duration.seconds(2))) == Duration.seconds(2))

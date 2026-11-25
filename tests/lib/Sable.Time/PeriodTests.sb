@@ -5,7 +5,7 @@ import Sable.Time
 
 fn periodError(_ text: String) -> ParseError? {
     do {
-        let _ = try Period.parse(text)
+        _ = try Period.parse(text)
         return none
     } catch {
         return error

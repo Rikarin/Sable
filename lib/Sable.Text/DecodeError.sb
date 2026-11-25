@@ -8,7 +8,7 @@ module Sable.Text
 ///
 /// ```sable
 /// do {
-///     let _ = try Base64.decode("SGV*bG8=")
+///     _ = try Base64.decode("SGV*bG8=")
 /// } catch {
 ///     assert(error == .InvalidCharacter(at: 3, byte: 0x2A))
 ///     assert(error.offset == 3)

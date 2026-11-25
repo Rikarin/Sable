@@ -181,5 +181,5 @@ fn aSampleOfNoneIsEmpty() {
 
 @test(traps: "count")
 fn aNegativeSampleTraps() {
-    let _ = [1, 2].sample(count: -1)
+    _ = [1, 2].sample(count: -1)
 }

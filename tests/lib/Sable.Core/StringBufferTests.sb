@@ -191,7 +191,7 @@ fn asciiCaseIsTheSameAtEveryLength() {
 fn aByteReadPastTheRoomStops() {
     unsafe {
         let buffer = StringBuffer.allocate(capacity: 8)
-        let _ = buffer.load(at: 8)
+        _ = buffer.load(at: 8)
     }
 }
 
@@ -199,7 +199,7 @@ fn aByteReadPastTheRoomStops() {
 fn aByteReadBeforeTheStartStops() {
     unsafe {
         let buffer = StringBuffer.allocate(capacity: 8)
-        let _ = buffer.load(at: -1)
+        _ = buffer.load(at: -1)
     }
 }
 
@@ -207,7 +207,7 @@ fn aByteReadBeforeTheStartStops() {
 fn finishingPastTheRoomStops() {
     unsafe {
         let buffer = StringBuffer.allocate(capacity: 8)
-        let _ = buffer.finish(count: 9)
+        _ = buffer.finish(count: 9)
     }
 }
 
@@ -215,7 +215,7 @@ fn finishingPastTheRoomStops() {
 fn finishingAsciiPastTheRoomStops() {
     unsafe {
         let buffer = StringBuffer.allocate(capacity: 8)
-        let _ = buffer.finish(asciiCount: 9)
+        _ = buffer.finish(asciiCount: 9)
     }
 }
 
@@ -223,7 +223,7 @@ fn finishingAsciiPastTheRoomStops() {
 fn finishingANegativeCountStops() {
     unsafe {
         let buffer = StringBuffer.allocate(capacity: 8)
-        let _ = buffer.finish(count: -1)
+        _ = buffer.finish(count: -1)
     }
 }
 
@@ -231,7 +231,7 @@ fn finishingANegativeCountStops() {
 fn finishingIfValidPastTheRoomStops() {
     unsafe {
         let buffer = StringBuffer.allocate(capacity: 8)
-        let _ = buffer.finishIfValid(count: 9)
+        _ = buffer.finishIfValid(count: 9)
     }
 }
 
@@ -239,7 +239,7 @@ fn finishingIfValidPastTheRoomStops() {
 fn growingFromMoreThanThereIsStops() {
     unsafe {
         let buffer = StringBuffer.allocate(capacity: 8)
-        let _ = buffer.growing(used: 9, capacity: 20)
+        _ = buffer.growing(used: 9, capacity: 20)
     }
 }
 
@@ -247,7 +247,7 @@ fn growingFromMoreThanThereIsStops() {
 fn growingToLessThanIsUsedStops() {
     unsafe {
         let buffer = StringBuffer.allocate(capacity: 8)
-        let _ = buffer.growing(used: 4, capacity: 2)
+        _ = buffer.growing(used: 4, capacity: 2)
     }
 }
 
@@ -271,7 +271,7 @@ fn aWordBeforeTheStartStops() {
 fn encodingPastTheRoomStops() {
     unsafe {
         let buffer = StringBuffer.allocate(capacity: 8)
-        let _ = buffer.encode(.HexEncode, [1], at: 9)
+        _ = buffer.encode(.HexEncode, [1], at: 9)
     }
 }
 

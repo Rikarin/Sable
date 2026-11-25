@@ -118,7 +118,7 @@ public struct Command {
     ///
     /// ```sable
     /// do {
-    ///     let _ = try Command("surely-no-such-program").spawn()
+    ///     _ = try Command("surely-no-such-program").spawn()
     ///     assert(false)
     /// } catch .NotFound(let program) {
     ///     assert(program == "surely-no-such-program")
@@ -224,7 +224,7 @@ public struct Command {
     // All of it, or until the child stops reading, which is all it wanted.
     static fn give(_ input: U8[>..], to stdin: ChildInput?) async {
         if let stdin = stdin {
-            let _ = try? await stdin.write(input)
+            _ = try? await stdin.write(input)
             stdin.close()
         }
     }

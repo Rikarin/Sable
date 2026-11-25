@@ -10,7 +10,7 @@ fn outside(_ p: RawPtr<Int>) -> Int {
     q.deallocate() //! S3470 'deallocate' is an 'unsafe fn'
     let view = UnsafeBuffer<Int>.viewing(p, count: 1) //! S3470 'viewing' is an 'unsafe fn'
     let bytes = NativeMemory.allocate(byteCount: 8) //! S3470 'allocate' is an 'unsafe fn'
-    let _ = RawMemory.load(0) //! S3040 'load' is internal to 'Sable.Core'
+    _ = RawMemory.load(0) //! S3040 'load' is internal to 'Sable.Core'
     return p.load() + view[0] //! S3470 'load' is an 'unsafe fn'
 }
 

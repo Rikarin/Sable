@@ -112,7 +112,7 @@ fn bufferedReadsAndRunsGiveEveryByteInOrder() throws {
     var exact = trickle(bytes, seed: 13)
     assertEqual(try exact.readExactly(1000).count, 1000)
     do {
-        let _ = try exact.readExactly(10000)
+        _ = try exact.readExactly(10000)
         fail("read past the end")
     } catch .UnexpectedEof { }
 
@@ -165,7 +165,7 @@ fn aMemoryStreamReadsWritesAndSeeks() throws {
     try stream.flush()
     assertEqual(try stream.readExactly(3), [1, 2, 9])
     do {
-        let _ = try stream.readExactly(10)
+        _ = try stream.readExactly(10)
         fail("read past the end")
     } catch .UnexpectedEof { }
 

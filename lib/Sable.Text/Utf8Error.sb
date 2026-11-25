@@ -5,7 +5,7 @@ module Sable.Text
 /// ```sable
 /// let bytes: U8[>..] = [0x61, 0xE2, 0x82, 0x28]
 /// do {
-///     let _ = try String.fromUtf8(bytes)
+///     _ = try String.fromUtf8(bytes)
 /// } catch {
 ///     assert(error.validUpTo == 1 && error.errorLength == 2)
 /// }

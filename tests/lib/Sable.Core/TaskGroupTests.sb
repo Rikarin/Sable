@@ -131,7 +131,7 @@ fn aThrowingGroupGivesResultsAndErrorsInTheirTurn() async {
 
     var caught = ""
     do {
-        let _ = try await withThrowingTaskGroup(of: Int.self) { group in
+        _ = try await withThrowingTaskGroup(of: Int.self) { group in
             group.spawn { try await even(3) }
             return try await group.next() ?? 0
         }

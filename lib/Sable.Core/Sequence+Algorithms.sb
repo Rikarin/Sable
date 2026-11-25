@@ -440,7 +440,7 @@ extension Sequence {
         }
         var dropped = 0
         while dropped < n && !result.isEmpty {
-            let _ = result.removeLast()
+            _ = result.removeLast()
             dropped += 1
         }
         return result

@@ -23,7 +23,7 @@ public class OrderedSet<Element: Hashable> {
     /// through them throws, it throws.
     public init<S: Sequence>(_ values: S) throws(S.Failure) where S.Element == Element {
         for try value in values {
-            let _ = append(value)
+            _ = append(value)
         }
     }
 
@@ -68,7 +68,7 @@ public class OrderedSet<Element: Hashable> {
         guard let position = positions[value] else {
             return false
         }
-        let _ = remove(at: position)
+        _ = remove(at: position)
         return true
     }
 
@@ -113,7 +113,7 @@ public class OrderedSet<Element: Hashable> {
     public fn union(_ other: OrderedSet<Element>) -> OrderedSet<Element> {
         let result = OrderedSet<Element>(elements.toArray())
         for value in other.elements {
-            let _ = result.append(value)
+            _ = result.append(value)
         }
         return result
     }

@@ -25,7 +25,7 @@ fn scratch(_ name: String) -> String {
 
 fn failure(_ command: Command) -> ProcessError? {
     do {
-        let _ = try command.spawn()
+        _ = try command.spawn()
         return none
     } catch {
         return error
@@ -111,7 +111,7 @@ fn itHasNoneOfThisProgramsFiles() async {
     let other = try! Command("cat").stdin(.Piped).stdout(.Piped).spawn()
     let after = try! await Command("ls").argument("/dev/fd").output()
     other.kill()
-    let _ = try! await other.wait()
+    _ = try! await other.wait()
     file.close()
     listener.close()
     try! File.remove(path)
@@ -271,7 +271,7 @@ fn oneCancelledIsKilled() async {
     let path = scratch("pid")
     let running = Task.spawn {
         do {
-            let _ = try await sh("echo $$ > \(path); exec sleep 60").output()
+            _ = try await sh("echo $$ > \(path); exec sleep 60").output()
             return "ended"
         } catch {
             return error.description()
@@ -291,7 +291,7 @@ fn oneCancelledIsKilled() async {
 @test
 fn aStatusWaitedForTooLongIsKilled() async {
     do {
-        let _ = try await withTimeout(Duration.milliseconds(50)) { try await Command("sleep").argument("60").status() }
+        _ = try await withTimeout(Duration.milliseconds(50)) { try await Command("sleep").argument("60").status() }
         assert(false)
     } catch let error as TimeoutError {
         assert(error.duration == Duration.milliseconds(50))

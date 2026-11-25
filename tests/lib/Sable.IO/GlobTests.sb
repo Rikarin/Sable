@@ -94,13 +94,13 @@ fn aPatternFromTheRootMatchesPathsFromIt() throws {
 fn whatIsNoPatternIsAnError() {
     for pattern in ["[a", "a[", "[!]", "{a", "{a,{b}", "[]", "{a,[}"] {
         do {
-            let _ = try Glob(pattern)
+            _ = try Glob(pattern)
             fail("'\(pattern)' is a pattern")
         } catch { }
     }
     // Two to the twelfth ways through it.
     do {
-        let _ = try Glob("{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}")
+        _ = try Glob("{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}")
         fail("it has too many ways through it")
     } catch { }
 }

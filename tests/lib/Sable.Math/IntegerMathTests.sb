@@ -29,7 +29,7 @@ fn isqrtIsExactWhereF64sSquareRootIsNot() {
 
 @test(traps: "isqrt's argument must not be negative, but is -4")
 fn isqrtOfANegativeNumberTraps() {
-    let _ = isqrt(-4)
+    _ = isqrt(-4)
 }
 
 @test
@@ -42,12 +42,12 @@ fn factorialMultipliesOneThroughN() {
 
 @test(traps: "integer overflow")
 fn factorialPastTwentyTraps() {
-    let _ = factorial(21)
+    _ = factorial(21)
 }
 
 @test(traps: "factorial's argument must not be negative, but is -1")
 fn factorialOfANegativeNumberTraps() {
-    let _ = factorial(-1)
+    _ = factorial(-1)
 }
 
 @test
@@ -76,7 +76,7 @@ fn binomialDoesNotOverflowOnTheWayToAResultThatFits() {
 
 @test(traps: "integer overflow")
 fn binomialTrapsWhenTheResultDoesNotFit() {
-    let _ = binomial(68, 34)
+    _ = binomial(68, 34)
 }
 
 @test
@@ -91,12 +91,12 @@ fn powModReducesEveryProduct() {
 
 @test(traps: "the modulus must be positive, not 0")
 fn powModByZeroTraps() {
-    let _ = powMod(2, 3, 0)
+    _ = powMod(2, 3, 0)
 }
 
 @test(traps: "the exponent must not be negative, but is -1")
 fn powModToANegativePowerTraps() {
-    let _ = powMod(2, -1, 7)
+    _ = powMod(2, -1, 7)
 }
 
 @test
@@ -117,17 +117,17 @@ fn modInverseIsNoneWithACommonFactor() {
 
 @test(traps: "the modulus must be positive, not 0")
 fn modInverseModuloZeroTraps() {
-    let _ = modInverse(3, 0)
+    _ = modInverse(3, 0)
 }
 
 @test(traps: "the modulus must be positive, not -7")
 fn powModByANegativeModulusTraps() {
-    let _ = powMod(2, 3, -7)
+    _ = powMod(2, 3, -7)
 }
 
 @test(traps: "the modulus must be positive, not -11")
 fn modInverseModuloANegativeNumberTraps() {
-    let _ = modInverse(3, -11)
+    _ = modInverse(3, -11)
 }
 
 @test
@@ -153,12 +153,12 @@ fn ilogCountsTheWholePowersOfTheBase() {
 
 @test(traps: "ilog's argument must be positive, not 0")
 fn ilogOfZeroTraps() {
-    let _ = ilog(0, base: 10)
+    _ = ilog(0, base: 10)
 }
 
 @test(traps: "ilog's base must be at least 2, not 1")
 fn ilogInBaseOneTraps() {
-    let _ = ilog(8, base: 1)
+    _ = ilog(8, base: 1)
 }
 
 @test
@@ -170,7 +170,7 @@ fn factorialTakesEveryWidth() {
 
 @test(traps: "integer overflow")
 fn factorialPastWhatTheTypeHoldsTraps() {
-    let _ = factorial(6 as I8)
+    _ = factorial(6 as I8)
 }
 
 @test

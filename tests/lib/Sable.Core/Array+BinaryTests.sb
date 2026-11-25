@@ -61,17 +61,17 @@ fn readsAtEveryUnalignedOffsetAgree() {
 
 @test(traps: "array index out of range")
 fn aReadPastTheEndTraps() {
-    let _ = sample().readU32(at: 6, endian: .Little)
+    _ = sample().readU32(at: 6, endian: .Little)
 }
 
 @test(traps: "array index out of range")
 fn aReadAtANegativeOffsetTraps() {
-    let _ = sample().readU16(at: -1, endian: .Little)
+    _ = sample().readU16(at: -1, endian: .Little)
 }
 
 @test(traps: "array index out of range")
 fn aReadOfASliceStopsAtTheSlicesEnd() {
-    let _ = sample().slice(from: 0, to: 4).readU64(at: 0, endian: .Little)
+    _ = sample().slice(from: 0, to: 4).readU64(at: 0, endian: .Little)
 }
 
 @test

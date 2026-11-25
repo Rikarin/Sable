@@ -35,7 +35,7 @@ public fn window(_ series: F64[>..], width: Int) -> F64 {
 public fn lastOfEach(_ a: Int[:], _ b: String) -> (Int, Char) {
     let last = ^1
     let tail = ^2...
-    let _ = a[tail]
+    _ = a[tail]
     return (a[last], b[last])
 }
 

@@ -75,7 +75,7 @@ public final class UdpSocket {
     fn send(_ bytes: U8[:], _ name: String, _ family: Int, _ address: SocketAddress) async throws(IoError) {
         var times = 0
         while true {
-            let _ = Runtime.sendDatagram(handle, bytes, family, address.highBits, address.lowBits, address.scopeNumber, address.port, "")
+            _ = Runtime.sendDatagram(handle, bytes, family, address.highBits, address.lowBits, address.scopeNumber, address.port, "")
             if Runtime.socketStatus() == 0 {
                 return
             }

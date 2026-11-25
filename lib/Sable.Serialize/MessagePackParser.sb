@@ -83,8 +83,8 @@ struct MessagePackParser {
                 return
             }
             afters[opened[opened.count - 1]] = starts.count
-            let _ = opened.removeLast()
-            let _ = left.removeLast()
+            _ = opened.removeLast()
+            _ = left.removeLast()
         }
     }
 }

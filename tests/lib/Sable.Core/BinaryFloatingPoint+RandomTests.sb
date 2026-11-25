@@ -61,22 +61,22 @@ fn theSystemsGeneratorIsTheDefault() {
 
 @test(traps: "a random value of an empty range")
 fn anEmptyRangeTraps() {
-    let _ = F64.random(in: 1.0..<1.0)
+    _ = F64.random(in: 1.0..<1.0)
 }
 
 @test(traps: "a random value of a range that is not finite")
 fn anInfiniteRangeTraps() {
-    let _ = F64.random(in: 0.0..<F64.infinity)
+    _ = F64.random(in: 0.0..<F64.infinity)
 }
 
 @test(traps: "a random value of a range that is not finite")
 fn anInfiniteClosedRangeTraps() {
-    let _ = F32.random(in: -F32.infinity...0.0)
+    _ = F32.random(in: -F32.infinity...0.0)
 }
 
 @test(traps: "a random value of an empty range")
 fn anUpsideDownClosedRangeTraps() {
-    let _ = F64.random(in: ClosedRange(lowerBound: 2.0, upperBound: 1.0))
+    _ = F64.random(in: ClosedRange(lowerBound: 2.0, upperBound: 1.0))
 }
 
 // The least and the greatest of many draws, of a range of few values.

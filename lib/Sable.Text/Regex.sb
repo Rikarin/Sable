@@ -448,9 +448,9 @@ public class Regex: Pattern {
             found[0] = span.0
             found[1] = span.1
         } else if backtracking {
-            let _ = backtracker().search(text, start, end, span.0, anchored: true, requiredEnd: -1, leading: "", &found)
+            _ = backtracker().search(text, start, end, span.0, anchored: true, requiredEnd: -1, leading: "", &found)
         } else {
-            let _ = pike().search(text, start, end, span.0, anchored: true, &found)
+            _ = pike().search(text, start, end, span.0, anchored: true, &found)
         }
         return RegexCaptures(base: text, slots: found, names: names)
     }

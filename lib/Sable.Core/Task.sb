@@ -86,7 +86,7 @@ public class Task<Success> {
     ///
     /// ```sable
     /// let steps = Atomic(0)
-    /// let _ = Task.detached {
+    /// _ = Task.detached {
     ///     await Task.yield()
     ///     steps.store(1)
     /// }

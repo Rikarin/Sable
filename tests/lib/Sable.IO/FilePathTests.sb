@@ -214,9 +214,9 @@ fn pathsCompareByTheirComponents() {
     assert(!(posix("x") < posix("x")))
 
     var seen = Set<FilePath>()
-    let _ = seen.insert(posix("a/b"))
-    let _ = seen.insert(posix("a//b"))
-    let _ = seen.insert(posix("a/c"))
+    _ = seen.insert(posix("a/b"))
+    _ = seen.insert(posix("a//b"))
+    _ = seen.insert(posix("a/c"))
     assertEqual(seen.count, 2)
     assertEqual(posix("/a b").debugDescription(), "FilePath(\"/a b\")")
     assertEqual("[\(posix("ab"):>4)]", "[  ab]")
@@ -254,7 +254,7 @@ fn theFileSystemResolvesWhatTheBytesCannot() throws {
     opened.close()
     try File.remove(name)
     do {
-        let _ = try FilePath("sable-test-no-such-path").canonical()
+        _ = try FilePath("sable-test-no-such-path").canonical()
         fail("a missing path resolved")
     } catch IoError.NotFound(_) { }
 }

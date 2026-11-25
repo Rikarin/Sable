@@ -72,7 +72,7 @@ public class TaskGroup<ChildResult>: AsyncSequence {
     /// Waits for every child not yet taken, dropping their results.
     public fn waitForAll() async {
         while !running.isEmpty {
-            let _ = await next()
+            _ = await next()
         }
     }
 

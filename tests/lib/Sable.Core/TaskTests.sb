@@ -265,7 +265,7 @@ fn blockingWorkGivesWhatItsBodyGives() async {
 fn blockingWorkThrowsWhatItsBodyThrows() async {
     var thrown = false
     do {
-        let _ = try await Task.blocking { () throws(Refusal) -> Int in
+        _ = try await Task.blocking { () throws(Refusal) -> Int in
             throw Refusal.No
         }
     } catch {

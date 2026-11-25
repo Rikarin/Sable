@@ -65,7 +65,7 @@ fn chunksOfAnExactMultipleAreAllFull() {
 @test(traps: "precondition failed: a chunk's size must be at least 1, not 0")
 fn chunksOfZeroTraps() {
     let xs: Int[>..] = [1, 2]
-    let _ = xs.chunks(of: 0)
+    _ = xs.chunks(of: 0)
 }
 
 @test
@@ -83,7 +83,7 @@ fn windowsAreEveryRunOfTheSize() {
 @test(traps: "precondition failed: a window's size must be at least 1, not 0")
 fn windowsOfZeroTraps() {
     let xs: Int[>..] = [1, 2]
-    let _ = xs.windows(of: 0)
+    _ = xs.windows(of: 0)
 }
 
 @test

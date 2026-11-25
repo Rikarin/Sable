@@ -983,6 +983,22 @@ public sealed class AssignmentExpressionSyntax : ExpressionSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitAssignmentExpression(this);
 }
 
+/// <summary>The `_` of `_ = f()`: what is assigned to it is dropped. Only ever an assignment's left side.</summary>
+public sealed class DiscardExpressionSyntax : ExpressionSyntax
+{
+    internal DiscardExpressionSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken UnderscoreToken => GetToken(0);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitDiscardExpression(this);
+}
+
 /// <summary>`c ? a : b`.</summary>
 public sealed class ConditionalExpressionSyntax : ExpressionSyntax
 {
@@ -3645,6 +3661,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitTryExpression(TryExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitBinaryExpression(BinaryExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitAssignmentExpression(AssignmentExpressionSyntax node) => DefaultVisit(node);
+    public virtual void VisitDiscardExpression(DiscardExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitConditionalExpression(ConditionalExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitRangeExpression(RangeExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitCastExpression(CastExpressionSyntax node) => DefaultVisit(node);

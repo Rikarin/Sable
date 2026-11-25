@@ -19,7 +19,7 @@ import Sable.Concurrency
 /// builder.options.handleSignals = false
 /// builder.services.add("ticker", Ticker())
 /// let host = try! builder.build()
-/// let _ = host.lifetime.started.register { host.lifetime.requestStop() }
+/// _ = host.lifetime.started.register { host.lifetime.requestStop() }
 /// try! await host.run()
 /// ```
 public protocol HostedService: Sendable {

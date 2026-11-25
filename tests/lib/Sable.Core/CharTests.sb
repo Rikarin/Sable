@@ -210,12 +210,12 @@ fn digitValuesInARadix() {
 
 @test(traps: "unreachable")
 fn aDigitValueInRadixOneTraps() {
-    let _ = '0'.digitValue(radix: 1)
+    _ = '0'.digitValue(radix: 1)
 }
 
 @test(traps: "unreachable")
 fn aDigitValueInRadixThirtySevenTraps() {
-    let _ = '0'.digitValue(radix: 37)
+    _ = '0'.digitValue(radix: 37)
 }
 
 @test
@@ -229,12 +229,12 @@ fn digitsFromValues() {
 
 @test(traps: "unreachable")
 fn aDigitInRadixOneTraps() {
-    let _ = Char.fromDigit(0, radix: 1)
+    _ = Char.fromDigit(0, radix: 1)
 }
 
 @test(traps: "unreachable")
 fn aDigitInRadixThirtySevenTraps() {
-    let _ = Char.fromDigit(0, radix: 37)
+    _ = Char.fromDigit(0, radix: 37)
 }
 
 @test

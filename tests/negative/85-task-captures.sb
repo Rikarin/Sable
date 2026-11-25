@@ -44,7 +44,7 @@ fn spawnAll(_ counter: Counter, _ settings: Settings, _ tally: Tally) async {
             counter.count                  // vouched for
         }
     }
-    let _ = await (a.value, b.value, c.value, d.value, e.value, f.value, g.value, h.value)
+    _ = await (a.value, b.value, c.value, d.value, e.value, f.value, g.value, h.value)
 }
 
 fn later(_ counter: Counter) async -> Int {

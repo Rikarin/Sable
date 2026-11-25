@@ -16,8 +16,8 @@ module Sable.Core
 /// ```sable
 /// var a = Pcg64(seed: 2024)
 /// var b = a
-/// let _ = a.next()
-/// let _ = a.next()
+/// _ = a.next()
+/// _ = a.next()
 /// b.advance(by: 2)
 /// assert(a.next() == b.next())
 /// ```

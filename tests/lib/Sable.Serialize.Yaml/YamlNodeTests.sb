@@ -6,7 +6,7 @@ import Sable.Testing
 
 fn failure(_ text: String, _ options: YamlOptions = YamlOptions()) -> String {
     do {
-        let _ = try Yaml.parse(text, options)
+        _ = try Yaml.parse(text, options)
         return "parsed"
     } catch {
         return error.description()
@@ -149,7 +149,7 @@ fn aKeyTwiceIsAnError() {
         assertEqual(failure(text), "parsed")
     }
     do {
-        let _ = try Yaml.parse("a: 1\na: 2")
+        _ = try Yaml.parse("a: 1\na: 2")
     } catch {
         assert(error.kind == .DuplicateKey)
     }
@@ -161,7 +161,7 @@ fn aliasesAreChecked() {
     assertEqual(failure("&a [b, *a]"), "line 1, column 8: the alias '*a' is inside the node it names")
     assertEqual(failure("&a\nk:\n  - *a"), "line 3, column 5: the alias '*a' is inside the node it names")
     do {
-        let _ = try Yaml.parseAll("--- &a 1\n--- *a\n")
+        _ = try Yaml.parseAll("--- &a 1\n--- *a\n")
         fail("an alias of another document's anchor")
     } catch {
         assert(error.kind == .Alias)
@@ -177,7 +177,7 @@ fn aBillionLaughsAreRefused() throws {
         i += 1
     }
     do {
-        let _ = try Yaml.parse(text)
+        _ = try Yaml.parse(text)
         fail("a billion laughs")
     } catch {
         assert(error.kind == .TooManyAliases)
@@ -211,7 +211,7 @@ fn aliasesNestNoDeeperThanAllowed() {
         i += 1
     }
     do {
-        let _ = try Yaml.parse(text)
+        _ = try Yaml.parse(text)
         fail("aliases nested 300 deep")
     } catch {
         assert(error.kind == .TooDeep)

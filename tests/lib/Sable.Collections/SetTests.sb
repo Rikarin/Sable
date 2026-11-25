@@ -9,11 +9,11 @@ import Sable.Testing
 @test
 fn aSetIsGoneThroughInTheOrderOfInsertion() {
     var members = Set<Int>()
-    let _ = members.insert(5)
-    let _ = members.insert(1)
-    let _ = members.insert(5)
-    let _ = members.insert(3)
-    let _ = members.remove(1)
+    _ = members.insert(5)
+    _ = members.insert(1)
+    _ = members.insert(5)
+    _ = members.insert(3)
+    _ = members.remove(1)
     var seen: String[>..] = []
     for member in members {
         seen.append("\(member)")
@@ -70,8 +70,8 @@ fn elementsComeInTheOrderTheyWereAdded() {
 @test
 fn removeTakesOutAMember() {
     var members = Set<String>()
-    let _ = members.insert("a")
-    let _ = members.insert("b")
+    _ = members.insert("a")
+    _ = members.insert("b")
     assert(members.contains("a"))
     assert(members.remove("a"))
     assert(!members.contains("a"))
@@ -213,7 +213,7 @@ fn aSetIsMadeFromAnySequenceAndThrowsWhatItThrows() {
     do {
         let made = try Set(numbers(upTo: 3, failAt: 4))
         assertEqual(made.count, 3)
-        let _ = try Set(numbers(upTo: 3, failAt: 2))
+        _ = try Set(numbers(upTo: 3, failAt: 2))
         assert(false)
     } catch .At(let at) {
         assertEqual(at, 2)

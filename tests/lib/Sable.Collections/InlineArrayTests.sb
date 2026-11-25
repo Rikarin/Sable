@@ -58,8 +58,8 @@ fn readingAndWritingAnInlineArrayAllocatesNothing() {
         for x in xs {
             total += x
         }
-        let _ = xs.contains(element: total)
-        let _ = xs.count
+        _ = xs.contains(element: total)
+        _ = xs.count
     })
     assertEqual(xs[0], 8)
 }

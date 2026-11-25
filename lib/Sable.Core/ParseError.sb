@@ -5,7 +5,7 @@ module Sable.Core
 ///
 /// ```sable
 /// do {
-///     let _ = try I8.parse("300")
+///     _ = try I8.parse("300")
 /// } catch {
 ///     assert(error == .Overflow)
 /// }

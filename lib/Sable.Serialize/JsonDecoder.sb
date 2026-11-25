@@ -14,7 +14,7 @@ import Sable.Text
 /// assert(try! items[0].field("name").decodeString() == "a")
 /// assert(items[1].field("name").isMissing)
 /// do {
-///     let _ = try items[1].field("name").decodeString()
+///     _ = try items[1].field("name").decodeString()
 /// } catch {
 ///     assert(error.description() == "$.items[1].name: missing")
 /// }

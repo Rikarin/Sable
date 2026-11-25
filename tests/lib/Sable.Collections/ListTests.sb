@@ -36,7 +36,7 @@ fn counting<C: RangeReplaceableCollection>(to n: Int) -> C where C.Element == In
         made.append(element: i)
         i += 1
     }
-    let _ = made.removeLast()
+    _ = made.removeLast()
     return made
 }
 
@@ -151,7 +151,7 @@ fn subscriptReadsAndWrites() {
 @test(traps: "array index out of range")
 fn subscriptPastTheEndTraps() {
     let list = List<Int>([1])
-    let _ = list[1]
+    _ = list[1]
 }
 
 @test
@@ -232,7 +232,7 @@ fn removeAtTakesOutTheElementAndClosesTheGap() {
 @test(traps: "array index out of range")
 fn removeAtPastTheEndTraps() {
     var list = List<Int>([1, 2])
-    let _ = list.remove(at: 2)
+    _ = list.remove(at: 2)
 }
 
 @test
@@ -247,7 +247,7 @@ fn swapRemoveMovesTheLastIntoTheGap() {
 @test(traps: "array index out of range")
 fn swapRemoveOfAnEmptyListTraps() {
     var list = List<Int>()
-    let _ = list.swapRemove(at: 0)
+    _ = list.swapRemove(at: 0)
 }
 
 @test
@@ -261,13 +261,13 @@ fn removeFirstAndLastTakeTheEnds() {
 @test(traps: "array index out of range")
 fn removeFirstOfAnEmptyListTraps() {
     var list = List<Int>()
-    let _ = list.removeFirst()
+    _ = list.removeFirst()
 }
 
 @test(traps: "removeLast of an empty array")
 fn removeLastOfAnEmptyListTraps() {
     var list = List<Int>()
-    let _ = list.removeLast()
+    _ = list.removeLast()
 }
 
 @test
@@ -442,7 +442,7 @@ fn aListHasARangeFromTheEndReplaced() {
 @test(traps: "index ^4 is out of range for count 3")
 fn aListPastItsStartTraps() {
     let list = List<Int>([1, 2, 3])
-    let _ = list[^blackBox(4)]
+    _ = list[^blackBox(4)]
 }
 
 @test

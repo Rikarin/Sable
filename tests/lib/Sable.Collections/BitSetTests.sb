@@ -9,11 +9,11 @@ import Sable.Testing
 @test
 fn aBitSetIsGoneThroughAscending() {
     let members = BitSet()
-    let _ = members.insert(130)
-    let _ = members.insert(3)
-    let _ = members.insert(64)
-    let _ = members.insert(0)
-    let _ = members.insert(63)
+    _ = members.insert(130)
+    _ = members.insert(3)
+    _ = members.insert(64)
+    _ = members.insert(0)
+    _ = members.insert(63)
     var seen: String[>..] = []
     for member in members {
         seen.append("\(member)")
@@ -52,7 +52,7 @@ fn insertAddsEachValueOnce() {
 @test(traps: "array index out of range")
 fn insertingANegativeValueTraps() {
     let members = BitSet()
-    let _ = members.insert(-1)
+    _ = members.insert(-1)
 }
 
 @test
@@ -156,5 +156,5 @@ fn setsOfDifferentLengthsCombine() {
 
 @test(traps: "array index out of range")
 fn aNegativeValueIsNotInserted() {
-    let _ = BitSet().insert(-1)
+    _ = BitSet().insert(-1)
 }

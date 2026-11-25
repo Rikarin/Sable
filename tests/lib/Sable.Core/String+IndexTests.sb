@@ -106,43 +106,43 @@ fn scalarBoundaries() {
 @test(traps: "string index not on a character boundary")
 fn readingInsideAScalarTraps() {
     let text = "aé"
-    let _ = text[String.Index(utf8Offset: 2)]
+    _ = text[String.Index(utf8Offset: 2)]
 }
 
 @test(traps: "string index out of range")
 fn readingAtTheEndTraps() {
     let text = "ab"
-    let _ = text[text.endIndex]
+    _ = text[text.endIndex]
 }
 
 @test(traps: "string index out of range")
 fn steppingPastTheEndTraps() {
     let text = "ab"
-    let _ = text.index(after: text.endIndex)
+    _ = text.index(after: text.endIndex)
 }
 
 @test(traps: "string index out of range")
 fn steppingBackFromTheStartTraps() {
     let text = "ab"
-    let _ = text.index(before: text.startIndex)
+    _ = text.index(before: text.startIndex)
 }
 
 @test(traps: "string index not on a character boundary")
 fn steppingBackFromInsideAScalarTraps() {
     let text = "é"
-    let _ = text.index(before: String.Index(utf8Offset: 1))
+    _ = text.index(before: String.Index(utf8Offset: 1))
 }
 
 @test(traps: "string index not on a character boundary")
 fn slicingInsideAScalarTraps() {
     let text = "éa"
-    let _ = text[String.Index(utf8Offset: 1)...]
+    _ = text[String.Index(utf8Offset: 1)...]
 }
 
 @test(traps: "string slice out of range")
 fn slicingBackwardsTraps() {
     let text = "abc"
-    let _ = text[String.Index(utf8Offset: 2)..<String.Index(utf8Offset: 1)]
+    _ = text[String.Index(utf8Offset: 2)..<String.Index(utf8Offset: 1)]
 }
 
 @test

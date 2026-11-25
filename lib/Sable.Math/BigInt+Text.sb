@@ -123,7 +123,7 @@ fn appendChunks(_ value: BigInt, _ level: Int, _ width: Int, _ powers: BigInt[:]
         while limbs.count > 0 {
             chunks.append(divideSmallInPlace(&limbs, base))
             while limbs.count > 0 && limbs[limbs.count - 1] == 0 {
-                let _ = limbs.removeLast()
+                _ = limbs.removeLast()
             }
         }
         var top: U64 = 0

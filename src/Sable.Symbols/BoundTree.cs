@@ -386,6 +386,13 @@ public sealed class BoundAssignment(
     public override IEnumerable<BoundNode> Children => Nodes(Target, Value);
 }
 
+/// <summary><c>_ = f()</c>: the value is made and dropped, and the expression gives nothing.</summary>
+public sealed class BoundDiscard(SyntaxNode syntax, TypeSymbol type, BoundExpression value)
+    : BoundExpression(syntax, type) {
+    public BoundExpression Value { get; } = value;
+    public override IEnumerable<BoundNode> Children => [Value];
+}
+
 public enum ConversionKind {
     Identity,
 

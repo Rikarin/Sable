@@ -96,11 +96,11 @@ fn noTwoHaveOneName() throws {
     files = []
     assertEqual(try Directory.list(temp.path).count, 0)
     do {
-        let _ = try Temp.file(in: temp.path.appending("missing"))
+        _ = try Temp.file(in: temp.path.appending("missing"))
         fail("there is nowhere to make it")
     } catch IoError.NotFound(_) { }
     do {
-        let _ = try Temp.directory(in: temp.path.appending("missing"))
+        _ = try Temp.directory(in: temp.path.appending("missing"))
         fail("there is nowhere to make it")
     } catch IoError.NotFound(_) { }
 }

@@ -295,26 +295,26 @@ fn parsingTakesEitherPartAloneWithOrWithoutSpaces() {
 fn parsingSaysWhatIsWrongAndWhere() {
     for blank in ["", "   "] {
         do {
-            let _ = try Complex<F64>.parse(blank)
+            _ = try Complex<F64>.parse(blank)
             assert(false, "parsed")
         } catch {
             assert(error == .Empty)
         }
     }
     do {
-        let _ = try Complex<F64>.parse("1 + 2xi")
+        _ = try Complex<F64>.parse("1 + 2xi")
         assert(false, "parsed")
     } catch {
         assert(error == .InvalidDigit(at: 5) || error == .Invalid(at: 5), "\(error.description())")
     }
     do {
-        let _ = try Complex<F64>.parse("1x + 2i")
+        _ = try Complex<F64>.parse("1x + 2i")
         assert(false, "parsed")
     } catch {
         assert(error == .InvalidDigit(at: 1) || error == .Invalid(at: 1), "\(error.description())")
     }
     do {
-        let _ = try Complex<F64>.parse("j")
+        _ = try Complex<F64>.parse("j")
         assert(false, "parsed")
     } catch {
         assert(error != .Empty)

@@ -35,7 +35,7 @@ fn utc(_ cron: String, _ from: String) -> String {
 
 fn refused(_ cron: String) -> String {
     do {
-        let _ = try CronExpression.parse(cron)
+        _ = try CronExpression.parse(cron)
         return "accepted"
     } catch {
         assertEqual(error.text, cron)

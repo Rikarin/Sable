@@ -1,0 +1,158 @@
+module Sable.Math.Geometry
+
+/// Three `I32`s: a volume's extent, a voxel, a compute shader's groups. 12 bytes, aligned to 4, as
+/// C's `int32_t[3]` and GLSL's `ivec3`. Arithmetic traps where a component
+/// overflows, as `I32`'s does, and division truncates toward zero.
+///
+/// ```sable
+/// let v = Int3(repeating: 7) / 2
+/// assert(v == Int3(repeating: 3) && v.x == v[0])
+/// ```
+public struct Int3: Hashable, AdditiveArithmetic, Sendable {
+    /// The x component.
+    public var x: I32
+
+    /// The y component.
+    public var y: I32
+
+    /// The z component.
+    public var z: I32
+
+    /// The vector of the components.
+    public init(_ x: I32, _ y: I32, _ z: I32) {
+        self.x = x
+        self.y = y
+        self.z = z
+    }
+
+    /// Every component the value.
+    public init(repeating value: I32) {
+        x = value
+        y = value
+        z = value
+    }
+
+    /// Each component toward zero to an integer. Traps where one is NaN or out of range.
+    public init(truncating value: Vector3) {
+        x = I32(value.x)
+        y = I32(value.y)
+        z = I32(value.z)
+    }
+
+    /// Every component zero.
+    public static var zero: Int3 => Int3(0, 0, 0)
+
+    /// Every component one.
+    public static var one: Int3 => Int3(1, 1, 1)
+
+    /// The x axis.
+    public static var unitX: Int3 => Int3(1, 0, 0)
+
+    /// The y axis.
+    public static var unitY: Int3 => Int3(0, 1, 0)
+
+    /// The z axis.
+    public static var unitZ: Int3 => Int3(0, 0, 1)
+
+    /// x and y.
+    public var xy: Int2 => Int2(x, y)
+
+    /// The components as lanes of a vector register.
+    public var simd: SIMD<I32, 3> {
+        get {
+            var lanes = SIMD<I32, 3>()
+            lanes[0] = x
+            lanes[1] = y
+            lanes[2] = z
+            return lanes
+        }
+    }
+
+    /// The product of the components, which traps where an I64 cannot hold it.
+    ///
+    /// ```sable
+    /// assert(Int3(1000, 1000, 1000).volume == 1000000000)
+    /// ```
+    public var volume: I64 => I64(x) * I64(y) * I64(z)
+
+    /// The component at the index, x first; outside 0..<3 traps.
+    public subscript(index: Int) -> I32 {
+        get {
+            switch index {
+                case 0: return x
+                case 1: return y
+                case 2: return z
+                default: preconditionFailure("an Int3 has no component \(index)")
+            }
+        }
+        set {
+            switch index {
+                case 0: x = newValue
+                case 1: y = newValue
+                case 2: z = newValue
+                default: preconditionFailure("an Int3 has no component \(index)")
+            }
+        }
+    }
+
+    /// The smaller of each pair of components.
+    public fn min(_ other: Int3) -> Int3 => Int3((x < other.x ? x : other.x), (y < other.y ? y : other.y), (z < other.z ? z : other.z))
+
+    /// The larger of each pair of components.
+    public fn max(_ other: Int3) -> Int3 => Int3((x > other.x ? x : other.x), (y > other.y ? y : other.y), (z > other.z ? z : other.z))
+
+    /// Each component held within the bounds'.
+    public fn clamped(lower: Int3, upper: Int3) -> Int3 => self.max(lower).min(upper)
+
+    /// Each component's magnitude; traps on the least I32.
+    public fn abs() -> Int3 => Int3((x < 0 ? -x : x), (y < 0 ? -y : y), (z < 0 ? -z : z))
+
+    /// The sum, component by component.
+    public operator + (lhs: Int3, rhs: Int3) -> Int3 => Int3(lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z)
+
+    /// The difference, component by component.
+    public operator - (lhs: Int3, rhs: Int3) -> Int3 => Int3(lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z)
+
+    /// The product, component by component.
+    public operator * (lhs: Int3, rhs: Int3) -> Int3 => Int3(lhs.x * rhs.x, lhs.y * rhs.y, lhs.z * rhs.z)
+
+    /// The quotient, component by component, toward zero.
+    public operator / (lhs: Int3, rhs: Int3) -> Int3 => Int3(lhs.x / rhs.x, lhs.y / rhs.y, lhs.z / rhs.z)
+
+    /// Every component negated.
+    public prefix operator - (operand: Int3) -> Int3 => Int3(-operand.x, -operand.y, -operand.z)
+
+    /// Every component times the number.
+    public operator * (lhs: Int3, rhs: I32) -> Int3 => Int3(lhs.x * rhs, lhs.y * rhs, lhs.z * rhs)
+
+    /// Every component times the number.
+    public operator * (lhs: I32, rhs: Int3) -> Int3 => rhs * lhs
+
+    /// Every component divided by the number, toward zero.
+    public operator / (lhs: Int3, rhs: I32) -> Int3 => Int3(lhs.x / rhs, lhs.y / rhs, lhs.z / rhs)
+
+    /// Whether the components are equal.
+    public operator == (lhs: Int3, rhs: Int3) -> Bool => lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z
+
+    /// The components' hashes.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(x)
+        hasher.combine(y)
+        hasher.combine(z)
+    }
+}
+
+extension Int3: Formattable {
+    /// The components in parentheses, each written as the spec says, the
+    /// whole padded to the width.
+    ///
+    /// ```sable
+    /// assert("\(Int3.unitX:.1)" == "(1, 0, 0)")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([x, y, z], spec, named: "Int3")
+}
+
+extension Int3: Debug {
+    /// As source writes it: `Int3(1, 1, 1)`.
+    public fn debugDescription() -> String => "Int3(\(x.debugDescription()), \(y.debugDescription()), \(z.debugDescription()))"
+}

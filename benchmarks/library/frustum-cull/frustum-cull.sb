@@ -1,0 +1,37 @@
+module FrustumCullBench
+
+import Sable.Math.Geometry
+
+// 4,096 spheres and their boxes against a camera's frustum, a thousand times over.
+
+fn seen(_ frustum: BoundingFrustum, _ spheres: BoundingSphere[:], _ boxes: BoundingBox[:]) -> Int {
+    var count = 0
+    for i in 0..<spheres.count {
+        if frustum.intersects(spheres[i]) {
+            count += 1
+            if frustum.intersects(boxes[i]) {
+                count += 1
+            }
+        }
+    }
+    return count
+}
+
+@main
+fn main() {
+    var spheres: BoundingSphere[>..] = []
+    var boxes: BoundingBox[>..] = []
+    for i in 0..<4096 {
+        let center = Vector3(F32(i % 61) - 30, F32(i % 37) - 18, F32(i % 101) - 90)
+        spheres.append(BoundingSphere(center, 1.75))
+        boxes.append(BoundingBox(center - Vector3.one, center + Vector3.one))
+    }
+    let projection = Matrix4x4.perspectiveFieldOfView(1, aspectRatio: 1.5, near: 0.5, far: 80)
+    var total = 0
+    for round in 0..<1000 {
+        let eye = Vector3(F32(round % 8), 0, 5)
+        let frustum = BoundingFrustum(Matrix4x4.lookAt(eye: eye, target: Vector3(0, 0, -40), up: Vector3.up) * projection)
+        total += seen(frustum, spheres, boxes)
+    }
+    print("\(total / 100000)")
+}

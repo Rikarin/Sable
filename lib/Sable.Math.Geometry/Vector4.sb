@@ -1,0 +1,307 @@
+module Sable.Math.Geometry
+
+/// Four `F32`s: a homogeneous point (w is 1) or direction (w is 0), a
+/// tangent with its handedness, a row of a matrix. 16 bytes, aligned to 4:
+/// an array of them is tightly packed, and `simd` makes a register of one.
+///
+/// ```sable
+/// let v = Vector4(1, 2, 4, 10) * 2
+/// assert(v.length == 2 * 11 && v[0] == v.x)
+/// ```
+public struct Vector4: Hashable, AdditiveArithmetic, Sendable {
+    /// The x component.
+    public var x: F32
+
+    /// The y component.
+    public var y: F32
+
+    /// The z component.
+    public var z: F32
+
+    /// The w component.
+    public var w: F32
+
+    /// The vector of the components.
+    public init(_ x: F32, _ y: F32, _ z: F32, _ w: F32) {
+        self.x = x
+        self.y = y
+        self.z = z
+        self.w = w
+    }
+
+    /// Every component the value.
+    public init(repeating value: F32) {
+        x = value
+        y = value
+        z = value
+        w = value
+    }
+
+    /// The three components of the shorter vector, and w.
+    public init(_ xyz: Vector3, _ w: F32) {
+        x = xyz.x
+        y = xyz.y
+        z = xyz.z
+        self.w = w
+    }
+
+    /// The integers, each the nearest `F32`.
+    public init(_ integers: Int4) {
+        x = F32(integers.x)
+        y = F32(integers.y)
+        z = F32(integers.z)
+        w = F32(integers.w)
+    }
+
+    /// The lanes, in order.
+    public init(_ lanes: SIMD<F32, 4>) {
+        x = lanes[0]
+        y = lanes[1]
+        z = lanes[2]
+        w = lanes[3]
+    }
+
+    /// The four floats of the slice from the offset on. Traps unless they are all in it.
+    public init(from components: F32[:], at offset: Int = 0) {
+        x = components[offset]
+        y = components[offset + 1]
+        z = components[offset + 2]
+        w = components[offset + 3]
+    }
+
+    /// Every component zero.
+    public static var zero: Vector4 => Vector4(0, 0, 0, 0)
+
+    /// Every component one.
+    public static var one: Vector4 => Vector4(1, 1, 1, 1)
+
+    /// The x axis.
+    public static var unitX: Vector4 => Vector4(1, 0, 0, 0)
+
+    /// The y axis.
+    public static var unitY: Vector4 => Vector4(0, 1, 0, 0)
+
+    /// The z axis.
+    public static var unitZ: Vector4 => Vector4(0, 0, 1, 0)
+
+    /// The w axis.
+    public static var unitW: Vector4 => Vector4(0, 0, 0, 1)
+
+    /// How many components there are: 4.
+    public static var componentCount: Int => 4
+
+    /// x and y.
+    public var xy: Vector2 => Vector2(x, y)
+
+    /// x, y and z, not divided by w.
+    public var xyz: Vector3 => Vector3(x, y, z)
+
+    /// The components as lanes of a vector register.
+    public var simd: SIMD<F32, 4> {
+        get {
+            var lanes = SIMD<F32, 4>()
+            lanes[0] = x
+            lanes[1] = y
+            lanes[2] = z
+            lanes[3] = w
+            return lanes
+        }
+    }
+
+    /// The component at the index, x first; outside 0..<4 traps.
+    public subscript(index: Int) -> F32 {
+        get {
+            switch index {
+                case 0: return x
+                case 1: return y
+                case 2: return z
+                case 3: return w
+                default: preconditionFailure("a Vector4 has no component \(index)")
+            }
+        }
+        set {
+            switch index {
+                case 0: x = newValue
+                case 1: y = newValue
+                case 2: z = newValue
+                case 3: w = newValue
+                default: preconditionFailure("a Vector4 has no component \(index)")
+            }
+        }
+    }
+
+    /// Writes the components to the slice from the offset on. Traps unless
+    /// there is room for all four, and then writes none.
+    public fn copy(to destination: inout F32[:], at offset: Int = 0) {
+        destination[offset + 3] = w
+        destination[offset + 2] = z
+        destination[offset + 1] = y
+        destination[offset] = x
+    }
+
+    /// The length, √(x² + y² + z² + w²).
+    ///
+    /// ```sable
+    /// assert(Vector4(1, 2, 4, 10).length == 11)
+    /// ```
+    public var length: F32 => (x * x + y * y + z * z + w * w).squareRoot()
+
+    /// The square of the length, with no square root: what to compare by.
+    public var lengthSquared: F32 => x * x + y * y + z * z + w * w
+
+    /// Whether every component is zero, of either sign.
+    public var isZero: Bool => x == 0 && y == 0 && z == 0 && w == 0
+
+    /// Whether any component is NaN.
+    public var isNaN: Bool => x.isNaN || y.isNaN || z.isNaN || w.isNaN
+
+    /// Whether every component is finite.
+    public var isFinite: Bool => x.isFinite && y.isFinite && z.isFinite && w.isFinite
+
+    /// The components added together.
+    public var sum: F32 => x + y + z + w
+
+    /// The least component; NaN if any is.
+    public var minComponent: F32 => x.minimum(y).minimum(z).minimum(w)
+
+    /// The greatest component; NaN if any is.
+    public var maxComponent: F32 => x.maximum(y).maximum(z).maximum(w)
+
+    /// The vector of length 1 the same way; a vector shorter than a
+    /// millionth has none, and gives `zero` rather than NaNs (.NET gives NaNs).
+    ///
+    /// ```sable
+    /// assert((Vector4.unitY * 8).normalized() == Vector4.unitY)
+    /// assert(Vector4.zero.normalized() == Vector4.zero)
+    /// ```
+    public fn normalized() -> Vector4 {
+        let squared = lengthSquared
+        if squared < 1e-12 {
+            return Vector4.zero
+        }
+        return self * (1 / squared.squareRoot())
+    }
+
+    /// The dot product: the product of the lengths and the cosine between.
+    public fn dot(_ other: Vector4) -> F32 => x * other.x + y * other.y + z * other.z + w * other.w
+
+    /// How far apart two points are.
+    public fn distance(to other: Vector4) -> F32 => (self - other).length
+
+    /// The square of how far apart two points are.
+    public fn distanceSquared(to other: Vector4) -> F32 => (self - other).lengthSquared
+
+    /// `self + (other - self) * amount`: exactly this at 0, and at 1 the other
+    /// but for rounding. The amount is not clamped.
+    ///
+    /// ```sable
+    /// assert(Vector4.zero.lerp(to: Vector4.one, 0.25) == Vector4(repeating: 0.25))
+    /// ```
+    public fn lerp(to other: Vector4, _ amount: F32) -> Vector4 => self + (other - self) * amount
+
+    /// The smaller of each pair of components: NaN if either is, and -0 below +0.
+    public fn min(_ other: Vector4) -> Vector4 => Vector4(x.minimum(other.x), y.minimum(other.y), z.minimum(other.z), w.minimum(other.w))
+
+    /// The larger of each pair of components: NaN if either is, and +0 above -0.
+    public fn max(_ other: Vector4) -> Vector4 => Vector4(x.maximum(other.x), y.maximum(other.y), z.maximum(other.z), w.maximum(other.w))
+
+    /// Each component held within the bounds': `max(lower).min(upper)`.
+    public fn clamped(lower: Vector4, upper: Vector4) -> Vector4 => self.max(lower).min(upper)
+
+    /// Each component's magnitude.
+    public fn abs() -> Vector4 => Vector4(x.abs(), y.abs(), z.abs(), w.abs())
+
+    /// Each component's square root.
+    public fn squareRoot() -> Vector4 => Vector4(x.squareRoot(), y.squareRoot(), z.squareRoot(), w.squareRoot())
+
+    /// Each component rounded down.
+    public fn floor() -> Vector4 => Vector4(x.rounded(.Down), y.rounded(.Down), z.rounded(.Down), w.rounded(.Down))
+
+    /// Each component rounded up.
+    public fn ceil() -> Vector4 => Vector4(x.rounded(.Up), y.rounded(.Up), z.rounded(.Up), w.rounded(.Up))
+
+    /// Each component rounded toward zero.
+    public fn truncated() -> Vector4 => Vector4(x.rounded(.TowardZero), y.rounded(.TowardZero), z.rounded(.TowardZero), w.rounded(.TowardZero))
+
+    /// Each component rounded to the nearest integer, a half to even.
+    public fn rounded() -> Vector4 => Vector4(x.rounded(.ToNearestOrEven), y.rounded(.ToNearestOrEven), z.rounded(.ToNearestOrEven), w.rounded(.ToNearestOrEven))
+
+    /// What the function makes of each component: `v.map { sin($0) }`.
+    public fn map<E: Error>(_ body: (F32) throws(E) -> F32) throws(E) -> Vector4 {
+        return Vector4(try body(x), try body(y), try body(z), try body(w))
+    }
+
+    /// The direction reflected by a surface of the (unit) normal.
+    ///
+    /// ```sable
+    /// assert(Vector4.unitY.reflected(normal: Vector4.unitY) == -Vector4.unitY)
+    /// ```
+    public fn reflected(normal: Vector4) -> Vector4 => self - normal * (2 * self.dot(normal))
+
+    /// The part of the vector along another; `zero` along one too short to
+    /// have a direction.
+    public fn projected(onto other: Vector4) -> Vector4 {
+        let squared = other.lengthSquared
+        if squared < 1e-12 {
+            return Vector4.zero
+        }
+        return other * (self.dot(other) / squared)
+    }
+
+    /// Whether each component is near the other's: see the function
+    /// `nearEqual`. `==` is exact.
+    public fn nearEqual(_ other: Vector4, tolerance: F32 = 1e-6) -> Bool {
+        return Sable.Math.Geometry.nearEqual(x, other.x, tolerance: tolerance) && Sable.Math.Geometry.nearEqual(y, other.y, tolerance: tolerance) && Sable.Math.Geometry.nearEqual(z, other.z, tolerance: tolerance) && Sable.Math.Geometry.nearEqual(w, other.w, tolerance: tolerance)
+    }
+
+    /// The sum, component by component.
+    public operator + (lhs: Vector4, rhs: Vector4) -> Vector4 => Vector4(lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z, lhs.w + rhs.w)
+
+    /// The difference, component by component.
+    public operator - (lhs: Vector4, rhs: Vector4) -> Vector4 => Vector4(lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z, lhs.w - rhs.w)
+
+    /// The product, component by component.
+    public operator * (lhs: Vector4, rhs: Vector4) -> Vector4 => Vector4(lhs.x * rhs.x, lhs.y * rhs.y, lhs.z * rhs.z, lhs.w * rhs.w)
+
+    /// The quotient, component by component.
+    public operator / (lhs: Vector4, rhs: Vector4) -> Vector4 => Vector4(lhs.x / rhs.x, lhs.y / rhs.y, lhs.z / rhs.z, lhs.w / rhs.w)
+
+    /// Every component negated.
+    public prefix operator - (operand: Vector4) -> Vector4 => Vector4(-operand.x, -operand.y, -operand.z, -operand.w)
+
+    /// Every component times the number.
+    public operator * (lhs: Vector4, rhs: F32) -> Vector4 => Vector4(lhs.x * rhs, lhs.y * rhs, lhs.z * rhs, lhs.w * rhs)
+
+    /// Every component times the number.
+    public operator * (lhs: F32, rhs: Vector4) -> Vector4 => rhs * lhs
+
+    /// Every component divided by the number, each quotient correctly rounded.
+    public operator / (lhs: Vector4, rhs: F32) -> Vector4 => Vector4(lhs.x / rhs, lhs.y / rhs, lhs.z / rhs, lhs.w / rhs)
+
+    /// Whether the components are exactly equal, as IEEE has it: -0 is 0, and
+    /// a NaN equals nothing, itself included.
+    public operator == (lhs: Vector4, rhs: Vector4) -> Bool => lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.w == rhs.w
+
+    /// The components' hashes: vectors that are equal hash alike, zeros of either sign too.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(x)
+        hasher.combine(y)
+        hasher.combine(z)
+        hasher.combine(w)
+    }
+}
+
+extension Vector4: Formattable {
+    /// The components in parentheses, each written as the spec says, the
+    /// whole padded to the width.
+    ///
+    /// ```sable
+    /// assert("\(Vector4.unitX:.1)" == "(1.0, 0.0, 0.0, 0.0)")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([x, y, z, w], spec, named: "Vector4")
+}
+
+extension Vector4: Debug {
+    /// As source writes it: `Vector4(1.0, 1.0, 1.0, 1.0)`.
+    public fn debugDescription() -> String => "Vector4(\(x.debugDescription()), \(y.debugDescription()), \(z.debugDescription()), \(w.debugDescription()))"
+}

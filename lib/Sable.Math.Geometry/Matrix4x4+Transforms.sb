@@ -1,0 +1,98 @@
+module Sable.Math.Geometry
+
+// Points and directions moved, one at a time and by the slice.
+
+extension Matrix4x4 {
+    /// The point moved, and divided by w where that is neither 1 nor 0
+    /// (within a millionth): by a projection, where it is on the screen.
+    ///
+    /// ```sable
+    /// let m = Matrix4x4(translation: Vector3(1, 2, 3))
+    /// assert(m.transformPosition(Vector3.one) == Vector3(2, 3, 4))
+    /// ```
+    public fn transformPosition(_ position: Vector3) -> Vector3 {
+        let moved = Vector4(position, 1) * self
+        return isNearZero(moved.w - 1) || isNearZero(moved.w) ? moved.xyz : moved.xyz / moved.w
+    }
+
+    /// The direction moved: the translation is nothing to it. A normal under
+    /// a scale that differs by axis wants `normalMatrix` instead.
+    public fn transformDirection(_ direction: Vector3) -> Vector3 {
+        return Vector3(
+            direction.x * m11 + direction.y * m21 + direction.z * m31,
+            direction.x * m12 + direction.y * m22 + direction.z * m32,
+            direction.x * m13 + direction.y * m23 + direction.z * m33
+        )
+    }
+
+    /// The point moved by an affine transform: there is no w to divide by.
+    public fn transformAffine(_ position: Vector3) -> Vector3 {
+        return Vector3(
+            position.x * m11 + position.y * m21 + position.z * m31 + m41,
+            position.x * m12 + position.y * m22 + position.z * m32 + m42,
+            position.x * m13 + position.y * m23 + position.z * m33 + m43
+        )
+    }
+
+    /// What normals are moved by: the inverse transpose of the linear part,
+    /// which keeps them across their surface however it is scaled; the
+    /// linear part itself where there is no inverse.
+    ///
+    /// ```sable
+    /// let squashed = Matrix4x4(scale: Vector3(2, 0.5, 1))
+    /// assert(squashed.normalMatrix.m11 == 0.5 && squashed.normalMatrix.m22 == 2)
+    /// ```
+    public var normalMatrix: Matrix3x3 => inverted()?.linear?.transposed() ?? linear
+
+    /// Each point moved by an affine transform (there is no division by w),
+    /// written to the destination. Traps unless it has room for them.
+    ///
+    /// ```sable
+    /// let m = Matrix4x4(translation: Vector3(10, 0, 0))
+    /// var moved = [Vector3.zero, Vector3.zero]
+    /// m.transformPositions([Vector3.one, Vector3.zero], into: &moved)
+    /// assert(moved == [Vector3(11, 1, 1), Vector3(10, 0, 0)])
+    /// ```
+    public fn transformPositions(_ source: Vector3[:], into destination: inout Vector3[:]) {
+        precondition(destination.count >= source.count, "the destination is shorter than the source")
+        for i in 0..<source.count {
+            destination[i] = transformAffine(source[i])
+        }
+    }
+
+    /// Each point moved by an affine transform where it is.
+    public fn transformPositions(_ positions: inout Vector3[:]) {
+        for i in 0..<positions.count {
+            positions[i] = transformAffine(positions[i])
+        }
+    }
+
+    /// Each direction moved, written to the destination. Traps unless it has
+    /// room for them.
+    public fn transformDirections(_ source: Vector3[:], into destination: inout Vector3[:]) {
+        precondition(destination.count >= source.count, "the destination is shorter than the source")
+        for i in 0..<source.count {
+            destination[i] = transformDirection(source[i])
+        }
+    }
+
+    /// Each homogeneous vector moved, written to the destination. Traps
+    /// unless it has room for them.
+    public fn transform(_ source: Vector4[:], into destination: inout Vector4[:]) {
+        precondition(destination.count >= source.count, "the destination is shorter than the source")
+        for i in 0..<source.count {
+            destination[i] = source[i] * self
+        }
+    }
+
+    /// Each transform and then the one for it, written to the destination:
+    /// the locals times the parents. Traps unless there are as many of both
+    /// and room for them.
+    public static fn multiply(_ left: Matrix4x4[:], _ right: Matrix4x4[:], into destination: inout Matrix4x4[:]) {
+        precondition(left.count == right.count, "as many transforms on the right as on the left")
+        precondition(destination.count >= left.count, "the destination is shorter than the source")
+        for i in 0..<left.count {
+            destination[i] = left[i] * right[i]
+        }
+    }
+}

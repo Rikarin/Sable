@@ -1,0 +1,73 @@
+module Sable.Math.Geometry
+
+/// A rotation in 8 bytes: the three smallest components in 20 bits each, and
+/// which is left out, which the length of 1 gives back. The error is under
+/// three millionths of a radian: what a clip's keys are kept in.
+///
+/// ```sable
+/// let q = Quaternion(axis: Vector3(1, 2, 3), angle: 0.7)
+/// assert(PackedQuaternion(q).quaternion.sameRotation(as: q))
+/// assert(MemoryLayout<PackedQuaternion>.size == 8)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct PackedQuaternion: Sendable {
+    /// Two bits for the component left out (0 for x), and then 20 for each
+    /// of the others in order, over -1/√2...1/√2.
+    public var bits: U64
+
+    /// The rotation of the bits, as `bits` gave them.
+    public init(bits: U64) {
+        self.bits = bits
+    }
+
+    /// The rotation, made of length 1, packed.
+    public init(_ value: Quaternion) {
+        // q and -q turn alike, so the greatest component is made positive and
+        // neither it nor its sign need be kept.
+        let unit = value.normalized().components
+        var largest = 0
+        for i in 1..<4 {
+            if unit[i].abs() > unit[largest].abs() {
+                largest = i
+            }
+        }
+        let sign: F32 = unit[largest] < 0 ? -1 : 1
+        var packed = U64(largest)
+        var shift: U64 = 2
+        for i in 0..<4 {
+            if i != largest {
+                let held = (unit[i] * sign).maximum(-packedRange).minimum(packedRange)
+                let step = ((held / packedRange + 1) * 0.5 * packedMask).rounded(.ToNearestOrEven)
+                packed |= U64(step) << shift
+                shift += 20
+            }
+        }
+        bits = packed
+    }
+
+    /// The rotation, of length 1.
+    public var quaternion: Quaternion {
+        get {
+            let largest = Int(bits & 3)
+            var unit = Vector4.zero
+            var sum: F32 = 0
+            var shift: U64 = 2
+            for i in 0..<4 {
+                if i != largest {
+                    let part = (F32((bits >> shift) & 0xFFFFF) / packedMask * 2 - 1) * packedRange
+                    unit[i] = part
+                    sum += part * part
+                    shift += 20
+                }
+            }
+            unit[largest] = (1 - sum).maximum(0).squareRoot()
+            return Quaternion(unit)
+        }
+    }
+}
+
+// 1/√2: what no component but the greatest passes.
+const packedRange: F32 = 0.70710678
+
+// The greatest of 20 bits.
+const packedMask: F32 = 1048575

@@ -1,0 +1,14 @@
+module Sable.Math.Geometry
+
+/// Which way a projection's depths run, over 0...1 either way.
+@derive(Equatable, Hashable, Debug)
+public enum DepthMapping {
+    /// The near plane is 1 and the far plane 0 (reverse-Z): a float's
+    /// precision is greatest near 0, which is where the distance then is, so
+    /// that things far off are told apart. Depths are cleared to 0, and the
+    /// greater is the nearer.
+    Reversed
+
+    /// The near plane is 0 and the far plane 1: .NET's and Direct3D's own.
+    Forward
+}

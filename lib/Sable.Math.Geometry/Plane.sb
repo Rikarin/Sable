@@ -1,0 +1,132 @@
+module Sable.Math.Geometry
+
+/// The plane of the points where `normal · p + d` is 0. The side the normal
+/// points to is the front. 16 bytes, as the `Vector4` of its coefficients.
+///
+/// `d` is the distance from the origin along the normal, negated, as .NET and
+/// every culling routine store it: the signed distance of a point is then
+/// `dotCoordinate`, a dot product.
+///
+/// ```sable
+/// let floor = Plane(point: Vector3(0, 2, 0), normal: Vector3.up)
+/// assert(floor.dotCoordinate(Vector3(5, 7, 5)) == 5)
+/// assert(floor.side(of: Vector3.zero) == .Back)
+/// ```
+public struct Plane: Hashable, Sendable {
+    /// The normal: of length 1 for distances to be distances.
+    public var normal: Vector3
+
+    /// The distance from the origin along the normal, negated.
+    public var d: F32
+
+    /// The plane of the normal, and the distance along it negated.
+    public init(_ normal: Vector3, _ d: F32) {
+        self.normal = normal
+        self.d = d
+    }
+
+    /// The plane of the four coefficients, x, y and z the normal's.
+    public init(_ coefficients: Vector4) {
+        normal = coefficients.xyz
+        d = coefficients.w
+    }
+
+    /// The plane through the point, its normal that way (and made unit).
+    public init(point: Vector3, normal: Vector3) {
+        let unit = normal.normalized()
+        self.normal = unit
+        d = -unit.dot(point)
+    }
+
+    /// The plane through three points, which are counter-clockwise seen from
+    /// its front; its normal is zero where they are in a line.
+    ///
+    /// ```sable
+    /// let plane = Plane(through: Vector3.zero, Vector3.unitX, -Vector3.unitZ)
+    /// assert(plane.normal == Vector3.up)
+    /// ```
+    public init(through a: Vector3, _ b: Vector3, _ c: Vector3) {
+        self = Plane(point: a, normal: (b - a).cross(c - a))
+    }
+
+    /// How many components there are: 4.
+    public static var componentCount: Int => 4
+
+    /// The normal and d as one vector.
+    public var coefficients: Vector4 => Vector4(normal, d)
+
+    /// The same plane, its normal of length 1; as it is if it has none.
+    public fn normalized() -> Plane {
+        let length = normal.length
+        if length < zeroTolerance {
+            return self
+        }
+        let inverse = 1 / length
+        return Plane(normal * inverse, d * inverse)
+    }
+
+    /// The dot product of the coefficients with a homogeneous point.
+    public fn dot(_ value: Vector4) -> F32 => coefficients.dot(value)
+
+    /// The signed distance of a point: above 0 in front of the plane, below
+    /// 0 behind. A distance only where the normal is unit.
+    public fn dotCoordinate(_ point: Vector3) -> F32 => normal.dot(point) + d
+
+    /// The dot product of the normal and a direction.
+    public fn dotNormal(_ direction: Vector3) -> F32 => normal.dot(direction)
+
+    /// Which side a point is on: within a millionth, on the plane.
+    public fn side(of point: Vector3) -> PlaneIntersectionType {
+        let distance = dotCoordinate(point)
+        if distance > zeroTolerance {
+            return .Front
+        }
+        return distance < -zeroTolerance ? .Back : .Intersecting
+    }
+
+    /// The plane moved as the matrix moves points, and normalised: its
+    /// coefficients by the inverse transpose, as a normal's. As it is where
+    /// the matrix has no inverse.
+    ///
+    /// ```sable
+    /// let moved = Plane(Vector3.up, 0).transformed(by: Matrix4x4(translation: Vector3(0, 3, 0)))
+    /// assert(moved == Plane(Vector3.up, -3))
+    /// ```
+    public fn transformed(by matrix: Matrix4x4) -> Plane {
+        guard let inverse = matrix.inverted() else {
+            return self
+        }
+        return Plane(coefficients * inverse.transposed()).normalized()
+    }
+
+    /// The plane turned about the origin.
+    public fn transformed(by rotation: Quaternion) -> Plane => Plane(rotation.transform(normal), d)
+
+    /// Whether the coefficients are near the other's.
+    public fn nearEqual(_ other: Plane, tolerance: F32 = 0.000001) -> Bool {
+        return normal.nearEqual(other.normal, tolerance: tolerance) && Sable.Math.Geometry.nearEqual(d, other.d, tolerance: tolerance)
+    }
+
+    /// Whether the coefficients are exactly equal, as IEEE has it.
+    public operator == (lhs: Plane, rhs: Plane) -> Bool => lhs.normal == rhs.normal && lhs.d == rhs.d
+
+    /// The coefficients' hashes.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(normal)
+        hasher.combine(d)
+    }
+}
+
+extension Plane: Formattable {
+    /// The four coefficients in parentheses.
+    ///
+    /// ```sable
+    /// assert("\(Plane(Vector3.up, -2):.0)" == "(0, 1, 0, -2)")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String => formatComponents([normal.x, normal.y, normal.z, d], spec, named: "Plane")
+}
+
+extension Plane: Debug {
+    /// The normal and d: `Plane(Vector3(0.0, 1.0, 0.0), -2.0)`.
+    public fn debugDescription() -> String => "Plane(\(normal.debugDescription()), \(d.debugDescription()))"
+}

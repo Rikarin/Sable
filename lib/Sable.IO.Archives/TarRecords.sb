@@ -1,0 +1,272 @@
+module Sable.IO.Archives
+
+import Sable.IO
+import Sable.Time
+
+/// What comes before an entry's header, to say more of it: pax's records, and
+/// GNU tar's long names. And the parts of an archive that its readers wait for.
+struct TarRecords {
+    /// What the records so far say: a keyword's of one entry, and of all.
+    var own: [String: String] = [:]
+    var all: [String: String] = [:]
+    var longName: String? = none
+    var longLink: String? = none
+
+    /// The most bytes there may be of one's records.
+    static var most: Int => 1 << 20
+
+    /// The records in a pax header: each its length in decimal, a space, a
+    /// keyword, "=", a value, and a line's end.
+    static fn parse(_ bytes: U8[>..], into records: inout [String: String]) throws(IoError) {
+        var at = 0
+        while at < bytes.count {
+            // What pads them is zeros.
+            if bytes[at] == 0 {
+                return
+            }
+            var length = 0
+            var i = at
+            while i < bytes.count && bytes[i] >= 0x30 && bytes[i] <= 0x39 && length < 1 << 24 {
+                length = length * 10 + Int(bytes[i] - 0x30)
+                i += 1
+            }
+            let end = at + length
+            if i == at || i >= bytes.count || bytes[i] != 0x20 || end > bytes.count || end <= i + 1 || bytes[end - 1] != 0x0A {
+                throw TarHeader.corrupt("a pax record is none")
+            }
+            let keyStart = i + 1
+            var equals = keyStart
+            while equals < end && bytes[equals] != 0x3D {
+                equals += 1
+            }
+            if equals >= end || equals == keyStart {
+                throw TarHeader.corrupt("a pax record is none")
+            }
+            records[String.fromUtf8Lossy(bytes[keyStart..<equals])] = String.fromUtf8Lossy(bytes[(equals + 1)..<(end - 1)])
+            at = end
+        }
+    }
+
+    /// Text that ends at its first zero: GNU tar's long name.
+    static fn long(_ bytes: U8[>..]) -> String {
+        return String.fromUtf8Lossy(bytes[..<(bytes.firstIndex(of: 0) ?? bytes.count)])
+    }
+
+    static fn decimal(_ text: String) throws(IoError) -> Int {
+        if let value = try? Int.parse(text) {
+            return value
+        }
+        throw TarHeader.corrupt("a number in a pax record is none")
+    }
+
+    /// A time: seconds, with a point and a fraction or not.
+    static fn time(_ text: String) throws(IoError) -> UtcDateTime {
+        guard let dot = text.firstIndex(of: '.') else {
+            return UtcDateTime.fromUnix(try TarRecords.decimal(text))
+        }
+        let whole = String(text[..<dot])
+        var nanoseconds = 0
+        var digits = 0
+        let bytes = text.utf8Bytes()
+        var i = whole.utf8Count + 1
+        while i < bytes.count {
+            if bytes[i] < 0x30 || bytes[i] > 0x39 {
+                throw TarHeader.corrupt("a number in a pax record is none")
+            }
+            if digits < 9 {
+                nanoseconds = nanoseconds * 10 + Int(bytes[i] - 0x30)
+                digits += 1
+            }
+            i += 1
+        }
+        while digits < 9 {
+            nanoseconds *= 10
+            digits += 1
+        }
+        let seconds = try TarRecords.decimal(whole)
+        let isNegative = whole.hasPrefix("-") && nanoseconds > 0
+        return UtcDateTime { secondsSinceEpoch: isNegative ? seconds - 1 : seconds, nanosecond: isNegative ? 1_000_000_000 - nanoseconds : nanoseconds }
+    }
+
+    /// What was said of the entry that comes next put in it, and forgotten.
+    mutating fn apply(to entry: inout TarEntry) throws(IoError) {
+        var said = all
+        for (key, value) in own {
+            said[key] = value
+        }
+        own = [:]
+        if let name = longName {
+            entry.name = name
+            longName = none
+        }
+        if let link = longLink {
+            entry.linkTarget = link
+            longLink = none
+        }
+        for (key, value) in said {
+            if key.hasPrefix("GNU.sparse.") {
+                throw .Unsupported(what: "a sparse file in a tar archive")
+            }
+            match key {
+                case "path"     => { entry.name = value }
+                case "linkpath" => { entry.linkTarget = value }
+                case "uname"    => { entry.userName = value }
+                case "gname"    => { entry.groupName = value }
+                case "uid"      => { entry.userId = try TarRecords.decimal(value) }
+                case "gid"      => { entry.groupId = try TarRecords.decimal(value) }
+                case "mtime"    => { entry.modified = try TarRecords.time(value) }
+                case "size" => {
+                    entry.size = try TarRecords.decimal(value)
+                    if entry.size < 0 {
+                        throw TarHeader.corrupt("an entry of less than no bytes")
+                    }
+                }
+                case _ => { entry.attributes[key] = value }
+            }
+        }
+        if case .Other(let flag) = entry.kind, flag == 0x53 {
+            throw .Unsupported(what: "a sparse file in a tar archive")
+        }
+    }
+
+    // ---- Written ---------------------------------------------------------------
+
+    /// A pax record, whose length has its own digits in it.
+    static fn add(_ key: String, _ value: String, to bytes: inout U8[>..]) {
+        let rest = key.utf8Count + value.utf8Count + 3
+        var length = rest + 1
+        while "\(length)".utf8Count + rest != length {
+            length = "\(length)".utf8Count + rest
+        }
+        bytes.append(utf8: "\(length) \(key)=\(value)\n")
+    }
+
+    /// A name in two, where it fits ustar's fields so: at a "/", at most 155
+    /// bytes before it and 100 after; or else as much of it as fits.
+    static fn divided(_ name: U8[>..]) -> (before: U8[>..], rest: U8[>..], fits: Bool) {
+        if name.count <= 100 {
+            return (before: [], rest: name, fits: true)
+        }
+        var at = name.count - 2
+        while at > 0 {
+            if name[at] == 0x2F && at <= 155 && name.count - at - 1 <= 100 {
+                return (before: name[..<at].toArray(), rest: name[(at + 1)...].toArray(), fits: true)
+            }
+            at -= 1
+        }
+        return (before: [], rest: name[..<100].toArray(), fits: false)
+    }
+
+    static fn isAscii(_ text: String) -> Bool {
+        for byte in text.utf8 {
+            if byte >= 0x80 || byte == 0 {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Everything that comes before an entry's bytes: records, if it needs
+    /// them, and its header.
+    static fn header(_ entry: TarEntry, _ format: TarFormat) throws(IoError) -> U8[>..] {
+        var named = entry
+        if entry.kind == .Directory && !entry.name.hasSuffix("/") {
+            named.name = entry.name + "/"
+        }
+        let name = named.name.utf8Bytes()
+        let link = entry.linkTarget.utf8Bytes()
+        if name.isEmpty || name.contains(0) || link.contains(0) || entry.size < 0 {
+            throw .InvalidInput(path: entry.name)
+        }
+        let parts = TarRecords.divided(name)
+        var all: U8[>..] = []
+        if format == .Gnu {
+            if name.count > 100 {
+                all.append(contentsOf: TarRecords.block("././@LongLink", 0x4C, join(name, 0), isGnu: true))
+            }
+            if link.count > 100 {
+                all.append(contentsOf: TarRecords.block("././@LongLink", 0x4B, join(link, 0), isGnu: true))
+            }
+            all.append(contentsOf: TarHeader.write(named, name: name, before: [], link: link, isGnu: true))
+            return all
+        }
+        let size = TarHeader.hasBytes(entry.kind) ? entry.size : 0
+        let seconds = entry.modified.secondsSinceEpoch
+        if format == .Ustar {
+            if !parts.fits || link.count > 100 || !TarHeader.fits(size, 12) || !TarHeader.fits(seconds, 12) || !TarHeader.fits(entry.userId, 8) || !TarHeader.fits(entry.groupId, 8) {
+                throw .Unsupported(what: "'\(entry.name)' in a ustar archive, which has no room for it")
+            }
+            return TarHeader.write(named, name: parts.rest, before: parts.before, link: link, isGnu: false)
+        }
+        var records: U8[>..] = []
+        for (key, value) in entry.attributes {
+            TarRecords.add(key, value, to: &records)
+        }
+        if !parts.fits || !TarRecords.isAscii(named.name) {
+            TarRecords.add("path", named.name, to: &records)
+        }
+        if link.count > 100 || !TarRecords.isAscii(entry.linkTarget) {
+            TarRecords.add("linkpath", entry.linkTarget, to: &records)
+        }
+        if !TarHeader.fits(size, 12) {
+            TarRecords.add("size", "\(size)", to: &records)
+        }
+        if !TarHeader.fits(entry.userId, 8) {
+            TarRecords.add("uid", "\(entry.userId)", to: &records)
+        }
+        if !TarHeader.fits(entry.groupId, 8) {
+            TarRecords.add("gid", "\(entry.groupId)", to: &records)
+        }
+        if entry.userName.utf8Count > 31 || !TarRecords.isAscii(entry.userName) {
+            TarRecords.add("uname", entry.userName, to: &records)
+        }
+        if entry.groupName.utf8Count > 31 || !TarRecords.isAscii(entry.groupName) {
+            TarRecords.add("gname", entry.groupName, to: &records)
+        }
+        if !TarHeader.fits(seconds, 12) || entry.modified.nanosecond != 0 {
+            TarRecords.add("mtime", TarRecords.written(entry.modified), to: &records)
+        }
+        if !records.isEmpty {
+            all.append(contentsOf: TarRecords.block("PaxHeader/\(named.name)", 0x78, records, isGnu: false))
+        }
+        all.append(contentsOf: TarHeader.write(named, name: parts.rest, before: parts.before, link: link, isGnu: false))
+        return all
+    }
+
+    /// A time in decimal.
+    static fn written(_ time: UtcDateTime) -> String {
+        if time.nanosecond == 0 {
+            return "\(time.secondsSinceEpoch)"
+        }
+        // Below zero, the fraction is of what is above.
+        let isNegative = time.secondsSinceEpoch < 0
+        let seconds = isNegative ? time.secondsSinceEpoch + 1 : time.secondsSinceEpoch
+        var fraction = "\(isNegative ? 1_000_000_000 - time.nanosecond : time.nanosecond)"
+        while fraction.utf8Count < 9 {
+            fraction = "0" + fraction
+        }
+        return "\(isNegative && seconds == 0 ? "-" : "")\(seconds).\(fraction)"
+    }
+
+    static fn join(_ bytes: U8[>..], _ last: U8) -> U8[>..] {
+        var all = bytes
+        all.append(last)
+        return all
+    }
+
+    /// A header of its own kind, and bytes after it, padded.
+    static fn block(_ name: String, _ flag: U8, _ bytes: U8[>..], isGnu: Bool) -> U8[>..] {
+        var entry = TarEntry(name, kind: .Other(flag: flag), size: bytes.count)
+        entry.mode = 0o644
+        let raw = name.utf8Bytes()
+        var all = TarHeader.write(entry, name: raw.count > 100 ? raw[..<100].toArray() : raw, before: [], link: [], isGnu: isGnu)
+        all.append(contentsOf: bytes)
+        all.append(repeating: 0, count: TarRecords.padding(bytes.count))
+        return all
+    }
+
+    /// How many zeros come after so many bytes.
+    static fn padding(_ count: Int) -> Int {
+        return (512 - count % 512) % 512
+    }
+}

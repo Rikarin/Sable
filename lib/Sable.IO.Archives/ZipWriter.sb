@@ -1,0 +1,92 @@
+module Sable.IO.Archives
+
+import Sable.IO
+import Sable.Time
+
+/// A zip archive written, from its start to its end, to anything that takes
+/// bytes: nothing written is gone back to. An entry is added whole, or begun,
+/// written and ended, when its sizes come after its bytes. Names are UTF-8;
+/// Zip64's records are written where they are needed. `finish()` writes the
+/// central directory, without which there is no archive.
+///
+/// ```sable
+/// let writer = ZipWriter(MemoryStream())
+/// try! writer.add("a.txt", "hello".utf8Bytes())
+/// try! writer.begin("b.txt")
+/// try! writer.write("a long ".utf8Bytes())
+/// try! writer.write("text".utf8Bytes())
+/// try! writer.end()
+/// try! writer.finish()
+/// let archive = try! ZipArchive(writer.inner.bytes)
+/// assert(try! archive.read(archive.entry(named: "b.txt")!) == "a long text".utf8Bytes())
+/// ```
+public final class ZipWriter<Inner: Writer> {
+    /// The writer it writes to.
+    public var inner: Inner
+    let builder: ZipBuilder
+
+    /// Writing to the writer.
+    public init(_ inner: Inner) {
+        self.inner = inner
+        builder = ZipBuilder()
+    }
+
+    /// An entry of the bytes.
+    public fn add(_ name: String, _ bytes: U8[:], options: ZipOptions = ZipOptions()) throws(IoError) {
+        try inner.write(try builder.whole(name, bytes, options, mode: 0o100000 | options.mode & 0o7777))
+    }
+
+    /// A directory, whose name ends with "/", or is made to.
+    public fn addDirectory(_ name: String, options: ZipOptions = ZipOptions()) throws(IoError) {
+        let mode = options.mode == 0o644 ? 0o755 : options.mode & 0o7777
+        try inner.write(try builder.whole(name.hasSuffix("/") ? name : name + "/", [], options, mode: 0o040000 | mode))
+    }
+
+    /// A symbolic link to a path.
+    public fn addSymlink(_ name: String, to target: String, options: ZipOptions = ZipOptions()) throws(IoError) {
+        try inner.write(try builder.whole(name, target.utf8Bytes(), options, mode: 0o120777))
+    }
+
+    /// An entry of everything the reader reads, a part at a time.
+    public fn add<R: Reader>(_ name: String, reading reader: inout R, options: ZipOptions = ZipOptions()) throws(IoError) {
+        try self.begin(name, options: options)
+        while true {
+            let bytes = try reader.read(upTo: 1 << 18)
+            if bytes.isEmpty {
+                break
+            }
+            try self.write(bytes)
+        }
+        try self.end()
+    }
+
+    /// An entry whose bytes are written next, up to 'end()'.
+    public fn begin(_ name: String, options: ZipOptions = ZipOptions()) throws(IoError) {
+        try inner.write(try builder.begin(name, options))
+    }
+
+    /// More of the entry begun.
+    public fn write(_ bytes: U8[:]) throws(IoError) {
+        try inner.write(try builder.write(bytes))
+    }
+
+    /// The end of the entry begun.
+    public fn end() throws(IoError) {
+        try inner.write(try builder.end())
+    }
+
+    /// The end of the archive, with a comment, and the writer flushed.
+    public fn finish(comment: String = "") throws(IoError) {
+        try inner.write(try builder.finish(comment: comment))
+        try inner.flush()
+    }
+
+    /// An entry of another archive, as it is there, not decompressed.
+    fn copy(_ entry: ZipEntry, from archive: ZipArchive) throws(IoError) {
+        var data = try archive.data(of: entry)
+        try inner.write(builder.copied(entry))
+        while data.left > 0 {
+            try inner.write(try data.read(upTo: 1 << 20))
+        }
+    }
+}

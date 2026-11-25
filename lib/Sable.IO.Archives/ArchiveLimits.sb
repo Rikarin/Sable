@@ -1,0 +1,23 @@
+module Sable.IO.Archives
+
+/// How much an archive may be extracted to before that fails: what an archive
+/// from anyone, which may say it has a thousand times as much as it is long,
+/// should be extracted with.
+///
+/// ```sable
+/// var limits = ArchiveLimits()
+/// limits.maximumTotal = 1 << 30
+/// assert(limits.maximumEntries > 1000)
+/// ```
+public struct ArchiveLimits: Sendable {
+    /// The most entries: a million, unless told otherwise.
+    public var maximumEntries: Int = 1_000_000
+
+    /// The most bytes of all the entries: 16 GiB, unless told otherwise.
+    public var maximumTotal: Int = 1 << 34
+
+    /// The most bytes of one.
+    public var maximumEntry: Int = Int.max
+
+    public init() { }
+}

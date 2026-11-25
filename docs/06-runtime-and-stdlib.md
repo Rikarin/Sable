@@ -901,6 +901,12 @@ Sable.IO.Compression Deflate Zlib Gzip Zstd Brotli (below), all at once, as they
                     (Compressor, Decompressor) and as readers and writers
                     that compress, async ones too, with limits on what is
                     decompressed
+Sable.IO.Archives   ZipArchive (random access by the central directory,
+                    Zip64) ZipWriter (to anything, with descriptors) Zip
+                    (create, extract, update), TarReader TarWriter (old,
+                    ustar, pax and GNU headers) Tar; async writers and a
+                    reader; extraction that stays in its directory, with
+                    limits (below)
 Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
                     urltestdata.json passes whole; resolution, setters,
                     origin, query items), Host (domain, IPv4, IPv6,
@@ -1231,6 +1237,32 @@ runs the codecs in `CompressionTests`.
   the length and the ratio.
 - CRC-32 is the processor's where it has the instructions
   (`runtime/checksums.c`: ARM's, or PCLMULQDQ), eight bytes by tables else.
+
+### Archives
+
+`Sable.IO.Archives` reads and writes zip and tar.
+
+- **Extraction stays in its directory.** A name with "..", a root, a drive or
+  a zero in it fails, with "/" between its parts or a backslash; on Windows,
+  and where `portableNames` asks, so do devices' names and those Windows
+  changes. Each directory on the way to a file is looked at, not through
+  links, before it is entered, and a file is made anew (`createNew`) or
+  replaces what was there, never written through. A symbolic link is made
+  only if its target, worked out by its text, is inside; a hard link only of
+  a file that is. Set-id bits are dropped. Limits bound the entries, each
+  one's bytes and all of them; a program that swaps directories meanwhile is
+  not defended against.
+- **Zip** takes what the central directory says, and refuses an entry whose
+  own header says another name or method, entries that overlap (the bombs
+  that are a thousand times their size are made so), and bytes that are more,
+  fewer or others than said. Names are UTF-8 where they say so, or are so on
+  Unix, else code page 437. A time is the extended field's, in UTC, or
+  MS-DOS's, as if it were.
+- **Tar** refuses sparse files, and a header's records of more than a
+  megabyte. What ustar has no room for is written as pax's records, or as GNU
+  tar's, as the format asks. Nothing is said of owners as files are made.
+- Not there: encryption, archives in parts, other methods of zip's, and
+  zlib-wrapped or brotli tars known by their bytes.
 
 ### Decimal
 

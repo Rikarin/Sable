@@ -1,0 +1,125 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// A tar archive read from its start to its end: the entries one by one, and
+/// the bytes of the last one given, as a Reader. Headers are old tar's,
+/// ustar's, pax's and GNU tar's; a sparse file in one is refused.
+///
+/// ```sable
+/// let writer = TarWriter(MemoryStream())
+/// try! writer.add(TarEntry("a.txt"), "hello".utf8Bytes())
+/// try! writer.finish()
+/// var reader = TarReader(MemoryStream(writer.inner.bytes))
+/// while let entry = try! reader.next() {
+///     assert(entry.name == "a.txt" && entry.size == 5)
+///     assert(try! reader.readToEnd() == "hello".utf8Bytes())
+/// }
+/// ```
+public struct TarReader<Inner: Reader>: Reader {
+    /// The reader the archive comes from.
+    public var inner: Inner
+    var records: TarRecords
+    /// How much of the entry is left, and of what pads it.
+    var left: Int
+    var padding: Int
+    var ended: Bool
+
+    /// Reading the reader: that of `Tar`'s compressed archives is one that
+    /// decompresses.
+    public init(_ inner: Inner) {
+        self.inner = inner
+        records = TarRecords()
+        left = 0
+        padding = 0
+        ended = false
+    }
+
+    /// The next entry, whatever of the last one was not read passed over; none
+    /// at the archive's end.
+    public mutating fn next() throws(IoError) -> TarEntry? {
+        while !ended {
+            try self.skip()
+            guard let block = try self.block() else {
+                ended = true
+                return none
+            }
+            if TarHeader.isZero(block) {
+                // Two are the end; what is after them is none of it.
+                _ = try self.block()
+                ended = true
+                return none
+            }
+            var entry = try TarHeader.read(block)
+            if case .Other(let flag) = entry.kind, flag == 0x78 || flag == 0x67 || flag == 0x4C || flag == 0x4B {
+                if entry.size > TarRecords.most {
+                    throw TarHeader.corrupt("a header of more than a megabyte")
+                }
+                let bytes = try self.exactly(entry.size)
+                padding = TarRecords.padding(entry.size)
+                match flag {
+                    case 0x78 => { try TarRecords.parse(bytes, into: &records.own) }
+                    case 0x67 => { try TarRecords.parse(bytes, into: &records.all) }
+                    case 0x4C => { records.longName = TarRecords.long(bytes) }
+                    case _    => { records.longLink = TarRecords.long(bytes) }
+                }
+                continue
+            }
+            try records.apply(to: &entry)
+            if TarHeader.hasBytes(entry.kind) {
+                left = entry.size
+                padding = TarRecords.padding(entry.size)
+            } else {
+                entry.size = 0
+            }
+            return entry
+        }
+        return none
+    }
+
+    /// Up to so many of the last entry's bytes: none at its end.
+    public mutating fn read(upTo count: Int) throws(IoError) -> U8[>..] {
+        if left == 0 || count <= 0 {
+            return []
+        }
+        let bytes = try inner.read(upTo: count < left ? count : left)
+        if bytes.isEmpty {
+            throw .UnexpectedEof
+        }
+        left -= bytes.count
+        return bytes
+    }
+
+    mutating fn skip() throws(IoError) {
+        while left > 0 {
+            _ = try self.read(upTo: 1 << 18)
+        }
+        while padding > 0 {
+            let bytes = try inner.read(upTo: padding)
+            if bytes.isEmpty {
+                throw .UnexpectedEof
+            }
+            padding -= bytes.count
+        }
+    }
+
+    /// The next 512 bytes: none where there is nothing more.
+    mutating fn block() throws(IoError) -> U8[>..]? {
+        var all: U8[>..] = []
+        while all.count < TarHeader.size {
+            let bytes = try inner.read(upTo: TarHeader.size - all.count)
+            if bytes.isEmpty {
+                if all.isEmpty {
+                    return none
+                }
+                throw .UnexpectedEof
+            }
+            all.append(contentsOf: bytes)
+        }
+        return all
+    }
+
+    mutating fn exactly(_ count: Int) throws(IoError) -> U8[>..] {
+        return try inner.readExactly(count)
+    }
+}

@@ -1,0 +1,44 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// What a tar archive's writers write around the entries' bytes.
+struct TarLayout {
+    /// How much of the entry is to come, how many bytes pad it, and how many
+    /// there are so far.
+    var left: Int = 0
+    var padding: Int = 0
+    var position: Int = 0
+
+    mutating fn begin(_ entry: TarEntry, _ format: TarFormat) throws(IoError) -> U8[>..] {
+        let missing = left
+        precondition(missing == 0, "an entry before all the bytes of the one before it: \(missing) are missing")
+        let bytes = try TarRecords.header(entry, format)
+        let hasBytes = TarHeader.hasBytes(entry.kind)
+        let size = entry.size
+        precondition(hasBytes || size == 0, "an entry that has no bytes, of \(size)")
+        left = size
+        padding = TarRecords.padding(size)
+        position += bytes.count
+        return bytes
+    }
+
+    /// So many bytes more: how many zeros come after them.
+    mutating fn write(_ count: Int) -> Int {
+        let room = left
+        precondition(count <= room, "\(count) bytes of an entry that has \(room) to come")
+        left -= count
+        let zeros = left == 0 && count > 0 ? padding : 0
+        position += count + zeros
+        return zeros
+    }
+
+    /// Two blocks of zeros, and as many as make the archive whole records of
+    /// twenty.
+    mutating fn finish() -> U8[>..] {
+        let missing = left
+        precondition(missing == 0, "the end before all the bytes of an entry: \(missing) are missing")
+        let end = position + 1024
+        return U8[>..](repeating: 0, count: 1024 + (10240 - end % 10240) % 10240)
+    }
+}

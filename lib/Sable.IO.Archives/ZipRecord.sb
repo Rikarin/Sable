@@ -1,0 +1,113 @@
+module Sable.IO.Archives
+
+import Sable.Time
+
+/// An entry as it is written: what its header and the central directory say.
+struct ZipRecord {
+    var name: U8[>..]
+    var comment: U8[>..]
+    var flags: Int
+    var method: Int
+    var time: U32
+    /// The time in UTC, as seconds, if it is one that the field for it has.
+    var seconds: I32?
+    var crc: U32
+    var compressedSize: Int
+    var size: Int
+    var madeBy: Int
+    var external: U32
+    var offset: Int
+    /// Whether its header has a Zip64 field.
+    var isLarge: Bool
+
+    static var wide: Int => 0xFFFF_FFFF
+
+    /// The version that is needed to read it.
+    var version: Int => isLarge || size >= ZipRecord.wide || compressedSize >= ZipRecord.wide || offset >= ZipRecord.wide ? 45 : (method == 93 ? 63 : 20)
+
+    fn writeTime(_ output: inout ByteBuffer, central: Bool) {
+        if let time = seconds {
+            output.writeU16(0x5455)
+            output.writeU16(5)
+            output.writeU8(1)
+            output.writeI32(time)
+        }
+    }
+
+    /// The header before its bytes. Where those are yet to come, its sizes are
+    /// none, and after them.
+    fn writeLocal(_ output: inout ByteBuffer) {
+        let isLate = (flags & 8) != 0
+        output.writeU32(ZipFormat.local)
+        output.writeU16(U16(version))
+        output.writeU16(U16(flags))
+        output.writeU16(U16(method))
+        output.writeU32(time)
+        output.writeU32(isLate ? 0 : crc)
+        output.writeU32(isLarge ? 0xFFFF_FFFF : (isLate ? 0 : U32(compressedSize)))
+        output.writeU32(isLarge ? 0xFFFF_FFFF : (isLate ? 0 : U32(size)))
+        output.writeU16(U16(name.count))
+        output.writeU16(U16((isLarge ? 20 : 0) + (seconds == none ? 0 : 9)))
+        output.write(bytes: name)
+        if isLarge {
+            output.writeU16(1)
+            output.writeU16(16)
+            output.writeU64(isLate ? 0 : U64(size))
+            output.writeU64(isLate ? 0 : U64(compressedSize))
+        }
+        self.writeTime(&output, central: false)
+    }
+
+    /// What comes after bytes whose sizes were not known before them.
+    fn writeDescriptor(_ output: inout ByteBuffer) {
+        output.writeU32(ZipFormat.descriptor)
+        output.writeU32(crc)
+        if isLarge {
+            output.writeU64(U64(compressedSize))
+            output.writeU64(U64(size))
+        } else {
+            output.writeU32(U32(compressedSize))
+            output.writeU32(U32(size))
+        }
+    }
+
+    fn writeCentral(_ output: inout ByteBuffer) {
+        let wide = ZipRecord.wide
+        let wideSize = size >= wide || isLarge
+        let widePacked = compressedSize >= wide || isLarge
+        let wideOffset = offset >= wide
+        let large = (wideSize ? 8 : 0) + (widePacked ? 8 : 0) + (wideOffset ? 8 : 0)
+        output.writeU32(ZipFormat.central)
+        output.writeU16(U16(madeBy))
+        output.writeU16(U16(version))
+        output.writeU16(U16(flags))
+        output.writeU16(U16(method))
+        output.writeU32(time)
+        output.writeU32(crc)
+        output.writeU32(widePacked ? 0xFFFF_FFFF : U32(compressedSize))
+        output.writeU32(wideSize ? 0xFFFF_FFFF : U32(size))
+        output.writeU16(U16(name.count))
+        output.writeU16(U16((large > 0 ? 4 + large : 0) + (seconds == none ? 0 : 9)))
+        output.writeU16(U16(comment.count))
+        output.writeU16(0)
+        output.writeU16(0)
+        output.writeU32(external)
+        output.writeU32(wideOffset ? 0xFFFF_FFFF : U32(offset))
+        output.write(bytes: name)
+        if large > 0 {
+            output.writeU16(1)
+            output.writeU16(U16(large))
+            if wideSize {
+                output.writeU64(U64(size))
+            }
+            if widePacked {
+                output.writeU64(U64(compressedSize))
+            }
+            if wideOffset {
+                output.writeU64(U64(offset))
+            }
+        }
+        self.writeTime(&output, central: true)
+        output.write(bytes: comment)
+    }
+}

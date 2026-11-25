@@ -1,0 +1,500 @@
+module ZipTests
+
+// Zip archives: what is written is read, whole, in parts and through the zip
+// and unzip commands; Zip64; what is damaged; and what would leave the
+// directory it is extracted to.
+
+import ArchiveData
+import Sable.IO
+import Sable.IO.Archives
+import Sable.Testing
+import Sable.Time
+
+fn archive(_ fill: (ZipWriter<MemoryStream>) throws(IoError) -> ()) -> U8[>..] {
+    let writer = ZipWriter(MemoryStream())
+    try! fill(writer)
+    try! writer.finish()
+    return writer.inner.bytes
+}
+
+@test
+fn entriesAreWrittenAndRead() throws {
+    let writer = ZipWriter(MemoryStream())
+    var options = ZipOptions()
+    options.modified = UtcDateTime.of(year: 2024, month: 5, day: 6, hour: 7, minute: 8, second: 9)
+    options.comment = "a note \u{2603}"
+    options.mode = 0o600
+    try writer.add("a.txt", "hello".utf8Bytes(), options: options)
+    for method in [ZipMethod.Store, ZipMethod.Deflate, ZipMethod.Zstd] {
+        options.method = method
+        try writer.add("whole \(method)", bytes(50_000), options: options)
+        try writer.begin("parts \(method)", options: options)
+        try writer.write(bytes(50_000)[..<20_000])
+        try writer.write(bytes(50_000)[20_000...])
+        try writer.end()
+        var reader = MemoryStream(bytes(300_000))
+        try writer.add("read \(method)", reading: &reader, options: options)
+    }
+    options.isLarge = true
+    try writer.begin("large \u{2603}", options: options)
+    try writer.write([1, 2, 3])
+    try writer.end()
+    try writer.addDirectory("d")
+    try writer.addSymlink("link", to: "a.txt")
+    try writer.finish(comment: "all of it")
+
+    let read = try ZipArchive(writer.inner.bytes)
+    assert(read.comment == "all of it" && read.entries.count == 13)
+    let first = read.entry(named: "a.txt")!
+    assert(first.modified == options.modified && first.comment == "a note \u{2603}" && first.mode == 0o100600)
+    assert(first.method == .Store && first.size == 5 && first.compressedSize == 5 && !first.isDirectory)
+    for method in [ZipMethod.Store, ZipMethod.Deflate, ZipMethod.Zstd] {
+        let whole = read.entry(named: "whole \(method)")!
+        assert(whole.method == method && (method == .Store) == (whole.compressedSize == 50_000))
+        assert((try read.read(whole)) == bytes(50_000))
+        assert((try read.read(read.entry(named: "parts \(method)")!)) == bytes(50_000))
+        assert((try read.read(read.entry(named: "read \(method)")!)) == bytes(300_000))
+    }
+    assert((try read.read(read.entry(named: "large \u{2603}")!)) == [1, 2, 3])
+    assert(read.entry(named: "d/")!.isDirectory && read.entry(named: "d/")!.mode == 0o040755)
+    assert(read.entry(named: "link")!.isSymlink && (try read.read(read.entry(named: "link")!)) == "a.txt".utf8Bytes())
+    assert(read.entry(named: "nowhere") == none)
+    assertEqualText(problem { try read.read(first, limit: 4) }, "'a.txt' has more than 4 bytes")
+}
+
+@test
+fn emptyAndPrefixedArchivesAreRead() throws {
+    let empty = archive { writer throws(IoError) in _ = writer }
+    assert(empty.count == 22 && (try ZipArchive(empty)).entries.isEmpty)
+    var prefixed = bytes(1000)
+    prefixed.append(contentsOf: archive { writer throws(IoError) in try writer.add("a", [1]) })
+    let read = try ZipArchive(prefixed)
+    assert((try read.read(read.entries[0])) == [1])
+}
+
+@test
+fn oldTimesAndNamesAreRead() throws {
+    var options = ZipOptions()
+    options.modified = UtcDateTime.of(year: 1970, month: 1, day: 1, hour: 0, minute: 0, second: 1)
+    let one = archive { writer throws(IoError) in try writer.add("abcd", [1, 2, 3], options: options) }
+    assert((try ZipArchive(one)).entries[0].modified == options.modified)
+    // Without the flag of UTF-8, in code page 437; and without the field of
+    // the time, as MS-DOS has it.
+    var changed = one
+    var i = 0
+    while i + 4 < changed.count {
+        if changed[i] == 0x61 && changed[i + 1] == 0x62 {
+            changed[i] = 0x81
+            changed[i + 1] = 0xE1
+        }
+        if changed[i] == 0x55 && changed[i + 1] == 0x54 {
+            changed[i] = 0x56
+        }
+        i += 1
+    }
+    for at in [7, one.count - 22 - 46 - 4 - 9 + 9] {
+        changed[at] = 0
+    }
+    let read = try ZipArchive(changed)
+    assert(read.entries[0].name == "\u{FC}\u{DF}cd", read.entries[0].name)
+    assert(read.entries[0].modified == UtcDateTime.of(year: 1980, month: 1, day: 1, hour: 0, minute: 0, second: 0))
+    assert((try read.read(read.entries[0])) == [1, 2, 3])
+    options.modified = UtcDateTime.of(year: 2200, month: 1, day: 1, hour: 0, minute: 0, second: 0)
+    let late = archive { writer throws(IoError) in try writer.add("a", [1], options: options) }
+    assert((try ZipArchive(late)).entries[0].modified.year == 2107)
+}
+
+@test
+fn zip64IsWrittenAndRead() throws {
+    // More entries than the end record can count.
+    let many = archive { writer throws(IoError) in
+        var i = 0
+        while i < 66_000 {
+            try writer.add("\(i)", [])
+            i += 1
+        }
+    }
+    let read = try ZipArchive(many)
+    assert(read.entries.count == 66_000 && read.entry(named: "65999") != none)
+    // The same with something before it.
+    var prefixed = bytes(100)
+    prefixed.append(contentsOf: many)
+    assert((try ZipArchive(prefixed)).entries.count == 66_000)
+    // Four gibibytes of zeros, most of them never written anywhere.
+    var options = ZipOptions()
+    options.isLarge = true
+    options.level = 1
+    let writer = ZipWriter(MemoryStream())
+    try writer.begin("zeros", options: options)
+    let zeros = U8[>..](repeating: 0, count: 1 << 24)
+    var i = 0
+    while i < 257 {
+        try writer.write(zeros)
+        i += 1
+    }
+    try writer.end()
+    try writer.add("after", [1])
+    try writer.finish()
+    let large = try ZipArchive(writer.inner.bytes)
+    assert(large.entries[0].size == 257 << 24)
+    assert((try large.read(large.entry(named: "after")!)) == [1])
+    // One that was not said to be large.
+    let small = ZipWriter(MemoryStream())
+    options.isLarge = false
+    try small.begin("zeros", options: options)
+    i = 0
+    while i < 255 {
+        try small.write(zeros)
+        i += 1
+    }
+    assertEqualText(problem { try small.write(zeros) }, "a zip entry of 4 GiB or more, which was not said to be large")
+}
+
+@test
+fn whatIsDamagedIsRefused() throws {
+    let good = archive { writer throws(IoError) in
+        try writer.add("first", bytes(3000))
+        try writer.add("second", bytes(100, seed: 2))
+    }
+    assertEqualText(problem { try ZipArchive([]) }, "the zip archive is corrupt: it has no end record")
+    assertEqualText(problem { try ZipArchive(bytes(70_000)) }, "the zip archive is corrupt: it has no end record")
+    // The checksum, in the central directory.
+    let directory = good.count - 22 - 2 * (46 + 9) - 5 - 6
+    var changed = good
+    changed[directory + 16] = changed[directory + 16] ^ 1
+    let bad = try ZipArchive(changed)
+    assertEqualText(problem { try bad.read(bad.entries[0]) }, "'first' has another checksum than the archive says")
+    // Longer, and shorter, than it says.
+    changed = good
+    changed[directory + 24] = changed[directory + 24] - 1
+    let longer = try ZipArchive(changed)
+    assertEqualText(problem { try longer.read(longer.entries[0]) }, "more would be decompressed than the limits allow")
+    changed[directory + 24] = changed[directory + 24] + 2
+    let shorter = try ZipArchive(changed)
+    assertEqualText(problem { try shorter.read(shorter.entries[0]) }, "'first' is shorter than the archive says")
+    // A method that is not read, and an encrypted entry.
+    changed = good
+    changed[directory + 10] = 14
+    let other = try ZipArchive(changed)
+    assert(other.entries[0].method == .Other(number: 14))
+    assertEqualText(problem { try other.read(other.entries[0]) }, "'a zip entry, 'first', compressed by method 14' is not supported here")
+    changed = good
+    changed[directory + 8] = changed[directory + 8] | 1
+    let secret = try ZipArchive(changed)
+    assert(secret.entries[0].isEncrypted)
+    assertEqualText(problem { try secret.read(secret.entries[0]) }, "'an encrypted zip entry, 'first'' is not supported here")
+    // Another name, or no header, where the entry is.
+    changed = good
+    changed[30] = 0x46
+    let named = try ZipArchive(changed)
+    assertEqualText(problem { try named.read(named.entries[0]) }, "the zip archive is corrupt: 'first' is another in its header")
+    changed = good
+    changed[0] = 0
+    let bare = try ZipArchive(changed)
+    assertEqualText(problem { try bare.read(bare.entries[0]) }, "the zip archive is corrupt: 'first' has no header")
+    // Two entries with the same bytes.
+    changed = good
+    let second = directory + 46 + 9 + 5
+    var i = 0
+    while i < 4 {
+        changed[second + 42 + i] = 0
+        i += 1
+    }
+    assertEqualText(problem { try ZipArchive(changed) }, "the zip archive is corrupt: its entries overlap")
+    changed[second + 45] = 0x70
+    assertEqualText(problem { try ZipArchive(changed) }, "the zip archive is corrupt: 'second' is not in it")
+    // The directory.
+    changed = good
+    changed[good.count - 22 + 10] = 3
+    assertEqualText(problem { try ZipArchive(changed) }, "the zip archive is corrupt: its central directory is not where it says")
+    changed = good
+    changed[directory + 29] = 1
+    assertEqualText(problem { try ZipArchive(changed) }, "the zip archive is corrupt: its central directory ends early")
+    changed = good
+    changed[good.count - 22 + 16] = 0xF0
+    changed[good.count - 22 + 17] = 0xFF
+    assertEqualText(problem { try ZipArchive(changed) }, "the zip archive is corrupt: its central directory is not where it says")
+    changed = good
+    changed[good.count - 22 + 4] = 1
+    assertEqualText(problem { try ZipArchive(changed) }, "'a zip archive in several parts' is not supported here")
+}
+
+@test
+fn damageIsNeverMoreThanAnError() {
+    let good = archive { writer throws(IoError) in
+        try writer.add("first", bytes(300))
+        try writer.begin("second")
+        try writer.write(bytes(200))
+        try writer.end()
+        try writer.addSymlink("link", to: "first")
+    }
+    var state: U64 = 88172645463325252
+    var round = 0
+    while round < 3000 {
+        var changed = good
+        var times = 1 + round % 4
+        while times > 0 {
+            state = state ^ (state << 13)
+            state = state ^ (state >> 7)
+            state = state ^ (state << 17)
+            changed[Int(state % U64(good.count))] = U8(state >> 40 & 0xFF)
+            times -= 1
+        }
+        if round % 10 == 0 {
+            changed.removeLast(Int(state % U64(good.count)))
+        }
+        if let read = try? ZipArchive(changed) {
+            for entry in read.entries {
+                _ = try? read.read(entry, limit: 1 << 20)
+            }
+        }
+        round += 1
+    }
+}
+
+@test
+fn directoriesAreArchivedAndExtracted() throws {
+    let temp = try Temp.directory()
+    try makeTree(temp.path.appending("in"))
+    let path = temp.path.appending("a.zip")
+    try Zip.create(path, from: temp.path.appending("in"))
+    try Zip.extract(path, to: temp.path.appending("out"))
+    assert(try isTree(temp.path.appending("out")))
+    let before = (try File.metadata(temp.path.appending("in/a.txt"))).modified
+    assert((try File.metadata(temp.path.appending("out/a.txt"))).modified.secondsSinceEpoch == before.secondsSinceEpoch)
+    // A second time, nothing is there already.
+    assert(problem { try Zip.extract(path, to: temp.path.appending("out")) }.hasSuffix("already"))
+    var options = ExtractOptions()
+    options.overwrite = true
+    try Zip.extract(path, to: temp.path.appending("out"), options: options)
+    assert(try isTree(temp.path.appending("out")))
+    // Without the times, the permissions and the links.
+    options = ExtractOptions()
+    options.keepTimes = false
+    options.keepPermissions = false
+    options.links = .Skipped
+    try Zip.extract(path, to: temp.path.appending("plain"), options: options)
+    assert(((try File.metadata(temp.path.appending("plain/a.txt"))).permissions.mode & 0o111) == 0)
+    assert(!File.exists(temp.path.appending("plain/sub/link")))
+    options.links = .Refused
+    assertEqualText(problem { try Zip.extract(path, to: temp.path.appending("none"), options: options) }, "a link, 'sub/link', leads to '../a.txt'")
+}
+
+@test
+fn nothingIsWrittenOutside() throws {
+    let temp = try Temp.directory()
+    let names = ["../up", "a/../../up", "/root", "..", "a/..", "..\\up", "a\\..\\..\\up", "C:\\x", "c:x", "\\x", "a\0b"]
+    for name in names {
+        // Written with another name, and then changed, as the writer refuses
+        // some of them.
+        let raw = name.utf8Bytes()
+        var made = archive { writer throws(IoError) in try writer.add(repeated("\u{7E}", raw.count), [1]) }
+        var i = 0
+        while i + raw.count <= made.count {
+            if made[i] == 0x7E && (i == 30 || made[i - 1] != 0x7E) {
+                var j = 0
+                while j < raw.count {
+                    made[i + j] = raw[j]
+                    j += 1
+                }
+            }
+            i += 1
+        }
+        let read = try ZipArchive(made)
+        let said = problem { try read.extract(to: temp.path.appending("out")) }
+        assert(said.contains("leads out of the directory"), "\(name): \(said)")
+    }
+    assert((try Directory.list(temp.path)) == ["out"])
+    assert((try Directory.list(temp.path.appending("out"))).isEmpty)
+}
+
+@test
+fn portableNamesAreWindowsToo() throws {
+    let temp = try Temp.directory()
+    var options = ExtractOptions()
+    options.portableNames = true
+    for name in ["CON", "a/nul.txt", "com1", "LPT9.x", "a:b", "x?", "x*", "\"x", "a<b", "a>b", "a|b", "dot.", "space ", "a\u{7}", "a\\prn"] {
+        let made = archive { writer throws(IoError) in try writer.add(name, [1]) }
+        let said = problem { try ZipArchive(made).extract(to: temp.path, options: options) }
+        assert(said.contains("is none a file may have"), "\(name): \(said)")
+    }
+    let good = archive { writer throws(IoError) in
+        try writer.add("com0/console/com10.txt", [1])
+        try writer.add("a\\b", [2])
+        try writer.add("lpt", [3])
+    }
+    try ZipArchive(good).extract(to: temp.path, options: options)
+    assert((try File.readBytes(temp.path.appending("a/b"))) == [2])
+    assert((try File.readBytes(temp.path.appending("com0/console/com10.txt"))) == [1])
+}
+
+@test
+fn anArchiveCutMeanwhileIsAnError() throws {
+    let temp = try Temp.directory()
+    let path = temp.path.appending("a.zip")
+    var options = ZipOptions()
+    options.method = .Store
+    try File.writeBytes(path, archive { writer throws(IoError) in try writer.add("a", bytes(100_000), options: options) })
+    let read = try ZipArchive.open(path)
+    var reader = try read.reader(for: read.entries[0])
+    assert(reader.entry.name == "a" && (try reader.read(upTo: 0)).isEmpty && (try reader.read(upTo: 10)).count == 10)
+    let file = try File.open(path, options: .appending)
+    try file.setLength(5000)
+    assertEqualText(problem { try reader.readToEnd() }, "the stream ended before what was needed")
+}
+
+@test
+fn linksAreNoWayOut() throws {
+    let temp = try Temp.directory()
+    try Directory.create(temp.path.appending("secret"))
+    let here = temp.path.appending("out")
+    for target in ["../secret", "/etc", "a/../../secret", "..", "", "C:\\x", "x/../.."] {
+        let made = archive { writer throws(IoError) in
+            if target.isEmpty {
+                try writer.addSymlink("link", to: "\0")
+            } else {
+                try writer.addSymlink("link", to: target)
+            }
+        }
+        assert(problem { try ZipArchive(made).extract(to: here) }.hasPrefix("a link, 'link', leads to"))
+    }
+    // A link in the directory, through which nothing is written; and one that
+    // was there before.
+    let through = archive { writer throws(IoError) in
+        try writer.addDirectory("real")
+        try writer.addSymlink("link", to: "real")
+        try writer.add("link/file", [1])
+    }
+    assertEqualText(problem { try ZipArchive(through).extract(to: here) }, "'link' is in the way of an entry: it is no directory, or a link")
+    let there = temp.path.appending("out2")
+    try Directory.create(there)
+    try File.createSymlink(at: there.appending("link"), to: "../secret")
+    let file = archive { writer throws(IoError) in try writer.add("link/file", [1]) }
+    assertEqualText(problem { try ZipArchive(file).extract(to: there) }, "'link' is in the way of an entry: it is no directory, or a link")
+    // In its place, where that is allowed, and not through it.
+    let same = archive { writer throws(IoError) in try writer.add("link", [1]) }
+    assert(problem { try ZipArchive(same).extract(to: there) }.hasSuffix("already"))
+    var options = ExtractOptions()
+    options.overwrite = true
+    try ZipArchive(same).extract(to: there, options: options)
+    assert((try File.metadata(there.appending("link"), followLinks: false)).isFile)
+    assert((try Directory.list(temp.path.appending("secret"))).isEmpty)
+    // Permissions that a new file should not have.
+    var bold = ZipOptions()
+    bold.mode = 0o6777
+    let setuid = archive { writer throws(IoError) in try writer.add("setuid", [1], options: bold) }
+    try ZipArchive(setuid).extract(to: there)
+    assert(((try File.metadata(there.appending("setuid"))).permissions.mode & 0o7777) == 0o777)
+}
+
+@test
+fn limitsAreKept() throws {
+    let temp = try Temp.directory()
+    let made = archive { writer throws(IoError) in
+        try writer.add("zeros", U8[>..](repeating: 0, count: 5_000_000))
+        try writer.add("more", U8[>..](repeating: 0, count: 5_000_000))
+    }
+    let read = try ZipArchive(made)
+    var options = ExtractOptions()
+    options.overwrite = true
+    options.limits.maximumTotal = 9_000_000
+    assertEqualText(problem { try read.extract(to: temp.path, options: options) }, "the archive has more bytes than the limits allow")
+    options.limits.maximumTotal = 10_000_000
+    options.limits.maximumEntry = 4_999_999
+    assertEqualText(problem { try read.extract(to: temp.path, options: options) }, "the archive has more bytes than the limits allow")
+    options.limits.maximumEntry = 5_000_000
+    options.limits.maximumEntries = 1
+    assertEqualText(problem { try read.extract(to: temp.path, options: options) }, "the archive has more than 1 entries")
+    options.limits.maximumEntries = 2
+    try read.extract(to: temp.path, options: options)
+}
+
+@test
+fn archivesAreChanged() throws {
+    let temp = try Temp.directory()
+    let path = temp.path.appending("a.zip")
+    try Zip.update(path) { changes in
+        changes.set("a", bytes(1000))
+        changes.set("b", bytes(2000))
+        changes.set("b", bytes(3000))
+        changes.set("c", [1])
+    }
+    try Zip.update(path) { changes in
+        changes.remove("a")
+        changes.set("c", [2])
+        changes.set("d", [3])
+    }
+    let read = try ZipArchive.open(path)
+    assert(read.entries.map { $0.name } == ["b", "c", "d"])
+    assert((try read.read(read.entry(named: "b")!)) == bytes(3000))
+    assert((try read.read(read.entry(named: "c")!)) == [2])
+    assert((try Directory.list(temp.path)) == ["a.zip"])
+    // One with descriptors is copied with its sizes before it.
+    var streamed = ZipWriter(MemoryStream())
+    try streamed.begin("s")
+    try streamed.write(bytes(500))
+    try streamed.end()
+    try streamed.finish(comment: "kept")
+    try File.writeBytes(path, streamed.inner.bytes)
+    try Zip.update(path) { changes in changes.set("t", [9]) }
+    let copied = try ZipArchive.open(path)
+    assert(copied.comment == "kept" && (try copied.read(copied.entries[0])) == bytes(500))
+}
+
+@test
+fn namesAndOptionsAreChecked() {
+    let writer = ZipWriter(MemoryStream())
+    assert(problem { try writer.add("", []) }.hasSuffix("was given something the system does not take"))
+    assert(problem { try writer.add("/a", []) }.hasSuffix("was given something the system does not take"))
+    var options = ZipOptions()
+    options.method = .Other(number: 5)
+    assertEqualText(problem { try writer.add("a", [], options: options) }, "'a zip entry compressed by another method' is not supported here")
+    assert(problem { try writer.finish(comment: repeated("x", 65_536)) }.hasSuffix("was given something the system does not take"))
+}
+
+@test
+fn theAsyncWriterToo() async throws {
+    let pipe = Pipe(pauseWriterThreshold: 1 << 20)
+    let writer = AsyncZipWriter(pipe.writer)
+    try await writer.addDirectory("d")
+    var options = ZipOptions()
+    options.mode = 0o700
+    try await writer.addDirectory("e/", options: options)
+    try await writer.add("d/a", bytes(1000))
+    try await writer.begin("b")
+    try await writer.write(bytes(100))
+    try await writer.end()
+    let source = Pipe()
+    try await source.writer.write([1, 2, 3])
+    await source.writer.complete()
+    try await writer.add("c", reading: source.reader)
+    try await writer.finish()
+    await pipe.writer.complete()
+    var all: U8[>..] = []
+    while true {
+        let part = try await pipe.reader.read(upTo: 10_000)
+        if part.isEmpty {
+            break
+        }
+        all.append(contentsOf: part)
+    }
+    let read = try ZipArchive(all)
+    assert(read.entries.map { $0.name } == ["d/", "e/", "d/a", "b", "c"])
+    assert((try read.read(read.entries[2])) == bytes(1000) && (try read.read(read.entries[4])) == [1, 2, 3])
+}
+
+@test
+fn zipAndUnzipAgree() async throws {
+    let temp = try Temp.directory()
+    try makeTree(temp.path.appending("in"))
+    if let _ = await run("unzip", ["-v"], in: temp.path) {
+        try Zip.create(temp.path.appending("ours.zip"), from: temp.path.appending("in"))
+        assert(await run("unzip", ["-tq", "ours.zip"], in: temp.path) != none)
+        assert(await run("unzip", ["-q", "ours.zip", "-d", "theirs"], in: temp.path) != none)
+        assert(try isTree(temp.path.appending("theirs")))
+    }
+    if let _ = await run("zip", ["-q", "-r", "-y", "../theirs.zip", "."], in: temp.path.appending("in")) {
+        try Zip.extract(temp.path.appending("theirs.zip"), to: temp.path.appending("out"))
+        assert(try isTree(temp.path.appending("out")))
+    }
+}

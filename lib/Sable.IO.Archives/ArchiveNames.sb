@@ -1,0 +1,92 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// An entry's name, as where in a directory it is.
+struct ArchiveNames {
+    /// The name's parts, where it is one that stays in the directory: none of
+    /// them "..", and nothing before the first. Parts that are empty, or ".",
+    /// are none. Throws where it is no such name, or, on Windows or where they
+    /// are to be portable, one that Windows does not have.
+    static fn parts(_ name: String, portable: Bool) throws(IoError) -> String[>..] {
+        var parts: String[>..] = []
+        // Windows takes either separator, and an archive made there may have
+        // the one that elsewhere is a letter like any: there is no file that
+        // needs to be named so and "..", so both are looked at everywhere.
+        for part in name.split(separator: '/') {
+            for piece in part.split(separator: '\\') {
+                if piece == ".." {
+                    throw ArchiveNames.unsafeName(name)
+                }
+            }
+        }
+        if name.hasPrefix("/") || name.hasPrefix("\\") || name.contains("\0") || ArchiveNames.hasDrive(name) {
+            throw ArchiveNames.unsafeName(name)
+        }
+        let isWindows = portable || PathStyle.native == .Windows
+        for part in name.split(where: { $0 == '/' || isWindows && $0 == '\\' }) {
+            if part.isEmpty || part == "." {
+                continue
+            }
+            if isWindows && !ArchiveNames.isWindowsName(String(part)) {
+                throw ArchiveNames.unsafeName(name)
+            }
+            parts.append(String(part))
+        }
+        return parts
+    }
+
+    static fn unsafeName(_ name: String) -> IoError {
+        return .InvalidData(what: "an entry's name, '\(name)', leads out of the directory, or is none a file may have")
+    }
+
+    /// Whether a name begins with a drive's letter, as "C:" does.
+    static fn hasDrive(_ name: String) -> Bool {
+        let bytes = name.utf8Bytes()
+        return bytes.count >= 2 && bytes[1] == 0x3A && ((bytes[0] | 0x20) >= 0x61 && (bytes[0] | 0x20) <= 0x7A)
+    }
+
+    /// Whether Windows has a file of the name, and not a device, a stream of
+    /// another file, or a file of another name.
+    static fn isWindowsName(_ part: String) -> Bool {
+        for byte in part.utf8 {
+            if byte < 0x20 || byte == 0x3A || byte == 0x2A || byte == 0x3F || byte == 0x22 || byte == 0x3C || byte == 0x3E || byte == 0x7C {
+                return false
+            }
+        }
+        if part.hasSuffix(".") || part.hasSuffix(" ") {
+            return false
+        }
+        var stem = part.uppercased()
+        if let dot = stem.firstIndex(of: '.') {
+            stem = String(stem[..<dot])
+        }
+        for device in ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"] {
+            if stem == device {
+                return false
+            }
+        }
+        let bytes = stem.utf8Bytes()
+        let isPort = stem.hasPrefix("COM") || stem.hasPrefix("LPT")
+        return !(isPort && bytes.count == 4 && bytes[3] >= 0x31 && bytes[3] <= 0x39)
+    }
+
+    /// Whether a link with a name, that leads to the target, leads to somewhere
+    /// in the directory: its parts' as far up as the name's are down.
+    static fn staysInside(_ parts: String[>..], target: String) -> Bool {
+        if target.isEmpty || target.hasPrefix("/") || target.hasPrefix("\\") || target.contains("\0") || ArchiveNames.hasDrive(target) {
+            return false
+        }
+        var depth = parts.count - 1
+        for part in target.split(where: { $0 == '/' || $0 == '\\' }) {
+            if part.isEmpty || part == "." {
+                continue
+            }
+            depth += part == ".." ? -1 : 1
+            if depth < 0 {
+                return false
+            }
+        }
+        return true
+    }
+}

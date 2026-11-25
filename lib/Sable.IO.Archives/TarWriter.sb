@@ -1,0 +1,58 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// A tar archive written. An entry is added whole, or begun and then written,
+/// as many bytes as it says it has.
+///
+/// ```sable
+/// let writer = TarWriter(MemoryStream())
+/// try! writer.add(TarEntry("a.txt"), "hello".utf8Bytes())
+/// try! writer.begin(TarEntry("b.txt", size: 4))
+/// try! writer.write("te".utf8Bytes())
+/// try! writer.write("xt".utf8Bytes())
+/// try! writer.finish()
+/// assert(writer.inner.bytes.count % 10240 == 0)
+/// ```
+public final class TarWriter<Inner: Writer> {
+    /// The writer it writes to.
+    public var inner: Inner
+    let format: TarFormat
+    var layout: TarLayout
+
+    /// Writing to the writer, in a format.
+    public init(_ inner: Inner, format: TarFormat = .Pax) {
+        self.inner = inner
+        self.format = format
+        layout = TarLayout()
+    }
+
+    /// An entry that has the bytes, and as many of them as they are.
+    public fn add(_ entry: TarEntry, _ bytes: U8[:] = []) throws(IoError) {
+        var sized = entry
+        sized.size = bytes.count
+        try self.begin(sized)
+        try self.write(bytes)
+    }
+
+    /// An entry whose bytes, as many as it says, are written next.
+    public fn begin(_ entry: TarEntry) throws(IoError) {
+        let bytes = try layout.begin(entry, format)
+        try inner.write(bytes)
+    }
+
+    /// More of the bytes of the entry begun.
+    public fn write(_ bytes: U8[:]) throws(IoError) {
+        let padding = layout.write(bytes.count)
+        try inner.write(bytes)
+        if padding > 0 {
+            try inner.write(U8[>..](repeating: 0, count: padding))
+        }
+    }
+
+    /// The archive's end, and the writer flushed.
+    public fn finish() throws(IoError) {
+        try inner.write(layout.finish())
+        try inner.flush()
+    }
+}

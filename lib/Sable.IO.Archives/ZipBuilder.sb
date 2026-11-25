@@ -1,0 +1,232 @@
+module Sable.IO.Archives
+
+import Sable.IO
+import Sable.IO.Compression
+import Sable.Time
+
+/// What a zip archive's writers write, made in memory a part at a time: every
+/// method gives the bytes that come next.
+final class ZipBuilder {
+    var records: ZipRecord[>..]
+    /// How many bytes there are so far.
+    var position: Int
+    /// The entry begun, if one is, and what it is compressed by.
+    var current: ZipRecord?
+    var deflating: DeflateEncoder?
+    var packing: ZstdEncoder?
+    var crc: Crc32
+    var isFinished: Bool
+
+    init() {
+        records = []
+        position = 0
+        current = none
+        deflating = none
+        packing = none
+        crc = Crc32()
+        isFinished = false
+    }
+
+    static fn invalid(_ what: String) -> IoError {
+        return .InvalidInput(path: what)
+    }
+
+    /// An entry's record, as the options say it is.
+    fn record(_ name: String, _ options: ZipOptions, mode: Int) throws(IoError) -> ZipRecord {
+        precondition(!isFinished, "an entry after the end of the archive")
+        precondition(current == none, "an entry within another")
+        let bytes = name.utf8Bytes()
+        let comment = options.comment.utf8Bytes()
+        if bytes.isEmpty || bytes.count > 65535 || comment.count > 65535 || name.hasPrefix("/") {
+            throw ZipBuilder.invalid(name)
+        }
+        if case .Other(_) = options.method {
+            throw .Unsupported(what: "a zip entry compressed by another method")
+        }
+        let modified = options.modified ?? UtcDateTime.now()
+        let seconds = modified.secondsSinceEpoch
+        // In UTF-8, as bit 11 says.
+        return ZipRecord(
+            name: bytes,
+            comment: comment,
+            flags: 0x800,
+            method: options.method.number,
+            time: ZipFormat.dosTime(modified),
+            seconds: seconds >= -2_147_483_648 && seconds <= 2_147_483_647 ? I32(seconds) : none,
+            crc: 0,
+            compressedSize: 0,
+            size: 0,
+            madeBy: 3 << 8 | 63,
+            external: U32(mode) << 16 | (name.hasSuffix("/") ? 0x10 : 0),
+            offset: position,
+            isLarge: false,
+        )
+    }
+
+    fn compressed(_ bytes: U8[:], _ options: ZipOptions) -> U8[>..] {
+        return match options.method {
+            case .Deflate => Deflate.compress(bytes, level: options.level ?? 6)
+            case .Zstd    => Zstd.compress(bytes, level: options.level ?? 3)
+            case _        => []
+        }
+    }
+
+    /// A whole entry.
+    fn whole(_ name: String, _ bytes: U8[:], _ options: ZipOptions, mode: Int) throws(IoError) -> U8[>..] {
+        var made = try self.record(name, options, mode: mode)
+        var sum = Crc32()
+        sum.update(bytes)
+        made.crc = sum.value
+        made.size = bytes.count
+        let packed = self.compressed(bytes, options)
+        let isStored = options.method == .Store || packed.count >= bytes.count
+        made.method = isStored ? 0 : made.method
+        made.compressedSize = isStored ? bytes.count : packed.count
+        made.isLarge = made.size >= ZipRecord.wide
+        var output = ByteBuffer()
+        made.writeLocal(&output)
+        if isStored {
+            output.write(bytes: bytes)
+        } else {
+            output.write(bytes: packed)
+        }
+        records.append(made)
+        position += output.count
+        return output.takeBytes()
+    }
+
+    /// The start of an entry whose bytes are yet to come.
+    fn begin(_ name: String, _ options: ZipOptions) throws(IoError) -> U8[>..] {
+        var made = try self.record(name, options, mode: 0o100000 | options.mode & 0o7777)
+        made.flags = made.flags | 8
+        made.isLarge = options.isLarge
+        crc = Crc32()
+        deflating = options.method == .Deflate ? DeflateEncoder(level: options.level ?? 6) : none
+        packing = options.method == .Zstd ? ZstdEncoder(level: options.level ?? 3) : none
+        var output = ByteBuffer()
+        made.writeLocal(&output)
+        position += output.count
+        current = made
+        return output.takeBytes()
+    }
+
+    /// More bytes of the entry begun.
+    fn write(_ bytes: U8[:]) throws(IoError) -> U8[>..] {
+        precondition(current != none, "bytes of no entry")
+        var made = current!
+        crc.update(bytes)
+        made.size += bytes.count
+        var output = ByteBuffer()
+        if let encoder = deflating {
+            encoder.compress(bytes, into: &output)
+        } else if let encoder = packing {
+            encoder.compress(bytes, into: &output)
+        } else {
+            output.write(bytes: bytes)
+        }
+        return try self.added(&made, &output)
+    }
+
+    /// The end of the entry begun.
+    fn end() throws(IoError) -> U8[>..] {
+        precondition(current != none, "the end of no entry")
+        var made = current!
+        var output = ByteBuffer()
+        if let encoder = deflating {
+            encoder.finish(into: &output)
+        } else if let encoder = packing {
+            encoder.finish(into: &output)
+        }
+        var all = try self.added(&made, &output)
+        made.crc = crc.value
+        var after = ByteBuffer()
+        made.writeDescriptor(&after)
+        position += after.count
+        all.append(contentsOf: after.bytes)
+        records.append(made)
+        current = none
+        deflating = none
+        packing = none
+        return all
+    }
+
+    fn added(_ made: inout ZipRecord, _ output: inout ByteBuffer) throws(IoError) -> U8[>..] {
+        made.compressedSize += output.count
+        if !made.isLarge && (made.size >= ZipRecord.wide || made.compressedSize >= ZipRecord.wide) {
+            throw .InvalidData(what: "a zip entry of 4 GiB or more, which was not said to be large")
+        }
+        position += output.count
+        current = made
+        return output.takeBytes()
+    }
+
+    /// An entry of another archive, as it is there compressed: what comes
+    /// before its bytes.
+    fn copied(_ entry: ZipEntry) -> U8[>..] {
+        let seconds = entry.modified.secondsSinceEpoch
+        let made = ZipRecord(
+            name: entry.rawName,
+            comment: entry.rawComment,
+            // Its sizes are before it, whatever they were.
+            flags: entry.flags & ~8,
+            method: entry.method.number,
+            time: entry.time,
+            seconds: seconds >= -2_147_483_648 && seconds <= 2_147_483_647 ? I32(seconds) : none,
+            crc: entry.crc32,
+            compressedSize: entry.compressedSize,
+            size: entry.size,
+            madeBy: entry.madeBy,
+            external: entry.externalAttributes,
+            offset: position,
+            isLarge: entry.size >= ZipRecord.wide || entry.compressedSize >= ZipRecord.wide,
+        )
+        var output = ByteBuffer()
+        made.writeLocal(&output)
+        records.append(made)
+        position += output.count + entry.compressedSize
+        return output.takeBytes()
+    }
+
+    /// The central directory, and the archive's end.
+    fn finish(comment: String) throws(IoError) -> U8[>..] {
+        precondition(current == none, "the end of the archive within an entry")
+        precondition(!isFinished, "the archive is finished already")
+        let text = comment.utf8Bytes()
+        if text.count > 65535 {
+            throw ZipBuilder.invalid("a zip archive's comment")
+        }
+        isFinished = true
+        var output = ByteBuffer()
+        for record in records {
+            record.writeCentral(&output)
+        }
+        let size = output.count
+        let wide = ZipRecord.wide
+        if records.count >= 0xFFFF || size >= wide || position >= wide {
+            output.writeU32(ZipFormat.end64)
+            output.writeU64(44)
+            output.writeU16(45)
+            output.writeU16(45)
+            output.writeU32(0)
+            output.writeU32(0)
+            output.writeU64(U64(records.count))
+            output.writeU64(U64(records.count))
+            output.writeU64(U64(size))
+            output.writeU64(U64(position))
+            output.writeU32(ZipFormat.locator)
+            output.writeU32(0)
+            output.writeU64(U64(position + size))
+            output.writeU32(1)
+        }
+        output.writeU32(ZipFormat.end)
+        output.writeU16(0)
+        output.writeU16(0)
+        output.writeU16(records.count >= 0xFFFF ? 0xFFFF : U16(records.count))
+        output.writeU16(records.count >= 0xFFFF ? 0xFFFF : U16(records.count))
+        output.writeU32(size >= wide ? 0xFFFF_FFFF : U32(size))
+        output.writeU32(position >= wide ? 0xFFFF_FFFF : U32(position))
+        output.writeU16(U16(text.count))
+        output.write(bytes: text)
+        return output.takeBytes()
+    }
+}

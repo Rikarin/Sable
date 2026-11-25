@@ -1,0 +1,55 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// A tar archive written by a task that suspends while it waits. See
+/// `TarWriter`.
+///
+/// ```sable
+/// let pipe = Pipe(pauseWriterThreshold: 1 << 20)
+/// let writer = AsyncTarWriter(pipe.writer)
+/// try! await writer.add(TarEntry("sub", kind: .Directory))
+/// try! await writer.add(TarEntry("sub/a.txt"), "hello".utf8Bytes())
+/// try! await writer.finish()
+/// ```
+public final class AsyncTarWriter<Inner: AsyncWriter> {
+    /// The writer it writes to.
+    public let inner: Inner
+    let format: TarFormat
+    var layout: TarLayout
+
+    /// Writing to the writer, in a format.
+    public init(_ inner: Inner, format: TarFormat = .Pax) {
+        self.inner = inner
+        self.format = format
+        layout = TarLayout()
+    }
+
+    /// An entry that has the bytes, and as many of them as they are.
+    public fn add(_ entry: TarEntry, _ bytes: U8[:] = []) async throws(IoError) {
+        var sized = entry
+        sized.size = bytes.count
+        try await self.begin(sized)
+        try await self.write(bytes)
+    }
+
+    /// An entry whose bytes, as many as it says, are written next.
+    public fn begin(_ entry: TarEntry) async throws(IoError) {
+        let bytes = try layout.begin(entry, format)
+        try await inner.write(bytes)
+    }
+
+    /// More of the bytes of the entry begun.
+    public fn write(_ bytes: U8[:]) async throws(IoError) {
+        let padding = layout.write(bytes.count)
+        try await inner.write(bytes)
+        if padding > 0 {
+            try await inner.write(U8[>..](repeating: 0, count: padding))
+        }
+    }
+
+    /// The archive's end.
+    public fn finish() async throws(IoError) {
+        try await inner.write(layout.finish())
+    }
+}

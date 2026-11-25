@@ -1,0 +1,53 @@
+module Sable.IO.Archives
+
+/// What a tar entry is.
+@derive(Equatable, Hashable, Debug)
+public union TarEntryKind: Sendable {
+    File
+
+    Directory
+
+    /// A symbolic link.
+    Symlink
+
+    /// Another name of an entry before it.
+    HardLink
+
+    CharacterDevice
+
+    BlockDevice
+
+    /// A named pipe.
+    Fifo
+
+    /// Something else, by the byte that says what.
+    Other(flag: U8)
+
+    var flag: U8 {
+        get {
+            return match self {
+                case .File            => 0x30
+                case .HardLink        => 0x31
+                case .Symlink         => 0x32
+                case .CharacterDevice => 0x33
+                case .BlockDevice     => 0x34
+                case .Directory       => 0x35
+                case .Fifo            => 0x36
+                case .Other(let flag) => flag
+            }
+        }
+    }
+
+    static fn of(_ flag: U8) -> TarEntryKind {
+        return match flag {
+            case 0 | 0x30 | 0x37 => .File
+            case 0x31            => .HardLink
+            case 0x32            => .Symlink
+            case 0x33            => .CharacterDevice
+            case 0x34            => .BlockDevice
+            case 0x35            => .Directory
+            case 0x36            => .Fifo
+            case _               => .Other(flag: flag)
+        }
+    }
+}

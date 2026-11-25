@@ -1,0 +1,39 @@
+module Sable.IO.Archives
+
+import Sable.IO
+
+/// How an archive is extracted to a directory. Whatever it is, nothing is
+/// written outside the directory, or through a link in it: an entry with a
+/// name that would be fails.
+///
+/// ```sable
+/// var options = ExtractOptions()
+/// options.overwrite = true
+/// options.links = .Skipped
+/// assert(options.keepTimes)
+/// ```
+public struct ExtractOptions: Sendable {
+    /// Whether a file that is there already is replaced, rather than failing.
+    public var overwrite: Bool = false
+
+    /// What is done with symbolic links.
+    public var links: ArchiveLinks = .Inside
+
+    /// Whether files have the permissions the archive says they had; none has
+    /// more than those of reading, writing and executing. Otherwise they have
+    /// those of any new file.
+    public var keepPermissions: Bool = true
+
+    /// Whether files have the times the archive says they had.
+    public var keepTimes: Bool = true
+
+    /// Whether names are refused that Windows has no files of — a device's, one
+    /// with ":" in it, one that ends with a dot — and "\\" is between a name's
+    /// parts as "/" is, as it always is there.
+    public var portableNames: Bool = false
+
+    /// How much may be extracted.
+    public var limits: ArchiveLimits = ArchiveLimits()
+
+    public init() { }
+}

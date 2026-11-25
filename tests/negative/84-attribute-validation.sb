@@ -21,7 +21,7 @@ fn versioned() { }
 @available(beos)                        //! S3094 'beos' is no platform
 fn elsewhere() { }
 
-@reflectable(true)                      //! S3094 '@reflectable' takes no arguments
+@reflectable(true)                      //! S3094 '@reflectable' takes nothing, or 'callable'
 struct Shown { }
 
 @main                                   //! S3514 'start' takes no parameters
@@ -37,6 +37,6 @@ struct Holder {
     @main                               //! S3514 'run' is a function of the module, not a method
     fn run() { }
 
-    @intrinsic                          //! S3081 only Sable.Core may declare an '@intrinsic'
+    @intrinsic                          //! S3081 only Sable.Core and Sable.Interop may declare an '@intrinsic'
     static fn name() -> String
 }

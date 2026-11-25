@@ -82,11 +82,20 @@ public sealed class ReflectionTests {
     public void ACallableTypeConformsToCallable() =>
         AssertClean("""
                     @reflectable(callable)
-                    public actor Tally { public init() { } public fn add(_ n: Int) -> Int => n }
+                    public actor Tally {
+                        public init() { }
+                        public fn add(_ n: Int) -> Int => n
+                    }
                     @reflectable(callable)
-                    union Shape { Dot; public fn area() -> F64 => 0 }
+                    union Shape {
+                        Dot
+                        public fn area() -> F64 => 0
+                    }
                     @reflectable(callable)
-                    struct Box<T> { var item: T; public fn get() -> T => item }
+                    struct Box<T> {
+                        var item: T
+                        public fn get() -> T => item
+                    }
                     fn first<T: Callable>(_ type: T.Type) -> String => T.callableMembers()[0].name
                     fn probe() -> String => first(Tally.self) + first(Shape.self) + first(Box<Int>.self) + TypeInfo.of(Shape.self).name
                     """);

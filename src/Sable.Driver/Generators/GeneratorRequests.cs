@@ -86,6 +86,7 @@ sealed class GeneratorRequests {
         ActorDeclarationSyntax a => new("actor", a.Identifier, a.Attributes, a.Modifiers, a.TypeParameters, a.BaseTypes, a.Members),
         UnionDeclarationSyntax u => new("union", u.Identifier, u.Attributes, u.Modifiers, u.TypeParameters, u.BaseTypes, u.Members),
         EnumDeclarationSyntax e => new("enum", e.Identifier, e.Attributes, e.Modifiers, null, e.BaseTypes, e.Members),
+        ProtocolDeclarationSyntax p => new("protocol", p.Identifier, p.Attributes, p.Modifiers, p.TypeParameters, p.BaseTypes, p.Members),
         _ => null,
     };
 
@@ -184,6 +185,107 @@ sealed class GeneratorRequests {
 
             Line("ME");
         }
+        // A protocol's requirements, its own and those of the protocols it
+        // refines, each once, as members: what a type that conforms has to
+        // give. Each says which protocol asks for it; one declared elsewhere
+        // is reported at the protocol's name.
+        void Requirements(NamedTypeSymbol? protocol, string at) {
+            var seen = new HashSet<NamedTypeSymbol>();
+            if (protocol is not null) {
+                Of(protocol);
+            }
+
+            void Of(NamedTypeSymbol each) {
+                var definition = each.OriginalDefinition;
+                if (!seen.Add(definition)) {
+                    return;
+                }
+
+                foreach (var refined in Guarded(() => definition.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol).ToList()) ?? []) {
+                    Of(refined);
+                }
+
+                foreach (var associated in definition.AssociatedTypes) {
+                    Line("M", "associatedtype", associated.Name, "1", "0", "0", "0", "-1", at, "0", "-1", "0", definition.Name);
+                    Line("ME");
+                }
+
+                foreach (var requirement in definition.Members) {
+                    switch (requirement) {
+                        case FunctionSymbol { IsAbstract: true } function:
+                            Function(function, definition.Name);
+                            break;
+                        case FieldSymbol { IsAbstract: true } property: {
+                            var type = Guarded(() => property.Type);
+                            Line("M", "var", property.Name, "1", Flag(property.IsStatic), Flag(property.IsAsyncGetter), "0",
+                                Id(types.Add(type)), Place(property, at),
+                                "0", "-1", Flag(property.IsComputed ? property.HasSetter : property.IsMutable), definition.Name);
+                            Line("ME");
+                            break;
+                        }
+                    }
+                }
+            }
+
+            void Function(FunctionSymbol function, string declaredIn) {
+                var kind = function.FunctionKind switch {
+                    FunctionKind.Initializer => "init",
+                    FunctionKind.Operator => "operator",
+                    FunctionKind.Subscript => "subscript",
+                    FunctionKind.Ordinary => "fn",
+                    _ => null,
+                };
+                if (kind is null) {
+                    return;
+                }
+
+                var returned = kind == "init" ? null : Guarded(() => function.ReturnType);
+                var thrown = Guarded(() => function.ThrownType);
+                // 'throws' alone is 'throws(any Error)', which it is not said to be.
+                var thrownId = thrown is null or ExistentialTypeSymbol { Constraint.Name: "Error" } ? -1 : types.Add(thrown);
+                Line("M", kind, function.Name, "1", Flag(function.IsStatic), Flag(function.IsAsync), Flag(thrown is not null),
+                    Id(returned is null || returned.Name == "Void" ? -1 : types.Add(returned)), Place(function, at),
+                    Flag(function.IsMutating), Id(thrownId), "0", declaredIn);
+                foreach (var parameter in function.TypeParameters) {
+                    Line("MT", parameter.Name);
+                }
+
+                foreach (var parameter in function.Parameters) {
+                    var written = parameter.DeclaringSyntax.FirstOrDefault() as ParameterSyntax;
+                    var modifier = parameter.Modifier switch {
+                        ParameterModifier.InOut => "inout",
+                        ParameterModifier.Out => "out",
+                        ParameterModifier.None => "",
+                        var other => other.ToString().ToLowerInvariant(),
+                    };
+                    Line("Q", parameter.Label == "_" ? "" : parameter.Label ?? parameter.Name, parameter.Name,
+                        written?.Type.ToString().Trim() ?? Guarded(() => parameter.Type.ToDisplayString()) ?? "", Flag(parameter.HasDefaultValue),
+                        Place(parameter, at), Id(types.Add(Guarded(() => parameter.Type))),
+                        written?.DefaultValue?.Value.ToString().Trim() ?? "",
+                        modifier, Flag(parameter.IsVariadic), Flag(parameter.IsAutoclosure), Flag(parameter.IsEscaping));
+                }
+
+                Line("ME");
+            }
+
+            // Where a requirement declared in this protocol is; the protocol's
+            // name for one it refines.
+            string Place(Symbol requirement, string fallback) {
+                var declaration = requirement.DeclaringSyntax.FirstOrDefault();
+                for (var up = declaration; up is not null; up = up.Parent) {
+                    if (up == node) {
+                        return Location(declaration switch {
+                            FunctionDeclarationSyntax f => f.Identifier.Span,
+                            ParameterSyntax p => p.Identifier.Span,
+                            var other => other!.Span,
+                        });
+                    }
+                }
+
+                return fallback;
+            }
+        }
+
         if (TypeParts(node) is { } parts) {
             var location = Location(parts.Identifier.Span);
             Line("D", parts.Keyword, parts.Identifier.Text, container, module, Flag(IsPublic(parts.Modifiers)), Flag(IsStatic(parts.Modifiers)), tree.Text.FileName, location, package);
@@ -252,7 +354,11 @@ sealed class GeneratorRequests {
                 }
             }
 
-            Members(parts, symbol as NamedTypeSymbol);
+            if (parts.Keyword == "protocol") {
+                Requirements(symbol as NamedTypeSymbol, location);
+            } else {
+                Members(parts, symbol as NamedTypeSymbol);
+            }
         } else if (node is FunctionDeclarationSyntax function) {
             var location = Location(function.Identifier.Span);
             Line("D", "fn", function.Identifier.Text, container, module, Flag(IsPublic(function.Modifiers)), Flag(IsStatic(function.Modifiers)), tree.Text.FileName, location, package);

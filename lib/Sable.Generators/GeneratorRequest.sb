@@ -112,11 +112,24 @@ struct RequestReader {
             if fields[7] != "-1" {
                 member.returned = resolvedType(fields[7])
             }
+            // A protocol's requirement says more.
+            if fields.count > 12 {
+                member.isMutating = fields[9] == "1"
+                if fields[10] != "-1" {
+                    member.thrown = resolvedType(fields[10])
+                }
+                member.isSettable = fields[11] == "1"
+                member.declaredIn = fields[12]
+            }
             hasMember = true
+        } else if tag == "MT" {
+            member.typeParameters.append(fields[1])
         } else if tag == "ME" {
             finishMember()
-            if member.keyword == "init" {
+            if member.keyword == "init" && declaration.keyword != "protocol" {
                 declaration.initializers.append(member)
+            } else if member.keyword == "var" || member.keyword == "associatedtype" {
+                declaration.properties.append(member)
             } else {
                 declaration.methods.append(member)
             }
@@ -188,6 +201,12 @@ struct RequestReader {
                 hasDefault: fields[4] == "1",
                 defaultText: restored(fields[7]),
                 location: Location { id: fields[5] }
+            }
+            if fields.count > 11 {
+                parameter.modifier = fields[8]
+                parameter.isVariadic = fields[9] == "1"
+                parameter.isAutoclosure = fields[10] == "1"
+                parameter.isEscaping = fields[11] == "1"
             }
             hasParameter = true
         } else if tag == "E" {

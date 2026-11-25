@@ -1,0 +1,294 @@
+module TestingGenerators
+
+import Sable.Generators
+import Sable.Text
+
+// '@mockable' on a protocol: 'Mock<Name>', a final class that conforms to
+// it, whose every requirement is answered by stubs and recorded for
+// verification; and its 'on', which says which calls a stub answers.
+@generator("mockable")
+fn mockable(_ declaration: Declaration, into output: inout Output) {
+    let name = declaration.qualifiedName
+    if declaration.keyword != "protocol" {
+        output.error("'@mockable' makes a mock of a protocol; '\(name)' is a \(declaration.keyword)", at: declaration.location)
+        return
+    }
+    if !declaration.typeParameters.isEmpty {
+        output.error("'@mockable' makes a mock of a protocol with no generic parameters; '\(name)' has them", at: declaration.location)
+        return
+    }
+    var types = TypeWriter(in: declaration.moduleName)
+    types.add("Sable.Testing")
+    var members: MockedMember[>..] = []
+    var wrong = false
+    for property in declaration.properties {
+        if let why = problem(ofProperty: property) {
+            output.error("'\(name)' cannot be mocked: \(why)", at: property.location)
+            wrong = true
+        } else {
+            members.append(MockedMember(property, isProperty: true, &types))
+        }
+    }
+    for method in declaration.methods {
+        if let why = problem(ofMethod: method) {
+            output.error("'\(name)' cannot be mocked: \(why)", at: method.location)
+            wrong = true
+        } else {
+            members.append(MockedMember(method, isProperty: false, &types))
+        }
+    }
+    if wrong {
+        return
+    }
+    let mock = "Mock" + declaration.name
+    let access = declaration.isPublic ? "public " : ""
+    let body = TextBuilder()
+    body.appendLine("/// A mock of '\(name)', which '@mockable' wrote: what each call answers")
+    body.appendLine("/// its 'on' says, and verifies.")
+    body.appendLine("@immutable")
+    body.appendLine("\(access)final class \(mock): \(name), Mocked {")
+    body.appendLine("    \(access)let recorder: MockRecorder")
+    for (i, member) in members.enumerated() {
+        body.appendLine("    let member\(i): MockMethod<\(member.arguments), \(member.result), \(member.thrown)>")
+        if member.isSettable {
+            body.appendLine("    let member\(i)Set: MockMethod<\(member.result), Void, Never>")
+        }
+    }
+    body.appendLine()
+    body.appendLine("    \(access)init(_ behavior: MockBehavior = .Loose) {")
+    body.appendLine("        recorder = MockRecorder(behavior)")
+    for (i, member) in members.enumerated() {
+        let otherwise = member.empty.map { ", otherwise: { \($0) }" } ?? ""
+        body.appendLine("        member\(i) = MockMethod<\(member.arguments), \(member.result), \(member.thrown)>(recorder, describe: { arguments in \(member.describe("arguments")) }\(otherwise))")
+        if member.isSettable {
+            body.appendLine("        member\(i)Set = MockMethod<\(member.result), Void, Never>(recorder, describe: { value in \"\(member.name) = \\(value:?)\" }, otherwise: { () })")
+        }
+    }
+    body.appendLine("    }")
+    for (i, member) in members.enumerated() {
+        body.appendLine()
+        body.append(member.implementation(i, access))
+    }
+    body.appendLine()
+    body.appendLine("    /// The calls of each member that the matchers given match, to stub and to verify.")
+    body.appendLine("    \(access)var on: Calls => Calls(owner: self)")
+    body.appendLine()
+    body.appendLine("    \(access)struct Calls {")
+    body.appendLine("        let owner: \(mock)")
+    for (i, member) in members.enumerated() {
+        body.appendLine()
+        body.append(member.calls(i, access))
+    }
+    body.appendLine("    }")
+    body.appendLine("}")
+    let file = declaration.moduleName.replacing(".", with: "_") + "_" + name.replacing(".", with: "_")
+    output.add(file: "\(file).mockable.sb", types.importLines() + "\n" + body.build())
+}
+
+fn problem(ofProperty property: Member) -> String? {
+    if property.keyword == "associatedtype" {
+        return "its associated type '\(property.name)' is no type a mock can choose"
+    }
+    if property.isStatic {
+        return "'\(property.name)' is static"
+    }
+    if property.isAsync {
+        return "'\(property.name)' is read by waiting"
+    }
+    return none
+}
+
+fn problem(ofMethod method: Member) -> String? {
+    if method.keyword != "fn" {
+        return "it requires \(method.keyword == "init" ? "an initialiser" : method.keyword == "operator" ? "the operator '\(method.name)'" : "a subscript")"
+    }
+    if method.isStatic {
+        return "'\(method.name)' is static"
+    }
+    if !method.typeParameters.isEmpty {
+        return "'\(method.name)' is generic"
+    }
+    for parameter in method.parameters {
+        if !parameter.modifier.isEmpty && parameter.modifier != "borrowing" {
+            return "the parameter '\(parameter.name)' of '\(method.name)' is '\(parameter.modifier)'"
+        }
+        if parameter.isVariadic {
+            return "the parameter '\(parameter.name)' of '\(method.name)' is variadic"
+        }
+        if parameter.resolved.kind == "function" && !parameter.isEscaping && !parameter.isAutoclosure {
+            return "the parameter '\(parameter.name)' of '\(method.name)' is a closure that does not escape, which a mock cannot keep"
+        }
+    }
+    return none
+}
+
+// A requirement as the mock writes it.
+struct MockedMember {
+    let name: String
+    let isProperty: Bool
+    let isSettable: Bool
+    let isAsync: Bool
+    let isThrowing: Bool
+    // Each parameter's label ("" for none), its type, and whether it is an
+    // autoclosure's; and whether all are Equatable.
+    var labels: String[>..] = []
+    var types: String[>..] = []
+    var autoclosures: Bool[>..] = []
+    var escaping: Bool[>..] = []
+    // Whether each is a closure: no matcher is given for one, nor is it
+    // described but as one.
+    var closures: Bool[>..] = []
+    var equatable: Bool = true
+    let result: String
+    let thrown: String
+    let empty: String?
+
+    init(_ member: Member, isProperty: Bool, _ writer: inout TypeWriter) {
+        name = member.name
+        self.isProperty = isProperty
+        isSettable = isProperty && member.isSettable
+        isAsync = member.isAsync
+        isThrowing = member.isThrowing
+        for parameter in member.parameters {
+            labels.append(parameter.label)
+            escaping.append(parameter.isEscaping)
+            closures.append(parameter.resolved.kind == "function" && !parameter.isAutoclosure)
+            if parameter.isAutoclosure && parameter.resolved.kind == "function" && !parameter.resolved.arguments.isEmpty {
+                let value = parameter.resolved.arguments[parameter.resolved.arguments.count - 1]
+                types.append(writer.source(value))
+                autoclosures.append(true)
+                equatable = equatable && value.conforms(to: "Equatable")
+            } else {
+                types.append(writer.source(parameter.resolved))
+                autoclosures.append(false)
+                equatable = equatable && parameter.resolved.conforms(to: "Equatable")
+            }
+        }
+        if let returned = member.returned {
+            result = writer.source(returned)
+        } else {
+            result = "Void"
+        }
+        if let error = member.thrown {
+            thrown = writer.source(error)
+        } else {
+            thrown = member.isThrowing ? "any Error" : "Never"
+        }
+        empty = emptyValue(member.returned)
+    }
+
+    // The arguments' type: a tuple of several, Void of none.
+    var arguments: String => types.isEmpty ? "Void" : types.count == 1 ? types[0] : "(" + types.joined(separator: ", ") + ")"
+
+    // The arguments as one value, from parameters 'p0'...
+    var given: String {
+        get {
+            var values: String[>..] = []
+            for i in 0..<types.count {
+                values.append(autoclosures[i] ? "p\(i)()" : "p\(i)")
+            }
+            return types.isEmpty ? "()" : types.count == 1 ? values[0] : "(" + values.joined(separator: ", ") + ")"
+        }
+    }
+
+    // The arguments' parts, of the value named.
+    fn part(_ value: String, _ i: Int) -> String {
+        return types.count == 1 ? value : "\(value).\(i)"
+    }
+
+    // A call as source would write it, of the arguments named, as code.
+    fn describe(_ value: String) -> String {
+        if isProperty {
+            return "\"\(name)\""
+        }
+        var parts: String[>..] = []
+        for i in 0..<types.count {
+            let label = labels[i].isEmpty ? "" : "\(labels[i]): "
+            parts.append(closures[i] ? "\(label){ … }" : "\(label)\\(\(part(value, i)):?)")
+        }
+        return "\"\(name)(" + parts.joined(separator: ", ") + ")\""
+    }
+
+    fn parameterList(_ typeOf: (Int) -> String, defaults: String = "", only: Int[>..]? = none) -> String {
+        var parts: String[>..] = []
+        for i in only ?? (0..<types.count).toArray() {
+            parts.append("\(labels[i].isEmpty ? "_" : labels[i]) p\(i): \(typeOf(i))\(defaults)")
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    fn implementation(_ i: Int, _ access: String) -> String {
+        let text = TextBuilder()
+        let waits = isAsync ? "await " : ""
+        let tries = isThrowing ? "try " : ""
+        let invoke = isAsync ? "invokeAsync" : "invoke"
+        if isProperty {
+            text.appendLine("    \(access)var \(name): \(result) {")
+            text.appendLine("        get {")
+            text.appendLine("            return member\(i).invoke(())")
+            text.appendLine("        }")
+            if isSettable {
+                text.appendLine("        set(value) {")
+                text.appendLine("            member\(i)Set.invoke(value)")
+                text.appendLine("        }")
+            }
+            text.appendLine("    }")
+            return text.build()
+        }
+        let effects = (isAsync ? " async" : "") + (isThrowing ? (thrown == "any Error" ? " throws" : " throws(\(thrown))") : "")
+        let returns = result == "Void" ? "" : " -> \(result)"
+        let parameters = parameterList({ autoclosures[$0] ? "@autoclosure () -> \(types[$0])" : escaping[$0] ? "@escaping \(types[$0])" : types[$0] })
+        text.appendLine("    \(access)fn \(name)(\(parameters))\(effects)\(returns) {")
+        text.appendLine("        \(result == "Void" ? "" : "return ")\(tries)\(waits)member\(i).\(invoke)(\(given))")
+        text.appendLine("    }")
+        return text.build()
+    }
+
+    fn calls(_ i: Int, _ access: String) -> String {
+        let text = TextBuilder()
+        let call = "MockCall<\(arguments), \(result), \(thrown)>"
+        if isProperty {
+            text.appendLine("        /// Reads of '\(name)'.")
+            text.appendLine("        \(access)var \(name): \(call) => \(call)(owner.member\(i), \"\(name)\", { _ in true })")
+            if isSettable {
+                let setter = "set" + name.slice(from: 0, to: 1).uppercased() + name.slice(from: 1, to: name.count)
+                let setCall = "MockCall<\(result), Void, Never>"
+                text.appendLine()
+                text.appendLine("        /// Writes of '\(name)' that the matcher matches.")
+                text.appendLine("        \(access)fn \(setter)(_ value: Matcher<\(result)> = .any) -> \(setCall) {")
+                text.appendLine("            return \(setCall)(owner.member\(i)Set, \"\(name) = \\(value)\", { value.matches($0) })")
+                text.appendLine("        }")
+            }
+            return text.build()
+        }
+        var shown: String[>..] = []
+        var tests: String[>..] = []
+        var given: Int[>..] = []
+        for j in 0..<types.count {
+            if closures[j] {
+                shown.append("\(labels[j].isEmpty ? "" : labels[j] + ": "){ … }")
+            } else {
+                shown.append("\(labels[j].isEmpty ? "" : labels[j] + ": ")\\(p\(j))")
+                tests.append("p\(j).matches(\(part("arguments", j)))")
+                given.append(j)
+            }
+        }
+        let matches = tests.isEmpty ? "_ in true" : "arguments in " + tests.joined(separator: " && ")
+        text.appendLine("        /// The calls of '\(name)' that the matchers match.")
+        text.appendLine("        \(access)fn \(name)(\(parameterList({ "Matcher<\(types[$0])>" }, defaults: " = .any", only: given))) -> \(call) {")
+        text.appendLine("            return \(call)(owner.member\(i), \"\(name)(\(shown.joined(separator: ", ")))\", { \(matches) })")
+        text.appendLine("        }")
+        if equatable && !types.isEmpty {
+            var equal: String[>..] = []
+            for j in 0..<types.count {
+                equal.append("\(labels[j].isEmpty ? "" : labels[j] + ": ").equal(p\(j))")
+            }
+            text.appendLine()
+            text.appendLine("        /// The calls of '\(name)' with these arguments.")
+            text.appendLine("        \(access)fn \(name)(\(parameterList({ types[$0] }))) -> \(call) {")
+            text.appendLine("            return \(name)(\(equal.joined(separator: ", ")))")
+            text.appendLine("        }")
+        }
+        return text.build()
+    }
+}

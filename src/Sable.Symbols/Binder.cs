@@ -4345,7 +4345,7 @@ public sealed partial class Binder {
 
         bool LacksMember(ImplicitMemberAccessExpressionSyntax member) =>
             type is ArrayTypeSymbol
-            || (type is NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Union or TypeKind.Enum } named
+            || (type is NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Builtin or TypeKind.Class or TypeKind.Union or TypeKind.Enum } named
                 && CalleeName(member.Name) is { Length: > 0 } name
                 && !HasMember(named, name)
                 && LookupMemberOfKind(named, name, instance: false) is null);

@@ -1296,6 +1296,24 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
 - `expectThrows(E.self) { … }` gives the error thrown, `expectThrows(error)`
   wants that very one, `expectThrows(saying: "text")` one that says that,
   `expectThrows { … }` any, `expectNoThrow` none; each has an async form.
+- `@mockable` on a protocol writes `Mock<Name>`, a final class that conforms
+  to it (and to those it refines): Moq's and mockall's, made by a source
+  generator (docs/08) as Sable has no run-time proxies. Its `on` names the
+  calls of a member that `Matcher`s match — `.any` (the default), `.equal(x)`,
+  `.matching { … }`, `.equivalent(to:)`, `.not(m)`; or values alone, where
+  every parameter is Equatable — to stub them, `.returns(v)`, `.throwing(e)`,
+  `.does { arguments in … }` (which may wait), answered in turn, the last
+  again; and to verify them, `.verify(.once)` with `Times`, `.arguments`,
+  `verifyInOrder([...])` across mocks and `verifyNoOtherCalls(mock)`. A
+  property is `on.name` and `on.setName(_:)`. A loose mock (the default)
+  answers what no stub does with the empty value of its type, where it has
+  one; `.Strict` fails the test. A mock is `@immutable`, so Sendable, and may
+  be called from any task. A protocol that needs a mock but not in the code
+  it is declared in can be refined in the tests: `@mockable protocol
+  TestGateway: Gateway { }` makes a `MockTestGateway` that is a `Gateway`.
+  What cannot be mocked — a static or generic member, an `inout` or
+  variadic parameter, a closure that does not escape, an associated type —
+  is an error at the attribute.
 - A `Fixture` is what tests are run with: `setUp` and `tearDown`, which may wait
   and throw, and how long one lives — `.PerTest`, unless it says `.PerSuite`,
   `.PerCollection` or `.PerPackage`. A `@suite`'s initialiser asks for the

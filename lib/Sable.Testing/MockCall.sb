@@ -1,0 +1,93 @@
+module Sable.Testing
+
+/// The calls of one member of a mock that the matchers given match: what a
+/// mock's `on` gives, to say what they are answered with, and to verify
+/// how often they were made.
+///
+/// A stub's answers are given in turn, call by call, the last again for
+/// every call after; of two stubs that match a call, the later answers it.
+///
+/// ```sable ignore
+/// @mockable
+/// protocol PaymentGateway {
+///     fn charge(amount: Int) throws(PaymentError) -> Receipt
+/// }
+///
+/// let gateway = MockPaymentGateway()
+/// gateway.on.charge(amount: .any).returns(Receipt(id: 1)).throwing(.Declined)
+/// gateway.on.charge(amount: .matching { $0 > 1000 }).throwing(.Limit)
+/// checkout(gateway)
+/// gateway.on.charge(amount: 100).verify(.once)
+/// ```
+public final class MockCall<A, R, E: Error>: MockVerifiable {
+    let method: MockMethod<A, R, E>
+    let matches: (A) -> Bool
+    let text: String
+    var stub: MockStub<A, R, E>?
+
+    /// The calls of the member that the predicate matches, written so.
+    public init(_ method: MockMethod<A, R, E>, _ text: String, _ matches: @escaping (A) -> Bool) {
+        self.method = method
+        self.text = text
+        self.matches = matches
+        stub = none
+    }
+
+    fn answer(_ answer: MockAnswer<A, R, E>) -> MockCall<A, R, E> {
+        if let stub = stub {
+            method.answer(stub, answer)
+        } else {
+            let made = MockStub<A, R, E>(matches)
+            made.answers.append(answer)
+            stub = made
+            method.add(made)
+        }
+        return self
+    }
+
+    /// Answers with the value; after the answers given before, if any.
+    @discardable
+    public fn returns(_ value: R) -> MockCall<A, R, E> {
+        return answer(.Value(value))
+    }
+
+    /// Answers by throwing the error.
+    @discardable
+    public fn throwing(_ error: E) -> MockCall<A, R, E> {
+        return answer(.Failure(error))
+    }
+
+    /// Answers with what the body makes of the arguments: a tuple of them,
+    /// for a member of several.
+    @discardable
+    public fn does(_ body: @escaping (A) throws(E) -> R) -> MockCall<A, R, E> {
+        return answer(.Run(body))
+    }
+
+    /// Answers with what the body makes of the arguments, waiting for it:
+    /// of a member that waits.
+    @discardable
+    public fn does(_ body: @escaping async (A) throws(E) -> R) -> MockCall<A, R, E> {
+        return answer(.Wait(body))
+    }
+
+    /// Fails the test unless the calls were made so many times, and counts
+    /// them as verified (`verifyNoOtherCalls`). The test goes on.
+    public fn verify(_ times: Times = .atLeastOnce, file: String = #file, line: Int = #line) {
+        let count = method.matching(matches, verifying: true).count
+        if !times.allows(count) {
+            let wanted = times.most == 0 ? "was not to be called" : "was to be called \(times)"
+            let made = count == 0 ? "was never called" : "was called \(Times.count(count))"
+            recordFailure("\(text) \(wanted), and \(made)\(method.listed())", file: file, line: line)
+        }
+    }
+
+    /// The arguments of the calls made that it matches, in order.
+    public var arguments: A[>..] => method.matching(matches, verifying: false).map({ $0.arguments }).toArray()
+
+    public fn callNumbers() -> Int[>..] {
+        return method.matching(matches, verifying: false).map({ $0.number }).toArray()
+    }
+
+    public var callText: String => text
+}

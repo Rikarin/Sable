@@ -18,7 +18,8 @@ module Sable.Generators
 /// A declaration that carries a generator's attribute: a type, a function
 /// or a method.
 public struct Declaration {
-    /// How it is declared: "struct", "class", "actor", "union", "enum" or "fn".
+    /// How it is declared: "struct", "class", "actor", "union", "enum",
+    /// "protocol" or "fn".
     public var keyword: String
     /// Its name, as declared.
     public var name: String
@@ -67,8 +68,13 @@ public struct Declaration {
     /// A type's initialisers, as it declares them, or else the one the
     /// compiler writes of its stored properties.
     public var initializers: Member[>..] = []
-    /// A type's methods, as it declares them: not its extensions'.
+    /// A type's methods, as it declares them: not its extensions'. A
+    /// protocol's are its requirements, those of the protocols it refines
+    /// among them, and its initialisers', operators' and subscripts'.
     public var methods: Member[>..] = []
+    /// A protocol's properties and associated types, those of the protocols
+    /// it refines among them.
+    public var properties: Member[>..] = []
     /// Whether nothing derives from it: any type but a class not `final`.
     public var isFinal: Bool = false
     /// The package it is in, for a dependency's declaration; "" for the

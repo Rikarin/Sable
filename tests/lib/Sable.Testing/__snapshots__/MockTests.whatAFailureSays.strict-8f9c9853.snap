@@ -1,0 +1,1 @@
+expectation failed: tick() was called, and no stub answers it: the mock is strict

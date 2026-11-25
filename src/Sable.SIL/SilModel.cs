@@ -2910,6 +2910,12 @@ public static class SilBuiltins {
         // The next task the running thread spawns starts cancelled: a
         // cancelled group's child, before any thread can run it.
         Add("task_spawn_cancelled", SilType.Unit);
+
+        // A wait for a child with a limit (withTimeout): begun; whether the
+        // child has ended; and, the child's, that it has.
+        Add("task_timed_begin", SilType.Unit);
+        Add("task_timed_woken", SilType.Bool);
+        Add("task_timed_end", SilType.Unit);
         Add("task_hop", SilType.Unit, SilType.Int);
         Add("task_waitlist_new", SilType.Int);
         Add("task_waitlist_free", SilType.Unit, SilType.Int);

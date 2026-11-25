@@ -628,6 +628,17 @@ static bool mutex_try_lock(PlatformMutex *mutex) {
     return pthread_mutex_trylock(mutex) == 0;
 }
 
+// What it looks like now, without taking its cache line from the thread that
+// holds it; true where the system's mutex does not say.
+static bool mutex_looks_free(PlatformMutex *mutex) {
+#if defined(__GLIBC__)
+    return __atomic_load_n(&mutex->__data.__lock, __ATOMIC_RELAXED) == 0;
+#else
+    (void)mutex;
+    return true;
+#endif
+}
+
 // A timed wait counts on the monotonic clock: macOS waits for a relative
 // time, and elsewhere the condition is made to use that clock.
 static void condition_init(PlatformCondition *condition) {

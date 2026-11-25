@@ -85,28 +85,33 @@ public final class Pipe {
     }
 
     fn flushWritten() async -> FlushResult {
-        let (published, full) = state.withLock { (state: inout PipeState) -> (Bool, Bool) in
-            let published = state.publish()
-            return (published, state.buffered >= pauseWriterThreshold)
+        return await flushed([])
+    }
+
+    // The bytes copied in and flushed, with whatever was before them: under
+    // the lock once, unless the flush must wait.
+    fn flushed(_ bytes: U8[:]) async -> FlushResult {
+        let (wakes, ended) = state.withLock { (state: inout PipeState) -> (Bool, FlushResult?) in
+            state.copyIn(bytes)
+            let wakes = state.publish() && state.readerWaits
+            if wakes {
+                state.readerWaits = false
+            }
+            // Full, it waits until what is left is less than that.
+            let full = state.buffered >= pauseWriterThreshold
+            return (wakes, state.flushUnder(full ? resumeWriterThreshold : Int.max))
         }
-        if published {
+        if wakes {
             readers.wakeAll()
         }
-        var waits = full
+        if let result = ended {
+            return result
+        }
         while true {
             let ticket = writers.ticket
-            let result = state.withLock { (state: inout PipeState) -> FlushResult? in
-                if waits && state.buffered > resumeWriterThreshold && !state.readerCompleted && !state.flushCanceled {
-                    return none
-                }
-                let canceled = state.flushCanceled
-                state.flushCanceled = false
-                return FlushResult { isCompleted: state.readerCompleted, isCanceled: canceled }
-            }
-            if let result = result {
+            if let result = state.withLock({ $0.flushUnder(resumeWriterThreshold) }) {
                 return result
             }
-            waits = true
             await writers.park(since: ticket)
         }
     }
@@ -115,6 +120,7 @@ public final class Pipe {
         state.withLock { (state: inout PipeState) in
             let _ = state.publish()
             state.writerCompleted = true
+            state.readerWaits = false
         }
         readers.wakeAll()
     }
@@ -146,11 +152,15 @@ public final class Pipe {
     }
 
     fn advanceReader(consumed: Int, examined: Int) {
-        let buffered = state.withLock { (state: inout PipeState) -> Int in
+        let wakes = state.withLock { (state: inout PipeState) -> Bool in
             state.advance(consumed, examined)
-            return state.buffered
+            let wakes = state.writerWaits && state.buffered <= resumeWriterThreshold
+            if wakes {
+                state.writerWaits = false
+            }
+            return wakes
         }
-        if buffered <= resumeWriterThreshold {
+        if wakes {
             writers.wakeAll()
         }
     }
@@ -186,6 +196,10 @@ struct PipeState {
     var readerCompleted: Bool
     var readCanceled: Bool
     var flushCanceled: Bool
+    // A task has looked, since the list it parks in was last woken, and
+    // found it must wait: an end wakes the other only if one has.
+    var readerWaits: Bool
+    var writerWaits: Bool
 
     init(_ segmentSize: Int) {
         self.segmentSize = segmentSize
@@ -201,6 +215,20 @@ struct PipeState {
         readerCompleted = false
         readCanceled = false
         flushCanceled = false
+        readerWaits = false
+        writerWaits = false
+    }
+
+    // What a flush gives once no more than this is buffered, or it need not
+    // wait for that; none while it must.
+    mutating fn flushUnder(_ most: Int) -> FlushResult? {
+        if buffered > most && !readerCompleted && !flushCanceled {
+            writerWaits = true
+            return none
+        }
+        let canceled = flushCanceled
+        flushCanceled = false
+        return FlushResult { isCompleted: readerCompleted, isCanceled: canceled }
     }
 
     mutating fn copyIn(_ bytes: U8[:]) {
@@ -262,6 +290,7 @@ struct PipeState {
     mutating fn read() -> ReadResult? {
         precondition(!readerCompleted, "a pipe read after its reader completed")
         if buffered <= examined && !writerCompleted && !readCanceled {
+            readerWaits = true
             return none
         }
         let canceled = readCanceled

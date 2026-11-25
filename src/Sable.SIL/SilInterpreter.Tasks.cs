@@ -29,7 +29,7 @@ public sealed partial class SilInterpreter {
         /// <summary>The root frame, once the task has begun.</summary>
         public HeapObject? Frame;
 
-        public bool Done, Finishing, Cancelled, Sleeping, Queued;
+        public bool Done, Finishing, Cancelled, Sleeping, Queued, Timed, TimedWoken;
         public long Deadline, SleepTicket, Priority = MediumPriority, Escalated = MediumPriority;
 
         /// <summary>The task it waits for, which its escalation reaches.</summary>
@@ -440,6 +440,24 @@ public sealed partial class SilInterpreter {
                 return true;
             }
 
+            case "task_timed_begin":
+                Current.TimedWoken = false;
+                return null;
+
+            case "task_timed_woken":
+                return Current.TimedWoken;
+
+            case "task_timed_end":
+                if (Current.Parent is { } waiting) {
+                    waiting.TimedWoken = true;
+                    if (waiting is { Timed: true, Sleeping: true }) {
+                        waiting.Sleeping = false;
+                        Enqueue(waiting);
+                    }
+                }
+
+                return null;
+
             case "task_spawn_cancelled":
                 _spawnCancelled = true;
                 return null;
@@ -531,12 +549,19 @@ public sealed partial class SilInterpreter {
 
             // A cancelled task does not sleep.
             case "async_sleep": {
+                // Under 0: for as long above it, or until a child's 'task_timed_end'.
                 var nanoseconds = (long)operands[0]!;
-                if (nanoseconds <= 0 || Current.Cancelled) {
+                var self = Current;
+                self.Timed = nanoseconds < 0;
+                nanoseconds = nanoseconds == long.MinValue ? long.MaxValue : Math.Abs(nanoseconds);
+                if (nanoseconds == 0 || self.Cancelled) {
                     return Yield();
                 }
 
-                var self = Current;
+                if (self is { Timed: true, TimedWoken: true }) {
+                    return false;
+                }
+
                 var now = Monotonic();
                 self.Deadline = nanoseconds > long.MaxValue - now ? long.MaxValue : now + nanoseconds;
                 self.Sleeping = true;

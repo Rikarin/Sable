@@ -1081,7 +1081,7 @@ public sealed class IncrementalTests {
     ///     Checked by its arguments, as this may not run where Linux does.
     /// </summary>
     [Theory]
-    [InlineData(NativePlatform.Linux, new[] { "-Wl,--gc-sections", "-lm", "-pthread" })]
+    [InlineData(NativePlatform.Linux, new[] { "-Wl,--gc-sections", "-lm", "-ldl", "-pthread" })]
     [InlineData(NativePlatform.MacOS, new[] { "-Wl,-dead_strip" })]
     public void ASeparateLinkTakesThePlatformsLibraries(NativePlatform platform, string[] flags) {
         Assert.Equal(flags, NativeBuild.PlatformLinkFlags(platform));
@@ -1110,12 +1110,12 @@ public sealed class IncrementalTests {
         Assert.Empty(NativeBuild.LtoFlags(release with { Lto = LtoMode.Off }, NativePlatform.MacOS, linksBitcode: true));
         Assert.Empty(NativeBuild.LtoFlags(release with { OptLevel = "0" }, NativePlatform.MacOS, linksBitcode: true));
 
-        Assert.Equal(["-Wl,--gc-sections", "-lm", "-pthread", "-Wl,--strip-all", "-Wl,-rpath,$ORIGIN"],
+        Assert.Equal(["-Wl,--gc-sections", "-lm", "-ldl", "-pthread", "-Wl,--strip-all", "-Wl,-rpath,$ORIGIN"],
             NativeBuild.LinkFlags(release with { Strip = StripMode.Symbols, Rpath = true }, NativePlatform.Linux));
         Assert.Equal(["-Wl,-dead_strip", "-Wl,-S"], NativeBuild.LinkFlags(release with { Strip = StripMode.DebugInfo }, NativePlatform.MacOS));
-        Assert.Equal(["a.o", "-o", "program", "-Wl,--gc-sections", "-lm", "-pthread", "-Wl,--strip-debug"],
+        Assert.Equal(["a.o", "-o", "program", "-Wl,--gc-sections", "-lm", "-ldl", "-pthread", "-Wl,--strip-debug"],
             NativeObjects.LinkArguments(["a.o"], "program", NativePlatform.Linux, release with { Strip = StripMode.DebugInfo }));
-        Assert.Equal(["-Wl,--gc-sections", "-lm", "-pthread", "-Wl,--no-gc-sections"],
+        Assert.Equal(["-Wl,--gc-sections", "-lm", "-ldl", "-pthread", "-Wl,--no-gc-sections"],
             NativeBuild.LinkFlags(NativeOptions.Of(optimise: false, debug: true), NativePlatform.Linux));
         Assert.Equal(["-Wno-override-module", "-fno-global-isel"], mac.IrFlags);
         Assert.Equal(["-Wno-override-module"], NativeTarget.Of("aarch64-unknown-linux-gnu").IrFlags);

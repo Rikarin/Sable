@@ -45,6 +45,9 @@ public sealed record SourceHeader(string? Module, IReadOnlyList<string> Imports)
                 }
 
                 imports.Add(imported);
+            } else if (line[0] == '#' && module is not null && text.IndexOf("import ", at, StringComparison.Ordinal) < 0) {
+                // Declarations under an '#if', with no import among them.
+                break;
             } else if (line[0] is '#' or '/' || module is null) {
                 return null;
             } else {

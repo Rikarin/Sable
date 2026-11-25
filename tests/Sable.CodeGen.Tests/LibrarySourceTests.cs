@@ -33,6 +33,7 @@ public sealed class LibrarySourceTests {
     [InlineData("", null, "")]
     [InlineData("module A\n/* a comment */\nimport B\n", null, null)]
     [InlineData("module A\n#if DEBUG\nimport B\n#endif\n", null, null)]
+    [InlineData("module A\nimport B\n#if DEBUG\nfn f() { }\n#endif\n", "A", "B")]
     [InlineData("module A\nimport B as C\n", null, null)]
     [InlineData("module A\nimport B.{ X }\n", null, null)]
     [InlineData("module A; import B\n", null, null)]

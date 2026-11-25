@@ -14,7 +14,7 @@ struct Sorted<T: Comparable> {
 @test
 fn aGenericTypeMakesTypesOfIt() {
     let pair: GenericType = Pair.self
-    let made = pair.instantiate([Int.self, String.self])
+    let made = pair.instantiate([Int.self, String.self])!
     assert(made == Pair<Int, String>.self)
     assertEqual(pair.parameterCount, 2)
     assertEqual(pair.arguments(of: Pair<Int, String>.self)!.count, 2)
@@ -28,7 +28,7 @@ fn whatDoesNotFitIsNone() {
     let pair: GenericType = Pair.self
     assert(pair.instantiate([Int.self]) == none)
     let sorted: GenericType = Sorted.self
-    assert(sorted.instantiate([Int.self]) == Sorted<Int>.self)
+    assert(sorted.instantiate([Int.self])! == Sorted<Int>.self)
 }
 
 @test

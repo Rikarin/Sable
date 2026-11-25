@@ -690,7 +690,13 @@ public sealed partial class SilGen {
             return known;
         }
 
-        var type = _external.TryGetValue(name, out var signature) ? signature() : null;
+        // Not declared yet, perhaps: main may ask for a library function
+        // before the library's declarations are gone through.
+        if (!_external.TryGetValue(name, out var signature)) {
+            return null;
+        }
+
+        var type = signature();
         _externalTypes[name] = type;
         return type;
     }

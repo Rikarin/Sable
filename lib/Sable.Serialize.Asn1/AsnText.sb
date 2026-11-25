@@ -1,0 +1,186 @@
+module Sable.Serialize.Asn1
+
+import Sable.Text
+
+// The text that bytes known to be UTF-8 are.
+fn textOf(_ utf8: U8[:]) -> String {
+    unsafe {
+        return String.fromUtf8Unchecked(utf8)
+    }
+}
+
+// Whether a byte is a character of a type whose characters are bytes, as
+// this reads and writes it.
+fn isCharacter(_ byte: U8, _ kind: AsnStringKind) -> Bool {
+    return match kind {
+        case .Numeric          => byte == 0x20 || (byte >= 0x30 && byte <= 0x39)
+        case .Printable        => isPrintable(byte)
+        case .Visible          => byte >= 0x20 && byte < 0x7F
+        case .Graphic          => byte >= 0x20 && byte < 0x7F
+        case .ObjectDescriptor => byte >= 0x20 && byte < 0x7F
+        case .Ia5              => byte < 0x80
+        // An escape would choose another character set (ISO/IEC 2022).
+        case _ => byte < 0x80 && byte != 0x1B
+    }
+}
+
+fn isPrintable(_ byte: U8) -> Bool {
+    if byte >= 0x61 {
+        return byte <= 0x7A
+    }
+    if byte >= 0x41 {
+        return byte <= 0x5A
+    }
+    if byte >= 0x27 {
+        return byte <= 0x3A ? byte != 0x2A : byte == 0x3D || byte == 0x3F
+    }
+    return byte == 0x20
+}
+
+// Whether the type's text is any Unicode, as UTF-8.
+fn isUtf8(_ kind: AsnStringKind) -> Bool {
+    return kind == .Utf8 || kind == .OidIri || kind == .RelativeOidIri
+}
+
+// The text the bytes are, the first of them at that position.
+fn decodeText(_ octets: U8[:], _ kind: AsnStringKind, _ at: Int) throws(AsnError) -> String {
+    if kind == .Bmp || kind == .Universal {
+        return try decodeWide(octets, kind == .Bmp ? 2 : 4, at)
+    }
+    if isUtf8(kind) {
+        let wrong = Runtime.validateUtf8(bytes: octets)
+        if wrong >= 0 {
+            throw AsnError.Malformed(at: at + wrong, reason: "ill-formed UTF-8")
+        }
+        let text = textOf(octets)
+        if kind != .Utf8 {
+            try checkIri(text, kind, at)
+        }
+        return text
+    }
+    if kind == .Teletex && !octets.contains(0x1B) {
+        return decodeTeletex(octets)
+    }
+    for i in 0..<octets.count {
+        if !isCharacter(octets[i], kind) {
+            if kind == .Teletex || kind == .Videotex || kind == .Graphic || kind == .General || kind == .ObjectDescriptor {
+                throw AsnError.OutOfRange(at: at + i, reason: "\(kind.tag) is read as text only where it is ASCII")
+            }
+            throw AsnError.Malformed(at: at + i, reason: "a byte that is no character of a \(kind.tag)")
+        }
+    }
+    return textOf(octets)
+}
+
+// UTF-8, if it is that, or else Latin-1: what is called a T61String.
+fn decodeTeletex(_ octets: U8[:]) -> String {
+    if Runtime.validateUtf8(bytes: octets) < 0 {
+        return textOf(octets)
+    }
+    var utf8: U8[>..] = []
+    for byte in octets {
+        appendScalar(&utf8, U32(byte))
+    }
+    return textOf(utf8)
+}
+
+// Characters of so many bytes each, the most significant first.
+fn decodeWide(_ octets: U8[:], _ width: Int, _ at: Int) throws(AsnError) -> String {
+    if octets.count % width != 0 {
+        throw AsnError.Malformed(at: at + octets.count, reason: "the text ends inside a character")
+    }
+    var utf8: U8[>..] = []
+    var i = 0
+    while i < octets.count {
+        var scalar: U32 = 0
+        for k in 0..<width {
+            scalar = scalar << 8 | U32(octets[i + k])
+        }
+        if scalar > 0x10FFFF || (scalar >= 0xD800 && scalar < 0xE000) {
+            throw AsnError.Malformed(at: at + i, reason: "not a Unicode character")
+        }
+        appendScalar(&utf8, scalar)
+        i += width
+    }
+    return textOf(utf8)
+}
+
+// The character's UTF-8.
+fn appendScalar(_ utf8: inout U8[>..], _ scalar: U32) {
+    if scalar < 0x80 {
+        utf8.append(U8.truncating(scalar))
+        return
+    }
+    if scalar < 0x800 {
+        utf8.append(0xC0 | U8.truncating(scalar >> 6))
+    } else {
+        if scalar < 0x10000 {
+            utf8.append(0xE0 | U8.truncating(scalar >> 12))
+        } else {
+            utf8.append(0xF0 | U8.truncating(scalar >> 18))
+            utf8.append(0x80 | U8.truncating(scalar >> 12 & 0x3F))
+        }
+        utf8.append(0x80 | U8.truncating(scalar >> 6 & 0x3F))
+    }
+    utf8.append(0x80 | U8.truncating(scalar & 0x3F))
+}
+
+// An identifier's labels: after a '/' each, but for a relative one's first,
+// and none of them empty.
+fn checkIri(_ text: String, _ kind: AsnStringKind, _ at: Int) throws(AsnError) {
+    var utf8: U8[>..] = []
+    utf8.append(utf8: text)
+    var atLabel = kind == .RelativeOidIri
+    for i in 0..<utf8.count {
+        if utf8[i] == 0x2F {
+            if atLabel || i == utf8.count - 1 {
+                throw AsnError.Malformed(at: at + i, reason: "an empty label")
+            }
+            atLabel = true
+        } else {
+            if i == 0 && kind == .OidIri {
+                throw AsnError.Malformed(at: at, reason: "an OID-IRI starts with a '/'")
+            }
+            atLabel = false
+        }
+    }
+    if utf8.isEmpty {
+        throw AsnError.Malformed(at: at, reason: "an empty label")
+    }
+}
+
+// The bytes of the text, or an error if the type has not its characters.
+fn encodeText(_ text: String, _ kind: AsnStringKind) throws(AsnError) -> U8[>..] {
+    var utf8: U8[>..] = []
+    if kind == .Bmp || kind == .Universal {
+        for char in text {
+            let scalar = U32(char.codePoint)
+            if kind == .Universal {
+                utf8.append(U8.truncating(scalar >> 24))
+                utf8.append(U8.truncating(scalar >> 16))
+            } else if scalar > 0xFFFF {
+                throw AsnError.Invalid(reason: "a BMPString has no U+\(scalar:X)")
+            }
+            utf8.append(U8.truncating(scalar >> 8))
+            utf8.append(U8.truncating(scalar))
+        }
+        return utf8
+    }
+    utf8.append(utf8: text)
+    if isUtf8(kind) {
+        if kind != .Utf8 {
+            do {
+                try checkIri(text, kind, 0)
+            } catch {
+                throw AsnError.Invalid(reason: "'\(text)' is not a \(kind.tag)")
+            }
+        }
+        return utf8
+    }
+    for byte in utf8 {
+        if !isCharacter(byte, kind) {
+            throw AsnError.Invalid(reason: "'\(text)' has characters a \(kind.tag) has not")
+        }
+    }
+    return utf8
+}

@@ -1,0 +1,162 @@
+module Asn1Bench
+
+import Sable.Serialize.Asn1
+import Sable.Time
+
+// ASN.1 by DER: twenty thousand certificates of X.509's shape written, and
+// each read back whole.
+
+fn writeName(_ writer: AsnWriter, _ common: String) throws(AsnError) {
+    try writer.beginSequence()
+    for part in ["com", "example"] {
+        try writer.beginSetOf()
+        try writer.beginSequence()
+        try writer.writeObjectIdentifier(domainComponent)
+        try writer.writeString(part, .Ia5)
+        try writer.endSequence()
+        try writer.endSetOf()
+    }
+    try writer.beginSetOf()
+    try writer.beginSequence()
+    try writer.writeObjectIdentifier(commonName)
+    try writer.writeString(common, .Utf8)
+    try writer.endSequence()
+    try writer.endSetOf()
+    try writer.endSequence()
+}
+
+fn writeAlgorithm(_ writer: AsnWriter, _ id: ObjectIdentifier) throws(AsnError) {
+    try writer.beginSequence()
+    try writer.writeObjectIdentifier(id)
+    try writer.writeNull()
+    try writer.endSequence()
+}
+
+let domainComponent = ObjectIdentifier([0, 9, 2342, 19200300, 100, 1, 25])
+let commonName = ObjectIdentifier([2, 5, 4, 3])
+let sha256WithRsa = ObjectIdentifier([1, 2, 840, 113549, 1, 1, 11])
+let rsa = ObjectIdentifier([1, 2, 840, 113549, 1, 1, 1])
+let keyUsage = ObjectIdentifier([2, 5, 29, 15])
+let basicConstraints = ObjectIdentifier([2, 5, 29, 19])
+
+fn writeCertificate(_ writer: AsnWriter, _ serial: Int, _ modulus: U8[:], _ from: OffsetDateTime, _ to: OffsetDateTime) throws(AsnError) {
+    try writer.beginSequence()
+    try writer.beginExplicit(.context(0))
+    try writer.writeInt(2)
+    try writer.endExplicit()
+    try writer.writeInt(serial)
+    try writeAlgorithm(writer, sha256WithRsa)
+    try writeName(writer, "Example CA")
+    try writer.beginSequence()
+    try writer.writeUtcTime(from)
+    try writer.writeUtcTime(to)
+    try writer.endSequence()
+    try writeName(writer, "host-\(serial)")
+    try writer.beginSequence()
+    try writeAlgorithm(writer, rsa)
+    try writer.beginOctetString()
+    try writer.beginSequence()
+    try writer.writeUnsignedInteger(modulus)
+    try writer.writeInt(65537)
+    try writer.endSequence()
+    try writer.endOctetString()
+    try writer.endSequence()
+    try writer.beginExplicit(.context(3))
+    try writer.beginSequence()
+    try writer.beginSequence()
+    try writer.writeObjectIdentifier(keyUsage)
+    try writer.writeBool(true)
+    try writer.beginOctetString()
+    try writer.writeNamedBits(flags: 0x60)
+    try writer.endOctetString()
+    try writer.endSequence()
+    try writer.beginSequence()
+    try writer.writeObjectIdentifier(basicConstraints)
+    try writer.writeBool(true)
+    try writer.beginOctetString()
+    try writer.beginSequence()
+    try writer.writeBool(true)
+    try writer.endSequence()
+    try writer.endOctetString()
+    try writer.endSequence()
+    try writer.endSequence()
+    try writer.endExplicit()
+    try writer.endSequence()
+}
+
+fn readName(_ reader: inout AsnReader) throws(AsnError) -> Int {
+    var length = 0
+    var names = try reader.readSequence()
+    while !names.isAtEnd {
+        var one = try names.readSetOf()
+        var attribute = try one.readSequence()
+        let id = try attribute.readObjectIdentifier()
+        length += try attribute.readString(id == commonName ? .Utf8 : .Ia5).utf8Count
+        try attribute.finish()
+        try one.finish()
+    }
+    return length
+}
+
+fn readCertificate(_ reader: inout AsnReader) throws(AsnError) -> Int {
+    var sum = 0
+    var fields = try reader.readSequence()
+    var version = try fields.readExplicit(.context(0))
+    sum += try version.readInt()
+    sum += try fields.readInt()
+    var algorithm = try fields.readSequence()
+    sum += try algorithm.readObjectIdentifier() == sha256WithRsa ? 1 : 0
+    try algorithm.readNull()
+    sum += try readName(&fields)
+    var validity = try fields.readSequence()
+    sum += try validity.readUtcTime().year
+    sum += try validity.readUtcTime().year
+    sum += try readName(&fields)
+    var key = try fields.readSequence()
+    let _ = try key.readEncoded()
+    var contents = try key.readOctetStringContents()
+    var numbers = try contents.readSequence()
+    sum += try numbers.readIntegerBytes().count
+    sum += try numbers.readInt()
+    var tagged = try fields.readExplicit(.context(3))
+    var extensions = try tagged.readSequence()
+    while !extensions.isAtEnd {
+        var one = try extensions.readSequence()
+        let id = try one.readObjectIdentifier()
+        sum += try one.readBool() ? 1 : 0
+        var value = try one.readOctetStringContents()
+        if id == keyUsage {
+            sum += Int(try value.readNamedBitsAsFlags())
+        } else {
+            var constraints = try value.readSequence()
+            sum += try constraints.readBool() ? 1 : 0
+        }
+    }
+    try fields.finish()
+    return sum
+}
+
+@main
+fn main() throws(AsnError) {
+    var modulus: U8[>..] = []
+    for i in 0..<256 {
+        modulus.append(U8.truncating(i * 7 + 193))
+    }
+    let from = UtcDateTime.of(year: 2024, month: 4, day: 30, hour: 14, minute: 25, second: 34)!.withOffset(UtcOffset.utc)
+    let to = UtcDateTime.of(year: 2025, month: 4, day: 30, hour: 14, minute: 25, second: 34)!.withOffset(UtcOffset.utc)
+    let writer = AsnWriter(rules: .Der)
+    var size = 0
+    var sum = 0
+    var check = 0
+    for i in 0..<20000 {
+        writer.reset()
+        try writeCertificate(writer, i, modulus, from, to)
+        let bytes = try writer.bytes()
+        size += bytes.count
+        check = (check * 31 + Int(bytes[i % bytes.count])) % 1000003
+        var reader = AsnReader(bytes, rules: .Der)
+        sum += try readCertificate(&reader)
+        try reader.finish()
+    }
+    print("\(size) \(sum) \(check)")
+}

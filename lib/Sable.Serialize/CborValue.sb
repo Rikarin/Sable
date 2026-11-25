@@ -12,7 +12,7 @@ import Sable.Text
 /// let value = try! CborValue.parse([0xA2, 0x61, 0x61, 0x20, 0x02, 0xC1, 0x05])
 /// assert(value["a"]! == CborValue.integer(-1))
 /// assert(value.diagnostic() == "{\"a\": -1, 2: 1(5)}")
-/// assert(try! value.bytes(deterministic: true) == [0xA2, 0x02, 0xC1, 0x05, 0x61, 0x61, 0x20])
+/// assert(try! value.bytes(conformance: .Deterministic) == [0xA2, 0x02, 0xC1, 0x05, 0x61, 0x61, 0x20])
 /// ```
 @frozen
 @derive(Equatable, Debug)
@@ -37,15 +37,15 @@ public union CborValue {
         return value < 0 ? .Negative(n: U64(-1 - value)) : .Unsigned(value: U64(value))
     }
 
-    /// The one item the bytes are, nested no deeper than that, and in the
-    /// deterministic encoding, if that is asked for.
-    public static fn parse(_ bytes: U8[>..], maximumDepth: Int = 128, deterministic: Bool = false) throws(SerializeError) -> CborValue {
-        return cborValue(try CborParser.parse(bytes, maximumDepth, deterministic), 0)
+    /// The one item the bytes are, nested no deeper than that, and what
+    /// `conformance` takes.
+    public static fn parse(_ bytes: U8[>..], maximumDepth: Int = 128, conformance: CborConformance = .Lax) throws(SerializeError) -> CborValue {
+        return cborValue(try CborParser.parse(bytes, maximumDepth, conformance), 0)
     }
 
-    /// The value as CBOR, in its preferred or its deterministic encoding.
-    public fn bytes(deterministic: Bool = false) throws(SerializeError) -> U8[>..] {
-        return try Cbor.encode(self, deterministic: deterministic)
+    /// The value as CBOR, as `conformance` has it written.
+    public fn bytes(conformance: CborConformance = .Lax) throws(SerializeError) -> U8[>..] {
+        return try Cbor.encode(self, conformance: conformance)
     }
 
     /// The integer, if this is one that fits an Int.

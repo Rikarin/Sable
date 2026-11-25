@@ -1,0 +1,217 @@
+module Sable.Serialize.Asn1
+
+// What CER writes of a string in one piece, at most, and each piece of a
+// longer one (X.690 §9.2).
+let cerPiece = 1000
+
+extension AsnReader {
+    /// An OCTET STRING. A view of the bytes read, with no copy, unless it
+    /// was in pieces.
+    public mutating fn readOctetString(tag: AsnTag = .octetString) throws(AsnError) -> U8[:] {
+        let value = try expect(tag, 4)
+        let octets = try octets(value)
+        at = value.end
+        return octets
+    }
+
+    /// A reader of the values an OCTET STRING's bytes are, as an X.509
+    /// extension's are, by the same rules.
+    ///
+    /// ```sable
+    /// var reader = AsnReader([0x04, 0x03, 0x01, 0x01, 0xFF], rules: .Der)
+    /// var inner = try! reader.readOctetStringContents()
+    /// assert(try! inner.readBool())
+    /// ```
+    public mutating fn readOctetStringContents(tag: AsnTag = .octetString) throws(AsnError) -> AsnReader {
+        let value = try expect(tag, 4)
+        let inner = try encapsulated(value, value.contents, try octets(value))
+        at = value.end
+        return inner
+    }
+
+    /// A BIT STRING. A view of the bytes read, with no copy, unless it was
+    /// in pieces or had unused bits that were not zero.
+    public mutating fn readBitString(tag: AsnTag = .bitString) throws(AsnError) -> AsnBitString {
+        let value = try expect(tag, 3)
+        let bits = try bits(value)
+        at = value.end
+        return bits
+    }
+
+    /// A reader of the values a BIT STRING's whole bytes are, as a public
+    /// key's are in a certificate, by the same rules.
+    public mutating fn readBitStringContents(tag: AsnTag = .bitString) throws(AsnError) -> AsnReader {
+        let value = try expect(tag, 3)
+        let bits = try bits(value)
+        if bits.unusedBits != 0 {
+            throw AsnError.Malformed(at: value.contents, reason: "a BIT STRING of values is not whole bytes")
+        }
+        let inner = try encapsulated(value, value.contents + 1, bits.bytes)
+        at = value.end
+        return inner
+    }
+
+    /// A BIT STRING whose bits have names, which by CER and DER has no zeros
+    /// at its end. `has` asks for one by its number.
+    ///
+    /// ```sable
+    /// // KeyUsage: keyCertSign (5) and cRLSign (6)
+    /// var reader = AsnReader([0x03, 0x02, 0x01, 0x06], rules: .Der)
+    /// let usage = try! reader.readNamedBits()
+    /// assert(usage.has(5) && usage.has(6) && !usage.has(0) && !usage.has(8))
+    /// ```
+    public mutating fn readNamedBits(tag: AsnTag = .bitString) throws(AsnError) -> AsnBitString {
+        let value = try expect(tag, 3)
+        let bits = try bits(value)
+        if rules != .Ber && !bits.isEmpty && !bits[bits.count - 1] {
+            throw AsnError.NotCanonical(at: value.contents, reason: "a named bit list ends in a zero")
+        }
+        at = value.end
+        return bits
+    }
+
+    /// A BIT STRING whose bits have names, as a number in which bit 0 is
+    /// the list's first. A bit past the 64th that is set is OutOfRange.
+    public mutating fn readNamedBitsAsFlags(tag: AsnTag = .bitString) throws(AsnError) -> U64 {
+        let start = at
+        var copy = self
+        let bits = try copy.readNamedBits(tag: tag)
+        var flags: U64 = 0
+        for i in 0..<bits.count {
+            if bits[i] {
+                if i > 63 {
+                    throw AsnError.OutOfRange(at: start, reason: "bit \(i) is set, and a U64 has 64")
+                }
+                flags |= 1 << U64(i)
+            }
+        }
+        at = copy.at
+        return flags
+    }
+
+    /// Text, whose characters must be ones the type has.
+    public mutating fn readString(_ kind: AsnStringKind = .Utf8, tag: AsnTag? = none) throws(AsnError) -> String {
+        let value = try expect(tag ?? kind.tag, kind.number)
+        let octets = try text(value, kind)
+        let string = try decodeText(octets, kind, value.contents)
+        at = value.end
+        return string
+    }
+
+    /// The bytes of text, as they are, whatever characters they may be.
+    public mutating fn readStringBytes(_ kind: AsnStringKind, tag: AsnTag? = none) throws(AsnError) -> U8[:] {
+        let value = try expect(tag ?? kind.tag, kind.number)
+        let octets = try text(value, kind)
+        at = value.end
+        return octets
+    }
+
+    fn text(_ value: AsnElement, _ kind: AsnStringKind) throws(AsnError) -> U8[:] {
+        if !kind.canBeConstructed && value.tag.isConstructed {
+            throw AsnError.Malformed(at: at, reason: "the value is constructed and should be primitive")
+        }
+        return try octets(value)
+    }
+
+    // A reader of the bytes of a string, the bytes read themselves when they
+    // are in one piece, so that errors say where.
+    fn encapsulated(_ value: AsnElement, _ start: Int, _ contents: U8[:]) throws(AsnError) -> AsnReader {
+        if depth >= options.maximumDepth {
+            throw AsnError.TooDeep(at: at, limit: options.maximumDepth)
+        }
+        if value.tag.isConstructed {
+            return AsnReader(contents, 0, contents.count, depth + 1, rules, options)
+        }
+        return AsnReader(bytes, start, value.contentsEnd, depth + 1, rules, options)
+    }
+
+    // The bytes of an octet string, or of any string encoded as one.
+    fn octets(_ value: AsnElement) throws(AsnError) -> U8[:] {
+        if !value.tag.isConstructed {
+            try checkWhole(value)
+            return bytes[value.contents..<value.contentsEnd]
+        }
+        var all: U8[>..] = []
+        var unused = 0
+        try pieces(value, 4, &all, &unused)
+        return all
+    }
+
+    fn bits(_ value: AsnElement) throws(AsnError) -> AsnBitString {
+        if !value.tag.isConstructed {
+            try checkWhole(value)
+            let unused = try unusedBits(value)
+            return AsnBitString(bytes: bytes[value.contents + 1..<value.contentsEnd], unusedBits: unused)
+        }
+        var all: U8[>..] = []
+        var unused = 0
+        try pieces(value, 3, &all, &unused)
+        return AsnBitString(bytes: all, unusedBits: unused)
+    }
+
+    // Throws if CER would have written the string in pieces.
+    fn checkWhole(_ value: AsnElement) throws(AsnError) {
+        if rules == .Cer && value.contentsEnd - value.contents > cerPiece {
+            throw AsnError.NotCanonical(at: at, reason: "a string of more than \(cerPiece) bytes in one piece")
+        }
+    }
+
+    // How many bits a primitive bit string does not use, its first byte.
+    fn unusedBits(_ value: AsnElement) throws(AsnError) -> Int {
+        if value.contents == value.contentsEnd {
+            throw AsnError.Malformed(at: value.contents, reason: "a BIT STRING is a byte at least")
+        }
+        let unused = Int(bytes[value.contents])
+        if unused > 7 || (unused > 0 && value.contentsEnd == value.contents + 1) {
+            throw AsnError.Malformed(at: value.contents, reason: "a BIT STRING has not \(unused) unused bits")
+        }
+        if rules != .Ber && unused > 0 && (bytes[value.contentsEnd - 1] & unusedMask(unused)) != 0 {
+            throw AsnError.NotCanonical(at: value.contentsEnd - 1, reason: "a BIT STRING's unused bits are not zero")
+        }
+        return unused
+    }
+
+    // Puts together the pieces a string is in, each a string of the type
+    // with that number: in pieces itself, as BER has it, or of a thousand
+    // bytes, all but the last, as CER has it.
+    fn pieces(_ value: AsnElement, _ number: Int, _ all: inout U8[>..], _ unused: inout Int) throws(AsnError) {
+        if rules == .Der {
+            throw AsnError.NotCanonical(at: at, reason: "a string in pieces")
+        }
+        var inner = try inside(value)
+        var count = 0
+        var lastSize = cerPiece
+        while !inner.isAtEnd {
+            let piece = try inner.element()
+            if piece.tag.tagClass != .Universal || piece.tag.number != number {
+                throw AsnError.UnexpectedTag(at: inner.at, expected: AsnTag.universal(number), found: piece.tag)
+            }
+            if unused != 0 {
+                throw AsnError.Malformed(at: inner.at, reason: "a piece after one that is not whole bytes")
+            }
+            count += 1
+            if piece.tag.isConstructed {
+                if rules == .Cer {
+                    throw AsnError.NotCanonical(at: inner.at, reason: "a piece of a string in pieces itself")
+                }
+                try inner.pieces(piece, number, &all, &unused)
+            } else {
+                let size = piece.contentsEnd - piece.contents
+                if rules == .Cer && (lastSize != cerPiece || size == 0 || size > cerPiece) {
+                    throw AsnError.NotCanonical(at: inner.at, reason: "a string's pieces are not of \(cerPiece) bytes")
+                }
+                lastSize = size
+                if number == 3 {
+                    unused = try inner.unusedBits(piece)
+                    all.append(contentsOf: bytes[piece.contents + 1..<piece.contentsEnd])
+                } else {
+                    all.append(contentsOf: bytes[piece.contents..<piece.contentsEnd])
+                }
+            }
+            inner.at = piece.end
+        }
+        if rules == .Cer && count < 2 {
+            throw AsnError.NotCanonical(at: at, reason: "a string in pieces that fits one")
+        }
+    }
+}

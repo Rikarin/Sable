@@ -1,0 +1,199 @@
+module Sable.Serialize.Asn1
+
+import Sable.Time
+
+extension AsnWriter {
+    /// An OCTET STRING.
+    public fn writeOctetString(_ value: U8[:], tag: AsnTag = .octetString) throws(AsnError) {
+        try string(value, tag, 4)
+    }
+
+    /// A BIT STRING.
+    public fn writeBitString(_ value: AsnBitString, tag: AsnTag = .bitString) throws(AsnError) {
+        try checkOwn(tag, 3)
+        item()
+        if rules == .Cer && value.bytes.count + 1 > cerPiece {
+            var contents: U8[>..] = [0]
+            contents.append(contentsOf: value.bytes)
+            appendPieces(tag, contents, 3, value.unusedBits)
+            return
+        }
+        tag.append(to: &written, constructed: false)
+        AsnLength.append(&written, value.bytes.count + 1)
+        written.append(U8(value.unusedBits))
+        written.append(contentsOf: value.bytes)
+    }
+
+    /// A BIT STRING whose bits have names, without the zeros at its end.
+    public fn writeNamedBits(_ value: AsnBitString, tag: AsnTag = .bitString) throws(AsnError) {
+        try writeBitString(value.trimmed, tag: tag)
+    }
+
+    /// A BIT STRING whose bits have names, the first the number's bit 0.
+    ///
+    /// ```sable
+    /// let writer = AsnWriter(rules: .Der)
+    /// try! writer.writeNamedBits(flags: 0b110_0000)
+    /// assert(try! writer.bytes() == [0x03, 0x02, 0x01, 0x06])
+    /// ```
+    public fn writeNamedBits(flags: U64, tag: AsnTag = .bitString) throws(AsnError) {
+        var bytes: U8[>..] = []
+        var rest = flags
+        while rest != 0 {
+            bytes.append(U8.truncating(rest).bitReversed)
+            rest = rest >> 8
+        }
+        try writeNamedBits(AsnBitString(bytes: bytes), tag: tag)
+    }
+
+    /// Text, whose characters must be ones the type has.
+    public fn writeString(_ value: String, _ kind: AsnStringKind = .Utf8, tag: AsnTag? = none) throws(AsnError) {
+        let contents = try encodeText(value, kind)
+        try string(contents, tag ?? kind.tag, kind.number)
+    }
+
+    /// Text already in the type's bytes, which are not looked at.
+    public fn writeStringBytes(_ value: U8[:], _ kind: AsnStringKind, tag: AsnTag? = none) throws(AsnError) {
+        try string(value, tag ?? kind.tag, kind.number)
+    }
+
+    fn string(_ contents: U8[:], _ tag: AsnTag, _ own: Int) throws(AsnError) {
+        // An IRI is in one piece however long it is (X.690 §8.21).
+        if rules == .Cer && contents.count > cerPiece && own < 35 {
+            try checkOwn(tag, own)
+            item()
+            appendPieces(tag, contents, 4, 0)
+            return
+        }
+        try primitive(tag, own, contents)
+    }
+
+    // ---- Times ---------------------------------------------------------------
+
+    /// A UTCTime, which is in UTC and to the second: an error if the year's
+    /// two digits would be read as another's, by the years up to
+    /// `twoDigitYearMaximum`.
+    public fn writeUtcTime(_ value: OffsetDateTime, tag: AsnTag = .utcTime, twoDigitYearMaximum: Int = 2049) throws(AsnError) {
+        let utc = value.toOffset(UtcOffset.utc)
+        if utc.year > twoDigitYearMaximum || utc.year <= twoDigitYearMaximum - 100 {
+            throw AsnError.Invalid(reason: "a UTCTime has no year \(utc.year), only \(twoDigitYearMaximum - 99) to \(twoDigitYearMaximum)")
+        }
+        var text = AsnTimeWriter()
+        text.number(utc.year % 100, 2)
+        text.date(utc.date)
+        text.time(utc.time)
+        text.bytes.append(0x5A)
+        try primitive(tag, 23, text.bytes)
+    }
+
+    /// A GeneralizedTime, which is in UTC: with the fraction of its second,
+    /// unless that is left out.
+    public fn writeGeneralizedTime(_ value: OffsetDateTime, tag: AsnTag = .generalizedTime, omitFraction: Bool = false) throws(AsnError) {
+        let utc = value.toOffset(UtcOffset.utc)
+        var text = AsnTimeWriter()
+        try text.year(utc.year)
+        text.date(utc.date)
+        text.time(utc.time)
+        if utc.nanosecond > 0 && !omitFraction {
+            text.bytes.append(0x2E)
+            text.number(utc.nanosecond, 9)
+            while text.bytes[text.bytes.count - 1] == 0x30 {
+                let _ = text.bytes.removeLast()
+            }
+        }
+        text.bytes.append(0x5A)
+        try primitive(tag, 24, text.bytes)
+    }
+
+    /// A DATE.
+    public fn writeDate(_ value: Date, tag: AsnTag = .date) throws(AsnError) {
+        var text = AsnTimeWriter()
+        try text.year(value.year)
+        text.date(value)
+        try primitive(tag, 31, text.bytes)
+    }
+
+    /// A TIME-OF-DAY, to the second.
+    public fn writeTimeOfDay(_ value: TimeOfDay, tag: AsnTag = .timeOfDay) throws(AsnError) {
+        var text = AsnTimeWriter()
+        text.time(value)
+        try primitive(tag, 32, text.bytes)
+    }
+
+    /// A DATE-TIME, to the second.
+    public fn writeDateTime(_ value: LocalDateTime, tag: AsnTag = .dateTime) throws(AsnError) {
+        var text = AsnTimeWriter()
+        try text.year(value.year)
+        text.date(value.date)
+        text.time(value.time)
+        try primitive(tag, 33, text.bytes)
+    }
+
+    /// A DURATION that ISO 8601 writes so, `P1Y2M`: by CER and DER without
+    /// its parts that are 0, but for the last.
+    public fn writeDuration(_ value: String, tag: AsnTag = .duration) throws(AsnError) {
+        var utf8: U8[>..] = []
+        utf8.append(utf8: value)
+        if utf8.isEmpty || utf8[0] != 0x50 || !isDuration(utf8[1...]) {
+            throw AsnError.Invalid(reason: "'\(value)' is not a duration")
+        }
+        let text = rules == .Ber ? utf8[1...].toArray() : shortestDuration(utf8[1...])
+        try primitive(tag, 34, text)
+    }
+
+    /// A TIME, of text ISO 8601 writes one in; by CER and DER its commas are
+    /// points.
+    public fn writeTime(_ value: String, tag: AsnTag = .time) throws(AsnError) {
+        var text: U8[>..] = []
+        text.append(utf8: value)
+        for i in 0..<text.count {
+            if !isIsoByte(text[i]) {
+                throw AsnError.Invalid(reason: "'\(value)' is not a time")
+            }
+            if text[i] == 0x2C && rules != .Ber {
+                text[i] = 0x2E
+            }
+        }
+        if text.isEmpty {
+            throw AsnError.Invalid(reason: "'\(value)' is not a time")
+        }
+        try primitive(tag, 14, text)
+    }
+}
+
+// The text of a time.
+struct AsnTimeWriter {
+    var bytes: U8[>..] = []
+
+    init() { }
+
+    // The number in so many digits.
+    mutating fn number(_ value: Int, _ count: Int) {
+        var scale = 1
+        for _ in 1..<count {
+            scale *= 10
+        }
+        while scale > 0 {
+            bytes.append(0x30 + U8(value / scale % 10))
+            scale /= 10
+        }
+    }
+
+    mutating fn year(_ year: Int) throws(AsnError) {
+        if year < 0 || year > 9999 {
+            throw AsnError.Invalid(reason: "a time has four digits for a year, and \(year) does not fit them")
+        }
+        number(year, 4)
+    }
+
+    mutating fn date(_ date: Date) {
+        number(date.month, 2)
+        number(date.day, 2)
+    }
+
+    mutating fn time(_ time: TimeOfDay) {
+        number(time.hour, 2)
+        number(time.minute, 2)
+        number(time.second, 2)
+    }
+}

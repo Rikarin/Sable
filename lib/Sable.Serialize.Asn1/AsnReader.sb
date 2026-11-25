@@ -1,0 +1,439 @@
+module Sable.Serialize.Asn1
+
+import Sable.Math
+
+/// ASN.1 values (X.690) read one after another, by the rules they were
+/// written by: .NET's AsnReader. A sequence, a set or an explicit tag is
+/// read as a reader of what is in it, over the same bytes. A read that
+/// throws moves nothing.
+///
+/// It is safe to read what anyone wrote: no length is believed before the
+/// bytes are there, AsnOptions bounds the nesting, and by DER and CER a
+/// value has its one encoding, or is an error.
+///
+/// Each `read` takes the tag a value of its type may have instead of the
+/// type's own, as `[0] IMPLICIT` gives it one.
+///
+/// ```sable
+/// // SEQUENCE { version INTEGER, name [0] IMPLICIT UTF8String OPTIONAL }
+/// var reader = AsnReader([0x30, 0x07, 0x02, 0x01, 0x02, 0x80, 0x02, 0x68, 0x69], rules: .Der)
+/// var fields = try! reader.readSequence()
+/// assert(try! fields.readInt() == 2)
+/// assert(fields.isNext(.context(0)))
+/// assert(try! fields.readString(.Utf8, tag: .context(0)) == "hi")
+/// try! fields.finish()
+/// try! reader.finish()
+/// ```
+public struct AsnReader {
+    // All the bytes, of which this reads those from 'at' to before 'end'.
+    let bytes: U8[:]
+    var at: Int
+    let end: Int
+    let depth: Int
+    /// The rules the values must have been written by.
+    public let rules: AsnEncodingRules
+    /// What it takes.
+    public let options: AsnOptions
+
+    /// A reader of the bytes.
+    public init(_ bytes: U8[:], rules: AsnEncodingRules, options: AsnOptions = AsnOptions()) {
+        self.init(bytes, 0, bytes.count, 0, rules, options)
+    }
+
+    init(_ bytes: U8[:], _ at: Int, _ end: Int, _ depth: Int, _ rules: AsnEncodingRules, _ options: AsnOptions) {
+        self.bytes = bytes
+        self.at = at
+        self.end = end
+        self.depth = depth
+        self.rules = rules
+        self.options = options
+    }
+
+    /// Where the next value starts, counted as an AsnError does.
+    public var position: Int => at
+
+    /// Whether every value has been read.
+    public var isAtEnd: Bool => at == end
+
+    /// Throws if there are values left.
+    public fn finish() throws(AsnError) {
+        if at < end {
+            throw AsnError.TrailingData(at: at)
+        }
+    }
+
+    // ---- Any value -----------------------------------------------------------
+
+    /// The next value's tag, which is not read past.
+    public fn peekTag() throws(AsnError) -> AsnTag {
+        return try valueTag(at).0
+    }
+
+    /// Whether there is a next value, of that tag's class and number: what
+    /// decides an OPTIONAL field.
+    public fn isNext(_ tag: AsnTag) -> Bool {
+        if let (found, _) = try? decodeTag(bytes, at, end) {
+            return found.matches(tag)
+        }
+        return false
+    }
+
+    /// The next value whole, its tag and length with its contents, which is
+    /// not read past. A view, with no copy, as all bytes read are.
+    public fn peekEncoded() throws(AsnError) -> U8[:] {
+        let value = try element()
+        return bytes[at..<value.end]
+    }
+
+    /// The next value's contents, which are not read past: of an indefinite
+    /// length, without the end of them.
+    public fn peekContents() throws(AsnError) -> U8[:] {
+        let value = try element()
+        return bytes[value.contents..<value.contentsEnd]
+    }
+
+    /// The next value whole, its tag and length with its contents. What is
+    /// in it is not looked at, but for where an indefinite length ends.
+    public mutating fn readEncoded() throws(AsnError) -> U8[:] {
+        let value = try element()
+        let encoded = bytes[at..<value.end]
+        at = value.end
+        return encoded
+    }
+
+    // ---- What holds values ---------------------------------------------------
+
+    /// A SEQUENCE or SEQUENCE OF, as a reader of what is in it. By the tag
+    /// `external`, `embeddedPdv` or `characterString`, one of the types that
+    /// are sequences under another name.
+    public mutating fn readSequence(tag: AsnTag = .sequence) throws(AsnError) -> AsnReader {
+        var own = 16
+        if tag.tagClass == .Universal && (tag.number == 8 || tag.number == 11 || tag.number == 29) {
+            own = tag.number
+        }
+        let value = try constructed(tag, own)
+        let inner = try inside(value)
+        at = value.end
+        return inner
+    }
+
+    /// A SET, as a reader of what is in it, which by CER and DER must be in
+    /// the order of the tags, each there once.
+    public mutating fn readSet(tag: AsnTag = .set) throws(AsnError) -> AsnReader {
+        let value = try constructed(tag, 17)
+        let inner = try inside(value)
+        if rules != .Ber && !options.skipSetOrder {
+            var rest = inner
+            var last = -1
+            while !rest.isAtEnd {
+                let next = try rest.element()
+                if next.tag.order <= last {
+                    throw AsnError.NotCanonical(at: rest.at, reason: "a set's values are not in the order of their tags")
+                }
+                last = next.tag.order
+                rest.at = next.end
+            }
+        }
+        at = value.end
+        return inner
+    }
+
+    /// A SET OF, as a reader of what is in it, which by CER and DER must be
+    /// in the order of the values' bytes.
+    public mutating fn readSetOf(tag: AsnTag = .set) throws(AsnError) -> AsnReader {
+        let value = try constructed(tag, 17)
+        let inner = try inside(value)
+        if rules != .Ber && !options.skipSetOrder {
+            var rest = inner
+            var start = rest.at
+            var length = 0
+            while !rest.isAtEnd {
+                let next = try rest.element()
+                if compareRuns(bytes, start, start + length, rest.at, next.end) > 0 {
+                    throw AsnError.NotCanonical(at: rest.at, reason: "a set's values are not in order")
+                }
+                start = rest.at
+                length = next.end - rest.at
+                rest.at = next.end
+            }
+        }
+        at = value.end
+        return inner
+    }
+
+    /// What an explicit tag tags, as a reader of that one value.
+    ///
+    /// ```sable
+    /// var reader = AsnReader([0xA0, 0x03, 0x02, 0x01, 0x02], rules: .Der)
+    /// var version = try! reader.readExplicit(.context(0))
+    /// assert(try! version.readInt() == 2)
+    /// ```
+    public mutating fn readExplicit(_ tag: AsnTag) throws(AsnError) -> AsnReader {
+        if tag.tagClass == .Universal {
+            throw AsnError.Invalid(reason: "an explicit tag is not one of ASN.1's own")
+        }
+        let value = try constructed(tag, -1)
+        let inner = try inside(value)
+        let tagged = try inner.element()
+        if tagged.end < inner.end {
+            throw AsnError.TrailingData(at: tagged.end)
+        }
+        at = value.end
+        return inner
+    }
+
+    // ---- Booleans, null and numbers ------------------------------------------
+
+    /// A BOOLEAN.
+    public mutating fn readBool(tag: AsnTag = .bool) throws(AsnError) -> Bool {
+        let value = try primitive(tag, 1)
+        if value.contentsEnd - value.contents != 1 {
+            throw AsnError.Malformed(at: value.contents, reason: "a BOOLEAN is one byte")
+        }
+        let byte = bytes[value.contents]
+        if byte != 0 && byte != 0xFF && rules != .Ber {
+            throw AsnError.NotCanonical(at: value.contents, reason: "true is 0xFF")
+        }
+        at = value.end
+        return byte != 0
+    }
+
+    /// A NULL.
+    public mutating fn readNull(tag: AsnTag = .null) throws(AsnError) {
+        let value = try primitive(tag, 5)
+        if value.contentsEnd != value.contents {
+            throw AsnError.Malformed(at: value.contents, reason: "a NULL has no contents")
+        }
+        at = value.end
+    }
+
+    /// An INTEGER an Int holds.
+    public mutating fn readInt(tag: AsnTag = .integer) throws(AsnError) -> Int {
+        let value = try integer(tag, 2)
+        let result = try intOf(value)
+        at = value.end
+        return result
+    }
+
+    /// An INTEGER a U64 holds.
+    public mutating fn readUInt(tag: AsnTag = .integer) throws(AsnError) -> U64 {
+        let value = try integer(tag, 2)
+        var start = value.contents
+        if bytes[start] == 0 {
+            start += 1
+        }
+        if bytes[value.contents] >= 0x80 || value.contentsEnd - start > 8 {
+            throw AsnError.OutOfRange(at: value.contents, reason: "the INTEGER is not a U64")
+        }
+        var result: U64 = 0
+        while start < value.contentsEnd {
+            result = result << 8 | U64(bytes[start])
+            start += 1
+        }
+        at = value.end
+        return result
+    }
+
+    /// An INTEGER of any size.
+    public mutating fn readBigInt(tag: AsnTag = .integer) throws(AsnError) -> BigInt {
+        let value = try integer(tag, 2)
+        at = value.end
+        return BigInt(bytes: bytes[value.contents..<value.contentsEnd], endian: .Big)
+    }
+
+    /// An INTEGER's bytes: its two's complement, the most significant first.
+    public mutating fn readIntegerBytes(tag: AsnTag = .integer) throws(AsnError) -> U8[:] {
+        let value = try integer(tag, 2)
+        at = value.end
+        return bytes[value.contents..<value.contentsEnd]
+    }
+
+    /// An ENUMERATED's number, if an Int holds it.
+    public mutating fn readEnumerated(tag: AsnTag = .enumerated) throws(AsnError) -> Int {
+        let value = try integer(tag, 10)
+        let result = try intOf(value)
+        at = value.end
+        return result
+    }
+
+    /// An ENUMERATED's bytes, as an INTEGER's are.
+    public mutating fn readEnumeratedBytes(tag: AsnTag = .enumerated) throws(AsnError) -> U8[:] {
+        let value = try integer(tag, 10)
+        at = value.end
+        return bytes[value.contents..<value.contentsEnd]
+    }
+
+    /// A REAL, as the nearest F64; one too large for any is OutOfRange.
+    public mutating fn readReal(tag: AsnTag = .real) throws(AsnError) -> F64 {
+        let value = try primitive(tag, 9)
+        let result = try decodeReal(bytes, value.contents, value.contentsEnd, rules != .Ber)
+        at = value.end
+        return result
+    }
+
+    // ---- Object identifiers --------------------------------------------------
+
+    /// An OBJECT IDENTIFIER, of at most 128 numbers of 128 bits each.
+    public mutating fn readObjectIdentifier(tag: AsnTag = .objectIdentifier) throws(AsnError) -> ObjectIdentifier {
+        let value = try primitive(tag, 6)
+        try checkArcs(bytes, value.contents, value.contentsEnd, 1)
+        at = value.end
+        return ObjectIdentifier { encoded: bytes[value.contents..<value.contentsEnd].toArray() }
+    }
+
+    /// A RELATIVE-OID's numbers, at most 128 of 128 bits each.
+    public mutating fn readRelativeOid(tag: AsnTag = .relativeOid) throws(AsnError) -> U128[>..] {
+        let value = try primitive(tag, 13)
+        try checkArcs(bytes, value.contents, value.contentsEnd, 0)
+        at = value.end
+        return subidentifiers(bytes[value.contents..<value.contentsEnd])
+    }
+
+    // ---- The values' bytes ---------------------------------------------------
+
+    // The tag of the value at the position, which is not the end of contents.
+    fn valueTag(_ position: Int) throws(AsnError) -> (AsnTag, Int) {
+        let (tag, next) = try decodeTag(bytes, position, end)
+        if tag.number == 0 && tag.tagClass == .Universal {
+            throw AsnError.Malformed(at: position, reason: "an end of contents where there should be a value")
+        }
+        return (tag, next)
+    }
+
+    // The next value.
+    fn element() throws(AsnError) -> AsnElement {
+        let (tag, next) = try valueTag(at)
+        let head = try AsnLength.read(bytes, next, end, tag.isConstructed, rules)
+        if head.count >= 0 {
+            return AsnElement(tag: tag, contents: head.next, contentsEnd: head.next + head.count, end: head.next + head.count)
+        }
+        let contentsEnd = try endOfContents(head.next)
+        return AsnElement(tag: tag, contents: head.next, contentsEnd: contentsEnd, end: contentsEnd + 2)
+    }
+
+    // Where the end of the contents that start there is: past what is in
+    // them, whole values of definite lengths and, counted, of indefinite.
+    fn endOfContents(_ start: Int) throws(AsnError) -> Int {
+        var position = start
+        var nested = 1
+        while true {
+            let (tag, next) = try decodeTag(bytes, position, end)
+            if tag.number == 0 && tag.tagClass == .Universal {
+                if tag.isConstructed || next >= end || bytes[next] != 0 {
+                    throw next >= end ? AsnError.UnexpectedEnd(at: next) : AsnError.Malformed(at: position, reason: "an end of contents that is not two zero bytes")
+                }
+                nested -= 1
+                if nested == 0 {
+                    return position
+                }
+                position = next + 1
+                continue
+            }
+            let head = try AsnLength.read(bytes, next, end, tag.isConstructed, rules)
+            if head.count >= 0 {
+                position = head.next + head.count
+            } else {
+                nested += 1
+                if depth + nested > options.maximumDepth {
+                    throw AsnError.TooDeep(at: position, limit: options.maximumDepth)
+                }
+                position = head.next
+            }
+        }
+    }
+
+    // The next value, if it is of the tag, which may be one of ASN.1's own
+    // only if it has that number: the type's.
+    fn expect(_ tag: AsnTag, _ own: Int) throws(AsnError) -> AsnElement {
+        try checkOwn(tag, own)
+        let value = try element()
+        if !value.tag.matches(tag) {
+            throw AsnError.UnexpectedTag(at: at, expected: tag, found: value.tag)
+        }
+        return value
+    }
+
+    fn primitive(_ tag: AsnTag, _ own: Int) throws(AsnError) -> AsnElement {
+        let value = try expect(tag, own)
+        if value.tag.isConstructed {
+            throw AsnError.Malformed(at: at, reason: "the value is constructed and should be primitive")
+        }
+        return value
+    }
+
+    fn constructed(_ tag: AsnTag, _ own: Int) throws(AsnError) -> AsnElement {
+        let value = try expect(tag, own)
+        if !value.tag.isConstructed {
+            throw AsnError.Malformed(at: at, reason: "the value is primitive and should be constructed")
+        }
+        return value
+    }
+
+    // A reader of what is in the value.
+    fn inside(_ value: AsnElement) throws(AsnError) -> AsnReader {
+        if depth >= options.maximumDepth {
+            throw AsnError.TooDeep(at: at, limit: options.maximumDepth)
+        }
+        return AsnReader(bytes, value.contents, value.contentsEnd, depth + 1, rules, options)
+    }
+
+    // The next value, an integer in as few bytes as hold it.
+    fn integer(_ tag: AsnTag, _ own: Int) throws(AsnError) -> AsnElement {
+        let value = try primitive(tag, own)
+        let count = value.contentsEnd - value.contents
+        if count == 0 {
+            throw AsnError.Malformed(at: value.contents, reason: "an integer is a byte at least")
+        }
+        if count > 1 {
+            let first = bytes[value.contents]
+            let sign = bytes[value.contents + 1] >= 0x80
+            if (first == 0 && !sign) || (first == 0xFF && sign) {
+                throw AsnError.Malformed(at: value.contents, reason: "an integer is in more bytes than it needs")
+            }
+        }
+        return value
+    }
+
+    fn intOf(_ value: AsnElement) throws(AsnError) -> Int {
+        if value.contentsEnd - value.contents > 8 {
+            throw AsnError.OutOfRange(at: value.contents, reason: "the integer is not an Int")
+        }
+        var result = bytes[value.contents] >= 0x80 ? -1 : 0
+        for i in value.contents..<value.contentsEnd {
+            result = result << 8 | Int(bytes[i])
+        }
+        return result
+    }
+}
+
+// A value's tag, and where its contents start and end, and it ends: after
+// an indefinite length's end of contents.
+struct AsnElement {
+    let tag: AsnTag
+    let contents: Int
+    let contentsEnd: Int
+    let end: Int
+}
+
+// Throws unless the tag is one a value of the type with that number may have.
+fn checkOwn(_ tag: AsnTag, _ own: Int) throws(AsnError) {
+    if tag.tagClass == .Universal && tag.number != own {
+        throw AsnError.Invalid(reason: "\(tag) is another type's own tag")
+    }
+}
+
+// The two runs of the bytes, compared byte by byte, as CER and DER order a
+// SET OF: no encoding begins another, so the padding X.690 §11.6 speaks of
+// never matters.
+fn compareRuns(_ bytes: U8[:], _ aStart: Int, _ aEnd: Int, _ bStart: Int, _ bEnd: Int) -> Int {
+    var i = 0
+    while aStart + i < aEnd && bStart + i < bEnd {
+        let a = bytes[aStart + i]
+        let b = bytes[bStart + i]
+        if a != b {
+            return a < b ? -1 : 1
+        }
+        i += 1
+    }
+    return (aEnd - aStart) - (bEnd - bStart)
+}

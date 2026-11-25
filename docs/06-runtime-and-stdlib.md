@@ -923,8 +923,9 @@ Sable.Serialize     Serializable (encode(to:), static decode(from:)) for
                     TomlEncoder and TomlDecoder, and TomlDocument, which
                     edits a text and keeps its comments and layout.
                     MessagePack: extensions and timestamps. CBOR (RFC 8949):
-                    tags, indefinite lengths, the deterministic encoding, and
-                    CborReader a token at a time. Each bounds depth and checks
+                    tags, indefinite lengths, CborConformance (strict, the
+                    deterministic encoding, length-first), and CborReader a
+                    token at a time. Each bounds depth and checks
                     a declared length before making anything of it. A type
                     asks `encoder as? CborEncoder` for what one format alone
                     has. Not yet: the zero-copy @inline_layout path
@@ -935,6 +936,14 @@ Sable.Serialize.Yaml YAML 1.2: YamlParser (events, linear in the text,
                     YamlStream (edited with its comments and formatting
                     kept, unedited byte for byte), YamlEncoder and
                     YamlDecoder, Yaml.encode/decode
+Sable.Serialize.Asn1 ASN.1 (X.690): AsnReader and AsnWriter by BER, CER
+                    and DER, as .NET's, for every universal type (REAL, the
+                    ISO 8601 times, RELATIVE-OID and the IRIs too), tagged
+                    implicitly or explicitly, and values in OCTET and BIT
+                    STRINGs; sets put in order, and checked to be; a nested
+                    reader shares the bytes; AsnTag, AsnBitString,
+                    ObjectIdentifier (128 numbers of 128 bits), AsnError at
+                    its byte
 Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     a full mode: wait — the sender's backpressure — or
                     drop oldest, newest or the write; close(error:);

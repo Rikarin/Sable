@@ -1,0 +1,398 @@
+module AsnWriterTests
+
+import Sable.Math
+import Sable.Serialize.Asn1
+import Sable.Testing
+import Sable.Text
+import Sable.Time
+
+// What was written, or why not.
+fn wrote(_ rules: AsnEncodingRules, _ body: (AsnWriter) throws(AsnError) -> Void) -> String {
+    let writer = AsnWriter(rules: rules)
+    do {
+        try body(writer)
+        return Hex.encode(try writer.bytes())
+    } catch {
+        return error.description()
+    }
+}
+
+fn allRules() -> AsnEncodingRules[>..] {
+    return [.Ber, .Cer, .Der]
+}
+
+fn der(_ body: (AsnWriter) throws(AsnError) -> Void) -> String {
+    return wrote(.Der, body)
+}
+
+@test
+fn numbers() {
+    let cases: (Int, String)[>..] = [
+        (0, "020100"),
+        (127, "02017f"),
+        (128, "02020080"),
+        (255, "020200ff"),
+        (256, "02020100"),
+        (-1, "0201ff"),
+        (-128, "020180"),
+        (-129, "0202ff7f"),
+        (Int.max, "02087fffffffffffffff"),
+        (Int.min, "02088000000000000000"),
+    ]
+    for (value, hex) in cases {
+        assertEqualText(der({ w in try w.writeInt(value) }), hex)
+        assertEqualText(der({ w in try w.writeBigInt(BigInt(value)) }), hex)
+        let encoded = try! Hex.decode(hex)
+        assertEqualText(der({ w in try w.writeIntegerBytes(encoded[2...]) }), hex)
+        var reader = AsnReader(encoded, rules: .Der)
+        assertEqual(try! reader.readInt(), value)
+    }
+    assertEqualText(der({ w in try w.writeUInt(U64.max) }), "020900ffffffffffffffff")
+    assertEqualText(der({ w in try w.writeUInt(5) }), "020105")
+    assertEqualText(der({ w in try w.writeUnsignedInteger([]) }), "020100")
+    assertEqualText(der({ w in try w.writeUnsignedInteger([0, 0]) }), "020100")
+    assertEqualText(der({ w in try w.writeUnsignedInteger([0, 0x7F]) }), "02017f")
+    assertEqualText(der({ w in try w.writeUnsignedInteger([0x80, 0]) }), "0203008000")
+    for wrong in ["", "007f", "ff80"] {
+        assertEqualText(der({ w in try w.writeIntegerBytes(try! Hex.decode(wrong)) }), "an integer's bytes are as few as hold it")
+    }
+    assertEqualText(der({ w in try w.writeEnumerated(3) }), "0a0103")
+    assertEqualText(der({ w in try w.writeBool(true) }), "0101ff")
+    assertEqualText(der({ w in try w.writeBool(false) }), "010100")
+    assertEqualText(der({ w in try w.writeNull() }), "0500")
+}
+
+@test
+fn reals() {
+    let cases: (F64, String)[>..] = [
+        (0.0, "0900"),
+        (1.0, "0903800001"),
+        (-1.0, "0903c00001"),
+        (0.15625, "090380fb05"),
+        (1024.0, "0903800a01"),
+        (F64.infinity, "090140"),
+        (-F64.infinity, "090141"),
+        (F64.nan, "090142"),
+        (F64.leastNonzeroMagnitude, "090481fbce01"),
+        (F64.greatestFiniteMagnitude, "090a8103cb1fffffffffffff"),
+    ]
+    for (value, hex) in cases {
+        assertEqualText(der({ w in try w.writeReal(value) }), hex)
+    }
+    assertEqualText(der({ w in try w.writeReal(-0.0) }), "090143")
+    var random = SeededRandomNumberGenerator(seed: 85)
+    for _ in 0..<2000 {
+        let value = F64.fromBits(random.next())
+        if value == value {
+            let writer = AsnWriter(rules: .Der)
+            try! writer.writeReal(value)
+            var reader = AsnReader(try! writer.bytes(), rules: .Der)
+            assertEqual(try! reader.readReal(), value)
+        }
+    }
+}
+
+@test
+fn objectIdentifiers() {
+    assertEqualText(der({ w in try w.writeObjectIdentifier("2.999.3") }), "0603883703")
+    assertEqualText(der({ w in try w.writeObjectIdentifier(ObjectIdentifier([1, 2, 840])) }), "06032a8648")
+    assertEqualText(der({ w in try w.writeObjectIdentifier("1.2.840") }), "06032a8648")
+    assertEqualText(der({ w in try w.writeObjectIdentifier("3.1") }), "'3.1' is not an object identifier")
+    assertEqualText(der({ w in try w.writeRelativeOid([8571, 3, 2]) }), "0d04c27b0302")
+    assertEqualText(der({ w in try w.writeRelativeOid([]) }), "a RELATIVE-OID is 1 to 128 numbers")
+}
+
+@test
+fn strings() {
+    assertEqualText(der({ w in try w.writeOctetString([0xCA, 0xFE]) }), "0402cafe")
+    assertEqualText(der({ w in try w.writeBitString(AsnBitString(bytes: [0x0A, 0x3B, 0x5F, 0x29, 0x1C, 0xDF], unusedBits: 4)) }), "0307040a3b5f291cd0")
+    assertEqualText(der({ w in try w.writeBitString(AsnBitString(bytes: [])) }), "030100")
+    assertEqualText(der({ w in try w.writeNamedBits(AsnBitString(bytes: [0x06, 0x00])) }), "03020106")
+    assertEqualText(der({ w in try w.writeNamedBits(AsnBitString(bytes: [0x00, 0x00])) }), "030100")
+    assertEqualText(der({ w in try w.writeNamedBits(flags: 256) }), "0303070080")
+    assertEqualText(der({ w in try w.writeNamedBits(flags: 0) }), "030100")
+    assertEqualText(der({ w in try w.writeString("€") }), "0c03e282ac")
+    assertEqualText(der({ w in try w.writeString("Jones", .Visible) }), "1a054a6f6e6573")
+    assertEqualText(der({ w in try w.writeString("é€", .Bmp) }), "1e0400e920ac")
+    assertEqualText(der({ w in try w.writeString("😀", .Bmp) }), "a BMPString has no U+1F600")
+    assertEqualText(der({ w in try w.writeString("😀", .Universal) }), "1c040001f600")
+    assertEqualText(der({ w in try w.writeString("a@b", .Printable) }), "'a@b' has characters a PrintableString has not")
+    assertEqualText(der({ w in try w.writeString("é", .Teletex) }), "'é' has characters a TeletexString has not")
+    assertEqualText(der({ w in try w.writeStringBytes([0xE9], .Teletex) }), "1401e9")
+    assertEqualText(der({ w in try w.writeString("12 3", .Numeric) }), "120431322033")
+    assertEqualText(der({ w in try w.writeString("/a/b", .OidIri) }), "1f23042f612f62")
+    assertEqualText(der({ w in try w.writeString("a/", .RelativeOidIri) }), "'a/' is not a RELATIVE-OID-IRI")
+    assertEqualText(der({ w in try w.writeString("hi", .Utf8, tag: .context(1)) }), "81026869")
+}
+
+fn at(_ text: String) -> OffsetDateTime {
+    return try! OffsetDateTime.parseRfc3339(text)
+}
+
+fn hexOf(_ text: String) -> String {
+    var bytes: U8[>..] = []
+    bytes.append(utf8: text)
+    return Hex.encode(bytes)
+}
+
+@test
+fn times() {
+    assertEqualText(der({ w in try w.writeUtcTime(at("1992-06-22T14:34:21.5+02:00")) }), "170d" + hexOf("920622123421Z"))
+    assertEqualText(der({ w in try w.writeUtcTime(at("2049-12-31T23:59:59Z")) }), "170d" + hexOf("491231235959Z"))
+    assertEqualText(
+        der({ w in try w.writeUtcTime(at("2050-01-01T00:00:00Z")) }),
+        "a UTCTime has no year 2050, only 1950 to 2049"
+    )
+    assertEqualText(der({ w in try w.writeUtcTime(at("1949-12-31T23:59:59Z")) }), "a UTCTime has no year 1949, only 1950 to 2049")
+    assertEqualText(der({ w in try w.writeUtcTime(at("2050-01-01T00:00:00Z"), twoDigitYearMaximum: 2060) }), "170d" + hexOf("500101000000Z"))
+    assertEqualText(der({ w in try w.writeGeneralizedTime(at("1992-07-22T13:21:00.300Z")) }), "1811" + hexOf("19920722132100.3Z"))
+    assertEqualText(der({ w in try w.writeGeneralizedTime(at("1992-07-22T13:21:00.000000001Z")) }), "1819" + hexOf("19920722132100.000000001Z"))
+    assertEqualText(der({ w in try w.writeGeneralizedTime(at("1992-07-22T13:21:00.3Z"), omitFraction: true) }), "180f" + hexOf("19920722132100Z"))
+    assertEqualText(der({ w in try w.writeGeneralizedTime(at("1992-05-21T01:00:00+01:00")) }), "180f" + hexOf("19920521000000Z"))
+    let local = LocalDateTime.of(year: 2024, month: 2, day: 29, hour: 18, minute: 23, second: 7)!
+    assertEqualText(der({ w in try w.writeDate(local.date) }), "1f1f08" + hexOf("20240229"))
+    assertEqualText(der({ w in try w.writeTimeOfDay(local.time) }), "1f2006" + hexOf("182307"))
+    assertEqualText(der({ w in try w.writeDateTime(local) }), "1f210e" + hexOf("20240229182307"))
+    assertEqualText(der({ w in try w.writeDuration("P1Y0M3DT0H0M") }), "1f2207" + hexOf("1Y3DT0M"))
+    assertEqualText(der({ w in try w.writeDuration("P1Y0M3DT1,50S") }), "1f220a" + hexOf("1Y3DT1.50S"))
+    assertEqualText(wrote(.Ber, { w in try w.writeDuration("P1Y0M3D") }), "1f2206" + hexOf("1Y0M3D"))
+    assertEqualText(der({ w in try w.writeDuration("1Y") }), "'1Y' is not a duration")
+    assertEqualText(der({ w in try w.writeDuration("") }), "'' is not a duration")
+    assertEqualText(der({ w in try w.writeTime("21:06,5") }), "0e07" + hexOf("21:06.5"))
+    assertEqualText(wrote(.Ber, { w in try w.writeTime("21:06,5") }), "0e07" + hexOf("21:06,5"))
+    assertEqualText(der({ w in try w.writeTime("") }), "'' is not a time")
+    assertEqualText(der({ w in try w.writeTime("noon") }), "'noon' is not a time")
+}
+
+@test
+fn whatHoldsValues() {
+    let one: (AsnWriter) throws(AsnError) -> Void = { w in
+        try w.writeSequence {
+            try w.writeInt(1)
+            try w.writeExplicit(.context(0)) {
+                try w.writeBool(true)
+            }
+        }
+    }
+    assertEqualText(wrote(.Der, one), "3008020101a0030101ff")
+    assertEqualText(wrote(.Ber, one), "3008020101a0030101ff")
+    assertEqualText(wrote(.Cer, one), "3080020101a0800101ff00000000")
+    assertEqualText(der({ w in
+        try w.writeSequence(tag: .external) { try w.writeNull() }
+    }), "28020500")
+    assertEqualText(der({ w in
+        try w.writeSequence(tag: .set) { try w.writeNull() }
+    }), "SET is another type's own tag")
+    assertEqualText(der({ w in
+        try w.writeOctetString { try w.writeInt(5) }
+    }), "0403020105")
+    assertEqualText(der({ w in
+        try w.writeBitString { try w.writeInt(5) }
+    }), "030400020105")
+    assertEqualText(wrote(.Cer, { w in
+        try w.writeBitString { try w.writeInt(5) }
+    }), "030400020105")
+    // Encoded values, one whole one at a time.
+    assertEqualText(der({ w in
+        try w.writeSequence { try w.writeEncoded([0x05, 0x00]) }
+    }), "30020500")
+    assertEqualText(der({ w in try w.writeEncoded([0x05, 0x00, 0x05]) }), "byte 2: more after the last value")
+    assertEqualText(der({ w in try w.writeEncoded([0x30, 0x80, 0, 0]) }), "byte 1: an indefinite length")
+    assertEqualText(der({ w in try w.writeEncoded([]) }), "byte 0: the bytes end inside a value")
+}
+
+@test
+fn lengthsOfEverySize() {
+    for count in [0, 1, 127, 128, 255, 256, 65535, 65536, 70000] {
+        for rules in allRules() {
+            var contents: U8[>..] = []
+            for i in 0..<count {
+                contents.append(U8.truncating(i))
+            }
+            let writer = AsnWriter(rules: rules)
+            try! writer.writeSequence(tag: .context(1000)) {
+                try writer.writeOctetString(contents)
+                try writer.writeOctetString {
+                    try writer.writeOctetString(contents)
+                }
+                try writer.writeBitString {
+                    try writer.writeOctetString(contents)
+                }
+            }
+            var reader = AsnReader(try! writer.bytes(), rules: rules)
+            var inner = try! reader.readSequence(tag: .context(1000))
+            assert(try! inner.readOctetString() == contents)
+            var octets = try! inner.readOctetStringContents()
+            assert(try! octets.readOctetString() == contents)
+            var bits = try! inner.readBitStringContents()
+            assert(try! bits.readOctetString() == contents)
+            try! inner.finish()
+            try! reader.finish()
+        }
+    }
+}
+
+@test
+fn setsAreSorted() {
+    let values: (AsnWriter) throws(AsnError) -> Void = { w in
+        try w.writeSet {
+            try w.writeNull(tag: .context(2))
+            try w.writeSequence(tag: .context(1)) {
+                try w.writeInt(300)
+            }
+            try w.writeNull(tag: .application(5))
+            try w.writeInt(1)
+        }
+    }
+    assertEqualText(wrote(.Der, values), "310d020101" + "4500" + "a104" + "0202012c" + "8200")
+    assertEqualText(wrote(.Ber, values), "310d8200" + "a1040202012c" + "4500" + "020101")
+    assertEqualText(wrote(.Cer, values), "3180020101" + "4500" + "a0800202012c0000".replacing("a080", with: "a180") + "8200" + "0000")
+    assertEqualText(
+        der({ w in
+            try w.writeSet {
+                try w.writeInt(2)
+                try w.writeInt(1)
+            }
+        }),
+        "a set has two values of one tag"
+    )
+    let list: (AsnWriter) throws(AsnError) -> Void = { w in
+        try w.writeSetOf {
+            for value in [300, 2, 1, 2, -1] {
+                try w.writeInt(value)
+            }
+        }
+    }
+    assertEqualText(wrote(.Der, list), "3110" + "020101" + "020102" + "020102" + "0201ff" + "0202012c")
+    assertEqualText(wrote(.Cer, list), "3180" + "020101" + "020102" + "020102" + "0201ff" + "0202012c" + "0000")
+    assertEqualText(wrote(.Ber, list), "3110" + "0202012c" + "020102" + "020101" + "020102" + "0201ff")
+    // A set in a set, and one long enough to move.
+    let long = AsnWriter(rules: .Der)
+    try! long.writeSetOf {
+        for i in 0..<300 {
+            try long.writeSetOf {
+                try long.writeInt(299 - i)
+                try long.writeInt(0)
+            }
+        }
+    }
+    var reader = AsnReader(try! long.bytes(), rules: .Der)
+    var sets = try! reader.readSetOf()
+    var count = 0
+    while !sets.isAtEnd {
+        var inner = try! sets.readSetOf()
+        assertEqual(try! inner.readInt(), 0)
+        count += 1
+    }
+    assertEqual(count, 300)
+}
+
+@test
+fn whatIsNotBalanced() {
+    assertEqualText(der({ w in try w.beginSequence() }), "a sequence was begun and not ended")
+    assertEqualText(der({ w in try w.endSequence() }), "a sequence was ended and not begun")
+    assertEqualText(
+        der({ w in
+            try w.beginSequence()
+            try w.endSet()
+        }),
+        "a set was ended and not begun"
+    )
+    assertEqualText(
+        der({ w in
+            try w.beginSet()
+            try w.endSetOf()
+        }),
+        "a set of was ended and not begun"
+    )
+    assertEqualText(
+        der({ w in
+            try w.beginOctetString()
+            try w.endBitString()
+        }),
+        "a bit string was ended and not begun"
+    )
+    assertEqualText(der({ w in try w.endOctetString() }), "an octet string was ended and not begun")
+    assertEqualText(der({ w in try w.endExplicit() }), "an explicit tag was ended and not begun")
+    assertEqualText(der({ w in
+        try w.writeExplicit(.context(0)) { }
+    }), "an explicit tag is of one value, not 0")
+    assertEqualText(der({ w in try w.beginExplicit(.set) }), "an explicit tag is not one of ASN.1's own")
+    assertEqualText(der({ w in try w.writeBool(true, tag: .integer) }), "INTEGER is another type's own tag")
+    let writer = AsnWriter(rules: .Der)
+    try! writer.beginSequence()
+    writer.reset()
+    try! writer.writeNull()
+    assertEqualText(Hex.encode(try! writer.bytes()), "0500")
+}
+
+@test
+fn anyTreeIsReadBack() {
+    var random = SeededRandomNumberGenerator(seed: 690)
+    for round in 0..<300 {
+        let rules: AsnEncodingRules = round % 3 == 0 ? .Ber : round % 3 == 1 ? .Cer : .Der
+        let writer = AsnWriter(rules: rules)
+        writeAny(writer, 0, &random)
+        let bytes = try! writer.bytes()
+        // Written again as it is read, it is the same bytes.
+        var reader = AsnReader(bytes, rules: rules)
+        let again = AsnWriter(rules: rules)
+        try! copy(&reader, again)
+        assert(try! again.bytes() == bytes)
+    }
+}
+
+fn writeAny(_ writer: AsnWriter, _ depth: Int, _ random: inout SeededRandomNumberGenerator) {
+    let kind = Int.random(in: 0..<(depth > 4 ? 4 : 7), using: &random)
+    if kind == 0 {
+        try! writer.writeInt(Int.truncating(random.next()) >> Int.random(in: 0..<64, using: &random))
+    } else if kind == 1 {
+        var bytes: U8[>..] = []
+        bytes.append(repeating: 5, count: Int.random(in: 0..<2500, using: &random))
+        try! writer.writeOctetString(bytes)
+    } else if kind == 2 {
+        try! writer.writeBool(depth % 2 == 0)
+    } else if kind == 3 {
+        try! writer.writeNull()
+    } else {
+        if kind == 4 {
+            try! writer.beginSequence()
+        } else {
+            try! writer.beginSetOf()
+        }
+        for _ in 0..<Int.random(in: 0..<6, using: &random) {
+            writeAny(writer, depth + 1, &random)
+        }
+        if kind == 4 {
+            try! writer.endSequence()
+        } else {
+            try! writer.endSetOf()
+        }
+    }
+}
+
+fn copy(_ reader: inout AsnReader, _ writer: AsnWriter) throws(AsnError) {
+    while !reader.isAtEnd {
+        let tag = try reader.peekTag()
+        if tag.matches(.sequence) {
+            var inner = try reader.readSequence()
+            try writer.beginSequence()
+            try copy(&inner, writer)
+            try writer.endSequence()
+        } else if tag.matches(.set) {
+            var inner = try reader.readSetOf()
+            try writer.beginSetOf()
+            try copy(&inner, writer)
+            try writer.endSetOf()
+        } else if tag.matches(.integer) {
+            try writer.writeBigInt(try reader.readBigInt())
+        } else if tag.matches(.octetString) {
+            try writer.writeOctetString(try reader.readOctetString())
+        } else if tag.matches(.bool) {
+            try writer.writeBool(try reader.readBool())
+        } else {
+            try reader.readNull()
+            try writer.writeNull()
+        }
+    }
+}

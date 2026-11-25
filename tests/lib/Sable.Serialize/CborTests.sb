@@ -35,11 +35,11 @@ fn bytes(_ hex: String) -> U8[>..] {
 
 // What an encoder wrote, or the error it threw.
 fn wrote(_ body: (CborEncoder) throws(SerializeError) -> Void) -> String {
-    return wroteAs(false, body)
+    return wroteAs(.Lax, body)
 }
 
-fn wroteAs(_ deterministic: Bool, _ body: (CborEncoder) throws(SerializeError) -> Void) -> String {
-    let encoder = CborEncoder(deterministic: deterministic)
+fn wroteAs(_ conformance: CborConformance, _ body: (CborEncoder) throws(SerializeError) -> Void) -> String {
+    let encoder = CborEncoder(conformance: conformance)
     do {
         try body(encoder)
         return Hex.encode(try encoder.bytes())
@@ -49,13 +49,13 @@ fn wroteAs(_ deterministic: Bool, _ body: (CborEncoder) throws(SerializeError) -
 }
 
 // The error the bytes do not parse by; "" when they parse.
-fn refusal(_ hex: String, depth: Int = 128, deterministic: Bool = false) -> String {
-    return refusal(of: bytes(hex), depth: depth, deterministic: deterministic)
+fn refusal(_ hex: String, depth: Int = 128, conformance: CborConformance = .Lax) -> String {
+    return refusal(of: bytes(hex), depth: depth, conformance: conformance)
 }
 
-fn refusal(of bytes: U8[>..], depth: Int = 128, deterministic: Bool = false) -> String {
+fn refusal(of bytes: U8[>..], depth: Int = 128, conformance: CborConformance = .Lax) -> String {
     do {
-        _ = try CborValue.parse(bytes, maximumDepth: depth, deterministic: deterministic)
+        let _ = try CborValue.parse(bytes, maximumDepth: depth, conformance: conformance)
         return ""
     } catch {
         return error.description()
@@ -122,12 +122,12 @@ fn rfc8949sExamplesAreReadAndWritten() throws {
         let value = try CborValue.parse(bytes(hex))
         assertEqual(value.diagnostic(), diagnostic)
         assertEqual(Hex.encode(try value.bytes()), hex)
-        assertEqual(Hex.encode(try value.bytes(deterministic: true)), hex)
-        assertEqual(refusal(hex, deterministic: true), "")
+        assertEqual(Hex.encode(try value.bytes(conformance: .Deterministic)), hex)
+        assertEqual(refusal(hex, conformance: .Deterministic), "")
     }
     for (diagnostic, hex) in otherVectors() {
         assertEqual((try CborValue.parse(bytes(hex))).diagnostic(), diagnostic)
-        assert(refusal(hex, deterministic: true).contains("which is not deterministic"))
+        assert(refusal(hex, conformance: .Deterministic).contains("which is not deterministic"))
     }
     // The two subnormal and least normal halves, by value.
     assert(try CborValue.parse(bytes("f90001")) == .Float(value: 5.960464477539063e-8))
@@ -176,8 +176,8 @@ fn theReaderReadsEveryExampleAsTokens() throws {
     // A sequence of items (RFC 8742), and a position in it.
     assert(try tokens(bytes("0180f6")) == [.Unsigned(value: 1), .BeginArray(count: 0), .End, .Simple(value: 22)])
     var reader = CborReader(bytes("820102"))
-    _ = try reader.next()
-    _ = try reader.next()
+    let _ = try reader.next()
+    let _ = try reader.next()
     assertEqual(reader.position, 2)
     assertEqual(reader.depth, 1)
 }
@@ -234,10 +234,10 @@ fn aDerivedTypeGoesThereAndBack() throws {
         when: UtcDateTime.fromUnix(1700000000),
     }
     for deterministic in [false, true] {
-        let encoded = try Cbor.encode(record, deterministic: deterministic)
+        let encoded = try Cbor.encode(record, conformance: deterministic ? .Deterministic : .Lax)
         assertEqual(encoded[0], deterministic ? 0xA6 as U8 : 0xBF as U8)
         assert(try Cbor.decode(Record.self, from: encoded) == record)
-        assertEqual(refusal(of: encoded, deterministic: true).isEmpty, deterministic)
+        assertEqual(refusal(of: encoded, conformance: .Deterministic).isEmpty, deterministic)
     }
     var counts = Dictionary<String, Int>()
     counts["one"] = 1
@@ -253,7 +253,7 @@ fn aDerivedTypeGoesThereAndBack() throws {
 @test
 fn theDeterministicEncodingSortsAMapByItsKeysBytes() throws {
     // RFC 8949 §4.2.1's example: 10, 100, -1, "z", "aa", [100], [-1], false.
-    let hex = wroteAs(true, { (encoder: CborEncoder) throws(SerializeError) in
+    let hex = wroteAs(.Deterministic, { (encoder: CborEncoder) throws(SerializeError) in
         try encoder.beginMap(count: 8)
         try encoder.encodeBool(false)
         try encoder.encodeInt(8)
@@ -278,9 +278,9 @@ fn theDeterministicEncodingSortsAMapByItsKeysBytes() throws {
         try encoder.endMap()
     })
     assertEqual(hex, "a80a0118640220036 17a0462616105811864068120 07f408".replacing(" ", with: ""))
-    assertEqual(refusal(hex, deterministic: true), "")
+    assertEqual(refusal(hex, conformance: .Deterministic), "")
     // Maps in maps, each of a count not known, and a tag on a key.
-    let nested = wroteAs(true, { (encoder: CborEncoder) throws(SerializeError) in
+    let nested = wroteAs(.Deterministic, { (encoder: CborEncoder) throws(SerializeError) in
         try encoder.beginMap(count: none)
         try encoder.encodeKey("b")
         try encoder.beginMap(count: none)
@@ -300,7 +300,7 @@ fn theDeterministicEncodingSortsAMapByItsKeysBytes() throws {
         try encoder.endMap()
     })
     assertEqual(nested, "a36161a06162a261638101 6164f6c5026178".replacing(" ", with: ""))
-    assertEqual(wroteAs(true, {
+    assertEqual(wroteAs(.Deterministic, {
         try $0.beginMap(count: 2);
         try $0.encodeKey("a");
         try $0.encodeNull();
@@ -314,14 +314,89 @@ fn theDeterministicEncodingSortsAMapByItsKeysBytes() throws {
 fn aDecoderCanAskForTheDeterministicEncoding() {
     for hex in ["1800", "190001", "1a0000ffff", "1b00000000ffffffff", "5800", "7800", "9800", "b800", "d800f6", "fa3fc00000", "fb3ff8000000000000", "a2616201616100", "a2616100616101", "5f40ff", "a2f4006100"] {
         if hex != "a2f4006100" {
-            assert(refusal(hex, deterministic: true).contains("not deterministic"))
+            assert(refusal(hex, conformance: .Deterministic).contains("not deterministic"))
         }
-        assertEqual(refusal(hex, deterministic: true).isEmpty, false)
+        assertEqual(refusal(hex, conformance: .Deterministic).isEmpty, false)
     }
-    assertEqual(refusal("a3616101616202f400", deterministic: true), "")
-    assertEqual(refusal("a2616201616100", deterministic: true), "not CBOR: a map's keys out of order, which is not deterministic, at byte 4")
-    assert((try? Cbor.decode(Int.self, from: bytes("1800"), deterministic: true)) == none)
-    assert((try? CborDecoder.parse(bytes("1800"), deterministic: true)) == none)
+    assertEqual(refusal("a3616101616202f400", conformance: .Deterministic), "")
+    assertEqual(refusal("a2616201616100", conformance: .Deterministic), "not CBOR: a map's keys out of order, which is not deterministic, at byte 4")
+    assert((try? Cbor.decode(Int.self, from: bytes("1800"), conformance: .Deterministic)) == none)
+    assert((try? CborDecoder.parse(bytes("1800"), conformance: .Deterministic)) == none)
+}
+
+@test
+fn aDeterministicNanAndBignumHaveOneEncoding() {
+    assertEqual(refusal("f97e00", conformance: .Deterministic), "")
+    assertEqual(refusal("f97e01"), "")
+    assert(refusal("f97e01", conformance: .Deterministic).contains("a NaN, not 0x7E00"))
+    assert(refusal("f9fe00", conformance: .Deterministic).contains("a NaN, not 0x7E00"))
+    assertEqual(refusal("f97c00", conformance: .Deterministic), "")
+    // RFC 8949 §3.4.3: 2^64 is a bignum, and what is less is not.
+    assertEqual(refusal("c249010000000000000000", conformance: .Deterministic), "")
+    assertEqual(refusal("c349010000000000000000", conformance: .Deterministic), "")
+    for hex in ["c248ffffffffffffffff", "c24a00010000000000000000", "c240", "c34101"] {
+        assertEqual(refusal(hex), "")
+        assertEqual(
+            refusal(hex, conformance: .Deterministic),
+            "not CBOR: a bignum longer than it need be, which is not deterministic, at byte 1"
+        )
+    }
+    assertEqual(refusal("c54101", conformance: .Deterministic), "")
+    let cases: (U8[>..], U64, String)[>..] = [
+        ([], 2, "00"),
+        ([0, 5], 2, "05"),
+        ([0, 5], 3, "25"),
+        ([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], 3, "3bffffffffffffffff"),
+        ([0, 1, 0, 0, 0, 0, 0, 0, 0, 0], 2, "c249010000000000000000"),
+        ([0, 5], 24, "d818420005"),
+    ]
+    for (data, tag, hex) in cases {
+        let encoder = CborEncoder(conformance: .Deterministic)
+        try! encoder.beginSequence(count: 2)
+        try! encoder.encodeTag(tag)
+        try! encoder.encodeBytes(data)
+        try! encoder.encodeInt(1)
+        try! encoder.endSequence()
+        assertEqual(Hex.encode(try! encoder.bytes()), "82" + hex + "01")
+    }
+}
+
+@test
+fn lengthFirstPutsShorterKeysBeforeLonger() {
+    // RFC 8949 §4.2.3's example: 10, 100, -1, "z", "aa", [100], [-1], false.
+    let value = try! CborValue.parse(bytes("a80a011864022003617a046261610581186406812007f408"))
+    let encoded = try! value.bytes(conformance: .LengthFirst)
+    assertEqual(Hex.encode(encoded), "a80a012003f408186402617a048120076261610581186406")
+    assertEqual(refusal(of: encoded, conformance: .LengthFirst), "")
+    assert(refusal(of: encoded, conformance: .Deterministic).contains("keys out of order"))
+    assert(refusal("a80a011864022003617a046261610581186406812007f408", conformance: .LengthFirst).contains("keys out of order"))
+}
+
+@test
+fn strictRefusesAKeyTwice() {
+    assertEqual(refusal("a2616200616101", conformance: .Strict), "")
+    assertEqual(refusal("bf616200616101ff", conformance: .Strict), "")
+    assertEqual(refusal("a3616200616101616202"), "")
+    assertEqual(refusal("a3616200616101616202", conformance: .Strict), "not CBOR: a map has a key twice at byte 7")
+    assertEqual(refusal("81bf6162006161016162 02ff".replacing(" ", with: ""), conformance: .Strict), "not CBOR: a map has a key twice at byte 8")
+    let twice = wroteAs(.Strict, { (encoder: CborEncoder) throws(SerializeError) in
+        try encoder.beginMap(count: none)
+        for key in ["b", "a", "b"] {
+            try encoder.encodeKey(key)
+            try encoder.encodeNull()
+        }
+        try encoder.endMap()
+    })
+    assertEqual(twice, "$: a map has the same key twice")
+    let once = wroteAs(.Strict, { (encoder: CborEncoder) throws(SerializeError) in
+        try encoder.beginMap(count: none)
+        for key in ["b", "a"] {
+            try encoder.encodeKey(key)
+            try encoder.encodeNull()
+        }
+        try encoder.endMap()
+    })
+    assertEqual(once, "bf6162f66161f6ff")
 }
 
 @test
@@ -353,40 +428,40 @@ fn decodersSayWhereAndWhatIsWrong() throws {
     var messages: String[>..] = []
     let attempts: (() throws(SerializeError) -> Void)[>..] = [
         {
-            _ = try root.field("zz").decodeInt()
+            let _ = try root.field("zz").decodeInt()
         },
         {
-            _ = try root.field("zz").decodeValue()
+            let _ = try root.field("zz").decodeValue()
         },
         {
-            _ = try root.decodeInt()
+            let _ = try root.decodeInt()
         },
         {
-            _ = try root.field("a").decodeString()
+            let _ = try root.field("a").decodeString()
         },
         {
-            _ = try root.field("a").element(1).decodeBool()
+            let _ = try root.field("a").element(1).decodeBool()
         },
         {
-            _ = try root.field("a").element(0).decodeBytes()
+            let _ = try root.field("a").element(0).decodeBytes()
         },
         {
-            _ = try root.field("a").element(0).decodeSequence()
+            let _ = try root.field("a").element(0).decodeSequence()
         },
         {
-            _ = try root.field("a").element(1).decodeFloat()
+            let _ = try root.field("a").element(1).decodeFloat()
         },
         {
-            _ = try root.field("a").element(1).decodeTimestamp()
+            let _ = try root.field("a").element(1).decodeTimestamp()
         },
         {
-            _ = try root.field("b c").decodeMap()
+            let _ = try root.field("b c").decodeMap()
         },
         {
-            _ = try root.field("a").caseName()
+            let _ = try root.field("a").caseName()
         },
         {
-            _ = try root.field("b c").caseName()
+            let _ = try root.field("b c").caseName()
         },
         { try root.field("a").beginStruct("T") },
         {
@@ -569,7 +644,7 @@ fn anyBytesAreReadOrRefused() {
         if let value = try? CborValue.parse(made) {
             let again = try! value.bytes()
             assert(try! CborValue.parse(again).bytes() == again)
-            _ = value.diagnostic()
+            let _ = value.diagnostic()
             assert((try? tokens(made)) != none)
         }
     }

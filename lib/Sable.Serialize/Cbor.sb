@@ -12,23 +12,22 @@ module Sable.Serialize
 /// assert(try! Cbor.decode(Int[>..].self, from: bytes) == numbers)
 /// ```
 public struct Cbor {
-    /// The value as CBOR: in the deterministic encoding (RFC 8949 §4.2.1),
-    /// if asked, in which a value has one encoding only.
-    public static fn encode<T: Serializable>(_ value: T, deterministic: Bool = false) throws(SerializeError) -> U8[>..] {
-        let encoder = CborEncoder(deterministic: deterministic)
+    /// The value as CBOR: by `.Deterministic`, in the one encoding RFC 8949
+    /// §4.2.1 has of it.
+    public static fn encode<T: Serializable>(_ value: T, conformance: CborConformance = .Lax) throws(SerializeError) -> U8[>..] {
+        let encoder = CborEncoder(conformance: conformance)
         try value.encode(to: encoder)
         return try encoder.bytes()
     }
 
     /// The value of the type the CBOR holds, which nests arrays, maps and
-    /// tags no deeper than that, and is in the deterministic encoding, if
-    /// that is asked for.
+    /// tags no deeper than that, and is what `conformance` takes.
     public static fn decode<T: Serializable>(
         _ type: T.Type,
         from bytes: U8[>..],
         maximumDepth: Int = 128,
-        deterministic: Bool = false
+        conformance: CborConformance = .Lax
     ) throws(SerializeError) -> T {
-        return try T.decode(from: try CborDecoder.parse(bytes, maximumDepth: maximumDepth, deterministic: deterministic))
+        return try T.decode(from: try CborDecoder.parse(bytes, maximumDepth: maximumDepth, conformance: conformance))
     }
 }

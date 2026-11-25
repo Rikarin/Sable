@@ -408,6 +408,26 @@ read where it is found: in a published package, which carries it in place of
 migration step; `sable new` and `init` write `package.sb`, and a directory
 with both kinds is an error, so there is never a question which one applies.
 
+The driver reads it, and `sable.lock`, with a TOML reader of its own
+(`src/Sable.Driver/Packages/Toml.cs`) and not with the library's
+(Sable.Serialize's `Toml`). The plan to use the library's is dropped, for what
+it was to bring has gone and what it would cost has not:
+
+- No manifest is edited as TOML. `sable add` and `remove` edit `package.sb`,
+  through the syntax tree (§5.2.7), and what a manifest evaluates to is written
+  anew; that was what a parser that keeps comments was for.
+- The driver is C#, so the library's parser would run in the SIL interpreter:
+  bound, lowered and run for each manifest and lock file read, where all that
+  is wanted is a table. A manifest must be read before there is a program to
+  compile, by the language server as it starts and for every package of a
+  graph, archives included.
+- The C# reader is what a compiler written in Sable would not bring along: it
+  would use the library's.
+
+What matters is that the two never read one file differently.
+`TomlAgreementTests` holds them to the same texts being TOML and to the same
+values.
+
 ### 5.2.10 Not built yet
 
 - Workspace inheritance in `package.sb` and `workspace.sb`: `shared` and

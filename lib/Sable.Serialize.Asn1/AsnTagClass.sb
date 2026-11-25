@@ -1,0 +1,15 @@
+module Sable.Serialize.Asn1
+
+/// What a tag's number is a number of (X.690 §8.1.2.2), in the order tags
+/// sort in.
+@derive(Equatable, Hashable, Debug)
+public enum AsnTagClass {
+    /// ASN.1's own types: 2 is INTEGER, whoever wrote it.
+    Universal
+    /// A type of one application's.
+    Application
+    /// A field of the structure it is in: what `[0]` in a module is.
+    ContextSpecific
+    /// A type of one organisation's.
+    Private
+}

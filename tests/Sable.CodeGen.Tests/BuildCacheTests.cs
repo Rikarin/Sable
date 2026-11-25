@@ -342,6 +342,38 @@ public sealed class BuildCacheTests {
         Assert.NotEqual(0, SableProcess.Run(fixture.Root, fixture.Home, "cache", "warm", "--import", "Sable.Nothing").ExitCode);
     }
 
+    /// <summary>
+    ///     A main that throws calls the library's <c>uncaughtError</c>, which
+    ///     it is lowered before: the unit declares it all the same.
+    /// </summary>
+    [Fact]
+    public void AMainThatThrowsIsAUnitOfItsOwn() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var fixture = new PackageFixture();
+        fixture.Package("app", "app", "0.1.0", "", ("src/main.sb", """
+            module App
+
+            enum Failure: Error { Any }
+
+            fn checked(_ x: Int) throws(Failure) -> Int {
+                if x > 5 {
+                    throw Failure.Any
+                }
+                return x
+            }
+
+            @main
+            fn main() throws(Failure) {
+                print(try checked(3))
+            }
+
+            """));
+        Assert.Equal("3\n", Build(fixture, "app").Output);
+    }
+
     /// <summary>Builds a package's binary with timings; what it printed, and how many units it compiled and reused.</summary>
     static (string Output, int Compiled, int Reused) Build(PackageFixture fixture, string directory) {
         fixture.Errors.GetStringBuilder().Clear();

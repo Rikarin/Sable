@@ -87,6 +87,8 @@ public struct Tar {
     public static fn extract<Source: PathLike, Target: PathLike>(_ path: Source, to directory: Target, options: ExtractOptions = ExtractOptions()) throws(IoError) {
         let file = try File.open(path)
         let start = try file.read(at: 0, upTo: 4)
+        // Windows moves the position there, too.
+        try file.seek(0, from: .Start)
         if start.count == 4 && start[0] == 0x1F && start[1] == 0x8B {
             try Tar.extract(reading: GzipReader(file), to: directory, options: options)
         } else if start.count == 4 && start.readU32(at: 0, endian: .Little) == 0xFD2F_B528 {

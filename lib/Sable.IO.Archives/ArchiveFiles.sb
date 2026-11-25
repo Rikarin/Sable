@@ -25,6 +25,12 @@ struct ArchiveFiles {
     /// Where a link leads, as an archive says it.
     static fn target(_ path: FilePath) throws(IoError) -> String {
         let target = try File.readLink(path)
-        return String.fromUtf8Lossy(target.bytes)
+        let text = String.fromUtf8Lossy(target.bytes)
+        // Archives have '/' between names, whatever the system has.
+        #if os(windows)
+        return text.replacing("\\", with: "/")
+        #else
+        return text
+        #endif
     }
 }

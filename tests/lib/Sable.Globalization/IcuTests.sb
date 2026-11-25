@@ -54,8 +54,10 @@ struct Mismatches {
         }
     }
 
-    fn report() {
-        expect(count == 0, "\(count) differ:\n" + shown.joined(separator: "\n"))
+    fn report(file: String = #file, line: Int = #line) {
+        if count > 0 {
+            recordFailure("\(count) differ:\n" + shown.joined(separator: "\n"), file: file, line: line)
+        }
     }
 }
 

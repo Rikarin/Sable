@@ -17,31 +17,28 @@ fn at(_ pattern: String, _ seconds: Int, _ tag: String = "en") -> String {
     return DateTimeFormatter(pattern: pattern, locale: Locale.of(tag)!).format(there)
 }
 
-fn dateError(_ text: String, _ pattern: String, _ tag: String = "en") -> ParseError? {
-    do {
-        _ = try DateTimeFormatter(pattern: pattern, locale: Locale.of(tag)!).parseDateTime(text)
-        return none
-    } catch {
-        return error
-    }
+@test(arguments: [
+    ("y yy yyyy yyyyyy u uuuu", "en", "2026 26 2026 002026 2026 2026"),
+    ("M MM MMM MMMM MMMMM", "en", "11 11 Nov November N"),
+    ("L LL LLL LLLL LLLLL", "cs", "11 11 lis listopad 11"),
+    ("MMMM", "cs", "listopadu"),
+    ("d dd D DDD", "en", "7 07 311 311"),
+    ("E EEE EEEE EEEEE", "en", "Sat Sat Saturday S"),
+    ("ccc cccc ccccc", "fi", "la lauantai L"),
+    ("G", "en", "AD"),
+    ("h hh H HH K KK k kk a", "en", "1 01 13 13 1 01 13 13 PM"),
+    ("m mm s ss", "en", "5 05 9 09"),
+    ("S SSS SSSSSS SSSSSSSSS SSSSSSSSSS", "en", "1 123 123456 123456789 1234567890"),
+    ("h B", "en", "1 PM"),
+    ("'o''clock' h''", "en", "o'clock 1'"),
+    ("dd.MM.yyyy", "ar-EG", "٠٧.١١.٢٠٢٦"),
+])
+fn aPatternsFieldsAreWrittenAsTheCldrSays(_ pattern: String, _ tag: String, _ expected: String) {
+    assertEqual(written(pattern, tag), expected)
 }
 
 @test
-fn aPatternsFieldsAreWrittenAsTheCldrSays() {
-    assertEqual(written("y yy yyyy yyyyyy u uuuu"), "2026 26 2026 002026 2026 2026")
-    assertEqual(written("M MM MMM MMMM MMMMM"), "11 11 Nov November N")
-    assertEqual(written("L LL LLL LLLL LLLLL", "cs"), "11 11 lis listopad 11")
-    assertEqual(written("MMMM", "cs"), "listopadu")
-    assertEqual(written("d dd D DDD"), "7 07 311 311")
-    assertEqual(written("E EEE EEEE EEEEE"), "Sat Sat Saturday S")
-    assertEqual(written("ccc cccc ccccc", "fi"), "la lauantai L")
-    assertEqual(written("G"), "AD")
-    assertEqual(written("h hh H HH K KK k kk a"), "1 01 13 13 1 01 13 13 PM")
-    assertEqual(written("m mm s ss"), "5 05 9 09")
-    assertEqual(written("S SSS SSSSSS SSSSSSSSS SSSSSSSSSS"), "1 123 123456 123456789 1234567890")
-    assertEqual(written("h B"), "1 PM")
-    assertEqual(written("'o''clock' h''"), "o'clock 1'")
-    assertEqual(written("dd.MM.yyyy", "ar-EG"), "٠٧.١١.٢٠٢٦")
+fn midnightIsTheHourItsFieldSays() {
     let midnight = TimeOfDay.midnight
     assertEqual(DateTimeFormatter(pattern: "h K k a", locale: Locale.of("en")!).format(midnight), "12 0 24 AM")
 }
@@ -54,16 +51,18 @@ fn aYearBeforeChristIsOfItsEra() {
     assertEqual(read, date)
 }
 
-@test
-fn anOffsetIsWrittenAsItsLettersSay() {
-    assertEqual(at("z|zzzz|O|OOOO", 3600), "GMT+1|GMT+01:00|GMT+1|GMT+01:00")
-    assertEqual(at("z|zzzz", 0), "GMT|GMT")
-    assertEqual(at("z|zzzz", -12600), "GMT-3:30|GMT-03:30")
-    assertEqual(at("z|zzzz", 19800, "fr"), "UTC+5:30|UTC+05:30")
-    assertEqual(at("x xx xxx", 19800), "+0530 +0530 +05:30")
-    assertEqual(at("x X XXX", 3600), "+01 +01 +01:00")
-    assertEqual(at("x X XX", 0), "+00 Z Z")
-    assertEqual(at("Z ZZZZ", -18000), "-0500 GMT-05:00")
+@test(arguments: [
+    ("z|zzzz|O|OOOO", 3600, "en", "GMT+1|GMT+01:00|GMT+1|GMT+01:00"),
+    ("z|zzzz", 0, "en", "GMT|GMT"),
+    ("z|zzzz", -12600, "en", "GMT-3:30|GMT-03:30"),
+    ("z|zzzz", 19800, "fr", "UTC+5:30|UTC+05:30"),
+    ("x xx xxx", 19800, "en", "+0530 +0530 +05:30"),
+    ("x X XXX", 3600, "en", "+01 +01 +01:00"),
+    ("x X XX", 0, "en", "+00 Z Z"),
+    ("Z ZZZZ", -18000, "en", "-0500 GMT-05:00"),
+])
+fn anOffsetIsWrittenAsItsLettersSay(_ pattern: String, _ seconds: Int, _ tag: String, _ expected: String) {
+    assertEqual(at(pattern, seconds, tag), expected)
 }
 
 @test
@@ -74,7 +73,7 @@ fn anOffsetThatIsNotThereIsLeftOut() {
     let time = TimeOfDay.of(hour: 13, minute: 5, second: 9)!
     for tag in Locale.available {
         let text = time.format(.Full, locale: Locale.of(tag)!)
-        assert(!text.hasSuffix(",") && !text.hasSuffix(" ") && !text.hasPrefix(" ") && !text.contains("("), text)
+        expect(!text.hasSuffix(",") && !text.hasSuffix(" ") && !text.hasPrefix(" ") && !text.contains("("), "\(tag): \(text)")
     }
     assertEqual(time.format(.Full, locale: Locale.of("ja")!), "13時05分09秒")
     assertEqual(time.format(.Long, locale: Locale.of("es")!), "13:05:09")
@@ -93,13 +92,15 @@ fn aMomentIsWrittenAsItsClocksShowIt() {
     assertEqual(formatter.pattern, "")
 }
 
-@test
-fn aDateIsReadWhateverItsNamesCaseAndLength() {
+@test(arguments: ["November 7, 2026", "november 7,2026", "NOV 07, 2026", "  November  7 , 2026 "])
+fn aDateIsReadWhateverItsNamesCaseAndLength(_ text: String) throws(ParseError) {
     let english = DateTimeFormatter(date: .Long, locale: Locale.of("en")!)
+    expect(try english.parseDate(text) == Date.of(year: 2026, month: 11, day: 7)!)
+}
+
+@test
+fn aDateIsReadByItsLocaleOrPattern() {
     let wanted = Date.of(year: 2026, month: 11, day: 7)!
-    for text in ["November 7, 2026", "november 7,2026", "NOV 07, 2026", "  November  7 , 2026 "] {
-        assertEqual(try! english.parseDate(text), wanted)
-    }
     assertEqual(try! Date.parse("7/11/26", .Short, locale: Locale.of("fr")!), wanted)
     assertEqual(try! Date.parse("٧ نوفمبر ٢٠٢٦", .Long, locale: Locale.of("ar-EG")!), wanted)
     assertEqual(try! Date.parse("2026年11月7日", .Long, locale: Locale.of("ja")!), wanted)
@@ -119,7 +120,6 @@ fn aTimeIsReadByItsHalfOrPartOfTheDay() {
     assertEqual(try! TimeOfDay.parse("12:30 pm", .Short, locale: english), TimeOfDay.of(hour: 12, minute: 30)!)
     assertEqual(try! TimeOfDay.parse("오후 1:05", .Short, locale: Locale.of("ko")!), TimeOfDay.of(hour: 13, minute: 5)!)
     assertEqual(try! TimeOfDay.parse("下午1:05", .Short, locale: Locale.of("zh-TW")!), TimeOfDay.of(hour: 13, minute: 5)!)
-    assertEqual(dateError("2026-11-07 清晨1:05", "y-MM-dd Bh:mm", "zh-Hant")!, ParseError.Invalid(at: 13))
     let exact = DateTimeFormatter(pattern: "kk:mm:ss.SSS", locale: english)
     assertEqual(try! exact.parseTime("24:00:01.5"), TimeOfDay.of(hour: 0, minute: 0, second: 1, nanosecond: 500000000)!)
     let eleven = DateTimeFormatter(pattern: "K:mm a", locale: english)
@@ -130,31 +130,38 @@ fn aTimeIsReadByItsHalfOrPartOfTheDay() {
 }
 
 @test
-fn aTypeReadsWhatItWrites() {
-    for tag in ["en", "de", "ar-EG", "ko", "zh-TW", "hi", "fr-CA"] {
-        let locale = Locale.of(tag)!
-        let text = moment().format(date: .Long, time: .Medium, locale: locale)
-        let whole = LocalDateTime.of(year: 2026, month: 11, day: 7, hour: 13, minute: 5, second: 9)!
-        assertEqual(try! LocalDateTime.parse(text, date: .Long, time: .Medium, locale: locale), whole)
-        assertEqual(try! Date.parse(whole.date.format(.Full, locale: locale), .Full, locale: locale), whole.date)
-        assertEqual(try! TimeOfDay.parse(whole.time.format(.Medium, locale: locale), .Medium, locale: locale), whole.time)
-    }
+fn aPartOfTheDayMayNotBeTheHours() {
+    let formatter = DateTimeFormatter(pattern: "y-MM-dd Bh:mm", locale: Locale.of("zh-Hant")!)
+    expectThrows(ParseError.Invalid(at: 13)) { _ = try formatter.parseDateTime("2026-11-07 清晨1:05") }
 }
 
-@test
-fn whatIsNoDateIsRefusedWhereItIsWrong() {
-    assertEqual(dateError("", "y-MM-dd")!, ParseError.Empty)
-    assertEqual(dateError("2026/11/07", "y-MM-dd")!, ParseError.Invalid(at: 4))
-    assertEqual(dateError("2026-xx-07", "y-MM-dd")!, ParseError.InvalidDigit(at: 5))
-    assertEqual(dateError("2026-13-07", "y-MM-dd")!, ParseError.Invalid(at: 5))
-    assertEqual(dateError("2026-02-30", "y-MM-dd")!, ParseError.Invalid(at: 8))
-    assertEqual(dateError("2026-02-03x", "y-MM-dd")!, ParseError.Invalid(at: 10))
-    assertEqual(dateError("2026-02", "y-MM-dd")!, ParseError.Invalid(at: 7))
-    assertEqual(dateError("7 Nvm 2026", "d MMM y")!, ParseError.Invalid(at: 2))
-    assertEqual(dateError("Mon 7 Nov 2026", "E d MMM y")!, ParseError.Invalid(at: 0))
-    assertEqual(dateError("25:00", "H:mm")!, ParseError.Invalid(at: 0))
-    assertEqual(dateError("13:00 PM", "h:mm a")!, ParseError.Invalid(at: 0))
-    assertEqual(dateError("0:00", "k:mm")!, ParseError.Invalid(at: 0))
-    assertEqual(dateError("12:60", "H:mm")!, ParseError.Invalid(at: 3))
-    assertEqual(dateError("12:00:60", "H:mm:ss")!, ParseError.Invalid(at: 6))
+@test(arguments: ["en", "de", "ar-EG", "ko", "zh-TW", "hi", "fr-CA"])
+fn aTypeReadsWhatItWrites(_ tag: String) throws(ParseError) {
+    let locale = Locale.of(tag)!
+    let text = moment().format(date: .Long, time: .Medium, locale: locale)
+    let whole = LocalDateTime.of(year: 2026, month: 11, day: 7, hour: 13, minute: 5, second: 9)!
+    assertEqual(try LocalDateTime.parse(text, date: .Long, time: .Medium, locale: locale), whole)
+    assertEqual(try Date.parse(whole.date.format(.Full, locale: locale), .Full, locale: locale), whole.date)
+    assertEqual(try TimeOfDay.parse(whole.time.format(.Medium, locale: locale), .Medium, locale: locale), whole.time)
+}
+
+@test(arguments: [
+    ("", "y-MM-dd", ParseError.Empty),
+    ("2026/11/07", "y-MM-dd", ParseError.Invalid(at: 4)),
+    ("2026-xx-07", "y-MM-dd", ParseError.InvalidDigit(at: 5)),
+    ("2026-13-07", "y-MM-dd", ParseError.Invalid(at: 5)),
+    ("2026-02-30", "y-MM-dd", ParseError.Invalid(at: 8)),
+    ("2026-02-03x", "y-MM-dd", ParseError.Invalid(at: 10)),
+    ("2026-02", "y-MM-dd", ParseError.Invalid(at: 7)),
+    ("7 Nvm 2026", "d MMM y", ParseError.Invalid(at: 2)),
+    ("Mon 7 Nov 2026", "E d MMM y", ParseError.Invalid(at: 0)),
+    ("25:00", "H:mm", ParseError.Invalid(at: 0)),
+    ("13:00 PM", "h:mm a", ParseError.Invalid(at: 0)),
+    ("0:00", "k:mm", ParseError.Invalid(at: 0)),
+    ("12:60", "H:mm", ParseError.Invalid(at: 3)),
+    ("12:00:60", "H:mm:ss", ParseError.Invalid(at: 6)),
+])
+fn whatIsNoDateIsRefusedWhereItIsWrong(_ text: String, _ pattern: String, _ error: ParseError) {
+    let formatter = DateTimeFormatter(pattern: pattern, locale: Locale.of("en")!)
+    expectThrows(error) { _ = try formatter.parseDateTime(text) }
 }

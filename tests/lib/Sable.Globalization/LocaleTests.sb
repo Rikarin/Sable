@@ -5,46 +5,36 @@ import Sable.IO
 import Sable.Testing
 import Sable.Time
 
-fn localeError(_ text: String) -> ParseError? {
-    do {
-        _ = try Locale.parse(text)
-        return none
-    } catch {
-        return error
-    }
+@test(arguments: [
+    ("EN", "en"), ("en-us", "en-US"), ("ZH-HANT-tw", "zh-Hant-TW"), ("sr-cyrl", "sr-Cyrl"), ("es-419", "es-419"),
+    ("de-1996-DE-x-y", ""), ("de-DE-1996", "de-DE-1996"), ("sl-rozaj-biske-1994", "sl-1994-biske-rozaj"),
+    ("en-u-attr-nu-latn-ca-buddhist", "en-u-attr-ca-buddhist-nu-latn"), ("en-u-kn-true", "en-u-kn"),
+    ("de-t-en-u-co-phonebk", "de-t-en-u-co-phonebk"), ("en-x-A-b", "en-x-a-b"), ("x-whatever", "und-x-whatever"),
+    ("i-klingon", "tlh"), ("zh-min-nan", "nan"), ("iw-IL", "he-IL"), ("sh", "sr-Latn"), ("sh-Cyrl", "sr-Cyrl"), ("de-DD", "de-DE"),
+    ("en-UK", "en-GB"), ("zh-yue-HK", "yue-HK"), ("en-a-bbb-x-a-ccc", "en-a-bbb-x-a-ccc"), ("und", "und"),
+])
+fn aTagIsPutInCanonicalForm(_ text: String, _ tag: String) {
+    assertEqual(Locale.of(text)?.tag ?? "", tag)
 }
 
-@test
-fn aTagIsPutInCanonicalForm() {
-    let all = [
-        ("EN", "en"), ("en-us", "en-US"), ("ZH-HANT-tw", "zh-Hant-TW"), ("sr-cyrl", "sr-Cyrl"), ("es-419", "es-419"),
-        ("de-1996-DE-x-y", ""), ("de-DE-1996", "de-DE-1996"), ("sl-rozaj-biske-1994", "sl-1994-biske-rozaj"),
-        ("en-u-attr-nu-latn-ca-buddhist", "en-u-attr-ca-buddhist-nu-latn"), ("en-u-kn-true", "en-u-kn"),
-        ("de-t-en-u-co-phonebk", "de-t-en-u-co-phonebk"), ("en-x-A-b", "en-x-a-b"), ("x-whatever", "und-x-whatever"),
-        ("i-klingon", "tlh"), ("zh-min-nan", "nan"), ("iw-IL", "he-IL"), ("sh", "sr-Latn"), ("sh-Cyrl", "sr-Cyrl"), ("de-DD", "de-DE"),
-        ("en-UK", "en-GB"), ("zh-yue-HK", "yue-HK"), ("en-a-bbb-x-a-ccc", "en-a-bbb-x-a-ccc"), ("und", "und"),
-    ]
-    for (text, tag) in all {
-        assertEqual(Locale.of(text)?.tag ?? "", tag)
-    }
-}
-
-@test
-fn aTagThatIsNoneIsRefusedWhereItIsWrong() {
-    assertEqual(localeError(""), ParseError.Empty)
-    assertEqual(localeError("e"), ParseError.Invalid(at: 0))
-    assertEqual(localeError("engl"), ParseError.Invalid(at: 0))
-    assertEqual(localeError("en--US"), ParseError.Invalid(at: 3))
-    assertEqual(localeError("en_US"), ParseError.Invalid(at: 0))
-    assertEqual(localeError("en-averylongsubtag"), ParseError.Invalid(at: 3))
-    assertEqual(localeError("en-US-GB"), ParseError.Invalid(at: 6))
-    assertEqual(localeError("en-u"), ParseError.Invalid(at: 4))
-    assertEqual(localeError("en-u-a"), ParseError.Invalid(at: 5))
-    assertEqual(localeError("en-x"), ParseError.Invalid(at: 4))
-    assertEqual(localeError("x"), ParseError.Invalid(at: 1))
-    assertEqual(localeError("de-1996-1996"), ParseError.Invalid(at: 8))
-    assertEqual(localeError("en-a-bb-a-cc"), ParseError.Invalid(at: 8))
-    assertEqual(localeError("čs"), ParseError.Invalid(at: 0))
+@test(arguments: [
+    ("", ParseError.Empty),
+    ("e", ParseError.Invalid(at: 0)),
+    ("engl", ParseError.Invalid(at: 0)),
+    ("en--US", ParseError.Invalid(at: 3)),
+    ("en_US", ParseError.Invalid(at: 0)),
+    ("en-averylongsubtag", ParseError.Invalid(at: 3)),
+    ("en-US-GB", ParseError.Invalid(at: 6)),
+    ("en-u", ParseError.Invalid(at: 4)),
+    ("en-u-a", ParseError.Invalid(at: 5)),
+    ("en-x", ParseError.Invalid(at: 4)),
+    ("x", ParseError.Invalid(at: 1)),
+    ("de-1996-1996", ParseError.Invalid(at: 8)),
+    ("en-a-bb-a-cc", ParseError.Invalid(at: 8)),
+    ("čs", ParseError.Invalid(at: 0)),
+])
+fn aTagThatIsNoneIsRefusedWhereItIsWrong(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try Locale.parse(text) }
 }
 
 @test
@@ -60,30 +50,37 @@ fn aLocaleNamesItsParts() {
     expect(same[Locale.of("en-US")!]! == 1)
 }
 
+@test(arguments: [
+    ("en-US", "en"), ("en-GB", "en-GB"), ("en-ZW", "en-001"), ("en-Latn-GB", "en-GB"), ("es-AR", "es-419"), ("es-ES", "es"), ("pt-AO", "pt-PT"),
+    ("zh-TW", "zh-Hant"), ("zh-Hant-HK", "zh-Hant"), ("zh-Hans-TW", "zh"), ("zh-CN", "zh"), ("sr-Latn", "und"), ("sr-Latn-RS", "und"), ("sr-RS", "sr"), ("no", "nb"),
+    ("no-NO", "nb"), ("tlh", "und"), ("und", "und"), ("en-Cyrl", "und"),
+])
+fn aLocaleWithNoDataOfItsOwnHasItsAncestors(_ tag: String, _ data: String) {
+    assertEqual(Locale.of(tag)!.dataLocale, data)
+}
+
 @test
-fn aLocaleWithNoDataOfItsOwnHasItsAncestors() {
-    let all = [
-        ("en-US", "en"), ("en-GB", "en-GB"), ("en-ZW", "en-001"), ("en-Latn-GB", "en-GB"), ("es-AR", "es-419"), ("es-ES", "es"), ("pt-AO", "pt-PT"),
-        ("zh-TW", "zh-Hant"), ("zh-Hant-HK", "zh-Hant"), ("zh-Hans-TW", "zh"), ("zh-CN", "zh"), ("sr-Latn", "und"), ("sr-Latn-RS", "und"), ("sr-RS", "sr"), ("no", "nb"),
-        ("no-NO", "nb"), ("tlh", "und"), ("und", "und"), ("en-Cyrl", "und"),
-    ]
-    for (tag, data) in all {
-        assertEqual(Locale.of(tag)!.dataLocale, data)
-    }
+fn aLocaleWithDataIsItsOwn() {
     for tag in Locale.available {
-        assertEqual(Locale.of(tag)!.dataLocale, tag)
+        expect(Locale.of(tag)?.dataLocale == tag)
     }
     expect(Locale.available.count > 50)
 }
 
+@test(arguments: [
+    ("en_US.UTF-8", "en-US"),
+    ("de_DE@euro", "de-DE"),
+    ("sr_RS.UTF-8@latin", "sr-Latn-RS"),
+    ("sr@cyrillic", "sr-Cyrl"),
+    ("sr_Latn_RS@latin", "sr-Latn-RS"),
+    ("POSIX", "und"),
+])
+fn aPosixNameIsALocale(_ name: String, _ tag: String) {
+    assertEqual(Locale.fromPosix(name)?.tag, tag)
+}
+
 @test
-fn aPosixNameIsALocale() {
-    assertEqual(Locale.fromPosix("en_US.UTF-8")!.tag, "en-US")
-    assertEqual(Locale.fromPosix("de_DE@euro")!.tag, "de-DE")
-    assertEqual(Locale.fromPosix("sr_RS.UTF-8@latin")!.tag, "sr-Latn-RS")
-    assertEqual(Locale.fromPosix("sr@cyrillic")!.tag, "sr-Cyrl")
-    assertEqual(Locale.fromPosix("sr_Latn_RS@latin")!.tag, "sr-Latn-RS")
-    assertEqual(Locale.fromPosix("POSIX")!.tag, "und")
+fn whatIsNoPosixNameIsNoLocale() {
     expect(Locale.fromPosix("") == none && Locale.fromPosix("!") == none)
 }
 
@@ -112,14 +109,20 @@ fn theCurrentLocaleIsTheEnvironments() {
     expect(!Locale.current.tag.isEmpty)
 }
 
+@test(arguments: [
+    ("fa", "arabext"),
+    ("hi", "latn"),
+    ("hi-u-nu-native", "deva"),
+    ("hi-u-nu-traditio", "deva"),
+    ("en-u-nu-thai", "thai"),
+    ("en-u-nu-nothing", "latn"),
+])
+fn aNumberingSystemIsTheLocalesOrTheOneAsked(_ tag: String, _ system: String) {
+    assertEqual(Locale.of(tag)!.numberingSystem, system)
+}
+
 @test
-fn aNumberingSystemIsTheLocalesOrTheOneAsked() {
-    assertEqual(Locale.of("fa")!.numberingSystem, "arabext")
-    assertEqual(Locale.of("hi")!.numberingSystem, "latn")
-    assertEqual(Locale.of("hi-u-nu-native")!.numberingSystem, "deva")
-    assertEqual(Locale.of("hi-u-nu-traditio")!.numberingSystem, "deva")
-    assertEqual(Locale.of("en-u-nu-thai")!.numberingSystem, "thai")
-    assertEqual(Locale.of("en-u-nu-nothing")!.numberingSystem, "latn")
+fn aWeekStartsOnTheLocalesDay() {
     assertEqual(Locale.invariant.firstDayOfWeek, Weekday.Monday)
     assertEqual(Locale.of("ar-EG")!.firstDayOfWeek, Weekday.Saturday)
     assertEqual(cldrVersion, "49")

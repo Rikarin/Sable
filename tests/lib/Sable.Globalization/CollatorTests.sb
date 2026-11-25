@@ -4,14 +4,12 @@ import Sable.Globalization
 import Sable.Testing
 import Sable.Text
 
-fn inOrder(_ collator: Collator, _ texts: String[>..]) {
-    var i = 1
-    while i < texts.count {
-        let pair = "\(texts[i - 1]) \(texts[i])"
-        assertEqual(collator.compare(texts[i - 1], texts[i]), Ordering.Less)
-        assertEqual(collator.compare(texts[i], texts[i - 1]), Ordering.Greater)
-        assert(collator.sortKey(texts[i - 1]) < collator.sortKey(texts[i]), pair)
-        i += 1
+fn inOrder(_ collator: Collator, _ texts: String[>..], file: String = #file, line: Int = #line) {
+    for i in 1..<texts.count {
+        let pair = "\(texts[i - 1]:?) \(texts[i]:?)"
+        expect(collator.compare(texts[i - 1], texts[i]) == .Less, pair, file: file, line: line)
+        expect(collator.compare(texts[i], texts[i - 1]) == .Greater, pair, file: file, line: line)
+        expect(collator.sortKey(texts[i - 1]) < collator.sortKey(texts[i]), pair, file: file, line: line)
     }
 }
 
@@ -25,20 +23,22 @@ fn theRootOrdersByLettersThenAccentsThenCase() {
     assertEqual(root.sortKey("\u{E9}"), root.sortKey("e\u{301}"))
 }
 
-@test
-fn aLanguageOrdersItsLettersItsOwnWay() {
-    inOrder(Collator(Locale.of("sv")!), ["zon", "ål", "ärm", "öl"])
-    inOrder(Collator(Locale.of("de")!), ["ad", "ärm", "az", "öl", "zon"])
-    inOrder(Collator(Locale.of("de-u-co-phonebk")!), ["ad", "ae", "ärm", "af"])
-    inOrder(Collator(Locale.of("cs")!), ["cena", "čas", "hora", "chata", "jih"])
-    inOrder(Collator(Locale.of("es")!), ["nz", "ñandú", "o"])
-    inOrder(Collator(Locale.of("es-u-co-trad")!), ["cz", "chico", "d", "lz", "llama", "m"])
-    inOrder(Collator(Locale.of("da")!), ["zebra", "Ærø", "ærø", "ø", "å"])
-    inOrder(Collator(Locale.of("no")!), ["zebra", "ærø", "ø", "å"])
-    inOrder(Collator(Locale.of("fr-CA")!), ["cote", "côte", "coté", "côté"])
-    inOrder(Collator(Locale.of("ru")!), ["1", "я", "a", "α"])
-    inOrder(Collator(Locale.of("sr-Latn")!), ["c", "č", "ć", "d", "dž", "đ"])
-    inOrder(Collator(Locale.of("xx")!), ["a", "ä", "b"])
+@test(arguments: [
+    ("sv", ["zon", "ål", "ärm", "öl"]),
+    ("de", ["ad", "ärm", "az", "öl", "zon"]),
+    ("de-u-co-phonebk", ["ad", "ae", "ärm", "af"]),
+    ("cs", ["cena", "čas", "hora", "chata", "jih"]),
+    ("es", ["nz", "ñandú", "o"]),
+    ("es-u-co-trad", ["cz", "chico", "d", "lz", "llama", "m"]),
+    ("da", ["zebra", "Ærø", "ærø", "ø", "å"]),
+    ("no", ["zebra", "ærø", "ø", "å"]),
+    ("fr-CA", ["cote", "côte", "coté", "côté"]),
+    ("ru", ["1", "я", "a", "α"]),
+    ("sr-Latn", ["c", "č", "ć", "d", "dž", "đ"]),
+    ("xx", ["a", "ä", "b"]),
+])
+fn aLanguageOrdersItsLettersItsOwnWay(_ tag: String, _ texts: String[>..]) {
+    inOrder(Collator(Locale.of(tag)!), texts)
 }
 
 @test
@@ -55,11 +55,9 @@ fn aStrengthSaysHowSmallADifferenceCounts() {
     assertEqual(all.compare("\u{E9}", "e\u{301}"), Ordering.Equal)
 }
 
-@test
-fn aCaseMayComeFirst() {
-    inOrder(Collator(.invariant, caseFirst: .Upper), ["A", "a", "B", "b"])
-    inOrder(Collator(.invariant, caseFirst: .Lower), ["a", "A", "b", "B"])
-    inOrder(Collator(.invariant, caseFirst: .Upper), ["A\u{338}", "a\u{338}"])
+@test(arguments: [(.Upper, ["A", "a", "B", "b"]), (.Lower, ["a", "A", "b", "B"]), (.Upper, ["A\u{338}", "a\u{338}"])])
+fn aCaseMayComeFirst(_ first: CollationCaseFirst, _ texts: String[>..]) {
+    inOrder(Collator(.invariant, caseFirst: first), texts)
 }
 
 @test
@@ -117,58 +115,31 @@ fn aCollatorSortsAndCompares() {
     expect(places[czech.sortKey("a")]! == 1 && czech.sortKey("a").bytes.count > 3)
 }
 
-struct Dice {
-    var state: U64
-
-    mutating fn next(_ below: Int) -> Int {
-        state = state ^ (state << 13)
-        state = state ^ (state >> 7)
-        state = state ^ (state << 17)
-        return Int(state % U64(below))
-    }
-
-    /// Up to six letters of the alphabets whose characters are taken alone,
-    /// with marks, digits, spaces and others among them.
-    mutating fn text() -> String {
-        var made = ""
-        for _ in 0..<next(7) {
-            let code = match next(12) {
-                case 0 => 0x300 + next(0x70)
-                case 1 => 0xC0 + next(0x490)
-                case 2 => 0x30 + next(10)
-                case 3 => 0x20 + next(16)
-                case 4 => 0xE00 + next(0x60)
-                case 5 => 0x410 + next(0x40)
-                case 6 => "chlzsnygdjěř·ÅåäöøæœßİıñÑ".toArray()[next(25)].codePoint
-                case _ => (next(4) == 0 ? 0x41 : 0x61) + next(26)
-            }
-            if let c = Char.fromCodePoint(code) {
-                made += String.fromChar(c)
-            }
-        }
-        return made
-    }
-}
+// A character of the alphabets whose characters are taken alone, with marks,
+// digits, spaces and others among them.
+let characters: Gen<Char> = Gen<Char>.weighted([
+    (4, Gen.number(in: 0x61...0x7A)), (1, Gen.number(in: 0x41...0x5A)), (1, Gen.number(in: 0x300...0x36F)), (1, Gen.number(in: 0xC0...0x54F)),
+    (1, Gen.number(in: 0x30...0x39)), (1, Gen.number(in: 0x20...0x2F)), (1, Gen.number(in: 0xE00...0xE5F)), (1, Gen.number(in: 0x410...0x44F)),
+    (1, Gen.element(of: "chlzsnygdjěř·ÅåäöøæœßİıñÑ".toArray()).map { $0.codePoint }),
+]).map { Char.fromCodePoint($0) ?? 'a' }
+let words: Gen<String> = Gen<String>.string(of: characters, count: 0...6)
 
 // Decomposed, a letter with a mark is not taken alone, and a sort key is of
 // the whole text: three ways to the same order.
-@test
-fn textsAreOrderedAlikeHoweverTheyAreWritten() {
-    var dice = Dice { state: 0x9E3779B97F4A7C15 }
-    for tag in ["und", "sv", "cs", "hu", "da", "es-u-co-trad", "fr-CA", "ru", "el", "tr", "lt", "cy", "vi", "en-u-kn", "en-u-ka-shifted"] {
-        let collator = Collator(Locale.of(tag)!)
-        for round in 0..<150 {
-            let a = dice.text()
-            let b = round % 3 == 0 ? a + dice.text() : round % 3 == 1 ? a.uppercased() + dice.text() : dice.text()
-            let order = collator.compare(a, b)
-            let what = "\(tag) \(a:?) \(b:?)"
-            let x = collator.sortKey(a)
-            let y = collator.sortKey(b)
-            assert(order == (x < y ? Ordering.Less : y < x ? Ordering.Greater : Ordering.Equal), what)
-            let c = a.normalized(.NFD)
-            let d = b.normalized(.NFD)
-            assertEqual(collator.compare(a, c), Ordering.Equal)
-            assert(collator.compare(c, d) == order && collator.compare(a, d) == order && collator.compare(c, b) == order, what)
-        }
+@test(arguments: ["und", "sv", "cs", "hu", "da", "es-u-co-trad", "fr-CA", "ru", "el", "tr", "lt", "cy", "vi", "en-u-kn", "en-u-ka-shifted"])
+fn textsAreOrderedAlikeHoweverTheyAreWritten(_ tag: String) {
+    let collator = Collator(Locale.of(tag)!)
+    // The second is one of its own, or the first, in capitals or not, and more.
+    let seconds = Gen.number(in: 0...2)
+    forAll(words, words, seconds, cases: 150) { (a: String, more: String, kind: Int) in
+        let b = kind == 0 ? more : kind == 1 ? a + more : a.uppercased() + more
+        let order = collator.compare(a, b)
+        let x = collator.sortKey(a)
+        let y = collator.sortKey(b)
+        expect(order == (x < y ? Ordering.Less : y < x ? Ordering.Greater : Ordering.Equal))
+        let c = a.normalized(.NFD)
+        let d = b.normalized(.NFD)
+        expect(collator.compare(a, c) == .Equal)
+        expect(collator.compare(c, d) == order && collator.compare(a, d) == order && collator.compare(c, b) == order)
     }
 }

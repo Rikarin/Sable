@@ -12,15 +12,6 @@ fn spec(_ text: String) -> FormatSpec {
     return try! FormatSpec.parse(text)
 }
 
-fn readError(_ text: String, _ tag: String, _ format: NumberFormat = .decimal) -> ParseError? {
-    do {
-        _ = try F64.parse(text, format: format, locale: locale(tag))
-        return none
-    } catch {
-        return error
-    }
-}
-
 @test
 fn everyNumberTypeIsWrittenAndReadByALocale() {
     let german = locale("de")
@@ -163,24 +154,25 @@ fn theInvariantLocaleWritesAsNoLocaleDoes() {
     assertEqual(2.5.format(.currency("EUR"), locale: .invariant), "€2.50")
 }
 
-@test
-fn aNumberIsReadHoweverItsSpacesAndSignsAreWritten() {
-    let french = locale("fr")
-    assertEqual(try! F64.parse("1 234 567,5", locale: french), 1234567.5)
-    assertEqual(try! F64.parse("1\u{202F}234\u{A0}567,5", locale: french), 1234567.5)
-    assertEqual(try! F64.parse("  -12,5 ", locale: french), -12.5)
-    assertEqual(try! F64.parse("\u{2212}12,5", locale: french), -12.5)
-    assertEqual(try! F64.parse("+12,5", locale: french), 12.5)
-    assertEqual(try! F64.parse(",5", locale: french), 0.5)
-    assertEqual(try! F64.parse("5,", locale: french), 5.0)
-    assertEqual(try! F64.parse("1234567", locale: french), 1234567.0)
-    assertEqual(try! F64.parse("1’234.5", locale: locale("de-CH")), 1234.5)
-    assertEqual(try! F64.parse("12,34,567.5", locale: locale("hi")), 1234567.5)
-    assertEqual(try! F64.parse("\u{61C}-١٬٢٣٤٫٥", locale: locale("ar-EG")), -1234.5)
-    assertEqual(try! F64.parse("1234.5", locale: locale("ar-EG-u-nu-latn")), 1234.5)
-    assertEqual(try! F64.parse("1.5E-3", format: .scientific, locale: locale("en")), 0.0015)
-    assertEqual(try! F64.parse("1,5×10^−3", format: .scientific, locale: locale("sv")), 0.0015)
-    assertEqual(try! F64.parse("1.e+3", format: .scientific, locale: locale("en")), 1000.0)
+@test(arguments: [
+    ("1 234 567,5", "fr", .decimal, 1234567.5),
+    ("1\u{202F}234\u{A0}567,5", "fr", .decimal, 1234567.5),
+    ("  -12,5 ", "fr", .decimal, -12.5),
+    ("\u{2212}12,5", "fr", .decimal, -12.5),
+    ("+12,5", "fr", .decimal, 12.5),
+    (",5", "fr", .decimal, 0.5),
+    ("5,", "fr", .decimal, 5.0),
+    ("1234567", "fr", .decimal, 1234567.0),
+    ("1’234.5", "de-CH", .decimal, 1234.5),
+    ("12,34,567.5", "hi", .decimal, 1234567.5),
+    ("\u{61C}-١٬٢٣٤٫٥", "ar-EG", .decimal, -1234.5),
+    ("1234.5", "ar-EG-u-nu-latn", .decimal, 1234.5),
+    ("1.5E-3", "en", .scientific, 0.0015),
+    ("1,5×10^−3", "sv", .scientific, 0.0015),
+    ("1.e+3", "en", .scientific, 1000.0),
+])
+fn aNumberIsReadHoweverItsSpacesAndSignsAreWritten(_ text: String, _ tag: String, _ format: NumberFormat, _ number: F64) throws(ParseError) {
+    expect(try F64.parse(text, format: format, locale: locale(tag)) == number)
 }
 
 @test
@@ -189,42 +181,47 @@ fn aPercentageIsReadAsTheNumberOfOneItIs() {
     assertEqual(try! F64.parse("%5", format: .percent, locale: locale("tr")), 0.05)
     assertEqual(try! F64.parse("-5 %", format: .percent, locale: locale("de")), -0.05)
     assertEqual(try! Int.parse("500%", format: .percent, locale: locale("en")), 5)
-    assertEqual(readError("12.5", "en", .percent)!, ParseError.Invalid(at: 0))
+    expectThrows(ParseError.Invalid(at: 0)) { _ = try F64.parse("12.5", format: .percent, locale: locale("en")) }
+}
+
+@test(arguments: ["CA$12.50", "$12.50", "CAD 12.50", "CAD12.50", "12.50"])
+fn moneyIsReadWithItsSymbolOrCodeOrNeither(_ text: String) throws(ParseError) {
+    let money = NumberFormat.currency("CAD")
+    expect(try F64.parse(text, format: money, locale: locale("en")) == 12.5)
+    expect(try F64.parse("-" + text, format: money, locale: locale("en")) == -12.5)
 }
 
 @test
-fn moneyIsReadWithItsSymbolOrCodeOrNeither() {
+fn accountingMoneyIsNegativeInParentheses() {
     let money = NumberFormat.currency("CAD")
-    for text in ["CA$12.50", "$12.50", "CAD 12.50", "CAD12.50", "12.50"] {
-        assertEqual(try! F64.parse(text, format: money, locale: locale("en")), 12.5)
-        assertEqual(try! F64.parse("-" + text, format: money, locale: locale("en")), -12.5)
-    }
     var accounts = money
     accounts.accounting = true
     assertEqual(try! F64.parse("(CA$12.50)", format: accounts, locale: locale("en")), -12.5)
-    assertEqual(readError("€12.50", "en", money)!, ParseError.InvalidDigit(at: 0))
+    expectThrows(ParseError.InvalidDigit(at: 0)) { _ = try F64.parse("€12.50", format: money, locale: locale("en")) }
 }
 
-@test
-fn whatIsNoNumberIsRefusedWhereItStopsBeingOne() {
-    assertEqual(readError("", "en")!, ParseError.Empty)
-    assertEqual(readError("  ", "en")!, ParseError.Empty)
-    assertEqual(readError("12x", "en")!, ParseError.InvalidDigit(at: 2))
-    assertEqual(readError("-", "en")!, ParseError.InvalidDigit(at: 0))
-    assertEqual(readError("-x", "en")!, ParseError.InvalidDigit(at: 1))
-    assertEqual(readError("1.2.3", "en")!, ParseError.InvalidDigit(at: 3))
-    assertEqual(readError("1.234,5", "en")!, ParseError.InvalidDigit(at: 5))
-    assertEqual(readError(".", "en")!, ParseError.InvalidDigit(at: 1))
-    assertEqual(readError("1e5", "en")!, ParseError.InvalidDigit(at: 1))
-    assertEqual(readError("1E", "en", .scientific)!, ParseError.InvalidDigit(at: 2))
-    assertEqual(readError("1Ex", "en", .scientific)!, ParseError.InvalidDigit(at: 2))
+@test(arguments: [
+    ("", "en", .decimal, ParseError.Empty),
+    ("  ", "en", .decimal, ParseError.Empty),
+    ("12x", "en", .decimal, ParseError.InvalidDigit(at: 2)),
+    ("-", "en", .decimal, ParseError.InvalidDigit(at: 0)),
+    ("-x", "en", .decimal, ParseError.InvalidDigit(at: 1)),
+    ("1.2.3", "en", .decimal, ParseError.InvalidDigit(at: 3)),
+    ("1.234,5", "en", .decimal, ParseError.InvalidDigit(at: 5)),
+    (".", "en", .decimal, ParseError.InvalidDigit(at: 1)),
+    ("1e5", "en", .decimal, ParseError.InvalidDigit(at: 1)),
+    ("1E", "en", .scientific, ParseError.InvalidDigit(at: 2)),
+    ("1Ex", "en", .scientific, ParseError.InvalidDigit(at: 2)),
     // Separators belong where the locale has them.
-    assertEqual(readError("1.5", "de")!, ParseError.Invalid(at: 0))
-    assertEqual(readError("12,34", "en")!, ParseError.Invalid(at: 0))
-    assertEqual(readError("1234,567", "en")!, ParseError.Invalid(at: 0))
-    assertEqual(readError("1,23,456", "en")!, ParseError.Invalid(at: 0))
-    assertEqual(readError(",123", "en")!, ParseError.InvalidDigit(at: 0))
-    assertEqual(readError("1,,234", "en")!, ParseError.InvalidDigit(at: 2))
+    ("1.5", "de", .decimal, ParseError.Invalid(at: 0)),
+    ("12,34", "en", .decimal, ParseError.Invalid(at: 0)),
+    ("1234,567", "en", .decimal, ParseError.Invalid(at: 0)),
+    ("1,23,456", "en", .decimal, ParseError.Invalid(at: 0)),
+    (",123", "en", .decimal, ParseError.InvalidDigit(at: 0)),
+    ("1,,234", "en", .decimal, ParseError.InvalidDigit(at: 2)),
+])
+fn whatIsNoNumberIsRefusedWhereItStopsBeingOne(_ text: String, _ tag: String, _ format: NumberFormat, _ error: ParseError) {
+    expectThrows(error) { _ = try F64.parse(text, format: format, locale: locale(tag)) }
 }
 
 @test
@@ -240,8 +237,8 @@ fn aFormatterIsMadeOnceForMany() {
 
 // A Decimal is written out and read by its digits; an F64 and an Int of few
 // digits are not, and must come to the same.
-@test
-fn aFloatIsWrittenAndReadAsTheDecimalItIs() {
+@test(arguments: ["und", "de", "fr", "en-IN", "es", "pl", "sv", "ar-EG", "fa", "he", "cs"])
+fn aFloatIsWrittenAndReadAsTheDecimalItIs(_ tag: String) {
     var two = NumberFormat.decimal
     two.minimumFractionDigits = 2
     two.maximumFractionDigits = 2
@@ -251,27 +248,25 @@ fn aFloatIsWrittenAndReadAsTheDecimalItIs() {
     var always = NumberFormat.decimal
     always.grouping = .Always
     always.sign = .Always
-    for tag in ["und", "de", "fr", "en-IN", "es", "pl", "sv", "ar-EG", "fa", "he", "cs"] {
-        for format in [two, bare, always, NumberFormat.percent, NumberFormat.currency("EUR"), NumberFormat.currency("CHF")] {
-            let formatter = NumberFormatter(format, locale: locale(tag))
-            var n = 1
-            while n < 1_000_000_000_000 {
-                for cents in [n, n + 5, n + 50, 0 - n] {
-                    let exact = try! Decimal.parse("\(cents)") / Decimal(100)
-                    let text = formatter.format(F64(cents) / 100.0)
-                    assertEqual(text, formatter.format(exact))
-                    assertEqual(formatter.format(cents), formatter.format(Decimal(cents)))
-                    let read: F64 = try! formatter.parse(text)
-                    let wanted: Decimal = try! formatter.parse(text)
-                    assertEqual("\(read)", "\(try! F64.parse("\(wanted)"))")
-                    if format.kind != .Decimal || format.minimumFractionDigits != none {
-                        continue
-                    }
-                    let whole: Int = try! formatter.parse(formatter.format(cents))
-                    assertEqual(whole, cents)
+    for format in [two, bare, always, NumberFormat.percent, NumberFormat.currency("EUR"), NumberFormat.currency("CHF")] {
+        let formatter = NumberFormatter(format, locale: locale(tag))
+        var n = 1
+        while n < 1_000_000_000_000 {
+            for cents in [n, n + 5, n + 50, 0 - n] {
+                let exact = try! Decimal.parse("\(cents)") / Decimal(100)
+                let text = formatter.format(F64(cents) / 100.0)
+                assertEqual(text, formatter.format(exact))
+                assertEqual(formatter.format(cents), formatter.format(Decimal(cents)))
+                let read: F64 = try! formatter.parse(text)
+                let wanted: Decimal = try! formatter.parse(text)
+                assertEqual("\(read)", "\(try! F64.parse("\(wanted)"))")
+                if format.kind != .Decimal || format.minimumFractionDigits != none {
+                    continue
                 }
-                n = n * 7 + 3
+                let whole: Int = try! formatter.parse(formatter.format(cents))
+                assertEqual(whole, cents)
             }
+            n = n * 7 + 3
         }
     }
 }
@@ -288,11 +283,13 @@ fn aFloatThatIsNoPlainDecimalIsRounded() {
     assertEqual(german.format(-0.0001), "-0")
     assertEqual(german.format(1e15 + 0.5), "1.000.000.000.000.000,5")
     assertEqual(german.format(Int.min), "-9.223.372.036.854.775.808")
-    for wrong in ["1.23", "1.2345", "12.34.567", ",", "-", "1,2,3", ".123", "1..234", "1.234.", "1,234.567"] {
-        require(readError(wrong, "de") != none, wrong)
-    }
     let big: F64 = try! german.parse("123.456.789.012.345.678.901")
     assertEqual(big, 1.2345678901234568e20)
     let zero: F64 = try! german.parse("-0")
     expect(1.0 / zero < 0.0)
+}
+
+@test(arguments: ["1.23", "1.2345", "12.34.567", ",", "-", "1,2,3", ".123", "1..234", "1.234.", "1,234.567"])
+fn separatorsOutOfTheirPlacesAreRefused(_ text: String) {
+    expectThrows(ParseError.self) { _ = try F64.parse(text, format: .decimal, locale: locale("de")) }
 }

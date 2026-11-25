@@ -5,6 +5,20 @@ module ArchiveData
 import Sable.IO
 import Sable.IO.Archives
 import Sable.Process
+import Sable.Testing
+
+/// A directory of the test's own, gone with all in it once the test ends.
+public final class TemporaryFiles: Fixture {
+    var directory: TempDirectory? = none
+
+    public init() { }
+
+    public var path: FilePath => directory!.path
+
+    public async fn setUp() throws {
+        directory = try Temp.directory()
+    }
+}
 
 /// What is wrong with what a closure does, as an error says it; or "nothing".
 public fn problem<T>(_ body: () throws(IoError) -> T) -> String {
@@ -46,7 +60,7 @@ public fn makeTree(_ root: FilePath) throws(IoError) {
     try File.writeBytes(root.appending("sub/deeper/none"), [])
     try File.write(root.appending("sub/caf\u{E9} \u{2603}.txt"), "text")
     try File.setPermissions(root.appending("a.txt"), FilePermissions(mode: 0o750))
-    let name = repeated("long", 40)
+    let name = "long".repeated(40)
     try Directory.create(root.appending(name))
     try File.write(root.appending("\(name)/\(name)"), "far")
     try File.createSymlink(at: root.appending("sub/link"), to: "../a.txt")
@@ -54,7 +68,7 @@ public fn makeTree(_ root: FilePath) throws(IoError) {
 
 /// Whether a directory has what 'makeTree' made.
 public fn isTree(_ root: FilePath) throws(IoError) -> Bool {
-    let name = repeated("long", 40)
+    let name = "long".repeated(40)
     return (try File.read(root.appending("a.txt"))) == "hello"
         && (try File.readBytes(root.appending("sub/large.bin"))) == bytes(700_000)
         && (try File.readBytes(root.appending("sub/deeper/none"))).isEmpty
@@ -65,13 +79,5 @@ public fn isTree(_ root: FilePath) throws(IoError) -> Bool {
         && ((try File.metadata(root.appending("a.txt"))).permissions.mode & 0o777) == 0o750
 }
 
-/// Text again and again.
-public fn repeated(_ text: String, _ count: Int) -> String {
-    var all = ""
-    var i = 0
-    while i < count {
-        all = all + text
-        i += 1
-    }
-    return all
-}
+/// A change of a byte, at a place of so many.
+public let byteChanges: Gen<(Int, U8)[>..]> = Gen<Int>.number(in: 0...Int.max).zip(Gen.number(in: U8(0)...U8(255))).array(count: 1...4)

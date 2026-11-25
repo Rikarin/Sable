@@ -27,58 +27,58 @@ fn entries(_ bytes: U8[>..]) throws(IoError) -> (TarEntry, U8[>..])[>..] {
     return all
 }
 
-@test
-fn entriesAreWrittenAndRead() throws {
-    for format in [TarFormat.Pax, TarFormat.Ustar, TarFormat.Gnu] {
-        let made = archive(format) { writer throws(IoError) in
-            var file = TarEntry("a/b.txt")
-            file.mode = 0o640
-            file.userId = 501
-            file.groupId = 20
-            file.userName = "someone"
-            file.groupName = "staff"
-            file.modified = UtcDateTime.fromUnix(1_700_000_000)
-            try writer.add(file, bytes(1000))
-            try writer.add(TarEntry("d", kind: .Directory))
-            var link = TarEntry("link", kind: .Symlink)
-            link.linkTarget = "a/b.txt"
-            try writer.add(link)
-            var hard = TarEntry("hard", kind: .HardLink)
-            hard.linkTarget = "a/b.txt"
-            try writer.add(hard)
-            var device = TarEntry("null", kind: .CharacterDevice)
-            device.deviceMajor = 1
-            device.deviceMinor = 3
-            try writer.add(device)
-            try writer.add(TarEntry("pipe", kind: .Fifo))
-            try writer.begin(TarEntry("parts", size: 1500))
-            try writer.write(bytes(1500)[..<700])
-            try writer.write(bytes(1500)[700...])
-            try writer.add(TarEntry("none"))
-            try writer.add(TarEntry("whole"), bytes(512))
-        }
-        require(made.count % 10240 == 0)
-        let read = try entries(made)
-        require(read.map { $0.0.name } == ["a/b.txt", "d/", "link", "hard", "null", "pipe", "parts", "none", "whole"], "\(format)")
-        let file = read[0].0
-        require(file.kind == .File && file.size == 1000 && file.mode == 0o640 && file.userId == 501 && file.groupId == 20)
-        require(file.userName == "someone" && file.groupName == "staff" && file.modified == UtcDateTime.fromUnix(1_700_000_000))
-        require(read[0].1 == bytes(1000) && read[1].0.kind == .Directory && read[1].0.mode == 0o755)
-        require(read[2].0.kind == .Symlink && read[2].0.linkTarget == "a/b.txt")
-        require(read[3].0.kind == .HardLink && read[3].0.linkTarget == "a/b.txt")
-        require(read[4].0.kind == .CharacterDevice && read[4].0.deviceMajor == 1 && read[4].0.deviceMinor == 3)
-        require(read[5].0.kind == .Fifo && read[6].1 == bytes(1500) && read[7].1.isEmpty && read[8].1 == bytes(512))
+let formats: TarFormat[>..] = [.Pax, .Ustar, .Gnu]
+
+@test(arguments: formats)
+fn entriesAreWrittenAndRead(_ format: TarFormat) throws {
+    let made = archive(format) { writer throws(IoError) in
+        var file = TarEntry("a/b.txt")
+        file.mode = 0o640
+        file.userId = 501
+        file.groupId = 20
+        file.userName = "someone"
+        file.groupName = "staff"
+        file.modified = UtcDateTime.fromUnix(1_700_000_000)
+        try writer.add(file, bytes(1000))
+        try writer.add(TarEntry("d", kind: .Directory))
+        var link = TarEntry("link", kind: .Symlink)
+        link.linkTarget = "a/b.txt"
+        try writer.add(link)
+        var hard = TarEntry("hard", kind: .HardLink)
+        hard.linkTarget = "a/b.txt"
+        try writer.add(hard)
+        var device = TarEntry("null", kind: .CharacterDevice)
+        device.deviceMajor = 1
+        device.deviceMinor = 3
+        try writer.add(device)
+        try writer.add(TarEntry("pipe", kind: .Fifo))
+        try writer.begin(TarEntry("parts", size: 1500))
+        try writer.write(bytes(1500)[..<700])
+        try writer.write(bytes(1500)[700...])
+        try writer.add(TarEntry("none"))
+        try writer.add(TarEntry("whole"), bytes(512))
     }
+    expect(made.count % 10240 == 0)
+    let read = try entries(made)
+    require(read.map { $0.0.name } == ["a/b.txt", "d/", "link", "hard", "null", "pipe", "parts", "none", "whole"])
+    let file = read[0].0
+    expect(file.kind == .File && file.size == 1000 && file.mode == 0o640 && file.userId == 501 && file.groupId == 20)
+    expect(file.userName == "someone" && file.groupName == "staff" && file.modified == UtcDateTime.fromUnix(1_700_000_000))
+    expect(read[0].1 == bytes(1000) && read[1].0.kind == .Directory && read[1].0.mode == 0o755)
+    expect(read[2].0.kind == .Symlink && read[2].0.linkTarget == "a/b.txt")
+    expect(read[3].0.kind == .HardLink && read[3].0.linkTarget == "a/b.txt")
+    expect(read[4].0.kind == .CharacterDevice && read[4].0.deviceMajor == 1 && read[4].0.deviceMinor == 3)
+    expect(read[5].0.kind == .Fifo && read[6].1 == bytes(1500) && read[7].1.isEmpty && read[8].1 == bytes(512))
 }
 
 @test
 fn whatDoesNotFitUstarIsSaidOtherwise() throws {
-    let long = repeated("0123456789", 30)
+    let long = "0123456789".repeated(30)
     var file = TarEntry("\(long)/\u{2603}")
     file.userId = 3_000_000
     file.groupId = 1 << 40
     file.userName = "\u{E9}"
-    file.groupName = repeated("g", 40)
+    file.groupName = "g".repeated(40)
     file.modified = UtcDateTime { secondsSinceEpoch: 1_700_000_000, nanosecond: 123_456_789 }
     file.attributes = ["comment": "a note", "SCHILY.xattr.user.x": "y=z\n"]
     var link = TarEntry("link", kind: .Symlink)
@@ -107,7 +107,7 @@ fn whatDoesNotFitUstarIsSaidOtherwise() throws {
     let ustar = TarWriter(MemoryStream(), format: .Ustar)
     expect(problem { try ustar.add(file, [1]) }.hasSuffix("in a ustar archive, which has no room for it' is not supported here"))
     // A name that ustar has in two parts.
-    let half = "\(repeated("d", 120))/\(repeated("f", 90))"
+    let half = "\("d".repeated(120))/\("f".repeated(90))"
     try ustar.add(TarEntry(half), [7])
     try ustar.finish()
     let split = try entries(ustar.inner.bytes)
@@ -190,102 +190,100 @@ fn whatIsDamagedIsRefused() {
     let good = archive { writer throws(IoError) in try writer.add(TarEntry("x"), bytes(600)) }
     var changed = good
     changed[0] = 0x79
-    assertEqualText(problem { try entries(changed) }, "the tar archive is corrupt: a header's checksum is wrong")
-    assertEqualText(problem { try entries(good[..<700].toArray()) }, "the stream ended before what was needed")
-    assertEqualText(problem { try entries(good[..<300].toArray()) }, "the stream ended before what was needed")
-    assertEqualText(problem { try entries(good[..<1300].toArray()) }, "the stream ended before what was needed")
+    expectThrows(saying: "the tar archive is corrupt: a header's checksum is wrong") { _ = try entries(changed) }
+    expectThrows(saying: "the stream ended before what was needed") { _ = try entries(good[..<700].toArray()) }
+    expectThrows(saying: "the stream ended before what was needed") { _ = try entries(good[..<300].toArray()) }
+    expectThrows(saying: "the stream ended before what was needed") { _ = try entries(good[..<1300].toArray()) }
     changed = good
     changed[125] = 0x39
-    assertEqualText(problem { try entries(summed(changed)) }, "the tar archive is corrupt: a number has something else in it")
+    expectThrows(saying: "the tar archive is corrupt: a number has something else in it") { _ = try entries(summed(changed)) }
     changed = good
     var i = 124
     while i < 136 {
         changed[i] = 0xFF
         i += 1
     }
-    assertEqualText(problem { try entries(summed(changed)) }, "the tar archive is corrupt: an entry of less than no bytes")
+    expectThrows(saying: "the tar archive is corrupt: an entry of less than no bytes") { _ = try entries(summed(changed)) }
     changed[124] = 0x8F
-    assertEqualText(problem { try entries(summed(changed)) }, "the tar archive is corrupt: a number is larger than there are")
-    // Sparse, both ways.
-    changed = good
+    expectThrows(saying: "the tar archive is corrupt: a number is larger than there are") { _ = try entries(summed(changed)) }
+}
+
+@test
+fn sparseFilesAreRefused() {
+    let good = archive { writer throws(IoError) in try writer.add(TarEntry("x"), bytes(600)) }
+    var changed = good
+    // Both ways.
     changed[156] = 0x53
-    assertEqualText(problem { try entries(summed(changed)) }, "'a sparse file in a tar archive' is not supported here")
+    expectThrows(saying: "'a sparse file in a tar archive' is not supported here") { _ = try entries(summed(changed)) }
     let sparse = archive { writer throws(IoError) in
         var entry = TarEntry("x")
         entry.attributes = ["GNU.sparse.major": "1"]
         try writer.add(entry)
     }
-    assertEqualText(problem { try entries(sparse) }, "'a sparse file in a tar archive' is not supported here")
-    // Records: more than there may be, and none that are.
-    changed = archive { writer throws(IoError) in
+    expectThrows(saying: "'a sparse file in a tar archive' is not supported here") { _ = try entries(sparse) }
+}
+
+@test
+fn aHeaderOfMoreThanAMegabyteIsRefused() {
+    let long = archive { writer throws(IoError) in
         var entry = TarEntry("x")
-        entry.attributes = ["comment": repeated("x", 1 << 20)]
+        entry.attributes = ["comment": "x".repeated(1 << 20)]
         try writer.add(entry)
     }
-    assertEqualText(problem { try entries(changed) }, "the tar archive is corrupt: a header of more than a megabyte")
+    expectThrows(saying: "the tar archive is corrupt: a header of more than a megabyte") { _ = try entries(long) }
+}
+
+@test(arguments: [("11 mtime=1", "99 mtime=1"), ("11 mtime=1", "x1 mtime=1"), ("mtime=1", "mtime+1"), ("11 mtime=1", "11 =time=1"), ("mtime=1", "mtime=x"), ("9 size=0", "9 size=-")])
+fn whatIsNoRecordIsRefused(_ from: String, _ to: String) {
     let record = archive { writer throws(IoError) in
         var entry = TarEntry("x")
         entry.attributes = ["mtime": "1", "size": "0"]
         try writer.add(entry)
     }
-    for (from, to) in [("11 mtime=1", "99 mtime=1"), ("11 mtime=1", "x1 mtime=1"), ("mtime=1", "mtime+1"), ("11 mtime=1", "11 =time=1"), ("mtime=1", "mtime=x"), ("9 size=0", "9 size=-")] {
-        changed = record
-        let wanted = from.utf8Bytes()
-        let made = to.utf8Bytes()
-        i = 0
-        while i < 1024 {
-            if changed[i..<i + wanted.count].toArray() == wanted {
-                var j = 0
-                while j < made.count {
-                    changed[i + j] = made[j]
-                    j += 1
-                }
+    var changed = record
+    let wanted = from.utf8Bytes()
+    let made = to.utf8Bytes()
+    for i in 0..<1024 {
+        if changed[i..<i + wanted.count].toArray() == wanted {
+            for j in 0..<made.count {
+                changed[i + j] = made[j]
             }
-            i += 1
         }
-        let said = problem { try entries(changed) }
-        require(said.hasPrefix("the tar archive is corrupt: "), "\(to): \(said)")
     }
+    let said = problem { try entries(changed) }
+    expect(said.hasPrefix("the tar archive is corrupt: "), said)
 }
 
 @test
 fn damageIsNeverMoreThanAnError() {
     let good = archive { writer throws(IoError) in
-        var entry = TarEntry(repeated("n", 150))
+        var entry = TarEntry("n".repeated(150))
         entry.attributes = ["comment": "x", "atime": "12.5"]
         entry.modified = UtcDateTime { secondsSinceEpoch: 5, nanosecond: 5 }
         try writer.add(entry, bytes(300))
         try writer.add(TarEntry("d", kind: .Directory))
     }
-    var state: U64 = 88172645463325252
-    var round = 0
-    while round < 3000 {
-        var changed = good[..<3584].toArray()
-        var times = 1 + round % 4
-        while times > 0 {
-            state = state ^ (state << 13)
-            state = state ^ (state >> 7)
-            state = state ^ (state << 17)
-            changed[Int(state % 3584)] = U8(state >> 40 & 0xFF)
-            times -= 1
+    let start = good[..<3584].toArray()
+    forAll(byteChanges, cases: 3000) { (changes: (Int, U8)[>..]) in
+        var changed = start
+        for (at, byte) in changes {
+            changed[at % 3584] = byte
         }
         // Each header's sum put right, so that what is past it is looked at.
         for at in [0, 1024, 2048] {
             changed = summed(changed, at: at)
         }
         _ = try? entries(changed)
-        round += 1
     }
 }
 
 @test
-fn directoriesAreArchivedAndExtracted() throws {
-    let temp = try Temp.directory()
+fn directoriesAreArchivedAndExtracted(temp: TemporaryFiles) throws {
     try makeTree(temp.path.appending("in"))
-    for name in ["a.tar", "a.tar.gz", "a.tgz", "a.tar.zst", "a.tar.br"] {
+    for name in ["a.tar", "a.tar.zst"] {
         try Tar.create(temp.path.appending(name), from: temp.path.appending("in"))
         try Tar.extract(temp.path.appending(name), to: temp.path.appending("out-\(name)"))
-        require(try isTree(temp.path.appending("out-\(name)")), name)
+        expect(try isTree(temp.path.appending("out-\(name)")), name)
     }
     let before = (try File.metadata(temp.path.appending("in/sub"))).modified
     expect((try File.metadata(temp.path.appending("out-a.tar/sub"))).modified == before)
@@ -297,8 +295,7 @@ fn directoriesAreArchivedAndExtracted() throws {
 }
 
 @test
-fn nothingIsWrittenOutside() throws {
-    let temp = try Temp.directory()
+fn nothingIsWrittenOutside(temp: TemporaryFiles) throws {
     try Directory.create(temp.path.appending("secret"))
     try File.write(temp.path.appending("secret/file"), "secret")
     let here = temp.path.appending("out")
@@ -347,26 +344,34 @@ fn nothingIsWrittenOutside() throws {
     expect((try File.read(temp.path.appending("secret/file"))) == "secret")
 }
 
-@test
-fn limitsAreKept() throws {
+@test(arguments: ["a.tar.gz", "a.tgz", "a.tar.br"])
+fn theNameSaysHowAnArchiveIsCompressed(_ name: String) throws {
     let temp = try Temp.directory()
+    try makeTree(temp.path.appending("in"))
+    try Tar.create(temp.path.appending(name), from: temp.path.appending("in"))
+    try Tar.extract(temp.path.appending(name), to: temp.path.appending("out"))
+    expect(try isTree(temp.path.appending("out")))
+}
+
+@test
+fn limitsAreKept(temp: TemporaryFiles) throws {
     let made = archive { writer throws(IoError) in
         try writer.add(TarEntry("zeros"), U8[>..](repeating: 0, count: 5_000_000))
     }
     var options = ExtractOptions()
     options.limits.maximumTotal = 4_000_000
-    assertEqualText(problem { try Tar.extract(reading: MemoryStream(made), to: temp.path, options: options) }, "the archive has more bytes than the limits allow")
+    expectThrows(saying: "the archive has more bytes than the limits allow") { _ = try Tar.extract(reading: MemoryStream(made), to: temp.path, options: options) }
     // Compressed, a decoder's limits hold too.
     let packed = Gzip.compress(made)
     let reader = GzipReader(MemoryStream(packed), decoder: GzipDecoder(limits: DecompressionLimits(maximumRatio: 100)))
-    assertEqualText(problem { try Tar.extract(reading: reader, to: temp.path.appending("x")) }, "more would be decompressed than the limits allow")
+    expectThrows(saying: "more would be decompressed than the limits allow") { _ = try Tar.extract(reading: reader, to: temp.path.appending("x")) }
 }
 
 @test
 fn theAsyncOnesToo() async throws {
     let pipe = Pipe(pauseWriterThreshold: 1 << 20)
     let writer = AsyncTarWriter(pipe.writer)
-    var entry = TarEntry(repeated("x", 300))
+    var entry = TarEntry("x".repeated(300))
     entry.attributes = ["comment": "y"]
     try await writer.add(entry, bytes(1000))
     try await writer.add(TarEntry("d", kind: .Directory))
@@ -395,40 +400,40 @@ fn theAsyncOnesToo() async throws {
     expect((try await reader.next())?.name == "last")
     expect((try await reader.next()) == none)
     expect((try await reader.next()) == none)
-    for format in [TarFormat.Gnu] {
-        let other = Pipe(pauseWriterThreshold: 1 << 20)
-        let gnu = AsyncTarWriter(other.writer, format: format)
-        var link = TarEntry(repeated("x", 300), kind: .Symlink)
-        link.linkTarget = repeated("y", 300)
-        try await gnu.add(link)
-        await other.writer.complete()
-        let back = try await AsyncTarReader(other.reader).next()
-        require(back?.name == link.name && back?.linkTarget == link.linkTarget)
-    }
-    let cut = Pipe()
-    try await cut.writer.write(bytes(100))
-    await cut.writer.complete()
-    do {
-        _ = try await AsyncTarReader(cut.reader).next()
-        fail("no error")
-    } catch {
-        expect(error.description() == "the stream ended before what was needed")
-    }
 }
 
 @test
-fn tarAgrees() async throws {
-    let temp = try Temp.directory()
+fn theAsyncOnesHaveGnusFormatToo() async throws {
+    let other = Pipe(pauseWriterThreshold: 1 << 20)
+    let gnu = AsyncTarWriter(other.writer, format: .Gnu)
+    var link = TarEntry("x".repeated(300), kind: .Symlink)
+    link.linkTarget = "y".repeated(300)
+    try await gnu.add(link)
+    await other.writer.complete()
+    let back = try await AsyncTarReader(other.reader).next()
+    expect(back?.name == link.name)
+    expect(back?.linkTarget == link.linkTarget)
+}
+
+@test
+fn theAsyncReaderSaysWhatIsWrong() async throws {
+    let cut = Pipe()
+    try await cut.writer.write(bytes(100))
+    await cut.writer.complete()
+    await expectThrows(saying: "the stream ended before what was needed") { _ = try await AsyncTarReader(cut.reader).next() }
+}
+
+@test
+fn tarAgrees(temp: TemporaryFiles) async throws {
     try makeTree(temp.path.appending("in"))
-    if await run("tar", ["--version"], in: temp.path) == none {
-        return
-    }
+    let has = await run("tar", ["--version"], in: temp.path) != none
+    try skip(if: !has, "there is no tar command")
     for format in [TarFormat.Pax, TarFormat.Gnu] {
         try Tar.create(temp.path.appending("ours.tar"), from: temp.path.appending("in"), format: format)
         let directory = "theirs-\(format)"
         try Directory.create(temp.path.appending(directory))
-        require(await run("tar", ["-xf", "ours.tar", "-C", directory], in: temp.path) != none)
-        require(try isTree(temp.path.appending(directory)), "\(format)")
+        expect(await run("tar", ["-xf", "ours.tar", "-C", directory], in: temp.path) != none)
+        expect(try isTree(temp.path.appending(directory)), "\(format)")
     }
     for format in ["pax", "gnutar"] {
         let made = await run("tar", ["-cf", "theirs.tar", "--format", format, "-C", "in", "."], in: temp.path)
@@ -436,7 +441,7 @@ fn tarAgrees() async throws {
             continue
         }
         try Tar.extract(temp.path.appending("theirs.tar"), to: temp.path.appending("out-\(format)"))
-        require(try isTree(temp.path.appending("out-\(format)")), format)
+        expect(try isTree(temp.path.appending("out-\(format)")), format)
     }
     expect(await run("tar", ["-czf", "theirs.tgz", "-C", "in", "."], in: temp.path) != none)
     try Tar.extract(temp.path.appending("theirs.tgz"), to: temp.path.appending("z"))

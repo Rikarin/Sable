@@ -50,16 +50,16 @@ fn entriesAreWrittenAndRead() throws {
     expect(first.method == .Store && first.size == 5 && first.compressedSize == 5 && !first.isDirectory)
     for method in [ZipMethod.Store, ZipMethod.Deflate, ZipMethod.Zstd] {
         let whole = read.entry(named: "whole \(method)")!
-        require(whole.method == method && (method == .Store) == (whole.compressedSize == 50_000))
-        require((try read.read(whole)) == bytes(50_000))
-        require((try read.read(read.entry(named: "parts \(method)")!)) == bytes(50_000))
-        require((try read.read(read.entry(named: "read \(method)")!)) == bytes(300_000))
+        expect(whole.method == method && (method == .Store) == (whole.compressedSize == 50_000))
+        expect((try read.read(whole)) == bytes(50_000))
+        expect((try read.read(read.entry(named: "parts \(method)")!)) == bytes(50_000))
+        expect((try read.read(read.entry(named: "read \(method)")!)) == bytes(300_000))
     }
     expect((try read.read(read.entry(named: "large \u{2603}")!)) == [1, 2, 3])
     expect(read.entry(named: "d/")!.isDirectory && read.entry(named: "d/")!.mode == 0o040755)
     expect(read.entry(named: "link")!.isSymlink && (try read.read(read.entry(named: "link")!)) == "a.txt".utf8Bytes())
     expect(read.entry(named: "nowhere") == none)
-    assertEqualText(problem { try read.read(first, limit: 4) }, "'a.txt' has more than 4 bytes")
+    expectThrows(saying: "'a.txt' has more than 4 bytes") { _ = try read.read(first, limit: 4) }
 }
 
 @test
@@ -104,7 +104,7 @@ fn oldTimesAndNamesAreRead() throws {
     expect((try ZipArchive(late)).entries[0].modified.year == 2107)
 }
 
-@test
+@test(tags: ["slow"], timeout: .minutes(5))
 fn zip64IsWrittenAndRead() throws {
     // More entries than the end record can count.
     let many = archive { writer throws(IoError) in
@@ -120,6 +120,10 @@ fn zip64IsWrittenAndRead() throws {
     var prefixed = bytes(100)
     prefixed.append(contentsOf: many)
     expect((try ZipArchive(prefixed)).entries.count == 66_000)
+}
+
+@test(tags: ["slow"], timeout: .minutes(5))
+fn anEntryOfFourGibibytesIsWrittenAndRead() throws {
     // Four gibibytes of zeros, most of them never written anywhere.
     var options = ZipOptions()
     options.isLarge = true
@@ -138,85 +142,131 @@ fn zip64IsWrittenAndRead() throws {
     let large = try ZipArchive(writer.inner.bytes)
     expect(large.entries[0].size == 257 << 24)
     expect((try large.read(large.entry(named: "after")!)) == [1])
-    // One that was not said to be large.
+}
+
+@test(tags: ["slow"], timeout: .minutes(5))
+fn anEntryNotSaidToBeLargeIsNot() throws {
+    var options = ZipOptions()
+    options.level = 1
+    let zeros = U8[>..](repeating: 0, count: 1 << 24)
     let small = ZipWriter(MemoryStream())
-    options.isLarge = false
     try small.begin("zeros", options: options)
-    i = 0
+    var i = 0
     while i < 255 {
         try small.write(zeros)
         i += 1
     }
-    assertEqualText(problem { try small.write(zeros) }, "a zip entry of 4 GiB or more, which was not said to be large")
+    expectThrows(saying: "a zip entry of 4 GiB or more, which was not said to be large") { _ = try small.write(zeros) }
 }
 
-@test
-fn whatIsDamagedIsRefused() throws {
-    let good = archive { writer throws(IoError) in
+/// Two entries, for a test to damage.
+fn twoEntries() -> U8[>..] {
+    return archive { writer throws(IoError) in
         try writer.add("first", bytes(3000))
         try writer.add("second", bytes(100, seed: 2))
     }
-    assertEqualText(problem { try ZipArchive([]) }, "the zip archive is corrupt: it has no end record")
-    assertEqualText(problem { try ZipArchive(bytes(70_000)) }, "the zip archive is corrupt: it has no end record")
+}
+
+/// Where the central directory of the two is.
+fn directoryStart(_ archive: U8[>..]) -> Int => archive.count - 22 - 2 * (46 + 9) - 5 - 6
+
+@test
+fn whatIsDamagedIsRefused() throws {
+    expectThrows(saying: "the zip archive is corrupt: it has no end record") { _ = try ZipArchive([]) }
+    expectThrows(saying: "the zip archive is corrupt: it has no end record") { _ = try ZipArchive(bytes(70_000)) }
+}
+
+@test
+fn aWrongChecksumIsRefused() throws {
     // The checksum, in the central directory.
-    let directory = good.count - 22 - 2 * (46 + 9) - 5 - 6
+    let good = twoEntries()
+    let directory = directoryStart(good)
     var changed = good
     changed[directory + 16] = changed[directory + 16] ^ 1
     let bad = try ZipArchive(changed)
-    assertEqualText(problem { try bad.read(bad.entries[0]) }, "'first' has another checksum than the archive says")
+    expectThrows(saying: "'first' has another checksum than the archive says") { _ = try bad.read(bad.entries[0]) }
+}
+
+@test
+fn aWrongSizeIsRefused() throws {
     // Longer, and shorter, than it says.
-    changed = good
+    let good = twoEntries()
+    let directory = directoryStart(good)
+    var changed = good
     changed[directory + 24] = changed[directory + 24] - 1
     let longer = try ZipArchive(changed)
-    assertEqualText(problem { try longer.read(longer.entries[0]) }, "more would be decompressed than the limits allow")
+    expectThrows(saying: "more would be decompressed than the limits allow") { _ = try longer.read(longer.entries[0]) }
     changed[directory + 24] = changed[directory + 24] + 2
     let shorter = try ZipArchive(changed)
-    assertEqualText(problem { try shorter.read(shorter.entries[0]) }, "'first' is shorter than the archive says")
+    expectThrows(saying: "'first' is shorter than the archive says") { _ = try shorter.read(shorter.entries[0]) }
+}
+
+@test
+fn aMethodThatIsNotReadIsRefused() throws {
     // A method that is not read, and an encrypted entry.
-    changed = good
+    let good = twoEntries()
+    let directory = directoryStart(good)
+    var changed = good
     changed[directory + 10] = 14
     let other = try ZipArchive(changed)
     expect(other.entries[0].method == .Other(number: 14))
-    assertEqualText(problem { try other.read(other.entries[0]) }, "'a zip entry, 'first', compressed by method 14' is not supported here")
+    expectThrows(saying: "'a zip entry, 'first', compressed by method 14' is not supported here") { _ = try other.read(other.entries[0]) }
     changed = good
     changed[directory + 8] = changed[directory + 8] | 1
     let secret = try ZipArchive(changed)
     expect(secret.entries[0].isEncrypted)
-    assertEqualText(problem { try secret.read(secret.entries[0]) }, "'an encrypted zip entry, 'first'' is not supported here")
+    expectThrows(saying: "'an encrypted zip entry, 'first'' is not supported here") { _ = try secret.read(secret.entries[0]) }
+}
+
+@test
+fn anEntrysHeaderIsItsOwn() throws {
     // Another name, or no header, where the entry is.
-    changed = good
+    let good = twoEntries()
+    var changed = good
     changed[30] = 0x46
     let named = try ZipArchive(changed)
-    assertEqualText(problem { try named.read(named.entries[0]) }, "the zip archive is corrupt: 'first' is another in its header")
+    expectThrows(saying: "the zip archive is corrupt: 'first' is another in its header") { _ = try named.read(named.entries[0]) }
     changed = good
     changed[0] = 0
     let bare = try ZipArchive(changed)
-    assertEqualText(problem { try bare.read(bare.entries[0]) }, "the zip archive is corrupt: 'first' has no header")
+    expectThrows(saying: "the zip archive is corrupt: 'first' has no header") { _ = try bare.read(bare.entries[0]) }
+}
+
+@test
+fn overlappingEntriesAreRefused() throws {
     // Two entries with the same bytes.
-    changed = good
+    let good = twoEntries()
+    let directory = directoryStart(good)
+    var changed = good
     let second = directory + 46 + 9 + 5
     var i = 0
     while i < 4 {
         changed[second + 42 + i] = 0
         i += 1
     }
-    assertEqualText(problem { try ZipArchive(changed) }, "the zip archive is corrupt: its entries overlap")
+    expectThrows(saying: "the zip archive is corrupt: its entries overlap") { _ = try ZipArchive(changed) }
     changed[second + 45] = 0x70
-    assertEqualText(problem { try ZipArchive(changed) }, "the zip archive is corrupt: 'second' is not in it")
+    expectThrows(saying: "the zip archive is corrupt: 'second' is not in it") { _ = try ZipArchive(changed) }
+}
+
+@test
+fn aDamagedDirectoryIsRefused() throws {
     // The directory.
-    changed = good
+    let good = twoEntries()
+    let directory = directoryStart(good)
+    var changed = good
     changed[good.count - 22 + 10] = 3
-    assertEqualText(problem { try ZipArchive(changed) }, "the zip archive is corrupt: its central directory is not where it says")
+    expectThrows(saying: "the zip archive is corrupt: its central directory is not where it says") { _ = try ZipArchive(changed) }
     changed = good
     changed[directory + 29] = 1
-    assertEqualText(problem { try ZipArchive(changed) }, "the zip archive is corrupt: its central directory ends early")
+    expectThrows(saying: "the zip archive is corrupt: its central directory ends early") { _ = try ZipArchive(changed) }
     changed = good
     changed[good.count - 22 + 16] = 0xF0
     changed[good.count - 22 + 17] = 0xFF
-    assertEqualText(problem { try ZipArchive(changed) }, "the zip archive is corrupt: its central directory is not where it says")
+    expectThrows(saying: "the zip archive is corrupt: its central directory is not where it says") { _ = try ZipArchive(changed) }
     changed = good
     changed[good.count - 22 + 4] = 1
-    assertEqualText(problem { try ZipArchive(changed) }, "'a zip archive in several parts' is not supported here")
+    expectThrows(saying: "'a zip archive in several parts' is not supported here") { _ = try ZipArchive(changed) }
 }
 
 @test
@@ -228,33 +278,25 @@ fn damageIsNeverMoreThanAnError() {
         try writer.end()
         try writer.addSymlink("link", to: "first")
     }
-    var state: U64 = 88172645463325252
-    var round = 0
-    while round < 3000 {
+    forAll(byteChanges, Gen<Int>.number(in: 0...9), Gen<Int>.number(in: 0...Int.max), cases: 3000) { (changes: (Int, U8)[>..], cutting: Int, cut: Int) in
         var changed = good
-        var times = 1 + round % 4
-        while times > 0 {
-            state = state ^ (state << 13)
-            state = state ^ (state >> 7)
-            state = state ^ (state << 17)
-            changed[Int(state % U64(good.count))] = U8(state >> 40 & 0xFF)
-            times -= 1
+        for (at, byte) in changes {
+            changed[at % good.count] = byte
         }
-        if round % 10 == 0 {
-            changed.removeLast(Int(state % U64(good.count)))
+        // One in ten is cut short.
+        if cutting == 9 {
+            changed.removeLast(cut % good.count)
         }
         if let read = try? ZipArchive(changed) {
             for entry in read.entries {
                 _ = try? read.read(entry, limit: 1 << 20)
             }
         }
-        round += 1
     }
 }
 
 @test
-fn directoriesAreArchivedAndExtracted() throws {
-    let temp = try Temp.directory()
+fn directoriesAreArchivedAndExtracted(temp: TemporaryFiles) throws {
     try makeTree(temp.path.appending("in"))
     let path = temp.path.appending("a.zip")
     try Zip.create(path, from: temp.path.appending("in"))
@@ -277,47 +319,44 @@ fn directoriesAreArchivedAndExtracted() throws {
     expect(((try File.metadata(temp.path.appending("plain/a.txt"))).permissions.mode & 0o111) == 0)
     expect(!File.exists(temp.path.appending("plain/sub/link")))
     options.links = .Refused
-    assertEqualText(problem { try Zip.extract(path, to: temp.path.appending("none"), options: options) }, "a link, 'sub/link', leads to '../a.txt'")
+    expectThrows(saying: "a link, 'sub/link', leads to '../a.txt'") { _ = try Zip.extract(path, to: temp.path.appending("none"), options: options) }
 }
 
-@test
-fn nothingIsWrittenOutside() throws {
+@test(arguments: ["../up", "a/../../up", "/root", "..", "a/..", "..\\up", "a\\..\\..\\up", "C:\\x", "c:x", "\\x", "a\0b"])
+fn nothingIsWrittenOutside(_ name: String) throws {
     let temp = try Temp.directory()
-    let names = ["../up", "a/../../up", "/root", "..", "a/..", "..\\up", "a\\..\\..\\up", "C:\\x", "c:x", "\\x", "a\0b"]
-    for name in names {
-        // Written with another name, and then changed, as the writer refuses
-        // some of them.
-        let raw = name.utf8Bytes()
-        var made = archive { writer throws(IoError) in try writer.add(repeated("\u{7E}", raw.count), [1]) }
-        var i = 0
-        while i + raw.count <= made.count {
-            if made[i] == 0x7E && (i == 30 || made[i - 1] != 0x7E) {
-                var j = 0
-                while j < raw.count {
-                    made[i + j] = raw[j]
-                    j += 1
-                }
+    // Written with another name, and then changed, as the writer refuses
+    // some of them.
+    let raw = name.utf8Bytes()
+    var made = archive { writer throws(IoError) in try writer.add("\u{7E}".repeated(raw.count), [1]) }
+    for i in 0...made.count - raw.count {
+        if made[i] == 0x7E && (i == 30 || made[i - 1] != 0x7E) {
+            for j in 0..<raw.count {
+                made[i + j] = raw[j]
             }
-            i += 1
         }
-        let read = try ZipArchive(made)
-        let said = problem { try read.extract(to: temp.path.appending("out")) }
-        assert(said.contains("leads out of the directory"), "\(name): \(said)")
     }
-    expect((try Directory.list(temp.path)) == ["out"])
-    expect((try Directory.list(temp.path.appending("out"))).isEmpty)
+    let read = try ZipArchive(made)
+    let said = problem { try read.extract(to: temp.path.appending("out")) }
+    expect(said.contains("leads out of the directory"), said)
+    expect(try Directory.list(temp.path) == ["out"])
+    expect(try Directory.list(temp.path.appending("out")).isEmpty)
 }
 
-@test
-fn portableNamesAreWindowsToo() throws {
+@test(arguments: ["CON", "a/nul.txt", "com1", "LPT9.x", "a:b", "x?", "x*", "\"x", "a<b", "a>b", "a|b", "dot.", "space ", "a\u{7}", "a\\prn"])
+fn aNameWindowsHasNotIsRefused(_ name: String) throws {
     let temp = try Temp.directory()
     var options = ExtractOptions()
     options.portableNames = true
-    for name in ["CON", "a/nul.txt", "com1", "LPT9.x", "a:b", "x?", "x*", "\"x", "a<b", "a>b", "a|b", "dot.", "space ", "a\u{7}", "a\\prn"] {
-        let made = archive { writer throws(IoError) in try writer.add(name, [1]) }
-        let said = problem { try ZipArchive(made).extract(to: temp.path, options: options) }
-        require(said.contains("is none a file may have"), "\(name): \(said)")
-    }
+    let made = archive { writer throws(IoError) in try writer.add(name, [1]) }
+    let said = problem { try ZipArchive(made).extract(to: temp.path, options: options) }
+    expect(said.contains("is none a file may have"), said)
+}
+
+@test
+fn portableNamesAreWindowsToo(temp: TemporaryFiles) throws {
+    var options = ExtractOptions()
+    options.portableNames = true
     let good = archive { writer throws(IoError) in
         try writer.add("com0/console/com10.txt", [1])
         try writer.add("a\\b", [2])
@@ -329,8 +368,7 @@ fn portableNamesAreWindowsToo() throws {
 }
 
 @test
-fn anArchiveCutMeanwhileIsAnError() throws {
-    let temp = try Temp.directory()
+fn anArchiveCutMeanwhileIsAnError(temp: TemporaryFiles) throws {
     let path = temp.path.appending("a.zip")
     var options = ZipOptions()
     options.method = .Store
@@ -340,24 +378,22 @@ fn anArchiveCutMeanwhileIsAnError() throws {
     expect(reader.entry.name == "a" && (try reader.read(upTo: 0)).isEmpty && (try reader.read(upTo: 10)).count == 10)
     let file = try File.open(path, options: .appending)
     try file.setLength(5000)
-    assertEqualText(problem { try reader.readToEnd() }, "the stream ended before what was needed")
+    expectThrows(saying: "the stream ended before what was needed") { _ = try reader.readToEnd() }
+}
+
+@test(arguments: ["../secret", "/etc", "a/../../secret", "..", "", "C:\\x", "x/../.."])
+fn aLinkOutIsRefused(_ target: String) throws {
+    let temp = try Temp.directory()
+    try Directory.create(temp.path.appending("secret"))
+    let made = archive { writer throws(IoError) in try writer.addSymlink("link", to: target.isEmpty ? "\0" : target) }
+    let said = problem { try ZipArchive(made).extract(to: temp.path.appending("out")) }
+    expect(said.hasPrefix("a link, 'link', leads to"), said)
 }
 
 @test
-fn linksAreNoWayOut() throws {
-    let temp = try Temp.directory()
+fn linksAreNoWayOut(temp: TemporaryFiles) throws {
     try Directory.create(temp.path.appending("secret"))
     let here = temp.path.appending("out")
-    for target in ["../secret", "/etc", "a/../../secret", "..", "", "C:\\x", "x/../.."] {
-        let made = archive { writer throws(IoError) in
-            if target.isEmpty {
-                try writer.addSymlink("link", to: "\0")
-            } else {
-                try writer.addSymlink("link", to: target)
-            }
-        }
-        require(problem { try ZipArchive(made).extract(to: here) }.hasPrefix("a link, 'link', leads to"))
-    }
     // A link in the directory, through which nothing is written; and one that
     // was there before.
     let through = archive { writer throws(IoError) in
@@ -365,12 +401,12 @@ fn linksAreNoWayOut() throws {
         try writer.addSymlink("link", to: "real")
         try writer.add("link/file", [1])
     }
-    assertEqualText(problem { try ZipArchive(through).extract(to: here) }, "'link' is in the way of an entry: it is no directory, or a link")
+    expectThrows(saying: "'link' is in the way of an entry: it is no directory, or a link") { _ = try ZipArchive(through).extract(to: here) }
     let there = temp.path.appending("out2")
     try Directory.create(there)
     try File.createSymlink(at: there.appending("link"), to: "../secret")
     let file = archive { writer throws(IoError) in try writer.add("link/file", [1]) }
-    assertEqualText(problem { try ZipArchive(file).extract(to: there) }, "'link' is in the way of an entry: it is no directory, or a link")
+    expectThrows(saying: "'link' is in the way of an entry: it is no directory, or a link") { _ = try ZipArchive(file).extract(to: there) }
     // In its place, where that is allowed, and not through it.
     let same = archive { writer throws(IoError) in try writer.add("link", [1]) }
     expect(problem { try ZipArchive(same).extract(to: there) }.hasSuffix("already"))
@@ -379,17 +415,19 @@ fn linksAreNoWayOut() throws {
     try ZipArchive(same).extract(to: there, options: options)
     expect((try File.metadata(there.appending("link"), followLinks: false)).isFile)
     expect((try Directory.list(temp.path.appending("secret"))).isEmpty)
-    // Permissions that a new file should not have.
-    var bold = ZipOptions()
-    bold.mode = 0o6777
-    let setuid = archive { writer throws(IoError) in try writer.add("setuid", [1], options: bold) }
-    try ZipArchive(setuid).extract(to: there)
-    expect(((try File.metadata(there.appending("setuid"))).permissions.mode & 0o7777) == 0o777)
 }
 
 @test
-fn limitsAreKept() throws {
-    let temp = try Temp.directory()
+fn aNewFileIsGivenNoOthersRights(temp: TemporaryFiles) throws {
+    var bold = ZipOptions()
+    bold.mode = 0o6777
+    let setuid = archive { writer throws(IoError) in try writer.add("setuid", [1], options: bold) }
+    try ZipArchive(setuid).extract(to: temp.path)
+    expect(((try File.metadata(temp.path.appending("setuid"))).permissions.mode & 0o7777) == 0o777)
+}
+
+@test
+fn limitsAreKept(temp: TemporaryFiles) throws {
     let made = archive { writer throws(IoError) in
         try writer.add("zeros", U8[>..](repeating: 0, count: 5_000_000))
         try writer.add("more", U8[>..](repeating: 0, count: 5_000_000))
@@ -398,20 +436,19 @@ fn limitsAreKept() throws {
     var options = ExtractOptions()
     options.overwrite = true
     options.limits.maximumTotal = 9_000_000
-    assertEqualText(problem { try read.extract(to: temp.path, options: options) }, "the archive has more bytes than the limits allow")
+    expectThrows(saying: "the archive has more bytes than the limits allow") { _ = try read.extract(to: temp.path, options: options) }
     options.limits.maximumTotal = 10_000_000
     options.limits.maximumEntry = 4_999_999
-    assertEqualText(problem { try read.extract(to: temp.path, options: options) }, "the archive has more bytes than the limits allow")
+    expectThrows(saying: "the archive has more bytes than the limits allow") { _ = try read.extract(to: temp.path, options: options) }
     options.limits.maximumEntry = 5_000_000
     options.limits.maximumEntries = 1
-    assertEqualText(problem { try read.extract(to: temp.path, options: options) }, "the archive has more than 1 entries")
+    expectThrows(saying: "the archive has more than 1 entries") { _ = try read.extract(to: temp.path, options: options) }
     options.limits.maximumEntries = 2
     try read.extract(to: temp.path, options: options)
 }
 
 @test
-fn archivesAreChanged() throws {
-    let temp = try Temp.directory()
+fn archivesAreChanged(temp: TemporaryFiles) throws {
     let path = temp.path.appending("a.zip")
     try Zip.update(path) { changes in
         changes.set("a", bytes(1000))
@@ -448,8 +485,8 @@ fn namesAndOptionsAreChecked() {
     expect(problem { try writer.add("/a", []) }.hasSuffix("was given something the system does not take"))
     var options = ZipOptions()
     options.method = .Other(number: 5)
-    assertEqualText(problem { try writer.add("a", [], options: options) }, "'a zip entry compressed by another method' is not supported here")
-    expect(problem { try writer.finish(comment: repeated("x", 65_536)) }.hasSuffix("was given something the system does not take"))
+    expectThrows(saying: "'a zip entry compressed by another method' is not supported here") { _ = try writer.add("a", [], options: options) }
+    expect(problem { try writer.finish(comment: "x".repeated(65_536)) }.hasSuffix("was given something the system does not take"))
 }
 
 @test
@@ -484,17 +521,21 @@ fn theAsyncWriterToo() async throws {
 }
 
 @test
-fn zipAndUnzipAgree() async throws {
-    let temp = try Temp.directory()
+fn unzipReadsOurs(temp: TemporaryFiles) async throws {
+    let has = await run("unzip", ["-v"], in: temp.path) != none
+    try skip(if: !has, "there is no unzip command")
     try makeTree(temp.path.appending("in"))
-    if let _ = await run("unzip", ["-v"], in: temp.path) {
-        try Zip.create(temp.path.appending("ours.zip"), from: temp.path.appending("in"))
-        expect(await run("unzip", ["-tq", "ours.zip"], in: temp.path) != none)
-        expect(await run("unzip", ["-q", "ours.zip", "-d", "theirs"], in: temp.path) != none)
-        expect(try isTree(temp.path.appending("theirs")))
-    }
-    if let _ = await run("zip", ["-q", "-r", "-y", "../theirs.zip", "."], in: temp.path.appending("in")) {
-        try Zip.extract(temp.path.appending("theirs.zip"), to: temp.path.appending("out"))
-        expect(try isTree(temp.path.appending("out")))
-    }
+    try Zip.create(temp.path.appending("ours.zip"), from: temp.path.appending("in"))
+    expect(await run("unzip", ["-tq", "ours.zip"], in: temp.path) != none)
+    expect(await run("unzip", ["-q", "ours.zip", "-d", "theirs"], in: temp.path) != none)
+    expect(try isTree(temp.path.appending("theirs")))
+}
+
+@test
+fn zipsAreRead(temp: TemporaryFiles) async throws {
+    try makeTree(temp.path.appending("in"))
+    let made = await run("zip", ["-q", "-r", "-y", "../theirs.zip", "."], in: temp.path.appending("in")) != none
+    try skip(if: !made, "there is no zip command")
+    try Zip.extract(temp.path.appending("theirs.zip"), to: temp.path.appending("out"))
+    expect(try isTree(temp.path.appending("out")))
 }

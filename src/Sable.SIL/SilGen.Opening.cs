@@ -335,6 +335,66 @@ public sealed partial class SilGen {
             return opened;
         }
 
+        /// <summary>The <c>any P.Type</c> a static member is asked for through, opened; null for any other use.</summary>
+        static BoundConversion? OpenedReceiver(BoundExpression use) =>
+            (use is BoundCall call ? call.Receiver : (use as BoundFieldAccess)?.Receiver)
+                is BoundConversion { ConversionKind: ConversionKind.Open, Type: MetatypeTypeSymbol { InstanceType: TypeParameterSymbol { OpenedFrom: not null } } } through ? through : null;
+
+        /// <summary>
+        ///     A static member used on an <c>any P.Type</c>: the type the value
+        ///     holds, known here by its metadata and the registry's tables of
+        ///     its conformances, as what the member is used on; a result of it
+        ///     erased as <see cref="OpenedCall" />'s is.
+        /// </summary>
+        SilValue? OpenedMetatypeUse(BoundExpression use, BoundConversion through, BoundConversion? erasure) {
+            Locate(use.Syntax);
+            var opened = (TypeParameterSymbol)((MetatypeTypeSymbol)through.Type).InstanceType;
+            var protocols = opened.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c)).OfType<NamedTypeSymbol>().Select(static p => p.OriginalDefinition).ToList();
+            if (use is BoundCall { Function: { } function } && function.ContainingSymbol is not NamedTypeSymbol) {
+                if (generator.OpenedShape(function) is null) {
+                    generator.CannotOpen(function, use.Syntax);
+                    _failed = true;
+                    return null;
+                }
+            } else {
+                generator.Opening();
+            }
+
+            if (Expression(through.Operand) is not { } metadata) {
+                return null;
+            }
+
+            var on = new BoundTypeExpression(through.Syntax, opened);
+            _genericMetadata[opened] = metadata;
+            try {
+                using (generator.Opaque(new GenericShape([opened], [..protocols.Select(p => (opened, p))]))) {
+                    foreach (var protocol in protocols) {
+                        generator.OpenedProtocol(protocol, erasure is not null, use is BoundCall described && generator.DescribesValues(described.Function), use.Syntax);
+                        _genericTables[(opened, protocol)] = Required(opened, protocol);
+                    }
+
+                    BoundExpression rebuilt = use switch {
+                        BoundCall call => new BoundCall(call.Syntax, on, call.Function, call.Arguments, call.Type) { Substitution = call.Substitution },
+                        BoundFieldAccess access => new BoundFieldAccess(access.Syntax, on, access.Field, access.Type) { Substitution = access.Substitution },
+                        _ => use,
+                    };
+                    var outer = _openingCall;
+                    _openingCall = rebuilt as BoundCall;
+                    var result = Expression(rebuilt);
+                    _openingCall = outer;
+                    if (erasure is null || result is null || _current is null) {
+                        return result;
+                    }
+
+                    var given = Sub(use.Type);
+                    return given is OptionalTypeSymbol or ArrayTypeSymbol ? ErasedMany(result, given, erasure) : Erased(result, opened, erasure);
+                }
+            } finally {
+                _genericMetadata.Remove(opened);
+                protocols.ForEach(p => _genericTables.Remove((opened, p)));
+            }
+        }
+
         /// <summary>
         ///     A call that opens a Type, its result erased to an existential
         ///     when <paramref name="erasure" /> says so: each opening
@@ -631,6 +691,23 @@ public sealed partial class SilGen {
                 requirements.ForEach(r => _genericTables.Remove(r));
             }
         }
+
+        /// <summary>
+        ///     Whether a member used on an existential of an instance of a
+        ///     generic protocol, <c>any Validator&lt;Int&gt;</c>, is an
+        ///     extension's, no requirement: code compiled once has no tables of
+        ///     such a protocol, so it runs the member's instance whose Self is
+        ///     the existential, which its requirements are called through.
+        /// </summary>
+        bool IsMemberOfInstance(BoundExpression existential, Symbol member, string key) =>
+            LowerType(existential.Type) is StructType layout && generator.IsExistentialLayout(layout) && generator.TabledProtocols(layout) is null
+            && (member.ContainingSymbol is ExtensionSymbol or FieldSymbol { ContainingSymbol: ExtensionSymbol } or FunctionSymbol { ContainingSymbol: ExtensionSymbol })
+            && !IsRequirementOf(existential, key);
+
+        /// <summary>The instance of a generic protocol an existential's constraint says it is of: <c>Validator&lt;Int&gt;</c>, for a member of Validator's. Null for none.</summary>
+        static NamedTypeSymbol? InstanceIn(TypeSymbol constraint, NamedTypeSymbol? protocol) =>
+            protocol is not { TypeKind: TypeKind.Protocol } ? null
+            : CompositionTypeSymbol.PartsOf(constraint).Select(p => p is NamedTypeSymbol named && ReferenceEquals(named.OriginalDefinition, protocol.OriginalDefinition) ? named : p.SupertypeOf(protocol.OriginalDefinition)).OfType<NamedTypeSymbol>().FirstOrDefault(static p => p.IsConstructed);
 
         /// <summary>Whether a member, by its key, is a requirement of an existential's protocols, which its tables hold.</summary>
         bool IsRequirementOf(BoundExpression existential, string key) =>

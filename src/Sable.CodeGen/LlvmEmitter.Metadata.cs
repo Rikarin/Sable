@@ -393,6 +393,43 @@ public sealed partial class LlvmEmitter {
         return "@\"sable.casters.register\"";
     }
 
+    /// <summary>What the registry knows a template's instances by: a generic type's name, or an array's, a slice's or an optional's sign.</summary>
+    static string TemplateName(SilType type) =>
+        SilModule.StructuralElement(type) is null ? DeclaredName((NominalType)type) : type switch { SliceType => "[:]", ArrayType => "[]", _ => "?" };
+
+    /// <summary>
+    ///     A constructor that gives the registry what arrays, slices and
+    ///     optionals conform to (<c>sable_register_structural</c>), in a module
+    ///     that asks it. Null for another.
+    /// </summary>
+    string? StructuralRegistration(SilModule module) {
+        if (module.StructuralConformances.Count == 0 || !module.Functions.Any(f => _reachable?.Contains(f.Name) != false
+                && f.Blocks.Any(static b => b.Instructions.Any(static i => i is BuiltinInst { Name: var name } && AsksRegistry(name))))) {
+            return null;
+        }
+
+        var records = new List<string>();
+        foreach (var (kind, protocol, requirements) in module.StructuralConformances) {
+            var required = "null";
+            if (!requirements.IsEmpty) {
+                required = $"@\"sable.structural.{records.Count}\"";
+                var each = string.Join(", ", requirements.Select(r => $"ptr {ProtocolDescriptor(r)}"));
+                _globals.Append($"{required} = internal constant [{requirements.Length} x ptr] [{each}]\n");
+            }
+
+            records.Add($"{{ ptr, ptr, i64, i64, ptr }} {{ ptr {ProtocolDescriptor(protocol)}, ptr null, i64 {(int)kind}, i64 {requirements.Length}, ptr {required} }}");
+        }
+
+        _globals.Append($"@\"sable.structural\" = internal constant [{records.Count} x {{ ptr, ptr, i64, i64, ptr }}] [{string.Join(", ", records)}]\n");
+        _helpers.Append($"define internal void @\"sable.structural.register\"() {{\nentry:\n  call void @sable_register_structural(ptr @\"sable.structural\", i64 {records.Count})\n  ret void\n}}\n\n");
+        return "@\"sable.structural.register\"";
+    }
+
+    /// <summary>A builtin that asks the conformance registry about a type known as the program runs.</summary>
+    static bool AsksRegistry(string builtin) =>
+        builtin.StartsWith("witness_table:", StringComparison.Ordinal) || builtin.StartsWith("witness_table_required:", StringComparison.Ordinal)
+        || builtin.StartsWith("metadata_is", StringComparison.Ordinal) || builtin.StartsWith("class_conforms:", StringComparison.Ordinal);
+
     /// <summary>
     ///     A constructor that hands the runtime each template table the module
     ///     made (SilGen.Templates.cs), by its generic type's name, with the
@@ -405,14 +442,14 @@ public sealed partial class LlvmEmitter {
         }
 
         var body = new StringBuilder("define internal void @\"sable.templates.register\"() {\nentry:\n");
-        foreach (var table in module.WitnessTables.Where(static t => t is { IsTemplate: true, Conformer: NominalType })) {
+        foreach (var table in module.WitnessTables.Where(static t => t.IsTemplate)) {
             var associated = "null";
             if (HasAssociated(table)) {
                 associated = WitnessTableName(table.Conformer, table.Protocol)[..^1] + ".accessors\"";
                 _globals.Append($"{associated} = {SharedLinkage} constant [{table.Accessors.Count} x ptr] [{string.Join(", ", table.Accessors.Select(a => $"ptr @{Global(a)}"))}]{Comdat(associated, SharedLinkage)}\n");
             }
 
-            body.Append($"  call void @sable_register_template(ptr {TrapMessage(DeclaredName((NominalType)table.Conformer))}, ptr {WitnessTableGlobal(table)}, ptr {associated})\n");
+            body.Append($"  call void @sable_register_template(ptr {TrapMessage(TemplateName(table.Conformer))}, ptr {WitnessTableGlobal(table)}, ptr {associated})\n");
         }
 
         _helpers.Append(body.Append("  ret void\n}\n\n"));
@@ -444,12 +481,14 @@ public sealed partial class LlvmEmitter {
         table.AssociatedTypes.Count > 0 || table.Bases.Exists(b => _module?.FindWitnessTable(table.Conformer, b) is { } refined && HasAssociated(refined));
 
     string? WitnessRegistration(SilModule module) {
-        if (module.Unit is null || module.WitnessTables.Count == 0) {
+        // A program compiled whole points a type's records at its tables; an array's, a slice's or an optional's has none.
+        var registered = module.WitnessTables.Where(t => !t.IsTemplate && (module.Unit is not null || SilModule.StructuralElement(t.Conformer) is not null && _emitted.Contains($"@\"sable.type.{Mangled(t.Conformer)}\""))).ToList();
+        if (registered.Count == 0) {
             return null;
         }
 
         var body = new StringBuilder("define internal void @\"sable.witnesses.register\"() {\nentry:\n");
-        foreach (var table in module.WitnessTables.Where(static t => !t.IsTemplate)) {
+        foreach (var table in registered) {
             body.Append($"  call void @sable_register_witness_table(ptr {TypeMetadataGlobal(table.Conformer)}, ptr {WitnessTableGlobal(table)})\n");
         }
 
@@ -539,6 +578,7 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_witness_table(ptr, ptr)
                                         declare void @sable_register_witness_table(ptr, ptr)
                                         declare void @sable_register_template(ptr, ptr, ptr)
+                                        declare void @sable_register_structural(ptr, i64)
                                         declare void @sable_register_generic_deinit(ptr, ptr)
                                         declare ptr @sable_witness_table_cached(ptr, ptr, ptr)
                                         declare ptr @sable_array_metadata(ptr, ptr)

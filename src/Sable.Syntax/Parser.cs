@@ -2376,7 +2376,8 @@ internal sealed class Parser {
     }
 
     GreenNode ParseClosureParameter() {
-        var identifier = EatIdentifier();
+        // '_', of a value the closure is given and does not use.
+        var identifier = At(SyntaxKind.UnderscoreToken) ? EatToken() : EatIdentifier();
         var colon = TryEatToken(SyntaxKind.ColonToken);
         var modifier = colon is null ? null : TryEatToken(SyntaxKind.InoutKeyword);
         var type = colon is null ? null : ParseType();
@@ -3471,12 +3472,12 @@ internal sealed class Parser {
 
     /// <summary>
     ///     <c>unsafe</c> starts a block on its own, but modifies a function in
-    ///     <c>unsafe fn</c>, <c>unsafe static fn</c> and the like: where a
-    ///     function or another modifier follows it, not a brace.
+    ///     <c>unsafe fn</c>, <c>unsafe static fn</c>, <c>unsafe init</c> and the
+    ///     like: where a function, an initialiser or another modifier follows it, not a brace.
     /// </summary>
     bool IsUnsafeFunctionModifier() =>
         At(SyntaxKind.UnsafeKeyword)
-        && (Peek(1).Kind == SyntaxKind.FnKeyword
+        && (Peek(1).Kind is SyntaxKind.FnKeyword or SyntaxKind.InitKeyword
             || IsModifier(Peek(1).Kind)
             || Peek(1).Kind == SyntaxKind.ConstKeyword && Peek(2).Kind == SyntaxKind.FnKeyword);
 

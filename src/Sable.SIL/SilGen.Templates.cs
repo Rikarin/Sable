@@ -46,6 +46,8 @@ public sealed partial class SilGen {
                 changed |= Templates(symbol.OriginalDefinition, type, wanted);
             }
 
+            changed |= StructuralTemplates();
+
             // A box the program names the class of — 'as? Box<Meters>' asks for it — is what a value made at run time is boxed in too.
             // In a unit, an instance's box is one another unit may open a call to make.
             if (_erasesAny || _openedProtocols.Any(static o => o.Boxes) || _unit is { CompilesGenerics: false } || _module.Unit is not null && CompilesOnce) {
@@ -58,21 +60,34 @@ public sealed partial class SilGen {
 
             // An instance the program names too has metadata of its own, which one
             // made at run time is the same type as: its tables, and its boxer, are made as a conforming type's are.
+            // So are those of any other type made of others — an instance, an array, an optional — whose metadata
+            // the program takes, where it opens types: a Type may hold it.
             var templates = _runtimeInstances.Select(static r => r.Symbol.OriginalDefinition).ToHashSet<TypeSymbol>(ReferenceEqualityComparer.Instance);
             var asked = ProtocolClosure(AskedProtocols());
-            var named = new List<(NamedTypeSymbol Symbol, NominalType Type)>();
+            var held = _openedProtocols.Count == 0 ? [] : MetadataTaken();
+            var named = new List<(TypeSymbol Symbol, SilType Type)>();
             foreach (var (key, lowered) in _types) {
-                if (key is NamedTypeSymbol { IsConstructed: true } n && templates.Contains(n.OriginalDefinition)
-                    && lowered is NominalType { TypeArguments: { IsDefaultOrEmpty: false } arguments } instance && !arguments.Any(SilType.MentionsOpaque)) {
-                    named.Add((n, instance));
+                if (lowered is null || SilType.MentionsOpaque(lowered)) {
+                    continue;
+                }
+
+                if (key is NamedTypeSymbol { IsConstructed: true } n && templates.Contains(n.OriginalDefinition) && lowered is NominalType { TypeArguments.IsDefaultOrEmpty: false }
+                    || key is NamedTypeSymbol { IsConstructed: true, TypeKind: not TypeKind.Protocol } or ArrayTypeSymbol or OptionalTypeSymbol && held.Contains(lowered)) {
+                    named.Add((key, lowered));
                 }
             }
 
             foreach (var (symbol, value) in named) {
                 foreach (var protocol in asked.Where(p => p.TypeParameters.IsEmpty && symbol.Satisfies(p))) {
-                    if (symbol.OriginalDefinition.DeclaringSyntax.FirstOrDefault() is { } at && _templated.Add((value.ToString(), QualifiedName(protocol)))) {
+                    var at = ((symbol as NamedTypeSymbol)?.OriginalDefinition ?? protocol).DeclaringSyntax.FirstOrDefault() ?? protocol.DeclaringSyntax.FirstOrDefault();
+                    if (at is not null && _templated.Add((value.ToString(), QualifiedName(protocol)))) {
                         changed = true;
-                        GenericTable(symbol, protocol, at, describe: _openedProtocols.Any(static o => o.Describes));
+                        if (symbol is NamedTypeSymbol) {
+                            GenericTable(symbol, protocol, at, describe: _openedProtocols.Any(static o => o.Describes));
+                        } else {
+                            WitnessTable(symbol, value, protocol, at);
+                        }
+
                         if (_openedProtocols.Any(static o => o.Boxes)) {
                             Boxer(value);
                         }
@@ -84,6 +99,21 @@ public sealed partial class SilGen {
                 LowerReached();
             }
         }
+    }
+
+    /// <summary>The types whose metadata the code lowered takes, and their type arguments.</summary>
+    HashSet<SilType> MetadataTaken() {
+        var taken = new HashSet<SilType>();
+        var pending = new Stack<SilType>(_module.Functions.SelectMany(static f => f.Blocks).SelectMany(static b => b.Instructions).OfType<MetadataInst>().Select(static m => m.Described));
+        while (pending.TryPop(out var type)) {
+            if (!SilType.MentionsOpaque(type) && taken.Add(type)) {
+                foreach (var argument in type is NominalType { TypeArguments.IsDefaultOrEmpty: false } nominal ? nominal.TypeArguments : ArrayType.ElementOf(type) is { } element ? [element] : []) {
+                    pending.Push(argument);
+                }
+            }
+        }
+
+        return taken;
     }
 
     /// <summary>Makes the template tables of a generic type's conformances to the protocols named that it has not been asked for yet: true when there was one.</summary>
@@ -100,7 +130,60 @@ public sealed partial class SilGen {
             if (_templated.Add((QualifiedName(definition), name)) && protocols.TryGetValue(name, out var protocol)
                 && requirements.All(r => r.Item1 < definition.TypeParameters.Length && protocols.ContainsKey(r.Item2))) {
                 made = true;
-                TemplateTable(definition, type, protocol, [..requirements.Select(r => (definition.TypeParameters[r.Item1], protocols[r.Item2]))]);
+                _templatesMade.Add((definition, protocol));
+                TemplateTable(definition, definition.Construct([..definition.TypeParameters.Cast<TypeSymbol>()]), type, protocol, [..requirements.Select(r => (definition.TypeParameters[r.Item1], protocols[r.Item2]))]);
+                _templatesMade.Remove((definition, protocol));
+            }
+        }
+
+        return made;
+    }
+
+    /// <summary>
+    ///     The template tables of arrays, slices and optionals, for each
+    ///     protocol the registry is asked about that they conform to: an
+    ///     instance may be made as the program runs, or be another unit's.
+    ///     True when it made one.
+    /// </summary>
+    bool StructuralTemplates() {
+        if (_openedProtocols.Count == 0 && _runtimeInstances.Count == 0) {
+            return false;
+        }
+
+        var made = false;
+        var asked = ProtocolClosure(AskedProtocols()).ToHashSet<NamedTypeSymbol>(ReferenceEqualityComparer.Instance);
+        void Make(string kind, NamedTypeSymbol definition, TypeSymbol concrete, NamedTypeSymbol protocol, ImmutableArray<(TypeParameterSymbol, NamedTypeSymbol)> required) {
+            if (!asked.Contains(protocol) || !_templated.Add((kind, QualifiedName(protocol)))) {
+                return;
+            }
+
+            made = true;
+            Opening();
+            SilType? instance;
+            using (Opaque(new GenericShape(definition.TypeParameters, [])))
+            using (_diagnostics.Suppress()) {
+                instance = Lower(concrete);
+            }
+
+            if (instance is not null) {
+                TemplateTable(definition, concrete, instance, protocol, required);
+            }
+        }
+
+        // A protocol refined before those that refine it, whose tables point at its.
+        foreach (var (protocol, carrier) in ArrayProtocols().OrderBy(static p => ProtocolClosure([p.Protocol]).Count).ToList()) {
+            var kind = carrier.ExtendedArray!.ArrayKind;
+            Make("[]", carrier, new ArrayTypeSymbol(carrier.TypeParameters[0], kind == ArrayKind.Slice ? ArrayKind.Grow : kind), protocol, []);
+            if (kind == ArrayKind.Slice) {
+                Make("[:]", carrier, carrier.ExtendedArray, protocol, []);
+            }
+        }
+
+        var optional = Core.Optional;
+        var protocols = ProtocolSymbols(optional);
+        foreach (var (name, requirements) in ConditionalProtocols(optional).OrderBy(c => protocols.TryGetValue(c.Protocol, out var p) ? ProtocolClosure([p]).Count : 0).ToList()) {
+            if (protocols.TryGetValue(name, out var protocol) && requirements.All(r => protocols.ContainsKey(r.Protocol))) {
+                Make("?", optional, new OptionalTypeSymbol(optional.TypeParameters[0]), protocol, [..requirements.Select(r => (optional.TypeParameters[r.Argument], protocols[r.Protocol]))]);
             }
         }
 
@@ -108,6 +191,9 @@ public sealed partial class SilGen {
     }
 
     readonly Dictionary<(NamedTypeSymbol, NamedTypeSymbol), bool> _templatesAsked = [];
+
+    /// <summary>The conformances whose templates' entries are being made: each is taken to have one, as a function's own body takes it to be compiled once.</summary>
+    readonly HashSet<(NamedTypeSymbol, NamedTypeSymbol)> _templatesMade = [];
 
     /// <summary>
     ///     Whether a type made of type parameters, <c>Pair&lt;T&gt;</c>, has a
@@ -122,6 +208,11 @@ public sealed partial class SilGen {
         }
 
         protocol = protocol.OriginalDefinition;
+        // A witness of the conformance being made — a requirement left to the protocol's default — asks for the conformance itself.
+        if (_templatesMade.Contains((definition, protocol))) {
+            return true;
+        }
+
         if (_templatesAsked.TryGetValue((definition, protocol), out var has)) {
             return has;
         }
@@ -213,8 +304,8 @@ public sealed partial class SilGen {
     }
 
     /// <summary>The template table of a generic type's conformance to a protocol, for its instance made at run time; none when an entry cannot be made.</summary>
-    void TemplateTable(NamedTypeSymbol definition, NominalType instance, NamedTypeSymbol protocol, ImmutableArray<(TypeParameterSymbol, NamedTypeSymbol)> required) {
-        if (!IsTabledProtocol(protocol) || !protocol.TypeParameters.IsEmpty || definition.ExtendedOptional is not null || definition.ExtendedArray is not null
+    void TemplateTable(NamedTypeSymbol definition, TypeSymbol concrete, SilType instance, NamedTypeSymbol protocol, ImmutableArray<(TypeParameterSymbol, NamedTypeSymbol)> required) {
+        if (!IsTabledProtocol(protocol) || !protocol.TypeParameters.IsEmpty
             || Bases(protocol).Any(b => _module.FindWitnessTable(instance, QualifiedName(b)) is null)
             || (definition.DeclaringSyntax.FirstOrDefault() ?? protocol.DeclaringSyntax.FirstOrDefault()) is not { } at) {
             return;
@@ -254,21 +345,21 @@ public sealed partial class SilGen {
         var table = new SilWitnessTable(instance, QualifiedName(protocol)) { IsTemplate = true };
         table.Bases.AddRange(Bases(protocol).Select(QualifiedName));
         for (var i = 0; i < protocol.OriginalDefinition.AssociatedTypes.Length; i++) {
-            if (!TemplateAssociated(definition, table, protocol, i, shape, at)) {
+            if (!TemplateAssociated(definition, concrete, table, protocol, i, shape, at)) {
                 Refused(protocol.OriginalDefinition.AssociatedTypes[i].Name);
                 return;
             }
         }
 
         foreach (var (key, member) in GenericRequirements(protocol)) {
-            if (member is FunctionSymbol { TypeParameters.IsEmpty: false } || GenericEntryType(protocol, member) is not { } type) {
+            if (GenericEntryType(protocol, member) is not { } type) {
                 Refused(key);
                 return;
             }
 
             string? witness;
             using (_diagnostics.Suppress()) {
-                witness = TemplateWitness(definition, protocol, table.Entries.Count, member, key, type, shape, at);
+                witness = TemplateWitness(definition, concrete, instance, protocol, table.Entries.Count, member, key, type, shape, at);
             }
 
             if (witness is null) {
@@ -288,12 +379,12 @@ public sealed partial class SilGen {
     ///     Self's — which reads the type arguments there, as an entry does.
     ///     False when its metadata, or what it conforms to, cannot be found so.
     /// </summary>
-    bool TemplateAssociated(NamedTypeSymbol definition, SilWitnessTable table, NamedTypeSymbol protocol, int index, GenericShape shape, SyntaxNode at) {
+    bool TemplateAssociated(NamedTypeSymbol definition, TypeSymbol concrete, SilWitnessTable table, NamedTypeSymbol protocol, int index, GenericShape shape, SyntaxNode at) {
         var associated = protocol.OriginalDefinition.AssociatedTypes[index];
-        var concrete = definition.Construct([..definition.TypeParameters.Cast<TypeSymbol>()]);
         using (Opaque(shape))
         using (AssociatedContext(definition)) {
-            var read = _compilation.AssociatedTypeOf(concrete, associated) is { } declared ? TypeSubstitution.For(concrete).Apply(declared) : null;
+            var read = concrete is not NamedTypeSymbol named ? AssociatedBinding(concrete, associated)
+                : _compilation.AssociatedTypeOf(named, associated) is { } declared ? TypeSubstitution.For(named).Apply(declared) : null;
             if (read is null) {
                 return false;
             }
@@ -303,7 +394,7 @@ public sealed partial class SilGen {
                 return false;
             }
 
-            var stem = $"$template$associated${Sanitise(QualifiedName(definition))}${Sanitise(QualifiedName(protocol))}${index}";
+            var stem = $"$template$associated${Sanitise(concrete is NamedTypeSymbol ? QualifiedName(definition) : table.Conformer.ToString())}${Sanitise(QualifiedName(protocol))}${index}";
             var hidden = shape.Parameters.Select(static _ => SilType.Metadata).Concat(shape.Requirements.Select(static _ => SilType.WitnessTable));
             var body = new SilFunction(stem + "$body", new FunctionType([..hidden], SilType.Metadata));
             body.ParameterNames.AddRange(shape.Parameters.Select(static p => $"$metadata.{ParameterName(p)}"));
@@ -390,9 +481,9 @@ public sealed partial class SilGen {
     ///     type with them. Null when the witness cannot be made.
     /// </summary>
     string? TemplateWitness(
-        NamedTypeSymbol definition, NamedTypeSymbol protocol, int index, Symbol member, string key, FunctionType type, GenericShape shape, SyntaxNode at
+        NamedTypeSymbol definition, TypeSymbol concrete, SilType instance, NamedTypeSymbol protocol, int index, Symbol member, string key, FunctionType type, GenericShape shape, SyntaxNode at
     ) {
-        var stem = $"$template$witness${Sanitise(QualifiedName(definition))}${Sanitise(QualifiedName(protocol))}${index}${(member.Name.All(char.IsLetterOrDigit) ? member.Name : "op")}";
+        var stem = $"$template$witness${Sanitise(concrete is NamedTypeSymbol ? QualifiedName(definition) : instance.ToString())}${Sanitise(QualifiedName(protocol))}${index}${(member.Name.All(char.IsLetterOrDigit) ? member.Name : "op")}";
         if (_module.Find(stem) is not null) {
             return stem;
         }
@@ -405,12 +496,30 @@ public sealed partial class SilGen {
             FieldSymbol field => field.IsStatic ? 0 : 1,
             _ => 0,
         };
-        var hidden = shape.Parameters.Select(static _ => SilType.Metadata).Concat(shape.Requirements.Select(static _ => SilType.WitnessTable));
-        var innerType = new FunctionType([..type.Parameters.Take(own), ..hidden, ..type.Parameters.Skip(own)], type.Result, type.Thrown, isAsync: type.IsAsync);
+        // One generic over parameters of its own is compiled once for those too:
+        // theirs come before Self's metadata, the type arguments' among them.
+        var generic = member is FunctionSymbol requirement ? OwnShape(requirement) : null;
+        if (member is FunctionSymbol declared && !OwnParameters(declared).IsEmpty && generic is null) {
+            return null;
+        }
+
+        var ownParameters = generic?.Parameters.Length ?? 0;
+        var ownHidden = ownParameters + (generic?.Requirements.Length ?? 0);
+        var before = generic is null ? own : type.Parameters.Length - 1 - ownHidden;
+        var metadataOf = shape.Parameters.Select(static _ => SilType.Metadata);
+        var tablesOf = shape.Requirements.Select(static _ => SilType.WitnessTable);
+        ImmutableArray<SilType> parameters = [
+            ..type.Parameters.Take(before), ..metadataOf, ..type.Parameters.Skip(before).Take(ownParameters), ..tablesOf, ..type.Parameters.Skip(before + ownParameters),
+        ];
+        var innerType = new FunctionType(parameters, type.Result, type.Thrown, isAsync: type.IsAsync);
         string? inner;
+        var definitionShape = shape;
+        if (generic is not null) {
+            shape = new GenericShape([..shape.Parameters, ..generic.Parameters], [..shape.Requirements, ..generic.Requirements]);
+        }
+
         using (Opaque(shape)) {
-            var concrete = definition.Construct([..definition.TypeParameters.Cast<TypeSymbol>()]);
-            inner = Lower(concrete) is { } value ? GenericWitness(concrete, value, protocol, key, member, innerType, at, ($"{stem}$body", shape)) : null;
+            inner = Lower(concrete) is { } value ? GenericWitness(concrete, value, protocol, key, member, innerType, at, ($"{stem}$body", shape), definition) : null;
         }
 
         if (inner is null) {
@@ -421,7 +530,11 @@ public sealed partial class SilGen {
         thunk.ParameterNames.AddRange([..Enumerable.Range(0, type.Parameters.Length - 1).Select(static i => $"$argument{i}"), "$metadata.Self"]);
         var entry = thunk.AddBlock();
         var given = type.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
-        var arguments = new List<SilValue>([..given.Take(own), ..TemplateArguments(entry, given[^1], shape), ..given.Skip(own)]);
+        var read = TemplateArguments(entry, given[^1], definitionShape);
+        var arguments = new List<SilValue>([
+            ..given.Take(before), ..read.Take(definitionShape.Parameters.Length), ..given.Skip(before).Take(ownParameters), ..read.Skip(definitionShape.Parameters.Length),
+            ..given.Skip(before + ownParameters),
+        ]);
         var callee = entry.Append(new FunctionRefInst(inner, innerType));
         if (type.Thrown is null) {
             var result = entry.Append(new ApplyInst(callee, type.Result, [..arguments]));

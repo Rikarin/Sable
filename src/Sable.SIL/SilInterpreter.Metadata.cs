@@ -222,7 +222,7 @@ public sealed partial class SilInterpreter {
             }
         }
 
-        return null;
+        return module.HasStructuralConformance(type, protocol) ? module.FindWitnessTable(type, protocol) ?? TemplateInstance(type, protocol) : null;
     }
 
     readonly Dictionary<(string Type, string Protocol), SilWitnessTable> _templateInstances = [];
@@ -237,12 +237,24 @@ public sealed partial class SilInterpreter {
             return made;
         }
 
+        if (SilModule.StructuralElement(type) is not null) {
+            if (module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && SilModule.StructuralElement(t.Conformer) is not null
+                                                         && TypeMetadata.KindOf(t.Conformer) == TypeMetadata.KindOf(type)) is not { } structural) {
+                return null;
+            }
+
+            return InstanceOf(structural);
+        }
+
         if (type is not NominalType { TypeArguments.IsEmpty: false, DisplayName: { } display } || display.IndexOf('<') is not (> 0 and var open)
             || module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && t.Conformer is NominalType { DisplayName: { } generic }
                                                        && generic.IndexOf('<') == open && generic.AsSpan(0, open).SequenceEqual(display.AsSpan(0, open))) is not { } template) {
             return null;
         }
 
+        return InstanceOf(template);
+
+        SilWitnessTable InstanceOf(SilWitnessTable template) {
         made = new SilWitnessTable(type, protocol);
         _templateInstances[(type.ToString(), protocol)] = made;
         made.Entries.AddRange(template.Entries);
@@ -254,6 +266,7 @@ public sealed partial class SilInterpreter {
         }
 
         return made;
+        }
     }
 
     /// <summary>The box class made for each type no code boxes, by the type's name.</summary>
@@ -290,7 +303,7 @@ public sealed partial class SilInterpreter {
             }
         }
 
-        return false;
+        return module.HasStructuralConformance(type, protocol);
     }
 
     /// <summary>

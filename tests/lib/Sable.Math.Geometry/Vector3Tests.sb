@@ -121,9 +121,9 @@ fn equalityIsExactAndNearEqualIsNot() {
     for i in 0..<3 {
         var other = almost
         other[i] = 1.5
-        require(almost != other)
-        require(!almost.nearEqual(other))
-        require(almost.nearEqual(other, tolerance: 0.5))
+        expect(almost != other)
+        expect(!almost.nearEqual(other))
+        expect(almost.nearEqual(other, tolerance: 0.5))
     }
     let nan = Vector3(repeating: F32.nan)
     expect(nan != nan && nan.isNaN && !nan.isFinite)
@@ -145,10 +145,10 @@ fn itIsWrittenAsItsComponents() {
 }
 
 @test
-fn itIsSerialisedByName() {
+fn itIsSerialisedByName() throws {
     let v = Vector3(1.5, -2.25, 0)
-    assertEqual(try! Json.decode(Vector3.self, from: try! Json.encode(v)), v)
-    expect(try! Json.encode(v).contains("\"y\":-2.25"))
+    assertEqual(try Json.decode(Vector3.self, from: Json.encode(v)), v)
+    expect(try Json.encode(v).contains("\"y\":-2.25"))
 }
 
 @test
@@ -159,7 +159,7 @@ fn itIsMadeFromFloatsIntegersAndLanes() {
     a.copy(to: &into, at: 1)
     assertEqual(Vector3(from: into, at: 1), a)
     assertEqual(into[0], 0)
-    expectPanic("") {
+    expectPanic() {
         var short: F32[>..] = [0]
         a.copy(to: &short)
     }

@@ -62,12 +62,21 @@ fn everyIntegerOfAFormatIsPackedBack() {
 
 @test
 fn aPackedRotationTurnsAlike() {
+    forAll { (q: Quaternion) in
+        let packed = PackedQuaternion(q)
+        expect(packed.quaternion.sameRotation(as: q) && nearEqual(packed.quaternion.length, 1))
+        expect(PackedQuaternion(bits: packed.bits) == packed && PackedQuaternion(-q) == packed)
+    }
+}
+
+@test
+fn soDoesAPackedRotationAboutAnAxis() {
     expect(PackedQuaternion(Quaternion.identity).quaternion.isIdentity)
     for i in 0..<200 {
         let q = Quaternion(axis: Vector3(F32(i % 7) - 3, F32(i % 5) - 2, F32(i % 3) - 1.5), angle: F32(i) * 0.17 - 17)
         let packed = PackedQuaternion(q)
         assert(packed.quaternion.sameRotation(as: q), "\(q)")
-        assert(nearEqual(packed.quaternion.length, 1))
+        assert(nearEqual(packed.quaternion.length, 1), "\(q)")
         assertEqual(PackedQuaternion(bits: packed.bits), packed)
         assertEqual(PackedQuaternion(-q), packed)
     }

@@ -51,7 +51,7 @@ struct Inputs {
         let expected = reference[name]!
         for i in 0..<values.count {
             let dotNet = expected[which * values.count + i]
-            assert(nearEqual(values[i], dotNet, tolerance: tolerance), "\(name) \(i) of set \(which): \(values[i]), and .NET's is \(dotNet)")
+            expect(nearEqual(values[i], dotNet, tolerance: tolerance), "\(name) \(i) of set \(which): \(values[i]), and .NET's is \(dotNet)")
         }
     }
 
@@ -84,194 +84,181 @@ struct Inputs {
     }
 }
 
-fn eachSet(_ body: (Inputs) -> Void) {
-    for which in 0..<6 {
-        body(Inputs(which))
-    }
+let sets = [0, 1, 2, 3, 4, 5]
+
+@test(arguments: sets)
+fn vector2IsAsDotNets(_ which: Int) {
+    let i = Inputs(which)
+    let a = i.a2
+    let b = i.b2
+    i.check("vector2.add", a + b)
+    i.check("vector2.subtract", a - b)
+    i.check("vector2.multiply", a * b)
+    i.check("vector2.divide", a / b)
+    i.check("vector2.divideBy", a / i.p[4])
+    i.check("vector2.numbers", [a.dot(b), a.length, a.distance(to: b), a.distanceSquared(to: b)])
+    i.check("vector2.normalized", a.normalized())
+    i.check("vector2.lerp", a.lerp(to: b, i.t))
+    i.check("vector2.min", a.min(b))
+    i.check("vector2.max", a.max(b))
+    i.check("vector2.clamped", a.clamped(lower: Vector2(repeating: -3), upper: Vector2(repeating: 3)))
+    i.check("vector2.reflected", a.reflected(normal: b.normalized()))
+    i.check("vector2.squareRoot", a.abs().squareRoot())
 }
 
-@test
-fn vector2IsAsDotNets() {
-    eachSet { i in
-        let a = i.a2
-        let b = i.b2
-        i.check("vector2.add", a + b)
-        i.check("vector2.subtract", a - b)
-        i.check("vector2.multiply", a * b)
-        i.check("vector2.divide", a / b)
-        i.check("vector2.divideBy", a / i.p[4])
-        i.check("vector2.numbers", [a.dot(b), a.length, a.distance(to: b), a.distanceSquared(to: b)])
-        i.check("vector2.normalized", a.normalized())
-        i.check("vector2.lerp", a.lerp(to: b, i.t))
-        i.check("vector2.min", a.min(b))
-        i.check("vector2.max", a.max(b))
-        i.check("vector2.clamped", a.clamped(lower: Vector2(repeating: -3), upper: Vector2(repeating: 3)))
-        i.check("vector2.reflected", a.reflected(normal: b.normalized()))
-        i.check("vector2.squareRoot", a.abs().squareRoot())
-    }
+@test(arguments: sets)
+fn vector3IsAsDotNets(_ which: Int) {
+    let i = Inputs(which)
+    let a = i.a
+    let b = i.b
+    i.check("vector3.add", a + b)
+    i.check("vector3.subtract", a - b)
+    i.check("vector3.multiply", a * b)
+    i.check("vector3.divide", a / b)
+    i.check("vector3.divideBy", a / i.p[9])
+    i.check("vector3.numbers", [a.dot(b), a.length, a.distance(to: b), a.distanceSquared(to: b), a.sum])
+    i.check("vector3.cross", a.cross(b))
+    i.check("vector3.normalized", a.normalized())
+    i.check("vector3.lerp", a.lerp(to: b, i.t))
+    i.check("vector3.min", a.min(b))
+    i.check("vector3.max", a.max(b))
+    i.check("vector3.clamped", a.clamped(lower: Vector3(repeating: -3), upper: Vector3(repeating: 3)))
+    i.check("vector3.reflected", a.reflected(normal: i.c.normalized()))
+    i.check("vector3.squareRoot", a.abs().squareRoot())
+    i.check("vector3.truncated", a.truncated())
+    i.check("vector3.rounded", a.rounded())
 }
 
-@test
-fn vector3IsAsDotNets() {
-    eachSet { i in
-        let a = i.a
-        let b = i.b
-        i.check("vector3.add", a + b)
-        i.check("vector3.subtract", a - b)
-        i.check("vector3.multiply", a * b)
-        i.check("vector3.divide", a / b)
-        i.check("vector3.divideBy", a / i.p[9])
-        i.check("vector3.numbers", [a.dot(b), a.length, a.distance(to: b), a.distanceSquared(to: b), a.sum])
-        i.check("vector3.cross", a.cross(b))
-        i.check("vector3.normalized", a.normalized())
-        i.check("vector3.lerp", a.lerp(to: b, i.t))
-        i.check("vector3.min", a.min(b))
-        i.check("vector3.max", a.max(b))
-        i.check("vector3.clamped", a.clamped(lower: Vector3(repeating: -3), upper: Vector3(repeating: 3)))
-        i.check("vector3.reflected", a.reflected(normal: i.c.normalized()))
-        i.check("vector3.squareRoot", a.abs().squareRoot())
-        i.check("vector3.truncated", a.truncated())
-        i.check("vector3.rounded", a.rounded())
-    }
+@test(arguments: sets)
+fn vector4IsAsDotNets(_ which: Int) {
+    let i = Inputs(which)
+    let a = i.a4
+    let b = i.b4
+    i.check("vector4.add", a + b)
+    i.check("vector4.subtract", a - b)
+    i.check("vector4.multiply", a * b)
+    i.check("vector4.divide", a / b)
+    i.check("vector4.numbers", [a.dot(b), a.length, a.distance(to: b), a.distanceSquared(to: b)])
+    i.check("vector4.normalized", a.normalized())
+    i.check("vector4.lerp", a.lerp(to: b, i.t))
+    i.check("vector4.min", a.min(b))
+    i.check("vector4.max", a.max(b))
+    i.check("vector4.clamped", a.clamped(lower: Vector4(repeating: -3), upper: Vector4(repeating: 3)))
 }
 
-@test
-fn vector4IsAsDotNets() {
-    eachSet { i in
-        let a = i.a4
-        let b = i.b4
-        i.check("vector4.add", a + b)
-        i.check("vector4.subtract", a - b)
-        i.check("vector4.multiply", a * b)
-        i.check("vector4.divide", a / b)
-        i.check("vector4.numbers", [a.dot(b), a.length, a.distance(to: b), a.distanceSquared(to: b)])
-        i.check("vector4.normalized", a.normalized())
-        i.check("vector4.lerp", a.lerp(to: b, i.t))
-        i.check("vector4.min", a.min(b))
-        i.check("vector4.max", a.max(b))
-        i.check("vector4.clamped", a.clamped(lower: Vector4(repeating: -3), upper: Vector4(repeating: 3)))
-    }
+@test(arguments: sets)
+fn quaternionIsAsDotNets(_ which: Int) {
+    let i = Inputs(which)
+    let q = i.q
+    let r = i.r
+    let other = Quaternion(i.a4)
+    i.check("quaternion.axisAngle", q)
+    i.check("quaternion.yawPitchRoll", r)
+    // '*' turns by the left first, which is .NET's Concatenate, and not
+    // its '*', which turns by the right first.
+    i.check("quaternion.concatenate", q * r)
+    i.check("quaternion.hamilton", r * q)
+    i.check("quaternion.slerp", q.slerp(to: r, i.t))
+    i.check("quaternion.nlerp", q.nlerp(to: r, i.t))
+    i.check("quaternion.normalized", other.normalized())
+    i.check("quaternion.inverted", other.inverted())
+    i.check("quaternion.conjugate", r.conjugate)
+    i.check("quaternion.numbers", [q.dot(r), other.length])
+    i.check("quaternion.ofMatrix", Quaternion(rotation: Matrix4x4(rotation: r)))
+    i.check("quaternion.transform", r.transform(i.b))
 }
 
-@test
-fn quaternionIsAsDotNets() {
-    eachSet { i in
-        let q = i.q
-        let r = i.r
-        let other = Quaternion(i.a4)
-        i.check("quaternion.axisAngle", q)
-        i.check("quaternion.yawPitchRoll", r)
-        // '*' turns by the left first, which is .NET's Concatenate, and not
-        // its '*', which turns by the right first.
-        i.check("quaternion.concatenate", q * r)
-        i.check("quaternion.hamilton", r * q)
-        i.check("quaternion.slerp", q.slerp(to: r, i.t))
-        i.check("quaternion.nlerp", q.nlerp(to: r, i.t))
-        i.check("quaternion.normalized", other.normalized())
-        i.check("quaternion.inverted", other.inverted())
-        i.check("quaternion.conjugate", r.conjugate)
-        i.check("quaternion.numbers", [q.dot(r), other.length])
-        i.check("quaternion.ofMatrix", Quaternion(rotation: Matrix4x4(rotation: r)))
-        i.check("quaternion.transform", r.transform(i.b))
-    }
+@test(arguments: sets)
+fn matrix4x4IsAsDotNets(_ which: Int) {
+    let i = Inputs(which)
+    let m = i.m
+    let n = i.n
+    i.check("matrix.translation", Matrix4x4(translation: i.a))
+    i.check("matrix.scale", Matrix4x4(scale: i.a))
+    i.check("matrix.scaleAbout", Matrix4x4(scale: i.a, about: i.b))
+    i.check("matrix.rotationX", Matrix4x4(rotationX: i.angle))
+    i.check("matrix.rotationY", Matrix4x4(rotationY: i.angle))
+    i.check("matrix.rotationZ", Matrix4x4(rotationZ: i.angle))
+    i.check("matrix.axisAngle", Matrix4x4(axis: i.a, angle: i.angle))
+    i.check("matrix.yawPitchRoll", Matrix4x4(yaw: i.p[18] / 4, pitch: i.p[19] / 4, roll: i.p[20] / 4))
+    i.check("matrix.rotation", Matrix4x4(rotation: i.q))
+    i.check("matrix.composed", m)
+    i.check("matrix.composed", Matrix4x4(scale: i.scale, rotation: i.q, translation: i.b))
+    i.check("matrix.multiply", m * n)
+    i.check("matrix.add", m + n)
+    i.check("matrix.subtract", m - n)
+    i.check("matrix.times", m * 2.5)
+    i.check("matrix.lerp", m.lerp(to: n, i.t))
+    i.check("matrix.transposed", m.transposed())
+    i.check("matrix.inverted", m.inverted()!)
+    i.check("matrix.determinant", [m.determinant])
+    let parts = m.decomposed()!
+    i.check("matrix.decomposedScale", parts.scale)
+    i.check("matrix.decomposedRotation", parts.rotation)
+    i.check("matrix.decomposedTranslation", parts.translation)
+    i.check("matrix.rotatedBy", m.rotated(by: i.r))
+    i.check("matrix.transformPosition", m.transformPosition(i.c))
+    i.check("matrix.transformPosition", m.transformAffine(i.c))
+    i.check("matrix.transformDirection", m.transformDirection(i.c))
+    i.check("matrix.transformVector4", i.a4 * m)
 }
 
-@test
-fn matrix4x4IsAsDotNets() {
-    eachSet { i in
-        let m = i.m
-        let n = i.n
-        i.check("matrix.translation", Matrix4x4(translation: i.a))
-        i.check("matrix.scale", Matrix4x4(scale: i.a))
-        i.check("matrix.scaleAbout", Matrix4x4(scale: i.a, about: i.b))
-        i.check("matrix.rotationX", Matrix4x4(rotationX: i.angle))
-        i.check("matrix.rotationY", Matrix4x4(rotationY: i.angle))
-        i.check("matrix.rotationZ", Matrix4x4(rotationZ: i.angle))
-        i.check("matrix.axisAngle", Matrix4x4(axis: i.a, angle: i.angle))
-        i.check("matrix.yawPitchRoll", Matrix4x4(yaw: i.p[18] / 4, pitch: i.p[19] / 4, roll: i.p[20] / 4))
-        i.check("matrix.rotation", Matrix4x4(rotation: i.q))
-        i.check("matrix.composed", m)
-        i.check("matrix.composed", Matrix4x4(scale: i.scale, rotation: i.q, translation: i.b))
-        i.check("matrix.multiply", m * n)
-        i.check("matrix.add", m + n)
-        i.check("matrix.subtract", m - n)
-        i.check("matrix.times", m * 2.5)
-        i.check("matrix.lerp", m.lerp(to: n, i.t))
-        i.check("matrix.transposed", m.transposed())
-        i.check("matrix.inverted", m.inverted()!)
-        i.check("matrix.determinant", [m.determinant])
-        let parts = m.decomposed()!
-        i.check("matrix.decomposedScale", parts.scale)
-        i.check("matrix.decomposedRotation", parts.rotation)
-        i.check("matrix.decomposedTranslation", parts.translation)
-        i.check("matrix.rotatedBy", m.rotated(by: i.r))
-        i.check("matrix.transformPosition", m.transformPosition(i.c))
-        i.check("matrix.transformPosition", m.transformAffine(i.c))
-        i.check("matrix.transformDirection", m.transformDirection(i.c))
-        i.check("matrix.transformVector4", i.a4 * m)
-    }
+@test(arguments: sets)
+fn camerasAreAsDotNetsWhereDepthsRunForward(_ which: Int) {
+    let i = Inputs(which)
+    let aspect = i.width / i.height
+    i.check("matrix.lookAt", Matrix4x4.lookAt(eye: i.a, target: i.b, up: Vector3.up))
+    i.check("matrix.lookTo", Matrix4x4.lookTo(eye: i.a, direction: i.b, up: Vector3.up))
+    i.check("matrix.world", Matrix4x4.world(position: i.a, forward: i.b, up: Vector3.up))
+    i.check("matrix.fieldOfView", Matrix4x4.perspectiveFieldOfView(1 + i.t, aspectRatio: aspect, near: i.near, far: i.far, depth: .Forward))
+    i.check("matrix.fieldOfViewInfinite", Matrix4x4.perspectiveFieldOfView(1 + i.t, aspectRatio: aspect, near: i.near, far: F32.infinity, depth: .Forward))
+    i.check("matrix.perspective", Matrix4x4.perspective(width: i.width, height: i.height, near: i.near, far: i.far, depth: .Forward))
+    i.check("matrix.perspectiveOffCenter", Matrix4x4.perspectiveOffCenter(left: -i.width, right: i.height, bottom: -i.height, top: i.width, near: i.near, far: i.far, depth: .Forward))
+    i.check("matrix.orthographic", Matrix4x4.orthographic(width: i.width, height: i.height, near: i.near, far: i.far, depth: .Forward))
+    i.check("matrix.orthographicOffCenter", Matrix4x4.orthographicOffCenter(left: -i.width, right: i.height, bottom: -i.height, top: i.width, near: i.near, far: i.far, depth: .Forward))
+    // Direct3D's and Vulkan's viewport, which .NET calls left-handed: its
+    // other one has the depths the other way about.
+    i.check("matrix.viewport", Matrix4x4.viewport(x: i.p[0], y: i.p[1], width: i.width, height: i.height, minDepth: 0.25, maxDepth: 0.75))
 }
 
-@test
-fn camerasAreAsDotNetsWhereDepthsRunForward() {
-    eachSet { i in
-        let aspect = i.width / i.height
-        i.check("matrix.lookAt", Matrix4x4.lookAt(eye: i.a, target: i.b, up: Vector3.up))
-        i.check("matrix.lookTo", Matrix4x4.lookTo(eye: i.a, direction: i.b, up: Vector3.up))
-        i.check("matrix.world", Matrix4x4.world(position: i.a, forward: i.b, up: Vector3.up))
-        i.check("matrix.fieldOfView", Matrix4x4.perspectiveFieldOfView(1 + i.t, aspectRatio: aspect, near: i.near, far: i.far, depth: .Forward))
-        i.check("matrix.fieldOfViewInfinite", Matrix4x4.perspectiveFieldOfView(1 + i.t, aspectRatio: aspect, near: i.near, far: F32.infinity, depth: .Forward))
-        i.check("matrix.perspective", Matrix4x4.perspective(width: i.width, height: i.height, near: i.near, far: i.far, depth: .Forward))
-        i.check("matrix.perspectiveOffCenter", Matrix4x4.perspectiveOffCenter(left: -i.width, right: i.height, bottom: -i.height, top: i.width, near: i.near, far: i.far, depth: .Forward))
-        i.check("matrix.orthographic", Matrix4x4.orthographic(width: i.width, height: i.height, near: i.near, far: i.far, depth: .Forward))
-        i.check("matrix.orthographicOffCenter", Matrix4x4.orthographicOffCenter(left: -i.width, right: i.height, bottom: -i.height, top: i.width, near: i.near, far: i.far, depth: .Forward))
-        // Direct3D's and Vulkan's viewport, which .NET calls left-handed: its
-        // other one has the depths the other way about.
-        i.check("matrix.viewport", Matrix4x4.viewport(x: i.p[0], y: i.p[1], width: i.width, height: i.height, minDepth: 0.25, maxDepth: 0.75))
-    }
+@test(arguments: sets)
+fn transformsOfPlanesAndBillboardsAreAsDotNets(_ which: Int) {
+    let i = Inputs(which)
+    let a = i.a
+    i.check("matrix.billboard", Matrix4x4.billboard(position: a, camera: i.b, up: Vector3.up, forward: Vector3.unitX))
+    i.check("matrix.billboardNear", Matrix4x4.billboard(position: a, camera: a, up: Vector3.up, forward: Vector3.unitX))
+    i.check("matrix.constrainedBillboard", Matrix4x4.constrainedBillboard(position: a, camera: i.b, axis: Vector3.unitY, cameraForward: Vector3.unitX, objectForward: Vector3.unitZ))
+    i.check("matrix.constrainedBillboardAlong", Matrix4x4.constrainedBillboard(position: a, camera: a + Vector3.unitY, axis: Vector3.unitY, cameraForward: Vector3.unitX, objectForward: Vector3.unitZ))
+    i.check("matrix.constrainedBillboardAll", Matrix4x4.constrainedBillboard(position: a, camera: a + Vector3.unitY, axis: Vector3.unitY, cameraForward: Vector3.unitX, objectForward: Vector3.unitY))
+    i.check("matrix.constrainedBillboardZ", Matrix4x4.constrainedBillboard(position: a, camera: a + Vector3.unitZ, axis: Vector3.unitZ, cameraForward: Vector3.unitX, objectForward: Vector3.unitZ))
+    i.check("matrix.reflection", Matrix4x4(reflectionIn: i.plane))
+    i.check("matrix.shadow", Matrix4x4(shadowOn: i.plane, light: a))
 }
 
-@test
-fn transformsOfPlanesAndBillboardsAreAsDotNets() {
-    eachSet { i in
-        let a = i.a
-        i.check("matrix.billboard", Matrix4x4.billboard(position: a, camera: i.b, up: Vector3.up, forward: Vector3.unitX))
-        i.check("matrix.billboardNear", Matrix4x4.billboard(position: a, camera: a, up: Vector3.up, forward: Vector3.unitX))
-        i.check("matrix.constrainedBillboard", Matrix4x4.constrainedBillboard(position: a, camera: i.b, axis: Vector3.unitY, cameraForward: Vector3.unitX, objectForward: Vector3.unitZ))
-        i.check("matrix.constrainedBillboardAlong", Matrix4x4.constrainedBillboard(position: a, camera: a + Vector3.unitY, axis: Vector3.unitY, cameraForward: Vector3.unitX, objectForward: Vector3.unitZ))
-        i.check("matrix.constrainedBillboardAll", Matrix4x4.constrainedBillboard(position: a, camera: a + Vector3.unitY, axis: Vector3.unitY, cameraForward: Vector3.unitX, objectForward: Vector3.unitY))
-        i.check("matrix.constrainedBillboardZ", Matrix4x4.constrainedBillboard(position: a, camera: a + Vector3.unitZ, axis: Vector3.unitZ, cameraForward: Vector3.unitX, objectForward: Vector3.unitZ))
-        i.check("matrix.reflection", Matrix4x4(reflectionIn: i.plane))
-        i.check("matrix.shadow", Matrix4x4(shadowOn: i.plane, light: a))
-    }
+@test(arguments: sets)
+fn planeIsAsDotNets(_ which: Int) {
+    let i = Inputs(which)
+    i.check("plane.throughPoints", Plane(through: i.a, i.b, i.c))
+    i.check("plane.normalized", i.plane.normalized())
+    i.check("plane.numbers", [i.plane.dot(i.a4), i.plane.dotCoordinate(i.a), i.plane.dotNormal(i.a)])
+    i.check("plane.transformed", i.plane.normalized().transformed(by: Matrix4x4(rotation: i.q) * Matrix4x4(translation: i.b)))
+    i.check("plane.rotated", i.plane.transformed(by: i.r))
 }
 
-@test
-fn planeIsAsDotNets() {
-    eachSet { i in
-        i.check("plane.throughPoints", Plane(through: i.a, i.b, i.c))
-        i.check("plane.normalized", i.plane.normalized())
-        i.check("plane.numbers", [i.plane.dot(i.a4), i.plane.dotCoordinate(i.a), i.plane.dotNormal(i.a)])
-        i.check("plane.transformed", i.plane.normalized().transformed(by: Matrix4x4(rotation: i.q) * Matrix4x4(translation: i.b)))
-        i.check("plane.rotated", i.plane.transformed(by: i.r))
-    }
-}
-
-@test
-fn matrix3x2IsAsDotNets() {
-    eachSet { i in
-        let flat = i.flat
-        i.check("flat.rotation", Matrix3x2(rotation: i.angle))
-        i.check("flat.rotationAbout", Matrix3x2(rotation: i.angle, about: i.a2))
-        i.check("flat.scale", Matrix3x2(scale: i.a2))
-        i.check("flat.scaleAbout", Matrix3x2(scale: i.a2, about: i.b2))
-        i.check("flat.skew", Matrix3x2(skewX: 0.1 * i.p[4], skewY: 0.1 * i.p[5]))
-        i.check("flat.skewAbout", Matrix3x2(skewX: 0.1 * i.p[4], skewY: 0.1 * i.p[5], about: i.a2))
-        i.check("flat.multiply", flat)
-        i.check("flat.inverted", flat.inverted()!)
-        i.check("flat.determinant", [flat.determinant])
-        i.check("flat.lerp", flat.lerp(to: Matrix3x2.identity, i.t))
-        i.check("flat.transformPosition", flat.transformPosition(i.b2))
-        i.check("flat.transformDirection", flat.transformDirection(i.b2))
-    }
+@test(arguments: sets)
+fn matrix3x2IsAsDotNets(_ which: Int) {
+    let i = Inputs(which)
+    let flat = i.flat
+    i.check("flat.rotation", Matrix3x2(rotation: i.angle))
+    i.check("flat.rotationAbout", Matrix3x2(rotation: i.angle, about: i.a2))
+    i.check("flat.scale", Matrix3x2(scale: i.a2))
+    i.check("flat.scaleAbout", Matrix3x2(scale: i.a2, about: i.b2))
+    i.check("flat.skew", Matrix3x2(skewX: 0.1 * i.p[4], skewY: 0.1 * i.p[5]))
+    i.check("flat.skewAbout", Matrix3x2(skewX: 0.1 * i.p[4], skewY: 0.1 * i.p[5], about: i.a2))
+    i.check("flat.multiply", flat)
+    i.check("flat.inverted", flat.inverted()!)
+    i.check("flat.determinant", [flat.determinant])
+    i.check("flat.lerp", flat.lerp(to: Matrix3x2.identity, i.t))
+    i.check("flat.transformPosition", flat.transformPosition(i.b2))
+    i.check("flat.transformDirection", flat.transformDirection(i.b2))
 }

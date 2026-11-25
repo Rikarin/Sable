@@ -58,17 +58,17 @@ fn itIsMadeOfFloatsTowardZero() {
 }
 
 @test
-fn itIsEqualHashedWrittenAndSerialised() {
+fn itIsEqualHashedWrittenAndSerialised() throws {
     assertEqual(a.hashValue, Int4(7, -3, 2, 9).hashValue)
     for i in 0..<4 {
         var other = a
         other[i] += 1
-        require(a != other)
+        expect(a != other)
     }
     assertEqual("\(a)", "(7, -3, 2, 9)")
     assertEqual(a.debugDescription(), "Int4(7, -3, 2, 9)")
     assertEqual("\(a:?)", "Int4(7, -3, 2, 9)")
-    assertEqual(try! Json.decode(Int4.self, from: try! Json.encode(a)), a)
+    assertEqual(try Json.decode(Int4.self, from: Json.encode(a)), a)
 }
 
 @test

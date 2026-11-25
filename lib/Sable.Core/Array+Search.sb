@@ -32,15 +32,15 @@ extension<Element> Element[:] {
     /// assert(xs.partitionPoint(where: (x: Int) => x <= 3) == 3)
     /// ```
     public fn partitionPoint(where predicate: (Element) -> Bool) -> Int {
+        // Each step halves what is left, keeping its upper half or its
+        // lower with no branch on which: the same steps whatever the
+        // elements, so that there is none for the machine to guess wrong.
         var low = 0
-        var high = self.count
-        while low < high {
-            let middle = low + (high - low) / 2
-            if predicate(self[middle]) {
-                low = middle + 1
-            } else {
-                high = middle
-            }
+        var size = self.count
+        while size > 0 {
+            let half = size >> 1
+            low = predicate(self[low + half]).selecting(low + size - half, low)
+            size = half
         }
         return low
     }
@@ -59,21 +59,24 @@ extension<Element> Element[:] {
     /// assert(xs.binarySearch(by: (x: Int) => x.compare(4)) == .Err(2))
     /// ```
     public fn binarySearch(by compare: (Element) -> Ordering) -> Outcome<Int, Int> {
+        // As 'partitionPoint' halves, with no branch on the comparison's
+        // answer: stopping early where it is equal would be one.
         var low = 0
-        var high = self.count
-        while low < high {
-            let middle = low + (high - low) / 2
-            let order = compare(self[middle])
-            if order == .Equal {
-                return .Ok(middle)
-            }
-            if order == .Less {
-                low = middle + 1
-            } else {
-                high = middle
-            }
+        var size = self.count
+        if size == 0 {
+            return .Err(0)
         }
-        return .Err(low)
+        while size > 1 {
+            let half = size >> 1
+            let middle = low + half
+            low = (compare(self[middle]) == .Greater).selecting(low, middle)
+            size = size - half
+        }
+        let order = compare(self[low])
+        if order == .Equal {
+            return .Ok(low)
+        }
+        return .Err(order == .Less ? low + 1 : low)
     }
 
     /// Where the value is in an array sorted in the comparator's order: as

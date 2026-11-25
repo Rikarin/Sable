@@ -41,6 +41,7 @@
 #include "arrays.c"
 #include "vectors.c"
 #include "crypto.c"
+#include "codecs.c"
 #include "leaks.c"
 #include "metadata.c"
 #include "inline_layout.c"

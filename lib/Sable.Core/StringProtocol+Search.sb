@@ -160,26 +160,34 @@ extension StringProtocol {
     /// ```
     public fn replacing(_ pattern: some Pattern, with replacement: String, maxCount: Int = 9223372036854775807) -> String {
         let text = self.asSubstring
-        var pieces: String[>..] = []
-        var start = text.start
-        var from = text.start
-        var replaced = 0
-        while replaced < maxCount && from <= text.end {
-            if let range = pattern.firstMatch(in: text, from: String.Index(utf8Offset: from)) {
-                pieces.append(text.base.utf8Slice(start, range.lowerBound.utf8Offset))
-                pieces.append(replacement)
-                start = range.upperBound.utf8Offset
-                from = text.offsetPast(range)
-                replaced = replaced + 1
-            } else {
-                break
-            }
-        }
-        if replaced == 0 {
+        if maxCount <= 0 {
             return self.toString()
         }
-        pieces.append(text.base.utf8Slice(start, text.end))
-        return Runtime.joinStrings(pieces, "")
+        guard let first = pattern.firstMatch(in: text, from: text.startIndex) else {
+            return self.toString()
+        }
+        unsafe {
+            var writer = StringWriter.allocate(capacity: text.utf8Count + replacement.utf8Count)
+            var start = text.start
+            var found = first
+            var replaced = 0
+            while true {
+                writer.append(utf8: text.base, from: start, to: found.lowerBound.utf8Offset)
+                writer.append(utf8: replacement, from: 0, to: replacement.utf8Count)
+                start = found.upperBound.utf8Offset
+                replaced = replaced + 1
+                let from = text.offsetPast(found)
+                if replaced >= maxCount || from > text.end {
+                    break
+                }
+                guard let next = pattern.firstMatch(in: text, from: String.Index(utf8Offset: from)) else {
+                    break
+                }
+                found = next
+            }
+            writer.append(utf8: text.base, from: start, to: text.end)
+            return writer.finish()
+        }
     }
 
     /// The text with each character the test accepts replaced.

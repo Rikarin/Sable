@@ -63,9 +63,10 @@ public sealed class BorrowLets : ISilPass {
             }
 
             switch (copied) {
-                // A parameter the caller lends: alive, and the same, for the whole call.
-                case CopyValueInst { Value: SilArgument parameter } copy
-                    when parameter.Block == function.Entry && SilVerifier.OwnershipOf(parameter) == Ownership.Guaranteed:
+                // A parameter the caller lends, or part of one: alive, and the
+                // same, for the whole call.
+                case CopyValueInst { Value: var parameter } copy
+                    when SilVerifier.OwnershipOf(parameter) == Ownership.Guaranteed && ForwardCopies.IsParameterBorrow(parameter):
                     Unmanage(slot, uses);
                     store.SetOperand(0, parameter);
                     copy.Block.Instructions.Remove(copy);
@@ -103,6 +104,11 @@ public sealed class BorrowLets : ISilPass {
         var exclusive = BorrowLoads.ExclusiveOf(load.Address);
         if (exclusive is null && !OfParameter(load.Address, function)) {
             return false;
+        }
+
+        // A 'let' field of what the caller lends never changes.
+        if (BorrowHeld.LetField(load.Address) is not null) {
+            return true;
         }
 
         // A branch changes nothing; a call that can throw is a call.

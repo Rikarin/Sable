@@ -1,0 +1,272 @@
+module KernelTests
+
+// The fast paths of Sable.Text — Base64's, Hex's and the transcoders' blocks,
+// and normalization's reading of only what changes — against the same done
+// plainly.
+
+import Sable.Testing
+import Sable.Text
+
+fn someBytes(_ count: Int, _ seed: U64) -> U8[>..] {
+    var rng = SeededRandomNumberGenerator(seed: seed)
+    var bytes: U8[>..] = []
+    for _ in 0..<count {
+        bytes.append((rng.next() & 0xFF) unchecked as U8)
+    }
+    return bytes
+}
+
+fn plainBase64(_ bytes: U8[:], _ digits: String, padding: Bool) -> String {
+    var text = ""
+    var i = 0
+    while i < bytes.count {
+        let left = bytes.count - i
+        let group = Int(bytes[i]) << 16 | (left > 1 ? Int(bytes[i + 1]) << 8 : 0) | (left > 2 ? Int(bytes[i + 2]) : 0)
+        text = text + "\(digits.at(index: group >> 18))\(digits.at(index: group >> 12 & 63))"
+        text = text + (left > 1 ? "\(digits.at(index: group >> 6 & 63))" : padding ? "=" : "")
+        text = text + (left > 2 ? "\(digits.at(index: group & 63))" : padding ? "=" : "")
+        i += 3
+    }
+    return text
+}
+
+@test
+fn base64OfEveryLengthIsThePlainOne() {
+    let standard = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    for count in 0..<200 {
+        let bytes = someBytes(count, U64(count))
+        for padding in [true, false] {
+            let plain = plainBase64(bytes, standard, padding: padding)
+            assertEqual(Base64.encode(bytes, padding: padding), plain)
+            assert(try! Base64.decode(plain) == bytes)
+            assert(try! Base64.decode(bytes: plain.utf8Bytes()) == bytes)
+            let around = "é" + plain + "!"
+            let piece = around[around.index(after: around.startIndex)..<around.index(before: around.endIndex)]
+            assert(try! Base64.decode(piece) == bytes)
+            let plainUrl = plainBase64(bytes, url, padding: padding)
+            assertEqual(Base64.encode(bytes, alphabet: .UrlSafe, padding: padding), plainUrl)
+            assert(try! Base64.decode(plainUrl, alphabet: .UrlSafe) == bytes)
+            var buffer = ByteBuffer()
+            buffer.writeU8(0x21)
+            Base64.encode(bytes, into: &buffer, padding: padding)
+            assert(buffer.bytes == ("!" + plain).utf8Bytes())
+        }
+    }
+}
+
+@test
+fn aWrongBase64DigitIsSaidToBeWhereItIs() {
+    let text = Base64.encode(someBytes(150, 1))
+    for at in 0..<200 {
+        for wrong in ["!", "-", "\u{7F}", "\u{0}", "[", "`", "{"] {
+            let before = text[..<text.index(atScalar: at)].toString()
+            let after = text[text.index(atScalar: at + 1)...].toString()
+            do {
+                let _ = try Base64.decode(before + wrong + after)
+                assert(false, "\(wrong) at \(at) decoded")
+            } catch {
+                assert(error == .InvalidCharacter(at: at, byte: wrong.utf8[0]), "\(error) for \(wrong) at \(at)")
+            }
+        }
+    }
+    do {
+        let _ = try Base64.decode(text[..<text.index(atScalar: 100)].toString() + "é" + text)
+        assert(false)
+    } catch {
+        assert(error == .InvalidCharacter(at: 100, byte: 0xC3))
+    }
+}
+
+@test
+fn hexOfEveryLengthIsThePlainOne() {
+    let lower = "0123456789abcdef"
+    for count in 0..<200 {
+        let bytes = someBytes(count, U64(count))
+        var plain = ""
+        for byte in bytes {
+            plain = plain + "\(lower.at(index: Int(byte) >> 4))\(lower.at(index: Int(byte) & 15))"
+        }
+        assertEqual(Hex.encode(bytes), plain)
+        assertEqual(Hex.encode(bytes, uppercase: true), plain.uppercased())
+        assert(try! Hex.decode(plain) == bytes)
+        assert(try! Hex.decode(plain.uppercased()) == bytes)
+        assert(try! Hex.decode(bytes: plain.utf8Bytes()) == bytes)
+    }
+}
+
+@test
+fn aWrongHexDigitIsSaidToBeWhereItIs() {
+    let text = Hex.encode(someBytes(80, 1))
+    for at in 0..<160 {
+        for wrong in ["g", "G", "/", ":", "@", "`", "\u{0}", "P"] {
+            let before = text[..<text.index(atScalar: at)].toString()
+            let after = text[text.index(atScalar: at + 1)...].toString()
+            do {
+                let _ = try Hex.decode(before + wrong + after)
+                assert(false, "\(wrong) at \(at) decoded")
+            } catch {
+                assert(error == .InvalidCharacter(at: at, byte: wrong.utf8[0]), "\(error) for \(wrong) at \(at)")
+            }
+        }
+    }
+}
+
+// Text of scalars of every width, in runs of every length.
+fn someText(_ length: Int, _ seed: U64) -> String {
+    var rng = SeededRandomNumberGenerator(seed: seed)
+    var scalars: Char[>..] = []
+    while scalars.count < length {
+        let bits = rng.next()
+        let run = Int(bits >> 8 & 15) + 1
+        for k in 0..<run {
+            let pick = Int(bits >> 16) &+ k * 37
+            scalars.append(match bits % 5 {
+                case 0 => Char.fromCodePoint(0x80 + (pick & 0x77F))!
+                case 1 => Char.fromCodePoint(0x4E00 + (pick & 0xFFF))!
+                case 2 => Char.fromCodePoint(0x10000 + (pick & 0xFFFF))!
+                case _ => Char.fromCodePoint(0x20 + (pick & 0x3F))!
+            })
+        }
+    }
+    return String(scalars)
+}
+
+@test
+fn transcodingIsThePlainOne() {
+    for length in 0..<150 {
+        let text = someText(length, U64(length))
+        var units: U16[>..] = [7]
+        let (status, read) = Utf8.toUtf16(text.utf8Bytes(), into: &units)
+        assert(status == .Done && read == text.utf8Count)
+        var plain: U16[>..] = [7]
+        for unit in text.utf16 {
+            plain.append(unit)
+        }
+        assert(units == plain)
+        var bytes: U8[>..] = []
+        let (back, readBack) = Utf8.fromUtf16(units[1...], into: &bytes)
+        assert(back == .Done && readBack == units.count - 1)
+        assert(bytes == text.utf8Bytes())
+    }
+}
+
+@test
+fn aLoneSurrogateAnywhereIsFound() {
+    let text = someText(60, 3)
+    var units: U16[>..] = []
+    for unit in text.utf16 {
+        units.append(unit)
+    }
+    let surrogates: U16[>..] = [0xD800, 0xDBFF, 0xDC00, 0xDFFF]
+    for at in 0..<units.count {
+        if Utf16.isTrailing(units[at]) {
+            continue
+        }
+        for lone in surrogates {
+            var broken: U16[>..] = []
+            for k in 0..<units.count {
+                if k == at {
+                    broken.append(lone)
+                }
+                broken.append(units[k])
+            }
+            var bytes: U8[>..] = []
+            let (status, read) = Utf8.fromUtf16(broken, into: &bytes, replacingInvalid: false)
+            assert(status == .InvalidData && read == at, "\(lone) at \(at): \(read)")
+        }
+    }
+}
+
+@test
+fn invalidUtf8AnywhereIsFound() {
+    let bytes = someText(40, 5).utf8Bytes()
+    let wrongs: U8[>..] = [0xFF, 0xC0, 0xF8, 0xFE]
+    for at in 0..<bytes.count {
+        for wrong in wrongs {
+            var broken = bytes
+            broken[at] = wrong
+            // Where a sequence the byte cuts short starts, or the byte.
+            var start = at
+            while start > 0 && bytes[start] >= 0x80 && bytes[start] < 0xC0 {
+                start -= 1
+            }
+            assertEqual(Utf8.validate(broken), start)
+        }
+    }
+    assert(Utf8.validate(bytes) == none)
+}
+
+// The four forms, the plain way: every scalar decomposed, all the marks in
+// order, then composed from the first scalar on.
+fn plainlyNormalized(_ text: String, _ form: NormalizationForm) -> String {
+    var pieces: String[>..] = []
+    for c in text {
+        pieces.append("\(c)".normalized(form == .NFC || form == .NFD ? .NFD : .NFKD))
+    }
+    var scalars: Char[>..] = []
+    for c in pieces.joined() {
+        scalars.append(c)
+    }
+    // A bubble sort, which is stable, of each run of marks.
+    var changed = true
+    while changed {
+        changed = false
+        var i = 1
+        while i < scalars.count {
+            let a = scalars[i - 1].canonicalCombiningClass
+            let b = scalars[i].canonicalCombiningClass
+            if b != 0 && a > b {
+                let held = scalars[i]
+                scalars[i] = scalars[i - 1]
+                scalars[i - 1] = held
+                changed = true
+            }
+            i += 1
+        }
+    }
+    if form == .NFD || form == .NFKD {
+        return String(scalars)
+    }
+    var kept: Char[>..] = []
+    var starter = -1
+    for c in scalars {
+        let last = kept.count - 1 == starter ? -1 : kept[kept.count - 1].canonicalCombiningClass
+        if starter >= 0 && (last == -1 || last != 0 && last < c.canonicalCombiningClass) {
+            let pair = "\(kept[starter])\(c)".normalized(.NFC)
+            if pair.count == 1 {
+                kept[starter] = pair.at(index: 0)
+                continue
+            }
+        }
+        if c.canonicalCombiningClass == 0 {
+            starter = kept.count
+        }
+        kept.append(c)
+    }
+    return String(kept)
+}
+
+@test
+fn normalizationIsThePlainOne() {
+    var pool: Char[>..] = []
+    for c in "aeouAEOUqQ ,\u{300}\u{301}\u{302}\u{308}\u{323}\u{327}\u{328}\u{345}\u{E9}\u{1EC7}\u{1D6}\u{DF}\u{F73}\u{F71}\u{F72}\u{F80}\u{344}\u{340}\u{1100}\u{1161}\u{11A8}\u{AC00}\u{AC01}\u{9C7}\u{9BE}\u{FF76}\u{FF9E}\u{FB01}\u{2126}\u{212B}\u{B2}\u{FDFA}\u{3042}\u{3099}\u{1F600}\u{1D15E}\u{11131}\u{11127}\u{95C}" {
+        pool.append(c)
+    }
+    let forms: NormalizationForm[>..] = [.NFC, .NFD, .NFKC, .NFKD]
+    var rng = SeededRandomNumberGenerator(seed: 11)
+    for _ in 0..<1500 {
+        var scalars: Char[>..] = []
+        for _ in 0..<Int(rng.next() % 12) {
+            scalars.append(pool[Int(rng.next() % U64(pool.count))])
+        }
+        let text = String(scalars)
+        for form in forms {
+            let normalized = text.normalized(form)
+            assertEqual(normalized, plainlyNormalized(text, form))
+            assertEqual(normalized.normalized(form), normalized)
+            assert(normalized.isNormalized(form))
+            assert(text.isNormalized(form) == (text == normalized))
+        }
+    }
+}

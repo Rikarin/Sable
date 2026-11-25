@@ -32,16 +32,18 @@ struct DictionaryEntry<Key, Value> {
 ///
 /// The entries are kept in an array in the order they were added, a removed
 /// one leaving none in its place until the table is next rebuilt. Beside it
-/// is the index: a power of two of slots, at most half of them used, each
-/// empty (-1), left by a removed entry (-2), or holding an entry's position
-/// with the top 31 bits of its key's hash above it. A lookup starts at the
-/// slot the hash's bottom bits pick and goes forward one slot at a time
-/// (linear probing), comparing the hash bits a slot holds before it
-/// compares keys — SwissTable's idea, without its SIMD groups — so that a
-/// miss rarely looks at the entries at all.
+/// is the index: a power of two of slots of four bytes, at most half of
+/// them used, each empty (-1), left by a removed entry (-2), or holding an
+/// entry's position with bits of its key's hash above it, as many as the
+/// position leaves of 31 — a thousand keys' positions take ten bits and
+/// leave twenty-one. A lookup starts at the slot the hash's bottom bits
+/// pick and goes forward one slot at a time (linear probing), comparing the
+/// hash bits a slot holds before it compares keys — SwissTable's idea,
+/// without its SIMD groups — so that a miss rarely looks at the entries at
+/// all.
 public struct Dictionary<Key: Hashable, Value>: Sequence {
     var entries: DictionaryEntry<Key, Value>?[>..] = []
-    var slots: Int[>..] = []
+    var slots: I32[>..] = []
     var live: Int = 0
 
     /// An empty dictionary.
@@ -136,7 +138,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
             if at < 0 {
                 return none
             }
-            return entries[slots[at] & 4294967295]!.value
+            return entries[position(at)]!.value
         }
         set {
             if let value = newValue {
@@ -169,9 +171,8 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
     public mutating fn updateValue(_ value: Value, forKey key: Key) -> Value? {
         let hash = Dictionary.hashOf(key)
         let at = place(key, hash)
-        let slot = slots[at]
-        if slot >= 0 {
-            let index = slot & 4294967295
+        if slots[at] >= 0 {
+            let index = position(at)
             var entry = entries[index]!
             let old = entry.value
             entry.value = value
@@ -202,12 +203,16 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
         if at < 0 {
             return none
         }
-        let index = slots[at] & 4294967295
-        let removed = entries[index]!.value
-        entries[index] = none
+        let removed = entries[position(at)]!.value
+        removeEntry(at)
+        return removed
+    }
+
+    /// The entry in the slot taken out, its place left empty.
+    mutating fn removeEntry(_ at: Int) {
+        entries[position(at)] = none
         slots[at] = -2
         live = live - 1
-        return removed
     }
 
     /// Every key and its value, taken out, and the room they took given back.
@@ -227,12 +232,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
         let size = slots.count
         entries = []
         live = 0
-        slots = []
-        var i = 0
-        while i < size {
-            slots.append(-1)
-            i = i + 1
-        }
+        slots = I32[>..](repeating: -1, count: size)
     }
 
     // ---- Entries --------------------------------------------------------------
@@ -245,9 +245,8 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
     public mutating fn orInsert(_ key: Key, _ value: Value) -> Value {
         let hash = Dictionary.hashOf(key)
         let at = place(key, hash)
-        let slot = slots[at]
-        if slot >= 0 {
-            return entries[slot & 4294967295]!.value
+        if slots[at] >= 0 {
+            return entries[position(at)]!.value
         }
         add(at, key, value, hash)
         return value
@@ -258,9 +257,8 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
     public mutating fn orInsertWith(_ key: Key, _ make: () -> Value) -> Value {
         let hash = Dictionary.hashOf(key)
         let at = place(key, hash)
-        let slot = slots[at]
-        if slot >= 0 {
-            return entries[slot & 4294967295]!.value
+        if slots[at] >= 0 {
+            return entries[position(at)]!.value
         }
         let value = make()
         add(at, key, value, hash)
@@ -392,6 +390,65 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
         return DictionaryIterator { entries: entries, position: 0 }
     }
 
+    // ---- Sets ------------------------------------------------------------------
+    //
+    // What a Set, a dictionary of its members, is combined with another by:
+    // a member found by the hash its own set has kept, not hashed again.
+
+    /// Adds the other's keys that are not here, after these, in their order.
+    package mutating fn formUnion(_ other: [Key: Value]) {
+        for entry in other.entries {
+            if let entry = entry {
+                let at = place(entry.key, entry.hash)
+                if slots[at] < 0 {
+                    add(at, entry)
+                }
+            }
+        }
+    }
+
+    /// The entries whose keys the other has, or with `present: false` those
+    /// whose keys it does not have, in the order they are here.
+    package fn entries(whoseKeysIn other: [Key: Value], present: Bool) -> [Key: Value] {
+        var kept: DictionaryEntry<Key, Value>?[>..] = []
+        kept.reserveCapacity(present && other.live < live ? other.live : live)
+        for entry in entries {
+            if let entry = entry {
+                if (other.find(entry.key, entry.hash) >= 0) == present {
+                    kept.append(entry)
+                }
+            }
+        }
+        var result = Dictionary<Key, Value> { entries: kept, slots: [], live: kept.count }
+        result.rebuild(Dictionary.sizeFor(kept.count))
+        return result
+    }
+
+    /// Whether any of the keys is one of the other's, or with `present:
+    /// false` whether any is not.
+    package fn hasKey(in other: [Key: Value], present: Bool) -> Bool {
+        for entry in entries {
+            if let entry = entry {
+                if (other.find(entry.key, entry.hash) >= 0) == present {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /// The key as it is here, equal to the one given, taken out; none when
+    /// there is none.
+    package mutating fn removeKey(_ key: Key) -> Key? {
+        let at = find(key, Dictionary.hashOf(key))
+        if at < 0 {
+            return none
+        }
+        let held = entries[position(at)]!.key
+        removeEntry(at)
+        return held
+    }
+
     // ---- The table ------------------------------------------------------------
 
     /// The key's hash, under this run's seed.
@@ -401,10 +458,20 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
         return hasher.finalize()
     }
 
-    /// The bits of a hash a slot keeps: its top 31, where the slot a probe
-    /// starts at is picked by its bottom ones.
+    /// The bits of a hash a slot may keep, its top 31, where the slot a
+    /// probe starts at is picked by its bottom ones. A slot keeps those above
+    /// the bits its entry's position needs, `indexMask`.
     static fn tagOf(_ hash: Int) -> Int {
         return (hash >> 33) & 2147483647
+    }
+
+    /// The bits of a slot that are its entry's position: entries are at most
+    /// half as many as the slots.
+    var indexMask: Int => (slots.count - 1) >> 1
+
+    /// The position of the entry in the slot, which holds one.
+    fn position(_ at: Int) -> Int {
+        return Int(slots[at]) & indexMask
     }
 
     /// The fewest slots, a power of two and at least 8, that hold this many
@@ -423,14 +490,16 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
             return -1
         }
         let mask = slots.count - 1
-        let tag = Dictionary.tagOf(hash)
+        let tagMask = -1 ^ indexMask
+        let tag = Dictionary.tagOf(hash) & tagMask
         var at = hash & mask
         while true {
-            let slot = slots[at]
+            let slot = Int(slots[at])
             if slot == -1 {
                 return -1
             }
-            if slot >= 0 && slot >> 32 == tag && entries[slot & 4294967295]!.key == key {
+            // A removed entry's slot, negative, has no tag.
+            if (slot & tagMask) == tag && entries[slot & indexMask]!.key == key {
                 return at
             }
             at = (at + 1) & mask
@@ -446,16 +515,17 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
             grow()
         }
         let mask = slots.count - 1
-        let tag = Dictionary.tagOf(hash)
+        let tagMask = -1 ^ indexMask
+        let tag = Dictionary.tagOf(hash) & tagMask
         var at = hash & mask
         var reuse = -1
         while true {
-            let slot = slots[at]
+            let slot = Int(slots[at])
             if slot == -1 {
                 return reuse >= 0 ? reuse : at
             }
             if slot >= 0 {
-                if slot >> 32 == tag && entries[slot & 4294967295]!.key == key {
+                if (slot & tagMask) == tag && entries[slot & indexMask]!.key == key {
                     return at
                 }
             } else if reuse < 0 {
@@ -467,8 +537,12 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
 
     /// Adds a new entry in the slot `place` gave for it.
     mutating fn add(_ at: Int, _ key: Key, _ value: Value, _ hash: Int) {
-        slots[at] = (Dictionary.tagOf(hash) << 32) | entries.count
-        entries.append(DictionaryEntry { key: key, value: value, hash: hash })
+        add(at, DictionaryEntry { key: key, value: value, hash: hash })
+    }
+
+    mutating fn add(_ at: Int, _ entry: DictionaryEntry<Key, Value>) {
+        slots[at] = ((Dictionary.tagOf(entry.hash) & (-1 ^ indexMask)) | entries.count) unchecked as I32
+        entries.append(entry)
         live = live + 1
     }
 
@@ -476,7 +550,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
     /// entry is taken out of the array while `change` runs, so the value it
     /// is given is referred to from nowhere else.
     mutating fn changeValue(_ at: Int, _ change: (inout Value) -> Void) {
-        let index = slots[at] & 4294967295
+        let index = position(at)
         var entry = entries[index]!
         entries[index] = none
         change(&entry.value)
@@ -486,14 +560,11 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
     /// One of another dictionary's entries merged in, at the slot `place`
     /// gave for its key.
     mutating fn mergeOne(_ at: Int, _ entry: DictionaryEntry<Key, Value>, _ combine: (Value, Value) -> Value) {
-        let slot = slots[at]
-        if slot < 0 {
-            slots[at] = (Dictionary.tagOf(entry.hash) << 32) | entries.count
-            entries.append(entry)
-            live = live + 1
+        if slots[at] < 0 {
+            add(at, entry)
             return
         }
-        let index = slot & 4294967295
+        let index = position(at)
         var mine = entries[index]!
         entries[index] = none
         mine.value = combine(mine.value, entry.value)
@@ -525,13 +596,13 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
             entries = kept
         }
 
-        var fresh: Int[>..] = []
-        var i = 0
-        while i < size {
-            fresh.append(-1)
-            i = i + 1
+        // A position must leave a slot's sign alone.
+        if size > 4294967296 {
+            fatalError("a Dictionary holds at most 2147483648 keys")
         }
+        var fresh = I32[>..](repeating: -1, count: size)
         let mask = size - 1
+        let tagMask = -1 ^ (mask >> 1)
         var index = 0
         for entry in entries {
             let hash = entry!.hash
@@ -539,7 +610,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
             while fresh[at] != -1 {
                 at = (at + 1) & mask
             }
-            fresh[at] = (Dictionary.tagOf(hash) << 32) | index
+            fresh[at] = ((Dictionary.tagOf(hash) & tagMask) | index) unchecked as I32
             index = index + 1
         }
         slots = fresh

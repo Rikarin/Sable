@@ -75,4 +75,36 @@ extension String {
     /// The byte at the offset of the UTF-8 encoding; out of range traps.
     @builtin("string_utf8_at")
     fn utf8Byte(_ offset: Int) -> U8
+
+    /// The eight bytes of the UTF-8 encoding from the offset, the first the
+    /// lowest; traps unless all are in it.
+    @builtin("string_utf8_load_U64")
+    fn utf8Word(_ offset: Int) -> U64
+
+    /// The eight bytes from the offset, which must be in the encoding, the
+    /// first the lowest, and zeros past the encoding's end.
+    @inline(always)
+    fn utf8Window(_ offset: Int) -> U64 {
+        let count = self.utf8Count
+        if count - offset >= 8 {
+            return self.utf8Word(offset)
+        }
+        return self.utf8Tail(offset)
+    }
+
+    /// The same of the last fewer than eight bytes.
+    @inline(never)
+    fn utf8Tail(_ offset: Int) -> U64 {
+        let count = self.utf8Count
+        if count >= 8 {
+            return self.utf8Word(count - 8) >> U64(64 - 8 * (count - offset))
+        }
+        var word: U64 = 0
+        var at = count
+        while at > offset {
+            at -= 1
+            word = word << 8 | U64(self.utf8Byte(at))
+        }
+        return word
+    }
 }

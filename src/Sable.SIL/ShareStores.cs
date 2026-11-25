@@ -50,9 +50,11 @@ static class ShareStores {
     static bool StoresNothing(string name) =>
         SharedStorage.IsMarker(name)
         || name is "ref_is_unique" or "address_to_int" or "opaque_free" or "array_clear" or "share_into" or "share_into_at"
-            // In place, in a buffer that is the only reference: the element is
-            // shared into the buffer as it is stored (the code generator).
-            or "array_set_unique";
+            // In place, in a buffer that is the only reference: an element is
+            // shared into the buffer as it is stored (the code generator), and
+            // an element's address is followed as one.
+            or "array_set_unique" or "array_element_addr_unique" or "simd_store_unique"
+        || name.StartsWith("bytes_store_unique_", StringComparison.Ordinal) || name.StartsWith("bytes_store_array_unique_", StringComparison.Ordinal);
 
     /// <summary>Whether a value of the type may hold an address, or a closure that does: a closure's context, the closure.</summary>
     static bool MayHold(SilType type) => MayHold(type, []);
@@ -82,7 +84,7 @@ static class ShareStores {
             foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
                 var root = instruction switch {
                     RefElementAddrInst { Reference.Type: ClassType { IsCoroutineFrame: false } type } field => new Root(field, field.Reference, type.LetFields.Contains(field.Field)),
-                    BuiltinInst { Name: "array_element_addr" or "box_project_unique" } element => new Root(element, element.Operands[0], false),
+                    BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique" or "box_project_unique" } element => new Root(element, element.Operands[0], false),
                     GlobalAddrInst global => new Root(global, null, false),
                     _ => null,
                 };
@@ -168,7 +170,8 @@ static class ShareStores {
                             break;
 
                         case StoreInst store when direct:
-                            if (!store.Value.Type.IsTrivial) {
+                            // Nothing else has an object just made (InitFields).
+                            if (!store.Value.Type.IsTrivial && !store.IntoFresh) {
                                 Before(store, root, store.Value);
                             }
 

@@ -58,6 +58,17 @@ public struct Utf8View: RandomAccessCollection {
         get => text.utf8Byte(position)
     }
 
+    /// The U64 the eight bytes from the offset write, as `U8[:]` reads one:
+    /// eight bytes looked at at once. Traps unless all are in the string.
+    ///
+    /// ```sable
+    /// assert("abcdefgh!".utf8.readU64(at: 1, endian: .Big) == 0x6263_6465_6667_6821)
+    /// ```
+    public fn readU64(at offset: Int, endian: Endian) -> U64 {
+        let word = text.utf8Word(offset)
+        return endian == .Little ? word : word.byteSwapped
+    }
+
     public fn index(after position: Int) -> Int {
         return position + 1
     }

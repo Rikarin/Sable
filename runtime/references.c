@@ -185,8 +185,9 @@ void sable_unowned_release(void *pointer) {
 
     uint32_t flags = __atomic_sub_fetch(&object->flags, SABLE_UNOWNED_ONE, __ATOMIC_ACQ_REL);
     if ((flags >> SABLE_UNOWNED_SHIFT) == 0 && (flags & SABLE_DEINITED)) {
-        object_gone(object);
-        object_free(object);
+        SableThread *thread = current_thread();
+        object_gone_on(thread, object);
+        object_free(thread, object);
     }
 }
 

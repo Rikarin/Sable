@@ -729,6 +729,13 @@ public struct Runtime {
     @builtin("string_from_utf8_unchecked")
     public unsafe static fn stringFromValidUtf8(_ bytes: U8[:]) -> String
 
+    /// The first 'count' bytes of the words, each little-endian, as a
+    /// string: short ASCII text made in registers, with no array to fill
+    /// first. The bytes must be ASCII and the count at most forty, neither
+    /// of which is checked.
+    @builtin("string_from_ascii_words")
+    public unsafe static fn stringFromAscii(_ first: U64, _ second: U64, _ third: U64, _ fourth: U64, _ fifth: U64, count: Int) -> String
+
     @builtin("string_join")
     public static fn joinStrings(parts: String[>..], separator: String) -> String
 

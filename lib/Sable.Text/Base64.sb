@@ -80,6 +80,25 @@ public struct Base64 {
     /// assert(Base64.encode(bytes, alphabet: .UrlSafe, padding: false) == "-_8")
     /// ```
     public static fn encode(_ bytes: U8[:], alphabet: Alphabet = .Standard, padding: Bool = true) -> String {
+        if bytes.count >= 64 {
+            // All but the last few bytes where the string will be.
+            let length = Base64.encodedLength(bytes.count, padding: padding)
+            unsafe {
+                let buffer = StringBuffer.allocate(capacity: length)
+                let done = buffer.encode(alphabet == .Standard ? .Base64Encode : .Base64UrlEncode, bytes, at: 0)
+                if done > 0 {
+                    var rest: U8[>..] = []
+                    Base64.appendEncoded(bytes[done...], to: &rest, digits: Base64.digits(alphabet), padding: padding)
+                    var at = length - rest.count
+                    for byte in rest {
+                        buffer.store(byte: byte, at: at)
+                        at += 1
+                    }
+                    return buffer.finish(asciiCount: length)
+                }
+                buffer.discard()
+            }
+        }
         var text: U8[>..] = []
         Base64.appendEncoded(bytes, to: &text, digits: Base64.digits(alphabet), padding: padding)
         return asciiText(text)
@@ -120,6 +139,26 @@ public struct Base64 {
     /// }
     /// ```
     public static fn decode<S: StringProtocol>(_ text: S, alphabet: Alphabet = .Standard, padding: Padding = .Either) throws(DecodeError) -> U8[>..] {
+        let piece = text.asSubstring
+        let start = piece.startIndex.utf8Offset
+        let count = piece.endIndex.utf8Offset - start
+        if count >= 64 {
+            // All but the last few digits, or as far as there are only
+            // digits, where the string has them; what is wrong after that
+            // is found, and said where it is, below.
+            let most = Base64.decodedLength(count)
+            var decoded: U8[>..] = []
+            decoded.append(repeating: 0, count: most)
+            let done = decoded.write(alphabet == .Standard ? .Base64Decode : .Base64UrlDecode, of: piece.base, from: start, to: start + count, at: 0)
+            if done > 0 {
+                var rest: U8[>..] = []
+                rest.append(utf8: piece.base, from: start + done, to: start + count)
+                if let end = try? Base64.writeDecoded(rest, to: &decoded, at: done / 4 * 3, values: Base64.values(alphabet), padding: padding, last: true) {
+                    decoded.removeLast(most - end)
+                    return decoded
+                }
+            }
+        }
         return try Base64.decode(bytes: textBytes(text), alphabet: alphabet, padding: padding)
     }
 
@@ -193,7 +232,8 @@ public struct Base64 {
     }
 
     // The bytes' digits written in place from 'start', where there is room
-    // for `encodedLength` of them: twelve bytes at a time as four groups of
+    // for `encodedLength` of them: blocks by the processor's instructions, or
+    // where it has none twelve bytes at a time as four groups of
     // twenty-four bits, while sixteen are left to load, as
     // `encodeVectors` has it; six bytes at a time from one 64-bit
     // load while eight are left to load, their eight digits written from
@@ -201,7 +241,13 @@ public struct Base64 {
     // at a time, then the last one or two, padded or not.
     static fn writeEncoded(_ bytes: U8[:], to text: inout U8[>..], at start: Int, digits: U8[:], padding: Bool) {
         let count = bytes.count
-        var i = Base64.encodeVectors(bytes, to: &text, at: start, digits: digits)
+        var i = 0
+        if count >= 64 {
+            i = text.write(digits[62] == 0x2B ? .Base64Encode : .Base64UrlEncode, of: bytes, at: start)
+        }
+        if i == 0 {
+            i = Base64.encodeVectors(bytes, to: &text, at: start, digits: digits)
+        }
         var j = start + i / 3 * 4
         while i + 8 <= count {
             let word = bytes.readU64(at: i, endian: .Big)
@@ -326,7 +372,13 @@ public struct Base64 {
         // Digits by the vector, as far as they are all digits, and then
         // eight from one 64-bit load, their six bytes written from
         // the last, so that one check of the index covers them all.
-        var i = Base64.decodeVectors(text, whole, to: &bytes, at: start, values: values)
+        var i = 0
+        if whole >= 64 {
+            i = bytes.write(values[0x2B] == 62 ? .Base64Decode : .Base64UrlDecode, of: text[..<whole], at: start)
+        }
+        if i == 0 {
+            i = Base64.decodeVectors(text, whole, to: &bytes, at: start, values: values)
+        }
         var j = start + i / 4 * 3
         while i + 8 <= whole {
             let word = text.readU64(at: i, endian: .Big)

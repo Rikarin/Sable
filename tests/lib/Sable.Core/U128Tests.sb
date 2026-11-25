@@ -117,3 +117,14 @@ fn negatingAnUnsignedValueWrapsOrSaturates() {
     assertEqual(U128.zero.checkedNeg() ?? 1, 0)
     assertEqual(U128.max.abs(), U128.max)
 }
+
+@test
+fn shortAndLongTextsAreParsed() throws {
+    assert(try U128.parse("0") == 0)
+    assert(try U128.parse("12") == 12)
+    assert(try U128.parse("+7f", radix: 16) == 127)
+    assert(try U128.parse("340282366920938463463374607431768211455") == U128.max)
+    assert((try? U128.parse("-1")) == none)
+    assert((try? U128.parse("340282366920938463463374607431768211456")) == none)
+    assert((try? U128.parse("1x")) == none)
+}

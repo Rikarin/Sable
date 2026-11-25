@@ -435,7 +435,7 @@ public sealed class BorrowLoads : ISilPass {
             UncheckedRefCastInst cast => KeptBy(cast.Value),
             StructExtractInst extract => KeptBy(extract.Value),
             TupleExtractInst extract => KeptBy(extract.Value),
-            BuiltinInst { Name: "array_get_borrowed" } element => KeptBy(element.Operands[0]),
+            BuiltinInst { Name: "array_get_borrowed" or "slice_of_borrowed" } element => KeptBy(element.Operands[0]),
             _ => reference,
         };
 
@@ -500,6 +500,13 @@ public sealed class BorrowLoads : ISilPass {
 ///             where <c>%v</c> is owned and its only consuming use is a
 ///             <c>destroy_value</c> later in the block: <c>%c</c> is <c>%v</c>,
 ///             which now lives as long as the copy did.
+///         </item>
+///         <item>
+///             <b>A struct only read.</b> <c>%s = struct (%a, %b)</c> whose
+///             fields are read and which is then destroyed — a view of
+///             something, such as a string's <c>utf8</c>: its fields are the
+///             values it was made of, each destroyed where it was, and a
+///             copy made to put in it is then one of the two above.
 ///         </item>
 ///     </list>
 /// </remarks>
@@ -1070,7 +1077,7 @@ public sealed class ForwardCopies : ISilPass {
             _ when SilVerifier.OwnershipOf(value) == Ownership.Owned => value,
             LoadBorrowInst => value,
             SilArgument { IsGuaranteed: true } payload when SwitchedFrom(payload) is { } switched => Root(switched),
-            BuiltinInst { Name: "array_get_borrowed" } element => Root(element.Operands[0]),
+            BuiltinInst { Name: "array_get_borrowed" or "slice_of_borrowed" } element => Root(element.Operands[0]),
             StructExtractInst extract => Root(extract.Value),
             TupleExtractInst extract => Root(extract.Value),
             UpcastInst upcast => Root(upcast.Value),
@@ -1105,11 +1112,11 @@ public sealed class ForwardCopies : ISilPass {
     }
 
     /// <summary>True for a parameter, or something borrowed from one through fields and casts.</summary>
-    static bool IsParameterBorrow(SilValue value) =>
+    internal static bool IsParameterBorrow(SilValue value) =>
         value switch {
             SilArgument { IsGuaranteed: true } payload when SwitchedFrom(payload) is { } switched => IsParameterBorrow(switched),
             SilArgument argument => argument.Block == argument.Block.Function.Entry,
-            BuiltinInst { Name: "array_get_borrowed" } element => IsParameterBorrow(element.Operands[0]),
+            BuiltinInst { Name: "array_get_borrowed" or "slice_of_borrowed" } element => IsParameterBorrow(element.Operands[0]),
             StructExtractInst extract => IsParameterBorrow(extract.Value),
             TupleExtractInst extract => IsParameterBorrow(extract.Value),
             UpcastInst upcast => IsParameterBorrow(upcast.Value),

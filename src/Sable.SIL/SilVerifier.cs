@@ -572,7 +572,7 @@ public static partial class SilVerifier {
                 argument.Block.Function.Type.IsOwned(argument.Block.Arguments.IndexOf(argument)) ? Ownership.Owned : Ownership.Guaranteed,
             SilArgument { IsGuaranteed: true } => Ownership.Guaranteed,
             StructExtractInst or TupleExtractInst or UncheckedRefCastInst or UpcastInst or LoadBorrowInst => Ownership.Guaranteed,
-            BuiltinInst { Name: "array_get_borrowed" or "no_context" or "opaque_borrow_as" or "box_project" } => Ownership.Guaranteed,
+            BuiltinInst { Name: "array_get_borrowed" or "slice_of_borrowed" or "no_context" or "opaque_borrow_as" or "box_project" } => Ownership.Guaranteed,
             _ => Ownership.Owned,
         };
 
@@ -701,7 +701,7 @@ public static partial class SilVerifier {
                     case UncheckedRefCastInst:
                     case UpcastInst:
                     case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst when Tracked(instruction.Operands[0]):
-                    case BuiltinInst { Name: "array_get_borrowed" } when !instruction.Type.IsTrivial && Tracked(instruction.Operands[0]):
+                    case BuiltinInst { Name: "array_get_borrowed" or "slice_of_borrowed" } when !instruction.Type.IsTrivial && Tracked(instruction.Operands[0]):
                         roots[instruction] = RootOf(instruction.Operands[0]);
                         break;
 

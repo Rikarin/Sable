@@ -837,6 +837,7 @@ public sealed class Simplify : ISilPass {
         || name.StartsWith("or_", StringComparison.Ordinal)
         || name.StartsWith("xor_", StringComparison.Ordinal)
         || name.StartsWith("not_", StringComparison.Ordinal)
+        || name.StartsWith("select_", StringComparison.Ordinal)
         || name.StartsWith("min_", StringComparison.Ordinal)
         || name.StartsWith("max_", StringComparison.Ordinal)
         || name.StartsWith("wrap_", StringComparison.Ordinal)

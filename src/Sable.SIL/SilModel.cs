@@ -1085,6 +1085,15 @@ public sealed class StoreInst(SilValue value, SilValue address, StoreKind kind) 
     public SilValue Value => Operands[0];
     public SilValue Address => Operands[1];
     public StoreKind Kind { get; } = kind;
+
+    /// <summary>
+    ///     Stores into an object just made, which nothing else has seen
+    ///     (<see cref="InitFields" />): it is not shared with another task, so
+    ///     neither need the value be. Known within a build alone; SIL read as
+    ///     text does not say so.
+    /// </summary>
+    public bool IntoFresh { get; set; }
+
     public override bool HasResult => false;
     public override string Opcode => "store";
 }
@@ -1311,7 +1320,7 @@ public static class SharedStorage {
             LoadUnownedInst unowned => (unowned.Address, false),
             StoreUnownedInst unowned => (unowned.Address, true),
             // An array changed where it is: its count, its buffer, an element.
-            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve" or "array_rotate" or "array_store_slice" or "array_append_utf8" or "array_append_repeating" or "array_append_all" or "array_element_addr" } array
+            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve" or "array_rotate" or "array_store_slice" or "array_append_utf8" or "array_append_repeating" or "array_append_all" or "array_element_addr" or "array_element_addr_unique" } array
                 => (array.Operands[0], true),
             BuiltinInst { Name: var name } stored when name.StartsWith("bytes_store_array_", StringComparison.Ordinal) => (stored.Operands[0], true),
             _ => null,
@@ -1986,7 +1995,7 @@ public static class SilBuiltins {
     ///     count work on an array alone.
     /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_all", "array_mismatch", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_element_addr_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "slice_of_borrowed", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_all", "array_mismatch", "region_alloc"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
@@ -2203,7 +2212,7 @@ public static class SilBuiltins {
             // array made the only reference to its buffer, the index checked.
             // Good until the array next changes, which the access to it, for
             // the length of the call, rules out.
-            case "array_element_addr" when Element(0, true) is { } element:
+            case "array_element_addr" or "array_element_addr_unique" when Element(0, true) is { } element:
                 return new([operands[0], SilType.Int], SilType.Address(element));
 
             case "array_remove_last" when Element(0, true, arrayOnly: true) is { } element:
@@ -2267,7 +2276,9 @@ public static class SilBuiltins {
                 return new([operands[0], SilType.Int, SilType.Int], new SliceType(element));
 
             // The whole of an array, as a slice: 'sum(xs)' of a 'sum(_: Int[:])'.
-            case "slice_of" when Element(0, false, arrayOnly: true) is { } element:
+            // 'slice_of_borrowed' is the same, borrowed from the array rather
+            // than holding its buffer.
+            case "slice_of" or "slice_of_borrowed" when Element(0, false, arrayOnly: true) is { } element:
                 return new([operands[0]], new SliceType(element));
 
             // A slice as an array again: its buffer, when the slice is the
@@ -2675,6 +2686,7 @@ public static class SilBuiltins {
         // these trap on one out of range or inside a scalar's bytes.
         Add("string_utf8_count", SilType.Int, SilType.String);
         Add("string_utf8_at", SilType.U8, SilType.String, SilType.Int);
+        Add("string_utf8_load_U64", SilType.U64, SilType.String, SilType.Int);
         Add("string_index_scalar", SilType.Char, SilType.String, SilType.Int);
         Add("string_index_after", SilType.Int, SilType.String, SilType.Int);
         Add("string_index_before", SilType.Int, SilType.String, SilType.Int);
@@ -2702,6 +2714,18 @@ public static class SilBuiltins {
         Add("bytes_find_any", SilType.Int, new SliceType(SilType.U8), new SliceType(SilType.U8));
         Add("bytes_count", SilType.Int, new SliceType(SilType.U8), SilType.U8);
         Add("string_from_utf8_unchecked", SilType.String, new SliceType(SilType.U8));
+        // A string being written (StringBuffer), by the address of its
+        // bytes: made with room for so many, moved to more room, given a
+        // run of a text's bytes, and taken as the string of the first so many,
+        // which are so many scalars, or -1 for them to be counted.
+        Add("string_buffer_make", SilType.Int, SilType.Int);
+        Add("string_buffer_grow", SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        Add("string_buffer_copy", SilType.Unit, SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("string_buffer_valid", SilType.Bool, SilType.Int, SilType.Int);
+        Add("string_buffer_take", SilType.String, SilType.Int, SilType.Int, SilType.Int);
+        // The first 'n' bytes of five words, each little-endian, which are
+        // ASCII and at most forty: short text made in registers.
+        Add("string_from_ascii_words", SilType.String, SilType.U64, SilType.U64, SilType.U64, SilType.U64, SilType.U64, SilType.Int);
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
         // A string's bytes hashed under a key (folded multiplies), and the key every
@@ -2720,6 +2744,13 @@ public static class SilBuiltins {
         Add("bytes_secure_zero", SilType.Unit, SilType.Address(new SliceType(SilType.U8)));
         Add("raw_random", SilType.Unit, SilType.Int, SilType.Int);
         Add("raw_secure_zero", SilType.Unit, SilType.Int, SilType.Int);
+        // Blocks of Base64 or Hex (where they go, the codec, the source), by
+        // the processor's own instructions: how much of the source was done.
+        Add("codec_bytes_bytes", SilType.Int, SilType.Address(new SliceType(SilType.U8)), SilType.Int, new SliceType(SilType.U8), SilType.Int);
+        Add("codec_string_bytes", SilType.Int, SilType.Address(new SliceType(SilType.U8)), SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.Int);
+        Add("utf8_to_utf16", SilType.Int, SilType.Address(new SliceType(SilType.U16)), new SliceType(SilType.U8), SilType.Int);
+        Add("utf16_to_utf8", SilType.Int, SilType.Address(new SliceType(SilType.U8)), new SliceType(SilType.U16), SilType.Int);
+        Add("codec_bytes_raw", SilType.Int, SilType.Int, new SliceType(SilType.U8), SilType.Int, SilType.Int);
         Add("crypto_blocks", SilType.Bool, SilType.Int, SilType.Int, new SliceType(SilType.U8));
         Add("crypto_blocks_raw", SilType.Bool, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
         // Sable.Math's kernels over arrays of floats, where the processor has
@@ -2743,6 +2774,7 @@ public static class SilBuiltins {
         }
 
         Add("string_from_Bool", SilType.String, SilType.Bool);
+        Add("select_Int", SilType.Int, SilType.Bool, SilType.Int, SilType.Int);
 
         // Parsing gives whether it worked, and the value when it did.
         Add("string_to_Int", SilType.Tuple([SilType.Bool, SilType.Int]), SilType.String);

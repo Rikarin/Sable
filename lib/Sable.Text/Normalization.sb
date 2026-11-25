@@ -8,6 +8,13 @@ module Sable.Text
 // UnicodeTextTables.sb, Hangul syllables by arithmetic; the marks after a
 // starter are put in the order of their combining classes; composition
 // puts back together whatever pairs compose and are not excluded.
+//
+// Text is nearly all in the form asked for already, so it is read for the
+// scalars that are not, and what lies between them is copied as it is. To
+// compose, a text is in pieces, each of a scalar that nothing before it
+// could compose with or be reordered with, and those after it that could:
+// each normalizes alone, and one of a scalar that NFC leaves be, with
+// nothing after it, is itself.
 
 /// The four normalization forms of Unicode: composed or decomposed, by
 /// canonical equivalence alone or by compatibility too.
@@ -41,17 +48,181 @@ extension String {
         if self.utf8Count == self.count {
             return self
         }
-        let compatibility = form == .NFKC || form == .NFKD
+        return self.normalizing(form) ?? self
+    }
+
+    // The text in the form; none when it is in it already.
+    fn normalizing(_ form: NormalizationForm) -> String? {
+        return match form {
+            case .NFC  => self.composing(compatibility: false)
+            case .NFKC => self.composing(compatibility: true)
+            case .NFD  => self.decomposing(compatibility: false)
+            case .NFKD => self.decomposing(compatibility: true)
+        }
+    }
+
+    // The text composed, or none when it is already.
+    fn composing(compatibility: Bool) -> String? {
+        let end = self.utf8Count
+        // The text before 'copied' has been written; 'writer' is made when some is.
+        var writer: StringWriter? = none
+        var copied = 0
+        // Where the piece being read starts.
+        var piece = 0
+        var i = 0
+        while i < end {
+            let word = textWindow(self, i, end)
+            if (word & 0x8080_8080_8080_8080) == 0 && end - i >= 8 {
+                piece = i + 7
+                i += 8
+                continue
+            }
+            if (word & 0x80) == 0 {
+                piece = i
+                i += 1
+                continue
+            }
+            let (code, width) = scalarIn(word)
+            let joins = scalarJoins(code, compatibility: compatibility)
+            if joins == .No {
+                piece = i
+                i += width
+                continue
+            }
+            let start = joins == .Yes ? piece : i
+            let next = i + width
+            let nextJoins = next < end && joinsBefore(self, next, end, compatibility: compatibility)
+            var composite = -2
+            if joins == .Yes && start < i && !nextJoins {
+                // The usual piece: a scalar, and one mark that may compose
+                // with it.
+                let (first, firstWidth) = scalarIn(textWindow(self, start, end))
+                if start + firstWidth == i && scalarJoins(first, compatibility: compatibility) == .No
+                    && isWhole(first, compatibility: compatibility) && isWhole(code, compatibility: compatibility) {
+                    composite = compose(first, code)
+                    if composite == -1 {
+                        i = next
+                        continue
+                    }
+                }
+            }
+            unsafe {
+                var output = writer ?? StringWriter.allocate(capacity: end)
+                output.append(utf8: self, from: copied, to: start)
+                if composite >= 0 {
+                    output.append(codePoint: composite)
+                    i = next
+                } else {
+                    i = self.composePiece(from: start, past: next, compatibility: compatibility, into: &output)
+                }
+                writer = output
+            }
+            copied = i
+            piece = i
+        }
+        guard var output = writer else {
+            return none
+        }
+        output.append(utf8: self, from: copied, to: end)
+        unsafe {
+            return output.finish()
+        }
+    }
+
+    // The piece from 'start', which is read at least as far as 'past',
+    // normalized and written: where it ends.
+    fn composePiece(from start: Int, past: Int, compatibility: Bool, into output: inout StringWriter) -> Int {
+        let end = self.utf8Count
         var scalars: Int[>..] = []
-        scalars.reserveCapacity(self.utf8Count)
-        for scalar in self {
-            decompose(scalar.codePoint, compatibility: compatibility, into: &scalars)
+        var i = start
+        while i < end && (i < past || joinsBefore(self, i, end, compatibility: compatibility)) {
+            let (code, width) = scalarIn(textWindow(self, i, end))
+            decompose(code, compatibility: compatibility, into: &scalars)
+            i += width
         }
         putInCanonicalOrder(&scalars)
-        if form == .NFC || form == .NFKC {
-            composeCanonically(&scalars)
+        composeCanonically(&scalars)
+        for scalar in scalars {
+            output.append(codePoint: scalar)
         }
-        return stringOfScalars(scalars)
+        return i
+    }
+
+    // The text decomposed, or none when it is already.
+    fn decomposing(compatibility: Bool) -> String? {
+        let end = self.utf8Count
+        var writer: StringWriter? = none
+        var copied = 0
+        // The combining class of the last scalar.
+        var lastClass: U64 = 0
+        var i = 0
+        while i < end {
+            let word = textWindow(self, i, end)
+            if (word & 0x80) == 0 {
+                let tops = word & 0x8080_8080_8080_8080
+                let run = tops == 0 ? 8 : tops.trailingZeroCount >> 3
+                i += run < end - i ? run : end - i
+                lastClass = 0
+                continue
+            }
+            let (code, width) = scalarIn(word)
+            let known = normalizationOf(code)
+            let scalarClass = known & 0xFF
+            let whole = (known & normalizationLength) == 0 && !isHangulSyllable(code) && (!compatibility || compatibilityOf(code) == 0)
+            if whole && (scalarClass == 0 || scalarClass >= lastClass) {
+                lastClass = scalarClass
+                i += width
+                continue
+            }
+            unsafe {
+                var output = writer ?? StringWriter.allocate(capacity: end + end / 4)
+                output.append(utf8: self, from: copied, to: i)
+                i += width
+                copied = i
+                let pair = Int(known >> 8 & 0x1FFF)
+                if (known & normalizationLength) == 0x40_0000 && (!compatibility || compatibilityOf(code) == 0) && combiningClassOf(decomposed(pair)) == 0 {
+                    // The usual decomposition: a base, and one mark.
+                    output.append(codePoint: decomposed(pair))
+                    output.append(codePoint: decomposed(pair + 1))
+                    lastClass = normalizationOf(decomposed(pair + 1)) & 0xFF
+                    writer = output
+                    continue
+                }
+                // The marks after the last starter, in their order: what was
+                // written of them taken back, and what follows put with it.
+                var scalars: Int[>..] = []
+                decompose(code, compatibility: compatibility, into: &scalars)
+                while i < end {
+                    let (mark, markWidth) = scalarIn(textWindow(self, i, end))
+                    if combiningClassOf(mark) == 0 {
+                        break
+                    }
+                    decompose(mark, compatibility: compatibility, into: &scalars)
+                    i += markWidth
+                }
+                copied = i
+                if combiningClassOf(scalars[0]) != 0 {
+                    var marks = takeMarks(&output)
+                    for scalar in scalars {
+                        marks.append(scalar)
+                    }
+                    scalars = marks
+                }
+                putInCanonicalOrder(&scalars)
+                for scalar in scalars {
+                    output.append(codePoint: scalar)
+                }
+                lastClass = normalizationOf(scalars[scalars.count - 1]) & 0xFF
+                writer = output
+            }
+        }
+        guard var output = writer else {
+            return none
+        }
+        output.append(utf8: self, from: copied, to: end)
+        unsafe {
+            return output.finish()
+        }
     }
 
     /// Whether the text is already in the normalization form.
@@ -61,7 +232,13 @@ extension String {
     /// assert(!"caf\u{E9}".isNormalized(.NFD))
     /// ```
     public fn isNormalized(_ form: NormalizationForm) -> Bool {
-        return self.utf8Count == self.count || self.normalized(form) == self
+        if self.utf8Count == self.count {
+            return true
+        }
+        guard let other = self.normalizing(form) else {
+            return true
+        }
+        return other == self
     }
 }
 
@@ -75,6 +252,111 @@ extension Char {
     /// assert('\u{301}'.canonicalCombiningClass == 230 && '\u{323}'.canonicalCombiningClass == 220)
     /// ```
     public var canonicalCombiningClass: Int => combiningClassOf(self.codePoint)
+}
+
+/// The marks the writer ends in, in order, taken back.
+fn takeMarks(_ output: inout StringWriter) -> Int[>..] {
+    var marks: Int[>..] = []
+    while let last = output.removeLastScalar() {
+        if combiningClassOf(last) == 0 {
+            output.append(codePoint: last)
+            break
+        }
+        marks.append(last)
+    }
+    marks.reverse()
+    return marks
+}
+
+/// The eight bytes of the text from an offset before its end, the first the
+/// lowest, and zeros past the end.
+@inline(always)
+fn textWindow(_ text: String, _ offset: Int, _ end: Int) -> U64 {
+    if end - offset >= 8 {
+        return text.utf8.readU64(at: offset, endian: .Little)
+    }
+    return textTail(text, offset, end)
+}
+
+@inline(never)
+fn textTail(_ text: String, _ offset: Int, _ end: Int) -> U64 {
+    if end >= 8 {
+        return text.utf8.readU64(at: end - 8, endian: .Little) >> U64(64 - 8 * (end - offset))
+    }
+    var word: U64 = 0
+    var at = end
+    while at > offset {
+        at -= 1
+        word = word << 8 | U64(text.utf8[at])
+    }
+    return word
+}
+
+/// The scalar whose UTF-8 the word's lowest bytes are, and how many it takes.
+@inline(always)
+fn scalarIn(_ word: U64) -> (code: Int, width: Int) {
+    let bits = Int(word & 0xFFFF_FFFF)
+    let lead = bits & 0xFF
+    if lead < 0x80 {
+        return (code: lead, width: 1)
+    }
+    if lead < 0xE0 {
+        return (code: (lead & 0x1F) << 6 | bits >> 8 & 0x3F, width: 2)
+    }
+    if lead < 0xF0 {
+        return (code: (lead & 0x0F) << 12 | (bits >> 8 & 0x3F) << 6 | bits >> 16 & 0x3F, width: 3)
+    }
+    return (code: (lead & 0x07) << 18 | (bits >> 8 & 0x3F) << 12 | (bits >> 16 & 0x3F) << 6 | bits >> 24 & 0x3F, width: 4)
+}
+
+@inline(always)
+fn isHangulSyllable(_ code: Int) -> Bool {
+    return code >= hangulBase && code < hangulBase + syllableCount
+}
+
+/// What composing makes of a scalar.
+enum ScalarJoins {
+    /// It starts a piece, and alone is itself.
+    No
+    /// It may compose or be reordered with what is before it.
+    Yes
+    /// It starts a piece, which must be normalized.
+    Changes
+}
+
+@inline(always)
+fn scalarJoins(_ code: Int, compatibility: Bool) -> ScalarJoins {
+    if code < 0x300 && !compatibility {
+        return .No // all compose already, and none joins
+    }
+    if compatibility {
+        let value = compatibilityOf(code)
+        if value != 0 {
+            return (value & compatibilityJoins) != 0 ? .Yes : .Changes
+        }
+    }
+    let known = normalizationOf(code)
+    if (known & normalizationJoins) != 0 {
+        return .Yes
+    }
+    return (known & normalizationChanges) != 0 ? .Changes : .No
+}
+
+/// Whether the scalar at the offset may compose or be reordered with what is
+/// before it.
+@inline(always)
+fn joinsBefore(_ text: String, _ offset: Int, _ end: Int, compatibility: Bool) -> Bool {
+    if text.utf8[offset] < 0x80 {
+        return false
+    }
+    return scalarJoins(scalarIn(textWindow(text, offset, end)).code, compatibility: compatibility) == .Yes
+}
+
+/// Whether the scalar is its own decomposition.
+@inline(always)
+fn isWhole(_ code: Int, compatibility: Bool) -> Bool {
+    return code < 0x80
+        || (normalizationOf(code) & normalizationLength) == 0 && !isHangulSyllable(code) && (!compatibility || compatibilityOf(code) == 0)
 }
 
 /// Each run of combining marks sorted by combining class, stably: a mark of

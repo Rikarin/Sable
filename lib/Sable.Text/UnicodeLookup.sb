@@ -1,82 +1,107 @@
 module Sable.Text
 
 // Reading the tables of UnicodeTextTables.sb, which tools/unicode-tables.py
-// generates and describes: fixed-width records of base-32 digits, '0' for 0
-// to 'O' for 31, textRecordsPerLine to a line. A property of every code
-// point is two lookups, its block's and then its own; a decomposition or a
-// composition is a binary search of records sorted by code point.
+// generates and describes: values for every code point in two stages, their
+// digits of base 64, '0' for 0 to 'o' for 63, the lowest first.
 
-/// The number the digits from byte 'at' of the table write.
-fn textNumber(_ table: String, _ at: Int, _ width: Int) -> Int {
-    let bytes = table.utf8
-    var value = 0
-    var i = 0
-    while i < width {
-        value = value * 32 + Int(bytes[at + i]) - 48
-        i = i + 1
+/// The value of a staged table whose blocks are of 2^shift records, of at
+/// most five digits: 0 past its 'limit' blocks. A record's digits are in the
+/// eight bytes from where it starts, so it is read at once.
+@inline(always)
+fn textStaged(_ index: String, _ blocks: String, shift: Int, limit: Int, width: Int, _ code: Int) -> U64 {
+    let block = code >> shift
+    if block >= limit {
+        return 0
+    }
+    let names = index.utf8
+    let at = block * 2 + (block >> 6)
+    let line = Int(names[at]) + Int(names[at + 1]) * 64 - 48 * 65
+    let start = line * ((width << shift) + 1) + (code & ((1 << shift) - 1)) * width
+    if width == 1 {
+        return U64(blocks.utf8[start]) &- 48
+    }
+    return textNumber(blocks, start, width)
+}
+
+/// The number the two to five digits from byte 'at' of the table write.
+@inline(always)
+fn textNumber(_ table: String, _ at: Int, _ width: Int) -> U64 {
+    // A digit's byte less '0' is its six bits: those bits of each byte, put
+    // side by side. (Past the digits a subtraction borrows upwards only.)
+    let digits = table.utf8.readU64(at: at, endian: .Little) &- 0x3030_3030_3030_3030
+    var value = digits & 0x3F | digits >> 2 & 0xFC0
+    if width > 2 {
+        value |= digits >> 4 & 0x3_F000
+    }
+    if width > 3 {
+        value |= digits >> 6 & 0xFC_0000
+    }
+    if width > 4 {
+        value |= digits >> 8 & 0x3F00_0000
     }
     return value
-}
-
-/// Where record r of a table of records 'width' digits wide starts.
-fn textRecord(_ record: Int, _ width: Int) -> Int {
-    return record * width + record / textRecordsPerLine
-}
-
-/// A two-stage table's value for the code point: its block of 128 from the
-/// index, then its place in that block.
-fn textStaged(_ index: String, _ blocks: String, _ width: Int, _ code: Int) -> Int {
-    let block = textNumber(index, textRecord(code >> 7, 2), 2)
-    return textNumber(blocks, textRecord(block * 128 + (code & 127), width), width)
-}
-
-/// The record whose key, its first 'keyWidth' digits, is the key; -1 when
-/// none is.
-fn textFind(_ table: String, count: Int, width: Int, keyWidth: Int, _ key: Int) -> Int {
-    var low = 0
-    var high = count
-    while low < high {
-        let middle = (low + high) / 2
-        let found = textNumber(table, textRecord(middle, width), keyWidth)
-        if found == key {
-            return middle
-        }
-        if found < key {
-            low = middle + 1
-        } else {
-            high = middle
-        }
-    }
-    return -1
 }
 
 /// Grapheme_Cluster_Break, Extended_Pictographic and Indic_Conjunct_Break,
 /// as graphemeBreakIndex's values put them together.
 fn graphemeBreakOf(_ code: Int) -> Int {
-    return textStaged(graphemeBreakIndex, graphemeBreakBlocks, graphemeBreakWidth, code)
+    return Int(textStaged(graphemeBreakIndex, graphemeBreakBlocks, shift: graphemeBreakShift, limit: graphemeBreakLimit, width: 2, code))
 }
 
 /// Word_Break, and 32 more for Extended_Pictographic.
 fn wordBreakOf(_ code: Int) -> Int {
-    return textStaged(wordBreakIndex, wordBreakBlocks, wordBreakWidth, code)
+    return Int(textStaged(wordBreakIndex, wordBreakBlocks, shift: wordBreakShift, limit: wordBreakLimit, width: 1, code))
 }
 
 fn sentenceBreakOf(_ code: Int) -> Int {
-    return textStaged(sentenceBreakIndex, sentenceBreakBlocks, sentenceBreakWidth, code)
+    return Int(textStaged(sentenceBreakIndex, sentenceBreakBlocks, shift: sentenceBreakShift, limit: sentenceBreakLimit, width: 1, code))
 }
 
 /// Line_Break as LB1 resolves it, and 64 more for East_Asian_Width F, W or
 /// H, and 128 more for an unassigned Extended_Pictographic code point.
 fn lineBreakOf(_ code: Int) -> Int {
-    return textStaged(lineBreakIndex, lineBreakBlocks, lineBreakWidth, code)
+    return Int(textStaged(lineBreakIndex, lineBreakBlocks, shift: lineBreakShift, limit: lineBreakLimit, width: 2, code))
 }
+
+// What normalization knows of a code point, as the tables have it.
+
+/// Its combining class, its canonical decomposition, and two bits.
+@inline(always)
+fn normalizationOf(_ code: Int) -> U64 {
+    return textStaged(normalizationIndex, normalizationBlocks, shift: normalizationShift, limit: normalizationLimit, width: 5, code)
+}
+
+/// Its compatibility decomposition, where that is not its canonical one.
+@inline(always)
+fn compatibilityOf(_ code: Int) -> U64 {
+    return textStaged(compatibilityIndex, compatibilityBlocks, shift: compatibilityShift, limit: compatibilityLimit, width: 4, code)
+}
+
+/// In normalizationOf's value: the code point is not itself in NFC.
+const normalizationChanges: U64 = 0x100_0000
+
+/// In normalizationOf's value: the code point may compose with what comes
+/// before it, or be reordered with it.
+const normalizationJoins: U64 = 0x200_0000
+
+/// In normalizationOf's value: how many scalars its decomposition has, if any.
+const normalizationLength: U64 = 0xE0_0000
+
+/// In compatibilityOf's value, as normalizationJoins.
+const compatibilityJoins: U64 = 0x8_0000
 
 /// Canonical_Combining_Class: 0 for a starter.
 fn combiningClassOf(_ code: Int) -> Int {
     if code < 0x300 {
         return 0
     }
-    return textStaged(combiningClassIndex, combiningClassBlocks, combiningClassWidth, code)
+    return Int(normalizationOf(code) & 0xFF)
+}
+
+/// Scalar i of the pool of decompositions.
+@inline(always)
+fn decomposed(_ i: Int) -> Int {
+    return Int(textNumber(decompositionPool, i * 3 + (i >> 4), 3))
 }
 
 // Hangul syllables decompose and compose by arithmetic (Unicode §3.12).
@@ -105,20 +130,25 @@ fn decompose(_ code: Int, compatibility: Bool, into scalars: inout Int[>..]) {
         }
         return
     }
-    let table = compatibility ? compatibilityDecompositionTable : canonicalDecompositionTable
-    let count = compatibility ? compatibilityDecompositionTableCount : canonicalDecompositionTableCount
-    let pool = compatibility ? compatibilityDecompositionPool : canonicalDecompositionPool
-    let record = textFind(table, count: count, width: 10, keyWidth: 5, code)
-    if record < 0 {
+    var start = 0
+    var length = 0
+    if compatibility {
+        let value = compatibilityOf(code)
+        start = Int(value & 0x3FFF)
+        length = Int(value >> 14 & 0x1F)
+    }
+    if length == 0 {
+        let value = normalizationOf(code)
+        start = Int(value >> 8 & 0x1FFF)
+        length = Int(value >> 21 & 7)
+    }
+    if length == 0 {
         scalars.append(code)
         return
     }
-    let at = textRecord(record, 10)
-    let start = textNumber(table, at + 5, 4)
-    let length = textNumber(table, at + 9, 1)
     var i = 0
     while i < length {
-        scalars.append(textNumber(pool, textRecord(start + i, 5), 5))
+        scalars.append(decomposed(start + i))
         i = i + 1
     }
 }
@@ -144,11 +174,24 @@ fn compose(_ first: Int, _ second: Int) -> Int {
         }
         return -1
     }
-    let record = textFind(compositionTable, count: compositionTableCount, width: 15, keyWidth: 10, first * 33554432 + second)
-    if record < 0 {
-        return -1
+    // The pairs the first scalar begins, in the order of their second.
+    let pairs = textStaged(compositionFirstIndex, compositionFirstBlocks, shift: compositionFirstShift, limit: compositionFirstLimit, width: 3, first)
+    var low = Int(pairs & 0x3FF)
+    var high = low + Int(pairs >> 10)
+    while low < high {
+        let middle = (low + high) / 2
+        let at = middle * 6 + (middle >> 4)
+        let found = Int(textNumber(compositionPairs, at, 3))
+        if found == second {
+            return Int(textNumber(compositionPairs, at + 3, 3))
+        }
+        if found < second {
+            low = middle + 1
+        } else {
+            high = middle
+        }
     }
-    return textNumber(compositionTable, textRecord(record, 15) + 10, 5)
+    return -1
 }
 
 /// The scalars, as a string.

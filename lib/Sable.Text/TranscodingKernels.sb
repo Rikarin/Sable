@@ -1,6 +1,7 @@
 module Sable.Text
 
-// The loops UTF-8 and UTF-16 are converted by: sixteen units at once while
+// The loops UTF-8 and UTF-16 are converted by, where the runtime's are not
+// (runtime/codecs.c), or stop: sixteen units at once while
 // they are ASCII, which are one unit either way, and the scalars of a run of
 // sixteen that is not one at a time. A destination is given its room first,
 // the most the source could take, and what was not taken is let go after.
@@ -11,41 +12,78 @@ fn appendUtf16(ofValid bytes: U8[:], to units: inout U16[>..]) {
     var j = units.count
     // A byte is never more than one unit: a pair's sequence is four.
     units.append(repeating: 0, count: count)
+    if count > 0 {
+        var written = 0
+        unsafe {
+            written = units.writeUtf16(ofValid: bytes, at: j)
+        }
+        if written > 0 {
+            units.removeLast(units.count - j - written)
+            return
+        }
+    }
     var i = 0
-    while i < count {
-        if count - i >= 16 {
-            let v = SIMD<U8, 16>.load(from: bytes, at: i)
-            if v.reduceMax() < 0x80 {
+    // Eight bytes at once, while there are eight: those before the first that
+    // is not ASCII, each a unit — eight units are stored, the rest of them
+    // written over next — or else the scalar they begin with.
+    while count - i >= 8 {
+        let word = bytes.readU64(at: i, endian: .Little)
+        let lead = U32(word & 0xFF)
+        if lead < 0x80 {
+            let tops = word & 0x8080_8080_8080_8080
+            let run = tops == 0 ? 8 : tops.trailingZeroCount >> 3
+            units.store(SIMD<U16, 8>.converting(SIMD<U8, 8>.load(from: bytes, at: i)), at: j)
+            i += run
+            j += run
+            // A long run, sixteen bytes at a time.
+            while run == 8 && count - i >= 16 {
+                let v = SIMD<U8, 16>.load(from: bytes, at: i)
+                if v.reduceMax() >= 0x80 {
+                    break
+                }
                 units.store(SIMD<U16, 16>.converting(v), at: j)
                 i += 16
                 j += 16
-                continue
             }
+        } else if lead < 0xE0 {
+            units[j] = ((lead & 0x1F) << 6 | U32(word >> 8 & 0x3F)) unchecked as U16
+            i += 2
+            j += 1
+        } else if lead < 0xF0 {
+            units[j] = ((lead & 0x0F) << 12 | U32(word >> 8 & 0x3F) << 6 | U32(word >> 16 & 0x3F)) unchecked as U16
+            i += 3
+            j += 1
+        } else {
+            let code = (lead & 0x07) << 18 | U32(word >> 8 & 0x3F) << 12 | U32(word >> 16 & 0x3F) << 6 | U32(word >> 24 & 0x3F)
+            let above = code &- 0x10000
+            units[j + 1] = (0xDC00 | above & 0x3FF) unchecked as U16
+            units[j] = (0xD800 | above >> 10) unchecked as U16
+            i += 4
+            j += 2
         }
-        // The scalars that start in the next sixteen bytes.
-        let end = count - i >= 16 ? i + 16 : count
-        while i < end {
-            let lead = U32(bytes[i])
-            if lead < 0x80 {
-                units[j] = lead unchecked as U16
-                i += 1
-                j += 1
-            } else if lead < 0xE0 {
-                units[j] = ((lead & 0x1F) << 6 | U32(bytes[i + 1]) & 0x3F) unchecked as U16
-                i += 2
-                j += 1
-            } else if lead < 0xF0 {
-                units[j] = ((lead & 0x0F) << 12 | (U32(bytes[i + 1]) & 0x3F) << 6 | U32(bytes[i + 2]) & 0x3F) unchecked as U16
-                i += 3
-                j += 1
-            } else {
-                let code = (lead & 0x07) << 18 | (U32(bytes[i + 1]) & 0x3F) << 12 | (U32(bytes[i + 2]) & 0x3F) << 6 | U32(bytes[i + 3]) & 0x3F
-                let above = code &- 0x10000
-                units[j + 1] = (0xDC00 | above & 0x3FF) unchecked as U16
-                units[j] = (0xD800 | above >> 10) unchecked as U16
-                i += 4
-                j += 2
-            }
+    }
+    // The scalars of the last few bytes.
+    while i < count {
+        let lead = U32(bytes[i])
+        if lead < 0x80 {
+            units[j] = lead unchecked as U16
+            i += 1
+            j += 1
+        } else if lead < 0xE0 {
+            units[j] = ((lead & 0x1F) << 6 | U32(bytes[i + 1]) & 0x3F) unchecked as U16
+            i += 2
+            j += 1
+        } else if lead < 0xF0 {
+            units[j] = ((lead & 0x0F) << 12 | (U32(bytes[i + 1]) & 0x3F) << 6 | U32(bytes[i + 2]) & 0x3F) unchecked as U16
+            i += 3
+            j += 1
+        } else {
+            let code = (lead & 0x07) << 18 | (U32(bytes[i + 1]) & 0x3F) << 12 | (U32(bytes[i + 2]) & 0x3F) << 6 | U32(bytes[i + 3]) & 0x3F
+            let above = code &- 0x10000
+            units[j + 1] = (0xDC00 | above & 0x3FF) unchecked as U16
+            units[j] = (0xD800 | above >> 10) unchecked as U16
+            i += 4
+            j += 2
         }
     }
     units.removeLast(units.count - j)
@@ -66,7 +104,10 @@ fn appendUtf8(ofUtf16 units: U16[:], from start: Int, to bytes: inout U8[>..]) -
         let blockEnd = count - i > block ? i + block : count
         block = block < 4096 ? block * 2 : block
         var j = bytes.count
-        bytes.append(repeating: 0, count: 3 * (blockEnd - i) + 3)
+        bytes.append(repeating: 0, count: 3 * (blockEnd - i) + 16)
+        let done = bytes.writeUtf8(of: units[i..<blockEnd], at: j)
+        i += done >> 32
+        j += done & 0xFFFF_FFFF
         var stopped = false
         while i < blockEnd && !stopped {
             if blockEnd - i >= 16 {

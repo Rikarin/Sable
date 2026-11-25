@@ -68,7 +68,10 @@ internal static class Visibility {
             case Accessibility.Package:
                 return DeclarationOf(symbol) is not { } written
                     || compilation.FileScopeOf(written) is not { } declared
-                    || string.Equals(declared.Tree.Options.Workspace, scope.Tree.Options.Workspace, StringComparison.Ordinal);
+                    || string.Equals(declared.Tree.Options.Workspace, scope.Tree.Options.Workspace, StringComparison.Ordinal)
+                    // The standard library's own, some of them read from disk
+                    // in place of the embedded (CoreLibrary.Brought).
+                    || CoreLibrary.IsStandardLibrary(CoreLibrary.ModuleOf(declared.Tree)) && CoreLibrary.IsStandardLibrary(CoreLibrary.ModuleOf(scope.Tree));
 
             case Accessibility.Internal:
                 return ModuleOf(symbol) is not { } module || ReferenceEquals(module, scope.Module);

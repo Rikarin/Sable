@@ -289,7 +289,7 @@ static void share_push(void *pointer) {
     share_stack[share_count++] = object;
 }
 
-void sable_share(void *pointer) {
+SABLE_SLOW void sable_share(void *pointer) {
     if (pointer == NULL || (object_flags(pointer) & (SABLE_IMMORTAL | SABLE_SHARED))) {
         return;
     }

@@ -30,24 +30,12 @@ public class Deque<Element> {
         return at < slots.count ? at : at - slots.count
     }
 
-    /// Twice the slots, the elements moved to the start of them in order.
+    /// Twice the slots, the elements moved to the start of them in order. A
+    /// call, as it is hardly ever made: 'append' is then short enough to be
+    /// part of what calls it.
+    @inline(never)
     fn grow() {
-        var size = slots.count * 2
-        if size < 8 {
-            size = 8
-        }
-        var grown: Element?[>..] = []
-        var i = 0
-        while i < used {
-            grown.append(slots[slot(i)])
-            i = i + 1
-        }
-        while i < size {
-            grown.append(none)
-            i = i + 1
-        }
-        slots = grown
-        head = 0
+        resize(slots.count < 4 ? 8 : slots.count * 2)
     }
 
     /// Adds the value at the back.
@@ -190,17 +178,17 @@ public class Deque<Element> {
     /// The elements moved to the front of the storage, in order, with room
     /// for 'size' in all.
     fn resize(_ size: Int) {
+        // The run from the front, then what wrapped round, then the rest.
+        let end = head + used
         var moved: Element?[>..] = []
         moved.reserveCapacity(size)
-        var i = 0
-        while i < used {
-            moved.append(slots[slot(i)])
-            i += 1
+        if end <= slots.count {
+            moved.append(contentsOf: slots[head..<end])
+        } else {
+            moved.append(contentsOf: slots[head..<slots.count])
+            moved.append(contentsOf: slots[0..<end - slots.count])
         }
-        while i < size {
-            moved.append(none)
-            i += 1
-        }
+        moved.append(repeating: none, count: size - used)
         slots = moved
         head = 0
     }

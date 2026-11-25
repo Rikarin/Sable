@@ -25,22 +25,34 @@ public class BitSet {
     }
 
     /// Adds the value, which must not be negative; true if it was not there.
+    @inline(always)
     public fn insert(_ value: Int) -> Bool {
-        if value < 0 {
-            let nothing: Int[>..] = []
-            return nothing[value] > 0
-        }
         let word = value >> 6
-        while words.count <= word {
-            words.append(0)
+        if value < 0 || word >= words.count {
+            extend(to: word + 1)
         }
+        let held = words[word]
         let mask = bit(value)
-        if (words[word] & mask) != 0 {
+        if (held & mask) != 0 {
             return false
         }
-        words[word] = words[word] | mask
+        words[word] = held | mask
         members = members + 1
         return true
+    }
+
+    // At least so many words; a negative count traps, as indexing an array by
+    // it does. A call, as it is hardly ever made: 'insert' is then short
+    // enough to be part of what calls it.
+    @inline(never)
+    fn extend(to count: Int) {
+        if count <= 0 {
+            let nothing: Int[>..] = []
+            let _ = nothing[count - 1]
+        }
+        while words.count < count {
+            words.append(0)
+        }
     }
 
     /// Removes the value; true if it was there.
@@ -67,41 +79,43 @@ public class BitSet {
 
     /// The values in this set or the other, or both.
     public fn union(_ other: BitSet) -> BitSet {
-        let result = BitSet()
+        let (longer, shorter) = if words.count >= other.words.count { (words, other.words) } else { (other.words, words) }
+        var both = longer
         var i = 0
-        while i < words.count || i < other.words.count {
-            let mine: U64 = i < words.count ? words[i] : 0
-            let theirs: U64 = i < other.words.count ? other.words[i] : 0
-            result.words.append(mine | theirs)
+        let shared = shorter.count
+        while i < shared {
+            both[i] = longer[i] | shorter[i]
             i = i + 1
         }
-        result.members = BitSet.population(result.words)
-        return result
+        return BitSet(words: both)
     }
 
     /// The values in both sets.
     public fn intersection(_ other: BitSet) -> BitSet {
-        let result = BitSet()
+        let mine = words
+        let theirs = other.words
+        let shared = mine.count < theirs.count ? mine.count : theirs.count
+        var common = U64[>..](repeating: 0, count: shared)
         var i = 0
-        while i < words.count && i < other.words.count {
-            result.words.append(words[i] & other.words[i])
+        while i < shared {
+            common[i] = mine[i] & theirs[i]
             i = i + 1
         }
-        result.members = BitSet.population(result.words)
-        return result
+        return BitSet(words: common)
     }
 
     /// The values in this set and not the other.
     public fn subtracting(_ other: BitSet) -> BitSet {
-        let result = BitSet()
+        let mine = words
+        let theirs = other.words
+        let shared = mine.count < theirs.count ? mine.count : theirs.count
+        var left = mine
         var i = 0
-        while i < words.count {
-            let theirs: U64 = i < other.words.count ? other.words[i] : 0
-            result.words.append(words[i] & ~theirs)
+        while i < shared {
+            left[i] = mine[i] & ~theirs[i]
             i = i + 1
         }
-        result.members = BitSet.population(result.words)
-        return result
+        return BitSet(words: left)
     }
 
     /// Whether every value in this set is in the other.
@@ -118,6 +132,12 @@ public class BitSet {
     }
 
     /// The bits set in the words: each word's lowest set bit cleared until none is left.
+    // A set of the bits of these words, counted.
+    init(words: U64[>..]) {
+        self.words = words
+        members = BitSet.population(words)
+    }
+
     static fn population(_ words: U64[>..]) -> Int {
         var total = 0
         for word in words {
@@ -133,22 +153,21 @@ public class BitSet {
     /// assert(a.symmetricDifference(BitSet([3, 4])).toArray() == [1, 2, 4])
     /// ```
     public fn symmetricDifference(_ other: BitSet) -> BitSet {
-        let result = BitSet()
+        let (longer, shorter) = if words.count >= other.words.count { (words, other.words) } else { (other.words, words) }
+        var either = longer
         var i = 0
-        while i < words.count || i < other.words.count {
-            let mine: U64 = i < words.count ? words[i] : 0
-            let theirs: U64 = i < other.words.count ? other.words[i] : 0
-            result.words.append(mine ^ theirs)
+        let shared = shorter.count
+        while i < shared {
+            either[i] = longer[i] ^ shorter[i]
             i = i + 1
         }
-        result.members = BitSet.population(result.words)
-        return result
+        return BitSet(words: either)
     }
 
     /// Adds the other's members.
     public fn formUnion(_ other: BitSet) {
-        while words.count < other.words.count {
-            words.append(0)
+        if words.count < other.words.count {
+            extend(to: other.words.count)
         }
         var i = 0
         while i < other.words.count {
@@ -180,8 +199,8 @@ public class BitSet {
 
     /// Keeps the members in one set or the other, not both.
     public fn formSymmetricDifference(_ other: BitSet) {
-        while words.count < other.words.count {
-            words.append(0)
+        if words.count < other.words.count {
+            extend(to: other.words.count)
         }
         var i = 0
         while i < other.words.count {

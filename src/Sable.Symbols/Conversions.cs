@@ -248,6 +248,29 @@ internal sealed class Conversions(CoreTypes core) {
         return true;
     }
 
+    /// <summary>The questions being answered through a type's own constraints, and what they were asked of.</summary>
+    [ThreadStatic]
+    static HashSet<(TypeSymbol, TypeSymbol)>? _asking;
+
+    /// <summary>
+    ///     Whether what an abstract type is constrained to meets a constraint.
+    ///     A question that comes back to itself — <c>T: Box&lt;T&gt;</c> where a
+    ///     Box is a P if its T is — is not answered by that.
+    /// </summary>
+    static bool ConstraintsSatisfy(TypeSymbol source, TypeSymbol constraint, TypeEquivalence? context) {
+        var constraints = AssociatedTypes.ConstraintsOf(source, context);
+        var asking = _asking ??= [];
+        if (!asking.Add((source, constraint))) {
+            return false;
+        }
+
+        try {
+            return constraints.Any(c => Satisfies(c, constraint, context));
+        } finally {
+            asking.Remove((source, constraint));
+        }
+    }
+
     /// <summary>True when a type meets a constraint: a protocol, a class, or several.</summary>
     public static bool Satisfies(TypeSymbol source, TypeSymbol constraint, TypeEquivalence? context = null) {
         if (constraint.IsError || source.IsError) {
@@ -283,7 +306,7 @@ internal sealed class Conversions(CoreTypes core) {
         if (Sendability.IsSendableProtocol(constraint)) {
             return Sendability.IsSendable(source)
                 || source is TypeParameterSymbol or DependentMemberTypeSymbol
-                && AssociatedTypes.ConstraintsOf(source, context).Any(c => Satisfies(c, constraint, context));
+                && ConstraintsSatisfy(source, constraint, context);
         }
 
         // CSignature is met by a function type C can have, by what it takes
@@ -295,7 +318,7 @@ internal sealed class Conversions(CoreTypes core) {
         // A type parameter satisfies only what it was constrained to: an
         // unconstrained one conforms to nothing.
         if (source is TypeParameterSymbol or DependentMemberTypeSymbol) {
-            return AssociatedTypes.ConstraintsOf(source, context).Any(c => Satisfies(c, constraint, context));
+            return ConstraintsSatisfy(source, constraint, context);
         }
 
         // Never has no values, so it is an Error (and what Error refines): a

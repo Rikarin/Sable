@@ -1,0 +1,129 @@
+module Negative.CircularConstraints
+
+// A constraint that leads back to the type it constrains says nothing of it,
+// and is reported where the ring closes (#309); what asks for a value's
+// members or conformances never goes round it.
+
+fn itself<S: S>(_ values: S) { //! S3170 'S: S' leads back to 'S'
+    for value in values { } //! S3013
+}
+
+fn eachOther<A: B, B: A>(_ values: A) { //! S3170 'B: A' leads back to 'B'
+    for value in values { } //! S3013
+}
+
+fn ring<A: B, B: C, C: A>(_ values: A, _ other: C) -> Bool { //! S3170 'C: A'
+    return values == other //! S3009
+}
+
+fn array<S: S[]>(_ values: S) { //! S3170 'S: S[]' leads back to 'S'
+    for value in values { } //! S3013
+}
+
+fn slice<S: S[:]>(_ values: S) { //! S3170 'S: S[:]' leads back to 'S'
+    for value in values { } //! S3013
+}
+
+fn growing<S: S[>..]>(_ values: S) -> any Sendable { //! S3170
+    return values //! S3004
+}
+
+fn optional<S: S?>(_ value: S) -> Bool { //! S3170
+    return value == value //! S3009
+}
+
+fn whole<S>(_ values: S) where S: S { //! S3170
+    print(values)
+}
+
+fn through<A: B[], B>(_ values: A, _ other: B) where B: A { //! S3170
+    for value in values { }
+}
+
+fn besides<S: Sequence & S>(_ values: S) throws { //! S3170
+    for try value in values { }
+}
+
+fn member<S: Sequence>(_ values: S) throws where S.Element: S.Element { //! S3170
+    for try value in values { }
+}
+
+fn memberBack<S: Sequence, T: S.Element>(_ values: S, _ value: T) throws where S.Element: T { //! S3170
+    for try value in values { }
+}
+
+struct Boxed<T: T> { //! S3170
+    var value: T
+}
+
+union Either<A: B, B: A> { //! S3170
+    First(A)
+    Second(B)
+}
+
+alias Pair<T: T> = (T, T) //! S3170
+
+protocol Linked {
+    associatedtype Next: Next //! S3170
+    associatedtype Left: Right //! S3170
+    associatedtype Right: Left
+}
+
+protocol Own where Self: Self { } //! S3170
+
+extension Sequence where Element: Element { //! S3170
+    fn noElements() -> Int {
+        return 0
+    }
+}
+
+extension<T: T[]> T[:] { //! S3170
+    fn alone() -> Int {
+        return 0
+    }
+}
+
+struct Holder {
+    fn method<S: S>(_ values: S) { //! S3170
+        fn local<T: T>(_ values: T) { //! S3170
+            for value in values { } //! S3013
+        }
+    }
+
+    init<S: S>(_ values: S) { //! S3170
+        for value in values { } //! S3013
+    }
+}
+
+// Not circular: a protocol's arguments, or a class's, may mention the parameter.
+
+protocol Like<T> {
+    fn isLike(_ other: T) -> Bool
+}
+
+open class Base<T> { }
+
+fn bounded<T: Like<T>>(_ a: T, _ b: T) -> Bool {
+    return a.isLike(b)
+}
+
+fn recurring<T: Base<T>>(_ a: T) { }
+
+// A conformance that holds where the argument's does, asked of a parameter
+// constrained to it, comes back to the question and is not answered by it.
+
+protocol Marked {
+    fn mark() -> Int
+}
+
+open class Wrapper<T> { }
+
+extension Wrapper: Marked where T: Marked {
+    fn mark() -> Int {
+        return 1
+    }
+}
+
+fn marked<T: Wrapper<T>>(_ value: T) -> any Marked {
+    return value //! S3004
+}

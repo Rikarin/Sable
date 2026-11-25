@@ -184,6 +184,7 @@ public enum ErrorCode {
     ERR_MissingSuperInit = 3143,
     ERR_OpenExistentialInUnion = 3150,
     ERR_ConstGenericPredicate = 3160,
+    ERR_CircularConstraint = 3170,
     ERR_ValueGenericArgument = 3420,
     ERR_ConstGenericPredicateFails = 3421,
     ERR_SelfRequirementOnExistential = 3161,

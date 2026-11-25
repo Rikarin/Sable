@@ -1,0 +1,508 @@
+module Sable.Collections
+
+/// A list kept so that copies of it stay cheap as they change: .NET's
+/// ImmutableList, Rust's `im::Vector`, Clojure's vector. A copy shares
+/// everything with the list it was made from, and a change to either copies
+/// only the few nodes on the way to the element: reading, replacing, adding at
+/// the end, inserting and removing anywhere, cutting a piece out and joining
+/// two lists are all O(log n), with 32 ways at each step — where changing a
+/// shared array copies all of it.
+///
+/// A value, as an array is, and changed by the same methods. Where nothing
+/// else holds it, it is changed in place, so there is no builder to make one
+/// with: a `var` is. `appending`, `replacing(at:with:)`, `inserting` and
+/// `removing(at:)` give a changed copy and leave this one as it is. A list
+/// that is only read, or copied seldom, is better an array: a `T[>..]` is a
+/// value too, .NET's ImmutableArray.
+///
+/// ```sable
+/// let before = ImmutableList<Int>(0..<1000)
+/// let after = before.appending(1000).removing(at: 0)
+/// assert(before.count == 1000 && before[0] == 0)
+/// assert(after.count == 1000 && after[0] == 1 && after[999] == 1000)
+/// let middle = after[10..<20]
+/// assert(middle.count == 10 && middle[0] == 11)
+/// assert((middle + middle).count == 20)
+/// ```
+public struct ImmutableList<Element> {
+    // The leaves but the last, a tree of at least one level above them, and
+    // how many elements it has; and the last, up to 32 elements, of which
+    // there are none only in an empty list. Adding at the end is adding to it.
+    var root: ListTreeNode<Element> = ListTreeNode<Element>()
+    var height: Int = 0
+    var inTree: Int = 0
+    var tail: Element[>..] = []
+
+    /// An empty list.
+    public init() { }
+
+    /// A list of the sequence's elements, in order. What going through them
+    /// throws, it throws.
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        for try element in elements {
+            append(element)
+        }
+    }
+
+    /// How many elements it holds.
+    public var count: Int => inTree + tail.count
+
+    /// Whether it holds no elements.
+    public var isEmpty: Bool => tail.isEmpty
+
+    /// The first element, or none when there are none.
+    public var first: Element? => isEmpty ? none : self[0]
+
+    /// The last element, or none when there are none.
+    public var last: Element? => isEmpty ? none : tail[tail.count - 1]
+
+    /// The element at 'index', to read or to replace; outside 0..<count traps.
+    public subscript(index: Int) -> Element {
+        get {
+            if index < 0 || index >= inTree {
+                // Past the tree, the tail's own check says it is out of range.
+                return tail[index - inTree]
+            }
+            return root.element(at: index, height)
+        }
+        set {
+            if index < 0 || index >= inTree {
+                tail[index - inTree] = newValue
+            } else {
+                root.replace(at: index, height, with: newValue)
+            }
+        }
+    }
+
+    /// Changes the element at 'index' where it is. The closure is given it
+    /// 'inout'; outside 0..<count traps.
+    public mutating fn modify(at index: Int, _ change: (inout Element) -> Void) {
+        if index < 0 || index >= inTree {
+            change(&tail[index - inTree])
+        } else {
+            root.modify(at: index, height, change)
+        }
+    }
+
+    /// The elements in a grow-only array of their own.
+    public fn toArray() -> Element[>..] {
+        var all: Element[>..] = []
+        all.reserveCapacity(count)
+        var at = 0
+        while at < inTree {
+            let (leaf, _) = root.leaf(at: at, height, from: 0)
+            all.append(contentsOf: leaf)
+            at += leaf.count
+        }
+        all.append(contentsOf: tail)
+        return all
+    }
+
+    // ---- Growing -----------------------------------------------------------
+
+    /// Adds the element at the end.
+    public mutating fn append(_ element: Element) {
+        if tail.count == listTreeWidth {
+            pushTail()
+        }
+        tail.append(element)
+    }
+
+    /// Adds the elements at the end, in order.
+    public mutating fn append(contentsOf elements: Element[:]) {
+        var from = 0
+        while from < elements.count {
+            if tail.count == listTreeWidth {
+                pushTail()
+            }
+            let room = listTreeWidth - tail.count
+            let to = from + room < elements.count ? from + room : elements.count
+            tail.append(contentsOf: elements[from..<to])
+            from = to
+        }
+    }
+
+    /// Adds the other list's elements at the end: O(log n), the nodes of both
+    /// shared but for those where they meet.
+    public mutating fn append(contentsOf other: ImmutableList<Element>) {
+        if other.inTree == 0 {
+            append(contentsOf: other.tail)
+            return
+        }
+        if isEmpty {
+            self = other
+            return
+        }
+        var joined = (ListTreeNode.leaf(tail), 0)
+        if inTree > 0 {
+            joined = ListTreeNode.join(root, height, joined.0, 0)
+        }
+        joined = ListTreeNode.join(joined.0, joined.1, other.root, other.height)
+        let total = count + other.inTree
+        tail = other.tail
+        takeTree(joined.0, joined.1, total)
+    }
+
+    /// Puts the element at 'index', those from there on moved up one; 'index'
+    /// may be the count, to add at the end, and outside 0...count traps.
+    public mutating fn insert(_ element: Element, at index: Int) {
+        precondition(index >= 0 && index <= count, "index \(index) is out of range for count \(count)")
+        if index >= inTree {
+            tail.putIn(element, index - inTree)
+            if tail.count > listTreeWidth {
+                let after = tail.removeLast()
+                pushTail()
+                tail.append(after)
+            }
+            return
+        }
+        if let half = root.insert(element, at: index, height) {
+            height += 1
+            root = ListTreeNode.of([root, half], height)
+        }
+        inTree += 1
+    }
+
+    /// Puts the elements at 'index', in order, those from there on moved up;
+    /// outside 0...count traps.
+    public mutating fn insert(contentsOf elements: ImmutableList<Element>, at index: Int) {
+        replace(index..<index, with: elements)
+    }
+
+    // ---- Shrinking ---------------------------------------------------------
+
+    /// Takes out the element at 'index' and gives it back, those after it
+    /// moved down one; outside 0..<count traps.
+    public mutating fn remove(at index: Int) -> Element {
+        precondition(index: index, inBounds: count)
+        if index >= inTree {
+            let removed = tail.takeOut(index - inTree)
+            if tail.isEmpty {
+                pullTail()
+            }
+            return removed
+        }
+        let removed = root.remove(at: index, height)
+        takeTree(root, height, inTree - 1)
+        return removed
+    }
+
+    /// Takes out the last element and gives it back; an empty list traps.
+    public mutating fn removeLast() -> Element {
+        let removed = tail.removeLast()
+        if tail.isEmpty {
+            pullTail()
+        }
+        return removed
+    }
+
+    /// Takes out the last element and gives it back, or none when empty.
+    public mutating fn popLast() -> Element? {
+        return isEmpty ? none : removeLast()
+    }
+
+    /// Takes out every element.
+    public mutating fn removeAll() {
+        self = ImmutableList<Element>()
+    }
+
+    /// Takes out the elements in the range, those after it moved down;
+    /// outside 0...count traps.
+    public mutating fn removeSubrange(_ range: Range<Int>) {
+        replace(range, with: ImmutableList<Element>())
+    }
+
+    /// The elements in the range replaced with the list's, which may be more
+    /// or fewer.
+    mutating fn replace(_ range: Range<Int>, with elements: ImmutableList<Element>) {
+        check(range)
+        let after = from(range.upperBound)
+        keepFirst(range.lowerBound)
+        append(contentsOf: elements)
+        append(contentsOf: after)
+    }
+
+    // ---- Changed copies ----------------------------------------------------
+
+    /// This list with the element at the end: the rest shared with this one.
+    public fn appending(_ element: Element) -> ImmutableList<Element> {
+        var changed = self
+        changed.append(element)
+        return changed
+    }
+
+    /// This list and then the other, the nodes of both shared.
+    public fn appending(contentsOf other: ImmutableList<Element>) -> ImmutableList<Element> {
+        var changed = self
+        changed.append(contentsOf: other)
+        return changed
+    }
+
+    /// This list with the element in place of the one at 'index': the rest
+    /// shared with this one.
+    public fn replacing(at index: Int, with element: Element) -> ImmutableList<Element> {
+        var changed = self
+        changed[index] = element
+        return changed
+    }
+
+    /// This list with the element put at 'index': the rest shared with this one.
+    public fn inserting(_ element: Element, at index: Int) -> ImmutableList<Element> {
+        var changed = self
+        changed.insert(element, at: index)
+        return changed
+    }
+
+    /// This list without the element at 'index': the rest shared with this one.
+    public fn removing(at index: Int) -> ImmutableList<Element> {
+        var changed = self
+        _ = changed.remove(at: index)
+        return changed
+    }
+
+    /// The first list's elements and then the second's, the nodes of both shared.
+    public operator + (lhs: ImmutableList<Element>, rhs: ImmutableList<Element>) -> ImmutableList<Element> {
+        return lhs.appending(contentsOf: rhs)
+    }
+
+    /// The elements in the range, as a list of their own, or replaced with
+    /// another's, which may be more or fewer: O(log n), the nodes shared. A
+    /// range outside 0...count traps.
+    ///
+    /// ```sable
+    /// var list = ImmutableList<Int>(0..<100)
+    /// list[1..<99] = ImmutableList<Int>([7])
+    /// assert(list.toArray() == [0, 7, 99])
+    /// assert(list[1...].toArray() == [7, 99])
+    /// ```
+    public subscript(range: some RangeExpression) -> ImmutableList<Element> {
+        get {
+            let positions = range.relative(to: self)
+            check(positions)
+            var piece = self
+            piece.keepFirst(positions.upperBound)
+            return piece.from(positions.lowerBound)
+        }
+        set {
+            replace(range.relative(to: self), with: newValue)
+        }
+    }
+
+    // ---- The tree ----------------------------------------------------------
+
+    fn check(_ range: Range<Int>) {
+        precondition(range.lowerBound >= 0 && range.upperBound <= count, "the range is not within the list's count, \(count)")
+    }
+
+    /// The tail, which is full, made the tree's last leaf.
+    mutating fn pushTail() {
+        let leaf = ListTreeNode.leaf(tail)
+        inTree += tail.count
+        tail = []
+        if height == 0 {
+            root = ListTreeNode.of([leaf], 1)
+            height = 1
+        } else if root.hasRoom(height) {
+            root.append(leaf: leaf, height)
+        } else {
+            let edge = ListTreeNode.path(to: leaf, height)
+            height += 1
+            root = ListTreeNode.of([root, edge], height)
+        }
+    }
+
+    /// The tree's last leaf, if it has one, made the tail.
+    mutating fn pullTail() {
+        if height > 0 {
+            tail = root.removeLastLeaf(height)
+            inTree -= tail.count
+            shorten()
+        }
+    }
+
+    /// The tree made as short as it may be, and nothing when it holds nothing.
+    mutating fn shorten() {
+        if inTree == 0 {
+            root = ListTreeNode<Element>()
+            height = 0
+            return
+        }
+        while height > 1 && root.children.count == 1 {
+            root = root.children[0]
+            height -= 1
+        }
+    }
+
+    /// The tree made this one's, its last leaf given some of the tail's
+    /// elements if it has fewer than a leaf should.
+    mutating fn takeTree(_ tree: ListTreeNode<Element>, _ treeHeight: Int, _ elements: Int) {
+        root = treeHeight == 0 ? ListTreeNode.of([tree], 1) : tree
+        height = treeHeight == 0 ? 1 : treeHeight
+        inTree = elements
+        if root.lastLeafCount(height) >= listTreeLeast {
+            shorten()
+            return
+        }
+        let after = tail
+        pullTail()
+        append(contentsOf: after)
+    }
+
+    /// The elements past the first so many taken out.
+    mutating fn keepFirst(_ kept: Int) {
+        if kept == 0 {
+            self = ImmutableList<Element>()
+        } else if kept > inTree {
+            tail.removeLast(count - kept)
+        } else {
+            if kept < inTree {
+                root.truncate(to: kept, height)
+                inTree = kept
+            }
+            pullTail()
+        }
+    }
+
+    /// The elements from the index on.
+    fn from(_ index: Int) -> ImmutableList<Element> {
+        var rest = ImmutableList<Element>()
+        if index >= inTree {
+            rest.tail = tail[index - inTree...].toArray()
+            return rest
+        }
+        rest.tail = tail
+        let (tree, treeHeight) = root.from(index, height)
+        rest.takeTree(tree, treeHeight, inTree - index)
+        return rest
+    }
+
+    /// The elements of the leaf, or the tail, an index is in, and the index
+    /// of the first of them.
+    fn leaf(at index: Int) -> (Element[>..], Int) {
+        return index >= inTree ? (tail, inTree) : root.leaf(at: index, height, from: 0)
+    }
+
+    /// Whether the two are one tree, all of it shared: copies of one another,
+    /// neither changed since. Constant time; two that are equal need not be
+    /// identical.
+    public fn isIdentical(to other: ImmutableList<Element>) -> Bool {
+        return inTree == other.inTree && height == other.height && tail.sharesElements(with: other.tail) && root.children.sharesElements(with: other.root.children)
+    }
+
+    /// What is wrong with its tree, or none: what the library's own tests ask.
+    public fn structuralFault() -> String? {
+        if tail.count > listTreeWidth || tail.isEmpty && inTree > 0 {
+            return "a tail of \(tail.count)"
+        }
+        if height == 0 {
+            return inTree == 0 && root.width == 0 ? none : "an empty tree"
+        }
+        if root.count(height) != inTree || height > 1 && root.children.count == 1 {
+            return "the root"
+        }
+        return root.fault(height, isRoot: true, isLast: true)
+    }
+}
+
+extension ImmutableList: RandomAccessCollection, MutableCollection, FromSequence<Element> {
+    /// An iterator over the elements, first to last.
+    public fn makeIterator() -> ImmutableListIterator<Element> {
+        return ImmutableListIterator<Element>(self)
+    }
+
+    public var startIndex: Int => 0
+
+    public var endIndex: Int => count
+
+    public fn index(after position: Int) -> Int => position + 1
+
+    public fn index(before position: Int) -> Int => position - 1
+
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+
+    public fn distance(from start: Int, to end: Int) -> Int => end - start
+}
+
+extension ImmutableList: RangeReplaceableCollection {
+    /// Takes out every element.
+    public mutating fn clear() {
+        removeAll()
+    }
+
+    /// The elements in the range replaced with the collection's: O(log n)
+    /// and how many those are.
+    public mutating fn replaceSubrange<C: Collection>(_ range: Range<Int>, with elements: C) where C.Element == Element {
+        replace(range, with: ImmutableList<Element>(elements))
+    }
+}
+
+/// Gives an ImmutableList's elements, a leaf at a time.
+public struct ImmutableListIterator<Element>: Iterator {
+    let list: ImmutableList<Element>
+    var leaf: Element[>..]
+    var position: Int = 0
+    var following: Int
+
+    init(_ list: ImmutableList<Element>) {
+        self.list = list
+        leaf = list.leaf(at: 0).0
+        following = leaf.count
+    }
+
+    /// The next element, or none after the last.
+    public mutating fn next() -> Element? {
+        if position == leaf.count {
+            if following == list.count {
+                return none
+            }
+            leaf = list.leaf(at: following).0
+            following += leaf.count
+            position = 0
+        }
+        let element = leaf[position]
+        position += 1
+        return element
+    }
+}
+
+extension ImmutableList: Equatable where Element: Equatable {
+    /// Whether the two hold equal elements in the same order: leaves the two
+    /// share at the same place are not compared.
+    public operator == (lhs: ImmutableList<Element>, rhs: ImmutableList<Element>) -> Bool {
+        if lhs.count != rhs.count {
+            return false
+        }
+        var at = 0
+        while at < lhs.count {
+            let (left, leftStart) = lhs.leaf(at: at)
+            let (right, rightStart) = rhs.leaf(at: at)
+            let leftEnd = leftStart + left.count
+            let rightEnd = rightStart + right.count
+            let end = leftEnd < rightEnd ? leftEnd : rightEnd
+            if !(leftStart == rightStart && left.sharesElements(with: right)) {
+                if !(left[at - leftStart..<end - leftStart] == right[at - rightStart..<end - rightStart]) {
+                    return false
+                }
+            }
+            at = end
+        }
+        return true
+    }
+}
+
+extension ImmutableList: Hashable where Element: Hashable {
+    /// Feeds the count and then each element to the hasher, as an array does.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(count)
+        for element in self {
+            element.hash(into: &hasher)
+        }
+    }
+}
+
+extension ImmutableList: Debug where Element: Debug {
+    /// `ImmutableList([1, 2])`.
+    public fn debugDescription() -> String {
+        return described("ImmutableList", descriptions(self))
+    }
+}

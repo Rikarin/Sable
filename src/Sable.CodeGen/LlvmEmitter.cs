@@ -5986,6 +5986,27 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
+                // An array is its buffer, all of it: the same one, or the same part of one.
+                case "array_shares": {
+                    string Buffer(int operand) => builtin.Operands[operand].Type is SliceType type ? SlicePart(operands[operand], type, 0) : operands[operand];
+                    string[] Span(int operand) => builtin.Operands[operand].Type is SliceType type
+                        ? [SlicePart(operands[operand], type, 1), SlicePart(operands[operand], type, 2)]
+                        : ["0", Count(operands[operand])];
+
+                    var same = Fresh();
+                    Line($"{same} = icmp eq ptr {Buffer(0)}, {Buffer(1)}");
+                    foreach (var (one, other) in Span(0).Zip(Span(1)).ToList()) {
+                        var part = Fresh();
+                        var both = Fresh();
+                        Line($"{part} = icmp eq i64 {one}, {other}");
+                        Line($"{both} = and i1 {same}, {part}");
+                        same = both;
+                    }
+
+                    Line($"{Result()} = and i1 {same}, true");
+                    return;
+                }
+
                 case "array_rotate": {
                     var pointee = ((AddressType)builtin.Operands[0].Type).Pointee;
                     var element = pointee is SliceType rotated ? rotated.Element : ((ArrayType)pointee).Element;

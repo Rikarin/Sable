@@ -2012,7 +2012,7 @@ public static class SilBuiltins {
     ///     count work on an array alone.
     /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_element_addr_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "slice_of_borrowed", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_holes", "array_take", "array_append_all", "array_mismatch", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_element_addr_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "slice_of_borrowed", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_holes", "array_take", "array_append_all", "array_mismatch", "array_shares", "region_alloc"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
@@ -2309,6 +2309,10 @@ public static class SilBuiltins {
             // at a time. -1 for any other element, which only its '==' compares.
             case "array_mismatch" when Element(0, false) is { } compared && operands.Count == 2 && Element(1, false) == compared:
                 return new([operands[0], operands[1]], SilType.Int);
+
+            // Whether two arrays, or slices, are the same elements of one buffer.
+            case "array_shares" when Element(0, false) is { } shared && operands.Count == 2 && Element(1, false) == shared:
+                return new([operands[0], operands[1]], SilType.Bool);
 
             // The elements [from, to) of an array or a slice rotated left by
             // the third operand, in place: moved, not copied, so no element

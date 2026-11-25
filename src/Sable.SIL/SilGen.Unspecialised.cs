@@ -1633,7 +1633,7 @@ public sealed partial class SilGen {
             }
 
             // One of two of the kind, compared.
-            if (callee.Builtin is "array_mismatch" && call.Receiver is { } compared && IsOwnArray(compared.Type)) {
+            if (callee.Builtin is "array_mismatch" or "array_shares" && call.Receiver is { } compared && IsOwnArray(compared.Type)) {
                 return call.Arguments.All(a => Simple(a.Type));
             }
 

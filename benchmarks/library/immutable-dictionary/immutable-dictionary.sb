@@ -1,0 +1,40 @@
+module ImmutableDictionaryBench
+
+// ImmutableDictionary: built, read, and changed with every version kept.
+
+import Sable.Collections
+
+fn main() {
+    // Built in place.
+    var map = ImmutableDictionary<Int, Int>()
+    for i in 0..<200000 {
+        map[i * 7919] = i
+    }
+    // Read.
+    var total = 0
+    for i in 0..<400000 {
+        if let value = map[i * 7919] {
+            total += value
+        }
+    }
+    // Changed, each version a copy of the last.
+    var versions: ImmutableDictionary<Int, Int>[>..] = []
+    var current = map
+    for i in 0..<100000 {
+        current = current.setting(i * 15838 % 1000003, to: i)
+        if i % 1000 == 0 {
+            versions.append(current)
+        }
+    }
+    for version in versions {
+        total += version.count
+    }
+    // Taken apart.
+    for i in 0..<100000 {
+        map.remove(i * 15838)
+    }
+    for (key, value) in map {
+        total = total &+ (key ^ value)
+    }
+    print("\(total) \(map.count) \(current.count)")
+}

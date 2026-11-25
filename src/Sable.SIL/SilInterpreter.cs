@@ -2131,6 +2131,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "array_count":
                 return (long)ElementsOf(operands[0]).Count;
 
+            case "array_shares": {
+                var (one, oneStart, oneCount) = ElementsOf(operands[0]);
+                var (other, otherStart, otherCount) = ElementsOf(operands[1]);
+                return ReferenceEquals(one, other) && oneStart == otherStart && oneCount == otherCount;
+            }
+
             case "array_mismatch": {
                 if (!SilBuiltins.ComparesByBits(ArrayType.ElementOf(builtin.Operands[0].Type)!)) {
                     return -1L;

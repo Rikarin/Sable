@@ -1,0 +1,235 @@
+module CertificateProfileTests
+
+// CertificateProfile (Sable.Crypto.X509): certificates of OpenSSL's that break
+// a rule each. Run with tools/stdlib-coverage.sh Sable.Crypto.X509.
+
+import Sable.Crypto
+import Sable.Crypto.X509
+import Sable.Testing
+import Sable.Time
+
+let rootGood: String = """
+-----BEGIN CERTIFICATE-----
+MIIBTjCB9qADAgECAgISNDAKBggqhkjOPQQDAjAPMQ0wCwYDVQQDDARHb29kMB4X
+DTI2MDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowDzENMAsGA1UEAwwER29vZDBZ
+MBMGByqGSM49AgEGCCqGSM49AwEHA0IABJLUpcyd9B4twQ3MDrdFX0GP/BHm24ju
+qABzzhIVfeJbW9HBIRzsijMkzbY54u5NyDBhCrk+mdEfu71sDUTHTQ2jQjBAMA8G
+A1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgIEMB0GA1UdDgQWBBSf8h06tRGo
+Wn0pYFNc02fnErNkKjAKBggqhkjOPQQDAgNHADBEAiAwF1qZ5Nutp6oSt6qorZ1j
+FEuBxDCHUbWuW3aFHuC7GAIgb06UL169mP2nhYyu1lJ8G2VantiqohGVU7q1ftLD
+FxI=
+-----END CERTIFICATE-----
+"""
+let rootAki: String = """
+-----BEGIN CERTIFICATE-----
+MIIBhzCCAS2gAwIBAgICEjQwCgYIKoZIzj0EAwIwDjEMMAoGA1UEAwwDQWtpMB4X
+DTI2MDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowDjEMMAoGA1UEAwwDQWtpMFkw
+EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEktSlzJ30Hi3BDcwOt0VfQY/8EebbiO6o
+AHPOEhV94ltb0cEhHOyKMyTNtjni7k3IMGEKuT6Z0R+7vWwNRMdNDaN7MHkwDwYD
+VR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAgQwHQYDVR0OBBYEFJ/yHTq1Eaha
+fSlgU1zTZ+cSs2QqMDcGA1UdIwQwMC6AFJ/yHTq1EahafSlgU1zTZ+cSs2QqoRKk
+EDAOMQwwCgYDVQQDDANBa2mCAhI0MAoGCCqGSM49BAMCA0gAMEUCIC8A4y/mcEwz
+HZNNXNe4b9gY2sCKxGe/6Q+cgjK/UVtRAiEAyCjj8YioUUCXaKwu/HBwTtESXthg
+TXubkO59z0/1FZ0=
+-----END CERTIFICATE-----
+"""
+let rootSoft: String = """
+-----BEGIN CERTIFICATE-----
+MIIBTTCB86ADAgECAgISNDAKBggqhkjOPQQDAjAPMQ0wCwYDVQQDDARTb2Z0MB4X
+DTI2MDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowDzENMAsGA1UEAwwEU29mdDBZ
+MBMGByqGSM49AgEGCCqGSM49AwEHA0IABJLUpcyd9B4twQ3MDrdFX0GP/BHm24ju
+qABzzhIVfeJbW9HBIRzsijMkzbY54u5NyDBhCrk+mdEfu71sDUTHTQ2jPzA9MAwG
+A1UdEwQFMAMBAf8wDgYDVR0PAQH/BAQDAgIEMB0GA1UdDgQWBBSf8h06tRGoWn0p
+YFNc02fnErNkKjAKBggqhkjOPQQDAgNJADBGAiEAnXG19O6QoaahTPkHJG/Or59n
+PXvRxsu2wYGa2QLNv/ACIQCL/7ZVOP859SdZIzmrIHvlRuo908aSbU03BMNyIUdP
+DA==
+-----END CERTIFICATE-----
+"""
+let rootNoSki: String = """
+-----BEGIN CERTIFICATE-----
+MIIBMTCB2aADAgECAgISNDAKBggqhkjOPQQDAjAQMQ4wDAYDVQQDDAVOb1NraTAe
+Fw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMBAxDjAMBgNVBAMMBU5vU2tp
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEktSlzJ30Hi3BDcwOt0VfQY/8Eebb
+iO6oAHPOEhV94ltb0cEhHOyKMyTNtjni7k3IMGEKuT6Z0R+7vWwNRMdNDaMjMCEw
+DwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAgQwCgYIKoZIzj0EAwIDRwAw
+RAIgJE/iNdJ5VaQ5kgO7WoMHlOWnIX3DxQlK4qVNx0ZzT0cCIC4Oaq5huI3z5rRo
+9k/+8lmueTxHVrlBkRl/z39HIHRr
+-----END CERTIFICATE-----
+"""
+let leafGood: String = """
+-----BEGIN CERTIFICATE-----
+MIIBczCCARmgAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
+Fw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMAAwWTATBgcqhkjOPQIBBggq
+hkjOPQMBBwNCAATy06iM6YkyI3dlch+azlA6QHdnqtHmkVZpCFkF74K0CP262tn3
+lGw9uSRSuv9FHLVpBOFFnLKAn/ZefgCzkhfeo3QwcjAbBgNVHREBAf8EETAPgg1h
+LmV4YW1wbGUuY29tMB8GA1UdIwQYMBaAFJ/yHTq1EahafSlgU1zTZ+cSs2QqMBMG
+A1UdJQQMMAoGCCsGAQUFBwMBMB0GA1UdDgQWBBR+1ZQprjmxL6GLcV47eUT8DkZJ
+bzAKBggqhkjOPQQDAgNIADBFAiBHEmJgcnT+Ko6DD0d5i6xwwkgW7ankkq7mdfTX
+uCNGrQIhAIBcoc5gZwRh1i7Dy4NZ1hZudmQchEzryGL7CP0G4rHf
+-----END CERTIFICATE-----
+"""
+let leafAki: String = """
+-----BEGIN CERTIFICATE-----
+MIIBcTCCARigAwIBAgICEjQwCgYIKoZIzj0EAwIwDjEMMAoGA1UEAwwDQWtpMB4X
+DTI2MDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowADBZMBMGByqGSM49AgEGCCqG
+SM49AwEHA0IABPLTqIzpiTIjd2VyH5rOUDpAd2eq0eaRVmkIWQXvgrQI/bra2feU
+bD25JFK6/0UctWkE4UWcsoCf9l5+ALOSF96jdDByMBsGA1UdEQEB/wQRMA+CDWEu
+ZXhhbXBsZS5jb20wHwYDVR0jBBgwFoAUn/IdOrURqFp9KWBTXNNn5xKzZCowEwYD
+VR0lBAwwCgYIKwYBBQUHAwEwHQYDVR0OBBYEFH7VlCmuObEvoYtxXjt5RPwORklv
+MAoGCCqGSM49BAMCA0cAMEQCIENtOfjtl1ROK8Ldv6moo/FqM270aljA75kdHMhw
+87KUAiBz9PIs8DidiQoJ9GzW22RiPXigjv1dZRxetlkRpps4ww==
+-----END CERTIFICATE-----
+"""
+let leafSoft: String = """
+-----BEGIN CERTIFICATE-----
+MIIBdDCCARmgAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwEU29mdDAe
+Fw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMAAwWTATBgcqhkjOPQIBBggq
+hkjOPQMBBwNCAATy06iM6YkyI3dlch+azlA6QHdnqtHmkVZpCFkF74K0CP262tn3
+lGw9uSRSuv9FHLVpBOFFnLKAn/ZefgCzkhfeo3QwcjAbBgNVHREBAf8EETAPgg1h
+LmV4YW1wbGUuY29tMB8GA1UdIwQYMBaAFJ/yHTq1EahafSlgU1zTZ+cSs2QqMBMG
+A1UdJQQMMAoGCCsGAQUFBwMBMB0GA1UdDgQWBBR+1ZQprjmxL6GLcV47eUT8DkZJ
+bzAKBggqhkjOPQQDAgNJADBGAiEA15awCZqkufXFtZCPJXHhwXrcDhZprRlB00LN
+oiJ/We4CIQDkpMxaiqSbcGEP9lTQTuYVTGWD6Zzx49y+y9DvamjqOg==
+-----END CERTIFICATE-----
+"""
+let leafNoSki: String = """
+-----BEGIN CERTIFICATE-----
+MIIBUTCB+aADAgECAgISNDAKBggqhkjOPQQDAjAQMQ4wDAYDVQQDDAVOb1NraTAe
+Fw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMAAwWTATBgcqhkjOPQIBBggq
+hkjOPQMBBwNCAATy06iM6YkyI3dlch+azlA6QHdnqtHmkVZpCFkF74K0CP262tn3
+lGw9uSRSuv9FHLVpBOFFnLKAn/ZefgCzkhfeo1MwUTAbBgNVHREBAf8EETAPgg1h
+LmV4YW1wbGUuY29tMBMGA1UdJQQMMAoGCCsGAQUFBwMBMB0GA1UdDgQWBBR+1ZQp
+rjmxL6GLcV47eUT8DkZJbzAKBggqhkjOPQQDAgNHADBEAiA3fnZPsyF/w5b8lWES
+tsEDFkrKcHS+KD1cpgpK+PBKHQIgcOTf8NUF+mULoD794yXzJAzhmWSw/Q2c7BDf
+VW0QmBU=
+-----END CERTIFICATE-----
+"""
+let leafSkiCrit: String = """
+-----BEGIN CERTIFICATE-----
+MIIBdTCCARygAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
+Fw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMAAwWTATBgcqhkjOPQIBBggq
+hkjOPQMBBwNCAATy06iM6YkyI3dlch+azlA6QHdnqtHmkVZpCFkF74K0CP262tn3
+lGw9uSRSuv9FHLVpBOFFnLKAn/ZefgCzkhfeo3cwdTAbBgNVHREBAf8EETAPgg1h
+LmV4YW1wbGUuY29tMCAGA1UdDgEB/wQWBBR+1ZQprjmxL6GLcV47eUT8DkZJbzAT
+BgNVHSUEDDAKBggrBgEFBQcDATAfBgNVHSMEGDAWgBSf8h06tRGoWn0pYFNc02fn
+ErNkKjAKBggqhkjOPQQDAgNHADBEAiA9hLK5/IGQxkhiCArfUcTgoRWOotcZkRMl
+/fiwp1QL7QIgNRULb52YZRLNNGVeeErh8TjnQpVZy6xbGTM9LtSz2H8=
+-----END CERTIFICATE-----
+"""
+let leafSanSoft: String = """
+-----BEGIN CERTIFICATE-----
+MIIBcDCCARagAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
+Fw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMAAwWTATBgcqhkjOPQIBBggq
+hkjOPQMBBwNCAATy06iM6YkyI3dlch+azlA6QHdnqtHmkVZpCFkF74K0CP262tn3
+lGw9uSRSuv9FHLVpBOFFnLKAn/ZefgCzkhfeo3EwbzAYBgNVHREEETAPgg1hLmV4
+YW1wbGUuY29tMB8GA1UdIwQYMBaAFJ/yHTq1EahafSlgU1zTZ+cSs2QqMBMGA1Ud
+JQQMMAoGCCsGAQUFBwMBMB0GA1UdDgQWBBR+1ZQprjmxL6GLcV47eUT8DkZJbzAK
+BggqhkjOPQQDAgNIADBFAiEA59I3WbPg2TSEAhFTQigx2egGnN8VkCEplBIMWPxB
+/AQCIHI3mU72G6Ug2zr7HrK521z913Foi4re9nIXcuuzjPJR
+-----END CERTIFICATE-----
+"""
+let leafNoSan: String = """
+-----BEGIN CERTIFICATE-----
+MIIBYTCCAQigAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
+Fw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMAwxCjAIBgNVBAMMAXgwWTAT
+BgcqhkjOPQIBBggqhkjOPQMBBwNCAATy06iM6YkyI3dlch+azlA6QHdnqtHmkVZp
+CFkF74K0CP262tn3lGw9uSRSuv9FHLVpBOFFnLKAn/ZefgCzkhfeo1cwVTAfBgNV
+HSMEGDAWgBSf8h06tRGoWn0pYFNc02fnErNkKjATBgNVHSUEDDAKBggrBgEFBQcD
+ATAdBgNVHQ4EFgQUftWUKa45sS+hi3FeO3lE/A5GSW8wCgYIKoZIzj0EAwIDRwAw
+RAIgfzfk+NjaIrApNBGvDcaG02wpkFWgHmHrer1dyFwmF8YCIALFIlZ5uUr29GTG
+cH6w5GkKfEZKimJrQRUtKHFRC6Z5
+-----END CERTIFICATE-----
+"""
+let leafPc: String = """
+-----BEGIN CERTIFICATE-----
+MIIBgzCCASmgAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
+Fw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMAAwWTATBgcqhkjOPQIBBggq
+hkjOPQMBBwNCAATy06iM6YkyI3dlch+azlA6QHdnqtHmkVZpCFkF74K0CP262tn3
+lGw9uSRSuv9FHLVpBOFFnLKAn/ZefgCzkhfeo4GDMIGAMBsGA1UdEQEB/wQRMA+C
+DWEuZXhhbXBsZS5jb20wHwYDVR0jBBgwFoAUn/IdOrURqFp9KWBTXNNn5xKzZCow
+EwYDVR0lBAwwCgYIKwYBBQUHAwEwDAYDVR0kBAUwA4ABAzAdBgNVHQ4EFgQUftWU
+Ka45sS+hi3FeO3lE/A5GSW8wCgYIKoZIzj0EAwIDSAAwRQIhALlbbMrQqt60bAvD
+4KRUSsC0x1fgGYecUN3wRK3ePKmNAiAIA6JJatG1j8f+4xcGPn7yoQ4GDbQqsG9G
+gb9dpuGdZg==
+-----END CERTIFICATE-----
+"""
+let leafEkuCrit: String = """
+-----BEGIN CERTIFICATE-----
+MIIBdTCCARygAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
+Fw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMAAwWTATBgcqhkjOPQIBBggq
+hkjOPQMBBwNCAATy06iM6YkyI3dlch+azlA6QHdnqtHmkVZpCFkF74K0CP262tn3
+lGw9uSRSuv9FHLVpBOFFnLKAn/ZefgCzkhfeo3cwdTAbBgNVHREBAf8EETAPgg1h
+LmV4YW1wbGUuY29tMB8GA1UdIwQYMBaAFJ/yHTq1EahafSlgU1zTZ+cSs2QqMBYG
+A1UdJQEB/wQMMAoGCCsGAQUFBwMBMB0GA1UdDgQWBBR+1ZQprjmxL6GLcV47eUT8
+DkZJbzAKBggqhkjOPQQDAgNHADBEAiB6dE03/8LHrKJulVARVWpJWbanQ7g2XV16
+KaG/BEcKagIgIEvDUMTnUU9M7sHSndCsI/Dk8mYjE03vlyJumb6RTcI=
+-----END CERTIFICATE-----
+"""
+let leafSanCrit: String = """
+-----BEGIN CERTIFICATE-----
+MIIBizCCATGgAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
+Fw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMBgxFjAUBgNVBAMMDWEuZXhh
+bXBsZS5jb20wWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATy06iM6YkyI3dlch+a
+zlA6QHdnqtHmkVZpCFkF74K0CP262tn3lGw9uSRSuv9FHLVpBOFFnLKAn/ZefgCz
+khfeo3QwcjAbBgNVHREBAf8EETAPgg1hLmV4YW1wbGUuY29tMB8GA1UdIwQYMBaA
+FJ/yHTq1EahafSlgU1zTZ+cSs2QqMBMGA1UdJQQMMAoGCCsGAQUFBwMBMB0GA1Ud
+DgQWBBR+1ZQprjmxL6GLcV47eUT8DkZJbzAKBggqhkjOPQQDAgNIADBFAiA9pvys
+PYehzyp9eWTF7++lOIYF2bBJXU/VrN5FUUVuHwIhALj6rRDd5mB0FK7sHFe8KjMe
+jitwzEW0kY4zOnqiqtrf
+-----END CERTIFICATE-----
+"""
+
+fn isGood(_ leaf: String, _ root: String, _ profile: CertificateProfile, host: String? = "a.example.com") -> Bool {
+    var verifier = CertificateVerifier(roots: TrustStore([try! Certificate.parse(pem: root)]))
+    verifier.profile = profile
+    let time = UtcDateTime.of(year: 2026, month: 6, day: 1, hour: 0, minute: 0, second: 0)!
+    return (try? verifier.verify(try! Certificate.parse(pem: leaf), host: host, at: time)) != none
+}
+
+// The least a path is refused by.
+fn check(_ leaf: String, _ root: String, _ refused: CertificateProfile?, host: String? = "a.example.com") {
+    assert(isGood(leaf, root, .Compatible, host: host))
+    assert(isGood(leaf, root, .Rfc5280, host: host) == (refused != .Rfc5280))
+    assert(isGood(leaf, root, .WebPki, host: host) == (refused == none))
+}
+
+@test
+fn aGoodPathIsGoodByEveryProfile() {
+    check(leafGood, rootGood, none)
+}
+
+@test
+fn eachRuleIsItsProfiles() {
+    check(leafAki, rootAki, .WebPki)
+    check(leafSoft, rootSoft, .Rfc5280)
+    check(leafNoSki, rootNoSki, .Rfc5280)
+    check(leafSkiCrit, rootGood, .Rfc5280)
+    check(leafSanSoft, rootGood, .Rfc5280)
+    check(leafNoSan, rootGood, .WebPki, host: none)
+    check(leafEkuCrit, rootGood, .WebPki)
+    check(leafSanCrit, rootGood, .WebPki)
+    // Policies that are constrained are not processed, so a critical
+    // extension that does is refused; one that is not critical is wrong.
+    assert(!isGood(leafPc, rootGood, .Rfc5280))
+}
+
+@test
+fn anAuthoritysIdentifierIsRead() {
+    let root = try! Certificate.parse(pem: rootAki)
+    let identifier = root.authorityKeyIdentifier!
+    assert(identifier.keyIdentifier == root.subjectKeyIdentifier && identifier.serialNumber == root.serialNumber)
+    assert(identifier.issuer! == [.Directory(root.subject)])
+    assert(AuthorityKeyIdentifier(keyIdentifier: [1]) == AuthorityKeyIdentifier(keyIdentifier: [1]) && AuthorityKeyIdentifier(keyIdentifier: [1]) != identifier)
+    assert(AuthorityKeyIdentifier(keyIdentifier: [1]).debugDescription().contains("keyIdentifier"))
+}
+
+@test
+fn valuesAreComparedAndDescribed() {
+    let one = RevokedCertificate(serialNumber: [1], date: UtcDateTime.fromUnix(0), reason: 1)
+    assert(one == RevokedCertificate(serialNumber: [1], date: UtcDateTime.fromUnix(0), reason: 1) && one != RevokedCertificate(serialNumber: [1], date: UtcDateTime.fromUnix(0)))
+    assert(one.debugDescription().contains("reason"))
+    assert(BasicConstraints(isAuthority: true).debugDescription().contains("isAuthority"))
+    assert(NameConstraints(permitted: [], excluded: [.Dns("a")]).debugDescription().contains("excluded"))
+    assert(SignatureAlgorithm.Ed25519.debugDescription().contains("Ed25519"))
+    assert(CertificateProfile.WebPki.debugDescription().contains("WebPki"))
+}

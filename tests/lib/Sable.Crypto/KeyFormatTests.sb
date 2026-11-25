@@ -293,6 +293,35 @@ fn aKeyOfAnotherTypeIsNotTaken() {
     assert(try! Ed25519PublicKey.parse(pem: edPublic) == Ed25519PrivateKey.parse(pem: edKey).publicKey)
 }
 
+fn typed<C: EllipticCurve>(_ curve: C.Type, _ secret: String, _ others: String[:]) {
+    let signs = try! EcdsaPrivateKey<C>.parse(pem: secret)
+    let agrees = try! EcdhPrivateKey<C>.parse(pem: secret)
+    assert(signs.bytes() == agrees.bytes() && signs.pem() == agrees.pem() && signs.jwk() == agrees.jwk() && signs.pkcs8() == agrees.pkcs8())
+    assert(signs.publicKey.pem == agrees.publicKey.pem && signs.publicKey.jwk == agrees.publicKey.jwk)
+    assert(try! EcdsaPrivateKey<C>.parse(pkcs8: signs.pkcs8()) == signs && EcdsaPrivateKey<C>.parse(jwk: signs.jwk()) == signs)
+    assert(try! EcdhPrivateKey<C>.parse(pkcs8: agrees.pkcs8()) == agrees && EcdhPublicKey<C>.parse(spki: agrees.publicKey.spki) == agrees.publicKey)
+    assert(try! EcdsaPublicKey<C>.parse(pem: signs.publicKey.pem) == signs.publicKey)
+    assert(try! EcdhPublicKey<C>.parse(jwk: signs.publicKey.jwk) == agrees.publicKey)
+    for other in others {
+        assert((try? EcdsaPrivateKey<C>.parse(pem: other)) == none && (try? EcdhPrivateKey<C>.parse(pem: other)) == none)
+        let publicKey = try! PrivateKey.parse(pem: other).publicKey.pem
+        assert((try? EcdsaPublicKey<C>.parse(pem: publicKey)) == none && (try? EcdhPublicKey<C>.parse(pem: publicKey)) == none)
+    }
+    assert((try? EcdhPrivateKey<C>([1])) == none && (try? EcdsaPublicKey<C>([4, 1])) == none)
+    assert(signs.publicKey.compressed.count == C.curve.byteCount + 1 && signs.publicKey.debugDescription().hasPrefix("EcdsaPublicKey<\(C.curve)>("))
+}
+
+@test
+fn aCurvesKeyIsForBothItsUses() {
+    typed(P256.self, p256Key, [p384Key, p521Key, edKey, rsaKey])
+    typed(P384.self, p384Key, [p256Key, p521Key, xKey])
+    typed(P521.self, p521Key, [p256Key, p384Key, rsaKey])
+    let ed = try! Ed25519PrivateKey.parse(pem: edKey)
+    assert(ed.publicKey.pem.trimmed() == edPublic.trimmed() && ed.publicKey.jwk == ed.publicKey.anyKey.jwk && ed.pem().trimmed() == edKey.trimmed())
+    let x = try! X25519PrivateKey.parse(pem: xKey)
+    assert(x.publicKey.pem.trimmed() == xPublic.trimmed() && x.pem().trimmed() == xKey.trimmed() && x.jwk() == x.anyKey.jwk())
+}
+
 @test
 fn whatTheLibraryHasNotIsRefused() {
     assert((try? PublicKey.parse(pem: explicitCurve)) == none)

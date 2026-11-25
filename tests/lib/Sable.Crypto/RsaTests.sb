@@ -71,7 +71,7 @@ fn opensslsSignaturesAreMadeAndValid() {
 fn everyPaddingIsValid() {
     for hash in [HashAlgorithm.Sha1, HashAlgorithm.Sha256, HashAlgorithm.Sha384, HashAlgorithm.Sha512, HashAlgorithm.Sha3_256, HashAlgorithm.Sha3_384, HashAlgorithm.Sha3_512] {
         for padding in [RsaSignaturePadding.Pkcs1(hash), RsaSignaturePadding.Pss(hash)] {
-            assert(padding.hash == hash)
+            assert(padding.hash == hash && padding == padding && padding.debugDescription().contains("Sha"))
             let signature = key.sign(text("a message"), padding: padding)
             assert(key.publicKey.isValid(signature, for: text("a message"), padding: padding))
             assert(!key.publicKey.isValid(signature, for: text("another"), padding: padding))

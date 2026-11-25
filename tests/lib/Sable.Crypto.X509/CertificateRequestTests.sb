@@ -79,6 +79,23 @@ fn everyKeysRequestIsSigned() {
     assert((try? CertificateRequest.make(subject: DistinguishedName([]), names: [], key: keys[3], algorithm: .Ecdsa(.Sha256))) == none)
 }
 
+// A byte of it changed is another request, or none, and never traps.
+@test
+fn whatIsNoRequestIsRefused() {
+    let request = try! CertificateRequest.parse(pem: opensslRequest)
+    var i = 0
+    var signed = 0
+    while i < request.der.count {
+        var der = request.der
+        der[i] = der[i] ^ 0x21
+        if let other = try? CertificateRequest.parse(der: der) {
+            signed += other.isSigned ? 1 : 0
+        }
+        i += 1
+    }
+    assertEqual(signed, 0)
+}
+
 @test
 fn otherAlgorithmsAreWrittenAndRead() {
     let rsa = try! PrivateKey.parse(pem: rsaPem)

@@ -7,11 +7,7 @@ struct Der {
     /// What the body writes.
     static fn write(_ body: (AsnWriter) throws(AsnError) -> Void) -> U8[>..] {
         let writer = AsnWriter(rules: .Der)
-        do {
-            try body(writer)
-            return try writer.bytes()
-        } catch {
-            fatalError("DER: \(error.description())")
-        }
+        try! body(writer)
+        return try! writer.bytes()
     }
 }

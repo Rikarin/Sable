@@ -598,6 +598,7 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_env_set(ptr, ptr)
                                 declare zeroext i1 @sable_env_remove(ptr)
                                 declare ptr @sable_env_all()
+                                declare ptr @sable_env_bytes(ptr)
                                 declare ptr @sable_system_text(i64)
                                 declare i64 @sable_system_number(i64)
                                 declare i64 @sable_memory_statistic(i64)
@@ -5525,6 +5526,10 @@ public sealed partial class LlvmEmitter {
 
                 case "env_remove":
                     Line($"{Result()} = call zeroext i1 @sable_env_remove(ptr {operands[0]})");
+                    return;
+
+                case "env_bytes":
+                    Line($"{Result()} = call ptr @sable_env_bytes(ptr {module.ArrayMetadata(new ArrayType(SilType.U8))})");
                     return;
 
                 case "env_all":

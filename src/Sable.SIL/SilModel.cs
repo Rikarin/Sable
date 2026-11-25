@@ -2857,6 +2857,7 @@ public static class SilBuiltins {
         Add("env_set", SilType.Bool, SilType.String, SilType.String);
         Add("env_remove", SilType.Bool, SilType.String);
         Add("env_all", new ArrayType(SilType.String));
+        Add("env_bytes", new ArrayType(SilType.U8));
         Add("system_text", SilType.String, SilType.Int);
         Add("system_number", SilType.Int, SilType.Int);
         Add("memory_statistic", SilType.Int, SilType.Int);

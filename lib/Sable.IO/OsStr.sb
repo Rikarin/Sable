@@ -1,0 +1,120 @@
+module Sable.IO
+
+import Sable.Text
+
+/// The system's text where it lies, a part of an `OsString` or of a path's
+/// bytes, not copied: Rust's `&OsStr`.
+///
+/// ```sable
+/// let whole = OsString("--out=dir")
+/// let flag = whole.view.split(once: 0x3D)!
+/// assert(flag.0.string == "--out")
+/// assert(flag.1.toOsString() == OsString("dir"))
+/// assert(whole.view.hasPrefix("--"))
+/// ```
+public struct OsStr: Sendable {
+    /// Its bytes: the system's own, or on Windows its UTF-16 as WTF-8.
+    public let bytes: U8[:]
+
+    /// The bytes', UTF-8 or not.
+    public init(bytes: U8[:]) {
+        self.bytes = bytes
+    }
+
+    /// The text, when it is UTF-8.
+    public var string: String? => try? String.fromUtf8(bytes)
+
+    /// Whether there is nothing in it.
+    public var isEmpty: Bool => bytes.isEmpty
+
+    /// A copy of its own.
+    public fn toOsString() -> OsString {
+        return OsString(bytes: bytes)
+    }
+
+    /// Whether it starts with the text.
+    public fn hasPrefix(_ text: String) -> Bool {
+        let start = text.utf8Bytes()
+        return bytes.count >= start.count && bytes[..<start.count] == start
+    }
+
+    /// What is before the first such byte, an ASCII one, and after it; none
+    /// when there is none. How a program's `--name=value` is taken apart
+    /// with the value as the system gave it.
+    public fn split(once byte: U8) -> (OsStr, OsStr)? {
+        precondition(byte < 0x80, "only an ASCII byte stands alone in UTF-8")
+        if let at = bytes.firstIndex(of: byte) {
+            return (OsStr(bytes: bytes[..<at]), OsStr(bytes: bytes[(at + 1)...]))
+        }
+        return none
+    }
+
+    /// Windows' wide text for it, as `OsString.wide` is.
+    public var wide: U16[>..] {
+        get {
+            var units: U16[>..] = []
+            var i = 0
+            while i < bytes.count {
+                let (scalar, width) = scalar(at: i)
+                i += width
+                if scalar >= 0x10000 {
+                    units.append((0xD800 + ((scalar - 0x10000) >> 10)) as U16)
+                    units.append((0xDC00 + ((scalar - 0x10000) & 0x3FF)) as U16)
+                } else {
+                    units.append(scalar as U16)
+                }
+            }
+            return units
+        }
+    }
+
+    // The scalar, or the lone surrogate, at a byte, and how many bytes it
+    // is; U+FFFD, and one, where there is none.
+    fn scalar(at i: Int) -> (U32, Int) {
+        let first = bytes[i] as U32
+        if first < 0x80 {
+            return (first, 1)
+        }
+        let width = first >= 0xF0 ? 4 : first >= 0xE0 ? 3 : 2
+        if first < 0xC2 || first > 0xF4 || i + width > bytes.count {
+            return (0xFFFD, 1)
+        }
+        var scalar = first & (0x7F >> (width as U32))
+        var k = 1
+        while k < width {
+            let next = bytes[i + k] as U32
+            if (next & 0xC0) != 0x80 {
+                return (0xFFFD, 1)
+            }
+            scalar = (scalar << 6) | (next & 0x3F)
+            k += 1
+        }
+        let least: U32 = width == 2 ? 0x80 : width == 3 ? 0x800 : 0x10000
+        return scalar < least || scalar > 0x10FFFF ? (0xFFFD, 1) : (scalar, width)
+    }
+}
+
+extension OsStr: Hashable {
+    /// The same bytes.
+    public operator == (lhs: OsStr, rhs: OsStr) -> Bool {
+        return lhs.bytes == rhs.bytes
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(bytes)
+    }
+}
+
+extension OsStr: Formattable {
+    /// As text, each ill-formed sequence made U+FFFD.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(String.fromUtf8Lossy(bytes))
+    }
+}
+
+extension OsStr: Debug {
+    /// The text in quotes.
+    public fn debugDescription() -> String {
+        return String.fromUtf8Lossy(bytes).debugDescription()
+    }
+}

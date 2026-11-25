@@ -484,7 +484,7 @@ SableString *sable_process_current_directory(void) {
         return make_string("", 0);
     }
 
-    SableString *result = make_ctext(path);
+    SableString *result = make_cstring(path); // the system's bytes, as FilePath has them
     free(path);
     return result;
 }
@@ -515,7 +515,7 @@ SableString *sable_process_executable_path(void) {
         return make_string("", 0);
     }
 
-    SableString *result = make_ctext(path);
+    SableString *result = make_cstring(path); // the system's bytes, as FilePath has them
     free(path);
     return result;
 }

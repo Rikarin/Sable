@@ -2000,7 +2000,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return true;
             }
 
-            case "env_all": {
+            case "env_all" or "env_bytes": {
                 var all = new SortedDictionary<string, string>(StringComparer.Ordinal);
                 if (Sandbox is { } within) {
                     foreach (var name in within.EnvironmentNames) {
@@ -2020,6 +2020,11 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     } else {
                         all[name] = value;
                     }
+                }
+
+                if (builtin.Name == "env_bytes") {
+                    return Allocate(new HeapArray(new ArrayType(SilType.U8),
+                        [..all.SelectMany(static e => Encoding.UTF8.GetBytes(e.Key + "=" + e.Value + "\0")).Select(static b => (object?)(long)b)]));
                 }
 
                 return Allocate(new HeapArray(new ArrayType(SilType.String), [..all.Select(e => (object?)Allocate(new HeapString(e.Key + "=" + e.Value)))]));

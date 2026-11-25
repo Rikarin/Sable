@@ -475,7 +475,8 @@ SableString *sable_file_canonical(const SableString *path) {
         return make_string("", 0);
     }
 
-    SableString *result = make_ctext(resolved);
+    // A path's bytes are the system's, text or not: FilePath has them so.
+    SableString *result = make_cstring(resolved);
     free(resolved);
     return result;
 }
@@ -603,15 +604,7 @@ int64_t sable_system_number(int64_t which) {
     return which == 0 ? processor_count() : which == 1 ? page_size() : which == 2 ? physical_memory() : 0;
 }
 
-// The argument's bytes as the system gave them (UTF-8 of its UTF-16 on
-// Windows), whatever they are: what a String of them would replace.
-SableArray *sable_io_argument_bytes(int64_t index, const SableMetadata *type) {
-    if (index < 0 || index >= sable_io_argument_count()) {
-        trap_here("argument index out of range");
-    }
-
-    const char *text = saved_argv[index + 1];
-    size_t length = strlen(text);
+static SableArray *make_bytes(const char *text, size_t length, const SableMetadata *type) {
     if (length == 0) {
         return NULL;
     }
@@ -621,6 +614,33 @@ SableArray *sable_io_argument_bytes(int64_t index, const SableMetadata *type) {
     memcpy(bytes->elements, text, length);
     bytes->capacity = (int64_t)length;
     bytes->count = (int64_t)length;
+    return bytes;
+}
+
+// The argument's bytes as the system gave them (its UTF-16 as WTF-8 on
+// Windows), whatever they are: what a String of them would replace.
+SableArray *sable_io_argument_bytes(int64_t index, const SableMetadata *type) {
+    if (index < 0 || index >= sable_io_argument_count()) {
+        trap_here("argument index out of range");
+    }
+
+    const char *text = saved_argv[index + 1];
+    return make_bytes(text, strlen(text), type);
+}
+
+// Every variable so, as "NAME=value", a NUL after each.
+SableArray *sable_env_bytes(const SableMetadata *type) {
+    size_t count = 0;
+    char **entries = environment_entries(&count);
+    Buffer all = { 0 };
+    for (size_t i = 0; i < count; i++) {
+        buffer_add(&all, entries[i], strlen(entries[i]) + 1);
+        free(entries[i]);
+    }
+
+    free(entries);
+    SableArray *bytes = make_bytes(all.bytes, all.length, type);
+    free(all.bytes);
     return bytes;
 }
 

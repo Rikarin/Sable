@@ -12,6 +12,46 @@ public struct Environment {
         return Runtime.environment(name)
     }
 
+    /// The value of an environment variable as the system has it, text or
+    /// not: Rust's `var_os`.
+    public static fn variable(_ name: OsString) -> OsString? {
+        // Windows' names are the same whatever their case.
+        #if os(windows)
+        let wanted = OsString("\(name)".lowercased())
+        for (other, value) in Environment.osVariables() {
+            if OsString("\(other)".lowercased()) == wanted {
+                return value
+            }
+        }
+        return none
+        #else
+        return Environment.osVariables()[name]
+        #endif
+    }
+
+    /// Every environment variable as the system has it, by name.
+    ///
+    /// ```sable
+    /// let all = Environment.osVariables()
+    /// assert(all.count >= Environment.variables().count)
+    /// ```
+    public static fn osVariables() -> Dictionary<OsString, OsString> {
+        var all = Dictionary<OsString, OsString>()
+        let bytes = Runtime.environmentBytes()
+        var start = 0
+        while let end = bytes[start...].firstIndex(of: 0) {
+            let entry = OsStr(bytes: bytes[start..<(start + end)])
+            // Windows has variables whose names start with '=', one a drive.
+            if let (name, value) = entry.split(once: 0x3D) {
+                if !name.isEmpty {
+                    all[name.toOsString()] = value.toOsString()
+                }
+            }
+            start += end + 1
+        }
+        return all
+    }
+
     /// Every environment variable, by name.
     ///
     /// ```sable
@@ -56,6 +96,16 @@ public struct Environment {
         }
     }
 
+    /// The variable set, its value text or not. Unsafe as setting text is;
+    /// a NUL in either traps, as one in text does.
+    public unsafe static fn set(_ name: OsString, _ value: OsString) {
+        precondition(!name.isEmpty && !name.bytes.contains(0x3D) && !name.bytes.contains(0), "'\(name)' is not an environment variable's name")
+        precondition(!value.bytes.contains(0), "an environment variable's value with a NUL in it")
+        unsafe {
+            precondition(Runtime.setEnvironment(name.systemString, value.systemString), "the system refused to set '\(name)'")
+        }
+    }
+
     /// The variable removed, for this program and the programs it runs
     /// after; one that is not set stays so. Unsafe, as `set` is.
     public unsafe static fn remove(_ name: String) {
@@ -83,13 +133,22 @@ public struct Environment {
         return all
     }
 
-    /// The program's arguments as the system gave them, each its bytes,
-    /// UTF-8 or not: Rust's `args_os`. A file name in one need not be text.
-    public static fn argumentBytes() -> U8[>..][>..] {
-        var all: U8[>..][>..] = []
+    /// The program's arguments as the system gave them, text or not: Rust's
+    /// `args_os`. A file name in one need not be text.
+    ///
+    /// ```sable
+    /// for argument in Environment.osArguments() {
+    ///     if argument.view.hasPrefix("-") {
+    ///         continue
+    ///     }
+    ///     print(FilePath(argument).fileName ?? "")
+    /// }
+    /// ```
+    public static fn osArguments() -> OsString[>..] {
+        var all: OsString[>..] = []
         var i = 0
         while i < Runtime.argumentCount() {
-            all.append(Runtime.argumentBytes(index: i))
+            all.append(OsString(bytes: Runtime.argumentBytes(index: i)))
             i += 1
         }
         return all

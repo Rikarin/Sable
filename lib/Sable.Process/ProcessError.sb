@@ -73,4 +73,10 @@ public union ProcessError: Error {
             throw ProcessError.InvalidArgument(text: text)
         }
     }
+
+    static fn check(_ text: OsString) throws(ProcessError) {
+        if text.bytes.contains(0) {
+            throw ProcessError.InvalidArgument(text: "\(text)")
+        }
+    }
 }

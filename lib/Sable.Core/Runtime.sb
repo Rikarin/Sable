@@ -103,6 +103,11 @@ public struct Runtime {
     @builtin("env_all")
     public static fn environmentEntries() -> String[>..]
 
+    /// Every variable as the system has it, UTF-8 or not: "NAME=value" and a
+    /// NUL after each.
+    @builtin("env_bytes")
+    public static fn environmentBytes() -> U8[>..]
+
     /// A text about the system (Platform, Environment): 0 the host's name,
     /// 1 the user's, 2 the home directory, 3 the temporary one, 4 the OS
     /// version, 5 the user's locale; empty where it gives none.

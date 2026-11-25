@@ -16,6 +16,8 @@
 #include <shellapi.h>
 #include <psapi.h>
 
+#include "wide.h"
+
 #pragma comment(lib, "advapi32")
 #pragma comment(lib, "bcrypt")
 #pragma comment(lib, "dbghelp")
@@ -34,36 +36,25 @@
 
 // ---- UTF-8 and UTF-16 ----------------------------------------------------
 
-// In memory the caller frees.
+// Windows' wide text as the runtime has it, WTF-8 (wide.h): well-formed UTF-16
+// is UTF-8, and any other comes back as it was. In memory the caller frees.
 static wchar_t *to_wide(const char *bytes) {
-    int units = MultiByteToWideChar(CP_UTF8, 0, bytes, -1, NULL, 0);
-    wchar_t *wide = malloc((size_t)(units > 0 ? units : 1) * sizeof(wchar_t));
+    wchar_t *wide = malloc(wtf8_to_wide(bytes, NULL) * sizeof(wchar_t));
     if (wide == NULL) {
         sable_trap("out of memory");
     }
 
-    if (units <= 0) {
-        wide[0] = L'\0';
-    } else {
-        MultiByteToWideChar(CP_UTF8, 0, bytes, -1, wide, units);
-    }
-
+    wtf8_to_wide(bytes, (uint16_t *)wide);
     return wide;
 }
 
 static char *from_wide(const wchar_t *wide) {
-    int length = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
-    char *bytes = malloc(length > 0 ? (size_t)length : 1);
+    char *bytes = malloc(wide_to_wtf8((const uint16_t *)wide, NULL));
     if (bytes == NULL) {
         sable_trap("out of memory");
     }
 
-    if (length <= 0) {
-        bytes[0] = '\0';
-    } else {
-        WideCharToMultiByte(CP_UTF8, 0, wide, -1, bytes, length, NULL, NULL);
-    }
-
+    wide_to_wtf8((const uint16_t *)wide, bytes);
     return bytes;
 }
 

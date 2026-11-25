@@ -93,32 +93,56 @@ fn countingMatches() {
     assertEqual("banana".count, 6)
 }
 
+@test(arguments: [
+    ("a-b-c", "-", "+", "a+b+c"), ("a--b", "--", "—", "a—b"), ("aaa", "a", "aa", "aaaaaa"),
+    ("nothing", "x", "y", "nothing"), ("", "a", "b", "")
+])
+fn replacingEveryMatch(_ text: String, _ pattern: String, _ replacement: String, _ replaced: String) {
+    expect(text.replacing(pattern, with: replacement) == replaced)
+}
+
 @test
-fn replacingEveryMatch() {
+fn replacingACharacter() {
     assertEqual("a-b-c".replacing('-', with: "+"), "a+b+c")
-    assertEqual("a--b".replacing("--", with: "—"), "a—b")
-    assertEqual("aaa".replacing("a", with: "aa"), "aaaaaa")
-    assertEqual("nothing".replacing("x", with: "y"), "nothing")
+}
+
+@test
+fn replacingWhatATestAccepts() {
     assertEqual("x1y22".replacing(where: { c in c.isDigit }, with: "#"), "x#y##")
-    assertEqual("".replacing("a", with: "b"), "")
+}
+
+@test(arguments: [("a-b-c", 1, "ab-c"), ("a-b-c", 0, "a-b-c"), ("a-b-c", 5, "abc")])
+fn replacingAtMostSoMany(_ text: String, _ count: Int, _ replaced: String) {
+    expect(text.replacing("-", with: "", maxCount: count) == replaced)
+}
+
+@test(arguments: [
+    ("a,b,,c", ["a", "b", "", "c"], ["a", "b", "c"]), (",a,", ["", "a", ""], ["a"]), (",,", ["", "", ""], []), ("", [""], [])
+])
+fn splittingKeepsEmptyRunsUnlessAskedNot(_ text: String, _ all: String[>..], _ nonEmpty: String[>..]) {
+    expect(text.split(",") == all)
+    expect(text.split(',') == all)
+    expect(text.split(",", omittingEmpty: true) == nonEmpty)
 }
 
 @test
-fn replacingAtMostSoMany() {
-    assertEqual("a-b-c".replacing("-", with: "", maxCount: 1), "ab-c")
-    assertEqual("a-b-c".replacing("-", with: "", maxCount: 0), "a-b-c")
-    assertEqual("a-b-c".replacing("-", with: "", maxCount: 5), "abc")
+fn splittingAtAStringTakesAllOfIt() {
+    expect("a::b".split("::") == ["a", "b"])
 }
 
+// A text put together again is what it was, however it was split.
 @test
-fn splittingKeepsEmptyRunsUnlessAskedNot() {
-    assertEqual("a,b,,c".split(","), ["a", "b", "", "c"])
-    assertEqual(",a,".split(','), ["", "a", ""])
-    assertEqual("a,b,,c".split(",", omittingEmpty: true), ["a", "b", "c"])
-    assertEqual(",,".split(",", omittingEmpty: true).count, 0)
-    assertEqual("".split(",").count, 1)
-    assertEqual("".split(",", omittingEmpty: true).count, 0)
-    assertEqual("a::b".split("::"), ["a", "b"])
+fn aTextSplitAndJoinedIsItself() {
+    forAll(Gen.string(of: Gen.element(of: ['a', 'é', ',', '-', '😀']), count: 0...40)) { (text: String) in
+        for separator in [",", "-,", "é"] {
+            let parts = text.split(separator)
+            expect(parts.joined(separator: separator) == text)
+            expect(parts.count == text.count(of: separator) + 1)
+            expect(text.ranges(of: separator).count == parts.count - 1)
+            expect(text.replacing(separator, with: "!") == parts.joined(separator: "!"))
+            expect(parts.allSatisfy { !$0.contains(separator) })
+        }
+    }
 }
 
 @test
@@ -153,13 +177,11 @@ fn splittingOnce() {
     expect("plain".splitLastOnce('=') == none, "nor from the end")
 }
 
-@test
-fn linesDropTheirEndings() {
-    assertEqual("one\r\ntwo\n\nthree\n".lines(), ["one", "two", "", "three"])
-    assertEqual("one".lines(), ["one"])
-    assertEqual("\n".lines(), [""])
-    assertEqual("".lines().count, 0)
-    assertEqual("a\r".lines(), ["a"])
+@test(arguments: [
+    ("one\r\ntwo\n\nthree\n", ["one", "two", "", "three"]), ("one", ["one"]), ("\n", [""]), ("", []), ("a\r", ["a"])
+])
+fn linesDropTheirEndings(_ text: String, _ lines: String[>..]) {
+    expect(text.lines() == lines)
 }
 
 @test

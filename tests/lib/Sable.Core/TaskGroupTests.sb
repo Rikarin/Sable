@@ -5,7 +5,9 @@ module TaskGroupTests
 //     tools/stdlib-coverage.sh Sable.Core
 
 import Sable.Testing
+import CoreTestSupport
 
+@derive(Equatable)
 union Bad: Error {
     Odd(n: Int)
 }
@@ -118,8 +120,8 @@ fn aChildMayBeGivenAPriority() async {
 }
 
 @test
-fn aThrowingGroupGivesResultsAndErrorsInTheirTurn() async {
-    let results = try? await withThrowingTaskGroup(of: Int.self) { group in
+fn aThrowingGroupGivesResultsAndErrorsInTheirTurn() async throws {
+    let results = try await withThrowingTaskGroup(of: Int.self) { group in
         group.spawn { try await even(2) }
         var results: Int[>..] = []
         for try await n in group {
@@ -127,24 +129,21 @@ fn aThrowingGroupGivesResultsAndErrorsInTheirTurn() async {
         }
         return results
     }
-    expect((results ?? []) == [2])
+    expect(results == [2])
 
-    var caught = ""
-    do {
+    await expectThrows(Bad.Odd(n: 3)) {
         _ = try await withThrowingTaskGroup(of: Int.self) { group in
-            group.spawn { try await even(3) }
-            return try await group.next() ?? 0
-        }
-    } catch {
-        caught = error.description()
+        group.spawn { try await even(3) }
+        return try await group.next() ?? 0
     }
-    assertEqual(caught, "Bad.Odd(n: 3)")
+    }
 }
 
 @test
 fn aThrowingGroupsBodyThatThrowsCancelsTheChildrenLeft() async {
     let log = Log()
-    let thrown = try? await withThrowingTaskGroup(of: Int.self) { group in
+    await expectThrows(CancellationError.self) {
+        _ = try await withThrowingTaskGroup(of: Int.self) { group in
         group.spawn {
             let slept = (try? await Task.sleep(nanoseconds: 10_000_000_000)) != none
             // Shared, but in turn: the latch, or the group's end, orders them.
@@ -156,30 +155,26 @@ fn aThrowingGroupsBodyThatThrowsCancelsTheChildrenLeft() async {
         expect(!group.isCancelled)
         throw CancellationError()
     }
-    expect(thrown == none)
+    }
     assertEqual(log.text, "cancelled")
 }
 
 @test
 fn waitingForAllOfAThrowingGroupThrowsTheFirstError() async {
-    var caught = ""
-    do {
-        try await withThrowingTaskGroup(of: Int.self) { group in
-            group.spawn { 1 }
-            group.spawn(priority: .high) { try await even(5) }
-            expect(!group.isEmpty)
-            try await group.waitForAll()
-            return 0
-        }
-    } catch {
-        caught = error.description()
+    await expectThrows(Bad.Odd(n: 5)) {
+        _ = try await withThrowingTaskGroup(of: Int.self) { group in
+        group.spawn { 1 }
+        group.spawn(priority: .high) { try await even(5) }
+        expect(!group.isEmpty)
+        try await group.waitForAll()
+        return 0
     }
-    assertEqual(caught, "Bad.Odd(n: 5)")
+    }
 }
 
 @test
-fn aThrowingGroupCancelledCancelsItsChildren() async {
-    let cancelled = try? await withThrowingTaskGroup(of: Bool.self) { group in
+fn aThrowingGroupCancelledCancelsItsChildren() async throws {
+    let cancelled = try await withThrowingTaskGroup(of: Bool.self) { group in
         group.cancelAll()
         expect(group.isCancelled)
         group.spawn { Task.isCancelled }
@@ -187,24 +182,7 @@ fn aThrowingGroupCancelledCancelsItsChildren() async {
         expect(group.isEmpty)
         return first
     }
-    expect(cancelled ?? false)
-}
-
-/// Shut until opened: what a test waits on for another task to reach a point.
-actor Latch {
-    var isOpen = false
-    let opened = WaitList()
-
-    fn wait() async {
-        while !isOpen {
-            await opened.park()
-        }
-    }
-
-    fn open() {
-        isOpen = true
-        opened.wakeAll()
-    }
+    expect(cancelled)
 }
 
 class Log {

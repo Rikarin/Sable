@@ -113,34 +113,28 @@ fn aFieldIsWrittenInPlace() {
     assertEqual(copy.items, [1])
 }
 
+@derive(Equatable)
 union Oops: Error { Bad }
 
 @test
 fn whatTheBodyThrowsIsThrown() {
-    var caught = 0
+    var number = 0
     var numbers = [1]
-    do {
+    expectThrows(Oops.Bad) {
         try numbers.withPointer { (start: RawPtr<Int>) throws(Oops) in
-            throw Oops.Bad
-        }
-    } catch {
-        caught += 1
+        throw Oops.Bad
     }
-    do {
+    }
+    expectThrows(Oops.Bad) {
         try numbers.withMutablePointer { (start: RawPtr<Int>) throws(Oops) in
-            throw Oops.Bad
-        }
-    } catch {
-        caught += 1
+        throw Oops.Bad
     }
-    do {
-        try Memory.withPointer(to: &caught) { (place: RawPtr<Int>) throws(Oops) in
-            throw Oops.Bad
-        }
-    } catch {
-        caught += 1
     }
-    assertEqual(caught, 3)
+    expectThrows(Oops.Bad) {
+        try Memory.withPointer(to: &number) { (place: RawPtr<Int>) throws(Oops) in
+        throw Oops.Bad
+    }
+    }
 }
 
 @test

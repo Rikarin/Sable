@@ -34,16 +34,13 @@ fn sortOrdersALargeArrayInPlace() {
     expect(values.isSorted())
 }
 
-@test
-fn sortOfAnOddNumberOfPassesEndsInTheArray() {
-    // 40 elements: runs of 16, then merges of width 16 and 32, two passes;
-    // 20 elements: one pass, which leaves the result in the scratch.
-    var twenty = scrambled(20, 100)
-    twenty.sort()
-    expect(twenty.isSorted())
-    var forty = scrambled(40, 100)
-    forty.sort()
-    expect(forty.isSorted())
+// 40 elements: runs of 16, then merges of width 16 and 32, two passes;
+// 20 elements: one pass, which leaves the result in the scratch.
+@test(arguments: [20, 40])
+fn sortOfAnOddNumberOfPassesEndsInTheArray(_ count: Int) {
+    var values = scrambled(count, 100)
+    values.sort()
+    expect(values.isSorted())
 }
 
 @test
@@ -84,8 +81,8 @@ fn sortByIsStable() {
     i = 1
     while i < tagged.count {
         let sameTen = tagged[i] / 1000 == tagged[i - 1] / 1000
-        assert(tagged[i] / 1000 >= tagged[i - 1] / 1000)
-        assert(!sameTen || tagged[i] > tagged[i - 1])
+        expect(tagged[i] / 1000 >= tagged[i - 1] / 1000)
+        expect(!sameTen || tagged[i] > tagged[i - 1])
         i = i + 1
     }
 }
@@ -120,51 +117,29 @@ fn sortAThousand() {
     values.sort()
 }
 
-/// Whether the array is in ascending order.
-fn ascending(_ xs: Int[:]) -> Bool {
-    var i = 1
-    while i < xs.count {
-        if xs[i] < xs[i - 1] {
-            return false
-        }
-        i = i + 1
-    }
-    return true
+// Every size to 40, and some past it.
+fn shapeSizes() -> Int[>..] {
+    var sizes = (0..<40).toArray()
+    sizes.append(contentsOf: stride(from: 40, to: 600, by: 37))
+    return sizes
 }
 
-@test
-fn sortUnstableAgreesWithSortOnManyShapes() {
-    var size = 0
-    while size < 600 {
-        // Random, few distinct values, sorted, reversed, all equal, and
-        // an organ pipe: what defeats a quicksort's pivot.
-        var shapes: Int[>..][>..] = [scrambled(size, 1000000), scrambled(size, 3)]
-        var up: Int[>..] = []
-        var down: Int[>..] = []
-        var same: Int[>..] = []
-        var pipe: Int[>..] = []
-        var i = 0
-        while i < size {
-            up.append(i)
-            down.append(size - i)
-            same.append(7)
-            pipe.append(i < size / 2 ? i : size - i)
-            i = i + 1
-        }
-        shapes.append(up)
-        shapes.append(down)
-        shapes.append(same)
-        shapes.append(pipe)
-        for shape in shapes {
-            var unstable = shape
-            unstable.sortUnstable()
-            assert(unstable == shape.sorted(), "sortUnstable of \(size) elements")
-            var descending = shape
-            descending.sortUnstable(by: (a: Int, b: Int) => a > b)
-            descending.reverse()
-            assert(ascending(descending), "sortUnstable(by:) of \(size) elements")
-        }
-        size = size + (size < 40 ? 1 : 37)
+@test(arguments: shapeSizes())
+fn sortUnstableAgreesWithSortOnManyShapes(_ size: Int) {
+    // Random, few distinct values, sorted, reversed, all equal, and
+    // an organ pipe: what defeats a quicksort's pivot.
+    let up = (0..<size).toArray()
+    let shapes: Int[>..][>..] = [
+        scrambled(size, 1000000), scrambled(size, 3), up, up.map { size - $0 },
+        Int[>..](repeating: 7, count: size), up.map { $0 < size / 2 ? $0 : size - $0 }
+    ]
+    for shape in shapes {
+        var unstable = shape
+        unstable.sortUnstable()
+        expect(unstable == shape.sorted())
+        var descending = shape
+        descending.sortUnstable(by: (a: Int, b: Int) => a > b)
+        expect(descending == shape.sorted(by: { $0 > $1 }))
     }
 }
 
@@ -213,6 +188,22 @@ fn sortOfARangeOfAFixedArrayOrdersThoseElements() {
     var values: Int[] = [4, 3, 2, 1]
     values[..<^1].sort()
     expect(values == [2, 3, 4, 1])
+}
+
+// Equal keys keep the order they came in, whatever the array and its length.
+@test
+fn aSortByAKeyOfAnyArrayIsStable() {
+    forAll(Gen.number(in: 0...9).array(count: 0...200)) { (keys: Int[>..]) in
+        var tagged: (Int, Int)[>..] = []
+        for (place, key) in keys.enumerated() {
+            tagged.append((key, place))
+        }
+        tagged.sort(by: (a: (Int, Int), b: (Int, Int)) => a.0 < b.0)
+        for pair in tagged.windows(of: 2) {
+            expect(pair[0].0 < pair[1].0 || pair[0].0 == pair[1].0 && pair[0].1 < pair[1].1)
+        }
+        expect(tagged.count == keys.count)
+    }
 }
 
 // Any array sorted is in order, and what it was: each value as often.

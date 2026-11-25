@@ -46,9 +46,11 @@ fn anOrderingAnswersQuestionsAndHasASign() {
     expect(Ordering.Greater.isGreater && !Ordering.Greater.isLessOrEqual)
     assertEqual(Ordering.Less.sign, -1)
     assertEqual(Ordering.Greater.sign, 1)
-    assertEqual(Ordering.of(sign: -42), .Less)
-    assertEqual(Ordering.of(sign: 0), .Equal)
-    assertEqual(Ordering.of(sign: 7), .Greater)
+}
+
+@test(arguments: [(-42, .Less), (0, .Equal), (7, .Greater)])
+fn anOrderingIsMadeOfASign(_ sign: Int, _ ordering: Ordering) {
+    expect(Ordering.of(sign: sign) == ordering)
 }
 
 @test

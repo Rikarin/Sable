@@ -488,3 +488,33 @@ fn aFloatClampsTowardZeroAndToTheBounds() {
     assertEqual(U128.clamping(F64.greatestFiniteMagnitude), U128.max)
     assertEqual(I16.clamping(-F16.infinity), I16.min)
 }
+
+// The arithmetic that does not trap, on numbers that are exact in an Int.
+@test
+fn everyArithmeticAgreesWithAWiderTypes() {
+    forAll { (a: I16, b: I16) in
+        for (exact, checked, wrapped, saturated, overflowing) in [
+            (Int(a) + Int(b), a.checkedAdd(b), a &+ b, a.saturatingAdd(b), a.overflowingAdd(b)),
+            (Int(a) - Int(b), a.checkedSub(b), a &- b, a.saturatingSub(b), a.overflowingSub(b)),
+            (Int(a) * Int(b), a.checkedMul(b), a &* b, a.saturatingMul(b), a.overflowingMul(b)),
+        ] {
+            expect(checked == I16.exactly(exact))
+            expect(wrapped == I16.truncating(exact))
+            expect(saturated == I16.clamping(exact))
+            expect(overflowing.0 == wrapped && overflowing.1 == (checked == none))
+        }
+        expect(Int(a.absDiff(b)) == (Int(a) - Int(b)).abs())
+        expect(Int(a.midpoint(b)) == (Int(a) + Int(b)) / 2)
+    }
+}
+
+@test
+fn swappingAndReversingTwiceGiveTheNumberBack() {
+    forAll { (x: U32, y: I128, by: U8) in
+        expect(x.byteSwapped.byteSwapped == x && y.byteSwapped.byteSwapped == y)
+        expect(x.bitReversed.bitReversed == x && y.bitReversed.bitReversed == y)
+        expect(x.rotatedLeft(by: Int(by)).rotatedRight(by: Int(by)) == x)
+        expect(U32.fromBigEndianBytes(x.bigEndianBytes()) == x)
+        expect(I128.fromLittleEndianBytes(y.littleEndianBytes()) == y)
+    }
+}

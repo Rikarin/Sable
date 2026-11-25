@@ -1,0 +1,66 @@
+module CoreTestSupport
+
+// What several of this module's test files use.
+
+/// The spec a text is, which is one.
+public fn spec(_ text: String) -> FormatSpec {
+    return try! FormatSpec.parse(text)
+}
+
+/// Shut until opened: what a test waits on for another task to reach a point.
+public actor Latch {
+    var isOpen = false
+    let opened = WaitList()
+
+    public init() { }
+
+    public fn wait() async {
+        while !isOpen {
+            await opened.park()
+        }
+    }
+
+    public fn open() {
+        isOpen = true
+        opened.wakeAll()
+    }
+}
+
+/// Counts its own going.
+public class Counted {
+    let gone: Atomic<Int>
+
+    public init(_ gone: Atomic<Int>) {
+        self.gone = gone
+    }
+
+    deinit {
+        gone.add(1)
+    }
+}
+
+/// Gives the values it was made with, in turn, then zeros.
+public struct Scripted: RandomNumberGenerator {
+    public var values: U64[>..]
+    /// How many have been drawn.
+    public var drawn: Int
+
+    public init(_ values: U64[>..]) {
+        self.values = values
+        self.drawn = 0
+    }
+
+    public mutating fn next() -> U64 {
+        drawn += 1
+        return drawn <= values.count ? values[drawn - 1] : 0
+    }
+}
+
+/// The generator's next so many draws.
+public fn draws<G: RandomNumberGenerator>(_ count: Int, from generator: inout G) -> U64[>..] {
+    var values: U64[>..] = []
+    for _ in 0..<count {
+        values.append(generator.next())
+    }
+    return values
+}

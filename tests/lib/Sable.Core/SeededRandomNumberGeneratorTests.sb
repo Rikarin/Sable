@@ -4,20 +4,14 @@ module SeededRandomNumberGeneratorTests
 // SplitMix64, pinned to the reference algorithm's first outputs.
 
 import Sable.Testing
+import CoreTestSupport
 
 @test
 fn aSeedGivesTheReferenceSequence() {
     var zero = SeededRandomNumberGenerator(seed: 0)
-    let a: U64 = 11091344671253066420
-    let b: U64 = 13793997310169335082
-    expect(zero.next() == a)
-    expect(zero.next() == b)
-    expect(zero.next() == 1900383378846508768)
-    expect(zero.next() == 7684712102626143532)
+    expect(draws(4, from: &zero) == [11091344671253066420, 13793997310169335082, 1900383378846508768, 7684712102626143532])
     var year = SeededRandomNumberGenerator(seed: 2024)
-    let c: U64 = 14427268137155694693
-    expect(year.next() == 1029197146548041518)
-    expect(year.next() == c)
+    expect(draws(2, from: &year) == [1029197146548041518, 14427268137155694693])
 }
 
 @test
@@ -25,17 +19,9 @@ fn theSameSeedRepeatsAndAnotherDiffers() {
     var a = SeededRandomNumberGenerator(seed: 77)
     var b = SeededRandomNumberGenerator(seed: 77)
     var c = SeededRandomNumberGenerator(seed: 78)
-    var differed = false
-    var i = 0
-    while i < 100 {
-        let x = a.next()
-        assertEqual(x, b.next())
-        if x != c.next() {
-            differed = true
-        }
-        i += 1
-    }
-    expect(differed)
+    let drawn = draws(100, from: &a)
+    expect(draws(100, from: &b) == drawn)
+    expect(draws(100, from: &c) != drawn)
 }
 
 @test
@@ -49,13 +35,10 @@ fn aCopyGoesOnFromWhereItWasCopied() {
 @test
 fn aStateGivesTheReferenceSequence() {
     var generator = SeededRandomNumberGenerator(state: [1, 2, 3, 4])
-    let expected: U64[>..] = [
+    expect(draws(10, from: &generator) == [
         11520, 0, 1509978240, 1215971899390074240, 1216172134540287360, 607988272756665600, 16172922978634559625, 8476171486693032832,
         10595114339597558777, 2904607092377533576
-    ]
-    for value in expected {
-        assertEqual(generator.next(), value)
-    }
+    ])
 }
 
 // The expected outputs are of the step's matrix raised to the power.
@@ -63,18 +46,14 @@ fn aStateGivesTheReferenceSequence() {
 fn aJumpIsTwoToThe128Draws() {
     var generator = SeededRandomNumberGenerator(state: [1, 2, 3, 4])
     generator.jump()
-    expect(generator.next() == 13534147089533256664)
-    expect(generator.next() == 7126240192422241655)
-    expect(generator.next() == 3805973808039778091)
+    expect(draws(3, from: &generator) == [13534147089533256664, 7126240192422241655, 3805973808039778091])
 }
 
 @test
 fn aLongJumpIsTwoToThe192Draws() {
     var generator = SeededRandomNumberGenerator(state: [1, 2, 3, 4])
     generator.longJump()
-    expect(generator.next() == 5942309088398569549)
-    expect(generator.next() == 15625447729937358436)
-    expect(generator.next() == 6925613901769781251)
+    expect(draws(3, from: &generator) == [5942309088398569549, 15625447729937358436, 6925613901769781251])
 }
 
 @test(traps: "the state must not be all zeros")

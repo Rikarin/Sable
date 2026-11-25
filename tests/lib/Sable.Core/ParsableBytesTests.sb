@@ -10,24 +10,6 @@ fn bytes(_ text: String) -> U8[>..] {
     return text.utf8Bytes()
 }
 
-fn intError(_ text: String, radix: Int, styles: NumberStyles = .Sign) -> ParseError? {
-    do {
-        _ = try Int.parse(utf8: bytes(text), radix: radix, styles: styles)
-        return none
-    } catch {
-        return error
-    }
-}
-
-fn floatError(_ text: String, styles: NumberStyles) -> ParseError? {
-    do {
-        _ = try F64.parse(text, styles: styles)
-        return none
-    } catch {
-        return error
-    }
-}
-
 @test
 fn integersAreReadFromTheirBytes() {
     assertEqual(try! Int.parse(utf8: bytes("-42"), radix: 10), -42)
@@ -39,25 +21,18 @@ fn integersAreReadFromTheirBytes() {
     assertEqual(try! Int.parse(utf8: bytes("zz"), radix: 36), 1295)
 }
 
-@test
-fn aByteThatIsNotADigitIsReportedWhereItIs() {
-    assertEqual(intError("", radix: 10), .Empty)
-    assertEqual(intError("12a", radix: 10), .InvalidDigit(at: 2))
-    assertEqual(intError("é1", radix: 10), .InvalidDigit(at: 0))
-    assertEqual(intError("1_", radix: 10, styles: .Any), .InvalidDigit(at: 1))
-    assertEqual(intError("+5", radix: 10, styles: .None), .InvalidDigit(at: 0))
-    assertEqual(intError("9223372036854775808", radix: 10), .Overflow)
-    assertEqual(intError("-9223372036854775809", radix: 10), .Underflow)
+@test(arguments: [
+    ("", .Sign, .Empty), ("12a", .Sign, .InvalidDigit(at: 2)), ("é1", .Sign, .InvalidDigit(at: 0)),
+    ("1_", .Any, .InvalidDigit(at: 1)), ("+5", .None, .InvalidDigit(at: 0)),
+    ("9223372036854775808", .Sign, .Overflow), ("-9223372036854775809", .Sign, .Underflow)
+])
+fn aByteThatIsNotADigitIsReportedWhereItIs(_ text: String, _ styles: NumberStyles, _ error: ParseError) {
+    expectThrows(error) { _ = try Int.parse(utf8: bytes(text), radix: 10, styles: styles) }
 }
 
 @test
 fn anUnsignedIntegerRefusesANegative() {
-    do {
-        _ = try U8.parse(utf8: bytes("-1"), radix: 10)
-        fail("parsed -1 as a U8")
-    } catch {
-        assertEqual(error, .Underflow)
-    }
+    expectThrows(ParseError.Underflow) { _ = try U8.parse(utf8: bytes("-1"), radix: 10) }
     assertEqual(try! U8.parse(utf8: bytes("-0"), radix: 10), 0)
 }
 
@@ -68,12 +43,7 @@ fn anyParsableIsReadFromItsBytes() {
     assertEqual(try! Int.parse(utf8: bytes("7")), 7)
     assertEqual(try! String.parse(utf8: bytes("héllo")), "héllo")
     let invalid: U8[>..] = [0xFF, 0x31]
-    do {
-        _ = try Int.parse(utf8: invalid)
-        fail("parsed bytes that are not UTF-8")
-    } catch {
-        assertEqual(error, .Invalid(at: 0))
-    }
+    expectThrows(ParseError.Invalid(at: 0)) { _ = try Int.parse(utf8: invalid) }
 }
 
 @test
@@ -82,9 +52,25 @@ fn aHexadecimalFloatIsParsed() {
     assertEqual(try! F64.parse("0x1p-1074", styles: .HexFloat), 4.9e-324)
     assertEqual(try! F32.parse(" -0x.8 ", styles: [.HexFloat, .Whitespace, .Sign]), -0.5)
     assertEqual(try! F16.parse("0x1p4", styles: .HexFloat), 16.0)
-    assertEqual(floatError("1.5", styles: .HexFloat), .Invalid(at: 0))
-    assertEqual(floatError("-0x1p0", styles: .HexFloat), .InvalidDigit(at: 0))
-    assertEqual(floatError(" ", styles: [.HexFloat, .Whitespace]), .Empty)
     let value = 0.1
     assertEqual(try! F64.parse(value.toHexString(), styles: [.HexFloat, .Sign]), value)
+}
+
+@test(arguments: [
+    ("1.5", .HexFloat, .Invalid(at: 0)), ("-0x1p0", .HexFloat, .InvalidDigit(at: 0)), (" ", [.HexFloat, .Whitespace], .Empty)
+])
+fn whatIsNoHexadecimalFloatIsRefused(_ text: String, _ styles: NumberStyles, _ error: ParseError) {
+    expectThrows(error) { _ = try F64.parse(text, styles: styles) }
+}
+
+@test
+fn bytesAreTheNumberTheirTextIs() {
+    forAll { (n: I64, f: F64) in
+        expect(try I64.parse(utf8: bytes("\(n)"), radix: 10) == n)
+        expect(try I64.parse(utf8: bytes("\(n:x)"), radix: 16) == n)
+        if f.isFinite {
+            expect((try F64.parse(utf8: bytes("\(f)"))).bits == f.bits)
+            expect((try F64.parse(f.toHexString(), styles: [.HexFloat, .Sign])).bits == f.bits)
+        }
+    }
 }

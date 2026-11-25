@@ -7,10 +7,6 @@ module GeneratorTests
 
 import Sable.Testing
 
-fn text(_ values: Int[:]) -> String {
-    return values.map { "\($0)" }.joined(separator: ",")
-}
-
 fn evens(upTo n: Int) -> some Sequence<Int> {
     var i = 0
     while i <= n {
@@ -46,8 +42,8 @@ fn words(_ text: String) -> some Sequence<String> {
 
 @test
 fn mapAndFilterGoThroughAGenerator() {
-    assertEqualText(text(evens(upTo: 8).map { $0 * 10 }), "0,20,40,60,80")
-    assertEqualText(text(evens(upTo: 8).filter { $0 % 4 == 0 }), "0,4,8")
+    expect(evens(upTo: 8).map { $0 * 10 } == [0, 20, 40, 60, 80])
+    expect(evens(upTo: 8).filter { $0 % 4 == 0 } == [0, 4, 8])
 }
 
 @test
@@ -60,7 +56,7 @@ fn reduceAndCountGoThroughAGenerator() {
 
 @test
 fn anEndlessGeneratorIsAskedOnlyForWhatIsTaken() {
-    assertEqualText(text(naturals().prefix(4)), "1,2,3,4")
+    expect(naturals().prefix(4) == [1, 2, 3, 4])
     assertEqual(naturals().first(where: { $0 * $0 > 50 }) ?? -1, 8)
 }
 
@@ -73,8 +69,8 @@ fn lazyViewsOverAGeneratorStayLazy() {
 @test
 fn eachIterationOfAGeneratorStartsAfresh() {
     let s = evens(upTo: 4)
-    assertEqualText(text(s.toArray()), "0,2,4")
-    assertEqualText(text(s.toArray()), "0,2,4")
+    expect(s.toArray() == [0, 2, 4])
+    expect(s.toArray() == [0, 2, 4])
 }
 
 @test
@@ -110,7 +106,7 @@ extension Sequence {
 
 @test
 fn aGeneratorInAProtocolsExtensionServesEveryConformer() throws {
-    assertEqualText(text([1, 2, 3, 4].pairedUp { $0 + $1 }.toArray()), "3,7")
-    assertEqualText(text(evens(upTo: 6).pairedUp { $0 * $1 }.toArray()), "0,24")
+    expect([1, 2, 3, 4].pairedUp { $0 + $1 }.toArray() == [3, 7])
+    expect(evens(upTo: 6).pairedUp { $0 * $1 }.toArray() == [0, 24])
     assertEqualText(words("a b c d").pairedUp { $0 + $1 }.joined(separator: " "), "ab cd")
 }

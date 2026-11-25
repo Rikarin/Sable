@@ -4,6 +4,7 @@ module RandomNumberGeneratorTests
 // and what every generator gets from the protocol.
 
 import Sable.Testing
+import CoreTestSupport
 import RandomStatistics
 
 // Counts up: predictable, so what is built on it can be checked exactly.
@@ -42,7 +43,7 @@ fn nextBelowABoundStaysBelowIt() {
     var i = 0
     while i < 500 {
         let n = generator.next(upperBound: 7)
-        assert(n >= 0 && n < 7)
+        assert(n >= 0 && n < 7, "\(n)")
         seen[n] = true
         i += 1
     }
@@ -72,7 +73,7 @@ fn aBoundNearlyAll64BitsThrowsAwayHalf() {
     var counts = zeroCounts(64)
     for _ in 0..<20000 {
         let n = generator.next(upperBound: bound)
-        assert(n < bound)
+        assert(n < bound, "\(n)")
         counts[Int(n >> 57) & 63] += 1
     }
     assertEven(counts)
@@ -97,40 +98,26 @@ fn aSmallBoundOfAWideTypeTakesOneDraw() {
 @test
 fn a128BitDrawInTheBiasedZoneIsDrawnAgain() {
     // Zero, zero, then all ones: the bound does not divide 2^128.
-    var generator = ScriptedBits { values: [0, 0, U64.max, U64.max], drawn: 0 }
+    var generator = Scripted([0, 0, U64.max, U64.max])
     let bound = (U128(1) << 127) + 1
     expect(generator.next(upperBound: bound) == bound - 1)
     assertEqual(generator.drawn, 4)
 }
 
-// Gives its values in turn.
-struct ScriptedBits: RandomNumberGenerator {
-    var values: U64[>..]
-    var drawn: Int
-
-    mutating fn next() -> U64 {
-        drawn += 1
-        return values[drawn - 1]
-    }
-}
-
-@test
-fn everyValueBelowABoundIsAsLikely() {
-    // 3, 5, 6 and 7 bits' bounds, whose draws cannot be divided evenly.
+// 3, 5, 6 and 7 bits' bounds, whose draws cannot be divided evenly.
+@test(arguments: [3, 7, 10, 52, 100])
+fn everyValueBelowABoundIsAsLikely(_ bound: Int) {
     var generator = SeededRandomNumberGenerator(seed: 6)
-    let bounds: Int[>..] = [3, 7, 10, 52, 100]
-    for bound in bounds {
-        var counts = zeroCounts(bound)
-        for _ in 0..<(1000 * bound) {
-            counts[generator.next(upperBound: bound)] += 1
-        }
-        assertEven(counts)
+    var counts = zeroCounts(bound)
+    for _ in 0..<(1000 * bound) {
+        counts[generator.next(upperBound: bound)] += 1
     }
+    assertEven(counts)
 }
 
 @test
 fn fillTakesEightBytesADrawLowestFirst() {
-    var scripted = ScriptedBits { values: [0x0807060504030201, 0x1817161514131211], drawn: 0 }
+    var scripted = Scripted([0x0807060504030201, 0x1817161514131211])
     var bytes: U8[>..] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     scripted.fill(bytes: &bytes)
     expect(bytes == [1, 2, 3, 4, 5, 6, 7, 8, 0x11, 0x12, 0x13])
@@ -139,7 +126,7 @@ fn fillTakesEightBytesADrawLowestFirst() {
 
 @test
 fn fillOfASliceChangesThatRangeAlone() {
-    var scripted = ScriptedBits { values: [0x0807060504030201], drawn: 0 }
+    var scripted = Scripted([0x0807060504030201])
     var bytes: U8[6] = [9, 9, 9, 9, 9, 9]
     scripted.fill(bytes: &bytes[2..<4])
     expect(bytes == [9, 9, 1, 2, 9, 9])
@@ -147,7 +134,7 @@ fn fillOfASliceChangesThatRangeAlone() {
 
 @test
 fn fillOfNothingDrawsNothing() {
-    var scripted = ScriptedBits { values: [], drawn: 0 }
+    var scripted = Scripted([])
     var nothing: U8[>..] = []
     scripted.fill(bytes: &nothing)
     assertEqual(scripted.drawn, 0)

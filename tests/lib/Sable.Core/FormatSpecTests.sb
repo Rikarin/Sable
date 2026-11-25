@@ -6,19 +6,7 @@ module FormatSpecTests
 //     tools/stdlib-coverage.sh Sable.Core
 
 import Sable.Testing
-
-fn spec(_ text: String) -> FormatSpec {
-    return try! FormatSpec.parse(text)
-}
-
-fn parseError(_ text: String) -> ParseError? {
-    do {
-        _ = try FormatSpec.parse(text)
-        return none
-    } catch {
-        return error
-    }
-}
+import CoreTestSupport
 
 @test
 fn anEmptySpecSaysNothing() {
@@ -59,11 +47,9 @@ fn aFillIsAnyScalarBeforeAnAlignment() {
     assertEqual(spec("<<2").fill, '<')
 }
 
-@test
-fn eachSignIsRead() {
-    expect(spec("+").sign == .Always)
-    expect(spec("-").sign == .Negative)
-    expect(spec(" ").sign == .Space)
+@test(arguments: [("+", .Always), ("-", .Negative), (" ", .Space)])
+fn eachSignIsRead(_ text: String, _ sign: FormatSign) {
+    expect(spec(text).sign == sign)
 }
 
 @test
@@ -72,20 +58,12 @@ fn aCommaSeparatorIsRead() {
     expect(spec("").separator == none)
 }
 
-@test
-fn eachKindLetterIsRead() {
-    expect(spec("d").kind == .Decimal)
-    expect(spec("x").kind == .Hex)
-    expect(spec("X").kind == .UpperHex)
-    expect(spec("o").kind == .Octal)
-    expect(spec("b").kind == .Binary)
-    expect(spec("e").kind == .Exponent)
-    expect(spec("E").kind == .UpperExponent)
-    expect(spec("f").kind == .Fixed)
-    expect(spec("g").kind == .General)
-    expect(spec("G").kind == .UpperGeneral)
-    expect(spec("%").kind == .Percent)
-    expect(spec("?").kind == .Debug)
+@test(arguments: [
+    ("d", .Decimal), ("x", .Hex), ("X", .UpperHex), ("o", .Octal), ("b", .Binary), ("e", .Exponent),
+    ("E", .UpperExponent), ("f", .Fixed), ("g", .General), ("G", .UpperGeneral), ("%", .Percent), ("?", .Debug)
+])
+fn eachKindLetterIsRead(_ text: String, _ kind: FormatKind) {
+    expect(spec(text).kind == kind)
 }
 
 @test
@@ -94,22 +72,19 @@ fn aPrecisionOfZeroIsKept() {
     assertEqual(spec(".0").debugDescription(), "FormatSpec(precision: 0)")
 }
 
-@test
-fn aPointWithoutDigitsIsRefused() {
-    assertEqual(parseError(".x") ?? .Empty, .InvalidDigit(at: 1))
-    assertEqual(parseError("8.") ?? .Empty, .InvalidDigit(at: 2))
+@test(arguments: [(".x", .InvalidDigit(at: 1)), ("8.", .InvalidDigit(at: 2))])
+fn aPointWithoutDigitsIsRefused(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try FormatSpec.parse(text) }
 }
 
-@test
-fn aScalarOutOfPlaceIsRefusedWhereItIs() {
-    assertEqual(parseError("08q") ?? .Empty, .Invalid(at: 2))
-    assertEqual(parseError("xx") ?? .Empty, .Invalid(at: 1))
-    assertEqual(parseError(".2+") ?? .Empty, .Invalid(at: 2))
+@test(arguments: [("08q", .Invalid(at: 2)), ("xx", .Invalid(at: 1)), (".2+", .Invalid(at: 2))])
+fn aScalarOutOfPlaceIsRefusedWhereItIs(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try FormatSpec.parse(text) }
 }
 
 @test
 fn aWidthPastAnIntOverflows() {
-    assertEqual(parseError("99999999999999999999") ?? .Empty, .Overflow)
+    expectThrows(ParseError.Overflow) { _ = try FormatSpec.parse("99999999999999999999") }
     assertEqual(spec("9223372036854775807").width, 9223372036854775807)
 }
 

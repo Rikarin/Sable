@@ -16,23 +16,25 @@ fn slowly(_ text: String, _ from: Int, _ to: Int, _ ranges: String) -> Int {
     return -1
 }
 
-@test
-fn aByteOfAnyRangeIsFoundWhereverItIs() {
-    let filler = "éxé¿~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-    for ranges in ["", "aa", "ac", "AZ09", "aabbAZ", "aabbccdd", "aabbccddee", "AEae__\u{0}\u{1F}"] {
-        for at in 0..<40 {
-            for found in ["a", "b", "C", "\u{1}", "5", "_", "d", "e"] {
-                var text = ""
-                for i in 0..<40 {
-                    text += i == at ? found : String.fromChar(filler.toArray()[i])
-                }
-                for from in [0, 1, 9] {
-                    let end = text.utf8Count
-                    assertEqual(Runtime.findAnyUtf8(text, from, end, ranges), slowly(text, from, end, ranges))
-                    assertEqual(Runtime.findAnyUtf8(text, from, end - 8, ranges), slowly(text, from, end - 8, ranges))
-                }
+@test(arguments: ["", "aa", "ac", "AZ09", "aabbAZ", "aabbccdd", "aabbccddee", "AEae__\u{0}\u{1F}"])
+fn aByteOfAnyRangeIsFoundWhereverItIs(_ ranges: String) {
+    let filler = "éxé¿~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~".toArray()
+    for at in 0..<40 {
+        for found in ["a", "b", "C", "\u{1}", "5", "_", "d", "e"] {
+            var text = ""
+            for i in 0..<40 {
+                text += i == at ? found : String.fromChar(filler[i])
+            }
+            for from in [0, 1, 9] {
+                let end = text.utf8Count
+                assertEqual(Runtime.findAnyUtf8(text, from, end, ranges), slowly(text, from, end, ranges))
+                assertEqual(Runtime.findAnyUtf8(text, from, end - 8, ranges), slowly(text, from, end - 8, ranges))
             }
         }
     }
-    assertEqual(Runtime.findAnyUtf8("a", 1, 1, "aa"), -1)
+}
+
+@test
+fn noByteIsFoundInNoText() {
+    expect(Runtime.findAnyUtf8("a", 1, 1, "aa") == -1)
 }

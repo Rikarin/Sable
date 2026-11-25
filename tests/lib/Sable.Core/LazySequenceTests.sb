@@ -6,14 +6,10 @@ module LazySequenceTests
 
 import Sable.Testing
 
-fn text(_ values: Int[:]) -> String {
-    return values.map { "\($0)" }.joined(separator: ",")
-}
-
 @test
 fn aLazyViewGivesTheSameElements() {
     let values: Int[>..] = [4, 5, 6]
-    assertEqualText(text(values.lazy.toArray()), "4,5,6")
+    expect(values.lazy.toArray() == [4, 5, 6])
 }
 
 @test
@@ -30,7 +26,7 @@ fn lazyMapTransformsAsItGoes() {
 
 @test
 fn lazyFilterTestsAsItGoes() {
-    assertEqualText(text([1, 2, 3, 4, 5, 6].lazy.filter { $0 % 2 == 0 }.toArray()), "2,4,6")
+    expect([1, 2, 3, 4, 5, 6].lazy.filter { $0 % 2 == 0 }.toArray() == [2, 4, 6])
     let nothing: Int[>..] = [1, 3].lazy.filter { $0 > 5 }.toArray()
     assertEqual(nothing.count, 0)
 }
@@ -44,23 +40,23 @@ fn aChainOfViewsGoesThroughTheSequenceOnce() {
         .map { $0 * 10 }
         .prefix(while: { $0 < 50 })
         .toArray()
-    assertEqualText(text(result), "10,30")
+    expect(result == [10, 30])
 
     // It read up to the five, whose fifty ended it, and no further.
-    assertEqualText(text(read), "1,2,3,4,5")
+    expect(read == [1, 2, 3, 4, 5])
 }
 
 @test
 fn lazyCompactMapLeavesOutNone() {
     let kept = [1, 2, 3, 4].lazy.compactMap { (value: Int) -> Int? in value % 2 == 0 ? value * 100 : none }
-    assertEqualText(text(kept.toArray()), "200,400")
+    expect(kept.toArray() == [200, 400])
 }
 
 @test
 fn lazyFlatMapJoinsTheInnerSequences() {
-    assertEqualText(text([1, 2, 3].lazy.flatMap { stride(from: 0, to: $0, by: 1) }.toArray()), "0,0,1,0,1,2")
+    expect([1, 2, 3].lazy.flatMap { stride(from: 0, to: $0, by: 1) }.toArray() == [0, 0, 1, 0, 1, 2])
     let values: Int[>..] = [0, 2, 0]
-    assertEqualText(text(values.lazy.flatMap { stride(from: 5, to: 5 + $0, by: 1) }.toArray()), "5,6")
+    expect(values.lazy.flatMap { stride(from: 5, to: 5 + $0, by: 1) }.toArray() == [5, 6])
 }
 
 @test
@@ -74,29 +70,29 @@ fn lazyPrefixWhileStopsAtTheFirstFailure() {
 
 @test
 fn lazyDropWhileKeepsFromTheFirstFailure() {
-    assertEqualText(text([1, 2, 9, 3, 1].lazy.drop(while: { $0 < 5 }).toArray()), "9,3,1")
+    expect([1, 2, 9, 3, 1].lazy.drop(while: { $0 < 5 }).toArray() == [9, 3, 1])
     assertEqual([1, 2].lazy.drop(while: { $0 < 5 }).toArray().count, 0)
 }
 
 @test
 fn lazyScanGivesEachRunningResult() {
-    assertEqualText(text([1, 2, 3, 4].lazy.scan(0) { $0 + $1 }.toArray()), "1,3,6,10")
-    assertEqualText(text([2, 3].lazy.scan(1) { $0 * $1 }.toArray()), "2,6")
+    expect([1, 2, 3, 4].lazy.scan(0) { $0 + $1 }.toArray() == [1, 3, 6, 10])
+    expect([2, 3].lazy.scan(1) { $0 * $1 }.toArray() == [2, 6])
 }
 
 @test
 fn lazyStridingGivesEverySoMany() {
     let values: Int[>..] = [0, 1, 2, 3, 4, 5, 6]
-    assertEqualText(text(values.lazy.striding(by: 3).toArray()), "0,3,6")
-    assertEqualText(text(values.lazy.striding(by: 1).toArray()), "0,1,2,3,4,5,6")
-    assertEqualText(text(values.lazy.striding(by: 0).toArray()), "0")
+    expect(values.lazy.striding(by: 3).toArray() == [0, 3, 6])
+    expect(values.lazy.striding(by: 1).toArray() == [0, 1, 2, 3, 4, 5, 6])
+    expect(values.lazy.striding(by: 0).toArray() == [0])
     let empty: Int[>..] = []
     assertEqual(empty.lazy.striding(by: 2).toArray().count, 0)
 }
 
 @test
 fn lazyCycledStartsAgain() {
-    assertEqualText(text([1, 2, 3].lazy.cycled().prefix(7)), "1,2,3,1,2,3,1")
+    expect([1, 2, 3].lazy.cycled().prefix(7) == [1, 2, 3, 1, 2, 3, 1])
     let empty: Int[>..] = []
     assertEqual(empty.lazy.cycled().toArray().count, 0)
 }
@@ -105,15 +101,15 @@ fn lazyCycledStartsAgain() {
 fn lazyInspectSeesEachElement() {
     var seen: Int[>..] = []
     let doubled = [1, 2].lazy.inspect { seen.append($0) }.map { $0 * 2 }.toArray()
-    assertEqualText(text(seen), "1,2")
-    assertEqualText(text(doubled), "2,4")
+    expect(seen == [1, 2])
+    expect(doubled == [2, 4])
 }
 
 @test
 fn aLazyViewIsASequenceGenericCodeTakes() {
     assertEqual(total([1, 2, 3].lazy.map { $0 * 3 }), 18)
     let collected: Int[>..] = [5, 6].lazy.map { $0 + 1 }.collect()
-    assertEqualText(text(collected), "6,7")
+    expect(collected == [6, 7])
 }
 
 fn total<S: Sequence>(_ values: S) -> Int where S.Element == Int, S.Failure == Never {

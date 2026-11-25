@@ -6,13 +6,12 @@ module StringTransformTests
 
 import Sable.Testing
 
-@test
-fn trimmingRemovesUnicodeWhiteSpace() {
-    assertEqual("  a b \t\n".trimmed(), "a b")
-    assertEqual("\u{3000}\u{A0}word\u{2003}".trimmed(), "word")
-    assertEqual("\u{85}x\u{2029}".trimmed(), "x")
-    assertEqual("   ".trimmed(), "")
-    assertEqual("é".trimmed(), "é")
+@test(arguments: [
+    ("  a b \t\n", "a b"), ("\u{3000}\u{A0}word\u{2003}", "word"), ("\u{85}x\u{2029}", "x"), ("   ", ""),
+    ("é", "é")
+])
+fn trimmingRemovesUnicodeWhiteSpace(_ text: String, _ trimmed: String) {
+    expect(text.trimmed() == trimmed)
 }
 
 @test

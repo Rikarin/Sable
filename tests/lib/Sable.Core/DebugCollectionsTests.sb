@@ -51,17 +51,18 @@ fn aStructWithCollectionsDerivesDebug() {
     assertEqual("\(order:#?)", "Order(\n    id: 7,\n    items: [\n        \"pen\",\n    ],\n    prices: [\n        \"pen\": 1.25,\n    ],\n    note: none,\n)")
 }
 
+@test(arguments: [
+    ("[1, 2]", "[\n    1,\n    2,\n]"), ("[]", "[]"), ("[:]", "[:]"), ("P()", "P()"),
+    ("[\"a, (b\"]", "[\n    \"a, (b\",\n]"), ("['(', '\\'']", "[\n    '(',\n    '\\'',\n]"),
+    ("List([1])", "List([\n    1,\n])"), ("Box(List([1]))", "Box(\n    List([\n        1,\n    ]),\n)"),
+    ("42", "42")
+])
+fn prettyDebugLaysTextOutOverLines(_ text: String, _ pretty: String) {
+    expect(FormatSpec.prettyDebug(text) == pretty)
+}
+
 @test
-fn prettyDebugLaysTextOutOverLines() {
-    assertEqual(FormatSpec.prettyDebug("[1, 2]"), "[\n    1,\n    2,\n]")
-    assertEqual(FormatSpec.prettyDebug("[]"), "[]")
-    assertEqual(FormatSpec.prettyDebug("[:]"), "[:]")
-    assertEqual(FormatSpec.prettyDebug("P()"), "P()")
-    assertEqual(FormatSpec.prettyDebug("[\"a, (b\"]"), "[\n    \"a, (b\",\n]")
-    assertEqual(FormatSpec.prettyDebug("['(', '\\'']"), "[\n    '(',\n    '\\'',\n]")
-    assertEqual(FormatSpec.prettyDebug("List([1])"), "List([\n    1,\n])")
-    assertEqual(FormatSpec.prettyDebug("Box(List([1]))"), "Box(\n    List([\n        1,\n    ]),\n)")
-    assertEqual(FormatSpec.prettyDebug("42"), "42")
+fn aPrettySpecLaysAValueOut() {
     assertEqual("\(5:#?)", "5")
     assertEqual("[\([1]:#?)]", "[[\n    1,\n]]")
 }

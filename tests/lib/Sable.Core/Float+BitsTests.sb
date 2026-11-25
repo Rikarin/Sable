@@ -16,10 +16,17 @@ fn anF64sBitsAreItsIEEEEncoding() {
 
 @test
 fn bitsSurviveTheRoundTrip() {
-    let values: F64[>..] = [0.0, -0.0, 1.5, -1e300, 5e-324, F64.pi]
-    for value in values {
-        assertEqual(F64.fromBits(value.bits).bits, value.bits)
+    forAll { (wide: U64, single: U32, half: U16) in
+        expect(F64.fromBits(wide).bits == wide)
+        expect(F32.fromBits(single).bits == single)
+        expect(F16.fromBits(half).bits == half)
+        expect(BF16.fromBits(half).bits == half)
     }
+}
+
+@test(arguments: [0.0, -0.0, 1.5, -1e300, 5e-324, F64.pi])
+fn theEdgesBitsSurviveTheRoundTrip(_ value: F64) {
+    expect(F64.fromBits(value.bits).bits == value.bits)
 }
 
 @test

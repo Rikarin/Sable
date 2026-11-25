@@ -102,7 +102,7 @@ fn manyWaitForOneTaskAndRaiseIt() async {
             }
             return sum
         }
-        assert(waiting >= 8 * (round + 1))
+        expect(waiting >= 8 * (round + 1))
         assertEqual(waiting % 8, 0)
     }
 }

@@ -221,15 +221,9 @@ fn aCopyIsADictionaryOfItsOwn() {
 fn manyKeysAreAllFound() {
     let d = squares(10000)
     assertEqual(d.count, 10000)
-    var i = 0
-    var wrong = 0
-    while i < 10000 {
-        if (d[i] ?? -1) != i * i {
-            wrong = wrong + 1
-        }
-        i = i + 1
+    for i in 0..<10000 {
+        assertEqual(d[i], i * i)
     }
-    assertEqual(wrong, 0)
     expect(d[10000] == none)
 }
 
@@ -274,7 +268,7 @@ fn removedSlotsAreReusedAndDroppedOnGrowth() {
     }
     i = 0
     while i < 40 {
-        assert(d.remove(i) != none)
+        expect(d.remove(i) != none)
         i = i + 2
     }
     i = 100
@@ -613,4 +607,98 @@ fn aDictionaryAgreesWithAModelAsItGrowsAndShrinks() {
     expect(map.capacity > 0 && map[5] == none)
     map[5] = 6
     assertEqual(map[5], 6)
+}
+
+@derive(Arbitrary, Debug)
+union Change {
+    Set(Int, Int)
+    Remove(Int)
+    Insert(Int, Int)
+    Add(Int)
+    RemoveEvens
+    RemoveAll(Bool)
+    Reserve(U8)
+    Shrink
+}
+
+// The entries in the order their keys were added, one after another: what a
+// dictionary must be, looked through for each key.
+struct OrderedPairs {
+    var pairs: (Int, Int)[>..] = []
+
+    fn place(_ key: Int) -> Int? {
+        return pairs.firstIndex(where: { pair in pair.0 == key })
+    }
+
+    mutating fn set(_ key: Int, _ value: Int?) -> Int? {
+        let at = place(key)
+        let before = at.map { pairs[$0].1 }
+        match value {
+            case .Some(let new) => {
+                if let at = at {
+                    pairs[at] = (key, new)
+                } else {
+                    pairs.append((key, new))
+                }
+            }
+            case .None => {
+                if let at = at {
+                    pairs[at..<(at + 1)] = []
+                }
+            }
+        }
+        return before
+    }
+}
+
+// Its keys clash, so that the order and the places removed entries leave
+// come up often; the test before this one has the sizes.
+@test
+fn aDictionaryAgreesWithItsPairsWhateverIsDoneToIt() {
+    forAll(Gen.arbitrary(Change.self).array(count: 0...200), cases: 200) { (changes: Change[>..]) in
+        var map: [Clash: Int] = [:]
+        var model = OrderedPairs()
+        for change in changes {
+            match change {
+                case .Set(let key, let value) => {
+                    let at = key & 31
+                    expect(map.updateValue(value, forKey: Clash { id: at }) == model.set(at, value))
+                }
+                case .Remove(let key) => {
+                    let at = key & 31
+                    expect(map.remove(Clash { id: at }) == model.set(at, none))
+                }
+                case .Insert(let key, let value) => {
+                    let at = key & 31
+                    let isNew = model.place(at) == none
+                    expect(map.insert(value, forKey: Clash { id: at }) == isNew)
+                    if isNew {
+                        _ = model.set(at, value)
+                    }
+                }
+                case .Add(let key) => {
+                    let at = key & 31
+                    map[Clash { id: at }, default: 0] &+= 1
+                    _ = model.set(at, (model.place(at).map { model.pairs[$0].1 } ?? 0) &+ 1)
+                }
+                case .RemoveEvens => {
+                    map.retain(where: { (key: Clash, value: Int) -> Bool in key.id % 2 == 1 })
+                    model.pairs = model.pairs.filter { pair in pair.0 % 2 == 1 }
+                }
+                case .RemoveAll(let keeping) => {
+                    map.removeAll(keepingCapacity: keeping)
+                    model.pairs = []
+                }
+                case .Reserve(let room) => map.reserveCapacity(Int(room))
+                case .Shrink            => map.shrinkToFit()
+            }
+            expect(map.count == model.pairs.count)
+        }
+        expect(map.map({ entry in entry.0.id }) == model.pairs.map({ pair in pair.0 }))
+        expect(map.map({ entry in entry.1 }) == model.pairs.map({ pair in pair.1 }))
+        for (key, value) in model.pairs {
+            expect(map[Clash { id: key }] == value)
+        }
+        expect(map[Clash { id: 32 }] == none)
+    }
 }

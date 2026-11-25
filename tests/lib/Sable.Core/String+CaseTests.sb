@@ -6,20 +6,16 @@ module StringCaseTests
 
 import Sable.Testing
 
-@test
-fn uppercasedUsesTheFullMappings() {
-    assertEqual("Straße".uppercased(), "STRASSE")
-    assertEqual("ǆemal".uppercased(), "ǄEMAL")
-    assertEqual("hello, wörld".uppercased(), "HELLO, WÖRLD")
-    assertEqual("ﬁx".uppercased(), "FIX")
-    assertEqual("".uppercased(), "")
+@test(arguments: [
+    ("Straße", "STRASSE"), ("ǆemal", "ǄEMAL"), ("hello, wörld", "HELLO, WÖRLD"), ("ﬁx", "FIX"), ("", "")
+])
+fn uppercasedUsesTheFullMappings(_ text: String, _ mapped: String) {
+    expect(text.uppercased() == mapped)
 }
 
-@test
-fn lowercasedUsesTheFullMappings() {
-    assertEqual("HELLO, WÖRLD".lowercased(), "hello, wörld")
-    assertEqual("İ".lowercased(), "i\u{307}")
-    assertEqual("ÀB".lowercased(), "àb")
+@test(arguments: [("HELLO, WÖRLD", "hello, wörld"), ("İ", "i\u{307}"), ("ÀB", "àb")])
+fn lowercasedUsesTheFullMappings(_ text: String, _ mapped: String) {
+    expect(text.lowercased() == mapped)
 }
 
 @test
@@ -29,16 +25,12 @@ fn textWithNothingToChangeIsGivenBack() {
     assertEqual("中文".uppercased(), "中文")
 }
 
-@test
-fn aFinalSigmaIsLowercasedToTheFinalForm() {
-    assertEqual("ΟΔΟΣ".lowercased(), "οδος")
-    assertEqual("ΟΔΟΣ ΟΔΟΣ".lowercased(), "οδος οδος")
-    assertEqual("ΣΑΣ".lowercased(), "σας")
-    assertEqual("Σ".lowercased(), "σ")
-    assertEqual("ΑΣ'".lowercased(), "ας'")
-    assertEqual("ΑΣ'Α".lowercased(), "ασ'α")
-    assertEqual("'Σ".lowercased(), "'σ")
-    assertEqual("1Σ".lowercased(), "1σ")
+@test(arguments: [
+    ("ΟΔΟΣ", "οδος"), ("ΟΔΟΣ ΟΔΟΣ", "οδος οδος"), ("ΣΑΣ", "σας"), ("Σ", "σ"), ("ΑΣ'", "ας'"), ("ΑΣ'Α", "ασ'α"),
+    ("'Σ", "'σ"), ("1Σ", "1σ")
+])
+fn aFinalSigmaIsLowercasedToTheFinalForm(_ text: String, _ mapped: String) {
+    expect(text.lowercased() == mapped)
 }
 
 @test
@@ -68,26 +60,27 @@ fn equalityIgnoringCase() {
 fn comparingWithNoOptionsIsByScalar() {
     expect("abc".compare("abd", options: []) == .Less, "c before d")
     expect("b".compare("abc", options: []) == .Greater, "b after a")
-    assertEqual("same".compare("same", options: []), .Equal)
+    expect("same".compare("same", options: []) == .Equal, "the same")
 }
 
-@test
-fn comparingIgnoringCase() {
-    expect("ABC".compare("abd", options: .IgnoringCase) == .Less, "c before d")
-    assertEqual("ABC".compare("abc", options: .IgnoringCase), .Equal)
-    expect("abc".compare("AB", options: .IgnoringCase) == .Greater, "longer after")
-    expect("ab".compare("ABC", options: .IgnoringCase) == .Less, "shorter before")
+@test(arguments: [
+    ("ABC", "abd", .IgnoringCase, .Less, "c before d"), ("ABC", "abc", .IgnoringCase, .Equal, "the same"),
+    ("abc", "AB", .IgnoringCase, .Greater, "longer after"), ("ab", "ABC", .IgnoringCase, .Less, "shorter before")
+])
+fn comparingIgnoringCase(_ a: String, _ b: String, _ options: String.CompareOptions, _ ordering: Ordering, _ why: String) {
+    expect(a.compare(b, options: options) == ordering, why)
 }
 
-@test
-fn comparingNumerically() {
-    expect("file9".compare("file10", options: .Numeric) == .Less, "9 before 10")
-    expect("file9".compare("file10", options: []) == .Greater, "but '9' after '1'")
-    assertEqual("file007".compare("file7", options: .Numeric), .Equal)
-    expect("file10b".compare("file10a", options: .Numeric) == .Greater, "the rest decides")
-    expect("v2.10".compare("v2.9", options: .Numeric) == .Greater, "each run of digits")
-    expect("12".compare("13", options: .Numeric) == .Less, "equal lengths, digit by digit")
-    expect("0".compare("00", options: .Numeric) == .Equal, "zeros are zero")
+@test(arguments: [
+    ("file9", "file10", .Numeric, .Less, "9 before 10"), ("file9", "file10", [], .Greater, "but '9' after '1'"),
+    ("file007", "file7", .Numeric, .Equal, "the same"),
+    ("file10b", "file10a", .Numeric, .Greater, "the rest decides"),
+    ("v2.10", "v2.9", .Numeric, .Greater, "each run of digits"),
+    ("12", "13", .Numeric, .Less, "equal lengths, digit by digit"),
+    ("0", "00", .Numeric, .Equal, "zeros are zero")
+])
+fn comparingNumerically(_ a: String, _ b: String, _ options: String.CompareOptions, _ ordering: Ordering, _ why: String) {
+    expect(a.compare(b, options: options) == ordering, why)
 }
 
 @test

@@ -5,15 +5,6 @@ module ByteReaderTests
 
 import Sable.Testing
 
-// What a read that should have failed gave instead, or how it failed.
-fn failure(_ error: ByteReadError) -> String {
-    return match error {
-        case .EndOfData(let at, let needed, let remaining) => "end of data at \(at): needed \(needed), \(remaining) left"
-        case .VarIntTooLong(let at)                        => "varint too long at \(at)"
-        default                                            => "another error"
-    }
-}
-
 @test
 fn aReaderStartsAtTheStart() {
     let bytes: U8[>..] = [1, 2, 3]
@@ -107,18 +98,8 @@ fn seekMovesAnywhereFromStartToEnd() throws(ByteReadError) {
 fn seekingOutsideTheBytesFailsAndStays() {
     let bytes: U8[>..] = [10, 20, 30]
     var reader = ByteReader(bytes)
-    do {
-        try reader.seek(to: 4)
-        fail("seeking past the end worked")
-    } catch {
-        assertEqual(failure(error), "end of data at 4: needed 0, 0 left")
-    }
-    do {
-        try reader.seek(to: -1)
-        fail("seeking before the start worked")
-    } catch {
-        assertEqual(failure(error), "end of data at -1: needed 0, 0 left")
-    }
+    expectThrows(saying: "0 bytes wanted at 4, and 0 left") { try reader.seek(to: 4) }
+    expectThrows(saying: "0 bytes wanted at -1, and 0 left") { try reader.seek(to: -1) }
     assertEqual(reader.position, 0)
 }
 
@@ -127,12 +108,7 @@ fn aReadPastTheEndFailsAndMovesNothing() throws(ByteReadError) {
     let bytes: U8[>..] = [1, 2, 3]
     var reader = ByteReader(bytes)
     _ = try reader.readU8()
-    do {
-        _ = try reader.readU32()
-        fail("a U32 was read from two bytes")
-    } catch {
-        assertEqual(failure(error), "end of data at 1: needed 4, 2 left")
-    }
+    expectThrows(saying: "4 bytes wanted at 1, and 2 left") { _ = try reader.readU32() }
     assertEqual(reader.position, 1)
     assertEqual(try reader.readU16(), 0x0302)
 }
@@ -141,42 +117,30 @@ fn aReadPastTheEndFailsAndMovesNothing() throws(ByteReadError) {
 fn everyReadFailsAtTheEnd() {
     let bytes: U8[>..] = []
     var reader = ByteReader(bytes)
-    var failures = 0
-    if (try? reader.readU8()) == none { failures = failures + 1 }
-    if (try? reader.readI8()) == none { failures = failures + 1 }
-    if (try? reader.readI16()) == none { failures = failures + 1 }
-    if (try? reader.readI32()) == none { failures = failures + 1 }
-    if (try? reader.readI64()) == none { failures = failures + 1 }
-    if (try? reader.readF32()) == none { failures = failures + 1 }
-    if (try? reader.readF64()) == none { failures = failures + 1 }
-    if (try? reader.readUtf8(byteCount: 1)) == none { failures = failures + 1 }
-    if (try? reader.skip(1)) == none { failures = failures + 1 }
-    assertEqual(failures, 9)
+    expectThrows(saying: "1 bytes wanted at 0, and 0 left") { _ = try reader.readU8() }
+    expectThrows(saying: "1 bytes wanted at 0, and 0 left") { _ = try reader.readI8() }
+    expectThrows(saying: "2 bytes wanted at 0, and 0 left") { _ = try reader.readI16() }
+    expectThrows(saying: "4 bytes wanted at 0, and 0 left") { _ = try reader.readI32() }
+    expectThrows(saying: "8 bytes wanted at 0, and 0 left") { _ = try reader.readI64() }
+    expectThrows(saying: "4 bytes wanted at 0, and 0 left") { _ = try reader.readF32() }
+    expectThrows(saying: "8 bytes wanted at 0, and 0 left") { _ = try reader.readF64() }
+    expectThrows(saying: "1 bytes wanted at 0, and 0 left") { _ = try reader.readUtf8(byteCount: 1) }
+    expectThrows(saying: "1 bytes wanted at 0, and 0 left") { try reader.skip(1) }
 }
 
 @test
 fn aNegativeCountFails() {
     let bytes: U8[>..] = [1, 2]
     var reader = ByteReader(bytes)
-    do {
-        _ = try reader.readBytes(-1)
-        fail("read -1 bytes")
-    } catch {
-        assertEqual(failure(error), "end of data at 0: needed -1, 2 left")
-    }
+    expectThrows(saying: "-1 bytes wanted at 0, and 2 left") { _ = try reader.readBytes(-1) }
 }
 
 @test
-fn aVarIntCutShortIsEndOfData() {
+fn aVarIntCutShortIsEndOfData() throws {
     let bytes: U8[>..] = [0x05, 0x80, 0x80]
     var reader = ByteReader(bytes)
-    do {
-        assertEqual(try reader.readVarUInt(), 5)
-        _ = try reader.readVarUInt()
-        fail("a cut-short varint was read")
-    } catch {
-        assertEqual(failure(error), "end of data at 1: needed 3, 2 left")
-    }
+    assertEqual(try reader.readVarUInt(), 5)
+    expectThrows(saying: "3 bytes wanted at 1, and 2 left") { _ = try reader.readVarUInt() }
     assertEqual(reader.position, 1)
 }
 
@@ -184,21 +148,11 @@ fn aVarIntCutShortIsEndOfData() {
 fn aVarIntPastSixtyFourBitsIsTooLong() {
     let eleven: U8[>..] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01]
     var reader = ByteReader(eleven)
-    do {
-        _ = try reader.readVarUInt()
-        fail("an eleven-byte varint was read")
-    } catch {
-        assertEqual(failure(error), "varint too long at 0")
-    }
+    expectThrows(saying: "the integer at 0 is longer than a U64") { _ = try reader.readVarUInt() }
 
     let tooWide: U8[>..] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02]
     var wide = ByteReader(tooWide)
-    do {
-        _ = try wide.readVarInt()
-        fail("a 65-bit varint was read")
-    } catch {
-        assertEqual(failure(error), "varint too long at 0")
-    }
+    expectThrows(saying: "the integer at 0 is longer than a U64") { _ = try wide.readVarInt() }
     assertEqual(wide.position, 0)
 }
 

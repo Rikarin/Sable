@@ -43,38 +43,37 @@ fn versionsAreAtLeastOnTheirOwnSystemAlone() {
     expect(!Platform.isAtLeast(windows: 10, 0, build: 999999))
 }
 
-@test
-fn eachSystemsVersionTextIsRead() {
-    let mac = OperatingSystemVersion.parse("15.2")
-    expect(mac.major == 15 && mac.minor == 2 && mac.patch == 0)
-    let linux = OperatingSystemVersion.parse("6.8.0-45-generic")
-    expect(linux.major == 6 && linux.minor == 8 && linux.patch == 0)
-    assertEqual(linux.text, "6.8.0-45-generic")
-    let windows = OperatingSystemVersion.parse("10.0.22631")
-    assertEqual(windows.patch, 22631)
-    let empty = OperatingSystemVersion.parse("")
-    expect(empty.major == 0 && empty.minor == 0 && empty.patch == 0)
-    let partial = OperatingSystemVersion.parse("7")
-    assertEqual(partial.major, 7)
-    let extra = OperatingSystemVersion.parse("1.2.3.4")
-    assertEqual(extra.patch, 3)
+@test(arguments: [
+    ("15.2", 15, 2, 0), ("6.8.0-45-generic", 6, 8, 0), ("10.0.22631", 10, 0, 22631), ("", 0, 0, 0), ("7", 7, 0, 0),
+    ("1.2.3.4", 1, 2, 3)
+])
+fn eachSystemsVersionTextIsRead(_ text: String, _ major: Int, _ minor: Int, _ patch: Int) {
+    let version = OperatingSystemVersion.parse(text)
+    expect(version.major == major && version.minor == minor && version.patch == patch)
+    expect(version.text == text)
+    expect(version.debugDescription() == "\(major).\(minor).\(patch)")
+}
 
+@test
+fn versionsCompareByTheirNumbers() {
     expect(OperatingSystemVersion.parse("15.2") > OperatingSystemVersion.parse("14.7.1"))
     expect(OperatingSystemVersion.parse("15.2") < OperatingSystemVersion.parse("15.10"))
     expect(OperatingSystemVersion.parse("15.2.1") > OperatingSystemVersion.parse("15.2"))
     expect(OperatingSystemVersion.parse("15.2") == OperatingSystemVersion.parse("15.2.0"))
-    assertEqual(linux.debugDescription(), "6.8.0")
+}
+
+@test(arguments: [(.MacOS, "macos"), (.Linux, "linux"), (.Windows, "windows"), (.Wasi, "wasi")])
+fn systemsHaveTheirIfNames(_ system: OperatingSystem, _ name: String) {
+    expect(system.name == name)
+}
+
+@test(arguments: [(.Arm64, "arm64"), (.X86_64, "x86_64"), (.Wasm32, "wasm32")])
+fn architecturesHaveTheirIfNames(_ architecture: Architecture, _ name: String) {
+    expect(architecture.name == name)
 }
 
 @test
-fn systemsAndArchitecturesHaveTheirIfNames() {
-    assertEqual(OperatingSystem.MacOS.name, "macos")
-    assertEqual(OperatingSystem.Linux.name, "linux")
-    assertEqual(OperatingSystem.Windows.name, "windows")
-    assertEqual(OperatingSystem.Wasi.name, "wasi")
-    assertEqual(Architecture.Arm64.name, "arm64")
-    assertEqual(Architecture.X86_64.name, "x86_64")
-    assertEqual(Architecture.Wasm32.name, "wasm32")
+fn systemsAndArchitecturesAreEqualAndHashAsThemselves() {
     expect(OperatingSystem.MacOS != OperatingSystem.Linux)
     assertEqual(Architecture.Arm64.hashValue, Architecture.Arm64.hashValue)
 }

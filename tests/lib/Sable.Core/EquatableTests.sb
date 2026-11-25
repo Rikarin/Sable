@@ -19,49 +19,54 @@ fn hashOf<T: Hashable>(_ value: T) -> Int {
 
 /// Two different values of a type: equal to themselves, ordered, and
 /// hashed equal to an equal value and (for these) apart from each other.
-fn check<T: Comparable & Hashable>(_ low: T, _ high: T) -> Bool {
-    return same(low, low) && !same(low, high) && before(low, high) && !before(high, low)
-        && hashOf(low) == hashOf(low) && hashOf(low) != hashOf(high)
+fn expectToConform<T: Comparable & Hashable & Debug>(_ low: T, _ high: T, line: Int = #line) {
+    let values = "\(T.self) \(low:?) and \(high:?)"
+    expect(same(low, low), values, line: line)
+    expect(!same(low, high), values, line: line)
+    expect(before(low, high), values, line: line)
+    expect(!before(high, low), values, line: line)
+    expect(hashOf(low) == hashOf(low), values, line: line)
+    expect(hashOf(low) != hashOf(high), values, line: line)
 }
 
 @test
 fn signedIntegersConform() {
-    expect(check(-1, 1))
-    expect(check(I8(-1), I8(1)))
-    expect(check(I16(-300), I16(300)))
-    expect(check(I32(-70000), I32(70000)))
-    expect(check(I64(-1), I64(5)))
-    expect(check(I128(-1), I128(1) << 100))
+    expectToConform(-1, 1)
+    expectToConform(I8(-1), I8(1))
+    expectToConform(I16(-300), I16(300))
+    expectToConform(I32(-70000), I32(70000))
+    expectToConform(I64(-1), I64(5))
+    expectToConform(I128(-1), I128(1) << 100)
 }
 
 @test
 fn unsignedIntegersConform() {
-    expect(check(U8(1), U8(255)))
-    expect(check(U16(1), U16(65535)))
-    expect(check(U32(1), U32(4000000000)))
-    expect(check(U64(1), U64(2)))
-    expect(check(UInt(1), UInt(2)))
-    expect(check(U128(1), U128(1) << 64))
+    expectToConform(U8(1), U8(255))
+    expectToConform(U16(1), U16(65535))
+    expectToConform(U32(1), U32(4000000000))
+    expectToConform(U64(1), U64(2))
+    expectToConform(UInt(1), UInt(2))
+    expectToConform(U128(1), U128(1) << 64)
 }
 
 @test
 fn floatsConform() {
-    expect(check(F16(0.5), F16(1.5)))
-    expect(check(F32(0.25), F32(2.5)))
-    expect(check(-1.5, 1.5))
+    expectToConform(F16(0.5), F16(1.5))
+    expectToConform(F32(0.25), F32(2.5))
+    expectToConform(-1.5, 1.5)
     assertEqual(hashOf(0.0), hashOf(-0.0))
 }
 
 @test
 fn stringsConformByScalar() {
-    expect(check("abc", "abd"))
-    expect(check("ab", "abc"))
+    expectToConform("abc", "abd")
+    expectToConform("ab", "abc")
     expect(before("z", "é"), "UTF-8's byte order is the scalars' order")
 }
 
 @test
 fn charactersConform() {
-    expect(check('a', 'b'))
+    expectToConform('a', 'b')
 }
 
 @test

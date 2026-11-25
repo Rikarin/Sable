@@ -12,26 +12,22 @@ fn plainShifted(_ byte: U8, _ first: U8, _ shift: U8) -> U8 {
 
 fn plainLowered(_ byte: U8) -> U8 => plainShifted(byte, 0x41, 0x20)
 
-@test
-fn lettersOfEitherCaseMoveInPlace() {
+@test(arguments: [(0x41, 0x20), (0x61, 0xE0)])
+fn lettersOfEitherCaseMoveInPlace(_ first: U8, _ shift: U8) {
     for start in 0..<3 {
         for n in 0...130 {
-            for (first, shift) in [(0x41, 0x20), (0x61, 0xE0)] as (U8, U8)[>..] {
-                var all: U8[>..] = []
-                for i in 0..<(start + n + 2) {
-                    all.append(U8((i * 11 + n) % 256))
-                }
-                let original = all
-                var moved = false
-                let changed = all[start..<(start + n)].shiftAsciiLetters(from: first, by: shift)
-                for i in 0..<all.count {
-                    let inside = i >= start && i < start + n
-                    let expected = inside ? plainShifted(original[i], first, shift) : original[i]
-                    moved = moved || expected != original[i]
-                    assertEqual(all[i], expected)
-                }
-                assertEqual(changed, moved)
+            var all: U8[>..] = []
+            for i in 0..<(start + n + 2) {
+                all.append(U8((i * 11 + n) % 256))
             }
+            var expected = all
+            var moved = false
+            for i in start..<(start + n) {
+                expected[i] = plainShifted(all[i], first, shift)
+                moved = moved || expected[i] != all[i]
+            }
+            assertEqual(all[start..<(start + n)].shiftAsciiLetters(from: first, by: shift), moved)
+            assertEqual(all, expected)
         }
     }
 }
@@ -47,24 +43,25 @@ fn everyByteMovesOrStays() {
     }
 }
 
-@test
-fn equalityIgnoresTheCaseOfLettersAlone() {
-    for n in [0, 1, 7, 15, 16, 17, 31, 32, 33, 130] as Int[>..] {
-        var a = U8[>..](repeating: 0x78, count: n)
-        var b = U8[>..](repeating: 0x58, count: n)
-        require(a.equalsIgnoringAsciiCase(b))
-        require(!a.equalsIgnoringAsciiCase(U8[>..](repeating: 0x58, count: n + 1)))
-        for at in 0..<n {
-            for x in [0x40, 0x41, 0x5A, 0x5B, 0x60, 0x61, 0x7A, 0x7B, 0x80, 0xC1, 0xE1, 0xFF] as U8[>..] {
-                for y in [0x40, 0x41, 0x5A, 0x5B, 0x60, 0x61, 0x7A, 0x7B, 0x80, 0xC1, 0xE1, 0xFF] as U8[>..] {
-                    a[at] = x
-                    b[at] = y
-                    assertEqual(a.equalsIgnoringAsciiCase(b), plainLowered(x) == plainLowered(y))
+@test(arguments: [0, 1, 7, 15, 16, 17, 31, 32, 33, 130])
+fn equalityIgnoresTheCaseOfLettersAlone(_ n: Int) {
+    let edges: U8[>..] = [0x40, 0x41, 0x5A, 0x5B, 0x60, 0x61, 0x7A, 0x7B, 0x80, 0xC1, 0xE1, 0xFF]
+    var a = U8[>..](repeating: 0x78, count: n)
+    var b = U8[>..](repeating: 0x58, count: n)
+    expect(a.equalsIgnoringAsciiCase(b))
+    expect(!a.equalsIgnoringAsciiCase(U8[>..](repeating: 0x58, count: n + 1)))
+    for at in 0..<n {
+        for x in edges {
+            for y in edges {
+                a[at] = x
+                b[at] = y
+                if a.equalsIgnoringAsciiCase(b) != (plainLowered(x) == plainLowered(y)) {
+                    fail("\(x:#x) and \(y:#x) at \(at)")
                 }
             }
-            a[at] = 0x78
-            b[at] = 0x58
         }
+        a[at] = 0x78
+        b[at] = 0x58
     }
 }
 
@@ -85,8 +82,8 @@ fn asciiStringsOfEveryLengthChangeCase() {
         assertEqual(text.lowercased(), lower)
         assertEqual(text.asciiUppercased(), upper)
         assertEqual((text + "é").asciiUppercased(), upper + "é")
-        assert(upper.equals(lower, ignoringCase: true))
-        assertEqual((upper + "É").equals(lower + "é", ignoringCase: true), true)
+        expect(upper.equals(lower, ignoringCase: true))
+        expect((upper + "É").equals(lower + "é", ignoringCase: true))
         assertEqual((upper + "A").compare(lower + "b", options: .IgnoringCase), .Less)
     }
 }

@@ -107,7 +107,7 @@ fn stringsOfEveryShortLengthAreComparedCopiedAndSplit() {
                 changed += i == at ? "_" : "\(c)"
                 i += 1
             }
-            assert(changed != text)
+            assertNotEqual(changed, text)
             assertEqual(changed.split('_').count, 2)
             assertEqual(changed.split('_')[0].utf8Count, at)
             assertEqual(changed.split('_')[1].utf8Count, length - 1 - at)

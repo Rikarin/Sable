@@ -6,10 +6,7 @@ module NumberFormattingTests
 //     tools/stdlib-coverage.sh Sable.Core
 
 import Sable.Testing
-
-fn spec(_ text: String) -> FormatSpec {
-    return try! FormatSpec.parse(text)
-}
+import CoreTestSupport
 
 // ---- Integers ----------------------------------------------------------------
 
@@ -131,15 +128,12 @@ fn anIntegerIgnoresAPrecision() {
 
 // ---- Floats ------------------------------------------------------------------
 
-@test
-fn aFloatWithNoSpecIsItsShortestDigits() {
-    assertEqual((0.1).format(FormatSpec()), "0.1")
-    assertEqual((4.0).format(FormatSpec()), "4.0")
-    assertEqual((100.0).format(FormatSpec()), "100.0")
-    assertEqual((1e20).format(FormatSpec()), "1e+20")
-    assertEqual((1.5e-7).format(FormatSpec()), "1.5e-07")
-    assertEqual((0.0001).format(FormatSpec()), "0.0001")
-    assertEqual((0.0).format(FormatSpec()), "0.0")
+@test(arguments: [
+    (0.1, "0.1"), (4.0, "4.0"), (100.0, "100.0"), (1e20, "1e+20"), (1.5e-7, "1.5e-07"), (0.0001, "0.0001"),
+    (0.0, "0.0")
+])
+fn aFloatWithNoSpecIsItsShortestDigits(_ x: F64, _ text: String) {
+    expect(x.format(FormatSpec()) == text)
 }
 
 @test
@@ -302,28 +296,21 @@ fn aDecimalKeepsEveryPlaceOfItsScale() {
     assertEqual(decimal("15", 1, "+08"), "+00001.5")
 }
 
-@test
-fn aDecimalIsRoundedToAPrecisionWithTiesToEven() {
-    assertEqual(decimal("125", 2, ".1"), "1.2")
-    assertEqual(decimal("135", 2, ".1"), "1.4")
-    assertEqual(decimal("5", 0, ".2"), "5.00")
-    assertEqual(decimal("12345", 3, ".2e"), "1.23e+01")
-    assertEqual(decimal("12345", 3, ".3g"), "12.3")
-    assertEqual(decimal("12345", 3, ".3G"), "12.3")
-    assertEqual(decimal("12345", 0, ".2g"), "1.2e+04")
-    assertEqual(decimal("12345", 5, ".1%"), "12.3%")
+@test(arguments: [
+    ("125", 2, ".1", "1.2"), ("135", 2, ".1", "1.4"), ("5", 0, ".2", "5.00"), ("12345", 3, ".2e", "1.23e+01"),
+    ("12345", 3, ".3g", "12.3"), ("12345", 3, ".3G", "12.3"), ("12345", 0, ".2g", "1.2e+04"),
+    ("12345", 5, ".1%", "12.3%")
+])
+fn aDecimalIsRoundedToAPrecisionWithTiesToEven(_ digits: String, _ scale: Int, _ spec: String, _ text: String) {
+    expect(decimal(digits, scale, spec) == text)
 }
 
-@test
-fn aDecimalTakesEachNotation() {
-    assertEqual(decimal("1200", 2, "e"), "1.2e+01")
-    assertEqual(decimal("1200", 2, "E"), "1.2E+01")
-    assertEqual(decimal("0", 0, "e"), "0e+00")
-    assertEqual(decimal("1500", 3, "g"), "1.5")
-    assertEqual(decimal("1500", 3, "G"), "1.5")
-    assertEqual(decimal("125", 3, "%"), "12.5%")
-    assertEqual(decimal("2", 0, "%"), "200%")
-    assertEqual(decimal("42", 1, "?"), "4.2")
+@test(arguments: [
+    ("1200", 2, "e", "1.2e+01"), ("1200", 2, "E", "1.2E+01"), ("0", 0, "e", "0e+00"), ("1500", 3, "g", "1.5"),
+    ("1500", 3, "G", "1.5"), ("125", 3, "%", "12.5%"), ("2", 0, "%", "200%"), ("42", 1, "?", "4.2")
+])
+fn aDecimalTakesEachNotation(_ digits: String, _ scale: Int, _ spec: String, _ text: String) {
+    expect(decimal(digits, scale, spec) == text)
 }
 
 // ---- Benchmarks ----------------------------------------------------------------

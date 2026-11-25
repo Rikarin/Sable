@@ -61,8 +61,8 @@ fn assertBitsFair<G: RandomNumberGenerator>(_ generator: inout G) {
     // Within 6 of their standard deviation, 50.
     var bit = 0
     while bit < 64 {
-        assert((ones[bit] - draws / 2).abs() < 300)
-        assert((same[bit] - draws / 2).abs() < 300)
+        expect((ones[bit] - draws / 2).abs() < 300)
+        expect((same[bit] - draws / 2).abs() < 300)
         bit += 1
     }
 }

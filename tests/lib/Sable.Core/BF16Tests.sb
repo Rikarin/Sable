@@ -59,20 +59,25 @@ fn itIsWrittenInItsShortestDigits() {
     assertEqual("\(BF16(1.5):?)", "1.5")
 }
 
-@test
-fn itIsParsedToTheNearest() {
-    assertEqual(try! BF16.parse("3.14159"), BF16.pi)
-    assertEqual(try! BF16.parse("1e39"), BF16.infinity)
-    assertEqual(try! BF16.parse("-0.1"), -BF16(0.1))
+@test(arguments: [
+    ("3.14159", BF16.pi), ("1e39", BF16.infinity), ("-0.1", -BF16(0.1)),
     // 3.0078125 is a tie, to even; a hair above it rounds up.
-    assertEqual(try! BF16.parse("3.0078125"), 3.0)
-    assertEqual(try! BF16.parse("3.00781250001"), 3.015625)
-    assertEqual(try! BF16.parse("0x1.8p1", styles: .HexFloat), 3.0)
-    var n = 0
-    while n < 400 {
+    ("3.0078125", 3.0), ("3.00781250001", 3.015625)
+])
+fn itIsParsedToTheNearest(_ text: String, _ value: BF16) throws {
+    expect(try BF16.parse(text) == value)
+}
+
+@test
+fn aHexadecimalOneIsParsed() throws {
+    expect(try BF16.parse("0x1.8p1", styles: .HexFloat) == 3.0)
+}
+
+@test
+fn itsShortestDigitsAreReadBack() throws {
+    for n in 0..<400 {
         let value = BF16.fromBits(U16(n * 97 % 0x7F80))
-        assertEqual(try! BF16.parse(value.toString()), value)
-        n += 1
+        assertEqual(try BF16.parse(value.toString()), value)
     }
 }
 
@@ -98,41 +103,46 @@ fn itsConstantsAreRoundedToTheNearest() {
     assertEqual(BF16.zero + BF16.one, 1.0)
 }
 
-@test
-fn itParsesWhatIsNotFinite() {
-    assertEqual(try! BF16.parse("inf"), BF16.infinity)
-    assertEqual(try! BF16.parse("-Infinity"), -BF16.infinity)
-    expect((try! BF16.parse("nan")).isNaN)
-    assertEqual(try! BF16.parse("1e400"), BF16.infinity)
-    assertEqual(try! BF16.parse("-1e400"), -BF16.infinity)
-    assertEqual(try! BF16.parse("1e-400"), 0.0)
-    expect((try? BF16.parse("1.5x")) == none)
-    expect((try? BF16.parse("")) == none)
+@test(arguments: [
+    ("inf", BF16.infinity), ("-Infinity", -BF16.infinity), ("1e400", BF16.infinity), ("-1e400", -BF16.infinity),
+    ("1e-400", 0.0)
+])
+fn itParsesWhatIsNotFinite(_ text: String, _ value: BF16) throws {
+    expect(try BF16.parse(text) == value)
 }
 
 @test
-fn aTextBesideATieIsRoundedItsOwnWay() {
+fn itParsesANaN() throws {
+    expect((try BF16.parse("nan")).isNaN)
+}
+
+@test(arguments: [("1.5x", .InvalidDigit(at: 3)), ("", .Empty)])
+fn itRefusesWhatIsNoNumber(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try BF16.parse(text) }
+}
+
+@test(arguments: [
     // Nearer to the halfway point than an F64 can tell, on either side of
     // it. 3.0078125 lies between 3.0, the even one, and 3.015625.
-    assertEqual(try! BF16.parse("3.00781250000000000000001"), 3.015625)
-    assertEqual(try! BF16.parse("3.00781249999999999999999"), 3.0)
-    assertEqual(try! BF16.parse("-3.0078125"), -3.0)
-    assertEqual(try! BF16.parse("-3.00781250000000000000001"), -3.015625)
-    assertEqual(try! BF16.parse("-3.00781249999999999999999"), -3.0)
+    ("3.00781250000000000000001", 3.015625), ("3.00781249999999999999999", 3.0), ("-3.0078125", -3.0),
+    ("-3.00781250000000000000001", -3.015625), ("-3.00781249999999999999999", -3.0),
     // 3.0234375 lies between 3.015625 and 3.03125, the even one.
-    assertEqual(try! BF16.parse("3.0234375"), 3.03125)
-    assertEqual(try! BF16.parse("3.02343750000000000000001"), 3.03125)
-    assertEqual(try! BF16.parse("3.02343749999999999999999"), 3.015625)
-    assertEqual(try! BF16.parse("-3.02343749999999999999999"), -3.015625)
+    ("3.0234375", 3.03125), ("3.02343750000000000000001", 3.03125), ("3.02343749999999999999999", 3.015625),
+    ("-3.02343749999999999999999", -3.015625)
+])
+fn aTextBesideATieIsRoundedItsOwnWay(_ text: String, _ value: BF16) throws {
+    expect(try BF16.parse(text) == value)
 }
 
-@test
-fn aTextBesideTheGreatestIsFiniteOrNot() {
+@test(arguments: [
     // 1.99609375 × 2^128 / 2, halfway from the greatest to 2^128: a tie is
     // to the even one, infinity.
-    assertEqual(try! BF16.parse("339617752923046005526922703901628039168"), BF16.infinity)
-    assertEqual(try! BF16.parse("339617752923046005526922703901628039169"), BF16.infinity)
-    assertEqual(try! BF16.parse("339617752923046005526922703901628039167"), BF16.greatestFiniteMagnitude)
-    assertEqual(try! BF16.parse("-339617752923046005526922703901628039168"), -BF16.infinity)
-    assertEqual(try! BF16.parse("-339617752923046005526922703901628039167"), -BF16.greatestFiniteMagnitude)
+    ("339617752923046005526922703901628039168", BF16.infinity),
+    ("339617752923046005526922703901628039169", BF16.infinity),
+    ("339617752923046005526922703901628039167", BF16.greatestFiniteMagnitude),
+    ("-339617752923046005526922703901628039168", -BF16.infinity),
+    ("-339617752923046005526922703901628039167", -BF16.greatestFiniteMagnitude)
+])
+fn aTextBesideTheGreatestIsFiniteOrNot(_ text: String, _ value: BF16) throws {
+    expect(try BF16.parse(text) == value)
 }

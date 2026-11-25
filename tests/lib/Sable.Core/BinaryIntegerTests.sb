@@ -76,32 +76,27 @@ fn divRemGivesTheQuotientAndTheRemainder() {
     assertEqual(remainder, -1)
 }
 
+@test(arguments: [(-7, 2, -4), (-7, -2, 4), (7, -2, -3), (7, 2, 3)])
+fn euclideanDivisionRoundsAwayFromANegativeRemainder(_ a: Int, _ b: Int, _ quotient: Int) {
+    expect(a.divEuclid(b) == quotient)
+}
+
 @test
 fn euclideanDivisionLeavesNoNegativeRemainder() {
-    assertEqual((-7).divEuclid(2), -4)
-    assertEqual((-7).divEuclid(-2), 4)
-    assertEqual(7.divEuclid(-2), -3)
-    assertEqual(7.divEuclid(2), 3)
     assertEqual((-7).remEuclid(2), 1)
     assertEqual((-7).remEuclid(-2), 1)
     assertEqual(7.remEuclid(-2), 1)
     assertEqual((7 as U8).remEuclid(3), 1)
 }
 
-@test
-fn divCeilRoundsUp() {
-    assertEqual(7.divCeil(2), 4)
-    assertEqual((-7).divCeil(-2), 4)
-    assertEqual((-7).divCeil(2), -3)
-    assertEqual(8.divCeil(2), 4)
+@test(arguments: [(7, 2, 4), (-7, -2, 4), (-7, 2, -3), (8, 2, 4)])
+fn divCeilRoundsUp(_ a: Int, _ b: Int, _ quotient: Int) {
+    expect(a.divCeil(b) == quotient)
 }
 
-@test
-fn divFloorRoundsDown() {
-    assertEqual(7.divFloor(2), 3)
-    assertEqual((-7).divFloor(2), -4)
-    assertEqual(7.divFloor(-2), -4)
-    assertEqual((-8).divFloor(2), -4)
+@test(arguments: [(7, 2, 3), (-7, 2, -4), (7, -2, -4), (-8, 2, -4)])
+fn divFloorRoundsDown(_ a: Int, _ b: Int, _ quotient: Int) {
+    expect(a.divFloor(b) == quotient)
 }
 
 @test
@@ -131,6 +126,22 @@ fn absIsTheDistanceFromZero() {
     assertEqual((-127 as I8).abs(), 127)
     assertEqual(5.abs(), 5)
     assertEqual((5 as U32).abs(), 5)
+}
+
+@test
+fn theRoundingsAgreeWithTheQuotientAndRemainder() {
+    forAll(Gen.arbitrary(I32.self), Gen.arbitrary(I32.self).filter { $0 != 0 }) { (a: I32, b: I32) in
+        let n = Int(a)
+        let d = Int(b)
+        let (quotient, remainder) = n.divRem(d)
+        expect(quotient * d + remainder == n)
+        let floor = remainder != 0 && (remainder < 0) != (d < 0) ? quotient - 1 : quotient
+        expect(n.divFloor(d) == floor)
+        expect(n.divCeil(d) == (remainder == 0 ? floor : floor + 1))
+        expect(n.divEuclid(d) * d + n.remEuclid(d) == n)
+        expect(n.remEuclid(d) >= 0 && n.remEuclid(d) < d.abs())
+        expect(n.isMultiple(of: d) == (remainder == 0))
+    }
 }
 
 @test(traps: "division by zero")

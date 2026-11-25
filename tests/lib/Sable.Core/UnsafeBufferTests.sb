@@ -4,6 +4,7 @@ module UnsafeBufferTests
 // random-access collection once made.
 
 import Sable.Testing
+import CoreTestSupport
 
 @test
 fn aBufferIsACollectionOfItsValues() {
@@ -49,18 +50,6 @@ fn anEmptyBufferHasNothing() {
         let view = UnsafeBuffer<Int>.viewing(RawPtr<Int>.null, count: 0)
         expect(view.isEmpty)
         expect(view.toArray() == [] as Int[>..])
-    }
-}
-
-class Counted {
-    let gone: Atomic<Int>
-
-    init(_ gone: Atomic<Int>) {
-        self.gone = gone
-    }
-
-    deinit {
-        gone.add(1)
     }
 }
 

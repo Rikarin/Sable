@@ -7,10 +7,6 @@ module IteratorTests
 
 import Sable.Testing
 
-fn text(_ values: Int[:]) -> String {
-    return values.map { "\($0)" }.joined(separator: ",")
-}
-
 // Through the protocol, so that the iterator is made and used, rather than
 // the compiler's own counting loop over an array or a range.
 fn elements<S: Sequence>(_ values: S) -> S.Element[>..] where S.Failure == Never {
@@ -35,10 +31,10 @@ fn everyKindOfArrayIsASequence() {
     let grow: Int[>..] = [1, 2, 3]
     let shrink: Int[>..<] = [4, 5]
     let fixed: Int[] = [6, 7]
-    assertEqualText(text(elements(grow)), "1,2,3")
-    assertEqualText(text(elements(shrink)), "4,5")
-    assertEqualText(text(elements(fixed)), "6,7")
-    assertEqualText(text(elements(grow.slice(from: 1, to: 3))), "2,3")
+    expect(elements(grow) == [1, 2, 3])
+    expect(elements(shrink) == [4, 5])
+    expect(elements(fixed) == [6, 7])
+    expect(elements(grow.slice(from: 1, to: 3)) == [2, 3])
     let empty: Int[>..] = []
     assertEqual(elements(empty).count, 0)
 }
@@ -55,7 +51,7 @@ fn anArrayIsARandomAccessCollection() {
 
 @test
 fn aRangeOfIntegersIsACollection() {
-    assertEqualText(text(elements(2..<5)), "2,3,4")
+    expect(elements(2..<5) == [2, 3, 4])
     assertEqual(elements(5..<2).count, 0)
     assertEqual(sizeOf(3..<7), 4)
     assertEqual(sizeOf(7..<3), 0)
@@ -63,14 +59,14 @@ fn aRangeOfIntegersIsACollection() {
     assertEqual(range[range.index(range.startIndex, offsetBy: 2)], 5)
     assertEqual(range.index(after: 3), 4)
     assertEqual(range.index(before: 4), 3)
-    assertEqualText(text(range.reversed().toArray()), "6,5,4,3")
-    assertEqualText(text((0..<10).filter { $0 % 4 == 0 }), "0,4,8")
+    expect(range.reversed().toArray() == [6, 5, 4, 3])
+    expect((0..<10).filter { $0 % 4 == 0 } == [0, 4, 8])
 }
 
 @test
 fn aClosedRangeOfIntegersIsASequence() {
-    assertEqualText(text(elements(2...4)), "2,3,4")
-    assertEqualText(text(elements(4...4)), "4")
+    expect(elements(2...4) == [2, 3, 4])
+    expect(elements(4...4) == [4])
     assertEqual(elements(5...4).count, 0)
     assertEqual((1...4).reduce(0) { $0 + $1 }, 10)
 }
@@ -138,8 +134,8 @@ fn aDictionaryIsMadeFromPairs() {
 
 @test
 fn aStrideIsASequence() {
-    assertEqualText(text(elements(stride(from: 0, to: 7, by: 3))), "0,3,6")
-    assertEqualText(text(elements(stride(from: 6, through: 0, by: -3))), "6,3,0")
+    expect(elements(stride(from: 0, to: 7, by: 3)) == [0, 3, 6])
+    expect(elements(stride(from: 6, through: 0, by: -3)) == [6, 3, 0])
 }
 
 @test

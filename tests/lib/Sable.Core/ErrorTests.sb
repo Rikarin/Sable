@@ -54,13 +54,10 @@ fn anErrorWithNothingOfItsOwnDescribesItsValue() {
 
 @test
 fn anErrorCaughtAsAnyErrorStillSaysWhatItSays() {
-    do {
-        try failWithContext()
-    } catch {
-        assertEqual(error.description(), "while fizzling")
-        assertEqual(error.source?.description() ?? "", "Boom.Fizzle(2)")
-        expect(error.source?.source == none, "the chain ends at the first error")
-    }
+    let error = require(expectThrows { try failWithContext() })
+    expect(error.description() == "while fizzling")
+    expect(error.source?.description() == "Boom.Fizzle(2)")
+    expect(error.source?.source == none, "the chain ends at the first error")
 }
 
 @test
@@ -71,21 +68,14 @@ fn aGenericFunctionReachesTheErrorsOwnRequirements() {
 
 @test
 fn anyErrorIsAnyDebug() {
-    do {
-        try fail(.Bang)
-    } catch {
-        let debug: any Debug = error
-        assertEqual(debug.debugDescription(), "Boom.Bang")
-    }
+    let debug: any Debug = require(expectThrows { try fail(.Bang) })
+    expect(debug.debugDescription() == "Boom.Bang")
 }
 
 @test
 fn somethingThrownThatIsNoErrorIsDescribedByWhatItIs() {
-    do {
-        try failWithAnything()
-    } catch {
-        assertEqual(error.description(), "NotAnError.Odd(3)")
-        assertEqual(error.debugDescription(), "NotAnError.Odd(3)")
-        expect(error.source == none)
-    }
+    let error = require(expectThrows { try failWithAnything() })
+    expect(error.description() == "NotAnError.Odd(3)")
+    expect(error.debugDescription() == "NotAnError.Odd(3)")
+    expect(error.source == none)
 }

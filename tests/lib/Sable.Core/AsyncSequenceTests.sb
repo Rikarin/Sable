@@ -6,6 +6,7 @@ module AsyncSequenceTests
 
 import Sable.Testing
 
+@derive(Equatable)
 enum Broken: Error {
     Down
 }
@@ -87,27 +88,27 @@ fn compactMapLeavesOutNone() async {
 }
 
 @test
-fn prefixStopsAskingOnceItHasEnough() async {
+fn prefixStopsAskingOnceItHasEnough() async throws {
     let source = counting(100)
-    expect(try! await source.prefix(3).collect() == [1, 2, 3])
+    expect(try await source.prefix(3).collect() == [1, 2, 3])
     assertEqual(source.counter.asked, 3)
 }
 
 @test
-fn prefixOfMoreThanThereAreGivesAll() async {
+fn prefixOfMoreThanThereAreGivesAll() async throws {
     let source = counting(2)
     var iterator = source.prefix(5).makeAsyncIterator()
-    expect(try! await iterator.next() == 1)
-    expect(try! await iterator.next() == 2)
-    expect(try! await iterator.next() == none)
-    expect(try! await iterator.next() == none)
+    expect(try await iterator.next() == 1)
+    expect(try await iterator.next() == 2)
+    expect(try await iterator.next() == none)
+    expect(try await iterator.next() == none)
     assertEqual(source.counter.asked, 3)
 }
 
 @test
-fn prefixOfNothingAsksForNothing() async {
+fn prefixOfNothingAsksForNothing() async throws {
     let source = counting(5)
-    expect(try! await source.prefix(0).collect() == [])
+    expect(try await source.prefix(0).collect() == [])
     assertEqual(source.counter.asked, 0)
 }
 
@@ -159,11 +160,11 @@ fn reduceIntoChangesTheResultInPlace() async {
 }
 
 @test
-fn firstWhereStopsAtTheFirstMatch() async {
+fn firstWhereStopsAtTheFirstMatch() async throws {
     let source = counting(100)
-    expect(try! await source.first(where: { $0 > 4 }) == 5)
+    expect(try await source.first(where: { $0 > 4 }) == 5)
     assertEqual(source.counter.asked, 5)
-    expect(try! await counting(3).first(where: { $0 > 4 }) == none)
+    expect(try await counting(3).first(where: { $0 > 4 }) == none)
 }
 
 @test
@@ -173,24 +174,14 @@ fn containsWhereSaysWhetherAnyMatches() async {
 }
 
 @test
-fn collectGathersEveryElement() async {
-    expect(try! await counting(4).collect() == [1, 2, 3, 4])
+fn collectGathersEveryElement() async throws {
+    expect(try await counting(4).collect() == [1, 2, 3, 4])
 }
 
 @test
 fn anOperatorPassesTheFailureOn() async {
-    do {
-        _ = try await counting(2, fails: true).map { $0 * 10 }.collect()
-        assert(false)
-    } catch {
-        expect(error == .Down)
-    }
-    do {
-        _ = try await counting(2, fails: true).reduce(0) { $0 + $1 }
-        assert(false)
-    } catch {
-        expect(error == .Down)
-    }
+    await expectThrows(Broken.Down) { _ = try await counting(2, fails: true).map { $0 * 10 }.collect() }
+    await expectThrows(Broken.Down) { _ = try await counting(2, fails: true).reduce(0) { $0 + $1 } }
 }
 
 @test
@@ -213,25 +204,20 @@ fn zipPairsUntilEitherEnds() async {
 }
 
 @test
-fn zipStopsOnceTheFirstEnds() async {
+fn zipStopsOnceTheFirstEnds() async throws {
     let second = counting(10)
     var iterator = zip([1].async, second).makeAsyncIterator()
-    let first = try! await iterator.next()
+    let first = try await iterator.next()
     expect(first != none)
-    expect(try! await iterator.next() == none)
-    expect(try! await iterator.next() == none)
+    expect(try await iterator.next() == none)
+    expect(try await iterator.next() == none)
     // The second was asked once for the pair, not again once the first ended.
     assertEqual(second.counter.asked, 1)
 }
 
 @test
-fn zipThrowsWhatEitherThrows() async {
+fn zipThrowsWhatEitherThrows() async throws {
     var iterator = zip(counting(1, fails: true), [1, 2].async).makeAsyncIterator()
-    do {
-        _ = try await iterator.next()
-        _ = try await iterator.next()
-        assert(false)
-    } catch {
-        expect(error == .Down)
-    }
+    expect(try await iterator.next() != none)
+    await expectThrows(Broken.Down) { _ = try await iterator.next() }
 }

@@ -92,15 +92,10 @@ fn indexedPairsEachScalarWithItsIndex() {
     assertEqual("".indexed().count, 0)
 }
 
-@test
-fn scalarBoundaries() {
-    let text = "aé"
-    expect(text.isScalarBoundary(utf8Offset: 0), "the start")
-    expect(text.isScalarBoundary(utf8Offset: 1), "where é starts")
-    expect(!text.isScalarBoundary(utf8Offset: 2), "inside é")
-    expect(text.isScalarBoundary(utf8Offset: 3), "the end")
-    expect(!text.isScalarBoundary(utf8Offset: 4), "past the end")
-    expect(!text.isScalarBoundary(utf8Offset: -1), "before the start")
+// The bytes of "aé": inside é there is none, nor past either end.
+@test(arguments: [(-1, false), (0, true), (1, true), (2, false), (3, true), (4, false)])
+fn scalarBoundaries(_ offset: Int, _ isBoundary: Bool) {
+    expect("aé".isScalarBoundary(utf8Offset: offset) == isBoundary)
 }
 
 @test(traps: "string index not on a character boundary")

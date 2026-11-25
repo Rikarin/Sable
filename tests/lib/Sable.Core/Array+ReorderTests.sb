@@ -131,13 +131,21 @@ fn copyFromALongerSourceTraps() {
 fn partitionPutsThoseThatPassAfterThoseThatFail() {
     var xs: Int[>..] = [1, 8, 3, 6, 5, 2, 9]
     let p = xs.partition(by: (x: Int) => x > 4)
-    assertEqual(p, 3)
-    var i = 0
-    while i < xs.count {
-        assertEqual(xs[i] > 4, i >= p)
-        i = i + 1
-    }
+    expect(p == 3)
+    expect(xs.map { $0 > 4 } == [false, false, false, true, true, true, true])
     expect(xs.sorted() == [1, 2, 3, 5, 6, 8, 9])
+}
+
+@test
+fn partitionOfAnyArrayPutsThoseThatPassAfterThoseThatFail() {
+    forAll { (values: I8[>..], limit: I8) in
+        var xs = values
+        let p = xs.partition(by: (x: I8) => x > limit)
+        expect(p == values.count(where: { $0 <= limit }))
+        expect(xs[..<p].allSatisfy { $0 <= limit })
+        expect(xs[p...].allSatisfy { $0 > limit })
+        expect(xs.sorted() == values.sorted())
+    }
 }
 
 @test
@@ -149,19 +157,26 @@ fn partitionOfAllOrNoneIsAtAnEnd() {
     assertEqual(empty.partition(by: (x: Int) => x > 0), 0)
 }
 
+@test(arguments: (0..<9).toArray())
+fn selectNthPutsTheSortedElementInPlace(_ n: Int) {
+    var xs: Int[>..] = [9, 1, 8, 2, 7, 3, 6, 4, 5]
+    xs.selectNth(n)
+    expect(xs[n] == n + 1)
+    expect(xs[..<n].allSatisfy { $0 < n + 1 })
+    expect(xs[(n + 1)...].allSatisfy { $0 > n + 1 })
+}
+
 @test
-fn selectNthPutsTheSortedElementInPlace() {
-    var i = 0
-    while i < 9 {
-        var xs: Int[>..] = [9, 1, 8, 2, 7, 3, 6, 4, 5]
-        xs.selectNth(i)
-        assertEqual(xs[i], i + 1)
-        var j = 0
-        while j < xs.count {
-            assertEqual(xs[j] < xs[i], j < i)
-            j = j + 1
-        }
-        i = i + 1
+fn selectNthOfAnyArrayPutsTheSortedElementInPlace() {
+    forAll(Gen.arbitrary(I8.self).array(count: 1...200), Gen.number(in: 0...199)) { (values: I8[>..], place: Int) in
+        let n = place % values.count
+        var xs = values
+        xs.selectNth(n)
+        let sorted = values.sorted()
+        expect(xs[n] == sorted[n])
+        expect(xs[..<n].allSatisfy { $0 <= sorted[n] })
+        expect(xs[(n + 1)...].allSatisfy { $0 >= sorted[n] })
+        expect(xs.sorted() == sorted)
     }
 }
 
@@ -243,12 +258,16 @@ fn reversesAsALoopDoes<T: SIMDScalar>(_ make: (Int) -> T) {
             all[start..<(start + n)].reverse()
             for i in 0..<all.count {
                 let inside = i >= start && i < start + n
-                assertEqual(all[i], original[inside ? start + start + n - 1 - i : i])
+                if all[i] != original[inside ? start + start + n - 1 - i : i] {
+                    fail("\(T.self): element \(i) of \(start)..<\(start + n) reversed is \(all[i])")
+                }
             }
             var whole = original
             whole.reverse()
             for i in 0..<whole.count {
-                assertEqual(whole[i], original[original.count - 1 - i])
+                if whole[i] != original[original.count - 1 - i] {
+                    fail("\(T.self): element \(i) of \(whole.count) reversed is \(whole[i])")
+                }
             }
         }
     }

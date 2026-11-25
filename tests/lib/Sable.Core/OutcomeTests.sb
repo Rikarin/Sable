@@ -64,14 +64,7 @@ fn getGivesTheValueBack() {
 @test
 fn getThrowsTheError() {
     let outcome: Parsed = .Err("bad")
-    var caught = ""
-    do {
-        let value = try outcome.get()
-        print(value)
-    } catch {
-        caught = error
-    }
-    assertEqual(caught, "bad")
+    expect(expectThrows(String.self) { _ = try outcome.get() } == "bad")
 }
 
 @test

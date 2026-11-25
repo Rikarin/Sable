@@ -13,14 +13,14 @@ fn scalar(_ code: Int) -> Char {
     return Char.fromCodePoint(code)!
 }
 
-@test
-fn lettersAreLettersInEveryScript() {
-    for c in ['a', 'Z', 'é', 'Ж', 'ω', '中', 'א', 'ǅ', 'ʰ'] {
-        require(c.isLetter, "\(c) is a letter")
-    }
-    for c in ['1', '_', ' ', '-', '٣', '€', 'Ⅻ'] {
-        require(!c.isLetter, "\(c) is not a letter")
-    }
+@test(arguments: ['a', 'Z', 'é', 'Ж', 'ω', '中', 'א', 'ǅ', 'ʰ'])
+fn lettersAreLettersInEveryScript(_ c: Char) {
+    expect(c.isLetter)
+}
+
+@test(arguments: ['1', '_', ' ', '-', '٣', '€', 'Ⅻ'])
+fn otherCharactersAreNoLetters(_ c: Char) {
+    expect(!c.isLetter)
 }
 
 @test
@@ -33,11 +33,13 @@ fn alphabeticTakesInLetterNumbersAndVowelSigns() {
     expect(!'-'.isAlphanumeric, "a dash is not alphanumeric")
 }
 
+@test(arguments: ['0', '9', '٣', '੫', 'Ⅻ', '½', '²'])
+fn numericCoversTheDigitsAndNumbersOfEveryScript(_ c: Char) {
+    expect(c.isNumeric)
+}
+
 @test
-fn numericCoversTheDigitsAndNumbersOfEveryScript() {
-    for c in ['0', '9', '٣', '੫', 'Ⅻ', '½', '²'] {
-        require(c.isNumeric, "\(c) is numeric")
-    }
+fn lettersAndPointsAreNotNumericNorOtherScriptsDigitsDigits() {
     expect(!'a'.isNumeric && !'.'.isNumeric, "letters and points are not")
     expect('5'.isDigit && !'٣'.isDigit, "isDigit is ASCII's")
 }
@@ -60,14 +62,16 @@ fn caseIgnorableScalarsAreThoseAWordsCaseLooksPast() {
     expect(!'a'.isCaseIgnorable && !'-'.isCaseIgnorable && !'Ж'.isCaseIgnorable, "letters and dashes are not")
 }
 
-@test
-fn whitespaceIsUnicodesWhiteSpaceProperty() {
-    for code in [0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x2000, 0x2007, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000] {
-        require(scalar(code).isWhitespace, "U+\(code) is white space")
-    }
-    for code in [0x08, 0x0E, 0x1F, 0x21, 0x200B, 0x180E, 0xFEFF, 0x2060] {
-        require(!scalar(code).isWhitespace, "U+\(code) is not white space")
-    }
+@test(arguments: [
+    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x2000, 0x2007, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000
+])
+fn whitespaceIsUnicodesWhiteSpaceProperty(_ code: Int) {
+    expect(scalar(code).isWhitespace)
+}
+
+@test(arguments: [0x08, 0x0E, 0x1F, 0x21, 0x200B, 0x180E, 0xFEFF, 0x2060])
+fn whatLooksLikeNothingIsNotAllWhitespace(_ code: Int) {
+    expect(!scalar(code).isWhitespace)
 }
 
 @test
@@ -80,45 +84,23 @@ fn punctuationSymbolsAndControls() {
     expect(!' '.isControl && !scalar(0xA0).isControl && !scalar(0x200D).isControl, "not controls")
 }
 
-@test
-fn generalCategoryCoversEachKind() {
-    assertEqual('A'.generalCategory, GeneralCategory.UppercaseLetter)
-    assertEqual('a'.generalCategory, GeneralCategory.LowercaseLetter)
-    assertEqual('ǅ'.generalCategory, GeneralCategory.TitlecaseLetter)
-    assertEqual('ʰ'.generalCategory, GeneralCategory.ModifierLetter)
-    assertEqual('中'.generalCategory, GeneralCategory.OtherLetter)
-    assertEqual(scalar(0x0301).generalCategory, GeneralCategory.NonspacingMark)
-    assertEqual(scalar(0x093E).generalCategory, GeneralCategory.SpacingMark)
-    assertEqual(scalar(0x20DD).generalCategory, GeneralCategory.EnclosingMark)
-    assertEqual('٣'.generalCategory, GeneralCategory.DecimalNumber)
-    assertEqual('Ⅻ'.generalCategory, GeneralCategory.LetterNumber)
-    assertEqual('½'.generalCategory, GeneralCategory.OtherNumber)
-    assertEqual('_'.generalCategory, GeneralCategory.ConnectorPunctuation)
-    assertEqual('-'.generalCategory, GeneralCategory.DashPunctuation)
-    assertEqual('('.generalCategory, GeneralCategory.OpenPunctuation)
-    assertEqual(')'.generalCategory, GeneralCategory.ClosePunctuation)
-    assertEqual('«'.generalCategory, GeneralCategory.InitialPunctuation)
-    assertEqual('»'.generalCategory, GeneralCategory.FinalPunctuation)
-    assertEqual('!'.generalCategory, GeneralCategory.OtherPunctuation)
-    assertEqual('+'.generalCategory, GeneralCategory.MathSymbol)
-    assertEqual('$'.generalCategory, GeneralCategory.CurrencySymbol)
-    assertEqual('^'.generalCategory, GeneralCategory.ModifierSymbol)
-    assertEqual('©'.generalCategory, GeneralCategory.OtherSymbol)
-    assertEqual(' '.generalCategory, GeneralCategory.SpaceSeparator)
-    assertEqual(scalar(0x2028).generalCategory, GeneralCategory.LineSeparator)
-    assertEqual(scalar(0x2029).generalCategory, GeneralCategory.ParagraphSeparator)
-    assertEqual('\t'.generalCategory, GeneralCategory.Control)
-    assertEqual(scalar(0x200D).generalCategory, GeneralCategory.Format)
-    assertEqual(scalar(0xE000).generalCategory, GeneralCategory.PrivateUse)
-    assertEqual(scalar(0x0378).generalCategory, GeneralCategory.Unassigned)
+@test(arguments: [
+    ('A', .UppercaseLetter), ('a', .LowercaseLetter), ('ǅ', .TitlecaseLetter), ('ʰ', .ModifierLetter),
+    ('中', .OtherLetter), (scalar(0x0301), .NonspacingMark), (scalar(0x093E), .SpacingMark),
+    (scalar(0x20DD), .EnclosingMark), ('٣', .DecimalNumber), ('Ⅻ', .LetterNumber), ('½', .OtherNumber),
+    ('_', .ConnectorPunctuation), ('-', .DashPunctuation), ('(', .OpenPunctuation), (')', .ClosePunctuation),
+    ('«', .InitialPunctuation), ('»', .FinalPunctuation), ('!', .OtherPunctuation), ('+', .MathSymbol),
+    ('$', .CurrencySymbol), ('^', .ModifierSymbol), ('©', .OtherSymbol), (' ', .SpaceSeparator),
+    (scalar(0x2028), .LineSeparator), (scalar(0x2029), .ParagraphSeparator), ('\t', .Control),
+    (scalar(0x200D), .Format), (scalar(0xE000), .PrivateUse), (scalar(0x0378), .Unassigned)
+])
+fn generalCategoryCoversEachKind(_ c: Char, _ category: GeneralCategory) {
+    expect(c.generalCategory == category)
 }
 
-@test
-fn generalCategoryAtTheEndsOfTheCodeSpace() {
-    assertEqual(scalar(0).generalCategory, GeneralCategory.Control)
-    assertEqual(scalar(0x10FFFF).generalCategory, GeneralCategory.Unassigned)
-    assertEqual(scalar(0x10FFFD).generalCategory, GeneralCategory.PrivateUse)
-    assertEqual(scalar(0x1F600).generalCategory, GeneralCategory.OtherSymbol)
+@test(arguments: [(0, .Control), (0x10FFFF, .Unassigned), (0x10FFFD, .PrivateUse), (0x1F600, .OtherSymbol)])
+fn generalCategoryAtTheEndsOfTheCodeSpace(_ code: Int, _ category: GeneralCategory) {
+    expect(scalar(code).generalCategory == category)
 }
 
 @test
@@ -137,75 +119,60 @@ fn asciiClassesAskOnlyAboutAscii() {
     expect(scalar(0).isAsciiControl && scalar(0x1F).isAsciiControl && scalar(0x7F).isAsciiControl && !scalar(0x85).isAsciiControl, "isAsciiControl")
 }
 
-@test
-fn uppercasedUsesTheFullMappings() {
-    assertEqual('a'.uppercased(), "A")
-    assertEqual('A'.uppercased(), "A")
-    assertEqual('ß'.uppercased(), "SS")
-    assertEqual('ŉ'.uppercased(), "ʼN")
-    assertEqual('ﬀ'.uppercased(), "FF")
-    assertEqual('ǅ'.uppercased(), "Ǆ")
-    assertEqual('ж'.uppercased(), "Ж")
-    assertEqual('1'.uppercased(), "1")
-    assertEqual('中'.uppercased(), "中")
+@test(arguments: [
+    ('a', "A"), ('A', "A"), ('ß', "SS"), ('ŉ', "ʼN"), ('ﬀ', "FF"), ('ǅ', "Ǆ"), ('ж', "Ж"), ('1', "1"), ('中', "中")
+])
+fn uppercasedUsesTheFullMappings(_ c: Char, _ text: String) {
+    expect(c.uppercased() == text)
+}
+
+@test(arguments: [('A', "a"), ('İ', "i\u{307}"), ('Ж', "ж"), ('Σ', "σ"), ('ǅ', "ǆ"), ('a', "a")])
+fn lowercasedUsesTheFullMappings(_ c: Char, _ text: String) {
+    expect(c.lowercased() == text)
+}
+
+@test(arguments: [
+    ('ß', 'ß'), ('ā', 'Ā'), ('ȁ', 'Ȁ'), ('ÿ', 'Ÿ'), ('ω', 'Ω'), (scalar(0x10428), scalar(0x10400)), ('z', 'Z')
+])
+fn simpleUppercaseIsOneScalar(_ c: Char, _ upper: Char) {
+    expect(c.simpleUppercase == upper)
+}
+
+@test(arguments: [('Ā', 'ā'), ('Ÿ', 'ÿ'), ('Z', 'z'), ('1', '1'), ('中', '中')])
+fn simpleLowercaseIsOneScalar(_ c: Char, _ lower: Char) {
+    expect(c.simpleLowercase == lower)
+}
+
+@test(arguments: [('K', 'k'), (scalar(0x212A), 'k'), ('Σ', 'σ'), ('ς', 'σ'), ('ẞ', 'ß'), ('1', '1')])
+fn caseFoldingMakesCaseVariantsTheSame(_ c: Char, _ folded: Char) {
+    expect(c.caseFolded == folded)
+}
+
+@test(arguments: [('a', 'A'), ('é', 'é'), ('@', '@'), ('[', '['), ('Z', 'Z')])
+fn asciiUppercaseChangesOnlyAsciiLetters(_ c: Char, _ upper: Char) {
+    expect(c.asciiUppercased() == upper)
+}
+
+@test(arguments: [('Z', 'z'), ('[', '['), ('É', 'É'), ('a', 'a')])
+fn asciiLowercaseChangesOnlyAsciiLetters(_ c: Char, _ lower: Char) {
+    expect(c.asciiLowercased() == lower)
+}
+
+@test(arguments: [('0', 10, 0), ('9', 10, 9), ('a', 16, 10), ('F', 16, 15), ('z', 36, 35)])
+fn digitValuesInARadix(_ c: Char, _ radix: Int, _ value: Int) {
+    expect(c.digitValue(radix: radix) == value)
+}
+
+// 'a' is no decimal digit and '2' no binary one; only ASCII's digits have values.
+@test(arguments: [('a', 10), ('2', 2), ('٣', 10), ('-', 36)])
+fn otherCharactersAreNoDigitsOfTheRadix(_ c: Char, _ radix: Int) {
+    expect(c.digitValue(radix: radix) == none)
 }
 
 @test
-fn lowercasedUsesTheFullMappings() {
-    assertEqual('A'.lowercased(), "a")
-    assertEqual('İ'.lowercased(), "i\u{307}")
-    assertEqual('Ж'.lowercased(), "ж")
-    assertEqual('Σ'.lowercased(), "σ")
-    assertEqual('ǅ'.lowercased(), "ǆ")
-    assertEqual('a'.lowercased(), "a")
-}
-
-@test
-fn simpleMappingsAreOneScalarEach() {
-    assertEqual('ß'.simpleUppercase, 'ß')
-    assertEqual('ā'.simpleUppercase, 'Ā')
-    assertEqual('Ā'.simpleLowercase, 'ā')
-    assertEqual('ȁ'.simpleUppercase, 'Ȁ')
-    assertEqual('ÿ'.simpleUppercase, 'Ÿ')
-    assertEqual('Ÿ'.simpleLowercase, 'ÿ')
-    assertEqual('ω'.simpleUppercase, 'Ω')
-    assertEqual(scalar(0x10428).simpleUppercase, scalar(0x10400))
-    assertEqual('z'.simpleUppercase, 'Z')
-    assertEqual('Z'.simpleLowercase, 'z')
-    assertEqual('1'.simpleLowercase, '1')
-    assertEqual('中'.simpleLowercase, '中')
-}
-
-@test
-fn caseFoldingMakesCaseVariantsTheSame() {
-    assertEqual('K'.caseFolded, 'k')
-    assertEqual(scalar(0x212A).caseFolded, 'k')
-    assertEqual('Σ'.caseFolded, 'σ')
-    assertEqual('ς'.caseFolded, 'σ')
-    assertEqual('ẞ'.caseFolded, 'ß')
-    assertEqual('1'.caseFolded, '1')
-}
-
-@test
-fn asciiCaseChangesOnlyAsciiLetters() {
-    assertEqual('a'.asciiUppercased(), 'A')
-    assertEqual('é'.asciiUppercased(), 'é')
-    assertEqual('Z'.asciiLowercased(), 'z')
-    assertEqual('[', '['.asciiLowercased())
-    assertEqual('@'.asciiUppercased(), '@')
-}
-
-@test
-fn digitValuesInARadix() {
-    assertEqual('0'.digitValue() ?? -1, 0)
-    assertEqual('9'.digitValue() ?? -1, 9)
-    assertEqual('a'.digitValue(radix: 16) ?? -1, 10)
-    assertEqual('F'.digitValue(radix: 16) ?? -1, 15)
-    assertEqual('z'.digitValue(radix: 36) ?? -1, 35)
-    expect('a'.digitValue() == none, "a is no decimal digit")
-    expect('2'.digitValue(radix: 2) == none, "2 is no binary digit")
-    expect('٣'.digitValue() == none, "only ASCII digits have values")
-    expect('-'.digitValue(radix: 36) == none, "a dash is no digit")
+fn aDigitsRadixIsTenUnlessTold() {
+    expect('9'.digitValue() == 9)
+    expect('a'.digitValue() == none)
 }
 
 @test(traps: "unreachable")
@@ -218,13 +185,15 @@ fn aDigitValueInRadixThirtySevenTraps() {
     _ = '0'.digitValue(radix: 37)
 }
 
+@test(arguments: [(7, 10, '7'), (11, 16, 'b'), (35, 36, 'z'), (10, 10, none), (-1, 10, none)])
+fn digitsFromValues(_ value: Int, _ radix: Int, _ digit: Char?) {
+    expect(Char.fromDigit(value, radix: radix) == digit)
+}
+
 @test
-fn digitsFromValues() {
-    assertEqual(Char.fromDigit(7) ?? '?', '7')
-    assertEqual(Char.fromDigit(11, radix: 16) ?? '?', 'b')
-    assertEqual(Char.fromDigit(35, radix: 36) ?? '?', 'z')
-    expect(Char.fromDigit(10) == none, "10 is no decimal digit")
-    expect(Char.fromDigit(-1) == none, "nor is -1")
+fn aValuesRadixIsTenUnlessTold() {
+    expect(Char.fromDigit(7) == '7')
+    expect(Char.fromDigit(10) == none)
 }
 
 @test(traps: "unreachable")
@@ -237,14 +206,10 @@ fn aDigitInRadixThirtySevenTraps() {
     _ = Char.fromDigit(0, radix: 37)
 }
 
-@test
-fn encodedLengths() {
-    assertEqual('a'.utf8Length, 1)
-    assertEqual('é'.utf8Length, 2)
-    assertEqual('€'.utf8Length, 3)
-    assertEqual(scalar(0x1F600).utf8Length, 4)
-    assertEqual('€'.utf16Length, 1)
-    assertEqual(scalar(0x1F600).utf16Length, 2)
+@test(arguments: [('a', 1, 1), ('é', 2, 1), ('€', 3, 1), ('😀', 4, 2)])
+fn encodedLengths(_ c: Char, _ bytes: Int, _ units: Int) {
+    expect(c.utf8Length == bytes)
+    expect(c.utf16Length == units)
 }
 
 @test

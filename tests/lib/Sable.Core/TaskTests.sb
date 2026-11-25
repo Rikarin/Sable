@@ -5,6 +5,7 @@ module TaskTests
 //     tools/stdlib-coverage.sh Sable.Core
 
 import Sable.Testing
+import CoreTestSupport
 
 fn nap() async -> String {
     do {
@@ -99,9 +100,8 @@ fn checkingForCancellationThrowsOnceCancelled() async {
 }
 
 @test
-fn aSleepNotCancelledWakesAndDoesNotThrow() async {
-    let slept = (try? await Task.sleep(nanoseconds: 1_000_000)) != none
-    expect(slept)
+fn aSleepNotCancelledWakesAndDoesNotThrow() async throws {
+    try await Task.sleep(nanoseconds: 1_000_000)
 }
 
 @test
@@ -221,26 +221,10 @@ fn aCancellationHandlerIsRemovedOnceItsOperationEnds() async {
 
 @test
 fn aCancellationHandlersOperationMayThrow() async {
-    let thrown = try? await withTaskCancellationHandler(operation: {
-        throw CancellationError()
-    }, onCancel: { })
-    expect(thrown == none)
-}
-
-/// Shut until opened: what a test waits on for another task to reach a point.
-actor Latch {
-    var isOpen = false
-    let opened = WaitList()
-
-    fn wait() async {
-        while !isOpen {
-            await opened.park()
-        }
-    }
-
-    fn open() {
-        isOpen = true
-        opened.wakeAll()
+    await expectThrows(CancellationError.self) {
+        try await withTaskCancellationHandler(operation: {
+            throw CancellationError()
+        }, onCancel: { })
     }
 }
 
@@ -252,6 +236,7 @@ class Flag {
     }
 }
 
+@derive(Equatable)
 union Refusal: Error {
     No
 }
@@ -263,15 +248,11 @@ fn blockingWorkGivesWhatItsBodyGives() async {
 
 @test
 fn blockingWorkThrowsWhatItsBodyThrows() async {
-    var thrown = false
-    do {
+    await expectThrows(Refusal.No) {
         _ = try await Task.blocking { () throws(Refusal) -> Int in
-            throw Refusal.No
-        }
-    } catch {
-        thrown = true
+        throw Refusal.No
     }
-    expect(thrown)
+    }
 }
 
 @test

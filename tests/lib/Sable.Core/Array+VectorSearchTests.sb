@@ -196,7 +196,7 @@ fn boolsAndCharsAreComparedAtOnce() {
         assertEqual(xs, ys)
         if n > 0 {
             ys[n - 1] = false
-            assert(xs != ys)
+            expect(xs != ys)
             assertEqual(xs.commonPrefixLength(with: ys), n - 1)
         }
         let cs = Char[>..](repeating: 'é', count: n)
@@ -204,7 +204,7 @@ fn boolsAndCharsAreComparedAtOnce() {
         assertEqual(cs, ds)
         if n > 0 {
             ds[n / 2] = 'e'
-            assert(cs != ds && ds < cs)
+            expect(cs != ds && ds < cs)
         }
     }
 }
@@ -261,30 +261,21 @@ fn anyOfUpToFiveCandidatesAndMore() {
     }
 }
 
-@test
-fn aCountPastWhatALaneHolds() {
-    // 255 steps of 32 I8s is 8160: each lane is gathered before it overflows.
-    for n in [8159, 8160, 8161, 20000] as Int[>..] {
-        let xs = I8[>..](repeating: -7, count: n)
-        assertEqual(xs.count(of: -7), n)
-    }
+// 255 steps of 32 I8s is 8160: each lane is gathered before it overflows.
+@test(arguments: [8159, 8160, 8161, 20000])
+fn aCountPastWhatALaneHolds(_ n: Int) {
+    let xs = I8[>..](repeating: -7, count: n)
+    expect(xs.count(of: -7) == n)
 }
 
 @test
 fn randomArraysAreSearchedAsTheLoopsDo() {
-    var random = SeededRandomNumberGenerator(seed: 7)
-    for _ in 0..<2000 {
-        let n = Int.random(in: 0...longest, using: &random)
-        var xs: U16[>..] = []
-        for _ in 0..<n {
-            xs.append(U16(Int.random(in: 0..<40, using: &random)))
-        }
-        let from = n == 0 ? 0 : Int.random(in: 0..<n, using: &random)
-        let slice = xs[from...]
-        let value = U16(Int.random(in: 0..<40, using: &random))
-        assertEqual(slice.firstIndex(of: value) ?? -1, scalarFirst(slice, value))
-        assertEqual(slice.lastIndex(of: value) ?? -1, scalarLast(slice, value))
-        assertEqual(slice.count(of: value), scalarCount(slice, value))
+    let element = Gen.number(in: U16(0)...39)
+    forAll(element.array(count: 0...longest), element, Gen.number(in: 0...longest), cases: 2000) { (xs: U16[>..], value: U16, start: Int) in
+        let slice = xs[start.min(other: xs.count)...]
+        expect((slice.firstIndex(of: value) ?? -1) == scalarFirst(slice, value))
+        expect((slice.lastIndex(of: value) ?? -1) == scalarLast(slice, value))
+        expect(slice.count(of: value) == scalarCount(slice, value))
     }
 }
 

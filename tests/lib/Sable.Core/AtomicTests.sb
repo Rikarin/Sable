@@ -3,6 +3,7 @@ module AtomicTests
 // Atomic, MemoryOrdering and OnceCell (Sable.Core).
 
 import Sable.Testing
+import CoreTestSupport
 import Sable.Time
 
 @test
@@ -160,18 +161,6 @@ fn anUpdateIsTriedAgainWhenTheValueChangedMeanwhile() {
     // A weak exchange may fail for no reason, so there may be more tries.
     assertEqual(tries[0], 1)
     assertEqual(tries[tries.count - 1], 10)
-}
-
-class Counted {
-    let gone: Atomic<Int>
-
-    init(_ gone: Atomic<Int>) {
-        self.gone = gone
-    }
-
-    deinit {
-        gone.add(1)
-    }
 }
 
 @test

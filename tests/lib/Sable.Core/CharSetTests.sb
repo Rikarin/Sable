@@ -35,12 +35,9 @@ fn theStandardSets() {
     expect(CharSet.asciiDigits.contains('0') && !CharSet.asciiDigits.contains('a'), "digits")
     expect(CharSet.asciiLetters.contains('q') && CharSet.asciiLetters.contains('Q') && !CharSet.asciiLetters.contains('1'), "letters")
     expect(CharSet.asciiAlphanumerics.contains('q') && CharSet.asciiAlphanumerics.contains('1') && !CharSet.asciiAlphanumerics.contains('-'), "alphanumerics")
-    var code = 0
-    while code < 0x3100 {
-        if let c = Char.fromCodePoint(code) {
-            assertEqual(CharSet.whitespace.contains(c), c.isWhitespace)
-        }
-        code = code + 1
+    for code in 0..<0x3100 {
+        let c = Char.fromCodePoint(code)!
+        assertEqual(CharSet.whitespace.contains(c), c.isWhitespace)
     }
 }
 

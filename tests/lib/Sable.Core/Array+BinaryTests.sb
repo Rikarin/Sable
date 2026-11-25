@@ -48,15 +48,11 @@ fn readsWorkOnASliceFromItsOwnStart() {
     assertEqual(slice.readU32(at: 2, endian: .Big), 0x0607_0809)
 }
 
-@test
-fn readsAtEveryUnalignedOffsetAgree() {
+@test(arguments: (0...5).toArray())
+fn readsAtEveryUnalignedOffsetAgree(_ offset: Int) {
     let bytes = sample()
-    var offset = 0
-    while offset + 4 <= bytes.count {
-        let byByte = U32(bytes[offset]) | U32(bytes[offset + 1]) << 8 | U32(bytes[offset + 2]) << 16 | U32(bytes[offset + 3]) << 24
-        assertEqual(bytes.readU32(at: offset, endian: .Little), byByte)
-        offset = offset + 1
-    }
+    let byByte = U32(bytes[offset]) | U32(bytes[offset + 1]) << 8 | U32(bytes[offset + 2]) << 16 | U32(bytes[offset + 3]) << 24
+    expect(bytes.readU32(at: offset, endian: .Little) == byByte)
 }
 
 @test(traps: "array index out of range")
@@ -79,14 +75,9 @@ fn writesPutTheBytesInTheOrderAsked() {
     var bytes: U8[>..] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     bytes.writeU16(0x0102, at: 0, endian: .Big)
     bytes.writeU32(0x0304_0506, at: 2, endian: .Little)
-    assertEqual(bytes[0], 0x01)
-    assertEqual(bytes[1], 0x02)
-    assertEqual(bytes[2], 0x06)
-    assertEqual(bytes[5], 0x03)
+    expect(bytes == [0x01, 0x02, 0x06, 0x05, 0x04, 0x03, 0, 0, 0, 0])
     bytes.writeU64(0x1122_3344_5566_7788, at: 1, endian: .Big)
-    assertEqual(bytes[1], 0x11)
-    assertEqual(bytes[8], 0x88)
-    assertEqual(bytes[9], 0)
+    expect(bytes == [0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0])
 }
 
 @test

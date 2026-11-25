@@ -4,13 +4,12 @@ module ChaChaTests
 // chacha20 keystream for the same key, counter and nonce.
 
 import Sable.Testing
+import CoreTestSupport
 
 fn countingKey() -> U8[32] {
     var key: U8[32] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    var i = 0
-    while i < 32 {
+    for i in 0..<32 {
         key[i] = U8(i)
-        i += 1
     }
     return key
 }
@@ -21,13 +20,10 @@ fn aBlockIsTheRfcs() {
     // a 64-bit counter and a 64-bit stream.
     var generator = ChaCha(key: countingKey(), stream: 0x4A000000)
     generator.seek(toBlock: 0x0900000000000001)
-    let expected: U64[>..] = [
+    expect(draws(8, from: &generator) == [
         0x15593BD1E4E7F110, 0xC47120A31FDD0F50, 0x0368C033C7F4D1C7, 0x4E6CD4C39AAA2204, 0x09AA9F07466482D2, 0xA2028BD905D7C214,
         0xB94E16DED19C12B5, 0x4E3C50A2E883D0CB
-    ]
-    for value in expected {
-        assertEqual(generator.next(), value)
-    }
+    ])
 }
 
 @test
@@ -42,19 +38,12 @@ fn bytesAreTheKeystreamInOrder() {
 @test
 fn theZeroKeysFirstBlockIsTheRfcs() {
     var zeros: U8[32] = countingKey()
-    var i = 0
-    while i < 32 {
-        zeros[i] = 0
-        i += 1
-    }
+    zeros.fill(0)
     var generator = ChaCha(key: zeros)
-    let expected: U64[>..] = [
+    expect(draws(9, from: &generator) == [
         0x903DF1A0ADE0B876, 0x28BD8653E56A5D40, 0x1AED8DA0B819D2BD, 0xC70D778BCCEF36A8, 0x8D4857517C5941DA, 0x374AD8B83FE02477,
         0x1CA11815F4B8436A, 0x8665EEB269B687C3, 0x7A385155BEE7079F
-    ]
-    for value in expected {
-        assertEqual(generator.next(), value)
-    }
+    ])
 }
 
 @test
@@ -64,16 +53,13 @@ fn theCounterCarriesPast32Bits() {
     for _ in 0..<7 {
         _ = generator.next()
     }
-    expect(generator.next() == 0xA602E8EB78214425)
-    expect(generator.next() == 0x5BA94553A0D82E2B)
+    expect(draws(2, from: &generator) == [0xA602E8EB78214425, 0x5BA94553A0D82E2B])
 }
 
 @test
 fn aSeedIsSpreadOverTheKey() {
     var generator = ChaCha(seed: 2024, stream: 3)
-    expect(generator.next() == 4054602380095964324)
-    expect(generator.next() == 16580289796138612556)
-    expect(generator.next() == 13656703944853745973)
+    expect(draws(3, from: &generator) == [4054602380095964324, 16580289796138612556, 13656703944853745973])
 }
 
 @test

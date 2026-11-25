@@ -6,24 +6,6 @@ module ParsableTests
 
 import Sable.Testing
 
-fn boolError(_ text: String) -> ParseError? {
-    do {
-        _ = try Bool.parse(text)
-        return none
-    } catch {
-        return error
-    }
-}
-
-fn charError(_ text: String) -> ParseError? {
-    do {
-        _ = try Char.parse(text)
-        return none
-    } catch {
-        return error
-    }
-}
-
 /// The value the text is, for any type that parses, written back.
 fn reparsed<T: Parsable & Formattable>(_ text: String, as witness: T) -> String {
     do {
@@ -52,23 +34,22 @@ fn aBoolIsTrueOrFalse() {
     expect(parsed)
 }
 
-@test
-fn aBoolIsNothingElse() {
-    assertEqual(boolError("") ?? .Overflow, .Empty)
-    assertEqual(boolError("True") ?? .Empty, .Invalid(at: 0))
-    assertEqual(boolError("tru") ?? .Empty, .Invalid(at: 3))
-    assertEqual(boolError("truth") ?? .Empty, .Invalid(at: 3))
-    assertEqual(boolError("fals") ?? .Empty, .Invalid(at: 4))
-    assertEqual(boolError("true ") ?? .Empty, .Invalid(at: 4))
-    assertEqual(boolError("yes") ?? .Empty, .Invalid(at: 0))
+@test(arguments: [
+    ("", .Empty), ("True", .Invalid(at: 0)), ("tru", .Invalid(at: 3)), ("truth", .Invalid(at: 3)),
+    ("fals", .Invalid(at: 4)), ("true ", .Invalid(at: 4)), ("yes", .Invalid(at: 0))
+])
+fn aBoolIsNothingElse(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try Bool.parse(text) }
 }
 
-@test
-fn aCharIsOneScalar() {
-    assertEqual(try! Char.parse("a"), 'a')
-    assertEqual(try! Char.parse("😀"), '😀')
-    assertEqual(charError("") ?? .Overflow, .Empty)
-    assertEqual(charError("ab") ?? .Empty, .Invalid(at: 1))
+@test(arguments: [("a", 'a'), ("😀", '😀')])
+fn aCharIsOneScalar(_ text: String, _ c: Char) throws {
+    expect(try Char.parse(text) == c)
+}
+
+@test(arguments: [("", .Empty), ("ab", .Invalid(at: 1))])
+fn aCharIsNothingElse(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try Char.parse(text) }
 }
 
 @test
@@ -97,20 +78,20 @@ fn parseErrorsAreEqualByCaseAndPosition() {
     assertNotEqual(ParseError.Overflow, ParseError.Underflow)
 }
 
-@test
-fn aParseErrorDescribesItselfAsSourceWritesIt() {
-    assertEqual(ParseError.Empty.debugDescription(), "ParseError.Empty")
-    assertEqual(ParseError.InvalidDigit(at: 3).debugDescription(), "ParseError.InvalidDigit(at: 3)")
-    assertEqual(ParseError.Invalid(at: 0).debugDescription(), "ParseError.Invalid(at: 0)")
-    assertEqual(ParseError.Overflow.debugDescription(), "ParseError.Overflow")
-    assertEqual(ParseError.Underflow.debugDescription(), "ParseError.Underflow")
+@test(arguments: [
+    (.Empty, "ParseError.Empty"), (.InvalidDigit(at: 3), "ParseError.InvalidDigit(at: 3)"),
+    (.Invalid(at: 0), "ParseError.Invalid(at: 0)"), (.Overflow, "ParseError.Overflow"),
+    (.Underflow, "ParseError.Underflow")
+])
+fn aParseErrorDescribesItselfAsSourceWritesIt(_ error: ParseError, _ text: String) {
+    expect(error.debugDescription() == text)
 }
 
-@test
-fn aParseErrorIsAnErrorThatSaysWhatWentWrong() {
-    assertEqual(ParseError.Empty.description(), "the text is empty")
-    assertEqual(ParseError.InvalidDigit(at: 2).description(), "not a digit at 2")
-    assertEqual(ParseError.Invalid(at: 0).description(), "not a value at 0")
-    assertEqual(ParseError.Overflow.description(), "the number is too large")
-    assertEqual(ParseError.Underflow.description(), "the number is too small")
+@test(arguments: [
+    (.Empty, "the text is empty"), (.InvalidDigit(at: 2), "not a digit at 2"),
+    (.Invalid(at: 0), "not a value at 0"), (.Overflow, "the number is too large"),
+    (.Underflow, "the number is too small")
+])
+fn aParseErrorIsAnErrorThatSaysWhatWentWrong(_ error: ParseError, _ text: String) {
+    expect(error.description() == text)
 }

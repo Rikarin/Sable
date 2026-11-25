@@ -35,18 +35,13 @@ fn anIntsMetadataSaysItsLayout() {
     expect(!m.isNoncopyable)
 }
 
-@test
-fn eachKindIsReported() {
-    expect(Box.self.kind == .Class)
-    expect(Point.self.kind == .Struct)
-    expect(Tag.self.kind == .Union)
-    expect(Int?.self.kind == .Optional)
-    expect((Int, Bool).self.kind == .Tuple)
-    expect(((Int) -> Int).self.kind == .Function)
-    expect(Int[>..].self.kind == .Array)
-    expect(String.self.kind == .String)
-    expect(Type.self.kind == .Metatype)
-    expect(Bool.self.kind == .Scalar)
+@test(arguments: [
+    (Box.self, .Class), (Point.self, .Struct), (Tag.self, .Union), (Int?.self, .Optional),
+    ((Int, Bool).self, .Tuple), (((Int) -> Int).self, .Function), (Int[>..].self, .Array), (String.self, .String),
+    (Type.self, .Metatype), (Bool.self, .Scalar)
+])
+fn eachKindIsReported(_ type: Type, _ kind: TypeKind) {
+    expect(type.kind == kind)
 }
 
 @test

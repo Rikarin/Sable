@@ -118,13 +118,12 @@ fn negatingAnUnsignedValueWrapsOrSaturates() {
     assertEqual(U128.max.abs(), U128.max)
 }
 
-@test
-fn shortAndLongTextsAreParsed() throws {
-    expect(try U128.parse("0") == 0)
-    expect(try U128.parse("12") == 12)
-    expect(try U128.parse("+7f", radix: 16) == 127)
-    expect(try U128.parse("340282366920938463463374607431768211455") == U128.max)
-    expect((try? U128.parse("-1")) == none)
-    expect((try? U128.parse("340282366920938463463374607431768211456")) == none)
-    expect((try? U128.parse("1x")) == none)
+@test(arguments: [("0", 10, 0), ("12", 10, 12), ("+7f", 16, 127), ("340282366920938463463374607431768211455", 10, U128.max)])
+fn shortAndLongTextsAreParsed(_ text: String, _ radix: Int, _ value: U128) throws {
+    expect(try U128.parse(text, radix: radix) == value)
+}
+
+@test(arguments: [("-1", .Underflow), ("340282366920938463463374607431768211456", .Overflow), ("1x", .InvalidDigit(at: 1))])
+fn aTextThatIsNoU128IsRefused(_ text: String, _ error: ParseError) {
+    expectThrows(error) { _ = try U128.parse(text) }
 }

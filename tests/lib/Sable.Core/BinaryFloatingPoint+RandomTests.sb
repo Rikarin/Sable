@@ -4,18 +4,8 @@ module BinaryFloatingPointRandomTests
 // Sable.Core).
 
 import Sable.Testing
+import CoreTestSupport
 import RandomStatistics
-
-// Gives the values it was made with, in turn, then zeros.
-struct Scripted: RandomNumberGenerator {
-    var values: U64[>..]
-    var drawn: Int
-
-    mutating fn next() -> U64 {
-        drawn += 1
-        return drawn <= values.count ? values[drawn - 1] : 0
-    }
-}
 
 @test
 fn aHalfOpenRangeStaysBelowItsUpperBound() {
@@ -24,7 +14,7 @@ fn aHalfOpenRangeStaysBelowItsUpperBound() {
     var i = 0
     while i < 1000 {
         let x = F64.random(in: 2.0..<4.0, using: &generator)
-        assert(x >= 2.0 && x < 4.0)
+        assert(x >= 2.0 && x < 4.0, "\(x)")
         sum += x
         i += 1
     }
@@ -38,9 +28,9 @@ fn aClosedRangeStaysWithinItsBounds() {
     var i = 0
     while i < 200 {
         let x = F32.random(in: -1.0...1.0, using: &generator)
-        assert(x >= -1.0 && x <= 1.0)
+        assert(x >= -1.0 && x <= 1.0, "\(x)")
         let h = F16.random(in: 0.0..<1.0, using: &generator)
-        assert(h >= 0.0 && h < 1.0)
+        assert(h >= 0.0 && h < 1.0, "\(h)")
         i += 1
     }
 }
@@ -86,7 +76,7 @@ fn extremes<T: BinaryFloatingPoint>(_ range: Range<T>) -> (T, T) {
     var greatest = range.lowerBound
     for _ in 0..<2000 {
         let x = T.random(in: range, using: &generator)
-        assert(x >= range.lowerBound && x < range.upperBound)
+        assert(x >= range.lowerBound && x < range.upperBound, "\(x)")
         least = x < least ? x : least
         greatest = x > greatest ? x : greatest
     }
@@ -99,7 +89,7 @@ fn extremes<T: BinaryFloatingPoint>(closed range: ClosedRange<T>) -> (T, T) {
     var greatest = range.lowerBound
     for _ in 0..<2000 {
         let x = T.random(in: range, using: &generator)
-        assert(x >= range.lowerBound && x <= range.upperBound)
+        assert(x >= range.lowerBound && x <= range.upperBound, "\(x)")
         least = x < least ? x : least
         greatest = x > greatest ? x : greatest
     }
@@ -140,9 +130,9 @@ fn aClosedRangeReachesBothItsBounds() {
 fn theLastStepOfAClosedRangeIsExactlyItsBound() {
     // Scaling a fraction gives the lower bound plus the width, which rounds
     // short of or past an upper bound as far below it as these.
-    var top = Scripted { values: [U64.max, 0], drawn: 0 }
+    var top = Scripted([U64.max, 0])
     assertEqual(F64.random(in: -489861948521.1566...(-7.312715117751976e-16), using: &top), -7.312715117751976e-16)
-    var bottom = Scripted { values: [0x8000000000000000, 0], drawn: 0 }
+    var bottom = Scripted([0x8000000000000000, 0])
     let x = F64.random(in: -489861948521.1566...(-7.312715117751976e-16), using: &bottom)
     expect(x < -2e11 && x > -3e11)
 }
@@ -210,10 +200,10 @@ fn aRangeAsWideAsTheTypeIsEven() {
     var narrow = zeroCounts(16)
     for _ in 0..<8000 {
         let x = F64.random(in: -greatest...greatest, using: &generator)
-        assert(x.isFinite)
+        assert(x.isFinite, "\(x)")
         counts[Int.fromWideValue((x / greatest + 1.0) * 7.999999)] += 1
         let h = F16.random(in: -F16.greatestFiniteMagnitude..<F16.greatestFiniteMagnitude, using: &generator)
-        assert(h.isFinite)
+        assert(h.isFinite, "\(h)")
         narrow[Int.fromWideValue((h.wideValue / 65504.0 + 1.0) * 7.999999)] += 1
     }
     assertEven(counts)

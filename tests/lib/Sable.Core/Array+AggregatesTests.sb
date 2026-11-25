@@ -54,12 +54,17 @@ fn extremesAgree<T: SIMDScalar & FixedWidthInteger>(_ middle: T) {
             assertEqual(same.min(), scalarLeast(same))
             assertEqual(same.max(), scalarGreatest(same))
             for at in 0..<n {
+                // A million of them: what they are is worked out for one that fails.
                 all[start + at] = T.min
-                assertEqual(all[start..<(start + n)].min(), T.min)
-                assertEqual(all[start..<(start + n)].max(), (n == 1 ? T.min : middle))
+                let least = all[start..<(start + n)]
+                if least.min() != T.min || least.max() != (n == 1 ? T.min : middle) {
+                    fail("\(T.self): the least of \(n) is at \(at), and min() is \(least.min()) and max() \(least.max())")
+                }
                 all[start + at] = T.max
-                assertEqual(all[start..<(start + n)].max(), T.max)
-                assertEqual(all[start..<(start + n)].min(), (n == 1 ? T.max : middle))
+                let greatest = all[start..<(start + n)]
+                if greatest.max() != T.max || greatest.min() != (n == 1 ? T.max : middle) {
+                    fail("\(T.self): the greatest of \(n) is at \(at), and max() is \(greatest.max()) and min() \(greatest.min())")
+                }
                 all[start + at] = middle
             }
         }
@@ -121,23 +126,24 @@ fn sumsOfEveryLengthAgree() {
     }
 }
 
-@test
-fn sumsThatReachTheBoundsAgree() {
-    // Large elements whose sums along the way fit, by a little: alternating
-    // signs, at every offset of a block.
-    for n in [15, 16, 17, 64, 255, 256, 257, 300, 520] as Int[>..] {
-        for lead in 0..<9 {
-            var longs = Int[>..](repeating: 1, count: lead)
-            var words = I32[>..](repeating: 1, count: lead)
-            for i in 0..<n {
-                longs.append(i % 2 == 0 ? Int.max - 100 : -(Int.max - 100))
-                words.append(i % 2 == 0 ? I32.max - 100 : -(I32.max - 100))
-            }
-            assertEqual(longs.sum(), scalarSum(longs)!)
-            assertEqual(words.sum(), scalarSum(words)!)
+// Large elements whose sums along the way fit, by a little: alternating
+// signs, at every offset of a block.
+@test(arguments: [15, 16, 17, 64, 255, 256, 257, 300, 520])
+fn sumsThatReachTheBoundsAgree(_ n: Int) {
+    for lead in 0..<9 {
+        var longs = Int[>..](repeating: 1, count: lead)
+        var words = I32[>..](repeating: 1, count: lead)
+        for i in 0..<n {
+            longs.append(i % 2 == 0 ? Int.max - 100 : -(Int.max - 100))
+            words.append(i % 2 == 0 ? I32.max - 100 : -(I32.max - 100))
         }
+        assertEqual(longs.sum(), scalarSum(longs)!)
+        assertEqual(words.sum(), scalarSum(words)!)
     }
-    // Exactly the bounds.
+}
+
+@test
+fn sumsThatAreExactlyTheBoundsAgree() {
     var longs = Int[>..](repeating: 0, count: 300)
     longs[299] = Int.max
     assertEqual(longs.sum(), Int.max)
@@ -171,29 +177,22 @@ fn blocksOfALongArrayAddUp() {
 
 // Sums of elements small enough to be added with no check in lanes, of some
 // that are not, and of totals close to the ends of the type.
-@test
-fn sumsOfThirtyTwoBitsTakeTheSameWayAsTheLoop() {
+@test(arguments: [16, 17, 100, 4096, 4097, 9000])
+fn sumsOfThirtyTwoBitsTakeTheSameWayAsTheLoop(_ count: Int) {
     var generator = SeededRandomNumberGenerator(seed: 7)
     for bits in 1...31 {
-        for count in [16, 17, 100, 4096, 4097, 9000] {
-            var xs: I32[>..] = []
-            var us: U32[>..] = []
-            for _ in 0..<count {
-                let magnitude = I32.truncating(generator.next() >> U64(64 - bits))
-                xs.append(generator.next() % 2 == 0 ? magnitude : -magnitude)
-                us.append(U32.truncating(generator.next() >> U64(64 - bits)))
-            }
-            if let sum = scalarSum(xs) {
-                assertEqual(xs.sum(), sum)
-            }
-            if let sum = scalarSum(us) {
-                assertEqual(us.sum(), sum)
-            }
-            xs[0] = I32.max
-            if let sum = scalarSum(xs) {
-                assertEqual(xs.sum(), sum)
-            }
-            xs[0] = I32.min
+        var xs: I32[>..] = []
+        var us: U32[>..] = []
+        for _ in 0..<count {
+            let magnitude = I32.truncating(generator.next() >> U64(64 - bits))
+            xs.append(generator.next() % 2 == 0 ? magnitude : -magnitude)
+            us.append(U32.truncating(generator.next() >> U64(64 - bits)))
+        }
+        if let sum = scalarSum(us) {
+            assertEqual(us.sum(), sum)
+        }
+        for first in [xs[0], I32.max, I32.min] {
+            xs[0] = first
             if let sum = scalarSum(xs) {
                 assertEqual(xs.sum(), sum)
             }

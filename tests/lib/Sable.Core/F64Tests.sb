@@ -57,16 +57,6 @@ fn theBitsRoundTrip() {
     expect((-0.0 as F64).bits != (0.0 as F64).bits, "the zeros differ in their sign bit")
 }
 
-/// The bits of the next pseudo-random F64, by xorshift: every pattern,
-/// NaNs and infinities among them, comes up as often as any other.
-fn nextBits(_ state: U64) -> U64 {
-    var x = state
-    x = x ^ (x << 13)
-    x = x ^ (x >> 7)
-    x = x ^ (x << 17)
-    return x
-}
-
 /// Whether the value, written in decimal, reads back as itself, bit for bit.
 fn roundTrips(_ value: F64) -> Bool {
     guard let read = value.toString().toF64() else {
@@ -75,43 +65,33 @@ fn roundTrips(_ value: F64) -> Bool {
     return read.bits == value.bits
 }
 
+// Every pattern of bits is as likely as any other.
 @test
 fn everyFiniteValueRoundTripsThroughItsShortestDecimal() {
-    var state: U64 = 0x9E3779B97F4A7C15
-    var checked = 0
-    while checked < 20000 {
-        state = nextBits(state)
-        let value = F64.fromBits(state)
-        if value.isFinite {
-            assert(roundTrips(value), "\(value) does not read back as itself")
-            checked = checked + 1
+    forAll(Gen.number(in: U64.min...U64.max).map { F64.fromBits($0) }, cases: 20000) { (value: F64) in
+        if value.isFinite && !roundTrips(value) {
+            recordFailure("\(value) does not read back as itself")
         }
     }
 }
 
-@test
-fn theEdgesOfTheFormatRoundTrip() {
-    let edges: F64[>..] = [
-        0.0, -0.0, F64.leastNonzeroMagnitude, -F64.leastNonzeroMagnitude, F64.leastNormalMagnitude,
-        F64.leastNormalMagnitude.nextDown, F64.greatestFiniteMagnitude, -F64.greatestFiniteMagnitude,
-        F64.epsilon, (1.0).nextUp, 0.1, 1.0e23, 9007199254740993.0,
-    ]
-    for value in edges {
-        assert(roundTrips(value), "\(value) does not read back as itself")
-    }
+@test(arguments: [
+    0.0, -0.0, F64.leastNonzeroMagnitude, -F64.leastNonzeroMagnitude, F64.leastNormalMagnitude,
+    F64.leastNormalMagnitude.nextDown, F64.greatestFiniteMagnitude, -F64.greatestFiniteMagnitude,
+    F64.epsilon, (1.0).nextUp, 0.1, 1.0e23, 9007199254740993.0
+])
+fn theEdgesOfTheFormatRoundTrip(_ value: F64) {
+    expect(roundTrips(value))
 }
 
-@test
-fn theShortestDigitsThatRoundTripAreWritten() {
-    // Up to 15 digits, 16 and 17, and where one becomes the other.
-    let written: (F64, String)[>..] = [
-        (0.1, "0.1"), (0.25, "0.25"), (-999.25, "-999.25"), (100.0, "100.0"), (-0.0, "-0.0"),
-        (123456789.125, "123456789.125"), (999999999999999.0, "999999999999999.0"), (1.0e15, "1000000000000000.0"),
-        (99999999999999.9, "99999999999999.9"), (0.30000000000000004, "0.30000000000000004"), (0.1 + 0.7, "0.7999999999999999"),
-        (1.0 / 3.0, "0.3333333333333333"), (1.0e-7, "1e-07"), (1.5e-7, "1.5e-07"), (1.0e22, "1e+22"), (2251799813685248.5, "2251799813685248.5"),
-        (1.0000000000000002, "1.0000000000000002"), (0.000123456789012345, "0.000123456789012345")
-    ]
-    for (value, text) in written {
-        assertEqual(value.toString(), text)
-    }
+// Up to 15 digits, 16 and 17, and where one becomes the other.
+@test(arguments: [
+    (0.1, "0.1"), (0.25, "0.25"), (-999.25, "-999.25"), (100.0, "100.0"), (-0.0, "-0.0"),
+    (123456789.125, "123456789.125"), (999999999999999.0, "999999999999999.0"), (1.0e15, "1000000000000000.0"),
+    (99999999999999.9, "99999999999999.9"), (0.30000000000000004, "0.30000000000000004"), (0.1 + 0.7, "0.7999999999999999"),
+    (1.0 / 3.0, "0.3333333333333333"), (1.0e-7, "1e-07"), (1.5e-7, "1.5e-07"), (1.0e22, "1e+22"), (2251799813685248.5, "2251799813685248.5"),
+    (1.0000000000000002, "1.0000000000000002"), (0.000123456789012345, "0.000123456789012345")
+])
+fn theShortestDigitsThatRoundTripAreWritten(_ value: F64, _ text: String) {
+    expect(value.toString() == text)
 }

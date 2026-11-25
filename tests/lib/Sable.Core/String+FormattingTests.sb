@@ -5,10 +5,7 @@ module StringFormattingTests
 //     tools/stdlib-coverage.sh Sable.Core
 
 import Sable.Testing
-
-fn spec(_ text: String) -> FormatSpec {
-    return try! FormatSpec.parse(text)
-}
+import CoreTestSupport
 
 @test
 fn aStringWithNoSpecIsItself() {

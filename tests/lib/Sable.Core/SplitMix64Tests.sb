@@ -4,21 +4,16 @@ module SplitMix64Tests
 // splitmix64.c.
 
 import Sable.Testing
+import CoreTestSupport
 
 @test
 fn aSeedGivesTheReferenceSequence() {
     var generator = SplitMix64(seed: 1234567)
-    let expected: U64[>..] = [6457827717110365317, 3203168211198807973, 9817491932198370423, 4593380528125082431, 16408922859458223821]
-    for value in expected {
-        assertEqual(generator.next(), value)
-    }
+    expect(draws(5, from: &generator) == [6457827717110365317, 3203168211198807973, 9817491932198370423, 4593380528125082431, 16408922859458223821])
 }
 
 @test
 fn zeroIsASeedAsGoodAsAnother() {
     var generator = SplitMix64(seed: 0)
-    let expected: U64[>..] = [16294208416658607535, 7960286522194355700, 487617019471545679]
-    for value in expected {
-        assertEqual(generator.next(), value)
-    }
+    expect(draws(3, from: &generator) == [16294208416658607535, 7960286522194355700, 487617019471545679])
 }

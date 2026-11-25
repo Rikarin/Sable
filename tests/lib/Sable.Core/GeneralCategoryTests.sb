@@ -5,14 +5,12 @@ module GeneralCategoryTests
 
 import Sable.Testing
 
-@test
-fn eachCategoryHasTheStandardsAbbreviation() {
-    assertEqual(GeneralCategory.UppercaseLetter.abbreviation, "Lu")
-    assertEqual(GeneralCategory.OtherLetter.abbreviation, "Lo")
-    assertEqual(GeneralCategory.DecimalNumber.abbreviation, "Nd")
-    assertEqual(GeneralCategory.OtherPunctuation.abbreviation, "Po")
-    assertEqual(GeneralCategory.SpaceSeparator.abbreviation, "Zs")
-    assertEqual(GeneralCategory.Unassigned.abbreviation, "Cn")
+@test(arguments: [
+    (.UppercaseLetter, "Lu"), (.OtherLetter, "Lo"), (.DecimalNumber, "Nd"), (.OtherPunctuation, "Po"),
+    (.SpaceSeparator, "Zs"), (.Unassigned, "Cn")
+])
+fn eachCategoryHasTheStandardsAbbreviation(_ category: GeneralCategory, _ abbreviation: String) {
+    expect(category.abbreviation == abbreviation)
 }
 
 @test

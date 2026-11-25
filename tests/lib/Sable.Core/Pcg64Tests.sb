@@ -4,25 +4,20 @@ module Pcg64Tests
 // NumPy's PCG64 given the same state, increment and distance.
 
 import Sable.Testing
+import CoreTestSupport
 
 @test
 fn theReferenceSeedingGivesTheReferenceSequence() {
     var generator = Pcg64(state: 42, stream: 54)
-    let expected: U64[>..] = [
+    expect(draws(6, from: &generator) == [
         0x86B1DA1D72062B68, 0x1304AA46C9853D39, 0xA3670E9E0DD50358, 0xF9090E529A7DAE00, 0xC85B9FD837996F2C, 0x606121F8E3919196
-    ]
-    for value in expected {
-        assertEqual(generator.next(), value)
-    }
+    ])
 }
 
 @test
 fn aSeedIsSpreadOverTheStateAndTheStream() {
     var generator = Pcg64(seed: 2024, stream: 7)
-    let expected: U64[>..] = [8692224219604682678, 12297169389127040451, 15552973567798586876]
-    for value in expected {
-        assertEqual(generator.next(), value)
-    }
+    expect(draws(3, from: &generator) == [8692224219604682678, 12297169389127040451, 15552973567798586876])
 }
 
 @test
@@ -40,8 +35,7 @@ fn advancingIsAsManyDraws() {
 fn advancingFarIsNumPys() {
     var generator = Pcg64(state: 42, stream: 54)
     generator.advance(by: (U128(1) << 100) | 12345)
-    expect(generator.next() == 0x56CCA40530C8A48A)
-    expect(generator.next() == 0x2EC3BEFA63172395)
+    expect(draws(2, from: &generator) == [0x56CCA40530C8A48A, 0x2EC3BEFA63172395])
 }
 
 @test

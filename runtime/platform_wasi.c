@@ -165,6 +165,19 @@ static bool thread_start(void (*run)(void *argument), void *argument) {
     return false;
 }
 
+static bool thread_start_sized(void (*run)(void *argument), void *argument, size_t stack) {
+    (void)stack;
+    return thread_start(run, argument);
+}
+
+static void thread_set_name(const char *name) {
+    (void)name;
+}
+
+static void thread_set_priority(int priority) {
+    (void)priority;
+}
+
 static int processor_count(void) {
     return 1;
 }

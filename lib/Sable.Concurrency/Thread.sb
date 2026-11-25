@@ -1,0 +1,211 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+/// One of the system's threads: .NET's `Thread`, Rust's `std::thread`. Most
+/// work is better a task, which costs far less and runs on a pool of threads
+/// one to a core; a thread is for what blocks for long, runs for as long as
+/// the program, or must have a stack, a name or a priority of its own. For
+/// work to be divided between the cores, `parallelFor` and an array's
+/// `parallel` divide it on the pool.
+///
+/// ```sable
+/// let sum = Thread.spawn(name: "sum") { (1...1000).reduce(0) { $0 + $1 } }
+/// assert(sum.thread.name == "sum")
+/// assert(sum.join() == 500_500)
+/// ```
+///
+/// A program ends once its main function has returned, every task has
+/// finished, and every thread it started has ended: one that never ends
+/// keeps it going. A trap on any thread stops the program, as on the main
+/// one.
+///
+/// A thread may spawn tasks, which run on the pool, and are no one's
+/// children once it has ended; and it may wait for them, blocking, with
+/// `Thread.blockOn`. Async code does not wait for a thread by blocking — it
+/// would keep a worker from every other task — but awaits the handle's
+/// `value()`.
+///
+/// On a system with one thread (WASI) a spawn traps. The interpreter has one
+/// too, and runs a thread to its end as it is spawned.
+@immutable
+public final class Thread: Equatable {
+    let handle: Int
+
+    init(handle: Int) {
+        self.handle = handle
+    }
+
+    deinit {
+        Runtime.threadRelease(handle)
+    }
+
+    /// The thread this is called on. A task may be on another after each
+    /// `await`.
+    ///
+    /// ```sable
+    /// assert(Thread.current == Thread.current)
+    /// ```
+    public static var current: Thread => Thread(handle: Runtime.threadCurrent())
+
+    /// A number no other thread of the program has, or has had.
+    public var id: Int => Runtime.threadId(handle)
+
+    /// What the thread was named, if it was: `main` for the main thread, and
+    /// `sable-worker-` and a number for one that runs tasks. A debugger shows
+    /// as much of it as the system keeps, 15 bytes on Linux.
+    public var name: String? {
+        get {
+            let name = Runtime.threadName(handle)
+            return name.isEmpty ? none : name
+        }
+    }
+
+    /// Starts a thread that runs the body, with a name, a stack of about so
+    /// many bytes (8 MiB if none is given, at least 256 KiB) and a priority.
+    /// The handle waits for it, and has what the body gives or throws. Traps
+    /// when the system cannot start one.
+    ///
+    /// The body runs alongside the code around it, so what it captures is
+    /// Sendable, as a task's is.
+    ///
+    /// ```sable
+    /// let letters = Thread.spawn { "a b c".count }
+    /// assert(letters.join() == 5)
+    /// ```
+    public static fn spawn<T: Sendable, E: Error>(name: String? = none, stackSize: Int = 0, priority: ThreadPriority = .Normal, _ body: @Sendable () throws(E) -> T) -> JoinHandle<T, E> {
+        return JoinHandle<T, E>(Thread.made(name, stackSize, priority), body)
+    }
+
+    static fn made(_ name: String?, _ stackSize: Int, _ priority: ThreadPriority) -> Thread {
+        precondition(stackSize >= 0, "a stack of \(stackSize) bytes")
+        return Thread(handle: Runtime.threadNew(name ?? "", stackSize, priority.level))
+    }
+
+    /// Runs the body with a scope, whose threads may use the variables of the
+    /// function that calls this where they are; each has ended by the time
+    /// this returns, or throws what the body throws. Rust's `thread::scope`.
+    ///
+    /// ```sable
+    /// let numbers = [4, 9, 2, 7]
+    /// var least = 0
+    /// var most = 0
+    /// Thread.scope { s in
+    ///     s.spawn { least = numbers.min() ?? 0 }
+    ///     s.spawn { most = numbers.max() ?? 0 }
+    /// }
+    /// assert(least == 2 && most == 9)
+    /// ```
+    ///
+    /// A `let` is shared by every thread that names it. A `var` is one
+    /// thread's alone for the length of the scope: its closure is written in
+    /// the scope's own, not in a loop, and nothing else in the scope — nor
+    /// another closure of the function — mentions the variable (S3236).
+    public static fn scope<R, E: Error>(_ body: (ThreadScope) throws(E) -> R) throws(E) -> R {
+        let scope = ThreadScope()
+        do {
+            let result = try body(scope)
+            scope.close()
+            return result
+        } catch {
+            scope.close()
+            throw error
+        }
+    }
+
+    /// Runs the async body as a task, and blocks this thread until it has
+    /// finished: how code that is not async waits for code that is — .NET's
+    /// `GetAwaiter().GetResult()`, Tokio's `block_on`. The main thread runs
+    /// the main actor's tasks meanwhile.
+    ///
+    /// Traps on a thread that runs tasks, where blocking could keep the task
+    /// waited for from running: async code awaits instead. Where the main
+    /// thread runs every task (`SABLE_WORKERS=0`), it must not be blocked
+    /// itself.
+    ///
+    /// ```sable
+    /// let answer = Thread.spawn { Thread.blockOn { await Task.spawn { 42 }.value } }
+    /// assert(await answer.value() == 42)
+    /// ```
+    public static fn blockOn<T: Sendable, E: Error>(_ body: @Sendable async () throws(E) -> T) throws(E) -> T {
+        let block = Runtime.blockNew()
+        let result = OnceCell<Outcome<T, E>>()
+        _ = Task.spawn {
+            let outcome = await typedOutcome(of: body)
+            _ = result.getOrInit { outcome }
+            Runtime.blockDone(block)
+        }
+        Runtime.blockWait(block)
+        return try result.get()!.get()
+    }
+
+    /// Blocks this thread for at least the duration. A task sleeps with
+    /// `Task.sleep`, which blocks none.
+    public static fn sleep(_ duration: Duration) {
+        if duration.totalNanoseconds > 0 {
+            Runtime.sleep(nanoseconds: duration.totalNanoseconds)
+        }
+    }
+
+    /// Lets another thread run now, if one waits to.
+    public static fn `yield`() {
+        Runtime.threadYield()
+    }
+
+    /// Blocks this thread until its token is there, and takes it: each thread
+    /// has at most one, which `unpark()` gives it, before or meanwhile. What
+    /// a lock or a queue is built from; with one token, what is waited for is
+    /// looked at again after.
+    ///
+    /// ```sable
+    /// Thread.current.unpark()
+    /// Thread.park()
+    /// ```
+    public static fn park() {
+        _ = Runtime.threadPark(until: -1)
+    }
+
+    /// As `park()`, for no longer than the duration: whether it took a token.
+    ///
+    /// ```sable
+    /// assert(!Thread.park(atMost: Duration.milliseconds(1)))
+    /// Thread.current.unpark()
+    /// assert(Thread.park(atMost: Duration.seconds(10)))
+    /// ```
+    public static fn park(atMost duration: Duration) -> Bool {
+        return Runtime.threadPark(until: deadline(after: duration))
+    }
+
+    /// Gives the thread its token, if it has none: its `park()` returns.
+    public fn unpark() {
+        Runtime.threadUnpark(handle)
+    }
+
+    /// How many threads can run at once: the processors the program is bound
+    /// to and, on Linux, the time its control group (a container) may have.
+    ///
+    /// ```sable
+    /// assert(Thread.availableParallelism >= 1)
+    /// ```
+    public static var availableParallelism: Int => Runtime.systemNumber(0)
+
+    /// Whether the two are one thread.
+    public operator == (a: Thread, b: Thread) -> Bool {
+        return a.handle == b.handle
+    }
+}
+
+// A time of the monotonic clock, so long from now.
+fn deadline(after duration: Duration) -> Int {
+    let now = Runtime.monotonicNanoseconds()
+    let wait = duration.totalNanoseconds
+    return wait <= 0 ? now : wait > Int.max - now ? Int.max : now + wait
+}
+
+fn typedOutcome<T, E: Error>(of body: async () throws(E) -> T) async -> Outcome<T, E> {
+    do {
+        return .Ok(try await body())
+    } catch {
+        return .Err(error)
+    }
+}

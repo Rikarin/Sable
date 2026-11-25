@@ -35,7 +35,12 @@ typedef struct SableThread {
     int64_t tasks_spawned;
     struct SableThread *next; // every thread's, the latest first
     int32_t index;            // how many were made before it
+    int32_t local_count;      // the places of its table of thread-locals, and
+    int32_t last_local;       // the place last made in it, and one (parallel.c)
+    struct ThreadLocalValue *locals;
+    struct OsThread *os;      // what Thread.current is, once asked for; counted
     bool attached;            // its thread is one C may call into: foreign.c
+    bool ends;                // its thread may end while the program runs on (foreign.c)
 } SableThread;
 
 static SableThread *all_threads;

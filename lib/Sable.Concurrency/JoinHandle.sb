@@ -1,0 +1,101 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+/// A thread started by `Thread.spawn`, or in a `Thread.scope`, and what its
+/// body gave or threw, once it has ended: Rust's `JoinHandle`. Any thread may
+/// wait for it, any number of times. Letting it go does not end the thread,
+/// nor does anything else.
+///
+/// ```sable
+/// let parse = Thread.spawn { () throws -> Int in
+///     throw CancellationError()
+/// }
+/// do {
+///     _ = try parse.join()
+///     assert(false)
+/// } catch { }
+/// assert(parse.isFinished)
+/// ```
+@immutable
+public final class JoinHandle<T: Sendable, E: Error> {
+    /// The thread.
+    public let thread: Thread
+
+    let outcome: OnceCell<Outcome<T, E>>
+    let finished: WaitList
+    let detached: Atomic<Bool>
+
+    init(_ thread: Thread, _ body: @Sendable () throws(E) -> T) {
+        self.thread = thread
+        outcome = OnceCell<Outcome<T, E>>()
+        finished = WaitList()
+        detached = Atomic(false)
+        let outcome = self.outcome
+        let finished = self.finished
+        Runtime.startThread(thread.handle) {
+            let ended = Outcome.catching(body)
+            _ = outcome.getOrInit { ended }
+            finished.wakeAll()
+        }
+    }
+
+    /// Waits for the thread to end, blocking this one: what its body gave, or
+    /// the error it threw. Its thread-locals have been destroyed by then.
+    /// Traps on the thread itself, and after `detach()`.
+    @discardable
+    public fn join() throws(E) -> T {
+        checkAttached()
+        _ = Runtime.threadJoin(thread.handle, until: -1)
+        return try outcome.get()!.get()
+    }
+
+    /// As `join()`, waiting no longer than the duration: none if the thread
+    /// had not ended by then.
+    ///
+    /// ```sable
+    /// let quick = Thread.spawn { 7 }
+    /// assert(quick.join(atMost: Duration.seconds(60)) == 7)
+    /// ```
+    public fn join(atMost duration: Duration) throws(E) -> T? {
+        checkAttached()
+        if !Runtime.threadJoin(thread.handle, until: deadline(after: duration)) {
+            return none
+        }
+        return try outcome.get()!.get()
+    }
+
+    /// What the body gives, or throws, waiting for it: the task suspends, and
+    /// no thread is blocked. The thread may have its thread-locals yet to
+    /// destroy.
+    ///
+    /// ```sable
+    /// assert(await Thread.spawn { 6 * 7 }.value() == 42)
+    /// ```
+    public fn value() async throws(E) -> T {
+        while true {
+            let ticket = finished.ticket
+            if let ended = outcome.get() {
+                return try ended.get()
+            }
+            await finished.park(since: ticket)
+        }
+    }
+
+    /// Whether the thread has ended: `join()` would not wait.
+    public var isFinished: Bool => Runtime.threadEnded(thread.handle)
+
+    /// Says that no one will wait for the thread: what it gives, or throws,
+    /// is dropped. The program still ends only once it has.
+    ///
+    /// ```sable
+    /// Thread.spawn { }.detach()
+    /// ```
+    public fn detach() {
+        detached.store(true)
+    }
+
+    fn checkAttached() {
+        precondition(!detached.load(), "a thread is joined that was detached")
+    }
+}

@@ -10984,6 +10984,14 @@ public sealed partial class SilGen {
                     return UnitValue.Instance;
                 }
 
+                // What runs a closure somewhere else, or later (SilGen.Tasks.cs).
+                if (owner is { Name: "Runtime", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }
+                    && callee.Name is "startThread" or "runLoop" or "setThreadLocal" or "pushTaskLocal") {
+                    return HandOver(call, callee.Name switch {
+                        "startThread" => "thread_start", "runLoop" => "thread_loop", "setThreadLocal" => "thread_local_set", _ => "task_local_push",
+                    });
+                }
+
                 // 'Runtime.share(value)': its objects counted atomically from now on.
                 if (owner is { Name: "Runtime", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } } && callee.Name == "share") {
                     return RawMemoryIntrinsic(call, "share");

@@ -1,0 +1,130 @@
+module Sable.Concurrency
+
+/// A value each thread has one of its own: made the first time the thread
+/// asks, and destroyed as the thread ends, those made last first. .NET's
+/// `ThreadLocal<T>`, Rust's `thread_local!`. The main thread's, and those of
+/// the threads that run tasks, are destroyed as the program ends.
+///
+/// ```sable
+/// let scratch = ThreadLocal<Int[>..]> { [] }
+/// scratch.withValue { $0.append(1) }
+/// let others = Thread.spawn { scratch.withValue { $0.count } }
+/// assert(others.join() == 0)
+/// assert(scratch.value.count == 1)
+/// ```
+///
+/// A task may be on another thread after each `await`, so what it finds here
+/// is the thread's, not its own: a cache, a buffer, a generator of random
+/// numbers, for as long as `withValue` runs, in which nothing is awaited.
+/// What is a task's own is a `TaskLocal`.
+///
+/// The objects a value holds are counted atomically, since what is read here
+/// may be handed to other threads.
+@immutable
+public final class ThreadLocal<Value> {
+    let key: Int
+    let make: () -> Value
+
+    /// A thread-local whose value, on each thread, is what 'make' gives there
+    /// the first time it is asked for. The closure runs on any thread, so what
+    /// it captures is Sendable.
+    public init(_ make: @escaping @Sendable () -> Value) {
+        key = Runtime.threadLocalKey()
+        self.make = make
+    }
+
+    deinit {
+        Runtime.threadLocalFree(key)
+    }
+
+    /// This thread's value, made now if it has none: a copy of it, or another
+    /// in its place.
+    ///
+    /// ```sable
+    /// let depth = ThreadLocal { 0 }
+    /// depth.value += 1
+    /// assert(depth.value == 1)
+    /// ```
+    public var value: Value {
+        get {
+            unsafe {
+                return current(at: cell())
+            }
+        }
+        set {
+            unsafe {
+                let place = cell()
+                _ = current(at: place)
+                place.store(.Some(newValue))
+            }
+        }
+    }
+
+    /// What the closure makes of this thread's value, which it may change
+    /// where it is. Asking this thread-local for its value meanwhile traps.
+    ///
+    /// ```sable
+    /// let seen = ThreadLocal<[String: Int]> { [:] }
+    /// assert(seen.withValue { $0["a"] = 1; return $0.count } == 1)
+    /// ```
+    public fn withValue<R, E: Error>(_ body: (inout Value) throws(E) -> R) throws(E) -> R {
+        unsafe {
+            let place = cell()
+            var value = take(from: place)
+            do {
+                let result = try body(&value)
+                place.initialize(to: .Some(move value))
+                return result
+            } catch {
+                place.initialize(to: .Some(move value))
+                throw error
+            }
+        }
+    }
+
+    /// Whether this thread has a value: one was asked for, and the thread has
+    /// not destroyed it.
+    public var isMade: Bool => Runtime.threadLocalFind(key) != 0
+
+    // Where this thread's value is: none there while 'withValue' has it.
+    fn cell() -> RawPtr<Value?> {
+        let found = Runtime.threadLocalFind(key)
+        return RawPtr<Value?>(address: found != 0 ? found : made())
+    }
+
+    fn made() -> Int {
+        let value = make()
+        // Asked for by 'make' itself, which has then made one.
+        let found = Runtime.threadLocalFind(key)
+        if found != 0 {
+            return found
+        }
+        unsafe {
+            let place = RawPtr<Value?>.allocate(count: 1)
+            place.initialize(to: .Some(value))
+            Runtime.setThreadLocal(key, place.address) {
+                unsafe {
+                    place.deinitialize()
+                    place.deallocate()
+                }
+            }
+            return place.address
+        }
+    }
+
+    unsafe fn current(at place: RawPtr<Value?>) -> Value {
+        guard let value = place.load() else {
+            preconditionFailure("a thread-local is asked for its value while 'withValue' has it")
+        }
+        return value
+    }
+
+    unsafe fn take(from place: RawPtr<Value?>) -> Value {
+        let taken = place.move()
+        place.initialize(to: none)
+        guard let value = taken else {
+            preconditionFailure("a thread-local is asked for its value while 'withValue' has it")
+        }
+        return value
+    }
+}

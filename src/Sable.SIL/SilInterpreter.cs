@@ -2469,6 +2469,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Inline(builtin, operands, depth);
         }
 
+        if (builtin.Name.StartsWith("thread_", StringComparison.Ordinal) || builtin.Name.StartsWith("task_local_", StringComparison.Ordinal)) {
+            return ThreadBuiltin(builtin.Name, operands, depth);
+        }
+
         if (builtin.Name.StartsWith("task_", StringComparison.Ordinal) || builtin.Name.StartsWith("async_", StringComparison.Ordinal)) {
             return Task(builtin.Name, operands, depth);
         }

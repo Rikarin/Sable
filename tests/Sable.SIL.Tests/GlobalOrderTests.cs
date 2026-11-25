@@ -8,7 +8,7 @@ namespace Sable.SIL.Tests;
 /// </summary>
 public sealed class GlobalOrderTests {
     static Compilation Program(params string[] files) =>
-        Compilation.Create([..files.Select(static (text, i) => SyntaxTree.Parse(new SourceText($"module M\n{text}", $"f{i}.sb")))]);
+        Compilation.Create([..files.Select(static (text, i) => SyntaxTree.Parse(new SourceText(text.StartsWith("module ", StringComparison.Ordinal) ? text : $"module M\n{text}", $"f{i}.sb")))]);
 
     static string Run(params string[] files) {
         var compilation = Program(files);
@@ -119,4 +119,64 @@ public sealed class GlobalOrderTests {
         var diagnostic = Assert.Single(Lowering("let a: Int = b\nfn main() { print(a) }", "let b: Int = a"));
         Assert.Equal(ErrorCode.ERR_GlobalInitializationCycle, diagnostic.Code);
     }
+
+    /// <summary>
+    ///     What a call through a protocol may read is no reason to set a global
+    ///     before one it surely reads.
+    /// </summary>
+    [Fact]
+    public void WhatACallMayReadDoesNotComeBeforeWhatItSurelyReads() =>
+        Assert.Equal(
+            "[1, 2]\n3\n7\n",
+            Run(
+                """
+                protocol Maker { fn make() -> Int }
+                struct Plain: Maker { fn make() -> Int { return 1 } }
+                struct FromLater: Maker { fn make() -> Int { return later + middle } }
+                fn made(_ maker: any Maker) -> Int { return maker.make() }
+                let first: Int[] = [made(Plain()), 2]
+                let middle: Int = later + 1
+                let later: Int = first[0] + 2 - first[1] + 1 + first.count
+                fn main() {
+                    print(first)
+                    print(later - 1)
+                    print(made(FromLater()) - 2)
+                }
+                """
+            )
+        );
+
+    /// <summary>A program's global that calls into the library comes after the library's constants (#332).</summary>
+    [Fact]
+    public void TheLibrarysGlobalsComeBeforeTheProgramsThatCallIt() =>
+        Assert.Equal("[5, 6]\n", Run("import Sable.Made\nlet mine: Int[>..] = Holder<Two>.generate()\nfn main() { print(mine) }", Library, Uses));
+
+    /// <summary>A library's global that calls its own type through a protocol comes after what that type's member reads.</summary>
+    [Fact]
+    public void ALibrarysGlobalIsSetAfterWhatItsTypesMembersRead() =>
+        Assert.Equal("[6, 1]\n", Run("import Sable.Made.Uses\nfn main() { print(ready) }", Uses, Library));
+
+    const string Library = """
+        module Sable.Made
+        public protocol Curve { static fn table() -> Int[>..] }
+        public struct Two: Curve {
+            public static fn table() -> Int[>..] { return numbers }
+        }
+        public struct Holder<C: Curve> {
+            public static fn generate() -> Int[>..] { return C.table() }
+        }
+        public fn through(_ curve: any Reader) -> Int[>..] { return curve.read() }
+        public protocol Reader { fn read() -> Int[>..] }
+        public struct ReadsNumbers: Reader {
+            public init() { }
+            public fn read() -> Int[>..] { return numbers }
+        }
+        let numbers: Int[>..] = [5, 6]
+        """;
+
+    const string Uses = """
+        module Sable.Made.Uses
+        import Sable.Made
+        public let ready: Int[>..] = [through(ReadsNumbers())[1], 1]
+        """;
 }

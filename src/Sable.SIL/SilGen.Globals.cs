@@ -13,10 +13,10 @@ namespace Sable.SIL;
 ///         What an initial value reads is what its expression names and what
 ///         the functions it calls read, as Go orders its package variables. A
 ///         call through a protocol, or of a method a subclass overrides, goes
-///         where only running it says: it may be any of the program's types'
-///         own, so a global one of them reads comes first too, where that
-///         leaves an order — and is no reason for an error where it does
-///         not. The standard library's globals come before the program's.
+///         where only running it says: it may be any type's own, so a global one
+///         of them reads comes first too, where what is surely read leaves an
+///         order — and is no reason for an error where it does not. The
+///         standard library's globals come before the program's.
 ///         Globals that need nothing of each other keep the order they were
 ///         declared in, file by file, so the program is set up as it reads
 ///         where it can be.
@@ -40,10 +40,47 @@ public sealed partial class SilGen {
         var path = new List<(FieldSymbol Global, IReadOnlyList<FunctionSymbol> Through, bool Maybe)>();
         var reported = new HashSet<FieldSymbol>();
 
+        var needs = new Dictionary<FieldSymbol, List<(FieldSymbol Global, IReadOnlyList<FunctionSymbol> Through, bool Maybe)>>();
+        List<(FieldSymbol Global, IReadOnlyList<FunctionSymbol> Through, bool Maybe)> Needs(FieldSymbol field) {
+            if (!needs.TryGetValue(field, out var known)) {
+                needs[field] = known = [..GlobalsNeededBy(field, _globalFields[declared[field]].Model).OrderBy(static n => n.Maybe).ThenBy(n => declared[n.Global])];
+            }
+
+            return known;
+        }
+
+        // Whether one surely needs one still being visited, so that what only
+        // may need it cannot come after it.
+        bool NeedsWhatIsVisited(FieldSymbol field) {
+            var seen = new HashSet<FieldSymbol> { field };
+            var pending = new Stack<FieldSymbol>(seen);
+            while (pending.TryPop(out var next)) {
+                foreach (var (needed, _, maybe) in Needs(next)) {
+                    if (maybe) {
+                        break;
+                    }
+
+                    if (state.TryGetValue(needed, out var placed)) {
+                        if (!placed) {
+                            return true;
+                        }
+                    } else if (seen.Add(needed)) {
+                        pending.Push(needed);
+                    }
+                }
+            }
+
+            return false;
+        }
+
         void Visit(int index) {
             var global = _globalFields[index];
             state[global.Field] = false;
-            foreach (var (needed, through, maybe) in GlobalsNeededBy(global.Field, global.Model).OrderBy(static n => n.Maybe).ThenBy(n => declared[n.Global])) {
+            foreach (var (needed, through, maybe) in Needs(global.Field)) {
+                if (maybe && (state.ContainsKey(needed) || NeedsWhatIsVisited(needed))) {
+                    continue;
+                }
+
                 path.Add((global.Field, through, maybe));
                 if (!state.TryGetValue(needed, out var placed)) {
                     Visit(declared[needed]);
@@ -117,12 +154,11 @@ public sealed partial class SilGen {
         return needed;
     }
 
-    Dictionary<string, List<FunctionSymbol>>? _programMembers;
+    Dictionary<string, List<FunctionSymbol>>? _typeMembers;
 
     /// <summary>
-    ///     The program's own functions a call of this one may run in its place:
-    ///     the members its types meet a requirement with, or override a method
-    ///     with. The library's are not looked through: its globals come first.
+    ///     The functions a call of this one may run in its place: the members
+    ///     types meet a requirement with, or override a method with.
     /// </summary>
     IEnumerable<FunctionSymbol> MayRun(Symbol member, string name, int parameters) {
         var requirement = member is FunctionSymbol called ? RequirementProtocol(called) : member.ContainingSymbol as NamedTypeSymbol is { TypeKind: TypeKind.Protocol } declaring ? declaring : null;
@@ -131,8 +167,8 @@ public sealed partial class SilGen {
             return [];
         }
 
-        if (_programMembers is null) {
-            _programMembers = new(StringComparer.Ordinal);
+        if (_typeMembers is null) {
+            _typeMembers = new(StringComparer.Ordinal);
             void Gather(IEnumerable<Symbol> members) {
                 foreach (var type in members.OfType<NamedTypeSymbol>()) {
                     Gather(type.Members);
@@ -143,26 +179,26 @@ public sealed partial class SilGen {
                     foreach (var member in type.Members) {
                         var made = member is FieldSymbol { IsComputed: true } property ? GetterOf(property) : member as FunctionSymbol;
                         if (made is not null) {
-                            (_programMembers.TryGetValue(member.Name, out var named) ? named : _programMembers[member.Name] = []).Add(made);
+                            (_typeMembers.TryGetValue(member.Name, out var named) ? named : _typeMembers[member.Name] = []).Add(made);
                         }
                     }
                 }
             }
 
-            foreach (var module in _compilation.Modules.Where(static m => !CoreLibrary.IsStandardLibrary(m.Name))) {
+            foreach (var module in _compilation.Modules) {
                 Gather(module.Members);
             }
         }
 
         name = member.ContainingSymbol is FieldSymbol field ? field.Name : name;
-        return !_programMembers.TryGetValue(name, out var candidates) ? [] : candidates.Where(c =>
+        return !_typeMembers.TryGetValue(name, out var candidates) ? [] : candidates.Where(c =>
             c.Parameters.Length == parameters && Owner(c)?.OriginalDefinition is { } owner
             && (requirement is not null ? owner.Supertypes.Any(s => s is NamedTypeSymbol named && ReferenceEquals(named.OriginalDefinition, requirement.OriginalDefinition)) || owner.Satisfies(requirement)
                 : !ReferenceEquals(owner, overridden) && owner.SupertypeOf(overridden!) is not null));
     }
 
     /// <summary>The globals some code names, and the functions it calls or names, in the order written.</summary>
-    /// <param name="Maybe">The program's own members that may meet the protocol's properties read.</param>
+    /// <param name="Maybe">The members that may meet the protocol's properties read.</param>
     readonly record struct References(List<FieldSymbol> Globals, List<FunctionSymbol> Functions, List<FunctionSymbol> Maybe);
 
     /// <summary>What each function reads and calls, worked out once for every global that reaches it.</summary>

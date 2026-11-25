@@ -331,4 +331,23 @@ public sealed class CryptoTests {
             """);
         Assert.Equal("true\nfalse\n", AssertAgree(source).Stdout);
     }
+
+    /// <summary>A module-level value that calls the library is set after the library's constants its call reads (#332).</summary>
+    [Fact]
+    public void AModulesValueMayBeMadeOfTheLibrarysConstants() {
+        foreach (var optimise in (bool[])[false, true]) {
+            Assert.Equal("true\n", Programs.BuildAndRun("""
+            module C332
+
+            import Sable.Crypto
+
+            let key: EcdsaPrivateKey<P256> = EcdsaPrivateKey<P256>.generate()
+
+            @main
+            fn main() {
+                print(key.publicKey == key.publicKey)
+            }
+            """, optimise).Stdout);
+        }
+    }
 }

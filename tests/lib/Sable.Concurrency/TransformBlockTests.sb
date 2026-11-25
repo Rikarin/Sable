@@ -173,7 +173,9 @@ fn faultingABlockDropsWhatItHolds() async {
 fn aLinkPassesItemsAndCompletionOn() async throws {
     let source = TransformBlock<Int, String> { "\($0)" }
     let seen = Mutex<String[>..]>([])
-    let sink = ActionBlock<String> { text in seen.withLock { $0.append(text) } }
+    let sink = ActionBlock<String> { text in
+        seen.withLock { $0.append(text) }
+    }
     source.link(to: sink, propagateCompletion: true)
     for i in 1...3 {
         await source.send(i)
@@ -466,7 +468,9 @@ fn aJoinBlockPairsItsTargetsItemsInOrder() async throws {
 fn aJoinBlockFeedsALink() async throws {
     let join = JoinBlock<Int, Int>(capacity: 2)
     let sums = Mutex<Int[>..]>([])
-    let sink = ActionBlock<(Int, Int)> { pair in sums.withLock { $0.append(pair.0 + pair.1) } }
+    let sink = ActionBlock<(Int, Int)> { pair in
+        sums.withLock { $0.append(pair.0 + pair.1) }
+    }
     join.link(to: sink, propagateCompletion: true)
     for i in 1...3 {
         await join.first.send(i)

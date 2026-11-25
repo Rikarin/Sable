@@ -19,14 +19,14 @@ module Sable.Concurrency
 /// ```
 public fn merge<First: AsyncSequence, Second: AsyncSequence, Third: AsyncSequence>(_ first: First, _ second: Second, _ third: Third) -> AsyncMerge3Sequence<First, Second, Third>
     where First: Sendable, Second: Sendable, Third: Sendable, First.Element: Sendable,
-          Second.Element == First.Element, Second.Failure == First.Failure, Third.Element == First.Element, Third.Failure == First.Failure {
+    Second.Element == First.Element, Second.Failure == First.Failure, Third.Element == First.Element, Third.Failure == First.Failure {
     return AsyncMerge3Sequence<First, Second, Third> { first: first, second: second, third: third }
 }
 
 /// What 'merge(_:_:_:)' makes: three async sequences' elements as they come.
 public struct AsyncMerge3Sequence<First: AsyncSequence, Second: AsyncSequence, Third: AsyncSequence>: AsyncSequence
     where First: Sendable, Second: Sendable, Third: Sendable, First.Element: Sendable,
-          Second.Element == First.Element, Second.Failure == First.Failure, Third.Element == First.Element, Third.Failure == First.Failure {
+    Second.Element == First.Element, Second.Failure == First.Failure, Third.Element == First.Element, Third.Failure == First.Failure {
     let first: First
     let second: Second
     let third: Third

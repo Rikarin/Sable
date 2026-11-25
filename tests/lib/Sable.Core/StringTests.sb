@@ -76,3 +76,44 @@ fn iteratingScalarsInOrder() {
     }
     assertEqual(seen, "[a][é][😀]")
 }
+
+// The first so many characters, put together one by one.
+fn joined(_ text: String, _ count: Int) -> String {
+    var made = ""
+    var i = 0
+    for c in text {
+        if i == count {
+            break
+        }
+        made += "\(c)"
+        i += 1
+    }
+    return made
+}
+
+@test
+fn stringsOfEveryShortLengthAreComparedCopiedAndSplit() {
+    let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    for length in 0..<40 {
+        let text = joined(letters, length)
+        let same = joined(letters, length)
+        assert(text == same)
+        assertEqual(text.utf8Count, length)
+        assertEqual(text + same, "\(text)\(same)")
+        for at in 0..<length {
+            var changed = ""
+            var i = 0
+            for c in text {
+                changed += i == at ? "_" : "\(c)"
+                i += 1
+            }
+            assert(changed != text)
+            assert(changed.split('_').count == 2)
+            assertEqual(changed.split('_')[0].utf8Count, at)
+            assertEqual(changed.split('_')[1].utf8Count, length - 1 - at)
+        }
+    }
+    let wide = "\(letters)\(letters)\(letters),\(letters)"
+    assertEqual(wide.split(',').count, 2)
+    assertEqual(wide.split(',')[1], letters)
+}

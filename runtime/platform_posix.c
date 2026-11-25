@@ -38,6 +38,7 @@
 #include <libproc.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <pthread/qos.h>
 #include <net/if_dl.h>
 #include <sys/event.h>
 #include <sys/sysctl.h>
@@ -750,12 +751,16 @@ static void *thread_main(void *pointer) {
     ThreadStart start = *(ThreadStart *)pointer;
     free(pointer);
     // A stack for the overflow handler, for as long as the thread runs.
-    watch_stack_on(malloc(SIGNAL_STACK));
+    char *memory = malloc(SIGNAL_STACK);
+    watch_stack_on(memory);
     start.run(start.argument);
+    stack_t none = { .ss_flags = SS_DISABLE, .ss_size = SIGNAL_STACK };
+    sigaltstack(&none, NULL);
+    free(memory);
     return NULL;
 }
 
-static bool thread_start(void (*run)(void *argument), void *argument) {
+static bool thread_start_sized(void (*run)(void *argument), void *argument, size_t stack) {
     ThreadStart *start = malloc(sizeof *start);
     if (start == NULL) {
         return false;
@@ -765,8 +770,11 @@ static bool thread_start(void (*run)(void *argument), void *argument) {
     start->argument = argument;
     pthread_attr_t attributes;
     pthread_attr_init(&attributes);
-    // As large as the main thread's usually is: a task's calls run here.
-    pthread_attr_setstacksize(&attributes, 8 * 1024 * 1024);
+    // Whole pages, and room for a handler's frames and the runtime's own.
+    enum { LEAST = 256 * 1024 };
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    stack = ((stack < LEAST ? LEAST : stack) + page - 1) / page * page;
+    pthread_attr_setstacksize(&attributes, stack);
     pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
     pthread_t thread;
     bool started = pthread_create(&thread, &attributes, thread_main, start) == 0;
@@ -778,10 +786,173 @@ static bool thread_start(void (*run)(void *argument), void *argument) {
     return started;
 }
 
+// As large as the main thread's usually is: a task's calls run here.
+static bool thread_start(void (*run)(void *argument), void *argument) {
+    return thread_start_sized(run, argument, THREAD_STACK);
+}
+
+#if defined(__APPLE__)
+static void thread_set_name(const char *name) {
+    pthread_setname_np(name);
+}
+
+static void thread_set_priority(int priority) {
+    static const qos_class_t classes[] = { QOS_CLASS_BACKGROUND, QOS_CLASS_UTILITY, QOS_CLASS_DEFAULT, QOS_CLASS_USER_INITIATED, QOS_CLASS_USER_INTERACTIVE };
+    pthread_set_qos_class_self_np(classes[priority + 2], 0);
+}
+
 static int processor_count(void) {
     long count = sysconf(_SC_NPROCESSORS_ONLN);
     return count > 0 ? (int)count : 1;
 }
+#else
+static void thread_set_name(const char *name) {
+    // Fifteen bytes, and a NUL: fewer where that would split a character.
+    char some[16];
+    size_t length = strlen(name);
+    if (length > 15) {
+        length = 15;
+        while (length > 0 && ((unsigned char)name[length] & 0xc0) == 0x80) {
+            length--;
+        }
+    }
+
+    memcpy(some, name, length);
+    some[length] = '\0';
+    pthread_setname_np(pthread_self(), some);
+}
+
+// Each thread's nice value is its own on Linux; to be nicer is always allowed.
+static void thread_set_priority(int priority) {
+    static const int nice[] = { 19, 10, 0, -5, -10 };
+    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), nice[priority + 2]);
+}
+
+// The processors a control group's quota comes to, rounded up: what the file
+// holds, "quota period" or, in version 1, the quota, with its period in
+// another. 0: no limit.
+static long quota_of(const char *directory, bool second) {
+    char path[4096 + 64], text[64];
+    long long quota = -1, period = 0;
+    snprintf(path, sizeof path, "%s/%s", directory, second ? "cpu.max" : "cpu.cfs_quota_us");
+    FILE *file = fopen(path, "re");
+    if (file == NULL) {
+        return 0;
+    }
+
+    char *read = fgets(text, sizeof text, file);
+    fclose(file);
+    if (read == NULL) {
+        return 0;
+    }
+
+    if (second) {
+        if (sscanf(text, "%lld %lld", &quota, &period) != 2) {
+            return 0;
+        }
+    } else {
+        quota = atoll(text);
+        snprintf(path, sizeof path, "%s/cpu.cfs_period_us", directory);
+        file = fopen(path, "re");
+        if (file != NULL) {
+            if (fgets(text, sizeof text, file) != NULL) {
+                period = atoll(text);
+            }
+
+            fclose(file);
+        }
+    }
+
+    return quota > 0 && period > 0 ? (long)((quota + period - 1) / period) : 0;
+}
+
+// The least of the limits on the program's control group and those it is in;
+// 0: none.
+static long group_limit(void) {
+    FILE *groups = fopen("/proc/self/cgroup", "re");
+    if (groups == NULL) {
+        return 0;
+    }
+
+    long least = 0;
+    char line[4096];
+    while (fgets(line, sizeof line, groups) != NULL) {
+        // "number:controllers:path", and "0::path" in version 2.
+        line[strcspn(line, "\n")] = '\0';
+        char *controllers = strchr(line, ':');
+        char *path = controllers != NULL ? strchr(controllers + 1, ':') : NULL;
+        if (path == NULL) {
+            continue;
+        }
+
+        *path++ = '\0';
+        controllers++;
+        bool second = controllers[0] == '\0';
+        bool cpu = false;
+        char *rest = NULL;
+        for (char *each = strtok_r(controllers, ",", &rest); each != NULL; each = strtok_r(NULL, ",", &rest)) {
+            cpu |= strcmp(each, "cpu") == 0;
+        }
+
+        if (!second && !cpu) {
+            continue;
+        }
+
+        char directory[4096 + 32];
+        const char *root = second ? "/sys/fs/cgroup" : "/sys/fs/cgroup/cpu";
+        for (;;) {
+            snprintf(directory, sizeof directory, "%s%s", root, strcmp(path, "/") == 0 ? "" : path);
+            long limit = quota_of(directory, second);
+            if (limit > 0 && (least == 0 || limit < least)) {
+                least = limit;
+            }
+
+            char *up = strrchr(path, '/');
+            if (up == NULL || path[0] == '\0') {
+                break;
+            }
+
+            *up = '\0';
+        }
+    }
+
+    fclose(groups);
+    return least;
+}
+
+static int processor_count(void) {
+    static int known;
+    int count = __atomic_load_n(&known, __ATOMIC_RELAXED);
+    if (count > 0) {
+        return count;
+    }
+
+    long most = sysconf(_SC_NPROCESSORS_ONLN);
+    for (int size = 1024; size <= 1 << 20; size *= 2) {
+        cpu_set_t *set = CPU_ALLOC((size_t)size);
+        if (set == NULL) {
+            break;
+        }
+
+        int failed = sched_getaffinity(0, CPU_ALLOC_SIZE((size_t)size), set);
+        int bound = failed ? 0 : CPU_COUNT_S(CPU_ALLOC_SIZE((size_t)size), set);
+        CPU_FREE(set);
+        if (bound > 0) {
+            most = bound;
+            break;
+        }
+    }
+
+    long limit = group_limit();
+    if (limit > 0 && limit < most) {
+        most = limit;
+    }
+
+    count = most > 0 ? (int)most : 1;
+    __atomic_store_n(&known, count, __ATOMIC_RELAXED);
+    return count;
+}
+#endif
 
 static void thread_yield(void) {
     sched_yield();

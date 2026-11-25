@@ -170,6 +170,7 @@ typedef struct SableTask {
     int64_t base_priority;           // as given: Task.currentPriority
     int64_t priority;                // as escalated: its band
     int64_t live;                    // its children not yet finished, and its body
+    struct TaskLocalValue *locals;   // the task-locals bound where it is, the innermost first (below)
     bool done;
     bool held_actor;                 // it has: an escalation may look at it
     uint8_t alive_list;              // the list of those alive it is on
@@ -753,13 +754,24 @@ static bool any_queued(void) {
     return false;
 }
 
+// The loops open to more threads (parallel.c), which a worker that finds no
+// task helps with: how many.
+static struct {
+    _Alignas(128) int32_t open;
+    _Alignas(128) char after[1];
+} loops;
+
+static bool loops_open(void) {
+    return __atomic_load_n(&loops.open, __ATOMIC_RELAXED) > 0;
+}
+
 // Whether a worker about to park must not: as 'any_queued', but a worker's
 // only task is not a reason while another watches, whose it is to find
 // (search). Asked after that task was seen: whoever watches says it no longer
 // does, and then looks.
 static bool must_look(void) {
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
-    if (__atomic_load_n(&hot.injected, __ATOMIC_RELAXED) > 0) {
+    if (__atomic_load_n(&hot.injected, __ATOMIC_RELAXED) > 0 || loops_open()) {
         return true;
     }
 
@@ -2082,6 +2094,84 @@ static void executor_release(void *actor) {
     schedule(next);
 }
 
+// ---- Task-locals ---------------------------------------------------------------
+
+// What 'TaskLocal.withValue' binds, for as long as it runs: the value in raw
+// memory of its own, and what destroys it. A task has a list of them, the
+// innermost first; a child begins with its parent's — the same nodes, each
+// counted by what holds it, a task or the node bound after it — so one is
+// changed by no one, and read without a lock.
+typedef struct TaskLocalValue {
+    int32_t references;
+    int64_t key;                   // the TaskLocal's, never another's
+    int64_t cell;
+    void (*destroy)(void *holder);
+    void *holder;
+    struct TaskLocalValue *outer;
+} TaskLocalValue;
+
+static void task_locals_release(TaskLocalValue *value) {
+    while (value != NULL && __atomic_sub_fetch(&value->references, 1, __ATOMIC_ACQ_REL) == 0) {
+        TaskLocalValue *outer = value->outer;
+        value->destroy(value->holder);
+        sable_release(value->holder);
+        free(value);
+        value = outer;
+    }
+}
+
+// A value bound, over whatever the key was bound to: 'cell' is where it is,
+// and 'destroy(holder)' destroys it, once the binding has ended and no task
+// spawned meanwhile has it any more.
+void sable_task_local_push(void (*destroy)(void *), void *holder, int64_t key, int64_t cell) {
+    TaskLocalValue *value = malloc(sizeof *value);
+    if (value == NULL) {
+        sable_trap("out of memory");
+    }
+
+    // The last task to have it may be another thread's.
+    sable_share(holder);
+    *value = (TaskLocalValue){ .references = 1, .key = key, .cell = cell, .destroy = destroy, .holder = holder, .outer = current_task->locals };
+    current_task->locals = value;
+}
+
+// The innermost binding ends.
+void sable_task_local_pop(void) {
+    TaskLocalValue *value = current_task->locals;
+    current_task->locals = value->outer;
+    if (value->outer != NULL) {
+        __atomic_fetch_add(&value->outer->references, 1, __ATOMIC_RELAXED);
+    }
+
+    task_locals_release(value);
+}
+
+// Where the value the key is bound to is, or 0.
+int64_t sable_task_local_find(int64_t key) {
+    for (TaskLocalValue *value = current_task->locals; value != NULL; value = value->outer) {
+        if (value->key == key) {
+            return value->cell;
+        }
+    }
+
+    return 0;
+}
+
+// A key no other has.
+int64_t sable_task_local_key(void) {
+    static int64_t keys;
+    return __atomic_add_fetch(&keys, 1, __ATOMIC_RELAXED);
+}
+
+// Those of a task that has finished, or is dropped, let go of.
+static void leave_locals(SableTask *task) {
+    TaskLocalValue *locals = task->locals;
+    if (__builtin_expect(locals != NULL, 0)) {
+        task->locals = NULL;
+        task_locals_release(locals);
+    }
+}
+
 // ---- Running a task ------------------------------------------------------------
 
 // A task's memory, from the size classes (memory.c) if one is large enough.
@@ -2225,6 +2315,7 @@ static void complete(SableTask *task) {
 
         // Given back now: its parent's list may hold the task for longer.
         slab_destroy(&task->frames);
+        leave_locals(task);
         __atomic_store_n(&task->done, true, __ATOMIC_SEQ_CST);
         SableTask *waiters = __atomic_exchange_n(&task->waiters, WAITERS_DONE, __ATOMIC_ACQ_REL);
         if (waiters != NULL || task->held_actor) {
@@ -2583,7 +2674,7 @@ static SableTask *search(Worker *self, bool watched) {
         for (int turn = 0; turn < SPIN_TURNS; turn++) {
             spin_turn();
             SableTask *task = find_work(self, false);
-            if (task != NULL) {
+            if (task != NULL || loops_open()) {
                 return task;
             }
         }
@@ -2594,9 +2685,14 @@ static SableTask *search(Worker *self, bool watched) {
     return find_work(self, watched || __atomic_load_n(&hot.watched, __ATOMIC_SEQ_CST) == 0);
 }
 
+static bool loop_help(void); // parallel.c
+
 static void worker_main(void *argument) {
     Worker *self = argument;
     current_worker = self;
+    char name[32];
+    snprintf(name, sizeof name, "sable-worker-%d", self->index);
+    thread_set_name(name);
     active_begin();
     bool searches = false; // counted in 'searching'
     bool watches = false;  // it is the one 'watched' says
@@ -2621,6 +2717,15 @@ static void worker_main(void *argument) {
         if (searches) {
             searches = false;
             __atomic_fetch_sub(&hot.searching, 1, __ATOMIC_SEQ_CST);
+        }
+
+        if (task == NULL && loops_open()) {
+            // A parallel loop is open: helped with until it has no more to do.
+            note_none(self);
+            leave_time();
+            if (loop_help()) {
+                continue;
+            }
         }
 
         if (task == NULL) {
@@ -2734,16 +2839,8 @@ static int64_t task_serial(void) {
     return next++;
 }
 
-// A new task, queued: 'start(context)' makes its root frame when it first
-// runs, 'resume' runs it, and 'drop' destroys it should it never finish. A
-// child of the running task unless detached; its priority its parent's (or
-// medium, detached) unless given, 0 or more. It runs on no actor, as
-// Swift's child tasks do, whatever its parent's. The program holds the handle until it releases
-// it. The context — the Task object, with the body in it — is shared: the
-// spawner and the task both hold it.
-void *sable_task_spawn(void *(*start)(void *), uint8_t (*resume)(void *), void (*drop)(void *), void *context,
-    int64_t priority, bool detached) {
-    if (__atomic_load_n(&worker_count, __ATOMIC_ACQUIRE) < 0) {
+static void pool_start_once(void) {
+    if (__builtin_expect(__atomic_load_n(&worker_count, __ATOMIC_ACQUIRE) < 0, 0)) {
         static SpinLock starting;
         spin_lock(&starting);
         if (worker_count < 0) {
@@ -2752,9 +2849,28 @@ void *sable_task_spawn(void *(*start)(void *), uint8_t (*resume)(void *), void (
 
         spin_unlock(&starting);
     }
+}
 
+// A new task, queued: 'start(context)' makes its root frame when it first
+// runs, 'resume' runs it, and 'drop' destroys it should it never finish. A
+// child of the running task unless detached; its priority its parent's (or
+// medium, detached) unless given, 0 or more. It runs on no actor, as
+// Swift's child tasks do, whatever its parent's. The program holds the handle until it releases
+// it. The context — the Task object, with the body in it — is shared: the
+// spawner and the task both hold it.
+static SableTask *task_make(void *(*start)(void *), uint8_t (*resume)(void *), void (*drop)(void *), void *context, int64_t priority, SableTask *parent);
+
+void *sable_task_spawn(void *(*start)(void *), uint8_t (*resume)(void *), void (*drop)(void *), void *context,
+    int64_t priority, bool detached) {
+    pool_start_once();
     sable_share(context);
+    SableTask *task = task_make(start, resume, drop, context, priority, detached ? NULL : current_task);
+    schedule(task);
+    return task;
+}
 
+// The task made, and not queued: a child of 'parent', if one is given.
+static SableTask *task_make(void *(*start)(void *), uint8_t (*resume)(void *), void (*drop)(void *), void *context, int64_t priority, SableTask *parent) {
     SableTask *task = task_alloc();
     if (task == NULL) {
         sable_trap("out of memory");
@@ -2769,7 +2885,6 @@ void *sable_task_spawn(void *(*start)(void *), uint8_t (*resume)(void *), void (
     task->inject_band = -1;
     slab_init(&task->frames, task->first_frames, sizeof task->first_frames);
 
-    SableTask *parent = detached ? NULL : current_task;
     task->base_priority = priority >= 0 ? priority : parent != NULL ? parent->base_priority : PRIORITY_MEDIUM;
     task->priority = task->base_priority;
     task->cancelled = spawn_cancelled;
@@ -2797,10 +2912,14 @@ void *sable_task_spawn(void *(*start)(void *), uint8_t (*resume)(void *), void (
 
     if (parent != NULL) {
         task->parent = parent;
+        if (__builtin_expect(parent->locals != NULL, 0)) {
+            __atomic_fetch_add(&parent->locals->references, 1, __ATOMIC_RELAXED);
+            task->locals = parent->locals;
+        }
+
         join_parent(task, parent);
     }
 
-    schedule(task);
     return task;
 }
 
@@ -3262,11 +3381,17 @@ void sable_waitlist_wake_one(void *pointer) {
 
 // The main thread runs what is its to run — the main task, tasks on the
 // main actor, and, with no pool, every task — until the main task can go
-// on ('until'), or, with none, until nothing more will happen.
-static void main_loop(SableTask *until) {
+// on ('until'), or it is 'done' that it waits for (Thread.blockOn); with
+// neither, until nothing more will happen.
+static void main_loop(SableTask *until, const int32_t *done) {
     __atomic_store_n(&settle.main_running, 0, __ATOMIC_SEQ_CST);
     wake_settler();
     for (;;) {
+        if (done != NULL && __atomic_load_n(done, __ATOMIC_SEQ_CST)) {
+            __atomic_store_n(&settle.main_running, 1, __ATOMIC_SEQ_CST);
+            return;
+        }
+
         SableTask *task = NULL;
         if (worker_count <= 0) {
             wake_sleepers();
@@ -3303,11 +3428,17 @@ static void main_loop(SableTask *until) {
 
         mutex_lock(&park_lock);
         __atomic_store_n(&hot.main_waiting, 1, __ATOMIC_SEQ_CST);
+        if (done != NULL && __atomic_load_n(done, __ATOMIC_SEQ_CST)) {
+            __atomic_store_n(&hot.main_waiting, 0, __ATOMIC_SEQ_CST);
+            mutex_unlock(&park_lock);
+            continue;
+        }
+
         int64_t changes = __atomic_load_n(&waits.background_changes, __ATOMIC_SEQ_CST);
         bool background = __atomic_load_n(&waits.background_waiting, __ATOMIC_SEQ_CST) != 0;
         bool idle = worker_count <= 0 ? !any_queued() : __atomic_load_n(&hot.main_head, __ATOMIC_SEQ_CST) == NULL;
         if (idle && quiescent()) {
-            if (until == NULL) {
+            if (until == NULL && done == NULL) {
                 __atomic_store_n(&hot.main_waiting, 0, __ATOMIC_SEQ_CST);
                 mutex_unlock(&park_lock);
                 return;
@@ -3351,7 +3482,7 @@ static void main_loop(SableTask *until) {
 // be woken; the main thread runs what is its until the main task can go on.
 void sable_task_run_until_main(void) {
     after_suspend(&main_task);
-    main_loop(&main_task);
+    main_loop(&main_task, NULL);
 }
 
 // A task that can no longer go on: its frames destroyed, from the root, as
@@ -3371,6 +3502,7 @@ static void drop_task(SableTask *task) {
     }
 
     tasks_dropped++;
+    leave_locals(task);
     __atomic_store_n(&task->done, true, __ATOMIC_SEQ_CST);
     __atomic_store_n(&task->waiters, WAITERS_DONE, __ATOMIC_SEQ_CST);
     leave_children(task);
@@ -3385,21 +3517,34 @@ static int spawned_before(const void *a, const void *b) {
     return left < right ? -1 : left > right;
 }
 
+static bool threads_started; // parallel.c: a program's own thread was
+static bool locals_end(void);
+
+static void drain(void);
+
 // As the entry point returns: every task still to run, run, the sleepers
-// too; then every task still waiting, which nothing will ever wake, dropped.
+// too, and every thread the program started, ended; then every task still
+// waiting, which nothing will ever wake, dropped; and the thread-locals of
+// the threads that do not end, whose deinits may yet set off others.
 void sable_tasks_drain(void) {
-    if (worker_count < 0) {
+    do {
+        drain();
+    } while (locals_end());
+}
+
+static void drain(void) {
+    if (worker_count < 0 && !__atomic_load_n(&threads_started, __ATOMIC_ACQUIRE)) {
         return;
     }
 
-    main_loop(NULL);
+    main_loop(NULL, NULL);
 
     // A signal may have come as the last task stopped, or a watched file
     // changed: no more are told of,
     // and what the last woke runs, before any task waiting is dropped.
     signals_stop();
     watches_stop();
-    main_loop(NULL);
+    main_loop(NULL, NULL);
 
     // No thread runs tasks now; a deinit on another may yet free one.
     SableTask **stuck = NULL;

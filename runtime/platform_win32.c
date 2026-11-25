@@ -368,7 +368,7 @@ static DWORD WINAPI thread_main(void *pointer) {
     return 0;
 }
 
-static bool thread_start(void (*run)(void *argument), void *argument) {
+static bool thread_start_sized(void (*run)(void *argument), void *argument, size_t stack) {
     ThreadStart *start = malloc(sizeof *start);
     if (start == NULL) {
         return false;
@@ -376,8 +376,9 @@ static bool thread_start(void (*run)(void *argument), void *argument) {
 
     start->run = run;
     start->argument = argument;
-    // 8 MiB, as the main thread is linked with (PlatformLinkFlags).
-    HANDLE thread = CreateThread(NULL, 8 * 1024 * 1024, thread_main, start, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+    // Room for a handler's frames, and the guarantee (watch_stack), at least.
+    enum { LEAST = 256 * 1024 };
+    HANDLE thread = CreateThread(NULL, stack < LEAST ? LEAST : stack, thread_main, start, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
     if (thread == NULL) {
         free(start);
         return false;
@@ -387,8 +388,37 @@ static bool thread_start(void (*run)(void *argument), void *argument) {
     return true;
 }
 
+// 8 MiB, as the main thread is linked with (PlatformLinkFlags).
+static bool thread_start(void (*run)(void *argument), void *argument) {
+    return thread_start_sized(run, argument, THREAD_STACK);
+}
+
+// SetThreadDescription is Windows 10's, from 1607 on: asked for, not linked.
+static void thread_set_name(const char *name) {
+    typedef HRESULT(WINAPI * Describe)(HANDLE, PCWSTR);
+    HMODULE kernel = GetModuleHandleW(L"kernelbase.dll");
+    Describe describe = kernel != NULL ? (Describe)(void *)GetProcAddress(kernel, "SetThreadDescription") : NULL;
+    wchar_t wide[256];
+    if (describe != NULL && MultiByteToWideChar(CP_UTF8, 0, name, -1, wide, 256) > 0) {
+        describe(GetCurrentThread(), wide);
+    }
+}
+
+static void thread_set_priority(int priority) {
+    SetThreadPriority(GetCurrentThread(), priority);
+}
+
+// Those the process is bound to, where it is of one group of processors.
 static int processor_count(void) {
     DWORD count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    DWORD_PTR mine = 0, all = 0;
+    if (count <= 64 && GetProcessAffinityMask(GetCurrentProcess(), &mine, &all) && mine != 0) {
+        count = 0;
+        for (; mine != 0; mine &= mine - 1) {
+            count++;
+        }
+    }
+
     return count > 0 ? (int)count : 1;
 }
 

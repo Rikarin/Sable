@@ -29,6 +29,78 @@ public sealed partial class SilInterpreter {
     /// <summary>Where the next block may start: clear of zero, so no block is at a null pointer.</summary>
     long _rawNext = 0x1_0000;
 
+    /// <summary>
+    ///     A value's storage, or an array's elements, lent by address: they are
+    ///     in a block of raw memory until the loan ends, and then put back. The
+    ///     latest lent is the first to end: a loan lasts as long as a call.
+    /// </summary>
+    sealed record Loan(RawBlock? Block, SilType Element, HeapArray? Array, int Start, int Count, IReference? Place, bool Writes);
+
+    readonly Stack<Loan> _loans = new();
+
+    object? Lend(BuiltinInst builtin, object?[] operands) {
+        Loan loan;
+        if (builtin.Name == "address_begin") {
+            var place = (IReference)operands[0]!;
+            loan = new(null, Concrete(((AddressType)builtin.Operands[0].Type).Pointee), null, 0, 1, place, true);
+        } else {
+            var writes = builtin.Name == "array_address";
+            var (buffer, start, count) = ElementsOf(writes ? ((IReference)operands[0]!).Peek() : operands[0]);
+            if (count > 0 && writes) {
+                (buffer, start) = Writable(builtin.Operands[0], (IReference)operands[0]!, 0);
+            }
+
+            var type = writes ? ((AddressType)builtin.Operands[0].Type).Pointee : builtin.Operands[0].Type;
+            loan = new(null, Concrete(type is SliceType slice ? slice.Element : ((ArrayType)type).Element), buffer, start, count, null, writes);
+        }
+
+        if (loan.Count == 0) {
+            _loans.Push(loan);
+            return 0L;
+        }
+
+        var stride = Math.Max(TypeLayout.Stride(loan.Element), 1);
+        var at = (_rawNext + 15) / 16 * 16;
+        _rawNext = at + (long)stride * loan.Count + 16;
+        var block = new RawBlock(at, stride * loan.Count);
+        _rawBlocks.Add(at, block);
+        for (var i = 0; i < loan.Count; i++) {
+            // A hole, an element taken out, is nothing in memory either.
+            if ((loan.Place is null ? loan.Array!.Elements[loan.Start + i] : loan.Place.Peek()) is { } value) {
+                if (Encode(loan.Element, value) is { } bytes) {
+                    bytes.CopyTo(block.Bytes, i * stride);
+                    Array.Fill(block.Written, true, i * stride, bytes.Length);
+                } else {
+                    block.Values[i * stride] = (loan.Element, value);
+                }
+            }
+        }
+
+        _loans.Push(loan with { Block = block });
+        return at;
+    }
+
+    void EndLoan() {
+        if (!_loans.TryPop(out var loan) || loan.Block is not { } block) {
+            return;
+        }
+
+        var stride = Math.Max(TypeLayout.Stride(loan.Element), 1);
+        for (var i = 0; loan.Writes && i < loan.Count; i++) {
+            var value = IsRawScalar(loan.Element)
+                ? block.Written[i * stride] ? Decode(loan.Element, block.Bytes.AsSpan(i * stride, TypeLayout.Size(loan.Element))) : null
+                : block.Values.TryGetValue(i * stride, out var held) ? held.Value : null;
+            if (loan.Place is null) {
+                loan.Array!.Elements[loan.Start + i] = value;
+            } else {
+                loan.Place.Set(value);
+            }
+        }
+
+        block.Freed = true;
+        block.Values.Clear();
+    }
+
     object? RawBuiltin(BuiltinInst builtin, object?[] operands) {
         switch (builtin.Name) {
             case "raw_alloc": {

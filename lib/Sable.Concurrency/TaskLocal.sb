@@ -1,0 +1,100 @@
+module Sable.Concurrency
+
+/// A value bound for as long as a piece of work runs, and seen by all of it:
+/// what the task running it calls, across every `await` and whichever thread
+/// it goes on on, and the tasks it spawns there — its children, a group's, an
+/// `async let`'s — which keep it even once the binding has ended. A request's
+/// identifier, a logger, a deadline. Swift's `@TaskLocal`, .NET's
+/// `AsyncLocal<T>`, Tokio's `task_local!`.
+///
+/// ```sable
+/// let request = TaskLocal("none")
+/// let seen = await request.withValue("r-17") {
+///     await Task.spawn { request.value }.value
+/// }
+/// assert(seen == "r-17" && request.value == "none")
+/// ```
+///
+/// A detached task begins with none, and so does a thread. `Task.blocking`'s
+/// work has its task's, and a parallel loop's that of the code that began it.
+/// Where nothing is bound, a task costs nothing more.
+@immutable
+public final class TaskLocal<Value: Sendable> {
+    /// The value where none is bound.
+    public let initial: Value
+
+    let key: Int
+
+    /// A task-local whose value is this where none is bound.
+    public init(_ initial: Value) {
+        self.initial = initial
+        key = Runtime.taskLocalKey()
+    }
+
+    /// The value bound where this is called, the innermost, or the initial
+    /// one.
+    public var value: Value {
+        get {
+            let place = Runtime.taskLocalFind(key)
+            if place == 0 {
+                return initial
+            }
+            unsafe {
+                return RawPtr<Value>(address: place).load()
+            }
+        }
+    }
+
+    /// Whether a value is bound where this is called.
+    public var isBound: Bool => Runtime.taskLocalFind(key) != 0
+
+    /// Runs the body with the value bound, and what it bound before again
+    /// after: what the body gives, or throws.
+    ///
+    /// ```sable
+    /// let level = TaskLocal(0)
+    /// level.withValue(1) {
+    ///     assert(level.value == 1)
+    ///     level.withValue(2) { assert(level.value == 2) }
+    ///     assert(level.value == 1)
+    /// }
+    /// assert(level.value == 0)
+    /// ```
+    public fn withValue<R, E: Error>(_ value: Value, _ body: () throws(E) -> R) throws(E) -> R {
+        bind(value)
+        do {
+            let result = try body()
+            Runtime.popTaskLocal()
+            return result
+        } catch {
+            Runtime.popTaskLocal()
+            throw error
+        }
+    }
+
+    /// Runs the async body with the value bound.
+    public fn withValue<R, E: Error>(_ value: Value, _ body: async () throws(E) -> R) async throws(E) -> R {
+        bind(value)
+        do {
+            let result = try await body()
+            Runtime.popTaskLocal()
+            return result
+        } catch {
+            Runtime.popTaskLocal()
+            throw error
+        }
+    }
+
+    fn bind(_ value: Value) {
+        unsafe {
+            let place = RawPtr<Value>.allocate(count: 1)
+            place.initialize(to: value)
+            Runtime.pushTaskLocal(key, place.address) {
+                unsafe {
+                    place.deinitialize()
+                    place.deallocate()
+                }
+            }
+        }
+    }
+}

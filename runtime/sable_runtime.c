@@ -58,6 +58,7 @@
 #include "process.c"
 #include "locks.c"
 #include "foreign.c"
+#include "parallel.c"
 
 // ---- Start-up --------------------------------------------------------------
 

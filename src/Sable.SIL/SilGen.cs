@@ -5318,6 +5318,12 @@ public sealed partial class SilGen {
                     && byValue.Kind is CaptureKind.Default or CaptureKind.ByValue && LowerType(access.Type) is { IsTrivial: false } and not AddressType:
                     return Hold(Emit(new LoadBorrowInst(Emit(new RefElementAddrInst(_context!, byValue.Field)))));
 
+                // A parameter it captured, likewise: a closure several threads
+                // call, above all, which each would count on every call.
+                case BoundParameterAccess access when closure is not null && closure.Captures.TryGetValue(access.Parameter, out var parameterByValue) && !parameterByValue.Boxed
+                    && parameterByValue.Kind is CaptureKind.Default or CaptureKind.ByValue && LowerType(access.Type) is { IsTrivial: false } and not AddressType:
+                    return Hold(Emit(new LoadBorrowInst(Emit(new RefElementAddrInst(_context!, parameterByValue.Field)))));
+
                 case BoundSelfAccess when _selfValue is not null:
                     return _selfValue;
 
@@ -10984,6 +10990,14 @@ public sealed partial class SilGen {
                     return UnitValue.Instance;
                 }
 
+                // What runs a closure somewhere else, or later (SilGen.Tasks.cs).
+                if (owner is { Name: "Runtime", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }
+                    && callee.Name is "startThread" or "runLoop" or "setThreadLocal" or "pushTaskLocal") {
+                    return HandOver(call, callee.Name switch {
+                        "startThread" => "thread_start", "runLoop" => "thread_loop", "setThreadLocal" => "thread_local_set", _ => "task_local_push",
+                    });
+                }
+
                 // 'Runtime.share(value)': its objects counted atomically from now on.
                 if (owner is { Name: "Runtime", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } } && callee.Name == "share") {
                     return RawMemoryIntrinsic(call, "share");
@@ -12465,14 +12479,20 @@ public sealed partial class SilGen {
             }
 
             if (call.Arguments.Length == 1) {
-                return LowerType(call.Type) is { } type ? Emit(new BuiltinInst(builtin, type, address)) : Missing(call, $"the type '{call.Type.ToDisplayString()}' in raw memory");
+                // A Void, or a Never, is nothing in memory.
+                return LowerType(call.Type) is not { } type ? Missing(call, $"the type '{call.Type.ToDisplayString()}' in raw memory")
+                    : type == SilType.Unit ? UnitValue.Instance
+                    : Emit(new BuiltinInst(builtin, type, address));
             }
 
             if (Expression(call.Arguments[1]) is not { } value) {
                 return null;
             }
 
-            Emit(new BuiltinInst(builtin, SilType.Unit, address, Owned(value)));
+            if (value.Type != SilType.Unit) {
+                Emit(new BuiltinInst(builtin, SilType.Unit, address, Owned(value)));
+            }
+
             return UnitValue.Instance;
         }
 

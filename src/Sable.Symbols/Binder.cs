@@ -345,6 +345,7 @@ public sealed partial class Binder {
     void CheckEscapes(BoundBlock body, FunctionSymbol function) {
         if (function.ContainingSymbol is not FunctionSymbol) {
             EscapeChecker.Check(body, function, _diagnostics);
+            ScopeChecker.Check(body, function, _diagnostics);
         }
     }
 
@@ -3213,10 +3214,10 @@ public sealed partial class Binder {
     ///     captures nothing; or a <c>@Sendable</c> parameter, checked where
     ///     its closure was written. Any other closure's captures cannot be seen.
     /// </summary>
-    void CheckSendableClosure(BoundExpression argument, string spawner) {
+    void CheckSendableClosure(BoundExpression argument, string spawner, bool scoped = false) {
         switch (Unconverted(argument)) {
             case BoundClosure closure:
-                CheckTaskCaptures(closure, spawner);
+                CheckTaskCaptures(closure, spawner, scoped);
                 return;
 
             case BoundParameterAccess { Parameter.IsSendable: true }:
@@ -3242,8 +3243,10 @@ public sealed partial class Binder {
     ///     captures crosses a boundary as an actor's arguments do, and must be
     ///     Sendable. A 'var' would be shared between the two, each changing
     ///     what the other reads: it is captured by value, '[x = x]', or not at all.
+    ///     A thread of a 'Thread.scope' may, where it is the thread's alone,
+    ///     which <see cref="ScopeChecker" /> sees to.
     /// </summary>
-    void CheckTaskCaptures(BoundClosure closure, string spawner) {
+    void CheckTaskCaptures(BoundClosure closure, string spawner, bool scoped = false) {
         var inner = new HashSet<Symbol>(ReferenceEqualityComparer.Instance) { closure.Symbol };
         var listed = new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
         foreach (var capture in closure.Captures) {
@@ -3292,7 +3295,7 @@ public sealed partial class Binder {
 
                 case BoundLocalAccess access when access.Local.ContainingSymbol is { } owner && !inner.Contains(owner)
                     && !listed.Contains(access.Local) && reported.Add(access.Local):
-                    if (access.Local.IsMutable) {
+                    if (access.Local.IsMutable && !scoped) {
                         _diagnostics.Error(
                             ErrorCode.ERR_TaskCaptureNotSendable,
                             access.Syntax.Span,
@@ -3306,6 +3309,11 @@ public sealed partial class Binder {
                     break;
 
                 case BoundParameterAccess access when access.Parameter.ContainingSymbol is { } owner && !inner.Contains(owner) && reported.Add(access.Parameter):
+                    if (access.Parameter.Modifier is ParameterModifier.InOut && !listed.Contains(access.Parameter) && !scoped) {
+                        ReportSharedStorage(access, access.Parameter.Name, "an 'inout' parameter", spawner);
+                        break;
+                    }
+
                     // A '@Sendable' closure parameter was checked where it was written.
                     if (!access.Parameter.IsSendable && Sendability.Why(access.Parameter.Type, []) is { } parameterReason) {
                         ReportTaskCapture(access.Syntax, access.Parameter.Name, access.Parameter.Type, parameterReason, spawner);
@@ -3314,6 +3322,11 @@ public sealed partial class Binder {
                     break;
 
                 case BoundSelfAccess self when reported.Add(SelfCaptureKey):
+                    if (self is { IsMutable: true, Type.IsReferenceType: false }) {
+                        ReportSharedStorage(self, "self", "the value a 'mutating' member changes", spawner);
+                        break;
+                    }
+
                     if (Sendability.Why(self.Type, []) is { } selfReason) {
                         ReportTaskCapture(self.Syntax, "self", self.Type, selfReason, spawner);
                     }
@@ -3322,6 +3335,14 @@ public sealed partial class Binder {
             }
         }
     }
+
+    void ReportSharedStorage(BoundExpression access, string name, string what, string spawner) =>
+        _diagnostics.Error(
+            ErrorCode.ERR_TaskCaptureNotSendable,
+            access.Syntax.Span,
+            $"'{name}' is {what}, which the task made by {spawner} would share with the code around it, each changing what the other reads; "
+            + "copy it into a 'let' to capture"
+        );
 
     static readonly object SelfCaptureKey = new();
 
@@ -5813,7 +5834,7 @@ public sealed partial class Binder {
         if (converted.Count == resolved.Parameters.Length) {
             for (var i = 0; i < converted.Count; i++) {
                 if (resolved.Parameters[i].IsSendable) {
-                    CheckSendableClosure(converted[i], $"'{resolved.Name}'");
+                    CheckSendableClosure(converted[i], $"'{resolved.Name}'", ScopeChecker.IsScopedSpawn(resolved));
                 }
             }
         }

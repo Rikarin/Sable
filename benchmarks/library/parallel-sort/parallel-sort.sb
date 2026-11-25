@@ -1,0 +1,12 @@
+module ParallelSort
+
+import Sable.Concurrency
+
+// A million numbers sorted by the pool's threads: PLINQ's OrderBy.
+
+@main
+fn main() {
+    let numbers = (0..<1_000_000).map { ($0 &* 2_654_435_761) & 0xF_FFFF }
+    let sorted = numbers.parallel.sorted()
+    print("\(sorted[0]) \(sorted[500_000]) \(sorted[999_999])")
+}

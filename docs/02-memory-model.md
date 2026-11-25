@@ -520,6 +520,12 @@ so nothing is stored later):
   which runs on one thread at a time, handed over with a release and an
   acquire; its fields are not looked at. A generator's, a closure's context and
   a captured variable's box are objects like any other.
+- *A thread's or a task's local* (docs/06 §6.7) is raw memory: what it holds
+  is shared, as another thread may come by it. A `var` that a scope's thread
+  changes is in a box, shared as the thread is given it, so what either stores
+  there is; the compiler holds that only one uses it at a time. A parallel
+  loop reads an array's elements by their address, so the array is not shared
+  for it, and what the elements hold is, before the loop begins.
 - *C*, which may call Sable on a thread of its own: what it is given to call
   there — a `CCallback`'s captures, and the globals — is shared as it is given
   (docs/06, "Calling C"). A closure lent to it for a call is called on the

@@ -1468,11 +1468,18 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 Alive((HeapObject)operands[0]!).Unmade = true;
                 return null;
 
-            // The interpreter's storage has no addresses, nor its functions C entries.
-            case "address_begin" or "array_address" or "slice_address" or "c_address":
-                throw new SilTrap("a C pointer to a value or a function, which the interpreter has none of; build the program to run it");
+            // The interpreter's functions have no C entries.
+            case "c_address":
+                throw new SilTrap("a C pointer to a function, which the interpreter has none of; build the program to run it");
 
-            case "address_end" or "slice_end" or "forget":
+            case "address_begin" or "array_address" or "slice_address":
+                return Lend(builtin, operands);
+
+            case "address_end" or "slice_end":
+                EndLoan();
+                return null;
+
+            case "forget":
                 return null;
 
             // An actor's identity: the interpreter's hops never wait, so need none.
@@ -2479,6 +2486,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
         if (builtin.Name.StartsWith("inline_", StringComparison.Ordinal)) {
             return Inline(builtin, operands, depth);
+        }
+
+        if (builtin.Name.StartsWith("thread_", StringComparison.Ordinal) || builtin.Name.StartsWith("task_local_", StringComparison.Ordinal)) {
+            return ThreadBuiltin(builtin.Name, operands, depth);
         }
 
         if (builtin.Name.StartsWith("task_", StringComparison.Ordinal) || builtin.Name.StartsWith("async_", StringComparison.Ordinal)) {

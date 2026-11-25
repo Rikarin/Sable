@@ -1,0 +1,14 @@
+module ThreadSpawn
+
+import Sable.Concurrency
+
+// Two thousand threads, each started and waited for: what one costs.
+
+@main
+fn main() {
+    var total = 0
+    for n in 0..<2000 {
+        total += Thread.spawn { n & 3 }.join()
+    }
+    print("\(total)")
+}

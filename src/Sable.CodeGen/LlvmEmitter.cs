@@ -743,6 +743,31 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_task_priority()
                                 declare void @sable_task_handler_push(ptr, ptr)
                                 declare void @sable_task_handler_pop()
+                                declare i64 @sable_thread_new(ptr, i64, i64)
+                                declare void @sable_thread_release(i64)
+                                declare i64 @sable_thread_current()
+                                declare i64 @sable_thread_id(i64)
+                                declare ptr @sable_thread_name(i64)
+                                declare zeroext i1 @sable_thread_join(i64, i64)
+                                declare zeroext i1 @sable_thread_ended(i64)
+                                declare zeroext i1 @sable_thread_park(i64)
+                                declare void @sable_thread_unpark(i64)
+                                declare void @sable_thread_yield()
+                                declare i64 @sable_thread_workers()
+                                declare void @sable_thread_loop_more()
+                                declare i64 @sable_thread_block_new()
+                                declare void @sable_thread_block_done(i64)
+                                declare void @sable_thread_block_wait(i64)
+                                declare i64 @sable_thread_local_key()
+                                declare void @sable_thread_local_free(i64)
+                                declare i64 @sable_thread_local_find(i64)
+                                declare i64 @sable_task_local_key()
+                                declare void @sable_task_local_pop()
+                                declare i64 @sable_task_local_find(i64)
+                                declare void @sable_thread_start(ptr, ptr, i64)
+                                declare void @sable_thread_loop(ptr, ptr, i64)
+                                declare void @sable_thread_local_set(ptr, ptr, i64, i64)
+                                declare void @sable_task_local_push(ptr, ptr, i64, i64)
                                 declare ptr @sable_group_new()
                                 declare void @sable_group_add(ptr, ptr)
                                 declare zeroext i1 @sable_group_wait(ptr)
@@ -4668,8 +4693,10 @@ public sealed partial class LlvmEmitter {
 
                 // Sockets (runtime/net.c), by handle: each builtin the runtime's
                 // function of its name, a slice its buffer, start and count,
-                // and an array given the metadata to make it with.
-                case var net when net.StartsWith("net_", StringComparison.Ordinal): {
+                // and an array given the metadata to make it with. And threads
+                // (runtime/parallel.c), and their and tasks' locals.
+                case var net when net.StartsWith("net_", StringComparison.Ordinal) || net.StartsWith("thread_", StringComparison.Ordinal)
+                                  || net.StartsWith("task_local_", StringComparison.Ordinal): {
                     List<string> passed = [];
                     for (var i = 0; i < operands.Length; i++) {
                         var type = builtin.Operands[i].Type;

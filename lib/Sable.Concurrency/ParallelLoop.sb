@@ -1,0 +1,73 @@
+module Sable.Concurrency
+
+// What every parallel loop divides: the numbers from 0 up to a count, handed
+// out a chunk at a time, in order, to whichever thread asks. A chunk is a
+// part of what is left, so that the first are large, and few, and the last
+// are small, and the threads end together however uneven the work is (guided
+// self-scheduling); and it depends on nothing but what is left, so that the
+// chunks are the same each time.
+//
+// The threads are the pool's and the one that began the loop, which runs
+// chunks as they do: a loop in a loop, or where every worker is in one, goes
+// on with whoever there is.
+@immutable
+final class ParallelLoop {
+    let next: Atomic<Int>
+    let count: Int
+    let grain: Int
+    let degree: Int
+    let divisor: Int
+
+    init(_ count: Int, degree: Int, grain: Int) {
+        precondition(degree >= 0, "a loop cannot be run by \(degree) threads")
+        precondition(grain >= 1, "a loop's chunks cannot be of \(grain) elements")
+        next = Atomic<Int>(0)
+        self.count = count
+        self.grain = grain
+        let most = count / grain + (count % grain == 0 ? 0 : 1)
+        var threads = degree == 0 ? Runtime.workerCount() : degree
+        if threads > most {
+            threads = most
+        }
+        self.degree = threads < 1 ? 1 : threads
+        divisor = self.degree == 1 ? 1 : self.degree * 4
+    }
+
+    // The next chunk; an empty one once there is none.
+    fn claim() -> Range<Int> {
+        var start = next.load(ordering: .Relaxed)
+        if start > 0 && degree > 1 {
+            Runtime.loopMore()
+        }
+        while start < count {
+            let left = count - start
+            let part = left / divisor
+            let size = part > grain ? part : grain
+            let end = size < left ? start + size : count
+            let taken = next.compareExchange(expected: start, desired: end, ordering: .Relaxed)
+            if taken.exchanged {
+                return start..<end
+            }
+            start = taken.original
+        }
+        return count..<count
+    }
+
+    // No more chunks: those handed out are gone on with, or not, by whoever
+    // has them.
+    fn stop() {
+        next.store(count, ordering: .Relaxed)
+    }
+
+    var isStopped: Bool => next.load(ordering: .Relaxed) >= count
+
+    // The work run by as many threads as there are chunks for, at most the
+    // degree, each of which claims until there is none.
+    fn run(_ work: () -> ()) {
+        if degree == 1 {
+            work()
+        } else {
+            Runtime.runLoop(degree, work)
+        }
+    }
+}

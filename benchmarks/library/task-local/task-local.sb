@@ -1,0 +1,24 @@
+module TaskLocals
+
+import Sable.Concurrency
+
+// A task-local read five million times, and bound a hundred thousand: .NET's
+// AsyncLocal<T>.
+
+@main
+fn main() {
+    let level = TaskLocal(1)
+    var total = 0
+    for _ in 0..<1_000_000 {
+        total += level.value
+    }
+    level.withValue(2) {
+        for _ in 0..<4_000_000 {
+            total += level.value
+        }
+    }
+    for n in 0..<100_000 {
+        total += level.withValue(n & 3) { level.value }
+    }
+    print("\(total)")
+}

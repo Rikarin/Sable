@@ -274,9 +274,9 @@ public sealed class DependencyInjectionTests {
             """).Stdout);
 
     [Fact]
-    public void NorIsItAnExistentialOfOneOfThem() =>
-        // One table would be all of them: an error, not the wrong member.
-        Assert.Contains("through an existential yet", Assert.Single(Pipeline.Compile(new SourceText("""
+    public void AndIsAnExistentialOfEither() =>
+        // A table of each: the right member.
+        Assert.Equal("string int\n", Programs.AssertAgree("""
             module App
 
             protocol Takes<T> { fn take(_ t: T) -> String }
@@ -286,9 +286,10 @@ public sealed class DependencyInjectionTests {
             }
             fn main() {
                 let s: any Takes<String> = Both()
-                print(s.take("a"))
+                let i: any Takes<Int> = Both()
+                print("\(s.take("a")) \(i.take(1))")
             }
-            """, "app.sb")).Errors));
+            """).Stdout);
 
     [Fact]
     public void AnArrayThatGrewIsCastToOneThatIsDone() =>

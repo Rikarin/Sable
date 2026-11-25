@@ -312,6 +312,12 @@ requirement: the existential-convention slots, their thunks and the thunks
 bridging the two conventions of before #299 are gone, in specialised builds
 as in unspecialised ones.
 
+A type that conforms to several instances of a generic protocol has a table
+for each, known by the protocol's name and the instance's arguments
+(`M.Handles$of$Int`). What an extension of a generic protocol adds, used on
+an existential of an instance of it, is the copy made for the existential as
+`Self`: code compiled once is given no tables of generic protocols.
+
 An instance of a generic protocol, `any Producer<Animal>`, holds the table
 of the conformer's own instance, `Producer<Dog>`: its entries take and give
 what the existential's entries are declared to, as an upcast of a class
@@ -685,7 +691,25 @@ that must itself conform has no template. A value of such an instance is
 boxed in a class the runtime makes for it (`sable_opaque_box`). In a program
 built in units, one unit may make the instance and another open it: the unit
 that opens a type as a protocol, or casts to it, makes the templates of every
-generic type of the program that conforms.
+generic type of the program that conforms. An entry for a requirement generic
+over parameters of its own is compiled once for those too: their metadata and
+tables come among the type arguments'. A witness that asks for the conformance
+itself — a requirement left to the protocol's default, whose `Self` it is —
+takes it to have the template being made.
+
+**Arrays, slices and optionals** conform by their extensions, where the type
+they are of does. Their metadata, made alike in every unit and as the program
+runs, has no records: a module that asks the registry gives it the list
+(`sable_register_structural`: the kind, the protocol, what is required of the
+one argument), which a lookup of such a type consults after its records.
+Their tables are templates as a generic type's are, known by the kind (`[]`,
+`[:]`, `?`), and the one a program makes for a type it names is registered
+for it, in a whole program as in units. Tuples, functions and enums conform
+to nothing but what an enum declares.
+
+A **static member of an `any P.Type`** is one of the type the value holds,
+opened as `P`'s `Self` for the one use: a requirement through the registry's
+table, a member of an extension of `P` compiled once.
 
 A specialised build compiles generic code once too, from the first call
 that opens a Type: such a call, and the code compiled once it reaches,

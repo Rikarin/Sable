@@ -1860,7 +1860,28 @@ public sealed class SilModule {
             }
         }
 
-        return false;
+        return HasStructuralConformance(type, protocol);
+    }
+
+    /// <summary>
+    ///     What every array, slice and optional conforms to, where the type it
+    ///     is of conforms to each protocol required. Their metadata has no
+    ///     records: the runtime is given this list.
+    /// </summary>
+    public List<(MetadataKind Kind, string Protocol, ImmutableArray<string> Requirements)> StructuralConformances { get; } = [];
+
+    /// <summary>The type an array, a slice or an optional is of; null for any other.</summary>
+    public static SilType? StructuralElement(SilType type) =>
+        ArrayType.ElementOf(type) ?? (type is EnumType optional ? TypeMetadata.OptionalPayload(optional) : null);
+
+    /// <summary>Whether an array, a slice or an optional conforms to the protocol.</summary>
+    public bool HasStructuralConformance(SilType type, string protocol) {
+        if (StructuralElement(type) is not { } element) {
+            return false;
+        }
+
+        var kind = type is SliceType ? MetadataKind.Slice : type is ArrayType ? MetadataKind.Array : MetadataKind.Optional;
+        return StructuralConformances.Exists(c => c.Kind == kind && c.Protocol == protocol && c.Requirements.All(r => HasConformance(element, r)));
     }
 
     /// <summary>

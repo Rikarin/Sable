@@ -22,7 +22,7 @@ public sealed partial class SilGen {
     readonly Dictionary<StructType, List<NamedTypeSymbol>> _layoutProtocols = [];
 
     /// <summary>The types boxed in an existential so far, by what they lower to: each may be cast to any protocol it conforms to.</summary>
-    readonly Dictionary<SilType, NamedTypeSymbol> _boxed = [];
+    readonly Dictionary<SilType, TypeSymbol> _boxed = [];
 
     /// <summary>The protocols cast to so far (<c>as? any Q</c>, <c>is any Q</c>): each boxed type that conforms has a table for each.</summary>
     readonly List<NamedTypeSymbol> _castTargets = [];
@@ -51,28 +51,21 @@ public sealed partial class SilGen {
     ///     Null when the type does not conform.
     /// </summary>
     internal SilWitnessTable? WitnessTable(TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, SyntaxNode at) {
-        var name = QualifiedName(protocol);
+        var name = TableName(concrete, protocol);
         if (_module.FindWitnessTable(value, name) is { } existing) {
             return existing;
         }
 
-        // A table is a protocol's, whichever its type arguments: a type that is
-        // a Provides<Int> and a Provides<String> has none of either, and is
-        // used as code that knows it uses it, by its own members.
-        if (!protocol.OriginalDefinition.TypeParameters.IsEmpty && concrete.SupertypesOf(protocol).Take(2).Count() > 1) {
-            return null;
-        }
-
-        var conformance = (protocol.OriginalDefinition.TypeParameters.IsEmpty ? null : concrete.SupertypeOf(protocol)) ?? protocol.OriginalDefinition;
+        var conformance = ConformanceTo(concrete, protocol) ?? protocol.OriginalDefinition;
         var table = new SilWitnessTable(value, name);
         AssociatedTypes(table, concrete, conformance);
+        var through = TypeSubstitution.For(conformance);
         foreach (var refined in Bases(conformance.OriginalDefinition)) {
-            table.Bases.Add(QualifiedName(refined));
+            table.Bases.Add(TableName(concrete, (NamedTypeSymbol)through.Apply(refined)));
         }
 
         // Added first: a witness may box a value of the type, and so ask for this very table.
         _module.AddWitnessTable(table);
-        var through = TypeSubstitution.For(conformance);
         foreach (var refined in Bases(conformance.OriginalDefinition)) {
             WitnessTable(concrete, value, (NamedTypeSymbol)through.Apply(refined), at);
         }
@@ -88,7 +81,7 @@ public sealed partial class SilGen {
                 }
             }
 
-            if (witness is null && type is not null && member is FunctionSymbol { TypeParameters.IsEmpty: false }) {
+            if (witness is null && type is not null && member is FunctionSymbol generic && !OwnParameters(generic).IsEmpty) {
                 witness = TrapWitness(table, key, type);
             }
 
@@ -97,6 +90,32 @@ public sealed partial class SilGen {
 
         _filling.Remove(table);
         return table;
+    }
+
+    /// <summary>
+    ///     The instance of a generic protocol a type conforms to it by: the
+    ///     one given itself, where it conforms to several, or the one whose
+    ///     existential that one is by variance. Null for a protocol that is not generic.
+    /// </summary>
+    internal static NamedTypeSymbol? ConformanceTo(TypeSymbol concrete, NamedTypeSymbol protocol) {
+        if (protocol.OriginalDefinition.TypeParameters.IsEmpty) {
+            return null;
+        }
+
+        var all = concrete.SupertypesOf(protocol).ToList();
+        return all.Find(s => s.Equals(protocol)) ?? all.Find(s => s.Satisfies(protocol)) ?? all.FirstOrDefault();
+    }
+
+    /// <summary>
+    ///     What a type's witness table for a protocol is known by: the
+    ///     protocol's name, and for a type that conforms to several instances
+    ///     of a generic one, which: <c>M.Handles$of$Int</c>.
+    /// </summary>
+    internal string TableName(TypeSymbol concrete, NamedTypeSymbol protocol) {
+        var name = QualifiedName(protocol);
+        return !protocol.OriginalDefinition.TypeParameters.IsEmpty && concrete.SupertypesOf(protocol).Take(2).Count() > 1 && ConformanceTo(concrete, protocol) is { } instance
+            ? $"{name}$of${string.Join("$", instance.TypeArguments.Select(a => Lower(a) is { } lowered ? Sanitise(lowered.ToString()) : "Never"))}"
+            : name;
     }
 
     /// <summary>The tables whose entries are being made: one asked for again meanwhile is taken as it will be.</summary>
@@ -120,9 +139,9 @@ public sealed partial class SilGen {
             }
         }
 
-        foreach (var refined in Bases(protocol.OriginalDefinition)) {
+        foreach (var (refined, name) in Bases(protocol.OriginalDefinition).Zip(table.Bases)) {
             var instance = (NamedTypeSymbol)TypeSubstitution.For(protocol).Apply(refined);
-            if (_module.FindWitnessTable(table.Conformer, QualifiedName(refined)) is { } baseTable && MissingWitness(baseTable, instance) is { } missing) {
+            if (_module.FindWitnessTable(table.Conformer, name) is { } baseTable && MissingWitness(baseTable, instance) is { } missing) {
                 return missing;
             }
         }
@@ -155,7 +174,7 @@ public sealed partial class SilGen {
             WitnessTable(concrete, value, protocol, at);
         }
 
-        if (concrete is NamedTypeSymbol named && _boxed.TryAdd(value, named)) {
+        if (concrete is NamedTypeSymbol or ArrayTypeSymbol or OptionalTypeSymbol && concrete is var named && _boxed.TryAdd(value, named)) {
             foreach (var target in _castTargets.Where(named.Satisfies)) {
                 WitnessTable(named, value, target, at);
             }

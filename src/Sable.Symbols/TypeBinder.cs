@@ -461,6 +461,7 @@ internal sealed class TypeBinder(Compilation compilation) {
         var scope = compilation.CurrentScope;
 
         parameter.TypeResolver = () => {
+            using var _ = _diagnostics.AnchoredAt(syntax);
             var written = BindType(syntax.Type, parameter.ContainingSymbol ?? parameter, scope);
 
             // 'values: Int...' is written as the element type and is a
@@ -484,7 +485,10 @@ internal sealed class TypeBinder(Compilation compilation) {
 
         // A computed property's 'some P' is the property's own: the type its
         // getter returns, hidden, as a function's result is.
-        field.TypeResolver = () => declaration.Declarator.TypeAnnotation is { } annotation
+        // Read first wherever something asks for it: what is wrong is said here.
+        field.TypeResolver = () => {
+            using var _ = _diagnostics.AnchoredAt(declaration);
+            return declaration.Declarator.TypeAnnotation is { } annotation
             ? BindType(annotation.Type, field, scope) is var annotated && annotated is OpaqueTypeSymbol { Origin: null } opaque && field.IsComputed
                 ? opaque.WithOrigin(field)
                 : annotated
@@ -499,6 +503,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                     $"'{field.Name}' needs a type annotation: its type can be left out only when its initial value is a literal, "
                     + "an array of literals, or a call to a type's initialiser"
                 );
+        };
 
         Defer(() => _ = field.Type);
 

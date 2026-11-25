@@ -492,6 +492,11 @@ public sealed partial class SilInterpreter {
             case "opaque_box": {
                 var type = (MetadataModel)operands[1]!;
                 var value = ((IReference)operands[0]!).Get();
+                if (type.Described.Kind == MetadataKind.Existential && value is object?[] existential) {
+                    result = existential[0];
+                    return true;
+                }
+
                 if (!module.Boxers.TryGetValue(type.Type.ToString(), out var boxer) || module.Find(boxer.Function) is not { } box) {
                     // An instance of a generic type made at run time: its box's class made here, the value moved in.
                     if (!_madeBoxes.TryGetValue(type.Type.ToString(), out var boxType)) {
@@ -513,11 +518,45 @@ public sealed partial class SilInterpreter {
                 Release(type.Type, value, depth);
                 return true;
             }
+            case "existential_cast": {
+                var box = Alive((HeapObject)operands[0]!);
+                var to = (MetadataModel)operands[1]!;
+                var place = (IReference)operands[2]!;
+                if (module.Casters.TryGetValue(to.Type.ToString(), out var known) && module.Find(known.Function) is { } caster) {
+                    result = Call(caster, [box, place], depth + 1);
+                    return true;
+                }
+
+                var held = box.Type.TypeArguments is [var of] ? of : box.Type.Fields[0].Type;
+                var value = box.Fields[0];
+                var dynamic = held is ClassType && value is HeapObject it ? Alive(it).Type : held;
+                result = false;
+                if (to.Type is StructType && to.Described.Kind == MetadataKind.Existential) {
+                    var tables = new List<object?>();
+                    foreach (var protocol in ExistentialProtocolNames(to.Described.Name) ?? ["?"]) {
+                        tables.Add(WitnessTableOf(dynamic, protocol));
+                    }
+
+                    if (!tables.Contains(null)) {
+                        Retain(box.Type, box);
+                        place.Set(new object?[] { box, MetadataOf(dynamic) }.Concat(tables).ToArray());
+                        result = true;
+                    }
+                } else if (IsSubtype(MetadataOf(dynamic), to)) {
+                    Retain(held, value);
+                    place.Set(value);
+                    result = true;
+                }
+
+                return true;
+            }
             case "opaque_free":
                 return true;
             case "opaque_type": {
                 var type = (MetadataModel)operands[1]!;
-                result = type.Type is ClassType && operands[0] is HeapObject held ? MetadataOf(Alive(held).Type) : type;
+                result = type.Type is ClassType && operands[0] is HeapObject held ? MetadataOf(Alive(held).Type)
+                    : type.Described.Kind == MetadataKind.Existential && operands[0] is object?[] { Length: >= 2 } existential && existential[1] is MetadataModel holds ? holds
+                    : type;
                 return true;
             }
         }
@@ -558,7 +597,9 @@ public sealed partial class SilInterpreter {
         if (builtin.Name.StartsWith("witness_table_required:", StringComparison.Ordinal)) {
             var type = (MetadataModel)operands[0]!;
             var protocol = builtin.Name["witness_table_required:".Length..];
-            result = WitnessTableOf(type.Type, protocol) ?? throw new SilTrap($"'{type.Described.Name}' does not conform to '{protocol}'");
+            result = WitnessTableOf(type.Type, protocol)
+                ?? (type.Type == SilType.Unit && protocol is "Sable.Core.Error" or "Sable.Core.Debug" ? new SilWitnessTable(SilType.Unit, protocol) : null)
+                ?? throw new SilTrap($"'{type.Described.Name}' does not conform to '{protocol}'");
             return true;
         }
 

@@ -127,7 +127,7 @@ public sealed partial class SilInterpreter {
             }
 
             case "raw_init" or "raw_init_unaligned": {
-                var type = builtin.Operands[1].Type;
+                var type = Concrete(builtin.Operands[1].Type);
                 var size = TypeLayout.Size(type);
                 var (block, at) = RawAccess((long)operands[0]!, type, size, aligned: builtin.Name == "raw_init");
                 Forget(block, at, size);
@@ -142,7 +142,7 @@ public sealed partial class SilInterpreter {
             }
 
             case "raw_load" or "raw_load_unaligned" or "raw_take": {
-                var type = builtin.Type;
+                var type = Concrete(builtin.Type);
                 var size = TypeLayout.Size(type);
                 var (block, at) = RawAccess((long)operands[0]!, type, size, aligned: builtin.Name != "raw_load_unaligned");
                 if (IsRawScalar(type)) {

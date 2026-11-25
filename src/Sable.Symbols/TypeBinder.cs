@@ -1298,6 +1298,12 @@ internal sealed class TypeBinder(Compilation compilation) {
 
             case ExistentialTypeSyntax existential: {
                 var constraint = BindType(existential.ConstraintType, context, scope);
+
+                // 'any P.Type': a type that conforms to P, known only at run time.
+                if (constraint is MetatypeTypeSymbol { InstanceType: NamedTypeSymbol { TypeKind: TypeKind.Protocol, TypeParameters.IsEmpty: true } }) {
+                    return new ExistentialTypeSymbol(constraint);
+                }
+
                 return RequireProtocol(constraint, "any", existential.ConstraintType.Span)
                     ? new ExistentialTypeSymbol(constraint)
                     : ErrorTypeSymbol.Instance;

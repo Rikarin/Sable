@@ -81,7 +81,7 @@ static class ShareStores {
         Dictionary<SilBlock, HashSet<SilBlock>>? _dominators;
 
         public void Run() {
-            foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
+            foreach (var instruction in function.Blocks.ToList().SelectMany(static b => b.Instructions)) {
                 var root = instruction switch {
                     RefElementAddrInst { Reference.Type: ClassType { IsCoroutineFrame: false } type } field => new Root(field, field.Reference, type.LetFields.Contains(field.Field)),
                     BuiltinInst { Name: "array_element_addr" or "array_element_addr_unique" or "box_project_unique" } element => new Root(element, element.Operands[0], false),
@@ -266,6 +266,8 @@ static class ShareStores {
 
             switch (instruction) {
                 case TryApplyInst call:
+                    call.Normal = OwnEdge(call.Normal);
+                    call.Error = OwnEdge(call.Error);
                     Add(_atStart, call.Normal);
                     Add(_atStart, call.Error);
                     break;
@@ -293,6 +295,32 @@ static class ShareStores {
                 }
             }
         }
+
+        /// <summary>
+        ///     Where a call goes, for what is done there of it alone: the block,
+        ///     or, when other code goes there too, where the address may not
+        ///     have been made, one of its own on the way.
+        /// </summary>
+        SilBlock OwnEdge(SilBlock target) {
+            if (_entered is null) {
+                _entered = new(ReferenceEqualityComparer.Instance);
+                foreach (var successor in function.Blocks.SelectMany(static b => b.Successors)) {
+                    _entered[successor] = _entered.GetValueOrDefault(successor) + 1;
+                }
+            }
+
+            if (_entered.GetValueOrDefault(target) < 2) {
+                return target;
+            }
+
+            var edge = function.AddBlock();
+            var passed = target.Arguments.Select(a => (SilValue)edge.AddArgument(a.Type, a.IsGuaranteed)).ToList();
+            edge.Append(new BranchInst(target, [..passed]));
+            _entered[edge] = 1;
+            return edge;
+        }
+
+        Dictionary<SilBlock, int>? _entered;
 
         bool Dominates(SilInstruction first, SilInstruction then) {
             if (ReferenceEquals(first.Block, then.Block)) {

@@ -198,6 +198,10 @@ public sealed partial class LlvmEmitter {
             constructors.Add(boxers);
         }
 
+        if (CasterRegistration(module) is { } casters) {
+            constructors.Add(casters);
+        }
+
         if (module.IsLibrary) {
             functions.Append(LibraryLifetime(module));
             constructors.Add("@\"sable.library.start\"");
@@ -1838,7 +1842,7 @@ public sealed partial class LlvmEmitter {
                 TupleType tuple => tuple.Elements.Select(PartMetadata).ToList(),
                 EnumType enumType => [..enumType.Cases.Select(c => c.Payload is { } payload ? PartMetadata(payload) : "null"), ..enumType.TypeArguments.Select(PartMetadata)],
                 StructType structType => [..structType.Fields.Select(f => PartMetadata(f.Type)), ..structType.TypeArguments.Select(PartMetadata)],
-                ClassType classType => [..classType.Fields.Select(f => PartMetadata(f.Type)), ..classType.TypeArguments.Select(PartMetadata)],
+                ClassType classType => [..classType.Fields.Select(f => FieldMetadata(f.Type)), ..classType.TypeArguments.Select(PartMetadata)],
                 _ => throw new NotSupportedException($"no metadata made at run time for {type} in {function.Name}"),
             };
             var list = Fresh();
@@ -1922,6 +1926,17 @@ public sealed partial class LlvmEmitter {
                 .Append($"  {slot} = getelementptr inbounds ptr, ptr {array}, i64 {index}\n")
                 .Append($"  {entry} = load ptr, ptr {slot}\n");
             return entry;
+        }
+
+        /// <summary>
+        ///     A class's field's metadata, for a class's made at run time: as a
+        ///     part's, but a reference to an object of a generic class of
+        ///     another generic type (<c>Log&lt;Repo&lt;T&gt;&gt;</c>, in Repo&lt;T&gt;) is any
+        ///     reference, as making that one's would lead back here.
+        /// </summary>
+        string FieldMetadata(SilType part) {
+            static bool IsGeneric(SilType type) => SilType.MentionsOpaque(type) && type is NominalType { TypeArguments.IsDefaultOrEmpty: false };
+            return part is ClassType { TypeArguments: { IsDefaultOrEmpty: false } arguments } && arguments.Any(IsGeneric) ? module.TypeMetadataGlobal(SilType.Object) : PartMetadata(part);
         }
 
         /// <summary>A part's metadata, for one made at run time: an indirect one's, an array of them's, or a constant.</summary>

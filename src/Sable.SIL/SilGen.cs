@@ -2183,7 +2183,7 @@ public sealed partial class SilGen {
             return SilType.Region;
         }
 
-        if (type.Equals(Core.Type)) {
+        if (type.Equals(Core.Type) || type is ExistentialTypeSymbol { MetatypeOf: not null }) {
             return SilType.Metadata;
         }
 
@@ -3572,6 +3572,15 @@ public sealed partial class SilGen {
             layout.Fields.Add((TypeName(protocol), SilType.WitnessTable));
         }
 
+        // Of an instance of a generic protocol, its type arguments are the
+        // existential's, as its metadata lists them.
+        if (protocols.Exists(static p => p.IsConstructed)
+            && protocols.SelectMany(static p => p.TypeArguments).Select(Lower).ToList() is var arguments && arguments.TrueForAll(static a => a is not null && !SilType.MentionsOpaque(a))) {
+            layout.TypeArguments = [..arguments!];
+            layout.DisplayName = "any " + string.Join(" & ", protocols.Select(p => !p.IsConstructed ? QualifiedName(p)
+                : $"{QualifiedName(p)}<{string.Join(", ", p.TypeArguments.Select(a => TypeMetadata.DisplayName(Lower(a)!)))}>"));
+        }
+
         _module.AddType(layout);
         _layoutProtocols[layout] = protocols;
         return layout;
@@ -3949,6 +3958,63 @@ public sealed partial class SilGen {
     }
 
     /// <summary>
+    ///     The instances of the program's generic types that meet a constraint
+    ///     one of whose protocols is an instance of a generic one, where that
+    ///     says what each of their type arguments is: <c>Sql&lt;Order&gt;</c>,
+    ///     for an <c>any Repo&lt;Order&gt;</c> and <c>Sql&lt;T&gt;: Repo&lt;T&gt;</c>.
+    ///     The declarations alone say which, so every unit finds the same.
+    /// </summary>
+    List<NamedTypeSymbol> ConformingInstances(TypeSymbol constraint) {
+        var found = new List<NamedTypeSymbol>();
+        var instances = CompositionTypeSymbol.PartsOf(constraint).OfType<NamedTypeSymbol>().Where(static p => p.TypeKind == TypeKind.Protocol && p.IsConstructed).ToList();
+
+        void Visit(IEnumerable<Symbol> members) {
+            foreach (var type in members.OfType<NamedTypeSymbol>()) {
+                if (type.TypeParameters.IsEmpty) {
+                    Visit(type.Members);
+                } else if (type.TypeKind is TypeKind.Struct or TypeKind.Class or TypeKind.Actor or TypeKind.Union && InstanceFor(type) is { } instance) {
+                    found.Add(instance);
+                }
+            }
+        }
+
+        NamedTypeSymbol? InstanceFor(NamedTypeSymbol type) {
+            var self = type.Construct([..type.TypeParameters]);
+            var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            foreach (var protocol in instances) {
+                if (self.SupertypeOf(protocol) is not { } declared || !TypeSubstitution.Unify(declared, protocol, type.TypeParameters, map)) {
+                    return null;
+                }
+            }
+
+            if (!type.TypeParameters.All(map.ContainsKey)) {
+                return null;
+            }
+
+            var substitution = new TypeSubstitution(map);
+            if (!type.TypeParameters.All(p => p.Constraints.All(c => map[p].Satisfies(substitution.Apply(c))))) {
+                return null;
+            }
+
+            var instance = type.Construct([..type.TypeParameters.Select(p => map[p])]);
+            return instance.Satisfies(constraint) ? instance : null;
+        }
+
+        // A protocol declared in a function is conformed to by what is declared beside it.
+        foreach (var protocol in instances) {
+            if (protocol.OriginalDefinition.ContainingSymbol is FunctionSymbol { LocalTypes: var locals }) {
+                Visit(locals);
+            }
+        }
+
+        foreach (var module in _compilation.Modules) {
+            Visit(module.Members);
+        }
+
+        return found;
+    }
+
+    /// <summary>
     ///     What <c>e as? T</c> does with the box of an existential: the value
     ///     as <typeparamref name="T" />, or none. To a concrete type, the box
     ///     is asked whether its class is that type's box — or, for an object,
@@ -3988,8 +4054,23 @@ public sealed partial class SilGen {
             return (name, type);
         }
 
+        // A class that others derive from: whatever object the box holds, of
+        // whichever class, is asked whether it is one.
+        if (layout is null && wanted is ClassType && target is NamedTypeSymbol { TypeKind: TypeKind.Class } open && IsInherited(open.OriginalDefinition)) {
+            var held = entry.Append(new BuiltinInst("box_metadata", SilType.Metadata, box));
+            var derives = entry.Append(new BuiltinInst("metadata_is_subtype", SilType.Bool, held, entry.Append(new MetadataInst(wanted))));
+            var one = cast.AddBlock();
+            var other = cast.AddBlock();
+            entry.Append(new CondBranchInst(derives, one, [], other, []));
+            var reference = one.Append(new LoadInst(one.Append(new RefElementAddrInst(one.Append(new UncheckedRefCastInst(box, ExistentialBox(wanted))), 0))));
+            one.Append(new BranchInst(joined, [one.Append(new EnumInst(optional, some, reference))]));
+            other.Append(new BranchInst(joined, [other.Append(new EnumInst(optional, none, null))]));
+            _module.Add(cast);
+            return (name, type);
+        }
+
         List<TypeSymbol> candidates = target switch {
-            ExistentialTypeSymbol existential when layout is not null => [..ConformingTypes(existential.Constraint)],
+            ExistentialTypeSymbol existential when layout is not null => [..ConformingTypes(existential.Constraint), ..ConformingInstances(existential.Constraint)],
             ExistentialTypeSymbol => [],
             var concrete => [concrete],
         };
@@ -7090,6 +7171,29 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } downcast when IsDowncast(downcast):
                     return Downcast(downcast);
 
+                // 't as? any P.Type': the type itself, if it conforms.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } metatype
+                    when CastTo(metatype) is ExistentialTypeSymbol { MetatypeOf: { } conformed } && LowerType(metatype.Operand.Type) == SilType.Metadata:
+                    return MetatypeDowncast(metatype, conformed);
+
+                // 'error as? IoError': what an 'any Error' boxes.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } thrown when IsErrorCast(thrown):
+                    return ErrorDowncast(thrown);
+
+                // 'provider as? T', T here a type no object is a value of.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } never when IsNeverCast(never):
+                    return Expression(never.Operand) is { } unlike ? SettledCast(never, unlike, null, CastTo(never)) : null;
+
+                // 'value as? any P', of a value only its metadata knows.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } erased
+                    when CastTo(erased) is ExistentialTypeSymbol { MetatypeOf: null } or NamedTypeSymbol { TypeKind: not TypeKind.Protocol } && IsOpaqueHere(erased.Operand.Type):
+                    return OpaqueAsExistential(erased);
+
+                // 'value as? T', T here a type only its metadata knows.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } held
+                    when _genericMetadata.Count > 0 && IsExistential(held.Operand.Type) && Mentions(CastTo(held), [.._genericMetadata.Keys]):
+                    return OpaqueDowncast(held);
+
                 // 'shape as? Square', 'shape as? any Named': asked of the existential's box;
                 // 'animal as? any Named', of a box made for the object.
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } opened when IsExistential(opened.Operand.Type) || IsObjectToProtocol(opened):
@@ -7152,6 +7256,9 @@ public sealed partial class SilGen {
                 // 'Int.self': the type is known here, so its metadata is a constant.
                 case BoundMetatype metatype:
                     return MetatypeValue(metatype);
+
+                case BoundGenericType generic:
+                    return GenericTypeValue(generic);
 
                 case BoundIndirectCall indirect:
                     return IndirectCall(indirect);
@@ -8426,7 +8533,7 @@ public sealed partial class SilGen {
         ///     — is the <c>Type</c> it converts to, which writes its name.
         /// </summary>
         BoundExpression AsTypeValue(BoundExpression part) =>
-            Sub(part.Type) is MetatypeTypeSymbol ? new BoundConversion(part.Syntax, Core.Type, part, ConversionKind.Identity) : part;
+            Sub(part.Type) is MetatypeTypeSymbol or ExistentialTypeSymbol { MetatypeOf: not null } ? new BoundConversion(part.Syntax, Core.Type, part, ConversionKind.Identity) : part;
 
         /// <summary><c>Formattable</c> and its <c>format</c>, when Sable.Core has them.</summary>
         (NamedTypeSymbol, FunctionSymbol)? FormatRequirement() =>
@@ -8829,6 +8936,80 @@ public sealed partial class SilGen {
             return answer;
         }
 
+        /// <summary>The type a cast asks for: the wrapped one, of 'as?'.</summary>
+        TypeSymbol CastTo(BoundConversion conversion) => CastTarget(Sub(conversion.Type) is OptionalTypeSymbol optional ? optional.UnderlyingType : Sub(conversion.Type));
+
+        /// <summary>'error as? IoError': a cast of an 'any Error' to a type of error.</summary>
+        bool IsErrorCast(BoundConversion conversion) =>
+            Sub(conversion.Operand.Type) is ExistentialTypeSymbol && LowerType(conversion.Operand.Type) == generator.AnyErrorType() && CastTo(conversion) is not ExistentialTypeSymbol;
+
+        /// <summary>The error an 'any Error' boxes, if it is of the type: '.Some' of it for 'as?', a trap otherwise for 'as!'.</summary>
+        SilValue? ErrorDowncast(BoundConversion conversion) {
+            var target = CastTo(conversion);
+            if (LowerType(target) is not { } wanted || LowerType(new OptionalTypeSymbol(target)) is not EnumType result || Borrow(conversion.Operand) is not { } error) {
+                return Missing(conversion, $"the cast to '{target.ToDisplayString()}'");
+            }
+
+            var box = generator.ErrorBox(wanted);
+            var isOne = Emit(new BuiltinInst($"class_is:{box.Name}", SilType.Bool, error));
+            SilValue Boxed() => Emit(new LoadInst(Emit(new RefElementAddrInst(Emit(new UncheckedRefCastInst(error, box)), 0))));
+            if (Sub(conversion.Type) is not OptionalTypeSymbol) {
+                Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, isOne)), $"cast to '{target.ToDisplayString()}' failed"));
+                var forced = Boxed();
+                End(error);
+                return forced;
+            }
+
+            var yes = function.AddBlock();
+            var no = function.AddBlock();
+            var after = function.AddBlock();
+            var joined = after.AddArgument(result);
+            Jump(new CondBranchInst(isOne, yes, [], no, []));
+
+            _current = yes;
+            Branch(after, Emit(new EnumInst(result, result.CaseIndex("Some"), Boxed())));
+
+            _current = no;
+            Branch(after, Emit(new EnumInst(result, result.CaseIndex("None"), null)));
+
+            _current = after;
+            End(error);
+            return joined;
+        }
+
+        /// <summary>'t as? any P.Type': whether the type conforms, asked of the registry; the type is the value.</summary>
+        SilValue? MetatypeDowncast(BoundConversion conversion, TypeSymbol protocol) {
+            if (LowerType(new ExistentialTypeSymbol(protocol)) is not { } existential || LowerType(conversion.Type) is not { } result || Expression(conversion.Operand) is not { } type) {
+                return Missing(conversion, $"the cast to '{conversion.Type.ToDisplayString()}'");
+            }
+
+            var conforms = Emit(new BuiltinInst("metadata_is_subtype", SilType.Bool, type, Emit(new MetadataInst(existential))));
+            if (Sub(conversion.Type) is not OptionalTypeSymbol) {
+                Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, conforms)), $"cast to 'any {protocol.ToDisplayString()}.Type' failed"));
+                return type;
+            }
+
+            var optional = (EnumType)result;
+            var yes = function.AddBlock();
+            var no = function.AddBlock();
+            var after = function.AddBlock();
+            var joined = after.AddArgument(optional);
+            Jump(new CondBranchInst(conforms, yes, [], no, []));
+            _current = yes;
+            Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("Some"), type)));
+            _current = no;
+            Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("None"), null)));
+            _current = after;
+            return joined;
+        }
+
+        /// <summary>'provider as? T' of an object, in an instance of generic code that makes T a type whose values are no objects.</summary>
+        bool IsNeverCast(BoundConversion conversion) =>
+            Sub(conversion.Operand.Type).TypeKind is TypeKind.Class or TypeKind.Actor
+            && CastTo(conversion) is var target and not (ExistentialTypeSymbol or OptionalTypeSymbol or TypeParameterSymbol or DependentMemberTypeSymbol)
+            && target.TypeKind is not (TypeKind.Class or TypeKind.Actor or TypeKind.Protocol) && StructuralUnionTypeSymbol.Of(target) is null
+            && conversion.Type is OptionalTypeSymbol { UnderlyingType: TypeParameterSymbol } or TypeParameterSymbol;
+
         /// <summary>'animal as? any Named': an object cast to an existential of protocols.</summary>
         bool IsObjectToProtocol(BoundConversion conversion) {
             var target = Sub(conversion.Type) is OptionalTypeSymbol optional ? optional.UnderlyingType : Sub(conversion.Type);
@@ -8947,7 +9128,17 @@ public sealed partial class SilGen {
         SilValue? KnownCast(BoundConversion conversion) {
             var optional = Sub(conversion.Type) is OptionalTypeSymbol;
             var targetSymbol = optional ? ((OptionalTypeSymbol)Sub(conversion.Type)).UnderlyingType : Sub(conversion.Type);
-            if (LowerType(conversion.Type) is not { } resultType || Expression(conversion.Operand) is not { } value) {
+            if (LowerType(conversion.Type) is not { } resultType) {
+                return null;
+            }
+
+            // 'value as? any Named': whether the type conforms is known now too.
+            if (CastTarget(targetSymbol) is ExistentialTypeSymbol wanted && Sub(conversion.Operand.Type).Satisfies(wanted.Constraint)) {
+                return Expression(new BoundConversion(conversion.Syntax, wanted, conversion.Operand, ConversionKind.Existential)) is not { } held ? null
+                    : optional ? Emit(new EnumInst((EnumType)resultType, ((EnumType)resultType).CaseIndex("Some"), Carried(held))) : held;
+            }
+
+            if (Expression(conversion.Operand) is not { } value) {
                 return null;
             }
 
@@ -8977,6 +9168,25 @@ public sealed partial class SilGen {
 
         /// <summary>'x is Dog': whether the object is of the class, or a subclass of it.</summary>
         SilValue? TypeTest(BoundTypeTest test) {
+            // 'x is Named' of a value only its metadata knows: its dynamic type asked.
+            if (IsOpaqueHere(test.Operand.Type) && MetadataOf(Sub(test.Operand.Type)) is { } operandMetadata && LowerType(CastTarget(test.TestedType)) is { } wantedType) {
+                if (Borrow(test.Operand) is not { } opaqueValue) {
+                    return null;
+                }
+
+                var dynamicType = Emit(new BuiltinInst("opaque_type", SilType.Metadata, opaqueValue, operandMetadata));
+                var isSubtype = Emit(new BuiltinInst("metadata_is_subtype", SilType.Bool, dynamicType, Emit(new MetadataInst(wantedType))));
+                End(opaqueValue);
+                return isSubtype;
+            }
+
+            // 't is any P.Type': whether the type conforms.
+            if (Sub(test.TestedType) is ExistentialTypeSymbol { MetatypeOf: { } conformed } && LowerType(test.Operand.Type) == SilType.Metadata) {
+                return LowerType(new ExistentialTypeSymbol(conformed)) is { } asked && Expression(test.Operand) is { } type
+                    ? Emit(new BuiltinInst("metadata_is_subtype", SilType.Bool, type, Emit(new MetadataInst(asked))))
+                    : null;
+            }
+
             // A value already known to be of the type: a union's binding that
             // an earlier test, failing, narrowed down to this one case.
             if (Sub(test.Operand.Type).Equals(Sub(test.TestedType))) {
@@ -11296,6 +11506,10 @@ public sealed partial class SilGen {
 
             if (IsAnyError(conversion.Operand.Type)) {
                 return ErrorAsExistential(conversion, layout);
+            }
+
+            if (IsOpaqueHere(conversion.Operand.Type)) {
+                return OpaqueAsExistential(conversion);
             }
 
             if (Sub(conversion.Operand.Type) is ExistentialTypeSymbol) {

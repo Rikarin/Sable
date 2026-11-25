@@ -352,6 +352,13 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_caster")) {
+                var cast = ParseType();
+                Expect("=");
+                module.Casters[cast.ToString()] = (cast, Expect(TokenKind.Global, "a caster's name").Text);
+                continue;
+            }
+
             if (Accept("sil_describer")) {
                 var described = ParseType();
                 Expect("=");

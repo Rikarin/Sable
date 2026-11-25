@@ -1006,6 +1006,13 @@ public sealed class ExistentialTypeSymbol(TypeSymbol constraint) : TypeSymbol {
 
     public TypeSymbol Constraint { get; } = constraint;
 
+    /// <summary>
+    ///     For <c>any P.Type</c>, an existential metatype — a type known only
+    ///     at run time that conforms to P — the P; null for any other. Its
+    ///     constraint is <c>P.Type</c>, and its value a <c>Type</c>'s.
+    /// </summary>
+    public TypeSymbol? MetatypeOf => (Constraint as MetatypeTypeSymbol)?.InstanceType;
+
     public override string ToDisplayString() => $"any {Constraint.ToDisplayString()}";
 
     public override bool Equals(TypeSymbol? other) =>

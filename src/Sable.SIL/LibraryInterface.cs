@@ -354,6 +354,10 @@ public sealed class LibraryInterface {
             program.Boxers.TryAdd(name, boxer);
         }
 
+        foreach (var (name, caster) in library.Casters) {
+            program.Casters.TryAdd(name, caster);
+        }
+
         foreach (var (name, deinit) in library.GenericDeinits) {
             program.GenericDeinits.TryAdd(name, deinit);
         }

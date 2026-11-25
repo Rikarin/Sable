@@ -270,7 +270,7 @@ public sealed partial class DebuggerFormatterTests {
                 // An inout parameter is where the value is: it shows the value.
                 "(Int) other = 4\n",
                 "(Gen.Reply<Int>) ok = Ok(4)",
-                "(Gen.Reply<Int>) both = Both(4, 5)",
+                "(Gen.Reply<Int>) both = Both(left: 4, right: 5)",
                 "(Gen.Pair<Gen.Pair<Int, Bool>, Int?>) nested = {\n  first = {\n    first = 4\n    second = true\n  }\n  second = 4\n}\n"
             );
 
@@ -336,7 +336,7 @@ public sealed partial class DebuggerFormatterTests {
             "(Rt.Crate<Rt.Meters>?) maybe = (item: (value: 7, text: \"long\"), tags: ((value: 7, text: \"long\"), true))",
             "(Rt.Crate<Rt.Meters>?) no = none\n",
             "((Rt.Crate<Rt.Meters>, Int)) pair = ((item: (value: 7, text: \"long\"), tags: ((value: 7, text: \"long\"), true)), 5)\n",
-            "(Rt.Maybe<Rt.Crate<Rt.Meters>>) two = Two((item: ",
+            "(Rt.Maybe<Rt.Crate<Rt.Meters>>) two = Two(a: (item: ",
             "(Rt.Cell<Rt.Crate<Rt.Meters>>) cell = Rt.Cell<Rt.Crate<Rt.Meters>> {\n  item = {\n    item = (value = 7, text = \"long\")\n",
             "(Sable.Core.Dictionary<Int, Rt.Crate<Rt.Meters>>) dict = count = 1 {\n  [4] = {\n    item = (value = 7, text = \"long\")\n",
             "(any Rt.Zero) made = Rt.Crate<Rt.Meters> {\n  [value] = {\n    item = (value = 7, text = \"long\")\n",
@@ -454,6 +454,68 @@ public sealed partial class DebuggerFormatterTests {
             Assert.Equal(0, Command.Find("build")!.Run([source, "-g", "-o", executable]));
             var output = await Debug(lldb, executable, ["b steps.sb:5", "run", "frame variable", "kill"]);
             Expect(output, "(Int) doubled = 2");
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>
+    ///     A Sable shared library in a program that is none: its types are
+    ///     looked up in it, by the names their metadata carries; and a union
+    ///     made at run time shows its case's labels.
+    /// </summary>
+    [PosixFact(NeedsLldb)]
+    public async Task ASharedLibrarysTypesAreItsOwn() {
+        if (Lldb.Value is not { } lldb) {
+            return;
+        }
+
+        const string library = """
+                               module Lib
+                               protocol Named { fn n() -> String }
+                               struct Pt: Named {
+                                   let x: Int
+                                   let label: String
+                                   fn n() -> String { return label }
+                               }
+                               union Maybe<T> { Just(value: T), Two(a: T, b: T) }
+                               fn show<T: Named>(_ v: T) -> Int {
+                                   let two = Maybe<T>.Two(a: v, b: v)
+                                   print(v.n()) // in show
+                                   if case .Two(let a, _) = two {
+                                       return a.n().count
+                                   }
+                                   return 0
+                               }
+                               @export("poke")
+                               public fn poke(_ n: I32) {
+                                   let a: any Named = Pt { x: 3, label: "hi" }
+                                   print(a.n()) // in poke
+                                   print(show(Pt { x: 4, label: "ho" }))
+                               }
+                               """;
+        var directory = Directory.CreateTempSubdirectory("sable-debug-library-");
+        using var generics = SilGen.UseGenerics(GenericsMode.Unspecialised);
+        try {
+            var source = Path.Combine(directory.FullName, "poke.sb");
+            File.WriteAllText(source, library);
+            var built = Path.Combine(directory.FullName, OperatingSystem.IsMacOS() ? "libpoke.dylib" : "libpoke.so");
+            Assert.Equal(0, Command.Find("build")!.Run([source, "-g", "-O0", "--emit", "dylib", "-o", built]));
+            var host = Path.Combine(directory.FullName, "host.c");
+            File.WriteAllText(host, "extern void poke(int n);\nint main(void) { poke(3); return 0; }\n");
+            var executable = Path.Combine(directory.FullName, "host");
+            using (var clang = System.Diagnostics.Process.Start(NativeBuild.CompilerPath, ["-g", host, built, "-Wl,-rpath," + directory.FullName, "-o", executable])!) {
+                await clang.WaitForExitAsync();
+                Assert.Equal(0, clang.ExitCode);
+            }
+
+            var output = await Debug(lldb, executable, [
+                Break(library, "poke.sb", "// in poke"), Break(library, "poke.sb", "// in show"), "run", "frame variable", "continue", "frame variable", "kill",
+            ]);
+            ExpectAll(output,
+                "(any Lib.Named) a = Lib.Pt {",
+                "two = Two(a: (x: 4, label: \"ho\"), b: (x: 4, label: \"ho\"))"
+            );
         } finally {
             directory.Delete(true);
         }

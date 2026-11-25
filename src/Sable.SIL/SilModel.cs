@@ -1824,6 +1824,15 @@ public sealed class SilModule {
     public Dictionary<string, (SilType Type, string Function)> Boxers { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    ///     For each existential generic code compiled once may cast to, by the
+    ///     type's name: the function that puts a box's value where it is told
+    ///     as that existential, if it is one (<c>existential_cast</c>) — made
+    ///     where the type is known, and registered with the runtime as
+    ///     describers are.
+    /// </summary>
+    public Dictionary<string, (SilType Type, string Function)> Casters { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
     ///     For each generic class with a deinit whose initialiser is compiled
     ///     once, by its name: the function that runs the deinit of an object
     ///     whose class the runtime made, registered with it
@@ -2503,6 +2512,10 @@ public static class SilBuiltins {
                 return new([metadata], result);
             case "opaque_box" when operands is [AddressType buffer, var m] && m == metadata && result is ClassType:
                 return new([buffer, metadata], result);
+            // 'e as? T' of a type only its metadata knows: what the box holds
+            // copied to the address, if it is one.
+            case "existential_cast" when operands is [ClassType box, var m, AddressType to] && m == metadata:
+                return new([box, metadata, to], SilType.Bool);
             case "opaque_free" when operands is [AddressType buffer]:
                 return new([buffer], SilType.Unit);
         }

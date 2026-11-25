@@ -293,6 +293,7 @@ public sealed class TypeMetadata {
             ArrayType array => $"[{DisplayName(array.Element)}]",
             SliceType slice => $"[{DisplayName(slice.Element)}:]",
             EnumType enumType when OptionalPayload(enumType) is { } payload => DisplayName(payload) + "?",
+            StructType { DisplayName: { } existential, Name: var name } when name.StartsWith("any$", StringComparison.Ordinal) => existential,
             StructType { Name: var name } when name.StartsWith("any$", StringComparison.Ordinal) => "any " + name[4..].Replace("$and$", " & ", StringComparison.Ordinal),
             TupleType tuple => $"({string.Join(", ", tuple.Elements.Select(DisplayName))})",
             ThickFunctionType thick => FunctionName(thick.Signature),

@@ -12,7 +12,7 @@ namespace Sable.CodeGen.Tests;
 ///     natively and in the interpreter, leak-checked; all four must agree.
 /// </summary>
 [Native]
-public sealed class OpenedTypeTests {
+public sealed partial class OpenedTypeTests {
     static Execution Runs(string declarations, string body) => RunsBoth(Program(declarations, body));
 
     /// <summary>A program whose main is async, run as <see cref="Runs" /> runs one.</summary>

@@ -1,5 +1,7 @@
 module Sable.Globalization
 
+import Sable.Text
+
 /// A locale's way of writing numbers, made once to write many: what
 /// `format(_:locale:)` makes for each number it is given. ECMA-402's
 /// Intl.NumberFormat.
@@ -21,8 +23,7 @@ public struct NumberFormatter {
     let decimal: String
     let group: String
     let minus: String
-    let plus: String
-    let percent: String
+    let signs: NumberSigns
     let exponent: String
     let notANumber: String
     let infinity: String
@@ -31,6 +32,9 @@ public struct NumberFormatter {
     let currency: String
     let minimumFraction: Int
     let maximumFraction: Int
+    /// What goes before a finite number and after it, and a negative one.
+    let positive: (String, String)
+    let negative: (String, String)
 
     /// The locale's way of writing numbers in the format. Money in a
     /// currency that is not three letters traps.
@@ -52,6 +56,8 @@ public struct NumberFormatter {
         }
         let money = which >= 3
         let pattern = NumberPattern(patterns[which])
+        let currency = currencyText(code, format.currencyDisplay, data)
+        let signs = NumberSigns(format.sign, minus: symbols[2], plus: symbols[3], percent: symbols[4], currency: currency, pattern)
         var least = pattern.minimumFraction
         var most = pattern.maximumFraction
         if which == 2 {
@@ -76,20 +82,32 @@ public struct NumberFormatter {
         self.decimal = money ? symbols[9] : symbols[0]
         self.group = money ? symbols[10] : symbols[1]
         self.minus = symbols[2]
-        self.plus = symbols[3]
-        self.percent = symbols[4]
+        self.signs = signs
         self.exponent = symbols[6]
         self.notANumber = symbols[7]
         self.infinity = symbols[8]
         self.minimumGrouping = data.text("minimumGrouping").toInt() ?? 1
         self.currencyCode = code
-        self.currency = currencyText(code, format.currencyDisplay, data)
+        self.currency = currency
         self.minimumFraction = least
         self.maximumFraction = most
+        self.positive = signs.affixes(negative: false, isNaN: false, isFinite: true)
+        self.negative = signs.affixes(negative: true, isNaN: false, isFinite: true)
     }
 
     /// The number as the locale writes it.
     public fn format<T: LocalizableNumber>(_ value: T) -> String {
+        if digits[0] == '0' && numberFormat.kind != .Scientific {
+            let shift = numberFormat.kind == .Percent ? 2 : 0
+            if let (scaled, places) = value.scaled(places: maximumFraction + shift) {
+                if places >= shift {
+                    return written(scaled, places - shift)
+                }
+                if scaled > -1_000_000_000_000_000 && scaled < 1_000_000_000_000_000 {
+                    return written(scaled * 100, places)
+                }
+            }
+        }
         if numberFormat.kind == .Scientific {
             var spec = FormatSpec()
             spec.kind = .Exponent
@@ -97,6 +115,67 @@ public struct NumberFormatter {
             return localized(withoutZeros(value.format(spec)))
         }
         return localized(plainText(value))
+    }
+
+    /// The whole number divided by a power of ten as the locale writes it, in
+    /// ASCII digits: what 'localized' writes of its plain digits, without
+    /// their being written first.
+    fn written(_ value: Int, _ places: Int) -> String {
+        let (leading, trailing) = value < 0 ? negative : positive
+        var rest = value < 0 ? 0 - value : value
+        var fraction = places
+        while fraction > minimumFraction && rest % 10 == 0 {
+            rest = rest / 10
+            fraction -= 1
+        }
+        let zeros = fraction < minimumFraction ? minimumFraction - fraction : 0
+        var whole = 0 - fraction
+        var left = rest
+        while left > 0 {
+            left = left / 10
+            whole += 1
+        }
+        whole = whole < numberFormat.minimumIntegerDigits ? numberFormat.minimumIntegerDigits : whole
+        whole = whole < 1 ? 1 : whole
+        let primary = pattern.primaryGroup
+        let least = numberFormat.grouping == .Always ? 1 : minimumGrouping
+        var separators = 0
+        if numberFormat.grouping != .Never && primary > 0 && whole >= primary + least && whole > primary {
+            separators = 1 + (whole - primary - 1) / pattern.secondaryGroup
+        }
+        let point = fraction + zeros > 0 ? decimal.utf8Count : 0
+        var at = leading.utf8Count + whole + separators * group.utf8Count + point + fraction + zeros + trailing.utf8Count
+        var bytes: U8[>..] = []
+        bytes.append(repeating: 0x30, count: at)
+        // From the end to the start.
+        putBefore(&at, trailing, &bytes)
+        at -= zeros
+        var i = 0
+        while i < fraction {
+            at -= 1
+            bytes[at] = U8(48 + rest % 10)
+            rest = rest / 10
+            i += 1
+        }
+        if point > 0 {
+            putBefore(&at, decimal, &bytes)
+        }
+        var next = separators > 0 ? primary : whole
+        i = 0
+        while i < whole {
+            if i == next {
+                putBefore(&at, group, &bytes)
+                next += pattern.secondaryGroup
+            }
+            at -= 1
+            bytes[at] = U8(48 + rest % 10)
+            rest = rest / 10
+            i += 1
+        }
+        putBefore(&at, leading, &bytes)
+        unsafe {
+            return String.fromUtf8Unchecked(bytes)
+        }
     }
 
     /// The number's digits, as many as the format writes.
@@ -139,7 +218,7 @@ public struct NumberFormatter {
         } else {
             body = parts.isNaN ? notANumber : infinity
         }
-        let (leading, trailing) = affixes(parts)
+        let (leading, trailing) = parts.isFinite ? (parts.negative ? negative : positive) : signs.affixes(negative: parts.negative, isNaN: parts.isNaN, isFinite: false)
         return leading + body + trailing
     }
 
@@ -166,57 +245,15 @@ public struct NumberFormatter {
     fn inDigits(_ text: String) -> String {
         return localDigits(text, digits)
     }
+}
 
-    /// What goes before the number and after it.
-    fn affixes(_ parts: NumberParts) -> (String, String) {
-        var sign = ""
-        if parts.negative {
-            sign = minus
-        } else if parts.isNaN {
-            sign = ""
-        } else if numberFormat.sign == .Always {
-            sign = plus
-        } else if numberFormat.sign == .Space {
-            sign = " "
-        }
-        if !sign.isEmpty && pattern.hasNegative && (parts.negative || pattern.negativeLeading.contains(where: { $0.kind == .Minus })
-            || pattern.negativeTrailing.contains(where: { $0.kind == .Minus })) {
-            return (affixText(pattern.negativeLeading, sign, parts, true), affixText(pattern.negativeTrailing, sign, parts, false))
-        }
-        return (sign + affixText(pattern.leading, sign, parts, true), affixText(pattern.trailing, sign, parts, false))
-    }
-
-    /// A leading or trailing, with a space between a currency's letters and the
-    /// digits where the pattern has none (UTS #35, currency spacing).
-    fn affixText(_ pieces: AffixPiece[>..], _ sign: String, _ parts: NumberParts, _ isPrefix: Bool) -> String {
-        var text = ""
-        var i = 0
-        for piece in pieces {
-            let touches = isPrefix ? i == pieces.count - 1 : i == 0
-            let space = touches && parts.isFinite && piece.kind == .Currency && needsSpace(isPrefix) ? "\u{A0}" : ""
-            text += match piece.kind {
-                case .Text     => piece.text
-                case .Minus    => sign
-                case .Plus     => plus
-                case .Percent  => percent
-                case .Currency => isPrefix ? currency + space : space + currency
-            }
-            i += 1
-        }
-        return text
-    }
-
-    /// Whether the currency's end beside the number is neither a symbol nor
-    /// a space already.
-    fn needsSpace(_ isPrefix: Bool) -> Bool {
-        if currency.isEmpty {
-            return false
-        }
-        let edge = isPrefix ? currency.last! : currency.first!
-        return match edge.generalCategory {
-            case .CurrencySymbol, .MathSymbol, .ModifierSymbol, .OtherSymbol, .SpaceSeparator => false
-            case _                                                                            => true
-        }
+/// Puts the text's bytes before the place, which is moved to their start.
+fn putBefore(_ at: inout Int, _ text: String, _ bytes: inout U8[>..]) {
+    var i = text.utf8Count
+    while i > 0 {
+        i -= 1
+        at -= 1
+        bytes[at] = text.utf8[i]
     }
 }
 

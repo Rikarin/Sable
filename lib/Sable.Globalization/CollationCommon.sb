@@ -1,0 +1,226 @@
+module Sable.Globalization
+
+// The elements a collator gives each code point below collationCommonLimit
+// (Latin, Greek and Cyrillic) that stands alone, so that texts of them are
+// compared without being normalized, searched for longer strings or gathered
+// into arrays.
+//
+// A character stands alone where it is no mark, what follows it is not one
+// either, and no string the tables know goes from the one into the other:
+// 'collationBegins' says that a string may begin in the character and go on
+// past it, 'collationGoesOn' that one begun before may go on into it.
+
+const collationElementMask = 0xFFF_FFFF_FFFF
+const collationBegins = 1 << 44
+const collationGoesOn = 1 << 45
+/// How many elements it has past the first, and where in 'rest' they are.
+const collationMoreShift = 46
+const collationRestShift = 50
+
+struct CollationCommon {
+    /// For each code point its first element and what is said above, or -1
+    /// where it is not to be taken alone.
+    var first: Int[>..] = []
+    /// The elements of those that have more than one.
+    var rest: Int[>..] = []
+
+    /// The root's, with its elements where the moves put them, and what the
+    /// tailoring's strings change. Digits are left out where they are numbers.
+    init(_ tailored: [Int: CollationString[>..]], _ moves: CollationMove[>..], numeric: Bool) {
+        first.reserveCapacity(collationCommonLimit)
+        var code = 0
+        while code < collationCommonLimit {
+            let at = collationRecord(code, 14)
+            let more = collationNumber(collationCommon, at + 8, 1)
+            if more > 8 || numeric && code >= 48 && code <= 57 {
+                first.append(-1)
+            } else {
+                var entry = placed(elementAt(collationCommon, at), moves) | (collationNumber(collationCommon, at + 13, 1) << 44)
+                if more > 0 {
+                    entry = entry | (more << collationMoreShift) | (rest.count << collationRestShift)
+                    let pooled = collationNumber(collationCommon, at + 9, 4)
+                    var i = 0
+                    while i < more {
+                        rest.append(placed(elementAt(collationPool, collationRecord(pooled + i, 8)), moves))
+                        i += 1
+                    }
+                }
+                first.append(entry)
+            }
+            code += 1
+        }
+        if !tailored.isEmpty {
+            tailor(tailored, moves)
+        }
+    }
+
+    /// Writes over the entries what the tailoring's strings change: the
+    /// elements of the characters any of them begins in, and what may join
+    /// others.
+    mutating fn tailor(_ tailored: [Int: CollationString[>..]], _ moves: CollationMove[>..]) {
+        // For each code point: 1 where a string begins with it, and the
+        // flags of an entry.
+        var roles: Int[>..] = []
+        roles.append(repeating: 0, count: collationCommonLimit)
+        for (_, strings) in tailored {
+            for s in strings {
+                var i = 0
+                while i < s.codes.count {
+                    let code = s.codes[i]
+                    if code < collationCommonLimit {
+                        roles[code] = roles[code] | (i == 0 ? 1 : collationGoesOn) | (i + 1 < s.codes.count ? collationBegins : 0)
+                    }
+                    i += 1
+                }
+            }
+        }
+        var code = 0
+        while code < collationCommonLimit {
+            let entry = first[code]
+            if entry >= 0 {
+                let at = collationRecord(code, 12)
+                var codes: Int[>..<] = [collationNumber(collationCommonDecomposed, at, 4)]
+                var all = roles[codes[0]]
+                let joined = all & collationGoesOn
+                for k in 1..<3 {
+                    let mark = collationNumber(collationCommonDecomposed, at + 4 * k, 4)
+                    if mark != 0 {
+                        codes.append(mark)
+                        all = all | roles[mark]
+                    }
+                }
+                let joins = (all & collationBegins) | joined
+                if (all & 1) != 0 {
+                    first[code] = retaken(codes, tailored, moves, entry, joins)
+                } else {
+                    first[code] = entry | joins
+                }
+            }
+            code += 1
+        }
+    }
+
+    /// The entry of a character the tailoring changes, its decomposition
+    /// being the codes.
+    mutating fn retaken(_ decomposed: Int[>..<], _ tailored: [Int: CollationString[>..]], _ moves: CollationMove[>..], _ entry: Int, _ joins: Int) -> Int {
+        var codes = decomposed
+        var elements: Int[>..] = []
+        var i = 0
+        while i < codes.count {
+            i = addLongest(&codes, i, tailored, into: &elements)
+        }
+        if elements.count > 9 {
+            return -1
+        }
+        var changed = (entry & (collationBegins | collationGoesOn)) | joins
+        if elements.count > 0 {
+            changed = changed | placed(elements[0], moves)
+        }
+        if elements.count > 1 {
+            changed = changed | ((elements.count - 1) << collationMoreShift) | (rest.count << collationRestShift)
+            i = 1
+            while i < elements.count {
+                rest.append(placed(elements[i], moves))
+                i += 1
+            }
+        }
+        return changed
+    }
+
+    /// The code point's entry, -1 for one that is not to be taken alone.
+    fn entry(_ code: Int) -> Int {
+        return code < collationCommonLimit ? first[code] : -1
+    }
+
+    /// The entry of the text's character at the offset: 0 at its end, and
+    /// negative for one that does not stand alone.
+    @inline(always)
+    fn entry(of text: String, at offset: Int) -> Int {
+        if offset >= text.utf8Count {
+            return 0
+        }
+        let byte = Int(text.utf8[offset])
+        if byte < 0x80 {
+            return first[byte]
+        }
+        return byte >= 0xE0 ? -1 : entry(((byte & 0x1F) << 6) | (Int(text.utf8[offset + 1]) & 0x3F))
+    }
+
+    /// Adds the entry's elements.
+    fn add(_ entry: Int, into elements: inout Int[>..]) {
+        elements.append(entry & collationElementMask)
+        let more = (entry >> collationMoreShift) & 15
+        var i = 0
+        while i < more {
+            elements.append(rest[(entry >> collationRestShift) + i])
+            i += 1
+        }
+    }
+}
+
+/// Goes through a text's elements while its characters stand alone.
+struct CollationCursor {
+    /// The next character's entry, read already to know whether the one
+    /// before it stands alone; -1 at the end, and -2 for one that does not.
+    var entry: Int
+    /// Where the character after that is.
+    var at: Int
+    /// The elements left of the character before: how many, and where.
+    var left: Int
+    var restAt: Int
+
+    /// From the offset on.
+    init(_ text: String, _ from: Int, _ common: CollationCommon) {
+        entry = -1
+        at = from
+        left = 0
+        restAt = 0
+        entry = read(text, common)
+    }
+
+    /// Whether a string begun before may go on into the next character.
+    var joins: Bool => entry >= 0 && (entry & collationGoesOn) != 0
+
+    /// The entry of the character at the offset, which is moved past it.
+    mutating fn read(_ text: String, _ common: CollationCommon) -> Int {
+        if at >= text.utf8Count {
+            return -1
+        }
+        var code = Int(text.utf8[at])
+        at += 1
+        if code >= 0x80 {
+            if code >= 0xE0 {
+                return -2
+            }
+            code = ((code & 0x1F) << 6) | (Int(text.utf8[at]) & 0x3F)
+            at += 1
+            if code >= collationCommonLimit {
+                return -2
+            }
+        }
+        let found = common.first[code]
+        return found < 0 ? -2 : found
+    }
+
+    /// The next element, -1 at the end, or -2 where a character does not
+    /// stand alone.
+    mutating fn next(_ text: String, _ common: CollationCommon) -> Int {
+        if left > 0 {
+            left -= 1
+            restAt += 1
+            return common.rest[restAt - 1]
+        }
+        let current = entry
+        if current < 0 {
+            return current
+        }
+        let following = read(text, common)
+        if following == -2 || following >= 0 && (current & collationBegins) != 0 && (following & collationGoesOn) != 0 {
+            return -2
+        }
+        entry = following
+        left = (current >> collationMoreShift) & 15
+        restAt = current >> collationRestShift
+        return current & collationElementMask
+    }
+}

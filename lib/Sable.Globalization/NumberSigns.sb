@@ -1,0 +1,73 @@
+module Sable.Globalization
+
+/// What a format puts around a number, by its sign: the pattern's affixes
+/// with the locale's signs and the currency in them.
+struct NumberSigns {
+    let sign: FormatSign
+    let minus: String
+    let plus: String
+    let percent: String
+    let currency: String
+    let pattern: NumberPattern
+
+    init(_ sign: FormatSign, minus: String, plus: String, percent: String, currency: String, _ pattern: NumberPattern) {
+        self.sign = sign
+        self.minus = minus
+        self.plus = plus
+        self.percent = percent
+        self.currency = currency
+        self.pattern = pattern
+    }
+
+    /// What goes before the number and after it.
+    fn affixes(negative: Bool, isNaN: Bool, isFinite: Bool) -> (String, String) {
+        var mark = ""
+        if negative {
+            mark = minus
+        } else if isNaN {
+            mark = ""
+        } else if sign == .Always {
+            mark = plus
+        } else if sign == .Space {
+            mark = " "
+        }
+        if !mark.isEmpty && pattern.hasNegative && (negative || pattern.negativeLeading.contains(where: { $0.kind == .Minus })
+            || pattern.negativeTrailing.contains(where: { $0.kind == .Minus })) {
+            return (affixText(pattern.negativeLeading, mark, isFinite, true), affixText(pattern.negativeTrailing, mark, isFinite, false))
+        }
+        return (mark + affixText(pattern.leading, mark, isFinite, true), affixText(pattern.trailing, mark, isFinite, false))
+    }
+
+    /// A leading or trailing, with a space between a currency's letters and the
+    /// digits where the pattern has none (UTS #35, currency spacing).
+    fn affixText(_ pieces: AffixPiece[>..], _ mark: String, _ isFinite: Bool, _ isPrefix: Bool) -> String {
+        var text = ""
+        var i = 0
+        for piece in pieces {
+            let touches = isPrefix ? i == pieces.count - 1 : i == 0
+            let space = touches && isFinite && piece.kind == .Currency && needsSpace(isPrefix) ? "\u{A0}" : ""
+            text += match piece.kind {
+                case .Text     => piece.text
+                case .Minus    => mark
+                case .Plus     => plus
+                case .Percent  => percent
+                case .Currency => isPrefix ? currency + space : space + currency
+            }
+            i += 1
+        }
+        return text
+    }
+
+    /// Whether the currency's end beside the number is neither a symbol nor
+    /// a space already.
+    fn needsSpace(_ isPrefix: Bool) -> Bool {
+        if currency.isEmpty {
+            return false
+        }
+        let edge = isPrefix ? currency.last! : currency.first!
+        return match edge.generalCategory {
+            case .CurrencySymbol, .MathSymbol, .ModifierSymbol, .OtherSymbol, .SpaceSeparator => false
+            case _                                                                            => true
+        }
+    }
+}

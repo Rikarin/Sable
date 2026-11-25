@@ -575,6 +575,7 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_string_count_range(ptr, i64, i64)
                                 declare i64 @sable_string_compare_range(ptr, i64, i64, ptr, i64, i64)
                                 declare i64 @sable_string_utf8_find_range(ptr, i64, i64, ptr, i64, i64)
+                                declare i64 @sable_string_utf8_find_any(ptr, i64, i64, ptr)
                                 declare i64 @sable_string_utf8_find_last_range(ptr, i64, i64, ptr, i64, i64)
                                 @sable_hash_seed = external global i64
                                 declare i64 @sable_random_bits()
@@ -4616,6 +4617,10 @@ public sealed partial class LlvmEmitter {
 
                 case "string_compare_range" or "string_utf8_find_range" or "string_utf8_find_last_range":
                     Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, ptr {operands[3]}, i64 {operands[4]}, i64 {operands[5]})");
+                    return;
+
+                case "string_utf8_find_any":
+                    Line($"{Result()} = call i64 @sable_string_utf8_find_any(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, ptr {operands[3]})");
                     return;
 
                 case "string_at":

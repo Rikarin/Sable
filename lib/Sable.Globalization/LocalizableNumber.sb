@@ -18,9 +18,29 @@ public protocol LocalizableNumber: Formattable, Parsable {
     /// or all it has for none; times a hundred for a percentage. "inf",
     /// "-inf" or "nan" for what is not finite.
     fn plainDigits(places: Int?, percent: Bool) -> String
+
+    /// The number that 'plainDigits' writes with no more places than these,
+    /// as a whole one and how many of its digits are after the point; or none
+    /// where that takes more than eighteen digits, or is better written out.
+    /// What it saves is the writing: none, as it is unless a type says
+    /// otherwise, is always right.
+    fn scaled(places: Int) -> (Int, Int)?
+
+    /// The number that is the whole one, of eighteen digits at most, divided
+    /// by ten to the places, as 'parse' reads its digits; or none to have them
+    /// read.
+    static fn ofScaled(_ value: Int, places: Int) -> Self?
 }
 
 extension LocalizableNumber {
+    public fn scaled(places: Int) -> (Int, Int)? {
+        return none
+    }
+
+    public static fn ofScaled(_ value: Int, places: Int) -> Self? {
+        return none
+    }
+
     /// The number as the locale writes it.
     ///
     /// ```sable
@@ -109,6 +129,14 @@ fn fractionDigits<T: Formattable>(_ value: T, _ places: Int?, _ percent: Bool) -
 extension Int: LocalizableNumber {
     public fn plainDigits(places: Int?, percent: Bool) -> String {
         return integerDigits("\(self)", percent)
+    }
+
+    public fn scaled(places: Int) -> (Int, Int)? {
+        return self > -1_000_000_000_000_000_000 && self < 1_000_000_000_000_000_000 ? (self, 0) : none
+    }
+
+    public static fn ofScaled(_ value: Int, places: Int) -> Int? {
+        return places == 0 ? value : none
     }
 }
 
@@ -200,6 +228,37 @@ extension F64: LocalizableNumber {
     public fn plainDigits(places: Int?, percent: Bool) -> String {
         return fractionDigits(self, places, percent)
     }
+
+    public fn scaled(places: Int) -> (Int, Int)? {
+        if places < 0 || places >= exactPowersOfTen.count {
+            return none
+        }
+        let power = exactPowersOfTen[places]
+        let product = self * power
+        if !(product > -1e12 && product < 1e12) || self == 0.0 {
+            return none
+        }
+        let nearest = product.rounded()
+        // Of at most fifteen digits, a decimal is the shortest that reads as
+        // its float: these are all it has, or it has more and is rounded,
+        // which the product's own error, below 2^-13, must leave no doubt of.
+        if nearest / power != self {
+            let off = product - nearest
+            if off > 0.499 || off < -0.499 {
+                return none
+            }
+        }
+        // What rounds to zero has its sign.
+        return nearest == 0.0 ? none : (Int(nearest), places)
+    }
+
+    public static fn ofScaled(_ value: Int, places: Int) -> F64? {
+        // A quotient of two exact floats is rounded once, as reading is.
+        if places >= exactPowersOfTen.count || value > 9_007_199_254_740_992 || value < -9_007_199_254_740_992 {
+            return none
+        }
+        return F64(value) / exactPowersOfTen[places]
+    }
 }
 
 extension Decimal: LocalizableNumber {
@@ -207,3 +266,6 @@ extension Decimal: LocalizableNumber {
         return fractionDigits(self, places, percent)
     }
 }
+
+// Powers of ten that are floats exactly.
+const exactPowersOfTen: F64[13] = [1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12]

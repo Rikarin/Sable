@@ -31,6 +31,130 @@ public sealed class PassTests {
         Assert.Throws<ArgumentOutOfRangeException>(() => SilPassManager.ForLevel("4"));
     }
 
+    static int Copies(SilModule module, string function) =>
+        module.Find(function)!.Blocks.SelectMany(static b => b.Instructions).Count(static i => i is CopyValueInst or LoadInst { Kind: LoadKind.Copy });
+
+    /// <summary>A view of a string, made for a byte to be read through it, is the string: nothing is retained.</summary>
+    [Fact]
+    public void AStructMadeToBeReadIsItsFields() {
+        var module = Lowered(
+            """
+            struct View {
+                let text: String
+                let shift: Int
+
+                fn at(_ i: Int) -> Int { return Int(text.utf8[i + shift]) }
+            }
+
+            fn sum(_ text: String) -> Int {
+                var total = 0
+                var i = 0
+                while i < text.utf8Count {
+                    total += Int(text.utf8[i]) + View { text: text, shift: 0 }.at(i)
+                    i += 1
+                }
+                return total
+            }
+
+            fn probe() -> Int { return sum("ab") }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        Assert.Equal(0, Copies(module, "M.sum"));
+        Assert.Equal(390L, new SilInterpreter(module).Run("M.probe"));
+    }
+
+    /// <summary>A local passed to a call that can throw is lent to it, not copied for it.</summary>
+    [Fact]
+    public void ALocalIsBorrowedAcrossACallThatCanThrow() {
+        var module = Lowered(
+            """
+            enum Odd: Error { Found }
+
+            struct Pair {
+                let a: String
+                let b: String
+
+                @inline(never)
+                fn check(_ n: Int) throws(Odd) -> Int {
+                    if n == 7 {
+                        throw .Found
+                    }
+                    return a.count + b.count + n
+                }
+            }
+
+            @inline(never)
+            fn make() -> Pair { return Pair { a: "ab", b: "cde" } }
+
+            fn probe(_ n: Int) -> Int {
+                let pair = make()
+                var total = 0
+                for i in 0..<n {
+                    total += (try? pair.check(i)) ?? 100
+                }
+                return total
+            }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        Assert.Equal(0, Copies(module, "M.probe"));
+        Assert.Equal(169L, new SilInterpreter(module).Run("M.probe", 9L));
+    }
+
+    /// <summary>A method taken as a closure borrows the receiver its context holds.</summary>
+    [Fact]
+    public void ABoundMethodBorrowsItsReceiver() {
+        var module = Lowered(
+            """
+            struct Adder {
+                let name: String
+
+                @inline(never)
+                fn add(_ n: Int) -> Int { return n + name.count }
+            }
+
+            @inline(never)
+            fn twice(_ body: (Int) -> Int) -> Int { return body(body(1)) }
+
+            fn probe() -> Int { return twice(Adder { name: "abc" }.add) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        Assert.Equal(0, Copies(module, "M.Adder.add$bound"));
+        Assert.Equal(7L, new SilInterpreter(module).Run("M.probe"));
+    }
+
+    /// <summary>
+    ///     A method an extension gives a type under a requirement's name, with
+    ///     other labels, does not stand in for the protocol's own default.
+    /// </summary>
+    [Fact]
+    public void AMethodOfOtherLabelsIsNotTheDefaultItSharesANameWith() {
+        var module = Lowered(
+            """
+            protocol Scalable {
+                fn scaled(byPowerOfTwo power: Int) -> Int
+            }
+
+            extension Scalable {
+                fn scaled(byPowerOfTwo power: Int) -> Int { return 1 << power }
+            }
+
+            struct One: Scalable { }
+
+            extension One {
+                fn scaled(places: Int) -> String { return "\(places)" }
+            }
+
+            fn through<T: Scalable>(_ x: T) -> Int { return x.scaled(byPowerOfTwo: 4) }
+
+            fn probe() -> Int { return through(One()) * 100 + One().scaled(byPowerOfTwo: 5) + One().scaled(places: 1234).count }
+            """
+        );
+        Assert.Equal(1636L, new SilInterpreter(module).Run("M.probe"));
+    }
+
     /// <summary>
     ///     <c>@inline(never)</c> keeps a call however small the callee;
     ///     <c>@inline(always)</c> inlines one however large, loops and all.

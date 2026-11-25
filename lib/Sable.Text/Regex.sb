@@ -9,8 +9,10 @@ module Sable.Text
 /// promise, and as .NET's `NonBacktracking` does. A lazy DFA finds where
 /// each match ends and, run backwards, where it starts; a PikeVM finds
 /// what each group matched, when that is asked for. A pattern that starts
-/// with a literal is searched for by that literal first, sixteen bytes at a
-/// time, and one that is nothing but a literal is only that.
+/// with a literal, with one of a few characters, or that has a character
+/// nothing before it can match, as an address its '@', is searched for by
+/// that first, sixteen bytes at a time, and one that is nothing but a
+/// literal is only that.
 ///
 /// The syntax is Rust's (RegexSyntax.sb lists it): Unicode classes —
 /// `\d`, `\w`, `\s`, `\b` and `.` are Unicode's, `\p{Lu}` a general
@@ -57,6 +59,8 @@ public class Regex: Pattern {
     // What every match starts with, exactly; and whether it is the whole pattern.
     let leading: String
     let literal: Bool
+    // The character every match has in it, with what comes before it.
+    let inner: RegexInner?
 
     // The engines, made when first needed.
     var forwardEngine: RegexDfa? = none
@@ -91,6 +95,7 @@ public class Regex: Pattern {
         var codes: Int[>..] = []
         literal = literalPrefix(root, into: &codes) && parser.groupCount == 0 && codes.count > 0
         leading = stringOfScalars(codes)
+        inner = codes.count == 0 && !anchoredStart && !backtracking ? innerLiteral(root, classes: parser.classes, names: parser.names) : none
         slots = filled(-1, program.slotCount)
     }
 
@@ -160,7 +165,11 @@ public class Regex: Pattern {
         if anchoredStart {
             return forward().findEnd(piece.base, start, end, start, anchored: true, earliest: true, leading: "") >= 0
         }
-        return forward().findEnd(piece.base, start, end, start, anchored: false, earliest: true, leading: leading) >= 0
+        let (tried, triedEnd) = forward().findByStarts(piece.base, start, end, start, leading, inner, earliest: true)
+        if triedEnd >= 0 || tried < 0 {
+            return triedEnd >= 0
+        }
+        return forward().findEnd(piece.base, start, end, tried, anchored: false, earliest: true, leading: leading) >= 0
     }
 
     /// The first match in the text, leftmost-first, or none.
@@ -199,8 +208,13 @@ public class Regex: Pattern {
 
     /// How many matches there are in the text, as `matches(in:)` finds them.
     public fn count(in text: some StringProtocol) -> Int {
+        let piece = text.asSubstring
+        let start = piece.startIndex.utf8Offset
+        let end = piece.endIndex.utf8Offset
+        var at = start
+        var lastEnd = -1
         var count = 0
-        for _ in matches(in: text) {
+        while nextSpan(piece.base, start, end, &at, &lastEnd) != none {
             count += 1
         }
         return count
@@ -409,14 +423,22 @@ public class Regex: Pattern {
             }
             return none
         }
-        let matchEnd = forward().findEnd(text, start, end, from, anchored: anchoredHere, earliest: false, leading: anchoredHere ? "" : leading)
+        if anchoredHere {
+            let matchEnd = forward().findEnd(text, start, end, from, anchored: true, earliest: false, leading: "")
+            return matchEnd < 0 ? none : (from, matchEnd)
+        }
+        let (tried, triedEnd) = forward().findByStarts(text, start, end, from, leading, inner)
+        if triedEnd >= 0 {
+            return (tried, triedEnd)
+        }
+        if tried < 0 {
+            return none
+        }
+        let matchEnd = forward().findEnd(text, start, end, tried, anchored: false, earliest: false, leading: leading)
         if matchEnd < 0 {
             return none
         }
-        if anchoredHere {
-            return (from, matchEnd)
-        }
-        return (reverse().findStart(text, start, end, matchEnd, limit: from), matchEnd)
+        return (reverse().findStart(text, start, end, matchEnd, limit: tried), matchEnd)
     }
 
     /// The match's groups, found by matching again from its start.

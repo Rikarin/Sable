@@ -3138,14 +3138,22 @@ public sealed partial class SilGen {
         var arguments = closure.Signature.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
         var context = entry.AddArgument(SilType.Object);
         var box = entry.Append(new UncheckedRefCastInst(context, BoxType(type.Parameters[0])));
-        var self = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(box, 0))));
+        var held = entry.Append(new RefElementAddrInst(box, 0));
+        // The caller keeps the context, which nothing writes, until this
+        // returns: the method borrows the receiver from it. An async one is
+        // awaited in a frame of its own.
+        var borrows = !type.Parameters[0].IsTrivial && !method.IsAsync;
+        SilInstruction self = borrows ? new LoadBorrowInst(held) : new LoadInst(held);
+        entry.Append(self);
         SilValue callee = dynamic
             ? entry.Append(new ClassMethodInst(self, VTableSlot(method), type))
             : entry.Append(new FunctionRefInst(name, type));
         SilValue[] all = [self, ..arguments];
 
         void Release(SilBlock block) {
-            if (!self.Type.IsTrivial) {
+            if (borrows) {
+                block.Append(new EndBorrowInst(self));
+            } else if (!self.Type.IsTrivial) {
                 block.Append(new DestroyValueInst(self));
             }
         }
@@ -3732,6 +3740,15 @@ public sealed partial class SilGen {
             && other.IsStatic == requirement.IsStatic
             && SameLabels(other, method));
 
+    /// <summary>Whether an extension of the protocol has a default for the requirement with its labels.</summary>
+    static bool HasLabelledDefault(NamedTypeSymbol? protocol, FunctionSymbol requirement) =>
+        protocol is { TypeKind: TypeKind.Protocol }
+        && protocol.Members.OfType<FunctionSymbol>().Any(f =>
+            f.ContainingSymbol is ExtensionSymbol
+            && f.Name == requirement.Name
+            && f.IsStatic == requirement.IsStatic
+            && SameLabels(f, requirement));
+
     internal static FunctionSymbol? Implementation(NamedTypeSymbol concrete, FunctionSymbol requirement) {
         // docs/03 §3.2: a protocol extension's member that is not a
         // requirement is chosen by the static type, not looked up on the
@@ -3761,7 +3778,10 @@ public sealed partial class SilGen {
                 .ThenBy(f => !SelfParametersMatch(f, requirement, type))
                 .ThenBy(f => !ParametersFit(f, requirement))
                 .FirstOrDefault();
-            if (found is not null) {
+            // One of other labels is another method where the protocol has a
+            // default of the requirement's own: F64's 'scaled(places:)' is not
+            // FloatingPoint's 'scaled(byPowerOfTwo:)'.
+            if (found is not null && (SameLabels(found, requirement) || !HasLabelledDefault(required, requirement))) {
                 return found;
             }
         }

@@ -658,6 +658,11 @@ fn pathologicalPatternsTakeLinearTime() {
     assertEqual((try! Regex("(x+x+)+y")).count(in: repeated("x", 20000)), 0)
     let words = repeated("word ", 4000) + "!"
     assert((try! Regex(#"^(\w+\s?)*$"#)).firstMatch(in: words) == none)
+    // Every place a match may start, and every '@' it may have in it, read
+    // past to the end for nothing.
+    assertEqual((try! Regex("a[^z]*z")).count(in: manyA), 0)
+    assertEqual((try! Regex("a+@[^z]*z")).count(in: repeated("a@", 20000)), 0)
+    assertEqual((try! Regex("(?m)^a[^z]*z")).count(in: repeated("a\n", 20000)), 0)
     // The PikeVM, which finds the groups, is linear too.
     assert((try! Regex("(a|aa)*c")).wholeMatch(repeated("a", 3000)) == none)
     let nested = try! Regex("((a+)+)+b")
@@ -759,6 +764,45 @@ fn theAutomataAndTheBacktrackerAgreeOnRandomPatterns() {
         }
         assertEqual(linear.isMatch(text), backtracking.isMatch(text))
         assertEqual(text.trimmingSuffix(linear), text.trimmingSuffix(backtracking))
+        round += 1
+    }
+}
+
+// Texts long enough to be searched in by how a match starts, or by a
+// character it has in it, and to have that given up.
+@test
+fn searchesByWhatAMatchHasAgreeWithTheBacktracker() {
+    var walk = Walk { state: 0x9E3779B97F4A7C15 }
+    let alphabet: String[>..] = ["a", "b", "c", "A", "é", " ", "\n", "@", "x", "x"]
+    var round = 0
+    while round < 300 {
+        var (pattern, isEmpty) = randomPattern(&walk, 1)
+        let kind = walk.next(4)
+        if kind < 2 {
+            let (after, _) = randomPattern(&walk, 2)
+            pattern = (kind == 0 ? pattern.replacing(".", with: "b").replacing("[^a]", with: "é") : pattern) + "@" + after
+        } else if kind == 2 {
+            pattern = "(?m)^" + pattern
+        } else if isEmpty {
+            pattern = ["b", "ab", "[ac]", "é"][walk.next(4)] + pattern
+        }
+        var text = ""
+        let length = walk.next(150)
+        var i = 0
+        while i < length {
+            text = text + alphabet[walk.next(alphabet.count)]
+            i += 1
+        }
+        let linear = try! Regex(pattern)
+        let backtracking = try! Regex(pattern, options: .Backtracking)
+        let expected = allSpans(backtracking, text)
+        let found = allSpans(linear, text)
+        if found != expected {
+            fail("/\(pattern)/ on \(text:?): backtracking \(expected), automata \(found)")
+        }
+        assert(linear.count(in: text) == backtracking.count(in: text) && linear.isMatch(text) == !expected.isEmpty, "/\(pattern)/ on \(text:?)")
+        let piece = text[text.startIndex..<(text.firstIndex(of: "@") ?? text.endIndex)]
+        assert(linear.count(in: piece) == backtracking.count(in: piece), "/\(pattern)/ on \(piece.toString():?)")
         round += 1
     }
 }

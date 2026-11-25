@@ -7,43 +7,44 @@ import Sable.Serialize
 import Sable.Testing
 
 /// Fails unless the value comes back from JSON and from MessagePack.
-fn assertComesBack<T: Serializable & Equatable & Debug>(_ value: T) {
-    assertEqual(try! Json.decode(T.self, from: try! Json.encode(value)), value)
-    assertEqual(try! MessagePack.decode(T.self, from: try! MessagePack.encode(value)), value)
+fn expectComesBack<T: Serializable & Equatable & Debug>(_ value: T) throws {
+    expect(try Json.decode(T.self, from: Json.encode(value)) == value)
+    expect(try MessagePack.decode(T.self, from: MessagePack.encode(value)) == value)
 }
 
 @test
-fn valuesOfGeometryAreStructsOfTheirFields() {
-    assertEqual(try! Json.encode(Vector3(1, 2, 3)), "{\"x\":1.0,\"y\":2.0,\"z\":3.0}")
-    assertEqual(try! Json.encode(Int2(1, -2)), "{\"x\":1,\"y\":-2}")
-    assertEqual(try! Json.encode(Plane(Vector3.up, 2)), "{\"normal\":{\"x\":0.0,\"y\":1.0,\"z\":0.0},\"d\":2.0}")
-    expect(try! Json.encode(Matrix4x4.identity).starts(with: "{\"m11\":1.0,\"m12\":0.0,"))
+fn valuesOfGeometryAreStructsOfTheirFields() throws {
+    assertEqual(try Json.encode(Vector3(1, 2, 3)), "{\"x\":1.0,\"y\":2.0,\"z\":3.0}")
+    assertEqual(try Json.encode(Int2(1, -2)), "{\"x\":1,\"y\":-2}")
+    assertEqual(try Json.encode(Plane(Vector3.up, 2)), "{\"normal\":{\"x\":0.0,\"y\":1.0,\"z\":0.0},\"d\":2.0}")
+    expect(try Json.encode(Matrix4x4.identity).starts(with: "{\"m11\":1.0,\"m12\":0.0,"))
 }
 
 @test
-fn valuesOfGeometryComeBack() {
-    assertComesBack(Vector2(1.5, -2))
-    assertComesBack(Vector3(1.5, -2, 0.1))
-    assertComesBack(Vector4(1.5, -2, 0.1, 4))
-    assertComesBack(Vector3D(1e100, -2, 0.1))
-    assertComesBack(Int2(1, I32.min))
-    assertComesBack(Int3(1, 2, 3))
-    assertComesBack(Int4(1, 2, 3, I32.max))
-    assertComesBack(Quaternion(0.1, 0.2, 0.3, 0.4))
-    assertComesBack(Matrix3x2(1, 2, 3, 4, 5, 6))
-    assertComesBack(Matrix3x3(1, 2, 3, 4, 5, 6, 7, 8, 9))
-    assertComesBack(Matrix4x4(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16))
-    assertComesBack(Transform(translation: Vector3.one, rotation: Quaternion(0.5, 0.5, 0.5, 0.5), scale: Vector3(1, 2, 3)))
-    assertComesBack(Plane(Vector3(0.6, 0.8, 0), -3))
-    assertComesBack(Ray(Vector3(1, 2, 3), Vector3(0.6, 0.8, 0)))
-    assertComesBack(BoundingBox(Vector3.zero, Vector3.one))
-    assertComesBack(BoundingSphere(Vector3.one, 3))
-    assertComesBack(BoundingFrustum(Matrix4x4.perspective(width: 1, height: 1, near: 1, far: 9)))
+fn valuesOfGeometryComeBack() throws {
+    try expectComesBack(Vector2(1.5, -2))
+    try expectComesBack(Vector3(1.5, -2, 0.1))
+    try expectComesBack(Vector4(1.5, -2, 0.1, 4))
+    try expectComesBack(Vector3D(1e100, -2, 0.1))
+    try expectComesBack(Int2(1, I32.min))
+    try expectComesBack(Int3(1, 2, 3))
+    try expectComesBack(Int4(1, 2, 3, I32.max))
+    try expectComesBack(Quaternion(0.1, 0.2, 0.3, 0.4))
+    try expectComesBack(Matrix3x2(1, 2, 3, 4, 5, 6))
+    try expectComesBack(Matrix3x3(1, 2, 3, 4, 5, 6, 7, 8, 9))
+    try expectComesBack(Matrix4x4(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16))
+    try expectComesBack(Transform(translation: Vector3.one, rotation: Quaternion(0.5, 0.5, 0.5, 0.5), scale: Vector3(1, 2, 3)))
+    try expectComesBack(Plane(Vector3(0.6, 0.8, 0), -3))
+    try expectComesBack(Ray(Vector3(1, 2, 3), Vector3(0.6, 0.8, 0)))
+    try expectComesBack(BoundingBox(Vector3.zero, Vector3.one))
+    try expectComesBack(BoundingSphere(Vector3.one, 3))
+    try expectComesBack(BoundingFrustum(Matrix4x4.perspective(width: 1, height: 1, near: 1, far: 9)))
 }
 
 @test
 fn aMissingComponentIsSaid() {
-    expectThrows(SerializeError.self) {
+    let error = expectThrows(SerializeError.self) {
         _ = try Json.decode(Vector3.self, from: "{\"x\":1,\"y\":2}")
     }
+    expect(require(error).description().contains("z"))
 }

@@ -1,0 +1,142 @@
+module ImmutableSortedTests
+
+// ImmutableSortedDictionary and ImmutableSortedSet (Sable.Collections):
+// against SortedDictionary and SortedSet as the models.
+
+import Sable.Collections
+import Sable.Testing
+
+@derive(Debug, Arbitrary)
+union SortedStep {
+    Put(U8, U8)
+    PutMany(U16)
+    Remove(U8)
+    PopFirst
+    PopLast
+    Split(U8)
+    Keep
+}
+
+fn expectSame(_ map: ImmutableSortedDictionary<Int, Int>, _ model: SortedDictionary<Int, Int>) {
+    expect(map.keys == model.keys && map.values == model.values)
+    expect(map.first?.key == model.first?.key && map.last?.key == model.last?.key)
+    for key in stride(from: -1, to: 260, by: 13) {
+        expect(map[key] == model[key] && map.contains(key) == model.contains(key))
+        expect(map.floor(key)?.key == model.floor(key)?.key)
+        expect(map.ceiling(key)?.key == model.ceiling(key)?.key)
+    }
+}
+
+@test
+fn aDictionaryIsWhatAMutableOneWouldBe() {
+    forAll(cases: 150) { (steps: SortedStep[>..]) in
+        var map = ImmutableSortedDictionary<Int, Int>()
+        var model = SortedDictionary<Int, Int>()
+        var kept: (ImmutableSortedDictionary<Int, Int>, SortedDictionary<Int, Int>)[>..] = []
+        for step in steps {
+            match step {
+                case .Put(let key, let value) => {
+                    expect(map.updateValue(Int(value), forKey: Int(key)) == model.updateValue(Int(value), forKey: Int(key)))
+                }
+                case .PutMany(let seed) => {
+                    for i in 0..<100 {
+                        map[(Int(seed) + i * 37) % 251] = i
+                        model[(Int(seed) + i * 37) % 251] = i
+                    }
+                }
+                case .Remove(let key) => expect(map.remove(Int(key)) == model.remove(Int(key)))
+                case .PopFirst => expect(map.popFirst()?.key == model.popFirst()?.key)
+                case .PopLast => expect(map.popLast()?.value == model.popLast()?.value)
+                case .Split(let key) => {
+                    let high = map.split(at: Int(key))
+                    let modelHigh = model.split(at: Int(key))
+                    expectSame(map, model)
+                    map = high
+                    model = modelHigh
+                }
+                case .Keep => kept.append((map, model))
+            }
+            expectSame(map, model)
+        }
+        for (version, was) in kept {
+            expectSame(version, was)
+        }
+        expect(map == ImmutableSortedDictionary<Int, Int>(model.map { ($0.key, $0.value) }.reversed()))
+    }
+}
+
+@test
+fn dictionariesByExample() {
+    let map = ImmutableSortedDictionary<Int, String>([(5, "e"), (1, "a"), (3, "c"), (7, "g")])
+    assert(map.range(3..<7).keys == [3, 5])
+    assert(map.range(3...7).keys == [3, 5, 7])
+    assert(map.range(4...).keys == [5, 7])
+    assert(map.range(..<5).keys == [1, 3])
+    assert(map.range(...5).keys == [1, 3, 5])
+    assertEqual(map.rank(of: 5), 2)
+    assert(map.setting(4, to: "d").count == 5 && map.removing(1).count == 3 && map.count == 4)
+    assert(map[map.startIndex].key == 1 && map[map.index(before: map.endIndex)].value == "g")
+    assert(map[map.index(map.startIndex, offsetBy: 2)].key == 5 && map[map.index(after: map.startIndex)].key == 3)
+    assert(map.index(forKey: 3)!.rank == 1 && map.index(forKey: 4) == none)
+    assert(map == map.setting(1, to: "a") && map != map.setting(1, to: "b") && map != map.removing(1) && map == map)
+    assertEqual(map.hashValue, map.setting(1, to: "a").hashValue)
+    assertEqual("\(map.range(...1))", "ImmutableSortedDictionary([1: \"a\"])")
+    assertEqual("\(map.range(...0))", "ImmutableSortedDictionary([:])")
+    var emptied = map
+    emptied[1] = none
+    emptied[2] = none
+    emptied.removeAll()
+    assert(emptied.isEmpty && emptied.first == none && emptied.popFirst() == none && emptied[1] == none && !map.isEmpty)
+    let collected: ImmutableSortedDictionary<Int, Int> = [(2, 3), (1, 2)].collect()
+    assert(collected.keys == [1, 2])
+}
+
+@test
+fn setsCombineAsSetsDo() {
+    forAll(cases: 150) { (first: U16[>..], second: U16[>..]) in
+        let a = ImmutableSortedSet<Int>(first.map { Int($0) % 300 })
+        let b = ImmutableSortedSet<Int>(second.map { Int($0) % 300 })
+        let x = SortedSet<Int>(first.map { Int($0) % 300 })
+        let y = SortedSet<Int>(second.map { Int($0) % 300 })
+        expect(a.toArray() == x.toArray())
+        expect(a.union(b).toArray() == x.union(y).toArray())
+        expect(a.intersection(b).toArray() == x.intersection(y).toArray())
+        expect(a.subtracting(b).toArray() == x.subtracting(y).toArray())
+        expect(a.symmetricDifference(b).toArray() == x.symmetricDifference(y).toArray())
+        expect(a.isSubset(of: b) == x.isSubset(of: y) && a.isSuperset(of: b) == x.isSuperset(of: y))
+        expect(a.isStrictSubset(of: b) == x.isStrictSubset(of: y) && a.isStrictSuperset(of: b) == x.isStrictSuperset(of: y))
+        expect(a.isDisjoint(with: b) == x.isDisjoint(with: y) && (a == b) == (x == y))
+        expect(a.intersection(b).isSubset(of: a))
+        var c = a
+        c.formUnion(b)
+        c.formIntersection(a)
+        expect(c == a)
+        c.subtract(b)
+        expect(c == a.subtracting(b))
+        for value in stride(from: -1, to: 301, by: 17) {
+            expect(a.contains(value) == x.contains(value) && a.floor(value) == x.floor(value) && a.ceiling(value) == x.ceiling(value))
+        }
+    }
+}
+
+@test
+fn setsByExample() {
+    var members = ImmutableSortedSet<Int>(stride(from: 0, to: 3000, by: 3))
+    let all = members
+    assert(members.insert(1) && !members.insert(1) && members.remove(0) && !members.remove(0) && !members.remove(5000))
+    assert(members.first == 1 && members.last == 2997 && members.count == 1000)
+    assert(members.popFirst() == 1 && members.popLast() == 2997)
+    assert(members.range(3..<9).toArray() == [3, 6] && members.range(3...9).toArray() == [3, 6, 9])
+    assert(members.range(2990...).toArray() == [2991, 2994] && members.range(..<6).toArray() == [3] && members.range(...6).toArray() == [3, 6])
+    assert(members.index(of: 6)!.rank == 1 && members.index(of: 7) == none)
+    assert(members[members.startIndex] == 3 && members[members.index(before: members.endIndex)] == 2994)
+    assert(members[members.index(members.startIndex, offsetBy: 10)] == 33 && members.index(after: members.startIndex).rank == 1)
+    let high = members.split(at: 1500)
+    assert(members.last == 1497 && high.first == 1500 && all.count == 1000 && all.first == 0)
+    assert(all.inserting(1).removing(1) == all && all.hashValue == all.inserting(1).removing(1).hashValue)
+    members.removeAll()
+    assert(members.isEmpty && members.popLast() == none && members.popFirst() == none && members.first == none)
+    assertEqual("\(all.range(...3))", "ImmutableSortedSet([0, 3])")
+    let collected: ImmutableSortedSet<String> = ["b", "a", "b"].collect()
+    assert(collected.toArray() == ["a", "b"])
+}

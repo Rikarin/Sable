@@ -376,6 +376,15 @@ public struct ImmutableList<Element> {
         return rest
     }
 
+    /// How many elements come before the first the closure says does not, of
+    /// a list whose elements that do all come first.
+    fn partition(_ isBefore: (Element) -> Bool) -> Int {
+        if inTree > 0 && !isBefore(root.last(height)) {
+            return root.partition(height, isBefore)
+        }
+        return inTree + tail.partitionPoint(where: isBefore)
+    }
+
     /// The elements of the leaf, or the tail, an index is in, and the index
     /// of the first of them.
     fn leaf(at index: Int) -> (Element[>..], Int) {

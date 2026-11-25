@@ -1584,7 +1584,8 @@ public sealed partial class Compilation {
             AccessibilityOf(declaration.Modifiers, container),
             FunctionKind.Initializer
         ) {
-            IsAsync = declaration.Modifiers.Any(SyntaxKind.AsyncKeyword)
+            IsAsync = declaration.Modifiers.Any(SyntaxKind.AsyncKeyword),
+            IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword)
         };
 
         // 'init<S: Sequence>(contentsOf s: S) where S.Element == T': an

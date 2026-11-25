@@ -1,0 +1,711 @@
+module Sable.Collections
+
+// What FrozenDictionary and FrozenSet find their keys by: a table made once,
+// for the keys it is given, by whichever of these says where a key is in the
+// fewest steps.
+//
+//  - A handful of keys are looked through one after another.
+//  - Integers that are one run are where they are from the first; those close
+//    together have a slot each for every integer from the least to the
+//    greatest; those spread out are hashed by one multiplication, whose
+//    multiplier is the one, of those tried, that puts the fewest keys in one
+//    slot.
+//  - Strings of lengths that all differ have a slot for each length. Others
+//    are hashed by their length and some of their bytes: eight from one place,
+//    from the start or the end, or the first eight and the last, as few as
+//    tell the keys apart; or all of them, where those do not.
+//  - Keys of any other type are hashed by their own 'hash(into:)', under the
+//    seed, of those tried, that puts the fewest in one slot.
+//
+// However found, it is one key, or very few, that the one asked for is then
+// compared with. No hash depends on the run, so that a table is the same in
+// every run, and can be made as a program is compiled; keys chosen to
+// collide are therefore possible, and the keys a table is made of should be
+// ones the program trusts. Those looked up need not be.
+//
+// Which way it is is known by the type where the type is known: '(Key.self as
+// Type) == String.self' is then a constant, and 'key as! String' the key. In
+// code compiled once for every type they ask the key's type as it runs.
+
+/// How a frozen table finds a key.
+enum FrozenStrategy: U8 {
+    Few
+    Consecutive
+    Dense
+    Integers
+    Lengths
+    FromStart
+    FromEnd
+    BothEnds
+    WholeText
+    Hashed
+}
+
+/// What a type's keys are to a frozen table.
+enum FrozenKind: U8 {
+    Integer
+    Text
+    Other
+}
+
+/// As many keys as are looked through one after another.
+const frozenFew = 4
+
+/// The slots, for each key, there may be of integers, or lengths, close together.
+const frozenDensest = 10
+
+/// As many bytes from a text's start, or end, as are tried to tell keys apart.
+const frozenFarthest = 64
+
+/// As many keys as have four slots each, or more, rather than two.
+const frozenRoomy = 1000
+
+/// The multipliers and the seeds to try: SplitMix64's.
+const fn frozenTrial(_ attempt: Int) -> U64 {
+    var word = U64(attempt + 1) &* 0x9E37_79B9_7F4A_7C15
+    word = (word ^ (word >> 30)) &* 0xBF58_476D_1CE4_E5B9
+    word = (word ^ (word >> 27)) &* 0x94D0_49BB_1331_11EB
+    return word ^ (word >> 31)
+}
+
+/// Distinct keys, in the order they were given, and where each is. The slots
+/// hold positions among the keys, or -1; a hashed key is in the first slot
+/// from its own on that was empty.
+struct FrozenTable<Key: Hashable> {
+    var keys: Key[>..] = []
+    var slots: I32[>..] = []
+    var strategy: FrozenStrategy = .Few
+    var foldsCase: Bool = false
+    // The least of integers, or of lengths; where in a text its bytes are
+    // taken from, from its start or back from its end.
+    var base: Int = 0
+    // Of texts that are hashed: the least length, and how much greater the
+    // greatest is.
+    var shortest: Int = 0
+    var span: Int = 0
+    // A hash's slot is the top bits of its product with the multiplier; or
+    // the multiplier is a Hasher's seed.
+    var multiplier: U64 = 0
+    var shift: U64 = 0
+
+    /// An empty table.
+    const init() { }
+
+    /// A table of the distinct keys of those given, each where it first comes.
+    const init(_ given: Key[:], foldingCase: Bool) {
+        foldsCase = foldingCase
+        keys.reserveCapacity(given.count)
+        var size = 16
+        while size < given.count * 2 {
+            size *= 2
+        }
+        var seen = I32[>..](repeating: -1, count: size)
+        var i = 0
+        while i < given.count {
+            var at = Int.truncating((firstHash(given[i]) &* FrozenText.second()) >> 32) & (size - 1)
+            while seen[at] >= 0 && !isSame(keys[Int(seen[at])], given[i]) {
+                at = (at + 1) & (size - 1)
+            }
+            if seen[at] < 0 {
+                seen[at] = keys.count unchecked as I32
+                keys.append(given[i])
+            }
+            i += 1
+        }
+        choose()
+    }
+
+    // ---- Keys --------------------------------------------------------------
+
+    @inline(always)
+    static const fn kind() -> FrozenKind {
+        if (Key.self as Type) == String.self {
+            return .Text
+        }
+        if (Key.self as Type) == Int.self || (Key.self as Type) == I64.self || (Key.self as Type) == I32.self {
+            return .Integer
+        }
+        if (Key.self as Type) == U32.self || (Key.self as Type) == U8.self || (Key.self as Type) == I16.self {
+            return .Integer
+        }
+        if (Key.self as Type) == U16.self || (Key.self as Type) == I8.self || (Key.self as Type) == Char.self {
+            return .Integer
+        }
+        return .Other
+    }
+
+    /// The key, of a type that is an integer's, as an Int.
+    @inline(always)
+    static const fn integer(_ key: Key) -> Int {
+        if (Key.self as Type) == Int.self {
+            return key as! Int
+        }
+        if (Key.self as Type) == I64.self {
+            return Int(key as! I64)
+        }
+        if (Key.self as Type) == I32.self {
+            return Int(key as! I32)
+        }
+        if (Key.self as Type) == U32.self {
+            return Int(key as! U32)
+        }
+        if (Key.self as Type) == U8.self {
+            return Int(key as! U8)
+        }
+        if (Key.self as Type) == I16.self {
+            return Int(key as! I16)
+        }
+        if (Key.self as Type) == U16.self {
+            return Int(key as! U16)
+        }
+        if (Key.self as Type) == I8.self {
+            return Int(key as! I8)
+        }
+        return (key as! Char).codePoint
+    }
+
+    /// A hash of a key, before the table has one of its own.
+    const fn firstHash(_ key: Key) -> U64 {
+        if FrozenTable<Key>.kind() == .Integer {
+            return FrozenTable<Key>.integer(key) unchecked as U64
+        }
+        if FrozenTable<Key>.kind() == .Text {
+            return FrozenText.hash(key as! String, 0, (key as! String).utf8Count, foldsCase)
+        }
+        return hash(key, 1)
+    }
+
+    const fn isSame(_ a: Key, _ b: Key) -> Bool {
+        if foldsCase {
+            return FrozenText.equalFoldingCase(a as! String, 0, (a as! String).utf8Count, b as! String)
+        }
+        return a == b
+    }
+
+    // ---- Looking up --------------------------------------------------------
+
+    /// Where the key is among the keys, or -1.
+    @inline(always)
+    const fn find(_ key: Key) -> Int {
+        if FrozenTable<Key>.kind() == .Integer {
+            return findInteger(key, FrozenTable<Key>.integer(key))
+        }
+        if FrozenTable<Key>.kind() == .Text {
+            return findText(key)
+        }
+        return strategy == .Few ? findFew(key) : findHashed(key)
+    }
+
+    @inline(always)
+    const fn findInteger(_ key: Key, _ number: Int) -> Int {
+        if strategy == .Dense {
+            let offset = number &- base
+            return offset >= 0 && offset < slots.count ? Int(slots[offset]) : -1
+        }
+        if strategy == .Integers {
+            let mask = slots.count &- 1
+            var at = slot(of: number unchecked as U64)
+            while true {
+                let position = Int(slots[at])
+                if position < 0 || FrozenTable<Key>.integer(keys[position]) == number {
+                    return position
+                }
+                at = (at &+ 1) & mask
+            }
+        }
+        if strategy == .Consecutive {
+            let offset = number &- base
+            return offset >= 0 && offset < keys.count ? offset : -1
+        }
+        return findFew(key)
+    }
+
+    @inline(always)
+    const fn findText(_ key: Key) -> Int {
+        if strategy == .Few && !foldsCase {
+            return findFew(key)
+        }
+        return find(key as! String, 0, (key as! String).utf8Count, whole: true)
+    }
+
+    /// Where the key some of a text's bytes spell is, or -1.
+    @inline(always)
+    const fn find(_ text: String, _ start: Int, _ end: Int, whole: Bool) -> Int {
+        if strategy == .Lengths {
+            let offset = end &- start &- base
+            if offset < 0 || offset >= slots.count {
+                return -1
+            }
+            let position = Int(slots[offset])
+            return position >= 0 && isKey(text, start, end, whole, position) ? position : -1
+        }
+        if strategy == .Few {
+            return findFew(text, start, end)
+        }
+        // Wrapped round where it is shorter: past any length.
+        if ((end &- start &- shortest) unchecked as U64) > (span unchecked as U64) {
+            return -1
+        }
+        let mask = slots.count &- 1
+        var at = slot(of: hash(text, start, end))
+        while true {
+            let position = Int(slots[at])
+            if position < 0 || isKey(text, start, end, whole, position) {
+                return position
+            }
+            at = (at &+ 1) & mask
+        }
+    }
+
+    @inline(always)
+    const fn isKey(_ text: String, _ start: Int, _ end: Int, _ whole: Bool, _ position: Int) -> Bool {
+        if foldsCase {
+            return FrozenText.equalFoldingCase(text, start, end, keys[position] as! String)
+        }
+        return whole ? (keys[position] as! String) == text : FrozenText.equal(text, start, end, keys[position] as! String)
+    }
+
+    const fn findFew(_ key: Key) -> Int {
+        var position = 0
+        while position < keys.count {
+            if keys[position] == key {
+                return position
+            }
+            position += 1
+        }
+        return -1
+    }
+
+    const fn findFew(_ text: String, _ start: Int, _ end: Int) -> Int {
+        var position = 0
+        while position < keys.count {
+            if isKey(text, start, end, false, position) {
+                return position
+            }
+            position += 1
+        }
+        return -1
+    }
+
+    const fn findHashed(_ key: Key) -> Int {
+        let mask = slots.count &- 1
+        var at = Int.truncating(hash(key, multiplier) >> shift)
+        while true {
+            let position = Int(slots[at])
+            if position < 0 || keys[position] == key {
+                return position
+            }
+            at = (at &+ 1) & mask
+        }
+    }
+
+    // ---- Hashes ------------------------------------------------------------
+
+    @inline(always)
+    const fn slot(of hash: U64) -> Int {
+        return Int.truncating((hash &* multiplier) >> shift)
+    }
+
+    /// What tells some of a text's bytes apart, by the table's strategy.
+    @inline(always)
+    const fn hash(_ text: String, _ start: Int, _ end: Int) -> U64 {
+        let count = end &- start
+        let length = (count unchecked as U64) &* FrozenText.lengthStep()
+        if strategy == .FromStart {
+            return FrozenText.word(text, start &+ base, end, foldsCase) ^ length
+        }
+        if strategy == .FromEnd {
+            return FrozenText.word(text, count < base ? start : end &- base, end, foldsCase) ^ length
+        }
+        if strategy == .BothEnds {
+            let first = FrozenText.word(text, start, end, foldsCase)
+            let last = FrozenText.word(text, count < 8 ? start : end &- 8, end, foldsCase)
+            return (first ^ length) &+ last &* FrozenText.second()
+        }
+        return FrozenText.hash(text, start, end, foldsCase)
+    }
+
+    const fn hash(keyAt position: Int) -> U64 {
+        return hash(keys[position] as! String, 0, (keys[position] as! String).utf8Count)
+    }
+
+    /// A key's own hash, under a seed.
+    @inline(always)
+    const fn hash(_ key: Key, _ seed: U64) -> U64 {
+        var hasher = Hasher(seed: seed)
+        key.hash(into: &hasher)
+        return hasher.finalize() unchecked as U64
+    }
+
+    /// A hash of a member that members equal to it have too.
+    fn hashOfMember(_ key: Key) -> Int {
+        var hasher = Hasher()
+        hasher.combine(firstHash(key) unchecked as Int)
+        return hasher.finalize()
+    }
+
+    /// The keys' values, of keys and values given side by side: each key's
+    /// the last it was given.
+    const fn settled<Value>(_ given: Key[>..], _ values: Value[>..]) -> Value[>..] {
+        if given.count == keys.count {
+            return values
+        }
+        var kept: Value[>..] = []
+        kept.reserveCapacity(keys.count)
+        var i = 0
+        while i < given.count {
+            let position = find(given[i])
+            if position == kept.count {
+                kept.append(values[i])
+            } else {
+                kept[position] = values[i]
+            }
+            i += 1
+        }
+        return kept
+    }
+
+    // ---- Making ------------------------------------------------------------
+
+    mutating const fn choose() {
+        if FrozenTable<Key>.kind() == .Integer {
+            chooseIntegers()
+        } else if FrozenTable<Key>.kind() == .Text {
+            chooseTexts()
+        } else {
+            chooseHashed()
+        }
+    }
+
+    mutating const fn chooseIntegers() {
+        var least = 0
+        var greatest = 0
+        var i = 0
+        while i < keys.count {
+            let number = FrozenTable<Key>.integer(keys[i])
+            least = i == 0 || number < least ? number : least
+            greatest = i == 0 || number > greatest ? number : greatest
+            i += 1
+        }
+        base = least
+        // Wrapped round where it is past an Int's range: negative.
+        let range = greatest &- least
+        if range == keys.count &- 1 {
+            var inOrder = true
+            i = 0
+            while inOrder && i < keys.count {
+                inOrder = FrozenTable<Key>.integer(keys[i]) == least + i
+                i += 1
+            }
+            if inOrder {
+                strategy = .Consecutive
+                return
+            }
+        }
+        if range >= 0 && range < keys.count * frozenDensest {
+            strategy = .Dense
+            slots.append(repeating: -1, count: range + 1)
+            i = 0
+            while i < keys.count {
+                slots[FrozenTable<Key>.integer(keys[i]) - least] = i unchecked as I32
+                i += 1
+            }
+            return
+        }
+        if keys.count <= frozenFew {
+            return
+        }
+        strategy = .Integers
+        var hashes: U64[>..] = []
+        hashes.reserveCapacity(keys.count)
+        i = 0
+        while i < keys.count {
+            hashes.append(FrozenTable<Key>.integer(keys[i]) unchecked as U64)
+            i += 1
+        }
+        place(hashes)
+    }
+
+    mutating const fn chooseTexts() {
+        if keys.count <= frozenFew {
+            return
+        }
+        shortest = Int.max
+        var longest = 0
+        var i = 0
+        while i < keys.count {
+            let count = (keys[i] as! String).utf8Count
+            shortest = count < shortest ? count : shortest
+            longest = count > longest ? count : longest
+            i += 1
+        }
+
+        span = longest - shortest
+
+        // Lengths that all differ.
+        if longest - shortest < keys.count * frozenDensest {
+            var byLength = I32[>..](repeating: -1, count: longest - shortest + 1)
+            var differ = true
+            i = 0
+            while differ && i < keys.count {
+                let offset = (keys[i] as! String).utf8Count - shortest
+                differ = byLength[offset] < 0
+                byLength[offset] = i unchecked as I32
+                i += 1
+            }
+            if differ {
+                strategy = .Lengths
+                base = shortest
+                slots = byLength
+                return
+            }
+        }
+
+        // The fewest bytes that tell all, or all but a few, apart.
+        var best = 0
+        var chosen = FrozenStrategy.WholeText
+        var chosenBase = 0
+        var offset = 0
+        let last = longest < frozenFarthest ? longest : frozenFarthest
+        while offset < last && best < keys.count {
+            strategy = .FromStart
+            base = offset
+            var different = distinctHashes()
+            if different > best {
+                best = different
+                chosen = .FromStart
+                chosenBase = offset
+            }
+            if best < keys.count {
+                strategy = .FromEnd
+                base = offset + 8
+                different = distinctHashes()
+                if different > best {
+                    best = different
+                    chosen = .FromEnd
+                    chosenBase = offset + 8
+                }
+            }
+            offset += offset < 8 ? 1 : 4
+        }
+        let enough = keys.count - keys.count / 50
+        if best < enough && longest > 8 {
+            strategy = .BothEnds
+            let different = distinctHashes()
+            if different > best {
+                best = different
+                chosen = .BothEnds
+                chosenBase = 0
+            }
+        }
+        strategy = best < enough ? .WholeText : chosen
+        base = best < enough ? 0 : chosenBase
+        var hashes: U64[>..] = []
+        hashes.reserveCapacity(keys.count)
+        i = 0
+        while i < keys.count {
+            hashes.append(hash(keyAt: i))
+            i += 1
+        }
+        place(hashes)
+    }
+
+    /// How many of the keys' hashes, by the strategy being tried, differ.
+    const fn distinctHashes() -> Int {
+        var size = 16
+        while size < keys.count * 2 {
+            size *= 2
+        }
+        var seen = U64[>..](repeating: 0, count: size)
+        var zeros = 0
+        var different = 0
+        var i = 0
+        while i < keys.count {
+            let word = hash(keyAt: i)
+            i += 1
+            if word == 0 {
+                zeros = 1
+                continue
+            }
+            var at = Int.truncating((word &* FrozenText.second()) >> 32) & (size - 1)
+            while seen[at] != 0 && seen[at] != word {
+                at = (at + 1) & (size - 1)
+            }
+            if seen[at] == 0 {
+                seen[at] = word
+                different += 1
+            }
+        }
+        return different + zeros
+    }
+
+    mutating const fn chooseHashed() {
+        if keys.count <= frozenFew {
+            return
+        }
+        strategy = .Hashed
+        sizeSlots()
+        // A seed costs every key's hash: fewer are tried of more keys.
+        let tries = keys.count <= 100 ? 24 : keys.count <= 1000 ? 8 : 2
+        var hashes = U64[>..](repeating: 0, count: keys.count)
+        var best = Int.max
+        var attempt = 0
+        while attempt < tries && best > 0 {
+            let seed = frozenTrial(attempt)
+            rehash(&hashes, seed)
+            let steps = fill(hashes, 1, best)
+            if steps < best {
+                best = steps
+                multiplier = seed
+            }
+            attempt += 1
+        }
+        rehash(&hashes, multiplier)
+        _ = fill(hashes, 1, Int.max)
+    }
+
+    const fn rehash(_ hashes: inout U64[>..], _ seed: U64) {
+        var i = 0
+        while i < keys.count {
+            hashes[i] = hash(keys[i], seed)
+            i += 1
+        }
+    }
+
+    /// Slots for the keys, two to four times as many, or more of a few: a
+    /// power of two.
+    mutating const fn sizeSlots() {
+        var size = 16
+        var bits: U64 = 4
+        while size < keys.count * (keys.count <= frozenRoomy ? 4 : 2) {
+            size *= 2
+            bits += 1
+        }
+        shift = 64 - bits
+        slots = I32[>..](repeating: -1, count: size)
+    }
+
+    /// Each key put in the first empty slot from its hash's on, under the
+    /// multiplier, of those tried, that moves the fewest along.
+    mutating const fn place(_ hashes: U64[>..]) {
+        sizeSlots()
+        let tries = keys.count <= 100 ? 256 : keys.count <= 1000 ? 64 : keys.count <= 10000 ? 16 : 4
+        var best = Int.max
+        var attempt = 0
+        while attempt < tries && best > 0 {
+            let trial = frozenTrial(attempt) | 1
+            let steps = fill(hashes, trial, best)
+            if steps < best {
+                best = steps
+                multiplier = trial
+            }
+            attempt += 1
+        }
+        _ = fill(hashes, multiplier, Int.max)
+    }
+
+    /// The slots filled under a multiplier, unless it moves keys as many
+    /// steps along as the most given: how many it does.
+    mutating const fn fill(_ hashes: U64[>..], _ trial: U64, _ most: Int) -> Int {
+        var i = 0
+        while i < slots.count {
+            slots[i] = -1
+            i += 1
+        }
+        let mask = slots.count - 1
+        var steps = 0
+        i = 0
+        while i < hashes.count && steps < most {
+            var at = Int.truncating((hashes[i] &* trial) >> shift)
+            while slots[at] >= 0 {
+                at = (at + 1) & mask
+                steps += 1
+            }
+            slots[at] = i unchecked as I32
+            i += 1
+        }
+        return steps
+    }
+}
+
+/// What a table reads of a text: the bytes from one offset up to another, as
+/// they are or with ASCII's capitals as its small letters.
+struct FrozenText {
+    /// What sets hashes of texts of different lengths apart.
+    static const fn lengthStep() -> U64 => 0xA24B_AED4_963E_E407
+
+    static const fn second() -> U64 => 0x9FB2_1C65_1E98_DF25
+
+    /// The eight bytes from an offset, the first the lowest, and zeros past
+    /// the end.
+    @inline(always)
+    static const fn word(_ text: String, _ at: Int, _ end: Int, _ foldingCase: Bool) -> U64 {
+        let left = end &- at
+        if left <= 0 {
+            return 0
+        }
+        var word = text.utf8Window(at)
+        if left < 8 {
+            word = word & (((1 as U64) << U64(8 &* left)) &- 1)
+        }
+        return foldingCase ? folded(word) : word
+    }
+
+    /// Eight bytes, those that are ASCII's capitals made its small letters.
+    @inline(always)
+    static const fn folded(_ word: U64) -> U64 {
+        // In each byte's top bit, whether its low seven are at least 'A', and
+        // whether they are past 'Z'; and whether it is ASCII.
+        let low = word & 0x7F7F_7F7F_7F7F_7F7F
+        let capital = (low &+ 0x3F3F_3F3F_3F3F_3F3F) & ~(low &+ 0x2525_2525_2525_2525) & ~word & 0x8080_8080_8080_8080
+        return word | (capital >> 2)
+    }
+
+    /// All the bytes' hash.
+    static const fn hash(_ text: String, _ start: Int, _ end: Int, _ foldingCase: Bool) -> U64 {
+        if !foldingCase {
+            return text.hash(utf8From: start, to: end, key: 0x2545_F491_4F6C_DD1D)
+        }
+        var all = U64(end - start) &* FrozenText.lengthStep()
+        var at = start
+        while at < end {
+            all = (all ^ word(text, at, end, true)) &* FrozenText.second()
+            all = all ^ (all >> 32)
+            at += 8
+        }
+        return all
+    }
+
+    /// Whether the bytes are the key's.
+    @inline(always)
+    static const fn equal(_ text: String, _ start: Int, _ end: Int, _ key: String) -> Bool {
+        return text.hasUtf8(from: start, to: end, equalTo: key)
+    }
+
+    /// Whether the bytes are the key's, but for the case of ASCII's letters.
+    static const fn equalFoldingCase(_ text: String, _ start: Int, _ end: Int, _ key: String) -> Bool {
+        let count = end - start
+        if count != key.utf8Count {
+            return false
+        }
+        var at = 0
+        while at < count {
+            let mine = word(text, start + at, end, false)
+            let theirs = word(key, at, count, false)
+            if mine != theirs && folded(mine) != folded(theirs) {
+                return false
+            }
+            at += 8
+        }
+        return true
+    }
+}
+
+extension FrozenTable where Key == String {
+    /// Where the key the piece spells is, or -1.
+    @inline(always)
+    fn find(_ piece: Substring) -> Int {
+        let start = piece.startIndex.utf8Offset
+        return find(piece.base, start, start &+ piece.utf8Count, whole: false)
+    }
+}

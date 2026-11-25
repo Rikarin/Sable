@@ -1,0 +1,333 @@
+module Sable.Collections
+
+/// Distinct values in order, kept so that copies stay cheap as they change:
+/// .NET's ImmutableSortedSet. A copy shares everything with the set it was
+/// made from, and a change to either copies only the nodes on the way to the
+/// value. Each operation on a value, or a place in the order, is O(log n); so
+/// is cutting out a range, as a set of its own that shares the nodes.
+///
+/// A value, changed by the methods SortedSet has, in place where nothing else
+/// holds it: a `var` is its own builder.
+///
+/// ```sable
+/// let set = ImmutableSortedSet<Int>([5, 1, 9])
+/// let more = set.inserting(7)
+/// assert(set.toArray() == [1, 5, 9] && more.toArray() == [1, 5, 7, 9])
+/// assert(more.floor(6) == 5 && more.range(5...8).count == 2)
+/// assert(set.union(ImmutableSortedSet<Int>([2])).toArray() == [1, 2, 5, 9])
+/// ```
+public struct ImmutableSortedSet<Element: Comparable> {
+    var members: ImmutableList<Element> = ImmutableList<Element>()
+
+    /// An empty set.
+    public init() { }
+
+    /// The distinct values among the sequence's. What going through them
+    /// throws, it throws.
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        for try element in elements {
+            insert(element)
+        }
+    }
+
+    /// How many values it holds.
+    public var count: Int => members.count
+
+    /// Whether it holds no values.
+    public var isEmpty: Bool => members.isEmpty
+
+    /// The least value, or none.
+    public var first: Element? => members.first
+
+    /// The greatest value, or none.
+    public var last: Element? => members.last
+
+    /// How many values come before the value: where it is, or would be put.
+    public fn rank(of value: Element) -> Int {
+        return members.partition { $0 < value }
+    }
+
+    /// How many values come before the value, or are it.
+    fn rank(past value: Element) -> Int {
+        return members.partition { !(value < $0) }
+    }
+
+    /// Whether the value is in the set.
+    public fn contains(_ value: Element) -> Bool {
+        let rank = rank(of: value)
+        return rank < members.count && !(value < members[rank])
+    }
+
+    /// The greatest value not above the value, or none.
+    public fn floor(_ value: Element) -> Element? {
+        let rank = rank(past: value)
+        return rank == 0 ? none : members[rank - 1]
+    }
+
+    /// The least value not below the value, or none.
+    public fn ceiling(_ value: Element) -> Element? {
+        let rank = rank(of: value)
+        return rank == members.count ? none : members[rank]
+    }
+
+    // ---- Changing ----------------------------------------------------------
+
+    /// Adds the value; true if it was not there before.
+    @discardable
+    public mutating fn insert(_ value: Element) -> Bool {
+        let rank = rank(of: value)
+        if rank < members.count && !(value < members[rank]) {
+            return false
+        }
+        members.insert(value, at: rank)
+        return true
+    }
+
+    /// Takes the value out; true if it was there.
+    @discardable
+    public mutating fn remove(_ value: Element) -> Bool {
+        let rank = rank(of: value)
+        if rank == members.count || value < members[rank] {
+            return false
+        }
+        _ = members.remove(at: rank)
+        return true
+    }
+
+    /// Takes out every value.
+    public mutating fn removeAll() {
+        members.removeAll()
+    }
+
+    /// The least value, taken out; none when there is none.
+    @discardable
+    public mutating fn popFirst() -> Element? {
+        return isEmpty ? none : members.remove(at: 0)
+    }
+
+    /// The greatest value, taken out; none when there is none.
+    @discardable
+    public mutating fn popLast() -> Element? {
+        return members.popLast()
+    }
+
+    /// This set with the value: the rest shared with this one.
+    public fn inserting(_ value: Element) -> ImmutableSortedSet<Element> {
+        var changed = self
+        changed.insert(value)
+        return changed
+    }
+
+    /// This set without the value: the rest shared with this one.
+    public fn removing(_ value: Element) -> ImmutableSortedSet<Element> {
+        var changed = self
+        changed.remove(value)
+        return changed
+    }
+
+    /// The members in a grow-only array, in order.
+    public fn toArray() -> Element[>..] {
+        return members.toArray()
+    }
+
+    // ---- Ranges ------------------------------------------------------------
+
+    /// The values in the range, as a set of their own, the nodes shared:
+    /// O(log n).
+    public fn range(_ values: Range<Element>) -> ImmutableSortedSet<Element> {
+        return piece(rank(of: values.lowerBound), rank(of: values.upperBound))
+    }
+
+    /// The values in the range, both ends included.
+    public fn range(_ values: ClosedRange<Element>) -> ImmutableSortedSet<Element> {
+        return piece(rank(of: values.lowerBound), rank(past: values.upperBound))
+    }
+
+    /// The values not below the bound.
+    public fn range(_ values: PartialRangeFrom<Element>) -> ImmutableSortedSet<Element> {
+        return piece(rank(of: values.lowerBound), count)
+    }
+
+    /// The values below the bound.
+    public fn range(_ values: PartialRangeUpTo<Element>) -> ImmutableSortedSet<Element> {
+        return piece(0, rank(of: values.upperBound))
+    }
+
+    /// The values not above the bound.
+    public fn range(_ values: PartialRangeThrough<Element>) -> ImmutableSortedSet<Element> {
+        return piece(0, rank(past: values.upperBound))
+    }
+
+    fn piece(_ from: Int, _ to: Int) -> ImmutableSortedSet<Element> {
+        var made = ImmutableSortedSet<Element>()
+        made.members = members[from..<to]
+        return made
+    }
+
+    /// The values from the one given on taken out, as a set of their own:
+    /// this one keeps those below it.
+    public mutating fn split(at value: Element) -> ImmutableSortedSet<Element> {
+        let rank = rank(of: value)
+        let high = piece(rank, count)
+        self = piece(0, rank)
+        return high
+    }
+
+    // ---- Combining ---------------------------------------------------------
+
+    /// Every value in this set or the other, in time by how many both have.
+    public fn union(_ other: ImmutableSortedSet<Element>) -> ImmutableSortedSet<Element> {
+        return combined(other, mine: true, both: true, theirs: true)
+    }
+
+    /// The values in both sets.
+    public fn intersection(_ other: ImmutableSortedSet<Element>) -> ImmutableSortedSet<Element> {
+        return combined(other, mine: false, both: true, theirs: false)
+    }
+
+    /// The values of this set that are not in the other.
+    public fn subtracting(_ other: ImmutableSortedSet<Element>) -> ImmutableSortedSet<Element> {
+        return combined(other, mine: true, both: false, theirs: false)
+    }
+
+    /// The values in one set but not both.
+    public fn symmetricDifference(_ other: ImmutableSortedSet<Element>) -> ImmutableSortedSet<Element> {
+        return combined(other, mine: true, both: false, theirs: true)
+    }
+
+    /// Adds every value of the other set.
+    public mutating fn formUnion(_ other: ImmutableSortedSet<Element>) {
+        self = self.union(other)
+    }
+
+    /// Keeps only the values that are also in the other set.
+    public mutating fn formIntersection(_ other: ImmutableSortedSet<Element>) {
+        self = self.intersection(other)
+    }
+
+    /// Takes out every value that is in the other set.
+    public mutating fn subtract(_ other: ImmutableSortedSet<Element>) {
+        self = self.subtracting(other)
+    }
+
+    // The values of this set alone, of both, and of the other alone, or not.
+    fn combined(_ other: ImmutableSortedSet<Element>, mine: Bool, both: Bool, theirs: Bool) -> ImmutableSortedSet<Element> {
+        var made = ImmutableSortedSet<Element>()
+        var left = makeIterator()
+        var right = other.makeIterator()
+        var a = left.next()
+        var b = right.next()
+        while true {
+            if let x = a {
+                if let y = b {
+                    if x < y {
+                        if mine {
+                            made.members.append(x)
+                        }
+                        a = left.next()
+                    } else if y < x {
+                        if theirs {
+                            made.members.append(y)
+                        }
+                        b = right.next()
+                    } else {
+                        if both {
+                            made.members.append(x)
+                        }
+                        a = left.next()
+                        b = right.next()
+                    }
+                } else {
+                    if !mine {
+                        return made
+                    }
+                    made.members.append(x)
+                    a = left.next()
+                }
+            } else if let y = b {
+                if !theirs {
+                    return made
+                }
+                made.members.append(y)
+                b = right.next()
+            } else {
+                return made
+            }
+        }
+    }
+
+    /// Whether every value of this set is in the other.
+    public fn isSubset(of other: ImmutableSortedSet<Element>) -> Bool {
+        return count <= other.count && intersection(other).count == count
+    }
+
+    /// Whether every value of the other set is in this one.
+    public fn isSuperset(of other: ImmutableSortedSet<Element>) -> Bool {
+        return other.isSubset(of: self)
+    }
+
+    /// Whether this set is a subset of the other, and smaller.
+    public fn isStrictSubset(of other: ImmutableSortedSet<Element>) -> Bool {
+        return count < other.count && self.isSubset(of: other)
+    }
+
+    /// Whether this set is a superset of the other, and larger.
+    public fn isStrictSuperset(of other: ImmutableSortedSet<Element>) -> Bool {
+        return other.isStrictSubset(of: self)
+    }
+
+    /// Whether the two sets have no value in common.
+    public fn isDisjoint(with other: ImmutableSortedSet<Element>) -> Bool {
+        return intersection(other).isEmpty
+    }
+}
+
+extension ImmutableSortedSet: BidirectionalCollection, FromSequence<Element> {
+    public alias Index = SortedIndex
+
+    /// The members, in order.
+    public fn makeIterator() -> ImmutableListIterator<Element> {
+        return members.makeIterator()
+    }
+
+    public var startIndex: SortedIndex => SortedIndex { rank: 0 }
+
+    public var endIndex: SortedIndex => SortedIndex { rank: members.count }
+
+    /// The member at a position, found in O(log n); one not a member's traps.
+    public subscript(position: SortedIndex) -> Element {
+        get => members[position.rank]
+    }
+
+    public fn index(after position: SortedIndex) -> SortedIndex => SortedIndex { rank: position.rank + 1 }
+
+    public fn index(before position: SortedIndex) -> SortedIndex => SortedIndex { rank: position.rank - 1 }
+
+    public fn index(_ position: SortedIndex, offsetBy distance: Int) -> SortedIndex => SortedIndex { rank: position.rank + distance }
+
+    /// The position of the value, or none.
+    public fn index(of value: Element) -> SortedIndex? {
+        return contains(value) ? SortedIndex { rank: rank(of: value) } : none
+    }
+}
+
+extension ImmutableSortedSet: Equatable {
+    /// Whether the two sets hold the same values.
+    public operator == (lhs: ImmutableSortedSet<Element>, rhs: ImmutableSortedSet<Element>) -> Bool {
+        return lhs.members == rhs.members
+    }
+}
+
+extension ImmutableSortedSet: Hashable where Element: Hashable {
+    /// Feeds the count and then each member, in order.
+    public fn hash(into hasher: inout Hasher) {
+        members.hash(into: &hasher)
+    }
+}
+
+extension ImmutableSortedSet: Debug where Element: Debug {
+    /// `ImmutableSortedSet([1, 2])`, in order.
+    public fn debugDescription() -> String {
+        return described("ImmutableSortedSet", descriptions(members))
+    }
+}

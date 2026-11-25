@@ -3303,9 +3303,9 @@ internal sealed class Parser {
 
     /// <summary>
     ///     <c>const</c> declares a compile-time constant on its own, but modifies
-    ///     a function in <c>const fn</c>.
+    ///     a function in <c>const fn</c>, and an initialiser in <c>const init</c>.
     /// </summary>
-    bool IsConstFunctionModifier() => At(SyntaxKind.ConstKeyword) && Peek(1).Kind == SyntaxKind.FnKeyword;
+    bool IsConstFunctionModifier() => At(SyntaxKind.ConstKeyword) && Peek(1).Kind is SyntaxKind.FnKeyword or SyntaxKind.InitKeyword;
 
     /// <summary>
     ///     <c>unsafe</c> starts a block on its own, but modifies a function in

@@ -1988,15 +1988,26 @@ public sealed class SilModule {
 /// </remarks>
 public static class SilBuiltins {
     /// <summary>
-    ///     An <c>array_literal</c> of numbers, Bools or Chars, every one written
-    ///     as a literal: natively a constant in read-only memory, made once
-    ///     and never counted (#265).
+    ///     An <c>array_literal</c> of numbers, Bools, Chars and strings, and of
+    ///     structs and tuples of them, every one written as a literal:
+    ///     natively a constant in read-only memory, made once and never
+    ///     counted (#265).
     /// </summary>
     public static bool IsConstantArray(BuiltinInst literal) =>
-        literal is { Name: "array_literal", Type: ArrayType array }
-        && (array.Element == SilType.Int || array.Element == SilType.Bool || array.Element == SilType.Char || array.Element == SilType.F64
-            || array.Element == SilType.F32 || SilType.IntegerInfo(array.Element) is not null)
-        && literal.Operands.All(static o => o is IntegerLiteralInst or FloatLiteralInst);
+        literal is { Name: "array_literal", Type: ArrayType array } && IsConstantElement(array.Element) && literal.Operands.All(IsConstant);
+
+    /// <summary>A type whose values a constant array may hold: one known all through, with nothing to run when it goes.</summary>
+    public static bool IsConstantElement(SilType type) =>
+        type switch {
+            StructType { Deinit: null, IsNoncopyable: false } structType => structType.Fields.Count > 0 && structType.Fields.All(static f => IsConstantElement(f.Type)),
+            TupleType tuple => tuple.Elements.Length > 0 && tuple.Elements.All(IsConstantElement),
+            _ => type == SilType.Int || type == SilType.Bool || type == SilType.Char || type == SilType.F64 || type == SilType.F32 || type == SilType.String
+                || SilType.IntegerInfo(type) is not null,
+        };
+
+    static bool IsConstant(SilValue value) =>
+        value is IntegerLiteralInst or FloatLiteralInst or StringLiteralInst
+        || value is StructInst or TupleInst && ((SilInstruction)value).Operands.All(IsConstant);
 
     public sealed record Signature(ImmutableArray<SilType> Operands, SilType Result) {
         /// <summary>The operands the builtin takes ownership of.</summary>
@@ -2749,6 +2760,7 @@ public static class SilBuiltins {
         Add("string_utf8_count", SilType.Int, SilType.String);
         Add("string_utf8_at", SilType.U8, SilType.String, SilType.Int);
         Add("string_utf8_load_U64", SilType.U64, SilType.String, SilType.Int);
+        Add("string_utf8_last_U64", SilType.U64, SilType.String);
         Add("string_index_scalar", SilType.Char, SilType.String, SilType.Int);
         Add("string_index_after", SilType.Int, SilType.String, SilType.Int);
         Add("string_index_before", SilType.Int, SilType.String, SilType.Int);

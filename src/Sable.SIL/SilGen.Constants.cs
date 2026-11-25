@@ -25,10 +25,12 @@ namespace Sable.SIL;
 ///     <para>
 ///         The program's own lowering then writes each constant where it is
 ///         read, as the literal it came to — a number, a string, a tuple or
-///         struct of them, an enum case — so it has no storage and costs
-///         nothing to read. A value no literal can say (an array, an object)
-///         is kept in a global set when the program starts, from the same
-///         code, which cannot do anything but compute it again.
+///         struct of them, an enum case, an array of them — so it has no
+///         storage and costs nothing to read. One with a great many elements
+///         is kept in a global instead, set to that literal as the program
+///         starts; one no literal can say (an object, a closure) in a global
+///         set from the same code, which cannot do anything but compute it
+///         again.
 ///     </para>
 ///     <para>
 ///         What goes wrong is reported where it went wrong: a trap
@@ -66,7 +68,14 @@ public sealed partial class SilGen {
     /// <param name="unchecked">The files the lowering asking does not check: their constants are bound one at a time (<see cref="BodyModel" />).</param>
     /// <param name="program">The program's declarations where they are gathered: of the standard library's files it does not check, evaluation looks at those alone.</param>
     static ConstantTable ConstantsOf(Compilation compilation, Func<SyntaxTree, bool>? @unchecked, SilProgram? program = null) =>
-        s_constants.GetValue(compilation, c => new SilGen(c) { _evaluation = new(), _unchecked = @unchecked, _program = program }.Evaluate());
+        s_constants.GetValue(compilation, c => {
+            // What it lowers is what the code it runs calls by name: tables
+            // and what they hold, which code compiled once calls through, are
+            // a whole program's. It runs a copy for its types instead.
+            using (UseGenerics(GenericsMode.Specialised)) {
+                return new SilGen(c) { _evaluation = new(), _unchecked = @unchecked, _program = program }.Evaluate();
+            }
+        });
 
     /// <summary>In the program's lowering: what compile-time evaluation found.</summary>
     ConstantTable? _constants;
@@ -355,6 +364,13 @@ public sealed partial class SilGen {
         }
 
         if (_evaluation is { } evaluation) {
+            // A literal is its own value, which nothing need be run for: and
+            // lowering what would run it lowers what else is wanted, code
+            // that reads it too among it.
+            if (FieldInitializer(field) is BoundLiteral literal) {
+                return literal;
+            }
+
             EnsureEvaluated(field);
             if (evaluation.Failed.Contains(field)) {
                 evaluation.ReadAFailure = true;
@@ -368,11 +384,29 @@ public sealed partial class SilGen {
         }
 
         if (_constants.Values.TryGetValue(field, out var value)) {
-            return IsLiteral(value, type) ? value ?? s_none : null;
+            return IsLiteral(value, type) && (_writingGlobals || ElementsIn(value) <= MostElements) ? value ?? s_none : null;
         }
 
         return FieldInitializer(field) as BoundLiteral;
     }
+
+    /// <summary>Whether the globals' initial values are being lowered: a constant kept in one is written there whole.</summary>
+    bool _writingGlobals;
+
+    /// <summary>The most elements of arrays a constant is written with wherever it is read.</summary>
+    const int MostElements = 256;
+
+    static int ElementsIn(object? value) =>
+        value switch {
+            SilInterpreter.ArrayValue array => array.Elements.Count + array.Elements.Sum(ElementsIn),
+            object?[] parts => parts.Sum(ElementsIn),
+            SilInterpreter.EnumValue e => ElementsIn(e.Payload),
+            _ => 0,
+        };
+
+    /// <summary>Whether the field is a constant whose value lowering can write, if not wherever it is read.</summary>
+    bool IsWrittenConstant(FieldSymbol field) =>
+        field.IsConstant && _constants is not null && Lower(field.Type) is { } type && _constants.Values.TryGetValue(field, out var value) && IsLiteral(value, type);
 
     /// <summary>Stands for a computed value that is null: an enum case without a payload has one.</summary>
     static readonly object s_none = new();
@@ -389,6 +423,9 @@ public sealed partial class SilGen {
                 && parts.Select((p, i) => IsLiteral(p, structType.Fields[i].Type)).All(static ok => ok),
             (object?[] parts, TupleType tuple) => parts.Length == tuple.Elements.Length
                 && parts.Select((p, i) => IsLiteral(p, tuple.Elements[i])).All(static ok => ok),
+            (null, ArrayType) => true,
+            (SilInterpreter.ArrayValue array, ArrayType arrayType) => SilBuiltins.IsConstantElement(arrayType.Element)
+                && array.Elements.All(e => IsLiteral(e, arrayType.Element)),
             (SilInterpreter.EnumValue e, EnumType enumType) => e.Case < enumType.Cases.Count
                 && (enumType.Cases[e.Case].Payload is not { } payload ? e.Payload is null : IsLiteral(e.Payload, payload)),
             _ => false,
@@ -420,6 +457,10 @@ public sealed partial class SilGen {
                     return Emit(new StructInst(structType, [..parts.Select((p, i) => ConstantValue(p, structType.Fields[i].Type))]));
                 case (object?[] parts, TupleType tuple):
                     return Emit(new TupleInst(tuple, [..parts.Select((p, i) => ConstantValue(p, tuple.Elements[i]))]));
+                case (null, ArrayType empty):
+                    return Emit(new BuiltinInst("array_empty", empty));
+                case (SilInterpreter.ArrayValue array, ArrayType arrayType):
+                    return Emit(new BuiltinInst("array_literal", arrayType, [..array.Elements.Select(e => ConstantValue(e, arrayType.Element))]));
                 case (SilInterpreter.EnumValue e, EnumType enumType):
                     return Emit(new EnumInst(enumType, e.Case,
                         enumType.Cases[e.Case].Payload is { } payload ? ConstantValue(e.Payload, payload) : null));

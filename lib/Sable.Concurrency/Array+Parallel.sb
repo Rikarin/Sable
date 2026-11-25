@@ -1,0 +1,100 @@
+module Sable.Concurrency
+
+// An array changed where it is by several threads at once, each a part of it
+// that no other has.
+
+extension<Element: Sendable> Element[:] {
+    /// Changes each element where it is, several at a time and in no order;
+    /// at most `degree` threads (0: as many as there are workers), each taking
+    /// at least `grain` elements at a time.
+    ///
+    /// ```sable
+    /// var xs = [1, 2, 3]
+    /// xs.parallelModify { $0 *= 10 }
+    /// assert(xs == [10, 20, 30])
+    /// ```
+    ///
+    /// If the closure throws, no more elements are begun, and the array has
+    /// some changed and some not.
+    public mutating fn parallelModify<E: Error>(degree: Int = 0, grain: Int = 1, _ body: @Sendable (inout Element) throws(E) -> Void) throws(E) {
+        try parallelModifyChunks(of: 0, degree: degree, grain: grain) { (chunk: ArrayChunk<Element>) throws(E) -> Void in
+            try chunk.modifyEach(body)
+        }
+    }
+
+    /// Runs the body for each run of so many elements — the last may be
+    /// shorter — several at a time and in no order, to change where they are:
+    /// .NET's `Parallel.ForEach` over a partitioner, Rayon's `par_chunks_mut`.
+    /// Nothing is copied, if the array is this one's alone. A `size` of 0 is
+    /// runs of whatever size each thread takes.
+    ///
+    /// ```sable
+    /// var xs = [5, 3, 1, 9, 7, 2]
+    /// xs.parallelModifyChunks(of: 3) { chunk in
+    ///     chunk[0] = chunk.startIndex + chunk.count
+    /// }
+    /// assert(xs == [3, 3, 1, 6, 7, 2])
+    /// ```
+    ///
+    /// A chunk is of use until the body returns: kept, and used after, it is
+    /// empty.
+    public mutating fn parallelModifyChunks<E: Error>(of size: Int, degree: Int = 0, grain: Int = 1, _ body: @Sendable (ArrayChunk<Element>) throws(E) -> Void) throws(E) {
+        precondition(size >= 0, "a chunk of \(size) elements")
+        let total = self.count
+        let each = size == 0 ? 1 : size
+        let pieces = total / each + (total % each == 0 ? 0 : 1)
+        try withMutablePointer { (start: RawPtr<Element>) throws(E) -> Void in
+            // What two elements hold may be one object, which two threads
+            // then count.
+            var i = 0
+            while i < total {
+                unsafe {
+                    Runtime.share(start.load(at: i))
+                }
+                i += 1
+            }
+            try parallelForChunks(0..<pieces, degree: degree, grain: grain) { (taken: Range<Int>) throws(E) -> Void in
+                let chunk = ArrayChunk<Element>(start)
+                defer { chunk.end() }
+                var piece = taken.lowerBound
+                while piece < taken.upperBound {
+                    let first = piece * each
+                    let after = size == 0 ? taken.upperBound : piece + 1
+                    let end = after * each
+                    chunk.become(first, end < total ? end : total)
+                    try body(chunk)
+                    piece = after
+                }
+            }
+        }
+    }
+
+    /// Sorts the elements in place by the closure ('a' before 'b' when it is
+    /// true), on at most `degree` threads (0: as many as there are workers):
+    /// stable, with one scratch array of the array's size. The closure runs on
+    /// several threads.
+    ///
+    /// ```sable
+    /// var words = ["pear", "fig", "banana"]
+    /// words.parallelSort(by: { $0.count > $1.count })
+    /// assert(words == ["banana", "pear", "fig"])
+    /// ```
+    public mutating fn parallelSort(degree: Int = 0, by before: @escaping @Sendable (Element, Element) -> Bool) {
+        parallelSorted(&self, degree, GivenOrder<Element> { body: before })
+    }
+}
+
+extension<Element: Sendable & Comparable> Element[:] {
+    /// Sorts the elements in place, least first, on at most `degree` threads
+    /// (0: as many as there are workers): stable, with one scratch array of
+    /// the array's size.
+    ///
+    /// ```sable
+    /// var xs = (0..<10_000).map { ($0 &* 7919) % 10_007 }
+    /// xs.parallelSort()
+    /// assert(xs.isSorted())
+    /// ```
+    public mutating fn parallelSort(degree: Int = 0) {
+        parallelSorted(&self, degree, NaturalOrder<Element> { })
+    }
+}

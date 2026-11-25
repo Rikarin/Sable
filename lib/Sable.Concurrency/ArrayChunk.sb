@@ -1,0 +1,92 @@
+module Sable.Concurrency
+
+/// A run of an array's elements, which one thread changes where they are while
+/// others change the rest: what `parallelModifyChunks` gives its body. Not
+/// Sendable, and empty once the body has returned, so that nothing reaches the
+/// array's elements after.
+///
+/// ```sable
+/// var xs = [4, 3, 2, 1]
+/// xs.parallelModifyChunks(of: 2) { chunk in
+///     chunk.modifyEach { $0 += 1 }
+///     chunk.swapAt(0, 1)
+/// }
+/// assert(xs == [4, 5, 2, 3])
+/// ```
+public final class ArrayChunk<Element: Sendable> {
+    let array: RawPtr<Element>
+    var first: Int = 0
+    var length: Int = 0
+
+    init(_ array: RawPtr<Element>) {
+        self.array = array
+    }
+
+    /// Where the chunk starts in the array.
+    public var startIndex: Int => first
+
+    /// How many elements the chunk has.
+    public var count: Int => length
+
+    /// The chunk's element at a place, from 0.
+    public subscript(index: Int) -> Element {
+        get {
+            check(index)
+            unsafe {
+                return array.load(at: first + index)
+            }
+        }
+        set {
+            check(index)
+            unsafe {
+                array.store(newValue, at: first + index)
+            }
+        }
+    }
+
+    /// Changes each element where it is, in order.
+    public fn modifyEach<E: Error>(_ body: (inout Element) throws(E) -> Void) throws(E) {
+        let start = first
+        let end = first + length
+        var i = start
+        while i < end {
+            unsafe {
+                var element = array.move(at: i)
+                do {
+                    try body(&element)
+                    array.initialize(to: move element, at: i)
+                } catch {
+                    array.initialize(to: move element, at: i)
+                    throw error
+                }
+            }
+            i += 1
+        }
+    }
+
+    /// Two elements, each put in the other's place.
+    public fn swapAt(_ i: Int, _ j: Int) {
+        check(i)
+        check(j)
+        if i != j {
+            unsafe {
+                let held = array.move(at: first + i)
+                array.initialize(to: array.move(at: first + j), at: first + i)
+                array.initialize(to: held, at: first + j)
+            }
+        }
+    }
+
+    fn check(_ index: Int) {
+        precondition(index >= 0 && index < length, "index \(index) is out of range for a chunk of \(length)")
+    }
+
+    fn become(_ first: Int, _ end: Int) {
+        self.first = first
+        length = end - first
+    }
+
+    fn end() {
+        length = 0
+    }
+}

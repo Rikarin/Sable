@@ -1,0 +1,447 @@
+module Sable.Concurrency
+
+/// A collection that several threads go through at once: an array's
+/// `parallel`, or a range's. Each operation here divides the elements between
+/// the pool's threads and this one, as `parallelFor` does, and gives its
+/// result once they are done: PLINQ, Rayon's parallel iterators.
+///
+/// ```sable
+/// let words = ["a", "list", "of", "words"]
+/// assert(words.parallel.map { $0.count } == [1, 4, 2, 5])
+/// assert(words.parallel.filter { $0.count > 1 } == ["list", "of", "words"])
+/// assert(words.parallel.contains { $0 == "of" })
+/// ```
+///
+/// What an operation is given runs on several threads, alongside itself, so
+/// what it captures is Sendable. Results come in the elements' order, unless
+/// `unordered` asks for whichever is ready first. The elements are cut into
+/// the same chunks each time, and what is made of the chunks is put together
+/// in order, so that a reduction whose combination is not quite associative —
+/// a sum of floats — gives the same each time, for a number of threads.
+///
+/// When a closure throws, no more elements are begun, and the error — the
+/// first, if several throw — is thrown once the threads have stopped.
+///
+/// An operation's result is an array of its own, not parallel: work that can
+/// be done as one is — `sum(of:)`, `reduce`, `compactMap` — is better done so.
+public struct Parallel<Source: ParallelSource> {
+    let source: Source
+    let degree: Int
+    let grain: Int
+    let isOrdered: Bool
+
+    /// How many elements there are.
+    public var count: Int => source.count
+
+    /// The same, gone through by at most so many threads, this one among
+    /// them; 0 is as many as there are workers.
+    ///
+    /// ```sable
+    /// assert([1, 2, 3].parallel.withDegree(2).sum() == 6)
+    /// ```
+    public fn withDegree(_ degree: Int) -> Parallel<Source> {
+        precondition(degree >= 0, "a loop cannot be run by \(degree) threads")
+        return Parallel<Source> { source: source, degree: degree, grain: grain, isOrdered: isOrdered }
+    }
+
+    /// The same, each thread taking at least so many elements at a time: for
+    /// work so small that to hand out one costs as much.
+    ///
+    /// ```sable
+    /// assert((0..<10_000).parallel.withGrain(256).map { $0 &* 3 }.count == 10_000)
+    /// ```
+    public fn withGrain(_ grain: Int) -> Parallel<Source> {
+        precondition(grain >= 1, "a loop's chunks cannot be of \(grain) elements")
+        return Parallel<Source> { source: source, degree: degree, grain: grain, isOrdered: isOrdered }
+    }
+
+    /// The same, where `filter`, `compactMap` and `flatMap` give what they
+    /// make in any order, and `first(where:)` whichever is found first: no
+    /// thread waits for what comes before.
+    public var unordered: Parallel<Source> => Parallel<Source> { source: source, degree: degree, grain: grain, isOrdered: false }
+
+    var loop: ParallelLoop => ParallelLoop(source.count, degree: degree, grain: grain)
+
+    // The body run for each chunk, by the thread that took it, until there is
+    // none, or one throws.
+    fn chunks<E: Error>(_ loop: ParallelLoop, _ body: (Range<Int>) throws(E) -> Void) throws(E) {
+        let failure = OnceCell<E>()
+        loop.run {
+            do {
+                while true {
+                    let chunk = loop.claim()
+                    if chunk.isEmpty {
+                        return
+                    }
+                    try body(chunk)
+                }
+            } catch {
+                loop.stop()
+                _ = failure.getOrInit { error }
+            }
+        }
+        if let error = failure.get() {
+            throw error
+        }
+    }
+
+    // What each chunk makes, in the chunks' order, if it is asked for.
+    fn parts<P, E: Error>(_ body: (Source.Reader, Range<Int>) throws(E) -> P) throws(E) -> P[>..] {
+        let made: Mutex<ParallelPart<P>[>..]> = Mutex([])
+        let loop = loop
+        try source.withReader { (reader: Source.Reader) throws(E) -> Void in
+            try chunks(loop) { (chunk: Range<Int>) throws(E) -> Void in
+                let part = ParallelPart<P> { start: chunk.lowerBound, value: try body(reader, chunk) }
+                made.withLock { $0.append(part) }
+            }
+        }
+        var parts = made.withLock { $0 }
+        if isOrdered {
+            parts.sort(by: (a: ParallelPart<P>, b: ParallelPart<P>) => a.start < b.start)
+        }
+        return parts.map { $0.value }
+    }
+
+    /// Runs the body for each element, in no order.
+    ///
+    /// ```sable
+    /// let most = Atomic(0)
+    /// [3, 8, 5].parallel.forEach { n in most.max(n) }
+    /// assert(most.load() == 8)
+    /// ```
+    public fn forEach<E: Error>(_ body: @Sendable (Source.Reader.Element) throws(E) -> Void) throws(E) {
+        let loop = loop
+        try source.withReader { (reader: Source.Reader) throws(E) -> Void in
+            try chunks(loop) { (chunk: Range<Int>) throws(E) -> Void in
+                var i = chunk.lowerBound
+                while i < chunk.upperBound {
+                    try body(reader.read(i))
+                    i += 1
+                }
+            }
+        }
+    }
+
+    /// What the closure makes of each element, in their order.
+    ///
+    /// ```sable
+    /// assert((1...3).toArray().parallel.map { "\($0)" } == ["1", "2", "3"])
+    /// ```
+    public fn map<T: Sendable, E: Error>(_ transform: @Sendable (Source.Reader.Element) throws(E) -> T) throws(E) -> T[>..] {
+        var made: T[>..] = []
+        made.append(holes: source.count)
+        let loop = loop
+        // Each thread fills the places of its chunks: those no one has, when
+        // a closure throws, are holes yet, which the array passes over.
+        try made.withMutablePointer { (place: RawPtr<T>) throws(E) -> Void in
+            try source.withReader { (reader: Source.Reader) throws(E) -> Void in
+                try chunks(loop) { (chunk: Range<Int>) throws(E) -> Void in
+                    var i = chunk.lowerBound
+                    while i < chunk.upperBound {
+                        let value = try transform(reader.read(i))
+                        unsafe {
+                            place.initialize(to: value, at: i)
+                        }
+                        i += 1
+                    }
+                }
+            }
+        }
+        return made
+    }
+
+    /// The elements the closure says yes to.
+    ///
+    /// ```sable
+    /// assert([5, 2, 8, 1].parallel.filter { $0 > 1 } == [5, 2, 8])
+    /// ```
+    public fn filter<E: Error>(_ isIncluded: @Sendable (Source.Reader.Element) throws(E) -> Bool) throws(E) -> Source.Reader.Element[>..] {
+        let parts = try parts { (reader: Source.Reader, chunk: Range<Int>) throws(E) -> Source.Reader.Element[>..] in
+            var kept: Source.Reader.Element[>..] = []
+            var i = chunk.lowerBound
+            while i < chunk.upperBound {
+                let element = reader.read(i)
+                if try isIncluded(element) {
+                    kept.append(element)
+                }
+                i += 1
+            }
+            return kept
+        }
+        return joined(parts)
+    }
+
+    /// What the closure makes of each element, but for those it makes nothing
+    /// of.
+    ///
+    /// ```sable
+    /// assert(["1", "x", "3"].parallel.compactMap { Int.parse($0) } == [1, 3])
+    /// ```
+    public fn compactMap<T: Sendable, E: Error>(_ transform: @Sendable (Source.Reader.Element) throws(E) -> T?) throws(E) -> T[>..] {
+        let parts = try parts { (reader: Source.Reader, chunk: Range<Int>) throws(E) -> T[>..] in
+            var kept: T[>..] = []
+            var i = chunk.lowerBound
+            while i < chunk.upperBound {
+                if let value = try transform(reader.read(i)) {
+                    kept.append(value)
+                }
+                i += 1
+            }
+            return kept
+        }
+        return joined(parts)
+    }
+
+    /// What the closure makes of each element, end to end.
+    ///
+    /// ```sable
+    /// assert([1, 2].parallel.flatMap { [$0, $0 * 10] } == [1, 10, 2, 20])
+    /// ```
+    public fn flatMap<S: Sequence, E: Error>(_ transform: @Sendable (Source.Reader.Element) throws(E) -> S) throws(E) -> S.Element[>..] where S.Failure == Never, S.Element: Sendable {
+        let parts = try parts { (reader: Source.Reader, chunk: Range<Int>) throws(E) -> S.Element[>..] in
+            var made: S.Element[>..] = []
+            var i = chunk.lowerBound
+            while i < chunk.upperBound {
+                for element in try transform(reader.read(i)) {
+                    made.append(element)
+                }
+                i += 1
+            }
+            return made
+        }
+        return joined(parts)
+    }
+
+    fn joined<T>(_ parts: T[>..][>..]) -> T[>..] {
+        var count = 0
+        for part in parts {
+            count += part.count
+        }
+        var all: T[>..] = []
+        all.reserveCapacity(count)
+        for part in parts {
+            all.append(contentsOf: part)
+        }
+        return all
+    }
+
+    /// The elements put together: each thread begins with the identity and
+    /// adds elements to it one after another, and what the threads made is
+    /// combined, in order. The identity is one that combining changes nothing
+    /// with, and the combination associative; the element types may differ.
+    /// Rayon's `fold` and `reduce`, PLINQ's `Aggregate`.
+    ///
+    /// ```sable
+    /// let letters = ["a", "bc", "def"].parallel.reduce(0, { $0 + $1.count }, combine: { $0 + $1 })
+    /// assert(letters == 6)
+    /// ```
+    public fn reduce<R: Sendable, E: Error>(_ identity: R, _ accumulate: @Sendable (R, Source.Reader.Element) throws(E) -> R, combine: (R, R) throws(E) -> R) throws(E) -> R {
+        let parts = try inOrder.parts { (reader: Source.Reader, chunk: Range<Int>) throws(E) -> R in
+            var total = identity
+            var i = chunk.lowerBound
+            while i < chunk.upperBound {
+                total = try accumulate(total, reader.read(i))
+                i += 1
+            }
+            return total
+        }
+        var total = identity
+        for part in parts {
+            total = try combine(total, part)
+        }
+        return total
+    }
+
+    /// As `reduce(_:_:combine:)`, where the elements are combined as the
+    /// parts are.
+    ///
+    /// ```sable
+    /// assert([2, 3, 4].parallel.reduce(1) { $0 * $1 } == 24)
+    /// ```
+    public fn reduce<E: Error>(_ identity: Source.Reader.Element, _ combine: @Sendable (Source.Reader.Element, Source.Reader.Element) throws(E) -> Source.Reader.Element) throws(E) -> Source.Reader.Element {
+        return try reduce(identity, combine, combine: combine)
+    }
+
+    var inOrder: Parallel<Source> => Parallel<Source> { source: source, degree: degree, grain: grain, isOrdered: true }
+
+    /// What the closure makes of each element, added up.
+    ///
+    /// ```sable
+    /// assert(["a", "bcd"].parallel.sum { $0.count } == 4)
+    /// ```
+    public fn sum<N: AdditiveArithmetic & Sendable, E: Error>(of value: @Sendable (Source.Reader.Element) throws(E) -> N) throws(E) -> N {
+        let parts = try inOrder.parts { (reader: Source.Reader, chunk: Range<Int>) throws(E) -> N in
+            var total = N.zero
+            var i = chunk.lowerBound
+            while i < chunk.upperBound {
+                total = total + (try value(reader.read(i)))
+                i += 1
+            }
+            return total
+        }
+        var total = N.zero
+        for part in parts {
+            total = total + part
+        }
+        return total
+    }
+
+    /// How many elements the closure says yes to.
+    ///
+    /// ```sable
+    /// assert((0..<100).parallel.count { $0 % 3 == 0 } == 34)
+    /// ```
+    public fn count<E: Error>(where predicate: @Sendable (Source.Reader.Element) throws(E) -> Bool) throws(E) -> Int {
+        return try sum { (element: Source.Reader.Element) throws(E) -> Int in (try predicate(element)) ? 1 : 0 }
+    }
+
+    /// Where the first element the closure says yes to is, or none: no
+    /// element after one found is begun. With `unordered`, any such element.
+    ///
+    /// ```sable
+    /// assert([4, 7, 9].parallel.firstIndex { $0 % 2 == 1 } == 1)
+    /// ```
+    public fn firstIndex<E: Error>(where predicate: @Sendable (Source.Reader.Element) throws(E) -> Bool) throws(E) -> Int? {
+        let found = Atomic<Int>(Int.max)
+        let loop = loop
+        let anyWill = !isOrdered
+        try source.withReader { (reader: Source.Reader) throws(E) -> Void in
+            try chunks(loop) { (chunk: Range<Int>) throws(E) -> Void in
+                var i = chunk.lowerBound
+                while i < chunk.upperBound {
+                    // One found before this; or, if any will do, at all.
+                    let least = found.load(ordering: .Relaxed)
+                    if least < i || (anyWill && least != Int.max) {
+                        return
+                    }
+                    if try predicate(reader.read(i)) {
+                        found.min(i)
+                        loop.stop()
+                        return
+                    }
+                    i += 1
+                }
+            }
+        }
+        let index = found.load()
+        return index == Int.max ? none : index
+    }
+
+    /// The first element the closure says yes to, or none; with `unordered`,
+    /// any.
+    ///
+    /// ```sable
+    /// assert((1..<1_000_000).parallel.first { $0 % 977 == 0 } == 977)
+    /// ```
+    public fn first<E: Error>(where predicate: @Sendable (Source.Reader.Element) throws(E) -> Bool) throws(E) -> Source.Reader.Element? {
+        guard let index = try firstIndex(where: predicate) else {
+            return none
+        }
+        return source.withReader { $0.read(index) }
+    }
+
+    /// Whether the closure says yes to any element. Once it has, no more are
+    /// begun.
+    ///
+    /// ```sable
+    /// assert(![1, 3].parallel.contains { $0 % 2 == 0 })
+    /// ```
+    public fn contains<E: Error>(where predicate: @Sendable (Source.Reader.Element) throws(E) -> Bool) throws(E) -> Bool {
+        return try unordered.firstIndex(where: predicate) != none
+    }
+
+    /// Whether the closure says yes to every element. Once it has said no, no
+    /// more are begun.
+    ///
+    /// ```sable
+    /// assert([1, 3].parallel.allSatisfy { $0 % 2 == 1 })
+    /// ```
+    public fn allSatisfy<E: Error>(_ predicate: @Sendable (Source.Reader.Element) throws(E) -> Bool) throws(E) -> Bool {
+        return !(try contains { (element: Source.Reader.Element) throws(E) -> Bool in !(try predicate(element)) })
+    }
+
+    /// The elements in the order the closure says ('a' before 'b' when it is
+    /// true): stable.
+    ///
+    /// ```sable
+    /// let words = ["pear", "fig", "apple"].parallel.sorted(by: { $0.count < $1.count })
+    /// assert(words == ["fig", "pear", "apple"])
+    /// ```
+    public fn sorted(by before: @escaping @Sendable (Source.Reader.Element, Source.Reader.Element) -> Bool) -> Source.Reader.Element[>..] {
+        var elements = map { $0 }
+        elements.parallelSort(degree: degree, by: before)
+        return elements
+    }
+}
+
+extension Parallel where Source.Reader.Element: AdditiveArithmetic {
+    /// The elements added up.
+    ///
+    /// ```sable
+    /// assert((1..<101).parallel.sum() == 5050)
+    /// ```
+    public fn sum() -> Source.Reader.Element {
+        return sum { $0 }
+    }
+}
+
+extension Parallel where Source.Reader.Element: Comparable {
+    /// The least element, the first of those equal; none if there are none.
+    ///
+    /// ```sable
+    /// assert([3, 1, 2].parallel.min() == 1)
+    /// ```
+    public fn min() -> Source.Reader.Element? {
+        return best { $1 < $0 }
+    }
+
+    /// The greatest element, the last of those equal; none if there are none.
+    ///
+    /// ```sable
+    /// assert([3, 1, 2].parallel.max() == 3)
+    /// ```
+    public fn max() -> Source.Reader.Element? {
+        return best { !($1 < $0) }
+    }
+
+    fn best(_ isBetter: @Sendable (Source.Reader.Element, Source.Reader.Element) -> Bool) -> Source.Reader.Element? {
+        let parts = inOrder.parts { (reader: Source.Reader, chunk: Range<Int>) -> Source.Reader.Element in
+            var best = reader.read(chunk.lowerBound)
+            var i = chunk.lowerBound + 1
+            while i < chunk.upperBound {
+                let element = reader.read(i)
+                if isBetter(best, element) {
+                    best = element
+                }
+                i += 1
+            }
+            return best
+        }
+        guard var best = parts.first else {
+            return none
+        }
+        for part in parts[1...] {
+            if isBetter(best, part) {
+                best = part
+            }
+        }
+        return best
+    }
+
+    /// The elements in order, least first: stable.
+    ///
+    /// ```sable
+    /// assert([3, 1, 2].parallel.sorted() == [1, 2, 3])
+    /// ```
+    public fn sorted() -> Source.Reader.Element[>..] {
+        var elements = map { $0 }
+        elements.parallelSort(degree: degree)
+        return elements
+    }
+}
+
+// What a chunk made, and where it starts.
+struct ParallelPart<P> {
+    let start: Int
+    let value: P
+}

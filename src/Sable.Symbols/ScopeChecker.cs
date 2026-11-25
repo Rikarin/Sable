@@ -38,23 +38,47 @@ internal static class ScopeChecker {
     static bool IsThreads(Symbol? type, string name) =>
         type is NamedTypeSymbol { ContainingSymbol: ModuleSymbol { Name: "Sable.Concurrency" } } named && named.Name == name;
 
-    public static void Check(BoundNode body, FunctionSymbol function, DiagnosticBag diagnostics) => Visit(body, function, body, diagnostics);
+    public static void Check(BoundNode body, FunctionSymbol function, DiagnosticBag diagnostics) => Visit(body, function, body, null, diagnostics);
 
-    /// <summary>Every scope in a function's body, and in those of the closures and local functions inside it, each its own function.</summary>
-    static void Visit(BoundNode node, Symbol function, BoundNode body, DiagnosticBag diagnostics) {
+    /// <summary>
+    ///     The closure of the innermost 'Thread.scope' around some code, the
+    ///     function that calls it and that function's body; whether the code
+    ///     is in a closure inside the scope's, and whether it may run more
+    ///     than once.
+    /// </summary>
+    sealed record Scope(BoundClosure Closure, Symbol Function, BoundNode Body, bool Nested = false, bool Repeated = false);
+
+    static void Visit(BoundNode node, Symbol function, BoundNode body, Scope? scope, DiagnosticBag diagnostics) {
         switch (node) {
             case BoundClosure closure:
                 (function, body) = (closure.Symbol, closure.Body);
+                scope = scope is null ? null : scope with { Nested = true };
                 break;
 
             case BoundLocalFunction { Body: { } local } declared:
                 (function, body) = (declared.Symbol, local);
+                scope = scope is null ? null : scope with { Nested = true };
+                break;
+
+            case BoundWhile or BoundRepeat or BoundForEach or BoundDefer when scope is not null:
+                scope = scope with { Repeated = true };
                 break;
 
             case BoundCall { Function: var called } call when IsScope(called):
+                foreach (var child in call.Children) {
+                    if (child is BoundExpression argument && Unwrapped(argument) is BoundClosure closure) {
+                        Visit(closure.Body, closure.Symbol, closure.Body, new Scope(closure, function, body), diagnostics);
+                    } else {
+                        Visit(child, function, body, scope, diagnostics);
+                    }
+                }
+
+                return;
+
+            case BoundCall { Function: var called } call when IsScopedSpawn(called):
                 foreach (var argument in call.Arguments) {
-                    if (Unwrapped(argument) is BoundClosure scope) {
-                        CheckScope(scope, function, body, diagnostics);
+                    if (Unwrapped(argument) is BoundClosure closure) {
+                        CheckThread(call, closure, scope, diagnostics);
                     }
                 }
 
@@ -62,65 +86,59 @@ internal static class ScopeChecker {
         }
 
         foreach (var child in node.Children) {
-            Visit(child, function, body, diagnostics);
+            Visit(child, function, body, scope, diagnostics);
         }
     }
 
     static BoundExpression Unwrapped(BoundExpression expression) =>
         expression is BoundConversion conversion ? Unwrapped(conversion.Operand) : expression;
 
-    /// <summary>A thread's closure in a scope, whose receiver is the scope's own; whether it is spawned where it may run more than once.</summary>
-    sealed record Spawned(BoundClosure Closure, bool Own, bool Nested, bool Repeated);
-
-    static void CheckScope(BoundClosure scope, Symbol function, BoundNode body, DiagnosticBag diagnostics) {
-        var spawned = new List<Spawned>();
-        Collect(scope.Body, scope, false, false, spawned);
-        foreach (var thread in spawned) {
-            var reported = new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
-            var inside = Owners(thread.Closure);
-            var listed = thread.Closure.Captures.Select(static c => c.Symbol).ToHashSet(ReferenceEqualityComparer.Instance);
-            foreach (var node in Descendants(thread.Closure.Body)) {
-                if (Variable(node) is { } variable && variable.ContainingSymbol is { } owner && !inside.Contains(owner) && !listed.Contains(variable)
-                    && !InUnsafe(node.Syntax) && reported.Add(variable) && Why(variable, thread, scope, function, body) is { } reason) {
-                    diagnostics.Error(
-                        ErrorCode.ERR_TaskCaptureNotSendable,
-                        node.Syntax.Span,
-                        $"the thread cannot share '{variable.Name}', a 'var' of the code around it: {reason}; "
-                        + $"copy it into a 'let' to capture, or capture its value in a capture list, '[{variable.Name} = {variable.Name}]'"
-                    );
-                }
+    static void CheckThread(BoundCall spawn, BoundClosure thread, Scope? scope, DiagnosticBag diagnostics) {
+        var reported = new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
+        var inside = Owners(thread);
+        var listed = thread.Captures.Select(static c => c.Symbol).ToHashSet(ReferenceEqualityComparer.Instance);
+        foreach (var node in Descendants(thread.Body)) {
+            if (Variable(node) is { } variable && variable.ContainingSymbol is { } owner && !inside.Contains(owner) && !listed.Contains(variable)
+                && !InUnsafe(node.Syntax) && reported.Add(variable) && Why(variable, spawn, thread, scope) is { } reason) {
+                diagnostics.Error(
+                    ErrorCode.ERR_TaskCaptureNotSendable,
+                    node.Syntax.Span,
+                    $"the thread cannot share '{variable.Name}', a 'var' of the code around it: {reason}; "
+                    + $"copy it into a 'let' to capture, or capture its value in a capture list, '[{variable.Name} = {variable.Name}]'"
+                );
             }
         }
     }
 
     /// <summary>Why a 'var' that a thread's closure captures is not that thread's alone; null where it is.</summary>
-    static string? Why(Symbol variable, Spawned thread, BoundClosure scope, Symbol function, BoundNode body) {
-        if (!ReferenceEquals(variable.ContainingSymbol, function)) {
-            return ReferenceEquals(variable.ContainingSymbol, scope.Symbol)
+    static string? Why(Symbol variable, BoundCall spawn, BoundClosure thread, Scope? scope) {
+        if (scope is not { Nested: false } || spawn.Receiver is not { } receiver
+            || Unwrapped(receiver) is not BoundParameterAccess { Parameter: var parameter } || !ReferenceEquals(parameter.ContainingSymbol, scope.Closure.Symbol)) {
+            return "the thread is not spawned on a scope in the closure that 'Thread.scope' gave it to";
+        }
+
+        if (!ReferenceEquals(variable.ContainingSymbol, scope.Function)) {
+            return ReferenceEquals(variable.ContainingSymbol, scope.Closure.Symbol)
                 ? "it ends with the scope's closure, before the thread has"
                 : "it is one of a function further out than the one that calls 'Thread.scope'";
         }
 
-        if (!thread.Own || thread.Nested) {
-            return "the thread is not spawned on this scope in the scope's own closure";
-        }
-
-        if (thread.Repeated) {
+        if (scope.Repeated) {
             return "the thread is spawned in a loop, so that several would change it at once";
         }
 
-        foreach (var node in Descendants(scope.Body, except: thread.Closure)) {
+        foreach (var node in Descendants(scope.Closure.Body, except: thread)) {
             if (ReferenceEquals(Variable(node), variable)) {
                 return "the scope uses it elsewhere, while the thread may be changing it";
             }
 
             // A reference made outside may be to it.
-            if (node is BoundLocalAccess { Local: { Type: ReferenceTypeSymbol } reference } && !ReferenceEquals(reference.ContainingSymbol, scope.Symbol)) {
+            if (node is BoundLocalAccess { Local: { Type: ReferenceTypeSymbol } reference } && !ReferenceEquals(reference.ContainingSymbol, scope.Closure.Symbol)) {
                 return $"the scope uses '{reference.Name}', a reference, which may be to it";
             }
         }
 
-        foreach (var node in Descendants(body, except: scope)) {
+        foreach (var node in Descendants(scope.Body, except: scope.Closure)) {
             if (node is BoundClosure or BoundLocalFunction && Descendants(node).Any(n => ReferenceEquals(Variable(n), variable))) {
                 return "another closure of the function uses it, which the scope may call";
             }
@@ -136,33 +154,6 @@ internal static class ScopeChecker {
             BoundParameterAccess { Parameter: { Modifier: ParameterModifier.InOut } parameter } => parameter,
             _ => null,
         };
-
-    static void Collect(BoundNode node, BoundClosure scope, bool nested, bool repeated, List<Spawned> spawned) {
-        switch (node) {
-            case BoundCall call when IsScopedSpawn(call.Function):
-                foreach (var argument in call.Arguments) {
-                    if (Unwrapped(argument) is BoundClosure closure) {
-                        var own = call.Receiver is { } receiver && Unwrapped(receiver) is BoundParameterAccess { Parameter: var parameter }
-                            && ReferenceEquals(parameter.ContainingSymbol, scope.Symbol);
-                        spawned.Add(new(closure, own, nested, repeated));
-                    }
-                }
-
-                break;
-
-            case BoundWhile or BoundRepeat or BoundForEach or BoundDefer:
-                repeated = true;
-                break;
-
-            case BoundClosure or BoundLocalFunction:
-                nested = true;
-                break;
-        }
-
-        foreach (var child in node.Children) {
-            Collect(child, scope, nested, repeated, spawned);
-        }
-    }
 
     /// <summary>The closure's own symbol, and those of the closures and local functions inside it.</summary>
     static HashSet<Symbol> Owners(BoundClosure closure) {

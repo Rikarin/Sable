@@ -1,0 +1,99 @@
+module Sable.Concurrency
+
+/// What `Parallel` divides between threads: a count of elements, any of which
+/// can be had by its number, from any thread. An array's elements
+/// (`ParallelElements`) and a range's numbers (`ParallelRange`).
+public protocol ParallelSource {
+    associatedtype Reader: ParallelReader
+
+    /// How many elements there are.
+    var count: Int { get }
+
+    /// Runs the body with what reads them, which is of use while it runs.
+    fn withReader<R, E: Error>(_ body: (Reader) throws(E) -> R) throws(E) -> R
+}
+
+/// Reads a `ParallelSource`'s elements: a plain value, that each thread has a
+/// copy of.
+public protocol ParallelReader {
+    associatedtype Element: Sendable
+
+    /// The element with the number, which is of the source's count.
+    fn read(_ index: Int) -> Element
+}
+
+/// An array's elements, where they lie: `array.parallel`'s source.
+public struct ParallelElements<Element: Sendable>: ParallelSource {
+    let elements: Element[:]
+
+    public var count: Int => elements.count
+
+    public fn withReader<R, E: Error>(_ body: (ParallelElementsReader<Element>) throws(E) -> R) throws(E) -> R {
+        // Each thread reads them by address, so that the array itself is
+        // shared with none, and stays counted as it was; what the elements
+        // hold is shared.
+        return try elements.withPointer { (start: RawPtr<Element>) throws(E) -> R in
+            var i = 0
+            while i < elements.count {
+                unsafe {
+                    Runtime.share(start.load(at: i))
+                }
+                i += 1
+            }
+            return try body(ParallelElementsReader<Element> { start: start })
+        }
+    }
+}
+
+/// Reads an array's elements.
+public struct ParallelElementsReader<Element: Sendable>: ParallelReader {
+    let start: RawPtr<Element>
+
+    public fn read(_ index: Int) -> Element {
+        unsafe {
+            return start.load(at: index)
+        }
+    }
+}
+
+/// A range's numbers: `range.parallel`'s source.
+public struct ParallelRange: ParallelSource {
+    let lowerBound: Int
+
+    public let count: Int
+
+    public fn withReader<R, E: Error>(_ body: (ParallelRangeReader) throws(E) -> R) throws(E) -> R {
+        return try body(ParallelRangeReader { lowerBound: lowerBound })
+    }
+}
+
+/// Reads a range's numbers.
+public struct ParallelRangeReader: ParallelReader {
+    let lowerBound: Int
+
+    public fn read(_ index: Int) -> Int {
+        return lowerBound + index
+    }
+}
+
+extension<Element: Sendable> Element[:] {
+    /// The elements, to be gone through by several threads at once: .NET's
+    /// `AsParallel()`, Rayon's `par_iter()`.
+    ///
+    /// ```sable
+    /// let squares = [1, 2, 3].parallel.map { $0 * $0 }
+    /// assert(squares == [1, 4, 9])
+    /// ```
+    public var parallel: Parallel<ParallelElements<Element>> =>
+        Parallel<ParallelElements<Element>> { source: ParallelElements<Element> { elements: self }, degree: 0, grain: 1, isOrdered: true }
+}
+
+extension Range where Bound == Int {
+    /// The numbers, to be gone through by several threads at once.
+    ///
+    /// ```sable
+    /// assert((0..<1000).parallel.filter { $0 % 100 == 0 }.count == 10)
+    /// ```
+    public var parallel: Parallel<ParallelRange> =>
+        Parallel<ParallelRange> { source: ParallelRange { lowerBound: lowerBound, count: isEmpty ? 0 : upperBound - lowerBound }, degree: 0, grain: 1, isOrdered: true }
+}

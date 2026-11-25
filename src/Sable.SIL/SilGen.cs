@@ -12473,14 +12473,20 @@ public sealed partial class SilGen {
             }
 
             if (call.Arguments.Length == 1) {
-                return LowerType(call.Type) is { } type ? Emit(new BuiltinInst(builtin, type, address)) : Missing(call, $"the type '{call.Type.ToDisplayString()}' in raw memory");
+                // A Void, or a Never, is nothing in memory.
+                return LowerType(call.Type) is not { } type ? Missing(call, $"the type '{call.Type.ToDisplayString()}' in raw memory")
+                    : type == SilType.Unit ? UnitValue.Instance
+                    : Emit(new BuiltinInst(builtin, type, address));
             }
 
             if (Expression(call.Arguments[1]) is not { } value) {
                 return null;
             }
 
-            Emit(new BuiltinInst(builtin, SilType.Unit, address, Owned(value)));
+            if (value.Type != SilType.Unit) {
+                Emit(new BuiltinInst(builtin, SilType.Unit, address, Owned(value)));
+            }
+
             return UnitValue.Instance;
         }
 

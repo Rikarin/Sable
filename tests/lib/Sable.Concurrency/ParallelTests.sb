@@ -1,0 +1,252 @@
+module ParallelTests
+
+// Parallel, its sources, ArrayChunk, and an array changed in place by several
+// threads (Sable.Concurrency).
+
+import Sable.Concurrency
+import Sable.Testing
+import Sable.Time
+
+struct Bad: Error {
+    let number: Int
+}
+
+struct Person: Sendable {
+    let name: String
+    let age: Int
+}
+
+let sizes = [0, 1, 2, 5, 64, 1000, 30_000]
+
+fn numbers(_ count: Int) -> Int[>..] {
+    return (0..<count).map { ($0 &* 7919 &+ 13) % 10_007 }
+}
+
+@test
+fn everyOperationIsTheSequentialOne() {
+    for count in sizes {
+        let xs = numbers(count)
+        assertEqual(xs.parallel.count, count)
+        assertEqual(xs.parallel.map { $0 * 2 }, xs.map { $0 * 2 })
+        assertEqual(xs.parallel.filter { $0 % 3 == 0 }, xs.filter { $0 % 3 == 0 })
+        assertEqual(xs.parallel.compactMap { $0 % 2 == 0 ? "\($0)" : none }, xs.compactMap { $0 % 2 == 0 ? "\($0)" : none })
+        assertEqual(xs.parallel.flatMap { [$0, -$0] }, xs.flatMap { [$0, -$0] })
+        assertEqual(xs.parallel.sum(), xs.sum())
+        assertEqual(xs.parallel.sum { $0 / 2 }, xs.map { $0 / 2 }.sum())
+        assertEqual(xs.parallel.reduce(0) { $0 ^ $1 }, xs.reduce(0) { $0 ^ $1 })
+        assertEqual(xs.parallel.min(), xs.min())
+        assertEqual(xs.parallel.max(), xs.max())
+        assertEqual(xs.parallel.count { $0 > 5000 }, xs.filter { $0 > 5000 }.count)
+        assertEqual(xs.parallel.sorted(), xs.sorted())
+        assertEqual(xs.parallel.first { $0 > 9000 }, xs.first(where: { $0 > 9000 }))
+        assertEqual(xs.parallel.contains { $0 == 13 }, xs.contains(13))
+        assertEqual(xs.parallel.allSatisfy { $0 < 10_007 }, true)
+        let seen = Atomic(0)
+        xs.parallel.forEach { seen.add($0) }
+        assertEqual(seen.load(), xs.sum())
+    }
+}
+
+@test
+fn aRangeIsGoneThrough() {
+    assertEqual((10..<20).parallel.map { $0 }, (10..<20).toArray())
+    assertEqual((5..<5).parallel.sum(), 0)
+    assertEqual((0..<100).parallel.withDegree(2).withGrain(9).filter { $0 % 10 == 0 }.count, 10)
+    assertEqual((-50..<51).parallel.sum(), 0)
+}
+
+@test
+fn valuesWithReferencesAreSafelyShared() {
+    let people = (0..<5000).map { Person { name: "person \($0 % 100)", age: $0 % 90 } }
+    let names = people.parallel.filter { $0.age > 80 }.map { $0.name }
+    assertEqual(names, people.filter { $0.age > 80 }.map { $0.name })
+    let sorted = people.parallel.sorted(by: { $0.name < $1.name })
+    let expected = people.sorted(by: { $0.name < $1.name })
+    // Stable: those of one name keep their order.
+    assertEqual(sorted.map { "\($0.name) \($0.age)" }, expected.map { "\($0.name) \($0.age)" })
+    let one = "the same object \(people.count)"
+    let same = (0..<2000).map { n in one }
+    assertEqual(same.parallel.map { $0 + "!" }.count, 2000)
+    assertEqual(same.parallel.sum { $0.count }, 2000 * one.count)
+}
+
+@test
+fn unorderedResultsAreAllThere() {
+    let xs = numbers(20_000)
+    let found = xs.parallel.unordered.filter { $0 % 7 == 0 }
+    assertEqual(found.sorted(), xs.filter { $0 % 7 == 0 }.sorted())
+    let first = xs.parallel.unordered.first { $0 % 7 == 0 }
+    assert(first! % 7 == 0)
+    assert(xs.parallel.unordered.firstIndex { $0 > 20_000 } == none)
+}
+
+@test
+fn aReductionsPartsAreCombinedInOrder() {
+    let text = (0..<3000).parallel.reduce("", { $0 + "\($1 % 10)" }, combine: { $0 + $1 })
+    let expected = (0..<3000).map { "\($0 % 10)" }.joined(separator: "")
+    assertEqual(text, expected)
+    // So that a sum of floats is the same each time.
+    let floats = numbers(50_000).map { 1.0 / F64($0 + 1) }
+    let sum = floats.parallel.withDegree(4).sum()
+    for _ in 0..<5 {
+        assertEqual(floats.parallel.withDegree(4).sum(), sum)
+    }
+}
+
+@test
+fn theFirstIsFoundWithoutTheRest() {
+    let looked = Atomic(0)
+    let found = (0..<10_000_000).parallel.first { n in
+        looked.add(1)
+        return n == 1000
+    }
+    assertEqual(found, 1000)
+    assert(looked.load() < 10_000_000)
+    for target in [0, 1, 777, 29_999] {
+        assertEqual((0..<30_000).parallel.firstIndex { $0 >= target }, target)
+    }
+    let checked = Atomic(0)
+    assert((0..<10_000_000).parallel.contains { n in
+        checked.add(1)
+        return n % 1000 == 999
+    })
+    assert(checked.load() < 10_000_000)
+    assert(!(0..<10_000_000).parallel.allSatisfy { $0 < 10 })
+}
+
+@test
+fn anErrorIsThrownAndNothingIsLeftBehind() {
+    let xs = numbers(20_000)
+    let error = thrown {
+        _ = try xs.parallel.map { (n: Int) throws -> String in
+            if n == 5000 {
+                throw Bad { number: n }
+            }
+            return "text \(n)"
+        }
+    } as? Bad
+    assertEqual(error?.number, 5000)
+    assert(thrown {
+        _ = try xs.parallel.filter { (n: Int) throws -> Bool in throw Bad { number: n } }
+    } is Bad)
+    assert(thrown {
+        _ = try xs.parallel.reduce(0, { (total: Int, n: Int) throws -> Int in throw Bad { number: n } }, combine: { $0 + $1 })
+    } is Bad)
+    assert(thrown {
+        _ = try xs.parallel.first { (n: Int) throws -> Bool in throw Bad { number: n } }
+    } is Bad)
+    assert(thrown {
+        try xs.parallel.forEach { (n: Int) throws -> Void in throw Bad { number: n } }
+    } is Bad)
+}
+
+@test
+fn anArrayIsChangedWhereItIs() {
+    for count in sizes {
+        var xs = numbers(count)
+        let before = xs
+        xs.parallelModify { $0 += 1 }
+        assertEqual(xs, before.map { $0 + 1 })
+        var texts = before.map { "\($0)" }
+        texts.parallelModify { $0 += "!" }
+        assertEqual(texts, before.map { "\($0)!" })
+    }
+}
+
+@test
+fn noOtherHoldersArrayIsChanged() {
+    var xs = numbers(1000)
+    let kept = xs
+    xs.parallelModify { $0 = -1 }
+    assertEqual(kept, numbers(1000))
+    assert(xs.allSatisfy { $0 == -1 })
+}
+
+@test
+fn anArrayIsChangedAChunkAtATime() {
+    var xs = (0..<100).toArray()
+    xs.parallelModifyChunks(of: 8) { chunk in
+        assert(chunk.startIndex % 8 == 0)
+        assert(chunk.count == 8 || (chunk.startIndex == 96 && chunk.count == 4))
+        chunk.swapAt(0, chunk.count - 1)
+        chunk[1] = chunk[1] * 10
+        chunk.swapAt(2, 2)
+    }
+    assertEqual(xs[0], 7)
+    assertEqual(xs[7], 0)
+    assertEqual(xs[9], 90)
+    assertEqual(xs[99], 96)
+    assertEqual(xs[10], 10)
+    var whole = (0..<100).toArray()
+    whole.parallelModifyChunks(of: 0, degree: 3, grain: 10) { chunk in
+        chunk.modifyEach { $0 = chunk.startIndex }
+    }
+    assert(whole.isSorted())
+}
+
+@test
+fn aChunkKeptIsEmpty() {
+    var xs = [1, 2, 3]
+    let kept = Mutex<Int>(0)
+    xs.parallelModifyChunks(of: 3) { chunk in
+        kept.withLock { $0 = chunk.count }
+    }
+    assertEqual(kept.withLock { $0 }, 3)
+    unsafe {
+        var chunk: ArrayChunk<Int>? = none
+        xs.parallelModifyChunks(of: 3) { unsafe { chunk = $0 } }
+        assertEqual(chunk!.count, 0)
+    }
+}
+
+@test
+fn anErrorLeavesEveryElementThere() {
+    var texts = (0..<2000).map { "text \($0)" }
+    let error = thrown {
+        try texts.parallelModify { (text: inout String) throws -> Void in
+            text += "."
+            if text == "text 1500." {
+                throw Bad { number: 1500 }
+            }
+        }
+    } as? Bad
+    assertEqual(error?.number, 1500)
+    assert(texts.enumerated().allSatisfy { $0.1 == "text \($0.0)" || $0.1 == "text \($0.0)." })
+}
+
+@test
+fn anArrayIsSortedByHoweverManyThreads() {
+    for degree in [0, 1, 2, 3, 4, 8] {
+        for count in [0, 1, 4095, 4096, 10_000, 100_000] {
+            let xs = numbers(count)
+            var sorted = xs
+            sorted.parallelSort(degree: degree)
+            assertEqual(sorted, xs.sorted())
+            var down = xs
+            down.parallelSort(degree: degree, by: { $0 / 10 > $1 / 10 })
+            assertEqual(down, xs.sorted(by: { $0 / 10 > $1 / 10 }))
+        }
+    }
+    var ordered = (0..<50_000).toArray()
+    ordered.parallelSort(degree: 4)
+    assert(ordered.isSorted())
+    var reversed = (0..<50_000).map { 50_000 - $0 }
+    reversed.parallelSort(degree: 4)
+    assert(reversed.isSorted())
+    var texts = numbers(20_000).map { "\($0)" }
+    let expected = texts.sorted()
+    texts.parallelSort(degree: 4)
+    assertEqual(texts, expected)
+}
+
+// What the body throws; an error of no other, if it throws nothing.
+struct Nothing: Error { }
+
+fn thrown(_ body: () throws -> Void) -> any Error {
+    do {
+        try body()
+        return Nothing()
+    } catch {
+        return error
+    }
+}

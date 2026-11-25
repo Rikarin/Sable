@@ -1,0 +1,179 @@
+module TaskLocalTests
+
+// TaskLocal (Sable.Concurrency).
+
+import Sable.Concurrency
+import Sable.Testing
+import Sable.Time
+
+struct Failed: Error { }
+
+@immutable
+final class Tracked {
+    let gone: Atomic<Int>
+    let name: String
+
+    init(_ name: String, _ gone: Atomic<Int>) {
+        self.name = name
+        self.gone = gone
+    }
+
+    deinit { gone.add(1) }
+}
+
+@test
+fn aValueIsBoundForAsLongAsTheBodyRuns() {
+    let local = TaskLocal(0)
+    assert(!local.isBound && local.value == 0)
+    let inside = local.withValue(1) {
+        assert(local.isBound)
+        return local.value + local.withValue(10) { local.value }
+    }
+    assertEqual(inside, 11)
+    assert(!local.isBound && local.value == 0)
+}
+
+@test
+fn whatAnErrorLeavesIsUnbound() {
+    let local = TaskLocal("none")
+    assert(thrown {
+        try local.withValue("bound") { () throws -> Void in throw Failed() }
+    } is Failed)
+    assertEqual(local.value, "none")
+}
+
+@test
+async fn aValueStaysBoundAcrossWaits() {
+    let local = TaskLocal(0)
+    await local.withValue(5) {
+        for _ in 0..<20 {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1000)
+            assertEqual(local.value, 5)
+        }
+        let blocking = await Task.blocking { local.value }
+        assertEqual(blocking, 5)
+    }
+    assertEqual(local.value, 0)
+}
+
+actor Keeper {
+    let local: TaskLocal<Int>
+    init(_ local: TaskLocal<Int>) { self.local = local }
+    fn read() -> Int => local.value
+}
+
+@test
+async fn anActorsCallHasItsCallersValue() {
+    let local = TaskLocal(0)
+    let keeper = Keeper(local)
+    let read = await local.withValue(8) { await keeper.read() }
+    assertEqual(read, 8)
+}
+
+@test
+async fn childrenHaveTheirParentsValue() {
+    let local = TaskLocal("none")
+    let seen = await local.withValue("bound") {
+        async let first = local.value
+        let second = Task.spawn {
+            await Task.yield()
+            return await Task.spawn { local.value }.value
+        }
+        let third = await withTaskGroup(of: String.self) { group in
+            group.spawn { local.value }
+            return await group.next()!
+        }
+        return [await first, await second.value, third]
+    }
+    assertEqual(seen, ["bound", "bound", "bound"])
+}
+
+@test
+async fn aDetachedTaskAndAThreadBeginWithNone() {
+    let local = TaskLocal(0)
+    let seen = await local.withValue(1) {
+        [await Task.detached { local.value }.value, await Thread.spawn { local.value }.value()]
+    }
+    assertEqual(seen, [0, 0])
+}
+
+@test
+async fn aChildKeepsItsValueOnceTheBindingHasEnded() {
+    let gone = Atomic(0)
+    let local = TaskLocal<Tracked?>(none)
+    let opened = AsyncSemaphore(permits: 0)
+    let child = local.withValue(Tracked("kept", gone)) {
+        Task.spawn {
+            await opened.acquire()
+            return local.value!.name
+        }
+    }
+    assertEqual(gone.load(), 0)
+    assert(local.value == none)
+    await opened.release()
+    assertEqual(await child.value, "kept")
+    // The child's was the last.
+    await Task.settle()
+    assertEqual(gone.load(), 1)
+}
+
+@test
+async fn aChildsBindingIsItsOwn() {
+    let local = TaskLocal(0)
+    await local.withValue(1) {
+        let child = Task.spawn {
+            local.withValue(2) { local.value }
+        }
+        assertEqual(await child.value, 2)
+        assertEqual(local.value, 1)
+    }
+}
+
+@test
+fn severalAreBoundApart() {
+    let a = TaskLocal(0)
+    let b = TaskLocal("none")
+    a.withValue(1) {
+        b.withValue("b") {
+            a.withValue(2) {
+                assertEqual("\(a.value)\(b.value)", "2b")
+            }
+            assertEqual("\(a.value)\(b.value)", "1b")
+        }
+        assertEqual("\(a.value)\(b.value)", "1none")
+    }
+}
+
+@test
+fn aParallelLoopHasTheValueWhereItBegan() {
+    let local = TaskLocal(0)
+    let sum = local.withValue(3) { (0..<1000).parallel.sum { n in local.value } }
+    assertEqual(sum, 3000)
+}
+
+// One suspended for good, dropped as the program ends, lets go of its value.
+@test
+async fn aTaskThatNeverEndsLetsGoOfItsValue() {
+    let local = TaskLocal<Tracked?>(none)
+    let gone = Atomic(0)
+    _ = Task.detached {
+        await local.withValue(Tracked("stuck", gone)) {
+            await WaitList().park()
+        }
+    }
+    await Task.settle()
+    assertEqual(gone.load(), 0)
+}
+
+// What the body throws; an error of no other, if it throws nothing.
+struct Nothing: Error { }
+
+fn thrown(_ body: () throws -> Void) -> any Error {
+    do {
+        try body()
+        return Nothing()
+    } catch {
+        return error
+    }
+}

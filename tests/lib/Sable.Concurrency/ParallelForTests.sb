@@ -1,0 +1,273 @@
+module ParallelForTests
+
+// parallelFor, parallelForChunks, parallelInvoke and parallelForEach
+// (Sable.Concurrency).
+
+import Sable.Concurrency
+import Sable.Testing
+import Sable.Time
+
+struct Bad: Error {
+    let number: Int
+}
+
+@test
+fn eachNumberIsDoneOnce() {
+    for count in [0, 1, 2, 3, 17, 1000, 10_000] {
+        let done: Mutex<Int[>..]> = Mutex([])
+        parallelFor(5..<5 + count) { i in done.withLock { $0.append(i) } }
+        assertEqual(done.withLock { $0.sorted() }, (5..<5 + count).toArray())
+    }
+}
+
+@test
+fn theDegreeAndTheGrainAreKeptTo() {
+    for degree in 1...4 {
+        let running = Atomic(0)
+        let most = Atomic(0)
+        let total = Atomic(0)
+        parallelForChunks(0..<200, degree: degree, grain: 7) { chunk in
+            let now = running.add(1) + 1
+            most.max(now)
+            assert(chunk.count >= 7 || chunk.upperBound == 200)
+            Thread.`yield`()
+            total.add(chunk.count)
+            running.subtract(1)
+        }
+        assertEqual(total.load(), 200)
+        assert(most.load() <= degree, "\(most.load()) ran at once")
+    }
+}
+
+@test
+fn oneThreadGoesThroughARangeInOrder() {
+    let seen: Mutex<Int[>..]> = Mutex([])
+    parallelFor(0..<50, degree: 1) { i in seen.withLock { $0.append(i) } }
+    assertEqual(seen.withLock { $0 }, (0..<50).toArray())
+}
+
+@test
+fn anErrorStopsTheLoop() {
+    let done = Atomic(0)
+    let error = thrown {
+        try parallelFor(0..<1_000_000) { (i: Int) throws -> Void in
+            done.add(1)
+            if i == 100 {
+                throw Bad { number: i }
+            }
+        }
+    } as? Bad
+    assertEqual(error?.number, 100)
+    assert(done.load() < 1_000_000)
+}
+
+@test
+fn oneOfSeveralErrorsIsThrown() {
+    let error = thrown {
+        try parallelFor(0..<100) { (i: Int) throws -> Void in throw Bad { number: i } }
+    } as? Bad
+    assert(error != none)
+}
+
+@test
+fn loopsNest() {
+    let total = Atomic(0)
+    parallelFor(0..<20) { i in
+        parallelFor(0..<20) { j in
+            parallelFor(0..<20) { k in
+                total.add(1)
+            }
+        }
+    }
+    assertEqual(total.load(), 8000)
+}
+
+@test
+async fn loopsRunInTasksOnEveryWorker() {
+    let totals = await withTaskGroup(of: Int.self) { group in
+        for n in 0..<30 {
+            group.spawn {
+                (0..<500).parallel.sum { $0 } + n
+            }
+        }
+        var sum = 0
+        for await total in group {
+            sum += total
+        }
+        return sum
+    }
+    assertEqual(totals, 124_750 * 30 + 435)
+}
+
+@test
+fn loopsRunOnThreadsThatAreNotThePools() {
+    let threads = (0..<4).map { n in
+        Thread.spawn { (0..<2000).parallel.sum { $0 } + n }
+    }
+    var sum = 0
+    for thread in threads {
+        sum += thread.join()
+    }
+    assertEqual(sum, 1_999_000 * 4 + 6)
+}
+
+@test
+async fn aLoopIsCancelledWithItsTask() {
+    let started = CountdownLatch(count: 1)
+    let done = Atomic(0)
+    let task = Task.spawn { () -> Bool in
+        do {
+            try parallelFor(0..<10_000_000) { (i: Int) throws -> Void in
+                started.countDown()
+                try Task.checkCancellation()
+                done.add(1)
+                Thread.sleep(Duration.microseconds(10))
+            }
+            return false
+        } catch {
+            return error is CancellationError
+        }
+    }
+    if Runtime.workerCount() > 0 {
+        await Task.blocking { started.wait() }
+        task.cancel()
+    } else {
+        task.cancel()
+    }
+    assert(await task.value)
+    assert(done.load() < 10_000_000)
+}
+
+@test
+fn aBodyMaySpawnTasks() async {
+    let total = Atomic(0)
+    let tasks = (0..<100).parallel.map { i in
+        Task.spawn { total.add(i) }
+    }
+    for task in tasks {
+        _ = await task.value
+    }
+    assertEqual(total.load(), 4950)
+}
+
+@test
+fn twoThreeAndFourAreInvoked() {
+    let two = parallelInvoke({ 1 }, { "two" })
+    assert(two.0 == 1 && two.1 == "two")
+    let three = parallelInvoke({ 1 }, { "two" }, { [3] })
+    assert(three.0 == 1 && three.1 == "two" && three.2 == [3])
+    let four = parallelInvoke({ 1 }, { 2 }, { 3 }, { 4 })
+    assert(four.0 + four.1 + four.2 + four.3 == 10)
+}
+
+@test
+fn aDivisionIsInvokedAgain() {
+    fn fibonacci(_ n: Int) -> Int {
+        if n < 2 {
+            return n
+        }
+        let (a, b) = parallelInvoke({ fibonacci(n - 1) }, { fibonacci(n - 2) })
+        return a + b
+    }
+    assertEqual(fibonacci(15), 610)
+}
+
+@test
+fn anInvokedErrorIsThrown() {
+    let error = thrown {
+        _ = try parallelInvoke({ () throws -> Int in throw Bad { number: 4 } }, { 5 })
+    } as? Bad
+    assertEqual(error?.number, 4)
+}
+
+@test
+async fn eachElementIsAwaitedByNoMoreThanTheDegree() throws {
+    let running = Atomic(0)
+    let most = Atomic(0)
+    let total = Atomic(0)
+    try await parallelForEach(1...30, degree: 3) { n in
+        let now = running.add(1) + 1
+        most.max(now)
+        try await Task.sleep(nanoseconds: 100_000)
+        total.add(n)
+        running.subtract(1)
+    }
+    assertEqual(total.load(), 465)
+    assert(most.load() <= 3)
+}
+
+@test
+async fn anAsyncBodysErrorCancelsTheOthers() {
+    let cancelled = Atomic(0)
+    let begun = Atomic(0)
+    do {
+        try await parallelForEach(0..<1000, degree: 4) { n in
+            begun.add(1)
+            if n == 3 {
+                throw Bad { number: n }
+            }
+            do {
+                try await Task.sleep(nanoseconds: 60_000_000_000)
+            } catch {
+                cancelled.add(1)
+                throw error
+            }
+        }
+        fail("it threw")
+    } catch let bad as Bad {
+        assertEqual(bad.number, 3)
+    } catch {
+        fail("another error")
+    }
+    assertEqual(cancelled.load(), 3)
+    assertEqual(begun.load(), 4)
+}
+
+@test
+async fn anAsyncLoopIsCancelledWithItsTask() {
+    let begun = AsyncSemaphore(permits: 0)
+    let task = Task.spawn { () -> Bool in
+        do {
+            try await parallelForEach(0..<100, degree: 2) { n in
+                await begun.release()
+                try await Task.sleep(nanoseconds: 60_000_000_000)
+            }
+            return false
+        } catch {
+            return error is CancellationError
+        }
+    }
+    await begun.acquire()
+    task.cancel()
+    assert(await task.value)
+}
+
+@test
+async fn anAsyncSequencesElementsAreTakenAsPlacesComeFree() throws {
+    let channel = Channel<Int>()
+    let total = Atomic(0)
+    let sending = Task.spawn {
+        for n in 0..<100 {
+            await channel.send(n)
+        }
+        await channel.close()
+    }
+    try await parallelForEach(channel, degree: 5) { n in
+        await Task.yield()
+        total.add(n)
+    }
+    await sending.value
+    assertEqual(total.load(), 4950)
+}
+
+// What the body throws; an error of no other, if it throws nothing.
+struct Nothing: Error { }
+
+fn thrown(_ body: () throws -> Void) -> any Error {
+    do {
+        try body()
+        return Nothing()
+    } catch {
+        return error
+    }
+}

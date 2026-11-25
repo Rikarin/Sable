@@ -779,9 +779,9 @@ the order their names have, with a member said twice once
 the member's metadata (`union_inject`, `union_case_metadata`,
 `union_case_payload`). An **array, slice or optional** of type parameters
 given where a conformance is required (`xs.map` of a `T[>..]`) has the
-template table of the extension that conforms it, one for the kind of type
-(`sable_register_structural_template`), which holds where its element
-conforms to what the extension asks. **`Task<T>`** is one class whatever its
+template table of the extension that conforms it ("Arrays, slices and
+optionals", above); so has a structural union of errors, known by `|`, whose
+entries ask which case a value holds and call the case's own. **`Task<T>`** is one class whatever its
 result (src/Sable.SIL/SilGen.Tasks.cs): its body writes the result where the
 task object keeps it, as its metadata lays it out.
 

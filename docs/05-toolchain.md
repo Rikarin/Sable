@@ -1191,6 +1191,17 @@ unspecialised on a loaded M1 Max (clang 10 s and 19 s of it, the passes 4 s
 and 6 s; 4 s is the prepared searches), and each build after it 2.6 s and
 2.0 s.
 
+*Why an unspecialised `-O0` binary is larger* (2.6 MB of `examples/ssg`,
+0.67 MB specialised): what each unit registers as it starts — witness
+tables, templates, boxers, describers — is named by its constructor, so the
+linker keeps every table of the library's units, and with them the entries
+(1,300 witnesses, 610 template functions), the code those call and its
+metadata, whether or not a lookup can ask for one: 1.0 MB of code for 0.44,
+0.4 MB of constants, and their symbols (1 MB). Keeping only what a program
+can look up needs the linker to drop a record whose type or protocol is
+dropped (Mach-O's `live_support`, ELF's link order), which the constructors
+do not let it. An optimised build has none of this.
+
 *Before and after*, measured with `sable` built Release on an M1 Max
 (load average 5–8), each a package's dev build: cold is an empty
 `$SABLE_HOME` and `target/`, warm a warm cache (as a release's prebuilt

@@ -2,15 +2,13 @@ module Sable.Collections
 
 /// Keys to values, in the order the keys were added — an order that
 /// removing a key closes up rather than leaving a gap in, and that can be
-/// read by position. The keys and values are arrays in that order, with a
-/// dictionary from each key to its position. Looking up, adding and
+/// read by position. It is a dictionary none of whose entries leaves a gap
+/// (Dictionary+Order.sb). Looking up, adding and
 /// changing are constant time; removing is linear, as every later position
 /// moves down one. (A `[Key: Value]` keeps its insertion order too, and
 /// removes in constant time; this is for reading and changing by position.)
 public class OrderedDictionary<Key: Hashable, Value> {
-    var orderedKeys: Key[>..] = []
-    var orderedValues: Value[>..] = []
-    var positions: [Key: Int] = [:]
+    var map: [Key: Value] = [:]
 
     /// An empty dictionary.
     public init() { }
@@ -25,77 +23,51 @@ public class OrderedDictionary<Key: Hashable, Value> {
     }
 
     /// How many keys it holds.
-    public var count: Int => orderedKeys.count
+    public var count: Int => map.count
 
     /// Whether it holds no keys.
-    public var isEmpty: Bool => orderedKeys.count == 0
+    public var isEmpty: Bool => map.count == 0
 
     /// The value for the key, or none.
-    public fn get(_ key: Key) -> Value? {
-        if let position = positions[key] {
-            return orderedValues[position]
-        }
-        return none
-    }
+    public fn get(_ key: Key) -> Value? => map[key]
 
     /// Whether the dictionary holds the key.
     public fn contains(_ key: Key) -> Bool {
-        return positions.contains(key)
+        return map.contains(key)
     }
 
     /// Where the key is in the order, or none.
     public fn index(of key: Key) -> Int? {
-        return positions[key]
+        let at = map.order(of: key)
+        return at < 0 ? none : at
     }
 
     /// Sets the key's value: a new key goes at the end, a key already there
     /// keeps its place.
     public fn set(_ key: Key, _ value: Value) {
-        // Looked up and, when it is new, added: at the end.
-        let position = positions.orInsert(key, orderedKeys.count)
-        if position < orderedKeys.count {
-            orderedValues[position] = value
-            return
-        }
-        orderedKeys.append(key)
-        orderedValues.append(value)
+        map.updateValue(value, forKey: key)
     }
 
     /// Removes the key, closing up the order behind it; its value, or none
     /// if it was not there.
     public fn remove(_ key: Key) -> Value? {
-        if let position = positions[key] {
-            let value = orderedValues[position]
-            positions.remove(key)
-            var i = position
-            while i + 1 < orderedKeys.count {
-                orderedKeys[i] = orderedKeys[i + 1]
-                orderedValues[i] = orderedValues[i + 1]
-                positions[orderedKeys[i]] = i
-                i = i + 1
-            }
-            orderedKeys.removeLast()
-            orderedValues.removeLast()
-            return value
-        }
-        return none
+        let at = map.order(of: key)
+        return at < 0 ? none : map.closeUp(at: at).1
     }
 
     /// The key at 'position' in the order; traps outside 0..<count.
     public fn key(at position: Int) -> Key {
-        return orderedKeys[position]
+        return map.orderedKey(at: position)
     }
 
     /// The value at 'position' in the order; traps outside 0..<count.
     public fn value(at position: Int) -> Value {
-        return orderedValues[position]
+        return map.orderedValue(at: position)
     }
 
     /// Removes every key.
     public fn removeAll() {
-        orderedKeys = []
-        orderedValues = []
-        positions.removeAll()
+        map.removeAll()
     }
 
     /// The key and its value put at the position, those from there on
@@ -108,24 +80,15 @@ public class OrderedDictionary<Key: Hashable, Value> {
     /// assert(ordered.keys == ["a", "b", "c"])
     /// ```
     public fn insert(_ value: Value, forKey key: Key, at position: Int) -> Bool {
-        if positions.contains(key) {
+        if map.contains(key) {
             return false
         }
-        if position < 0 || position > orderedKeys.count {
+        if position < 0 || position > map.count {
             let nothing: Int[>..] = []
             let _ = nothing[position]
         }
-        orderedKeys.append(key)
-        orderedValues.append(value)
-        var i = orderedKeys.count - 1
-        while i > position {
-            orderedKeys[i] = orderedKeys[i - 1]
-            orderedValues[i] = orderedValues[i - 1]
-            i -= 1
-        }
-        orderedKeys[position] = key
-        orderedValues[position] = value
-        reindex(from: position)
+        map.updateValue(value, forKey: key)
+        map.moveLast(to: position)
         return true
     }
 
@@ -137,9 +100,7 @@ public class OrderedDictionary<Key: Hashable, Value> {
     /// assert(key == "a" && value == 1 && ordered.keys == ["b"])
     /// ```
     public fn remove(at position: Int) -> (Key, Value) {
-        let key = orderedKeys[position]
-        let value = remove(key)!
-        return (key, value)
+        return map.closeUp(at: position)
     }
 
     /// The entries at the two positions exchanged.
@@ -147,14 +108,7 @@ public class OrderedDictionary<Key: Hashable, Value> {
         if i == j {
             return
         }
-        let key = orderedKeys[i]
-        let value = orderedValues[i]
-        orderedKeys[i] = orderedKeys[j]
-        orderedValues[i] = orderedValues[j]
-        orderedKeys[j] = key
-        orderedValues[j] = value
-        positions[orderedKeys[i]] = i
-        positions[orderedKeys[j]] = j
+        map.exchange(i, j)
     }
 
     /// The entries put in the order the closure says ('a' before 'b' when it
@@ -166,35 +120,33 @@ public class OrderedDictionary<Key: Hashable, Value> {
     /// assert(ordered.keys == ["a", "b"])
     /// ```
     public fn sort(by before: ((Key, Value), (Key, Value)) -> Bool) {
-        var order = (0..<orderedKeys.count).toArray()
-        let keys = orderedKeys
-        let values = orderedValues
-        order.sort(by: (a: Int, b: Int) => before((keys[a], values[a]), (keys[b], values[b])))
-        var sortedKeys: Key[>..] = []
-        var sortedValues: Value[>..] = []
-        sortedKeys.reserveCapacity(order.count)
-        sortedValues.reserveCapacity(order.count)
-        for at in order {
-            sortedKeys.append(keys[at])
-            sortedValues.append(values[at])
-        }
-        orderedKeys = sortedKeys
-        orderedValues = sortedValues
-        reindex(from: 0)
+        var order = (0..<map.count).toArray()
+        let held = map
+        order.sort(by: (a: Int, b: Int) => before((held.orderedKey(at: a), held.orderedValue(at: a)), (held.orderedKey(at: b), held.orderedValue(at: b))))
+        map.reorder(order)
     }
 
     /// The keys, in order.
-    public var keys: Key[>..] => orderedKeys
+    public var keys: Key[>..] {
+        get {
+            var keys: Key[>..] = []
+            keys.reserveCapacity(map.count)
+            for (key, _) in map {
+                keys.append(key)
+            }
+            return keys
+        }
+    }
 
     /// The values, in their keys' order.
-    public var values: Value[>..] => orderedValues
-
-    // Each key's position, from the one given on, as the arrays now say.
-    fn reindex(from start: Int) {
-        var i = start
-        while i < orderedKeys.count {
-            positions[orderedKeys[i]] = i
-            i += 1
+    public var values: Value[>..] {
+        get {
+            var values: Value[>..] = []
+            values.reserveCapacity(map.count)
+            for (_, value) in map {
+                values.append(value)
+            }
+            return values
         }
     }
 }
@@ -210,8 +162,8 @@ extension OrderedDictionary where Key: Comparable {
 // each key with its value, by their position in the order.
 extension OrderedDictionary: RandomAccessCollection, FromSequence<(Key, Value)> {
     /// An iterator over the entries, each key with its value, in order.
-    public fn makeIterator() -> Zip2Iterator<ArrayIterator<Key>, ArrayIterator<Value>> {
-        return zip(orderedKeys, orderedValues).makeIterator()
+    public fn makeIterator() -> DictionaryIterator<Key, Value> {
+        return map.makeIterator()
     }
 
     /// The entry at 'position' in the order; traps outside 0..<count.
@@ -223,14 +175,14 @@ extension OrderedDictionary: RandomAccessCollection, FromSequence<(Key, Value)> 
     /// assert(ages[1].0 == "bo" && ages[1].1 == 42)
     /// ```
     public subscript(position: Int) -> (Key, Value) {
-        get => (orderedKeys[position], orderedValues[position])
+        get => (map.orderedKey(at: position), map.orderedValue(at: position))
     }
 
     /// The first entry's position: 0.
     public var startIndex: Int => 0
 
     /// The position past the last entry: the count.
-    public var endIndex: Int => orderedKeys.count
+    public var endIndex: Int => map.count
 
     /// The next position.
     public fn index(after position: Int) -> Int => position + 1

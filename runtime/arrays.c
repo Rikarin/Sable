@@ -1047,6 +1047,32 @@ static const SableMetadata string_array_metadata = {
     sizeof(SableArray), _Alignof(SableArray), NULL, NULL,
 };
 
+// The first of the byte from 'at' up to 'end', or NULL: what memchr finds, and
+// is asked to where it is far off, without a call for each of the many short
+// pieces a text splits into.
+static inline const char *next_byte(const char *at, const char *end, char byte) {
+    sable_bytes16 wanted;
+    memset(&wanted, byte, sizeof wanted);
+    for (const char *distant = at + 64; end - at >= 16; at += 16) {
+        if (at == distant) {
+            return memchr(at, byte, (size_t)(end - at));
+        }
+
+        sable_mask16 found = (sable_mask16)(load16(at) == wanted);
+        if (any16(found)) {
+            return at + (int64_t)(__builtin_ctzll(mask16_bits(found)) / MASK16_LANE_BITS);
+        }
+    }
+
+    for (; at < end; at++) {
+        if (*at == byte) {
+            return at;
+        }
+    }
+
+    return NULL;
+}
+
 SableArray *sable_string_split(const SableString *s, int32_t separator) {
     // An ASCII separator is a byte that never occurs inside another scalar's
     // encoding: the parts are found with memchr, counted first so that the
@@ -1055,7 +1081,7 @@ SableArray *sable_string_split(const SableString *s, int32_t separator) {
     if (separator < 0x80) {
         int64_t n = 1;
         for (const char *at = s->bytes, *end = s->bytes + s->length;
-             (at = memchr(at, separator, (size_t)(end - at))) != NULL; at++) {
+             (at = next_byte(at, end, (char)separator)) != NULL; at++) {
             n++;
         }
 
@@ -1065,7 +1091,7 @@ SableArray *sable_string_split(const SableString *s, int32_t separator) {
         bool ascii = s->count == s->length;
         const char *start = s->bytes, *end = s->bytes + s->length;
         for (int64_t i = 0; i < n; i++) {
-            const char *stop = i + 1 < n ? memchr(start, separator, (size_t)(end - start)) : end;
+            const char *stop = i + 1 < n ? next_byte(start, end, (char)separator) : end;
             int64_t length = stop - start;
             ((SableString **)parts->elements)[i] = ascii ? make_counted(start, length, length) : make_string(start, length);
             parts->count = i + 1;

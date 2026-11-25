@@ -77,6 +77,9 @@ public sealed partial class SilGen {
         return new Restore(() => AmbientGenerics.Value = before);
     }
 
+    /// <summary><c>SABLE_GENERICS_TRACE</c>: says of each generic function which way it was compiled and why, and each instance made for known types.</summary>
+    static bool TracesGenerics => Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 };
+
     static readonly AsyncLocal<bool> AmbientOptimised = new();
 
     /// <summary>
@@ -121,7 +124,11 @@ public sealed partial class SilGen {
     }
 
     /// <summary>True for a type parameter of the unspecialised code being lowered, or an associated type read through one.</summary>
-    internal bool IsOpaque(TypeSymbol type) => type is TypeParameterSymbol parameter && _opaque.Contains(parameter) || IsAssociatedOf(type, _opaque);
+    internal bool IsOpaque(TypeSymbol type) =>
+        type is TypeParameterSymbol parameter && _opaque.Contains(parameter) || IsAssociatedOf(type, _opaque) || type is StructuralUnionTypeSymbol union && union.Cases.All(IsOpaque);
+
+    /// <summary>Between the names of the members of a union of opaque types, in its own.</summary>
+    public const string UnionName = "__or__";
 
     /// <summary>
     ///     True for an associated type read through one of the type
@@ -158,6 +165,7 @@ public sealed partial class SilGen {
             DependentMemberTypeSymbol member => $"{OpaqueName(member.BaseType)}.{member.Associated.Name}",
             TypeParameterSymbol parameter when !_opaque.Contains(parameter) && AssociatedSelf(parameter, _opaque) is { } self => $"{self.Name}.{parameter.Name}",
             TypeParameterSymbol parameter => ParameterName(parameter),
+            StructuralUnionTypeSymbol union => string.Join(UnionName, union.Cases.Select(OpaqueName).Order(StringComparer.Ordinal)),
             _ => type.Name,
         };
 
@@ -173,12 +181,49 @@ public sealed partial class SilGen {
     ///     A function's types as its code compiled once reads them: each
     ///     <c>some P</c> parameter's as the type parameter standing for it
     ///     (<see cref="FunctionSymbol.OpaqueTypeParameters" />), which the
-    ///     substitution it is lowered with maps to itself.
+    ///     substitution it is lowered with maps to itself; and a type
+    ///     parameter a 'where' clause says is another type (<c>extension
+    ///     Dictionary where Key == String</c>) as that type
+    ///     (<see cref="FixedParameters" />).
     /// </summary>
-    internal static TypeSubstitution OpaqueParametersAsThemselves(FunctionSymbol symbol) =>
-        symbol.OpaqueTypeParameters.IsEmpty
+    internal static TypeSubstitution OpaqueParametersAsThemselves(FunctionSymbol symbol) {
+        var known = FixedParameters(symbol);
+        return symbol.OpaqueTypeParameters.IsEmpty && known.Count == 0
             ? TypeSubstitution.Empty
-            : new(symbol.OpaqueTypeParameters.ToDictionary(static p => p, static p => (TypeSymbol)p));
+            : new(symbol.OpaqueTypeParameters.Select(static p => (Key: p, Value: (TypeSymbol)p)).Concat(known.Select(static k => (k.Key, k.Value))).ToDictionary(static p => p.Key, static p => p.Value));
+    }
+
+    static readonly Dictionary<TypeParameterSymbol, TypeSymbol> NoneFixed = [];
+
+    /// <summary>
+    ///     The type parameters of a function, or of the type it is a member
+    ///     of, that its 'where' clause, or its extension's, says are another
+    ///     type: no parameter of its code compiled once, which reads each as
+    ///     the type it is.
+    /// </summary>
+    internal static Dictionary<TypeParameterSymbol, TypeSymbol> FixedParameters(FunctionSymbol symbol) {
+        var requirements = symbol.SameTypeRequirements.Concat(ExtensionOf(symbol)?.SameTypeRequirements ?? []).ToList();
+        if (requirements.Count == 0) {
+            return NoneFixed;
+        }
+
+        var all = TypeParametersOf(symbol).Where(static p => p.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol }).ToList();
+        var known = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        foreach (var (left, right) in requirements) {
+            // 'S.Element == Element' makes the associated type the parameter (CanonicalType), not the parameter it.
+            if (left is TypeParameterSymbol or DependentMemberTypeSymbol && right is TypeParameterSymbol or DependentMemberTypeSymbol) {
+                continue;
+            }
+
+            if (left is TypeParameterSymbol named && all.Contains(named) && !known.ContainsKey(named) && !Mentions(right, [named, ..known.Keys])) {
+                known[named] = right;
+            } else if (right is TypeParameterSymbol other && all.Contains(other) && !known.ContainsKey(other) && !Mentions(left, [other, ..known.Keys])) {
+                known[other] = left;
+            }
+        }
+
+        return known;
+    }
 
     /// <summary>The function whose unspecialised body is being lowered: the same-type requirements its associated types are read with.</summary>
     Symbol? _associatedContext;
@@ -238,6 +283,17 @@ public sealed partial class SilGen {
                     }
 
                     break;
+                // A class's, whose metadata is made from its fields'.
+                case ClassType classType:
+                    foreach (var field in classType.Fields) {
+                        Collect(field.Type);
+                    }
+
+                    foreach (var argument in classType.TypeArguments) {
+                        Collect(argument);
+                    }
+
+                    break;
                 case StructType structType:
                     foreach (var field in structType.Fields) {
                         Collect(field.Type);
@@ -269,6 +325,12 @@ public sealed partial class SilGen {
                     Collect(described);
                 }
             }
+        }
+
+        // A union's are its members'.
+        foreach (var union in names.Where(static n => n.Contains(UnionName, StringComparison.Ordinal)).ToList()) {
+            names.Remove(union);
+            names.UnionWith(union.Split(UnionName).Where(static n => n.Contains('.')));
         }
 
         var made = new HashSet<string>(StringComparer.Ordinal);
@@ -338,7 +400,15 @@ public sealed partial class SilGen {
     }
 
     /// <summary>A type as the same-type requirements in force where it is lowered make it: <c>S.Iter.Element</c> as <c>S.Element</c>.</summary>
-    internal TypeSymbol Canonical(TypeSymbol type) => _associatedContext is { } context ? _compilation.CanonicalType(context, type) : type;
+    internal TypeSymbol Canonical(TypeSymbol type) =>
+        type is StructuralUnionTypeSymbol union ? StructuralUnionTypeSymbol.Create(union.Cases.Select(Canonical))
+        : _associatedContext is { } context ? _compilation.CanonicalType(context, Bare(type)) : type;
+
+    /// <summary>An associated type of a protocol's own Self as the protocol's code names it: <c>Failure</c> for <c>Self.Failure</c>.</summary>
+    static TypeSymbol Bare(TypeSymbol type) =>
+        type is not DependentMemberTypeSymbol { BaseType: var on, Associated: var associated } ? type
+        : on is TypeParameterSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } owner } self && ReferenceEquals(owner.OriginalDefinition.SelfTypeParameter, self) ? associated
+        : Bare(on) is var bare && !ReferenceEquals(bare, on) ? new DependentMemberTypeSymbol(bare, associated) : type;
 
     /// <summary>
     ///     What an unspecialised function takes besides its own parameters: a
@@ -374,7 +444,16 @@ public sealed partial class SilGen {
     ///     describer: as its body says, or, for one still being decided — a
     ///     recursion — yes.
     /// </summary>
-    internal bool DescribesValues(FunctionSymbol callee) => _describes.GetValueOrDefault(callee, true);
+    internal bool DescribesValues(FunctionSymbol callee) => _describes.GetValueOrDefault(callee, true) || MayDescribe(callee);
+
+    /// <summary>
+    ///     A method a subclass may override, whatever its own body does; and
+    ///     an initialiser of a class in a hierarchy or with a deinit, whose
+    ///     methods are later given what they describe by the object's class.
+    /// </summary>
+    bool MayDescribe(FunctionSymbol callee) =>
+        HierarchiesOnce && Owner(callee)?.OriginalDefinition is { TypeKind: TypeKind.Class or TypeKind.Actor, TypeParameters.IsEmpty: false } owner
+        && (IsVirtual(callee) && IsInherited(owner) || callee.FunctionKind == FunctionKind.Initializer && (IsInherited(owner) || SuperclassOf(owner) is not null || DeinitOf(owner) is not null));
 
     /// <summary>
     ///     For each unspecialised function, whether it, or unspecialised code
@@ -386,7 +465,7 @@ public sealed partial class SilGen {
     /// </summary>
     readonly Dictionary<FunctionSymbol, bool> _debugDescribes = new(ReferenceEqualityComparer.Instance);
 
-    internal bool DebugDescribesValues(FunctionSymbol callee) => _debugDescribes.GetValueOrDefault(callee, false);
+    internal bool DebugDescribesValues(FunctionSymbol callee) => _debugDescribes.GetValueOrDefault(callee, false) || MayDescribe(callee);
     readonly List<FunctionSymbol> _shapeOrder = [];
     readonly HashSet<FunctionSymbol> _shaping = new(ReferenceEqualityComparer.Instance);
 
@@ -428,7 +507,7 @@ public sealed partial class SilGen {
                 _refusals[symbol] = refused;
             }
 
-            if (refused is not null && Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
+            if (refused is not null && TracesGenerics) {
                 Console.Error.WriteLine($"specialised {TraceName(symbol)}: {refused}");
             }
 
@@ -554,11 +633,15 @@ public sealed partial class SilGen {
         type switch {
             TypeParameterSymbol parameter => parameters.Contains(parameter) || IsAssociatedOf(parameter, parameters),
             DependentMemberTypeSymbol => IsAssociatedOf(type, parameters),
+            // A union of them: what one of them it is, and how it is laid out, its metadata's.
+            StructuralUnionTypeSymbol union => union.Cases.All(c => c is TypeParameterSymbol or DependentMemberTypeSymbol && IsHeld(c, parameters)),
             MetatypeTypeSymbol { InstanceType: var instance } => instance is TypeParameterSymbol p && parameters.Contains(p) || IsAssociatedOf(instance, parameters),
             ArrayTypeSymbol => IsArrayOf(type, parameters),
             OptionalTypeSymbol optional => IsHeld(optional.UnderlyingType, parameters) && optional.UnderlyingType is not MetatypeTypeSymbol,
             TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => Mentions(e, parameters))
                                      && tuple.ElementTypes.All(e => !Mentions(e, parameters) || IsHeld(e, parameters) && e is not MetatypeTypeSymbol),
+            // Named without its arguments, inside it: with its own.
+            NamedTypeSymbol { IsGenericDefinition: true } definition => IsPlainGeneric(definition) && definition.TypeParameters.All(parameters.Contains),
             NamedTypeSymbol { IsConstructed: true } generic => IsPlainGeneric(generic.OriginalDefinition) && generic.TypeArguments.Any(a => Mentions(a, parameters))
                                                              && generic.TypeArguments.All(a => !Mentions(a, parameters) || IsHeld(a, parameters) && a is not MetatypeTypeSymbol),
             _ => false,
@@ -574,7 +657,7 @@ public sealed partial class SilGen {
     ///     is made is given to such code through a thunk that converts.
     /// </summary>
     internal static bool IsGenericFunction(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> parameters) =>
-        type is FunctionTypeSymbol { IsRethrows: false, IsAsync: false } function && Mentions(function, parameters)
+        type is FunctionTypeSymbol { IsRethrows: false } function && Mentions(function, parameters)
         && function.ParameterTypes.All(p => !Mentions(p, parameters) || IsHeld(p, parameters) && p is not MetatypeTypeSymbol)
         && (!Mentions(function.ReturnType, parameters) || IsHeld(function.ReturnType, parameters) && function.ReturnType is not MetatypeTypeSymbol)
         && (function.ThrownType is not { } thrown || !Mentions(thrown, parameters)
@@ -600,7 +683,7 @@ public sealed partial class SilGen {
             case TypeKind.Union:
                 return definition.Members.OfType<UnionCaseSymbol>().All(c => !c.HasAttribute("indirect")
                                                                              && c.Payload.All(p => Layable(p.Type, definition)));
-            case TypeKind.Class:
+            case TypeKind.Class or TypeKind.Actor:
                 return IsPlainGenericClass(definition);
             default:
                 return false;
@@ -632,13 +715,13 @@ public sealed partial class SilGen {
     [ThreadStatic] static HashSet<NamedTypeSymbol>? _plainClassesAsked;
 
     static bool HasPlainFields(NamedTypeSymbol definition) =>
-        definition is { TypeKind: TypeKind.Class, IsNoncopyable: false, TypeParameters.IsEmpty: false }
-        // A task is the runtime's, laid out for its result (TaskClass).
-        && definition is not { Name: "Task", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }
+        definition is { TypeKind: TypeKind.Class or TypeKind.Actor, IsNoncopyable: false, TypeParameters.IsEmpty: false }
+        // A task is the runtime's, laid out for its result (TaskClass), where its code is not compiled once.
+        && (TasksCompiledOnce || definition is not { Name: "Task", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } })
         && !definition.TypeParameters.Any(static p => p.IsValue || p.AllowsNoncopyable)
-        && definition.BaseTypes.OfType<NamedTypeSymbol>().All(static b => b.TypeKind != TypeKind.Class)
+        && HasPlainSuperclass(definition)
         && StoredFields(definition).All(f => f.ReferenceKind == default
-                                             && (!MentionsDefinition(f.Type, definition) || f.Type is NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Class } other && !ReferenceEquals(other.OriginalDefinition, definition))
+                                             && (!MentionsDefinition(f.Type, definition) || f.Type is NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Class or TypeKind.Actor } other && !ReferenceEquals(other.OriginalDefinition, definition))
                                              && (IsStoredFunction(f.Type, definition) || !Mentions(f.Type, definition.TypeParameters) || ByReference(f.Type, definition.TypeParameters)
                                                  // One held by value: the object laid out at run time, from its arguments' metadata.
                                                  || IsHeld(f.Type, definition.TypeParameters) && f.Type is not MetatypeTypeSymbol));
@@ -650,14 +733,15 @@ public sealed partial class SilGen {
     ///     compiled once too, finds it by the class's name (<see cref="GenericDeinitThunk" />).
     /// </summary>
     bool IsClassInitializer(FunctionSymbol symbol) =>
-        symbol is { FunctionKind: FunctionKind.Initializer, IsSynthesized: false } && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Class } owner
-        && IsPlainGenericClass(owner) && (DeinitOf(owner) is not { } deinit || UnspecialisedShape(deinit) is not null);
+        symbol.FunctionKind == FunctionKind.Initializer && (!symbol.IsSynthesized || _compilation.InheritedInitializers.ContainsKey(symbol))
+        && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Class or TypeKind.Actor } owner
+        && (owner.TypeParameters.IsEmpty || IsPlainGenericClass(owner) && HasSlotsOnce(owner) && (DeinitOf(owner) is not { } deinit || UnspecialisedShape(deinit) is not null));
 
     static FunctionSymbol? DeinitOf(NamedTypeSymbol definition) => definition.Members.OfType<FunctionSymbol>().FirstOrDefault(static f => f.FunctionKind == FunctionKind.Deinitializer);
 
     /// <summary>A generic class's deinit: compiled once as a method is.</summary>
     static bool IsClassDeinit(FunctionSymbol symbol) =>
-        symbol.FunctionKind == FunctionKind.Deinitializer && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Class } owner && IsPlainGenericClass(owner);
+        symbol.FunctionKind == FunctionKind.Deinitializer && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Class or TypeKind.Actor } owner && IsPlainGenericClass(owner);
 
     /// <summary>
     ///     What runs the deinit of a generic class's object whose class the
@@ -668,26 +752,130 @@ public sealed partial class SilGen {
     ///     Made with the class's initialiser, which makes such objects.
     /// </summary>
     void GenericDeinitThunk(NamedTypeSymbol owner, SyntaxNode at) {
-        if (DeinitOf(owner) is not { } deinit || _module.GenericDeinits.ContainsKey(QualifiedName(owner)) || UnspecialisedShape(deinit) is not { } shape
-            || UnspecialisedInstance(deinit, shape, at) is not var (name, type)) {
+        if (_module.GenericDeinits.ContainsKey(QualifiedName(owner))) {
+            return;
+        }
+
+        // Its own, then what it inherits has.
+        var levels = new List<(string Name, FunctionType Type, GenericShape? Shape, NamedTypeSymbol Level)>();
+        for (var level = owner; level is not null; level = SuperclassOf(level)?.OriginalDefinition) {
+            if (DeinitOf(level) is not { } deinit) {
+                continue;
+            }
+
+            if (!IsGeneric(deinit)) {
+                if (!_names.TryGetValue(deinit, out var plain) || (_module.Find(plain)?.Type ?? SignatureOf(deinit, at, TypeSubstitution.Empty)) is not { } plainType) {
+                    return;
+                }
+
+                levels.Add((plain, plainType, null, level));
+            } else if (UnspecialisedShape(deinit) is { } shape && UnspecialisedInstance(deinit, shape, at) is var (name, type)) {
+                levels.Add((name, type, shape, level));
+            } else {
+                return;
+            }
+        }
+
+        SilType? selfType;
+        using (Opaque(new GenericShape(owner.TypeParameters, []))) {
+            selfType = Lower(owner.Construct([..owner.TypeParameters.Cast<TypeSymbol>()]));
+        }
+
+        if (levels.Count == 0 || selfType is not ClassType selfClass) {
             return;
         }
 
         var stem = $"$template$deinit${Sanitise(QualifiedName(owner))}";
         _module.GenericDeinits[QualifiedName(owner)] = stem;
-        var thunk = new SilFunction(stem, new FunctionType([type.Parameters[0]], SilType.Unit));
+        var thunk = new SilFunction(stem, new FunctionType([selfClass], SilType.Unit));
         var entry = thunk.AddBlock();
-        var self = entry.AddArgument(type.Parameters[0]);
-        var metadata = entry.Append(new BuiltinInst("object_metadata", SilType.Metadata, self));
-        entry.Append(new ApplyInst(entry.Append(new FunctionRefInst(name, type)), SilType.Unit, [self, ..TemplateArguments(entry, metadata, shape)]));
+        var self = entry.AddArgument(selfClass);
+        foreach (var (name, type, shape, level) in levels) {
+            SilValue seen = self;
+            if (type.Parameters[0] is ClassType wanted && wanted != selfClass) {
+                var ancestor = selfClass;
+                while (ancestor is not null && ancestor != wanted && !SilType.SameErasingOpaque(ancestor, wanted, opaqueOnly: true)) {
+                    ancestor = ancestor.Superclass;
+                }
+
+                if (ancestor is null) {
+                    continue;
+                }
+
+                if (ancestor != selfClass) {
+                    seen = entry.Append(new UpcastInst(seen, ancestor));
+                }
+
+                if (ancestor != wanted) {
+                    seen = entry.Append(new BuiltinInst("opaque_borrow_as", wanted, seen));
+                }
+            }
+
+            List<SilValue> hidden = [];
+            if (shape is not null) {
+                var metadata = entry.Append(new BuiltinInst($"object_metadata_as:{QualifiedName(level)}", SilType.Metadata, self));
+                hidden = TemplateArguments(entry, metadata, shape);
+            }
+
+            entry.Append(new ApplyInst(entry.Append(new FunctionRefInst(name, type)), SilType.Unit, [seen, ..hidden]));
+        }
+
         entry.Append(new ReturnInst(null));
         _module.Add(thunk);
+    }
+
+    /// <summary>
+    ///     A generic class's deinit for an instance whose arguments are known,
+    ///     in an unoptimised build that compiles generics once: a call of the
+    ///     one compiled once, with their metadata and tables. False when there is none.
+    /// </summary>
+    bool DeinitThunk(FunctionSymbol symbol, string name, FunctionType type, TypeSubstitution substitution) {
+        if (_generics != GenericsMode.Unspecialised || AmbientOptimised.Value || !IsClassDeinit(symbol) || UnspecialisedShape(symbol) is not { } shape
+            || symbol.DeclaringSyntax.FirstOrDefault() is not { } at) {
+            return false;
+        }
+
+        var hidden = new List<SilType>();
+        foreach (var parameter in shape.Parameters) {
+            if (substitution.Lookup(parameter) is not { } given || Lower(given) is not { } lowered || lowered is NominalType { IsNoncopyable: true }
+                || !shape.ProtocolsOf(parameter).All(p => GenericTable(given, p, at, DescribesValues(symbol), DebugDescribesValues(symbol)))) {
+                return false;
+            }
+
+            if (DescribesValues(symbol)) {
+                Describer(given, lowered, at, DebugDescribesValues(symbol));
+            }
+
+            hidden.Add(lowered);
+        }
+
+        if (UnspecialisedInstance(symbol, shape, at) is not var (generic, genericType)) {
+            return false;
+        }
+
+        var thunk = new SilFunction(name, type);
+        var entry = thunk.AddBlock();
+        SilValue self = entry.AddArgument(type.Parameters[0]);
+        if (self.Type != genericType.Parameters[0]) {
+            self = entry.Append(new BuiltinInst("opaque_borrow_as", genericType.Parameters[0], self));
+        }
+
+        var arguments = new List<SilValue> { self };
+        arguments.AddRange(hidden.Select(h => entry.Append(new MetadataInst(h))));
+        foreach (var (parameter, protocol) in shape.Requirements) {
+            arguments.Add(entry.Append(new BuiltinInst($"witness_table_known:{QualifiedName(protocol)}", SilType.WitnessTable, entry.Append(new MetadataInst(hidden[shape.Parameters.IndexOf(parameter)])))));
+        }
+
+        entry.Append(new ApplyInst(entry.Append(new FunctionRefInst(generic, genericType)), SilType.Unit, [..arguments]));
+        entry.Append(new ReturnInst(null));
+        _module.Add(thunk);
+        return true;
     }
 
     /// <summary>A type that mentions type parameters only behind a reference: an array or a slice of held values, or a plain generic class of them.</summary>
     static bool ByReference(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> parameters) =>
         IsArrayOf(type, parameters)
-        || type is NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Class } named && IsPlainGenericClass(named.OriginalDefinition)
+        || type is NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Class or TypeKind.Actor } named && IsPlainGenericClass(named.OriginalDefinition)
            && named.TypeArguments.All(a => !Mentions(a, parameters) || IsHeld(a, parameters) && a is not MetatypeTypeSymbol)
         // A plain generic struct that holds its own type parameters only behind references: '[Key: Int]'.
         || type is NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Struct } structure && IsPlainGeneric(structure.OriginalDefinition)
@@ -707,9 +895,29 @@ public sealed partial class SilGen {
     ///     the instance's arguments and code that does not both use it.
     /// </summary>
     static bool IsStoredFunction(TypeSymbol type, NamedTypeSymbol definition) =>
-        type is FunctionTypeSymbol && Generics == GenericsMode.Unspecialised && !AmbientOptimised.Value && Mentions(type, definition.TypeParameters) && IsGenericFunction(type, definition.TypeParameters);
+        Function(type) is { } function && Generics == GenericsMode.Unspecialised && !AmbientOptimised.Value && Mentions(function, definition.TypeParameters) && IsGenericFunction(function, definition.TypeParameters);
 
-    readonly Dictionary<FieldSymbol, ThickFunctionType?> _storedFunctions = new(ReferenceEqualityComparer.Instance);
+    /// <summary>A function type, or the one an optional wraps.</summary>
+    static FunctionTypeSymbol? Function(TypeSymbol type) => type as FunctionTypeSymbol ?? (type as OptionalTypeSymbol)?.UnderlyingType as FunctionTypeSymbol;
+
+    /// <summary>
+    ///     The type a union's case keeps a function of its type parameters'
+    ///     values in, whatever the instance's arguments, as a field does
+    ///     (<see cref="StoredFunctionType" />); null for any other payload.
+    /// </summary>
+    SilType? StoredPayloadType(NamedTypeSymbol definition, TypeSymbol payload) {
+        if (_generics != GenericsMode.Unspecialised || definition.TypeParameters.IsEmpty || Function(payload) is null || !IsStoredFunction(payload, definition) || !IsPlainGeneric(definition)) {
+            return null;
+        }
+
+        var own = definition.TypeParameters.ToDictionary(static p => p, TypeParameterSymbol.Stored);
+        var map = new TypeSubstitution(own.ToDictionary(static p => p.Key, static p => (TypeSymbol)p.Value));
+        using (Opaque(new GenericShape([..own.Values], []))) {
+            return Lower(map.Apply(payload is OptionalTypeSymbol optional ? new OptionalTypeSymbol(_compilation.CanonicalType(definition, optional.UnderlyingType)) : _compilation.CanonicalType(definition, payload)));
+        }
+    }
+
+    readonly Dictionary<FieldSymbol, SilType?> _storedFunctions = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     ///     The type a field of a generic type keeps a function in, whatever
@@ -718,19 +926,19 @@ public sealed partial class SilGen {
     ///     and what writes it converts one to this. Null for any other field,
     ///     and of a type no code compiled once holds.
     /// </summary>
-    internal ThickFunctionType? StoredFunctionType(FieldSymbol field) {
+    internal SilType? StoredFunctionType(FieldSymbol field) {
         if (_storedFunctions.TryGetValue(field, out var known)) {
             return known;
         }
 
-        ThickFunctionType? stored = null;
-        if (_generics == GenericsMode.Unspecialised && field is { IsStatic: false, IsComputed: false, ReferenceKind: 0 } && field.Type is FunctionTypeSymbol
+        SilType? stored = null;
+        if (_generics == GenericsMode.Unspecialised && field is { IsStatic: false, IsComputed: false, ReferenceKind: 0 } && Function(field.Type) is not null
             && (field.ContainingSymbol is NamedTypeSymbol { TypeParameters.IsEmpty: false } owner ? owner.OriginalDefinition : null) is { } definition
             && IsStoredFunction(field.Type, definition) && IsPlainGeneric(definition)) {
             var own = definition.TypeParameters.ToDictionary(static p => p, TypeParameterSymbol.Stored);
             var map = new TypeSubstitution(own.ToDictionary(static p => p.Key, static p => (TypeSymbol)p.Value));
             using (Opaque(new GenericShape([..own.Values], []))) {
-                stored = Lower(map.Apply(_compilation.CanonicalType(definition, field.Type))) as ThickFunctionType;
+                stored = Lower(map.Apply(field.Type is OptionalTypeSymbol optional ? new OptionalTypeSymbol(_compilation.CanonicalType(definition, optional.UnderlyingType)) : _compilation.CanonicalType(definition, field.Type)));
             }
         }
 
@@ -752,7 +960,9 @@ public sealed partial class SilGen {
             return receiver is ArrayTypeSymbol array && owner.TypeParameters.Length == 1 ? new() { [owner.TypeParameters[0]] = array.ElementType } : null;
         }
 
-        return receiver is NamedTypeSymbol named && ReferenceEquals(named.OriginalDefinition, owner) && named.TypeArguments.Length == owner.TypeParameters.Length
+        // Its own, or one a superclass of its class declares.
+        return receiver is NamedTypeSymbol given && (given.TypeKind == TypeKind.Class ? InstanceOf(given.IsGenericDefinition ? given.Construct([..given.TypeParameters.Cast<TypeSymbol>()]) : given, owner) : given) is { } named
+               && ReferenceEquals(named.OriginalDefinition, owner) && named.TypeArguments.Length == owner.TypeParameters.Length
             ? owner.TypeParameters.Zip(named.TypeArguments).ToDictionary(static p => p.First, static p => p.Second)
             : null;
     }
@@ -814,6 +1024,9 @@ public sealed partial class SilGen {
         return new TypeSubstitution(map).Apply(declared);
     }
 
+    /// <summary>Sable.Core's Equatable.</summary>
+    internal NamedTypeSymbol? EquatableProtocol() => Core.Module.GetMembers("Equatable").OfType<NamedTypeSymbol>().FirstOrDefault(static p => p.TypeKind == TypeKind.Protocol);
+
     /// <summary>Whether a requirement's type made of Self is the type given, with Self the type parameter it is called on.</summary>
     static bool SameHeld(TypeSymbol declared, TypeParameterSymbol self, TypeSymbol given, TypeParameterSymbol parameter) =>
         new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol> { [self] = parameter }).Apply(declared).Equals(given);
@@ -851,18 +1064,20 @@ public sealed partial class SilGen {
     GenericShape? SignatureShape(FunctionSymbol symbol, out string? refused) {
         refused = null;
         var all = TypeParametersOf(symbol).ToList();
-        if (all.Count == 0 || !_declarations.ContainsKey(symbol)) {
+        if (all.Count == 0 || !_declarations.TryGetValue(symbol, out var declaration)
+            // A requirement or a builtin, which has no body to compile either way.
+            || !symbol.HasBody && !IsAbstractMethod(symbol) && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null && _compilation.GetInheritedInitializerBody(symbol) is null
+            // A task's is never called: the compiler makes one, queued.
+            || symbol.FunctionKind == FunctionKind.Initializer && ReferenceEquals(symbol.ContainingSymbol, Core.Task)) {
             return null;
         }
 
         refused = _localGenerics.ContainsKey(symbol) ? "a local generic function"
             : symbol.IsPolymorphic ? "polymorphic recursion"
-            : symbol.FunctionKind != FunctionKind.Ordinary && !IsOwnOperator(symbol) && !IsGetter(symbol) && !IsSubscriptAccessor(symbol) && !IsValueInitializer(symbol) && !IsClassInitializer(symbol) && !IsClassDeinit(symbol) ? $"{(symbol.FunctionKind.ToString()[0] is 'A' or 'E' or 'I' or 'O' or 'U' ? "an" : "a")} {symbol.FunctionKind.ToString().ToLowerInvariant()}"
+            : symbol.FunctionKind != FunctionKind.Ordinary && !IsOwnOperator(symbol) && !IsGetter(symbol) && !IsSetter(symbol) && !IsSubscriptAccessor(symbol) && !IsValueInitializer(symbol) && !IsClassInitializer(symbol) && !IsClassDeinit(symbol) ? $"{(symbol.FunctionKind.ToString()[0] is 'A' or 'E' or 'I' or 'O' or 'U' ? "an" : "a")} {symbol.FunctionKind.ToString().ToLowerInvariant()}"
             : symbol.ForeignName is not null ? "foreign"
             : symbol.OpaqueTypeParameters.Any(static p => !p.OpaqueParameter!.Arguments.IsEmpty) ? "a 'some P<…>' parameter"
             : _compilation.GetGenerator(symbol) is not null ? "a generator"
-            : _compilation.GetLazyBody(symbol) is not null
-              || _compilation.GetInheritedInitializerBody(symbol) is not null ? "a body the compiler writes"
             : null;
         if (refused is not null) {
             return null;
@@ -900,19 +1115,14 @@ public sealed partial class SilGen {
 
             // A class's method a subclass may override is called through the
             // vtable, which holds its instances for each class's arguments.
-            if (owner.TypeKind == TypeKind.Class && (IsInherited(owner) || owner.IsOpen)) {
+            // In an optimised build, or one generic over its own.
+            if (owner.TypeKind == TypeKind.Class && (IsInherited(owner) || owner.IsOpen || SuperclassOf(owner) is not null) && (!HierarchiesOnce || IsVirtual(symbol) && !symbol.TypeParameters.IsEmpty)) {
                 refused = "a member of a generic class a subclass may override";
                 return null;
             }
 
             own.AddRange(owner.TypeParameters);
-            if (ExtensionOf(symbol) is { SameTypeRequirements.IsEmpty: false }) {
-                // 'extension Array where Element == Int' is another type's.
-                refused = "a 'where' clause";
-                return null;
-            }
-
-            if (SelfType(symbol, TypeSubstitution.Empty) is not { } selfType || !IsHeld(selfType, [..own, ..symbol.TypeParameters])) {
+            if (SelfType(symbol, OpaqueParametersAsThemselves(symbol)) is not { } selfType || Mentions(selfType, own) && !IsHeld(selfType, [..own, ..symbol.TypeParameters])) {
                 refused = "a member of a generic type its code cannot hold";
                 return null;
             }
@@ -925,6 +1135,10 @@ public sealed partial class SilGen {
             refused = "type parameters from around it";
             return null;
         }
+
+        // One a 'where' clause says is another type is that type.
+        var fixedParameters = FixedParameters(symbol);
+        own.RemoveAll(fixedParameters.ContainsKey);
 
         foreach (var parameter in own.Where(p => owner is not { TypeKind: TypeKind.Protocol } || !ReferenceEquals(p, owner.SelfTypeParameter))) {
             if (parameter is { IsValue: true } or { AllowsNoncopyable: true }) {
@@ -946,12 +1160,25 @@ public sealed partial class SilGen {
             }
         }
 
+        // A derived member's conformance requires of its type's arguments what it reads of them.
+        if (owner is { TypeParameters.IsEmpty: false } && _compilation.GetDerivation(symbol) is { IsConditional: true, Protocol: var derived } && IsTabledProtocol(derived)) {
+            foreach (var parameter in owner.TypeParameters) {
+                if (!requirements.Any(r => ReferenceEquals(r.Item1, parameter) && ReferenceEquals(r.Item2, derived.OriginalDefinition))) {
+                    requirements.Add((parameter, derived.OriginalDefinition));
+                }
+            }
+        }
+
         // 'where' clauses, the function's and its extension's: 'T: P' is a
         // table more; 'S.Element: P' is found in the registry, as the caller
         // makes sure it can be; 'S.Element == T' reads one as the other.
         var extension = ExtensionOf(symbol);
         foreach (var (subject, constraint) in symbol.ConformanceRequirements.Concat(extension?.ConformanceRequirements ?? [])) {
             foreach (var part in CompositionTypeSymbol.PartsOf(constraint)) {
+                if (subject is TypeParameterSymbol settled && fixedParameters.ContainsKey(settled)) {
+                    continue;
+                }
+
                 if (part is not NamedTypeSymbol protocol || !IsTabledProtocol(protocol)
                     || !(subject is TypeParameterSymbol direct && own.Contains(direct) || IsAssociatedOf(subject, own))) {
                     refused = "a 'where' clause";
@@ -972,25 +1199,25 @@ public sealed partial class SilGen {
             }
         }
 
-        bool Passable(TypeSymbol type) =>
-            !Mentions(type, own) || IsHeld(type, own);
-
         var asThemselves = OpaqueParametersAsThemselves(symbol);
+        bool Passable(TypeSymbol type) =>
+            (asThemselves.IsEmpty ? type : Substitute(asThemselves, type)) is var read && (!Mentions(read, own) || IsHeld(read, own));
+
         foreach (var parameter in symbol.Parameters) {
             var parameterType = asThemselves.IsEmpty ? parameter.Type : Substitute(asThemselves, parameter.Type);
 
             // 'using generator: inout G' is the address of the caller's storage, as any inout parameter is.
             // So is an array of them: the buffer's reference, the same whatever they are.
-            var inoutOwn = parameter.Modifier == ParameterModifier.InOut && (parameterType is TypeParameterSymbol changed && own.Contains(changed) || IsArrayOf(parameterType, own));
-            if (!Passable(parameterType) && !IsGenericFunction(parameterType, own)
-                || Mentions(parameterType, own) && !inoutOwn && (parameter.IsVariadic || parameter.IsByReference || parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In))) {
+            var inoutOwn = parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out && IsHeld(parameterType, own) && parameterType is not MetatypeTypeSymbol;
+            if (!Passable(parameterType) && !(Function(parameterType) is { } taken && IsGenericFunction(taken, own))
+                || Mentions(parameterType, own) && !inoutOwn && (parameter.IsByReference || parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In or ParameterModifier.Consuming))) {
                 refused = $"the parameter '{parameter.Name}: {parameter.Type.ToDisplayString()}'";
                 return null;
             }
         }
 
         // An error of a type parameter's type, or an associated type's, 'throws(S.Failure)', is written where the caller says.
-        if (!Passable(symbol.ReturnType) || symbol.ThrownType is { } thrown && _compilation.CanonicalType(symbol, thrown) is var canonicalThrown
+        if (!Passable(symbol.ReturnType) && !(Function(Substitute(asThemselves, symbol.ReturnType)) is { } given && IsGenericFunction(given, own)) || symbol.ThrownType is { } thrown && _compilation.CanonicalType(symbol, thrown) is var canonicalThrown
             && Mentions(canonicalThrown, own) && (!IsHeld(canonicalThrown, own) || canonicalThrown is MetatypeTypeSymbol or ArrayTypeSymbol)) {
             refused = $"the result '{symbol.ReturnType.ToDisplayString()}'";
             return null;
@@ -998,6 +1225,9 @@ public sealed partial class SilGen {
 
         return new([..own], [..requirements]);
     }
+
+    /// <summary>An abstract class's method, which a stub stands for.</summary>
+    static bool IsAbstractMethod(FunctionSymbol symbol) => symbol.IsAbstract && Owner(symbol) is { TypeKind: TypeKind.Class };
 
     /// <summary>
     ///     A static member of a generic class, struct or union — a method or
@@ -1033,12 +1263,13 @@ public sealed partial class SilGen {
                 : QualifiedName(symbol);
 
     /// <summary>
-    ///     A generic struct's own initialiser — not a class's, whose object
-    ///     unspecialised code cannot make yet: it builds self in a slot of
-    ///     its own and returns it, as a static member that returns Self does.
+    ///     A value type's initialiser — a generic struct's or union's, an
+    ///     array's or an optional's, one generic over type parameters of its
+    ///     own, a protocol extension's: it builds self in a slot of its own
+    ///     and returns it, as a static member that returns Self does.
     /// </summary>
     static bool IsValueInitializer(FunctionSymbol symbol) =>
-        symbol is { FunctionKind: FunctionKind.Initializer, IsSynthesized: false } && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Struct, ExtendedArray: null, ExtendedOptional: null };
+        symbol is { FunctionKind: FunctionKind.Initializer, IsSynthesized: false } && Owner(symbol)?.OriginalDefinition is { TypeKind: not (TypeKind.Class or TypeKind.Actor) };
 
     /// <summary>An operator a generic type, or an extension of an optional or an array, declares with a body: a static member of it.</summary>
     static bool IsOwnOperator(FunctionSymbol symbol) =>
@@ -1071,9 +1302,13 @@ public sealed partial class SilGen {
     bool IsGetter(FunctionSymbol symbol) =>
         symbol is { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol property } && ReferenceEquals(GetterOf(property), symbol);
 
+    /// <summary>Its setter: compiled once as a method of the new value is, which changes self.</summary>
+    bool IsSetter(FunctionSymbol symbol) =>
+        symbol is { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol property } && (ReferenceEquals(SetterOf(property), symbol) || symbol.Name is "willSet" or "didSet");
+
     /// <summary>A side of a same-type requirement unspecialised code can read: a type parameter, an associated type read through one, or a type that mentions none.</summary>
     static bool SameTypeSide(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> own) =>
-        !Mentions(type, own) || type is TypeParameterSymbol parameter && own.Contains(parameter) || IsAssociatedOf(type, own);
+        !Mentions(type, own) || type is TypeParameterSymbol parameter && own.Contains(parameter) || IsAssociatedOf(type, own) || IsHeld(type, own) && type is not MetatypeTypeSymbol;
 
     /// <summary>A body that is one call of a protocol's requirement, given the function's parameters as they are.</summary>
     static bool IsForwarder(BoundBlock body) {
@@ -1090,10 +1325,15 @@ public sealed partial class SilGen {
 
     /// <summary>A function's body, bound: as it is written, or the one <c>@derive</c> made.</summary>
     BoundBlock? BodyOf(FunctionSymbol symbol, SyntaxNode syntax, SemanticModel model) =>
-        _compilation.GetDerivedBody(symbol) ?? BodyModel(model, syntax).GetBoundNode(syntax) as BoundBlock;
+        _compilation.GetDerivedBody(symbol) ?? _compilation.GetLazyBody(symbol) ?? _compilation.GetInheritedInitializerBody(symbol) ?? BodyModel(model, syntax).GetBoundNode(syntax) as BoundBlock;
 
     bool BodyAllows(FunctionSymbol symbol, GenericShape shape) {
         var (syntax, model) = _declarations[symbol];
+        if (IsAbstractMethod(symbol)) {
+            _describes[symbol] = _debugDescribes[symbol] = false;
+            return true;
+        }
+
         if (BodyOf(symbol, syntax, model) is not { } body) {
             return false;
         }
@@ -1104,7 +1344,7 @@ public sealed partial class SilGen {
         // or a library call where the type is known, and costs nothing.
         if (!_opening && IsForwarder(body)) {
             _refusals[symbol] = "it only hands its parameters to a requirement, so it is copied for each type";
-            if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
+            if (TracesGenerics) {
                 Console.Error.WriteLine($"specialised {TraceName(symbol)}: a forwarder to a requirement");
             }
 
@@ -1113,7 +1353,7 @@ public sealed partial class SilGen {
 
         // One that names its type's type parameters is given their metadata after all: it stays specialised.
         if (Owner(symbol)?.OriginalDefinition is { } independentOwner && IsIndependentStatic(symbol, independentOwner) && NamesOwnerParameters(body, independentOwner) && !shape.Parameters.Any(p => independentOwner.TypeParameters.Contains(p))) {
-            if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
+            if (TracesGenerics) {
                 Console.Error.WriteLine($"specialised {TraceName(symbol)}: a static member naming its type's type parameters");
             }
 
@@ -1128,7 +1368,7 @@ public sealed partial class SilGen {
         if (initialValues.TrueForAll(v => checker.Allows(v, false)) && checker.Allows(body, false)) {
             _describes[symbol] = checker.Describes;
             _debugDescribes[symbol] = checker.DebugDescribes;
-            if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
+            if (TracesGenerics) {
                 Console.Error.WriteLine($"unspecialised {TraceName(symbol)}");
             }
 
@@ -1140,8 +1380,8 @@ public sealed partial class SilGen {
         }
 
         // Why each function that could be is not, for whoever is widening what can be.
-        if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 } && checker.Refused is { } refused) {
-            Console.Error.WriteLine($"specialised {TraceName(symbol)}: {refused.GetType().Name} '{refused.Syntax.ToString().Trim().ReplaceLineEndings(" ")}'{(Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") == "2" && refused is BoundExpression e ? $" : {e.Type.ToDisplayString()} ({e.Type.GetType().Name}){(e is BoundConversion c ? $" {c.ConversionKind} of {c.Operand.GetType().Name} {c.Operand.Type.ToDisplayString()}" : "")}" : "")}");
+        if (TracesGenerics && checker.Refused is { } refused) {
+            Console.Error.WriteLine($"specialised {TraceName(symbol)}: {refused.GetType().Name} {(Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") == "2" ? checker.RefusedAt : "")} '{refused.Syntax.ToString().Trim().ReplaceLineEndings(" ")}'{(Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") == "2" && refused is BoundExpression e ? $" : {e.Type.ToDisplayString()} ({e.Type.GetType().Name}){(e is BoundConversion c ? $" {c.ConversionKind} of {c.Operand.GetType().Name} {c.Operand.Type.ToDisplayString()}" : "")}" : "")}");
         }
 
         return false;
@@ -1167,12 +1407,17 @@ public sealed partial class SilGen {
 
         bool Mentions(TypeSymbol type) => SilGen.Mentions(V(type), _own);
 
-        bool IsOwn(TypeSymbol type) => V(type) is var seen && (seen is TypeParameterSymbol parameter && _own.Contains(parameter) || IsAssociatedOf(seen, _own));
+        bool IsOwn(TypeSymbol type) =>
+            V(type) is var seen && (seen is TypeParameterSymbol parameter && _own.Contains(parameter) || IsAssociatedOf(seen, _own) || seen is StructuralUnionTypeSymbol union && union.Cases.All(IsOwn));
 
         /// <summary>The protocols, with those they refine, a type parameter or an associated type is known here to conform to.</summary>
         List<NamedTypeSymbol> Known(TypeSymbol type) => ProtocolClosure(generator.ProtocolsKnown(checkedSymbol, shape, V(type)));
 
-        TypeSymbol Canonical(TypeSymbol type) => generator._compilation.CanonicalType(checkedSymbol, V(type));
+        TypeSymbol Canonical(TypeSymbol type) =>
+            V(type) is StructuralUnionTypeSymbol union ? StructuralUnionTypeSymbol.Create(union.Cases.Select(Canonical)) : generator._compilation.CanonicalType(checkedSymbol, Bare(V(type)));
+
+        /// <summary>The members of a union, or the type itself.</summary>
+        static ImmutableArray<TypeSymbol> Members(TypeSymbol type) => type is StructuralUnionTypeSymbol union ? union.Cases : [type];
 
         /// <summary>Whether a requirement's type, read through the type it is called on, is the type given, as the requirements in force here read both.</summary>
         bool SameThrough(TypeSymbol declared, NamedTypeSymbol protocol, TypeSymbol on, TypeSymbol given) {
@@ -1189,7 +1434,7 @@ public sealed partial class SilGen {
         bool HeldThrough(TypeSymbol declared, NamedTypeSymbol protocol, TypeSymbol on) => Simple(Canonical(Through(declared, protocol, V(on))));
 
         /// <summary>A type a value may have here: a type parameter, its metatype, or one that mentions none.</summary>
-        bool Simple(TypeSymbol type) => !Mentions(type) || IsHeld(V(type), _own) || IsGenericFunction(V(type), _own);
+        bool Simple(TypeSymbol type) => !Mentions(type) || IsHeld(V(type), _own) || Function(V(type)) is { } function && IsGenericFunction(function, _own);
 
         bool IsOwnArray(TypeSymbol type) => IsArrayOf(V(type), _own);
 
@@ -1214,11 +1459,32 @@ public sealed partial class SilGen {
         /// <summary>How many closures compiled with the function the node being checked is inside.</summary>
         int _closureDepth;
 
-        /// <summary>Whether the code being checked may change the function's own self: not inside a closure, which has a copy.</summary>
-        bool OwnMutating => (checkedSymbol.IsMutating || IsValueInitializer(checkedSymbol)) && _closureDepth == 0;
+        /// <summary>Whether the code being checked may change the function's own self: a closure may too, through the box they share.</summary>
+        bool OwnMutating => checkedSymbol.IsMutating || IsValueInitializer(checkedSymbol);
 
-        /// <summary>Whether the code being checked may change its self's stored fields: a mutating method's, or any method's of a class.</summary>
-        bool FieldsMutable => _closureDepth == 0 && (checkedSymbol.IsMutating || IsValueInitializer(checkedSymbol) || OwnerOf(checkedSymbol) is { TypeKind: TypeKind.Class });
+        /// <summary>A value of an expression's type, standing for whatever is stored there.</summary>
+        BoundExpression Standing(BoundExpression of) => new BoundParameterAccess(of.Syntax, ParameterSymbol.Synthetic("$stored", generator.Core.Module, of.Type));
+
+        /// <summary>
+        ///     Whether an expression is a place this code may change: a
+        ///     'var', an inout parameter, its own self, a stored field of one
+        ///     or of an object it holds.
+        /// </summary>
+        bool IsPlace(BoundExpression? place) =>
+            place switch {
+                BoundLocalAccess local => local.Local.IsMutable,
+                BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } => true,
+                // Implicitly, its own self.
+                null or BoundSelfAccess => OwnMutating,
+                // A subscript's element, and a computed property's value: read, changed and set.
+                BoundIndexAccess { Subscript: not null } element => IsPlace(element.Receiver) && SubscriptAllowed(element, null) && SubscriptAllowed(element, Standing(element)),
+                BoundFieldAccess { Receiver: var of, Field: { IsStatic: false, IsComputed: true, Builtin: null } computed } property when generator.SetterOf(computed) is { } setter =>
+                    (of is { Type: NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } } || IsPlace(of)) && PropertyAllowed(property)
+                    && CallAllowed(new BoundCall(property.Syntax, of, setter, [Standing(property)], generator.Core.Void)),
+                BoundFieldAccess { Receiver: { } on, Field: { IsStatic: false, IsComputed: false, Builtin: null } } field =>
+                    PropertyAllowed(field) && (on.Type is NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } ? Produces(on) : IsPlace(on)),
+                _ => false,
+            };
 
         /// <summary>
         ///     Whether a closure can be compiled with this function, in the
@@ -1228,7 +1494,7 @@ public sealed partial class SilGen {
         ///     and is not inside another.
         /// </summary>
         bool ClosureAllowed(BoundClosure closure) {
-            if (closure.IsAutoclosure || generator._compilation.GetGenerator(closure.Symbol) is not null
+            if (generator._compilation.GetGenerator(closure.Symbol) is not null
                 || Mentions(closure.Type) && !IsGenericFunction(V(closure.Type), _own)
                 || closure.Type is FunctionTypeSymbol { ThrownType: { } closureThrown } && Mentions(Canonical(closureThrown))) {
                 return false;
@@ -1242,9 +1508,10 @@ public sealed partial class SilGen {
             }
 
             return captures.All(c => !Mentions(c.Type) || c is { Boxed: false, Kind: CaptureKind.Default or CaptureKind.ByValue, Key: LocalSymbol or ParameterSymbol }
-                && (IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol || IsGenericFunction(V(c.Type), _own))
+                && (IsHeld(V(c.Type), _own) || Function(V(c.Type)) is { } captured && IsGenericFunction(captured, _own))
                 // A 'var' it shares, in a box laid out at run time.
-                || c is { Boxed: true, Kind: CaptureKind.Default, Key: LocalSymbol } && IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol
+                // or an inout parameter or a 'self' it changes, kept in one for the call.
+                || c is { Boxed: true, Kind: CaptureKind.Default, Key: LocalSymbol or ParameterSymbol or SelfKey } && IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol
                 // Its self: an object, or a copy of a value.
                 || c is { Boxed: false, Kind: CaptureKind.Default or CaptureKind.ByValue, Key: SelfKey } && IsHeld(V(c.Type), _own));
         }
@@ -1315,9 +1582,11 @@ public sealed partial class SilGen {
                 case BoundPatternDeclaration pattern when Descendants(pattern).Any(n => n is BoundBindingPattern binding && Mentions(binding.Local.Type) && (inClosure || !Simple(binding.Local.Type))):
                 case BoundBindingPattern binding when Mentions(binding.Local.Type) && (inClosure || !Simple(binding.Local.Type)):
                 case BoundConditionBinding { Local: { } bound } when Mentions(bound.Type) && (inClosure || !Simple(bound.Type)):
+                case BoundTypeTestPattern tested when Mentions(tested.InputType) || Mentions(tested.TestedType) && (inClosure || tested.InputType is not ExistentialTypeSymbol { MetatypeOf: null } || !IsHeld(V(tested.TestedType), _own)):
+                    return false;
                 case BoundTypeTest test when Mentions(test.TestedType) || Mentions(test.Operand.Type) && (inClosure || !IsTestable(test.TestedType) || !IsOwn(test.Operand.Type)):
                 case BoundForEach { Element: { } element } loop when Mentions(element.Type)
-                                                                    && (inClosure || !IsOwnArray(loop.Sequence.Type) || !Simple(element.Type) || loop.Sequence is not (BoundLocalAccess or BoundParameterAccess or BoundSelfAccess or BoundFieldAccess { Receiver: BoundSelfAccess or BoundLocalAccess or BoundParameterAccess })):
+                                                                    && (inClosure || !IsOwnArray(loop.Sequence.Type) || !Simple(element.Type)):
                     return false;
                 case BoundCall call when CallMentions(call) && (inClosure || !CallAllowed(call)):
                     return false;
@@ -1406,7 +1675,9 @@ public sealed partial class SilGen {
             // Thrown on as it is, written where this function's caller says;
             // or, of a type parameter's or an associated type's, boxed as the
             // 'any Error' this function throws, by its type's eraser.
+            // One of the union this function throws, or some of it: put in it there.
             return Canonical(own).Equals(Canonical(thrown))
+                   || IsOwn(Canonical(thrown)) && Members(Canonical(thrown)).All(Members(Canonical(own)).Contains)
                    || IsOwn(Canonical(thrown)) && own is ExistentialTypeSymbol { Constraint: var constraint } && constraint.Equals(generator.Core.Error);
         }
 
@@ -1434,9 +1705,10 @@ public sealed partial class SilGen {
 
         bool Produces(BoundExpression expression) =>
             expression switch {
-                BoundParameterAccess { IsNarrowed: false } or BoundLocalAccess { IsNarrowed: false } or BoundSelfAccess => true,
-                // A 'for' loop's iterator, named with the type it has.
-                BoundLocalAccess local => local.Type.Equals(local.Local.Type),
+                BoundParameterAccess { IsNarrowed: false } or BoundLocalAccess { IsNarrowed: false } or BoundSelfAccess or BoundSuperAccess => true,
+                // A 'for' loop's iterator, named with the type it has; an optional narrowed to what it wraps.
+                BoundLocalAccess local => local.Type.Equals(local.Local.Type) || IsUnwrapped(local.Type, local.Local.Type),
+                BoundParameterAccess parameter => V(parameter.Type).Equals(V(parameter.Parameter.Type)) || IsUnwrapped(parameter.Type, parameter.Parameter.Type),
                 BoundCall or BoundMetatype or BoundTypeExpression or BoundConditional or BoundAssignment or BoundDiscard or BoundTry => true,
                 // A call of a function of them, in the generic convention.
                 BoundIndirectCall { Callee.Type: var calleeType } => IsGenericFunction(V(calleeType), _own),
@@ -1446,9 +1718,11 @@ public sealed partial class SilGen {
                 // An await of a call: the call, which the task may suspend in.
                 BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Await, Operand: var awaited } => Produces(awaited),
                 BoundFieldAccess access => PropertyAllowed(access),
-                BoundConversion { ConversionKind: ConversionKind.Identity } conversion when conversion.Type.Equals(conversion.Operand.Type) => true,
+                BoundConversion { ConversionKind: ConversionKind.Identity } conversion when conversion.Type.Equals(conversion.Operand.Type) || Canonical(conversion.Type).Equals(Canonical(conversion.Operand.Type)) => true,
                 // A closure that throws nothing where one that may throw is taken.
-                BoundConversion { ConversionKind: ConversionKind.Upcast } upcast => IsGenericFunction(V(upcast.Type), _own) && IsGenericFunction(V(upcast.Operand.Type), _own),
+                BoundConversion { ConversionKind: ConversionKind.Upcast } upcast => IsGenericFunction(V(upcast.Type), _own) && IsGenericFunction(V(upcast.Operand.Type), _own)
+                    // An object as one of its superclasses.
+                    || upcast is { Type: NamedTypeSymbol { TypeKind: TypeKind.Class }, Operand.Type: NamedTypeSymbol { TypeKind: TypeKind.Class } } && Simple(upcast.Type) && Simple(upcast.Operand.Type),
                 // An array or a slice of them, seen as another kind of array of them.
                 BoundConversion { ConversionKind: ConversionKind.Identity } view when IsOwnArray(view.Type) && IsOwnArray(view.Operand.Type) => Produces(view.Operand),
                 BoundArray array => IsOwnArray(array.Type),
@@ -1458,46 +1732,47 @@ public sealed partial class SilGen {
                 BoundConversion { ConversionKind: ConversionKind.OptionalWrap } wrap => Simple(wrap.Operand.Type),
                 BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol { UnderlyingType: var unwrapped } } force => unwrapped.Equals(force.Type),
                 // 'lowerBound as! C.Index': the value, when its metadata is the other's.
-                BoundConversion { ConversionKind: ConversionKind.Explicit } cast when IsOpaqueCast(cast) || IsOpenedCast(cast) => true,
+                BoundConversion { ConversionKind: ConversionKind.Explicit } cast when IsOpaqueCast(cast) || IsOpenedCast(cast) || IsHeldCast(cast) => true,
                 // A range of them, a generic struct.
                 BoundRange range => Simple(range.Type),
                 BoundLiteral { Value: null, Type: OptionalTypeSymbol } => true,
                 BoundBinaryOperator { OperatorKind: BinaryOperatorKind.Coalesce } => true,
                 BoundTuple or BoundTupleElementAccess or BoundMatch or BoundIfExpression => true,
                 // A generic struct or union of them, made where the metadata says.
-                BoundRecordExpression or BoundUnionCaseConstruction => true,
+                BoundRecordExpression or BoundUnionCaseConstruction or BoundUnionCaseGroup => true,
                 BoundDictionary => true,
                 _ => false,
             };
+
+        /// <summary>A read of an optional that a test has said is not none, as the value it wraps.</summary>
+        bool IsUnwrapped(TypeSymbol read, TypeSymbol declared) => V(declared) is OptionalTypeSymbol optional && Canonical(optional.UnderlyingType).Equals(Canonical(read)) && Simple(declared);
 
         bool Consumes(BoundNode parent, BoundExpression child) =>
             parent switch {
                 BoundLocalDeclaration or BoundPatternDeclaration or BoundExpressionStatement or BoundDiscard or BoundReturn => true,
                 BoundAssignment assignment => ReferenceEquals(child, assignment.Value)
                                               || assignment.Target is BoundLocalAccess or BoundParameterAccess && ReferenceEquals(child, assignment.Target)
-                                              || assignment.Target is BoundFieldAccess { Receiver: BoundSelfAccess or BoundLocalAccess { Local.IsMutable: true } } stored
-                                              && ReferenceEquals(child, assignment.Target) && PropertyAllowed(stored)
+                                              || assignment.Target is BoundFieldAccess && ReferenceEquals(child, assignment.Target) && IsPlace(assignment.Target)
                                               // A part of an element, 'nodes[i].value = v': read out, changed and written back.
                                               || assignment.Target is BoundFieldAccess { Receiver: BoundIndexAccess { Subscript: null, Indices: [_], Receiver: var parts }, Field: { IsComputed: false, IsStatic: false } } part
-                                              && ReferenceEquals(child, part) && IsOwnArray(parts.Type) && PropertyAllowed(part) && Changeable(parts)
+                                              && ReferenceEquals(child, part) && IsOwnArray(parts.Type) && PropertyAllowed(part) && IsPlace(parts)
                                               || assignment.Target is BoundSelfAccess && OwnMutating && ReferenceEquals(child, assignment.Target)
                                               || assignment.Target is BoundIndexAccess { Subscript: not null } stores && ReferenceEquals(child, assignment.Target) && SubscriptAllowed(stores, assignment.Value)
                                               || assignment.Target is BoundIndexAccess { Subscript: null, Indices: [_], Receiver: var array } && IsOwnArray(array.Type) && ReferenceEquals(child, assignment.Target)
-                                              && (array is BoundLocalAccess { Local.IsMutable: true } || array is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0 || array is BoundFieldAccess { Receiver: BoundSelfAccess } && FieldsMutable
-                                                  || array is BoundSelfAccess && OwnMutating),
+                                              && IsPlace(array),
                 BoundCall or BoundBinaryOperator or BoundUnaryOperator or BoundTry => true,
-                BoundIndirectCall indirect => IsGenericFunction(V(indirect.Callee.Type), _own) && (ReferenceEquals(child, indirect.Callee) ? indirect.Callee is BoundParameterAccess or BoundLocalAccess || indirect.Callee is BoundFieldAccess { Field: { IsComputed: false, IsStatic: false } } kept && PropertyAllowed(kept) : true),
+                BoundIndirectCall indirect => IsGenericFunction(V(indirect.Callee.Type), _own) && (!ReferenceEquals(child, indirect.Callee) || Produces(indirect.Callee)),
                 BoundFieldAccess access => ReferenceEquals(child, access.Receiver) && PropertyAllowed(access),
                 BoundConditional conditional => !ReferenceEquals(child, conditional.Condition),
                 BoundConversion { ConversionKind: ConversionKind.Identity } => true,
-                BoundConversion { ConversionKind: ConversionKind.Upcast } upcast => IsGenericFunction(V(upcast.Type), _own),
+                BoundConversion { ConversionKind: ConversionKind.Upcast } upcast => IsGenericFunction(V(upcast.Type), _own) || upcast.Type is NamedTypeSymbol { TypeKind: TypeKind.Class } && Simple(upcast.Type),
                 BoundArray or BoundTuple or BoundMatchArm or BoundIf or BoundRecordExpression or BoundUnionCaseConstruction or BoundDictionary => true,
                 BoundTupleElementAccess element => ReferenceEquals(child, element.Receiver),
                 BoundMatch match => ReferenceEquals(child, match.Subject),
                 BoundConditionBinding binding => ReferenceEquals(child, binding.Source),
                 BoundConversion { ConversionKind: ConversionKind.OptionalWrap } => true,
                 BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol } => true,
-                BoundConversion { ConversionKind: ConversionKind.Explicit } cast => IsOpaqueCast(cast) || IsErasure(cast),
+                BoundConversion { ConversionKind: ConversionKind.Explicit } cast => IsOpaqueCast(cast) || IsErasure(cast) || IsHeldCast(cast),
                 BoundConversion { ConversionKind: ConversionKind.Existential } erasure => IsErasure(erasure),
                 BoundTypeTest test => IsOwn(test.Operand.Type) && IsTestable(test.TestedType),
                 BoundRange => true,
@@ -1508,16 +1783,11 @@ public sealed partial class SilGen {
                 BoundThrow => _handlers.Count == 0 && _closureDepth == 0 && checkedSymbol.ThrownType is { } own && Canonical(own).Equals(Canonical(child.Type)),
                 // Not inside a protocol's own 'debugDescription' (Error's
                 // '"\(self)"'): a describer would call it back.
-                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0
+                // One made of them, an array or an optional, is written by code made for each type.
+                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0 && (IsOwn(child.Type) || child.Type is MetatypeTypeSymbol)
                                                         && (interpolated.Formats[at] is null || interpolated.Formats[at]!.Specifier == DebugFormat && (DebugDescribes = true)) && !DescribesSelf && (Describes = true),
                 _ => false,
             };
-
-        /// <summary>An array this code may change where it is: a local, an inout parameter, a stored field of its self.</summary>
-        bool Changeable(BoundExpression array) =>
-            array is BoundLocalAccess { Local.IsMutable: true } || array is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0
-            || array is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsComputed: false, IsStatic: false } } stored && FieldsMutable && PropertyAllowed(stored)
-            || array is BoundSelfAccess && OwnMutating;
 
         bool DescribesSelf => checkedSymbol is { Name: "debugDescription" } && OwnerOf(checkedSymbol) is { TypeKind: TypeKind.Protocol };
 
@@ -1537,7 +1807,7 @@ public sealed partial class SilGen {
         ///     (<see cref="FunctionLowering.OpaqueAsExistential" />).
         /// </summary>
         bool IsErasure(BoundConversion erasure) {
-            if (!IsOwn(erasure.Operand.Type) || _closureDepth > 0) {
+            if (!IsOwn(erasure.Operand.Type)) {
                 return false;
             }
 
@@ -1561,9 +1831,23 @@ public sealed partial class SilGen {
         /// <summary>An 'as?' or 'as!' of an existential to one of the function's opaque types, or a type made of them (<see cref="FunctionLowering.OpaqueDowncast" />).</summary>
         bool IsOpenedCast(BoundConversion cast) =>
             cast is { Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false }, Operand.Type: ExistentialTypeSymbol { Constraint: var constraint } }
-            && !constraint.Equals(generator.Core.Error) && !Mentions(constraint)
+            && !Mentions(constraint)
             && (cast.Type is OptionalTypeSymbol { UnderlyingType: var wrapped } ? wrapped : cast.Type) is var target and not (ExistentialTypeSymbol or OptionalTypeSymbol or MetatypeTypeSymbol)
             && IsHeld(V(target), _own);
+
+        /// <summary>
+        ///     An 'as?' or 'as!' from one of the function's opaque types to an
+        ///     array, an optional, a tuple or a generic value type made of them
+        ///     (<see cref="FunctionLowering.OpaqueHeldCast" />): the value, when
+        ///     its metadata is that type's.
+        /// </summary>
+        bool IsHeldCast(BoundConversion cast) =>
+            cast is { Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } && IsOwn(cast.Operand.Type)
+            && CastTarget(cast) is var target && !IsOwn(target) && target is ArrayTypeSymbol or OptionalTypeSymbol or TupleTypeSymbol or NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Union }
+            && Mentions(target) && IsHeld(V(target), _own);
+
+        /// <summary>The type a cast asks for: 'as? T' gives a T?.</summary>
+        static TypeSymbol CastTarget(BoundConversion cast) => cast.Type is OptionalTypeSymbol { UnderlyingType: var wrapped } ? wrapped : cast.Type;
 
         /// <summary>An 'as!' from one of the function's opaque types to another (<see cref="FunctionLowering.OpaqueForcedCast" />).</summary>
         bool IsOpaqueCast(BoundConversion cast) =>
@@ -1608,8 +1892,20 @@ public sealed partial class SilGen {
             Mentions(call.Type) || call.Receiver is { } receiver && Mentions(receiver.Type) || call.Arguments.Any(a => Mentions(a.Type))
             || call.Substitution.Parameters.Any(p => call.Substitution.Lookup(p) is { } bound && Mentions(bound));
 
+        /// <summary>Which condition kept a call out, by its line, for SABLE_GENERICS_TRACE=2.</summary>
+        bool No([System.Runtime.CompilerServices.CallerLineNumber] int line = 0) {
+            RefusedAt = line;
+            return false;
+        }
+
+        public int RefusedAt { get; private set; }
+
         bool CallAllowed(BoundCall call) {
-            var callee = call.Function;
+            // Through the slot another method introduces: a call of that.
+            var callee = call.Receiver is not BoundSuperAccess && HasSelf(call.Function) && generator.IsDynamic(call.Function) && generator.DynamicRoot(call.Function) is { } root ? root : call.Function;
+            if (!ReferenceEquals(callee, call.Function) && !IsGeneric(callee)) {
+                return Simple(call.Type) && call.Arguments.All(a => Simple(a.Type)) && call.Substitution.Parameters.All(p => !Mentions(call.Substitution.Apply(p))) || No();
+            }
 
             // 'type(of: x)': the metadata, or an object's own class.
             if (callee is { Name: "type", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }) {
@@ -1626,6 +1922,16 @@ public sealed partial class SilGen {
                 return Simple(call.Type) && call.Arguments.All(a => Simple(a.Type));
             }
 
+            // One of a generic type's own builtins that has nothing to do with its arguments: 'TaskGroup<T>.take(group)'.
+            if (callee is { Builtin: not null, IsStatic: true } && !Mentions(call.Type) && !call.Arguments.Any(a => Mentions(a.Type))) {
+                return true;
+            }
+
+            // A task's, which the compiler writes: its class is one for every result.
+            if (IsIntrinsic(callee) && ReferenceEquals(callee.ContainingSymbol, generator.Core.Task)) {
+                return TasksCompiledOnce && Simple(call.Type) && call.Arguments.All(a => Simple(a.Type)) && call.Receiver is null or BoundTypeExpression or { Type: NamedTypeSymbol } || No();
+            }
+
             // An array's own builtins, on an array of a type parameter's values held in a local.
             // One that only reads it: a slice of it, or a copy of a slice's run.
             if (callee.Builtin is "array_slice" or "array_of_slice" && call.Receiver is { } viewed && IsOwnArray(viewed.Type)) {
@@ -1637,12 +1943,8 @@ public sealed partial class SilGen {
                 return call.Arguments.All(a => Simple(a.Type));
             }
 
-            if (callee.Builtin is "array_append" or "array_append_repeating" or "array_append_holes" or "array_take" or "array_append_all" or "array_remove_last" or "array_rotate" or "array_reserve" or "array_clear" or "array_truncate" && call.Receiver is { } array && IsOwnArray(array.Type)) {
-                return (call.Receiver is BoundLocalAccess { Local.IsMutable: true }
-                        || call.Receiver is BoundSelfAccess && OwnMutating
-                        || call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0
-                        || call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess } stored && FieldsMutable && PropertyAllowed(stored)
-                        || call.Receiver is BoundFieldAccess { Receiver: BoundLocalAccess { Local.IsMutable: true }, Field: { IsComputed: false, IsStatic: false } } local && PropertyAllowed(local))
+            if (callee.Builtin is "array_append" or "array_append_repeating" or "array_append_holes" or "array_take" or "array_append_all" or "array_remove_last" or "array_rotate" or "array_reserve" or "array_clear" or "array_truncate" && (call.Receiver?.Type ?? (Owner(checkedSymbol) is null ? null : SelfType(checkedSymbol, TypeSubstitution.Empty))) is { } array && IsOwnArray(array)) {
+                return IsPlace(call.Receiver)
                        && call.Arguments.All(a => Simple(a.Type));
             }
 
@@ -1652,7 +1954,7 @@ public sealed partial class SilGen {
             }
 
             if (!IsGeneric(callee) || generator.UnspecialisedShape(callee) is not { } calleeShape) {
-                return false;
+                return No();
             }
 
             Describes |= generator.DescribesValues(callee);
@@ -1672,33 +1974,46 @@ public sealed partial class SilGen {
             var calleeOwner = calleeSelf is null ? OwnerOf(callee)?.OriginalDefinition : null;
             var ownerBound = calleeOwner is null ? null : OwnerBindings(calleeOwner, call.Receiver is null ? (Owner(checkedSymbol) is null ? null : SelfType(checkedSymbol, TypeSubstitution.Empty)) : receiverType);
             if (call.Receiver is { } onValue && Mentions(onValue.Type) && (calleeSelf is null || receiverType is null || !IsOwn(receiverType))
-                && (ownerBound is null || !Simple(onValue.Type))) {
-                return false;
+                && (ownerBound is null && calleeSelf is null || receiverType is null || !Simple(onValue.Type))) {
+                return No();
             }
 
-            if (calleeOwner is not null && callee.IsMutating && call.Receiver is not (BoundLocalAccess { Local.IsMutable: true } or null or BoundSelfAccess)
-                && !(call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0)
-                && !(call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsComputed: false, IsStatic: false } } changed && FieldsMutable && PropertyAllowed(changed))) {
-                return false;
+            if (calleeOwner is { TypeKind: not (TypeKind.Class or TypeKind.Actor) } && callee.IsMutating && call.Receiver is not (null or BoundSelfAccess) && !IsPlace(call.Receiver)) {
+                return No();
             }
 
             // One that changes self changes a local, or this function's own self.
-            if (calleeSelf is not null && callee.IsMutating && receiverType is not null && IsOwn(receiverType)
-                && call.Receiver is not (BoundLocalAccess { Local.IsMutable: true } or null or BoundSelfAccess) && !(call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0) || callee.IsMutating && call.Receiver is null or BoundSelfAccess && !OwnMutating) {
-                return false;
+            if (calleeSelf is not null && callee.IsMutating && receiverType is not null && Mentions(receiverType) && call.Receiver is not (null or BoundSelfAccess) && !IsPlace(call.Receiver)
+                || callee.IsMutating && calleeOwner is not { TypeKind: TypeKind.Class or TypeKind.Actor } && call.Receiver is null or BoundSelfAccess && !OwnMutating) {
+                return No();
+            }
+
+            // A subscript's 'some P' index, which says nothing of what it is bound to but its own type.
+            TypeSymbol? GivenFor(TypeParameterSymbol parameter) {
+                for (var i = 0; parameter.OpaqueParameter is { } opaque && i < callee.Parameters.Length && i < call.Arguments.Length; i++) {
+                    if (callee.Parameters[i].Type.Equals(opaque)) {
+                        return call.Arguments[i] is BoundConversion { ConversionKind: ConversionKind.Existential, Type: OpaqueTypeSymbol, Operand: var given } ? given.Type : call.Arguments[i].Type;
+                    }
+                }
+
+                return null;
             }
 
             var boundMap = new Dictionary<TypeParameterSymbol, TypeSymbol>();
             foreach (var parameter in calleeShape.Parameters) {
                 if ((ReferenceEquals(parameter, calleeSelf) ? call.Substitution.Lookup(parameter) ?? receiverType
-                        : call.Substitution.Lookup(parameter) ?? ownerBound?.GetValueOrDefault(parameter)) is not { } given) {
-                    return false;
+                        : call.Substitution.Lookup(parameter) ?? ownerBound?.GetValueOrDefault(parameter) ?? GivenFor(parameter)) is not { } given) {
+                    return No();
                 }
 
                 var bound = V(given);
                 boundMap[parameter] = bound;
 
                 if (!Mentions(bound)) {
+                    if (!calleeShape.ProtocolsOf(parameter).All(p => generator.MeetsOnce(bound, p))) {
+                        return No();
+                    }
+
                     continue;
                 }
 
@@ -1706,9 +2021,9 @@ public sealed partial class SilGen {
                 // parameter's values, its metadata made at run time —
                 // polymorphic recursion — for a callee that asks nothing of it;
                 // or a generic type's instance, whose conformances have templates.
-                if (bound is not TypeParameterSymbol && IsHeld(V(bound), _own) && bound is not MetatypeTypeSymbol) {
+                if (!IsOwn(bound) && IsHeld(bound, _own) && bound is not MetatypeTypeSymbol) {
                     if (!calleeShape.ProtocolsOf(parameter).All(p => generator.HasTemplate(bound, p))) {
-                        return false;
+                        return No();
                     }
 
                     continue;
@@ -1716,28 +2031,35 @@ public sealed partial class SilGen {
 
                 // What the callee requires of it, this function has: its own tables, or what they refine.
                 if (!IsOwn(bound)) {
-                    return false;
+                    return No();
                 }
 
                 var has = Known(bound);
                 if (!calleeShape.ProtocolsOf(parameter).All(needed => has.Any(p => ReferenceEquals(p, needed)))) {
-                    return false;
+                    return No();
                 }
+            }
+
+            foreach (var (known, value) in FixedParameters(callee)) {
+                boundMap[known] = value;
             }
 
             var calleeSubstitution = WithAssociatedTypes(callee, new TypeSubstitution(boundMap));
 
             // A 'rethrows(E)' callee whose E is a type only metadata knows here,
             // and whose functions may throw something else too, throws them
-            // together as 'any Error' (#297): only a function that throws one
-            // may throw it on, as it is; it cannot be seen as E again yet.
+            // together as 'any Error' (#297): a function that throws one may
+            // throw it on, as it is, and one that throws E takes it out of
+            // its box; a handler cannot see it as E yet.
             if (callee is { IsRethrows: true, RethrownAlso: { } also } && Canonical(calleeSubstitution.Apply(also)) is var rethrown && Mentions(rethrown) && !rethrown.Equals(generator.Core.Never)
                 && (callee.ThrownType is not { } declared || !Canonical(calleeSubstitution.Apply(declared)).Equals(rethrown))
-                && (_handlers.Count > 0 || _closureDepth > 0 || checkedSymbol.ThrownType is not ExistentialTypeSymbol { Constraint: var erased } || !erased.Equals(generator.Core.Error))) {
-                return false;
+                && (_handlers.Count > 0 || _closureDepth > 0 || !(checkedSymbol.ThrownType is ExistentialTypeSymbol { Constraint: var erased } && erased.Equals(generator.Core.Error)
+                    // Or one whose error is E itself, which is what its 'any Error' holds.
+                    || checkedSymbol.ThrownType is { } ownThrown && Canonical(ownThrown).Equals(rethrown) && IsOwn(rethrown)))) {
+                return No();
             }
 
-            return callee.ThrownType is not { } calleeThrown || ThrowsAllowed(calleeSubstitution.Apply(calleeThrown));
+            return callee.ThrownType is not { } calleeThrown || ThrowsAllowed(calleeSubstitution.Apply(calleeThrown)) || No();
         }
 
         /// <summary>A requirement of the protocols a type parameter has, called on one, as its generic witness takes it.</summary>
@@ -1745,7 +2067,7 @@ public sealed partial class SilGen {
             var callee = call.Function;
             if (RequirementProtocol(callee) is not { } declared || generator.GenericEntryType(declared, callee) is null
                 || !generator.GenericRequirements(declared).Exists(r => ReferenceEquals(r.Member, callee))) {
-                return false;
+                return No();
             }
 
             var protocol = declared.OriginalDefinition;
@@ -1757,22 +2079,43 @@ public sealed partial class SilGen {
                 null => (self is null ? null : call.Substitution.Lookup(self)) ?? callee.Parameters.Zip(call.Arguments).FirstOrDefault(p => p.First.Type.Equals(self)).Second?.Type,
             } is { } read ? V(read) : null;
 
+            // On a type known here: that type's own member, as lowering calls it.
+            if (selfType is not null && !Mentions(selfType)) {
+                var member = selfType switch {
+                    NamedTypeSymbol named => Implementation(named, callee),
+                    ArrayTypeSymbol array => generator.ArrayImplementation(array, callee),
+                    OptionalTypeSymbol => Implementation(generator.Core.Optional, callee),
+                    _ => null,
+                };
+                if (member is null || OwnerOf(member) is { TypeKind: TypeKind.Protocol } || member.TypeParameters.Length != callee.TypeParameters.Length) {
+                    return No();
+                }
+
+                var owner = OwnerOf(member)?.OriginalDefinition;
+                var bindings = (owner is null ? null : OwnerBindings(owner, selfType)) ?? [];
+                for (var i = 0; i < member.TypeParameters.Length; i++) {
+                    if (call.Substitution.Lookup(callee.TypeParameters[i]) is { } given) {
+                        bindings[member.TypeParameters[i]] = given;
+                    }
+                }
+
+                return !IsGeneric(member) ? call.Arguments.All(a => Simple(a.Type)) && Simple(call.Type)
+                    : CallAllowed(new BoundCall(call.Syntax, call.Receiver, member, call.Arguments, call.Type) { Substitution = new TypeSubstitution(bindings) });
+            }
+
             if (selfType is null || !IsOwn(selfType) || !Known(selfType).Any(p => ReferenceEquals(p, protocol))) {
-                return false;
+                return No();
             }
 
             if (callee.ThrownType is { } thrown && !ThrowsAllowed(Through(thrown, protocol, selfType))) {
-                return false;
+                return No();
             }
 
             // A method that changes its value changes it in a local, or a
             // protocol extension's own self, when it may change it.
             // Or a stored field of the self of a method that may change it: 'base.next()'.
-            if (callee.IsMutating && call.Receiver is not BoundLocalAccess { Local.IsMutable: true }
-                && !(call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0)
-                && !(call.Receiver is null or BoundSelfAccess && OwnMutating)
-                && !(call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsComputed: false, IsStatic: false } } stored && FieldsMutable && PropertyAllowed(stored))) {
-                return false;
+            if (callee.IsMutating && call.Receiver is not null && !IsPlace(call.Receiver)) {
+                return No();
             }
 
             // Generic over parameters of its own: each bound to a type this
@@ -1784,7 +2127,7 @@ public sealed partial class SilGen {
                 var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
                 foreach (var parameter in own.Parameters) {
                     if ((parameter.OpaqueParameter is null ? call.Substitution.Lookup(parameter) : OpaqueGiven(call, parameter)) is not { } given) {
-                        return false;
+                        return No();
                     }
 
                     var bound = V(given);
@@ -1792,11 +2135,15 @@ public sealed partial class SilGen {
                     if (IsOwn(bound)) {
                         var has = Known(bound);
                         if (!own.ProtocolsOf(parameter).All(needed => has.Any(p => ReferenceEquals(p, needed)))) {
-                            return false;
+                            return No();
                         }
-                    } else if (Mentions(bound) || bound is not (NamedTypeSymbol or ArrayTypeSymbol) || generator.Lower(bound) is not { } lowered || lowered is NominalType { IsNoncopyable: true } || bound.Equals(generator.Core.Never)
-                               || !own.ProtocolsOf(parameter).All(needed => bound.Satisfies(needed))) {
-                        return false;
+                    } else if (Mentions(bound)) {
+                        if (!IsHeld(bound, _own) || bound is MetatypeTypeSymbol || !own.ProtocolsOf(parameter).All(needed => generator.HasTemplate(bound, needed))) {
+                            return No();
+                        }
+                    } else if (bound is not (NamedTypeSymbol or ArrayTypeSymbol) || generator.Lower(bound) is not { } lowered || lowered is NominalType { IsNoncopyable: true } || bound.Equals(generator.Core.Never)
+                               || !own.ProtocolsOf(parameter).All(needed => bound.Satisfies(needed) && generator.MeetsOnce(bound, needed))) {
+                        return No();
                     }
                 }
 
@@ -1804,11 +2151,11 @@ public sealed partial class SilGen {
                 Describes = DebugDescribes = true;
                 foreach (var (declaredParameter, argument) in callee.Parameters.Zip(call.Arguments)) {
                     if (!OwnTypeAs(declaredParameter.Type, PassedAsItIs(argument).Type)) {
-                        return false;
+                        return No();
                     }
                 }
 
-                return OwnTypeAs(callee.ReturnType, call.Type);
+                return OwnTypeAs(ResultOf(callee)!, call.Type);
             }
 
             bool OwnTypeAs(TypeSymbol declared, TypeSymbol given) {
@@ -1818,11 +2165,12 @@ public sealed partial class SilGen {
 
             foreach (var (declaredParameter, argument) in callee.Parameters.Zip(call.Arguments)) {
                 if (SilGen.Mentions(declaredParameter.Type, [self!]) ? !SameThrough(declaredParameter.Type, protocol, selfType, argument.Type) : Mentions(argument.Type)) {
-                    return false;
+                    return No();
                 }
             }
 
-            return SilGen.Mentions(callee.ReturnType, [self!]) ? SameThrough(callee.ReturnType, protocol, selfType, call.Type) : !Mentions(call.Type);
+            var returned = ResultOf(callee)!;
+            return SilGen.Mentions(returned, [self!]) ? SameThrough(returned, protocol, selfType, call.Type) : !Mentions(call.Type);
         }
 
         /// <summary>A property requirement of a type parameter's protocols, read on one: through its getter's generic entry.</summary>
@@ -1834,9 +2182,14 @@ public sealed partial class SilGen {
                 return true;
             }
 
+            // A task's value, and its handle.
+            if (ReferenceEquals(field.ContainingSymbol, generator.Core.Task) && field.Name is "value" or "handle" && access.Receiver is { Type: var taskType }) {
+                return TasksCompiledOnce && Simple(taskType) && Simple(access.Type);
+            }
+
             // A stored field of a generic struct this function holds, where its metadata says.
             if (access.Receiver is { } holder && field is { IsStatic: false, IsComputed: false, Builtin: null }
-                && holder.Type is NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Struct or TypeKind.Class } && Simple(holder.Type) && Simple(access.Type)) {
+                && holder.Type is NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } owner && (owner.IsConstructed || owner.IsGenericDefinition) && Simple(holder.Type) && Simple(access.Type)) {
                 return true;
             }
 
@@ -1880,14 +2233,36 @@ public sealed partial class SilGen {
                 return true;
             }
 
+            // Two arrays, slices or optionals of them, compared by what they conform to Equatable by.
+            if (IsHeldEquality(binary)) {
+                return true;
+            }
+
             return binary.Method is { } method && OperatorAllowed(method, binary.Left, [binary.Left, binary.Right], binary);
         }
+
+        /// <summary>
+        ///     Two arrays, slices or optionals of a type parameter's values
+        ///     compared, as their kind's table of Equatable says
+        ///     (<see cref="FunctionLowering.HeldEquality" />).
+        /// </summary>
+        bool IsHeldEquality(BoundBinaryOperator binary) =>
+            binary is { OperatorKind: BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual, Method: null }
+            && V(binary.Left.Type) is ArrayTypeSymbol or OptionalTypeSymbol && V(binary.Left.Type).Equals(V(binary.Right.Type)) && Simple(binary.Left.Type)
+            && (V(binary.Left.Type) is ArrayTypeSymbol array ? array.ElementType : ((OptionalTypeSymbol)V(binary.Left.Type)).UnderlyingType) is var element
+            && IsOwn(element) && generator.EquatableProtocol() is { } equatable && Known(element).Any(p => ReferenceEquals(p, equatable)) && generator.HasTemplate(V(binary.Left.Type), equatable);
 
         /// <summary>An operator applied to values this code holds: a requirement's, through its table, or a generic type's own, compiled once as a static member is.</summary>
         bool OperatorAllowed(FunctionSymbol method, BoundExpression first, ImmutableArray<BoundExpression> operands, BoundExpression at) {
             var call = new BoundCall(at.Syntax, null, method, operands, at.Type);
             if (OwnerOf(method) is { TypeKind: TypeKind.Protocol }) {
                 return RequirementAllowed(call);
+            }
+
+            // An array's or an optional's, declared by its extension.
+            if (OwnerOf(method)?.OriginalDefinition is { } extended && (extended.ExtendedArray is not null || extended.ExtendedOptional is not null)) {
+                return OwnerBindings(extended, V(first.Type)) is { } elements
+                       && CallAllowed(new BoundCall(at.Syntax, null, method, operands, at.Type) { Substitution = new TypeSubstitution(elements) });
             }
 
             return OwnerOf(method) is { ExtendedArray: null, ExtendedOptional: null } owner && V(first.Type) is NamedTypeSymbol { IsConstructed: true } named
@@ -1933,8 +2308,9 @@ public sealed partial class SilGen {
         }
 
         // An initialiser borrows what it is given, as any function compiled
-        // once does: its callers pass values of a type parameter where they are.
-        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) || IsClassInitializer(symbol) ? default : signature.Owned.Concat(hidden.Select(static _ => false)).ToImmutableArray();
+        // once does, and one that consumes a parameter: its callers pass
+        // values of a type parameter where they are.
+        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) || IsClassInitializer(symbol) || symbol.Parameters.Any(static p => p.Modifier == ParameterModifier.Consuming) ? default : signature.Owned.Concat(hidden.Select(static _ => false)).ToImmutableArray();
         var type = new FunctionType([..signature.Parameters, ..hidden], result, thrown, owned, signature.IsAsync);
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, OpaqueParametersAsThemselves(symbol), _loweringInstance);
@@ -1950,8 +2326,9 @@ public sealed partial class SilGen {
         }
 
         _pending.Enqueue((symbol, name, type, OpaqueParametersAsThemselves(symbol)));
-        if (IsClassInitializer(symbol) && Owner(symbol) is { } madeClass) {
+        if (IsClassInitializer(symbol) && Owner(symbol) is { TypeParameters.IsEmpty: false } madeClass) {
             GenericDeinitThunk(madeClass.OriginalDefinition, at);
+            SuperclassAccessor(madeClass.OriginalDefinition);
         }
 
         return (name, type);
@@ -1988,6 +2365,11 @@ public sealed partial class SilGen {
                 }
 
                 switch (member) {
+                    // 'init()': a static member that gives a Self.
+                    case FunctionSymbol { FunctionKind: FunctionKind.Initializer } initializer:
+                        requirements.Add(("static$" + SlotName(initializer), initializer));
+                        break;
+
                     case FunctionSymbol { FunctionKind: FunctionKind.Ordinary or FunctionKind.Operator } function:
                         requirements.Add(((function.IsStatic || function.FunctionKind == FunctionKind.Operator ? "static$" : "") + SlotName(function), function));
                         break;
@@ -2096,7 +2478,8 @@ public sealed partial class SilGen {
             }
         }
 
-        if ((Slot(requirement.ReturnType) ?? ArrayOfSelf(arguments.Apply(requirement.ReturnType), self, ownParameters)) is not { } result) {
+        var returned = ResultOf(requirement)!;
+        if ((Slot(returned) ?? ArrayOfSelf(arguments.Apply(returned), self, ownParameters)) is not { } result) {
             return null;
         }
 
@@ -2122,24 +2505,13 @@ public sealed partial class SilGen {
 
         // Its own type parameters' metadata and tables, after where the result and the error go.
         if (OwnShape(requirement) is { } ownShape) {
-            if (requirement.IsAsync) {
-                return null;
-            }
-
             parameters.AddRange(Enumerable.Repeat(SilType.Metadata, ownShape.Parameters.Length));
             parameters.AddRange(Enumerable.Repeat(SilType.WitnessTable, ownShape.Requirements.Length));
         }
 
-        // An async one is awaited through its entry as any async call is.
-        // Only self may be held by address — in the existential's box, or
-        // the caller's frame, which outlives the call — not yet a value of
-        // Self or of an associated type in the caller's storage, which a
-        // suspension would have to keep.
-        if (requirement.IsAsync && (parameters.Skip(HasSelf(requirement) ? 1 : 0).Any(static p => SilType.MentionsOpaque(p))
-                || SilType.MentionsOpaque(result) || thrown is not null && SilType.MentionsOpaque(thrown))) {
-            return null;
-        }
-
+        // An async one is awaited through its entry as any async call is:
+        // what it is given by address — self in the existential's box, a
+        // value in the caller's frame, where its result goes — outlives the call.
         parameters.Add(SilType.Metadata);
         return new FunctionType(parameters.ToImmutable(), result, thrown, isAsync: requirement.IsAsync);
     }
@@ -2158,7 +2530,9 @@ public sealed partial class SilGen {
 
         if (!_ownShapes.TryGetValue(requirement, out var shape)) {
             var requirements = new List<(TypeParameterSymbol, NamedTypeSymbol)>();
-            var passed = requirement.ConformanceRequirements.IsEmpty && requirement.SameTypeRequirements.IsEmpty;
+            // 'where C.Element == Element' reads one of its associated types as the protocol's.
+            var passed = requirement.ConformanceRequirements.IsEmpty
+                         && requirement.SameTypeRequirements.All(r => r.Left is DependentMemberTypeSymbol or TypeParameterSymbol && r.Right is DependentMemberTypeSymbol or TypeParameterSymbol);
             foreach (var parameter in OwnParameters(requirement)) {
                 passed &= parameter is { IsValue: false, AllowsNoncopyable: false } && parameter.OpaqueParameter is not { Arguments.IsEmpty: false };
                 foreach (var part in parameter.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c))) {
@@ -2174,6 +2548,33 @@ public sealed partial class SilGen {
         }
 
         return shape;
+    }
+
+    /// <summary>
+    ///     Whether a type's table of a conformance is whole: what meets each
+    ///     requirement generic over its own parameters is compiled once, as
+    ///     its entry must be (<see cref="TrapWitness" />).
+    /// </summary>
+    internal bool MeetsOnce(TypeSymbol concrete, NamedTypeSymbol protocol) {
+        foreach (var each in ProtocolClosure([protocol])) {
+            foreach (var (_, member) in GenericRequirements(each)) {
+                if (member is not FunctionSymbol requirement || OwnParameters(requirement).IsEmpty || GenericEntryType(each, requirement) is null) {
+                    continue;
+                }
+
+                var met = concrete switch {
+                    NamedTypeSymbol named => Implementation(named, requirement),
+                    ArrayTypeSymbol array => ArrayImplementation(array, requirement),
+                    OptionalTypeSymbol => Implementation(Core.Optional, requirement),
+                    _ => null,
+                };
+                if (met is null || UnspecialisedShape(met) is null) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /// <summary>A requirement's own type parameters: those it declares, and one for each <c>some P</c> its parameters have.</summary>
@@ -2219,7 +2620,14 @@ public sealed partial class SilGen {
     ///     does not declare each conformance itself, or it cannot be lowered.
     /// </summary>
     internal bool GenericTable(TypeSymbol concrete, NamedTypeSymbol protocol, SyntaxNode at, bool describe = true, bool debugDescribe = false) {
-        if (Lower(concrete) is not { } value || concrete is not (NamedTypeSymbol or ArrayTypeSymbol)) {
+        // A union of errors is one through its template.
+        if (concrete is StructuralUnionTypeSymbol errors) {
+            return Lower(errors) is not null && errors.Cases.All(c => GenericTable(c, protocol, at, describe, debugDescribe)) && HasUnionTemplate(protocol.OriginalDefinition);
+        }
+
+        // 'any Error' is an error itself.
+        var self = concrete.Equals(Core.AnyError) && ProtocolClosure([Core.Error]).Any(p => ReferenceEquals(p, protocol.OriginalDefinition));
+        if (Lower(concrete) is not { } value || !self && concrete is not (NamedTypeSymbol or ArrayTypeSymbol or OptionalTypeSymbol)) {
             return false;
         }
 
@@ -2235,17 +2643,23 @@ public sealed partial class SilGen {
             if (!concrete.Equals(Core.Never) && !closure.TrueForAll(p => declared.Contains(QualifiedName(p)))) {
                 return false;
             }
-        } else if (!CompilesOnce || value is not ArrayType) {
+        } else if (!self && (!CompilesOnce || value is not (ArrayType or SliceType or EnumType))) {
             return false;
         }
 
-        if (!closure.TrueForAll(concrete.Satisfies)) {
+        if (!self && !closure.TrueForAll(concrete.Satisfies)) {
             return false;
         }
 
         foreach (var each in closure) {
             if (WitnessTable(concrete, value, each, at) is { } made && _partial.Contains(made)) {
                 return false;
+            }
+        }
+
+        if (self && value is NominalType anyError) {
+            foreach (var name in closure.Select(QualifiedName).Where(n => !anyError.Conformances.Contains(n))) {
+                anyError.Conformances.Add(name);
             }
         }
 
@@ -2269,7 +2683,7 @@ public sealed partial class SilGen {
                         Describer(read, lowered, at, debugDescribed);
                     }
 
-                    if (AssociatedBinding(concrete, associated) is not { } bound || bound is not (NamedTypeSymbol or ArrayTypeSymbol)) {
+                    if (AssociatedBinding(concrete, associated) is not { } bound || bound is not (NamedTypeSymbol or ArrayTypeSymbol or OptionalTypeSymbol)) {
                         continue;
                     }
 
@@ -2383,9 +2797,9 @@ public sealed partial class SilGen {
 
         var substitution = WithAssociatedTypes(requirement, new TypeSubstitution(WithProtocolArguments(protocol, bound)));
         BoundExpression? receiver = HasSelf(requirement) ? new BoundSelfAccess(syntax, self, requirement.IsMutating)
-            : requirement.IsStatic ? new BoundTypeExpression(syntax, self)
+            : requirement.IsStatic || requirement.FunctionKind == FunctionKind.Initializer ? new BoundTypeExpression(syntax, self)
             : null;
-        BoundExpression call = new BoundCall(syntax, receiver, requirement, [..requirement.Parameters.Select(p => (BoundExpression)new BoundParameterAccess(syntax, p))], requirement.ReturnType) {
+        BoundExpression call = new BoundCall(syntax, receiver, requirement, [..requirement.Parameters.Select(p => (BoundExpression)new BoundParameterAccess(syntax, p))], ResultOf(requirement)!) {
             Substitution = substitution,
         };
 
@@ -2403,7 +2817,7 @@ public sealed partial class SilGen {
                 Substitution = substitution,
             };
         }
-        BoundStatement[] statements = requirement.ReturnType.Equals(Core.Void)
+        BoundStatement[] statements = ResultOf(requirement)!.Equals(Core.Void)
             ? [new BoundExpressionStatement(syntax, call), new BoundReturn(syntax, null)]
             : [new BoundReturn(syntax, call)];
 
@@ -2429,7 +2843,7 @@ public sealed partial class SilGen {
             SourceFile = source.FileName,
             Line = source.GetLinePosition(syntax.Span.Start).Line,
         };
-        var bridge = new Bridge(HasSelf(requirement), [..requirement.Parameters.Where(p => Mentions(p.Type, [self]))], Mentions(requirement.ReturnType, [self]));
+        var bridge = new Bridge(HasSelf(requirement), [..requirement.Parameters.Where(p => Mentions(p.Type, [self]))], Mentions(ResultOf(requirement)!, [self]));
         var lowering = new FunctionLowering(this, requirement, function, source, substitution) { Bridged = bridge with { Self = concrete } };
         lowering.Lower(new BoundBlock(syntax, [], [..statements]));
         if (lowering.Failed) {
@@ -2625,6 +3039,32 @@ public sealed partial class SilGen {
     }
 
     static (string Thunk, ClassType Context)? MakeReabstraction(SilModule module, FunctionType source, FunctionType target, string name, ThickFunctionType closure) {
+        var context = new ClassType($"{name}$context");
+        context.Fields.Add(("function", closure));
+        if (MakeConversion(module, source, target, name, new ThickFunctionType(target).Implementation, 1, (entry, _) => {
+                var holder = entry.Append(new UncheckedRefCastInst(entry.Arguments[^1], context));
+                return (entry.Append(new LoadBorrowInst(entry.Append(new RefElementAddrInst(holder, 0)))), [], []);
+            }, selfless: true) is null) {
+            return null;
+        }
+
+        module.AddType(context);
+        return (name, context);
+    }
+
+    /// <summary>
+    ///     A function that converts: of the type <paramref name="whole" />,
+    ///     which is <paramref name="target" />'s parameters after its self
+    ///     (unless <paramref name="selfless" />) and before
+    ///     <paramref name="hidden" /> more, it calls what
+    ///     <paramref name="callee" /> says, of <paramref name="source" />'s
+    ///     type between what it passes before and after, with each argument,
+    ///     the result and the error as that has them. Null when one cannot be.
+    /// </summary>
+    static string? MakeConversion(
+        SilModule module, FunctionType source, FunctionType target, string name, FunctionType whole, int hidden,
+        Func<SilBlock, SilValue, (SilValue Function, SilValue[] Before, List<SilValue> After)?> callee, bool selfless = false
+    ) {
         // A result written where the caller says, on either side: the last parameter.
         // After it, where an error goes that is thrown as its address.
         static bool WritesError(FunctionType type) => type is { Thrown: AddressType error, Parameters: [.., var last] } && last == error;
@@ -2641,14 +3081,16 @@ public sealed partial class SilGen {
             return null;
         }
 
-        var context = new ClassType($"{name}$context");
-        context.Fields.Add(("function", closure));
-        var thunk = new SilFunction(name, new ThickFunctionType(target).Implementation);
+        var thunk = new SilFunction(name, whole);
         var entry = thunk.AddBlock();
-        var given = target.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
-        var contextArgument = entry.AddArgument(SilType.Object);
-        var holder = entry.Append(new UncheckedRefCastInst(contextArgument, context));
-        var function = entry.Append(new LoadBorrowInst(entry.Append(new RefElementAddrInst(holder, 0))));
+        foreach (var parameter in whole.Parameters) {
+            entry.AddArgument(parameter);
+        }
+
+        var given = entry.Arguments.Skip(selfless ? 0 : 1).SkipLast(hidden).Cast<SilValue>().ToList();
+        if (callee(entry, entry.Arguments[0]) is not var (function, before, after)) {
+            return null;
+        }
 
         // Each argument as the closure takes it: where the caller holds it, seen as the type it is.
         var arguments = new List<SilValue>();
@@ -2717,7 +3159,10 @@ public sealed partial class SilGen {
                 block.Append(new EndBorrowInst(ends[i]));
             }
 
-            block.Append(new EndBorrowInst(function));
+            if (function is LoadBorrowInst) {
+                block.Append(new EndBorrowInst(function));
+            }
+
             if (outResult && result is not null && resultType != SilType.Unit) {
                 var into = given[own - 1];
                 SilValue at = ((AddressType)into.Type).Pointee == resultType ? into : block.Append(new BuiltinInst("opaque_cast", SilType.Address(resultType), into));
@@ -2747,20 +3192,23 @@ public sealed partial class SilGen {
         }
 
         if (source.Thrown is null) {
-            var result = entry.Append(new ApplyInst(function, resultType, [..arguments]));
+            var result = entry.Append(new ApplyInst(function, resultType, [..before, ..arguments, ..after]));
             Finish(entry, resultType == SilType.Unit ? null : result);
         } else {
             var normal = thunk.AddBlock();
             var result = resultType == SilType.Unit ? null : normal.AddArgument(resultType);
             var failed = thunk.AddBlock();
             var error = failed.AddArgument(source.Thrown);
-            entry.Append(new TryApplyInst(function, resultType, [..arguments], normal, failed));
+            entry.Append(new TryApplyInst(function, resultType, [..before, ..arguments, ..after], normal, failed));
             Finish(normal, result);
             for (var i = ends.Count - 1; i >= 0; i--) {
                 failed.Append(new EndBorrowInst(ends[i]));
             }
 
-            failed.Append(new EndBorrowInst(function));
+            if (function is LoadBorrowInst) {
+                failed.Append(new EndBorrowInst(function));
+            }
+
             SilValue raised = error;
             if (outError) {
                 if (!inError) {
@@ -2776,9 +3224,8 @@ public sealed partial class SilGen {
             failed.Append(new ThrowInst(raised));
         }
 
-        module.AddType(context);
         module.Add(thunk);
-        return (name, context);
+        return name;
     }
 
     // -----------------------------------------------------------------------
@@ -2903,6 +3350,19 @@ public sealed partial class SilGen {
         SilArgument? _errorOut;
 
         /// <summary>
+        ///     An <c>any Error</c> that is an error of a type only its
+        ///     metadata knows — what a 'rethrows(E)' callee throws whose
+        ///     functions throw nothing else — as that type: out of its box.
+        /// </summary>
+        SilValue Unerased(SilValue error, TypeSymbol to, OpaqueType wanted) {
+            var slot = NewSlot(wanted);
+            var isOne = Emit(new BuiltinInst("existential_cast", SilType.Bool, error, MetadataOf(to)!, slot));
+            Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, isOne)), $"an error that is not {to.ToDisplayString()}"));
+            Destroy(error);
+            return Emit(new LoadInst(slot, LoadKind.Take));
+        }
+
+        /// <summary>
         ///     An error on its way out of a bridged function whose error is
         ///     written where its caller says: written there, as the type it is,
         ///     and the address thrown. False for any other function.
@@ -2910,6 +3370,19 @@ public sealed partial class SilGen {
         bool ErrorOut(ref SilValue error) {
             if (_errorOut is not { } into || _handlers.Count > 0 || _current is null) {
                 return false;
+            }
+
+            // An 'any Error' that is one of its type: taken out of its box.
+            if (error.Type is ClassType { Name: "any$Error" } && into.Type is AddressType { Pointee: OpaqueType thrownHere } && symbol.ThrownType is { } own
+                && CanonicalHere(Sub(own)) is var named && IsOpaqueHere(named)) {
+                error = Unerased(Owned(error), named, thrownHere);
+            }
+
+            // One of a union's members, or a part of it, put in the union there.
+            if (error.Type is OpaqueType given && into.Type is AddressType { Pointee: OpaqueType { Name: var union } } && union != given.Name && union.Contains(UnionName, StringComparison.Ordinal)) {
+                Emit(new BuiltinInst("union_inject", SilType.Unit, Owned(error), into));
+                error = into;
+                return true;
             }
 
             // A callee's, written where it was told: this function's own place.
@@ -2935,7 +3408,9 @@ public sealed partial class SilGen {
             }
 
             if (IsOpaqueHere(canonical) || LowerType(canonical) is { } held && SilType.IsIndirect(held)) {
-                if (_errorOut is { } own && _handlers.Count == 0) {
+                // The same error, or one a witness throws as its protocol names it.
+                if (_errorOut is { } own && _handlers.Count == 0
+                    && !(own.Type is AddressType { Pointee: OpaqueType { Name: var union } } && union.Contains(UnionName, StringComparison.Ordinal) && LowerType(canonical) is OpaqueType { Name: var part } && part != union)) {
                     return (own.Type == expected ? own : Emit(new BuiltinInst("opaque_cast", expected, own)), null, false);
                 }
 
@@ -2966,7 +3441,9 @@ public sealed partial class SilGen {
         bool IsOpaqueHere(TypeSymbol type) =>
             type is TypeParameterSymbol parameter && _genericMetadata.ContainsKey(parameter)
             || _genericMetadata.Count > 0 && IsAssociatedOf(type, [.._genericMetadata.Keys]) && generator.Canonical(type) is var canonical
-            && (canonical.Equals(type) ? true : IsOpaqueHere(canonical));
+            && (canonical.Equals(type) ? true : IsOpaqueHere(canonical))
+            || _genericMetadata.Count > 0 && type is StructuralUnionTypeSymbol && generator.Canonical(type) is var made
+            && (made is StructuralUnionTypeSymbol union ? union.Cases.All(IsOpaqueHere) : IsOpaqueHere(made));
 
         /// <summary>Names the entry block's newest argument, for the debugger and for finding a type parameter's metadata (<c>$metadata.T</c>).</summary>
         void NameArgument(string name) {
@@ -2986,7 +3463,7 @@ public sealed partial class SilGen {
         void GenericParameters(ImmutableArray<SilType> parameterTypes, ref int next) {
             if (generator._unspecialised.TryGetValue(function.Name, out var generic)) {
                 if (function.Type.Result == SilType.Unit && next < parameterTypes.Length && parameterTypes[next] is AddressType { Pointee: var pointee } && SilType.IsIndirect(pointee)
-                    && (Bridged is not null || ResultOf(symbol) is { } made && generator.Lower(made) is { } returned && SilType.IsIndirect(returned))) {
+                    && (Bridged is not null || ResultOf(symbol) is { } made && LowerType(made) is { } returned && SilType.IsIndirect(returned))) {
                     _indirectResult = _entry.AddArgument(parameterTypes[next++]);
                     NameArgument("$out");
                 }
@@ -3171,12 +3648,28 @@ public sealed partial class SilGen {
                     : Emit(new BuiltinInst($"opaque_metadata:{generator.OpaqueName(type)}", SilType.Metadata));
             }
 
+            // A union of them: made at run time from its members'.
+            if (type is StructuralUnionTypeSymbol && IsOpaqueHere(type)) {
+                return generator.Canonical(type) is var canonicalUnion && !canonicalUnion.Equals(type) ? MetadataOf(canonicalUnion)
+                    : Emit(new BuiltinInst($"opaque_metadata:{generator.OpaqueName(type)}", SilType.Metadata));
+            }
+
             // An array of a type parameter's values: made at run time from the element's.
             if (type is ArrayTypeSymbol { ElementType: var element } array && IsArrayOf(type, [.._genericMetadata.Keys])) {
                 return MetadataOf(element) is { } of ? Emit(new BuiltinInst(array.ArrayKind == ArrayKind.Slice ? "metadata_slice" : "metadata_array", SilType.Metadata, of)) : null;
             }
 
-            return LowerType(type) is { } lowered ? Emit(new MetadataInst(lowered)) : null;
+            if (LowerType(type) is not { } lowered) {
+                return null;
+            }
+
+            // A type a function declares, which nothing that looks for the
+            // types that conform to a protocol finds: code compiled once may box it.
+            if (type is NamedTypeSymbol { IsConstructed: false, ContainingSymbol: FunctionSymbol, DeclaringSyntax: [var declared, ..] } local) {
+                generator.Given(local, lowered, declared);
+            }
+
+            return Emit(new MetadataInst(lowered));
         }
 
         /// <summary>The type parameter of this function a requirement's call is on, as Self, or an associated type read through one; null for a call on anything else.</summary>
@@ -3318,7 +3811,7 @@ public sealed partial class SilGen {
             if (ownShape is not null) {
                 var ownBound = new TypeSubstitution(ownShape.Parameters.ToDictionary(static p => p, p => OwnGiven(p)!));
                 foreach (var (ownParameter, ownProtocol) in ownShape.Requirements) {
-                    if (ownBound.Lookup(ownParameter) is { } given && !IsOpaqueHere(given)) {
+                    if (ownBound.Lookup(ownParameter) is { } given && !Mentions(given, [.._genericMetadata.Keys])) {
                         generator.GenericTable(given, ownProtocol, call.Syntax, true, true);
                     }
                 }
@@ -3471,7 +3964,7 @@ public sealed partial class SilGen {
             foreach (var (subject, constraint) in callee.ConformanceRequirements.Concat(extension?.ConformanceRequirements ?? [])) {
                 var named = Sub(WithAssociatedTypes(callee, bound).Apply(subject));
                 if (subject is TypeParameterSymbol direct && found.Parameters.Contains(direct)
-                    || named is not (NamedTypeSymbol or ArrayTypeSymbol) || Mentions(named, [.._genericMetadata.Keys])) {
+                    || named is not (NamedTypeSymbol or ArrayTypeSymbol or OptionalTypeSymbol) || Mentions(named, [.._genericMetadata.Keys])) {
                     continue;
                 }
 
@@ -3535,6 +4028,62 @@ public sealed partial class SilGen {
             Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, same)), $"cast to '{conversion.Type.ToDisplayString()}' failed"));
             var owned = Owned(value);
             return owned.Type == target ? owned : Emit(new BuiltinInst("opaque_take_as", target, owned));
+        }
+
+        /// <summary>Two arrays, slices or optionals of a type parameter's values compared: through their kind's table of Equatable, as any two values of a conforming type are.</summary>
+        SilValue? HeldEquality(BoundBinaryOperator binary) {
+            if (generator.EquatableProtocol() is not { } equatable
+                || generator.GenericRequirements(equatable).FindIndex(static r => r.Member is FunctionSymbol { Name: "==" }) is not (>= 0 and var index)
+                || generator.GenericEntryType(equatable, generator.GenericRequirements(equatable)[index].Member) is not { } type || MetadataOf(binary.Left.Type) is not { } metadata) {
+                return Missing(binary, $"'{Describe(binary.Syntax)}'");
+            }
+
+            var table = Emit(new BuiltinInst($"witness_table_known:{QualifiedName(equatable)}", SilType.WitnessTable, metadata));
+            var code = Emit(new BuiltinInst($"witness_generic:{index}", type, table));
+            var borrows = new List<SilValue>();
+            if (GenericArgument(binary.Left, Sub(binary.Left.Type), type.Parameters[0], borrows) is not { } left || GenericArgument(binary.Right, Sub(binary.Right.Type), type.Parameters[1], borrows) is not { } right) {
+                EndAll(borrows);
+                return null;
+            }
+
+            var same = Invoke(code, type, [left, right, metadata], borrows, binary.Syntax);
+            return same is null || binary.OperatorKind == BinaryOperatorKind.Equal ? same : Emit(new BuiltinInst("not_Bool", SilType.Bool, same));
+        }
+
+        /// <summary>
+        ///     <c>elements as? Element[&gt;..]</c> of a value of a type only its
+        ///     metadata knows: the same value, seen as the array it is when its
+        ///     metadata is the array's, else none (or a trap, for <c>as!</c>).
+        /// </summary>
+        SilValue? OpaqueHeldCast(BoundConversion conversion) {
+            var target = CastTo(conversion);
+            if (MetadataOf(conversion.Operand.Type) is not { } from || MetadataOf(target) is not { } to || LowerType(target) is not { } wanted
+                || Expression(conversion.Operand) is not { } value) {
+                return Missing(conversion, $"the cast to '{target.ToDisplayString()}'");
+            }
+
+            // Held where its own type says, whichever way it goes.
+            var slot = NewSlot(value.Type);
+            Emit(new StoreInst(Owned(value), slot, StoreKind.Init));
+            var same = Emit(new BuiltinInst("metadata_equal", SilType.Bool, from, to));
+            var seen = Emit(new BuiltinInst("opaque_cast", SilType.Address(wanted), slot));
+            if (Sub(conversion.Type) is not OptionalTypeSymbol || LowerType(conversion.Type) is not EnumType optional) {
+                Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, same)), $"cast to '{target.ToDisplayString()}' failed"));
+                return Emit(new LoadInst(seen, wanted.IsTrivial ? LoadKind.Trivial : LoadKind.Take));
+            }
+
+            var yes = function.AddBlock();
+            var no = function.AddBlock();
+            var after = function.AddBlock();
+            var made = after.AddArgument(optional);
+            Jump(new CondBranchInst(same, yes, [], no, []));
+            _current = yes;
+            Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("Some"), Emit(new LoadInst(seen, wanted.IsTrivial ? LoadKind.Trivial : LoadKind.Take)))));
+            _current = no;
+            Emit(new DestroyAddrInst(slot));
+            Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("None"), null)));
+            _current = after;
+            return made;
         }
 
         /// <summary>
@@ -3651,7 +4200,7 @@ public sealed partial class SilGen {
             }
 
             var slot = NewSlot(wanted);
-            var isOne = Emit(new BuiltinInst("existential_cast", SilType.Bool, Emit(new StructExtractInst(existential, 0)), metadata, slot));
+            var isOne = Emit(new BuiltinInst("existential_cast", SilType.Bool, existential.Type is ClassType ? existential : Emit(new StructExtractInst(existential, 0)), metadata, slot));
             End(existential);
             if (Sub(conversion.Type) is not OptionalTypeSymbol) {
                 Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, isOne)), $"cast to '{target.ToDisplayString()}' failed"));
@@ -3768,7 +4317,10 @@ public sealed partial class SilGen {
             IReadOnlyCollection<TypeParameterSymbol> own = [.._genericMetadata.Keys];
             return Mentions(closureExpression.Type, own) || generator.CapturesOf(closureExpression).Any(c => Mentions(c.Type, own))
                    || Descendants(closureExpression.Body).Any(n => n is BoundExpression { Type: var type } && Mentions(type, own)
-                                                                  || n is BoundLocalDeclaration { Local.Type: var local } && Mentions(local, own));
+                                                                  || n is BoundLocalDeclaration { Local.Type: var local } && Mentions(local, own)
+                                                                  // 'Self.make()': what it is called for, though neither its receiver nor its result says.
+                                                                  || n is BoundCall call && (call.Substitution.Parameters.Any(p => call.Substitution.Lookup(p) is { } bound && Mentions(bound, own))
+                                                                                             || call.Receiver is null && OwnerOf(call.Function) is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } of } && own.Contains(of)));
         }
 
         /// <summary>
@@ -3936,6 +4488,30 @@ public sealed partial class SilGen {
         ///     that converts. The value itself, when it is neither's.
         /// </summary>
         SilValue AsFunction(SilValue value, SilType wanted) {
+            // An optional one: none, or the function it wraps as the other.
+            if (value.Type is EnumType { Cases: [("Some", ThickFunctionType wrapped), ("None", null)] } from && wanted is EnumType { Cases: [("Some", ThickFunctionType wrappedTo), ("None", null)] } to && from != to) {
+                if (SilType.SameErasingOpaque(wrapped, wrappedTo)) {
+                    return Emit(new BuiltinInst("opaque_take_as", to, Owned(value)));
+                }
+
+                var held = Owned(value);
+                var some = function.AddBlock();
+                var payload = Payload(some, wrapped);
+                var none = function.AddBlock();
+                var after = function.AddBlock();
+                var made = after.AddArgument(to);
+                Jump(new SwitchEnumInst(held, [(from.CaseIndex("Some"), some)], none));
+                _current = some;
+                var converted = AsFunction(payload, wrappedTo);
+                Destroy(held);
+                Branch(after, Emit(new EnumInst(to, to.CaseIndex("Some"), Owned(converted))));
+                _current = none;
+                Destroy(held);
+                Branch(after, Emit(new EnumInst(to, to.CaseIndex("None"), null)));
+                _current = after;
+                return made;
+            }
+
             if (value.Type is not ThickFunctionType given || wanted is not ThickFunctionType target || given == target) {
                 return value;
             }
@@ -3955,7 +4531,7 @@ public sealed partial class SilGen {
 
         /// <summary>A stored field read, as the type it has here: a function a generic type keeps in its own convention, as this code's.</summary>
         SilValue? AsRead(SilValue? read, BoundFieldAccess access) =>
-            read is { Type: ThickFunctionType kept } && generator.StoredFunctionType(access.Field) is not null && LowerType(access.Type) is ThickFunctionType here && kept != here
+            read is { Type: ThickFunctionType or EnumType } && read.Type is var kept && generator.StoredFunctionType(access.Field) is not null && LowerType(access.Type) is { } here && kept != here
                 ? AsFunction(read, here)
                 : read;
 

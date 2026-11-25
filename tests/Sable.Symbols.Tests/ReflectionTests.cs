@@ -77,4 +77,55 @@ public sealed class ReflectionTests {
         Assert.Equal(ErrorCode.ERR_NotReflectableKind, error.Code);
         Assert.Contains(message, error.Message);
     }
+
+    [Fact]
+    public void ACallableTypeConformsToCallable() =>
+        AssertClean("""
+                    @reflectable(callable)
+                    public actor Tally {
+                        public init() { }
+                        public fn add(_ n: Int) -> Int => n
+                    }
+                    @reflectable(callable)
+                    union Shape {
+                        Dot
+                        public fn area() -> F64 => 0
+                    }
+                    @reflectable(callable)
+                    struct Box<T> {
+                        var item: T
+                        public fn get() -> T => item
+                    }
+                    fn first<T: Callable>(_ type: T.Type) -> String => T.callableMembers()[0].name
+                    fn probe() -> String => first(Tally.self) + first(Shape.self) + first(Box<Int>.self) + TypeInfo.of(Shape.self).name
+                    """);
+
+    [Fact]
+    public void AReflectableTypeIsCallableOnlyIfItAsks() {
+        var errors = ErrorsIn("""
+                              @reflectable
+                              struct Point { var x: Int }
+                              fn probe() -> Int => Point.callableMembers().count
+                              """);
+        Assert.NotEmpty(errors);
+    }
+
+    [Fact]
+    public void AMovedTypeIsNotCallable() {
+        var error = Assert.Single(ErrorsIn("""
+                                           @noncopy
+                                           @reflectable(callable)
+                                           struct Handle { public fn close() { } }
+                                           """));
+        Assert.Equal(ErrorCode.ERR_NotReflectableKind, error.Code);
+    }
+
+    [Theory]
+    [InlineData("@reflectable(invocable)")]
+    [InlineData("@reflectable()")]
+    [InlineData("@reflectable(callable, 1)")]
+    public void ReflectableTakesNothingOrCallable(string attribute) {
+        var error = Assert.Single(ErrorsIn($"{attribute}\nstruct Point {{ var x: Int }}"));
+        Assert.Contains("'@reflectable(callable)'", error.Message);
+    }
 }

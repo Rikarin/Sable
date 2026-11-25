@@ -222,27 +222,27 @@ public sealed class UnspecialisedLoweringTests {
 
     /// <summary>
     ///     A function whose type parameter is used in a way unspecialised
-    ///     code cannot serve yet — a closure over one returned — is still
-    ///     specialised, for each type it is used with, in a program that is
-    ///     otherwise unspecialised.
+    ///     code does not serve (docs/06 §6.2) — a value made of it written out —
+    ///     is specialised, for each type it is used with, in a program that
+    ///     is otherwise unspecialised.
     /// </summary>
     [Fact]
     public void WhatUnspecialisedCodeCannotServeIsStillSpecialised() {
         var module = Lower("""
-                           fn first<T>(_ value: T) -> () -> T { return { value } }
+                           fn first<T>(_ value: T) -> String { return "\([value])" }
 
                            fn pass<T>(_ value: T) -> T { return value }
 
                            fn main() {
-                               print(first(1)())
-                               print(first("a")())
-                               print(pass(first(3)()))
+                               print(first(1))
+                               print(first("a"))
+                               print(pass(first(3)))
                            }
                            """);
         Assert.NotNull(module.Find("M.pass$generic"));
         Assert.Null(module.Find("M.first$generic"));
         Assert.Equal(2, module.Functions.Count(static f => f.Name.StartsWith("M.first$of$", StringComparison.Ordinal) && !f.Name.Contains("$closure", StringComparison.Ordinal)));
-        Assert.Equal("1\na\n3\n", Run(module));
+        Assert.Equal("[1]\n[\"a\"]\n[3]\n", Run(module));
     }
 
     /// <summary>

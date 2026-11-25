@@ -1263,6 +1263,9 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 Map(instruction, Emit(new UpcastInst(Value(upcast.Value), AsClass(Substitute(upcast.Type))), instruction));
                 return;
 
+            // One called in its slot's own convention, which no copy of the caller changes.
+            case ClassMethodInst { Type: FunctionType slot } when SilType.MentionsOpaque(slot):
+                throw new Refused("a call through a generic class's vtable");
             case ClassMethodInst method:
                 Map(instruction, Emit(new ClassMethodInst(Value(method.Reference), method.Method, (FunctionType)Substitute(method.Type)), instruction));
                 return;
@@ -1341,13 +1344,34 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 var apply = Emit(new ApplyInst(reference, copy.Type.Result, [..passed]), call);
                 if (outAddress is not null) {
                     Emit(new StoreInst(apply, outAddress, StoreKind.Init), call);
-                } else if (Substitute(call.Type) != copy.Type.Result) {
+                } else if (SilType.MentionsOpaque(call.Type) ? !SilType.SameErasingOpaque(call.Type, copy.Type.Result, opaqueOnly: true) : call.Type != copy.Type.Result) {
                     throw new Refused("a call whose result changes type");
                 }
 
                 Map(call, apply);
                 return;
         }
+    }
+
+    Dictionary<SilValue, List<SilInstruction>>? _users;
+
+    /// <summary>Whether a value seen as a callee's type is only passed to calls, borrowed from there or not.</summary>
+    bool IsLent(SilValue value) {
+        if (_users is null) {
+            _users = new(ReferenceEqualityComparer.Instance);
+            foreach (var instruction in plan.Generic.Blocks.SelectMany(static b => b.Instructions)) {
+                foreach (var operand in instruction.Operands) {
+                    (_users.TryGetValue(operand, out var list) ? list : _users[operand] = []).Add(instruction);
+                }
+            }
+        }
+
+        return _users.TryGetValue(value, out var users) && users.TrueForAll(u => u switch {
+            ApplyInst or TryApplyInst => !ReferenceEquals(u.Operands[0], value),
+            EndBorrowInst => true,
+            LoadBorrowInst => IsLent(u),
+            _ => false,
+        });
     }
 
     /// <summary>
@@ -1445,6 +1469,12 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                     var holder = Emit(new AllocRefInst(context), builtin);
                     Emit(new StoreInst(viewed, Emit(new RefElementAddrInst(holder, 0), builtin), StoreKind.Init), builtin);
                     Map(builtin, Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk, to.Implementation), builtin), holder, to), builtin));
+                    return;
+                }
+
+                // A value lent to another generic function as its own type parameter's: in the copy, as it is.
+                if (name is not "opaque_take_as" && !SilType.MentionsOpaque(viewed.Type) && IsLent(builtin)) {
+                    Map(builtin, viewed);
                     return;
                 }
 

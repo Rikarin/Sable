@@ -1,0 +1,9 @@
+module Sable.Core
+
+/// What a member of a '@reflectable(callable)' type is.
+public enum CallableKind {
+    Initializer
+    Method
+    StaticMethod
+    Operator
+}

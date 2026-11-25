@@ -1222,7 +1222,24 @@ KB of the unit's 1074 KB of `-O0` code — on its first build. On the
 three-line program the difference is all in that unit: SIL lowering +290
 ms, verifying +65 ms, emitting +110 ms and clang +475 ms. That is the work
 stage 7 moves into the cache, not a regression in any one step, and later
-builds do not repeat it.
+builds do not repeat it. Now that nearly all of the library's generic code
+is compiled once (1324 functions, docs/06 §6.2), and its array searches by
+vectors are made for every SIMD scalar, the gap is larger, and of the same
+kind: `examples/ssg` with an empty cache takes 24 s specialised and 31 s
+unspecialised on a loaded M1 Max (clang 10 s and 19 s of it, the passes 4 s
+and 6 s; 4 s is the prepared searches), and each build after it 2.6 s and
+2.0 s.
+
+*Why an unspecialised `-O0` binary is larger* (2.6 MB of `examples/ssg`,
+0.67 MB specialised): what each unit registers as it starts — witness
+tables, templates, boxers, describers — is named by its constructor, so the
+linker keeps every table of the library's units, and with them the entries
+(1,300 witnesses, 610 template functions), the code those call and its
+metadata, whether or not a lookup can ask for one: 1.0 MB of code for 0.44,
+0.4 MB of constants, and their symbols (1 MB). Keeping only what a program
+can look up needs the linker to drop a record whose type or protocol is
+dropped (Mach-O's `live_support`, ELF's link order), which the constructors
+do not let it. An optimised build has none of this.
 
 *Before and after*, measured with `sable` built Release on an M1 Max
 (load average 5–8), each a package's dev build: cold is an empty

@@ -56,6 +56,10 @@ public sealed partial class SilInterpreter {
             return model;
         }
 
+        if (name.Contains(SilGen.UnionName, StringComparison.Ordinal)) {
+            return MetadataOf(UnionOf(name.Split(SilGen.UnionName).Select(m => OpaqueModel(m).Type)));
+        }
+
         if (_opaqueTypes is null || _associatedTypes is not var (function, parameter) || function.AssociatedMetadata.Find(a => a.Name == name) is not { } associated) {
             throw new SilTrap($"no metadata for @opaque({name}) here");
         }
@@ -75,6 +79,56 @@ public sealed partial class SilInterpreter {
         model = MetadataOf(table.AssociatedTypes[associated.Index].Type);
         _opaqueTypes[name] = model;
         return model;
+    }
+
+    /// <summary>A value of a type as a union it is a member of, or whose cases all are.</summary>
+    object? InUnion(object? value, SilType from, SilType to, int depth) {
+        if (from.ToString() == to.ToString()) {
+            return value;
+        }
+
+        if (to is ClassType { Name: "any$Error" }) {
+            var eraser = module.ErrorErasers.TryGetValue(from.ToString(), out var known) ? module.Find(known.Function) : null;
+            var boxed = Call(eraser ?? throw new SilTrap($"an error of '{from}' with no way to box it as 'any Error'"), [value, MetadataOf(from)], depth + 1);
+            Release(from, value, depth);
+            return boxed;
+        }
+
+        if (TypeMetadata.IsStructuralUnion(from) && value is EnumValue held) {
+            return InUnion(held.Payload, ((EnumType)from).Cases[held.Case].Payload!, to, depth);
+        }
+
+        var index = ((EnumType)to).Cases.FindIndex(c => c.Payload!.ToString() == from.ToString());
+        return index >= 0 ? new EnumValue(index, value) : throw new SilTrap("an error that is no case of the union thrown");
+    }
+
+    readonly Dictionary<string, EnumType> _madeUnions = new(StringComparer.Ordinal);
+
+    /// <summary>The structural union of these types, normalised as <c>sable_structural_union_type</c> does: Never's adds no case.</summary>
+    SilType UnionOf(IEnumerable<SilType> members) {
+        var all = members.ToList();
+        var cases = all.SelectMany(static t => TypeMetadata.IsStructuralUnion(t) ? ((EnumType)t).Cases.Select(static c => c.Payload!) : [t]).Where(static t => t != SilType.Unit)
+            .DistinctBy(static t => t.ToString()).OrderBy(TypeMetadata.DisplayName, StringComparer.Ordinal).ToList();
+        if (cases.Find(static c => c is ClassType { Name: "any$Error" }) is { } anyError) {
+            return anyError;
+        }
+
+        if (cases.Count < 2) {
+            return cases.Count == 0 ? all[0] : cases[0];
+        }
+
+        var name = "Union$" + string.Join("$or$", cases.Select(static c => SilGen.Sanitise(c.ToString())));
+        if (module.FindType(name) is { } existing) {
+            return existing;
+        }
+
+        if (!_madeUnions.TryGetValue(name, out var made)) {
+            made = new EnumType(name) { IsUnion = true, DisplayName = string.Join(" | ", cases.Select(TypeMetadata.DisplayName)) };
+            made.Cases.AddRange(cases.Select(static c => (SilGen.Sanitise(c.ToString()), (SilType?)c)));
+            _madeUnions[name] = made;
+        }
+
+        return made;
     }
 
     /// <summary>
@@ -141,14 +195,16 @@ public sealed partial class SilInterpreter {
                 return concrete;
             }
 
-            // A class laid out for its arguments: it has no superclass and no vtable, and its deinit is its generic class's.
+            // A class laid out for its arguments: its vtable is its generic class's, and so is its deinit.
             case ClassType { IsGenericInstance: true } classType: {
                 var concrete = new ClassType(name) {
                     DisplayName = display,
                     TypeArguments = [..arguments],
                     Deinit = display is null ? null : module.GenericDeinits.GetValueOrDefault(display[..display.IndexOf('<')]),
+                    Superclass = classType.Superclass is { } superclass ? (ClassType)Concrete(superclass) : null,
                 };
                 _concreteGenerics[name] = concrete;
+                concrete.VTable.AddRange(classType.VTable);
                 concrete.Fields.AddRange(classType.Fields.Select(f => (f.Name, Concrete(f.Type))));
                 concrete.Conformances.AddRange(classType.Conformances);
                 concrete.ConditionalConformances.AddRange(classType.ConditionalConformances);
@@ -237,13 +293,8 @@ public sealed partial class SilInterpreter {
             return made;
         }
 
-        if (SilModule.StructuralElement(type) is not null) {
-            if (module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && SilModule.StructuralElement(t.Conformer) is not null
-                                                         && TypeMetadata.KindOf(t.Conformer) == TypeMetadata.KindOf(type)) is not { } structural) {
-                return null;
-            }
-
-            return InstanceOf(structural);
+        if (TypeMetadata.IsStructuralUnion(type) || SilModule.StructuralElement(type) is not null) {
+            return module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && SilModule.TemplateKind(t) == TypeMetadata.KindOf(type)) is { } structural ? InstanceOf(structural) : null;
         }
 
         if (type is not NominalType { TypeArguments.IsEmpty: false, DisplayName: { } display } || display.IndexOf('<') is not (> 0 and var open)
@@ -278,6 +329,9 @@ public sealed partial class SilInterpreter {
     ///     of a class; a type that conforms to each protocol of an existential
     ///     (every type is an <c>any Any</c>).
     /// </summary>
+    /// <summary>A type whose members are callable, by the order they are listed in.</summary>
+    (SilType Type, string Function) CallableAt(long index) => module.Callables.OrderBy(static c => c.Key, StringComparer.Ordinal).ElementAt((int)index).Value;
+
     bool IsSubtype(MetadataModel type, MetadataModel of) {
         if (ReferenceEquals(type, of)) {
             return true;
@@ -389,6 +443,15 @@ public sealed partial class SilInterpreter {
             case "metadata_equal":
                 result = ReferenceEquals(operands[0], operands[1]);
                 return true;
+            case "callable_type_count":
+                result = (long)module.Callables.Count;
+                return true;
+            case "callable_type":
+                result = MetadataOf(CallableAt((long)operands[0]!).Type);
+                return true;
+            case "callable_members":
+                result = Call(module.Find(CallableAt((long)operands[0]!).Function)!, [], depth + 1);
+                return true;
             case "metadata_hash":
                 result = NameHash(((MetadataModel)operands[0]!).Described.Name);
                 return true;
@@ -397,6 +460,16 @@ public sealed partial class SilInterpreter {
                 return true;
 
             // An object's own class, from its header.
+            case var ancestor when ancestor.StartsWith("object_metadata_as:", StringComparison.Ordinal): {
+                var wanted = ancestor["object_metadata_as:".Length..] + "<";
+                var level = (ClassType?)Alive((HeapObject)operands[0]!).Type;
+                while (level is not null && !TypeMetadata.DisplayName(level).StartsWith(wanted, StringComparison.Ordinal)) {
+                    level = level.Superclass;
+                }
+
+                result = MetadataOf(level ?? throw new SilTrap("an object that is not of the class its method is of"));
+                return true;
+            }
             case "object_metadata":
                 result = MetadataOf(Alive((HeapObject)operands[0]!).Type);
                 return true;
@@ -491,8 +564,33 @@ public sealed partial class SilInterpreter {
                 return true;
             }
             // An error of one, boxed as 'any Error' by its type's eraser; the value, taken, let go.
+            // An error put in a union of its type and others; and the case a union holds.
+            case "union_inject": {
+                var from = OpaqueModel(((OpaqueType)builtin.Operands[0].Type).Name).Type;
+                var to = OpaqueModel(((OpaqueType)((AddressType)builtin.Operands[1].Type).Pointee).Name).Type;
+                ((IReference)operands[1]!).Set(InUnion(operands[0], from, to, depth));
+                result = null;
+                return true;
+            }
+            case "union_case_metadata" or "union_case_payload": {
+                var union = (EnumType)((MetadataModel)operands[1]!).Type;
+                var held = (EnumValue)operands[0]!;
+                result = builtin.Name == "union_case_metadata" ? MetadataOf(union.Cases[held.Case].Payload!) : held.Payload;
+                return true;
+            }
             case "opaque_erase_error": {
                 var type = OpaqueModel(((OpaqueType)builtin.Operands[0].Type).Name);
+                var erasedValue = operands[0];
+                if (type.Type is ClassType { Name: "any$Error" }) {
+                    result = erasedValue;
+                    return true;
+                }
+
+                if (TypeMetadata.IsStructuralUnion(type.Type) && erasedValue is EnumValue unionCase) {
+                    type = MetadataOf(((EnumType)type.Type).Cases[unionCase.Case].Payload!);
+                    operands[0] = unionCase.Payload;
+                }
+
                 if (!module.ErrorErasers.TryGetValue(type.Type.ToString(), out var eraser) || module.Find(eraser.Function) is not { } erase) {
                     throw new SilTrap($"an error of '{type.Type}' with no way to box it as 'any Error'");
                 }
@@ -544,8 +642,30 @@ public sealed partial class SilInterpreter {
                     return true;
                 }
 
+                // To 'any Error', which is the box itself.
+                if (to.Type is ClassType && IsSubtype(MetadataOf(box.Type), to)) {
+                    Retain(box.Type, box);
+                    place.Set(box);
+                    result = true;
+                    return true;
+                }
+
                 var held = box.Type.TypeArguments is [var of] ? of : box.Type.Fields[0].Type;
                 var value = box.Fields[0];
+
+                // To a structural union: one of its cases' types, put in it.
+                if (TypeMetadata.IsStructuralUnion(to.Type)) {
+                    var union = (EnumType)to.Type;
+                    var index = union.Cases.FindIndex(c => IsSubtype(MetadataOf(value is HeapObject inside && held is ClassType ? Alive(inside).Type : held), MetadataOf(c.Payload!)));
+                    result = index >= 0;
+                    if (index >= 0) {
+                        Retain(held, value);
+                        place.Set(new EnumValue(index, value));
+                    }
+
+                    return true;
+                }
+
                 var dynamic = held is ClassType && value is HeapObject it ? Alive(it).Type : held;
                 result = false;
                 if (to.Type is StructType && to.Described.Kind == MetadataKind.Existential) {

@@ -195,7 +195,7 @@ public sealed partial class SilGen {
                         if (shape == Shape.Optional) {
                             parts.Add(new("some", ((OptionalTypeSymbol)type).UnderlyingType, _ => (payload, false)));
                         } else if (shape == Shape.Structural) {
-                            parts.Add(new("value", ((StructuralUnionTypeSymbol)type).Cases[c], _ => (payload, false)));
+                            parts.Add(new("value", ((StructuralUnionTypeSymbol)type).Cases.First(m => Lower(m) == payloadType), _ => (payload, false)));
                         } else if (IsIndirect(enumType, c)) {
                             // A boxed payload: each part copied out of the box.
                             var fields = PayloadOf((NamedTypeSymbol)type, caseName);

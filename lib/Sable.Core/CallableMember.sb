@@ -1,0 +1,214 @@
+module Sable.Core
+
+/// An initialiser, method or operator of a '@reflectable(callable)' type,
+/// called with its arguments boxed ('any Any'). Each argument's type is
+/// checked as it is called, and one that is not the parameter's is an error
+/// ('CallError'), not a trap; what the member throws is thrown on as it is.
+/// Only the type's public members are here, so a call reaches what any code
+/// could call.
+public struct CallableMember {
+    /// The member's name; 'init' for an initialiser.
+    public let name: String
+
+    /// As it would be declared: 'mutating fn move(by dx: Int) throws -> Int'.
+    public let signature: String
+
+    public let kind: CallableKind
+    public let parameterNames: String[>..]
+
+    /// The parameters' types, which the arguments are to be of. Empty for a
+    /// member that is not callable.
+    public let parameterTypes: Type[>..]
+
+    /// What it gives: the type itself for an initialiser, '()' for nothing.
+    public let returnType: Type
+
+    public let isMutating: Bool
+
+    /// Whether its call waits: an async member's does, and one of an actor's,
+    /// or the main actor's. 'callAsync' calls it.
+    public let isAsync: Bool
+
+    public let isThrowing: Bool
+
+    /// Why it cannot be called with boxed arguments, or none if it can: one
+    /// generic over its own type parameters, with an 'inout' or variadic
+    /// parameter, or of a type no box holds is described and not called.
+    public let refusal: String?
+
+    var direct: ((inout any Any, (any Any)[:]) throws -> any Any)? = none
+    var waiting: (async (inout any Any, (any Any)[:]) throws -> any Any)? = none
+
+    init(_ name: String, _ signature: String, _ parameterNames: String[>..], _ parameterTypes: Type[>..], _ returnType: Type, _ flags: Int, _ refusal: String) {
+        self.name = name
+        self.signature = signature
+        self.parameterNames = parameterNames
+        self.parameterTypes = parameterTypes
+        self.returnType = returnType
+        self.isMutating = flags / 2 % 2 == 1
+        self.isAsync = flags / 4 % 2 == 1
+        self.isThrowing = flags / 8 % 2 == 1
+        self.refusal = refusal.isEmpty ? none : refusal
+        self.kind = flags / 16 % 2 == 1 ? .Initializer : flags / 32 % 2 == 1 ? .Operator : flags % 2 == 1 ? .StaticMethod : .Method
+    }
+
+    /// Whether it can be called with boxed arguments: 'refusal' says why not.
+    public var isCallable: Bool => refusal == none
+
+    /// Calls an initialiser, a static method or an operator.
+    ///
+    /// ```sable
+    /// @reflectable(callable)
+    /// struct Point {
+    ///     public var x: Int
+    ///
+    ///     public static fn at(_ x: Int) -> Point => Point { x: x }
+    /// }
+    ///
+    /// let at = Point.callable("at")!
+    /// assert((try! at.call(3) as! Point).x == 3)
+    /// do {
+    ///     _ = try at.call("three")
+    ///     assert(false)
+    /// } catch let error as CallError {
+    ///     assert(error.description() == "argument 0 is 'Int', and was given 'String'")
+    /// } catch {
+    ///     assert(false)
+    /// }
+    /// ```
+    public fn call(_ arguments: any Any...) throws -> any Any => try call(with: arguments)
+
+    /// Calls an initialiser, a static method or an operator with the arguments in an array.
+    public fn call(with arguments: (any Any)[:]) throws -> any Any {
+        if kind == .Method {
+            throw CallError.NoReceiver
+        }
+
+        var nothing: any Any = ()
+        return try called(&nothing, arguments)
+    }
+
+    /// Calls a method on a value, which it does not change.
+    public fn call(on receiver: any Any, _ arguments: any Any...) throws -> any Any => try call(on: receiver, with: arguments)
+
+    /// Calls a method on a value, which it does not change, with the arguments in an array.
+    public fn call(on receiver: any Any, with arguments: (any Any)[:]) throws -> any Any {
+        if isMutating {
+            throw CallError.Mutating
+        }
+
+        var held = receiver
+        return try called(&held, arguments)
+    }
+
+    /// Calls a method on a value, which a mutating one changes.
+    public fn call(mutating receiver: inout any Any, _ arguments: any Any...) throws -> any Any => try call(mutating: &receiver, with: arguments)
+
+    /// Calls a method on a value, which a mutating one changes, with the arguments in an array.
+    public fn call(mutating receiver: inout any Any, with arguments: (any Any)[:]) throws -> any Any {
+        return try called(&receiver, arguments)
+    }
+
+    /// Calls an initialiser, a static method or an operator, waiting for it;
+    /// one that does not wait is called too.
+    public fn callAsync(_ arguments: any Any...) async throws -> any Any => try await callAsync(with: arguments)
+
+    /// Calls an initialiser, a static method or an operator with the arguments in an array.
+    public fn callAsync(with arguments: (any Any)[:]) async throws -> any Any {
+        if kind == .Method {
+            throw CallError.NoReceiver
+        }
+
+        var nothing: any Any = ()
+        return try await calledAsync(&nothing, arguments)
+    }
+
+    /// Calls a method on a value, waiting for it: an actor's on its actor.
+    public fn callAsync(on receiver: any Any, _ arguments: any Any...) async throws -> any Any => try await callAsync(on: receiver, with: arguments)
+
+    /// Calls a method on a value, which it does not change, with the arguments in an array.
+    public fn callAsync(on receiver: any Any, with arguments: (any Any)[:]) async throws -> any Any {
+        if isMutating {
+            throw CallError.Mutating
+        }
+
+        var held = receiver
+        return try await calledAsync(&held, arguments)
+    }
+
+    /// Calls a method on a value, waiting for it; a mutating one's change is
+    /// put back once it is done.
+    public fn callAsync(mutating receiver: inout any Any, _ arguments: any Any...) async throws -> any Any => try await callAsync(mutating: &receiver, with: arguments)
+
+    /// Calls a method on a value, which a mutating one changes, with the arguments in an array.
+    public fn callAsync(mutating receiver: inout any Any, with arguments: (any Any)[:]) async throws -> any Any {
+        return try await calledAsync(&receiver, arguments)
+    }
+
+    fn check(_ arguments: (any Any)[:]) throws {
+        if let why = refusal {
+            throw CallError.NotCallable(why)
+        }
+
+        if arguments.count != parameterTypes.count {
+            throw CallError.ArgumentCount(expected: parameterTypes.count, given: arguments.count)
+        }
+    }
+
+    fn called(_ receiver: inout any Any, _ arguments: (any Any)[:]) throws -> any Any {
+        try check(arguments)
+        if let body = direct {
+            return try body(&receiver, arguments)
+        }
+
+        throw CallError.Async
+    }
+
+    fn calledAsync(_ receiver: inout any Any, _ arguments: (any Any)[:]) async throws -> any Any {
+        try check(arguments)
+        if let body = waiting {
+            return try await body(&receiver, arguments)
+        }
+
+        return try called(&receiver, arguments)
+    }
+
+    // What the compiler's 'describeCallables', 'callMember' and
+    // 'callMemberAsync' are made of.
+
+    static fn described(
+        _ name: String,
+        _ signature: String,
+        _ parameterNames: String[>..],
+        _ parameterTypes: Type[>..],
+        _ returnType: Type,
+        _ flags: Int,
+        _ refusal: String,
+    ) -> CallableMember {
+        return CallableMember(name, signature, parameterNames, parameterTypes, returnType, flags, refusal)
+    }
+
+    static fn receiver<T>(_ boxed: any Any, _ wanted: T.Type) throws -> T {
+        if let value = boxed as? T {
+            return value
+        }
+
+        throw CallError.Receiver(expected: wanted, given: type(of: boxed))
+    }
+
+    static fn argument<T>(_ arguments: (any Any)[:], _ index: Int, _ wanted: T.Type) throws -> T {
+        if let value = arguments[index] as? T {
+            return value
+        }
+
+        throw CallError.Argument(index: index, expected: wanted, given: type(of: arguments[index]))
+    }
+
+    static fn boxed<T>(_ value: T) -> any Any => value
+
+    static fn nothing() -> any Any => ()
+
+    static fn missing() throws -> any Any {
+        throw CallError.NotCallable("there is no such member")
+    }
+}

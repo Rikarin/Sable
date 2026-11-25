@@ -198,6 +198,10 @@ public sealed partial class LlvmEmitter {
             constructors.Add(classes);
         }
 
+        if (CallableRegistration(module) is { } callables) {
+            constructors.Add(callables);
+        }
+
         if (BoxerRegistration(module) is { } boxers) {
             constructors.Add(boxers);
         }
@@ -1414,8 +1418,7 @@ public sealed partial class LlvmEmitter {
 
         // A generic class's, which metadata made at run time for the same
         // type arguments must be (GenericClassRegistration).
-        if (_module?.UnspecialisedGenerics == true && type.IsGenericInstance
-            && type.Superclass is null && type.VTable.Count == 0) {
+        if (_module?.UnspecialisedGenerics == true && type.IsGenericInstance) {
             _genericClasses.Add(type);
         }
 
@@ -1873,6 +1876,26 @@ public sealed partial class LlvmEmitter {
         ///     instance and kept at the call that asks.
         /// </summary>
         string OpaqueMetadata(SilType type) {
+            // A union of opaque types: made at run time from its members'.
+            if (type is OpaqueType { Name: var union } && union.Contains(SilGen.UnionName, StringComparison.Ordinal)) {
+                if (_opaqueMetadata.TryGetValue(union, out var joined)) {
+                    return joined;
+                }
+
+                var members = union.Split(SilGen.UnionName).Select(m => OpaqueMetadata(new OpaqueType(m))).ToList();
+                var array = Fresh();
+                _entryAllocas.Append($"  {array} = alloca [{members.Count} x ptr], align 8\n");
+                for (var i = 0; i < members.Count; i++) {
+                    var at = Fresh();
+                    _entryAllocas.Append($"  {at} = getelementptr inbounds [{members.Count} x ptr], ptr {array}, i32 0, i32 {i}\n")
+                        .Append($"  store ptr {members[i]}, ptr {at}\n");
+                }
+
+                joined = Fresh();
+                _entryAllocas.Append($"  {joined} = call ptr @sable_structural_union_type(i64 {members.Count}, ptr {array})\n");
+                return _opaqueMetadata[union] = joined;
+            }
+
             if (type is OpaqueType opaque) {
                 return _opaqueMetadata.TryGetValue(opaque.Name, out var metadata) ? metadata
                     : function.AssociatedMetadata.Find(a => a.Name == opaque.Name) is { } associated ? AssociatedMetadata(associated)

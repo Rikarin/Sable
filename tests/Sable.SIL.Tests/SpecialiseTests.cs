@@ -356,12 +356,13 @@ public sealed class SpecialiseTests {
         Assert.Equal(expected, Run(Optimised(Predicates)));
     }
 
-    /// <summary>A module lowered specialised has nothing for the pass to do.</summary>
+    /// <summary>A module lowered specialised has nothing for the pass to do but drop the library's entries nothing reaches.</summary>
     [Fact]
     public void AModuleWithNothingGenericIsLeftAsItIs() {
         var module = Lower(Shapes, GenericsMode.Specialised);
-        var before = SilPrinter.Print(module);
+        string Printed() => SilPrinter.Print(module, false, static f => !f.Name.Contains("Sable.Core.", StringComparison.Ordinal));
+        var before = Printed();
         SilPassManager.Run(module, [new Specialise()]);
-        Assert.Equal(before, SilPrinter.Print(module));
+        Assert.Equal(before, Printed());
     }
 }

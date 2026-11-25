@@ -391,12 +391,12 @@ public static class AsyncLowering {
 
             // The parameters, in the frame from the start: read in every state.
             // One of a type parameter's type is where its caller holds it, for
-            // the whole call: the frame keeps its address.
+            // the whole call: the frame keeps its address. A shorthand one, '$0', is no field's name.
             var parameters = body.Arguments.ToList();
             var parameterFields = new List<int>();
             for (var i = 0; i < parameters.Count; i++) {
                 var indirect = SilType.IsIndirect(parameters[i].Type);
-                var field = entry.Append(Field(i < parameterNames.Count ? parameterNames[i] : $"$parameter{i}", indirect ? new AddressType(parameters[i].Type) : parameters[i].Type));
+                var field = entry.Append(Field(i < parameterNames.Count && parameterNames[i] is not ['$', >= '0' and <= '9', ..] ? parameterNames[i] : $"$parameter{i}", indirect ? new AddressType(parameters[i].Type) : parameters[i].Type));
                 parameterFields.Add(frame.Fields.Count - 1);
                 SilValue value = entry.Append(new LoadInst(field, LoadKind.Trivial) { Location = at });
                 if (indirect) {
@@ -827,6 +827,18 @@ public static class AsyncLowering {
         ///     — the frame's, or a caller's — and not a copy of what it holds.
         /// </summary>
         static void Reborrow(SilFunction function) {
+            // One seen as a callee's type parameter is seen as it again there, as only the callee has that type's metadata.
+            foreach (var seen in function.Blocks.SelectMany(static b => b.Instructions).OfType<BuiltinInst>()
+                         .Where(static b => b.Name == "opaque_borrow_as" && SilType.IsIndirect(b.Type) && SilType.IsIndirect(b.Operands[0].Type)).Reverse().ToList()) {
+                foreach (var user in function.Blocks.SelectMany(static b => b.Instructions).Where(i => i.Operands.Any(o => ReferenceEquals(o, seen))).ToList()) {
+                    var again = new BuiltinInst(seen.Name, seen.Type, seen.Operands[0]) { Location = user.Location };
+                    Insert(user.Block, user.Block.Instructions.IndexOf(user), again);
+                    Substitute(user, seen, again);
+                }
+
+                seen.Block.Instructions.Remove(seen);
+            }
+
             foreach (var borrow in function.Blocks.SelectMany(static b => b.Instructions).OfType<LoadBorrowInst>().Where(static b => SilType.IsIndirect(b.Type)).ToList()) {
                 var users = function.Blocks.SelectMany(static b => b.Instructions).Where(i => i.Operands.Any(o => ReferenceEquals(o, borrow))).ToList();
                 foreach (var user in users) {

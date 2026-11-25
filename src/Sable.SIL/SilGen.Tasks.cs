@@ -39,12 +39,26 @@ public sealed partial class SilGen {
             return existing;
         }
 
+        // Compiled once for every result (#297): an instance of a generic
+        // class, laid out and destroyed as one is, its body kept in the
+        // generic convention, run by one thunk for all of them.
+        var once = TasksCompiledOnce;
         var task = _module.AddType(new ClassType(name));
         task.Fields.Add(("handle", SilType.Int));
         task.Fields.Add(("result", optional));
-        task.Fields.Add(("body", new ThickFunctionType(new FunctionType([], result, thrown, isAsync: true))));
+        task.Fields.Add(("body", once ? TaskBodyOnce(thrown is not null) : new ThickFunctionType(new FunctionType([], result, thrown, isAsync: true))));
         if (optionalError is not null) {
             task.Fields.Add(("error", optionalError));
+        }
+
+        if (once) {
+            task.TypeArguments = thrown is null ? [result] : [result, thrown];
+            task.DisplayName = $"{TaskGenericName(thrown is not null)}<{string.Join(", ", task.TypeArguments.Select(TypeMetadata.DisplayName))}>";
+            if (SilType.MentionsOpaque(task)) {
+                task.HasGenericDeinit = true;
+                TaskOnce(thrown is not null);
+                return task;
+            }
         }
 
         // Its deinit gives the runtime's task back.
@@ -56,6 +70,11 @@ public sealed partial class SilGen {
         entry.Append(new ReturnInst(null));
         _module.Add(deinit);
         task.Deinit = deinit.Name;
+
+        if (once) {
+            TaskOnce(thrown is not null);
+            return task;
+        }
 
         // Run on the task: the body called, its result kept, the task's reference given back.
         var run = new SilFunction(TaskRunName(task), RunType(task));
@@ -97,10 +116,155 @@ public sealed partial class SilGen {
         return task;
     }
 
-    static string TaskRunName(ClassType task) => $"$task.run${task.Name}";
+    /// <summary>
+    ///     Whether a task is an instance of one generic class, its code
+    ///     compiled once: in an unoptimised build that compiles generics once,
+    ///     as the functions a generic type stores are
+    ///     (<see cref="StoredFunctionType" />).
+    /// </summary>
+    internal static bool TasksCompiledOnce => Generics == GenericsMode.Unspecialised && !AmbientOptimised.Value;
+
+    /// <summary>The generic name of the class of tasks, or of those that keep an error too.</summary>
+    string TaskGenericName(bool throws) => QualifiedName(Core.Task!) + (throws ? "$throws" : "");
+
+    static readonly OpaqueType TaskSuccess = new("__Success"), TaskFailure = new("__Failure");
+
+    /// <summary>A task's body as the class of tasks keeps it, whatever its result: told where it, and an error, go.</summary>
+    static ThickFunctionType TaskBodyOnce(bool throws) =>
+        new(throws
+            ? new FunctionType([SilType.Address(TaskSuccess), SilType.Address(TaskFailure)], SilType.Unit, SilType.Address(TaskFailure), isAsync: true)
+            : new FunctionType([SilType.Address(TaskSuccess)], SilType.Unit, isAsync: true));
+
+    /// <summary>What runs a task of any result, and its deinit, each made once: given the task, whose class says what its result is.</summary>
+    void TaskOnce(bool throws) {
+        var run = TaskRunOnce(throws);
+        if (_module.Find(run) is not null) {
+            return;
+        }
+
+        // Held back until the class itself is, which making it asks for.
+        var shape = throws ? (SilType[])[SilType.Metadata, SilType.Metadata] : [SilType.Metadata];
+        var names = throws ? (string[])["$metadata.__Success", "$metadata.__Failure"] : ["$metadata.__Success"];
+        var thunk = _module.Add(new SilFunction(run, TaskRunType));
+        var optional = OptionalOf(TaskSuccess);
+        var optionalError = OptionalOf(TaskFailure);
+        var className = $"Task$of${Sanitise(TaskSuccess.ToString())}" + (throws ? $"$throws${Sanitise(TaskFailure.ToString())}" : "");
+        if (_module.FindType(className) is not ClassType task) {
+            task = _module.AddType(new ClassType(className));
+            task.Fields.AddRange([("handle", SilType.Int), ("result", optional), ("body", TaskBodyOnce(throws))]);
+            if (throws) {
+                task.Fields.Add(("error", optionalError));
+            }
+
+            task.TypeArguments = throws ? [TaskSuccess, TaskFailure] : [TaskSuccess];
+            task.DisplayName = $"{TaskGenericName(throws)}<{string.Join(", ", task.TypeArguments.Select(TypeMetadata.DisplayName))}>";
+            task.HasGenericDeinit = true;
+        }
+
+        // The run, reading what its result is from the task's class, and the one compiled once it calls.
+        var body = new SilFunction(run + "$generic", new FunctionType([task, ..shape], SilType.Unit, null, [true, ..shape.Select(static _ => false)], isAsync: true));
+        {
+            var entry = thunk.AddBlock();
+            var given = entry.AddArgument(SilType.Object);
+            var held = entry.Append(new CopyValueInst(entry.Append(new UncheckedRefCastInst(given, task))));
+            entry.Append(new DestroyValueInst(given));
+            var metadata = entry.Append(new BuiltinInst("object_metadata", SilType.Metadata, held));
+            var arguments = shape.Select((_, i) => (SilValue)entry.Append(new BuiltinInst("metadata_argument", SilType.Metadata, metadata, entry.Append(new IntegerLiteralInst(SilType.Int, i))))).ToList();
+            entry.Append(new ApplyInst(entry.Append(new FunctionRefInst(body.Name, body.Type)), SilType.Unit, [held, ..arguments]));
+            entry.Append(new ReturnInst(null));
+        }
+
+        {
+            body.ParameterNames.AddRange(["task", ..names]);
+            var entry = body.AddBlock();
+            var owned = entry.AddArgument(task);
+            foreach (var hidden in shape) {
+                entry.AddArgument(hidden);
+            }
+
+            var slot = entry.Append(new AllocStackInst(TaskSuccess));
+            var failure = throws ? entry.Append(new AllocStackInst(TaskFailure)) : null;
+            var code = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(owned, TaskBody))));
+            var block = entry;
+            if (failure is not null) {
+                var normal = body.AddBlock();
+                var failed = body.AddBlock();
+                failed.AddArgument(SilType.Address(TaskFailure));
+                entry.Append(new TryApplyInst(code, SilType.Unit, [slot, failure], normal, failed));
+                failed.Append(new DestroyValueInst(code));
+                var error = failed.Append(new LoadInst(failure, LoadKind.Take));
+                failed.Append(new BuiltinInst("share", SilType.Unit, error));
+                var someError = failed.Append(new EnumInst(optionalError, optionalError.CaseIndex("Some"), error));
+                failed.Append(new StoreInst(someError, failed.Append(new RefElementAddrInst(owned, TaskError)), StoreKind.Assign));
+                failed.Append(new DestroyValueInst(owned));
+                failed.Append(new DeallocStackInst(failure));
+                failed.Append(new DeallocStackInst(slot));
+                failed.Append(new ReturnInst(null));
+                block = normal;
+            } else {
+                entry.Append(new ApplyInst(code, SilType.Unit, [slot]));
+            }
+
+            block.Append(new DestroyValueInst(code));
+            var value = block.Append(new LoadInst(slot, LoadKind.Take));
+            block.Append(new BuiltinInst("share", SilType.Unit, value));
+            var some = block.Append(new EnumInst(optional, optional.CaseIndex("Some"), value));
+            block.Append(new StoreInst(some, block.Append(new RefElementAddrInst(owned, TaskResult)), StoreKind.Assign));
+            block.Append(new DestroyValueInst(owned));
+            if (failure is not null) {
+                block.Append(new DeallocStackInst(failure));
+            }
+
+            block.Append(new DeallocStackInst(slot));
+            block.Append(new ReturnInst(null));
+            _module.Add(body);
+        }
+
+        // The deinit: the runtime's task given back, through the handle.
+        var stem = $"$template$deinit$task{(throws ? "$throws" : "")}";
+        _module.GenericDeinits[TaskGenericName(throws)] = stem;
+        var release = new SilFunction(stem + "$generic", new FunctionType([task, ..shape], SilType.Unit));
+        release.ParameterNames.AddRange(["task", ..names]);
+        var start = release.AddBlock();
+        var released = start.AddArgument(task);
+        foreach (var hidden in shape) {
+            start.AddArgument(hidden);
+        }
+
+        start.Append(new BuiltinInst("task_release", SilType.Unit, start.Append(new LoadInst(start.Append(new RefElementAddrInst(released, TaskHandle))))));
+        start.Append(new ReturnInst(null));
+        _module.Add(release);
+        var deinit = new SilFunction(stem, new FunctionType([task], SilType.Unit));
+        var at = deinit.AddBlock();
+        var self = at.AddArgument(task);
+        var of = at.Append(new BuiltinInst("object_metadata", SilType.Metadata, self));
+        at.Append(new ApplyInst(at.Append(new FunctionRefInst(release.Name, release.Type)), SilType.Unit,
+            [self, ..shape.Select((_, i) => (SilValue)at.Append(new BuiltinInst("metadata_argument", SilType.Metadata, of, at.Append(new IntegerLiteralInst(SilType.Int, i)))))]));
+        at.Append(new ReturnInst(null));
+        _module.Add(deinit);
+    }
+
+    /// <summary>An optional of an opaque type, as unspecialised code holds it.</summary>
+    EnumType OptionalOf(OpaqueType wrapped) {
+        var name = $"Optional${Sanitise(wrapped.ToString())}";
+        if (_module.FindType(name) is EnumType existing) {
+            return existing;
+        }
+
+        var made = new EnumType(name);
+        made.Cases.Add(("Some", wrapped));
+        made.Cases.Add(("None", null));
+        return (EnumType)_module.AddType(made);
+    }
+
+    static string TaskRunOnce(bool throws) => throws ? "$task.run$once$throws" : "$task.run$once";
+
+    static readonly FunctionType TaskRunType = new([SilType.Object], SilType.Unit, null, [true], isAsync: true);
+
+    static string TaskRunName(ClassType task) => TasksCompiledOnce ? TaskRunOnce(task.Fields.Count > TaskError) : $"$task.run${task.Name}";
 
     /// <summary>What runs a task: async, the root of its task's frames, given the task to keep its result in.</summary>
-    static FunctionType RunType(ClassType task) => new([task], SilType.Unit, null, [true], isAsync: true);
+    static FunctionType RunType(ClassType task) => TasksCompiledOnce ? TaskRunType : new([task], SilType.Unit, null, [true], isAsync: true);
 
     /// <summary>What a cancellation handler is: a closure taking nothing and giving nothing.</summary>
     static readonly ThickFunctionType HandlerBody = new(new FunctionType([], SilType.Unit));
@@ -224,7 +388,7 @@ public sealed partial class SilGen {
             }
 
             var made = Emit(new AllocRefInst(task));
-            Emit(new StoreInst(Owned(body), Emit(new RefElementAddrInst(made, TaskBody)), StoreKind.Assign));
+            Emit(new StoreInst(Owned(AsFunction(body, task.Fields[TaskBody].Type)), Emit(new RefElementAddrInst(made, TaskBody)), StoreKind.Assign));
             var optional = (EnumType)task.Fields[TaskResult].Type;
             Emit(new StoreInst(Emit(new EnumInst(optional, optional.CaseIndex("None"), null)), Emit(new RefElementAddrInst(made, TaskResult)), StoreKind.Assign));
 
@@ -255,7 +419,7 @@ public sealed partial class SilGen {
             }
 
             var made = Emit(new AllocRefInst(task));
-            Emit(new StoreInst(Owned(body), Emit(new RefElementAddrInst(made, TaskBody)), StoreKind.Assign));
+            Emit(new StoreInst(Owned(AsFunction(body, task.Fields[TaskBody].Type)), Emit(new RefElementAddrInst(made, TaskBody)), StoreKind.Assign));
             foreach (var field in (int[])[TaskResult, TaskError]) {
                 if (field < task.Fields.Count && task.Fields[field].Type is EnumType optional) {
                     Emit(new StoreInst(Emit(new EnumInst(optional, optional.CaseIndex("None"), null)), Emit(new RefElementAddrInst(made, field)), StoreKind.Assign));

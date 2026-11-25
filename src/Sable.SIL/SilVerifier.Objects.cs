@@ -207,7 +207,7 @@ public static partial class SilVerifier {
         foreach (var block in order) {
             foreach (var instruction in block.Instructions) {
                 switch (instruction) {
-                    case UpcastInst or CopyValueInst or UncheckedRefCastInst when aliases.Contains(instruction.Operands[0]):
+                    case UpcastInst or CopyValueInst or UncheckedRefCastInst or BuiltinInst { Name: "opaque_borrow_as" } when aliases.Contains(instruction.Operands[0]):
                         aliases.Add(instruction);
                         break;
                     case RefElementAddrInst element when aliases.Contains(element.Reference):
@@ -294,7 +294,7 @@ public static partial class SilVerifier {
                     return;
 
                 // Naming the object, or a field's address, uses neither.
-                case UpcastInst or CopyValueInst or UncheckedRefCastInst when aliases.Contains(instruction):
+                case UpcastInst or CopyValueInst or UncheckedRefCastInst or BuiltinInst { Name: "opaque_borrow_as" } when aliases.Contains(instruction):
                 case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst when fieldOf.ContainsKey(instruction):
                 case BuiltinInst { Name: "access_begin_read" or "access_begin_modify" or "access_end" or "access_check_read" or "access_check_modify" }:
                 // Destroying it destroys what is stored; an empty field is
@@ -397,7 +397,7 @@ public static partial class SilVerifier {
                     continue;
                 }
 
-                if (signature.Parameters.IsEmpty || signature.Parameters[0] is not ClassType self || !classType.IsSubclassOf(self)) {
+                if (signature.Parameters.IsEmpty || signature.Parameters[0] is not ClassType self || !classType.IsSubclassOf(self) && !InheritsErasing(classType, self)) {
                     errors.Add($"{classType.Name}: vtable slot #{method} names @{function} : {signature}, which does not take a {classType.Name} as self");
                     continue;
                 }
@@ -418,4 +418,15 @@ public static partial class SilVerifier {
         && method.Parameters.Skip(1).SequenceEqual(slot.Parameters.Skip(1))
         && method.Thrown == slot.Thrown
         && (method.Result == slot.Result || method.Result is ClassType result && slot.Result is ClassType expected && result.IsSubclassOf(expected));
+
+    /// <summary>Whether a class inherits from an instance of the generic class a method compiled once takes as self (#297).</summary>
+    static bool InheritsErasing(ClassType type, ClassType self) {
+        for (var at = type; at is not null; at = at.Superclass) {
+            if (SilType.SameErasingOpaque(at, self, opaqueOnly: true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

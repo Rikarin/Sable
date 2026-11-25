@@ -10,7 +10,7 @@ public sealed class PassTests {
 
     /// <summary>How many of an instruction the program's own functions have: Sable.Core's, lowered with it, are not counted.</summary>
     static int Count<T>(SilModule module) =>
-        module.Functions.Where(static f => !f.Name.StartsWith("Sable.Core.", StringComparison.Ordinal))
+        module.Functions.Where(static f => !f.Name.Contains("Sable.Core.", StringComparison.Ordinal))
             .Sum(static f => f.Blocks.Sum(static b => b.Instructions.OfType<T>().Count()));
 
     /// <summary>
@@ -827,7 +827,7 @@ public sealed class PassTests {
     /// <summary>The closures the program's own functions still make, and the contexts they still allocate.</summary>
     static List<SilInstruction> Closures(SilModule module) =>
         [
-            ..module.Functions.Where(static f => !f.Name.StartsWith("Sable.Core.", StringComparison.Ordinal))
+            ..module.Functions.Where(static f => !f.Name.Contains("Sable.Core.", StringComparison.Ordinal))
                 .SelectMany(Instructions)
                 .Where(static i => i is PartialApplyInst || i is AllocRefInst { ClassType.Name: var name } && name.EndsWith("$context", StringComparison.Ordinal)),
         ];

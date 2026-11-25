@@ -1,0 +1,126 @@
+module Examples.Plugins
+
+// A pipeline made of plugins the program finds by what they conform to, and
+// makes and calls by name with arguments it has as text: a command line's, or
+// a configuration file's. Each asks to be found with '@reflectable(callable)'
+// (docs/06 §6.3); one that does not is not kept for it.
+
+/// A step that changes a text.
+public protocol Filter {
+    fn apply(_ text: String) throws -> String
+}
+
+public struct EmptyText: Error { }
+
+@reflectable(callable)
+public struct Upper: Filter {
+    public init() { }
+
+    public fn apply(_ text: String) -> String => text.uppercased()
+}
+
+@reflectable(callable)
+public struct Repeat: Filter {
+    let times: Int
+
+    public init(_ times: Int) { self.times = times }
+
+    public fn apply(_ text: String) throws -> String {
+        if text.isEmpty {
+            throw EmptyText { }
+        }
+
+        return text.repeated(times)
+    }
+}
+
+@reflectable(callable)
+public class Quote: Filter {
+    var mark: String
+
+    public init(_ mark: String) { self.mark = mark }
+
+    public fn apply(_ text: String) -> String => mark + text + mark
+
+    public fn use(_ mark: String) { self.mark = mark }
+}
+
+/// The arguments, each as the type its parameter has.
+fn parsed(_ words: String[>..], as types: Type[>..]) -> (any Any)[>..]? {
+    if words.count != types.count {
+        return none
+    }
+
+    var arguments: (any Any)[>..] = []
+    for (i, word) in words.enumerated() {
+        if types[i] == Int.self {
+            guard let number = try? Int.parse(word) else {
+                return none
+            }
+
+            arguments.append(number)
+        } else {
+            arguments.append(word)
+        }
+    }
+
+    return arguments
+}
+
+/// The filter a step names, made with its arguments: 'Repeat 2'.
+fn filter(named step: String) throws -> (any Filter)? {
+    let words = step.split(separator: ' ').map { String($0) }
+    let filters: Type = (any Filter).self
+    for type in filters.callableSubtypes() {
+        if type.name.hasSuffix("." + words[0]), let make = type.callable("init") {
+            guard let arguments = parsed(words.dropFirst(1).map { $0 }, as: make.parameterTypes) else {
+                return none
+            }
+
+            return try make.call(with: arguments) as? any Filter
+        }
+    }
+
+    return none
+}
+
+@main
+fn main() {
+    let filters: Type = (any Filter).self
+    for type in filters.callableSubtypes() {
+        for member in type.callableMembers {
+            print("\(type.name): \(member.signature)")
+        }
+    }
+
+    do {
+        var text = "sable "
+        for step in ["Upper", "Repeat 2", "Quote *", "Repeat twice", "Missing"] {
+            if let found = try filter(named: step) {
+                text = try found.apply(text)
+                print("\(step): \(text)")
+            } else {
+                print("\(step): no such filter")
+            }
+        }
+
+        // One object's members, whatever its class is.
+        let quote: any Any = Quote("'")
+        let members = type(of: quote)
+        _ = try members.callable("use")!.call(on: quote, "\"")
+        print(try members.callable("apply")!.call(on: quote, "hello") as! String)
+
+        // What is wrong with a call is thrown, and so is what the member throws.
+        do {
+            _ = try members.callable("apply")!.call(on: quote, 3)
+        } catch let error as CallError {
+            print(error.description())
+        }
+
+        _ = try Repeat.callable("apply")!.call(on: Repeat(2), "")
+    } catch is EmptyText {
+        print("nothing to repeat")
+    } catch {
+        print("unexpected: \(error)")
+    }
+}

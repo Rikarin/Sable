@@ -345,10 +345,36 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_superclass")) {
+                var derived = Expect(TokenKind.String, "a class's name").Text;
+                Expect("=");
+                module.SuperclassAccessors[derived] = Expect(TokenKind.Global, "an accessor's name").Text;
+                continue;
+            }
+
             if (Accept("sil_boxer")) {
                 var boxed = ParseType();
                 Expect("=");
                 module.Boxers[boxed.ToString()] = (boxed, Expect(TokenKind.Global, "a boxer's name").Text);
+                continue;
+            }
+
+            if (Accept("sil_structural")) {
+                var kind = Enum.Parse<MetadataKind>(Expect(TokenKind.String, "a kind of type").Text);
+                var conformed = Expect(TokenKind.String, "a protocol's name").Text;
+                var requirements = ImmutableArray.CreateBuilder<string>();
+                while (Current.Kind == TokenKind.String) {
+                    requirements.Add(Expect(TokenKind.String, "a protocol's name").Text);
+                }
+
+                module.StructuralConformances.Add((kind, conformed, requirements.ToImmutable()));
+                continue;
+            }
+
+            if (Accept("sil_callable")) {
+                var callable = ParseType();
+                Expect("=");
+                module.Callables[callable.ToString()] = (callable, Expect(TokenKind.Global, "a function's name").Text);
                 continue;
             }
 

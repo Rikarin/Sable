@@ -518,11 +518,10 @@ the fields' or cases' names, the name, and the type arguments' count) as
 (`sable_field_address`); a struct that holds them only through a reference
 (`T[]`) has the layout it has whatever `T` is, and is passed as it is. Such a
 type is a type argument and a type's name as Sable writes it
-(`M.Pair<String, Int>`) as one made where its arguments are known. A type
-with a deinit, packed or aligned, move-only, a union with a boxed case, and
-an extension with `where T == X` are still specialised.
+(`M.Pair<String, Int>`) as one made where its arguments are known. In
+an extension or a function with `where T == X` the parameter is that type.
 
-A **generic class** with no superclass is compiled once as a struct is, the
+A **generic class** is compiled once as a struct is, the
 reference passed as it is; any method may change self's fields. One whose
 stored fields hold its type parameters' values only behind references —
 arrays and slices of them, plain generic structs that do (`[Key: Int]`),
@@ -544,8 +543,16 @@ identity to `is` and `as?`. A **deinit** is compiled once too: a program
 registers, by the class's name, a function that reads the type arguments
 from an object's class and calls it (`$template$deinit$…`,
 `sable_register_generic_deinit`), which a class made at run time runs before
-its fields go. A class that a subclass may override is still
-specialised, as its vtable holds an instance for each class's arguments. An
+its fields go. A class
+in a **hierarchy** — with a superclass, or one a program inherits from
+(src/Sable.SIL/SilGen.Hierarchies.cs) — is too: its superclass is made from
+its own type arguments (`sil_superclass`, an accessor the class's shape
+names), and its vtable's slots are in the convention of the class that
+declares the method, so that a call through the base, whatever it knows of
+the types, passes what any override takes; an override whose types are
+fixed (`class Names: Box<String>`) has a thunk in its slot that converts, as
+a reabstraction thunk does. A method generic over its own parameters that a
+subclass may override is not (below). An
 **operator** a generic type declares is a static member of it. A
 **subscript**'s getter and setter, of a generic struct,
 union or class, are compiled once as methods are (a dictionary's `d[key]` and
@@ -615,9 +622,11 @@ which sizes it at run time and destroys it through its witnesses, and is
 copied into a slot of its own where the closure's code starts. Such a
 closure captures by value (a `let`, a parameter, its own `self`), and may be inside
 another; a `var` it shares is in a box that is an instance of a generic class,
-laid out at run time as any is. One that changes a value's `self`
-keeps its function specialised, as does a function that returns a closure
-over its type parameters.
+laid out at run time as any is. One that changes a value's `self` is
+given where it is, as any closure that does not escape is; a function that
+gives back a closure over its type parameters gives it in the convention of
+its own, which a caller that knows the types converts. An async closure's
+parameter and result go as an async function's do.
 
 A function **stored** in a field of a generic struct or class is kept, in an
 unspecialised build, in the generic convention of the type's own parameters
@@ -630,7 +639,8 @@ converts likewise (`SilGen.StoredFunctionType`). So the Lazy adapters and
 in the convention of the instance's types, and calls it directly; so does an
 optimised unspecialised one (`SilGen.UseOptimised`), where those types' code
 is copied for each instance, as the specialisation pass would leave a
-conversion at every use.
+conversion at every use. A payload that is a function, and an optional
+function, are kept and converted likewise.
 
 A **requirement generic over its own parameters** (`relative<C:
 Collection>(to: C)`) has an entry that takes, before `Self`'s metadata, the
@@ -762,12 +772,70 @@ no function takes one. A generic type made of type parameters, `Pair<T>`,
 given where its conformance is required, has the conformance's template table
 ("Opening a Type", below), found from the metadata made for it.
 
-What unspecialised code cannot serve yet — a structural union of `T`, a
-method of a generic class a subclass may override, `Task<T>`, an async
-closure's parameter, an array of type parameters given where a conformance is required
-(`xs.map` of a `T[>..]`), or a generator — is still specialised for its type arguments in
-the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
-says, for each generic function, which way it went and why. A specialised
+A **structural union** of type parameters, `Failure | E`, is opaque as an
+optional of one is: its metadata is made at run time from its members', in
+the order their names have, with a member said twice once
+(`sable_union_type`), and a value goes in, and is asked which it holds, by
+the member's metadata (`union_inject`, `union_case_metadata`,
+`union_case_payload`). An **array, slice or optional** of type parameters
+given where a conformance is required (`xs.map` of a `T[>..]`) has the
+template table of the extension that conforms it ("Arrays, slices and
+optionals", above); so has a structural union of errors, known by `|`, whose
+entries ask which case a value holds and call the case's own. **`Task<T>`** is one class whatever its
+result (src/Sable.SIL/SilGen.Tasks.cs): its body writes the result where the
+task object keeps it, as its metadata lays it out.
+
+**What is compiled for each type in both modes, and why.** These are
+decisions, not gaps: a generic function that meets one is specialised for
+its type arguments in the same program, so a program builds either way, and
+`SABLE_GENERICS_TRACE=1` says, for each, which way it went and which of
+these it met (`2` also says each instance a unit makes).
+
+- *Value parameters, and what is laid out by them*: `SIMD<T, N>`,
+  `SIMDMask`, `ArrayVec<T, N>`, `SmallVec`, `T[=N]`. Their layout — a
+  register, a frame's bytes — is what they are for; code that took it from
+  metadata would be slower than the array it stands in for. A search of an
+  array by vectors is among them, but every type it can be given is known
+  (the SIMD scalars), so the library's archive has them all (**prepared**
+  instances, `SilUnitInfo.Prepared`, listed in its interface), and a program
+  makes none.
+- *Move-only types* (`~Copyable` parameters, `@noncopy`): a value is never
+  where two owners could read it, which the convention — the caller keeps
+  what it passes — is made of.
+- *A type with a layout or a deinit of its own rules*: a struct with a
+  deinit, `@packed`, `@align`, `@inline_layout`, a union with an `indirect`
+  case.
+- *Generators*: the iterator is a struct of the body's own slots, laid out
+  inline, and which there are differs with the type.
+- *A constraint on an instance of a generic protocol* (`FromSequence<E>`,
+  `Validator<V>`, `some Sequence<Int>`), and the members of a generic
+  protocol: a table's entries take the protocol's arguments as they are, so
+  there is one per instance.
+- *A method generic over its own parameters that a subclass may override*:
+  a vtable slot is one function, and what it would be asked for is not known
+  where the subclass is compiled.
+- *What is written per type by the compiler*: `Mirror` and `Reflect`,
+  `Error`'s description by default (`"\(self)"`: it is the type's own
+  describer), and a forwarder that only calls a requirement, which is
+  smaller than the call it would take.
+- *A value made of type parameters written out* (`"\(xs)"` of a `T[]`), a
+  `catch` that mixes a type parameter's error with others, a type test of a
+  value only its metadata knows against a type made of type parameters, a
+  union that mixes type parameters with known types, a local generic
+  function over the type parameters around it, `@polymorphic`, and a
+  requirement that takes an array or a generic type of `Self` `inout`: each
+  would need a part of the runtime of its own, for what is seldom written
+  and compiled once per type at no loss but that.
+- *In an optimised build*, stored functions, tasks and class hierarchies: its
+  types' code is copied for each instance and specialised, and one kept in
+  the generic convention would be converted at every use.
+
+Measured on the standard library as a debug build's archive: 1324 generic
+functions compiled once and 119 for each type (346 and 418, with some that
+have no body, before the list above was done: 99 of either are the value
+generics), and a program of the core's collections — arrays, dictionaries,
+searches, sorts, lazy and zipped sequences — lowers none of their code
+(CompiledGenericsTests); `examples/ssg` makes no instance (six before). A specialised
 build (the default) makes no describers but for a call that opens a Type
 or an existential.
 
@@ -795,15 +863,55 @@ let t = TypeInfo.of(Document.self)
 for method in t.methods where method.isPublic {
     print(method.signature)
 }
-let doc = try t.construct(args: ["title": "Untitled"])
-let result = try t.invoke("render", on: doc, args: [])
+
+// Requires @reflectable(callable): its public members, called with boxed arguments
+let doc = try Document.callable("init")!.call("Untitled")
+let result = try type(of: doc).callable("render")!.call(on: doc)
+
+// The types that ask for it and conform to a protocol — the plugin story
+let plugins: Type = (any Plugin).self
+for type in plugins.callableSubtypes() {
+    let plugin = try type.callable("init")!.call() as! any Plugin
+}
 
 // Attribute reading
 for route in t.attributes(of: Route.self) { }  // Route: a struct conforming to Attribute
-
-// Dynamic lookup by name — the plugin story
-if let ty = Runtime.lookupType("App.Plugins.MyPlugin") { }
 ```
+
+### Calling by reflection
+
+`@reflectable(callable)` conforms a type to `Callable`, whose three
+requirements the compiler writes as it writes a derived member
+(src/Sable.Symbols/DerivedBodies.Callable.cs): one describes each of the
+type's public initialisers, methods and operators (`CallableMember`: name,
+signature, parameter and result `Type`s), one calls the member of an index,
+and one the members whose call waits — the async ones, an actor's and the
+main actor's, which hop as written code does. An argument is taken out of
+its box as the parameter's type, the receiver as the type's; one that is not
+it is a `CallError` thrown, and what the member throws is thrown on. A
+mutating method called on an `any Any` in a variable changes it.
+
+- *Opt-in, and only public members.* A type is asked for by its author, and
+  what is called by name could be called by any code, so access control
+  holds without knowing who asks. A type that does not ask has no
+  descriptor, no thunk and nothing registered: a program in which none does
+  is byte for byte what it was. `--deny-reflection` refuses it (S3450).
+- *Described, and refused with a reason* (`refusal`): a member generic over
+  its own parameters, one with an `inout` or variadic parameter, of an
+  extension that holds only of some instances, an abstract class's
+  initialiser, one whose parameter or result no box holds (a move-only
+  type, a view, a function), and one isolated to an actor whose parameters
+  or result are not `Sendable`, which the boxes would hide. Each argument is
+  given: a default value is bound at a call, where there is none.
+- *Found by type.* `T.callableMembers()` where `T: Callable`, a generic
+  type's instance among them; `type(of: x).callableMembers` whatever `x` is,
+  from what each image registers as it starts (`sable_register_callable`:
+  a type's metadata and the function that gives its members).
+- *Listed by protocol.* `Type.callableSubtypes()` asks the conformance
+  registry of each type registered (`sable_metadata_is_subtype`), so the
+  types a program lists are those that asked to be kept: no linker flag or
+  scan of every type, and a generic type, which is no one type, is not
+  among them.
 
 ### The reachability model
 
@@ -819,7 +927,8 @@ At link time the compiler computes the reflection closure:
 type that got pulled in by accident is then visible and fixable, which is
 exactly the problem `ILLink` warnings try and fail to solve.
 
-**`Runtime.lookupType(String)` would force conservatism** (it is not built):
+**`Runtime.lookupType(String)` would force conservatism** (it is not built;
+a program that loads by name looks among `callableSubtypes()`):
 a call with a non-constant string would have to keep every public type of
 the package reflectable. How a package says so is to be designed with it;
 the manifest has no `[reflect]` table, since what is reflected on is said

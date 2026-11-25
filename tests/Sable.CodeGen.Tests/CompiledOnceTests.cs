@@ -10,7 +10,7 @@ namespace Sable.CodeGen.Tests;
 ///     must print the same, and the functions named must have been compiled once.
 /// </summary>
 [Native]
-public sealed class CompiledOnceTests {
+public sealed partial class CompiledOnceTests {
     static void Prints(string expected, string program, params string[] once) {
         foreach (var mode in (GenericsMode[])[GenericsMode.Unspecialised, GenericsMode.Specialised]) {
             using var _ = SilGen.UseGenerics(mode);

@@ -36,6 +36,9 @@ final class ParallelLoop {
     // The next chunk; an empty one once there is none.
     fn claim() -> Range<Int> {
         var start = next.load(ordering: .Relaxed)
+        if start > 0 && degree > 1 {
+            Runtime.loopMore()
+        }
         while start < count {
             let left = count - start
             let part = left / divisor

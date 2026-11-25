@@ -149,7 +149,7 @@ public sealed partial class SilInterpreter {
                 _threads[(long)operands[0]!].Token = true;
                 return null;
 
-            case "thread_yield":
+            case "thread_yield" or "thread_loop_more":
                 return null;
 
             // As with SABLE_WORKERS=0: the one thread runs every task.

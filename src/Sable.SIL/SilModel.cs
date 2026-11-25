@@ -3152,6 +3152,7 @@ public static class SilBuiltins {
         Add("thread_unpark", SilType.Unit, SilType.Int);
         Add("thread_yield", SilType.Unit);
         Add("thread_workers", SilType.Int);
+        Add("thread_loop_more", SilType.Unit);
         Add("thread_block_new", SilType.Int);
         Add("thread_block_done", SilType.Unit, SilType.Int);
         Add("thread_block_wait", SilType.Unit, SilType.Int);

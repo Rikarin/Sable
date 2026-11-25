@@ -364,6 +364,10 @@ public struct Runtime {
     @intrinsic
     public static fn runLoop(_ degree: Int, _ work: () -> ())
 
+    /// Said by a thread that takes another piece of what it runs in a loop.
+    @builtin("thread_loop_more")
+    public static fn loopMore()
+
     // A value for each thread, by a key: where it is, 0 until the thread has
     // one; put there, with what destroys it as the thread ends.
 

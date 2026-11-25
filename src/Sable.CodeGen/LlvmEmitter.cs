@@ -752,6 +752,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_thread_unpark(i64)
                                 declare void @sable_thread_yield()
                                 declare i64 @sable_thread_workers()
+                                declare void @sable_thread_loop_more()
                                 declare i64 @sable_thread_block_new()
                                 declare void @sable_thread_block_done(i64)
                                 declare void @sable_thread_block_wait(i64)

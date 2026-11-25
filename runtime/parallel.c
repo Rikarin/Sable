@@ -454,6 +454,7 @@ typedef struct Loop {
     void (*run)(void *holder);
     void *holder;
     SableTask *task;
+    int64_t since;
     int32_t room;                  // for how many more; under loops_lock, as the rest of this
     bool open;                     // on the list
     struct Loop *previous, *next;
@@ -463,6 +464,17 @@ typedef struct Loop {
     PlatformMutex lock;
     PlatformCondition done;
 } Loop;
+
+// Waking a worker costs more than some loops do. A thread whose last few were
+// brief wakes none as it begins another: it wakes them, if they are to be,
+// once the loop has gone on for a while, as it takes its next piece
+// (sable_thread_loop_more). Workers awake and idle see it meanwhile.
+enum { BRIEF_LOOPS = 4 };
+
+static const int64_t BRIEF = 40000;
+
+static _Thread_local int brief_loops;
+static _Thread_local Loop *unwoken_loop;
 
 static _Alignas(128) SpinLock loops_lock;
 static Loop *loops_head, *loops_tail, *loops_free;
@@ -551,6 +563,15 @@ static bool loop_help(void) {
     return true;
 }
 
+// The thread is to take another piece of a loop.
+void sable_thread_loop_more(void) {
+    Loop *loop = unwoken_loop;
+    if (__builtin_expect(loop != NULL, 0) && sable_time_monotonic() - loop->since >= BRIEF / 4) {
+        unwoken_loop = NULL;
+        loop_wake(2);
+    }
+}
+
 // 'run(holder)' run by this thread and by at most 'degree' less one others,
 // and the holder let go of once all have returned. A degree of 0 is as many as
 // there are workers.
@@ -601,9 +622,18 @@ void sable_thread_loop(void (*run)(void *), void *holder, int64_t degree) {
     loops_tail = loop;
     __atomic_fetch_add(&loops.open, 1, __ATOMIC_SEQ_CST);
     spin_unlock(&loops_lock);
-    loop_wake((int32_t)degree - 1);
+    Loop *outer = unwoken_loop;
+    unwoken_loop = NULL;
+    loop->since = sable_time_monotonic();
+    if (brief_loops >= BRIEF_LOOPS) {
+        unwoken_loop = loop;
+    } else {
+        loop_wake((int32_t)degree - 1);
+    }
 
     run(holder);
+    unwoken_loop = outer;
+    brief_loops = sable_time_monotonic() - loop->since < BRIEF ? brief_loops + (brief_loops < BRIEF_LOOPS) : 0;
 
     spin_lock(&loops_lock);
     loop_close(loop);

@@ -5318,6 +5318,12 @@ public sealed partial class SilGen {
                     && byValue.Kind is CaptureKind.Default or CaptureKind.ByValue && LowerType(access.Type) is { IsTrivial: false } and not AddressType:
                     return Hold(Emit(new LoadBorrowInst(Emit(new RefElementAddrInst(_context!, byValue.Field)))));
 
+                // A parameter it captured, likewise: a closure several threads
+                // call, above all, which each would count on every call.
+                case BoundParameterAccess access when closure is not null && closure.Captures.TryGetValue(access.Parameter, out var parameterByValue) && !parameterByValue.Boxed
+                    && parameterByValue.Kind is CaptureKind.Default or CaptureKind.ByValue && LowerType(access.Type) is { IsTrivial: false } and not AddressType:
+                    return Hold(Emit(new LoadBorrowInst(Emit(new RefElementAddrInst(_context!, parameterByValue.Field)))));
+
                 case BoundSelfAccess when _selfValue is not null:
                     return _selfValue;
 

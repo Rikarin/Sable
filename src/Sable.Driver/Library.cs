@@ -31,6 +31,23 @@ public static class Library {
     /// <summary>The library modules there are, by name.</summary>
     public static IReadOnlyCollection<string> ModuleNames => [..Files.Value.Keys];
 
+    /// <summary>
+    ///     The files of a library module's own source generators (docs/08
+    ///     §8.1), by the module's name: <c>lib/&lt;Module&gt;/generators/</c>.
+    /// </summary>
+    public static IReadOnlyDictionary<string, IReadOnlyList<(string Name, string Text)>> Generators => GeneratorFiles.Value;
+
+    static readonly Lazy<IReadOnlyDictionary<string, IReadOnlyList<(string Name, string Text)>>> GeneratorFiles = new(static () =>
+        typeof(Library).Assembly.GetManifestResourceNames()
+            .Where(static n => n.StartsWith("generators/", StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal)
+            .Select(static n => {
+                using var reader = new StreamReader(typeof(Library).Assembly.GetManifestResourceStream(n)!);
+                return (Name: "lib/" + n.Replace('\\', '/')["generators/".Length..], Text: reader.ReadToEnd());
+            })
+            .GroupBy(static f => f.Name.Split('/')[1], StringComparer.Ordinal)
+            .ToDictionary(static g => g.Key, static g => (IReadOnlyList<(string, string)>)[..g], StringComparer.Ordinal));
+
     /// <summary>A library module's source, every file of it in order: what a cache of anything built from it hashes.</summary>
     public static string Source(string module) => string.Join("\n", ModuleFor(module, ParseOptions.Default).Select(static f => f.Text.Text));
 

@@ -5,14 +5,14 @@ import Sable.Testing
 
 import InjectionSupport
 
-@derive(Injectable)
+@injectable
 final class Orders {
     let repository: any Repository<Order>
     init(repository: any Repository<Order>) { self.repository = repository }
 }
 
 fn opened() -> ServiceCollection {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addScoped(open: Repository.self, MemoryRepository.self)
     services.addTransient(open: Log.self, Log.self)
     services.addScoped(Connection.self)
@@ -21,7 +21,7 @@ fn opened() -> ServiceCollection {
 
 @test
 fn anOpenGenericIsClosedAsItIsAskedFor() {
-    let services = opened()
+    var services = opened()
     services.addScoped(Orders.self)
     (try! services.build()).withScope { scope in
         let orders = try! scope.resolve(Orders.self)
@@ -35,7 +35,7 @@ fn anOpenGenericIsClosedAsItIsAskedFor() {
 
 @test
 fn aClosedRegistrationIsGivenBeforeAnOpenOne() {
-    let services = opened()
+    var services = opened()
     services.addScoped((any Repository<Int>).self) { scope in
         MemoryRepository<Int>(connection: Connection(), log: try scope.resolve(Log<MemoryRepository<Int>>.self))
     }
@@ -48,18 +48,18 @@ fn aClosedRegistrationIsGivenBeforeAnOpenOne() {
 
 @test
 fn anOpenGenericOfATypeNoCodeNames() {
-    let services = opened()
+    var services = opened()
     services.addTransient(open: MemoryRepository.self, MemoryRepository.self)
     let wanted = MemoryRepository.self.instantiate([Bool.self])!
     (try! services.build()).withScope { scope in
-        let given = try! scope.resolve(dynamic: wanted)
+        let given = try! scope.resolve(wanted)
         assertEqual("\(type(of: given))", "InjectionSupport.MemoryRepository<Bool>")
     }
 }
 
 @test
 fn anOpenGenericsOwnDependenciesAreChecked() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addScoped(open: Repository.self, MemoryRepository.self)
     services.addScoped(Orders.self)
     let said = problems(services)
@@ -68,7 +68,7 @@ fn anOpenGenericsOwnDependenciesAreChecked() {
 
 @test
 fn anOpenSingletonMayNotHoldAScopedService() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addSingleton(open: Repository.self, MemoryRepository.self)
     services.addTransient(open: Log.self, Log.self)
     services.addScoped(Connection.self)
@@ -82,21 +82,21 @@ protocol Sized {
     fn size() -> Int
 }
 
-@derive(Injectable)
+@injectable
 final class SizedHolder<Item: Sized>: Holder<Item> {
     init() { }
 }
 
 final class Plain<Item>: Holder<Item> { }
 
-@derive(Injectable)
+@injectable
 final class WantsHolder {
     init(_holder: any Holder<Int>) { }
 }
 
 @test
 fn aConstraintThatIsNotMetIsSaid() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addTransient(open: Holder.self, SizedHolder.self)
     services.addTransient(WantsHolder.self)
     assertEqual(problems(services), "the services cannot be provided: any OpenGenericTests.Holder<Int> cannot be made from OpenGenericTests.SizedHolder: a type argument does not meet its constraints")
@@ -104,7 +104,7 @@ fn aConstraintThatIsNotMetIsSaid() {
 
 @test
 fn anImplementationMustBeInjectable() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addTransient(open: Holder.self, Plain.self)
     services.addTransient(WantsHolder.self)
     assertEqual(problems(services), "the services cannot be provided: OpenGenericTests.Plain<Int>, registered for any OpenGenericTests.Holder<Int>, is not one")
@@ -112,7 +112,7 @@ fn anImplementationMustBeInjectable() {
 
 @test
 fn anOpenSingletonIsOneForEachType() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addSingleton(open: Log.self, Log.self)
     let provider = try! services.build()
     assert((try! provider.resolve(Log<Int>.self)) === (try! provider.resolve(Log<Int>.self)))
@@ -121,7 +121,7 @@ fn anOpenSingletonIsOneForEachType() {
 
 @test
 fn anOpenGenericMayBeKeyed() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addTransient(open: Log.self, Log.self, key: "k")
     let provider = try! services.build()
     assert((try! provider.find(Log<Int>.self)) == none)

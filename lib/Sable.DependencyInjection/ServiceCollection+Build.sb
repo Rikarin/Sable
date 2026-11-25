@@ -1,0 +1,109 @@
+module Sable.DependencyInjection
+
+extension ServiceCollection {
+    /// The provider of what is registered. Unless told not to, checks first
+    /// that every service can be made as its dependencies say: that each is
+    /// registered, that none leads back to itself, and that no singleton
+    /// holds a scoped one. Throws ServiceError.Invalid with all that is wrong,
+    /// and ServiceError.NeedsAsync where `buildAsync` is needed. A registration
+    /// that is eager is made here.
+    ///
+    /// ```sable
+    /// var services = ServiceCollection()
+    /// services.add(ServiceDescriptor.of(String.self, .Transient, from: [ServiceDependency(Int.self)]) { services in
+    ///     "\(try services.resolve(Int.self))"
+    /// })
+    /// do {
+    ///     _ = try services.build()
+    /// } catch {
+    ///     print(error.description())   // … nothing provides Int: String -> Int
+    /// }
+    /// ```
+    public fn build(validate: Bool = true) throws(ServiceError) -> ServiceProvider {
+        let waiting = descriptors.filter { $0.isAsync }.map { $0.key }.toArray()
+        if !waiting.isEmpty {
+            throw ServiceError.NeedsAsync(services: waiting)
+        }
+        let (provider, all) = try provided(validate)
+        for entry in all.filter({ $0.eager }) {
+            _ = try entry.value(in: ServiceScope(provider, isRoot: true))
+        }
+        return provider
+    }
+
+    /// The provider of what is registered, checked as `build` checks it, with
+    /// the singletons whose making waits made too, each after what it says it
+    /// is made from.
+    ///
+    /// ```sable
+    /// var services = ServiceCollection()
+    /// services.addSingleton(Int.self) { _services in
+    ///     await Task.yield()
+    ///     return 7
+    /// }
+    /// let provider = try! await services.buildAsync()
+    /// assert(try! provider.resolve(Int.self) == 7)
+    /// ```
+    public async fn buildAsync(validate: Bool = true) throws(ServiceError) -> ServiceProvider {
+        let (provider, all) = try provided(validate)
+        do {
+            var begun: [Int: Bool] = [:]
+            for entry in all.filter({ $0.eager }) {
+                for each in provider.order(to: entry, &begun) {
+                    if let start = each.maker.start {
+                        try await each.begin(start, in: ServiceScope(provider, isRoot: true))
+                    } else if each.eager {
+                        _ = try each.value(in: ServiceScope(provider, isRoot: true))
+                    }
+                }
+            }
+        } catch {
+            await provider.disposeAsync()
+            throw error
+        }
+        return provider
+    }
+
+    fn provided(_ validate: Bool) throws(ServiceError) -> (ServiceProvider, ServiceEntry[>..]) {
+        var entries: [ServiceKey: ServiceEntry[>..]] = [:]
+        var all: ServiceEntry[>..] = []
+        var firstLink = 0
+        var places = 0
+        for descriptor in descriptors {
+            let entry = descriptor.entry(slot: all.count, place: places, firstLink: firstLink)
+            all.append(entry)
+            places += descriptor.lifetime == .Scoped ? 1 : 0
+            firstLink += descriptor.dependencies.count
+            var list = entries[descriptor.key] ?? []
+            list.append(entry)
+            entries[descriptor.key] = list
+        }
+        // What each is linked to, in the places it has; the rest of them are
+        // linked to nothing that is asked for.
+        var links: ServiceLink[>..] = []
+        for entry in all {
+            for dependency in entry.dependencies {
+                let single = dependency.kind == .Required || dependency.kind == .Optional
+                if single && dependency.key.key == none {
+                    if let found = entries[dependency.key] {
+                        links.append(ServiceLink { type: dependency.key.type, entry: found[found.count - 1] })
+                    }
+                }
+            }
+            while links.count < entry.firstLink + entry.linkCount {
+                links.append(ServiceLink { type: Never.self, entry: entry })
+            }
+        }
+        let provider = ServiceProvider(entries: entries, links: links, generics: openServices, slots: all.count, places: places)
+        if validate {
+            var check = ServiceValidation(provider)
+            for descriptor in descriptors {
+                check.check(descriptor.key)
+            }
+            if !check.problems.isEmpty {
+                throw ServiceError.Invalid(problems: check.problems)
+            }
+        }
+        return (provider, all)
+    }
+}

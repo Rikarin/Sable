@@ -58,6 +58,13 @@ public static class PackageGenerators {
 
             var library = package.Package.LibrarySources().ToHashSet(StringComparer.Ordinal);
             return [..files.Distinct(StringComparer.Ordinal).Select(f => new PackageFile(PackageBuilder.Parse(graph, package, f, optimise), f, library.Contains(f)))];
+        }, package => {
+            IEnumerable<string> files = package.Package.LibrarySources();
+            if (package.Name == member) {
+                files = files.Concat(package.Package.Bins.Select(static b => b.Path)).Concat(dev ? PackageBuilder.TestFiles(package) : []);
+            }
+
+            return files.Any(static f => File.Exists(f) && LibraryGenerators.MayImport(File.ReadAllText(f)));
         });
         if (!engine.HasGenerators) {
             return GeneratedSources.None;
@@ -117,7 +124,8 @@ public static class PackageGenerators {
 
         var engine = new Engine(graph, member, dev: true, package => package.Name == member
             ? [..documents.Select(static d => new PackageFile(d, d.Text.FileName, true))]
-            : [..(byPackage.TryGetValue(package.Name, out var trees) ? trees : []).Select(static t => new PackageFile(t, t.Text.FileName, true))]);
+            : [..(byPackage.TryGetValue(package.Name, out var trees) ? trees : []).Select(static t => new PackageFile(t, t.Text.FileName, true))],
+            package => (package.Name == member ? documents : byPackage.TryGetValue(package.Name, out var files) ? files : []).Any(static t => LibraryGenerators.MayImport(t.Text.Text)));
         if (!engine.HasGenerators) {
             return GeneratedTrees.None;
         }
@@ -182,12 +190,13 @@ public static class PackageGenerators {
         readonly Dictionary<string, GeneratorSet?> _sets = new(StringComparer.Ordinal);
         readonly Dictionary<string, PackageOutcome> _done = new(StringComparer.Ordinal);
 
-        public Engine(PackageGraph graph, string member, bool dev, Func<ResolvedPackage, IReadOnlyList<PackageFile>> files) {
+        /// <param name="importsLibrary">Whether a package may import a library module with generators of its own.</param>
+        public Engine(PackageGraph graph, string member, bool dev, Func<ResolvedPackage, IReadOnlyList<PackageFile>> files, Func<ResolvedPackage, bool> importsLibrary) {
             _graph = graph;
             _member = member;
             _dev = dev;
             _files = files;
-            HasGenerators = graph.Closure(member, dev).Any(p => SetOf(p.Name) is not null);
+            HasGenerators = graph.Closure(member, dev).Any(p => SetOf(p.Name) is not null || importsLibrary(p));
         }
 
         /// <summary>Whether any package the member compiles with has generators: if none does, there is nothing to run.</summary>
@@ -210,19 +219,25 @@ public static class PackageGenerators {
             var package = _graph.Packages[name];
             var own = name == _member;
             var references = new List<SyntaxTree>();
+            var dependencies = new List<(string, IReadOnlyList<SyntaxTree>)>();
             foreach (var dependency in _graph.Closure(name, own && _dev).Where(p => p.Name != name)) {
-                references.AddRange(Ensure(dependency.Name).Library);
+                var done = Ensure(dependency.Name);
+                references.AddRange(done.Library);
+                // Its own files, not what was written for them.
+                dependencies.Add((dependency.Name, [..done.Library.Where(done.Paths.ContainsKey)]));
             }
 
             var files = _files(package);
             var paths = files.ToDictionary(static f => f.Tree, static f => f.Path);
             IEnumerable<string> names = [name, ..package.Dependencies, ..own && _dev ? package.DevDependencies : []];
-            var visible = names.Distinct(StringComparer.Ordinal).Select(SetOf).OfType<GeneratorSet>().ToList();
+            var visible = names.Distinct(StringComparer.Ordinal).Select(SetOf).OfType<GeneratorSet>()
+                .Concat(LibraryGenerators.VisibleTo(files.Select(static f => f.Tree))).ToList();
             var problems = new List<string>();
             var result = GenerationResult.Empty;
             if (visible.Count > 0) {
                 result = SourceGenerators.Run(new GenerationInput(name, visible, [..files.Select(static f => f.Tree)]) {
                     References = references,
+                    Dependencies = dependencies,
                     Inputs = Inputs(package, problems),
                 });
             }

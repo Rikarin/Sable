@@ -39,11 +39,11 @@ public final class HostedServices {
     /// A service made from its own dependencies, by the builder's container.
     ///
     /// ```sable
-    /// @immutable
-    /// @derive(Injectable)
-    /// final class Greeter: HostedService {
+    /// struct Greeter: HostedService, Injectable {
     ///     let environment: HostEnvironment
-    ///     init(environment: HostEnvironment) { self.environment = environment }
+    ///     static fn make(_ services: ServiceScope) throws -> Greeter {
+    ///         return Greeter { environment: try services.resolve(HostEnvironment.self) }
+    ///     }
     ///     async fn run(cancellation: CancellationToken) throws {
     ///         print("in \(environment.name)")
     ///     }

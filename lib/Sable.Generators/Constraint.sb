@@ -1,0 +1,9 @@
+module Sable.Generators
+
+/// What a type's generic parameter must be.
+public struct Constraint {
+    /// The parameter's name.
+    public var parameter: String
+    /// The protocol it conforms to, or the class it derives from.
+    public var type: TypeRef
+}

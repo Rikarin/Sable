@@ -56,6 +56,13 @@ public sealed partial class SilGen {
             return existing;
         }
 
+        // A table is a protocol's, whichever its type arguments: a type that is
+        // a Provides<Int> and a Provides<String> has none of either, and is
+        // used as code that knows it uses it, by its own members.
+        if (!protocol.OriginalDefinition.TypeParameters.IsEmpty && concrete.SupertypesOf(protocol).Take(2).Count() > 1) {
+            return null;
+        }
+
         var conformance = (protocol.OriginalDefinition.TypeParameters.IsEmpty ? null : concrete.SupertypeOf(protocol)) ?? protocol.OriginalDefinition;
         var table = new SilWitnessTable(value, name);
         AssociatedTypes(table, concrete, conformance);

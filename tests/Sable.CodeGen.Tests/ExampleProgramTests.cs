@@ -103,20 +103,25 @@ public sealed class ExampleProgramTests {
             """
             2 ordered
             1 ordered
-              Examples.Shop.Transaction: begun
-              Examples.Shop.MemoryRepository<Examples.Shop.Order>: 1 kept
-              Examples.Shop.MemoryRepository<Examples.Shop.Receipt>: 1 kept
-              Examples.Shop.Checkout: tea for 85 kr
-              Examples.Shop.MemoryRepository<Examples.Shop.Order>: 2 kept
-              Examples.Shop.MemoryRepository<Examples.Shop.Receipt>: 2 kept
-              Examples.Shop.Checkout: cups for 85 kr
-              Examples.Shop.Transaction: committed, 4 changed
-              Examples.Shop.Transaction: begun
-              Examples.Shop.MemoryRepository<Examples.Shop.Order>: 1 kept
-              Examples.Shop.MemoryRepository<Examples.Shop.Receipt>: 1 kept
-              Examples.Shop.Checkout: a kettle for 85 kr
-              Examples.Shop.Transaction: committed, 2 changed
-            nothing provides Examples.Shop.Transaction: Examples.Shop.Checkout -> any Examples.Shop.Repository<Examples.Shop.Order> -> Examples.Shop.Transaction
+              9 Examples.Shop.Transaction: begun
+              9 Examples.Shop.MemoryRepository<Examples.Shop.Order>: 1 kept
+              9 Examples.Shop.MemoryRepository<Examples.Shop.Receipt>: 1 kept
+              9 Examples.Shop.Checkout: tea for 85 kr, thank you
+              9 Examples.Shop.MemoryRepository<Examples.Shop.Order>: 2 kept
+              9 Examples.Shop.MemoryRepository<Examples.Shop.Receipt>: 2 kept
+              9 Examples.Shop.Checkout: cups for 85 kr, thank you
+              9 Examples.Shop.Transaction: committed, 4 changed
+              9 Examples.Shop.Transaction: begun
+              9 Examples.Shop.MemoryRepository<Examples.Shop.Order>: 1 kept
+              9 Examples.Shop.MemoryRepository<Examples.Shop.Receipt>: 1 kept
+              9 Examples.Shop.Checkout: a kettle for 85 kr, thank you
+              9 Examples.Shop.Transaction: committed, 2 changed
+              23 Examples.Shop.Transaction: begun
+              23 Examples.Shop.MemoryRepository<Examples.Shop.Order>: 1 kept
+              23 Examples.Shop.MemoryRepository<Examples.Shop.Receipt>: 1 kept
+              23 Examples.Shop.Checkout: a teapot for 175 kr, thank you
+              23 Examples.Shop.Transaction: committed, 2 changed
+            nothing provides any Examples.Shop.Clock: Examples.Shop.Transaction -> Examples.Shop.Logger<Examples.Shop.Transaction> -> any Examples.Shop.Clock
 
             """,
             Run("06-shop.sb")

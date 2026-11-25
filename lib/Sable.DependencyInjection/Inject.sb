@@ -1,7 +1,0 @@
-module Sable.DependencyInjection
-
-/// On the initialiser `@derive(Injectable)` is to use, of a type that has
-/// several.
-public struct Inject: Attribute {
-    public init() { }
-}

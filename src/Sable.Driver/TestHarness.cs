@@ -1,3 +1,4 @@
+using Sable.Driver.Generators;
 using System.Globalization;
 using System.Text;
 using Sable.CodeGen;
@@ -90,6 +91,14 @@ public static class TestHarness {
         if (docExamples) {
             program.AddRange(DocExamples.Extract(program.ToList()));
         }
+
+        var expanded = LibraryGenerators.Expand(program);
+        warnings.AddRange(expanded.Warnings);
+        if (expanded.Errors.Count > 0) {
+            return new(null, null, expanded.Errors);
+        }
+
+        program = [..expanded.Program];
 
         // Every test build has Sable.Testing, whether or not a file imports
         // it. What the compiler writes is parsed as the program is: the

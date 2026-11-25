@@ -787,7 +787,7 @@ public sealed class SourceGeneratorTests {
         var errors = fixture.Errors.ToString();
                 Assert.Contains("'@describe' starts a source generator, which is given a type, a function or a method, not a property", errors);
         Assert.Contains("src/more.sb:4:5", errors);
-        Assert.Contains("'@hidden' is read by a source generator on a field, a case or a parameter, not on a struct", errors);
+        Assert.Contains("'@hidden' is read by a source generator on a field, a case, an initialiser, a method or a parameter, not on a struct", errors);
         Assert.DoesNotContain("src/more.sb:9:", errors);
     }
 

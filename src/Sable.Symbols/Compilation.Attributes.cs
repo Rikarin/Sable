@@ -495,17 +495,27 @@ public sealed partial class Compilation {
     }
 
     /// <summary>
+    ///     The attributes the library modules' own generators answer to and
+    ///     read on members: what <c>lib/&lt;Module&gt;/generators/</c> says,
+    ///     which the driver has (and a test holds to this).
+    /// </summary>
+    public static readonly IReadOnlyList<(string Module, IReadOnlyList<string> Types, IReadOnlyList<string> Members)> LibraryGeneratorAttributes = [
+        ("Sable.DependencyInjection", ["injectable", "container"], ["keyed", "inject", "include", "singleton", "scoped", "transient"]),
+    ];
+
+    /// <summary>
     ///     An attribute a source generator the file's package can see answers
     ///     to, or reads on members (docs/08), and if so, in
     ///     <paramref name="problem" />, why it does not apply where it is
     ///     written. A generator is given types, at the top level of a file or
     ///     in another type, functions at the top level, and methods of types and
-    ///     extensions; and it reads attributes on their fields, cases and
-    ///     parameters.
+    ///     extensions; and it reads attributes on their fields, cases,
+    ///     initialisers, methods and parameters. A library module's generators
+    ///     are seen by the files that import the module.
     /// </summary>
     static bool IsGeneratorAttribute(SyntaxTree tree, AttributeSyntax attribute, string name, out string? problem) {
         const AttributeTargets types = AttributeTargets.Struct | AttributeTargets.Class | AttributeTargets.Actor | AttributeTargets.Union | AttributeTargets.Enum;
-        const AttributeTargets members = AttributeTargets.Field | AttributeTargets.UnionCase | AttributeTargets.EnumCase | AttributeTargets.Parameter;
+        const AttributeTargets members = AttributeTargets.Field | AttributeTargets.UnionCase | AttributeTargets.EnumCase | AttributeTargets.Parameter | AttributeTargets.Initializer | AttributeTargets.Function;
         var target = AttributeTargetOf(attribute.Parent)?.Target ?? AttributeTargets.None;
         var noun = AttributeTargetOf(attribute.Parent)?.Noun ?? "this";
 
@@ -518,18 +528,21 @@ public sealed partial class Compilation {
 
         var onDeclaration = ((target & types) != 0 || target == AttributeTargets.Function) && Placed(attribute.Parent?.Parent);
         var onMember = (target & members) != 0;
+        var library = LibraryGeneratorAttributes.Where(g => tree.Root is CompilationUnitSyntax unit && unit.Imports.Any(i => i.Name.ToString().Trim() == g.Module)).ToList();
+        var isType = tree.Options.GeneratorAttributes.Contains(name) || library.Exists(g => g.Types.Contains(name));
+        var isMember = tree.Options.GeneratorMemberAttributes.Contains(name) || library.Exists(g => g.Members.Contains(name));
         problem = null;
-        if (tree.Options.GeneratorAttributes.Contains(name) && onDeclaration || tree.Options.GeneratorMemberAttributes.Contains(name) && onMember) {
+        if (isType && onDeclaration || isMember && onMember) {
             return true;
         }
 
-        if (tree.Options.GeneratorAttributes.Contains(name)) {
+        if (isType) {
             problem = $"'@{name}' starts a source generator, which is given a type, a function or a method, not {noun}";
             return true;
         }
 
-        if (tree.Options.GeneratorMemberAttributes.Contains(name)) {
-            problem = $"'@{name}' is read by a source generator on a field, a case or a parameter, not on {noun}";
+        if (isMember) {
+            problem = $"'@{name}' is read by a source generator on a field, a case, an initialiser, a method or a parameter, not on {noun}";
             return true;
         }
 

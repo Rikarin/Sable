@@ -44,10 +44,12 @@ struct RequestReader {
     var hasCase: Bool = false
     var parameter: Parameter = Parameter { label: "", name: "", type: "", hasDefault: false }
     var hasParameter: Bool = false
+    var member: Member = Member { keyword: "", name: "" }
+    var hasMember: Bool = false
     var attribute: Attribute = Attribute { name: "", arguments: [] }
     var hasAttribute: Bool = false
     // Where the attribute goes: "d" the declaration, "f" the field, "c" the
-    // case, "q" the parameter.
+    // case, "q" the parameter, "m" the member.
     var target: String = "d"
 
     init() { }
@@ -71,6 +73,10 @@ struct RequestReader {
             pkg.inputs.append(InputFile { path: restored(fields[1]), text: restored(fields[2]) })
         } else if tag == "Y" {
             type = TypeRef { kind: fields[2], name: fields[3], moduleName: fields[4], text: restored(fields[5]) }
+            type.qualifiedName = fields[6]
+            type.suffix = fields[7]
+            type.isPublic = fields[8] == "1"
+            type.isFinal = fields[9] == "1"
             hasType = true
         } else if tag == "YC" {
             type.conformances.append(fields[1])
@@ -87,6 +93,34 @@ struct RequestReader {
             declaration.isStatic = fields[6] == "1"
             declaration.file = restored(fields[7])
             declaration.location = Location { id: fields[8] }
+            declaration.packageName = fields[9]
+        } else if tag == "DT" {
+            declaration.type = resolvedType(fields[1])
+        } else if tag == "DS" {
+            declaration.supertypes.append(resolvedType(fields[1]))
+        } else if tag == "DF" {
+            declaration.isFinal = fields[1] == "1"
+        } else if tag == "TC" {
+            declaration.constraints.append(Constraint { parameter: fields[1], type: resolvedType(fields[2]) })
+        } else if tag == "M" {
+            finishMember()
+            member = Member { keyword: fields[1], name: fields[2], location: Location { id: fields[8] } }
+            member.isPublic = fields[3] == "1"
+            member.isStatic = fields[4] == "1"
+            member.isAsync = fields[5] == "1"
+            member.isThrowing = fields[6] == "1"
+            if fields[7] != "-1" {
+                member.returned = resolvedType(fields[7])
+            }
+            hasMember = true
+        } else if tag == "ME" {
+            finishMember()
+            if member.keyword == "init" {
+                declaration.initializers.append(member)
+            } else {
+                declaration.methods.append(member)
+            }
+            hasMember = false
         } else if tag == "V" {
             declaration.isAsync = fields[1] == "1"
             declaration.isThrowing = fields[2] == "1"
@@ -152,6 +186,7 @@ struct RequestReader {
                 type: restored(fields[3]),
                 resolved: resolvedType(fields[6]),
                 hasDefault: fields[4] == "1",
+                defaultText: restored(fields[7]),
                 location: Location { id: fields[5] }
             }
             hasParameter = true
@@ -192,6 +227,8 @@ struct RequestReader {
             kase.attributes.append(attribute)
         } else if target == "q" {
             parameter.attributes.append(attribute)
+        } else if target == "m" {
+            member.attributes.append(attribute)
         } else {
             declaration.attributes.append(attribute)
             if attribute.name == generator {
@@ -212,7 +249,11 @@ struct RequestReader {
             hasCase = false
         }
         if hasParameter {
-            declaration.parameters.append(parameter)
+            if hasMember {
+                member.parameters.append(parameter)
+            } else {
+                declaration.parameters.append(parameter)
+            }
             hasParameter = false
         }
     }

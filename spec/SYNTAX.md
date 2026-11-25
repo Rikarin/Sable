@@ -897,6 +897,8 @@ fn zip<A, B, S1, S2>(_ a: S1, _ b: S2) -> some Sequence<(A, B)>
   value rather than called, the function is still compiled for its types.
 - Constraints: protocol conformance (`T: P`), class inheritance (`T: Widget`),
   same-type (`where S.Element == T`), `Sized`, `Copyable`, `Sendable`.
+- A method's `where Self: P` is asked of each call of it, and known in its
+  body: `fn resolve<T>(_: T.Type) -> T where Self: Provides<T>`.
 - Variance: generic types are invariant. Protocol existentials are covariant in
   their associated types only when declared `out`:
 
@@ -1452,6 +1454,9 @@ x as! Widget          // dynamic downcast, traps on failure
 x is Drawable         // conformance/type test, narrows in the true branch
 x unchecked as I32    // explicit wrapping/truncating conversion
 ```
+
+`xs as Int[]` gives an array that grew (`Int[>..]`, `Int[>..<]`) as one that is
+done, and back: the same elements, shared until either is changed.
 
 `as` and `unchecked as` convert between numeric types. `unchecked as` never
 traps: an integer keeps its low bits, and a float goes toward zero and stops

@@ -1,4 +1,5 @@
 using Sable.CodeGen;
+using Sable.Driver.Generators;
 using Sable.SIL;
 using Sable.Symbols;
 using Sable.Syntax;
@@ -101,6 +102,11 @@ public static partial class Pipeline {
         string? optLevel = null,
         bool checkArc = false
     ) {
+        (program, var generatorErrors, var generatorWarnings) = LibraryGenerators.Expand(program);
+        if (generatorErrors.Count > 0) {
+            return new(null, null, generatorErrors) { Warnings = generatorWarnings };
+        }
+
         var level = optLevel ?? (optimised ? "2" : "0");
         using var optimisedLowering = SilGen.UseOptimised(level != "0");
         Compilation compilation;
@@ -118,7 +124,7 @@ public static partial class Pipeline {
             standard = check?.Skipped;
             // The SIL checks run as the program is lowered, below.
             errors = Formatted(standard is null ? compilation.GetAllDiagnosticsByFile() : compilation.GetAllDiagnosticsByFile(t => !standard(t)), program);
-            warnings = Warnings(compilation, program);
+            warnings = [..generatorWarnings, ..Warnings(compilation, program)];
         }
 
         // The warnings go with whatever comes back, an error or the IR.
@@ -235,9 +241,14 @@ public static partial class Pipeline {
 
     /// <summary>Type-checks a program: its errors, and the warnings about its own files.</summary>
     public static (IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings) Diagnose(IReadOnlyList<SyntaxTree> program) {
+        (program, var reported, var warned) = LibraryGenerators.Expand(program);
+        if (reported.Count > 0) {
+            return (reported, warned);
+        }
+
         var compilation = CompilationOf(program);
         var errors = Errors(compilation, program);
-        return (errors.Count > 0 ? errors : ConstantErrors(compilation, program), Warnings(compilation, program));
+        return (errors.Count > 0 ? errors : ConstantErrors(compilation, program), [..warned, ..Warnings(compilation, program)]);
     }
 
     /// <summary>
@@ -270,13 +281,18 @@ public static partial class Pipeline {
         LintConfiguration configuration,
         IReadOnlyList<SyntaxTree> linted
     ) {
+        (program, var reported, var warned) = LibraryGenerators.Expand(program);
+        if (reported.Count > 0) {
+            return (reported, warned);
+        }
+
         var compilation = CompilationOf(program);
         var errors = Errors(compilation, program);
         if (errors.Count == 0) {
             errors = ConstantErrors(compilation, program);
         }
 
-        var warnings = Warnings(compilation, program);
+        List<string> warnings = [..warned, ..Warnings(compilation, program)];
         if (errors.Count > 0) {
             return (errors, warnings);
         }

@@ -11,7 +11,7 @@ import Sable.Concurrency
 /// factory is given.
 ///
 /// ```sable
-/// let services = ServiceCollection()
+/// var services = ServiceCollection()
 /// services.addScoped(Int[>..].self) { _scope in [1] }
 /// let provider = try! services.build()
 /// provider.withScope { scope in
@@ -29,6 +29,10 @@ public final class ServiceScope {
     var disposals: Disposals = Disposals()
     // What is being made now, outermost first.
     var making: Making[>..] = []
+    // What the innermost of them asks for next, of the provider's links, and
+    // where its own end.
+    var next: Int = 0
+    var end: Int = 0
     var isDisposed: Bool = false
 
     init(_ provider: ServiceProvider, isRoot: Bool) {
@@ -99,13 +103,14 @@ public final class ServiceScope {
     /// .NET's `ActivatorUtilities.CreateInstance`. Whoever asked disposes it.
     ///
     /// ```sable
-    /// @derive(Injectable)
-    /// class Report {
+    /// struct Report: Injectable {
     ///     let title: String
-    ///     init(title: String) { self.title = title }
+    ///     static fn make(_ services: ServiceScope) throws -> Report {
+    ///         return Report { title: try services.resolve(String.self) }
+    ///     }
     /// }
     ///
-    /// let services = ServiceCollection()
+    /// var services = ServiceCollection()
     /// services.addSingleton(String.self, value: "March")
     /// (try! services.build()).withScope { scope in
     ///     assert((try! scope.make(Report.self)).title == "March")
@@ -113,7 +118,7 @@ public final class ServiceScope {
     /// ```
     public fn make<T: Injectable>(_ type: T.Type) throws(ServiceError) -> T {
         do {
-            return try T.create(from: self)
+            return try T.make(self)
         } catch {
             throw error as? ServiceError ?? ServiceError.Failed(service: ServiceKey(type), error: error)
         }
@@ -122,14 +127,14 @@ public final class ServiceScope {
     /// The service of a type known only as the program runs.
     ///
     /// ```sable
-    /// let services = ServiceCollection()
+    /// var services = ServiceCollection()
     /// services.addSingleton(Int.self, value: 7)
     /// let wanted: Type = Int.self
     /// (try! services.build()).withScope { scope in
-    ///     assert(try! scope.resolve(dynamic: wanted) as? Int == 7)
+    ///     assert(try! scope.resolve(wanted) as? Int == 7)
     /// }
     /// ```
-    public fn resolve(dynamic type: Type, key: String? = none) throws(ServiceError) -> any Any {
+    public fn resolve(_ type: Type, key: String? = none) throws(ServiceError) -> any Any {
         let wanted = ServiceKey(type, key: key)
         guard let entry = try provider.entry(wanted) else {
             throw missing(wanted)
@@ -172,16 +177,10 @@ public final class ServiceScope {
     // Where the link is to what is being made says it is made from next, if
     // it is this; else -1.
     fn linked(_ type: Type) -> Int {
-        let top = making.count - 1
-        if top < 0 {
-            return -1
-        }
-        let at = making[top].next
-        if at < making[top].end {
-            if provider.links[at].type == type {
-                making[top].next = at + 1
-                return at
-            }
+        let at = next
+        if at < end && provider.links[at].type == type {
+            next = at + 1
+            return at
         }
         return -1
     }
@@ -257,14 +256,22 @@ public final class ServiceScope {
         if making.count % 16 == 15 && isMaking(entry) {
             throw ServiceError.Circular(path: round(entry))
         }
-        making.append(Making { entry: entry, next: entry.firstLink, end: entry.firstLink + entry.linkCount })
+        making.append(Making { entry: entry, next: next, end: end })
+        next = entry.firstLink
+        end = next + entry.linkCount
     }
 
-    fn end() {
-        _ = making.removeLast()
+    fn finish() {
+        let ended = making.removeLast()
+        next = ended.next
+        end = ended.end
     }
 
     fn keep(_ instance: any Any, at slot: Int) {
+        if kept.isEmpty {
+            kept.reserveCapacity(provider.places)
+            order.reserveCapacity(provider.places)
+        }
         while kept.count <= slot {
             kept.append(none)
         }

@@ -9,7 +9,7 @@ struct OpenService: Sendable {
     let key: String?
 
     // The entry of the service of the key's type, when it is one of these.
-    fn entry(_ key: ServiceKey, slot: Int) throws(ServiceError) -> ServiceEntry? {
+    fn entry(_ key: ServiceKey, slot: Int, place: Int) throws(ServiceError) -> ServiceEntry? {
         if key.key != self.key {
             return none
         }
@@ -22,7 +22,7 @@ struct OpenService: Sendable {
         if !type.isSubtype(of: (any Injectable).self) {
             throw ServiceError.WrongType(service: key, implementation: type)
         }
-        return ServiceEntry(key: key, lifetime: lifetime, dependencies: needs(type), slot: slot, firstLink: -1, owned: true, make: { scope in
+        return ServiceEntry(key: key, lifetime: lifetime, dependencies: needs(type), slot: slot, place: place, firstLink: -1, owned: true, maker: ServiceMaker { scope in
             try made(type, scope)
         })
     }
@@ -33,5 +33,5 @@ fn needs<T: Injectable>(_ type: T.Type) -> ServiceDependency[>..] {
 }
 
 fn made<T: Injectable>(_ type: T.Type, _ scope: ServiceScope) throws -> T {
-    return try T.create(from: scope)
+    return try T.make(scope)
 }

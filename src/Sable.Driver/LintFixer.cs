@@ -1,3 +1,4 @@
+using Sable.Driver.Generators;
 using Sable.Symbols;
 using Sable.Syntax;
 
@@ -34,7 +35,7 @@ internal static class LintFixer {
         var before = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var round = 0; round < MaxRounds; round++) {
             var program = parse();
-            var compilation = Compilation.Create([..program, ..Library.For(program)]);
+            var compilation = Compilation.Create([..LibraryGenerators.Expand(program).Program, ..Library.For(program)]);
             var errors = compilation.GetAllDiagnosticsByFile()
                 .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error && d.Tree is not null && !CoreLibrary.Contains(d.Tree))
                 .ToList();

@@ -6,25 +6,25 @@ import Sable.Testing
 
 import InjectionSupport
 
-@derive(Injectable)
+@injectable
 struct Values {
     let clock: any Clock
-    @Keyed("hot")
+    @keyed("hot")
     let name: String
     let size: Int = 3
 }
 
-@derive(Injectable)
+@injectable
 final class Several {
     let from: String
 
     init() { from = "nothing" }
 
-    @Inject
+    @inject
     init(clock: any Clock) { from = "a clock at \(clock.now())" }
 }
 
-@derive(Injectable)
+@injectable
 final class Many {
     let late: Lazy<Values>
     let make: () -> Values
@@ -37,14 +37,14 @@ final class Many {
     }
 }
 
-@derive(Injectable)
+@injectable
 final class Failing {
     init() throws {
         throw TestError("it fails")
     }
 }
 
-@derive(Injectable)
+@injectable
 actor Counter {
     let start: Int
     init(start: Int) { self.start = start }
@@ -55,11 +55,11 @@ open class Base {
     init(clock: any Clock) { self.clock = clock }
 }
 
-@derive(Injectable)
+@injectable
 final class Derived: Base { }
 
 fn services() -> ServiceCollection {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addSingleton((any Clock).self, FixedClock.self)
     services.addSingleton(String.self, key: "hot", value: "hot")
     services.addTransient(Values.self)
@@ -78,14 +78,14 @@ fn aStructIsMadeOfItsFields() {
 
 @test
 fn theInitialiserMarkedIsTheOneUsed() {
-    let all = services()
+    var all = services()
     all.addTransient(Several.self)
     assertEqual((try! (try! all.build()).resolve(Several.self)).from, "a clock at 12")
 }
 
 @test
 fn lazyFactoryAndScopeParameters() {
-    let all = services()
+    var all = services()
     all.addScoped(Many.self)
     (try! all.build()).withScope { scope in
         let many = try! scope.resolve(Many.self)
@@ -98,7 +98,7 @@ fn lazyFactoryAndScopeParameters() {
 
 @test
 fn aFactoryOfASingletonsOutlivesTheScopeThatAsked() {
-    let all = services()
+    var all = services()
     all.addSingleton(Record.self) { scope in
         let make = scope.factory(Values.self)
         let record = Record()
@@ -111,7 +111,7 @@ fn aFactoryOfASingletonsOutlivesTheScopeThatAsked() {
 
 @test
 fn whatAnInitialiserThrowsIsSaid() {
-    let all = ServiceCollection()
+    var all = ServiceCollection()
     all.addTransient(Failing.self)
     do {
         _ = try (try! all.build()).resolve(Failing.self)
@@ -123,7 +123,7 @@ fn whatAnInitialiserThrowsIsSaid() {
 
 @test
 async fn anActorIsAService() {
-    let all = ServiceCollection()
+    var all = ServiceCollection()
     all.addSingleton(Int.self, value: 4)
     all.addSingleton(Counter.self)
     let counter = try! (try! all.build()).resolve(Counter.self)
@@ -132,7 +132,7 @@ async fn anActorIsAService() {
 
 @test
 fn anInheritedInitialiserIsTheClasss() {
-    let all = services()
+    var all = services()
     all.addTransient(Derived.self)
     assertEqual((try! (try! all.build()).resolve(Derived.self)).clock.now(), 12)
 }
@@ -141,7 +141,7 @@ fn anInheritedInitialiserIsTheClasss() {
 struct ByHand: Injectable {
     let clock: any Clock
 
-    static fn create(from services: ServiceScope) throws -> Self {
+    static fn make(_ services: ServiceScope) throws -> Self {
         return ByHand { clock: try services.resolve((any Clock).self) }
     }
 }
@@ -149,7 +149,7 @@ struct ByHand: Injectable {
 @test
 fn aTypeMaySayHowItIsMadeItself() {
     assert(ByHand.dependencies().isEmpty)
-    let all = services()
+    var all = services()
     all.addTransient(ByHand.self)
     let provider = try! all.build()
     assertEqual((try! provider.resolve(ByHand.self)).clock.now(), 12)
@@ -166,10 +166,4 @@ fn whatIsMadeWithoutBeingRegistered() {
     } catch {
         assertEqual(error.description(), "InjectableTests.Failing could not be made: it fails")
     }
-}
-
-@test
-fn theAttributesAreValues() {
-    assertEqual(Keyed("k").key, "k")
-    _ = Inject()
 }

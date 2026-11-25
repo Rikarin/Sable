@@ -1,0 +1,31 @@
+module Sable.DependencyInjection
+
+/// A type whose making waits: what `@injectable` writes for a type whose
+/// initialiser is async. It is a singleton, made as its provider is built
+/// (`ServiceCollection.buildAsync`).
+///
+/// ```sable
+/// struct Settings: AsyncInjectable {
+///     let name: String
+///     static async fn make(_ services: ServiceScope) throws -> Settings {
+///         return Settings { name: try services.resolve(String.self) }
+///     }
+/// }
+///
+/// var services = ServiceCollection()
+/// services.addSingleton(String.self, value: "Ada")
+/// services.addSingleton(Settings.self)
+/// let provider = try! await services.buildAsync()
+/// assert(try! provider.resolve(Settings.self).name == "Ada")
+/// ```
+public protocol AsyncInjectable {
+    /// One, made from what the scope gives.
+    static async fn make(_ services: ServiceScope) throws -> Self
+
+    /// What `make` asks the scope for.
+    static fn dependencies() -> ServiceDependency[>..]
+}
+
+extension AsyncInjectable {
+    public static fn dependencies() -> ServiceDependency[>..] { return [] }
+}

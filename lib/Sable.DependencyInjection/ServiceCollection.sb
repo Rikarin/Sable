@@ -8,19 +8,25 @@ module Sable.DependencyInjection
 ///     fn now() -> Int
 /// }
 ///
-/// @immutable
-/// @derive(Injectable)
-/// final class FixedClock: Clock {
-///     init() { }
-///     fn now() -> Int { return 12 }
+/// struct FixedClock: Clock {
+///     let time: Int
+///     fn now() -> Int { return time }
 /// }
 ///
-/// let services = ServiceCollection()
-/// services.addSingleton((any Clock).self, FixedClock.self)
+/// var services = ServiceCollection()
+/// services.addSingleton((any Clock).self) { _services in FixedClock { time: 12 } }
 /// let provider = try! services.build()
 /// assert(try! provider.resolve((any Clock).self).now() == 12)
+///
+/// // A test's own, in place of it.
+/// services.replaceSingleton((any Clock).self) { _services in FixedClock { time: 3 } }
+/// assert(try! (try! services.build()).resolve((any Clock).self).now() == 3)
 /// ```
-public final class ServiceCollection {
+///
+/// What `@container` says at compile time, a collection says as it is built:
+/// `services.add(AppServices.self)` adds all a container knows, and what is
+/// added, replaced or removed after is checked with it.
+public struct ServiceCollection {
     /// The registrations, in order. Of two of one service, the later is the
     /// one given where one is asked for.
     public var descriptors: ServiceDescriptor[>..] = []
@@ -32,68 +38,97 @@ public final class ServiceCollection {
     // ---- Singletons ----------------------------------------------------
 
     /// One for the program, made from its own dependencies.
-    public fn addSingleton<T: Injectable & Sendable>(_ type: T.Type, key: String? = none) {
+    public mutating fn addSingleton<T: Injectable & Sendable>(_ type: T.Type, key: String? = none) {
         add(ServiceDescriptor.of(type, ServiceLifetime.Singleton, key))
     }
 
     /// One for the program, the service `S` being a `T`.
-    public fn addSingleton<S: Sendable, T: Injectable>(_ service: S.Type, _ type: T.Type, key: String? = none) {
+    public mutating fn addSingleton<S: Sendable, T: Injectable>(_ service: S.Type, _ type: T.Type, key: String? = none) {
         add(ServiceDescriptor.of(service, type, ServiceLifetime.Singleton, key))
     }
 
     /// One for the program, made by the closure.
-    public fn addSingleton<S: Sendable>(_ service: S.Type, key: String? = none, _ make: @escaping @Sendable (ServiceScope) throws -> S) {
+    public mutating fn addSingleton<S: Sendable>(_ service: S.Type, key: String? = none, _ make: @escaping @Sendable (ServiceScope) throws -> S) {
         add(ServiceDescriptor.of(service, ServiceLifetime.Singleton, key, make))
     }
 
+    /// One for the program, made as the provider is built by a closure that
+    /// waits: `buildAsync` waits for it.
+    public mutating fn addSingleton<S: Sendable>(_ service: S.Type, key: String? = none, _ make: @escaping @Sendable async (ServiceScope) throws -> S) {
+        add(ServiceDescriptor(ServiceKey(service, key: key), waiting: [], { scope in try await make(scope) }))
+    }
+
+    /// One for the program, made as the provider is built from its own
+    /// dependencies, by waiting for it.
+    public mutating fn addSingleton<T: AsyncInjectable & Sendable>(_ type: T.Type, key: String? = none) {
+        add(ServiceDescriptor(ServiceKey(type, key: key), waiting: T.dependencies(), { scope in try await T.make(scope) }))
+    }
+
+    /// One for the program, the service `S` being a `T`, made as the provider
+    /// is built by waiting for it.
+    public mutating fn addSingleton<S: Sendable, T: AsyncInjectable>(_ service: S.Type, _ type: T.Type, key: String? = none) {
+        add(ServiceDescriptor(ServiceKey(service, key: key), waiting: T.dependencies(), { scope in try await T.make(scope) }))
+    }
+
     /// One for the program, already made. Whose it is, disposes it.
-    public fn addSingleton<S: Sendable>(_ service: S.Type, key: String? = none, value: S) {
+    public mutating fn addSingleton<S: Sendable>(_ service: S.Type, key: String? = none, value: S) {
         add(ServiceDescriptor.of(service, key, value))
     }
 
     // ---- Scoped --------------------------------------------------------
 
     /// One for each scope, made from its own dependencies.
-    public fn addScoped<T: Injectable>(_ type: T.Type, key: String? = none) {
+    public mutating fn addScoped<T: Injectable>(_ type: T.Type, key: String? = none) {
         add(ServiceDescriptor.of(type, ServiceLifetime.Scoped, key))
     }
 
     /// One for each scope, the service `S` being a `T`.
-    public fn addScoped<S, T: Injectable>(_ service: S.Type, _ type: T.Type, key: String? = none) {
+    public mutating fn addScoped<S, T: Injectable>(_ service: S.Type, _ type: T.Type, key: String? = none) {
         add(ServiceDescriptor.of(service, type, ServiceLifetime.Scoped, key))
     }
 
     /// One for each scope, made by the closure.
-    public fn addScoped<S>(_ service: S.Type, key: String? = none, _ make: @escaping @Sendable (ServiceScope) throws -> S) {
+    public mutating fn addScoped<S>(_ service: S.Type, key: String? = none, _ make: @escaping @Sendable (ServiceScope) throws -> S) {
         add(ServiceDescriptor.of(service, ServiceLifetime.Scoped, key, make))
     }
 
     // ---- Transient -----------------------------------------------------
 
     /// A new one each time, made from its own dependencies.
-    public fn addTransient<T: Injectable>(_ type: T.Type, key: String? = none) {
+    public mutating fn addTransient<T: Injectable>(_ type: T.Type, key: String? = none) {
         add(ServiceDescriptor.of(type, ServiceLifetime.Transient, key))
     }
 
     /// A new one each time, the service `S` being a `T`.
-    public fn addTransient<S, T: Injectable>(_ service: S.Type, _ type: T.Type, key: String? = none) {
+    public mutating fn addTransient<S, T: Injectable>(_ service: S.Type, _ type: T.Type, key: String? = none) {
         add(ServiceDescriptor.of(service, type, ServiceLifetime.Transient, key))
     }
 
     /// A new one each time, made by the closure.
-    public fn addTransient<S>(_ service: S.Type, key: String? = none, _ make: @escaping @Sendable (ServiceScope) throws -> S) {
+    public mutating fn addTransient<S>(_ service: S.Type, key: String? = none, _ make: @escaping @Sendable (ServiceScope) throws -> S) {
         add(ServiceDescriptor.of(service, ServiceLifetime.Transient, key, make))
     }
 
     // ---- The registrations ---------------------------------------------
 
     /// Adds a registration.
-    public fn add(_ descriptor: ServiceDescriptor) {
+    public mutating fn add(_ descriptor: ServiceDescriptor) {
         descriptors.append(descriptor)
     }
 
+    /// Adds all that a module registers.
+    public mutating fn add<M: ServiceModule>(_ services: M) {
+        services.register(in: &self)
+    }
+
+    /// Adds all that a container, or a package's `Services`, registers.
+    public mutating fn add<M: StandardModule>(_ services: M.Type) {
+        M.standard().register(in: &self)
+    }
+
     /// Adds a registration unless its service has one: whether it did.
-    public fn tryAdd(_ descriptor: ServiceDescriptor) -> Bool {
+    @discardable
+    public mutating fn tryAdd(_ descriptor: ServiceDescriptor) -> Bool {
         if contains(descriptor.key) {
             return false
         }
@@ -102,14 +137,44 @@ public final class ServiceCollection {
     }
 
     /// Adds a registration in place of those its service has.
-    public fn replace(_ descriptor: ServiceDescriptor) {
-        removeAll(descriptor.key)
+    public mutating fn replace(_ descriptor: ServiceDescriptor) {
+        remove(descriptor.key)
         add(descriptor)
     }
 
+    /// One for the program, made by the closure, in place of the service's own.
+    public mutating fn replaceSingleton<S: Sendable>(_ service: S.Type, key: String? = none, _ make: @escaping @Sendable (ServiceScope) throws -> S) {
+        replace(ServiceDescriptor.of(service, ServiceLifetime.Singleton, key, make))
+    }
+
+    /// One for the program, already made, in place of the service's own.
+    public mutating fn replaceSingleton<S: Sendable>(_ service: S.Type, key: String? = none, value: S) {
+        replace(ServiceDescriptor.of(service, key, value))
+    }
+
+    /// One for each scope, made by the closure, in place of the service's own.
+    public mutating fn replaceScoped<S>(_ service: S.Type, key: String? = none, _ make: @escaping @Sendable (ServiceScope) throws -> S) {
+        replace(ServiceDescriptor.of(service, ServiceLifetime.Scoped, key, make))
+    }
+
+    /// A new one each time, made by the closure, in place of the service's own.
+    public mutating fn replaceTransient<S>(_ service: S.Type, key: String? = none, _ make: @escaping @Sendable (ServiceScope) throws -> S) {
+        replace(ServiceDescriptor.of(service, ServiceLifetime.Transient, key, make))
+    }
+
     /// Removes a service's registrations.
-    public fn removeAll(_ key: ServiceKey) {
+    public mutating fn remove(_ type: Type, key: String? = none) {
+        remove(ServiceKey(type, key: key))
+    }
+
+    /// Removes a service's registrations.
+    public mutating fn remove(_ key: ServiceKey) {
         descriptors = descriptors.filter { $0.key != key }.toArray()
+    }
+
+    /// Whether the service is registered.
+    public fn contains(_ type: Type, key: String? = none) -> Bool {
+        return contains(ServiceKey(type, key: key))
     }
 
     /// Whether the service is registered.
@@ -120,65 +185,5 @@ public final class ServiceCollection {
             }
         }
         return false
-    }
-
-    /// The provider of what is registered. Unless told not to, checks first
-    /// that every service can be made as its dependencies say: that each is
-    /// registered, that none leads back to itself, and that no singleton
-    /// holds a scoped one. Throws ServiceError.Invalid with all that is wrong.
-    ///
-    /// ```sable
-    /// @derive(Injectable)
-    /// final class Needy {
-    ///     init(name: String) { }
-    /// }
-    ///
-    /// let services = ServiceCollection()
-    /// services.addTransient(Needy.self)
-    /// do {
-    ///     _ = try services.build()
-    /// } catch {
-    ///     print(error.description())   // … nothing provides String: …Needy -> String
-    /// }
-    /// ```
-    public fn build(validate: Bool = true) throws(ServiceError) -> ServiceProvider {
-        var entries: [ServiceKey: ServiceEntry[>..]] = [:]
-        var all: ServiceEntry[>..] = []
-        var firstLink = 0
-        for descriptor in descriptors {
-            let entry = descriptor.entry(slot: all.count, firstLink: firstLink)
-            all.append(entry)
-            firstLink += descriptor.dependencies.count
-            var list = entries[descriptor.key] ?? []
-            list.append(entry)
-            entries[descriptor.key] = list
-        }
-        // What each is linked to, in the places it has; the rest of them are
-        // linked to nothing that is asked for.
-        var links: ServiceLink[>..] = []
-        for entry in all {
-            for dependency in entry.dependencies {
-                let single = dependency.kind == .Required || dependency.kind == .Optional
-                if single && dependency.key.key == none {
-                    if let found = entries[dependency.key] {
-                        links.append(ServiceLink { type: dependency.key.type, entry: found[found.count - 1] })
-                    }
-                }
-            }
-            while links.count < entry.firstLink + entry.linkCount {
-                links.append(ServiceLink { type: Never.self, entry: entry })
-            }
-        }
-        let provider = ServiceProvider(entries: entries, links: links, generics: openServices, slots: all.count)
-        if validate {
-            var check = ServiceValidation(provider)
-            for descriptor in descriptors {
-                check.check(descriptor.key)
-            }
-            if !check.problems.isEmpty {
-                throw ServiceError.Invalid(problems: check.problems)
-            }
-        }
-        return provider
     }
 }

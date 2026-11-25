@@ -100,7 +100,7 @@ sealed class GeneratorRequests {
     ///     of its request: its lines, through <c>E</c>, and the places its
     ///     locations name.
     /// </summary>
-    public (string Lines, GeneratorItem Item) Describe(int index, SyntaxTree tree, CompilationUnitSyntax unit, SyntaxNode node, AttributeSyntax attribute, string container) {
+    public (string Lines, GeneratorItem Item) Describe(int index, SyntaxTree tree, CompilationUnitSyntax unit, SyntaxNode node, AttributeSyntax attribute, string container, string package = "") {
         var lines = new StringBuilder();
         var spans = new List<TextSpan>();
         var types = new TypeTable(this, lines);
@@ -125,10 +125,83 @@ sealed class GeneratorRequests {
 
         var module = unit.Module is { } m ? m.Name.ToString().Trim() : "";
         var symbol = SymbolOf(tree, node);
+
+        string LabelOf(ParameterSyntax parameter) =>
+            parameter.Label.IsNone ? parameter.Identifier.Text : parameter.Label.Text == "_" ? "" : parameter.Label.Text;
+
+        void Parameters(IReadOnlyList<ParameterSyntax> parameters, FunctionSymbol? function) {
+            for (var i = 0; i < parameters.Count; i++) {
+                var parameter = parameters[i];
+                var at = i;
+                var id = types.Add(Guarded(() => function is { } f && at < f.Parameters.Length ? f.Parameters[at].Type : null));
+                Line("Q", LabelOf(parameter), parameter.Identifier.Text, parameter.Type.ToString().Trim(), Flag(parameter.DefaultValue is not null), Location(parameter.Identifier.Span), Id(id),
+                    parameter.DefaultValue?.Value.ToString().Trim() ?? "");
+                Attributes(parameter.Attributes, "q");
+            }
+        }
+
+        // A type's initialisers and methods: 'M', then its parameters.
+        void Member(string kind, string name, SyntaxTokenList modifiers, bool isPublic, bool isAsync, bool isThrowing, TypeSymbol? returned, SyntaxList<AttributeSyntax> attributes, TextSpan span) {
+            var returnId = returned is null || returned.Name == "Void" ? -1 : types.Add(returned);
+            Line("M", kind, name, Flag(isPublic), Flag(IsStatic(modifiers)), Flag(isAsync), Flag(isThrowing), Id(returnId), Location(span));
+            Attributes(attributes, "m");
+        }
+
+        void Members(TypeDeclarationParts parts, NamedTypeSymbol? type) {
+            var declared = false;
+            foreach (var member in parts.Members) {
+                if (member is InitDeclarationSyntax init) {
+                    declared = true;
+                    var initSymbol = SymbolOf(tree, init) as FunctionSymbol;
+                    Member("init", "init", init.Modifiers, IsPublic(init.Modifiers), initSymbol?.IsAsync ?? false, initSymbol?.ThrownType is not null, null, init.Attributes, init.InitKeyword.Span);
+                    Parameters([..init.Parameters.Parameters], initSymbol);
+                    Line("ME");
+                } else if (member is FunctionDeclarationSyntax method) {
+                    var methodSymbol = SymbolOf(tree, method) as FunctionSymbol;
+                    Member("fn", method.Identifier.Text, method.Modifiers, IsPublic(method.Modifiers), IsAsync(method), method.ThrowsSpec is not null,
+                        methodSymbol is { } m ? Guarded(() => m.ReturnType) : null, method.Attributes, method.Identifier.Span);
+                    Parameters([..method.Parameters.Parameters], methodSymbol);
+                    Line("ME");
+                }
+            }
+
+            // The one the compiler writes, of the stored properties.
+            if (declared || type is null || Guarded(() => type.GetMembers("init").OfType<FunctionSymbol>().FirstOrDefault()) is not { } memberwise) {
+                return;
+            }
+
+            Member("init", "init", default, memberwise.DeclaredAccessibility == Accessibility.Public, false, memberwise.ThrownType is not null, null, default, parts.Identifier.Span);
+            foreach (var parameter in memberwise.Parameters) {
+                var field = parts.Members.OfType<FieldDeclarationSyntax>().FirstOrDefault(f => f.Declarator.Pattern is BindingPatternSyntax b && b.Identifier.Text == parameter.Name);
+                var id = types.Add(Guarded(() => parameter.Type));
+                Line("Q", parameter.Label == "_" ? "" : parameter.Label ?? parameter.Name, parameter.Name, field?.Declarator.TypeAnnotation?.Type.ToString().Trim() ?? "",
+                    Flag(parameter.HasDefaultValue || field?.Declarator.Initializer is not null), Location(field?.Declarator.Pattern.Span ?? parts.Identifier.Span), Id(id),
+                    field?.Declarator.Initializer?.Value.ToString().Trim() ?? "");
+                if (field is not null) {
+                    Attributes(field.Attributes, "q");
+                }
+            }
+
+            Line("ME");
+        }
         if (TypeParts(node) is { } parts) {
             var location = Location(parts.Identifier.Span);
-            Line("D", parts.Keyword, parts.Identifier.Text, container, module, Flag(IsPublic(parts.Modifiers)), Flag(IsStatic(parts.Modifiers)), tree.Text.FileName, location);
+            Line("D", parts.Keyword, parts.Identifier.Text, container, module, Flag(IsPublic(parts.Modifiers)), Flag(IsStatic(parts.Modifiers)), tree.Text.FileName, location, package);
             if (symbol is NamedTypeSymbol type) {
+                var self = type.TypeParameters.IsEmpty ? type : Guarded(() => type.Construct([..type.TypeParameters])) ?? type;
+                Line("DT", Id(types.Add(self)));
+                foreach (var supertype in Guarded(() => self.Supertypes.Where(s => !s.Equals(self)).Distinct().ToList()) ?? []) {
+                    Line("DS", Id(types.Add(supertype)));
+                }
+
+                foreach (var parameter in type.TypeParameters) {
+                    foreach (var constraint in parameter.Constraints) {
+                        Line("TC", parameter.Name, Id(types.Add(constraint)));
+                    }
+                }
+
+                Line("DF", Flag(type.IsFinal));
+
                 foreach (var protocol in ConformancesOf(type)) {
                     Line("X", protocol);
                 }
@@ -178,25 +251,19 @@ sealed class GeneratorRequests {
                         break;
                 }
             }
+
+            Members(parts, symbol as NamedTypeSymbol);
         } else if (node is FunctionDeclarationSyntax function) {
             var location = Location(function.Identifier.Span);
-            Line("D", "fn", function.Identifier.Text, container, module, Flag(IsPublic(function.Modifiers)), Flag(IsStatic(function.Modifiers)), tree.Text.FileName, location);
+            Line("D", "fn", function.Identifier.Text, container, module, Flag(IsPublic(function.Modifiers)), Flag(IsStatic(function.Modifiers)), tree.Text.FileName, location, package);
             var functionSymbol = symbol as FunctionSymbol;
             var returned = functionSymbol is { } f ? Guarded(() => f.ReturnType) : null;
             var returnId = function.ReturnClause is null || returned is null || returned.Name == "Void" ? -1 : types.Add(returned);
-            Line("V", Flag(function.AsyncKeyword.Kind != SyntaxKind.None && !function.AsyncKeyword.IsNone), Flag(function.ThrowsSpec is not null),
+            Line("V", Flag(IsAsync(function)), Flag(function.ThrowsSpec is not null),
                 function.ReturnClause?.Type.ToString().Trim() ?? "", Id(returnId));
             Common(function.TypeParameters, null);
             Attributes(function.Attributes, "d");
-            var parameters = function.Parameters.Parameters.ToList();
-            for (var i = 0; i < parameters.Count; i++) {
-                var parameter = parameters[i];
-                var at = i;
-                var id = types.Add(Guarded(() => functionSymbol is { } fs && at < fs.Parameters.Length ? fs.Parameters[at].Type : null));
-                var label = parameter.Label.IsNone ? parameter.Identifier.Text : parameter.Label.Text == "_" ? "" : parameter.Label.Text;
-                Line("Q", label, parameter.Identifier.Text, parameter.Type.ToString().Trim(), Flag(parameter.DefaultValue is not null), Location(parameter.Identifier.Span), Id(id));
-                Attributes(parameter.Attributes, "q");
-            }
+            Parameters([..function.Parameters.Parameters], functionSymbol);
         }
 
         Line("E");
@@ -224,6 +291,9 @@ sealed class GeneratorRequests {
         field.Accessors is null
         && field.Declarator.Pattern is BindingPatternSyntax
         && !IsStatic(field.Modifiers);
+
+    static bool IsAsync(FunctionDeclarationSyntax function) =>
+        function.Modifiers.Any(static m => m.Kind == SyntaxKind.AsyncKeyword) || function.AsyncKeyword.Kind == SyntaxKind.AsyncKeyword;
 
     static bool IsPublic(SyntaxTokenList modifiers) => modifiers.Any(static m => m.Kind == SyntaxKind.PublicKeyword);
 
@@ -281,7 +351,7 @@ sealed class GeneratorRequests {
             return known;
         }
 
-        if (type is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol and not TypeKind.Error } || Semantic is not { } compilation) {
+        if (type is not (NamedTypeSymbol { TypeKind: not TypeKind.Error } or ExistentialTypeSymbol) || Semantic is not { } compilation) {
             return _conformances[type] = [];
         }
 
@@ -327,7 +397,7 @@ sealed class GeneratorRequests {
             var argumentIds = depth < 8 ? arguments.Select(a => Add(a, depth + 1)).Where(static i => i >= 0).ToList() : [];
             var id = _next++;
             _ids[type] = id;
-            Line("Y", Id(id), kind, name, ModuleOf(type), Guarded(type.ToDisplayString) ?? name);
+            Line("Y", Id(id), kind, name, ModuleOf(type), Guarded(type.ToDisplayString) ?? name, QualifiedNameOf(type), Written(type), Flag(IsPublicType(type)), Flag(type is NamedTypeSymbol { IsFinal: true } or NamedTypeSymbol { TypeKind: not TypeKind.Class }));
             foreach (var protocol in owner.ConformancesOf(type)) {
                 Line("YC", protocol);
             }
@@ -351,9 +421,10 @@ sealed class GeneratorRequests {
             OptionalTypeSymbol optional => ("optional", "Optional", [optional.UnderlyingType]),
             ArrayTypeSymbol array => ("array", "Array", [array.ElementType]),
             TupleTypeSymbol tuple => ("tuple", "", [..tuple.ElementTypes]),
-            FunctionTypeSymbol => ("function", "", []),
+            FunctionTypeSymbol function => ("function", "", [..function.ParameterTypes, function.ReturnType]),
             TypeParameterSymbol parameter => ("parameter", parameter.Name, []),
-            ExistentialTypeSymbol existential => ("protocol", existential.Constraint.Name, []),
+            ExistentialTypeSymbol { Constraint: NamedTypeSymbol constraint } => ("protocol", constraint.Name, [..constraint.TypeArguments]),
+            ExistentialTypeSymbol existential => ("unresolved", existential.Constraint.Name, []),
             NamedTypeSymbol { Name: "Dictionary" } named when ModuleOf(named) == CoreLibrary.ModuleName => ("dictionary", "Dictionary", [..named.TypeArguments]),
             NamedTypeSymbol named => (named.TypeKind switch {
                 TypeKind.Struct or TypeKind.Builtin => "struct",
@@ -367,8 +438,41 @@ sealed class GeneratorRequests {
             _ => ("unresolved", type.Name, []),
         };
 
+        /// <summary>The type's name as code outside the types it is in writes it: <c>Outer.Inner</c>.</summary>
+        static string QualifiedNameOf(TypeSymbol type) {
+            var named = type is ExistentialTypeSymbol { Constraint: NamedTypeSymbol constraint } ? constraint : type;
+            var name = Shape(type).Name;
+            for (var current = named.ContainingSymbol as NamedTypeSymbol; current is not null; current = current.ContainingSymbol as NamedTypeSymbol) {
+                name = $"{current.Name}.{name}";
+            }
+
+            return name;
+        }
+
+        /// <summary>What a type's kind leaves out of how it is written: an array's brackets, and a function's effects.</summary>
+        static string Written(TypeSymbol type) => type switch {
+            ArrayTypeSymbol { ArrayKind: ArrayKind.Fixed, Capacity: null, CapacityParameter: null } => "[]",
+            ArrayTypeSymbol { ArrayKind: ArrayKind.Grow } => "[>..]",
+            ArrayTypeSymbol { ArrayKind: ArrayKind.GrowShrink } => "[>..<]",
+            ArrayTypeSymbol => "[:]",
+            FunctionTypeSymbol function => (function.IsAsync ? "async " : "") + (function.ThrownType is not null ? "throws" : ""),
+            _ => "",
+        };
+
+        static bool IsPublicType(TypeSymbol type) => type switch {
+            ExistentialTypeSymbol existential => IsPublicType(existential.Constraint),
+            NamedTypeSymbol named => named.OriginalDefinition.DeclaredAccessibility == Accessibility.Public
+                && (named.ContainingSymbol is not NamedTypeSymbol outer || IsPublicType(outer))
+                && named.TypeArguments.All(IsPublicType),
+            OptionalTypeSymbol optional => IsPublicType(optional.UnderlyingType),
+            ArrayTypeSymbol array => IsPublicType(array.ElementType),
+            FunctionTypeSymbol function => function.ParameterTypes.Append(function.ReturnType).All(IsPublicType),
+            TupleTypeSymbol tuple => tuple.ElementTypes.All(IsPublicType),
+            _ => true,
+        };
+
         static string ModuleOf(TypeSymbol type) {
-            for (var current = (Symbol?)type; current is not null; current = current.ContainingSymbol) {
+            for (var current = (Symbol?)(type is ExistentialTypeSymbol { Constraint: NamedTypeSymbol constraint } ? constraint : type); current is not null; current = current.ContainingSymbol) {
                 if (current is ModuleSymbol module) {
                     return module.Name;
                 }

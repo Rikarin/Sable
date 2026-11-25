@@ -60,7 +60,7 @@ final class Freed {
 @test
 fn aScopeDisposesWhatItMadeTheLastFirst() {
     let record = Record()
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addScoped(Closing.self, key: "a") { _scope in Closing("a", record) }
     services.addScoped(Closing.self, key: "b") { scope in
         _ = try scope.resolve(Closing.self, key: "a")
@@ -79,7 +79,7 @@ fn aScopeDisposesWhatItMadeTheLastFirst() {
 @test
 fn aScopeEndsWhenItsBodyThrows() {
     let record = Record()
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addScoped(Closing.self) { _scope in Closing("a", record) }
     let provider = try! services.build()
     do {
@@ -96,7 +96,7 @@ fn aScopeEndsWhenItsBodyThrows() {
 @test
 fn aScopeLetsGoOfWhatItHeld() {
     let record = Record()
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addScoped(Freed.self) { _scope in Freed(record) }
     let provider = try! services.build()
     provider.withScope { scope in
@@ -109,7 +109,7 @@ fn aScopeLetsGoOfWhatItHeld() {
 @test
 fn theProviderDisposesItsSingletons() {
     let record = Record()
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addSingleton(ClosingShared.self, key: "a") { _scope in ClosingShared("a", record) }
     services.addSingleton(ClosingShared.self, key: "b") { scope in
         _ = try scope.resolve(ClosingShared.self, key: "a")
@@ -136,7 +136,7 @@ fn theProviderDisposesItsSingletons() {
 fn aProviderThatGoesDisposes() {
     let record = Record()
     do {
-        let services = ServiceCollection()
+        var services = ServiceCollection()
         services.addSingleton(ClosingShared.self) { _scope in ClosingShared("a", record) }
         let provider = try! services.build()
         _ = try! provider.resolve(ClosingShared.self)
@@ -147,7 +147,7 @@ fn aProviderThatGoesDisposes() {
 @test
 fn anInstanceIsItsOwnersToDispose() {
     let record = Record()
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addSingleton(ClosingShared.self, value: ClosingShared("a", record))
     let provider = try! services.build()
     _ = try! provider.resolve(ClosingShared.self)
@@ -158,7 +158,7 @@ fn anInstanceIsItsOwnersToDispose() {
 @test
 fn anAsyncScopeWaitsForWhatItMade() async {
     let record = Record()
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addScoped(ClosingLate.self) { _scope in ClosingLate("late", record) }
     services.addScoped(Closing.self) { scope in
         _ = try scope.resolve(ClosingLate.self)
@@ -176,7 +176,7 @@ fn anAsyncScopeWaitsForWhatItMade() async {
 @test
 fn theProviderWaitsForItsSingletons() async {
     let record = Record()
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addSingleton(ClosingLate.self) { _scope in ClosingLate("late", record) }
     let provider = try! services.build()
     _ = try! provider.resolve(ClosingLate.self)
@@ -186,7 +186,7 @@ fn theProviderWaitsForItsSingletons() async {
 
 @test
 fn aDisposedScopeGivesNothing() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addScoped(Int.self) { _scope in 1 }
     let provider = try! services.build()
     let scope = provider.withScope { scope in scope }
@@ -212,7 +212,7 @@ final class ClosingEither: Disposable, AsyncDisposable {
 @test
 fn oneOfBothKindsIsWaitedForWhereItCanBe() async {
     let record = Record()
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addScoped(ClosingEither.self) { _scope in ClosingEither(record) }
     let provider = try! services.build()
     provider.withScope { scope in
@@ -227,7 +227,7 @@ fn oneOfBothKindsIsWaitedForWhereItCanBe() async {
 @test
 fn anAsyncScopeEndsWhenItsBodyThrows() async {
     let record = Record()
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addTransient(Closing.self) { _scope in Closing("a", record) }
     let provider = try! services.build()
     do {

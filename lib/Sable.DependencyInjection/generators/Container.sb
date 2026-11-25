@@ -1,0 +1,212 @@
+module DependencyInjectionGenerators
+
+import Sable.Generators
+import Sable.Text
+
+// '@container': a provider and a scope that build what the package's
+// '@injectable' types, the packages it includes and the container's own
+// functions register, in code that names each; and for a package with
+// '@injectable' types, the fragment that others include.
+@generator("container", members: ["include", "singleton", "scoped", "transient", "keyed"], with: ["injectable"])
+fn container(_ pkg: Package, into output: inout Output) {
+    var own: Declaration[>..] = []
+    var containers: Declaration[>..] = []
+    for declaration in pkg.declarations {
+        if declaration.attribute(named: "container") != none {
+            if declaration.packageName.isEmpty {
+                containers.append(declaration)
+            }
+        } else if declaration.packageName.isEmpty && isRegistered(declaration) {
+            own.append(declaration)
+        }
+    }
+    for declaration in containers {
+        writeContainer(declaration, own, pkg, &output)
+    }
+    if !pkg.name.isEmpty && !own.isEmpty {
+        writeFragment(own, pkg, &output)
+    }
+}
+
+// Whether its '@injectable' registers it, and can.
+fn isRegistered(_ declaration: Declaration) -> Bool {
+    return !lifetime(of: declaration).isEmpty && lifetimeProblem(declaration) == none && injected(declaration) != none && declaration.type != none
+}
+
+// The lifetime a container's function says, or "".
+fn lifetime(of method: Member) -> String {
+    if method.attribute(named: "singleton") != none {
+        return "Singleton"
+    }
+    if method.attribute(named: "scoped") != none {
+        return "Scoped"
+    }
+    return method.attribute(named: "transient") != none ? "Transient" : ""
+}
+
+fn writeContainer(_ declaration: Declaration, _ own: Declaration[>..], _ pkg: Package, _ output: inout Output) {
+    if declaration.keyword != "struct" && declaration.keyword != "class" || !declaration.typeParameters.isEmpty {
+        output.error("a container is a struct or a class, and is not generic; '\(declaration.name)' is not one", at: declaration.location)
+        return
+    }
+    if !declaration.conforms(to: "Sendable") {
+        output.error("a container is shared by whoever uses its provider, so it is Sendable: a struct of Sendable values, or an '@immutable' class; '\(declaration.name)' is not", at: declaration.location)
+        return
+    }
+    var graph = Graph()
+    for each in own {
+        register(each, "", &graph)
+    }
+    var included: String[>..] = []
+    var wrong = false
+    var attributes = declaration.attributes
+    for method in declaration.methods {
+        attributes.append(contentsOf: method.attributes)
+    }
+    for attribute in attributes {
+        if attribute.name != "include" {
+            continue
+        }
+        for argument in attribute.arguments {
+            let name = argument.text.replacing(".self", with: "")
+            let moduleName = name.splitLastOnce(".")?.0 ?? ""
+            guard let owner = packageOf(moduleName, pkg) else {
+                output.error("'@include(\(argument.text))' names no package's services: '<Module>.Services.self', of a package this one depends on that has '@injectable' types with lifetimes", at: declaration.location)
+                wrong = true
+                continue
+            }
+            if included.contains(name) {
+                continue
+            }
+            included.append(name)
+            for each in pkg.declarations {
+                if each.packageName == owner && isRegistered(each) {
+                    register(each, name, &graph)
+                }
+            }
+        }
+    }
+    for method in declaration.methods {
+        let lifetime = lifetime(of: method)
+        if lifetime.isEmpty {
+            if method.attribute(named: "keyed") != none {
+                output.error("'\(method.name)' says '@keyed' but not how long what it makes lives: '@singleton', '@scoped' or '@transient'", at: method.location)
+                wrong = true
+            }
+            continue
+        }
+        guard let returned = method.returned else {
+            output.error("'\(method.name)' gives nothing to register", at: method.location)
+            wrong = true
+            continue
+        }
+        var needs: Need[>..] = []
+        for parameter in method.parameters {
+            let (need, why) = need(of: parameter)
+            needs.append(need)
+            if let why = why {
+                output.error("no container calls '\(method.name)': its parameter '\(parameter.name)' \(why)", at: parameter.location)
+                wrong = true
+            }
+        }
+        _ = graph.add(Registration {
+            service: returned,
+            key: method.attribute(named: "keyed")?.arguments?.first?.string ?? "",
+            lifetime: lifetime,
+            making: .Function,
+            callee: method.name,
+            type: none,
+            isAsync: method.isAsync,
+            isThrowing: method.isThrowing,
+            disposal: disposal(of: returned),
+            isShared: isShared(returned),
+            location: method.location,
+            packageName: "",
+            needs: needs
+        })
+    }
+    if wrong {
+        return
+    }
+    var checks = Checks(graph, container: declaration.location)
+    checks.check(&output)
+    if checks.hasErrors {
+        return
+    }
+    var writer = ContainerWriter(declaration, checks.graph)
+    let body = writer.write()
+    let file = declaration.moduleName.replacing(".", with: "_") + "_" + declaration.qualifiedName.replacing(".", with: "_")
+    output.add(file: "\(file).container.sb", body + "\n" + writer.registrations(own, included), inModule: declaration.moduleName)
+}
+
+// The package whose '@injectable' types are in the module, or in one in it.
+fn packageOf(_ moduleName: String, _ pkg: Package) -> String? {
+    for each in pkg.declarations {
+        if !each.packageName.isEmpty && isRegistered(each) && fragmentModule(pkg, each.packageName) == moduleName {
+            return each.packageName
+        }
+    }
+    return none
+}
+
+// The module a package's fragment is in: of those its '@injectable' types are
+// in, the one the fewest names deep, the first of those.
+fn fragmentModule(_ pkg: Package, _ owner: String) -> String {
+    var found = ""
+    for each in pkg.declarations {
+        if each.packageName == owner && isRegistered(each) {
+            if found.isEmpty || each.moduleName.split(separator: '.').count < found.split(separator: '.').count {
+                found = each.moduleName
+            }
+        }
+    }
+    return found
+}
+
+// A type's registration, of this package or, through its fragment, another's.
+fn register(_ declaration: Declaration, _ fragment: String, _ graph: inout Graph) {
+    guard let service = serviceType(of: declaration), let making = injected(declaration) else {
+        return
+    }
+    let key = declaration.attribute(named: "injectable")?.string(named: "key") ?? ""
+    let reaches = fragment.isEmpty || declaration.isPublic && making.isPublic
+    if !declaration.typeParameters.isEmpty {
+        if reaches {
+            graph.opens.append(Open { declaration: declaration, making: making, service: service, key: key, lifetime: lifetime(of: declaration) })
+        }
+        return
+    }
+    var needs: Need[>..] = []
+    var isOpen = service.isPublic
+    for parameter in making.parameters {
+        let (need, why) = need(of: parameter)
+        if why != none {
+            return
+        }
+        needs.append(need)
+        isOpen = isOpen && need.type.isPublic
+    }
+    if !reaches && !isOpen || !fragment.isEmpty && !service.isPublic {
+        graph.hidden[Graph.slot(service, key)] = declaration.packageName
+        return
+    }
+    _ = graph.add(Registration {
+        service: service,
+        key: key,
+        lifetime: lifetime(of: declaration),
+        making: reaches ? .Initialiser : .Fragment,
+        callee: reaches ? "" : "\(fragment).\(fragmentFunction(declaration))",
+        type: declaration.type,
+        isAsync: making.isAsync,
+        isThrowing: making.isThrowing,
+        disposal: disposal(of: declaration),
+        isShared: isShared(service),
+        location: declaration.location,
+        packageName: declaration.packageName,
+        needs: needs
+    })
+}
+
+fn fragmentFunction(_ declaration: Declaration) -> String {
+    return "make" + declaration.qualifiedName.replacing(".", with: "")
+}

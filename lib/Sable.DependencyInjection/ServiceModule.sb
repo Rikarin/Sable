@@ -1,0 +1,21 @@
+module Sable.DependencyInjection
+
+/// Registrations that go together, as `ServiceCollection.add` adds them: a
+/// `@container`, a package's `Services`, or a plugin's own.
+///
+/// ```sable
+/// struct Greetings: ServiceModule {
+///     let name: String
+///     fn register(in services: inout ServiceCollection) {
+///         services.addSingleton(String.self, value: "hello, \(name)")
+///     }
+/// }
+///
+/// var services = ServiceCollection()
+/// services.add(Greetings { name: "Ada" })
+/// assert(try! (try! services.build()).resolve(String.self) == "hello, Ada")
+/// ```
+public protocol ServiceModule {
+    /// Adds the registrations.
+    fn register(in services: inout ServiceCollection)
+}

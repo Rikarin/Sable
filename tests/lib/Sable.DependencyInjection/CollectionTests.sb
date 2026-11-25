@@ -1,0 +1,135 @@
+module CollectionTests
+
+import Sable.Concurrency
+import Sable.DependencyInjection
+import Sable.Testing
+
+import InjectionSupport
+
+protocol Plugin {
+    fn register(in services: inout ServiceCollection)
+}
+
+struct Counting: Plugin, ServiceModule {
+    let start: Int
+    fn register(in services: inout ServiceCollection) {
+        services.addSingleton(Int.self, value: start)
+    }
+}
+
+@test
+fn aCollectionIsAValue() {
+    var services = ServiceCollection()
+    services.addSingleton(Int.self, value: 1)
+    var other = services
+    other.replaceSingleton(Int.self, value: 2)
+    other.addSingleton(String.self, value: "two")
+    assertEqual(try! (try! services.build()).resolve(Int.self), 1)
+    assert(!services.contains(String.self))
+    assertEqual(try! (try! other.build()).resolve(Int.self), 2)
+}
+
+@test
+fn aPluginRegistersItsOwn() {
+    var services = ServiceCollection()
+    let plugins: (any Plugin)[] = [Counting { start: 4 }]
+    for plugin in plugins {
+        plugin.register(in: &services)
+    }
+    services.add(Counting { start: 5 })
+    let provider = try! services.build()
+    assertEqual(try! provider.resolve(Int.self), 5)
+    assertEqual(try! provider.resolveAll(Int.self), [4, 5])
+}
+
+@test
+fn registrationsAreReplacedWithOthersOfAnyLifetime() {
+    var services = ServiceCollection()
+    services.addSingleton(Int.self, value: 1)
+    services.replaceTransient(Int.self) { _scope in 2 }
+    assertEqual(services.descriptors.count, 1)
+    assert(services.descriptors[0].lifetime == .Transient && !services.descriptors[0].isEager && !services.descriptors[0].isAsync)
+    services.replaceScoped(Int.self) { _scope in 3 }
+    (try! services.build()).withScope { scope in assertEqual(try! scope.resolve(Int.self), 3) }
+    assert(!services.tryAdd(ServiceDescriptor.of(Int.self, .Transient) { _scope in 4 }))
+    assert(services.tryAdd(ServiceDescriptor.of(Int.self, .Transient, "k") { _scope in 4 }))
+    services.remove(Int.self)
+    assert(!services.contains(Int.self) && services.contains(Int.self, key: "k"))
+}
+
+@test
+fn anEagerOneIsMadeAsTheProviderIsBuilt() {
+    let record = Record()
+    var services = ServiceCollection()
+    services.add(ServiceDescriptor.of(Int.self, .Singleton, from: [ServiceDependency(String.self)], eager: true) { scope in
+        record.add("int of \(try scope.resolve(String.self))")
+        return 1
+    })
+    services.addSingleton(String.self) { _scope in
+        record.add("string")
+        return "s"
+    }
+    _ = try! services.build()
+    assertEqual(record.all, "string int of s")
+}
+
+@test
+fn whatAnEagerOneThrowsIsTheBuilds() {
+    var services = ServiceCollection()
+    services.add(ServiceDescriptor.of(Int.self, .Singleton, from: [], eager: true) { (_scope: ServiceScope) throws in
+        throw TestError("it fails")
+    })
+    do {
+        _ = try services.build()
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "Int could not be made: it fails")
+    }
+}
+
+// Made by waiting, without saying what it is made from.
+struct Warmed: AsyncInjectable, Clock {
+    let of: Int
+    static async fn make(_ services: ServiceScope) throws -> Warmed {
+        await Task.yield()
+        return Warmed { of: try services.resolve(Int.self) }
+    }
+    fn now() -> Int { return of }
+}
+
+@test
+async fn whatIsMadeByWaitingIsMadeAfterWhatItSays() {
+    let record = Record()
+    var services = ServiceCollection()
+    services.add(ServiceDescriptor.waiting(String.self, from: [ServiceDependency(Int.self)]) { scope in
+        record.add("string of \(try scope.resolve(Int.self))")
+        return "s"
+    })
+    services.addSingleton(Int.self) { _scope in
+        await Task.yield()
+        record.add("int")
+        return 7
+    }
+    services.addSingleton(Warmed.self)
+    services.addSingleton((any Clock).self, Warmed.self)
+    let provider = try! await services.buildAsync()
+    assertEqual(record.all, "int string of 7")
+    assertEqual((try! provider.resolve(Warmed.self)).of, 7)
+    assertEqual((try! provider.resolve((any Clock).self)).now(), 7)
+}
+
+@test
+async fn whatIsAskedForBeforeItWasWaitedForIsSaid() {
+    var services = ServiceCollection()
+    services.add(ServiceDescriptor.waiting(String.self, from: []) { scope in "\(try scope.resolve(Int.self))" })
+    services.addSingleton(Int.self) { _scope in
+        await Task.yield()
+        return 7
+    }
+    do {
+        _ = try await services.buildAsync()
+        assert(false)
+    } catch {
+        assert(error.description().hasPrefix("Int is made as the provider is built, and was asked for before it was"))
+    }
+}

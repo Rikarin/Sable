@@ -1,0 +1,29 @@
+module Sable.Generators
+
+/// An initialiser or a method of a type.
+public struct Member {
+    /// "init" or "fn".
+    public var keyword: String
+    /// Its name; an initialiser's is "init".
+    public var name: String
+    public var isPublic: Bool = false
+    public var isStatic: Bool = false
+    public var isAsync: Bool = false
+    public var isThrowing: Bool = false
+    /// Its parameters, in order.
+    public var parameters: Parameter[>..] = []
+    /// What a method returns, resolved; none when it returns nothing.
+    public var returned: TypeRef? = none
+    public var attributes: Attribute[>..] = []
+    public var location: Location = Location { id: "" }
+
+    /// The attribute named, if it has it.
+    public fn attribute(named name: String) -> Attribute? {
+        for attribute in attributes {
+            if attribute.name == name {
+                return attribute
+            }
+        }
+        return none
+    }
+}

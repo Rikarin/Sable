@@ -6,7 +6,7 @@ import Sable.Concurrency
 /// it; each singleton is made once, the first time it is wanted.
 ///
 /// ```sable
-/// let services = ServiceCollection()
+/// var services = ServiceCollection()
 /// services.addSingleton(String.self, value: "hello")
 /// let provider = try! services.build()
 /// assert(try! provider.resolve(String.self) == "hello")
@@ -16,14 +16,17 @@ public final class ServiceProvider {
     let entries: [ServiceKey: ServiceEntry[>..]]
     let links: ServiceLink[>..]
     let generics: OpenService[>..]
+    // How many scoped services there are, but the open generics'.
+    let places: Int
     let state: Mutex<ProviderState>
     let disposed: Atomic<Bool>
 
-    init(entries: [ServiceKey: ServiceEntry[>..]], links: ServiceLink[>..], generics: OpenService[>..], slots: Int) {
+    init(entries: [ServiceKey: ServiceEntry[>..]], links: ServiceLink[>..], generics: OpenService[>..], slots: Int, places: Int) {
         self.entries = entries
         self.links = links
         self.generics = generics
-        state = Mutex(ProviderState { slots: slots })
+        self.places = places
+        state = Mutex(ProviderState { slots: slots, places: places })
         disposed = Atomic(false)
     }
 
@@ -55,8 +58,8 @@ public final class ServiceProvider {
     }
 
     /// The service of a type known only as the program runs.
-    public fn resolve(dynamic type: Type, key: String? = none) throws(ServiceError) -> any Any {
-        return try ServiceScope(self, isRoot: true).resolve(dynamic: type, key: key)
+    public fn resolve(_ type: Type, key: String? = none) throws(ServiceError) -> any Any {
+        return try ServiceScope(self, isRoot: true).resolve(type, key: key)
     }
 
     /// Whether the service is registered.
@@ -72,7 +75,7 @@ public final class ServiceProvider {
     ///     fn dispose() { print("closed") }
     /// }
     ///
-    /// let services = ServiceCollection()
+    /// var services = ServiceCollection()
     /// services.addScoped(Connection.self) { _scope in Connection() }
     /// (try! services.build()).withScope { scope in
     ///     let connection = try! scope.resolve(Connection.self)
@@ -140,6 +143,25 @@ public final class ServiceProvider {
         }
     }
 
+    // The entry, after each eager one that it is made from.
+    fn order(to entry: ServiceEntry, _ begun: inout [Int: Bool]) -> ServiceEntry[>..] {
+        if begun[entry.slot] != none {
+            return []
+        }
+        begun[entry.slot] = true
+        var all: ServiceEntry[>..] = []
+        for dependency in entry.dependencies {
+            if dependency.kind == .Deferred {
+                continue
+            }
+            for each in (try? entries(dependency.key)) ?? [] {
+                all.append(contentsOf: order(to: each, &begun))
+            }
+        }
+        all.append(entry)
+        return all
+    }
+
     // The one a service is: the last registered.
     fn entry(_ key: ServiceKey) throws(ServiceError) -> ServiceEntry? {
         if let found = entries[key] {
@@ -166,11 +188,12 @@ public final class ServiceProvider {
         }
         var made: ServiceEntry[>..] = []
         for each in generics {
-            let slot = state.withLock { (held: inout ProviderState) -> Int in
+            let (slot, place) = state.withLock { (held: inout ProviderState) -> (Int, Int) in
                 held.slots += 1
-                return held.slots - 1
+                held.places += 1
+                return (held.slots - 1, held.places - 1)
             }
-            if let entry = try each.entry(key, slot: slot) {
+            if let entry = try each.entry(key, slot: slot, place: place) {
                 made.append(entry)
             }
         }
@@ -190,4 +213,5 @@ struct ProviderState {
     // The open generics' entries asked for so far.
     var closed: [ServiceKey: ServiceEntry[>..]] = [:]
     var slots: Int = 0
+    var places: Int = 0
 }

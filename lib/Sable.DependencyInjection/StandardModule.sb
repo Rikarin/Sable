@@ -1,0 +1,8 @@
+module Sable.DependencyInjection
+
+/// A ServiceModule made of nothing, so that its type says which it is:
+/// `services.add(AppServices.self)`.
+public protocol StandardModule: ServiceModule {
+    /// The module.
+    static fn standard() -> Self
+}

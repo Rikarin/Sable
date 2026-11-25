@@ -1,0 +1,24 @@
+module Sable.DependencyInjection
+
+/// A `@container`'s provider, or a scope of it.
+///
+/// ```sable
+/// class Answers: ServiceContainer, Provides<Int>, Provides<String> {
+///     fn provide(_ type: Int.Type) -> Int { return 42 }
+///     fn provide(_ type: String.Type) -> String { return "forty-two" }
+/// }
+///
+/// fn ask<C: ServiceContainer & Provides<Int>>(_ container: C) -> Int {
+///     return container.resolve(Int.self)
+/// }
+///
+/// assert(ask(Answers()) == 42)
+/// ```
+public protocol ServiceContainer { }
+
+extension ServiceContainer {
+    /// The service. What the container does not provide does not compile.
+    public fn resolve<Service>(_ type: Service.Type) -> Service where Self: Provides<Service> {
+        return provide(type)
+    }
+}

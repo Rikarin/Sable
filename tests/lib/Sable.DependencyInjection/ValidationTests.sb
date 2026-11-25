@@ -7,53 +7,53 @@ import Sable.Testing
 import InjectionSupport
 
 @immutable
-@derive(Injectable)
+@injectable
 final class Single {
     init(_scoped: Scoped) { }
 }
 
 @immutable
-@derive(Injectable)
+@injectable
 final class Scoped {
     init() { }
 }
 
 @immutable
-@derive(Injectable)
+@injectable
 final class Between {
     init(_scoped: Scoped) { }
 }
 
 @immutable
-@derive(Injectable)
+@injectable
 final class HoldsBetween {
     init(_between: Between) { }
 }
 
 @immutable
-@derive(Injectable)
+@injectable
 final class Egg {
     init(_hen: Hen) { }
 }
 
 @immutable
-@derive(Injectable)
+@injectable
 final class Hen {
     init(_egg: Egg) { }
 }
 
-@derive(Injectable)
+@injectable
 final class LazyEgg {
     init(_hen: Lazy<LazyHen>) { }
 }
 
-@derive(Injectable)
+@injectable
 final class LazyHen {
     init(_egg: LazyEgg) { }
 }
 
 @immutable
-@derive(Injectable)
+@injectable
 final class Optionally {
     let clock: (any Clock)?
     let clocks: (any Clock)[]
@@ -67,7 +67,7 @@ final class Optionally {
 
 @test
 fn whatIsMissingIsSaidWithItsPath() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addTransient(Between.self)
     services.addTransient(HoldsBetween.self)
     let said = problems(services)
@@ -76,7 +76,7 @@ fn whatIsMissingIsSaidWithItsPath() {
 
 @test
 fn aSingletonMayNotHoldAScopedService() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addSingleton(Single.self)
     services.addScoped(Scoped.self)
     assertEqual(problems(services), "the services cannot be provided: a singleton would hold a scoped service: ValidationTests.Single -> ValidationTests.Scoped")
@@ -84,7 +84,7 @@ fn aSingletonMayNotHoldAScopedService() {
 
 @test
 fn norThroughATransientOne() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addScoped(Scoped.self)
     services.addTransient(Between.self)
     assertEqual(problems(services), "")
@@ -95,7 +95,7 @@ fn norThroughATransientOne() {
 
 @test
 fn aServiceMayNotNeedItself() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addTransient(Hen.self)
     services.addTransient(Egg.self)
     let said = problems(services)
@@ -104,7 +104,7 @@ fn aServiceMayNotNeedItself() {
 
 @test
 fn aLazyOneBreaksACycle() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addTransient(LazyHen.self)
     services.addTransient(LazyEgg.self)
     assertEqual(problems(services), "")
@@ -113,7 +113,7 @@ fn aLazyOneBreaksACycle() {
 
 @test
 fn aCycleOfClosuresIsFoundAsItIsMade() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addTransient(Int.self) { scope in (try scope.resolve(String.self)).count }
     services.addTransient(String.self) { scope in "\(try scope.resolve(Int.self))" }
     let provider = try! services.build()
@@ -127,7 +127,7 @@ fn aCycleOfClosuresIsFoundAsItIsMade() {
 
 @test
 fn aCycleOfSingletonsIsNotWaitedFor() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addSingleton(Int.self) { scope in (try scope.resolve(String.self)).count }
     services.addSingleton(String.self) { scope in "\(try scope.resolve(Int.self))" }
     let provider = try! services.build()
@@ -141,7 +141,7 @@ fn aCycleOfSingletonsIsNotWaitedFor() {
 
 @test
 fn aSingletonsClosureIsHeldToItToo() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addScoped(Scoped.self)
     services.addSingleton(Int.self) { scope in
         _ = try scope.resolve(Scoped.self)
@@ -160,7 +160,7 @@ fn aSingletonsClosureIsHeldToItToo() {
 
 @test
 fn everyProblemIsSaid() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addSingleton(Single.self)
     services.addScoped(Scoped.self)
     services.addTransient(Hen.self)
@@ -179,7 +179,7 @@ fn everyProblemIsSaid() {
 
 @test
 fn aCollectionIsBuiltUncheckedWhenAsked() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addTransient(Between.self)
     let provider = try! services.build(validate: false)
     do {
@@ -192,7 +192,7 @@ fn aCollectionIsBuiltUncheckedWhenAsked() {
 
 @test
 fn optionalListedAndDefaultedDependenciesMayBeMissing() {
-    let services = ServiceCollection()
+    var services = ServiceCollection()
     services.addSingleton(Optionally.self)
     let alone = try! (try! services.build()).resolve(Optionally.self)
     assert(alone.clock == none && alone.clocks.isEmpty && alone.retries == 3)

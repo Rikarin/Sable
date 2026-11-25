@@ -1,0 +1,19 @@
+module Sable.DependencyInjection
+
+// What makes a service: kept as an object's, so that a descriptor is Sendable.
+@immutable
+final class ServiceMaker {
+    let make: (ServiceScope) throws -> any Any
+    // For one whose making waits, and whose 'make' then says that it has not.
+    let start: (async (ServiceScope) throws -> any Any)?
+
+    init(_ make: @escaping @Sendable (ServiceScope) throws -> any Any) {
+        self.make = make
+        start = none
+    }
+
+    init(waiting start: @escaping @Sendable async (ServiceScope) throws -> any Any) {
+        make = { _scope in fatalError("made as its provider is built") }
+        self.start = start
+    }
+}

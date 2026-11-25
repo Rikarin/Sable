@@ -1,0 +1,189 @@
+module DependencyInjectionGenerators
+
+import Sable.Generators
+import Sable.Text
+
+// How a registration is made.
+enum Making {
+    // By its type's initialiser.
+    Initialiser
+    // By a function of the container.
+    Function
+    // By a function of the fragment its package has, which reaches what the
+    // package keeps to itself.
+    Fragment
+}
+
+// A service that can be given, and how.
+struct Registration {
+    let service: TypeRef
+    let key: String
+    // "Singleton", "Scoped" or "Transient".
+    let lifetime: String
+    let making: Making
+    // What is called: a type's source is written later, for where it is.
+    let callee: String
+    let type: TypeRef?
+    let isAsync: Bool
+    let isThrowing: Bool
+    // Whether it has something to dispose: "no", "sync", "async" or "unknown".
+    let disposal: String
+    // Whether any thread may use it, where that is known.
+    let isShared: Bool
+    let location: Location
+    let packageName: String
+    var needs: Need[>..]
+    // What its members are called: unique in the container.
+    var name: String = ""
+
+    // It, as a message says it.
+    var title: String => key.isEmpty ? short(service) : "\(short(service)) (\"\(key)\")"
+    var isSingleton: Bool => lifetime == "Singleton"
+    var isScoped: Bool => lifetime == "Scoped"
+    // Made as the container is built.
+    var isEager: Bool => isSingleton && (isAsync || isThrowing)
+}
+
+// A generic type's registration: one for each type it is asked for as.
+struct Open {
+    let declaration: Declaration
+    let making: Member
+    let service: TypeRef
+    let key: String
+    let lifetime: String
+}
+
+// What a container's services are, and what each is made from.
+struct Graph {
+    var registrations: Registration[>..] = []
+    var opens: Open[>..] = []
+    // The registrations of a service, by its identity and key.
+    var byService: [String: Int[>..]] = [:]
+    // The open generics' registrations made, by their number and identity.
+    var closed: [String: Int] = [:]
+    // What a package has that this one cannot name, by its identity and key.
+    var hidden: [String: String] = [:]
+    var names: [String: Int] = [:]
+
+    init() { }
+
+    static fn slot(_ type: TypeRef, _ key: String) -> String {
+        return identity(type) + "|" + key
+    }
+
+    mutating fn add(_ registration: Registration) -> Int {
+        var added = registration
+        var name = identifier(registration.service)
+        if !registration.key.isEmpty {
+            name += "Keyed"
+        }
+        let used = (names[name] ?? 0) + 1
+        names[name] = used
+        added.name = used == 1 ? name : "\(name)_\(used)"
+        registrations.append(added)
+        let slot = Graph.slot(registration.service, registration.key)
+        var list = byService[slot] ?? []
+        list.append(registrations.count - 1)
+        byService[slot] = list
+        return registrations.count - 1
+    }
+
+    // Every registration of the service: those of the type itself, then an
+    // open generic's, made for it now if it is the first time.
+    mutating fn candidates(_ type: TypeRef, _ key: String) -> Int[>..] {
+        for i in 0..<opens.count {
+            let generic = opens[i]
+            if generic.key != key {
+                continue
+            }
+            guard let types = matched(generic.service, type, generic.declaration.typeParameters) else {
+                continue
+            }
+            if !meets(generic.declaration, types) {
+                continue
+            }
+            let mark = "\(i)|" + identity(type)
+            if closed[mark] != none {
+                continue
+            }
+            closed[mark] = -1
+            closed[mark] = add(close(generic, type, types))
+        }
+        return byService[Graph.slot(type, key)] ?? []
+    }
+
+    fn close(_ generic: Open, _ service: TypeRef, _ types: TypeRef[>..]) -> Registration {
+        let names = generic.declaration.typeParameters
+        var needs: Need[>..] = []
+        for parameter in generic.making.parameters {
+            let (asked, _) = need(of: parameter)
+            needs.append(Need {
+                label: asked.label,
+                name: asked.name,
+                kind: asked.kind,
+                service: substituted(asked.service, names, types),
+                key: asked.key,
+                type: substituted(asked.type, names, types),
+                hasDefault: asked.hasDefault,
+                defaultText: asked.defaultText,
+                location: asked.location
+            })
+        }
+        return Registration {
+            service: service,
+            key: generic.key,
+            lifetime: generic.lifetime,
+            making: .Initialiser,
+            callee: "",
+            type: substituted(generic.declaration.type ?? service, names, types),
+            isAsync: generic.making.isAsync,
+            isThrowing: generic.making.isThrowing,
+            disposal: disposal(of: generic.declaration),
+            isShared: true,
+            location: generic.declaration.location,
+            packageName: generic.declaration.packageName,
+            needs: needs
+        }
+    }
+
+    // Whether the type arguments are what the generic type asks of them, as
+    // far as that is known here: the code written says the rest.
+    fn meets(_ declaration: Declaration, _ types: TypeRef[>..]) -> Bool {
+        for constraint in declaration.constraints {
+            guard let at = declaration.typeParameters.firstIndex(of: constraint.parameter) else {
+                continue
+            }
+            let type = types[at]
+            let known = type.kind == "struct" || type.kind == "class" || type.kind == "enum" || type.kind == "union" || type.kind == "actor" || type.kind == "protocol"
+            if constraint.type.kind == "protocol" && constraint.type.arguments.isEmpty && known && type.arguments.isEmpty && type.name != constraint.type.name && !type.conforms(to: constraint.type.name) {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+// Whether what its initialiser makes has something to dispose.
+fn disposal(of declaration: Declaration) -> String {
+    if declaration.conforms(to: "AsyncDisposable") {
+        return "async"
+    }
+    return declaration.conforms(to: "Disposable") ? "sync" : "no"
+}
+
+// The same of what a function gives: of a class that others derive from, or
+// an existential, only the running program knows.
+fn disposal(of type: TypeRef) -> String {
+    if type.conforms(to: "AsyncDisposable") {
+        return "async"
+    }
+    if type.conforms(to: "Disposable") {
+        return "sync"
+    }
+    return type.kind == "protocol" || type.kind == "unresolved" || !type.isFinal ? "unknown" : "no"
+}
+
+fn isShared(_ type: TypeRef) -> Bool {
+    let named = type.kind == "class" || type.kind == "struct" || type.kind == "union" || type.kind == "protocol"
+    return !named || !type.arguments.isEmpty || type.conforms(to: "Sendable") || type.name == "Sendable"
+}

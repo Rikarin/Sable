@@ -11,6 +11,8 @@ public struct Parameter {
     public var resolved: TypeRef = TypeRef { kind: "unresolved", name: "", moduleName: "", text: "" }
     /// Whether it has a default value.
     public var hasDefault: Bool
+    /// Its default value, as written; "" for none.
+    public var defaultText: String = ""
     public var attributes: Attribute[>..] = []
     public var location: Location = Location { id: "" }
 

@@ -82,13 +82,18 @@ services, a list of commands. It runs when at least one declaration carries
 its attribute. With `@generator("name", always: true)`, it runs for every
 package that can see it, even one with no such declaration. That is how a
 generator adds code unconditionally, such as helper types its other output
-uses, or types generated from input files (§8.3).
+uses, or types generated from input files (§8.3). With `@generator("name",
+with: ["other"])`, it is also given the declarations that carry `@other`, and
+runs for them; and after its own package's, those of every package it depends
+on, directly or not, each with its `packageName`. That is how it reads what a
+dependency declares: the declarations, not a description made of them.
 
 The compiler rejects an attribute it does not know (S3092), so a generator
 also names the attributes it reads on members and parameters:
 `@generator("json", members: ["rename", "skip"])`. A package that can see the
 generator may then write `@json` where a generator is given declarations
-(§8.2), and `@rename(...)` or `@skip` on fields, cases and parameters.
+(§8.2), and `@rename(...)` or `@skip` on fields, cases, initialisers, methods
+and parameters.
 Written anywhere else, they are S3093.
 
 ## 8.2 Which declarations a generator sees
@@ -98,6 +103,12 @@ A generator runs over two kinds of package:
 - the package that has it, and
 - every package that depends on that package directly. The package's tests
   also count when it is a dev-dependency.
+
+The standard library's modules have generators too, in
+`lib/<Module>/generators/`, embedded in the compiler (`LibraryGenerators`).
+They run for every package with a file that imports the module, and their
+attributes are known in the files that do: Sable.DependencyInjection's
+`@injectable` and `@container`.
 
 So writing `@json` in your package takes one thing: depending on the package
 whose generator answers to `json`. A transitive dependency's generators do not
@@ -134,9 +145,14 @@ not the compiler's symbols:
 | `superclass` | A class's superclass, by name, or none |
 | `trigger` | The attribute that started this run, with its arguments |
 | `attributes` | Every attribute on the declaration |
+| `type`, `supertypes` | A type as a `TypeRef`, with its generic parameters as its arguments, and what it derives from and conforms to, with theirs |
+| `constraints` | What a type's generic parameters must be: each `parameter`, and the `type` |
+| `initializers`, `methods` | A type's own, each a `Member`: name, modifiers, effects, parameters, what it returns, its attributes. With no initialiser declared, the memberwise one |
+| `isFinal` | Whether nothing derives from it |
+| `packageName` | A dependency's declaration's package (§8.1, `with:`), or `""` |
 | `fields` | A type's stored fields: name, type, `var` or `let`, whether it has a default, its attributes |
 | `cases` | A union's cases and their payloads, or an enum's cases and their raw values |
-| `parameters` | A function's parameters: label, name, type, whether it has a default, its attributes |
+| `parameters` | A function's parameters: label, name, type, whether it has a default and which, its attributes |
 | `returnType`, `returned` | A function's return type, as written and resolved |
 | `isAsync`, `throws` | A function's effects |
 | `imports` | The imports of the file it is in |
@@ -153,7 +169,10 @@ compiler resolved it to:
 | `name` | The type's name, without its module or arguments |
 | `moduleName` | The module that declares it, or `""` |
 | `text` | The whole type, as the compiler writes it |
-| `arguments` | Its generic arguments; an optional's or an array's element; a dictionary's key and value |
+| `arguments` | Its generic arguments; an optional's or an array's element; a dictionary's key and value; a function's parameters, then its result |
+| `qualifiedName` | Its name with those of the types it is in: `Outer.Inner` |
+| `suffix` | An array's brackets, `[]` or `[>..]`; a function's `async` and `throws` |
+| `isPublic`, `isFinal` | Whether it and all it is made of is public, and whether nothing derives from it |
 | `conformances` | Every protocol it conforms to, by name |
 | `attributes` | The attributes on its declaration, by name |
 
@@ -214,7 +233,8 @@ The compiler places each file in a module. By default this is the module of
 the declaration that produced it. For a package generator it is the first
 declaration's module, or, when there is none, the module of the package's
 first library file (or of its first binary). `inModule:` names another module,
-which must be one the package declares. The compiler starts the file with the
+which must be one the package declares; the file then goes with the first
+declaration given that is in it. The compiler starts the file with the
 module's `module` line and the imports of the declaration's file, so a
 generator writes only declarations and any imports of its own. A file may not
 declare a `module` itself.
@@ -292,7 +312,12 @@ the code had been written by hand. Interpreting is also what makes §8.5
 possible: the interpreter gives a generator only what the rules allow, so a
 dependency's generator cannot touch the machine it runs on.
 
-A loose file (`sable run file.sb`) has no package, so it has no generators.
+What the standard library's own generators gave is kept in `$SABLE_HOME/cache`
+besides, with the compiler's other records of its library, so a build with
+nothing new to generate does not compile them.
+
+A loose file (`sable run file.sb`) has no package, so it has no generators but
+the standard library's.
 
 ## 8.7 In the editor
 
@@ -378,9 +403,8 @@ built-in conformances, and generators cover the rest.
   decision, not a generator one.
 - **Patterns checked while compiling.** .NET's `[GeneratedRegex]` reads a
   literal pattern at build time and reports a bad one as an error. Sable's
-  `Regex` (Sable.Text) cannot do that through a generator: generators belong
-  to a package's `generators/` directory, which the standard library, embedded
-  in the compiler, does not have, and a generator sees declarations, not the
+  `Regex` (Sable.Text) cannot do that through a generator: a generator sees
+  declarations, not the
   `Regex("…")` calls in bodies. Nor through `const fn`: `compileError` takes
   only a literal message, so it could not say what is wrong where, and every
   function the parser calls, its class's initialiser and methods among them,

@@ -18,13 +18,11 @@ fn withNoSocketNoOneIsTold() {
     expect(!Systemd.notify("READY=1"))
 }
 
-@test
-fn aSocketThatIsNotThereIsNotTold() {
-    expect(!Systemd.notify("READY=1", socket: "/nowhere/to/be/found"))
-    expect(!Systemd.notify("READY=1", socket: "vsock:2:1234"))
-    expect(!Systemd.notify("READY=1", socket: ""))
-    expect(!Systemd.notify("READY=1", socket: "@sable-nowhere-to-be-found"))
-    expect(!Systemd.notify("READY=1", socket: "/" + "x".repeated(200)))
+@test(arguments: [
+    "/nowhere/to/be/found", "vsock:2:1234", "", "@sable-nowhere-to-be-found", "/" + "x".repeated(200),
+])
+fn aSocketThatIsNotThereIsNotTold(_ socket: String) {
+    expect(!Systemd.notify("READY=1", socket: socket))
 }
 
 @test

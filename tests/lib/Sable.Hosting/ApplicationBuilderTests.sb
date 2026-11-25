@@ -82,15 +82,10 @@ fn theSystemsClockIsTheUsualOne() async {
     expect(builder.clock.now.durationSince(before) >= Duration.milliseconds(5))
     let clock = builder.clock
     let sleeping = Task.spawn {
-        do {
-            try await clock.sleep(until: before.adding(Duration.hours(1)))
-            return false
-        } catch {
-            return true
-        }
+        await expectThrows(CancellationError.self) { try await clock.sleep(until: before.adding(Duration.hours(1))) }
     }
     sleeping.cancel()
-    expect(await sleeping.value)
+    _ = await sleeping.value
 }
 
 @test

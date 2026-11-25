@@ -20,14 +20,14 @@ fn type(_ text: String) throws -> YamlType {
 @test
 fn scalarsAreTheCoreSchemas() throws {
     for text in ["", "~", "null", "Null", "NULL", "!!null ~"] {
-        assert(try type(text) == .Null, text)
-        assert((try Yaml.parse(text)).isNull)
+        require(try type(text) == .Null, text)
+        require((try Yaml.parse(text)).isNull)
     }
     for text in ["true", "True", "TRUE", "!!bool true"] {
-        assert((try Yaml.parse(text)).bool == true, text)
+        require((try Yaml.parse(text)).bool == true, text)
     }
     for text in ["false", "False", "FALSE"] {
-        assert((try Yaml.parse(text)).bool == false, text)
+        require((try Yaml.parse(text)).bool == false, text)
     }
     let ints: [String: Int] = ["0": 0, "-0": 0, "+12": 12, "007": 7, "0o17": 15, "0xfF": 255, "-9223372036854775808": Int.min, "9223372036854775807": Int.max, "!!int 3": 3]
     for (text, value) in ints {
@@ -40,18 +40,18 @@ fn scalarsAreTheCoreSchemas() throws {
     assertEqual((try Yaml.parse(".inf")).float ?? 0.0, 1.0 / 0.0)
     assertEqual((try Yaml.parse("+.Inf")).float ?? 0.0, 1.0 / 0.0)
     assertEqual((try Yaml.parse("-.INF")).float ?? 0.0, -1.0 / 0.0)
-    assert((try Yaml.parse(".NaN")).float!.isNaN)
+    expect((try Yaml.parse(".NaN")).float!.isNaN)
     for text in ["no", "yes", "on", "off", "y", "nUll", "tRue", "1_000", "12:30", "2001-01-01", "0b1", "0o8", "0xg", "-0x1", ".", "+.", "1e", "1.e+", "1 2", "é", "e1", ".inf1", "é.inf", "'1'", "\"true\"", "|\n 1", "!!str 1", "! 1", "!x 1", "!!int a", "!!bool 1", "!!float x", "!!null 0"] {
         let item = try Yaml.parse(text)
-        assert(item.type == .String, text)
-        assert(item.bool == none && item.int == none && item.float == none && item.uint == none)
+        require(item.type == .String, text)
+        require(item.bool == none && item.int == none && item.float == none && item.uint == none)
     }
     assertEqual((try Yaml.parse("18446744073709551615")).uint ?? 0, U64.max)
-    assert((try Yaml.parse("18446744073709551615")).int == none && (try Yaml.parse("18446744073709551616")).uint == none)
-    assert((try Yaml.parse("-9223372036854775809")).int == none && (try Yaml.parse("-1")).uint == none && (try Yaml.parse("-0")).uint == 0)
-    assert((try Yaml.parse("!!binary aGk=")).binary! == [104, 105])
-    assert((try Yaml.parse("!!binary |\n aG\n k=\n")).binary! == [104, 105])
-    assert((try Yaml.parse("!!binary '?'")).binary == none && (try Yaml.parse("aGk=")).binary == none)
+    expect((try Yaml.parse("18446744073709551615")).int == none && (try Yaml.parse("18446744073709551616")).uint == none)
+    expect((try Yaml.parse("-9223372036854775809")).int == none && (try Yaml.parse("-1")).uint == none && (try Yaml.parse("-0")).uint == 0)
+    expect((try Yaml.parse("!!binary aGk=")).binary! == [104, 105])
+    expect((try Yaml.parse("!!binary |\n aG\n k=\n")).binary! == [104, 105])
+    expect((try Yaml.parse("!!binary '?'")).binary == none && (try Yaml.parse("aGk=")).binary == none)
 }
 
 @test
@@ -59,10 +59,10 @@ fn partsAreReachedThroughAliases() throws {
     let node = try Yaml.parse("base: &b {x: 1, y: [2, 3]}\nitem: *b\nlist:\n- *b\n")
     assertEqual(node["item"]!["x"]!.int ?? 0, 1)
     assertEqual(node["list"]![0]!["y"]![1]!.int ?? 0, 3)
-    assert(node["item"]!.kind == .Alias && node["item"]!.type == .Mapping && node["item"]!.count == 2)
-    assert(node["item"]!.resolved === node["base"]!)
-    assert(node["none"] == none && node["list"]![1] == none && node["list"]![-1] == none && node["list"]!["x"] == none && node[0] == none)
-    assert(node["list"]!.text == none && node["base"]!["x"]!.text == "1" && node["base"]!["x"]!.string == none)
+    expect(node["item"]!.kind == .Alias && node["item"]!.type == .Mapping && node["item"]!.count == 2)
+    expect(node["item"]!.resolved === node["base"]!)
+    expect(node["none"] == none && node["list"]![1] == none && node["list"]![-1] == none && node["list"]!["x"] == none && node[0] == none)
+    expect(node["list"]!.text == none && node["base"]!["x"]!.text == "1" && node["base"]!["x"]!.string == none)
     assertEqual("\(node["item"]!.line):\(node["item"]!.column)", "2:7")
     assertEqual("\(node["list"]![0]!.line):\(node["list"]![0]!.column)", "4:3")
     assertEqual(node.count, 3)
@@ -85,7 +85,7 @@ fn nodesAreMadeAndChanged() throws {
     node["c"] = YamlNode.aliasOf(node["a"]!)
     let text = "s: \"1\"\ni: -1\nu: 18446744073709551615\nf: 1.0\nn: null\nb: false\ny: !!binary aGk=\nl: &list [1]\nm:\n  k: v\na: *list\nc: *list\n"
     assertEqual(try Yaml.print(node), text)
-    assert((try Yaml.parse(text)) == node)
+    expect((try Yaml.parse(text)) == node)
     node["l"]!.append(YamlNode.int(3))
     node["a"]!.insert(YamlNode.int(2), at: 1)
     node["m"]!.insert(YamlEntry(YamlNode.string("j"), YamlNode.null()), at: 0)
@@ -124,13 +124,13 @@ fn anAnchorDefinedTwiceNamesTheLast() throws {
 fn equalityIsOfTheData() throws {
     let a = try Yaml.parse("a: [1, 'x', null]\nb: &b {c: 1.0, ? [k] : v}\nd: *b")
     let b = try Yaml.parse("d: {? [k] : v, c: 1.0}\na:\n - 0x1\n - x\n - ~\nb:\n  c: 1.\n  ? - k\n  : \"v\"\n")
-    assert(a == b && b == a && a == a)
+    expect(a == b && b == a && a == a)
     for other in ["a: [1]", "[1]", "x", "{a: [1, 'x', null], b: 1, d: 1}", "a: [1, 'x', null]\nb: &b {c: 1.0, ? [k] : w}\nd: *b", "a: [2, 'x', null]\nb: &b {c: 1.0, ? [k] : v}\nd: *b", "a: [1, 'x']\nb: &b {c: 1.0, ? [k] : v}\nd: *b"] {
-        assert(a != (try Yaml.parse(other)), other)
+        require(a != (try Yaml.parse(other)), other)
     }
-    assert((try Yaml.parse("1")) != (try Yaml.parse("1.0")) && (try Yaml.parse("1")) != (try Yaml.parse("'1'")))
-    assert((try Yaml.parse("!x 1")) != (try Yaml.parse("!y 1")) && (try Yaml.parse("!!binary aa==")) != (try Yaml.parse("aa==")))
-    assert((try Yaml.parse("true")) != (try Yaml.parse("false")))
+    expect((try Yaml.parse("1")) != (try Yaml.parse("1.0")) && (try Yaml.parse("1")) != (try Yaml.parse("'1'")))
+    expect((try Yaml.parse("!x 1")) != (try Yaml.parse("!y 1")) && (try Yaml.parse("!!binary aa==")) != (try Yaml.parse("aa==")))
+    expect((try Yaml.parse("true")) != (try Yaml.parse("false")))
 }
 
 @test
@@ -151,7 +151,7 @@ fn aKeyTwiceIsAnError() {
     do {
         _ = try Yaml.parse("a: 1\na: 2")
     } catch {
-        assert(error.kind == .DuplicateKey)
+        expect(error.kind == .DuplicateKey)
     }
 }
 
@@ -164,7 +164,7 @@ fn aliasesAreChecked() {
         _ = try Yaml.parseAll("--- &a 1\n--- *a\n")
         fail("an alias of another document's anchor")
     } catch {
-        assert(error.kind == .Alias)
+        expect(error.kind == .Alias)
     }
 }
 
@@ -180,11 +180,11 @@ fn aBillionLaughsAreRefused() throws {
         _ = try Yaml.parse(text)
         fail("a billion laughs")
     } catch {
-        assert(error.kind == .TooManyAliases)
+        expect(error.kind == .TooManyAliases)
         assertEqual(error.line, 5)
     }
     // As a mapping's values and keys, and by doubling.
-    assert((try? Yaml.parse("a: &a {x: 1}\n" + doubled(40))) == none)
+    expect((try? Yaml.parse("a: &a {x: 1}\n" + doubled(40))) == none)
     let few = YamlOptions(maxAliasExpansion: 6)
     assertEqual((try Yaml.parse("- &a [1, 2]\n- *a\n- *a\n", few)).count, 3)
     assertEqual(failure("- &a [1, 2]\n- *a\n- *a\n- *a\n- *a\n", few), "line 5, column 3: the document's aliases stand for more than 6 nodes")
@@ -214,18 +214,18 @@ fn aliasesNestNoDeeperThanAllowed() {
         _ = try Yaml.parse(text)
         fail("aliases nested 300 deep")
     } catch {
-        assert(error.kind == .TooDeep)
+        expect(error.kind == .TooDeep)
         assertEqual(error.line, 256)
     }
 }
 
 @test
 fn oneDocumentOrAll() throws {
-    assert((try Yaml.parse("# nothing\n")).isNull)
+    expect((try Yaml.parse("# nothing\n")).isNull)
     assertEqual(failure("a\n---\nb"), "line 2, column 1: a second document, where one is read: 'parseAll' reads them all")
     let all = try Yaml.parseAll("a\n---\n- b\n...\n---\n")
     assertEqual(all.count, 3)
-    assert(all[2].isNull)
+    expect(all[2].isNull)
     assertEqual(try Yaml.printAll(all), "a\n---\n- b\n---\n")
     assertEqual((try Yaml.parseAll("")).count, 0)
     let bytes: U8[>..] = [0xFF, 0xFE, 0x61, 0]
@@ -250,10 +250,10 @@ fn pathologicalTreesAreMadeInLinearTime() throws {
 fn anyTreeIsAFormatOfItsOwn() throws {
     let node = try Yaml.parse("a: [1, -2, 18446744073709551615, 1.5, true, null, x]\nb: {c: !!binary aGk=}\n")
     assertEqual(try Json.encode(node), "{\"a\":[1,-2,18446744073709551615,1.5,true,null,\"x\"],\"b\":{\"c\":\"aGk=\"}}")
-    assert((try Yaml.decode(YamlNode.self, from: try Yaml.encode(node))) == node)
+    expect((try Yaml.decode(YamlNode.self, from: try Yaml.encode(node))) == node)
     let json = try Json.decode(YamlNode.self, from: "{\"a\":[1,2.5,\"no\",null,false,18446744073709551615]}")
     assertEqual(try Yaml.encode(json), "a:\n  - 1\n  - 2.5\n  - \"no\"\n  - null\n  - false\n  - 18446744073709551615\n")
     for text in ["[a]: 1", "!!binary '?'", "18446744073709551616"] {
-        assert((try? Json.encode(try! Yaml.parse(text))) == none, text)
+        require((try? Json.encode(try! Yaml.parse(text))) == none, text)
     }
 }

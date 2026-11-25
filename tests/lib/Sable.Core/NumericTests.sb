@@ -53,7 +53,7 @@ fn signedNumericNegates() {
     assertEqual(opposite(5), -5)
     assertEqual(opposite(-1.5), 1.5)
     assertEqual(opposite(7 as I8), -7)
-    assert(opposite(0.0).isSignMinus, "the opposite of +0 is -0")
+    expect(opposite(0.0).isSignMinus, "the opposite of +0 is -0")
 }
 
 @test(traps: "integer overflow")

@@ -56,41 +56,41 @@ fn caseFoldingMakesCaseVariantsTheSame() {
 
 @test
 fn equalityIgnoringCase() {
-    assert("Hello".equals("hELLO", ignoringCase: true), "ASCII")
-    assert("ΟΔΟΣ".equals("οδος", ignoringCase: true), "Greek, with a final sigma")
-    assert("\u{212A}elvin".equals("kelvin", ignoringCase: true), "the Kelvin sign")
-    assert(!"Hello".equals("hELLO", ignoringCase: false), "with case")
-    assert("Hello".equals("Hello", ignoringCase: false), "the same")
-    assert(!"Hello".equals("Hell", ignoringCase: true), "a prefix is not equal")
+    expect("Hello".equals("hELLO", ignoringCase: true), "ASCII")
+    expect("ΟΔΟΣ".equals("οδος", ignoringCase: true), "Greek, with a final sigma")
+    expect("\u{212A}elvin".equals("kelvin", ignoringCase: true), "the Kelvin sign")
+    expect(!"Hello".equals("hELLO", ignoringCase: false), "with case")
+    expect("Hello".equals("Hello", ignoringCase: false), "the same")
+    expect(!"Hello".equals("Hell", ignoringCase: true), "a prefix is not equal")
 }
 
 @test
 fn comparingWithNoOptionsIsByScalar() {
-    assert("abc".compare("abd", options: []) == .Less, "c before d")
-    assert("b".compare("abc", options: []) == .Greater, "b after a")
+    expect("abc".compare("abd", options: []) == .Less, "c before d")
+    expect("b".compare("abc", options: []) == .Greater, "b after a")
     assertEqual("same".compare("same", options: []), .Equal)
 }
 
 @test
 fn comparingIgnoringCase() {
-    assert("ABC".compare("abd", options: .IgnoringCase) == .Less, "c before d")
+    expect("ABC".compare("abd", options: .IgnoringCase) == .Less, "c before d")
     assertEqual("ABC".compare("abc", options: .IgnoringCase), .Equal)
-    assert("abc".compare("AB", options: .IgnoringCase) == .Greater, "longer after")
-    assert("ab".compare("ABC", options: .IgnoringCase) == .Less, "shorter before")
+    expect("abc".compare("AB", options: .IgnoringCase) == .Greater, "longer after")
+    expect("ab".compare("ABC", options: .IgnoringCase) == .Less, "shorter before")
 }
 
 @test
 fn comparingNumerically() {
-    assert("file9".compare("file10", options: .Numeric) == .Less, "9 before 10")
-    assert("file9".compare("file10", options: []) == .Greater, "but '9' after '1'")
+    expect("file9".compare("file10", options: .Numeric) == .Less, "9 before 10")
+    expect("file9".compare("file10", options: []) == .Greater, "but '9' after '1'")
     assertEqual("file007".compare("file7", options: .Numeric), .Equal)
-    assert("file10b".compare("file10a", options: .Numeric) == .Greater, "the rest decides")
-    assert("v2.10".compare("v2.9", options: .Numeric) == .Greater, "each run of digits")
-    assert("12".compare("13", options: .Numeric) == .Less, "equal lengths, digit by digit")
-    assert("0".compare("00", options: .Numeric) == .Equal, "zeros are zero")
+    expect("file10b".compare("file10a", options: .Numeric) == .Greater, "the rest decides")
+    expect("v2.10".compare("v2.9", options: .Numeric) == .Greater, "each run of digits")
+    expect("12".compare("13", options: .Numeric) == .Less, "equal lengths, digit by digit")
+    expect("0".compare("00", options: .Numeric) == .Equal, "zeros are zero")
 }
 
 @test
 fn comparingNumericallyAndIgnoringCase() {
-    assert("FILE9".compare("file10", options: [.Numeric, .IgnoringCase]) == .Less, "both at once")
+    expect("FILE9".compare("file10", options: [.Numeric, .IgnoringCase]) == .Less, "both at once")
 }

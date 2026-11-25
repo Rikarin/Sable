@@ -59,7 +59,7 @@ fn polarCoordinatesMakeTheNumberAtThatDistanceAndAngle() {
     assertParts(Complex(magnitude: inf, phase: nan), inf, 0.0)
     assertParts(Complex(magnitude: 1.0, phase: inf), nan, nan)
     let back = Complex(magnitude: z.magnitude, phase: z.phase)
-    assert((back - z).magnitude < 4.0 * F64.epsilon)
+    expect((back - z).magnitude < 4.0 * F64.epsilon)
 }
 
 @test
@@ -91,11 +91,11 @@ fn thePhaseIsAtan2OfTheParts() {
 
 @test
 fn finitenessAndZeroLookAtBothParts() {
-    assert(Complex(1.0, 2.0).isFinite)
-    assert(!Complex(1.0, inf).isFinite)
-    assert(!Complex(nan, 0.0).isFinite)
-    assert(Complex(-0.0, 0.0).isZero)
-    assert(!Complex(0.0, 1e-300).isZero)
+    expect(Complex(1.0, 2.0).isFinite)
+    expect(!Complex(1.0, inf).isFinite)
+    expect(!Complex(nan, 0.0).isFinite)
+    expect(Complex(-0.0, 0.0).isZero)
+    expect(!Complex(0.0, 1e-300).isZero)
 }
 
 // Arithmetic.
@@ -130,8 +130,8 @@ fn productsMultiplyMagnitudesAndAddPhases() {
 @test
 fn aProductTooLargeIsThePointAtInfinity() {
     let big = Complex(1e200, 1e200)
-    assert(!(big * big).isFinite)
-    assert(big * big == Complex<F64>.infinity)
+    expect(!(big * big).isFinite)
+    expect(big * big == Complex<F64>.infinity)
 }
 
 @test
@@ -161,7 +161,7 @@ fn quotientsNeitherOverflowNorUnderflowOnTheWay() {
     assertWithin(subnormal.imaginary, -0.6, ulps: 1)
     let large = Complex(6e307, 8e307) / Complex(3e307, 4e307)
     assertWithin(large.real, 2.0, ulps: 1)
-    assert(large.imaginary.abs() < 1e-15)
+    expect(large.imaginary.abs() < 1e-15)
     let narrow = Complex(1e30 as F32, 1e30) / Complex(1e30, -1e30)
     assertWithin(narrow.imaginary, 1.0, ulps: 1)
     let narrowSubnormal = Complex(2e-40 as F32, 0.0) / Complex(0.0, 2e-40)
@@ -175,17 +175,17 @@ fn quotientsNeitherOverflowNorUnderflowOnTheWay() {
     let tiny = Complex(1.0, 1.0) / Complex(1e300, 1e300)
     assertWithin(tiny.real, 1e-300, ulps: 1)
     assertParts(Complex(1e-300, 0.0) / Complex(1e300, 0.0), 0.0, 0.0)
-    assert(!(Complex(1e300, 0.0) / Complex(1e-300, 0.0)).isFinite)
+    expect(!(Complex(1e300, 0.0) / Complex(1e-300, 0.0)).isFinite)
 }
 
 @test
 fn dividingByZeroOrInfinityGivesInfinityZeroOrNaN() {
-    assert(Complex(1.0, 0.0) / Complex<F64>.zero == Complex<F64>.infinity)
+    expect(Complex(1.0, 0.0) / Complex<F64>.zero == Complex<F64>.infinity)
     assertParts(Complex(1.0, 2.0) / Complex(inf, 0.0), 0.0, 0.0)
-    assert(Complex(inf, 0.0) / Complex(1.0, 0.0) == Complex<F64>.infinity)
-    assert((Complex<F64>.zero / Complex<F64>.zero).real.isNaN)
-    assert((Complex(inf, 0.0) / Complex(nan, 0.0)).real.isNaN)
-    assert((Complex(nan, 0.0) / Complex<F64>.zero).real.isNaN)
+    expect(Complex(inf, 0.0) / Complex(1.0, 0.0) == Complex<F64>.infinity)
+    expect((Complex<F64>.zero / Complex<F64>.zero).real.isNaN)
+    expect((Complex(inf, 0.0) / Complex(nan, 0.0)).real.isNaN)
+    expect((Complex(nan, 0.0) / Complex<F64>.zero).real.isNaN)
 }
 
 @test
@@ -193,72 +193,72 @@ fn genericNumericCodeTakesComplexNumbers() {
     let values = [Complex(1.0, 1.0), Complex(0.0, 2.0)]
     assertParts(sumOfSquares(values), -4.0, 2.0)
     assertParts(negated(Complex(1.0, -1.0)), -1.0, 1.0)
-    assert(power(Complex<F64>.i, 2) == Complex(-1.0, 0.0))
+    expect(power(Complex<F64>.i, 2) == Complex(-1.0, 0.0))
 }
 
 // Equality and hashing.
 
 @test
 fn equalNumbersHaveEqualPartsAZeroOfEitherSign() {
-    assert(Complex(1.0, 2.0) == Complex(1.0, 2.0))
-    assert(Complex(1.0, 2.0) != Complex(1.0, -2.0))
-    assert(Complex(0.0, 0.0) == Complex(-0.0, -0.0))
-    assert(Complex(1.0 as F32, 2.0) == Complex(1.0, 2.0))
+    expect(Complex(1.0, 2.0) == Complex(1.0, 2.0))
+    expect(Complex(1.0, 2.0) != Complex(1.0, -2.0))
+    expect(Complex(0.0, 0.0) == Complex(-0.0, -0.0))
+    expect(Complex(1.0 as F32, 2.0) == Complex(1.0, 2.0))
 }
 
 @test
 fn everyNonFiniteNumberIsTheOnePointAtInfinity() {
     let nanReal = Complex(nan, 1.0)
-    assert(nanReal == nanReal)
-    assert(nanReal == Complex(2.0, -inf))
-    assert(Complex(inf, 0.0) == Complex(-inf, nan))
-    assert(Complex(inf, 0.0) != Complex(1e308, 0.0))
-    assert(Complex(1.0, 0.0) != Complex(nan, 0.0))
+    expect(nanReal == nanReal)
+    expect(nanReal == Complex(2.0, -inf))
+    expect(Complex(inf, 0.0) == Complex(-inf, nan))
+    expect(Complex(inf, 0.0) != Complex(1e308, 0.0))
+    expect(Complex(1.0, 0.0) != Complex(nan, 0.0))
 }
 
 @test
 fn equalNumbersHashAlike() {
-    assert(Complex(0.0, -0.0).hashValue == Complex<F64>.zero.hashValue)
-    assert(Complex(nan, 3.0).hashValue == Complex<F64>.infinity.hashValue)
-    assert(Complex(1.0, 2.0).hashValue == Complex(1.0, 2.0).hashValue)
-    assert(Complex(1.0, 2.0).hashValue != Complex(2.0, 1.0).hashValue)
+    expect(Complex(0.0, -0.0).hashValue == Complex<F64>.zero.hashValue)
+    expect(Complex(nan, 3.0).hashValue == Complex<F64>.infinity.hashValue)
+    expect(Complex(1.0, 2.0).hashValue == Complex(1.0, 2.0).hashValue)
+    expect(Complex(1.0, 2.0).hashValue != Complex(2.0, 1.0).hashValue)
     var seen: [Complex<F64>: Int] = [:]
     seen[Complex(1.0, 2.0)] = 1
     seen[Complex(1.0, 2.0)] = 2
     seen[Complex(nan, 0.0)] = 3
     seen[Complex(0.0, inf)] = 4
-    assert(seen.count == 2 && seen[Complex(-inf, 1.0)] == 4)
+    expect(seen.count == 2 && seen[Complex(-inf, 1.0)] == 4)
 }
 
 // Text.
 
 @test
 fn aNumberIsWrittenAsItsPartsWithTheImaginaryOnesSign() {
-    assert("\(Complex(1.5, -2.0))" == "1.5 - 2.0i")
-    assert("\(Complex(1.5, 2.0))" == "1.5 + 2.0i")
-    assert("\(Complex(-1.0, -0.0))" == "-1.0 - 0.0i")
-    assert("\(Complex(0.5 as F32, 0.25))" == "0.5 + 0.25i")
-    assert("\(Complex(inf, nan))" == "inf + nani")
+    expect("\(Complex(1.5, -2.0))" == "1.5 - 2.0i")
+    expect("\(Complex(1.5, 2.0))" == "1.5 + 2.0i")
+    expect("\(Complex(-1.0, -0.0))" == "-1.0 - 0.0i")
+    expect("\(Complex(0.5 as F32, 0.25))" == "0.5 + 0.25i")
+    expect("\(Complex(inf, nan))" == "inf + nani")
 }
 
 @test
 fn theSpecAppliesToEachPartAndTheWidthToTheWhole() {
     let z = Complex(1.0, -2.5)
-    assert("\(z:.2)" == "1.00 - 2.50i")
-    assert("\(z:+)" == "+1.0 - 2.5i")
-    assert("\(z:e)" == "1e+00 - 2.5e+00i")
-    assert("[\(z:>12)]" == "[  1.0 - 2.5i]")
-    assert("[\(z:<12)]" == "[1.0 - 2.5i  ]")
-    assert("[\(z:*^14)]" == "[**1.0 - 2.5i**]")
-    assert("[\(z:012)]" == "[  1.0 - 2.5i]")
+    expect("\(z:.2)" == "1.00 - 2.50i")
+    expect("\(z:+)" == "+1.0 - 2.5i")
+    expect("\(z:e)" == "1e+00 - 2.5e+00i")
+    expect("[\(z:>12)]" == "[  1.0 - 2.5i]")
+    expect("[\(z:<12)]" == "[1.0 - 2.5i  ]")
+    expect("[\(z:*^14)]" == "[**1.0 - 2.5i**]")
+    expect("[\(z:012)]" == "[  1.0 - 2.5i]")
 }
 
 @test
 fn debugWritesTheNumberAsSourceWould() {
-    assert(Complex(1.0, -2.0).debugDescription() == "Complex(1.0, -2.0)")
-    assert("\(Complex(1.0, 0.5):?)" == "Complex(1.0, 0.5)")
-    assert("[\(Complex(1.0, 0.5):>20?)]" == "[   Complex(1.0, 0.5)]")
-    assert(Complex(2.0 as F32, 0.0).debugDescription() == "Complex(2.0, 0.0)")
+    expect(Complex(1.0, -2.0).debugDescription() == "Complex(1.0, -2.0)")
+    expect("\(Complex(1.0, 0.5):?)" == "Complex(1.0, 0.5)")
+    expect("[\(Complex(1.0, 0.5):>20?)]" == "[   Complex(1.0, 0.5)]")
+    expect(Complex(2.0 as F32, 0.0).debugDescription() == "Complex(2.0, 0.0)")
 }
 
 @test
@@ -288,7 +288,7 @@ fn parsingTakesEitherPartAloneWithOrWithoutSpaces() {
     assertParts(try! Complex<F64>.parse("1. - 2.i"), 1.0, -2.0)
     let special = try! Complex<F64>.parse("inf - nani")
     assertSame(special.real, inf)
-    assert(special.imaginary.isNaN)
+    expect(special.imaginary.isNaN)
 }
 
 @test
@@ -296,27 +296,27 @@ fn parsingSaysWhatIsWrongAndWhere() {
     for blank in ["", "   "] {
         do {
             _ = try Complex<F64>.parse(blank)
-            assert(false, "parsed")
+            fail("parsed")
         } catch {
-            assert(error == .Empty)
+            require(error == .Empty)
         }
     }
     do {
         _ = try Complex<F64>.parse("1 + 2xi")
-        assert(false, "parsed")
+        fail("parsed")
     } catch {
-        assert(error == .InvalidDigit(at: 5) || error == .Invalid(at: 5), "\(error.description())")
+        expect(error == .InvalidDigit(at: 5) || error == .Invalid(at: 5), "\(error.description())")
     }
     do {
         _ = try Complex<F64>.parse("1x + 2i")
-        assert(false, "parsed")
+        fail("parsed")
     } catch {
-        assert(error == .InvalidDigit(at: 1) || error == .Invalid(at: 1), "\(error.description())")
+        expect(error == .InvalidDigit(at: 1) || error == .Invalid(at: 1), "\(error.description())")
     }
     do {
         _ = try Complex<F64>.parse("j")
-        assert(false, "parsed")
+        fail("parsed")
     } catch {
-        assert(error != .Empty)
+        expect(error != .Empty)
     }
 }

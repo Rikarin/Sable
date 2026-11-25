@@ -9,9 +9,9 @@ import Sable.Testing
 @test
 fn aStatusOfZeroIsASuccess() {
     let status = ExitStatus(code: 0)
-    assert(status.success)
-    assert(status.code == 0)
-    assert(status.signal == none)
+    expect(status.success)
+    expect(status.code == 0)
+    expect(status.signal == none)
     assertEqual(status.shellStatus, 0)
     assertEqual(status.description(), "exit status 0")
 }
@@ -19,24 +19,24 @@ fn aStatusOfZeroIsASuccess() {
 @test
 fn anyOtherStatusIsNot() {
     let status = ExitStatus(code: 3)
-    assert(!status.success)
+    expect(!status.success)
     assertEqual(status.shellStatus, 3)
 }
 
 @test
 fn oneASignalEndedHasNoCode() {
     let status = ExitStatus(signal: .Terminate)
-    assert(!status.success)
-    assert(status.code == none)
-    assert(status.signal! == Signal.Terminate)
+    expect(!status.success)
+    expect(status.code == none)
+    expect(status.signal! == Signal.Terminate)
     assertEqual(status.shellStatus, 143)
     assertEqual(status.description(), "signal TERM")
 }
 
 @test
 fn endingWithTheShellsStatusIsNotEndingByTheSignal() {
-    assert(ExitStatus(code: 143) != ExitStatus(signal: .Terminate))
-    assert(ExitStatus(signal: .Kill) == ExitStatus(signal: .Kill))
-    assert(ExitStatus(code: 1) == ExitStatus(code: 1))
-    assert(ExitStatus(code: 1) != ExitStatus(code: 2))
+    expect(ExitStatus(code: 143) != ExitStatus(signal: .Terminate))
+    expect(ExitStatus(signal: .Kill) == ExitStatus(signal: .Kill))
+    expect(ExitStatus(code: 1) == ExitStatus(code: 1))
+    expect(ExitStatus(code: 1) != ExitStatus(code: 2))
 }

@@ -30,8 +30,8 @@ fn aTagIsItsBytes() {
 @test
 fn aTagMatchesWhateverIsInIt() {
     let tag = AsnTag.context(3)
-    assert(tag.matches(tag.asConstructed()) && tag != tag.asConstructed())
-    assert(!tag.matches(.application(3)) && !tag.matches(.context(4)))
+    expect(tag.matches(tag.asConstructed()) && tag != tag.asConstructed())
+    expect(!tag.matches(.application(3)) && !tag.matches(.context(4)))
     assertEqual(tag.asConstructed().asPrimitive(), tag)
 }
 

@@ -9,8 +9,8 @@ import Sable.Testing
 @test
 fn aCapturedBacktraceHasFrames() {
     let trace = Backtrace.capture()
-    assert(!trace.isEmpty, "a native program has frames")
-    assert(trace.frames.count > 1)
+    expect(!trace.isEmpty, "a native program has frames")
+    expect(trace.frames.count > 1)
 }
 
 @test
@@ -48,6 +48,6 @@ fn whetherABacktraceIsWantedIsSABLE_BACKTRACEs() {
 @test
 fn anEmptyBacktraceSaysSo() {
     let trace = Backtrace { frames: [] }
-    assert(trace.isEmpty)
+    expect(trace.isEmpty)
     assertEqual(trace.description(), "<no frames>")
 }

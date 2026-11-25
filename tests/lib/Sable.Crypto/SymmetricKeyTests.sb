@@ -21,15 +21,15 @@ fn message(_ count: Int) -> U8[>..] {
 fn aKeyKeepsItsBytes() {
     let key = SymmetricKey(message(37))
     assertEqual(key.byteCount, 37)
-    assert(key.bytes() == message(37))
+    expect(key.bytes() == message(37))
     assertEqual(SymmetricKey([]).byteCount, 0)
     assertEqual(SymmetricKey([]).bytes().count, 0)
 }
 
 @test
 fn keysAreEqualWhenTheirBytesAre() {
-    assert(SymmetricKey(message(20)) == SymmetricKey(message(20)))
-    assert(SymmetricKey(message(20)) != SymmetricKey(message(21)))
+    expect(SymmetricKey(message(20)) == SymmetricKey(message(20)))
+    expect(SymmetricKey(message(20)) != SymmetricKey(message(21)))
     var i = 0
     while i < 20 {
         var other = message(20)
@@ -49,6 +49,6 @@ fn printingAKeySaysOnlyHowLongItIs() {
 
 @test
 fn randomKeysDiffer() {
-    assert(SymmetricKey.random(byteCount: 32) != SymmetricKey.random(byteCount: 32))
+    expect(SymmetricKey.random(byteCount: 32) != SymmetricKey.random(byteCount: 32))
     assertEqual(SymmetricKey.random(byteCount: 0).byteCount, 0)
 }

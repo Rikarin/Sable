@@ -64,11 +64,11 @@ fn rangesStepsAndLists() {
 fn monthsAndWeekdaysHaveNames() {
     assertEqual(utc("0 0 1 FEB *", "2026-05-01T00:00:00Z"), "2027-02-01T00:00:00Z")
     assertEqual(utc("0 12 * jan-mar Sat", "2026-05-01T00:00:00Z"), "2027-01-02T12:00:00Z")
-    assert(try! CronExpression.parse("0 0 * * sun") == CronExpression.parse("0 0 * * 7"))
-    assert(try! CronExpression.parse("0 0 * * 0") == CronExpression.parse("0 0 * * 7"))
-    assert(try! CronExpression.parse("0 0 * * sat-sun") == CronExpression.parse("0 0 * * 6,0"))
-    assert(try! CronExpression.parse("0 0 * * 5-7") == CronExpression.parse("0 0 * * fri,sat,sun"))
-    assert(!(try! CronExpression.parse("0 0 * * 1") == CronExpression.parse("0 0 * * 2")))
+    expect(try! CronExpression.parse("0 0 * * sun") == CronExpression.parse("0 0 * * 7"))
+    expect(try! CronExpression.parse("0 0 * * 0") == CronExpression.parse("0 0 * * 7"))
+    expect(try! CronExpression.parse("0 0 * * sat-sun") == CronExpression.parse("0 0 * * 6,0"))
+    expect(try! CronExpression.parse("0 0 * * 5-7") == CronExpression.parse("0 0 * * fri,sat,sun"))
+    expect(!(try! CronExpression.parse("0 0 * * 1") == CronExpression.parse("0 0 * * 2")))
 }
 
 @test
@@ -100,7 +100,7 @@ fn theShorthands() {
 
 @test
 fn blanksBetweenFieldsMayBeAny() {
-    assert(try! CronExpression.parse("  0\t0  * * *  ") == CronExpression.parse("0 0 * * *"))
+    expect(try! CronExpression.parse("  0\t0  * * *  ") == CronExpression.parse("0 0 * * *"))
 }
 
 @test

@@ -50,14 +50,14 @@ fn aTagThatIsNoneIsRefusedWhereItIsWrong() {
 @test
 fn aLocaleNamesItsParts() {
     let locale = Locale.of("zh-Hant-TW-u-nu-hanidec")!
-    assert(locale.language == "zh" && locale.script! == "Hant" && locale.region! == "TW")
-    assert(locale.keyword("nu")! == "hanidec" && locale.keyword("ca") == none)
+    expect(locale.language == "zh" && locale.script! == "Hant" && locale.region! == "TW")
+    expect(locale.keyword("nu")! == "hanidec" && locale.keyword("ca") == none)
     assertEqual("\(locale)", "zh-Hant-TW-u-nu-hanidec")
     assertEqual("[\(Locale.of("en")!:>4)]", "[  en]")
     assertEqual("\(locale:?)", "Locale.of(\"zh-Hant-TW-u-nu-hanidec\")")
     assertEqual(locale.toString(), locale.tag)
     let same: [Locale: Int] = [Locale.of("EN-us")!: 1]
-    assert(same[Locale.of("en-US")!]! == 1)
+    expect(same[Locale.of("en-US")!]! == 1)
 }
 
 @test
@@ -73,7 +73,7 @@ fn aLocaleWithNoDataOfItsOwnHasItsAncestors() {
     for tag in Locale.available {
         assertEqual(Locale.of(tag)!.dataLocale, tag)
     }
-    assert(Locale.available.count > 50)
+    expect(Locale.available.count > 50)
 }
 
 @test
@@ -84,7 +84,7 @@ fn aPosixNameIsALocale() {
     assertEqual(Locale.fromPosix("sr@cyrillic")!.tag, "sr-Cyrl")
     assertEqual(Locale.fromPosix("sr_Latn_RS@latin")!.tag, "sr-Latn-RS")
     assertEqual(Locale.fromPosix("POSIX")!.tag, "und")
-    assert(Locale.fromPosix("") == none && Locale.fromPosix("!") == none)
+    expect(Locale.fromPosix("") == none && Locale.fromPosix("!") == none)
 }
 
 @test
@@ -109,7 +109,7 @@ fn theCurrentLocaleIsTheEnvironments() {
         Environment.remove("LANG")
     }
     #endif
-    assert(!Locale.current.tag.isEmpty)
+    expect(!Locale.current.tag.isEmpty)
 }
 
 @test

@@ -14,7 +14,7 @@ fn everySignalIsTheOneOfItsNumber() {
         assert(Signal.of(number: signal.number) == signal)
         names.append(Signal.of(number: signal.number).name)
     }
-    assert(names == ["HUP", "INT", "QUIT", "ABRT", "KILL", "SEGV", "PIPE", "ALRM", "TERM", "USR1", "USR2", "CHLD", "CONT", "STOP", "WINCH"])
+    expect(names == ["HUP", "INT", "QUIT", "ABRT", "KILL", "SEGV", "PIPE", "ALRM", "TERM", "USR1", "USR2", "CHLD", "CONT", "STOP", "WINCH"])
 }
 
 @test
@@ -22,6 +22,6 @@ fn aNumberNoNameIsForIsItsOwn() {
     let signal = Signal.of(number: 61)
     assertEqual(signal.number, 61)
     assertEqual(signal.name, "61")
-    assert(signal == Signal.Other(number: 61))
-    assert(signal != Signal.Interrupt)
+    expect(signal == Signal.Other(number: 61))
+    expect(signal != Signal.Interrupt)
 }

@@ -15,11 +15,11 @@ fn offsetError(_ text: String) -> ParseError? {
 @test
 fn anOffsetIsAtMostADayAndTwoHours() {
     assertEqual(UtcOffset.of(seconds: 93599)!.toString(), "+25:59:59")
-    assert(UtcOffset.of(seconds: 93600) == none)
-    assert(UtcOffset.of(seconds: -93600) == none)
-    assert(UtcOffset.of(hours: 26) == none)
-    assert(UtcOffset.of(hours: 1, minutes: 60) == none)
-    assert(UtcOffset.of(hours: 1, seconds: -60) == none)
+    expect(UtcOffset.of(seconds: 93600) == none)
+    expect(UtcOffset.of(seconds: -93600) == none)
+    expect(UtcOffset.of(hours: 26) == none)
+    expect(UtcOffset.of(hours: 1, minutes: 60) == none)
+    expect(UtcOffset.of(hours: 1, seconds: -60) == none)
     assertEqual(UtcOffset.hours(30), UtcOffset.hours(25))
     assertEqual(UtcOffset.hours(-30), UtcOffset.hours(-25))
 }
@@ -35,7 +35,7 @@ fn anOffsetHasPartsWithItsSign() {
     assertEqual(offset.negated().toString(), "+03:30:15")
     assertEqual(offset.duration, Duration.seconds(-12615))
     assertEqual(UtcOffset.utc.toString(), "+00:00")
-    assert(offset < UtcOffset.utc)
+    expect(offset < UtcOffset.utc)
     assertEqual(offset.hashValue, UtcOffset.of(seconds: -12615)!.hashValue)
     assertEqual(UtcOffset.hours(5).debugDescription(), "+05:00")
 }

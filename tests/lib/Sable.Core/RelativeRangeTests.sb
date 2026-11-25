@@ -33,8 +33,8 @@ fn aRangeHeldInAVariableIsTheSameRange() {
     let end = ^1
     let r = 1..<end
     assertEqual(r, 1..<^1)
-    assert(r != 1...^1)
-    assert(r != ^1..<^1)
+    expect(r != 1...^1)
+    expect(r != ^1..<^1)
     let positions = r.relative(to: [1, 2, 3, 4])
     assertEqual(positions.lowerBound, 1)
     assertEqual(positions.upperBound, 3)
@@ -43,14 +43,14 @@ fn aRangeHeldInAVariableIsTheSameRange() {
 @test
 fn anArrayIsSlicedFromTheEnd() {
     let xs = [1, 2, 3, 4, 5]
-    assert(xs[1..<^1] == [2, 3, 4])
-    assert(xs[^3...] == [3, 4, 5])
-    assert(xs[^2...^1] == [4, 5])
-    assert(xs[..<^3] == [1, 2])
-    assert(xs[...^2] == [1, 2, 3, 4])
-    assert(xs[^5..<2] == [1, 2])
-    assert(xs[0..<^0] == xs[0...])
-    assert(xs[^0...] == [])
+    expect(xs[1..<^1] == [2, 3, 4])
+    expect(xs[^3...] == [3, 4, 5])
+    expect(xs[^2...^1] == [4, 5])
+    expect(xs[..<^3] == [1, 2])
+    expect(xs[...^2] == [1, 2, 3, 4])
+    expect(xs[^5..<2] == [1, 2])
+    expect(xs[0..<^0] == xs[0...])
+    expect(xs[^0...] == [])
 }
 
 @test

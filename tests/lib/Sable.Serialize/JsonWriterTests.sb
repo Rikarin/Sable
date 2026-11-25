@@ -133,12 +133,7 @@ fn numbersAreWrittenInFull() throws {
     let back = itemsOf(try parse(writer.toString()))
     assertEqual(back.map({ asNumber($0)! }), [0.1, -2.5, 1e300, 5e-324, 3.0])
     for value in [F64.nan, F64.infinity, -F64.infinity] {
-        do {
-            try writer.writeFloat(value)
-            fail("\(value) was written")
-        } catch {
-            assertEqual(error.description(), "$: JSON has no \(value)")
-        }
+        expectThrows(saying: "$: JSON has no \(value)") { try writer.writeFloat(value) }
     }
 }
 

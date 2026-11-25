@@ -148,17 +148,17 @@ fn transcodingByExample() {
     var units: U16[>..] = []
     let cut: U8[>..] = [0x68, 0x69, 0xF0, 0x9F]
     let (status, read) = Utf8.toUtf16(cut, into: &units, isFinalBlock: false)
-    assert(status == .NeedMoreData && read == 2)
+    expect(status == .NeedMoreData && read == 2)
     let (finalStatus, finalRead) = Utf8.toUtf16(cut, into: &units, replacingInvalid: false)
-    assert(finalStatus == .InvalidData && finalRead == 2)
+    expect(finalStatus == .InvalidData && finalRead == 2)
     var bytes: U8[>..] = []
     let lone: U16[>..] = [0x41, 0xD800]
     let (pairStatus, pairRead) = Utf8.fromUtf16(lone, into: &bytes, isFinalBlock: false)
-    assert(pairStatus == .NeedMoreData && pairRead == 1)
+    expect(pairStatus == .NeedMoreData && pairRead == 1)
     var decoder = Utf16Decoder()
     assertEqual(decoder.decode(lone), "A")
     assertEqual(decoder.finish(), "\u{FFFD}")
-    assert(decoder.sawInvalid)
+    expect(decoder.sawInvalid)
     assertEqual(decoder.finish(), "")
 }
 
@@ -191,24 +191,24 @@ fn assertConverts(_ scalars: Char[:]) {
     padded.append(0xF0)
     var gotUnits: U16[>..] = [7]
     let toUnits = Utf8.toUtf16(padded[1..<(bytes.count + 1)], into: &gotUnits)
-    assert(toUnits.status == .Done && toUnits.read == bytes.count)
-    assert(gotUnits[1...] == units && gotUnits[0] == 7)
+    expect(toUnits.status == .Done && toUnits.read == bytes.count)
+    expect(gotUnits[1...] == units && gotUnits[0] == 7)
 
     var paddedUnits: U16[>..] = [0xD800]
     paddedUnits.append(contentsOf: units)
     paddedUnits.append(0xDC00)
     var gotBytes: U8[>..] = [9]
     let toBytes = Utf8.fromUtf16(paddedUnits[1..<(units.count + 1)], into: &gotBytes)
-    assert(toBytes.status == .Done && toBytes.read == units.count)
-    assert(gotBytes[1...] == bytes && gotBytes[0] == 9)
+    expect(toBytes.status == .Done && toBytes.read == units.count)
+    expect(gotBytes[1...] == bytes && gotBytes[0] == 9)
 
     let text = try! String.fromUtf8(bytes)
-    assert(text.utf16Units() == units)
+    expect(text.utf16Units() == units)
     assertEqual(text.utf16Count, units.count)
     assertEqual(text.utf32Units().count, scalars.count)
-    assert(try! String.fromUtf16(units) == text)
-    assert(String.fromUtf16Lossy(units) == text)
-    assert(Utf16.isValid(units))
+    expect(try! String.fromUtf16(units) == text)
+    expect(String.fromUtf16Lossy(units) == text)
+    expect(Utf16.isValid(units))
     var latin = true
     for scalar in scalars {
         latin = latin && scalar.codePoint < 0x100
@@ -216,7 +216,7 @@ fn assertConverts(_ scalars: Char[:]) {
     let latinBytes = text.latin1Bytes()
     assertEqual(latinBytes != none, latin)
     if latin {
-        assert(String.fromLatin1(latinBytes!) == text)
+        expect(String.fromLatin1(latinBytes!) == text)
     }
 }
 

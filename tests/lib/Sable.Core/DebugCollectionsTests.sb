@@ -86,7 +86,7 @@ fn anInterpolationIsWrittenInPieces() {
     assertEqual(writer.text, "total: 42 items,    42!")
     writeTotal(&writer, 255)
     assertEqual(writer.count, 10)
-    assert(writer.text.hasSuffix("n=0255 [ff]"))
+    expect(writer.text.hasSuffix("n=0255 [ff]"))
     var text = ""
     text.write("a\(1)b\(true)")
     assertEqual(text, "a1btrue")

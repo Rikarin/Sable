@@ -34,10 +34,10 @@ fn failure<T>(_ body: () throws(Broken) -> T) -> Int? {
 
 @test
 fn mapAndFilterGiveWhatTheyGiveOverAnArray() throws {
-    assert(try numbers(upTo: 4).map { $0 * 10 } == [10, 20, 30, 40])
-    assert(try numbers(upTo: 4).filter { $0 % 2 == 0 } == [2, 4])
-    assert(try numbers(upTo: 4).compactMap { $0 > 2 ? $0 : none } == [3, 4])
-    assert(try numbers(upTo: 2).flatMap { [$0, $0] } == [1, 1, 2, 2])
+    expect(try numbers(upTo: 4).map { $0 * 10 } == [10, 20, 30, 40])
+    expect(try numbers(upTo: 4).filter { $0 % 2 == 0 } == [2, 4])
+    expect(try numbers(upTo: 4).compactMap { $0 > 2 ? $0 : none } == [3, 4])
+    expect(try numbers(upTo: 2).flatMap { [$0, $0] } == [1, 1, 2, 2])
 }
 
 @test
@@ -53,10 +53,10 @@ fn anErrorPartWayIsTheCalls() {
 @test
 fn anAlgorithmThatStopsEarlyNeverReachesTheError() throws {
     assertEqual(try numbers(upTo: 9, failAt: 5).first(where: { $0 == 2 }), 2)
-    assert(try numbers(upTo: 9, failAt: 5).contains(where: { $0 == 3 }))
-    assert(!(try numbers(upTo: 9, failAt: 5).allSatisfy { $0 > 1 }))
-    assert(try numbers(upTo: 9, failAt: 5).prefix(3) == [1, 2, 3])
-    assert(try numbers(upTo: 9, failAt: 5).prefix(while: { $0 < 3 }) == [1, 2])
+    expect(try numbers(upTo: 9, failAt: 5).contains(where: { $0 == 3 }))
+    expect(!(try numbers(upTo: 9, failAt: 5).allSatisfy { $0 > 1 }))
+    expect(try numbers(upTo: 9, failAt: 5).prefix(3) == [1, 2, 3])
+    expect(try numbers(upTo: 9, failAt: 5).prefix(while: { $0 < 3 }) == [1, 2])
 }
 
 @test
@@ -66,34 +66,34 @@ fn reductionsAndOrderingRethrow() throws {
     assertEqual(try numbers(upTo: 4).product(), 24)
     assertEqual(try numbers(upTo: 4).max(), 4)
     assertEqual(try numbers(upTo: 4).min(by: { $0 > $1 }), 4)
-    assert(try numbers(upTo: 3).sorted(by: { $0 > $1 }) == [3, 2, 1])
-    assert(try numbers(upTo: 5).dropFirst(3) == [4, 5])
-    assert(try numbers(upTo: 5).suffix(2) == [4, 5])
+    expect(try numbers(upTo: 3).sorted(by: { $0 > $1 }) == [3, 2, 1])
+    expect(try numbers(upTo: 5).dropFirst(3) == [4, 5])
+    expect(try numbers(upTo: 5).suffix(2) == [4, 5])
     assertEqual(try numbers(upTo: 5).chunks(of: 2).count, 3)
-    assert(try numbers(upTo: 3).elementsEqual([1, 2, 3]))
-    assert(try numbers(upTo: 3).starts(with: [1, 2]))
-    assert(try numbers(upTo: 3).contains(2))
+    expect(try numbers(upTo: 3).elementsEqual([1, 2, 3]))
+    expect(try numbers(upTo: 3).starts(with: [1, 2]))
+    expect(try numbers(upTo: 3).contains(2))
 }
 
 @test
 fn collectingThrowsWhatGoingThroughThrows() throws {
     let all: Int[>..] = try numbers(upTo: 3).collect()
-    assert(all == [1, 2, 3])
+    expect(all == [1, 2, 3])
     let made: Int[>..] = try numbers(upTo: 2).collect()
-    assert(made == [1, 2])
+    expect(made == [1, 2])
     assertEqual(failure {
         let partial: Int[>..] = try numbers(upTo: 3, failAt: 3).collect()
         return partial.count
     }, 3)
     var grown: Int[>..] = [0]
     try grown.append(contentsOf: numbers(upTo: 2))
-    assert(grown == [0, 1, 2])
+    expect(grown == [0, 1, 2])
 }
 
 @test
 fn aConformersInitialiserThrowsWhatGoingThroughThrows() throws {
-    assert(try Int[>..](numbers(upTo: 3)) == [1, 2, 3])
-    assert(try Int[>..<](numbers(upTo: 2)) == [1, 2])
+    expect(try Int[>..](numbers(upTo: 3)) == [1, 2, 3])
+    expect(try Int[>..<](numbers(upTo: 2)) == [1, 2])
     assertEqual(failure { try Int[>..](numbers(upTo: 3, failAt: 2)).count }, 2)
     assertEqual(failure { try Int[>..<](numbers(upTo: 3, failAt: 1)).count }, 1)
     let digits = try String(numbers(upTo: 3).map { Char.fromDigit($0)! })
@@ -110,7 +110,7 @@ fn lazyViewsThrowTheirBasesFailure() throws {
     for try n in numbers(upTo: 5).lazy.map({ $0 * 2 }).filter({ $0 > 2 }) {
         seen.append(n)
     }
-    assert(seen == [4, 6, 8, 10])
+    expect(seen == [4, 6, 8, 10])
     assertEqual(failure {
         var total = 0
         for try n in numbers(upTo: 5, failAt: 3).lazy.map({ $0 * 2 }) {
@@ -134,7 +134,7 @@ fn lazyViewsThrowTheirBasesFailure() throws {
 
 @test
 fn whatCannotFailNeedsNoTry() {
-    assert([1, 2, 3].map { $0 + 1 } == [2, 3, 4])
+    expect([1, 2, 3].map { $0 + 1 } == [2, 3, 4])
     assertEqual((1...4).reduce(0) { $0 + $1 }, 10)
-    assert(stride(from: 0, to: 6, by: 2).lazy.map { $0 + 1 }.toArray() == [1, 3, 5])
+    expect(stride(from: 0, to: 6, by: 2).lazy.map { $0 + 1 }.toArray() == [1, 3, 5])
 }

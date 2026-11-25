@@ -59,12 +59,12 @@ fn code(_ key: U8[:], _ text: String) -> String {
 fn aCodeIsValidForItsBytesAndKeyAlone() {
     let key = SymmetricKey(message(32))
     let code = Hmac<Sha256>.authenticationCode(for: message(50), using: key)
-    assert(Hmac<Sha256>.isValid(code, for: message(50), using: key))
-    assert(Hmac<Sha256>.isValid(code.bytes, for: message(50), using: key))
-    assert(!Hmac<Sha256>.isValid(code, for: message(49), using: key))
-    assert(!Hmac<Sha256>.isValid(code, for: message(50), using: SymmetricKey(message(31))))
-    assert(!Hmac<Sha256>.isValid(code.bytes[..<16], for: message(50), using: key))
-    assert(!Hmac<Sha256>.isValid([], for: message(50), using: key))
+    expect(Hmac<Sha256>.isValid(code, for: message(50), using: key))
+    expect(Hmac<Sha256>.isValid(code.bytes, for: message(50), using: key))
+    expect(!Hmac<Sha256>.isValid(code, for: message(49), using: key))
+    expect(!Hmac<Sha256>.isValid(code, for: message(50), using: SymmetricKey(message(31))))
+    expect(!Hmac<Sha256>.isValid(code.bytes[..<16], for: message(50), using: key))
+    expect(!Hmac<Sha256>.isValid([], for: message(50), using: key))
     var i = 0
     while i < 32 {
         var wrong = code.bytes
@@ -80,10 +80,10 @@ fn aCodeInPartsIsTheWholes() {
     var code = Hmac<Sha512>(key: key)
     code.update(message(300)[..<100])
     let begun = code
-    assert(code.finalize() == Hmac<Sha512>.authenticationCode(for: message(100), using: key))
+    expect(code.finalize() == Hmac<Sha512>.authenticationCode(for: message(100), using: key))
     code.update(message(300)[100...])
-    assert(code.finalize() == Hmac<Sha512>.authenticationCode(for: message(300), using: key))
-    assert(begun.finalize() == Hmac<Sha512>.authenticationCode(for: message(100), using: key))
+    expect(code.finalize() == Hmac<Sha512>.authenticationCode(for: message(300), using: key))
+    expect(begun.finalize() == Hmac<Sha512>.authenticationCode(for: message(100), using: key))
 }
 
 @test
@@ -91,14 +91,14 @@ fn aCodeInPartsIsCheckedAsItStands() {
     let key = SymmetricKey(message(40))
     var code = Hmac<Sha256>(key: key)
     code.update(message(100)[..<60])
-    assert(!code.isValid(Hmac<Sha256>.authenticationCode(for: message(100), using: key)))
+    expect(!code.isValid(Hmac<Sha256>.authenticationCode(for: message(100), using: key)))
     code.update(message(100)[60...])
     let whole = Hmac<Sha256>.authenticationCode(for: message(100), using: key)
-    assert(code.isValid(whole) && code.isValid(whole.bytes))
-    assert(!code.isValid(whole.bytes[..<31]) && !code.isValid([]))
+    expect(code.isValid(whole) && code.isValid(whole.bytes))
+    expect(!code.isValid(whole.bytes[..<31]) && !code.isValid([]))
     // Checking it leaves it as it was.
     code.update([1])
-    assert(!code.isValid(whole))
+    expect(!code.isValid(whole))
 }
 
 @test
@@ -115,6 +115,6 @@ fn keysOfEveryLengthAroundABlockMakeTheCodeTheirPaddingDoes() {
         var outer = Sha256()
         outer.update(U8[>..](pad.map { $0 ^ 0x5C }))
         outer.update(inner.finalize().bytes)
-        assert(Hmac<Sha256>.authenticationCode(for: message(20), using: SymmetricKey(message(count))) == outer.finalize())
+        require(Hmac<Sha256>.authenticationCode(for: message(20), using: SymmetricKey(message(count))) == outer.finalize())
     }
 }

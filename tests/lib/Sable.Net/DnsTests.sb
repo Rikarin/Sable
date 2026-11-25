@@ -20,31 +20,23 @@ fn thrown(_ body: async () throws(IoError) -> ()) async -> String {
 }
 
 @test
-fn localhostIsLookedUp() async {
-    do {
-        let all = try await Dns.resolve("localhost")
-        assert(!all.isEmpty)
-        for address in all {
-            assert(address.isLoopback)
-        }
-        let four = try await Dns.resolve("localhost", family: .V4, timeout: Duration.seconds(20))
-        assertEqual(four, [IpAddress.v4Loopback])
-    } catch {
-        assert(false, error.description())
+fn localhostIsLookedUp() async throws {
+    let all = try await Dns.resolve("localhost")
+    expect(!all.isEmpty)
+    for address in all {
+        assert(address.isLoopback)
     }
+    let four = try await Dns.resolve("localhost", family: .V4, timeout: Duration.seconds(20))
+    assertEqual(four, [IpAddress.v4Loopback])
 }
 
 @test
-fn anAddressIsItself() async {
-    do {
-        assertEqual(try await Dns.resolve("192.0.2.1"), [IpAddress(192, 0, 2, 1)])
-        assertEqual(try await Dns.resolve("2001:db8::1", family: .V6), [try! IpAddress.parse("2001:db8::1")])
-        assertEqual(await thrown {
-            _ = try await Dns.resolve("192.0.2.1", family: .V6)
-        }, "'192.0.2.1' has no address")
-    } catch {
-        assert(false, error.description())
-    }
+fn anAddressIsItself() async throws {
+    assertEqual(try await Dns.resolve("192.0.2.1"), [IpAddress(192, 0, 2, 1)])
+    assertEqual(try await Dns.resolve("2001:db8::1", family: .V6), [try! IpAddress.parse("2001:db8::1")])
+    assertEqual(await thrown {
+        _ = try await Dns.resolve("192.0.2.1", family: .V6)
+    }, "'192.0.2.1' has no address")
 }
 
 /// None of these reaches the resolver, which might read it as an address.
@@ -78,7 +70,7 @@ fn aLookupWithNoTimeTimesOutOrIsDone() async {
     let said = await thrown {
         _ = try await Dns.resolve("localhost", timeout: Duration.zero)
     }
-    assert(said == "" || said == "it took too long", said)
+    expect(said == "" || said == "it took too long", said)
 }
 
 @test

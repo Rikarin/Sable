@@ -185,8 +185,8 @@ fn aLimitOfNothingStillWaitsForTheBody() async {
         ended.store(true)
         return 1
     }
-    assert(value == none)
-    assert(ended.load())
+    expect(value == none)
+    expect(ended.load())
 }
 
 @test
@@ -198,7 +198,7 @@ fn limitsNestAndFollowEachOther() async {
         }
         return sum
     }
-    assert(total == 1225)
+    expect(total == 1225)
 }
 
 @test
@@ -211,7 +211,7 @@ fn aCancelledWaitWithALimitGivesWhatTheBodyGave() async {
     }
     await Task.yield()
     outer.cancel()
-    assert(await outer.value == true)
+    expect(await outer.value == true)
 }
 
 @test

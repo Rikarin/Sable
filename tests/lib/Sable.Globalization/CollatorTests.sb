@@ -76,18 +76,18 @@ fn punctuationMayBePassedOver() {
     assertEqual(loose.compare("co-op", "coop"), Ordering.Equal)
     assertEqual(loose.compare("co -\u{301}op", "coop"), Ordering.Equal)
     assertEqual(loose.compare("a+b", "ab"), Ordering.Less)
-    assert(Collator(Locale.of("th")!).ignorePunctuation)
+    expect(Collator(Locale.of("th")!).ignorePunctuation)
 }
 
 @test
 fn aLocalesKeywordsSayWhatArgumentsDo() {
     let asked = Collator(Locale.of("en-u-kn-ks-level2-kf-upper-ka-shifted")!)
-    assert(asked.numeric && asked.strength == .Secondary && asked.caseFirst == .Upper && asked.ignorePunctuation)
+    expect(asked.numeric && asked.strength == .Secondary && asked.caseFirst == .Upper && asked.ignorePunctuation)
     let off = Collator(Locale.of("da-u-kn-false-ks-level1-kf-false")!)
-    assert(!off.numeric && off.strength == .Primary && off.caseFirst == .Off)
+    expect(!off.numeric && off.strength == .Primary && off.caseFirst == .Off)
     let over = Collator(Locale.of("th-u-kn-ks-identic-kf-lower-ka-noignore")!, strength: .Tertiary)
-    assert(over.strength == .Tertiary && over.caseFirst == .Lower && !over.ignorePunctuation)
-    assert(Collator(Locale.of("da")!).caseFirst == .Upper)
+    expect(over.strength == .Tertiary && over.caseFirst == .Lower && !over.ignorePunctuation)
+    expect(Collator(Locale.of("da")!).caseFirst == .Upper)
 }
 
 @test
@@ -112,9 +112,9 @@ fn aCollatorSortsAndCompares() {
     assertEqual("chata".compare("dům"), Ordering.Less)
     let key = Collator(.invariant, strength: .Primary).sortKey("")
     assertEqual("\(key:?)", "SortKey()")
-    assert("\(czech.sortKey("a"):?)".hasPrefix("SortKey("))
+    expect("\(czech.sortKey("a"):?)".hasPrefix("SortKey("))
     let places = [czech.sortKey("a"): 1]
-    assert(places[czech.sortKey("a")]! == 1 && czech.sortKey("a").bytes.count > 3)
+    expect(places[czech.sortKey("a")]! == 1 && czech.sortKey("a").bytes.count > 3)
 }
 
 struct Dice {

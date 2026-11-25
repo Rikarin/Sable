@@ -14,14 +14,14 @@ fn failuresAreGroupedByPathInTheirOrder() {
     assertEqual(result.failures(at: "a").count, 1)
     assertEqual(result.toString(separator: "; "), "1; 2; 3")
     assertEqual("\(result:>8)".count, 8)
-    assert(result.has(errorAt: "a"))
-    assert(result.hasErrors)
+    expect(result.has(errorAt: "a"))
+    expect(result.hasErrors)
 }
 
 @test
 fn aFailureIsEqualToOneThatSaysTheSame() {
     let failure = ValidationFailure(path: "a", message: "m", attemptedValue: "1")
-    assert(failure == ValidationFailure(path: "a", message: "m", attemptedValue: "1", placeholders: ["x": "y"]))
-    assert(failure != ValidationFailure(path: "b", message: "m", attemptedValue: "1"))
+    expect(failure == ValidationFailure(path: "a", message: "m", attemptedValue: "1", placeholders: ["x": "y"]))
+    expect(failure != ValidationFailure(path: "b", message: "m", attemptedValue: "1"))
     assertEqual(failure.debugDescription(), "ValidationFailure(a: m [Custom])")
 }

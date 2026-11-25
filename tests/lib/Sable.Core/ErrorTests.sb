@@ -49,7 +49,7 @@ fn told<E: Error>(_ error: E) -> String {
 fn anErrorWithNothingOfItsOwnDescribesItsValue() {
     assertEqual(Boom.Bang.description(), "Boom.Bang")
     assertEqual(Boom.Fizzle(4).debugDescription(), "Boom.Fizzle(4)")
-    assert(Boom.Bang.source == none)
+    expect(Boom.Bang.source == none)
 }
 
 @test
@@ -59,7 +59,7 @@ fn anErrorCaughtAsAnyErrorStillSaysWhatItSays() {
     } catch {
         assertEqual(error.description(), "while fizzling")
         assertEqual(error.source?.description() ?? "", "Boom.Fizzle(2)")
-        assert(error.source?.source == none, "the chain ends at the first error")
+        expect(error.source?.source == none, "the chain ends at the first error")
     }
 }
 
@@ -86,6 +86,6 @@ fn somethingThrownThatIsNoErrorIsDescribedByWhatItIs() {
     } catch {
         assertEqual(error.description(), "NotAnError.Odd(3)")
         assertEqual(error.debugDescription(), "NotAnError.Odd(3)")
-        assert(error.source == none)
+        expect(error.source == none)
     }
 }

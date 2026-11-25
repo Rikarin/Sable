@@ -155,12 +155,7 @@ JQSH6EBOmMrP3a4enhqWP5BeoaydxU8=
 let within: UtcDateTime = UtcDateTime.of(year: 2026, month: 6, day: 1, hour: 0, minute: 0, second: 0)!
 
 fn assertThrows(_ expected: CertificateError, _ body: () throws(CertificateError) -> Void) {
-    do {
-        try body()
-        fail("nothing was thrown")
-    } catch {
-        assertEqual(error, expected)
-    }
+    expectThrows(expected) { try body() }
 }
 
 fn opensslVerifier() -> CertificateVerifier {
@@ -173,17 +168,17 @@ fn opensslsPathIsFound() {
     let inter = try! Certificate.parse(pem: interPem)
     let root = try! Certificate.parse(pem: rootPem)
     let verifier = opensslVerifier()
-    assert(try! verifier.verify(leaf, intermediates: [root, inter], host: "www.example.com", at: within) == [leaf, inter, root])
-    assert(try! verifier.verify(leaf, intermediates: [inter], purpose: KeyPurpose.clientAuth, at: within).count == 3)
-    assert(try! verifier.verify(leaf, intermediates: [inter], purpose: none, at: within).count == 3)
+    expect(try! verifier.verify(leaf, intermediates: [root, inter], host: "www.example.com", at: within) == [leaf, inter, root])
+    expect(try! verifier.verify(leaf, intermediates: [inter], purpose: KeyPurpose.clientAuth, at: within).count == 3)
+    expect(try! verifier.verify(leaf, intermediates: [inter], purpose: none, at: within).count == 3)
     assertThrows(CertificateError.UnknownIssuer(issuer: "CN=Intermediate,O=Example\\, Ltd,C=CH")) { () throws(CertificateError) in _ = try verifier.verify(leaf, at: within) }
     assertThrows(CertificateError.HostMismatch(host: "other.example")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], host: "other.example", at: within) }
     assertThrows(CertificateError.NotForPurpose(reason: "CN=www.example.com is not for 1.3.6.1.5.5.7.3.3")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], purpose: KeyPurpose.codeSigning, at: within) }
     assertThrows(CertificateError.NotYetValid(subject: "CN=www.example.com")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: UtcDateTime.fromUnix(0)) }
     assertThrows(CertificateError.Expired(subject: "CN=www.example.com")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: leaf.notAfter.adding(Duration.seconds(1))) }
-    assert(try! verifier.verify(leaf, intermediates: [inter], at: leaf.notAfter).count == 3 && verifier.verify(leaf, intermediates: [inter], at: leaf.notBefore).count == 3)
+    expect(try! verifier.verify(leaf, intermediates: [inter], at: leaf.notAfter).count == 3 && verifier.verify(leaf, intermediates: [inter], at: leaf.notBefore).count == 3)
     let pss = try! Certificate.parse(pem: pssPem)
-    assert(try! verifier.verify(pss, host: "pss.example.com", at: within).count == 2)
+    expect(try! verifier.verify(pss, host: "pss.example.com", at: within).count == 2)
     assertThrows(CertificateError.Unsupported(reason: "CN=SHA1 is signed with an algorithm the library does not take: 1.2.840.113549.1.1.5")) { () throws(CertificateError) in _ = try verifier.verify(try Certificate.parse(pem: sha1Pem), at: within) }
 }
 
@@ -191,8 +186,8 @@ fn opensslsPathIsFound() {
 fn aCertificateTrustedItselfIsItsOwnPath() {
     let own = try! Certificate.parse(pem: edPem)
     let verifier = CertificateVerifier(roots: TrustStore([own]))
-    assert(try! verifier.verify(own, host: "ed.example.com", at: within) == [own])
-    assert((try? opensslVerifier().verify(own, host: "ed.example.com", at: within)) == none)
+    expect(try! verifier.verify(own, host: "ed.example.com", at: within) == [own])
+    expect((try? opensslVerifier().verify(own, host: "ed.example.com", at: within)) == none)
 }
 
 @test
@@ -202,18 +197,18 @@ fn revokedCertificatesAreRefused() {
     var verifier = opensslVerifier()
     verifier.profile = .Rfc5280
     verifier.revocationLists = [try! CertificateRevocationList.parse(pem: crlEmpty)]
-    assert(try! verifier.verify(leaf, intermediates: [inter], at: within).count == 3)
+    expect(try! verifier.verify(leaf, intermediates: [inter], at: within).count == 3)
     let list = try! CertificateRevocationList.parse(pem: crlRevoked)
-    assert(list.revoked.count == 2 && list.entry(for: leaf)!.reason == 1 && list.entry(for: inter) == none)
+    expect(list.revoked.count == 2 && list.entry(for: leaf)!.reason == 1 && list.entry(for: inter) == none)
     assertEqual(list.revoked[0].date.rfc3339(), "2026-03-01T00:00:00Z")
-    assert(list.thisUpdate.year == 2026 && list.nextUpdate!.year == 2036 && list.issuer == inter.subject && list.extensions.count >= 1)
-    assert(list.isSigned(by: try! inter.publicKey()) && !list.isSigned(by: try! leaf.publicKey()))
+    expect(list.thisUpdate.year == 2026 && list.nextUpdate!.year == 2036 && list.issuer == inter.subject && list.extensions.count >= 1)
+    expect(list.isSigned(by: try! inter.publicKey()) && !list.isSigned(by: try! leaf.publicKey()))
     verifier.revocationLists = [list]
     assertThrows(CertificateError.Revoked(subject: "CN=www.example.com")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: within) }
     verifier.revocationLists = [try! CertificateRevocationList.parse(pem: crlRoot)]
     assertThrows(CertificateError.Revoked(subject: "CN=Intermediate,O=Example\\, Ltd,C=CH")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: within) }
     // A list out of date: the certificates are too, so one of before they were.
-    assert((try? CertificateRevocationList.parse(der: list.der[..<^1])) == none && (try? CertificateRevocationList.parse(pem: rootPem)) == none)
+    expect((try? CertificateRevocationList.parse(der: list.der[..<^1])) == none && (try? CertificateRevocationList.parse(pem: rootPem)) == none)
     // Signed by another.
     var changed = list.der
     changed[changed.count - 1] = changed[changed.count - 1] ^ 1
@@ -266,26 +261,26 @@ fn problem(_ leaf: Certificate, _ between: Certificate[>..], _ root: Authority, 
 fn onlyAuthoritiesIssue() {
     let root = authority("Root", by: none)
     let inter = authority("Inter", by: root)
-    assert(problem(server("a.example.com", by: inter), [inter.certificate], root) == none)
-    assert(problem(server("a.example.com", by: inter), [inter.certificate], root, profile: .WebPki) == none)
+    expect(problem(server("a.example.com", by: inter), [inter.certificate], root) == none)
+    expect(problem(server("a.example.com", by: inter), [inter.certificate], root, profile: .WebPki) == none)
     // Not one, and one whose key is not for it.
     let plain = authority("Plain", by: root) { (b: inout CertificateBuilder) in b.basicConstraints = BasicConstraints(isAuthority: false) }
-    assert(problem(server("a.example.com", by: plain), [plain.certificate], root) == CertificateError.Invalid(reason: "CN=Plain is no authority, and issued a certificate"))
+    expect(problem(server("a.example.com", by: plain), [plain.certificate], root) == CertificateError.Invalid(reason: "CN=Plain is no authority, and issued a certificate"))
     let other = authority("Other", by: root) { (b: inout CertificateBuilder) in b.keyUsage = .DigitalSignature }
-    assert(problem(server("a.example.com", by: other), [other.certificate], root) == CertificateError.NotForPurpose(reason: "the key of CN=Other is not for signing certificates"))
+    expect(problem(server("a.example.com", by: other), [other.certificate], root) == CertificateError.NotForPurpose(reason: "the key of CN=Other is not for signing certificates"))
     let code = authority("Code", by: root) { (b: inout CertificateBuilder) in b.purposes = [KeyPurpose.codeSigning] }
-    assert(problem(server("a.example.com", by: code), [code.certificate], root) == CertificateError.NotForPurpose(reason: "CN=Code is not for 1.3.6.1.5.5.7.3.1"))
+    expect(problem(server("a.example.com", by: code), [code.certificate], root) == CertificateError.NotForPurpose(reason: "CN=Code is not for 1.3.6.1.5.5.7.3.1"))
     let free = authority("Any", by: root) { (b: inout CertificateBuilder) in b.purposes = [KeyPurpose.anyPurpose] }
-    assert(problem(server("a.example.com", by: free), [free.certificate], root) == none)
+    expect(problem(server("a.example.com", by: free), [free.certificate], root) == none)
     let old = authority("Old", by: root) { (b: inout CertificateBuilder) in b.notAfter = b.notBefore }
-    assert(problem(server("a.example.com", by: old), [old.certificate], root) == CertificateError.Expired(subject: "CN=Old"))
+    expect(problem(server("a.example.com", by: old), [old.certificate], root) == CertificateError.Expired(subject: "CN=Old"))
     // Signed by another of the same name.
     let impostor = authority("Inter", by: none)
-    assert(problem(server("a.example.com", by: impostor), [inter.certificate], root) == CertificateError.InvalidSignature(subject: ""))
+    expect(problem(server("a.example.com", by: impostor), [inter.certificate], root) == CertificateError.InvalidSignature(subject: ""))
     let signs = server("a.example.com", by: inter) { (b: inout CertificateBuilder) in b.keyUsage = .KeyCertSign }
-    assert(problem(signs, [inter.certificate], root) == CertificateError.Invalid(reason: " may sign certificates, and is no authority"))
+    expect(problem(signs, [inter.certificate], root) == CertificateError.Invalid(reason: " may sign certificates, and is no authority"))
     let constrains = server("a.example.com", by: inter) { (b: inout CertificateBuilder) in b.nameConstraints = NameConstraints(permitted: [.Dns("x")], excluded: []) }
-    assert(problem(constrains, [inter.certificate], root) == CertificateError.Invalid(reason: " has name constraints, and is no authority"))
+    expect(problem(constrains, [inter.certificate], root) == CertificateError.Invalid(reason: " has name constraints, and is no authority"))
 }
 
 @test
@@ -293,8 +288,8 @@ fn pathsAreAsLongAsTheyMayBe() {
     let root = authority("Root", by: none) { (b: inout CertificateBuilder) in b.basicConstraints = BasicConstraints(isAuthority: true, pathLength: 1) }
     let one = authority("One", by: root)
     let two = authority("Two", by: one)
-    assert(problem(server("a.example.com", by: one), [one.certificate], root) == none)
-    assert(problem(server("a.example.com", by: two), [two.certificate, one.certificate], root) == CertificateError.Invalid(reason: "CN=Root may have 1 authorities below it, and has 2"))
+    expect(problem(server("a.example.com", by: one), [one.certificate], root) == none)
+    expect(problem(server("a.example.com", by: two), [two.certificate, one.certificate], root) == CertificateError.Invalid(reason: "CN=Root may have 1 authorities below it, and has 2"))
     var last = authority("Free", by: none)
     let free = last
     var between: Certificate[>..] = []
@@ -304,7 +299,7 @@ fn pathsAreAsLongAsTheyMayBe() {
         between.append(last.certificate)
         i += 1
     }
-    assert(problem(server("a.example.com", by: last), between, free) == CertificateError.LimitExceeded(reason: "a path of more than 8 authorities"))
+    expect(problem(server("a.example.com", by: last), between, free) == CertificateError.LimitExceeded(reason: "a path of more than 8 authorities"))
     var verifier = CertificateVerifier(roots: TrustStore([free.certificate]))
     verifier.maximumDepth = 10
     assertEqual(try! verifier.verify(server("a.example.com", by: last), intermediates: between, host: "a.example.com").count, 12)
@@ -322,10 +317,10 @@ fn aWayRoundIsNotFollowedForEver() {
     }
     let between = [cross(a, by: b), cross(b, by: a), a.certificate, b.certificate]
     let leaf = server("a.example.com", by: a)
-    assert(problem(leaf, between.toArray(), root) != none)
+    expect(problem(leaf, between.toArray(), root) != none)
     var more = between.toArray()
     more.append(cross(b, by: root))
-    assert(problem(leaf, more, root) == none)
+    expect(problem(leaf, more, root) == none)
 }
 
 @test
@@ -337,7 +332,7 @@ fn namesAreWithinWhatIsPermitted() {
             b.alternativeNames = names
             b.subject = subject
         }
-        assert((problem(leaf, [inter.certificate], root, host: none) == none) == good, "\(permitted.count) \(excluded.count) \(names[0])")
+        expect((problem(leaf, [inter.certificate], root, host: none) == none) == good, "\(permitted.count) \(excluded.count) \(names[0])")
     }
     check([.Dns("example.com")], [], [.Dns("example.com"), .Dns("A.b.Example.com"), .Dns("*.example.com")], true)
     check([.Dns("example.com")], [], [.Dns("badexample.com")], false)
@@ -384,9 +379,9 @@ fn aCriticalExtensionThatIsNotKnownIsRefused() {
     let root = authority("Root", by: none)
     let mark = ObjectIdentifier([1, 3, 6, 1, 4, 1, 99999, 1])
     let critical = server("a.example.com", by: root) { (b: inout CertificateBuilder) in b.extensions = [CertificateExtension(mark, isCritical: true, value: [5, 0])] }
-    assert(problem(critical, [], root) == CertificateError.Invalid(reason: " has a critical extension that is not known: 1.3.6.1.4.1.99999.1"))
+    expect(problem(critical, [], root) == CertificateError.Invalid(reason: " has a critical extension that is not known: 1.3.6.1.4.1.99999.1"))
     let plain = server("a.example.com", by: root) { (b: inout CertificateBuilder) in b.extensions = [CertificateExtension(mark, isCritical: false, value: [5, 0])] }
-    assert(problem(plain, [], root) == none)
+    expect(problem(plain, [], root) == none)
 }
 
 @test
@@ -394,9 +389,9 @@ fn theProfilesAskForMore() {
     let root = authority("Root", by: none)
     fn check(_ first: CertificateProfile, _ change: (inout CertificateBuilder) -> ()) {
         let leaf = server("a.example.com", by: root, change)
-        assert(problem(leaf, [], root) == none)
-        assert((problem(leaf, [], root, profile: .Rfc5280) == none) == (first == .WebPki))
-        assert(problem(leaf, [], root, profile: .WebPki) != none)
+        expect(problem(leaf, [], root) == none)
+        expect((problem(leaf, [], root, profile: .Rfc5280) == none) == (first == .WebPki))
+        expect(problem(leaf, [], root, profile: .WebPki) != none)
     }
     check(.Rfc5280) { (b: inout CertificateBuilder) in b.serialNumber = U8[>..](repeating: 1, count: 21) }
     check(.Rfc5280) { (b: inout CertificateBuilder) in b.serialNumber = [0] }
@@ -408,12 +403,12 @@ fn theProfilesAskForMore() {
         b.subject = DistinguishedName(commonName: "a.example.com")
     }
     let named = server("a.example.com", by: root) { (b: inout CertificateBuilder) in b.subject = DistinguishedName(commonName: "a.example.com") }
-    assert(problem(named, [], root, profile: .WebPki) == none)
+    expect(problem(named, [], root, profile: .WebPki) == none)
     let address = server("::1", by: root) { (b: inout CertificateBuilder) in b.subject = DistinguishedName(commonName: "::1") }
-    assert(problem(address, [], root, host: "::1", profile: .WebPki) == none)
+    expect(problem(address, [], root, host: "::1", profile: .WebPki) == none)
     let purposed = authority("Purposed", by: none) { (b: inout CertificateBuilder) in b.purposes = [KeyPurpose.serverAuth] }
-    assert(problem(server("a.example.com", by: purposed), [], purposed) == none)
-    assert(problem(server("a.example.com", by: purposed), [], purposed, profile: .WebPki) != none)
+    expect(problem(server("a.example.com", by: purposed), [], purposed) == none)
+    expect(problem(server("a.example.com", by: purposed), [], purposed, profile: .WebPki) != none)
 }
 
 @test
@@ -421,11 +416,11 @@ fn weakAndUnknownKeysAreRefused() {
     let root = authority("Root", by: none)
     let x = X25519PrivateKey.generate().anyKey
     let agree = try! CertificateBuilder(subject: DistinguishedName([]), host: "a.example.com").issued(to: x.publicKey, by: root.certificate, signingKey: root.key)
-    assert(problem(agree, [], root) == none)
-    assert((try? CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: x)) == none)
-    assert((try? CertificateBuilder(subject: DistinguishedName(commonName: "x")).issued(to: x.publicKey, by: root.certificate, signingKey: EcdsaPrivateKey<P256>.generate().anyKey)) == none)
+    expect(problem(agree, [], root) == none)
+    expect((try? CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: x)) == none)
+    expect((try? CertificateBuilder(subject: DistinguishedName(commonName: "x")).issued(to: x.publicKey, by: root.certificate, signingKey: EcdsaPrivateKey<P256>.generate().anyKey)) == none)
     var modulus = U8[>..](repeating: 0xFF, count: 128)
     modulus[127] = 0xFD
     let short = try! CertificateBuilder(subject: DistinguishedName([]), host: "a.example.com").issued(to: RsaPublicKey(modulus: modulus, exponent: 3).anyKey, by: root.certificate, signingKey: root.key)
-    assert(problem(short, [], root) == CertificateError.Unsupported(reason: "the RSA key of  is of 1024 bits, not 2048 or more"))
+    expect(problem(short, [], root) == CertificateError.Unsupported(reason: "the RSA key of  is of 1024 bits, not 2048 or more"))
 }

@@ -38,5 +38,5 @@ fn aCategoryHasItsName() {
     for name in ["zero", "one", "two", "few", "many", "other"] {
         assertEqual(PluralCategory.of(name)!.name, name)
     }
-    assert(PluralCategory.of("several") == none)
+    expect(PluralCategory.of("several") == none)
 }

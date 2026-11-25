@@ -37,8 +37,8 @@ fn aCopyHasTheBytesAndThePermissions() throws {
     try File.writeBytes(from, bytes)
     try File.setPermissions(from, FilePermissions(mode: 0o444))
     try File.copy(from: from, to: to)
-    assert(try File.readBytes(to) == bytes)
-    assert((try File.metadata(to)).permissions.isReadOnly)
+    expect(try File.readBytes(to) == bytes)
+    expect((try File.metadata(to)).permissions.isReadOnly)
 
     // Over a file there, which gets the permissions too.
     let other = temp.path.appending("other.bin")
@@ -48,7 +48,7 @@ fn aCopyHasTheBytesAndThePermissions() throws {
     try File.setPermissions(short, (try File.metadata(short)).permissions.readOnly())
     try File.copy(from: short, to: other)
     assertEqual(text(other), "short")
-    assert((try File.metadata(other)).permissions.isReadOnly)
+    expect((try File.metadata(other)).permissions.isReadOnly)
     try File.setPermissions(short, (try File.metadata(short)).permissions.writable())
 }
 
@@ -95,7 +95,7 @@ fn whatIsNoFileIsNotCopied() throws {
         try File.copy(from: temp.path.appending("missing"), to: temp.path.appending("to"))
         fail("nothing was copied")
     } catch IoError.NotFound(_) { }
-    assert(!File.exists(temp.path.appending("to")))
+    expect(!File.exists(temp.path.appending("to")))
 }
 
 @test
@@ -112,13 +112,13 @@ fn aRenameReplacesOrRefuses() throws {
     assertEqual(text(b), "b")
     try File.rename(from: a, to: b)
     assertEqual(text(b), "a")
-    assert(!File.exists(a))
+    expect(!File.exists(a))
     try File.rename(from: b, to: a, overwrite: false)
     assertEqual(text(a), "a")
     // A directory too.
     try Directory.create(temp.path.appending("d/e"), recursive: true)
     try File.rename(from: temp.path.appending("d"), to: temp.path.appending("f"))
-    assert(Directory.exists(temp.path.appending("f/e")))
+    expect(Directory.exists(temp.path.appending("f/e")))
     do {
         try File.rename(from: temp.path.appending("missing"), to: a)
         fail("nothing was renamed")
@@ -150,30 +150,30 @@ fn metadataSaysWhatIsThere() throws {
     try File.write(path, "twelve bytes")
     let metadata = try File.metadata(path)
     assertEqual(metadata.size, 12)
-    assert(metadata.isFile && !metadata.isDirectory && !metadata.isSymlink)
-    assert(metadata.kind == FileKind.File)
-    assert(metadata.modified.secondsSinceEpoch >= before)
-    assert(metadata.accessed.secondsSinceEpoch >= before)
+    expect(metadata.isFile && !metadata.isDirectory && !metadata.isSymlink)
+    expect(metadata.kind == FileKind.File)
+    expect(metadata.modified.secondsSinceEpoch >= before)
+    expect(metadata.accessed.secondsSinceEpoch >= before)
     // Linux keeps it on some file systems alone.
     #if os(linux)
     #else
-    assert(metadata.created != none)
+    expect(metadata.created != none)
     #endif
     if let created = metadata.created {
-        assert(created.secondsSinceEpoch >= before)
+        expect(created.secondsSinceEpoch >= before)
         // When it was written does not change when it was made.
         try File.setModified(path, UtcDateTime.fromUnix(4_000_000_000))
-        assert((try File.metadata(path)).created == created)
+        expect((try File.metadata(path)).created == created)
         try File.setModified(path, metadata.modified)
     }
-    assert(!metadata.permissions.isReadOnly)
+    expect(!metadata.permissions.isReadOnly)
     let opened = try File.open(path)
     let same = try opened.metadata()
     assertEqual(same.size, 12)
-    assert(same.kind == FileKind.File && same.modified == metadata.modified)
+    expect(same.kind == FileKind.File && same.modified == metadata.modified)
     opened.close()
 
-    assert((try File.metadata("\(temp.path)")).isDirectory)
+    expect((try File.metadata("\(temp.path)")).isDirectory)
     do {
         _ = try File.metadata(temp.path.appending("missing"))
         fail("nothing has metadata")
@@ -187,21 +187,21 @@ fn timesAndPermissionsAreSet() throws {
     try File.write(path, "x")
     let then = UtcDateTime { secondsSinceEpoch: 1234567890, nanosecond: 123456700 }
     try File.setModified(path, then)
-    assert((try File.metadata(path)).modified == then)
+    expect((try File.metadata(path)).modified == then)
     try File.setAccessed(path, UtcDateTime.fromUnix(1000))
     let metadata = try File.metadata(path)
-    assert(metadata.accessed == UtcDateTime.fromUnix(1000))
-    assert(metadata.modified == then)
+    expect(metadata.accessed == UtcDateTime.fromUnix(1000))
+    expect(metadata.modified == then)
     // Before 1970 as well.
     let old = UtcDateTime { secondsSinceEpoch: -100, nanosecond: 500000000 }
     try File.setModified(path, old)
-    assert((try File.metadata(path)).modified == old)
+    expect((try File.metadata(path)).modified == old)
 
     try File.setPermissions(path, FilePermissions(mode: 0o400))
-    assert((try File.metadata(path)).permissions.isReadOnly)
+    expect((try File.metadata(path)).permissions.isReadOnly)
     try File.setPermissions(path, FilePermissions(mode: 0o640))
     let given = (try File.metadata(path)).permissions
-    assert(!given.isReadOnly)
+    expect(!given.isReadOnly)
     #if os(windows)
     #else
     assertEqual(given.mode, 0o640)
@@ -224,9 +224,9 @@ fn permissionsAreWrittenAsLsWritesThem() {
     assertEqual("\(FilePermissions(mode: 0o751))", "rwxr-x--x")
     assertEqual("\(FilePermissions(mode: 0))", "---------")
     assertEqual("\(FilePermissions(mode: 0o644):12)".count, 12)
-    assert(FilePermissions(mode: 0o644).executable() == FilePermissions(mode: 0o755))
-    assert(FilePermissions(mode: 0o444).writable() == FilePermissions(mode: 0o644))
-    assert(FilePermissions(mode: 0o111).isExecutable && !FilePermissions(mode: 0o666).isExecutable)
+    expect(FilePermissions(mode: 0o644).executable() == FilePermissions(mode: 0o755))
+    expect(FilePermissions(mode: 0o444).writable() == FilePermissions(mode: 0o644))
+    expect(FilePermissions(mode: 0o111).isExecutable && !FilePermissions(mode: 0o666).isExecutable)
     assertEqual(FilePermissions(mode: 0o600).debugDescription(), "FilePermissions(rw-------)")
     assertEqual(FilePermissions(mode: 0o600).hashValue, FilePermissions(mode: 0o100600).hashValue)
 }
@@ -263,11 +263,11 @@ fn aSymbolicLinkLeadsToItsTarget() throws {
     try File.write(path, "text")
     try File.createSymlink(at: link, to: "file")
     assertEqual(text(link), "text")
-    assert(try File.readLink(link) == FilePath("file"))
-    assert((try File.metadata(link)).isFile)
+    expect(try File.readLink(link) == FilePath("file"))
+    expect((try File.metadata(link)).isFile)
     let itself = try File.metadata(link, followLinks: false)
-    assert(itself.isSymlink && itself.kind == FileKind.SymbolicLink)
-    assert(try link.canonical() == try path.canonical())
+    expect(itself.isSymlink && itself.kind == FileKind.SymbolicLink)
+    expect(try link.canonical() == try path.canonical())
     // Removed itself, and not what it leads to.
     try File.remove(link)
     assertEqual(text(path), "text")
@@ -276,24 +276,24 @@ fn aSymbolicLinkLeadsToItsTarget() throws {
     let inside = temp.path.appending("inside")
     try Directory.create(inside)
     try File.createSymlink(at: link, to: inside)
-    assert(Directory.exists(link) && !File.exists(link))
+    expect(Directory.exists(link) && !File.exists(link))
     try File.write(link.appending("x"), "x")
     assertEqual(text(inside.appending("x")), "x")
     try File.remove(link)
     assertEqual(text(inside.appending("x")), "x")
     try File.createSymlink(at: link, to: temp.path.appending("nowhere"))
-    assert(!File.exists(link) && !Directory.exists(link))
+    expect(!File.exists(link) && !Directory.exists(link))
     do {
         _ = try File.metadata(link)
         fail("it leads nowhere")
     } catch IoError.NotFound(_) { }
-    assert((try File.metadata(link, followLinks: false)).isSymlink)
+    expect((try File.metadata(link, followLinks: false)).isSymlink)
     do {
         try File.createSymlink(at: link, to: "file")
         fail("one there was replaced")
     } catch IoError.AlreadyExists(_) { }
     try File.rename(from: link, to: temp.path.appending("moved"))
-    assert(try File.readLink(temp.path.appending("moved")) == temp.path.appending("nowhere"))
+    expect(try File.readLink(temp.path.appending("moved")) == temp.path.appending("nowhere"))
     do {
         _ = try File.readLink(path)
         fail("a file is no link")
@@ -319,7 +319,7 @@ fn onlyWhatIsNamedIsRemoved() throws {
             fail("'\(path)' was removed")
         } catch IoError.InvalidInput(_) { }
     }
-    assert(Directory.exists(directory))
+    expect(Directory.exists(directory))
     // A NUL would cut the path short.
     let file = temp.path.appending("file")
     try File.write(file, "kept")
@@ -328,7 +328,7 @@ fn onlyWhatIsNamedIsRemoved() throws {
         fail("a path with a NUL named something")
     } catch IoError.InvalidInput(_) { }
     assertEqual(text(file), "kept")
-    assert(!File.exists("\(file)\0"))
+    expect(!File.exists("\(file)\0"))
 }
 
 @test
@@ -337,7 +337,7 @@ fn aFileIsReadAndAddedTo() throws {
     let path = temp.path.appending("file")
     try File.write(path, "one\r\ntwo\n")
     try File.append(path, "three")
-    assert(try File.readLines(path) == ["one", "two", "three"])
+    expect(try File.readLines(path) == ["one", "two", "three"])
     try File.appendBytes("\(path)", [0xFF])
     assertEqual(try File.read(path), "one\r\ntwo\nthree\u{FFFD}")
     for missing in ["", "\(path)-missing", "\(path)/inside"] {
@@ -363,20 +363,20 @@ fn aMoveBetweenFileSystemsIsACopy() throws {
     try File.setModified(a, UtcDateTime.fromUnix(1000))
     try File.move(from: a, to: b)
     assertEqual(text(b), "a")
-    assert(!File.exists(a))
+    expect(!File.exists(a))
     let metadata = try File.metadata(b)
     assertEqual(metadata.permissions.mode, 0o640)
-    assert(metadata.modified == UtcDateTime.fromUnix(1000))
+    expect(metadata.modified == UtcDateTime.fromUnix(1000))
     try File.write(a, "again")
     do {
         try File.move(from: a, to: b, overwrite: false)
         fail("it replaced one there")
     } catch IoError.AlreadyExists(_) { }
     assertEqual(text(b), "a")
-    assert(try Directory.list(other.path) == ["b"])
+    expect(try Directory.list(other.path) == ["b"])
     try File.createSymlink(at: temp.path.appending("link"), to: "nowhere")
     try File.move(from: temp.path.appending("link"), to: other.path.appending("link"))
-    assert(try File.readLink(other.path.appending("link")) == FilePath("nowhere"))
+    expect(try File.readLink(other.path.appending("link")) == FilePath("nowhere"))
     try Directory.create(temp.path.appending("d"))
     do {
         try File.move(from: temp.path.appending("d"), to: other.path.appending("d"))
@@ -395,16 +395,16 @@ fn aJunctionIsALink() async throws {
     try Directory.create(tree)
     try File.write(outside.appending("kept"), "kept")
     let link = tree.appending("link")
-    assert((try await Command("cmd").arguments(["/c", "mklink", "/J", "\(link)", "\(outside)"]).output()).status.success)
-    assert((try File.metadata(link, followLinks: false)).isSymlink)
-    assert((try File.metadata(link)).isDirectory)
-    assert(try File.readLink(link) == outside)
+    expect((try await Command("cmd").arguments(["/c", "mklink", "/J", "\(link)", "\(outside)"]).output()).status.success)
+    expect((try File.metadata(link, followLinks: false)).isSymlink)
+    expect((try File.metadata(link)).isDirectory)
+    expect(try File.readLink(link) == outside)
     for try entry in try Directory.walk(tree) {
         assertEqual(entry.name, "link")
         assert(entry.isSymlink)
     }
     try Directory.remove(tree, recursive: true)
-    assert(!Directory.exists(tree))
+    expect(!Directory.exists(tree))
     assertEqual(text(outside.appending("kept")), "kept")
 }
 #else
@@ -412,10 +412,10 @@ fn aJunctionIsALink() async throws {
 fn aFifoIsNoFileToCopy() async throws {
     let temp = try Temp.directory()
     let fifo = temp.path.appending("fifo")
-    assert((try await Command("mkfifo").argument("\(fifo)").status()).success)
-    assert((try File.metadata(fifo)).kind == FileKind.Fifo)
+    expect((try await Command("mkfifo").argument("\(fifo)").status()).success)
+    expect((try File.metadata(fifo)).kind == FileKind.Fifo)
     for try entry in try Directory.entries(temp.path) {
-        assert(entry.kind == FileKind.Fifo)
+        assertEqual(entry.kind, FileKind.Fifo)
     }
     do {
         try File.copy(from: fifo, to: temp.path.appending("to"))
@@ -431,7 +431,7 @@ fn aFifoIsNoFileToCopy() async throws {
 
 @test
 fn aDeviceIsOne() throws {
-    assert((try File.metadata("/dev/null")).kind == FileKind.CharacterDevice)
+    expect((try File.metadata("/dev/null")).kind == FileKind.CharacterDevice)
 }
 
 @test
@@ -442,10 +442,10 @@ fn aPathNeedNotBeUtf8() throws {
     let path = temp.path.appending(FilePath(bytes: [0x61, 0xFF]))
     try File.write(path, "x")
     for try entry in try Directory.entries(temp.path) {
-        assert(entry.path.bytes == path.bytes)
+        assertEqual(entry.path.bytes, path.bytes)
         try File.remove(entry.path)
     }
-    assert(try Directory.list(temp.path) == [])
+    expect(try Directory.list(temp.path) == [])
     #endif
 }
 #endif

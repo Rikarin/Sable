@@ -14,25 +14,25 @@ fn isEven(_ x: Int) -> Bool {
 fn firstIndexWhereFindsTheFirstThatPasses() {
     let xs: Int[>..] = [3, 8, 5, 10]
     assertEqual(xs.firstIndex(where: isEven) ?? -1, 1)
-    assert(xs.firstIndex(where: (x: Int) => x > 10) == none)
+    expect(xs.firstIndex(where: (x: Int) => x > 10) == none)
     let empty: Int[>..] = []
-    assert(empty.firstIndex(where: isEven) == none)
+    expect(empty.firstIndex(where: isEven) == none)
 }
 
 @test
 fn lastIndexWhereFindsTheLastThatPasses() {
     let xs: Int[>..] = [3, 8, 5, 10, 7]
     assertEqual(xs.lastIndex(where: isEven) ?? -1, 3)
-    assert(xs.lastIndex(where: (x: Int) => x > 10) == none)
+    expect(xs.lastIndex(where: (x: Int) => x > 10) == none)
 }
 
 @test
 fn isSortedByComparesNeighbours() {
     let descending: Int[>..] = [9, 5, 5, 1]
-    assert(descending.isSorted(by: (a: Int, b: Int) => b < a))
-    assert(!descending.isSorted(by: (a: Int, b: Int) => a < b))
+    expect(descending.isSorted(by: (a: Int, b: Int) => b < a))
+    expect(!descending.isSorted(by: (a: Int, b: Int) => a < b))
     let one: Int[>..] = [4]
-    assert(one.isSorted(by: (a: Int, b: Int) => a < b))
+    expect(one.isSorted(by: (a: Int, b: Int) => a < b))
 }
 
 @test
@@ -62,29 +62,29 @@ fn partitionPointFindsTheInsertionPlaceInALargeArray() {
 @test
 fn binarySearchForAValueFindsItOrWhereItWouldGo() {
     let xs: Int[>..] = [1, 3, 5, 7, 9]
-    assert(xs.binarySearch(for: 1) == .Ok(0))
-    assert(xs.binarySearch(for: 9) == .Ok(4))
-    assert(xs.binarySearch(for: 5) == .Ok(2))
-    assert(xs.binarySearch(for: 0) == .Err(0))
-    assert(xs.binarySearch(for: 6) == .Err(3))
-    assert(xs.binarySearch(for: 10) == .Err(5))
+    expect(xs.binarySearch(for: 1) == .Ok(0))
+    expect(xs.binarySearch(for: 9) == .Ok(4))
+    expect(xs.binarySearch(for: 5) == .Ok(2))
+    expect(xs.binarySearch(for: 0) == .Err(0))
+    expect(xs.binarySearch(for: 6) == .Err(3))
+    expect(xs.binarySearch(for: 10) == .Err(5))
     let empty: Int[>..] = []
-    assert(empty.binarySearch(for: 4) == .Err(0))
+    expect(empty.binarySearch(for: 4) == .Err(0))
 }
 
 @test
 fn binarySearchByAComparisonUsesItsSign() {
     let words: String[>..] = ["a", "bee", "cats", "dingo"]
-    assert(words.binarySearch(by: (w: String) => w.count.compare(3)) == .Ok(1))
-    assert(words.binarySearch(by: (w: String) => w.count.compare(2)) == .Err(1))
-    assert(words.binarySearch(by: (w: String) => w.compare("cow")) == .Err(3))
+    expect(words.binarySearch(by: (w: String) => w.count.compare(3)) == .Ok(1))
+    expect(words.binarySearch(by: (w: String) => w.count.compare(2)) == .Err(1))
+    expect(words.binarySearch(by: (w: String) => w.compare("cow")) == .Err(3))
 }
 
 @test
 fn binarySearchForAKeyComparesTheKeysElementsGive() {
     let pairs: (Int, String)[>..] = [(1, "one"), (4, "four"), (9, "nine")]
-    assert(pairs.binarySearch(forKey: 4, by: (p: (Int, String)) => p.0) == .Ok(1))
-    assert(pairs.binarySearch(forKey: 5, by: (p: (Int, String)) => p.0) == .Err(2))
+    expect(pairs.binarySearch(forKey: 4, by: (p: (Int, String)) => p.0) == .Ok(1))
+    expect(pairs.binarySearch(forKey: 5, by: (p: (Int, String)) => p.0) == .Err(2))
 }
 
 @test
@@ -97,8 +97,8 @@ fn binarySearchFindsEveryElementOfALargeArray() {
     }
     i = 0
     while i < 1000 {
-        assert(xs.binarySearch(for: i * 2) == .Ok(i))
-        assert(xs.binarySearch(for: i * 2 + 1) == .Err(i + 1))
+        assertEqual(xs.binarySearch(for: i * 2), .Ok(i))
+        assertEqual(xs.binarySearch(for: i * 2 + 1), .Err(i + 1))
         i = i + 1
     }
 }
@@ -109,35 +109,35 @@ fn firstAndLastIndexOfFindEqualElements() {
     assertEqual(xs.firstIndex(of: "a") ?? -1, 0)
     assertEqual(xs.lastIndex(of: "a") ?? -1, 2)
     assertEqual(xs.firstIndex(of: "c") ?? -1, 3)
-    assert(xs.firstIndex(of: "z") == none)
-    assert(xs.lastIndex(of: "z") == none)
+    expect(xs.firstIndex(of: "z") == none)
+    expect(xs.lastIndex(of: "z") == none)
 }
 
 @test
 fn firstIndexOfAnyFindsTheFirstOfSeveral() {
     let xs: Char[>..] = ['h', 'e', 'l', 'l', 'o']
     assertEqual(xs.firstIndex(ofAny: ['o', 'l']) ?? -1, 2)
-    assert(xs.firstIndex(ofAny: ['z']) == none)
-    assert(xs.firstIndex(ofAny: []) == none)
+    expect(xs.firstIndex(ofAny: ['z']) == none)
+    expect(xs.firstIndex(ofAny: []) == none)
 }
 
 @test
 fn startsWithComparesTheFirstElements() {
     let xs: Int[>..] = [1, 2, 3]
-    assert(xs.starts(with: [1, 2]))
-    assert(xs.starts(with: []))
-    assert(xs.starts(with: xs))
-    assert(!xs.starts(with: [2]))
-    assert(!xs.starts(with: [1, 2, 3, 4]))
+    expect(xs.starts(with: [1, 2]))
+    expect(xs.starts(with: []))
+    expect(xs.starts(with: xs))
+    expect(!xs.starts(with: [2]))
+    expect(!xs.starts(with: [1, 2, 3, 4]))
 }
 
 @test
 fn endsWithComparesTheLastElements() {
     let xs: Int[>..] = [1, 2, 3]
-    assert(xs.ends(with: [2, 3]))
-    assert(xs.ends(with: []))
-    assert(!xs.ends(with: [1, 3]))
-    assert(!xs.ends(with: [0, 1, 2, 3]))
+    expect(xs.ends(with: [2, 3]))
+    expect(xs.ends(with: []))
+    expect(!xs.ends(with: [1, 3]))
+    expect(!xs.ends(with: [0, 1, 2, 3]))
 }
 
 @test
@@ -172,8 +172,8 @@ fn minAndMaxAreTheExtremes() {
 @test
 fn minAndMaxOfNothingAreNone() {
     let empty: F64[>..] = []
-    assert(empty.min() == none)
-    assert(empty.max() == none)
+    expect(empty.min() == none)
+    expect(empty.max() == none)
 }
 
 @test
@@ -181,9 +181,9 @@ fn isSortedIsAscendingOrder() {
     let ascending: Int[>..] = [1, 1, 2, 5]
     let unsorted: Int[>..] = [1, 3, 2]
     let empty: Int[>..] = []
-    assert(ascending.isSorted())
-    assert(!unsorted.isSorted())
-    assert(empty.isSorted())
+    expect(ascending.isSorted())
+    expect(!unsorted.isSorted())
+    expect(empty.isSorted())
 }
 
 @test

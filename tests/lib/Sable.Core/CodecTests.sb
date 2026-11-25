@@ -10,7 +10,7 @@ fn wholeBlocksAreWrittenOrNone() {
     let bytes = U8[>..](repeating: 0xAB, count: 96)
     var digits = U8[>..](repeating: 0, count: 256)
     let done = digits.write(.HexEncode, of: bytes, at: 0)
-    assert(done >= 0 && done <= 96)
+    expect(done >= 0 && done <= 96)
     var i = 0
     while i < done {
         assertEqual(digits[i * 2], 0x61)
@@ -25,7 +25,7 @@ fn aStringsDigitsAreDecodedUpToTheFirstThatIsNone() {
     let text = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeffzz"
     var bytes = U8[>..](repeating: 7, count: 64)
     let done = bytes.write(.HexDecode, of: text, from: 0, to: text.utf8Count, at: 0)
-    assert(done >= 0 && done <= 64)
+    expect(done >= 0 && done <= 64)
     if done >= 4 {
         assertEqual(bytes[0], 0)
         assertEqual(bytes[1], 0x11)
@@ -42,6 +42,6 @@ fn unitsAndBytesAreEachOther() {
     var back = U16[>..](repeating: 0, count: 64)
     unsafe {
         let count = back.writeUtf16(ofValid: source, at: 0)
-        assert(count == 0 || count == 40 && back[39] == 0x68)
+        expect(count == 0 || count == 40 && back[39] == 0x68)
     }
 }

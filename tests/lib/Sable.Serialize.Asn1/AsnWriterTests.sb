@@ -221,11 +221,11 @@ fn lengthsOfEverySize() {
             }
             var reader = AsnReader(try! writer.bytes(), rules: rules)
             var inner = try! reader.readSequence(tag: .context(1000))
-            assert(try! inner.readOctetString() == contents)
+            assertEqual(try! inner.readOctetString(), contents)
             var octets = try! inner.readOctetStringContents()
-            assert(try! octets.readOctetString() == contents)
+            assertEqual(try! octets.readOctetString(), contents)
             var bits = try! inner.readBitStringContents()
-            assert(try! bits.readOctetString() == contents)
+            assertEqual(try! bits.readOctetString(), contents)
             try! inner.finish()
             try! reader.finish()
         }
@@ -338,7 +338,7 @@ fn anyTreeIsReadBack() {
         var reader = AsnReader(bytes, rules: rules)
         let again = AsnWriter(rules: rules)
         try! copy(&reader, again)
-        assert(try! again.bytes() == bytes)
+        assertEqual(try! again.bytes(), bytes)
     }
 }
 

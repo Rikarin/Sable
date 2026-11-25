@@ -28,7 +28,7 @@ fn aStopwatchMeasuresItsClockWhileItRuns() {
     assertEqual(watch.elapsed, Duration.seconds(2))
     watch.start()
     assertEqual(watch.stop(), Duration.seconds(2))
-    assert(!watch.isRunning)
+    expect(!watch.isRunning)
     clock.pass(3)
     assertEqual(watch.stop(), Duration.seconds(2))
     watch.start()
@@ -40,7 +40,7 @@ fn aStopwatchMeasuresItsClockWhileItRuns() {
     assertEqual(copy.elapsed, Duration.seconds(8))
     watch.reset()
     assertEqual(watch.elapsed, Duration.zero)
-    assert(!Stopwatch(clock: clock, running: false).isRunning)
+    expect(!Stopwatch(clock: clock, running: false).isRunning)
     let real = Stopwatch(running: false)
     assertEqual(real.elapsed, Duration.zero)
 }

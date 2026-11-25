@@ -43,18 +43,18 @@ fn whatIsNotAnIdentifier() {
         arcs.append("1")
     }
     assertEqualText(failure(arcs.joined(separator: ".")), "the number is too large")
-    assert(ObjectIdentifier.of(arcs: [1]) == none)
-    assert(ObjectIdentifier.of(arcs: [2, U128.max]) == none)
-    assert((try? ObjectIdentifier.decode([0x80])) == none)
+    expect(ObjectIdentifier.of(arcs: [1]) == none)
+    expect(ObjectIdentifier.of(arcs: [2, U128.max]) == none)
+    expect((try? ObjectIdentifier.decode([0x80])) == none)
 }
 
 @test
 fn oneIsAPrefixOfThoseItNames() {
     let pkcs1 = ObjectIdentifier([1, 2, 840, 113549, 1, 1])
-    assert(pkcs1.isPrefix(of: ObjectIdentifier([1, 2, 840, 113549, 1, 1, 11])))
-    assert(pkcs1.isPrefix(of: pkcs1))
-    assert(!pkcs1.isPrefix(of: ObjectIdentifier([1, 2, 840, 113549, 1])))
-    assert(!pkcs1.isPrefix(of: ObjectIdentifier([1, 2, 840, 113549, 1, 2, 1])))
+    expect(pkcs1.isPrefix(of: ObjectIdentifier([1, 2, 840, 113549, 1, 1, 11])))
+    expect(pkcs1.isPrefix(of: pkcs1))
+    expect(!pkcs1.isPrefix(of: ObjectIdentifier([1, 2, 840, 113549, 1])))
+    expect(!pkcs1.isPrefix(of: ObjectIdentifier([1, 2, 840, 113549, 1, 2, 1])))
 }
 
 @test

@@ -12,7 +12,7 @@ import FloatAssertions
 /// Fails unless the two are within a relative distance of each other.
 fn assertNear(_ actual: F64, _ expected: F64, _ within: F64 = 1.0e-12) {
     let scale = expected.abs() > 1.0 ? expected.abs() : 1.0
-    assert((actual - expected).abs() <= within * scale, "expected \(expected), got \(actual)")
+    expect((actual - expected).abs() <= within * scale, "expected \(expected), got \(actual)")
 }
 
 /// A random walk of numbers: xorshift.
@@ -49,12 +49,12 @@ fn theUsualStatistics() {
     assertNear(quantile(five, 0.3), 2.2)
     assertSame(percentile(five, 50.0), 3.0)
     assertNear(percentile(five, 90.0), 4.6)
-    assert(quantile(five, -0.1).isNaN && quantile(five, 1.5).isNaN && quantile(five, nan).isNaN)
+    expect(quantile(five, -0.1).isNaN && quantile(five, 1.5).isNaN && quantile(five, nan).isNaN)
     let several = quantiles(five, [0.0, 0.5, 1.0, 2.0])
     assertEqual(several.count, 4)
     assertSame(several[1], 3.0)
     assertSame(several[2], 5.0)
-    assert(several[3].isNaN)
+    expect(several[3].isNaN)
     // Equal neighbours give themselves, never a rounding off them.
     assertSame(quantile([0.1, 0.1, 0.1], 0.37), 0.1)
 
@@ -65,7 +65,7 @@ fn theUsualStatistics() {
     assertEqual(mode([0.0, -0.0, 1.0]).count, 1)
     assertEqual(mode([4.0, 1.0]).count, 2)
     let noValues: F64[>..] = []
-    assert(mode(noValues).isEmpty)
+    expect(mode(noValues).isEmpty)
 
     assertSame(covariance([1.0, 2.0, 3.0], [1.0, 2.0, 3.0], .Population), 2.0 / 3.0)
     assertSame(covariance([1.0, 2.0, 3.0], [6.0, 4.0, 2.0]), -2.0)
@@ -78,23 +78,23 @@ fn theUsualStatistics() {
 fn nothingAndNaNGiveNaN() {
     let nothing: F64[>..] = []
     assertSame(sum(nothing), 0.0)
-    assert(mean(nothing).isNaN && median(nothing).isNaN && quantile(nothing, 0.5).isNaN)
-    assert(variance(nothing).isNaN && variance([1.0]).isNaN)
+    expect(mean(nothing).isNaN && median(nothing).isNaN && quantile(nothing, 0.5).isNaN)
+    expect(variance(nothing).isNaN && variance([1.0]).isNaN)
     assertSame(variance([1.0], .Population), 0.0)
-    assert(variance(nothing, .Population).isNaN)
-    assert(minimum(nothing).isNaN && maximum(nothing).isNaN)
+    expect(variance(nothing, .Population).isNaN)
+    expect(minimum(nothing).isNaN && maximum(nothing).isNaN)
     let several = quantiles(nothing, [0.5])
-    assert(several[0].isNaN)
+    expect(several[0].isNaN)
 
     let poisoned = [1.0, nan, 3.0]
-    assert(sum(poisoned).isNaN && mean(poisoned).isNaN && variance(poisoned).isNaN)
-    assert(median(poisoned).isNaN && minimum(poisoned).isNaN && maximum(poisoned).isNaN)
-    assert(quantiles(poisoned, [0.5])[0].isNaN)
+    expect(sum(poisoned).isNaN && mean(poisoned).isNaN && variance(poisoned).isNaN)
+    expect(median(poisoned).isNaN && minimum(poisoned).isNaN && maximum(poisoned).isNaN)
+    expect(quantiles(poisoned, [0.5])[0].isNaN)
     assertSame(sum([inf, 1.0]), inf)
-    assert(sum([inf, -inf]).isNaN)
-    assert(covariance([1.0, 2.0], [1.0]).isNaN && covariance([1.0], [1.0]).isNaN)
-    assert(correlation([1.0, 1.0, 1.0], [1.0, 2.0, 3.0]).isNaN)
-    assert(correlation([1.0, 2.0], [1.0]).isNaN)
+    expect(sum([inf, -inf]).isNaN)
+    expect(covariance([1.0, 2.0], [1.0]).isNaN && covariance([1.0], [1.0]).isNaN)
+    expect(correlation([1.0, 1.0, 1.0], [1.0, 2.0, 3.0]).isNaN)
+    expect(correlation([1.0, 2.0], [1.0]).isNaN)
 }
 
 @test
@@ -192,17 +192,17 @@ fn runningStatisticsMatchAndMerge() {
     assertEqual(empty.merged(with: a).count, 100)
     assertEqual(a.merged(with: empty).count, 100)
 
-    assert(empty.mean.isNaN && empty.variance().isNaN && empty.minimum.isNaN && empty.maximum.isNaN)
+    expect(empty.mean.isNaN && empty.variance().isNaN && empty.minimum.isNaN && empty.maximum.isNaN)
     assertSame(empty.sum, 0.0)
     var one = RunningStatistics()
     one.add(4.0)
-    assert(one.variance().isNaN)
+    expect(one.variance().isNaN)
     assertSame(one.variance(.Population), 0.0)
     var poisoned = RunningStatistics()
     poisoned.add(1.0)
     poisoned.add(nan)
-    assert(poisoned.mean.isNaN && poisoned.variance().isNaN && poisoned.minimum.isNaN && poisoned.maximum.isNaN)
-    assert(empty.merged(with: poisoned).merged(with: one).mean.isNaN)
+    expect(poisoned.mean.isNaN && poisoned.variance().isNaN && poisoned.minimum.isNaN && poisoned.maximum.isNaN)
+    expect(empty.merged(with: poisoned).merged(with: one).mean.isNaN)
 }
 
 @test
@@ -235,7 +235,7 @@ fn histogramsCountIntoEqualBins() {
     let nothing = histogram(noValues, bins: 2)
     assertEqual(nothing.total, 0)
     assertSame(nothing.edges[2], 1.0)
-    assert(VarianceKind.Sample != VarianceKind.Population)
+    expect(VarianceKind.Sample != VarianceKind.Population)
 }
 
 @test
@@ -256,29 +256,29 @@ fn benchmarksAreSummedUpByTheseStatistics() {
 fn everyNumberTypeHasItsStatistics() {
     // Floats: the answer in the type, computed in F64 and rounded once.
     let singles: F32[>..] = [1.5, 2.5, 3.5, 4.5]
-    assert(mean(singles) == (3.0 as F32))
-    assert(median(singles) == (3.0 as F32))
-    assert(variance(singles, .Population) == (1.25 as F32))
-    assert(minimum(singles) == (1.5 as F32) && maximum(singles) == (4.5 as F32))
-    assert(quantile(singles, 1.0) == (4.5 as F32))
-    assert(quantiles(singles, [0.0])[0] == (1.5 as F32))
-    assert(percentile(singles, 0.0) == (1.5 as F32))
-    assert(sum(singles) == (12.0 as F32))
-    assert(standardDeviation(singles, .Population) == F32.rounding(wideValue: (1.25).squareRoot()))
-    assert(covariance(singles, singles, .Population) == (1.25 as F32))
-    assert(correlation(singles, singles) == (1.0 as F32))
+    expect(mean(singles) == (3.0 as F32))
+    expect(median(singles) == (3.0 as F32))
+    expect(variance(singles, .Population) == (1.25 as F32))
+    expect(minimum(singles) == (1.5 as F32) && maximum(singles) == (4.5 as F32))
+    expect(quantile(singles, 1.0) == (4.5 as F32))
+    expect(quantiles(singles, [0.0])[0] == (1.5 as F32))
+    expect(percentile(singles, 0.0) == (1.5 as F32))
+    expect(sum(singles) == (12.0 as F32))
+    expect(standardDeviation(singles, .Population) == F32.rounding(wideValue: (1.25).squareRoot()))
+    expect(covariance(singles, singles, .Population) == (1.25 as F32))
+    expect(correlation(singles, singles) == (1.0 as F32))
     // An F32 sum in F32 loses 1 at 2^24; in F64, rounded once, it does not.
     let big: F32[>..] = [16777216.0, 1.0, 1.0]
-    assert(sum(big) == (16777218.0 as F32))
+    expect(sum(big) == (16777218.0 as F32))
     var empty32: F32[>..] = []
-    assert(mean(empty32).isNaN && minimum(empty32).isNaN && maximum(empty32).isNaN)
+    expect(mean(empty32).isNaN && minimum(empty32).isNaN && maximum(empty32).isNaN)
     empty32.append(F32.nan)
-    assert(minimum(empty32).isNaN && maximum(empty32).isNaN)
+    expect(minimum(empty32).isNaN && maximum(empty32).isNaN)
 
     let halves: F16[>..] = [0.5, 1.5]
-    assert(mean(halves) == (1.0 as F16))
+    expect(mean(halves) == (1.0 as F16))
     let brains: BF16[>..] = [2.0, 4.0]
-    assert(mean(brains) == (3.0 as BF16))
+    expect(mean(brains) == (3.0 as BF16))
     assertEqual(mode(halves).count, 2)
 
     // Integers: an F64 where the answer need not be one, the type where it is.
@@ -296,14 +296,14 @@ fn everyNumberTypeHasItsStatistics() {
     assertEqual(minimum(ints) ?? -1, 1)
     assertEqual(maximum(ints) ?? -1, 4)
     let noInts: Int[>..] = []
-    assert(minimum(noInts) == none && maximum(noInts) == none)
-    assert(mean(noInts).isNaN && median(noInts).isNaN)
+    expect(minimum(noInts) == none && maximum(noInts) == none)
+    expect(mean(noInts).isNaN && median(noInts).isNaN)
     assertEqual(sum(noInts), 0)
 
     let bytes: U8[>..] = [200, 250, 250]
     assertNear(mean(bytes), 700.0 / 3.0)
     assertEqual(mode(bytes)[0], 250)
-    assert(maximum(bytes) == (250 as U8))
+    expect(maximum(bytes) == (250 as U8))
     let small: I8[>..] = [-128, 127]
     assertSame(mean(small), -0.5)
     let huge: I128[>..] = [I128.max, I128.max]

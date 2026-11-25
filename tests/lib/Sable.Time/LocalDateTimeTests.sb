@@ -37,8 +37,8 @@ fn aLocalDateTimeIsADateAndATime() {
     assertEqual(at.nanosecond, 7)
     assertEqual(at.weekday, Weekday.Tuesday)
     assertEqual(at.dayOfYear, 321)
-    assert(LocalDateTime.of(year: 2026, month: 2, day: 29) == none)
-    assert(LocalDateTime.of(year: 2026, month: 2, day: 28, hour: 24) == none)
+    expect(LocalDateTime.of(year: 2026, month: 2, day: 29) == none)
+    expect(LocalDateTime.of(year: 2026, month: 2, day: 28, hour: 24) == none)
     assertEqual(at.with(time: TimeOfDay.noon).toString(), "2026-11-17T12:00:00")
     assertEqual(at.assumingUtc().toString(), "2026-11-17T09:05:03.000000007Z")
 }
@@ -59,9 +59,9 @@ fn aLocalDateTimeMovesByTheClockAndTheCalendar() {
 
 @test
 fn localDateTimesAreOrdered() {
-    assert(local(2026, 1, 1, 0, 0) < local(2026, 1, 1, 0, 1))
-    assert(local(2025, 12, 31, 23, 59) < local(2026, 1, 1, 0, 0))
-    assert(!(local(2026, 1, 1, 0, 0) < local(2026, 1, 1, 0, 0)))
+    expect(local(2026, 1, 1, 0, 0) < local(2026, 1, 1, 0, 1))
+    expect(local(2025, 12, 31, 23, 59) < local(2026, 1, 1, 0, 0))
+    expect(!(local(2026, 1, 1, 0, 0) < local(2026, 1, 1, 0, 0)))
     assertEqual(local(2026, 1, 1, 0, 0).hashValue, local(2026, 1, 1, 0, 0).hashValue)
 }
 

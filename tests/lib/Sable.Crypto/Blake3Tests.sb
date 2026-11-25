@@ -63,7 +63,7 @@ fn aMessageInTwoPartsIsTheWholeWhereverItIsCut() {
         var hash = Blake3()
         hash.update(whole[..<cut])
         hash.update(whole[cut...])
-        assert(hash.finalize() == expected)
+        assertEqual(hash.finalize(), expected)
         cut += 7
     }
 }
@@ -76,7 +76,7 @@ fn aMessageAByteAtATimeIsTheWhole() {
         hash.update([byte])
         hash.update([])
     }
-    assert(hash.finalize() == Blake3.hash(whole))
+    expect(hash.finalize() == Blake3.hash(whole))
 }
 
 @test
@@ -85,10 +85,10 @@ fn finalizingLeavesTheFunctionToGoOn() {
     var hash = Blake3()
     hash.update(whole[..<2048])
     let copy = hash
-    assert(hash.finalize() == Blake3.hash(whole[..<2048]))
+    expect(hash.finalize() == Blake3.hash(whole[..<2048]))
     hash.update(whole[2048...])
-    assert(hash.finalize() == Blake3.hash(whole))
-    assert(copy.finalize() == Blake3.hash(whole[..<2048]))
+    expect(hash.finalize() == Blake3.hash(whole))
+    expect(copy.finalize() == Blake3.hash(whole[..<2048]))
 }
 
 @test
@@ -101,8 +101,8 @@ fn itsOutputReadInPartsIsTheWhole() {
     while parts.count < 300 {
         parts.append(contentsOf: reader.read(count: 25))
     }
-    assert(parts == whole)
-    assert(whole.starts(with: hash.finalize().bytes))
+    expect(parts == whole)
+    expect(whole.starts(with: hash.finalize().bytes))
     assertEqual(Blake3.digestByteCount, 32)
     assertEqual(Blake3.blockByteCount, 64)
 }

@@ -11,14 +11,14 @@ import Sable.Testing
 @test
 fn variablesAreListedSetAndRemoved() {
     let name = "SABLE_ENVIRONMENT_TEST_VALUE"
-    assert(Environment.variable(name) == none)
+    expect(Environment.variable(name) == none)
     unsafe {
         Environment.set(name, "one = two")
     }
     assertEqual(Environment.variable(name) ?? "-", "one = two")
     let all = Environment.variables()
     assertEqual(all[name] ?? "-", "one = two")
-    assert(all.count > 1)
+    expect(all.count > 1)
     unsafe {
         Environment.set(name, "")
     }
@@ -27,8 +27,8 @@ fn variablesAreListedSetAndRemoved() {
         Environment.remove(name)
         Environment.remove(name)
     }
-    assert(Environment.variable(name) == none)
-    assert(Environment.variables()[name] == none)
+    expect(Environment.variable(name) == none)
+    expect(Environment.variables()[name] == none)
 }
 
 @test
@@ -63,22 +63,22 @@ fn argumentsAsTextAndAsBytes() {
 @test
 fn theProgramsPlaces() {
     let here = Environment.currentDirectory
-    assert(here.isAbsolute)
-    assert(Environment.changeCurrentDirectory(to: here))
-    assert(!Environment.changeCurrentDirectory(to: FilePath("sable-no-such-directory")))
+    expect(here.isAbsolute)
+    expect(Environment.changeCurrentDirectory(to: here))
+    expect(!Environment.changeCurrentDirectory(to: FilePath("sable-no-such-directory")))
     let home = Environment.homeDirectory!
-    assert(home.isAbsolute)
-    assert(Directory.exists("\(home)"))
+    expect(home.isAbsolute)
+    expect(Directory.exists("\(home)"))
     let temporary = Environment.temporaryDirectory
-    assert(temporary.isAbsolute)
-    assert(Directory.exists("\(temporary)"))
+    expect(temporary.isAbsolute)
+    expect(Directory.exists("\(temporary)"))
     if let program = Environment.executablePath {
-        assert(program.isAbsolute)
+        expect(program.isAbsolute)
     }
-    assert(Environment.knownFolder(.Home)! == home)
-    assert(Environment.knownFolder(.Temporary)! == temporary)
+    expect(Environment.knownFolder(.Home)! == home)
+    expect(Environment.knownFolder(.Temporary)! == temporary)
     let config = Environment.knownFolder(.Config)!
-    assert(config.isAbsolute && config.starts(with: home) || Environment.variable("XDG_CONFIG_HOME") != none)
+    expect(config.isAbsolute && config.starts(with: home) || Environment.variable("XDG_CONFIG_HOME") != none)
 }
 
 fn folder(_ kind: KnownFolder, _ system: OperatingSystem, _ variables: Dictionary<String, String>) -> String {

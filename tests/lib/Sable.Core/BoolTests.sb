@@ -21,7 +21,7 @@ fn randomGivesBothValues() {
         }
         i += 1
     }
-    assert(heads > 60 && heads < 140)
+    expect(heads > 60 && heads < 140)
     var sawTrue = false
     var sawFalse = false
     i = 0
@@ -33,5 +33,5 @@ fn randomGivesBothValues() {
         }
         i += 1
     }
-    assert(sawTrue && sawFalse)
+    expect(sawTrue && sawFalse)
 }

@@ -31,14 +31,14 @@ fn nothing(_ result: ReadResult?) -> Bool {
 fn aByteSequenceReadsAcrossItsSegments() {
     let bytes = ByteSequence(segments: [[1, 2], [], [3, 4, 5], [6]])
     assertEqual(bytes.count, 6)
-    assert(!bytes.isEmpty)
+    expect(!bytes.isEmpty)
     assertEqual(bytes.segmentCount, 3)
     assertEqual(bytes.segment(1), [3, 4, 5])
     assertEqual(bytes[0], 1)
     assertEqual(bytes[5], 6)
     assertEqual(bytes.firstIndex(of: 4) ?? -1, 3)
     assertEqual(bytes.firstIndex(of: 6) ?? -1, 5)
-    assert(bytes.firstIndex(of: 9) == none)
+    expect(bytes.firstIndex(of: 9) == none)
     assertEqual(bytes.toArray(), [1, 2, 3, 4, 5, 6])
 
     // A slice keeps its segments, cut where it starts and ends.
@@ -53,9 +53,9 @@ fn aByteSequenceReadsAcrossItsSegments() {
     assertEqual(bytes.slice(from: 2, count: 1).toArray(), [3])
     assertEqual(bytes.slice(from: 5, count: 1).toArray(), [6])
     let nothingAtAll = bytes.slice(from: 6, count: 0)
-    assert(nothingAtAll.isEmpty)
+    expect(nothingAtAll.isEmpty)
     assertEqual(nothingAtAll.segmentCount, 0)
-    assert(ByteSequence(segments: []).isEmpty)
+    expect(ByteSequence(segments: []).isEmpty)
 }
 
 /// Lines read through the pipe as a parser would read them: ask, look for
@@ -177,24 +177,24 @@ fn aWriterWaitsWhileItsReaderIsBehind() async {
 fn committedBuffersAndAsyncReadsAndWrites() async {
     let pipe = Pipe()
     var buffer = await pipe.writer.rentBuffer(minimumCapacity: 10)
-    assert(buffer.isEmpty && buffer.capacity >= 4096)
+    expect(buffer.isEmpty && buffer.capacity >= 4096)
     buffer.append(contentsOf: [1, 2, 3])
     await pipe.writer.commit(move buffer)
     await pipe.writer.commit([])
     await pipe.writer.buffer([4, 5])
     await pipe.writer.commit([6])
-    assert(nothing(await pipe.reader.tryRead()))
+    expect(nothing(await pipe.reader.tryRead()))
     let flushed = await pipe.writer.flush()
-    assert(!flushed.isCompleted && !flushed.isCanceled)
+    expect(!flushed.isCompleted && !flushed.isCanceled)
     assertEqual(await pipe.length, 6)
 
     let result = (await pipe.reader.tryRead())!
     assertEqual(result.buffer.segmentCount, 3)
     assertEqual(result.buffer.toArray(), [1, 2, 3, 4, 5, 6])
-    assert(!result.isCompleted && !result.isCanceled)
+    expect(!result.isCompleted && !result.isCanceled)
     // Looked at whole and consumed in part: a try waits for more.
     await pipe.reader.advance(consumed: 2, examined: 6)
-    assert(nothing(await pipe.reader.tryRead()))
+    expect(nothing(await pipe.reader.tryRead()))
 
     // As an AsyncReader and an AsyncWriter.
     do {
@@ -202,11 +202,11 @@ fn committedBuffersAndAsyncReadsAndWrites() async {
         assertEqual(try await pipe.reader.read(upTo: 3), [3, 4, 5])
         assertEqual(try await pipe.reader.read(upTo: 10), [6, 7])
         await pipe.writer.complete()
-        assert(try await pipe.reader.read(upTo: 10).isEmpty)
+        expect(try await pipe.reader.read(upTo: 10).isEmpty)
     } catch {
         fail(error.description())
     }
-    assert((await pipe.reader.tryRead())!.isCompleted)
+    expect((await pipe.reader.tryRead())!.isCompleted)
 }
 
 @test
@@ -215,12 +215,12 @@ fn readsAndFlushesAreCanceledAndEndsComplete() async {
     // A read canceled before it waits comes back at once, canceled.
     await pipe.reader.cancelPendingRead()
     let canceled = await pipe.reader.read()
-    assert(canceled.isCanceled && canceled.buffer.isEmpty)
+    expect(canceled.isCanceled && canceled.buffer.isEmpty)
 
     // A read canceled while it waits.
     let reading = Task.spawn { await pipe.reader.read() }
     await pipe.reader.cancelPendingRead()
-    assert((await reading.value).isCanceled)
+    expect((await reading.value).isCanceled)
 
     // A flush held back past the threshold, canceled while it waits or
     // before; the next is not.
@@ -228,15 +228,15 @@ fn readsAndFlushesAreCanceledAndEndsComplete() async {
     let flushing = Task.spawn { await pipe.writer.flush() }
     await pipe.writer.cancelPendingFlush()
     let flushed = await flushing.value
-    assert(flushed.isCanceled && !flushed.isCompleted)
+    expect(flushed.isCanceled && !flushed.isCompleted)
     await pipe.writer.cancelPendingFlush()
-    assert((await pipe.writer.flush()).isCanceled)
+    expect((await pipe.writer.flush()).isCanceled)
     await pipe.reader.advance(consumed: 0, examined: 0)
 
     // The reader gone, writes go nowhere and say so.
     await pipe.reader.complete()
     assertEqual(await pipe.length, 0)
-    assert((await pipe.writer.flush()).isCompleted)
+    expect((await pipe.writer.flush()).isCompleted)
     do {
         try await pipe.writer.write([1])
         fail("a write reached a completed reader")

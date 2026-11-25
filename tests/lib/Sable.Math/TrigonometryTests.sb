@@ -201,5 +201,5 @@ fn sinPiOfAThousandAngles() {
         total = total + sinPi(F64(i) * 0.001)
         i = i + 1
     }
-    assert(total > 0.0)
+    expect(total > 0.0)
 }

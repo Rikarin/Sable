@@ -10,13 +10,13 @@ fn transitionsAreEqualInEveryPart() {
     let spring = zone.nextTransition(after: start)!
     let autumn = zone.nextTransition(after: spring.instant)!
     assertEqual(zone.nextTransition(after: start)!, spring)
-    assert(spring != autumn)
+    expect(spring != autumn)
     let other = try! TimeZone.posix("XYZ-1CEST,M3.5.0,M10.5.0/3")
-    assert(other.nextTransition(after: start)! == spring)
+    expect(other.nextTransition(after: start)! == spring)
     let renamed = try! TimeZone.posix("CET-1CET,M3.5.0,M10.5.0/3")
-    assert(renamed.nextTransition(after: start)! != spring)
+    expect(renamed.nextTransition(after: start)! != spring)
     let shifted = try! TimeZone.posix("CET-1CEST-3,M3.5.0,M10.5.0/3")
-    assert(shifted.nextTransition(after: start)! != spring)
+    expect(shifted.nextTransition(after: start)! != spring)
     let standard = ZoneTransition { instant: spring.instant, offset: spring.offset, abbreviation: spring.abbreviation, isDaylightSaving: false }
-    assert(standard != spring)
+    expect(standard != spring)
 }

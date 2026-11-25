@@ -71,7 +71,7 @@ fn whatIsMissingIsSaidWithItsPath() {
     services.addTransient(Between.self)
     services.addTransient(HoldsBetween.self)
     let said = problems(services)
-    assert(said.contains("nothing provides ValidationTests.Scoped: ValidationTests.Between -> ValidationTests.Scoped"), said)
+    expect(said.contains("nothing provides ValidationTests.Scoped: ValidationTests.Between -> ValidationTests.Scoped"), said)
 }
 
 @test
@@ -90,7 +90,7 @@ fn norThroughATransientOne() {
     assertEqual(problems(services), "")
     services.addSingleton(HoldsBetween.self)
     let said = problems(services)
-    assert(said.contains("ValidationTests.HoldsBetween -> ValidationTests.Between -> ValidationTests.Scoped"), said)
+    expect(said.contains("ValidationTests.HoldsBetween -> ValidationTests.Between -> ValidationTests.Scoped"), said)
 }
 
 @test
@@ -99,7 +99,7 @@ fn aServiceMayNotNeedItself() {
     services.addTransient(Hen.self)
     services.addTransient(Egg.self)
     let said = problems(services)
-    assert(said.contains("a service needs itself: ValidationTests.Hen -> ValidationTests.Egg -> ValidationTests.Hen"), said)
+    expect(said.contains("a service needs itself: ValidationTests.Hen -> ValidationTests.Egg -> ValidationTests.Hen"), said)
 }
 
 @test
@@ -117,12 +117,7 @@ fn aCycleOfClosuresIsFoundAsItIsMade() {
     services.addTransient(Int.self) { scope in (try scope.resolve(String.self)).count }
     services.addTransient(String.self) { scope in "\(try scope.resolve(Int.self))" }
     let provider = try! services.build()
-    do {
-        _ = try provider.resolve(Int.self)
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "a service needs itself: Int -> String -> Int")
-    }
+    expectThrows(saying: "a service needs itself: Int -> String -> Int") { _ = try provider.resolve(Int.self) }
 }
 
 @test
@@ -131,12 +126,7 @@ fn aCycleOfSingletonsIsNotWaitedFor() {
     services.addSingleton(Int.self) { scope in (try scope.resolve(String.self)).count }
     services.addSingleton(String.self) { scope in "\(try scope.resolve(Int.self))" }
     let provider = try! services.build()
-    do {
-        _ = try provider.resolve(Int.self)
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "a service needs itself: Int -> String -> Int")
-    }
+    expectThrows(saying: "a service needs itself: Int -> String -> Int") { _ = try provider.resolve(Int.self) }
 }
 
 @test
@@ -149,12 +139,7 @@ fn aSingletonsClosureIsHeldToItToo() {
     }
     let provider = try! services.build()
     provider.withScope { scope in
-        do {
-            _ = try scope.resolve(Int.self)
-            assert(false)
-        } catch {
-            assertEqual(error.description(), "a singleton would hold a scoped service: Int -> ValidationTests.Scoped")
-        }
+        expectThrows(saying: "a singleton would hold a scoped service: Int -> ValidationTests.Scoped") { _ = try scope.resolve(Int.self) }
     }
 }
 
@@ -182,12 +167,7 @@ fn aCollectionIsBuiltUncheckedWhenAsked() {
     var services = ServiceCollection()
     services.addTransient(Between.self)
     let provider = try! services.build(validate: false)
-    do {
-        _ = try provider.resolve(Between.self)
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "nothing provides ValidationTests.Scoped: ValidationTests.Between -> ValidationTests.Scoped")
-    }
+    expectThrows(saying: "nothing provides ValidationTests.Scoped: ValidationTests.Between -> ValidationTests.Scoped") { _ = try provider.resolve(Between.self) }
 }
 
 @test
@@ -195,10 +175,10 @@ fn optionalListedAndDefaultedDependenciesMayBeMissing() {
     var services = ServiceCollection()
     services.addSingleton(Optionally.self)
     let alone = try! (try! services.build()).resolve(Optionally.self)
-    assert(alone.clock == none && alone.clocks.isEmpty && alone.retries == 3)
+    expect(alone.clock == none && alone.clocks.isEmpty && alone.retries == 3)
     services.addSingleton((any Clock).self, FixedClock.self)
     services.addSingleton((any Clock).self, FixedClock.self)
     services.addSingleton(Int.self, value: 8)
     let given = try! (try! services.build()).resolve(Optionally.self)
-    assert(given.clock != none && given.clocks.count == 2 && given.retries == 8)
+    expect(given.clock != none && given.clocks.count == 2 && given.retries == 8)
 }

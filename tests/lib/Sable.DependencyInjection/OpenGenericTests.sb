@@ -26,10 +26,10 @@ fn anOpenGenericIsClosedAsItIsAskedFor() {
     (try! services.build()).withScope { scope in
         let orders = try! scope.resolve(Orders.self)
         assertEqual(orders.repository.describe(), "InjectionSupport.Order by InjectionSupport.MemoryRepository<InjectionSupport.Order>")
-        assert(orders.repository.first() == none)
+        expect(orders.repository.first() == none)
         let again = try! scope.resolve((any Repository<Order>).self) as! MemoryRepository<Order>
-        assert(again === (orders.repository as! MemoryRepository<Order>))
-        assert(again.isOn(try! scope.resolve(Connection.self)))
+        expect(again === (orders.repository as! MemoryRepository<Order>))
+        expect(again.isOn(try! scope.resolve(Connection.self)))
     }
 }
 
@@ -41,7 +41,7 @@ fn aClosedRegistrationIsGivenBeforeAnOpenOne() {
     }
     (try! services.build()).withScope { scope in
         let given = try! scope.resolve((any Repository<Int>).self) as! MemoryRepository<Int>
-        assert(!given.isOn(try! scope.resolve(Connection.self)))
+        expect(!given.isOn(try! scope.resolve(Connection.self)))
         assertEqual((try! scope.resolveAll((any Repository<String>).self)).count, 1)
     }
 }
@@ -63,7 +63,7 @@ fn anOpenGenericsOwnDependenciesAreChecked() {
     services.addScoped(open: Repository.self, MemoryRepository.self)
     services.addScoped(Orders.self)
     let said = problems(services)
-    assert(said.contains("nothing provides InjectionSupport.Connection: OpenGenericTests.Orders -> any InjectionSupport.Repository<InjectionSupport.Order> -> InjectionSupport.Connection"), said)
+    expect(said.contains("nothing provides InjectionSupport.Connection: OpenGenericTests.Orders -> any InjectionSupport.Repository<InjectionSupport.Order> -> InjectionSupport.Connection"), said)
 }
 
 @test
@@ -73,7 +73,7 @@ fn anOpenSingletonMayNotHoldAScopedService() {
     services.addTransient(open: Log.self, Log.self)
     services.addScoped(Connection.self)
     services.addTransient(Orders.self)
-    assert(problems(services).contains("a singleton would hold a scoped service: any InjectionSupport.Repository"))
+    expect(problems(services).contains("a singleton would hold a scoped service: any InjectionSupport.Repository"))
 }
 
 protocol Holder<Item> { }
@@ -115,7 +115,7 @@ fn anOpenSingletonIsOneForEachType() {
     var services = ServiceCollection()
     services.addSingleton(open: Log.self, Log.self)
     let provider = try! services.build()
-    assert((try! provider.resolve(Log<Int>.self)) === (try! provider.resolve(Log<Int>.self)))
+    expect((try! provider.resolve(Log<Int>.self)) === (try! provider.resolve(Log<Int>.self)))
     assertEqual((try! provider.resolve(Log<String>.self)).category(), "String")
 }
 
@@ -124,6 +124,6 @@ fn anOpenGenericMayBeKeyed() {
     var services = ServiceCollection()
     services.addTransient(open: Log.self, Log.self, key: "k")
     let provider = try! services.build()
-    assert((try! provider.find(Log<Int>.self)) == none)
+    expect((try! provider.find(Log<Int>.self)) == none)
     assertEqual((try! provider.resolve(Log<Int>.self, key: "k")).category(), "Int")
 }

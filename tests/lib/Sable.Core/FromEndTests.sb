@@ -10,7 +10,7 @@ fn aCaretMakesTheCountBackFromTheEnd() {
     let last = ^1
     assertEqual(last.n, 1)
     assertEqual(^(2 + 1), FromEnd(3))
-    assert(^1 != ^2)
+    expect(^1 != ^2)
     assertEqual((^4).debugDescription(), "^4")
 }
 

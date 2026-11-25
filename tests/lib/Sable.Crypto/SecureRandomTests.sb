@@ -20,7 +20,7 @@ fn everyByteComes() {
     for byte in SecureRandom.bytes(100_000) {
         seen[Int(byte)] = 1
     }
-    assert(!seen.contains(element: 0))
+    expect(!seen.contains(element: 0))
 }
 
 @test
@@ -35,13 +35,13 @@ fn fillingReplacesEveryByte() {
     }
     let before = bytes
     SecureRandom.fill(&bytes[..<500])
-    assert(bytes[500...] == before[500...])
-    assert(bytes[..<500] != before[..<500])
+    expect(bytes[500...] == before[500...])
+    expect(bytes[..<500] != before[..<500])
 }
 
 @test
 fn noTwoAreAlike() {
-    assert(SecureRandom.bytes(32) != SecureRandom.bytes(32))
+    expect(SecureRandom.bytes(32) != SecureRandom.bytes(32))
 }
 
 @test
@@ -52,6 +52,6 @@ fn manyBytesAreFilledToTheEnd() {
         counts[Int(byte)] += 1
     }
     // Each 3906 times, give or take ten times the deviation.
-    assert(counts.allSatisfy { $0 > 3280 && $0 < 4532 })
-    assert(bytes[999_940...] != U8[>..](repeating: 0, count: 63))
+    expect(counts.allSatisfy { $0 > 3280 && $0 < 4532 })
+    expect(bytes[999_940...] != U8[>..](repeating: 0, count: 63))
 }

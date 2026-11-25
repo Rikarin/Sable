@@ -85,7 +85,7 @@ fn aClosedRangeUpToTheLargestIntegerEnds() {
 fn aStringIsASequenceOfItsCharacters() {
     let characters = elements("héllo")
     assertEqual(characters.count, 5)
-    assert(characters[1] == 'é')
+    expect(characters[1] == 'é')
     assertEqual(elements("").count, 0)
 }
 
@@ -116,9 +116,9 @@ fn aDictionaryIsACollectionOfItsEntries() {
         position = ages.index(after: position)
     }
     assertEqualText(seen.joined(separator: ","), "ann=31,cy=7")
-    assert(ages.firstIndex(where: { entry in entry.1 > 10 }) == ages.startIndex)
+    expect(ages.firstIndex(where: { entry in entry.1 > 10 }) == ages.startIndex)
     let empty: [String: Int] = [:]
-    assert(empty.startIndex == empty.endIndex)
+    expect(empty.startIndex == empty.endIndex)
 }
 
 @test(traps: "out of range")
@@ -149,8 +149,8 @@ fn peekLooksWithoutTaking() {
     assertEqual(iterator.peek() ?? -1, 1)
     assertEqual(iterator.next() ?? -1, 1)
     assertEqual(iterator.next() ?? -1, 2)
-    assert(iterator.peek() == none, "nothing is left to look at")
-    assert(iterator.next() == none, "nothing is left to take")
+    expect(iterator.peek() == none, "nothing is left to look at")
+    expect(iterator.next() == none, "nothing is left to take")
 }
 
 @test
@@ -158,5 +158,5 @@ fn peekableWithoutPeekingIsTheIterator() {
     var iterator = (1..<3).makeIterator().peekable()
     assertEqual(iterator.next() ?? -1, 1)
     assertEqual(iterator.next() ?? -1, 2)
-    assert(iterator.next() == none, "done")
+    expect(iterator.next() == none, "done")
 }

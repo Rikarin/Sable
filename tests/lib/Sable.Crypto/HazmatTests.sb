@@ -69,21 +69,21 @@ fn theModesAreAsPublished() {
     for i in 0..<3 {
         let e = try! Hazmat.AesEcb(key: keys[i])
         assertEqual(hex(try! e.encrypt(text)), ecb[i])
-        assert((try! e.decrypt(bytes(ecb[i]))) == text)
+        require((try! e.decrypt(bytes(ecb[i]))) == text)
         let c = try! Hazmat.AesCbc(key: keys[i])
         assertEqual(hex(try! c.encrypt(text, iv: iv, padding: .None)), cbc[i])
-        assert((try! c.decrypt(bytes(cbc[i]), iv: iv, padding: .None)) == text)
+        require((try! c.decrypt(bytes(cbc[i]), iv: iv, padding: .None)) == text)
         let f = try! Hazmat.AesCfb(key: keys[i])
         assertEqual(hex(try! f.encrypt(text, iv: iv)), cfb[i])
-        assert((try! f.decrypt(bytes(cfb[i]), iv: iv)) == text)
+        require((try! f.decrypt(bytes(cfb[i]), iv: iv)) == text)
         let t = try! Hazmat.AesCtr(key: keys[i])
         let counter = bytes("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
         assertEqual(hex(try! t.apply(text, counterBlock: counter)), ctr[i])
-        assert((try! t.apply(bytes(ctr[i]), counterBlock: counter)) == text)
+        require((try! t.apply(bytes(ctr[i]), counterBlock: counter)) == text)
     }
     let byte = try! Hazmat.AesCfb(key: key, feedback: .Byte)
     assertEqual(hex(try! byte.encrypt(text[..<18], iv: iv)), "3b79424c9c0dd436bace9e0ed4586a4f32b9")
-    assert((try! byte.decrypt(bytes("3b79424c9c0dd436bace9e0ed4586a4f32b9"), iv: iv)) == text[..<18].toArray())
+    expect((try! byte.decrypt(bytes("3b79424c9c0dd436bace9e0ed4586a4f32b9"), iv: iv)) == text[..<18].toArray())
 }
 
 // Each mode in single blocks of AesEcb, at every length around the kernels' strides.
@@ -133,17 +133,17 @@ fn everyLengthIsMadeOfItsBlocks() {
             at = end
         }
         let whole = count / 16 * 16
-        assert((try! cbc.encrypt(plain[..<whole], iv: iv, padding: .None)) == chained)
-        assert((try! cbc.decrypt(chained, iv: iv, padding: .None)) == plain[..<whole].toArray())
-        assert((try! cbc.decrypt(try! cbc.encrypt(plain, iv: iv), iv: iv)) == plain)
-        assert((try! block.decrypt(try! block.encrypt(plain[..<whole]))) == plain[..<whole].toArray())
-        assert((try! block.decrypt(try! block.encrypt(plain, padding: .Pkcs7), padding: .Pkcs7)) == plain)
-        assert((try! cfb.encrypt(plain, iv: iv)) == fed)
-        assert((try! cfb.decrypt(fed, iv: iv)) == plain)
-        assert((try! cfb8.decrypt(try! cfb8.encrypt(plain, iv: iv), iv: iv)) == plain)
-        assert((try! ctr.apply(plain, counterBlock: start)) == counted)
+        assertEqual((try! cbc.encrypt(plain[..<whole], iv: iv, padding: .None)), chained)
+        assertEqual((try! cbc.decrypt(chained, iv: iv, padding: .None)), plain[..<whole].toArray())
+        assertEqual((try! cbc.decrypt(try! cbc.encrypt(plain, iv: iv), iv: iv)), plain)
+        assertEqual((try! block.decrypt(try! block.encrypt(plain[..<whole]))), plain[..<whole].toArray())
+        assertEqual((try! block.decrypt(try! block.encrypt(plain, padding: .Pkcs7), padding: .Pkcs7)), plain)
+        assertEqual((try! cfb.encrypt(plain, iv: iv)), fed)
+        assertEqual((try! cfb.decrypt(fed, iv: iv)), plain)
+        assertEqual((try! cfb8.decrypt(try! cfb8.encrypt(plain, iv: iv), iv: iv)), plain)
+        assertEqual((try! ctr.apply(plain, counterBlock: start)), counted)
         if count >= 32 {
-            assert((try! ctr.apply(plain[32...], counterBlock: start, skippingBlocks: 2)) == counted[32...].toArray())
+            assertEqual((try! ctr.apply(plain[32...], counterBlock: start, skippingBlocks: 2)), counted[32...].toArray())
         }
     }
 }
@@ -156,17 +156,17 @@ fn theCounterIsAllOfItsBlock() {
     for start in ["000000000000000000000000fffffff0", "0000000000000000fffffffffffffff0", "fffffffffffffffffffffffffffffff0", "0102030405060708090a0bffffffffff"] {
         let whole = try! ctr.apply(plain, counterBlock: bytes(start))
         for blocks in [1, 15, 16, 17, 40] {
-            assert((try! ctr.apply(plain[(16 * blocks)...], counterBlock: bytes(start), skippingBlocks: U64(blocks))) == whole[(16 * blocks)...].toArray())
+            require((try! ctr.apply(plain[(16 * blocks)...], counterBlock: bytes(start), skippingBlocks: U64(blocks))) == whole[(16 * blocks)...].toArray())
         }
         let block = try! Hazmat.AesEcb(key: key)
         let after = start == "fffffffffffffffffffffffffffffff0" ? "00000000000000000000000000000000" : ""
         if after != "" {
             let stream = try! block.encrypt(bytes(after))
-            assert(whole[256] == (stream[0] ^ plain[256]))
+            require(whole[256] == (stream[0] ^ plain[256]))
         }
     }
     let far = try! ctr.apply(plain, counterBlock: bytes("00000000000000000000000000000001"), skippingBlocks: U64.max)
-    assert(far == (try! ctr.apply(plain, counterBlock: bytes("00000000000000010000000000000000"))))
+    expect(far == (try! ctr.apply(plain, counterBlock: bytes("00000000000000010000000000000000"))))
 }
 
 fn wrong(_ body: () throws(CryptoError) -> Void) -> String {
@@ -201,7 +201,7 @@ fn wrongLengthsAreErrors() {
         assert(false)
     } catch {
         assertEqual(error.description(), whole)
-        assert(place == message(17))
+        expect(place == message(17))
     }
 }
 
@@ -217,7 +217,7 @@ fn wrongPaddingIsAnError() {
         plain[31] = U8(last)
         let sealedText = try! cipher.encrypt(plain)
         if last >= 1 && last <= 16 {
-            assert((try! cipher.decrypt(sealedText, padding: .Pkcs7)) == plain[..<32 - last].toArray())
+            assertEqual((try! cipher.decrypt(sealedText, padding: .Pkcs7)), plain[..<32 - last].toArray())
             for i in 1..<last {
                 var other = plain
                 other[31 - i] = other[31 - i] ^ 0x80
@@ -236,12 +236,12 @@ fn aLongMessageIsTheSameBothWays() {
     let cbc = try! Hazmat.AesCbc(key: key24)
     let cfb = try! Hazmat.AesCfb(key: key24)
     let made = try! cbc.encrypt(plain, iv: iv)
-    assert(made.count == 100_016)
-    assert((try! cbc.decrypt(made, iv: iv)) == plain)
-    assert((try! cfb.decrypt(try! cfb.encrypt(plain, iv: iv), iv: iv)) == plain)
+    expect(made.count == 100_016)
+    expect((try! cbc.decrypt(made, iv: iv)) == plain)
+    expect((try! cfb.decrypt(try! cfb.encrypt(plain, iv: iv), iv: iv)) == plain)
     var place = plain
     try! cbc.encrypt(inPlace: &place, iv: iv)
-    assert(place == made[..<100_000].toArray())
+    expect(place == made[..<100_000].toArray())
     try! cbc.decrypt(inPlace: &place, iv: iv)
-    assert(place == plain)
+    expect(place == plain)
 }

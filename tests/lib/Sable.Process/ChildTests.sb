@@ -38,19 +38,19 @@ fn isGone(_ id: Int) async -> Bool {
 @test
 fn aChildRunsAsThisProgramGoesOn() async {
     let child = try! Command("cat").stdin(.Piped).stdout(.Null).spawn()
-    assert(child.id > 0 && child.id != Process.id())
-    assert(child.tryWait() == none)
+    expect(child.id > 0 && child.id != Process.id())
+    expect(child.tryWait() == none)
     child.stdin!.close()
     let status = try! await child.wait()
-    assert(status.success)
-    assert(child.tryWait()! == status)
+    expect(status.success)
+    expect(child.tryWait()! == status)
 }
 
 @test
 fn itsStatusIsKept() async {
     let child = try! sh("exit 7").spawn()
-    assert(try! await child.wait() == ExitStatus(code: 7))
-    assert(try! await child.wait() == ExitStatus(code: 7))
+    expect(try! await child.wait() == ExitStatus(code: 7))
+    expect(try! await child.wait() == ExitStatus(code: 7))
 }
 
 @test
@@ -73,14 +73,14 @@ fn aWaitCanHaveALimit() async {
         _ = try await withTimeout(Duration.milliseconds(30)) { try await child.wait() }
         assert(false)
     } catch let error as TimeoutError {
-        assert(error.duration == Duration.milliseconds(30))
+        expect(error.duration == Duration.milliseconds(30))
     } catch {
         assert(false)
     }
     // It runs on, and can be waited for again.
-    assert(child.tryWait() == none)
-    assert(child.kill())
-    assert(try! await child.wait() == ExitStatus(signal: .Kill))
+    expect(child.tryWait() == none)
+    expect(child.kill())
+    expect(try! await child.wait() == ExitStatus(signal: .Kill))
 }
 
 @test
@@ -110,7 +110,7 @@ fn aChildNoOneWaitsForIsNoZombie() async {
         let child = try! Command("true").spawn()
         id = child.id
     }
-    assert(await isGone(id))
+    expect(await isGone(id))
 }
 
 // ---- Killed and signalled -------------------------------------------------------
@@ -118,18 +118,18 @@ fn aChildNoOneWaitsForIsNoZombie() async {
 @test
 fn killedItSaysSo() async {
     let child = try! Command("sleep").argument("60").spawn()
-    assert(child.kill())
+    expect(child.kill())
     let status = try! await child.wait()
-    assert(status.signal! == Signal.Kill && status.code == none && !status.success)
+    expect(status.signal! == Signal.Kill && status.code == none && !status.success)
 }
 
 @test
 fn oneThatHasEndedIsNotSignalled() async {
     let child = try! Command("true").spawn()
     _ = try! await child.wait()
-    assert(!child.kill())
-    assert(!child.kill(tree: true))
-    assert(try! !child.signal(.Terminate))
+    expect(!child.kill())
+    expect(!child.kill(tree: true))
+    expect(try! !child.signal(.Terminate))
 }
 
 @test
@@ -149,35 +149,25 @@ fn killingAsItEndsIsNoTrouble() async {
 fn aSignalReachesIt() async {
     let child = try! sh("trap 'echo caught; exit 4' TERM; echo ready; while :; do sleep 0.01; done").stdout(.Piped).spawn()
     var lines = child.stdout!.lines().makeAsyncIterator()
-    assert(try! await lines.next() == "ready")
-    assert(try! child.signal(.Terminate))
-    assert(try! await lines.next() == "caught")
-    assert(try! await child.wait() == ExitStatus(code: 4))
+    expect(try! await lines.next() == "ready")
+    expect(try! child.signal(.Terminate))
+    expect(try! await lines.next() == "caught")
+    expect(try! await child.wait() == ExitStatus(code: 4))
 }
 
 @test
 fn aSignalItDoesNotCatchEndsIt() async {
     let child = try! Command("sleep").argument("60").spawn()
-    assert(try! child.signal(.User1))
-    assert(try! await child.wait() == ExitStatus(signal: .User1))
+    expect(try! child.signal(.User1))
+    expect(try! await child.wait() == ExitStatus(signal: .User1))
 }
 
 @test
 fn whatIsNoSignalIsRefused() async {
     let child = try! Command("cat").stdin(.Piped).spawn()
-    do {
-        try child.signal(.Other(number: 999))
-        assert(false)
-    } catch {
-        assertEqual(error.description(), ProcessError.Unsupported.description())
-    }
-    do {
-        try child.signal(.Other(number: 0))
-        assert(false)
-    } catch {
-        assertEqual(error.description(), ProcessError.Unsupported.description())
-    }
-    assert(child.tryWait() == none)
+    expectThrows(saying: ProcessError.Unsupported.description()) { try child.signal(.Other(number: 999)) }
+    expectThrows(saying: ProcessError.Unsupported.description()) { try child.signal(.Other(number: 0)) }
+    expect(child.tryWait() == none)
     child.stdin!.close()
     _ = try! await child.wait()
 }
@@ -188,10 +178,10 @@ fn killingTheTreeEndsWhatItStarted() async {
     var lines = child.stdout!.lines().makeAsyncIterator()
     let first = try! await lines.next()
     let second = try! await lines.next()
-    assert(child.kill(tree: true))
-    assert(try! await child.wait() == ExitStatus(signal: .Kill))
-    assert(await isGone(first!.toInt()!))
-    assert(await isGone(second!.toInt()!))
+    expect(child.kill(tree: true))
+    expect(try! await child.wait() == ExitStatus(signal: .Kill))
+    expect(await isGone(first!.toInt()!))
+    expect(await isGone(second!.toInt()!))
 }
 
 @test
@@ -199,10 +189,10 @@ fn killingItAloneLeavesWhatItStarted() async {
     let child = try! sh("sleep 60 & echo $!; wait").stdout(.Piped).spawn()
     var lines = child.stdout!.lines().makeAsyncIterator()
     let started = try! await lines.next()
-    assert(child.kill())
+    expect(child.kill())
     _ = try! await child.wait()
     let alive = try! await sh("kill \(started!)").status()
-    assert(alive.success)
+    expect(alive.success)
 }
 
 // ---- Its streams ------------------------------------------------------------------
@@ -210,7 +200,7 @@ fn killingItAloneLeavesWhatItStarted() async {
 @test
 fn onlyStreamsPipedAreThere() async {
     let child = try! Command("true").stdin(.Null).stdout(.Piped).stderr(.Null).spawn()
-    assert(child.stdin == none && child.stderr == none && child.stdout != none)
+    expect(child.stdin == none && child.stderr == none && child.stdout != none)
     _ = try! await child.wait()
 }
 
@@ -223,18 +213,18 @@ fn whatIsWrittenIsReadAsItComes() async {
         while got.count < text.utf8Count {
             got.append(contentsOf: try! await child.stdout!.read(upTo: 100))
         }
-        assert(got == text.utf8.toArray())
+        require(got == text.utf8.toArray())
     }
     child.stdin!.close()
-    assert(try! await child.stdout!.read(upTo: 100).isEmpty)
-    assert(try! await child.wait().success)
+    expect(try! await child.stdout!.read(upTo: 100).isEmpty)
+    expect(try! await child.wait().success)
 }
 
 @test
 fn aReadGivesNoMoreThanIsAskedFor() async {
     let child = try! sh("printf abcdef").stdout(.Piped).spawn()
     let two = try! await child.stdout!.read(upTo: 2)
-    assert(two == [0x61, 0x62])
+    expect(two == [0x61, 0x62])
     assertEqual(try! await child.stdout!.readText(), "cdef")
     _ = try! await child.wait()
 }
@@ -244,12 +234,7 @@ fn writingToOneThatReadsNoMoreThrows() async {
     // And does not end this program, as a SIGPIPE would.
     let child = try! Command("true").stdin(.Piped).spawn()
     _ = try! await child.wait()
-    do {
-        try await child.stdin!.write("no one reads this")
-        assert(false)
-    } catch {
-        assertEqual(error.description(), IoError.Disconnected.description())
-    }
+    await expectThrows(saying: IoError.Disconnected.description()) { try await child.stdin!.write("no one reads this") }
 }
 
 @test
@@ -322,7 +307,7 @@ fn itsLinesComeAsItWritesThem() async throws {
     for try await line in child.stdout!.lines() {
         lines.append(line)
     }
-    assert(lines == ["one", "two", "", "four", "last"])
+    expect(lines == ["one", "two", "", "four", "last"])
     _ = try! await child.wait()
 }
 
@@ -331,9 +316,9 @@ fn aLineLongerThanAReadIsWhole() async {
     let child = try! sh("head -c 300000 /dev/zero | tr '\\0' x; echo; echo end").stdout(.Piped).spawn()
     var lines = child.stdout!.lines().makeAsyncIterator()
     assertEqual(try! await lines.next()!.utf8Count, 300000)
-    assert(try! await lines.next() == "end")
-    assert(try! await lines.next() == none)
-    assert(try! await lines.next() == none)
+    expect(try! await lines.next() == "end")
+    expect(try! await lines.next() == none)
+    expect(try! await lines.next() == none)
     _ = try! await child.wait()
 }
 

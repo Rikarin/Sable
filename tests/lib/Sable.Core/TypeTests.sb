@@ -31,22 +31,22 @@ fn anIntsMetadataSaysItsLayout() {
     assertEqual(m.size, 8)
     assertEqual(m.alignment, 8)
     assertEqual(m.stride, 8)
-    assert(m.isTrivial)
-    assert(!m.isNoncopyable)
+    expect(m.isTrivial)
+    expect(!m.isNoncopyable)
 }
 
 @test
 fn eachKindIsReported() {
-    assert(Box.self.kind == .Class)
-    assert(Point.self.kind == .Struct)
-    assert(Tag.self.kind == .Union)
-    assert(Int?.self.kind == .Optional)
-    assert((Int, Bool).self.kind == .Tuple)
-    assert(((Int) -> Int).self.kind == .Function)
-    assert(Int[>..].self.kind == .Array)
-    assert(String.self.kind == .String)
-    assert(Type.self.kind == .Metatype)
-    assert(Bool.self.kind == .Scalar)
+    expect(Box.self.kind == .Class)
+    expect(Point.self.kind == .Struct)
+    expect(Tag.self.kind == .Union)
+    expect(Int?.self.kind == .Optional)
+    expect((Int, Bool).self.kind == .Tuple)
+    expect(((Int) -> Int).self.kind == .Function)
+    expect(Int[>..].self.kind == .Array)
+    expect(String.self.kind == .String)
+    expect(Type.self.kind == .Metatype)
+    expect(Bool.self.kind == .Scalar)
 }
 
 @test
@@ -55,26 +55,26 @@ fn aStructsFieldsAreItsStoredFieldsInOrder() {
     assertEqual(m.fieldCount, 2)
     assertEqual(m.fieldName(at: 0), "x")
     assertEqual(m.fieldOffset(at: 0), 0)
-    assert(m.fieldType(at: 0) == Int.self)
+    expect(m.fieldType(at: 0) == Int.self)
     assertEqual(m.fieldName(at: 1), "name")
     assertEqual(m.fieldOffset(at: 1), 8)
-    assert(m.fieldType(at: 1) == String.self)
+    expect(m.fieldType(at: 1) == String.self)
 }
 
 @test
 fn anOptionalsArgumentIsTheWrappedType() {
     let m: Type = String?.self
     assertEqual(m.argumentCount, 1)
-    assert(m.argument(at: 0) == String.self)
-    assert(!m.isTrivial)
+    expect(m.argument(at: 0) == String.self)
+    expect(!m.isTrivial)
 }
 
 @test
 fn aTypeIsEqualOnlyToItself() {
     let p: Type = Point.self
-    assert(p == Point.self)
-    assert(p != Box.self)
-    assert(p != Point?.self)
+    expect(p == Point.self)
+    expect(p != Box.self)
+    expect(p != Point?.self)
 }
 
 @test
@@ -102,7 +102,7 @@ fn aDictionaryIsKeyedByType() {
     assertEqual(names[Int.self] ?? "", "int")
     assertEqual(names[String.self] ?? "", "string")
     assertEqual(names[Point.self] ?? "", "point")
-    assert(names[Box.self] == none)
+    expect(names[Box.self] == none)
     assertEqual(names.count, 3)
 }
 
@@ -117,39 +117,39 @@ extension Dog: Pet { }
 @test
 fn typeOfAnObjectIsItsOwnClass() {
     let animal: Animal = Dog()
-    assert(type(of: animal) == Dog.self)
-    assert(type(of: animal) != Animal.self)
+    expect(type(of: animal) == Dog.self)
+    expect(type(of: animal) != Animal.self)
 }
 
 @test
 fn typeOfAnExistentialIsWhatItHolds() {
     let value: any Equatable = 3
-    assert(type(of: value) == Int.self)
+    expect(type(of: value) == Int.self)
     let pet: any Pet = Dog()
-    assert(type(of: pet) == Dog.self)
+    expect(type(of: pet) == Dog.self)
 }
 
 @test
 fn typeOfAnyOtherValueIsItsStaticType() {
-    assert(type(of: 3) == Int.self)
-    assert(type(of: Point { x: 1, name: "" }) == Point.self)
+    expect(type(of: 3) == Int.self)
+    expect(type(of: Point { x: 1, name: "" }) == Point.self)
     let nothing: Int? = none
-    assert(type(of: nothing) == Int?.self)
+    expect(type(of: nothing) == Int?.self)
 }
 
 @test
 fn aSubclassIsASubtypeOfItsSuperclass() {
-    assert(Dog.self.isSubtype(of: Animal.self))
-    assert(!Animal.self.isSubtype(of: Dog.self))
-    assert(Dog.self.isSubtype(of: Dog.self))
+    expect(Dog.self.isSubtype(of: Animal.self))
+    expect(!Animal.self.isSubtype(of: Dog.self))
+    expect(Dog.self.isSubtype(of: Dog.self))
 }
 
 @test
 fn aConformingTypeIsASubtypeOfTheExistential() {
-    assert(Dog.self.isSubtype(of: (any Pet).self))
-    assert(!Animal.self.isSubtype(of: (any Pet).self))
-    assert(Int.self.isSubtype(of: (any Hashable).self))
-    assert(!Point.self.isSubtype(of: (any Hashable).self))
+    expect(Dog.self.isSubtype(of: (any Pet).self))
+    expect(!Animal.self.isSubtype(of: (any Pet).self))
+    expect(Int.self.isSubtype(of: (any Hashable).self))
+    expect(!Point.self.isSubtype(of: (any Hashable).self))
 }
 
 @test
@@ -161,14 +161,14 @@ fn isInstanceChecksAValueAgainstATypeKnownAtRunTime() {
         found += t.isInstance(animal) ? "y" : "n"
     }
     assertEqual(found, "yyyn")
-    assert(Int.self.isInstance(3))
-    assert(!Int.self.isInstance("3"))
+    expect(Int.self.isInstance(3))
+    expect(!Int.self.isInstance("3"))
 }
 
 @test
 fn aMoveOnlyTypeIsNoncopyable() {
-    assert(Unique.self.isNoncopyable)
-    assert(!Unique.self.isTrivial)
+    expect(Unique.self.isNoncopyable)
+    expect(!Unique.self.isTrivial)
 }
 
 @test
@@ -235,14 +235,14 @@ fn aTypeFromADictionaryOpensAGenericFunction() {
 fn anExistentialsDynamicTypeOpensAsItsOwnType() {
     let held: any Unit = Second { count: 5 }
     let made = unitOf(type(of: held))
-    assert(type(of: made) == Second.self)
+    expect(type(of: made) == Second.self)
     assertEqual(nameOf(type(of: held)), "TypeTests.Second")
 }
 
 @test
 fn aGenericTypeIsMadeForATypeKnownAtRunTime() {
     let t: Type = Metre.self
-    assert(arrayTypeOf(t) == Metre[].self)
-    assert(holderTypeOf(t) == Holder<Metre>.self)
+    expect(arrayTypeOf(t) == Metre[].self)
+    expect(holderTypeOf(t) == Holder<Metre>.self)
     assertEqual(holderTypeOf(t).name, "TypeTests.Holder<TypeTests.Metre>")
 }

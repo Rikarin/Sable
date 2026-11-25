@@ -23,12 +23,12 @@ fn errorOf(_ values: Int[>..]) -> String {
 
 @test
 fn wellFormedTextIsValid() {
-    assert(Utf8.isValid(bytes([])), "nothing")
-    assert(Utf8.isValid(bytes([0x61, 0x7F])), "ASCII")
-    assert(Utf8.isValid(bytes([0xC2, 0x80, 0xDF, 0xBF])), "two-byte sequences at both ends of their range")
-    assert(Utf8.isValid(bytes([0xE0, 0xA0, 0x80, 0xED, 0x9F, 0xBF, 0xEE, 0x80, 0x80, 0xEF, 0xBF, 0xBF])), "three-byte sequences")
-    assert(Utf8.isValid(bytes([0xF0, 0x90, 0x80, 0x80, 0xF4, 0x8F, 0xBF, 0xBF])), "four-byte sequences, up to U+10FFFF")
-    assert(Utf8.validate(bytes([0x68, 0x69])) == none, "no error")
+    expect(Utf8.isValid(bytes([])), "nothing")
+    expect(Utf8.isValid(bytes([0x61, 0x7F])), "ASCII")
+    expect(Utf8.isValid(bytes([0xC2, 0x80, 0xDF, 0xBF])), "two-byte sequences at both ends of their range")
+    expect(Utf8.isValid(bytes([0xE0, 0xA0, 0x80, 0xED, 0x9F, 0xBF, 0xEE, 0x80, 0x80, 0xEF, 0xBF, 0xBF])), "three-byte sequences")
+    expect(Utf8.isValid(bytes([0xF0, 0x90, 0x80, 0x80, 0xF4, 0x8F, 0xBF, 0xBF])), "four-byte sequences, up to U+10FFFF")
+    expect(Utf8.validate(bytes([0x68, 0x69])) == none, "no error")
 }
 
 @test
@@ -54,7 +54,7 @@ fn aSequenceCutShortIsIncomplete() {
     assertEqual(errorOf([0xF0, 0x9F, 0x98]), "incomplete UTF-8 at byte 0")
     let error = Utf8.error(in: bytes([0x61, 0xF0, 0x9F]))!
     assertEqual(error.validUpTo, 1)
-    assert(error.errorLength == none, "no length for an incomplete sequence")
+    expect(error.errorLength == none, "no length for an incomplete sequence")
 }
 
 @test
@@ -84,7 +84,7 @@ fn validatingAcrossBlocksOfMixedText() {
     while text.count < 60 {
         text.append(contentsOf: scalars)
     }
-    assert(Utf8.isValid(bytes(text)), "well-formed")
+    expect(Utf8.isValid(bytes(text)), "well-formed")
 
     var position = 0
     while position < 60 {
@@ -118,16 +118,16 @@ fn sequenceLengthsByLeadByte() {
     assertEqual(Utf8.sequenceLength(lead: 0xC3) ?? 0, 2)
     assertEqual(Utf8.sequenceLength(lead: 0xE2) ?? 0, 3)
     assertEqual(Utf8.sequenceLength(lead: 0xF0) ?? 0, 4)
-    assert(Utf8.sequenceLength(lead: 0x80) == none, "a continuation byte leads nothing")
-    assert(Utf8.sequenceLength(lead: 0xC0) == none, "0xC0 only leads overlong forms")
-    assert(Utf8.sequenceLength(lead: 0xF5) == none, "0xF5 leads past U+10FFFF")
+    expect(Utf8.sequenceLength(lead: 0x80) == none, "a continuation byte leads nothing")
+    expect(Utf8.sequenceLength(lead: 0xC0) == none, "0xC0 only leads overlong forms")
+    expect(Utf8.sequenceLength(lead: 0xF5) == none, "0xF5 leads past U+10FFFF")
 }
 
 @test
 fn errorsCompare() {
-    assert(Utf8Error(validUpTo: 1, errorLength: 2) == Utf8Error(validUpTo: 1, errorLength: 2), "equal")
-    assert(Utf8Error(validUpTo: 1, errorLength: 2) != Utf8Error(validUpTo: 1, errorLength: none), "lengths differ")
-    assert(Utf8Error(validUpTo: 1, errorLength: 2) != Utf8Error(validUpTo: 2, errorLength: 2), "places differ")
+    expect(Utf8Error(validUpTo: 1, errorLength: 2) == Utf8Error(validUpTo: 1, errorLength: 2), "equal")
+    expect(Utf8Error(validUpTo: 1, errorLength: 2) != Utf8Error(validUpTo: 1, errorLength: none), "lengths differ")
+    expect(Utf8Error(validUpTo: 1, errorLength: 2) != Utf8Error(validUpTo: 2, errorLength: 2), "places differ")
 }
 
 /// A random walk of bytes, weighted to the ranges UTF-8's rules turn on.

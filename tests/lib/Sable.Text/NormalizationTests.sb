@@ -90,7 +90,7 @@ fn everyFormAgreesWithNormalizationTest() throws {
             }
         }
     }
-    assert(cases > 18000, "the file is read")
+    expect(cases > 18000, "the file is read")
     assertEqual(wrong == 0 ? "" : "\(wrong) of \(cases) wrong:\(described)", "")
 
     var unchanged = 0
@@ -116,9 +116,9 @@ fn normalizingByExample() {
     let decomposed = "cafe\u{301}"
     assertEqual(decomposed.normalized(.NFC), composed)
     assertEqual(composed.normalized(.NFD), decomposed)
-    assert(composed.isNormalized(.NFC), "composed is NFC")
-    assert(!composed.isNormalized(.NFD), "composed is not NFD")
-    assert("plain".isNormalized(.NFKD), "ASCII is in every form")
+    expect(composed.isNormalized(.NFC), "composed is NFC")
+    expect(!composed.isNormalized(.NFD), "composed is not NFD")
+    expect("plain".isNormalized(.NFKD), "ASCII is in every form")
     assertEqual("\u{FB01}".normalized(.NFKD), "fi")
     assertEqual("x\u{B2}".normalized(.NFKC), "x2")
     assertEqual("\u{D55C}".normalized(.NFD), "\u{1112}\u{1161}\u{11AB}")

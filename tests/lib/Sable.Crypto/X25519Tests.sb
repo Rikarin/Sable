@@ -49,30 +49,25 @@ fn bothSidesAgree() {
     let alice = try! X25519PrivateKey(hex("77076d0a7318a57d3c16c17251b26645dc6c2d0a6e0f9a9a9e2c6f6f6b1d0c1a"))
     let bob = try! X25519PrivateKey(hex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"))
     assertEqual(Hex.encode(bob.publicKey.bytes), "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
-    assert(try! alice.sharedSecret(with: bob.publicKey) == bob.sharedSecret(with: alice.publicKey))
+    expect(try! alice.sharedSecret(with: bob.publicKey) == bob.sharedSecret(with: alice.publicKey))
     let one = X25519PrivateKey.generate()
     let two = X25519PrivateKey.generate()
-    assert(try! one.sharedSecret(with: two.publicKey) == two.sharedSecret(with: one.publicKey))
+    expect(try! one.sharedSecret(with: two.publicKey) == two.sharedSecret(with: one.publicKey))
 }
 
 @test
 fn aPointOfSmallOrderIsRefused() {
     let key = X25519PrivateKey.generate()
     for point in ["0000000000000000000000000000000000000000000000000000000000000000", "0100000000000000000000000000000000000000000000000000000000000000", "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800"] {
-        do {
-            _ = try key.sharedSecret(with: try X25519PublicKey(hex(point)))
-            fail("a point of small order")
-        } catch {
-            assertEqual(error.description(), "an X25519 public key of small order")
-        }
+        expectThrows(saying: "an X25519 public key of small order") { _ = try key.sharedSecret(with: try X25519PublicKey(hex(point))) }
     }
 }
 
 @test
 fn keysAreOf32Bytes() {
-    assert((try? X25519PrivateKey([1])) == none && (try? X25519PublicKey([1])) == none)
+    expect((try? X25519PrivateKey([1])) == none && (try? X25519PublicKey([1])) == none)
     let key = X25519PrivateKey.generate()
-    assert(key == (try! X25519PrivateKey(key.bytes())) && key != X25519PrivateKey.generate())
+    expect(key == (try! X25519PrivateKey(key.bytes())) && key != X25519PrivateKey.generate())
     assertEqual(key.debugDescription(), "X25519PrivateKey")
-    assert(key.publicKey.debugDescription().hasPrefix("X25519PublicKey("))
+    expect(key.publicKey.debugDescription().hasPrefix("X25519PublicKey("))
 }

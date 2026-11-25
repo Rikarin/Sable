@@ -14,7 +14,7 @@ fn arithmeticRoundsToTheNearestBFloat() {
     assertEqual(x * x, 2.25)
     assertEqual(BF16(1.0) / BF16(3.0), BF16(0.333984375))
     assertEqual(BF16(1.0) + BF16.epsilon / 2.0, 1.0)
-    assert(BF16(1.0) + BF16.epsilon > 1.0)
+    expect(BF16(1.0) + BF16.epsilon > 1.0)
     assertEqual((BF16(4.5) as BF16).squareRoot(), BF16(2.125))
     assertEqual(-x, -1.5)
     assertEqual(BF16(7.0).truncatingRemainder(dividingBy: 2.0), 1.0)
@@ -25,9 +25,9 @@ fn itHasAnF32sRange() {
     assertEqual(F32(BF16.greatestFiniteMagnitude), 3.3895314e38)
     assertEqual(BF16.greatestFiniteMagnitude * 2.0, BF16.infinity)
     assertEqual(F32(BF16.leastNormalMagnitude), 1.1754944e-38)
-    assert(BF16.leastNonzeroMagnitude > 0.0)
+    expect(BF16.leastNonzeroMagnitude > 0.0)
     assertEqual(BF16.leastNonzeroMagnitude / 2.0, 0.0)
-    assert(BF16.nan.isNaN && BF16.nan != BF16.nan)
+    expect(BF16.nan.isNaN && BF16.nan != BF16.nan)
     assertEqual(BF16.significandBitCount, 7)
     assertEqual(BF16.exponentBitCount, 8)
 }
@@ -80,7 +80,7 @@ fn itIsParsedToTheNearest() {
 fn itComparesHashesAndSorts() {
     var values: BF16[>..] = [3.0, -1.0, 0.5]
     values.sort()
-    assert(values == [-1.0, 0.5, 3.0])
+    expect(values == [-1.0, 0.5, 3.0])
     assertEqual(BF16(0.5).hashValue, BF16(0.5).hashValue)
     assertEqual(BF16(2.5).rounded(), 3.0)
     assertEqual(BF16(1.0).nextUp, BF16(1.0078125))
@@ -102,12 +102,12 @@ fn itsConstantsAreRoundedToTheNearest() {
 fn itParsesWhatIsNotFinite() {
     assertEqual(try! BF16.parse("inf"), BF16.infinity)
     assertEqual(try! BF16.parse("-Infinity"), -BF16.infinity)
-    assert((try! BF16.parse("nan")).isNaN)
+    expect((try! BF16.parse("nan")).isNaN)
     assertEqual(try! BF16.parse("1e400"), BF16.infinity)
     assertEqual(try! BF16.parse("-1e400"), -BF16.infinity)
     assertEqual(try! BF16.parse("1e-400"), 0.0)
-    assert((try? BF16.parse("1.5x")) == none)
-    assert((try? BF16.parse("")) == none)
+    expect((try? BF16.parse("1.5x")) == none)
+    expect((try? BF16.parse("")) == none)
 }
 
 @test

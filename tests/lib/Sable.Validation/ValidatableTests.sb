@@ -44,7 +44,7 @@ fn signup() -> Signup {
 
 @test
 async fn attributesAreTheRules() {
-    assert((await signup().validate()).isValid)
+    expect((await signup().validate()).isValid)
     var bad = signup()
     bad.email = ""
     bad.age = 3
@@ -63,7 +63,7 @@ async fn attributesAreTheRules() {
 
 @test
 async fn validatedGivesTheValueOrThrows() {
-    assert((try! await signup().validated()) == signup())
+    expect((try! await signup().validated()) == signup())
     do {
         _ = try await Place(city: "", country: "SK").validated()
         assert(false)
@@ -98,7 +98,7 @@ async fn aFieldOfAValidatableTypeIsValidByItsOwnRules() {
         "from.city", "from.country", "to.city", "to.country", "since", "stops[0].city", "stops[0].country", "stops[2].city", "stops[2].country", "",
     ])
     let plain = Trip(from: Place(city: "x", country: none), to: none, stops: [], since: 3, until: none)
-    assert((await plain.validate()).isValid)
+    expect((await plain.validate()).isValid)
     assertEqual((await plain.validate(ValidationOptions(ruleSets: ["Book"]))).failures.map(\.path), ["to"])
 }
 
@@ -111,8 +111,8 @@ struct Bounds<Bound: Comparable> {
 
 @test
 async fn aGenericTypeDerives() {
-    assert((await Bounds<Int>(lower: 1, upper: 1).validate()).isValid)
-    assert((await Bounds<String>(lower: "b", upper: "a").validate()).has(errorAt: "lower"))
+    expect((await Bounds<Int>(lower: 1, upper: 1).validate()).isValid)
+    expect((await Bounds<String>(lower: "b", upper: "a").validate()).has(errorAt: "lower"))
 }
 
 struct ByHand: Validatable {
@@ -125,8 +125,8 @@ struct ByHand: Validatable {
 
 @test
 async fn aConformanceIsWrittenByHandToo() {
-    assert((await ByHand(n: 0).validate()).has(errorAt: "n"))
-    assert((try! ByHand.validationRules().check(ByHand(n: 1))).isValid)
+    expect((await ByHand(n: 0).validate()).has(errorAt: "n"))
+    expect((try! ByHand.validationRules().check(ByHand(n: 1))).isValid)
 }
 
 struct Docs: Attribute {
@@ -152,5 +152,5 @@ async fn aTypeInABodyDerives() {
         @notEmpty
         var name: String
     }
-    assert((await Local(name: "").validate()).has(errorAt: "name"))
+    expect((await Local(name: "").validate()).has(errorAt: "name"))
 }

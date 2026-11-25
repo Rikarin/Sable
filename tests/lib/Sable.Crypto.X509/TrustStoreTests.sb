@@ -44,12 +44,12 @@ TqqhesCkBBz5sDZLkiUEvf/Vok7Kem0O
 fn aBundleIsReadButForWhatIsNoCertificate() {
     let store = try! TrustStore.parse(bundle: "# a note\n" + rootPem + "\n-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n" + edPem + "\n-----BEGIN OTHER-----\nAQID\n-----END OTHER-----\n")
     assertEqual(store.certificates.count, 2)
-    assert(store.contains(try! Certificate.parse(pem: rootPem)) && store.contains(try! Certificate.parse(pem: edPem)))
-    assert((try? TrustStore.parse(bundle: "-----BEGIN CERTIFICATE-----\n")) == none)
+    expect(store.contains(try! Certificate.parse(pem: rootPem)) && store.contains(try! Certificate.parse(pem: edPem)))
+    expect((try? TrustStore.parse(bundle: "-----BEGIN CERTIFICATE-----\n")) == none)
     let key = EcdsaPrivateKey<P256>.generate().anyKey
     let other = try! CertificateBuilder(subject: store.certificates[0].subject).selfSigned(with: key)
-    assert(!store.contains(other))
-    assert(TrustStore([]).certificates.isEmpty)
+    expect(!store.contains(other))
+    expect(TrustStore([]).certificates.isEmpty)
 }
 
 // The environment's is the process's, so one test has both.

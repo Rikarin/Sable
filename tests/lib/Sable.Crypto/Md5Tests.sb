@@ -49,7 +49,7 @@ fn aMessageInTwoPartsIsTheWholeWhereverItIsCut() {
         var hash = Insecure.Md5()
         hash.update(whole[..<cut])
         hash.update(whole[cut...])
-        assert(hash.finalize() == expected)
+        assertEqual(hash.finalize(), expected)
         cut += 1
     }
 }
@@ -62,7 +62,7 @@ fn aMessageAByteAtATimeIsTheWhole() {
         hash.update([byte])
         hash.update([])
     }
-    assert(hash.finalize() == Insecure.Md5.hash(whole))
+    expect(hash.finalize() == Insecure.Md5.hash(whole))
 }
 
 @test
@@ -70,10 +70,10 @@ fn finalizingLeavesTheFunctionToGoOn() {
     let whole = message(73)
     var hash = Insecure.Md5()
     hash.update(whole[..<64])
-    assert(hash.finalize() == Insecure.Md5.hash(whole[..<64]))
-    assert(hash.finalize() == Insecure.Md5.hash(whole[..<64]))
+    expect(hash.finalize() == Insecure.Md5.hash(whole[..<64]))
+    expect(hash.finalize() == Insecure.Md5.hash(whole[..<64]))
     hash.update(whole[64...])
-    assert(hash.finalize() == Insecure.Md5.hash(whole))
+    expect(hash.finalize() == Insecure.Md5.hash(whole))
 }
 
 @test
@@ -84,8 +84,8 @@ fn aCopyHashesOnByItself() {
     var second = first
     first.update(whole[7...])
     second.update(whole[..<3])
-    assert(first.finalize() == Insecure.Md5.hash(whole))
-    assert(second.finalize() == Insecure.Md5.hash(joined(message(7), message(3))))
+    expect(first.finalize() == Insecure.Md5.hash(whole))
+    expect(second.finalize() == Insecure.Md5.hash(joined(message(7), message(3))))
 }
 
 @test

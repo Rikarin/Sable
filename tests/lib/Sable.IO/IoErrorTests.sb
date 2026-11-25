@@ -16,7 +16,7 @@ fn failToRead(_ path: String) throws {
 
 @test
 fn anIoErrorIsAnError() {
-    assert(isAnError(IoError.NotFound(path: "a.txt")))
+    expect(isAnError(IoError.NotFound(path: "a.txt")))
 }
 
 @test

@@ -14,11 +14,11 @@ fn timeError(_ text: String) -> ParseError? {
 
 @test
 fn aTimeIsOnlyOneOnTheClock() {
-    assert(TimeOfDay.of(hour: 24, minute: 0) == none)
-    assert(TimeOfDay.of(hour: 23, minute: 60) == none)
-    assert(TimeOfDay.of(hour: 23, minute: 59, second: 60) == none)
-    assert(TimeOfDay.of(hour: 0, minute: 0, nanosecond: 1000000000) == none)
-    assert(TimeOfDay.of(hour: -1, minute: 0) == none)
+    expect(TimeOfDay.of(hour: 24, minute: 0) == none)
+    expect(TimeOfDay.of(hour: 23, minute: 60) == none)
+    expect(TimeOfDay.of(hour: 23, minute: 59, second: 60) == none)
+    expect(TimeOfDay.of(hour: 0, minute: 0, nanosecond: 1000000000) == none)
+    expect(TimeOfDay.of(hour: -1, minute: 0) == none)
     let time = TimeOfDay.of(hour: 13, minute: 4, second: 5, nanosecond: 6007008)!
     assertEqual(time.hour, 13)
     assertEqual(time.minute, 4)
@@ -40,7 +40,7 @@ fn aTimeGoesRoundTheClock() {
     assertEqual(TimeOfDay.fromNanosecondOfDay(-1), TimeOfDay.max)
     assertEqual(TimeOfDay.noon.durationUntil(late), Duration.minutes(690))
     assertEqual(late.on(Date.of(year: 2026, month: 1, day: 1)!).toString(), "2026-01-01T23:30:00")
-    assert(TimeOfDay.noon < late)
+    expect(TimeOfDay.noon < late)
     assertEqual(late.hashValue, TimeOfDay.of(hour: 23, minute: 30)!.hashValue)
 }
 

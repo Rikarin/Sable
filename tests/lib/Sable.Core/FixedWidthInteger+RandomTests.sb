@@ -16,7 +16,7 @@ fn aHalfOpenRangeLeavesOutItsUpperBound() {
         seen[n - 4] = true
         i += 1
     }
-    assert(seen.allSatisfy({ $0 }))
+    expect(seen.allSatisfy({ $0 }))
 }
 
 @test
@@ -32,7 +32,7 @@ fn aClosedRangeTakesBothEnds() {
         high = high || n == 2
         i += 1
     }
-    assert(low && high)
+    expect(low && high)
 }
 
 @test
@@ -47,7 +47,7 @@ fn aRangeWiderThanTheTypesPositivesWorks() {
         positive = positive || n > 0
         i += 1
     }
-    assert(negative && positive)
+    expect(negative && positive)
 }
 
 @test
@@ -61,7 +61,7 @@ fn theWholeOfATypeIsARange() {
         _ = U128.random(in: U128.min...U128.max, using: &generator)
         i += 1
     }
-    assert(everSet == 255)
+    expect(everSet == 255)
 }
 
 @test
@@ -88,9 +88,9 @@ fn aOneValueRangeGivesThatValue() {
 @test
 fn theSystemsGeneratorIsTheDefault() {
     let n = U16.random(in: 1000..<2000)
-    assert(n >= 1000 && n < 2000)
+    expect(n >= 1000 && n < 2000)
     let m = Int.random(in: -3...3)
-    assert(m >= -3 && m <= 3)
+    expect(m >= -3 && m <= 3)
 }
 
 @test(traps: "a random value of an empty range")

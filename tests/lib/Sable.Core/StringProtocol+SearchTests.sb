@@ -16,29 +16,29 @@ fn offset(_ index: String.Index?) -> Int {
 @test
 fn containsFindsEachKindOfPattern() {
     let text = "hello, wörld"
-    assert(text.contains("o, w"), "a string")
-    assert(text.contains('ö'), "a character")
-    assert(text.contains(CharSet(",;")), "a set")
-    assert(text.contains(where: { c in c.isPunctuation }), "a test")
-    assert(!text.contains("world"), "not a string that is not there")
-    assert(!text.contains('z'), "nor a character")
-    assert(!text.contains(where: { c in c.isDigit }), "nor what no character passes")
-    assert(text.contains(""), "the empty string is everywhere")
-    assert("".contains(""), "even in the empty string")
-    assert(!"".contains('a'), "nothing is in the empty string")
+    expect(text.contains("o, w"), "a string")
+    expect(text.contains('ö'), "a character")
+    expect(text.contains(CharSet(",;")), "a set")
+    expect(text.contains(where: { c in c.isPunctuation }), "a test")
+    expect(!text.contains("world"), "not a string that is not there")
+    expect(!text.contains('z'), "nor a character")
+    expect(!text.contains(where: { c in c.isDigit }), "nor what no character passes")
+    expect(text.contains(""), "the empty string is everywhere")
+    expect("".contains(""), "even in the empty string")
+    expect(!"".contains('a'), "nothing is in the empty string")
 }
 
 @test
 fn prefixesAndSuffixes() {
     let text = "café au lait"
-    assert(text.hasPrefix("café") && text.hasPrefix('c') && text.hasPrefix(""), "prefixes")
-    assert(!text.hasPrefix("lait") && !text.hasPrefix('a') && !"".hasPrefix('a'), "not prefixes")
-    assert(text.hasSuffix("lait") && text.hasSuffix('t') && text.hasSuffix(""), "suffixes")
-    assert(!text.hasSuffix("café") && !text.hasSuffix('l') && !"".hasSuffix('a'), "not suffixes")
-    assert(!"ab".hasPrefix("abc") && !"ab".hasSuffix("abc"), "a pattern longer than the text")
-    assert("é".hasSuffix('é') && !"é".hasSuffix('e'), "a suffix of more than one byte")
-    assert(text.hasPrefix(CharSet.asciiLetters) && text.hasSuffix(CharSet.asciiLetters), "a set at either end")
-    assert(!text.hasPrefix(CharSet.asciiDigits) && !text.hasSuffix(CharSet.asciiDigits), "a set at neither end")
+    expect(text.hasPrefix("café") && text.hasPrefix('c') && text.hasPrefix(""), "prefixes")
+    expect(!text.hasPrefix("lait") && !text.hasPrefix('a') && !"".hasPrefix('a'), "not prefixes")
+    expect(text.hasSuffix("lait") && text.hasSuffix('t') && text.hasSuffix(""), "suffixes")
+    expect(!text.hasSuffix("café") && !text.hasSuffix('l') && !"".hasSuffix('a'), "not suffixes")
+    expect(!"ab".hasPrefix("abc") && !"ab".hasSuffix("abc"), "a pattern longer than the text")
+    expect("é".hasSuffix('é') && !"é".hasSuffix('e'), "a suffix of more than one byte")
+    expect(text.hasPrefix(CharSet.asciiLetters) && text.hasSuffix(CharSet.asciiLetters), "a set at either end")
+    expect(!text.hasPrefix(CharSet.asciiDigits) && !text.hasSuffix(CharSet.asciiDigits), "a set at neither end")
 }
 
 @test
@@ -70,7 +70,7 @@ fn rangesOfMatches() {
     let all = text.ranges(of: "bc")
     assertEqual(all.count, 2)
     assertEqual(all[1].lowerBound.utf8Offset, 4)
-    assert(text.firstRange(of: "x") == none && text.lastRange(of: "x") == none, "no match, no range")
+    expect(text.firstRange(of: "x") == none && text.lastRange(of: "x") == none, "no match, no range")
     assertEqual("aaaa".ranges(of: "aa").count, 2)
 }
 
@@ -149,8 +149,8 @@ fn splittingOnce() {
     let last = "key=value=more".splitLastOnce("=")!
     assertEqual(last.0, "key=value")
     assertEqual(last.1, "more")
-    assert("plain".splitOnce('=') == none, "no separator, no pair")
-    assert("plain".splitLastOnce('=') == none, "nor from the end")
+    expect("plain".splitOnce('=') == none, "no separator, no pair")
+    expect("plain".splitLastOnce('=') == none, "nor from the end")
 }
 
 @test

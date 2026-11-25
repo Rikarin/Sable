@@ -9,9 +9,9 @@ import Sable.Testing
 fn aCollectionThatCannotGoBackStepsForwards() {
     let counts = ["a": 1, "b": 2, "c": 3]
     let second = counts.index(counts.startIndex, offsetBy: 1)
-    assert(counts.index(counts.startIndex, offsetBy: 0) == counts.startIndex)
-    assert(counts.index(second, offsetBy: 2) == counts.endIndex)
-    assert(counts.index(counts.startIndex, offsetBy: 3) == counts.endIndex)
+    expect(counts.index(counts.startIndex, offsetBy: 0) == counts.startIndex)
+    expect(counts.index(second, offsetBy: 2) == counts.endIndex)
+    expect(counts.index(counts.startIndex, offsetBy: 3) == counts.endIndex)
 }
 
 @test(traps: "distance must not be negative, but is -1")
@@ -58,7 +58,7 @@ fn anArrayIsWrittenFromTheEnd() {
     var xs: Int[>..] = [1, 2, 3]
     xs[^1] = 9
     xs[^3] += 10
-    assert(xs == [11, 2, 9])
+    expect(xs == [11, 2, 9])
     var fixed: Int[3] = [1, 2, 3]
     fixed[^2] = 7
     assertEqual(fixed[1], 7)
@@ -78,7 +78,7 @@ fn aMutableCollectionIsWrittenAndReadFromTheEnd() {
     var xs: Int[>..] = [1, 2, 3]
     setFromEnd(&xs, 1, 4)
     setFromEnd(&xs, 3, 0)
-    assert(xs == [0, 2, 4])
+    expect(xs == [0, 2, 4])
     assertEqual(readFromEnd(&xs, 2), 2)
 }
 

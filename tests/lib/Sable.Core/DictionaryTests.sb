@@ -46,19 +46,19 @@ fn aLiteralHoldsItsEntries() {
 @test
 fn aMissingKeyHasNoValue() {
     let ages: [String: Int] = ["ann": 31]
-    assert(ages["cy"] == none)
-    assert(!ages.contains("cy"))
-    assert(ages.contains("ann"))
+    expect(ages["cy"] == none)
+    expect(!ages.contains("cy"))
+    expect(ages.contains("ann"))
 }
 
 @test
 fn anEmptyLiteralIsEmpty() {
     let empty: [Int: String] = [:]
-    assert(empty.isEmpty)
+    expect(empty.isEmpty)
     assertEqual(empty.count, 0)
     assertEqual(empty.capacity, 0)
-    assert(empty[1] == none)
-    assert(!empty.contains(1))
+    expect(empty[1] == none)
+    expect(!empty.contains(1))
 }
 
 @test
@@ -66,7 +66,7 @@ fn aRepeatedKeyInALiteralKeepsTheLastValue() {
     let d: [String: Int] = ["a": 1, "b": 2, "a": 3]
     assertEqual(d.count, 2)
     assertEqual(d["a"] ?? -1, 3)
-    assert(d.map({ entry in entry.0 }) == ["a", "b"], "the key keeps its first place")
+    expect(d.map({ entry in entry.0 }) == ["a", "b"], "the key keeps its first place")
 }
 
 @test
@@ -76,7 +76,7 @@ fn aDerivedHashableStructIsAKey() {
     names[Point { x: 2, y: 1 }] = "b"
     assertEqual(names[Point { x: 1, y: 2 }] ?? "", "a")
     assertEqual(names[Point { x: 2, y: 1 }] ?? "", "b")
-    assert(names[Point { x: 1, y: 1 }] == none)
+    expect(names[Point { x: 1, y: 1 }] == none)
 }
 
 @test
@@ -90,7 +90,7 @@ fn keysThatHashAlikeAreToldApartByEquality() {
     assertEqual(d.count, 40)
     assertEqual(d[Clash { id: 0 }] ?? -1, 0)
     assertEqual(d[Clash { id: 39 }] ?? -1, 39)
-    assert(d[Clash { id: 40 }] == none)
+    expect(d[Clash { id: 40 }] == none)
     assertEqual(d.remove(Clash { id: 20 }) ?? -1, 20)
     assertEqual(d[Clash { id: 21 }] ?? -1, 21)
 }
@@ -127,14 +127,14 @@ fn settingAnExistingKeyChangesItsValueNotItsPlace() {
     d["a"] = 10
     assertEqual(d["a"] ?? -1, 10)
     assertEqual(d.count, 2)
-    assert(d.map({ entry in entry.0 }) == ["a", "b"])
+    expect(d.map({ entry in entry.0 }) == ["a", "b"])
 }
 
 @test
 fn settingNoneRemovesTheKey() {
     var d: [String: Int] = ["a": 1, "b": 2]
     d["a"] = none
-    assert(!d.contains("a"))
+    expect(!d.contains("a"))
     assertEqual(d.count, 1)
     d["missing"] = none
     assertEqual(d.count, 1)
@@ -143,7 +143,7 @@ fn settingNoneRemovesTheKey() {
 @test
 fn updateValueGivesWhatItReplaced() {
     var d: [String: Int] = [:]
-    assert(d.updateValue(1, forKey: "a") == none, "a new key replaces nothing")
+    expect(d.updateValue(1, forKey: "a") == none, "a new key replaces nothing")
     assertEqual(d.updateValue(2, forKey: "a") ?? -1, 1)
     assertEqual(d["a"] ?? -1, 2)
 }
@@ -151,9 +151,9 @@ fn updateValueGivesWhatItReplaced() {
 @test
 fn insertLeavesAKeyThatIsThereAlone() {
     var d: [String: Int] = ["a": 1]
-    assert(!d.insert(5, forKey: "a"))
+    expect(!d.insert(5, forKey: "a"))
     assertEqual(d["a"] ?? -1, 1)
-    assert(d.insert(2, forKey: "b"))
+    expect(d.insert(2, forKey: "b"))
     assertEqual(d["b"] ?? -1, 2)
 }
 
@@ -161,8 +161,8 @@ fn insertLeavesAKeyThatIsThereAlone() {
 fn removeGivesTheValueOnce() {
     var d: [String: Int] = ["a": 1]
     assertEqual(d.remove("a") ?? -1, 1)
-    assert(d.remove("a") == none, "a key is removed once")
-    assert(d.isEmpty)
+    expect(d.remove("a") == none, "a key is removed once")
+    expect(d.isEmpty)
 }
 
 @test
@@ -174,16 +174,16 @@ fn theDefaultSubscriptCounts() {
     assertEqual(counts["to"] ?? -1, 2)
     assertEqual(counts["not"] ?? -1, 1)
     assertEqual(counts["missing", default: 7], 7)
-    assert(counts.map({ entry in entry.0 }) == ["to", "be", "or", "not"])
+    expect(counts.map({ entry in entry.0 }) == ["to", "be", "or", "not"])
 }
 
 @test
 fn removeAllEmptiesIt() {
     var d = squares(20)
     d.removeAll()
-    assert(d.isEmpty)
+    expect(d.isEmpty)
     assertEqual(d.capacity, 0)
-    assert(d[3] == none)
+    expect(d[3] == none)
     d[3] = 9
     assertEqual(d[3] ?? -1, 9)
 }
@@ -193,9 +193,9 @@ fn removeAllCanKeepTheRoom() {
     var d = squares(20)
     let room = d.capacity
     d.removeAll(keepingCapacity: true)
-    assert(d.isEmpty)
+    expect(d.isEmpty)
     assertEqual(d.capacity, room)
-    assert(d[3] == none)
+    expect(d[3] == none)
     d[3] = 9
     assertEqual(d[3] ?? -1, 9)
     d.removeAll(keepingCapacity: false)
@@ -209,10 +209,10 @@ fn aCopyIsADictionaryOfItsOwn() {
     b["x"] = 2
     b["y"] = 3
     assertEqual(a["x"] ?? -1, 1)
-    assert(a["y"] == none)
+    expect(a["y"] == none)
     assertEqual(b["x"] ?? -1, 2)
     a["z"] = 4
-    assert(b["z"] == none)
+    expect(b["z"] == none)
 }
 
 // ---- Many keys ----------------------------------------------------------------
@@ -230,7 +230,7 @@ fn manyKeysAreAllFound() {
         i = i + 1
     }
     assertEqual(wrong, 0)
-    assert(d[10000] == none)
+    expect(d[10000] == none)
 }
 
 @test
@@ -246,7 +246,7 @@ fn removingHalfKeepsTheOtherHalfInOrder() {
     assertEqual(keys[0], 1)
     assertEqual(keys[1], 3)
     assertEqual(keys[499], 999)
-    assert(d[2] == none)
+    expect(d[2] == none)
     assertEqual(d[3] ?? -1, 9)
 }
 
@@ -260,8 +260,8 @@ fn addingAndRemovingOneKeyOverAndOverStaysSmall() {
         i = i + 1
     }
     assertEqual(d.count, 3)
-    assert(d.capacity <= 8, "what removed keys leave is dropped as the table is rebuilt")
-    assert(d.map({ entry in entry.0 }) == [0, 1, 2])
+    expect(d.capacity <= 8, "what removed keys leave is dropped as the table is rebuilt")
+    expect(d.map({ entry in entry.0 }) == [0, 1, 2])
 }
 
 @test
@@ -284,7 +284,7 @@ fn removedSlotsAreReusedAndDroppedOnGrowth() {
     }
     assertEqual(d.count, 120)
     assertEqual(d[1] ?? -1, 1)
-    assert(d[2] == none)
+    expect(d[2] == none)
     assertEqual(d[150] ?? -1, 150)
     assertEqual(d.map({ entry in entry.0 }).count, 120)
 }
@@ -294,8 +294,8 @@ fn aKeyAddedAfterRemovalsGoesLast() {
     var d: [String: Int] = ["a": 1, "b": 2, "c": 3]
     d["b"] = none
     d["b"] = 4
-    assert(d.map({ entry in entry.0 }) == ["a", "c", "b"])
-    assert(d.map({ entry in entry.1 }) == [1, 3, 4])
+    expect(d.map({ entry in entry.0 }) == ["a", "c", "b"])
+    expect(d.map({ entry in entry.1 }) == [1, 3, 4])
 }
 
 // ---- Capacity -----------------------------------------------------------------
@@ -305,7 +305,7 @@ fn reserveCapacityMakesRoomAhead() {
     var d: [Int: Int] = [:]
     d.reserveCapacity(100)
     let room = d.capacity
-    assert(room >= 100)
+    expect(room >= 100)
     var i = 0
     while i < 100 {
         d[i] = i
@@ -319,8 +319,8 @@ fn reserveCapacityMakesRoomAhead() {
 @test
 fn minimumCapacityStartsWithRoom() {
     let d = Dictionary<Int, Int>(minimumCapacity: 50)
-    assert(d.isEmpty)
-    assert(d.capacity >= 50)
+    expect(d.isEmpty)
+    expect(d.capacity >= 50)
 }
 
 @test
@@ -333,7 +333,7 @@ fn shrinkToFitGivesBackRoom() {
     }
     d.shrinkToFit()
     assertEqual(d.count, 10)
-    assert(d.capacity < 100)
+    expect(d.capacity < 100)
     assertEqual(d[9] ?? -1, 81)
     d.removeAll(keepingCapacity: true)
     d.shrinkToFit()
@@ -369,10 +369,10 @@ fn orInsertWithMakesTheValueOnlyWhenMissing() {
 @test
 fn modifyChangesOnlyAKeyThatIsThere() {
     var d: [String: Int] = ["a": 1]
-    assert(d.modify("a") { (n: inout Int) in n += 10 })
+    expect(d.modify("a") { (n: inout Int) in n += 10 })
     assertEqual(d["a"] ?? -1, 11)
-    assert(!d.modify("b") { $0 += 10 })
-    assert(d["b"] == none)
+    expect(!d.modify("b") { $0 += 10 })
+    expect(d["b"] == none)
 }
 
 @test
@@ -394,7 +394,7 @@ fn modifyChangesTheValueWhereItIs() {
     }
     assertEqual(tally["x"] ?? -1, 3)
     assertEqual(tally["y"] ?? -1, 1)
-    assert(tally.map({ entry in entry.0 }) == ["x", "y"])
+    expect(tally.map({ entry in entry.0 }) == ["x", "y"])
 }
 
 // ---- Merging and transforming -------------------------------------------------
@@ -403,24 +403,24 @@ fn modifyChangesTheValueWhereItIs() {
 fn groupingPutsEachValueUnderItsKeyInOrder() {
     let words: String[>..] = ["apple", "bean", "avocado", "beet", "cherry"]
     let byLength = Dictionary(grouping: words, by: { (word: String) -> Int in word.count })
-    assert(byLength.map({ entry in entry.0 }) == [5, 4, 7, 6])
-    assert((byLength[4] ?? []) == ["bean", "beet"])
-    assert((byLength[5] ?? []) == ["apple"])
-    assert(byLength[3] == none)
+    expect(byLength.map({ entry in entry.0 }) == [5, 4, 7, 6])
+    expect((byLength[4] ?? []) == ["bean", "beet"])
+    expect((byLength[5] ?? []) == ["apple"])
+    expect(byLength[3] == none)
 }
 
 @test
 fn groupingNothingIsEmpty() {
     let nothing: Int[>..] = []
     let groups: [Bool: Int[>..]] = Dictionary(grouping: nothing, by: { (n: Int) -> Bool in n > 0 })
-    assert(groups.isEmpty)
+    expect(groups.isEmpty)
 }
 
 @test
 fn groupingTakesAnySequence() {
     let parity = Dictionary(grouping: 1...7, by: { (n: Int) -> Bool in n % 2 == 0 })
-    assert((parity[true] ?? []) == [2, 4, 6])
-    assert((parity[false] ?? []) == [1, 3, 5, 7])
+    expect((parity[true] ?? []) == [2, 4, 6])
+    expect((parity[false] ?? []) == [1, 3, 5, 7])
 }
 
 @test
@@ -431,7 +431,7 @@ fn mergeCombinesWhatBothHave() {
     assertEqual(a["x"] ?? -1, 1)
     assertEqual(a["y"] ?? -1, 12)
     assertEqual(a["z"] ?? -1, 20)
-    assert(a.map({ entry in entry.0 }) == ["x", "y", "z"])
+    expect(a.map({ entry in entry.0 }) == ["x", "y", "z"])
 }
 
 @test
@@ -453,8 +453,8 @@ fn mapValuesKeepsTheKeysAndTheirOrder() {
     assertEqual(text.count, 2)
     assertEqual(text["a"] ?? "", "#1")
     assertEqual(text["c"] ?? "", "#3")
-    assert(text["b"] == none)
-    assert(text.map({ entry in entry.0 }) == ["a", "c"])
+    expect(text["b"] == none)
+    expect(text.map({ entry in entry.0 }) == ["a", "c"])
 }
 
 @test
@@ -463,8 +463,8 @@ fn compactMapValuesDropsWhatMakesNothing() {
     let numbers = d.compactMapValues { (s: String) -> Int? in s.toInt() }
     assertEqual(numbers.count, 2)
     assertEqual(numbers["two"] ?? -1, 2)
-    assert(numbers["many"] == none)
-    assert(numbers.map({ entry in entry.0 }) == ["one", "two"])
+    expect(numbers["many"] == none)
+    expect(numbers.map({ entry in entry.0 }) == ["one", "two"])
 }
 
 @test
@@ -473,14 +473,14 @@ fn filterKeepsWhatItSays() {
     let even = d.filter { (key: Int, value: Int) -> Bool in key % 2 == 0 }
     assertEqual(even.count, 5)
     assertEqual(even[4] ?? -1, 16)
-    assert(even[3] == none)
+    expect(even[3] == none)
 }
 
 @test
 fn retainRemovesTheRest() {
     var d = squares(10)
     d.retain(where: { (key: Int, value: Int) -> Bool in value > 20 })
-    assert(d.map({ entry in entry.0 }) == [5, 6, 7, 8, 9])
+    expect(d.map({ entry in entry.0 }) == [5, 6, 7, 8, 9])
     d.retain(where: { (key: Int, value: Int) -> Bool in true })
     assertEqual(d.count, 5)
     d[10] = 100
@@ -501,7 +501,7 @@ fn iterationIsInTheOrderKeysWereAdded() {
         seen.append(key)
         total = total + value
     }
-    assert(seen == ["c", "a", "b"])
+    expect(seen == ["c", "a", "b"])
     assertEqual(total, 6)
 }
 
@@ -514,17 +514,17 @@ fn iterationPassesOverRemovedKeys() {
     for (key, _) in d {
         keys.append(key)
     }
-    assert(keys == [1, 2, 4])
-    assert(d.map({ entry in entry.1 }) == [1, 4, 16])
+    expect(keys == [1, 2, 4])
+    expect(d.map({ entry in entry.1 }) == [1, 4, 16])
 }
 
 @test
 fn anIteratorGivesNoneAfterTheLast() {
     let d: [Int: Int] = [1: 1]
     var iterator = d.makeIterator()
-    assert(iterator.next() != none)
-    assert(iterator.next() == none)
-    assert(iterator.next() == none)
+    expect(iterator.next() != none)
+    expect(iterator.next() == none)
+    expect(iterator.next() == none)
 }
 
 // ---- Hashing ------------------------------------------------------------------
@@ -563,16 +563,16 @@ fn lookingUpStrings(_ b: Bencher) {
 fn uniqueKeysWithValuesHoldsEachPair() {
     let pairs: (String, Int)[>..] = [("one", 1), ("two", 2), ("three", 3)]
     let numbers = Dictionary(uniqueKeysWithValues: pairs)
-    assert(numbers.count == 3)
-    assert(numbers["two"]! == 2)
-    assert(numbers.map({ entry in entry.0 }) == ["one", "two", "three"])
+    expect(numbers.count == 3)
+    expect(numbers["two"]! == 2)
+    expect(numbers.map({ entry in entry.0 }) == ["one", "two", "three"])
 }
 
 @test
 fn uniqueKeysWithValuesTakesAnySequence() {
     let squares = Dictionary(uniqueKeysWithValues: (1...4).map({ (n: Int) -> (Int, Int) in (n, n * n) }))
-    assert(squares[4]! == 16)
-    assert(squares.count == 4)
+    expect(squares[4]! == 16)
+    expect(squares.count == 4)
 }
 
 @test(traps: "Dictionary(uniqueKeysWithValues:) was given the key 2 twice")
@@ -591,26 +591,26 @@ fn aDictionaryAgreesWithAModelAsItGrowsAndShrinks() {
         seed = (seed * 1103515245 + 12345) % 2147483648
         let key = seed / 7 % 3000
         if seed / 3 % 100 < (step / 10000 % 2 == 0 ? 70 : 30) {
-            assert(map.updateValue(step, forKey: key) == model[key])
+            assertEqual(map.updateValue(step, forKey: key), model[key])
             model[key] = step
         } else {
-            assert(map.remove(key) == model[key])
+            assertEqual(map.remove(key), model[key])
             model[key] = none
         }
     }
     var held = 0
     for key in 0..<3000 {
-        assert(map[key] == model[key])
-        assert(map.contains(key) == (model[key] != none))
+        assertEqual(map[key], model[key])
+        assertEqual(map.contains(key), (model[key] != none))
         held += model[key] == none ? 0 : 1
     }
     assertEqual(map.count, held)
     map.shrinkToFit()
     for (key, value) in map {
-        assert(model[key] == value)
+        assertEqual(model[key], value)
     }
     map.removeAll(keepingCapacity: true)
-    assert(map.capacity > 0 && map[5] == none)
+    expect(map.capacity > 0 && map[5] == none)
     map[5] = 6
     assertEqual(map[5], 6)
 }

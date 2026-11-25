@@ -32,96 +32,77 @@ fn echoOnce(_ listener: TcpListener) async throws(IoError) {
 }
 
 @test
-fn aStreamWritesAndReadsBytes() async {
-    do {
-        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-        let server = Task.spawn { try? await echoOnce(listener) }
-        let stream = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
-        try await stream.write([1, 2, 255])
-        stream.finishWriting()
-        assertEqual(text(try await stream.readAll()), text([2, 3, 0]))
-        await server.value
-    } catch {
-        assert(false, error.description())
-    }
+fn aStreamWritesAndReadsBytes() async throws {
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let server = Task.spawn { try? await echoOnce(listener) }
+    let stream = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
+    try await stream.write([1, 2, 255])
+    stream.finishWriting()
+    assertEqual(text(try await stream.readAll()), text([2, 3, 0]))
+    await server.value
 }
 
 @test
-fn aReadGivesWhatHasComeAndNothingAtTheEnd() async {
-    do {
-        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-        let server = Task.spawn { try? await echoOnce(listener) }
-        let stream = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
-        try await stream.write([9])
-        stream.finishWriting()
-        assertEqual(text(try await stream.read(upTo: 10)), text([10]))
-        assertEqual(try await stream.read(upTo: 10).count, 0)
-        await server.value
-    } catch {
-        assert(false, error.description())
-    }
+fn aReadGivesWhatHasComeAndNothingAtTheEnd() async throws {
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let server = Task.spawn { try? await echoOnce(listener) }
+    let stream = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
+    try await stream.write([9])
+    stream.finishWriting()
+    assertEqual(text(try await stream.read(upTo: 10)), text([10]))
+    assertEqual(try await stream.read(upTo: 10).count, 0)
+    await server.value
 }
 
 @test
-fn aLargeWriteWaitsForItsReader() async {
-    do {
-        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-        let server = Task.spawn { try? await echoOnce(listener) }
-        let stream = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
-        var bytes: U8[>..] = []
-        for i in 0..<300_000 {
-            bytes.append(U8(i % 200))
-        }
-        try await stream.write(bytes)
-        stream.finishWriting()
-        let reply = try await stream.readAll()
-        assertEqual(reply.count, 300_000)
-        assertEqual(reply[299_999], 200)
-        await server.value
-    } catch {
-        assert(false, error.description())
+fn aLargeWriteWaitsForItsReader() async throws {
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let server = Task.spawn { try? await echoOnce(listener) }
+    let stream = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
+    var bytes: U8[>..] = []
+    for i in 0..<300_000 {
+        bytes.append(U8(i % 200))
     }
+    try await stream.write(bytes)
+    stream.finishWriting()
+    let reply = try await stream.readAll()
+    assertEqual(reply.count, 300_000)
+    assertEqual(reply[299_999], 200)
+    await server.value
 }
 
 @test
 fn connectingWhereNothingListensThrows() async {
     var port = 0
-    do {
+    await expectThrows(saying: "'127.0.0.1:\(port)' refused the connection") {
         let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
         port = listener.port
         listener.close()
         _ = try await TcpStream.connect(host: "127.0.0.1", port: port)
-        assert(false, "connected")
-    } catch {
-        assertEqual(error.description(), "'127.0.0.1:\(port)' refused the connection")
     }
 }
 
 @test
-fn usingAClosedStreamThrows() async {
+fn usingAClosedStreamThrows() async throws {
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let server = Task.spawn { try? await listener.accept() }
+    let stream = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
+    stream.close()
+    var said = ""
     do {
-        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-        let server = Task.spawn { try? await listener.accept() }
-        let stream = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
-        stream.close()
-        var said = ""
-        do {
-            _ = try await stream.read(upTo: 1)
-        } catch {
-            said = error.description()
-        }
-        assertEqual(said, "the connection failed or was closed")
-        said = ""
-        do {
-            try await stream.write([1])
-        } catch {
-            said = error.description()
-        }
-        assertEqual(said, "the connection failed or was closed")
-        _ = await server.value
+        _ = try await stream.read(upTo: 1)
     } catch {
-        assert(false, error.description())
+        said = error.description()
     }
+    assertEqual(said, "the connection failed or was closed")
+    said = ""
+    do {
+        try await stream.write([1])
+    } catch {
+        said = error.description()
+    }
+    assertEqual(said, "the connection failed or was closed")
+    _ = await server.value
 }
 
 /// A connection's two ends, over loopback.
@@ -142,247 +123,207 @@ fn thrown(_ body: async () throws(IoError) -> ()) async -> String {
 }
 
 @test
-fn bothEndsKnowBothAddresses() async {
-    do {
-        let (client, server) = try await pair()
-        assertEqual(client.peerAddress, server.localAddress)
-        assertEqual(server.peerAddress, client.localAddress)
-        client.close()
-        assert(client.localAddress == none)
-    } catch {
-        assert(false, error.description())
-    }
+fn bothEndsKnowBothAddresses() async throws {
+    let (client, server) = try await pair()
+    assertEqual(client.peerAddress, server.localAddress)
+    assertEqual(server.peerAddress, client.localAddress)
+    client.close()
+    expect(client.localAddress == none)
 }
 
 @test
-fn aHalfClosedConnectionIsStillWrittenTheOtherWay() async {
-    do {
-        let (client, server) = try await pair()
-        client.finishWriting()
-        assertEqual((try await server.read(upTo: 1)).count, 0)
-        try await server.write([1, 2])
-        assertEqual(text(try await client.read(upTo: 10)), text([1, 2]))
-        assert((await thrown { try await client.write([1]) }) != "")
-        client.finishReading()
-        assertEqual((try await client.read(upTo: 1)).count, 0)
-    } catch {
-        assert(false, error.description())
-    }
+fn aHalfClosedConnectionIsStillWrittenTheOtherWay() async throws {
+    let (client, server) = try await pair()
+    client.finishWriting()
+    assertEqual((try await server.read(upTo: 1)).count, 0)
+    try await server.write([1, 2])
+    assertEqual(text(try await client.read(upTo: 10)), text([1, 2]))
+    expect((await thrown { try await client.write([1]) }) != "")
+    client.finishReading()
+    assertEqual((try await client.read(upTo: 1)).count, 0)
 }
 
 @test
-fn closingWakesAReadAndAWriteOnOtherTasks() async {
-    do {
-        let (client, server) = try await pair()
-        let reading = Task.spawn { await thrown {
-            _ = try await client.read(upTo: 1)
-        } }
-        let writing = Task.spawn { await thrown {
-            let block = U8[>..](repeating: 7, count: 1 << 20)
-            while true {
-                try await client.write(block)
-            }
-        } }
-        try? await Task.sleep(nanoseconds: 20_000_000)
-        client.close()
-        assertEqual(await reading.value, "the connection failed or was closed")
-        assertEqual(await writing.value, "the connection failed or was closed")
-        server.close()
-    } catch {
-        assert(false, error.description())
-    }
+fn closingWakesAReadAndAWriteOnOtherTasks() async throws {
+    let (client, server) = try await pair()
+    let reading = Task.spawn { await thrown {
+        _ = try await client.read(upTo: 1)
+    } }
+    let writing = Task.spawn { await thrown {
+        let block = U8[>..](repeating: 7, count: 1 << 20)
+        while true {
+            try await client.write(block)
+        }
+    } }
+    try? await Task.sleep(nanoseconds: 20_000_000)
+    client.close()
+    assertEqual(await reading.value, "the connection failed or was closed")
+    assertEqual(await writing.value, "the connection failed or was closed")
+    server.close()
 }
 
 /// A socket closed as other tasks read and write it, and its number the
 /// next one's at once: no byte of one connection's is read by another's.
 @test
-fn closingRacesWithCallsAndMixesNoConnections() async {
-    do {
-        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-        let address = listener.localAddress
-        let server = Task.spawn {
-            var number = 0
-            while let connection = try? await listener.accept() {
-                number += 1
-                let mark = U8(number % 256)
-                _ = Task.spawn { () -> Bool in
-                    let block = U8[>..](repeating: mark, count: 4096)
-                    while (try? await connection.write(block)) != none { }
-                    return true
-                }
+fn closingRacesWithCallsAndMixesNoConnections() async throws {
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let address = listener.localAddress
+    let server = Task.spawn {
+        var number = 0
+        while let connection = try? await listener.accept() {
+            number += 1
+            let mark = U8(number % 256)
+            _ = Task.spawn { () -> Bool in
+                let block = U8[>..](repeating: mark, count: 4096)
+                while (try? await connection.write(block)) != none { }
+                return true
             }
         }
-        var mixed = 0
-        for _ in 0..<8 {
-            var round: Task<Int>[>..] = []
-            for _ in 0..<8 {
-                round.append(Task.spawn { () -> Int in
-                    guard let stream = try? await TcpStream.connect(address) else {
-                        return 0
-                    }
-                    let reading = Task.spawn { () -> Int in
-                        var first = -1
-                        var wrong = 0
-                        while let bytes = try? await stream.read(upTo: 1024) {
-                            if bytes.isEmpty {
-                                break
-                            }
-                            for b in bytes {
-                                if first < 0 {
-                                    first = Int(b)
-                                }
-                                wrong += Int(b) == first ? 0 : 1
-                            }
-                        }
-                        return wrong
-                    }
-                    for _ in 0..<Int.random(in: 1..<20) {
-                        await Task.yield()
-                    }
-                    stream.close()
-                    return await reading.value
-                })
-            }
-            for task in round {
-                mixed += await task.value
-            }
-        }
-        listener.close()
-        await server.value
-        assertEqual(mixed, 0)
-    } catch {
-        assert(false, error.description())
     }
+    var mixed = 0
+    for _ in 0..<8 {
+        var round: Task<Int>[>..] = []
+        for _ in 0..<8 {
+            round.append(Task.spawn { () -> Int in
+                guard let stream = try? await TcpStream.connect(address) else {
+                    return 0
+                }
+                let reading = Task.spawn { () -> Int in
+                    var first = -1
+                    var wrong = 0
+                    while let bytes = try? await stream.read(upTo: 1024) {
+                        if bytes.isEmpty {
+                            break
+                        }
+                        for b in bytes {
+                            if first < 0 {
+                                first = Int(b)
+                            }
+                            wrong += Int(b) == first ? 0 : 1
+                        }
+                    }
+                    return wrong
+                }
+                for _ in 0..<Int.random(in: 1..<20) {
+                    await Task.yield()
+                }
+                stream.close()
+                return await reading.value
+            })
+        }
+        for task in round {
+            mixed += await task.value
+        }
+    }
+    listener.close()
+    await server.value
+    assertEqual(mixed, 0)
 }
 
 @test
-fn aCancelledReadLosesNoByte() async {
-    do {
-        let (client, server) = try await pair()
-        let writer = Task.spawn {
-            for i in 0..<2000 {
-                try? await server.write([U8(i % 251)])
-            }
-            server.finishWriting()
+fn aCancelledReadLosesNoByte() async throws {
+    let (client, server) = try await pair()
+    let writer = Task.spawn {
+        for i in 0..<2000 {
+            try? await server.write([U8(i % 251)])
         }
-        var got: U8[>..] = []
-        var ended = false
-        while !ended {
-            let reading = Task.spawn { try? await client.read(upTo: 16) }
-            if Int.random(in: 0..<3) == 0 {
-                await Task.yield()
-            }
-            reading.cancel()
-            if let bytes = await reading.value {
-                got.append(contentsOf: bytes)
-                ended = bytes.isEmpty
-            }
-        }
-        await writer.value
-        var right = got.count == 2000
-        for i in 0..<got.count {
-            right = right && Int(got[i]) == i % 251
-        }
-        assert(right, "\(got.count) bytes")
-    } catch {
-        assert(false, error.description())
+        server.finishWriting()
     }
+    var got: U8[>..] = []
+    var ended = false
+    while !ended {
+        let reading = Task.spawn { try? await client.read(upTo: 16) }
+        if Int.random(in: 0..<3) == 0 {
+            await Task.yield()
+        }
+        reading.cancel()
+        if let bytes = await reading.value {
+            got.append(contentsOf: bytes)
+            ended = bytes.isEmpty
+        }
+    }
+    await writer.value
+    var right = got.count == 2000
+    for i in 0..<got.count {
+        right = right && Int(got[i]) == i % 251
+    }
+    expect(right, "\(got.count) bytes")
 }
 
 /// A read or an accept given up is begun again, and nothing is lost by it.
 @test
-fn aReadAnAcceptAndAWriteTimeOut() async {
-    do {
-        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-        assert((try? await withTimeout(Duration.milliseconds(20)) { try await listener.accept() }) == none)
-        let client = try await TcpStream.connect(listener.localAddress)
-        let server = try await listener.accept()
-        assert((try? await withTimeout(Duration.milliseconds(20)) { try await server.read(upTo: 9) }) == none)
-        // Writes that no one reads, too: more than one, as a system may take
-        // a large one whole.
+fn aReadAnAcceptAndAWriteTimeOut() async throws {
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    expect((try? await withTimeout(Duration.milliseconds(20)) { try await listener.accept() }) == none)
+    let client = try await TcpStream.connect(listener.localAddress)
+    let server = try await listener.accept()
+    expect((try? await withTimeout(Duration.milliseconds(20)) { try await server.read(upTo: 9) }) == none)
+    // Writes that no one reads, too: more than one, as a system may take
+    // a large one whole.
+    let block = U8[>..](repeating: 7, count: 1 << 20)
+    let wrote: Void? = try? await withTimeout(Duration.milliseconds(50)) {
+        while true {
+            try await server.write(block)
+        }
+    }
+    expect(wrote == none)
+    assertEqual((try await client.read(upTo: 4)).count, 4)
+    try await client.write([1, 2])
+    assertEqual(try await server.read(upTo: 9), [1, 2])
+}
+
+@test
+fn aCancelledWriteLeavesTheConnectionOpen() async throws {
+    let (client, server) = try await pair()
+    let writing = Task.spawn { await thrown {
         let block = U8[>..](repeating: 7, count: 1 << 20)
-        let wrote: Void? = try? await withTimeout(Duration.milliseconds(50)) {
-            while true {
-                try await server.write(block)
-            }
+        while true {
+            try await client.write(block)
         }
-        assert(wrote == none)
-        assertEqual((try await client.read(upTo: 4)).count, 4)
-        try await client.write([1, 2])
-        assertEqual(try await server.read(upTo: 9), [1, 2])
-    } catch {
-        assert(false, error.description())
-    }
+    } }
+    try? await Task.sleep(nanoseconds: 20_000_000)
+    writing.cancel()
+    assertEqual(await writing.value, "the task was cancelled while it waited")
+    assertEqual((try await server.read(upTo: 4)).count, 4)
+    client.finishWriting()
+    let rest = try await server.readAll()
+    expect(rest.count > 0)
 }
 
 @test
-fn aCancelledWriteLeavesTheConnectionOpen() async {
-    do {
-        let (client, server) = try await pair()
-        let writing = Task.spawn { await thrown {
-            let block = U8[>..](repeating: 7, count: 1 << 20)
-            while true {
-                try await client.write(block)
-            }
-        } }
-        try? await Task.sleep(nanoseconds: 20_000_000)
-        writing.cancel()
-        assertEqual(await writing.value, "the task was cancelled while it waited")
-        assertEqual((try await server.read(upTo: 4)).count, 4)
-        client.finishWriting()
-        let rest = try await server.readAll()
-        assert(rest.count > 0)
-    } catch {
-        assert(false, error.description())
-    }
-}
-
-@test
-fn aWriteToAnEndThatIsGoneThrows() async {
-    do {
-        let (client, server) = try await pair()
-        try server.setLinger(Duration.zero)
-        server.close()
-        var said = ""
-        for _ in 0..<50 {
-            said = await thrown { try await client.write([1]) }
-            if said != "" {
-                break
-            }
-            try? await Task.sleep(nanoseconds: 2_000_000)
+fn aWriteToAnEndThatIsGoneThrows() async throws {
+    let (client, server) = try await pair()
+    try server.setLinger(Duration.zero)
+    server.close()
+    var said = ""
+    for _ in 0..<50 {
+        said = await thrown { try await client.write([1]) }
+        if said != "" {
+            break
         }
-        assertEqual(said, "the connection failed or was closed")
-    } catch {
-        assert(false, error.description())
+        try? await Task.sleep(nanoseconds: 2_000_000)
     }
+    assertEqual(said, "the connection failed or was closed")
 }
 
 @test
-fn connectingByNameTriesEveryAddress() async {
-    do {
-        // It listens on IPv4 alone, and localhost's IPv6 address refuses.
-        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-        let stream = try await TcpStream.connect(host: "localhost", port: listener.port, timeout: Duration.seconds(10))
-        assertEqual(stream.peerAddress!.ip, IpAddress.v4Loopback)
-        let literal = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
-        assertEqual(literal.peerAddress, listener.localAddress)
-    } catch {
-        assert(false, error.description())
-    }
+fn connectingByNameTriesEveryAddress() async throws {
+    // It listens on IPv4 alone, and localhost's IPv6 address refuses.
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let stream = try await TcpStream.connect(host: "localhost", port: listener.port, timeout: Duration.seconds(10))
+    assertEqual(stream.peerAddress!.ip, IpAddress.v4Loopback)
+    let literal = try await TcpStream.connect(host: "127.0.0.1", port: listener.port)
+    assertEqual(literal.peerAddress, listener.localAddress)
 }
 
 @test
-fn aTimeoutThatIsNotReachedLeavesTheConnectionOpen() async {
-    do {
-        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
-        let client = try await TcpStream.connect(listener.localAddress, timeout: Duration.milliseconds(200))
-        let server = try await listener.accept()
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        try await client.write([5])
-        assertEqual(text(try await server.read(upTo: 1)), text([5]))
-    } catch {
-        assert(false, error.description())
-    }
+fn aTimeoutThatIsNotReachedLeavesTheConnectionOpen() async throws {
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let client = try await TcpStream.connect(listener.localAddress, timeout: Duration.milliseconds(200))
+    let server = try await listener.accept()
+    try? await Task.sleep(nanoseconds: 250_000_000)
+    try await client.write([5])
+    assertEqual(text(try await server.read(upTo: 1)), text([5]))
 }
 
 /// Connecting where no one answers: on Linux a listener whose queue is full,
@@ -390,82 +331,74 @@ fn aTimeoutThatIsNotReachedLeavesTheConnectionOpen() async {
 /// interface has. Either takes longer than it is given, or is refused where
 /// the other is the one that does.
 @test
-fn connectingTimesOutAndIsCancelled() async {
-    do {
-        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0), backlog: 1)
-        let full = listener.localAddress
-        var held: TcpStream[>..] = []
-        var said: String[>..] = []
-        for _ in 0..<300 {
-            do {
-                held.append(try await TcpStream.connect(full, timeout: Duration.milliseconds(60)))
-            } catch {
-                said.append(error.description())
-                break
-            }
+fn connectingTimesOutAndIsCancelled() async throws {
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0), backlog: 1)
+    let full = listener.localAddress
+    var held: TcpStream[>..] = []
+    var said: String[>..] = []
+    for _ in 0..<300 {
+        do {
+            held.append(try await TcpStream.connect(full, timeout: Duration.milliseconds(60)))
+        } catch {
+            said.append(error.description())
+            break
         }
-        let silent = SocketAddress(IpAddress(127, 0, 0, 2), port: listener.port)
-        let start = Instant.now()
-        said.append(await thrown {
-            _ = try await TcpStream.connect(silent, timeout: Duration.milliseconds(60))
-        })
-        assert(said.contains("it took too long"), said.joined(separator: "; "))
-        assert(start.elapsed < Duration.seconds(10))
-        let nowhere = said[0] == "it took too long" ? full : silent
-        let waiting = Task.spawn { await thrown {
-            _ = try await TcpStream.connect(nowhere, timeout: Duration.seconds(60))
-        } }
-        let untimed = Task.spawn { await thrown {
-            _ = try await TcpStream.connect(nowhere)
-        } }
-        try? await Task.sleep(nanoseconds: 5_000_000)
-        waiting.cancel()
-        untimed.cancel()
-        assertEqual(await waiting.value, "the task was cancelled while it waited")
-        assertEqual(await untimed.value, "the task was cancelled while it waited")
-        assertEqual(await thrown {
-            _ = try await TcpStream.connect(host: nowhere.ip.toString(), port: nowhere.port, timeout: Duration.milliseconds(30))
-        }, "it took too long")
-    } catch {
-        assert(false, error.description())
     }
+    let silent = SocketAddress(IpAddress(127, 0, 0, 2), port: listener.port)
+    let start = Instant.now()
+    said.append(await thrown {
+        _ = try await TcpStream.connect(silent, timeout: Duration.milliseconds(60))
+    })
+    expect(said.contains("it took too long"), said.joined(separator: "; "))
+    expect(start.elapsed < Duration.seconds(10))
+    let nowhere = said[0] == "it took too long" ? full : silent
+    let waiting = Task.spawn { await thrown {
+        _ = try await TcpStream.connect(nowhere, timeout: Duration.seconds(60))
+    } }
+    let untimed = Task.spawn { await thrown {
+        _ = try await TcpStream.connect(nowhere)
+    } }
+    try? await Task.sleep(nanoseconds: 5_000_000)
+    waiting.cancel()
+    untimed.cancel()
+    assertEqual(await waiting.value, "the task was cancelled while it waited")
+    assertEqual(await untimed.value, "the task was cancelled while it waited")
+    assertEqual(await thrown {
+        _ = try await TcpStream.connect(host: nowhere.ip.toString(), port: nowhere.port, timeout: Duration.milliseconds(30))
+    }, "it took too long")
 }
 
 @test
-fn aConnectionsOptionsAreWhatTheyWereSetTo() async {
-    do {
-        let (client, server) = try await pair()
-        assert(try client.noDelay())
-        try client.setNoDelay(false)
-        assert(!(try client.noDelay()))
-        assert((try client.keepAlive()) == none)
-        try client.setKeepAlive(KeepAlive(idle: Duration.seconds(60), interval: Duration.milliseconds(9500), count: 4))
-        let keepAlive = (try client.keepAlive())!
-        assertEqual(keepAlive.idle, Duration.seconds(60))
-        assertEqual(keepAlive.interval, Duration.seconds(10))
-        assertEqual(keepAlive.count, 4)
-        let never = KeepAlive(idle: Duration.seconds(1), interval: Duration.seconds(1), count: 0)
-        assertEqual(await thrown { try client.setKeepAlive(never) }, "'a keep-alive' was given something the system does not take")
-        try client.setKeepAlive(none)
-        assert((try client.keepAlive()) == none)
-        try client.setReceiveBufferSize(100_000)
-        assert((try client.receiveBufferSize()) >= 100_000)
-        try client.setSendBufferSize(100_000)
-        assert((try client.sendBufferSize()) >= 100_000)
-        assert((try client.linger()) == none)
-        try client.setLinger(Duration.seconds(3))
-        assertEqual(try client.linger(), Duration.seconds(3))
-        try client.setLinger(none)
-        assert((try client.linger()) == none)
-        try client.setHopLimit(17)
-        assertEqual(try client.hopLimit(), 17)
-        server.close()
-        client.close()
-        assertEqual(await thrown { try client.setNoDelay(true) }, "the connection failed or was closed")
-        assertEqual(await thrown {
-            _ = try client.noDelay()
-        }, "the connection failed or was closed")
-    } catch {
-        assert(false, error.description())
-    }
+fn aConnectionsOptionsAreWhatTheyWereSetTo() async throws {
+    let (client, server) = try await pair()
+    expect(try client.noDelay())
+    try client.setNoDelay(false)
+    expect(!(try client.noDelay()))
+    expect((try client.keepAlive()) == none)
+    try client.setKeepAlive(KeepAlive(idle: Duration.seconds(60), interval: Duration.milliseconds(9500), count: 4))
+    let keepAlive = (try client.keepAlive())!
+    assertEqual(keepAlive.idle, Duration.seconds(60))
+    assertEqual(keepAlive.interval, Duration.seconds(10))
+    assertEqual(keepAlive.count, 4)
+    let never = KeepAlive(idle: Duration.seconds(1), interval: Duration.seconds(1), count: 0)
+    assertEqual(await thrown { try client.setKeepAlive(never) }, "'a keep-alive' was given something the system does not take")
+    try client.setKeepAlive(none)
+    expect((try client.keepAlive()) == none)
+    try client.setReceiveBufferSize(100_000)
+    expect((try client.receiveBufferSize()) >= 100_000)
+    try client.setSendBufferSize(100_000)
+    expect((try client.sendBufferSize()) >= 100_000)
+    expect((try client.linger()) == none)
+    try client.setLinger(Duration.seconds(3))
+    assertEqual(try client.linger(), Duration.seconds(3))
+    try client.setLinger(none)
+    expect((try client.linger()) == none)
+    try client.setHopLimit(17)
+    assertEqual(try client.hopLimit(), 17)
+    server.close()
+    client.close()
+    assertEqual(await thrown { try client.setNoDelay(true) }, "the connection failed or was closed")
+    assertEqual(await thrown {
+        _ = try client.noDelay()
+    }, "the connection failed or was closed")
 }

@@ -14,8 +14,8 @@ fn weekdaysAreNumberedFromMonday() {
         assertEqual(Weekday.of(n)!.number, n)
         n += 1
     }
-    assert(Weekday.of(0) == none)
-    assert(Weekday.of(8) == none)
+    expect(Weekday.of(0) == none)
+    expect(Weekday.of(8) == none)
 }
 
 @test

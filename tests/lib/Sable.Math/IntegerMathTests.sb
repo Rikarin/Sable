@@ -110,9 +110,9 @@ fn modInverseUndoesMultiplication() {
 
 @test
 fn modInverseIsNoneWithACommonFactor() {
-    assert(modInverse(2, 4) == none, "2 has no inverse modulo 4")
-    assert(modInverse(0, 7) == none, "0 has no inverse")
-    assert(modInverse(21, 14) == none, "7 divides both")
+    expect(modInverse(2, 4) == none, "2 has no inverse modulo 4")
+    expect(modInverse(0, 7) == none, "0 has no inverse")
+    expect(modInverse(21, 14) == none, "7 divides both")
 }
 
 @test(traps: "the modulus must be positive, not 0")
@@ -199,5 +199,5 @@ fn modInverseOfA128BitTypeDoesNotOverflow() {
     let inverse: U128 = 82_984_245_440_425_468_002_353_066_831_922_575_035
     assertEqual(modInverse(a, m) ?? 0, inverse)
     assertEqual(modInverse(3 as U8, 250) ?? 0, 167 as U8)
-    assert(modInverse(4 as U8, 250) == none, "2 divides both")
+    expect(modInverse(4 as U8, 250) == none, "2 divides both")
 }

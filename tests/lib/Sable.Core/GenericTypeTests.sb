@@ -15,32 +15,32 @@ struct Sorted<T: Comparable> {
 fn aGenericTypeMakesTypesOfIt() {
     let pair: GenericType = Pair.self
     let made = pair.instantiate([Int.self, String.self])!
-    assert(made == Pair<Int, String>.self)
+    expect(made == Pair<Int, String>.self)
     assertEqual(pair.parameterCount, 2)
     assertEqual(pair.arguments(of: Pair<Int, String>.self)!.count, 2)
-    assert(pair.arguments(of: Pair<Int, String>.self)! == [Int.self, String.self])
-    assert(pair.arguments(of: Int.self) == none)
-    assert(pair.arguments(of: Sorted<Int>.self) == none)
+    expect(pair.arguments(of: Pair<Int, String>.self)! == [Int.self, String.self])
+    expect(pair.arguments(of: Int.self) == none)
+    expect(pair.arguments(of: Sorted<Int>.self) == none)
 }
 
 @test
 fn whatDoesNotFitIsNone() {
     let pair: GenericType = Pair.self
-    assert(pair.instantiate([Int.self]) == none)
+    expect(pair.instantiate([Int.self]) == none)
     let sorted: GenericType = Sorted.self
-    assert(sorted.instantiate([Int.self])! == Sorted<Int>.self)
+    expect(sorted.instantiate([Int.self])! == Sorted<Int>.self)
 }
 
 @test
 fn aGenericTypeIsAValue() {
     let pair: GenericType = Pair.self
     let sorted: GenericType = Sorted.self
-    assert(pair == Pair.self)
-    assert(pair != sorted)
+    expect(pair == Pair.self)
+    expect(pair != sorted)
     var names: [GenericType: Int] = [:]
     names[pair] = 1
     names[sorted] = 2
     assertEqual(names[pair], 1)
     assertEqual("\(pair)", pair.debugDescription())
-    assert(pair.debugDescription().hasSuffix("Pair"))
+    expect(pair.debugDescription().hasSuffix("Pair"))
 }

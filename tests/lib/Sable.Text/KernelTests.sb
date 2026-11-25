@@ -39,18 +39,18 @@ fn base64OfEveryLengthIsThePlainOne() {
         for padding in [true, false] {
             let plain = plainBase64(bytes, standard, padding: padding)
             assertEqual(Base64.encode(bytes, padding: padding), plain)
-            assert(try! Base64.decode(plain) == bytes)
-            assert(try! Base64.decode(bytes: plain.utf8Bytes()) == bytes)
+            assertEqual(try! Base64.decode(plain), bytes)
+            assertEqual(try! Base64.decode(bytes: plain.utf8Bytes()), bytes)
             let around = "é" + plain + "!"
             let piece = around[around.index(after: around.startIndex)..<around.index(before: around.endIndex)]
-            assert(try! Base64.decode(piece) == bytes)
+            assertEqual(try! Base64.decode(piece), bytes)
             let plainUrl = plainBase64(bytes, url, padding: padding)
             assertEqual(Base64.encode(bytes, alphabet: .UrlSafe, padding: padding), plainUrl)
-            assert(try! Base64.decode(plainUrl, alphabet: .UrlSafe) == bytes)
+            assertEqual(try! Base64.decode(plainUrl, alphabet: .UrlSafe), bytes)
             var buffer = ByteBuffer()
             buffer.writeU8(0x21)
             Base64.encode(bytes, into: &buffer, padding: padding)
-            assert(buffer.bytes == ("!" + plain).utf8Bytes())
+            assertEqual(buffer.bytes, ("!" + plain).utf8Bytes())
         }
     }
 }
@@ -64,7 +64,7 @@ fn aWrongBase64DigitIsSaidToBeWhereItIs() {
             let after = text[text.index(atScalar: at + 1)...].toString()
             do {
                 _ = try Base64.decode(before + wrong + after)
-                assert(false, "\(wrong) at \(at) decoded")
+                fail("\(wrong) at \(at) decoded")
             } catch {
                 assert(error == .InvalidCharacter(at: at, byte: wrong.utf8[0]), "\(error) for \(wrong) at \(at)")
             }
@@ -74,7 +74,7 @@ fn aWrongBase64DigitIsSaidToBeWhereItIs() {
         _ = try Base64.decode(text[..<text.index(atScalar: 100)].toString() + "é" + text)
         assert(false)
     } catch {
-        assert(error == .InvalidCharacter(at: 100, byte: 0xC3))
+        expect(error == .InvalidCharacter(at: 100, byte: 0xC3))
     }
 }
 
@@ -89,9 +89,9 @@ fn hexOfEveryLengthIsThePlainOne() {
         }
         assertEqual(Hex.encode(bytes), plain)
         assertEqual(Hex.encode(bytes, uppercase: true), plain.uppercased())
-        assert(try! Hex.decode(plain) == bytes)
-        assert(try! Hex.decode(plain.uppercased()) == bytes)
-        assert(try! Hex.decode(bytes: plain.utf8Bytes()) == bytes)
+        assertEqual(try! Hex.decode(plain), bytes)
+        assertEqual(try! Hex.decode(plain.uppercased()), bytes)
+        assertEqual(try! Hex.decode(bytes: plain.utf8Bytes()), bytes)
     }
 }
 
@@ -104,7 +104,7 @@ fn aWrongHexDigitIsSaidToBeWhereItIs() {
             let after = text[text.index(atScalar: at + 1)...].toString()
             do {
                 _ = try Hex.decode(before + wrong + after)
-                assert(false, "\(wrong) at \(at) decoded")
+                fail("\(wrong) at \(at) decoded")
             } catch {
                 assert(error == .InvalidCharacter(at: at, byte: wrong.utf8[0]), "\(error) for \(wrong) at \(at)")
             }
@@ -143,11 +143,11 @@ fn transcodingIsThePlainOne() {
         for unit in text.utf16 {
             plain.append(unit)
         }
-        assert(units == plain)
+        assertEqual(units, plain)
         var bytes: U8[>..] = []
         let (back, readBack) = Utf8.fromUtf16(units[1...], into: &bytes)
         assert(back == .Done && readBack == units.count - 1)
-        assert(bytes == text.utf8Bytes())
+        assertEqual(bytes, text.utf8Bytes())
     }
 }
 
@@ -194,7 +194,7 @@ fn invalidUtf8AnywhereIsFound() {
             assertEqual(Utf8.validate(broken), start)
         }
     }
-    assert(Utf8.validate(bytes) == none)
+    expect(Utf8.validate(bytes) == none)
 }
 
 // The four forms, the plain way: every scalar decomposed, all the marks in
@@ -266,7 +266,7 @@ fn normalizationIsThePlainOne() {
             assertEqual(normalized, plainlyNormalized(text, form))
             assertEqual(normalized.normalized(form), normalized)
             assert(normalized.isNormalized(form))
-            assert(text.isNormalized(form) == (text == normalized))
+            assertEqual(text.isNormalized(form), (text == normalized))
         }
     }
 }

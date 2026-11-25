@@ -29,7 +29,7 @@ fn aHalfOpenRangeStaysBelowItsUpperBound() {
         i += 1
     }
     // Spread evenly: the mean is near the middle.
-    assert(sum / 1000.0 > 2.9 && sum / 1000.0 < 3.1)
+    expect(sum / 1000.0 > 2.9 && sum / 1000.0 < 3.1)
 }
 
 @test
@@ -54,9 +54,9 @@ fn aRangeOfOneValueGivesIt() {
 @test
 fn theSystemsGeneratorIsTheDefault() {
     let x = F64.random(in: 0.0..<1.0)
-    assert(x >= 0.0 && x < 1.0)
+    expect(x >= 0.0 && x < 1.0)
     let y = F32.random(in: 5.0...6.0)
-    assert(y >= 5.0 && y <= 6.0)
+    expect(y >= 5.0 && y <= 6.0)
 }
 
 @test(traps: "a random value of an empty range")
@@ -144,7 +144,7 @@ fn theLastStepOfAClosedRangeIsExactlyItsBound() {
     assertEqual(F64.random(in: -489861948521.1566...(-7.312715117751976e-16), using: &top), -7.312715117751976e-16)
     var bottom = Scripted { values: [0x8000000000000000, 0], drawn: 0 }
     let x = F64.random(in: -489861948521.1566...(-7.312715117751976e-16), using: &bottom)
-    assert(x < -2e11 && x > -3e11)
+    expect(x < -2e11 && x > -3e11)
 }
 
 @test

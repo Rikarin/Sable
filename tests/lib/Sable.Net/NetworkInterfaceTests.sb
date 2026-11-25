@@ -10,11 +10,11 @@ import Sable.Testing
 fn theLoopbackInterfaceIsThere() {
     let all = try! NetworkInterface.all()
     let loopback = all.first(where: { $0.isLoopback })!
-    assert(loopback.isUp && loopback.isRunning)
-    assert(loopback.index > 0)
-    assert((loopback.mtu ?? 1) > 0)
-    assert(loopback.hardwareAddress == none || loopback.hardwareAddress! == [0, 0, 0, 0, 0, 0])
-    assert(!loopback.isPointToPoint)
+    expect(loopback.isUp && loopback.isRunning)
+    expect(loopback.index > 0)
+    expect((loopback.mtu ?? 1) > 0)
+    expect(loopback.hardwareAddress == none || loopback.hardwareAddress! == [0, 0, 0, 0, 0, 0])
+    expect(!loopback.isPointToPoint)
     let address = loopback.addresses.first(where: { $0.address == IpAddress.v4Loopback })!
     assertEqual(address.network.toString(), "127.0.0.0/8")
 }

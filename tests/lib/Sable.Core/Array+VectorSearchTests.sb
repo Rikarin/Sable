@@ -116,7 +116,7 @@ fn comparisonsAgree<T: SIMDScalar>(_ other: T, _ changed: T) {
         // Differing past the end of both: not looked at.
         ys[2 + n] = changed
         ys[1] = changed
-        assert(xs[1..<(n + 1)] == ys[2..<(n + 2)])
+        assertEqual(xs[1..<(n + 1)], ys[2..<(n + 2)])
     }
 }
 
@@ -167,10 +167,10 @@ fn orderIsTheElementsAndNotTheBytes() {
     // a negative is before a positive, though its bits are the greater.
     let big = U16[>..](repeating: 0x0100, count: 20)
     let small = U16[>..](repeating: 0x00FF, count: 20)
-    assert(small < big && !(big < small))
+    expect(small < big && !(big < small))
     let minus = Int[>..](repeating: -1, count: 20)
     let plus = Int[>..](repeating: 1, count: 20)
-    assert(minus < plus && !(plus < minus))
+    expect(minus < plus && !(plus < minus))
 }
 
 @test
@@ -178,14 +178,14 @@ fn aFloatIsComparedByItsValue() {
     let nan = F64.nan
     var xs = F64[>..](repeating: 0.0, count: 40)
     let minusZeros = F64[>..](repeating: -0.0, count: 40)
-    assert(xs == minusZeros)
+    expect(xs == minusZeros)
     assertEqual(xs.firstIndex(of: -0.0) ?? -1, 0)
     assertEqual(xs.count(of: -0.0), 40)
     xs[21] = nan
-    assert(xs != xs)
-    assert(!xs.contains(nan))
+    expect(xs != xs)
+    expect(!xs.contains(nan))
     assertEqual(xs.count(of: nan), 0)
-    assert(xs.firstIndex(ofAny: [nan, nan]) == none)
+    expect(xs.firstIndex(ofAny: [nan, nan]) == none)
 }
 
 @test
@@ -193,7 +193,7 @@ fn boolsAndCharsAreComparedAtOnce() {
     for n in 0...longest {
         let xs = Bool[>..](repeating: true, count: n)
         var ys = xs
-        assert(xs == ys)
+        assertEqual(xs, ys)
         if n > 0 {
             ys[n - 1] = false
             assert(xs != ys)
@@ -201,7 +201,7 @@ fn boolsAndCharsAreComparedAtOnce() {
         }
         let cs = Char[>..](repeating: 'é', count: n)
         var ds = cs
-        assert(cs == ds)
+        assertEqual(cs, ds)
         if n > 0 {
             ds[n / 2] = 'e'
             assert(cs != ds && ds < cs)
@@ -221,18 +221,18 @@ fn genericCodeComparesAsTheElementDoes() {
     var others = words
     others[15] = "b"
     let (equal, less, common) = same(words, others)
-    assert(!equal && less)
+    expect(!equal && less)
     assertEqual(common, 15)
     let ones = I32[>..](repeating: 1, count: 20)
     var twos = ones
     twos[19] = -2
     let (sameInts, lessInts, commonInts) = same(ones, twos)
-    assert(!sameInts && !lessInts)
+    expect(!sameInts && !lessInts)
     assertEqual(commonInts, 19)
     let zeros = F32[>..](repeating: 0.0, count: 20)
     let negatives = F32[>..](repeating: -0.0, count: 20)
     let (sameZeros, _, commonZeros) = same(zeros, negatives)
-    assert(sameZeros)
+    expect(sameZeros)
     assertEqual(commonZeros, 20)
 }
 

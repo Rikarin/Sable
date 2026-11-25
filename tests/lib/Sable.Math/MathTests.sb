@@ -56,19 +56,19 @@ fn powerMultipliesBySquaring() {
 
 @test
 fn isPrimeTriesTheDivisors() {
-    assert(isPrime(97), "97 is prime")
-    assert(!isPrime(91), "91 is 7 x 13")
-    assert(isPrime(2) && isPrime(3 as U8), "2 and 3 are prime")
-    assert(!isPrime(1) && !isPrime(0) && !isPrime(-7), "nothing below 2 is")
-    assert(!isPrime(64 as I16), "an even number above 2 is not")
-    assert(isPrime(251 as U8), "251 is prime")
+    expect(isPrime(97), "97 is prime")
+    expect(!isPrime(91), "91 is 7 x 13")
+    expect(isPrime(2) && isPrime(3 as U8), "2 and 3 are prime")
+    expect(!isPrime(1) && !isPrime(0) && !isPrime(-7), "nothing below 2 is")
+    expect(!isPrime(64 as I16), "an even number above 2 is not")
+    expect(isPrime(251 as U8), "251 is prime")
 }
 
 @test
 fn squareRootIsCorrectlyRounded() {
     assertEqual(squareRoot(2.0), 1.4142135623730951)
     assertEqual(squareRoot(9.0 as F32), 3.0)
-    assert(squareRoot(-1.0).isNaN, "-1 has no square root")
+    expect(squareRoot(-1.0).isNaN, "-1 has no square root")
 }
 
 @test

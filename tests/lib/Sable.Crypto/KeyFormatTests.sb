@@ -233,22 +233,22 @@ c6v9E+HEJg==
 fn check(_ secret: String, _ publicKey: String) {
     let key = try! PrivateKey.parse(pem: secret)
     let own = try! PublicKey.parse(pem: publicKey)
-    assert(key.publicKey == own)
+    expect(key.publicKey == own)
     assertEqual(key.pem().trimmed(), secret.trimmed())
     assertEqual(own.pem.trimmed(), publicKey.trimmed())
-    assert(try! PrivateKey.parse(pkcs8: key.pkcs8()) == key)
-    assert(try! PublicKey.parse(spki: own.spki) == own)
-    assert(try! PrivateKey.parse(jwk: key.jwk()) == key)
-    assert(try! PublicKey.parse(jwk: own.jwk) == own)
+    expect(try! PrivateKey.parse(pkcs8: key.pkcs8()) == key)
+    expect(try! PublicKey.parse(spki: own.spki) == own)
+    expect(try! PrivateKey.parse(jwk: key.jwk()) == key)
+    expect(try! PublicKey.parse(jwk: own.jwk) == own)
     // A private JWK has the public key too.
-    assert(try! PublicKey.parse(jwk: key.jwk()) == own)
-    assert(!key.debugDescription().contains("(") && own.debugDescription().hasPrefix("PublicKey."))
+    expect(try! PublicKey.parse(jwk: key.jwk()) == own)
+    expect(!key.debugDescription().contains("(") && own.debugDescription().hasPrefix("PublicKey."))
     // Cut short, or with something after.
     let der = key.pkcs8()
-    assert((try? PrivateKey.parse(pkcs8: der[..<^1])) == none && (try? PublicKey.parse(spki: own.spki[..<^1])) == none)
+    expect((try? PrivateKey.parse(pkcs8: der[..<^1])) == none && (try? PublicKey.parse(spki: own.spki[..<^1])) == none)
     var longer = der
     longer.append(0)
-    assert((try? PrivateKey.parse(pkcs8: longer)) == none)
+    expect((try? PrivateKey.parse(pkcs8: longer)) == none)
 }
 
 @test
@@ -264,51 +264,51 @@ fn opensslsKeysAreReadAndWrittenAsTheyWere() {
 @test
 fn theOlderFormatsAreRead() {
     let p256 = try! PrivateKey.parse(pem: p256Key)
-    assert(try! PrivateKey.parse(pem: p256Sec1) == p256 && PrivateKey.parse(pem: p256Parameters) == p256)
+    expect(try! PrivateKey.parse(pem: p256Sec1) == p256 && PrivateKey.parse(pem: p256Parameters) == p256)
     assertEqual(PemBlock(label: "EC PRIVATE KEY", bytes: p256.sec1()!).text.trimmed(), p256Sec1.trimmed())
     let rsa = try! PrivateKey.parse(pem: rsaKey)
-    assert(try! PrivateKey.parse(pem: rsaPkcs1) == rsa && rsa.sec1() == none)
-    assert(try! PublicKey.parse(pem: rsaPublicPkcs1) == rsa.publicKey)
+    expect(try! PrivateKey.parse(pem: rsaPkcs1) == rsa && rsa.sec1() == none)
+    expect(try! PublicKey.parse(pem: rsaPublicPkcs1) == rsa.publicKey)
     let p521 = try! PrivateKey.parse(pem: p521Key)
-    assert(try! PrivateKey.parse(sec1: p521.sec1()!) == p521)
-    assert((try? PrivateKey.parse(sec1: p521.sec1()!, curve: .P256)) == none)
+    expect(try! PrivateKey.parse(sec1: p521.sec1()!) == p521)
+    expect((try? PrivateKey.parse(sec1: p521.sec1()!, curve: .P256)) == none)
     let p384 = try! PrivateKey.parse(pem: p384Key)
-    assert(try! PrivateKey.parse(sec1: p384.sec1()!, curve: .P384) == p384)
+    expect(try! PrivateKey.parse(sec1: p384.sec1()!, curve: .P384) == p384)
 }
 
 @test
 fn aKeyOfAnotherTypeIsNotTaken() {
-    assert((try? EcdsaPrivateKey<P256>.parse(pem: p384Key)) == none && (try? EcdsaPublicKey<P256>.parse(pem: p384Public)) == none)
-    assert((try? EcdhPrivateKey<P521>.parse(pem: rsaKey)) == none && (try? EcdhPublicKey<P521>.parse(pem: edPublic)) == none)
-    assert((try? Ed25519PrivateKey.parse(pem: xKey)) == none && (try? Ed25519PublicKey.parse(pem: xPublic)) == none)
-    assert((try? X25519PrivateKey.parse(pem: edKey)) == none && (try? X25519PublicKey.parse(pem: edPublic)) == none)
-    assert((try? RsaPrivateKey.parse(pem: edKey)) == none && (try? RsaPublicKey.parse(pem: edPublic)) == none)
-    assert(try! EcdhPrivateKey<P256>.parse(pem: p256Key).bytes() == EcdsaPrivateKey<P256>.parse(pem: p256Key).bytes())
-    assert(try! EcdhPublicKey<P384>.parse(pem: p384Public).bytes == EcdsaPublicKey<P384>.parse(pem: p384Public).bytes)
-    assert(try! EcdhPrivateKey<P521>.parse(pem: p521Key).publicKey.spki == EcdsaPrivateKey<P521>.parse(pem: p521Key).publicKey.spki)
-    assert(try! X25519PublicKey.parse(pem: xPublic).spki == X25519PrivateKey.parse(pem: xKey).publicKey.spki)
-    assert(try! EcdhPrivateKey<P384>.parse(pem: p384Key).pem().trimmed() == p384Key.trimmed())
-    assert(try! EcdsaPrivateKey<P521>.parse(pem: p521Key).pkcs8() == EcdhPrivateKey<P521>.parse(pem: p521Key).pkcs8())
-    assert(try! RsaPublicKey.parse(pem: rsaPublic) == RsaPrivateKey.parse(pem: rsaKey).publicKey)
-    assert(try! Ed25519PublicKey.parse(pem: edPublic) == Ed25519PrivateKey.parse(pem: edKey).publicKey)
+    expect((try? EcdsaPrivateKey<P256>.parse(pem: p384Key)) == none && (try? EcdsaPublicKey<P256>.parse(pem: p384Public)) == none)
+    expect((try? EcdhPrivateKey<P521>.parse(pem: rsaKey)) == none && (try? EcdhPublicKey<P521>.parse(pem: edPublic)) == none)
+    expect((try? Ed25519PrivateKey.parse(pem: xKey)) == none && (try? Ed25519PublicKey.parse(pem: xPublic)) == none)
+    expect((try? X25519PrivateKey.parse(pem: edKey)) == none && (try? X25519PublicKey.parse(pem: edPublic)) == none)
+    expect((try? RsaPrivateKey.parse(pem: edKey)) == none && (try? RsaPublicKey.parse(pem: edPublic)) == none)
+    expect(try! EcdhPrivateKey<P256>.parse(pem: p256Key).bytes() == EcdsaPrivateKey<P256>.parse(pem: p256Key).bytes())
+    expect(try! EcdhPublicKey<P384>.parse(pem: p384Public).bytes == EcdsaPublicKey<P384>.parse(pem: p384Public).bytes)
+    expect(try! EcdhPrivateKey<P521>.parse(pem: p521Key).publicKey.spki == EcdsaPrivateKey<P521>.parse(pem: p521Key).publicKey.spki)
+    expect(try! X25519PublicKey.parse(pem: xPublic).spki == X25519PrivateKey.parse(pem: xKey).publicKey.spki)
+    expect(try! EcdhPrivateKey<P384>.parse(pem: p384Key).pem().trimmed() == p384Key.trimmed())
+    expect(try! EcdsaPrivateKey<P521>.parse(pem: p521Key).pkcs8() == EcdhPrivateKey<P521>.parse(pem: p521Key).pkcs8())
+    expect(try! RsaPublicKey.parse(pem: rsaPublic) == RsaPrivateKey.parse(pem: rsaKey).publicKey)
+    expect(try! Ed25519PublicKey.parse(pem: edPublic) == Ed25519PrivateKey.parse(pem: edKey).publicKey)
 }
 
 fn typed<C: EllipticCurve>(_ curve: C.Type, _ secret: String, _ others: String[:]) {
     let signs = try! EcdsaPrivateKey<C>.parse(pem: secret)
     let agrees = try! EcdhPrivateKey<C>.parse(pem: secret)
-    assert(signs.bytes() == agrees.bytes() && signs.pem() == agrees.pem() && signs.jwk() == agrees.jwk() && signs.pkcs8() == agrees.pkcs8())
-    assert(signs.publicKey.pem == agrees.publicKey.pem && signs.publicKey.jwk == agrees.publicKey.jwk)
-    assert(try! EcdsaPrivateKey<C>.parse(pkcs8: signs.pkcs8()) == signs && EcdsaPrivateKey<C>.parse(jwk: signs.jwk()) == signs)
-    assert(try! EcdhPrivateKey<C>.parse(pkcs8: agrees.pkcs8()) == agrees && EcdhPublicKey<C>.parse(spki: agrees.publicKey.spki) == agrees.publicKey)
-    assert(try! EcdsaPublicKey<C>.parse(pem: signs.publicKey.pem) == signs.publicKey)
-    assert(try! EcdhPublicKey<C>.parse(jwk: signs.publicKey.jwk) == agrees.publicKey)
+    expect(signs.bytes() == agrees.bytes() && signs.pem() == agrees.pem() && signs.jwk() == agrees.jwk() && signs.pkcs8() == agrees.pkcs8())
+    expect(signs.publicKey.pem == agrees.publicKey.pem && signs.publicKey.jwk == agrees.publicKey.jwk)
+    expect(try! EcdsaPrivateKey<C>.parse(pkcs8: signs.pkcs8()) == signs && EcdsaPrivateKey<C>.parse(jwk: signs.jwk()) == signs)
+    expect(try! EcdhPrivateKey<C>.parse(pkcs8: agrees.pkcs8()) == agrees && EcdhPublicKey<C>.parse(spki: agrees.publicKey.spki) == agrees.publicKey)
+    expect(try! EcdsaPublicKey<C>.parse(pem: signs.publicKey.pem) == signs.publicKey)
+    expect(try! EcdhPublicKey<C>.parse(jwk: signs.publicKey.jwk) == agrees.publicKey)
     for other in others {
         assert((try? EcdsaPrivateKey<C>.parse(pem: other)) == none && (try? EcdhPrivateKey<C>.parse(pem: other)) == none)
         let publicKey = try! PrivateKey.parse(pem: other).publicKey.pem
         assert((try? EcdsaPublicKey<C>.parse(pem: publicKey)) == none && (try? EcdhPublicKey<C>.parse(pem: publicKey)) == none)
     }
-    assert((try? EcdhPrivateKey<C>([1])) == none && (try? EcdsaPublicKey<C>([4, 1])) == none)
-    assert(signs.publicKey.compressed.count == C.curve.byteCount + 1 && signs.publicKey.debugDescription().hasPrefix("EcdsaPublicKey<\(C.curve)>("))
+    expect((try? EcdhPrivateKey<C>([1])) == none && (try? EcdsaPublicKey<C>([4, 1])) == none)
+    expect(signs.publicKey.compressed.count == C.curve.byteCount + 1 && signs.publicKey.debugDescription().hasPrefix("EcdsaPublicKey<\(C.curve)>("))
 }
 
 @test
@@ -317,25 +317,25 @@ fn aCurvesKeyIsForBothItsUses() {
     typed(P384.self, p384Key, [p256Key, p521Key, xKey])
     typed(P521.self, p521Key, [p256Key, p384Key, rsaKey])
     let ed = try! Ed25519PrivateKey.parse(pem: edKey)
-    assert(ed.publicKey.pem.trimmed() == edPublic.trimmed() && ed.publicKey.jwk == ed.publicKey.anyKey.jwk && ed.pem().trimmed() == edKey.trimmed())
+    expect(ed.publicKey.pem.trimmed() == edPublic.trimmed() && ed.publicKey.jwk == ed.publicKey.anyKey.jwk && ed.pem().trimmed() == edKey.trimmed())
     let x = try! X25519PrivateKey.parse(pem: xKey)
-    assert(x.publicKey.pem.trimmed() == xPublic.trimmed() && x.pem().trimmed() == xKey.trimmed() && x.jwk() == x.anyKey.jwk())
+    expect(x.publicKey.pem.trimmed() == xPublic.trimmed() && x.pem().trimmed() == xKey.trimmed() && x.jwk() == x.anyKey.jwk())
 }
 
 @test
 fn whatTheLibraryHasNotIsRefused() {
-    assert((try? PublicKey.parse(pem: explicitCurve)) == none)
-    assert((try? PublicKey.parse(pem: otherCurve)) == none)
-    assert((try? PublicKey.parse(pem: otherAlgorithm)) == none)
-    assert((try? PrivateKey.parse(pem: encrypted)) == none)
-    assert((try? PublicKey.parse(pem: "nothing")) == none && (try? PublicKey.parse(spki: [0x30, 0x00])) == none)
+    expect((try? PublicKey.parse(pem: explicitCurve)) == none)
+    expect((try? PublicKey.parse(pem: otherCurve)) == none)
+    expect((try? PublicKey.parse(pem: otherAlgorithm)) == none)
+    expect((try? PrivateKey.parse(pem: encrypted)) == none)
+    expect((try? PublicKey.parse(pem: "nothing")) == none && (try? PublicKey.parse(spki: [0x30, 0x00])) == none)
     // A private key with another's public key.
     let one = EcdsaPrivateKey<P256>.generate()
     let two = EcdsaPrivateKey<P256>.generate()
     let der = one.pkcs8()
     var mixed = der[..<der.count - 64].toArray()
     mixed.append(contentsOf: two.publicKey.bytes[1...])
-    assert((try? PrivateKey.parse(pkcs8: mixed)) == none && (try? PrivateKey.parse(pkcs8: der)) != none)
+    expect((try? PrivateKey.parse(pkcs8: mixed)) == none && (try? PrivateKey.parse(pkcs8: der)) != none)
 }
 
 // Ed25519's of RFC 8410 §10.3, whose second has its public key with it.
@@ -343,8 +343,8 @@ fn whatTheLibraryHasNotIsRefused() {
 fn rfc8410sKeysAreRead() {
     let first = try! PrivateKey.parse(pem: "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\n-----END PRIVATE KEY-----\n")
     let second = try! PrivateKey.parse(pem: "-----BEGIN PRIVATE KEY-----\nMHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\noB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrB\nZ9w7lshQhqowtrbLDFw4rXAxZuE=\n-----END PRIVATE KEY-----\n")
-    assert(first == second)
-    assert((try? PrivateKey.parse(pem: "-----BEGIN PRIVATE KEY-----\nMHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\noB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrB\nZ9w7lshQhqowtrbLDFw4rXAxZuF=\n-----END PRIVATE KEY-----\n")) == none)
+    expect(first == second)
+    expect((try? PrivateKey.parse(pem: "-----BEGIN PRIVATE KEY-----\nMHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\noB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrB\nZ9w7lshQhqowtrbLDFw4rXAxZuF=\n-----END PRIVATE KEY-----\n")) == none)
 }
 
 @test
@@ -362,22 +362,22 @@ fn jwksAreReadStrictly() {
         assert((try? PrivateKey.parse(jwk: each)) == none)
     }
     // Without a private key, and with another's public one.
-    assert((try? PrivateKey.parse(jwk: key.jwk)) == none)
+    expect((try? PrivateKey.parse(jwk: key.jwk)) == none)
     let one = Ed25519PrivateKey.generate()
     let two = Ed25519PrivateKey.generate()
-    assert((try? PrivateKey.parse(jwk: one.jwk().replacing(Base64.encode(one.publicKey.bytes, alphabet: .UrlSafe, padding: false), with: Base64.encode(two.publicKey.bytes, alphabet: .UrlSafe, padding: false)))) == none)
+    expect((try? PrivateKey.parse(jwk: one.jwk().replacing(Base64.encode(one.publicKey.bytes, alphabet: .UrlSafe, padding: false), with: Base64.encode(two.publicKey.bytes, alphabet: .UrlSafe, padding: false)))) == none)
 }
 
 @test
 fn pemIsReadStrictly() {
     let blocks = try! PemBlock.parse("a note\n-----BEGIN A B-----\r\nAQID\r\n-----END A B-----\r\n\r\n-----BEGIN C-----\n-----END C-----")
-    assert(blocks == [PemBlock(label: "A B", bytes: [1, 2, 3]), PemBlock(label: "C", bytes: [])])
-    assert(try! PemBlock.parse("").isEmpty)
+    expect(blocks == [PemBlock(label: "A B", bytes: [1, 2, 3]), PemBlock(label: "C", bytes: [])])
+    expect(try! PemBlock.parse("").isEmpty)
     for bad in ["-----BEGIN A-----\nAQID\n", "-----BEGIN A-----\nAQID\n-----END B-----\n", "-----BEGIN A-----\n!\n-----END A-----\n", "-----BEGIN A-----\nProc-Type: 4,ENCRYPTED\n\nAQID\n-----END A-----\n", "-----BEGIN A-----\nAQI\n-----END A-----\n"] {
-        assert((try? PemBlock.parse(bad)) == none)
+        require((try? PemBlock.parse(bad)) == none)
     }
     let long = PemBlock(label: "X", bytes: U8[>..](repeating: 7, count: 100))
     assertEqual(long.text.split(separator: '\n').toArray()[1].utf8.count, 64)
-    assert(try! PemBlock.parse(long.text) == [long])
-    assert(PemBlock(label: "X", bytes: [1]) != PemBlock(label: "Y", bytes: [1]))
+    expect(try! PemBlock.parse(long.text) == [long])
+    expect(PemBlock(label: "X", bytes: [1]) != PemBlock(label: "Y", bytes: [1]))
 }

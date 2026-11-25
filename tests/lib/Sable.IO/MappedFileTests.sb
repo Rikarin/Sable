@@ -37,19 +37,19 @@ fn aMappingReadsTheWholeFile() throws {
     let bytes = pattern(200000)
     try File.writeBytes(path, bytes)
     let mapped = try MappedFile.open(path)
-    assert(mapped.isOpen)
-    assert(mapped.mode == .ReadOnly)
+    expect(mapped.isOpen)
+    expect(mapped.mode == .ReadOnly)
     assertEqual(mapped.count, 200000)
-    assert(same(mapped.bytes, bytes))
+    expect(same(mapped.bytes, bytes))
     mapped.advise(.Sequential)
     mapped.advise(.Random)
     mapped.advise(.WillNeed)
     mapped.advise(.Normal)
     mapped.advise(.DontNeed)
-    assert(MapAdvice.WillNeed != MapAdvice.Normal)
+    expect(MapAdvice.WillNeed != MapAdvice.Normal)
     assertEqual(MapAdvice.Sequential.hashValue, MapAdvice.Sequential.hashValue)
-    assert(MapAdvice.Random.debugDescription().hasSuffix("Random"))
-    assert(same(mapped.bytes[1000..<1010], bytes[1000..<1010]))
+    expect(MapAdvice.Random.debugDescription().hasSuffix("Random"))
+    expect(same(mapped.bytes[1000..<1010], bytes[1000..<1010]))
     // Read-only: writing through it is an error, and a flush does nothing.
     do {
         try mapped.write([1], at: 0)
@@ -65,14 +65,14 @@ fn aMappingReadsTheWholeFile() throws {
     var copy = mapped.bytes
     copy[0] = copy[0] &+ 1
     copy.append(5)
-    assert(copy[0] != mapped.bytes[0])
+    expect(copy[0] != mapped.bytes[0])
     assertEqual(mapped.count, 200000)
     // An array taken from it keeps its bytes past close.
     let kept = mapped.bytes
     mapped.close()
-    assert(!mapped.isOpen)
+    expect(!mapped.isOpen)
     assertEqual(mapped.count, 0)
-    assert(same(kept, bytes))
+    expect(same(kept, bytes))
     try File.remove(path)
 }
 
@@ -84,13 +84,13 @@ fn writesReachTheFileOrStayPrivate() throws {
     let shared = try MappedFile.open(path, mode: .ReadWrite)
     var seen = shared.bytes
     try shared.write([20, 30], at: 2)
-    assert(same(shared.bytes, [0, 1, 20, 30, 4, 5, 6, 7]))
+    expect(same(shared.bytes, [0, 1, 20, 30, 4, 5, 6, 7]))
     // An array taken before the write is the mapping, and sees it.
     assertEqual(seen[3], 30)
     try shared.flush()
     try shared.flush(at: 2, count: 2)
     try shared.flush(at: 0, count: 0)
-    assert(same(try File.readBytes(path), [0, 1, 20, 30, 4, 5, 6, 7]))
+    expect(same(try File.readBytes(path), [0, 1, 20, 30, 4, 5, 6, 7]))
     do {
         try shared.write([1, 2], at: 7)
         fail("a write went past the end")
@@ -99,10 +99,7 @@ fn writesReachTheFileOrStayPrivate() throws {
         try shared.write([1], at: -1)
         fail("a write went before the start")
     } catch IoError.InvalidInput(_) { }
-    do {
-        try shared.flush(at: 6, count: 5)
-        fail("a flush went past the end")
-    } catch { }
+    expectThrows { try shared.flush(at: 6, count: 5) }
 
     // Grown, the file has zeros after; the old array keeps the old mapping.
     try shared.resize(to: 12)
@@ -135,7 +132,7 @@ fn writesReachTheFileOrStayPrivate() throws {
     assertEqual(try File.readBytes(path).count, 10)
     try shared.resize(to: 0)
     assertEqual(shared.count, 0)
-    assert(shared.bytes.isEmpty)
+    expect(shared.bytes.isEmpty)
     try shared.resize(to: 3)
     assertEqual(shared.count, 3)
     do {
@@ -151,9 +148,9 @@ fn writesReachTheFileOrStayPrivate() throws {
     try File.writeBytes(path, [1, 2, 3])
     let copied = try MappedFile.open(FilePath(path), mode: .CopyOnWrite)
     try copied.write([7], at: 1)
-    assert(same(copied.bytes, [1, 7, 3]))
+    expect(same(copied.bytes, [1, 7, 3]))
     try copied.flush()
-    assert(same(try File.readBytes(path), [1, 2, 3]))
+    expect(same(try File.readBytes(path), [1, 2, 3]))
     copied.close()
     try File.remove(path)
 }
@@ -164,7 +161,7 @@ fn anEmptyOrMissingFileMapsAsItShould() throws {
     try File.writeBytes(path, [])
     let empty = try MappedFile.open(path)
     assertEqual(empty.count, 0)
-    assert(empty.bytes.isEmpty)
+    expect(empty.bytes.isEmpty)
     empty.close()
     try File.remove(path)
     do {

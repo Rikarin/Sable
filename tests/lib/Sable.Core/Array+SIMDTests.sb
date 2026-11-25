@@ -9,13 +9,13 @@ fn aVectorIsStoredOverElements() {
     var values: F32[>..] = [0, 0, 0, 0, 0]
     let before = values
     values.store(SIMD<F32, 4>([1, 2, 3, 4]), at: 1)
-    assert(values == [0, 1, 2, 3, 4])
-    assert(before == [0, 0, 0, 0, 0])
+    expect(values == [0, 1, 2, 3, 4])
+    expect(before == [0, 0, 0, 0, 0])
 }
 
 @test
 fn aVectorIsScatteredToItsIndices() {
     var values: I32[>..] = [0, 0, 0, 0]
     values.scatter(SIMD<I32, 2>([7, 9]), at: SIMD<Int, 2>([3, 0]))
-    assert(values == [9, 0, 0, 7])
+    expect(values == [9, 0, 0, 7])
 }

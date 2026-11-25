@@ -40,8 +40,8 @@ fn everyFunctionHasItsKey() {
 @test
 fn noIterationsAndNoBytesAreRefused() {
     let secret = SymmetricKey([1])
-    assert((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 0, byteCount: 1)) == none)
-    assert((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: -1, byteCount: 1)) == none)
-    assert((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 1, byteCount: 0)) == none)
-    assert((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 1, byteCount: Int.max)) == none)
+    expect((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 0, byteCount: 1)) == none)
+    expect((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: -1, byteCount: 1)) == none)
+    expect((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 1, byteCount: 0)) == none)
+    expect((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 1, byteCount: Int.max)) == none)
 }

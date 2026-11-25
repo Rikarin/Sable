@@ -201,7 +201,7 @@ fn valuesPastAnI64AreTheSameNumberHoweverMade() {
     assertEqual(BigInt(I128.min).toString(), "-170141183460469231731687303715884105728")
     assertEqual(BigInt.fromWideBitPattern(U128.max), BigInt(-1))
     assertEqual(BigInt(5 as U8) * BigInt(-7 as I16), BigInt(-35))
-    assert(BigInt.isSigned)
+    expect(BigInt.isSigned)
 }
 
 @test
@@ -220,8 +220,8 @@ fn aBigIntIsABigIntGenerically() {
     let (q, r) = (-n).divRem(BigInt(10))
     assertEqual(q * BigInt(10) + r, -n)
     assertEqual(r, BigInt(-1))
-    assert(n.isOdd && !n.isEven && (n + BigInt(1)).isEven && BigInt(4).isEven)
-    assert(!n.isZero && BigInt(0).isZero)
+    expect(n.isOdd && !n.isEven && (n + BigInt(1)).isEven && BigInt(4).isEven)
+    expect(!n.isZero && BigInt(0).isZero)
 }
 
 @test
@@ -409,18 +409,8 @@ fn parsingSaysWhereTheTextIsWrong() {
     assertEqual(parseError("-"), ParseError.InvalidDigit(at: 1))
     assertEqual(parseError("1__0"), ParseError.InvalidDigit(at: 2))
     assertEqual(parseError("+ 1"), ParseError.InvalidDigit(at: 1))
-    do {
-        _ = try BigInt.parse("12", radix: 2)
-        assert(false)
-    } catch {
-        assertEqual(error, ParseError.InvalidDigit(at: 1))
-    }
-    do {
-        _ = try BigInt.parse("  ", radix: 10, styles: .Whitespace)
-        assert(false)
-    } catch {
-        assertEqual(error, ParseError.Empty)
-    }
+    expectThrows(ParseError.InvalidDigit(at: 1)) { _ = try BigInt.parse("12", radix: 2) }
+    expectThrows(ParseError.Empty) { _ = try BigInt.parse("  ", radix: 10, styles: .Whitespace) }
 }
 
 fn parseError(_ text: String) -> ParseError {
@@ -477,16 +467,16 @@ fn aShiftByAHugeBigIntTraps() {
 
 @test
 fn bytesAreTheTwosComplement() {
-    assert(BigInt(0).toBytes() == [0])
-    assert(BigInt(-1).toBytes() == [255])
-    assert(BigInt(127).toBytes() == [127])
-    assert(BigInt(128).toBytes() == [128, 0])
-    assert(BigInt(-128).toBytes() == [128])
-    assert(BigInt(-129).toBytes(.Big) == [255, 127])
+    expect(BigInt(0).toBytes() == [0])
+    expect(BigInt(-1).toBytes() == [255])
+    expect(BigInt(127).toBytes() == [127])
+    expect(BigInt(128).toBytes() == [128, 0])
+    expect(BigInt(-128).toBytes() == [128])
+    expect(BigInt(-129).toBytes(.Big) == [255, 127])
     let n = BigInt(2).pow(64)
-    assert(n.toBytes() == [0, 0, 0, 0, 0, 0, 0, 0, 1])
-    assert(n.toBytes(.Big) == [1, 0, 0, 0, 0, 0, 0, 0, 0])
-    assert((-n).toBytes() == [0, 0, 0, 0, 0, 0, 0, 0, 255])
+    expect(n.toBytes() == [0, 0, 0, 0, 0, 0, 0, 0, 1])
+    expect(n.toBytes(.Big) == [1, 0, 0, 0, 0, 0, 0, 0, 0])
+    expect((-n).toBytes() == [0, 0, 0, 0, 0, 0, 0, 0, 255])
     assertEqual(BigInt(bytes: []), BigInt(0))
     assertEqual(BigInt(bytes: [0, 0, 0, 0, 0, 0, 0, 0, 255]), -n)
     assertEqual(BigInt(bytes: [255, 255, 255, 255, 255, 255, 255, 255, 255], signed: false), BigInt(2).pow(72) - BigInt(1))

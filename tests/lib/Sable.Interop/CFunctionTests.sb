@@ -87,12 +87,12 @@ fn aFunctionOfNothingIsCalled() {
 @test
 fn pointersCompareAndPrint() {
     let one = cFunction(byValue)
-    assert(one == cFunction(byValue))
-    assert(one != CFunction<(RawPtr<Opaque>, RawPtr<Opaque>) -> CInt>.null)
-    assert(!one.isNull)
-    assert(CFunction<() -> ()>.null.isNull)
+    expect(one == cFunction(byValue))
+    expect(one != CFunction<(RawPtr<Opaque>, RawPtr<Opaque>) -> CInt>.null)
+    expect(!one.isNull)
+    expect(CFunction<() -> ()>.null.isNull)
     assertEqual(CFunction<() -> ()>.null.debugDescription(), "null")
-    assert(CFunction<(RawPtr<Opaque>, RawPtr<Opaque>) -> CInt>(pointer: one.pointer) == one)
+    expect(CFunction<(RawPtr<Opaque>, RawPtr<Opaque>) -> CInt>(pointer: one.pointer) == one)
 }
 
 @test(traps: "a null C function pointer called")
@@ -104,6 +104,6 @@ fn aNullFunctionIsNotCalled() {
 
 @test
 fn aContextIsFirstOrLast() {
-    assert(ContextPosition.First != ContextPosition.Last)
-    assert(ContextPosition.Last.debugDescription().hasSuffix("Last"))
+    expect(ContextPosition.First != ContextPosition.Last)
+    expect(ContextPosition.Last.debugDescription().hasSuffix("Last"))
 }

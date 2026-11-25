@@ -77,8 +77,8 @@ fn slicingByIndices() {
 fn indicesCompareAndHashByOffset() {
     let a = String.Index(utf8Offset: 3)
     let b = String.Index(utf8Offset: 5)
-    assert(a < b && !(b < a), "ordered by offset")
-    assert(a == String.Index(utf8Offset: 3) && a != b, "equal by offset")
+    expect(a < b && !(b < a), "ordered by offset")
+    expect(a == String.Index(utf8Offset: 3) && a != b, "equal by offset")
     assertEqual(a.hashValue, String.Index(utf8Offset: 3).hashValue)
 }
 
@@ -95,12 +95,12 @@ fn indexedPairsEachScalarWithItsIndex() {
 @test
 fn scalarBoundaries() {
     let text = "aé"
-    assert(text.isScalarBoundary(utf8Offset: 0), "the start")
-    assert(text.isScalarBoundary(utf8Offset: 1), "where é starts")
-    assert(!text.isScalarBoundary(utf8Offset: 2), "inside é")
-    assert(text.isScalarBoundary(utf8Offset: 3), "the end")
-    assert(!text.isScalarBoundary(utf8Offset: 4), "past the end")
-    assert(!text.isScalarBoundary(utf8Offset: -1), "before the start")
+    expect(text.isScalarBoundary(utf8Offset: 0), "the start")
+    expect(text.isScalarBoundary(utf8Offset: 1), "where é starts")
+    expect(!text.isScalarBoundary(utf8Offset: 2), "inside é")
+    expect(text.isScalarBoundary(utf8Offset: 3), "the end")
+    expect(!text.isScalarBoundary(utf8Offset: 4), "past the end")
+    expect(!text.isScalarBoundary(utf8Offset: -1), "before the start")
 }
 
 @test(traps: "string index not on a character boundary")

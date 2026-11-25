@@ -31,14 +31,14 @@ fn genericCodeDividesWithTheProtocolsOperators() {
 
 @test
 fn genericCodeUsesTheBitOperators() {
-    assert(bitsAgree(12 as U8, 10), "U8's bits agree")
-    assert(bitsAgree(-12 as I64, 10), "I64's bits agree")
+    expect(bitsAgree(12 as U8, 10), "U8's bits agree")
+    expect(bitsAgree(-12 as I64, 10), "I64's bits agree")
 }
 
 @test
 fn signednessIsTheTypes() {
-    assert(Int.isSigned && I8.isSigned && I128.isSigned, "the I types are signed")
-    assert(!UInt.isSigned && !U8.isSigned && !U128.isSigned, "the U types are not")
+    expect(Int.isSigned && I8.isSigned && I128.isSigned, "the I types are signed")
+    expect(!UInt.isSigned && !U8.isSigned && !U128.isSigned, "the U types are not")
 }
 
 @test
@@ -50,23 +50,23 @@ fn signumIsMinusOneZeroOrOne() {
 
 @test
 fn positiveAndNegativeLeaveOutZero() {
-    assert(5.isPositive && !5.isNegative, "5 is positive")
-    assert((-5).isNegative && !(-5).isPositive, "-5 is negative")
-    assert(!0.isPositive && !0.isNegative, "0 is neither")
+    expect(5.isPositive && !5.isNegative, "5 is positive")
+    expect((-5).isNegative && !(-5).isPositive, "-5 is negative")
+    expect(!0.isPositive && !0.isNegative, "0 is neither")
 }
 
 @test
 fn onlyZeroIsAMultipleOfZero() {
-    assert(12.isMultiple(of: 4), "12 is a multiple of 4")
-    assert(!12.isMultiple(of: 5), "12 is not a multiple of 5")
-    assert(0.isMultiple(of: 0), "0 is a multiple of 0")
-    assert(!3.isMultiple(of: 0), "3 is not a multiple of 0")
+    expect(12.isMultiple(of: 4), "12 is a multiple of 4")
+    expect(!12.isMultiple(of: 5), "12 is not a multiple of 5")
+    expect(0.isMultiple(of: 0), "0 is a multiple of 0")
+    expect(!3.isMultiple(of: 0), "3 is not a multiple of 0")
 }
 
 @test
 fn everythingIsAMultipleOfMinusOne() {
-    assert(I8.min.isMultiple(of: -1), "the least value divides by -1")
-    assert(Int.min.isMultiple(of: -1), "Int's least value divides by -1")
+    expect(I8.min.isMultiple(of: -1), "the least value divides by -1")
+    expect(Int.min.isMultiple(of: -1), "Int's least value divides by -1")
 }
 
 @test

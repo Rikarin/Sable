@@ -21,8 +21,8 @@ fn aReaderStartsAtTheStart() {
     assertEqual(reader.position, 0)
     assertEqual(reader.count, 3)
     assertEqual(reader.remaining, 3)
-    assert(!reader.isAtEnd, "three bytes to read")
-    assert(reader.endian == .Little, "little-endian unless told otherwise")
+    expect(!reader.isAtEnd, "three bytes to read")
+    expect(reader.endian == .Little, "little-endian unless told otherwise")
 }
 
 @test
@@ -32,7 +32,7 @@ fn valuesAreReadInTheReadersOrder() throws(ByteReadError) {
     assertEqual(try big.readU16(), 0x0102)
     assertEqual(try big.readU32(), 0x0304_0506)
     assertEqual(try big.readU64(), 0x0708_090A_0B0C_0D0E)
-    assert(big.isAtEnd, "every byte read")
+    expect(big.isAtEnd, "every byte read")
 
     var little = ByteReader(bytes)
     assertEqual(try little.readU16(), 0x0201)
@@ -65,7 +65,7 @@ fn whatABufferWritesAReaderReadsBack() throws(ByteReadError) {
     assertEqual(try reader.readVarUInt(), 0xFFFF_FFFF_FFFF_FFFF)
     assertEqual(try reader.readVarInt(), -123_456_789)
     assertEqual(try reader.readUtf8(byteCount: reader.remaining), "naïve ☃")
-    assert(reader.isAtEnd, "every byte read")
+    expect(reader.isAtEnd, "every byte read")
 }
 
 @test
@@ -88,7 +88,7 @@ fn peekLooksWithoutReading() throws(ByteReadError) {
     assertEqual(reader.peekU8() ?? 0, 7)
     assertEqual(reader.position, 0)
     _ = try reader.readU8()
-    assert(reader.peekU8() == none, "nothing left to peek at")
+    expect(reader.peekU8() == none, "nothing left to peek at")
 }
 
 @test
@@ -100,7 +100,7 @@ fn seekMovesAnywhereFromStartToEnd() throws(ByteReadError) {
     try reader.seek(to: 0)
     assertEqual(try reader.readU8(), 10)
     try reader.seek(to: 3)
-    assert(reader.isAtEnd, "the end is a place to seek to")
+    expect(reader.isAtEnd, "the end is a place to seek to")
 }
 
 @test
@@ -228,7 +228,7 @@ fn readAThousandMixedValues() {
     while !reader.isAtEnd {
         total = total + U64(try! reader.readU32()) + (try! reader.readVarUInt())
     }
-    assert(total > 0)
+    expect(total > 0)
 }
 
 @test

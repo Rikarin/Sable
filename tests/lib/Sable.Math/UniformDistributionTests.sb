@@ -21,7 +21,7 @@ fn integersAreAsLikelyAsEachOther() {
 fn aHalfOpenRangeLeavesOutItsUpperBound() {
     var generator = SeededRandomNumberGenerator(seed: 2)
     let coin = UniformDistribution(in: (0 as U8)..<2)
-    assert(coin.samples(count: 1000, using: &generator).allSatisfy({ $0 < 2 }))
+    expect(coin.samples(count: 1000, using: &generator).allSatisfy({ $0 < 2 }))
 }
 
 @test
@@ -44,13 +44,13 @@ fn itDrawsWhatTheTypesRandomDoes() {
 @test
 fn theSystemsGeneratorIsTheDefault() {
     let x = UniformDistribution(in: 5...6).sample()
-    assert(x == 5 || x == 6)
+    expect(x == 5 || x == 6)
 }
 
 @test
 fn noSamplesAreNone() {
     var generator = SeededRandomNumberGenerator(seed: 5)
-    assert(UniformDistribution(in: 1...6).samples(count: 0, using: &generator).isEmpty)
+    expect(UniformDistribution(in: 1...6).samples(count: 0, using: &generator).isEmpty)
 }
 
 @test(traps: "a random value of an empty range")

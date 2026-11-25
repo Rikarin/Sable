@@ -8,7 +8,7 @@ import Sable.Text
 
 // The bytes are the ones expected; when not, both are shown in hexadecimal.
 fn assertBytes(_ actual: U8[:], _ expected: U8[:]) {
-    assert(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
+    expect(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
 }
 
 fn sample(_ count: Int) -> U8[>..] {
@@ -96,7 +96,7 @@ fn everyLengthRoundTripsUnderEveryAlphabetAndPadding() {
 fn theHexAlphabetSortsAsItsBytesDo() {
     let low: U8[>..] = [0x10, 0xFF]
     let high: U8[>..] = [0x11, 0x00]
-    assert(Base32.encode(low, alphabet: .Hex) < Base32.encode(high, alphabet: .Hex), "base32hex keeps the order")
+    expect(Base32.encode(low, alphabet: .Hex) < Base32.encode(high, alphabet: .Hex), "base32hex keeps the order")
 }
 
 @test

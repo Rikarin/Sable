@@ -25,7 +25,7 @@ fn aWriterOfTheProgramsOwnGetsEachPiece() {
     pieces.write("a")
     pieces.writeLine("b")
     pieces.write(describing: 3)
-    assert(pieces.pieces == ["a", "b", "\n", "3"])
+    expect(pieces.pieces == ["a", "b", "\n", "3"])
 }
 
 @test
@@ -50,7 +50,7 @@ fn printToAWriterEndsTheLine() {
 fn printToAWriterOfTheProgramsOwnWritesTheTextThenTheBreak() {
     var pieces = Pieces()
     print("hi", to: &pieces)
-    assert(pieces.pieces == ["hi", "\n"])
+    expect(pieces.pieces == ["hi", "\n"])
 }
 
 @test

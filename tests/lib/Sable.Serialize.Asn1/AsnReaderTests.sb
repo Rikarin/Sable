@@ -240,7 +240,7 @@ fn aReal() {
     }
     var reader = AsnReader([0x09, 0x01, 0x43], rules: .Der)
     let zero = try! reader.readReal()
-    assert(zero == 0.0 && zero.isSignMinus)
+    expect(zero == 0.0 && zero.isSignMinus)
 }
 
 @test
@@ -262,7 +262,7 @@ fn aRealOfOtherBases() {
     ]
     for (hex, value) in cases {
         assertEqualText(ber("real", hex), value)
-        assert(der("real", hex).hasPrefix("byte "), "DER took \(hex)")
+        require(der("real", hex).hasPrefix("byte "), "DER took \(hex)")
     }
     assertEqualText(ber("real", "09 03 b0 00 01"), "byte 2: a REAL of a reserved base")
     assertEqualText(ber("real", "09 01 44"), "byte 2: a reserved REAL")
@@ -318,7 +318,7 @@ fn aDecimalReal() {
     ]
     for (value, expected) in cases {
         let found = ber("real", text("09", value))
-        assert(expected == "not" ? found.hasSuffix("not a decimal REAL") : found == expected, "\(value) is \(found)")
+        require(expected == "not" ? found.hasSuffix("not a decimal REAL") : found == expected, "\(value) is \(found)")
     }
     assertEqualText(ber("real", text("09", "\u{3}1.E400")), "byte 2: the REAL is too large for an F64")
     assertEqualText(ber("real", text("09", "\u{4}1")), "byte 2: a reserved REAL")
@@ -348,12 +348,7 @@ fn aDecimalReal() {
     var long: U8[>..] = [0x09, 0x82, 0x04, 0x01, 0x01]
     long.append(repeating: 0x31, count: 1024)
     var reader = AsnReader(long, rules: .Ber)
-    do {
-        _ = try reader.readReal()
-        assert(false)
-    } catch {
-        assertEqualText(error.description(), "byte 4: a decimal REAL of more than 1024 bytes")
-    }
+    expectThrows(saying: "byte 4: a decimal REAL of more than 1024 bytes") { _ = try reader.readReal() }
 }
 
 @test
@@ -385,12 +380,7 @@ fn anObjectIdentifier() {
     var many: U8[>..] = [0x06, 0x81, 0x80]
     many.append(repeating: 1, count: 128)
     var reader = AsnReader(many, rules: .Der)
-    do {
-        _ = try reader.readObjectIdentifier()
-        assert(false)
-    } catch {
-        assertEqualText(error.description(), "byte 130: an object identifier has more than 128 numbers")
-    }
+    expectThrows(saying: "byte 130: an object identifier has more than 128 numbers") { _ = try reader.readObjectIdentifier() }
     many[0] = 0x0D
     reader = AsnReader(many, rules: .Der)
     assertEqual(try! reader.readRelativeOid().count, 128)
@@ -450,7 +440,7 @@ fn cerHasLongStringsInPieces() {
     assertEqualText(Hex.encode(encoded[0..<6]), "2480048203e8")
     assertEqualText(Hex.encode(encoded[encoded.count - 5..<encoded.count]), "0401070000")
     var reader = AsnReader(encoded, rules: .Cer)
-    assert(try! reader.readOctetString() == long)
+    expect(try! reader.readOctetString() == long)
     try! reader.finish()
     // The same in one piece, or in others, is not CER.
     let whole = AsnWriter(rules: .Der)
@@ -468,7 +458,7 @@ fn cerHasLongStringsInPieces() {
     let bits = AsnWriter(rules: .Cer)
     try! bits.writeBitString(AsnBitString(bytes: long, unusedBits: 0))
     var bitReader = AsnReader(try! bits.bytes(), rules: .Cer)
-    assert(try! bitReader.readBitString() == AsnBitString(bytes: long))
+    expect(try! bitReader.readBitString() == AsnBitString(bytes: long))
     try! bitReader.finish()
     let names = AsnWriter(rules: .Cer)
     let name = "é".repeated(800)
@@ -660,27 +650,22 @@ fn tags() {
     assertEqualText(der("skip", "0000"), "byte 0: an end of contents where there should be a value")
     var reader = AsnReader([0xA1, 0x00], rules: .Der)
     let tag = try! reader.peekTag()
-    assert(tag == AsnTag.context(1).asConstructed())
-    assert(reader.isNext(.context(1)) && !reader.isNext(.context(2)) && !reader.isNext(.application(1)))
-    assert(try! reader.peekEncoded() == [0xA1, 0x00])
-    assert(try! reader.peekContents().isEmpty)
+    expect(tag == AsnTag.context(1).asConstructed())
+    expect(reader.isNext(.context(1)) && !reader.isNext(.context(2)) && !reader.isNext(.application(1)))
+    expect(try! reader.peekEncoded() == [0xA1, 0x00])
+    expect(try! reader.peekContents().isEmpty)
     assertEqual(reader.position, 0)
     _ = try! reader.readEncoded()
-    assert(reader.isAtEnd && !reader.isNext(.context(1)))
+    expect(reader.isAtEnd && !reader.isNext(.context(1)))
     // A type's tag is not another's.
     do {
         _ = try reader.readBool(tag: .integer)
         assert(false)
     } catch {
         assertEqualText(error.description(), "INTEGER is another type's own tag")
-        assert(error.offset == none)
+        expect(error.offset == none)
     }
-    do {
-        _ = try reader.readExplicit(.sequence)
-        assert(false)
-    } catch {
-        assertEqualText(error.description(), "an explicit tag is not one of ASN.1's own")
-    }
+    expectThrows(saying: "an explicit tag is not one of ASN.1's own") { _ = try reader.readExplicit(.sequence) }
 }
 
 @test
@@ -756,7 +741,7 @@ fn taggedValues() {
     // Implicit tags of every kind of value.
     var sequence = AsnReader(try! Hex.decode("a0030101ff"), rules: .Der)
     inner = try! sequence.readSequence(tag: .context(0))
-    assert(try! inner.readBool())
+    expect(try! inner.readBool())
     var pieces = AsnReader(try! Hex.decode("a0800401ca0401fe0000"), rules: .Ber)
     assertEqualText(Hex.encode(try! pieces.readOctetString(tag: .context(0))), "cafe")
 }
@@ -775,12 +760,7 @@ fn encapsulatedValues() {
     inner = try! pieces.readOctetStringContents()
     assertEqual(try! inner.readInt(), 5)
     var odd = AsnReader(try! Hex.decode("0302010a"), rules: .Der)
-    do {
-        _ = try odd.readBitStringContents()
-        assert(false)
-    } catch {
-        assertEqualText(error.description(), "byte 2: a BIT STRING of values is not whole bytes")
-    }
+    expectThrows(saying: "byte 2: a BIT STRING of values is not whole bytes") { _ = try odd.readBitStringContents() }
 }
 
 // So many sequences, one in another, of each length's form.
@@ -846,12 +826,7 @@ fn nestingHasALimit() {
     // A value in a string in a value.
     var reader = AsnReader([0x04, 0x02, 0x04, 0x00], rules: .Der, options: AsnOptions(maximumDepth: 1))
     var inner = try! reader.readOctetStringContents()
-    do {
-        _ = try inner.readOctetStringContents()
-        assert(false)
-    } catch {
-        assertEqual(error, AsnError.TooDeep(at: 2, limit: 1))
-    }
+    expectThrows(AsnError.TooDeep(at: 2, limit: 1)) { _ = try inner.readOctetStringContents() }
 }
 
 @test

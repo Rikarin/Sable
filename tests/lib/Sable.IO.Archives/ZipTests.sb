@@ -44,32 +44,32 @@ fn entriesAreWrittenAndRead() throws {
     try writer.finish(comment: "all of it")
 
     let read = try ZipArchive(writer.inner.bytes)
-    assert(read.comment == "all of it" && read.entries.count == 13)
+    expect(read.comment == "all of it" && read.entries.count == 13)
     let first = read.entry(named: "a.txt")!
-    assert(first.modified == options.modified && first.comment == "a note \u{2603}" && first.mode == 0o100600)
-    assert(first.method == .Store && first.size == 5 && first.compressedSize == 5 && !first.isDirectory)
+    expect(first.modified == options.modified && first.comment == "a note \u{2603}" && first.mode == 0o100600)
+    expect(first.method == .Store && first.size == 5 && first.compressedSize == 5 && !first.isDirectory)
     for method in [ZipMethod.Store, ZipMethod.Deflate, ZipMethod.Zstd] {
         let whole = read.entry(named: "whole \(method)")!
-        assert(whole.method == method && (method == .Store) == (whole.compressedSize == 50_000))
-        assert((try read.read(whole)) == bytes(50_000))
-        assert((try read.read(read.entry(named: "parts \(method)")!)) == bytes(50_000))
-        assert((try read.read(read.entry(named: "read \(method)")!)) == bytes(300_000))
+        require(whole.method == method && (method == .Store) == (whole.compressedSize == 50_000))
+        require((try read.read(whole)) == bytes(50_000))
+        require((try read.read(read.entry(named: "parts \(method)")!)) == bytes(50_000))
+        require((try read.read(read.entry(named: "read \(method)")!)) == bytes(300_000))
     }
-    assert((try read.read(read.entry(named: "large \u{2603}")!)) == [1, 2, 3])
-    assert(read.entry(named: "d/")!.isDirectory && read.entry(named: "d/")!.mode == 0o040755)
-    assert(read.entry(named: "link")!.isSymlink && (try read.read(read.entry(named: "link")!)) == "a.txt".utf8Bytes())
-    assert(read.entry(named: "nowhere") == none)
+    expect((try read.read(read.entry(named: "large \u{2603}")!)) == [1, 2, 3])
+    expect(read.entry(named: "d/")!.isDirectory && read.entry(named: "d/")!.mode == 0o040755)
+    expect(read.entry(named: "link")!.isSymlink && (try read.read(read.entry(named: "link")!)) == "a.txt".utf8Bytes())
+    expect(read.entry(named: "nowhere") == none)
     assertEqualText(problem { try read.read(first, limit: 4) }, "'a.txt' has more than 4 bytes")
 }
 
 @test
 fn emptyAndPrefixedArchivesAreRead() throws {
     let empty = archive { writer throws(IoError) in _ = writer }
-    assert(empty.count == 22 && (try ZipArchive(empty)).entries.isEmpty)
+    expect(empty.count == 22 && (try ZipArchive(empty)).entries.isEmpty)
     var prefixed = bytes(1000)
     prefixed.append(contentsOf: archive { writer throws(IoError) in try writer.add("a", [1]) })
     let read = try ZipArchive(prefixed)
-    assert((try read.read(read.entries[0])) == [1])
+    expect((try read.read(read.entries[0])) == [1])
 }
 
 @test
@@ -77,7 +77,7 @@ fn oldTimesAndNamesAreRead() throws {
     var options = ZipOptions()
     options.modified = UtcDateTime.of(year: 1970, month: 1, day: 1, hour: 0, minute: 0, second: 1)
     let one = archive { writer throws(IoError) in try writer.add("abcd", [1, 2, 3], options: options) }
-    assert((try ZipArchive(one)).entries[0].modified == options.modified)
+    expect((try ZipArchive(one)).entries[0].modified == options.modified)
     // Without the flag of UTF-8, in code page 437; and without the field of
     // the time, as MS-DOS has it.
     var changed = one
@@ -96,12 +96,12 @@ fn oldTimesAndNamesAreRead() throws {
         changed[at] = 0
     }
     let read = try ZipArchive(changed)
-    assert(read.entries[0].name == "\u{FC}\u{DF}cd", read.entries[0].name)
-    assert(read.entries[0].modified == UtcDateTime.of(year: 1980, month: 1, day: 1, hour: 0, minute: 0, second: 0))
-    assert((try read.read(read.entries[0])) == [1, 2, 3])
+    expect(read.entries[0].name == "\u{FC}\u{DF}cd", read.entries[0].name)
+    expect(read.entries[0].modified == UtcDateTime.of(year: 1980, month: 1, day: 1, hour: 0, minute: 0, second: 0))
+    expect((try read.read(read.entries[0])) == [1, 2, 3])
     options.modified = UtcDateTime.of(year: 2200, month: 1, day: 1, hour: 0, minute: 0, second: 0)
     let late = archive { writer throws(IoError) in try writer.add("a", [1], options: options) }
-    assert((try ZipArchive(late)).entries[0].modified.year == 2107)
+    expect((try ZipArchive(late)).entries[0].modified.year == 2107)
 }
 
 @test
@@ -115,11 +115,11 @@ fn zip64IsWrittenAndRead() throws {
         }
     }
     let read = try ZipArchive(many)
-    assert(read.entries.count == 66_000 && read.entry(named: "65999") != none)
+    expect(read.entries.count == 66_000 && read.entry(named: "65999") != none)
     // The same with something before it.
     var prefixed = bytes(100)
     prefixed.append(contentsOf: many)
-    assert((try ZipArchive(prefixed)).entries.count == 66_000)
+    expect((try ZipArchive(prefixed)).entries.count == 66_000)
     // Four gibibytes of zeros, most of them never written anywhere.
     var options = ZipOptions()
     options.isLarge = true
@@ -136,8 +136,8 @@ fn zip64IsWrittenAndRead() throws {
     try writer.add("after", [1])
     try writer.finish()
     let large = try ZipArchive(writer.inner.bytes)
-    assert(large.entries[0].size == 257 << 24)
-    assert((try large.read(large.entry(named: "after")!)) == [1])
+    expect(large.entries[0].size == 257 << 24)
+    expect((try large.read(large.entry(named: "after")!)) == [1])
     // One that was not said to be large.
     let small = ZipWriter(MemoryStream())
     options.isLarge = false
@@ -176,12 +176,12 @@ fn whatIsDamagedIsRefused() throws {
     changed = good
     changed[directory + 10] = 14
     let other = try ZipArchive(changed)
-    assert(other.entries[0].method == .Other(number: 14))
+    expect(other.entries[0].method == .Other(number: 14))
     assertEqualText(problem { try other.read(other.entries[0]) }, "'a zip entry, 'first', compressed by method 14' is not supported here")
     changed = good
     changed[directory + 8] = changed[directory + 8] | 1
     let secret = try ZipArchive(changed)
-    assert(secret.entries[0].isEncrypted)
+    expect(secret.entries[0].isEncrypted)
     assertEqualText(problem { try secret.read(secret.entries[0]) }, "'an encrypted zip entry, 'first'' is not supported here")
     // Another name, or no header, where the entry is.
     changed = good
@@ -259,23 +259,23 @@ fn directoriesAreArchivedAndExtracted() throws {
     let path = temp.path.appending("a.zip")
     try Zip.create(path, from: temp.path.appending("in"))
     try Zip.extract(path, to: temp.path.appending("out"))
-    assert(try isTree(temp.path.appending("out")))
+    expect(try isTree(temp.path.appending("out")))
     let before = (try File.metadata(temp.path.appending("in/a.txt"))).modified
-    assert((try File.metadata(temp.path.appending("out/a.txt"))).modified.secondsSinceEpoch == before.secondsSinceEpoch)
+    expect((try File.metadata(temp.path.appending("out/a.txt"))).modified.secondsSinceEpoch == before.secondsSinceEpoch)
     // A second time, nothing is there already.
-    assert(problem { try Zip.extract(path, to: temp.path.appending("out")) }.hasSuffix("already"))
+    expect(problem { try Zip.extract(path, to: temp.path.appending("out")) }.hasSuffix("already"))
     var options = ExtractOptions()
     options.overwrite = true
     try Zip.extract(path, to: temp.path.appending("out"), options: options)
-    assert(try isTree(temp.path.appending("out")))
+    expect(try isTree(temp.path.appending("out")))
     // Without the times, the permissions and the links.
     options = ExtractOptions()
     options.keepTimes = false
     options.keepPermissions = false
     options.links = .Skipped
     try Zip.extract(path, to: temp.path.appending("plain"), options: options)
-    assert(((try File.metadata(temp.path.appending("plain/a.txt"))).permissions.mode & 0o111) == 0)
-    assert(!File.exists(temp.path.appending("plain/sub/link")))
+    expect(((try File.metadata(temp.path.appending("plain/a.txt"))).permissions.mode & 0o111) == 0)
+    expect(!File.exists(temp.path.appending("plain/sub/link")))
     options.links = .Refused
     assertEqualText(problem { try Zip.extract(path, to: temp.path.appending("none"), options: options) }, "a link, 'sub/link', leads to '../a.txt'")
 }
@@ -304,8 +304,8 @@ fn nothingIsWrittenOutside() throws {
         let said = problem { try read.extract(to: temp.path.appending("out")) }
         assert(said.contains("leads out of the directory"), "\(name): \(said)")
     }
-    assert((try Directory.list(temp.path)) == ["out"])
-    assert((try Directory.list(temp.path.appending("out"))).isEmpty)
+    expect((try Directory.list(temp.path)) == ["out"])
+    expect((try Directory.list(temp.path.appending("out"))).isEmpty)
 }
 
 @test
@@ -316,7 +316,7 @@ fn portableNamesAreWindowsToo() throws {
     for name in ["CON", "a/nul.txt", "com1", "LPT9.x", "a:b", "x?", "x*", "\"x", "a<b", "a>b", "a|b", "dot.", "space ", "a\u{7}", "a\\prn"] {
         let made = archive { writer throws(IoError) in try writer.add(name, [1]) }
         let said = problem { try ZipArchive(made).extract(to: temp.path, options: options) }
-        assert(said.contains("is none a file may have"), "\(name): \(said)")
+        require(said.contains("is none a file may have"), "\(name): \(said)")
     }
     let good = archive { writer throws(IoError) in
         try writer.add("com0/console/com10.txt", [1])
@@ -324,8 +324,8 @@ fn portableNamesAreWindowsToo() throws {
         try writer.add("lpt", [3])
     }
     try ZipArchive(good).extract(to: temp.path, options: options)
-    assert((try File.readBytes(temp.path.appending("a/b"))) == [2])
-    assert((try File.readBytes(temp.path.appending("com0/console/com10.txt"))) == [1])
+    expect((try File.readBytes(temp.path.appending("a/b"))) == [2])
+    expect((try File.readBytes(temp.path.appending("com0/console/com10.txt"))) == [1])
 }
 
 @test
@@ -337,7 +337,7 @@ fn anArchiveCutMeanwhileIsAnError() throws {
     try File.writeBytes(path, archive { writer throws(IoError) in try writer.add("a", bytes(100_000), options: options) })
     let read = try ZipArchive.open(path)
     var reader = try read.reader(for: read.entries[0])
-    assert(reader.entry.name == "a" && (try reader.read(upTo: 0)).isEmpty && (try reader.read(upTo: 10)).count == 10)
+    expect(reader.entry.name == "a" && (try reader.read(upTo: 0)).isEmpty && (try reader.read(upTo: 10)).count == 10)
     let file = try File.open(path, options: .appending)
     try file.setLength(5000)
     assertEqualText(problem { try reader.readToEnd() }, "the stream ended before what was needed")
@@ -356,7 +356,7 @@ fn linksAreNoWayOut() throws {
                 try writer.addSymlink("link", to: target)
             }
         }
-        assert(problem { try ZipArchive(made).extract(to: here) }.hasPrefix("a link, 'link', leads to"))
+        require(problem { try ZipArchive(made).extract(to: here) }.hasPrefix("a link, 'link', leads to"))
     }
     // A link in the directory, through which nothing is written; and one that
     // was there before.
@@ -373,18 +373,18 @@ fn linksAreNoWayOut() throws {
     assertEqualText(problem { try ZipArchive(file).extract(to: there) }, "'link' is in the way of an entry: it is no directory, or a link")
     // In its place, where that is allowed, and not through it.
     let same = archive { writer throws(IoError) in try writer.add("link", [1]) }
-    assert(problem { try ZipArchive(same).extract(to: there) }.hasSuffix("already"))
+    expect(problem { try ZipArchive(same).extract(to: there) }.hasSuffix("already"))
     var options = ExtractOptions()
     options.overwrite = true
     try ZipArchive(same).extract(to: there, options: options)
-    assert((try File.metadata(there.appending("link"), followLinks: false)).isFile)
-    assert((try Directory.list(temp.path.appending("secret"))).isEmpty)
+    expect((try File.metadata(there.appending("link"), followLinks: false)).isFile)
+    expect((try Directory.list(temp.path.appending("secret"))).isEmpty)
     // Permissions that a new file should not have.
     var bold = ZipOptions()
     bold.mode = 0o6777
     let setuid = archive { writer throws(IoError) in try writer.add("setuid", [1], options: bold) }
     try ZipArchive(setuid).extract(to: there)
-    assert(((try File.metadata(there.appending("setuid"))).permissions.mode & 0o7777) == 0o777)
+    expect(((try File.metadata(there.appending("setuid"))).permissions.mode & 0o7777) == 0o777)
 }
 
 @test
@@ -425,10 +425,10 @@ fn archivesAreChanged() throws {
         changes.set("d", [3])
     }
     let read = try ZipArchive.open(path)
-    assert(read.entries.map { $0.name } == ["b", "c", "d"])
-    assert((try read.read(read.entry(named: "b")!)) == bytes(3000))
-    assert((try read.read(read.entry(named: "c")!)) == [2])
-    assert((try Directory.list(temp.path)) == ["a.zip"])
+    expect(read.entries.map { $0.name } == ["b", "c", "d"])
+    expect((try read.read(read.entry(named: "b")!)) == bytes(3000))
+    expect((try read.read(read.entry(named: "c")!)) == [2])
+    expect((try Directory.list(temp.path)) == ["a.zip"])
     // One with descriptors is copied with its sizes before it.
     var streamed = ZipWriter(MemoryStream())
     try streamed.begin("s")
@@ -438,18 +438,18 @@ fn archivesAreChanged() throws {
     try File.writeBytes(path, streamed.inner.bytes)
     try Zip.update(path) { changes in changes.set("t", [9]) }
     let copied = try ZipArchive.open(path)
-    assert(copied.comment == "kept" && (try copied.read(copied.entries[0])) == bytes(500))
+    expect(copied.comment == "kept" && (try copied.read(copied.entries[0])) == bytes(500))
 }
 
 @test
 fn namesAndOptionsAreChecked() {
     let writer = ZipWriter(MemoryStream())
-    assert(problem { try writer.add("", []) }.hasSuffix("was given something the system does not take"))
-    assert(problem { try writer.add("/a", []) }.hasSuffix("was given something the system does not take"))
+    expect(problem { try writer.add("", []) }.hasSuffix("was given something the system does not take"))
+    expect(problem { try writer.add("/a", []) }.hasSuffix("was given something the system does not take"))
     var options = ZipOptions()
     options.method = .Other(number: 5)
     assertEqualText(problem { try writer.add("a", [], options: options) }, "'a zip entry compressed by another method' is not supported here")
-    assert(problem { try writer.finish(comment: repeated("x", 65_536)) }.hasSuffix("was given something the system does not take"))
+    expect(problem { try writer.finish(comment: repeated("x", 65_536)) }.hasSuffix("was given something the system does not take"))
 }
 
 @test
@@ -479,8 +479,8 @@ fn theAsyncWriterToo() async throws {
         all.append(contentsOf: part)
     }
     let read = try ZipArchive(all)
-    assert(read.entries.map { $0.name } == ["d/", "e/", "d/a", "b", "c"])
-    assert((try read.read(read.entries[2])) == bytes(1000) && (try read.read(read.entries[4])) == [1, 2, 3])
+    expect(read.entries.map { $0.name } == ["d/", "e/", "d/a", "b", "c"])
+    expect((try read.read(read.entries[2])) == bytes(1000) && (try read.read(read.entries[4])) == [1, 2, 3])
 }
 
 @test
@@ -489,12 +489,12 @@ fn zipAndUnzipAgree() async throws {
     try makeTree(temp.path.appending("in"))
     if let _ = await run("unzip", ["-v"], in: temp.path) {
         try Zip.create(temp.path.appending("ours.zip"), from: temp.path.appending("in"))
-        assert(await run("unzip", ["-tq", "ours.zip"], in: temp.path) != none)
-        assert(await run("unzip", ["-q", "ours.zip", "-d", "theirs"], in: temp.path) != none)
-        assert(try isTree(temp.path.appending("theirs")))
+        expect(await run("unzip", ["-tq", "ours.zip"], in: temp.path) != none)
+        expect(await run("unzip", ["-q", "ours.zip", "-d", "theirs"], in: temp.path) != none)
+        expect(try isTree(temp.path.appending("theirs")))
     }
     if let _ = await run("zip", ["-q", "-r", "-y", "../theirs.zip", "."], in: temp.path.appending("in")) {
         try Zip.extract(temp.path.appending("theirs.zip"), to: temp.path.appending("out"))
-        assert(try isTree(temp.path.appending("out")))
+        expect(try isTree(temp.path.appending("out")))
     }
 }

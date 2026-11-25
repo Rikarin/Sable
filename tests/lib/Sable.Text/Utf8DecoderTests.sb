@@ -20,7 +20,7 @@ fn aScalarSplitAcrossChunksIsKeptWhole() {
     assertEqual(decoder.decode(bytes([0x63, 0x61, 0x66, 0xC3])), "caf")
     assertEqual(decoder.decode(bytes([0xA9, 0x21])), "é!")
     assertEqual(decoder.finish(), "")
-    assert(!decoder.sawInvalid, "nothing was replaced")
+    expect(!decoder.sawInvalid, "nothing was replaced")
 }
 
 @test
@@ -51,14 +51,14 @@ fn aSequenceLeftUnfinishedIsReplacedAtTheEnd() {
     var decoder = Utf8Decoder()
     assertEqual(decoder.decode(bytes([0x61, 0xE2, 0x82])), "a")
     assertEqual(decoder.finish(), "\u{FFFD}")
-    assert(decoder.sawInvalid, "the unfinished sequence was replaced")
+    expect(decoder.sawInvalid, "the unfinished sequence was replaced")
 }
 
 @test
 fn illFormedBytesAreReplacedAsTheyCome() {
     var decoder = Utf8Decoder()
     assertEqual(decoder.decode(bytes([0x61, 0xFF, 0x62])), "a\u{FFFD}b")
-    assert(decoder.sawInvalid, "replaced")
+    expect(decoder.sawInvalid, "replaced")
     assertEqual(decoder.decode(bytes([0xC3, 0x28])), "\u{FFFD}(")
 }
 

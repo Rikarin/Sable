@@ -51,35 +51,35 @@ static let key: RsaPrivateKey = try! RsaPrivateKey.parse(pem: opensslKey)
 @test
 fn opensslsSignaturesAreMadeAndValid() {
     let pkcs1 = hex("403a828dab308e313317d8af618396c04ec99069f4af841c0dc1b2b0e2a885d6701d5a02bdebfce6b3be5821283e1a65ddfeddb06e89366e396eb8cc326e60ea2da94ff617540caf5975e3900b8190f11f8a23a3c32f15899fb7f258e7173c1e83b6e1356329a17b04340f601dfa1e2b951a957f378b6e26e6b3e5b223ad3307ac110afc8429626a136f909b3ccab259d25bfd68a9337c8c3f4f2cca00e9d834ef5188239abf8945fbde5710bf409d43cc74ba142d2ac0daed612a9c9997b33e16829bc8628f09d8fa1244bf5aaddfafe492949167dcf688adb2b42591f1ed7cca003e60033cde96d3efafe6e65963731c690afa81b8495bc720c5b5f9d6b1db")
-    assert(key.sign(text("a message"), padding: .Pkcs1(.Sha256)) == pkcs1)
-    assert(key.publicKey.isValid(pkcs1, for: text("a message"), padding: .Pkcs1(.Sha256)))
-    assert(!key.publicKey.isValid(pkcs1, for: text("another"), padding: .Pkcs1(.Sha256)))
-    assert(!key.publicKey.isValid(pkcs1, for: text("a message"), padding: .Pkcs1(.Sha512)))
-    assert(!key.publicKey.isValid(pkcs1, for: text("a message"), padding: .Pss(.Sha256)))
+    expect(key.sign(text("a message"), padding: .Pkcs1(.Sha256)) == pkcs1)
+    expect(key.publicKey.isValid(pkcs1, for: text("a message"), padding: .Pkcs1(.Sha256)))
+    expect(!key.publicKey.isValid(pkcs1, for: text("another"), padding: .Pkcs1(.Sha256)))
+    expect(!key.publicKey.isValid(pkcs1, for: text("a message"), padding: .Pkcs1(.Sha512)))
+    expect(!key.publicKey.isValid(pkcs1, for: text("a message"), padding: .Pss(.Sha256)))
     let pss = hex("06b8da84564d61ed76cab093fe595de56a03dd39047547a5fa5fe1164471f5a8f5fa2b88a175d526820f34f79d424388a5758a206e5562f3a7c0293b7e41fc28de84975dbe2d35f98a3c095134c2467fa8f88c366965b4de212f011ee02b60035ae28a66db2721bc77e44a6c273eb1ca5f49e572195b06279616284c2a38347b17149de547472a0b97355bf9b00999022bd706697b65edc0a1f00b66083b6ea3db779e7551bdcd0f996d982143e62f53276f0fe5a0ffbccca003995be0c57c3334e80639f7eacae43585d8ee5ea338013cb1d593d2c28c1faf255cc56de4cf1eef8e2a42cddcac03812a86c9e34cb68420d6fbaed74b83eb036a0a87e699bbeb")
-    assert(key.publicKey.isValid(pss, for: text("a message"), padding: .Pss(.Sha256)))
-    assert(key.publicKey.isValid(pss, for: text("a message"), padding: .PssParameters(.Sha256, maskHash: .Sha256, saltByteCount: 32)))
-    assert(!key.publicKey.isValid(pss, for: text("a message"), padding: .PssParameters(.Sha256, maskHash: .Sha256, saltByteCount: 31)))
-    assert(!key.publicKey.isValid(pss, for: text("another"), padding: .Pss(.Sha256)))
-    assert(!key.publicKey.isValid(pss, for: text("a message"), padding: .Pkcs1(.Sha256)))
+    expect(key.publicKey.isValid(pss, for: text("a message"), padding: .Pss(.Sha256)))
+    expect(key.publicKey.isValid(pss, for: text("a message"), padding: .PssParameters(.Sha256, maskHash: .Sha256, saltByteCount: 32)))
+    expect(!key.publicKey.isValid(pss, for: text("a message"), padding: .PssParameters(.Sha256, maskHash: .Sha256, saltByteCount: 31)))
+    expect(!key.publicKey.isValid(pss, for: text("another"), padding: .Pss(.Sha256)))
+    expect(!key.publicKey.isValid(pss, for: text("a message"), padding: .Pkcs1(.Sha256)))
     let mixed = hex("104c92fc2b0e88b12e22c53863b58bb8f5a04183e12697a1fe13c81aaec0bf0ed8164e60cde1c52f91c5b3b379588a569d8b62971d0fb9de05fdf917f559747ab2de86fdd176a9825b23e736428d3f191f5328ba9c4bce975fb2d2617a7f3ee69fcca47edb308ecc80e519c7a6e958772fb73b97216c7df1d0261b8a3e72ef8853781c3612df2cff61f0570ddb7e9515cc78d53d065be15c33bcabdf9b4166a896bf54a2d83a1c9e769707457c8b57a0e4a7fe1ecc1c602268d906cf4966a5c3bfcaa8da849aceac80cdb8a2ecb24e2bf26750dbff6a2803efcc0b5666ca8fed018c37979d6a3e46600764081f6e0c0a4473f5f4f8ffd5aaa5e820c8aa6a2f7b")
-    assert(key.publicKey.isValid(mixed, for: text("a message"), padding: .PssParameters(.Sha512, maskHash: .Sha256, saltByteCount: 0)))
-    assert(key.sign(text("a message"), padding: .PssParameters(.Sha512, maskHash: .Sha256, saltByteCount: 0)) == mixed)
+    expect(key.publicKey.isValid(mixed, for: text("a message"), padding: .PssParameters(.Sha512, maskHash: .Sha256, saltByteCount: 0)))
+    expect(key.sign(text("a message"), padding: .PssParameters(.Sha512, maskHash: .Sha256, saltByteCount: 0)) == mixed)
 }
 
 @test
 fn everyPaddingIsValid() {
     for hash in [HashAlgorithm.Sha1, HashAlgorithm.Sha256, HashAlgorithm.Sha384, HashAlgorithm.Sha512, HashAlgorithm.Sha3_256, HashAlgorithm.Sha3_384, HashAlgorithm.Sha3_512] {
         for padding in [RsaSignaturePadding.Pkcs1(hash), RsaSignaturePadding.Pss(hash)] {
-            assert(padding.hash == hash && padding == padding && padding.debugDescription().contains("Sha"))
+            require(padding.hash == hash && padding == padding && padding.debugDescription().contains("Sha"))
             let signature = key.sign(text("a message"), padding: padding)
-            assert(key.publicKey.isValid(signature, for: text("a message"), padding: padding))
-            assert(!key.publicKey.isValid(signature, for: text("another"), padding: padding))
+            require(key.publicKey.isValid(signature, for: text("a message"), padding: padding))
+            require(!key.publicKey.isValid(signature, for: text("another"), padding: padding))
         }
     }
     // PSS has a salt, and a signature is never another.
-    assert(key.sign([1], padding: .Pss(.Sha256)) != key.sign([1], padding: .Pss(.Sha256)))
-    assert(key.sign([1], padding: .Pkcs1(.Sha256)) == key.sign([1], padding: .Pkcs1(.Sha256)))
+    expect(key.sign([1], padding: .Pss(.Sha256)) != key.sign([1], padding: .Pss(.Sha256)))
+    expect(key.sign([1], padding: .Pkcs1(.Sha256)) == key.sign([1], padding: .Pkcs1(.Sha256)))
 }
 
 @test
@@ -87,28 +87,28 @@ fn anythingElseIsNotValid() {
     let signature = key.sign([1], padding: .Pkcs1(.Sha256))
     var changed = signature
     changed[100] = changed[100] ^ 1
-    assert(!key.publicKey.isValid(changed, for: [1], padding: .Pkcs1(.Sha256)))
-    assert(!key.publicKey.isValid(signature[1...], for: [1], padding: .Pkcs1(.Sha256)))
+    expect(!key.publicKey.isValid(changed, for: [1], padding: .Pkcs1(.Sha256)))
+    expect(!key.publicKey.isValid(signature[1...], for: [1], padding: .Pkcs1(.Sha256)))
     // The modulus and more.
-    assert(!key.publicKey.isValid(U8[>..](repeating: 0xFF, count: 256), for: [1], padding: .Pkcs1(.Sha256)))
-    assert(!key.publicKey.isValid(key.publicKey.modulus, for: [1], padding: .Pss(.Sha256)))
-    assert(!key.publicKey.isValid(signature, digest: [1, 2], padding: .Pkcs1(.Sha256)))
-    assert(!key.publicKey.isValid(signature, digest: [1, 2], padding: .Pss(.Sha256)))
-    assert(!key.publicKey.isValid(signature, for: [1], padding: .PssParameters(.Sha256, maskHash: .Sha256, saltByteCount: -1)))
-    assert(!key.publicKey.isValid(signature, for: [1], padding: .PssParameters(.Sha256, maskHash: .Sha256, saltByteCount: 1000)))
+    expect(!key.publicKey.isValid(U8[>..](repeating: 0xFF, count: 256), for: [1], padding: .Pkcs1(.Sha256)))
+    expect(!key.publicKey.isValid(key.publicKey.modulus, for: [1], padding: .Pss(.Sha256)))
+    expect(!key.publicKey.isValid(signature, digest: [1, 2], padding: .Pkcs1(.Sha256)))
+    expect(!key.publicKey.isValid(signature, digest: [1, 2], padding: .Pss(.Sha256)))
+    expect(!key.publicKey.isValid(signature, for: [1], padding: .PssParameters(.Sha256, maskHash: .Sha256, saltByteCount: -1)))
+    expect(!key.publicKey.isValid(signature, for: [1], padding: .PssParameters(.Sha256, maskHash: .Sha256, saltByteCount: 1000)))
 }
 
 @test
 fn aMadeKeySignsAndIsReadBack() {
     let made = RsaPrivateKey.generate(bits: 2048)
-    assert(made.publicKey.bitCount == 2048 && made.publicKey.signatureByteCount == 256)
+    expect(made.publicKey.bitCount == 2048 && made.publicKey.signatureByteCount == 256)
     let signature = made.sign([1], padding: .Pss(.Sha256))
-    assert(made.publicKey.isValid(signature, for: [1], padding: .Pss(.Sha256)))
+    expect(made.publicKey.isValid(signature, for: [1], padding: .Pss(.Sha256)))
     let read = try! RsaPrivateKey(modulus: made.publicKey.modulus, exponent: 65537, privateExponent: made.privateExponent(), prime1: made.prime1(), prime2: made.prime2(), exponent1: made.exponent1(), exponent2: made.exponent2(), coefficient: made.coefficient())
-    assert(read == made && read != key)
+    expect(read == made && read != key)
     assertEqual(made.debugDescription(), "RsaPrivateKey(2048 bits)")
     assertEqual(made.publicKey.debugDescription(), "RsaPublicKey(2048 bits, exponent 65537)")
-    assert([made.publicKey: 1][read.publicKey] == 1)
+    expect([made.publicKey: 1][read.publicKey] == 1)
 }
 
 // Each number of the key's changed, one at a time.
@@ -124,24 +124,24 @@ fn numbersThatDoNotGoTogetherAreNoKey() {
         }
         i += 1
     }
-    assert((try? RsaPrivateKey(modulus: numbers[0], exponent: 3, privateExponent: numbers[1], prime1: numbers[2], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6])) == none)
-    assert((try? RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: [], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6])) == none)
-    assert((try? RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: numbers[0], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6])) == none)
-    assert((try? RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: numbers[2], prime2: numbers[3], exponent1: numbers[0], exponent2: numbers[5], coefficient: numbers[6])) == none)
+    expect((try? RsaPrivateKey(modulus: numbers[0], exponent: 3, privateExponent: numbers[1], prime1: numbers[2], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6])) == none)
+    expect((try? RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: [], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6])) == none)
+    expect((try? RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: numbers[0], prime2: numbers[3], exponent1: numbers[4], exponent2: numbers[5], coefficient: numbers[6])) == none)
+    expect((try? RsaPrivateKey(modulus: numbers[0], exponent: 65537, privateExponent: numbers[1], prime1: numbers[2], prime2: numbers[3], exponent1: numbers[0], exponent2: numbers[5], coefficient: numbers[6])) == none)
 }
 
 @test
 fn publicKeysAreOddAndOfALengthAllowed() {
-    assert((try? RsaPublicKey(modulus: [], exponent: 3)) == none)
-    assert((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 127), exponent: 3)) == none)
-    assert((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 2049), exponent: 3)) == none)
-    assert((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFE, count: 256), exponent: 3)) == none)
-    assert((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 256), exponent: 4)) == none)
-    assert((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 256), exponent: 1)) == none)
+    expect((try? RsaPublicKey(modulus: [], exponent: 3)) == none)
+    expect((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 127), exponent: 3)) == none)
+    expect((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 2049), exponent: 3)) == none)
+    expect((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFE, count: 256), exponent: 3)) == none)
+    expect((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 256), exponent: 4)) == none)
+    expect((try? RsaPublicKey(modulus: U8[>..](repeating: 0xFF, count: 256), exponent: 1)) == none)
     var padded: U8[>..] = [0, 0]
     padded.append(repeating: 0xFF, count: 256)
-    assert(try! RsaPublicKey(modulus: padded, exponent: 3) == RsaPublicKey(modulus: padded[2...], exponent: 3))
-    assert(try! RsaPublicKey(modulus: padded, exponent: 3) != RsaPublicKey(modulus: padded, exponent: 5))
+    expect(try! RsaPublicKey(modulus: padded, exponent: 3) == RsaPublicKey(modulus: padded[2...], exponent: 3))
+    expect(try! RsaPublicKey(modulus: padded, exponent: 3) != RsaPublicKey(modulus: padded, exponent: 5))
 }
 
 // A modulus of 2041 bits: PSS's encoding is of a byte less than it.
@@ -151,9 +151,9 @@ fn aModulusOfABitMoreThanBytesIsChecked() {
     modulus[0] = 1
     let odd = try! RsaPublicKey(modulus: modulus, exponent: 65537)
     assertEqual(odd.bitCount, 2041)
-    assert(!odd.isValid(U8[>..](repeating: 0, count: 256), for: [1], padding: .Pss(.Sha256)))
+    expect(!odd.isValid(U8[>..](repeating: 0, count: 256), for: [1], padding: .Pss(.Sha256)))
     var one = U8[>..](repeating: 0, count: 256)
     one[255] = 2
-    assert(!odd.isValid(one, for: [1], padding: .Pss(.Sha256)))
-    assert(!odd.isValid(one, for: [1], padding: .Pkcs1(.Sha256)))
+    expect(!odd.isValid(one, for: [1], padding: .Pss(.Sha256)))
+    expect(!odd.isValid(one, for: [1], padding: .Pkcs1(.Sha256)))
 }

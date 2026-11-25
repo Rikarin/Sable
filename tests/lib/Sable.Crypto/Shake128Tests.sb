@@ -59,16 +59,16 @@ fn aMessageGoesOnAfterItsOutputIsRead() {
     shake.update(message(100)[..<60])
     var first = shake.reader()
     var copy = first
-    assert(first.read(count: 20) == copy.read(count: 20))
+    expect(first.read(count: 20) == copy.read(count: 20))
     shake.update(message(100)[60...])
-    assert(shake.finalize(count: 20) == Shake128.hash(message(100), count: 20))
+    expect(shake.finalize(count: 20) == Shake128.hash(message(100), count: 20))
 }
 
 @test
 fn textIsHashedAsItsUtf8Bytes() {
     var shake = Shake128()
     shake.update(utf8: "abc")
-    assert(shake.finalize(count: 9) == Shake128.hash([0x61, 0x62, 0x63], count: 9))
-    assert(shake.finalize(count: 9) == Shake128.hash(utf8: "abc", count: 9))
-    assert(shake.finalize(count: 0).count == 0)
+    expect(shake.finalize(count: 9) == Shake128.hash([0x61, 0x62, 0x63], count: 9))
+    expect(shake.finalize(count: 9) == Shake128.hash(utf8: "abc", count: 9))
+    expect(shake.finalize(count: 0).count == 0)
 }

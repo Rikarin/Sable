@@ -146,7 +146,7 @@ fn arraysAndMapsTakeTheShortestCount() throws {
             try unsized.encodeInt(value)
         }
         try unsized.endSequence()
-        assert(try unsized.bytes() == bytes)
+        require(try unsized.bytes() == bytes)
     }
     for (count, head) in [(0, "80"), (15, "8f"), (16, "de0010"), (65536, "df00010000")] as (Int, String)[>..] {
         let encoder = MessagePackEncoder()
@@ -168,15 +168,15 @@ fn extensionsTakeTheirFixedFormsWhereTheyFit() throws {
         let bytes = try MessagePack.encode(value)
         assertEqual(hex(bytes[0..<(head.count / 2)].toArray()), head)
         assertEqual(bytes.count, head.count / 2 + count)
-        assert(try MessagePack.decode(MessagePackExtension.self, from: bytes) == value)
-        assert(try MessagePackDecoder.parse(bytes).kind == .Bytes)
+        require(try MessagePack.decode(MessagePackExtension.self, from: bytes) == value)
+        require(try MessagePackDecoder.parse(bytes).kind == .Bytes)
         assertEqual((try MessagePackDecoder.parse(bytes).decodeBytes()).count, count)
     }
     assertEqual(try MessagePack.decode(MessagePackExtension.self, from: [0xD4, 0x80, 1]).type, -128)
     // In a format without extensions, its parts.
     let text = try Json.encode(MessagePackExtension(type: -3, data: [1, 2]))
     assertEqual(text, "{\"type\":-3,\"data\":\"AQI=\"}")
-    assert(try Json.decode(MessagePackExtension.self, from: text) == MessagePackExtension(type: -3, data: [1, 2]))
+    expect(try Json.decode(MessagePackExtension.self, from: text) == MessagePackExtension(type: -3, data: [1, 2]))
 }
 
 @test
@@ -194,7 +194,7 @@ fn timestampsTakeTheShortestOfTheirThreeForms() throws {
         let encoder = MessagePackEncoder()
         try encoder.encodeTimestamp(moment)
         assertEqual(hex(try encoder.bytes()), text)
-        assert(try MessagePackDecoder.parse(try encoder.bytes()).decodeTimestamp() == moment)
+        require(try MessagePackDecoder.parse(try encoder.bytes()).decodeTimestamp() == moment)
     }
 }
 
@@ -202,19 +202,14 @@ fn timestampsTakeTheShortestOfTheirThreeForms() throws {
 fn aTimestampIsAUtcDateTimeOfAnyType() throws {
     let moment = UtcDateTime { secondsSinceEpoch: 1700000000, nanosecond: 250000000 }
     let decoder = try MessagePackDecoder.parse(try MessagePack.encode(MessagePackExtension(moment)))
-    assert(decoder.kind == .String)
-    assert(try UtcDateTime.decode(from: decoder) == moment)
+    expect(decoder.kind == .String)
+    expect(try UtcDateTime.decode(from: decoder) == moment)
     // A year RFC 3339 does not write, nanoseconds over a second's, a length
     // that is no timestamp's, and another type.
     for bytes in [[0xC7, 12, 0xFF, 0, 0, 0, 0, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], [0xC7, 12, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0], [0xD5, 0xFF, 0, 0], [0xD6, 5, 0, 0, 0, 0]] as U8[>..][>..] {
-        assert((try? MessagePack.decode(UtcDateTime.self, from: bytes)) == none)
+        require((try? MessagePack.decode(UtcDateTime.self, from: bytes)) == none)
     }
-    do {
-        _ = try MessagePackDecoder.parse([0xD4, 5, 0]).decodeTimestamp()
-        fail("not a timestamp")
-    } catch {
-        assertEqual(error.description(), "$: the extension of type 5 is not a timestamp")
-    }
+    expectThrows(saying: "$: the extension of type 5 is not a timestamp") { _ = try MessagePackDecoder.parse([0xD4, 5, 0]).decodeTimestamp() }
 }
 
 @test
@@ -230,7 +225,7 @@ fn aDerivedTypeGoesThereAndBack() throws {
     // The flattened struct's fields are the record's own: six, and the count
     // is right though it was not known when the map was begun.
     assertEqual(bytes[0], 0x86)
-    assert(try MessagePack.decode(Record.self, from: bytes) == record)
+    expect(try MessagePack.decode(Record.self, from: bytes) == record)
     var counts = Dictionary<String, Int>()
     counts["one"] = 1
     assertEqual(hex(try MessagePack.encode(counts)), "81a36f6e6501")
@@ -252,8 +247,8 @@ fn aValueOfEveryKindGoesThereAndBack() throws {
     assertEqual(try MessagePackValue.parse(bytes), value)
     assertEqual(try MessagePack.decode(MessagePackValue.self, from: bytes), value)
     assertEqual(value["a"]!, MessagePackValue.Array(items: [.Null, .Bool(value: true), .Bool(value: false)]))
-    assert(value["b"] == none && MessagePackValue.Null["a"] == none)
-    assert((try? Json.encode(value)) == none)
+    expect(value["b"] == none && MessagePackValue.Null["a"] == none)
+    expect((try? Json.encode(value)) == none)
 }
 
 @test
@@ -263,8 +258,8 @@ fn aValueGoesThroughOtherFormats() throws {
     assertEqual(try Json.encode(value), text)
     let numbered = try MessagePackValue.parse([0x82, 0x01, 0xC0, 0xCF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02])
     assertEqual(try Json.encode(numbered), "{\"1\":null,\"18446744073709551615\":2}")
-    assert((try? MessagePackValue.decode(from: try JsonDecoder.parse("{}").field("a"))) == none)
-    assert((try? MessagePackValue.decode(from: try MessagePackDecoder.parse([0x80]).field("a"))) == none)
+    expect((try? MessagePackValue.decode(from: try JsonDecoder.parse("{}").field("a"))) == none)
+    expect((try? MessagePackValue.decode(from: try MessagePackDecoder.parse([0x80]).field("a"))) == none)
     let json = try JsonValue.decode(from: try MessagePackDecoder.parse([0x93, 0xCB, 0x3F, 0xE0, 0, 0, 0, 0, 0, 0, 0x2A, 0xC4, 0x01, 0xFF]))
     assertEqual(try Json.encode(json), "[0.5,42.0,[255.0]]")
 }
@@ -274,11 +269,11 @@ fn decodersSayWhereAndWhatIsWrong() throws {
     let root = try MessagePackDecoder.parse([0x83, 0xA1, 0x61, 0x92, 0x01, 0xA1, 0x78, 0x05, 0xC3, 0xA3, 0x62, 0x20, 0x63, 0x81, 0xC0, 0x01])
     assertEqual(root.path, "$")
     assertEqual(root.count, 3)
-    assert(root.kind == .Map && !root.isNull && !root.isMissing)
+    expect(root.kind == .Map && !root.isNull && !root.isMissing)
     assertEqual(root.field("a").element(1).path, "$.a[1]")
-    assert(root.field("a").element(2).isMissing && root.field("a").element(-1).isMissing && root.element(0).isMissing)
-    assert(root.hasField("a") && !root.hasField("c") && !root.hasField("5") && !root.field("a").hasField("a"))
-    assert(!root.excluding(["a"]).hasField("a"))
+    expect(root.field("a").element(2).isMissing && root.field("a").element(-1).isMissing && root.element(0).isMissing)
+    expect(root.hasField("a") && !root.hasField("c") && !root.hasField("5") && !root.field("a").hasField("a"))
+    expect(!root.excluding(["a"]).hasField("a"))
     assertEqual(try root.excluding(["a"]).excluding(["5"]).decodeMap().count, 1)
     var messages: String[>..] = []
     let attempts: (() throws(SerializeError) -> Void)[>..] = [
@@ -350,8 +345,8 @@ fn decodersSayWhereAndWhatIsWrong() throws {
         assert(!(try MessagePackDecoder.parse(bytes).kindName.isEmpty))
     }
     assertEqual(kinds, "Null Bool Number Number Number String Bytes Sequence Map Bytes ")
-    assert(root.field("zz").kind == .Missing && root.field("zz").kindName == "nothing")
-    assert(root.casePayload().isMissing)
+    expect(root.field("zz").kind == .Missing && root.field("zz").kindName == "nothing")
+    expect(root.casePayload().isMissing)
 }
 
 @test
@@ -410,7 +405,7 @@ fn everyPrefixOfAValueIsRefused() throws {
 fn declaredLengthsAreCheckedBeforeAnythingIsMade() {
     // Strings, bytes, extensions, arrays and maps of 4 GB in a few bytes.
     for first in [0xDB, 0xC6, 0xC9, 0xDD, 0xDF] as U8[>..] {
-        assert(!refusal([first, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x02]).isEmpty)
+        require(!refusal([first, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x02]).isEmpty)
     }
     // Arrays that each claim all that is left.
     var nested: U8[>..] = []
@@ -419,7 +414,7 @@ fn declaredLengthsAreCheckedBeforeAnythingIsMade() {
         nested.append(0xFF)
         nested.append(0xFF)
     }
-    assert(refusal(nested).contains("more values than there are bytes for"))
+    expect(refusal(nested).contains("more values than there are bytes for"))
 }
 
 @test
@@ -435,7 +430,7 @@ fn nestingIsBounded() {
         maps.append(0x81)
         maps.append(0xC0)
     }
-    assert(refusal(maps).contains("nested more than 128 deep"))
+    expect(refusal(maps).contains("nested more than 128 deep"))
 }
 
 @test
@@ -449,7 +444,7 @@ fn anyBytesAreReadOrRefused() {
         if let value = try? MessagePackValue.parse(bytes) {
             // Its shortest form reads as the same value, a NaN apart.
             let again = try! value.bytes()
-            assert(try! MessagePackValue.parse(again).bytes() == again)
+            assertEqual(try! MessagePackValue.parse(again).bytes(), again)
         }
     }
 }

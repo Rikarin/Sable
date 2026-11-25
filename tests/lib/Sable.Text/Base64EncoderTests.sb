@@ -54,7 +54,7 @@ fn onlyWholeGroupsAreWrittenBeforeTheEnd() {
     assertEqual(encoder.encode("fo".utf8Bytes()), "")
     assertEqual(encoder.encode("ob".utf8Bytes()), "Zm9v")
     assertEqual(encoder.finish(), "Yg==")
-    assert(encoder.padding, "padded unless told")
+    expect(encoder.padding, "padded unless told")
 }
 
 @test
@@ -87,7 +87,7 @@ fn chunksEncodeIntoABufferAsTheWhole() {
             var expected = ByteBuffer()
             expected.writeU8(0x21)
             Base64.encode(bytes, into: &expected, padding: padding)
-            assert(buffer.bytes == expected.bytes)
+            assertEqual(buffer.bytes, expected.bytes)
             // Empty again.
             encoder.finish(into: &buffer)
             assertEqual(buffer.count, expected.count)

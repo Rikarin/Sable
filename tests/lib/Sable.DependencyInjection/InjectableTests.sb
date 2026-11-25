@@ -70,10 +70,10 @@ fn services() -> ServiceCollection {
 fn aStructIsMadeOfItsFields() {
     let provider = try! services().build()
     let values = try! provider.resolve(Values.self)
-    assert(values.clock.now() == 12 && values.name == "hot" && values.size == 3)
+    expect(values.clock.now() == 12 && values.name == "hot" && values.size == 3)
     let all = Values.dependencies()
     assertEqual(all.map { "\($0.key)" }.joined(separator: ", "), "any InjectionSupport.Clock, String (\"hot\"), Int")
-    assert(all[0].kind == .Required && all[2].kind == .Optional)
+    expect(all[0].kind == .Required && all[2].kind == .Optional)
 }
 
 @test
@@ -89,8 +89,8 @@ fn lazyFactoryAndScopeParameters() {
     all.addScoped(Many.self)
     (try! all.build()).withScope { scope in
         let many = try! scope.resolve(Many.self)
-        assert(many.scope === scope)
-        assert(!many.late.isMade)
+        expect(many.scope === scope)
+        expect(!many.late.isMade)
         assertEqual(many.late.value.name, "hot")
         assertEqual(many.make().size, 3)
     }
@@ -113,12 +113,7 @@ fn aFactoryOfASingletonsOutlivesTheScopeThatAsked() {
 fn whatAnInitialiserThrowsIsSaid() {
     var all = ServiceCollection()
     all.addTransient(Failing.self)
-    do {
-        _ = try (try! all.build()).resolve(Failing.self)
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "InjectableTests.Failing could not be made: it fails")
-    }
+    expectThrows(saying: "InjectableTests.Failing could not be made: it fails") { _ = try (try! all.build()).resolve(Failing.self) }
 }
 
 @test
@@ -148,7 +143,7 @@ struct ByHand: Injectable {
 
 @test
 fn aTypeMaySayHowItIsMadeItself() {
-    assert(ByHand.dependencies().isEmpty)
+    expect(ByHand.dependencies().isEmpty)
     var all = services()
     all.addTransient(ByHand.self)
     let provider = try! all.build()
@@ -160,10 +155,5 @@ fn aTypeMaySayHowItIsMadeItself() {
 fn whatIsMadeWithoutBeingRegistered() {
     let provider = try! services().build()
     assertEqual((try! provider.make(Values.self)).name, "hot")
-    do {
-        _ = try provider.make(Failing.self)
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "InjectableTests.Failing could not be made: it fails")
-    }
+    expectThrows(saying: "InjectableTests.Failing could not be made: it fails") { _ = try provider.make(Failing.self) }
 }

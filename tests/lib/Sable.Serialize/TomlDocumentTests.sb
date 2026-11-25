@@ -13,14 +13,14 @@ fn edited(_ text: String, _ edit: (inout TomlDocument) throws(SerializeError) ->
         return "error: " + error.description()
     }
     // What is left is TOML, and the document holds what its text does.
-    assert(try! Toml.parse(document.text()) == document.table())
+    expect(try! Toml.parse(document.text()) == document.table())
     return document.text()
 }
 
 fn setting(_ text: String, _ path: String[>..], _ value: TomlValue) -> String {
     return edited(text, { (document: inout TomlDocument) throws(SerializeError) in
         try document.set(path, value)
-        assert(document.get(path)! == value)
+        expect(document.get(path)! == value)
     })
 }
 
@@ -28,7 +28,7 @@ fn removing(_ text: String, _ path: String[>..]) -> String {
     return edited(text, { (document: inout TomlDocument) throws(SerializeError) in
         let was = document.get(path) != none
         let removed = try document.remove(path)
-        assert(removed == was)
+        expect(removed == was)
     })
 }
 
@@ -37,7 +37,7 @@ fn appending(_ text: String, _ path: String[>..], _ value: TomlValue) -> String 
         let count = document.get(path)?.items?.count ?? 0
         try document.append(path, value)
         assertEqual(document.get(path)!.items!.count, count + 1)
-        assert(document.get(path)!.items![count] == value)
+        expect(document.get(path)!.items![count] == value)
     })
 }
 
@@ -76,27 +76,27 @@ fn aTextUnchangedIsTheSame() throws {
         assertEqual(try TomlDocument.parse(text).text(), text)
     }
     assertEqual(TomlDocument().text(), "")
-    assert(TomlDocument().table().isEmpty)
-    assert((try? TomlDocument.parse("a = ")) == none)
-    assert((try? TomlDocument.parse("a.b = 1", maximumDepth: 1)) == none)
+    expect(TomlDocument().table().isEmpty)
+    expect((try? TomlDocument.parse("a = ")) == none)
+    expect((try? TomlDocument.parse("a.b = 1", maximumDepth: 1)) == none)
 }
 
 @test
 fn valuesAreFoundByPath() throws {
     let document = try TomlDocument.parse(manifest)
-    assert(document.get(["package", "name"])! == .Text(value: "a"))
-    assert(document.get(["dependencies", "image", "features", "0"])! == .Text(value: "png"))
-    assert(document.get(["bin", "1", "options", "fast"])! == .Bool(value: true))
+    expect(document.get(["package", "name"])! == .Text(value: "a"))
+    expect(document.get(["dependencies", "image", "features", "0"])! == .Text(value: "png"))
+    expect(document.get(["bin", "1", "options", "fast"])! == .Bool(value: true))
     assertEqual(document.get([])!.table!.keys, ["package", "dependencies", "bin"])
     for path in [["x"], ["bin", "2"], ["bin", "-1"], ["bin", "name"], ["package", "name", "x"]] as String[>..][>..] {
-        assert(document.get(path) == none && document.position(path) == none)
+        require(document.get(path) == none && document.position(path) == none)
     }
     let at = document.position(["bin", "1", "name"])!
     assertEqual(at.line, 17)
     assertEqual(at.column, 1)
     assertEqual(document.position(["dependencies", "image", "version"])!.column, 11)
     assertEqual(document.position(["bin", "1"])!.line, 16)
-    assert(document.position(["bin"]) == none)
+    expect(document.position(["bin"]) == none)
 }
 
 @test
@@ -152,7 +152,7 @@ fn settingATableOfLinesTakesThemOutFirst() {
     assertEqual(setting("[a]\nx = 1\n[a.b]\ny = 2\n[c]\nz = 3\n", ["a"], one), "a = 1\n\n[c]\nz = 3\n")
     assertEqual(setting("a.b = 1\na.c = 2\nd = 3\n", ["a"], one), "d = 3\na = 1\n")
     assertEqual(setting("[[a]]\n[[a]]\n[b]\n", ["a"], .Array(items: [])), "a = []\n\n[b]\n")
-    assert(setting("[[a]]\n[[a]]\n", ["a", "0"], one).hasPrefix("error: $.a.0: is a table under its own header"))
+    expect(setting("[[a]]\n[[a]]\n", ["a", "0"], one).hasPrefix("error: $.a.0: is a table under its own header"))
 }
 
 @test
@@ -161,7 +161,7 @@ fn settingRefusesWhatCannotBe() {
     assertEqual(setting("a = [1]", ["a", "1"], one), "error: $.a: is an array, not a table")
     assertEqual(setting("a = [{b = [1]}]", ["a", "0", "b", "x", "y"], one), "error: $.a.0.b: is an array, not a table")
     assertEqual(setting("", [], one), "error: $: the document itself cannot be set")
-    assert((try? TomlDocument.parse("", maximumDepth: 2)) != none)
+    expect((try? TomlDocument.parse("", maximumDepth: 2)) != none)
     var shallow = try! TomlDocument.parse("", maximumDepth: 2)
     do {
         try shallow.set(["a", "b", "c", "d"], one)
@@ -235,8 +235,8 @@ fn appendingATableMakesADoubleHeader() {
     assertEqual(appending("[[a]]\n", ["a"], one), "error: $.a: is an array of tables, and the value is an integer")
     assertEqual(appending("a = 1\n", ["a"], one), "error: $.a: is an integer, not an array")
     assertEqual(appending("a = 1", [], table("")), "error: $: is a table, not an array")
-    assert(appending("a = 1\n", ["a", "b"], table("")).hasPrefix("error: "))
-    assert(appending("a = {}\n", ["a", "b"], table("")).hasPrefix("error: "))
+    expect(appending("a = 1\n", ["a", "b"], table("")).hasPrefix("error: "))
+    expect(appending("a = {}\n", ["a", "b"], table("")).hasPrefix("error: "))
 }
 
 fn above(_ text: String, _ path: String[>..], _ comment: String?) -> String {
@@ -248,8 +248,8 @@ fn commentsAreThoseRightAbove() throws {
     let document = try TomlDocument.parse(manifest)
     assertEqual(document.comment(["dependencies"])!, "What it needs.")
     assertEqual(document.comment(["bin", "0"])!, "The programs.")
-    assert(document.comment(["package"]) == none && document.comment(["bin", "1"]) == none && document.comment(["bin"]) == none && document.comment(["x"]) == none)
-    assert(document.comment(["dependencies", "image", "version"]) == none)
+    expect(document.comment(["package"]) == none && document.comment(["bin", "1"]) == none && document.comment(["bin"]) == none && document.comment(["x"]) == none)
+    expect(document.comment(["dependencies", "image", "version"]) == none)
     assertEqual((try TomlDocument.parse("#a\n  # b\n#\n  c = 1")).comment(["c"])!, "a\nb\n")
     assertEqual(above("a = 1\n  b = 2\n", ["b"], "x\n\ny"), "a = 1\n  # x\n  #\n  # y\n  b = 2\n")
     assertEqual(above("# old\n# older\n[t]\n", ["t"], "new"), "# new\n[t]\n")
@@ -283,12 +283,12 @@ fn anyEditsLeaveTomlWithTheRestAsItWas() throws {
                         try document.append(path, value)
                     } else {
                         try document.set(path, value)
-                        assert(document.get(path)! == value)
+                        assertEqual(document.get(path)!, value)
                     }
                 } catch {
                     assertEqual(document.text(), before)
                 }
-                assert(try Toml.parse(document.text()) == document.table())
+                assertEqual(try Toml.parse(document.text()), document.table())
             }
         }
     }

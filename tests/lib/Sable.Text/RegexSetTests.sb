@@ -9,9 +9,9 @@ import Sable.Testing
 @test
 fn eachMatchingPatternIsReported() {
     let patternSet = try! RegexSet([#"\w+"#, #"\d+"#, #"\pL+"#, "foo", "bar", "barfoo", "foobar"])
-    assert(patternSet.matches("foobar") == [0, 2, 3, 4, 6])
-    assert(patternSet.matches("42") == [0, 1])
-    assert(patternSet.matches("") == [])
+    expect(patternSet.matches("foobar") == [0, 2, 3, 4, 6])
+    expect(patternSet.matches("42") == [0, 1])
+    expect(patternSet.matches("") == [])
     assertEqual(patternSet.count, 7)
     assertEqual(patternSet.patterns[3], "foo")
 }
@@ -19,27 +19,27 @@ fn eachMatchingPatternIsReported() {
 @test
 fn anyMatchStopsEarly() {
     let patternSet = try! RegexSet(["a", "b"])
-    assert(patternSet.isMatch("xxb"))
-    assert(!patternSet.isMatch("xxx"))
-    assert(!patternSet.isMatch(""))
+    expect(patternSet.isMatch("xxb"))
+    expect(!patternSet.isMatch("xxx"))
+    expect(!patternSet.isMatch(""))
     let empty = try! RegexSet([])
-    assert(!empty.isMatch("a"))
-    assert(empty.matches("a") == [])
+    expect(!empty.isMatch("a"))
+    expect(empty.matches("a") == [])
 }
 
 @test
 fn assertionsAndOptionsApplyToEachPattern() {
     let patternSet = try! RegexSet(["^a", "a$", #"\bb\b"#, "(?m)^c$", "(?s)d.e"], options: .IgnoreCase)
-    assert(patternSet.matches("A b") == [0, 2])
-    assert(patternSet.matches("ba") == [1])
-    assert(patternSet.matches("x\nC\n") == [3])
-    assert(patternSet.matches("D\nE") == [4])
+    expect(patternSet.matches("A b") == [0, 2])
+    expect(patternSet.matches("ba") == [1])
+    expect(patternSet.matches("x\nC\n") == [3])
+    expect(patternSet.matches("D\nE") == [4])
     let empty = try! RegexSet(["", "x*", "^$"])
-    assert(empty.matches("") == [0, 1, 2])
-    assert(empty.matches("y") == [0, 1])
+    expect(empty.matches("") == [0, 1, 2])
+    expect(empty.matches("y") == [0, 1])
     // A piece of a text is a text of its own: the "b" of "ab" is a word.
     let text = "ab"
-    assert(patternSet.matches(text[text.index(after: text.startIndex)..<text.endIndex]) == [2])
+    expect(patternSet.matches(text[text.index(after: text.startIndex)..<text.endIndex]) == [2])
 }
 
 @test
@@ -48,14 +48,14 @@ fn aMistakeSaysWhichPattern() {
         _ = try RegexSet(["a", "b(", "c"])
         fail("unclosed group")
     } catch {
-        assert(error.kind == .UnclosedGroup && error.offset == 1)
+        expect(error.kind == .UnclosedGroup && error.offset == 1)
         assertEqual(error.message, "pattern 1: unclosed group")
     }
     do {
         _ = try RegexSet([#"(a)\1"#], options: .Backtracking)
         fail("a set cannot backtrack")
     } catch {
-        assert(error.kind == .NeedsBacktracking)
+        expect(error.kind == .NeedsBacktracking)
     }
 }
 
@@ -72,6 +72,6 @@ fn aSetMatchesWhatEachRegexMatches() {
             }
             i += 1
         }
-        assert(patternSet.matches(text) == expected, "\(text)")
+        require(patternSet.matches(text) == expected, "\(text)")
     }
 }

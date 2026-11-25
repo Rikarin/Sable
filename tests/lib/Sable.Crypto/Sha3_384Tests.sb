@@ -47,7 +47,7 @@ fn aMessageInTwoPartsIsTheWholeWhereverItIsCut() {
         var hash = Sha3_384()
         hash.update(whole[..<cut])
         hash.update(whole[cut...])
-        assert(hash.finalize() == expected)
+        assertEqual(hash.finalize(), expected)
         cut += 1
     }
 }
@@ -60,7 +60,7 @@ fn aMessageAByteAtATimeIsTheWhole() {
         hash.update([byte])
         hash.update([])
     }
-    assert(hash.finalize() == Sha3_384.hash(whole))
+    expect(hash.finalize() == Sha3_384.hash(whole))
 }
 
 @test
@@ -68,10 +68,10 @@ fn finalizingLeavesTheFunctionToGoOn() {
     let whole = message(113)
     var hash = Sha3_384()
     hash.update(whole[..<104])
-    assert(hash.finalize() == Sha3_384.hash(whole[..<104]))
-    assert(hash.finalize() == Sha3_384.hash(whole[..<104]))
+    expect(hash.finalize() == Sha3_384.hash(whole[..<104]))
+    expect(hash.finalize() == Sha3_384.hash(whole[..<104]))
     hash.update(whole[104...])
-    assert(hash.finalize() == Sha3_384.hash(whole))
+    expect(hash.finalize() == Sha3_384.hash(whole))
 }
 
 @test
@@ -82,8 +82,8 @@ fn aCopyHashesOnByItself() {
     var second = first
     first.update(whole[7...])
     second.update(whole[..<3])
-    assert(first.finalize() == Sha3_384.hash(whole))
-    assert(second.finalize() == Sha3_384.hash(joined(message(7), message(3))))
+    expect(first.finalize() == Sha3_384.hash(whole))
+    expect(second.finalize() == Sha3_384.hash(joined(message(7), message(3))))
 }
 
 @test

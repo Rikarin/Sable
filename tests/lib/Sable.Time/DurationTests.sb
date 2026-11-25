@@ -69,7 +69,7 @@ fn componentsShareTheSign() {
     assertEqual(min.nanoseconds, -854775808)
     let max = Duration.max.components
     assertEqual(max.hours * 3600 + max.minutes * 60 + max.seconds, 9223372036)
-    assert(Duration.zero.isZero && !Duration.zero.isNegative && ns(-1).isNegative)
+    expect(Duration.zero.isZero && !Duration.zero.isNegative && ns(-1).isNegative)
 }
 
 @test(traps: "overflow")
@@ -152,7 +152,7 @@ fn operatorsAreTheIntegersOwn() {
     sum += Duration.seconds(1)
     sum -= Duration.milliseconds(1)
     assertEqual(sum, Duration.milliseconds(999))
-    assert(Duration.min < Duration.zero && Duration.zero < Duration.max && ns(1) >= ns(1))
+    expect(Duration.min < Duration.zero && Duration.zero < Duration.max && ns(1) >= ns(1))
 }
 
 @test(traps: "overflow")

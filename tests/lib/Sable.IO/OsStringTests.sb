@@ -12,8 +12,8 @@ fn textIsItsUtf8() {
     let text = OsString("héllo")
     assertEqual(text.bytes, [0x68, 0xC3, 0xA9, 0x6C, 0x6C, 0x6F])
     assertEqual(text.string, "héllo")
-    assert(!text.isEmpty)
-    assert(OsString("").isEmpty)
+    expect(!text.isEmpty)
+    expect(OsString("").isEmpty)
     assertEqual("\(text)", "héllo")
     assertEqual(text.debugDescription(), "\"héllo\"")
 }
@@ -32,10 +32,10 @@ fn whatIsNotTextIsKept() {
 @test
 fn equalAndOrderedByBytes() {
     assertEqual(OsString("a"), OsString(bytes: [0x61]))
-    assert(OsString("a") != OsString("b"))
-    assert(OsString("a") < OsString("ab"))
-    assert(OsString(bytes: [0xFF]) > OsString("z"))
-    assert(OsString("a").view == OsString("a").view)
+    expect(OsString("a") != OsString("b"))
+    expect(OsString("a") < OsString("ab"))
+    expect(OsString(bytes: [0xFF]) > OsString("z"))
+    expect(OsString("a").view == OsString("a").view)
     var counts: [OsString: Int] = [:]
     counts[OsString("x")] = 1
     counts[OsString(bytes: [0x78])] = 2
@@ -70,10 +70,10 @@ fn aViewIsTakenApart() {
     let (name, value) = whole.view.split(once: 0x3D)!
     assertEqual(name.string, "--o")
     assertEqual(value.toOsString().bytes, [0xFF])
-    assert(whole.view.hasPrefix("--"))
-    assert(!whole.view.hasPrefix("--out"))
-    assert(OsString("x").view.split(once: 0x3D) == none)
-    assert(OsStr(bytes: []).isEmpty)
+    expect(whole.view.hasPrefix("--"))
+    expect(!whole.view.hasPrefix("--out"))
+    expect(OsString("x").view.split(once: 0x3D) == none)
+    expect(OsStr(bytes: []).isEmpty)
 }
 
 @test
@@ -82,7 +82,7 @@ fn aPathIsTheSystemsText() {
     assertEqual(path.pathExtension, "b")
     assertEqual(path.osString.bytes, [0x61, 0x2F, 0xFF, 0x2E, 0x62])
     assertEqual(OsString("a/b").filePath, FilePath("a/b"))
-    assert(!File.exists(OsString("surely-no-such-file")))
+    expect(!File.exists(OsString("surely-no-such-file")))
 }
 
 @test

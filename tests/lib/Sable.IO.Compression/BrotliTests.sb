@@ -17,12 +17,12 @@ fn hex(_ text: String) -> U8[>..] {
 @test
 fn whatTheReferenceMadeIsDecompressed() throws {
     // Its tests' 'empty', 'ukkonooa' and 'quickfox'.
-    assert((try Brotli.decompress([0x06])).isEmpty)
+    expect((try Brotli.decompress([0x06])).isEmpty)
     let ukkonooa = "ukko nooa, ukko nooa oli kunnon mies, kun han meni saunaan, pisti laukun naulaan, ukko nooa, ukko nooa oli kunnon mies."
-    assert((try Brotli.decompress(hex("1b760000144aac9b7abde1979d7f8ec282360e9ce09003f78b9e38e6b600abc3caa0c2da6636dccd808d2e21d76ee3ea4cb8f0d2b8c7c2704d3af0697ea1b84573abc4571e"))) == ukkonooa.utf8Bytes())
-    assert((try Brotli.decompress(Brotli.compress(ukkonooa.utf8Bytes(), quality: 11))) == ukkonooa.utf8Bytes())
+    expect((try Brotli.decompress(hex("1b760000144aac9b7abde1979d7f8ec282360e9ce09003f78b9e38e6b600abc3caa0c2da6636dccd808d2e21d76ee3ea4cb8f0d2b8c7c2704d3af0697ea1b84573abc4571e"))) == ukkonooa.utf8Bytes())
+    expect((try Brotli.decompress(Brotli.compress(ukkonooa.utf8Bytes(), quality: 11))) == ukkonooa.utf8Bytes())
     let fox = "The quick brown fox jumps over the lazy dog"
-    assert((try Brotli.decompress(hex("0f158054686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f6703"))) == fox.utf8Bytes())
+    expect((try Brotli.decompress(hex("0f158054686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f6703"))) == fox.utf8Bytes())
 }
 
 @test
@@ -49,8 +49,8 @@ fn longStreamsRoundTrip() throws {
         for kind in [0, 3, 4, 5, 6, 7] {
             let bytes = sample(kind, 700_000, seed: U64(quality + 70))
             let packed = Brotli.compress(bytes, quality: quality)
-            assert((try Brotli.decompress(packed)) == bytes, "quality \(quality), kind \(kind)")
-            assert(packed.count <= Brotli.maxCompressedLength(bytes.count))
+            require((try Brotli.decompress(packed)) == bytes, "quality \(quality), kind \(kind)")
+            require(packed.count <= Brotli.maxCompressedLength(bytes.count))
         }
     }
     // Small windows, which are slid.
@@ -64,7 +64,7 @@ fn longStreamsRoundTrip() throws {
             at += 50_000
         }
         encoder.finish(into: &packed)
-        assert((try Brotli.decompress(packed.bytes)) == bytes, "a window of 2 to the \(log)")
+        require((try Brotli.decompress(packed.bytes)) == bytes, "a window of 2 to the \(log)")
     }
 }
 
@@ -74,13 +74,13 @@ fn higherQualitiesAreSmaller() {
     var before = Int.max
     for quality in [0, 2, 5, 9, 11] {
         let packed = Brotli.compress(bytes, quality: quality).count
-        assert(packed < before, "quality \(quality): \(packed) after \(before)")
+        require(packed < before, "quality \(quality): \(packed) after \(before)")
         before = packed
     }
     // Words of the dictionary: less than half of their letters.
     let words = "government information technology university development international community".utf8Bytes()
-    assert(Brotli.compress(words, quality: 5).count < 50)
-    assert(Brotli.compress(words, quality: 4).count > 50)
+    expect(Brotli.compress(words, quality: 5).count < 50)
+    expect(Brotli.compress(words, quality: 4).count > 50)
 }
 
 @test
@@ -116,7 +116,7 @@ fn whatIsFlushedCanBeDecompressed() throws {
     encoder.finish(into: &end)
     end.writeU8(77)
     let last = try decoder.decompress(end.bytes, into: &bytes)
-    assert(last.status == .Finished && last.consumed == end.count - 1)
+    expect(last.status == .Finished && last.consumed == end.count - 1)
 }
 
 fn says(_ bytes: U8[>..], _ what: String) -> Int {
@@ -198,7 +198,7 @@ fn whatIsWrongIsSaid() {
     wrong += says(run(142, 16, []), "a copy longer than the meta-block has room for")
     let codes: (Int, Int)[>..] = [(1, 2), (0, 2), (65, 8), (1, 2), (0, 2), (136, 10), (1, 2), (1, 2), (4, 6), (16, 6)]
     wrong += says(bits(join(join(start, codes), [(1, 1), (0, 1), (0, 1)])), "a distance of none")
-    assert(wrong == 0)
+    expect(wrong == 0)
 }
 
 @test
@@ -236,18 +236,18 @@ fn damageIsNeverMoreThanAnError() {
         }
         seed += 1
     }
-    assert(failed > 7000)
+    expect(failed > 7000)
 }
 
 @test
 fn limitsAreKept() throws {
     let bomb = Brotli.compress(U8[>..](repeating: 0, count: 10_000_000), quality: 9)
-    assert(bomb.count < 1000)
+    expect(bomb.count < 1000)
     let most = DecompressionLimits(maximumLength: 9_999_999)
-    assert(fails(CompressionError.LimitExceeded) { try Brotli.decompress(bomb, limits: most) })
+    expect(fails(CompressionError.LimitExceeded) { try Brotli.decompress(bomb, limits: most) })
     let ratio = DecompressionLimits(maximumRatio: 1000)
-    assert(fails(CompressionError.LimitExceeded) { try Brotli.decompress(bomb, limits: ratio) })
-    assert((try Brotli.decompress(bomb)).count == 10_000_000)
+    expect(fails(CompressionError.LimitExceeded) { try Brotli.decompress(bomb, limits: ratio) })
+    expect((try Brotli.decompress(bomb)).count == 10_000_000)
 }
 
 @test
@@ -259,22 +259,22 @@ fn brotliReadsAndWritesOurs() async throws {
         for kind in [0, 3, 4, 6, 7] {
             let bytes = sample(kind, 200_000, seed: U64(quality))
             let read = await run("brotli", ["-dc"], input: Brotli.compress(bytes, quality: quality))
-            assert(read == bytes, "brotli reads quality \(quality), kind \(kind)")
+            require(read == bytes, "brotli reads quality \(quality), kind \(kind)")
             if let packed = await run("brotli", ["-c", "-q", "\(quality)"], input: bytes) {
-                assert((try Brotli.decompress(packed)) == bytes, "brotli's quality \(quality), kind \(kind)")
+                require((try Brotli.decompress(packed)) == bytes, "brotli's quality \(quality), kind \(kind)")
                 var decoder = BrotliDecoder()
-                assert((try decompressInPieces(&decoder, packed, seed: 1)) == bytes)
-                assert(fails(CompressionError.Truncated) { try Brotli.decompress(packed[..<(packed.count - 1)]) })
+                require((try decompressInPieces(&decoder, packed, seed: 1)) == bytes)
+                require(fails(CompressionError.Truncated) { try Brotli.decompress(packed[..<(packed.count - 1)]) })
             }
         }
     }
     // Text of the dictionary's, as every transform has it, and not.
     let text = "The Government of the United States, the University of California, and International Business. INFORMATION, \"the Development\" = 'community'. "
     for quality in [5, 11] {
-        assert(await run("brotli", ["-dc"], input: Brotli.compress(text.utf8Bytes(), quality: quality)) == text.utf8Bytes())
+        require(await run("brotli", ["-dc"], input: Brotli.compress(text.utf8Bytes(), quality: quality)) == text.utf8Bytes())
     }
     if let packed = await run("brotli", ["-c", "-q", "11"], input: text.utf8Bytes()) {
-        assert((try Brotli.decompress(packed)) == text.utf8Bytes())
+        expect((try Brotli.decompress(packed)) == text.utf8Bytes())
     }
 }
 
@@ -285,5 +285,5 @@ fn theStreamsToo() throws {
     try writer.write(bytes)
     try writer.finish()
     var reader = BrotliReader(MemoryStream(writer.inner.bytes))
-    assert((try reader.readToEnd()) == bytes)
+    expect((try reader.readToEnd()) == bytes)
 }

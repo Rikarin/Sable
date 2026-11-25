@@ -68,8 +68,8 @@ fn lazyPrefixWhileStopsAtTheFirstFailure() {
     var view = [1, 2, 9, 3].lazy.prefix(while: { $0 < 5 }).makeIterator()
     assertEqual(view.next() ?? -1, 1)
     assertEqual(view.next() ?? -1, 2)
-    assert(view.next() == none, "stops at nine")
-    assert(view.next() == none, "and stays stopped")
+    expect(view.next() == none, "stops at nine")
+    expect(view.next() == none, "and stays stopped")
 }
 
 @test

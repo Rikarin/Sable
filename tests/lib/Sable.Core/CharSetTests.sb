@@ -8,33 +8,33 @@ import Sable.Testing
 @test
 fn aSetHasTheCharactersItWasMadeOf() {
     let chars = CharSet("a,é😀")
-    assert(chars.contains('a') && chars.contains(',') && chars.contains('é') && chars.contains(Char.fromCodePoint(0x1F600)!), "its characters")
-    assert(!chars.contains('b') && !chars.contains('e') && !chars.contains('😁'), "no others")
-    assert(!chars.isEmpty && CharSet("").isEmpty, "empty only when made of nothing")
+    expect(chars.contains('a') && chars.contains(',') && chars.contains('é') && chars.contains(Char.fromCodePoint(0x1F600)!), "its characters")
+    expect(!chars.contains('b') && !chars.contains('e') && !chars.contains('😁'), "no others")
+    expect(!chars.isEmpty && CharSet("").isEmpty, "empty only when made of nothing")
 }
 
 @test
 fn bothHalvesOfAsciiAreKept() {
     let chars = CharSet("\u{0}?@\u{7F}")
-    assert(chars.contains('\u{0}') && chars.contains('?') && chars.contains('@') && chars.contains('\u{7F}'), "the first and second 64")
-    assert(!chars.contains('>') && !chars.contains('A') && !chars.contains('~'), "their neighbours are not")
+    expect(chars.contains('\u{0}') && chars.contains('?') && chars.contains('@') && chars.contains('\u{7F}'), "the first and second 64")
+    expect(!chars.contains('>') && !chars.contains('A') && !chars.contains('~'), "their neighbours are not")
 }
 
 @test
 fn rangesAndUnions() {
     let greek = CharSet.range('α', 'ω')
-    assert(greek.contains('λ') && !greek.contains('Ω'), "a range beyond ASCII")
+    expect(greek.contains('λ') && !greek.contains('Ω'), "a range beyond ASCII")
     let mixed = CharSet.range('x', 'é')
-    assert(mixed.contains('y') && mixed.contains('\u{7F}') && mixed.contains('à') && !mixed.contains('w') && !mixed.contains('ê'), "a range across ASCII's end")
+    expect(mixed.contains('y') && mixed.contains('\u{7F}') && mixed.contains('à') && !mixed.contains('w') && !mixed.contains('ê'), "a range across ASCII's end")
     let both = greek.union(CharSet.asciiDigits)
-    assert(both.contains('λ') && both.contains('7') && !both.contains('a'), "a union")
+    expect(both.contains('λ') && both.contains('7') && !both.contains('a'), "a union")
 }
 
 @test
 fn theStandardSets() {
-    assert(CharSet.asciiDigits.contains('0') && !CharSet.asciiDigits.contains('a'), "digits")
-    assert(CharSet.asciiLetters.contains('q') && CharSet.asciiLetters.contains('Q') && !CharSet.asciiLetters.contains('1'), "letters")
-    assert(CharSet.asciiAlphanumerics.contains('q') && CharSet.asciiAlphanumerics.contains('1') && !CharSet.asciiAlphanumerics.contains('-'), "alphanumerics")
+    expect(CharSet.asciiDigits.contains('0') && !CharSet.asciiDigits.contains('a'), "digits")
+    expect(CharSet.asciiLetters.contains('q') && CharSet.asciiLetters.contains('Q') && !CharSet.asciiLetters.contains('1'), "letters")
+    expect(CharSet.asciiAlphanumerics.contains('q') && CharSet.asciiAlphanumerics.contains('1') && !CharSet.asciiAlphanumerics.contains('-'), "alphanumerics")
     var code = 0
     while code < 0x3100 {
         if let c = Char.fromCodePoint(code) {
@@ -49,7 +49,7 @@ fn insertingCharacters() {
     var chars = CharSet("")
     chars.insert('a')
     chars.insert(from: 'é', through: 'ë')
-    assert(chars.contains('a') && chars.contains('ê') && !chars.contains('ì'), "what was inserted")
+    expect(chars.contains('a') && chars.contains('ê') && !chars.contains('ì'), "what was inserted")
 }
 
 @test
@@ -59,7 +59,7 @@ fn searchingForAnyOfTheSet() {
     assertEqual(text.split(separators).joined(separator: " "), "a b c d")
     assertEqual(text.firstIndex(of: separators)!.utf8Offset, 1)
     assertEqual(text.lastIndex(of: separators)!.utf8Offset, 5)
-    assert("abc".firstIndex(of: separators) == none && "abc".lastIndex(of: separators) == none, "none there")
-    assert("éèê".firstIndex(of: CharSet.asciiLetters) == none, "ASCII sets pass over other scalars")
+    expect("abc".firstIndex(of: separators) == none && "abc".lastIndex(of: separators) == none, "none there")
+    expect("éèê".firstIndex(of: CharSet.asciiLetters) == none, "ASCII sets pass over other scalars")
     assertEqual("x = 1".firstIndex(of: CharSet.asciiDigits)!.utf8Offset, 4)
 }

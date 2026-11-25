@@ -38,6 +38,12 @@ public final class CapturedExpression {
         return value
     }
 
+    // What it has kept, let go of: it has nothing to say, and the call's
+    // surroundings may keep it longer than what it holds is to live.
+    fn forget() {
+        values = []
+    }
+
     /// The whole expression, as it was written; empty when it was not
     /// worked out.
     public var text: String => texts.isEmpty ? "" : texts[texts.count - 1]

@@ -22,7 +22,7 @@ fn cases(_ name: String) -> String[>..][>..] {
             all.append(line.split('\t'))
         }
     }
-    assert(all.count > 50)
+    expect(all.count > 50)
     return all
 }
 
@@ -55,7 +55,7 @@ struct Mismatches {
     }
 
     fn report() {
-        assert(count == 0, "\(count) differ:\n" + shown.joined(separator: "\n"))
+        expect(count == 0, "\(count) differ:\n" + shown.joined(separator: "\n"))
     }
 }
 

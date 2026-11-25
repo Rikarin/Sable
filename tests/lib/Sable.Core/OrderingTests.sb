@@ -41,9 +41,9 @@ fn anOrderingIsReversedAndTiesAreBroken() {
 
 @test
 fn anOrderingAnswersQuestionsAndHasASign() {
-    assert(Ordering.Less.isLess && Ordering.Less.isLessOrEqual && !Ordering.Less.isGreaterOrEqual)
-    assert(Ordering.Equal.isEqual && Ordering.Equal.isLessOrEqual && Ordering.Equal.isGreaterOrEqual)
-    assert(Ordering.Greater.isGreater && !Ordering.Greater.isLessOrEqual)
+    expect(Ordering.Less.isLess && Ordering.Less.isLessOrEqual && !Ordering.Less.isGreaterOrEqual)
+    expect(Ordering.Equal.isEqual && Ordering.Equal.isLessOrEqual && Ordering.Equal.isGreaterOrEqual)
+    expect(Ordering.Greater.isGreater && !Ordering.Greater.isLessOrEqual)
     assertEqual(Ordering.Less.sign, -1)
     assertEqual(Ordering.Greater.sign, 1)
     assertEqual(Ordering.of(sign: -42), .Less)
@@ -66,19 +66,19 @@ fn floatsCompareTotallyOrPartially() {
     assertEqual((-F64.nan).totalCompare(-F64.infinity), .Less)
     assertEqual(1.5.totalCompare(1.5), .Equal)
     assertEqual(1.0.partialCompare(2.0), .Less)
-    assert(F64.nan.partialCompare(1.0) == none)
-    assert(1.0.partialCompare(F64.nan) == none)
+    expect(F64.nan.partialCompare(1.0) == none)
+    expect(1.0.partialCompare(F64.nan) == none)
     let sorted = [3.0, F64.nan, -1.0, -0.0, 0.0].sorted(using: Comparator<F64>((a: F64, b: F64) => a.totalCompare(b)))
     assertEqual(sorted[0], -1.0)
-    assert(sorted[1] == 0.0 && sorted[1].isSignMinus)
-    assert(sorted[4].isNaN)
+    expect(sorted[1] == 0.0 && sorted[1].isSignMinus)
+    expect(sorted[4].isNaN)
 }
 
 @test
 fn reverseTurnsTheOrderRound() {
-    assert(Reverse(3) < Reverse(1))
-    assert(!(Reverse(1) < Reverse(1)))
+    expect(Reverse(3) < Reverse(1))
+    expect(!(Reverse(1) < Reverse(1)))
     assertEqual(Reverse("a").compare(Reverse("b")), .Greater)
-    assert([1, 3, 2].sorted(byKey: { Reverse($0) }) == [3, 2, 1])
+    expect([1, 3, 2].sorted(byKey: { Reverse($0) }) == [3, 2, 1])
     assertEqual(Reverse(5).value, 5)
 }

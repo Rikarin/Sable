@@ -340,12 +340,12 @@ fn aDecimalIsMadeFromACoefficientAndAScale() {
     assertEqualText("\(x)", "-1.25")
     assertEqual(x.scale, 2)
     assertEqual(x.coefficient, -125)
-    assert(x.isNegative)
-    assert(!x.isZero)
+    expect(x.isNegative)
+    expect(!x.isZero)
     assertEqual(Decimal(x.coefficient, scale: x.scale), x)
     assertEqualText("\(Decimal(7 as U8))", "7")
     assertEqualText("\(Decimal(0, scale: 3))", "0.000")
-    assert(Decimal(0, scale: 3).isZero)
+    expect(Decimal(0, scale: 3).isZero)
 }
 
 @test(traps: "a decimal's scale must be from 0 to 28, not 29")
@@ -374,17 +374,17 @@ fn theBoundsAreNinetySixBitsEitherWay() {
 
 @test
 fn aZeroHasNoSign() {
-    assert(!(-Decimal.zero).isNegative)
-    assert(!(d("-1.5") + d("1.5")).isNegative)
+    expect(!(-Decimal.zero).isNegative)
+    expect(!(d("-1.5") + d("1.5")).isNegative)
     assertEqualText("\(-Decimal(0, scale: 2))", "0.00")
 }
 
 @test
 fn isIntegerLooksAtTheFraction() {
-    assert(d("2.00").isInteger)
-    assert(d("-7").isInteger)
-    assert(!d("2.01").isInteger)
-    assert(!d("-0.5").isInteger)
+    expect(d("2.00").isInteger)
+    expect(d("-7").isInteger)
+    expect(!d("2.01").isInteger)
+    expect(!d("-0.5").isInteger)
 }
 
 @test
@@ -395,9 +395,9 @@ fn theBitsAreDotNetsLayout() {
     assertEqual(Decimal.fromBits(bits), Decimal(-125, scale: 2))
     assertEqual(Decimal.fromBits(Decimal.max.bits), Decimal.max)
     // A scale past 28, and bits .NET keeps zero.
-    assert(Decimal.fromBits(29 << 112) == none)
-    assert(Decimal.fromBits((1 as U128) << 96) == none)
-    assert(Decimal.fromBits((1 as U128) << 120) == none)
+    expect(Decimal.fromBits(29 << 112) == none)
+    expect(Decimal.fromBits((1 as U128) << 96) == none)
+    expect(Decimal.fromBits((1 as U128) << 120) == none)
     // A negative zero's sign is dropped.
     assertEqual(Decimal.fromBits((1 as U128) << 127)!.bits, 0)
 }
@@ -432,10 +432,10 @@ fn decimalsAreOrderedByValue() {
         written.joined(separator: " "),
         "-79228162514264337593543950335 -3 0 0.0000000000000000000000000001 2.10 2.1 79228162514264337593543950335"
     )
-    assert(d("0.0000000000000000000000000001") < Decimal.max)
-    assert(Decimal.max > d("0.0000000000000000000000000001"))
-    assert(d("-0.0000000000000000000000000001") > Decimal.min)
-    assert(d("1.5") <= d("1.50"))
+    expect(d("0.0000000000000000000000000001") < Decimal.max)
+    expect(Decimal.max > d("0.0000000000000000000000000001"))
+    expect(d("-0.0000000000000000000000000001") > Decimal.min)
+    expect(d("1.5") <= d("1.50"))
 }
 
 // ---- Arithmetic --------------------------------------------------------------------
@@ -495,8 +495,8 @@ fn aQuotientTakesAsManyPlacesAsFit() {
     assertEqualText("\(d("1000000000000000000000") / d("3"))", "333333333333333333333.33333333")
     assertEqualText("\(Decimal.max / d("3"))", "26409387504754779197847983445")
     // 2^96 - 1 and five sevenths, which rounds past the greatest.
-    assert(d("55459713759985036315480765235").checkedDiv(d("0.7")) == none)
-    assert(Decimal.max.checkedDiv(d("0.000000000000000001")) == none)
+    expect(d("55459713759985036315480765235").checkedDiv(d("0.7")) == none)
+    expect(Decimal.max.checkedDiv(d("0.000000000000000001")) == none)
 }
 
 @test
@@ -522,15 +522,15 @@ fn aRemainderAcrossManyPlacesIsExact() {
 
 @test
 fn theCheckedFormsGiveNoneForWhatTraps() {
-    assert(Decimal.max.checkedAdd(d("1")) == none)
-    assert(Decimal.min.checkedSub(d("1")) == none)
-    assert(Decimal.max.checkedMul(d("2")) == none)
-    assert(Decimal.max.checkedMul(Decimal.max) == none)
-    assert(Decimal.max.checkedMul(d("2.0000000000000000000")) == none)
-    assert(Decimal.max.checkedDiv(d("0.5")) == none)
-    assert(d("1000").checkedDiv(d("0.0000000000000000000000000001")) == none)
-    assert(d("1").checkedDiv(Decimal.zero) == none)
-    assert(d("1").checkedRem(Decimal.zero) == none)
+    expect(Decimal.max.checkedAdd(d("1")) == none)
+    expect(Decimal.min.checkedSub(d("1")) == none)
+    expect(Decimal.max.checkedMul(d("2")) == none)
+    expect(Decimal.max.checkedMul(Decimal.max) == none)
+    expect(Decimal.max.checkedMul(d("2.0000000000000000000")) == none)
+    expect(Decimal.max.checkedDiv(d("0.5")) == none)
+    expect(d("1000").checkedDiv(d("0.0000000000000000000000000001")) == none)
+    expect(d("1").checkedDiv(Decimal.zero) == none)
+    expect(d("1").checkedRem(Decimal.zero) == none)
     assertEqual(d("1.5").checkedAdd(d("1")), d("2.5"))
     assertEqual(d("1.5").checkedSub(d("1")), d("0.5"))
     assertEqual(d("1.5").checkedMul(d("2")), d("3"))
@@ -675,18 +675,18 @@ fn integersConvertExactlyOrNotAtAll() {
     assertEqual(Decimal.exactly(-7), Decimal(-7))
     assertEqual(Decimal.exactly(255 as U8), Decimal(255))
     assertEqual(Decimal.exactly(79228162514264337593543950335 as U128), Decimal.max)
-    assert(Decimal.exactly(79228162514264337593543950336 as U128) == none)
-    assert(Decimal.exactly(U128.max) == none)
-    assert(Decimal.exactly(I128.min) == none)
+    expect(Decimal.exactly(79228162514264337593543950336 as U128) == none)
+    expect(Decimal.exactly(U128.max) == none)
+    expect(Decimal.exactly(I128.min) == none)
     assertEqual(Decimal.exactly(-79228162514264337593543950335 as I128), Decimal.min)
 }
 
 @test
 fn aDecimalConvertsToEachIntegerType() {
     assertEqual(Int.exactly(d("42.00")), 42)
-    assert(Int.exactly(d("42.5")) == none)
-    assert(U8.exactly(d("-1")) == none)
-    assert(I8.exactly(d("128")) == none)
+    expect(Int.exactly(d("42.5")) == none)
+    expect(U8.exactly(d("-1")) == none)
+    expect(I8.exactly(d("128")) == none)
     assertEqual(I128.exactly(Decimal.min), -79228162514264337593543950335)
     assertEqual(Int.clamping(d("-2.9")), -2)
     assertEqual(U8.clamping(d("300")), 255)
@@ -704,13 +704,13 @@ fn aFloatConvertsExactlyWhereItsBinaryValueFits() {
     assertEqual(Decimal.exactly(0.5 as F32), d("0.5"))
     assertEqual(Decimal.exactly(0.0009765625), d("0.0009765625"))
     // 0.1's binary value has 55 places; 1e30 is past 96 bits.
-    assert(Decimal.exactly(0.1) == none)
-    assert(Decimal.exactly(1e30) == none)
-    assert(Decimal.exactly(F64.nan) == none)
-    assert(Decimal.exactly(F64.infinity) == none)
-    assert(Decimal.exactly(5e-324) == none)
+    expect(Decimal.exactly(0.1) == none)
+    expect(Decimal.exactly(1e30) == none)
+    expect(Decimal.exactly(F64.nan) == none)
+    expect(Decimal.exactly(F64.infinity) == none)
+    expect(Decimal.exactly(5e-324) == none)
     // 28 places, but a coefficient past 96 bits.
-    assert(Decimal.exactly(F64.converting(9007199254740991) / 268435456.0) == none)
+    expect(Decimal.exactly(F64.converting(9007199254740991) / 268435456.0) == none)
 }
 
 @test

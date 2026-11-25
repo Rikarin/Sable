@@ -29,7 +29,7 @@ fn aSingletonIsOneForTheProvider() {
     assertEqual(made.all, "")
     let first = try! provider.resolve(Shared.self)
     provider.withScope { scope in
-        assert(first === (try! scope.resolve(Shared.self)))
+        expect(first === (try! scope.resolve(Shared.self)))
     }
     assertEqual(made.all, "made")
 }
@@ -41,11 +41,11 @@ fn aScopedServiceIsOneForItsScope() {
     let provider = try! services.build()
     let outer = provider.withScope { scope in
         let first = try! scope.resolve(Counted.self)
-        assert(first === (try! scope.resolve(Counted.self)))
+        expect(first === (try! scope.resolve(Counted.self)))
         return first
     }
     provider.withScope { scope in
-        assert(outer !== (try! scope.resolve(Counted.self)))
+        expect(outer !== (try! scope.resolve(Counted.self)))
     }
 }
 
@@ -54,7 +54,7 @@ fn aTransientServiceIsNewEachTime() {
     var services = ServiceCollection()
     services.addTransient(Counted.self) { _scope in Counted() }
     let provider = try! services.build()
-    assert((try! provider.resolve(Counted.self)) !== (try! provider.resolve(Counted.self)))
+    expect((try! provider.resolve(Counted.self)) !== (try! provider.resolve(Counted.self)))
 }
 
 @test
@@ -62,7 +62,7 @@ fn anInstanceIsGivenAsItIs() {
     let one = Shared(5)
     var services = ServiceCollection()
     services.addSingleton(Shared.self, value: one)
-    assert((try! (try! services.build()).resolve(Shared.self)) === one)
+    expect((try! (try! services.build()).resolve(Shared.self)) === one)
 }
 
 @test
@@ -83,7 +83,7 @@ fn aScopedServiceIsNotTheProvidersToGive() {
         _ = try provider.resolve(Counted.self)
         assert(false)
     } catch {
-        assert(error.description().contains("Counted is scoped"), error.description())
+        expect(error.description().contains("Counted is scoped"), error.description())
     }
 }
 
@@ -99,12 +99,7 @@ fn whatIsRegisteredMustBeTheService() {
     var services = ServiceCollection()
     services.addSingleton(Int.self, FixedClock.self)
     let provider = try! services.build()
-    do {
-        _ = try provider.resolve(Int.self)
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "InjectionSupport.FixedClock, registered for Int, is not one")
-    }
+    expectThrows(saying: "InjectionSupport.FixedClock, registered for Int, is not one") { _ = try provider.resolve(Int.self) }
 }
 
 @test
@@ -126,20 +121,15 @@ fn keyedServicesAreApart() {
     let provider = try! services.build()
     assertEqual(try! provider.resolve(Int.self), 1)
     assertEqual(try! provider.resolve(Int.self, key: "two"), 2)
-    assert((try! provider.find(Int.self, key: "three")) == none)
-    do {
-        _ = try provider.resolve(Int.self, key: "three")
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "nothing provides Int (\"three\")")
-    }
+    expect((try! provider.find(Int.self, key: "three")) == none)
+    expectThrows(saying: "nothing provides Int (\"three\")") { _ = try provider.resolve(Int.self, key: "three") }
 }
 
 @test
 fn whatIsNotRegisteredIsNotFound() {
     let provider = try! ServiceCollection().build()
-    assert((try! provider.find(Int.self)) == none)
-    assert(!provider.contains(Int.self))
+    expect((try! provider.find(Int.self)) == none)
+    expect(!provider.contains(Int.self))
     assertEqual(provider.withScope { scope in
         try! scope.resolve(Int.self, otherwise: { 9 })
     }, 9)
@@ -159,11 +149,11 @@ fn aServiceOfATypeKnownOnlyAsItRuns() {
 @test
 fn theScopeAndTheProviderAreServices() {
     let provider = try! ServiceCollection().build()
-    assert((try! provider.resolve(ServiceProvider.self)) === provider)
+    expect((try! provider.resolve(ServiceProvider.self)) === provider)
     provider.withScope { scope in
-        assert((try! scope.resolve(ServiceScope.self)) === scope)
-        assert((try! scope.resolve(ServiceProvider.self)) === provider)
-        assert(scope.provider === provider)
+        expect((try! scope.resolve(ServiceScope.self)) === scope)
+        expect((try! scope.resolve(ServiceProvider.self)) === provider)
+        expect(scope.provider === provider)
     }
 }
 
@@ -171,13 +161,13 @@ fn theScopeAndTheProviderAreServices() {
 fn registrationsAreReplacedAndRemoved() {
     var services = ServiceCollection()
     services.addSingleton(Int.self, value: 1)
-    assert(!services.tryAdd(ServiceDescriptor.of(Int.self, none, 2)))
-    assert(services.tryAdd(ServiceDescriptor.of(String.self, none, "s")))
+    expect(!services.tryAdd(ServiceDescriptor.of(Int.self, none, 2)))
+    expect(services.tryAdd(ServiceDescriptor.of(String.self, none, "s")))
     services.replace(ServiceDescriptor.of(Int.self, ServiceLifetime.Transient) { _scope in 3 })
     assertEqual(try! (try! services.build()).resolve(Int.self), 3)
     assertEqual(services.descriptors.count, 2)
     services.remove(ServiceKey(Int.self))
-    assert(!services.contains(ServiceKey(Int.self)))
+    expect(!services.contains(ServiceKey(Int.self)))
 }
 
 @test
@@ -186,12 +176,7 @@ fn whatAFactoryThrowsIsSaid() {
     services.addTransient(Int.self) { _scope in
         throw TestError("no number")
     }
-    do {
-        _ = try (try! services.build()).resolve(Int.self)
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "Int could not be made: no number")
-    }
+    expectThrows(saying: "Int could not be made: no number") { _ = try (try! services.build()).resolve(Int.self) }
 }
 
 @test

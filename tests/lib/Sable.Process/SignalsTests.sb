@@ -15,16 +15,16 @@ import Sable.Time
 @test
 fn aSignalListenedForComes() async {
     let signals = try! Signals.on(.Terminate)
-    assert(Signals.raise(.Terminate))
+    expect(Signals.raise(.Terminate))
     var iterator = signals.makeAsyncIterator()
-    assert(await iterator.next()! == Signal.Terminate)
+    expect(await iterator.next()! == Signal.Terminate)
 }
 
 @test
 fn aSignalAnotherProgramSendsComes() async {
     let signals = try! Signals.on([.User1, .User2])
     let sent = try! await Command("sh").arguments(["-c", "kill -USR2 $PPID"]).status()
-    assert(sent.success)
+    expect(sent.success)
     for await signal in signals {
         assert(signal == Signal.User2)
         break
@@ -40,7 +40,7 @@ fn aSignalWakesATaskWaitingForIt() async {
     }
     try? await Task.sleep(for: Duration.milliseconds(30))
     Signals.raise(.Interrupt)
-    assert(await waiting.value! == Signal.Interrupt)
+    expect(await waiting.value! == Signal.Interrupt)
 }
 
 @test
@@ -53,7 +53,7 @@ fn signalsOfTwoKindsBothCome() async {
     numbers.sort()
     var expected = [Signal.User1.number, Signal.User2.number]
     expected.sort()
-    assert(numbers == expected)
+    expect(numbers == expected)
 }
 
 @test
@@ -63,8 +63,8 @@ fn everyListenerHearsIt() async {
     Signals.raise(.User1)
     var first = one.makeAsyncIterator()
     var second = two.makeAsyncIterator()
-    assert(await first.next()! == Signal.User1)
-    assert(await second.next()! == Signal.User1)
+    expect(await first.next()! == Signal.User1)
+    expect(await second.next()! == Signal.User1)
 }
 
 @test
@@ -119,26 +119,21 @@ fn aSignalNoOneListensForDoesWhatItDid() async {
         let signals = try! Signals.on(.Terminate)
         Signals.raise(.Terminate)
         var iterator = signals.makeAsyncIterator()
-        assert(await iterator.next()! == Signal.Terminate)
+        expect(await iterator.next()! == Signal.Terminate)
     }
     let listening = try! Signals.on(.Terminate)
     let child = try! Command("sleep").argument("60").spawn()
-    assert(try! child.signal(.Terminate))
-    assert(try! await child.wait() == ExitStatus(signal: .Terminate))
+    expect(try! child.signal(.Terminate))
+    expect(try! await child.wait() == ExitStatus(signal: .Terminate))
     _ = listening
 }
 
 @test
 fn whatCannotBeCaughtIsRefused() {
     for signal in [Signal.Kill, Signal.Stop, Signal.SegmentationFault, Signal.Other(number: 0), Signal.Other(number: 63)] {
-        do {
-            _ = try Signals.on([.User1, signal])
-            assert(false, signal.name)
-        } catch {
-            assertEqual(error.description(), ProcessError.Unsupported.description())
-        }
+        expectThrows(saying: ProcessError.Unsupported.description()) { _ = try Signals.on([.User1, signal]) }
     }
-    assert(!Signals.raise(.Other(number: 0)))
+    expect(!Signals.raise(.Other(number: 0)))
 }
 
 @test

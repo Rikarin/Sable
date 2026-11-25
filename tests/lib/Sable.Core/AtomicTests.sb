@@ -13,9 +13,9 @@ fn anAtomicIntegerIsChangedWhole() {
     assertEqual(n.load(), 3)
     assertEqual(n.exchange(10), 3)
     let failed = n.compareExchange(expected: 3, desired: 99)
-    assert(!failed.exchanged && failed.original == 10)
+    expect(!failed.exchanged && failed.original == 10)
     let swapped = n.compareExchange(expected: 10, desired: 12)
-    assert(swapped.exchanged && swapped.original == 10)
+    expect(swapped.exchanged && swapped.original == 10)
     assertEqual(n.bitwiseAnd(0b1010), 12)
     assertEqual(n.bitwiseOr(0b0101), 8)
     assertEqual(n.bitwiseXor(0b1111), 13)
@@ -51,13 +51,13 @@ fn everyWidthWrapsAsItsType() {
 @test
 fn anAtomicFlagIsSetAndCleared() {
     let flag = Atomic<Bool>(false)
-    assert(!flag.logicalOr(true))
-    assert(flag.load())
-    assert(flag.logicalXor(true))
-    assert(!flag.load())
-    assert(!flag.logicalAnd(true))
-    assert(flag.compareExchange(expected: false, desired: true).exchanged)
-    assert(flag.exchange(false))
+    expect(!flag.logicalOr(true))
+    expect(flag.load())
+    expect(flag.logicalXor(true))
+    expect(!flag.load())
+    expect(!flag.logicalAnd(true))
+    expect(flag.compareExchange(expected: false, desired: true).exchanged)
+    expect(flag.exchange(false))
     atomicFence()
     atomicFence(.Acquire)
 }
@@ -65,7 +65,7 @@ fn anAtomicFlagIsSetAndCleared() {
 @test
 fn aOnceCellIsMadeOnce() {
     let cell = OnceCell<String>()
-    assert(cell.get() == none)
+    expect(cell.get() == none)
     var made = 0
     assertEqual(cell.getOrInit {
         made += 1
@@ -119,7 +119,7 @@ fn anAtomicTakesEveryOrdering() {
     assertEqual(n.load(), 20)
     atomicFence(.Release)
     atomicFence(.AcquireRelease)
-    assert(MemoryOrdering.Acquire != MemoryOrdering.Release)
+    expect(MemoryOrdering.Acquire != MemoryOrdering.Release)
     assertEqual("\(MemoryOrdering.AcquireRelease)", "AcquireRelease")
 }
 
@@ -179,7 +179,7 @@ fn aOnceCellLetsItsValueGoIfItMadeOne() {
     let gone = Atomic<Int>(0)
     do {
         let empty = OnceCell<Counted>()
-        assert(empty.get() == none)
+        expect(empty.get() == none)
     }
     assertEqual(gone.load(), 0)
     do {
@@ -209,7 +209,7 @@ fn aOnceCellsAskersWaitForTheTaskMakingIt() async {
         await Task.yield()
     }
     let asker = Task.spawn {
-        assert(cell.get() == none)
+        expect(cell.get() == none)
         asking.store(true)
         return cell.getOrInit { 8 }
     }

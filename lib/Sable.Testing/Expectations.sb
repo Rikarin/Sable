@@ -50,6 +50,7 @@ public fn expect(_ condition: Bool, _ message: String = "", file: String = #file
     if !condition {
         recordFailure(expression, message, file, line)
     }
+    expression.forget()
 }
 
 /// Fails the test and ends it unless the condition holds, saying what the
@@ -66,6 +67,7 @@ public fn require(_ condition: Bool, _ message: String = "", file: String = #fil
         recordFailure(expression, message, file, line)
         endFailedTest()
     }
+    expression.forget()
 }
 
 /// The value, when there is one; with none, the test fails and ends.
@@ -76,6 +78,7 @@ public fn require(_ condition: Bool, _ message: String = "", file: String = #fil
 /// ```
 public fn require<T>(_ value: T?, _ message: String = "", file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) -> T {
     if let value = value {
+        expression.forget()
         return value
     }
     recordFailure(expression, message.isEmpty ? "there is no value" : message, file, line)

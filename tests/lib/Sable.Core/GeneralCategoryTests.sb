@@ -30,8 +30,8 @@ fn eachCategoryIsInOneMajorClass() {
 
 @test
 fn categoriesCompareAndDescribeThemselves() {
-    assert(GeneralCategory.Control == GeneralCategory.Control, "equal to itself")
-    assert(GeneralCategory.Control != GeneralCategory.Format, "different cases differ")
+    expect(GeneralCategory.Control == GeneralCategory.Control, "equal to itself")
+    expect(GeneralCategory.Control != GeneralCategory.Format, "different cases differ")
     assertEqual("\(GeneralCategory.MathSymbol)", "MathSymbol")
 }
 

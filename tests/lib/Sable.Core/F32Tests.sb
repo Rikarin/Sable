@@ -37,8 +37,8 @@ fn theLimitsAreTheFormats() {
 fn infinityAndNaNAreThemselves() {
     assertEqual(F32.infinity.toString(), "inf")
     assertEqual((-F32.infinity).toString(), "-inf")
-    assert(F32.nan.isNaN, "NaN is NaN")
-    assert(F32.nan != F32.nan, "NaN equals nothing")
+    expect(F32.nan.isNaN, "NaN is NaN")
+    expect(F32.nan != F32.nan, "NaN equals nothing")
 }
 
 @test
@@ -54,5 +54,5 @@ fn theBitsRoundTrip() {
     assertEqual(F32.fromBits(0x3F800000), 1.0)
     assertEqual(F32.fromBits(F32.pi.bits), F32.pi)
     assertEqual(F32.leastNonzeroMagnitude.bits, 1)
-    assert((-0.0 as F32).bits != (0.0 as F32).bits, "the zeros differ in their sign bit")
+    expect((-0.0 as F32).bits != (0.0 as F32).bits, "the zeros differ in their sign bit")
 }

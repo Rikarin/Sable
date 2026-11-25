@@ -30,14 +30,14 @@ fn anEmptySpecSaysNothing() {
 fn everyPartIsReadInOrder() {
     let read = spec("*^+#012_.3e")
     assertEqual(read.fill, '*')
-    assert(read.alignment == .Center)
-    assert(read.sign == .Always)
-    assert(read.alternate)
-    assert(read.zeroPadded)
+    expect(read.alignment == .Center)
+    expect(read.sign == .Always)
+    expect(read.alternate)
+    expect(read.zeroPadded)
     assertEqual(read.width, 12)
-    assert(read.separator == '_')
-    assert(read.precision == 3)
-    assert(read.kind == .Exponent)
+    expect(read.separator == '_')
+    expect(read.precision == 3)
+    expect(read.kind == .Exponent)
     assertEqual(read.debugDescription(), "FormatSpec(fill: '*', alignment: .Center, sign: .Always, alternate: true, zeroPadded: true, width: 12, separator: '_', precision: 3, kind: .Exponent)")
 }
 
@@ -45,52 +45,52 @@ fn everyPartIsReadInOrder() {
 fn anAlignmentAloneHasASpaceForFill() {
     let read = spec("<8")
     assertEqual(read.fill, ' ')
-    assert(read.alignment == .Left)
+    expect(read.alignment == .Left)
     assertEqual(read.width, 8)
-    assert(spec(">").alignment == .Right)
-    assert(spec("^").alignment == .Center)
+    expect(spec(">").alignment == .Right)
+    expect(spec("^").alignment == .Center)
 }
 
 @test
 fn aFillIsAnyScalarBeforeAnAlignment() {
     assertEqual(spec("é>3").fill, 'é')
     assertEqual(spec("0<5").fill, '0')
-    assert(!spec("0<5").zeroPadded)
+    expect(!spec("0<5").zeroPadded)
     assertEqual(spec("<<2").fill, '<')
 }
 
 @test
 fn eachSignIsRead() {
-    assert(spec("+").sign == .Always)
-    assert(spec("-").sign == .Negative)
-    assert(spec(" ").sign == .Space)
+    expect(spec("+").sign == .Always)
+    expect(spec("-").sign == .Negative)
+    expect(spec(" ").sign == .Space)
 }
 
 @test
 fn aCommaSeparatorIsRead() {
-    assert(spec(",").separator == ',')
-    assert(spec("").separator == none)
+    expect(spec(",").separator == ',')
+    expect(spec("").separator == none)
 }
 
 @test
 fn eachKindLetterIsRead() {
-    assert(spec("d").kind == .Decimal)
-    assert(spec("x").kind == .Hex)
-    assert(spec("X").kind == .UpperHex)
-    assert(spec("o").kind == .Octal)
-    assert(spec("b").kind == .Binary)
-    assert(spec("e").kind == .Exponent)
-    assert(spec("E").kind == .UpperExponent)
-    assert(spec("f").kind == .Fixed)
-    assert(spec("g").kind == .General)
-    assert(spec("G").kind == .UpperGeneral)
-    assert(spec("%").kind == .Percent)
-    assert(spec("?").kind == .Debug)
+    expect(spec("d").kind == .Decimal)
+    expect(spec("x").kind == .Hex)
+    expect(spec("X").kind == .UpperHex)
+    expect(spec("o").kind == .Octal)
+    expect(spec("b").kind == .Binary)
+    expect(spec("e").kind == .Exponent)
+    expect(spec("E").kind == .UpperExponent)
+    expect(spec("f").kind == .Fixed)
+    expect(spec("g").kind == .General)
+    expect(spec("G").kind == .UpperGeneral)
+    expect(spec("%").kind == .Percent)
+    expect(spec("?").kind == .Debug)
 }
 
 @test
 fn aPrecisionOfZeroIsKept() {
-    assert(spec(".0").precision == 0)
+    expect(spec(".0").precision == 0)
     assertEqual(spec(".0").debugDescription(), "FormatSpec(precision: 0)")
 }
 

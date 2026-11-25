@@ -49,8 +49,8 @@ fn aScopeIsAnInterfacesIndexOrName() {
     let loopback = (try! NetworkInterface.all()).first(where: { $0.isLoopback })!
     assertEqual(Int(ip("fe80::1%\(loopback.name)").scope), loopback.index)
     assertEqual(Int(ip("fe80::1%\(loopback.index)").scope), loopback.index)
-    assert(ip("fe80::1%1") != ip("fe80::1%2"))
-    assert(ip("fe80::1%1") < ip("fe80::1%2"))
+    expect(ip("fe80::1%1") != ip("fe80::1%2"))
+    expect(ip("fe80::1%1") < ip("fe80::1%2"))
     assertEqual(ip("fe80::1").scoped(to: 3).scope, 3)
     assertEqual(IpAddress.v4Any.scoped(to: 3).scope, 0)
 }
@@ -64,15 +64,15 @@ fn anAddressIsItsBytes() {
     assertEqual(six.bytes[15], 0x29)
     assertEqual(IpAddress.fromBytes(six.bytes), six)
     assertEqual(ip("10.20.30.40").bytes, [10, 20, 30, 40])
-    assert(IpAddress.fromBytes([]) == none)
-    assert(IpAddress.fromBytes([1, 2, 3, 4, 5]) == none)
+    expect(IpAddress.fromBytes([]) == none)
+    expect(IpAddress.fromBytes([1, 2, 3, 4, 5]) == none)
 }
 
 @test
 fn addressesAreOrderedAndHashed() {
-    assert(ip("9.0.0.1") < ip("10.0.0.0"))
-    assert(ip("255.0.0.0") < ip("::"))
-    assert(ip("::1") < ip("::2") && ip("::ffff") < ip("1::"))
+    expect(ip("9.0.0.1") < ip("10.0.0.0"))
+    expect(ip("255.0.0.0") < ip("::"))
+    expect(ip("::1") < ip("::2") && ip("::ffff") < ip("1::"))
     var seen: [IpAddress: Int] = [:]
     seen[ip("::1")] = 1
     seen[ip("0:0::1")] = 2
@@ -85,13 +85,13 @@ fn addressesAreOrderedAndHashed() {
 @test
 fn aMappedAddressIsItsIpv4One() {
     let mapped = ip("::ffff:10.1.2.3")
-    assert(mapped.isV4Mapped && mapped.isV6 && !mapped.isV4)
-    assert(mapped != ip("10.1.2.3"))
+    expect(mapped.isV4Mapped && mapped.isV6 && !mapped.isV4)
+    expect(mapped != ip("10.1.2.3"))
     assertEqual(mapped.canonical, ip("10.1.2.3"))
     assertEqual(ip("10.1.2.3").mappedToV6, mapped)
     assertEqual(mapped.mappedToV6, mapped)
     assertEqual(ip("::1").canonical, ip("::1"))
-    assert(!ip("::fffe:1.2.3.4").isV4Mapped)
+    expect(!ip("::fffe:1.2.3.4").isV4Mapped)
 }
 
 /// The text's kinds, as one word.

@@ -103,14 +103,14 @@ fn oneOutsideATypeIsOverflowOrUnderflow() {
 
 @test
 fn everyNarrowTypeChecksItsRange() {
-    assert((try? I16.parse("32768")) == none)
-    assert((try? I32.parse("-2147483649")) == none)
-    assert((try? I64.parse("9223372036854775808")) == none)
-    assert((try? I128.parse("170141183460469231731687303715884105728")) == none)
-    assert((try? U16.parse("65536")) == none)
-    assert((try? U64.parse("18446744073709551616")) == none)
-    assert((try? UInt.parse("-1")) == none)
-    assert((try? U128.parse("-1")) == none)
+    expect((try? I16.parse("32768")) == none)
+    expect((try? I32.parse("-2147483649")) == none)
+    expect((try? I64.parse("9223372036854775808")) == none)
+    expect((try? I128.parse("170141183460469231731687303715884105728")) == none)
+    expect((try? U16.parse("65536")) == none)
+    expect((try? U64.parse("18446744073709551616")) == none)
+    expect((try? UInt.parse("-1")) == none)
+    expect((try? U128.parse("-1")) == none)
 }
 
 @test
@@ -123,7 +123,7 @@ fn negativeZeroIsZeroForAnUnsignedType() {
 fn aNumberPastEveryTypeOverflows() {
     assertEqual(intError("340282366920938463463374607431768211456") ?? .Empty, .Overflow)
     assertEqual(intError("-999999999999999999999999999999999999999999") ?? .Empty, .Underflow)
-    assert((try? U128.parse("340282366920938463463374607431768211456")) == none)
+    expect((try? U128.parse("340282366920938463463374607431768211456")) == none)
 }
 
 @test
@@ -259,18 +259,18 @@ fn floatsRoundToNearestTiesToEven() {
 @test
 fn aFloatTooLargeIsAnInfinity() {
     let inf = try! F64.parse("1e400")
-    assert(inf > 1.7976931348623157e308)
+    expect(inf > 1.7976931348623157e308)
     assertEqual(try! F64.parse("-1e400"), 0.0 - inf)
 }
 
 @test
 fn theWordsAreInfinityAndNaN() {
     let inf = try! F64.parse("inf")
-    assert(inf > 1.7976931348623157e308)
+    expect(inf > 1.7976931348623157e308)
     assertEqual(try! F64.parse("Infinity"), inf)
     assertEqual(try! F64.parse("-INF"), 0.0 - inf)
     let nan = try! F64.parse("NaN")
-    assert(nan != nan)
+    expect(nan != nan)
     assertEqual(floatError("infinite") ?? .Empty, .InvalidDigit(at: 0))
     assertEqual(floatError("nope") ?? .Empty, .InvalidDigit(at: 0))
 }
@@ -310,10 +310,10 @@ fn anF32IsRoundedOnce() {
     let up: F32 = 1.00000012
     assertEqual(try! F32.parse("1.000000059604644775390626"), up)
     let inf = try! F32.parse("1e39")
-    assert(F64(inf) > 1e300)
+    expect(F64(inf) > 1e300)
     assertEqual(try! F32.parse(" -2_5 ", styles: .Any), -25.0)
     let nan = try! F32.parse("nan")
-    assert(nan != nan)
+    expect(nan != nan)
 }
 
 @test
@@ -333,12 +333,12 @@ fn anF16IsRoundedAsIfOnce() {
     assertEqual(try! F16.parse("65519"), greatest)
     assertEqual(try! F16.parse("65519.99999999999999999"), greatest)
     let inf = try! F16.parse("65520")
-    assert(F64(inf) > 1e300)
-    assert(F64(try! F16.parse("-65520.000000000000000001")) < -1e300)
-    assert(F64(try! F16.parse("1e10")) > 1e300)
+    expect(F64(inf) > 1e300)
+    expect(F64(try! F16.parse("-65520.000000000000000001")) < -1e300)
+    expect(F64(try! F16.parse("1e10")) > 1e300)
     assertEqual(try! F16.parse("1_0", styles: .Separators), 10.0)
     let nan = try! F16.parse("NAN")
-    assert(nan != nan)
+    expect(nan != nan)
 }
 
 @test
@@ -381,9 +381,9 @@ fn everyF16RoundTrips() {
 @test
 fn theToHelpersAreParseOrNone() {
     assertEqual("42".toInt() ?? 0, 42)
-    assert("4x".toInt() == none)
+    expect("4x".toInt() == none)
     assertEqual("-128".toI8() ?? 0, -128)
-    assert("128".toI8() == none)
+    expect("128".toI8() == none)
     assertEqual("32767".toI16() ?? 0, 32767)
     assertEqual("-5".toI32() ?? 0, -5)
     assertEqual("5".toI64() ?? 0, 5)
@@ -399,10 +399,10 @@ fn theToHelpersAreParseOrNone() {
 
 @test
 fn toF64IsNoneForWhatIsNotFinite() {
-    assert("1e400".toF64() == none)
-    assert("inf".toF64() == none)
-    assert("nan".toF64() == none)
-    assert("x".toF64() == none)
+    expect("1e400".toF64() == none)
+    expect("inf".toF64() == none)
+    expect("nan".toF64() == none)
+    expect("x".toF64() == none)
 }
 
 // ---- Benchmarks ----------------------------------------------------------------
@@ -510,8 +510,8 @@ fn floatsHardToReadAreNearest() {
     assertEqual(try! F64.parse("2.2250738585072012e-308").bits, 0x10000000000000)
     // The greatest, and what rounds past it.
     assertEqual(try! F64.parse("1.7976931348623158e308"), 1.7976931348623157e308)
-    assert(try! F64.parse("1.7976931348623159e308") > 1.7976931348623157e308)
-    assert(try! F64.parse("-1e99999999999999999999") < -1.7976931348623157e308)
+    expect(try! F64.parse("1.7976931348623159e308") > 1.7976931348623157e308)
+    expect(try! F64.parse("-1e99999999999999999999") < -1.7976931348623157e308)
     assertEqual(try! F64.parse("1e-99999999999999999999"), 0.0)
     assertEqual(try! F64.parse("0e99999999999999999999"), 0.0)
     assertEqual(try! F64.parse("1" + zeros(400) + "e-400"), 1.0)

@@ -7,22 +7,22 @@ import Sable.Testing
 @test
 fn aMaskIsMadeFromLanesOrOneValue() {
     let cleared = SIMDMask<4>()
-    assert(!cleared.anyTrue)
+    expect(!cleared.anyTrue)
     assertEqual(cleared, SIMDMask<4>(repeating: false))
     let full = SIMDMask<4>(repeating: true)
-    assert(full.allTrue)
+    expect(full.allTrue)
     assertEqual(full.count, 4)
     let mask = SIMDMask<2>([true, false])
-    assert(mask[0] && !mask[1])
+    expect(mask[0] && !mask[1])
 }
 
 @test
 fn aLaneIsReadAndWrittenByIndex() {
     var mask = SIMDMask<8>()
     mask[5] = true
-    assert(mask[5])
+    expect(mask[5])
     assertEqual(mask.trueCount, 1)
-    assert(mask.anyTrue && !mask.allTrue)
+    expect(mask.anyTrue && !mask.allTrue)
 }
 
 @test
@@ -33,7 +33,7 @@ fn masksCombineLaneByLane() {
     assertEqual(a | b, SIMDMask<4>([true, true, true, false]))
     assertEqual(a ^ b, SIMDMask<4>([false, true, true, false]))
     assertEqual(~a, SIMDMask<4>([false, false, true, true]))
-    assert(a != b)
+    expect(a != b)
 }
 
 @test

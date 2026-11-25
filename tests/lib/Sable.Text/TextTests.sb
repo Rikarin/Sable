@@ -10,7 +10,7 @@ import Sable.Testing
 fn parsingIntegers() {
     assertEqual(parseInt("-42") ?? 0, -42)
     assertEqual(parseInt("ff", radix: 16) ?? 0, 255)
-    assert(parseInt("4x") == none)
+    expect(parseInt("4x") == none)
 }
 
 @test
@@ -31,9 +31,9 @@ fn integersInEveryRadixAndSign() {
     assertEqual(parseInt("+7") ?? 0, 7)
     assertEqual(parseInt("Zz", radix: 36) ?? 0, 1295)
     assertEqual(parseInt("10", radix: 99) ?? 0, 10)
-    assert(parseInt("") == none && parseInt("-") == none, "no digits")
-    assert(parseInt("9223372036854775808") == none, "too big")
+    expect(parseInt("") == none && parseInt("-") == none, "no digits")
+    expect(parseInt("9223372036854775808") == none, "too big")
     assertEqual(parseInt("-9223372036854775808") ?? 0, -9223372036854775807 - 1)
-    assert(parseInt("99999999999999999999") == none, "far too big")
-    assert(parseInt("1!") == none, "not a digit")
+    expect(parseInt("99999999999999999999") == none, "far too big")
+    expect(parseInt("1!") == none, "not a digit")
 }

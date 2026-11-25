@@ -17,9 +17,9 @@ fn hex(_ bytes: U8[:]) -> String {
 @test
 fn aNewBufferIsEmptyAndLittleEndian() {
     let buffer = ByteBuffer()
-    assert(buffer.isEmpty, "nothing written yet")
+    expect(buffer.isEmpty, "nothing written yet")
     assertEqual(buffer.count, 0)
-    assert(buffer.endian == .Little, "little-endian unless told otherwise")
+    expect(buffer.endian == .Little, "little-endian unless told otherwise")
 }
 
 @test
@@ -131,7 +131,7 @@ fn clearEmptiesTheBuffer() {
     var buffer = ByteBuffer()
     buffer.writeU64(1)
     buffer.clear()
-    assert(buffer.isEmpty, "cleared")
+    expect(buffer.isEmpty, "cleared")
     buffer.writeU8(9)
     assertEqual(hex(buffer.bytes), "09")
 }
@@ -146,7 +146,7 @@ fn writeAThousandMixedValues() {
         buffer.writeF64(F64(i))
         i = i + 1
     }
-    assert(buffer.count > 12_000)
+    expect(buffer.count > 12_000)
 }
 
 @test
@@ -160,7 +160,7 @@ fn reservedBytesAreWrittenInPlaceAndTheUnusedGivenBack() {
         return 3
     }
     assertEqual(buffer.count, 4)
-    assert(buffer.bytes == [0xFF, 1, 2, 3])
+    expect(buffer.bytes == [0xFF, 1, 2, 3])
     buffer.write(reserving: 4) { bytes, start in
         return 0
     }
@@ -169,24 +169,24 @@ fn reservedBytesAreWrittenInPlaceAndTheUnusedGivenBack() {
         bytes[start + 1] = 9
         return 2
     }
-    assert(buffer.bytes == [0xFF, 1, 2, 3, 0, 9])
+    expect(buffer.bytes == [0xFF, 1, 2, 3, 0, 9])
 }
 
 @test
 fn aBufferKeepsItsRoom() {
     var buffer = ByteBuffer()
     buffer.reserveCapacity(1000)
-    assert(buffer.capacity >= 1000)
+    expect(buffer.capacity >= 1000)
     buffer.writeU64(1)
     buffer.clear()
-    assert(buffer.isEmpty)
-    assert(buffer.capacity >= 1000)
+    expect(buffer.isEmpty)
+    expect(buffer.capacity >= 1000)
     buffer.writeU8(7)
     let taken = buffer.takeBytes()
-    assert(taken == [7])
-    assert(buffer.isEmpty)
+    expect(taken == [7])
+    expect(buffer.isEmpty)
     var reused = ByteBuffer(reusing: taken)
-    assert(reused.isEmpty)
+    expect(reused.isEmpty)
     reused.writeU8(8)
-    assert(reused.bytes == [8])
+    expect(reused.bytes == [8])
 }

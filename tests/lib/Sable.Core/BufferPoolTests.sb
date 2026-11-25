@@ -9,10 +9,10 @@ import Sable.Testing
 fn aRentedBufferIsEmptyWithTheRoomAskedFor() {
     let pool = BufferPool()
     let small = pool.rent(minimumCapacity: 10)
-    assert(small.isEmpty)
-    assert(small.capacity >= 256)
+    expect(small.isEmpty)
+    expect(small.capacity >= 256)
     let big = pool.rent(minimumCapacity: 5000)
-    assert(big.capacity >= 8192)
+    expect(big.capacity >= 8192)
     assertEqual(pool.count, 0)
 }
 
@@ -24,8 +24,8 @@ fn aBufferGivenBackIsRentedAgainEmpty() {
     pool.giveBack(move bytes)
     assertEqual(pool.count, 1)
     let again = pool.rent(minimumCapacity: 600)
-    assert(again.isEmpty)
-    assert(again.capacity >= 1024)
+    expect(again.isEmpty)
+    expect(again.capacity >= 1024)
     assertEqual(pool.count, 0)
 }
 
@@ -67,11 +67,11 @@ fn aPoolKeepsOnlyWhatItsLimitsAllow() {
 fn aByteBufferWritesIntoAPooledBuffer() {
     let pool = BufferPool()
     var buffer = ByteBuffer(reusing: pool.rent(minimumCapacity: 512), endian: .Big)
-    assert(buffer.capacity >= 512)
+    expect(buffer.capacity >= 512)
     buffer.writeU16(0xCAFE)
     let bytes = buffer.takeBytes()
-    assert(buffer.isEmpty)
-    assert(bytes == [0xCA, 0xFE])
+    expect(buffer.isEmpty)
+    expect(bytes == [0xCA, 0xFE])
     pool.giveBack(move bytes)
     assertEqual(pool.count, 1)
 }

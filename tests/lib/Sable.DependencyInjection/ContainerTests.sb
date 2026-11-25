@@ -219,12 +219,12 @@ async fn everyFormOfParameterIsGiven() {
         assertEqual(service.strict.name(), "strict")
         assertEqual(service.rules.map { $0.name() }.joined(separator: ", "), "cheap, loyal to here")
         assertEqual(service.listed.count, 2)
-        assert(service.missing == none)
-        assert((service.session!) === scope.resolve(Session.self))
+        expect(service.missing == none)
+        expect((service.session!) === scope.resolve(Session.self))
         assertEqual(service.retries, 4)
-        assert(service.tickets() !== service.tickets())
-        assert(service.parent.child.value.parent! === service.parent)
-        assert(scope.resolve(Service.self) === service)
+        expect(service.tickets() !== service.tickets())
+        expect(service.parent.child.value.parent! === service.parent)
+        expect(scope.resolve(Service.self) === service)
     }
     assertEqual(sink.all, "ContainerTests.Service:hello ticket ticket session")
 }
@@ -234,12 +234,12 @@ async fn aScopedServiceIsOneForItsScope() {
     let provider = await provided()
     let first = await provider.withScope { scope in scope.resolve(Session.self) }
     let second = await provider.withScope { scope in
-        assert(scope.resolve(Session.self) === scope.resolve(Session.self))
-        assert(scope.resolve(Ticket.self) !== scope.resolve(Ticket.self))
+        expect(scope.resolve(Session.self) === scope.resolve(Session.self))
+        expect(scope.resolve(Ticket.self) !== scope.resolve(Ticket.self))
         return scope.resolve(Session.self)
     }
-    assert(first !== second)
-    assert(first.database === provider.resolve(Database.self))
+    expect(first !== second)
+    expect(first.database === provider.resolve(Database.self))
 }
 
 @test
@@ -248,10 +248,10 @@ async fn theProviderGivesWhatIsTheWholePrograms() {
     assertEqual(provider.resolve(Database.self).url, "here")
     assertEqual(provider.resolve((any Clock).self).now(), 12)
     assertEqual(provider.find(String.self, key: "title")!, "services of here")
-    assert(provider.find(String.self, key: "other") == none)
+    expect(provider.find(String.self, key: "other") == none)
     assertEqual(provider.find((any Rule).self, key: "strict")!.name(), "strict")
     let late = provider.resolve(Late.self)
-    assert(!late.clock.isMade)
+    expect(!late.clock.isMade)
     assertEqual(late.clock.value.now(), 12)
     assertEqual(late.again().size, 3)
     assertEqual(await provider.resolve(Counter.self).next(), 1)
@@ -310,12 +310,7 @@ async fn aScopeEndsWhenItsBodyThrows() {
 
 @test
 async fn whatASingletonThrowsIsTheBuilds() {
-    do {
-        _ = try await Services.build(Services { sink: Memory(), url: "nowhere" })
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "no database at nowhere")
-    }
+    await expectThrows(saying: "no database at nowhere") { _ = try await Services.build(Services { sink: Memory(), url: "nowhere" }) }
 }
 
 fn nowBy<C: ServiceContainer & Provides<any Clock>>(_ container: C) -> Int {
@@ -360,11 +355,11 @@ async fn theSameGraphIsACollections() {
         assertEqual(service.strict.name(), "strict")
         assertEqual(service.rules.map { $0.name() }.joined(separator: ", "), "cheap, loyal to here")
         assertEqual(service.listed.count, 2)
-        assert(service.missing == none)
-        assert((service.session!) === (try! scope.resolve(Session.self)))
+        expect(service.missing == none)
+        expect((service.session!) === (try! scope.resolve(Session.self)))
         assertEqual(service.retries, 4)
-        assert(service.tickets() !== service.tickets())
-        assert(service.parent.child.value.parent! === service.parent)
+        expect(service.tickets() !== service.tickets())
+        expect(service.parent.child.value.parent! === service.parent)
     }
     assertEqual(sink.all, "ContainerTests.Service:hello ticket ticket session")
     assertEqual(try! provider.resolve(String.self, key: "title"), "services of here")
@@ -394,24 +389,14 @@ async fn aTestPutsItsOwnInPlaceOfAContainers() {
 fn whatWaitsMustBeBuiltByWaiting() {
     var services = ServiceCollection()
     services.add(Services { sink: Memory() })
-    do {
-        _ = try services.build()
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "ContainerTests.Warm, ContainerTests.Database must be waited for: 'buildAsync' builds them")
-    }
+    expectThrows(saying: "ContainerTests.Warm, ContainerTests.Database must be waited for: 'buildAsync' builds them") { _ = try services.build() }
 }
 
 @test
 async fn whatASingletonThrowsIsTheCollectionsBuilds() {
     var services = ServiceCollection()
     services.add(Services { sink: Memory(), url: "nowhere" })
-    do {
-        _ = try await services.buildAsync()
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "ContainerTests.Database could not be made: no database at nowhere")
-    }
+    await expectThrows(saying: "ContainerTests.Database could not be made: no database at nowhere") { _ = try await services.buildAsync() }
 }
 
 // ---- A container made of nothing, with what is waited for as it ends -------

@@ -7,10 +7,10 @@ import Sable.Validation
 
 @test
 fn aPatternMatchesSomewhereUnlessAnchored() {
-    assert(passes("xaby") { $0.matches("ab") })
-    assert(!passes("xaby") { $0.matches("^ab$") })
-    assert(passes("AB") { $0.matches("ab", options: .IgnoreCase) })
-    assert(passes("ab") { $0.matches(try! Regex("a.")) })
+    expect(passes("xaby") { $0.matches("ab") })
+    expect(!passes("xaby") { $0.matches("^ab$") })
+    expect(passes("AB") { $0.matches("ab", options: .IgnoreCase) })
+    expect(passes("ab") { $0.matches(try! Regex("a.")) })
     let failure = verdict("x") { $0.matches("a+") }.failures[0]
     assertEqual(failure.message, "'It' is not in the correct format.")
     assertEqual(failure.placeholders["RegularExpression"] ?? "", "a+")
@@ -19,14 +19,14 @@ fn aPatternMatchesSomewhereUnlessAnchored() {
 @test
 fn aUrlIsAnAbsoluteOneTheParserReads() {
     for text in ["https://example.org", "http://[::1]:8080/a?b#c", "ftp://h/x", "mailto:a@b.c", "urn:isbn:0451450523", "https://münchen.de/"] {
-        assert(passes(text) { $0.url() })
+        require(passes(text) { $0.url() })
     }
     for text in ["", "example.org", "/path", "http://", "https://exa mple.org", "http://[::1", "http://a:99999/"] {
-        assert(!passes(text) { $0.url() })
+        require(!passes(text) { $0.url() })
     }
-    assert(passes("HTTPS://x.org") { $0.url(schemes: ["http", "https"]) })
-    assert(!passes("ftp://x.org") { $0.url(schemes: ["http", "https"]) })
-    assert(!passes("nothing") { $0.url(schemes: ["http"]) })
+    expect(passes("HTTPS://x.org") { $0.url(schemes: ["http", "https"]) })
+    expect(!passes("ftp://x.org") { $0.url(schemes: ["http", "https"]) })
+    expect(!passes("nothing") { $0.url(schemes: ["http"]) })
     assertEqual(message("x") { $0.url() }, "'It' is not a valid URL.")
 }
 
@@ -38,7 +38,7 @@ fn aUuidIsInAFormItsParserReads() {
         assert(passes(text) { $0.uuid() })
     }
     for text in ["", "f81d4fae-7dec-11d0-a765-00a0c91e6bf", "g81d4fae-7dec-11d0-a765-00a0c91e6bf6", "f81d4fae7-dec-11d0-a765-00a0c91e6bf6"] {
-        assert(!passes(text) { $0.uuid() })
+        require(!passes(text) { $0.uuid() })
     }
     assertEqual(message("x") { $0.uuid() }, "'It' is not a valid UUID.")
 }
@@ -52,7 +52,7 @@ fn aCardNumberHasLuhnsSum() {
         assertEqual(passes(text) { $0.creditCard() }, text != "6304000000000000000" || luhn(text))
     }
     for text in ["", "4111111111111112", "4408041234567890", "4408 0412 3456 789x", "4408041234567891", "0000000", "00000000000000000000", "\u{0664}111111111111111"] {
-        assert(!passes(text) { $0.creditCard() })
+        require(!passes(text) { $0.creditCard() })
     }
     assertEqual(message("1") { $0.creditCard() }, "'It' is not a valid credit card number.")
 }
@@ -71,7 +71,7 @@ fn luhn(_ text: String) -> Bool {
 @test
 fn everyWrongDigitOfACardNumberIsFound() {
     let right = "4539578763621486"
-    assert(passes(right) { $0.creditCard() })
+    expect(passes(right) { $0.creditCard() })
     for i in 0..<16 {
         for d in 0..<10 {
             var changed = ""
@@ -87,21 +87,21 @@ fn everyWrongDigitOfACardNumberIsFound() {
 fn aPrecisionIsOfDigitsBeforeAndAfterThePoint() {
     // FluentValidation's ScalePrecision cases.
     for text in ["12.34", "2.34", "-2.34", "0.34", "12", "0"] {
-        assert(passes(try! Decimal.parse(text)) { $0.precisionScale(4, 2) })
+        require(passes(try! Decimal.parse(text)) { $0.precisionScale(4, 2) })
     }
     for text in ["123.456", "12.341", "123.4", "-123.4", "0.003", "1.234"] {
-        assert(!passes(try! Decimal.parse(text)) { $0.precisionScale(4, 2) })
+        require(!passes(try! Decimal.parse(text)) { $0.precisionScale(4, 2) })
     }
-    assert(!passes(try! Decimal.parse("1.2300")) { $0.precisionScale(4, 2) })
-    assert(passes(try! Decimal.parse("1.2300")) { $0.precisionScale(4, 2, ignoringTrailingZeros: true) })
+    expect(!passes(try! Decimal.parse("1.2300")) { $0.precisionScale(4, 2) })
+    expect(passes(try! Decimal.parse("1.2300")) { $0.precisionScale(4, 2, ignoringTrailingZeros: true) })
     assertEqual(message(try! Decimal.parse("123.456")) { $0.precisionScale(4, 2) },
         "'It' must not be more than 4 digits in total, with allowance for 2 decimals. 3 digits and 3 decimals were found.")
 }
 
 @test
 fn aDecimalIsWhatItsParserReads() {
-    assert(passes("12.50") { $0.decimal().precisionScale(4, 2) })
-    assert(!passes("12,50") { $0.decimal() })
-    assert(!passes("abc") { $0.precisionScale(4, 2) })
+    expect(passes("12.50") { $0.decimal().precisionScale(4, 2) })
+    expect(!passes("12,50") { $0.decimal() })
+    expect(!passes("abc") { $0.precisionScale(4, 2) })
     assertEqual(message("abc") { $0.decimal() }, "'It' is not a number.")
 }

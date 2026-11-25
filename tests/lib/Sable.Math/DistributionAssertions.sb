@@ -28,7 +28,7 @@ public fn kolmogorovSmirnov(_ draws: F64[:], _ cumulative: (F64) -> F64) -> F64 
 /// Fails unless the draws are of the distribution with the function.
 public fn assertFollows(_ draws: F64[:], _ cumulative: (F64) -> F64) {
     let statistic = kolmogorovSmirnov(draws, cumulative)
-    assert(statistic < 2.2, "Kolmogorov and Smirnov's statistic is \(statistic)")
+    expect(statistic < 2.2, "Kolmogorov and Smirnov's statistic is \(statistic)")
 }
 
 /// Fails unless the counts are in proportion to the shares, by chi-squared;
@@ -57,7 +57,7 @@ public fn assertShares(_ counts: Int[:], _ shares: F64[:]) {
         i += 1
     }
     let deviation = (statistic - degrees) / (2.0 * degrees).squareRoot()
-    assert(deviation < 6.0, "chi-squared is \(deviation) deviations off")
+    expect(deviation < 6.0, "chi-squared is \(deviation) deviations off")
 }
 
 /// The normal distribution's function, of mean 0 and deviation 1.

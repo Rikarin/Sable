@@ -70,12 +70,12 @@ fn everyLengthHasItsCodeOfKmac128() {
 fn aCodeOfKmac128IsValidForItsBytesKeyAndCustomizationAlone() {
     let key = SymmetricKey(message(32))
     let code = Kmac128.authenticationCode(for: message(50), using: key, customization: [1]).bytes
-    assert(Kmac128.isValid(code, for: message(50), using: key, customization: [1]))
-    assert(!Kmac128.isValid(code, for: message(50), using: key))
-    assert(!Kmac128.isValid(code, for: message(51), using: key, customization: [1]))
-    assert(!Kmac128.isValid(code, for: message(50), using: SymmetricKey(message(33)), customization: [1]))
-    assert(!Kmac128.isValid(code[..<20], for: message(50), using: key, customization: [1]))
-    assert(!Kmac128.isValid(code[..<15], for: message(50), using: key, customization: [1]))
+    expect(Kmac128.isValid(code, for: message(50), using: key, customization: [1]))
+    expect(!Kmac128.isValid(code, for: message(50), using: key))
+    expect(!Kmac128.isValid(code, for: message(51), using: key, customization: [1]))
+    expect(!Kmac128.isValid(code, for: message(50), using: SymmetricKey(message(33)), customization: [1]))
+    expect(!Kmac128.isValid(code[..<20], for: message(50), using: key, customization: [1]))
+    expect(!Kmac128.isValid(code[..<15], for: message(50), using: key, customization: [1]))
 }
 
 @test
@@ -83,10 +83,10 @@ fn aCodeOfKmac128InPartsIsTheWholes() {
     let key = SymmetricKey(message(32))
     var code = Kmac128(key: key)
     code.update(message(400)[..<200])
-    assert(code.finalize() == Kmac128.authenticationCode(for: message(200), using: key))
+    expect(code.finalize() == Kmac128.authenticationCode(for: message(200), using: key))
     code.update(message(400)[200...])
-    assert(code.finalize() == Kmac128.authenticationCode(for: message(400), using: key))
-    assert(code.finalize(count: 40) == Kmac128.authenticationCode(for: message(400), using: key, count: 40))
+    expect(code.finalize() == Kmac128.authenticationCode(for: message(400), using: key))
+    expect(code.finalize(count: 40) == Kmac128.authenticationCode(for: message(400), using: key, count: 40))
 }
 
 @test
@@ -94,7 +94,7 @@ fn outputOfKmac128WithNoFixedLengthBeginsAsAShorterOneDoes() {
     let code = Kmac128(key: SymmetricKey(message(32)))
     var short = code.reader()
     var long = code.reader()
-    assert(long.read(count: 300).starts(with: short.read(count: 20)))
+    expect(long.read(count: 300).starts(with: short.read(count: 20)))
 }
 
 // NIST's samples, which OpenSSL gives too.
@@ -122,12 +122,12 @@ fn everyLengthHasItsCodeOfKmac256() {
 fn aCodeOfKmac256IsValidForItsBytesKeyAndCustomizationAlone() {
     let key = SymmetricKey(message(32))
     let code = Kmac256.authenticationCode(for: message(50), using: key, customization: [1]).bytes
-    assert(Kmac256.isValid(code, for: message(50), using: key, customization: [1]))
-    assert(!Kmac256.isValid(code, for: message(50), using: key))
-    assert(!Kmac256.isValid(code, for: message(51), using: key, customization: [1]))
-    assert(!Kmac256.isValid(code, for: message(50), using: SymmetricKey(message(33)), customization: [1]))
-    assert(!Kmac256.isValid(code[..<20], for: message(50), using: key, customization: [1]))
-    assert(!Kmac256.isValid(code[..<15], for: message(50), using: key, customization: [1]))
+    expect(Kmac256.isValid(code, for: message(50), using: key, customization: [1]))
+    expect(!Kmac256.isValid(code, for: message(50), using: key))
+    expect(!Kmac256.isValid(code, for: message(51), using: key, customization: [1]))
+    expect(!Kmac256.isValid(code, for: message(50), using: SymmetricKey(message(33)), customization: [1]))
+    expect(!Kmac256.isValid(code[..<20], for: message(50), using: key, customization: [1]))
+    expect(!Kmac256.isValid(code[..<15], for: message(50), using: key, customization: [1]))
 }
 
 @test
@@ -135,10 +135,10 @@ fn aCodeOfKmac256InPartsIsTheWholes() {
     let key = SymmetricKey(message(32))
     var code = Kmac256(key: key)
     code.update(message(400)[..<200])
-    assert(code.finalize() == Kmac256.authenticationCode(for: message(200), using: key))
+    expect(code.finalize() == Kmac256.authenticationCode(for: message(200), using: key))
     code.update(message(400)[200...])
-    assert(code.finalize() == Kmac256.authenticationCode(for: message(400), using: key))
-    assert(code.finalize(count: 40) == Kmac256.authenticationCode(for: message(400), using: key, count: 40))
+    expect(code.finalize() == Kmac256.authenticationCode(for: message(400), using: key))
+    expect(code.finalize(count: 40) == Kmac256.authenticationCode(for: message(400), using: key, count: 40))
 }
 
 @test
@@ -146,7 +146,7 @@ fn outputOfKmac256WithNoFixedLengthBeginsAsAShorterOneDoes() {
     let code = Kmac256(key: SymmetricKey(message(32)))
     var short = code.reader()
     var long = code.reader()
-    assert(long.read(count: 300).starts(with: short.read(count: 20)))
+    expect(long.read(count: 300).starts(with: short.read(count: 20)))
 }
 
 // NIST's samples of KMACXOF, which @noble/hashes gives too.
@@ -171,19 +171,19 @@ fn kmac128InPartsIsCheckedAsItStands() {
     let whole = code.finalize()
     var bytes: U8[>..] = []
     bytes.append(utf8: "a message")
-    assert(whole == Kmac128.authenticationCode(for: bytes, using: key, customization: [1]))
-    assert(code.isValid(whole) && code.isValid(whole.bytes) && code.isValid(code.finalize(count: 16)))
+    expect(whole == Kmac128.authenticationCode(for: bytes, using: key, customization: [1]))
+    expect(code.isValid(whole) && code.isValid(whole.bytes) && code.isValid(code.finalize(count: 16)))
     // A part of a code is not the code of that length.
-    assert(!code.isValid(whole.bytes[..<24]) && !code.isValid(code.finalize(count: 15)))
-    assert(Kmac128.isValid(whole, for: bytes, using: key, customization: [1]))
-    assert(!Kmac128.isValid(whole, for: bytes, using: key))
+    expect(!code.isValid(whole.bytes[..<24]) && !code.isValid(code.finalize(count: 15)))
+    expect(Kmac128.isValid(whole, for: bytes, using: key, customization: [1]))
+    expect(!Kmac128.isValid(whole, for: bytes, using: key))
     var reader = code.reader()
     let output = reader.read(count: 100)
     // A part of the output is.
-    assert(code.isValidOutput(output) && code.isValidOutput(output[..<16]))
-    assert(!code.isValidOutput(output[..<15]) && !code.isValidOutput(output[1...]) && !code.isValidOutput(whole.bytes))
+    expect(code.isValidOutput(output) && code.isValidOutput(output[..<16]))
+    expect(!code.isValidOutput(output[..<15]) && !code.isValidOutput(output[1...]) && !code.isValidOutput(whole.bytes))
     code.update([1])
-    assert(!code.isValid(whole) && !code.isValidOutput(output))
+    expect(!code.isValid(whole) && !code.isValidOutput(output))
 }
 
 @test
@@ -195,17 +195,17 @@ fn kmac256InPartsIsCheckedAsItStands() {
     let whole = code.finalize()
     var bytes: U8[>..] = []
     bytes.append(utf8: "a message")
-    assert(whole == Kmac256.authenticationCode(for: bytes, using: key, customization: [1]))
-    assert(code.isValid(whole) && code.isValid(whole.bytes) && code.isValid(code.finalize(count: 16)))
+    expect(whole == Kmac256.authenticationCode(for: bytes, using: key, customization: [1]))
+    expect(code.isValid(whole) && code.isValid(whole.bytes) && code.isValid(code.finalize(count: 16)))
     // A part of a code is not the code of that length.
-    assert(!code.isValid(whole.bytes[..<24]) && !code.isValid(code.finalize(count: 15)))
-    assert(Kmac256.isValid(whole, for: bytes, using: key, customization: [1]))
-    assert(!Kmac256.isValid(whole, for: bytes, using: key))
+    expect(!code.isValid(whole.bytes[..<24]) && !code.isValid(code.finalize(count: 15)))
+    expect(Kmac256.isValid(whole, for: bytes, using: key, customization: [1]))
+    expect(!Kmac256.isValid(whole, for: bytes, using: key))
     var reader = code.reader()
     let output = reader.read(count: 100)
     // A part of the output is.
-    assert(code.isValidOutput(output) && code.isValidOutput(output[..<16]))
-    assert(!code.isValidOutput(output[..<15]) && !code.isValidOutput(output[1...]) && !code.isValidOutput(whole.bytes))
+    expect(code.isValidOutput(output) && code.isValidOutput(output[..<16]))
+    expect(!code.isValidOutput(output[..<15]) && !code.isValidOutput(output[1...]) && !code.isValidOutput(whole.bytes))
     code.update([1])
-    assert(!code.isValid(whole) && !code.isValidOutput(output))
+    expect(!code.isValid(whole) && !code.isValidOutput(output))
 }

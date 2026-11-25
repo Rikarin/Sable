@@ -11,24 +11,24 @@ fn countAndIsEmptyDescribeTheElements() {
     let empty: Int[>..] = []
     let three: Int[>..] = [1, 2, 3]
     assertEqual(empty.count, 0)
-    assert(empty.isEmpty)
+    expect(empty.isEmpty)
     assertEqual(three.count, 3)
-    assert(!three.isEmpty)
+    expect(!three.isEmpty)
 }
 
 @test
 fn sliceViewsARunOfTheElements() {
     let xs: Int[>..] = [1, 2, 3, 4]
     let middle = xs.slice(from: 1, to: 3)
-    assert(middle == [2, 3])
+    expect(middle == [2, 3])
     assertEqual(xs.slice(from: 2, to: 2).count, 0)
 }
 
 @test
 fn firstAndLastAreNoneForAnEmptyArray() {
     let empty: String[>..] = []
-    assert(empty.first == none)
-    assert(empty.last == none)
+    expect(empty.first == none)
+    expect(empty.last == none)
 }
 
 @test
@@ -47,8 +47,8 @@ fn toArrayOfAWholeArrayIsAnEqualCopy() {
     var copy = xs.toArray()
     copy.append(4)
     xs[0] = 9
-    assert(xs == [9, 2, 3])
-    assert(copy == [1, 2, 3, 4])
+    expect(xs == [9, 2, 3])
+    expect(copy == [1, 2, 3, 4])
 }
 
 @test
@@ -56,7 +56,7 @@ fn toArrayOfASliceCopiesItsRun() {
     let words: String[>..] = ["a", "b", "c", "d"]
     var run = words[1..<3].toArray()
     run.append("e")
-    assert(run == ["b", "c", "e"])
+    expect(run == ["b", "c", "e"])
     assertEqual(words[2...].toArray().count, 2)
     let nothing: Int[>..] = []
     assertEqual(nothing.toArray().count, 0)
@@ -65,8 +65,8 @@ fn toArrayOfASliceCopiesItsRun() {
 @test
 fn containsFindsAnEqualElement() {
     let xs: String[>..] = ["pear", "fig"]
-    assert(xs.contains(element: "fig"))
-    assert(!xs.contains(element: "kiwi"))
+    expect(xs.contains(element: "fig"))
+    expect(!xs.contains(element: "kiwi"))
 }
 
 @test
@@ -74,7 +74,7 @@ fn appendContentsOfAddsEveryElementInOrder() {
     var grow: Int[>..] = [1]
     grow.append(contentsOf: [2, 3])
     grow.append(contentsOf: grow[0..<2])
-    assert(grow == [1, 2, 3, 1, 2])
+    expect(grow == [1, 2, 3, 1, 2])
     var shrink: String[>..<] = []
     shrink.append(contentsOf: ["x", "y"])
     assertEqual(shrink.count, 2)
@@ -85,15 +85,15 @@ fn appendContentsOfAddsEveryElementInOrder() {
 fn reserveCapacityMakesRoomWithoutChangingTheElements() {
     var xs: Int[>..] = [1, 2]
     xs.reserveCapacity(100)
-    assert(xs.capacity >= 100)
-    assert(xs == [1, 2])
+    expect(xs.capacity >= 100)
+    expect(xs == [1, 2])
     let before = xs.capacity
     xs.reserveCapacity(10)
     assertEqual(xs.capacity, before)
     var shrink: Int[>..<] = []
     assertEqual(shrink.capacity, 0)
     shrink.reserveCapacity(8)
-    assert(shrink.capacity >= 8)
+    expect(shrink.capacity >= 8)
 }
 
 @test
@@ -102,8 +102,8 @@ fn reserveCapacityOfAnArrayCopyLeavesTheOriginal() {
     var ys = xs
     ys.reserveCapacity(64)
     ys.append(4)
-    assert(xs == [1, 2, 3])
-    assert(ys == [1, 2, 3, 4])
+    expect(xs == [1, 2, 3])
+    expect(ys == [1, 2, 3, 4])
 }
 
 @test
@@ -144,27 +144,27 @@ fn elementsAreRemovedKeepingTheBuffer() {
     xs.reserveCapacity(64)
     xs.append(contentsOf: ["a", "b", "c", "d"])
     xs.removeLast(3)
-    assert(xs == ["a"])
-    assert(xs.capacity >= 64)
+    expect(xs == ["a"])
+    expect(xs.capacity >= 64)
     xs.removeLast(0)
-    assert(xs == ["a"])
+    expect(xs == ["a"])
     xs.append("e")
     xs.removeAll(keepingCapacity: true)
-    assert(xs.isEmpty)
-    assert(xs.capacity >= 64)
+    expect(xs.isEmpty)
+    expect(xs.capacity >= 64)
     xs.append("f")
     xs.removeAll()
-    assert(xs.isEmpty)
+    expect(xs.isEmpty)
     var ys: Int[>..<] = [1, 2, 3]
     ys.removeLast(2)
-    assert(ys == [1])
+    expect(ys == [1])
 }
 
 @test
 fn repeatingMakesCopiesOfAnyElement() {
     assertEqual(Int[>..](repeating: 7, count: 3), [7, 7, 7])
     assertEqual(String[>..<](repeating: "a", count: 2), ["a", "a"])
-    assert(Int[>..](repeating: 1, count: 0).isEmpty)
+    expect(Int[>..](repeating: 1, count: 0).isEmpty)
     var bytes: U8[>..] = [1]
     bytes.append(repeating: 0xFF, count: 100)
     assertEqual(bytes.count, 101)

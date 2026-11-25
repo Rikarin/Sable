@@ -8,7 +8,7 @@ import Sable.Text
 
 // The bytes are the ones expected; when not, both are shown in hexadecimal.
 fn assertBytes(_ actual: U8[:], _ expected: U8[:]) {
-    assert(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
+    expect(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
 }
 
 fn decodeError(_ text: String) -> DecodeError? {
@@ -44,7 +44,7 @@ fn everyByteValueRoundTripsInEitherCase() {
     let lower = Hex.encode(bytes)
     let upper = Hex.encode(bytes, uppercase: true)
     assertEqual(lower.utf8Count, 512)
-    assert(lower.hasPrefix("000102") && lower.hasSuffix("fdfeff"), "two lower-case digits a byte, high first")
+    expect(lower.hasPrefix("000102") && lower.hasSuffix("fdfeff"), "two lower-case digits a byte, high first")
     assertEqual(upper, lower.uppercased())
     assertBytes(try! Hex.decode(lower), bytes)
     assertBytes(try! Hex.decode(upper), bytes)
@@ -146,7 +146,7 @@ fn everyByteThatIsNoDigitIsFoundAtEveryPosition() {
                 if digits.contains(U8(value)) {
                     assert(thrown == none)
                 } else {
-                    assert(thrown == .InvalidCharacter(at: at, byte: U8(value)))
+                    assertEqual(thrown, .InvalidCharacter(at: at, byte: U8(value)))
                 }
             }
             text[at] = held

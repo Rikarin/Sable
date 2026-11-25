@@ -8,7 +8,7 @@ fn edited(_ text: String, _ change: (YamlNode) -> Void) throws -> String {
     let stream = try YamlStream(text)
     change(stream.documents[0].root)
     let after = try stream.text()
-    assert((try Yaml.parseAll(after))[0] == stream.documents[0].root, after)
+    expect((try Yaml.parseAll(after))[0] == stream.documents[0].root, after)
     return after
 }
 
@@ -63,7 +63,7 @@ fn commentsAreGiven() throws {
     assertEqual(root["server"]!["ports"]![1]!.trailingComment ?? "", "tls")
     assertEqual(root["server"]!["opts"]!.trailingComment ?? "", "flow")
     assertEqual(root["script"]!.trailingComment ?? "", "run")
-    assert(root.entries[0].key.comment == none && root["tail"]!.trailingComment == none && root.entries[4].key.comment == none)
+    expect(root.entries[0].key.comment == none && root["tail"]!.trailingComment == none && root.entries[4].key.comment == none)
     let top = (try YamlStream("# one\n#two\nk: &a !!map # on\n  # in\n  x: 1\n")).documents[0].root
     assertEqual(top.entries[0].key.comment ?? "", "one\ntwo")
     assertEqual(top["k"]!.trailingComment ?? "", "on")

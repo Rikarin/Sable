@@ -10,8 +10,8 @@ fn monthsAreNumberedFromJanuary() {
         assertEqual(Month.of(n)!.number, n)
         n += 1
     }
-    assert(Month.of(0) == none)
-    assert(Month.of(13) == none)
+    expect(Month.of(0) == none)
+    expect(Month.of(13) == none)
 }
 
 @test

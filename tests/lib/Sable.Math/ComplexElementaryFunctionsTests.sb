@@ -19,7 +19,7 @@ import FloatAssertions
 fn assertNear(_ actual: Complex<F64>, _ re: F64, _ im: F64) {
     let expected = Complex(re, im)
     let error = (actual - expected).magnitude
-    assert(error <= 4.0 * F64.epsilon * expected.magnitude, "expected \(expected), got \(actual)")
+    expect(error <= 4.0 * F64.epsilon * expected.magnitude, "expected \(expected), got \(actual)")
     if re.isNormal {
         assertWithin(actual.real, re, ulps: 16)
     }
@@ -32,7 +32,7 @@ fn assertNear(_ actual: Complex<F64>, _ re: F64, _ im: F64) {
 fn assertNear(_ actual: Complex<F32>, _ re: F32, _ im: F32) {
     let expected = Complex(re, im)
     let error = (actual - expected).magnitude
-    assert(error <= 4.0 * F32.epsilon * expected.magnitude, "expected \(expected), got \(actual)")
+    expect(error <= 4.0 * F32.epsilon * expected.magnitude, "expected \(expected), got \(actual)")
     if re.isNormal {
         assertWithin(actual.real, re, ulps: 16)
     }
@@ -93,20 +93,20 @@ fn sineSquaredPlusCosineSquaredIsOne() {
 @test
 fn theTangentIsTheSineOverTheCosineAndTanhLikewise() {
     let z = Complex(0.7, -1.2)
-    assert((tan(z) - sin(z) / cos(z)).magnitude <= 4.0 * F64.epsilon * tan(z).magnitude)
-    assert((tanh(z) - sinh(z) / cosh(z)).magnitude <= 4.0 * F64.epsilon * tanh(z).magnitude)
+    expect((tan(z) - sin(z) / cos(z)).magnitude <= 4.0 * F64.epsilon * tan(z).magnitude)
+    expect((tanh(z) - sinh(z) / cosh(z)).magnitude <= 4.0 * F64.epsilon * tanh(z).magnitude)
 }
 
 @test
 fn eachInverseUndoesItsFunctionNearZero() {
     let z = Complex(0.3, -0.4)
     let tolerance = 8.0 * F64.epsilon
-    assert((sin(asin(z)) - z).magnitude <= tolerance)
-    assert((cos(acos(z)) - z).magnitude <= tolerance)
-    assert((tan(atan(z)) - z).magnitude <= tolerance)
-    assert((sinh(asinh(z)) - z).magnitude <= tolerance)
-    assert((cosh(acosh(z)) - z).magnitude <= tolerance)
-    assert((tanh(atanh(z)) - z).magnitude <= tolerance)
+    expect((sin(asin(z)) - z).magnitude <= tolerance)
+    expect((cos(acos(z)) - z).magnitude <= tolerance)
+    expect((tan(atan(z)) - z).magnitude <= tolerance)
+    expect((sinh(asinh(z)) - z).magnitude <= tolerance)
+    expect((cosh(acosh(z)) - z).magnitude <= tolerance)
+    expect((tanh(atanh(z)) - z).magnitude <= tolerance)
 }
 
 @test
@@ -114,19 +114,19 @@ fn theFunctionsAreSymmetricInTheRealAxis() {
     // f(conj z) = conj f(z) for each of them, to the bit.
     let z = Complex(0.8, 1.7)
     let w = z.conjugate
-    assert(exp(w) == exp(z).conjugate && log(w) == log(z).conjugate && sqrt(w) == sqrt(z).conjugate)
-    assert(sin(w) == sin(z).conjugate && cos(w) == cos(z).conjugate && tan(w) == tan(z).conjugate)
-    assert(sinh(w) == sinh(z).conjugate && cosh(w) == cosh(z).conjugate && tanh(w) == tanh(z).conjugate)
-    assert(asin(w) == asin(z).conjugate && acos(w) == acos(z).conjugate && atan(w) == atan(z).conjugate)
-    assert(asinh(w) == asinh(z).conjugate && acosh(w) == acosh(z).conjugate && atanh(w) == atanh(z).conjugate)
+    expect(exp(w) == exp(z).conjugate && log(w) == log(z).conjugate && sqrt(w) == sqrt(z).conjugate)
+    expect(sin(w) == sin(z).conjugate && cos(w) == cos(z).conjugate && tan(w) == tan(z).conjugate)
+    expect(sinh(w) == sinh(z).conjugate && cosh(w) == cosh(z).conjugate && tanh(w) == tanh(z).conjugate)
+    expect(asin(w) == asin(z).conjugate && acos(w) == acos(z).conjugate && atan(w) == atan(z).conjugate)
+    expect(asinh(w) == asinh(z).conjugate && acosh(w) == acosh(z).conjugate && atanh(w) == atanh(z).conjugate)
 }
 
 @test
 fn theOddFunctionsAreOdd() {
     let z = Complex(0.8, -1.7)
-    assert(sin(-z) == -sin(z) && tan(-z) == -tan(z) && sinh(-z) == -sinh(z) && tanh(-z) == -tanh(z))
-    assert(asin(-z) == -asin(z) && atan(-z) == -atan(z) && asinh(-z) == -asinh(z) && atanh(-z) == -atanh(z))
-    assert(cos(-z) == cos(z) && cosh(-z) == cosh(z))
+    expect(sin(-z) == -sin(z) && tan(-z) == -tan(z) && sinh(-z) == -sinh(z) && tanh(-z) == -tanh(z))
+    expect(asin(-z) == -asin(z) && atan(-z) == -atan(z) && asinh(-z) == -asinh(z) && atanh(-z) == -atanh(z))
+    expect(cos(-z) == cos(z) && cosh(-z) == cosh(z))
 }
 
 // Branch cuts: the sign of the zero part picks the side.
@@ -233,7 +233,7 @@ fn atanhHasPolesAtOneAndMinusOne() {
     assertParts(atanh(Complex(1.0, 0.0)), inf, 0.0)
     assertParts(atanh(Complex(-1.0, -0.0)), -inf, -0.0)
     assertParts(atan(Complex(0.0, 1.0)), 0.0, inf)
-    assert(!atanh(Complex(1.0, 0.0)).isFinite)
+    expect(!atanh(Complex(1.0, 0.0)).isFinite)
 }
 
 @test
@@ -241,12 +241,12 @@ fn theFunctionsOfThePointAtInfinityAreThePointAtInfinity() {
     let infinite = Complex(inf, 1.0)
     let notANumber = Complex(nan, 0.0)
     for z in [infinite, notANumber] {
-        assert(!exp(z).isFinite && !log(z).isFinite && !sqrt(z).isFinite)
-        assert(!sin(z).isFinite && !cos(z).isFinite && !tan(z).isFinite)
-        assert(!sinh(z).isFinite && !cosh(z).isFinite && !tanh(z).isFinite)
-        assert(!asin(z).isFinite && !acos(z).isFinite && !atan(z).isFinite)
-        assert(!asinh(z).isFinite && !acosh(z).isFinite && !atanh(z).isFinite)
-        assert(!pow(z, Complex(2.0, 0.0)).isFinite)
+        require(!exp(z).isFinite && !log(z).isFinite && !sqrt(z).isFinite)
+        require(!sin(z).isFinite && !cos(z).isFinite && !tan(z).isFinite)
+        require(!sinh(z).isFinite && !cosh(z).isFinite && !tanh(z).isFinite)
+        require(!asin(z).isFinite && !acos(z).isFinite && !atan(z).isFinite)
+        require(!asinh(z).isFinite && !acosh(z).isFinite && !atanh(z).isFinite)
+        require(!pow(z, Complex(2.0, 0.0)).isFinite)
     }
 }
 
@@ -254,11 +254,11 @@ fn theFunctionsOfThePointAtInfinityAreThePointAtInfinity() {
 fn expAndTheHyperbolicFunctionsReachPastTheOverflowOfTheirScale() {
     // e^710 overflows; e^710 cos(pi/4) does not, nor sinh's or cosh's half.
     let z = Complex(710.0, F64.pi / 4.0)
-    assert(exp(z).isFinite && cosh(z).isFinite && sinh(z).isFinite)
-    assert(sinh(Complex(-710.0, 1.0)).real < 0.0)
+    expect(exp(z).isFinite && cosh(z).isFinite && sinh(z).isFinite)
+    expect(sinh(Complex(-710.0, 1.0)).real < 0.0)
     let narrow = Complex(89.0 as F32, F32.pi / 4.0)
-    assert(exp(narrow).isFinite)
-    assert(!exp(Complex(720.0, 0.5)).isFinite)
+    expect(exp(narrow).isFinite)
+    expect(!exp(Complex(720.0, 0.5)).isFinite)
 }
 
 @test
@@ -273,15 +273,15 @@ fn tanhIsOneWithATinyImaginaryPartFarFromTheAxis() {
 @test
 fn anIntegerPowerIsExactWhereItsProductsAre() {
     let i = Complex<F64>.i
-    assert(pow(i, 0) == Complex(1.0, 0.0))
+    expect(pow(i, 0) == Complex(1.0, 0.0))
     assertParts(pow(i, 2), -1.0, 0.0)
-    assert(pow(i, 3) == Complex(0.0, -1.0))
-    assert(pow(i, 4) == Complex(1.0, 0.0))
-    assert(pow(Complex(1.0, 1.0), 8) == Complex(16.0, 0.0))
+    expect(pow(i, 3) == Complex(0.0, -1.0))
+    expect(pow(i, 4) == Complex(1.0, 0.0))
+    expect(pow(Complex(1.0, 1.0), 8) == Complex(16.0, 0.0))
     assertParts(pow(Complex(2.0, 0.0), -3), 0.125, 0.0)
-    assert(pow(Complex(1.0, 0.0), Int.min) == Complex<F64>.one)
-    assert(pow(Complex(0.0, 0.0), -1) == Complex<F64>.infinity)
-    assert(pow(Complex(1.0 as F32, -1.0), 2) == Complex(0.0, -2.0))
+    expect(pow(Complex(1.0, 0.0), Int.min) == Complex<F64>.one)
+    expect(pow(Complex(0.0, 0.0), -1) == Complex<F64>.infinity)
+    expect(pow(Complex(1.0 as F32, -1.0), 2) == Complex(0.0, -2.0))
 }
 
 @test
@@ -296,7 +296,7 @@ fn zeroToAPowerIsZeroOneOrInfinite() {
     let zero = Complex<F64>.zero
     assertParts(pow(zero, Complex(2.0, 1.0)), 0.0, 0.0)
     assertParts(pow(zero, zero), 1.0, 0.0)
-    assert(pow(zero, Complex(-1.0, 0.0)) == Complex<F64>.infinity)
+    expect(pow(zero, Complex(-1.0, 0.0)) == Complex<F64>.infinity)
 }
 
 // Against high-precision references.

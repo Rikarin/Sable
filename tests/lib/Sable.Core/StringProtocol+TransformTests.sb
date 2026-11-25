@@ -34,8 +34,8 @@ fn trimmingWhatATestAccepts() {
 
 @test
 fn blankStrings() {
-    assert("".isBlank && " \t\n".isBlank && "\u{3000}".isBlank, "blank")
-    assert(!" a ".isBlank, "not blank")
+    expect("".isBlank && " \t\n".isBlank && "\u{3000}".isBlank, "blank")
+    expect(!" a ".isBlank, "not blank")
 }
 
 @test

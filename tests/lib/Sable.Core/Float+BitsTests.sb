@@ -25,7 +25,7 @@ fn bitsSurviveTheRoundTrip() {
 @test
 fn aNaNsPayloadIsKept() {
     let nan = F64.fromBits(0x7FF8_0000_0000_0001)
-    assert(nan != nan, "the bits are a NaN")
+    expect(nan != nan, "the bits are a NaN")
     assertEqual(nan.bits, 0x7FF8_0000_0000_0001)
     assertEqual(F64.fromBits(0x7FF0_0000_0000_0000), 1.0 / 0.0)
 }

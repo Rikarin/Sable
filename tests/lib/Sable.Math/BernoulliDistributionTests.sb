@@ -50,8 +50,8 @@ fn aHalfIsExactlyHalfTheDraws() {
     let half = BernoulliDistribution(probability: 0.5)
     var below = Constant { bits: (U64(1) << 63) - 1 }
     var at = Constant { bits: U64(1) << 63 }
-    assert(half.sample(using: &below))
-    assert(!half.sample(using: &at))
+    expect(half.sample(using: &below))
+    expect(!half.sample(using: &at))
 }
 
 @test(traps: "a probability must be from 0 to 1")

@@ -16,7 +16,7 @@ fn anIntervalsJobRunsEachTimeItHasPassed() async {
     let record = Record()
     let builder = quietBuilder(clock)
     builder.services.addRecurring(every: Duration.minutes(5)) { _cancellation in record.add("run") }
-    assert(builder.services.names == ["every 5m"])
+    expect(builder.services.names == ["every 5m"])
     let host = try! builder.build()
     let running = Task.spawn { await outcome(host) }
     var i = 1
@@ -37,7 +37,7 @@ fn aCronJobRunsWhenItSays() async {
     let record = Record()
     let builder = quietBuilder(clock)
     try! builder.services.addRecurring("0 */5 * * *") { _cancellation in record.add("run") }
-    assert(builder.services.names == ["0 */5 * * *"])
+    expect(builder.services.names == ["0 */5 * * *"])
     let host = try! builder.build()
     let running = Task.spawn { await outcome(host) }
     await clock.pass(Duration.hours(5))
@@ -51,12 +51,7 @@ fn aCronJobRunsWhenItSays() async {
 @test
 fn aTextThatIsNotCronIsRefusedAsItIsAdded() {
     let builder = quietBuilder(FakeHostClock())
-    do {
-        try builder.services.addRecurring("sometimes") { _cancellation in }
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "'sometimes' is not a cron expression: it has 1 fields, not 5")
-    }
+    expectThrows(saying: "'sometimes' is not a cron expression: it has 1 fields, not 5") { try builder.services.addRecurring("sometimes") { _cancellation in } }
 }
 
 @test
@@ -133,7 +128,7 @@ fn runsThatOverlapMayQueue() async {
     // Stopping, the one running is waited for; the one waiting is not run.
     host.lifetime.requestStop()
     await settle()
-    assert(!host.lifetime.stopped.isCancellationRequested)
+    expect(!host.lifetime.stopped.isCancellationRequested)
     await gate.release()
     assertEqual(await running.value, "")
     assertEqual(record.all, "begin end begin end")

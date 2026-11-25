@@ -71,27 +71,27 @@ fn theFullWidthProductKeepsTheHighHalf() {
 @test
 fn checkedArithmeticGivesNoneWhereItDoesNotFit() {
     assertEqual((250 as U8).checkedAdd(5) ?? 0, 255)
-    assert((250 as U8).checkedAdd(6) == none, "256 does not fit")
+    expect((250 as U8).checkedAdd(6) == none, "256 does not fit")
     assertEqual((5 as U8).checkedSub(5) ?? 1, 0)
-    assert((5 as U8).checkedSub(6) == none, "-1 does not fit")
+    expect((5 as U8).checkedSub(6) == none, "-1 does not fit")
     assertEqual((16 as U8).checkedMul(15) ?? 0, 240)
-    assert((16 as U8).checkedMul(16) == none, "256 does not fit")
+    expect((16 as U8).checkedMul(16) == none, "256 does not fit")
 }
 
 @test
 fn checkedDivisionGivesNoneForZeroOrOverflow() {
     assertEqual(7.checkedDiv(2) ?? 0, 3)
-    assert(7.checkedDiv(0) == none, "no quotient by zero")
-    assert(I8.min.checkedDiv(-1) == none, "128 does not fit")
+    expect(7.checkedDiv(0) == none, "no quotient by zero")
+    expect(I8.min.checkedDiv(-1) == none, "128 does not fit")
     assertEqual(7.checkedRem(2) ?? 0, 1)
-    assert(7.checkedRem(0) == none, "no remainder by zero")
-    assert(I8.min.checkedRem(-1) == none, "the quotient does not fit")
+    expect(7.checkedRem(0) == none, "no remainder by zero")
+    expect(I8.min.checkedRem(-1) == none, "the quotient does not fit")
 }
 
 @test
 fn checkedNegationAndAbsGiveNoneWhereItDoesNotFit() {
     assertEqual(5.checkedNeg() ?? 0, -5)
-    assert(I16.min.checkedNeg() == none, "32768 does not fit")
+    expect(I16.min.checkedNeg() == none, "32768 does not fit")
     assertEqual((-5).checkedAbs() ?? 0, 5)
     assertEqual(5.checkedAbs() ?? 0, 5)
 }
@@ -99,17 +99,17 @@ fn checkedNegationAndAbsGiveNoneWhereItDoesNotFit() {
 @test
 fn checkedShiftsGiveNoneForACountOutsideTheWidth() {
     assertEqual((1 as U8).checkedShl(7) ?? 0, 128)
-    assert((1 as U8).checkedShl(8) == none, "8 is past the width")
-    assert((1 as U8).checkedShl(-1) == none, "-1 is no count")
+    expect((1 as U8).checkedShl(8) == none, "8 is past the width")
+    expect((1 as U8).checkedShl(-1) == none, "-1 is no count")
     assertEqual((128 as U8).checkedShr(7) ?? 0, 1)
-    assert((128 as U8).checkedShr(8) == none, "8 is past the width")
+    expect((128 as U8).checkedShr(8) == none, "8 is past the width")
 }
 
 @test
 fn checkedPowGivesNoneWhereItDoesNotFit() {
     assertEqual(2.checkedPow(10) ?? 0, 1024)
-    assert((2 as U8).checkedPow(8) == none, "256 does not fit")
-    assert(2.checkedPow(-1) == none, "no integer power")
+    expect((2 as U8).checkedPow(8) == none, "256 does not fit")
+    expect(2.checkedPow(-1) == none, "no integer power")
     assertEqual(7.checkedPow(0) ?? 0, 1)
 }
 
@@ -220,33 +220,33 @@ fn saturatingNegationAndAbsStopAtTheGreatest() {
 fn overflowingDivisionReportsTheLeastValueByMinusOne() {
     let (quotient, overflowed) = I8.min.overflowingDiv(-1)
     assertEqual(quotient, I8.min)
-    assert(overflowed, "the quotient overflowed")
+    expect(overflowed, "the quotient overflowed")
     let (remainder, remainderOverflowed) = I8.min.overflowingRem(-1)
     assertEqual(remainder, 0)
-    assert(remainderOverflowed, "the quotient overflowed")
+    expect(remainderOverflowed, "the quotient overflowed")
     let (fine, fineOverflowed) = 7.overflowingDiv(2)
     assertEqual(fine, 3)
-    assert(!fineOverflowed, "7 / 2 fits")
+    expect(!fineOverflowed, "7 / 2 fits")
 }
 
 @test
 fn overflowingNegationReportsTheLeastValue() {
     let (negated, overflowed) = I8.min.overflowingNeg()
     assertEqual(negated, I8.min)
-    assert(overflowed, "128 does not fit")
+    expect(overflowed, "128 does not fit")
     let (magnitude, absOverflowed) = 5.overflowingAbs()
     assertEqual(magnitude, 5)
-    assert(!absOverflowed, "5 fits")
+    expect(!absOverflowed, "5 fits")
 }
 
 @test
 fn overflowingPowReportsWhetherAnySquareOrProductOverflowed() {
     let (power, overflowed) = (2 as U8).overflowingPow(9)
     assertEqual(power, 0)
-    assert(overflowed, "512 does not fit")
+    expect(overflowed, "512 does not fit")
     let (fits, fitsOverflowed) = (2 as U8).overflowingPow(7)
     assertEqual(fits, 128)
-    assert(!fitsOverflowed, "128 fits")
+    expect(!fitsOverflowed, "128 fits")
 }
 
 // ---- trapping -----------------------------------------------------------
@@ -273,11 +273,11 @@ fn powTrapsForANegativeExponent() {
 
 @test
 fn powersOfTwoArePositiveWithOneBitSet() {
-    assert(64.isPowerOfTwo, "64 is 2^6")
-    assert(1.isPowerOfTwo, "1 is 2^0")
-    assert(!0.isPowerOfTwo, "0 is not")
-    assert(!(-8).isPowerOfTwo, "-8 is not")
-    assert(!12.isPowerOfTwo, "12 is not")
+    expect(64.isPowerOfTwo, "64 is 2^6")
+    expect(1.isPowerOfTwo, "1 is 2^0")
+    expect(!0.isPowerOfTwo, "0 is not")
+    expect(!(-8).isPowerOfTwo, "-8 is not")
+    expect(!12.isPowerOfTwo, "12 is not")
 }
 
 @test
@@ -286,8 +286,8 @@ fn theNextPowerOfTwoIsNotBelowTheValue() {
     assertEqual(8.nextPowerOfTwo(), 8)
     assertEqual(0.nextPowerOfTwo(), 1)
     assertEqual((-3).nextPowerOfTwo(), 1)
-    assert((200 as U8).checkedNextPowerOfTwo() == none, "256 does not fit")
-    assert((65 as I8).checkedNextPowerOfTwo() == none, "128 does not fit")
+    expect((200 as U8).checkedNextPowerOfTwo() == none, "256 does not fit")
+    expect((65 as I8).checkedNextPowerOfTwo() == none, "128 does not fit")
     assertEqual((64 as I8).checkedNextPowerOfTwo() ?? 0, 64)
 }
 
@@ -302,8 +302,8 @@ fn log2IsTheHighestSetBit() {
     assertEqual(1000.log2(), 9)
     assertEqual(U64.max.log2(), 63)
     assertEqual(8.checkedLog2() ?? -1, 3)
-    assert(0.checkedLog2() == none, "0 has no logarithm")
-    assert((-4).checkedLog2() == none, "-4 has no logarithm")
+    expect(0.checkedLog2() == none, "0 has no logarithm")
+    expect((-4).checkedLog2() == none, "-4 has no logarithm")
 }
 
 @test(traps: "the logarithm of a value not above zero")
@@ -318,7 +318,7 @@ fn log10CountsTheDigitsLessOne() {
     assertEqual(1.log10(), 0)
     assertEqual((255 as U8).log10(), 2)
     assertEqual(100.checkedLog10() ?? -1, 2)
-    assert(0.checkedLog10() == none, "0 has no logarithm")
+    expect(0.checkedLog10() == none, "0 has no logarithm")
 }
 
 @test(traps: "the logarithm of a value not above zero")
@@ -337,7 +337,7 @@ fn isqrtRoundsTheRootDown() {
     assertEqual(U64.max.isqrt(), 4294967295)
     assertEqual(Int.max.isqrt(), 3037000499)
     assertEqual(17.checkedIsqrt() ?? -1, 4)
-    assert((-1).checkedIsqrt() == none, "-1 has no root")
+    expect((-1).checkedIsqrt() == none, "-1 has no root")
 }
 
 @test(traps: "the square root of a negative value")
@@ -382,9 +382,9 @@ fn midpointRoundsTowardZeroWithoutOverflowing() {
 
 @test
 fn bytesComeInEitherOrder() {
-    assert((0x1234 as U16).bigEndianBytes() == [0x12, 0x34], "big-endian is most significant first")
-    assert((0x1234 as U16).littleEndianBytes() == [0x34, 0x12], "little-endian is least significant first")
-    assert((-2 as I16).bigEndianBytes() == [0xFF, 0xFE], "a negative value's bytes are its two's complement")
+    expect((0x1234 as U16).bigEndianBytes() == [0x12, 0x34], "big-endian is most significant first")
+    expect((0x1234 as U16).littleEndianBytes() == [0x34, 0x12], "little-endian is least significant first")
+    expect((-2 as I16).bigEndianBytes() == [0xFF, 0xFE], "a negative value's bytes are its two's complement")
 }
 
 @test
@@ -397,8 +397,8 @@ fn bytesReadBackAsTheValue() {
 
 @test
 fn bytesOfTheWrongCountAreNone() {
-    assert(U16.fromBigEndianBytes([0x12]) == none, "one byte is not a U16")
-    assert(U16.fromLittleEndianBytes([1, 2, 3]) == none, "three bytes are not a U16")
+    expect(U16.fromBigEndianBytes([0x12]) == none, "one byte is not a U16")
+    expect(U16.fromLittleEndianBytes([1, 2, 3]) == none, "three bytes are not a U16")
 }
 
 @test
@@ -422,10 +422,10 @@ fn truncatingKeepsTheLowBits() {
 @test
 fn exactlyGivesNoneWhereTheValueDoesNotFit() {
     assertEqual(U8.exactly(255) ?? 0, 255)
-    assert(U8.exactly(256) == none, "256 does not fit a U8")
-    assert(U8.exactly(-1) == none, "-1 does not fit a U8")
-    assert(I8.exactly(128 as U8) == none, "128 does not fit an I8")
-    assert(U128.exactly(-1 as I128) == none, "-1 does not fit a U128")
+    expect(U8.exactly(256) == none, "256 does not fit a U8")
+    expect(U8.exactly(-1) == none, "-1 does not fit a U8")
+    expect(I8.exactly(128 as U8) == none, "128 does not fit an I8")
+    expect(U128.exactly(-1 as I128) == none, "-1 does not fit a U128")
     assertEqual(Int.exactly(-5 as I8) ?? 0, -5)
 }
 
@@ -433,10 +433,10 @@ fn exactlyGivesNoneWhereTheValueDoesNotFit() {
 fn anIntegerOfAnySizeConvertsOnlyWhereItFits() {
     // Sable.Math's BigInt: its 128 bits hold it from -2^127 up to 2^128.
     assertEqual(U128.exactly(BigInt(2).pow(128) - BigInt(1)) ?? 0, U128.max)
-    assert(U128.exactly(BigInt(2).pow(128)) == none, "2^128 does not fit a U128")
-    assert(I128.exactly(BigInt(2).pow(127)) == none, "2^127 does not fit an I128")
+    expect(U128.exactly(BigInt(2).pow(128)) == none, "2^128 does not fit a U128")
+    expect(I128.exactly(BigInt(2).pow(127)) == none, "2^127 does not fit an I128")
     assertEqual(I128.exactly(-BigInt(2).pow(127)) ?? 0, I128.min)
-    assert(Int.exactly(BigInt(2).pow(300) + BigInt(5)) == none, "2^300 + 5 does not fit an Int")
+    expect(Int.exactly(BigInt(2).pow(300) + BigInt(5)) == none, "2^300 + 5 does not fit an Int")
     assertEqual(Int.clamping(-BigInt(2).pow(300)), Int.min)
     assertEqual(U8.truncating(BigInt(2).pow(300) + BigInt(5)), 5)
 }
@@ -444,7 +444,7 @@ fn anIntegerOfAnySizeConvertsOnlyWhereItFits() {
 @test
 fn exactlyWorksFromAGenericSource() {
     assertEqual(widen(200 as U8) ?? 0, 200)
-    assert(widen(U64.max) == none, "U64's greatest value does not fit an Int")
+    expect(widen(U64.max) == none, "U64's greatest value does not fit an Int")
 }
 
 @test
@@ -465,14 +465,14 @@ fn aFloatIsExactlyAnIntegerOnlyWithoutAFractionAndInRange() {
     assertEqual(I32.exactly(42.0) ?? 0, 42)
     assertEqual(I8.exactly(-128.0) ?? 0, -128)
     assertEqual(U64.exactly(-0.0) ?? 1, 0)
-    assert(I32.exactly(2.5) == none, "2.5 has a fraction")
-    assert(I8.exactly(128.0) == none, "128 does not fit an I8")
-    assert(I8.exactly(-129.0) == none, "-129 does not fit an I8")
-    assert(U8.exactly(-1.0) == none, "-1 does not fit a U8")
-    assert(Int.exactly(9223372036854775808.0) == none, "2^63 does not fit an Int")
+    expect(I32.exactly(2.5) == none, "2.5 has a fraction")
+    expect(I8.exactly(128.0) == none, "128 does not fit an I8")
+    expect(I8.exactly(-129.0) == none, "-129 does not fit an I8")
+    expect(U8.exactly(-1.0) == none, "-1 does not fit a U8")
+    expect(Int.exactly(9223372036854775808.0) == none, "2^63 does not fit an Int")
     assertEqual(Int.exactly(-9223372036854775808.0) ?? 0, Int.min)
-    assert(Int.exactly(F64.nan) == none, "NaN is no integer")
-    assert(Int.exactly(F64.infinity) == none, "infinity is no integer")
+    expect(Int.exactly(F64.nan) == none, "NaN is no integer")
+    expect(Int.exactly(F64.infinity) == none, "infinity is no integer")
     assertEqual(wholeBytes(200.0 as F32) ?? 0, 200)
     assertEqual(wholeBytes(7.0 as F16) ?? 0, 7)
 }

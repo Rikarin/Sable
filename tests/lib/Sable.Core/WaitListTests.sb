@@ -97,7 +97,7 @@ fn aCancellableParkEndsWithAWake() async {
     let reader = Task.spawn { await mailbox.take() }
     await Task.yield()
     await mailbox.post(3)
-    assert(await reader.value == 3)
+    expect(await reader.value == 3)
 }
 
 @test
@@ -108,7 +108,7 @@ fn aCancellableParkEndsWithTheTasksCancellation() async {
         await Task.yield()
     }
     reader.cancel()
-    assert(await reader.value == none)
+    expect(await reader.value == none)
 }
 
 @test
@@ -123,7 +123,7 @@ fn aCancelledTaskDoesNotParkCancellably() async {
         return true
     }
     task.cancel()
-    assert(await task.value)
+    expect(await task.value)
 }
 
 @test
@@ -161,7 +161,7 @@ fn aParkSinceTheCurrentTicketWaitsForTheNextWake() async {
     // before its park is one it sees by its ticket.
     list.wakeAll()
     await waiter.value
-    assert(woken.load())
+    expect(woken.load())
 }
 
 @test

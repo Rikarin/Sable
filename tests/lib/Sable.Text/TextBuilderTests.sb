@@ -64,7 +64,7 @@ fn randomEditsAgreeWithAString() {
         } else if choice == 9 && model.count > 0 {
             let at = walk.next(model.count)
             let character = alphabet[walk.next(alphabet.count)].at(index: 0)
-            assert(builder[at] == model.at(index: at))
+            assertEqual(builder[at], model.at(index: at))
             builder[at] = character
             model = model.slice(from: 0, to: at) + String.fromChar(character) + model.slice(from: at + 1, to: model.count)
         } else if choice == 10 && model.count > 200 {
@@ -98,7 +98,7 @@ fn randomEditsAgreeWithAString() {
 @test
 fn manyPiecesAreGatheredIntoFewChunks() {
     let builder = TextBuilder(capacity: 16)
-    assert(builder.capacity >= 16)
+    expect(builder.capacity >= 16)
     var expected = 0
     var i = 0
     while i < 10000 {
@@ -108,16 +108,16 @@ fn manyPiecesAreGatheredIntoFewChunks() {
     }
     assertEqual(builder.count, expected)
     let chunks = builder.chunks
-    assert(chunks.count < 50, "\(chunks.count) chunks")
+    expect(chunks.count < 50, "\(chunks.count) chunks")
     var joined = 0
     for chunk in chunks {
         joined += chunk.count
     }
     assertEqual(joined, expected)
-    assert(builder.build().hasPrefix("piece 0;piece 1;"))
-    assert(builder.build().hasSuffix("piece 9999;"))
+    expect(builder.build().hasPrefix("piece 0;piece 1;"))
+    expect(builder.build().hasSuffix("piece 9999;"))
     builder.reserveCapacity(100)
-    assert(builder.capacity >= 100)
+    expect(builder.capacity >= 100)
 }
 
 @test
@@ -151,8 +151,8 @@ fn eachWayOfAppending() {
 @test
 fn editsAtTheEdgesAndEmptiness() {
     let builder = TextBuilder()
-    assert(builder.isEmpty && builder.count == 0 && builder.build() == "")
-    assert(builder.chunks.isEmpty)
+    expect(builder.isEmpty && builder.count == 0 && builder.build() == "")
+    expect(builder.chunks.isEmpty)
     builder.insert("bc", at: 0)
     builder.insert("a", at: 0)
     builder.insert("d", at: 3)
@@ -161,7 +161,7 @@ fn editsAtTheEdgesAndEmptiness() {
     builder.remove(0..<1)
     assertEqual(builder.build(), "bcd")
     builder.replace(0..<3, with: "")
-    assert(builder.isEmpty)
+    expect(builder.isEmpty)
     builder.append("x-y-x")
     assertEqual(builder.replace("x", with: "zz"), 2)
     assertEqual(builder.replace("q", with: "zz"), 0)
@@ -174,7 +174,7 @@ fn editsAtTheEdgesAndEmptiness() {
     assertEqual(builder.build(), "zé")
     assertEqual(builder.utf8Count, 3)
     builder.clear()
-    assert(builder.isEmpty && builder.utf8Count == 0 && builder.build() == "")
+    expect(builder.isEmpty && builder.utf8Count == 0 && builder.build() == "")
 }
 
 @test

@@ -27,12 +27,12 @@ fn patternError(_ text: String, _ pattern: String) -> ParseError? {
 
 @test
 fn aDateIsOnlyOneThatExists() {
-    assert(Date.of(year: 2023, month: 2, day: 29) == none)
-    assert(Date.of(year: 2024, month: 13, day: 1) == none)
-    assert(Date.of(year: 2024, month: 4, day: 31) == none)
-    assert(Date.of(year: 2024, month: 1, day: 0) == none)
-    assert(Date.of(year: 2024, dayOfYear: 367) == none)
-    assert(Date.of(year: 2023, dayOfYear: 366) == none)
+    expect(Date.of(year: 2023, month: 2, day: 29) == none)
+    expect(Date.of(year: 2024, month: 13, day: 1) == none)
+    expect(Date.of(year: 2024, month: 4, day: 31) == none)
+    expect(Date.of(year: 2024, month: 1, day: 0) == none)
+    expect(Date.of(year: 2024, dayOfYear: 367) == none)
+    expect(Date.of(year: 2023, dayOfYear: 366) == none)
     assertEqual(Date.of(year: 2023, dayOfYear: 365)!, date(2023, 12, 31))
     assertEqual(Date.unixEpoch, date(1970, 1, 1))
 }
@@ -54,7 +54,7 @@ fn aDateCountsDaysFromTheEpoch() {
 fn aDateKnowsItsPlaceInTheYear() {
     let leap = date(2024, 12, 31)
     assertEqual(leap.dayOfYear, 366)
-    assert(leap.isInLeapYear)
+    expect(leap.isInLeapYear)
     assertEqual(leap.daysInYear, 366)
     assertEqual(date(2026, 2, 10).daysInMonth, 28)
     assertEqual(date(2026, 11, 17).weekday, Weekday.Tuesday)
@@ -78,8 +78,8 @@ fn isoWeeksStartOnTheWeekOfTheFirstThursday() {
     assertEqual(date(2027, 1, 3).isoWeek, 53)
     assertEqual(date(2027, 1, 4).isoWeek, 1)
     assertEqual(Date.of(isoWeekYear: 2020, week: 53, weekday: .Sunday)!, date(2021, 1, 3))
-    assert(Date.of(isoWeekYear: 2021, week: 53, weekday: .Monday) == none)
-    assert(Date.of(isoWeekYear: 2021, week: 0, weekday: .Monday) == none)
+    expect(Date.of(isoWeekYear: 2021, week: 53, weekday: .Monday) == none)
+    expect(Date.of(isoWeekYear: 2021, week: 0, weekday: .Monday) == none)
     // Every day's week reads back as the day.
     var day = date(1999, 12, 1)
     while day < date(2030, 2, 1) {
@@ -143,10 +143,10 @@ fn aDateMeetsATime() {
 
 @test
 fn datesAreOrdered() {
-    assert(date(2025, 12, 31) < date(2026, 1, 1))
-    assert(date(2026, 1, 31) < date(2026, 2, 1))
-    assert(date(2026, 2, 1) < date(2026, 2, 2))
-    assert(!(date(2026, 2, 2) < date(2026, 2, 2)))
+    expect(date(2025, 12, 31) < date(2026, 1, 1))
+    expect(date(2026, 1, 31) < date(2026, 2, 1))
+    expect(date(2026, 2, 1) < date(2026, 2, 2))
+    expect(!(date(2026, 2, 2) < date(2026, 2, 2)))
     assertEqual(date(2026, 2, 2).hashValue, date(2026, 2, 2).hashValue)
 }
 
@@ -254,11 +254,6 @@ fn errorsCountScalarsNotBytes() {
         }
     }
     // After the minus sign of three bytes.
-    do {
-        _ = try OffsetDateTime.parse("2026-11-17T01:02:03−01:0x")
-        assert(false)
-    } catch {
-        assertEqual(error, ParseError.InvalidDigit(at: 24))
-    }
+    expectThrows(ParseError.InvalidDigit(at: 24)) { _ = try OffsetDateTime.parse("2026-11-17T01:02:03−01:0x") }
     assertEqual(try! OffsetDateTime.parse("2026-11-17T01:02:03−01:00").offset.totalSeconds, -3600)
 }

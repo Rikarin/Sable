@@ -41,7 +41,7 @@ fn onlyWellFormedBytesFinishIfValid() {
         let bad = StringBuffer.allocate(capacity: 8)
         bad.store(byte: 0xC3, at: 0)
         bad.store(byte: 0x21, at: 1)
-        assert(bad.finishIfValid(count: 2) == none)
+        expect(bad.finishIfValid(count: 2) == none)
     }
 }
 
@@ -73,7 +73,7 @@ fn aWritersLastScalarsAreTakenBack() {
     unsafe {
         var writer = StringWriter.allocate(capacity: 4)
         writer.reserveCapacity(100)
-        assert(writer.capacity >= 100)
+        expect(writer.capacity >= 100)
         for code in [0x41, 0xE9, 0x4E16, 0x1F600] {
             writer.append(codePoint: code)
         }
@@ -81,7 +81,7 @@ fn aWritersLastScalarsAreTakenBack() {
         assertEqual(writer.removeLastScalar(), 0x4E16)
         assertEqual(writer.removeLastScalar(), 0xE9)
         assertEqual(writer.removeLastScalar(), 0x41)
-        assert(writer.removeLastScalar() == none)
+        expect(writer.removeLastScalar() == none)
         writer.append(utf8: "abc", from: 0, to: 3)
         writer.truncate(to: 1)
         assertEqual(writer.finish(), "a")
@@ -301,7 +301,7 @@ fn aBufferGrowsByHalfAtLeast() {
         let lots = little.growing(used: 8, capacity: 100)
         assertEqual(lots.capacity, 100)
         let encoded = lots.encode(.HexEncode, U8[>..](repeating: 1, count: 40), at: 8)
-        assert(encoded >= 0 && encoded <= 40)
+        expect(encoded >= 0 && encoded <= 40)
         assertEqual(lots.finish(asciiCount: 8), "abcdefgh")
     }
 }

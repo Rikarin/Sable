@@ -29,8 +29,8 @@ fn aDigestIsWrittenInHexadecimal() {
 
 @test
 fn digestsAreEqualWhenTheirBytesAre() {
-    assert(Digest(message(32)) == Digest(message(32)))
-    assert(Digest(message(32)) != Digest(message(31)))
+    expect(Digest(message(32)) == Digest(message(32)))
+    expect(Digest(message(32)) != Digest(message(31)))
     assertEqual(Digest(message(32)).hashValue, Digest(message(32)).hashValue)
     let known = Set<Digest>([Digest(message(4)), Digest(message(5)), Digest(message(4))])
     assertEqual(known.count, 2)
@@ -45,11 +45,11 @@ fn resets<H: HashFunction>(_ type: H.Type) {
         hash.update(bytes)
         let copy = hash
         let digest = hash.finalize()
-        assert(hash.finalizeAndReset() == digest)
-        assert(hash.finalize() == empty)
+        assertEqual(hash.finalizeAndReset(), digest)
+        assertEqual(hash.finalize(), empty)
         // A copy made before is not reset.
-        assert(copy.finalize() == digest)
-        assert(H.hash(bytes) == digest)
+        assertEqual(copy.finalize(), digest)
+        assertEqual(H.hash(bytes), digest)
     }
 }
 
@@ -74,11 +74,11 @@ fn resetsTo<H: HashFunction>(_ start: H) {
     for count in [0, 1, 64, 128, 1024, 5000] {
         hash.update(U8[>..](repeating: 9, count: count))
         let digest = hash.finalize()
-        assert(hash.finalizeAndReset() == digest)
+        assertEqual(hash.finalizeAndReset(), digest)
         assert(hash.finalize() == empty && start.finalize() == empty)
     }
     hash.update([1])
-    assert(hash.finalizeAndReset() != empty)
+    expect(hash.finalizeAndReset() != empty)
 }
 
 @test

@@ -86,21 +86,15 @@ fn aPatternFromTheRootMatchesPathsFromIt() throws {
     try check("./a", ["a"], ["b"])
     try check("../a", ["../a"], ["a"])
     let glob = try Glob("**/*.TXT", caseSensitive: false)
-    assert(glob.matches(FilePath("a/b.txt")) && glob.matches("A.Txt"))
-    assert(!(try Glob("A")).matches("a"))
+    expect(glob.matches(FilePath("a/b.txt")) && glob.matches("A.Txt"))
+    expect(!(try Glob("A")).matches("a"))
 }
 
 @test
 fn whatIsNoPatternIsAnError() {
     for pattern in ["[a", "a[", "[!]", "{a", "{a,{b}", "[]", "{a,[}"] {
-        do {
-            _ = try Glob(pattern)
-            fail("'\(pattern)' is a pattern")
-        } catch { }
+        expectThrows { _ = try Glob(pattern) }
     }
     // Two to the twelfth ways through it.
-    do {
-        _ = try Glob("{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}")
-        fail("it has too many ways through it")
-    } catch { }
+    expectThrows { _ = try Glob("{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}") }
 }

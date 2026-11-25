@@ -30,8 +30,8 @@ fn aSlicesAreFromItsFirst() {
 @test
 fn theEmptyArraysAreNowhere() {
     var empty: Int[>..] = []
-    assert(empty.withPointer { $0.isNull })
-    assert(empty.withMutablePointer { $0.isNull })
+    expect(empty.withPointer { $0.isNull })
+    expect(empty.withMutablePointer { $0.isNull })
     let sliced = [1, 2][1..<1]
     assertEqual(sliced.count, 0)
     sliced.withPointer { start in }

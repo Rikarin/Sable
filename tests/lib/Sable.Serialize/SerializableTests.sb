@@ -48,16 +48,16 @@ fn everyKindOfValueRoundTrips() throws {
     let text = try Json.encode(value)
     assertEqual(text, "{\"flag\":true,\"small\":-128,\"count\":-9223372036854775807,\"big\":18446744073709551615,\"ratio\":0.1,\"single\":1.5,\"name\":\"quote \\\" slash \\\\ newline \\n tab \\t bell \\u0007 é 😀\",\"letter\":\"ж\",\"nickname\":null,\"tags\":[\"a\",\"b\"],\"grid\":[[1,2],[],[3]]}")
     let back = try Json.decode(Everything.self, from: text)
-    assert(back == value)
+    expect(back == value)
     let fromBytes = try Json.decode(Everything.self, fromBytes: try Json.encodeBytes(value))
-    assert(fromBytes == value)
+    expect(fromBytes == value)
 
     // Optionals: a value, null, or not there at all.
     var named = value
     named.nickname = "ana"
     assertEqual((try Json.decode(Everything.self, from: try Json.encode(named))).nickname ?? "-", "ana")
     let order = try Json.decode(Order.self, from: "{\"id\": 1, \"items\": [], \"extra\": {\"ignored\": [1, 2]}}")
-    assert(order.note == none && order.items.isEmpty)
+    expect(order.note == none && order.items.isEmpty)
 }
 
 @test
@@ -90,7 +90,7 @@ fn fieldsAreRenamedSkippedAndDefaulted() throws {
     assertEqual(back.userName, "bo")
     assertEqual(back.session, "none")
     assertEqual(back.retries, 3)
-    assert(back.lastLogin == none)
+    expect(back.lastLogin == none)
     assertEqual((try Json.decode(Account.self, from: text)).retries, 5)
 }
 
@@ -128,7 +128,7 @@ fn everyNamingPolicy() throws {
     assertEqual(NamingPolicy.CamelCase.apply("SomeName"), "someName")
     assertEqual(NamingPolicy.ScreamingSnakeCase.apply("a"), "A")
     assertEqual(NamingPolicy.SnakeCase.apply(""), "")
-    assert(NamingPolicy.SnakeCase != NamingPolicy.KebabCase)
+    expect(NamingPolicy.SnakeCase != NamingPolicy.KebabCase)
 }
 
 @derive(Serializable, Equatable, Debug)
@@ -150,7 +150,7 @@ fn genericTypesDeriveForEachConstruction() throws {
     assertEqual(try Json.encode(try roundTrip(pair)), try Json.encode(pair))
     let inner: Pair<Bool, F64> = Pair(first: false, second: 2.0)
     let nested: Pair<Pair<Bool, F64>, Item?> = Pair(first: inner, second: Item { name: "n", price: 1.0 })
-    assert((try roundTrip(nested)) == nested)
+    expect((try roundTrip(nested)) == nested)
     let overflow: Pair<Int, Int> = Pair(first: 0, second: 0)
     assertEqual(failureLike(overflow, "{\"first\":9223372036854775808,\"second\":0}"), "$.first: 9223372036854775808 does not fit an Int")
 }
@@ -194,22 +194,22 @@ union Message {
 @test
 fn enumsAndUnionsInEachTagging() throws {
     assertEqual(try Json.encode(Direction.South), "\"South\"")
-    assert((try Json.decode(Direction.self, from: "\"North\"")) == .North)
+    expect((try Json.decode(Direction.self, from: "\"North\"")) == .North)
 
     let shapes: Shape[>..] = [.Circle(radius: 1.5), .Rectangle(width: 2.0, height: 3.0), .Label("x"), .Point(1, 2), .Empty]
     let external = try Json.encode(shapes)
     assertEqual(external, "[{\"Circle\":{\"radius\":1.5}},{\"Rectangle\":{\"width\":2.0,\"height\":3.0}},{\"Label\":\"x\"},{\"Point\":[1,2]},\"nothing\"]")
-    assert((try Json.decode(Shape[>..].self, from: external)) == shapes)
+    expect((try Json.decode(Shape[>..].self, from: external)) == shapes)
 
     let events: Event[>..] = [.Click(x: 1, y: 2), .Key(code: 13), .Idle]
     let insideTagged = try Json.encode(events)
     assertEqual(insideTagged, "[{\"type\":\"Click\",\"x\":1,\"y\":2},{\"type\":\"Key\",\"code\":13},{\"type\":\"Idle\"}]")
-    assert((try Json.decode(Event[>..].self, from: insideTagged)) == events)
+    expect((try Json.decode(Event[>..].self, from: insideTagged)) == events)
 
     let messages: Message[>..] = [.Text("hi"), .Move(dx: -1, dy: 0), .Quit]
     let adjacent = try Json.encode(messages)
     assertEqual(adjacent, "[{\"t\":\"Text\",\"c\":\"hi\"},{\"t\":\"Move\",\"c\":{\"dx\":-1,\"dy\":0}},{\"t\":\"Quit\"}]")
-    assert((try Json.decode(Message[>..].self, from: adjacent)) == messages)
+    expect((try Json.decode(Message[>..].self, from: adjacent)) == messages)
 }
 
 fn failure<T: Serializable>(_ type: T.Type, _ text: String) -> String {
@@ -237,14 +237,9 @@ fn errorsSayWhere() {
     assertEqual(failure(Item.self, "{\"name\":\"a\",\"price\":1e999}"), "$.price: 1e999 is out of range")
     assertEqual(failure(Item.self, "{\"name\":\"a\" \"price\":1}"), "not JSON: line 1, column 13: found '\"' where ',' or '}' was expected")
     assertEqual(failure(Item.self, "{\"weird key\":1}"), "$.name: missing")
-    do {
-        _ = try Json.encode(Item { name: "nan", price: 0.0 / 0.0 })
-        fail("a NaN was written")
-    } catch {
-        assertEqual(error.description(), "$: JSON has no nan")
-    }
+    expectThrows(saying: "$: JSON has no nan") { _ = try Json.encode(Item { name: "nan", price: 0.0 / 0.0 }) }
     let error = SerializeError.Syntax(reason: "x")
-    assert(error == SerializeError.Syntax(reason: "x") && error.debugDescription().hasPrefix("SerializeError"))
+    expect(error == SerializeError.Syntax(reason: "x") && error.debugDescription().hasPrefix("SerializeError"))
 }
 
 @test
@@ -254,37 +249,34 @@ fn theDecoderAndJsonValuesDirectly() throws {
     let a = try root.field("a").decodeSequence()
     assertEqual(a.count, 2)
     assertEqual(a[1].field("b c").path, "$.a[1]['b c']")
-    assert(a[1].field("b c").isNull && !a[1].field("b c").isMissing)
+    expect(a[1].field("b c").isNull && !a[1].field("b c").isMissing)
     assertEqual(root.field("a").element(1).path, "$.a[1]")
-    assert(root.field("a").element(5).isMissing && root.element(0).isMissing)
+    expect(root.field("a").element(5).isMissing && root.element(0).isMissing)
     assertEqual(try root.field("u").decodeString(), "é😀\n")
     assertEqual(try root.field("n").decodeFloat(), -50.0)
-    assert(try root.field("t").decodeBool() && !(try root.field("f").decodeBool()))
+    expect(try root.field("t").decodeBool() && !(try root.field("f").decodeBool()))
     assertEqual(root.field("t").kindName, "a Bool")
     assertEqual(root.field("missing").kindName, "nothing")
     assertEqual(root.field("n").kindName, "a number")
     assertEqual(root.field("a").kindName, "an array")
     assertEqual(root.kindName, "an object")
-    assert(root.kind == .Map && root.field("missing").kind == .Missing && root.field("t").kind == .Bool && root.field("f").kind == .Bool)
-    assert(root.field("a").kind == .Sequence && root.field("n").kind == .Number && root.field("u").kind == .String)
-    assert(a[1].field("b c").kind == .Null)
+    expect(root.kind == .Map && root.field("missing").kind == .Missing && root.field("t").kind == .Bool && root.field("f").kind == .Bool)
+    expect(root.field("a").kind == .Sequence && root.field("n").kind == .Number && root.field("u").kind == .String)
+    expect(a[1].field("b c").kind == .Null)
     assertEqual(a[0].kindName, "a number")
     assertEqual(a[1].field("b c").kindName, "null")
-    assert(root.hasField("t") && !root.hasField("x"))
+    expect(root.hasField("t") && !root.hasField("x"))
     var keys: String[>..] = []
     for member in try root.decodeMap() {
         keys.append(member.key)
     }
     assertEqual(keys.joined(separator: ","), "a,u,n,t,f")
-    assert(root.field("n").field("x").isMissing)
+    expect(root.field("n").field("x").isMissing)
 
     // A document of any shape, as a JsonValue, and back.
     let value = try Json.decode(JsonValue.self, from: "{\"x\":[1,true,null,\"s\"]}")
     assertEqual(try Json.encode(value), "{\"x\":[1.0,true,null,\"s\"]}")
-    do {
-        _ = try JsonValue.decode(from: root.field("absent"))
-        fail("nothing decoded as a value")
-    } catch { }
+    expectThrows { _ = try JsonValue.decode(from: root.field("absent")) }
 
     var counts = Dictionary<String, Int>()
     counts["one"] = 1
@@ -395,16 +387,11 @@ fn whatIsFlattenedIsAnyStruct() throws {
     let click: Logged<Event> = Logged(at: 7, what: .Click(x: 1, y: 2))
     let text = try Json.encode(click)
     assertEqual(text, "{\"at\":7,\"type\":\"Click\",\"x\":1,\"y\":2}")
-    assert((try Json.decode(Logged<Event>.self, from: text)) == click)
+    expect((try Json.decode(Logged<Event>.self, from: text)) == click)
 
     // Only running tells that a type parameter's value is not a struct.
     let number: Logged<Int> = Logged(at: 7, what: 3)
-    do {
-        _ = try Json.encode(number)
-        fail("a number was flattened")
-    } catch {
-        assertEqual(error.description(), "$: only a struct or a map can be flattened")
-    }
+    expectThrows(saying: "$: only a struct or a map can be flattened") { _ = try Json.encode(number) }
 }
 
 // ---- Untagged unions -----------------------------------------------------
@@ -433,14 +420,14 @@ fn anUntaggedUnionIsItsFirstCaseThatDecodes() throws {
     let ids: Id[>..] = [.Number(3), .Name("x"), .Range(from: 1, to: 2), .Pair(4, "y"), .Page(Page { offset: 1, limit: 2 }), .Nothing]
     let text = try Json.encode(ids)
     assertEqual(text, "[3,\"x\",{\"from\":1,\"to\":2},[4,\"y\"],{\"offset\":1,\"max\":2},null]")
-    assert((try Json.decode(Id[>..].self, from: text)) == ids)
+    expect((try Json.decode(Id[>..].self, from: text)) == ids)
     assertEqual(failure(Id.self, "true"), "$: expected a case of Id, found a Bool")
     assertEqual(failure(Id[>..].self, "[1,{}]"), "$[1]: expected a case of Id, found an object")
 
     // A struct's payload is read from a struct alone, though every field of
     // it may be missing; and the union may hold itself.
     let loose = try Json.decode(Loose.self, from: "[\"t\",{},[]]")
-    assert(loose == .Many([.Text("t"), .Maybe(a: none, b: none), .Many([])]))
+    expect(loose == .Many([.Text("t"), .Maybe(a: none, b: none), .Many([])]))
 }
 
 // ---- Other conformances --------------------------------------------------
@@ -451,8 +438,8 @@ fn aSetIsASequence() throws {
     _ = unique.insert(3)
     assertEqual(try Json.encode(unique), "[3]")
     let back = try Json.decode(Set<String>.self, from: "[\"a\",\"b\",\"a\"]")
-    assert(back.count == 2 && back.contains("a") && back.contains("b"))
-    assert((try roundTrip(back)) == back)
+    expect(back.count == 2 && back.contains("a") && back.contains("b"))
+    expect((try roundTrip(back)) == back)
     assertEqual(failure(Set<Int>.self, "{}"), "$: expected an array, found an object")
     assertEqual(failure(Set<Int>.self, "[1,\"x\"]"), "$[1]: expected an integer, found a string")
 }
@@ -460,7 +447,7 @@ fn aSetIsASequence() throws {
 @test
 fn aDurationIsItsNanoseconds() throws {
     assertEqual(try Json.encode(Duration.milliseconds(-1500)), "-1500000000")
-    assert((try roundTrip(Duration.nanoseconds(Int.min))) == Duration.nanoseconds(Int.min))
+    expect((try roundTrip(Duration.nanoseconds(Int.min))) == Duration.nanoseconds(Int.min))
     assertEqual(failure(Duration.self, "\"1s\""), "$: expected an integer, found a string")
 }
 
@@ -468,19 +455,19 @@ fn aDurationIsItsNanoseconds() throws {
 fn aDateTimeIsIso8601() throws {
     let whole = UtcDateTime.fromUnix(1700000000)
     assertEqual(try Json.encode(whole), "\"2023-11-14T22:13:20Z\"")
-    assert((try roundTrip(whole)) == whole)
+    expect((try roundTrip(whole)) == whole)
     let exact = UtcDateTime { secondsSinceEpoch: 1700000000, nanosecond: 5000100 }
     assertEqual(try Json.encode(exact), "\"2023-11-14T22:13:20.0050001Z\"")
-    assert((try roundTrip(exact)) == exact)
+    expect((try roundTrip(exact)) == exact)
     let before = UtcDateTime { secondsSinceEpoch: -1, nanosecond: 1 }
-    assert((try roundTrip(before)) == before)
-    assert((try Json.decode(UtcDateTime.self, from: "\"2023-11-15T00:13:20+02:00\"")) == whole)
+    expect((try roundTrip(before)) == before)
+    expect((try Json.decode(UtcDateTime.self, from: "\"2023-11-15T00:13:20+02:00\"")) == whole)
     assertEqual(failure(UtcDateTime.self, "\"soon\""), "$: 'soon' is not an ISO 8601 date and time")
     do {
         _ = try Json.encode(UtcDateTime.fromUnix(400000000000))
         fail("a year of five digits was written")
     } catch {
-        assert(error.description().hasPrefix("$: ISO 8601 has no year 14"))
+        expect(error.description().hasPrefix("$: ISO 8601 has no year 14"))
     }
 }
 
@@ -502,11 +489,11 @@ fn bytesAreBase64InJson() throws {
         var bytes: U8[>..] = []
         bytes.append(utf8: text)
         assertEqual(try Json.encode(Blob { bytes: bytes }), "\"" + encoded + "\"")
-        assert((try Json.decode(Blob.self, from: "\"" + encoded + "\"")).bytes == bytes)
+        require((try Json.decode(Blob.self, from: "\"" + encoded + "\"")).bytes == bytes)
     }
     assertEqual(try Json.encode(Blob { bytes: [251, 255, 191] }), "\"+/+/\"")
-    assert((try Json.decode(Blob.self, from: "\"+/+/\"")).bytes == [251, 255, 191])
-    assert((try Json.decode(Blob.self, from: "\"Zg\"")).bytes == [102])
+    expect((try Json.decode(Blob.self, from: "\"+/+/\"")).bytes == [251, 255, 191])
+    expect((try Json.decode(Blob.self, from: "\"Zg\"")).bytes == [102])
     for bad in ["Z", "Zg===", "Z!==", "Zh==", "Zg=", "===="] {
         assertEqual(failure(Blob.self, "\"" + bad + "\""), "$: '" + bad + "' is not base64")
     }

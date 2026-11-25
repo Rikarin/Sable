@@ -10,14 +10,14 @@ fn aSeedGivesTheReferenceSequence() {
     var zero = SeededRandomNumberGenerator(seed: 0)
     let a: U64 = 11091344671253066420
     let b: U64 = 13793997310169335082
-    assert(zero.next() == a)
-    assert(zero.next() == b)
-    assert(zero.next() == 1900383378846508768)
-    assert(zero.next() == 7684712102626143532)
+    expect(zero.next() == a)
+    expect(zero.next() == b)
+    expect(zero.next() == 1900383378846508768)
+    expect(zero.next() == 7684712102626143532)
     var year = SeededRandomNumberGenerator(seed: 2024)
     let c: U64 = 14427268137155694693
-    assert(year.next() == 1029197146548041518)
-    assert(year.next() == c)
+    expect(year.next() == 1029197146548041518)
+    expect(year.next() == c)
 }
 
 @test
@@ -29,13 +29,13 @@ fn theSameSeedRepeatsAndAnotherDiffers() {
     var i = 0
     while i < 100 {
         let x = a.next()
-        assert(x == b.next())
+        assertEqual(x, b.next())
         if x != c.next() {
             differed = true
         }
         i += 1
     }
-    assert(differed)
+    expect(differed)
 }
 
 @test
@@ -43,7 +43,7 @@ fn aCopyGoesOnFromWhereItWasCopied() {
     var original = SeededRandomNumberGenerator(seed: 5)
     _ = original.next()
     var copy = original
-    assert(copy.next() == original.next())
+    expect(copy.next() == original.next())
 }
 
 @test
@@ -63,18 +63,18 @@ fn aStateGivesTheReferenceSequence() {
 fn aJumpIsTwoToThe128Draws() {
     var generator = SeededRandomNumberGenerator(state: [1, 2, 3, 4])
     generator.jump()
-    assert(generator.next() == 13534147089533256664)
-    assert(generator.next() == 7126240192422241655)
-    assert(generator.next() == 3805973808039778091)
+    expect(generator.next() == 13534147089533256664)
+    expect(generator.next() == 7126240192422241655)
+    expect(generator.next() == 3805973808039778091)
 }
 
 @test
 fn aLongJumpIsTwoToThe192Draws() {
     var generator = SeededRandomNumberGenerator(state: [1, 2, 3, 4])
     generator.longJump()
-    assert(generator.next() == 5942309088398569549)
-    assert(generator.next() == 15625447729937358436)
-    assert(generator.next() == 6925613901769781251)
+    expect(generator.next() == 5942309088398569549)
+    expect(generator.next() == 15625447729937358436)
+    expect(generator.next() == 6925613901769781251)
 }
 
 @test(traps: "the state must not be all zeros")

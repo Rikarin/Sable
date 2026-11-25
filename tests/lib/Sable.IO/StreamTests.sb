@@ -104,8 +104,8 @@ fn bufferedReadsAndRunsGiveEveryByteInOrder() throws {
     assertEqual(try runs.readUntil(0), [1, 0])
     assertEqual(try runs.readUntil(0), [2, 3, 0])
     assertEqual(try runs.readUntil(0), [4])
-    assert(try runs.readUntil(0).isEmpty)
-    assert(try runs.readLine() == none)
+    expect(try runs.readUntil(0).isEmpty)
+    expect(try runs.readLine() == none)
 
     var whole = trickle(bytes, seed: 11)
     assertEqual(try whole.readToEnd(), bytes)
@@ -161,7 +161,7 @@ fn aMemoryStreamReadsWritesAndSeeks() throws {
         try stream.seek(-1, from: .Start)
         fail("seeked before the start")
     } catch IoError.InvalidInput(_) { }
-    assert(try stream.read(upTo: 0).isEmpty)
+    expect(try stream.read(upTo: 0).isEmpty)
     try stream.flush()
     assertEqual(try stream.readExactly(3), [1, 2, 9])
     do {
@@ -190,7 +190,7 @@ fn textRoundTripsThroughEveryEncoding() throws {
         assertEqual(try lines.readLine() ?? "-", "Grüße, мир 😀")
         assertEqual(try lines.readLine() ?? "-", "second line")
         assertEqual(try lines.readLine() ?? "-", "third")
-        assert(try lines.readLine() == none)
+        require(try lines.readLine() == none)
     }
 
     var latin = TextWriter(MemoryStream(), encoding: .Latin1)
@@ -205,6 +205,6 @@ fn textRoundTripsThroughEveryEncoding() throws {
     var bad = TextReader(MemoryStream([0x61, 0xFF]))
     assertEqual(try bad.readToEnd(), "a\u{FFFD}")
     var empty = TextReader(MemoryStream())
-    assert(try empty.readLine() == none)
+    expect(try empty.readLine() == none)
     assertEqual(try empty.read(), "")
 }

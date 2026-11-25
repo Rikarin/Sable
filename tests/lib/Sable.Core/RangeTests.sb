@@ -8,43 +8,43 @@ import Sable.Testing
 @test
 fn aRangeHoldsItsLowerBoundAndNotItsUpper() {
     let r = 2..<5
-    assert(r.contains(2))
-    assert(r.contains(4))
-    assert(!r.contains(5))
-    assert(!r.contains(1))
-    assert(!r.isEmpty)
+    expect(r.contains(2))
+    expect(r.contains(4))
+    expect(!r.contains(5))
+    expect(!r.contains(1))
+    expect(!r.isEmpty)
     assertEqual(r.count, 3)
 }
 
 @test
 fn aRangeWhoseBoundsMeetIsEmpty() {
     let r = 3..<3
-    assert(r.isEmpty)
+    expect(r.isEmpty)
     assertEqual(r.count, 0)
-    assert(!r.contains(3))
+    expect(!r.contains(3))
     let words = "a"..<"c"
-    assert(words.contains("b"))
-    assert(!words.isEmpty)
+    expect(words.contains("b"))
+    expect(!words.isEmpty)
 }
 
 @test
 fn anUpsideDownRangeIsEmpty() {
     let r = Range(lowerBound: 5, upperBound: 2)
-    assert(r.isEmpty)
+    expect(r.isEmpty)
     assertEqual(r.count, 0)
 }
 
 @test
 fn rangesOverlapWhenTheyShareAValue() {
-    assert((0..<5).overlaps(4..<9))
-    assert(!(0..<5).overlaps(5..<9))
-    assert(!(0..<5).overlaps(3..<3))
-    assert((0..<5).overlaps(4...9))
-    assert(!(0..<5).overlaps(5...9))
-    assert((0...5).overlaps(5...9))
-    assert(!(0...4).overlaps(5...9))
-    assert((4...9).overlaps(0..<5))
-    assert(!(5...9).overlaps(0..<5))
+    expect((0..<5).overlaps(4..<9))
+    expect(!(0..<5).overlaps(5..<9))
+    expect(!(0..<5).overlaps(3..<3))
+    expect((0..<5).overlaps(4...9))
+    expect(!(0..<5).overlaps(5...9))
+    expect((0...5).overlaps(5...9))
+    expect(!(0...4).overlaps(5...9))
+    expect((4...9).overlaps(0..<5))
+    expect(!(5...9).overlaps(0..<5))
 }
 
 @test
@@ -59,12 +59,12 @@ fn aClampedRangeLiesWithinItsLimits() {
 
 @test
 fn aSubrangeHasNoValueOutsideTheOther() {
-    assert((2..<4).isSubrange(of: 0..<10))
-    assert((0..<10).isSubrange(of: 0..<10))
-    assert(!(2..<12).isSubrange(of: 0..<10))
-    assert((20..<20).isSubrange(of: 0..<10))
-    assert((2...4).isSubrange(of: 0...10))
-    assert(!(2...11).isSubrange(of: 0...10))
+    expect((2..<4).isSubrange(of: 0..<10))
+    expect((0..<10).isSubrange(of: 0..<10))
+    expect(!(2..<12).isSubrange(of: 0..<10))
+    expect((20..<20).isSubrange(of: 0..<10))
+    expect((2...4).isSubrange(of: 0...10))
+    expect(!(2...11).isSubrange(of: 0...10))
 }
 
 @test
@@ -78,12 +78,12 @@ fn aRangeOfAnyIntegerCountsItsValues() {
 
 @test
 fn aRangeGoesBackwardsReversed() {
-    assert((0..<5).reversed().toArray() == [4, 3, 2, 1, 0])
-    assert((1...4).reversed().toArray() == [4, 3, 2, 1])
-    assert((250 as U8...255).reversed().toArray() == [255, 254, 253, 252, 251, 250] as U8[>..])
-    assert((-2 as I16..<2).toArray() == [-2, -1, 0, 1] as I16[>..])
+    expect((0..<5).reversed().toArray() == [4, 3, 2, 1, 0])
+    expect((1...4).reversed().toArray() == [4, 3, 2, 1])
+    expect((250 as U8...255).reversed().toArray() == [255, 254, 253, 252, 251, 250] as U8[>..])
+    expect((-2 as I16..<2).toArray() == [-2, -1, 0, 1] as I16[>..])
     assertEqual((5...8)[2], 7)
-    assert((3..<3).reversed().toArray() == [] as Int[>..])
+    expect((3..<3).reversed().toArray() == [] as Int[>..])
 }
 
 fn sum<S: Sequence>(_ values: S) -> Int where S.Element == I8, S.Failure == Never {
@@ -103,33 +103,33 @@ fn aRangeOfNarrowIntegersIsASequence() {
 
 @test
 fn aRangeStepsBy() {
-    assert((0..<10).step(by: 3).toArray() == [0, 3, 6, 9])
-    assert((0..<9).step(by: 3).toArray() == [0, 3, 6])
-    assert((0...9).step(by: 3).toArray() == [0, 3, 6, 9])
-    assert((0..<10).step(by: 0).toArray() == [] as Int[>..])
-    assert((0...10).step(by: -1).toArray() == [] as Int[>..])
+    expect((0..<10).step(by: 3).toArray() == [0, 3, 6, 9])
+    expect((0..<9).step(by: 3).toArray() == [0, 3, 6])
+    expect((0...9).step(by: 3).toArray() == [0, 3, 6, 9])
+    expect((0..<10).step(by: 0).toArray() == [] as Int[>..])
+    expect((0...10).step(by: -1).toArray() == [] as Int[>..])
 }
 
 @test
 fn aClosedRangeHoldsBothItsBounds() {
     let r = 2...5
-    assert(r.contains(2) && r.contains(5))
-    assert(!r.contains(1) && !r.contains(6))
-    assert(("a"..."c").contains("b"))
-    assert(!("a"..."c").contains("d"))
+    expect(r.contains(2) && r.contains(5))
+    expect(!r.contains(1) && !r.contains(6))
+    expect(("a"..."c").contains("b"))
+    expect(!("a"..."c").contains("d"))
     let upsideDown = ClosedRange(lowerBound: 5, upperBound: 2)
-    assert(upsideDown.isEmpty && !upsideDown.contains(3))
+    expect(upsideDown.isEmpty && !upsideDown.contains(3))
     assertEqual(upsideDown.count, 0)
 }
 
 @test
 fn closedRangesOverlapWhenTheyShareAValue() {
     let empty = ClosedRange(lowerBound: 5, upperBound: 2)
-    assert(!empty.overlaps(0...9))
-    assert(!(0...9).overlaps(empty))
-    assert(!(5...9).overlaps(0...4))
-    assert((5...9).overlaps(0...5))
-    assert((0...9).overlaps(3...4) && (3...4).overlaps(0...9))
+    expect(!empty.overlaps(0...9))
+    expect(!(0...9).overlaps(empty))
+    expect(!(5...9).overlaps(0...4))
+    expect((5...9).overlaps(0...5))
+    expect((0...9).overlaps(3...4) && (3...4).overlaps(0...9))
 }
 
 @test
@@ -142,16 +142,16 @@ fn aClosedRangeIsClampedAtEitherEnd() {
 
 @test
 fn aClosedSubrangeHasNoValueOutsideTheOther() {
-    assert(!(-1...4).isSubrange(of: 0...10))
-    assert((0...10).isSubrange(of: 0...10))
-    assert(ClosedRange(lowerBound: 25, upperBound: 20).isSubrange(of: 0...10))
+    expect(!(-1...4).isSubrange(of: 0...10))
+    expect((0...10).isSubrange(of: 0...10))
+    expect(ClosedRange(lowerBound: 25, upperBound: 20).isSubrange(of: 0...10))
 }
 
 @test
 fn closedRangesCompareAndDescribeThemselves() {
-    assert(2...5 == 2...5)
-    assert(2...5 != 3...5)
-    assert(2...5 != 2...6)
+    expect(2...5 == 2...5)
+    expect(2...5 != 3...5)
+    expect(2...5 != 2...6)
     assertEqual("\(2...5)", "2...5")
     assertEqual("\("a"..."c")", "\"a\"...\"c\"")
 }
@@ -173,10 +173,10 @@ fn everyOther<C: RandomAccessCollection>(_ values: C) -> C.Element[>..] where C.
 
 @test
 fn aClosedRangeIsARandomAccessCollection() {
-    assert(everyOther(1...5) == [1, 3, 5])
-    assert(everyOther(1...4) == [1, 3])
-    assert(everyOther(253 as U8...255) == [253, 255] as U8[>..])
-    assert(everyOther(I8.min...-126) == [-128, -126] as I8[>..])
+    expect(everyOther(1...5) == [1, 3, 5])
+    expect(everyOther(1...4) == [1, 3])
+    expect(everyOther(253 as U8...255) == [253, 255] as U8[>..])
+    expect(everyOther(I8.min...-126) == [-128, -126] as I8[>..])
 }
 
 @test(traps: "position 4 is out of range for count 4")

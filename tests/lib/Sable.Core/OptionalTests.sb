@@ -15,10 +15,10 @@ fn nothing() -> Int? {
 
 @test
 fn isSomeAndIsNoneSayWhatItHolds() {
-    assert(held(1).isSome)
-    assert(!held(1).isNone)
-    assert(nothing().isNone)
-    assert(!nothing().isSome)
+    expect(held(1).isSome)
+    expect(!held(1).isNone)
+    expect(nothing().isNone)
+    expect(!nothing().isSome)
 }
 
 @test
@@ -34,8 +34,8 @@ fn mapOfNothingIsNothing() {
         called = true
         return v
     })
-    assert(result == none)
-    assert(!called, "the transform does not run")
+    expect(result == none)
+    expect(!called, "the transform does not run")
 }
 
 @test
@@ -43,16 +43,16 @@ fn flatMapChainsStepsThatMayGiveNothing() {
     let text: String? = "42"
     assertEqual(text.flatMap({ t in t.toInt() }) ?? -1, 42)
     let bad: String? = "x"
-    assert(bad.flatMap({ t in t.toInt() }) == none)
+    expect(bad.flatMap({ t in t.toInt() }) == none)
     let absent: String? = none
-    assert(absent.flatMap({ t in t.toInt() }) == none)
+    expect(absent.flatMap({ t in t.toInt() }) == none)
 }
 
 @test
 fn filterKeepsOnlyWhatMeetsTheCondition() {
     assertEqual(held(8).filter({ v in v > 5 }) ?? -1, 8)
-    assert(held(2).filter({ v in v > 5 }) == none)
-    assert(nothing().filter({ v in true }) == none)
+    expect(held(2).filter({ v in v > 5 }) == none)
+    expect(nothing().filter({ v in true }) == none)
 }
 
 @test
@@ -91,14 +91,14 @@ fn expectOfNothingStopsWithTheMessage() {
 fn takeLeavesNothingBehind() {
     var pending: Int? = 5
     assertEqual(pending.take() ?? -1, 5)
-    assert(pending == none)
-    assert(pending.take() == none)
+    expect(pending == none)
+    expect(pending.take() == none)
 }
 
 @test
 fn replaceGivesWhatWasThere() {
     var slot: String? = none
-    assert(slot.replace(with: "a") == none)
+    expect(slot.replace(with: "a") == none)
     assertEqual(slot.replace(with: "b") ?? "", "a")
     assertEqual(slot ?? "", "b")
 }
@@ -115,8 +115,8 @@ fn zipPairsTwoValues() {
 fn zipWithNothingOnEitherSideIsNothing() {
     let letter: String? = "a"
     let absent: String? = none
-    assert(nothing().zip(letter) == none)
-    assert(held(1).zip(absent) == none)
+    expect(nothing().zip(letter) == none)
+    expect(held(1).zip(absent) == none)
 }
 
 @test
@@ -159,18 +159,18 @@ struct Opaque {
 
 @test
 fn anOptionalOfSomethingEquatableIsEquatable() {
-    assert(equal(held(2), held(2)))
-    assert(!equal(held(2), held(3)))
-    assert(!equal(held(2), nothing()))
-    assert(!equal(nothing(), held(2)))
-    assert(equal(nothing(), nothing()))
+    expect(equal(held(2), held(2)))
+    expect(!equal(held(2), held(3)))
+    expect(!equal(held(2), nothing()))
+    expect(!equal(nothing(), held(2)))
+    expect(equal(nothing(), nothing()))
     assertEqual(held(4), held(4))
 }
 
 @test
 fn anOptionalOfSomethingHashableHashesWhatItHolds() {
     assertEqual(held(5).hashValue, held(5).hashValue)
-    assert(held(0).hashValue != nothing().hashValue, "none hashes apart from a value")
+    expect(held(0).hashValue != nothing().hashValue, "none hashes apart from a value")
     var names: [Int?: String] = [:]
     names[held(1)] = "one"
     names[nothing()] = "none"
@@ -182,13 +182,13 @@ fn anOptionalOfSomethingHashableHashesWhatItHolds() {
 
 @test
 fn noneComesBeforeEveryValue() {
-    assert(equal(least(held(1), nothing()), nothing()))
-    assert(equal(least(nothing(), held(1)), nothing()))
-    assert(equal(least(held(3), held(2)), held(2)))
-    assert(equal(least(nothing(), nothing()), nothing()))
+    expect(equal(least(held(1), nothing()), nothing()))
+    expect(equal(least(nothing(), held(1)), nothing()))
+    expect(equal(least(held(3), held(2)), held(2)))
+    expect(equal(least(nothing(), nothing()), nothing()))
     let sorted = [held(3), nothing(), held(1)].sorted()
-    assert(equal(sorted[0], nothing()))
-    assert(equal(sorted[2], held(3)))
+    expect(equal(sorted[0], nothing()))
+    expect(equal(sorted[2], held(3)))
 }
 
 @test
@@ -204,6 +204,6 @@ fn anOptionalOfWhatConformsToNothingStillComparesWithNone() {
     // 'Opaque?' is not Equatable, as Opaque is not, so a generic function
     // over Equatables does not take it; it still compares with 'none'.
     let absent: Opaque? = none
-    assert(absent == none)
+    expect(absent == none)
     assertEqual(absent?.id ?? -1, -1)
 }

@@ -261,7 +261,7 @@ fn aCancelledConnectStopsEveryAttempt() async {
     }
     task.cancel()
     assertEqual(await task.value, "the task was cancelled while it waited")
-    assert(log.all().contains("6a-cancelled") && log.all().contains("4a-cancelled"), log.all())
+    expect(log.all().contains("6a-cancelled") && log.all().contains("4a-cancelled"), log.all())
 }
 
 @test

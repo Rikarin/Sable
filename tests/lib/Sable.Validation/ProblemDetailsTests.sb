@@ -20,7 +20,7 @@ fn aProblemIsReadAsTheRfcAsks() {
     assertEqual(problem.title ?? "", "You do not have enough credit.")
     assertEqual(problem.detail ?? "", "Your current balance is 30, but that costs 50.")
     assertEqual(problem.instance ?? "", "/account/12345/msgs/abc")
-    assert(problem.status == none)
+    expect(problem.status == none)
     assertEqual(try! Json.decode(ProblemDetails.self, from: "{}").type, "about:blank")
 }
 

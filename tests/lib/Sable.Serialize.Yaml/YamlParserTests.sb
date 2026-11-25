@@ -630,7 +630,7 @@ fn theEventsBeforeAnErrorComeFirst() throws {
         } catch {
             assertEqual(error.description(), "line 3, column 1: the text ends inside '[' of line 2, column 5")
             assertEqual(error.offset, 8)
-            assert(error.kind == .Syntax)
+            assertEqual(error.kind, .Syntax)
             thrown += 1
         }
     }
@@ -638,7 +638,7 @@ fn theEventsBeforeAnErrorComeFirst() throws {
     let finished = YamlParser("")
     _ = try finished.next()
     _ = try finished.next()
-    assert((try finished.next()) == none && (try finished.next()) == none)
+    expect((try finished.next()) == none && (try finished.next()) == none)
 }
 
 @test
@@ -649,7 +649,7 @@ fn errorsAreSaid() {
     } catch {
         assertEqual(error.description(), "line 1, column 5: the text ends inside '[' of line 1, column 4")
         assertEqual("\(error.offset)", "4")
-        assert(error == error && error.debugDescription().hasPrefix("YamlError"))
+        expect(error == error && error.debugDescription().hasPrefix("YamlError"))
     }
 }
 
@@ -672,14 +672,14 @@ fn eventsHaveTheirPlaces() throws {
 fn depthIsLimited() {
     let shallow = YamlOptions(maxDepth: 3)
     for text in ["[[[a]]]", "{a: {b: {c: d}}}", "- - - a", "a:\n b:\n  c: d", "- a:\n  - b", "[a: [b]]", "[? a : [b]]"] {
-        assert((try? Yaml.events(text, shallow)) != none, text)
+        require((try? Yaml.events(text, shallow)) != none, text)
     }
     for text in ["[[[[a]]]]", "{a: {b: {c: {d: e}}}}", "- - - - a", "a:\n b:\n  c:\n   d: e", "- a:\n  - b:\n    - c", "[[[a: b]]]", "[[[? a : b]]]", "? ? ? ? a", "- - - ? a", "- - - : a"] {
         do {
             _ = try Yaml.events(text, shallow)
             fail(text)
         } catch {
-            assert(error.kind == .TooDeep, error.description())
+            require(error.kind == .TooDeep, error.description())
         }
     }
 }

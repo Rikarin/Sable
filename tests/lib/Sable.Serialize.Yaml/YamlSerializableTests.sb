@@ -69,12 +69,12 @@ fn record() -> Record {
 fn aDerivedTypeRoundTrips() throws {
     let text = try Yaml.encode(record())
     assertEqual(text, "name: \"no\"\nversion: 18446744073709551615\nlevel: High\nids:\n  - -1\n  - \"1\"\n  - null\nshapes:\n  - Circle:\n      radius: 1.5\n  - Point:\n      - 1\n      - 2\n  - Label: \"a: b\"\n  - Empty\nevent:\n  type: Key\n  code: 2\nnote: |\n  two\n  lines\nratio: 1.0\n")
-    assert((try Yaml.decode(Record.self, from: text)) == record())
+    expect((try Yaml.decode(Record.self, from: text)) == record())
     for options in [YamlPrintOptions(flow: true), YamlPrintOptions(indent: 4, indentSequences: false), YamlPrintOptions(explicitStart: true)] {
-        assert((try Yaml.decode(Record.self, from: try Yaml.encode(record(), options))) == record())
+        require((try Yaml.decode(Record.self, from: try Yaml.encode(record(), options))) == record())
     }
     // YAML is JSON's superset.
-    assert((try Yaml.decode(Record.self, from: try Json.encode(record()))) == record())
+    expect((try Yaml.decode(Record.self, from: try Json.encode(record()))) == record())
     let all = try Yaml.encodeAll([1, 2])
     assertEqual(all, "--- 1\n--- 2\n")
     assertEqual((try Yaml.decodeAll(Int.self, from: all)).count, 2)
@@ -94,13 +94,13 @@ fn theLibrarysConformancesRoundTrip() throws {
     assertEqual((try Yaml.decode(Dictionary<String, Int>.self, from: "1: 1\ntrue: 2\n"))["true"] ?? 0, 2)
     var unique = Set<Int>()
     _ = unique.insert(4)
-    assert((try Yaml.decode(Set<Int>.self, from: try Yaml.encode(unique))) == unique)
-    assert((try Yaml.decode(Duration.self, from: try Yaml.encode(Duration.seconds(2)))) == Duration.seconds(2))
+    expect((try Yaml.decode(Set<Int>.self, from: try Yaml.encode(unique))) == unique)
+    expect((try Yaml.decode(Duration.self, from: try Yaml.encode(Duration.seconds(2)))) == Duration.seconds(2))
     let moment = UtcDateTime.fromUnix(1700000000)
-    assert((try Yaml.decode(UtcDateTime.self, from: try Yaml.encode(moment))) == moment)
+    expect((try Yaml.decode(UtcDateTime.self, from: try Yaml.encode(moment))) == moment)
     let infinity = 1.0 / 0.0
     assertEqual(try Yaml.decode(F64.self, from: try Yaml.encode(-infinity)), -infinity)
-    assert((try Yaml.decode(F64.self, from: try Yaml.encode(0.0 / 0.0))).isNaN)
+    expect((try Yaml.decode(F64.self, from: try Yaml.encode(0.0 / 0.0))).isNaN)
     let value = try Yaml.decode(JsonValue.self, from: "a: [1, yes, ~]\n")
     assertEqual(try Json.encode(value), "{\"a\":[1.0,\"yes\",null]}")
     let empty: Int[>..] = []
@@ -117,8 +117,8 @@ fn bytesAreBinary() throws {
     assertEqual(text, "!!binary AP8Q\n")
     assertEqual(try encoder.text(), text)
     let root = try YamlDecoder.parse(text)
-    assert(root.kind == .Bytes && (try root.decodeBytes()) == [0, 255, 16])
-    assert((try YamlDecoder.parse("AP8Q").decodeBytes()) == [0, 255, 16])
+    expect(root.kind == .Bytes && (try root.decodeBytes()) == [0, 255, 16])
+    expect((try YamlDecoder.parse("AP8Q").decodeBytes()) == [0, 255, 16])
 }
 
 fn failure<T: Serializable>(_ type: T.Type, _ text: String) -> String {
@@ -157,7 +157,7 @@ fn errorsSayWhere() {
         _ = try Yaml.decodeAll(Int.self, from: "--- 1\n--- [")
         fail("decoded")
     } catch {
-        assert(error.description().hasPrefix("not YAML: line 2"))
+        expect(error.description().hasPrefix("not YAML: line 2"))
     }
 }
 
@@ -165,39 +165,31 @@ fn errorsSayWhere() {
 fn theDecoderDirectly() throws {
     let root = try YamlDecoder.parse("a: &x [1, {b c: ~}]\nd: *x\ne: !!str 1\nf: 0o17\ng: !Own {h: .5}\n")
     assertEqual(root.field("a").element(1).field("b c").path, "$.a[1]['b c']")
-    assert(root.field("a").element(1).field("b c").isNull)
-    assert(root.field("a").element(9).isMissing && root.element(0).isMissing && root.field("z").isMissing && root.field("z").element(0).isMissing && root.field("z").field("y").isMissing)
+    expect(root.field("a").element(1).field("b c").isNull)
+    expect(root.field("a").element(9).isMissing && root.element(0).isMissing && root.field("z").isMissing && root.field("z").element(0).isMissing && root.field("z").field("y").isMissing)
     assertEqual(try root.field("d").element(0).decodeInt(), 1)
     assertEqual(try root.field("e").decodeString(), "1")
     assertEqual(try root.field("f").decodeUInt(), 15)
     assertEqual(try root.field("g").field("h").decodeFloat(), 0.5)
     assertEqual(try root.field("f").decodeFloat(), 15.0)
-    assert(root.hasField("a") && !root.hasField("q"))
+    expect(root.hasField("a") && !root.hasField("q"))
     let rest = root.excluding(["a"]).excluding(["d", "e"])
     var keys: String[>..] = []
     for member in try rest.decodeMap() {
         keys.append(member.key)
     }
     assertEqual(keys.joined(separator: ","), "f,g")
-    assert(rest.field("a").isMissing)
-    assert(root.kind == .Map && root.field("a").kind == .Sequence && root.field("f").kind == .Number && root.field("e").kind == .String && root.field("z").kind == .Missing)
-    assert(root.element(0).kind == .Missing && root.field("z").kindName == "nothing" && root.field("a").element(1).field("b c").kind == .Null)
-    assert((try YamlDecoder.parse("true")).kind == .Bool && (try YamlDecoder.parse("1.5")).kind == .Number)
-    assert((try YamlDecoder.parse("x")).casePayload().isMissing && (try YamlDecoder.parse("Circle: 1")).casePayload().node != none)
+    expect(rest.field("a").isMissing)
+    expect(root.kind == .Map && root.field("a").kind == .Sequence && root.field("f").kind == .Number && root.field("e").kind == .String && root.field("z").kind == .Missing)
+    expect(root.element(0).kind == .Missing && root.field("z").kindName == "nothing" && root.field("a").element(1).field("b c").kind == .Null)
+    expect((try YamlDecoder.parse("true")).kind == .Bool && (try YamlDecoder.parse("1.5")).kind == .Number)
+    expect((try YamlDecoder.parse("x")).casePayload().isMissing && (try YamlDecoder.parse("Circle: 1")).casePayload().node != none)
     assertEqual((try YamlDecoder.parse("x")).invalid("no").description(), "$: no")
     let encoder = YamlEncoder()
-    do {
+    expectThrows(saying: "$: only a struct or a map can be flattened") {
         try encoder.beginMap(count: 1)
         try encoder.flattenNext()
         try encoder.encodeInt(1)
-        fail("an integer was flattened")
-    } catch {
-        assertEqual(error.description(), "$: only a struct or a map can be flattened")
     }
-    do {
-        _ = try YamlEncoder().text()
-        fail("nothing was written")
-    } catch {
-        assertEqual(error.description(), "$: a document ends before its value does")
-    }
+    expectThrows(saying: "$: a document ends before its value does") { _ = try YamlEncoder().text() }
 }

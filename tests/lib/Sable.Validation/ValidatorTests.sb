@@ -28,8 +28,8 @@ struct CustomerValidator: Validator<TestCustomer> {
 @test
 async fn aValueThatBreaksNoRuleIsValid() {
     let result = await CustomerValidator().validate(ada())
-    assert(result.isValid)
-    assert(!result.hasErrors)
+    expect(result.isValid)
+    expect(!result.hasErrors)
     assertEqual(result.ruleSets, ["default"])
 }
 
@@ -50,10 +50,10 @@ async fn failuresComeInTheOrderOfTheRulesWithPathsToWhatIsWrong() {
 async fn rulesKeptValidateAgainAndAgain() {
     let rules = Rules(CustomerValidator())
     var customer = ada()
-    assert((await rules.validate(customer)).isValid)
+    expect((await rules.validate(customer)).isValid)
     customer.email = "ada"
     assertEqual((await rules.validate(customer)).messages(at: "email"), ["'Email' is not a valid email address."])
-    assert((await rules.validate(ada())).isValid)
+    expect((await rules.validate(ada())).isValid)
 }
 
 @test
@@ -61,11 +61,8 @@ async fn validatedGivesTheValueOrThrowsEveryFailure() {
     assertEqual((try! await CustomerValidator().validated(ada())).age, 36)
     var customer = ada()
     customer.email = ""
-    do {
+    await expectThrows(saying: "Validation failed:\n -- email: 'Email' must not be empty.\n -- email: 'Email' is not a valid email address.") {
         _ = try await CustomerValidator().validated(customer)
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "Validation failed:\n -- email: 'Email' must not be empty.\n -- email: 'Email' is not a valid email address.")
     }
 }
 
@@ -78,8 +75,8 @@ fn anErrorOfTheValueItselfHasNoPathToSay() {
 @test
 fn checkingWithoutWaitingRunsRulesThatDoNotWait() {
     let order = OrderValidator()
-    assert((try! order.check(TestOrder(total: 1, lines: []))).isValid)
-    assert((try! order.check(TestOrder(total: 0, lines: []))).has(errorAt: "total"))
+    expect((try! order.check(TestOrder(total: 1, lines: []))).isValid)
+    expect((try! order.check(TestOrder(total: 0, lines: []))).has(errorAt: "total"))
 }
 
 @test
@@ -89,9 +86,9 @@ fn checkingWithoutWaitingRefusesRulesThatWait() {
         assert(false)
     } catch {
         assertEqual(error.path, "")
-        assert(error.description().contains("asynchronous"))
-        assert(error == AsyncRuleError(path: ""))
-        assert(error != AsyncRuleError(path: "x"))
+        expect(error.description().contains("asynchronous"))
+        expect(error == AsyncRuleError(path: ""))
+        expect(error != AsyncRuleError(path: "x"))
     }
 }
 
@@ -102,7 +99,7 @@ fn aRuleThatWaitsBehindAConditionThatFailsIsNoReasonToRefuse() {
         await Task.yield()
         return t > 0
     }.when { (value) in false }
-    assert((try! rules.check(TestOrder(total: 0, lines: []))).isValid)
+    expect((try! rules.check(TestOrder(total: 0, lines: []))).isValid)
 }
 
 @test

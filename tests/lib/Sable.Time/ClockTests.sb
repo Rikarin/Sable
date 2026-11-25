@@ -32,11 +32,11 @@ fn nap<C: Clock>(on clock: C) async -> Duration {
 
 @test
 fn theSystemsClocksSleepAtLeastAsLong() async {
-    assert(await nap(on: MonotonicClock()) >= Duration.milliseconds(2))
-    assert(await nap(on: SuspendingClock()) >= Duration.milliseconds(2))
+    expect(await nap(on: MonotonicClock()) >= Duration.milliseconds(2))
+    expect(await nap(on: SuspendingClock()) >= Duration.milliseconds(2))
     let moment = SystemClock().now().adding(Duration.milliseconds(2))
     try! await SystemClock().sleep(until: moment)
-    assert(SystemClock().now() >= moment)
+    expect(SystemClock().now() >= moment)
 }
 
 @test
@@ -46,7 +46,7 @@ fn aDeadlineThatHasPassedIsNotWaitedFor() async {
     try! await MonotonicClock().sleep(until: Instant.origin - Duration.max)
     try! await SuspendingClock().sleep(until: SuspendingInstant.now().adding(Duration.hours(-1)))
     try! await SystemClock().sleep(until: UtcDateTime.unixEpoch)
-    assert(start.elapsed < Duration.minutes(1))
+    expect(start.elapsed < Duration.minutes(1))
 }
 
 @test
@@ -87,37 +87,35 @@ fn measuringIsOnTheClock() async {
         _ = 1
     }), Duration.seconds(1))
     assertEqual(await measure(clock: clock) { await Task.yield() }, Duration.seconds(1))
-    assert(measure { Runtime.sleep(nanoseconds: 1_000_000) } >= Duration.milliseconds(1))
-    assert(await measure { try! await MonotonicClock().sleep(for: Duration.milliseconds(1)) } >= Duration.milliseconds(1))
+    expect(measure { Runtime.sleep(nanoseconds: 1_000_000) } >= Duration.milliseconds(1))
+    expect(await measure { try! await MonotonicClock().sleep(for: Duration.milliseconds(1)) } >= Duration.milliseconds(1))
 }
 
 @test
 fn measuringThrowsWhatTheBodyThrows() async {
-    do {
+    expectThrows {
         _ = try measure { () throws(Oops) -> Void in
-            throw Oops()
-        }
-        assert(false)
-    } catch { }
-    do {
+        throw Oops()
+    }
+    }
+    await expectThrows {
         _ = try await measure { () throws(Oops) -> Void in
-            await Task.yield()
-            throw Oops()
-        }
-        assert(false)
-    } catch { }
+        await Task.yield()
+        throw Oops()
+    }
+    }
 }
 
 @test
 fn instantsOfASuspendingClockAreCompared() {
     let start = SuspendingInstant.now()
     let later = start.adding(Duration.seconds(1))
-    assert(start < later && start != later)
+    expect(start < later && start != later)
     assertEqual(later.durationSince(start), Duration.seconds(1))
     assertEqual(later.saturatingAdding(Duration.max), start.saturatingAdding(Duration.max))
     let seen: [SuspendingInstant: Int] = [start: 1]
     assertEqual(seen[start] ?? 0, 1)
-    assert(start.debugDescription().hasPrefix("SuspendingInstant("))
+    expect(start.debugDescription().hasPrefix("SuspendingInstant("))
 }
 
 @test

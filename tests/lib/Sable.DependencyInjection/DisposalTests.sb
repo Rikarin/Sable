@@ -88,7 +88,7 @@ fn aScopeEndsWhenItsBodyThrows() {
             throw TestError("stop")
         }
     } catch {
-        assert(error is TestError)
+        expect(error is TestError)
     }
     assertEqual(record.all, "a")
 }
@@ -123,12 +123,12 @@ fn theProviderDisposesItsSingletons() {
     provider.dispose()
     provider.dispose()
     assertEqual(record.all, "b a")
-    assert(provider.isDisposed)
+    expect(provider.isDisposed)
     do {
         _ = try provider.resolve(ClosingShared.self, key: "a")
         assert(false)
     } catch {
-        assert(error.description().contains("disposed"), error.description())
+        expect(error.description().contains("disposed"), error.description())
     }
 }
 
@@ -190,12 +190,7 @@ fn aDisposedScopeGivesNothing() {
     services.addScoped(Int.self) { _scope in 1 }
     let provider = try! services.build()
     let scope = provider.withScope { scope in scope }
-    do {
-        _ = try scope.resolve(Int.self)
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "Int was asked for after its scope was disposed")
-    }
+    expectThrows(saying: "Int was asked for after its scope was disposed") { _ = try scope.resolve(Int.self) }
 }
 
 // Both: waited for where that can be, and else not.

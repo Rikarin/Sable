@@ -36,10 +36,10 @@ fn published(_ wrapping: String, _ key: String, _ wrapped: String, padded: Bool)
     let secret = SymmetricKey(bytes(key))
     if padded {
         assertEqual("\(Digest(try! cipher.wrapPadded(secret)))", wrapped)
-        assert((try! cipher.unwrapPadded(bytes(wrapped))) == secret)
+        expect((try! cipher.unwrapPadded(bytes(wrapped))) == secret)
     } else {
         assertEqual("\(Digest(try! cipher.wrap(secret)))", wrapped)
-        assert((try! cipher.unwrap(bytes(wrapped))) == secret)
+        expect((try! cipher.unwrap(bytes(wrapped))) == secret)
     }
 }
 
@@ -70,35 +70,25 @@ fn everyLengthIsUnwrapped() {
     for count in 1..<80 {
         let key = SymmetricKey(message(count))
         let padded = try! cipher.wrapPadded(key)
-        assert(padded.count == (count + 7) / 8 * 8 + 8)
-        assert((try! cipher.unwrapPadded(padded)) == key)
+        assertEqual(padded.count, (count + 7) / 8 * 8 + 8)
+        assertEqual((try! cipher.unwrapPadded(padded)), key)
         if count >= 16 && count % 8 == 0 {
             let wrapped = try! cipher.wrap(key)
             assert(wrapped.count == count + 8 && wrapped != padded)
-            assert((try! cipher.unwrap(wrapped)) == key)
+            assertEqual((try! cipher.unwrap(wrapped)), key)
             refused(cipher, wrapped, padded: true)
             refused(cipher, padded, padded: false)
         } else {
-            do {
-                _ = try cipher.wrap(key)
-                assert(false)
-            } catch {
-                assertEqual(error.description(), "a key to wrap without padding has a multiple of 8 bytes, and 16 at least, not \(count)")
-            }
+            expectThrows(saying: "a key to wrap without padding has a multiple of 8 bytes, and 16 at least, not \(count)") { _ = try cipher.wrap(key) }
         }
     }
-    do {
-        _ = try cipher.wrapPadded(SymmetricKey([]))
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "a key to wrap has 1 to 4294967295 bytes, not 0")
-    }
+    expectThrows(saying: "a key to wrap has 1 to 4294967295 bytes, not 0") { _ = try cipher.wrapPadded(SymmetricKey([])) }
 }
 
 fn refused(_ cipher: AesKeyWrap, _ wrapped: U8[:], padded: Bool) {
     do {
         _ = padded ? try cipher.unwrapPadded(wrapped) : try cipher.unwrap(wrapped)
-        assert(false, "it was unwrapped")
+        fail("it was unwrapped")
     } catch {
         assertEqual(error, .AuthenticationFailed)
     }
@@ -146,7 +136,7 @@ fn wrongPaddingIsRefused() {
         plain.append(contentsOf: [1, 2, 3, 4, 5, 6, 7, 0])
         let wrapped = try! block.encrypt(plain)
         if length == 7 || length == 8 {
-            assert((try! cipher.unwrapPadded(wrapped)) == SymmetricKey(plain[8..<8 + length]))
+            require((try! cipher.unwrapPadded(wrapped)) == SymmetricKey(plain[8..<8 + length]))
         } else {
             refused(cipher, wrapped, padded: true)
         }
@@ -159,10 +149,5 @@ fn wrongPaddingIsRefused() {
 
 @test
 fn theWrappingKeyHasItsLength() {
-    do {
-        _ = try AesKeyWrap(key: SymmetricKey(message(20)))
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "an AES key has 16, 24 or 32 bytes, not 20")
-    }
+    expectThrows(saying: "an AES key has 16, 24 or 32 bytes, not 20") { _ = try AesKeyWrap(key: SymmetricKey(message(20))) }
 }

@@ -31,7 +31,7 @@ fn aKeyPathReadsWhatItNames() {
 fn aKeyPathThroughAnOptionalLeadsToOne() {
     let path = \KeyPathCustomer.billing?.city
     assertEqual(path.path, "billing.city")
-    assert(path.value(of: keyPathCustomer()) == none)
+    expect(path.value(of: keyPathCustomer()) == none)
 }
 
 @test

@@ -1,5 +1,7 @@
 module Sable.Testing
 
+import Sable.Math
+
 /// What an arbitrary value is made from: a series of choices, each a number
 /// up to a limit, 0 the simplest. They are drawn at random, or said again
 /// from a list; every one drawn is kept, so that a value is made again from
@@ -152,15 +154,17 @@ public final class Choices {
     /// each is left out by itself: calls the body as often as it makes the
     /// elements, at least and at most so many.
     public fn times(_ least: Int, _ most: Int, _ body: () -> Void) {
-        // A tenth of the size is the mean of the lengths: an end is as
-        // likely after each element.
-        let mean = size / 10 + 1
+        // A tenth of the size is the mean of the lengths, and half the way
+        // to the most there may be where that is said: an end is as likely
+        // after each element.
+        let bounded = most < 1_000_000
+        let mean = max(size / 10 + 1, bounded ? (most - least) * size / 200 : 0)
         var count = 0
         var more = true
         while more && count < most {
             let start = drawn.count
             if count >= least {
-                more = !isEnough && chance(mean, outOf: mean + 1)
+                more = (bounded || !isEnough) && chance(mean, outOf: mean + 1)
             }
             if more {
                 body()

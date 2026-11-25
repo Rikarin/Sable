@@ -36,7 +36,7 @@ fn theRfcsAgreementsAreMade() {
 fn checkOwn<C: EllipticCurve>(_ curve: C.Type) {
     let mine = EcdhPrivateKey<C>.generate()
     let yours = EcdhPrivateKey<C>.generate()
-    assert(mine.sharedSecret(with: yours.publicKey) == yours.sharedSecret(with: mine.publicKey))
+    expect(mine.sharedSecret(with: yours.publicKey) == yours.sharedSecret(with: mine.publicKey))
     assertEqual(mine.sharedSecret(with: yours.publicKey).byteCount, C.curve.byteCount)
     for key in [mine.publicKey, yours.publicKey] {
         assert(try! EcdhPublicKey<C>(key.compressed) == key && EcdhPublicKey<C>(key.bytes) == key)
@@ -44,30 +44,30 @@ fn checkOwn<C: EllipticCurve>(_ curve: C.Type) {
     // The other y, and one of no point.
     var other = mine.publicKey.compressed
     other[0] = other[0] ^ 1
-    assert(try! EcdhPublicKey<C>(other) != mine.publicKey)
-    assert(try! yours.sharedSecret(with: EcdhPublicKey<C>(other)) == yours.sharedSecret(with: mine.publicKey))
+    expect(try! EcdhPublicKey<C>(other) != mine.publicKey)
+    expect(try! yours.sharedSecret(with: EcdhPublicKey<C>(other)) == yours.sharedSecret(with: mine.publicKey))
     var wrong = mine.publicKey.bytes
     wrong[wrong.count - 1] = wrong[wrong.count - 1] ^ 1
-    assert((try? EcdhPublicKey<C>(wrong)) == none)
+    expect((try? EcdhPublicKey<C>(wrong)) == none)
     // Infinity, nothing, too few, another form, and coordinates over the modulus.
-    assert((try? EcdhPublicKey<C>([0])) == none && (try? EcdhPublicKey<C>([])) == none)
-    assert((try? EcdhPublicKey<C>(mine.publicKey.bytes[..<^1])) == none)
+    expect((try? EcdhPublicKey<C>([0])) == none && (try? EcdhPublicKey<C>([])) == none)
+    expect((try? EcdhPublicKey<C>(mine.publicKey.bytes[..<^1])) == none)
     wrong = mine.publicKey.bytes
     wrong[0] = 6
-    assert((try? EcdhPublicKey<C>(wrong)) == none)
+    expect((try? EcdhPublicKey<C>(wrong)) == none)
     var i = 1
     while i < wrong.count {
         wrong[i] = 0xFF
         i += 1
     }
     wrong[0] = 4
-    assert((try? EcdhPublicKey<C>(wrong)) == none)
+    expect((try? EcdhPublicKey<C>(wrong)) == none)
     wrong = wrong[..<C.curve.byteCount + 1].toArray()
     wrong[0] = 2
-    assert((try? EcdhPublicKey<C>(wrong)) == none)
+    expect((try? EcdhPublicKey<C>(wrong)) == none)
     assertEqual(mine.debugDescription(), "EcdhPrivateKey<\(C.curve)>")
-    assert(mine.publicKey.debugDescription().hasPrefix("EcdhPublicKey<\(C.curve)>(04"))
-    assert(mine != yours && (try! EcdhPrivateKey<C>(mine.bytes())) == mine)
+    expect(mine.publicKey.debugDescription().hasPrefix("EcdhPublicKey<\(C.curve)>(04"))
+    expect(mine != yours && (try! EcdhPrivateKey<C>(mine.bytes())) == mine)
 }
 
 @test
@@ -88,11 +88,11 @@ fn smallScalarsAgree() {
         var bytes = U8[>..](repeating: 0, count: 32)
         bytes[31] = U8(scalar)
         let key = try! EcdhPrivateKey<P256>(bytes)
-        assert(key.sharedSecret(with: other.publicKey) == other.sharedSecret(with: key.publicKey))
+        assertEqual(key.sharedSecret(with: other.publicKey), other.sharedSecret(with: key.publicKey))
         bytes = hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551")
         bytes[31] = bytes[31] - U8(scalar)
         let opposite = try! EcdhPrivateKey<P256>(bytes)
-        assert(opposite.sharedSecret(with: other.publicKey) == key.sharedSecret(with: other.publicKey))
+        assertEqual(opposite.sharedSecret(with: other.publicKey), key.sharedSecret(with: other.publicKey))
         assert(opposite.publicKey != key.publicKey)
         scalar += 1
     }

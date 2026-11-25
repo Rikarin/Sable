@@ -152,7 +152,7 @@ fn integersAreDecimalHexadecimalOctalOrBinary() {
         "+0x1", "-0x1", "+0o1", "-0b1", "1a", "0x1.0", "9223372036854775808", "-9223372036854775809", "0x8000000000000000", "0xffffffffffffffff", "0o1000000000000000000000",
         "0b1000000000000000000000000000000000000000000000000000000000000000", "1,000", "1'000", "1L", "0xDEADBEEFG", "_", "1_000_", "\u{0661}", "1\u{a0}", "e1",
     ] as String[>..] {
-        assert(value(text).hasPrefix("error: "), text)
+        expect(value(text).hasPrefix("error: "), text)
     }
     assertEqual(value("9223372036854775808"), "error: line 1, column 5: '9223372036854775808' does not fit 64 bits")
 }
@@ -171,7 +171,7 @@ fn floatsHaveFractionsAndExponents() {
         ".7", "7.", "3.e+20", "1.", "+.1", "1e", "1e+", "1e1.0", "1e_1", "1e1_", "1_.0", "1._0", "1.0_", "1.0_e1", "1__0.0", "01.0", "-01.0", "00.0", "1.2.3", "Inf", "NaN", "INF", "++inf", "in f", "infinity",
         "nan1", "1e1e1", "0x1p3", "1.0f", "1.e1", "1.0e", "_1.0", "+ 1.0", "1,5", "inf_", "0_1.0", "e", "1e 1",
     ] as String[>..] {
-        assert(value(text).hasPrefix("error: "), text)
+        expect(value(text).hasPrefix("error: "), text)
     }
 }
 
@@ -204,7 +204,7 @@ fn datesAndTimesAreRfc3339s() {
         "07:32", "7:32:00", "07:32:0", "24:00:00", "07:60:00", "07:32:61", "07:32:00Z", "07:32:00.", "07:32:00.1.2", "07:32:00+01:00", "07-32-00", "1979/05/27", "10000-01-01", "-1979-05-27", "1979-05-27-", "1979-05-27T07:32:00-7:00",
         "1987-07-05 17:45:00\tZ", "12:34:5a", "1a:00:00", "2021-1-1", "198a-01-01",
     ] as String[>..] {
-        assert(value(text).hasPrefix("error: "), text)
+        expect(value(text).hasPrefix("error: "), text)
     }
 }
 
@@ -304,18 +304,8 @@ fn errorsSayWhereAndWhy() {
     for (text, message) in cases {
         assertEqual(read(text), "error: " + message)
     }
-    do {
-        _ = try Toml.decode(Dictionary<String, Int>.self, from: "a = ")
-        fail("read")
-    } catch {
-        assertEqual(error.description(), "not TOML: line 1, column 5: expected a value, found the end")
-    }
-    do {
-        _ = try TomlDecoder.parse(bytes: [0x61, 0x3D, 0x22, 0xFF, 0x22])
-        fail("read")
-    } catch {
-        assertEqual(error.description(), "not TOML: line 1, column 4: ill-formed UTF-8")
-    }
+    expectThrows(saying: "not TOML: line 1, column 5: expected a value, found the end") { _ = try Toml.decode(Dictionary<String, Int>.self, from: "a = ") }
+    expectThrows(saying: "not TOML: line 1, column 4: ill-formed UTF-8") { _ = try TomlDecoder.parse(bytes: [0x61, 0x3D, 0x22, 0xFF, 0x22]) }
 }
 
 fn repeated(_ text: String, _ count: Int) -> String {
@@ -344,11 +334,11 @@ fn nestingIsBoundedHoweverItIsWritten() {
         path = path + ".a"
     }
     // Each [[a.a…]] is two deeper: an array, and a table in it.
-    assert(read(arrays).contains("nested more than 128 deep"))
-    assert(!read("a = " + repeated("[", 128) + repeated("]", 128)).hasPrefix("error: "))
-    assert(read("a = " + repeated("[", 129) + repeated("]", 129)).hasPrefix("error: "))
-    assert((try? Toml.parse("a.b.c = 1", maximumDepth: 2)) == none)
-    assert((try? Toml.parse("a.b.c = 1", maximumDepth: 3)) != none)
+    expect(read(arrays).contains("nested more than 128 deep"))
+    expect(!read("a = " + repeated("[", 128) + repeated("]", 128)).hasPrefix("error: "))
+    expect(read("a = " + repeated("[", 129) + repeated("]", 129)).hasPrefix("error: "))
+    expect((try? Toml.parse("a.b.c = 1", maximumDepth: 2)) == none)
+    expect((try? Toml.parse("a.b.c = 1", maximumDepth: 3)) != none)
 }
 
 @test
@@ -359,7 +349,7 @@ fn manyKeysAreNotQuadratic() throws {
     }
     let table = try Toml.parse(String.fromUtf8Lossy(text))
     assertEqual(table.count, 20000)
-    assert(table["key19999"]! == .Integer(value: 19999))
+    expect(table["key19999"]! == .Integer(value: 19999))
 }
 
 @test
@@ -377,10 +367,10 @@ fn anyTextIsReadOrRefused() throws {
             // What is written is read as the same.
             let again = try Toml.parse(try Toml.write(table))
             assertEqual(show(.Table(table: again)).count, show(.Table(table: table)).count)
-            assert((try TomlDocument.parse(text)).text() == text)
+            assertEqual((try TomlDocument.parse(text)).text(), text)
         }
     }
-    assert(valid > 100, "\(valid)")
+    expect(valid > 100, "\(valid)")
 }
 
 // ---- Tables as values, writing -----------------------------------------------
@@ -388,7 +378,7 @@ fn anyTextIsReadOrRefused() throws {
 @test
 fn aTableKeepsItsOrder() {
     var table = TomlTable()
-    assert(table.isEmpty && table["a"] == none)
+    expect(table.isEmpty && table["a"] == none)
     table["b"] = .Integer(value: 1)
     table["a"] = .Bool(value: true)
     table["b"] = .Integer(value: 2)
@@ -397,17 +387,17 @@ fn aTableKeepsItsOrder() {
     assertEqual(table.keys, ["b", "a", "c"])
     table["b"] = none
     assertEqual(table.keys, ["a", "c"])
-    assert(table["c"]!.text == "x" && table["b"] == none)
+    expect(table["c"]!.text == "x" && table["b"] == none)
     var other = TomlTable()
     other["c"] = .Text(value: "x")
-    assert(table != other)
+    expect(table != other)
     other["a"] = .Bool(value: true)
-    assert(table == other)
+    expect(table == other)
     other["a"] = .Bool(value: false)
-    assert(table != other)
+    expect(table != other)
     other["a"] = none
     other["d"] = .Bool(value: true)
-    assert(table != other)
+    expect(table != other)
     assertEqual(table.debugDescription(), "{ a = true, c = \"x\" }")
     assertEqual(table.entries[1], TomlEntry { key: "c", value: .Text(value: "x") })
 }
@@ -437,12 +427,7 @@ fn writingPutsValuesBeforeTables() throws {
     let late = TomlValue.LocalDate(value: Date.of(year: 10000, month: 1, day: 1)!)
     var tables = TomlTable()
     tables["x"] = .Array(items: [late])
-    do {
-        _ = try Toml.write(tables)
-        fail("written")
-    } catch {
-        assertEqual(error.description(), "$: TOML has no year 10000")
-    }
+    expectThrows(saying: "$: TOML has no year 10000") { _ = try Toml.write(tables) }
 }
 
 // ---- Serializable ------------------------------------------------------------
@@ -491,14 +476,14 @@ fn aDerivedTypeGoesThereAndBack() throws {
         text,
         "version = 3\nrate = 0.5\nname = \"r\"\nwhen = \"2023-11-14T22:13:20Z\"\nday = 2026-11-24\n\n[[shapes]]\n\n[shapes.Circle]\nradius = 0.1\n\n[[shapes]]\n\n[shapes.Circle]\nradius = 2.0\n\n[inner]\nversion = 4\nrate = 1.5\n"
     )
-    assert(try Toml.decode(Record.self, from: text) == record())
+    expect(try Toml.decode(Record.self, from: text) == record())
     // A date and time of TOML's own reads as a UtcDateTime too.
-    assert(try Toml.decode(Record.self, from: text.replacing("\"2023-11-14T22:13:20Z\"", with: "2023-11-14T23:13:20+01:00")) == record())
-    assert(try TomlDocument.parse(text).decode(Record.self) == record())
+    expect(try Toml.decode(Record.self, from: text.replacing("\"2023-11-14T22:13:20Z\"", with: "2023-11-14T23:13:20+01:00")) == record())
+    expect(try TomlDocument.parse(text).decode(Record.self) == record())
     var mixed = record()
     mixed.shapes = [.Point(1, 2), .Empty]
-    assert(try Toml.encode(mixed).contains("shapes = [{ Point = [1, 2] }, \"Empty\"]"))
-    assert(try Toml.decode(Record.self, from: try Toml.encode(mixed)) == mixed)
+    expect(try Toml.encode(mixed).contains("shapes = [{ Point = [1, 2] }, \"Empty\"]"))
+    expect(try Toml.decode(Record.self, from: try Toml.encode(mixed)) == mixed)
     var counts = Dictionary<String, Int?>()
     counts["one"] = 1
     counts["none"] = none
@@ -586,17 +571,17 @@ fn decodersSayWhereAndWhatIsWrong() throws {
     let root = try TomlDecoder.parse("a = [1, 'x']\n'b c' = {d = -1, e = 'AQI', f = '!'}\ng = 1.5\n[[h]]\ni = true\nj = 2026-11-24")
     assertEqual(root.path, "$")
     assertEqual(root.count, 4)
-    assert(root.kind == .Map && !root.isNull && !root.isMissing)
+    expect(root.kind == .Map && !root.isNull && !root.isMissing)
     assertEqual(root.field("a").element(1).path, "$.a[1]")
     assertEqual(root.field("h").element(0).field("i").path, "$.h[0].i")
-    assert(root.field("a").element(2).isMissing && root.field("a").element(-1).isMissing && root.element(0).isMissing)
-    assert(root.hasField("a") && !root.hasField("c") && !root.field("a").hasField("a"))
-    assert(!root.excluding(["a"]).hasField("a"))
+    expect(root.field("a").element(2).isMissing && root.field("a").element(-1).isMissing && root.element(0).isMissing)
+    expect(root.hasField("a") && !root.hasField("c") && !root.field("a").hasField("a"))
+    expect(!root.excluding(["a"]).hasField("a"))
     assertEqual(try root.excluding(["a"]).excluding(["g"]).decodeMap().count, 2)
-    assert(try root.field("b c").field("e").decodeBytes() == [1, 2])
+    expect(try root.field("b c").field("e").decodeBytes() == [1, 2])
     assertEqual(try root.field("a").element(0).decodeUInt(), 1)
     assertEqual(try root.field("a").element(0).decodeFloat(), 1.0)
-    assert(try root.field("h").element(0).field("i").decodeBool())
+    expect(try root.field("h").element(0).field("i").decodeBool())
     var messages: String[>..] = []
     let attempts: (() throws(SerializeError) -> Void)[>..] = [
         {
@@ -691,7 +676,7 @@ fn decodersSayWhereAndWhatIsWrong() throws {
         kinds += "\(decoder.kind) "
     }
     assertEqual(kinds, "Sequence Number String Bool String Missing ")
-    assert(root.casePayload().isMissing && root.field("zz").kindName == "nothing")
+    expect(root.casePayload().isMissing && root.field("zz").kindName == "nothing")
 }
 
 @test
@@ -702,9 +687,9 @@ fn aValueGoesThroughOtherFormats() throws {
     assertEqual(show(back), "{a:[i1,f2.5,true,s\"x\"]}")
     assertEqual(show(try Toml.decode(TomlValue.self, from: "a = 1")), "{a:i1}")
     assertEqual(show(try MessagePack.decode(TomlValue.self, from: [0xC4, 1, 255])), "[i255]")
-    assert((try? Json.decode(TomlValue.self, from: "null")) == none)
-    assert((try? TomlValue.decode(from: try JsonDecoder.parse("{}").field("a"))) == none)
+    expect((try? Json.decode(TomlValue.self, from: "null")) == none)
+    expect((try? TomlValue.decode(from: try JsonDecoder.parse("{}").field("a"))) == none)
     let document = try JsonValue.decode(from: try TomlDecoder.parse("a = [1, 'x', 2026-11-24]"))
     assertEqual(try Json.encode(document), "{\"a\":[1.0,\"x\",\"2026-11-24\"]}")
-    assert(table.table != none && table.items == none && table.text == none && table.kindName == "a table")
+    expect(table.table != none && table.items == none && table.text == none && table.kindName == "a table")
 }

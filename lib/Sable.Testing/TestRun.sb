@@ -82,7 +82,7 @@ async fn runNamed(_ tests: TestCase[>..]) -> Int {
     var chosen: TestCase[>..] = []
     var expanded = ""
     var cases: TestCase[>..] = []
-    while let name = Runtime.readLine() {
+    for name in NamedTests.names {
         let function = functionName(name)
         for test in tests {
             if test.name != function {
@@ -113,6 +113,53 @@ async fn runNamed(_ tests: TestCase[>..]) -> Int {
         }
     }
     return 0
+}
+
+/// The tests a process was started for: '--run-test' and the name, or
+/// '--run-tests' and each on a line of standard input.
+struct NamedTests {
+    // Whether it was started for some alone.
+    static let isSome: Bool = NamedTests.flag("--run-test") != none || NamedTests.flag("--run-tests") != none
+    static let names: String[>..] = NamedTests.read()
+    static let functions: String[>..] = NamedTests.names.map({ functionName($0) })
+
+    // Where the argument is.
+    static fn flag(_ argument: String) -> Int? {
+        for i in 0..<Runtime.argumentCount() {
+            if Runtime.argument(i) == argument {
+                return i
+            }
+        }
+        return none
+    }
+
+    static fn read() -> String[>..] {
+        if let at = NamedTests.flag("--run-test") {
+            return at + 1 < Runtime.argumentCount() ? [Runtime.argument(at + 1)] : []
+        }
+        var names: String[>..] = []
+        if NamedTests.flag("--run-tests") != none {
+            while let name = Runtime.readLine() {
+                names.append(name)
+            }
+        }
+        return names
+    }
+}
+
+/// Whether this process has a use for the test of the name, which the entry
+/// point the compiler writes asks before it makes one: not, in a process
+/// started for others.
+public fn wantsTest(_ name: String) -> Bool {
+    if !NamedTests.isSome {
+        return true
+    }
+    for function in NamedTests.functions {
+        if function == name {
+            return true
+        }
+    }
+    return false
 }
 
 // A test's name without its case's arguments.

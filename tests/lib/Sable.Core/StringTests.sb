@@ -12,21 +12,21 @@ fn countingAndReadingScalars() {
     assertEqual(text.count, 3)
     assertEqual(text.at(1), 'é')
     assertEqual(text.slice(from: 1, to: 3), "é€")
-    assert("".isEmpty && !text.isEmpty, "isEmpty")
+    expect("".isEmpty && !text.isEmpty, "isEmpty")
 }
 
 @test
 fn aStringIsAsciiWhenEveryScalarIsOneByte() {
-    assert("plain text".isAscii)
-    assert("".isAscii)
-    assert(!"café".isAscii)
+    expect("plain text".isAscii)
+    expect("".isAscii)
+    expect(!"café".isAscii)
 }
 
 @test
 fn findingACharacterByScalarPosition() {
-    assert("aé€".contains(character: '€'), "contains")
+    expect("aé€".contains(character: '€'), "contains")
     assertEqual("aé€".indexOf(character: '€') ?? -1, 2)
-    assert("abc".indexOf(character: 'z') == none, "none when absent")
+    expect("abc".indexOf(character: 'z') == none, "none when absent")
 }
 
 @test
@@ -53,10 +53,10 @@ fn joiningAndBuilding() {
 @test
 fn parsingNumbers() {
     assertEqual("42".toInt() ?? 0, 42)
-    assert("4x".toInt() == none, "not a number")
+    expect("4x".toInt() == none, "not a number")
     assertEqual("2.5".toF64() ?? 0.0, 2.5)
-    assert("inf".toF64() == none && "1e999".toF64() == none, "no infinities")
-    assert("x".toF64() == none, "not a number")
+    expect("inf".toF64() == none && "1e999".toF64() == none, "no infinities")
+    expect("x".toF64() == none, "not a number")
     assertEqual("-8".toI8() ?? 0, -8)
     assertEqual("300".toI16() ?? 0, 300)
     assertEqual("70000".toI32() ?? 0, 70000)
@@ -97,7 +97,7 @@ fn stringsOfEveryShortLengthAreComparedCopiedAndSplit() {
     for length in 0..<40 {
         let text = joined(letters, length)
         let same = joined(letters, length)
-        assert(text == same)
+        assertEqual(text, same)
         assertEqual(text.utf8Count, length)
         assertEqual(text + same, "\(text)\(same)")
         for at in 0..<length {
@@ -108,7 +108,7 @@ fn stringsOfEveryShortLengthAreComparedCopiedAndSplit() {
                 i += 1
             }
             assert(changed != text)
-            assert(changed.split('_').count == 2)
+            assertEqual(changed.split('_').count, 2)
             assertEqual(changed.split('_')[0].utf8Count, at)
             assertEqual(changed.split('_')[1].utf8Count, length - 1 - at)
         }

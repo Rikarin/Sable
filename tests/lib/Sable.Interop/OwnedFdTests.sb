@@ -51,7 +51,7 @@ fn itIsClosedAsItGoes() {
     unsafe {
         do {
             let writer = OwnedFd.taking(to)
-            assert(writer.isValid)
+            expect(writer.isValid)
             assertEqual(write(writer.descriptor), 3)
         }
         let reader = OwnedFd.taking(from)
@@ -69,7 +69,7 @@ fn anotherDescriptorKeepsItOpen() {
         var writer = OwnedFd.taking(to)
         let again = try! writer.duplicate()
         try! writer.close()
-        assert(!writer.isValid)
+        expect(!writer.isValid)
         assertEqual(write(again.descriptor), 3)
         assertEqual(read(reader.descriptor), 3)
     }
@@ -90,7 +90,7 @@ fn oneGivenAwayIsNotClosed() {
         let closer = OwnedFd.taking(given)
         let reader = OwnedFd.taking(from)
         assertEqual(read(reader.descriptor), 3)
-        assert(closer.isValid)
+        expect(closer.isValid)
     }
 }
 
@@ -98,7 +98,7 @@ fn oneGivenAwayIsNotClosed() {
 fn whatFailsIsThrown() {
     unsafe {
         var nothing = OwnedFd.taking(-1)
-        assert(!nothing.isValid)
+        expect(!nothing.isValid)
         do {
             _ = try nothing.duplicate()
             assert(false)
@@ -107,10 +107,7 @@ fn whatFailsIsThrown() {
         }
         try! nothing.close()
         var odd = OwnedFd.taking(999_999)
-        do {
-            try odd.close()
-            assert(false)
-        } catch { }
+        expectThrows { try odd.close() }
     }
 }
 
@@ -120,7 +117,7 @@ fn itMovesIntoAndOutOfAFile() {
     try! File.write(path, "hello")
     let file = try! File.open(path, options: .reading)
     let owned = try! file.takeDescriptor()
-    assert(!file.isOpen)
+    expect(!file.isOpen)
     assertEqual(read(owned.descriptor), 4)
     unsafe {
         let back = FileHandle.owning(owned, path: "again")

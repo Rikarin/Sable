@@ -20,7 +20,7 @@ fn checkRfc(_ seed: String, _ key: String, _ message: String, _ signature: Strin
     let own = try! Ed25519PrivateKey(seed: hex(seed))
     assertEqual(Hex.encode(own.publicKey.bytes), key)
     assertEqual(Hex.encode(own.sign(hex(message))), signature)
-    assert(own.publicKey.isValid(hex(signature), for: hex(message)))
+    expect(own.publicKey.isValid(hex(signature), for: hex(message)))
     assertEqual(Hex.encode(own.seed()), seed)
 }
 
@@ -46,10 +46,10 @@ fn anythingChangedIsNotValid() {
         assert(!key.publicKey.isValid(other, for: message))
         i += 7
     }
-    assert(!key.publicKey.isValid(signature, for: text("a massage")))
-    assert(!Ed25519PrivateKey.generate().publicKey.isValid(signature, for: message))
-    assert(!key.publicKey.isValid(signature[..<63], for: message))
-    assert(!key.publicKey.isValid([], for: message))
+    expect(!key.publicKey.isValid(signature, for: text("a massage")))
+    expect(!Ed25519PrivateKey.generate().publicKey.isValid(signature, for: message))
+    expect(!key.publicKey.isValid(signature[..<63], for: message))
+    expect(!key.publicKey.isValid([], for: message))
 }
 
 // S and S plus the order are the same scalar; only the first is valid.
@@ -66,7 +66,7 @@ fn aScalarOfTheOrderOrMoreIsNotValid() {
         carry = sum >> 8
         i += 1
     }
-    assert(!key.publicKey.isValid(signature, for: [1]))
+    expect(!key.publicKey.isValid(signature, for: [1]))
 }
 
 @test
@@ -77,14 +77,14 @@ fn bytesThatAreNoPointAreNoKey() {
         assert((try? Ed25519PublicKey(hex(each))) == none)
     }
     // The point that adds nothing is one.
-    assert((try? Ed25519PublicKey(hex("0100000000000000000000000000000000000000000000000000000000000000"))) != none)
-    assert((try? Ed25519PrivateKey(seed: [1, 2])) == none)
+    expect((try? Ed25519PublicKey(hex("0100000000000000000000000000000000000000000000000000000000000000"))) != none)
+    expect((try? Ed25519PrivateKey(seed: [1, 2])) == none)
 }
 
 @test
 fn aKeyDoesNotSayItsSecret() {
     let key = Ed25519PrivateKey.generate()
     assertEqual(key.debugDescription(), "Ed25519PrivateKey")
-    assert(key.publicKey.debugDescription().hasPrefix("Ed25519PublicKey("))
-    assert(key == (try! Ed25519PrivateKey(seed: key.seed())) && key != Ed25519PrivateKey.generate())
+    expect(key.publicKey.debugDescription().hasPrefix("Ed25519PublicKey("))
+    expect(key == (try! Ed25519PrivateKey(seed: key.seed())) && key != Ed25519PrivateKey.generate())
 }

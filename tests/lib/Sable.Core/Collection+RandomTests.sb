@@ -21,8 +21,8 @@ fn randomElementChoosesEachInTime() {
 @test
 fn randomElementOfNothingIsNone() {
     let empty: Int[>..] = []
-    assert(empty.randomElement() == none)
-    assert((1..<6).randomElement() != none)
+    expect(empty.randomElement() == none)
+    expect((1..<6).randomElement() != none)
 }
 
 @test
@@ -36,8 +36,8 @@ fn shuffleKeepsTheElementsAndChangesTheOrder() {
     }
     let ordered = deck
     deck.shuffle(using: &generator)
-    assert(deck != ordered)
-    assert(deck.sorted() == ordered)
+    expect(deck != ordered)
+    expect(deck.sorted() == ordered)
 }
 
 @test
@@ -48,7 +48,7 @@ fn shuffleWithTheSameSeedGivesTheSameOrder() {
     var second: Int[>..] = [1, 2, 3, 4, 5, 6, 7, 8]
     first.shuffle(using: &a)
     second.shuffle(using: &b)
-    assert(first == second)
+    expect(first == second)
 }
 
 @test
@@ -58,7 +58,7 @@ fn shuffleOfNoneOrOneLeavesItAlone() {
     assertEqual(empty.count, 0)
     var one: Int[>..] = [7]
     one.shuffle()
-    assert(one == [7])
+    expect(one == [7])
 }
 
 @test
@@ -79,7 +79,7 @@ fn everyOrderComesUp() {
 fn shuffledGivesANewArrayOfAnySequence() {
     var generator = SeededRandomNumberGenerator(seed: 34)
     let shuffled = (1...20).shuffled(using: &generator)
-    assert(shuffled.sorted() == (1...20).toArray())
+    expect(shuffled.sorted() == (1...20).toArray())
     let fixed: Int[4] = [1, 2, 3, 4]
     assertEqual(fixed.shuffled().count, 4)
 }
@@ -141,7 +141,7 @@ fn aSmallSampleIsTheStartOfALargeOne() {
     var b = SeededRandomNumberGenerator(seed: 40)
     let small = (0..<100).sample(count: 25, using: &a)
     let large = (0..<100).sample(count: 26, using: &b)
-    assert(small == large[0..<25].toArray())
+    expect(small == large[0..<25].toArray())
     assertEqual(distinctCount(small), 25)
 }
 
@@ -165,18 +165,18 @@ fn aSampleOfAHugeRangeIsNotSlow() {
 fn aSampleOfAsManyOrMoreIsAllOfThem() {
     var generator = SeededRandomNumberGenerator(seed: 42)
     let xs: Int[>..] = [5, 6, 7]
-    assert(xs.sample(count: 3, using: &generator).sorted() == [5, 6, 7])
-    assert(xs.sample(count: 9, using: &generator).sorted() == [5, 6, 7])
-    assert(xs.lazy.map({ $0 + 1 }).sample(count: 9, using: &generator).sorted() == [6, 7, 8])
+    expect(xs.sample(count: 3, using: &generator).sorted() == [5, 6, 7])
+    expect(xs.sample(count: 9, using: &generator).sorted() == [5, 6, 7])
+    expect(xs.lazy.map({ $0 + 1 }).sample(count: 9, using: &generator).sorted() == [6, 7, 8])
 }
 
 @test
 fn aSampleOfNoneIsEmpty() {
     let xs: Int[>..] = [5, 6, 7]
     let nothing: Int[>..] = []
-    assert(xs.sample(count: 0).isEmpty)
-    assert(nothing.sample(count: 2).isEmpty)
-    assert(xs.lazy.map({ $0 }).sample(count: 0).isEmpty)
+    expect(xs.sample(count: 0).isEmpty)
+    expect(nothing.sample(count: 2).isEmpty)
+    expect(xs.lazy.map({ $0 }).sample(count: 0).isEmpty)
 }
 
 @test(traps: "count")

@@ -8,7 +8,7 @@ import Sable.Text
 
 // The bytes are the ones expected; when not, both are shown in hexadecimal.
 fn assertBytes(_ actual: U8[:], _ expected: U8[:]) {
-    assert(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
+    expect(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
 }
 
 fn sample(_ count: Int) -> U8[>..] {
@@ -78,7 +78,7 @@ fn theLastGroupIsHeldUntilTheEnd() {
     assertBytes(try! decoder.decode("Zm9v"), "foo".utf8Bytes())
     assertBytes(try! decoder.decode("_w"), "foo".utf8Bytes())
     assertBytes(try! decoder.finish(), [0xFF])
-    assert(decoder.padding == .Forbidden, "the rule it was given")
+    expect(decoder.padding == .Forbidden, "the rule it was given")
 }
 
 @test

@@ -12,24 +12,24 @@ fn bytes(_ text: String) -> U8[>..] {
 
 @test
 fn asciiIsBytesBelow128() {
-    assert(Ascii.isValid(bytes("Hello, world!\u{7F}")), "ASCII")
-    assert(Ascii.isValid(bytes("")), "nothing")
-    assert(!Ascii.isValid(bytes("café")), "é is not")
+    expect(Ascii.isValid(bytes("Hello, world!\u{7F}")), "ASCII")
+    expect(Ascii.isValid(bytes("")), "nothing")
+    expect(!Ascii.isValid(bytes("café")), "é is not")
 }
 
 @test
 fn comparingIgnoringCase() {
-    assert(Ascii.equalsIgnoringCase(bytes("Content-Type"), bytes("content-type")), "same but for case")
-    assert(!Ascii.equalsIgnoringCase(bytes("Content-Type"), bytes("Content-Typf")), "a letter differs")
-    assert(!Ascii.equalsIgnoringCase(bytes("ab"), bytes("abc")), "lengths differ")
-    assert(!Ascii.equalsIgnoringCase(bytes("@"), bytes("`")), "neighbours of the letters are not letters")
-    assert(!Ascii.equalsIgnoringCase(bytes("É"), bytes("é")), "only ASCII letters fold")
+    expect(Ascii.equalsIgnoringCase(bytes("Content-Type"), bytes("content-type")), "same but for case")
+    expect(!Ascii.equalsIgnoringCase(bytes("Content-Type"), bytes("Content-Typf")), "a letter differs")
+    expect(!Ascii.equalsIgnoringCase(bytes("ab"), bytes("abc")), "lengths differ")
+    expect(!Ascii.equalsIgnoringCase(bytes("@"), bytes("`")), "neighbours of the letters are not letters")
+    expect(!Ascii.equalsIgnoringCase(bytes("É"), bytes("é")), "only ASCII letters fold")
 }
 
 @test
 fn changingCase() {
-    assert(Ascii.uppercased(bytes("abz-AZé")) == bytes("ABZ-AZé"), "upper")
-    assert(Ascii.lowercased(bytes("ABZ-azÉ")) == bytes("abz-azÉ"), "lower")
+    expect(Ascii.uppercased(bytes("abz-AZé")) == bytes("ABZ-AZé"), "upper")
+    expect(Ascii.lowercased(bytes("ABZ-azÉ")) == bytes("abz-azÉ"), "lower")
 }
 
 fn plainLowered(_ byte: U8) -> U8 {
@@ -62,8 +62,8 @@ fn everyByteAtEveryPositionOfEveryLength() {
                         valid = valid && byte < 0x80
                     }
                     if at % 3 == 0 || n < 40 {
-                        assert(Ascii.lowercased(bytes) == lower)
-                        assert(Ascii.uppercased(bytes) == upper)
+                        assertEqual(Ascii.lowercased(bytes), lower)
+                        assertEqual(Ascii.uppercased(bytes), upper)
                         assertEqual(Ascii.isValid(bytes), valid)
                     }
                     all[start + at] = held
@@ -112,6 +112,6 @@ fn comparingLooksNoFurtherThanTheSlices() {
 fn changingCaseLeavesTheOriginal() {
     let original = U8[>..](repeating: 0x61, count: 50)
     let upper = Ascii.uppercased(original)
-    assert(original == U8[>..](repeating: 0x61, count: 50))
-    assert(upper == U8[>..](repeating: 0x41, count: 50))
+    expect(original == U8[>..](repeating: 0x61, count: 50))
+    expect(upper == U8[>..](repeating: 0x41, count: 50))
 }

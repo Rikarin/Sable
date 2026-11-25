@@ -34,10 +34,10 @@ fn servicesStartInOrderAndStopInReverse() async {
     lifetime.requestStop()
     assertEqual(await running.value, "")
     let all = record.all
-    assert(all.hasSuffix("end-c stop-c end-b stop-b end-a stop-a"), all)
+    expect(all.hasSuffix("end-c stop-c end-b stop-b end-a stop-a"), all)
     // Started in order; each one's run begins some time after.
     let order = all.split(' ').filter { $0.hasPrefix("start") }.map { $0.toString() }.toArray()
-    assert(order == ["start-a", "start-b", "start-c"], all)
+    expect(order == ["start-a", "start-b", "start-c"], all)
 }
 
 @test
@@ -56,7 +56,7 @@ fn theEventsComeInOrder() async {
     host.lifetime.requestStop()
     assertEqual(await running.value, "")
     let all = record.all
-    assert(all.hasSuffix("stopping end-a stop-a stopped"), all)
+    expect(all.hasSuffix("stopping end-a stop-a stopped"), all)
 }
 
 @test
@@ -64,7 +64,7 @@ fn aHostWithNoServicesRunsUntilItIsAsked() async {
     let host = try! quietBuilder(FakeHostClock()).build()
     stopWhenStarted(host)
     assertEqual(await outcome(host), "")
-    assert(host.lifetime.stopped.isCancellationRequested)
+    expect(host.lifetime.stopped.isCancellationRequested)
 }
 
 @test
@@ -76,7 +76,7 @@ fn aServiceThatFailsStopsTheHost() async {
     let host = try! builder.build()
     assertEqual(await outcome(host), "the service 'bad' failed: no run")
     let all = record.all
-    assert(all.hasSuffix("stop-bad end-a stop-a"), all)
+    expect(all.hasSuffix("stop-bad end-a stop-a"), all)
 }
 
 @test
@@ -90,10 +90,10 @@ fn aServiceThatFailsMayBeIgnored() async {
     let running = Task.spawn { await outcome(host) }
     await record.awaitLine("run-bad")
     await record.awaitLine("run-good")
-    assert(!host.lifetime.stopping.isCancellationRequested)
+    expect(!host.lifetime.stopping.isCancellationRequested)
     host.lifetime.requestStop()
     assertEqual(await running.value, "")
-    assert(record.all.hasSuffix("end-good stop-good stop-bad"), record.all)
+    expect(record.all.hasSuffix("end-good stop-good stop-bad"), record.all)
 }
 
 @test
@@ -135,9 +135,9 @@ fn aStartThatFailsStopsThoseBeforeIt() async {
     let host = try! builder.build()
     assertEqual(await outcome(host), "the service 'bad' did not start: no start")
     let all = record.all
-    assert(all.hasSuffix("end-a stop-a"), all)
-    assert(!all.contains("start-c") && !all.contains("stop-bad"), all)
-    assert(!host.lifetime.started.isCancellationRequested && host.lifetime.stopped.isCancellationRequested)
+    expect(all.hasSuffix("end-a stop-a"), all)
+    expect(!all.contains("start-c") && !all.contains("stop-bad"), all)
+    expect(!host.lifetime.started.isCancellationRequested && host.lifetime.stopped.isCancellationRequested)
 }
 
 @test
@@ -167,8 +167,8 @@ fn aStopAskedForWhileStartingEndsTheStart() async {
     await record.awaitLine("start-slow")
     host.lifetime.requestStop()
     assertEqual(await running.value, "")
-    assert(!record.all.contains("start-c") && record.all.hasSuffix("end-a stop-a"), record.all)
-    assert(!host.lifetime.started.isCancellationRequested)
+    expect(!record.all.contains("start-c") && record.all.hasSuffix("end-a stop-a"), record.all)
+    expect(!host.lifetime.started.isCancellationRequested)
 }
 
 @test
@@ -203,14 +203,14 @@ fn aServiceThatIgnoresItsCancellationIsWaitedForNoLongerThanTheTimeout() async {
     await record.awaitLine("stop-c")
     await clock.awaitSleep(Duration.seconds(10))
     clock.advance(Duration.milliseconds(9_999))
-    assert(!host.lifetime.stopped.isCancellationRequested)
+    expect(!host.lifetime.stopped.isCancellationRequested)
     clock.advance(Duration.milliseconds(1))
     // What could not be told in time has not stopped in time either.
     assertEqual(await running.value, "not stopped in time: stuck, a")
-    assert(host.lifetime.stopped.isCancellationRequested)
+    expect(host.lifetime.stopped.isCancellationRequested)
     // Told all the same.
     await record.awaitLine("end-a")
-    assert(!record.all.contains("stop-a"))
+    expect(!record.all.contains("stop-a"))
 }
 
 @test
@@ -255,7 +255,7 @@ fn aStopThatFailsIsThrownAndTheRestStop() async {
     let host = try! builder.build()
     stopWhenStarted(host)
     assertEqual(await outcome(host), "the service 'bad' did not stop cleanly: no stop")
-    assert(record.all.hasSuffix("stop-bad end-a stop-a"), record.all)
+    expect(record.all.hasSuffix("stop-bad end-a stop-a"), record.all)
 }
 
 @test
@@ -268,7 +268,7 @@ fn cancellingTheTaskThatRunsItStopsTheHost() async {
     await record.awaitLine("run-a")
     running.cancel()
     assertEqual(await running.value, "")
-    assert(record.all.hasSuffix("end-a stop-a"), record.all)
+    expect(record.all.hasSuffix("end-a stop-a"), record.all)
 }
 
 @test
@@ -282,7 +282,7 @@ fn aTermSignalStopsTheHost() async {
     await record.awaitLine("run-a")
     Signals.raise(.Terminate)
     assertEqual(await running.value, "")
-    assert(record.all.hasSuffix("end-a stop-a"), record.all)
+    expect(record.all.hasSuffix("end-a stop-a"), record.all)
 }
 
 // On Windows a hangup is the console closing, and always stops.
@@ -300,7 +300,7 @@ fn aHangupReloads() async {
     await record.awaitLine("run-a")
     Signals.raise(.Hangup)
     await record.awaitLine("handler")
-    assert(record.all.contains("reload handler"), record.all)
+    expect(record.all.contains("reload handler"), record.all)
     Signals.raise(.Interrupt)
     assertEqual(await running.value, "")
 }
@@ -366,7 +366,7 @@ fn whatTheHostWasBuiltWithIsThere() {
     let builder = quietBuilder(FakeHostClock())
     builder.environment.name = "Staging"
     let host = try! builder.build()
-    assert(host.environment.isStaging)
-    assert(host.logging.minimumLevel == none)
-    assert(host.configuration.value("Sable:No:Such:Key") == none)
+    expect(host.environment.isStaging)
+    expect(host.logging.minimumLevel == none)
+    expect(host.configuration.value("Sable:No:Such:Key") == none)
 }

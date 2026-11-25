@@ -11,8 +11,8 @@ fn aFileGoesAsItIsLetGo() throws {
     do {
         let file = try Temp.file(startingWith: "start-", endingWith: ".end")
         path = file.path
-        assert(path.isAbsolute && File.exists(path))
-        assert(path.fileName!.hasPrefix("start-") && path.fileName!.hasSuffix(".end"))
+        expect(path.isAbsolute && File.exists(path))
+        expect(path.fileName!.hasPrefix("start-") && path.fileName!.hasSuffix(".end"))
         try file.file.write([0x61, 0x62])
         assertEqual(try File.read(path), "ab")
         #if os(windows)
@@ -20,7 +20,7 @@ fn aFileGoesAsItIsLetGo() throws {
         assertEqual((try File.metadata(path)).permissions.mode, 0o600)
         #endif
     }
-    assert(!File.exists(path))
+    expect(!File.exists(path))
 }
 
 @test
@@ -29,13 +29,13 @@ fn aFileIsRemovedKeptOrRenamed() throws {
     let removed = try Temp.file(in: temp.path)
     try removed.remove()
     try removed.remove()
-    assert(!File.exists(removed.path) && !removed.file.isOpen)
+    expect(!File.exists(removed.path) && !removed.file.isOpen)
 
     var kept = FilePath("")
     do {
         kept = (try Temp.file(in: temp.path)).keep()
     }
-    assert(File.exists(kept))
+    expect(File.exists(kept))
 
     let target = temp.path.appending("settings")
     try File.write(target, "old")
@@ -58,7 +58,7 @@ fn aDirectoryGoesWithAllInIt() throws {
     do {
         let directory = try Temp.directory(startingWith: "start-")
         path = directory.path
-        assert(Directory.exists(path) && path.fileName!.hasPrefix("start-"))
+        expect(Directory.exists(path) && path.fileName!.hasPrefix("start-"))
         #if os(windows)
         #else
         assertEqual((try File.metadata(path)).permissions.mode, 0o700)
@@ -66,7 +66,7 @@ fn aDirectoryGoesWithAllInIt() throws {
         try Directory.create(path.appending("a/b"), recursive: true)
         try File.write(path.appending("a/b/c"), "c")
     }
-    assert(!Directory.exists(path))
+    expect(!Directory.exists(path))
 }
 
 @test
@@ -75,12 +75,12 @@ fn aDirectoryIsRemovedOrKept() throws {
     let removed = try Temp.directory(in: temp.path)
     try removed.remove()
     try removed.remove()
-    assert(!Directory.exists(removed.path))
+    expect(!Directory.exists(removed.path))
     var kept = FilePath("")
     do {
         kept = (try Temp.directory(in: temp.path)).keep()
     }
-    assert(Directory.exists(kept))
+    expect(Directory.exists(kept))
 }
 
 @test

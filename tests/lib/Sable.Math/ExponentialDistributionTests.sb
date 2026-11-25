@@ -16,7 +16,7 @@ fn aSeedGivesTheSameDrawsEverywhere() {
     assertEqual(draws[2], 1.8222489598318623)
     assertEqual(draws[3], 3.036187386388376)
     assertEqual(draws[4], 0.3909480775788058)
-    assert(folded(draws) == 0xCAB97C168E4D587F)
+    expect(folded(draws) == 0xCAB97C168E4D587F)
 }
 
 @test
@@ -42,7 +42,7 @@ fn theTailFollowsTheDistribution() {
     }
     // 454 of them expected.
     let expected = 1000000.0 * exp(-edge)
-    assert((F64(beyond.count) - expected).abs() < 5.0 * expected.squareRoot())
+    expect((F64(beyond.count) - expected).abs() < 5.0 * expected.squareRoot())
     assertFollows(beyond, { -expm1(-$0) })
 }
 

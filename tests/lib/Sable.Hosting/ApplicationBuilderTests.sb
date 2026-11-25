@@ -25,7 +25,7 @@ fn servicesAreMadeInOrderFromTheContext() {
         made.add("b")
         return Recorded("b", made)
     })
-    assert(builder.services.names == ["a", "b"])
+    expect(builder.services.names == ["a", "b"])
     assertEqual(made.all, "")
     _ = try! builder.build()
     assertEqual(made.all, "a:app b")
@@ -37,12 +37,7 @@ fn whatMakingAServiceThrowsBuildThrows() {
     builder.services.add("bad", make: { _context in
         throw TestError("not made")
     })
-    do {
-        _ = try builder.build()
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "not made")
-    }
+    expectThrows(saying: "not made") { _ = try builder.build() }
 }
 
 @test
@@ -84,7 +79,7 @@ fn theSystemsClockIsTheUsualOne() async {
     let builder = ApplicationBuilder()
     let before = builder.clock.now
     try! await builder.clock.sleep(until: before.adding(Duration.milliseconds(5)))
-    assert(builder.clock.now.durationSince(before) >= Duration.milliseconds(5))
+    expect(builder.clock.now.durationSince(before) >= Duration.milliseconds(5))
     let clock = builder.clock
     let sleeping = Task.spawn {
         do {
@@ -95,20 +90,20 @@ fn theSystemsClockIsTheUsualOne() async {
         }
     }
     sleeping.cancel()
-    assert(await sleeping.value)
+    expect(await sleeping.value)
 }
 
 @test
 fn theLevelIsTheEnvironments() {
-    assert(rank(ApplicationBuilder().logging.minimumLevel!) == rank(Level.Info))
+    expect(rank(ApplicationBuilder().logging.minimumLevel!) == rank(Level.Info))
     unsafe {
         Environment.set("SABLE_LOG", "debug")
     }
-    assert(rank(ApplicationBuilder().logging.minimumLevel!) == rank(Level.Debug))
+    expect(rank(ApplicationBuilder().logging.minimumLevel!) == rank(Level.Debug))
     unsafe {
         Environment.set("SABLE_LOG", "nonsense")
     }
-    assert(rank(ApplicationBuilder().logging.minimumLevel!) == rank(Level.Info))
+    expect(rank(ApplicationBuilder().logging.minimumLevel!) == rank(Level.Info))
 }
 
 @test
@@ -116,15 +111,15 @@ fn theEnvironmentIsNamedByItsVariable() {
     unsafe {
         Environment.remove("SABLE_ENVIRONMENT")
     }
-    assert(HostEnvironment.current().isProduction)
+    expect(HostEnvironment.current().isProduction)
     unsafe {
         Environment.set("SABLE_ENVIRONMENT", "development")
     }
     let environment = HostEnvironment.current()
-    assert(environment.isDevelopment && !environment.isProduction && !environment.isStaging)
+    expect(environment.isDevelopment && !environment.isProduction && !environment.isStaging)
     assertEqual(environment.name, "development")
-    assert(environment.isEnvironment("DEVELOPMENT"))
-    assert(!environment.applicationName.isEmpty)
+    expect(environment.isEnvironment("DEVELOPMENT"))
+    expect(!environment.applicationName.isEmpty)
 }
 
 @test
@@ -134,9 +129,9 @@ fn configurationIsTheEnvironmentsVariables() async {
         Environment.set("APP_DATABASE__URL", "db")
     }
     let configuration = EnvironmentConfiguration(prefix: "APP_")
-    assert(configuration.value("Http:Port") == "80")
-    assert(configuration.value("Database:Url") == "db")
-    assert(configuration.value("Database:Name") == none)
+    expect(configuration.value("Http:Port") == "80")
+    expect(configuration.value("Database:Url") == "db")
+    expect(configuration.value("Database:Name") == none)
     try! await configuration.reload()
 }
 
@@ -145,8 +140,8 @@ fn loggersAreSetAsTheLoggingIs() {
     let logging = HostLogging(minimumLevel: Level.Warning, timestamps: true)
     let logger = logging.logger("a")
     assertEqual(logger.name, "a")
-    assert(logger.timestamps && logger.isEnabled(.Warning) && !logger.isEnabled(.Info))
-    assert(!HostLogging(minimumLevel: none).logger("b").isEnabled(.Warning))
+    expect(logger.timestamps && logger.isEnabled(.Warning) && !logger.isEnabled(.Info))
+    expect(!HostLogging(minimumLevel: none).logger("b").isEnabled(.Warning))
 }
 
 @test

@@ -313,14 +313,14 @@ fn namedGroupsAreNumberedWithTheOthers() {
     assertEqual(regex.groupIndex(named: "month"), 2)
     assertEqual(regex.groupIndex(named: "day"), none)
     assertEqual(regex.groupIndex(named: ""), none)
-    assert(regex.groupNames == ["", "year", "month"])
+    expect(regex.groupNames == ["", "year", "month"])
     let found = regex.captures(in: "on 1999-12")!
     assertEqual(found["year"]!.toString(), "1999")
     assertEqual(found["month"]!.toString(), "12")
-    assert(found["day"] == none)
-    assert(found[3] == none && found[-1] == none)
+    expect(found["day"] == none)
+    expect(found[3] == none && found[-1] == none)
     assertEqual(found.range(named: "year")!.lowerBound.utf8Offset, 3)
-    assert(found.range(named: "") == none && found.range(named: "nope") == none)
+    expect(found.range(named: "") == none && found.range(named: "nope") == none)
     assertEqual(found.text.toString(), "1999-12")
     assertEqual(found.range.upperBound.utf8Offset, 10)
 }
@@ -483,7 +483,7 @@ fn matchesSkipAnEmptyMatchRightAfterAnother() {
         assert(!found.isEmpty)
         assertEqual(found.base, "one two")
     }
-    assert(texts == ["one", "two"])
+    expect(texts == ["one", "two"])
     let first = words.firstMatch(in: "one two")!
     assertEqual(first, words.firstMatch(in: "one two")!)
     assertEqual("\(first:?)", #"0..<3 "one""#)
@@ -494,7 +494,7 @@ fn matchesSkipAnEmptyMatchRightAfterAnother() {
     for pair in (try! Regex(#"(\w)=(\d)"#)).allCaptures(in: "a=1, b=2, c=x") {
         keys.append(pair[1]!.toString() + pair[2]!.toString())
     }
-    assert(keys == ["a1", "b2"])
+    expect(keys == ["a1", "b2"])
 }
 
 @test
@@ -502,8 +502,8 @@ fn literalsAreSearchedForDirectly() {
     let regex = try! Regex("needle")
     let text = "hay hay hay needle hay needle"
     assertEqual(allSpans(regex, text), "12-18 23-29")
-    assert(regex.isMatch(text))
-    assert(!regex.isMatch("haystack"))
+    expect(regex.isMatch(text))
+    expect(!regex.isMatch("haystack"))
     assertEqual(spans(regex, text), "12-18")
     assertEqual(text.firstIndex(of: regex)!.utf8Offset, 12)
     assertEqual(text.trimmingSuffix(regex), "hay hay hay needle hay ")
@@ -525,8 +525,8 @@ fn aSubstringIsSearchedAsATextOfItsOwn() {
         let found = regex.firstMatch(in: middle)!
         assertEqual(found.range.lowerBound.utf8Offset, 3)
         assertEqual(found.text.toString(), "cd")
-        assert(regex.isMatch(middle))
-        assert(!regex.isMatch(text))
+        require(regex.isMatch(middle))
+        require(!regex.isMatch(text))
         assertEqual(regex.captures(in: middle)!.range.upperBound.utf8Offset, 5)
         assertEqual(regex.count(in: middle), 1)
     }
@@ -542,15 +542,15 @@ fn stringSearchesTakeARegex() {
     assertEqual(text.lastRange(of: digits)!.upperBound.utf8Offset, 12)
     assertEqual(text.ranges(of: digits).count, 3)
     assertEqual(text.count(of: digits), 3)
-    assert(text.contains(digits))
-    assert(!"abc".contains(digits))
-    assert(text.split(spaces) == ["a1", "b22", "c333"])
-    assert(text.split(digits, omittingEmpty: true) == ["a", " b", "  c"])
+    expect(text.contains(digits))
+    expect(!"abc".contains(digits))
+    expect(text.split(spaces) == ["a1", "b22", "c333"])
+    expect(text.split(digits, omittingEmpty: true) == ["a", " b", "  c"])
     assertEqual("  x  ".trimmingPrefix(spaces), "x  ")
     assertEqual("x123".trimmingSuffix(digits), "x")
     assertEqual("123".trimmingSuffix(digits), "")
-    assert("123abc".hasPrefix(digits) && !"abc123".hasPrefix(digits))
-    assert("abc123".hasSuffix(digits) && !"123abc".hasSuffix(digits))
+    expect("123abc".hasPrefix(digits) && !"abc123".hasPrefix(digits))
+    expect("abc123".hasSuffix(digits) && !"123abc".hasSuffix(digits))
     assertEqual(text.replacing(digits, with: "#"), "a# b#  c#")
     assertEqual(text.replacing(digits, with: "<$0>", maxCount: 2), "a<1> b<22>  c333")
     assertEqual("abc".replacing(digits, with: "#"), "abc")
@@ -594,8 +594,8 @@ fn wholeMatchMatchesTheWholeText() {
     for options in [RegexOptions.None, RegexOptions.Backtracking] {
         let regex = try! Regex("a|ab", options: options)
         assertEqual(regex.wholeMatch("ab")!.range.upperBound.utf8Offset, 2)
-        assert(regex.wholeMatch("abc") == none)
-        assert(regex.wholeMatch("xab") == none)
+        require(regex.wholeMatch("abc") == none)
+        require(regex.wholeMatch("xab") == none)
         let groups = try! Regex(#"(\d+)-(\d+)"#, options: options)
         let found = groups.wholeMatch("12-345")!
         assertEqual(found[2]!.toString(), "345")
@@ -606,7 +606,7 @@ fn wholeMatchMatchesTheWholeText() {
 fn escapeMakesAPatternOfAText() {
     let text = #"a.b*c+d?e(f)g[h]i{j}k|l^m$n\o#p-q&r~s t"#
     let regex = try! Regex(Regex.escape(text))
-    assert(regex.wholeMatch(text) != none)
+    expect(regex.wholeMatch(text) != none)
     assertEqual(Regex.escape("é1"), "é1")
     assertEqual(Regex.escape("1.5"), #"1\.5"#)
 }
@@ -615,7 +615,7 @@ fn escapeMakesAPatternOfAText() {
 fn optionsAndPatternAreKept() {
     let regex = try! Regex("a", options: [.IgnoreCase, .Multiline])
     assertEqual(regex.pattern, "a")
-    assert(regex.options.contains(.IgnoreCase) && !regex.options.contains(.DotAll))
+    expect(regex.options.contains(.IgnoreCase) && !regex.options.contains(.DotAll))
 }
 
 @test
@@ -629,9 +629,9 @@ fn matchesAllocateNothingOnceTheCacheIsWarm() {
             total += found.range.upperBound.utf8Offset
         }
     }
-    assert(total > 0)
+    expect(total > 0)
     assertNoAllocations {
-        assert(words.isMatch(text))
+        expect(words.isMatch(text))
     }
 }
 
@@ -651,22 +651,22 @@ fn repeated(_ piece: String, _ times: Int) -> String {
 fn pathologicalPatternsTakeLinearTime() {
     // Each of these takes a backtracker time exponential in the text.
     let manyA = repeated("a", 20000)
-    assert(!(try! Regex("(a*)*b")).isMatch(manyA))
-    assert(!(try! Regex("(a|aa)+b")).isMatch(manyA))
-    assert(!(try! Regex("(a|a)*c")).isMatch(manyA))
-    assert((try! Regex("(a|aa)+$")).isMatch(manyA))
+    expect(!(try! Regex("(a*)*b")).isMatch(manyA))
+    expect(!(try! Regex("(a|aa)+b")).isMatch(manyA))
+    expect(!(try! Regex("(a|a)*c")).isMatch(manyA))
+    expect((try! Regex("(a|aa)+$")).isMatch(manyA))
     assertEqual((try! Regex("(x+x+)+y")).count(in: repeated("x", 20000)), 0)
     let words = repeated("word ", 4000) + "!"
-    assert((try! Regex(#"^(\w+\s?)*$"#)).firstMatch(in: words) == none)
+    expect((try! Regex(#"^(\w+\s?)*$"#)).firstMatch(in: words) == none)
     // Every place a match may start, and every '@' it may have in it, read
     // past to the end for nothing.
     assertEqual((try! Regex("a[^z]*z")).count(in: manyA), 0)
     assertEqual((try! Regex("a+@[^z]*z")).count(in: repeated("a@", 20000)), 0)
     assertEqual((try! Regex("(?m)^a[^z]*z")).count(in: repeated("a\n", 20000)), 0)
     // The PikeVM, which finds the groups, is linear too.
-    assert((try! Regex("(a|aa)*c")).wholeMatch(repeated("a", 3000)) == none)
+    expect((try! Regex("(a|aa)*c")).wholeMatch(repeated("a", 3000)) == none)
     let nested = try! Regex("((a+)+)+b")
-    assert(nested.captures(in: repeated("a", 3000) + "b") != none)
+    expect(nested.captures(in: repeated("a", 3000) + "b") != none)
     // A DFA that needs more states than its cache holds clears it and goes on.
     var letters = ""
     var state: U64 = 0x9E3779B97F4A7C15

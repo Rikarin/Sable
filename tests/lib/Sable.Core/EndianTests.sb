@@ -7,8 +7,8 @@ import Sable.Testing
 
 @test
 fn everyTargetIsLittleEndian() {
-    assert(Endian.native == .Little, "the native order is little-endian")
-    assert(Endian.Big != Endian.Little, "the two orders differ")
+    expect(Endian.native == .Little, "the native order is little-endian")
+    expect(Endian.Big != Endian.Little, "the two orders differ")
     assertEqual("\(Endian.Big)", "Big")
 }
 
@@ -21,7 +21,7 @@ fn byteSwappedReversesTheBytesOfEachWidth() {
     assertEqual(a.byteSwapped, 0x3412)
     assertEqual(b.byteSwapped, 0x4433_2211)
     assertEqual(c.byteSwapped, 0x0807_0605_0403_0201)
-    assert(d.byteSwapped == U128(1) << 120, "a U128's low byte goes to the top")
+    expect(d.byteSwapped == U128(1) << 120, "a U128's low byte goes to the top")
 }
 
 @test
@@ -35,7 +35,7 @@ fn byteSwappedOfASignedIntegerReversesItsBitPattern() {
     assertEqual(b.byteSwapped, -16_777_217)
     assertEqual(c.byteSwapped, I64(1) << 56)
     assertEqual(d.byteSwapped, -1)
-    assert(e.byteSwapped == I128(0x7F) << 120, "an I128's low byte goes to the top")
+    expect(e.byteSwapped == I128(0x7F) << 120, "an I128's low byte goes to the top")
 }
 
 @test

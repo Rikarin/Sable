@@ -342,7 +342,7 @@ public static class TestHarness {
             var i = 0;
             foreach (var test in modules[m]) {
                 if (kind == TestKind.Test) {
-                    main.Append(CultureInfo.InvariantCulture, $"    all.append(TestCase({Case(test, test.Fixtures.Count > 0 ? RunName + Suffix(m, i) : $"list{m}[{i}]", Suffix(m, i))}))\n");
+                    main.Append(CultureInfo.InvariantCulture, $"    if wantsTest({Quote(test.QualifiedName)}) {{\n        all.append(TestCase({Case(test, test.Fixtures.Count > 0 ? RunName + Suffix(m, i) : $"list{m}[{i}]", Suffix(m, i))}))\n    }}\n");
                 } else {
                     main.Append(CultureInfo.InvariantCulture, $"    all.append({caseType} {{ name: {Quote(test.QualifiedName)}, location: {Quote(test.Location)}, run: list{m}[{i}] }})\n");
                 }

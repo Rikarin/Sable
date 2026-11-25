@@ -62,16 +62,16 @@ fn aStringIsQuotedWhenItWouldReadBackAsAnotherType() throws {
         assertEqual(try scalarText(text), "\"" + text + "\"\n")
         assertEqual(try written([YamlEvent.sequenceStart(style: .Flow), YamlEvent.scalar(text), YamlEvent.sequenceEnd()]), "[\"" + text + "\"]\n")
         let node = try Yaml.parse(try scalarText(text))
-        assert(node.string == text, text)
+        require(node.string == text, text)
     }
     // Those of YAML 1.1, so that its readers take them for strings too.
     for text in ["no", "No", "on", "YES", "off", "<<", "=", "1_000", "12:30:45", "2001-01-01", "0b101", "-0b1", "0x_1", "-0xF"] {
         assertEqual(try scalarText(text), "\"" + text + "\"\n")
-        assert((try Yaml.parse(text)).type == .String, text)
+        require((try Yaml.parse(text)).type == .String, text)
     }
     for text in ["a", "note", "nUll", "tRUE", "1.2.3", "1e", "0o8", "0xg", "0b2", "+", ".", "-.", ".infinity", "e3", "y", "n", "1e+", "10.0.0.1", "é", "~a", "0o", "0x", "v1", "12-30"] {
         assertEqual(try scalarText(text), text + "\n")
-        assert((try Yaml.parse(text)).type == .String, text)
+        require((try Yaml.parse(text)).type == .String, text)
     }
 }
 
@@ -195,7 +195,7 @@ fn refused(_ events: YamlEvent[>..]) -> String {
     do {
         return try Yaml.print(events: events)
     } catch {
-        assert(error.kind == .Structure)
+        expect(error.kind == .Structure)
         return error.description()
     }
 }

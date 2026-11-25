@@ -39,8 +39,8 @@ fn aCommandIsAValue() {
     let one = Command("echo").argument("a")
     let two = one.arguments(["b", "c"])
     assertEqual(one.program, "echo")
-    assert(one.argumentList == ["a"])
-    assert(two.argumentList == ["a", "b", "c"])
+    expect(one.argumentList == ["a"])
+    expect(two.argumentList == ["a", "b", "c"])
 }
 
 @test
@@ -65,8 +65,8 @@ fn theEnvironmentIsThisProgramsAndWhatIsSet() async {
         .environment("SABLE_COMMAND_REPLACED", "new").environment("SABLE_COMMAND_ADDED", "a=b").removeEnvironment("SABLE_COMMAND_REMOVED").output()
     assertEqual(done.output, "yes new a=b unset\n")
     // And this program's own is as it was.
-    assert(Environment.variable("SABLE_COMMAND_REPLACED") == "old")
-    assert(Environment.variable("SABLE_COMMAND_ADDED") == none)
+    expect(Environment.variable("SABLE_COMMAND_REPLACED") == "old")
+    expect(Environment.variable("SABLE_COMMAND_ADDED") == none)
 }
 
 @test
@@ -116,7 +116,7 @@ fn itHasNoneOfThisProgramsFiles() async {
     listener.close()
     try! File.remove(path)
     // Its three streams, and what 'ls' opened to look.
-    assert(after.output.contains("2\n") && !after.output.contains("5"), after.output)
+    expect(after.output.contains("2\n") && !after.output.contains("5"), after.output)
     assertEqual(after.output, before.output)
 }
 
@@ -132,7 +132,7 @@ fn itsBrokenPipesAreItsOwn() async {
 @test
 fn nothingIsReadUnlessSaid() async {
     let done = try! await Command("cat").output()
-    assert(done.succeeded && done.output == "")
+    expect(done.succeeded && done.output == "")
 }
 
 @test
@@ -141,12 +141,12 @@ fn aStreamCanBeAFile() async {
     let output = scratch("out")
     try! File.writeBytes(input, "from a file".utf8.toArray())
     let status = try! await Command("cat").stdin(.File(path: input)).stdout(.File(path: output)).status()
-    assert(status.success)
-    assert(try! File.readBytes(output) == "from a file".utf8.toArray())
+    expect(status.success)
+    expect(try! File.readBytes(output) == "from a file".utf8.toArray())
     // Emptied as it is opened.
     let again = try! await sh("printf x").stdout(.File(path: output)).status()
-    assert(again.success)
-    assert(try! File.readBytes(output) == [0x78])
+    expect(again.success)
+    expect(try! File.readBytes(output) == [0x78])
     try! File.remove(input)
     try! File.remove(output)
 }
@@ -155,8 +155,8 @@ fn aStreamCanBeAFile() async {
 fn outputAndErrorsToOneFileAreInOrder() async {
     let path = scratch("both")
     let status = try! await sh("echo one; echo two >&2; echo three").stdout(.File(path: path)).stderr(.File(path: path)).status()
-    assert(status.success)
-    assert(try! File.readBytes(path) == "one\ntwo\nthree\n".utf8.toArray())
+    expect(status.success)
+    expect(try! File.readBytes(path) == "one\ntwo\nthree\n".utf8.toArray())
     try! File.remove(path)
 }
 
@@ -171,7 +171,7 @@ fn nothingIsKeptOfAStreamThatIsNothing() async {
 fn aStreamPipedToNoOneIsNothing() async {
     // Nothing reads them: piped, it would wait for ever.
     let status = try! await sh("head -c 1000000 /dev/zero").stdin(.Piped).stdout(.Piped).stderr(.Piped).status()
-    assert(status.success)
+    expect(status.success)
 }
 
 @test
@@ -190,7 +190,7 @@ fn moreThanAPipeHoldsBothWaysDoesNotWait() async {
         i += 1
     }
     let done = try! await Command("cat").output(input: bytes)
-    assert(done.outputBytes == bytes)
+    expect(done.outputBytes == bytes)
 }
 
 @test
@@ -285,7 +285,7 @@ fn oneCancelledIsKilled() async {
     running.cancel()
     assertEqual(await running.value, ProcessError.Cancelled.description())
     try! File.remove(path)
-    assert(await isGone(id.trimmed()))
+    expect(await isGone(id.trimmed()))
 }
 
 @test
@@ -294,7 +294,7 @@ fn aStatusWaitedForTooLongIsKilled() async {
         _ = try await withTimeout(Duration.milliseconds(50)) { try await Command("sleep").argument("60").status() }
         assert(false)
     } catch let error as TimeoutError {
-        assert(error.duration == Duration.milliseconds(50))
+        expect(error.duration == Duration.milliseconds(50))
     } catch {
         assert(false)
     }

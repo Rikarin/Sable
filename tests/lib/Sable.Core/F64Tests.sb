@@ -37,8 +37,8 @@ fn theLimitsAreTheFormats() {
 fn infinityAndNaNAreThemselves() {
     assertEqual(F64.infinity.toString(), "inf")
     assertEqual((-F64.infinity).toString(), "-inf")
-    assert(F64.nan.isNaN, "NaN is NaN")
-    assert(F64.nan != F64.nan, "NaN equals nothing")
+    expect(F64.nan.isNaN, "NaN is NaN")
+    expect(F64.nan != F64.nan, "NaN equals nothing")
 }
 
 @test
@@ -54,7 +54,7 @@ fn theBitsRoundTrip() {
     assertEqual(F64.fromBits(0x3FF0000000000000), 1.0)
     assertEqual(F64.fromBits(F64.pi.bits), F64.pi)
     assertEqual(F64.leastNonzeroMagnitude.bits, 1)
-    assert((-0.0 as F64).bits != (0.0 as F64).bits, "the zeros differ in their sign bit")
+    expect((-0.0 as F64).bits != (0.0 as F64).bits, "the zeros differ in their sign bit")
 }
 
 /// The bits of the next pseudo-random F64, by xorshift: every pattern,

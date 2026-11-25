@@ -17,8 +17,8 @@ fn aProgramRunGivesWhatItWroteAndHowItEnded() {
     assertEqual(done.errors, "err\n")
     assertEqual(done.outputBytes.count, 4)
     assertEqual(done.errorBytes.count, 4)
-    assert(done.status.code == 3)
-    assert(!done.succeeded)
+    expect(done.status.code == 3)
+    expect(!done.succeeded)
 }
 
 @test
@@ -33,7 +33,7 @@ fn inputAndOutputLargerThanAPipeDoNotWaitForEachOther() {
     while text.utf8Count < 2_000_000 {
         text += "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\n"
     }
-    assert(try! Process.run("cat", [], input: text).output == text)
+    expect(try! Process.run("cat", [], input: text).output == text)
 }
 
 @test
@@ -42,13 +42,13 @@ fn aProgramThatReadsNoInputIsNoTrouble() {
     while text.utf8Count < 1_000_000 {
         text += "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\n"
     }
-    assert(try! Process.run("true", [], input: text).succeeded)
+    expect(try! Process.run("true", [], input: text).succeeded)
 }
 
 @test
 fn aProgramASignalEndedSaysWhich() {
     let done = try! Process.run("sh", ["-c", "kill -TERM $$"])
-    assert(done.status == ExitStatus(signal: .Terminate))
+    expect(done.status == ExitStatus(signal: .Terminate))
 }
 
 @test
@@ -78,11 +78,11 @@ fn aNulInAnArgumentIsRefused() {
 @test
 fn theDirectoryCanBeChanged() {
     let start = Process.currentDirectory()
-    assert(Process.changeDirectory("/"))
+    expect(Process.changeDirectory("/"))
     assertEqual(Process.currentDirectory(), "/")
-    assert(!Process.changeDirectory("/surely/not/here"))
-    assert(Process.changeDirectory(start))
-    assert(Process.id() > 0)
+    expect(!Process.changeDirectory("/surely/not/here"))
+    expect(Process.changeDirectory(start))
+    expect(Process.id() > 0)
 }
 
 #endif

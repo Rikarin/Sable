@@ -65,33 +65,33 @@ fn refused(_ memoryKiB: Int, _ iterations: Int, _ parallelism: Int, _ maximumMem
 
 @test
 fn parametersItIsNotDefinedForAreRefused() {
-    assert(refused(64, 1, 0))
-    assert(refused(64, 1, -1))
-    assert(refused(Int.max, 1, 0x100_0000))
-    assert(refused(64, 0, 1))
-    assert(refused(64, -1, 1))
-    assert(refused(64, 0x1_0000_0000, 1))
-    assert(refused(7, 1, 1))
-    assert(refused(31, 1, 4))
-    assert(refused(-1, 1, 1))
-    assert(!refused(8, 1, 1))
+    expect(refused(64, 1, 0))
+    expect(refused(64, 1, -1))
+    expect(refused(Int.max, 1, 0x100_0000))
+    expect(refused(64, 0, 1))
+    expect(refused(64, -1, 1))
+    expect(refused(64, 0x1_0000_0000, 1))
+    expect(refused(7, 1, 1))
+    expect(refused(31, 1, 4))
+    expect(refused(-1, 1, 1))
+    expect(!refused(8, 1, 1))
 }
 
 @test
 fn moreMemoryThanTheLimitIsRefused() {
-    assert(refused(Int.max, 1, 1))
-    assert(refused(0x1_0000_0000, 1, 1, Int.max))
-    assert(refused(4_194_305, 1, 1))
-    assert(refused(1025, 1, 1, 1024 * 1024))
-    assert(!refused(1024, 1, 1, 1024 * 1024))
+    expect(refused(Int.max, 1, 1))
+    expect(refused(0x1_0000_0000, 1, 1, Int.max))
+    expect(refused(4_194_305, 1, 1))
+    expect(refused(1025, 1, 1, 1024 * 1024))
+    expect(!refused(1024, 1, 1, 1024 * 1024))
 }
 
 @test
 fn aShortSaltAndAShortKeyAreRefused() {
     let argon2 = try! Argon2id(memoryKiB: 8, iterations: 1, parallelism: 1)
     let secret = SymmetricKey([1])
-    assert((try? argon2.deriveKey(from: secret, salt: message(7), byteCount: 32)) == none)
-    assert((try? argon2.deriveKey(from: secret, salt: message(8), byteCount: 3)) == none)
-    assert((try? argon2.deriveKey(from: secret, salt: message(8), byteCount: 0x1_0000_0000)) == none)
+    expect((try? argon2.deriveKey(from: secret, salt: message(7), byteCount: 32)) == none)
+    expect((try? argon2.deriveKey(from: secret, salt: message(8), byteCount: 3)) == none)
+    expect((try? argon2.deriveKey(from: secret, salt: message(8), byteCount: 0x1_0000_0000)) == none)
     assertEqual((try! argon2.deriveKey(from: secret, salt: message(8), byteCount: 4)).byteCount, 4)
 }

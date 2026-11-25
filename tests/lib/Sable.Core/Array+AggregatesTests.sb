@@ -51,15 +51,15 @@ fn extremesAgree<T: SIMDScalar & FixedWidthInteger>(_ middle: T) {
                 all[start - 1] = T.max
             }
             let same = all[start..<(start + n)]
-            assert(same.min() == scalarLeast(same))
-            assert(same.max() == scalarGreatest(same))
+            assertEqual(same.min(), scalarLeast(same))
+            assertEqual(same.max(), scalarGreatest(same))
             for at in 0..<n {
                 all[start + at] = T.min
-                assert(all[start..<(start + n)].min() == T.min)
-                assert(all[start..<(start + n)].max() == (n == 1 ? T.min : middle))
+                assertEqual(all[start..<(start + n)].min(), T.min)
+                assertEqual(all[start..<(start + n)].max(), (n == 1 ? T.min : middle))
                 all[start + at] = T.max
-                assert(all[start..<(start + n)].max() == T.max)
-                assert(all[start..<(start + n)].min() == (n == 1 ? T.max : middle))
+                assertEqual(all[start..<(start + n)].max(), T.max)
+                assertEqual(all[start..<(start + n)].min(), (n == 1 ? T.max : middle))
                 all[start + at] = middle
             }
         }
@@ -83,10 +83,10 @@ fn theExtremesAreFoundAtEveryPosition() {
 @test
 fn floatsKeepTheSequencesOwn() {
     let xs: F64[>..] = [2.0, 1.5, 7.0]
-    assert(xs.min() == 1.5 && xs.max() == 7.0)
+    expect(xs.min() == 1.5 && xs.max() == 7.0)
     assertEqual(xs.sum(), 10.5)
     let words: String[>..] = ["b", "a"]
-    assert(words.min() == "a")
+    expect(words.min() == "a")
 }
 
 @test

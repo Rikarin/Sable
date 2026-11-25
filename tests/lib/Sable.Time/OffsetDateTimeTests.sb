@@ -44,7 +44,7 @@ fn anOffsetDateTimeIsAMomentAndItsClock() {
     assertEqual(at.weekday, Weekday.Tuesday)
     assertEqual(at.date, Date.of(year: 2026, month: 11, day: 17)!)
     assertEqual(at.time, TimeOfDay.of(hour: 1, minute: 5, second: 3, nanosecond: 4)!)
-    assert(OffsetDateTime.of(year: 2026, month: 2, day: 30, offset: UtcOffset.utc) == none)
+    expect(OffsetDateTime.of(year: 2026, month: 2, day: 30, offset: UtcOffset.utc) == none)
 }
 
 @test
@@ -53,15 +53,15 @@ fn offsetDateTimesConvertAndMove() {
     let elsewhere = at.toOffset(UtcOffset.hours(-5))
     assertEqual(elsewhere.toString(), "2026-01-31T17:00:00-05:00")
     assertEqual(elsewhere.instant, at.instant)
-    assert(elsewhere != at)
+    expect(elsewhere != at)
     assertEqual(at.adding(Duration.hours(2)).toString(), "2026-02-01T01:00:00+01:00")
     assertEqual(at.adding(Period.months(1)).toString(), "2026-02-28T23:00:00+01:00")
     assertEqual(at.adding(Duration.hours(2)).durationSince(at), Duration.hours(2))
     assertEqual(at.zoned(in: TimeZone.fixed(UtcOffset.hours(9))).toString(), "2026-02-01T07:00:00+09:00[+09:00]")
     // Ordered by moment; at one moment, the greater offset first.
-    assert(at < elsewhere)
-    assert(at.adding(Duration.seconds(-1)) < elsewhere)
-    assert(!(at < at))
+    expect(at < elsewhere)
+    expect(at.adding(Duration.seconds(-1)) < elsewhere)
+    expect(!(at < at))
     assertEqual(at.hashValue, OffsetDateTime.of(year: 2026, month: 1, day: 31, hour: 23, offset: UtcOffset.hours(1))!.hashValue)
 }
 

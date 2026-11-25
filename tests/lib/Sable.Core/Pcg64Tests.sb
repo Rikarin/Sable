@@ -40,8 +40,8 @@ fn advancingIsAsManyDraws() {
 fn advancingFarIsNumPys() {
     var generator = Pcg64(state: 42, stream: 54)
     generator.advance(by: (U128(1) << 100) | 12345)
-    assert(generator.next() == 0x56CCA40530C8A48A)
-    assert(generator.next() == 0x2EC3BEFA63172395)
+    expect(generator.next() == 0x56CCA40530C8A48A)
+    expect(generator.next() == 0x2EC3BEFA63172395)
 }
 
 @test
@@ -67,5 +67,5 @@ fn streamsOfOneSeedDiffer() {
         differences += (first.next() ^ second.next()).popCount
     }
     // Half of 4096 bits, within 6 of their 32 standard deviations.
-    assert(differences > 1856 && differences < 2240)
+    expect(differences > 1856 && differences < 2240)
 }

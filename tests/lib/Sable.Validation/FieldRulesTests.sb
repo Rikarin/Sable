@@ -19,8 +19,8 @@ fn whatIsSaidIsOfTheLastCheck() {
 @test
 fn aValueWithOnlyWarningsIsNotValidAndHasNoErrors() {
     let result = verdict(5) { $0.greaterThan(9).severity(.Warning) }
-    assert(!result.isValid)
-    assert(!result.hasErrors)
+    expect(!result.isValid)
+    expect(!result.hasErrors)
 }
 
 @test
@@ -85,5 +85,5 @@ extension FieldRules where V == String {
 @test
 fn aProgramsOwnRuleIsAnExtension() {
     assertEqual(message("A") { $0.slug() }, "'It' is no slug.")
-    assert(passes("a-1") { $0.slug() })
+    expect(passes("a-1") { $0.slug() })
 }

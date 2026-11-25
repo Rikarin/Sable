@@ -52,25 +52,25 @@ fn refused(_ cost: Int, _ blockSize: Int, _ parallelism: Int, _ maximumMemory: I
 
 @test
 fn parametersItIsNotDefinedForAreRefused() {
-    assert(refused(0, 8, 1))
-    assert(refused(1, 8, 1))
-    assert(refused(-1024, 8, 1))
-    assert(refused(1000, 8, 1))
-    assert(refused(1024, 0, 1))
-    assert(refused(1024, 8, 0))
-    assert(refused(1024, -8, -1))
-    assert(refused(1024, 0x4000_0000, 1))
-    assert(refused(1024, 0x10000, 0x10000))
-    assert(refused(65536, 1, 1))
-    assert(!refused(32768, 1, 1))
+    expect(refused(0, 8, 1))
+    expect(refused(1, 8, 1))
+    expect(refused(-1024, 8, 1))
+    expect(refused(1000, 8, 1))
+    expect(refused(1024, 0, 1))
+    expect(refused(1024, 8, 0))
+    expect(refused(1024, -8, -1))
+    expect(refused(1024, 0x4000_0000, 1))
+    expect(refused(1024, 0x10000, 0x10000))
+    expect(refused(65536, 1, 1))
+    expect(!refused(32768, 1, 1))
 }
 
 @test
 fn moreMemoryThanTheLimitIsRefused() {
-    assert(refused(Int.max / 2 + 1, 8, 1))
-    assert(refused(1 << 62, 8, 1))
-    assert(refused(1 << 20, 8, 1))
-    assert(refused(1024, 8, 1, 1024 * 1024))
-    assert(!refused(1024, 8, 1, 1028 * 1024))
-    assert(refused(16, 1, 0x3FFF_FFFF))
+    expect(refused(Int.max / 2 + 1, 8, 1))
+    expect(refused(1 << 62, 8, 1))
+    expect(refused(1 << 20, 8, 1))
+    expect(refused(1024, 8, 1, 1024 * 1024))
+    expect(!refused(1024, 8, 1, 1028 * 1024))
+    expect(refused(16, 1, 0x3FFF_FFFF))
 }

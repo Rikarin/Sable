@@ -35,8 +35,8 @@ fn aCStringCGivesIsRead() {
             assertEqual(value.validated, "välue")
             assertEqual(value.bytes[1], 0xC3)
             assertEqual(value.debugDescription(), "\"välue\"")
-            assert(!value.isEmpty)
-            assert(find(text, 0x21).isNull)
+            expect(!value.isEmpty)
+            expect(find(text, 0x21).isNull)
         }
     }
 }
@@ -53,11 +53,11 @@ fn bytesThatAreNotTextAreReplacedInText() {
 @test
 fn theEmptyStringIsItsNul() {
     let empty = try! CString("")
-    assert(empty.cStr.isEmpty)
+    expect(empty.cStr.isEmpty)
     assertEqual(empty.count, 0)
     assertEqual(empty.string, "")
     "".withCString { text in
-        assert(text.isEmpty)
+        expect(text.isEmpty)
     }
 }
 
@@ -121,15 +121,15 @@ fn severalTextsAreAnArgv() {
     ["ls", "", "ö"].withCStrings { texts in
         unsafe {
             assertEqual(CStr.viewing(texts.load(at: 0)).string, "ls")
-            assert(CStr.viewing(texts.load(at: 1)).isEmpty)
+            expect(CStr.viewing(texts.load(at: 1)).isEmpty)
             assertEqual(CStr.viewing(texts.load(at: 2)).string, "ö")
-            assert(texts.load(at: 3).isNull)
+            expect(texts.load(at: 3).isNull)
         }
     }
     let nothing: String[>..] = []
     nothing.withCStrings { texts in
         unsafe {
-            assert(texts.load().isNull)
+            expect(texts.load().isNull)
         }
     }
 }

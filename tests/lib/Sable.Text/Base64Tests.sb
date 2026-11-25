@@ -8,7 +8,7 @@ import Sable.Text
 
 // The bytes are the ones expected; when not, both are shown in hexadecimal.
 fn assertBytes(_ actual: U8[:], _ expected: U8[:]) {
-    assert(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
+    expect(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
 }
 
 // 'count' bytes that run through every value, in no simple order.
@@ -75,9 +75,9 @@ fn everyByteValueRoundTripsInBothAlphabets() {
     }
     let standard = Base64.encode(bytes)
     let urlSafe = Base64.encode(bytes, alphabet: .UrlSafe)
-    assert(standard.contains("+") && standard.contains("/"), "the standard alphabet's last digits")
-    assert(urlSafe.contains("-") && urlSafe.contains("_"), "the URL-safe alphabet's last digits")
-    assert(!urlSafe.contains("+") && !urlSafe.contains("/"), "nothing that needs escaping in a URL")
+    expect(standard.contains("+") && standard.contains("/"), "the standard alphabet's last digits")
+    expect(urlSafe.contains("-") && urlSafe.contains("_"), "the URL-safe alphabet's last digits")
+    expect(!urlSafe.contains("+") && !urlSafe.contains("/"), "nothing that needs escaping in a URL")
     assertBytes(try! Base64.decode(standard), bytes)
     assertBytes(try! Base64.decode(urlSafe, alphabet: .UrlSafe), bytes)
 }
@@ -315,9 +315,9 @@ fn everyByteThatIsNoDigitIsFoundAtEveryPositionOfALongText() {
                 if digits.contains(byte) {
                     assert(thrown == none)
                 } else if byte == 0x3D {
-                    assert(thrown == .InvalidPadding(at: at))
+                    assertEqual(thrown, .InvalidPadding(at: at))
                 } else {
-                    assert(thrown == .InvalidCharacter(at: at, byte: byte))
+                    assertEqual(thrown, .InvalidCharacter(at: at, byte: byte))
                 }
             }
             text[at] = held

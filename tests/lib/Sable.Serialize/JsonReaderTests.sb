@@ -34,8 +34,8 @@ fn tokens(_ bytes: U8[:], _ options: ParseOptions = strict()) -> String {
         while try reader.next() != none {
             lines.append(try line(reader))
         }
-        assert(reader.isAtEnd)
-        assert(reader.bytesRead == bytes.count)
+        expect(reader.isAtEnd)
+        expect(reader.bytesRead == bytes.count)
         lines.append("end")
     } catch {
         lines.append(error.description())
@@ -60,7 +60,7 @@ fn pieces(_ bytes: U8[:], _ size: Int, _ options: ParseOptions) -> String {
                 reader.finish()
             }
         }
-        assert(reader.bytesRead == bytes.count)
+        expect(reader.bytesRead == bytes.count)
         lines.append("end")
     } catch {
         lines.append(error.description())
@@ -89,7 +89,7 @@ fn refused(_ text: String, _ options: ParseOptions = strict()) -> String {
 fn refused(bytes: U8[>..], _ options: ParseOptions = strict()) -> String {
     let lines = read(bytes: bytes, options).split(separator: '\n')
     let last = lines[lines.count - 1]
-    assert(last != "end", "\(bytes.toString()) is refused")
+    expect(last != "end", "\(bytes.toString()) is refused")
     return last
 }
 
@@ -229,13 +229,13 @@ fn nestingIsBounded() {
         deep = "[{\"k\":" + deep + (deep.isEmpty ? "0" : "") + "}]"
     }
     let whole = tokens(utf8(deep))
-    assert(whole.hasSuffix("EndArray 1:1601/0 ]\nend"))
+    expect(whole.hasSuffix("EndArray 1:1601/0 ]\nend"))
     assertEqualText(pieces(utf8(deep), 7, strict()), whole)
     assertEqual(refused("[[[]]]", ParseOptions(maxDepth: 2)), "line 1, column 3: nested more than 2 deep")
     assertEqual(refused("{\"a\":{\"b\":[]}}", ParseOptions(maxDepth: 2)), "line 1, column 11: nested more than 2 deep")
-    assert(tokens(utf8("[[]]"), ParseOptions(maxDepth: 2)).hasSuffix("end"))
+    expect(tokens(utf8("[[]]"), ParseOptions(maxDepth: 2)).hasSuffix("end"))
     let opened = U8[>..](repeating: 0x5B, count: 100000)
-    assert(tokens(opened).hasSuffix("line 1, column 513: nested more than 512 deep"))
+    expect(tokens(opened).hasSuffix("line 1, column 513: nested more than 512 deep"))
 }
 
 @test
@@ -265,9 +265,9 @@ fn commentsAreTokensWhenAskedFor() throws {
     _ = try reader.next()
     _ = try reader.next()
     try reader.skipValue()
-    assert(reader.token == .EndArray)
-    assert(try reader.next() == .Key)
-    assert(reader.valueEquals("b"))
+    expect(reader.token == .EndArray)
+    expect(try reader.next() == .Key)
+    expect(reader.valueEquals("b"))
     // The parser has no use for them.
     assertEqual(render(try parseWith("/*a*/[1/*b*/]/*c*/", options)), "[1]")
 }
@@ -276,8 +276,8 @@ fn commentsAreTokensWhenAskedFor() throws {
 fn aKeyTwiceIsRefusedWhenAskedFor() {
     let options = ParseOptions(rejectDuplicateKeys: true)
     assertEqual(refused("{\"a\":1,\"b\":{\"a\":2},\"\\u0061\":3}", options), "line 1, column 20: the key \"a\" appears twice")
-    assert(read("{\"a\":{\"a\":1},\"b\":[{\"a\":1},{\"a\":1}]}", options).hasSuffix("end"))
-    assert(read("{\"a\":1,\"a\":2}").hasSuffix("end"))
+    expect(read("{\"a\":{\"a\":1},\"b\":[{\"a\":1},{\"a\":1}]}", options).hasSuffix("end"))
+    expect(read("{\"a\":1,\"a\":2}").hasSuffix("end"))
 }
 
 @test
@@ -317,26 +317,26 @@ fn valuesAreOfTheTypeAskedFor() throws {
     assertEqual(failure(reader) { r in _ = try r.float() }, "line 1, column 85: invalid number: out of range")
     assertEqual(failure(reader) { r in _ = try r.string() }, "line 1, column 85: found '1' where a string was expected")
     _ = try reader.next()
-    assert(try reader.bool())
+    expect(try reader.bool())
     assertEqual(failure(reader) { r in _ = try r.int() }, "line 1, column 92: found 't' where a number was expected")
     _ = try reader.next()
-    assert(!(try reader.bool()))
+    expect(!(try reader.bool()))
     _ = try reader.next()
     assertEqual(try reader.base64(), [0x68, 0x69])
     assertEqual(failure(reader) { r in _ = try r.bool() }, "line 1, column 105: found '\"' where true or false was expected")
     _ = try reader.next()
-    assert(reader.hasEscapes && reader.valueEquals("kA!") && !reader.valueEquals("k\\u0041!"))
+    expect(reader.hasEscapes && reader.valueEquals("kA!") && !reader.valueEquals("k\\u0041!"))
     assertEqual(reader.rawValue.toString(), "k\\u0041!")
     assertEqual(failure(reader) { r in _ = try r.base64() }, "line 1, column 113: found '\"' where base64 was expected")
     var written: U8[>..] = [0x21]
     try reader.appendString(to: &written)
     assertEqual(written, [0x21, 0x6B, 0x41, 0x21])
     _ = try reader.next()
-    assert(!reader.hasEscapes && reader.valueEquals("{}") && !reader.valueEquals("{]") && !reader.valueEquals("{"))
+    expect(!reader.hasEscapes && reader.valueEquals("{}") && !reader.valueEquals("{]") && !reader.valueEquals("{"))
     try reader.appendString(to: &written)
     assertEqual(written.count, 6)
     _ = try reader.next()
-    assert(!reader.valueEquals("]"))
+    expect(!reader.valueEquals("]"))
     assertEqual(failure(reader) { r in
         var more: U8[>..] = []
         try r.appendString(to: &more)
@@ -357,10 +357,10 @@ fn longValuesAreCompared() throws {
     for text in ["", "a", "abcdefg", "abcdefgh", "abcdefghi", "abcdefghijklmnop", "abcdefghijklmnopq"] {
         var reader = JsonReader("\"\(text)\"")
         _ = try reader.next()
-        assert(reader.valueEquals(text) && !reader.valueEquals(text + "x"))
+        require(reader.valueEquals(text) && !reader.valueEquals(text + "x"))
         if !text.isEmpty {
-            assert(!reader.valueEquals("_" + text.slice(from: 1, to: text.count)))
-            assert(!reader.valueEquals(text.slice(from: 0, to: text.count - 1) + "_"))
+            require(!reader.valueEquals("_" + text.slice(from: 1, to: text.count)))
+            require(!reader.valueEquals(text.slice(from: 0, to: text.count - 1) + "_"))
         }
     }
 }
@@ -374,37 +374,32 @@ fn aFloatIsTheNearest() throws {
     }
     var reader = JsonReader("-0.0")
     _ = try reader.next()
-    assert((try reader.float()).isSignMinus)
+    expect((try reader.float()).isSignMinus)
 }
 
 @test
 fn valuesAreSkipped() throws {
     var reader = JsonReader("{\"a\": {\"x\": [1, {\"y\": 2}]}, \"b\": 1, \"c\": [[], []], \"d\": 4}")
     try reader.skipValue()
-    assert(reader.token == none)
+    expect(reader.token == none)
     _ = try reader.next()
     _ = try reader.next()
     try reader.skipValue()
-    assert(reader.token == .EndObject && reader.depth == 1)
+    expect(reader.token == .EndObject && reader.depth == 1)
     _ = try reader.next()
     try reader.skipValue()
-    assert(reader.token == .Number)
+    expect(reader.token == .Number)
     try reader.skipValue()
-    assert(reader.token == .Number)
+    expect(reader.token == .Number)
     _ = try reader.next()
-    assert(try reader.next() == .BeginArray)
+    expect(try reader.next() == .BeginArray)
     try reader.skipValue()
-    assert(reader.token == .EndArray && reader.depth == 1)
-    assert(try reader.next() == .Key)
-    assert(reader.valueEquals("d"))
+    expect(reader.token == .EndArray && reader.depth == 1)
+    expect(try reader.next() == .Key)
+    expect(reader.valueEquals("d"))
     var bad = JsonReader("[[1,]]")
     _ = try bad.next()
-    do {
-        try bad.skipValue()
-        fail("a malformed value was skipped")
-    } catch {
-        assertEqual(error.description(), "line 1, column 5: found ']' where a value was expected")
-    }
+    expectThrows(saying: "line 1, column 5: found ']' where a value was expected") { try bad.skipValue() }
 }
 
 @test
@@ -435,7 +430,7 @@ fn skippingGoesOnWhereMoreBytesCome() throws {
     }
     reader.finish()
     assertEqual(seen, "BeginObject Key Key Number EndObject ")
-    assert(reader.isAtEnd)
+    expect(reader.isAtEnd)
 }
 
 @test
@@ -444,12 +439,7 @@ fn aTypeIsDecodedAsTheOptionsAllow() throws {
     assertEqual(try Json.decode(Int[>..].self, from: "/*a*/[1, /*b*/ 2,]//c", options: options), [1, 2])
     assertEqual(try Json.decode(Int.self, fromBytes: utf8("7 // seven"), options: relaxed()), 7)
     for (text, reason) in [("1 2", "line 1, column 3: text after the value"), ("[] {}", "line 1, column 4: text after the value"), (" ", "line 1, column 2: the text ends where a value was expected")] {
-        do {
-            _ = try Json.decode(JsonValue.self, from: text, options: options)
-            fail("'\(text)' is one value")
-        } catch {
-            assertEqual(error.description(), "not JSON: \(reason)")
-        }
+        expectThrows(saying: "not JSON: \(reason)") { _ = try Json.decode(JsonValue.self, from: text, options: options) }
         assertEqual(describe { _ = try parseWith(text, options) }, reason)
     }
 }
@@ -493,8 +483,8 @@ fn aReaderIsReadFrom() throws {
         }
     }
     assertEqual(seen, "1 a text longer than a piece is 4 ")
-    assert(reader.isAtEnd && reader.bytesRead == bytes.count)
-    assert(try reader.next(from: &source) == none)
+    expect(reader.isAtEnd && reader.bytesRead == bytes.count)
+    expect(try reader.next(from: &source) == none)
 }
 
 @test
@@ -511,21 +501,15 @@ fn aReadersFailureIsNotTheJsons() {
     }
     source = Trickle(stream: MemoryStream(utf8("[[1")), failsAtEnd: true)
     reader = JsonReader.streaming()
-    do {
+    expectThrows(saying: IoError.TimedOut.description()) {
         _ = try reader.next(from: &source)
         try reader.skipValue(from: &source)
-        fail("a document cut short was read")
-    } catch {
-        assertEqual(error.description(), IoError.TimedOut.description())
     }
     source = Trickle(stream: MemoryStream(utf8("[[}")))
     reader = JsonReader.streaming()
-    do {
+    expectThrows(saying: "line 1, column 3: found '}' where a value was expected") {
         _ = try reader.next(from: &source)
         try reader.skipValue(from: &source)
-        fail("a malformed document was skipped")
-    } catch {
-        assertEqual(error.description(), "line 1, column 3: found '}' where a value was expected")
     }
 }
 
@@ -568,28 +552,22 @@ fn anAsyncReaderIsReadFrom() async throws {
         }
     }
     assertEqual(seen, "BeginObject Key Key String é EndObject ")
-    assert(reader.isAtEnd)
+    expect(reader.isAtEnd)
 }
 
 @test
 fn anAsyncReadersFailureIsNotTheJsons() async {
     var reader = JsonReader.streaming()
     let failing = AsyncTrickle([utf8("[1"), []])
-    do {
+    await expectThrows(saying: IoError.Interrupted.description()) {
         while try await reader.next(from: failing) != none { }
-        fail("a document cut short was read")
-    } catch {
-        assertEqual(error.description(), IoError.Interrupted.description())
     }
     reader = JsonReader.streaming()
     let malformed = AsyncTrickle([utf8("[[1"), utf8("}")])
-    do {
+    await expectThrows(saying: "line 1, column 4: found '}' where ',' or ']' was expected") {
         _ = try await reader.next(from: malformed)
         _ = try await reader.next(from: malformed)
         try await reader.skipValue(from: malformed)
-        fail("a malformed document was read")
-    } catch {
-        assertEqual(error.description(), "line 1, column 4: found '}' where ',' or ']' was expected")
     }
 }
 
@@ -611,16 +589,16 @@ fn aLongTokenInManyPiecesIsLookedAtOnce() throws {
         _ = try reader.next()
     }
     reader.append([0x2C, 0x2F, 0x2A])
-    assert(try reader.next() == .Number)
+    expect(try reader.next() == .Number)
     for _ in 0..<65536 {
         reader.append(utf8("1234567890123456"))
         assert(try reader.next() == none)
     }
     reader.append(utf8("*/ null]"))
     reader.finish()
-    assert(try reader.next() == .Null)
-    assert(try reader.next() == .EndArray)
-    assert(try reader.next() == none && reader.isAtEnd)
+    expect(try reader.next() == .Null)
+    expect(try reader.next() == .EndArray)
+    expect(try reader.next() == none && reader.isAtEnd)
 }
 
 @test
@@ -636,7 +614,7 @@ fn tokensAreReadWithoutAllocating() {
                 sum += 1
             }
         }
-        assert(sum == 13)
+        expect(sum == 13)
     }
 }
 

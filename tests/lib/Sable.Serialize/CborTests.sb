@@ -130,8 +130,8 @@ fn rfc8949sExamplesAreReadAndWritten() throws {
         assert(refusal(hex, conformance: .Deterministic).contains("which is not deterministic"))
     }
     // The two subnormal and least normal halves, by value.
-    assert(try CborValue.parse(bytes("f90001")) == .Float(value: 5.960464477539063e-8))
-    assert(try CborValue.parse(bytes("f90400")) == .Float(value: 0.00006103515625))
+    expect(try CborValue.parse(bytes("f90001")) == .Float(value: 5.960464477539063e-8))
+    expect(try CborValue.parse(bytes("f90400")) == .Float(value: 0.00006103515625))
     assertEqual(Hex.encode(try Cbor.encode(5.960464477539063e-8)), "f90001")
     assertEqual(Hex.encode(try Cbor.encode(0.00006103515625)), "f90400")
 }
@@ -170,11 +170,11 @@ fn theReaderReadsEveryExampleAsTokens() throws {
         }
         assertEqual(Hex.encode(try encoder.bytes()), hex)
     }
-    assert(try tokens(bytes("7f61616162ff")) == [.Text(value: "ab")])
-    assert(try tokens(bytes("5f4101ff")) == [.Bytes(value: [1])])
-    assert(try tokens(bytes("bf01c102ff")) == [.BeginMap(count: none), .Unsigned(value: 1), .Tag(number: 1), .Unsigned(value: 2), .End])
+    expect(try tokens(bytes("7f61616162ff")) == [.Text(value: "ab")])
+    expect(try tokens(bytes("5f4101ff")) == [.Bytes(value: [1])])
+    expect(try tokens(bytes("bf01c102ff")) == [.BeginMap(count: none), .Unsigned(value: 1), .Tag(number: 1), .Unsigned(value: 2), .End])
     // A sequence of items (RFC 8742), and a position in it.
-    assert(try tokens(bytes("0180f6")) == [.Unsigned(value: 1), .BeginArray(count: 0), .End, .Simple(value: 22)])
+    expect(try tokens(bytes("0180f6")) == [.Unsigned(value: 1), .BeginArray(count: 0), .End, .Simple(value: 22)])
     var reader = CborReader(bytes("820102"))
     _ = try reader.next()
     _ = try reader.next()
@@ -193,7 +193,7 @@ fn integersTakeTheFewestBytes() throws {
         assertEqual(Hex.encode(try Cbor.encode(value)), hex)
         assertEqual(try Cbor.decode(Int.self, from: bytes(hex)), value)
         assertEqual((try CborValue.parse(bytes(hex))).int!, value)
-        assert(CborValue.integer(value) == (try CborValue.parse(bytes(hex))))
+        require(CborValue.integer(value) == (try CborValue.parse(bytes(hex))))
     }
     assertEqual(try Cbor.decode(U64.self, from: bytes("1bffffffffffffffff")), U64.max)
     for hex in ["01", "1801", "190001", "1a00000001", "1b0000000000000001", "c24101", "c24a00000000000000000001"] {
@@ -206,12 +206,12 @@ fn integersTakeTheFewestBytes() throws {
     assertEqual(try Cbor.decode(F64.self, from: bytes("c34107")), -8.0)
     assertEqual(try Cbor.decode(F64.self, from: bytes("3863")), -100.0)
     for hex in ["1bffffffffffffffff", "3bffffffffffffffff", "c249010000000000000000", "f93c00"] {
-        assert((try? Cbor.decode(Int.self, from: bytes(hex))) == none)
+        require((try? Cbor.decode(Int.self, from: bytes(hex))) == none)
     }
     for hex in ["20", "c249010000000000000000", "c34100"] {
-        assert((try? Cbor.decode(U64.self, from: bytes(hex))) == none)
+        require((try? Cbor.decode(U64.self, from: bytes(hex))) == none)
     }
-    assert((CborValue.Unsigned(value: U64.max)).int == none && (CborValue.Negative(n: U64.max)).int == none && CborValue.Null.int == none)
+    expect((CborValue.Unsigned(value: U64.max)).int == none && (CborValue.Negative(n: U64.max)).int == none && CborValue.Null.int == none)
 }
 
 @test
@@ -236,7 +236,7 @@ fn aDerivedTypeGoesThereAndBack() throws {
     for deterministic in [false, true] {
         let encoded = try Cbor.encode(record, conformance: deterministic ? .Deterministic : .Lax)
         assertEqual(encoded[0], deterministic ? 0xA6 as U8 : 0xBF as U8)
-        assert(try Cbor.decode(Record.self, from: encoded) == record)
+        require(try Cbor.decode(Record.self, from: encoded) == record)
         assertEqual(refusal(of: encoded, conformance: .Deterministic).isEmpty, deterministic)
     }
     var counts = Dictionary<String, Int>()
@@ -247,7 +247,7 @@ fn aDerivedTypeGoesThereAndBack() throws {
     assertEqual(Hex.encode(try Cbor.encode(Shape.Point(1, 2))), "a165506f696e74820102")
     // Indefinite lengths throughout, and tags that are looked through.
     let shapes = try Cbor.decode(Shape[>..].self, from: bytes("9fd9d9f765456d707479bf7f65506f696e7460ff9f0120ffffff"))
-    assert(shapes == [.Empty, .Point(1, -1)])
+    expect(shapes == [.Empty, .Point(1, -1)])
 }
 
 @test
@@ -314,22 +314,22 @@ fn theDeterministicEncodingSortsAMapByItsKeysBytes() throws {
 fn aDecoderCanAskForTheDeterministicEncoding() {
     for hex in ["1800", "190001", "1a0000ffff", "1b00000000ffffffff", "5800", "7800", "9800", "b800", "d800f6", "fa3fc00000", "fb3ff8000000000000", "a2616201616100", "a2616100616101", "5f40ff", "a2f4006100"] {
         if hex != "a2f4006100" {
-            assert(refusal(hex, conformance: .Deterministic).contains("not deterministic"))
+            require(refusal(hex, conformance: .Deterministic).contains("not deterministic"))
         }
         assertEqual(refusal(hex, conformance: .Deterministic).isEmpty, false)
     }
     assertEqual(refusal("a3616101616202f400", conformance: .Deterministic), "")
     assertEqual(refusal("a2616201616100", conformance: .Deterministic), "not CBOR: a map's keys out of order, which is not deterministic, at byte 4")
-    assert((try? Cbor.decode(Int.self, from: bytes("1800"), conformance: .Deterministic)) == none)
-    assert((try? CborDecoder.parse(bytes("1800"), conformance: .Deterministic)) == none)
+    expect((try? Cbor.decode(Int.self, from: bytes("1800"), conformance: .Deterministic)) == none)
+    expect((try? CborDecoder.parse(bytes("1800"), conformance: .Deterministic)) == none)
 }
 
 @test
 fn aDeterministicNanAndBignumHaveOneEncoding() {
     assertEqual(refusal("f97e00", conformance: .Deterministic), "")
     assertEqual(refusal("f97e01"), "")
-    assert(refusal("f97e01", conformance: .Deterministic).contains("a NaN, not 0x7E00"))
-    assert(refusal("f9fe00", conformance: .Deterministic).contains("a NaN, not 0x7E00"))
+    expect(refusal("f97e01", conformance: .Deterministic).contains("a NaN, not 0x7E00"))
+    expect(refusal("f9fe00", conformance: .Deterministic).contains("a NaN, not 0x7E00"))
     assertEqual(refusal("f97c00", conformance: .Deterministic), "")
     // RFC 8949 §3.4.3: 2^64 is a bignum, and what is less is not.
     assertEqual(refusal("c249010000000000000000", conformance: .Deterministic), "")
@@ -368,8 +368,8 @@ fn lengthFirstPutsShorterKeysBeforeLonger() {
     let encoded = try! value.bytes(conformance: .LengthFirst)
     assertEqual(Hex.encode(encoded), "a80a012003f408186402617a048120076261610581186406")
     assertEqual(refusal(of: encoded, conformance: .LengthFirst), "")
-    assert(refusal(of: encoded, conformance: .Deterministic).contains("keys out of order"))
-    assert(refusal("a80a011864022003617a046261610581186406812007f408", conformance: .LengthFirst).contains("keys out of order"))
+    expect(refusal(of: encoded, conformance: .Deterministic).contains("keys out of order"))
+    expect(refusal("a80a011864022003617a046261610581186406812007f408", conformance: .LengthFirst).contains("keys out of order"))
 }
 
 @test
@@ -402,15 +402,15 @@ fn strictRefusesAKeyTwice() {
 @test
 fn aMomentReadsFromItsTags() throws {
     let moment = UtcDateTime.fromUnix(1363896240)
-    assert(try Cbor.decode(UtcDateTime.self, from: bytes("c11a514b67b0")) == moment)
-    assert(try Cbor.decode(UtcDateTime.self, from: bytes("c074323031332d30332d32315432303a30343a30305a")) == moment)
-    assert(try CborDecoder.parse(bytes("c074323031332d30332d32315432303a30343a30305a")).decodeTimestamp() == moment)
+    expect(try Cbor.decode(UtcDateTime.self, from: bytes("c11a514b67b0")) == moment)
+    expect(try Cbor.decode(UtcDateTime.self, from: bytes("c074323031332d30332d32315432303a30343a30305a")) == moment)
+    expect(try CborDecoder.parse(bytes("c074323031332d30332d32315432303a30343a30305a")).decodeTimestamp() == moment)
     let half = try Cbor.decode(UtcDateTime.self, from: bytes("c1fb41d452d9ec200000"))
     assertEqual(half.nanosecond, 500000000)
     let before = try Cbor.decode(UtcDateTime.self, from: bytes("c1f9be00"))
-    assert(before == UtcDateTime { secondsSinceEpoch: -2, nanosecond: 500000000 })
+    expect(before == UtcDateTime { secondsSinceEpoch: -2, nanosecond: 500000000 })
     for hex in ["c11bffffffffffffffff", "c1fb7e37e43c8800759c", "c1f97e00", "c1f97c00", "c11b7fffffffffffffff", "c1f6", "01"] {
-        assert((try? CborDecoder.parse(bytes(hex)).decodeTimestamp()) == none)
+        require((try? CborDecoder.parse(bytes(hex)).decodeTimestamp()) == none)
     }
 }
 
@@ -419,11 +419,11 @@ fn decodersSayWhereAndWhatIsWrong() throws {
     let root = try CborDecoder.parse(bytes("a3616182016178 05f5 63622063a1f601".replacing(" ", with: "")))
     assertEqual(root.path, "$")
     assertEqual(root.count, 3)
-    assert(root.kind == .Map && !root.isNull && !root.isMissing && root.tags.isEmpty)
+    expect(root.kind == .Map && !root.isNull && !root.isMissing && root.tags.isEmpty)
     assertEqual(root.field("a").element(1).path, "$.a[1]")
-    assert(root.field("a").element(2).isMissing && root.field("a").element(-1).isMissing && root.element(0).isMissing)
-    assert(root.hasField("a") && !root.hasField("c") && !root.hasField("5") && !root.field("a").hasField("a"))
-    assert(!root.excluding(["a"]).hasField("a"))
+    expect(root.field("a").element(2).isMissing && root.field("a").element(-1).isMissing && root.element(0).isMissing)
+    expect(root.hasField("a") && !root.hasField("c") && !root.hasField("5") && !root.field("a").hasField("a"))
+    expect(!root.excluding(["a"]).hasField("a"))
     assertEqual(try root.excluding(["a"]).excluding(["5"]).decodeMap().count, 1)
     var messages: String[>..] = []
     let attempts: (() throws(SerializeError) -> Void)[>..] = [
@@ -500,13 +500,13 @@ fn decodersSayWhereAndWhatIsWrong() throws {
     for hex in ["f6", "f7", "f4", "01", "20", "f90000", "60", "40", "80", "a0", "c24101", "f0", "c1c240", "9fff", "bfff"] {
         let decoder = try CborDecoder.parse(bytes(hex))
         kinds += "\(decoder.kind) "
-        assert(!decoder.kindName.isEmpty)
+        require(!decoder.kindName.isEmpty)
     }
     assertEqual(kinds, "Null Null Bool Number Number Number String Bytes Sequence Map Number Number Number Sequence Map ")
     assertEqual(try CborDecoder.parse(bytes("9f010203ff")).count, 3)
     assertEqual(try CborDecoder.parse(bytes("bf0102ff")).count, 1)
-    assert(root.field("zz").kind == .Missing && root.field("zz").kindName == "nothing" && root.casePayload().isMissing)
-    assert(try CborDecoder.parse(bytes("d9d9f7c101")).tags == [55799, 1])
+    expect(root.field("zz").kind == .Missing && root.field("zz").kindName == "nothing" && root.casePayload().isMissing)
+    expect(try CborDecoder.parse(bytes("d9d9f7c101")).tags == [55799, 1])
 }
 
 @test
@@ -561,9 +561,9 @@ fn aValueOfEveryKindGoesThereAndBack() throws {
     assertEqual(try CborValue.parse(encoded), value)
     assertEqual(try Cbor.decode(CborValue.self, from: encoded), value)
     assertEqual(value["a"]!, CborValue.Array(items: [.Null, .Undefined, .Bool(value: true), .Simple(value: 99)]))
-    assert(value["b"] == none && CborValue.Null["a"] == none)
-    assert((try? Json.encode(value)) == none)
-    assert((try? Json.encode(CborValue.Simple(value: 1))) == none)
+    expect(value["b"] == none && CborValue.Null["a"] == none)
+    expect((try? Json.encode(value)) == none)
+    expect((try? Json.encode(CborValue.Simple(value: 1))) == none)
 }
 
 @test
@@ -573,10 +573,10 @@ fn aValueGoesThroughOtherFormats() throws {
     assertEqual(try Json.encode(value), text)
     assertEqual(try Json.encode(try CborValue.parse(bytes("a301f7200a3bffffffffffffffffc13bffffffffffffffff"))), "{\"1\":null,\"-1\":10,\"-18446744073709551616\":-1.8446744073709552e+19}")
     let packed = try MessagePackValue.decode(from: try CborDecoder.parse(bytes("8341ff01f5")))
-    assert(packed == .Array(items: [.Bytes(value: [255]), .Integer(value: 1), .Bool(value: true)]))
+    expect(packed == .Array(items: [.Bytes(value: [255]), .Integer(value: 1), .Bool(value: true)]))
     let back = try CborValue.decode(from: try MessagePackDecoder.parse(try MessagePack.encode(packed)))
     assertEqual(back.diagnostic(), "[h'ff', 1, true]")
-    assert((try? CborValue.decode(from: try JsonDecoder.parse("{}").field("a"))) == none)
+    expect((try? CborValue.decode(from: try JsonDecoder.parse("{}").field("a"))) == none)
 }
 
 @test
@@ -622,15 +622,15 @@ fn nestingIsBounded() {
         var hostile: U8[>..] = []
         hostile.append(repeating: byte, count: 1000000)
         assertEqual(refusal(of: hostile), "not CBOR: nested more than 128 deep at byte 128")
-        assert((try? tokens(hostile)) == none)
+        require((try? tokens(hostile)) == none)
     }
     var deep: U8[>..] = []
     deep.append(repeating: 0x81, count: 128)
     deep.append(0xF6)
     assertEqual(refusal(of: deep), "")
-    assert(!refusal(of: deep, depth: 127).isEmpty)
-    assert((try? tokens(deep, depth: 127)) == none)
-    assert((try? tokens(deep)) != none)
+    expect(!refusal(of: deep, depth: 127).isEmpty)
+    expect((try? tokens(deep, depth: 127)) == none)
+    expect((try? tokens(deep)) != none)
 }
 
 @test
@@ -643,7 +643,7 @@ fn anyBytesAreReadOrRefused() {
         }
         if let value = try? CborValue.parse(made) {
             let again = try! value.bytes()
-            assert(try! CborValue.parse(again).bytes() == again)
+            assertEqual(try! CborValue.parse(again).bytes(), again)
             _ = value.diagnostic()
             assert((try? tokens(made)) != none)
         }

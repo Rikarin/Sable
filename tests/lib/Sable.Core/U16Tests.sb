@@ -13,7 +13,7 @@ fn theLimitsAreTheWidthsBounds() {
     assertEqual(U16.zero, 0)
     assertEqual(U16.one, 1)
     assertEqual(U16.bitWidth, 16)
-    assert(!U16.isSigned, "U16 is unsigned")
+    expect(!U16.isSigned, "U16 is unsigned")
 }
 
 @test
@@ -26,30 +26,30 @@ fn theLimitsPrintInDecimal() {
 fn addingPastTheGreatestValueWrapsSaturatesOrReportsIt() {
     assertEqual(U16.max.wrappingAdd(1), U16.min)
     assertEqual(U16.max.saturatingAdd(1), U16.max)
-    assert(U16.max.checkedAdd(1) == none, "the sum does not fit")
+    expect(U16.max.checkedAdd(1) == none, "the sum does not fit")
     let (sum, overflowed) = U16.max.overflowingAdd(1)
     assertEqual(sum, U16.min)
-    assert(overflowed, "the sum overflowed")
+    expect(overflowed, "the sum overflowed")
 }
 
 @test
 fn subtractingPastTheLeastValueWrapsSaturatesOrReportsIt() {
     assertEqual(U16.min.wrappingSub(1), U16.max)
     assertEqual(U16.min.saturatingSub(1), U16.min)
-    assert(U16.min.checkedSub(1) == none, "the difference does not fit")
+    expect(U16.min.checkedSub(1) == none, "the difference does not fit")
     let (difference, overflowed) = U16.min.overflowingSub(1)
     assertEqual(difference, U16.max)
-    assert(overflowed, "the difference overflowed")
+    expect(overflowed, "the difference overflowed")
 }
 
 @test
 fn multiplyingPastTheLimitsWrapsSaturatesOrReportsIt() {
     assertEqual(U16.max.wrappingMul(2), U16.max - 1)
     assertEqual(U16.max.saturatingMul(2), U16.max)
-    assert(U16.max.checkedMul(2) == none, "the product does not fit")
+    expect(U16.max.checkedMul(2) == none, "the product does not fit")
     let (product, overflowed) = U16.max.overflowingMul(2)
     assertEqual(product, U16.max - 1)
-    assert(overflowed, "the product overflowed")
+    expect(overflowed, "the product overflowed")
     let (high, low) = U16.max.multipliedFullWidth(by: U16.max)
     assertEqual(high, 65534)
     assertEqual(low, 1)
@@ -80,8 +80,8 @@ fn rotationsAndSwapsWorkAtTheWidth() {
 
 @test
 fn conversionsStopAtTheLimits() {
-    assert(U16.exactly(U128.max) == none, "only a U128 holds U128's greatest value")
-    assert(U16.exactly(I128.min) == none, "only an I128 holds I128's least value")
+    expect(U16.exactly(U128.max) == none, "only a U128 holds U128's greatest value")
+    expect(U16.exactly(I128.min) == none, "only an I128 holds I128's least value")
     assertEqual(U16.clamping(U128.max), U16.max)
     assertEqual(U16.clamping(I128.min), U16.min)
     assertEqual(U16.truncating(U128.max), U16.max)
@@ -92,7 +92,7 @@ fn conversionsStopAtTheLimits() {
 fn theRemainderOfTheLeastValueByMinusOneIsZero() {
     assertEqual(U16.max.wrappingDiv(U16.max), 1)
     assertEqual(U16.max.wrappingRem(2), 1)
-    assert(U16.max.checkedDiv(0) == none, "there is no quotient by zero")
+    expect(U16.max.checkedDiv(0) == none, "there is no quotient by zero")
 }
 
 @test(traps: "integer overflow")
@@ -113,7 +113,7 @@ fn subtractingPastTheLeastValueTraps() {
 fn negatingAnUnsignedValueWrapsOrSaturates() {
     assertEqual(U16.one.wrappingNeg(), U16.max)
     assertEqual(U16.one.saturatingNeg(), 0)
-    assert(U16.one.checkedNeg() == none, "an unsigned type has no -1")
+    expect(U16.one.checkedNeg() == none, "an unsigned type has no -1")
     assertEqual(U16.zero.checkedNeg() ?? 1, 0)
     assertEqual(U16.max.abs(), U16.max)
 }

@@ -188,9 +188,9 @@ fn isGood(_ leaf: String, _ root: String, _ profile: CertificateProfile, host: S
 
 // The least a path is refused by.
 fn check(_ leaf: String, _ root: String, _ refused: CertificateProfile?, host: String? = "a.example.com") {
-    assert(isGood(leaf, root, .Compatible, host: host))
-    assert(isGood(leaf, root, .Rfc5280, host: host) == (refused != .Rfc5280))
-    assert(isGood(leaf, root, .WebPki, host: host) == (refused == none))
+    expect(isGood(leaf, root, .Compatible, host: host))
+    expect(isGood(leaf, root, .Rfc5280, host: host) == (refused != .Rfc5280))
+    expect(isGood(leaf, root, .WebPki, host: host) == (refused == none))
 }
 
 @test
@@ -210,26 +210,26 @@ fn eachRuleIsItsProfiles() {
     check(leafSanCrit, rootGood, .WebPki)
     // Policies that are constrained are not processed, so a critical
     // extension that does is refused; one that is not critical is wrong.
-    assert(!isGood(leafPc, rootGood, .Rfc5280))
+    expect(!isGood(leafPc, rootGood, .Rfc5280))
 }
 
 @test
 fn anAuthoritysIdentifierIsRead() {
     let root = try! Certificate.parse(pem: rootAki)
     let identifier = root.authorityKeyIdentifier!
-    assert(identifier.keyIdentifier == root.subjectKeyIdentifier && identifier.serialNumber == root.serialNumber)
-    assert(identifier.issuer! == [.Directory(root.subject)])
-    assert(AuthorityKeyIdentifier(keyIdentifier: [1]) == AuthorityKeyIdentifier(keyIdentifier: [1]) && AuthorityKeyIdentifier(keyIdentifier: [1]) != identifier)
-    assert(AuthorityKeyIdentifier(keyIdentifier: [1]).debugDescription().contains("keyIdentifier"))
+    expect(identifier.keyIdentifier == root.subjectKeyIdentifier && identifier.serialNumber == root.serialNumber)
+    expect(identifier.issuer! == [.Directory(root.subject)])
+    expect(AuthorityKeyIdentifier(keyIdentifier: [1]) == AuthorityKeyIdentifier(keyIdentifier: [1]) && AuthorityKeyIdentifier(keyIdentifier: [1]) != identifier)
+    expect(AuthorityKeyIdentifier(keyIdentifier: [1]).debugDescription().contains("keyIdentifier"))
 }
 
 @test
 fn valuesAreComparedAndDescribed() {
     let one = RevokedCertificate(serialNumber: [1], date: UtcDateTime.fromUnix(0), reason: 1)
-    assert(one == RevokedCertificate(serialNumber: [1], date: UtcDateTime.fromUnix(0), reason: 1) && one != RevokedCertificate(serialNumber: [1], date: UtcDateTime.fromUnix(0)))
-    assert(one.debugDescription().contains("reason"))
-    assert(BasicConstraints(isAuthority: true).debugDescription().contains("isAuthority"))
-    assert(NameConstraints(permitted: [], excluded: [.Dns("a")]).debugDescription().contains("excluded"))
-    assert(SignatureAlgorithm.Ed25519.debugDescription().contains("Ed25519"))
-    assert(CertificateProfile.WebPki.debugDescription().contains("WebPki"))
+    expect(one == RevokedCertificate(serialNumber: [1], date: UtcDateTime.fromUnix(0), reason: 1) && one != RevokedCertificate(serialNumber: [1], date: UtcDateTime.fromUnix(0)))
+    expect(one.debugDescription().contains("reason"))
+    expect(BasicConstraints(isAuthority: true).debugDescription().contains("isAuthority"))
+    expect(NameConstraints(permitted: [], excluded: [.Dns("a")]).debugDescription().contains("excluded"))
+    expect(SignatureAlgorithm.Ed25519.debugDescription().contains("Ed25519"))
+    expect(CertificateProfile.WebPki.debugDescription().contains("WebPki"))
 }

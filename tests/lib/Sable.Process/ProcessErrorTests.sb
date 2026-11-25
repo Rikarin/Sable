@@ -13,7 +13,7 @@ fn isAnError<T>(_ value: T) -> Bool where T: Error {
 
 @test
 fn aProcessErrorIsAnError() {
-    assert(isAnError(ProcessError.NotFound(program: "nothing-by-this-name")))
+    expect(isAnError(ProcessError.NotFound(program: "nothing-by-this-name")))
 }
 
 @test

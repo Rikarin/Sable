@@ -63,7 +63,7 @@ fn anUnsignedIntegerRefusesANegative() {
 
 @test
 fn anyParsableIsReadFromItsBytes() {
-    assert(try! Bool.parse(utf8: bytes("true")))
+    expect(try! Bool.parse(utf8: bytes("true")))
     assertEqual(try! F64.parse(utf8: bytes("1.5")), 1.5)
     assertEqual(try! Int.parse(utf8: bytes("7")), 7)
     assertEqual(try! String.parse(utf8: bytes("héllo")), "héllo")

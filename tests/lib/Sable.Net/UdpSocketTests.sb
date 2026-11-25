@@ -23,273 +23,225 @@ fn thrown(_ body: async () throws(IoError) -> ()) async -> String {
 }
 
 @test
-fn datagramsAreReceivedWholeWithWhomTheyAreFrom() async {
-    do {
-        let a = try loopback()
-        let b = try loopback()
-        try await a.send([1, 2, 3], to: b.localAddress)
-        try await a.send([], to: b.localAddress)
-        try await a.send([4], to: b.localAddress)
-        let first = try await b.receive()
-        assertEqual(first.bytes, [1, 2, 3])
-        assertEqual(first.source, a.localAddress)
-        assert(!first.isTruncated)
-        assertEqual((try await b.receive()).bytes.count, 0)
-        assertEqual((try await b.receive()).bytes, [4])
-    } catch {
-        assert(false, error.description())
-    }
+fn datagramsAreReceivedWholeWithWhomTheyAreFrom() async throws {
+    let a = try loopback()
+    let b = try loopback()
+    try await a.send([1, 2, 3], to: b.localAddress)
+    try await a.send([], to: b.localAddress)
+    try await a.send([4], to: b.localAddress)
+    let first = try await b.receive()
+    assertEqual(first.bytes, [1, 2, 3])
+    assertEqual(first.source, a.localAddress)
+    expect(!first.isTruncated)
+    assertEqual((try await b.receive()).bytes.count, 0)
+    assertEqual((try await b.receive()).bytes, [4])
 }
 
 @test
-fn aReceiveWaitsForADatagram() async {
-    do {
-        let a = try loopback()
-        let b = try loopback()
-        let waiting = Task.spawn { (try? await b.receive())?.bytes ?? [] }
-        await Task.yield()
-        try await a.send([9], to: b.localAddress)
-        assertEqual(await waiting.value, [9])
-    } catch {
-        assert(false, error.description())
-    }
+fn aReceiveWaitsForADatagram() async throws {
+    let a = try loopback()
+    let b = try loopback()
+    let waiting = Task.spawn { (try? await b.receive())?.bytes ?? [] }
+    await Task.yield()
+    try await a.send([9], to: b.localAddress)
+    assertEqual(await waiting.value, [9])
 }
 
 @test
-fn aDatagramLongerThanAskedForIsCutShort() async {
-    do {
-        let a = try loopback()
-        let b = try loopback()
-        try await a.send([1, 2, 3, 4], to: b.localAddress)
-        try await a.send([5, 6], to: b.localAddress)
-        let cut = try await b.receive(upTo: 2)
-        assertEqual(cut.bytes, [1, 2])
-        assert(cut.isTruncated)
-        let whole = try await b.receive(upTo: 2)
-        assertEqual(whole.bytes, [5, 6])
-        assert(!whole.isTruncated)
-    } catch {
-        assert(false, error.description())
-    }
+fn aDatagramLongerThanAskedForIsCutShort() async throws {
+    let a = try loopback()
+    let b = try loopback()
+    try await a.send([1, 2, 3, 4], to: b.localAddress)
+    try await a.send([5, 6], to: b.localAddress)
+    let cut = try await b.receive(upTo: 2)
+    assertEqual(cut.bytes, [1, 2])
+    expect(cut.isTruncated)
+    let whole = try await b.receive(upTo: 2)
+    assertEqual(whole.bytes, [5, 6])
+    expect(!whole.isTruncated)
 }
 
 @test
-fn aDatagramTooLongForOneIsRefused() async {
-    do {
-        let a = try loopback()
-        let b = try loopback()
-        let long = U8[>..](repeating: 1, count: 70_000)
-        assertEqual(await thrown { try await a.send(long, to: b.localAddress) }, "the message is too long")
-        // The socket is as it was.
-        try await a.send([1], to: b.localAddress)
-        assertEqual((try await b.receive()).bytes, [1])
-    } catch {
-        assert(false, error.description())
-    }
+fn aDatagramTooLongForOneIsRefused() async throws {
+    let a = try loopback()
+    let b = try loopback()
+    let long = U8[>..](repeating: 1, count: 70_000)
+    assertEqual(await thrown { try await a.send(long, to: b.localAddress) }, "the message is too long")
+    // The socket is as it was.
+    try await a.send([1], to: b.localAddress)
+    assertEqual((try await b.receive()).bytes, [1])
 }
 
 @test
-fn aConnectedSocketSendsAndReceivesWithOneOther() async {
-    do {
-        let a = try loopback()
-        let b = try loopback()
-        let stranger = try loopback()
-        assert(a.peerAddress == none)
-        try a.connect(to: b.localAddress)
-        assertEqual(a.peerAddress, b.localAddress)
-        try await a.send([1])
-        assertEqual((try await b.receive()).source, a.localAddress)
-        try await stranger.send([66], to: a.localAddress)
-        try await b.send([2], to: a.localAddress)
-        assertEqual((try await a.receive()).bytes, [2])
-        assert((await thrown { try await b.send([1]) }) != "")
-    } catch {
-        assert(false, error.description())
-    }
+fn aConnectedSocketSendsAndReceivesWithOneOther() async throws {
+    let a = try loopback()
+    let b = try loopback()
+    let stranger = try loopback()
+    expect(a.peerAddress == none)
+    try a.connect(to: b.localAddress)
+    assertEqual(a.peerAddress, b.localAddress)
+    try await a.send([1])
+    assertEqual((try await b.receive()).source, a.localAddress)
+    try await stranger.send([66], to: a.localAddress)
+    try await b.send([2], to: a.localAddress)
+    assertEqual((try await a.receive()).bytes, [2])
+    expect((await thrown { try await b.send([1]) }) != "")
 }
 
 @test
-fn anIpv6SocketTakesIpv6AloneUnlessTold() async {
-    do {
-        let six = try UdpSocket.bind(SocketAddress(.v6Loopback, port: 0))
-        let other = try UdpSocket.bind(SocketAddress(.v6Loopback, port: 0))
-        try await other.send([6], to: six.localAddress)
-        assertEqual((try await six.receive()).source, other.localAddress)
+fn anIpv6SocketTakesIpv6AloneUnlessTold() async throws {
+    let six = try UdpSocket.bind(SocketAddress(.v6Loopback, port: 0))
+    let other = try UdpSocket.bind(SocketAddress(.v6Loopback, port: 0))
+    try await other.send([6], to: six.localAddress)
+    assertEqual((try await six.receive()).source, other.localAddress)
 
-        let alone = try UdpSocket.bind(SocketAddress(.v6Any, port: 0))
-        // IPv4's port of that number is free.
-        _ = try UdpSocket.bind(SocketAddress(.v4Any, port: alone.localAddress.port))
+    let alone = try UdpSocket.bind(SocketAddress(.v6Any, port: 0))
+    // IPv4's port of that number is free.
+    _ = try UdpSocket.bind(SocketAddress(.v4Any, port: alone.localAddress.port))
 
-        let both = try UdpSocket.bind(SocketAddress(.v6Any, port: 0), dualStack: true)
-        let four = try loopback()
-        try await four.send([4], to: SocketAddress(.v4Loopback, port: both.localAddress.port))
-        let datagram = try await both.receive()
-        assertEqual(datagram.source.ip.canonical, four.localAddress.ip)
-        try await both.send([5], to: datagram.source)
-        assertEqual((try await four.receive()).bytes, [5])
-    } catch {
-        assert(false, error.description())
-    }
+    let both = try UdpSocket.bind(SocketAddress(.v6Any, port: 0), dualStack: true)
+    let four = try loopback()
+    try await four.send([4], to: SocketAddress(.v4Loopback, port: both.localAddress.port))
+    let datagram = try await both.receive()
+    assertEqual(datagram.source.ip.canonical, four.localAddress.ip)
+    try await both.send([5], to: datagram.source)
+    assertEqual((try await four.receive()).bytes, [5])
 }
 
 @test
-fn closingAndCancellingWakeAReceive() async {
-    do {
-        let a = try loopback()
-        let waiting = Task.spawn { await thrown {
-            _ = try await a.receive()
-        } }
-        await Task.yield()
-        waiting.cancel()
-        assertEqual(await waiting.value, "the task was cancelled while it waited")
-        let again = Task.spawn { await thrown {
-            _ = try await a.receive()
-        } }
-        await Task.yield()
-        a.close()
-        assertEqual(await again.value, "the connection failed or was closed")
-        assertEqual(await thrown { try await a.send([1], to: SocketAddress(.v4Loopback, port: 9)) }, "the connection failed or was closed")
-    } catch {
-        assert(false, error.description())
-    }
+fn closingAndCancellingWakeAReceive() async throws {
+    let a = try loopback()
+    let waiting = Task.spawn { await thrown {
+        _ = try await a.receive()
+    } }
+    await Task.yield()
+    waiting.cancel()
+    assertEqual(await waiting.value, "the task was cancelled while it waited")
+    let again = Task.spawn { await thrown {
+        _ = try await a.receive()
+    } }
+    await Task.yield()
+    a.close()
+    assertEqual(await again.value, "the connection failed or was closed")
+    assertEqual(await thrown { try await a.send([1], to: SocketAddress(.v4Loopback, port: 9)) }, "the connection failed or was closed")
 }
 
 @test
-fn aPortInUseIsSaidToBe() async {
-    do {
-        let a = try loopback()
-        assertEqual(await thrown {
-            _ = try UdpSocket.bind(a.localAddress)
-        }, "'\(a.localAddress)' is in use")
-    } catch {
-        assert(false, error.description())
-    }
+fn aPortInUseIsSaidToBe() async throws {
+    let a = try loopback()
+    assertEqual(await thrown {
+        _ = try UdpSocket.bind(a.localAddress)
+    }, "'\(a.localAddress)' is in use")
 }
 
 @test
-fn aSocketsOptionsAreWhatTheyWereSetTo() async {
-    do {
-        let a = try loopback()
-        assert(!(try a.broadcast()))
-        try a.setBroadcast(true)
-        assert(try a.broadcast())
-        try a.setReceiveBufferSize(50_000)
-        assert((try a.receiveBufferSize()) >= 50_000)
-        try a.setSendBufferSize(50_000)
-        assert((try a.sendBufferSize()) >= 50_000)
-        try a.setHopLimit(9)
-        assertEqual(try a.hopLimit(), 9)
-        assert(try a.multicastLoop())
-        try a.setMulticastLoop(false)
-        assert(!(try a.multicastLoop()))
-        assertEqual(try a.multicastHopLimit(), 1)
-        try a.setMulticastHopLimit(3)
-        assertEqual(try a.multicastHopLimit(), 3)
-        assert((await thrown { try a.setMulticastHopLimit(256) }) != "")
-        assert((await thrown { try a.setMulticastHopLimit(-1) }) != "")
-        assert((await thrown { try a.join(group: IpAddress.v4Loopback) }) != "")
-        let six = try UdpSocket.bind(SocketAddress(.v6Loopback, port: 0))
-        try six.setHopLimit(9)
-        assertEqual(try six.hopLimit(), 9)
-        try six.setMulticastLoop(false)
-        assert(!(try six.multicastLoop()))
-        try six.setMulticastHopLimit(3)
-        assertEqual(try six.multicastHopLimit(), 3)
-    } catch {
-        assert(false, error.description())
-    }
+fn aSocketsOptionsAreWhatTheyWereSetTo() async throws {
+    let a = try loopback()
+    expect(!(try a.broadcast()))
+    try a.setBroadcast(true)
+    expect(try a.broadcast())
+    try a.setReceiveBufferSize(50_000)
+    expect((try a.receiveBufferSize()) >= 50_000)
+    try a.setSendBufferSize(50_000)
+    expect((try a.sendBufferSize()) >= 50_000)
+    try a.setHopLimit(9)
+    assertEqual(try a.hopLimit(), 9)
+    expect(try a.multicastLoop())
+    try a.setMulticastLoop(false)
+    expect(!(try a.multicastLoop()))
+    assertEqual(try a.multicastHopLimit(), 1)
+    try a.setMulticastHopLimit(3)
+    assertEqual(try a.multicastHopLimit(), 3)
+    expect((await thrown { try a.setMulticastHopLimit(256) }) != "")
+    expect((await thrown { try a.setMulticastHopLimit(-1) }) != "")
+    expect((await thrown { try a.join(group: IpAddress.v4Loopback) }) != "")
+    let six = try UdpSocket.bind(SocketAddress(.v6Loopback, port: 0))
+    try six.setHopLimit(9)
+    assertEqual(try six.hopLimit(), 9)
+    try six.setMulticastLoop(false)
+    expect(!(try six.multicastLoop()))
+    try six.setMulticastHopLimit(3)
+    assertEqual(try six.multicastHopLimit(), 3)
 }
 
 /// On the loopback interface alone: nothing leaves the machine.
 @test
-fn aGroupsDatagramsReachThoseInIt() async {
-    do {
-        let interface = (try NetworkInterface.all()).first(where: { $0.isLoopback })!
-        if !interface.supportsMulticast {
-            return
-        }
-        let group = IpAddress(239, 255, 62, 62)
-        let first = try UdpSocket.bind(SocketAddress(.v4Any, port: 0), shareAddress: true)
-        let second = try UdpSocket.bind(first.localAddress, shareAddress: true)
-        let sender = try loopback()
-        try first.join(group: group, interface: interface.index)
-        try second.join(group: group, interface: interface.index)
-        try sender.setMulticastInterface(interface.index)
-        let to = SocketAddress(group, port: first.localAddress.port)
-        try await sender.send([1, 2], to: to)
-        assertEqual((try await first.receive()).bytes, [1, 2])
-        assertEqual((try await second.receive()).bytes, [1, 2])
-        try second.leave(group: group, interface: interface.index)
-        try await sender.send([3], to: to)
-        assertEqual((try await first.receive()).bytes, [3])
-        let left = Task.spawn { await thrown {
-            _ = try await second.receive()
-        } }
-        try? await Task.sleep(nanoseconds: 30_000_000)
-        left.cancel()
-        assertEqual(await left.value, "the task was cancelled while it waited")
-        assert((await thrown { try first.join(group: IpAddress(127, 0, 0, 1)) }) != "")
-        assert((await thrown { try second.leave(group: group, interface: interface.index) }) != "")
-    } catch {
-        assert(false, error.description())
+fn aGroupsDatagramsReachThoseInIt() async throws {
+    let interface = (try NetworkInterface.all()).first(where: { $0.isLoopback })!
+    if !interface.supportsMulticast {
+        return
     }
+    let group = IpAddress(239, 255, 62, 62)
+    let first = try UdpSocket.bind(SocketAddress(.v4Any, port: 0), shareAddress: true)
+    let second = try UdpSocket.bind(first.localAddress, shareAddress: true)
+    let sender = try loopback()
+    try first.join(group: group, interface: interface.index)
+    try second.join(group: group, interface: interface.index)
+    try sender.setMulticastInterface(interface.index)
+    let to = SocketAddress(group, port: first.localAddress.port)
+    try await sender.send([1, 2], to: to)
+    assertEqual((try await first.receive()).bytes, [1, 2])
+    assertEqual((try await second.receive()).bytes, [1, 2])
+    try second.leave(group: group, interface: interface.index)
+    try await sender.send([3], to: to)
+    assertEqual((try await first.receive()).bytes, [3])
+    let left = Task.spawn { await thrown {
+        _ = try await second.receive()
+    } }
+    try? await Task.sleep(nanoseconds: 30_000_000)
+    left.cancel()
+    assertEqual(await left.value, "the task was cancelled while it waited")
+    expect((await thrown { try first.join(group: IpAddress(127, 0, 0, 1)) }) != "")
+    expect((await thrown { try second.leave(group: group, interface: interface.index) }) != "")
 }
 
 @test
-fn anIpv6GroupsDatagramsReachThoseInIt() async {
-    do {
-        let interface = (try NetworkInterface.all()).first(where: { $0.isLoopback })!
-        if !interface.supportsMulticast {
-            return
-        }
-        let group = (try! IpAddress.parse("ff01::6262")).scoped(to: U32(interface.index))
-        let receiver = try UdpSocket.bind(SocketAddress(.v6Any, port: 0))
-        let sender = try UdpSocket.bind(SocketAddress(.v6Loopback, port: 0))
-        try receiver.join(group: group, interface: interface.index)
-        try sender.setMulticastInterface(interface.index)
-        try await sender.send([6], to: SocketAddress(group, port: receiver.localAddress.port))
-        assertEqual((try await receiver.receive()).bytes, [6])
-    } catch {
-        assert(false, error.description())
+fn anIpv6GroupsDatagramsReachThoseInIt() async throws {
+    let interface = (try NetworkInterface.all()).first(where: { $0.isLoopback })!
+    if !interface.supportsMulticast {
+        return
     }
+    let group = (try! IpAddress.parse("ff01::6262")).scoped(to: U32(interface.index))
+    let receiver = try UdpSocket.bind(SocketAddress(.v6Any, port: 0))
+    let sender = try UdpSocket.bind(SocketAddress(.v6Loopback, port: 0))
+    try receiver.join(group: group, interface: interface.index)
+    try sender.setMulticastInterface(interface.index)
+    try await sender.send([6], to: SocketAddress(group, port: receiver.localAddress.port))
+    assertEqual((try await receiver.receive()).bytes, [6])
 }
 
 @test
-fn aClosedSocketsCallsThrow() async {
-    do {
-        let a = try loopback()
-        let b = try loopback()
-        a.close()
-        let closed = "the connection failed or was closed"
-        assertEqual(await thrown {
-            _ = try a.hopLimit()
-        }, closed)
-        assertEqual(await thrown {
-            _ = try a.broadcast()
-        }, closed)
-        assertEqual(await thrown {
-            _ = try a.multicastLoop()
-        }, closed)
-        assertEqual(await thrown {
-            _ = try a.multicastHopLimit()
-        }, closed)
-        assertEqual(await thrown {
-            _ = try a.receiveBufferSize()
-        }, closed)
-        assertEqual(await thrown {
-            _ = try a.sendBufferSize()
-        }, closed)
-        assertEqual(await thrown { try a.setMulticastInterface(0) }, closed)
-        assertEqual(await thrown { try a.connect(to: b.localAddress) }, closed)
-        assertEqual(await thrown { try await a.send([1]) }, closed)
-        assertEqual(await thrown { try a.join(group: try! IpAddress.parse("ff01::1")) }, closed)
-        assertEqual(await thrown { try a.leave(group: try! IpAddress.parse("ff01::1")) }, closed)
-        // The other is as it was.
-        try await b.send([1], to: b.localAddress)
-        assertEqual((try await b.receive()).bytes, [1])
-    } catch {
-        assert(false, error.description())
-    }
+fn aClosedSocketsCallsThrow() async throws {
+    let a = try loopback()
+    let b = try loopback()
+    a.close()
+    let closed = "the connection failed or was closed"
+    assertEqual(await thrown {
+        _ = try a.hopLimit()
+    }, closed)
+    assertEqual(await thrown {
+        _ = try a.broadcast()
+    }, closed)
+    assertEqual(await thrown {
+        _ = try a.multicastLoop()
+    }, closed)
+    assertEqual(await thrown {
+        _ = try a.multicastHopLimit()
+    }, closed)
+    assertEqual(await thrown {
+        _ = try a.receiveBufferSize()
+    }, closed)
+    assertEqual(await thrown {
+        _ = try a.sendBufferSize()
+    }, closed)
+    assertEqual(await thrown { try a.setMulticastInterface(0) }, closed)
+    assertEqual(await thrown { try a.connect(to: b.localAddress) }, closed)
+    assertEqual(await thrown { try await a.send([1]) }, closed)
+    assertEqual(await thrown { try a.join(group: try! IpAddress.parse("ff01::1")) }, closed)
+    assertEqual(await thrown { try a.leave(group: try! IpAddress.parse("ff01::1")) }, closed)
+    // The other is as it was.
+    try await b.send([1], to: b.localAddress)
+    assertEqual((try await b.receive()).bytes, [1])
 }
 
 @test
@@ -297,37 +249,37 @@ fn aClosedSocketSaysSoWhateverIsAsked() async {
     let a = try! loopback()
     let group = try! IpAddress.parse("ff02::1")
     a.close()
-    assert((await thrown { try a.connect(to: SocketAddress(IpAddress.v4Loopback, port: 9)) }) != "")
-    assert((await thrown { try await a.send([1]) }) != "")
+    expect((await thrown { try a.connect(to: SocketAddress(IpAddress.v4Loopback, port: 9)) }) != "")
+    expect((await thrown { try await a.send([1]) }) != "")
     assert((await thrown {
         _ = try await a.receive()
     }) != "")
-    assert((await thrown { try a.setMulticastInterface(1) }) != "")
+    expect((await thrown { try a.setMulticastInterface(1) }) != "")
     assert((await thrown {
         _ = try a.multicastLoop()
     }) != "")
-    assert((await thrown { try a.setMulticastLoop(true) }) != "")
+    expect((await thrown { try a.setMulticastLoop(true) }) != "")
     assert((await thrown {
         _ = try a.multicastHopLimit()
     }) != "")
-    assert((await thrown { try a.setMulticastHopLimit(1) }) != "")
+    expect((await thrown { try a.setMulticastHopLimit(1) }) != "")
     assert((await thrown {
         _ = try a.broadcast()
     }) != "")
-    assert((await thrown { try a.setBroadcast(true) }) != "")
+    expect((await thrown { try a.setBroadcast(true) }) != "")
     assert((await thrown {
         _ = try a.receiveBufferSize()
     }) != "")
-    assert((await thrown { try a.setReceiveBufferSize(4096) }) != "")
+    expect((await thrown { try a.setReceiveBufferSize(4096) }) != "")
     assert((await thrown {
         _ = try a.sendBufferSize()
     }) != "")
-    assert((await thrown { try a.setSendBufferSize(4096) }) != "")
+    expect((await thrown { try a.setSendBufferSize(4096) }) != "")
     assert((await thrown {
         _ = try a.hopLimit()
     }) != "")
-    assert((await thrown { try a.setHopLimit(1) }) != "")
-    assert((await thrown { try a.join(group: group) }) != "")
-    assert((await thrown { try a.leave(group: group) }) != "")
-    assert(a.peerAddress == none)
+    expect((await thrown { try a.setHopLimit(1) }) != "")
+    expect((await thrown { try a.join(group: group) }) != "")
+    expect((await thrown { try a.leave(group: group) }) != "")
+    expect(a.peerAddress == none)
 }

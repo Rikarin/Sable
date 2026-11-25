@@ -10,9 +10,9 @@ import Sable.Testing
 fn swapAtExchangesTwoElements() {
     var xs: String[>..] = ["a", "b", "c"]
     xs.swapAt(0, 2)
-    assert(xs == ["c", "b", "a"])
+    expect(xs == ["c", "b", "a"])
     xs.swapAt(1, 1)
-    assert(xs == ["c", "b", "a"])
+    expect(xs == ["c", "b", "a"])
 }
 
 @test
@@ -20,8 +20,8 @@ fn swapAtChangesTheArrayItIsCalledOnOnly() {
     var xs: Int[>..] = [1, 2]
     let kept = xs
     xs.swapAt(0, 1)
-    assert(xs == [2, 1])
-    assert(kept == [1, 2])
+    expect(xs == [2, 1])
+    expect(kept == [1, 2])
 }
 
 @test(traps: "array index out of range")
@@ -34,10 +34,10 @@ fn swapAtOutsideTheArrayTraps() {
 fn reversePutsTheElementsInTheOppositeOrder() {
     var even: Int[>..] = [1, 2, 3, 4]
     even.reverse()
-    assert(even == [4, 3, 2, 1])
+    expect(even == [4, 3, 2, 1])
     var odd: Int[] = [1, 2, 3]
     odd.reverse()
-    assert(odd == [3, 2, 1])
+    expect(odd == [3, 2, 1])
     var empty: Int[>..] = []
     empty.reverse()
     assertEqual(empty.count, 0)
@@ -46,31 +46,31 @@ fn reversePutsTheElementsInTheOppositeOrder() {
 @test
 fn reversedLeavesTheArrayAsItWas() {
     let xs: String[>..] = ["x", "y", "z"]
-    assert(xs.reversed().toArray() == ["z", "y", "x"])
-    assert(xs == ["x", "y", "z"])
-    assert(xs[1...].reversed().toArray() == ["z", "y"])
+    expect(xs.reversed().toArray() == ["z", "y", "x"])
+    expect(xs == ["x", "y", "z"])
+    expect(xs[1...].reversed().toArray() == ["z", "y"])
 }
 
 @test
 fn rotateLeftBringsAnElementToTheFront() {
     var xs: Int[>..] = [1, 2, 3, 4, 5]
     xs.rotate(left: 2)
-    assert(xs == [3, 4, 5, 1, 2])
+    expect(xs == [3, 4, 5, 1, 2])
     xs.rotate(left: 0)
-    assert(xs == [3, 4, 5, 1, 2])
+    expect(xs == [3, 4, 5, 1, 2])
     xs.rotate(left: 5)
-    assert(xs == [3, 4, 5, 1, 2])
+    expect(xs == [3, 4, 5, 1, 2])
     xs.rotate(left: 7)
-    assert(xs == [5, 1, 2, 3, 4])
+    expect(xs == [5, 1, 2, 3, 4])
 }
 
 @test
 fn rotateRightAndNegativeCountsGoTheOtherWay() {
     var xs: Int[>..] = [1, 2, 3, 4, 5]
     xs.rotate(right: 1)
-    assert(xs == [5, 1, 2, 3, 4])
+    expect(xs == [5, 1, 2, 3, 4])
     xs.rotate(left: -1)
-    assert(xs == [4, 5, 1, 2, 3])
+    expect(xs == [4, 5, 1, 2, 3])
     var empty: Int[>..] = []
     empty.rotate(left: 3)
     assertEqual(empty.count, 0)
@@ -80,12 +80,12 @@ fn rotateRightAndNegativeCountsGoTheOtherWay() {
 fn rotateARangeLeavesTheRestWhereItIs() {
     var xs: String[>..] = ["a", "b", "c", "d", "e"]
     xs.rotate(from: 1, to: 4, left: 1)
-    assert(xs == ["a", "c", "d", "b", "e"])
+    expect(xs == ["a", "c", "d", "b", "e"])
     xs.rotate(from: 1, to: 4, left: -1)
-    assert(xs == ["a", "b", "c", "d", "e"])
+    expect(xs == ["a", "b", "c", "d", "e"])
     xs.rotate(from: 3, to: 3, left: 2)
     xs.rotate(from: 0, to: 2, left: 2)
-    assert(xs == ["a", "b", "c", "d", "e"])
+    expect(xs == ["a", "b", "c", "d", "e"])
 }
 
 @test(traps: "array slice out of range")
@@ -104,7 +104,7 @@ fn rotateARangeTheWrongWayRoundTraps() {
 fn fillSetsEveryElement() {
     var xs: String[>..] = ["a", "b", "c"]
     xs.fill("z")
-    assert(xs == ["z", "z", "z"])
+    expect(xs == ["z", "z", "z"])
 }
 
 @test
@@ -112,7 +112,7 @@ fn copyFromSetsEachElementFromTheSource() {
     var xs: Int[>..] = [0, 0, 0]
     let source: Int[>..] = [9, 7, 8, 9, 6]
     xs.copy(from: source[1..<4])
-    assert(xs == [7, 8, 9])
+    expect(xs == [7, 8, 9])
 }
 
 @test(traps: "array index out of range")
@@ -137,7 +137,7 @@ fn partitionPutsThoseThatPassAfterThoseThatFail() {
         assertEqual(xs[i] > 4, i >= p)
         i = i + 1
     }
-    assert(xs.sorted() == [1, 2, 3, 5, 6, 8, 9])
+    expect(xs.sorted() == [1, 2, 3, 5, 6, 8, 9])
 }
 
 @test
@@ -206,7 +206,7 @@ fn reorderingChangesAFieldOfAnObjectInPlace() {
     let holder = Holder()
     holder.values.reverse()
     holder.values.swapAt(0, 1)
-    assert(holder.values == [2, 3, 1])
+    expect(holder.values == [2, 3, 1])
 }
 
 class Holder {
@@ -217,11 +217,11 @@ class Holder {
 fn reorderingARangeChangesThoseElementsInTheArray() {
     var values: Int[>..] = [1, 2, 3, 4, 5]
     values[1...3].reverse()
-    assert(values == [1, 4, 3, 2, 5])
+    expect(values == [1, 4, 3, 2, 5])
     values[^2...].swapAt(0, 1)
-    assert(values == [1, 4, 3, 5, 2])
+    expect(values == [1, 4, 3, 5, 2])
     values[..<3].rotate(left: 1)
-    assert(values == [4, 3, 1, 5, 2])
+    expect(values == [4, 3, 1, 5, 2])
 }
 
 @test(traps: "array slice out of range")
@@ -243,12 +243,12 @@ fn reversesAsALoopDoes<T: SIMDScalar>(_ make: (Int) -> T) {
             all[start..<(start + n)].reverse()
             for i in 0..<all.count {
                 let inside = i >= start && i < start + n
-                assert(all[i] == original[inside ? start + start + n - 1 - i : i])
+                assertEqual(all[i], original[inside ? start + start + n - 1 - i : i])
             }
             var whole = original
             whole.reverse()
             for i in 0..<whole.count {
-                assert(whole[i] == original[original.count - 1 - i])
+                assertEqual(whole[i], original[original.count - 1 - i])
             }
         }
     }

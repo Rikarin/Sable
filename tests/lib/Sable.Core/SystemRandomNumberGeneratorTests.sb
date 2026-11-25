@@ -18,7 +18,7 @@ fn drawsDiffer() {
         }
         i += 1
     }
-    assert(differed)
+    expect(differed)
 }
 
 @test
@@ -33,15 +33,15 @@ fn everyBitIsSometimesSetAndSometimesClear() {
         everClear = everClear | ~bits
         i += 1
     }
-    assert(everSet == U64.max)
-    assert(everClear == U64.max)
+    expect(everSet == U64.max)
+    expect(everClear == U64.max)
 }
 
 @test
 fn twoGeneratorsDoNotRepeatEachOther() {
     var a = SystemRandomNumberGenerator()
     var b = SystemRandomNumberGenerator()
-    assert(a.next() != b.next() || a.next() != b.next())
+    expect(a.next() != b.next() || a.next() != b.next())
 }
 
 @test
@@ -56,7 +56,7 @@ fn fillGivesEveryByteRandomBits() {
             everSet[i] = everSet[i] | bytes[i]
         }
     }
-    assert(everSet == U8[>..](repeating: 0xFF, count: 1000))
+    expect(everSet == U8[>..](repeating: 0xFF, count: 1000))
 }
 
 @test
@@ -65,9 +65,9 @@ fn fillOfASliceChangesThatRangeAlone() {
     var bytes = U8[>..](repeating: 0, count: 48)
     let before = bytes
     system.fill(bytes: &bytes[16..<32])
-    assert(bytes[..<16] == before[..<16] && bytes[32...] == before[32...])
-    assert(bytes != before && before == U8[>..](repeating: 0, count: 48))
+    expect(bytes[..<16] == before[..<16] && bytes[32...] == before[32...])
+    expect(bytes != before && before == U8[>..](repeating: 0, count: 48))
     var nothing: U8[>..] = []
     system.fill(bytes: &nothing)
-    assert(nothing.isEmpty)
+    expect(nothing.isEmpty)
 }

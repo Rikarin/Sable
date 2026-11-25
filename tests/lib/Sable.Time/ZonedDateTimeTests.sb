@@ -61,12 +61,12 @@ fn newYorkSkipsAnHourInMarchAndRepeatsOneInNovember() {
     assertEqual(strictError(twice, newYork), TimeZoneError.Ambiguous(twice))
     assertEqual(newYork.offsets(for: local(2026, 7, 4, 12, 0)), AmbiguousOffset.Unambiguous(offset: offset("-04:00")))
     assertEqual(newYork.offsets(for: local(2026, 7, 4, 12, 0)).unambiguous!, offset("-04:00"))
-    assert(newYork.offsets(for: twice).unambiguous == none)
+    expect(newYork.offsets(for: twice).unambiguous == none)
     let summer = twice.zoned(in: newYork, .Earlier)
     assertEqual(summer.abbreviation, "EDT")
-    assert(summer.isDaylightSaving)
+    expect(summer.isDaylightSaving)
     assertEqual(summer.adding(Duration.hours(1)).abbreviation, "EST")
-    assert(!summer.adding(Duration.hours(1)).isDaylightSaving)
+    expect(!summer.adding(Duration.hours(1)).isDaylightSaving)
 }
 
 @test
@@ -131,7 +131,7 @@ fn kolkataHasKeptOneOffsetSince1945() {
     let now = UtcDateTime.of(year: 2026, month: 6, day: 1, hour: 0, minute: 0, second: 0)!
     assertEqual(kolkata.offset(at: now), offset("+05:30"))
     assertEqual(kolkata.abbreviation(at: now), "IST")
-    assert(kolkata.nextTransition(after: now) == none)
+    expect(kolkata.nextTransition(after: now) == none)
     let last = kolkata.previousTransition(before: now)!
     assertEqual(last.instant.year, 1945)
     assertEqual(last.offset, offset("+05:30"))
@@ -197,11 +197,11 @@ fn aZonedDateTimeHasItsLocalFields() {
     assertEqual(at.with(time: TimeOfDay.noon).toString(), "2026-11-17T12:00:00+01:00[Europe/Prague]")
     assertEqual(at.format(pattern: "dddd HH:mm zzz"), "Tuesday 09:05 +01:00")
     assertEqual(at.debugDescription(), at.toString())
-    assert(ZonedDateTime.of(year: 2026, month: 2, day: 30, zone: prague) == none)
+    expect(ZonedDateTime.of(year: 2026, month: 2, day: 30, zone: prague) == none)
     let sameMoment = at.withZone(zone("Asia/Kolkata"))
-    assert(sameMoment != at)
-    assert(sameMoment < at)
-    assert(at < at.adding(Duration.nanoseconds(1)))
+    expect(sameMoment != at)
+    expect(sameMoment < at)
+    expect(at < at.adding(Duration.nanoseconds(1)))
     assertEqual(at.hashValue, at.withZone(prague).hashValue)
 }
 

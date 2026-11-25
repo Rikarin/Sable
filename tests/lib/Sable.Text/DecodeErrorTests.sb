@@ -34,16 +34,16 @@ fn debugWritesTheCaseAsSourceDoes() {
 
 @test
 fn errorsAreEqualByCaseAndFields() {
-    assert(DecodeError.InvalidCharacter(at: 1, byte: 2) == .InvalidCharacter(at: 1, byte: 2))
-    assert(DecodeError.InvalidCharacter(at: 1, byte: 2) != .InvalidCharacter(at: 1, byte: 3))
-    assert(DecodeError.InvalidLength(at: 1) == .InvalidLength(at: 1))
-    assert(DecodeError.InvalidLength(at: 1) != .InvalidPadding(at: 1))
-    assert(DecodeError.InvalidPadding(at: 1) == .InvalidPadding(at: 1))
-    assert(DecodeError.TrailingBits(at: 1) == .TrailingBits(at: 1))
-    assert(DecodeError.TrailingBits(at: 1) != .TrailingBits(at: 2))
+    expect(DecodeError.InvalidCharacter(at: 1, byte: 2) == .InvalidCharacter(at: 1, byte: 2))
+    expect(DecodeError.InvalidCharacter(at: 1, byte: 2) != .InvalidCharacter(at: 1, byte: 3))
+    expect(DecodeError.InvalidLength(at: 1) == .InvalidLength(at: 1))
+    expect(DecodeError.InvalidLength(at: 1) != .InvalidPadding(at: 1))
+    expect(DecodeError.InvalidPadding(at: 1) == .InvalidPadding(at: 1))
+    expect(DecodeError.TrailingBits(at: 1) == .TrailingBits(at: 1))
+    expect(DecodeError.TrailingBits(at: 1) != .TrailingBits(at: 2))
 }
 
 @test
 fn paddingRulesAreDistinct() {
-    assert(Padding.Required != Padding.Either && Padding.Either != Padding.Forbidden)
+    expect(Padding.Required != Padding.Either && Padding.Either != Padding.Forbidden)
 }

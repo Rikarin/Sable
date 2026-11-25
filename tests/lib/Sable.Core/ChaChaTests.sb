@@ -36,7 +36,7 @@ fn bytesAreTheKeystreamInOrder() {
     generator.seek(toBlock: 0x0900000000000001)
     var bytes: U8[12] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     generator.fill(bytes: &bytes)
-    assert(bytes == [0x10, 0xF1, 0xE7, 0xE4, 0xD1, 0x3B, 0x59, 0x15, 0x50, 0x0F, 0xDD, 0x1F])
+    expect(bytes == [0x10, 0xF1, 0xE7, 0xE4, 0xD1, 0x3B, 0x59, 0x15, 0x50, 0x0F, 0xDD, 0x1F])
 }
 
 @test
@@ -64,16 +64,16 @@ fn theCounterCarriesPast32Bits() {
     for _ in 0..<7 {
         _ = generator.next()
     }
-    assert(generator.next() == 0xA602E8EB78214425)
-    assert(generator.next() == 0x5BA94553A0D82E2B)
+    expect(generator.next() == 0xA602E8EB78214425)
+    expect(generator.next() == 0x5BA94553A0D82E2B)
 }
 
 @test
 fn aSeedIsSpreadOverTheKey() {
     var generator = ChaCha(seed: 2024, stream: 3)
-    assert(generator.next() == 4054602380095964324)
-    assert(generator.next() == 16580289796138612556)
-    assert(generator.next() == 13656703944853745973)
+    expect(generator.next() == 4054602380095964324)
+    expect(generator.next() == 16580289796138612556)
+    expect(generator.next() == 13656703944853745973)
 }
 
 @test

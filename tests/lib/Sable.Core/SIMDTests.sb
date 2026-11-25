@@ -13,7 +13,7 @@ fn aVectorIsMadeFromLanesOrOneValue() {
     assertEqual(v[0], 1)
     assertEqual(v[3], 4)
     assertEqual(v.count, 4)
-    assert(v.toArray() == [1, 2, 3, 4])
+    expect(v.toArray() == [1, 2, 3, 4])
 }
 
 @test
@@ -170,9 +170,9 @@ fn floatsHaveTheirIeeeOperations() {
 @test
 fn floatEqualityIsEveryLanes() {
     var v = SIMD<F64, 2>(repeating: 1.0)
-    assert(v == SIMD<F64, 2>(repeating: 1.0))
+    expect(v == SIMD<F64, 2>(repeating: 1.0))
     v[0] = F64.nan
-    assert(v != v)
+    expect(v != v)
 }
 
 @test

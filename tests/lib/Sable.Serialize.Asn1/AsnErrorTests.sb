@@ -24,6 +24,6 @@ fn eachErrorSaysWhereAndWhat() {
         assert(false)
     } catch {
         assertEqual(error.offset, 0)
-        assert(error.description().hasPrefix("byte 0: expected "))
+        expect(error.description().hasPrefix("byte 0: expected "))
     }
 }

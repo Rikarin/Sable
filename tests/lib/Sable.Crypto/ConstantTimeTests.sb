@@ -40,18 +40,18 @@ fn bytesAreEqualOnlyWhenEveryOneIs() {
 @test
 fn slicesAreComparedFromWhereTheyStart() {
     let bytes = message(60)
-    assert(constantTimeEquals(bytes[3..<30], bytes[3..<30]))
-    assert(!constantTimeEquals(bytes[3..<30], bytes[4..<31]))
+    expect(constantTimeEquals(bytes[3..<30], bytes[3..<30]))
+    expect(!constantTimeEquals(bytes[3..<30], bytes[4..<31]))
 }
 
 @test
 fn zeroingLeavesNothing() {
     var bytes = message(50)
     secureZero(&bytes)
-    assert(bytes == U8[>..](repeating: 0, count: 50))
+    expect(bytes == U8[>..](repeating: 0, count: 50))
     var fixed: U8[] = [1, 2, 3]
     secureZero(&fixed)
-    assert(fixed[0] == 0 && fixed[2] == 0)
+    expect(fixed[0] == 0 && fixed[2] == 0)
     var empty: U8[>..] = []
     secureZero(&empty)
     assertEqual(empty.count, 0)
@@ -61,8 +61,8 @@ fn zeroingLeavesNothing() {
 fn zeroingARangeLeavesTheRest() {
     var bytes = message(10)
     secureZero(&bytes[2..<5])
-    assert(bytes[2] == 0 && bytes[4] == 0)
-    assert(bytes[1] == message(10)[1] && bytes[5] == message(10)[5])
+    expect(bytes[2] == 0 && bytes[4] == 0)
+    expect(bytes[1] == message(10)[1] && bytes[5] == message(10)[5])
 }
 
 @test
@@ -70,8 +70,8 @@ fn zeroingACopyLeavesTheOriginal() {
     let original = message(10)
     var copy = original
     secureZero(&copy)
-    assert(original == message(10))
-    assert(copy == U8[>..](repeating: 0, count: 10))
+    expect(original == message(10))
+    expect(copy == U8[>..](repeating: 0, count: 10))
 }
 
 @test

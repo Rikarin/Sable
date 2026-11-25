@@ -36,7 +36,7 @@ fn shown(_ path: FilePath?) -> String {
 fn row(_ path: FilePath, _ components: String, parent: String, name: String, stem: String, ext: String, root: Bool, absolute: Bool) {
     let got = "\(parts(path)) | \(shown(path.parent)) | \(path.fileName ?? "none") | \(path.stem ?? "none") | \(path.pathExtension ?? "none") | \(path.hasRoot) | \(path.isAbsolute)"
     let wanted = "\(components) | \(parent) | \(name) | \(stem) | \(ext) | \(root) | \(absolute)"
-    assert(got == wanted, "\(path): \(got), not \(wanted)")
+    expect(got == wanted, "\(path): \(got), not \(wanted)")
 }
 
 @test
@@ -95,14 +95,14 @@ fn windowsPathsAsRustReadsThem() {
     row(windows("\\\\.\\COM1"), "\\\\.\\COM1,", parent: "none", name: "none", stem: "none", ext: "none", root: true, absolute: true)
     row(windows("\\\\.\\pipe\\x"), "\\\\.\\pipe,\\,x", parent: "\\\\.\\pipe\\", name: "x", stem: "x", ext: "none", root: true, absolute: true)
 
-    assert(windows("c:\\x").prefixKind == .Disk)
-    assert(windows("\\\\?\\x").prefixKind == .Verbatim)
-    assert(windows("\\\\?\\C:\\").prefixKind == .VerbatimDisk)
-    assert(windows("\\\\?\\UNC\\s\\h").prefixKind == .VerbatimUnc)
-    assert(windows("\\\\.\\x").prefixKind == .DeviceNamespace)
-    assert(windows("\\\\s\\h").prefixKind == .Unc)
-    assert(windows("x").prefixKind == none)
-    assert(posix("//s/h").prefixKind == none)
+    expect(windows("c:\\x").prefixKind == .Disk)
+    expect(windows("\\\\?\\x").prefixKind == .Verbatim)
+    expect(windows("\\\\?\\C:\\").prefixKind == .VerbatimDisk)
+    expect(windows("\\\\?\\UNC\\s\\h").prefixKind == .VerbatimUnc)
+    expect(windows("\\\\.\\x").prefixKind == .DeviceNamespace)
+    expect(windows("\\\\s\\h").prefixKind == .Unc)
+    expect(windows("x").prefixKind == none)
+    expect(posix("//s/h").prefixKind == none)
     assertEqual(shown(windows("c:\\a").root), "c:\\")
     assertEqual(shown(windows("c:a").root), "c:")
     assertEqual(shown(posix("/a").root), "/")
@@ -143,8 +143,8 @@ fn namesAndExtensionsAreReplaced() {
     assertEqual(shown(posix("/a").removingLastComponent()), "/")
     assertEqual(shown(posix("/").removingLastComponent()), "/")
     assertEqual("\(posix("a/b").lastComponent!)", "b")
-    assert(posix("").lastComponent == none)
-    assert(posix("a/..").lastComponent!.kind == .ParentDirectory)
+    expect(posix("").lastComponent == none)
+    expect(posix("a/..").lastComponent!.kind == .ParentDirectory)
 }
 
 @test
@@ -164,16 +164,16 @@ fn normalizingIsByTheBytesAlone() {
 
 @test
 fn prefixesSuffixesAndRelativePaths() {
-    assert(posix("/etc/passwd").starts(with: posix("/etc")))
-    assert(posix("/etc/passwd").starts(with: posix("/etc/")))
-    assert(!posix("/etc/passwd").starts(with: posix("/et")))
-    assert(!posix("/etc").starts(with: posix("/etc/passwd")))
-    assert(!posix("etc/passwd").starts(with: posix("/etc")))
-    assert(posix("/etc/passwd").ends(with: posix("passwd")))
-    assert(posix("/etc/passwd").ends(with: posix("etc/passwd")))
-    assert(!posix("/etc/passwd").ends(with: posix("/passwd")))
-    assert(!posix("a").ends(with: posix("b/a")))
-    assert(windows("c:\\a\\b").starts(with: windows("c:/a")))
+    expect(posix("/etc/passwd").starts(with: posix("/etc")))
+    expect(posix("/etc/passwd").starts(with: posix("/etc/")))
+    expect(!posix("/etc/passwd").starts(with: posix("/et")))
+    expect(!posix("/etc").starts(with: posix("/etc/passwd")))
+    expect(!posix("etc/passwd").starts(with: posix("/etc")))
+    expect(posix("/etc/passwd").ends(with: posix("passwd")))
+    expect(posix("/etc/passwd").ends(with: posix("etc/passwd")))
+    expect(!posix("/etc/passwd").ends(with: posix("/passwd")))
+    expect(!posix("a").ends(with: posix("b/a")))
+    expect(windows("c:\\a\\b").starts(with: windows("c:/a")))
 
     assertEqual(shown(posix("/test/haha/foo.txt").strippingPrefix(posix("/test/"))), "haha/foo.txt")
     assertEqual(shown(posix("/test/haha/foo.txt").strippingPrefix(posix("/test/haha/foo.txt"))), "")
@@ -194,24 +194,24 @@ fn prefixesSuffixesAndRelativePaths() {
 
 @test
 fn pathsCompareByTheirComponents() {
-    assert(posix("a//b/") == posix("a/b"))
-    assert(posix("a/./b") == posix("a/b"))
-    assert(posix("./a") != posix("a"))
-    assert(posix("/a") != posix("a"))
-    assert(posix("a") != windows("a"))
-    assert(windows("c:/a") == windows("c:\\a"))
+    expect(posix("a//b/") == posix("a/b"))
+    expect(posix("a/./b") == posix("a/b"))
+    expect(posix("./a") != posix("a"))
+    expect(posix("/a") != posix("a"))
+    expect(posix("a") != windows("a"))
+    expect(windows("c:/a") == windows("c:\\a"))
     assertEqual(posix("a//b/").hashValue, posix("a/b").hashValue)
     assertEqual(windows("c:/a").hashValue, windows("c:\\a").hashValue)
 
-    assert(posix("a") < posix("b"))
-    assert(posix("a") < posix("a/b"))
-    assert(!(posix("a/b") < posix("a")))
-    assert(posix("/z") < posix("a"))
-    assert(posix("a/b") < posix("a/c"))
-    assert(posix("ab") > posix("a"))
-    assert(posix("..") < posix("a"))
-    assert(posix("x") < windows("x"))
-    assert(!(posix("x") < posix("x")))
+    expect(posix("a") < posix("b"))
+    expect(posix("a") < posix("a/b"))
+    expect(!(posix("a/b") < posix("a")))
+    expect(posix("/z") < posix("a"))
+    expect(posix("a/b") < posix("a/c"))
+    expect(posix("ab") > posix("a"))
+    expect(posix("..") < posix("a"))
+    expect(posix("x") < windows("x"))
+    expect(!(posix("x") < posix("x")))
 
     var seen = Set<FilePath>()
     _ = seen.insert(posix("a/b"))
@@ -226,29 +226,29 @@ fn pathsCompareByTheirComponents() {
 fn bytesThatAreNotUtf8ArePathsToo() {
     // Latin-1 "café" as a POSIX file name may have it.
     let path = FilePath(bytes: [0x2F, 0x74, 0x2F, 0x63, 0x61, 0x66, 0xE9, 0x2E, 0x74, 0x78, 0x74], style: .Posix)
-    assert(path.string == none)
+    expect(path.string == none)
     assertEqual("\(path)", "/t/caf\u{FFFD}.txt")
     assertEqual(path.pathExtension ?? "-", "txt")
     assertEqual(path.components.count, 3)
-    assert(path.components[2].string == none)
+    expect(path.components[2].string == none)
     assertEqual(path.components[2].bytes.count, 8)
-    assert(path.parent! == posix("/t"))
+    expect(path.parent! == posix("/t"))
     assertEqual(path.withExtension("md").bytes[6], 0xE9)
-    assert(posix("ok").string! == "ok")
-    assert(posix("ok").components[0].string! == "ok")
+    expect(posix("ok").string! == "ok")
+    expect(posix("ok").components[0].string! == "ok")
 }
 
 @test
 fn theFileSystemResolvesWhatTheBytesCannot() throws {
     let here = try FilePath(".").canonical()
-    assert(here.isAbsolute)
-    assert(FilePath(".").absolute().isAbsolute)
-    assert(here.absolute() == here)
+    expect(here.isAbsolute)
+    expect(FilePath(".").absolute().isAbsolute)
+    expect(here.absolute() == here)
     let name = "sable-test-path-canonical.txt"
     try File.write(name, "x")
     let file = try FilePath("./" + name).canonical()
     assertEqual(file.fileName ?? "-", name)
-    assert(file.parent! == here)
+    expect(file.parent! == here)
     let opened = try File.open(FilePath(name))
     assertEqual(try opened.read(upTo: 5).count, 1)
     opened.close()
@@ -274,10 +274,10 @@ fn pathsAsTextGoThroughFilePath() {
     assertEqual(Path.directory("/"), "/")
     assertEqual(Path.directory(""), ".")
     assertEqual(Path.extension("a/b.tar.gz") ?? "-", "gz")
-    assert(Path.extension(".hidden") == none)
+    expect(Path.extension(".hidden") == none)
     assertEqual(Path.withoutExtension("x/y/report.md"), "x/y/report")
     assertEqual(Path.normalized("a/./b/../c"), "a\(s)c")
     assertEqual(Path.relative("/a/b", to: "/a") ?? "-", "b")
-    assert(Path.relative("a", to: "/a") == none)
-    assert(Path.isAbsolute(onWindows ? "C:\\a" : "/a") && !Path.isAbsolute("a"))
+    expect(Path.relative("a", to: "/a") == none)
+    expect(Path.isAbsolute(onWindows ? "C:\\a" : "/a") && !Path.isAbsolute("a"))
 }

@@ -16,7 +16,7 @@ fn aSeedGivesTheSameDrawsEverywhere() {
     assertEqual(draws[2], -1.2856299354940448)
     assertEqual(draws[3], 2.1335893740268284)
     assertEqual(draws[4], -0.47783344259739247)
-    assert(folded(draws) == 0x885CA1DB04B64BD4)
+    expect(folded(draws) == 0x885CA1DB04B64BD4)
 }
 
 @test
@@ -33,10 +33,10 @@ fn theMomentsAreTheDistributions() {
     let draws = NormalDistribution().samples(count: 200000, using: &generator)
     let squares = draws.map({ $0 * $0 })
     // Each within 5 of its standard error.
-    assert(mean(draws).abs() < 0.0112)
-    assert((mean(squares) - 1.0).abs() < 0.0159)
-    assert(mean(draws.map({ $0 * $0 * $0 })).abs() < 0.0434)
-    assert((mean(squares.map({ $0 * $0 })) - 3.0).abs() < 0.11)
+    expect(mean(draws).abs() < 0.0112)
+    expect((mean(squares) - 1.0).abs() < 0.0159)
+    expect(mean(draws.map({ $0 * $0 * $0 })).abs() < 0.0434)
+    expect((mean(squares.map({ $0 * $0 })) - 3.0).abs() < 0.11)
 }
 
 // Beyond the base layer, which is drawn another way.
@@ -57,8 +57,8 @@ fn theTailFollowsTheDistribution() {
     // 516 of them expected, as many on each side.
     let share = 2.0 * normalCumulative(-edge)
     let expected = 2000000.0 * share
-    assert((F64(beyond.count) - expected).abs() < 5.0 * expected.squareRoot())
-    assert((F64(negative) - F64(beyond.count) / 2.0).abs() < 2.5 * F64(beyond.count).squareRoot())
+    expect((F64(beyond.count) - expected).abs() < 5.0 * expected.squareRoot())
+    expect((F64(negative) - F64(beyond.count) / 2.0).abs() < 2.5 * F64(beyond.count).squareRoot())
     assertFollows(beyond, { 1.0 - 2.0 * normalCumulative(-$0) / share })
 }
 

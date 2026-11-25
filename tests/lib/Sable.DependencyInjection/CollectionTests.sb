@@ -25,7 +25,7 @@ fn aCollectionIsAValue() {
     other.replaceSingleton(Int.self, value: 2)
     other.addSingleton(String.self, value: "two")
     assertEqual(try! (try! services.build()).resolve(Int.self), 1)
-    assert(!services.contains(String.self))
+    expect(!services.contains(String.self))
     assertEqual(try! (try! other.build()).resolve(Int.self), 2)
 }
 
@@ -48,13 +48,13 @@ fn registrationsAreReplacedWithOthersOfAnyLifetime() {
     services.addSingleton(Int.self, value: 1)
     services.replaceTransient(Int.self) { _scope in 2 }
     assertEqual(services.descriptors.count, 1)
-    assert(services.descriptors[0].lifetime == .Transient && !services.descriptors[0].isEager && !services.descriptors[0].isAsync)
+    expect(services.descriptors[0].lifetime == .Transient && !services.descriptors[0].isEager && !services.descriptors[0].isAsync)
     services.replaceScoped(Int.self) { _scope in 3 }
     (try! services.build()).withScope { scope in assertEqual(try! scope.resolve(Int.self), 3) }
-    assert(!services.tryAdd(ServiceDescriptor.of(Int.self, .Transient) { _scope in 4 }))
-    assert(services.tryAdd(ServiceDescriptor.of(Int.self, .Transient, "k") { _scope in 4 }))
+    expect(!services.tryAdd(ServiceDescriptor.of(Int.self, .Transient) { _scope in 4 }))
+    expect(services.tryAdd(ServiceDescriptor.of(Int.self, .Transient, "k") { _scope in 4 }))
     services.remove(Int.self)
-    assert(!services.contains(Int.self) && services.contains(Int.self, key: "k"))
+    expect(!services.contains(Int.self) && services.contains(Int.self, key: "k"))
 }
 
 @test
@@ -79,12 +79,7 @@ fn whatAnEagerOneThrowsIsTheBuilds() {
     services.add(ServiceDescriptor.of(Int.self, .Singleton, from: [], eager: true) { (_scope: ServiceScope) throws in
         throw TestError("it fails")
     })
-    do {
-        _ = try services.build()
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "Int could not be made: it fails")
-    }
+    expectThrows(saying: "Int could not be made: it fails") { _ = try services.build() }
 }
 
 // Made by waiting, without saying what it is made from.
@@ -130,6 +125,6 @@ async fn whatIsAskedForBeforeItWasWaitedForIsSaid() {
         _ = try await services.buildAsync()
         assert(false)
     } catch {
-        assert(error.description().hasPrefix("Int is made as the provider is built, and was asked for before it was"))
+        expect(error.description().hasPrefix("Int is made as the provider is built, and was asked for before it was"))
     }
 }

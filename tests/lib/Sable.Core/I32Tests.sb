@@ -13,7 +13,7 @@ fn theLimitsAreTheWidthsBounds() {
     assertEqual(I32.zero, 0)
     assertEqual(I32.one, 1)
     assertEqual(I32.bitWidth, 32)
-    assert(I32.isSigned, "I32 is signed")
+    expect(I32.isSigned, "I32 is signed")
 }
 
 @test
@@ -26,30 +26,30 @@ fn theLimitsPrintInDecimal() {
 fn addingPastTheGreatestValueWrapsSaturatesOrReportsIt() {
     assertEqual(I32.max.wrappingAdd(1), I32.min)
     assertEqual(I32.max.saturatingAdd(1), I32.max)
-    assert(I32.max.checkedAdd(1) == none, "the sum does not fit")
+    expect(I32.max.checkedAdd(1) == none, "the sum does not fit")
     let (sum, overflowed) = I32.max.overflowingAdd(1)
     assertEqual(sum, I32.min)
-    assert(overflowed, "the sum overflowed")
+    expect(overflowed, "the sum overflowed")
 }
 
 @test
 fn subtractingPastTheLeastValueWrapsSaturatesOrReportsIt() {
     assertEqual(I32.min.wrappingSub(1), I32.max)
     assertEqual(I32.min.saturatingSub(1), I32.min)
-    assert(I32.min.checkedSub(1) == none, "the difference does not fit")
+    expect(I32.min.checkedSub(1) == none, "the difference does not fit")
     let (difference, overflowed) = I32.min.overflowingSub(1)
     assertEqual(difference, I32.max)
-    assert(overflowed, "the difference overflowed")
+    expect(overflowed, "the difference overflowed")
 }
 
 @test
 fn multiplyingPastTheLimitsWrapsSaturatesOrReportsIt() {
     assertEqual(I32.max.wrappingMul(2), -2)
     assertEqual(I32.max.saturatingMul(2), I32.max)
-    assert(I32.max.checkedMul(2) == none, "the product does not fit")
+    expect(I32.max.checkedMul(2) == none, "the product does not fit")
     let (product, overflowed) = I32.max.overflowingMul(2)
     assertEqual(product, -2)
-    assert(overflowed, "the product overflowed")
+    expect(overflowed, "the product overflowed")
     let (high, low) = I32.max.multipliedFullWidth(by: I32.max)
     assertEqual(high, 1073741823)
     assertEqual(low, 1)
@@ -80,8 +80,8 @@ fn rotationsAndSwapsWorkAtTheWidth() {
 
 @test
 fn conversionsStopAtTheLimits() {
-    assert(I32.exactly(U128.max) == none, "only a U128 holds U128's greatest value")
-    assert(I32.exactly(I128.min) == none, "only an I128 holds I128's least value")
+    expect(I32.exactly(U128.max) == none, "only a U128 holds U128's greatest value")
+    expect(I32.exactly(I128.min) == none, "only an I128 holds I128's least value")
     assertEqual(I32.clamping(U128.max), I32.max)
     assertEqual(I32.clamping(I128.min), I32.min)
     assertEqual(I32.truncating(U128.max), -1)
@@ -92,7 +92,7 @@ fn conversionsStopAtTheLimits() {
 fn theRemainderOfTheLeastValueByMinusOneIsZero() {
     assertEqual(I32.min.wrappingDiv(-1), I32.min)
     assertEqual(I32.min.wrappingRem(-1), 0)
-    assert(I32.min.checkedDiv(-1) == none, "the quotient does not fit")
+    expect(I32.min.checkedDiv(-1) == none, "the quotient does not fit")
 }
 
 @test(traps: "integer overflow")
@@ -119,8 +119,8 @@ fn theLeastValuesAbsoluteValueWrapsOrSaturates() {
     assertEqual(I32.min.wrappingAbs(), I32.min)
     assertEqual(I32.min.saturatingAbs(), I32.max)
     assertEqual(I32.min.saturatingNeg(), I32.max)
-    assert(I32.min.checkedAbs() == none, "the least value has no absolute value")
+    expect(I32.min.checkedAbs() == none, "the least value has no absolute value")
     let (magnitude, overflowed) = I32.min.overflowingAbs()
     assertEqual(magnitude, I32.min)
-    assert(overflowed, "the absolute value overflowed")
+    expect(overflowed, "the absolute value overflowed")
 }

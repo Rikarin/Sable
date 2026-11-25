@@ -18,23 +18,23 @@ fn people() -> Person[>..] {
 fn aComparatorOrdersByAKey() {
     let byAge = Comparator<Person>.by { $0.age }
     assertEqual(byAge.compare(people()[1], people()[0]), .Less)
-    assert(byAge.areInIncreasingOrder(people()[3], people()[1]))
-    assert(people().sorted(using: byAge).map { $0.name } == ["Dee", "Bob", "Cy", "Ann"])
+    expect(byAge.areInIncreasingOrder(people()[3], people()[1]))
+    expect(people().sorted(using: byAge).map { $0.name } == ["Dee", "Bob", "Cy", "Ann"])
 }
 
 @test
 fn tiesAreBrokenByTheNextKey() {
     let order = Comparator<Person>.by { $0.age }.reversed().then(by: { $0.name })
-    assert(people().sorted(using: order).map { $0.name } == ["Ann", "Cy", "Bob", "Dee"])
+    expect(people().sorted(using: order).map { $0.name } == ["Ann", "Cy", "Bob", "Dee"])
     let same = Comparator<Person>.by { $0.age }.reversed().then(Comparator<Person>.by { $0.name })
-    assert(people().sorted(using: same).map { $0.name } == ["Ann", "Cy", "Bob", "Dee"])
+    expect(people().sorted(using: same).map { $0.name } == ["Ann", "Cy", "Bob", "Dee"])
 }
 
 @test
 fn aSortUsingAComparatorIsStable() {
     var everyone = people()
     everyone.sort(using: Comparator<Person>.by { $0.age }.reversed())
-    assert(everyone.map { $0.name } == ["Cy", "Ann", "Bob", "Dee"])
+    expect(everyone.map { $0.name } == ["Cy", "Ann", "Bob", "Dee"])
 }
 
 @test
@@ -42,21 +42,21 @@ fn theLeastAndGreatestAreFoundByAComparator() {
     let byAge = Comparator<Person>.by { $0.age }
     assertEqual(people().min(using: byAge)!.name, "Dee")
     assertEqual(people().max(using: byAge)!.name, "Ann")
-    assert(([] as Person[>..]).min(using: byAge) == none)
+    expect(([] as Person[>..]).min(using: byAge) == none)
 }
 
 @test
 fn aSortedArrayIsSearchedInTheComparatorsOrder() {
     let descending = Comparator<Int>.natural().reversed()
     let xs: Int[>..] = [9, 7, 5, 3, 1]
-    assert(xs.binarySearch(for: 5, using: descending) == .Ok(2))
-    assert(xs.binarySearch(for: 4, using: descending) == .Err(3))
-    assert(xs.binarySearch(by: (x: Int) => 5.compare(x)) == .Ok(2))
+    expect(xs.binarySearch(for: 5, using: descending) == .Ok(2))
+    expect(xs.binarySearch(for: 4, using: descending) == .Err(3))
+    expect(xs.binarySearch(by: (x: Int) => 5.compare(x)) == .Ok(2))
 }
 
 @test
 fn aComparatorIsMadeFromAClosure() {
     let byLastLetter = Comparator<String>((a: String, b: String) => a[^1].compare(b[^1]))
-    assert(["ab", "ca", "bc"].sorted(using: byLastLetter) == ["ca", "ab", "bc"])
-    assert(["b", "a", "c"].sorted(using: Comparator<String>.natural()) == ["a", "b", "c"])
+    expect(["ab", "ca", "bc"].sorted(using: byLastLetter) == ["ca", "ab", "bc"])
+    expect(["b", "a", "c"].sorted(using: Comparator<String>.natural()) == ["a", "b", "c"])
 }

@@ -17,12 +17,12 @@ fn aBufferIsACollectionOfItsValues() {
         view[0] = 3
         view[2] = 7
         assertEqual(view.count, 4)
-        assert(view.toArray() == [3, 0, 7, 0])
+        expect(view.toArray() == [3, 0, 7, 0])
         assertEqual(view.reduce(0) { $0 + $1 }, 10)
-        assert(view.reversed().toArray() == [0, 7, 0, 3])
+        expect(view.reversed().toArray() == [0, 7, 0, 3])
         assertEqual(view.firstIndex(of: 7), 2)
         view.swapAt(0, 3)
-        assert(buffer.toArray() == [0, 0, 7, 3])
+        expect(buffer.toArray() == [0, 0, 7, 3])
     }
 }
 
@@ -37,7 +37,7 @@ fn aBufferViewsMemoryItDoesNotOwn() {
         start.initialize(to: "y", at: 1)
         start.initialize(to: "z", at: 2)
         let view = UnsafeBuffer<String>.viewing(start + 1, count: 2)
-        assert(view.toArray() == ["y", "z"])
+        expect(view.toArray() == ["y", "z"])
         assertEqual(view.start, start + 1)
         start.deinitialize(count: 3)
     }
@@ -47,8 +47,8 @@ fn aBufferViewsMemoryItDoesNotOwn() {
 fn anEmptyBufferHasNothing() {
     unsafe {
         let view = UnsafeBuffer<Int>.viewing(RawPtr<Int>.null, count: 0)
-        assert(view.isEmpty)
-        assert(view.toArray() == [] as Int[>..])
+        expect(view.isEmpty)
+        expect(view.toArray() == [] as Int[>..])
     }
 }
 

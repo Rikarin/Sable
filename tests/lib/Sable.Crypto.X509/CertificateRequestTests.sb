@@ -55,12 +55,12 @@ Xr4BpNp+0xb+YeUA8TvmAdw=
 fn opensslsRequestIsRead() {
     let request = try! CertificateRequest.parse(pem: opensslRequest)
     assertEqual(request.debugDescription(), "CertificateRequest(CN=ask)")
-    assert(request.isSigned && request.alternativeNames == [.Dns("ask.example.com")] && request.extensions.count == 1)
+    expect(request.isSigned && request.alternativeNames == [.Dns("ask.example.com")] && request.extensions.count == 1)
     assertEqual(request.pem.trimmed(), opensslRequest.trimmed())
     var der = request.der
     der[der.count - 1] = der[der.count - 1] ^ 1
-    assert(!(try! CertificateRequest.parse(der: der)).isSigned)
-    assert((try? CertificateRequest.parse(der: der[..<^1])) == none && (try? CertificateRequest.parse(pem: rsaPem)) == none)
+    expect(!(try! CertificateRequest.parse(der: der)).isSigned)
+    expect((try? CertificateRequest.parse(der: der[..<^1])) == none && (try? CertificateRequest.parse(pem: rsaPem)) == none)
 }
 
 @test
@@ -69,14 +69,14 @@ fn everyKeysRequestIsSigned() {
     for key in keys {
         let request = try! CertificateRequest.make(subject: DistinguishedName(commonName: "x"), names: [.Dns("a.example"), .Uri("https://a.example/")], key: key)
         assert(request.isSigned && request.subject.first(.commonName) == "x" && request.alternativeNames.count == 2)
-        assert(try! request.publicKey() == key.publicKey)
+        assertEqual(try! request.publicKey(), key.publicKey)
         let empty = try! CertificateRequest.make(subject: DistinguishedName([]), names: [], key: key)
         assert(empty.isSigned && empty.extensions.isEmpty)
         let certificate = try! CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: key)
         assert(certificate.isSigned(by: key.publicKey) && certificate.alternativeNames.isEmpty)
     }
-    assert((try? CertificateRequest.make(subject: DistinguishedName([]), names: [], key: X25519PrivateKey.generate().anyKey)) == none)
-    assert((try? CertificateRequest.make(subject: DistinguishedName([]), names: [], key: keys[3], algorithm: .Ecdsa(.Sha256))) == none)
+    expect((try? CertificateRequest.make(subject: DistinguishedName([]), names: [], key: X25519PrivateKey.generate().anyKey)) == none)
+    expect((try? CertificateRequest.make(subject: DistinguishedName([]), names: [], key: keys[3], algorithm: .Ecdsa(.Sha256))) == none)
 }
 
 // A byte of it changed is another request, or none, and never traps.
@@ -101,11 +101,11 @@ fn otherAlgorithmsAreWrittenAndRead() {
     let rsa = try! PrivateKey.parse(pem: rsaPem)
     for algorithm in [SignatureAlgorithm.RsaPkcs1(.Sha384), SignatureAlgorithm.RsaPkcs1(.Sha512), SignatureAlgorithm.RsaPss(.Sha384, maskHash: .Sha256, saltByteCount: 20)] {
         let certificate = try! CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: rsa, algorithm: algorithm)
-        assert(certificate.signatureAlgorithm == algorithm && certificate.isSigned(by: rsa.publicKey))
+        require(certificate.signatureAlgorithm == algorithm && certificate.isSigned(by: rsa.publicKey))
     }
     let key = EcdsaPrivateKey<P256>.generate().anyKey
     let certificate = try! CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: key, algorithm: .Ecdsa(.Sha512))
-    assert(certificate.signatureAlgorithm == .Ecdsa(.Sha512) && certificate.isSigned(by: key.publicKey) && !certificate.isSigned(by: rsa.publicKey))
+    expect(certificate.signatureAlgorithm == .Ecdsa(.Sha512) && certificate.isSigned(by: key.publicKey) && !certificate.isSigned(by: rsa.publicKey))
 }
 
 @test
@@ -121,10 +121,10 @@ fn whatABuilderIsGivenIsWritten() {
     builder.purposes = [KeyPurpose.timeStamping, KeyPurpose.ocspSigning, KeyPurpose.emailProtection]
     builder.serialNumber = [0xFF, 1]
     let made = try! builder.selfSigned(with: key)
-    assert(made.notBefore == builder.notBefore && made.notAfter == builder.notAfter)
-    assert(made.basicConstraints == builder.basicConstraints && made.keyUsage == builder.keyUsage)
-    assert(made.nameConstraints == builder.nameConstraints && made.alternativeNames == builder.alternativeNames)
-    assert(made.purposes! == builder.purposes && made.serialNumber == [0, 0xFF, 1])
+    expect(made.notBefore == builder.notBefore && made.notAfter == builder.notAfter)
+    expect(made.basicConstraints == builder.basicConstraints && made.keyUsage == builder.keyUsage)
+    expect(made.nameConstraints == builder.nameConstraints && made.alternativeNames == builder.alternativeNames)
+    expect(made.purposes! == builder.purposes && made.serialNumber == [0, 0xFF, 1])
     builder.keyUsage = .None
-    assert((try! builder.selfSigned(with: key)).keyUsage == none)
+    expect((try! builder.selfSigned(with: key)).keyUsage == none)
 }

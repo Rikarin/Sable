@@ -123,51 +123,51 @@ fn everyPartIsRead() {
     assertEqual("\(leaf.subject)", "CN=www.example.com")
     assertEqual("\(leaf.issuer)", "CN=Intermediate,O=Example\\, Ltd,C=CH")
     assertEqual(Hex.encode(leaf.serialNumber), "0a0b0c0d")
-    assert(leaf.version == 3 && !leaf.isSelfIssued)
+    expect(leaf.version == 3 && !leaf.isSelfIssued)
     assertEqual(leaf.notBefore.rfc3339(), "2026-01-01T00:00:00Z")
     assertEqual(leaf.notAfter.rfc3339(), "2036-01-01T00:00:00Z")
-    assert(leaf.signatureAlgorithm == .Ecdsa(.Sha256))
-    assert(leaf.basicConstraints == BasicConstraints(isAuthority: false) && leaf.keyUsage == .DigitalSignature)
-    assert(leaf.purposes! == [KeyPurpose.serverAuth, KeyPurpose.clientAuth])
-    assert(leaf.nameConstraints == none && leaf.extensions.count == 7)
+    expect(leaf.signatureAlgorithm == .Ecdsa(.Sha256))
+    expect(leaf.basicConstraints == BasicConstraints(isAuthority: false) && leaf.keyUsage == .DigitalSignature)
+    expect(leaf.purposes! == [KeyPurpose.serverAuth, KeyPurpose.clientAuth])
+    expect(leaf.nameConstraints == none && leaf.extensions.count == 7)
     var names: String[>..] = []
     for name in leaf.alternativeNames {
         names.append("\(name)")
     }
     assertEqual(names.joined(separator: " "), "DNS:www.example.com DNS:*.apps.example.com IP:192.0.2.1 IP:2001:db8:0:0:0:0:0:1 email:a@example.com URI:https://example.com/x registered:1.2.3.4 other:1.2.3.5 directory:CN=inner")
     let inter = try! Certificate.parse(pem: interPem)
-    assert(inter.basicConstraints == BasicConstraints(isAuthority: true, pathLength: 0))
-    assert(inter.keyUsage! == [KeyUsage.KeyCertSign, KeyUsage.CrlSign])
-    assert(leaf.authorityKeyIdentifier!.keyIdentifier == inter.subjectKeyIdentifier)
-    assert(leaf.isSigned(by: try! inter.publicKey()) && !leaf.isSigned(by: try! leaf.publicKey()))
-    assert(leaf.extension(ObjectIdentifier([2, 5, 29, 17]))!.isCritical == false && leaf.extension(ObjectIdentifier([1, 2, 3])) == none)
+    expect(inter.basicConstraints == BasicConstraints(isAuthority: true, pathLength: 0))
+    expect(inter.keyUsage! == [KeyUsage.KeyCertSign, KeyUsage.CrlSign])
+    expect(leaf.authorityKeyIdentifier!.keyIdentifier == inter.subjectKeyIdentifier)
+    expect(leaf.isSigned(by: try! inter.publicKey()) && !leaf.isSigned(by: try! leaf.publicKey()))
+    expect(leaf.extension(ObjectIdentifier([2, 5, 29, 17]))!.isCritical == false && leaf.extension(ObjectIdentifier([1, 2, 3])) == none)
     assertEqual(leaf.debugDescription(), "Certificate(CN=www.example.com, by CN=Intermediate,O=Example\\, Ltd,C=CH, 0a0b0c0d)")
     assertEqual(leaf.fingerprint().count, 32)
-    assert(leaf.signature.count > 60 && leaf.spki.count > 90)
+    expect(leaf.signature.count > 60 && leaf.spki.count > 90)
     assertEqual(leaf.pem.trimmed(), leafPem.trimmed())
-    assert([leaf: 1][try! Certificate.parse(der: leaf.der)] == 1 && leaf != inter)
+    expect([leaf: 1][try! Certificate.parse(der: leaf.der)] == 1 && leaf != inter)
 }
 
 @test
 fn everySignatureAlgorithmIsRead() {
     let root = try! Certificate.parse(pem: rootPem)
-    assert(root.signatureAlgorithm == .RsaPkcs1(.Sha256) && root.isSelfIssued && root.isSigned(by: try! root.publicKey()))
+    expect(root.signatureAlgorithm == .RsaPkcs1(.Sha256) && root.isSelfIssued && root.isSigned(by: try! root.publicKey()))
     let pss = try! Certificate.parse(pem: pssPem)
-    assert(pss.signatureAlgorithm == .RsaPss(.Sha256, maskHash: .Sha256, saltByteCount: 32) && pss.isSigned(by: try! root.publicKey()))
+    expect(pss.signatureAlgorithm == .RsaPss(.Sha256, maskHash: .Sha256, saltByteCount: 32) && pss.isSigned(by: try! root.publicKey()))
     let sha1 = try! Certificate.parse(pem: sha1Pem)
-    assert(sha1.signatureAlgorithm == .Unknown(ObjectIdentifier([1, 2, 840, 113549, 1, 1, 5])) && !sha1.isSigned(by: try! root.publicKey()))
+    expect(sha1.signatureAlgorithm == .Unknown(ObjectIdentifier([1, 2, 840, 113549, 1, 1, 5])) && !sha1.isSigned(by: try! root.publicKey()))
     let own = try! Certificate.parse(pem: edPem)
-    assert(own.signatureAlgorithm == .Ed25519 && own.isSigned(by: try! own.publicKey()) && !own.isSigned(by: try! root.publicKey()))
+    expect(own.signatureAlgorithm == .Ed25519 && own.isSigned(by: try! own.publicKey()) && !own.isSigned(by: try! root.publicKey()))
 }
 
 @test
 fn whatIsNoCertificateIsRefused() {
     let der = try! Certificate.parse(pem: leafPem).der
-    assert((try? Certificate.parse(der: [])) == none && (try? Certificate.parse(pem: "")) == none)
-    assert((try? Certificate.parse(der: der[..<^1])) == none)
+    expect((try? Certificate.parse(der: [])) == none && (try? Certificate.parse(pem: "")) == none)
+    expect((try? Certificate.parse(der: der[..<^1])) == none)
     var longer = der
     longer.append(0)
-    assert((try? Certificate.parse(der: longer)) == none)
+    expect((try? Certificate.parse(der: longer)) == none)
     // Any byte of it changed may or may not leave a certificate, and never traps.
     var i = 0
     var read = 0
@@ -179,8 +179,8 @@ fn whatIsNoCertificateIsRefused() {
         }
         i += 1
     }
-    assert(read > 0 && read < der.count)
-    assert((try? Certificate.parseAll(pem: "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n")) == none)
+    expect(read > 0 && read < der.count)
+    expect((try? Certificate.parseAll(pem: "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n")) == none)
     assertEqual(try! Certificate.parseAll(pem: leafPem + "\nnotes\n" + interPem).count, 2)
 }
 
@@ -188,10 +188,10 @@ fn whatIsNoCertificateIsRefused() {
 fn hostsAreMatched() {
     let leaf = try! Certificate.parse(pem: leafPem)
     for host in ["www.example.com", "WWW.Example.COM", "www.example.com.", "a.apps.example.com", "192.0.2.1", "2001:db8::1", "[2001:DB8:0::1]"] {
-        assert(leaf.isFor(host: host), host)
+        require(leaf.isFor(host: host), host)
     }
     for host in ["example.com", "a.b.apps.example.com", "apps.example.com", ".apps.example.com", "*.apps.example.com", "192.0.2.2", "192.0.2.01", "2001:db8::2", "", ".", "www..example.com", "-a.apps.example.com", "a.apps.example.com:443", "xn--\u{e9}.apps.example.com", "1", "::1::"] {
-        assert(!leaf.isFor(host: host), host)
+        require(!leaf.isFor(host: host), host)
     }
 }
 
@@ -201,14 +201,14 @@ fn aWildcardIsForOneLabelBeforeTwo() {
     fn made(_ name: String) -> Certificate {
         return try! CertificateBuilder(subject: DistinguishedName([]), host: name).selfSigned(with: key)
     }
-    assert(made("*.example.com").isFor(host: "a.example.com"))
-    assert(!made("*.com").isFor(host: "example.com") && !made("*").isFor(host: "localhost"))
-    assert(!made("w*.example.com").isFor(host: "www.example.com") && !made("www.*.com").isFor(host: "www.example.com"))
-    assert(!made("*.*.example.com").isFor(host: "a.b.example.com"))
-    assert(made("localhost").isFor(host: "localhost") && made("::1").isFor(host: "0:0:0:0:0:0:0:1") && made("10.0.0.1").isFor(host: "10.0.0.1"))
-    assert(made("::ffff:10.0.0.1").isFor(host: "::ffff:a00:1"))
+    expect(made("*.example.com").isFor(host: "a.example.com"))
+    expect(!made("*.com").isFor(host: "example.com") && !made("*").isFor(host: "localhost"))
+    expect(!made("w*.example.com").isFor(host: "www.example.com") && !made("www.*.com").isFor(host: "www.example.com"))
+    expect(!made("*.*.example.com").isFor(host: "a.b.example.com"))
+    expect(made("localhost").isFor(host: "localhost") && made("::1").isFor(host: "0:0:0:0:0:0:0:1") && made("10.0.0.1").isFor(host: "10.0.0.1"))
+    expect(made("::ffff:10.0.0.1").isFor(host: "::ffff:a00:1"))
     for host in ["1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "::12345", "::g", "1::2::3", "10.0.0.256", "10.0.0", "1.2.3.4.5", "a.b.c.1", "1:2:3:4:5:6:7::8"] {
-        assert(!made("::1").isFor(host: host))
+        require(!made("::1").isFor(host: host))
     }
 }
 
@@ -217,16 +217,16 @@ fn namesAreEqualButForCaseAndSpace() {
     let one = DistinguishedName([NameAttribute(.organizationName, "Example  Ltd"), NameAttribute(.commonName, "Name")])
     let two = DistinguishedName([NameAttribute(.organizationName, "example ltd"), NameAttribute(.commonName, " NAME ")])
     let three = DistinguishedName([NameAttribute(.commonName, "Name"), NameAttribute(.organizationName, "Example Ltd")])
-    assert(one == two && one != three && one.der != two.der)
-    assert([one: 1][two] == 1)
-    assert(one.first(.commonName) == "Name" && one.first(.localityName) == none && one.all(.organizationName) == ["Example  Ltd"])
-    assert(DistinguishedName([]).isEmpty && !one.isEmpty)
+    expect(one == two && one != three && one.der != two.der)
+    expect([one: 1][two] == 1)
+    expect(one.first(.commonName) == "Name" && one.first(.localityName) == none && one.all(.organizationName) == ["Example  Ltd"])
+    expect(DistinguishedName([]).isEmpty && !one.isEmpty)
     let odd = DistinguishedName([NameAttribute(.commonName, "#a,b+\"c\\"), NameAttribute(ObjectIdentifier([1, 2, 3]), "x"), NameAttribute(.countryName, "CH")])
     assertEqual("\(odd)", "C=CH,1.2.3=#0c0178,CN=\\#a\\,b\\+\\\"c\\\\")
     assertEqual("\(DistinguishedName(commonName: "x"):>6)", "  CN=x")
-    assert(NameAttribute(.commonName, "a") != NameAttribute(.organizationName, "a") && NameAttribute(.commonName, "a") != NameAttribute(.commonName, "b"))
+    expect(NameAttribute(.commonName, "a") != NameAttribute(.organizationName, "a") && NameAttribute(.commonName, "a") != NameAttribute(.commonName, "b"))
     for type in [ObjectIdentifier.serialNumber, ObjectIdentifier.stateOrProvinceName, ObjectIdentifier.streetAddress, ObjectIdentifier.organizationalUnitName, ObjectIdentifier.domainComponent, ObjectIdentifier.emailAddress] {
-        assert(DistinguishedName([NameAttribute(type, "x")]).first(type) == "x")
+        require(DistinguishedName([NameAttribute(type, "x")]).first(type) == "x")
     }
 }
 

@@ -45,7 +45,7 @@ fn aMessageInTwoPartsIsTheWholeWhereverItIsCut() {
         var hash = Blake2b()
         hash.update(whole[..<cut])
         hash.update(whole[cut...])
-        assert(hash.finalize() == expected)
+        assertEqual(hash.finalize(), expected)
         cut += 1
     }
 }
@@ -58,7 +58,7 @@ fn aMessageAByteAtATimeIsTheWhole() {
         hash.update([byte])
         hash.update([])
     }
-    assert(hash.finalize() == Blake2b.hash(whole))
+    expect(hash.finalize() == Blake2b.hash(whole))
 }
 
 @test
@@ -66,10 +66,10 @@ fn finalizingLeavesTheFunctionToGoOn() {
     let whole = message(137)
     var hash = Blake2b()
     hash.update(whole[..<128])
-    assert(hash.finalize() == Blake2b.hash(whole[..<128]))
-    assert(hash.finalize() == Blake2b.hash(whole[..<128]))
+    expect(hash.finalize() == Blake2b.hash(whole[..<128]))
+    expect(hash.finalize() == Blake2b.hash(whole[..<128]))
     hash.update(whole[128...])
-    assert(hash.finalize() == Blake2b.hash(whole))
+    expect(hash.finalize() == Blake2b.hash(whole))
 }
 
 @test
@@ -80,8 +80,8 @@ fn aCopyHashesOnByItself() {
     var second = first
     first.update(whole[7...])
     second.update(whole[..<3])
-    assert(first.finalize() == Blake2b.hash(whole))
-    assert(second.finalize() == Blake2b.hash(joined(message(7), message(3))))
+    expect(first.finalize() == Blake2b.hash(whole))
+    expect(second.finalize() == Blake2b.hash(joined(message(7), message(3))))
 }
 
 @test
@@ -115,5 +115,5 @@ fn everyDigestSizeAndKeySizeHasItsDigest() {
 fn aShorterDigestIsNotTheStartOfALonger() {
     let short = Blake2b(digestByteCount: 32).finalize()
     assertEqual(short.count, 32)
-    assert(!Blake2b().finalize().bytes.starts(with: short.bytes))
+    expect(!Blake2b().finalize().bytes.starts(with: short.bytes))
 }

@@ -57,17 +57,17 @@ fn entriesAreWrittenAndRead() throws {
             try writer.add(TarEntry("none"))
             try writer.add(TarEntry("whole"), bytes(512))
         }
-        assert(made.count % 10240 == 0)
+        require(made.count % 10240 == 0)
         let read = try entries(made)
-        assert(read.map { $0.0.name } == ["a/b.txt", "d/", "link", "hard", "null", "pipe", "parts", "none", "whole"], "\(format)")
+        require(read.map { $0.0.name } == ["a/b.txt", "d/", "link", "hard", "null", "pipe", "parts", "none", "whole"], "\(format)")
         let file = read[0].0
-        assert(file.kind == .File && file.size == 1000 && file.mode == 0o640 && file.userId == 501 && file.groupId == 20)
-        assert(file.userName == "someone" && file.groupName == "staff" && file.modified == UtcDateTime.fromUnix(1_700_000_000))
-        assert(read[0].1 == bytes(1000) && read[1].0.kind == .Directory && read[1].0.mode == 0o755)
-        assert(read[2].0.kind == .Symlink && read[2].0.linkTarget == "a/b.txt")
-        assert(read[3].0.kind == .HardLink && read[3].0.linkTarget == "a/b.txt")
-        assert(read[4].0.kind == .CharacterDevice && read[4].0.deviceMajor == 1 && read[4].0.deviceMinor == 3)
-        assert(read[5].0.kind == .Fifo && read[6].1 == bytes(1500) && read[7].1.isEmpty && read[8].1 == bytes(512))
+        require(file.kind == .File && file.size == 1000 && file.mode == 0o640 && file.userId == 501 && file.groupId == 20)
+        require(file.userName == "someone" && file.groupName == "staff" && file.modified == UtcDateTime.fromUnix(1_700_000_000))
+        require(read[0].1 == bytes(1000) && read[1].0.kind == .Directory && read[1].0.mode == 0o755)
+        require(read[2].0.kind == .Symlink && read[2].0.linkTarget == "a/b.txt")
+        require(read[3].0.kind == .HardLink && read[3].0.linkTarget == "a/b.txt")
+        require(read[4].0.kind == .CharacterDevice && read[4].0.deviceMajor == 1 && read[4].0.deviceMinor == 3)
+        require(read[5].0.kind == .Fifo && read[6].1 == bytes(1500) && read[7].1.isEmpty && read[8].1 == bytes(512))
     }
 }
 
@@ -89,30 +89,30 @@ fn whatDoesNotFitUstarIsSaidOtherwise() throws {
         try writer.add(link)
         try writer.add(TarEntry("after"), [3])
     })
-    assert(pax[0].0.name == file.name && pax[0].0.userId == 3_000_000 && pax[0].0.groupId == 1 << 40)
-    assert(pax[0].0.userName == "\u{E9}" && pax[0].0.groupName == file.groupName && pax[0].0.modified == file.modified)
-    assert(pax[0].0.attributes["comment"] == "a note" && pax[0].0.attributes["SCHILY.xattr.user.x"] == "y=z\n")
-    assert(pax[0].1 == [1, 2] && pax[1].0.linkTarget == long && pax[1].0.modified == link.modified)
-    assert(pax[2].0.name == "after" && pax[2].0.attributes.isEmpty && pax[2].1 == [3])
+    expect(pax[0].0.name == file.name && pax[0].0.userId == 3_000_000 && pax[0].0.groupId == 1 << 40)
+    expect(pax[0].0.userName == "\u{E9}" && pax[0].0.groupName == file.groupName && pax[0].0.modified == file.modified)
+    expect(pax[0].0.attributes["comment"] == "a note" && pax[0].0.attributes["SCHILY.xattr.user.x"] == "y=z\n")
+    expect(pax[0].1 == [1, 2] && pax[1].0.linkTarget == long && pax[1].0.modified == link.modified)
+    expect(pax[2].0.name == "after" && pax[2].0.attributes.isEmpty && pax[2].1 == [3])
 
     let gnu = try entries(archive(.Gnu) { writer throws(IoError) in
         try writer.add(file, [1, 2])
         try writer.add(link)
         try writer.add(TarEntry("after"), [3])
     })
-    assert(gnu[0].0.name == file.name && gnu[0].0.userId == 3_000_000 && gnu[0].0.groupId == 1 << 40)
-    assert(gnu[0].0.modified == UtcDateTime.fromUnix(1_700_000_000) && gnu[1].0.linkTarget == long)
-    assert(gnu[1].0.modified == UtcDateTime.fromUnix(-2) && gnu[2].0.name == "after")
+    expect(gnu[0].0.name == file.name && gnu[0].0.userId == 3_000_000 && gnu[0].0.groupId == 1 << 40)
+    expect(gnu[0].0.modified == UtcDateTime.fromUnix(1_700_000_000) && gnu[1].0.linkTarget == long)
+    expect(gnu[1].0.modified == UtcDateTime.fromUnix(-2) && gnu[2].0.name == "after")
 
     let ustar = TarWriter(MemoryStream(), format: .Ustar)
-    assert(problem { try ustar.add(file, [1]) }.hasSuffix("in a ustar archive, which has no room for it' is not supported here"))
+    expect(problem { try ustar.add(file, [1]) }.hasSuffix("in a ustar archive, which has no room for it' is not supported here"))
     // A name that ustar has in two parts.
     let half = "\(repeated("d", 120))/\(repeated("f", 90))"
     try ustar.add(TarEntry(half), [7])
     try ustar.finish()
     let split = try entries(ustar.inner.bytes)
-    assert(split[0].0.name == half && split[0].1 == [7])
-    assert(problem { try ustar.add(TarEntry("")) }.hasSuffix("was given something the system does not take"))
+    expect(split[0].0.name == half && split[0].1 == [7])
+    expect(problem { try ustar.add(TarEntry("")) }.hasSuffix("was given something the system does not take"))
 }
 
 /// A header's checksum put right.
@@ -146,13 +146,13 @@ fn oldHeadersAreRead() throws {
         old[i] = 0
         i += 1
     }
-    assert((try entries(summed(old)))[0].1 == [1, 2, 3])
+    expect((try entries(summed(old)))[0].1 == [1, 2, 3])
     // A directory by its name alone, and spaces before a number.
     old[2] = 0
     old[124] = 0x20
     old[134] = 0x30
     old = summed(old)
-    assert((try entries(old[..<512].toArray()))[0].0.kind == .Directory)
+    expect((try entries(old[..<512].toArray()))[0].0.kind == .Directory)
     // A sum as if bytes had signs.
     var signed = archive(.Ustar) { writer throws(IoError) in try writer.add(TarEntry("\u{E9}x"), [1]) }
     var sum = 0
@@ -168,11 +168,11 @@ fn oldHeadersAreRead() throws {
         sum = sum >> 3
         i -= 1
     }
-    assert((try entries(signed))[0].0.name == "\u{E9}x")
+    expect((try entries(signed))[0].0.name == "\u{E9}x")
     // The archive that ends with no zeros, and one with none but them.
     let bare = archive { writer throws(IoError) in try writer.add(TarEntry("x"), [1]) }
-    assert((try entries(bare[..<1024].toArray())).count == 1)
-    assert((try entries([])).isEmpty && (try entries(U8[>..](repeating: 0, count: 1024))).isEmpty)
+    expect((try entries(bare[..<1024].toArray())).count == 1)
+    expect((try entries([])).isEmpty && (try entries(U8[>..](repeating: 0, count: 1024))).isEmpty)
     // A global record, which is of every entry after it.
     var global = archive { writer throws(IoError) in
         var entry = TarEntry("first")
@@ -182,7 +182,7 @@ fn oldHeadersAreRead() throws {
     }
     global[156] = 0x67
     let both = try entries(summed(global))
-    assert(both[0].0.attributes["comment"] == "all" && both[1].0.attributes["comment"] == "all")
+    expect(both[0].0.attributes["comment"] == "all" && both[1].0.attributes["comment"] == "all")
 }
 
 @test
@@ -244,7 +244,7 @@ fn whatIsDamagedIsRefused() {
             i += 1
         }
         let said = problem { try entries(changed) }
-        assert(said.hasPrefix("the tar archive is corrupt: "), "\(to): \(said)")
+        require(said.hasPrefix("the tar archive is corrupt: "), "\(to): \(said)")
     }
 }
 
@@ -285,15 +285,15 @@ fn directoriesAreArchivedAndExtracted() throws {
     for name in ["a.tar", "a.tar.gz", "a.tgz", "a.tar.zst", "a.tar.br"] {
         try Tar.create(temp.path.appending(name), from: temp.path.appending("in"))
         try Tar.extract(temp.path.appending(name), to: temp.path.appending("out-\(name)"))
-        assert(try isTree(temp.path.appending("out-\(name)")), name)
+        require(try isTree(temp.path.appending("out-\(name)")), name)
     }
     let before = (try File.metadata(temp.path.appending("in/sub"))).modified
-    assert((try File.metadata(temp.path.appending("out-a.tar/sub"))).modified == before)
+    expect((try File.metadata(temp.path.appending("out-a.tar/sub"))).modified == before)
     let small = (try File.metadata(temp.path.appending("a.tar.zst"))).size
-    assert(small < (try File.metadata(temp.path.appending("a.tar"))).size / 2)
+    expect(small < (try File.metadata(temp.path.appending("a.tar"))).size / 2)
     try Tar.create(temp.path.appending("g.tar"), from: temp.path.appending("in"), format: .Gnu)
     try Tar.extract(temp.path.appending("g.tar"), to: temp.path.appending("g"))
-    assert(try isTree(temp.path.appending("g")))
+    expect(try isTree(temp.path.appending("g")))
 }
 
 @test
@@ -308,7 +308,7 @@ fn nothingIsWrittenOutside() throws {
     }
     for name in ["../up", "a/../../up", "/root", "a\\..\\..\\up", "C:x"] {
         let said = extracting { writer throws(IoError) in try writer.add(TarEntry(name), [1]) }
-        assert(said.contains("leads out of the directory"), "\(name): \(said)")
+        require(said.contains("leads out of the directory"), "\(name): \(said)")
     }
     fn entry(_ name: String, _ kind: TarEntryKind, _ target: String) -> TarEntry {
         var made = TarEntry(name, kind: kind)
@@ -316,35 +316,35 @@ fn nothingIsWrittenOutside() throws {
         return made
     }
     // Links out, by a link or by a name; and a file through one.
-    assert(extracting { writer throws(IoError) in try writer.add(entry("link", .Symlink, "../secret")) }.hasPrefix("a link, 'link', leads to"))
-    assert(extracting { writer throws(IoError) in try writer.add(entry("hard", .HardLink, "../secret/file")) }.contains("leads out of the directory"))
+    expect(extracting { writer throws(IoError) in try writer.add(entry("link", .Symlink, "../secret")) }.hasPrefix("a link, 'link', leads to"))
+    expect(extracting { writer throws(IoError) in try writer.add(entry("hard", .HardLink, "../secret/file")) }.contains("leads out of the directory"))
     let through = extracting { writer throws(IoError) in
         try writer.add(TarEntry("real", kind: .Directory))
         try writer.add(entry("way", .Symlink, "real"))
         try writer.add(TarEntry("way/file"), [1])
     }
-    assert(through == "'way' is in the way of an entry: it is no directory, or a link")
+    expect(through == "'way' is in the way of an entry: it is no directory, or a link")
     // A hard link of a link, or of what is not there.
     let linked = extracting { writer throws(IoError) in
         try writer.add(entry("other", .Symlink, "real"))
         try writer.add(entry("hard", .HardLink, "other"))
     }
-    assert(linked == "'hard' is another name for 'other', which is no file")
+    expect(linked == "'hard' is another name for 'other', which is no file")
     // One of a file that is, which then has both names.
     let good = extracting { writer throws(IoError) in
         try writer.add(TarEntry("./"))
         try writer.add(TarEntry("one"), [1])
     }
-    assert(good.contains("leads out of the directory"))
+    expect(good.contains("leads out of the directory"))
     let named = extracting { writer throws(IoError) in
         try writer.add(TarEntry(".", kind: .Directory))
         try writer.add(TarEntry("pipe", kind: .Fifo))
         try writer.add(TarEntry("one"), [1])
         try writer.add(entry("two", .HardLink, "one"))
     }
-    assert(named == "nothing" && (try File.readBytes(here.appending("two"))) == [1] && !File.exists(here.appending("pipe")))
-    assert((try Directory.list(temp.path)) == ["out", "secret"])
-    assert((try File.read(temp.path.appending("secret/file"))) == "secret")
+    expect(named == "nothing" && (try File.readBytes(here.appending("two"))) == [1] && !File.exists(here.appending("pipe")))
+    expect((try Directory.list(temp.path)) == ["out", "secret"])
+    expect((try File.read(temp.path.appending("secret/file"))) == "secret")
 }
 
 @test
@@ -379,7 +379,7 @@ fn theAsyncOnesToo() async throws {
     await pipe.writer.complete()
     let reader = AsyncTarReader(pipe.reader)
     let first = try await reader.next()
-    assert(first?.name == entry.name && first!.attributes["comment"] == "y")
+    expect(first?.name == entry.name && first!.attributes["comment"] == "y")
     var all: U8[>..] = []
     while true {
         let part = try await reader.read(upTo: 100)
@@ -388,13 +388,13 @@ fn theAsyncOnesToo() async throws {
         }
         all.append(contentsOf: part)
     }
-    assert(all == bytes(1000))
-    assert((try await reader.next())?.kind == .Directory)
-    assert((try await reader.next())?.size == 10)
-    assert((try await reader.next())?.name == "skipped")
-    assert((try await reader.next())?.name == "last")
-    assert((try await reader.next()) == none)
-    assert((try await reader.next()) == none)
+    expect(all == bytes(1000))
+    expect((try await reader.next())?.kind == .Directory)
+    expect((try await reader.next())?.size == 10)
+    expect((try await reader.next())?.name == "skipped")
+    expect((try await reader.next())?.name == "last")
+    expect((try await reader.next()) == none)
+    expect((try await reader.next()) == none)
     for format in [TarFormat.Gnu] {
         let other = Pipe(pauseWriterThreshold: 1 << 20)
         let gnu = AsyncTarWriter(other.writer, format: format)
@@ -403,7 +403,7 @@ fn theAsyncOnesToo() async throws {
         try await gnu.add(link)
         await other.writer.complete()
         let back = try await AsyncTarReader(other.reader).next()
-        assert(back?.name == link.name && back?.linkTarget == link.linkTarget)
+        require(back?.name == link.name && back?.linkTarget == link.linkTarget)
     }
     let cut = Pipe()
     try await cut.writer.write(bytes(100))
@@ -412,7 +412,7 @@ fn theAsyncOnesToo() async throws {
         _ = try await AsyncTarReader(cut.reader).next()
         fail("no error")
     } catch {
-        assert(error.description() == "the stream ended before what was needed")
+        expect(error.description() == "the stream ended before what was needed")
     }
 }
 
@@ -427,8 +427,8 @@ fn tarAgrees() async throws {
         try Tar.create(temp.path.appending("ours.tar"), from: temp.path.appending("in"), format: format)
         let directory = "theirs-\(format)"
         try Directory.create(temp.path.appending(directory))
-        assert(await run("tar", ["-xf", "ours.tar", "-C", directory], in: temp.path) != none)
-        assert(try isTree(temp.path.appending(directory)), "\(format)")
+        require(await run("tar", ["-xf", "ours.tar", "-C", directory], in: temp.path) != none)
+        require(try isTree(temp.path.appending(directory)), "\(format)")
     }
     for format in ["pax", "gnutar"] {
         let made = await run("tar", ["-cf", "theirs.tar", "--format", format, "-C", "in", "."], in: temp.path)
@@ -436,9 +436,9 @@ fn tarAgrees() async throws {
             continue
         }
         try Tar.extract(temp.path.appending("theirs.tar"), to: temp.path.appending("out-\(format)"))
-        assert(try isTree(temp.path.appending("out-\(format)")), format)
+        require(try isTree(temp.path.appending("out-\(format)")), format)
     }
-    assert(await run("tar", ["-czf", "theirs.tgz", "-C", "in", "."], in: temp.path) != none)
+    expect(await run("tar", ["-czf", "theirs.tgz", "-C", "in", "."], in: temp.path) != none)
     try Tar.extract(temp.path.appending("theirs.tgz"), to: temp.path.appending("z"))
-    assert(try isTree(temp.path.appending("z")))
+    expect(try isTree(temp.path.appending("z")))
 }

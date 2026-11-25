@@ -7,17 +7,17 @@ import Sable.Testing
 fn bitsAreCountedFromTheTop() {
     let bits = AsnBitString(bytes: [0x80, 0x40], unusedBits: 6)
     assertEqual(bits.count, 10)
-    assert(bits[0] && bits[9])
+    expect(bits[0] && bits[9])
     for i in 1..<9 {
-        assert(!bits[i])
+        require(!bits[i])
     }
-    assert(bits.has(9) && !bits.has(10) && !bits.has(-1) && !bits.has(100))
+    expect(bits.has(9) && !bits.has(10) && !bits.has(-1) && !bits.has(100))
 }
 
 @test
 fn unusedBitsAreCleared() {
     let bits = AsnBitString(bytes: [0xFF], unusedBits: 3)
-    assert(bits.bytes == [0xF8])
+    expect(bits.bytes == [0xF8])
     assertEqual(bits, AsnBitString(bytes: [0xF8], unusedBits: 3))
     assertNotEqual(bits, AsnBitString(bytes: [0xF8]))
 }
@@ -25,5 +25,5 @@ fn unusedBitsAreCleared() {
 @test
 fn noBitsAreEmpty() {
     let bits = AsnBitString(bytes: [])
-    assert(bits.isEmpty && bits.count == 0 && !bits.has(0))
+    expect(bits.isEmpty && bits.count == 0 && !bits.has(0))
 }

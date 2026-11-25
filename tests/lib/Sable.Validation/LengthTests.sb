@@ -12,18 +12,18 @@ fn aLengthIsWithinBothBounds() {
     assertEqual(message("a") { $0.length(2) }, "'It' must be 2 long. It is 1 long.")
     assertEqual(message("a") { $0.minLength(2) }, "'It' must be at least 2 long. It is 1 long.")
     assertEqual(message("abc") { $0.maxLength(2) }, "'It' must be 2 long or less. It is 3 long.")
-    assert(passes("ab") { $0.length(2).minLength(2).maxLength(2) })
+    expect(passes("ab") { $0.length(2).minLength(2).maxLength(2) })
 }
 
 @test
 fn aLengthIsOfCharactersAndOfElements() {
-    assert(passes("\u{1F600}\u{1F600}") { $0.length(2) })
-    assert(passes([1, 2, 3]) { $0.length(3) })
-    assert(!passes([1, 2, 3]) { $0.maxLength(2) })
+    expect(passes("\u{1F600}\u{1F600}") { $0.length(2) })
+    expect(passes([1, 2, 3]) { $0.length(3) })
+    expect(!passes([1, 2, 3]) { $0.maxLength(2) })
 }
 
 @test
 fn uniqueRefusesAnElementThatRepeats() {
-    assert(passes([1, 2, 3]) { $0.unique() })
+    expect(passes([1, 2, 3]) { $0.unique() })
     assertEqual(message([1, 2, 1]) { $0.unique() }, "'It' must not repeat a value.")
 }

@@ -22,7 +22,7 @@ fn socketAddressesAreOrderedAndHashed() {
     let a = SocketAddress(.v4Loopback, port: 80)
     let b = SocketAddress(.v4Loopback, port: 81)
     let c = SocketAddress(.v6Loopback, port: 1)
-    assert(a < b && b < c && !(c < a) && a != b)
+    expect(a < b && b < c && !(c < a) && a != b)
     var seen: [SocketAddress: Int] = [:]
     seen[a] = 1
     seen[try! SocketAddress.parse("127.0.0.1:80")] = 2
@@ -35,8 +35,8 @@ fn socketAddressesAreOrderedAndHashed() {
 fn aUrlsHostIsAnAddress() {
     assertEqual((try! Url.parse("http://127.1:80/")).host!.ipAddress, IpAddress.v4Loopback)
     assertEqual((try! Url.parse("http://[2001:db8::1]/")).host!.ipAddress, try! IpAddress.parse("2001:db8::1"))
-    assert((try! Url.parse("http://[::ffff:7f00:1]/")).host!.ipAddress!.isLoopback)
-    assert((try! Url.parse("http://example.com/")).host!.ipAddress == none)
+    expect((try! Url.parse("http://[::ffff:7f00:1]/")).host!.ipAddress!.isLoopback)
+    expect((try! Url.parse("http://example.com/")).host!.ipAddress == none)
     for text in ["192.0.2.1", "2001:db8::1", "::", "::ffff:1.2.3.4"] {
         let address = try! IpAddress.parse(text)
         assertEqual(Host.address(address).ipAddress, address)

@@ -21,15 +21,15 @@ fn half(_ n: Int) -> Parsed {
 @test
 fn aSuccessIsASuccess() {
     let outcome: Parsed = .Ok(1)
-    assert(outcome.isSuccess)
-    assert(!outcome.isFailure)
+    expect(outcome.isSuccess)
+    expect(!outcome.isFailure)
 }
 
 @test
 fn aFailureIsAFailure() {
     let outcome: Parsed = .Err("no")
-    assert(outcome.isFailure)
-    assert(!outcome.isSuccess)
+    expect(outcome.isFailure)
+    expect(!outcome.isSuccess)
 }
 
 @test
@@ -37,8 +37,8 @@ fn okAndErrorGiveWhatItHolds() {
     let good: Parsed = .Ok(5)
     let bad: Parsed = .Err("no")
     assertEqual(good.ok ?? -1, 5)
-    assert(good.error == none)
-    assert(bad.ok == none)
+    expect(good.error == none)
+    expect(bad.ok == none)
     assertEqual(bad.error ?? "", "no")
 }
 
@@ -117,21 +117,21 @@ fn expectOfAFailureStopsWithTheMessage() {
 
 @test
 fn outcomesAreEqualByCaseAndContents() {
-    assert(half(4) == half(4))
-    assert(half(4) != half(6))
-    assert(half(3) == half(3))
-    assert(half(3) != half(5))
-    assert(half(4) != Parsed.Err("2"))
-    assert(Parsed.Err("2") != half(4))
+    expect(half(4) == half(4))
+    expect(half(4) != half(6))
+    expect(half(3) == half(3))
+    expect(half(3) != half(5))
+    expect(half(4) != Parsed.Err("2"))
+    expect(Parsed.Err("2") != half(4))
 }
 
 @test
 fn successesOrderBeforeFailures() {
-    assert(half(4) < half(6))
-    assert(!(half(6) < half(4)))
-    assert(half(100) < half(1))
-    assert(!(half(1) < half(100)))
-    assert(half(1) < half(3))
+    expect(half(4) < half(6))
+    expect(!(half(6) < half(4)))
+    expect(half(100) < half(1))
+    expect(!(half(1) < half(100)))
+    expect(half(1) < half(3))
 }
 
 @test

@@ -107,7 +107,7 @@ fn shown<S: Sequence>(_ sequence: S) -> String where S.Element == Substring, S.F
 @test
 fn graphemeClustersAgreeWithGraphemeBreakTest() throws {
     let cases = try breakCases("GraphemeBreakTest.txt")
-    assert(cases.count > 700, "the file is read")
+    expect(cases.count > 700, "the file is read")
     assertEqual(check(cases, { pieces($0.graphemes) }), "")
 }
 
@@ -137,21 +137,21 @@ fn lines(_ text: String) -> String[>..] {
 @test
 fn wordsAgreeWithWordBreakTest() throws {
     let cases = try breakCases("WordBreakTest.txt")
-    assert(cases.count > 1800, "the file is read")
+    expect(cases.count > 1800, "the file is read")
     assertEqual(check(cases, { pieces($0.words) }), "")
 }
 
 @test
 fn sentencesAgreeWithSentenceBreakTest() throws {
     let cases = try breakCases("SentenceBreakTest.txt")
-    assert(cases.count > 500, "the file is read")
+    expect(cases.count > 500, "the file is read")
     assertEqual(check(cases, { pieces($0.sentences) }), "")
 }
 
 @test
 fn lineBreaksAgreeWithLineBreakTest() throws {
     let cases = try breakCases("LineBreakTest.txt")
-    assert(cases.count > 15000, "the file is read")
+    expect(cases.count > 15000, "the file is read")
     assertEqual(check(cases, lines), "")
 }
 

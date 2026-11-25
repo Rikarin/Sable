@@ -24,8 +24,8 @@ fn aTasksValueIsWhatItsBodyGives() async {
 @test
 fn aTaskIsNotCancelledUntilAsked() async {
     let task = Task.spawn { Task.isCancelled }
-    assert(!(await task.value))
-    assert(!Task.isCancelled)
+    expect(!(await task.value))
+    expect(!Task.isCancelled)
 }
 
 @test
@@ -57,7 +57,7 @@ fn aDetachedTaskIsNotCancelledWithItsSpawner() async {
         return await free.value
     }
     task.cancel()
-    assert(!(await task.value))
+    expect(!(await task.value))
 }
 
 @test
@@ -70,7 +70,7 @@ fn aTaskSpawnedByACancelledOneStartsCancelled() async {
     }
     task.cancel()
     await cancelled.open()
-    assert(await task.value)
+    expect(await task.value)
 }
 
 @test
@@ -95,13 +95,13 @@ fn checkingForCancellationThrowsOnceCancelled() async {
     await checked.wait()
     task.cancel()
     await cancelled.open()
-    assert(await task.value)
+    expect(await task.value)
 }
 
 @test
 fn aSleepNotCancelledWakesAndDoesNotThrow() async {
     let slept = (try? await Task.sleep(nanoseconds: 1_000_000)) != none
-    assert(slept)
+    expect(slept)
 }
 
 @test
@@ -138,9 +138,9 @@ fn aDetachedTasksPriorityIsMedium() async {
 
 @test
 fn prioritiesAreOrderedByTheirRawValues() {
-    assert(TaskPriority.high.rawValue > TaskPriority.medium.rawValue)
-    assert(TaskPriority.medium.rawValue > TaskPriority.low.rawValue)
-    assert(TaskPriority.low.rawValue > TaskPriority.background.rawValue)
+    expect(TaskPriority.high.rawValue > TaskPriority.medium.rawValue)
+    expect(TaskPriority.medium.rawValue > TaskPriority.low.rawValue)
+    expect(TaskPriority.low.rawValue > TaskPriority.background.rawValue)
     assertEqual(TaskPriority(rawValue: 25), TaskPriority.high)
 }
 
@@ -166,9 +166,9 @@ fn aCancellationHandlerRunsAsTheTaskIsCancelled() async {
         })
     }
     await installed.wait()
-    assert(!ran.value)
+    expect(!ran.value)
     task.cancel()
-    assert(ran.value)
+    expect(ran.value)
     assertEqual(await task.value, "the task was cancelled")
 }
 
@@ -191,7 +191,7 @@ fn aCancellationHandlerRunsAtOnceIfTheTaskIsCancelledAlready() async {
     }
     task.cancel()
     await cancelled.open()
-    assert(await task.value)
+    expect(await task.value)
 }
 
 @test
@@ -216,7 +216,7 @@ fn aCancellationHandlerIsRemovedOnceItsOperationEnds() async {
     task.cancel()
     await cancelled.open()
     assertEqual(await task.value, 1)
-    assert(!ran.value)
+    expect(!ran.value)
 }
 
 @test
@@ -224,7 +224,7 @@ fn aCancellationHandlersOperationMayThrow() async {
     let thrown = try? await withTaskCancellationHandler(operation: {
         throw CancellationError()
     }, onCancel: { })
-    assert(thrown == none)
+    expect(thrown == none)
 }
 
 /// Shut until opened: what a test waits on for another task to reach a point.
@@ -271,11 +271,11 @@ fn blockingWorkThrowsWhatItsBodyThrows() async {
     } catch {
         thrown = true
     }
-    assert(thrown)
+    expect(thrown)
 }
 
 @test
 fn blockingWorkRunsAsItsTask() async {
     let task = Task.spawn { await Task.blocking { Task.isCancelled } }
-    assert(!(await task.value))
+    expect(!(await task.value))
 }

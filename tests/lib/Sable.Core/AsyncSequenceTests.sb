@@ -57,13 +57,13 @@ fn anArrayAsAnAsyncSequenceGivesItsElements() async {
     for await value in [4, 5, 6].async {
         got.append(value)
     }
-    assert(got == [4, 5, 6])
+    expect(got == [4, 5, 6])
 }
 
 @test
 fn mapTransformsEachElement() async {
     let doubled = await [1, 2, 3].async.map { $0 * 2 }.collect()
-    assert(doubled == [2, 4, 6])
+    expect(doubled == [2, 4, 6])
 }
 
 @test
@@ -72,24 +72,24 @@ fn mapMayAwait() async {
         await Task.yield()
         return "n\(value)"
     }.collect()
-    assert(labels == ["n1", "n2"])
+    expect(labels == ["n1", "n2"])
 }
 
 @test
 fn filterKeepsWhatPasses() async {
-    assert(await (1...10).async.filter { $0 % 3 == 0 }.collect() == [3, 6, 9])
+    expect(await (1...10).async.filter { $0 % 3 == 0 }.collect() == [3, 6, 9])
 }
 
 @test
 fn compactMapLeavesOutNone() async {
     let parsed = await ["1", "x", "3"].async.compactMap { try? Int.parse($0) }.collect()
-    assert(parsed == [1, 3])
+    expect(parsed == [1, 3])
 }
 
 @test
 fn prefixStopsAskingOnceItHasEnough() async {
     let source = counting(100)
-    assert(try! await source.prefix(3).collect() == [1, 2, 3])
+    expect(try! await source.prefix(3).collect() == [1, 2, 3])
     assertEqual(source.counter.asked, 3)
 }
 
@@ -97,45 +97,45 @@ fn prefixStopsAskingOnceItHasEnough() async {
 fn prefixOfMoreThanThereAreGivesAll() async {
     let source = counting(2)
     var iterator = source.prefix(5).makeAsyncIterator()
-    assert(try! await iterator.next() == 1)
-    assert(try! await iterator.next() == 2)
-    assert(try! await iterator.next() == none)
-    assert(try! await iterator.next() == none)
+    expect(try! await iterator.next() == 1)
+    expect(try! await iterator.next() == 2)
+    expect(try! await iterator.next() == none)
+    expect(try! await iterator.next() == none)
     assertEqual(source.counter.asked, 3)
 }
 
 @test
 fn prefixOfNothingAsksForNothing() async {
     let source = counting(5)
-    assert(try! await source.prefix(0).collect() == [])
+    expect(try! await source.prefix(0).collect() == [])
     assertEqual(source.counter.asked, 0)
 }
 
 @test
 fn prefixWhileStopsAtTheFirstFailure() async {
     let taken = await [1, 2, 7, 3].async.prefix(while: { $0 < 5 }).collect()
-    assert(taken == [1, 2])
+    expect(taken == [1, 2])
     var iterator = [9].async.prefix(while: { $0 < 5 }).makeAsyncIterator()
-    assert(await iterator.next() == none)
-    assert(await iterator.next() == none)
+    expect(await iterator.next() == none)
+    expect(await iterator.next() == none)
 }
 
 @test
 fn chunkedGroupsTheElements() async {
     let chunks = await (1...7).async.chunked(3).collect()
     assertEqual(chunks.count, 3)
-    assert(chunks[0] == [1, 2, 3])
-    assert(chunks[1] == [4, 5, 6])
-    assert(chunks[2] == [7])
+    expect(chunks[0] == [1, 2, 3])
+    expect(chunks[1] == [4, 5, 6])
+    expect(chunks[2] == [7])
 }
 
 @test
 fn chunkedOfAnExactMultipleHasNoShortChunk() async {
     var iterator = (1...4).async.chunked(2).makeAsyncIterator()
-    assert(await iterator.next()! == [1, 2])
-    assert(await iterator.next()! == [3, 4])
-    assert(await iterator.next() == none)
-    assert(await iterator.next() == none)
+    expect(await iterator.next()! == [1, 2])
+    expect(await iterator.next()! == [3, 4])
+    expect(await iterator.next() == none)
+    expect(await iterator.next() == none)
 }
 
 @test
@@ -161,20 +161,20 @@ fn reduceIntoChangesTheResultInPlace() async {
 @test
 fn firstWhereStopsAtTheFirstMatch() async {
     let source = counting(100)
-    assert(try! await source.first(where: { $0 > 4 }) == 5)
+    expect(try! await source.first(where: { $0 > 4 }) == 5)
     assertEqual(source.counter.asked, 5)
-    assert(try! await counting(3).first(where: { $0 > 4 }) == none)
+    expect(try! await counting(3).first(where: { $0 > 4 }) == none)
 }
 
 @test
 fn containsWhereSaysWhetherAnyMatches() async {
-    assert(await [1, 2, 3].async.contains(where: { $0 == 2 }))
-    assert(!(await [1, 2, 3].async.contains(where: { $0 == 9 })))
+    expect(await [1, 2, 3].async.contains(where: { $0 == 2 }))
+    expect(!(await [1, 2, 3].async.contains(where: { $0 == 9 })))
 }
 
 @test
 fn collectGathersEveryElement() async {
-    assert(try! await counting(4).collect() == [1, 2, 3, 4])
+    expect(try! await counting(4).collect() == [1, 2, 3, 4])
 }
 
 @test
@@ -183,13 +183,13 @@ fn anOperatorPassesTheFailureOn() async {
         _ = try await counting(2, fails: true).map { $0 * 10 }.collect()
         assert(false)
     } catch {
-        assert(error == .Down)
+        expect(error == .Down)
     }
     do {
         _ = try await counting(2, fails: true).reduce(0) { $0 + $1 }
         assert(false)
     } catch {
-        assert(error == .Down)
+        expect(error == .Down)
     }
 }
 
@@ -200,7 +200,7 @@ fn operatorsChain() async {
         .map { $0 * $0 }
         .prefix(3)
         .collect()
-    assert(result == [4, 16, 36])
+    expect(result == [4, 16, 36])
 }
 
 @test
@@ -209,7 +209,7 @@ fn zipPairsUntilEitherEnds() async {
     for await (number, name) in zip([1, 2, 3].async, ["one", "two"].async) {
         pairs.append("\(number)=\(name)")
     }
-    assert(pairs == ["1=one", "2=two"])
+    expect(pairs == ["1=one", "2=two"])
 }
 
 @test
@@ -217,9 +217,9 @@ fn zipStopsOnceTheFirstEnds() async {
     let second = counting(10)
     var iterator = zip([1].async, second).makeAsyncIterator()
     let first = try! await iterator.next()
-    assert(first != none)
-    assert(try! await iterator.next() == none)
-    assert(try! await iterator.next() == none)
+    expect(first != none)
+    expect(try! await iterator.next() == none)
+    expect(try! await iterator.next() == none)
     // The second was asked once for the pair, not again once the first ended.
     assertEqual(second.counter.asked, 1)
 }
@@ -232,6 +232,6 @@ fn zipThrowsWhatEitherThrows() async {
         _ = try await iterator.next()
         assert(false)
     } catch {
-        assert(error == .Down)
+        expect(error == .Down)
     }
 }

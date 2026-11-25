@@ -41,8 +41,8 @@ fn twoClosuresOfOneTypeAreTwo() {
     var log = ""
     withCallback({ (context: RawPtr<Opaque>) in log += "a" }) { first, firstContext in
         withCallback({ (context: RawPtr<Opaque>) in log += "b" }) { second, secondContext in
-            assert(first == second)
-            assert(firstContext != secondContext)
+            expect(first == second)
+            expect(firstContext != secondContext)
             call(first)(secondContext)
             call(first)(firstContext)
         }
@@ -70,12 +70,11 @@ union Oops: Error { Bad }
 
 @test
 fn whatTheBodyThrowsIsThrown() {
-    do {
+    expectThrows {
         try withCallback({ (context: RawPtr<Opaque>) in }) { (function: CFunction<(RawPtr<Opaque>) -> ()>, context: RawPtr<Opaque>) throws(Oops) in
-            throw Oops.Bad
-        }
-        assert(false)
-    } catch { }
+        throw Oops.Bad
+    }
+    }
 }
 
 @test

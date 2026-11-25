@@ -10,7 +10,7 @@ fn aListOfFewIsJustThem() {
     assertEqual(formatter.format(nothing), "")
     assertEqual(formatter.format(["a"]), "a")
     assertEqual(formatter.format(["a", "b"]), "a and b")
-    assert(formatter.kind == .And && formatter.locale.tag == "en")
+    expect(formatter.kind == .And && formatter.locale.tag == "en")
 }
 
 @test

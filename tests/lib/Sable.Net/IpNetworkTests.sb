@@ -28,30 +28,30 @@ fn aNetworkIsItsFirstAddressAndPrefix() {
 
 @test
 fn aNetworkContainsWhatBeginsWithItsBits() {
-    assert(network("0.0.0.0/0").contains(ip("255.255.255.255")))
-    assert(!network("0.0.0.0/0").contains(ip("::1")))
-    assert(network("::/0").contains(ip("::ffff:1.2.3.4")))
-    assert(network("172.16.0.0/12").contains(ip("172.31.255.255")))
-    assert(!network("172.16.0.0/12").contains(ip("172.32.0.0")))
-    assert(network("192.0.2.1/32").contains(ip("192.0.2.1")))
-    assert(!network("192.0.2.1/32").contains(ip("192.0.2.2")))
-    assert(network("2001:db8::/32").contains(ip("2001:db8:ffff::1")))
-    assert(!network("2001:db8::/32").contains(ip("2001:db9::")))
-    assert(network("1:2:3:4:8000::/65").contains(ip("1:2:3:4:ffff::")))
-    assert(!network("1:2:3:4:8000::/65").contains(ip("1:2:3:4:7fff::")))
-    assert(network("fe80::/10").contains(ip("fe80::1%4")))
-    assert(network("10.0.0.0/8").contains(ip("::ffff:10.9.8.7")))
-    assert(network("::ffff:10.0.0.0/104").contains(ip("::ffff:10.9.8.7")))
-    assert(!network("::ffff:10.0.0.0/104").contains(ip("10.9.8.7")))
+    expect(network("0.0.0.0/0").contains(ip("255.255.255.255")))
+    expect(!network("0.0.0.0/0").contains(ip("::1")))
+    expect(network("::/0").contains(ip("::ffff:1.2.3.4")))
+    expect(network("172.16.0.0/12").contains(ip("172.31.255.255")))
+    expect(!network("172.16.0.0/12").contains(ip("172.32.0.0")))
+    expect(network("192.0.2.1/32").contains(ip("192.0.2.1")))
+    expect(!network("192.0.2.1/32").contains(ip("192.0.2.2")))
+    expect(network("2001:db8::/32").contains(ip("2001:db8:ffff::1")))
+    expect(!network("2001:db8::/32").contains(ip("2001:db9::")))
+    expect(network("1:2:3:4:8000::/65").contains(ip("1:2:3:4:ffff::")))
+    expect(!network("1:2:3:4:8000::/65").contains(ip("1:2:3:4:7fff::")))
+    expect(network("fe80::/10").contains(ip("fe80::1%4")))
+    expect(network("10.0.0.0/8").contains(ip("::ffff:10.9.8.7")))
+    expect(network("::ffff:10.0.0.0/104").contains(ip("::ffff:10.9.8.7")))
+    expect(!network("::ffff:10.0.0.0/104").contains(ip("10.9.8.7")))
 }
 
 @test
 fn networksContainAndOverlapOthers() {
-    assert(network("10.0.0.0/8").contains(network("10.1.0.0/16")))
-    assert(!network("10.1.0.0/16").contains(network("10.0.0.0/8")))
-    assert(network("10.1.0.0/16").overlaps(network("10.0.0.0/8")))
-    assert(!network("10.1.0.0/16").overlaps(network("10.2.0.0/16")))
-    assert(!network("::/0").overlaps(network("0.0.0.0/0")))
+    expect(network("10.0.0.0/8").contains(network("10.1.0.0/16")))
+    expect(!network("10.1.0.0/16").contains(network("10.0.0.0/8")))
+    expect(network("10.1.0.0/16").overlaps(network("10.0.0.0/8")))
+    expect(!network("10.1.0.0/16").overlaps(network("10.2.0.0/16")))
+    expect(!network("::/0").overlaps(network("0.0.0.0/0")))
 }
 
 @test

@@ -34,7 +34,7 @@ fn version4IsRfc9562sExample() {
     assertEqual(id.toString(), "919108f7-52d1-4320-9bac-f847db4148a8")
     assertEqual(id.version, 4)
     assertEqual(id.variant, 2)
-    assert(id.timestamp == none)
+    expect(id.timestamp == none)
 }
 
 @test
@@ -95,7 +95,7 @@ fn bytesGoInOrder() {
     let slice: U8[>..] = [0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]
     assertEqual(UUID.fromBytes(slice), id)
     let short: U8[>..] = [1, 2]
-    assert(UUID.fromBytes(short) == none)
+    expect(UUID.fromBytes(short) == none)
 }
 
 @test
@@ -113,8 +113,8 @@ fn randomOnesDifferAndTimeOrderedOnesSort() {
     var generator = SeededRandomNumberGenerator(seed: 9)
     let earlier = UUID.timeOrdered(milliseconds: 1000, using: &generator)
     let later = UUID.timeOrdered(milliseconds: 1001, using: &generator)
-    assert(earlier < later)
-    assert(UUID.nil < earlier && later < UUID.max)
+    expect(earlier < later)
+    expect(UUID.nil < earlier && later < UUID.max)
     let now = UUID.timeOrdered()
-    assert(now.timestamp! > 1700000000000)
+    expect(now.timestamp! > 1700000000000)
 }

@@ -73,7 +73,7 @@ fn thePersonnelRecord() {
         "31 1f 61 11 1a05 52616c7068 1a01 54 1a05 536d697468 a0 0a 43 08 3139353731313131",
         "31 1f 61 11 1a05 537573616e 1a01 42 1a05 4a6f6e6573 a0 0a 43 08 3139353930373137",
     ].joined(separator: " ")
-    assert(try! writer.bytes() == hex(expected))
+    expect(try! writer.bytes() == hex(expected))
 
     var reader = AsnReader(hex(expected), rules: .Ber)
     var record = try! reader.readSet(tag: .application(0))
@@ -95,7 +95,7 @@ fn thePersonnelRecord() {
     assertEqualText(orders.joined(separator: " "), "[APPLICATION 1] [APPLICATION 2] [0] [1] [2] [3]")
     let refused = AsnReader(hex(expected), rules: .Der)
     var copy = refused
-    assert((try? copy.readSet(tag: .application(0))) == none)
+    expect((try? copy.readSet(tag: .application(0))) == none)
 }
 
 // ---- RFC 5280 Appendix C ---------------------------------------------------
@@ -236,7 +236,7 @@ fn digestInfo(_ signature: U8[>..]) -> U8[>..] {
     while message[i] == 0xFF {
         i += 1
     }
-    assert(message[0] == 1 && message[i] == 0)
+    expect(message[0] == 1 && message[i] == 0)
     return message[i + 1..<message.count].toArray()
 }
 
@@ -290,7 +290,7 @@ fn theExampleCertificate() {
     var keyBits = try! key.readBitStringContents()
     assertEqual(keyBits.position, 223)
     var rsa = try! keyBits.readSequence()
-    assert(try! rsa.readBigInt() == BigInt(bytes: modulus(), endian: .Big, signed: false))
+    expect(try! rsa.readBigInt() == BigInt(bytes: modulus(), endian: .Big, signed: false))
     assertEqual(rsa.position, 358)
     assertEqual(try! rsa.readInt(), 65537)
     var tagged = try! inner.readExplicit(.context(3))
@@ -423,6 +423,6 @@ fn aDigestInfo() {
         }
         var expected = hex(head)
         expected.append(contentsOf: digest)
-        assert(try! writer.bytes() == expected)
+        expect(try! writer.bytes() == expected)
     }
 }

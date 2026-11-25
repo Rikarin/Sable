@@ -31,18 +31,18 @@ fn theProgramsOwnSymbolsAreFound() {
         let absolute: ((CInt) -> CInt)? = program.symbol("abs")
         assertEqual(absolute!(-3), 3)
     }
-    assert(program.contains("malloc"))
-    assert(!program.contains("surely_no_such_symbol"))
-    assert(!program.contains("str\u{0}len"))
-    assert(program.path.isEmpty)
+    expect(program.contains("malloc"))
+    expect(!program.contains("surely_no_such_symbol"))
+    expect(!program.contains("str\u{0}len"))
+    expect(program.path.isEmpty)
 }
 
 @test
 fn aSymbolThatIsNotThereIsAnError() {
     unsafe {
         let nothing: (() -> ())? = DynamicLibrary.program.symbol("surely_no_such_symbol")
-        assert(nothing == none)
-        assert(DynamicLibrary.program.variable("surely_no_such_symbol", as: CInt.self) == none)
+        expect(nothing == none)
+        expect(DynamicLibrary.program.variable("surely_no_such_symbol", as: CInt.self) == none)
         do {
             let _: () -> () = try DynamicLibrary.program.function("surely_no_such_symbol")
             assert(false)
@@ -63,7 +63,7 @@ fn aLibraryThatIsNotThereIsAnError() {
             assert(false)
         } catch .NotLoaded(let library, let reason) {
             assertEqual(library, name)
-            assert(!reason.isEmpty)
+            require(!reason.isEmpty)
         } catch {
             assert(false)
         }
@@ -80,7 +80,7 @@ fn aLibrarysNameIsChecked() {
             assert(false)
         } catch {
             assertEqual(error, LibraryError.NotLoaded(library: name, reason: reason))
-            assert(error.description().hasPrefix("'\(name)' could not be loaded: "))
+            require(error.description().hasPrefix("'\(name)' could not be loaded: "))
         }
     }
 }
@@ -93,7 +93,7 @@ fn zlibIsLoadedAndCalled() {
     }
     unsafe {
         let version: () -> CStr = try! library.function("zlibVersion")
-        assert(version().string.hasPrefix("1."))
+        expect(version().string.hasPrefix("1."))
 
         let crc32: (CUnsignedLong, RawPtr<U8>, CUnsignedInt) -> CUnsignedLong = try! library.function("crc32")
         let check = "123456789".utf8Bytes().withPointer { bytes in crc32(0, bytes, 9) }
@@ -111,7 +111,7 @@ fn zlibIsLoadedAndCalled() {
             }
         }
         assertEqual(deflated, 0)
-        assert(Int(size) < text.count / 10)
+        expect(Int(size) < text.count / 10)
         var restored = U8[>..](repeating: 0, count: text.count)
         var restoredSize = CUnsignedLong(restored.count)
         let inflated = restored.withMutablePointer { (into: RawPtr<U8>) -> CInt in
@@ -136,17 +136,17 @@ fn aFunctionKeepsItsLibraryOpen() {
         }
     }
     if let version {
-        assert(version().string.hasPrefix("1."))
+        expect(version().string.hasPrefix("1."))
     }
 }
 
 @test
 fn aLibraryIsOpenedByItsPathAndKnowsIt() {
     if let library = zlib() {
-        assert(!library.path.isEmpty)
-        assert(library.contains("adler32"))
+        expect(!library.path.isEmpty)
+        expect(library.contains("adler32"))
         unsafe {
-            assert((try? DynamicLibrary.open(library.path, global: true)) != none)
+            expect((try? DynamicLibrary.open(library.path, global: true)) != none)
         }
     }
 }

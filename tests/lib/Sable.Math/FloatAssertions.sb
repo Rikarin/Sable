@@ -23,13 +23,13 @@ public let nan32: F32 = F32.fromBits(0x7FC0_0000)
 /// (so +0.0 and -0.0 differ).
 public fn assertSame(_ actual: F64, _ expected: F64) {
     let same = actual != actual ? expected != expected : actual.bits == expected.bits
-    assert(same, "expected \(expected), got \(actual)")
+    expect(same, "expected \(expected), got \(actual)")
 }
 
 /// Fails unless the two are the same float.
 public fn assertSame(_ actual: F32, _ expected: F32) {
     let same = actual != actual ? expected != expected : actual.bits == expected.bits
-    assert(same, "expected \(expected), got \(actual)")
+    expect(same, "expected \(expected), got \(actual)")
 }
 
 /// How many floats apart two finite floats are: 0 for the same one, 1 for
@@ -48,12 +48,12 @@ public fn ulpDistance(_ a: F32, _ b: F32) -> I128 {
 /// Fails unless the value is within so many units in the last place of the
 /// reference (a correctly rounded value, from a high-precision source).
 public fn assertWithin(_ actual: F64, _ expected: F64, ulps: Int) {
-    assert(ulpDistance(actual, expected) <= I128(ulps), "expected \(expected) within \(ulps) ulp, got \(actual)")
+    expect(ulpDistance(actual, expected) <= I128(ulps), "expected \(expected) within \(ulps) ulp, got \(actual)")
 }
 
 /// Fails unless the value is within so many units in the last place of the reference.
 public fn assertWithin(_ actual: F32, _ expected: F32, ulps: Int) {
-    assert(ulpDistance(actual, expected) <= I128(ulps), "expected \(expected) within \(ulps) ulp, got \(actual)")
+    expect(ulpDistance(actual, expected) <= I128(ulps), "expected \(expected) within \(ulps) ulp, got \(actual)")
 }
 
 // A float's place among all floats: its bits, read so that the order of

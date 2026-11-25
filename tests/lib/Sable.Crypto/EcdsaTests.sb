@@ -43,7 +43,7 @@ fn checkRfc<C: EllipticCurve>(_ curve: C.Type, _ secret: String, _ message: Stri
     let key = try! EcdsaPrivateKey<C>(hex(secret))
     let made = key.sign(text(message), hash: hash, deterministic: true)
     assertEqual(Hex.encode(made.bytes), signature)
-    assert(key.publicKey.isValid(made, for: text(message), hash: hash))
+    expect(key.publicKey.isValid(made, for: text(message), hash: hash))
 }
 
 // RFC 6979 A.2.5 to A.2.7.
@@ -63,13 +63,13 @@ fn theRfcsSignaturesAreMade() {
 fn opensslsSignaturesAreValid() {
     let p256 = try! EcdsaPublicKey<P256>.parse(pem: opensslP256)
     let first = try! EcdsaSignature<P256>(der: hex("3046022100bb56b7f1ad7fc4a27336c4f656e30172ada559dfc095901bf1279f8f247cab98022100d60192a868246979ee2a22ed0052f27d01c9b9e94d1a03d9db4bad5d48c3ab74"))
-    assert(p256.isValid(first, for: text("a message")) && !p256.isValid(first, for: text("another")))
+    expect(p256.isValid(first, for: text("a message")) && !p256.isValid(first, for: text("another")))
     let p384 = try! EcdsaPublicKey<P384>.parse(pem: opensslP384)
     let second = try! EcdsaSignature<P384>(der: hex("3065023100b7d8f3813c6536a79520590ec6c99d5f90d7e30aab4ddb6ca7382a98261326f63132235f8ba964f501deece486b0c24602301ec0bfac87f04d63a07422a3ce5d3f6b8900b5a4b402aad830e786e7bb36b3928d3773d13d6f7bd7a1f06689237092ad"))
-    assert(p384.isValid(second, for: text("a message")) && !p384.isValid(second, for: text("another")))
+    expect(p384.isValid(second, for: text("a message")) && !p384.isValid(second, for: text("another")))
     let p521 = try! EcdsaPublicKey<P521>.parse(pem: opensslP521)
     let third = try! EcdsaSignature<P521>(der: hex("308188024201f2d1a3ba306350afbb767b650dd5b29cd657fe5aafc6703e7a594388e7c22abbde9ea242bcfce3d4159215b131f3068f92fdab87288381a085d3edb0ce9a4066e702420126612bc30ccfae54070b2610c258c00c153074251cff871a63e458d63a06cc57b2ccb5e8043efec8f396e8318c9f5d13a1c8742c243c11002922b1937ef733565c"))
-    assert(p521.isValid(third, for: text("a message")) && !p521.isValid(third, for: text("another")))
+    expect(p521.isValid(third, for: text("a message")) && !p521.isValid(third, for: text("another")))
 }
 
 fn checkOwn<C: EllipticCurve>(_ curve: C.Type) {
@@ -78,12 +78,12 @@ fn checkOwn<C: EllipticCurve>(_ curve: C.Type) {
         let signature = key.sign(text("a message"), hash: hash)
         assert(key.publicKey.isValid(signature, for: text("a message"), hash: hash))
         assert(!key.publicKey.isValid(signature, for: text("another"), hash: hash))
-        assert(try! EcdsaSignature<C>(der: signature.der) == signature)
-        assert(try! EcdsaSignature<C>(signature.bytes) == signature)
+        assertEqual(try! EcdsaSignature<C>(der: signature.der), signature)
+        assertEqual(try! EcdsaSignature<C>(signature.bytes), signature)
     }
     // Two are not alike: the nonce has random bytes in it.
-    assert(key.sign([1]) != key.sign([1]))
-    assert(key.sign([1], deterministic: true) == key.sign([1], deterministic: true))
+    expect(key.sign([1]) != key.sign([1]))
+    expect(key.sign([1], deterministic: true) == key.sign([1], deterministic: true))
     // Any digest, longer than the order or of nothing.
     for count in [0, 1, 20, 66, 100] {
         let digest = U8[>..](repeating: 0xFF, count: count)
@@ -108,12 +108,12 @@ fn numbersASignatureDoesNotHaveAreNotValid() {
         for s in [zero, order, U8[>..](repeating: 0xFF, count: 32)] {
             var bytes = r
             bytes.append(contentsOf: s)
-            assert(!key.publicKey.isValid(try! EcdsaSignature<P256>(bytes), for: [1]))
+            require(!key.publicKey.isValid(try! EcdsaSignature<P256>(bytes), for: [1]))
         }
     }
-    assert((try? EcdsaSignature<P256>([1, 2])) == none)
-    assert(EcdsaSignature<P256>.self != EcdsaSignature<P384>.self)
-    assert(key.sign([1]).debugDescription().hasPrefix("EcdsaSignature<P256>("))
+    expect((try? EcdsaSignature<P256>([1, 2])) == none)
+    expect(EcdsaSignature<P256>.self != EcdsaSignature<P384>.self)
+    expect(key.sign([1]).debugDescription().hasPrefix("EcdsaSignature<P256>("))
 }
 
 @test
@@ -121,27 +121,27 @@ fn derIsReadStrictly() {
     // Right; a length in two bytes; a zero too many; negative; something after;
     // a number too long; three of them.
     let bad = ["308106020101020101", "300702020001020101", "3006020181020101", "300602010102010100", "30060201010201", "3009020101020101020101"]
-    assert((try? EcdsaSignature<P256>(der: hex("3006020101020101"))) != none)
+    expect((try? EcdsaSignature<P256>(der: hex("3006020101020101"))) != none)
     for each in bad {
         assert((try? EcdsaSignature<P256>(der: hex(each))) == none)
     }
     var long: U8[>..] = [0x30, 0x26, 0x02, 0x21, 0x01]
     long.append(repeating: 0, count: 32)
     long.append(contentsOf: [0x02, 0x01, 0x01])
-    assert((try? EcdsaSignature<P256>(der: long)) == none)
+    expect((try? EcdsaSignature<P256>(der: long)) == none)
 }
 
 @test
 fn scalarsAreFromOneToTheOrder() {
-    assert((try? EcdsaPrivateKey<P256>(U8[>..](repeating: 0, count: 32))) == none)
-    assert((try? EcdsaPrivateKey<P256>(hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"))) == none)
-    assert((try? EcdsaPrivateKey<P256>(U8[>..](repeating: 1, count: 31))) == none)
+    expect((try? EcdsaPrivateKey<P256>(U8[>..](repeating: 0, count: 32))) == none)
+    expect((try? EcdsaPrivateKey<P256>(hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"))) == none)
+    expect((try? EcdsaPrivateKey<P256>(U8[>..](repeating: 1, count: 31))) == none)
     let last = try! EcdsaPrivateKey<P256>(hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550"))
     let first = try! EcdsaPrivateKey<P256>(hex("0000000000000000000000000000000000000000000000000000000000000001"))
     // Opposite points: the base point and its negative.
     assertEqual(Hex.encode(first.publicKey.compressed), "036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296")
     assertEqual(Hex.encode(last.publicKey.compressed), "026b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296")
-    assert(first.publicKey.isValid(first.sign([1]), for: [1]) && last.publicKey.isValid(last.sign([1]), for: [1]))
-    assert(first != last && first.debugDescription() == "EcdsaPrivateKey<P256>")
+    expect(first.publicKey.isValid(first.sign([1]), for: [1]) && last.publicKey.isValid(last.sign([1]), for: [1]))
+    expect(first != last && first.debugDescription() == "EcdsaPrivateKey<P256>")
     assertEqual(Hex.encode(last.bytes()), "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550")
 }

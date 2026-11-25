@@ -27,7 +27,7 @@ fn theStandardsCaseHasItsKey() {
     assertEqual("\(Digest(extracted.bytes()))", "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5")
     let key = try! Hkdf<Sha256>.deriveKey(from: secret, salt: salt, info: info, byteCount: 42)
     assertEqual("\(Digest(key.bytes()))", "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865")
-    assert((try! Hkdf<Sha256>.expand(extracted, info: info, byteCount: 42)) == key)
+    expect((try! Hkdf<Sha256>.expand(extracted, info: info, byteCount: 42)) == key)
 }
 
 @test
@@ -47,6 +47,6 @@ fn aKeyOfMoreThan255DigestsIsRefused() {
     let secret = SymmetricKey(message(32))
     assertEqual((try! Hkdf<Sha256>.deriveKey(from: secret, byteCount: 255 * 32)).byteCount, 255 * 32)
     assertEqual((try! Hkdf<Sha256>.deriveKey(from: secret, byteCount: 0)).byteCount, 0)
-    assert((try? Hkdf<Sha256>.deriveKey(from: secret, byteCount: 255 * 32 + 1)) == none)
-    assert((try? Hkdf<Sha256>.deriveKey(from: secret, byteCount: -1)) == none)
+    expect((try? Hkdf<Sha256>.deriveKey(from: secret, byteCount: 255 * 32 + 1)) == none)
+    expect((try? Hkdf<Sha256>.deriveKey(from: secret, byteCount: -1)) == none)
 }

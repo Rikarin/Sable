@@ -16,21 +16,21 @@ fn aRangeOfAStringIsAPieceOfIt() {
     let text = "naïve café"
     let space = text.firstIndex(of: ' ')!
     let word = text[..<space]
-    assert(word == "naïve")
-    assert(word.base == text)
+    expect(word == "naïve")
+    expect(word.base == text)
     assertEqual(word.startIndex, text.startIndex)
     assertEqual(word.endIndex, space)
     assertEqual(word.count, 5)
     assertEqual(word.utf8Count, 6)
-    assert(!word.isEmpty)
-    assert(text[space..<space].isEmpty)
+    expect(!word.isEmpty)
+    expect(text[space..<space].isEmpty)
 }
 
 @test
 fn theWholeOfAStringIsAPieceOfItself() {
     let whole = Substring("abc")
     assertEqual(whole.count, 3)
-    assert(whole.base == "abc")
+    expect(whole.base == "abc")
     assertEqual(whole.asSubstring.utf8Count, 3)
     assertEqual("abc".asSubstring.endIndex.utf8Offset, 3)
 }
@@ -69,10 +69,10 @@ fn aPieceIsReadAtItsStringsIndices() {
 fn aPieceOfAPieceIsAPieceOfTheSameString() {
     let text = "naïve café"
     let word = text[..<text.firstIndex(of: ' ')!]
-    assert(word[^3...] == "ïve")
-    assert(word[word.index(after: word.startIndex)...] == "aïve")
-    assert(word[1..<^1] == "aïv")
-    assert(word[^2...].base == text)
+    expect(word[^3...] == "ïve")
+    expect(word[word.index(after: word.startIndex)...] == "aïve")
+    expect(word[1..<^1] == "aïv")
+    expect(word[^2...].base == text)
 }
 
 @test
@@ -83,7 +83,7 @@ fn aPieceIsASequenceOfItsScalars() {
         seen = seen + String.fromChar(c)
     }
     assertEqual(seen, "aé!")
-    assert(text[^4..<^1].map({ c in c.codePoint }) == [97, 233, 33])
+    expect(text[^4..<^1].map({ c in c.codePoint }) == [97, 233, 33])
 }
 
 @test(traps: "string index out of range")
@@ -132,15 +132,15 @@ fn aPieceEqualsAndOrdersAsItsString() {
     let text = "apple banana"
     let apple = text[..<text.firstIndex(of: ' ')!]
     let banana = text[text.index(after: text.firstIndex(of: ' ')!)...]
-    assert(apple == "apple" && "apple" == apple)
-    assert(apple != "apples" && "appl" != apple)
-    assert(apple == Substring("apple"))
-    assert(apple != banana)
-    assert(apple < banana)
-    assert(apple < "b" && "a" < apple)
-    assert(!(banana < apple))
-    assert(!(apple < "apple"))
-    assert(apple >= Substring("apple"))
+    expect(apple == "apple" && "apple" == apple)
+    expect(apple != "apples" && "appl" != apple)
+    expect(apple == Substring("apple"))
+    expect(apple != banana)
+    expect(apple < banana)
+    expect(apple < "b" && "a" < apple)
+    expect(!(banana < apple))
+    expect(!(apple < "apple"))
+    expect(apple >= Substring("apple"))
 }
 
 @test
@@ -149,7 +149,7 @@ fn aPieceHashesAsItsString() {
     let key = text[..<text.firstIndex(of: '=')!]
     assertEqual(key.hashValue, "key".hashValue)
     assertEqual(text[text.index(atScalar: 4)...].hashValue, "value".hashValue)
-    assert(key.hashValue != "kex".hashValue)
+    expect(key.hashValue != "kex".hashValue)
 }
 
 @test
@@ -161,8 +161,8 @@ fn aStringDictionaryIsLookedUpByAPiece() {
     assertEqual(ports[scheme[..<scheme.index(atScalar: 4)]], 80)
     assertEqual(ports[url[^3...]], none)
     assertEqual(ports[url[^3...], default: 0], 0)
-    assert(ports.contains(scheme))
-    assert(!ports.contains(url[^3...]))
+    expect(ports.contains(scheme))
+    expect(!ports.contains(url[^3...]))
     let empty: [String: Int] = [:]
     assertEqual(empty[scheme], none)
 }
@@ -187,7 +187,7 @@ fn aLargeDictionaryIsProbedByAPiece() {
     for word in text.asSubstring.split(" ") {
         found.append(table[word, default: -1])
     }
-    assert(found == [-1, 1, 2, -1, 151, 299, -1, -1])
+    expect(found == [-1, 1, 2, -1, 151, 299, -1, -1])
     var hits = 0
     i = 0
     while i < 400 {
@@ -214,11 +214,11 @@ fn aPieceIsWrittenAsItsString() {
 fn aPieceIsAPattern() {
     let text = "one, two, three"
     let comma = text[text.index(atScalar: 3)..<text.index(atScalar: 5)]
-    assert(text.contains(comma))
-    assert(text.split(comma) == ["one", "two", "three"])
+    expect(text.contains(comma))
+    expect(text.split(comma) == ["one", "two", "three"])
     assertEqual(text.lastIndex(of: comma)?.utf8Offset, 8)
-    assert(!text.hasPrefix(comma))
-    assert("x, ".hasSuffix(comma))
+    expect(!text.hasPrefix(comma))
+    expect("x, ".hasSuffix(comma))
     assertEqual(text.count(of: comma), 2)
     assertEqual(text.firstIndex(of: Substring(", t")), text.firstIndex(of: comma))
     assertEqual("".firstIndex(of: comma), none)
@@ -229,15 +229,15 @@ fn aPieceIsAPattern() {
 fn searchingAPieceStaysInsideIt() {
     let text = "a=1;b=2;c=3"
     let middle = text[text.index(atScalar: 4)..<text.index(atScalar: 7)]
-    assert(middle == "b=2")
-    assert(!middle.contains(";"))
-    assert(!middle.contains("a"))
-    assert(middle.hasPrefix("b") && middle.hasSuffix("2"))
-    assert(!middle.hasPrefix(";") && !middle.hasSuffix(";"))
-    assert(!middle.hasPrefix('a') && !middle.hasSuffix('c'))
-    assert(middle.hasPrefix('b') && middle.hasSuffix('2'))
-    assert(!middle.contains(CharSet("ac")))
-    assert(!middle.hasPrefix(CharSet(";")) && !middle.hasSuffix(CharSet(";")))
+    expect(middle == "b=2")
+    expect(!middle.contains(";"))
+    expect(!middle.contains("a"))
+    expect(middle.hasPrefix("b") && middle.hasSuffix("2"))
+    expect(!middle.hasPrefix(";") && !middle.hasSuffix(";"))
+    expect(!middle.hasPrefix('a') && !middle.hasSuffix('c'))
+    expect(middle.hasPrefix('b') && middle.hasSuffix('2'))
+    expect(!middle.contains(CharSet("ac")))
+    expect(!middle.hasPrefix(CharSet(";")) && !middle.hasSuffix(CharSet(";")))
     assertEqual(middle.firstIndex(of: "=")?.utf8Offset, 5)
     assertEqual(middle.lastIndex(of: "=")?.utf8Offset, 5)
     assertEqual(middle.lastIndex(of: CharSet("=a"))?.utf8Offset, 5)
@@ -252,18 +252,18 @@ fn aPiecesCutsArePiecesOfTheSameString() {
     let fields = line.asSubstring.split(";")
     assertEqual(fields.count, 2)
     let pair = fields[0].splitOnce("=")!
-    assert(pair.0.trimmed() == "name" && pair.1.trimmed() == "sable")
-    assert(pair.1.base == line)
+    expect(pair.0.trimmed() == "name" && pair.1.trimmed() == "sable")
+    expect(pair.1.base == line)
     let size = fields[1].splitLastOnce('=')!
     assertEqual(size.1.trimmed().toInt(), 3)
-    assert(fields[1].trimmedStart() == "size = 3  ")
-    assert(fields[1].trimmedEnd() == " size = 3")
-    assert(fields[0].trimmingPrefix("  ").trimmingSuffix(" ") == "name = sable")
+    expect(fields[1].trimmedStart() == "size = 3  ")
+    expect(fields[1].trimmedEnd() == " size = 3")
+    expect(fields[0].trimmingPrefix("  ").trimmingSuffix(" ") == "name = sable")
     assertEqual(fields[1].splitWhitespace().count, 3)
     assertEqual(line.asSubstring.lines().count, 1)
-    assert(line.asSubstring.trimmed(where: { c in c == ' ' }).hasPrefix("name"))
-    assert(line[^2...].trimmed().isEmpty && line[^4...].trimmed() == "3")
-    assert(line[^2...].isBlank)
+    expect(line.asSubstring.trimmed(where: { c in c == ' ' }).hasPrefix("name"))
+    expect(line[^2...].trimmed().isEmpty && line[^4...].trimmed() == "3")
+    expect(line[^2...].isBlank)
 }
 
 @test
@@ -289,7 +289,7 @@ fn aPieceParsesWhereItLies() {
     assertEqual(after(fields[1], 2).toI8(), -4)
     assertEqual(after(fields[2], 2).toF64(), 2.5)
     let flag: Bool = try! after(fields[3], 3).parse()
-    assert(flag)
+    expect(flag)
     assertEqual(try! Char.parse(after(fields[4], 2)), 'é')
     assertEqual(try! String.parse(after(fields[4], 2)), "é")
     assertEqual(fields[0].toInt(), none)

@@ -26,49 +26,49 @@ fn check<T: Comparable & Hashable>(_ low: T, _ high: T) -> Bool {
 
 @test
 fn signedIntegersConform() {
-    assert(check(-1, 1))
-    assert(check(I8(-1), I8(1)))
-    assert(check(I16(-300), I16(300)))
-    assert(check(I32(-70000), I32(70000)))
-    assert(check(I64(-1), I64(5)))
-    assert(check(I128(-1), I128(1) << 100))
+    expect(check(-1, 1))
+    expect(check(I8(-1), I8(1)))
+    expect(check(I16(-300), I16(300)))
+    expect(check(I32(-70000), I32(70000)))
+    expect(check(I64(-1), I64(5)))
+    expect(check(I128(-1), I128(1) << 100))
 }
 
 @test
 fn unsignedIntegersConform() {
-    assert(check(U8(1), U8(255)))
-    assert(check(U16(1), U16(65535)))
-    assert(check(U32(1), U32(4000000000)))
-    assert(check(U64(1), U64(2)))
-    assert(check(UInt(1), UInt(2)))
-    assert(check(U128(1), U128(1) << 64))
+    expect(check(U8(1), U8(255)))
+    expect(check(U16(1), U16(65535)))
+    expect(check(U32(1), U32(4000000000)))
+    expect(check(U64(1), U64(2)))
+    expect(check(UInt(1), UInt(2)))
+    expect(check(U128(1), U128(1) << 64))
 }
 
 @test
 fn floatsConform() {
-    assert(check(F16(0.5), F16(1.5)))
-    assert(check(F32(0.25), F32(2.5)))
-    assert(check(-1.5, 1.5))
+    expect(check(F16(0.5), F16(1.5)))
+    expect(check(F32(0.25), F32(2.5)))
+    expect(check(-1.5, 1.5))
     assertEqual(hashOf(0.0), hashOf(-0.0))
 }
 
 @test
 fn stringsConformByScalar() {
-    assert(check("abc", "abd"))
-    assert(check("ab", "abc"))
-    assert(before("z", "é"), "UTF-8's byte order is the scalars' order")
+    expect(check("abc", "abd"))
+    expect(check("ab", "abc"))
+    expect(before("z", "é"), "UTF-8's byte order is the scalars' order")
 }
 
 @test
 fn charactersConform() {
-    assert(check('a', 'b'))
+    expect(check('a', 'b'))
 }
 
 @test
 fn booleansAreEquatableAndHashable() {
-    assert(same(true, true))
-    assert(!same(true, false))
-    assert(hashOf(true) != hashOf(false))
+    expect(same(true, true))
+    expect(!same(true, false))
+    expect(hashOf(true) != hashOf(false))
 }
 
 @test

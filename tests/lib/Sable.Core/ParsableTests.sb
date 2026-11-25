@@ -49,7 +49,7 @@ fn aBoolIsTrueOrFalse() {
     assertEqual(try! Bool.parse("true"), true)
     assertEqual(try! Bool.parse("false"), false)
     let parsed: Bool = try! "true".parse()
-    assert(parsed)
+    expect(parsed)
 }
 
 @test

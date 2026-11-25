@@ -61,7 +61,7 @@ fn illFormedUtf8ThrowsWhereItIs() {
         assertEqual(error.validUpTo, 1)
         assertEqual(error.errorLength ?? 0, 2)
     }
-    assert(caught, "the error was thrown")
+    expect(caught, "the error was thrown")
 }
 
 @test
@@ -91,7 +91,7 @@ fn anUnpairedSurrogateThrowsWhereItIs() {
     } catch {
         index = error.index
         assertEqual(error.debugDescription(), "unpaired surrogate at code unit 2")
-        assert(error == Utf16Error(index: 2) && error != Utf16Error(index: 1), "errors compare by index")
+        expect(error == Utf16Error(index: 2) && error != Utf16Error(index: 1), "errors compare by index")
     }
     assertEqual(index, 2)
 }
@@ -101,7 +101,7 @@ fn utf32BecomesTextWhenEachCodeIsAScalar() {
     var codes: U32[>..] = [0x61, 0x20AC, 0x1F600]
     assertEqual(String.fromUtf32(codes) ?? "?", "a€😀")
     codes.append(0xD800)
-    assert(String.fromUtf32(codes) == none, "a surrogate is no scalar")
+    expect(String.fromUtf32(codes) == none, "a surrogate is no scalar")
 }
 
 @test
@@ -114,21 +114,21 @@ fn latin1BytesAreTheirOwnScalars() {
 @test
 fn asciiBytesBecomeTextOnlyWhenAscii() {
     assertEqual(String.fromAscii(bytes([0x6F, 0x6B])) ?? "?", "ok")
-    assert(String.fromAscii(bytes([0x6F, 0xE9])) == none, "0xE9 is not ASCII")
+    expect(String.fromAscii(bytes([0x6F, 0xE9])) == none, "0xE9 is not ASCII")
 }
 
 @test
 fn encodingToEachForm() {
     let text = "a€😀"
-    assert(text.utf8Bytes() == bytes([0x61, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80]), "UTF-8")
-    assert(text.utf16Units() == units([0x61, 0x20AC, 0xD83D, 0xDE00]), "UTF-16")
+    expect(text.utf8Bytes() == bytes([0x61, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80]), "UTF-8")
+    expect(text.utf16Units() == units([0x61, 0x20AC, 0xD83D, 0xDE00]), "UTF-16")
     assertEqual(text.utf16Count, 4)
     let codes: U32[>..] = [0x61, 0x20AC, 0x1F600]
-    assert(text.utf32Units() == codes, "UTF-32")
-    assert("café".latin1Bytes()! == bytes([0x63, 0x61, 0x66, 0xE9]), "Latin-1")
-    assert(text.latin1Bytes() == none, "€ is not Latin-1")
-    assert("ok".asciiBytes()! == bytes([0x6F, 0x6B]), "ASCII")
-    assert("café".asciiBytes() == none, "é is not ASCII")
+    expect(text.utf32Units() == codes, "UTF-32")
+    expect("café".latin1Bytes()! == bytes([0x63, 0x61, 0x66, 0xE9]), "Latin-1")
+    expect(text.latin1Bytes() == none, "€ is not Latin-1")
+    expect("ok".asciiBytes()! == bytes([0x6F, 0x6B]), "ASCII")
+    expect("café".asciiBytes() == none, "é is not ASCII")
 }
 
 @test

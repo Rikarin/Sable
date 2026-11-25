@@ -59,12 +59,7 @@ async fn whatMustBeWaitedForIs() {
         await Task.yield()
         return "late"
     }
-    do {
-        _ = try builder.build()
-        assert(false)
-    } catch {
-        assertEqual(error.description(), "String (\"name\") must be waited for: 'buildAsync' builds them")
-    }
+    expectThrows(saying: "String (\"name\") must be waited for: 'buildAsync' builds them") { _ = try builder.build() }
     let host = try! await builder.buildAsync()
     try! await host.run()
     assertEqual(ledger.all, "late ran disposed")

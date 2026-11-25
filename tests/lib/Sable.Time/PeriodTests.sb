@@ -24,8 +24,8 @@ fn periodsKeepTheirPartsApart() {
     assertEqual(Period.years(1) + Period.months(2) + Period.days(3), Period.of(years: 1, months: 2, days: 3))
     assertEqual(Period.of(years: 1, months: 2, days: 3) - Period.days(3), Period.of(years: 1, months: 2))
     assertEqual(Period.of(months: 1, days: -2).negated(), Period.of(months: -1, days: 2))
-    assert(Period.zero.isZero)
-    assert(!Period.days(1).isZero)
+    expect(Period.zero.isZero)
+    expect(!Period.days(1).isZero)
     assertEqual(Period.days(1).hashValue, Period.days(1).hashValue)
 }
 

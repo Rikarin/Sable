@@ -54,8 +54,8 @@ fn mapAndFilterGoThroughAGenerator() {
 fn reduceAndCountGoThroughAGenerator() {
     assertEqual(evens(upTo: 10).reduce(0, { $0 + $1 }), 30)
     assertEqual(evens(upTo: 10).count(where: { $0 > 4 }), 3)
-    assert(evens(upTo: 10).contains(6))
-    assert(!evens(upTo: 10).contains(7))
+    expect(evens(upTo: 10).contains(6))
+    expect(!evens(upTo: 10).contains(7))
 }
 
 @test
@@ -90,7 +90,7 @@ fn generatorsZipAndEnumerate() {
         pairs = pairs + "\(i)\(w)"
     }
     assertEqualText(pairs, "0a1b2c")
-    assert(evens(upTo: 4).elementsEqual([0, 2, 4]))
+    expect(evens(upTo: 4).elementsEqual([0, 2, 4]))
 }
 
 extension Sequence {

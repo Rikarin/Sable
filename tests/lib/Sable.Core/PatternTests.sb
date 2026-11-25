@@ -90,7 +90,7 @@ fn aTestMatchesWhatItAccepts() {
     let text = "ab1é2"
     assertEqual(text.firstIndex(where: { c in c.isDigit })!.utf8Offset, 2)
     assertEqual(text.lastIndex(where: { c in c.isDigit })!.utf8Offset, 5)
-    assert(text.hasPrefix(CharSet.asciiLetters), "a chars as a prefix")
+    expect(text.hasPrefix(CharSet.asciiLetters), "a chars as a prefix")
     assertEqual(text.trimmingPrefix(CharSet("a")), "b1é2")
     assertEqual(text.trimmingSuffix(CharSet("2")), "ab1é")
     assertEqual(text.trimmingSuffix(CharSet("x")), text)
@@ -100,8 +100,8 @@ fn aTestMatchesWhatItAccepts() {
 
 @test
 fn aTestAtEitherEnd() {
-    assert("1ab".hasPrefix(where: { c in c.isDigit }), "a digit first")
-    assert(!"a1".hasPrefix(where: { c in c.isDigit }) && !"".hasPrefix(where: { c in c.isDigit }), "no digit first")
-    assert("ab2".hasSuffix(where: { c in c.isDigit }), "a digit last")
-    assert(!"2a".hasSuffix(where: { c in c.isDigit }) && !"".hasSuffix(where: { c in c.isDigit }), "no digit last")
+    expect("1ab".hasPrefix(where: { c in c.isDigit }), "a digit first")
+    expect(!"a1".hasPrefix(where: { c in c.isDigit }) && !"".hasPrefix(where: { c in c.isDigit }), "no digit first")
+    expect("ab2".hasSuffix(where: { c in c.isDigit }), "a digit last")
+    expect(!"2a".hasSuffix(where: { c in c.isDigit }) && !"".hasSuffix(where: { c in c.isDigit }), "no digit last")
 }

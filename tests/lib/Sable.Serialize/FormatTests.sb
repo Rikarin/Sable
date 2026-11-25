@@ -342,14 +342,14 @@ fn aDerivedTypeGoesThroughAnyFormat() throws {
         try written(record),
         "struct Record ?(key name, string r, key version, uint 3, key light, case Green, key ids, seq 3(int 1, string a, null), key shape, case Circle(struct Circle 1(key radius, float 1.5)), key note, null)"
     )
-    assert((try back(record)) == record)
+    expect((try back(record)) == record)
     assertEqual(try written(Meta { version: 1, light: .Red }), "struct Meta 2(key version, uint 1, key light, case Red)")
     assertEqual(try written(Shape.Point(1, 2)), "case Point(seq 2(int 1, int 2))")
     assertEqual(try written(Event.Key(code: 2)), "struct Event 2(key type, string Key, key code, int 2)")
     let events: Event[>..] = [.Key(code: 2), .Idle]
-    assert((try back(events)) == events)
+    expect((try back(events)) == events)
     let shapes: Shape[>..] = [.Point(1, 2), .Empty]
-    assert((try back(shapes)) == shapes)
+    expect((try back(shapes)) == shapes)
 }
 
 @test
@@ -361,12 +361,12 @@ fn theLibrarysConformancesDoToo() throws {
     var unique = Set<Int>()
     _ = unique.insert(4)
     assertEqual(try written(unique), "seq 1(int 4)")
-    assert((try back(unique)) == unique)
-    assert((try back(Duration.seconds(2))) == Duration.seconds(2))
+    expect((try back(unique)) == unique)
+    expect((try back(Duration.seconds(2))) == Duration.seconds(2))
     let moment = UtcDateTime.fromUnix(1700000000)
-    assert((try back(moment)) == moment)
-    assert(try back(true))
-    assert((try back(2.5)) == 2.5)
+    expect((try back(moment)) == moment)
+    expect(try back(true))
+    expect((try back(2.5)) == 2.5)
 }
 
 @test

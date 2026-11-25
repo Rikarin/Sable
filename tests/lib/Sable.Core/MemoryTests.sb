@@ -33,8 +33,8 @@ fn valuesAreSwappedReplacedAndTaken() {
     assertEqual(a, "new")
     var held: String? = "taken"
     assertEqual(Memory.take(&held), "taken")
-    assert(held == none)
-    assert(Memory.take(&held) == none)
+    expect(held == none)
+    expect(Memory.take(&held) == none)
 }
 
 @test
@@ -56,7 +56,7 @@ fn nativeMemoryIsAllocatedAlignedAndZeroed() {
 
 @test
 fn aNonNullPointerIsNeverNull() {
-    assert(NonNull<Int>.from(RawPtr<Int>.null) == none)
+    expect(NonNull<Int>.from(RawPtr<Int>.null) == none)
     let found = NonNull<Int>.from(RawPtr<Int>(address: 64))
     assertEqual(found!.pointer.address, 64)
     assertEqual(found!.debugDescription(), "0x40")
@@ -100,7 +100,7 @@ fn nonNullPointersAreEqualAndHashAsTheirPointers() {
     let a = NonNull<Int>.from(RawPtr<Int>(address: 64))!
     let b = NonNull<Int>.from(RawPtr<Int>(address: 64))!
     let c = NonNull<Int>.from(RawPtr<Int>(address: 72))!
-    assert(a == b && a != c)
+    expect(a == b && a != c)
     assertEqual(a.hashValue, b.hashValue)
     let names: [NonNull<Int>: String] = [a: "a", c: "c"]
     assertEqual(names[b], "a")

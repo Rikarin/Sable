@@ -43,16 +43,16 @@ fn aGroupsResultsComeInTheOrderTheChildrenFinish() async {
         }
         return order
     }
-    assert(order == [1, 2, 3])
+    expect(order == [1, 2, 3])
 }
 
 @test
 fn aGroupWithNoChildrenGivesNone() async {
     let first = await withTaskGroup(of: Int.self) { group in
-        assert(group.isEmpty)
+        expect(group.isEmpty)
         return await group.next()
     }
-    assert(first == none)
+    expect(first == none)
 }
 
 @test
@@ -79,11 +79,11 @@ fn waitingForAllEmptiesTheGroup() async {
     let empty = await withTaskGroup(of: Int.self) { group in
         group.spawn { 1 }
         group.spawn { await after(1, 2) }
-        assert(!group.isEmpty)
+        expect(!group.isEmpty)
         await group.waitForAll()
         return group.isEmpty
     }
-    assert(empty)
+    expect(empty)
 }
 
 @test
@@ -94,10 +94,10 @@ fn cancellingAGroupCancelsItsChildrenAndThoseSpawnedAfter() async {
             await later.wait()
             return Task.isCancelled
         }
-        assert(!group.isCancelled)
+        expect(!group.isCancelled)
         group.cancelAll()
         await later.open()
-        assert(group.isCancelled)
+        expect(group.isCancelled)
         group.spawn { Task.isCancelled }
         var all = true
         for await one in group {
@@ -105,7 +105,7 @@ fn cancellingAGroupCancelsItsChildrenAndThoseSpawnedAfter() async {
         }
         return all
     }
-    assert(cancelled)
+    expect(cancelled)
 }
 
 @test
@@ -114,7 +114,7 @@ fn aChildMayBeGivenAPriority() async {
         group.spawn(priority: .low) { Task.currentPriority }
         return await group.next()
     }
-    assert(priority == TaskPriority.low)
+    expect(priority == TaskPriority.low)
 }
 
 @test
@@ -127,7 +127,7 @@ fn aThrowingGroupGivesResultsAndErrorsInTheirTurn() async {
         }
         return results
     }
-    assert((results ?? []) == [2])
+    expect((results ?? []) == [2])
 
     var caught = ""
     do {
@@ -153,10 +153,10 @@ fn aThrowingGroupsBodyThatThrowsCancelsTheChildrenLeft() async {
             }
             return 1
         }
-        assert(!group.isCancelled)
+        expect(!group.isCancelled)
         throw CancellationError()
     }
-    assert(thrown == none)
+    expect(thrown == none)
     assertEqual(log.text, "cancelled")
 }
 
@@ -167,7 +167,7 @@ fn waitingForAllOfAThrowingGroupThrowsTheFirstError() async {
         try await withThrowingTaskGroup(of: Int.self) { group in
             group.spawn { 1 }
             group.spawn(priority: .high) { try await even(5) }
-            assert(!group.isEmpty)
+            expect(!group.isEmpty)
             try await group.waitForAll()
             return 0
         }
@@ -181,13 +181,13 @@ fn waitingForAllOfAThrowingGroupThrowsTheFirstError() async {
 fn aThrowingGroupCancelledCancelsItsChildren() async {
     let cancelled = try? await withThrowingTaskGroup(of: Bool.self) { group in
         group.cancelAll()
-        assert(group.isCancelled)
+        expect(group.isCancelled)
         group.spawn { Task.isCancelled }
         let first = try await group.next() ?? false
-        assert(group.isEmpty)
+        expect(group.isEmpty)
         return first
     }
-    assert(cancelled ?? false)
+    expect(cancelled ?? false)
 }
 
 /// Shut until opened: what a test waits on for another task to reach a point.

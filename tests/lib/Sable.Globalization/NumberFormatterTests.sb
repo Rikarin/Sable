@@ -47,7 +47,7 @@ fn everyNumberTypeIsWrittenAndReadByALocale() {
     assertEqual(try! Decimal.parse("1.234,50", locale: german), Decimal(123450, scale: 2))
     assertEqual(try! U8.parse("255", locale: german), 255)
     let tooLarge: U8? = try? U8.parse("256", locale: german)
-    assert(tooLarge == none)
+    expect(tooLarge == none)
 }
 
 @test
@@ -121,11 +121,11 @@ fn whatIsNotFiniteHasTheLocalesWords() {
     assertEqual(infinite.format(.currency("CHF"), locale: locale("en")), "CHF∞")
     assertEqual(infinite.format(.scientific, locale: locale("en")), "∞")
     assertEqual(infinite.format(.decimal, locale: .invariant), "inf")
-    assert((try! F64.parse("-∞", locale: locale("en"))) == 0.0 - infinite)
+    expect((try! F64.parse("-∞", locale: locale("en"))) == 0.0 - infinite)
     let nan = try! F64.parse("NaN", locale: locale("en"))
-    assert(nan != nan)
+    expect(nan != nan)
     let all = try! F64.parse("∞%", format: .percent, locale: locale("en"))
-    assert(all == infinite)
+    expect(all == infinite)
 }
 
 @test
@@ -235,7 +235,7 @@ fn aFormatterIsMadeOnceForMany() {
     let read: Decimal = try! formatter.parse("$1,234.56")
     assertEqual(read, Decimal(123456, scale: 2))
     assertEqual(formatter.locale.tag, "en")
-    assert(formatter.numberFormat.kind == .Currency("usd"))
+    expect(formatter.numberFormat.kind == .Currency("usd"))
 }
 
 // A Decimal is written out and read by its digits; an F64 and an Int of few
@@ -289,10 +289,10 @@ fn aFloatThatIsNoPlainDecimalIsRounded() {
     assertEqual(german.format(1e15 + 0.5), "1.000.000.000.000.000,5")
     assertEqual(german.format(Int.min), "-9.223.372.036.854.775.808")
     for wrong in ["1.23", "1.2345", "12.34.567", ",", "-", "1,2,3", ".123", "1..234", "1.234.", "1,234.567"] {
-        assert(readError(wrong, "de") != none, wrong)
+        require(readError(wrong, "de") != none, wrong)
     }
     let big: F64 = try! german.parse("123.456.789.012.345.678.901")
     assertEqual(big, 1.2345678901234568e20)
     let zero: F64 = try! german.parse("-0")
-    assert(1.0 / zero < 0.0)
+    expect(1.0 / zero < 0.0)
 }

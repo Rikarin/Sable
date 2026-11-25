@@ -96,12 +96,12 @@ fn tzif(version: U8, at change: Int, footer: String) -> U8[>..] {
 fn utcAndFixedZonesNeverChange() {
     let utc = TimeZone.utc
     assertEqual(utc.id, "UTC")
-    assert(utc.isFixed)
+    expect(utc.isFixed)
     assertEqual(utc.offset(at: moment(2026, 1, 1, 0)), UtcOffset.utc)
     assertEqual(utc.abbreviation(at: moment(2026, 1, 1, 0)), "UTC")
-    assert(!utc.isDaylightSaving(at: moment(2026, 1, 1, 0)))
-    assert(utc.nextTransition(after: moment(2026, 1, 1, 0)) == none)
-    assert(utc.previousTransition(before: moment(2026, 1, 1, 0)) == none)
+    expect(!utc.isDaylightSaving(at: moment(2026, 1, 1, 0)))
+    expect(utc.nextTransition(after: moment(2026, 1, 1, 0)) == none)
+    expect(utc.previousTransition(before: moment(2026, 1, 1, 0)) == none)
     let fixed = TimeZone.fixed(UtcOffset.of(hours: 5, minutes: 45)!)
     assertEqual(fixed.id, "+05:45")
     assertEqual(fixed.offset(at: moment(1900, 1, 1, 0)).toString(), "+05:45")
@@ -115,7 +115,7 @@ fn utcAndFixedZonesNeverChange() {
 fn posixRulesSayWhenDaylightSavingIs() {
     let zone = try! TimeZone.posix("CET-1CEST,M3.5.0,M10.5.0/3")
     assertEqual(zone.id, "CET-1CEST,M3.5.0,M10.5.0/3")
-    assert(!zone.isFixed)
+    expect(!zone.isFixed)
     assertEqual(zone.offset(at: moment(2040, 1, 1, 0)).toString(), "+01:00")
     assertEqual(zone.offset(at: moment(2040, 7, 1, 0)).toString(), "+02:00")
     assertEqual(zone.abbreviation(at: moment(2040, 1, 1, 0)), "CET")
@@ -127,7 +127,7 @@ fn posixRulesSayWhenDaylightSavingIs() {
     assertEqual(spring.abbreviation, "CEST")
     let autumn = zone.nextTransition(after: spring.instant)!
     assertEqual(autumn.instant, moment(2040, 10, 28, 1))
-    assert(!autumn.isDaylightSaving)
+    expect(!autumn.isDaylightSaving)
     assertEqual(zone.previousTransition(before: autumn.instant)!, spring)
     assertEqual(zone.previousTransition(before: moment(2040, 1, 1, 0))!.instant, moment(2039, 10, 30, 1))
     assertEqual(autumn.debugDescription(), "2040-10-28T01:00:00Z +01:00 CET")
@@ -142,11 +142,11 @@ fn posixRulesHaveEveryForm() {
     assertEqual(eastern.nextTransition(after: moment(2030, 1, 1, 0))!.instant, moment(2030, 3, 10, 7))
     // No daylight saving at all, in angle brackets.
     let india = try! TimeZone.posix("<+0530>-5:30")
-    assert(india.isFixed)
+    expect(india.isFixed)
     assertEqual(india.abbreviation(at: moment(2030, 1, 1, 0)), "+0530")
     assertEqual(india.offset(at: moment(2030, 1, 1, 0)).toString(), "+05:30")
-    assert(india.nextTransition(after: moment(2030, 1, 1, 0)) == none)
-    assert(india.previousTransition(before: moment(2030, 1, 1, 0)) == none)
+    expect(india.nextTransition(after: moment(2030, 1, 1, 0)) == none)
+    expect(india.previousTransition(before: moment(2030, 1, 1, 0)) == none)
     // The southern hemisphere, half an hour of daylight saving.
     let lordHowe = try! TimeZone.posix("<+1030>-10:30<+11>-11,M10.1.0,M4.1.0")
     assertEqual(lordHowe.offset(at: moment(2030, 1, 1, 0)).toString(), "+11:00")
@@ -171,7 +171,7 @@ fn aMalformedPosixRuleIsSaidToBe() {
         "CET-1CEST,M3,M10.5.0", "CET-1CEST,M3.5,M10.5.0", "CET-168", "CET-1:", "CET-1:00:", "CET-1CEST,M3.5.0/x,M10.5.0",
         "CET-1CEST,M3.5.0,M10.5.0/x", "CET-1CEST!", "CET-1CEST,M3.5.0,x", "CET-1 ",
     ] {
-        assert(posixError(rule) != none, "\(rule) is not a rule")
+        expect(posixError(rule) != none, "\(rule) is not a rule")
     }
 }
 
@@ -205,12 +205,12 @@ fn aMalformedTZifFileIsSaidToBe() {
     assertEqual(tzifError([]), TimeZoneError.Malformed(id: "Test/Zone"))
     var bad = tzif(version: 0x32, at: 0, footer: "BBB-2")
     bad[0] = 0x55
-    assert(tzifError(bad) != none)
+    expect(tzifError(bad) != none)
     bad = tzif(version: 0x32, at: 0, footer: "not a rule")
-    assert(tzifError(bad) != none)
+    expect(tzifError(bad) != none)
     bad = tzif(version: 0x32, at: 0, footer: "BBB-2")
     _ = bad.removeLast()
-    assert(tzifError(bad) != none)
+    expect(tzifError(bad) != none)
     bad = tzif(version: 0x32, at: 0, footer: "BBB-2")
     var truncated: U8[>..] = []
     for byte in bad {
@@ -218,19 +218,19 @@ fn aMalformedTZifFileIsSaidToBe() {
             truncated.append(byte)
         }
     }
-    assert(tzifError(truncated) != none)
+    expect(tzifError(truncated) != none)
     // A change to a type that is not there.
     bad = tzif(version: 0, at: 0, footer: "")
     bad[48] = 7
-    assert(tzifError(bad) != none)
+    expect(tzifError(bad) != none)
     // An abbreviation past the characters.
     bad = tzif(version: 0, at: 0, footer: "")
     bad[54] = 9
-    assert(tzifError(bad) != none)
+    expect(tzifError(bad) != none)
     // No types.
     bad = tzif(version: 0, at: 0, footer: "")
     bad[39] = 0
-    assert(tzifError(bad) != none)
+    expect(tzifError(bad) != none)
 }
 
 @test
@@ -248,7 +248,7 @@ fn anIdNamesAFileInTheDatabaseAndNothingElse() {
     assertEqual(TimeZoneError.Malformed(id: "x").debugDescription(), "TimeZoneError.Malformed(id: \"x\")")
     assertEqual(TimeZoneError.Skipped(at).debugDescription(), "TimeZoneError.Skipped(2026-03-08T02:00:00)")
     assertEqual(TimeZoneError.Ambiguous(at).debugDescription(), "TimeZoneError.Ambiguous(2026-03-08T02:00:00)")
-    assert(TimeZoneError.Skipped(at) != TimeZoneError.Ambiguous(at))
+    expect(TimeZoneError.Skipped(at) != TimeZoneError.Ambiguous(at))
 }
 
 @test
@@ -257,9 +257,9 @@ fn theDatabaseListsItsZones() {
         return
     }
     let ids = TimeZone.identifiers()
-    assert(ids.contains("Europe/Prague"))
-    assert(ids.contains("America/Argentina/Buenos_Aires"))
-    assert(!ids.contains("posixrules"))
+    expect(ids.contains("Europe/Prague"))
+    expect(ids.contains("America/Argentina/Buenos_Aires"))
+    expect(!ids.contains("posixrules"))
     for id in ids {
         assert(!id.hasPrefix("posix/") && !id.hasPrefix("right/"), id)
     }
@@ -296,7 +296,7 @@ fn theSystemZoneIsTheOneTZNames() {
     unsafe {
         _ = Runtime.removeEnvironment("TZ")
     }
-    assert(!TimeZone.system().id.isEmpty)
+    expect(!TimeZone.system().id.isEmpty)
 }
 
 @test

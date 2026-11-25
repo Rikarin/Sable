@@ -5,6 +5,7 @@ module HarnessTests
 // when it fails is in tests/Sable.CodeGen.Tests/TestFeatureTests.cs. Run with
 //     tools/stdlib-coverage.sh Sable.Testing
 
+import Sable.Math
 import Sable.Testing
 
 @derive(Equatable, Debug)
@@ -211,6 +212,37 @@ fn aSnapshotIsOfItsCase(_ text: String) {
     assertSnapshot(text)
     assertSnapshot([text], named: "in an array")
     assertSnapshot(text + "\n" + text)
+}
+
+// Counts those there are.
+final class Counted {
+    static let alive: Atomic<Int> = Atomic(0)
+
+    init() { _ = Counted.alive.add(1) }
+
+    deinit { _ = Counted.alive.add(-1) }
+
+    var one: Int => 1
+}
+
+@test
+fn anExpectationKeepsNothingOnceItHolds() {
+    expect(Counted().one == 1)
+    expect(Counted.alive.load() == 0)
+    require(Counted().one == 1)
+    assertEqual(Counted.alive.load(), 0)
+}
+
+@test
+fn anArrayOfSoManyIsOfAllOfThem() {
+    var longest = 0
+    var total = 0
+    forAll(Gen.number(in: 0...9).array(count: 0...300)) { (xs: Int[>..]) in
+        longest = max(longest, xs.count)
+        total += xs.count
+    }
+    expect(longest > 200)
+    expect(total > 5000)
 }
 
 @test

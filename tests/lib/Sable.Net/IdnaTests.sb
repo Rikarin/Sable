@@ -142,7 +142,7 @@ fn everyLineOfIdnaTestV2() throws {
     }
     print("IdnaTestV2: \(checked) lines checked, \(skipped) skipped, \(failures.count) failed")
     assertEqual(failures.count, 0)
-    assert(checked > 4000)
+    expect(checked > 4000)
 }
 
 @test
@@ -155,7 +155,7 @@ fn punycodeRoundTrips() {
     // RFC 3492's sample (A): Arabic (Egyptian).
     let arabic = Punycode.decode("egbpdaj6bu4bxfgehfvwxn")!
     assertEqual(Punycode.encode(arabic) ?? "-", "egbpdaj6bu4bxfgehfvwxn")
-    assert(Punycode.decode("ü") == none)
-    assert(Punycode.decode("a-!") == none)
-    assert(Punycode.decode("99999999999") == none)
+    expect(Punycode.decode("ü") == none)
+    expect(Punycode.decode("a-!") == none)
+    expect(Punycode.decode("99999999999") == none)
 }

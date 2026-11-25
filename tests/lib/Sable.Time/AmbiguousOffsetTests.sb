@@ -7,13 +7,13 @@ import Sable.Time
 fn ambiguousOffsetsCompareByCaseAndOffsets() {
     let one = UtcOffset.hours(1)
     let two = UtcOffset.hours(2)
-    assert(AmbiguousOffset.Unambiguous(offset: one) == .Unambiguous(offset: one))
-    assert(AmbiguousOffset.Unambiguous(offset: one) != .Unambiguous(offset: two))
-    assert(AmbiguousOffset.Gap(before: one, after: two) == .Gap(before: one, after: two))
-    assert(AmbiguousOffset.Gap(before: one, after: two) != .Gap(before: one, after: one))
-    assert(AmbiguousOffset.Fold(before: two, after: one) == .Fold(before: two, after: one))
-    assert(AmbiguousOffset.Fold(before: two, after: one) != .Gap(before: two, after: one))
-    assert(AmbiguousOffset.Gap(before: one, after: two).unambiguous == none)
+    expect(AmbiguousOffset.Unambiguous(offset: one) == .Unambiguous(offset: one))
+    expect(AmbiguousOffset.Unambiguous(offset: one) != .Unambiguous(offset: two))
+    expect(AmbiguousOffset.Gap(before: one, after: two) == .Gap(before: one, after: two))
+    expect(AmbiguousOffset.Gap(before: one, after: two) != .Gap(before: one, after: one))
+    expect(AmbiguousOffset.Fold(before: two, after: one) == .Fold(before: two, after: one))
+    expect(AmbiguousOffset.Fold(before: two, after: one) != .Gap(before: two, after: one))
+    expect(AmbiguousOffset.Gap(before: one, after: two).unambiguous == none)
 }
 
 @test

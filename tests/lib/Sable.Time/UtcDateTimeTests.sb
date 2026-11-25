@@ -17,7 +17,7 @@ fn aUtcDateTimeHasItsCalendarFields() {
     assertEqual(moment.date, Date.of(year: 2026, month: 11, day: 17)!)
     assertEqual(moment.timeOfDay, TimeOfDay.of(hour: 9, minute: 5, second: 3, nanosecond: 250000000)!)
     assertEqual(moment.local.toString(), "2026-11-17T09:05:03.25")
-    assert(UtcDateTime.of(year: 2026, month: 11, day: 31, hour: 0, minute: 0, second: 0) == none)
+    expect(UtcDateTime.of(year: 2026, month: 11, day: 31, hour: 0, minute: 0, second: 0) == none)
     assertEqual(UtcDateTime.unixEpoch, UtcDateTime.fromUnix(0))
 }
 
@@ -51,9 +51,9 @@ fn aUtcDateTimeReadsPatternsAndISO8601() {
 
 @test
 fn nowIsAfterTheIssueWasWritten() {
-    assert(UtcDateTime.now() > UtcDateTime.of(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0)!)
-    assert(Date.today().year >= 2026)
-    assert(LocalDateTime.now().year >= 2026)
-    assert(OffsetDateTime.now().year >= 2026)
-    assert(ZonedDateTime.now().year >= 2026)
+    expect(UtcDateTime.now() > UtcDateTime.of(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0)!)
+    expect(Date.today().year >= 2026)
+    expect(LocalDateTime.now().year >= 2026)
+    expect(OffsetDateTime.now().year >= 2026)
+    expect(ZonedDateTime.now().year >= 2026)
 }

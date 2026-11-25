@@ -13,7 +13,7 @@ fn theLimitsAreTheWidthsBounds() {
     assertEqual(U128.zero, 0)
     assertEqual(U128.one, 1)
     assertEqual(U128.bitWidth, 128)
-    assert(!U128.isSigned, "U128 is unsigned")
+    expect(!U128.isSigned, "U128 is unsigned")
 }
 
 @test
@@ -26,30 +26,30 @@ fn theLimitsPrintInDecimal() {
 fn addingPastTheGreatestValueWrapsSaturatesOrReportsIt() {
     assertEqual(U128.max.wrappingAdd(1), U128.min)
     assertEqual(U128.max.saturatingAdd(1), U128.max)
-    assert(U128.max.checkedAdd(1) == none, "the sum does not fit")
+    expect(U128.max.checkedAdd(1) == none, "the sum does not fit")
     let (sum, overflowed) = U128.max.overflowingAdd(1)
     assertEqual(sum, U128.min)
-    assert(overflowed, "the sum overflowed")
+    expect(overflowed, "the sum overflowed")
 }
 
 @test
 fn subtractingPastTheLeastValueWrapsSaturatesOrReportsIt() {
     assertEqual(U128.min.wrappingSub(1), U128.max)
     assertEqual(U128.min.saturatingSub(1), U128.min)
-    assert(U128.min.checkedSub(1) == none, "the difference does not fit")
+    expect(U128.min.checkedSub(1) == none, "the difference does not fit")
     let (difference, overflowed) = U128.min.overflowingSub(1)
     assertEqual(difference, U128.max)
-    assert(overflowed, "the difference overflowed")
+    expect(overflowed, "the difference overflowed")
 }
 
 @test
 fn multiplyingPastTheLimitsWrapsSaturatesOrReportsIt() {
     assertEqual(U128.max.wrappingMul(2), U128.max - 1)
     assertEqual(U128.max.saturatingMul(2), U128.max)
-    assert(U128.max.checkedMul(2) == none, "the product does not fit")
+    expect(U128.max.checkedMul(2) == none, "the product does not fit")
     let (product, overflowed) = U128.max.overflowingMul(2)
     assertEqual(product, U128.max - 1)
-    assert(overflowed, "the product overflowed")
+    expect(overflowed, "the product overflowed")
     let (high, low) = U128.max.multipliedFullWidth(by: U128.max)
     assertEqual(high, 340282366920938463463374607431768211454)
     assertEqual(low, 1)
@@ -80,8 +80,8 @@ fn rotationsAndSwapsWorkAtTheWidth() {
 
 @test
 fn conversionsStopAtTheLimits() {
-    assert(U128.exactly(U128.max) == U128.max, "only a U128 holds U128's greatest value")
-    assert(U128.exactly(I128.min) == none, "only an I128 holds I128's least value")
+    expect(U128.exactly(U128.max) == U128.max, "only a U128 holds U128's greatest value")
+    expect(U128.exactly(I128.min) == none, "only an I128 holds I128's least value")
     assertEqual(U128.clamping(U128.max), U128.max)
     assertEqual(U128.clamping(I128.min), U128.min)
     assertEqual(U128.truncating(U128.max), U128.max)
@@ -92,7 +92,7 @@ fn conversionsStopAtTheLimits() {
 fn theRemainderOfTheLeastValueByMinusOneIsZero() {
     assertEqual(U128.max.wrappingDiv(U128.max), 1)
     assertEqual(U128.max.wrappingRem(2), 1)
-    assert(U128.max.checkedDiv(0) == none, "there is no quotient by zero")
+    expect(U128.max.checkedDiv(0) == none, "there is no quotient by zero")
 }
 
 @test(traps: "integer overflow")
@@ -113,18 +113,18 @@ fn subtractingPastTheLeastValueTraps() {
 fn negatingAnUnsignedValueWrapsOrSaturates() {
     assertEqual(U128.one.wrappingNeg(), U128.max)
     assertEqual(U128.one.saturatingNeg(), 0)
-    assert(U128.one.checkedNeg() == none, "an unsigned type has no -1")
+    expect(U128.one.checkedNeg() == none, "an unsigned type has no -1")
     assertEqual(U128.zero.checkedNeg() ?? 1, 0)
     assertEqual(U128.max.abs(), U128.max)
 }
 
 @test
 fn shortAndLongTextsAreParsed() throws {
-    assert(try U128.parse("0") == 0)
-    assert(try U128.parse("12") == 12)
-    assert(try U128.parse("+7f", radix: 16) == 127)
-    assert(try U128.parse("340282366920938463463374607431768211455") == U128.max)
-    assert((try? U128.parse("-1")) == none)
-    assert((try? U128.parse("340282366920938463463374607431768211456")) == none)
-    assert((try? U128.parse("1x")) == none)
+    expect(try U128.parse("0") == 0)
+    expect(try U128.parse("12") == 12)
+    expect(try U128.parse("+7f", radix: 16) == 127)
+    expect(try U128.parse("340282366920938463463374607431768211455") == U128.max)
+    expect((try? U128.parse("-1")) == none)
+    expect((try? U128.parse("340282366920938463463374607431768211456")) == none)
+    expect((try? U128.parse("1x")) == none)
 }

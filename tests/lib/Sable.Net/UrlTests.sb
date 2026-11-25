@@ -87,5 +87,5 @@ fn everyCaseOfWptsUrlTestData() throws {
     }
     print("urltestdata.json: \(checked) cases, \(failures.count) failed")
     assertEqual(failures.count, 0)
-    assert(checked > 800)
+    expect(checked > 800)
 }

@@ -8,9 +8,9 @@ fn instantsMeasureTheMonotonicClock() {
     let start = Instant.now()
     let later = start.adding(Duration.milliseconds(5))
     assertEqual(later.durationSince(start), Duration.milliseconds(5))
-    assert(start < later)
-    assert(start == start)
-    assert(start.elapsed >= Duration.zero)
+    expect(start < later)
+    expect(start == start)
+    expect(start.elapsed >= Duration.zero)
 }
 
 @test

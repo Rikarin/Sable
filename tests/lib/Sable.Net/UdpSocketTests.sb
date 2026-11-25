@@ -289,3 +289,43 @@ fn aClosedSocketsCallsThrow() async {
         assert(false, error.description())
     }
 }
+
+@test
+fn aClosedSocketSaysSoWhateverIsAsked() async {
+    let a = try! loopback()
+    let group = try! IpAddress.parse("ff02::1")
+    a.close()
+    assert((await thrown { try a.connect(to: SocketAddress(IpAddress.v4Loopback, port: 9)) }) != "")
+    assert((await thrown { try await a.send([1]) }) != "")
+    assert((await thrown {
+        let _ = try await a.receive()
+    }) != "")
+    assert((await thrown { try a.setMulticastInterface(1) }) != "")
+    assert((await thrown {
+        let _ = try a.multicastLoop()
+    }) != "")
+    assert((await thrown { try a.setMulticastLoop(true) }) != "")
+    assert((await thrown {
+        let _ = try a.multicastHopLimit()
+    }) != "")
+    assert((await thrown { try a.setMulticastHopLimit(1) }) != "")
+    assert((await thrown {
+        let _ = try a.broadcast()
+    }) != "")
+    assert((await thrown { try a.setBroadcast(true) }) != "")
+    assert((await thrown {
+        let _ = try a.receiveBufferSize()
+    }) != "")
+    assert((await thrown { try a.setReceiveBufferSize(4096) }) != "")
+    assert((await thrown {
+        let _ = try a.sendBufferSize()
+    }) != "")
+    assert((await thrown { try a.setSendBufferSize(4096) }) != "")
+    assert((await thrown {
+        let _ = try a.hopLimit()
+    }) != "")
+    assert((await thrown { try a.setHopLimit(1) }) != "")
+    assert((await thrown { try a.join(group: group) }) != "")
+    assert((await thrown { try a.leave(group: group) }) != "")
+    assert(a.peerAddress == none)
+}

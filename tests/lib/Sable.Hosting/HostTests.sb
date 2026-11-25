@@ -285,6 +285,8 @@ fn aTermSignalStopsTheHost() async {
     assert(record.all.hasSuffix("end-a stop-a"), record.all)
 }
 
+// On Windows a hangup is the console closing, and always stops.
+#if !os(windows)
 @test
 fn aHangupReloads() async {
     let record = Record()
@@ -302,6 +304,8 @@ fn aHangupReloads() async {
     Signals.raise(.Interrupt)
     assertEqual(await running.value, "")
 }
+
+#endif
 
 @test
 fn aHangupMayStop() async {

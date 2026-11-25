@@ -53,7 +53,7 @@ public sealed partial class SilGen {
     // What a type is, to a mirror
     // -----------------------------------------------------------------------
 
-    enum Shape { Scalar, Struct, Class, Tuple, Union, Enum, Optional, Array, Dictionary, Opaque }
+    enum Shape { Scalar, Struct, Class, Tuple, Union, Structural, Enum, Optional, Array, Dictionary, Opaque }
 
     /// <summary>How a value of the type is taken apart; <see cref="Shape.Opaque" /> for what is only named.</summary>
     Shape ShapeOf(TypeSymbol type, SilType lowered) =>
@@ -69,6 +69,9 @@ public sealed partial class SilGen {
             (NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } named, ClassType) when !named.OriginalDefinition.Equals(Core.Task) => Shape.Class,
             (NamedTypeSymbol { TypeKind: TypeKind.Union }, EnumType) => Shape.Union,
             (NamedTypeSymbol { TypeKind: TypeKind.Enum }, EnumType) => Shape.Enum,
+
+            // 'Early | Late': the value it holds.
+            (StructuralUnionTypeSymbol union, EnumType cases) when cases.Cases.Count == union.Cases.Length => Shape.Structural,
             _ => Shape.Opaque,
         };
 
@@ -178,7 +181,7 @@ public sealed partial class SilGen {
                 return;
             }
 
-            case Shape.Union or Shape.Enum or Shape.Optional: {
+            case Shape.Union or Shape.Structural or Shape.Enum or Shape.Optional: {
                 var enumType = (EnumType)value.Type;
                 var targets = new List<(int, SilBlock)>();
                 var arms = new List<(SilBlock Block, Arm Arm)>();
@@ -191,6 +194,8 @@ public sealed partial class SilGen {
                         var payload = block.AddArgument(payloadType, !payloadType.IsTrivial);
                         if (shape == Shape.Optional) {
                             parts.Add(new("some", ((OptionalTypeSymbol)type).UnderlyingType, _ => (payload, false)));
+                        } else if (shape == Shape.Structural) {
+                            parts.Add(new("value", ((StructuralUnionTypeSymbol)type).Cases[c], _ => (payload, false)));
                         } else if (IsIndirect(enumType, c)) {
                             // A boxed payload: each part copied out of the box.
                             var fields = PayloadOf((NamedTypeSymbol)type, caseName);
@@ -537,6 +542,12 @@ public sealed partial class SilGen {
             // An optional is its value, or 'none'.
             if (shape == Shape.Optional) {
                 s.Emit(new ReturnInst(arm.Parts.Count == 0 ? s.Text("none") : DescribePart(s, arm.Parts[0], depth)));
+                return;
+            }
+
+            // A structural union is the value it holds.
+            if (shape == Shape.Structural) {
+                s.Emit(new ReturnInst(DescribePart(s, arm.Parts[0], depth)));
                 return;
             }
 

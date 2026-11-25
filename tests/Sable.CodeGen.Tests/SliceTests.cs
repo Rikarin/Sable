@@ -757,7 +757,7 @@ public sealed class SliceTests {
                 "    var xs: Int[>..] = [1, 2, 3, 4]\n    shorten(&xs)\n    print(\"unreachable\")"
             )
         );
-        Assert.StartsWith("fatal error: a slice of count 1 stored over a range of count 4\n", execution.Stderr, StringComparison.Ordinal);
+        Assert.StartsWith("fatal error: a slice of another count given back for the whole of an array\n", execution.Stderr, StringComparison.Ordinal);
     }
 
     /// <summary>

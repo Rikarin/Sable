@@ -759,23 +759,22 @@ public sealed partial class LlvmEmitter {
                                 declare { i128, i1 } @llvm.ssub.with.overflow.i128(i128, i128)
                                 define linkonce_odr hidden { i128, i1 } @sable_smul_overflow_i128(i128 %a, i128 %b) {
                                 entry:
-                                  %product = mul i128 %a, %b
-                                  %zero = icmp eq i128 %b, 0
-                                  br i1 %zero, label %fits, label %nonzero
-                                nonzero:
-                                  %minusOne = icmp eq i128 %b, -1
-                                  br i1 %minusOne, label %negate, label %divide
-                                negate:
-                                  %isMin = icmp eq i128 %a, -170141183460469231731687303715884105728
-                                  br label %done
-                                divide:
-                                  %back = sdiv i128 %product, %b
-                                  %differs = icmp ne i128 %back, %a
-                                  br label %done
-                                fits:
-                                  br label %done
-                                done:
-                                  %overflowed = phi i1 [ %isMin, %negate ], [ %differs, %divide ], [ false, %fits ]
+                                  %different = xor i128 %a, %b
+                                  %negative = icmp slt i128 %different, 0
+                                  %aNegative = icmp slt i128 %a, 0
+                                  %aNegated = sub i128 0, %a
+                                  %aSize = select i1 %aNegative, i128 %aNegated, i128 %a
+                                  %bNegative = icmp slt i128 %b, 0
+                                  %bNegated = sub i128 0, %b
+                                  %bSize = select i1 %bNegative, i128 %bNegated, i128 %b
+                                  %sizes = call { i128, i1 } @llvm.umul.with.overflow.i128(i128 %aSize, i128 %bSize)
+                                  %size = extractvalue { i128, i1 } %sizes, 0
+                                  %past = extractvalue { i128, i1 } %sizes, 1
+                                  %most = select i1 %negative, i128 170141183460469231731687303715884105728, i128 170141183460469231731687303715884105727
+                                  %tooBig = icmp ugt i128 %size, %most
+                                  %overflowed = or i1 %past, %tooBig
+                                  %sizeNegated = sub i128 0, %size
+                                  %product = select i1 %negative, i128 %sizeNegated, i128 %size
                                   %pair = insertvalue { i128, i1 } undef, i128 %product, 0
                                   %result = insertvalue { i128, i1 } %pair, i1 %overflowed, 1
                                   ret { i128, i1 } %result
@@ -6312,8 +6311,9 @@ public sealed partial class LlvmEmitter {
         ///     signed I128 multiply, which LLVM lowers to compiler-rt's
         ///     <c>__muloti4</c>, a function libgcc on AArch64 Linux does not
         ///     have; it calls <c>sable_smul_overflow_i128</c>, defined in every
-        ///     module over a wrapping multiply and a division (<c>__divti3</c>, which
-        ///     every C library's support code has).
+        ///     module over an unsigned multiply of the sizes, which LLVM writes
+        ///     out. (Not a multiply checked by a division back: LLVM sees what
+        ///     that is, and calls <c>__muloti4</c> for it.)
         /// </summary>
         static string OverflowFunction(string intrinsic, string t) =>
             intrinsic == "smul" && t == "i128" ? "@sable_smul_overflow_i128" : $"@llvm.{intrinsic}.with.overflow.{t}";

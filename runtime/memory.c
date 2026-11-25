@@ -725,6 +725,18 @@ void *sable_raw_alloc(int64_t size, int64_t alignment) {
         sable_trap("out of memory");
     }
 
+#if SABLE_ASAN
+    // Nothing after the room, which ASan would take for part of it.
+    void *start = NULL;
+    if (posix_memalign(&start, (size_t)alignment, (size_t)(alignment + size)) != 0) {
+        sable_trap("out of memory");
+    }
+
+    void *place = (char *)start + alignment;
+    ((void **)place)[-1] = start;
+    return place;
+#endif
+
     char *block = malloc((size_t)(size + alignment + (int64_t)sizeof(void *)));
     if (block == NULL) {
         sable_trap("out of memory");

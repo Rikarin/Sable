@@ -1,0 +1,116 @@
+module FuzzTests
+
+// How '@fuzz' targets are called, and what 'sable fuzz' kept is run again
+// (Sable.Testing), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Testing
+
+union Odd: Error { Number(Int) }
+
+// What the targets below were called with last.
+final class Seen {
+    var calls: Int = 0
+    var text: String = ""
+}
+
+@test
+fn aTargetsValuesAreMadeOfTheBytes() {
+    let seen = Seen()
+    fuzzCall("M.one", [3, 5]) { (n: U8) in seen.text = "\(n)" }
+    assertEqual(seen.text, "5")
+    fuzzCall("M.two", [3, 5, 1]) { (n: U8, flag: Bool) in seen.text = "\(n) \(flag)" }
+    assertEqual(seen.text, "5 true")
+    fuzzCall("M.three", []) { (a: Int, b: String, c: U8[>..]) in seen.text = "\(a) \(b.isEmpty) \(c.count)" }
+    assertEqual(seen.text, "0 true 0")
+    fuzzCall("M.four", [1, 1, 1, 0]) { (a: Bool, b: Bool, c: Bool, d: Bool) in seen.text = "\(a) \(b) \(c) \(d)" }
+    assertEqual(seen.text, "true true true false")
+}
+
+@test
+fn aTrapSaysWhatTheTargetWasCalledWith() {
+    let ended = expectPanic("too many") {
+        fuzzCall("M.f", [1, 1, 2, 5]) { (n: U8, m: U8) in
+        if m == 1 { fatalError("too many") }
+    }
+    }
+    if let ended = ended {
+        expect(ended.errors.contains("called with 1, 1"))
+    }
+}
+
+@test
+fn whatATargetThrowsIsATrap() {
+    expectPanic("M.f threw: ") {
+        fuzzCall("M.f", [1, 1]) { (n: U8) in
+        throw Odd.Number(Int(n))
+    }
+    }
+}
+
+struct Never1: Arbitrary {
+    static fn arbitrary(from choices: Choices) -> Never1 {
+        _ = Gen.number(in: 0...9).filter { $0 > 20 }.value(from: choices)
+        return Never1 { }
+    }
+}
+
+@test
+fn aValueGivenUpOnIsNotTried() {
+    let seen = Seen()
+    fuzzCall("M.f", [1, 2, 3]) { (n: Never1) in seen.calls += 1 }
+    assertEqual(seen.calls, 0)
+}
+
+// The lists 'sable test' makes, in a directory of their own.
+fn listing(_ name: String, _ text: String, _ body: () -> Void) {
+    let directory = TemporaryDirectory.path
+    assert(Runtime.writeFile("\(directory)/\(name).inputs", text, false))
+    unsafe {
+        assert(Runtime.setEnvironment("SABLE_FUZZ_INPUTS", directory))
+    }
+    body()
+    unsafe {
+        assert(Runtime.removeEnvironment("SABLE_FUZZ_INPUTS"))
+    }
+    _ = Runtime.removeFile("\(directory)/\(name).inputs")
+}
+
+struct TemporaryDirectory {
+    static var path: String {
+        get {
+            return Runtime.environment("TMPDIR") ?? Runtime.environment("TEMP") ?? "/tmp"
+        }
+    }
+}
+
+@test
+async fn savedInputsAreCases() {
+    let seen = Seen()
+    var cases: TestArguments[>..] = []
+    listing("FuzzTests.saved", "crash\t/x/crash-1\t0aff\ncorpus\t/x/a\t\ncorpus\t/x/b\t01\n") {
+        cases = fuzzReplays("FuzzTests.saved") { data in
+        seen.calls += 1
+        seen.text += "\(data.toArray())"
+    }
+    }
+    assertEqual(cases.map({ $0.description }), ["crash-1", "corpus"])
+    assert(await cases[0].run() == none)
+    assertEqual(seen.text, "[10, 255]")
+    assert(await cases[1].run() == none)
+    assertEqual(seen.text, "[10, 255][][1]")
+    assertEqual(fuzzReplays("FuzzTests.saved", { data in }).count, 0)
+}
+
+@test
+async fn aSavedInputThatFailsIsNamed() {
+    var cases: TestArguments[>..] = []
+    listing("FuzzTests.fails", "corpus\t/x/a\t07\n") {
+        cases = fuzzReplays("FuzzTests.fails") { data in fatalError("wrong") }
+    }
+    let one = cases[0].run
+    let ended = await expectPanic("wrong") { _ = await one() }
+    if let ended = ended {
+        expect(ended.errors.contains("with the saved input /x/a"))
+    }
+}

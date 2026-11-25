@@ -292,14 +292,16 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
     /// <summary>
     ///     And every keyword and operator, and the forms no kind of node is
     ///     for: a key path from a context's type and from a named one, and a
-    ///     value discarded.
+    ///     value discarded. (Not the words of other languages that are tokens
+    ///     to be refused by name.)
     /// </summary>
     [Fact]
     public void EveryKindOfTokenIsInASeed() {
         var seeds = Seeds().Select(static source => SyntaxTree.Parse(source)).ToList();
         var seen = seeds.SelectMany(static tree => tree.Root.DescendantTokens()).Select(static token => token.Kind).ToHashSet();
+        SyntaxKind[] refused = [SyntaxKind.BorrowingKeyword, SyntaxKind.RefKeyword, SyntaxKind.TypealiasKeyword];
         var missing = Enum.GetValues<SyntaxKind>()
-            .Where(kind => SyntaxFacts.GetText(kind) is { Length: > 0 } && !seen.Contains(kind))
+            .Where(kind => SyntaxFacts.GetText(kind) is { Length: > 0 } && !seen.Contains(kind) && !refused.Contains(kind))
             .Select(static kind => $"{kind} '{SyntaxFacts.GetText(kind)}'")
             .ToList();
         Assert.True(missing.Count == 0, "no seed program uses: " + string.Join(", ", missing));

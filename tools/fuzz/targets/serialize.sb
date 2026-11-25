@@ -34,8 +34,12 @@ fn tokensOf(_ data: U8[:]) -> Int? {
     var reader = JsonReader(data)
     var count = 0
     do {
-        while try reader.next() != none {
+        while let token = try reader.next() {
             count += 1
+            // A number too large to be one is the parser's to refuse.
+            if token == .Number {
+                _ = try reader.float()
+            }
         }
         return count
     } catch {
@@ -50,8 +54,11 @@ fn tokensInParts(_ data: U8[:], _ length: Int) -> Int? {
     var ended = false
     do {
         while true {
-            while try reader.next() != none {
+            while let token = try reader.next() {
                 count += 1
+                if token == .Number {
+                    _ = try reader.float()
+                }
             }
             if at < data.count {
                 let end = at + length < data.count ? at + length : data.count

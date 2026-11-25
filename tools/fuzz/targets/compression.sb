@@ -70,7 +70,7 @@ fn zlib(_ data: U8[:]) {
 
 @fuzz
 fn zstd(_ data: U8[:]) {
-    check(try? Zstd.decompress(data, limits: limits()), ZstdDecoder(limits: limits(), maximumWindow: 1 << 22), data, "zstd")
+    check(try? Zstd.decompress(data, limits: limits()), ZstdDecoder(limits: limits()), data, "zstd")
 }
 
 @fuzz

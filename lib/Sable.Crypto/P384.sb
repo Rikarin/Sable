@@ -1,0 +1,13 @@
+module Sable.Crypto
+
+/// NIST's P-384, secp384r1 elsewhere: the curve of an
+/// `EcdsaPrivateKey<P384>` or an `EcdhPrivateKey<P384>`.
+///
+/// ```sable
+/// assert(P384.curve.byteCount == 48)
+/// ```
+public struct P384: EllipticCurve {
+    private init() { }
+
+    public static var curve: NamedCurve => .P384
+}

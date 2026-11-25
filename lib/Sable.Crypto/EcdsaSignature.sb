@@ -1,0 +1,91 @@
+module Sable.Crypto
+
+import Sable.Serialize.Asn1
+import Sable.Text
+
+/// An ECDSA signature: two numbers, r and s. They are written one after the
+/// other in as many bytes each as the curve has (`bytes`, as IEEE P1363 and
+/// JWS do), or as a DER sequence of two integers (`der`, as X.509 and TLS
+/// do).
+///
+/// ```sable
+/// let key = EcdsaPrivateKey<P256>.generate()
+/// let signature = key.sign([1, 2, 3])
+/// assert(signature.bytes.count == 64)
+/// assert(try! EcdsaSignature<P256>(der: signature.der) == signature)
+/// ```
+@derive(Equatable, Hashable)
+public struct EcdsaSignature<Curve: EllipticCurve>: Hashable, Debug, Sendable {
+    /// r and s, most significant byte first.
+    public let bytes: U8[>..]
+
+    /// The signature those bytes are, r and s one after the other. Whether
+    /// they are numbers a signature may have is asked when it is checked.
+    public init(_ bytes: U8[:]) throws(CryptoError) {
+        if bytes.count != 2 * Curve.curve.byteCount {
+            throw CryptoError.InvalidEncoding(reason: "an ECDSA signature of \(bytes.count) bytes, not \(2 * Curve.curve.byteCount)")
+        }
+        self.bytes = bytes.toArray()
+    }
+
+    init(checked bytes: consuming U8[>..]) {
+        self.bytes = bytes
+    }
+
+    /// The signature encoded as a DER sequence of r and s, read strictly:
+    /// any other encoding of the two is refused.
+    public init(der: U8[:]) throws(CryptoError) {
+        guard let made = EcdsaSignature<Curve>.numbers(der) else {
+            throw CryptoError.InvalidEncoding(reason: "an ECDSA signature that is no DER sequence of two numbers of \(Curve.curve.byteCount) bytes")
+        }
+        bytes = made
+    }
+
+    static fn numbers(_ der: U8[:]) -> U8[>..]? {
+        let count = Curve.curve.byteCount
+        var made: U8[>..] = []
+        do {
+            var reader = AsnReader(der, rules: .Der)
+            var sequence = try reader.readSequence()
+            try reader.finish()
+            var i = 0
+            while i < 2 {
+                var number = try sequence.readIntegerBytes()
+                if number[0] >= 0x80 {
+                    return none
+                }
+                if number[0] == 0 {
+                    number = number[1...]
+                }
+                if number.count > count {
+                    return none
+                }
+                made.append(repeating: 0, count: count - number.count)
+                made.append(contentsOf: number)
+                i += 1
+            }
+            try sequence.finish()
+        } catch {
+            return none
+        }
+        return made
+    }
+
+    /// The signature as a DER sequence of r and s.
+    public var der: U8[>..] {
+        get {
+            let count = Curve.curve.byteCount
+            return Der.write { (writer: AsnWriter) throws(AsnError) in
+                try writer.beginSequence()
+                try writer.writeUnsignedInteger(bytes[..<count])
+                try writer.writeUnsignedInteger(bytes[count...])
+                try writer.endSequence()
+            }
+        }
+    }
+
+    /// The type and the bytes in hexadecimal.
+    public fn debugDescription() -> String {
+        return "EcdsaSignature<\(Curve.curve)>(" + Hex.encode(bytes) + ")"
+    }
+}

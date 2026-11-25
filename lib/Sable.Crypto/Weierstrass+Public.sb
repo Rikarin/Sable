@@ -1,0 +1,216 @@
+module Sable.Crypto
+
+// What checks an ECDSA signature, where nothing is secret: sums whose time
+// depends on the points and the scalars. A point here is X, Y and Z with x
+// being X/Z² and y being Y/Z³ (Jacobian coordinates), whose doubling takes
+// eight products and not thirteen, and infinity is a Z of 0.
+extension Weierstrass {
+    /// r = 2p (dbl-2001-b), which r may be.
+    unsafe static fn doublePublic(_ r: Int, _ p: Int, scratch: Int) {
+        let size = F.size
+        let x = p
+        let y = p &+ size
+        let z = p &+ 2 &* size
+        let delta = scratch
+        let gamma = scratch &+ size
+        let beta = scratch &+ 2 &* size
+        let alpha = scratch &+ 3 &* size
+        let t = scratch &+ 4 &* size
+        let u = scratch &+ 5 &* size
+        F.square(delta, z)
+        F.square(gamma, y)
+        F.multiply(beta, x, gamma)
+        F.sub(t, x, delta)
+        F.add(u, x, delta)
+        F.multiply(t, t, u)
+        F.add(alpha, t, t)
+        F.add(alpha, alpha, t)
+        F.add(u, y, z)
+        F.square(u, u)
+        F.sub(u, u, gamma)
+        F.sub(r &+ 2 &* size, u, delta)
+        // X = α² - 8β, Y = α(4β - X) - 8γ².
+        F.add(beta, beta, beta)
+        F.add(beta, beta, beta)
+        F.square(t, alpha)
+        F.sub(t, t, beta)
+        F.sub(t, t, beta)
+        F.sub(beta, beta, t)
+        F.multiply(alpha, alpha, beta)
+        F.square(gamma, gamma)
+        F.add(gamma, gamma, gamma)
+        F.add(gamma, gamma, gamma)
+        F.add(gamma, gamma, gamma)
+        Wide.copy(r, t, F.limbs)
+        F.sub(r &+ size, alpha, gamma)
+    }
+
+    /// r = p + q, or p - q; q's Z is 1, and not there, where it is affine.
+    unsafe static fn addPublic(_ r: Int, _ p: Int, _ q: Int, affine: Bool, subtract: Bool, scratch: Int) {
+        let size = F.size
+        let n = F.limbs
+        let z1 = p &+ 2 &* size
+        let z2 = q &+ 2 &* size
+        let u1 = scratch
+        let u2 = scratch &+ size
+        let s1 = scratch &+ 2 &* size
+        let s2 = scratch &+ 3 &* size
+        let h = scratch &+ 4 &* size
+        let t = scratch &+ 5 &* size
+        let hh = scratch &+ 6 &* size
+        let v = scratch &+ 7 &* size
+        let y2 = scratch &+ 8 &* size
+        if !affine && Wide.zeroMask(z2, n) != 0 {
+            Wide.copy(r, p, 3 &* n)
+            return
+        }
+        if subtract {
+            F.negate(y2, q &+ size)
+        } else {
+            Wide.copy(y2, q &+ size, n)
+        }
+        if Wide.zeroMask(z1, n) != 0 {
+            Wide.copy(r, q, n)
+            Wide.copy(r &+ size, y2, n)
+            Wide.copy(r &+ 2 &* size, affine ? F.one : z2, n)
+            return
+        }
+        F.square(t, z1)
+        F.multiply(u2, q, t)
+        F.multiply(t, t, z1)
+        F.multiply(s2, y2, t)
+        if affine {
+            Wide.copy(u1, p, n)
+            Wide.copy(s1, p &+ size, n)
+        } else {
+            F.square(t, z2)
+            F.multiply(u1, p, t)
+            F.multiply(t, t, z2)
+            F.multiply(s1, p &+ size, t)
+        }
+        F.sub(h, u2, u1)
+        F.sub(s2, s2, s1)
+        if Wide.zeroMask(h, n) != 0 {
+            if Wide.zeroMask(s2, n) != 0 {
+                doublePublic(r, p, scratch: scratch)
+            } else {
+                Wide.setSmall(r, 0, 3 &* n)
+            }
+            return
+        }
+        F.multiply(t, z1, h)
+        if !affine {
+            F.multiply(t, t, z2)
+        }
+        Wide.copy(r &+ 2 &* size, t, n)
+        F.square(hh, h)
+        F.multiply(h, h, hh)
+        F.multiply(v, u1, hh)
+        F.square(t, s2)
+        F.sub(t, t, h)
+        F.sub(t, t, v)
+        F.sub(t, t, v)
+        F.multiply(h, h, s1)
+        F.sub(v, v, t)
+        F.multiply(v, v, s2)
+        Wide.copy(r, t, n)
+        F.sub(r &+ size, v, h)
+    }
+
+    /// The scalar's digits, a bit each, odd or zero and from -15 to 15.
+    unsafe static fn slidePublic(_ scalar: Int) -> Int[>..] {
+        let count = 64 * F.limbs
+        var digits = Int[>..](repeating: 0, count: count + 1)
+        var carry = 0
+        var bit = 0
+        while bit < count {
+            let shift = (bit & 63) unchecked as U64
+            let index = bit >> 6
+            var value = Wide.limb(scalar, index) >> shift
+            if shift != 0 && index + 1 < F.limbs {
+                value = value | (Wide.limb(scalar, index + 1) << (64 - shift))
+            }
+            let digit = Int(value & 31) + carry
+            if (digit & 1) == 0 {
+                bit += 1
+                continue
+            }
+            if digit >= 16 && bit + 5 <= count {
+                digits[bit] = digit - 32
+                carry = 1
+            } else {
+                digits[bit] = digit
+                carry = 0
+            }
+            bit += 5
+        }
+        digits[count] = carry
+        return digits
+    }
+
+    /// r = a·G + b·Q, G being the base point and Q's Z 1.
+    unsafe static fn multiplyPublic(_ r: Int, _ a: Int, _ b: Int, point: Int) {
+        let width = F.tableBits
+        let perWindow = 1 << (width - 1)
+        let memory = SecretMemory(count: 9 * pointBytes + 9 * F.size)
+        let table = memory.address
+        let twice = table + 8 * pointBytes
+        let scratch = twice + pointBytes
+        Wide.copy(table, point, 3 * F.limbs)
+        doublePublic(twice, point, scratch: scratch)
+        var i = 1
+        while i < 8 {
+            addPublic(table + i * pointBytes, table + (i - 1) * pointBytes, twice, affine: false, subtract: false, scratch: scratch)
+            i += 1
+        }
+        let digits = slidePublic(b)
+        Wide.setSmall(r, 0, 3 * F.limbs)
+        i = digits.count - 1
+        while i >= 0 && digits[i] == 0 {
+            i -= 1
+        }
+        while i >= 0 {
+            doublePublic(r, r, scratch: scratch)
+            let d = digits[i]
+            if d != 0 {
+                addPublic(r, r, table + ((d < 0 ? -d : d) >> 1) * pointBytes, affine: false, subtract: d < 0, scratch: scratch)
+            }
+            i -= 1
+        }
+        var window = 0
+        while window < windows(width) {
+            let (magnitude, sign) = digit(a, window, width: width)
+            if magnitude != 0 {
+                let entry = F.baseTable + (window * perWindow + (magnitude unchecked as Int) - 1) * 2 * F.size
+                addPublic(r, r, entry, affine: true, subtract: sign != 0, scratch: scratch)
+            }
+            window += 1
+        }
+    }
+
+    /// Whether the number at an address, under the order, is the point's x
+    /// modulo the order.
+    unsafe static fn hasX(_ p: Int, _ number: Int) -> Bool {
+        let memory = SecretMemory(count: 4 * F.size)
+        let zz = memory.address
+        let t = zz + F.size
+        let candidate = t + F.size
+        if Wide.zeroMask(p + 2 * F.size, F.limbs) != 0 {
+            return false
+        }
+        F.square(zz, p + 2 * F.size)
+        F.enter(t, number)
+        F.multiply(t, t, zz)
+        if Wide.equalMask(t, p, F.limbs) != 0 {
+            return true
+        }
+        // The order is under the modulus, so that x may be one order more.
+        let carry = Wide.add(candidate, number, F.order.address, F.limbs)
+        if carry != 0 || Wide.less(candidate, F.modulus, F.limbs) == 0 {
+            return false
+        }
+        F.enter(t, candidate)
+        F.multiply(t, t, zz)
+        return Wide.equalMask(t, p, F.limbs) != 0
+    }
+}

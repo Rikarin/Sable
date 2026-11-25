@@ -1,0 +1,17 @@
+module Sable.Crypto
+
+import Sable.Serialize.Asn1
+
+/// DER of the library's own writing, which no value makes fail.
+struct Der {
+    /// What the body writes.
+    static fn write(_ body: (AsnWriter) throws(AsnError) -> Void) -> U8[>..] {
+        let writer = AsnWriter(rules: .Der)
+        do {
+            try body(writer)
+            return try writer.bytes()
+        } catch {
+            fatalError("DER: \(error.description())")
+        }
+    }
+}

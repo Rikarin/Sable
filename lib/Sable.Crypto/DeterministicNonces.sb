@@ -1,0 +1,65 @@
+module Sable.Crypto
+
+/// RFC 6979's nonces: HMAC-DRBG begun with a key and a digest, and with
+/// bytes of any kind added (§3.6). With random bytes added a signature does
+/// not depend on them being good ones, as it would with a random nonce, nor
+/// is made twice alike, which helps who can make the signer err.
+struct DeterministicNonces {
+    let hash: HashAlgorithm
+    var key: U8[>..]
+    var value: U8[>..]
+
+    init(_ hash: HashAlgorithm, key secret: U8[:], digest: U8[:], added: U8[:]) {
+        self.hash = hash
+        value = U8[>..](repeating: 1, count: hash.digestByteCount)
+        key = U8[>..](repeating: 0, count: hash.digestByteCount)
+        self.mix(0, secret, digest, added)
+        self.mix(1, secret, digest, added)
+    }
+
+    fn code(_ message: U8[:]) -> U8[>..] {
+        let key = SymmetricKey(key)
+        return match hash {
+            case .Sha1     => Hmac<Insecure.Sha1>.authenticationCode(for: message, using: key).bytes
+            case .Sha256   => Hmac<Sha256>.authenticationCode(for: message, using: key).bytes
+            case .Sha384   => Hmac<Sha384>.authenticationCode(for: message, using: key).bytes
+            case .Sha512   => Hmac<Sha512>.authenticationCode(for: message, using: key).bytes
+            case .Sha3_256 => Hmac<Sha3_256>.authenticationCode(for: message, using: key).bytes
+            case .Sha3_384 => Hmac<Sha3_384>.authenticationCode(for: message, using: key).bytes
+            case .Sha3_512 => Hmac<Sha3_512>.authenticationCode(for: message, using: key).bytes
+        }
+    }
+
+    /// The generator's state made another, by the byte and what follows it.
+    mutating fn mix(_ byte: U8, _ secret: U8[:], _ digest: U8[:], _ added: U8[:]) {
+        var message: U8[>..] = []
+        message.reserveCapacity(value.count + 1 + secret.count + digest.count + added.count)
+        message.append(contentsOf: value)
+        message.append(byte)
+        message.append(contentsOf: secret)
+        message.append(contentsOf: digest)
+        message.append(contentsOf: added)
+        let nextKey = self.code(message)
+        message.zeroSecurely()
+        key.zeroSecurely()
+        key = nextKey
+        let nextValue = self.code(value)
+        value.zeroSecurely()
+        value = nextValue
+    }
+
+    /// So many bytes, the next nonce there might be. What made them is then
+    /// changed, as it is for one that will not do: a signature takes one.
+    mutating fn next(count: Int) -> U8[>..] {
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(count + value.count)
+        while bytes.count < count {
+            value = self.code(value)
+            bytes.append(contentsOf: value)
+        }
+        let nonce = bytes[..<count].toArray()
+        bytes.zeroSecurely()
+        self.mix(0, [], [], [])
+        return nonce
+    }
+}

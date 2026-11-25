@@ -1,0 +1,103 @@
+module Sable.Crypto
+
+/// P-521's field, modulo 2^521 - 1, its elements the numbers themselves, of
+/// nine limbs under the modulus: R is 1, as a product's bits past the 521st
+/// are only added to the rest.
+struct P521Field: CurveField {
+    static var limbs: Int => 9
+
+    static var byteCount: Int => 66
+
+    static var bits: Int => 521
+
+    static var tableBits: Int => 4
+
+    static var constants: Int => p521Constants
+
+    static var baseTable: Int => p521BaseTable
+
+    static var order: MontgomeryModulus => p521Order
+
+    unsafe static fn multiply(_ r: Int, _ a: Int, _ b: Int) {
+        var t: U64[18] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        var i = 0
+        while i < 9 {
+            let digit = wide(Wide.limb(b, i))
+            var carry: U64 = 0
+            var j = 0
+            while j < 9 {
+                let product = wide(Wide.limb(a, j)) &* digit &+ wide(t[i &+ j]) &+ wide(carry)
+                t[i &+ j] = lowHalf(product)
+                carry = highHalf(product)
+                j = j &+ 1
+            }
+            t[i &+ 9] = carry
+            i = i &+ 1
+        }
+        // The sum of the low 521 bits and the rest is under twice the modulus.
+        var carry: U64 = 0
+        i = 0
+        while i < 9 {
+            let low = i == 8 ? t[8] & 0x1FF : t[i]
+            let high = (t[i &+ 8] >> 9) | (t[i &+ 9] << 55)
+            let sum = wide(low) &+ wide(high) &+ wide(carry)
+            t[i] = lowHalf(sum)
+            carry = highHalf(sum)
+            i = i &+ 1
+        }
+        // It and one reach 2^521 where it is the modulus or more, and then
+        // it less the modulus is that without the bit.
+        carry = 1
+        i = 0
+        while i < 9 {
+            let sum = wide(t[i]) &+ wide(carry)
+            t[i &+ 9] = lowHalf(sum)
+            carry = highHalf(sum)
+            i = i &+ 1
+        }
+        let over = maskOf(bit: (t[17] >> 9) & 1)
+        t[17] = t[17] & 0x1FF
+        i = 0
+        while i < 9 {
+            Wide.put(r, i, (t[i &+ 9] & over) | (t[i] & ~over))
+            i = i &+ 1
+        }
+    }
+
+    unsafe static fn square(_ r: Int, _ a: Int) {
+        multiply(r, a, a)
+    }
+}
+
+/// The modulus, 1 and the square of R; b, and the base point's x and y.
+let p521Constants: Int = constantTable([
+    0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF,
+    0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF,
+    0x00000000000001FF,
+    0x0000000000000001, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+    0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+    0x0000000000000000,
+    0x0000000000000001, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+    0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+    0x0000000000000000,
+    0xEF451FD46B503F00, 0x3573DF883D2C34F1, 0x1652C0BD3BB1BF07, 0x56193951EC7E937B,
+    0xB8B489918EF109E1, 0xA2DA725B99B315F3, 0x929A21A0B68540EE, 0x953EB9618E1C9A1F,
+    0x0000000000000051,
+    0xF97E7E31C2E5BD66, 0x3348B3C1856A429B, 0xFE1DC127A2FFA8DE, 0xA14B5E77EFE75928,
+    0xF828AF606B4D3DBA, 0x9C648139053FB521, 0x9E3ECB662395B442, 0x858E06B70404E9CD,
+    0x00000000000000C6,
+    0x88BE94769FD16650, 0x353C7086A272C240, 0xC550B9013FAD0761, 0x97EE72995EF42640,
+    0x17AFBD17273E662C, 0x98F54449579B4468, 0x5C8A5FB42C7D1BD9, 0x39296A789A3BC004,
+    0x0000000000000118,
+] as U64[>..])
+
+/// The base point's order.
+let p521Order = MontgomeryModulus(bigEndian: [
+    0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFA, 0x51, 0x86, 0x87, 0x83, 0xBF, 0x2F, 0x96, 0x6B, 0x7F, 0xCC, 0x01, 0x48, 0xF7, 0x09,
+    0xA5, 0xD0, 0x3B, 0xB5, 0xC9, 0xB8, 0x89, 0x9C, 0x47, 0xAE, 0xBB, 0x6F, 0xB7, 0x1E, 0x91, 0x38,
+    0x64, 0x09,
+])
+
+let p521BaseTable: Int = Weierstrass<P521Field>.makeBaseTable()

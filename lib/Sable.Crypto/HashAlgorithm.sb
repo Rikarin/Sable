@@ -1,0 +1,50 @@
+module Sable.Crypto
+
+/// A hash function chosen as the program runs, as a key's file, a
+/// certificate or a token names one: what a signature is of.
+///
+/// ```sable
+/// assert(HashAlgorithm.Sha256.hash([]) == Sha256.hash([]))
+/// assert(HashAlgorithm.Sha384.digestByteCount == 48)
+/// ```
+public enum HashAlgorithm {
+    /// SHA-1, whose collisions have been found: for checking old signatures
+    /// alone.
+    Sha1
+    Sha256
+    Sha384
+    Sha512
+    Sha3_256
+    Sha3_384
+    Sha3_512
+
+    /// How many bytes a digest has.
+    public var digestByteCount: Int => match self {
+        case .Sha1     => 20
+        case .Sha256   => 32
+        case .Sha384   => 48
+        case .Sha512   => 64
+        case .Sha3_256 => 32
+        case .Sha3_384 => 48
+        case .Sha3_512 => 64
+    }
+
+    /// The digest of the bytes.
+    public fn hash(_ bytes: U8[:]) -> Digest {
+        return digest(of: bytes, by: self)
+    }
+}
+
+/// The digest of the bytes by an algorithm. Not in HashAlgorithm, where its
+/// cases' names hide the types'.
+fn digest(of bytes: U8[:], by algorithm: HashAlgorithm) -> Digest {
+    return match algorithm {
+        case .Sha1     => Insecure.Sha1.hash(bytes)
+        case .Sha256   => Sha256.hash(bytes)
+        case .Sha384   => Sha384.hash(bytes)
+        case .Sha512   => Sha512.hash(bytes)
+        case .Sha3_256 => Sha3_256.hash(bytes)
+        case .Sha3_384 => Sha3_384.hash(bytes)
+        case .Sha3_512 => Sha3_512.hash(bytes)
+    }
+}

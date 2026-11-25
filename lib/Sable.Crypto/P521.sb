@@ -1,0 +1,13 @@
+module Sable.Crypto
+
+/// NIST's P-521, secp521r1 elsewhere: the curve of an
+/// `EcdsaPrivateKey<P521>` or an `EcdhPrivateKey<P521>`.
+///
+/// ```sable
+/// assert(P521.curve.byteCount == 66)
+/// ```
+public struct P521: EllipticCurve {
+    private init() { }
+
+    public static var curve: NamedCurve => .P521
+}

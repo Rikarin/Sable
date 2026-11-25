@@ -1,0 +1,82 @@
+module Sable.Crypto
+
+/// An ECDSA key of a NIST curve to sign with (FIPS 186-5).
+///
+/// ```sable
+/// let key = EcdsaPrivateKey<P256>.generate()
+/// let signature = key.sign([1, 2, 3])
+/// assert(key.publicKey.isValid(signature, for: [1, 2, 3]))
+/// assert(!key.publicKey.isValid(signature, for: [1, 2, 4]))
+/// ```
+///
+/// A signature's nonce is RFC 6979's with random bytes added (§3.6): no
+/// other source but the key and the message is needed for a good one, and
+/// two signatures of a message differ. `deterministic: true` leaves the
+/// bytes out, for the RFC's own signatures.
+public struct EcdsaPrivateKey<Curve: EllipticCurve>: Equatable, Debug, Sendable {
+    let scalar: SecretMemory
+
+    /// The key others check the signatures with.
+    public let publicKey: EcdsaPublicKey<Curve>
+
+    /// The key those bytes are: a number from 1 to the curve's order, most
+    /// significant byte first, of as many bytes as the curve has.
+    ///
+    /// ```sable
+    /// let key = EcdsaPrivateKey<P256>.generate()
+    /// assert(try! EcdsaPrivateKey<P256>(key.bytes()) == key)
+    /// ```
+    public init(_ bytes: U8[:]) throws(CryptoError) {
+        guard let scalar = Curve.curve.scalar(bytes) else {
+            throw CryptoError.InvalidKey(reason: "no private key of \(Curve.curve), which are \(Curve.curve.byteCount) bytes and under the order")
+        }
+        self.init(scalar: scalar)
+    }
+
+    init(scalar: SecretMemory) {
+        self.scalar = scalar
+        publicKey = EcdsaPublicKey<Curve>(checked: Curve.curve.publicKey(scalar))
+    }
+
+    /// A new key from the system's random source.
+    public static fn generate() -> EcdsaPrivateKey<Curve> {
+        return EcdsaPrivateKey<Curve>(scalar: Curve.curve.randomScalar())
+    }
+
+    /// The key's bytes.
+    public fn bytes() -> U8[>..] {
+        return Curve.curve.bytes(scalar)
+    }
+
+    /// The message's signature: of its digest, by the function the curve is
+    /// usually used with unless another is given.
+    ///
+    /// ```sable
+    /// let key = EcdsaPrivateKey<P256>.generate()
+    /// let signature = key.sign([1], hash: .Sha512, deterministic: true)
+    /// assert(signature == key.sign([1], hash: .Sha512, deterministic: true))
+    /// assert(key.publicKey.isValid(signature, for: [1], hash: .Sha512))
+    /// ```
+    public fn sign(_ message: U8[:], hash: HashAlgorithm = Curve.curve.hash, deterministic: Bool = false) -> EcdsaSignature<Curve> {
+        return self.sign(digest: hash.hash(message).bytes, hash: hash, deterministic: deterministic)
+    }
+
+    /// The signature of a message's digest, by the function given: the
+    /// digest is of any length, and the function makes the nonce.
+    public fn sign(digest value: U8[:], hash: HashAlgorithm = Curve.curve.hash, deterministic: Bool = false) -> EcdsaSignature<Curve> {
+        let added = deterministic ? U8[>..]() : SecureRandom.bytes(32)
+        return EcdsaSignature<Curve>(checked: Curve.curve.sign(scalar, digest: value, hash: hash, added: added))
+    }
+
+    /// Whether the two are the same key, in constant time.
+    public operator == (lhs: EcdsaPrivateKey<Curve>, rhs: EcdsaPrivateKey<Curve>) -> Bool {
+        unsafe {
+            return Wide.equalMask(lhs.scalar.address, rhs.scalar.address, lhs.scalar.count / 8) != 0
+        }
+    }
+
+    /// What kind of key it is, and not what it is.
+    public fn debugDescription() -> String {
+        return "EcdsaPrivateKey<\(Curve.curve)>"
+    }
+}

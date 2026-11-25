@@ -1,0 +1,435 @@
+module Sable.Crypto
+
+/// The curve y² = x³ - 3x + b over a field, a group of prime order. A point
+/// is X, Y and Z at an address: x is X/Z and y is Y/Z, and the point at
+/// infinity is (0 : 1 : 0). The sums are the complete ones of Renes,
+/// Costello and Batina ("Complete addition formulas for prime order elliptic
+/// curves", algorithms 4, 5 and 6, whose steps these are): right for every
+/// two points, the same and opposite ones and infinity too, so that a
+/// scalar's bits decide nothing but which of a table's entries, all of them
+/// looked at, is added.
+struct Weierstrass<F: CurveField> {
+    /// How many bytes a point has.
+    static var pointBytes: Int => 3 &* F.size
+
+    /// How many bytes a sum's scratch has.
+    static var scratchBytes: Int => 8 &* F.size
+
+    /// How many bits of a scalar are taken at a time where there is no table.
+    static var windowBits: Int => 5
+
+    unsafe static fn setInfinity(_ r: Int) {
+        Wide.setSmall(r, 0, 3 &* F.limbs)
+        Wide.copy(r &+ F.size, F.one, F.limbs)
+    }
+
+    /// r = p + q, which r may be.
+    unsafe static fn add(_ r: Int, _ p: Int, _ q: Int, scratch: Int) {
+        let size = F.size
+        let t0 = scratch
+        let t1 = scratch &+ size
+        let t2 = scratch &+ 2 &* size
+        let t3 = scratch &+ 3 &* size
+        let t4 = scratch &+ 4 &* size
+        let x3 = scratch &+ 5 &* size
+        let y3 = scratch &+ 6 &* size
+        let z3 = scratch &+ 7 &* size
+        let x1 = p
+        let y1 = p &+ size
+        let z1 = p &+ 2 &* size
+        let x2 = q
+        let y2 = q &+ size
+        let z2 = q &+ 2 &* size
+        F.multiply(t0, x1, x2)
+        F.multiply(t1, y1, y2)
+        F.multiply(t2, z1, z2)
+        F.add(t3, x1, y1)
+        F.add(t4, x2, y2)
+        F.multiply(t3, t3, t4)
+        F.add(t4, t0, t1)
+        F.sub(t3, t3, t4)
+        F.add(t4, y1, z1)
+        F.add(x3, y2, z2)
+        F.multiply(t4, t4, x3)
+        F.add(x3, t1, t2)
+        F.sub(t4, t4, x3)
+        F.add(x3, x1, z1)
+        F.add(y3, x2, z2)
+        F.multiply(x3, x3, y3)
+        F.add(y3, t0, t2)
+        F.sub(y3, x3, y3)
+        F.multiply(z3, F.b, t2)
+        F.sub(x3, y3, z3)
+        F.add(z3, x3, x3)
+        F.add(x3, x3, z3)
+        F.sub(z3, t1, x3)
+        F.add(x3, t1, x3)
+        F.multiply(y3, F.b, y3)
+        Weierstrass<F>.finish(r, scratch)
+    }
+
+    /// The steps the two sums end with, from algorithm 4's 26th.
+    @inline(always)
+    unsafe static fn finish(_ r: Int, _ scratch: Int) {
+        let size = F.size
+        let t0 = scratch
+        let t1 = scratch &+ size
+        let t2 = scratch &+ 2 &* size
+        let t3 = scratch &+ 3 &* size
+        let t4 = scratch &+ 4 &* size
+        let x3 = scratch &+ 5 &* size
+        let y3 = scratch &+ 6 &* size
+        let z3 = scratch &+ 7 &* size
+        F.add(t1, t2, t2)
+        F.add(t2, t1, t2)
+        F.sub(y3, y3, t2)
+        F.sub(y3, y3, t0)
+        F.add(t1, y3, y3)
+        F.add(y3, t1, y3)
+        F.add(t1, t0, t0)
+        F.add(t0, t1, t0)
+        F.sub(t0, t0, t2)
+        F.multiply(t1, t4, y3)
+        F.multiply(t2, t0, y3)
+        F.multiply(y3, x3, z3)
+        F.add(r &+ size, y3, t2)
+        F.multiply(x3, t3, x3)
+        F.sub(r, x3, t1)
+        F.multiply(z3, t4, z3)
+        F.multiply(t1, t3, t0)
+        F.add(r &+ 2 &* size, z3, t1)
+    }
+
+    /// r = p + q, which r may be, q's Z being 1 and not there.
+    unsafe static fn addAffine(_ r: Int, _ p: Int, _ q: Int, scratch: Int) {
+        let size = F.size
+        let t0 = scratch
+        let t1 = scratch &+ size
+        let t2 = scratch &+ 2 &* size
+        let t3 = scratch &+ 3 &* size
+        let t4 = scratch &+ 4 &* size
+        let x3 = scratch &+ 5 &* size
+        let y3 = scratch &+ 6 &* size
+        let z3 = scratch &+ 7 &* size
+        let x1 = p
+        let y1 = p &+ size
+        let z1 = p &+ 2 &* size
+        let x2 = q
+        let y2 = q &+ size
+        F.multiply(t0, x1, x2)
+        F.multiply(t1, y1, y2)
+        F.add(t3, x2, y2)
+        F.add(t4, x1, y1)
+        F.multiply(t3, t3, t4)
+        F.add(t4, t0, t1)
+        F.sub(t3, t3, t4)
+        F.multiply(t4, y2, z1)
+        F.add(t4, t4, y1)
+        F.multiply(y3, x2, z1)
+        F.add(y3, y3, x1)
+        F.multiply(z3, F.b, z1)
+        F.sub(x3, y3, z3)
+        F.add(z3, x3, x3)
+        F.add(x3, x3, z3)
+        F.sub(z3, t1, x3)
+        F.add(x3, t1, x3)
+        F.multiply(y3, F.b, y3)
+        Wide.copy(t2, z1, F.limbs)
+        Weierstrass<F>.finish(r, scratch)
+    }
+
+    /// r = 2p, which r may be.
+    unsafe static fn double(_ r: Int, _ p: Int, scratch: Int) {
+        let size = F.size
+        let t0 = scratch
+        let t1 = scratch &+ size
+        let t2 = scratch &+ 2 &* size
+        let t3 = scratch &+ 3 &* size
+        let x3 = scratch &+ 4 &* size
+        let y3 = scratch &+ 5 &* size
+        let z3 = scratch &+ 6 &* size
+        let x = p
+        let y = p &+ size
+        let z = p &+ 2 &* size
+        F.square(t0, x)
+        F.square(t1, y)
+        F.square(t2, z)
+        F.multiply(t3, x, y)
+        F.add(t3, t3, t3)
+        F.multiply(z3, x, z)
+        F.add(z3, z3, z3)
+        F.multiply(y3, F.b, t2)
+        F.sub(y3, y3, z3)
+        F.add(x3, y3, y3)
+        F.add(y3, x3, y3)
+        F.sub(x3, t1, y3)
+        F.add(y3, t1, y3)
+        F.multiply(y3, x3, y3)
+        F.multiply(x3, x3, t3)
+        F.add(t3, t2, t2)
+        F.add(t2, t2, t3)
+        F.multiply(z3, F.b, z3)
+        F.sub(z3, z3, t2)
+        F.sub(z3, z3, t0)
+        F.add(t3, z3, z3)
+        F.add(z3, z3, t3)
+        F.add(t3, t0, t0)
+        F.add(t0, t3, t0)
+        F.sub(t0, t0, t2)
+        F.multiply(t0, t0, z3)
+        F.add(y3, y3, t0)
+        F.multiply(t0, y, z)
+        F.add(t0, t0, t0)
+        F.multiply(z3, t0, z3)
+        F.sub(r, x3, z3)
+        F.multiply(z3, t0, t1)
+        F.add(z3, z3, z3)
+        F.add(r &+ 2 &* size, z3, z3)
+        Wide.copy(r &+ size, y3, F.limbs)
+    }
+
+    /// A window's digit (Booth's), from minus to plus 2^(width - 1): how big
+    /// it is, and all ones for a negative one. The window is the scalar's
+    /// bits from width·index on and the one below them.
+    @inline(always)
+    unsafe static fn digit(_ scalar: Int, _ index: Int, width: Int) -> (U64, U64) {
+        let low = width &* index &- 1
+        var bits: U64 = 0
+        if low < 0 {
+            bits = Wide.limb(scalar, 0) << 1
+        } else {
+            let limb = low >> 6
+            let shift = (low & 63) unchecked as U64
+            if limb < F.limbs {
+                bits = Wide.limb(scalar, limb) >> shift
+                if shift != 0 && limb &+ 1 < F.limbs {
+                    bits = bits | (Wide.limb(scalar, limb &+ 1) << (64 - shift))
+                }
+            }
+        }
+        let count: U64 = 1 << ((width &+ 1) unchecked as U64)
+        bits = bits & (count &- 1)
+        let sign = maskOf(bit: bits >> (width unchecked as U64))
+        let magnitude = (bits & ~sign) | ((count &- 1 &- bits) & sign)
+        return ((magnitude &+ 1) >> 1, sign)
+    }
+
+    /// How many windows of so many bits a scalar has.
+    static fn windows(_ width: Int) -> Int {
+        return F.bits / width + 1
+    }
+
+    /// r = the scalar's multiple of the point: five bits of it at a time,
+    /// from the top.
+    unsafe static fn multiply(_ r: Int, _ scalar: Int, point: Int) {
+        let width = windowBits
+        let memory = SecretMemory(count: 16 * pointBytes + 2 * pointBytes + F.size + scratchBytes)
+        let table = memory.address
+        let chosen = table + 16 * pointBytes
+        let sum = chosen + pointBytes
+        let negated = sum + pointBytes
+        let scratch = negated + F.size
+        // 1 to 16 times the point.
+        Wide.copy(table, point, 3 * F.limbs)
+        var i = 2
+        while i <= 16 {
+            let entry = table + (i - 1) * pointBytes
+            if i % 2 == 0 {
+                double(entry, table + (i / 2 - 1) * pointBytes, scratch: scratch)
+            } else {
+                add(entry, entry - pointBytes, point, scratch: scratch)
+            }
+            i += 1
+        }
+        setInfinity(sum)
+        var window = windows(width) - 1
+        var isFirst = true
+        while window >= 0 {
+            if !isFirst {
+                i = 0
+                while i < width {
+                    double(sum, sum, scratch: scratch)
+                    i = i &+ 1
+                }
+            }
+            isFirst = false
+            let (magnitude, sign) = digit(scalar, window, width: width)
+            // None of the entries is infinity, for nothing.
+            let nothing = maskIfZero(magnitude)
+            Wide.setSmall(chosen, 0, 3 &* F.limbs)
+            Wide.gather(chosen &+ F.size, nothing, F.one, F.limbs)
+            i = 1
+            while i <= 16 {
+                Wide.gather(chosen, maskIfZero(magnitude ^ (i unchecked as U64)), table &+ (i &- 1) &* pointBytes, 3 &* F.limbs)
+                i = i &+ 1
+            }
+            F.negate(negated, chosen &+ F.size)
+            Wide.select(chosen &+ F.size, sign, negated, chosen &+ F.size, F.limbs)
+            add(sum, sum, chosen, scratch: scratch)
+            window = window &- 1
+        }
+        Wide.copy(r, sum, 3 &* F.limbs)
+    }
+
+    /// The table a scalar's multiple of the base point is summed from: for
+    /// each window, 1 to 2^(width - 1) times the base point and 2 to the
+    /// number of bits below the window, without Z.
+    static fn makeBaseTable() -> Int {
+        unsafe {
+            let width = F.tableBits
+            let perWindow = 1 << (width - 1)
+            let count = windows(width) * perWindow
+            let table = NativeMemory.allocate(byteCount: count * 2 * F.size, alignment: 16).address
+            let memory = SecretMemory(count: (count + 1) * pointBytes + scratchBytes)
+            let points = memory.address
+            let base = points + count * pointBytes
+            let scratch = base + pointBytes
+            Wide.copy(base, F.baseX, 2 * F.limbs)
+            Wide.copy(base + 2 * F.size, F.one, F.limbs)
+            var at = points
+            var window = 0
+            while window < windows(width) {
+                Wide.copy(at, base, 3 * F.limbs)
+                var i = 1
+                while i < perWindow {
+                    add(at + i * pointBytes, at + (i - 1) * pointBytes, base, scratch: scratch)
+                    i += 1
+                }
+                at += perWindow * pointBytes
+                double(base, at - pointBytes, scratch: scratch)
+                window += 1
+            }
+            makeAffine(table, points, count: count)
+            return table
+        }
+    }
+
+    /// The points without Z, every one of which is inverted at once. None is
+    /// infinity.
+    unsafe static fn makeAffine(_ r: Int, _ points: Int, count: Int) {
+        let memory = SecretMemory(count: (count + 1) * F.size + 20 * F.size)
+        let products = memory.address
+        let inverse = products + (count + 1) * F.size
+        let scratch = inverse + F.size
+        Wide.copy(products, F.one, F.limbs)
+        var i = 0
+        while i < count {
+            F.multiply(products + (i + 1) * F.size, products + i * F.size, points + i * pointBytes + 2 * F.size)
+            i += 1
+        }
+        F.invert(inverse, products + count * F.size, scratch: scratch)
+        i = count - 1
+        while i >= 0 {
+            let point = points + i * pointBytes
+            F.multiply(scratch, inverse, products + i * F.size)
+            F.multiply(inverse, inverse, point + 2 * F.size)
+            F.multiply(r + 2 * i * F.size, point, scratch)
+            F.multiply(r + (2 * i + 1) * F.size, point + F.size, scratch)
+            i -= 1
+        }
+    }
+
+    /// r = the scalar's multiple of the base point: a sum of one entry of
+    /// each window's, with nothing doubled.
+    unsafe static fn multiplyBase(_ r: Int, _ scalar: Int) {
+        let width = F.tableBits
+        let perWindow = 1 << (width - 1)
+        let table = F.baseTable
+        let memory = SecretMemory(count: 2 * F.size + F.size + 2 * pointBytes + scratchBytes)
+        let chosen = memory.address
+        let negated = chosen + 2 * F.size
+        let sum = negated + F.size
+        let next = sum + pointBytes
+        let scratch = next + pointBytes
+        setInfinity(sum)
+        var window = 0
+        while window < windows(width) {
+            let (magnitude, sign) = digit(scalar, window, width: width)
+            let row = table &+ window &* perWindow &* 2 &* F.size
+            Wide.setSmall(chosen, 0, 2 &* F.limbs)
+            var i = 1
+            while i <= perWindow {
+                Wide.gather(chosen, maskIfZero(magnitude ^ (i unchecked as U64)), row &+ (i &- 1) &* 2 &* F.size, 2 &* F.limbs)
+                i = i &+ 1
+            }
+            F.negate(negated, chosen &+ F.size)
+            Wide.select(chosen &+ F.size, sign, negated, chosen &+ F.size, F.limbs)
+            // A point without Z is never infinity: for a digit of nothing
+            // the sum is made, and not taken.
+            addAffine(next, sum, chosen, scratch: scratch)
+            Wide.select(sum, maskIfZero(magnitude), sum, next, 3 &* F.limbs)
+            window = window &+ 1
+        }
+        Wide.copy(r, sum, 3 &* F.limbs)
+    }
+
+    /// The point's x and y, as numbers, at r, and whether it has them: all
+    /// ones but for infinity.
+    unsafe static fn leave(_ r: Int, _ p: Int) -> U64 {
+        let memory = SecretMemory(count: 20 * F.size)
+        let inverse = memory.address
+        let scratch = inverse + F.size
+        F.invert(inverse, p &+ 2 &* F.size, scratch: scratch)
+        F.multiply(r, p, inverse)
+        F.multiply(r &+ F.size, p &+ F.size, inverse)
+        F.leave(r, r, scratch: scratch)
+        F.leave(r &+ F.size, r &+ F.size, scratch: scratch)
+        return ~Wide.zeroMask(p &+ 2 &* F.size, F.limbs)
+    }
+
+    /// r = x³ - 3x + b, x an element; r lies apart from it, and has three
+    /// elements of scratch after it.
+    unsafe static fn curve(_ r: Int, _ x: Int) {
+        let t = r &+ F.size
+        F.square(r, x)
+        F.multiply(r, r, x)
+        F.add(t, x, x)
+        F.add(t, t, x)
+        F.sub(r, r, t)
+        F.add(r, r, F.b)
+    }
+
+    /// The point encoded by SEC 1 §2.3.4 as X, Y and Z, and whether the
+    /// bytes are one: uncompressed or compressed, under the modulus, on the
+    /// curve and not infinity. Not for a secret.
+    unsafe static fn decode(_ r: Int, _ bytes: U8[:]) -> Bool {
+        let count = F.byteCount
+        if bytes.isEmpty {
+            return false
+        }
+        let kind = bytes[0]
+        if kind == 4 ? bytes.count != 2 * count + 1 : (kind != 2 && kind != 3) || bytes.count != count + 1 {
+            return false
+        }
+        let memory = SecretMemory(count: 24 * F.size)
+        let t = memory.address
+        let scratch = t + 4 * F.size
+        Wide.fromBigEndian(t, bytes[1..<count + 1], F.limbs)
+        if Wide.less(t, F.modulus, F.limbs) == 0 {
+            return false
+        }
+        F.enter(r, t)
+        Wide.copy(r + 2 * F.size, F.one, F.limbs)
+        curve(t, r)
+        if kind == 4 {
+            let y = scratch
+            Wide.fromBigEndian(y, bytes[count + 1...], F.limbs)
+            if Wide.less(y, F.modulus, F.limbs) == 0 {
+                return false
+            }
+            F.enter(r + F.size, y)
+            F.square(y, r + F.size)
+            return Wide.equalMask(y, t, F.limbs) != 0
+        }
+        F.squareRoot(r + F.size, t, scratch: scratch)
+        F.square(scratch, r + F.size)
+        if Wide.equalMask(scratch, t, F.limbs) == 0 {
+            return false
+        }
+        F.leave(scratch, r + F.size, scratch: scratch + F.size)
+        if (Wide.limb(scratch, 0) & 1) != U64(kind & 1) {
+            F.negate(r + F.size, r + F.size)
+        }
+        return true
+    }
+}

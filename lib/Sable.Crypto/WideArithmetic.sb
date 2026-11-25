@@ -169,6 +169,16 @@ struct Wide {
         return borrow
     }
 
+    /// r = a >> 1, the bit 'top' coming in.
+    unsafe static fn halve(_ r: Int, _ a: Int, top: U64, _ n: Int) {
+        var i = 0
+        while i < n {
+            let above = i == n &- 1 ? top : limb(a, i &+ 1)
+            put(r, i, (limb(a, i) >> 1) | (above << 63))
+            i = i &+ 1
+        }
+    }
+
     /// r = a * b, of n and m limbs, in n + m that lie apart from both.
     unsafe static fn multiply(_ r: Int, _ a: Int, _ n: Int, _ b: Int, _ m: Int) {
         setSmall(r, 0, n)

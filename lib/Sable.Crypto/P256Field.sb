@@ -1,0 +1,140 @@
+module Sable.Crypto
+
+/// P-256's field, modulo 2^256 - 2^224 + 2^192 + 2^96 - 1, its elements
+/// Montgomery numbers of four limbs under the modulus.
+struct P256Field: CurveField {
+    static var limbs: Int => 4
+
+    static var byteCount: Int => 32
+
+    static var bits: Int => 256
+
+    static var tableBits: Int => 5
+
+    static var constants: Int => p256Constants
+
+    static var baseTable: Int => p256BaseTable
+
+    static var order: MontgomeryModulus => p256Order
+
+    unsafe static fn multiply(_ r: Int, _ a: Int, _ b: Int) {
+        let a0 = wide(Wide.limb(a, 0))
+        let a1 = wide(Wide.limb(a, 1))
+        let a2 = wide(Wide.limb(a, 2))
+        let a3 = wide(Wide.limb(a, 3))
+        let b0 = wide(Wide.limb(b, 0))
+        let b1 = wide(Wide.limb(b, 1))
+        let b2 = wide(Wide.limb(b, 2))
+        let b3 = wide(Wide.limb(b, 3))
+        let x0 = a0 &* b0
+        let x1 = a1 &* b0 &+ wide(highHalf(x0))
+        let x2 = a2 &* b0 &+ wide(highHalf(x1))
+        let x3 = a3 &* b0 &+ wide(highHalf(x2))
+        let h0 = highHalf(x3)
+        let x4 = a0 &* b1 &+ wide(lowHalf(x1))
+        let x5 = a1 &* b1 &+ wide(lowHalf(x2)) &+ wide(highHalf(x4))
+        let x6 = a2 &* b1 &+ wide(lowHalf(x3)) &+ wide(highHalf(x5))
+        let x7 = a3 &* b1 &+ wide(h0) &+ wide(highHalf(x6))
+        let h1 = highHalf(x7)
+        let x8 = a0 &* b2 &+ wide(lowHalf(x5))
+        let x9 = a1 &* b2 &+ wide(lowHalf(x6)) &+ wide(highHalf(x8))
+        let x10 = a2 &* b2 &+ wide(lowHalf(x7)) &+ wide(highHalf(x9))
+        let x11 = a3 &* b2 &+ wide(h1) &+ wide(highHalf(x10))
+        let h2 = highHalf(x11)
+        let x12 = a0 &* b3 &+ wide(lowHalf(x9))
+        let x13 = a1 &* b3 &+ wide(lowHalf(x10)) &+ wide(highHalf(x12))
+        let x14 = a2 &* b3 &+ wide(lowHalf(x11)) &+ wide(highHalf(x13))
+        let x15 = a3 &* b3 &+ wide(h2) &+ wide(highHalf(x14))
+        let h3 = highHalf(x15)
+        P256Field.reduce(r, lowHalf(x0), lowHalf(x4), lowHalf(x8), lowHalf(x12), lowHalf(x13), lowHalf(x14), lowHalf(x15), h3)
+    }
+
+    unsafe static fn square(_ r: Int, _ a: Int) {
+        let a0 = wide(Wide.limb(a, 0))
+        let a1 = wide(Wide.limb(a, 1))
+        let a2 = wide(Wide.limb(a, 2))
+        let a3 = wide(Wide.limb(a, 3))
+        // The products of two different limbs, once.
+        let x0 = a1 &* a0
+        let x1 = a2 &* a0 &+ wide(highHalf(x0))
+        let x2 = a3 &* a0 &+ wide(highHalf(x1))
+        let x3 = a2 &* a1 &+ wide(lowHalf(x2))
+        let x4 = a3 &* a1 &+ wide(highHalf(x2)) &+ wide(highHalf(x3))
+        let x5 = a3 &* a2 &+ wide(highHalf(x4))
+        let m1 = lowHalf(x0)
+        let m2 = lowHalf(x1)
+        let m3 = lowHalf(x3)
+        let m4 = lowHalf(x4)
+        let m5 = lowHalf(x5)
+        let m6 = highHalf(x5)
+        // Doubled, and the squares added.
+        let s0 = a0 &* a0
+        let s1 = a1 &* a1
+        let s2 = a2 &* a2
+        let s3 = a3 &* a3
+        let y1 = wide(m1 << 1) &+ wide(highHalf(s0))
+        let y2 = wide((m2 << 1) | (m1 >> 63)) &+ wide(lowHalf(s1)) &+ wide(highHalf(y1))
+        let y3 = wide((m3 << 1) | (m2 >> 63)) &+ wide(highHalf(s1)) &+ wide(highHalf(y2))
+        let y4 = wide((m4 << 1) | (m3 >> 63)) &+ wide(lowHalf(s2)) &+ wide(highHalf(y3))
+        let y5 = wide((m5 << 1) | (m4 >> 63)) &+ wide(highHalf(s2)) &+ wide(highHalf(y4))
+        let y6 = wide((m6 << 1) | (m5 >> 63)) &+ wide(lowHalf(s3)) &+ wide(highHalf(y5))
+        let y7 = (m6 >> 63) &+ highHalf(s3) &+ highHalf(y6)
+        P256Field.reduce(r, lowHalf(s0), lowHalf(y1), lowHalf(y2), lowHalf(y3), lowHalf(y4), lowHalf(y5), lowHalf(y6), y7)
+    }
+
+    /// A product of eight limbs over R: four times, as much of the modulus
+    /// is added as makes the lowest limb zero, which is as much as the limb
+    /// says, since the modulus is -1 modulo 2^64.
+    @inline(always)
+    unsafe static fn reduce(_ r: Int, _ t0: U64, _ t1: U64, _ t2: U64, _ t3: U64, _ t4: U64, _ t5: U64, _ t6: U64, _ t7: U64) {
+        let m3: U128 = 0xFFFFFFFF00000001
+        let a1 = wide(t1) &+ (wide(t0) << 32)
+        let a2 = wide(t2) &+ wide(highHalf(a1))
+        let a3 = wide(t3) &+ wide(t0) &* m3 &+ wide(highHalf(a2))
+        let a4 = wide(t4) &+ wide(highHalf(a3))
+        let b1 = wide(lowHalf(a2)) &+ (wide(lowHalf(a1)) << 32)
+        let b2 = wide(lowHalf(a3)) &+ wide(highHalf(b1))
+        let b3 = wide(lowHalf(a4)) &+ wide(lowHalf(a1)) &* m3 &+ wide(highHalf(b2))
+        let b4 = wide(t5) &+ wide(highHalf(a4)) &+ wide(highHalf(b3))
+        let c1 = wide(lowHalf(b2)) &+ (wide(lowHalf(b1)) << 32)
+        let c2 = wide(lowHalf(b3)) &+ wide(highHalf(c1))
+        let c3 = wide(lowHalf(b4)) &+ wide(lowHalf(b1)) &* m3 &+ wide(highHalf(c2))
+        let c4 = wide(t6) &+ wide(highHalf(b4)) &+ wide(highHalf(c3))
+        let d1 = wide(lowHalf(c2)) &+ (wide(lowHalf(c1)) << 32)
+        let d2 = wide(lowHalf(c3)) &+ wide(highHalf(d1))
+        let d3 = wide(lowHalf(c4)) &+ wide(lowHalf(c1)) &* m3 &+ wide(highHalf(d2))
+        let d4 = wide(t7) &+ wide(highHalf(c4)) &+ wide(highHalf(d3))
+        let r0 = lowHalf(d1)
+        let r1 = lowHalf(d2)
+        let r2 = lowHalf(d3)
+        let r3 = lowHalf(d4)
+        // Less the modulus, if that leaves nothing to borrow from.
+        let s0 = wide(r0) &- 0xFFFFFFFFFFFFFFFF
+        let s1 = wide(r1) &- 0x00000000FFFFFFFF &- wide(highHalf(s0) & 1)
+        let s2 = wide(r2) &- wide(highHalf(s1) & 1)
+        let s3 = wide(r3) &- m3 &- wide(highHalf(s2) & 1)
+        let keep = maskOf(bit: (highHalf(s3) & 1) & (1 &- highHalf(d4)))
+        Wide.put(r, 0, (r0 & keep) | (lowHalf(s0) & ~keep))
+        Wide.put(r, 1, (r1 & keep) | (lowHalf(s1) & ~keep))
+        Wide.put(r, 2, (r2 & keep) | (lowHalf(s2) & ~keep))
+        Wide.put(r, 3, (r3 & keep) | (lowHalf(s3) & ~keep))
+    }
+}
+
+/// The modulus, 1 and the square of R; b, and the base point's x and y.
+let p256Constants: Int = constantTable([
+    0xFFFFFFFFFFFFFFFF, 0x00000000FFFFFFFF, 0x0000000000000000, 0xFFFFFFFF00000001,
+    0x0000000000000001, 0xFFFFFFFF00000000, 0xFFFFFFFFFFFFFFFF, 0x00000000FFFFFFFE,
+    0x0000000000000003, 0xFFFFFFFBFFFFFFFF, 0xFFFFFFFFFFFFFFFE, 0x00000004FFFFFFFD,
+    0xD89CDF6229C4BDDF, 0xACF005CD78843090, 0xE5A220ABF7212ED6, 0xDC30061D04874834,
+    0x79E730D418A9143C, 0x75BA95FC5FEDB601, 0x79FB732B77622510, 0x18905F76A53755C6,
+    0xDDF25357CE95560A, 0x8B4AB8E4BA19E45C, 0xD2E88688DD21F325, 0x8571FF1825885D85,
+] as U64[>..])
+
+/// The base point's order.
+let p256Order = MontgomeryModulus(bigEndian: [
+    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xBC, 0xE6, 0xFA, 0xAD, 0xA7, 0x17, 0x9E, 0x84, 0xF3, 0xB9, 0xCA, 0xC2, 0xFC, 0x63, 0x25, 0x51,
+])
+
+let p256BaseTable: Int = Weierstrass<P256Field>.makeBaseTable()

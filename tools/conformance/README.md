@@ -9,6 +9,7 @@ its own, and give that directory to the suite's script, from a built tree
 python3 -I tools/conformance/crypto/run.py data/
 python3 -I tools/conformance/toml/run.py data/toml-test
 python3 -I tools/conformance/yaml/run.py data/yaml-test-suite
+python3 -I tools/conformance/compression/run.py data/compression [corpus file ...]
 python3 -I tools/conformance/net/run.py data/iana
 python3 -I tools/conformance/random/run.py data/practrand/RNG_test --size 8GB
 ```
@@ -43,6 +44,16 @@ Messages, keys and outputs that are not of whole bytes are skipped: the library
 takes bytes. So are SHA-224, SHA3-224 and SHA-512/t, which it has not.
 ChaCha20-Poly1305's vectors test the ChaCha generator's keystream. Neither
 source has vectors for BLAKE2b, BLAKE3, Argon2id, scrypt or MD5.
+
+## compression: brotli's and zstd's own, and zlib
+
+`data/compression/zstd/`, the archive of https://github.com/facebook/zstd v1.5.7
+unpacked (`v1.5.7.tar.gz`, SHA-256 `37d72845…012ee3`): its golden frames, files
+and dictionaries; BSD. `data/compression/brotli/tests/testdata/`, that directory
+of https://github.com/google/brotli v1.0.9, file by file, as its archives leave
+it out: MIT. Python's zlib is the third. Corpus files (Silesia's, say) are
+compressed at every level and read by the `gzip`, `zstd` and `brotli` commands
+that are there, and theirs here.
 
 ## toml: toml-test
 

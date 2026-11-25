@@ -176,6 +176,49 @@ public sealed class CompressionTests {
         );
 
     [Fact]
+    public void BrotliStaysInItsMemory() =>
+        Assert.Equal(
+            "whole true\npieces true\nstopped true\n",
+            Output(
+                """
+                var whole = true
+                for quality in [1, 5, 11] {
+                    let bytes = sample(600 + quality * 31, U64(quality + 7))
+                    whole = whole && (try! Brotli.decompress(Brotli.compress(bytes, quality: quality))) == bytes
+                }
+                print("whole \(whole)")
+                let bytes = sample(1500, 98)
+                var packed = ByteBuffer()
+                let encoder = BrotliEncoder(quality: 5, windowLog: 10)
+                encoder.compress(bytes[..<700], into: &packed)
+                encoder.flush(into: &packed)
+                encoder.compress(bytes[700...], into: &packed)
+                encoder.finish(into: &packed)
+                let decoder = BrotliDecoder()
+                var back = ByteBuffer()
+                var at = 0
+                while at < packed.count {
+                    let end = at + 200 < packed.count ? at + 200 : packed.count
+                    let step = try! decoder.decompress(packed.bytes[at..<end], into: &back, limit: 300)
+                    at += step.consumed
+                }
+                while !decoder.isFinished {
+                    _ = try! decoder.decompress([], into: &back, limit: 300)
+                }
+                print("pieces \(back.bytes == bytes)")
+                // There is no checksum: that it stops is enough.
+                var seed: U64 = 1
+                while seed < 13 {
+                    let limits = DecompressionLimits(maximumLength: 5000)
+                    _ = try? Brotli.decompress(damaged(Brotli.compress(sample(300, seed), quality: 1 + Int(seed) % 5), seed), limits: limits)
+                    seed += 1
+                }
+                print("stopped true")
+                """
+            )
+        );
+
+    [Fact]
     public void DeflateIsWhatDotNetReadsAndReadsWhatItWrites() {
         var bytes = new byte[5000];
         for (var i = 0; i < bytes.Length; i++) {

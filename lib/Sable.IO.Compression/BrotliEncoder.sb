@@ -1,0 +1,327 @@
+module Sable.IO.Compression
+
+/// Bytes compressed to brotli (RFC 7932) as they come. .NET's `BrotliEncoder`.
+///
+/// ```sable
+/// let encoder = BrotliEncoder(quality: 11)
+/// var packed = ByteBuffer()
+/// encoder.compress([1, 2, 3], into: &packed)
+/// encoder.finish(into: &packed)
+/// assert(try! Brotli.decompress(packed.bytes) == [1, 2, 3])
+/// ```
+public final class BrotliEncoder: Compressor {
+    let quality: Int
+    let windowLog: Int
+    let parameters: ZstdLevel
+    let parser: ZstdParser
+    let writer: BrotliBlockWriter
+    var window: Block
+    /// The first byte that may be matched, the first not compressed, the end.
+    var low: Int
+    var next: Int
+    var end: Int
+    var base: Int
+    /// How many bytes were compressed before 'next'.
+    var before: Int
+    /// The sequences and the literals of a part, and the commands.
+    let room: Block
+    let commands: Block
+    let target: Block
+    var bits: BitWriter
+    var lastDistances: (Int, Int, Int, Int)
+    var offset1: Int
+    var offset2: Int
+    var offset3: Int
+    var hasBegun: Bool
+    var isFinished: Bool
+
+    /// How many bytes a meta-block has at most, and a part that is parsed.
+    static var most: Int => 524288
+
+    static var part: Int => 131072
+
+    /// At quality 4, with a window of 4 MiB.
+    public convenience init() {
+        self.init(quality: 4, windowLog: 22, expecting: Int.max)
+    }
+
+    /// At a quality from 0 to 11, the smallest, with a window of 2 to a power
+    /// from 10 to 24 bytes.
+    public convenience init(quality: Int, windowLog: Int = 22) {
+        self.init(quality: quality, windowLog: windowLog, expecting: Int.max)
+    }
+
+    init(quality: Int, windowLog: Int, expecting count: Int) {
+        precondition(quality >= 0 && quality <= 11, "a brotli quality of \(quality)")
+        precondition(windowLog >= 10 && windowLog <= 24, "a brotli window of 2 to the \(windowLog) bytes")
+        self.quality = quality
+        var log = windowLog
+        while log > 16 && count <= (1 << (log - 1)) - 16 {
+            log -= 1
+        }
+        self.windowLog = log
+        let levels: Int[>..] = [-1, 1, 2, 3, 5, 7, 8, 9, 11, 12, 16, 19]
+        // Of few bytes, the parse of least bits knows too little of their codes.
+        var made = ZstdLevel(level: count < 8192 && quality > 9 ? 12 : levels[quality], expecting: count)
+        made.windowLog = log
+        // A match is of a distance that the window reaches.
+        made.reach = (1 << log) - 16
+        parameters = made
+        let most = count < BrotliEncoder.most ? count + 16 : BrotliEncoder.most
+        let spare = count <= made.reach ? count : (made.reach > 1048576 ? made.reach : 1048576)
+        window = Block(count: made.reach + spare + most + 128)
+        low = window.address
+        next = low
+        end = low
+        base = low - made.reach - 1
+        before = 0
+        parser = ZstdParser(level: made)
+        parser.inserted = low - base
+        writer = BrotliBlockWriter(maxCommands: most / 3 + 16)
+        room = Block(count: 16 * (BrotliEncoder.part / 3 + 2) + BrotliEncoder.part + 128)
+        commands = Block(count: 16 * (most / 3 + 16))
+        target = Block(count: 2 * most + 65536)
+        bits = BitWriter(bits: 0, count: 0, position: target.address)
+        lastDistances = (4, 11, 15, 16)
+        offset1 = 4
+        offset2 = 11
+        offset3 = 15
+        hasBegun = false
+        isFinished = false
+        unsafe {
+            store64(0, end)
+        }
+    }
+
+    var limit: Int => window.address + window.count - 64
+
+    public fn compress(_ source: U8[:], into output: inout ByteBuffer) {
+        precondition(!isFinished, "compressing after the end of the stream")
+        var at = 0
+        while at < source.count {
+            if end - next == BrotliEncoder.most || end == limit {
+                self.writeBlock(into: &output)
+                self.slide()
+            }
+            let space = limit - end < BrotliEncoder.most - (end - next) ? limit - end : BrotliEncoder.most - (end - next)
+            let taken = source.count - at < space ? source.count - at : space
+            unsafe {
+                NativeMemory.copy(from: source[at..<at + taken], to: RawPtr<U8>(address: end))
+                end = end + taken
+                store64(0, end)
+            }
+            at += taken
+        }
+    }
+
+    public fn flush(into output: inout ByteBuffer) {
+        precondition(!isFinished, "flushing after the end of the stream")
+        self.writeBlock(into: &output)
+        // Metadata of no bytes, which ends on one.
+        self.begin()
+        unsafe {
+            bits.write(6, 6)
+            bits.align()
+        }
+        self.drain(into: &output)
+    }
+
+    public fn finish(into output: inout ByteBuffer) {
+        precondition(!isFinished, "the stream is finished already")
+        isFinished = true
+        self.writeBlock(into: &output)
+        self.begin()
+        unsafe {
+            bits.write(3, 2)
+            bits.align()
+        }
+        self.drain(into: &output)
+    }
+
+    /// The window's size.
+    fn begin() {
+        if hasBegun {
+            return
+        }
+        hasBegun = true
+        unsafe {
+            if windowLog == 16 {
+                bits.write(0, 1)
+            } else if windowLog == 17 {
+                bits.write(1, 7)
+            } else if windowLog > 17 {
+                bits.write((windowLog - 17) << 1 | 1, 4)
+            } else {
+                bits.write((windowLog - 8) << 4 | 1, 7)
+            }
+        }
+    }
+
+    fn drain(into output: inout ByteBuffer) {
+        unsafe {
+            output.append(from: RawPtr<U8>(address: target.address), byteCount: bits.position - target.address)
+        }
+        bits.position = target.address
+    }
+
+    /// The window moved on: what may be matched kept, before what is not
+    /// compressed.
+    fn slide() {
+        if limit - end >= BrotliEncoder.most {
+            return
+        }
+        let keep = next - low < parameters.reach ? next - low : parameters.reach
+        let from = next - keep
+        let moved = from - window.address
+        if moved > 0 {
+            unsafe {
+                copyBytes(from: from, to: window.address, end - from + 8)
+            }
+            low = window.address
+            next -= moved
+            end -= moved
+            base -= moved
+        }
+    }
+
+    /// What is not compressed written, as a meta-block.
+    fn writeBlock(into output: inout ByteBuffer) {
+        let count = end - next
+        if count == 0 {
+            return
+        }
+        self.begin()
+        unsafe {
+            let made = self.findCommands()
+            let saved = bits
+            let savedDistances = lastDistances
+            self.writeLength(count)
+            // Compressed, which the last meta-block alone may leave unsaid.
+            bits.write(0, 1)
+            writer.write(
+                &bits,
+                commands: commands.address,
+                count: made,
+                source: next,
+                end: end,
+                before: before,
+                last: &lastDistances,
+                hard: quality < 5 ? 0 : (quality < 7 ? 1 : (quality < 9 ? 2 : 4)),
+            )
+            if bits.position - saved.position > count + 4 {
+                // As it is, which is less.
+                bits = saved
+                store8(bits.bits unchecked as Int, bits.position)
+                lastDistances = savedDistances
+                self.writeLength(count)
+                bits.write(1, 1)
+                bits.align()
+                copyBytes(from: next, to: bits.position, count)
+                bits.position = bits.position + count
+            }
+        }
+        before += count
+        next = end
+        self.drain(into: &output)
+    }
+
+    /// The start of a meta-block's header: not the last, and of a length.
+    unsafe fn writeLength(_ count: Int) {
+        bits.write(0, 1)
+        var nibbles = 4
+        while count - 1 >> (4 * nibbles) != 0 {
+            nibbles += 1
+        }
+        bits.write(nibbles - 4, 2)
+        bits.write(count - 1, 4 * nibbles)
+    }
+
+    /// The commands of what is not compressed: how many.
+    unsafe fn findCommands() -> Int {
+        var made = 0
+        // Literals since the last command's copy.
+        var pending = 0
+        var at = next
+        while at < end {
+            let stop = at + BrotliEncoder.part < end ? at + BrotliEncoder.part : end
+            var sequences = ZstdSequences(
+                sequences: room.address,
+                literals: room.address + 16 * (BrotliEncoder.part / 3 + 2),
+                count: 0,
+                literalEnd: room.address + 16 * (BrotliEncoder.part / 3 + 2),
+                offset1: offset1,
+                offset2: offset2,
+                offset3: offset3,
+            )
+            if stop - at > 15 {
+                parser.parse(at, stop, low: low, base: base, into: &sequences)
+            }
+            offset1 = sequences.offset1
+            offset2 = sequences.offset2
+            offset3 = sequences.offset3
+            var place = at
+            var i = 0
+            while i < sequences.count {
+                let sequence = sequences.sequences &+ 16 &* i
+                let literals = pending &+ (load32(sequence) unchecked as Int)
+                let length = load32(sequence &+ 4) unchecked as Int &+ 3
+                let start = place &- pending
+                made = self.addLiterals(made, start, literals)
+                self.endCommand(made, copy: length, made: length, distance: load32(sequence &+ 12) unchecked as Int)
+                made = made &+ 1
+                place = start &+ literals &+ length
+                pending = 0
+                i = i &+ 1
+            }
+            pending = pending &+ (stop &- place)
+            at = stop
+        }
+        if pending > 0 {
+            made = self.addLiterals(made, end - pending, pending)
+            let insert = load32(commands.address + 16 * made)
+            if insert > 0 {
+                self.endCommand(made, copy: 2, made: 0, distance: 0)
+                made += 1
+            }
+        }
+        return made
+    }
+
+    @inline(always)
+    unsafe fn endCommand(_ index: Int, copy: Int, made: Int, distance: Int) {
+        let command = commands.address &+ 16 &* index
+        store32(copy unchecked as U32, command &+ 4)
+        store32(made unchecked as U32, command &+ 8)
+        store32(distance unchecked as U32, command &+ 12)
+    }
+
+    /// The literals of the next command; before it, the commands of the words
+    /// of the dictionary that are among them.
+    unsafe fn addLiterals(_ index: Int, _ start: Int, _ count: Int) -> Int {
+        var made = index
+        var anchor = start
+        let last = start &+ count
+        if quality >= 5 && count >= 6 {
+            var at = start
+            while at &+ 6 <= last {
+                let word = findBrotliWord(at, most: last &- at < 24 ? last &- at : 24)
+                if word == 0 {
+                    at = at &+ 1
+                    continue
+                }
+                let length = word >> 16
+                let reach = before &+ (at &- next) < parameters.reach ? before &+ (at &- next) : parameters.reach
+                // With a space after it, where there is one.
+                let spaced = at &+ length < last && load8(at &+ length) == 0x20
+                let id = (word & 0xFFFF) | (spaced ? 1 << (load32(brotliWords &+ 8 &* length) unchecked as Int) : 0)
+                store32((at &- anchor) unchecked as U32, commands.address &+ 16 &* made)
+                self.endCommand(made, copy: length, made: (length &+ (spaced ? 1 : 0)) | 0x8000_0000, distance: reach &+ 1 &+ id)
+                made = made &+ 1
+                at = at &+ length &+ (spaced ? 1 : 0)
+                anchor = at
+            }
+        }
+        store32((last &- anchor) unchecked as U32, commands.address &+ 16 &* made)
+        return made
+    }
+}

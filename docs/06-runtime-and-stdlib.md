@@ -897,7 +897,7 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     Environment (variables listed, set and removed under
                     'unsafe', arguments as text and bytes, home, temporary
                     and known folders by XDG, Apple and Windows rules)
-Sable.IO.Compression Deflate Zlib Gzip Zstd (below), all at once, as they come
+Sable.IO.Compression Deflate Zlib Gzip Zstd Brotli (below), all at once, as they come
                     (Compressor, Decompressor) and as readers and writers
                     that compress, async ones too, with limits on what is
                     decompressed
@@ -1216,6 +1216,16 @@ runs the codecs in `CompressionTests`.
   with a hash and eight more bits of it beside each (5 to 13), a tree of
   places and the parse of least bits over a whole block (14 to 22). It does
   not split blocks by their content, nor write several at once.
+- **Brotli** decodes by tables of eight bits, the bits in variables across a
+  whole run of commands. The static dictionary, its transforms and its context
+  tables are RFC 7932's, made into a source file by
+  `tools/brotli-dictionary.py`, packed, and unpacked when first needed. The
+  encoder has qualities 0 to 11 over the zstd encoder's match finders (at 10
+  and 11 its parse of least bits, by zstd's costs rather than brotli's), and
+  codes of its own: a literal's chosen by the bytes before it, contexts alike
+  sharing one (from 5), by the best of up to four modes; a distance's by the
+  copy's length. It does not split meta-blocks into block types, and uses two
+  of the dictionary's transforms.
 - A decoder says how much it consumed, exactly, so what follows a stream can
   be read; a gzip decoder reads every member. `DecompressionLimits` bound
   the length and the ratio.

@@ -20,6 +20,7 @@ public final class ZstdDictionary {
     /// A ZstdEntropy's tables, and what it has beside them: none of a dictionary
     /// that is only bytes.
     let tables: Block?
+    let huffmanLog: Int
     let logs: (Int, Int, Int)
     /// How the three codes are distributed, two bytes a symbol, 128 for each,
     /// and how many symbols each has, for an encoder's tables.
@@ -35,6 +36,7 @@ public final class ZstdDictionary {
             id = 0
             content = bytes.toArray()
             tables = none
+            huffmanLog = 11
             logs = (-1, -1, -1)
             distributions = none
             symbols = (0, 0, 0)
@@ -84,6 +86,7 @@ public final class ZstdDictionary {
         }
         content = bytes[(bytes.count - size)...].toArray()
         tables = made.memory
+        huffmanLog = made.huffmanLog
         distributions = kept
         symbols = counts
         logs = made.logs

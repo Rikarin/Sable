@@ -1,0 +1,284 @@
+module Sable.IO.Compression
+
+// A dictionary trained: the runs of the samples whose eight-byte strings are in
+// the most of them, chosen one after another, what one has no longer counted
+// for the next (as zstd's 'fastcover' does); and before them the codes of what
+// compressing the samples with those comes to.
+
+extension Zstd {
+    /// A dictionary for bytes like the samples, in zstd's own format, which the
+    /// `zstd` command takes too: what is most common among them. It is worth
+    /// its bytes where there are many small things alike — records, messages —
+    /// each compressed on its own; a hundred samples at least, and a hundred
+    /// times the dictionary's size of them, make a good one.
+    ///
+    /// ```sable
+    /// var samples: U8[>..][>..] = []
+    /// var i = 0
+    /// while i < 200 {
+    ///     samples.append("{\"id\": \(i), \"kind\": \"measurement\", \"value\": \(i * 37 % 100)}".utf8Bytes())
+    ///     i += 1
+    /// }
+    /// let dictionary = try! ZstdDictionary(Zstd.trainDictionary(samples, size: 1000))
+    /// let one = Zstd.compress(samples[7], dictionary: dictionary)
+    /// assert(one.count < Zstd.compress(samples[7]).count)
+    /// assert(try! Zstd.decompress(one, dictionary: dictionary) == samples[7])
+    /// ```
+    public static fn trainDictionary(_ samples: U8[>..][>..], size: Int = 112_640) -> U8[>..] {
+        precondition(size >= 256, "a dictionary of \(size) bytes")
+        var content = commonRuns(samples, size: size - 200)
+        // What the last three offsets are, at first, must be in it.
+        while content.count < 8 {
+            content.append(0)
+        }
+        unsafe {
+            return withCodes(content, samples)
+        }
+    }
+
+    /// The runs, the commonest last, where the shortest offsets reach.
+    static fn commonRuns(_ samples: U8[>..][>..], size: Int) -> U8[>..] {
+        var all: U8[>..] = []
+        var ends: Int[>..] = []
+        for sample in samples {
+            all.append(contentsOf: sample)
+            ends.append(all.count)
+        }
+        if all.count < 16 || all.count <= size / 8 {
+            return all.count > size ? all[(all.count - size)...].toArray() : all
+        }
+        // How many of the samples each string of eight bytes is in, by a hash.
+        let log = 18
+        var counts = U32[>..](repeating: 0, count: 1 << log)
+        var seen = U32[>..](repeating: 0, count: 1 << log)
+        var start = 0
+        var number: U32 = 0
+        for end in ends {
+            number += 1
+            var at = start
+            while at + 8 <= end {
+                let slot = hashOf(all.readU64(at: at, endian: .Little), 8, log)
+                if seen[slot] != number {
+                    seen[slot] = number
+                    counts[slot] = counts[slot] &+ 1
+                }
+                at += 1
+            }
+            start = end
+        }
+        // One that is in one sample alone is worth nothing.
+        var i = 0
+        while i < counts.count {
+            counts[i] = counts[i] > 0 ? counts[i] - 1 : 0
+            i += 1
+        }
+
+        // A run from each part of the samples in turn, of the most of them.
+        let run = size < 4096 ? 64 : 256
+        let parts = size / run < 1 ? 1 : size / run
+        let part = all.count / parts < run * 4 ? run * 4 : all.count / parts
+        var runs: U8[>..][>..] = []
+        var taken = 0
+        var idle = 0
+        var from = 0
+        while taken < size && idle < 4 + all.count / part {
+            let to = from + part < all.count ? from + part : all.count
+            let best = bestRun(all, from, to, run, &counts, log)
+            from = to + 8 >= all.count ? 0 : to
+            if best.score == 0 {
+                idle += 1
+                continue
+            }
+            idle = 0
+            var length = best.end - best.start
+            length = length < size - taken ? length : size - taken
+            runs.append(all[(best.end - length)..<best.end].toArray())
+            taken += length
+            var at = best.start
+            while at + 8 <= best.end {
+                counts[hashOf(all.readU64(at: at, endian: .Little), 8, log)] = 0
+                at += 1
+            }
+        }
+        var content: U8[>..] = []
+        i = runs.count - 1
+        while i >= 0 {
+            content.append(contentsOf: runs[i])
+            i -= 1
+        }
+        return content
+    }
+
+    /// The run of a part whose strings, each counted once, are in the most
+    /// samples, without what at its ends is in none.
+    static fn bestRun(_ all: U8[>..], _ from: Int, _ to: Int, _ run: Int, _ counts: inout U32[>..], _ log: Int) -> (start: Int, end: Int, score: Int) {
+        let strings = run - 7
+        var active = U16[>..](repeating: 0, count: 1 << log)
+        var slots: Int[>..] = []
+        var score = 0
+        var best = 0
+        var bestAt = from
+        var at = from
+        while at + 8 <= to {
+            let slot = hashOf(all.readU64(at: at, endian: .Little), 8, log)
+            slots.append(slot)
+            if active[slot] == 0 {
+                score += Int(counts[slot])
+            }
+            active[slot] = active[slot] &+ 1
+            if slots.count > strings {
+                let old = slots[slots.count - strings - 1]
+                active[old] = active[old] &- 1
+                if active[old] == 0 {
+                    score -= Int(counts[old])
+                }
+            }
+            if score > best {
+                best = score
+                bestAt = at
+            }
+            at += 1
+        }
+        var start = bestAt - strings + 1 > from ? bestAt - strings + 1 : from
+        var last = bestAt
+        while start < last && counts[slots[start - from]] == 0 {
+            start += 1
+        }
+        while last > start && counts[slots[last - from]] == 0 {
+            last -= 1
+        }
+        return (start: start, end: last + 8, score: best)
+    }
+
+    /// The dictionary of the content, with the codes that the samples have when
+    /// compressed with it.
+    unsafe static fn withCodes(_ content: U8[>..], _ samples: U8[>..][>..]) -> U8[>..] {
+        let known = try! ZstdDictionary(content)
+        let writer = ZstdBlockWriter(maxSequences: ZstdBlocks.maxBlock / 3 + 1)
+        let room = Block(count: 16 * (ZstdBlocks.maxBlock / 3 + 2) + ZstdBlocks.maxBlock + 64)
+        // Every byte and every code may come, if seldom.
+        var bytes = U32[>..](repeating: 1, count: 256)
+        var codes = U32[>..](repeating: 1, count: 192)
+        // A thousand of them say enough.
+        let step = samples.count / 1000 + 1
+        var number = 0
+        while number < samples.count {
+            let sample = samples[number]
+            number += step
+            let count = sample.count < ZstdBlocks.maxBlock ? sample.count : ZstdBlocks.maxBlock
+            if count < 8 {
+                continue
+            }
+            let encoder = ZstdEncoder(level: 3, checksum: false, dictionary: known, contentSize: count)
+            NativeMemory.copy(from: sample[..<count], to: RawPtr<U8>(address: encoder.end))
+            store64(0, encoder.end + count)
+            var made = ZstdSequences(
+                sequences: room.address,
+                literals: room.address + 16 * (ZstdBlocks.maxBlock / 3 + 2),
+                count: 0,
+                literalEnd: room.address + 16 * (ZstdBlocks.maxBlock / 3 + 2),
+                offset1: 1,
+                offset2: 4,
+                offset3: 8,
+            )
+            encoder.parser.parse(encoder.end, encoder.end + count, low: encoder.low, base: encoder.base, into: &made)
+            var at = made.literals
+            while at < made.literalEnd {
+                let byte = load8(at)
+                bytes[byte] = bytes[byte] + 1
+                at = at &+ 1
+            }
+            writer.findCodes(made.sequences, made.count)
+            var i = 0
+            while i < 192 {
+                codes[i] = codes[i] + load32(writer.counts + 4 * i)
+                i += 1
+            }
+        }
+
+        var output = ByteBuffer()
+        var hash = XxHash64()
+        let memory = Block(count: content.count + 16)
+        NativeMemory.copy(from: content, to: RawPtr<U8>(address: memory.address))
+        hash.update(at: memory.address, count: content.count)
+        output.writeU32(0xEC30_A437)
+        // Of the numbers that no registry of dictionaries has.
+        output.writeU32(U32(hash.value % 2_147_450_880 + 32768))
+        let work = Block(count: 8192, zeroed: true)
+        writer.writeDictionary(&output, literals: bytes, codes: codes, work: work.address)
+        output.writeU32(1)
+        output.writeU32(4)
+        output.writeU32(8)
+        output.write(bytes: content)
+        return output.takeBytes()
+    }
+}
+
+extension ZstdBlockWriter {
+    /// A dictionary's Huffman code, and its tables of offsets, match lengths
+    /// and literal lengths, described, of counts none of which is zero but of
+    /// codes there are not.
+    unsafe fn writeDictionary(_ output: inout ByteBuffer, literals: U32[>..], codes: U32[>..], work scratch: Int) {
+        // Counts whose code's description is too long are made more alike.
+        var given = literals
+        var end = scratch
+        while end == scratch {
+            var largest: U32 = 1
+            var i = 0
+            while i < 256 {
+                largest = given[i] > largest ? given[i] : largest
+                i += 1
+            }
+            // Less than 2^22 in all.
+            while largest > 16000 {
+                largest = largest >> 1
+                i = 0
+                while i < 256 {
+                    given[i] = given[i] / 2 + 1
+                    i += 1
+                }
+            }
+            i = 0
+            while i < 256 {
+                store32(given[i], work &+ 4096 &+ 4 &* i)
+                given[i] = given[i] / 4 + 1
+                i += 1
+            }
+            let lengths = work &+ 3072
+            _ = huffmanLengths(work &+ 4096, count: 256, limit: 11, lengths: lengths, work: work)
+            end = self.writeWeights(lengths, last: 255, to: scratch)
+            if largest <= 2 {
+                // As much alike as they may be, and still not all the same.
+                i = 0
+                while i < 256 {
+                    given[i] = i < 128 ? 8 : 1
+                    i += 1
+                }
+            }
+        }
+        output.append(from: RawPtr<U8>(address: scratch), byteCount: end - scratch)
+        for code in [ZstdCode.Offset, ZstdCode.MatchLength, ZstdCode.LiteralLength] {
+            let distribution = work &+ 1024
+            var total = 0
+            var i = 0
+            while i < code.symbolCount {
+                total += Int(codes[64 * code.index + i])
+                i += 1
+            }
+            // No more than a table tells apart.
+            let shift = total > 1 << 24 ? 8 : 0
+            total = 0
+            i = 0
+            while i < code.symbolCount {
+                let these = codes[64 * code.index + i] >> U32(shift)
+                store32(these == 0 ? 1 : these, scratch &+ 4 &* i)
+                total += these == 0 ? 1 : Int(these)
+                i += 1
+            }
+            normalizeCounts(scratch, symbols: code.symbolCount, total: total, log: code.maxLog, into: distribution)
+            let written = scratch &+ 1024
+            let last = writeDistribution(distribution, symbols: code.symbolCount, log: code.maxLog, to: written)
+            output.append(from: RawPtr<U8>(address: written), byteCount: last - written)
+        }
+    }
+}

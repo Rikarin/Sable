@@ -1,0 +1,108 @@
+module CompressionConformance
+
+// Answers what run.py asks of Sable.IO.Compression: a request a line, tabs
+// between what is wanted, the codec, and the paths of what is read and written.
+// What cannot be decompressed is answered "error" and why.
+
+import Sable.IO
+import Sable.IO.Compression
+
+fn decompress(_ codec: String, _ bytes: U8[>..]) throws(CompressionError) -> U8[>..] {
+    return match codec {
+        case "deflate" => try Deflate.decompress(bytes)
+        case "zlib"    => try Zlib.decompress(bytes)
+        case "gzip"    => try Gzip.decompress(bytes)
+        case "zstd"    => try Zstd.decompress(bytes)
+        case _         => try Brotli.decompress(bytes)
+    }
+}
+
+fn pieces<D: Decompressor>(_ decoder: inout D, _ bytes: U8[>..]) throws(CompressionError) -> U8[>..] {
+    var buffer = ByteBuffer()
+    var at = 0
+    var size = 1
+    while true {
+        let end = at + size < bytes.count ? at + size : bytes.count
+        let step = try decoder.decompress(bytes[at..<end], into: &buffer, limit: 977)
+        at += step.consumed
+        size = size * 3 % 1009 + 1
+        if step.status == .Finished && at == bytes.count {
+            return buffer.takeBytes()
+        }
+        if step.consumed == 0 && step.produced == 0 && at == bytes.count {
+            throw .Truncated
+        }
+    }
+}
+
+fn inPieces(_ codec: String, _ bytes: U8[>..]) throws(CompressionError) -> U8[>..] {
+    if codec == "zstd" {
+        var decoder = ZstdDecoder()
+        return try pieces(&decoder, bytes)
+    }
+    if codec == "brotli" {
+        var decoder = BrotliDecoder()
+        return try pieces(&decoder, bytes)
+    }
+    if codec == "gzip" {
+        var decoder = GzipDecoder()
+        return try pieces(&decoder, bytes)
+    }
+    if codec == "zlib" {
+        var decoder = ZlibDecoder()
+        return try pieces(&decoder, bytes)
+    }
+    var decoder = DeflateDecoder()
+    return try pieces(&decoder, bytes)
+}
+
+fn compress(_ codec: String, _ level: Int, _ bytes: U8[>..]) -> U8[>..] {
+    return match codec {
+        case "deflate" => Deflate.compress(bytes, level: level)
+        case "zlib"    => Zlib.compress(bytes, level: level)
+        case "gzip"    => Gzip.compress(bytes, level: level)
+        case "zstd"    => Zstd.compress(bytes, level: level)
+        case _         => Brotli.compress(bytes, quality: level)
+    }
+}
+
+fn answer(_ request: String[>..]) throws -> String {
+    let bytes = try File.readBytes(request[2])
+    match request[0] {
+        case "decompress" => {
+            let made = try decompress(request[1], bytes)
+            let again = try inPieces(request[1], bytes)
+            if made != again {
+                return "other in pieces"
+            }
+            try File.writeBytes(request[3], made)
+            return "\(made.count)"
+        }
+        case "compress" => {
+            let made = compress(request[1], try Int.parse(request[4]), bytes)
+            if (try decompress(request[1], made)) != bytes {
+                return "other when decompressed"
+            }
+            try File.writeBytes(request[3], made)
+            return "\(made.count)"
+        }
+        case _ => {
+            // A dictionary: what is compressed with it is what it was.
+            let dictionary = try ZstdDictionary(bytes)
+            let text = try File.readBytes(request[3])
+            let packed = Zstd.compress(text, level: 5, dictionary: dictionary)
+            return (try Zstd.decompress(packed, dictionary: dictionary)) == text ? "\(dictionary.id)" : "other"
+        }
+    }
+}
+
+@main
+fn main() {
+    while let line = Console.readLine() {
+        do {
+            print(try answer(line.split(separator: '\t').map { String($0) }))
+        } catch {
+            print("error \(error.description())")
+        }
+    }
+}

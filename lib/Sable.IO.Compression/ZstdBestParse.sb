@@ -123,7 +123,7 @@ final class ZstdBestParse {
         let head = parser.hashes.address &+ 4 &* hashOf(load64(at), width, level.hashLog)
         var next = load32(head)
         store32(place, head)
-        let reach = at &- low < 1 << level.windowLog ? at &- low : 1 << level.windowLog
+        let reach = at &- low < level.reach ? at &- low : level.reach
         var best = shortest
         if level.minMatch == 3 {
             let head3 = parser.hashes3.address &+ 4 &* hashOf(load64(at), 3, 16)

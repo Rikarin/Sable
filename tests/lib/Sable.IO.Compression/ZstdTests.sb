@@ -376,3 +376,35 @@ fn theStreamsToo() throws {
     var reader = ZstdReader(MemoryStream(writer.inner.bytes))
     assert((try reader.readToEnd()) == bytes)
 }
+
+@test
+fn dictionariesAreTrained() async throws {
+    var samples: U8[>..][>..] = []
+    var seed: U64 = 1
+    while seed <= 400 {
+        samples.append(sample(4, 200 + Int(seed) % 300, seed: seed))
+        seed += 1
+    }
+    let text = sample(4, 300, seed: 4321)
+    let plain = Zstd.compress(text).count
+    for size in [256, 1000, 8000, 112_640] {
+        let trained = Zstd.trainDictionary(samples, size: size)
+        assert(trained.count <= size, "\(trained.count) of \(size) bytes")
+        let dictionary = try ZstdDictionary(trained)
+        assert(dictionary.id >= 32768)
+        let packed = Zstd.compress(text, dictionary: dictionary)
+        assert(packed.count < plain, "\(packed.count), \(plain) without")
+        assert((try Zstd.decompress(packed, dictionary: dictionary)) == text)
+        if await has("zstd") {
+            let directory = try Temp.directory()
+            try File.writeBytes("\(directory.path)/d", trained)
+            assert(await run("zstd", ["-dcq", "-D", "\(directory.path)/d"], input: packed) == text, "zstd reads what a dictionary of \(size) helped with")
+        }
+    }
+    // Of nothing, of one byte again and again, and of what is nowhere alike.
+    for few in [[], [U8[>..](repeating: 7, count: 100)], [sample(0, 3000)], [sample(0, 20_000), sample(1, 20_000)]] as U8[>..][>..][>..] {
+        let dictionary = try ZstdDictionary(Zstd.trainDictionary(few, size: 2000))
+        let packed = Zstd.compress(text, level: 7, dictionary: dictionary)
+        assert((try Zstd.decompress(packed, dictionary: dictionary)) == text)
+    }
+}

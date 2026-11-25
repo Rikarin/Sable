@@ -4,9 +4,9 @@ module Sable.IO.Compression
 /// by Huffman codes, the sequences by tables of their three codes, each the
 /// block's own, the last block's, or one known beforehand, whichever is least.
 ///
-/// A sequence is three words: how many literals, how long a match, less three,
-/// and what its offset is, as it is written: 1 to 3 for one of the last three,
-/// or the offset and three.
+/// A sequence is four words: how many literals, how long a match, less three,
+/// what its offset is, as it is written: 1 to 3 for one of the last three, or
+/// the offset and three; and the offset.
 final class ZstdBlockWriter {
     /// The literals' Huffman codes, in a word each, the bits with their number
     /// at bit 24, of this block and the last; the three codes' tables, of this
@@ -77,7 +77,7 @@ final class ZstdBlockWriter {
         fillBytes(lengths, with: 0, 256)
         var last = 0
         var i = 0
-        while i < 2048 {
+        while i < 1 << dictionary.huffmanLog {
             let entry = load16(tables.address &+ 2 &* i)
             store8(entry & 15, lengths &+ (entry >> 8))
             last = entry >> 8 > last ? entry >> 8 : last
@@ -504,7 +504,7 @@ final class ZstdBlockWriter {
         fillBytes(counted, with: 0, 3 &* 256)
         var i = 0
         while i < count {
-            let at = sequences &+ 12 &* i
+            let at = sequences &+ 16 &* i
             let literalLength = load32(at) unchecked as Int
             let matchLength = load32(at &+ 4) unchecked as Int
             let offset = load32(at &+ 8) unchecked as Int
@@ -668,7 +668,7 @@ final class ZstdBlockWriter {
                 literalState = nextState(literalTable, literalCode, literalState, literalBits)
             }
             isFirst = false
-            let at = sequences &+ 12 &* i
+            let at = sequences &+ 16 &* i
             let literalWidth = load32(widths &+ 4 &* literalCode) unchecked as Int
             let matchWidth = load32(widths &+ 144 &+ 4 &* matchCode) unchecked as Int
             let literalValue = (load32(at) unchecked as Int) & ((1 << literalWidth) &- 1)

@@ -3,7 +3,8 @@ module Sable.IO.Compression
 /// Where a block's sequences and literals are put, and the last three offsets
 /// as its decoder will have them.
 struct ZstdSequences {
-    /// The sequences, three words each, and the literals.
+    /// The sequences, four words each — how many literals, how long a match,
+    /// less three, its offset as zstd writes it, and that — and the literals.
     let sequences: Int
     let literals: Int
     var count: Int
@@ -47,10 +48,11 @@ struct ZstdSequences {
             offset2 = offset1
             offset1 = offset
         }
-        let at = sequences &+ 12 &* self.count
+        let at = sequences &+ 16 &* self.count
         store32(count unchecked as U32, at)
         store32((length &- 3) unchecked as U32, at &+ 4)
         store32(written unchecked as U32, at &+ 8)
+        store32(offset unchecked as U32, at &+ 12)
         self.count = self.count &+ 1
     }
 
@@ -143,7 +145,7 @@ final class ZstdParser {
         let width = level.minMatch
         let log = level.hashLog
         let stride = level.target > 0 ? level.target : 1
-        let window = 1 << level.windowLog
+        let window = level.reach
         var made = sequences
         var at = start
         var anchor = start
@@ -213,7 +215,7 @@ final class ZstdParser {
         let width = level.minMatch
         let longLog = level.hashLog
         let shortLog = level.chainLog
-        let window = 1 << level.windowLog
+        let window = level.reach
         var made = sequences
         var at = start
         var anchor = start
@@ -345,7 +347,7 @@ final class ZstdParser {
         let first = (hash >> 8) << log
         let head = load8(rowHeads &+ (hash >> 8))
         let place = (at &- base) unchecked as U32
-        let reach = at &- low < 1 << level.windowLog ? at &- low : 1 << level.windowLog
+        let reach = at &- low < level.reach ? at &- low : level.reach
         // Which of the row's tags are the hash's, the newest first: a bit each.
         let wanted = ((hash & 255) unchecked as U64) &* 0x0101_0101_0101_0101
         var mask: U64 = 0

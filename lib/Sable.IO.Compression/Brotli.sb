@@ -1,0 +1,47 @@
+module Sable.IO.Compression
+
+/// Brotli (RFC 7932), all at once.
+///
+/// ```sable
+/// let packed = Brotli.compress("so so so so so so so so so so".utf8Bytes(), quality: 11)
+/// assert(try! Brotli.decompress(packed) == "so so so so so so so so so so".utf8Bytes())
+/// ```
+public struct Brotli {
+    /// The bytes compressed, at a quality from 0 to 11, the smallest, with a
+    /// window of 2 to a power from 10 to 24 bytes.
+    public static fn compress(_ source: U8[:], quality: Int = 4, windowLog: Int = 22) -> U8[>..] {
+        var output = ByteBuffer()
+        compress(source, into: &output, quality: quality, windowLog: windowLog)
+        return output.takeBytes()
+    }
+
+    /// The bytes compressed at the buffer's end: to how many.
+    @discardable
+    public static fn compress(_ source: U8[:], into output: inout ByteBuffer, quality: Int = 4, windowLog: Int = 22) -> Int {
+        let start = output.count
+        let encoder = BrotliEncoder(quality: quality, windowLog: windowLog, expecting: source.count)
+        encoder.compress(source, into: &output)
+        encoder.finish(into: &output)
+        return output.count - start
+    }
+
+    /// The bytes decompressed. They must be one stream and no more:
+    /// `.Truncated` where it does not end.
+    public static fn decompress(_ source: U8[:], limits: DecompressionLimits = DecompressionLimits()) throws(CompressionError) -> U8[>..] {
+        var output = ByteBuffer()
+        try decompress(source, into: &output, limits: limits)
+        return output.takeBytes()
+    }
+
+    /// The bytes decompressed at the buffer's end: to how many.
+    @discardable
+    public static fn decompress(_ source: U8[:], into output: inout ByteBuffer, limits: DecompressionLimits = DecompressionLimits()) throws(CompressionError) -> Int {
+        var decoder = BrotliDecoder(limits: limits)
+        return try decompressWhole(&decoder, source, into: &output)
+    }
+
+    /// The most bytes so many can be compressed to, at any quality.
+    public static fn maxCompressedLength(_ count: Int) -> Int {
+        return count + (count / 262144 + 1) * 12 + 16
+    }
+}

@@ -60,6 +60,7 @@ public final class ZstdEncoder: Compressor {
             while made.windowLog < 27 && 1 << made.windowLog < known {
                 made.windowLog += 1
             }
+            made.reach = 1 << made.windowLog
         }
         parameters = made
         let reach = 1 << made.windowLog
@@ -72,7 +73,7 @@ public final class ZstdEncoder: Compressor {
         parser = ZstdParser(level: made)
         parser.inserted = low - base
         writer = ZstdBlockWriter(maxSequences: ZstdBlocks.maxBlock / 3 + 1)
-        sequenceRoom = Block(count: 12 * (ZstdBlocks.maxBlock / 3 + 2) + ZstdBlocks.maxBlock + 64)
+        sequenceRoom = Block(count: 16 * (ZstdBlocks.maxBlock / 3 + 2) + ZstdBlocks.maxBlock + 64)
         target = Block(count: 2 * ZstdBlocks.maxBlock + 2048)
         offset1 = 1
         offset2 = 4
@@ -219,9 +220,9 @@ public final class ZstdEncoder: Compressor {
             } else if count > 7 {
                 var sequences = ZstdSequences(
                     sequences: sequenceRoom.address,
-                    literals: sequenceRoom.address + 12 * (ZstdBlocks.maxBlock / 3 + 2),
+                    literals: sequenceRoom.address + 16 * (ZstdBlocks.maxBlock / 3 + 2),
                     count: 0,
-                    literalEnd: sequenceRoom.address + 12 * (ZstdBlocks.maxBlock / 3 + 2),
+                    literalEnd: sequenceRoom.address + 16 * (ZstdBlocks.maxBlock / 3 + 2),
                     offset1: offset1,
                     offset2: offset2,
                     offset3: offset3,

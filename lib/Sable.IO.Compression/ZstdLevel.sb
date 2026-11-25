@@ -18,6 +18,8 @@ enum ZstdStrategy {
 
 struct ZstdLevel {
     var windowLog: Int
+    /// How far back a match may be.
+    var reach: Int
     /// The logs of the second table's or the tree's entries, and of the hash
     /// table's.
     var chainLog: Int
@@ -62,6 +64,7 @@ struct ZstdLevel {
         ]
         let row = rows[level < 0 ? 0 : level]
         windowLog = row[0]
+        reach = 1 << windowLog
         chainLog = row[1]
         hashLog = row[2]
         searchLog = row[3]
@@ -75,6 +78,7 @@ struct ZstdLevel {
                 needed += 1
             }
             windowLog = needed
+            reach = 1 << needed
             let least = needed + 1 < 10 ? 10 : needed + 1
             hashLog = hashLog < least ? hashLog : least
             chainLog = chainLog < needed + (strategy == .Best ? 1 : 0) ? chainLog : needed + (strategy == .Best ? 1 : 0)

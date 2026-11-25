@@ -157,13 +157,13 @@ final class ZstdBlocks {
         literalStart = literals.address
         literalCount = size
         length = header &+ packed
-        let right = format == 0 ? ZstdBlocks.stream(at, left, to: literalStart, size, entropy.huffman) : ZstdBlocks.streams(at, left, to: literalStart, size, entropy.huffman)
+        let right = format == 0 ? ZstdBlocks.stream(at, left, to: literalStart, size, entropy.huffman, entropy.huffmanLog) : ZstdBlocks.streams(at, left, to: literalStart, size, entropy.huffman, entropy.huffmanLog)
         return right ? none : "literals that are not their codes'"
     }
 
     /// One stream of Huffman codes, read from its end back, of 'size' bytes:
     /// false where it is not, exactly.
-    unsafe static fn stream(_ source: Int, _ count: Int, to target: Int, _ size: Int, _ table: Int) -> Bool {
+    unsafe static fn stream(_ source: Int, _ count: Int, to target: Int, _ size: Int, _ table: Int, _ log: Int) -> Bool {
         if count < 1 {
             return false
         }
@@ -171,31 +171,32 @@ final class ZstdBlocks {
         if last == 0 {
             return false
         }
-        return finishStream(source, 8 &* (count &- 1) &+ (63 &- last.leadingZeroCount), target, target &+ size, table)
+        return finishStream(source, 8 &* (count &- 1) &+ (63 &- last.leadingZeroCount), target, target &+ size, table, log)
     }
 
     /// The rest of a stream of which so many bits are left.
-    unsafe static fn finishStream(_ source: Int, _ bits: Int, _ target: Int, _ end: Int, _ table: Int) -> Bool {
+    unsafe static fn finishStream(_ source: Int, _ bits: Int, _ target: Int, _ end: Int, _ table: Int, _ log: Int) -> Bool {
         var left = bits
         var to = target
-        // Five at a time while eight bytes before are the stream's.
-        while left >= 64 && end &- to >= 5 {
+        // Four at a time while eight bytes before are the stream's.
+        let shift = (64 &- log) unchecked as U64
+        while left >= 64 && end &- to >= 4 {
             // The bits above those left are used already.
             var word = load64(source &+ ((left &+ 7) >> 3) &- 8) << (((0 &- left) & 7) unchecked as U64)
             var used = 0
             var i = 0
-            while i < 5 {
-                let entry = load16(table &+ 2 &* ((word >> 53) unchecked as Int))
+            while i < 4 {
+                let entry = load16(table &+ 2 &* ((word >> (shift & 63)) unchecked as Int))
                 word = word << ((entry & 15) unchecked as U64)
                 used = used &+ (entry & 15)
                 store8(entry >> 8, to &+ i)
                 i = i &+ 1
             }
-            to = to &+ 5
+            to = to &+ 4
             left = left &- used
         }
         while to < end {
-            let entry = load16(table &+ 2 &* readBitsBack(source, left &- 11, 11))
+            let entry = load16(table &+ 2 &* readBitsBack(source, left &- log, log))
             left = left &- (entry & 15)
             if left < 0 {
                 return false
@@ -209,7 +210,7 @@ final class ZstdBlocks {
     /// Four streams of Huffman codes, each of a quarter of 'size' bytes: the
     /// four decoded at once, five bytes of each at a time, while there are so
     /// many, and eight bytes before where each is read.
-    unsafe static fn streams(_ source: Int, _ count: Int, to target: Int, _ size: Int, _ table: Int) -> Bool {
+    unsafe static fn streams(_ source: Int, _ count: Int, to target: Int, _ size: Int, _ table: Int, _ log: Int) -> Bool {
         if count < 10 || size < 6 {
             return false
         }
@@ -237,7 +238,7 @@ final class ZstdBlocks {
         if left0 < 0 || left1 < 0 || left2 < 0 || left3 < 0 {
             return false
         }
-        if left0 >= 64 && left1 >= 64 && left2 >= 64 && left3 >= 64 {
+        if log == 11 && left0 >= 64 && left1 >= 64 && left2 >= 64 && left3 >= 64 {
             // Each stream's next bits at the top of a word, whose lowest set
             // bit says how many of it are used; and where the word is from.
             var at0 = start0 &+ (left0 &+ 7) / 8 &- 8
@@ -299,10 +300,10 @@ final class ZstdBlocks {
             left2 = 8 &* (at2 &- start2) &+ 64 &- word2.trailingZeroCount
             left3 = 8 &* (at3 &- start3) &+ 64 &- word3.trailingZeroCount
         }
-        if !finishStream(start0, left0, to0, target &+ quarter, table) || !finishStream(start1, left1, to1, target &+ 2 &* quarter, table) {
+        if !finishStream(start0, left0, to0, target &+ quarter, table, log) || !finishStream(start1, left1, to1, target &+ 2 &* quarter, table, log) {
             return false
         }
-        return finishStream(start2, left2, to2, target &+ 3 &* quarter, table) && finishStream(start3, left3, to3, last, table)
+        return finishStream(start2, left2, to2, target &+ 3 &* quarter, table, log) && finishStream(start3, left3, to3, last, table, log)
     }
 
     @inline(always)

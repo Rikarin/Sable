@@ -1,11 +1,31 @@
 module Sable.IO.Compression
 
 /// CRC-32 (IEEE 802.3's, reflected) of bytes as they come: eight bytes a step.
-struct Crc32 {
-    var state: U32 = 0xFFFF_FFFF
+package struct Crc32 {
+    var state: U32
+
+    /// Of no bytes yet.
+    package init() {
+        state = 0xFFFF_FFFF
+    }
 
     /// What is in gzip's trailers, and zip's entries.
-    var value: U32 => ~state
+    package var value: U32 => ~state
+
+    /// More bytes, through memory a run at a time, where the processor can be
+    /// asked for the whole of it.
+    package mutating fn update(_ bytes: U8[:]) {
+        let memory = Block(count: bytes.count < 16384 ? bytes.count + 16 : 16384)
+        var i = 0
+        while i < bytes.count {
+            let end = i + memory.count < bytes.count ? i + memory.count : bytes.count
+            unsafe {
+                NativeMemory.copy(from: bytes[i..<end], to: RawPtr<U8>(address: memory.address))
+                self.update(at: memory.address, count: end - i)
+            }
+            i = end
+        }
+    }
 
     /// The state after the bytes at an address, and above it how many of them
     /// it is after: as many as the processor has instructions for.

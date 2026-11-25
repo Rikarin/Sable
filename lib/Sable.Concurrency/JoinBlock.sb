@@ -1,0 +1,110 @@
+module Sable.Concurrency
+
+/// A dataflow block that pairs what its two targets are sent, the first of
+/// each, then the second of each: .NET's `JoinBlock<T1, T2>`, where two
+/// streams meet — an order and its payment. Each target holds at most
+/// `capacity` items waiting for their pair; the block completes once either
+/// target has completed and has nothing left to pair. A target faulting
+/// faults the block.
+///
+/// ```sable
+/// let join = JoinBlock<String, Int>()
+/// await join.first.send("a")
+/// await join.second.send(1)
+/// await join.second.send(2)
+/// join.complete()
+/// var pairs: String[>..] = []
+/// while let (name, number) = try! await join.receive() {
+///     pairs.append("\(name)\(number)")
+/// }
+/// assert(pairs == ["a1"])
+/// ```
+@immutable
+public final class JoinBlock<A: Sendable, B: Sendable>: AsyncSequence {
+    public alias Iter = DataflowIterator<(A, B)>
+
+    /// What the first of each pair is sent to.
+    public let first: BufferBlock<A>
+
+    /// What the second of each pair is sent to.
+    public let second: BufferBlock<B>
+
+    let outlet: BlockOutlet<(A, B)>
+    let status: BlockStatus
+
+    /// A block pairing its targets' items, each holding at most so many
+    /// (none: as many as come), as many pairs as that held not yet taken.
+    public init(capacity: Int? = none) {
+        first = BufferBlock<A>(capacity: capacity)
+        second = BufferBlock<B>(capacity: capacity)
+        let outlet = BlockOutlet<(A, B)>(capacity, toEvery: false)
+        self.outlet = outlet
+        let status = BlockStatus()
+        self.status = status
+        let first = self.first
+        let second = self.second
+        _ = Task.detached {
+            do {
+                while true {
+                    guard let a = try await first.receive() else {
+                        break
+                    }
+                    guard let b = try await second.receive() else {
+                        break
+                    }
+                    if await outlet.put((a, b)) != .Sent {
+                        break
+                    }
+                }
+            } catch {
+                _ = status.record(error)
+            }
+            first.complete()
+            second.complete()
+            outlet.finish(status.failure)
+            _ = status.finished.succeed(true)
+        }
+    }
+
+    /// Both targets completed: the block pairs what they hold, then
+    /// completes.
+    public fn complete() {
+        first.complete()
+        second.complete()
+    }
+
+    /// The block, and its targets, stopped with the error.
+    public fn fault(_ error: any Error) {
+        first.fault(error)
+        second.fault(error)
+    }
+
+    /// The error it faulted with, if it has.
+    public var failure: (any Error)? => status.failure
+
+    /// Waits until the block has paired all it can and its pairs are
+    /// taken; throws what it faulted with.
+    public fn completion() async throws {
+        try await status.completion(outlet.drained)
+    }
+
+    /// Its pairs given to the target, if the predicate takes them: as
+    /// `TransformBlock.link(to:propagateCompletion:maxMessages:where:)`.
+    public fn link<Target: DataflowTarget>(to target: Target, propagateCompletion: Bool = false, maxMessages: Int? = none, where accepts: @escaping @Sendable ((A, B)) -> Bool = { _ in true })
+        where Target.Input == (A, B), Target: Sendable {
+        let block = self
+        let options = DataflowLinkOptions { propagateCompletion: propagateCompletion, maxMessages: maxMessages }
+        outlet.link(DataflowLink<(A, B)>(target, options, accepts), fault: { block.fault($0) })
+    }
+
+    /// The next pair no link takes, waiting for it; none once it has
+    /// completed. Throws what it faulted with.
+    public fn receive() async throws -> (A, B)? {
+        return try await outlet.receive()
+    }
+
+    /// Its pairs as they come: as `receive()`.
+    public fn makeAsyncIterator() -> DataflowIterator<(A, B)> {
+        return DataflowIterator<(A, B)>(outlet)
+    }
+}

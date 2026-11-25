@@ -1,0 +1,486 @@
+module TransformBlockTests
+
+// The dataflow blocks (Sable.Concurrency) — TransformBlock, TransformManyBlock,
+// ActionBlock, BufferBlock, BroadcastBlock, BatchBlock and JoinBlock — and
+// the links between them, tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Concurrency
+//
+// A slow block waits on a gate the test opens, and Task.settle() waits for
+// all that can go on, so what each test sees is the same every run.
+
+import ConcurrencySupport
+import Sable.Concurrency
+import Sable.Testing
+
+// A gate the test opens: what waits on it is slow until then.
+@immutable
+final class Gate {
+    let isOpen: Atomic<Bool>
+    let opened: WaitList
+
+    init() {
+        isOpen = Atomic(false)
+        opened = WaitList()
+    }
+
+    fn pass() async {
+        while true {
+            let ticket = opened.ticket
+            if isOpen.load() {
+                return
+            }
+            await opened.park(since: ticket)
+        }
+    }
+
+    fn openUp() {
+        isOpen.store(true)
+        opened.wakeAll()
+    }
+}
+
+@derive(Equatable, Debug)
+struct Refused: Error {
+    let item: Int
+}
+
+// ---- TransformBlock -------------------------------------------------------
+
+@test
+fn aTransformBlockGivesWhatItMakesInOrder() async throws {
+    let double = TransformBlock<Int, Int>(parallelism: 4) { n in
+        await Task.yield()
+        return n * 2
+    }
+    for i in 1...50 {
+        await double.send(i)
+    }
+    double.complete()
+    var all: Int[>..] = []
+    for try await value in double {
+        all.append(value)
+    }
+    expect(all == (1...50).map { $0 * 2 })
+    try await double.completion()
+}
+
+@test
+fn anUnorderedBlockGivesEachAsItIsDone() async throws {
+    let gate = Gate()
+    let slowFirst = TransformBlock<Int, Int>(parallelism: 2, ordered: false) { n in
+        if n == 1 {
+            await gate.pass()
+        }
+        return n
+    }
+    await slowFirst.send(1)
+    await slowFirst.send(2)
+    await Task.settle()
+    expect(slowFirst.tryReceive() == 2)
+    gate.openUp()
+    expect(try await slowFirst.receive() == 1)
+}
+
+@test
+fn aBlockWorksOnNoMoreThanItsParallelismAtOnce() async {
+    let gate = Gate()
+    let running = Atomic(0)
+    let started = Atomic(0)
+    let block = ActionBlock<Int>(parallelism: 3) { _ in
+        started.add(1)
+        running.add(1)
+        await gate.pass()
+        running.add(-1)
+    }
+    for i in 0..<10 {
+        _ = block.trySend(i)
+    }
+    await Task.settle()
+    assertEqual(started.load(), 3)
+    gate.openUp()
+    block.complete()
+    try! await block.completion()
+    assertEqual(started.load(), 10)
+}
+
+@test
+fn aSendWaitsWhileTheBlockIsFull() async {
+    let gate = Gate()
+    let block = ActionBlock<Int>(capacity: 2) { _ in await gate.pass() }
+    let sent = Atomic(0)
+    let producer = Task.spawn {
+        for i in 0..<10 {
+            if await block.send(i) == .Sent {
+                sent.add(1)
+            }
+        }
+    }
+    await Task.settle()
+    // One being worked on, two waiting; the fourth send waits for room.
+    assertEqual(sent.load(), 3)
+    assertEqual(block.trySend(99), SendResult.Full)
+    gate.openUp()
+    await producer.value
+    assertEqual(sent.load(), 10)
+}
+
+@test
+fn whatTheTransformThrowsFaultsTheBlock() async {
+    let block = TransformBlock<Int, Int> { (n: Int) throws -> Int in
+        if n == 3 {
+            throw Refused { item: n }
+        }
+        return n
+    }
+    for i in 1...5 {
+        _ = await block.send(i)
+    }
+    await Task.settle()
+    expect(block.failure != none)
+    assertEqual(await block.send(6), SendResult.Closed)
+    var got: Int[>..] = []
+    await expectThrows(Refused { item: 3 }) {
+        for try await value in block {
+            got.append(value)
+        }
+    }
+    expect(got == [1, 2])
+    await expectThrows(Refused { item: 3 }) { try await block.completion() }
+}
+
+@test
+fn faultingABlockDropsWhatItHolds() async {
+    let gate = Gate()
+    let done = Atomic(0)
+    let block = ActionBlock<Int> { _ in
+        await gate.pass()
+        done.add(1)
+    }
+    for i in 0..<5 {
+        _ = block.trySend(i)
+    }
+    await Task.settle()
+    block.fault(Refused { item: -1 })
+    gate.openUp()
+    await expectThrows(Refused { item: -1 }) { try await block.completion() }
+    expect(done.load() <= 1)
+    assertEqual(block.inputCount, 0)
+}
+
+// ---- Links ----------------------------------------------------------------
+
+@test
+fn aLinkPassesItemsAndCompletionOn() async throws {
+    let source = TransformBlock<Int, String> { "\($0)" }
+    let seen = Mutex<String[>..]>([])
+    let sink = ActionBlock<String> { text in seen.withLock { $0.append(text) } }
+    source.link(to: sink, propagateCompletion: true)
+    for i in 1...3 {
+        await source.send(i)
+    }
+    source.complete()
+    try await sink.completion()
+    try await source.completion()
+    expect(seen.withLock { $0 } == ["1", "2", "3"])
+}
+
+@test
+fn aLinksPredicateChoosesWhatItTakes() async throws {
+    let source = BufferBlock<Int>()
+    let evens = BufferBlock<Int>()
+    let odds = BufferBlock<Int>()
+    source.link(to: evens, propagateCompletion: true, where: { $0 % 2 == 0 })
+    source.link(to: odds, propagateCompletion: true)
+    for i in 1...6 {
+        await source.send(i)
+    }
+    source.complete()
+    try await source.completion()
+    var e: Int[>..] = []
+    for try await value in evens {
+        e.append(value)
+    }
+    var o: Int[>..] = []
+    for try await value in odds {
+        o.append(value)
+    }
+    expect(e == [2, 4, 6] && o == [1, 3, 5])
+}
+
+@test
+fn anItemNoLinkTakesWaitsForOne() async throws {
+    let source = BufferBlock<Int>()
+    let evens = BufferBlock<Int>()
+    source.link(to: evens, where: { $0 % 2 == 0 })
+    await source.send(1)
+    await source.send(2)
+    await Task.settle()
+    // 1 waits at the head for a link that takes it, and 2 behind it.
+    assertEqual(evens.count, 0)
+    let rest = BufferBlock<Int>()
+    source.link(to: rest)
+    await Task.settle()
+    expect(rest.tryReceive() == 1)
+    expect(evens.tryReceive() == 2)
+}
+
+@test
+fn aLinkWithALimitGoesAfterSoMany() async throws {
+    let source = BufferBlock<Int>()
+    let first = BufferBlock<Int>()
+    let rest = BufferBlock<Int>()
+    source.link(to: first, maxMessages: 2)
+    source.link(to: rest)
+    for i in 1...5 {
+        await source.send(i)
+    }
+    await Task.settle()
+    assertEqual(first.count, 2)
+    assertEqual(rest.count, 3)
+}
+
+@test
+fn aFullTargetLetsTheNextTakeTheItem() async throws {
+    let source = BufferBlock<Int>()
+    let gate = Gate()
+    let busy = ActionBlock<Int>(capacity: 1) { _ in await gate.pass() }
+    let spare = BufferBlock<Int>()
+    source.link(to: busy)
+    source.link(to: spare)
+    await source.send(1)
+    await Task.settle()
+    for i in 2...4 {
+        await source.send(i)
+    }
+    await Task.settle()
+    // 1 is worked on and 2 waits in 'busy'; 3 and 4 went to the spare.
+    assertEqual(spare.count, 2)
+    gate.openUp()
+}
+
+@test
+fn aFaultFlowsDownstreamAlongTheLinks() async {
+    let first = TransformBlock<Int, Int> { (n: Int) throws -> Int in
+        if n == 2 {
+            throw Refused { item: n }
+        }
+        return n
+    }
+    let second = TransformBlock<Int, Int> { $0 }
+    let third = ActionBlock<Int> { _ in }
+    first.link(to: second, propagateCompletion: true)
+    second.link(to: third, propagateCompletion: true)
+    for i in 1...3 {
+        _ = await first.send(i)
+    }
+    await expectThrows(Refused { item: 2 }) { try await third.completion() }
+    await expectThrows(Refused { item: 2 }) { try await second.completion() }
+}
+
+@test
+fn aFaultedTargetFaultsWhatFeedsIt() async {
+    let source = TransformBlock<Int, Int>(capacity: 2) { $0 }
+    let sink = ActionBlock<Int> { (n: Int) throws -> Void in
+        if n == 1 {
+            throw Refused { item: n }
+        }
+    }
+    source.link(to: sink, propagateCompletion: true)
+    let producer = Task.spawn {
+        var sent = 0
+        for i in 1...100 {
+            if await source.send(i) != .Sent {
+                break
+            }
+            sent += 1
+        }
+        return sent
+    }
+    // The producer stops rather than waits for ever.
+    expect(await producer.value < 100)
+    await expectThrows(Refused { item: 1 }) { try await source.completion() }
+}
+
+// ---- The three-stage pipeline -----------------------------------------------
+
+@test
+fn aPipelineHoldsABoundedNumberUnderASlowConsumer() async throws {
+    let gate = Gate()
+    let parse = TransformBlock<Int, String>(capacity: 4, parallelism: 2) { "row \($0)" }
+    let batch = BatchBlock<String>(size: 5, capacity: 4)
+    let saved = Atomic(0)
+    let save = ActionBlock<String[>..]>(capacity: 2) { rows in
+        await gate.pass()
+        saved.add(rows.count)
+    }
+    parse.link(to: batch, propagateCompletion: true)
+    batch.link(to: save, propagateCompletion: true)
+    let sent = Atomic(0)
+    let producer = Task.spawn {
+        for i in 0..<1000 {
+            _ = await parse.send(i)
+            sent.add(1)
+        }
+        parse.complete()
+    }
+    await Task.settle()
+    // The consumer is stuck: what the pipeline took in is bounded by the
+    // blocks' capacities, not by what the producer has — rows: 4 waiting
+    // in 'parse', 2 being parsed, 4 parsed, 1 being linked on, 4 waiting in
+    // 'batch', 1 being batched and 4 in the batch it fills; batches of 5:
+    // 4 made, 1 being linked on, 2 waiting in 'save' and 1 being saved.
+    let held = sent.load()
+    expect(held <= 4 + 2 + 4 + 1 + 4 + 1 + 4 + 5 * (4 + 1 + 2 + 1))
+    expect(held > 10)
+    gate.openUp()
+    await producer.value
+    try await save.completion()
+    assertEqual(saved.load(), 1000)
+}
+
+// ---- TransformManyBlock ----------------------------------------------------
+
+@test
+fn aTransformManyBlockGivesEveryItemItMakes() async throws {
+    let split = TransformManyBlock<Int, Int>(parallelism: 3) { n in Int[>..](repeating: n, count: n) }
+    for i in 1...4 {
+        await split.send(i)
+    }
+    split.complete()
+    var all: Int[>..] = []
+    for try await value in split {
+        all.append(value)
+    }
+    expect(all == [1, 2, 2, 3, 3, 3, 4, 4, 4, 4])
+}
+
+// ---- BufferBlock and BroadcastBlock ---------------------------------------------
+
+@test
+fn aBufferBlockGivesEachItemToOneReceiver() async throws {
+    let queue = BufferBlock<Int>()
+    for i in 1...100 {
+        await queue.send(i)
+    }
+    queue.complete()
+    let takers = (0..<4).map { _ in
+        Task.spawn {
+            var total = 0
+            while let value = try! await queue.receive() {
+                total += value
+            }
+            return total
+        }
+    }
+    var total = 0
+    for taker in takers {
+        total += await taker.value
+    }
+    assertEqual(total, 5050)
+    try await queue.completion()
+}
+
+@test
+fn aFaultedBufferBlockThrowsToItsReceivers() async {
+    let queue = BufferBlock<Int>()
+    await queue.send(1)
+    queue.fault(Refused { item: 0 })
+    await expectThrows(Refused { item: 0 }) { _ = try await queue.receive() }
+    assertEqual(queue.trySend(2), SendResult.Closed)
+}
+
+@test
+fn aBroadcastBlockGivesEveryItemToEveryTarget() async throws {
+    let fanOut = BroadcastBlock<Int>(capacity: 2)
+    let a = BufferBlock<Int>()
+    let b = BufferBlock<Int>()
+    fanOut.link(to: a, propagateCompletion: true)
+    fanOut.link(to: b, propagateCompletion: true)
+    for i in 1...3 {
+        await fanOut.send(i)
+    }
+    fanOut.complete()
+    try await fanOut.completion()
+    var fromA: Int[>..] = []
+    for try await value in a {
+        fromA.append(value)
+    }
+    var fromB: Int[>..] = []
+    for try await value in b {
+        fromB.append(value)
+    }
+    expect(fromA == [1, 2, 3] && fromB == [1, 2, 3])
+}
+
+// ---- BatchBlock --------------------------------------------------------------
+
+@test
+fn aBatchBlockGivesFullBatchesAndTheRestAtTheEnd() async throws {
+    let batches = BatchBlock<Int>(size: 3)
+    for i in 1...7 {
+        await batches.send(i)
+    }
+    await Task.settle()
+    expect(try await batches.receive() == [1, 2, 3])
+    expect(try await batches.receive() == [4, 5, 6])
+    expect(batches.tryReceive() == none)
+    batches.complete()
+    expect(try await batches.receive() == [7])
+    expect(try await batches.receive() == none)
+}
+
+@test
+fn triggerBatchGivesWhatItHoldsNow() async throws {
+    let batches = BatchBlock<Int>(size: 10)
+    await batches.send(1)
+    await batches.send(2)
+    await batches.triggerBatch()
+    expect(try await batches.receive() == [1, 2])
+    // Nothing held: no empty batch.
+    await batches.triggerBatch()
+    await batches.send(3)
+    batches.complete()
+    expect(try await batches.receive() == [3])
+}
+
+// ---- JoinBlock --------------------------------------------------------------
+
+@test
+fn aJoinBlockPairsItsTargetsItemsInOrder() async throws {
+    let join = JoinBlock<String, Int>()
+    await join.first.send("a")
+    await join.first.send("b")
+    await join.second.send(1)
+    await join.second.send(2)
+    await join.second.send(3)
+    join.complete()
+    var pairs: String[>..] = []
+    for try await (name, number) in join {
+        pairs.append("\(name)\(number)")
+    }
+    expect(pairs == ["a1", "b2"])
+    try await join.completion()
+}
+
+@test
+fn aJoinBlockFeedsALink() async throws {
+    let join = JoinBlock<Int, Int>(capacity: 2)
+    let sums = Mutex<Int[>..]>([])
+    let sink = ActionBlock<(Int, Int)> { pair in sums.withLock { $0.append(pair.0 + pair.1) } }
+    join.link(to: sink, propagateCompletion: true)
+    for i in 1...3 {
+        await join.first.send(i)
+        await join.second.send(i * 10)
+    }
+    join.complete()
+    try await sink.completion()
+    expect(sums.withLock { $0 } == [11, 22, 33])
+}
+
+@test
+fn aFaultedTargetFaultsTheJoin() async {
+    let join = JoinBlock<Int, Int>()
+    await join.first.send(1)
+    join.second.fault(Refused { item: 2 })
+    await expectThrows(Refused { item: 2 }) { try await join.completion() }
+}

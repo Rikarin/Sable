@@ -1146,8 +1146,24 @@ Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     drop oldest, newest or the write; close(error:);
                     cancellable sends and receives), Broadcast, Watch,
                     Oneshot, AsyncStream and AsyncThrowingStream (make,
-                    buffering policy, onTermination), merge, debounce,
-                    throttle, Mutex RwLock Condition Semaphore Barrier
+                    buffering policy, onTermination), merge (of two or
+                    three), combineLatest, switchToLatest, mapConcurrent
+                    and flatMapConcurrent (a limit, in order or not),
+                    debounce, throttle, timeout, chunked(maxCount:orEvery:),
+                    sample; BroadcastSubject (replay) and
+                    CurrentValueSubject; dataflow blocks — BufferBlock,
+                    TransformBlock, TransformManyBlock, ActionBlock,
+                    BatchBlock, BroadcastBlock, JoinBlock — linked with
+                    predicates and limits, bounded (a send waits: the
+                    producer's backpressure), parallel in order or not,
+                    completion and faults passed along the links, and a
+                    faulted target faulting what feeds it; ObjectPool
+                    (a cell a thread in front of a shared stack; Lease,
+                    move-only; PoolPolicy, Resettable; leases tracked
+                    with where they were rented) and AsyncPool (made
+                    asynchronously, at most so many, rents waiting in
+                    turn, idle timeout on a Clock, validation),
+                    Mutex RwLock Condition Semaphore Barrier
                     CountdownLatch Once Lazy, AsyncMutex AsyncSemaphore,
                     Thread (spawn, scope, park, blockOn), JoinHandle,
                     ThreadLocal, TaskLocal, parallelFor parallelInvoke
@@ -1160,7 +1176,7 @@ Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     Continuation (checked; a leak traps in debug),
                     withTimeout, race, whenAll/whenAny/whenEach,
                     Task.sleep(for:), Timer, Interval, TestClock; each, and
-                    debounce, throttle and cancel(after:), on any Clock
+                    the timed operators and cancel(after:), on any Clock
                     (Task, TaskGroup, WaitList, AsyncSequence with map,
                     filter, compactMap, prefix, chunked, reduce,
                     first(where:), collect and zip, Atomic<T> and OnceCell

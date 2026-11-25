@@ -5,41 +5,30 @@ module ConcurrentDictionaryTests
 // key atomic, getOrInsert's closure run once per key, and iteration during
 // writes giving each entry that is there throughout exactly once.
 
+import ConcurrencySupport
 import Sable.Concurrency
 import Sable.Testing
-
-/// A random walk of numbers: xorshift.
-struct Walk {
-    var state: U64
-
-    mutating fn next(_ below: Int) -> Int {
-        state = state ^ (state << 13)
-        state = state ^ (state >> 7)
-        state = state ^ (state << 17)
-        return Int(state % U64(below))
-    }
-}
 
 @test
 fn eachOperationByExample() {
     let dictionary = ConcurrentDictionary<String, Int>(shards: 5)
-    assert(dictionary.isEmpty)
-    assert(dictionary["a"] == none)
-    assert(dictionary.updateValue(1, forKey: "a") == none)
-    assert(dictionary.updateValue(2, forKey: "a") == 1)
-    assert(!dictionary.insert(3, forKey: "a"))
-    assert(dictionary.insert(4, forKey: "b"))
-    assert(dictionary.contains("b"))
+    expect(dictionary.isEmpty)
+    expect(dictionary["a"] == none)
+    expect(dictionary.updateValue(1, forKey: "a") == none)
+    expect(dictionary.updateValue(2, forKey: "a") == 1)
+    expect(!dictionary.insert(3, forKey: "a"))
+    expect(dictionary.insert(4, forKey: "b"))
+    expect(dictionary.contains("b"))
     assertEqual(dictionary.count, 2)
-    assert(dictionary.update("a") { $0 *= 10 })
-    assert(!dictionary.update("zz") { $0 *= 10 })
+    expect(dictionary.update("a") { $0 *= 10 })
+    expect(!dictionary.update("zz") { $0 *= 10 })
     dictionary.update("c", default: 7) { $0 += 1 }
     assertEqual(dictionary["a"] ?? 0, 20)
     assertEqual(dictionary["c"] ?? 0, 8)
     assertEqual(dictionary.getOrInsert("d", with: { 9 }), 9)
     assertEqual(dictionary.getOrInsert("d", with: { 10 }), 9)
-    assert(dictionary.remove("d") == 9)
-    assert(dictionary.remove("d") == none)
+    expect(dictionary.remove("d") == 9)
+    expect(dictionary.remove("d") == none)
     let copy = dictionary.snapshot()
     assertEqual(copy.count, 3)
     assertEqual(copy["b"] ?? 0, 4)
@@ -49,36 +38,64 @@ fn eachOperationByExample() {
     }
     assertEqual(keys, 3)
     dictionary.removeAll()
-    assert(dictionary.isEmpty)
+    expect(dictionary.isEmpty)
     assertEqual(dictionary.count, 0)
+}
+
+@derive(Debug)
+union Step {
+    UpdateValue(Int)
+    Remove(Int)
+    GetOrInsert(Int)
+    Increment(Int)
+    Get(Int)
 }
 
 @test
 fn randomOperationsAgreeWithADictionary() {
-    let dictionary = ConcurrentDictionary<Int, Int>()
-    var model: [Int: Int] = [:]
-    var walk = Walk { state: 0xD1B54A32D192ED03 }
-    var step = 0
-    while step < 20000 {
-        let key = walk.next(200)
-        let choice = walk.next(5)
-        if choice == 0 {
-            assert(dictionary.updateValue(step, forKey: key) == model.updateValue(step, forKey: key))
-        } else if choice == 1 {
-            assert(dictionary.remove(key) == model.remove(key))
-        } else if choice == 2 {
-            assertEqual(dictionary.getOrInsert(key, with: { step }), model.orInsertWith(key, { step }))
-        } else if choice == 3 {
-            dictionary.update(key, default: 0) { $0 += 1 }
-            model.modify(key, default: 0) { $0 += 1 }
-        } else {
-            assert(dictionary[key] == model[key])
+    let keys = Gen.number(in: 0...199)
+    let step = Gen.oneOf([
+        keys.map { Step.UpdateValue($0) },
+        keys.map { Step.Remove($0) },
+        keys.map { Step.GetOrInsert($0) },
+        keys.map { Step.Increment($0) },
+        keys.map { Step.Get($0) },
+    ])
+    forAll(many(step, upTo: 4000), cases: 14) { (steps: Step[>..]) in
+        let dictionary = ConcurrentDictionary<Int, Int>()
+        var model: [Int: Int] = [:]
+        var number = 0
+        for step in steps {
+            number += 1
+            let now = number
+            var same = true
+            match step {
+                case .UpdateValue(let key) => {
+                    same = dictionary.updateValue(now, forKey: key) == model.updateValue(now, forKey: key)
+                }
+                case .Remove(let key) => {
+                    same = dictionary.remove(key) == model.remove(key)
+                }
+                case .GetOrInsert(let key) => {
+                    same = dictionary.getOrInsert(key, with: { now }) == model.orInsertWith(key, { now })
+                }
+                case .Increment(let key) => {
+                    dictionary.update(key, default: 0) { $0 += 1 }
+                    model.modify(key, default: 0) { $0 += 1 }
+                }
+                case .Get(let key) => {
+                    same = dictionary[key] == model[key]
+                }
+            }
+            if !same {
+                recordFailure("step \(now), \(step:?), does not agree")
+                return
+            }
         }
-        step = step + 1
-    }
-    assertEqual(dictionary.count, model.count)
-    for entry in dictionary {
-        assert(model[entry.key] == entry.value)
+        expect(dictionary.count == model.count)
+        for entry in dictionary {
+            expect(model[entry.key] == entry.value)
+        }
     }
 }
 
@@ -97,7 +114,7 @@ fn manyTasksUpdatingAtOnceLoseNoUpdate() async {
                         made.add(1)
                         return i % 32
                     })
-                    assert(value == i % 32)
+                    assertEqual(value, i % 32)
                     i += 1
                 }
                 return 0
@@ -170,7 +187,7 @@ fn iteratingWhileOthersWriteGivesEachLastingEntryOnce() async {
         }
         return all
     }
-    assert(seenRight, "a lasting entry was missed or given twice")
+    expect(seenRight, "a lasting entry was missed or given twice")
 }
 
 @test

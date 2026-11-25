@@ -4,14 +4,9 @@ module BroadcastTests
 // run with
 //     tools/stdlib-coverage.sh Sable.Concurrency
 
+import ConcurrencySupport
 import Sable.Concurrency
 import Sable.Testing
-
-fn settle() async {
-    for _ in 0..<20 {
-        await Task.yield()
-    }
-}
 
 @test
 fn everyReceiverGetsEveryValue() async {
@@ -35,7 +30,7 @@ fn everyReceiverGetsEveryValue() async {
     }
     broadcast.close()
     for reader in readers {
-        assert(await reader.value == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        assertEqual(await reader.value, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
     }
 }
 
@@ -45,8 +40,8 @@ fn aReceiverGetsOnlyWhatIsSentAfterItSubscribed() async {
     broadcast.send(1)
     var receiver = broadcast.subscribe()
     broadcast.send(2)
-    assert(await receiver.receive() == 2)
-    assert(receiver.tryReceive() == none)
+    expect(await receiver.receive() == 2)
+    expect(receiver.tryReceive() == none)
 }
 
 @test
@@ -59,7 +54,7 @@ fn aReceiverWaitsForAValue() async {
     }
     await settle()
     broadcast.send("now")
-    assert(await reader.value == "now")
+    expect(await reader.value == "now")
 }
 
 @test
@@ -70,10 +65,10 @@ fn aReceiverTooFarBehindMissesTheOldest() async {
     for i in 1...7 {
         broadcast.send(i)
     }
-    assert(await receiver.receive() == 5)
+    expect(await receiver.receive() == 5)
     assertEqual(receiver.missed, 4)
-    assert(receiver.tryReceive() == 6)
-    assert(receiver.tryReceive() == 7)
+    expect(receiver.tryReceive() == 6)
+    expect(receiver.tryReceive() == 7)
     assertEqual(receiver.missed, 4)
 }
 
@@ -83,11 +78,11 @@ fn closingDeliversWhatIsLeftThenNone() async {
     var receiver = broadcast.subscribe()
     broadcast.send(1)
     broadcast.close()
-    assert(broadcast.isClosed)
-    assert(!broadcast.send(2))
-    assert(await receiver.receive() == 1)
-    assert(await receiver.receive() == none)
-    assert(receiver.tryReceive() == none)
+    expect(broadcast.isClosed)
+    expect(!broadcast.send(2))
+    expect(await receiver.receive() == 1)
+    expect(await receiver.receive() == none)
+    expect(receiver.tryReceive() == none)
 }
 
 @test
@@ -100,7 +95,7 @@ fn closingWakesAWaitingReceiver() async {
     }
     await settle()
     broadcast.close()
-    assert(await reader.value == none)
+    expect(await reader.value == none)
 }
 
 @test
@@ -113,7 +108,7 @@ fn aWaitingReceiveIsCancelled() async {
     }
     await settle()
     reader.cancel()
-    assert(await reader.value == none)
+    expect(await reader.value == none)
 }
 
 @test
@@ -123,13 +118,13 @@ fn receiversGoAtTheirOwnPace() async {
     var slow = broadcast.subscribe()
     broadcast.send(1)
     broadcast.send(2)
-    assert(await fast.receive() == 1)
-    assert(await fast.receive() == 2)
-    assert(await slow.receive() == 1)
+    expect(await fast.receive() == 1)
+    expect(await fast.receive() == 2)
+    expect(await slow.receive() == 1)
     broadcast.send(3)
-    assert(await slow.receive() == 2)
-    assert(await slow.receive() == 3)
-    assert(await fast.receive() == 3)
+    expect(await slow.receive() == 2)
+    expect(await slow.receive() == 3)
+    expect(await fast.receive() == 3)
 }
 
 @test

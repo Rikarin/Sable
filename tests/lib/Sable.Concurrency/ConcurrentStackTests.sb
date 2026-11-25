@@ -10,9 +10,9 @@ import Sable.Testing
 @test
 fn aStackGivesBackTheLastFirst() {
     let stack = ConcurrentStack<Int>()
-    assert(stack.isEmpty)
-    assert(stack.pop() == none)
-    assert(stack.peek() == none)
+    expect(stack.isEmpty)
+    expect(stack.pop() == none)
+    expect(stack.peek() == none)
     stack.push(1)
     stack.push(contentsOf: [2, 3, 4])
     assertEqual(stack.count, 4)
@@ -23,7 +23,7 @@ fn aStackGivesBackTheLastFirst() {
     assertEqual(top[0], 3)
     assertEqual(top[1], 2)
     assertEqual(stack.pop(upTo: 5).count, 1)
-    assert(stack.isEmpty)
+    expect(stack.isEmpty)
     stack.push(9)
     stack.removeAll()
     assertEqual(stack.count, 0)
@@ -70,5 +70,5 @@ fn pushersAndPoppersAtOnceLoseNothing() async {
     }
     // 0..<20000 and 100000..<120000, each once.
     assertEqual(sums, 2 * (19999 * 20000 / 2) + 20000 * 100000)
-    assert(stack.isEmpty)
+    expect(stack.isEmpty)
 }

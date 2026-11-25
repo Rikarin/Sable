@@ -3,30 +3,25 @@ module OneshotTests
 // Oneshot (Sable.Concurrency), tested with '@test': run with
 //     tools/stdlib-coverage.sh Sable.Concurrency
 
+import ConcurrencySupport
 import Sable.Concurrency
 import Sable.Testing
-
-fn settle() async {
-    for _ in 0..<20 {
-        await Task.yield()
-    }
-}
 
 @test
 fn theValueSentIsReceived() async {
     let oneshot = Oneshot<Int>()
-    assert(!oneshot.isCompleted)
-    assert(oneshot.send(5))
-    assert(oneshot.isCompleted)
-    assert(await oneshot.receive() == 5)
+    expect(!oneshot.isCompleted)
+    expect(oneshot.send(5))
+    expect(oneshot.isCompleted)
+    expect(await oneshot.receive() == 5)
 }
 
 @test
 fn aSecondSendIsRefused() async {
     let oneshot = Oneshot<String>()
-    assert(oneshot.send("first"))
-    assert(!oneshot.send("second"))
-    assert(await oneshot.receive() == "first")
+    expect(oneshot.send("first"))
+    expect(!oneshot.send("second"))
+    expect(await oneshot.receive() == "first")
 }
 
 @test
@@ -35,7 +30,7 @@ fn aReceiverWaitsForTheValue() async {
     let receiver = Task.spawn { await oneshot.receive() }
     await settle()
     oneshot.send(8)
-    assert(await receiver.value == 8)
+    expect(await receiver.value == 8)
 }
 
 @test
@@ -45,7 +40,7 @@ fn aValueSentFromAnotherThreadWakesTheReceiver() async {
         await Task.yield()
         oneshot.send(11)
     }
-    assert(await oneshot.receive() == 11)
+    expect(await oneshot.receive() == 11)
     await sender.value
 }
 
@@ -53,15 +48,15 @@ fn aValueSentFromAnotherThreadWakesTheReceiver() async {
 fn theValueIsTakenOnce() async {
     let oneshot = Oneshot<Int>()
     oneshot.send(1)
-    assert(oneshot.tryReceive() == 1)
-    assert(oneshot.tryReceive() == none)
-    assert(await oneshot.receive() == none)
+    expect(oneshot.tryReceive() == 1)
+    expect(oneshot.tryReceive() == none)
+    expect(await oneshot.receive() == none)
 }
 
 @test
 fn tryReceiveBeforeTheSendGivesNone() {
     let oneshot = Oneshot<Int>()
-    assert(oneshot.tryReceive() == none)
+    expect(oneshot.tryReceive() == none)
 }
 
 @test
@@ -70,9 +65,9 @@ fn closingWithoutAValueEndsTheWait() async {
     let receiver = Task.spawn { await oneshot.receive() }
     await settle()
     oneshot.close()
-    assert(await receiver.value == none)
-    assert(oneshot.isCompleted)
-    assert(!oneshot.send(3))
+    expect(await receiver.value == none)
+    expect(oneshot.isCompleted)
+    expect(!oneshot.send(3))
 }
 
 @test
@@ -80,7 +75,7 @@ fn closingKeepsAValueSentAlready() async {
     let oneshot = Oneshot<Int>()
     oneshot.send(4)
     oneshot.close()
-    assert(await oneshot.receive() == 4)
+    expect(await oneshot.receive() == 4)
 }
 
 @test
@@ -89,10 +84,10 @@ fn aWaitingReceiveIsCancelled() async {
     let receiver = Task.spawn { await oneshot.receive() }
     await settle()
     receiver.cancel()
-    assert(await receiver.value == none)
+    expect(await receiver.value == none)
     // The value is still there for another.
     oneshot.send(6)
-    assert(await oneshot.receive() == 6)
+    expect(await oneshot.receive() == 6)
 }
 
 @test

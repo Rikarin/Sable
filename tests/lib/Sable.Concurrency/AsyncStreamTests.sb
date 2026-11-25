@@ -4,33 +4,33 @@ module AsyncStreamTests
 // (Sable.Concurrency), tested with '@test': run with
 //     tools/stdlib-coverage.sh Sable.Concurrency
 
+import ConcurrencySupport
 import Sable.Concurrency
 import Sable.Testing
 
+@derive(Equatable)
 enum Lost: Error {
     Connection
-}
-
-fn settle() async {
-    for _ in 0..<20 {
-        await Task.yield()
-    }
-}
-
-// Waits, a millisecond at a time, until the condition holds: for what other
-// tasks, on other threads, are to have done (gives up after five seconds).
-fn until(_ condition: () -> Bool) async {
-    var waited = 0
-    while !condition() && waited < 5000 {
-        try? await Task.sleep(nanoseconds: 1_000_000)
-        waited += 1
-    }
 }
 
 fn enqueued<T>(_ result: YieldResult<T>) -> Int {
     return match result {
         case .Enqueued(let room) => room
         case _                   => -1
+    }
+}
+
+fn dropped<T>(_ result: YieldResult<T>) -> T? {
+    return match result {
+        case .Dropped(let value) => value
+        case _                   => none
+    }
+}
+
+fn isTerminated<T>(_ result: YieldResult<T>) -> Bool {
+    return match result {
+        case .Terminated => true
+        case _           => false
     }
 }
 
@@ -41,7 +41,7 @@ fn valuesComeInTheOrderYielded() async {
         continuation.yield(i)
     }
     continuation.finish()
-    assert(await stream.collect() == [1, 2, 3, 4])
+    expect(await stream.collect() == [1, 2, 3, 4])
 }
 
 @test
@@ -82,7 +82,7 @@ fn anUnboundedStreamHoldsEverything() async {
     let (stream, continuation) = AsyncStream<Int>.make(bufferingPolicy: .Unbounded)
     assertEqual(enqueued(continuation.yield(1)), Int.max)
     continuation.finish()
-    assert(await stream.collect() == [1])
+    expect(await stream.collect() == [1])
 }
 
 @test
@@ -90,12 +90,9 @@ fn bufferingOldestDropsWhatIsYieldedWhileFull() async {
     let (stream, continuation) = AsyncStream<Int>.make(bufferingPolicy: .BufferingOldest(2))
     assertEqual(enqueued(continuation.yield(1)), 1)
     assertEqual(enqueued(continuation.yield(2)), 0)
-    match continuation.yield(3) {
-        case .Dropped(let value) => assertEqual(value, 3)
-        case _                   => assert(false)
-    }
+    expect(dropped(continuation.yield(3)) == 3)
     continuation.finish()
-    assert(await stream.collect() == [1, 2])
+    expect(await stream.collect() == [1, 2])
 }
 
 @test
@@ -103,23 +100,17 @@ fn bufferingNewestDropsTheOldest() async {
     let (stream, continuation) = AsyncStream<Int>.make(bufferingPolicy: .BufferingNewest(2))
     continuation.yield(1)
     continuation.yield(2)
-    match continuation.yield(3) {
-        case .Dropped(let value) => assertEqual(value, 1)
-        case _                   => assert(false)
-    }
+    expect(dropped(continuation.yield(3)) == 1)
     continuation.finish()
-    assert(await stream.collect() == [2, 3])
+    expect(await stream.collect() == [2, 3])
 }
 
 @test
 fn aStreamBufferingNothingDropsWhatNoOneWaitsFor() async {
     let (stream, continuation) = AsyncStream<Int>.make(bufferingPolicy: .BufferingNewest(0))
-    match continuation.yield(1) {
-        case .Dropped(let value) => assertEqual(value, 1)
-        case _                   => assert(false)
-    }
+    expect(dropped(continuation.yield(1)) == 1)
     continuation.finish()
-    assert(await stream.collect() == [])
+    expect(await stream.collect() == [])
 }
 
 @test
@@ -128,35 +119,29 @@ fn finishingKeepsWhatWasYielded() async {
     continuation.yield(1)
     continuation.finish()
     continuation.finish()
-    assert(continuation.isTerminated)
-    match continuation.yield(2) {
-        case .Terminated => { }
-        case _           => assert(false)
-    }
+    expect(continuation.isTerminated)
+    expect(isTerminated(continuation.yield(2)))
     var iterator = stream.makeAsyncIterator()
     assertEqual(await iterator.next() ?? 0, 1)
-    assert(await iterator.next() == none)
-    assert(await iterator.next() == none)
+    expect(await iterator.next() == none)
+    expect(await iterator.next() == none)
 }
 
 @test
-fn finishingWithAnErrorThrowsItAfterTheValues() async {
+fn finishingWithAnErrorThrowsItAfterTheValues() async throws {
     let (stream, continuation) = AsyncThrowingStream<Int, Lost>.make()
     continuation.yield(1)
     continuation.yield(2)
     continuation.finish(throwing: .Connection)
     var got: Int[>..] = []
     var iterator = stream.makeAsyncIterator()
-    do {
+    await expectThrows(Lost.Connection) {
         while let value = try await iterator.next() {
             got.append(value)
         }
-        assert(false)
-    } catch {
-        assert(error == .Connection)
     }
-    assert(got == [1, 2])
-    assert(try! await iterator.next() == none)
+    expect(got == [1, 2])
+    expect(try await iterator.next() == none)
 }
 
 @test
@@ -168,7 +153,7 @@ fn aStreamFinishedWithoutAnErrorEndsQuietly() async throws {
     for try await value in stream {
         got.append(value)
     }
-    assert(got == [5])
+    expect(got == [5])
 }
 
 @test
@@ -190,11 +175,8 @@ fn theConsumersCancellationEndsTheStream() async {
     consumer.cancel()
     assertEqual(await consumer.value, 1)
     assertEqual(heard.load(), 2)
-    assert(continuation.isTerminated)
-    match continuation.yield(2) {
-        case .Terminated => { }
-        case _           => assert(false)
-    }
+    expect(continuation.isTerminated)
+    expect(isTerminated(continuation.yield(2)))
 }
 
 @test
@@ -220,7 +202,7 @@ fn aContinuationLetGoFinishesTheStream() async {
         continuation.yield(1)
         continuation.yield(2)
     }
-    assert(await stream.collect() == [1, 2])
+    expect(await stream.collect() == [1, 2])
 }
 
 @test
@@ -232,5 +214,5 @@ fn aContinuationKeptFeedsTheStreamLater() async {
     let continuation = kept.withLock { $0 }!
     continuation.yield(7)
     continuation.finish()
-    assert(await stream.collect() == [7])
+    expect(await stream.collect() == [7])
 }

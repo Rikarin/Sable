@@ -26,7 +26,7 @@ fn aConditionWakesAWaiterWhenTheValueIsReady() async {
     }
     assertEqual(await consumer.value, 5050)
     let empty: Mutex<Int[>..]> = Mutex([])
-    assert(empty.withLock(when: filled, within: 1000000, { !$0.isEmpty }) { $0.count } == none)
+    expect(empty.withLock(when: filled, within: 1000000, { !$0.isEmpty }) { $0.count } == none)
 }
 
 @test
@@ -49,7 +49,7 @@ fn notifyOneWakesTheOneWaiting() async {
     // The waiter asked holding the lock, so this takes it only once it waits.
     ready.withLock { $0 = true }
     changed.notifyOne()
-    assert(await waiter.value)
+    expect(await waiter.value)
 }
 
 @test

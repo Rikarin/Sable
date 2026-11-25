@@ -48,54 +48,44 @@ fn cancellingAGroupReachesItsGrandchildren() async {
 @test
 fn aTimeoutCancelsTheBodysChildren() async {
     let stopped = Atomic<Bool>(false)
-    do {
-        _ = try await withTimeout(Duration.milliseconds(20)) {
-            await withTaskGroup(of: Void.self) { group in
-            group.spawn {
-                if await sleepsUntilCancelled() {
-                    stopped.store(true)
-                }
+    _ = try? await withTimeout(Duration.milliseconds(20)) {
+        await withTaskGroup(of: Void.self) { group in
+        group.spawn {
+            if await sleepsUntilCancelled() {
+                stopped.store(true)
             }
         }
-        }
-    } catch { }
-    assert(stopped.load())
+    }
+    }
+    expect(stopped.load())
 }
 
 // ---- Timeouts ------------------------------------------------------------------
 
 @test
-fn aBodyInTimeGivesItsValue() async {
-    do {
-        let value = try await withTimeout(Duration.seconds(30)) { 6 * 7 }
-        assertEqual(value, 42)
-        let later = try await withTimeout(Duration.seconds(30)) {
-            try await Task.sleep(for: Duration.milliseconds(1))
-            return "slept"
-        }
-        assertEqual(later, "slept")
-    } catch {
-        fail("timed out: \(error)")
+fn aBodyInTimeGivesItsValue() async throws {
+    let value = try await withTimeout(Duration.seconds(30)) { 6 * 7 }
+    assertEqual(value, 42)
+    let later = try await withTimeout(Duration.seconds(30)) {
+        try await Task.sleep(for: Duration.milliseconds(1))
+        return "slept"
     }
+    assertEqual(later, "slept")
 }
 
 @test
 fn aBodyTooSlowTimesOutPromptly() async {
     let started = Instant.now()
-    do {
+    let error = await expectThrows(TimeoutError.self) {
         _ = try await withTimeout(Duration.milliseconds(20)) {
-            try await Task.sleep(for: Duration.seconds(60))
-            return 1
-        }
-        fail("did not time out")
-    } catch let error as TimeoutError {
-        assert(error.duration == Duration.milliseconds(20))
-        assertEqual(error.description(), "timed out after \(Duration.milliseconds(20).toString())")
-    } catch {
-        fail("threw \(error)")
+        try await Task.sleep(for: Duration.seconds(60))
+        return 1
     }
+    }
+    expect(error?.duration == Duration.milliseconds(20))
+    expect(error?.description() == "timed out after \(Duration.milliseconds(20).toString())")
     // Promptly: the body's sleep ends at its cancellation, not its minute.
-    assert(started.elapsed.totalMilliseconds < 10_000)
+    expect(started.elapsed.totalMilliseconds < 10_000)
 }
 
 struct Broken: Error {
@@ -106,31 +96,24 @@ struct Broken: Error {
 
 @test
 fn aBodysOwnErrorPassesThrough() async {
-    do {
+    await expectThrows(saying: "broken") {
         _ = try await withTimeout(Duration.seconds(30)) { () throws -> Int in
-            throw Broken()
-        }
-        fail("did not throw")
-    } catch {
-        assertEqual("\(error)", "Broken()")
+        throw Broken()
+    }
     }
 }
 
 @test
 fn timeoutsNest() async {
-    do {
+    let error = await expectThrows(TimeoutError.self) {
         _ = try await withTimeout(Duration.seconds(30)) {
             try await withTimeout(Duration.milliseconds(10)) {
             try await Task.sleep(for: Duration.seconds(60))
             return 0
         }
         }
-        fail("the inner one did not time out")
-    } catch let error as TimeoutError {
-        assert(error.duration == Duration.milliseconds(10))
-    } catch {
-        fail("threw \(error)")
     }
+    expect(error?.duration == Duration.milliseconds(10))
 }
 
 @test
@@ -163,33 +146,26 @@ fn handlersRunOnceInOrderAndLateOnesAtOnce() {
     _ = token.register { log.withLock { $0 += "a" } }
     let undone = token.register { log.withLock { $0 += "x" } }
     _ = token.register { log.withLock { $0 += "b" } }
-    assert(undone.unregister())
-    assert(!undone.unregister())
-    assert(!token.isCancellationRequested && !source.isCancellationRequested)
+    expect(undone.unregister())
+    expect(!undone.unregister())
+    expect(!token.isCancellationRequested && !source.isCancellationRequested)
     source.cancel()
     source.cancel()
-    assert(token.isCancellationRequested)
+    expect(token.isCancellationRequested)
     assertEqual(log.withLock { $0 }, "ab")
     _ = token.register { log.withLock { $0 += "c" } }
     assertEqual(log.withLock { $0 }, "abc")
-    do {
-        try token.throwIfCancellationRequested()
-        fail("did not throw")
-    } catch { }
+    expectThrows { try token.throwIfCancellationRequested() }
 }
 
 @test
 fn theNeverTokenNeverIs() {
     let never = CancellationToken.never
-    assert(!never.canBeCancelled && !never.isCancellationRequested)
-    assert(CancellationTokenSource().token.canBeCancelled)
+    expect(!never.canBeCancelled && !never.isCancellationRequested)
+    expect(CancellationTokenSource().token.canBeCancelled)
     let registration = never.register { fail("ran") }
-    assert(!registration.unregister())
-    do {
-        try never.throwIfCancellationRequested()
-    } catch {
-        fail("threw")
-    }
+    expect(!registration.unregister())
+    expectNoThrow { try never.throwIfCancellationRequested() }
 }
 
 @test
@@ -197,44 +173,39 @@ fn linkedSourcesFollowAnyOfTheirs() {
     let a = CancellationTokenSource()
     let b = CancellationTokenSource()
     let linked = CancellationTokenSource.linked([a.token, b.token])
-    assert(!linked.isCancellationRequested)
+    expect(!linked.isCancellationRequested)
     b.cancel()
-    assert(linked.isCancellationRequested && !a.isCancellationRequested)
+    expect(linked.isCancellationRequested && !a.isCancellationRequested)
     let own = CancellationTokenSource.linked([CancellationTokenSource().token])
     own.cancel()
-    assert(own.isCancellationRequested)
+    expect(own.isCancellationRequested)
 }
 
 @test
 fn aSourceCancelsAfterADelay() async {
     let source = CancellationTokenSource()
     source.cancel(after: Duration.milliseconds(10))
-    assert(await source.token.cancellationRequested())
+    expect(await source.token.cancellationRequested())
     let now = CancellationTokenSource()
     now.cancel(after: Duration.milliseconds(0))
-    assert(now.isCancellationRequested)
+    expect(now.isCancellationRequested)
 }
 
 @test
 fn aTokenStopsStructuredWork() async {
     let source = CancellationTokenSource()
     source.cancel(after: Duration.milliseconds(10))
-    do {
+    await expectThrows(CancellationError.self) {
         _ = try await withCancellation(source.token) {
-            try await Task.sleep(for: Duration.seconds(60))
-            return 1
-        }
-        fail("did not stop")
-    } catch let error as CancellationError { } catch {
-        fail("threw \(error)")
+        try await Task.sleep(for: Duration.seconds(60))
+        return 1
     }
-    // A body that finishes first gives its value, the token never firing.
-    do {
-        let value = try await withCancellation(CancellationTokenSource().token) { 7 }
-        assertEqual(value, 7)
-    } catch {
-        fail("threw \(error)")
     }
+}
+
+@test
+fn aBodyThatFinishesBeforeItsTokenGivesItsValue() async throws {
+    assertEqual(try await withCancellation(CancellationTokenSource().token) { 7 }, 7)
 }
 
 @test
@@ -242,7 +213,7 @@ fn waitingForATokenEndsWithTheTask() async {
     let task = Task.spawn { await CancellationToken.never.cancellationRequested() }
     await Task.yield()
     task.cancel()
-    assert(!(await task.value))
+    expect(!(await task.value))
 }
 
 // ---- Promises and continuations ------------------------------------------------
@@ -250,13 +221,13 @@ fn waitingForATokenEndsWithTheTask() async {
 @test
 fn aPromiseCompletesOnceForEveryWaiter() async {
     let promise = Promise<String, Never>()
-    assert(!promise.isCompleted)
+    expect(!promise.isCompleted)
     let first = Task.spawn { await promise.value() }
     let second = Task.spawn { await promise.value() }
     await Task.yield()
-    assert(promise.succeed("done"))
-    assert(promise.isCompleted)
-    assert(!promise.succeed("again"))
+    expect(promise.succeed("done"))
+    expect(promise.isCompleted)
+    expect(!promise.succeed("again"))
     assertEqual(await first.value, "done")
     assertEqual(await second.value, "done")
     // A waiter after the completion has it at once.
@@ -266,14 +237,9 @@ fn aPromiseCompletesOnceForEveryWaiter() async {
 @test
 fn aPromiseCarriesAnError() async {
     let promise = Promise<Int, Broken>()
-    assert(promise.fail(Broken()))
-    assert(!promise.complete(with: .Ok(1)))
-    do {
-        _ = try await promise.value()
-        fail("did not throw")
-    } catch {
-        assertEqual("\(error)", "Broken()")
-    }
+    expect(promise.fail(Broken()))
+    expect(!promise.complete(with: .Ok(1)))
+    await expectThrows(saying: "broken") { _ = try await promise.value() }
 }
 
 @test
@@ -285,13 +251,10 @@ fn aContinuationIsResumedFromElsewhere() async {
         }
     }
     assertEqual(value, 42)
-    do {
+    await expectThrows(saying: "broken") {
         _ = try await withContinuation(returning: Int.self, throwing: Broken.self) { continuation in
-            continuation.resume(throwing: Broken())
-        }
-        fail("did not throw")
-    } catch {
-        assertEqual("\(error)", "Broken()")
+        continuation.resume(throwing: Broken())
+    }
     }
     let given = await withContinuation(returning: String.self) { continuation in
         continuation.resume(with: .Ok("outcome"))
@@ -316,38 +279,35 @@ fn aLeakedContinuationTrapsInADebugBuild() async {
 // ---- Races and waiting on tasks ------------------------------------------------
 
 @test
-fn theFirstToFinishWinsAndTheRestAreCancelled() async {
+fn theFirstToFinishWinsAndTheRestAreCancelled() async throws {
     let loserStopped = Atomic<Bool>(false)
-    do {
-        let winner = try await race({ "fast" }, {
-            if await sleepsUntilCancelled() {
-                loserStopped.store(true)
-            }
-            return "slow"
-        })
-        assertEqual(winner, "fast")
-        assert(loserStopped.load())
-        let three = try await race({
-            try await Task.sleep(for: Duration.seconds(60))
-            return 1
-        }, { 2 }, {
-            try await Task.sleep(for: Duration.seconds(60))
-            return 3
-        })
-        assertEqual(three, 2)
-    } catch {
-        fail("threw \(error)")
-    }
-    do {
+    let winner = try await race({ "fast" }, {
+        if await sleepsUntilCancelled() {
+            loserStopped.store(true)
+        }
+        return "slow"
+    })
+    assertEqual(winner, "fast")
+    expect(loserStopped.load())
+    let three = try await race({
+        try await Task.sleep(for: Duration.seconds(60))
+        return 1
+    }, { 2 }, {
+        try await Task.sleep(for: Duration.seconds(60))
+        return 3
+    })
+    assertEqual(three, 2)
+}
+
+@test
+fn anErrorFirstIsTheRaces() async {
+    await expectThrows(Broken.self) {
         _ = try await race({ () throws -> Int in
             throw Broken()
         }, {
             try await Task.sleep(for: Duration.seconds(60))
             return 0
         })
-        fail("did not throw")
-    } catch {
-        assertEqual("\(error)", "Broken()")
     }
 }
 
@@ -371,9 +331,9 @@ fn tasksAreWaitedForAllAnyOrEach() async {
         order.append(done.value)
         indices.append(done.index)
     }
-    assertEqual("\(order)", "[2, 3, 1]")
-    assertEqual("\(indices)", "[1, 2, 0]")
-    assertEqual("\(await whenAll([slow, fast, middle]))", "[1, 2, 3]")
+    assertEqual(order, [2, 3, 1])
+    assertEqual(indices, [1, 2, 0])
+    assertEqual(await whenAll([slow, fast, middle]), [1, 2, 3])
     let noTasks: Task<Int>[>..] = []
     var count = 0
     for await _ in whenEach(noTasks) {

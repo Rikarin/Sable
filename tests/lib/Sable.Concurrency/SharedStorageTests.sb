@@ -232,119 +232,164 @@ async fn hammerKeeper(_ live: Atomic<Int>) {
     }
 }
 
-async fn store(_ which: Int) {
+// Where what several threads reach is held.
+@derive(Debug)
+enum Place {
+    GlobalThroughInout
+    Global
+    GlobalArray
+    GlobalDictionary
+    StaticArray
+    ImmortalsField
+    ImmortalsArray
+    UnownedInArray
+    Unowned
+    WeakObjectsField
+    UnownedUnsafe
+    UnownedThroughInout
+    CapturedVariable
+    ActorsObject
+    GeneratorsFrame
+    UnownedInStruct
+    ImmutableGlobal
+}
+
+let ways: Place[>..] = [
+    .GlobalThroughInout,
+    .Global,
+    .GlobalArray,
+    .GlobalDictionary,
+    .StaticArray,
+    .ImmortalsField,
+    .ImmortalsArray,
+    .UnownedInArray,
+    .Unowned,
+    .WeakObjectsField,
+    .UnownedUnsafe,
+    .UnownedThroughInout,
+    .CapturedVariable,
+    .ActorsObject,
+    .GeneratorsFrame,
+    .UnownedInStruct,
+    .ImmutableGlobal,
+]
+
+@test(arguments: ways)
+fn whatGlobalsAndFramesHoldIsCountedOnEveryThread(_ way: Place) async {
     let live = Atomic<Int>(0)
     if true {
         let box = Mutex(Boxes())
-        if which == 0 {
-            await hammer(live, box, { b, h, i in assign(&globalOne, h) }, { b in globalOne })
-        }
-        if which == 1 {
-            await hammer(live, box, { b, h, i in globalOne = h }, { b in globalOne })
-        }
-        if which == 2 {
-            await hammer(live, box, { b, h, i in append(&globalList, h) }, { b in globalList.first })
-        }
-        if which == 3 {
-            await hammer(live, box, { b, h, i in insert(&globalTable, i, h) }, { b in globalTable[0] })
-        }
-        if which == 4 {
-            await hammer(live, box, { b, h, i in
-                _ = Statics.names
-            }, { b in Statics.names.count > 3 ? none : fixedList[0] })
-        }
-        if which == 5 {
-            await hammer(live, box, { b, h, i in assign(&Statics.holder.one, h) }, { b in Statics.holder.one })
-        }
-        if which == 6 {
-            await hammer(live, box, { b, h, i in append(&Statics.holder.list, h) }, { b in Statics.holder.list.first })
-        }
-        if which == 7 {
-            await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
-                if let o = b.owner {
-                    return o.backs[0].target
-                }
-                return none
-            })
-        }
-        if which == 8 {
-            await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
-                if let o = b.owner {
-                    return o.direct
-                }
-                return none
-            })
-        }
-        if which == 9 {
-            await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
-                if let o = b.owner {
-                    return o.weakly?.one
-                }
-                return none
-            })
-        }
-        if which == 10 {
-            await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
-                if let o = b.owner {
-                    return o.fast
-                }
-                return none
-            })
-        }
-        if which == 11 {
-            await hammer(live, box, { b, h, i in
-                if b.owner == none {
-                    b.owner = Owner(h)
-                }
-                setDirect(&b.owner, h)
-            }, { b -> Held? in
-                if let o = b.owner {
-                    return o.direct
-                }
-                return none
-            })
-        }
-        if which == 12 {
-            await hammer(live, box, { b, h, i in
-                var captured: Held? = none
-                b.make = { captured }
-                b.set = { captured = $0 }
-                if let put = b.set {
-                    put(h)
-                }
-            }, { b -> Held? in
-                if let make = b.make {
-                    return make()
-                }
-                return none
-            })
-        }
-        if which == 13 { await hammerKeeper(live) }
-        if which == 14 {
-            await hammer(live, box, { b, h, i in
-                if b.make == none {
-                    var it = numbers(live)
-                    b.make = { it.next() }
-                }
-            }, { b -> Held? in
-                if let make = b.make {
-                    return make()
-                }
-                return none
-            })
-        }
-        if which == 15 {
-            await hammer(live, box, { b, h, i in
-                b.kept = [h]
-                let back = Back { target: h }
-                b.backs = []
-                b.backs.append(back)
-            }, { b -> Held? in b.backs.count > 0 ? b.backs[0].target : none })
-        }
-        if which == 16 {
-            await hammer(live, box, { b, h, i in
-                _ = h
-            }, { b in fixed })
+        match way {
+            case .GlobalThroughInout => {
+                await hammer(live, box, { b, h, i in assign(&globalOne, h) }, { b in globalOne })
+            }
+            case .Global => {
+                await hammer(live, box, { b, h, i in globalOne = h }, { b in globalOne })
+            }
+            case .GlobalArray => {
+                await hammer(live, box, { b, h, i in append(&globalList, h) }, { b in globalList.first })
+            }
+            case .GlobalDictionary => {
+                await hammer(live, box, { b, h, i in insert(&globalTable, i, h) }, { b in globalTable[0] })
+            }
+            case .StaticArray => {
+                await hammer(live, box, { b, h, i in
+                    _ = Statics.names
+                }, { b in Statics.names.count > 3 ? none : fixedList[0] })
+            }
+            case .ImmortalsField => {
+                await hammer(live, box, { b, h, i in assign(&Statics.holder.one, h) }, { b in Statics.holder.one })
+            }
+            case .ImmortalsArray => {
+                await hammer(live, box, { b, h, i in append(&Statics.holder.list, h) }, { b in Statics.holder.list.first })
+            }
+            case .UnownedInArray => {
+                await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
+                    if let o = b.owner {
+                        return o.backs[0].target
+                    }
+                    return none
+                })
+            }
+            case .Unowned => {
+                await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
+                    if let o = b.owner {
+                        return o.direct
+                    }
+                    return none
+                })
+            }
+            case .WeakObjectsField => {
+                await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
+                    if let o = b.owner {
+                        return o.weakly?.one
+                    }
+                    return none
+                })
+            }
+            case .UnownedUnsafe => {
+                await hammer(live, box, { b, h, i in b.owner = Owner(h) }, { b -> Held? in
+                    if let o = b.owner {
+                        return o.fast
+                    }
+                    return none
+                })
+            }
+            case .UnownedThroughInout => {
+                await hammer(live, box, { b, h, i in
+                    if b.owner == none {
+                        b.owner = Owner(h)
+                    }
+                    setDirect(&b.owner, h)
+                }, { b -> Held? in
+                    if let o = b.owner {
+                        return o.direct
+                    }
+                    return none
+                })
+            }
+            case .CapturedVariable => {
+                await hammer(live, box, { b, h, i in
+                    var captured: Held? = none
+                    b.make = { captured }
+                    b.set = { captured = $0 }
+                    if let put = b.set {
+                        put(h)
+                    }
+                }, { b -> Held? in
+                    if let make = b.make {
+                        return make()
+                    }
+                    return none
+                })
+            }
+            case .ActorsObject => { await hammerKeeper(live) }
+            case .GeneratorsFrame => {
+                await hammer(live, box, { b, h, i in
+                    if b.make == none {
+                        var it = numbers(live)
+                        b.make = { it.next() }
+                    }
+                }, { b -> Held? in
+                    if let make = b.make {
+                        return make()
+                    }
+                    return none
+                })
+            }
+            case .UnownedInStruct => {
+                await hammer(live, box, { b, h, i in
+                    b.kept = [h]
+                    let back = Back { target: h }
+                    b.backs = []
+                    b.backs.append(back)
+                }, { b -> Held? in b.backs.count > 0 ? b.backs[0].target : none })
+            }
+            case .ImmutableGlobal => {
+                await hammer(live, box, { b, h, i in
+                    _ = h
+                }, { b in fixed })
+            }
         }
         globalOne = none
         globalList = []
@@ -353,13 +398,6 @@ async fn store(_ which: Int) {
         Statics.holder.list = []
     }
     assertEqual(live.load(), 0)
-}
-
-@test
-fn whatGlobalsAndFramesHoldIsCountedOnEveryThread() async {
-    for i in 0..<17 {
-        await store(i)
-    }
 }
 
 final class Parent {
@@ -399,25 +437,28 @@ fn spin(_ read: () -> Parent) -> Int {
     return total
 }
 
-@test
-fn whatAnUnownedReferenceNamesIsCountedOnEveryThread() async {
-    for k in 0..<3 {
-        await readUnowned(k)
-    }
+@derive(Debug)
+enum Reading {
+    Unowned
+    UnownedUnsafe
+    UnownedInArray
 }
 
-async fn readUnowned(_ k: Int) {
-    let parent = Parent(k)
+let readings: Reading[>..] = [.Unowned, .UnownedUnsafe, .UnownedInArray]
+
+@test(arguments: readings)
+fn whatAnUnownedReferenceNamesIsCountedOnEveryThread(_ reading: Reading) async {
+    let parent = Parent(1)
     let child = Child(parent)
     await withTaskGroup(of: Int.self) { group in
         for _ in 0..<3 {
             unsafe {
                 group.spawn {
                     let c = child
-                    if k == 0 {
+                    if reading == .Unowned {
                         return spin { c.parent }
                     }
-                    if k == 1 {
+                    if reading == .UnownedUnsafe {
                         return spin { c.fast }
                     }
                     return spin { c.backs[0].parent }

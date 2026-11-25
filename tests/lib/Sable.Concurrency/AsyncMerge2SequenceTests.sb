@@ -4,28 +4,9 @@ module AsyncMerge2SequenceTests
 // '@test': run with
 //     tools/stdlib-coverage.sh Sable.Concurrency
 
+import ConcurrencySupport
 import Sable.Concurrency
 import Sable.Testing
-
-enum Broken: Error {
-    Down
-}
-
-fn settle() async {
-    for _ in 0..<20 {
-        await Task.yield()
-    }
-}
-
-// Waits, a millisecond at a time, until the condition holds: for what other
-// tasks, on other threads, are to have done (gives up after five seconds).
-fn until(_ condition: () -> Bool) async {
-    var waited = 0
-    while !condition() && waited < 5000 {
-        try? await Task.sleep(nanoseconds: 1_000_000)
-        waited += 1
-    }
-}
 
 @test
 fn mergeGivesEveryElementOfBoth() async {
@@ -39,7 +20,7 @@ fn mergeGivesEveryElementOfBoth() async {
     await second.close()
     var got = await merge(first, second).collect()
     got.sort()
-    assert(got == [0, 1, 2, 3, 4, 100, 101, 102, 103, 104])
+    expect(got == [0, 1, 2, 3, 4, 100, 101, 102, 103, 104])
 }
 
 @test
@@ -59,10 +40,10 @@ fn mergeKeepsEachSequencesOrder() async {
     var count = 0
     for await value in merge(first, second) {
         if value < 1000 {
-            assert(value > lastFirst)
+            expect(value > lastFirst)
             lastFirst = value
         } else {
-            assert(value > lastSecond)
+            expect(value > lastSecond)
             lastSecond = value
         }
         count += 1
@@ -77,14 +58,14 @@ fn mergeGivesElementsAsTheyCome() async {
     let second = Channel<Int>()
     var iterator = merge(first, second).makeAsyncIterator()
     await second.send(2)
-    assert(await iterator.next() == 2)
+    expect(await iterator.next() == 2)
     await first.send(1)
-    assert(await iterator.next() == 1)
+    expect(await iterator.next() == 1)
     await first.close()
     await second.send(3)
-    assert(await iterator.next() == 3)
+    expect(await iterator.next() == 3)
     await second.close()
-    assert(await iterator.next() == none)
+    expect(await iterator.next() == none)
 }
 
 @test
@@ -93,12 +74,7 @@ fn mergeEndsWithTheFirstError() async {
     let second = ThrowingChannel<Int, Broken>()
     await first.close(error: .Down)
     var iterator = merge(first, second).makeAsyncIterator()
-    do {
-        _ = try await iterator.next()
-        assert(false)
-    } catch {
-        assert(error == .Down)
-    }
+    await expectThrows(Broken.Down) { _ = try await iterator.next() }
     await second.close()
 }
 

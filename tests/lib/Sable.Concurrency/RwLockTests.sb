@@ -43,9 +43,9 @@ fn readersShareAndAWriterIsAlone() async {
         }
         await group.waitForAll()
     }
-    assert(writersAlone.load())
+    expect(writersAlone.load())
     assertEqual(table.read { $0 }, 600)
-    assert(mostReaders.load() >= 1)
+    expect(mostReaders.load() >= 1)
 }
 
 struct Failure: Error {
@@ -66,19 +66,17 @@ fn readersAreInsideTogether() {
 @test
 fn aThrowingReaderOrWriterLetsTheLockGo() {
     let n = RwLock<Int>(1)
-    do {
+    expectThrows {
         try n.read { value in
-            throw Failure()
-        }
-        fail("it did not throw")
-    } catch { }
-    do {
+        throw Failure()
+    }
+    }
+    expectThrows {
         try n.write { value in
-            value = 7
-            throw Failure()
-        }
-        fail("it did not throw")
-    } catch { }
+        value = 7
+        throw Failure()
+    }
+    }
     n.write { $0 += 1 }
     assertEqual(n.read { $0 }, 8)
 }
@@ -198,7 +196,7 @@ fn crowdsOfReadersAndWritersSeeWholeValues() async {
         }
         return all
     }
-    assert(whole, "a reader saw a value part-way through a write")
+    expect(whole, "a reader saw a value part-way through a write")
     assertEqual(table.read { $0.count }, 120)
 }
 

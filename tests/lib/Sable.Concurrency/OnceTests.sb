@@ -13,7 +13,7 @@ fn onceAndLazyMakeTheirValueOnce() async {
         runs.add(1)
         return [1, 2, 3]
     }
-    assert(!table.isMade && !setup.hasRun)
+    expect(!table.isMade && !setup.hasRun)
     await withTaskGroup(of: Int.self) { group in
         var task = 0
         while task < 8 {
@@ -28,5 +28,5 @@ fn onceAndLazyMakeTheirValueOnce() async {
         }
     }
     assertEqual(runs.load(), 101)
-    assert(table.isMade && setup.hasRun)
+    expect(table.isMade && setup.hasRun)
 }

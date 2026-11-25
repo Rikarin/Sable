@@ -25,13 +25,12 @@ struct Failure: Error {
 @test
 fn aMutexKeepsWhatAThrowingClosureLeft() {
     let n = Mutex<Int>(1)
-    do {
+    expectThrows {
         try n.withLock { value in
-            value = 7
-            throw Failure()
-        }
-        fail("it did not throw")
-    } catch { }
+        value = 7
+        throw Failure()
+    }
+    }
     assertEqual(n.withLock { $0 }, 7)
 }
 
@@ -63,7 +62,7 @@ fn aHeldMutexIsNotAvailable() {
         value += 1
         return n.withLockIfAvailable { $0 } == none
     }
-    assert(refused)
+    expect(refused)
     assertEqual(n.withLockIfAvailable { $0 }, 2)
 }
 
@@ -118,7 +117,7 @@ fn whatIsPutInALockedArrayIsCountedOnEveryThread() async {
             }
             await group.waitForAll()
         }
-        assert(live.load() > 0)
+        expect(live.load() > 0)
     }
     assertEqual(live.load(), 0)
 }

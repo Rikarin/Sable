@@ -3,21 +3,16 @@ module WatchTests
 // Watch and WatchReceiver (Sable.Concurrency), tested with '@test': run with
 //     tools/stdlib-coverage.sh Sable.Concurrency
 
+import ConcurrencySupport
 import Sable.Concurrency
 import Sable.Testing
-
-fn settle() async {
-    for _ in 0..<20 {
-        await Task.yield()
-    }
-}
 
 @test
 fn itHoldsTheLatestValue() {
     let watch = Watch<Int>(1)
     assertEqual(watch.value, 1)
     assertEqual(watch.version, 0)
-    assert(watch.send(2))
+    expect(watch.send(2))
     assertEqual(watch.value, 2)
     assertEqual(watch.version, 1)
 }
@@ -32,20 +27,20 @@ fn aReceiverWaitsForAChange() async {
     }
     await settle()
     watch.send("new")
-    assert(await reader.value == "new")
+    expect(await reader.value == "new")
 }
 
 @test
 fn aSlowReceiverSkipsToTheNewest() async {
     let watch = Watch<Int>(0)
     var receiver = watch.subscribe()
-    assert(!receiver.hasChanged)
+    expect(!receiver.hasChanged)
     for i in 1...5 {
         watch.send(i)
     }
-    assert(receiver.hasChanged)
-    assert(await receiver.changed() == 5)
-    assert(!receiver.hasChanged)
+    expect(receiver.hasChanged)
+    expect(await receiver.changed() == 5)
+    expect(!receiver.hasChanged)
 }
 
 @test
@@ -53,16 +48,16 @@ fn borrowingMarksTheValueSeen() {
     let watch = Watch<Int>(3)
     var receiver = watch.subscribe()
     watch.send(4)
-    assert(receiver.hasChanged)
+    expect(receiver.hasChanged)
     assertEqual(receiver.borrowAndMarkSeen(), 4)
-    assert(!receiver.hasChanged)
+    expect(!receiver.hasChanged)
 }
 
 @test
 fn updateChangesTheValueInPlace() {
     let watch = Watch<Int[>..]>([1])
-    assert(watch.update { $0.append(2) })
-    assert(watch.value == [1, 2])
+    expect(watch.update { $0.append(2) })
+    expect(watch.value == [1, 2])
     assertEqual(watch.version, 1)
 }
 
@@ -80,7 +75,7 @@ fn everyReceiverSeesTheChange() async {
     await settle()
     watch.send(7)
     for reader in readers {
-        assert(await reader.value == 7)
+        assertEqual(await reader.value, 7)
     }
 }
 
@@ -90,12 +85,12 @@ fn closingEndsTheWaitOnceTheLastIsSeen() async {
     var receiver = watch.subscribe()
     watch.send(1)
     watch.close()
-    assert(watch.isClosed)
-    assert(!watch.send(2))
-    assert(!watch.update { $0 += 1 })
+    expect(watch.isClosed)
+    expect(!watch.send(2))
+    expect(!watch.update { $0 += 1 })
     // The change made before closing is still seen, then none.
-    assert(await receiver.changed() == 1)
-    assert(await receiver.changed() == none)
+    expect(await receiver.changed() == 1)
+    expect(await receiver.changed() == none)
 }
 
 @test
@@ -108,7 +103,7 @@ fn closingWakesAWaitingReceiver() async {
     }
     await settle()
     watch.close()
-    assert(await reader.value == none)
+    expect(await reader.value == none)
 }
 
 @test
@@ -121,19 +116,19 @@ fn aWaitingReceiverIsCancelled() async {
     }
     await settle()
     reader.cancel()
-    assert(await reader.value == none)
+    expect(await reader.value == none)
 }
 
 @test
 fn iteratingGivesTheValueThenEachChange() async {
     let watch = Watch<Int>(10)
     var iterator = watch.makeAsyncIterator()
-    assert(await iterator.next() == 10)
+    expect(await iterator.next() == 10)
     watch.send(20)
     watch.send(30)
-    assert(await iterator.next() == 30)
+    expect(await iterator.next() == 30)
     watch.close()
-    assert(await iterator.next() == none)
+    expect(await iterator.next() == none)
 }
 
 @test
@@ -146,5 +141,5 @@ fn aReceiverIsItsOwnIterator() async {
     for await value in receiver {
         got.append(value)
     }
-    assert(got == [2])
+    expect(got == [2])
 }

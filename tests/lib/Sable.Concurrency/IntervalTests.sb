@@ -75,7 +75,7 @@ fn anIntervalBehindEndsOnceCancelled() async {
         return first.isNone && second.isNone
     }
     ticking.cancel()
-    assert(await ticking.value)
+    expect(await ticking.value)
 }
 
 @test
@@ -104,11 +104,11 @@ fn intervalsAreOnTheMonotonicClockUnlessTold() async {
     let start = Instant.now()
     var count = 0
     for await tick in Interval(every: Duration.milliseconds(1)).prefix(3) {
-        assert(tick > start && tick <= Instant.now())
+        expect(tick > start && tick <= Instant.now())
         count += 1
     }
     assertEqual(count, 3)
-    assert(start.elapsed >= Duration.milliseconds(3))
+    expect(start.elapsed >= Duration.milliseconds(3))
 }
 
 @test(traps: "above zero")

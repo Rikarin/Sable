@@ -28,11 +28,11 @@ fn aSemaphoreLetsSoManyInAtOnce() async {
         }
         await group.waitForAll()
     }
-    assert(most.load() <= 2)
+    expect(most.load() <= 2)
     assertEqual(slots.availablePermits, 2)
     let one = Semaphore(permits: 1)
-    assert(one.tryAcquire())
-    assert(!one.acquire(within: 1000000))
+    expect(one.tryAcquire())
+    expect(!one.acquire(within: 1000000))
     one.release()
-    assert(one.acquire(within: 1000000))
+    expect(one.acquire(within: 1000000))
 }

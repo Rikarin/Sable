@@ -9,19 +9,10 @@ module AsyncTimedSequenceTests
 // or short against long pauses, so that a loaded machine does not change
 // what the test sees.
 
+import ConcurrencySupport
 import Sable.Concurrency
 import Sable.Testing
 import Sable.Time
-
-enum Broken: Error {
-    Down
-}
-
-fn settle() async {
-    for _ in 0..<20 {
-        await Task.yield()
-    }
-}
 
 @test
 fn debounceGivesTheLastOfABurst() async {
@@ -30,7 +21,7 @@ fn debounceGivesTheLastOfABurst() async {
         await input.send(i)
     }
     await input.close()
-    assert(await input.debounce(for: Duration.seconds(60)).collect() == [5])
+    expect(await input.debounce(for: Duration.seconds(60)).collect() == [5])
 }
 
 @test
@@ -40,18 +31,18 @@ fn debounceGivesAnElementOnceTheSequenceIsQuiet() async {
     await input.send(1)
     await input.send(2)
     // Nothing more comes: the interval passes, and 2 is given.
-    assert(await iterator.next() == 2)
+    expect(await iterator.next() == 2)
     await input.send(3)
     await input.close()
-    assert(await iterator.next() == 3)
-    assert(await iterator.next() == none)
+    expect(await iterator.next() == 3)
+    expect(await iterator.next() == none)
 }
 
 @test
 fn debounceOfAnEmptySequenceIsEmpty() async {
     let input = Channel<Int>()
     await input.close()
-    assert(await input.debounce(for: Duration.milliseconds(1)).collect() == [])
+    expect(await input.debounce(for: Duration.milliseconds(1)).collect() == [])
 }
 
 @test
@@ -61,15 +52,12 @@ fn debouncePassesTheErrorOn() async {
     await input.close(error: .Down)
     var got: Int[>..] = []
     var iterator = input.debounce(for: Duration.seconds(60)).makeAsyncIterator()
-    do {
+    await expectThrows(Broken.Down) {
         while let value = try await iterator.next() {
             got.append(value)
         }
-        assert(false)
-    } catch {
-        assert(error == .Down)
     }
-    assert(got == [1])
+    expect(got == [1])
 }
 
 @test
@@ -79,7 +67,7 @@ fn throttleGivesTheFirstAtOnceAndTheNewestAfter() async {
         await input.send(i)
     }
     await input.close()
-    assert(await input.throttle(for: Duration.seconds(60)).collect() == [1, 5])
+    expect(await input.throttle(for: Duration.seconds(60)).collect() == [1, 5])
 }
 
 @test
@@ -89,25 +77,25 @@ fn throttleCanKeepTheFirstOfAnInterval() async {
         await input.send(i)
     }
     await input.close()
-    assert(await input.throttle(for: Duration.seconds(60), latest: false).collect() == [1, 2])
+    expect(await input.throttle(for: Duration.seconds(60), latest: false).collect() == [1, 2])
 }
 
-@test
+@test(tags: ["slow"], timeout: .seconds(60))
 fn throttleGivesTheWaitingElementAtTheIntervalsEnd() async {
     let input = Channel<Int>()
     var iterator = input.throttle(for: Duration.milliseconds(200)).makeAsyncIterator()
     await input.send(1)
-    assert(await iterator.next() == 1)
+    expect(await iterator.next() == 1)
     await input.send(2)
     await input.send(3)
     // The timer to the interval's end lets the newest through.
-    assert(await iterator.next() == 3)
+    expect(await iterator.next() == 3)
     try? await Task.sleep(for: Duration.milliseconds(300))
     // The interval has passed: the next goes through at once.
     await input.send(4)
-    assert(await iterator.next() == 4)
+    expect(await iterator.next() == 4)
     await input.close()
-    assert(await iterator.next() == none)
+    expect(await iterator.next() == none)
 }
 
 @test
@@ -115,12 +103,7 @@ fn throttlePassesTheErrorOn() async {
     let input = ThrowingChannel<Int, Broken>()
     await input.close(error: .Down)
     var iterator = input.throttle(for: Duration.seconds(1)).makeAsyncIterator()
-    do {
-        _ = try await iterator.next()
-        assert(false)
-    } catch {
-        assert(error == .Down)
-    }
+    await expectThrows(Broken.Down) { _ = try await iterator.next() }
 }
 
 @test

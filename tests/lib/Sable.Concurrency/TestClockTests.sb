@@ -101,7 +101,7 @@ fn aSleeperThatSleepsAgainIsWokenAgain() async {
     assertEqual(clock.nextDeadline! - Instant.origin, Duration.seconds(6))
     await clock.advance(by: Duration.seconds(5))
     assertEqual(log.text, "a1@2 b@3 a2@4 c@5 d@5 a3@6 a4@8")
-    assert(clock.nextDeadline.isNone)
+    expect(clock.nextDeadline.isNone)
 }
 
 @test
@@ -131,7 +131,7 @@ fn whatAWokenTaskSetsOffHasHappened() async {
 }
 
 @test
-fn aCancelledSleeperIsRemoved() async {
+fn aCancelledSleeperIsRemoved() async throws {
     let clock = TestClock()
     let sleeper = Task.spawn {
         do {
@@ -141,11 +141,11 @@ fn aCancelledSleeperIsRemoved() async {
             return true
         }
     }
-    try! await clock.waitForSleepers()
+    try await clock.waitForSleepers()
     assertEqual(clock.sleeperCount, 1)
     sleeper.cancel()
     assertEqual(clock.sleeperCount, 0)
-    assert(await sleeper.value)
+    expect(await sleeper.value)
     await clock.advance(by: Duration.seconds(1))
 }
 
@@ -159,33 +159,33 @@ fn aTaskCancelledAlreadyDoesNotSleep() async {
         return (try? await clock.sleep(for: Duration.seconds(1))) == none
     }
     sleeper.cancel()
-    assert(await sleeper.value)
+    expect(await sleeper.value)
     assertEqual(clock.sleeperCount, 0)
 }
 
 @test
-fn aDeadlineThatHasPassedIsNotSleptFor() async {
+fn aDeadlineThatHasPassedIsNotSleptFor() async throws {
     let clock = TestClock()
-    try! await clock.sleep(for: Duration.zero)
-    try! await clock.sleep(until: Instant.origin - Duration.seconds(1))
+    try await clock.sleep(for: Duration.zero)
+    try await clock.sleep(until: Instant.origin - Duration.seconds(1))
     assertEqual(clock.sleeperCount, 0)
 }
 
 @test
-fn sleepersCanBeWaitedFor() async {
+fn sleepersCanBeWaitedFor() async throws {
     let clock = TestClock()
     _ = Task.spawn {
         // Work that advancing does not wait for.
         try! await Task.sleep(nanoseconds: 1_000_000)
         try! await clock.sleep(for: Duration.seconds(1))
     }
-    try! await clock.waitForSleepers()
+    try await clock.waitForSleepers()
     assertEqual(clock.sleeperCount, 1)
     await clock.advance(by: Duration.seconds(1))
     let waiting = Task.spawn { (try? await clock.waitForSleepers(3)) == none }
     await Task.settle()
     waiting.cancel()
-    assert(await waiting.value)
+    expect(await waiting.value)
 }
 
 @test
@@ -246,14 +246,14 @@ fn sleepsAndTimersAreOnTheClock() async {
 }
 
 @test
-fn sleepsAndTimersAreOnTheMonotonicClockUnlessTold() async {
+fn sleepsAndTimersAreOnTheMonotonicClockUnlessTold() async throws {
     let start = Instant.now()
-    try! await sleep(Duration.milliseconds(1))
-    try! await Task.sleep(for: Duration.milliseconds(1))
-    try! await Task.sleep(until: start + Duration.milliseconds(3))
-    try! await Timer.after(Duration.milliseconds(1))
-    try! await Timer.at(start + Duration.milliseconds(5))
-    assert(start.elapsed >= Duration.milliseconds(5))
+    try await sleep(Duration.milliseconds(1))
+    try await Task.sleep(for: Duration.milliseconds(1))
+    try await Task.sleep(until: start + Duration.milliseconds(3))
+    try await Timer.after(Duration.milliseconds(1))
+    try await Timer.at(start + Duration.milliseconds(5))
+    expect(start.elapsed >= Duration.milliseconds(5))
     await yieldNow()
 }
 
@@ -288,11 +288,11 @@ fn timeoutsAreOnTheClock() async {
 }
 
 @test
-fn aTimeoutOfTheLongestDurationNeverComes() async {
-    assertEqual(try! await withTimeout(Duration.max) { 7 }, 7)
+fn aTimeoutOfTheLongestDurationNeverComes() async throws {
+    assertEqual(try await withTimeout(Duration.max) { 7 }, 7)
     let clock = TestClock()
     await clock.advance(by: Duration.hours(1))
-    assertEqual(try! await withTimeout(Duration.max, clock: clock) { 7 }, 7)
+    assertEqual(try await withTimeout(Duration.max, clock: clock) { 7 }, 7)
 }
 
 @test
@@ -301,9 +301,9 @@ fn tokensAreCancelledOnTheClock() async {
     let source = CancellationTokenSource()
     source.cancel(after: Duration.seconds(10), clock: clock)
     await clock.advance(by: Duration.seconds(9))
-    assert(!source.isCancellationRequested)
+    expect(!source.isCancellationRequested)
     await clock.advance(by: Duration.seconds(1))
-    assert(source.isCancellationRequested)
+    expect(source.isCancellationRequested)
 }
 
 @test

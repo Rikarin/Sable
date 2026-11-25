@@ -1,0 +1,33 @@
+module ConcurrencySupport
+
+import Sable.Testing
+
+@derive(Equatable)
+public enum Broken: Error {
+    Down
+}
+
+/// Lets every task queued run, a few times over, so that those that can
+/// get as far as they can go.
+public fn settle() async {
+    for _ in 0..<20 {
+        await Task.yield()
+    }
+}
+
+/// Waits, a millisecond at a time, until the condition holds: for what other
+/// tasks, on other threads, are to have done (gives up after five seconds).
+public fn until(_ condition: () -> Bool) async {
+    var waited = 0
+    while !condition() && waited < 5000 {
+        try? await Task.sleep(nanoseconds: 1_000_000)
+        waited += 1
+    }
+}
+
+/// Arrays of as many as a number up to the limit says, each as likely. (What
+/// 'array(count:)' makes is mostly short, and never shorter than its least
+/// when a failing case is made simpler.)
+public fn many<T>(_ element: Gen<T>, upTo limit: Int) -> Gen<T[>..]> {
+    return Gen.number(in: 0...limit).flatMap { count in element.array(count: count...count) }
+}

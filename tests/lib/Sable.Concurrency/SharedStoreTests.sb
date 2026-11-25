@@ -268,138 +268,204 @@ fn unownedOf(_ b: Box) -> Held? {
     return none
 }
 
-async fn store(_ which: Int) {
+// How a reference is stored.
+@derive(Debug)
+enum Way {
+    AppendInout
+    AssignInout
+    AssignGeneric
+    AppendToElement
+    MutatingMethod
+    MutatingElement
+    Union
+    DictionaryInClosure
+    Witness
+    Exchange
+    ClosureOfInout
+    CapturingSelf
+    CapturingSelfInlined
+    ThrowingInout
+    TupleElement
+    Override
+    GenericField
+    Closure
+    Unowned
+    UnownedGeneric
+    Element
+    ExchangeElement
+    AppendAndSwap
+    SliceAssigned
+    InlineStructInout
+    InlineStruct
+    SliceInout
+    ActorsState
+    RawPointer
+    StringArray
+    SwapAndAppend
+}
+
+let ways: Way[>..] = [
+    .AppendInout,
+    .AssignInout,
+    .AssignGeneric,
+    .AppendToElement,
+    .MutatingMethod,
+    .MutatingElement,
+    .Union,
+    .DictionaryInClosure,
+    .Witness,
+    .Exchange,
+    .ClosureOfInout,
+    .CapturingSelf,
+    .CapturingSelfInlined,
+    .ThrowingInout,
+    .TupleElement,
+    .Override,
+    .GenericField,
+    .Closure,
+    .Unowned,
+    .UnownedGeneric,
+    .Element,
+    .ExchangeElement,
+    .AppendAndSwap,
+    .SliceAssigned,
+    .InlineStructInout,
+    .InlineStruct,
+    .SliceInout,
+    .ActorsState,
+    .RawPointer,
+    .StringArray,
+    .SwapAndAppend,
+]
+
+@test(arguments: ways)
+fn whatIsStoredOutOfSightIsCountedOnEveryThread(_ way: Way) async {
     let live = Atomic<Int>(0)
     if true {
         let box = Mutex(Box())
-        if which == 0 {
-            await hammer(box, live, { b, h, i in append(&b.list, h) }, { $0.list.first })
-        }
-        if which == 1 {
-            await hammer(box, live, { b, h, i in assign(&b.one, h) }, { $0.one })
-        }
-        if which == 2 {
-            await hammer(box, live, { b, h, i in assignAny(&b.one, h) }, { $0.one })
-        }
-        if which == 3 {
-            await hammer(box, live, { b, h, i in append(&b.lists[i % 4], h) }, { $0.lists[0].first })
-        }
-        if which == 4 {
-            await hammer(box, live, { b, h, i in b.pair.put(h) }, { $0.pair.first })
-        }
-        if which == 5 {
-            await hammer(box, live, { b, h, i in b.pairs[0].put(h) }, { $0.pairs[0].list.first })
-        }
-        if which == 6 {
-            await hammer(box, live, { b, h, i in assignAny(&b.either, i % 2 == 0 ? Either.One(h) : Either.Two(h, h)) }, { eitherHeld($0.either) })
-        }
-        if which == 7 {
-            await hammer(box, live, { b, h, i in
-                with(&b.table) { $0[i % 10] = h }
-            }, { $0.table[0] })
-        }
-        if which == 8 {
-            await hammer(box, live, { b, h, i in b.keeper.keep(h) }, { $0.keeper.kept() })
-        }
-        if which == 9 {
-            await hammer(box, live, { b, h, i in
-                var fresh: Held? = h
-                exchange(&b.one, &fresh)
-            }, { $0.one })
-        }
-        if which == 10 {
-            await hammer(box, live, { b, h, i in
-                with(&b.one) { $0 = h }
-            }, { $0.one })
-        }
-        if which == 11 {
-            await hammer(box, live, { b, h, i in b.pair.throughClosure(h) }, { $0.pair.first })
-        }
-        if which == 12 {
-            await hammer(box, live, { b, h, i in b.pair.inlinedClosure(h) }, { $0.pair.first })
-        }
-        if which == 13 {
-            await hammer(box, live, { b, h, i in
-                do {
-                    try throwing(&b.one, h)
-                } catch { }
-            }, { $0.one })
-        }
-        if which == 14 {
-            await hammer(box, live, { b, h, i in assign(&b.tuple.0, h) }, { $0.tuple.0 })
-        }
-        if which == 15 {
-            await hammer(box, live, { b, h, i in b.parent.replace(&b.one, h) }, { $0.one })
-        }
-        if which == 16 {
-            await hammer(box, live, { b, h, i in assign(&b.generic.value, h) }, { $0.generic.value })
-        }
-        if which == 17 {
-            await hammer(box, live, { b, h, i in
-                assignAny(&b.function, { h })
-            }, { called($0) })
-        }
-        if which == 18 {
-            await hammer(box, live, { b, h, i in b.owner = Owner(h) }, { unownedOf($0) })
-        }
-        if which == 19 {
-            await hammer(box, live, { b, h, i in assignAny(&b.owner, Owner(h)) }, { unownedOf($0) })
-        }
-        if which == 20 {
-            await hammer(box, live, { b, h, i in b.lists[i % 4] = [h] }, { $0.lists[0].first })
-        }
-        if which == 21 {
-            await hammer(box, live, { b, h, i in
-                var fresh: Held[>..] = [h]
-                exchange(&b.lists[0], &fresh)
-            }, { $0.lists[0].first })
-        }
-        if which == 22 {
-            await hammer(box, live, { b, h, i in
-                b.lists.append([h])
-                b.lists.swapAt(0, 4)
-                _ = b.lists.removeLast()
-            }, { $0.lists[0].first })
-        }
-        if which == 23 {
-            await hammer(box, live, { b, h, i in b.lists[0..<1] = [[h]] }, { $0.lists[0].first })
-        }
-        if which == 24 {
-            await hammer(box, live, { b, h, i in assign(&b.fixed.b, h) }, { $0.fixed.b })
-        }
-        if which == 25 {
-            await hammer(box, live, { b, h, i in b.fixed.a = h }, { $0.fixed.a })
-        }
-        if which == 26 {
-            await hammer(box, live, { b, h, i in fillSlice(&b.lists[0..<2], h) }, { $0.lists[0].first })
-        }
-        if which == 27 { await hammerActor(live) }
-        if which == 28 {
-            await hammer(box, live, { b, h, i in
-                unsafe {
-                    let p = RawPtr<Held?>.allocate(count: 1)
-                    p.initialize(to: h)
-                    b.one = p.move()
-                    p.deallocate()
-                }
-            }, { $0.one })
-        }
-        if which == 29 {
-            await hammer(box, live, { b, h, i in addNames(&b.names, i) }, { b in b.names.count > 100 ? b.one : none })
-        }
-        if which == 30 {
-            await hammer(box, live, { b, h, i in
-                b.lists.swapAt(0, 1);
-                append(&b.lists[0], h)
-            }, { $0.lists[0].first })
+        match way {
+            case .AppendInout => {
+                await hammer(box, live, { b, h, i in append(&b.list, h) }, { $0.list.first })
+            }
+            case .AssignInout => {
+                await hammer(box, live, { b, h, i in assign(&b.one, h) }, { $0.one })
+            }
+            case .AssignGeneric => {
+                await hammer(box, live, { b, h, i in assignAny(&b.one, h) }, { $0.one })
+            }
+            case .AppendToElement => {
+                await hammer(box, live, { b, h, i in append(&b.lists[i % 4], h) }, { $0.lists[0].first })
+            }
+            case .MutatingMethod => {
+                await hammer(box, live, { b, h, i in b.pair.put(h) }, { $0.pair.first })
+            }
+            case .MutatingElement => {
+                await hammer(box, live, { b, h, i in b.pairs[0].put(h) }, { $0.pairs[0].list.first })
+            }
+            case .Union => {
+                await hammer(box, live, { b, h, i in assignAny(&b.either, i % 2 == 0 ? Either.One(h) : Either.Two(h, h)) }, { eitherHeld($0.either) })
+            }
+            case .DictionaryInClosure => {
+                await hammer(box, live, { b, h, i in
+                    with(&b.table) { $0[i % 10] = h }
+                }, { $0.table[0] })
+            }
+            case .Witness => {
+                await hammer(box, live, { b, h, i in b.keeper.keep(h) }, { $0.keeper.kept() })
+            }
+            case .Exchange => {
+                await hammer(box, live, { b, h, i in
+                    var fresh: Held? = h
+                    exchange(&b.one, &fresh)
+                }, { $0.one })
+            }
+            case .ClosureOfInout => {
+                await hammer(box, live, { b, h, i in
+                    with(&b.one) { $0 = h }
+                }, { $0.one })
+            }
+            case .CapturingSelf => {
+                await hammer(box, live, { b, h, i in b.pair.throughClosure(h) }, { $0.pair.first })
+            }
+            case .CapturingSelfInlined => {
+                await hammer(box, live, { b, h, i in b.pair.inlinedClosure(h) }, { $0.pair.first })
+            }
+            case .ThrowingInout => {
+                await hammer(box, live, { b, h, i in
+                    do {
+                        try throwing(&b.one, h)
+                    } catch { }
+                }, { $0.one })
+            }
+            case .TupleElement => {
+                await hammer(box, live, { b, h, i in assign(&b.tuple.0, h) }, { $0.tuple.0 })
+            }
+            case .Override => {
+                await hammer(box, live, { b, h, i in b.parent.replace(&b.one, h) }, { $0.one })
+            }
+            case .GenericField => {
+                await hammer(box, live, { b, h, i in assign(&b.generic.value, h) }, { $0.generic.value })
+            }
+            case .Closure => {
+                await hammer(box, live, { b, h, i in
+                    assignAny(&b.function, { h })
+                }, { called($0) })
+            }
+            case .Unowned => {
+                await hammer(box, live, { b, h, i in b.owner = Owner(h) }, { unownedOf($0) })
+            }
+            case .UnownedGeneric => {
+                await hammer(box, live, { b, h, i in assignAny(&b.owner, Owner(h)) }, { unownedOf($0) })
+            }
+            case .Element => {
+                await hammer(box, live, { b, h, i in b.lists[i % 4] = [h] }, { $0.lists[0].first })
+            }
+            case .ExchangeElement => {
+                await hammer(box, live, { b, h, i in
+                    var fresh: Held[>..] = [h]
+                    exchange(&b.lists[0], &fresh)
+                }, { $0.lists[0].first })
+            }
+            case .AppendAndSwap => {
+                await hammer(box, live, { b, h, i in
+                    b.lists.append([h])
+                    b.lists.swapAt(0, 4)
+                    _ = b.lists.removeLast()
+                }, { $0.lists[0].first })
+            }
+            case .SliceAssigned => {
+                await hammer(box, live, { b, h, i in b.lists[0..<1] = [[h]] }, { $0.lists[0].first })
+            }
+            case .InlineStructInout => {
+                await hammer(box, live, { b, h, i in assign(&b.fixed.b, h) }, { $0.fixed.b })
+            }
+            case .InlineStruct => {
+                await hammer(box, live, { b, h, i in b.fixed.a = h }, { $0.fixed.a })
+            }
+            case .SliceInout => {
+                await hammer(box, live, { b, h, i in fillSlice(&b.lists[0..<2], h) }, { $0.lists[0].first })
+            }
+            case .ActorsState => { await hammerActor(live) }
+            case .RawPointer => {
+                await hammer(box, live, { b, h, i in
+                    unsafe {
+                        let p = RawPtr<Held?>.allocate(count: 1)
+                        p.initialize(to: h)
+                        b.one = p.move()
+                        p.deallocate()
+                    }
+                }, { $0.one })
+            }
+            case .StringArray => {
+                await hammer(box, live, { b, h, i in addNames(&b.names, i) }, { b in b.names.count > 100 ? b.one : none })
+            }
+            case .SwapAndAppend => {
+                await hammer(box, live, { b, h, i in
+                    b.lists.swapAt(0, 1);
+                    append(&b.lists[0], h)
+                }, { $0.lists[0].first })
+            }
         }
     }
     assertEqual(live.load(), 0)
-}
-
-@test
-fn whatIsStoredOutOfSightIsCountedOnEveryThread() async {
-    for i in 0..<31 {
-        await store(i)
-    }
 }

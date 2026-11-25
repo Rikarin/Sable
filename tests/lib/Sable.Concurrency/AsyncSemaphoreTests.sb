@@ -25,9 +25,9 @@ fn anAsyncSemaphoreLetsSoManyTasksIn() async {
         }
         await group.waitForAll()
     }
-    assert(most.load() <= 3 && most.load() >= 1)
+    expect(most.load() <= 3 && most.load() >= 1)
     assertEqual(await slots.availablePermits, 3)
-    assert(await slots.tryAcquire())
+    expect(await slots.tryAcquire())
 }
 
 @test
@@ -73,7 +73,7 @@ fn severalPermitsReleasedGoToThoseWaitingFirst() async {
     await Task.settle()
     assertEqual(semaphore.availablePermits, 0)
     semaphore.release(count: 2)
-    assert(!semaphore.tryAcquire())
+    expect(!semaphore.tryAcquire())
     await Task.settle()
     assertEqual(woken.load(), 2)
     semaphore.release(count: 3)

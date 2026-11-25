@@ -5,58 +5,52 @@ module ConcurrentQueueTests
 // linearizable FIFO queue gives every value exactly once and each
 // consumer sees each producer's values in the order they were enqueued.
 
+import ConcurrencySupport
 import Sable.Concurrency
 import Sable.Testing
-
-/// A random walk of numbers: xorshift.
-struct Walk {
-    var state: U64
-
-    mutating fn next(_ below: Int) -> Int {
-        state = state ^ (state << 13)
-        state = state ^ (state >> 7)
-        state = state ^ (state << 17)
-        return Int(state % U64(below))
-    }
-}
 
 @test
 fn aQueueGivesBackInTheOrderItWasGiven() {
     let queue = ConcurrentQueue<String>()
-    assert(queue.isEmpty)
-    assert(queue.dequeue() == none)
-    assert(queue.peek() == none)
+    expect(queue.isEmpty)
+    expect(queue.dequeue() == none)
+    expect(queue.peek() == none)
     queue.enqueue("a")
     queue.enqueue("b")
     assertEqual(queue.count, 2)
-    assert(!queue.isEmpty)
+    expect(!queue.isEmpty)
     assertEqual(queue.peek() ?? "-", "a")
     assertEqual(queue.dequeue() ?? "-", "a")
     assertEqual(queue.dequeue() ?? "-", "b")
-    assert(queue.dequeue() == none)
+    expect(queue.dequeue() == none)
     assertEqual(queue.count, 0)
 }
 
 @test
 fn randomOperationsAgreeWithAnArray() {
-    let queue = ConcurrentQueue<Int>()
-    var model: Int[>..] = []
-    var front = 0
-    var walk = Walk { state: 0x9E3779B97F4A7C15 }
-    var step = 0
-    while step < 20000 {
-        if walk.next(3) < 2 {
-            queue.enqueue(step)
-            model.append(step)
-        } else {
-            let expected: Int? = front < model.count ? model[front] : none
-            if expected != none {
-                front = front + 1
+    let enqueues = Gen.weighted([(1, Gen.always(false)), (2, Gen.always(true))])
+    forAll(many(enqueues, upTo: 4000), cases: 14) { (steps: Bool[>..]) in
+        let queue = ConcurrentQueue<Int>()
+        var enqueued = 0
+        var dequeued = 0
+        for enqueues in steps {
+            if enqueues {
+                queue.enqueue(enqueued)
+                enqueued += 1
+            } else {
+                let expected: Int? = dequeued < enqueued ? dequeued : none
+                dequeued += expected == none ? 0 : 1
+                let value = queue.dequeue()
+                if value != expected {
+                    recordFailure("dequeued \(value:?) rather than \(expected:?)")
+                    return
+                }
             }
-            assert(queue.dequeue() == expected, "dequeue at step \(step)")
+            if queue.count != enqueued - dequeued {
+                recordFailure("\(queue.count) in it rather than \(enqueued - dequeued)")
+                return
+            }
         }
-        assertEqual(queue.count, model.count - front)
-        step = step + 1
     }
 }
 
@@ -135,7 +129,7 @@ fn producersAndConsumersAtOnceLoseAndReorderNothing() async {
     assertEqual(total, producers * perProducer)
     assertEqual(counts[0], perProducer)
     assertEqual(counts[1], perProducer)
-    assert(queue.isEmpty)
+    expect(queue.isEmpty)
 }
 
 @test

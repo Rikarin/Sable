@@ -31,9 +31,9 @@ fn anAsyncMutexIsHeldAcrossSuspensions() async {
         }
         assertEqual(total, 20)
     }
-    assert(!overlapped.load())
-    assert(!(await gate.isLocked))
-    assert(await gate.tryLock())
-    assert(!(await gate.tryLock()))
+    expect(!overlapped.load())
+    expect(!(await gate.isLocked))
+    expect(await gate.tryLock())
+    expect(!(await gate.tryLock()))
     await gate.unlock()
 }

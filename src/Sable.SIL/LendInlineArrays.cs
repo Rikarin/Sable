@@ -176,6 +176,11 @@ public sealed class LendInlineArrays : ISilPass {
                     case BuiltinInst { Name: "fixed_restore" } when change:
                         break;
 
+                    // Seen as unspecialised code's slice of its type parameter's values (#297): the same view.
+                    case BuiltinInst { Name: "opaque_borrow_as" or "opaque_cast" } seenAs when ReferenceEquals(seenAs.Operands[0], holder):
+                        Hold(seenAs);
+                        break;
+
                     // A slice of it, or an element borrowed from it, holds it too.
                     case BuiltinInst { Name: "array_slice" or "array_get_borrowed" } part when ReferenceEquals(part.Operands[0], holder) && !part.Type.IsTrivial:
                         Hold(part);

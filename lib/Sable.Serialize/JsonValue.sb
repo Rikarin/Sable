@@ -112,10 +112,15 @@ public fn membersOf(_ value: JsonValue) -> Member[>..] {
 }
 
 public fn field(_ value: JsonValue, _ key: String) -> JsonValue? {
-    for m in membersOf(value) {
-        if m.key == key {
-            return m.value
+    match value {
+        case .Object(let members) => {
+            for i in 0..<members.count {
+                if members[i].key == key {
+                    return members[i].value
+                }
+            }
         }
+        default => { }
     }
     return none
 }

@@ -77,6 +77,19 @@ public struct BufferedReader<Inner: Reader>: Reader {
     /// The next line as UTF-8 text, without its "\n" or "\r\n", ill-formed
     /// bytes made U+FFFD; none at the end.
     public mutating fn readLine() throws(IoError) -> String? {
+        if !(try fill()) {
+            return none
+        }
+        // A line that ends in the buffer is decoded where it lies.
+        if let at = buffer[position...].firstIndex(of: 0x0A) {
+            let start = position
+            var end = start + at
+            position = end + 1
+            if end > start && buffer[end - 1] == 0x0D {
+                end -= 1
+            }
+            return String.fromUtf8Lossy(buffer[start..<end])
+        }
         var line = try readUntil(0x0A)
         if line.isEmpty {
             return none

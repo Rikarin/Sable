@@ -47,6 +47,9 @@ extension String {
     /// assert(String.fromUtf8Lossy(bytes) == "a\u{FFFD}b")
     /// ```
     public static fn fromUtf8Lossy(_ bytes: U8[:]) -> String {
+        if let text = Runtime.decodeUtf8(bytes) {
+            return text
+        }
         var pieces: String[>..] = []
         var start = 0
         while start < bytes.count {

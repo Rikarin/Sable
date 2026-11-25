@@ -1313,6 +1313,7 @@ public static class SharedStorage {
             // An array changed where it is: its count, its buffer, an element.
             BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve" or "array_rotate" or "array_store_slice" or "array_append_utf8" or "array_append_repeating" or "array_append_all" or "array_element_addr" } array
                 => (array.Operands[0], true),
+            BuiltinInst { Name: var name } stored when name.StartsWith("bytes_store_array_", StringComparison.Ordinal) => (stored.Operands[0], true),
             _ => null,
         };
 
@@ -3001,8 +3002,12 @@ public static class SilBuiltins {
         // reference to its run first.
         foreach (var unsigned in new[] { SilType.U16, SilType.U32, SilType.U64 }) {
             Add($"bytes_load_{unsigned}", unsigned, new SliceType(SilType.U8), SilType.Int);
+            Add($"bytes_load_array_{unsigned}", unsigned, new ArrayType(SilType.U8), SilType.Int);
             Add($"bytes_store_{unsigned}", SilType.Unit, SilType.Address(new SliceType(SilType.U8)), SilType.Int, unsigned);
             Add($"bytes_store_unique_{unsigned}", SilType.Unit, SilType.Address(new SliceType(SilType.U8)), SilType.Int, unsigned);
+            // The same, of an array of bytes in its place (HoistUniqueness).
+            Add($"bytes_store_array_{unsigned}", SilType.Unit, SilType.Address(new ArrayType(SilType.U8)), SilType.Int, unsigned);
+            Add($"bytes_store_array_unique_{unsigned}", SilType.Unit, SilType.Address(new ArrayType(SilType.U8)), SilType.Int, unsigned);
         }
 
         // A float's bits as the unsigned integer of its width, and back: the

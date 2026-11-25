@@ -3859,10 +3859,10 @@ public sealed partial class LlvmEmitter {
                 NegativeOffsetTraps(operands[1]);
                 var lastIndex = Fresh();
                 Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
-                var last = SliceElement(operands[0], lastIndex, (SliceType)builtin.Operands[0].Type);
+                var last = builtin.Operands[0].Type is ArrayType whole ? InlineElement(operands[0], lastIndex, whole.Element) : SliceElement(operands[0], lastIndex, (SliceType)builtin.Operands[0].Type);
                 var first = Fresh();
                 Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
-                Line($"{Result()} = load {integer}, ptr {first}, align 1");
+                Line($"{Result()} = load {integer}, ptr {first}, align 1, !tbaa {TbaaElement}");
                 return;
             }
 
@@ -3875,6 +3875,20 @@ public sealed partial class LlvmEmitter {
                 NegativeOffsetTraps(operands[1]);
                 var lastIndex = Fresh();
                 Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
+                if (((AddressType)builtin.Operands[0].Type).Pointee is ArrayType bytes) {
+                    if (!builtin.Name.StartsWith("bytes_store_array_unique_", StringComparison.Ordinal)) {
+                        MakeUnique(operands[0], bytes);
+                    }
+
+                    var array = Fresh();
+                    var start = Fresh();
+                    Line($"{array} = load ptr, ptr {operands[0]}");
+                    var end = InlineElement(array, lastIndex, bytes.Element);
+                    Line($"{start} = getelementptr inbounds i8, ptr {end}, i64 {1 - width}");
+                    Line($"store {integer} {operands[2]}, ptr {start}, align 1, !tbaa {TbaaElement}");
+                    return;
+                }
+
                 var written = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
                 string last;
                 if (builtin.Name.StartsWith("bytes_store_unique_", StringComparison.Ordinal)) {
@@ -3889,7 +3903,7 @@ public sealed partial class LlvmEmitter {
 
                 var first = Fresh();
                 Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
-                Line($"store {integer} {operands[2]}, ptr {first}, align 1");
+                Line($"store {integer} {operands[2]}, ptr {first}, align 1, !tbaa {TbaaElement}");
                 return;
             }
 
@@ -5231,43 +5245,9 @@ public sealed partial class LlvmEmitter {
                     _names[builtin] = SliceMutableElement(operands[0], operands[1], addressed);
                     return;
 
-                // The check inline — the empty array, or an array of its own
-                // kind whose buffer has one reference, is unique already — and
-                // the call only for the rest: a shared buffer, which it
-                // copies, or a mapped file's bytes, which are never the array's.
-                case "array_make_unique": {
-                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
-                    var metadata = ArrayMetadataOf(arrayType);
-                    var array = Fresh();
-                    var isNull = Fresh();
-                    Line($"{array} = load ptr, ptr {operands[0]}");
-                    Line($"{isNull} = icmp eq ptr {array}, null");
-                    var check = NewLabel("shared");
-                    var copy = NewLabel("copy");
-                    var done = NewLabel("unique");
-                    Line($"br i1 {isNull}, label %{done}, label %{check}");
-                    Continue(check);
-                    var typeField = Fresh();
-                    var type = Fresh();
-                    var strongField = Fresh();
-                    var strong = Fresh();
-                    var own = Fresh();
-                    var one = Fresh();
-                    var unique = Fresh();
-                    Line($"{typeField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 0");
-                    Line($"{type} = load ptr, ptr {typeField}, !tbaa {TbaaHeader}");
-                    Line($"{own} = icmp eq ptr {type}, {metadata}");
-                    Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
-                    Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
-                    Line($"{one} = icmp eq i32 {strong}, 1");
-                    Line($"{unique} = and i1 {own}, {one}");
-                    Line($"br i1 {unique}, label %{done}, label %{copy}");
-                    Continue(copy);
-                    Line($"call void @sable_array_make_unique(ptr {operands[0]}, ptr {metadata})");
-                    Line($"br label %{done}");
-                    Continue(done);
+                case "array_make_unique":
+                    MakeUnique(operands[0], (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee);
                     return;
-                }
 
                 // Unique already: the element written where it is, its index checked.
                 case "array_set_unique": {
@@ -6764,6 +6744,45 @@ public sealed partial class LlvmEmitter {
             SiteForRuntime();
             Line($"{element} = call ptr @sable_slice_mutable_element(ptr {slot}, ptr {ArrayMetadataOf(new ArrayType(type.Element))}, i64 {index})");
             return element;
+        }
+
+        /// <summary>
+        ///     An array's place made the only reference to its buffer, the
+        ///     check inline — the empty array, or an array of its own kind
+        ///     whose buffer has one reference, is unique already — and the
+        ///     call only for the rest: a shared buffer, which it copies, or a
+        ///     mapped file's bytes, which are never the array's.
+        /// </summary>
+        void MakeUnique(string slot, ArrayType arrayType) {
+            var metadata = ArrayMetadataOf(arrayType);
+            var array = Fresh();
+            var isNull = Fresh();
+            Line($"{array} = load ptr, ptr {slot}");
+            Line($"{isNull} = icmp eq ptr {array}, null");
+            var check = NewLabel("shared");
+            var copy = NewLabel("copy");
+            var done = NewLabel("unique");
+            Line($"br i1 {isNull}, label %{done}, label %{check}");
+            Continue(check);
+            var typeField = Fresh();
+            var type = Fresh();
+            var strongField = Fresh();
+            var strong = Fresh();
+            var own = Fresh();
+            var one = Fresh();
+            var unique = Fresh();
+            Line($"{typeField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 0");
+            Line($"{type} = load ptr, ptr {typeField}, !tbaa {TbaaHeader}");
+            Line($"{own} = icmp eq ptr {type}, {metadata}");
+            Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
+            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+            Line($"{one} = icmp eq i32 {strong}, 1");
+            Line($"{unique} = and i1 {own}, {one}");
+            Line($"br i1 {unique}, label %{done}, label %{copy}");
+            Continue(copy);
+            Line($"call void @sable_array_make_unique(ptr {slot}, ptr {metadata})");
+            Line($"br label %{done}");
+            Continue(done);
         }
 
         /// <summary>An element's address, its index checked against the count — inline, with no call.</summary>

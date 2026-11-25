@@ -3,18 +3,20 @@ module UnixSocketTests
 // UnixListener, UnixStream and UnixDatagramSocket (Sable.Net): run with
 //     tools/stdlib-coverage.sh Sable.Net
 
+import Sable.Concurrency
 import Sable.IO
 import Sable.Net
 import Sable.Process
 import Sable.Testing
 import Sable.Time
 
-// Windows' Unix sockets are not verified yet (#62).
-#if !os(windows)
-
 /// A path no other test has, short enough for a socket's.
 fn path(_ name: String) -> String {
+    #if os(windows)
+    return "\(Environment.temporaryDirectory.appending("sable-\(Process.id())-\(name)"))"
+    #else
     return "/tmp/sable-\(Process.id())-\(name)"
+    #endif
 }
 
 /// What the body throws; "" for nothing.
@@ -36,6 +38,8 @@ fn aConnectionIsMadeAtAPath() async {
             let _ = try? File.remove(at)
         }
         assertEqual(listener.path, at)
+        assert((try File.metadata(at)).kind == FileKind.Socket)
+        assert((try File.metadata(at, followLinks: false)).kind == FileKind.Socket)
         let client = try await UnixStream.connect(at, timeout: Duration.seconds(10))
         let server = try await listener.accept()
         try await client.write([1, 2, 3])
@@ -143,6 +147,59 @@ fn closingAndCancellingWakeAnAccept() async {
     }
 }
 
+/// More than the system holds: the writer waits for the reader.
+@test
+fn aLargeWriteWaitsForItsReader() async {
+    let at = path("large")
+    do {
+        let listener = try UnixListener.bind(at)
+        defer {
+            let _ = try? File.remove(at)
+        }
+        let client = try await UnixStream.connect(at)
+        let server = try await listener.accept()
+        let writing = Task.spawn { await thrown {
+            var block: U8[>..] = []
+            for i in 0..<1_000_000 {
+                block.append(U8(i % 251))
+            }
+            try await client.write(block)
+            client.finishWriting()
+        } }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let got = try await server.readAll()
+        assertEqual(await writing.value, "")
+        assertEqual(got.count, 1_000_000)
+        var right = true
+        for i in 0..<got.count {
+            right = right && Int(got[i]) == i % 251
+        }
+        assert(right)
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+/// A read or an accept given up is begun again, and nothing is lost by it.
+@test
+fn aReadAndAnAcceptTimeOut() async {
+    let at = path("timeout")
+    do {
+        let listener = try UnixListener.bind(at)
+        defer {
+            let _ = try? File.remove(at)
+        }
+        assert((try? await withTimeout(Duration.milliseconds(20)) { try await listener.accept() }) == none)
+        let client = try await UnixStream.connect(at)
+        let server = try await listener.accept()
+        assert((try? await withTimeout(Duration.milliseconds(20)) { try await server.read(upTo: 9) }) == none)
+        try await client.write([1, 2])
+        assertEqual(try await server.read(upTo: 9), [1, 2])
+    } catch {
+        assert(false, error.description())
+    }
+}
+
 @test
 fn closingAStreamWakesItsRead() async {
     let at = path("read")
@@ -165,6 +222,20 @@ fn closingAStreamWakesItsRead() async {
     }
 }
 
+#if os(windows)
+// Windows' Unix sockets are streams alone.
+@test
+fn thereAreNoDatagrams() async {
+    assertEqual(await thrown {
+        let _ = try UnixDatagramSocket.unbound()
+    }, "'' is not supported here")
+    let at = path("datagram")
+    assertEqual(await thrown {
+        let _ = try UnixDatagramSocket.bind(at)
+    }, "'\(at)' is not supported here")
+    assert(!File.exists(at))
+}
+#else
 @test
 fn datagramsAreSentToAPath() async {
     let at = path("datagram")

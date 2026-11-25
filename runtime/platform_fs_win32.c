@@ -34,6 +34,12 @@ static bool is_link(HANDLE handle, DWORD attributes) {
            && GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof tag) && is_link_tag(tag.ReparseTag);
 }
 
+static bool is_socket(HANDLE handle, DWORD attributes) {
+    FILE_ATTRIBUTE_TAG_INFO tag;
+    return (attributes & FILE_ATTRIBUTE_REPARSE_POINT)
+           && GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof tag) && is_socket_tag(tag.ReparseTag);
+}
+
 static bool handle_metadata(HANDLE handle, FileMetadata *metadata, FileError *error) {
     BY_HANDLE_FILE_INFORMATION info;
     if (!GetFileInformationByHandle(handle, &info)) {
@@ -42,7 +48,7 @@ static bool handle_metadata(HANDLE handle, FileMetadata *metadata, FileError *er
     }
 
     bool directory = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-    metadata->kind = is_link(handle, info.dwFileAttributes) ? FILE_KIND_LINK : directory ? FILE_KIND_DIRECTORY : FILE_KIND_FILE;
+    metadata->kind = is_link(handle, info.dwFileAttributes) ? FILE_KIND_LINK : is_socket(handle, info.dwFileAttributes) ? FILE_KIND_SOCKET : directory ? FILE_KIND_DIRECTORY : FILE_KIND_FILE;
     metadata->size = directory ? 0 : (int64_t)(((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow);
     metadata->permissions = (info.dwFileAttributes & FILE_ATTRIBUTE_READONLY ? 0444 : 0666) | (directory ? 0111 : 0);
     time_of(info.ftLastWriteTime, metadata->modified);
@@ -67,6 +73,18 @@ enum { SHARE_ALL = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE };
 static bool fs_metadata(const char *name, bool follow, FileMetadata *metadata, FileError *error) {
     wchar_t *wide = to_wide(name);
     HANDLE handle = fs_open(wide, FILE_READ_ATTRIBUTES, SHARE_ALL, follow);
+    if (handle == INVALID_HANDLE_VALUE && follow && GetLastError() == ERROR_CANT_ACCESS_FILE) {
+        // A socket cannot be gone through, and is what it is.
+        handle = fs_open(wide, FILE_READ_ATTRIBUTES, SHARE_ALL, false);
+        FILE_ATTRIBUTE_TAG_INFO tag;
+        if (handle != INVALID_HANDLE_VALUE
+            && !(GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof tag) && is_socket_tag(tag.ReparseTag))) {
+            CloseHandle(handle);
+            handle = INVALID_HANDLE_VALUE;
+            SetLastError(ERROR_CANT_ACCESS_FILE);
+        }
+    }
+
     free(wide);
     if (handle == INVALID_HANDLE_VALUE) {
         file_failed(error);
@@ -592,7 +610,8 @@ static char *directory_next(void *directory, int *kind, FileError *error) {
         }
 
         bool link = (entry->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && is_link_tag(entry->dwReserved0);
-        *kind = link ? FILE_KIND_LINK : entry->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ? FILE_KIND_DIRECTORY : FILE_KIND_FILE;
+        bool socket = (entry->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && is_socket_tag(entry->dwReserved0);
+        *kind = link ? FILE_KIND_LINK : socket ? FILE_KIND_SOCKET : entry->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ? FILE_KIND_DIRECTORY : FILE_KIND_FILE;
         return from_wide(entry->cFileName);
     }
 }

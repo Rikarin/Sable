@@ -1,0 +1,21 @@
+module Sable.Crypto.X509
+
+/// What a certificate's key is for (RFC 5280 §4.2.1.3).
+///
+/// ```sable
+/// let usage: KeyUsage = [.DigitalSignature, .KeyAgreement]
+/// assert(usage.contains(.KeyAgreement) && !usage.contains(.KeyCertSign))
+/// ```
+@flags
+public enum KeyUsage: U64 {
+    None = 0
+    DigitalSignature = 1
+    ContentCommitment = 2
+    KeyEncipherment = 4
+    DataEncipherment = 8
+    KeyAgreement = 16
+    KeyCertSign = 32
+    CrlSign = 64
+    EncipherOnly = 128
+    DecipherOnly = 256
+}

@@ -1,0 +1,24 @@
+module Sable.Crypto.X509
+
+/// How much a verifier asks of certificates.
+///
+/// ```sable
+/// var verifier = CertificateVerifier(roots: TrustStore([]))
+/// assert(verifier.profile == .Compatible)
+/// verifier.profile = .WebPki
+/// ```
+@derive(Equatable, Hashable, Debug)
+public enum CertificateProfile: Sendable {
+    /// What RFC 5280 §6 has a verifier check: everything a certificate could
+    /// be wrongly believed without. What private authorities issue passes it.
+    Compatible
+
+    /// That, and what RFC 5280 §4 and §5 ask of who issues certificates: key
+    /// identifiers, which extensions are critical, serial numbers.
+    Rfc5280
+
+    /// That, and what the CA/Browser Forum asks of the public web's
+    /// certificates: a server's purpose said, its common name among its
+    /// alternative ones, no authority's certificate for a server's.
+    WebPki
+}

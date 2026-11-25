@@ -1,0 +1,263 @@
+module Sable.Crypto.X509
+
+/// Whether a path's names are within what its authorities may issue
+/// certificates for (RFC 5280 §6.1.3 b and c). How much there is to compare
+/// is limited, as it grows with the one times the other.
+struct NameChecker {
+    /// How many comparisons of two names there may be.
+    var left: Int = 250_000
+
+    /// The path's names checked, the certificate at its end first and the
+    /// trusted one last.
+    mutating fn check(_ path: Certificate[:]) throws(CertificateError) {
+        var i = path.count - 1
+        while i > 0 {
+            if let constraints = path[i].nameConstraints {
+                try self.checkConstraints(constraints)
+                var k = i - 1
+                while k >= 0 {
+                    // One that an authority has issued itself, on the way,
+                    // has its own name.
+                    if k == 0 || !path[k].isSelfIssued {
+                        try self.check(path[k], constraints)
+                    }
+                    k -= 1
+                }
+            }
+            i -= 1
+        }
+    }
+
+    /// That the constraints are ones.
+    mutating fn checkConstraints(_ constraints: NameConstraints) throws(CertificateError) {
+        for list in [constraints.permitted, constraints.excluded] {
+            for constraint in list {
+                left -= 1
+                if left < 0 {
+                    throw CertificateError.LimitExceeded(reason: "too many names to compare")
+                }
+                match constraint {
+                    case .Dns(let name) => {
+                        if !name.isEmpty && !HostName.isName(name.lowercased()) {
+                            throw CertificateError.Invalid(reason: "a name constraint that is no domain: '\(name)'")
+                        }
+                    }
+                    case .Ip(let bytes) => {
+                        if !NameChecker.isMask(bytes[bytes.count / 2...]) {
+                            throw CertificateError.Invalid(reason: "a name constraint whose mask is not one")
+                        }
+                    }
+                    case .Email(let name) => {
+                        if !NameChecker.isMailConstraint(name) {
+                            throw CertificateError.Invalid(reason: "a name constraint that is no mailbox or host: '\(name)'")
+                        }
+                    }
+                    default => { }
+                }
+            }
+        }
+    }
+
+    static fn isMask(_ mask: U8[:]) -> Bool {
+        var ended = false
+        for byte in mask {
+            var bit = 0x80
+            while bit > 0 {
+                let isSet = (Int(byte) & bit) != 0
+                if isSet && ended {
+                    return false
+                }
+                ended = ended || !isSet
+                bit = bit / 2
+            }
+        }
+        return true
+    }
+
+    static fn isMailConstraint(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        if let (_, host) = mailbox(lower) {
+            return HostName.isName(host)
+        }
+        if lower.contains('@') {
+            return false
+        }
+        return HostName.isName(lower.hasPrefix(".") ? "\(lower.trimmingPrefix("."))" : lower)
+    }
+
+    /// A mailbox's two parts, if it is one.
+    static fn mailbox(_ text: String) -> (String, String)? {
+        guard let at = text.lastIndex(of: '@') else {
+            return none
+        }
+        let local = "\(text[..<at])"
+        let host = "\(text[text.index(after: at)...])"
+        if local.isEmpty || host.isEmpty || local.contains('@') {
+            return none
+        }
+        return (local, host)
+    }
+
+    mutating fn check(_ certificate: Certificate, _ constraints: NameConstraints) throws(CertificateError) {
+        var hasMail = false
+        for name in certificate.alternativeNames {
+            if case .Email(_) = name {
+                hasMail = true
+            }
+            try self.check(name, constraints)
+        }
+        if !certificate.subject.isEmpty {
+            try self.check(.Directory(certificate.subject), constraints)
+        }
+        if !hasMail {
+            for text in certificate.subject.all(.emailAddress) {
+                try self.check(.Email(text), constraints)
+            }
+        }
+    }
+
+    mutating fn check(_ name: GeneralName, _ constraints: NameConstraints) throws(CertificateError) {
+        for constraint in constraints.excluded {
+            if try self.isWithin(name, constraint, excluding: true) {
+                throw CertificateError.NameNotPermitted(reason: "\(name) is in what an issuer excludes, \(constraint)")
+            }
+        }
+        var isConstrained = false
+        for constraint in constraints.permitted {
+            if NameChecker.sameKind(name, constraint) {
+                isConstrained = true
+                if try self.isWithin(name, constraint, excluding: false) {
+                    return
+                }
+            }
+        }
+        if isConstrained {
+            throw CertificateError.NameNotPermitted(reason: "\(name) is in nothing an issuer permits")
+        }
+    }
+
+    static fn sameKind(_ a: GeneralName, _ b: GeneralName) -> Bool {
+        return match (a, b) {
+            case (.Dns(_), .Dns(_))                   => true
+            case (.Ip(let x), .Ip(let y))             => y.count == 2 * x.count || x.count != y.count / 2
+            case (.Email(_), .Email(_))               => true
+            case (.Uri(_), .Uri(_))                   => true
+            case (.Directory(_), .Directory(_))       => true
+            case (.Other(let x, _), .Other(let y, _)) => x == y
+            case (.RegisteredId(_), .RegisteredId(_)) => true
+            case (.Unknown(_), .Unknown(_))           => true
+            default                                   => false
+        }
+    }
+
+    /// Whether the name is within the constraint. A name that is none of its
+    /// kind is not to be taken where that kind is constrained.
+    mutating fn isWithin(_ name: GeneralName, _ constraint: GeneralName, excluding: Bool) throws(CertificateError) -> Bool {
+        left -= 1
+        if left < 0 {
+            throw CertificateError.LimitExceeded(reason: "too many names to compare")
+        }
+        match (name, constraint) {
+            case (.Dns(let written), .Dns(let given)) => {
+                let text = written.lowercased()
+                let domain = given.lowercased()
+                let isWild = text.hasPrefix("*.")
+                let host = isWild ? "\(text.trimmingPrefix("*."))" : text
+                if !HostName.isName(host) {
+                    throw CertificateError.NameNotPermitted(reason: "'\(written)' is no domain, and domains are constrained")
+                }
+                if NameChecker.isUnder(host, domain) {
+                    return true
+                }
+                // Some name it stands for is.
+                return excluding && isWild && HostName.parent(domain) == host
+            }
+            case (.Ip(let address), .Ip(let range)) => {
+                if range.count != 2 * address.count {
+                    return false
+                }
+                var i = 0
+                while i < address.count {
+                    let mask = range[address.count + i]
+                    if (address[i] & mask) != (range[i] & mask) {
+                        return false
+                    }
+                    i += 1
+                }
+                return true
+            }
+            case (.Email(let written), .Email(let given)) => {
+                guard let (local, host) = NameChecker.mailbox(written), HostName.isName(host.lowercased()) else {
+                    throw CertificateError.NameNotPermitted(reason: "'\(written)' is no mailbox, and mailboxes are constrained")
+                }
+                if let (wantedLocal, wantedHost) = NameChecker.mailbox(given) {
+                    return local == wantedLocal && host.lowercased() == wantedHost.lowercased()
+                }
+                return NameChecker.isHost(host.lowercased(), given.lowercased())
+            }
+            case (.Uri(let written), .Uri(let given)) => {
+                guard let host = NameChecker.host(written) else {
+                    throw CertificateError.NameNotPermitted(reason: "'\(written)' has no host, and those of URIs are constrained")
+                }
+                return NameChecker.isHost(host, given.lowercased())
+            }
+            case (.Directory(let own), .Directory(let other)) => {
+                return own.isWithin(other)
+            }
+            case (.Other(let own, _), .Other(let other, _)) => {
+                // What is within what is not known.
+                return excluding && own == other
+            }
+            case (.RegisteredId(_), .RegisteredId(_)) => {
+                return excluding
+            }
+            case (.Unknown(_), .Unknown(_)) => {
+                return excluding
+            }
+            default => {
+                return false
+            }
+        }
+    }
+
+    /// Whether the name is the domain or one under it. Every name is under
+    /// no domain at all.
+    static fn isUnder(_ name: String, _ domain: String) -> Bool {
+        return domain.isEmpty || name == domain || name.hasSuffix("." + domain)
+    }
+
+    /// Whether the host is the one given, or, given one with a dot before
+    /// it, is under that.
+    static fn isHost(_ host: String, _ given: String) -> Bool {
+        return given.hasPrefix(".") ? host.hasSuffix(given) && host.utf8.count > given.utf8.count : host == given
+    }
+
+    /// A URI's host, in lower case, if it has one and that is a name.
+    static fn host(_ uri: String) -> String? {
+        let parts = uri.split("://")
+        var rest = ""
+        var isAfter = false
+        for part in parts {
+            if isAfter {
+                rest = "\(part)"
+                break
+            }
+            isAfter = true
+        }
+        var authority = ""
+        for c in rest {
+            if c == '/' || c == '?' || c == '#' {
+                break
+            }
+            authority += "\(c)"
+        }
+        if let at = authority.lastIndex(of: '@') {
+            authority = "\(authority[authority.index(after: at)...])"
+        }
+        if let colon = authority.lastIndex(of: ':') {
+            authority = "\(authority[..<colon])"
+        }
+        let host = authority.lowercased()
+        return HostName.isName(host) ? host : none
+    }
+}

@@ -1,0 +1,216 @@
+module Sable.Crypto.X509
+
+import Sable.Crypto
+import Sable.Serialize.Asn1
+import Sable.Time
+
+/// A certificate to be made: one that signs itself, for tests and for what
+/// is trusted by hand, or one that an authority issues.
+///
+/// ```sable
+/// let rootKey = Ed25519PrivateKey.generate().anyKey
+/// let root = try! CertificateBuilder(subject: DistinguishedName(commonName: "Root"), isAuthority: true).selfSigned(with: rootKey)
+/// var builder = CertificateBuilder(subject: DistinguishedName([]), host: "test.example")
+/// builder.notAfter = builder.notBefore.adding(Duration.days(7))
+/// let key = EcdsaPrivateKey<P256>.generate().anyKey
+/// let certificate = try! builder.issued(to: key.publicKey, by: root, signingKey: rootKey)
+/// assert(certificate.issuer == root.subject && certificate.isSigned(by: rootKey.publicKey))
+/// ```
+public struct CertificateBuilder {
+    /// Whose it is.
+    public var subject: DistinguishedName
+
+    /// What names it is of.
+    public var alternativeNames: GeneralName[>..] = []
+
+    /// From when on it holds: an hour ago, as clocks differ.
+    public var notBefore: UtcDateTime
+
+    /// Until when it holds: 90 days from now.
+    public var notAfter: UtcDateTime
+
+    /// Its number, positive and of at most 20 bytes: a random one of 16.
+    public var serialNumber: U8[>..]
+
+    /// Whether it is an authority's.
+    public var basicConstraints: BasicConstraints = BasicConstraints(isAuthority: false)
+
+    /// What its key is for.
+    public var keyUsage: KeyUsage = .DigitalSignature
+
+    /// What it is for; any, if there are none.
+    public var purposes: KeyPurpose[>..] = []
+
+    /// The names it may issue certificates for, if they are some.
+    public var nameConstraints: NameConstraints? = none
+
+    /// Other extensions.
+    public var extensions: CertificateExtension[>..] = []
+
+    /// A certificate of a subject with no names; an authority's, if it is
+    /// to be one.
+    public init(subject: DistinguishedName, isAuthority: Bool = false) {
+        self.subject = subject
+        let now = UtcDateTime.fromUnix(UtcDateTime.now().secondsSinceEpoch)
+        notBefore = now.adding(Duration.hours(-1))
+        notAfter = now.adding(Duration.days(90))
+        var serial = SecureRandom.bytes(16)
+        serial[0] = (serial[0] & 0x7F) | 0x40
+        serialNumber = serial
+        if isAuthority {
+            basicConstraints = BasicConstraints(isAuthority: true)
+            keyUsage = [.KeyCertSign, .CrlSign]
+        }
+    }
+
+    /// A server's certificate: of a host, which is a domain's name, perhaps
+    /// with "*." before it, or an address.
+    public init(subject: DistinguishedName, host: String) {
+        self.init(subject: subject)
+        if let address = IpText.read(host) {
+            alternativeNames = [.Ip(address)]
+        } else {
+            alternativeNames = [.Dns(host)]
+        }
+        purposes = [KeyPurpose.serverAuth]
+    }
+
+    /// The certificate of the key, signed with it: its own issuer.
+    public fn selfSigned(with key: PrivateKey, algorithm: SignatureAlgorithm? = none) throws(CertificateError) -> Certificate {
+        return try self.make(key.publicKey, subject, none, key, algorithm)
+    }
+
+    /// The certificate of a key, issued by an authority, whose own key is
+    /// the one to sign with.
+    public fn issued(to key: PublicKey, by issuer: Certificate, signingKey: PrivateKey, algorithm: SignatureAlgorithm? = none) throws(CertificateError) -> Certificate {
+        if try issuer.publicKey() != signingKey.publicKey {
+            throw CertificateError.Invalid(reason: "the key to sign with is not that of \(issuer.subject)")
+        }
+        return try self.make(key, issuer.subject, issuer.subjectKeyIdentifier, signingKey, algorithm)
+    }
+
+    /// A name of a key: the first 20 bytes of the SHA-256 of what is in its
+    /// SubjectPublicKeyInfo's bit string (RFC 7093, the first method).
+    static fn identifier(_ spki: U8[:]) -> U8[>..] {
+        do {
+            var reader = AsnReader(spki, rules: .Der)
+            var info = try reader.readSequence()
+            _ = try info.readEncoded()
+            let bits = try info.readBitString().bytes
+            return Sha256.hash(bits).bytes[..<20].toArray()
+        } catch {
+            fatalError("a key of the library's own writing")
+        }
+    }
+
+    fn make(_ key: PublicKey, _ issuer: DistinguishedName, _ authority: U8[>..]?, _ signingKey: PrivateKey, _ given: SignatureAlgorithm?) throws(CertificateError) -> Certificate {
+        let algorithm = try SignatureAlgorithm.chosen(given, for: signingKey)
+        var signed: U8[>..] = []
+        do {
+            signed = try self.body(key.spki, issuer, authority, algorithm)
+        } catch {
+            throw CertificateError.Invalid(reason: error.description())
+        }
+        return try Certificate.parse(der: try SignedDer.write(signed, algorithm, signingKey))
+    }
+
+    fn body(_ spki: U8[:], _ issuer: DistinguishedName, _ authority: U8[>..]?, _ algorithm: SignatureAlgorithm) throws(AsnError) -> U8[>..] {
+        let writer = AsnWriter(rules: .Der)
+        try writer.beginSequence()
+        try writer.beginExplicit(.context(0))
+        try writer.writeInt(2)
+        try writer.endExplicit()
+        try writer.writeUnsignedInteger(serialNumber)
+        try algorithm.write(writer)
+        try writer.writeEncoded(issuer.der)
+        try writer.beginSequence()
+        try CertificateBuilder.writeTime(writer, notBefore)
+        try CertificateBuilder.writeTime(writer, notAfter)
+        try writer.endSequence()
+        try writer.writeEncoded(subject.der)
+        try writer.writeEncoded(spki)
+        try writer.beginExplicit(.context(3))
+        try writer.beginSequence()
+        let identifier = CertificateBuilder.identifier(spki)
+        for each in try self.allExtensions(identifier, authority) {
+            try each.write(writer)
+        }
+        try writer.endSequence()
+        try writer.endExplicit()
+        try writer.endSequence()
+        return try writer.bytes()
+    }
+
+    static fn writeTime(_ writer: AsnWriter, _ time: UtcDateTime) throws(AsnError) {
+        let whole = UtcDateTime.fromUnix(time.secondsSinceEpoch).withOffset(UtcOffset.utc)
+        if time.year < 2050 {
+            try writer.writeUtcTime(whole)
+        } else {
+            try writer.writeGeneralizedTime(whole)
+        }
+    }
+
+    fn allExtensions(_ identifier: U8[:], _ authority: U8[>..]?) throws(AsnError) -> CertificateExtension[>..] {
+        var all: CertificateExtension[>..] = []
+        all.append(try CertificateBuilder.value(KnownExtensions.basicConstraints, isCritical: true) { (writer: AsnWriter) throws(AsnError) in
+            try writer.beginSequence()
+            if basicConstraints.isAuthority {
+                try writer.writeBool(true)
+                if let length = basicConstraints.pathLength {
+                    try writer.writeInt(length)
+                }
+            }
+            try writer.endSequence()
+        })
+        if keyUsage != .None {
+            all.append(try CertificateBuilder.value(KnownExtensions.keyUsage, isCritical: true) { (writer: AsnWriter) throws(AsnError) in
+                try writer.writeNamedBits(flags: keyUsage as U64)
+            })
+        }
+        all.append(contentsOf: try CertificateBuilder.named(alternativeNames, isCritical: subject.isEmpty))
+        if !purposes.isEmpty {
+            all.append(try CertificateBuilder.value(KnownExtensions.extendedKeyUsage, isCritical: false) { (writer: AsnWriter) throws(AsnError) in
+                try writer.beginSequence()
+                for purpose in purposes {
+                    try writer.writeObjectIdentifier(purpose.identifier)
+                }
+                try writer.endSequence()
+            })
+        }
+        if let nameConstraints {
+            all.append(try CertificateBuilder.value(KnownExtensions.nameConstraints, isCritical: true) { (writer: AsnWriter) throws(AsnError) in
+                try nameConstraints.write(writer)
+            })
+        }
+        all.append(try CertificateBuilder.value(KnownExtensions.subjectKeyIdentifier, isCritical: false) { (writer: AsnWriter) throws(AsnError) in
+            try writer.writeOctetString(identifier)
+        })
+        all.append(try CertificateBuilder.value(KnownExtensions.authorityKeyIdentifier, isCritical: false) { (writer: AsnWriter) throws(AsnError) in
+            try writer.beginSequence()
+            try writer.writeOctetString(authority ?? identifier.toArray(), tag: .context(0))
+            try writer.endSequence()
+        })
+        all.append(contentsOf: extensions)
+        return all
+    }
+
+    /// Alternative names' extension, if there are some.
+    static fn named(_ names: GeneralName[:], isCritical: Bool) throws(AsnError) -> CertificateExtension[>..] {
+        if names.isEmpty {
+            return []
+        }
+        return [try value(KnownExtensions.subjectAlternativeName, isCritical: isCritical) { (writer: AsnWriter) throws(AsnError) in
+            try writer.beginSequence()
+            for name in names {
+                try name.write(writer)
+            }
+            try writer.endSequence()
+        }]
+    }
+
+    static fn value(_ identifier: ObjectIdentifier, isCritical: Bool, _ body: (AsnWriter) throws(AsnError) -> Void) throws(AsnError) -> CertificateExtension {
+        let writer = AsnWriter(rules: .Der)
+        try body(writer)
+        return CertificateExtension(identifier, isCritical: isCritical, value: try writer.bytes())
+    }
+}

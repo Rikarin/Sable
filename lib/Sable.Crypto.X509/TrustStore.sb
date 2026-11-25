@@ -1,0 +1,66 @@
+module Sable.Crypto.X509
+
+import Sable.Crypto
+
+/// Certificates that are trusted for what they are, and not for who issued
+/// them: the roots of every path.
+///
+/// ```sable
+/// let key = EcdsaPrivateKey<P256>.generate().anyKey
+/// let root = try! CertificateBuilder(subject: DistinguishedName(commonName: "Root"), isAuthority: true).selfSigned(with: key)
+/// let store = TrustStore([root])
+/// assert(store.certificates == [root] && store.contains(root))
+/// ```
+public struct TrustStore: Sendable {
+    /// Every certificate.
+    public let certificates: Certificate[>..]
+
+    // Where the certificates of a subject are.
+    let bySubject: [DistinguishedName: Int[>..]]
+
+    public init(_ certificates: Certificate[:]) {
+        var bySubject: [DistinguishedName: Int[>..]] = [:]
+        var i = 0
+        while i < certificates.count {
+            var places = bySubject[certificates[i].subject] ?? []
+            places.append(i)
+            bySubject[certificates[i].subject] = places
+            i += 1
+        }
+        self.certificates = certificates.toArray()
+        self.bySubject = bySubject
+    }
+
+    /// The certificates of a text in PEM, as a bundle has them. One the
+    /// library cannot read is left out.
+    public static fn parse(bundle: String) throws(CertificateError) -> TrustStore {
+        var all: Certificate[>..] = []
+        for block in try PemText.blocks(bundle) {
+            if block.label == "CERTIFICATE" || block.label == "TRUSTED CERTIFICATE" {
+                if let certificate = try? Certificate.parse(der: block.bytes) {
+                    all.append(certificate)
+                }
+            }
+        }
+        return TrustStore(all)
+    }
+
+    /// Whether the certificate is one of them.
+    public fn contains(_ certificate: Certificate) -> Bool {
+        for place in bySubject[certificate.subject] ?? [] {
+            if certificates[place] == certificate {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// The certificates of a subject.
+    fn of(_ subject: DistinguishedName) -> Certificate[>..] {
+        var found: Certificate[>..] = []
+        for place in bySubject[subject] ?? [] {
+            found.append(certificates[place])
+        }
+        return found
+    }
+}

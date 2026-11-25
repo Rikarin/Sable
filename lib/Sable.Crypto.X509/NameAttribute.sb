@@ -1,0 +1,79 @@
+module Sable.Crypto.X509
+
+import Sable.Serialize.Asn1
+
+/// One part of a distinguished name: what it is, and its text.
+///
+/// ```sable
+/// let name = DistinguishedName([NameAttribute(.commonName, "example.com")])
+/// assert("\(name)" == "CN=example.com")
+/// ```
+public struct NameAttribute: Equatable, Sendable {
+    /// What kind of part it is.
+    public let type: ObjectIdentifier
+
+    /// Its value as it is encoded, a string of some type nearly always.
+    public let encoded: U8[>..]
+
+    /// Its text; none if the value is no string.
+    public let text: String?
+
+    /// The part of a kind and a text, which is written as UTF8String, or, of
+    /// a country or a serial number, as PrintableString.
+    public init(_ type: ObjectIdentifier, _ text: String) {
+        self.type = type
+        self.text = text
+        let writer = AsnWriter(rules: .Der)
+        let printable = type == .countryName || type == .serialNumber
+        do {
+            try writer.writeString(text, printable ? .Printable : .Utf8)
+            encoded = try writer.bytes()
+        } catch {
+            preconditionFailure("'\(text)' in a name: \(error.description())")
+        }
+    }
+
+    init(_ type: ObjectIdentifier, encoded: U8[:], text: String?) {
+        self.type = type
+        self.encoded = encoded.toArray()
+        self.text = text
+    }
+
+    /// Whether the two are the same kind, and the same text but for the
+    /// case and how much space is between words (RFC 5280 §7.1).
+    public operator == (lhs: NameAttribute, rhs: NameAttribute) -> Bool {
+        if lhs.type != rhs.type {
+            return false
+        }
+        if lhs.encoded == rhs.encoded {
+            return true
+        }
+        guard let a = lhs.text, let b = rhs.text else {
+            return false
+        }
+        return folded(a) == folded(b)
+    }
+
+    /// How two that are equal are written the same.
+    fn appendKey(to bytes: inout U8[>..]) {
+        bytes.append(contentsOf: type.encoded)
+        bytes.append(0)
+        if let text {
+            bytes.append(utf8: folded(text))
+        } else {
+            bytes.append(contentsOf: encoded)
+        }
+        bytes.append(0)
+    }
+}
+
+/// The text in lower case, with one space between words and none around.
+fn folded(_ text: String) -> String {
+    var words: String[>..] = []
+    for word in text.lowercased().split(separator: ' ') {
+        if !word.isEmpty {
+            words.append("\(word)")
+        }
+    }
+    return words.joined(separator: " ")
+}

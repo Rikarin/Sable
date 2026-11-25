@@ -1,0 +1,24 @@
+module Sable.Crypto.X509
+
+import Sable.Crypto
+
+/// PEM read with this module's error.
+struct PemText {
+    static fn blocks(_ text: String) throws(CertificateError) -> PemBlock[>..] {
+        do {
+            return try PemBlock.parse(text)
+        } catch {
+            throw CertificateError.Malformed(reason: error.description())
+        }
+    }
+
+    /// The first block of a label.
+    static fn first(_ text: String, _ label: String) throws(CertificateError) -> PemBlock {
+        for block in try PemText.blocks(text) {
+            if block.label == label {
+                return block
+            }
+        }
+        throw CertificateError.Malformed(reason: "no \(label) in the PEM")
+    }
+}

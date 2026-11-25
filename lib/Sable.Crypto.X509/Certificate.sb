@@ -1,0 +1,183 @@
+module Sable.Crypto.X509
+
+import Sable.Crypto
+import Sable.Serialize.Asn1
+import Sable.Text
+import Sable.Time
+
+/// A certificate (RFC 5280): a public key, the names it is of, and the
+/// signature of who says so. Reading one checks that it is well-formed and
+/// nothing more: whether it is to be believed is for `CertificateVerifier`.
+///
+/// ```sable
+/// let key = EcdsaPrivateKey<P256>.generate().anyKey
+/// let certificate = try! CertificateBuilder(subject: DistinguishedName(commonName: "Test"), host: "test.example").selfSigned(with: key)
+/// let read = try! Certificate.parse(pem: certificate.pem)
+/// assert(read == certificate)
+/// assert("\(read.subject)" == "CN=Test" && read.subject == read.issuer)
+/// assert(read.alternativeNames == [.Dns("test.example")])
+/// assert(try! read.publicKey() == key.publicKey)
+/// ```
+public struct Certificate: Hashable, Debug, Sendable {
+    let contents: CertificateContents
+
+    /// The certificate encoded in DER.
+    public static fn parse(der: U8[:]) throws(CertificateError) -> Certificate {
+        do {
+            return Certificate(contents: try CertificateContents(der))
+        } catch {
+            throw CertificateError.Malformed(reason: "not a certificate: \(error.description())")
+        }
+    }
+
+    init(contents: CertificateContents) {
+        self.contents = contents
+    }
+
+    /// The text's first certificate in PEM.
+    public static fn parse(pem: String) throws(CertificateError) -> Certificate {
+        let all = try Certificate.parseAll(pem: pem)
+        if all.isEmpty {
+            throw CertificateError.Malformed(reason: "no certificate in the PEM")
+        }
+        return all[0]
+    }
+
+    /// Every certificate of the text in PEM, in order: a server's, and those
+    /// of who issued it.
+    public static fn parseAll(pem: String) throws(CertificateError) -> Certificate[>..] {
+        var all: Certificate[>..] = []
+        for block in try PemText.blocks(pem) {
+            if block.label == "CERTIFICATE" {
+                all.append(try Certificate.parse(der: block.bytes))
+            }
+        }
+        return all
+    }
+
+    /// The certificate in DER.
+    public var der: U8[>..] => contents.der
+
+    /// The certificate in PEM.
+    public var pem: String => PemBlock(label: "CERTIFICATE", bytes: contents.der).text
+
+    /// Its version: 3, nearly always.
+    public var version: Int => contents.version
+
+    /// Its number among its issuer's, the most significant byte first.
+    public var serialNumber: U8[>..] => contents.serialNumber
+
+    /// Who issued it.
+    public var issuer: DistinguishedName => contents.issuer
+
+    /// Whose it is.
+    public var subject: DistinguishedName => contents.subject
+
+    /// From when on it holds.
+    public var notBefore: UtcDateTime => contents.notBefore
+
+    /// Until when it holds, that second with it.
+    public var notAfter: UtcDateTime => contents.notAfter
+
+    /// How it is signed.
+    public var signatureAlgorithm: SignatureAlgorithm => contents.signatureAlgorithm
+
+    /// Its signature.
+    public var signature: U8[>..] => contents.signature
+
+    /// Its key, as a SubjectPublicKeyInfo in DER.
+    public var spki: U8[>..] => contents.spki
+
+    /// Its key. A certificate of a key the library has not is read all the
+    /// same, and this throws.
+    public fn publicKey() throws(CertificateError) -> PublicKey {
+        do {
+            return try PublicKey.parse(spki: contents.spki)
+        } catch {
+            throw CertificateError.Unsupported(reason: "the key of \(subject): \(error.description())")
+        }
+    }
+
+    /// Every extension, in order.
+    public var extensions: CertificateExtension[>..] => contents.extensions
+
+    /// The extension of that kind.
+    public fn extension(_ identifier: ObjectIdentifier) -> CertificateExtension? {
+        for each in contents.extensions {
+            if each.identifier == identifier {
+                return each
+            }
+        }
+        return none
+    }
+
+    /// Whether it is an authority's.
+    public var basicConstraints: BasicConstraints? => contents.basicConstraints
+
+    /// What its key is for, if it says.
+    public var keyUsage: KeyUsage? => contents.keyUsage
+
+    /// What it is for, if it says.
+    public var purposes: KeyPurpose[>..]? => contents.purposes
+
+    /// What names it is of: none, if it does not say.
+    public var alternativeNames: GeneralName[>..] => contents.alternativeNames
+
+    /// The names its key may issue certificates for, if they are some.
+    public var nameConstraints: NameConstraints? => contents.nameConstraints
+
+    /// A name of its key's, for those it issues to tell by.
+    public var subjectKeyIdentifier: U8[>..]? => contents.subjectKeyIdentifier
+
+    /// Which of its issuer's keys it is signed with.
+    public var authorityKeyIdentifier: AuthorityKeyIdentifier? => contents.authorityKeyIdentifier
+
+    /// Whether its issuer and its subject are the same.
+    public var isSelfIssued: Bool => issuer == subject
+
+    /// Whether the key signed it.
+    public fn isSigned(by key: PublicKey) -> Bool {
+        return contents.signatureAlgorithm.isValid(contents.signature, for: contents.signed, key: key)
+    }
+
+    /// The certificate's digest, which names it.
+    public fn fingerprint(_ hash: HashAlgorithm = .Sha256) -> Digest {
+        return hash.digest(of: contents.der)
+    }
+
+    /// Whether the certificate is of that host (RFC 9525): a domain's name,
+    /// which may be under a name of the certificate's that begins with "*.",
+    /// or an address. The subject's common name is not asked.
+    ///
+    /// ```sable
+    /// let key = EcdsaPrivateKey<P256>.generate().anyKey
+    /// let certificate = try! CertificateBuilder(subject: DistinguishedName([]), host: "*.example.com").selfSigned(with: key)
+    /// assert(certificate.isFor(host: "www.example.com"))
+    /// assert(!certificate.isFor(host: "example.com") && !certificate.isFor(host: "a.b.example.com"))
+    /// ```
+    public fn isFor(host: String) -> Bool {
+        guard let name = HostName.of(host) else {
+            return false
+        }
+        for each in contents.alternativeNames {
+            if name.matches(each) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Whether the two are the same bytes.
+    public operator == (lhs: Certificate, rhs: Certificate) -> Bool {
+        return lhs.contents.der == rhs.contents.der
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(contents.der)
+    }
+
+    /// The subject, the issuer and the serial number.
+    public fn debugDescription() -> String {
+        return "Certificate(\(subject), by \(issuer), \(Hex.encode(contents.serialNumber)))"
+    }
+}

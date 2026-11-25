@@ -1,0 +1,222 @@
+module Sable.Crypto.X509
+
+import Sable.Serialize.Asn1
+import Sable.Time
+
+/// A certificate's parts, read once and shared by its copies.
+@immutable
+final class CertificateContents {
+    let der: U8[>..]
+    let signed: U8[>..]
+    let version: Int
+    let serialNumber: U8[>..]
+    let signatureAlgorithm: SignatureAlgorithm
+    let signature: U8[>..]
+    let issuer: DistinguishedName
+    let notBefore: UtcDateTime
+    let notAfter: UtcDateTime
+    let subject: DistinguishedName
+    let spki: U8[>..]
+    let extensions: CertificateExtension[>..]
+    let basicConstraints: BasicConstraints?
+    let keyUsage: KeyUsage?
+    let purposes: KeyPurpose[>..]?
+    let alternativeNames: GeneralName[>..]
+    let nameConstraints: NameConstraints?
+    let subjectKeyIdentifier: U8[>..]?
+    let authorityKeyIdentifier: AuthorityKeyIdentifier?
+
+    init(_ der: U8[:]) throws(AsnError) {
+        var reader = AsnReader(der, rules: .Der)
+        var outer = try reader.readSequence()
+        try reader.finish()
+        let signed = try outer.peekEncoded()
+        var body = try outer.readSequence()
+        let algorithmBytes = try outer.peekEncoded()
+        let algorithm = try SignatureAlgorithm(reading: &outer)
+        let bits = try outer.readBitString()
+        if bits.unusedBits != 0 {
+            throw AsnError.Malformed(at: outer.position, reason: "a signature that is not whole bytes")
+        }
+        try outer.finish()
+
+        var version = 1
+        if body.isNext(.context(0)) {
+            var explicit = try body.readExplicit(.context(0))
+            version = try explicit.readInt() + 1
+            try explicit.finish()
+            if version != 2 && version != 3 {
+                throw AsnError.OutOfRange(at: body.position, reason: "version \(version) of a certificate")
+            }
+        }
+        let serial = try body.readIntegerBytes()
+        if try body.peekEncoded() != algorithmBytes {
+            throw AsnError.Malformed(at: body.position, reason: "two signature algorithms")
+        }
+        _ = try body.readEncoded()
+        let issuer = try DistinguishedName(read: try body.readEncoded())
+        var validity = try body.readSequence()
+        let notBefore = try CertificateContents.readTime(&validity)
+        let notAfter = try CertificateContents.readTime(&validity)
+        try validity.finish()
+        let subject = try DistinguishedName(read: try body.readEncoded())
+        let spki = try body.peekEncoded()
+        try CertificateContents.checkKey(&body)
+        var i = 1
+        while i <= 2 {
+            if version > 1 && body.isNext(.context(i)) {
+                // A unique identifier, which no one gives.
+                _ = try body.readBitString(tag: .context(i))
+            }
+            i += 1
+        }
+        var extensions: CertificateExtension[>..] = []
+        if version == 3 && body.isNext(.context(3)) {
+            var explicit = try body.readExplicit(.context(3))
+            extensions = try CertificateExtension.readAll(&explicit)
+            try explicit.finish()
+        }
+        try body.finish()
+
+        var basicConstraints: BasicConstraints? = none
+        var keyUsage: KeyUsage? = none
+        var purposes: KeyPurpose[>..]? = none
+        var alternativeNames: GeneralName[>..] = []
+        var nameConstraints: NameConstraints? = none
+        var subjectKeyIdentifier: U8[>..]? = none
+        var authorityKeyIdentifier: AuthorityKeyIdentifier? = none
+        for each in extensions {
+            var value = AsnReader(each.value, rules: .Der)
+            if each.identifier == KnownExtensions.basicConstraints {
+                basicConstraints = try CertificateContents.readBasicConstraints(&value)
+            } else if each.identifier == KnownExtensions.keyUsage {
+                keyUsage = try CertificateContents.readKeyUsage(&value)
+            } else if each.identifier == KnownExtensions.extendedKeyUsage {
+                purposes = try CertificateContents.readPurposes(&value)
+            } else if each.identifier == KnownExtensions.subjectAlternativeName {
+                alternativeNames = try GeneralName.readAll(&value)
+            } else if each.identifier == KnownExtensions.nameConstraints {
+                nameConstraints = try NameConstraints(reading: &value)
+            } else if each.identifier == KnownExtensions.subjectKeyIdentifier {
+                subjectKeyIdentifier = try value.readOctetString().toArray()
+            } else if each.identifier == KnownExtensions.authorityKeyIdentifier {
+                authorityKeyIdentifier = try AuthorityKeyIdentifier(reading: &value)
+            } else if each.identifier == KnownExtensions.authorityInformation {
+                try CertificateContents.checkInformation(&value)
+            } else {
+                continue
+            }
+            try value.finish()
+        }
+
+        self.der = der.toArray()
+        self.signed = signed.toArray()
+        self.version = version
+        serialNumber = serial.toArray()
+        signatureAlgorithm = algorithm
+        signature = bits.bytes.toArray()
+        self.issuer = issuer
+        self.notBefore = notBefore
+        self.notAfter = notAfter
+        self.subject = subject
+        self.spki = spki.toArray()
+        self.extensions = extensions
+        self.basicConstraints = basicConstraints
+        self.keyUsage = keyUsage
+        self.purposes = purposes
+        self.alternativeNames = alternativeNames
+        self.nameConstraints = nameConstraints
+        self.subjectKeyIdentifier = subjectKeyIdentifier
+        self.authorityKeyIdentifier = authorityKeyIdentifier
+    }
+
+    /// A time as RFC 5280 §4.1.2.5 has it: UTCTime until 2049 and
+    /// GeneralizedTime from 2050 on, in whole seconds and in UTC.
+    static fn readTime(_ reader: inout AsnReader) throws(AsnError) -> UtcDateTime {
+        let at = reader.position
+        if reader.isNext(.utcTime) {
+            return try reader.readUtcTime().instant
+        }
+        let time = try reader.readGeneralizedTime().instant
+        if time.nanosecond != 0 || time.year < 2050 {
+            throw AsnError.NotCanonical(at: at, reason: "a time of a kind it should not be of")
+        }
+        return time
+    }
+
+    /// That the key is one, of any algorithm.
+    static fn checkKey(_ reader: inout AsnReader) throws(AsnError) {
+        var info = try reader.readSequence()
+        var algorithm = try info.readSequence()
+        _ = try algorithm.readObjectIdentifier()
+        if !algorithm.isAtEnd {
+            _ = try algorithm.readEncoded()
+        }
+        try algorithm.finish()
+        _ = try info.readBitString()
+        try info.finish()
+    }
+
+    static fn readBasicConstraints(_ reader: inout AsnReader) throws(AsnError) -> BasicConstraints {
+        var sequence = try reader.readSequence()
+        var isAuthority = false
+        if sequence.isNext(.bool) {
+            isAuthority = try sequence.readBool()
+            if !isAuthority {
+                throw AsnError.NotCanonical(at: sequence.position, reason: "a default that is written")
+            }
+        }
+        var length: Int? = none
+        if sequence.isNext(.integer) {
+            let read = try sequence.readInt()
+            if read < 0 {
+                throw AsnError.OutOfRange(at: sequence.position, reason: "a path of \(read)")
+            }
+            length = read
+        }
+        try sequence.finish()
+        return BasicConstraints(isAuthority: isAuthority, pathLength: length)
+    }
+
+    static fn readKeyUsage(_ reader: inout AsnReader) throws(AsnError) -> KeyUsage {
+        let bits = try reader.readNamedBits()
+        var usage: KeyUsage = .None
+        var i = 0
+        let flags: KeyUsage[>..] = [.DigitalSignature, .ContentCommitment, .KeyEncipherment, .DataEncipherment, .KeyAgreement, .KeyCertSign, .CrlSign, .EncipherOnly, .DecipherOnly]
+        for flag in flags {
+            if bits.has(i) {
+                usage = usage | flag
+            }
+            i += 1
+        }
+        if usage == .None {
+            throw AsnError.Malformed(at: reader.position, reason: "a key for nothing")
+        }
+        return usage
+    }
+
+    static fn readPurposes(_ reader: inout AsnReader) throws(AsnError) -> KeyPurpose[>..] {
+        var sequence = try reader.readSequence()
+        var purposes: KeyPurpose[>..] = []
+        while !sequence.isAtEnd {
+            purposes.append(KeyPurpose(try sequence.readObjectIdentifier()))
+        }
+        if purposes.isEmpty {
+            throw AsnError.Malformed(at: reader.position, reason: "a certificate for no purpose")
+        }
+        return purposes
+    }
+
+    static fn checkInformation(_ reader: inout AsnReader) throws(AsnError) {
+        var sequence = try reader.readSequence()
+        if sequence.isAtEnd {
+            throw AsnError.Malformed(at: reader.position, reason: "no information of the authority")
+        }
+        while !sequence.isAtEnd {
+            var description = try sequence.readSequence()
+            _ = try description.readObjectIdentifier()
+            _ = try GeneralName(reading: &description)
+            try description.finish()
+        }
+    }
+}

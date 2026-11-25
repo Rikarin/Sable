@@ -1,0 +1,222 @@
+module Sable.Crypto.X509
+
+import Sable.Serialize.Asn1
+import Sable.Text
+
+/// Who a certificate is of, or is from (RFC 5280 §4.1.2.4): parts, in order,
+/// the widest first. Two are equal if their parts are, whatever the case of
+/// their letters.
+///
+/// ```sable
+/// let name = DistinguishedName([NameAttribute(.countryName, "CH"), NameAttribute(.organizationName, "Example, Ltd")])
+/// assert("\(name)" == "O=Example\\, Ltd,C=CH")
+/// assert(name == DistinguishedName([NameAttribute(.countryName, "ch"), NameAttribute(.organizationName, "example,  ltd")]))
+/// ```
+public struct DistinguishedName: Hashable, Formattable, Debug, Sendable {
+    /// The parts. Those of one set are nearly always alone in it.
+    public let parts: NameAttribute[>..][>..]
+
+    /// The name in DER.
+    public let der: U8[>..]
+
+    // What is the same for names that are equal.
+    let key: U8[>..]
+
+    /// The name of these parts, each on its own.
+    public init(_ attributes: NameAttribute[:]) {
+        var parts: NameAttribute[>..][>..] = []
+        for attribute in attributes {
+            parts.append([attribute])
+        }
+        let writer = AsnWriter(rules: .Der)
+        do {
+            try writer.beginSequence()
+            for part in parts {
+                try writer.beginSetOf()
+                for attribute in part {
+                    try writer.beginSequence()
+                    try writer.writeObjectIdentifier(attribute.type)
+                    try writer.writeEncoded(attribute.encoded)
+                    try writer.endSequence()
+                }
+                try writer.endSetOf()
+            }
+            try writer.endSequence()
+            der = try writer.bytes()
+        } catch {
+            preconditionFailure("a name: \(error.description())")
+        }
+        self.parts = parts
+        key = DistinguishedName.key(parts)
+    }
+
+    /// The name with a common name alone.
+    ///
+    /// ```sable
+    /// assert("\(DistinguishedName(commonName: "Test"))" == "CN=Test")
+    /// ```
+    public init(commonName text: String) {
+        self.init([NameAttribute(.commonName, text)])
+    }
+
+    /// The name encoded in DER.
+    init(read der: U8[:]) throws(AsnError) {
+        var reader = AsnReader(der, rules: .Der)
+        var sets = try reader.readSequence()
+        try reader.finish()
+        var parts: NameAttribute[>..][>..] = []
+        while !sets.isAtEnd {
+            var group = try sets.readSetOf()
+            var part: NameAttribute[>..] = []
+            while !group.isAtEnd {
+                var pair = try group.readSequence()
+                let type = try pair.readObjectIdentifier()
+                let encoded = try pair.peekEncoded()
+                let text = try DistinguishedName.readText(&pair)
+                try pair.finish()
+                part.append(NameAttribute(type, encoded: encoded, text: text))
+            }
+            if part.isEmpty {
+                throw AsnError.Malformed(at: sets.position, reason: "a part of a name with nothing in it")
+            }
+            parts.append(part)
+        }
+        self.parts = parts
+        self.der = der.toArray()
+        key = DistinguishedName.key(parts)
+    }
+
+    /// The next value's text, if it is a string; it is read past either way.
+    static fn readText(_ reader: inout AsnReader) throws(AsnError) -> String? {
+        for kind in [AsnStringKind.Utf8, AsnStringKind.Printable, AsnStringKind.Ia5, AsnStringKind.Teletex, AsnStringKind.Bmp, AsnStringKind.Universal] {
+            if reader.isNext(kind.tag) {
+                if let text = try? reader.readString(kind) {
+                    return text
+                }
+                break
+            }
+        }
+        _ = try reader.readEncoded()
+        return none
+    }
+
+    static fn key(_ parts: NameAttribute[>..][:]) -> U8[>..] {
+        var bytes: U8[>..] = []
+        for part in parts {
+            bytes.append(contentsOf: partKey(part))
+        }
+        return bytes
+    }
+
+    /// What is the same for a set whatever order its parts are in.
+    static fn partKey(_ part: NameAttribute[:]) -> U8[>..] {
+        var keys: U8[>..][>..] = []
+        for attribute in part {
+            var bytes: U8[>..] = []
+            attribute.appendKey(to: &bytes)
+            keys.append(bytes)
+        }
+        var bytes: U8[>..] = [1]
+        for key in keys.sorted() {
+            bytes.append(contentsOf: key)
+        }
+        return bytes
+    }
+
+    /// Whether there are no parts.
+    public var isEmpty: Bool => parts.isEmpty
+
+    /// The first text of a kind.
+    ///
+    /// ```sable
+    /// assert(DistinguishedName(commonName: "Test").first(.commonName) == "Test")
+    /// ```
+    public fn first(_ type: ObjectIdentifier) -> String? {
+        for part in parts {
+            for attribute in part {
+                if attribute.type == type {
+                    return attribute.text
+                }
+            }
+        }
+        return none
+    }
+
+    /// Every text of a kind.
+    public fn all(_ type: ObjectIdentifier) -> String[>..] {
+        var texts: String[>..] = []
+        for part in parts {
+            for attribute in part {
+                if attribute.type == type, let text = attribute.text {
+                    texts.append(text)
+                }
+            }
+        }
+        return texts
+    }
+
+    /// Whether the name begins with the parts of the other.
+    fn isWithin(_ other: DistinguishedName) -> Bool {
+        if other.parts.count > parts.count {
+            return false
+        }
+        var i = 0
+        while i < other.parts.count {
+            if DistinguishedName.partKey(parts[i]) != DistinguishedName.partKey(other.parts[i]) {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    public operator == (lhs: DistinguishedName, rhs: DistinguishedName) -> Bool {
+        return lhs.key == rhs.key
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(key)
+    }
+
+    /// The name as RFC 4514 writes it: the narrowest part first.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(self.debugDescription())
+    }
+
+    /// The name as RFC 4514 writes it: the narrowest part first.
+    public fn debugDescription() -> String {
+        var written: String[>..] = []
+        for part in parts.reversed() {
+            var pairs: String[>..] = []
+            for attribute in part {
+                pairs.append(DistinguishedName.written(attribute))
+            }
+            written.append(pairs.joined(separator: "+"))
+        }
+        return written.joined(separator: ",")
+    }
+
+    static fn written(_ attribute: NameAttribute) -> String {
+        var letters = "\(attribute.type)"
+        var known = false
+        var i = 0
+        while i < nameTypes.count {
+            if nameTypes[i] == attribute.type {
+                letters = nameLetters[i]
+                known = true
+            }
+            i += 1
+        }
+        guard let text = attribute.text, known else {
+            return letters + "=#" + Hex.encode(attribute.encoded)
+        }
+        var escaped = ""
+        var first = true
+        for c in text {
+            let special = c == ',' || c == '+' || c == '"' || c == '\\' || c == '<' || c == '>' || c == ';' || (first && (c == '#' || c == ' '))
+            escaped += special ? "\\\(c)" : "\(c)"
+            first = false
+        }
+        return letters + "=" + escaped
+    }
+}

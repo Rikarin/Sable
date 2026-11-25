@@ -1,0 +1,44 @@
+module Sable.Crypto.X509
+
+import Sable.Serialize.Asn1
+
+extension ObjectIdentifier {
+    /// A name's CN.
+    public static var commonName: ObjectIdentifier => nameTypes[0]
+
+    /// A name's serialNumber.
+    public static var serialNumber: ObjectIdentifier => nameTypes[1]
+
+    /// A name's C.
+    public static var countryName: ObjectIdentifier => nameTypes[2]
+
+    /// A name's L.
+    public static var localityName: ObjectIdentifier => nameTypes[3]
+
+    /// A name's ST.
+    public static var stateOrProvinceName: ObjectIdentifier => nameTypes[4]
+
+    /// A name's STREET.
+    public static var streetAddress: ObjectIdentifier => nameTypes[5]
+
+    /// A name's O.
+    public static var organizationName: ObjectIdentifier => nameTypes[6]
+
+    /// A name's OU.
+    public static var organizationalUnitName: ObjectIdentifier => nameTypes[7]
+
+    /// A name's DC.
+    public static var domainComponent: ObjectIdentifier => nameTypes[8]
+
+    /// A name's emailAddress, of PKCS #9.
+    public static var emailAddress: ObjectIdentifier => nameTypes[9]
+}
+
+// The kinds above, and the letters RFC 4514 has for them.
+let nameTypes: ObjectIdentifier[>..] = [
+    ObjectIdentifier([2, 5, 4, 3]), ObjectIdentifier([2, 5, 4, 5]), ObjectIdentifier([2, 5, 4, 6]), ObjectIdentifier([2, 5, 4, 7]),
+    ObjectIdentifier([2, 5, 4, 8]), ObjectIdentifier([2, 5, 4, 9]), ObjectIdentifier([2, 5, 4, 10]), ObjectIdentifier([2, 5, 4, 11]),
+    ObjectIdentifier([0, 9, 2342, 19200300, 100, 1, 25]), ObjectIdentifier([1, 2, 840, 113549, 1, 9, 1]),
+]
+
+let nameLetters: String[>..] = ["CN", "serialNumber", "C", "L", "ST", "STREET", "O", "OU", "DC", "emailAddress"]

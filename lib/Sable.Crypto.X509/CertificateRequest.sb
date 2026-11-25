@@ -1,0 +1,161 @@
+module Sable.Crypto.X509
+
+import Sable.Crypto
+import Sable.Serialize.Asn1
+
+/// A request for a certificate (PKCS #10, RFC 2986): a key and the names it
+/// is to be certified with, signed with the key.
+///
+/// ```sable
+/// let key = EcdsaPrivateKey<P256>.generate().anyKey
+/// let request = try! CertificateRequest.make(subject: DistinguishedName([]), names: [.Dns("test.example")], key: key)
+/// let read = try! CertificateRequest.parse(pem: request.pem)
+/// assert(read.isSigned && read.alternativeNames == [.Dns("test.example")])
+/// assert(try! read.publicKey() == key.publicKey)
+/// ```
+public struct CertificateRequest: Debug, Sendable {
+    /// Whose the certificate is to be.
+    public let subject: DistinguishedName
+
+    /// The key, as a SubjectPublicKeyInfo in DER.
+    public let spki: U8[>..]
+
+    /// The extensions asked for.
+    public let extensions: CertificateExtension[>..]
+
+    /// The names asked for.
+    public let alternativeNames: GeneralName[>..]
+
+    /// The request in DER.
+    public let der: U8[>..]
+
+    let signed: U8[>..]
+    let signatureAlgorithm: SignatureAlgorithm
+    let signature: U8[>..]
+
+    /// A request for a certificate of the key's public one.
+    public static fn make(subject: DistinguishedName, names: GeneralName[:], key: PrivateKey, extensions: CertificateExtension[:] = [], algorithm given: SignatureAlgorithm? = none) throws(CertificateError) -> CertificateRequest {
+        let algorithm = try SignatureAlgorithm.chosen(given, for: key)
+        var signed: U8[>..] = []
+        do {
+            signed = try body(subject, names, key.publicKey.spki, extensions)
+        } catch {
+            throw CertificateError.Invalid(reason: error.description())
+        }
+        return try CertificateRequest.parse(der: try SignedDer.write(signed, algorithm, key))
+    }
+
+    static fn body(_ subject: DistinguishedName, _ names: GeneralName[:], _ spki: U8[:], _ extensions: CertificateExtension[:]) throws(AsnError) -> U8[>..] {
+        var all = try CertificateBuilder.named(names, isCritical: subject.isEmpty)
+        all.append(contentsOf: extensions)
+        let writer = AsnWriter(rules: .Der)
+        try writer.beginSequence()
+        try writer.writeInt(0)
+        try writer.writeEncoded(subject.der)
+        try writer.writeEncoded(spki)
+        try writer.beginSetOf(tag: .context(0))
+        if !all.isEmpty {
+            try writer.beginSequence()
+            try writer.writeObjectIdentifier(extensionRequest)
+            try writer.beginSetOf()
+            try writer.beginSequence()
+            for each in all {
+                try each.write(writer)
+            }
+            try writer.endSequence()
+            try writer.endSetOf()
+            try writer.endSequence()
+        }
+        try writer.endSetOf()
+        try writer.endSequence()
+        return try writer.bytes()
+    }
+
+    static let extensionRequest: ObjectIdentifier = ObjectIdentifier([1, 2, 840, 113549, 1, 9, 14])
+
+    /// The request encoded in DER.
+    public static fn parse(der encoded: U8[:]) throws(CertificateError) -> CertificateRequest {
+        do {
+            return try CertificateRequest(reading: encoded)
+        } catch {
+            throw CertificateError.Malformed(reason: "not a certificate request: \(error.description())")
+        }
+    }
+
+    /// The text's first request in PEM.
+    public static fn parse(pem: String) throws(CertificateError) -> CertificateRequest {
+        return try CertificateRequest.parse(der: try PemText.first(pem, "CERTIFICATE REQUEST").bytes)
+    }
+
+    init(reading encoded: U8[:]) throws(AsnError) {
+        var reader = AsnReader(encoded, rules: .Der)
+        var outer = try reader.readSequence()
+        try reader.finish()
+        let signed = try outer.peekEncoded()
+        var body = try outer.readSequence()
+        signatureAlgorithm = try SignatureAlgorithm(reading: &outer)
+        signature = try outer.readBitString().bytes.toArray()
+        try outer.finish()
+        if try body.readInt() != 0 {
+            throw AsnError.OutOfRange(at: body.position, reason: "another version")
+        }
+        subject = try DistinguishedName(read: try body.readEncoded())
+        spki = try body.peekEncoded().toArray()
+        try CertificateContents.checkKey(&body)
+        var extensions: CertificateExtension[>..] = []
+        if body.isNext(.context(0)) {
+            var attributes = try body.readSetOf(tag: .context(0))
+            while !attributes.isAtEnd {
+                var attribute = try attributes.readSequence()
+                let type = try attribute.readObjectIdentifier()
+                var values = try attribute.readSetOf()
+                try attribute.finish()
+                if type == CertificateRequest.extensionRequest {
+                    extensions = try CertificateExtension.readAll(&values)
+                    try values.finish()
+                }
+            }
+        }
+        try body.finish()
+        var names: GeneralName[>..] = []
+        for each in extensions {
+            if each.identifier == KnownExtensions.subjectAlternativeName {
+                var value = AsnReader(each.value, rules: .Der)
+                names = try GeneralName.readAll(&value)
+                try value.finish()
+            }
+        }
+        self.extensions = extensions
+        alternativeNames = names
+        der = encoded.toArray()
+        self.signed = signed.toArray()
+    }
+
+    /// The request in PEM.
+    public var pem: String => PemBlock(label: "CERTIFICATE REQUEST", bytes: der).text
+
+    /// The key.
+    public fn publicKey() throws(CertificateError) -> PublicKey {
+        do {
+            return try PublicKey.parse(spki: spki)
+        } catch {
+            throw CertificateError.Unsupported(reason: "the key of \(subject): \(error.description())")
+        }
+    }
+
+    /// Whether it is signed with the key it is of: whether who made it has
+    /// that.
+    public var isSigned: Bool {
+        get {
+            guard let key = try? self.publicKey() else {
+                return false
+            }
+            return signatureAlgorithm.isValid(signature, for: signed, key: key)
+        }
+    }
+
+    /// The type and the subject.
+    public fn debugDescription() -> String {
+        return "CertificateRequest(\(subject))"
+    }
+}

@@ -1,0 +1,221 @@
+module Sable.Crypto.X509
+
+import Sable.Crypto
+import Sable.Serialize.Asn1
+
+/// How a certificate, a request or a revocation list is signed.
+///
+/// ```sable
+/// let key = EcdsaPrivateKey<P384>.generate().anyKey
+/// assert(SignatureAlgorithm.usual(for: key) == .Ecdsa(.Sha384))
+/// ```
+@derive(Equatable, Debug)
+public union SignatureAlgorithm: Sendable {
+    Ecdsa(HashAlgorithm)
+    RsaPkcs1(HashAlgorithm)
+    RsaPss(HashAlgorithm, maskHash: HashAlgorithm, saltByteCount: Int)
+    Ed25519
+
+    /// One the library has not, or whose parameters are none it takes.
+    Unknown(ObjectIdentifier)
+
+    /// The one a key signs with if nothing else is said: RSA keys sign with
+    /// PKCS #1 v1.5 and SHA-256, as everything that reads certificates
+    /// knows that. None for a key that does not sign.
+    public static fn usual(for key: PrivateKey) -> SignatureAlgorithm? {
+        return match key {
+            case .Rsa(_)     => .RsaPkcs1(.Sha256)
+            case .P256(_)    => .Ecdsa(.Sha256)
+            case .P384(_)    => .Ecdsa(.Sha384)
+            case .P521(_)    => .Ecdsa(.Sha512)
+            case .Ed25519(_) => .Ed25519
+            default          => none
+        }
+    }
+
+    /// The one given, or the one the key signs with.
+    static fn chosen(_ given: SignatureAlgorithm?, for key: PrivateKey) throws(CertificateError) -> SignatureAlgorithm {
+        if let given {
+            return given
+        }
+        guard let own = SignatureAlgorithm.usual(for: key) else {
+            throw CertificateError.Unsupported(reason: "a key that does not sign")
+        }
+        return own
+    }
+
+    init(reading reader: inout AsnReader) throws(AsnError) {
+        var sequence = try reader.readSequence()
+        let identifier = try sequence.readObjectIdentifier()
+        var parameters: U8[:]? = none
+        if !sequence.isAtEnd {
+            parameters = try sequence.readEncoded()
+        }
+        try sequence.finish()
+        self = SignatureAlgorithm.known(identifier, parameters)
+    }
+
+    static fn known(_ identifier: ObjectIdentifier, _ parameters: U8[:]?) -> SignatureAlgorithm {
+        let isAbsent = parameters == none
+        // RFC 4055: NULL, and nothing is to be read as that.
+        let isNull = isAbsent || parameters! == [5, 0]
+        if identifier == SignatureIdentifiers.rsaPss {
+            if let parameters, let read = try? pss(parameters) {
+                return read
+            }
+            return .Unknown(identifier)
+        }
+        var i = 0
+        while i < 3 {
+            let hash: HashAlgorithm = i == 0 ? .Sha256 : i == 1 ? .Sha384 : .Sha512
+            if identifier == SignatureIdentifiers.rsa[i] && isNull {
+                return .RsaPkcs1(hash)
+            }
+            if identifier == SignatureIdentifiers.ecdsa[i] && isAbsent {
+                return .Ecdsa(hash)
+            }
+            i += 1
+        }
+        if identifier == SignatureIdentifiers.ed25519 && isAbsent {
+            return .Ed25519
+        }
+        return .Unknown(identifier)
+    }
+
+    /// RSASSA-PSS-params (RFC 4055 §3.1), of SHA-2 functions: the defaults,
+    /// which are SHA-1, are not taken.
+    static fn pss(_ encoded: U8[:]) throws(AsnError) -> SignatureAlgorithm {
+        var reader = AsnReader(encoded, rules: .Der)
+        var sequence = try reader.readSequence()
+        var tagged = try sequence.readExplicit(.context(0))
+        let hash = try hashAlgorithm(&tagged)
+        try tagged.finish()
+        tagged = try sequence.readExplicit(.context(1))
+        var mask = try tagged.readSequence()
+        if try mask.readObjectIdentifier() != SignatureIdentifiers.mgf1 {
+            throw AsnError.Malformed(at: 0, reason: "a mask that is not MGF1")
+        }
+        let maskHash = try hashAlgorithm(&mask)
+        try mask.finish()
+        try tagged.finish()
+        tagged = try sequence.readExplicit(.context(2))
+        let salt = try tagged.readInt()
+        try tagged.finish()
+        try sequence.finish()
+        if salt < 0 || salt > 256 {
+            throw AsnError.OutOfRange(at: 0, reason: "a salt of \(salt) bytes")
+        }
+        return .RsaPss(hash, maskHash: maskHash, saltByteCount: salt)
+    }
+
+    static fn hashAlgorithm(_ reader: inout AsnReader) throws(AsnError) -> HashAlgorithm {
+        var sequence = try reader.readSequence()
+        let identifier = try sequence.readObjectIdentifier()
+        if !sequence.isAtEnd {
+            try sequence.readNull()
+        }
+        try sequence.finish()
+        if identifier == SignatureIdentifiers.hashes[0] {
+            return .Sha256
+        }
+        if identifier == SignatureIdentifiers.hashes[1] {
+            return .Sha384
+        }
+        if identifier == SignatureIdentifiers.hashes[2] {
+            return .Sha512
+        }
+        throw AsnError.Malformed(at: 0, reason: "a hash function of \(identifier)")
+    }
+
+    fn write(_ writer: AsnWriter) throws(AsnError) {
+        try writer.beginSequence()
+        match self {
+            case .Ecdsa(let hash)    => try writer.writeObjectIdentifier(SignatureIdentifiers.ecdsa[SignatureIdentifiers.index(hash)])
+            case .RsaPkcs1(let hash) => {
+                try writer.writeObjectIdentifier(SignatureIdentifiers.rsa[SignatureIdentifiers.index(hash)])
+                try writer.writeNull()
+            }
+            case .RsaPss(let hash, let maskHash, let saltByteCount) => {
+                try writer.writeObjectIdentifier(SignatureIdentifiers.rsaPss)
+                try writer.beginSequence()
+                try writer.beginExplicit(.context(0))
+                try SignatureAlgorithm.writeHash(writer, hash)
+                try writer.endExplicit()
+                try writer.beginExplicit(.context(1))
+                try writer.beginSequence()
+                try writer.writeObjectIdentifier(SignatureIdentifiers.mgf1)
+                try SignatureAlgorithm.writeHash(writer, maskHash)
+                try writer.endSequence()
+                try writer.endExplicit()
+                try writer.beginExplicit(.context(2))
+                try writer.writeInt(saltByteCount)
+                try writer.endExplicit()
+                try writer.endSequence()
+            }
+            case .Ed25519                 => try writer.writeObjectIdentifier(SignatureIdentifiers.ed25519)
+            case .Unknown(let identifier) => try writer.writeObjectIdentifier(identifier)
+        }
+        try writer.endSequence()
+    }
+
+    static fn writeHash(_ writer: AsnWriter, _ hash: HashAlgorithm) throws(AsnError) {
+        try writer.beginSequence()
+        try writer.writeObjectIdentifier(SignatureIdentifiers.hashes[SignatureIdentifiers.index(hash)])
+        try writer.writeNull()
+        try writer.endSequence()
+    }
+
+    /// Whether it is the key's signature of the message. False, too, for a
+    /// key of another algorithm.
+    fn isValid(_ signature: U8[:], for message: U8[:], key: PublicKey) -> Bool {
+        match (self, key) {
+            case (.Ecdsa(let hash), .P256(let own)) => {
+                guard let read = try? EcdsaSignature<P256>(der: signature) else {
+                    return false
+                }
+                return own.isValid(read, for: message, hash: hash)
+            }
+            case (.Ecdsa(let hash), .P384(let own)) => {
+                guard let read = try? EcdsaSignature<P384>(der: signature) else {
+                    return false
+                }
+                return own.isValid(read, for: message, hash: hash)
+            }
+            case (.Ecdsa(let hash), .P521(let own)) => {
+                guard let read = try? EcdsaSignature<P521>(der: signature) else {
+                    return false
+                }
+                return own.isValid(read, for: message, hash: hash)
+            }
+            case (.RsaPkcs1(let hash), .Rsa(let own)) => {
+                return own.isValid(signature, for: message, padding: .Pkcs1(hash))
+            }
+            case (.RsaPss(let hash, let maskHash, let saltByteCount), .Rsa(let own)) => {
+                return own.isValid(signature, for: message, padding: .PssParameters(hash, maskHash: maskHash, saltByteCount: saltByteCount))
+            }
+            case (.Ed25519, .Ed25519(let own)) => {
+                return own.isValid(signature, for: message)
+            }
+            default => {
+                return false
+            }
+        }
+    }
+
+    /// The message's signature by a key of the algorithm.
+    fn sign(_ message: U8[:], with key: PrivateKey) throws(CertificateError) -> U8[>..] {
+        match (self, key) {
+            case (.Ecdsa(let hash), .P256(let own))     => { return own.sign(message, hash: hash).der }
+            case (.Ecdsa(let hash), .P384(let own))     => { return own.sign(message, hash: hash).der }
+            case (.Ecdsa(let hash), .P521(let own))     => { return own.sign(message, hash: hash).der }
+            case (.RsaPkcs1(let hash), .Rsa(let own))   => { return own.sign(message, padding: .Pkcs1(hash)) }
+            case (.RsaPss(let hash, let maskHash, let saltByteCount), .Rsa(let own)) => {
+                return own.sign(message, padding: .PssParameters(hash, maskHash: maskHash, saltByteCount: saltByteCount))
+            }
+            case (.Ed25519, .Ed25519(let own)) => { return own.sign(message) }
+            default => {
+                throw CertificateError.Unsupported(reason: "a key of another algorithm than the signature's")
+            }
+        }
+    }
+}

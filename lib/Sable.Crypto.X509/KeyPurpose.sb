@@ -1,0 +1,47 @@
+module Sable.Crypto.X509
+
+import Sable.Serialize.Asn1
+
+/// What a certificate is for (RFC 5280 §4.2.1.12): servers, clients, code.
+///
+/// ```sable
+/// assert(KeyPurpose.serverAuth != KeyPurpose.clientAuth)
+/// assert("\(KeyPurpose.serverAuth.identifier)" == "1.3.6.1.5.5.7.3.1")
+/// ```
+@derive(Equatable, Hashable)
+public struct KeyPurpose: Hashable, Sendable {
+    /// The purpose's object identifier.
+    public let identifier: ObjectIdentifier
+
+    public init(_ identifier: ObjectIdentifier) {
+        self.identifier = identifier
+    }
+
+    /// Any purpose at all.
+    public static var anyPurpose: KeyPurpose => keyPurposes[0]
+
+    /// A TLS server's.
+    public static var serverAuth: KeyPurpose => keyPurposes[1]
+
+    /// A TLS client's.
+    public static var clientAuth: KeyPurpose => keyPurposes[2]
+
+    /// Signing code.
+    public static var codeSigning: KeyPurpose => keyPurposes[3]
+
+    /// Mail's.
+    public static var emailProtection: KeyPurpose => keyPurposes[4]
+
+    /// Time stamps'.
+    public static var timeStamping: KeyPurpose => keyPurposes[5]
+
+    /// Answering whether certificates hold.
+    public static var ocspSigning: KeyPurpose => keyPurposes[6]
+}
+
+let keyPurposes: KeyPurpose[>..] = [
+    KeyPurpose(ObjectIdentifier([2, 5, 29, 37, 0])), KeyPurpose(ObjectIdentifier([1, 3, 6, 1, 5, 5, 7, 3, 1])),
+    KeyPurpose(ObjectIdentifier([1, 3, 6, 1, 5, 5, 7, 3, 2])), KeyPurpose(ObjectIdentifier([1, 3, 6, 1, 5, 5, 7, 3, 3])),
+    KeyPurpose(ObjectIdentifier([1, 3, 6, 1, 5, 5, 7, 3, 4])), KeyPurpose(ObjectIdentifier([1, 3, 6, 1, 5, 5, 7, 3, 8])),
+    KeyPurpose(ObjectIdentifier([1, 3, 6, 1, 5, 5, 7, 3, 9])),
+]

@@ -1,0 +1,23 @@
+module Sable.Crypto.X509
+
+/// Whether a certificate is an authority's, and how many authorities there
+/// may be below it (RFC 5280 §4.2.1.9).
+///
+/// ```sable
+/// let constraints = BasicConstraints(isAuthority: true, pathLength: 0)
+/// assert(constraints.isAuthority && constraints.pathLength == 0)
+/// ```
+@derive(Equatable, Debug)
+public struct BasicConstraints: Sendable {
+    /// Whether certificates may be issued with the key.
+    public let isAuthority: Bool
+
+    /// How many authorities may be on the way to the certificate at the end;
+    /// none for any number.
+    public let pathLength: Int?
+
+    public init(isAuthority: Bool, pathLength: Int? = none) {
+        self.isAuthority = isAuthority
+        self.pathLength = pathLength
+    }
+}

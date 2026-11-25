@@ -1,0 +1,24 @@
+module Sable.Crypto.X509
+
+import Sable.Crypto
+import Sable.Serialize.Asn1
+
+/// The object identifiers of signatures; of SHA-256's, SHA-384's and
+/// SHA-512's, in that order.
+struct SignatureIdentifiers {
+    static let ecdsa: ObjectIdentifier[>..] = [ObjectIdentifier([1, 2, 840, 10045, 4, 3, 2]), ObjectIdentifier([1, 2, 840, 10045, 4, 3, 3]), ObjectIdentifier([1, 2, 840, 10045, 4, 3, 4])]
+    static let rsa: ObjectIdentifier[>..] = [ObjectIdentifier([1, 2, 840, 113549, 1, 1, 11]), ObjectIdentifier([1, 2, 840, 113549, 1, 1, 12]), ObjectIdentifier([1, 2, 840, 113549, 1, 1, 13])]
+    static let hashes: ObjectIdentifier[>..] = [ObjectIdentifier([2, 16, 840, 1, 101, 3, 4, 2, 1]), ObjectIdentifier([2, 16, 840, 1, 101, 3, 4, 2, 2]), ObjectIdentifier([2, 16, 840, 1, 101, 3, 4, 2, 3])]
+    static let rsaPss: ObjectIdentifier = ObjectIdentifier([1, 2, 840, 113549, 1, 1, 10])
+    static let mgf1: ObjectIdentifier = ObjectIdentifier([1, 2, 840, 113549, 1, 1, 8])
+    static let ed25519: ObjectIdentifier = ObjectIdentifier([1, 3, 101, 112])
+
+    static fn index(_ hash: HashAlgorithm) -> Int {
+        return match hash {
+            case .Sha256 => 0
+            case .Sha384 => 1
+            case .Sha512 => 2
+            default      => preconditionFailure("certificates are not signed with \(hash)")
+        }
+    }
+}

@@ -1,0 +1,269 @@
+module Sable.Crypto.X509
+
+import Sable.Crypto
+import Sable.Time
+
+/// The search for a path: depth first, trusted issuers before others and
+/// those whose key identifier is the one named before those too. What it
+/// takes is limited, so that certificates cannot be made to take it long.
+final class PathSearch {
+    let verifier: CertificateVerifier
+    let intermediates: Certificate[>..]
+    let purpose: KeyPurpose?
+    let time: UtcDateTime
+
+    /// How many signatures may be checked.
+    var signaturesLeft = 100
+
+    /// How many certificates may be looked at.
+    var candidatesLeft = 10_000
+
+    var names = NameChecker()
+
+    /// Why the first path that was not one was not.
+    var problem: CertificateError? = none
+
+    init(_ verifier: CertificateVerifier, _ intermediates: Certificate[:], _ purpose: KeyPurpose?, _ time: UtcDateTime) {
+        self.verifier = verifier
+        self.intermediates = intermediates.toArray()
+        self.purpose = purpose
+        self.time = time
+    }
+
+    fn run(_ certificate: Certificate) throws(CertificateError) -> Certificate[>..] {
+        try self.checkLeaf(certificate)
+        if verifier.roots.contains(certificate) && certificate.isSelfIssued {
+            // Trusted itself.
+            return [certificate]
+        }
+        if let path = try self.extend([certificate]) {
+            return path
+        }
+        if let problem {
+            throw problem
+        }
+        throw CertificateError.UnknownIssuer(issuer: "\(certificate.issuer)")
+    }
+
+    /// The path, led on to a trusted certificate.
+    fn extend(_ path: Certificate[>..]) throws(CertificateError) -> Certificate[>..]? {
+        let last = path[path.count - 1]
+        var below = 0
+        var i = 1
+        while i < path.count {
+            if !path[i].isSelfIssued {
+                below += 1
+            }
+            i += 1
+        }
+        for root in self.ordered(verifier.roots.of(last.issuer), for: last) {
+            if try self.mayFollow(path, root, below: below, isRoot: true) {
+                var whole = path
+                whole.append(root)
+                if try self.isGood(whole) {
+                    return whole
+                }
+            }
+        }
+        var found: Certificate[>..] = []
+        for each in intermediates {
+            candidatesLeft -= 1
+            if candidatesLeft < 0 {
+                throw CertificateError.LimitExceeded(reason: "too many certificates to look at")
+            }
+            if each.subject == last.issuer && !PathSearch.isIn(path, each) {
+                found.append(each)
+            }
+        }
+        for each in self.ordered(found, for: last) {
+            if path.count > 64 || (!each.isSelfIssued && below >= verifier.maximumDepth) {
+                self.note(CertificateError.LimitExceeded(reason: "a path of more than \(verifier.maximumDepth) authorities"))
+                continue
+            }
+            if try self.mayFollow(path, each, below: below, isRoot: false) {
+                var longer = path
+                longer.append(each)
+                if let whole = try self.extend(longer) {
+                    return whole
+                }
+            }
+        }
+        return none
+    }
+
+    /// Whether the path has the certificate, or another with its subject and
+    /// its key.
+    static fn isIn(_ path: Certificate[:], _ certificate: Certificate) -> Bool {
+        for each in path {
+            if each.subject == certificate.subject && each.spki == certificate.spki {
+                return true
+            }
+        }
+        return false
+    }
+
+    fn ordered(_ candidates: Certificate[>..], for last: Certificate) -> Certificate[>..] {
+        guard let wanted = last.authorityKeyIdentifier?.keyIdentifier else {
+            return candidates
+        }
+        var first: Certificate[>..] = []
+        var rest: Certificate[>..] = []
+        for each in candidates {
+            if each.subjectKeyIdentifier == wanted {
+                first.append(each)
+            } else {
+                rest.append(each)
+            }
+        }
+        first.append(contentsOf: rest)
+        return first
+    }
+
+    fn note(_ error: CertificateError) {
+        if problem == none {
+            problem = error
+        }
+    }
+
+    /// Whether the candidate may have issued the path's last certificate,
+    /// and did.
+    fn mayFollow(_ path: Certificate[:], _ candidate: Certificate, below: Int, isRoot: Bool) throws(CertificateError) -> Bool {
+        candidatesLeft -= 1
+        if candidatesLeft < 0 {
+            throw CertificateError.LimitExceeded(reason: "too many certificates to look at")
+        }
+        let last = path[path.count - 1]
+        do {
+            try self.checkAuthority(candidate, below: below, isRoot: isRoot)
+            let key = try self.key(candidate)
+            signaturesLeft -= 1
+            if signaturesLeft < 0 {
+                throw CertificateError.LimitExceeded(reason: "too many signatures to check")
+            }
+            if case .Unknown(let identifier) = last.signatureAlgorithm {
+                throw CertificateError.Unsupported(reason: "\(last.subject) is signed with an algorithm the library does not take: \(identifier)")
+            }
+            if !last.isSigned(by: key) {
+                throw CertificateError.InvalidSignature(subject: "\(last.subject)")
+            }
+            return true
+        } catch {
+            if signaturesLeft < 0 {
+                throw error
+            }
+            self.note(error)
+            return false
+        }
+    }
+
+    /// Whether the whole path is good, which its certificates each are.
+    fn isGood(_ path: Certificate[:]) throws(CertificateError) -> Bool {
+        do {
+            try names.check(path)
+            var i = 0
+            while i + 1 < path.count {
+                for list in verifier.revocationLists {
+                    if list.issuer == path[i + 1].subject {
+                        try list.check(path[i], issuer: path[i + 1], at: time, profile: verifier.profile)
+                    }
+                }
+                i += 1
+            }
+            return true
+        } catch {
+            if case .LimitExceeded(_) = error {
+                throw error
+            }
+            self.note(error)
+            return false
+        }
+    }
+
+    /// The certificate's key, if it is one that is taken.
+    fn key(_ certificate: Certificate) throws(CertificateError) -> PublicKey {
+        let key = try certificate.publicKey()
+        if case .Rsa(let rsa) = key {
+            if rsa.bitCount < 2048 {
+                throw CertificateError.Unsupported(reason: "the RSA key of \(certificate.subject) is of \(rsa.bitCount) bits, not 2048 or more")
+            }
+        }
+        return key
+    }
+
+    /// What every certificate is asked.
+    fn checkAny(_ certificate: Certificate) throws(CertificateError) {
+        // In whole seconds, as a certificate's times are.
+        if time.secondsSinceEpoch < certificate.notBefore.secondsSinceEpoch {
+            throw CertificateError.NotYetValid(subject: "\(certificate.subject)")
+        }
+        if time.secondsSinceEpoch > certificate.notAfter.secondsSinceEpoch {
+            throw CertificateError.Expired(subject: "\(certificate.subject)")
+        }
+        if certificate.issuer.isEmpty {
+            throw CertificateError.Invalid(reason: "\(certificate.subject) has no issuer")
+        }
+        for each in certificate.extensions {
+            if each.isCritical && !PathSearch.known.contains(each.identifier) {
+                throw CertificateError.Invalid(reason: "\(certificate.subject) has a critical extension that is not known: \(each.identifier)")
+            }
+        }
+        _ = try self.key(certificate)
+        if verifier.profile != .Compatible {
+            try ProfileRules.checkAny(certificate, verifier.profile)
+        }
+    }
+
+    static let known: ObjectIdentifierList = ObjectIdentifierList()
+
+    /// What the certificate at the path's end is asked.
+    fn checkLeaf(_ certificate: Certificate) throws(CertificateError) {
+        try self.checkAny(certificate)
+        let isAuthority = certificate.basicConstraints?.isAuthority ?? false
+        if !isAuthority && certificate.nameConstraints != none {
+            throw CertificateError.Invalid(reason: "\(certificate.subject) has name constraints, and is no authority")
+        }
+        if let usage = certificate.keyUsage {
+            if usage.contains(.KeyCertSign) && !isAuthority {
+                throw CertificateError.Invalid(reason: "\(certificate.subject) may sign certificates, and is no authority")
+            }
+        }
+        try self.checkPurpose(certificate)
+        if verifier.profile != .Compatible {
+            try ProfileRules.checkLeaf(certificate, verifier.profile)
+        }
+    }
+
+    fn checkPurpose(_ certificate: Certificate) throws(CertificateError) {
+        if let purpose, let purposes = certificate.purposes {
+            if !purposes.contains(purpose) && !purposes.contains(KeyPurpose.anyPurpose) {
+                throw CertificateError.NotForPurpose(reason: "\(certificate.subject) is not for \(purpose.identifier)")
+            }
+        }
+    }
+
+    /// What one that issued another is asked, with so many authorities
+    /// between it and the path's end.
+    fn checkAuthority(_ certificate: Certificate, below: Int, isRoot: Bool) throws(CertificateError) {
+        try self.checkAny(certificate)
+        guard let constraints = certificate.basicConstraints, constraints.isAuthority else {
+            throw CertificateError.Invalid(reason: "\(certificate.subject) is no authority, and issued a certificate")
+        }
+        if let length = constraints.pathLength {
+            if below > length {
+                throw CertificateError.Invalid(reason: "\(certificate.subject) may have \(length) authorities below it, and has \(below)")
+            }
+        }
+        if let usage = certificate.keyUsage {
+            if !usage.contains(.KeyCertSign) {
+                throw CertificateError.NotForPurpose(reason: "the key of \(certificate.subject) is not for signing certificates")
+            }
+        }
+        if certificate.subject.isEmpty {
+            throw CertificateError.Invalid(reason: "an authority without a name")
+        }
+        try self.checkPurpose(certificate)
+        if verifier.profile != .Compatible {
+            try ProfileRules.checkAuthority(certificate, verifier.profile, isRoot: isRoot)
+        }
+    }
+}

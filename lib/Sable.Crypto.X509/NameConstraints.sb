@@ -1,0 +1,74 @@
+module Sable.Crypto.X509
+
+import Sable.Serialize.Asn1
+
+/// The names an authority may, and may not, issue certificates for (RFC 5280
+/// §4.2.1.10). An address has its mask after it.
+///
+/// ```sable
+/// let constraints = NameConstraints(permitted: [.Dns("example.com")], excluded: [.Dns("secret.example.com")])
+/// assert(constraints.permitted == [.Dns("example.com")])
+/// ```
+@derive(Equatable, Debug)
+public struct NameConstraints: Sendable {
+    /// If there is one of a kind, names of that kind must be within one.
+    public let permitted: GeneralName[>..]
+
+    /// What names may not be within.
+    public let excluded: GeneralName[>..]
+
+    public init(permitted: GeneralName[:], excluded: GeneralName[:]) {
+        self.permitted = permitted.toArray()
+        self.excluded = excluded.toArray()
+    }
+
+    init(reading reader: inout AsnReader) throws(AsnError) {
+        var sequence = try reader.readSequence()
+        var permitted: GeneralName[>..] = []
+        var excluded: GeneralName[>..] = []
+        if sequence.isNext(.context(0)) {
+            permitted = try NameConstraints.subtrees(&sequence, .context(0))
+        }
+        if sequence.isNext(.context(1)) {
+            excluded = try NameConstraints.subtrees(&sequence, .context(1))
+        }
+        try sequence.finish()
+        if permitted.isEmpty && excluded.isEmpty {
+            throw AsnError.Malformed(at: reader.position, reason: "name constraints that constrain nothing")
+        }
+        self.init(permitted: permitted, excluded: excluded)
+    }
+
+    static fn subtrees(_ reader: inout AsnReader, _ tag: AsnTag) throws(AsnError) -> GeneralName[>..] {
+        var sequence = try reader.readSequence(tag: tag)
+        var names: GeneralName[>..] = []
+        while !sequence.isAtEnd {
+            var subtree = try sequence.readSequence()
+            names.append(try GeneralName(reading: &subtree, constraint: true))
+            // A minimum of other than 0, and a maximum, are never used.
+            try subtree.finish()
+        }
+        if names.isEmpty {
+            throw AsnError.Malformed(at: reader.position, reason: "name constraints with an empty list")
+        }
+        return names
+    }
+
+    fn write(_ writer: AsnWriter) throws(AsnError) {
+        try writer.beginSequence()
+        var number = 0
+        for names in [permitted, excluded] {
+            if !names.isEmpty {
+                try writer.beginSequence(tag: .context(number))
+                for name in names {
+                    try writer.beginSequence()
+                    try name.write(writer)
+                    try writer.endSequence()
+                }
+                try writer.endSequence()
+            }
+            number += 1
+        }
+        try writer.endSequence()
+    }
+}

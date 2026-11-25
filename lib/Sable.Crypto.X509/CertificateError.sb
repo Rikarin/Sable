@@ -1,0 +1,67 @@
+module Sable.Crypto.X509
+
+/// Why bytes are no certificate, or a certificate is not trusted.
+///
+/// ```sable
+/// do {
+///     _ = try Certificate.parse(der: [0x30, 0x00])
+/// } catch {
+///     assert(error.description().hasPrefix("not a certificate"))
+/// }
+/// ```
+@derive(Equatable, Debug)
+public union CertificateError: Error {
+    /// The bytes are not what they should be, or the text is not.
+    Malformed(reason: String)
+
+    /// A key, a signature or a constraint of a kind the library has not.
+    Unsupported(reason: String)
+
+    /// The time is past a certificate's.
+    Expired(subject: String)
+
+    /// The time is before a certificate's.
+    NotYetValid(subject: String)
+
+    /// The certificate is not the server's that was asked for.
+    HostMismatch(host: String)
+
+    /// The certificate, or one that issued it, is not for what it is used for.
+    NotForPurpose(reason: String)
+
+    /// No certificate that is trusted issued it, nor any that such a one did.
+    UnknownIssuer(issuer: String)
+
+    /// A signature is not the issuer's.
+    InvalidSignature(subject: String)
+
+    /// A name is not one an issuer may issue certificates for.
+    NameNotPermitted(reason: String)
+
+    /// A certificate breaks another rule of RFC 5280, or of the profile.
+    Invalid(reason: String)
+
+    /// The issuer says in a revocation list that the certificate does not hold.
+    Revoked(subject: String)
+
+    /// Finding a path to a trusted certificate took too long.
+    LimitExceeded(reason: String)
+
+    /// What is wrong.
+    public fn description() -> String {
+        return match self {
+            case .Malformed(let reason)        => reason
+            case .Unsupported(let reason)      => reason
+            case .Expired(let subject)         => "the certificate of \(subject) has expired"
+            case .NotYetValid(let subject)     => "the certificate of \(subject) is not valid yet"
+            case .HostMismatch(let host)       => "the certificate is not for \(host)"
+            case .NotForPurpose(let reason)    => reason
+            case .UnknownIssuer(let issuer)    => "nothing trusted has issued a certificate of \(issuer)"
+            case .InvalidSignature(let subject) => "the signature of the certificate of \(subject) is not its issuer's"
+            case .NameNotPermitted(let reason) => reason
+            case .Invalid(let reason)          => reason
+            case .Revoked(let subject)         => "the certificate of \(subject) has been revoked"
+            case .LimitExceeded(let reason)    => reason
+        }
+    }
+}

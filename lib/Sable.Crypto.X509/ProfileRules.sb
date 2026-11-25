@@ -1,0 +1,129 @@
+module Sable.Crypto.X509
+
+import Sable.Crypto
+import Sable.Serialize.Asn1
+
+/// The extensions a verifier knows, so that they may be critical. Policies
+/// are known as any is taken.
+struct ObjectIdentifierList: Sendable {
+    let all: ObjectIdentifier[>..]
+
+    init() {
+        all = [
+            KnownExtensions.basicConstraints, KnownExtensions.keyUsage, KnownExtensions.extendedKeyUsage, KnownExtensions.subjectAlternativeName,
+            KnownExtensions.nameConstraints, KnownExtensions.subjectKeyIdentifier, KnownExtensions.authorityKeyIdentifier, KnownExtensions.certificatePolicies,
+        ]
+    }
+
+    fn contains(_ identifier: ObjectIdentifier) -> Bool {
+        for each in all {
+            if each == identifier {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+/// What the profiles ask besides.
+struct ProfileRules {
+    static fn fail(_ certificate: Certificate, _ reason: String) throws(CertificateError) {
+        throw CertificateError.Invalid(reason: "\(certificate.subject): \(reason)")
+    }
+
+    static fn isCritical(_ certificate: Certificate, _ identifier: ObjectIdentifier) -> Bool {
+        return certificate.extension(identifier)?.isCritical ?? false
+    }
+
+    static fn checkAny(_ certificate: Certificate, _ profile: CertificateProfile) throws(CertificateError) {
+        if certificate.version != 3 {
+            try fail(certificate, "a certificate of version \(certificate.version)")
+        }
+        let serial = certificate.serialNumber
+        if serial.count > 20 || serial[0] >= 0x80 || (serial.count == 1 && serial[0] == 0) {
+            try fail(certificate, "a serial number that is not positive, or of more than 20 bytes")
+        }
+        if isCritical(certificate, KnownExtensions.subjectKeyIdentifier) || isCritical(certificate, KnownExtensions.authorityKeyIdentifier) {
+            try fail(certificate, "a critical key identifier")
+        }
+        for each in certificate.extensions {
+            if each.identifier == KnownExtensions.policyConstraints && !each.isCritical {
+                try fail(certificate, "policy constraints that are not critical")
+            }
+        }
+        if certificate.subject.isEmpty && !certificate.alternativeNames.isEmpty && !isCritical(certificate, KnownExtensions.subjectAlternativeName) {
+            try fail(certificate, "alternative names that are not critical, and no subject")
+        }
+        if profile == .WebPki {
+            if case .Rsa(let key) = try certificate.publicKey() {
+                if key.bitCount % 8 != 0 {
+                    try fail(certificate, "an RSA key of \(key.bitCount) bits")
+                }
+            }
+        }
+    }
+
+    static fn checkLeaf(_ certificate: Certificate, _ profile: CertificateProfile) throws(CertificateError) {
+        if certificate.authorityKeyIdentifier?.keyIdentifier == none {
+            try fail(certificate, "no authority key identifier")
+        }
+        if profile != .WebPki {
+            return
+        }
+        if certificate.basicConstraints?.isAuthority ?? false {
+            try fail(certificate, "an authority's, and not a server's")
+        }
+        if certificate.alternativeNames.isEmpty {
+            try fail(certificate, "no alternative names")
+        }
+        if isCritical(certificate, KnownExtensions.subjectAlternativeName) != certificate.subject.isEmpty {
+            try fail(certificate, "alternative names that are critical, and a subject")
+        }
+        guard let purposes = certificate.purposes else {
+            try fail(certificate, "no purpose")
+            return
+        }
+        if purposes.contains(KeyPurpose.anyPurpose) || isCritical(certificate, KnownExtensions.extendedKeyUsage) {
+            try fail(certificate, "any purpose, or critical ones")
+        }
+        for name in certificate.subject.all(.commonName) {
+            var isNamed = false
+            for each in certificate.alternativeNames {
+                match each {
+                    case .Dns(let own)  => { isNamed = isNamed || own == name }
+                    case .Ip(let bytes) => { isNamed = isNamed || IpText.canonical(bytes) == name }
+                    default             => { }
+                }
+            }
+            if !isNamed {
+                try fail(certificate, "a common name that is no alternative one")
+            }
+        }
+    }
+
+    static fn checkAuthority(_ certificate: Certificate, _ profile: CertificateProfile, isRoot: Bool) throws(CertificateError) {
+        if !isCritical(certificate, KnownExtensions.basicConstraints) {
+            try fail(certificate, "basic constraints that are not critical")
+        }
+        if certificate.subjectKeyIdentifier == none {
+            try fail(certificate, "no subject key identifier")
+        }
+        if !isRoot || !certificate.isSelfIssued {
+            if certificate.authorityKeyIdentifier?.keyIdentifier == none {
+                try fail(certificate, "no authority key identifier")
+            }
+            return
+        }
+        if profile != .WebPki {
+            return
+        }
+        if certificate.purposes != none {
+            try fail(certificate, "a root's purposes")
+        }
+        if let identifier = certificate.authorityKeyIdentifier {
+            if identifier.keyIdentifier == none || identifier.keyIdentifier != certificate.subjectKeyIdentifier || identifier.issuer != none || identifier.serialNumber != none {
+                try fail(certificate, "a root with another's key identifier")
+            }
+        }
+    }
+}

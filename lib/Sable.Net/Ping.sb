@@ -96,6 +96,7 @@ public struct Ping {
             }
             if result == 2 {
                 // Linux keeps the error a ping socket was sent for it.
+                #if os(linux)
                 if let error = socket.takeError() {
                     if let status = PingStatus.ofError(socket.family, type: error.type, code: error.code, from: error.from) {
                         let echo = IcmpMessage.parse(error.echo)
@@ -105,6 +106,7 @@ public struct Ping {
                     }
                     continue
                 }
+                #endif
                 failures += 1
                 if Runtime.socketError() == 12 || failures > 100 {
                     return .Failed(error: socketError("ping"))
@@ -126,6 +128,7 @@ public struct Ping {
 
     // ---- Windows -------------------------------------------------------------------
 
+    #if os(windows)
     static async fn bySystem(_ address: IpAddress, _ timeout: Duration, _ options: PingOptions, _ payload: U8[>..]) async throws(IoError) -> PingReply {
         let to = SocketAddress(address, port: 0)
         let milliseconds = timeout.totalNanoseconds / 1_000_000 < 1 ? 1 : timeout.totalNanoseconds / 1_000_000
@@ -156,6 +159,7 @@ public struct Ping {
         return PingReply { status: status, address: status == PingStatus.TimedOut ? address : from, roundTrip: roundTrip,
             payloadSize: status == PingStatus.Success ? payload.count : 0 }
     }
+    #endif
 }
 
 // The sequence numbers of this program's echoes.

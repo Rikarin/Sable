@@ -43,6 +43,7 @@ fn localDirectory(anyUser: Bool) throws(IoError) -> String {
     return String.fromUtf8Lossy(room[0..<length])
 }
 
+#if os(windows)
 // Waits for the handle, once a call on it found it would block; or throws,
 // if the call failed (its other end gone), or the task is cancelled.
 fn waitForHandle(_ handle: Int, writable: Bool) async throws(IoError) {
@@ -57,6 +58,7 @@ fn waitForHandle(_ handle: Int, writable: Bool) async throws(IoError) {
         throw IoError.Cancelled
     }
 }
+#endif
 
 // A while, longer each time, to a hundredth of a second: a wait nothing will
 // say the end of.

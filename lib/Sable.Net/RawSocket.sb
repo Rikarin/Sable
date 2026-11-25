@@ -137,6 +137,7 @@ public final class RawSocket: Sendable {
         Runtime.closeSocket(handle)
     }
 
+    #if os(linux)
     // An ICMP error the system kept for the socket (Linux's ping sockets):
     // its type and code, who sent it, and the echo it is about; none.
     fn takeError() -> (type: Int, code: Int, from: IpAddress, echo: U8[>..])? {
@@ -155,4 +156,5 @@ public final class RawSocket: Sendable {
         let from = SocketAddress.ofLastCall()?.ip ?? (family == .V4 ? IpAddress.v4Any : IpAddress.v6Any)
         return (type: parts[0], code: parts[1], from: from, echo: room[0..<got].toArray())
     }
+    #endif
 }

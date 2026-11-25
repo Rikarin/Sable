@@ -33,10 +33,10 @@ public final class LocalStream: AsyncReader, AsyncWriter, Sendable {
     }
 
     deinit {
-        if reader != 0 {
-            Runtime.closeSocket(reader)
-            Runtime.closeSocket(writer)
-        }
+        #if os(windows)
+        Runtime.closeSocket(reader)
+        Runtime.closeSocket(writer)
+        #endif
     }
 
     /// A connection to the server of the name, waiting while it is busy (as
@@ -97,9 +97,7 @@ public final class LocalStream: AsyncReader, AsyncWriter, Sendable {
     /// as much of it as 'count' takes. A task cancelled while it waits
     /// throws Cancelled, and no byte is lost.
     public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
-        if let stream = unix {
-            return try await stream.read(upTo: count)
-        }
+        #if os(windows)
         while true {
             let bytes = Runtime.readSocket(reader, count)
             if Runtime.socketStatus() == 0 {
@@ -107,6 +105,9 @@ public final class LocalStream: AsyncReader, AsyncWriter, Sendable {
             }
             try await waitForHandle(reader, writable: false)
         }
+        #else
+        return try await unix!.read(upTo: count)
+        #endif
     }
 
     /// Every byte until the other end finishes writing.
@@ -124,10 +125,7 @@ public final class LocalStream: AsyncReader, AsyncWriter, Sendable {
     /// Every one of the bytes written, waiting while the other end is slow
     /// to read them: of a stream of messages, one message.
     public fn write(_ bytes: U8[:]) async throws(IoError) {
-        if let stream = unix {
-            try await stream.write(bytes)
-            return
-        }
+        #if os(windows)
         var from = 0
         while from < bytes.count {
             let written = Runtime.writeSocket(writer, bytes[from...])
@@ -137,37 +135,41 @@ public final class LocalStream: AsyncReader, AsyncWriter, Sendable {
                 try await waitForHandle(writer, writable: true)
             }
         }
+        #else
+        try await unix!.write(bytes)
+        #endif
     }
 
     /// Nothing more is written. On macOS and Linux the other end reads to
     /// its end, and reading goes on; a named pipe has no such half, and
     /// its other end reads to its end only once this one is closed.
     public fn finishWriting() {
-        if let stream = unix {
-            stream.finishWriting()
-        } else {
-            Runtime.closeSocket(writer)
-        }
+        #if os(windows)
+        Runtime.closeSocket(writer)
+        #else
+        unix!.finishWriting()
+        #endif
     }
 
     /// Who is at the other end: its process, and on macOS and Linux its
     /// user.
     public fn peerCredentials() throws(IoError) -> PeerCredentials {
-        if let stream = unix {
-            return try stream.peerCredentials()
-        }
+        #if os(windows)
         let process = localPeer(reader, server)
         return PeerCredentials(processId: process >= 0 ? process : none, userId: none)
+        #else
+        return try unix!.peerCredentials()
+        #endif
     }
 
     /// Closed, both ways: tasks waiting on it wake and throw Disconnected.
     /// Dropping the stream closes it too.
     public fn close() {
-        if let stream = unix {
-            stream.close()
-        } else {
-            Runtime.closeSocket(reader)
-            Runtime.closeSocket(writer)
-        }
+        #if os(windows)
+        Runtime.closeSocket(reader)
+        Runtime.closeSocket(writer)
+        #else
+        unix!.close()
+        #endif
     }
 }

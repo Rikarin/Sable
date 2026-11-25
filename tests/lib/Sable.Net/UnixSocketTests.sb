@@ -228,4 +228,17 @@ fn aSenderWaitsForAReceiverThatIsFull(socket: SocketPath) async throws {
     assertEqual(await sending.value, "")
 }
 
+@test
+fn eachEndOfAConnectionKnowsWhoIsAtTheOther(socket: SocketPath) async throws {
+    try skip(if: PeerCredentials.currentUserId == none, "Windows says no user of a socket's peer")
+    let listener = try UnixListener.bind(socket.path)
+    let client = try await UnixStream.connect(socket.path, timeout: Duration.seconds(10))
+    let server = try await listener.accept()
+    let peer = try server.peerCredentials()
+    assertEqual(peer.processId, Process.id())
+    assertEqual(peer.userId, PeerCredentials.currentUserId)
+    assertEqual(try client.peerCredentials().userId, PeerCredentials.currentUserId)
+    assertEqual(PeerCredentials(processId: 1, userId: none).processId, 1)
+}
+
 #endif

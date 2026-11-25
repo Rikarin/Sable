@@ -71,7 +71,7 @@ static HANDLE fs_open(const wchar_t *name, DWORD access, DWORD share, bool follo
 enum { SHARE_ALL = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE };
 
 static bool fs_metadata(const char *name, bool follow, FileMetadata *metadata, FileError *error) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     HANDLE handle = fs_open(wide, FILE_READ_ATTRIBUTES, SHARE_ALL, follow);
     if (handle == INVALID_HANDLE_VALUE && follow && GetLastError() == ERROR_CANT_ACCESS_FILE) {
         // A socket cannot be gone through, and is what it is.
@@ -97,7 +97,7 @@ static bool fs_metadata(const char *name, bool follow, FileMetadata *metadata, F
 }
 
 static bool fs_set_permissions(const char *name, int permissions, FileError *error) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     HANDLE handle = fs_open(wide, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES, SHARE_ALL, true);
     free(wide);
     if (handle == INVALID_HANDLE_VALUE) {
@@ -135,7 +135,7 @@ static bool fs_set_time(const char *name, int which, int64_t seconds, int64_t na
         return false;
     }
 
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     HANDLE handle = fs_open(wide, FILE_WRITE_ATTRIBUTES, SHARE_ALL, true);
     free(wide);
     if (handle == INVALID_HANDLE_VALUE) {
@@ -156,7 +156,7 @@ static bool fs_set_time(const char *name, int which, int64_t seconds, int64_t na
 
 static bool fs_make_directory(const char *name, int permissions, FileError *error) {
     (void)permissions;
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     bool made = CreateDirectoryW(wide, NULL) != FALSE;
     if (!made) {
         file_failed(error);
@@ -201,7 +201,7 @@ static bool is_missing(DWORD code) {
 }
 
 static bool fs_remove(const char *name, bool directory, FileError *error) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     HANDLE handle = fs_open(wide, DELETE | FILE_READ_ATTRIBUTES, SHARE_ALL, false);
     free(wide);
     FILE_ATTRIBUTE_TAG_INFO info;
@@ -347,7 +347,7 @@ static bool tree_remove(const wchar_t *path, bool first, int *retries, FileError
 }
 
 static bool fs_remove_tree(const char *name, FileError *error) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     size_t length = wcslen(wide);
     bool verbatim = length >= 4 && wcsncmp(wide, L"\\\\?\\", 4) == 0;
     while (length > 0 && (wide[length - 1] == L'\\' || (wide[length - 1] == L'/' && !verbatim))) {
@@ -400,10 +400,39 @@ static bool fs_remove_tree(const char *name, FileError *error) {
 
 // ---- Renaming, links and copying -----------------------------------------------
 
+// In place of what is at the target even where it is open somewhere, as POSIX
+// has it: whoever has it open keeps it. From Windows 10 on, on NTFS; elsewhere
+// it fails, and nothing is done.
+static bool rename_over(const wchar_t *source, const wchar_t *target) {
+    HANDLE handle = CreateFileW(source, DELETE | SYNCHRONIZE, SHARE_ALL, NULL, OPEN_EXISTING,
+                                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    size_t bytes = wcslen(target) * sizeof(wchar_t);
+    size_t size = sizeof(FILE_RENAME_INFO) + bytes;
+    FILE_RENAME_INFO *info = calloc(1, size);
+    if (info == NULL) {
+        sable_trap("out of memory");
+    }
+
+    // FILE_RENAME_FLAG_REPLACE_IF_EXISTS and FILE_RENAME_FLAG_POSIX_SEMANTICS,
+    // where the older structure has only whether to replace.
+    DWORD flags = 0x1 | 0x2;
+    memcpy(info, &flags, sizeof flags);
+    info->FileNameLength = (DWORD)bytes;
+    memcpy(info->FileName, target, bytes);
+    bool renamed = SetFileInformationByHandle(handle, (FILE_INFO_BY_HANDLE_CLASS)22 /* FileRenameInfoEx */, info, (DWORD)size) != FALSE;
+    free(info);
+    CloseHandle(handle);
+    return renamed;
+}
+
 static bool fs_rename(const char *from, const char *to, bool replace, FileError *error) {
-    wchar_t *source = to_wide(from);
-    wchar_t *target = to_wide(to);
-    bool renamed = MoveFileExW(source, target, replace ? MOVEFILE_REPLACE_EXISTING : 0) != FALSE;
+    wchar_t *source = to_wide_path(from);
+    wchar_t *target = to_wide_path(to);
+    bool renamed = (replace && rename_over(source, target)) || MoveFileExW(source, target, replace ? MOVEFILE_REPLACE_EXISTING : 0) != FALSE;
     if (!renamed) {
         file_failed(error);
     }
@@ -414,8 +443,8 @@ static bool fs_rename(const char *from, const char *to, bool replace, FileError 
 }
 
 static bool fs_link(const char *target, const char *name, int kind, FileError *error) {
-    wchar_t *to = to_wide(target);
-    wchar_t *link = to_wide(name);
+    wchar_t *to = kind == FILE_LINK_HARD ? to_wide_path(target) : to_wide(target);
+    wchar_t *link = to_wide_path(name);
     bool linked;
     if (kind == FILE_LINK_HARD) {
         linked = CreateHardLinkW(link, to, NULL) != FALSE;
@@ -455,7 +484,7 @@ typedef struct LinkData {
 } LinkData;
 
 static char *fs_read_link(const char *name, FileError *error) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     HANDLE handle = fs_open(wide, FILE_READ_ATTRIBUTES, SHARE_ALL, false);
     free(wide);
     if (handle == INVALID_HANDLE_VALUE) {
@@ -511,8 +540,8 @@ static char *fs_read_link(const char *name, FileError *error) {
 
 // The whole file copied by the system, its attributes with it.
 static bool file_copy(const char *from, const char *to, bool replace, FileError *error) {
-    wchar_t *source = to_wide(from);
-    wchar_t *target = to_wide(to);
+    wchar_t *source = to_wide_path(from);
+    wchar_t *target = to_wide_path(to);
     DWORD attributes = GetFileAttributesW(source);
     bool copied = false;
     if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
@@ -554,7 +583,7 @@ typedef struct DirectoryReader {
 } DirectoryReader;
 
 static void *directory_open(const char *name, FileError *error) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     DWORD attributes = GetFileAttributesW(wide);
     if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
         file_failed(error);
@@ -749,7 +778,7 @@ static void watch_state_free(WatchState *state) {
 }
 
 static void *watch_open(void *watch, const char *name, bool recursive, FileError *error) {
-    wchar_t *wide = to_wide(name);
+    wchar_t *wide = to_wide_path(name);
     DWORD length = GetFullPathNameW(wide, 0, NULL, NULL);
     wchar_t *path = length == 0 ? NULL : malloc(((size_t)length + 1) * sizeof(wchar_t));
     if (path == NULL || GetFullPathNameW(wide, length + 1, path, NULL) == 0) {

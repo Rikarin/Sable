@@ -744,6 +744,9 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_threads_begin()
                                 declare void @sable_object_unmade(ptr)
                                 declare void @sable_task_spawn_cancelled()
+                                declare void @sable_task_timed_begin()
+                                declare zeroext i1 @sable_task_timed_woken()
+                                declare void @sable_task_timed_end()
                                 declare zeroext i1 @sable_actor_hop(ptr)
                                 declare ptr @sable_actor_current()
                                 declare ptr @sable_waitlist_new()
@@ -4238,6 +4241,18 @@ public sealed partial class LlvmEmitter {
 
                 case "task_priority":
                     Line($"{Result()} = call i64 @sable_task_priority()");
+                    return;
+
+                case "task_timed_begin":
+                    Line("call void @sable_task_timed_begin()");
+                    return;
+
+                case "task_timed_end":
+                    Line("call void @sable_task_timed_end()");
+                    return;
+
+                case "task_timed_woken":
+                    Line($"{Result()} = call zeroext i1 @sable_task_timed_woken()");
                     return;
 
                 case "task_spawn_cancelled":

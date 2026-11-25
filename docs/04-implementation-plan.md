@@ -1667,7 +1667,7 @@ The fan-out runs 6.5 times faster on ten cores (`AFanOutRunsInParallel`
 asks for at least twice on four). What stage 2 did in a few nanoseconds
 it did by having nothing to share: an actor call was a plain call, and a
 task was never handed to another thread. One thread now pays for
-sharing the spawned closure and the task's result, the tree's lock and
+sharing the spawned closure and the task's result, the task's counts and
 the actor hops (a yielding ping-pong hops four times a round); many pay
 for handing tasks between cores, which a task that does little between
 spawns and awaits cannot win back.

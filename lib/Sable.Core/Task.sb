@@ -102,9 +102,39 @@ public class Task<Success> {
     /// task cancelled before or while it sleeps wakes at once, and the
     /// sleep throws CancellationError.
     public static async fn sleep(nanoseconds: Int) throws(CancellationError) {
-        await Task.sleepUncancelled(nanoseconds: nanoseconds)
+        await Task.sleepUncancelled(nanoseconds: nanoseconds < 0 ? 0 : nanoseconds)
         try Task.checkCancellation()
     }
+
+    /// The body run as a child that is given so long: what it gave, or
+    /// none if it had not ended by then, and was cancelled and waited for;
+    /// but as long as it likes once this task is cancelled, and it with it.
+    /// One timer and one child: withTimeout's.
+    public static fn limited<T>(nanoseconds: Int, _ body: @Sendable async () -> T) async -> T? {
+        Task.beginTimed()
+        let child = Task.spawn {
+            let value = await body()
+            Task.endTimed()
+            return value
+        }
+        // At least one: under 0 is a sleep that the child's end ends.
+        await Task.sleepUncancelled(nanoseconds: nanoseconds < 1 ? -1 : -nanoseconds)
+        if Task.wokenTimed() || Task.isCancelled {
+            return await child.value
+        }
+        child.cancel()
+        let _ = await child.value
+        return none
+    }
+
+    @builtin("task_timed_begin")
+    static fn beginTimed()
+
+    @builtin("task_timed_woken")
+    static fn wokenTimed() -> Bool
+
+    @builtin("task_timed_end")
+    static fn endTimed()
 
     /// The sleep itself, which a cancellation ends without saying so.
     @intrinsic

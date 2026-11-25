@@ -2158,6 +2158,22 @@ public sealed partial class Compilation {
     }
 
     void ReportDuplicate(SyntaxToken identifier, string name, Symbol existing) {
+        // One a generator wrote is not the program's to change: it is the
+        // program's own that is told, where it is.
+        if (CurrentScope is { Tree: var tree } && IsGenerated(tree)
+            && existing.DeclaringSyntax is [var written, ..] && TreeOf(written) is { } own && !IsGenerated(own)) {
+            var token = SemanticModel.NameTokenOf(existing, written);
+            ReportDeclaration(
+                Diagnostic.Error(
+                    ErrorCode.ERR_DuplicateDeclaration,
+                    token.IsNone ? written.Span : token.Span,
+                    $"a generator declares '{name}' in this scope too, in '{tree.Text.FileName}', so this needs another name"
+                ).WithRelated(DiagnosticLocation.At(identifier, "declared by the generator here")),
+                own
+            );
+            return;
+        }
+
         var where = existing.Location is { } location
             ? $" (already declared at offset {location.Start})"
             : string.Empty;
@@ -2168,6 +2184,12 @@ public sealed partial class Compilation {
             $"'{name}' is already declared in this scope{where}",
             existing.DeclaredHere("declared first here")
         );
+    }
+
+    /// <summary>A file a source generator wrote (docs/08), which a build keeps in target/generated.</summary>
+    static bool IsGenerated(SyntaxTree tree) {
+        var path = tree.Text.FileName.Replace('\\', '/');
+        return path.Contains("/target/generated/", StringComparison.Ordinal) || path.StartsWith("target/generated/", StringComparison.Ordinal);
     }
 
     static Accessibility AccessibilityOf(SyntaxTokenList modifiers, Symbol container) {

@@ -1902,7 +1902,8 @@ provider.withScope { scope in
   are. So `resolve` does neither. Any other singleton is made the first time
   it is wanted.
 - **Fragments.** A package with registered `@injectable` types gets a public
-  `Services`, in the module of theirs fewest names deep. `@include(M.Services.self)`
+  `Services`, in the module of theirs fewest names deep, so nothing else there
+  has that name, a container neither (S3232). `@include(M.Services.self)`
   has a container build them, their graph checked with its own; an error there
   is at the container. A type the package keeps to itself is made by a
   function of the fragment, when it is registered as what is public, of what

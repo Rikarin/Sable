@@ -431,6 +431,37 @@ public sealed class DependencyInjectionTests {
         Assert.Contains("src/main.sb:21:8", errors);
     }
 
+    /// <summary>The fragment is called Services: a container in its module with that name is told so where it is, and only that (#331).</summary>
+    [Fact]
+    public void AContainerCalledServicesIsToldToTakeAnotherName() {
+        using var fixture = new PackageFixture();
+        Assert.Equal(1, Check(App.Replace("AppServices", "Services", StringComparison.Ordinal), Payments, out var errors, fixture));
+        Assert.Contains("error[S3232]: container: 'App.Services' is what the package registers, for others to include", errors);
+        Assert.Contains("a container in that module needs another name, as 'AppServices' is", errors);
+        Assert.Contains("--> src/main.sb:21:8", errors);
+        Assert.DoesNotContain("S2000", errors);
+        Assert.DoesNotContain("generated/", errors);
+    }
+
+    /// <summary>In another module it is like any other, and so is the fragment's name where nothing is registered.</summary>
+    [Fact]
+    public void AContainerCalledServicesCompilesWhereTheFragmentIsNot() {
+        using var fixture = new PackageFixture();
+        var app = App.Replace("AppServices", "Services", StringComparison.Ordinal).Replace("@injectable(.Scoped)", "@injectable", StringComparison.Ordinal)
+            .Replace("@singleton fn bank()", "@scoped fn till(gateway: any Gateway, ledger: Ledger<Coin>) -> Till { return Till(gateway: gateway, ledger: ledger) }\n            @singleton fn bank()", StringComparison.Ordinal);
+        Assert.True(Check(app, Payments, out var errors, fixture) == 0, errors);
+    }
+
+    /// <summary>Any other type of the name is reported where it is, not in the generated file.</summary>
+    [Fact]
+    public void ATypeCalledServicesIsReportedAtItsOwnDeclaration() {
+        using var fixture = new PackageFixture();
+        Assert.Equal(1, Check(App.Replace("struct Coin { }", "struct Coin { }\nstruct Services { }", StringComparison.Ordinal), Payments, out var errors, fixture));
+        Assert.Contains("error[S2000]: a generator declares 'Services' in this scope too", errors);
+        Assert.Contains("so this needs another name", errors);
+        Assert.Contains("--> src/main.sb:7:8", errors);
+    }
+
     [Fact]
     public void WhatAPackageKeepsToItselfIsNotIncluded() {
         using var fixture = new PackageFixture();

@@ -24,7 +24,12 @@ fn container(_ pkg: Package, into output: inout Output) {
         writeContainer(declaration, own, pkg, &output)
     }
     if !pkg.name.isEmpty && !own.isEmpty {
-        writeFragment(own, pkg, &output)
+        let moduleName = fragmentModule(pkg, "")
+        guard let taken = containers.first(where: { $0.qualifiedName == "Services" && $0.moduleName == moduleName }) else {
+            writeFragment(own, pkg, &output)
+            return
+        }
+        output.error("'\(moduleName).Services' is what the package registers, for others to include, which is written beside its '@injectable' types: a container in that module needs another name, as 'AppServices' is", at: taken.location)
     }
 }
 

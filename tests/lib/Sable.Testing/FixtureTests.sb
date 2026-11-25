@@ -169,7 +169,7 @@ fn run(_ names: String[>..]) -> (output: String, errors: String)? {
         return none
     }
     let input = names.map({ "FixtureTests.StoreTests.\($0)\n" }).joined(separator: "")
-    let output = require(Runtime.run(program, ["--run-tests"], input))
+    let output = require(Runtime.run(program, ["--run-tests", "--grace", "100000000"], input))
     let kept = output.lines().filter({ !$0.isEmpty && !$0.contains("test begun") }).joined(separator: "\n")
     return (output: kept, errors: Runtime.lastErrorOutput())
 }
@@ -265,6 +265,94 @@ fn aLongerLifetimeOutlivesAShorter(_ one: FixtureLifetime, _ other: FixtureLifet
     expect(one.outlives(other) == outlives)
 }
 
+// ---- The harness on its own ---------------------------------------------------
+
+// What the harness prints, asked to run the tests; none where it cannot be.
+fn harness(_ arguments: String[>..]) -> (status: Int, output: String)? {
+    let program = Runtime.executablePath()
+    if program.isEmpty {
+        return none
+    }
+    let output = require(Runtime.run(program, arguments, ""))
+    return (status: Runtime.lastExitStatus(), output: output)
+}
+
+@test
+fn theHarnessRunsAndReports() {
+    guard let ran = harness([
+        "--explicit", "--timeout", "20", "--seed", "7", "--show-output", "--filter", "name:FixtureTests & (name:*.asserts | name:*.expects | name:*.traps | name:*.skipped | name:*.skippedAsItRuns | name:*.triedAgain | name:*.oneAtATime | name:FixtureTests.StoreTests.eachCase* | name:*.attaches)"
+    ]) else {
+        return
+    }
+    expect(ran.status == 1)
+    expect(ran.output.hasPrefix("running 10 tests\n"))
+    expect(ran.output.contains("test FixtureTests.StoreTests.expects ... FAILED ("))
+    expect(ran.output.contains("test FixtureTests.StoreTests.eachCaseHasASuiteOfItsOwn(2) ... ok ("))
+    expect(ran.output.contains("test FixtureTests.skipped ... skipped: not now\n"))
+    expect(ran.output.contains("test FixtureTests.skippedAsItRuns ... skipped: what it needs is not here\n"))
+    expect(ran.output.contains(", on try 2\n"))
+    expect(ran.output.contains("---- FixtureTests.StoreTests.traps (FixtureTests.sb:"))
+    expect(ran.output.contains("    fatal error: array index out of range\n"))
+    expect(ran.output.contains("    (exit status 134)\n"))
+    expect(ran.output.contains("    suite down\n    scratch down after 1\n"))
+    expect(ran.output.contains("failed:\n"))
+    expect(ran.output.contains("test result: FAILED. 5 passed; 3 failed; 2 skipped; "))
+}
+
+@test
+fn aTestPastItsTimeIsFailedByTheHarness() {
+    guard let ran = harness(["--exact", "FixtureTests.StoreTests.waits"]) else {
+        return
+    }
+    expect(ran.status == 1)
+    expect(ran.output.contains("the test did not finish within 200.00 ms, and was stopped"))
+}
+
+@test
+fn aTestMayHaveToTrapInTheHarness() {
+    guard let ran = harness(["--exact", "HarnessTests.aCaseMayHaveToTrap"]) else {
+        return
+    }
+    expect(ran.status == 0)
+    expect(ran.output.contains("test result: ok. 1 passed; 0 failed; "))
+}
+
+@test
+fn testsAreRunInOneProcessWhenAsked() {
+    guard let ran = harness(["--in-process", "FixtureTests.StoreTests", "HarnessTests.aCaseMayHaveToTrap", "FixtureTests.skipped"]) else {
+        return
+    }
+    expect(ran.status == 0)
+    expect(ran.output.contains("test HarnessTests.aCaseMayHaveToTrap(0) ... ignored"))
+    expect(ran.output.contains("test FixtureTests.skippedAsItRuns ... skipped: not said\n"))
+    expect(ran.output.contains("test FixtureTests.StoreTests.whatIsSharedIsMadeOnce ... ok\n"))
+    expect(ran.output.contains("database down\ncollection down\ntest FixtureTests.skippedAsItRuns") && ran.output.contains("\npackage down\n"))
+}
+
+@test
+fn theTestsAreListed() {
+    guard let ran = harness(["--list", "--exact", "FixtureTests.oneAtATime"]) else {
+        return
+    }
+    expect(ran.status == 0)
+    expect(ran.output.hasPrefix("FixtureTests.oneAtATime: test (FixtureTests.sb:") && ran.output.hasSuffix("1 test\n"))
+}
+
+@test(arguments: [
+    ("--no-such", "unknown option '--no-such'"),
+    ("--seed", "'--seed' wants a value"),
+    ("--seed x", "'--seed' wants a number, or 'random', not 'x'"),
+    ("--timeout x", "'--timeout' wants a number of seconds, not 'x'"),
+    ("--filter (", "'--filter (': a term is missing"),
+    ("--run-test none", "no test named 'none'"),
+])
+fn whatTheHarnessDoesNotUnderstandIsSaid(_ arguments: String, _ said: String) {
+    if let ran = harness(arguments.split(' ')) {
+        expect(ran.status == 2)
+        expect(Runtime.lastErrorOutput().contains(said))
+    }
+}
+
 // ---- What a test says of itself ------------------------------------------------
 
 fn described(_ test: String) -> String? {
@@ -306,6 +394,23 @@ fn skippedUnless() { }
 fn skippedAsItRuns() throws {
     try skip(if: packagesMade.load() == 1, "not said")
     try skip("what it needs is not here")
+}
+
+@test
+async fn whatIsThrownOfNoTypeInParticular() async {
+    expect(expectThrows { try skip("why") }?.description() == "skipped: why")
+    expect(expectThrows("said") {
+        throw FixtureError(message: "m")
+    }?.description() == "m")
+    expect(await expectThrows {
+        await Task.yield()
+        try skip(if: true, "later")
+    }?.description() == "skipped: later")
+    expectThrows(saying: "skipped: why") { try skip("why") }
+    await expectThrows(saying: "m") {
+        await Task.yield()
+        throw FixtureError(message: "m")
+    }
 }
 
 @test(retry: 2)

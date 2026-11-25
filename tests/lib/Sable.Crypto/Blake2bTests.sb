@@ -16,6 +16,9 @@ let published: Published[>..] = [
 @test(arguments: published)
 fn thePublishedMessagesHaveTheirDigests(_ one: Published) {
     expect("\(Blake2b.hash(one.message))" == one.digest)
+    if let text = one.text {
+        expect("\(Blake2b.hash(utf8: text))" == one.digest)
+    }
 }
 
 // Every length to past three blocks, its digest among those hashed here;

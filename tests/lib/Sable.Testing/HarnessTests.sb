@@ -70,6 +70,14 @@ async fn fails() {
             expectThrows(Oops.Bad) { _ = try fail(0) }
         case "throws none later":
             await expectThrows(Oops.Bad) { await Task.yield() }
+        case "throws nothing":
+            expectThrows("") { }
+        case "throws nothing later":
+            await expectThrows { await Task.yield() }
+        case "says nothing":
+            expectThrows(saying: "x", "why") { }
+        case "says another":
+            expectThrows(saying: "x") { _ = try fail(1) }
         case "no throw":
             expectNoThrow { _ = try fail(1) }
         case "no throw later":
@@ -141,6 +149,10 @@ fn timesRun() -> Int {
     ("throws one", "expectation failed: 'Oops.Bad' was thrown, and 'Oops.Worse(1)' was to be"),
     ("throws none", "expectation failed: nothing was thrown, and 'Oops.Bad' was to be"),
     ("throws none later", "expectation failed: nothing was thrown, and 'Oops.Bad' was to be"),
+    ("throws nothing", "expectation failed: nothing was thrown ("),
+    ("throws nothing later", "expectation failed: nothing was thrown ("),
+    ("says nothing", "expectation failed: nothing was thrown: why"),
+    ("says another", "expectation failed: what was thrown says something else ("),
     ("no throw", "expectation failed: an error was thrown: Oops.Bad"),
     ("no throw later", "expectation failed: an error was thrown: Oops.Bad"),
     ("returns", "expectation failed: the body was to trap with 'that', and it returned"),

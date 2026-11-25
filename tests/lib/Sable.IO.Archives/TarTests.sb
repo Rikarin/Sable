@@ -255,6 +255,20 @@ fn whatIsNoRecordIsRefused(_ from: String, _ to: String) {
 }
 
 @test
+fn zerosPadTheRecords() throws {
+    var made = archive { writer throws(IoError) in
+        try writer.add(TarEntry("n".repeated(150)), bytes(3))
+        try writer.add(TarEntry("d", kind: .Directory))
+    }
+    // The records of the first entry, whose name is too long for its header.
+    expect(try entries(made)[0].0.name == "n".repeated(150))
+    made[512] = 0
+    let read = try entries(made)
+    expect(read.count == 2)
+    expect(read[0].0.name != "n".repeated(150))
+}
+
+@test
 fn damageIsNeverMoreThanAnError() {
     let good = archive { writer throws(IoError) in
         var entry = TarEntry("n".repeated(150))

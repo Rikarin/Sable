@@ -37,11 +37,14 @@ public fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
 /// is the message, or the start of one that is long.
 public struct Published: Debug {
     public let message: U8[>..]
+    /// The message as text, when it is short.
+    public let text: String?
     public let digest: String
     let name: String
 
     public init(_ text: String, _ digest: String) {
         message = text.utf8.toArray()
+        self.text = text
         self.digest = digest
         name = text.count > 20 ? "\(text.utf8.count) bytes, \(text.prefix(12))\u{2026}" : text
     }
@@ -49,6 +52,7 @@ public struct Published: Debug {
     /// A million times the letter a.
     public init(millionTimesADigest digest: String) {
         message = U8[>..](repeating: 0x61, count: 1_000_000)
+        text = none
         self.digest = digest
         name = "a million a"
     }

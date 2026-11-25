@@ -18,6 +18,9 @@ let published: Published[>..] = [
 @test(arguments: published)
 fn thePublishedMessagesHaveTheirDigests(_ one: Published) {
     expect("\(Sha3_512.hash(one.message))" == one.digest)
+    if let text = one.text {
+        expect("\(Sha3_512.hash(utf8: text))" == one.digest)
+    }
 }
 
 // Every length to past three blocks, its digest among those hashed here;

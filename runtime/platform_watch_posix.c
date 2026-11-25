@@ -43,7 +43,9 @@ static bool watch_is_directory(const char *path) {
 // happened to, its flags gathered over a while — a file made and written
 // and one only written may look the same — so the paths that are there are
 // remembered, and what happened is told from whether the path is there now
-// and was before.
+// and was before. A file is watched by the directory it is in, the rest of
+// which is ignored: watched itself, what takes its place a second time goes
+// unsaid.
 
 #include <dispatch/dispatch.h>
 
@@ -285,8 +287,19 @@ static void watch_root(WatchState *state) {
     }
 }
 
+// Whether something there before and now was written, or had its place taken.
+static bool watch_is_change(uint32_t flags) {
+    return (flags & (FSEVENT_MODIFIED | FSEVENT_RENAMED)) != 0
+           || (flags & (FSEVENT_CREATED | FSEVENT_REMOVED)) == (FSEVENT_CREATED | FSEVENT_REMOVED);
+}
+
 static void watch_event(WatchState *state, const char *path, uint32_t flags) {
     if (flags & FSEVENT_MUST_SCAN) {
+        // What is there is known anew, for what is told of after.
+        path_clear(&state->there);
+        if (state->directory) {
+            watch_learn(state, "", false);
+        }
         watch_report(state->watch, WATCH_RESCAN, "", 0);
         return;
     }
@@ -295,7 +308,7 @@ static void watch_event(WatchState *state, const char *path, uint32_t flags) {
     bool at_root = strcmp(path, state->root) == 0;
     if ((flags & FSEVENT_ROOT_CHANGED) || at_root) {
         watch_root(state);
-        if (at_root && !state->directory && !state->gone && (flags & FSEVENT_MODIFIED)) {
+        if (at_root && !state->directory && !state->gone && watch_is_change(flags)) {
             watch_report(state->watch, WATCH_MODIFIED, "", 0);
         }
         return;
@@ -329,7 +342,7 @@ static void watch_event(WatchState *state, const char *path, uint32_t flags) {
         if (S_ISDIR(info.st_mode) && state->recursive) {
             watch_learn(state, relative, true);
         }
-    } else if (!S_ISDIR(info.st_mode) && ((flags & (FSEVENT_MODIFIED | FSEVENT_RENAMED)) || (flags & (FSEVENT_CREATED | FSEVENT_REMOVED)) == (FSEVENT_CREATED | FSEVENT_REMOVED))) {
+    } else if (!S_ISDIR(info.st_mode) && watch_is_change(flags)) {
         watch_report(state->watch, WATCH_MODIFIED, relative, strlen(relative));
     }
 }
@@ -393,7 +406,13 @@ static void *watch_open(void *watch, const char *name, bool recursive, FileError
     state->recursive = recursive;
     state->directory = S_ISDIR(info.st_mode);
     state->queue = dispatch_queue_create("sable.watch", DISPATCH_QUEUE_SERIAL);
-    const void *path = fsevents.string(NULL, (const uint8_t *)root, (long)strlen(root), 0x08000100 /* UTF-8 */, 0);
+    size_t length = strlen(root);
+    if (!state->directory) {
+        length = (size_t)(strrchr(root, '/') - root);
+        length = length == 0 ? 1 : length;
+    }
+
+    const void *path = fsevents.string(NULL, (const uint8_t *)root, (long)length, 0x08000100 /* UTF-8 */, 0);
     const void *paths = path == NULL ? NULL : fsevents.array(NULL, &path, 1, fsevents.array_callbacks);
     FsEventContext context = { .info = state };
     if (paths != NULL) {
@@ -459,7 +478,10 @@ static void watch_close(void *handle) {
 //
 // inotify watches one directory, not what is inside it: each directory is
 // watched as it is found, and what one found later already holds is
-// reported as made (inotify may say so too: twice is better than not).
+// reported as made (inotify may say so too: twice is better than not). A
+// file is watched by the directory it is in, the rest of which is ignored:
+// a watch of its own would be of the file there is now, and not of the one
+// that takes its place.
 
 #include <sys/inotify.h>
 
@@ -474,7 +496,8 @@ typedef struct WatchedDirectory {
 
 typedef struct WatchState {
     void *watch;
-    char *root; // as given
+    char *root; // as given, or the directory of the file watched
+    char *only; // the one name in it watched, or NULL
     bool recursive;
     int inotify;
     WatchedDirectory *directories;
@@ -568,13 +591,22 @@ static void watch_close(void *handle) {
 
     free(state->directories);
     free(state->root);
+    free(state->only);
     free(state);
 }
 
 static void *watch_open(void *watch, const char *name, bool recursive, FileError *error) {
+    struct stat info;
+    char *file = NULL;
+    if (stat(name, &info) != 0 || (!S_ISDIR(info.st_mode) && (file = realpath(name, NULL)) == NULL)) {
+        file_failed(error);
+        return NULL;
+    }
+
     int descriptor = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (descriptor < 0) {
         file_failed(error);
+        free(file);
         return NULL;
     }
 
@@ -584,8 +616,17 @@ static void *watch_open(void *watch, const char *name, bool recursive, FileError
     }
 
     state->watch = watch;
-    state->root = watch_copy(name);
-    state->recursive = recursive;
+    if (file != NULL) {
+        // Absolute, so a separator is before its name.
+        char *last = strrchr(file, '/');
+        state->only = watch_copy(last + 1);
+        last[last == file ? 1 : 0] = '\0';
+        state->root = file;
+    } else {
+        state->root = watch_copy(name);
+        state->recursive = recursive;
+    }
+
     state->inotify = descriptor;
     errno = 0;
     if (!watch_add(state, "", false)) {
@@ -603,6 +644,10 @@ static PlatformSocket watch_descriptor(void *state) {
 
 static void watch_event(WatchState *state, const struct inotify_event *event) {
     if (event->mask & IN_Q_OVERFLOW) {
+        // A directory made meanwhile may be watched by no one.
+        if (state->recursive) {
+            (void)!watch_add(state, "", false);
+        }
         watch_report(state->watch, WATCH_RESCAN, "", 0);
         return;
     }
@@ -622,19 +667,22 @@ static void watch_event(WatchState *state, const struct inotify_event *event) {
         // Any other's is said by the directory it is in.
         if (root) {
             watch_report(state->watch, WATCH_REMOVED, "", 0);
+            if (event->mask & IN_MOVE_SELF) {
+                // What happens in it now is at no path of its old name.
+                while (state->count > 0) {
+                    inotify_rm_watch(state->inotify, state->directories[state->count - 1].descriptor);
+                    watch_forget(state, state->count - 1);
+                }
+            }
         }
         return;
     }
 
-    if (event->len == 0) {
-        // A file's own watch.
-        if (root && (event->mask & IN_MODIFY)) {
-            watch_report(state->watch, WATCH_MODIFIED, "", 0);
-        }
+    if (event->len == 0 || (state->only != NULL && strcmp(event->name, state->only) != 0)) {
         return;
     }
 
-    char *inside = watch_join(found->relative, event->name);
+    char *inside = state->only != NULL ? watch_copy("") : watch_join(found->relative, event->name);
     size_t length = strlen(inside);
     if (event->mask & (IN_CREATE | IN_MOVED_TO)) {
         watch_report(state->watch, WATCH_CREATED, inside, length);

@@ -154,8 +154,17 @@ fn metadataSaysWhatIsThere() throws {
     assert(metadata.kind == FileKind.File)
     assert(metadata.modified.secondsSinceEpoch >= before)
     assert(metadata.accessed.secondsSinceEpoch >= before)
+    // Linux keeps it on some file systems alone.
+    #if os(linux)
+    #else
+    assert(metadata.created != none)
+    #endif
     if let created = metadata.created {
         assert(created.secondsSinceEpoch >= before)
+        // When it was written does not change when it was made.
+        try File.setModified(path, UtcDateTime.fromUnix(4_000_000_000))
+        assert((try File.metadata(path)).created == created)
+        try File.setModified(path, metadata.modified)
     }
     assert(!metadata.permissions.isReadOnly)
     let opened = try File.open(path)
@@ -376,6 +385,28 @@ fn aMoveBetweenFileSystemsIsACopy() throws {
 }
 
 #if os(windows)
+// A link to a directory that anyone may make, and the system's own.
+@test
+fn aJunctionIsALink() async throws {
+    let temp = try Temp.directory()
+    let outside = temp.path.appending("outside")
+    let tree = temp.path.appending("tree")
+    try Directory.create(outside)
+    try Directory.create(tree)
+    try File.write(outside.appending("kept"), "kept")
+    let link = tree.appending("link")
+    assert((try await Command("cmd").arguments(["/c", "mklink", "/J", "\(link)", "\(outside)"]).output()).status.success)
+    assert((try File.metadata(link, followLinks: false)).isSymlink)
+    assert((try File.metadata(link)).isDirectory)
+    assert(try File.readLink(link) == outside)
+    for try entry in try Directory.walk(tree) {
+        assertEqual(entry.name, "link")
+        assert(entry.isSymlink)
+    }
+    try Directory.remove(tree, recursive: true)
+    assert(!Directory.exists(tree))
+    assertEqual(text(outside.appending("kept")), "kept")
+}
 #else
 @test
 fn aFifoIsNoFileToCopy() async throws {

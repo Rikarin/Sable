@@ -11,7 +11,9 @@ module Sable.IO
 /// one; one may come twice, or of a change just before the watching began;
 /// a file replaced may be `.Modified` or `.Created`; a directory renamed to
 /// inside the path, or out of it, may come without what is in it. Links are
-/// not followed, but the path itself when it is one.
+/// not followed, but the path itself when it is one. A file is watched by
+/// its path, whatever file comes to be there; a directory that is renamed
+/// itself is `.Removed`, but on Windows, where it is watched on.
 ///
 /// Watching lasts as long as the watcher is held. One task at a time may
 /// wait for the next event, and one waiting keeps no program going once its

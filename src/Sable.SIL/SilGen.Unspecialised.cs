@@ -1157,6 +1157,15 @@ public sealed partial class SilGen {
             }
         }
 
+        // A derived member's conformance requires of its type's arguments what it reads of them.
+        if (owner is { TypeParameters.IsEmpty: false } && _compilation.GetDerivation(symbol) is { Protocol: var derived } && IsTabledProtocol(derived)) {
+            foreach (var parameter in owner.TypeParameters) {
+                if (!requirements.Any(r => ReferenceEquals(r.Item1, parameter) && ReferenceEquals(r.Item2, derived.OriginalDefinition))) {
+                    requirements.Add((parameter, derived.OriginalDefinition));
+                }
+            }
+        }
+
         // 'where' clauses, the function's and its extension's: 'T: P' is a
         // table more; 'S.Element: P' is found in the registry, as the caller
         // makes sure it can be; 'S.Element == T' reads one as the other.
@@ -1197,7 +1206,7 @@ public sealed partial class SilGen {
             // 'using generator: inout G' is the address of the caller's storage, as any inout parameter is.
             // So is an array of them: the buffer's reference, the same whatever they are.
             var inoutOwn = parameter.Modifier == ParameterModifier.InOut && IsHeld(parameterType, own) && parameterType is not MetatypeTypeSymbol;
-            if (!Passable(parameterType) && !IsGenericFunction(parameterType, own)
+            if (!Passable(parameterType) && !(Function(parameterType) is { } taken && IsGenericFunction(taken, own))
                 || Mentions(parameterType, own) && !inoutOwn && (parameter.IsVariadic || parameter.IsByReference || parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In))) {
                 refused = $"the parameter '{parameter.Name}: {parameter.Type.ToDisplayString()}'";
                 return null;
@@ -1470,7 +1479,7 @@ public sealed partial class SilGen {
                     (of is { Type: NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } } || IsPlace(of)) && PropertyAllowed(property)
                     && CallAllowed(new BoundCall(property.Syntax, of, setter, [Standing(property)], generator.Core.Void)),
                 BoundFieldAccess { Receiver: { } on, Field: { IsStatic: false, IsComputed: false, Builtin: null } } field =>
-                    PropertyAllowed(field) && (on.Type is NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } ? on is BoundSelfAccess or BoundLocalAccess or BoundParameterAccess or BoundFieldAccess : IsPlace(on)),
+                    PropertyAllowed(field) && (on.Type is NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } ? Produces(on) : IsPlace(on)),
                 _ => false,
             };
 
@@ -1496,7 +1505,7 @@ public sealed partial class SilGen {
             }
 
             return captures.All(c => !Mentions(c.Type) || c is { Boxed: false, Kind: CaptureKind.Default or CaptureKind.ByValue, Key: LocalSymbol or ParameterSymbol }
-                && (IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol || IsGenericFunction(V(c.Type), _own))
+                && (IsHeld(V(c.Type), _own) || Function(V(c.Type)) is { } captured && IsGenericFunction(captured, _own))
                 // A 'var' it shares, in a box laid out at run time.
                 // or an inout parameter or a 'self' it changes, kept in one for the call.
                 || c is { Boxed: true, Kind: CaptureKind.Default, Key: LocalSymbol or ParameterSymbol or SelfKey } && IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol
@@ -2066,6 +2075,30 @@ public sealed partial class SilGen {
                 { } receiver => receiver.Type,
                 null => (self is null ? null : call.Substitution.Lookup(self)) ?? callee.Parameters.Zip(call.Arguments).FirstOrDefault(p => p.First.Type.Equals(self)).Second?.Type,
             } is { } read ? V(read) : null;
+
+            // On a type known here: that type's own member, as lowering calls it.
+            if (selfType is not null && !Mentions(selfType)) {
+                var member = selfType switch {
+                    NamedTypeSymbol named => Implementation(named, callee),
+                    ArrayTypeSymbol array => generator.ArrayImplementation(array, callee),
+                    OptionalTypeSymbol => Implementation(generator.Core.Optional, callee),
+                    _ => null,
+                };
+                if (member is null || OwnerOf(member) is { TypeKind: TypeKind.Protocol } || member.TypeParameters.Length != callee.TypeParameters.Length) {
+                    return No();
+                }
+
+                var owner = OwnerOf(member)?.OriginalDefinition;
+                var bindings = (owner is null ? null : OwnerBindings(owner, selfType)) ?? [];
+                for (var i = 0; i < member.TypeParameters.Length; i++) {
+                    if (call.Substitution.Lookup(callee.TypeParameters[i]) is { } given) {
+                        bindings[member.TypeParameters[i]] = given;
+                    }
+                }
+
+                return !IsGeneric(member) ? call.Arguments.All(a => Simple(a.Type)) && Simple(call.Type)
+                    : CallAllowed(new BoundCall(call.Syntax, call.Receiver, member, call.Arguments, call.Type) { Substitution = new TypeSubstitution(bindings) });
+            }
 
             if (selfType is null || !IsOwn(selfType) || !Known(selfType).Any(p => ReferenceEquals(p, protocol))) {
                 return No();

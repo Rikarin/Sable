@@ -11399,6 +11399,20 @@ public sealed partial class SilGen {
                     continue;
                 }
 
+                // An optional function of them, likewise.
+                if (genericShape is not null && i < callee.Parameters.Length && type.Parameters[arguments.Count] is EnumType { Cases: [("Some", ThickFunctionType), ("None", null)] } optionalFunction
+                    && SilType.MentionsOpaque(optionalFunction) && !type.IsOwned(arguments.Count)) {
+                    if (Expression(call.Arguments[i]) is not { } given) {
+                        EndAll(borrows);
+                        return null;
+                    }
+
+                    var converted = Hold(AsFunction(Owned(given), optionalFunction));
+                    arguments.Add(converted);
+                    borrows.Add(converted);
+                    continue;
+                }
+
                 // An array of them, or a generic struct holding them by reference: the same bits, seen as the callee's.
                 if (genericShape is not null && i < callee.Parameters.Length && callee.Parameters[i] is { IsByReference: false, Modifier: ParameterModifier.None or ParameterModifier.In }
                     && !type.IsOwned(arguments.Count) && type.Parameters[arguments.Count] is var arrayParameter && SilType.MentionsOpaque(arrayParameter) && arrayParameter is not AddressType) {

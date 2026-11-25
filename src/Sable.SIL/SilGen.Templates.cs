@@ -381,6 +381,11 @@ public sealed partial class SilGen {
             }
         }
 
+        // One '@derive' gave it holds where each argument conforms.
+        if (structural is null && definition.Members.OfType<FunctionSymbol>().Any(m => _compilation.GetDerivation(m) is { Protocol: var derived } && ReferenceEquals(derived.OriginalDefinition, protocol.OriginalDefinition))) {
+            required = [..required, ..definition.TypeParameters.Select(p => (p, protocol.OriginalDefinition))];
+        }
+
         foreach (var (parameter, each) in required) {
             if (!requirements.Exists(r => ReferenceEquals(r.Item1, parameter) && ReferenceEquals(r.Item2, each))) {
                 requirements.Add((parameter, each));

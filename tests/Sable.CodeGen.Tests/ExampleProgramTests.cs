@@ -152,9 +152,9 @@ public sealed class ExampleProgramTests {
     public void ThePipelineHoldsABoundedNumberAndPassesAFaultOn() =>
         Assert.Equal(
             """
-            while the store is stuck, the pipeline took 965 of 10000 lines
+            while the store is stuck, the pipeline took 274 of 2000 lines
             bounded: true
-            saved 10000 records in 200 batches
+            saved 2000 records in 80 batches
             batcher: BadLine(line: "garbage")
             store: BadLine(line: "garbage")
             some sends were refused: true

@@ -58,19 +58,27 @@ public sealed partial class SilGen {
 
             // An instance the program names too has metadata of its own, which one
             // made at run time is the same type as: its tables, and its boxer, are made as a conforming type's are.
+            // So are those of any other type made of others — an instance, an array, an optional — whose metadata
+            // the program takes, where it opens types: a Type may hold it.
             var templates = _runtimeInstances.Select(static r => r.Symbol.OriginalDefinition).ToHashSet<TypeSymbol>(ReferenceEqualityComparer.Instance);
             var asked = ProtocolClosure(AskedProtocols());
-            var named = new List<(NamedTypeSymbol Symbol, NominalType Type)>();
+            var held = _openedProtocols.Count == 0 ? [] : MetadataTaken();
+            var named = new List<(TypeSymbol Symbol, SilType Type)>();
             foreach (var (key, lowered) in _types) {
-                if (key is NamedTypeSymbol { IsConstructed: true } n && templates.Contains(n.OriginalDefinition)
-                    && lowered is NominalType { TypeArguments: { IsDefaultOrEmpty: false } arguments } instance && !arguments.Any(SilType.MentionsOpaque)) {
-                    named.Add((n, instance));
+                if (lowered is null || SilType.MentionsOpaque(lowered)) {
+                    continue;
+                }
+
+                if (key is NamedTypeSymbol { IsConstructed: true } n && templates.Contains(n.OriginalDefinition) && lowered is NominalType { TypeArguments.IsDefaultOrEmpty: false }
+                    || key is NamedTypeSymbol { IsConstructed: true, TypeKind: not TypeKind.Protocol } or ArrayTypeSymbol or OptionalTypeSymbol && held.Contains(lowered)) {
+                    named.Add((key, lowered));
                 }
             }
 
             foreach (var (symbol, value) in named) {
                 foreach (var protocol in asked.Where(p => p.TypeParameters.IsEmpty && symbol.Satisfies(p))) {
-                    if (symbol.OriginalDefinition.DeclaringSyntax.FirstOrDefault() is { } at && _templated.Add((value.ToString(), QualifiedName(protocol)))) {
+                    var at = ((symbol as NamedTypeSymbol)?.OriginalDefinition ?? protocol).DeclaringSyntax.FirstOrDefault() ?? protocol.DeclaringSyntax.FirstOrDefault();
+                    if (at is not null && _templated.Add((value.ToString(), QualifiedName(protocol)))) {
                         changed = true;
                         GenericTable(symbol, protocol, at, describe: _openedProtocols.Any(static o => o.Describes));
                         if (_openedProtocols.Any(static o => o.Boxes)) {
@@ -84,6 +92,21 @@ public sealed partial class SilGen {
                 LowerReached();
             }
         }
+    }
+
+    /// <summary>The types whose metadata the code lowered takes, and their type arguments.</summary>
+    HashSet<SilType> MetadataTaken() {
+        var taken = new HashSet<SilType>();
+        var pending = new Stack<SilType>(_module.Functions.SelectMany(static f => f.Blocks).SelectMany(static b => b.Instructions).OfType<MetadataInst>().Select(static m => m.Described));
+        while (pending.TryPop(out var type)) {
+            if (!SilType.MentionsOpaque(type) && taken.Add(type)) {
+                foreach (var argument in type is NominalType { TypeArguments.IsDefaultOrEmpty: false } nominal ? nominal.TypeArguments : ArrayType.ElementOf(type) is { } element ? [element] : []) {
+                    pending.Push(argument);
+                }
+            }
+        }
+
+        return taken;
     }
 
     /// <summary>Makes the template tables of a generic type's conformances to the protocols named that it has not been asked for yet: true when there was one.</summary>

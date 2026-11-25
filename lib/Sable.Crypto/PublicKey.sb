@@ -1,0 +1,156 @@
+module Sable.Crypto
+
+import Sable.Serialize.Asn1
+
+/// A public key of any algorithm the library has: what a file, a certificate
+/// or a JWK holds when which is not known before. A key of a NIST curve is
+/// an ECDSA one here, as the formats do not say which of the two it is;
+/// `EcdhPublicKey` is made of one too.
+///
+/// ```sable
+/// let written = Ed25519PrivateKey.generate().publicKey.pem
+/// match try! PublicKey.parse(pem: written) {
+///     case .Ed25519(let key) => assert(key.pem == written)
+///     default => fatalError("another key")
+/// }
+/// ```
+@derive(Equatable, Hashable)
+public union PublicKey: Hashable, Debug, Sendable {
+    Rsa(RsaPublicKey)
+    P256(EcdsaPublicKey<Sable.Crypto.P256>)
+    P384(EcdsaPublicKey<Sable.Crypto.P384>)
+    P521(EcdsaPublicKey<Sable.Crypto.P521>)
+    Ed25519(Ed25519PublicKey)
+    X25519(X25519PublicKey)
+
+    /// The key of a SubjectPublicKeyInfo (RFC 5280 §4.1.2.7), in DER.
+    public static fn parse(spki: U8[:]) throws(CryptoError) -> PublicKey {
+        let (identifier, curve, bits) = try KeyIdentifiers.der("a public key") { () throws(AsnError) in try PublicKey.parts(spki) }
+        if identifier == KeyIdentifiers.rsa {
+            return .Rsa(try RsaPublicKey.parse(pkcs1: bits))
+        }
+        if identifier == KeyIdentifiers.ec {
+            guard let curve else {
+                throw CryptoError.InvalidKey(reason: "a key of a curve without a name")
+            }
+            return try PublicKey(curve: try KeyIdentifiers.curve(curve), point: bits)
+        }
+        if identifier == KeyIdentifiers.ed25519 {
+            return .Ed25519(try Ed25519PublicKey(bits))
+        }
+        if identifier == KeyIdentifiers.x25519 {
+            return .X25519(try X25519PublicKey(bits))
+        }
+        throw CryptoError.InvalidKey(reason: "a key of an algorithm the library does not have: \(identifier)")
+    }
+
+    /// The key of a point of a curve, encoded.
+    public init(curve: NamedCurve, point: U8[:]) throws(CryptoError) {
+        self = match curve {
+            case .P256 => .P256(try EcdsaPublicKey<Sable.Crypto.P256>(point))
+            case .P384 => .P384(try EcdsaPublicKey<Sable.Crypto.P384>(point))
+            case .P521 => .P521(try EcdsaPublicKey<Sable.Crypto.P521>(point))
+        }
+    }
+
+    /// The algorithm, the curve if that is a name, and the key's bytes.
+    static fn parts(_ spki: U8[:]) throws(AsnError) -> (ObjectIdentifier, ObjectIdentifier?, U8[:]) {
+        var reader = AsnReader(spki, rules: .Der)
+        var info = try reader.readSequence()
+        try reader.finish()
+        var algorithm = try info.readSequence()
+        let identifier = try algorithm.readObjectIdentifier()
+        var curve: ObjectIdentifier? = none
+        if identifier == KeyIdentifiers.rsa {
+            try algorithm.readNull()
+        } else if identifier == KeyIdentifiers.ec {
+            if algorithm.isNext(.objectIdentifier) {
+                curve = try algorithm.readObjectIdentifier()
+            } else {
+                _ = try algorithm.readEncoded()
+            }
+        } else if identifier != KeyIdentifiers.ed25519 && identifier != KeyIdentifiers.x25519 && !algorithm.isAtEnd {
+            _ = try algorithm.readEncoded()
+        }
+        try algorithm.finish()
+        let bits = try info.readBitString()
+        if bits.unusedBits != 0 {
+            throw AsnError.Malformed(at: info.position, reason: "a key that is not whole bytes")
+        }
+        try info.finish()
+        return (identifier, curve, bits.bytes)
+    }
+
+    /// The key of the text's first PEM block of one: a SubjectPublicKeyInfo
+    /// ("PUBLIC KEY") or a PKCS #1 RSA key ("RSA PUBLIC KEY").
+    public static fn parse(pem: String) throws(CryptoError) -> PublicKey {
+        let block = try PemBlock.first(pem, ["PUBLIC KEY", "RSA PUBLIC KEY"])
+        if block.label == "PUBLIC KEY" {
+            return try PublicKey.parse(spki: block.bytes)
+        } else {
+            return .Rsa(try RsaPublicKey.parse(pkcs1: block.bytes))
+        }
+    }
+
+    /// The key as a SubjectPublicKeyInfo, in DER.
+    public var spki: U8[>..] {
+        get {
+            return match self {
+                case .Rsa(let key)     => PublicKey.info(KeyIdentifiers.rsa, none, key.pkcs1)
+                case .P256(let key)    => PublicKey.info(KeyIdentifiers.ec, KeyIdentifiers.p256, key.bytes)
+                case .P384(let key)    => PublicKey.info(KeyIdentifiers.ec, KeyIdentifiers.p384, key.bytes)
+                case .P521(let key)    => PublicKey.info(KeyIdentifiers.ec, KeyIdentifiers.p521, key.bytes)
+                case .Ed25519(let key) => PublicKey.info(KeyIdentifiers.ed25519, none, key.bytes)
+                case .X25519(let key)  => PublicKey.info(KeyIdentifiers.x25519, none, key.bytes)
+            }
+        }
+    }
+
+    static fn info(_ identifier: ObjectIdentifier, _ curve: ObjectIdentifier?, _ bytes: U8[:]) -> U8[>..] {
+        return Der.write { (writer: AsnWriter) throws(AsnError) in
+            try writer.beginSequence()
+            try PublicKey.writeAlgorithm(writer, identifier, curve)
+            try writer.writeBitString(AsnBitString(bytes: bytes))
+            try writer.endSequence()
+        }
+    }
+
+    /// An AlgorithmIdentifier of a key.
+    static fn writeAlgorithm(_ writer: AsnWriter, _ identifier: ObjectIdentifier, _ curve: ObjectIdentifier?) throws(AsnError) {
+        try writer.beginSequence()
+        try writer.writeObjectIdentifier(identifier)
+        if let curve {
+            try writer.writeObjectIdentifier(curve)
+        } else if identifier == KeyIdentifiers.rsa {
+            try writer.writeNull()
+        }
+        try writer.endSequence()
+    }
+
+    /// The key as a SubjectPublicKeyInfo, in PEM.
+    public var pem: String => PemBlock(label: "PUBLIC KEY", bytes: spki).text
+
+    /// Which algorithm, and the key in hexadecimal, or of an RSA one its length.
+    public fn debugDescription() -> String {
+        return match self {
+            case .Rsa(let key)     => "PublicKey.Rsa(\(key.bitCount) bits)"
+            case .P256(let key)    => "PublicKey.P256(\(Digest(key.bytes)))"
+            case .P384(let key)    => "PublicKey.P384(\(Digest(key.bytes)))"
+            case .P521(let key)    => "PublicKey.P521(\(Digest(key.bytes)))"
+            case .Ed25519(let key) => "PublicKey.Ed25519(\(Digest(key.bytes)))"
+            case .X25519(let key)  => "PublicKey.X25519(\(Digest(key.bytes)))"
+        }
+    }
+
+    /// The curve's name and the point, if it is a NIST curve's key.
+    var point: (NamedCurve, U8[>..])? {
+        get {
+            return match self {
+                case .P256(let key) => (NamedCurve.P256, key.bytes)
+                case .P384(let key) => (NamedCurve.P384, key.bytes)
+                case .P521(let key) => (NamedCurve.P521, key.bytes)
+                default             => none
+            }
+        }
+    }
+}

@@ -1,0 +1,282 @@
+module Sable.Crypto
+
+import Sable.Serialize.Asn1
+
+/// A private key of any algorithm the library has: what a file or a JWK
+/// holds when which is not known before. A key of a NIST curve is an ECDSA
+/// one here, as the formats do not say which of the two it is;
+/// `EcdhPrivateKey` is made of one too.
+///
+/// ```sable
+/// let written = EcdsaPrivateKey<P384>.generate().pem()
+/// let key = try! PrivateKey.parse(pem: written)
+/// match key {
+///     case .P384(_) => assert(key.pem() == written)
+///     default => fatalError("another key")
+/// }
+/// ```
+@derive(Equatable)
+public union PrivateKey: Equatable, Debug, Sendable {
+    Rsa(RsaPrivateKey)
+    P256(EcdsaPrivateKey<Sable.Crypto.P256>)
+    P384(EcdsaPrivateKey<Sable.Crypto.P384>)
+    P521(EcdsaPrivateKey<Sable.Crypto.P521>)
+    Ed25519(Ed25519PrivateKey)
+    X25519(X25519PrivateKey)
+
+    /// The key's public one.
+    public var publicKey: PublicKey => match self {
+        case .Rsa(let key)     => .Rsa(key.publicKey)
+        case .P256(let key)    => .P256(key.publicKey)
+        case .P384(let key)    => .P384(key.publicKey)
+        case .P521(let key)    => .P521(key.publicKey)
+        case .Ed25519(let key) => .Ed25519(key.publicKey)
+        case .X25519(let key)  => .X25519(key.publicKey)
+    }
+
+    /// The key of a PKCS #8 PrivateKeyInfo (RFC 5958), in DER, not encrypted.
+    public static fn parse(pkcs8: U8[:]) throws(CryptoError) -> PrivateKey {
+        let (identifier, curve, content, stated) = try KeyIdentifiers.der("a private key") { () throws(AsnError) in try PrivateKey.parts(pkcs8) }
+        var made: PrivateKey
+        if identifier == KeyIdentifiers.rsa {
+            made = .Rsa(try RsaPrivateKey.parse(pkcs1: content))
+        } else if identifier == KeyIdentifiers.ec {
+            guard let known = curve else {
+                throw CryptoError.InvalidKey(reason: "a key of a curve without a name")
+            }
+            made = try PrivateKey.parse(sec1: content, curve: try KeyIdentifiers.curve(known))
+        } else if identifier == KeyIdentifiers.ed25519 {
+            let seed = try KeyIdentifiers.der("a private key") { () throws(AsnError) in try PrivateKey.octets(content) }
+            made = .Ed25519(try Ed25519PrivateKey(seed: seed))
+        } else if identifier == KeyIdentifiers.x25519 {
+            let bytes = try KeyIdentifiers.der("a private key") { () throws(AsnError) in try PrivateKey.octets(content) }
+            made = .X25519(try X25519PrivateKey(bytes))
+        } else {
+            throw CryptoError.InvalidKey(reason: "a key of an algorithm the library does not have: \(identifier)")
+        }
+        if let stated {
+            let own: U8[>..] = match made.publicKey {
+                case .Ed25519(let key) => key.bytes
+                case .X25519(let key)  => key.bytes
+                case .Rsa(let key)     => key.pkcs1
+                case .P256(let key)    => key.bytes
+                case .P384(let key)    => key.bytes
+                case .P521(let key)    => key.bytes
+            }
+            if own != stated {
+                throw CryptoError.InvalidKey(reason: "a private key with another's public key")
+            }
+        }
+        return made
+    }
+
+    /// The algorithm, the curve if that is a name, the key and the public
+    /// key if it is there.
+    static fn parts(_ pkcs8: U8[:]) throws(AsnError) -> (ObjectIdentifier, ObjectIdentifier?, U8[:], U8[:]?) {
+        var reader = AsnReader(pkcs8, rules: .Der)
+        var info = try reader.readSequence()
+        try reader.finish()
+        let version = try info.readInt()
+        if version != 0 && version != 1 {
+            throw AsnError.OutOfRange(at: info.position, reason: "version \(version) of a private key")
+        }
+        var algorithm = try info.readSequence()
+        let identifier = try algorithm.readObjectIdentifier()
+        var curve: ObjectIdentifier? = none
+        if identifier == KeyIdentifiers.rsa {
+            try algorithm.readNull()
+        } else if identifier == KeyIdentifiers.ec {
+            if algorithm.isNext(.objectIdentifier) {
+                curve = try algorithm.readObjectIdentifier()
+            } else {
+                _ = try algorithm.readEncoded()
+            }
+        } else if identifier != KeyIdentifiers.ed25519 && identifier != KeyIdentifiers.x25519 && !algorithm.isAtEnd {
+            _ = try algorithm.readEncoded()
+        }
+        try algorithm.finish()
+        let content = try info.readOctetString()
+        if info.isNext(.context(0)) {
+            // Attributes, which none of the algorithms uses.
+            _ = try info.readEncoded()
+        }
+        var stated: U8[:]? = none
+        if version == 1 && info.isNext(.context(1)) {
+            stated = try info.readBitString(tag: .context(1)).bytes
+        }
+        try info.finish()
+        return (identifier, curve, content, stated)
+    }
+
+    static fn octets(_ content: U8[:]) throws(AsnError) -> U8[:] {
+        var reader = AsnReader(content, rules: .Der)
+        let octets = try reader.readOctetString()
+        try reader.finish()
+        return octets
+    }
+
+    /// The scalar, if it is a NIST curve's key.
+    var scalar: SecretMemory? => match self {
+        case .P256(let key) => key.scalar
+        case .P384(let key) => key.scalar
+        case .P521(let key) => key.scalar
+        default             => none
+    }
+
+    /// The key of a SEC 1 ECPrivateKey (RFC 5915), in DER, of the curve it
+    /// names, or of the one given if that is not known from elsewhere.
+    public static fn parse(sec1: U8[:], curve given: NamedCurve? = none) throws(CryptoError) -> PrivateKey {
+        let (secret, named, stated) = try KeyIdentifiers.der("an EC private key") { () throws(AsnError) in try PrivateKey.sec1Parts(sec1) }
+        var curve = given
+        if let named {
+            let own = try KeyIdentifiers.curve(named)
+            if let given {
+                if given != own {
+                    throw CryptoError.InvalidKey(reason: "a key of \(own) that is said to be of \(given)")
+                }
+            }
+            curve = own
+        }
+        guard let known = curve else {
+            throw CryptoError.InvalidKey(reason: "a key that does not name its curve")
+        }
+        let made = try PrivateKey(curve: known, scalar: secret)
+        if let stated {
+            guard let (_, own) = made.publicKey.point, let point = known.decode(stated), own == point else {
+                throw CryptoError.InvalidKey(reason: "a private key with another's public key")
+            }
+        }
+        return made
+    }
+
+    /// The key of a scalar of a curve. Zeros may be missing before it, or be
+    /// too many, as some write it as a number.
+    init(curve: NamedCurve, scalar: U8[:]) throws(CryptoError) {
+        let digits = stripped(scalar)
+        if digits.count > curve.byteCount {
+            throw CryptoError.InvalidKey(reason: "a private key longer than \(curve)'s")
+        }
+        var padded = U8[>..](repeating: 0, count: curve.byteCount - digits.count)
+        padded.append(contentsOf: digits)
+        self = match curve {
+            case .P256 => .P256(try EcdsaPrivateKey<Sable.Crypto.P256>(padded))
+            case .P384 => .P384(try EcdsaPrivateKey<Sable.Crypto.P384>(padded))
+            case .P521 => .P521(try EcdsaPrivateKey<Sable.Crypto.P521>(padded))
+        }
+        padded.zeroSecurely()
+    }
+
+    static fn sec1Parts(_ sec1: U8[:]) throws(AsnError) -> (U8[:], ObjectIdentifier?, U8[:]?) {
+        var reader = AsnReader(sec1, rules: .Der)
+        var info = try reader.readSequence()
+        try reader.finish()
+        let version = try info.readInt()
+        if version != 1 {
+            throw AsnError.OutOfRange(at: info.position, reason: "version \(version) of an EC private key")
+        }
+        let secret = try info.readOctetString()
+        var curve: ObjectIdentifier? = none
+        if info.isNext(.context(0)) {
+            var parameters = try info.readExplicit(.context(0))
+            if parameters.isNext(.objectIdentifier) {
+                curve = try parameters.readObjectIdentifier()
+            } else {
+                _ = try parameters.readEncoded()
+            }
+            try parameters.finish()
+        }
+        var stated: U8[:]? = none
+        if info.isNext(.context(1)) {
+            var parameters = try info.readExplicit(.context(1))
+            stated = try parameters.readBitString().bytes
+            try parameters.finish()
+        }
+        try info.finish()
+        return (secret, curve, stated)
+    }
+
+    /// The key of the text's first PEM block of one: PKCS #8 ("PRIVATE
+    /// KEY"), PKCS #1 ("RSA PRIVATE KEY") or SEC 1 ("EC PRIVATE KEY").
+    public static fn parse(pem: String) throws(CryptoError) -> PrivateKey {
+        let block = try PemBlock.first(pem, ["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY"])
+        return match block.label {
+            case "PRIVATE KEY"     => try PrivateKey.parse(pkcs8: block.bytes)
+            case "RSA PRIVATE KEY" => .Rsa(try RsaPrivateKey.parse(pkcs1: block.bytes))
+            case _                 => try PrivateKey.parse(sec1: block.bytes)
+        }
+    }
+
+    /// The key as a PKCS #8 PrivateKeyInfo, in DER.
+    public fn pkcs8() -> U8[>..] {
+        return match self {
+            case .Rsa(let key)     => PrivateKey.info(KeyIdentifiers.rsa, none, key.pkcs1())
+            case .P256(let key)    => PrivateKey.info(KeyIdentifiers.ec, KeyIdentifiers.p256, PrivateKey.sec1(.P256, key.bytes(), key.publicKey.bytes, named: false))
+            case .P384(let key)    => PrivateKey.info(KeyIdentifiers.ec, KeyIdentifiers.p384, PrivateKey.sec1(.P384, key.bytes(), key.publicKey.bytes, named: false))
+            case .P521(let key)    => PrivateKey.info(KeyIdentifiers.ec, KeyIdentifiers.p521, PrivateKey.sec1(.P521, key.bytes(), key.publicKey.bytes, named: false))
+            case .Ed25519(let key) => PrivateKey.info(KeyIdentifiers.ed25519, none, PrivateKey.octetString(key.seed()))
+            case .X25519(let key)  => PrivateKey.info(KeyIdentifiers.x25519, none, PrivateKey.octetString(key.bytes()))
+        }
+    }
+
+    static fn info(_ identifier: ObjectIdentifier, _ curve: ObjectIdentifier?, _ content: U8[:]) -> U8[>..] {
+        return Der.write { (writer: AsnWriter) throws(AsnError) in
+            try writer.beginSequence()
+            try writer.writeInt(0)
+            try PublicKey.writeAlgorithm(writer, identifier, curve)
+            try writer.writeOctetString(content)
+            try writer.endSequence()
+        }
+    }
+
+    static fn octetString(_ bytes: U8[:]) -> U8[>..] {
+        return Der.write { (writer: AsnWriter) throws(AsnError) in
+            try writer.writeOctetString(bytes)
+        }
+    }
+
+    /// A SEC 1 ECPrivateKey.
+    static fn sec1(_ curve: NamedCurve, _ scalar: U8[:], _ point: U8[:], named: Bool) -> U8[>..] {
+        return Der.write { (writer: AsnWriter) throws(AsnError) in
+            try writer.beginSequence()
+            try writer.writeInt(1)
+            try writer.writeOctetString(scalar)
+            if named {
+                try writer.beginExplicit(.context(0))
+                try writer.writeObjectIdentifier(KeyIdentifiers.of(curve))
+                try writer.endExplicit()
+            }
+            try writer.beginExplicit(.context(1))
+            try writer.writeBitString(AsnBitString(bytes: point))
+            try writer.endExplicit()
+            try writer.endSequence()
+        }
+    }
+
+    /// The key as a SEC 1 ECPrivateKey, in DER; none of one that is not of a
+    /// NIST curve.
+    public fn sec1() -> U8[>..]? {
+        return match self {
+            case .P256(let key) => PrivateKey.sec1(.P256, key.bytes(), key.publicKey.bytes, named: true)
+            case .P384(let key) => PrivateKey.sec1(.P384, key.bytes(), key.publicKey.bytes, named: true)
+            case .P521(let key) => PrivateKey.sec1(.P521, key.bytes(), key.publicKey.bytes, named: true)
+            default             => none
+        }
+    }
+
+    /// The key as a PKCS #8 PrivateKeyInfo, in PEM.
+    public fn pem() -> String {
+        return PemBlock(label: "PRIVATE KEY", bytes: self.pkcs8()).text
+    }
+
+    /// Which algorithm's key it is, and not what it is.
+    public fn debugDescription() -> String {
+        return match self {
+            case .Rsa(_)     => "PrivateKey.Rsa"
+            case .P256(_)    => "PrivateKey.P256"
+            case .P384(_)    => "PrivateKey.P384"
+            case .P521(_)    => "PrivateKey.P521"
+            case .Ed25519(_) => "PrivateKey.Ed25519"
+            case .X25519(_)  => "PrivateKey.X25519"
+        }
+    }
+}

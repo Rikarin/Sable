@@ -1,0 +1,114 @@
+module Sable.Crypto
+
+import Sable.Serialize
+import Sable.Text
+
+/// A JWK's members (RFC 7517, 7518 §6, 8037): texts, and bytes as Base64url.
+struct Jwk {
+    let decoder: JsonDecoder
+
+    init(_ text: String) throws(CryptoError) {
+        do {
+            decoder = try JsonDecoder.parse(text)
+            try decoder.beginStruct("JWK")
+        } catch {
+            throw CryptoError.InvalidEncoding(reason: "a JWK: \(error.description())")
+        }
+    }
+
+    /// The member of that name, or none.
+    fn text(_ name: String) throws(CryptoError) -> String? {
+        if !decoder.hasField(name) {
+            return none
+        }
+        do {
+            return try decoder.field(name).decodeString()
+        } catch {
+            throw CryptoError.InvalidEncoding(reason: "a JWK: \(error.description())")
+        }
+    }
+
+    /// The member's bytes.
+    fn bytes(_ name: String) throws(CryptoError) -> U8[>..] {
+        guard let text = try self.text(name) else {
+            throw CryptoError.InvalidEncoding(reason: "a JWK without '\(name)'")
+        }
+        guard let bytes = try? Base64.decode(text, alphabet: .UrlSafe, padding: .Forbidden) else {
+            throw CryptoError.InvalidEncoding(reason: "a JWK whose '\(name)' is not Base64url")
+        }
+        return bytes
+    }
+
+    /// The member's bytes, which are so many.
+    fn bytes(_ name: String, count: Int) throws(CryptoError) -> U8[>..] {
+        let bytes = try self.bytes(name)
+        if bytes.count != count {
+            throw CryptoError.InvalidEncoding(reason: "a JWK whose '\(name)' is of \(bytes.count) bytes, not \(count)")
+        }
+        return bytes
+    }
+
+    /// A curve's point, uncompressed.
+    fn point(_ curve: NamedCurve) throws(CryptoError) -> U8[>..] {
+        var point: U8[>..] = [4]
+        point.append(contentsOf: try self.bytes("x", count: curve.byteCount))
+        point.append(contentsOf: try self.bytes("y", count: curve.byteCount))
+        return point
+    }
+
+    /// The curve 'crv' names, of a key whose 'kty' is "EC".
+    fn curve() throws(CryptoError) -> NamedCurve {
+        let name = try self.text("crv") ?? ""
+        return match name {
+            case "P-256" => NamedCurve.P256
+            case "P-384" => NamedCurve.P384
+            case "P-521" => NamedCurve.P521
+            case _       => throw CryptoError.InvalidKey(reason: "a JWK of a curve the library does not have: '\(name)'")
+        }
+    }
+
+    /// What a JWK's key is: its 'kty', and its 'crv' if it is "OKP".
+    fn kind() throws(CryptoError) -> String {
+        guard let kind = try self.text("kty") else {
+            throw CryptoError.InvalidEncoding(reason: "a JWK without 'kty'")
+        }
+        if kind == "OKP" {
+            return try self.text("crv") ?? ""
+        }
+        return kind
+    }
+
+    /// A JWK's text, of its members in order.
+    static fn write(_ members: (String, String)[:]) -> String {
+        var text = "{"
+        for (name, value) in members {
+            if text != "{" {
+                text += ","
+            }
+            text += "\"\(name)\":\"\(value)\""
+        }
+        return text + "}"
+    }
+
+    static fn encode(_ bytes: U8[:]) -> String {
+        return Base64.encode(bytes, alphabet: .UrlSafe, padding: false)
+    }
+
+    /// The name a curve has in a JWK.
+    static fn name(_ curve: NamedCurve) -> String {
+        return match curve {
+            case .P256 => "P-256"
+            case .P384 => "P-384"
+            case .P521 => "P-521"
+        }
+    }
+
+    /// The members of a curve's public key.
+    static fn members(_ curve: NamedCurve, _ point: U8[:]) -> (String, String)[>..] {
+        let count = curve.byteCount
+        return [
+            ("kty", "EC"), ("crv", name(curve)),
+            ("x", encode(point[1..<count + 1])), ("y", encode(point[count + 1...])),
+        ]
+    }
+}

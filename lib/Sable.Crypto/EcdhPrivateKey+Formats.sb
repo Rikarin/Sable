@@ -1,0 +1,16 @@
+module Sable.Crypto
+
+extension EcdhPrivateKey: AsymmetricPrivateKey {
+    public init(_ key: PrivateKey) throws(CryptoError) {
+        guard let (curve, point) = key.publicKey.point, curve == Curve.curve, let scalar = key.scalar else {
+            throw CryptoError.InvalidKey(reason: "not a key of \(Curve.curve)")
+        }
+        self.init(scalar: scalar, publicKey: EcdhPublicKey<Curve>(checked: point))
+    }
+
+    public var anyKey: PrivateKey => match Curve.curve {
+        case .P256 => .P256(EcdsaPrivateKey<P256>(scalar: scalar, publicKey: EcdsaPublicKey<P256>(checked: publicKey.bytes)))
+        case .P384 => .P384(EcdsaPrivateKey<P384>(scalar: scalar, publicKey: EcdsaPublicKey<P384>(checked: publicKey.bytes)))
+        case .P521 => .P521(EcdsaPrivateKey<P521>(scalar: scalar, publicKey: EcdsaPublicKey<P521>(checked: publicKey.bytes)))
+    }
+}

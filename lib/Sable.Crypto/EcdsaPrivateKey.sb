@@ -38,6 +38,11 @@ public struct EcdsaPrivateKey<Curve: EllipticCurve>: Equatable, Debug, Sendable 
         publicKey = EcdsaPublicKey<Curve>(checked: Curve.curve.publicKey(scalar))
     }
 
+    init(scalar: SecretMemory, publicKey: EcdsaPublicKey<Curve>) {
+        self.scalar = scalar
+        self.publicKey = publicKey
+    }
+
     /// A new key from the system's random source.
     public static fn generate() -> EcdsaPrivateKey<Curve> {
         return EcdsaPrivateKey<Curve>(scalar: Curve.curve.randomScalar())

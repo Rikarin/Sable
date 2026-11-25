@@ -1,0 +1,55 @@
+module Sable.Crypto
+
+extension PublicKey {
+    /// The key of a JWK (RFC 7517): of one with a private key, its public
+    /// one. What else the JWK says, of its use say, is not read.
+    ///
+    /// ```sable
+    /// let key = try! PublicKey.parse(jwk: "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\"}")
+    /// assert(key.jwk == "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\"}")
+    /// ```
+    public static fn parse(jwk: String) throws(CryptoError) -> PublicKey {
+        return try PublicKey(Jwk(jwk))
+    }
+
+    init(_ jwk: Jwk) throws(CryptoError) {
+        let kind = try jwk.kind()
+        match kind {
+            case "RSA" => {
+                self = .Rsa(try RsaPublicKey(modulus: try jwk.bytes("n"), exponent: try rsaExponent(try jwk.bytes("e"))))
+            }
+            case "EC" => {
+                let curve = try jwk.curve()
+                self = try PublicKey(curve: curve, point: try jwk.point(curve))
+            }
+            case "Ed25519" => {
+                self = .Ed25519(try Ed25519PublicKey(try jwk.bytes("x", count: 32)))
+            }
+            case "X25519" => {
+                self = .X25519(try X25519PublicKey(try jwk.bytes("x", count: 32)))
+            }
+            case _ => {
+                throw CryptoError.InvalidKey(reason: "a JWK of a kind the library does not have: '\(kind)'")
+            }
+        }
+    }
+
+    /// The key as a JWK.
+    public var jwk: String => Jwk.write(jwkMembers)
+
+    var jwkMembers: (String, String)[>..] => match self {
+        case .Rsa(let key)     => [("kty", "RSA"), ("n", Jwk.encode(key.modulus)), ("e", Jwk.encode(exponentBytes(key.exponent)))]
+        case .P256(let key)    => Jwk.members(.P256, key.bytes)
+        case .P384(let key)    => Jwk.members(.P384, key.bytes)
+        case .P521(let key)    => Jwk.members(.P521, key.bytes)
+        case .Ed25519(let key) => [("kty", "OKP"), ("crv", "Ed25519"), ("x", Jwk.encode(key.bytes))]
+        case .X25519(let key)  => [("kty", "OKP"), ("crv", "X25519"), ("x", Jwk.encode(key.bytes))]
+    }
+}
+
+/// An exponent's bytes, most significant first, as few as hold it.
+fn exponentBytes(_ exponent: U64) -> U8[>..] {
+    var bytes = U8[>..](repeating: 0, count: 8)
+    bytes.writeU64(exponent, at: 0, endian: .Big)
+    return stripped(bytes).toArray()
+}

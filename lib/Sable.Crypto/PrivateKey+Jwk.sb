@@ -1,0 +1,59 @@
+module Sable.Crypto
+
+extension PrivateKey {
+    /// The key of a JWK (RFC 7517) that has a private one: of an RSA key,
+    /// with its primes. What else the JWK says, of its use say, is not read.
+    ///
+    /// ```sable
+    /// let key = EcdsaPrivateKey<P256>.generate().anyKey
+    /// assert(try! PrivateKey.parse(jwk: key.jwk()) == key)
+    /// ```
+    public static fn parse(jwk text: String) throws(CryptoError) -> PrivateKey {
+        let jwk = try Jwk(text)
+        let kind = try jwk.kind()
+        var made: PrivateKey
+        match kind {
+            case "RSA" => {
+                made = .Rsa(try RsaPrivateKey(modulus: try jwk.bytes("n"), exponent: try rsaExponent(try jwk.bytes("e")), privateExponent: try jwk.bytes("d"), prime1: try jwk.bytes("p"), prime2: try jwk.bytes("q"), exponent1: try jwk.bytes("dp"), exponent2: try jwk.bytes("dq"), coefficient: try jwk.bytes("qi")))
+            }
+            case "EC" => {
+                let curve = try jwk.curve()
+                made = try PrivateKey(curve: curve, scalar: try jwk.bytes("d", count: curve.byteCount))
+            }
+            case "Ed25519" => {
+                made = .Ed25519(try Ed25519PrivateKey(seed: try jwk.bytes("d", count: 32)))
+            }
+            case "X25519" => {
+                made = .X25519(try X25519PrivateKey(try jwk.bytes("d", count: 32)))
+            }
+            case _ => {
+                throw CryptoError.InvalidKey(reason: "a JWK of a kind the library does not have: '\(kind)'")
+            }
+        }
+        if try PublicKey(jwk) != made.publicKey {
+            throw CryptoError.InvalidKey(reason: "a private key with another's public key")
+        }
+        return made
+    }
+
+    /// The key as a JWK.
+    public fn jwk() -> String {
+        var members = publicKey.jwkMembers
+        match self {
+            case .Rsa(let key) => {
+                members.append(("d", Jwk.encode(key.privateExponent())))
+                members.append(("p", Jwk.encode(key.prime1())))
+                members.append(("q", Jwk.encode(key.prime2())))
+                members.append(("dp", Jwk.encode(key.exponent1())))
+                members.append(("dq", Jwk.encode(key.exponent2())))
+                members.append(("qi", Jwk.encode(key.coefficient())))
+            }
+            case .P256(let key)    => members.append(("d", Jwk.encode(key.bytes())))
+            case .P384(let key)    => members.append(("d", Jwk.encode(key.bytes())))
+            case .P521(let key)    => members.append(("d", Jwk.encode(key.bytes())))
+            case .Ed25519(let key) => members.append(("d", Jwk.encode(key.seed())))
+            case .X25519(let key)  => members.append(("d", Jwk.encode(key.bytes())))
+        }
+        return Jwk.write(members)
+    }
+}

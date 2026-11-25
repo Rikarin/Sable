@@ -1,0 +1,86 @@
+module Sable.Crypto
+
+import Sable.Text
+
+/// Bytes with a label, as PEM text has them (RFC 7468): Base64 between a
+/// line that begins and one that ends.
+///
+/// ```sable
+/// let block = PemBlock(label: "EXAMPLE", bytes: [1, 2, 3])
+/// assert(block.text == "-----BEGIN EXAMPLE-----\nAQID\n-----END EXAMPLE-----\n")
+/// assert(try! PemBlock.parse("what is around them\n" + block.text) == [block])
+/// ```
+@derive(Equatable)
+public struct PemBlock: Equatable, Sendable {
+    /// What the bytes are: "CERTIFICATE", "PRIVATE KEY".
+    public let label: String
+
+    /// The bytes.
+    public let bytes: U8[>..]
+
+    public init(label: String, bytes: U8[:]) {
+        self.label = label
+        self.bytes = bytes.toArray()
+    }
+
+    /// The block as text, in lines of 64 characters.
+    public var text: String {
+        get {
+            var lines: String[>..] = ["-----BEGIN \(label)-----"]
+            var at = 0
+            while at < bytes.count {
+                // Forty-eight bytes are sixty-four characters.
+                let end = at + 48 < bytes.count ? at + 48 : bytes.count
+                lines.append(Base64.encode(bytes[at..<end]))
+                at = end
+            }
+            lines.append("-----END \(label)-----")
+            return lines.joined(separator: "\n") + "\n"
+        }
+    }
+
+    /// Every block of the text, in order. What is outside of them is passed
+    /// over, as files of certificates have notes there.
+    public static fn parse(_ text: String) throws(CryptoError) -> PemBlock[>..] {
+        var blocks: PemBlock[>..] = []
+        var label: String? = none
+        var content: U8[>..] = []
+        for raw in text.split(separator: '\n') {
+            let line = raw.trimmed()
+            if let name = label {
+                if line == "-----END \(name)-----" {
+                    guard let bytes = try? Base64.decode(bytes: content, padding: .Required) else {
+                        throw CryptoError.InvalidEncoding(reason: "PEM whose \(name) is not Base64")
+                    }
+                    blocks.append(PemBlock(label: name, bytes: bytes))
+                    label = none
+                } else if line.hasPrefix("-----") {
+                    throw CryptoError.InvalidEncoding(reason: "PEM whose \(name) does not end")
+                } else {
+                    // RFC 7468 has no headers; OpenSSL's encrypted keys do.
+                    if line.contains(':') {
+                        throw CryptoError.InvalidEncoding(reason: "PEM whose \(name) has headers")
+                    }
+                    content.append(utf8: "\(line)")
+                }
+            } else if line.hasPrefix("-----BEGIN ") && line.hasSuffix("-----") && line.utf8.count > 16 {
+                label = "\(line)".replacing("-----BEGIN ", with: "").replacing("-----", with: "")
+                content = []
+            }
+        }
+        if let name = label {
+            throw CryptoError.InvalidEncoding(reason: "PEM whose \(name) does not end")
+        }
+        return blocks
+    }
+
+    /// The text's first block of one of the labels, if it has one.
+    static fn first(_ text: String, _ labels: String[:]) throws(CryptoError) -> PemBlock {
+        for block in try PemBlock.parse(text) {
+            if labels.contains(block.label) {
+                return block
+            }
+        }
+        throw CryptoError.InvalidEncoding(reason: "no PEM block of \(labels.joined(separator: ", "))")
+    }
+}

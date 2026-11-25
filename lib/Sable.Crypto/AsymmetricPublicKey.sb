@@ -1,0 +1,46 @@
+module Sable.Crypto
+
+/// A public key of one algorithm, read and written in the formats they all
+/// have: SubjectPublicKeyInfo (RFC 5280), as DER or PEM, and JWK (RFC 7517).
+///
+/// ```sable
+/// let key = EcdsaPrivateKey<P256>.generate().publicKey
+/// assert(key.pem.hasPrefix("-----BEGIN PUBLIC KEY-----"))
+/// assert(try! EcdsaPublicKey<P256>.parse(pem: key.pem) == key)
+/// assert(try! EcdsaPublicKey<P256>.parse(spki: key.spki) == key)
+/// assert(try! EcdsaPublicKey<P256>.parse(jwk: key.jwk) == key)
+/// ```
+public protocol AsymmetricPublicKey: Sendable {
+    /// The key of any algorithm, if it is of this one.
+    init(_ key: PublicKey) throws(CryptoError)
+
+    /// The key as one of any algorithm.
+    var anyKey: PublicKey { get }
+}
+
+extension AsymmetricPublicKey {
+    /// The key of a SubjectPublicKeyInfo, in DER.
+    public static fn parse(spki: U8[:]) throws(CryptoError) -> Self {
+        return try Self(PublicKey.parse(spki: spki))
+    }
+
+    /// The key of a SubjectPublicKeyInfo, in PEM; of an RSA key, a PKCS #1
+    /// one too.
+    public static fn parse(pem: String) throws(CryptoError) -> Self {
+        return try Self(PublicKey.parse(pem: pem))
+    }
+
+    /// The key of a JWK.
+    public static fn parse(jwk: String) throws(CryptoError) -> Self {
+        return try Self(PublicKey.parse(jwk: jwk))
+    }
+
+    /// The key as a SubjectPublicKeyInfo, in DER.
+    public var spki: U8[>..] => anyKey.spki
+
+    /// The key as a SubjectPublicKeyInfo, in PEM.
+    public var pem: String => anyKey.pem
+
+    /// The key as a JWK.
+    public var jwk: String => anyKey.jwk
+}

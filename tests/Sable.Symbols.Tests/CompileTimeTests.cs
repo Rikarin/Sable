@@ -46,6 +46,10 @@ public sealed class CompileTimeTests {
         Assert.Equal("Int", TypeOf("const fn factorial(_ n: Int) -> Int => n <= 1 ? 1 : n * factorial(n - 1)\nconst Table = factorial(5)", "Table").ToDisplayString());
 
     [Fact]
+    public void AGenericTypesInitialiserGivesItsType() =>
+        Assert.Equal("Box<Int>", TypeOf("struct Box<T> {\n    let value: T\n}\nconst Three = Box<Int>(value: 3)", "Three").ToDisplayString());
+
+    [Fact]
     public void ArithmeticOnAnotherConstantGivesItsType() =>
         Assert.Equal("U8", TypeOf("const Width: U8 = 4\nconst Area = Width * 2", "Area").ToDisplayString());
 
@@ -80,6 +84,46 @@ public sealed class CompileTimeTests {
             """
             const fn square(_ n: Int) -> Int => n * n
             const Area: Int = square(4)
+            """
+        );
+
+    [Fact]
+    public void AConstantCanBeMadeByAConstInit() =>
+        AssertClean(
+            """
+            struct Table<T> {
+                var all: T[>..]
+                const init(_ value: T) { all = [value, value] }
+            }
+            const Twice = Table<Int>(3)
+            """
+        );
+
+    [Fact]
+    public void ItCannotByAnyOther() =>
+        AssertReports(
+            ErrorCode.ERR_NotConstant,
+            """
+            struct Table {
+                var all: Int[>..]
+                init(_ value: Int) { all = [value, value] }
+            }
+            const Twice = Table(3)
+            """
+        );
+
+    [Fact]
+    public void AConstInitCannotPrint() =>
+        AssertReports(
+            ErrorCode.ERR_NotConstant,
+            """
+            struct Noisy {
+                let value: Int
+                const init(_ value: Int) {
+                    print(value)
+                    self.value = value
+                }
+            }
             """
         );
 

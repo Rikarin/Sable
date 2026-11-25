@@ -990,6 +990,12 @@ public sealed partial class SilGen {
                 } else {
                     var (syntax, model) = _declarations[symbol];
                     _loweringInstance = name;
+
+                    // Generic code this unit copies for types it knows: what compiling generics once leaves.
+                    if (TracesGenerics && _generics == GenericsMode.Unspecialised && !_unspecialised.ContainsKey(name)) {
+                        Console.Error.WriteLine($"instance {name} of {TraceName(symbol)}");
+                    }
+
                     using (_unspecialised.TryGetValue(name, out var generic) ? Opaque(generic.Shape) : null)
                     using (generic.Shape is not null ? AssociatedContext(symbol) : null) {
                         LowerBody(symbol, syntax, model, name, type, substitution);

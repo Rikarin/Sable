@@ -77,6 +77,9 @@ public sealed partial class SilGen {
         return new Restore(() => AmbientGenerics.Value = before);
     }
 
+    /// <summary><c>SABLE_GENERICS_TRACE</c>: says of each generic function which way it was compiled and why, and each instance made for known types.</summary>
+    static bool TracesGenerics => Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 };
+
     static readonly AsyncLocal<bool> AmbientOptimised = new();
 
     /// <summary>
@@ -428,7 +431,7 @@ public sealed partial class SilGen {
                 _refusals[symbol] = refused;
             }
 
-            if (refused is not null && Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
+            if (refused is not null && TracesGenerics) {
                 Console.Error.WriteLine($"specialised {TraceName(symbol)}: {refused}");
             }
 
@@ -1104,7 +1107,7 @@ public sealed partial class SilGen {
         // or a library call where the type is known, and costs nothing.
         if (!_opening && IsForwarder(body)) {
             _refusals[symbol] = "it only hands its parameters to a requirement, so it is copied for each type";
-            if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
+            if (TracesGenerics) {
                 Console.Error.WriteLine($"specialised {TraceName(symbol)}: a forwarder to a requirement");
             }
 
@@ -1113,7 +1116,7 @@ public sealed partial class SilGen {
 
         // One that names its type's type parameters is given their metadata after all: it stays specialised.
         if (Owner(symbol)?.OriginalDefinition is { } independentOwner && IsIndependentStatic(symbol, independentOwner) && NamesOwnerParameters(body, independentOwner) && !shape.Parameters.Any(p => independentOwner.TypeParameters.Contains(p))) {
-            if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
+            if (TracesGenerics) {
                 Console.Error.WriteLine($"specialised {TraceName(symbol)}: a static member naming its type's type parameters");
             }
 
@@ -1128,7 +1131,7 @@ public sealed partial class SilGen {
         if (initialValues.TrueForAll(v => checker.Allows(v, false)) && checker.Allows(body, false)) {
             _describes[symbol] = checker.Describes;
             _debugDescribes[symbol] = checker.DebugDescribes;
-            if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
+            if (TracesGenerics) {
                 Console.Error.WriteLine($"unspecialised {TraceName(symbol)}");
             }
 
@@ -1140,7 +1143,7 @@ public sealed partial class SilGen {
         }
 
         // Why each function that could be is not, for whoever is widening what can be.
-        if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 } && checker.Refused is { } refused) {
+        if (TracesGenerics && checker.Refused is { } refused) {
             Console.Error.WriteLine($"specialised {TraceName(symbol)}: {refused.GetType().Name} '{refused.Syntax.ToString().Trim().ReplaceLineEndings(" ")}'{(Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") == "2" && refused is BoundExpression e ? $" : {e.Type.ToDisplayString()} ({e.Type.GetType().Name}){(e is BoundConversion c ? $" {c.ConversionKind} of {c.Operand.GetType().Name} {c.Operand.Type.ToDisplayString()}" : "")}" : "")}");
         }
 
@@ -1214,11 +1217,23 @@ public sealed partial class SilGen {
         /// <summary>How many closures compiled with the function the node being checked is inside.</summary>
         int _closureDepth;
 
-        /// <summary>Whether the code being checked may change the function's own self: not inside a closure, which has a copy.</summary>
-        bool OwnMutating => (checkedSymbol.IsMutating || IsValueInitializer(checkedSymbol)) && _closureDepth == 0;
+        /// <summary>Whether the code being checked may change the function's own self: a closure may too, through the box they share.</summary>
+        bool OwnMutating => checkedSymbol.IsMutating || IsValueInitializer(checkedSymbol);
 
-        /// <summary>Whether the code being checked may change its self's stored fields: a mutating method's, or any method's of a class.</summary>
-        bool FieldsMutable => _closureDepth == 0 && (checkedSymbol.IsMutating || IsValueInitializer(checkedSymbol) || OwnerOf(checkedSymbol) is { TypeKind: TypeKind.Class });
+        /// <summary>
+        ///     Whether an expression is a place this code may change: a
+        ///     'var', an inout parameter, its own self, a stored field of one
+        ///     or of an object it holds.
+        /// </summary>
+        bool IsPlace(BoundExpression? place) =>
+            place switch {
+                BoundLocalAccess local => local.Local.IsMutable,
+                BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } => true,
+                BoundSelfAccess => OwnMutating,
+                BoundFieldAccess { Receiver: { } on, Field: { IsStatic: false, IsComputed: false, Builtin: null } } field =>
+                    PropertyAllowed(field) && (on.Type is NamedTypeSymbol { TypeKind: TypeKind.Class } ? on is BoundSelfAccess or BoundLocalAccess or BoundParameterAccess or BoundFieldAccess : IsPlace(on)),
+                _ => false,
+            };
 
         /// <summary>
         ///     Whether a closure can be compiled with this function, in the
@@ -1228,7 +1243,7 @@ public sealed partial class SilGen {
         ///     and is not inside another.
         /// </summary>
         bool ClosureAllowed(BoundClosure closure) {
-            if (closure.IsAutoclosure || generator._compilation.GetGenerator(closure.Symbol) is not null
+            if (generator._compilation.GetGenerator(closure.Symbol) is not null
                 || Mentions(closure.Type) && !IsGenericFunction(V(closure.Type), _own)
                 || closure.Type is FunctionTypeSymbol { ThrownType: { } closureThrown } && Mentions(Canonical(closureThrown))) {
                 return false;
@@ -1244,7 +1259,8 @@ public sealed partial class SilGen {
             return captures.All(c => !Mentions(c.Type) || c is { Boxed: false, Kind: CaptureKind.Default or CaptureKind.ByValue, Key: LocalSymbol or ParameterSymbol }
                 && (IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol || IsGenericFunction(V(c.Type), _own))
                 // A 'var' it shares, in a box laid out at run time.
-                || c is { Boxed: true, Kind: CaptureKind.Default, Key: LocalSymbol } && IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol
+                // or an inout parameter or a 'self' it changes, kept in one for the call.
+                || c is { Boxed: true, Kind: CaptureKind.Default, Key: LocalSymbol or ParameterSymbol or SelfKey } && IsHeld(V(c.Type), _own) && c.Type is not MetatypeTypeSymbol
                 // Its self: an object, or a copy of a value.
                 || c is { Boxed: false, Kind: CaptureKind.Default or CaptureKind.ByValue, Key: SelfKey } && IsHeld(V(c.Type), _own));
         }
@@ -1475,16 +1491,14 @@ public sealed partial class SilGen {
                 BoundLocalDeclaration or BoundPatternDeclaration or BoundExpressionStatement or BoundDiscard or BoundReturn => true,
                 BoundAssignment assignment => ReferenceEquals(child, assignment.Value)
                                               || assignment.Target is BoundLocalAccess or BoundParameterAccess && ReferenceEquals(child, assignment.Target)
-                                              || assignment.Target is BoundFieldAccess { Receiver: BoundSelfAccess or BoundLocalAccess { Local.IsMutable: true } } stored
-                                              && ReferenceEquals(child, assignment.Target) && PropertyAllowed(stored)
+                                              || assignment.Target is BoundFieldAccess && ReferenceEquals(child, assignment.Target) && IsPlace(assignment.Target)
                                               // A part of an element, 'nodes[i].value = v': read out, changed and written back.
                                               || assignment.Target is BoundFieldAccess { Receiver: BoundIndexAccess { Subscript: null, Indices: [_], Receiver: var parts }, Field: { IsComputed: false, IsStatic: false } } part
-                                              && ReferenceEquals(child, part) && IsOwnArray(parts.Type) && PropertyAllowed(part) && Changeable(parts)
+                                              && ReferenceEquals(child, part) && IsOwnArray(parts.Type) && PropertyAllowed(part) && IsPlace(parts)
                                               || assignment.Target is BoundSelfAccess && OwnMutating && ReferenceEquals(child, assignment.Target)
                                               || assignment.Target is BoundIndexAccess { Subscript: not null } stores && ReferenceEquals(child, assignment.Target) && SubscriptAllowed(stores, assignment.Value)
                                               || assignment.Target is BoundIndexAccess { Subscript: null, Indices: [_], Receiver: var array } && IsOwnArray(array.Type) && ReferenceEquals(child, assignment.Target)
-                                              && (array is BoundLocalAccess { Local.IsMutable: true } || array is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0 || array is BoundFieldAccess { Receiver: BoundSelfAccess } && FieldsMutable
-                                                  || array is BoundSelfAccess && OwnMutating),
+                                              && IsPlace(array),
                 BoundCall or BoundBinaryOperator or BoundUnaryOperator or BoundTry => true,
                 BoundIndirectCall indirect => IsGenericFunction(V(indirect.Callee.Type), _own) && (ReferenceEquals(child, indirect.Callee) ? indirect.Callee is BoundParameterAccess or BoundLocalAccess || indirect.Callee is BoundFieldAccess { Field: { IsComputed: false, IsStatic: false } } kept && PropertyAllowed(kept) : true),
                 BoundFieldAccess access => ReferenceEquals(child, access.Receiver) && PropertyAllowed(access),
@@ -1512,12 +1526,6 @@ public sealed partial class SilGen {
                                                         && (interpolated.Formats[at] is null || interpolated.Formats[at]!.Specifier == DebugFormat && (DebugDescribes = true)) && !DescribesSelf && (Describes = true),
                 _ => false,
             };
-
-        /// <summary>An array this code may change where it is: a local, an inout parameter, a stored field of its self.</summary>
-        bool Changeable(BoundExpression array) =>
-            array is BoundLocalAccess { Local.IsMutable: true } || array is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0
-            || array is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsComputed: false, IsStatic: false } } stored && FieldsMutable && PropertyAllowed(stored)
-            || array is BoundSelfAccess && OwnMutating;
 
         bool DescribesSelf => checkedSymbol is { Name: "debugDescription" } && OwnerOf(checkedSymbol) is { TypeKind: TypeKind.Protocol };
 
@@ -1638,11 +1646,7 @@ public sealed partial class SilGen {
             }
 
             if (callee.Builtin is "array_append" or "array_append_repeating" or "array_append_holes" or "array_take" or "array_append_all" or "array_remove_last" or "array_rotate" or "array_reserve" or "array_clear" or "array_truncate" && call.Receiver is { } array && IsOwnArray(array.Type)) {
-                return (call.Receiver is BoundLocalAccess { Local.IsMutable: true }
-                        || call.Receiver is BoundSelfAccess && OwnMutating
-                        || call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0
-                        || call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess } stored && FieldsMutable && PropertyAllowed(stored)
-                        || call.Receiver is BoundFieldAccess { Receiver: BoundLocalAccess { Local.IsMutable: true }, Field: { IsComputed: false, IsStatic: false } } local && PropertyAllowed(local))
+                return IsPlace(call.Receiver)
                        && call.Arguments.All(a => Simple(a.Type));
             }
 
@@ -1676,15 +1680,13 @@ public sealed partial class SilGen {
                 return false;
             }
 
-            if (calleeOwner is not null && callee.IsMutating && call.Receiver is not (BoundLocalAccess { Local.IsMutable: true } or null or BoundSelfAccess)
-                && !(call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0)
-                && !(call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsComputed: false, IsStatic: false } } changed && FieldsMutable && PropertyAllowed(changed))) {
+            if (calleeOwner is not null && callee.IsMutating && call.Receiver is not (null or BoundSelfAccess) && !IsPlace(call.Receiver)) {
                 return false;
             }
 
             // One that changes self changes a local, or this function's own self.
-            if (calleeSelf is not null && callee.IsMutating && receiverType is not null && IsOwn(receiverType)
-                && call.Receiver is not (BoundLocalAccess { Local.IsMutable: true } or null or BoundSelfAccess) && !(call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0) || callee.IsMutating && call.Receiver is null or BoundSelfAccess && !OwnMutating) {
+            if (calleeSelf is not null && callee.IsMutating && receiverType is not null && IsOwn(receiverType) && call.Receiver is not (null or BoundSelfAccess) && !IsPlace(call.Receiver)
+                || callee.IsMutating && call.Receiver is null or BoundSelfAccess && !OwnMutating) {
                 return false;
             }
 
@@ -1768,10 +1770,7 @@ public sealed partial class SilGen {
             // A method that changes its value changes it in a local, or a
             // protocol extension's own self, when it may change it.
             // Or a stored field of the self of a method that may change it: 'base.next()'.
-            if (callee.IsMutating && call.Receiver is not BoundLocalAccess { Local.IsMutable: true }
-                && !(call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0)
-                && !(call.Receiver is null or BoundSelfAccess && OwnMutating)
-                && !(call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsComputed: false, IsStatic: false } } stored && FieldsMutable && PropertyAllowed(stored))) {
+            if (callee.IsMutating && call.Receiver is not null && !IsPlace(call.Receiver)) {
                 return false;
             }
 

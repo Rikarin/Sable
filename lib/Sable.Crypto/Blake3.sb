@@ -37,8 +37,8 @@ public struct Blake3: HashFunction, ExtendableOutputFunction {
         unsafe {
             var i = 0
             while i < 32 {
-                store32(load32(blake3Constants + i), memory.address + i)
-                store32(load32(blake3Constants + i), memory.address + Blake3.chainAt + i)
+                store32(load32(blake3Constants &+ i), memory.address &+ i)
+                store32(load32(blake3Constants &+ i), memory.address &+ Blake3.chainAt &+ i)
                 i += 4
             }
         }
@@ -155,7 +155,23 @@ public struct Blake3: HashFunction, ExtendableOutputFunction {
 
     public fn finalize() -> Digest {
         var output = self.output()
-        return Digest(output.read(count: 32))
+        return Digest(taking: output.read(count: 32))
+    }
+
+    /// The digest of every byte given so far, after which nothing has been:
+    /// what is hashed next is under the same key, or for the same context.
+    public mutating fn finalizeAndReset() -> Digest {
+        let digest = self.finalize()
+        let memory = box.mutableAddress()
+        unsafe {
+            Native.zero(memory + 32, box.memory.count - 32)
+            NativeMemory.copy(from: RawPtr<U8>(address: memory), to: RawPtr<U8>(address: memory + Blake3.chainAt), byteCount: 32)
+        }
+        buffered = 0
+        blocks = 0
+        chunks = 0
+        depth = 0
+        return digest
     }
 
     public fn reader() -> OutputReader {

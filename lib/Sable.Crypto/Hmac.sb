@@ -13,19 +13,27 @@ module Sable.Crypto
 public struct Hmac<H: HashFunction>: Sendable {
     // Each with its padded key hashed.
     var inner: H
-    let outer: H
+    var outer: H
 
     /// A code begun under the key, of any length; RFC 2104 asks for at least
     /// a digest's.
     public init(key: SymmetricKey) {
-        var secret = key.bytes()
-        self.init(secret: secret)
-        secret.zeroSecurely()
-    }
-
-    init(secret: U8[:]) {
-        // A key longer than a block is hashed first.
-        var pad: U8[>..] = secret.count > H.blockByteCount ? H.hash(secret).bytes : secret.toArray()
+        // Room for a block first, so that the key is in no array let go of
+        // as it grows.
+        var pad: U8[>..] = []
+        pad.reserveCapacity(H.blockByteCount)
+        if key.byteCount > H.blockByteCount {
+            // A key longer than a block is hashed.
+            var secret = key.bytes()
+            var digest = H.hash(secret).bytes
+            pad.append(contentsOf: digest)
+            digest.zeroSecurely()
+            secret.zeroSecurely()
+        } else {
+            unsafe {
+                appendBytes(to: &pad, from: key.memory.address, count: key.byteCount)
+            }
+        }
         pad.append(repeating: 0, count: H.blockByteCount - pad.count)
         var i = 0
         while i < pad.count {
@@ -74,7 +82,33 @@ public struct Hmac<H: HashFunction>: Sendable {
     public static fn authenticationCode(for bytes: U8[:], using key: SymmetricKey) -> Digest {
         var code = Hmac<H>(key: key)
         code.update(bytes)
-        return code.finalize()
+        return code.spend()
+    }
+
+    /// 'finalize', in the code's own memory, which it is then no more in.
+    mutating fn spend() -> Digest {
+        outer.update(inner.finalizeAndReset().bytes)
+        return outer.finalizeAndReset()
+    }
+
+    /// Whether the code is that of every byte given so far, compared in
+    /// constant time; more can still be given. .NET's `VerifyCurrentHash`.
+    ///
+    /// ```sable
+    /// let key = SymmetricKey.random(byteCount: 32)
+    /// var code = Hmac<Sha256>(key: key)
+    /// code.update(utf8: "a message")
+    /// assert(code.isValid(code.finalize().bytes))
+    /// assert(!code.isValid([1, 2, 3]))
+    /// ```
+    public fn isValid(_ code: U8[:]) -> Bool {
+        return constantTimeEquals(self.finalize().bytes, code)
+    }
+
+    /// Whether the code is that of every byte given so far, compared in
+    /// constant time.
+    public fn isValid(_ code: Digest) -> Bool {
+        return self.isValid(code.bytes)
     }
 
     /// Whether the code is the bytes' under the key, compared in constant

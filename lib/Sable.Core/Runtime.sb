@@ -669,9 +669,8 @@ public struct Runtime {
     @builtin("hash_seed")
     public static fn hashSeed() -> Int
 
-    /// 64 bits from the operating system's random source (getentropy, or
-    /// BCryptGenRandom on Windows; a trap when it fails), fresh at each call: what
-    /// SystemRandomNumberGenerator draws.
+    /// 64 bits from the operating system's random source (a trap when
+    /// it fails), fresh at each call: what SystemRandomNumberGenerator draws.
     @builtin("random_bits")
     public static fn randomBits() -> Int
 

@@ -25,7 +25,13 @@ extension Insecure {
         }
 
         public fn finalize() -> Digest {
-            return Digest(state.finish().bytes(from: 0, count: 16))
+            return Digest(taking: state.finish().bytes(from: 0, count: 16))
+        }
+
+        public mutating fn finalizeAndReset() -> Digest {
+            let digest = Digest(taking: state.finishInPlace().bytes(from: 0, count: 16))
+            state.restart(Insecure.Md5.initialState)
+            return digest
         }
     }
 }

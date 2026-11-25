@@ -26,13 +26,20 @@ public struct Kmac128: Sendable {
         sponge.update(bytes)
     }
 
+    /// Authenticates the text's UTF-8 bytes after those already given.
+    public mutating fn update(utf8 text: String) {
+        var bytes: U8[>..] = []
+        bytes.append(utf8: text)
+        sponge.update(bytes)
+    }
+
     /// The code, of so many bytes, of every byte given so far; more can
     /// still be given.
     public fn finalize(count: Int = 32) -> Digest {
         precondition(count >= 0, "a code of \(count) bytes")
         var ended = sponge
         ended.update(kmacRightEncode((count * 8) unchecked as U64))
-        return Digest(ended.output(count: count))
+        return Digest(taking: ended.output(count: count))
     }
 
     /// KMACXOF128: output of a length that is not fixed beforehand, and that
@@ -47,6 +54,36 @@ public struct Kmac128: Sendable {
         var ended = sponge
         ended.update(kmacRightEncode(0))
         return OutputReader(sponge: ended.finish(), rate: 168)
+    }
+
+    /// Whether the code, of whatever length, is that of every byte given so
+    /// far, compared in constant time; more can still be given. One of fewer
+    /// than 16 bytes never is. .NET's `VerifyCurrentHash`.
+    ///
+    /// ```sable
+    /// var code = Kmac128(key: SymmetricKey.random(byteCount: 32))
+    /// code.update(utf8: "a message")
+    /// assert(code.isValid(code.finalize(count: 24).bytes))
+    /// assert(!code.isValid(code.finalize(count: 32).bytes[..<24]))
+    /// ```
+    public fn isValid(_ code: U8[:]) -> Bool {
+        return code.count >= 16 && constantTimeEquals(self.finalize(count: code.count).bytes, code)
+    }
+
+    /// Whether the code is that of every byte given so far, compared in
+    /// constant time. One of fewer than 16 bytes never is.
+    public fn isValid(_ code: Digest) -> Bool {
+        return self.isValid(code.bytes)
+    }
+
+    /// Whether the output is the start of `reader()`'s, compared in constant
+    /// time. Less than 16 bytes of it never is. .NET's `KmacXof128.Verify`.
+    public fn isValidOutput(_ output: U8[:]) -> Bool {
+        if output.count < 16 {
+            return false
+        }
+        var reader = self.reader()
+        return constantTimeEquals(reader.read(count: output.count), output)
     }
 
     /// The code of the bytes, at once.
@@ -69,10 +106,19 @@ public struct Kmac128: Sendable {
         using key: SymmetricKey,
         customization: U8[:] = []
     ) -> Bool {
-        if code.count < 16 {
-            return false
-        }
-        let expected = Kmac128.authenticationCode(for: bytes, using: key, count: code.count, customization: customization)
-        return constantTimeEquals(expected.bytes, code)
+        var expected = Kmac128(key: key, customization: customization)
+        expected.update(bytes)
+        return expected.isValid(code)
+    }
+
+    /// Whether the code, of whatever length, is the bytes' under the key,
+    /// compared in constant time. One of fewer than 16 bytes never is.
+    public static fn isValid(
+        _ code: Digest,
+        for bytes: U8[:],
+        using key: SymmetricKey,
+        customization: U8[:] = []
+    ) -> Bool {
+        return Kmac128.isValid(code.bytes, for: bytes, using: key, customization: customization)
     }
 }

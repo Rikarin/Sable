@@ -39,7 +39,7 @@ struct BlockState<Hash: BlockHash>: Sendable {
         var i = 0
         while i < words.count {
             unsafe {
-                store32(words[i], box.memory.address + 4 * i)
+                store32(words[i], box.memory.address &+ 4 &* i)
             }
             i += 1
         }
@@ -52,7 +52,7 @@ struct BlockState<Hash: BlockHash>: Sendable {
         var i = 0
         while i < words.count {
             unsafe {
-                store64(words[i], box.memory.address + 8 * i)
+                store64(words[i], box.memory.address &+ 8 &* i)
             }
             i += 1
         }
@@ -106,29 +106,69 @@ struct BlockState<Hash: BlockHash>: Sendable {
     /// its own.
     fn finish() -> SecretMemory {
         let end = box.memory.copy()
-        let block = end.address + Hash.stateBytes
+        BlockState<Hash>.end(end.address, buffered: buffered, length: length)
+        return end
+    }
+
+    /// The same in place: where it is, until 'restart'.
+    mutating fn finishInPlace() -> SecretMemory {
+        BlockState<Hash>.end(box.mutableAddress(), buffered: buffered, length: length)
+        return box.memory
+    }
+
+    /// Nothing hashed again, the state as given, after 'finishInPlace'.
+    mutating fn restart(_ words: U32[:]) {
+        let state = box.mutableAddress()
         unsafe {
-            store8(0x80, block + buffered)
+            Native.zero(state, Hash.stateBytes + 2 * Hash.blockBytes)
+            var i = 0
+            while i < words.count {
+                store32(words[i], state &+ 4 &* i)
+                i += 1
+            }
+        }
+        buffered = 0
+        length = 0
+    }
+
+    mutating fn restart(_ words: U64[:]) {
+        let state = box.mutableAddress()
+        unsafe {
+            Native.zero(state, Hash.stateBytes + 2 * Hash.blockBytes)
+            var i = 0
+            while i < words.count {
+                store64(words[i], state &+ 8 &* i)
+                i += 1
+            }
+        }
+        buffered = 0
+        length = 0
+    }
+
+    /// The message's padding and its length, after the bytes buffered.
+    static fn end(_ state: Int, buffered: Int, length: U64) {
+        let block = state + Hash.stateBytes
+        unsafe {
+            store8(0x80, block &+ buffered)
             var used = buffered + 1
             if used > Hash.blockBytes - Hash.lengthBytes {
                 Native.zero(block + used, Hash.blockBytes - used)
-                BlockState<Hash>.compressBlock(end.address)
+                BlockState<Hash>.compressBlock(state)
                 used = 0
             }
             Native.zero(block + used, Hash.blockBytes - used)
             let bits = length << 3
             let last = block + Hash.blockBytes
             if Hash.bigEndianLength {
-                store64(bits.byteSwapped, last - 8)
+                store64(bits.byteSwapped, last &- 8)
                 if Hash.lengthBytes == 16 {
-                    store64((length >> 61).byteSwapped, last - 16)
+                    store64((length >> 61).byteSwapped, last &- 16)
                 }
             } else {
-                store64(bits, last - 8)
+                store64(bits, last &- 8)
             }
-            BlockState<Hash>.compressBlock(end.address)
+            BlockState<Hash>.compressBlock(state)
         }
-        return end
     }
 
     /// HashFunction's 'iterateHmac', for a hash whose digest is the start of
@@ -142,15 +182,15 @@ struct BlockState<Hash: BlockHash>: Sendable {
         let block = state + Hash.stateBytes
         unsafe {
             store(first, at: block)
-            store8(0x80, block + size)
-            store64((8 * (Hash.blockBytes + size) unchecked as U64).byteSwapped, block + Hash.blockBytes - 8)
+            store8(0x80, block &+ size)
+            store64((8 * (Hash.blockBytes + size) unchecked as U64).byteSwapped, block &+ Hash.blockBytes &- 8)
             var done = 1
             while done < iterations {
                 BlockState<Hash>.hashBlock(inner.box.memory.address, state, digest: size)
                 BlockState<Hash>.hashBlock(outer.box.memory.address, state, digest: size)
                 var i = 0
                 while i < size {
-                    store32(load32(sum.address + i) ^ load32(block + i), sum.address + i)
+                    store32(load32(sum.address &+ i) ^ load32(block &+ i), sum.address &+ i)
                     i += 4
                 }
                 done += 1
@@ -168,12 +208,12 @@ struct BlockState<Hash: BlockHash>: Sendable {
         var i = 0
         if Hash.lengthBytes == 16 {
             while i < size {
-                store64(load64(state + i).byteSwapped, block + i)
+                store64(load64(state &+ i).byteSwapped, block &+ i)
                 i += 8
             }
         } else {
             while i < size {
-                store32(load32(state + i).byteSwapped, block + i)
+                store32(load32(state &+ i).byteSwapped, block &+ i)
                 i += 4
             }
         }
@@ -192,28 +232,26 @@ struct BlockState<Hash: BlockHash>: Sendable {
 
 /// The first bytes of a state of big-endian 32-bit words.
 fn bigEndianDigest32(_ state: SecretMemory, count: Int) -> Digest {
-    var bytes: U8[>..] = []
-    bytes.append(repeating: 0, count: count)
+    var bytes = U8[>..](repeating: 0, count: count)
     var i = 0
     while i < count {
         unsafe {
-            bytes.writeU32(load32(state.address + i), at: i, endian: .Big)
+            bytes.writeU32(load32(state.address &+ i), at: i, endian: .Big)
         }
         i += 4
     }
-    return Digest(bytes)
+    return Digest(taking: bytes)
 }
 
 /// The first bytes of a state of big-endian 64-bit words.
 fn bigEndianDigest64(_ state: SecretMemory, count: Int) -> Digest {
-    var bytes: U8[>..] = []
-    bytes.append(repeating: 0, count: count)
+    var bytes = U8[>..](repeating: 0, count: count)
     var i = 0
     while i < count {
         unsafe {
-            bytes.writeU64(load64(state.address + i), at: i, endian: .Big)
+            bytes.writeU64(load64(state.address &+ i), at: i, endian: .Big)
         }
         i += 8
     }
-    return Digest(bytes)
+    return Digest(taking: bytes)
 }

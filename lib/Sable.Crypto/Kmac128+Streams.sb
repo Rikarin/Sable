@@ -1,0 +1,64 @@
+module Sable.Crypto
+
+import Sable.IO
+
+extension Kmac128 {
+    /// Authenticates what the reader has left, to its end, after the bytes
+    /// already given.
+    public mutating fn update<R: Reader>(reading reader: inout R) throws(IoError) {
+        while true {
+            let bytes = try reader.read(upTo: streamedBytes)
+            if bytes.isEmpty {
+                return
+            }
+            self.update(bytes)
+        }
+    }
+
+    /// Authenticates what the reader has left, to its end, after the bytes
+    /// already given, the task suspended while it waits for them.
+    public mutating fn update<R: AsyncReader>(reading reader: R) async throws(IoError) {
+        while true {
+            let bytes = try await reader.read(upTo: streamedBytes)
+            if bytes.isEmpty {
+                return
+            }
+            self.update(bytes)
+        }
+    }
+
+    /// Whether the code, of whatever length, is that of what the reader has
+    /// left, to its end, compared in constant time. One of fewer than 16
+    /// bytes never is.
+    ///
+    /// ```sable
+    /// let key = SymmetricKey.random(byteCount: 32)
+    /// let code = Kmac128.authenticationCode(for: [1, 2, 3], using: key)
+    /// var stream = MemoryStream([1, 2, 3])
+    /// assert(try! Kmac128.isValid(code.bytes, reading: &stream, using: key))
+    /// ```
+    public static fn isValid<R: Reader>(
+        _ code: U8[:],
+        reading reader: inout R,
+        using key: SymmetricKey,
+        customization: U8[:] = []
+    ) throws(IoError) -> Bool {
+        var expected = Kmac128(key: key, customization: customization)
+        try expected.update(reading: &reader)
+        return expected.isValid(code)
+    }
+
+    /// Whether the code, of whatever length, is that of what the reader has
+    /// left, to its end, compared in constant time, the task suspended while
+    /// it waits for it. One of fewer than 16 bytes never is.
+    public static fn isValid<R: AsyncReader>(
+        _ code: U8[:],
+        reading reader: R,
+        using key: SymmetricKey,
+        customization: U8[:] = []
+    ) async throws(IoError) -> Bool {
+        var expected = Kmac128(key: key, customization: customization)
+        try await expected.update(reading: reader)
+        return expected.isValid(code)
+    }
+}

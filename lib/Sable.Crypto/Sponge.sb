@@ -81,9 +81,9 @@ struct Sponge: Sendable {
         let block = end.address + 200
         unsafe {
             Native.zero(block + buffered, rate - buffered)
-            store8(suffix, block + buffered)
+            store8(suffix, block &+ buffered)
             let last = RawPtr<U8>(address: block).load(at: rate - 1)
-            store8(last | 0x80, block + rate - 1)
+            store8(last | 0x80, block &+ rate &- 1)
             absorbBlock(end.address)
             Native.zero(block, rate)
         }

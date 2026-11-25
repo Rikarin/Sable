@@ -43,3 +43,15 @@ fn fillingReplacesEveryByte() {
 fn noTwoAreAlike() {
     assert(SecureRandom.bytes(32) != SecureRandom.bytes(32))
 }
+
+@test
+fn manyBytesAreFilledToTheEnd() {
+    let bytes = SecureRandom.bytes(1_000_003)
+    var counts = Int[>..](repeating: 0, count: 256)
+    for byte in bytes {
+        counts[Int(byte)] += 1
+    }
+    // Each 3906 times, give or take ten times the deviation.
+    assert(counts.allSatisfy { $0 > 3280 && $0 < 4532 })
+    assert(bytes[999_940...] != U8[>..](repeating: 0, count: 63))
+}

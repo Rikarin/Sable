@@ -1,6 +1,7 @@
 module Sable.Hosting
 
 import Sable.Concurrency
+import Sable.DependencyInjection
 import Sable.Diagnostics
 import Sable.Time
 
@@ -17,6 +18,8 @@ public struct HostContext: Sendable {
     public let lifetime: ApplicationLifetime
     /// The time it goes by.
     public let clock: any HostClock
+    /// What the container gives.
+    public let container: ServiceProvider
 
     /// Waits this long by the host's clock; throws CancellationError as
     /// soon as the token is cancelled, or the task is.

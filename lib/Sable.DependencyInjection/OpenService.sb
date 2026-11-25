@@ -1,0 +1,37 @@
+module Sable.DependencyInjection
+
+// An open generic's registration: one for every type of a generic service,
+// made of the implementation's type of the same type arguments.
+struct OpenService: Sendable {
+    let service: GenericType
+    let implementation: GenericType
+    let lifetime: ServiceLifetime
+    let key: String?
+
+    // The entry of the service of the key's type, when it is one of these.
+    fn entry(_ key: ServiceKey, slot: Int) throws(ServiceError) -> ServiceEntry? {
+        if key.key != self.key {
+            return none
+        }
+        guard let arguments = service.arguments(of: key.type) else {
+            return none
+        }
+        guard let type = implementation.instantiate(arguments) else {
+            throw ServiceError.Unconstructible(service: key, implementation: implementation.name)
+        }
+        if !type.isSubtype(of: (any Injectable).self) {
+            throw ServiceError.WrongType(service: key, implementation: type)
+        }
+        return ServiceEntry(key: key, lifetime: lifetime, dependencies: needs(type), slot: slot, firstLink: -1, owned: true, make: { scope in
+            try made(type, scope)
+        })
+    }
+}
+
+fn needs<T: Injectable>(_ type: T.Type) -> ServiceDependency[>..] {
+    return T.dependencies()
+}
+
+fn made<T: Injectable>(_ type: T.Type, _ scope: ServiceScope) throws -> T {
+    return try T.create(from: scope)
+}

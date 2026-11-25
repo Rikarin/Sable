@@ -1,0 +1,242 @@
+module DisposalTests
+
+import Sable.DependencyInjection
+import Sable.Testing
+
+import InjectionSupport
+
+final class Closing: Disposable {
+    let name: String
+    let record: Record
+
+    init(_ name: String, _ record: Record) {
+        self.name = name
+        self.record = record
+    }
+
+    fn dispose() { record.add(name) }
+}
+
+struct ClosingValue: Disposable {
+    let record: Record
+    fn dispose() { record.add("value") }
+}
+
+@immutable
+final class ClosingLate: AsyncDisposable {
+    let name: String
+    let record: Record
+
+    init(_ name: String, _ record: Record) {
+        self.name = name
+        self.record = record
+    }
+
+    async fn disposeAsync() {
+        await Task.yield()
+        record.add(name)
+    }
+}
+
+@immutable
+final class ClosingShared: Disposable {
+    let name: String
+    let record: Record
+
+    init(_ name: String, _ record: Record) {
+        self.name = name
+        self.record = record
+    }
+
+    fn dispose() { record.add(name) }
+}
+
+final class Freed {
+    let record: Record
+    init(_ record: Record) { self.record = record }
+    deinit { record.add("freed") }
+}
+
+@test
+fn aScopeDisposesWhatItMadeTheLastFirst() {
+    let record = Record()
+    let services = ServiceCollection()
+    services.addScoped(Closing.self, key: "a") { _scope in Closing("a", record) }
+    services.addScoped(Closing.self, key: "b") { scope in
+        _ = try scope.resolve(Closing.self, key: "a")
+        return Closing("b", record)
+    }
+    services.addTransient(ClosingValue.self) { _scope in ClosingValue { record: record } }
+    let provider = try! services.build()
+    provider.withScope { scope in
+        _ = try! scope.resolve(Closing.self, key: "b")
+        _ = try! scope.resolve(ClosingValue.self)
+        record.add("body")
+    }
+    assertEqual(record.all, "body value b a")
+}
+
+@test
+fn aScopeEndsWhenItsBodyThrows() {
+    let record = Record()
+    let services = ServiceCollection()
+    services.addScoped(Closing.self) { _scope in Closing("a", record) }
+    let provider = try! services.build()
+    do {
+        try provider.withScope { scope in
+            _ = try scope.resolve(Closing.self)
+            throw TestError("stop")
+        }
+    } catch {
+        assert(error is TestError)
+    }
+    assertEqual(record.all, "a")
+}
+
+@test
+fn aScopeLetsGoOfWhatItHeld() {
+    let record = Record()
+    let services = ServiceCollection()
+    services.addScoped(Freed.self) { _scope in Freed(record) }
+    let provider = try! services.build()
+    provider.withScope { scope in
+        _ = try! scope.resolve(Freed.self)
+        record.add("body")
+    }
+    assertEqual(record.all, "body freed")
+}
+
+@test
+fn theProviderDisposesItsSingletons() {
+    let record = Record()
+    let services = ServiceCollection()
+    services.addSingleton(ClosingShared.self, key: "a") { _scope in ClosingShared("a", record) }
+    services.addSingleton(ClosingShared.self, key: "b") { scope in
+        _ = try scope.resolve(ClosingShared.self, key: "a")
+        return ClosingShared("b", record)
+    }
+    let provider = try! services.build()
+    provider.withScope { scope in
+        _ = try! scope.resolve(ClosingShared.self, key: "b")
+    }
+    assertEqual(record.all, "")
+    provider.dispose()
+    provider.dispose()
+    assertEqual(record.all, "b a")
+    assert(provider.isDisposed)
+    do {
+        _ = try provider.resolve(ClosingShared.self, key: "a")
+        assert(false)
+    } catch {
+        assert(error.description().contains("disposed"), error.description())
+    }
+}
+
+@test
+fn aProviderThatGoesDisposes() {
+    let record = Record()
+    do {
+        let services = ServiceCollection()
+        services.addSingleton(ClosingShared.self) { _scope in ClosingShared("a", record) }
+        let provider = try! services.build()
+        _ = try! provider.resolve(ClosingShared.self)
+    }
+    assertEqual(record.all, "a")
+}
+
+@test
+fn anInstanceIsItsOwnersToDispose() {
+    let record = Record()
+    let services = ServiceCollection()
+    services.addSingleton(ClosingShared.self, value: ClosingShared("a", record))
+    let provider = try! services.build()
+    _ = try! provider.resolve(ClosingShared.self)
+    provider.dispose()
+    assertEqual(record.all, "")
+}
+
+@test
+fn anAsyncScopeWaitsForWhatItMade() async {
+    let record = Record()
+    let services = ServiceCollection()
+    services.addScoped(ClosingLate.self) { _scope in ClosingLate("late", record) }
+    services.addScoped(Closing.self) { scope in
+        _ = try scope.resolve(ClosingLate.self)
+        return Closing("a", record)
+    }
+    let provider = try! services.build()
+    await provider.withAsyncScope { scope in
+        _ = try! scope.resolve(Closing.self)
+        await Task.yield()
+        record.add("body")
+    }
+    assertEqual(record.all, "body a late")
+}
+
+@test
+fn theProviderWaitsForItsSingletons() async {
+    let record = Record()
+    let services = ServiceCollection()
+    services.addSingleton(ClosingLate.self) { _scope in ClosingLate("late", record) }
+    let provider = try! services.build()
+    _ = try! provider.resolve(ClosingLate.self)
+    await provider.disposeAsync()
+    assertEqual(record.all, "late")
+}
+
+@test
+fn aDisposedScopeGivesNothing() {
+    let services = ServiceCollection()
+    services.addScoped(Int.self) { _scope in 1 }
+    let provider = try! services.build()
+    let scope = provider.withScope { scope in scope }
+    do {
+        _ = try scope.resolve(Int.self)
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "Int was asked for after its scope was disposed")
+    }
+}
+
+// Both: waited for where that can be, and else not.
+final class ClosingEither: Disposable, AsyncDisposable {
+    let record: Record
+
+    init(_ record: Record) { self.record = record }
+
+    fn dispose() { record.add("now") }
+
+    async fn disposeAsync() { record.add("later") }
+}
+
+@test
+fn oneOfBothKindsIsWaitedForWhereItCanBe() async {
+    let record = Record()
+    let services = ServiceCollection()
+    services.addScoped(ClosingEither.self) { _scope in ClosingEither(record) }
+    let provider = try! services.build()
+    provider.withScope { scope in
+        _ = try! scope.resolve(ClosingEither.self)
+    }
+    await provider.withAsyncScope { scope in
+        _ = try! scope.resolve(ClosingEither.self)
+    }
+    assertEqual(record.all, "now later")
+}
+
+@test
+fn anAsyncScopeEndsWhenItsBodyThrows() async {
+    let record = Record()
+    let services = ServiceCollection()
+    services.addTransient(Closing.self) { _scope in Closing("a", record) }
+    let provider = try! services.build()
+    do {
+        try await provider.withAsyncScope { scope in
+            _ = try scope.resolve(Closing.self)
+            throw TestError("stop")
+        }
+    } catch {
+        record.add("caught")
+    }
+    assertEqual(record.all, "a caught")
+}

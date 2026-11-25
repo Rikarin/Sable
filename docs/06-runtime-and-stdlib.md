@@ -607,8 +607,8 @@ from its context, after what it captures. A value of a type held
 indirectly that it captures is kept in an array of one in the context,
 which sizes it at run time and destroys it through its witnesses, and is
 copied into a slot of its own where the closure's code starts. Such a
-closure captures by value (a `let`, a parameter); one that shares a `var`
-of a type parameter's type, or captures `self`, or is inside another,
+closure captures by value (a `let`, a parameter, its own `self`), and may be inside
+another; one that shares a `var` of a type parameter's type
 keeps its function specialised, as does a function that returns a closure
 over its type parameters.
 
@@ -694,6 +694,24 @@ types still calls the copies made for them. A function that only forwards to a r
 otherwise left specialised, is compiled once when a call opens a Type for
 it; one that cannot be is S3164, with what in its body keeps it copied.
 
+A **cast of an existential to a type only its metadata knows**, `x as? T` and
+`x as! T` in code compiled once, asks the runtime (`existential_cast`,
+`sable_existential_cast`) for what the box holds: one of that type, or of a
+class it derives from, is copied out by its value witnesses. To an
+existential it is asked of the type's **caster**: a function made, as a cast
+written there is, where code that knows the existential hands its `T.Type`
+to code compiled once, and registered as boxers are; or, with none, of the
+registry. A cast to an instance of a generic protocol, `any Repo<Order>`,
+tries each type of the program that conforms, and each generic type's
+instance whose arguments that says (`Sql<Order>`, for `Sql<T>: Repo<T>`).
+
+**A generic type without its type arguments** is a value too: `Stack.self` is
+a `GenericType` — its name, how many type arguments it takes, and a function
+that makes its metadata from theirs (src/Sable.SIL/SilGen.GenericTypes.cs) as
+`Stack<T>.self` does in code compiled once, after asking whether each meets
+its constraints. The type arguments of a type are its metadata's, those of
+an existential of a generic protocol's instance too.
+
 Inside such code, a type made of a type parameter as a value — `T[].self`,
 `T?.self`, `(T, Int).self`, `Box<T>.self` — is its metadata made at run
 time from `T`'s (`sable_array_type`, `sable_enum_type`, `sable_tuple_type`,
@@ -702,11 +720,24 @@ for a type known only at run time. Its name is its parts' names, as the
 metadata of the same type written out has it (`M.Box<M.Label>`, its
 arguments qualified), and `==` holds the two to be one type.
 
-What unspecialised code cannot serve yet — an optional chain through a
-`T?`, a structural union of `T`, a method of a generic class
-a subclass may override, `Task<T>`, an async closure's
-parameter, a generic type made of type parameters given where its
-conformance is required, or a generator — is still specialised for its type arguments in
+A value of a type parameter's type becomes an existential — of the protocols
+it is known to conform to, or `any Any` — in a buffer of its own that its
+type's boxer boxes (`opaque_box`), or, of one that is an existential already,
+as the box it holds; `x as? any P`, `x as? Dog` and `x is P` ask the box or
+the value's dynamic type (`opaque_type`). Raw memory's values
+(`RawMemory.load`, `take`, `initialize`, so `RawPtr`, `OnceCell`, `Mutex` and
+the concurrent collections) and `Runtime.share` go through the value
+witnesses. `Never` given for an error's type parameter has a table with
+nothing in it, as nothing is ever called through it; `Sendable` has none, and
+no function takes one. A generic type made of type parameters, `Pair<T>`,
+given where its conformance is required, has the conformance's template table
+("Opening a Type", below), found from the metadata made for it.
+
+What unspecialised code cannot serve yet — a structural union of `T`, a
+method of a generic class a subclass may override, `Task<T>`, an async
+closure's parameter, a `var` of a type parameter's type that a closure
+shares, an array of type parameters given where a conformance is required
+(`xs.map` of a `T[>..]`), or a generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised
 build (the default) makes no describers but for a call that opens a Type
@@ -972,6 +1003,10 @@ Sable.Hosting       ApplicationBuilder and Host (services started in order,
                     timeout; signals; failure policies), HostedService,
                     ApplicationLifetime, recurring jobs (CronExpression,
                     intervals, overlap policies), Systemd (sd_notify)
+Sable.DependencyInjection
+                    ServiceCollection (singleton, scoped, transient; keyed,
+                    open generics; checked as it is built), ServiceProvider,
+                    ServiceScope, @derive(Injectable)
 Sable.Crypto        HashFunction and Digest: SHA-2, SHA-3, BLAKE2b, BLAKE3,
                     Insecure.Md5 and Sha1; SHAKE; Hmac, KMAC; Hkdf, Pbkdf2,
                     Scrypt, Argon2id; PasswordHash (PHC strings);
@@ -1372,6 +1407,44 @@ place.
 - **Cancellation.** `wait` throws `Cancelled`, and the child runs on:
   `withTimeout` limits a wait. `output` and `status` kill theirs.
 
+### Dependency injection
+
+`Sable.DependencyInjection` (#81) is Microsoft.Extensions.DependencyInjection's
+container: a `ServiceCollection` of registrations, the `ServiceProvider` its
+`build` makes, and `ServiceScope`s.
+
+- **Factories.** `@derive(Injectable)` writes a type's `create(from:)`, its
+  initialiser called with what a scope gives for each parameter, and
+  `dependencies()`, what that is. A parameter no container can give — an
+  `inout`, a function that takes something, a slice — is an error where it
+  is (S3071), as is a type with several initialisers and none marked
+  `@Inject`. Nothing is called through reflection.
+- **Keys.** A service is known by its `Type` and, for a keyed one, a string.
+  It is kept as an `any Any` and given as the type asked for, so one that
+  only the running program knows is a service like any other.
+- **Open generics.** `addScoped(open: Repository.self, SqlRepository.self)`
+  takes two `GenericType`s (§6.2). Asked for `any Repository<Order>`, the
+  provider reads the type arguments from its metadata, makes
+  `SqlRepository<Order>`'s of the same, and opens it as `Injectable`. The
+  cast back to `any Repository<Order>` has the tables of every generic type
+  of the program that conforms where its arguments are known, so an instance
+  no code names is one all the same.
+- **Sharing.** A singleton's service is Sendable, so the provider is; a
+  `ServiceScope` is not, and what is scoped or transient need not be. Two
+  threads that want one singleton wait for one of them to make it.
+- **Checks.** `build` goes through what the registrations say they are made
+  from: what is missing, what leads back to itself (but by a `Lazy` or a
+  closure), and what scoped service a singleton would hold, each with its
+  path. A closure's dependencies are not known, so it is held to the same as
+  it runs.
+- **Disposal.** A scope disposes what it made, the last first, as its
+  closure ends; the provider its singletons. `withAsyncScope` waits for an
+  `AsyncDisposable`. A transient one is its scope's to dispose; one asked of
+  the provider, the provider's, as in .NET.
+
+`@container`, whose graph is checked as it is compiled, is not written: the
+standard library has no generators, and the graph is the compiler's to see.
+
 ### Hosting
 
 `Sable.Hosting` is .NET's generic host over what the library has, with
@@ -1379,13 +1452,12 @@ swift-service-lifecycle's ordering: `ApplicationBuilder` (`services`,
 `configuration`, `logging`, `environment`, `options`) builds a `Host`, whose
 `run` lasts as long as the program does.
 
-- **No container.** `services` is the list of services to run, each made by
-  a typed closure from a `HostContext` as the host is built; what two share
-  is made before them and captured by both. Dependency injection is #81's
-  (`Sable.DependencyInjection`), whose `@container` is checked when it is
-  compiled: a container resolved at run time here would be a second, weaker
-  one. A container plugs in as any value does, by being captured by the
-  closures that make services.
+- **Services.** `services` is the list of services to run, each made as the
+  host is built: by a typed closure from a `HostContext`, or, for a type
+  that derives `Injectable`, by the builder's `container`
+  (`Sable.DependencyInjection`, below), which has the host's environment,
+  configuration, logging, lifetime and clock too. The host disposes the
+  container once its services have stopped.
 - **Seams.** `configuration` is any `HostConfiguration` — a key's text, and
   `reload` — with the environment's variables for the one there is: #80's
   library is to conform to it. `logging` is the settings (`HostLogging`)
@@ -1564,6 +1636,10 @@ Derivation is implemented as compiler-known conformance synthesis against the
 always-present `FieldDescriptor` metadata, not as source generation. It
 composes with generics (`@derive(Equatable)` on `Pair<T, U>` yields a
 conditional conformance `where T: Equatable, U: Equatable`).
+
+`Injectable` is for classes, actors and structs alike, and reads the type's
+initialiser, not its fields: `create(from:)` calls it with what a
+`ServiceScope` gives for each parameter ("Dependency injection", above).
 
 `Serializable` writes a struct as an object of its fields, an enum as its
 case's name, and a union's case tagged externally (`{"Circle": {"radius":

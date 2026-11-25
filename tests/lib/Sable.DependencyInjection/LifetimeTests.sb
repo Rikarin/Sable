@@ -1,0 +1,224 @@
+module LifetimeTests
+
+// Sable.DependencyInjection, tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.DependencyInjection
+
+import Sable.Concurrency
+import Sable.DependencyInjection
+import Sable.Testing
+
+import InjectionSupport
+
+final class Counted { }
+
+@immutable
+final class Shared {
+    let id: Int
+    init(_ id: Int) { self.id = id }
+}
+
+@test
+fn aSingletonIsOneForTheProvider() {
+    let made = Record()
+    let services = ServiceCollection()
+    services.addSingleton(Shared.self) { _scope in
+        made.add("made")
+        return Shared(1)
+    }
+    let provider = try! services.build()
+    assertEqual(made.all, "")
+    let first = try! provider.resolve(Shared.self)
+    provider.withScope { scope in
+        assert(first === (try! scope.resolve(Shared.self)))
+    }
+    assertEqual(made.all, "made")
+}
+
+@test
+fn aScopedServiceIsOneForItsScope() {
+    let services = ServiceCollection()
+    services.addScoped(Counted.self) { _scope in Counted() }
+    let provider = try! services.build()
+    let outer = provider.withScope { scope in
+        let first = try! scope.resolve(Counted.self)
+        assert(first === (try! scope.resolve(Counted.self)))
+        return first
+    }
+    provider.withScope { scope in
+        assert(outer !== (try! scope.resolve(Counted.self)))
+    }
+}
+
+@test
+fn aTransientServiceIsNewEachTime() {
+    let services = ServiceCollection()
+    services.addTransient(Counted.self) { _scope in Counted() }
+    let provider = try! services.build()
+    assert((try! provider.resolve(Counted.self)) !== (try! provider.resolve(Counted.self)))
+}
+
+@test
+fn anInstanceIsGivenAsItIs() {
+    let one = Shared(5)
+    let services = ServiceCollection()
+    services.addSingleton(Shared.self, value: one)
+    assert((try! (try! services.build()).resolve(Shared.self)) === one)
+}
+
+@test
+fn aValueIsAService() {
+    let services = ServiceCollection()
+    services.addSingleton(Int.self, value: 42)
+    services.addTransient(String.self) { scope in "n = \(try scope.resolve(Int.self))" }
+    let provider = try! services.build()
+    assertEqual(try! provider.resolve(String.self), "n = 42")
+}
+
+@test
+fn aScopedServiceIsNotTheProvidersToGive() {
+    let services = ServiceCollection()
+    services.addScoped(Counted.self) { _scope in Counted() }
+    let provider = try! services.build()
+    do {
+        _ = try provider.resolve(Counted.self)
+        assert(false)
+    } catch {
+        assert(error.description().contains("Counted is scoped"), error.description())
+    }
+}
+
+@test
+fn aTypeIsRegisteredAsAProtocol() {
+    let services = ServiceCollection()
+    services.addSingleton((any Clock).self, FixedClock.self)
+    assertEqual((try! (try! services.build()).resolve((any Clock).self)).now(), 12)
+}
+
+@test
+fn whatIsRegisteredMustBeTheService() {
+    let services = ServiceCollection()
+    services.addSingleton(Int.self, FixedClock.self)
+    let provider = try! services.build()
+    do {
+        _ = try provider.resolve(Int.self)
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "InjectionSupport.FixedClock, registered for Int, is not one")
+    }
+}
+
+@test
+fn theLastRegistrationIsTheOneAskedForAndAllAreListed() {
+    let services = ServiceCollection()
+    services.addTransient(Int.self) { _scope in 1 }
+    services.addTransient(Int.self) { _scope in 2 }
+    let provider = try! services.build()
+    assertEqual(try! provider.resolve(Int.self), 2)
+    assertEqual(try! provider.resolveAll(Int.self), [1, 2])
+    assertEqual(try! provider.resolveAll(String.self), [])
+}
+
+@test
+fn keyedServicesAreApart() {
+    let services = ServiceCollection()
+    services.addSingleton(Int.self, value: 1)
+    services.addSingleton(Int.self, key: "two", value: 2)
+    let provider = try! services.build()
+    assertEqual(try! provider.resolve(Int.self), 1)
+    assertEqual(try! provider.resolve(Int.self, key: "two"), 2)
+    assert((try! provider.find(Int.self, key: "three")) == none)
+    do {
+        _ = try provider.resolve(Int.self, key: "three")
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "nothing provides Int (\"three\")")
+    }
+}
+
+@test
+fn whatIsNotRegisteredIsNotFound() {
+    let provider = try! ServiceCollection().build()
+    assert((try! provider.find(Int.self)) == none)
+    assert(!provider.contains(Int.self))
+    assertEqual(provider.withScope { scope in
+        try! scope.resolve(Int.self, otherwise: { 9 })
+    }, 9)
+}
+
+@test
+fn aServiceOfATypeKnownOnlyAsItRuns() {
+    let services = ServiceCollection()
+    services.addSingleton(Int.self, value: 7)
+    services.addSingleton((any Clock).self, FixedClock.self)
+    let provider = try! services.build()
+    let wanted: Type[] = [Int.self, (any Clock).self]
+    assertEqual(try! provider.resolve(dynamic: wanted[0]) as? Int, 7)
+    assertEqual((try! provider.resolve(dynamic: wanted[1]) as? any Clock)?.now(), 12)
+}
+
+@test
+fn theScopeAndTheProviderAreServices() {
+    let provider = try! ServiceCollection().build()
+    assert((try! provider.resolve(ServiceProvider.self)) === provider)
+    provider.withScope { scope in
+        assert((try! scope.resolve(ServiceScope.self)) === scope)
+        assert((try! scope.resolve(ServiceProvider.self)) === provider)
+        assert(scope.provider === provider)
+    }
+}
+
+@test
+fn registrationsAreReplacedAndRemoved() {
+    let services = ServiceCollection()
+    services.addSingleton(Int.self, value: 1)
+    assert(!services.tryAdd(ServiceDescriptor.of(Int.self, none, 2)))
+    assert(services.tryAdd(ServiceDescriptor.of(String.self, none, "s")))
+    services.replace(ServiceDescriptor.of(Int.self, ServiceLifetime.Transient) { _scope in 3 })
+    assertEqual(try! (try! services.build()).resolve(Int.self), 3)
+    assertEqual(services.descriptors.count, 2)
+    services.removeAll(ServiceKey(Int.self))
+    assert(!services.contains(ServiceKey(Int.self)))
+}
+
+@test
+fn whatAFactoryThrowsIsSaid() {
+    let services = ServiceCollection()
+    services.addTransient(Int.self) { _scope in
+        throw TestError("no number")
+    }
+    do {
+        _ = try (try! services.build()).resolve(Int.self)
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "Int could not be made: no number")
+    }
+}
+
+@test
+fn aSingletonIsMadeOnceByManyThreads() async {
+    let made = Record()
+    let services = ServiceCollection()
+    services.addSingleton(Shared.self) { _scope in
+        made.add("made")
+        return Shared(1)
+    }
+    let provider = try! services.build()
+    let sum = await withTaskGroup(of: Int.self) { group in
+        for _ in 0..<32 {
+            group.spawn {
+                var own = 0
+                for _ in 0..<100 {
+                    own += (try! provider.resolve(Shared.self)).id
+                }
+                return own
+            }
+        }
+        var all = 0
+        for await each in group {
+            all += each
+        }
+        return all
+    }
+    assertEqual(sum, 3200)
+    assertEqual(made.all, "made")
+}

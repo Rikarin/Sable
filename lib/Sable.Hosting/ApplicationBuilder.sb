@@ -1,5 +1,6 @@
 module Sable.Hosting
 
+import Sable.DependencyInjection
 import Sable.Diagnostics
 import Sable.IO
 import Sable.Time
@@ -20,6 +21,11 @@ import Sable.Time
 public final class ApplicationBuilder {
     /// The services to run.
     public let services: HostedServices
+    /// What they are made from, for those that say what that is
+    /// (`HostedServices.add(_:_:)` of a type). The host's environment,
+    /// configuration, logging, lifetime and clock are registered as it is
+    /// built, unless something else is; it disposes the rest as it stops.
+    public let container: ServiceCollection
     /// What they are configured by: the environment's variables, if not set.
     public var configuration: any HostConfiguration
     /// How they log.
@@ -35,6 +41,7 @@ public final class ApplicationBuilder {
     /// A builder with the usual settings. SABLE_LOG's level is the logging's.
     public init() {
         services = HostedServices()
+        container = ServiceCollection()
         configuration = EnvironmentConfiguration()
         logging = HostLogging(minimumLevel: ApplicationBuilder.levelFromEnvironment())
         environment = HostEnvironment.current()
@@ -61,12 +68,19 @@ public final class ApplicationBuilder {
     /// The host, its services made, each from its closure in order. What a
     /// closure throws, this throws.
     public fn build() throws -> Host {
+        let lifetime = ApplicationLifetime()
+        _ = container.tryAdd(ServiceDescriptor.of(HostEnvironment.self, none, environment))
+        _ = container.tryAdd(ServiceDescriptor.of((any HostConfiguration).self, none, configuration))
+        _ = container.tryAdd(ServiceDescriptor.of(HostLogging.self, none, logging))
+        _ = container.tryAdd(ServiceDescriptor.of(ApplicationLifetime.self, none, lifetime))
+        _ = container.tryAdd(ServiceDescriptor.of((any HostClock).self, none, clock))
         let context = HostContext {
             environment: environment,
             configuration: configuration,
             logging: logging,
-            lifetime: ApplicationLifetime(),
-            clock: clock
+            lifetime: lifetime,
+            clock: clock,
+            container: try container.build()
         }
         var runs: ServiceRun[>..] = []
         for entry in services.entries {

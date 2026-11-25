@@ -1,0 +1,81 @@
+module InjectionSupport
+
+import Sable.Concurrency
+import Sable.DependencyInjection
+
+/// What happened, in order, from whichever thread.
+@immutable
+public final class Record {
+    let held: Mutex<String[>..]>
+
+    public init() {
+        held = Mutex([])
+    }
+
+    public fn add(_ what: String) {
+        held.withLock { $0.append(what) }
+    }
+
+    public var all: String => held.withLock { $0.joined(separator: " ") }
+}
+
+public protocol Clock: Sendable {
+    fn now() -> Int
+}
+
+@immutable
+@derive(Injectable)
+public final class FixedClock: Clock {
+    public init() { }
+    public fn now() -> Int { return 12 }
+}
+
+public protocol Repository<Item> {
+    fn describe() -> String
+    fn first() -> Item?
+}
+
+@derive(Injectable)
+public final class Connection {
+    public init() { }
+}
+
+@derive(Injectable)
+public final class MemoryRepository<Item>: Repository<Item> {
+    let connection: Connection
+    let log: Log<MemoryRepository<Item>>
+
+    public init(connection: Connection, log: Log<MemoryRepository<Item>>) {
+        self.connection = connection
+        self.log = log
+    }
+
+    public fn describe() -> String { return "\(Item.self) by \(log.category())" }
+    public fn first() -> Item? { return none }
+    public fn isOn(_ other: Connection) -> Bool { return connection === other }
+}
+
+@derive(Injectable)
+public final class Log<Category> {
+    public init() { }
+    public fn category() -> String { return "\(Category.self)" }
+}
+
+public struct Order { }
+
+/// What the collection says is wrong with it; "" for nothing.
+public fn problems(_ services: ServiceCollection) -> String {
+    do {
+        _ = try services.build()
+        return ""
+    } catch {
+        return error.description()
+    }
+}
+
+public struct TestError: Error {
+    let message: String
+    public init(_ message: String) { self.message = message }
+    public fn description() -> String { return message }
+    public fn debugDescription() -> String { return message }
+}

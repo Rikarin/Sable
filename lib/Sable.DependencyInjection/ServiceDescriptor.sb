@@ -1,0 +1,36 @@
+module Sable.DependencyInjection
+
+/// A registration: a service, how long it lives, and how it is made.
+public struct ServiceDescriptor: Sendable {
+    /// The service.
+    public let key: ServiceKey
+    /// How long it lives.
+    public let lifetime: ServiceLifetime
+    /// What it is made from, as far as it says.
+    public let dependencies: ServiceDependency[>..]
+    let maker: ServiceMaker
+    // Whether the provider disposes what it makes.
+    let owned: Bool
+
+    init(_ key: ServiceKey, _ lifetime: ServiceLifetime, _ dependencies: ServiceDependency[>..], owned: Bool, _ make: @escaping @Sendable (ServiceScope) throws -> any Any) {
+        self.key = key
+        self.lifetime = lifetime
+        self.dependencies = dependencies
+        maker = ServiceMaker(make)
+        self.owned = owned
+    }
+
+    fn entry(slot: Int, firstLink: Int) -> ServiceEntry {
+        return ServiceEntry(key: key, lifetime: lifetime, dependencies: dependencies, slot: slot, firstLink: firstLink, owned: owned, make: maker.make)
+    }
+}
+
+// What makes a service: kept as an object's, so that a descriptor is Sendable.
+@immutable
+final class ServiceMaker {
+    let make: (ServiceScope) throws -> any Any
+
+    init(_ make: @escaping @Sendable (ServiceScope) throws -> any Any) {
+        self.make = make
+    }
+}

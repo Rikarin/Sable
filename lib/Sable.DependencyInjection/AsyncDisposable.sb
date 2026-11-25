@@ -1,0 +1,10 @@
+module Sable.DependencyInjection
+
+/// A service that waits as it gives up what it holds: .NET's
+/// `IAsyncDisposable`. Only `ServiceProvider.withAsyncScope` and
+/// `disposeAsync` can wait for it: left to a scope that cannot, it is
+/// disposed by its `dispose` if it is `Disposable` too, and else a trap.
+public protocol AsyncDisposable {
+    /// Gives up what the service holds. Called once.
+    async fn disposeAsync()
+}

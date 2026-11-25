@@ -1,0 +1,65 @@
+module Sable.DependencyInjection
+
+/// Why a service cannot be given, or a collection not built.
+public union ServiceError: Error {
+    /// Nothing provides the service; who wanted it, outermost first.
+    NotRegistered(service: ServiceKey, path: ServiceKey[>..])
+    /// Making the service leads back to it.
+    Circular(path: ServiceKey[>..])
+    /// A singleton holds a scoped service, which would outlive its scope.
+    Captive(path: ServiceKey[>..])
+    /// A scoped service was asked of the provider, not of a scope.
+    ScopedFromRoot(service: ServiceKey)
+    /// The service's factory threw this.
+    Failed(service: ServiceKey, error: any Error)
+    /// What was registered for the service is not one.
+    WrongType(service: ServiceKey, implementation: Type)
+    /// An open generic's constraints are not met by the type arguments asked for.
+    Unconstructible(service: ServiceKey, implementation: String)
+    /// It was asked for after its scope, or its provider, was disposed.
+    Disposed(service: ServiceKey)
+    /// What is wrong with a collection, all of it.
+    Invalid(problems: ServiceError[>..])
+
+    /// What is wrong, with the path that leads to it.
+    public fn description() -> String {
+        match self {
+            case .NotRegistered(let service, let path) => {
+                var whole = path
+                whole.append(service)
+                return path.isEmpty ? "nothing provides \(service)" : "nothing provides \(service): \(ServiceError.arrows(whole))"
+            }
+            case .Circular(let path) => {
+                return "a service needs itself: \(ServiceError.arrows(path))"
+            }
+            case .Captive(let path) => {
+                return "a singleton would hold a scoped service: \(ServiceError.arrows(path))"
+            }
+            case .ScopedFromRoot(let service) => {
+                return "\(service) is scoped: ask a scope for it, not the provider"
+            }
+            case .Failed(let service, let error) => {
+                return "\(service) could not be made: \(error.description())"
+            }
+            case .WrongType(let service, let implementation) => {
+                return "\(implementation.name), registered for \(service), is not one"
+            }
+            case .Unconstructible(let service, let implementation) => {
+                return "\(service) cannot be made from \(implementation): a type argument does not meet its constraints"
+            }
+            case .Disposed(let service) => {
+                return "\(service) was asked for after its scope was disposed"
+            }
+            case .Invalid(let problems) => {
+                return "the services cannot be provided: " + problems.map { $0.description() }.joined(separator: "; ")
+            }
+        }
+    }
+
+    /// The description.
+    public fn debugDescription() -> String { return description() }
+
+    static fn arrows(_ path: ServiceKey[>..]) -> String {
+        return path.map { $0.description() }.joined(separator: " -> ")
+    }
+}

@@ -1,0 +1,44 @@
+module Sable.DependencyInjection
+
+extension ServiceCollection {
+    /// A registration of every type of a generic service, each made of the
+    /// implementation's type of the same type arguments, the first time it is
+    /// asked for: `addScoped(open: Repository.self, SqlRepository.self)` is
+    /// .NET's `AddScoped(typeof(IRepository<>), typeof(SqlRepository<>))`.
+    /// The implementation is Injectable, and one registered for the closed
+    /// type itself is given before it.
+    ///
+    /// ```sable
+    /// protocol Repository<Item> {
+    ///     fn count() -> Int
+    /// }
+    ///
+    /// @derive(Injectable)
+    /// final class MemoryRepository<Item>: Repository<Item> {
+    ///     init() { }
+    ///     fn count() -> Int { return 0 }
+    /// }
+    ///
+    /// let services = ServiceCollection()
+    /// services.addScoped(open: Repository.self, MemoryRepository.self)
+    /// (try! services.build()).withScope { scope in
+    ///     let repository = try! scope.resolve((any Repository<String>).self)
+    ///     assert(repository.count() == 0)
+    /// }
+    /// ```
+    public fn addScoped(open service: GenericType, _ implementation: GenericType, key: String? = none) {
+        openServices.append(OpenService { service: service, implementation: implementation, lifetime: ServiceLifetime.Scoped, key: key })
+    }
+
+    /// A generic service's every type, a new one each time.
+    public fn addTransient(open service: GenericType, _ implementation: GenericType, key: String? = none) {
+        openServices.append(OpenService { service: service, implementation: implementation, lifetime: ServiceLifetime.Transient, key: key })
+    }
+
+    /// A generic service's every type, one of each for the program. Any
+    /// thread may come to use it, so the implementation must be safe to share:
+    /// that it is Sendable for each of its types is the program's to see to.
+    public fn addSingleton(open service: GenericType, _ implementation: GenericType, key: String? = none) {
+        openServices.append(OpenService { service: service, implementation: implementation, lifetime: ServiceLifetime.Singleton, key: key })
+    }
+}

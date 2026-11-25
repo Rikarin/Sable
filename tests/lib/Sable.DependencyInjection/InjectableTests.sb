@@ -1,0 +1,175 @@
+module InjectableTests
+
+import Sable.Concurrency
+import Sable.DependencyInjection
+import Sable.Testing
+
+import InjectionSupport
+
+@derive(Injectable)
+struct Values {
+    let clock: any Clock
+    @Keyed("hot")
+    let name: String
+    let size: Int = 3
+}
+
+@derive(Injectable)
+final class Several {
+    let from: String
+
+    init() { from = "nothing" }
+
+    @Inject
+    init(clock: any Clock) { from = "a clock at \(clock.now())" }
+}
+
+@derive(Injectable)
+final class Many {
+    let late: Lazy<Values>
+    let make: () -> Values
+    let scope: ServiceScope
+
+    init(late: Lazy<Values>, _ make: @escaping () -> Values, scope: ServiceScope) {
+        self.late = late
+        self.make = make
+        self.scope = scope
+    }
+}
+
+@derive(Injectable)
+final class Failing {
+    init() throws {
+        throw TestError("it fails")
+    }
+}
+
+@derive(Injectable)
+actor Counter {
+    let start: Int
+    init(start: Int) { self.start = start }
+}
+
+open class Base {
+    let clock: any Clock
+    init(clock: any Clock) { self.clock = clock }
+}
+
+@derive(Injectable)
+final class Derived: Base { }
+
+fn services() -> ServiceCollection {
+    let services = ServiceCollection()
+    services.addSingleton((any Clock).self, FixedClock.self)
+    services.addSingleton(String.self, key: "hot", value: "hot")
+    services.addTransient(Values.self)
+    return services
+}
+
+@test
+fn aStructIsMadeOfItsFields() {
+    let provider = try! services().build()
+    let values = try! provider.resolve(Values.self)
+    assert(values.clock.now() == 12 && values.name == "hot" && values.size == 3)
+    let all = Values.dependencies()
+    assertEqual(all.map { "\($0.key)" }.joined(separator: ", "), "any InjectionSupport.Clock, String (\"hot\"), Int")
+    assert(all[0].kind == .Required && all[2].kind == .Optional)
+}
+
+@test
+fn theInitialiserMarkedIsTheOneUsed() {
+    let all = services()
+    all.addTransient(Several.self)
+    assertEqual((try! (try! all.build()).resolve(Several.self)).from, "a clock at 12")
+}
+
+@test
+fn lazyFactoryAndScopeParameters() {
+    let all = services()
+    all.addScoped(Many.self)
+    (try! all.build()).withScope { scope in
+        let many = try! scope.resolve(Many.self)
+        assert(many.scope === scope)
+        assert(!many.late.isMade)
+        assertEqual(many.late.value.name, "hot")
+        assertEqual(many.make().size, 3)
+    }
+}
+
+@test
+fn aFactoryOfASingletonsOutlivesTheScopeThatAsked() {
+    let all = services()
+    all.addSingleton(Record.self) { scope in
+        let make = scope.factory(Values.self)
+        let record = Record()
+        record.add(make().name)
+        return record
+    }
+    let provider = try! all.build()
+    assertEqual(provider.withScope { scope in (try! scope.resolve(Record.self)).all }, "hot")
+}
+
+@test
+fn whatAnInitialiserThrowsIsSaid() {
+    let all = ServiceCollection()
+    all.addTransient(Failing.self)
+    do {
+        _ = try (try! all.build()).resolve(Failing.self)
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "InjectableTests.Failing could not be made: it fails")
+    }
+}
+
+@test
+async fn anActorIsAService() {
+    let all = ServiceCollection()
+    all.addSingleton(Int.self, value: 4)
+    all.addSingleton(Counter.self)
+    let counter = try! (try! all.build()).resolve(Counter.self)
+    assertEqual(counter.start, 4)
+}
+
+@test
+fn anInheritedInitialiserIsTheClasss() {
+    let all = services()
+    all.addTransient(Derived.self)
+    assertEqual((try! (try! all.build()).resolve(Derived.self)).clock.now(), 12)
+}
+
+// Written by hand, without saying what it is made from.
+struct ByHand: Injectable {
+    let clock: any Clock
+
+    static fn create(from services: ServiceScope) throws -> Self {
+        return ByHand { clock: try services.resolve((any Clock).self) }
+    }
+}
+
+@test
+fn aTypeMaySayHowItIsMadeItself() {
+    assert(ByHand.dependencies().isEmpty)
+    let all = services()
+    all.addTransient(ByHand.self)
+    let provider = try! all.build()
+    assertEqual((try! provider.resolve(ByHand.self)).clock.now(), 12)
+    assertEqual((try! provider.make(ByHand.self)).clock.now(), 12)
+}
+
+@test
+fn whatIsMadeWithoutBeingRegistered() {
+    let provider = try! services().build()
+    assertEqual((try! provider.make(Values.self)).name, "hot")
+    do {
+        _ = try provider.make(Failing.self)
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "InjectableTests.Failing could not be made: it fails")
+    }
+}
+
+@test
+fn theAttributesAreValues() {
+    assertEqual(Keyed("k").key, "k")
+    _ = Inject()
+}

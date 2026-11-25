@@ -1,0 +1,15 @@
+module Sable.DependencyInjection
+
+/// What a service is made from: another service, and what it is to it.
+public struct ServiceDependency: Sendable {
+    /// The service: for a `T?`, a `T[]`, a `() -> T` or a `Lazy<T>`, the `T`.
+    public let key: ServiceKey
+    /// What it is to its owner.
+    public let kind: DependencyKind
+
+    /// The service of this type, and this key.
+    public init(_ type: Type, key: String? = none, kind: DependencyKind = DependencyKind.Required) {
+        self.key = ServiceKey(type, key: key)
+        self.kind = kind
+    }
+}

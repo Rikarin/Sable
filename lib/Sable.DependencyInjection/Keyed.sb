@@ -1,0 +1,12 @@
+module Sable.DependencyInjection
+
+/// On a parameter of an initialiser `@derive(Injectable)` reads: the service
+/// is the one registered with this key (.NET's `[FromKeyedServices]`).
+public struct Keyed: Attribute {
+    /// The key.
+    public let key: String
+
+    public init(_ key: String) {
+        self.key = key
+    }
+}

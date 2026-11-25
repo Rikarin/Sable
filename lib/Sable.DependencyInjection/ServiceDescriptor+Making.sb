@@ -1,0 +1,24 @@
+module Sable.DependencyInjection
+
+extension ServiceDescriptor {
+    /// A registration of a type as itself, made from its own dependencies.
+    public static fn of<T: Injectable>(_ type: T.Type, _ lifetime: ServiceLifetime, _ key: String? = none) -> ServiceDescriptor {
+        return ServiceDescriptor(ServiceKey(type, key: key), lifetime, T.dependencies(), owned: true, { scope in try T.create(from: scope) })
+    }
+
+    /// A registration of a `T` as an `S`, made from its own dependencies.
+    /// Asked for where a `T` is not an `S`, it is ServiceError.WrongType.
+    public static fn of<S, T: Injectable>(_ service: S.Type, _ type: T.Type, _ lifetime: ServiceLifetime, _ key: String? = none) -> ServiceDescriptor {
+        return ServiceDescriptor(ServiceKey(service, key: key), lifetime, T.dependencies(), owned: true, { scope in try T.create(from: scope) })
+    }
+
+    /// A registration of what the closure makes.
+    public static fn of<S>(_ service: S.Type, _ lifetime: ServiceLifetime, _ key: String? = none, _ make: @escaping @Sendable (ServiceScope) throws -> S) -> ServiceDescriptor {
+        return ServiceDescriptor(ServiceKey(service, key: key), lifetime, [], owned: true, { scope in try make(scope) })
+    }
+
+    /// A singleton's registration, already made.
+    public static fn of<S: Sendable>(_ service: S.Type, _ key: String? = none, _ value: S) -> ServiceDescriptor {
+        return ServiceDescriptor(ServiceKey(service, key: key), ServiceLifetime.Singleton, [], owned: false, { _scope in value })
+    }
+}

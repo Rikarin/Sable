@@ -43,53 +43,44 @@ fn aSymbolThatIsNotThereIsAnError() {
         let nothing: (() -> ())? = DynamicLibrary.program.symbol("surely_no_such_symbol")
         expect(nothing == none)
         expect(DynamicLibrary.program.variable("surely_no_such_symbol", as: CInt.self) == none)
-        do {
+        let error = LibraryError.NoSymbol(name: "surely_no_such_symbol", library: "")
+        expectThrows(error) {
             let _: () -> () = try DynamicLibrary.program.function("surely_no_such_symbol")
-            assert(false)
-        } catch {
-            assertEqual(error, LibraryError.NoSymbol(name: "surely_no_such_symbol", library: ""))
-            assertEqual(error.description(), "'' has no 'surely_no_such_symbol'")
         }
+        expect(error.description() == "'' has no 'surely_no_such_symbol'")
     }
 }
 
-@test
-fn aLibraryThatIsNotThereIsAnError() {
-    for name in ["surely-no-such-library", "./surely/no/such/library.so"] {
-        do {
-            unsafe {
-                _ = try DynamicLibrary.open(name)
-            }
-            assert(false)
-        } catch .NotLoaded(let library, let reason) {
-            assertEqual(library, name)
-            require(!reason.isEmpty)
-        } catch {
-            assert(false)
+@test(arguments: ["surely-no-such-library", "./surely/no/such/library.so"])
+fn aLibraryThatIsNotThereIsAnError(_ name: String) {
+    let error = require(expectThrows(LibraryError.self) {
+        unsafe {
+            _ = try DynamicLibrary.open(name)
         }
+    })
+    if case .NotLoaded(let library, let reason) = error {
+        expect(library == name)
+        expect(!reason.isEmpty)
+    } else {
+        fail(error.description())
     }
 }
 
-@test
-fn aLibrarysNameIsChecked() {
-    for (name, reason) in [("", "it has no name"), ("a\u{0}b", "its name has a NUL in it")] {
-        do {
-            unsafe {
-                _ = try DynamicLibrary.open(name)
-            }
-            assert(false)
-        } catch {
-            assertEqual(error, LibraryError.NotLoaded(library: name, reason: reason))
-            require(error.description().hasPrefix("'\(name)' could not be loaded: "))
+@test(arguments: [("", "it has no name"), ("a\u{0}b", "its name has a NUL in it")])
+fn aLibrarysNameIsChecked(_ name: String, _ reason: String) {
+    let error = LibraryError.NotLoaded(library: name, reason: reason)
+    expectThrows(error) {
+        unsafe {
+            _ = try DynamicLibrary.open(name)
         }
     }
+    expect(error.description().hasPrefix("'\(name)' could not be loaded: "))
 }
 
 @test
-fn zlibIsLoadedAndCalled() {
-    let library = zlib()
-    if library == none {
-        return
+fn zlibIsLoadedAndCalled() throws {
+    guard let library = zlib() else {
+        try skip("there is no zlib")
     }
     unsafe {
         let version: () -> CStr = try! library.function("zlibVersion")
@@ -126,7 +117,7 @@ fn zlibIsLoadedAndCalled() {
 
 // The function keeps its library open after the library's own value is gone.
 @test
-fn aFunctionKeepsItsLibraryOpen() {
+fn aFunctionKeepsItsLibraryOpen() throws {
     var version: (() -> CStr)? = none
     do {
         if let library = zlib() {
@@ -135,19 +126,21 @@ fn aFunctionKeepsItsLibraryOpen() {
             }
         }
     }
-    if let version {
-        expect(version().string.hasPrefix("1."))
+    guard let kept = version else {
+        try skip("there is no zlib")
     }
+    expect(kept().string.hasPrefix("1."))
 }
 
 @test
-fn aLibraryIsOpenedByItsPathAndKnowsIt() {
-    if let library = zlib() {
-        expect(!library.path.isEmpty)
-        expect(library.contains("adler32"))
-        unsafe {
-            expect((try? DynamicLibrary.open(library.path, global: true)) != none)
-        }
+fn aLibraryIsOpenedByItsPathAndKnowsIt() throws {
+    guard let library = zlib() else {
+        try skip("there is no zlib")
+    }
+    expect(!library.path.isEmpty)
+    expect(library.contains("adler32"))
+    unsafe {
+        expect((try? DynamicLibrary.open(library.path, global: true)) != none)
     }
 }
 

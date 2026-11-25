@@ -78,13 +78,8 @@ fn aCStringStaysWhereItIs() {
 
 @test
 fn aNulInsideIsAnError() {
-    do {
-        _ = try CString("ab\u{0}c")
-        assert(false)
-    } catch {
-        assertEqual(error, InteriorNul(position: 2))
-        assertEqual(error.description(), "a C string cannot have a NUL in it, and byte 2 is one")
-    }
+    expectThrows(InteriorNul(position: 2)) { _ = try CString("ab\u{0}c") }
+    assertEqual(InteriorNul(position: 2).description(), "a C string cannot have a NUL in it, and byte 2 is one")
 }
 
 @test(traps: "a C string cannot have a NUL in it")
@@ -138,32 +133,24 @@ union Oops: Error { Bad }
 
 @test
 fn whatTheBodyThrowsIsThrown() {
-    var caught = 0
-    do {
+    expectThrows(Oops.self) {
         try "x".withCString { (text: CStr) throws(Oops) in
-            throw Oops.Bad
-        }
-    } catch {
-        caught += 1
+        throw Oops.Bad
     }
-    do {
+    }
+    expectThrows(Oops.self) {
         try ["x"].withCStrings { (texts: RawPtr<RawPtr<CChar>>) throws(Oops) in
-            throw Oops.Bad
-        }
-    } catch {
-        caught += 1
+        throw Oops.Bad
     }
-    assertEqual(caught, 2)
+    }
 }
 
-@test
-fn textOfAnyLengthIsLent() {
-    for count in [1, 126, 127, 128, 129, 5000] {
-        let text = "x".repeated(count)
-        text.withCString { lent in
-            assertEqual(lent.count, count)
-            assertEqual(lent.string, text)
-        }
+@test(arguments: [1, 126, 127, 128, 129, 5000])
+fn textOfAnyLengthIsLent(_ count: Int) {
+    let text = "x".repeated(count)
+    text.withCString { lent in
+        assertEqual(lent.count, count)
+        assertEqual(lent.string, text)
     }
 }
 

@@ -99,12 +99,8 @@ fn whatFailsIsThrown() {
     unsafe {
         var nothing = OwnedFd.taking(-1)
         expect(!nothing.isValid)
-        do {
-            _ = try nothing.duplicate()
-            assert(false)
-        } catch {
-            assertEqual(error.description().hasPrefix("'descriptor -1' failed"), true)
-        }
+        let error = expectThrows { _ = try nothing.duplicate() }
+        expect((error?.description() ?? "").hasPrefix("'descriptor -1' failed"))
         try! nothing.close()
         var odd = OwnedFd.taking(999_999)
         expectThrows { try odd.close() }

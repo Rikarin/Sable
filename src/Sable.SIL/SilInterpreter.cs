@@ -2470,7 +2470,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return AtomicBuiltin(builtin, operands);
         }
 
-        if (builtin.Name.StartsWith("lock_", StringComparison.Ordinal) || builtin.Name.StartsWith("condition_", StringComparison.Ordinal)) {
+        if (builtin.Name.StartsWith("lock_", StringComparison.Ordinal) || builtin.Name.StartsWith("rwlock_", StringComparison.Ordinal) || builtin.Name.StartsWith("condition_", StringComparison.Ordinal)) {
             return LockBuiltin(builtin, operands);
         }
 

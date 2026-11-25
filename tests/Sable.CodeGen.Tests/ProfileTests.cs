@@ -194,6 +194,7 @@ public sealed class ProfileTests {
                                         @dead = global { ptr, i32, i32 } { ptr null, i32 0, i32 0 }
                                         {{LlvmEmitter.RetainAndRelease(checkArc)}}
                                         declare void @sable_set_arguments(i32, ptr)
+                                        declare void @sable_share(ptr)
 
                                         define i32 @main(i32 %argc, ptr %argv) {
                                           call void @sable_set_arguments(i32 %argc, ptr %argv)

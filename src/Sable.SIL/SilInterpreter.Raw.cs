@@ -296,6 +296,10 @@ public sealed partial class SilInterpreter {
     /// <summary>The locks made, by handle: whether each is held.</summary>
     readonly Dictionary<long, bool> _locks = [];
 
+    readonly Dictionary<long, long> _readers = [];
+
+    const int LockRoom = 24;
+
     long _nextLock = 1;
 
     /// <summary>
@@ -307,14 +311,31 @@ public sealed partial class SilInterpreter {
     /// </summary>
     object? LockBuiltin(BuiltinInst builtin, object?[] operands) {
         switch (builtin.Name) {
-            case "lock_new":
+            case "lock_new": {
+                // The room before it is memory (Runtime.lockRoom).
+                var start = (_rawNext + 15) / 16 * 16;
+                _rawNext = start + LockRoom + 24;
+                _rawBlocks.Add(start, new RawBlock(start, LockRoom));
+                _locks[start + LockRoom] = false;
+                return start + LockRoom;
+            }
+
+            case "lock_free": {
+                var handle = (long)operands[0]!;
+                _locks.Remove(handle);
+                _rawBlocks[handle - LockRoom].Freed = true;
+                _rawBlocks[handle - LockRoom].Values.Clear();
+                return null;
+            }
+
+            case "rwlock_new":
             case "condition_new": {
                 var handle = _nextLock++;
                 _locks[handle] = false;
                 return handle;
             }
 
-            case "lock_free" or "condition_free":
+            case "condition_free":
                 _locks.Remove((long)operands[0]!);
                 return null;
 
@@ -339,6 +360,41 @@ public sealed partial class SilInterpreter {
             }
 
             case "lock_release":
+                _locks[(long)operands[0]!] = false;
+                return null;
+
+            case "rwlock_free": {
+                var handle = (long)operands[0]!;
+                _locks.Remove(handle);
+                _readers.Remove(handle);
+                return null;
+            }
+
+            case "rwlock_read": {
+                var handle = (long)operands[0]!;
+                if (_locks[handle]) {
+                    throw new SilTrap("a lock is taken to read that is held to write: with one thread running every task, it would never be released");
+                }
+
+                _readers[handle] = _readers.GetValueOrDefault(handle) + 1;
+                return 0L;
+            }
+
+            case "rwlock_read_done":
+                _readers[(long)operands[0]!]--;
+                return null;
+
+            case "rwlock_write": {
+                var handle = (long)operands[0]!;
+                if (_locks[handle] || _readers.GetValueOrDefault(handle) > 0) {
+                    throw new SilTrap("a lock is taken to write that is held already: with one thread running every task, it would never be released");
+                }
+
+                _locks[handle] = true;
+                return null;
+            }
+
+            case "rwlock_write_done":
                 _locks[(long)operands[0]!] = false;
                 return null;
 

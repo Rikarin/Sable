@@ -296,6 +296,11 @@ public struct Runtime {
     @builtin("lock_new")
     public static fn lockNew() -> Int
 
+    /// How many bytes before a lock are its maker's to use, for what it
+    /// guards: on the lock's own cache line, so that a thread that has
+    /// taken the lock has them too. Aligned as an Int is.
+    public static const lockRoom = 24
+
     @builtin("lock_free")
     public static fn lockFree(_ lock: Int)
 
@@ -307,6 +312,25 @@ public struct Runtime {
 
     @builtin("lock_release")
     public static fn lockRelease(_ lock: Int)
+
+    @builtin("rwlock_new")
+    public static fn rwLockNew() -> Int
+
+    @builtin("rwlock_free")
+    public static fn rwLockFree(_ lock: Int)
+
+    // Takes the lock to read: what rwLockReadDone is given.
+    @builtin("rwlock_read")
+    public static fn rwLockRead(_ lock: Int) -> Int
+
+    @builtin("rwlock_read_done")
+    public static fn rwLockReadDone(_ lock: Int, _ counted: Int)
+
+    @builtin("rwlock_write")
+    public static fn rwLockWrite(_ lock: Int)
+
+    @builtin("rwlock_write_done")
+    public static fn rwLockWriteDone(_ lock: Int)
 
     @builtin("condition_new")
     public static fn conditionNew() -> Int

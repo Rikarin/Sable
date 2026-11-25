@@ -66,3 +66,59 @@ fn aHeldMutexIsNotAvailable() {
     assert(refused)
     assertEqual(n.withLockIfAvailable { $0 }, 2)
 }
+
+// Counts down as it goes.
+final class Held {
+    let live: Atomic<Int>
+
+    init(_ live: Atomic<Int>) {
+        self.live = live
+        live.add(1)
+    }
+
+    deinit {
+        live.subtract(1)
+    }
+}
+
+@test
+fn whatIsPutInALockedArrayIsCountedOnEveryThread() async {
+    // Made inside the lock, stored in an array that is shared already, and
+    // held by several threads outside it: in place, appended, in an array
+    // of arrays, and in a field of an object.
+    let live = Atomic<Int>(0)
+    if true {
+        let slots: Mutex<Held?[>..]> = Mutex([none, none, none, none])
+        let lists: Mutex<Held[>..][>..]> = Mutex([[], []])
+        await withTaskGroup(of: Int.self) { group in
+            for task in 0..<4 {
+                group.spawn {
+                    var kept: Held[>..] = []
+                    for i in 0..<3000 {
+                        let at = (i + task) % 4
+                        if i % 5 == 0 {
+                            slots.withLock { $0[at] = Held(live) }
+                        }
+                        if let held = slots.withLock({ $0[at] }) {
+                            kept.append(held)
+                        }
+                        lists.withLock { lists in
+                            if lists[at % 2].count > 20 {
+                                lists[at % 2] = []
+                            }
+                            lists[at % 2].append(Held(live))
+                        }
+                        kept.append(contentsOf: lists.withLock { $0[(at + 1) % 2] })
+                        if kept.count > 50 {
+                            kept = []
+                        }
+                    }
+                    return kept.count
+                }
+            }
+            await group.waitForAll()
+        }
+        assert(live.load() > 0)
+    }
+    assertEqual(live.load(), 0)
+}

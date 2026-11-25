@@ -86,47 +86,120 @@ fn aThrowingReaderOrWriterLetsTheLockGo() {
 @test
 fn aReaderWaitsForTheWriter() async {
     let table = RwLock<Int>(0)
+    let writing = Atomic<Bool>(false)
     let started = Atomic<Bool>(false)
-    let reader = table.write { value -> Task<Int> in
-        let task = Task.spawn {
-            started.store(true)
-            return table.read { $0 }
+    let writer = Task.spawn {
+        await Task.blocking {
+            table.write { value in
+            writing.store(true)
+            while !started.load() { }
+            // Time for the reader to come to the lock, and wait.
+            pause()
+            value = 5
         }
-        while !started.load() { }
-        // Time for the reader to come to the lock, and wait.
-        pause()
-        value = 5
-        return task
+        }
+    }
+    while !writing.load() {
+        await Task.yield()
+    }
+    let reader = Task.spawn {
+        await Task.blocking {
+        started.store(true)
+        return table.read { $0 }
+    }
     }
     assertEqual(await reader.value, 5)
+    await writer.value
 }
 
 @test
 fn aWriterWaitsForTheReadersAndGoesBeforeLaterOnes() async {
     let table = RwLock<Int>(0)
-    let writing = Atomic<Bool>(false)
     let reading = Atomic<Bool>(false)
-    let (writer, reader) = table.read { value -> (Task<Int>, Task<Int>) in
-        let writer = Task.spawn {
-            writing.store(true)
-            return table.write { value -> Int in
-                value += 1
-                return value
-            }
+    let writing = Atomic<Bool>(false)
+    let readingLater = Atomic<Bool>(false)
+    let first = Task.spawn {
+        await Task.blocking {
+            table.read { value in
+            reading.store(true)
+            while !writing.load() { }
+            // Time for the writer to come to the lock, and wait; then
+            // for the later reader.
+            pause()
+            assertEqual(value, 0)
+            while !readingLater.load() { }
+            pause()
         }
+        }
+    }
+    while !reading.load() {
+        await Task.yield()
+    }
+    let writer = Task.spawn {
+        await Task.blocking {
+        writing.store(true)
+        return table.write { value -> Int in
+            value += 1
+            return value
+        }
+    }
+    }
+    let later = Task.spawn {
+        await Task.blocking {
         while !writing.load() { }
         pause()
-        assertEqual(value, 0)
-        let reader = Task.spawn {
-            reading.store(true)
-            return table.read { $0 }
-        }
-        while !reading.load() { }
-        pause()
-        return (writer, reader)
+        readingLater.store(true)
+        return table.read { $0 }
+    }
     }
     assertEqual(await writer.value, 1)
-    assertEqual(await reader.value, 1)
+    assertEqual(await later.value, 1)
+    await first.value
+}
+
+struct Tally {
+    var count: Int
+    var text: String
+}
+
+@test
+fn crowdsOfReadersAndWritersSeeWholeValues() async {
+    // Readers enough to be counted each in a place of its own, some of them,
+    // and some writers, inside for long enough that the others sleep.
+    let table = RwLock<Tally>(Tally { count: 0, text: "0" })
+    let whole = await withTaskGroup(of: Bool.self) { group -> Bool in
+        for task in 0..<6 {
+            group.spawn {
+                var whole = true
+                for i in 0..<400 {
+                    if i % 20 == task {
+                        table.write { (tally: inout Tally) in
+                            tally.count += 1
+                            if i % 60 == 0 {
+                                Runtime.sleep(nanoseconds: 20000)
+                            }
+                            tally.text = "\(tally.count)"
+                        }
+                    } else {
+                        whole = table.read { tally -> Bool in
+                            if i % 130 == 7 {
+                                Runtime.sleep(nanoseconds: 15000)
+                            }
+                            return tally.text == "\(tally.count)"
+                        } && whole
+                    }
+                }
+                return whole
+            }
+        }
+        var all = true
+        for await whole in group {
+            all = all && whole
+        }
+        return all
+    }
+    assert(whole, "a reader saw a value part-way through a write")
+    assertEqual(table.read { $0.count }, 120)
 }
 
 // Waits, holding what it holds, for other threads to come to a lock.

@@ -31,6 +31,7 @@ typedef struct SableThread {
     int64_t live_objects, allocations;
     int64_t frames_made, frame_chunks; // async frames (frames.c)
     struct SableThread *next; // every thread's, the latest first
+    int32_t index;            // how many were made before it
 } SableThread;
 
 static SableThread *all_threads;
@@ -87,6 +88,16 @@ static inline void this_thread_set(SableThread *thread) {
 }
 #endif
 
+// A pause in a spin: the processor's hint that this is a wait loop. On ARM
+// 'yield' does nothing on most cores, and 'isb' is as long as x86's 'pause'.
+static inline void spin_pause(void) {
+#if defined(__aarch64__)
+    __asm__ __volatile__("isb");
+#elif defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#endif
+}
+
 // A lock for a few instructions: taken by spinning, then by letting
 // another thread run, since its holder may have been preempted.
 typedef struct SpinLock {
@@ -100,6 +111,8 @@ __attribute__((noinline)) static void spin_lock_held(SpinLock *lock) {
             if (++spins > 64) {
                 thread_yield();
                 spins = 0;
+            } else {
+                spin_pause();
             }
         }
     } while (__atomic_exchange_n(&lock->held, 1, __ATOMIC_ACQUIRE));
@@ -127,6 +140,7 @@ __attribute__((noinline)) static SableThread *make_thread(void) {
 
     spin_lock(&threads_lock);
     thread->next = all_threads;
+    thread->index = all_threads != NULL ? all_threads->index + 1 : 0;
     all_threads = thread;
     spin_unlock(&threads_lock);
     this_thread_set(thread);

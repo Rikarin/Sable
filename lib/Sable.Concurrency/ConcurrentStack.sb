@@ -2,8 +2,8 @@ module Sable.Concurrency
 
 // A last-in, first-out stack for many threads at once. Every operation is
 // at the one end, so there is nothing to spread over locks as the queue
-// and the dictionary do: an array behind a Mutex, its lock held for a push
-// or a pop and no longer.
+// and the dictionary do: an array behind a lock, held for a push or a pop
+// and no longer, the array's reference on the lock's cache line.
 
 /// A last-in, first-out stack that many threads push to and pop from at
 /// once: .NET's `ConcurrentStack`. Each operation is atomic. Its values
@@ -19,22 +19,57 @@ module Sable.Concurrency
 /// ```
 @immutable
 public final class ConcurrentStack<Element: Sendable> {
-    let items: Mutex<Element[>..]>
+    let lock: Int
 
     /// An empty stack.
     public init() {
-        items = Mutex<Element[>..]>([])
+        lock = Runtime.lockNew()
+        unsafe {
+            cell().initialize(to: [])
+        }
+    }
+
+    deinit {
+        unsafe {
+            cell().deinitialize()
+        }
+        Runtime.lockFree(lock)
+    }
+
+    fn cell() -> RawPtr<Element[>..]> {
+        return RawPtr<Element[>..]>(address: lock - Runtime.lockRoom)
+    }
+
+    // The closure's result for the values, the lock held.
+    fn withItems<R>(_ body: (inout Element[>..]) -> R) -> R {
+        Runtime.lockAcquire(lock)
+        unsafe {
+            var items = cell().move()
+            let result = body(&items)
+            Runtime.share(items)
+            cell().initialize(to: move items)
+            Runtime.lockRelease(lock)
+            return result
+        }
     }
 
     /// Puts the value on top.
     public fn push(_ value: Element) {
-        items.withLock { $0.append(value) }
+        Runtime.share(value)
+        Runtime.lockAcquire(lock)
+        unsafe {
+            var items = cell().move()
+            items.append(value)
+            Runtime.share(items)
+            cell().initialize(to: move items)
+        }
+        Runtime.lockRelease(lock)
     }
 
     /// Puts each of the values on top, in order, as one step: no other
     /// thread's value comes between them.
     public fn push(contentsOf values: Element[:]) {
-        items.withLock { stack in
+        withItems { stack in
             for value in values {
                 stack.append(value)
             }
@@ -43,13 +78,23 @@ public final class ConcurrentStack<Element: Sendable> {
 
     /// Takes the value on top; none when the stack is empty.
     public fn pop() -> Element? {
-        return items.withLock { $0.isEmpty ? none : $0.removeLast() }
+        Runtime.lockAcquire(lock)
+        unsafe {
+            var items = cell().move()
+            var value: Element? = none
+            if !items.isEmpty {
+                value = items.removeLast()
+            }
+            cell().initialize(to: move items)
+            Runtime.lockRelease(lock)
+            return value
+        }
     }
 
     /// Takes up to 'count' values from the top, the top one first, as one
     /// step.
     public fn pop(upTo count: Int) -> Element[>..] {
-        return items.withLock { stack in
+        return withItems { stack in
             var taken: Element[>..] = []
             while taken.count < count && !stack.isEmpty {
                 taken.append(stack.removeLast())
@@ -60,17 +105,17 @@ public final class ConcurrentStack<Element: Sendable> {
 
     /// The value on top, left there; none when the stack is empty.
     public fn peek() -> Element? {
-        return items.withLock { $0.last }
+        return withItems { $0.last }
     }
 
     /// How many values the stack holds.
-    public var count: Int => items.withLock { $0.count }
+    public var count: Int => withItems { $0.count }
 
     /// Whether the stack is empty.
-    public var isEmpty: Bool => items.withLock { $0.isEmpty }
+    public var isEmpty: Bool => withItems { $0.isEmpty }
 
     /// Removes every value.
     public fn removeAll() {
-        items.withLock { $0.removeAll() }
+        withItems { $0.removeAll() }
     }
 }

@@ -4,10 +4,10 @@ module Sable.Concurrency
 // its entries are spread over shards by their keys' hashes, each shard a
 // Dictionary behind a lock of its own, so that threads working on keys of
 // different shards never wait for each other. The shards are raw memory,
-// each lock and each Dictionary on cache lines of its own, rather than an
-// array of Mutex objects: reaching an object would retain and release it,
-// and every thread counting the same objects up and down would pass their
-// cache lines from core to core on every operation. Each operation on one key is
+// each Dictionary in the room on its lock's cache line (Runtime.lockRoom),
+// rather than an array of Mutex objects: reaching an object would retain and
+// release it, and every thread counting the same objects up and down would
+// pass their cache lines from core to core on every operation. Each operation on one key is
 // atomic: it holds that key's shard for its whole length, the closure of
 // getOrInsert and update included. What spans shards (count, iteration) sees
 // each shard as it is when it gets to it, not all of them at one moment.
@@ -30,47 +30,59 @@ public final class ConcurrentDictionary<Key: Hashable & Sendable, Value: Sendabl
     public alias Element = (key: Key, value: Value)
     public alias Iter = ConcurrentDictionaryIterator<Key, Value>
 
-    // Shard i's lock is locks[i]; its Dictionary is cells[i * spacing].
+    // The shards' locks, each with its Dictionary in the room before it.
     let locks: RawPtr<Int>
-    let cells: RawPtr<[Key: Value]>
-    let spacing: Int
     let mask: Int
 
     /// An empty dictionary, with as many shards as threads that may use it
-    /// at once without waiting for each other: 32 unless given, rounded up
+    /// at once without waiting for each other: 64 unless given, rounded up
     /// to a power of two.
-    public init(shards count: Int = 32) {
+    public init(shards count: Int = 64) {
         var size = 1
         while size < count {
             size = size * 2
         }
         mask = size - 1
-        let stride = MemoryLayout<[Key: Value]>.stride
-        spacing = stride >= 128 ? 1 : (128 + stride - 1) / stride
         unsafe {
             locks = RawPtr<Int>.allocate(count: size)
-            cells = RawPtr<[Key: Value]>.allocate(count: size * spacing)
-            var i = 0
-            while i < size {
-                locks.initialize(to: Runtime.lockNew(), at: i)
+            for i in 0..<size {
+                let lock = Runtime.lockNew()
+                locks.initialize(to: lock, at: i)
                 let empty: [Key: Value] = [:]
-                Runtime.share(empty)
-                cells.initialize(to: empty, at: i * spacing)
-                i = i + 1
+                shard(lock).initialize(to: empty)
             }
         }
     }
 
     deinit {
         unsafe {
-            var i = 0
-            while i <= mask {
-                cells.advanced(by: i * spacing).deinitialize()
-                Runtime.lockFree(locks.load(at: i))
-                i = i + 1
+            for i in 0...mask {
+                let lock = locks.load(at: i)
+                shard(lock).deinitialize()
+                Runtime.lockFree(lock)
             }
-            cells.deallocate()
             locks.deallocate()
+        }
+    }
+
+    // The Dictionary a shard's lock guards.
+    fn shard(_ lock: Int) -> RawPtr<[Key: Value]> {
+        return RawPtr<[Key: Value]>(address: lock - Runtime.lockRoom)
+    }
+
+    // Who takes a shard's lock moves its Dictionary out and back in, so that
+    // it is the only reference to its arrays, and changes them in place; and,
+    // if it changed it, shares it first, as its arrays may be new ones (what
+    // is stored in an array that is shared already is shared as it goes in).
+
+    // The lock of the key's shard, taken. The shard is chosen by the hash's
+    // high bits, as the shard's own Dictionary places its keys by the low
+    // ones.
+    fn acquire(_ key: Key) -> Int {
+        unsafe {
+            let lock = locks.load(at: (key.hashValue >> 40) & mask)
+            Runtime.lockAcquire(lock)
+            return lock
         }
     }
 
@@ -79,49 +91,82 @@ public final class ConcurrentDictionary<Key: Hashable & Sendable, Value: Sendabl
         unsafe {
             let lock = locks.load(at: i)
             Runtime.lockAcquire(lock)
-            var entries = cells.move(at: i * spacing)
+            var entries = shard(lock).move()
             let result = body(&entries)
             Runtime.share(entries)
-            cells.initialize(to: entries, at: i * spacing)
+            shard(lock).initialize(to: move entries)
             Runtime.lockRelease(lock)
             return result
         }
     }
 
-    /// The closure's result for the Dictionary of the key's shard, its lock
-    /// held. The shard is chosen by the hash's high bits, as the shard's
-    /// own Dictionary places its keys by the low ones.
-    fn withShard<R>(of key: Key, _ body: (inout [Key: Value]) -> R) -> R {
-        return withShard((key.hashValue >> 40) & mask, body)
-    }
-
     /// The key's value, or none.
     public subscript(key: Key) -> Value? {
-        get => withShard(of: key) { $0[key] }
+        get {
+            let lock = acquire(key)
+            unsafe {
+                var entries = shard(lock).move()
+                let value = entries[key]
+                shard(lock).initialize(to: move entries)
+                Runtime.lockRelease(lock)
+                return value
+            }
+        }
     }
 
     /// Whether the key has a value.
     public fn contains(_ key: Key) -> Bool {
-        return withShard(of: key) { $0.contains(key) }
+        let lock = acquire(key)
+        unsafe {
+            var entries = shard(lock).move()
+            let found = entries.contains(key)
+            shard(lock).initialize(to: move entries)
+            Runtime.lockRelease(lock)
+            return found
+        }
     }
 
     /// Sets the key's value, and gives the value it replaced, if any.
     public fn updateValue(_ value: Value, forKey key: Key) -> Value? {
         Runtime.share(key)
         Runtime.share(value)
-        return withShard(of: key) { $0.updateValue(value, forKey: key) }
+        let lock = acquire(key)
+        unsafe {
+            var entries = shard(lock).move()
+            let result = entries.updateValue(value, forKey: key)
+            Runtime.share(entries)
+            shard(lock).initialize(to: move entries)
+            Runtime.lockRelease(lock)
+            return result
+        }
     }
 
     /// Sets the key's value if it has none: whether it did (.NET's TryAdd).
     public fn insert(_ value: Value, forKey key: Key) -> Bool {
         Runtime.share(key)
         Runtime.share(value)
-        return withShard(of: key) { $0.insert(value, forKey: key) }
+        let lock = acquire(key)
+        unsafe {
+            var entries = shard(lock).move()
+            let result = entries.insert(value, forKey: key)
+            Runtime.share(entries)
+            shard(lock).initialize(to: move entries)
+            Runtime.lockRelease(lock)
+            return result
+        }
     }
 
     /// Removes the key, and gives the value it had, if any.
     public fn remove(_ key: Key) -> Value? {
-        return withShard(of: key) { $0.remove(key) }
+        let lock = acquire(key)
+        unsafe {
+            var entries = shard(lock).move()
+            let result = entries.remove(key)
+            Runtime.share(entries)
+            shard(lock).initialize(to: move entries)
+            Runtime.lockRelease(lock)
+            return result
+        }
     }
 
     /// The key's value, made by the closure and kept if it has none (.NET's
@@ -129,13 +174,29 @@ public final class ConcurrentDictionary<Key: Hashable & Sendable, Value: Sendabl
     /// two threads that ask for the same key at once get the one value.
     public fn getOrInsert(_ key: Key, with make: () -> Value) -> Value {
         Runtime.share(key)
-        return withShard(of: key) { $0.orInsertWith(key, make) }
+        let lock = acquire(key)
+        unsafe {
+            var entries = shard(lock).move()
+            let result = entries.orInsertWith(key, make)
+            Runtime.share(entries)
+            shard(lock).initialize(to: move entries)
+            Runtime.lockRelease(lock)
+            return result
+        }
     }
 
     /// Changes the key's value in place, holding its shard: whether it had
     /// one to change.
     public fn update(_ key: Key, _ change: (inout Value) -> Void) -> Bool {
-        return withShard(of: key) { $0.modify(key, change) }
+        let lock = acquire(key)
+        unsafe {
+            var entries = shard(lock).move()
+            let result = entries.modify(key, change)
+            Runtime.share(entries)
+            shard(lock).initialize(to: move entries)
+            Runtime.lockRelease(lock)
+            return result
+        }
     }
 
     /// Changes the key's value in place, starting from the default when it
@@ -143,7 +204,14 @@ public final class ConcurrentDictionary<Key: Hashable & Sendable, Value: Sendabl
     public fn update(_ key: Key, default fallback: Value, _ change: (inout Value) -> Void) {
         Runtime.share(key)
         Runtime.share(fallback)
-        withShard(of: key) { $0.modify(key, default: fallback, change) }
+        let lock = acquire(key)
+        unsafe {
+            var entries = shard(lock).move()
+            entries.modify(key, default: fallback, change)
+            Runtime.share(entries)
+            shard(lock).initialize(to: move entries)
+            Runtime.lockRelease(lock)
+        }
     }
 
     /// Removes every entry, one shard after another.

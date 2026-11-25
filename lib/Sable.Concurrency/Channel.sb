@@ -1,11 +1,22 @@
 module Sable.Concurrency
 
 // Channels (docs/04 §4.3, docs/06 §6.7), written in Sable over the core's
-// Task and WaitList. A channel is an actor, so its buffer is changed by one
-// call at a time, whichever threads its senders and receivers run on. A
-// receiver with nothing to take, or a sender with no room, parks in a wait
-// list until a call changes what it waits for, holding no thread; it parks
-// cancellably, so that the task's cancellation wakes it, and it gives up.
+// WaitList. What is sent is added to one ring of values under one lock, and
+// taken from another ring under another: a receiver that finds its ring
+// empty swaps it for the senders', so that the two ends meet once for many
+// values, not at each. A bounded channel, whose senders must know what is
+// held, has one ring and one lock. Neither lock is held for longer than a
+// few values' moving, so neither end waits for the other to run, as it
+// would for an actor. A receiver with nothing to take, or a sender with no
+// room, parks in a wait list, holding no thread, until what it waits for
+// changes: it says so (the waiting counts), and takes the list's ticket,
+// under the lock it looked under, so that a wake between its look and its
+// park is not missed; and it parks cancellably, so that the task's
+// cancellation wakes it, and it gives up — having looked once more, so a
+// change it was woken for is not lost with it. Each value wakes a receiver,
+// and each room made a sender, while any are counted: whoever wakes one
+// counts it out. One that went another way stays counted, which costs a
+// wake of no one.
 
 /// Values passed from task to task in the order sent, that cannot fail:
 /// a ThrowingChannel whose Failure is Never. What is sent crosses from one
@@ -57,35 +68,68 @@ public alias Channel<Element: Sendable> = ThrowingChannel<Element, Never>
 /// await jobs.close()
 /// assert(await worker.value == 55)
 /// ```
-public actor ThrowingChannel<Element: Sendable, Failure: Error>: AsyncSequence {
+@immutable
+public final class ThrowingChannel<Element: Sendable, Failure: Error>: AsyncSequence {
     public alias Iter = ChannelIterator<Element, Failure>
 
-    var queue: ValueQueue<Element> = ValueQueue<Element>()
-    var closed: Bool = false
-    var failure: Failure? = none
-    var waitingReceivers: Int = 0
-    var waitingSenders: Int = 0
-    let receivers: WaitList = WaitList()
-    let senders: WaitList = WaitList()
+    // The senders' lock guards 'back', 'flags' and 'failure'; the
+    // receivers', taken first where both are, 'front'.
+    let sendLock: Int
+    let receiveLock: Int
+    let back: ChannelRing<Element>
+    let front: ChannelRing<Element>
+    // Whether it is closed, and how many receivers, and senders, may be
+    // parked, or about to be: each a word.
+    let flags: RawPtr<Int>
+    let failure: RawPtr<Failure?>
+    let receivers: WaitList
+    let senders: WaitList
 
     /// How many values it holds at most; none when unbounded.
-    public nonisolated let capacity: Int?
+    public let capacity: Int?
 
     /// What a send to it does while it is full.
-    public nonisolated let fullMode: ChannelFullMode
+    public let fullMode: ChannelFullMode
 
     /// An unbounded channel: a send never waits.
-    public init() {
-        capacity = none
-        fullMode = .Wait
+    public convenience init() {
+        self.init(room: none, fullMode: .Wait)
     }
 
     /// A channel holding at most so many values; a send while it is full
     /// does as the full mode says — by default, waits for room.
-    public init(capacity: Int, fullMode: ChannelFullMode = .Wait) {
+    public convenience init(capacity: Int, fullMode: ChannelFullMode = .Wait) {
         precondition(capacity > 0, "a channel cannot hold \(capacity) values")
-        self.capacity = capacity
+        self.init(room: capacity, fullMode: fullMode)
+    }
+
+    init(room: Int?, fullMode: ChannelFullMode) {
+        capacity = room
         self.fullMode = fullMode
+        receivers = WaitList()
+        senders = WaitList()
+        sendLock = Runtime.lockNew()
+        receiveLock = Runtime.lockNew()
+        unsafe {
+            back = ChannelRing.make()
+            front = ChannelRing.make()
+            flags = RawPtr<Int>.allocate(count: channelFlags)
+            flags.initialize(repeating: 0, count: channelFlags)
+            failure = RawPtr<Failure?>.allocate(count: 1)
+            failure.initialize(to: none)
+        }
+    }
+
+    deinit {
+        unsafe {
+            back.destroy()
+            front.destroy()
+            flags.deallocate()
+            failure.deinitialize()
+            failure.deallocate()
+        }
+        Runtime.lockFree(sendLock)
+        Runtime.lockFree(receiveLock)
     }
 
     /// Sends the value, waiting while the channel is full if its full mode
@@ -95,18 +139,17 @@ public actor ThrowingChannel<Element: Sendable, Failure: Error>: AsyncSequence {
     @discardable
     public fn send(_ value: Element) async -> SendResult {
         while true {
-            if closed {
-                return .Closed
+            match offer(value, waiting: true) {
+                case .Done(let result) => {
+                    return result
+                }
+                case .Full(let ticket) => {
+                    if Task.isCancelled {
+                        return .Cancelled
+                    }
+                    await senders.parkCancellably(since: ticket)
+                }
             }
-            if let result = offer(value) {
-                return result
-            }
-            if Task.isCancelled {
-                return .Cancelled
-            }
-            waitingSenders += 1
-            await senders.parkCancellably()
-            waitingSenders -= 1
         }
     }
 
@@ -114,113 +157,250 @@ public actor ThrowingChannel<Element: Sendable, Failure: Error>: AsyncSequence {
     /// full and would have the sender wait.
     @discardable
     public fn trySend(_ value: Element) -> SendResult {
-        if closed {
-            return .Closed
+        match offer(value, waiting: false) {
+            case .Done(let result) => {
+                return result
+            }
+            case .Full(_) => {
+                return .Full
+            }
         }
-        return offer(value) ?? .Full
     }
 
-    // The value taken if there is room, or room made by the full mode:
-    // none if the sender must wait.
-    fn offer(_ value: Element) -> SendResult? {
-        if let capacity = capacity {
-            if queue.count >= capacity {
-                match fullMode {
-                    case .Wait => {
-                        return none
-                    }
-                    case .DropWrite => {
-                        return .Dropped
-                    }
-                    case .DropOldest => {
-                        let _ = queue.removeFirst()
-                    }
-                    case .DropNewest => {
-                        let _ = queue.removeLast()
+    // The value taken if there is room, or room made by the full mode;
+    // waiting, the receivers are told that a sender without room will park.
+    fn offer(_ value: Element, waiting: Bool) -> ChannelOffer {
+        Runtime.share(value)
+        Runtime.lockAcquire(sendLock)
+        unsafe {
+            if flags.load(at: channelClosed) != 0 {
+                Runtime.lockRelease(sendLock)
+                return .Done(.Closed)
+            }
+            // A value dropped is destroyed with the lock let go, as its
+            // deinit may do anything.
+            var dropped: Element? = none
+            if let capacity = capacity {
+                if back.count() >= capacity {
+                    match fullMode {
+                        case .Wait => {
+                            if waiting {
+                                flags.store(flags.load(at: channelSenders) + 1, at: channelSenders)
+                            }
+                            let ticket = senders.ticket
+                            Runtime.lockRelease(sendLock)
+                            return .Full(ticket)
+                        }
+                        case .DropWrite => {
+                            Runtime.lockRelease(sendLock)
+                            return .Done(.Dropped)
+                        }
+                        case .DropOldest => {
+                            dropped = back.removeFirst()
+                        }
+                        case .DropNewest => {
+                            dropped = back.removeLast()
+                        }
                     }
                 }
             }
+            back.append(value)
+            let waiting = flags.load(at: channelReceivers)
+            if waiting > 0 {
+                flags.store(waiting - 1, at: channelReceivers)
+            }
+            Runtime.lockRelease(sendLock)
+            if waiting > 0 {
+                receivers.wakeOne()
+            }
+            dropped = none
         }
-        queue.append(value)
-        if waitingReceivers > 0 {
-            receivers.wakeAll()
-        }
-        return .Sent
+        return .Done(.Sent)
     }
 
     /// The next value, waiting for one: none once the channel is closed and
     /// empty, or if the receiving task is cancelled while it waits. Closed
     /// with an error and empty, it throws the error.
     public fn receive() async throws(Failure) -> Element? {
-        while queue.isEmpty {
-            if closed {
-                if let failure = failure {
-                    throw failure
+        while true {
+            match poll(waiting: true) {
+                case .Value(let value) => {
+                    return value
                 }
-                return none
+                case .Ended => {
+                    return none
+                }
+                case .Failed(let error) => {
+                    throw error
+                }
+                case .Empty(let ticket) => {
+                    if Task.isCancelled {
+                        return none
+                    }
+                    await receivers.parkCancellably(since: ticket)
+                }
             }
-            if Task.isCancelled {
-                return none
-            }
-            waitingReceivers += 1
-            await receivers.parkCancellably()
-            waitingReceivers -= 1
         }
-        return take()
     }
 
     /// The next value if one is there now; none otherwise.
     public fn tryReceive() -> Element? {
-        if queue.isEmpty {
-            return none
+        match poll(waiting: false) {
+            case .Value(let value) => {
+                return value
+            }
+            case _ => {
+                return none
+            }
         }
-        return take()
     }
 
-    fn take() -> Element {
-        let value = queue.removeFirst()
-        if waitingSenders > 0 {
-            senders.wakeAll()
+    // What a receiver finds; waiting, the senders are told that it will park.
+    fn poll(waiting: Bool) -> ChannelPoll<Element, Failure> {
+        if capacity != none {
+            return pollBounded(waiting)
         }
-        return value
+        Runtime.lockAcquire(receiveLock)
+        unsafe {
+            if front.count() == 0 {
+                Runtime.lockAcquire(sendLock)
+                front.swap(with: back)
+                if front.count() == 0 {
+                    let found = nothing(waiting)
+                    Runtime.lockRelease(sendLock)
+                    Runtime.lockRelease(receiveLock)
+                    return found
+                }
+                Runtime.lockRelease(sendLock)
+            }
+            let value = front.removeFirst()
+            Runtime.lockRelease(receiveLock)
+            return .Value(value)
+        }
+    }
+
+    fn pollBounded(_ waiting: Bool) -> ChannelPoll<Element, Failure> {
+        Runtime.lockAcquire(sendLock)
+        unsafe {
+            if back.count() == 0 {
+                let found = nothing(waiting)
+                Runtime.lockRelease(sendLock)
+                return found
+            }
+            let value = back.removeFirst()
+            let waiting = flags.load(at: channelSenders)
+            if waiting > 0 {
+                flags.store(waiting - 1, at: channelSenders)
+            }
+            Runtime.lockRelease(sendLock)
+            if waiting > 0 {
+                senders.wakeOne()
+            }
+            return .Value(value)
+        }
+    }
+
+    // What a receiver finds that finds no value. Under the senders' lock.
+    fn nothing(_ waiting: Bool) -> ChannelPoll<Element, Failure> {
+        unsafe {
+            if flags.load(at: channelClosed) != 0 {
+                if let error = failure.load() {
+                    return .Failed(error)
+                }
+                return .Ended
+            }
+            if waiting {
+                flags.store(flags.load(at: channelReceivers) + 1, at: channelReceivers)
+            }
+        }
+        return .Empty(receivers.ticket)
     }
 
     /// No more values will come: sends from now on are `.Closed`, those
     /// waiting for room among them, and receivers get what the channel
     /// holds, then none. Closing it again does nothing.
     public fn close() {
-        if closed {
-            return
-        }
-        closed = true
-        receivers.wakeAll()
-        senders.wakeAll()
+        end(none)
     }
 
     /// Closed with an error: receivers get what the channel holds, then the
     /// error, thrown — .NET's `Complete(exception)`. Closing it again, with
     /// or without an error, does nothing.
     public fn close(error: Failure) {
-        if closed {
-            return
+        end(error)
+    }
+
+    fn end(_ error: Failure?) {
+        Runtime.share(error)
+        Runtime.lockAcquire(sendLock)
+        unsafe {
+            if flags.load(at: channelClosed) == 0 {
+                flags.store(1, at: channelClosed)
+                failure.store(error)
+            }
         }
-        failure = error
-        close()
+        Runtime.lockRelease(sendLock)
+        receivers.wakeAll()
+        senders.wakeAll()
     }
 
     /// Whether it has been closed; it may still hold values to receive.
-    public var isClosed: Bool => closed
+    public var isClosed: Bool {
+        get {
+            Runtime.lockAcquire(sendLock)
+            var closed = false
+            unsafe {
+                closed = flags.load(at: channelClosed) != 0
+            }
+            Runtime.lockRelease(sendLock)
+            return closed
+        }
+    }
 
     /// Values sent and not yet received.
-    public var count: Int => queue.count
+    public var count: Int {
+        get {
+            Runtime.lockAcquire(receiveLock)
+            Runtime.lockAcquire(sendLock)
+            var held = 0
+            unsafe {
+                held = front.count() + back.count()
+            }
+            Runtime.lockRelease(sendLock)
+            Runtime.lockRelease(receiveLock)
+            return held
+        }
+    }
 
     /// Whether it holds no values now.
-    public var isEmpty: Bool => queue.isEmpty
+    public var isEmpty: Bool => count == 0
 
     /// Its values as they are received, for 'for await'.
-    public nonisolated fn makeAsyncIterator() -> ChannelIterator<Element, Failure> {
+    public fn makeAsyncIterator() -> ChannelIterator<Element, Failure> {
         return ChannelIterator<Element, Failure> { channel: self, done: false }
     }
+}
+
+// A channel's flags, by their words.
+const channelClosed = 0
+const channelReceivers = 1
+const channelSenders = 2
+const channelFlags = 3
+
+// What became of a value offered: what a send says, or, with no room for
+// it, the ticket to wait for room since.
+union ChannelOffer {
+    Done(SendResult)
+    Full(Int)
+}
+
+// What a receiver finds: a value, the end, the error it ended with, or
+// nothing yet, with the ticket to wait since.
+union ChannelPoll<Element, Failure> {
+    Value(Element)
+    Ended
+    Failed(Failure)
+    Empty(Int)
 }
 
 /// Receives a channel's values, one per 'next()': what 'for await value in

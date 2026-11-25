@@ -2914,6 +2914,7 @@ public static class SilBuiltins {
         Add("task_waitlist_new", SilType.Int);
         Add("task_waitlist_free", SilType.Unit, SilType.Int);
         Add("task_waitlist_wake", SilType.Unit, SilType.Int);
+        Add("task_waitlist_wake_one", SilType.Unit, SilType.Int);
         Add("task_park", SilType.Unit, SilType.Int);
 
         // A wait list's ticket — how many times it has been woken — and a
@@ -2999,8 +3000,7 @@ public static class SilBuiltins {
 
         Add("atomic_fence", SilType.Unit, SilType.Int);
 
-        // Locks (Mutex, Condition and what is built on them): the system's
-        // mutex and condition variable, by handle. A thread that waits
+        // Locks (Mutex, Condition and what is built on them), by handle. A thread that waits
         // blocks. A condition's wait takes the mutex held, and a time of the
         // monotonic clock to stop at, or a negative one for none.
         Add("lock_new", SilType.Int);
@@ -3008,6 +3008,13 @@ public static class SilBuiltins {
         Add("lock_acquire", SilType.Unit, SilType.Int);
         Add("lock_try_acquire", SilType.Bool, SilType.Int);
         Add("lock_release", SilType.Unit, SilType.Int);
+        // A reader/writer lock: what reading it gives, its end takes.
+        Add("rwlock_new", SilType.Int);
+        Add("rwlock_free", SilType.Unit, SilType.Int);
+        Add("rwlock_read", SilType.Int, SilType.Int);
+        Add("rwlock_read_done", SilType.Unit, SilType.Int, SilType.Int);
+        Add("rwlock_write", SilType.Unit, SilType.Int);
+        Add("rwlock_write_done", SilType.Unit, SilType.Int);
         Add("condition_new", SilType.Int);
         Add("condition_free", SilType.Unit, SilType.Int);
         Add("condition_wait", SilType.Unit, SilType.Int, SilType.Int, SilType.Int);

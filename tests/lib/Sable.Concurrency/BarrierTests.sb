@@ -14,10 +14,13 @@ fn aLatchAndABarrierLetThreadsGoTogether() async {
         var task = 0
         while task < 2 {
             group.spawn {
-                if barrier.wait() {
-                    leaders.add(1)
+                // Each on a thread of its own, however few workers there are.
+                await Task.blocking {
+                    if barrier.wait() {
+                        leaders.add(1)
+                    }
+                    latch.countDown()
                 }
-                latch.countDown()
                 return 0
             }
             task += 1

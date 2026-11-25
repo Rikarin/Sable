@@ -34,11 +34,14 @@ fn notifyOneWakesTheOneWaiting() async {
     let ready = Mutex<Bool>(false)
     let changed = Condition()
     let asked = Atomic<Bool>(false)
+    // On a thread of its own, which its wait blocks.
     let waiter = Task.spawn {
-        return ready.withLock(when: changed, { value -> Bool in
-            asked.store(true)
-            return value
-        }) { $0 }
+        await Task.blocking {
+            ready.withLock(when: changed, { value -> Bool in
+                asked.store(true)
+                return value
+            }) { $0 }
+        }
     }
     while !asked.load() {
         await Task.yield()
@@ -57,10 +60,12 @@ fn aWaitWithADeadlineEndsWhenTheValueIsReady() async {
     assertEqual(count.withLock(when: changed, within: 0, { $0 == 0 }) { $0 }, 0)
     let asked = Atomic<Bool>(false)
     let waiter = Task.spawn {
-        return count.withLock(when: changed, within: 60000000000, { value -> Bool in
-            asked.store(true)
-            return value > 0
-        }) { $0 * 10 }
+        await Task.blocking {
+            count.withLock(when: changed, within: 60000000000, { value -> Bool in
+                asked.store(true)
+                return value > 0
+            }) { $0 * 10 }
+        }
     }
     while !asked.load() {
         await Task.yield()

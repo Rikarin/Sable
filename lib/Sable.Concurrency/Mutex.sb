@@ -99,16 +99,18 @@ public final class Mutex<Value> {
     }
 
     // The closure run on the value, the lock held already; the value put
-    // back and the lock let go after, whether it returns or throws.
+    // back and the lock let go after, whether it returns or throws. Moved, so
+    // that no copy of it is left to count down once the lock is let go: the
+    // next holder would find it not its own, and copy what it changes.
     fn held<R, E: Error>(_ body: (inout Value) throws(E) -> R) throws(E) -> R {
         var value = take()
         do {
             let result = try body(&value)
-            put(value)
+            put(move value)
             Runtime.lockRelease(lock)
             return result
         } catch {
-            put(value)
+            put(move value)
             Runtime.lockRelease(lock)
             throw error
         }

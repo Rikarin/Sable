@@ -1,5 +1,7 @@
 module Sable.IO
 
+import Sable.Concurrency
+
 /// Bytes passed from a writing task to a reading one through buffers of
 /// the pipe's own, rented from a BufferPool: .NET's System.IO.Pipelines,
 /// what a server reads requests through. The writer fills buffers and
@@ -15,7 +17,7 @@ module Sable.IO
 /// thresholds must be above the largest message: a writer held back by a
 /// reader that is waiting for it waits for ever, as .NET's does.
 ///
-/// The pipe is an actor; `reader` and `writer` are its two ends.
+/// `reader` and `writer` are its two ends.
 ///
 /// ```sable
 /// let pipe = Pipe()
@@ -28,7 +30,8 @@ module Sable.IO
 /// await pipe.reader.advance(consumed: 3)
 /// await writing.value
 /// ```
-public actor Pipe {
+@immutable
+public final class Pipe {
     /// How far ahead of its reader a writer gets before its flush waits.
     public let pauseWriterThreshold: Int
     /// How far ahead of its reader a waiting writer goes on again: at or
@@ -37,6 +40,135 @@ public actor Pipe {
     /// How big a buffer the writer fills: the most a segment holds.
     public let segmentSize: Int
 
+    // Behind a lock held for no longer than a copy: an end waits by parking
+    // in a wait list, whose ticket it takes before it looks, so that a wake
+    // between its look and its park is not missed.
+    let state: Mutex<PipeState>
+    let readers: WaitList
+    let writers: WaitList
+
+    public init(pauseWriterThreshold: Int = 65536, resumeWriterThreshold: Int = 32768, segmentSize: Int = 4096) {
+        precondition(resumeWriterThreshold <= pauseWriterThreshold && segmentSize > 0, "a pipe resumes at or under where it pauses")
+        self.pauseWriterThreshold = pauseWriterThreshold
+        self.resumeWriterThreshold = resumeWriterThreshold
+        self.segmentSize = segmentSize
+        self.state = Mutex(PipeState(segmentSize))
+        self.readers = WaitList()
+        self.writers = WaitList()
+    }
+
+    /// The end bytes are read from.
+    public var reader: PipeReader {
+        get {
+            return PipeReader { pipe: self }
+        }
+    }
+
+    /// The end bytes are written to.
+    public var writer: PipeWriter {
+        get {
+            return PipeWriter { pipe: self }
+        }
+    }
+
+    /// Bytes flushed and not yet consumed.
+    public var length: Int => state.withLock { $0.buffered }
+
+    // ---- Writing -----------------------------------------------------------
+
+    fn copyIn(_ bytes: U8[:]) {
+        state.withLock { $0.copyIn(bytes) }
+    }
+
+    fn takeIn(_ segment: U8[>..]) {
+        state.withLock { $0.takeIn(segment) }
+    }
+
+    fn flushWritten() async -> FlushResult {
+        let (published, full) = state.withLock { (state: inout PipeState) -> (Bool, Bool) in
+            let published = state.publish()
+            return (published, state.buffered >= pauseWriterThreshold)
+        }
+        if published {
+            readers.wakeAll()
+        }
+        var waits = full
+        while true {
+            let ticket = writers.ticket
+            let result = state.withLock { (state: inout PipeState) -> FlushResult? in
+                if waits && state.buffered > resumeWriterThreshold && !state.readerCompleted && !state.flushCanceled {
+                    return none
+                }
+                let canceled = state.flushCanceled
+                state.flushCanceled = false
+                return FlushResult { isCompleted: state.readerCompleted, isCanceled: canceled }
+            }
+            if let result = result {
+                return result
+            }
+            waits = true
+            await writers.park(since: ticket)
+        }
+    }
+
+    fn completeWriting() {
+        state.withLock { (state: inout PipeState) in
+            let _ = state.publish()
+            state.writerCompleted = true
+        }
+        readers.wakeAll()
+    }
+
+    fn cancelFlush() {
+        state.withLock { $0.flushCanceled = true }
+        writers.wakeAll()
+    }
+
+    fn rentBuffer(_ minimumCapacity: Int) -> U8[>..] {
+        let least = minimumCapacity < segmentSize ? segmentSize : minimumCapacity
+        return state.withLock { $0.pool.rent(minimumCapacity: least) }
+    }
+
+    // ---- Reading -----------------------------------------------------------
+
+    fn readBuffered() async -> ReadResult {
+        while true {
+            let ticket = readers.ticket
+            if let result = tryReadBuffered() {
+                return result
+            }
+            await readers.park(since: ticket)
+        }
+    }
+
+    fn tryReadBuffered() -> ReadResult? {
+        return state.withLock { $0.read() }
+    }
+
+    fn advanceReader(consumed: Int, examined: Int) {
+        let buffered = state.withLock { (state: inout PipeState) -> Int in
+            state.advance(consumed, examined)
+            return state.buffered
+        }
+        if buffered <= resumeWriterThreshold {
+            writers.wakeAll()
+        }
+    }
+
+    fn completeReading() {
+        state.withLock { $0.completeReading() }
+        writers.wakeAll()
+    }
+
+    fn cancelRead() {
+        state.withLock { $0.readCanceled = true }
+        readers.wakeAll()
+    }
+}
+
+// What a pipe holds.
+struct PipeState {
+    let segmentSize: Int
     let pool: BufferPool
     // Flushed, for the reader: segments[first...], the first read from
     // 'head' on, 'buffered' bytes in all.
@@ -54,50 +186,24 @@ public actor Pipe {
     var readerCompleted: Bool
     var readCanceled: Bool
     var flushCanceled: Bool
-    let readers: WaitList
-    let writers: WaitList
 
-    public init(pauseWriterThreshold: Int = 65536, resumeWriterThreshold: Int = 32768, segmentSize: Int = 4096) {
-        precondition(resumeWriterThreshold <= pauseWriterThreshold && segmentSize > 0, "a pipe resumes at or under where it pauses")
-        self.pauseWriterThreshold = pauseWriterThreshold
-        self.resumeWriterThreshold = resumeWriterThreshold
+    init(_ segmentSize: Int) {
         self.segmentSize = segmentSize
-        self.pool = BufferPool()
-        self.segments = []
-        self.first = 0
-        self.head = 0
-        self.buffered = 0
-        self.examined = 0
-        self.unflushed = []
-        self.tail = []
-        self.writerCompleted = false
-        self.readerCompleted = false
-        self.readCanceled = false
-        self.flushCanceled = false
-        self.readers = WaitList()
-        self.writers = WaitList()
+        pool = BufferPool()
+        segments = []
+        first = 0
+        head = 0
+        buffered = 0
+        examined = 0
+        unflushed = []
+        tail = []
+        writerCompleted = false
+        readerCompleted = false
+        readCanceled = false
+        flushCanceled = false
     }
 
-    /// The end bytes are read from.
-    public nonisolated var reader: PipeReader {
-        get {
-            return PipeReader { pipe: self }
-        }
-    }
-
-    /// The end bytes are written to.
-    public nonisolated var writer: PipeWriter {
-        get {
-            return PipeWriter { pipe: self }
-        }
-    }
-
-    /// Bytes flushed and not yet consumed.
-    public var length: Int => buffered
-
-    // ---- Writing -----------------------------------------------------------
-
-    fn copyIn(_ bytes: U8[:]) {
+    mutating fn copyIn(_ bytes: U8[:]) {
         var from = 0
         while from < bytes.count {
             if tail.capacity - tail.count == 0 {
@@ -113,7 +219,7 @@ public actor Pipe {
         }
     }
 
-    fn takeIn(_ segment: consuming U8[>..]) {
+    mutating fn takeIn(_ segment: U8[>..]) {
         if !segment.isEmpty {
             if !tail.isEmpty {
                 unflushed.append(tail)
@@ -123,54 +229,24 @@ public actor Pipe {
         }
     }
 
-    // What was written, made the reader's.
-    fn publish() {
+    // What was written, made the reader's: whether anything was.
+    mutating fn publish() -> Bool {
         if !tail.isEmpty {
             unflushed.append(tail)
             tail = []
         }
         if readerCompleted {
             unflushed = []
-            return
+            return false
         }
         for segment in unflushed {
             buffered += segment.count
             segments.append(segment)
         }
-        if !unflushed.isEmpty {
-            unflushed = []
-            readers.wakeAll()
-        }
+        let added = !unflushed.isEmpty
+        unflushed = []
+        return added
     }
-
-    fn flushWritten() async -> FlushResult {
-        publish()
-        if buffered >= pauseWriterThreshold {
-            while buffered > resumeWriterThreshold && !readerCompleted && !flushCanceled {
-                await writers.park()
-            }
-        }
-        let canceled = flushCanceled
-        flushCanceled = false
-        return FlushResult { isCompleted: readerCompleted, isCanceled: canceled }
-    }
-
-    fn completeWriting() {
-        publish()
-        writerCompleted = true
-        readers.wakeAll()
-    }
-
-    fn cancelFlush() {
-        flushCanceled = true
-        writers.wakeAll()
-    }
-
-    fn rentBuffer(_ minimumCapacity: Int) -> U8[>..] {
-        return pool.rent(minimumCapacity: minimumCapacity < segmentSize ? segmentSize : minimumCapacity)
-    }
-
-    // ---- Reading -----------------------------------------------------------
 
     fn current() -> ByteSequence {
         var live: U8[>..][>..] = []
@@ -182,17 +258,9 @@ public actor Pipe {
         return ByteSequence(segments: live, start: head, count: buffered)
     }
 
-    fn readBuffered() async -> ReadResult {
+    // The result of a read, or none while it must wait.
+    mutating fn read() -> ReadResult? {
         precondition(!readerCompleted, "a pipe read after its reader completed")
-        while buffered <= examined && !writerCompleted && !readCanceled {
-            await readers.park()
-        }
-        let canceled = readCanceled
-        readCanceled = false
-        return ReadResult { buffer: current(), isCompleted: writerCompleted, isCanceled: canceled }
-    }
-
-    fn tryReadBuffered() -> ReadResult? {
         if buffered <= examined && !writerCompleted && !readCanceled {
             return none
         }
@@ -201,7 +269,7 @@ public actor Pipe {
         return ReadResult { buffer: current(), isCompleted: writerCompleted, isCanceled: canceled }
     }
 
-    fn advanceReader(consumed: Int, examined seen: Int) {
+    mutating fn advance(_ consumed: Int, _ seen: Int) {
         precondition(consumed >= 0 && consumed <= seen && seen <= buffered, "a pipe advanced by \(consumed) consumed and \(seen) examined of \(buffered)")
         var left = consumed
         while left > 0 {
@@ -234,23 +302,14 @@ public actor Pipe {
         }
         buffered -= consumed
         examined = seen - consumed
-        if buffered <= resumeWriterThreshold {
-            writers.wakeAll()
-        }
     }
 
-    fn completeReading() {
+    mutating fn completeReading() {
         readerCompleted = true
         segments = []
         first = 0
         head = 0
         buffered = 0
         examined = 0
-        writers.wakeAll()
-    }
-
-    fn cancelRead() {
-        readCanceled = true
-        readers.wakeAll()
     }
 }

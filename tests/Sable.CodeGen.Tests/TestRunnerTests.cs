@@ -334,7 +334,7 @@ public sealed class TestRunnerTests {
         var main = files[1].Text.Text;
         Assert.Contains($"module {TestHarness.HarnessModule}\n", main, StringComparison.Ordinal);
         Assert.Contains("import Suite.{ sableHarnessList0 }", main, StringComparison.Ordinal);
-        Assert.Contains("all.append(TestCase { name: \"Suite.doubling\", location: \"test.sb:10\", run: list0[0], traps: none })", main, StringComparison.Ordinal);
+        Assert.Contains("all.append(TestCase { name: \"Suite.doubling\", location: \"test.sb:10\", run: list0[0], traps: none, tags: [], timeLimit: 0, cases: none })", main, StringComparison.Ordinal);
         Assert.Contains("async fn sableHarnessMain() -> Int", main, StringComparison.Ordinal);
     }
 

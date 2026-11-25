@@ -1,0 +1,65 @@
+module CapturedExpressionTests
+
+// What a failed expectation says of its expression (Sable.Testing), tested
+// with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Testing
+
+fn captured(_ value: Bool, _ expression: CapturedExpression = #expression) -> CapturedExpression {
+    return expression
+}
+
+fn told(_ expression: CapturedExpression) -> String {
+    return expression.parts.map({ "\($0.0) = \($0.1)" }).joined(separator: "; ")
+}
+
+struct Point {
+    var x: Int
+    var y: Int
+}
+
+@test
+fn theTextIsTheExpressionsOnOneLine() {
+    let a = 1
+    assertEqualText(captured(a == 1).text, "a == 1")
+    assertEqualText(captured(a == 1
+            && a > 0).text, "a == 1 && a > 0")
+    assertEqualText(CapturedExpression.begin().text, "")
+    assertEqual(CapturedExpression.begin().parts.count, 0)
+}
+
+@test
+fn thePartsAreTheValuesInIt() {
+    let point = Point(x: 3, y: 4)
+    let names = ["a", "b"]
+    assertEqualText(told(captured(point.x + 1 == point.y)), "point = Point(x: 3, y: 4); point.x = 3; point.x + 1 = 4; point.y = 4")
+    assertEqualText(told(captured(names[0] == "a" && !names.isEmpty)),
+        "names = [\"a\", \"b\"]; names[0] = \"a\"; names[0] == \"a\" = true; names.isEmpty = false; !names.isEmpty = true")
+}
+
+@test
+fn whatIsNotWorkedOutIsNotTold() {
+    let n = 0
+    assertEqualText(told(captured(n != 0 && 10 / n > 1)), "n = 0; n != 0 = false")
+}
+
+@test
+fn anEqualityShowsWhereItsSidesDiffer() {
+    let left = "abc"
+    assertEqualText(captured(left == "abd").details(),
+        "    the values differ\n       left: \"abc\"\n      right: \"abd\"\n                ^ first difference at character 3\n")
+    // Two values that read the same are told once, as what they are.
+    let nan = F64.nan
+    assertEqualText(captured(nan == nan).details(), "")
+}
+
+fn parsed(_ text: String) throws(ParseError) -> Int {
+    return try Int.parse(text)
+}
+
+@test
+fn aTriedExpressionHasItsSidesToo() throws(ParseError) {
+    assertEqualText(captured(try parsed("12") == 13).details(),
+        "    the values differ\n       left: 12\n      right: 13\n              ^ first difference at character 1\n")
+}

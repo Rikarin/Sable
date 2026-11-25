@@ -1,0 +1,83 @@
+module Sable.Testing
+
+// 'expect' and 'require' (docs/06 §6.4): what a test says should hold. A
+// failed expectation is reported with what its expression was and the
+// values its parts had, and fails the test; the test goes on after
+// 'expect', and ends at 'require'.
+
+/// Fails the test, saying why; the test goes on.
+public fn recordFailure(_ message: String, file: String = #file, line: Int = #line) {
+    var first = message
+    var rest = ""
+    if let end = message.firstIndex(of: '\n') {
+        first = message[..<end].toString()
+        rest = message[end...].toString()
+    }
+    say("\(first) (\(file):\(line))\(rest)")
+}
+
+// Fails the test and says why, unless a property is trying out cases.
+fn say(_ failure: String) {
+    _ = TestState.failed.add(1)
+    if !TestState.quiet {
+        Runtime.writeError("\(expectationMarker)\(failure)\n")
+    }
+}
+
+// 'condition (file:line)', and what its parts were on the lines after it.
+fn recordFailure(_ captured: CapturedExpression, _ message: String, _ file: String, _ line: Int) {
+    let said = message.isEmpty ? "" : ": \(message)"
+    let details = TestState.quiet ? "" : captured.details()
+    say("\(captured.text)\(said) (\(file):\(line))\(details.isEmpty ? "" : "\n" + details.slice(from: 0, to: details.count - 1))")
+}
+
+// Ends the test, whose failure has been said.
+fn endFailedTest() -> Never {
+    try! stopTest()
+    unreachable()
+}
+
+/// Fails the test unless the condition holds, saying what the condition is
+/// and what each part of it was. The test goes on: every expectation it
+/// does not meet is reported.
+///
+/// ```sable
+/// let names = ["Ada", "Grace"]
+/// expect(names.count == 2)
+/// expect(names.contains("Ada"), "Ada is always invited")
+/// ```
+public fn expect(_ condition: Bool, _ message: String = "", file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) {
+    if !condition {
+        recordFailure(expression, message, file, line)
+    }
+}
+
+/// Fails the test and ends it unless the condition holds, saying what the
+/// condition is and what each part of it was: what the rest of the test
+/// cannot go on without.
+///
+/// ```sable
+/// let names = ["Ada", "Grace"]
+/// require(names.count == 2)
+/// expect(names[1] == "Grace")
+/// ```
+public fn require(_ condition: Bool, _ message: String = "", file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) {
+    if !condition {
+        recordFailure(expression, message, file, line)
+        endFailedTest()
+    }
+}
+
+/// The value, when there is one; with none, the test fails and ends.
+///
+/// ```sable
+/// let first = require(["Ada", "Grace"].first)
+/// expect(first == "Ada")
+/// ```
+public fn require<T>(_ value: T?, _ message: String = "", file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) -> T {
+    if let value = value {
+        return value
+    }
+    recordFailure(expression, message.isEmpty ? "there is no value" : message, file, line)
+    endFailedTest()
+}

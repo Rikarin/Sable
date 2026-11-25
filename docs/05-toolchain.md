@@ -13,7 +13,7 @@ sable new <name> [--lib|--bin]     scaffold a package
 sable init                         scaffold in the current directory
 sable build [--release] [--target] compile
 sable run [-- args...]             build and execute
-sable test [filter] [--doc] [-j n] [--timeout s] [--coverage]  run @test functions and doc examples
+sable test [filter] [--filter expr] [--doc] [-j n] [--timeout s] [--coverage]  run @test functions and doc examples
 sable bench [filter]               run @bench functions, compare to baseline
 sable fuzz [target] [--time 8h]    fuzz a @fuzz function with libFuzzer; --replay, --minimise
 sable check                        type-check only, no codegen (fast)
@@ -48,6 +48,37 @@ object a line on standard output — `severity`, `code`, `message`, `file`,
 `line`, `column`, `rendered` — for editors and CI), `-j <n>` and
 `--offline`; and `sable -V` prints the version. None of them changes what a
 build produces.
+
+`sable test` runs each test in a process of its own, as many at once as there
+are processors (`-j`). What `@test` may say of one:
+
+```sable
+@test(arguments: [("1", 1), ("-7", -7)], tags: ["fast"], timeout: .seconds(5))
+fn parses(_ text: String, _ value: Int) throws { expect(try Int.parse(text) == value) }
+```
+
+- `arguments:` runs the test for each element of an array of what it takes —
+  tuples, for several parameters — or, given an array for each parameter, for
+  each pair. Each case is a test: reported, timed, stopped and selected on its
+  own, as `Module.parses("1", 1)`. (The arrays are worked out as the tests are
+  listed; a case is named for its arguments as Debug writes them, a second one
+  of the same name with `#2` after it.)
+- `tags:` are what `--filter` may ask for it by, and what the reports carry.
+- `timeout:` stops it when it runs longer, and fails it, whatever `--timeout`
+  says of the rest: `.milliseconds`, `.seconds` or `.minutes` of a literal.
+- `traps`, or `traps: "text"`: it passes by trapping.
+
+A name, or part of one, selects tests (`--exact` all of it; a function's name
+is then all its cases). `--filter` takes an expression: `tag:`, `name:` and
+`file:` terms — a bare word is a name's — put together with `&`, `|`, `!` and
+parentheses, `*` standing for any text: `--filter 'tag:fast & !name:*Slow*'`.
+
+`--junit <path>` and `--trx <path>` write the results as JUnit's XML and as
+Visual Studio's TRX, for a CI to show. `--seed <n>` makes the property tests'
+cases from a seed, as a failure gives it (SABLE_TEST_SEED does too). `--bless`,
+or SABLE_UPDATE_SNAPSHOTS=1, writes the snapshots the tests compare with. The
+editor's Test Explorer shows each case under its function. What a test is
+written with is Sable.Testing's (docs/06 §6.4).
 
 `sable test --coverage` counts what of the package's own code (not
 `tests/`, dependencies or the library) the tests run: each line, and each

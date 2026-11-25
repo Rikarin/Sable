@@ -2063,10 +2063,24 @@ Full design in [05-toolchain.md](05-toolchain.md).
 - Isolation: each test is a process of its own, so tests that share
   globals, or start tasks on the runtime's threads, never see each other;
   several run at once only as several processes.
-- **Deferred:** snapshot and property testing (docs/06 lists them under
-  Sable.Testing; #73, #107); a time limit inside the harness's own runner
-  (`--in-process`, or the harness run directly rather than by `sable
-  test`), which would need a builtin to wait on a child with one.
+- **Arguments, expectations, deaths, snapshots, properties (#73).** A
+  `@test(arguments:)` function's arrays are bound where it is declared, in
+  every build; the harness gives each such test a file with the imports of its
+  own (an extension of its type, for a static method) whose function makes the
+  cases, and `TestCase.expanded` names them. The harness does all the
+  selecting: `--describe` takes the filters, gives a test's time limit and
+  tags, and last how many were left out. `#expression`
+  (`Binder.Expressions.cs`) binds the call as a match on a new capture whose
+  one arm is the call, its first argument's parts each put through `note`. A
+  death test is `--run-test <name> --role death:<n>`: the test again, its nth
+  body run and no other. A property's case in a process of its own is `--role
+  property:<n>:<size>`, its choices on standard input; the trap hook starts
+  those, as the process that trapped ends. `TestReport.cs` writes JUnit and TRX.
+- **Deferred:** a time limit inside the harness's own runner (`--in-process`,
+  or the harness run directly rather than by `sable test`); fixtures,
+  lifecycle, serial groups, retries and skipping (#107); `@bench(arguments:)`
+  and one filter for both commands (#129: `TestFilter` is in Sable.Testing for
+  it).
 
 ### Packages, as implemented
 

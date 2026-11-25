@@ -1,0 +1,223 @@
+module Sable.Testing
+
+/// A failing case made simpler while it still fails: the choices it was made
+/// from left out, lowered and brought to 0, until none of that fails. One
+/// series of choices is simpler than another when it is shorter or, as long,
+/// has the smaller choice where they first differ.
+final class Shrinker {
+    // The simplest that fails so far.
+    var best: U64[>..]
+    var spans: (start: Int, end: Int)[>..]
+    // What running the choices drew, if it failed.
+    let attempt: (U64[>..]) -> Drawn?
+    var triesLeft: Int
+    let deadline: Int
+    /// How many times it was made simpler.
+    var steps: Int
+
+    init(_ failing: Drawn, tries: Int, nanoseconds: Int, _ attempt: @escaping (U64[>..]) -> Drawn?) {
+        best = failing.choices
+        spans = failing.spans
+        self.attempt = attempt
+        triesLeft = tries
+        deadline = Runtime.monotonicNanoseconds() + nanoseconds
+        steps = 0
+    }
+
+    fn run() {
+        var before = -1
+        while before != steps && !isDone {
+            before = steps
+            leaveOutSpans()
+            leaveOutRuns()
+            zeroSpans()
+            lower()
+            moveBetween()
+        }
+    }
+
+    var isDone: Bool => triesLeft <= 0 || Runtime.monotonicNanoseconds() > deadline
+
+    // Whether the choices fail, and what they drew is simpler than what
+    // does already, which it then is.
+    fn fails(_ choices: U64[>..]) -> Bool {
+        if isDone || !Shrinker.isSimpler(choices, than: best) {
+            return false
+        }
+        triesLeft -= 1
+        guard let drawn = attempt(choices) else {
+            return false
+        }
+        if !Shrinker.isSimpler(drawn.choices, than: best) {
+            return false
+        }
+        best = drawn.choices
+        spans = drawn.spans
+        steps += 1
+        return true
+    }
+
+    static fn isSimpler(_ one: U64[>..], than other: U64[>..]) -> Bool {
+        if one.count != other.count {
+            return one.count < other.count
+        }
+        var i = 0
+        while i < one.count {
+            if one[i] != other[i] {
+                return one[i] < other[i]
+            }
+            i += 1
+        }
+        return false
+    }
+
+    // Each span — an element of a collection, a value a filter refused —
+    // left out, the last first: what comes after it stays as it is.
+    fn leaveOutSpans() {
+        var i = spans.count - 1
+        while i >= 0 {
+            if i < spans.count {
+                let span = spans[i]
+                if span.end > span.start {
+                    _ = fails(without(span.start, span.end))
+                }
+            }
+            i -= 1
+        }
+    }
+
+    // Runs of choices left out, long ones first.
+    fn leaveOutRuns() {
+        var length = 8
+        while length > 0 {
+            var start = best.count - length
+            while start >= 0 {
+                if start + length <= best.count {
+                    _ = fails(without(start, start + length))
+                }
+                start -= 1
+            }
+            length = length / 2
+        }
+    }
+
+    fn without(_ start: Int, _ end: Int) -> U64[>..] {
+        var left: U64[>..] = []
+        left.reserveCapacity(best.count)
+        var i = 0
+        while i < best.count {
+            if i < start || i >= end {
+                left.append(best[i])
+            }
+            i += 1
+        }
+        return left
+    }
+
+    // Each span made of the simplest choices.
+    fn zeroSpans() {
+        var i = spans.count - 1
+        while i >= 0 {
+            if i < spans.count {
+                var choices = best
+                var at = spans[i].start
+                while at < spans[i].end {
+                    choices[at] = 0
+                    at += 1
+                }
+                _ = fails(choices)
+            }
+            i -= 1
+        }
+    }
+
+    // Each choice as low as it goes: 0, or halfway there, or one less; and
+    // one less with the choices after it left out, as when it said how many.
+    fn lower() {
+        var at = 0
+        while at < best.count {
+            if best[at] != 0 && !fails(with(at, 0)) {
+                var passes: U64 = 0
+                while at < best.count && best[at] > passes + 1 {
+                    let middle = passes + (best[at] - passes) / 2
+                    if !fails(with(at, middle)) {
+                        passes = middle
+                    }
+                    if isDone {
+                        return
+                    }
+                }
+                if at < best.count && best[at] > 0 {
+                    if at + 1 < best.count {
+                        var less = without(at + 1, at + 2)
+                        less[at] = best[at] - 1
+                        _ = fails(less)
+                    }
+                }
+            }
+            at += 1
+        }
+    }
+
+    fn with(_ at: Int, _ value: U64) -> U64[>..] {
+        var choices = best
+        choices[at] = value
+        return choices
+    }
+
+    // A choice lowered and one after it raised as much: two numbers whose
+    // sum is what fails end as small a first one as may be.
+    fn moveBetween() {
+        var at = 0
+        while at + 1 < best.count && at < 64 {
+            var other = at + 1
+            while other < best.count && other < at + 8 {
+                let amount = best[at]
+                if amount > 0 && best[other] <= U64.max - amount {
+                    var choices = with(at, 0)
+                    choices[other] = choices[other] + amount
+                    _ = fails(choices)
+                }
+                other += 1
+            }
+            at += 1
+        }
+    }
+}
+
+/// What a case was made from.
+struct Drawn {
+    let choices: U64[>..]
+    let spans: (start: Int, end: Int)[>..]
+
+    // As one process says it to another, on a line.
+    fn written() -> String {
+        let choicesText = choices.map({ "\($0:x)" }).joined(separator: ",")
+        let spansText = spans.map({ "\($0.start)-\($0.end)" }).joined(separator: ",")
+        return "\(choicesText);\(spansText)"
+    }
+
+    static fn read(_ line: String) -> Drawn {
+        let halves = line.split(';')
+        var choices: U64[>..] = []
+        var spans: (start: Int, end: Int)[>..] = []
+        for text in halves[0].split(',') {
+            if let value = try? U64.parse(text, radix: 16) {
+                choices.append(value)
+            }
+        }
+        if halves.count > 1 {
+            for text in halves[1].split(',') {
+                let ends = text.split('-')
+                if ends.count == 2 {
+                    if let start = try? Int.parse(ends[0]) {
+                        if let end = try? Int.parse(ends[1]) {
+                            spans.append((start: start, end: end))
+                        }
+                    }
+                }
+            }
+        }
+        return Drawn { choices: choices, spans: spans }
+    }
+}

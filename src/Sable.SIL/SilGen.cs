@@ -1416,13 +1416,14 @@ public sealed partial class SilGen {
 
         substitution = WithAssociatedTypes(symbol, substitution);
 
-        // A static member of a generic class named without the class's
+        // A static member of a generic type named without the type's
         // arguments — 'Task.sleep(…)', which never mentions Success — is one
         // function whatever they would be: they are Never.
-        if (symbol.IsStatic && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Class, TypeParameters: { Length: > 0 } classParameters }
-            && classParameters.Any(p => substitution.Lookup(p) is null)) {
+        if (symbol.IsStatic
+            && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Class or TypeKind.Struct or TypeKind.Union, TypeParameters: { Length: > 0 } ownParameters }
+            && ownParameters.Any(p => substitution.Lookup(p) is null)) {
             var map = substitution.Parameters.ToDictionary(static p => p, p => substitution.Lookup(p)!);
-            foreach (var parameter in classParameters.Where(p => substitution.Lookup(p) is null)) {
+            foreach (var parameter in ownParameters.Where(p => substitution.Lookup(p) is null)) {
                 map[parameter] = Core.Never;
             }
 
@@ -7185,6 +7186,11 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol } conversion:
                     return Unwrap(conversion);
 
+                // 'error as? IoError', of any error: the one it boxes.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } ofError
+                    when IsAnyError(ofError.Operand.Type) && CastTarget(ofError.Type is OptionalTypeSymbol named ? named.UnderlyingType : ofError.Type) is not ExistentialTypeSymbol:
+                    return ErrorCast(ofError);
+
                 // 'x as? Dog' and 'x as! Dog': a downcast, checked as the program runs.
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } downcast when IsDowncast(downcast):
                     return Downcast(downcast);
@@ -9072,6 +9078,25 @@ public sealed partial class SilGen {
             // Never reached: a block nothing branches to, dropped with what uses it.
             _current = function.AddBlock();
             return _current.AddArgument(resultType);
+        }
+
+        /// <summary>
+        ///     'error as? IoError' and 'error as! IoError' of an 'any Error': what
+        ///     'match error { case let e as IoError => e; default => none }' gives,
+        ///     and, for 'as!', unwrapped.
+        /// </summary>
+        SilValue? ErrorCast(BoundConversion conversion) {
+            var optional = Sub(conversion.Type) as OptionalTypeSymbol ?? new OptionalTypeSymbol(Sub(conversion.Type));
+            var at = conversion.Syntax;
+            var local = LocalSymbol.Synthesised("$error", Core.Module, optional.UnderlyingType);
+            var matched = new BoundMatch(at, optional, conversion.Operand, [
+                new BoundMatchArm(at, [new BoundTypeTestPattern(at, conversion.Operand.Type, optional.UnderlyingType, local)], null,
+                    new BoundConversion(at, optional, new BoundLocalAccess(at, local), ConversionKind.OptionalWrap)),
+                new BoundMatchArm(at, [], null, new BoundLiteral(at, optional, null)),
+            ]);
+            return conversion.Type is OptionalTypeSymbol
+                ? Expression(matched)
+                : Expression(new BoundConversion(at, optional.UnderlyingType, matched, ConversionKind.Explicit));
         }
 
         /// <summary>'x is Dog': whether the object is of the class, or a subclass of it.</summary>

@@ -12,17 +12,54 @@ const path = require("path");
 const sable = require("./sable");
 const coverage = require("./coverage");
 
-/** `Module.name: test (path:line)`, a line of `sable test --list`. */
-const LISTED = /^(\S+): test \((.+):(\d+)\)$/;
+/**
+ * `Module.name: test (path:line)`, a line of `sable test --list`; a case of
+ * a `@test(arguments:)` test is `Module.name(1, "two words"): test (…)`.
+ */
+const LISTED = /^(\S.*): test \((.+):(\d+)\)$/;
 
 /** `test Module.name ... ok (1.2 ms)`, a line of a run; the time in ns, µs, ms or s. */
-const RESULT = /^test (\S+) \.\.\. (ok|FAILED|ignored)(?: \(([\d.]+) (ns|µs|us|ms|s)\))?/;
+const RESULT = /^test (.+) \.\.\. (ok|FAILED|ignored)(?: \(([\d.]+) (ns|µs|us|ms|s)\)| \(it must trap.*)?$/;
 
 /** Milliseconds in each unit the harness prints a time in. */
 const UNITS = { ns: 1e-6, "µs": 1e-3, us: 1e-3, ms: 1, s: 1000 };
 
 /** `---- Module.name (path:line) ----`, the start of a failure's report. */
-const FAILURE = /^---- (\S+) \((.+):(\d+)\) ----$/;
+const FAILURE = /^---- (.+) \((.+):(\d+)\) ----$/;
+
+/**
+ * A test's name without a case's arguments, whose dots are not the name's.
+ * @param {string} id
+ */
+function functionOf(id) {
+  const open = id.indexOf("(");
+  return open < 0 ? id : id.slice(0, open);
+}
+
+/**
+ * The tests there are to run in an item: itself, or, of a
+ * `@test(arguments:)` test or a package, each of those under it.
+ * @param {vscode.TestItem} item
+ * @param {Set<string>} excluded The items left out, by id.
+ * @returns {vscode.TestItem[]}
+ */
+function leaves(item, excluded) {
+  if (excluded.has(item.id)) {
+    return [];
+  }
+
+  // A package with no tests is none itself.
+  if (item.children.size === 0) {
+    return item.id.includes("::") ? [item] : [];
+  }
+
+  /** @type {vscode.TestItem[]} */
+  const all = [];
+  item.children.forEach((child) => {
+    all.push(...leaves(child, excluded));
+  });
+  return all;
+}
 
 /** @param {vscode.ExtensionContext} context */
 function register(context) {
@@ -57,6 +94,8 @@ function register(context) {
       item.error = undefined;
       /** @type {vscode.TestItem[]} */
       const tests = [];
+      /** A function with arguments → its item: its cases are its children. */
+      const functions = new Map();
       for (const line of stdout.split(/\r?\n/)) {
         const match = LISTED.exec(line.trim());
         if (!match) {
@@ -64,11 +103,26 @@ function register(context) {
         }
 
         const [, id, file, lineNumber] = match;
-        const test = controller.createTestItem(`${root}::${id}`, id.split(".").pop() ?? id, vscode.Uri.file(path.resolve(root, file)));
+        const name = functionOf(id);
         const at = Number(lineNumber) - 1;
-        test.range = new vscode.Range(at, 0, at, 0);
-        test.description = id.includes(".") ? id.slice(0, id.lastIndexOf(".")) : undefined;
-        tests.push(test);
+        /** @param {string} id @param {string} label */
+        const create = (id, label) => {
+          const test = controller.createTestItem(`${root}::${id}`, label, vscode.Uri.file(path.resolve(root, file)));
+          test.range = new vscode.Range(at, 0, at, 0);
+          return test;
+        };
+
+        let test = functions.get(name);
+        if (!test) {
+          test = create(name, name.split(".").pop() ?? name);
+          test.description = name.includes(".") ? name.slice(0, name.lastIndexOf(".")) : undefined;
+          tests.push(test);
+        }
+
+        if (id !== name) {
+          functions.set(name, test);
+          test.children.add(create(id, id.slice(name.length)));
+        }
       }
 
       item.children.replace(tests);
@@ -155,18 +209,7 @@ function selectedTests(packages, request) {
       continue;
     }
 
-    const tests = plan.get(root) ?? [];
-    if (item.id === root) {
-      item.children.forEach((child) => {
-        if (!excluded.has(child.id)) {
-          tests.push(child);
-        }
-      });
-    } else {
-      tests.push(item);
-    }
-
-    plan.set(root, tests);
+    plan.set(root, [...(plan.get(root) ?? []), ...leaves(item, excluded)]);
   }
 
   return plan;
@@ -263,16 +306,9 @@ async function runTests(controller, packages, request, token, measure = false) {
     }
 
     if (item.id === root) {
-      /** @type {vscode.TestItem[]} */
-      const children = [];
-      item.children.forEach((child) => {
-        if (!excluded.has(child.id)) {
-          children.push(child);
-        }
-      });
-      plan.set(root, excluded.size === 0 ? "all" : children);
+      plan.set(root, excluded.size === 0 ? "all" : leaves(item, excluded));
     } else if (plan.get(root) !== "all" && !excluded.has(item.id)) {
-      plan.set(root, [.../** @type {vscode.TestItem[]} */ (plan.get(root) ?? []), item]);
+      plan.set(root, [.../** @type {vscode.TestItem[]} */ (plan.get(root) ?? []), ...leaves(item, excluded)]);
     }
   }
 
@@ -288,7 +324,7 @@ async function runTests(controller, packages, request, token, measure = false) {
       const all = selection === "all";
       const tests = [];
       if (all) {
-        item.children.forEach((child) => tests.push(child));
+        tests.push(...leaves(item, excluded));
       } else {
         tests.push(...selection);
       }

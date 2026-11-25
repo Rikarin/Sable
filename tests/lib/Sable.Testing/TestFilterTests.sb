@@ -1,0 +1,32 @@
+module TestFilterTests
+
+// '--filter' (Sable.Testing), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Testing
+
+fn test(_ name: String, _ tags: String[>..]) -> TestCase {
+    return TestCase { name: name, location: "src/Parser.sb:12", run: () => { return none }, traps: none, tags: tags, timeLimit: 0, cases: none }
+}
+
+@test(arguments: [
+    ("parse", true), ("name:parse", true), ("print", false), ("tag:fast", true), ("tag:fas", false), ("tag:f*", true),
+    ("file:Parser", true), ("file:12", false), ("file:*Parser.sb", true), ("file:src", true), ("!tag:fast", false), ("!!tag:fast", true),
+    ("tag:fast & name:print", false), ("tag:fast & parse", true), ("tag:slow | parse", true), ("tag:slow | print", false),
+    ("tag:slow & print | parse", true), ("tag:slow & (print | parse)", false), ("!(tag:slow|print)", true),
+    ("name:Suite.*", true), ("name:*Suite", false), ("name:*S*e*s", true), ("name:S*", true), ("*", true), ("name:Suite.parses", true),
+    ("\"parse\"", true), ("name:\"pars es\"", false), ("\"&\"", false),
+])
+fn aFilterSelects(_ filter: String, _ selected: Bool) throws(TestFilterError) {
+    expect(try TestFilter(filter).matches(test("Suite.parses", ["fast", "net"])) == selected)
+}
+
+@test(arguments: [
+    ("", "a term is missing at the end"), ("a &", "a term is missing at the end"), ("& a", "a term is missing before '&'"),
+    ("(a", "a ')' is missing"), ("a b", "'b' is not expected there"), ("a)", "')' is not expected there"), ("!", "a term is missing at the end"),
+])
+fn aFilterThatIsNotOneSaysWhy(_ filter: String, _ why: String) {
+    let error = require(expectThrows(TestFilterError.self) { _ = try TestFilter(filter) })
+    expect(error.message == why)
+    expect(error.description() == why)
+}

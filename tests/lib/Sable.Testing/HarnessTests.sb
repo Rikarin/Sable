@@ -1,0 +1,145 @@
+module HarnessTests
+
+// What a test may say beyond an assertion (Sable.Testing) — expectations,
+// death tests, snapshots, cases — as a test of them sees it; what each says
+// when it fails is in tests/Sable.CodeGen.Tests/TestFeatureTests.cs. Run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Testing
+
+@derive(Equatable, Debug)
+union Oops: Error {
+    Bad
+    Worse(Int)
+}
+
+fn fail(_ n: Int) throws(Oops) -> Int {
+    if n > 1 {
+        throw .Worse(n)
+    }
+    if n == 1 {
+        throw .Bad
+    }
+    return n
+}
+
+@test
+async fn whatIsThrownIsGiven() {
+    expect(expectThrows(Oops.self) { _ = try fail(3) } == Oops.Worse(3))
+    expectThrows(Oops.Bad) { _ = try fail(1) }
+    expect(expectNoThrow { try fail(0) } == 0)
+    await expectThrows(Oops.self) {
+        await Task.yield()
+        _ = try fail(1)
+    }
+    await expectThrows(Oops.Worse(2)) {
+        await Task.yield()
+        _ = try fail(2)
+    }
+    let got = await expectNoThrow {
+        await Task.yield()
+        return try fail(0)
+    }
+    expect(got == 0)
+}
+
+// A failure of an expectation ends its process as a failed assertion does,
+// and says so: seen from a process started for it.
+@test(arguments: [
+    (0, "expectation failed: 1 + 1 == n: not so"),
+    (1, "expectation failed: some: there is no value"),
+    (2, "expectation failed: nothing was thrown"),
+    (3, "expectation failed: another error was thrown: Oops.Bad"),
+    (4, "expectation failed: an error was thrown: Oops.Bad"),
+    (5, "expectation failed: 'Oops.Bad' was thrown, and 'Oops.Worse(1)' was to be"),
+    (6, "expectation failed: the property does not hold of 10"),
+    (8, "expectation failed: first line (HarnessTests.sb"),
+    (9, "expectation failed: too few values were let through"),
+    (10, "expectation failed: the property does not hold of 3"),
+])
+fn whatAFailureSays(_ which: Int, _ said: String) {
+    let ended = expectPanic("'try!' caught an error") {
+        let n = 3
+        let some: Int? = none
+        switch which {
+            case 0: expect(1 + 1 == n, "not so")
+            case 1: _ = require(some)
+            case 2: expectThrows(Oops.self) { }
+            case 3: expectThrows(ParseError.self) { _ = try fail(1) }
+            case 4: expectNoThrow { _ = try fail(1) }
+            case 5: expectThrows(Oops.Worse(1)) { _ = try fail(1) }
+            case 6: forAll { (n: U16) in expect(n < 10) }
+            case 8: recordFailure("first line\nsecond line")
+            case 9: forAll(Gen.arbitrary(Bool.self).filter { _ in false }) { (b: Bool) in expect(b) }
+            default: forAll(Gen.number(in: 0...9)) { (n: Int) in
+                if n > 2 {
+                    throw Oops.Worse(n)
+                }
+            }
+        }
+        require(false, "a process for a trap ends in one")
+    }
+    expect(ended == none || ended!.errors.contains(said), ended?.errors ?? "")
+}
+
+@test
+async fn aProcessThatEndsIsSeenToEnd() {
+    let numbers = [1, 2, 3]
+    let end = expectPanic("out of range") { print(numbers[3]) }
+    expect(end?.message == "array index out of range" && end?.status == 134)
+    let exit = expectExit(7) {
+        print("out")
+        Runtime.exit(7)
+    }
+    expect(exit?.message == "" && exit?.output == "out\n")
+    await expectPanic("in the end") {
+        await Task.yield()
+        fatalError("in the end")
+    }
+    await expectExit(0) {
+        await Task.yield()
+        Runtime.exit(0)
+    }
+}
+
+// A trap in a property's case is shrunk in processes of its own; here, one
+// within a process, which is said as it is.
+@test
+fn aPropertyThatTraps() {
+    let ended = expectPanic("integer overflow") {
+        forAll(Gen.number(in: 0 as U8...255)) { (n: U8) in _ = n + 1 }
+    }
+    expect(ended == none || ended!.errors.contains("the property does not hold of 255"), ended?.errors ?? "")
+}
+
+@test(arguments: ["", "a b/c", "name"])
+fn aSnapshotIsOfItsCase(_ text: String) {
+    assertSnapshot(text)
+    assertSnapshot([text], named: "in an array")
+    assertSnapshot(text + "\n" + text)
+}
+
+@test
+fn aCaseIsNamedForItsArguments() {
+    let cases: () -> TestArguments[>..] = () => [
+        TestArguments("1, \"x\"", () => { return none }),
+        TestArguments("1, \"x\"", () => { return "thrown" }),
+        TestArguments("é".repeated(130), () => { return none }),
+    ]
+    let test = TestCase { name: "S.t", location: "s.sb:1", run: () => { return none }, traps: "x", tags: ["t"], timeLimit: 5, cases: cases }
+    let all = test.expanded()
+    expect(all.map({ $0.name }) == ["S.t(1, \"x\")", "S.t(1, \"x\")#2", "S.t(\("é".repeated(120))…)"])
+    expect(all[0].traps == "x" && all[0].tags == ["t"] && all[0].timeLimit == 5 && all[0].cases == none)
+    expect(all[0].expanded().count == 1)
+}
+
+@test(arguments: [1, 2], ["a", "b"], tags: ["cases"], timeout: .minutes(5))
+async fn everyPairOfTwoArraysIsACase(_ n: Int, _ letter: String) {
+    await Task.yield()
+    expect(n > 0 && letter.count == 1)
+}
+
+@test(arguments: [0], traps: "division")
+fn aCaseMayHaveToTrap(_ n: Int) {
+    print(1 / n)
+}

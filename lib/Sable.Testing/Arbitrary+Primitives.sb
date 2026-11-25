@@ -1,0 +1,168 @@
+module Sable.Testing
+
+// Arbitrary for the built-in types: small and round values more often than
+// a uniform choice of bits would give, and the ends of the range now and
+// then, which is where code is wrong.
+
+// How many bits a number's magnitude has, and then which: a short one as
+// likely as a long one, its bits no more than the size says, or, now and
+// then, all there are.
+fn arbitraryMagnitude(_ choices: Choices, bits: Int) -> U128 {
+    let limit = U64(bits)
+    let wide = U64(bits * choices.size / 100)
+    let length = choices.choose(limit) {
+        if choices.generator.next(upperBound: 16) == 0 {
+            return limit
+        }
+        return choices.generator.next(upperBound: wide + 1)
+    }
+    if length == 0 {
+        return 0
+    }
+    if length <= 64 {
+        let all = length == 64 ? U64.max : (1 << length) - 1
+        return U128(arbitraryBits(choices, upTo: all))
+    }
+    let high = arbitraryBits(choices, upTo: (1 << (length - 64)) - 1)
+    return (U128(high) << 64) | U128(arbitraryBits(choices, upTo: U64.max))
+}
+
+// Any of the numbers to the limit, the limit itself one time in eight.
+fn arbitraryBits(_ choices: Choices, upTo limit: U64) -> U64 {
+    return choices.choose(limit) {
+        if choices.generator.next(upperBound: 8) == 0 {
+            return limit
+        }
+        return limit == U64.max ? choices.generator.next() : choices.generator.next(upperBound: limit + 1)
+    }
+}
+
+// 0 is the simplest, then the numbers further from it, a positive one
+// before the negative one as far.
+fn arbitrarySigned<T: FixedWidthInteger>(_ choices: Choices) -> T {
+    let magnitude = T.truncating(arbitraryMagnitude(choices, bits: T.bitWidth - 1))
+    // All the bits the other way: -1 for 0, and the least for the greatest.
+    return choices.draw(upTo: 1) == 1 ? ~magnitude : magnitude
+}
+
+fn arbitraryUnsigned<T: FixedWidthInteger>(_ choices: Choices) -> T {
+    return T.truncating(arbitraryMagnitude(choices, bits: T.bitWidth))
+}
+
+extension Int: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Int { return arbitrarySigned(choices) }
+}
+extension I8: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> I8 { return arbitrarySigned(choices) }
+}
+extension I16: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> I16 { return arbitrarySigned(choices) }
+}
+extension I32: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> I32 { return arbitrarySigned(choices) }
+}
+extension I64: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> I64 { return arbitrarySigned(choices) }
+}
+extension I128: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> I128 { return arbitrarySigned(choices) }
+}
+extension UInt: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> UInt { return arbitraryUnsigned(choices) }
+}
+extension U8: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> U8 { return arbitraryUnsigned(choices) }
+}
+extension U16: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> U16 { return arbitraryUnsigned(choices) }
+}
+extension U32: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> U32 { return arbitraryUnsigned(choices) }
+}
+extension U64: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> U64 { return arbitraryUnsigned(choices) }
+}
+extension U128: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> U128 { return arbitraryUnsigned(choices) }
+}
+
+extension Bool: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> Bool { return choices.draw(upTo: 1) == 1 }
+}
+
+// A float: a whole number, then one with a few bits after the point, then
+// any bits at all, then one of the values there is something to say about.
+fn arbitraryFloat(_ choices: Choices, special: U64[:]) -> (kind: U64, value: F64, bits: U64) {
+    let kind = choices.draw(upTo: 3)
+    switch kind {
+        case 0:
+            let whole: I32 = arbitrarySigned(choices)
+            return (kind: kind, value: F64(whole), bits: 0)
+        case 1:
+            let whole: I32 = arbitrarySigned(choices)
+            let part = choices.draw(upTo: 255)
+            return (kind: kind, value: F64(whole) + F64(part) / 256.0, bits: 0)
+        case 2:
+            return (kind: kind, value: 0.0, bits: choices.draw(upTo: U64.max))
+        default:
+            return (kind: kind, value: 0.0, bits: choices.element(of: special))
+    }
+}
+
+extension F64: Arbitrary {
+    /// Infinities and NaN among them: 'Gen' has finite ones.
+    public static fn arbitrary(from choices: Choices) -> F64 {
+        let chosen = arbitraryFloat(choices, special: [
+            0x8000000000000000, 0x7FEFFFFFFFFFFFFF, 0x0010000000000000, 0x0000000000000001, 0x7FF0000000000000, 0xFFF0000000000000, 0x7FF8000000000000,
+        ])
+        return chosen.kind < 2 ? chosen.value : F64.fromBits( chosen.bits)
+    }
+}
+extension F32: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> F32 {
+        let chosen = arbitraryFloat(choices, special: [0x80000000, 0x7F7FFFFF, 0x00800000, 0x00000001, 0x7F800000, 0xFF800000, 0x7FC00000])
+        return chosen.kind < 2 ? F32(chosen.value) : F32.fromBits( U32.truncating(chosen.bits))
+    }
+}
+
+extension Char: Arbitrary {
+    /// A letter, then any of ASCII that prints, then any scalar there is.
+    public static fn arbitrary(from choices: Choices) -> Char {
+        let kind = choices.choose(3) {
+            let of = choices.generator.next(upperBound: 16 as U64)
+            return of < 8 ? 0 : of < 13 ? 1 : of < 15 ? 2 : 3
+        }
+        switch kind {
+            case 0:
+                return (97 + choices.below(26)) as Char
+            case 1:
+                return (32 + choices.below(95)) as Char
+            case 2:
+                // The first 2048: control characters, and scripts whose case changes.
+                return choices.below(0x800) as Char
+            default:
+                // The surrogates are no scalars.
+                let scalar = choices.below(0x10F800)
+                return (scalar < 0xD800 ? scalar : scalar + 0x800) as Char
+        }
+    }
+}
+
+fn text(of characters: Char[>..]) -> String {
+    return Runtime.joinStrings(characters.map { String.fromChar($0) }, "")
+}
+
+extension String: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> String {
+        var characters: Char[>..] = []
+        choices.times(0, Int.max) { characters.append(Char.arbitrary(from: choices)) }
+        return text(of: characters)
+    }
+}
+
+extension UUID: Arbitrary {
+    public static fn arbitrary(from choices: Choices) -> UUID {
+        let high = choices.draw(upTo: U64.max)
+        return UUID(high: high, low: choices.draw(upTo: U64.max))
+    }
+}

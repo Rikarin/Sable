@@ -2812,7 +2812,7 @@ public sealed partial class Binder {
             ThrowExpressionSyntax throwExpression => BindThrowExpression(throwExpression),
             RangeExpressionSyntax range => BindRange(range, expectedType),
             DictionaryExpressionSyntax dictionary => BindDictionary(dictionary, expectedType),
-            BuiltinExpressionSyntax builtin => BindBuiltin(builtin),
+            BuiltinExpressionSyntax builtin => BindBuiltin(builtin, expectedType),
 
             // A compound type written where an expression goes, which only
             // '.self' follows: the member access turns it into the metatype.
@@ -4168,8 +4168,16 @@ public sealed partial class Binder {
             ArrayExpressionSyntax => type is NamedTypeSymbol { IsFlags: false, TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Union or TypeKind.Enum },
             ImplicitMemberAccessExpressionSyntax member => LacksMember(member),
             InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax member } => LacksMember(member),
+            ClosureExpressionSyntax closure => type is FunctionTypeSymbol function && TakesOtherwise(closure.Signature.Parameters.Count, function),
+            BraceClosureExpressionSyntax { Header: { } header } => type is FunctionTypeSymbol function && TakesOtherwise(header.Parameters.Count, function),
             _ => false,
         };
+
+        // A closure that names more or fewer parameters than the function
+        // has is for an overload that has as many; unless they are a tuple's parts.
+        static bool TakesOtherwise(int named, FunctionTypeSymbol function) =>
+            named != function.ParameterTypes.Length
+            && !(function.ParameterTypes is [TupleTypeSymbol { ElementTypes.Length: var parts }] && parts == named);
 
         bool LacksMember(ImplicitMemberAccessExpressionSyntax member) =>
             type is ArrayTypeSymbol
@@ -5717,7 +5725,7 @@ public sealed partial class Binder {
         };
 
         // A call that opens a Type: its result erased.
-        var made = OpenedCall(call, resolved, substitution, syntax);
+        var made = CapturingExpression(call) ?? OpenedCall(call, resolved, substitution, syntax);
         result = made.Type;
 
         // A call through '?.' that gives an optional already gives that one.
@@ -5776,6 +5784,12 @@ public sealed partial class Binder {
             || _compilation.FileScopeOf(syntax) is not { } scope
             || parameter.ContainingSymbol is not { } container) {
             return null;
+        }
+
+        // What the call's first argument is written as, and the values in
+        // it: the call is bound around it (Binder.Expressions.cs).
+        if (clause.Value is BuiltinExpressionSyntax { NameToken.Text: "expression" }) {
+            return new BoundBuiltin(call, substitution.Apply(parameter.Type), "expression");
         }
 
         if (clause.Value is BuiltinExpressionSyntax { NameToken.Text: var name } && name is "file" or "line" or "column" or "function") {
@@ -7986,8 +8000,12 @@ public sealed partial class Binder {
     }
 
     /// <summary>Binds <c>#file</c> and the rest, per spec/lexical.md §9.</summary>
-    BoundExpression BindBuiltin(BuiltinExpressionSyntax syntax) {
+    BoundExpression BindBuiltin(BuiltinExpressionSyntax syntax, TypeSymbol? expectedType) {
         var name = syntax.NameToken.Text;
+
+        if (name == "expression") {
+            return BindExpressionBuiltin(syntax, expectedType);
+        }
 
         TypeSymbol type = name switch {
             "file" or "function" or "module" => Core.String,

@@ -1,0 +1,27 @@
+module Sable.Testing
+
+/// A type with arbitrary values, which a property is tried with: Rust's
+/// `proptest::Arbitrary`, Haskell's `Arbitrary`. A value is made from
+/// choices, the simplest value from the simplest ones, and that is all there
+/// is to write: a failing case is shrunk by its choices, not its value.
+///
+/// '@derive(Arbitrary)' makes a struct from its fields', an enum's case and a
+/// union's from its payloads'. A type with an invariant makes its values by
+/// hand, or says what 'forAll' is to make them with, a 'Gen'.
+///
+/// ```sable
+/// struct Even: Arbitrary {
+///     let value: Int
+///
+///     static fn arbitrary(from choices: Choices) -> Even {
+///         return Even { value: Int(choices.draw(upTo: 1000)) * 2 }
+///     }
+/// }
+/// forAll { (even: Even) in
+///     expect(even.value % 2 == 0)
+/// }
+/// ```
+public protocol Arbitrary {
+    /// A value made from the choices.
+    static fn arbitrary(from choices: Choices) -> Self
+}

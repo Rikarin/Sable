@@ -1,0 +1,63 @@
+module Sable.Testing
+
+/// What the test running in this process has come to so far. A test is a
+/// process's only one, but for a run in one process, which starts it afresh
+/// for each.
+struct TestState {
+    // How many expectations failed: any task of the test's may fail one.
+    static let failed: Atomic<Int> = Atomic(0)
+    // How many death tests and properties it has come to: what tells one
+    // from another when the test is run again for one of them.
+    static let deathTests: Atomic<Int> = Atomic(0)
+    static let properties: Atomic<Int> = Atomic(0)
+    // The test's name, and the '@test(arguments:)' case's with it, for
+    // running it again; empty outside a test.
+    static var name: String = ""
+    // How many snapshots it has kept under each name.
+    static var snapshots: String[>..] = []
+    // What this process is, beside a test's: the death test, or the case of
+    // a property, it was started for.
+    static var role: String = ""
+    // What every property's cases are made from: the run's, shown when one
+    // fails, so that '--seed' or SABLE_TEST_SEED makes them again.
+    static var seed: U64 = TestState.chosenSeed()
+    // Whether the test has the process to itself, and so can be run again
+    // in another: not in a run of them all in one.
+    static var isAlone: Bool = true
+    // Whether a failure is counted and not said: while a property tries
+    // out cases to find the simplest that fails.
+    static var quiet: Bool = false
+
+    static fn chosenSeed() -> U64 {
+        if let text = Runtime.environment("SABLE_TEST_SEED") {
+            if let seed = try? U64.parse(text) {
+                return seed
+            }
+            Runtime.writeError("SABLE_TEST_SEED is '\(text)', which is not a number: a seed is chosen\n")
+        }
+        // Not so long that it is tedious to type.
+        return U64.truncating(Runtime.randomBits()) >> 24
+    }
+
+    /// The test run again in a process of its own, for the part of it the
+    /// role names, with the input to read: how it ended and what it wrote to
+    /// standard error; none where it cannot be.
+    static fn runAgain(as role: String, input: String = "") -> (status: Int, output: String, errors: String)? {
+        let program = Runtime.executablePath()
+        if program.isEmpty || !isAlone || name.isEmpty {
+            return none
+        }
+        guard let output = Runtime.run(program, ["--run-test", name, "--seed", "\(seed)", "--role", role], input) else {
+            return none
+        }
+        return (status: Runtime.lastExitStatus(), output: output, errors: Runtime.lastErrorOutput())
+    }
+
+    static fn begin(_ test: String) {
+        name = test
+        failed.store(0)
+        deathTests.store(0)
+        properties.store(0)
+        snapshots = []
+    }
+}

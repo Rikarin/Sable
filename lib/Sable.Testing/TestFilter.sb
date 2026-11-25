@@ -1,0 +1,239 @@
+module Sable.Testing
+
+/// Which tests to run, as '--filter' says: terms put together with '&',
+/// '|', '!' and parentheses, '!' before '&' before '|'.
+///
+/// - 'tag:fast' — tests so tagged ('@test(tags: ["fast"])').
+/// - 'name:parse', or 'parse' alone — whose name has that in it.
+/// - 'file:Parser' — whose file's name has.
+///
+/// A '*' in a term stands for any run of characters, and then the term is
+/// the whole of what it is compared with. A term with a space, or one of the
+/// characters above, is written in double quotes.
+///
+/// ```sable
+/// let filter = try! TestFilter("tag:fast & !name:*Slow*")
+/// fn test(_ name: String, _ tags: String[>..]) -> TestCase {
+///     return TestCase { name: name, location: "a.sb:1", run: () => { return none }, traps: none, tags: tags, timeLimit: 0, cases: none }
+/// }
+/// assert(filter.matches(test("Suite.parses", ["fast"])))
+/// assert(!filter.matches(test("Suite.parsesSlowly", ["fast"])))
+/// assert(!filter.matches(test("Suite.parses", [])))
+/// ```
+public struct TestFilter {
+    // In the order they are worked out, each after its operands.
+    var steps: FilterStep[>..]
+
+    /// The filter the text writes.
+    public init(_ text: String) throws(TestFilterError) {
+        var parser = FilterParser(text)
+        try parser.either()
+        if let unread = parser.next {
+            throw TestFilterError(message: "'\(unread.text)' is not expected there")
+        }
+        steps = parser.steps
+    }
+
+    /// Whether the test is one of those the filter selects.
+    public fn matches(_ test: TestCase) -> Bool {
+        var stack: Bool[>..] = []
+        for step in steps {
+            match step {
+                case .Term(let kind, let text) => stack.append(TestFilter.matches(test, kind, text))
+                case .Not => {
+                    let operand = stack.removeLast()
+                    stack.append(!operand)
+                }
+                case .Both => {
+                    let right = stack.removeLast()
+                    let left = stack.removeLast()
+                    stack.append(left && right)
+                }
+                case .Either => {
+                    let right = stack.removeLast()
+                    let left = stack.removeLast()
+                    stack.append(left || right)
+                }
+            }
+        }
+        return stack[0]
+    }
+
+    static fn matches(_ test: TestCase, _ kind: String, _ text: String) -> Bool {
+        match kind {
+            case "tag" => {
+                for tag in test.tags {
+                    if text.contains('*') ? glob(text, tag) : tag == text {
+                        return true
+                    }
+                }
+                return false
+            }
+            case "file" => {
+                let colon = test.location.lastIndex(of: ':') ?? test.location.endIndex
+                let file = test.location[..<colon].toString()
+                return text.contains('*') ? glob(text, file) : file.contains(text)
+            }
+            default => {
+                return text.contains('*') ? glob(text, test.name) : test.name.contains(text)
+            }
+        }
+    }
+
+    // Whether the whole text is what the pattern says, '*' being any run of
+    // characters: the last '*' is tried again, further on, where what
+    // follows it fails.
+    static fn glob(_ pattern: String, _ text: String) -> Bool {
+        let wanted = pattern.toArray()
+        let given = text.toArray()
+        var p = 0
+        var t = 0
+        var star = -1
+        var from = 0
+        while t < given.count {
+            if p < wanted.count && wanted[p] == '*' {
+                star = p
+                from = t
+                p += 1
+            } else if p < wanted.count && wanted[p] == given[t] {
+                p += 1
+                t += 1
+            } else if star >= 0 {
+                p = star + 1
+                from += 1
+                t = from
+            } else {
+                return false
+            }
+        }
+        while p < wanted.count && wanted[p] == '*' {
+            p += 1
+        }
+        return p == wanted.count
+    }
+}
+
+/// What is wrong with a filter's text.
+@derive(Equatable)
+public struct TestFilterError: Error {
+    public let message: String
+
+    public fn description() -> String {
+        return message
+    }
+}
+
+union FilterStep {
+    Term(String, String)
+    Not
+    Both
+    Either
+}
+
+// A filter's text, read a token at a time: a word, or one of the operators.
+struct FilterParser {
+    let characters: Char[>..]
+    var at: Int
+    var steps: FilterStep[>..]
+    // The token that comes next, and whether it was quoted, and so is a word
+    // whatever it is; none at the end.
+    var next: (text: String, quoted: Bool)?
+
+    init(_ text: String) {
+        characters = text.toArray()
+        at = 0
+        steps = []
+        next = none
+        advance()
+    }
+
+    mutating fn advance() {
+        while at < characters.count && characters[at] == ' ' {
+            at += 1
+        }
+        if at == characters.count {
+            next = none
+            return
+        }
+        if FilterParser.isOperator(characters[at]) {
+            next = (text: String.fromChar(characters[at]), quoted: false)
+            at += 1
+            return
+        }
+        var word = ""
+        var quoted = false
+        while at < characters.count && characters[at] != ' ' && !FilterParser.isOperator(characters[at]) {
+            if characters[at] == '"' {
+                quoted = true
+                at += 1
+                while at < characters.count && characters[at] != '"' {
+                    word += String.fromChar(characters[at])
+                    at += 1
+                }
+            } else {
+                word += String.fromChar(characters[at])
+            }
+            at += 1
+        }
+        next = (text: word, quoted: quoted)
+    }
+
+    static fn isOperator(_ c: Char) -> Bool {
+        return c == '&' || c == '|' || c == '!' || c == '(' || c == ')'
+    }
+
+    mutating fn take(_ symbol: String) -> Bool {
+        if let token = next {
+            if token.text == symbol && !token.quoted {
+                advance()
+                return true
+            }
+        }
+        return false
+    }
+
+    mutating fn either() throws(TestFilterError) {
+        try both()
+        while take("|") {
+            try both()
+            steps.append(.Either)
+        }
+    }
+
+    mutating fn both() throws(TestFilterError) {
+        try one()
+        while take("&") {
+            try one()
+            steps.append(.Both)
+        }
+    }
+
+    mutating fn one() throws(TestFilterError) {
+        if take("!") {
+            try one()
+            steps.append(.Not)
+            return
+        }
+        if take("(") {
+            try either()
+            if !take(")") {
+                throw TestFilterError(message: "a ')' is missing")
+            }
+            return
+        }
+        guard let token = next else {
+            throw TestFilterError(message: "a term is missing at the end")
+        }
+        if !token.quoted && token.text.count == 1 && FilterParser.isOperator(token.text.at(0)) {
+            throw TestFilterError(message: "a term is missing before '\(token.text)'")
+        }
+        advance()
+        for kind in ["tag", "name", "file"] {
+            if token.text.hasPrefix(kind + ":") {
+                steps.append(.Term(kind, token.text.slice(from: kind.count + 1, to: token.text.count)))
+                return
+            }
+        }
+        steps.append(.Term("name", token.text))
+    }
+}

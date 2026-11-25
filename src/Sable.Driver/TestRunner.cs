@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Sable.Driver;
 
@@ -11,16 +12,17 @@ namespace Sable.Driver;
 ///     on one child at a time, cannot do.
 /// </summary>
 /// <remarks>
-///     The harness says what its tests are with <c>--describe</c> (name,
-///     place, and the trap a <c>@test(traps)</c> must end in), and runs one
-///     with <c>--run-test</c>. What this prints is what the harness's own
+///     The harness says what the tests its filters select are with
+///     <c>--describe</c> (name, place, the trap a <c>@test(traps)</c> must end
+///     in, its own time limit, its tags), and runs one with <c>--run-test</c>. What this prints is what the harness's own
 ///     runner prints, so the problem matcher and the editor read either; a
 ///     test's line is printed as it finishes, so with several at once they
 ///     come in the order they finish.
 /// </remarks>
-internal static class TestRunner {
+internal static partial class TestRunner {
     /// <summary>One test, as <c>--describe</c> gives it.</summary>
-    internal sealed record TestEntry(string Name, string Location, string? Traps);
+    /// <param name="Limit">The time limit it was declared with, if it was: shorter or longer than the run's.</param>
+    internal sealed record TestEntry(string Name, string Location, string? Traps, TimeSpan? Limit = null, IReadOnlyList<string>? Tags = null);
 
     /// <summary>How one test's process ended.</summary>
     /// <param name="Started">
@@ -29,21 +31,21 @@ internal static class TestRunner {
     /// </param>
     /// <param name="Limit">The time limit it was stopped at, when it was.</param>
     /// <param name="Stuck">It would not stop, or left its output open after it ended, and was given up on.</param>
-    sealed record Outcome(TestEntry Test, bool Started, int Status, string Output, string Errors, TimeSpan Took, TimeSpan? Limit, bool Stuck) {
+    internal sealed record Outcome(TestEntry Test, bool Started, int Status, string Output, string Errors, TimeSpan Took, TimeSpan? Limit, bool Stuck) {
         public bool TimedOut => Limit is not null;
     }
 
-    /// <summary>The marker a failed assertion's report starts with (Sable.Testing's <c>failureMarker</c>).</summary>
-    const string FailureMarker = "assertion failed: ";
+    /// <summary>The markers a failed assertion's and a failed expectation's reports start with (Sable.Testing's <c>failureMarker</c> and <c>expectationMarker</c>).</summary>
+    static readonly string[] FailureMarkers = ["assertion failed: ", "expectation failed: "];
 
     /// <summary>
     ///     Whether a test's errors hold Sable.Testing's report of a failed
-    ///     assertion: a line that starts with the marker. Sable.Core's
+    ///     assertion: a line that starts with a marker. Sable.Core's
     ///     debug <c>assert</c> traps with the same words after
     ///     <c>fatal error: </c>, which is a trap like any other.
     /// </summary>
     static bool IsTestAssertion(string errors) =>
-        errors.StartsWith(FailureMarker, StringComparison.Ordinal) || errors.Contains("\n" + FailureMarker, StringComparison.Ordinal);
+        FailureMarkers.Any(m => errors.StartsWith(m, StringComparison.Ordinal) || errors.Contains("\n" + m, StringComparison.Ordinal));
 
     /// <summary>After this long, a test with no time limit is said to be running long, once.</summary>
     static readonly TimeSpan SlowTest = TimeSpan.FromSeconds(60);
@@ -54,21 +56,23 @@ internal static class TestRunner {
 
     /// <summary>Runs the tests the arguments select; returns the exit code, as the harness's runner would.</summary>
     /// <param name="environment">Variables set for each test process (and only for it): a coverage run's counts file.</param>
+    /// <param name="reports">Files to write the results to besides (<see cref="TestReport" />).</param>
     public static int Run(string executable, IReadOnlyList<string> harnessArguments, int jobs, TimeSpan? timeout, TextWriter output, TextWriter error,
-        IReadOnlyDictionary<string, string>? environment = null) {
-        var exact = harnessArguments.Contains("--exact");
+        IReadOnlyDictionary<string, string>? environment = null, IReadOnlyList<TestReport>? reports = null) {
         var showOutput = harnessArguments.Contains("--show-output");
-        var filters = harnessArguments.Where(static a => !a.StartsWith("--", StringComparison.Ordinal)).ToList();
+        var begun = DateTimeOffset.Now;
 
-        // Every test, then those the filters select, as the harness selects them.
-        var described = Capture(executable, ["--describe"], null, environment);
+        // The tests the filters select, as the harness selects them.
+        var described = Capture(executable, ["--describe", ..harnessArguments], null, environment);
         if (!described.Started || described.Status != 0) {
             error.Write(described.Errors);
             return described.Started && described.Status > 0 ? described.Status : 1;
         }
 
-        var all = Parse(described.Output);
-        var chosen = all.Where(t => Selected(t.Name, filters, exact)).ToList();
+        var (chosen, filteredOut) = Parse(described.Output);
+
+        // The seed the run's property tests make their cases from, if one was given.
+        var seed = harnessArguments.SkipWhile(static a => a != "--seed").Take(2).ToList();
         output.WriteLine($"running {chosen.Count} test{Plural(chosen.Count)}");
 
         var started = Stopwatch.GetTimestamp();
@@ -76,7 +80,7 @@ internal static class TestRunner {
         var gate = new object();
         Parallel.For(0, chosen.Count, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, jobs) }, i => {
             var test = chosen[i];
-            var outcome = RunOne(executable, test, timeout, environment, () => {
+            var outcome = RunOne(executable, test, seed, timeout, environment, () => {
                 lock (gate) {
                     output.WriteLine($"test {test.Name} has been running for over {SlowTest.TotalSeconds:0} s");
                 }
@@ -107,33 +111,48 @@ internal static class TestRunner {
             }
         }
 
+        foreach (var report in reports ?? []) {
+            report.Write([..outcomes.Select(static o => o!)], begun, Stopwatch.GetElapsedTime(started));
+        }
+
         output.WriteLine();
         var passed = chosen.Count - failures.Count;
         output.WriteLine(
-            $"test result: {(failures.Count == 0 ? "ok" : "FAILED")}. {passed} passed; {failures.Count} failed; {all.Count - chosen.Count} filtered out; finished in {FormatDuration(Stopwatch.GetElapsedTime(started))}");
+            $"test result: {(failures.Count == 0 ? "ok" : "FAILED")}. {passed} passed; {failures.Count} failed; {filteredOut} filtered out; finished in {FormatDuration(Stopwatch.GetElapsedTime(started))}");
         return failures.Count == 0 ? 0 : 1;
     }
 
-    /// <summary>The tests <c>--describe</c> printed: name, place and trap, a line each, tab-separated.</summary>
-    internal static List<TestEntry> Parse(string described) {
+    /// <summary>
+    ///     The tests <c>--describe</c> printed, a line each, tab-separated:
+    ///     name, place, trap, time limit in nanoseconds (0 for none) and tags,
+    ///     with commas between; and how many the filters left out.
+    /// </summary>
+    internal static (List<TestEntry> Tests, int FilteredOut) Parse(string described) {
         var tests = new List<TestEntry>();
+        var filteredOut = 0;
         foreach (var line in described.Split('\n')) {
             var fields = line.TrimEnd('\r').Split('\t');
-            if (fields.Length == 3) {
-                tests.Add(new(fields[0], fields[1], fields[2] == "-" ? null : fields[2]));
+            if (fields.Length == 5) {
+                var limit = long.Parse(fields[3], CultureInfo.InvariantCulture);
+                tests.Add(new(
+                    fields[0],
+                    fields[1],
+                    fields[2] == "-" ? null : fields[2],
+                    limit == 0 ? null : TimeSpan.FromTicks(limit / 100),
+                    fields[4].Split(',', StringSplitOptions.RemoveEmptyEntries)
+                ));
+            } else if (fields is ["filtered out", var count]) {
+                filteredOut = int.Parse(count, CultureInfo.InvariantCulture);
             }
         }
 
-        return tests;
+        return (tests, filteredOut);
     }
 
-    /// <summary>Selected by any filter, as part of the name or, with <paramref name="exact" />, all of it; every test is, with none.</summary>
-    static bool Selected(string name, IReadOnlyList<string> filters, bool exact) =>
-        filters.Count == 0 || filters.Any(f => exact ? name == f : name.Contains(f, StringComparison.Ordinal));
-
-    static Outcome RunOne(string executable, TestEntry test, TimeSpan? timeout, IReadOnlyDictionary<string, string>? environment, Action runningLong) {
+    static Outcome RunOne(string executable, TestEntry test, IReadOnlyList<string> seed, TimeSpan? timeout, IReadOnlyDictionary<string, string>? environment, Action runningLong) {
         var clock = Stopwatch.StartNew();
-        var result = Capture(executable, ["--run-test", test.Name], timeout, environment, runningLong);
+        timeout = test.Limit ?? timeout;
+        var result = Capture(executable, ["--run-test", test.Name, ..seed], timeout, environment, runningLong);
         return new(test, result.Started, result.Status, result.Output, result.Errors, clock.Elapsed, result.TimedOut ? timeout : null, result.Stuck);
     }
 
@@ -283,7 +302,7 @@ internal static class TestRunner {
     ///     passes by trapping — not by failing an assertion, which is the
     ///     test failing — with the message it names. (Sable.Testing's <c>verdict</c>.)
     /// </summary>
-    static string? Verdict(Outcome outcome) {
+    internal static string? Verdict(Outcome outcome) {
         if (outcome.TimedOut) {
             // The limit, not the time it took: stopping a process tree can
             // take a while, on Windows most of all.
@@ -310,8 +329,10 @@ internal static class TestRunner {
     }
 
     /// <summary>What a failed test's process said, and how it ended. (Sable.Testing's <c>failureReport</c>.)</summary>
-    static string Report(Outcome outcome) {
-        var report = new StringBuilder($"---- {outcome.Test.Name} ({outcome.Test.Location}) ----");
+    static string Report(Outcome outcome) => $"---- {outcome.Test.Name} ({outcome.Test.Location}) ----{Details(outcome)}";
+
+    internal static string Details(Outcome outcome) {
+        var report = new StringBuilder();
         if (!outcome.Started) {
             return report.Append("\nthe test's process could not be started").ToString();
         }
@@ -322,7 +343,7 @@ internal static class TestRunner {
 
         // An assertion's own trap says nothing its report has not.
         var assertion = IsTestAssertion(outcome.Errors);
-        var shown = assertion ? outcome.Errors.Replace("fatal error: 'try!' caught an error\n", "", StringComparison.Ordinal) : outcome.Errors;
+        var shown = Said(outcome);
         if (shown.Length > 0) {
             report.Append('\n').Append(Indented(shown));
         }
@@ -337,6 +358,14 @@ internal static class TestRunner {
 
         return report.ToString();
     }
+
+    /// <summary>What the test wrote to standard error, without the trap a failed assertion ends with.</summary>
+    internal static string Said(Outcome outcome) =>
+        IsTestAssertion(outcome.Errors) ? AssertionTrap().Replace(outcome.Errors, "") : outcome.Errors;
+
+    /// <summary>The trap a failed assertion ends with, and the line that says where: inside Sable.Testing.</summary>
+    [GeneratedRegex(@"^fatal error: 'try!' caught an error\r?\n(?:  at .*\r?\n)?", RegexOptions.Multiline)]
+    private static partial Regex AssertionTrap();
 
     static string Indented(string text) {
         var lines = text.Split('\n');

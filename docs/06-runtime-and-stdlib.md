@@ -988,10 +988,57 @@ Sable.Crypto        HashFunction and Digest: SHA-2, SHA-3, BLAKE2b, BLAKE3,
                     SymmetricKey, SecureRandom, constantTimeEquals,
                     secureZero
 Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
-Sable.Testing       @test @bench, assertions, snapshot testing, property testing
+Sable.Testing       @test @bench; assert, assertEqual and the like; expect and
+                    require, which show their expression's parts; expectThrows;
+                    expectPanic and expectExit (death tests); assertSnapshot;
+                    forAll, Arbitrary and Gen (property tests); Bencher
 Sable.Interop       C FFI helpers, CString, CVarArg, callback shims
 Sable.Reflect       the reflection surface described above
 ```
+
+### Tests
+
+A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
+
+- `assert`, `assertEqual`, `assertEqualText` and `fail` end it, saying why.
+  `expect(condition)` fails it and goes on, so that one run says all that does
+  not hold; `require(condition)` fails it and ends it, and `require(optional)`
+  gives the value there is. Both say what the condition was written as and
+  what each part of it was, and where the sides of an equality differ:
+
+  ```
+  expectation failed: names.count == 3 (NamesTests.sb:12)
+      the values differ
+         left: 2
+        right: 3
+               ^ first difference at character 0
+      names: ["Ada", "Grace"]
+  ```
+
+  That is a parameter's doing whose default is `#expression` (SYNTAX.md §18):
+  the argument is worked out once, as it would be, and may throw and await.
+- `expectThrows(E.self) { … }` gives the error thrown, `expectThrows(error)`
+  wants that very one, `expectNoThrow` none; each has an async form.
+- `expectPanic("text") { … }` and `expectExit(status) { … }` run their body in
+  a process of its own, the test run again as far as there, and give how it
+  ended. Where none can be started — `--in-process`, the interpreter, WASI —
+  they are passed by, and say so.
+- `assertSnapshot(value, named:)` compares with
+  `__snapshots__/<file>.<test>.<name>.snap` beside the test's file.
+  SABLE_UPDATE_SNAPSHOTS=1 (`sable test --bless`) writes it; one that is not
+  there is a failure.
+- `forAll { (xs: Int[>..]) in … }` tries a body with a hundred arbitrary values,
+  small to large, and shows the simplest it does not hold of, with the seed
+  that makes it again. A value is made from `Choices`, numbers drawn at random
+  and kept; a failing one is shrunk by its choices rather than its value (as
+  Hypothesis does), so `Arbitrary` is one function, no `shrink` beside it, and
+  what `map`, `flatMap` and `filter` make shrinks too. `@derive(Arbitrary)`
+  makes a struct of its fields, an enum's case and a union's of its payload,
+  coming to an end when it holds its own kind. The built-in types, optionals,
+  arrays, dictionaries, sets, ranges and `Outcome` are Arbitrary; `Gen` is for
+  anything else (`Gen.number(in: 0...9).array(count: 1...5)`). A body that
+  traps is shrunk by running the test again, a process for each case.
+  `Choices(bytes:)` makes a fuzz target a value of its input.
 
 ### Dictionaries and hashing
 
@@ -1577,7 +1624,7 @@ Sable has no macros (docs/01 §1.6). `@derive` covers the conformances the
 standard library defines:
 
 ```sable
-@derive(Equatable, Hashable, Comparable, Serializable, Debug, Copy)
+@derive(Equatable, Hashable, Comparable, Serializable, Debug, Arbitrary, Copy)
 struct Point { var x: I32, var y: I32 }
 ```
 

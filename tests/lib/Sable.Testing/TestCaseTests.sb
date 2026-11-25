@@ -11,7 +11,7 @@ async fn returns() -> String? {
 }
 
 fn testCase(traps: String?) -> TestCase {
-    return TestCase { name: "Suite.example", location: "example.sb:1", run: returns, traps: traps }
+    return TestCase { name: "Suite.example", location: "example.sb:1", run: returns, traps: traps, tags: [], timeLimit: 0, cases: none }
 }
 
 @test

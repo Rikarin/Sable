@@ -1,0 +1,143 @@
+module Sable.Testing
+
+// Snapshots: what a value was when someone looked at it and said it was
+// right, kept in a file the test compares with.
+
+/// Fails the test unless the value is what its snapshot says, showing a
+/// diff. The test goes on.
+///
+/// The snapshot is a text file beside the test's:
+/// `__snapshots__/<file>.<test>.snap`, or `.<test>.<named>.snap`; a test's
+/// second one with no name ends `.2.snap`. A '@test(arguments:)' case has
+/// its arguments in the name. With SABLE_UPDATE_SNAPSHOTS=1 set, or under
+/// 'sable test --bless', the file is written instead; without, one that is
+/// not there is a failure, so that a run never agrees with itself.
+///
+/// The value is written as Debug writes it. Text is written as it is.
+///
+/// ```sable ignore
+/// assertSnapshot(parse("1 + 2 * 3"), named: "precedence")
+/// ```
+public fn assertSnapshot<T: Debug>(_ value: T, named name: String = "", file: String = #file, line: Int = #line, function: String = #function) {
+    compareSnapshot(value.debugDescription(), name, file, line, function)
+}
+
+/// Fails the test unless the text is what its snapshot says.
+public fn assertSnapshot(_ text: String, named name: String = "", file: String = #file, line: Int = #line, function: String = #function) {
+    compareSnapshot(text, name, file, line, function)
+}
+
+fn compareSnapshot(_ text: String, _ name: String, _ file: String, _ line: Int, _ function: String) {
+    let path = snapshotPath(file, function, name)
+    // A line break at the end, as editors leave a text file; the text is
+    // what is before it.
+    if Runtime.environment("SABLE_UPDATE_SNAPSHOTS") == "1" {
+        if !makeDirectories(directoryOf(path)) || !Runtime.writeFile(path, text + "\n", false) {
+            recordFailure("the snapshot '\(path)' cannot be written", file: file, line: line)
+        }
+        return
+    }
+    let shown = path.slice(from: directoryOf(directoryOf(path)).count, to: path.count).trimmingPrefix("/")
+    guard let kept = Runtime.readFile(path) else {
+        recordFailure("there is no snapshot '\(shown)': SABLE_UPDATE_SNAPSHOTS=1 (or 'sable test --bless') writes it, as\n\(indented(text))", file: file, line: line)
+        return
+    }
+    // A checkout may have written its line breaks as Windows has them.
+    let given = (text + "\n").replacing("\r\n", with: "\n")
+    let wanted = kept.replacing("\r\n", with: "\n")
+    if given != wanted {
+        recordFailure("the value is not that of its snapshot '\(shown)' (SABLE_UPDATE_SNAPSHOTS=1 makes it so); \(lineDiff(wanted.lines(), given.lines()))", file: file, line: line)
+    }
+}
+
+// Beside the test's file, whose path is from the program's directory when
+// the toolchain says which that is.
+fn snapshotPath(_ file: String, _ function: String, _ name: String) -> String {
+    var path = file
+    if let root = Runtime.environment("SABLE_TEST_ROOT") {
+        if !isAbsolute(path) {
+            path = root + "/" + path
+        }
+    }
+    let directory = directoryOf(path)
+    var stem = path.slice(from: directory.isEmpty ? 0 : directory.count + 1, to: path.count)
+    if stem.hasSuffix(".sb") {
+        stem = stem.slice(from: 0, to: stem.count - 3)
+    }
+    let arguments = argumentsOf(TestState.name)
+    var key = "\(stem).\(function)\(arguments)"
+    if !name.isEmpty {
+        key += "." + fileName(name)
+    } else {
+        TestState.snapshots.append(key)
+        var times = 0
+        for other in TestState.snapshots {
+            if other == key {
+                times += 1
+            }
+        }
+        if times > 1 {
+            key += ".\(times)"
+        }
+    }
+    return (directory.isEmpty ? "" : directory + "/") + "__snapshots__/\(key).snap"
+}
+
+// A case's arguments in its test's name, as a file's name may have them.
+fn argumentsOf(_ name: String) -> String {
+    if let parenthesis = name.firstIndex(of: '(') {
+        return "." + fileName(name[parenthesis...].toString())
+    }
+    return ""
+}
+
+// The ASCII letters, digits, '-' and '_' of the name, a run of anything else made
+// one '-'; with what it was hashed in after it, when that left any out, so
+// that two names do not share a file.
+fn fileName(_ name: String) -> String {
+    var made = ""
+    var same = true
+    for c in name {
+        if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
+            made += String.fromChar(c)
+        } else {
+            same = false
+            if !made.isEmpty && !made.hasSuffix("-") {
+                made += "-"
+            }
+        }
+    }
+    if made.count > 60 {
+        made = made.slice(from: 0, to: 60)
+        same = false
+    }
+    if made.hasSuffix("-") {
+        made = made.slice(from: 0, to: made.count - 1)
+    }
+    if same {
+        return made
+    }
+    // FNV-1a, which is the same on every machine.
+    var hash: U32 = 2166136261
+    for byte in name.utf8 {
+        hash = (hash ^ U32(byte)) &* 16777619
+    }
+    return (made.isEmpty ? "" : made + "-") + "\(hash:08x)"
+}
+
+fn isAbsolute(_ path: String) -> Bool {
+    return path.hasPrefix("/") || path.hasPrefix("\\") || (path.count > 2 && path.at(1) == ':')
+}
+
+// What comes before the last separator; empty for a name alone.
+fn directoryOf(_ path: String) -> String {
+    var i = path.count - 1
+    while i >= 0 {
+        let c = path.at(i)
+        if c == '/' || c == '\\' {
+            return path.slice(from: 0, to: i)
+        }
+        i -= 1
+    }
+    return ""
+}

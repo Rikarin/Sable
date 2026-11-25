@@ -130,10 +130,12 @@ public sealed class TestRunnerMoreTests {
 
         var run = Native(Suite, arguments: ["--describe", "outOfRange"]);
         Assert.Equal(0, run.ExitCode);
-        Assert.Equal("Suite.outOfRange\ttest.sb:24\t\nSuite.outOfRangeSaid\ttest.sb:30\tout of range\n", run.Stdout);
+        Assert.Equal("Suite.outOfRange\ttest.sb:24\t\t0\t\nSuite.outOfRangeSaid\ttest.sb:30\tout of range\t0\t\nfiltered out\t5\n", run.Stdout);
+        var (tests, filteredOut) = Sable.Driver.TestRunner.Parse(run.Stdout + "Suite.awaits\ttest.sb:10\t-\t1500000000\tslow,net\n");
+        Assert.Equal(5, filteredOut);
         Assert.Equal(
-            [new("Suite.outOfRange", "test.sb:24", ""), new("Suite.outOfRangeSaid", "test.sb:30", "out of range"), new("Suite.awaits", "test.sb:10", null)],
-            Sable.Driver.TestRunner.Parse(run.Stdout + "Suite.awaits\ttest.sb:10\t-\n"));
+            [("Suite.outOfRange", "test.sb:24", "", null, ""), ("Suite.outOfRangeSaid", "test.sb:30", "out of range", null, ""), ("Suite.awaits", "test.sb:10", null, TimeSpan.FromSeconds(1.5), "slow net")],
+            tests.Select(static t => (t.Name, t.Location, t.Traps, t.Limit, string.Join(' ', t.Tags!))));
     }
 
     /// <summary>

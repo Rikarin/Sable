@@ -21,6 +21,30 @@ public sealed class PipelineTests {
         Assert.Contains(result.Errors, static e => e.Contains("S7000", StringComparison.Ordinal));
     }
 
+    // In the library it says the function, and is placed at the program's own
+    // call that led to it, however far off (#303).
+    [Theory]
+    [InlineData("keep(move made)", "fn unused() {}", 8)]
+    [InlineData("through(move made)", "fn through<T: ~Copyable>(_ value: consuming T) -> Int { return keep(move value) }", 4)]
+    public void SomethingInTheLibraryNotLoweredYetSaysWhereTheProgramNeedsIt(string call, string declaration, int line) {
+        var library = SyntaxTree.Parse(
+            new SourceText(
+                "module Sable.Extra\npublic fn keep<T: ~Copyable>(_ value: consuming T) -> Int { return held(move value) }\n"
+                + "fn held<T: ~Copyable>(_ value: consuming T) -> Int {\n    let held: T[] = []\n    return held.count\n}\n",
+                "lib/Sable.Extra/Extra.sb"
+            )
+        );
+        var program = SyntaxTree.Parse(
+            new SourceText($"module M\nimport Sable.Extra\n@noncopy struct Token {{ var id: Int }}\n{declaration}\n@main\nfn main() {{\n    let made = Token(id: 1)\n    print({call})\n}}\n", "test.sb")
+        );
+        var result = Pipeline.Compile([program, library]);
+        Assert.False(result.Succeeded);
+        var error = result.Errors.FirstOrDefault(static e => e.Contains("S7000", StringComparison.Ordinal));
+        Assert.True(error is not null, string.Join("\n", result.Errors));
+        Assert.Contains("in 'held' of the standard library (lib/Sable.Extra/Extra.sb:4:", error, StringComparison.Ordinal);
+        Assert.Contains($"--> test.sb:{line}:", error, StringComparison.Ordinal);
+    }
+
     // 'sable check' reports what the checks on SIL find, as a build does (#130).
     [Theory]
     [InlineData("S3057", "@noncopy struct H { var v: Int }\nfn take(_ h: consuming H) {}\nfn f() {\n    let h = H(v: 1)\n    take(h)\n    take(h)\n}\n", 6)]

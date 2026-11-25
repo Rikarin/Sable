@@ -1037,6 +1037,7 @@ public sealed class Lexer {
                     new(start, _position - start),
                     """"unterminated string literal; use """ for a multi-line string""""
                 );
+                FlushLiteral(parts, builder, rawStart);
                 break;
             }
 
@@ -1062,7 +1063,6 @@ public sealed class Lexer {
             _position++;
         }
 
-        FlushLiteral(parts, builder, rawStart);
         return Finish(SyntaxKind.StringLiteralToken, parts);
     }
 
@@ -1414,14 +1414,16 @@ public sealed class Lexer {
     /// <summary>
     ///     Ends a run of literal text. The raw span is recorded as well as the
     ///     cooked text, because the parser rebuilds an interpolated string from
-    ///     the original characters and the pieces have to tile the token exactly.
+    ///     the original characters and the pieces have to tile the token exactly:
+    ///     text that means nothing — an escape that is no character, a
+    ///     backslash that joins two lines — is a part all the same.
     /// </summary>
     void FlushLiteral(
         ImmutableArray<StringPart>.Builder parts,
         StringBuilder builder,
         int rawStart
     ) {
-        if (builder.Length == 0) {
+        if (_position == rawStart) {
             return;
         }
 

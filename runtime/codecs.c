@@ -27,8 +27,8 @@ enum {
 #define SABLE_CODEC_X64 1
 #include <cpuid.h>
 #include <immintrin.h>
-#define SABLE_TARGET_SSSE3 __attribute__((target("ssse3")))
-#define SABLE_TARGET_AVX2 __attribute__((target("avx2")))
+#define SABLE_CODEC_TARGET_SSSE3 __attribute__((target("ssse3")))
+#define SABLE_CODEC_TARGET_AVX2 __attribute__((target("avx2")))
 #endif
 
 #if defined(SABLE_CODEC_NEON)
@@ -170,7 +170,7 @@ static int codec_features(void) {
 // (Muła and Lemire, "Faster Base64 Encoding and Decoding using AVX2
 // Instructions", 2018.) The digit a value is written as is it and what its
 // run of digits is ahead of it, found by which run that is.
-SABLE_TARGET_SSSE3 static int64_t base64_encode_ssse3(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool url) {
+SABLE_CODEC_TARGET_SSSE3 static int64_t base64_encode_ssse3(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool url) {
     const __m128i order = _mm_setr_epi8(1, 0, 2, 1, 4, 3, 5, 4, 7, 6, 8, 7, 10, 9, 11, 10);
     const char ahead62 = (char)(url ? '-' - 62 : '+' - 62), ahead63 = (char)(url ? '_' - 63 : '/' - 63);
     const __m128i ahead = _mm_setr_epi8('a' - 26, '0' - 52, '0' - 52, '0' - 52, '0' - 52, '0' - 52, '0' - 52, '0' - 52,
@@ -189,7 +189,7 @@ SABLE_TARGET_SSSE3 static int64_t base64_encode_ssse3(const uint8_t *from, int64
     return i;
 }
 
-SABLE_TARGET_AVX2 static int64_t base64_encode_avx2(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool url) {
+SABLE_CODEC_TARGET_AVX2 static int64_t base64_encode_avx2(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool url) {
     const __m256i order = _mm256_broadcastsi128_si256(_mm_setr_epi8(1, 0, 2, 1, 4, 3, 5, 4, 7, 6, 8, 7, 10, 9, 11, 10));
     const char ahead62 = (char)(url ? '-' - 62 : '+' - 62), ahead63 = (char)(url ? '_' - 63 : '/' - 63);
     const __m256i ahead = _mm256_broadcastsi128_si256(
@@ -215,7 +215,7 @@ SABLE_TARGET_AVX2 static int64_t base64_encode_avx2(const uint8_t *from, int64_t
 // comparisons with the runs' bounds say which that is; one in no run is no
 // digit. (Signed comparisons: a byte past 0x7F is below every run.) Four
 // values are then put together as three bytes by two multiply-and-adds.
-SABLE_TARGET_SSSE3 static int64_t base64_decode_ssse3(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool url) {
+SABLE_CODEC_TARGET_SSSE3 static int64_t base64_decode_ssse3(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool url) {
     const __m128i digit62 = _mm_set1_epi8(url ? '-' : '+'), digit63 = _mm_set1_epi8(url ? '_' : '/');
     const __m128i order = _mm_setr_epi8(2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12, -1, -1, -1, -1);
     int64_t i = 0;
@@ -243,7 +243,7 @@ SABLE_TARGET_SSSE3 static int64_t base64_decode_ssse3(const uint8_t *from, int64
     return i;
 }
 
-SABLE_TARGET_AVX2 static int64_t base64_decode_avx2(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool url) {
+SABLE_CODEC_TARGET_AVX2 static int64_t base64_decode_avx2(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool url) {
     const __m256i digit62 = _mm256_set1_epi8(url ? '-' : '+'), digit63 = _mm256_set1_epi8(url ? '_' : '/');
     const __m256i order = _mm256_broadcastsi128_si256(_mm_setr_epi8(2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12, -1, -1, -1, -1));
     const __m256i together = _mm256_setr_epi32(0, 1, 2, 4, 5, 6, 7, 7);
@@ -273,7 +273,7 @@ SABLE_TARGET_AVX2 static int64_t base64_decode_avx2(const uint8_t *from, int64_t
     return i;
 }
 
-SABLE_TARGET_SSSE3 static int64_t hex_encode_ssse3(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool upper) {
+SABLE_CODEC_TARGET_SSSE3 static int64_t hex_encode_ssse3(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool upper) {
     const __m128i digits = _mm_loadu_si128((const __m128i *)(const void *)(upper ? "0123456789ABCDEF" : "0123456789abcdef"));
     const __m128i four = _mm_set1_epi8(0x0F);
     int64_t i = 0;
@@ -288,7 +288,7 @@ SABLE_TARGET_SSSE3 static int64_t hex_encode_ssse3(const uint8_t *from, int64_t 
     return i;
 }
 
-SABLE_TARGET_AVX2 static int64_t hex_encode_avx2(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool upper) {
+SABLE_CODEC_TARGET_AVX2 static int64_t hex_encode_avx2(const uint8_t *from, int64_t count, uint8_t *to, int64_t room, bool upper) {
     const __m256i digits = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)(const void *)(upper ? "0123456789ABCDEF" : "0123456789abcdef")));
     const __m256i four = _mm256_set1_epi8(0x0F);
     int64_t i = 0;
@@ -305,7 +305,7 @@ SABLE_TARGET_AVX2 static int64_t hex_encode_avx2(const uint8_t *from, int64_t co
     return i;
 }
 
-SABLE_TARGET_SSSE3 static int64_t hex_decode_ssse3(const uint8_t *from, int64_t count, uint8_t *to, int64_t room) {
+SABLE_CODEC_TARGET_SSSE3 static int64_t hex_decode_ssse3(const uint8_t *from, int64_t count, uint8_t *to, int64_t room) {
     int64_t i = 0;
     for (; count - i >= 32 && room >= 16; i += 32, to += 16, room -= 16) {
         __m128i pairs[2];
@@ -330,7 +330,7 @@ SABLE_TARGET_SSSE3 static int64_t hex_decode_ssse3(const uint8_t *from, int64_t 
     return i;
 }
 
-SABLE_TARGET_AVX2 static int64_t hex_decode_avx2(const uint8_t *from, int64_t count, uint8_t *to, int64_t room) {
+SABLE_CODEC_TARGET_AVX2 static int64_t hex_decode_avx2(const uint8_t *from, int64_t count, uint8_t *to, int64_t room) {
     int64_t i = 0;
     for (; count - i >= 64 && room >= 32; i += 64, to += 32, room -= 32) {
         __m256i pairs[2];

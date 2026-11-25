@@ -61,8 +61,17 @@ public fn isTree(_ root: FilePath) throws(IoError) -> Bool {
         && (try File.read(root.appending("sub/caf\u{E9} \u{2603}.txt"))) == "text"
         && (try File.read(root.appending("\(name)/\(name)"))) == "far"
         && Directory.exists(root.appending("empty"))
-        && (try File.readLink(root.appending("sub/link"))).string == "../a.txt"
-        && ((try File.metadata(root.appending("a.txt"))).permissions.mode & 0o777) == 0o750
+        && (try File.readLink(root.appending("sub/link"))).string?.replacing("\\", with: "/") == "../a.txt"
+        && keepsMode(try File.metadata(root.appending("a.txt")))
+}
+
+// Windows has no permissions but whether a file may be written.
+fn keepsMode(_ metadata: FileMetadata) -> Bool {
+    #if os(windows)
+    return (metadata.permissions.mode & 0o200) != 0
+    #else
+    return (metadata.permissions.mode & 0o777) == 0o750
+    #endif
 }
 
 /// Text again and again.

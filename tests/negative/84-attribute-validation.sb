@@ -37,6 +37,6 @@ struct Holder {
     @main                               //! S3514 'run' is a function of the module, not a method
     fn run() { }
 
-    @intrinsic                          //! S3081 only Sable.Core may declare an '@intrinsic'
+    @intrinsic                          //! S3081 only Sable.Core and Sable.Interop may declare an '@intrinsic'
     static fn name() -> String
 }

@@ -176,12 +176,49 @@ public sealed partial class SilGen {
     ///     A function's types as its code compiled once reads them: each
     ///     <c>some P</c> parameter's as the type parameter standing for it
     ///     (<see cref="FunctionSymbol.OpaqueTypeParameters" />), which the
-    ///     substitution it is lowered with maps to itself.
+    ///     substitution it is lowered with maps to itself; and a type
+    ///     parameter a 'where' clause says is another type (<c>extension
+    ///     Dictionary where Key == String</c>) as that type
+    ///     (<see cref="FixedParameters" />).
     /// </summary>
-    internal static TypeSubstitution OpaqueParametersAsThemselves(FunctionSymbol symbol) =>
-        symbol.OpaqueTypeParameters.IsEmpty
+    internal static TypeSubstitution OpaqueParametersAsThemselves(FunctionSymbol symbol) {
+        var known = FixedParameters(symbol);
+        return symbol.OpaqueTypeParameters.IsEmpty && known.Count == 0
             ? TypeSubstitution.Empty
-            : new(symbol.OpaqueTypeParameters.ToDictionary(static p => p, static p => (TypeSymbol)p));
+            : new(symbol.OpaqueTypeParameters.Select(static p => (Key: p, Value: (TypeSymbol)p)).Concat(known.Select(static k => (k.Key, k.Value))).ToDictionary(static p => p.Key, static p => p.Value));
+    }
+
+    static readonly Dictionary<TypeParameterSymbol, TypeSymbol> NoneFixed = [];
+
+    /// <summary>
+    ///     The type parameters of a function, or of the type it is a member
+    ///     of, that its 'where' clause, or its extension's, says are another
+    ///     type: no parameter of its code compiled once, which reads each as
+    ///     the type it is.
+    /// </summary>
+    internal static Dictionary<TypeParameterSymbol, TypeSymbol> FixedParameters(FunctionSymbol symbol) {
+        var requirements = symbol.SameTypeRequirements.Concat(ExtensionOf(symbol)?.SameTypeRequirements ?? []).ToList();
+        if (requirements.Count == 0) {
+            return NoneFixed;
+        }
+
+        var all = TypeParametersOf(symbol).Where(static p => p.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol }).ToList();
+        var known = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        foreach (var (left, right) in requirements) {
+            // 'S.Element == Element' makes the associated type the parameter (CanonicalType), not the parameter it.
+            if (left is TypeParameterSymbol or DependentMemberTypeSymbol && right is TypeParameterSymbol or DependentMemberTypeSymbol) {
+                continue;
+            }
+
+            if (left is TypeParameterSymbol named && all.Contains(named) && !known.ContainsKey(named) && !Mentions(right, [named, ..known.Keys])) {
+                known[named] = right;
+            } else if (right is TypeParameterSymbol other && all.Contains(other) && !known.ContainsKey(other) && !Mentions(left, [other, ..known.Keys])) {
+                known[other] = left;
+            }
+        }
+
+        return known;
+    }
 
     /// <summary>The function whose unspecialised body is being lowered: the same-type requirements its associated types are read with.</summary>
     Symbol? _associatedContext;
@@ -920,13 +957,7 @@ public sealed partial class SilGen {
             }
 
             own.AddRange(owner.TypeParameters);
-            if (ExtensionOf(symbol) is { SameTypeRequirements.IsEmpty: false }) {
-                // 'extension Array where Element == Int' is another type's.
-                refused = "a 'where' clause";
-                return null;
-            }
-
-            if (SelfType(symbol, TypeSubstitution.Empty) is not { } selfType || !IsHeld(selfType, [..own, ..symbol.TypeParameters])) {
+            if (SelfType(symbol, OpaqueParametersAsThemselves(symbol)) is not { } selfType || Mentions(selfType, own) && !IsHeld(selfType, [..own, ..symbol.TypeParameters])) {
                 refused = "a member of a generic type its code cannot hold";
                 return null;
             }
@@ -939,6 +970,10 @@ public sealed partial class SilGen {
             refused = "type parameters from around it";
             return null;
         }
+
+        // One a 'where' clause says is another type is that type.
+        var fixedParameters = FixedParameters(symbol);
+        own.RemoveAll(fixedParameters.ContainsKey);
 
         foreach (var parameter in own.Where(p => owner is not { TypeKind: TypeKind.Protocol } || !ReferenceEquals(p, owner.SelfTypeParameter))) {
             if (parameter is { IsValue: true } or { AllowsNoncopyable: true }) {
@@ -966,6 +1001,10 @@ public sealed partial class SilGen {
         var extension = ExtensionOf(symbol);
         foreach (var (subject, constraint) in symbol.ConformanceRequirements.Concat(extension?.ConformanceRequirements ?? [])) {
             foreach (var part in CompositionTypeSymbol.PartsOf(constraint)) {
+                if (subject is TypeParameterSymbol settled && fixedParameters.ContainsKey(settled)) {
+                    continue;
+                }
+
                 if (part is not NamedTypeSymbol protocol || !IsTabledProtocol(protocol)
                     || !(subject is TypeParameterSymbol direct && own.Contains(direct) || IsAssociatedOf(subject, own))) {
                     refused = "a 'where' clause";
@@ -986,10 +1025,10 @@ public sealed partial class SilGen {
             }
         }
 
-        bool Passable(TypeSymbol type) =>
-            !Mentions(type, own) || IsHeld(type, own);
-
         var asThemselves = OpaqueParametersAsThemselves(symbol);
+        bool Passable(TypeSymbol type) =>
+            (asThemselves.IsEmpty ? type : Substitute(asThemselves, type)) is var read && (!Mentions(read, own) || IsHeld(read, own));
+
         foreach (var parameter in symbol.Parameters) {
             var parameterType = asThemselves.IsEmpty ? parameter.Type : Substitute(asThemselves, parameter.Type);
 
@@ -1088,7 +1127,7 @@ public sealed partial class SilGen {
 
     /// <summary>A side of a same-type requirement unspecialised code can read: a type parameter, an associated type read through one, or a type that mentions none.</summary>
     static bool SameTypeSide(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> own) =>
-        !Mentions(type, own) || type is TypeParameterSymbol parameter && own.Contains(parameter) || IsAssociatedOf(type, own);
+        !Mentions(type, own) || type is TypeParameterSymbol parameter && own.Contains(parameter) || IsAssociatedOf(type, own) || IsHeld(type, own) && type is not MetatypeTypeSymbol;
 
     /// <summary>A body that is one call of a protocol's requirement, given the function's parameters as they are.</summary>
     static bool IsForwarder(BoundBlock body) {
@@ -1738,6 +1777,10 @@ public sealed partial class SilGen {
                 if (!calleeShape.ProtocolsOf(parameter).All(needed => has.Any(p => ReferenceEquals(p, needed)))) {
                     return false;
                 }
+            }
+
+            foreach (var (known, value) in FixedParameters(callee)) {
+                boundMap[known] = value;
             }
 
             var calleeSubstitution = WithAssociatedTypes(callee, new TypeSubstitution(boundMap));
@@ -2978,7 +3021,7 @@ public sealed partial class SilGen {
         void GenericParameters(ImmutableArray<SilType> parameterTypes, ref int next) {
             if (generator._unspecialised.TryGetValue(function.Name, out var generic)) {
                 if (function.Type.Result == SilType.Unit && next < parameterTypes.Length && parameterTypes[next] is AddressType { Pointee: var pointee } && SilType.IsIndirect(pointee)
-                    && (Bridged is not null || ResultOf(symbol) is { } made && generator.Lower(made) is { } returned && SilType.IsIndirect(returned))) {
+                    && (Bridged is not null || ResultOf(symbol) is { } made && LowerType(made) is { } returned && SilType.IsIndirect(returned))) {
                     _indirectResult = _entry.AddArgument(parameterTypes[next++]);
                     NameArgument("$out");
                 }

@@ -20,6 +20,7 @@ FEuBxDCHUbWuW3aFHuC7GAIgb06UL169mP2nhYyu1lJ8G2VantiqohGVU7q1ftLD
 FxI=
 -----END CERTIFICATE-----
 """
+
 let rootAki: String = """
 -----BEGIN CERTIFICATE-----
 MIIBhzCCAS2gAwIBAgICEjQwCgYIKoZIzj0EAwIwDjEMMAoGA1UEAwwDQWtpMB4X
@@ -33,6 +34,7 @@ HZNNXNe4b9gY2sCKxGe/6Q+cgjK/UVtRAiEAyCjj8YioUUCXaKwu/HBwTtESXthg
 TXubkO59z0/1FZ0=
 -----END CERTIFICATE-----
 """
+
 let rootSoft: String = """
 -----BEGIN CERTIFICATE-----
 MIIBTTCB86ADAgECAgISNDAKBggqhkjOPQQDAjAPMQ0wCwYDVQQDDARTb2Z0MB4X
@@ -45,6 +47,7 @@ PXvRxsu2wYGa2QLNv/ACIQCL/7ZVOP859SdZIzmrIHvlRuo908aSbU03BMNyIUdP
 DA==
 -----END CERTIFICATE-----
 """
+
 let rootNoSki: String = """
 -----BEGIN CERTIFICATE-----
 MIIBMTCB2aADAgECAgISNDAKBggqhkjOPQQDAjAQMQ4wDAYDVQQDDAVOb1NraTAe
@@ -56,6 +59,7 @@ RAIgJE/iNdJ5VaQ5kgO7WoMHlOWnIX3DxQlK4qVNx0ZzT0cCIC4Oaq5huI3z5rRo
 9k/+8lmueTxHVrlBkRl/z39HIHRr
 -----END CERTIFICATE-----
 """
+
 let leafGood: String = """
 -----BEGIN CERTIFICATE-----
 MIIBczCCARmgAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
@@ -68,6 +72,7 @@ bzAKBggqhkjOPQQDAgNIADBFAiBHEmJgcnT+Ko6DD0d5i6xwwkgW7ankkq7mdfTX
 uCNGrQIhAIBcoc5gZwRh1i7Dy4NZ1hZudmQchEzryGL7CP0G4rHf
 -----END CERTIFICATE-----
 """
+
 let leafAki: String = """
 -----BEGIN CERTIFICATE-----
 MIIBcTCCARigAwIBAgICEjQwCgYIKoZIzj0EAwIwDjEMMAoGA1UEAwwDQWtpMB4X
@@ -80,6 +85,7 @@ MAoGCCqGSM49BAMCA0cAMEQCIENtOfjtl1ROK8Ldv6moo/FqM270aljA75kdHMhw
 87KUAiBz9PIs8DidiQoJ9GzW22RiPXigjv1dZRxetlkRpps4ww==
 -----END CERTIFICATE-----
 """
+
 let leafSoft: String = """
 -----BEGIN CERTIFICATE-----
 MIIBdDCCARmgAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwEU29mdDAe
@@ -92,6 +98,7 @@ bzAKBggqhkjOPQQDAgNJADBGAiEA15awCZqkufXFtZCPJXHhwXrcDhZprRlB00LN
 oiJ/We4CIQDkpMxaiqSbcGEP9lTQTuYVTGWD6Zzx49y+y9DvamjqOg==
 -----END CERTIFICATE-----
 """
+
 let leafNoSki: String = """
 -----BEGIN CERTIFICATE-----
 MIIBUTCB+aADAgECAgISNDAKBggqhkjOPQQDAjAQMQ4wDAYDVQQDDAVOb1NraTAe
@@ -104,6 +111,7 @@ tsEDFkrKcHS+KD1cpgpK+PBKHQIgcOTf8NUF+mULoD794yXzJAzhmWSw/Q2c7BDf
 VW0QmBU=
 -----END CERTIFICATE-----
 """
+
 let leafSkiCrit: String = """
 -----BEGIN CERTIFICATE-----
 MIIBdTCCARygAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
@@ -116,6 +124,7 @@ ErNkKjAKBggqhkjOPQQDAgNHADBEAiA9hLK5/IGQxkhiCArfUcTgoRWOotcZkRMl
 /fiwp1QL7QIgNRULb52YZRLNNGVeeErh8TjnQpVZy6xbGTM9LtSz2H8=
 -----END CERTIFICATE-----
 """
+
 let leafSanSoft: String = """
 -----BEGIN CERTIFICATE-----
 MIIBcDCCARagAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
@@ -128,6 +137,7 @@ BggqhkjOPQQDAgNIADBFAiEA59I3WbPg2TSEAhFTQigx2egGnN8VkCEplBIMWPxB
 /AQCIHI3mU72G6Ug2zr7HrK521z913Foi4re9nIXcuuzjPJR
 -----END CERTIFICATE-----
 """
+
 let leafNoSan: String = """
 -----BEGIN CERTIFICATE-----
 MIIBYTCCAQigAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
@@ -140,6 +150,7 @@ RAIgfzfk+NjaIrApNBGvDcaG02wpkFWgHmHrer1dyFwmF8YCIALFIlZ5uUr29GTG
 cH6w5GkKfEZKimJrQRUtKHFRC6Z5
 -----END CERTIFICATE-----
 """
+
 let leafPc: String = """
 -----BEGIN CERTIFICATE-----
 MIIBgzCCASmgAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
@@ -153,6 +164,7 @@ Ka45sS+hi3FeO3lE/A5GSW8wCgYIKoZIzj0EAwIDSAAwRQIhALlbbMrQqt60bAvD
 gb9dpuGdZg==
 -----END CERTIFICATE-----
 """
+
 let leafEkuCrit: String = """
 -----BEGIN CERTIFICATE-----
 MIIBdTCCARygAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
@@ -165,6 +177,7 @@ DkZJbzAKBggqhkjOPQQDAgNHADBEAiB6dE03/8LHrKJulVARVWpJWbanQ7g2XV16
 KaG/BEcKagIgIEvDUMTnUU9M7sHSndCsI/Dk8mYjE03vlyJumb6RTcI=
 -----END CERTIFICATE-----
 """
+
 let leafSanCrit: String = """
 -----BEGIN CERTIFICATE-----
 MIIBizCCATGgAwIBAgICEjQwCgYIKoZIzj0EAwIwDzENMAsGA1UEAwwER29vZDAe
@@ -198,25 +211,45 @@ fn aGoodPathIsGoodByEveryProfile() {
     check(leafGood, rootGood, none)
 }
 
+/// A path that breaks a rule, and the least profile that refuses it: what a
+/// test's case is called is the rule.
+struct Broken: Debug {
+    let rule: String
+    let leaf: String
+    let root: String
+    let refused: CertificateProfile
+    var host: String? = "a.example.com"
+
+    fn debugDescription() -> String => rule
+}
+
+let brokenPaths: Broken[>..] = [
+    Broken(rule: "a root's authority identifier has an issuer", leaf: leafAki, root: rootAki, refused: .WebPki),
+    Broken(rule: "a root's constraints are not critical", leaf: leafSoft, root: rootSoft, refused: .Rfc5280),
+    Broken(rule: "a root has no identifier", leaf: leafNoSki, root: rootNoSki, refused: .Rfc5280),
+    Broken(rule: "an identifier is critical", leaf: leafSkiCrit, root: rootGood, refused: .Rfc5280),
+    Broken(rule: "the names of no subject are not critical", leaf: leafSanSoft, root: rootGood, refused: .Rfc5280),
+    Broken(rule: "there are no names", leaf: leafNoSan, root: rootGood, refused: .WebPki, host: none),
+    Broken(rule: "the purposes are critical", leaf: leafEkuCrit, root: rootGood, refused: .WebPki),
+    Broken(rule: "the names of a subject are critical", leaf: leafSanCrit, root: rootGood, refused: .WebPki),
+]
+
+@test(arguments: brokenPaths)
+fn eachRuleIsItsProfiles(_ path: Broken) {
+    check(path.leaf, path.root, path.refused, host: path.host)
+}
+
+// Policies that are constrained are not processed, so a critical
+// extension that does is refused; one that is not critical is wrong.
 @test
-fn eachRuleIsItsProfiles() {
-    check(leafAki, rootAki, .WebPki)
-    check(leafSoft, rootSoft, .Rfc5280)
-    check(leafNoSki, rootNoSki, .Rfc5280)
-    check(leafSkiCrit, rootGood, .Rfc5280)
-    check(leafSanSoft, rootGood, .Rfc5280)
-    check(leafNoSan, rootGood, .WebPki, host: none)
-    check(leafEkuCrit, rootGood, .WebPki)
-    check(leafSanCrit, rootGood, .WebPki)
-    // Policies that are constrained are not processed, so a critical
-    // extension that does is refused; one that is not critical is wrong.
+fn constrainedPoliciesAreRefused() {
     expect(!isGood(leafPc, rootGood, .Rfc5280))
 }
 
 @test
 fn anAuthoritysIdentifierIsRead() {
     let root = try! Certificate.parse(pem: rootAki)
-    let identifier = root.authorityKeyIdentifier!
+    let identifier = require(root.authorityKeyIdentifier)
     expect(identifier.keyIdentifier == root.subjectKeyIdentifier && identifier.serialNumber == root.serialNumber)
     expect(identifier.issuer! == [.Directory(root.subject)])
     expect(AuthorityKeyIdentifier(keyIdentifier: [1]) == AuthorityKeyIdentifier(keyIdentifier: [1]) && AuthorityKeyIdentifier(keyIdentifier: [1]) != identifier)

@@ -4,118 +4,13 @@ module CertificateVerifierTests
 // wrong in one way each. Run with tools/stdlib-coverage.sh Sable.Crypto.X509;
 // x509-limbo is tools/conformance/x509.
 
+import X509Support
 import Sable.Crypto
 import Sable.Crypto.X509
 import Sable.Serialize.Asn1
 import Sable.Testing
 import Sable.Time
 
-let rootPem: String = """
------BEGIN CERTIFICATE-----
-MIIDJDCCAgygAwIBAgICEjQwDQYJKoZIhvcNAQELBQAwMzELMAkGA1UEBhMCQ0gx
-FTATBgNVBAoMDEV4YW1wbGUsIEx0ZDENMAsGA1UEAwwEUm9vdDAeFw0yNjAxMDEw
-MDAwMDBaFw0zNjAxMDEwMDAwMDBaMDMxCzAJBgNVBAYTAkNIMRUwEwYDVQQKDAxF
-eGFtcGxlLCBMdGQxDTALBgNVBAMMBFJvb3QwggEiMA0GCSqGSIb3DQEBAQUAA4IB
-DwAwggEKAoIBAQC65MtLQOBeCx5WvZGBNZ1bOztPwvFP/DsDlUX7BqAabc2eFZDs
-AYEd1M4crZhZdTD+egAB/kYQFRSavAp3NNgIe+yeeuR55klscOC8bf8e2Ro+FBox
-SI7xBXCXrrVJOtWXK7yVLO7E6/UdQ+4oAltd4ZPH7liumXOIJPsjUo9oNx+q2JC9
-UgV+mtxKCbp0DpIgV7VtyOMJnfxzSv4VVeek8txtXAtncUT9FVygKBTzIFEjcwU3
-sTUqxcVKUSUKMQtoUkY6PebwNpkkOhs9lCyRvz+JhD+W+bHiyZ9al0/yROkJEPpL
-kT/tMV1uJTmVehMMhyG1a9598/g3DFTPqzjZAgMBAAGjQjBAMA8GA1UdEwEB/wQF
-MAMBAf8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTG44n8p1/jOTQBMZGSkyjq
-W9gpgzANBgkqhkiG9w0BAQsFAAOCAQEAbqUIR0Owt1wuCg0ExcPAe/ET3YV9uEqa
-A4zW/FdZXz65HNzHHX72RoV7CWlV4zx+rXYuS7iX3ZVSOK26rD1damfbemfEnj1F
-leR/yM8fof4hxi9kgkhd3zJUjH0R+J3EIjVO6YJUewirVGVD2/7A5xe8QlFn1j/H
-gbf9VB/UpyFkt8bEwN5Z66j6m1jtxxSLWdThkOZa3Yoji1wgthxUoEieKaDhiaUk
-bymxQHW7yK+rut3bGyfla+akIP4XfV5P3e3nf8JKu/1XcIhYJh545Kt079OtWka+
-JxnW1C9tVvAlpPOXdlPz5nvjs7ODmzFyYeIEhNxMAOdCtMF1tX6Txw==
------END CERTIFICATE-----
-"""
-let interPem: String = """
------BEGIN CERTIFICATE-----
-MIIChDCCAWygAwIBAgIBIjANBgkqhkiG9w0BAQsFADAzMQswCQYDVQQGEwJDSDEV
-MBMGA1UECgwMRXhhbXBsZSwgTHRkMQ0wCwYDVQQDDARSb290MB4XDTI2MDEwMTAw
-MDAwMFoXDTM2MDEwMTAwMDAwMFowOzELMAkGA1UEBhMCQ0gxFTATBgNVBAoMDEV4
-YW1wbGUsIEx0ZDEVMBMGA1UEAwwMSW50ZXJtZWRpYXRlMFkwEwYHKoZIzj0CAQYI
-KoZIzj0DAQcDQgAEe84HkWxLQWMktUOpIoX++kSmSPDUKeQQ0++clX2Ud5FduvZY
-/NegB81i5qc32MWAk2Al/g6TwfJn11WPh84G9aNmMGQwEgYDVR0TAQH/BAgwBgEB
-/wIBADAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFMlG9acB+L8pCOVI/wT3vIrY
-+kbWMB8GA1UdIwQYMBaAFMbjifynX+M5NAExkZKTKOpb2CmDMA0GCSqGSIb3DQEB
-CwUAA4IBAQBdDlOMJeOppxCpHXFmLYxevk4KwQcTWegorJJ/5wkt74HdoEqiwuRN
-JzsjlLKkHqOUnsN75clFLrB8kLGlBp/qaP4LR1mSLPke0/Q2e9ebm8CbPhBHM+7b
-2c/mGkW2oAS+aZyoyF7gk4lux/6JPUg1RgSyMD+rQj9xAgo9j+FM6BStIwWHray8
-JGdHiZN+h47NOLU42m0KqtY/0fjPwghkUQPLxqzf0rXyHIFxOtUdlH6xiJ0unpt/
-td/+WwefQMkwA4VVPmkBZNNxZn7jkGfNeDOlUIdy1mwUU94C8t3w+ouh9dv4qGja
-/KtQQJBsAD+BJ2L9GilkxnYPZLHnOrwz
------END CERTIFICATE-----
-"""
-let leafPem: String = """
------BEGIN CERTIFICATE-----
-MIICtDCCAlqgAwIBAgIECgsMDTAKBggqhkjOPQQDAjA7MQswCQYDVQQGEwJDSDEV
-MBMGA1UECgwMRXhhbXBsZSwgTHRkMRUwEwYDVQQDDAxJbnRlcm1lZGlhdGUwHhcN
-MjYwMTAxMDAwMDAwWhcNMzYwMTAxMDAwMDAwWjAaMRgwFgYDVQQDDA93d3cuZXhh
-bXBsZS5jb20wdjAQBgcqhkjOPQIBBgUrgQQAIgNiAATBHpJx7VFo2nM1SMny1rlg
-GKXOYRr9jU61jhMkzmxKoFxW37Bj2ISK/o+0UrLpKqe90pB02O3OLds9fo8KuC7A
-1a0aQHfORtp0vFRcFLfCM1O+wYJr/yp813mvWkvOT4CjggFOMIIBSjAJBgNVHRME
-AjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUH
-AwIwHQYDVR0OBBYEFM860kydDRFNLtnUZyUZ3S1Cq20uMB8GA1UdIwQYMBaAFMlG
-9acB+L8pCOVI/wT3vIrY+kbWMDQGCCsGAQUFBwEBBCgwJjAkBggrBgEFBQcwAYYY
-aHR0cDovL29jc3AuZXhhbXBsZS5jb20vMIGXBgNVHREEgY8wgYyCD3d3dy5leGFt
-cGxlLmNvbYISKi5hcHBzLmV4YW1wbGUuY29thwTAAAIBhxAgAQ24AAAAAAAAAAAA
-AAABgQ1hQGV4YW1wbGUuY29thhVodHRwczovL2V4YW1wbGUuY29tL3iIAyoDBKAO
-BgMqAwWgBwwFaGVsbG+kEjAQMQ4wDAYDVQQDDAVpbm5lcjAKBggqhkjOPQQDAgNI
-ADBFAiEAtBZuvCZ1YqkkHPpxYkx6rhgVBPwtQ+1Tx5ndWO6AszYCIFbjSNLnUG/U
-vZBm/LVl76Od66qgavZ2WI1kkQ9l0kxp
------END CERTIFICATE-----
-"""
-let pssPem: String = """
------BEGIN CERTIFICATE-----
-MIIC1DCCAYigAwIBAgIBBzBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUA
-oRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASAwMzELMAkGA1UEBhMC
-Q0gxFTATBgNVBAoMDEV4YW1wbGUsIEx0ZDENMAsGA1UEAwwEUm9vdDAeFw0yNjAx
-MDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMA4xDDAKBgNVBAMMA1BTUzB2MBAGByqG
-SM49AgEGBSuBBAAiA2IABMEeknHtUWjaczVIyfLWuWAYpc5hGv2NTrWOEyTObEqg
-XFbfsGPYhIr+j7RSsukqp73SkHTY7c4t2z1+jwq4LsDVrRpAd85G2nS8VFwUt8Iz
-U77Bgmv/KnzXea9aS85PgKNeMFwwGgYDVR0RBBMwEYIPcHNzLmV4YW1wbGUuY29t
-MB0GA1UdDgQWBBTPOtJMnQ0RTS7Z1GclGd0tQqttLjAfBgNVHSMEGDAWgBTG44n8
-p1/jOTQBMZGSkyjqW9gpgzBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUA
-oRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASADggEBABV+qp5EAfvj
-EFnwx0/7Fn0YQFP5DE/KyPd/6/H07d6q8FYl+k4ikhTGrZlksziMQwebjz4xv7G1
-Yng7elN1g0hBJLeDlHXqSOSeqXOtoe22/CdZb2/F0rsF5S7+kLme4I5YoykxgG8P
-YzlyuQeZobgkccsBmipmbURlqBOpL4TcZhtfERU9NpnhtWdHqnBgzZbhPsC3jF9O
-YGKjHsNRLop+gJ17usKEW1mca9hQ4GjqgAhN1rX1Px09IWW7bpygdPRJjzRqLvFQ
-0iruKcN5UjqIDiIvT+Mz5cw30nqE5kgm/a/alnF/pJg99jgVhpbb0g692LEzEuPc
-pzAjApy3phc=
------END CERTIFICATE-----
-"""
-let sha1Pem: String = """
------BEGIN CERTIFICATE-----
-MIICbjCCAVagAwIBAgIBCDANBgkqhkiG9w0BAQUFADAzMQswCQYDVQQGEwJDSDEV
-MBMGA1UECgwMRXhhbXBsZSwgTHRkMQ0wCwYDVQQDDARSb290MB4XDTI2MDEwMTAw
-MDAwMFoXDTM2MDEwMTAwMDAwMFowDzENMAsGA1UEAwwEU0hBMTB2MBAGByqGSM49
-AgEGBSuBBAAiA2IABMEeknHtUWjaczVIyfLWuWAYpc5hGv2NTrWOEyTObEqgXFbf
-sGPYhIr+j7RSsukqp73SkHTY7c4t2z1+jwq4LsDVrRpAd85G2nS8VFwUt8IzU77B
-gmv/KnzXea9aS85PgKNfMF0wGwYDVR0RBBQwEoIQc2hhMS5leGFtcGxlLmNvbTAd
-BgNVHQ4EFgQUzzrSTJ0NEU0u2dRnJRndLUKrbS4wHwYDVR0jBBgwFoAUxuOJ/Kdf
-4zk0ATGRkpMo6lvYKYMwDQYJKoZIhvcNAQEFBQADggEBAAJ2SXDlj9Ra/ItZCt6O
-aJ7wRJc+iXy0/KZVtvhoJOJEZ/xBA9LDe0K4OMDkuN2bG+rxkd4kB6TFwGPBK+e+
-vH4yE1cj+LNxCNKIIjhaKja/FfQAW1wRqWo5D8uam+XtIjoIcPjT1Nn//2u81u21
-n4jgDzZiC6DVxirjp/8S1GDcuypnxLkV6Qm8ew7JSOs6q0QI/yTZe6ipoNGmr/qN
-NQQ+ogIszBiPgeoBWXVi/Q3pdCUoJ2CW6tBhlZoed0s+brJ4gD4nS4KBZR/HM1+C
-gC22RFkNiFLz0Fqpl+yE+NUvp3ijHTGz/E+wGOH4pYKgLPTIxjeYeA0xUXvQllIa
-pH8=
------END CERTIFICATE-----
-"""
-let edPem: String = """
------BEGIN CERTIFICATE-----
-MIIBBDCBt6ADAgECAgEJMAUGAytlcDANMQswCQYDVQQDDAJFZDAeFw0yNjAxMDEw
-MDAwMDBaFw0zNjAxMDEwMDAwMDBaMA0xCzAJBgNVBAMMAkVkMCowBQYDK2VwAyEA
-DonhvLeQG/6HHd0m/1kbpvAQGl3zewu2p0iOoH0QWbKjPDA6MBkGA1UdEQQSMBCC
-DmVkLmV4YW1wbGUuY29tMB0GA1UdDgQWBBRBXHD1ST2YqbjBq23eft/EsrwFBjAF
-BgMrZXADQQCMjWgRbQdD5tvdF2DAxY3SWlCbmPhPC+YFJblAbMBCZZgUqgtx+w5+
-TqqhesCkBBz5sDZLkiUEvf/Vok7Kem0O
------END CERTIFICATE-----
-"""
 let crlEmpty: String = """
 -----BEGIN X509 CRL-----
 MIHzMIGbAgEBMAoGCCqGSM49BAMCMDsxCzAJBgNVBAYTAkNIMRUwEwYDVQQKDAxF
@@ -126,6 +21,7 @@ itj6RtYwCgYDVR0UBAMCAQUwCgYIKoZIzj0EAwIDRwAwRAIgbECx4dxrP7VgFSBC
 wjf7xp3B
 -----END X509 CRL-----
 """
+
 let crlRevoked: String = """
 -----BEGIN X509 CRL-----
 MIIBLzCB1gIBATAKBggqhkjOPQQDAjA7MQswCQYDVQQGEwJDSDEVMBMGA1UECgwM
@@ -137,6 +33,7 @@ ANxOrfT2Dv2uYGBdj2aoBcoeqBR8SDnH1f0T5eF2Ju2cAiBHJs83HwQNx3XTSDfU
 WhY8V3B4ioV6SzzD1hqMTo0UNA==
 -----END X509 CRL-----
 """
+
 let crlRoot: String = """
 -----BEGIN X509 CRL-----
 MIIBwzCBrAIBATANBgkqhkiG9w0BAQsFADAzMQswCQYDVQQGEwJDSDEVMBMGA1UE
@@ -154,10 +51,6 @@ JQSH6EBOmMrP3a4enhqWP5BeoaydxU8=
 
 let within: UtcDateTime = UtcDateTime.of(year: 2026, month: 6, day: 1, hour: 0, minute: 0, second: 0)!
 
-fn assertThrows(_ expected: CertificateError, _ body: () throws(CertificateError) -> Void) {
-    expectThrows(expected) { try body() }
-}
-
 fn opensslVerifier() -> CertificateVerifier {
     return CertificateVerifier(roots: TrustStore([try! Certificate.parse(pem: rootPem)]))
 }
@@ -171,15 +64,15 @@ fn opensslsPathIsFound() {
     expect(try! verifier.verify(leaf, intermediates: [root, inter], host: "www.example.com", at: within) == [leaf, inter, root])
     expect(try! verifier.verify(leaf, intermediates: [inter], purpose: KeyPurpose.clientAuth, at: within).count == 3)
     expect(try! verifier.verify(leaf, intermediates: [inter], purpose: none, at: within).count == 3)
-    assertThrows(CertificateError.UnknownIssuer(issuer: "CN=Intermediate,O=Example\\, Ltd,C=CH")) { () throws(CertificateError) in _ = try verifier.verify(leaf, at: within) }
-    assertThrows(CertificateError.HostMismatch(host: "other.example")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], host: "other.example", at: within) }
-    assertThrows(CertificateError.NotForPurpose(reason: "CN=www.example.com is not for 1.3.6.1.5.5.7.3.3")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], purpose: KeyPurpose.codeSigning, at: within) }
-    assertThrows(CertificateError.NotYetValid(subject: "CN=www.example.com")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: UtcDateTime.fromUnix(0)) }
-    assertThrows(CertificateError.Expired(subject: "CN=www.example.com")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: leaf.notAfter.adding(Duration.seconds(1))) }
+    expectThrows(CertificateError.UnknownIssuer(issuer: "CN=Intermediate,O=Example\\, Ltd,C=CH")) { _ = try verifier.verify(leaf, at: within) }
+    expectThrows(CertificateError.HostMismatch(host: "other.example")) { _ = try verifier.verify(leaf, intermediates: [inter], host: "other.example", at: within) }
+    expectThrows(CertificateError.NotForPurpose(reason: "CN=www.example.com is not for 1.3.6.1.5.5.7.3.3")) { _ = try verifier.verify(leaf, intermediates: [inter], purpose: KeyPurpose.codeSigning, at: within) }
+    expectThrows(CertificateError.NotYetValid(subject: "CN=www.example.com")) { _ = try verifier.verify(leaf, intermediates: [inter], at: UtcDateTime.fromUnix(0)) }
+    expectThrows(CertificateError.Expired(subject: "CN=www.example.com")) { _ = try verifier.verify(leaf, intermediates: [inter], at: leaf.notAfter.adding(Duration.seconds(1))) }
     expect(try! verifier.verify(leaf, intermediates: [inter], at: leaf.notAfter).count == 3 && verifier.verify(leaf, intermediates: [inter], at: leaf.notBefore).count == 3)
     let pss = try! Certificate.parse(pem: pssPem)
     expect(try! verifier.verify(pss, host: "pss.example.com", at: within).count == 2)
-    assertThrows(CertificateError.Unsupported(reason: "CN=SHA1 is signed with an algorithm the library does not take: 1.2.840.113549.1.1.5")) { () throws(CertificateError) in _ = try verifier.verify(try Certificate.parse(pem: sha1Pem), at: within) }
+    expectThrows(CertificateError.Unsupported(reason: "CN=SHA1 is signed with an algorithm the library does not take: 1.2.840.113549.1.1.5")) { _ = try verifier.verify(try Certificate.parse(pem: sha1Pem), at: within) }
 }
 
 @test
@@ -187,7 +80,7 @@ fn aCertificateTrustedItselfIsItsOwnPath() {
     let own = try! Certificate.parse(pem: edPem)
     let verifier = CertificateVerifier(roots: TrustStore([own]))
     expect(try! verifier.verify(own, host: "ed.example.com", at: within) == [own])
-    expect((try? opensslVerifier().verify(own, host: "ed.example.com", at: within)) == none)
+    expectThrows { _ = try opensslVerifier().verify(own, host: "ed.example.com", at: within) }
 }
 
 @test
@@ -204,16 +97,16 @@ fn revokedCertificatesAreRefused() {
     expect(list.thisUpdate.year == 2026 && list.nextUpdate!.year == 2036 && list.issuer == inter.subject && list.extensions.count >= 1)
     expect(list.isSigned(by: try! inter.publicKey()) && !list.isSigned(by: try! leaf.publicKey()))
     verifier.revocationLists = [list]
-    assertThrows(CertificateError.Revoked(subject: "CN=www.example.com")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: within) }
+    expectThrows(CertificateError.Revoked(subject: "CN=www.example.com")) { _ = try verifier.verify(leaf, intermediates: [inter], at: within) }
     verifier.revocationLists = [try! CertificateRevocationList.parse(pem: crlRoot)]
-    assertThrows(CertificateError.Revoked(subject: "CN=Intermediate,O=Example\\, Ltd,C=CH")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: within) }
+    expectThrows(CertificateError.Revoked(subject: "CN=Intermediate,O=Example\\, Ltd,C=CH")) { _ = try verifier.verify(leaf, intermediates: [inter], at: within) }
     // A list out of date: the certificates are too, so one of before they were.
     expect((try? CertificateRevocationList.parse(der: list.der[..<^1])) == none && (try? CertificateRevocationList.parse(pem: rootPem)) == none)
     // Signed by another.
     var changed = list.der
     changed[changed.count - 1] = changed[changed.count - 1] ^ 1
     verifier.revocationLists = [try! CertificateRevocationList.parse(der: changed)]
-    assertThrows(CertificateError.Invalid(reason: "the revocation list of CN=Intermediate,O=Example\\, Ltd,C=CH is not signed with its key")) { () throws(CertificateError) in _ = try verifier.verify(leaf, intermediates: [inter], at: within) }
+    expectThrows(CertificateError.Invalid(reason: "the revocation list of CN=Intermediate,O=Example\\, Ltd,C=CH is not signed with its key")) { _ = try verifier.verify(leaf, intermediates: [inter], at: within) }
     var i = 0
     while i < list.der.count {
         var other = list.der
@@ -323,55 +216,73 @@ fn aWayRoundIsNotFollowedForEver() {
     expect(problem(leaf, more, root) == none)
 }
 
-@test
-fn namesAreWithinWhatIsPermitted() {
+let inside: DistinguishedName = DistinguishedName([NameAttribute(.countryName, "CH"), NameAttribute(.commonName, "x")])
+let other: ObjectIdentifier = ObjectIdentifier([1, 2, 3])
+
+fn namesProblem(_ permitted: GeneralName[>..], _ excluded: GeneralName[>..], _ names: GeneralName[>..], subject: DistinguishedName = DistinguishedName([])) -> CertificateError? {
     let root = authority("Root", by: none)
-    fn check(_ permitted: GeneralName[>..], _ excluded: GeneralName[>..], _ names: GeneralName[>..], _ good: Bool, subject: DistinguishedName = DistinguishedName([])) {
-        let inter = authority("Inter", by: root) { (b: inout CertificateBuilder) in b.nameConstraints = NameConstraints(permitted: permitted, excluded: excluded) }
-        let leaf = server("a", by: inter) { (b: inout CertificateBuilder) in
-            b.alternativeNames = names
-            b.subject = subject
-        }
-        expect((problem(leaf, [inter.certificate], root, host: none) == none) == good, "\(permitted.count) \(excluded.count) \(names[0])")
+    let inter = authority("Inter", by: root) { (b: inout CertificateBuilder) in b.nameConstraints = NameConstraints(permitted: permitted, excluded: excluded) }
+    let leaf = server("a", by: inter) { (b: inout CertificateBuilder) in
+        b.alternativeNames = names
+        b.subject = subject
     }
-    check([.Dns("example.com")], [], [.Dns("example.com"), .Dns("A.b.Example.com"), .Dns("*.example.com")], true)
-    check([.Dns("example.com")], [], [.Dns("badexample.com")], false)
-    check([.Dns("a.example.com")], [], [.Dns("*.example.com")], false)
-    check([.Dns("")], [], [.Dns("anything.example")], true)
-    check([], [.Dns("bad.example.com")], [.Dns("good.example.com")], true)
-    check([], [.Dns("bad.example.com")], [.Dns("x.bad.example.com")], false)
-    check([], [.Dns("bad.example.com")], [.Dns("*.example.com")], false)
-    check([], [.Dns("a.bad.example.com")], [.Dns("*.example.com")], true)
-    check([.Dns("example.com")], [], [.Dns("bad_name.example.com")], false)
-    check([.Dns("*.example.com")], [], [.Dns("a.example.com")], false)
-    check([.Dns("example.com")], [], [.Email("a@other.example")], true)
-    check([.Ip([10, 0, 0, 0, 255, 0, 0, 0])], [], [.Ip([10, 1, 2, 3])], true)
-    check([.Ip([10, 0, 0, 0, 255, 0, 0, 0])], [], [.Ip([11, 1, 2, 3])], false)
-    check([.Ip([10, 0, 0, 0, 255, 0, 255, 0])], [], [.Ip([10, 1, 0, 3])], false)
-    check([], [.Ip([10, 0, 0, 0, 255, 0, 0, 0])], [.Ip([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])], true)
-    check([.Email("a@example.com")], [], [.Email("a@EXAMPLE.com")], true)
-    check([.Email("a@example.com")], [], [.Email("b@example.com")], false)
-    check([.Email("example.com")], [], [.Email("b@example.com")], true)
-    check([.Email("example.com")], [], [.Email("b@sub.example.com")], false)
-    check([.Email(".example.com")], [], [.Email("b@sub.example.com")], true)
-    check([.Email(".example.com")], [], [.Email("b@example.com")], false)
-    check([.Email("a@b@example.com")], [], [.Email("b@example.com")], false)
-    check([.Email("example.com")], [], [.Email("no mailbox")], false)
-    check([.Email("example.com")], [], [.Dns("x.example")], false, subject: DistinguishedName([NameAttribute(.emailAddress, "a@other.example")]))
-    check([.Uri("example.com")], [], [.Uri("https://user@example.com:8443/path?q")], true)
-    check([.Uri(".example.com")], [], [.Uri("https://a.example.com")], true)
-    check([.Uri(".example.com")], [], [.Uri("https://example.com")], false)
-    check([.Uri("example.com")], [], [.Uri("urn:nothing")], false)
-    let inside = DistinguishedName([NameAttribute(.countryName, "CH"), NameAttribute(.commonName, "x")])
-    check([.Directory(DistinguishedName([NameAttribute(.countryName, "ch")]))], [], [.Dns("x.example")], true, subject: inside)
-    check([.Directory(DistinguishedName([NameAttribute(.countryName, "DE")]))], [], [.Dns("x.example")], false, subject: inside)
-    check([], [.Directory(inside)], [.Directory(inside)], false)
-    check([.Directory(inside)], [], [.Directory(DistinguishedName([NameAttribute(.countryName, "CH")]))], false)
-    let other = ObjectIdentifier([1, 2, 3])
-    check([], [.Other(other, [5, 0])], [.Other(other, [5, 0])], false)
-    check([.Other(other, [5, 0])], [], [.Other(other, [5, 0])], false)
-    check([], [.Other(other, [5, 0])], [.Other(ObjectIdentifier([1, 2, 4]), [5, 0])], true)
-    check([], [.RegisteredId(other)], [.RegisteredId(other)], false)
+    return problem(leaf, [inter.certificate], root, host: none)
+}
+
+let permittedNames: (GeneralName[>..], GeneralName[>..], GeneralName[>..])[>..] = [
+    ([.Dns("example.com")], [], [.Dns("example.com"), .Dns("A.b.Example.com"), .Dns("*.example.com")]),
+    ([.Dns("")], [], [.Dns("anything.example")]),
+    ([], [.Dns("bad.example.com")], [.Dns("good.example.com")]),
+    ([], [.Dns("a.bad.example.com")], [.Dns("*.example.com")]),
+    ([.Dns("example.com")], [], [.Email("a@other.example")]),
+    ([.Ip([10, 0, 0, 0, 255, 0, 0, 0])], [], [.Ip([10, 1, 2, 3])]),
+    ([], [.Ip([10, 0, 0, 0, 255, 0, 0, 0])], [.Ip([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])]),
+    ([.Email("a@example.com")], [], [.Email("a@EXAMPLE.com")]),
+    ([.Email("example.com")], [], [.Email("b@example.com")]),
+    ([.Email(".example.com")], [], [.Email("b@sub.example.com")]),
+    ([.Uri("example.com")], [], [.Uri("https://user@example.com:8443/path?q")]),
+    ([.Uri(".example.com")], [], [.Uri("https://a.example.com")]),
+    ([], [.Other(other, [5, 0])], [.Other(ObjectIdentifier([1, 2, 4]), [5, 0])]),
+]
+
+@test(arguments: permittedNames)
+fn namesAreWithinWhatIsPermitted(_ permitted: GeneralName[>..], _ excluded: GeneralName[>..], _ names: GeneralName[>..]) {
+    expect(namesProblem(permitted, excluded, names) == none)
+}
+
+let refusedNames: (GeneralName[>..], GeneralName[>..], GeneralName[>..])[>..] = [
+    ([.Dns("example.com")], [], [.Dns("badexample.com")]),
+    ([.Dns("a.example.com")], [], [.Dns("*.example.com")]),
+    ([], [.Dns("bad.example.com")], [.Dns("x.bad.example.com")]),
+    ([], [.Dns("bad.example.com")], [.Dns("*.example.com")]),
+    ([.Dns("example.com")], [], [.Dns("bad_name.example.com")]),
+    ([.Dns("*.example.com")], [], [.Dns("a.example.com")]),
+    ([.Ip([10, 0, 0, 0, 255, 0, 0, 0])], [], [.Ip([11, 1, 2, 3])]),
+    ([.Ip([10, 0, 0, 0, 255, 0, 255, 0])], [], [.Ip([10, 1, 0, 3])]),
+    ([.Email("a@example.com")], [], [.Email("b@example.com")]),
+    ([.Email("example.com")], [], [.Email("b@sub.example.com")]),
+    ([.Email(".example.com")], [], [.Email("b@example.com")]),
+    ([.Email("a@b@example.com")], [], [.Email("b@example.com")]),
+    ([.Email("example.com")], [], [.Email("no mailbox")]),
+    ([.Uri(".example.com")], [], [.Uri("https://example.com")]),
+    ([.Uri("example.com")], [], [.Uri("urn:nothing")]),
+    ([], [.Directory(inside)], [.Directory(inside)]),
+    ([.Directory(inside)], [], [.Directory(DistinguishedName([NameAttribute(.countryName, "CH")]))]),
+    ([], [.Other(other, [5, 0])], [.Other(other, [5, 0])]),
+    ([.Other(other, [5, 0])], [], [.Other(other, [5, 0])]),
+    ([], [.RegisteredId(other)], [.RegisteredId(other)]),
+]
+
+@test(arguments: refusedNames)
+fn namesOutsideWhatIsPermittedAreRefused(_ permitted: GeneralName[>..], _ excluded: GeneralName[>..], _ names: GeneralName[>..]) {
+    expect(namesProblem(permitted, excluded, names) != none)
+}
+
+@test
+fn theSubjectIsWithinWhatIsPermittedToo() {
+    expect(namesProblem([.Email("example.com")], [], [.Dns("x.example")], subject: DistinguishedName([NameAttribute(.emailAddress, "a@other.example")])) != none)
+    expect(namesProblem([.Directory(DistinguishedName([NameAttribute(.countryName, "ch")]))], [], [.Dns("x.example")], subject: inside) == none)
+    expect(namesProblem([.Directory(DistinguishedName([NameAttribute(.countryName, "DE")]))], [], [.Dns("x.example")], subject: inside) != none)
 }
 
 @test
@@ -417,8 +328,8 @@ fn weakAndUnknownKeysAreRefused() {
     let x = X25519PrivateKey.generate().anyKey
     let agree = try! CertificateBuilder(subject: DistinguishedName([]), host: "a.example.com").issued(to: x.publicKey, by: root.certificate, signingKey: root.key)
     expect(problem(agree, [], root) == none)
-    expect((try? CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: x)) == none)
-    expect((try? CertificateBuilder(subject: DistinguishedName(commonName: "x")).issued(to: x.publicKey, by: root.certificate, signingKey: EcdsaPrivateKey<P256>.generate().anyKey)) == none)
+    expectThrows { _ = try CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: x) }
+    expectThrows { _ = try CertificateBuilder(subject: DistinguishedName(commonName: "x")).issued(to: x.publicKey, by: root.certificate, signingKey: EcdsaPrivateKey<P256>.generate().anyKey) }
     var modulus = U8[>..](repeating: 0xFF, count: 128)
     modulus[127] = 0xFD
     let short = try! CertificateBuilder(subject: DistinguishedName([]), host: "a.example.com").issued(to: RsaPublicKey(modulus: modulus, exponent: 3).anyKey, by: root.certificate, signingKey: root.key)

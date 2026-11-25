@@ -3,49 +3,18 @@ module TrustStoreTests
 // TrustStore (Sable.Crypto.X509): the system's, files' and one's own. Run with
 // tools/stdlib-coverage.sh Sable.Crypto.X509.
 
+import X509Support
 import Sable.Crypto
 import Sable.Crypto.X509
 import Sable.IO
 import Sable.Testing
-
-let rootPem: String = """
------BEGIN CERTIFICATE-----
-MIIDJDCCAgygAwIBAgICEjQwDQYJKoZIhvcNAQELBQAwMzELMAkGA1UEBhMCQ0gx
-FTATBgNVBAoMDEV4YW1wbGUsIEx0ZDENMAsGA1UEAwwEUm9vdDAeFw0yNjAxMDEw
-MDAwMDBaFw0zNjAxMDEwMDAwMDBaMDMxCzAJBgNVBAYTAkNIMRUwEwYDVQQKDAxF
-eGFtcGxlLCBMdGQxDTALBgNVBAMMBFJvb3QwggEiMA0GCSqGSIb3DQEBAQUAA4IB
-DwAwggEKAoIBAQC65MtLQOBeCx5WvZGBNZ1bOztPwvFP/DsDlUX7BqAabc2eFZDs
-AYEd1M4crZhZdTD+egAB/kYQFRSavAp3NNgIe+yeeuR55klscOC8bf8e2Ro+FBox
-SI7xBXCXrrVJOtWXK7yVLO7E6/UdQ+4oAltd4ZPH7liumXOIJPsjUo9oNx+q2JC9
-UgV+mtxKCbp0DpIgV7VtyOMJnfxzSv4VVeek8txtXAtncUT9FVygKBTzIFEjcwU3
-sTUqxcVKUSUKMQtoUkY6PebwNpkkOhs9lCyRvz+JhD+W+bHiyZ9al0/yROkJEPpL
-kT/tMV1uJTmVehMMhyG1a9598/g3DFTPqzjZAgMBAAGjQjBAMA8GA1UdEwEB/wQF
-MAMBAf8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTG44n8p1/jOTQBMZGSkyjq
-W9gpgzANBgkqhkiG9w0BAQsFAAOCAQEAbqUIR0Owt1wuCg0ExcPAe/ET3YV9uEqa
-A4zW/FdZXz65HNzHHX72RoV7CWlV4zx+rXYuS7iX3ZVSOK26rD1damfbemfEnj1F
-leR/yM8fof4hxi9kgkhd3zJUjH0R+J3EIjVO6YJUewirVGVD2/7A5xe8QlFn1j/H
-gbf9VB/UpyFkt8bEwN5Z66j6m1jtxxSLWdThkOZa3Yoji1wgthxUoEieKaDhiaUk
-bymxQHW7yK+rut3bGyfla+akIP4XfV5P3e3nf8JKu/1XcIhYJh545Kt079OtWka+
-JxnW1C9tVvAlpPOXdlPz5nvjs7ODmzFyYeIEhNxMAOdCtMF1tX6Txw==
------END CERTIFICATE-----
-"""
-let edPem: String = """
------BEGIN CERTIFICATE-----
-MIIBBDCBt6ADAgECAgEJMAUGAytlcDANMQswCQYDVQQDDAJFZDAeFw0yNjAxMDEw
-MDAwMDBaFw0zNjAxMDEwMDAwMDBaMA0xCzAJBgNVBAMMAkVkMCowBQYDK2VwAyEA
-DonhvLeQG/6HHd0m/1kbpvAQGl3zewu2p0iOoH0QWbKjPDA6MBkGA1UdEQQSMBCC
-DmVkLmV4YW1wbGUuY29tMB0GA1UdDgQWBBRBXHD1ST2YqbjBq23eft/EsrwFBjAF
-BgMrZXADQQCMjWgRbQdD5tvdF2DAxY3SWlCbmPhPC+YFJblAbMBCZZgUqgtx+w5+
-TqqhesCkBBz5sDZLkiUEvf/Vok7Kem0O
------END CERTIFICATE-----
-"""
 
 @test
 fn aBundleIsReadButForWhatIsNoCertificate() {
     let store = try! TrustStore.parse(bundle: "# a note\n" + rootPem + "\n-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n" + edPem + "\n-----BEGIN OTHER-----\nAQID\n-----END OTHER-----\n")
     assertEqual(store.certificates.count, 2)
     expect(store.contains(try! Certificate.parse(pem: rootPem)) && store.contains(try! Certificate.parse(pem: edPem)))
-    expect((try? TrustStore.parse(bundle: "-----BEGIN CERTIFICATE-----\n")) == none)
+    expectThrows { _ = try TrustStore.parse(bundle: "-----BEGIN CERTIFICATE-----\n") }
     let key = EcdsaPrivateKey<P256>.generate().anyKey
     let other = try! CertificateBuilder(subject: store.certificates[0].subject).selfSigned(with: key)
     expect(!store.contains(other))
@@ -54,12 +23,12 @@ fn aBundleIsReadButForWhatIsNoCertificate() {
 
 // The environment's is the process's, so one test has both.
 @test
-fn theSystemsIsReadOrTheOneTheEnvironmentNames() {
-    let directory = try! Temp.directory()
+fn theSystemsIsReadOrTheOneTheEnvironmentNames() throws {
+    let directory = try Temp.directory()
     let file = "\(directory.path)/roots.pem"
-    try! File.write(file, rootPem)
-    try! File.write("\(directory.path)/more.pem", edPem + "\n" + rootPem)
-    try! File.write("\(directory.path)/note.txt", "nothing")
+    try File.write(file, rootPem)
+    try File.write("\(directory.path)/more.pem", edPem + "\n" + rootPem)
+    try File.write("\(directory.path)/note.txt", "nothing")
     unsafe {
         Environment.set("SSL_CERT_FILE", file)
         assertEqual(TrustStore.system().certificates.count, 1)
@@ -74,6 +43,6 @@ fn theSystemsIsReadOrTheOneTheEnvironmentNames() {
     }
     // A machine may have none, as a container does.
     for certificate in TrustStore.system().certificates {
-        assert(certificate.der.count > 0)
+        expect(certificate.der.count > 0)
     }
 }

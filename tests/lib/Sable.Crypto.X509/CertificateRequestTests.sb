@@ -20,6 +20,7 @@ yIJaZJd5hMB+m0GGMHPeLmATuisCMQDD+MQe0q93+U8Aq9ZZFMe57P2xAmPMmfEq
 lQFBHT0ZBY9xcQsyp9tRW60n0UdFf7A=
 -----END CERTIFICATE REQUEST-----
 """
+
 let rsaPem: String = """
 -----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC65MtLQOBeCx5W
@@ -68,15 +69,15 @@ fn everyKeysRequestIsSigned() {
     let keys = [EcdsaPrivateKey<P256>.generate().anyKey, EcdsaPrivateKey<P384>.generate().anyKey, EcdsaPrivateKey<P521>.generate().anyKey, Ed25519PrivateKey.generate().anyKey, try! PrivateKey.parse(pem: rsaPem)]
     for key in keys {
         let request = try! CertificateRequest.make(subject: DistinguishedName(commonName: "x"), names: [.Dns("a.example"), .Uri("https://a.example/")], key: key)
-        assert(request.isSigned && request.subject.first(.commonName) == "x" && request.alternativeNames.count == 2)
+        expect(request.isSigned && request.subject.first(.commonName) == "x" && request.alternativeNames.count == 2, "\(key:?)")
         assertEqual(try! request.publicKey(), key.publicKey)
         let empty = try! CertificateRequest.make(subject: DistinguishedName([]), names: [], key: key)
-        assert(empty.isSigned && empty.extensions.isEmpty)
+        expect(empty.isSigned && empty.extensions.isEmpty, "\(key:?)")
         let certificate = try! CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: key)
-        assert(certificate.isSigned(by: key.publicKey) && certificate.alternativeNames.isEmpty)
+        expect(certificate.isSigned(by: key.publicKey) && certificate.alternativeNames.isEmpty, "\(key:?)")
     }
-    expect((try? CertificateRequest.make(subject: DistinguishedName([]), names: [], key: X25519PrivateKey.generate().anyKey)) == none)
-    expect((try? CertificateRequest.make(subject: DistinguishedName([]), names: [], key: keys[3], algorithm: .Ecdsa(.Sha256))) == none)
+    expectThrows { _ = try CertificateRequest.make(subject: DistinguishedName([]), names: [], key: X25519PrivateKey.generate().anyKey) }
+    expectThrows { _ = try CertificateRequest.make(subject: DistinguishedName([]), names: [], key: keys[3], algorithm: .Ecdsa(.Sha256)) }
 }
 
 // A byte of it changed is another request, or none, and never traps.
@@ -96,13 +97,19 @@ fn whatIsNoRequestIsRefused() {
     assertEqual(signed, 0)
 }
 
+let rsaAlgorithms: SignatureAlgorithm[>..] = [.RsaPkcs1(.Sha384), .RsaPkcs1(.Sha512), .RsaPss(.Sha384, maskHash: .Sha256, saltByteCount: 20)]
+
+@test(arguments: rsaAlgorithms)
+fn otherAlgorithmsAreWrittenAndRead(_ algorithm: SignatureAlgorithm) throws {
+    let rsa = try PrivateKey.parse(pem: rsaPem)
+    let certificate = try CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: rsa, algorithm: algorithm)
+    expect(certificate.signatureAlgorithm == algorithm)
+    expect(certificate.isSigned(by: rsa.publicKey))
+}
+
 @test
-fn otherAlgorithmsAreWrittenAndRead() {
+fn aHashLongerThanTheCurveIsWrittenAndRead() {
     let rsa = try! PrivateKey.parse(pem: rsaPem)
-    for algorithm in [SignatureAlgorithm.RsaPkcs1(.Sha384), SignatureAlgorithm.RsaPkcs1(.Sha512), SignatureAlgorithm.RsaPss(.Sha384, maskHash: .Sha256, saltByteCount: 20)] {
-        let certificate = try! CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: rsa, algorithm: algorithm)
-        require(certificate.signatureAlgorithm == algorithm && certificate.isSigned(by: rsa.publicKey))
-    }
     let key = EcdsaPrivateKey<P256>.generate().anyKey
     let certificate = try! CertificateBuilder(subject: DistinguishedName(commonName: "x")).selfSigned(with: key, algorithm: .Ecdsa(.Sha512))
     expect(certificate.signatureAlgorithm == .Ecdsa(.Sha512) && certificate.isSigned(by: key.publicKey) && !certificate.isSigned(by: rsa.publicKey))

@@ -3,119 +3,13 @@ module CertificateTests
 // Certificate, its extensions and names (Sable.Crypto.X509): OpenSSL's. Run
 // with tools/stdlib-coverage.sh Sable.Crypto.X509.
 
+import X509Support
 import Sable.Crypto
 import Sable.Crypto.X509
 import Sable.Serialize.Asn1
 import Sable.Testing
 import Sable.Text
 import Sable.Time
-
-let rootPem: String = """
------BEGIN CERTIFICATE-----
-MIIDJDCCAgygAwIBAgICEjQwDQYJKoZIhvcNAQELBQAwMzELMAkGA1UEBhMCQ0gx
-FTATBgNVBAoMDEV4YW1wbGUsIEx0ZDENMAsGA1UEAwwEUm9vdDAeFw0yNjAxMDEw
-MDAwMDBaFw0zNjAxMDEwMDAwMDBaMDMxCzAJBgNVBAYTAkNIMRUwEwYDVQQKDAxF
-eGFtcGxlLCBMdGQxDTALBgNVBAMMBFJvb3QwggEiMA0GCSqGSIb3DQEBAQUAA4IB
-DwAwggEKAoIBAQC65MtLQOBeCx5WvZGBNZ1bOztPwvFP/DsDlUX7BqAabc2eFZDs
-AYEd1M4crZhZdTD+egAB/kYQFRSavAp3NNgIe+yeeuR55klscOC8bf8e2Ro+FBox
-SI7xBXCXrrVJOtWXK7yVLO7E6/UdQ+4oAltd4ZPH7liumXOIJPsjUo9oNx+q2JC9
-UgV+mtxKCbp0DpIgV7VtyOMJnfxzSv4VVeek8txtXAtncUT9FVygKBTzIFEjcwU3
-sTUqxcVKUSUKMQtoUkY6PebwNpkkOhs9lCyRvz+JhD+W+bHiyZ9al0/yROkJEPpL
-kT/tMV1uJTmVehMMhyG1a9598/g3DFTPqzjZAgMBAAGjQjBAMA8GA1UdEwEB/wQF
-MAMBAf8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTG44n8p1/jOTQBMZGSkyjq
-W9gpgzANBgkqhkiG9w0BAQsFAAOCAQEAbqUIR0Owt1wuCg0ExcPAe/ET3YV9uEqa
-A4zW/FdZXz65HNzHHX72RoV7CWlV4zx+rXYuS7iX3ZVSOK26rD1damfbemfEnj1F
-leR/yM8fof4hxi9kgkhd3zJUjH0R+J3EIjVO6YJUewirVGVD2/7A5xe8QlFn1j/H
-gbf9VB/UpyFkt8bEwN5Z66j6m1jtxxSLWdThkOZa3Yoji1wgthxUoEieKaDhiaUk
-bymxQHW7yK+rut3bGyfla+akIP4XfV5P3e3nf8JKu/1XcIhYJh545Kt079OtWka+
-JxnW1C9tVvAlpPOXdlPz5nvjs7ODmzFyYeIEhNxMAOdCtMF1tX6Txw==
------END CERTIFICATE-----
-"""
-let interPem: String = """
------BEGIN CERTIFICATE-----
-MIIChDCCAWygAwIBAgIBIjANBgkqhkiG9w0BAQsFADAzMQswCQYDVQQGEwJDSDEV
-MBMGA1UECgwMRXhhbXBsZSwgTHRkMQ0wCwYDVQQDDARSb290MB4XDTI2MDEwMTAw
-MDAwMFoXDTM2MDEwMTAwMDAwMFowOzELMAkGA1UEBhMCQ0gxFTATBgNVBAoMDEV4
-YW1wbGUsIEx0ZDEVMBMGA1UEAwwMSW50ZXJtZWRpYXRlMFkwEwYHKoZIzj0CAQYI
-KoZIzj0DAQcDQgAEe84HkWxLQWMktUOpIoX++kSmSPDUKeQQ0++clX2Ud5FduvZY
-/NegB81i5qc32MWAk2Al/g6TwfJn11WPh84G9aNmMGQwEgYDVR0TAQH/BAgwBgEB
-/wIBADAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFMlG9acB+L8pCOVI/wT3vIrY
-+kbWMB8GA1UdIwQYMBaAFMbjifynX+M5NAExkZKTKOpb2CmDMA0GCSqGSIb3DQEB
-CwUAA4IBAQBdDlOMJeOppxCpHXFmLYxevk4KwQcTWegorJJ/5wkt74HdoEqiwuRN
-JzsjlLKkHqOUnsN75clFLrB8kLGlBp/qaP4LR1mSLPke0/Q2e9ebm8CbPhBHM+7b
-2c/mGkW2oAS+aZyoyF7gk4lux/6JPUg1RgSyMD+rQj9xAgo9j+FM6BStIwWHray8
-JGdHiZN+h47NOLU42m0KqtY/0fjPwghkUQPLxqzf0rXyHIFxOtUdlH6xiJ0unpt/
-td/+WwefQMkwA4VVPmkBZNNxZn7jkGfNeDOlUIdy1mwUU94C8t3w+ouh9dv4qGja
-/KtQQJBsAD+BJ2L9GilkxnYPZLHnOrwz
------END CERTIFICATE-----
-"""
-let leafPem: String = """
------BEGIN CERTIFICATE-----
-MIICtDCCAlqgAwIBAgIECgsMDTAKBggqhkjOPQQDAjA7MQswCQYDVQQGEwJDSDEV
-MBMGA1UECgwMRXhhbXBsZSwgTHRkMRUwEwYDVQQDDAxJbnRlcm1lZGlhdGUwHhcN
-MjYwMTAxMDAwMDAwWhcNMzYwMTAxMDAwMDAwWjAaMRgwFgYDVQQDDA93d3cuZXhh
-bXBsZS5jb20wdjAQBgcqhkjOPQIBBgUrgQQAIgNiAATBHpJx7VFo2nM1SMny1rlg
-GKXOYRr9jU61jhMkzmxKoFxW37Bj2ISK/o+0UrLpKqe90pB02O3OLds9fo8KuC7A
-1a0aQHfORtp0vFRcFLfCM1O+wYJr/yp813mvWkvOT4CjggFOMIIBSjAJBgNVHRME
-AjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUH
-AwIwHQYDVR0OBBYEFM860kydDRFNLtnUZyUZ3S1Cq20uMB8GA1UdIwQYMBaAFMlG
-9acB+L8pCOVI/wT3vIrY+kbWMDQGCCsGAQUFBwEBBCgwJjAkBggrBgEFBQcwAYYY
-aHR0cDovL29jc3AuZXhhbXBsZS5jb20vMIGXBgNVHREEgY8wgYyCD3d3dy5leGFt
-cGxlLmNvbYISKi5hcHBzLmV4YW1wbGUuY29thwTAAAIBhxAgAQ24AAAAAAAAAAAA
-AAABgQ1hQGV4YW1wbGUuY29thhVodHRwczovL2V4YW1wbGUuY29tL3iIAyoDBKAO
-BgMqAwWgBwwFaGVsbG+kEjAQMQ4wDAYDVQQDDAVpbm5lcjAKBggqhkjOPQQDAgNI
-ADBFAiEAtBZuvCZ1YqkkHPpxYkx6rhgVBPwtQ+1Tx5ndWO6AszYCIFbjSNLnUG/U
-vZBm/LVl76Od66qgavZ2WI1kkQ9l0kxp
------END CERTIFICATE-----
-"""
-let pssPem: String = """
------BEGIN CERTIFICATE-----
-MIIC1DCCAYigAwIBAgIBBzBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUA
-oRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASAwMzELMAkGA1UEBhMC
-Q0gxFTATBgNVBAoMDEV4YW1wbGUsIEx0ZDENMAsGA1UEAwwEUm9vdDAeFw0yNjAx
-MDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMA4xDDAKBgNVBAMMA1BTUzB2MBAGByqG
-SM49AgEGBSuBBAAiA2IABMEeknHtUWjaczVIyfLWuWAYpc5hGv2NTrWOEyTObEqg
-XFbfsGPYhIr+j7RSsukqp73SkHTY7c4t2z1+jwq4LsDVrRpAd85G2nS8VFwUt8Iz
-U77Bgmv/KnzXea9aS85PgKNeMFwwGgYDVR0RBBMwEYIPcHNzLmV4YW1wbGUuY29t
-MB0GA1UdDgQWBBTPOtJMnQ0RTS7Z1GclGd0tQqttLjAfBgNVHSMEGDAWgBTG44n8
-p1/jOTQBMZGSkyjqW9gpgzBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQCAQUA
-oRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASADggEBABV+qp5EAfvj
-EFnwx0/7Fn0YQFP5DE/KyPd/6/H07d6q8FYl+k4ikhTGrZlksziMQwebjz4xv7G1
-Yng7elN1g0hBJLeDlHXqSOSeqXOtoe22/CdZb2/F0rsF5S7+kLme4I5YoykxgG8P
-YzlyuQeZobgkccsBmipmbURlqBOpL4TcZhtfERU9NpnhtWdHqnBgzZbhPsC3jF9O
-YGKjHsNRLop+gJ17usKEW1mca9hQ4GjqgAhN1rX1Px09IWW7bpygdPRJjzRqLvFQ
-0iruKcN5UjqIDiIvT+Mz5cw30nqE5kgm/a/alnF/pJg99jgVhpbb0g692LEzEuPc
-pzAjApy3phc=
------END CERTIFICATE-----
-"""
-let sha1Pem: String = """
------BEGIN CERTIFICATE-----
-MIICbjCCAVagAwIBAgIBCDANBgkqhkiG9w0BAQUFADAzMQswCQYDVQQGEwJDSDEV
-MBMGA1UECgwMRXhhbXBsZSwgTHRkMQ0wCwYDVQQDDARSb290MB4XDTI2MDEwMTAw
-MDAwMFoXDTM2MDEwMTAwMDAwMFowDzENMAsGA1UEAwwEU0hBMTB2MBAGByqGSM49
-AgEGBSuBBAAiA2IABMEeknHtUWjaczVIyfLWuWAYpc5hGv2NTrWOEyTObEqgXFbf
-sGPYhIr+j7RSsukqp73SkHTY7c4t2z1+jwq4LsDVrRpAd85G2nS8VFwUt8IzU77B
-gmv/KnzXea9aS85PgKNfMF0wGwYDVR0RBBQwEoIQc2hhMS5leGFtcGxlLmNvbTAd
-BgNVHQ4EFgQUzzrSTJ0NEU0u2dRnJRndLUKrbS4wHwYDVR0jBBgwFoAUxuOJ/Kdf
-4zk0ATGRkpMo6lvYKYMwDQYJKoZIhvcNAQEFBQADggEBAAJ2SXDlj9Ra/ItZCt6O
-aJ7wRJc+iXy0/KZVtvhoJOJEZ/xBA9LDe0K4OMDkuN2bG+rxkd4kB6TFwGPBK+e+
-vH4yE1cj+LNxCNKIIjhaKja/FfQAW1wRqWo5D8uam+XtIjoIcPjT1Nn//2u81u21
-n4jgDzZiC6DVxirjp/8S1GDcuypnxLkV6Qm8ew7JSOs6q0QI/yTZe6ipoNGmr/qN
-NQQ+ogIszBiPgeoBWXVi/Q3pdCUoJ2CW6tBhlZoed0s+brJ4gD4nS4KBZR/HM1+C
-gC22RFkNiFLz0Fqpl+yE+NUvp3ijHTGz/E+wGOH4pYKgLPTIxjeYeA0xUXvQllIa
-pH8=
------END CERTIFICATE-----
-"""
-let edPem: String = """
------BEGIN CERTIFICATE-----
-MIIBBDCBt6ADAgECAgEJMAUGAytlcDANMQswCQYDVQQDDAJFZDAeFw0yNjAxMDEw
-MDAwMDBaFw0zNjAxMDEwMDAwMDBaMA0xCzAJBgNVBAMMAkVkMCowBQYDK2VwAyEA
-DonhvLeQG/6HHd0m/1kbpvAQGl3zewu2p0iOoH0QWbKjPDA6MBkGA1UdEQQSMBCC
-DmVkLmV4YW1wbGUuY29tMB0GA1UdDgQWBBRBXHD1ST2YqbjBq23eft/EsrwFBjAF
-BgMrZXADQQCMjWgRbQdD5tvdF2DAxY3SWlCbmPhPC+YFJblAbMBCZZgUqgtx+w5+
-TqqhesCkBBz5sDZLkiUEvf/Vok7Kem0O
------END CERTIFICATE-----
-"""
 
 @test
 fn everyPartIsRead() {
@@ -164,10 +58,10 @@ fn everySignatureAlgorithmIsRead() {
 fn whatIsNoCertificateIsRefused() {
     let der = try! Certificate.parse(pem: leafPem).der
     expect((try? Certificate.parse(der: [])) == none && (try? Certificate.parse(pem: "")) == none)
-    expect((try? Certificate.parse(der: der[..<^1])) == none)
+    expectThrows { _ = try Certificate.parse(der: der[..<^1]) }
     var longer = der
     longer.append(0)
-    expect((try? Certificate.parse(der: longer)) == none)
+    expectThrows { _ = try Certificate.parse(der: longer) }
     // Any byte of it changed may or may not leave a certificate, and never traps.
     var i = 0
     var read = 0
@@ -179,20 +73,20 @@ fn whatIsNoCertificateIsRefused() {
         }
         i += 1
     }
-    expect(read > 0 && read < der.count)
-    expect((try? Certificate.parseAll(pem: "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n")) == none)
+    expect(read > 0)
+    expect(read < der.count)
+    expectThrows { _ = try Certificate.parseAll(pem: "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n") }
     assertEqual(try! Certificate.parseAll(pem: leafPem + "\nnotes\n" + interPem).count, 2)
 }
 
-@test
-fn hostsAreMatched() {
-    let leaf = try! Certificate.parse(pem: leafPem)
-    for host in ["www.example.com", "WWW.Example.COM", "www.example.com.", "a.apps.example.com", "192.0.2.1", "2001:db8::1", "[2001:DB8:0::1]"] {
-        require(leaf.isFor(host: host), host)
-    }
-    for host in ["example.com", "a.b.apps.example.com", "apps.example.com", ".apps.example.com", "*.apps.example.com", "192.0.2.2", "192.0.2.01", "2001:db8::2", "", ".", "www..example.com", "-a.apps.example.com", "a.apps.example.com:443", "xn--\u{e9}.apps.example.com", "1", "::1::"] {
-        require(!leaf.isFor(host: host), host)
-    }
+@test(arguments: ["www.example.com", "WWW.Example.COM", "www.example.com.", "a.apps.example.com", "192.0.2.1", "2001:db8::1", "[2001:DB8:0::1]"])
+fn hostsAreMatched(_ host: String) throws {
+    expect(try Certificate.parse(pem: leafPem).isFor(host: host))
+}
+
+@test(arguments: ["example.com", "a.b.apps.example.com", "apps.example.com", ".apps.example.com", "*.apps.example.com", "192.0.2.2", "192.0.2.01", "2001:db8::2", "", ".", "www..example.com", "-a.apps.example.com", "a.apps.example.com:443", "xn--\u{e9}.apps.example.com", "1", "::1::"])
+fn otherHostsAreNotMatched(_ host: String) throws {
+    expect(!(try Certificate.parse(pem: leafPem).isFor(host: host)))
 }
 
 @test
@@ -207,9 +101,12 @@ fn aWildcardIsForOneLabelBeforeTwo() {
     expect(!made("*.*.example.com").isFor(host: "a.b.example.com"))
     expect(made("localhost").isFor(host: "localhost") && made("::1").isFor(host: "0:0:0:0:0:0:0:1") && made("10.0.0.1").isFor(host: "10.0.0.1"))
     expect(made("::ffff:10.0.0.1").isFor(host: "::ffff:a00:1"))
-    for host in ["1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "::12345", "::g", "1::2::3", "10.0.0.256", "10.0.0", "1.2.3.4.5", "a.b.c.1", "1:2:3:4:5:6:7::8"] {
-        require(!made("::1").isFor(host: host))
-    }
+}
+
+@test(arguments: ["1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "::12345", "::g", "1::2::3", "10.0.0.256", "10.0.0", "1.2.3.4.5", "a.b.c.1", "1:2:3:4:5:6:7::8"])
+fn whatIsNoAddressIsNotMatched(_ host: String) {
+    let certificate = try! CertificateBuilder(subject: DistinguishedName([]), host: "::1").selfSigned(with: EcdsaPrivateKey<P256>.generate().anyKey)
+    expect(!certificate.isFor(host: host))
 }
 
 @test
@@ -226,19 +123,26 @@ fn namesAreEqualButForCaseAndSpace() {
     assertEqual("\(DistinguishedName(commonName: "x"):>6)", "  CN=x")
     expect(NameAttribute(.commonName, "a") != NameAttribute(.organizationName, "a") && NameAttribute(.commonName, "a") != NameAttribute(.commonName, "b"))
     for type in [ObjectIdentifier.serialNumber, ObjectIdentifier.stateOrProvinceName, ObjectIdentifier.streetAddress, ObjectIdentifier.organizationalUnitName, ObjectIdentifier.domainComponent, ObjectIdentifier.emailAddress] {
-        require(DistinguishedName([NameAttribute(type, "x")]).first(type) == "x")
+        expect(DistinguishedName([NameAttribute(type, "x")]).first(type) == "x", "\(type)")
     }
 }
 
-@test
-fn errorsSayWhatIsWrong() {
-    let all: CertificateError[>..] = [
-        .Malformed(reason: "a"), .Unsupported(reason: "b"), .Expired(subject: "c"), .NotYetValid(subject: "d"), .HostMismatch(host: "e"), .NotForPurpose(reason: "f"),
-        .UnknownIssuer(issuer: "g"), .InvalidSignature(subject: "h"), .NameNotPermitted(reason: "i"), .Invalid(reason: "j"), .Revoked(subject: "k"), .LimitExceeded(reason: "l"),
-    ]
-    var said = ""
-    for each in all {
-        said += each.description() + "; "
-    }
-    assertEqual(said, "a; b; the certificate of c has expired; the certificate of d is not valid yet; the certificate is not for e; f; nothing trusted has issued a certificate of g; the signature of the certificate of h is not its issuer's; i; j; the certificate of k has been revoked; l; ")
+let errors: (CertificateError, String)[>..] = [
+    (.Malformed(reason: "a"), "a"),
+    (.Unsupported(reason: "b"), "b"),
+    (.Expired(subject: "c"), "the certificate of c has expired"),
+    (.NotYetValid(subject: "d"), "the certificate of d is not valid yet"),
+    (.HostMismatch(host: "e"), "the certificate is not for e"),
+    (.NotForPurpose(reason: "f"), "f"),
+    (.UnknownIssuer(issuer: "g"), "nothing trusted has issued a certificate of g"),
+    (.InvalidSignature(subject: "h"), "the signature of the certificate of h is not its issuer's"),
+    (.NameNotPermitted(reason: "i"), "i"),
+    (.Invalid(reason: "j"), "j"),
+    (.Revoked(subject: "k"), "the certificate of k has been revoked"),
+    (.LimitExceeded(reason: "l"), "l"),
+]
+
+@test(arguments: errors)
+fn errorsSayWhatIsWrong(_ error: CertificateError, _ text: String) {
+    expect(error.description() == text)
 }

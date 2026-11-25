@@ -6,6 +6,7 @@ module CompressionData
 import Sable.IO
 import Sable.IO.Compression
 import Sable.Process
+import Sable.Text
 
 /// A random walk of numbers: xorshift.
 public struct Walk {
@@ -162,12 +163,29 @@ public fn join<T>(_ first: T[>..], _ second: T[>..]) -> T[>..] {
     return both
 }
 
-/// Whether a call throws the error.
-public fn fails<E: Error, T>(_ expected: E, _ body: () throws(E) -> T) -> Bool {
-    do {
-        _ = try body()
-        return false
-    } catch {
-        return error.debugDescription() == expected.debugDescription()
-    }
+/// The bytes that hexadecimal text is of.
+public fn hex(_ text: String) -> U8[>..] {
+    return try! Hex.decode(text)
 }
+
+/// Bits put together, least significant first, after 'start' bits of zeros:
+/// pairs of a value and a width.
+public fn bits(_ parts: (Int, Int)[>..], after start: Int = 0) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var held = 0
+    var count = start
+    for (value, width) in parts {
+        held |= value << count
+        count += width
+        while count >= 8 {
+            bytes.append(U8(held & 0xFF))
+            held >>= 8
+            count -= 8
+        }
+    }
+    bytes.append(U8(held & 0xFF))
+    return bytes
+}
+
+/// The seeds that a test is run with, a case for each.
+public let seeds: Int[>..] = Int[>..](1...40)

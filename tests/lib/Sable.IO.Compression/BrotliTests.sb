@@ -8,11 +8,6 @@ import CompressionData
 import Sable.IO
 import Sable.IO.Compression
 import Sable.Testing
-import Sable.Text
-
-fn hex(_ text: String) -> U8[>..] {
-    return try! Hex.decode(text)
-}
 
 @test
 fn whatTheReferenceMadeIsDecompressed() throws {
@@ -25,50 +20,45 @@ fn whatTheReferenceMadeIsDecompressed() throws {
     expect((try Brotli.decompress(hex("0f158054686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f6703"))) == fox.utf8Bytes())
 }
 
-@test
-fn everyQualityRoundTrips() throws {
-    var quality = 0
-    while quality <= 11 {
-        var kind = 0
-        while kind < 8 {
-            for length in sampleLengths {
-                let bytes = sample(kind, length, seed: U64(quality + 200))
-                let packed = Brotli.compress(bytes, quality: quality)
-                assert((try Brotli.decompress(packed)) == bytes, "quality \(quality), kind \(kind), \(length) bytes")
-                assert(packed.count <= Brotli.maxCompressedLength(length), "quality \(quality), kind \(kind), \(length) bytes to \(packed.count)")
-            }
-            kind += 1
-        }
-        quality += 1
-    }
-}
-
-@test
-fn longStreamsRoundTrip() throws {
-    for quality in [0, 1, 3, 4, 6, 8, 9] {
-        for kind in [0, 3, 4, 5, 6, 7] {
-            let bytes = sample(kind, 700_000, seed: U64(quality + 70))
+@test(arguments: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], tags: ["slow"], timeout: .minutes(2))
+fn everyQualityRoundTrips(_ quality: Int) throws {
+    var kind = 0
+    while kind < 8 {
+        for length in sampleLengths {
+            let bytes = sample(kind, length, seed: U64(quality + 200))
             let packed = Brotli.compress(bytes, quality: quality)
-            require((try Brotli.decompress(packed)) == bytes, "quality \(quality), kind \(kind)")
-            require(packed.count <= Brotli.maxCompressedLength(bytes.count))
+            assert((try Brotli.decompress(packed)) == bytes, "quality \(quality), kind \(kind), \(length) bytes")
+            assert(packed.count <= Brotli.maxCompressedLength(length), "quality \(quality), kind \(kind), \(length) bytes to \(packed.count)")
         }
-    }
-    // Small windows, which are slid.
-    for log in [10, 13, 15, 16, 17, 18, 20] {
-        let bytes = sample(5, 2_500_000, seed: U64(log))
-        let encoder = BrotliEncoder(quality: 5, windowLog: log)
-        var packed = ByteBuffer()
-        var at = 0
-        while at < bytes.count {
-            encoder.compress(bytes[at..<(at + 50_000)], into: &packed)
-            at += 50_000
-        }
-        encoder.finish(into: &packed)
-        require((try Brotli.decompress(packed.bytes)) == bytes, "a window of 2 to the \(log)")
+        kind += 1
     }
 }
 
-@test
+@test(arguments: [0, 1, 3, 4, 6, 8, 9], tags: ["slow"], timeout: .minutes(3))
+fn longStreamsRoundTrip(_ quality: Int) throws {
+    for kind in [0, 3, 4, 5, 6, 7] {
+        let bytes = sample(kind, 700_000, seed: U64(quality + 70))
+        let packed = Brotli.compress(bytes, quality: quality)
+        expect((try Brotli.decompress(packed)) == bytes, "quality \(quality), kind \(kind)")
+        expect(packed.count <= Brotli.maxCompressedLength(bytes.count))
+    }
+}
+
+@test(arguments: [10, 13, 15, 16, 17, 18, 20], tags: ["slow"], timeout: .minutes(3))
+fn aSmallWindowIsSlid(_ log: Int) throws {
+    let bytes = sample(5, 2_500_000, seed: U64(log))
+    let encoder = BrotliEncoder(quality: 5, windowLog: log)
+    var packed = ByteBuffer()
+    var at = 0
+    while at < bytes.count {
+        encoder.compress(bytes[at..<(at + 50_000)], into: &packed)
+        at += 50_000
+    }
+    encoder.finish(into: &packed)
+    expect(try Brotli.decompress(packed.bytes) == bytes)
+}
+
+@test(tags: ["slow"], timeout: .minutes(1))
 fn higherQualitiesAreSmaller() {
     let bytes = sample(4, 300_000)
     var before = Int.max
@@ -77,24 +67,24 @@ fn higherQualitiesAreSmaller() {
         require(packed < before, "quality \(quality): \(packed) after \(before)")
         before = packed
     }
-    // Words of the dictionary: less than half of their letters.
+}
+
+@test
+fn wordsOfTheDictionaryAreShort() {
+    // Less than half of their letters.
     let words = "government information technology university development international community".utf8Bytes()
     expect(Brotli.compress(words, quality: 5).count < 50)
     expect(Brotli.compress(words, quality: 4).count > 50)
 }
 
-@test
-fn piecesOfAnySizeRoundTrip() throws {
-    var seed: U64 = 1
-    while seed <= 40 {
-        let bytes = sample(Int(seed) % 8, 100_000 + Int(seed) * 9000, seed: seed)
-        var encoder = BrotliEncoder(quality: Int(seed) % 10)
-        let packed = compressInPieces(&encoder, bytes, seed: seed, flushing: seed % 2 == 0)
-        var decoder = BrotliDecoder()
-        assert((try decompressInPieces(&decoder, packed, seed: seed)) == bytes, "seed \(seed)")
-        assert(decoder.isFinished)
-        seed += 1
-    }
+@test(arguments: seeds, tags: ["slow"], timeout: .minutes(1))
+fn piecesOfAnySizeRoundTrip(_ seed: Int) throws {
+    let bytes = sample(seed % 8, 100_000 + seed * 9000, seed: U64(seed))
+    var encoder = BrotliEncoder(quality: seed % 10)
+    let packed = compressInPieces(&encoder, bytes, seed: U64(seed), flushing: seed % 2 == 0)
+    var decoder = BrotliDecoder()
+    expect(try decompressInPieces(&decoder, packed, seed: U64(seed)) == bytes)
+    expect(decoder.isFinished)
 }
 
 @test
@@ -109,7 +99,7 @@ fn whatIsFlushedCanBeDecompressed() throws {
         encoder.compress(piece, into: &packed)
         encoder.flush(into: &packed)
         let step = try decoder.decompress(packed.bytes, into: &bytes)
-        assert(step.status == .NeedsInput && step.consumed == packed.count && step.produced == piece.count)
+        expect(step == CompressionProgress(consumed: packed.count, produced: piece.count, status: .NeedsInput), "round \(round)")
         round += 1
     }
     var end = ByteBuffer()
@@ -119,62 +109,35 @@ fn whatIsFlushedCanBeDecompressed() throws {
     expect(last.status == .Finished && last.consumed == end.count - 1)
 }
 
-fn says(_ bytes: U8[>..], _ what: String) -> Int {
-    do {
-        _ = try Brotli.decompress(bytes)
-        print("nothing wrong, where it was: \(what)")
-        return 1
-    } catch {
-        if error != .Corrupt(what) {
-            print("\(error), where it was: \(what)")
-            return 1
-        }
-        return 0
-    }
-}
-
-/// Bits put together, least significant first, after a window of 64 KiB: pairs
-/// of a value and a width; and zeros after them.
-fn bits(_ parts: (Int, Int)[>..]) -> U8[>..] {
-    var bytes: U8[>..] = []
-    var held = 0
-    var count = 1
-    for (value, width) in parts {
-        held |= value << count
-        count += width
-        while count >= 8 {
-            bytes.append(U8(held & 0xFF))
-            held >>= 8
-            count -= 8
-        }
-    }
-    bytes.append(U8(held & 0xFF))
+/// Bits put together after a window of 64 KiB; and zeros after them.
+fn stream(_ parts: (Int, Int)[>..]) -> U8[>..] {
+    var bytes = bits(parts, after: 1)
     bytes.append(repeating: 0, count: 8)
     return bytes
 }
 
-@test
-fn whatIsWrongIsSaid() {
-    var wrong = 0
-    wrong += says([0x11], "a window of no known size")
+/// Streams that are wrong, and what is wrong with each.
+fn wrongStreams() -> (U8[>..], String)[>..] {
+    var all: (U8[>..], String)[>..] = []
+    all.append(([0x11] as U8[>..], "a window of no known size"))
     // Metadata: a bit that should be zero, a length with a byte too many, and
     // bits after it.
-    wrong += says(bits([(0, 1), (3, 2), (1, 1)]), "a meta-block of no known kind")
-    wrong += says(bits([(0, 1), (3, 2), (0, 1), (2, 2), (5, 8), (0, 8)]), "a length with too many zeros")
-    wrong += says(bits([(0, 1), (3, 2), (0, 1), (0, 2), (1, 1)]), "bits that should be zero")
-    wrong += says(bits([(0, 1), (1, 2), (5, 16), (0, 4)]), "a length with too many zeros")
+    all.append((stream([(0, 1), (3, 2), (1, 1)]), "a meta-block of no known kind"))
+    all.append((stream([(0, 1), (3, 2), (0, 1), (2, 2), (5, 8), (0, 8)]), "a length with too many zeros"))
+    all.append((stream([(0, 1), (3, 2), (0, 1), (0, 2), (1, 1)]), "bits that should be zero"))
+    all.append((stream([(0, 1), (1, 2), (5, 16), (0, 4)]), "a length with too many zeros"))
     // Not compressed, with bits after its header.
-    wrong += says(bits([(0, 1), (0, 2), (4, 16), (1, 1), (1, 1)]), "bits that should be zero")
-    wrong += says(bits([(1, 1), (1, 1), (1, 1)]), "bits that should be zero")
+    all.append((stream([(0, 1), (0, 2), (4, 16), (1, 1), (1, 1)]), "bits that should be zero"))
+    all.append((stream([(1, 1), (1, 1), (1, 1)]), "bits that should be zero"))
     // A meta-block of five bytes, one type of block of each category, no
     // direct distances, one code of literals and of distances.
     let start: (Int, Int)[>..] = [(1, 1), (0, 1), (0, 2), (4, 16), (0, 3), (0, 6), (0, 2), (0, 1), (0, 1)]
     // A literals' code of two symbols that are the same.
-    wrong += says(bits(join(start, [(1, 2), (1, 2), (65, 8), (65, 8)])), "a prefix code's symbol that is none")
-    wrong += says(bits(join(start, [(1, 2), (0, 2), (65, 8), (1, 2), (0, 2), (704, 10)])), "a prefix code's symbol that is none")
+    all.append((stream(join(start, [(1, 2), (1, 2), (65, 8), (65, 8)])), "a prefix code's symbol that is none"))
+    all.append((stream(join(start, [(1, 2), (0, 2), (65, 8), (1, 2), (0, 2), (704, 10)])), "a prefix code's symbol that is none"))
     // Code lengths' own lengths: too many, and too few.
-    wrong += says(bits(join(start, [(0, 2), (7, 4), (3, 3), (7, 4)])), "the lengths of a code's lengths are no code's")
-    wrong += says(bits(join(start, [(0, 2), (3, 3), (3, 3), (0, 32)])), "the lengths of a code's lengths are no code's")
+    all.append((stream(join(start, [(0, 2), (7, 4), (3, 3), (7, 4)])), "the lengths of a code's lengths are no code's"))
+    all.append((stream(join(start, [(0, 2), (3, 3), (3, 3), (0, 32)])), "the lengths of a code's lengths are no code's"))
     // Own lengths of one for 1 and for 17: 1, and zeros past the last.
     var zeros = join(start, [(0, 2), (7, 4), (0, 2), (0, 2), (0, 2), (0, 2), (0, 2), (7, 4)])
     var i = 0
@@ -182,23 +145,28 @@ fn whatIsWrongIsSaid() {
         zeros = join(zeros, [(1, 1), (7, 3)])
         i += 1
     }
-    wrong += says(bits(zeros), "the code lengths go on past the last")
+    all.append((stream(zeros), "the code lengths go on past the last"))
     // One literal, 65; a command; a distance.
     fn run(_ command: Int, _ distance: Int, _ rest: (Int, Int)[>..]) -> U8[>..] {
-        return bits(join(join(start, [(1, 2), (0, 2), (65, 8), (1, 2), (0, 2), (command, 10), (1, 2), (0, 2), (distance, 6)]), rest))
+        return stream(join(join(start, [(1, 2), (0, 2), (65, 8), (1, 2), (0, 2), (command, 10), (1, 2), (0, 2), (distance, 6)]), rest))
     }
     // Insert six or seven; copy two.
-    wrong += says(run(176, 0, [(0, 1)]), "more literals than the meta-block has")
+    all.append((run(176, 0, [(0, 1)]), "more literals than the meta-block has"))
     // Insert one and copy from before the first: a word of three letters, and
     // one put through a transform there is none of.
-    wrong += says(run(137, 40, [(0, 13)]), "a word of no known length")
-    wrong += says(run(138, 63, [(0xFF_FFFF, 24)]), "a word transformed in no known way")
+    all.append((run(137, 40, [(0, 13)]), "a word of no known length"))
+    all.append((run(138, 63, [(0xFF_FFFF, 24)]), "a word transformed in no known way"))
     // A word and a copy longer than is left, and a distance of 1 less 1.
-    wrong += says(run(142, 17, []), "a word longer than the meta-block has room for")
-    wrong += says(run(142, 16, []), "a copy longer than the meta-block has room for")
+    all.append((run(142, 17, []), "a word longer than the meta-block has room for"))
+    all.append((run(142, 16, []), "a copy longer than the meta-block has room for"))
     let codes: (Int, Int)[>..] = [(1, 2), (0, 2), (65, 8), (1, 2), (0, 2), (136, 10), (1, 2), (1, 2), (4, 6), (16, 6)]
-    wrong += says(bits(join(join(start, codes), [(1, 1), (0, 1), (0, 1)])), "a distance of none")
-    expect(wrong == 0)
+    all.append((stream(join(join(start, codes), [(1, 1), (0, 1), (0, 1)])), "a distance of none"))
+    return all
+}
+
+@test(arguments: wrongStreams())
+fn whatIsWrongIsSaid(_ bytes: U8[>..], _ what: String) {
+    expectThrows(CompressionError.Corrupt(what)) { _ = try Brotli.decompress(bytes) }
 }
 
 @test
@@ -207,13 +175,13 @@ fn aStreamCutShortIsTruncated() {
         let packed = Brotli.compress(sample(7, 5000), quality: quality)
         var length = 0
         while length < packed.count {
-            assert(fails(CompressionError.Truncated) { try Brotli.decompress(packed[..<length]) })
+            expectThrows(CompressionError.Truncated, "\(length) bytes") { _ = try Brotli.decompress(packed[..<length]) }
             length += 1 + length / 50
         }
     }
 }
 
-@test
+@test(tags: ["slow"], timeout: .minutes(5))
 fn damageIsNeverMoreThanAnError() {
     var seed: U64 = 1
     var failed = 0
@@ -244,34 +212,37 @@ fn limitsAreKept() throws {
     let bomb = Brotli.compress(U8[>..](repeating: 0, count: 10_000_000), quality: 9)
     expect(bomb.count < 1000)
     let most = DecompressionLimits(maximumLength: 9_999_999)
-    expect(fails(CompressionError.LimitExceeded) { try Brotli.decompress(bomb, limits: most) })
+    expectThrows(CompressionError.LimitExceeded) { _ = try Brotli.decompress(bomb, limits: most) }
     let ratio = DecompressionLimits(maximumRatio: 1000)
-    expect(fails(CompressionError.LimitExceeded) { try Brotli.decompress(bomb, limits: ratio) })
+    expectThrows(CompressionError.LimitExceeded) { _ = try Brotli.decompress(bomb, limits: ratio) }
     expect((try Brotli.decompress(bomb)).count == 10_000_000)
 }
 
-@test
-fn brotliReadsAndWritesOurs() async throws {
-    if !(await has("brotli")) {
-        return
-    }
-    for quality in [0, 2, 5, 9, 11] {
-        for kind in [0, 3, 4, 6, 7] {
-            let bytes = sample(kind, 200_000, seed: U64(quality))
-            let read = await run("brotli", ["-dc"], input: Brotli.compress(bytes, quality: quality))
-            require(read == bytes, "brotli reads quality \(quality), kind \(kind)")
-            if let packed = await run("brotli", ["-c", "-q", "\(quality)"], input: bytes) {
-                require((try Brotli.decompress(packed)) == bytes, "brotli's quality \(quality), kind \(kind)")
-                var decoder = BrotliDecoder()
-                require((try decompressInPieces(&decoder, packed, seed: 1)) == bytes)
-                require(fails(CompressionError.Truncated) { try Brotli.decompress(packed[..<(packed.count - 1)]) })
-            }
+@test(arguments: [0, 2, 5, 9, 11], tags: ["slow"], timeout: .minutes(5))
+fn brotliReadsAndWritesOurs(_ quality: Int) async throws {
+    let there = await has("brotli")
+    try skip(if: !there, "there is no brotli command")
+    for kind in [0, 3, 4, 6, 7] {
+        let bytes = sample(kind, 200_000, seed: U64(quality))
+        let read = await run("brotli", ["-dc"], input: Brotli.compress(bytes, quality: quality))
+        expect(read == bytes, "brotli reads quality \(quality), kind \(kind)")
+        if let packed = await run("brotli", ["-c", "-q", "\(quality)"], input: bytes) {
+            expect((try Brotli.decompress(packed)) == bytes, "brotli's quality \(quality), kind \(kind)")
+            var decoder = BrotliDecoder()
+            expect((try decompressInPieces(&decoder, packed, seed: 1)) == bytes)
+            expectThrows(CompressionError.Truncated) { _ = try Brotli.decompress(packed[..<(packed.count - 1)]) }
         }
     }
-    // Text of the dictionary's, as every transform has it, and not.
+}
+
+// Text of the dictionary's, as every transform has it, and not.
+@test
+fn brotliReadsAndWritesTextOfTheDictionary() async throws {
+    let there = await has("brotli")
+    try skip(if: !there, "there is no brotli command")
     let text = "The Government of the United States, the University of California, and International Business. INFORMATION, \"the Development\" = 'community'. "
     for quality in [5, 11] {
-        require(await run("brotli", ["-dc"], input: Brotli.compress(text.utf8Bytes(), quality: quality)) == text.utf8Bytes())
+        expect(await run("brotli", ["-dc"], input: Brotli.compress(text.utf8Bytes(), quality: quality)) == text.utf8Bytes())
     }
     if let packed = await run("brotli", ["-c", "-q", "11"], input: text.utf8Bytes()) {
         expect((try Brotli.decompress(packed)) == text.utf8Bytes())

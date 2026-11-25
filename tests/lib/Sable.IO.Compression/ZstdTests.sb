@@ -8,11 +8,6 @@ import CompressionData
 import Sable.IO
 import Sable.IO.Compression
 import Sable.Testing
-import Sable.Text
-
-fn hex(_ text: String) -> U8[>..] {
-    return try! Hex.decode(text)
-}
 
 @test
 fn goldenFramesAreDecompressed() throws {
@@ -22,54 +17,51 @@ fn goldenFramesAreDecompressed() throws {
     expect((try Zstd.decompress(hex("28b52ffd00008500006848656c6c6f20576f726c64210a8000"))) == "Hello World!\n".utf8Bytes())
     let run = try Zstd.decompress(hex("28b52ffda4000010000200100002001000020010000200100002001000020010000200100003001000f13e16e1"))
     expect(run == U8[>..](repeating: 0, count: 1_048_576))
-    expect(fails(CompressionError.Corrupt("an offset of none")) { try Zstd.decompress(hex("28b52ffd0000450000080002002f430bae")) })
-    expect(fails(CompressionError.Corrupt("a Huffman table that is none")) { try Zstd.decompress(hex("28b52ffd000055000072800104207e1f02aa00")) })
-    expect(fails(CompressionError.Corrupt("bytes after a block's literals")) { try Zstd.decompress(hex("28b52ffd00009500006848656c6c6f20576f726c64210a80000000")) })
+    expectThrows(CompressionError.Corrupt("an offset of none")) { _ = try Zstd.decompress(hex("28b52ffd0000450000080002002f430bae")) }
+    expectThrows(CompressionError.Corrupt("a Huffman table that is none")) { _ = try Zstd.decompress(hex("28b52ffd000055000072800104207e1f02aa00")) }
+    expectThrows(CompressionError.Corrupt("bytes after a block's literals")) { _ = try Zstd.decompress(hex("28b52ffd00009500006848656c6c6f20576f726c64210a80000000")) }
 }
 
-@test
-fn everyLevelRoundTrips() throws {
-    for level in [-20, -1, 1, 2, 3, 4, 5, 6, 8, 11, 13, 14, 17, 18, 19, 22] {
-        var kind = 0
-        while kind < 8 {
-            for length in sampleLengths {
-                let bytes = sample(kind, length, seed: U64(level + 100))
-                let packed = Zstd.compress(bytes, level: level)
-                assert((try Zstd.decompress(packed)) == bytes, "level \(level), kind \(kind), \(length) bytes")
-                assert(packed.count <= Zstd.maxCompressedLength(length), "level \(level), kind \(kind), \(length) bytes to \(packed.count)")
-            }
-            kind += 1
+@test(arguments: [-20, -1, 1, 2, 3, 4, 5, 6, 8, 11, 13, 14, 17, 18, 19, 22], tags: ["slow"], timeout: .minutes(2))
+fn everyLevelRoundTrips(_ level: Int) throws {
+    var kind = 0
+    while kind < 8 {
+        for length in sampleLengths {
+            let bytes = sample(kind, length, seed: U64(level + 100))
+            let packed = Zstd.compress(bytes, level: level)
+            assert((try Zstd.decompress(packed)) == bytes, "level \(level), kind \(kind), \(length) bytes")
+            assert(packed.count <= Zstd.maxCompressedLength(length), "level \(level), kind \(kind), \(length) bytes to \(packed.count)")
         }
+        kind += 1
     }
 }
 
-@test
-fn longFramesRoundTrip() throws {
-    for level in [-3, 1, 3, 5, 7, 12, 16] {
-        for kind in [0, 3, 4, 5, 7] {
-            let bytes = sample(kind, 500_000, seed: U64(level + 50))
-            let packed = Zstd.compress(bytes, level: level, checksum: level != 3)
-            require((try Zstd.decompress(packed)) == bytes, "level \(level), kind \(kind)")
-            require(packed.count <= Zstd.maxCompressedLength(bytes.count))
-        }
+@test(arguments: [-3, 1, 3, 5, 7, 12, 16], tags: ["slow"], timeout: .minutes(3))
+fn longFramesRoundTrip(_ level: Int) throws {
+    for kind in [0, 3, 4, 5, 7] {
+        let bytes = sample(kind, 500_000, seed: U64(level + 50))
+        let packed = Zstd.compress(bytes, level: level, checksum: level != 3)
+        expect((try Zstd.decompress(packed)) == bytes, "level \(level), kind \(kind)")
+        expect(packed.count <= Zstd.maxCompressedLength(bytes.count))
     }
-    // A window that is slid under the tables.
+}
+
+@test(arguments: [1, 3, 5, 13], tags: ["slow"], timeout: .minutes(3))
+fn aWindowIsSlidUnderTheTables(_ level: Int) throws {
     let long = sample(5, 3_000_000, seed: 9)
-    for level in [1, 3, 5, 13] {
-        let encoder = ZstdEncoder(level: level)
-        var packed = ByteBuffer()
-        var at = 0
-        while at < long.count {
-            encoder.compress(long[at..<(at + 100_000)], into: &packed)
-            at += 100_000
-        }
-        encoder.finish(into: &packed)
-        require((try Zstd.decompress(packed.bytes)) == long, "level \(level)")
-        require(packed.count < 900_000, "level \(level): \(packed.count)")
+    let encoder = ZstdEncoder(level: level)
+    var packed = ByteBuffer()
+    var at = 0
+    while at < long.count {
+        encoder.compress(long[at..<(at + 100_000)], into: &packed)
+        at += 100_000
     }
+    encoder.finish(into: &packed)
+    expect(try Zstd.decompress(packed.bytes) == long)
+    expect(packed.count < 900_000)
 }
 
-@test
+@test(tags: ["slow"], timeout: .minutes(1))
 fn higherLevelsAreSmaller() {
     let bytes = sample(4, 300_000)
     let fastest = Zstd.compress(bytes, level: -10).count
@@ -82,18 +74,14 @@ fn higherLevelsAreSmaller() {
     expect(Zstd.compress(U8[>..](repeating: 7, count: 1_000_000)).count < 60)
 }
 
-@test
-fn piecesOfAnySizeRoundTrip() throws {
-    var seed: U64 = 1
-    while seed <= 40 {
-        let bytes = sample(Int(seed) % 8, 100_000 + Int(seed) * 9000, seed: seed)
-        var encoder = ZstdEncoder(level: 1 + Int(seed) % 13, checksum: seed % 3 == 0)
-        let packed = compressInPieces(&encoder, bytes, seed: seed, flushing: seed % 2 == 0)
-        var decoder = ZstdDecoder()
-        assert((try decompressInPieces(&decoder, packed, seed: seed)) == bytes, "seed \(seed)")
-        assert(decoder.isFinished)
-        seed += 1
-    }
+@test(arguments: seeds, tags: ["slow"], timeout: .minutes(1))
+fn piecesOfAnySizeRoundTrip(_ seed: Int) throws {
+    let bytes = sample(seed % 8, 100_000 + seed * 9000, seed: U64(seed))
+    var encoder = ZstdEncoder(level: 1 + seed % 13, checksum: seed % 3 == 0)
+    let packed = compressInPieces(&encoder, bytes, seed: U64(seed), flushing: seed % 2 == 0)
+    var decoder = ZstdDecoder()
+    expect(try decompressInPieces(&decoder, packed, seed: U64(seed)) == bytes)
+    expect(decoder.isFinished)
 }
 
 @test
@@ -108,8 +96,8 @@ fn whatIsFlushedCanBeDecompressed() throws {
         encoder.compress(piece, into: &packed)
         encoder.flush(into: &packed)
         let step = try decoder.decompress(packed.bytes, into: &bytes)
-        assert(step.status == .NeedsInput && step.consumed == packed.count && step.produced == piece.count)
-        assert(!decoder.isFinished)
+        expect(step == CompressionProgress(consumed: packed.count, produced: piece.count, status: .NeedsInput), "round \(round)")
+        expect(!decoder.isFinished, "round \(round)")
         round += 1
     }
 }
@@ -128,24 +116,11 @@ fn framesFollowOneAnother() throws {
     var bytes = ByteBuffer()
     let step = try decoder.decompress(join(first, [0x28, 0xB5, 9, 9]), into: &bytes)
     expect(step.status == .Finished && step.consumed == first.count)
-    expect(fails(CompressionError.Corrupt("bytes follow the end of the stream")) { try Zstd.decompress(join(first, [1])) })
-    expect(fails(CompressionError.Truncated) { try Zstd.decompress(join(first, [0x28, 0xB5, 0x2F])) })
-    expect(fails(CompressionError.Corrupt("no zstd frame")) { try Zstd.decompress([1, 2, 3, 4]) })
-    expect(fails(CompressionError.Truncated) { try Zstd.decompress([]) })
-    expect(fails(CompressionError.Truncated) { try Zstd.decompress(skippable[..<9].toArray()) })
-}
-
-fn says(_ bytes: U8[>..], _ what: String) -> Bool {
-    do {
-        _ = try Zstd.decompress(bytes)
-        print("nothing wrong, where it was: \(what)")
-        return false
-    } catch {
-        if error != .Corrupt(what) {
-            print("\(error), where it was: \(what)")
-        }
-        return error == .Corrupt(what)
-    }
+    expectThrows(CompressionError.Corrupt("bytes follow the end of the stream")) { _ = try Zstd.decompress(join(first, [1])) }
+    expectThrows(CompressionError.Truncated) { _ = try Zstd.decompress(join(first, [0x28, 0xB5, 0x2F])) }
+    expectThrows(CompressionError.Corrupt("no zstd frame")) { _ = try Zstd.decompress([1, 2, 3, 4]) }
+    expectThrows(CompressionError.Truncated) { _ = try Zstd.decompress([]) }
+    expectThrows(CompressionError.Truncated) { _ = try Zstd.decompress(skippable[..<9].toArray()) }
 }
 
 /// A frame of a window of 1 KiB with one block, its last, of what is given.
@@ -155,54 +130,66 @@ fn frame(_ kind: Int, _ block: U8[>..], size: Int = -1) -> U8[>..] {
     return join(start, block)
 }
 
-@test
-fn whatIsWrongIsSaid() {
-    var wrong = 0
-    wrong += says([0x28, 0xB5, 0x2F, 0xFD, 8, 0], "a frame header of no known kind") ? 0 : 1
-    wrong += says(frame(3, []), "a block of no known type") ? 0 : 1
-    wrong += says(frame(1, [7], size: 1025), "a block larger than the window") ? 0 : 1
-    wrong += says([0x28, 0xB5, 0x2F, 0xFD, 0x20, 2, 0x10, 0, 0, 1, 2, 9, 0, 0, 3], "a frame longer than it says") ? 0 : 1
-    wrong += says([0x28, 0xB5, 0x2F, 0xFD, 0x20, 4, 0x19, 0, 0, 1, 2, 3], "a frame shorter than it says") ? 0 : 1
-    wrong += says(frame(2, []), "an empty block") ? 0 : 1
+/// Frames that are wrong, and what is wrong with each.
+let wrongFrames: (U8[>..], String)[>..] = [
+    ([0x28, 0xB5, 0x2F, 0xFD, 8, 0], "a frame header of no known kind"),
+    (frame(3, []), "a block of no known type"),
+    (frame(1, [7], size: 1025), "a block larger than the window"),
+    ([0x28, 0xB5, 0x2F, 0xFD, 0x20, 2, 0x10, 0, 0, 1, 2, 9, 0, 0, 3], "a frame longer than it says"),
+    ([0x28, 0xB5, 0x2F, 0xFD, 0x20, 4, 0x19, 0, 0, 1, 2, 3], "a frame shorter than it says"),
+    (frame(2, []), "an empty block"),
     // Raw literals, and what is after them.
-    wrong += says(frame(2, [2 << 3]), "literals cut short") ? 0 : 1
-    wrong += says(frame(2, [4]), "literals cut short") ? 0 : 1
-    wrong += says(frame(2, [1]), "literals cut short") ? 0 : 1
-    wrong += says(frame(2, [0x0C, 0xFF, 0xFF]), "more literals than a block has") ? 0 : 1
-    wrong += says(frame(2, [2 << 3, 1, 2]), "a block with no sequences") ? 0 : 1
-    wrong += says(frame(2, [0, 200]), "a block cut short") ? 0 : 1
-    wrong += says(frame(2, [0, 255, 0]), "a block cut short") ? 0 : 1
-    wrong += says(frame(2, [0, 1]), "a block cut short") ? 0 : 1
-    wrong += says(frame(2, [0, 1, 1]), "modes of no known kind") ? 0 : 1
-    wrong += says(frame(2, [0, 1, 0x40]), "a code of one symbol, which is none") ? 0 : 1
-    wrong += says(frame(2, [0, 1, 0x40, 36]), "a code of one symbol, which is none") ? 0 : 1
-    wrong += says(frame(2, [0, 1, 0x80, 0xFF]), "a distribution that is none") ? 0 : 1
-    wrong += says(frame(2, [0, 1, 0xC0]), "the last table's codes, where there was none") ? 0 : 1
-    wrong += says(frame(2, [0, 1, 0]), "a stream that does not end") ? 0 : 1
-    wrong += says(frame(2, [0, 1, 0, 0]), "a stream that does not end") ? 0 : 1
+    (frame(2, [2 << 3]), "literals cut short"),
+    (frame(2, [4]), "literals cut short"),
+    (frame(2, [1]), "literals cut short"),
+    (frame(2, [0x0C, 0xFF, 0xFF]), "more literals than a block has"),
+    (frame(2, [2 << 3, 1, 2]), "a block with no sequences"),
+    (frame(2, [0, 200]), "a block cut short"),
+    (frame(2, [0, 255, 0]), "a block cut short"),
+    (frame(2, [0, 1]), "a block cut short"),
+    (frame(2, [0, 1, 1]), "modes of no known kind"),
+    (frame(2, [0, 1, 0x40]), "a code of one symbol, which is none"),
+    (frame(2, [0, 1, 0x40, 36]), "a code of one symbol, which is none"),
+    (frame(2, [0, 1, 0x80, 0xFF]), "a distribution that is none"),
+    (frame(2, [0, 1, 0xC0]), "the last table's codes, where there was none"),
+    (frame(2, [0, 1, 0]), "a stream that does not end"),
+    (frame(2, [0, 1, 0, 0]), "a stream that does not end"),
     // One sequence whose tables have one symbol each: five literals it has not,
     // an offset back of 5, a match of 3.
-    wrong += says(frame(2, [0, 1, 0x54, 5, 3, 0, 1]), "a sequence longer than its block") ? 0 : 1
-    wrong += says(frame(2, [8, 9, 1, 0x54, 1, 3, 0, 8]), "a match of bytes before the first") ? 0 : 1
-    wrong += says(frame(2, [8, 9, 1, 0x54, 1, 0, 0, 2]), "sequences that do not end where they should") ? 0 : 1
-    wrong += says(frame(2, [8, 9, 1, 0x54, 1, 0, 0, 1, 1]), "sequences that do not end where they should") ? 0 : 1
-    // A byte, and the byte again three times: the last offset.
-    expect((try! Zstd.decompress(frame(2, [8, 9, 1, 0x54, 1, 0, 0, 1]))) == [9, 9, 9, 9])
+    (frame(2, [0, 1, 0x54, 5, 3, 0, 1]), "a sequence longer than its block"),
+    (frame(2, [8, 9, 1, 0x54, 1, 3, 0, 8]), "a match of bytes before the first"),
+    (frame(2, [8, 9, 1, 0x54, 1, 0, 0, 2]), "sequences that do not end where they should"),
+    (frame(2, [8, 9, 1, 0x54, 1, 0, 0, 1, 1]), "sequences that do not end where they should"),
     // Huffman literals with no table, or one that is none, or cut short.
-    wrong += says(frame(2, [3, 0x10, 0]), "the last Huffman table, where there was none") ? 0 : 1
-    wrong += says(frame(2, [2, 0x10]), "literals cut short") ? 0 : 1
-    wrong += says(frame(2, [2, 0xFF, 0xFF]), "literals cut short") ? 0 : 1
-    wrong += says(frame(2, [0x22, 0x00, 0x01, 0, 0, 0, 0]), "a Huffman table that is none") ? 0 : 1
-    wrong += says(frame(2, [0x22, 0xC0, 0x00, 0x81, 0xC0, 1]), "a Huffman table that is none") ? 0 : 1
+    (frame(2, [3, 0x10, 0]), "the last Huffman table, where there was none"),
+    (frame(2, [2, 0x10]), "literals cut short"),
+    (frame(2, [2, 0xFF, 0xFF]), "literals cut short"),
+    (frame(2, [0x22, 0x00, 0x01, 0, 0, 0, 0]), "a Huffman table that is none"),
+    (frame(2, [0x22, 0xC0, 0x00, 0x81, 0xC0, 1]), "a Huffman table that is none"),
     // Two symbols, one bit each: a stream of two bits that should have one.
-    wrong += says(frame(2, [0x12, 0xC0, 0x00, 0x80, 0x10, 0x05, 0]), "literals that are not their codes'") ? 0 : 1
-    expect((try! Zstd.decompress(frame(2, [0x22, 0xC0, 0x00, 0x80, 0x10, 0x06, 0]))) == [1, 0])
+    (frame(2, [0x12, 0xC0, 0x00, 0x80, 0x10, 0x05, 0]), "literals that are not their codes'"),
+    // A size of more bytes than there are.
+    ([0x28, 0xB5, 0x2F, 0xFD, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0x80], "a frame of more bytes than there are"),
+]
+
+@test(arguments: wrongFrames)
+fn whatIsWrongIsSaid(_ bytes: U8[>..], _ what: String) {
+    expectThrows(CompressionError.Corrupt(what)) { _ = try Zstd.decompress(bytes) }
+}
+
+@test
+fn aWrongChecksumIsSaid() {
     var changed = Zstd.compress(sample(4, 100))
     changed[changed.count - 1] = changed[changed.count - 1] ^ 1
-    wrong += says(changed, "the checksum is wrong") ? 0 : 1
-    // A size of more bytes than there are.
-    wrong += says([0x28, 0xB5, 0x2F, 0xFD, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0x80], "a frame of more bytes than there are") ? 0 : 1
-    expect(wrong == 0)
+    expectThrows(CompressionError.Corrupt("the checksum is wrong")) { _ = try Zstd.decompress(changed) }
+}
+
+@test
+fn theShortestFramesAreDecompressed() throws {
+    // A byte, and the byte again three times: the last offset.
+    expect(try Zstd.decompress(frame(2, [8, 9, 1, 0x54, 1, 0, 0, 1])) == [9, 9, 9, 9])
+    // Two symbols, one bit each.
+    expect(try Zstd.decompress(frame(2, [0x22, 0xC0, 0x00, 0x80, 0x10, 0x06, 0])) == [1, 0])
 }
 
 @test
@@ -211,13 +198,13 @@ fn aFrameCutShortIsTruncated() {
         let packed = Zstd.compress(sample(7, 5000), level: level)
         var length = 0
         while length < packed.count {
-            assert(fails(CompressionError.Truncated) { try Zstd.decompress(packed[..<length]) })
+            expectThrows(CompressionError.Truncated, "\(length) bytes") { _ = try Zstd.decompress(packed[..<length]) }
             length += 1 + length / 50
         }
     }
 }
 
-@test
+@test(tags: ["slow"], timeout: .minutes(3))
 fn damageIsNeverMoreThanAnError() {
     var seed: U64 = 1
     var failed = 0
@@ -257,73 +244,71 @@ fn limitsAreKept() throws {
     let bomb = Zstd.compress(U8[>..](repeating: 0, count: 20_000_000))
     expect(bomb.count < 800)
     let most = DecompressionLimits(maximumLength: 19_999_999)
-    expect(fails(CompressionError.LimitExceeded) { try Zstd.decompress(bomb, limits: most) })
+    expectThrows(CompressionError.LimitExceeded) { _ = try Zstd.decompress(bomb, limits: most) }
     let ratio = DecompressionLimits(maximumRatio: 1000)
-    expect(fails(CompressionError.LimitExceeded) { try Zstd.decompress(bomb, limits: ratio) })
+    expectThrows(CompressionError.LimitExceeded) { _ = try Zstd.decompress(bomb, limits: ratio) }
     // One whose header does not say how long it is.
     let encoder = ZstdEncoder(level: 1)
     var unsaid = ByteBuffer()
     encoder.compress(U8[>..](repeating: 0, count: 20_000_000), into: &unsaid)
     encoder.finish(into: &unsaid)
-    expect(fails(CompressionError.LimitExceeded) { try Zstd.decompress(unsaid.bytes, limits: most) })
+    expectThrows(CompressionError.LimitExceeded) { _ = try Zstd.decompress(unsaid.bytes, limits: most) }
     expect((try Zstd.decompress(unsaid.bytes)).count == 20_000_000)
     // A window of 512 KiB, where 256 KiB are allowed.
     let decoder = ZstdDecoder(limits: DecompressionLimits(), maximumWindow: 262_144)
     var bytes = ByteBuffer()
-    expect(fails(CompressionError.WindowTooLarge(bytes: 524_288)) { try decoder.decompress(unsaid.bytes, into: &bytes) })
+    expectThrows(CompressionError.WindowTooLarge(bytes: 524_288)) { _ = try decoder.decompress(unsaid.bytes, into: &bytes) }
     // One of two terabytes is refused before anything is allocated for it.
-    expect(fails(CompressionError.WindowTooLarge(bytes: 2_199_023_255_552)) { try Zstd.decompress([0x28, 0xB5, 0x2F, 0xFD, 0, 0xF8, 1, 0, 0]) })
+    expectThrows(CompressionError.WindowTooLarge(bytes: 2_199_023_255_552)) { _ = try Zstd.decompress([0x28, 0xB5, 0x2F, 0xFD, 0, 0xF8, 1, 0, 0]) }
 }
 
-@test
-fn dictionariesAreUsed() throws {
+@test(arguments: [-2, 1, 3, 5, 9, 16, 19], tags: ["slow"], timeout: .minutes(2))
+fn dictionariesAreUsed(_ level: Int) throws {
     let known = sample(4, 20_000, seed: 3)
     let text = sample(4, 600, seed: 99)
     let dictionary = try ZstdDictionary(known)
-    for level in [-2, 1, 3, 5, 9, 16, 19] {
-        let plain = Zstd.compress(text, level: level)
-        let packed = Zstd.compress(text, level: level, dictionary: dictionary)
-        require(packed.count < plain.count, "level \(level): \(packed.count), \(plain.count)")
-        require((try Zstd.decompress(packed, dictionary: dictionary)) == text)
-        // What the dictionary is part of for the first of its bytes only.
-        let long = sample(4, 400_000, seed: 98)
-        var encoder = ZstdEncoder(level: level, dictionary: dictionary)
-        let pieces = compressInPieces(&encoder, long, seed: 1, flushing: false)
-        var decoder = ZstdDecoder(limits: DecompressionLimits(), dictionary: dictionary)
-        require((try decompressInPieces(&decoder, pieces, seed: 2)) == long, "level \(level)")
-        // The frames do not go on from one another.
-        require((try Zstd.decompress(join(packed, packed), dictionary: dictionary)) == join(text, text))
-    }
-    expect(dictionary.id == 0)
-    expect(fails(CompressionError.Corrupt("a dictionary's Huffman table")) { try ZstdDictionary([0x37, 0xA4, 0x30, 0xEC, 1, 0, 0, 0]) })
-    // A frame that says which it needs.
-    expect(fails(CompressionError.DictionaryNeeded(id: 5)) { try Zstd.decompress([0x28, 0xB5, 0x2F, 0xFD, 1, 0, 5, 1, 0, 0]) })
+    let plain = Zstd.compress(text, level: level)
+    let packed = Zstd.compress(text, level: level, dictionary: dictionary)
+    expect(packed.count < plain.count, "level \(level): \(packed.count), \(plain.count)")
+    expect((try Zstd.decompress(packed, dictionary: dictionary)) == text)
+    // What the dictionary is part of for the first of its bytes only.
+    let long = sample(4, 400_000, seed: 98)
+    var encoder = ZstdEncoder(level: level, dictionary: dictionary)
+    let pieces = compressInPieces(&encoder, long, seed: 1, flushing: false)
+    var decoder = ZstdDecoder(limits: DecompressionLimits(), dictionary: dictionary)
+    expect((try decompressInPieces(&decoder, pieces, seed: 2)) == long, "level \(level)")
+    // The frames do not go on from one another.
+    expect((try Zstd.decompress(join(packed, packed), dictionary: dictionary)) == join(text, text))
 }
 
 @test
-fn zstdReadsAndWritesOurs() async throws {
-    if !(await has("zstd")) {
-        return
-    }
-    for level in [1, 3, 6, 12, 19] {
-        for kind in [0, 3, 4, 7] {
-            let bytes = sample(kind, 300_000, seed: U64(level))
-            let read = await run("zstd", ["-dcq"], input: Zstd.compress(bytes, level: level))
-            require(read == bytes, "zstd reads level \(level), kind \(kind)")
-            if let packed = await run("zstd", ["-cq", "-\(level)"], input: bytes) {
-                require((try Zstd.decompress(packed)) == bytes, "zstd's level \(level), kind \(kind)")
-                var decoder = ZstdDecoder()
-                require((try decompressInPieces(&decoder, packed, seed: 1)) == bytes)
-            }
+fn aDictionaryIsCheckedAndNamed() throws {
+    expect(try ZstdDictionary(sample(4, 20_000, seed: 3)).id == 0)
+    expectThrows(CompressionError.Corrupt("a dictionary's Huffman table")) { _ = try ZstdDictionary([0x37, 0xA4, 0x30, 0xEC, 1, 0, 0, 0]) }
+    // A frame that says which it needs.
+    expectThrows(CompressionError.DictionaryNeeded(id: 5)) { _ = try Zstd.decompress([0x28, 0xB5, 0x2F, 0xFD, 1, 0, 5, 1, 0, 0]) }
+}
+
+@test(arguments: [1, 3, 6, 12, 19], tags: ["slow"], timeout: .minutes(5))
+fn zstdReadsAndWritesOurs(_ level: Int) async throws {
+    let there = await has("zstd")
+    try skip(if: !there, "there is no zstd command")
+    for kind in [0, 3, 4, 7] {
+        let bytes = sample(kind, 300_000, seed: U64(level))
+        let read = await run("zstd", ["-dcq"], input: Zstd.compress(bytes, level: level))
+        expect(read == bytes, "zstd reads level \(level), kind \(kind)")
+        if let packed = await run("zstd", ["-cq", "-\(level)"], input: bytes) {
+            expect((try Zstd.decompress(packed)) == bytes, "zstd's level \(level), kind \(kind)")
+            var decoder = ZstdDecoder()
+            expect((try decompressInPieces(&decoder, packed, seed: 1)) == bytes)
         }
     }
 }
 
 @test
 fn zstdsDictionariesAreUsed() async throws {
-    if !(await has("zstd")) {
-        return
-    }
+    let there = await has("zstd")
+    try skip(if: !there, "there is no zstd command")
     let directory = try Temp.directory()
     var files: String[>..] = []
     var i = 0
@@ -335,9 +320,7 @@ fn zstdsDictionariesAreUsed() async throws {
     }
     let path = "\(directory.path)/dictionary"
     let trained = await run("zstd", join(["--train", "-q", "--maxdict=8000", "-o", path], files), input: [])
-    if trained == none {
-        return
-    }
+    try skip(if: trained == none, "this zstd trains no dictionaries")
     let dictionary = try ZstdDictionary(try File.readBytes(path))
     expect(dictionary.id != 0)
     let text = sample(4, 500, seed: 1234)
@@ -348,7 +331,7 @@ fn zstdsDictionariesAreUsed() async throws {
         require(packed.count < Zstd.compress(text, level: level).count)
         if let theirs = await run("zstd", ["-cq", "-\(level)", "-D", path], input: text) {
             require((try Zstd.decompress(theirs, dictionary: dictionary)) == text, "zstd's level \(level)")
-            require(fails(CompressionError.DictionaryNeeded(id: dictionary.id)) { try Zstd.decompress(theirs) })
+            expectThrows(CompressionError.DictionaryNeeded(id: dictionary.id)) { _ = try Zstd.decompress(theirs) }
         }
     }
     // Damaged, it is refused, or is another that is whole.
@@ -409,20 +392,18 @@ fn dictionariesAreTrained() async throws {
     }
 }
 
-@test
-fn windowsOfAnySizeRoundTrip() throws {
-    for log in [10, 12, 15, 18, 22] {
-        let bytes = sample(5, 1_500_000, seed: U64(log))
-        for level in [1, 3, 5, 16] {
-            let packed = Zstd.compress(bytes[..<300_000], level: level, windowLog: log)
-            require((try Zstd.decompress(packed)) == bytes[..<300_000].toArray(), "level \(level), 2 to the \(log)")
-        }
-        let encoder = ZstdEncoder(level: 3, windowLog: log)
-        var packed = ByteBuffer()
-        encoder.compress(bytes, into: &packed)
-        encoder.finish(into: &packed)
-        let decoder = ZstdDecoder(limits: DecompressionLimits(), maximumWindow: 1 << log)
-        var back = ByteBuffer()
-        require((try decoder.decompress(packed.bytes, into: &back)).status == .Finished && back.bytes == bytes, "2 to the \(log)")
+@test(arguments: [10, 12, 15, 18, 22], tags: ["slow"], timeout: .minutes(3))
+fn windowsOfAnySizeRoundTrip(_ log: Int) throws {
+    let bytes = sample(5, 1_500_000, seed: U64(log))
+    for level in [1, 3, 5, 16] {
+        let packed = Zstd.compress(bytes[..<300_000], level: level, windowLog: log)
+        expect((try Zstd.decompress(packed)) == bytes[..<300_000].toArray(), "level \(level), 2 to the \(log)")
     }
+    let encoder = ZstdEncoder(level: 3, windowLog: log)
+    var packed = ByteBuffer()
+    encoder.compress(bytes, into: &packed)
+    encoder.finish(into: &packed)
+    let decoder = ZstdDecoder(limits: DecompressionLimits(), maximumWindow: 1 << log)
+    var back = ByteBuffer()
+    expect((try decoder.decompress(packed.bytes, into: &back)).status == .Finished && back.bytes == bytes, "2 to the \(log)")
 }

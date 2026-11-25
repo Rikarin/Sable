@@ -41,7 +41,7 @@ fn readersDecompress() throws {
     var all: U8[>..] = []
     while true {
         let read = try zlib.read(upTo: 1000)
-        assert(read.count <= 1000)
+        expect(read.count <= 1000)
         if read.isEmpty {
             break
         }
@@ -59,19 +59,19 @@ fn readersDecompress() throws {
 fn readersSayWhatIsWrong() {
     let packed = Gzip.compress(sample(4, 1000))
     var short = GzipReader(MemoryStream(packed[..<(packed.count - 1)].toArray()))
-    expect(fails(IoError.UnexpectedEof) { try short.readToEnd() })
+    expectThrows(saying: IoError.UnexpectedEof.description()) { _ = try short.readToEnd() }
     var empty = GzipReader(MemoryStream())
-    expect(fails(IoError.UnexpectedEof) { try empty.readToEnd() })
+    expectThrows(saying: IoError.UnexpectedEof.description()) { _ = try empty.readToEnd() }
     var changed = packed
     changed[0] = 0
     var damagedReader = GzipReader(MemoryStream(changed))
-    expect(fails(IoError.InvalidData(what: "the data is corrupt: no gzip header")) { try damagedReader.readToEnd() })
+    expectThrows(saying: IoError.InvalidData(what: "the data is corrupt: no gzip header").description()) { _ = try damagedReader.readToEnd() }
     let limits = DecompressionLimits(maximumLength: 999)
     var limited = GzipReader(MemoryStream(packed), decoder: GzipDecoder(limits: limits))
-    expect(fails(IoError.InvalidData(what: "more would be decompressed than the limits allow")) { try limited.readToEnd() })
+    expectThrows(saying: IoError.InvalidData(what: "more would be decompressed than the limits allow").description()) { _ = try limited.readToEnd() }
 }
 
-@test
+@test(tags: ["slow"], timeout: .minutes(1))
 fn writersCompress() throws {
     let bytes = sample(4, 300_000)
     let gzip = GzipWriter(MemoryStream(), encoder: GzipEncoder(level: 9))
@@ -99,7 +99,7 @@ fn writersCompress() throws {
     expect(try Zlib.decompress(zlib.inner.bytes) == bytes)
     expect(try Deflate.decompress(raw.inner.bytes) == bytes)
     let full = GzipWriter(Full())
-    expect(fails(IoError.Failed(path: "full")) { try full.finish() })
+    expectThrows(saying: IoError.Failed(path: "full").description()) { try full.finish() }
 }
 
 /// A class over the bytes written, to look at them once the writer is gone.
@@ -150,23 +150,13 @@ fn theAsyncOnesToo() async throws {
     try await short.writer.write([0x1F, 0x8B])
     await short.writer.complete()
     let cut = AsyncGzipReader(short.reader)
-    do {
-        _ = try await cut.read(upTo: 10)
-        fail("no error")
-    } catch {
-        expect(error.debugDescription() == "IoError.UnexpectedEof")
-    }
+    await expectThrows(saying: IoError.UnexpectedEof.description()) { _ = try await cut.read(upTo: 10) }
 
     let wrong = Pipe()
     try await wrong.writer.write([9, 9, 9, 9, 9, 9, 9, 9, 9, 9])
     await wrong.writer.complete()
     let bad = AsyncZlibReader(wrong.reader)
-    do {
-        _ = try await bad.read(upTo: 10)
-        fail("no error")
-    } catch {
-        expect(error.description() == "the data is corrupt: no zlib header")
-    }
+    await expectThrows(saying: "the data is corrupt: no zlib header") { _ = try await bad.read(upTo: 10) }
 }
 
 @test
@@ -179,12 +169,21 @@ fn aStepSaysWhatItDid() throws {
     expect(decoder.isFinished && step.status.debugDescription() == "CompressionStatus.Finished")
 }
 
+let errors: (CompressionError, String)[>..] = [
+    (.Truncated, "the data ends before the stream does"),
+    (.LimitExceeded, "more would be decompressed than the limits allow"),
+    (.DictionaryNeeded(id: 7), "the data needs the dictionary 7"),
+    (.Corrupt("it is odd"), "the data is corrupt: it is odd"),
+    (.WindowTooLarge(bytes: 9), "the data needs a window of 9 bytes"),
+]
+
+@test(arguments: errors)
+fn errorsSayWhatTheyAre(_ error: CompressionError, _ text: String) {
+    expect(error.description() == text)
+}
+
 @test
-fn errorsSayWhatTheyAre() {
-    expect(CompressionError.Truncated.description() == "the data ends before the stream does")
-    expect(CompressionError.LimitExceeded.description() == "more would be decompressed than the limits allow")
-    expect(CompressionError.DictionaryNeeded(id: 7).description() == "the data needs the dictionary 7")
-    expect(CompressionError.Corrupt("it is odd").description() == "the data is corrupt: it is odd")
-    expect(CompressionError.LimitExceeded != CompressionError.Truncated && CompressionError.WindowTooLarge(bytes: 1) != .WindowTooLarge(bytes: 2))
-    expect(CompressionError.WindowTooLarge(bytes: 9).description() == "the data needs a window of 9 bytes")
+fn errorsAreEqualWhenTheySayTheSame() {
+    expect(CompressionError.LimitExceeded != CompressionError.Truncated)
+    expect(CompressionError.WindowTooLarge(bytes: 1) != .WindowTooLarge(bytes: 2))
 }

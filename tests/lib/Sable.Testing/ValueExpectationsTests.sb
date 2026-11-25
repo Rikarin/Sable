@@ -111,7 +111,7 @@ async fn fails() {
     let got = order(1, 10, "c", ["x": 1, "z": 0])
     let expected = order(2, 12, "c(", ["x": 2, "y": 3, "z": 0])
     match Runtime.environment("SABLE_TESTING_FAILS") ?? "" {
-        case "equal" => expect(got.lines == expected.lines)
+        case "equal"      => expect(got.lines == expected.lines)
         case "equal text" => expect("one" == "two")
         case "equivalent" => expectEquivalent(got, expected)
         case "equivalent but" => expectEquivalent(got, expected, "as ordered") {
@@ -120,15 +120,15 @@ async fn fails() {
             $0.exclude("tags[*]")
             $0.exclude("nothing")
         }
-        case "in any order" => expectEquivalent([1, 2, 3, 3], [3, 4, 2, 1]) { $0.ignoresOrder = true }
-        case "longer" => expectEquivalent([1, 2], [1, 2, 3])
-        case "cases" => expectEquivalent([Shape.Circle(radius: 2), Shape.Square(1)], [Shape.Circle(radius: 3), Shape.Circle(radius: 1)])
-        case "sets" => expectEquivalent(Set([1, 2]), Set([2, 3]))
-        case "many" => expectEquivalent((0..<20).toArray(), (1...20).toArray())
-        case "all" => expectAll([1, 2, 3, 4], "even") { $0 % 2 == 0 }
-        case "in order" => expect(["a", "b", "c"], containsInOrder: ["a", "c", "b"])
+        case "in any order"   => expectEquivalent([1, 2, 3, 3], [3, 4, 2, 1]) { $0.ignoresOrder = true }
+        case "longer"         => expectEquivalent([1, 2], [1, 2, 3])
+        case "cases"          => expectEquivalent([Shape.Circle(radius: 2), Shape.Square(1)], [Shape.Circle(radius: 3), Shape.Circle(radius: 1)])
+        case "sets"           => expectEquivalent(Set([1, 2]), Set([2, 3]))
+        case "many"           => expectEquivalent((0..<20).toArray(), (1...20).toArray())
+        case "all"            => expectAll([1, 2, 3, 4], "even") { $0 % 2 == 0 }
+        case "in order"       => expect(["a", "b", "c"], containsInOrder: ["a", "c", "b"])
         case "first in order" => expect(["a", "b"], containsInOrder: ["z"])
-        case "close" => expectClose(0.25, 0.5, within: 0.125, "halves")
+        case "close"          => expectClose(0.25, 0.5, within: 0.125, "halves")
         case "within" => {
             let clock = TestClock()
             _ = await expect(within: Duration.seconds(1), "a second", clock: clock) {
@@ -143,7 +143,9 @@ async fn fails() {
             }
             print("not reached")
         }
-        case "require all throws" => requireAll { throw "no" }
+        case "require all throws" => requireAll {
+            throw "no"
+        }
         case _ => { }
     }
 }

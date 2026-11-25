@@ -31,7 +31,6 @@ protocol PaymentGateway: Store {
     fn balance() -> Int
     fn lookup(_ id: Int) -> Receipt?
     fn note(_ message: @autoclosure () -> String)
-    fn later(_ body: @escaping () -> Int)
     var currency: String { get set }
 }
 
@@ -122,16 +121,13 @@ fn propertiesAreReadAndWritten() {
     gateway.on.currency.verify(.once)
 }
 
+// A closure a member is given is kept, and may be called by a stub: in
+// MockableTests.cs, as compiling generic code once for every type cannot
+// yet take a function type for a type parameter's closure.
 @test
-fn closuresAreKeptAndAutoclosuresWorkedOut() {
+fn anAutoclosureIsWorkedOut() {
     let gateway = MockPaymentGateway()
-    gateway.on.later().does { body in _ = body() }
-    var ran = 0
-    gateway.later({
-        ran += 1
-        return ran
-    })
-    expect(ran == 1)
+    let ran = 1
     gateway.note("a \(ran)")
     expect(gateway.on.note().arguments == ["a 1"])
 }
@@ -167,7 +163,9 @@ fn callsAreInTheOrderTheyWereMade() {
 async fn aSendableMockIsCalledFromAnyTask() {
     let ticker = MockTicker(.Strict)
     ticker.on.tick().returns(1)
-    let tasks = (0..<8).map({ _ in Task.spawn { ticker.tick() } }).toArray()
+    let tasks = (0..<8).map({ _ in
+        Task.spawn { ticker.tick() }
+    }).toArray()
     var sum = 0
     for task in tasks {
         sum += await task.value
@@ -213,7 +211,7 @@ async fn fails() {
             _ = checkout(gateway)
             verifyInOrder([gateway.on.charge(), gateway.on.open()])
         }
-        case "strict" => _ = ticker.tick()
+        case "strict"   => _ = ticker.tick()
         case "no value" => _ = try? gateway.charge(amount: 1, to: "x")
         case "waits" => {
             gateway.on.balance().does { _ in

@@ -93,7 +93,9 @@ fn aFileIsWrittenWhenTheClockSays() {
 @test
 async fn itIsUsedFromAnyTask() {
     let files = InMemoryFileSystem()
-    let tasks = (0..<8).map({ i in Task.spawn { try! files.write("f\(i).txt", "\(i)") } }).toArray()
+    let tasks = (0..<8).map({ i in
+        Task.spawn { try! files.write("f\(i).txt", "\(i)") }
+    }).toArray()
     for task in tasks {
         await task.value
     }

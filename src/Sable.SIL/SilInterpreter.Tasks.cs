@@ -121,6 +121,9 @@ public sealed partial class SilInterpreter {
     /// <summary>How many times each wait list has been woken: its ticket.</summary>
     readonly Dictionary<long, long> _waitListTickets = [];
 
+    /// <summary>How many grants each wait list holds, given while no task was parked to take one.</summary>
+    readonly Dictionary<long, long> _waitListGrants = [];
+
     // The sleepers, by deadline and then by when they began to sleep; a
     // ticket that is no longer the task's is one it has left (cancelled).
     readonly PriorityQueue<(InterpretedTask Task, long Ticket), (long Deadline, long Ticket)> _sleepers = new();
@@ -482,6 +485,7 @@ public sealed partial class SilInterpreter {
 
                 _waitLists.Remove((long)operands[0]!);
                 _waitListTickets.Remove((long)operands[0]!);
+                _waitListGrants.Remove((long)operands[0]!);
                 return null;
 
             // No list is Task.settle()'s: until no other task can go on.
@@ -498,6 +502,17 @@ public sealed partial class SilInterpreter {
             case "async_park_cancellable": {
                 var handle = (long)operands[0]!;
                 var ticket = (long)operands[1]!;
+                // The least there is: for a grant, taken at once if one was given.
+                if (ticket == long.MinValue) {
+                    if (_waitListGrants.GetValueOrDefault(handle) is > 0 and var grants) {
+                        _waitListGrants[handle] = grants - 1;
+                        return false;
+                    }
+
+                    _waitLists[handle].Add(Current);
+                    return true;
+                }
+
                 // Under -1: one whose cancellation does not wake it, that much under -2.
                 var cancellable = ticket >= -1;
                 var since = cancellable ? ticket : -2 - ticket;
@@ -527,6 +542,20 @@ public sealed partial class SilInterpreter {
                 }
 
                 list.Clear();
+                return null;
+            }
+
+            case "task_waitlist_grant": {
+                var handle = (long)operands[0]!;
+                var list = _waitLists[handle];
+                if (list.Count > 0) {
+                    var parked = list[0];
+                    list.RemoveAt(0);
+                    Enqueue(parked);
+                } else {
+                    _waitListGrants[handle] = _waitListGrants.GetValueOrDefault(handle) + 1;
+                }
+
                 return null;
             }
 

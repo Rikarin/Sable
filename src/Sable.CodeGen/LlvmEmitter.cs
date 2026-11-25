@@ -771,6 +771,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_waitlist_free(ptr)
                                 declare void @sable_waitlist_wake(ptr)
                                 declare void @sable_waitlist_wake_one(ptr)
+                                declare void @sable_waitlist_grant(ptr)
                                 declare zeroext i1 @sable_task_park(ptr)
                                 declare zeroext i1 @sable_task_park_cancellable(ptr, i64)
                                 declare i64 @sable_waitlist_ticket(ptr)
@@ -4542,7 +4543,7 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case "task_waitlist_free" or "task_waitlist_wake" or "task_waitlist_wake_one": {
+                case "task_waitlist_free" or "task_waitlist_wake" or "task_waitlist_wake_one" or "task_waitlist_grant": {
                     var list = Fresh();
                     Line($"{list} = inttoptr i64 {operands[0]} to ptr");
                     Line($"call void @sable_{builtin.Name[5..]}(ptr {list})");

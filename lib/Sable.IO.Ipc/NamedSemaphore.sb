@@ -1,0 +1,141 @@
+module Sable.IO.Ipc
+
+import Sable.IO
+import Sable.Time
+
+/// A semaphore that processes share by a name: POSIX's `sem_open`, a named
+/// semaphore on Windows; .NET's `Semaphore(initialCount, maximumCount,
+/// name)`. It counts what may be taken: `wait` takes one, waiting while
+/// there are none, and `release` gives some back, for this process or
+/// another to take.
+///
+/// A wait suspends the task, not its thread, looking again in a while (no
+/// system tells a waiter of another process's release): a waiter may wait
+/// up to a hundredth of a second more than it must. The name is up to 30
+/// letters, digits, '.', '_' and '-'. Its maker's `close()` removes the
+/// name (POSIX); a process that has it open keeps it. On Windows it lives
+/// while any process has it, and shares its names with shared memory.
+/// Deeply immutable, so Sendable.
+///
+/// ```sable
+/// let made = try! NamedSemaphore.create(name: "sable-semaphore-example", initialCount: 1)
+/// let other = try! NamedSemaphore.open(name: "sable-semaphore-example")
+/// assert(try! other.tryWait())
+/// assert(!(try! made.tryWait()))
+/// try! made.release()
+/// assert(try! other.tryWait())
+/// other.close()
+/// made.close()
+/// ```
+@immutable
+public final class NamedSemaphore: Sendable {
+    /// Its name.
+    public let name: String
+    let handle: Atomic<Int>
+    let made: Bool
+
+    init(name: String, handle: Int, made: Bool) {
+        self.name = name
+        self.handle = Atomic<Int>(handle)
+        self.made = made
+    }
+
+    deinit {
+        close()
+    }
+
+    /// Made, with so many to take: AlreadyExists when the name is another's.
+    public static fn create(name: String, initialCount: Int) throws(IoError) -> NamedSemaphore {
+        return try NamedSemaphore.opening(name, initialCount, create: true)
+    }
+
+    /// The semaphore of the name, made by another: NotFound when there is
+    /// none.
+    public static fn open(name: String) throws(IoError) -> NamedSemaphore {
+        return try NamedSemaphore.opening(name, 0, create: false)
+    }
+
+    static fn opening(_ name: String, _ count: Int, create: Bool) throws(IoError) -> NamedSemaphore {
+        try checkName(name, most: 30)
+        if count < 0 {
+            throw IoError.InvalidInput(path: name)
+        }
+        let handle = withBytes(name) { (at: RawPtr<U8>, length: Int) -> Int in
+            unsafe {
+                return semaphoreOpen(at, length, count, create)
+            }
+        }
+        if handle < 0 {
+            throw IoError.lastSystemError(name)
+        }
+        return NamedSemaphore(name: name, handle: handle, made: create)
+    }
+
+    fn live() throws(IoError) -> Int {
+        let at = handle.load()
+        if at < 0 {
+            throw IoError.InvalidInput(path: name)
+        }
+        return at
+    }
+
+    /// One taken if there is one, without waiting: whether there was.
+    public fn tryWait() throws(IoError) -> Bool {
+        let result = semaphoreTry(try live())
+        if result < 0 {
+            throw IoError.lastSystemError(name)
+        }
+        return result == 1
+    }
+
+    /// One taken, waiting while there are none. A task cancelled while it
+    /// waits throws Cancelled, having taken none.
+    public fn wait() async throws(IoError) {
+        var times = 0
+        while !(try tryWait()) {
+            try await pause(times)
+            times += 1
+        }
+    }
+
+    /// One taken, waiting no longer than the timeout: whether one was.
+    public fn wait(timeout: Duration) async throws(IoError) -> Bool {
+        let start = Instant.now()
+        var times = 0
+        while !(try tryWait()) {
+            if start.elapsed >= timeout {
+                return false
+            }
+            try await pause(times)
+            times += 1
+        }
+        return true
+    }
+
+    /// So many given back, for waiters here or elsewhere to take.
+    public fn release(_ count: Int = 1) throws(IoError) {
+        if count < 1 {
+            throw IoError.InvalidInput(path: name)
+        }
+        if !semaphoreRelease(try live(), count) {
+            throw IoError.lastSystemError(name)
+        }
+    }
+
+    /// Let go of, and its name removed by its maker. Close it once no task
+    /// waits on it.
+    public fn close() {
+        let at = handle.exchange(-1)
+        if at < 0 {
+            return
+        }
+        semaphoreClose(at)
+        if made {
+            _ = withBytes(name) { (bytes: RawPtr<U8>, length: Int) -> Bool in
+                unsafe {
+                    return semaphoreRemove(bytes, length)
+                }
+            }
+        }
+    }
+}

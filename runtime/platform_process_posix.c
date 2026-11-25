@@ -444,6 +444,10 @@ static bool open_stream(const ProcessSpec *spec, int which, int *stream, Platfor
         *stream = clear_of_streams(*stream);
         return *stream >= 0 || process_failed(error, PROCESS_ERROR_FILE, which);
     }
+    case STDIO_HANDLE:
+        // A copy, closed after as the others are: the handle stays this program's.
+        *stream = fcntl((int)spec->handles[which], F_DUPFD_CLOEXEC, 3);
+        return *stream >= 0 || process_failed(error, PROCESS_ERROR_FILE, which);
     default: {
         int ends[2];
         if (!make_pipe(ends)) {

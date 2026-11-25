@@ -1,0 +1,262 @@
+module LocalStreamTests
+
+// LocalListener, LocalStream and LocalAccess (Sable.IO.Ipc): run with
+//     tools/stdlib-coverage.sh Sable.IO.Ipc
+
+import Sable.Concurrency
+import Sable.IO
+import Sable.IO.Ipc
+import Sable.Net
+import Sable.Process
+import Sable.Testing
+import Sable.Time
+
+fn unique() -> String {
+    return "sable-local-\(Process.id())-\(Int.random(in: 0..<1 << 30))"
+}
+
+// What the server does with each connection: what it reads, written back,
+// until the client has finished.
+fn echo(_ connection: LocalStream) async throws(IoError) {
+    while true {
+        let bytes = try await connection.read(upTo: 4096)
+        if bytes.isEmpty {
+            return
+        }
+        try await connection.write(bytes)
+    }
+}
+
+@test
+fn whatIsSentIsEchoed() async throws {
+    let name = unique()
+    let server = try LocalListener.bind(name: name)
+    assertEqual(server.name, name)
+    expect(server.access == .CurrentUserOnly && !server.messages)
+    let serving = Task.spawn { () -> Bool in
+        let connection = try! await server.accept()
+        try! await echo(connection)
+        return true
+    }
+    let client = try await LocalStream.connect(name: name, timeout: Duration.seconds(10))
+    var sent: U8[>..] = []
+    for i in 0..<100_000 {
+        sent.append(U8(i % 253))
+    }
+    let reading = Task.spawn { () -> U8[>..] in
+        var got: U8[>..] = []
+        while got.count < 100_000 {
+            got.append(contentsOf: try! await client.read(upTo: 65536))
+        }
+        return got
+    }
+    try await client.write(sent)
+    expect(await reading.value == sent)
+    client.close()
+    expect(await serving.value)
+    server.close()
+    #if !os(windows)
+    expect(!File.exists(server.path))
+    #endif
+}
+
+@test
+fn manyClientsAreServed() async throws {
+    let name = unique()
+    let server = try LocalListener.bind(name: name)
+    let serving = Task.spawn { () -> Int in
+        for _ in 0..<8 {
+            let connection = try! await server.accept()
+            Task.detached { try! await echo(connection) }
+        }
+        return 8
+    }
+    var clients: Task<String>[>..] = []
+    for i in 0..<8 {
+        clients.append(Task.spawn { () -> String in
+            let client = try! await LocalStream.connect(name: name, timeout: Duration.seconds(10))
+            try! await client.write("client \(i)".utf8.toArray())
+            var got: U8[>..] = []
+            while got.count < "client \(i)".utf8Count {
+                got.append(contentsOf: try! await client.read(upTo: 100))
+            }
+            return String.fromUtf8Lossy(got)
+        })
+    }
+    for (i, client) in clients.enumerated() {
+        assertEqual(await client.value, "client \(i)")
+    }
+    assertEqual(await serving.value, 8)
+}
+
+@test
+fn eachEndKnowsWhoIsAtTheOther() async throws {
+    let name = unique()
+    let server = try LocalListener.bind(name: name)
+    let accepting = Task.spawn { try! await server.accept() }
+    let client = try await LocalStream.connect(name: name)
+    let connection = await accepting.value
+    let peer = try connection.peerCredentials()
+    assertEqual(peer.processId, Process.id())
+    assertEqual(try client.peerCredentials().processId, Process.id())
+    #if !os(windows)
+    assertEqual(peer.userId, PeerCredentials.currentUserId)
+    #endif
+}
+
+@test
+fn aNameNoServerHasIsNotFound() async {
+    let name = unique()
+    let error = await expectThrows { _ = try await LocalStream.connect(name: name) }
+    expect("\(error!)".contains("NotFound"))
+}
+
+@test
+fn aNameIsAServersAloneUntilItCloses() async throws {
+    let name = unique()
+    let server = try LocalListener.bind(name: name)
+    expectThrows(saying: IoError.AddressInUse(address: name).description()) {
+        _ = try LocalListener.bind(name: name)
+    }
+    server.close()
+    let again = try LocalListener.bind(name: name)
+    again.close()
+}
+
+#if !os(windows)
+@test
+fn aSocketLeftByAServerThatEndedIsTakenOver() async throws {
+    let name = unique()
+    let first = try LocalListener.bind(name: name)
+    // As if the server ended: its socket is left where it was.
+    let left = try UnixListener.bind("\(first.path).left")
+    left.close()
+    try File.rename(from: "\(first.path).left", to: first.path)
+    let second = try LocalListener.bind(name: name)
+    let accepting = Task.spawn { try! await second.accept() }
+    let client = try await LocalStream.connect(name: name)
+    try await client.write([7])
+    assertEqual(try await (await accepting.value).read(upTo: 1), [7])
+    second.close()
+    _ = first
+}
+#endif
+
+@test
+fn aClosedListenerWakesItsAcceptAndACancelledAcceptThrows() async throws {
+    let server = try LocalListener.bind(name: unique())
+    let accepting = Task.spawn { () -> String in
+        do {
+            _ = try await server.accept()
+            return "accepted"
+        } catch {
+            return error.description()
+        }
+    }
+    try? await Task.sleep(for: Duration.milliseconds(5))
+    server.close()
+    assertEqual(await accepting.value, IoError.Disconnected.description())
+    let other = try LocalListener.bind(name: unique())
+    let cancelled = Task.spawn { () -> String in
+        do {
+            _ = try await other.accept()
+            return "accepted"
+        } catch {
+            return error.description()
+        }
+    }
+    cancelled.cancel()
+    assertEqual(await cancelled.value, IoError.Cancelled.description())
+}
+
+@test(arguments: ["", "a/b", "a\\b", "with space"])
+fn aNameOfOtherCharactersIsRefused(name: String) async {
+    expectThrows(saying: IoError.InvalidInput(path: name).description()) {
+        _ = try LocalListener.bind(name: name)
+    }
+    await expectThrows(saying: IoError.InvalidInput(path: name).description()) {
+        _ = try await LocalStream.connect(name: name)
+    }
+}
+
+@test
+fn finishingWritingEndsWhatTheOtherEndReads() async throws {
+    try skip(if: isWindows(), "a named pipe has no half to close")
+    let name = unique()
+    let server = try LocalListener.bind(name: name, access: .AnyUser)
+    let accepting = Task.spawn { try! await server.accept() }
+    let client = try await LocalStream.connect(name: name, access: .AnyUser)
+    let connection = await accepting.value
+    try await client.write([1, 2])
+    client.finishWriting()
+    assertEqual(try await connection.readAll(), [1, 2])
+    try await connection.write([3])
+    connection.close()
+    assertEqual(try await client.readAll(), [3])
+}
+
+fn isWindows() -> Bool {
+    #if os(windows)
+    return true
+    #else
+    return false
+    #endif
+}
+
+@test
+fn messagesAreKeptWholeOnWindowsAlone() async throws {
+    let name = unique()
+    #if os(windows)
+    let server = try LocalListener.bind(name: name, messages: true)
+    let accepting = Task.spawn { try! await server.accept() }
+    let client = try await LocalStream.connect(name: name, messages: true)
+    let connection = await accepting.value
+    try await client.write([1, 2, 3])
+    try await client.write([4, 5])
+    assertEqual(try await connection.read(upTo: 100), [1, 2, 3])
+    assertEqual(try await connection.read(upTo: 100), [4, 5])
+    #else
+    expectThrows(saying: IoError.Unsupported(what: "a local stream of messages").description()) {
+        _ = try LocalListener.bind(name: name, messages: true)
+    }
+    await expectThrows(saying: IoError.Unsupported(what: "a local stream of messages").description()) {
+        _ = try await LocalStream.connect(name: name, messages: true)
+    }
+    #endif
+}
+
+// ---- Another user ------------------------------------------------------------------
+
+#if os(linux)
+// Whether this machine lets the test be another user without a password,
+// as CI's runners do, and has Python to connect with.
+fn mayBeAnotherUser() async -> Bool {
+    let asked = try? await Command("sudo").arguments(["-n", "-u", "nobody", "python3", "-c", "pass"]).stdout(.Null).stderr(.Null).status()
+    return asked?.success ?? false
+}
+
+// What another user's connection to the path says: "connected", or the
+// error's name.
+fn connectAsAnotherUser(_ path: String) async throws -> String {
+    let script = "import socket\ns = socket.socket(socket.AF_UNIX)\ntry:\n    s.connect('\(path)')\n    print('connected')\nexcept OSError as e:\n    print(type(e).__name__)\n"
+    let done = try await Command("sudo").arguments(["-n", "-u", "nobody", "python3", "-c", script]).output()
+    return done.output.trimmed()
+}
+
+@test
+fn anotherUserIsDeniedAServerForThisUserAlone() async throws {
+    try skip(if: !(await mayBeAnotherUser()), "another user cannot be run as without a password, or there is no python3")
+    let server = try LocalListener.bind(name: unique())
+    assertEqual(try await connectAsAnotherUser(server.path), "PermissionError")
+}
+
+@test
+fn anotherUserConnectsToAServerForAnyone() async throws {
+    try skip(if: !(await mayBeAnotherUser()), "another user cannot be run as without a password, or there is no python3")
+    let server = try LocalListener.bind(name: unique(), access: .AnyUser)
+    let accepting = Task.spawn { try! await server.accept() }
+    assertEqual(try await connectAsAnotherUser(server.path), "connected")
+    let connection = await accepting.value
+    expect((try connection.peerCredentials().userId) != PeerCredentials.currentUserId)
+}
+#endif

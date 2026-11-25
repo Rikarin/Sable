@@ -187,7 +187,9 @@ static void child_main(void *argument) {
 // The program started: its handle, or 0, with sable_process_error saying
 // why not. Two bits of 'flags' for each stream, what it is (STDIO_); the
 // next, whether the environment is the one given rather than this
-// program's. An empty directory is this program's.
+// program's; and one for each stream (128 for the first) that is a handle
+// of this program's (STDIO_HANDLE), its number in 'files'. An empty
+// directory is this program's.
 int64_t sable_process_spawn(const SableString *program, const SableArray *arguments, const SableArray *environment, int64_t flags,
     const SableString *directory, const SableArray *files) {
     ProcessSpec spec = { .argv = c_strings(program, arguments) };
@@ -197,8 +199,9 @@ int64_t sable_process_spawn(const SableString *program, const SableArray *argume
     spec.environment = variables;
     spec.directory = start;
     for (int i = 0; i < 3; i++) {
-        spec.stdio[i] = (int)(flags >> (2 * i)) & 3;
+        spec.stdio[i] = (flags & (128 << i)) != 0 ? STDIO_HANDLE : (int)(flags >> (2 * i)) & 3;
         spec.files[i] = names[i];
+        spec.handles[i] = spec.stdio[i] == STDIO_HANDLE ? (intptr_t)strtoll(names[i], NULL, 10) : -1;
     }
 
     ChildProcess *child = calloc(1, sizeof *child);

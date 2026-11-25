@@ -1,0 +1,43 @@
+module Sable.IO
+
+/// An end of an operating system pipe made for a child process
+/// (`OsPipe.toChild`, `fromChild`, `betweenChildren`): a descriptor on
+/// POSIX, a HANDLE on Windows, that blocks as a program's streams do. It
+/// is given to a child as one of its streams (Sable.Process's
+/// `Stdio.Pipe`), which has a copy of it; this program then closes its
+/// own, or the other end never reads to its end. Closed as it goes too.
+/// .NET's `AnonymousPipeClientStream`'s handle.
+///
+/// ```sable
+/// let (end, writer) = try! OsPipe.toChild()
+/// assert(end.isOpen)
+/// end.close()
+/// assert(!end.isOpen && end.handle == -1)
+/// writer.close()
+/// ```
+@immutable
+public final class PipeEnd: Sendable {
+    let held: Atomic<Int>
+
+    init(handle: Int) {
+        held = Atomic<Int>(handle)
+    }
+
+    deinit {
+        close()
+    }
+
+    /// The descriptor or HANDLE, to give to a child: -1 once closed.
+    public var handle: Int => held.load()
+
+    /// Whether it is still this program's.
+    public var isOpen: Bool => held.load() >= 0
+
+    /// This program's copy let go: a child given it keeps its own.
+    public fn close() {
+        let handle = held.exchange(-1)
+        if handle >= 0 {
+            closeHandle(handle)
+        }
+    }
+}

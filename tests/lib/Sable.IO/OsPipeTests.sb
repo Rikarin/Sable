@@ -1,0 +1,89 @@
+module OsPipeTests
+
+// OsPipe, OsPipeReader, OsPipeWriter and PipeEnd (Sable.IO): run with
+//     tools/stdlib-coverage.sh Sable.IO
+
+import Sable.Concurrency
+import Sable.IO
+import Sable.Testing
+import Sable.Time
+
+@test
+fn whatIsWrittenIsReadInOrder() async throws {
+    let (reader, writer) = try OsPipe.create()
+    try await writer.write([1, 2, 3])
+    try await writer.write("abc")
+    writer.close()
+    assertEqual(try await reader.readAll(), [1, 2, 3, 97, 98, 99])
+    assertEqual((try await reader.read(upTo: 10)).count, 0)
+}
+
+@test
+fn aReaderWaitsForWhatIsWritten() async throws {
+    let (reader, writer) = try OsPipe.create()
+    let reading = Task.spawn { () -> U8[>..] in try! await reader.read(upTo: 10) }
+    try? await Task.sleep(for: Duration.milliseconds(10))
+    try await writer.write([9])
+    assertEqual(await reading.value, [9])
+}
+
+@test
+fn moreThanThePipeHoldsGoesThroughAsItIsRead() async throws {
+    let (reader, writer) = try OsPipe.create()
+    var bytes: U8[>..] = []
+    for i in 0..<(1 << 20) {
+        bytes.append(U8(i & 0xFF))
+    }
+    let sent = bytes
+    let writing = Task.spawn { () -> Bool in
+        try! await writer.write(sent)
+        writer.close()
+        return true
+    }
+    let got = try await reader.readAll()
+    expect(await writing.value)
+    assertEqual(got.count, 1 << 20)
+    expect(got == bytes)
+}
+
+@test
+fn writingToAPipeNoOneReadsThrowsDisconnected() async throws {
+    let (reader, writer) = try OsPipe.create()
+    reader.close()
+    await expectThrows(saying: IoError.Disconnected.description()) {
+        try await writer.write(U8[>..](repeating: 1, count: 1 << 20))
+    }
+}
+
+@test
+fn aCancelledReadThrowsCancelled() async throws {
+    let (reader, writer) = try OsPipe.create()
+    let reading = Task.spawn { () -> String in
+        do {
+            _ = try await reader.read(upTo: 10)
+            return "read"
+        } catch {
+            return error.description()
+        }
+    }
+    try? await Task.sleep(for: Duration.milliseconds(10))
+    reading.cancel()
+    assertEqual(await reading.value, IoError.Cancelled.description())
+    writer.close()
+}
+
+@test
+fn aChildsEndIsClosedOnce() throws {
+    let (end, writer) = try OsPipe.toChild()
+    expect(end.isOpen && end.handle >= 0)
+    end.close()
+    end.close()
+    expect(!end.isOpen)
+    assertEqual(end.handle, -1)
+    writer.close()
+    let (reader, other) = try OsPipe.fromChild()
+    expect(other.isOpen)
+    reader.close()
+    let (first, second) = try OsPipe.betweenChildren()
+    expect(first.isOpen && second.isOpen && first.handle != second.handle)
+}

@@ -1,0 +1,60 @@
+module Sable.IO
+
+/// An operating system pipe: what one end writes the other reads, in order,
+/// within a program, or between it and the children it starts. Rust's
+/// `std::io::pipe`, .NET's anonymous pipes. Not Sable.IO's `Pipe`, which is
+/// a buffer between two tasks of one program.
+///
+/// This program's ends suspend a task that waits, not its thread. An end
+/// for a child (`PipeEnd`) blocks, as a program's streams do: give it to a
+/// child as one of its streams (Sable.Process's `Stdio.Pipe`), then close
+/// this program's copy of it.
+///
+/// ```sable
+/// fn roundTrip() async throws(IoError) -> U8[>..] {
+///     let (reader, writer) = try OsPipe.create()
+///     try await writer.write([1, 2, 3])
+///     writer.close()
+///     return try await reader.readAll()
+/// }
+/// ```
+public struct OsPipe {
+    /// A pipe with both ends this program's.
+    public static fn create() throws(IoError) -> (OsPipeReader, OsPipeWriter) {
+        let ends = try OsPipe.make(0)
+        return (OsPipeReader(handle: ends[0], waitsForWriter: false), OsPipeWriter(handle: ends[1]))
+    }
+
+    /// A pipe a child reads: its end, and this program's to write to it.
+    public static fn toChild() throws(IoError) -> (PipeEnd, OsPipeWriter) {
+        let ends = try OsPipe.make(1)
+        return (PipeEnd(handle: ends[0]), OsPipeWriter(handle: ends[1]))
+    }
+
+    /// A pipe a child writes: this program's end to read it, and the child's.
+    public static fn fromChild() throws(IoError) -> (OsPipeReader, PipeEnd) {
+        let ends = try OsPipe.make(2)
+        return (OsPipeReader(handle: ends[0], waitsForWriter: false), PipeEnd(handle: ends[1]))
+    }
+
+    /// A pipe from one child to another, as a shell's `a | b`: the end one
+    /// reads, and the end the other writes.
+    public static fn betweenChildren() throws(IoError) -> (PipeEnd, PipeEnd) {
+        let ends = try OsPipe.make(3)
+        return (PipeEnd(handle: ends[0]), PipeEnd(handle: ends[1]))
+    }
+
+    // The two ends, the reader's first; each a child's by its bit.
+    static fn make(_ children: Int) throws(IoError) -> Int[>..] {
+        var ends: Int[>..] = [0, 0]
+        let made = ends.withMutablePointer { (at: RawPtr<Int>) -> Bool in
+            unsafe {
+                return openPipe(children, at)
+            }
+        }
+        if !made {
+            throw IoError.lastSystemError("a pipe")
+        }
+        return ends
+    }
+}

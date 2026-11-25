@@ -1,0 +1,131 @@
+module SharedMemoryTests
+
+// SharedMemory and NamedSemaphore across processes (Sable.IO.Ipc): run with
+//     tools/stdlib-coverage.sh Sable.IO.Ipc
+
+import Sable.IO
+import Sable.IO.Ipc
+import Sable.Process
+import Sable.Testing
+import Sable.Time
+
+/// A name no other test, run or program has.
+fn unique(_ what: String) -> String {
+    return "sb\(what)\(Process.id())x\(Int.random(in: 0..<1 << 30))"
+}
+
+@test
+fn whatOneWritesTheOtherReads() throws {
+    let name = unique("m")
+    let made = try SharedMemory.create(name: name, size: 1000)
+    assertEqual(made.name, name)
+    assertEqual(made.count, 1000)
+    expect(made.bytes.allSatisfy { $0 == 0 })
+    let opened = try SharedMemory.open(name: name)
+    expect(opened.count >= 1000)
+    try made.write([1, 2, 3], at: 997)
+    assertEqual(opened.bytes[997..<1000].toArray(), [1, 2, 3])
+    try opened.write([9], at: 0)
+    assertEqual(made.bytes[0], 9)
+    opened.close()
+    made.close()
+}
+
+@test
+fn aWritePastTheEndOrAfterCloseIsRefused() throws {
+    let name = unique("m")
+    let made = try SharedMemory.create(name: name, size: 16)
+    expectThrows(saying: IoError.InvalidInput(path: name).description()) {
+        try made.write([1, 2], at: 15)
+    }
+    made.close()
+    expectThrows(saying: IoError.InvalidInput(path: name).description()) {
+        try made.write([1], at: 0)
+    }
+    made.close()
+}
+
+@test
+fn aNameIsMadeOnceAndGoesWithItsMaker() throws {
+    let name = unique("m")
+    expectThrows(saying: IoError.NotFound(path: name).description()) {
+        _ = try SharedMemory.open(name: name)
+    }
+    let made = try SharedMemory.create(name: name, size: 64)
+    expectThrows(saying: IoError.AlreadyExists(path: name).description()) {
+        _ = try SharedMemory.create(name: name, size: 64)
+    }
+    made.close()
+    #if !os(windows)
+    expectThrows(saying: IoError.NotFound(path: name).description()) {
+        _ = try SharedMemory.open(name: name)
+    }
+    #endif
+}
+
+@test(arguments: ["", "has/slash", "has space", "abcdefghijklmnopqrstuvwxyz12345"])
+fn aNameOfOtherCharactersOrTooLongIsRefused(name: String) {
+    expectThrows(saying: IoError.InvalidInput(path: name).description()) {
+        _ = try SharedMemory.create(name: name, size: 8)
+    }
+    expectThrows(saying: IoError.InvalidInput(path: name).description()) {
+        _ = try NamedSemaphore.create(name: name, initialCount: 0)
+    }
+}
+
+@test
+fn anEmptySizeIsRefused() {
+    expectThrows(saying: IoError.InvalidInput(path: "sbempty").description()) {
+        _ = try SharedMemory.create(name: "sbempty", size: 0)
+    }
+}
+
+// ---- With a child --------------------------------------------------------------
+
+// The child's half of the test below: in a process the test starts, given
+// the names. Run as a test of its own, it has none, and does nothing.
+@test
+fn childSideOfSharedMemory() async throws {
+    guard let names = Environment.variable("SABLE_IPC_TEST_CHILD") else {
+        return
+    }
+    let parts = names.split(separator: ',').map { $0.toString() }
+    let memory = try SharedMemory.open(name: parts[0])
+    let request = try NamedSemaphore.open(name: parts[1])
+    let answer = try NamedSemaphore.open(name: parts[2])
+    for _ in 0..<3 {
+        try await request.wait()
+        // Each byte up to the zero, given back reversed.
+        let bytes = memory.bytes
+        var length = 0
+        while bytes[length] != 0 {
+            length += 1
+        }
+        try memory.write(bytes[0..<length].reversed().toArray(), at: 0)
+        try answer.release()
+    }
+}
+
+@test
+fn aChildRoundTripsDataThroughSharedMemoryGuardedByNamedSemaphores() async throws {
+    let program = Environment.executablePath
+    try skip(if: program == none, "this program's path is not known")
+    let names = [unique("m"), unique("q"), unique("a")]
+    let memory = try SharedMemory.create(name: names[0], size: 4096)
+    let request = try NamedSemaphore.create(name: names[1], initialCount: 0)
+    let answer = try NamedSemaphore.create(name: names[2], initialCount: 0)
+    let child = try Command("\(program!)").arguments(["--run-test", "SharedMemoryTests.childSideOfSharedMemory"])
+        .environment("SABLE_IPC_TEST_CHILD", names.joined(separator: ",")).stdout(.Null).spawn()
+    for word in ["shared", "memory", "semaphore"] {
+        var bytes = word.utf8.toArray()
+        bytes.append(0)
+        try memory.write(bytes, at: 0)
+        try request.release()
+        expect(try await answer.wait(timeout: Duration.seconds(60)), "the child answers")
+        assertEqual(String.fromUtf8Lossy(memory.bytes[0..<word.utf8Count]), String(word.reversed()))
+    }
+    expect((try await child.wait()).success)
+    memory.close()
+    request.close()
+    answer.close()
+}

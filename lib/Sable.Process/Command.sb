@@ -162,6 +162,12 @@ public struct Command {
             let chosen = stream ?? Stdio.Inherit
             try ProcessError.check(chosen.path)
             flags = flags | (chosen.kind << (2 * i))
+            if chosen.isPipe {
+                if chosen.path == "-1" {
+                    throw ProcessError.InvalidArgument(text: "a pipe's end, closed")
+                }
+                flags = flags | (128 << i)
+            }
             files.append(chosen.path)
             i += 1
         }

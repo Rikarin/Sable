@@ -1,0 +1,87 @@
+module NamedMutexTests
+
+// NamedMutex and NamedMutexGuard (Sable.IO.Ipc): run with
+//     tools/stdlib-coverage.sh Sable.IO.Ipc
+
+import Sable.IO
+import Sable.IO.Ipc
+import Sable.Process
+import Sable.Testing
+import Sable.Time
+
+fn unique() -> String {
+    return "sable-mutex-\(Process.id())-\(Int.random(in: 0..<1 << 30))"
+}
+
+@test
+fn oneHoldsItAtATime() async throws {
+    let name = unique()
+    let mutex = try NamedMutex(name: name)
+    assertEqual(mutex.name, name)
+    expect(mutex.path.hasSuffix("\(name).lock"))
+    let held = try await mutex.lock()
+    expect(held.isHeld)
+    // Another opening of it, as another process's would be.
+    let other = try NamedMutex(name: name)
+    expect(try other.tryLock() == none)
+    held.unlock()
+    held.unlock()
+    expect(!held.isHeld)
+    let again = require(try other.tryLock())
+    expect(again.isHeld)
+    try? File.remove(mutex.path)
+}
+
+@test
+fn aGuardLetGoOfUnlocksIt() async throws {
+    let mutex = try NamedMutex(name: unique())
+    do {
+        let held = try await mutex.lock()
+        expect(held.isHeld)
+    }
+    let again = try await mutex.lock(timeout: Duration.seconds(10))
+    expect(again.isHeld)
+    try? File.remove(mutex.path)
+}
+
+@test
+fn aWaiterHoldsItOnceItIsLetGo() async throws {
+    let mutex = try NamedMutex(name: unique())
+    let held = try await mutex.lock()
+    let waiting = Task.spawn { () -> Bool in
+        let mine = try! await mutex.lock()
+        return mine.isHeld
+    }
+    try? await Task.sleep(for: Duration.milliseconds(5))
+    held.unlock()
+    expect(await waiting.value)
+    try? File.remove(mutex.path)
+}
+
+@test
+fn aWaitWithALimitTimesOutAndACancelledOneThrows() async throws {
+    let mutex = try NamedMutex(name: unique())
+    let held = try await mutex.lock()
+    await expectThrows(saying: IoError.TimedOut.description()) {
+        _ = try await mutex.lock(timeout: Duration.milliseconds(5))
+    }
+    let waiting = Task.spawn { () -> String in
+        do {
+            _ = try await mutex.lock()
+            return "held"
+        } catch {
+            return error.description()
+        }
+    }
+    waiting.cancel()
+    assertEqual(await waiting.value, IoError.Cancelled.description())
+    held.unlock()
+    try? File.remove(mutex.path)
+}
+
+@test
+fn aNameOfOtherCharactersIsRefused() {
+    expectThrows(saying: IoError.InvalidInput(path: "../up").description()) {
+        _ = try NamedMutex(name: "../up")
+    }
+}

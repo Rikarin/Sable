@@ -1,0 +1,72 @@
+module Sable.IO
+
+/// The end of an operating system pipe (`OsPipe`, `Fifo`) that this program
+/// reads. A read suspends the task while there is nothing, not its thread.
+/// Deeply immutable, so Sendable; one task at a time may read it.
+@immutable
+public final class OsPipeReader: AsyncReader, Sendable {
+    let handle: Int
+    // A FIFO's reader: none has written yet, and nothing read is its end.
+    let waitsForWriter: Bool
+    let writerSeen: Atomic<Bool>
+
+    init(handle: Int, waitsForWriter: Bool) {
+        self.handle = handle
+        self.waitsForWriter = waitsForWriter
+        writerSeen = Atomic<Bool>(!waitsForWriter)
+    }
+
+    deinit {
+        Runtime.closeSocket(handle)
+    }
+
+    /// Up to 'count' bytes, as soon as any have come; none at the end, once
+    /// every writer has closed its end. A task cancelled while it waits
+    /// throws Cancelled, and no byte is lost.
+    public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        var times = 0
+        while true {
+            let bytes = Runtime.readSocket(handle, count)
+            let status = Runtime.socketStatus()
+            if status == 0 && (!bytes.isEmpty || count <= 0 || writerSeen.load()) {
+                writerSeen.store(true)
+                return bytes
+            }
+            if status == 0 {
+                // A FIFO no one has opened to write yet: looked at again in a
+                // while, to a tenth of a second.
+                if Task.isCancelled {
+                    throw IoError.Cancelled
+                }
+                do {
+                    try await Task.sleep(nanoseconds: (times < 7 ? 1 << times : 100) * 1_000_000)
+                } catch {
+                    throw IoError.Cancelled
+                }
+                times += 1
+                continue
+            }
+            if status == 1 {
+                writerSeen.store(true)
+            }
+            try await waitForOsPipe(handle, writable: false)
+        }
+    }
+
+    /// Every byte to the end.
+    public fn readAll() async throws(IoError) -> U8[>..] {
+        var all: U8[>..] = []
+        while true {
+            let bytes = try await read(upTo: 65536)
+            if bytes.isEmpty {
+                return all
+            }
+            all.append(contentsOf: bytes)
+        }
+    }
+
+    /// Not read any more: a writer is told no one reads it.
+    public fn close() {
+        Runtime.closeSocket(handle)
+    }
+}

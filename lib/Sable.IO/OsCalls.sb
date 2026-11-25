@@ -1,0 +1,61 @@
+module Sable.IO
+
+// What OsPipe, PipeEnd and Fifo call in the runtime (runtime/ipc.c), and
+// how a name crosses to it: its UTF-8 bytes and their count.
+
+extension IoError {
+    /// The error the runtime's last call on a socket, a pipe, or another of
+    /// the system's objects (Sable.IO.Ipc's, Sable.IO.Ports') failed with on
+    /// this thread, for what it was called on: by the kind the runtime says,
+    /// the system's code kept where no kind fits.
+    public static fn lastSystemError(_ what: String) -> IoError {
+        return match Runtime.socketError() {
+            case 1  => .Disconnected
+            case 2  => .ConnectionRefused(address: what)
+            case 3  => .TimedOut
+            case 4  => .Unreachable(address: what)
+            case 5  => .AddressInUse(address: what)
+            case 6  => .PermissionDenied(path: what)
+            case 8  => .InvalidInput(path: what)
+            case 9  => .MessageTooLong
+            case 10 => .Unsupported(what: what)
+            case 11 => .NotFound(path: what)
+            case 12 => .Disconnected
+            case 13 => .AlreadyExists(path: what)
+            case _  => .Os(path: what, code: Runtime.socketErrorCode())
+        }
+    }
+}
+
+// The text's bytes lent to the body, with their count.
+fn withBytes<R>(_ text: String, _ body: (RawPtr<U8>, Int) -> R) -> R {
+    let bytes = text.utf8.toArray()
+    return bytes.withPointer { (at: RawPtr<U8>) -> R in body(at, bytes.count) }
+}
+
+// Waits for the pipe, once a call on it found it would block; or throws,
+// if the call failed (its other end gone), or the task is cancelled.
+fn waitForOsPipe(_ handle: Int, writable: Bool) async throws(IoError) {
+    if Runtime.socketStatus() != 1 {
+        throw IoError.Disconnected
+    }
+    if Task.isCancelled {
+        throw IoError.Cancelled
+    }
+    await Runtime.waitForSocket(handle, writable: writable)
+    if Task.isCancelled {
+        throw IoError.Cancelled
+    }
+}
+
+@extern("c", "sable_ipc_pipe")
+unsafe fn openPipe(_ children: Int, _ ends: RawPtr<Int>) -> Bool
+
+@extern("c", "sable_ipc_handle_close")
+fn closeHandle(_ handle: Int)
+
+@extern("c", "sable_ipc_fifo_make")
+unsafe fn makeFifo(_ path: RawPtr<U8>, _ length: Int, _ permissions: Int) -> Bool
+
+@extern("c", "sable_ipc_fifo_open")
+unsafe fn openFifo(_ path: RawPtr<U8>, _ length: Int, _ writes: Bool) -> Int

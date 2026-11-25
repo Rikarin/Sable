@@ -235,6 +235,7 @@ enum {
     NET_ERROR_UNSUPPORTED = 10,
     NET_ERROR_NOT_FOUND = 11,
     NET_ERROR_CLOSED = 12,
+    NET_ERROR_EXISTS = 13, // a name made new is another's already
 };
 
 typedef struct NetFailure {
@@ -302,6 +303,10 @@ enum {
     NET_OPTION_MULTICAST_HOPS = 12,
     NET_OPTION_MULTICAST_INTERFACE = 13,
     NET_OPTION_IPV6_ONLY = 14,
+    NET_OPTION_DONT_FRAGMENT = 15, // not broken up on the way: too long for a link, dropped
+    NET_OPTION_HEADER_INCLUDED = 16, // a raw IPv4 socket's sends have their own header
+    NET_OPTION_PEER_PROCESS = 17,  // a Unix domain socket's peer's process, read only; -1 unknown
+    NET_OPTION_PEER_USER = 18,     // and its user
 };
 
 static bool socket_set_option(PlatformSocket socket, int option, int64_t value);
@@ -578,7 +583,8 @@ static void file_map_advise(void *base, int64_t length, int advice);
 
 // What each of a child's standard streams is: this program's own, nothing,
 // a pipe to this program, or a file.
-enum { STDIO_INHERIT = 0, STDIO_NULL = 1, STDIO_PIPED = 2, STDIO_FILE = 3 };
+// a handle of this program's (ipc.c's child end of a pipe), given as it is.
+enum { STDIO_INHERIT = 0, STDIO_NULL = 1, STDIO_PIPED = 2, STDIO_FILE = 3, STDIO_HANDLE = 4 };
 
 // Why a program could not be started, by number: Sable.Process's
 // ProcessError.
@@ -605,6 +611,7 @@ typedef struct ProcessSpec {
     const char *directory; // where it starts; NULL: where this program is
     int stdio[3];
     const char *files[3];  // for STDIO_FILE: read (0), or made and emptied (1, 2)
+    intptr_t handles[3];   // for STDIO_HANDLE: a descriptor, or a HANDLE, this program keeps
 } ProcessSpec;
 
 typedef struct PlatformProcess {
@@ -652,6 +659,126 @@ static void pipes_wait(const PlatformPipe pipes[3]);
 // What is ready, said by another thread than the one in reactor_wait: a
 // pipe of Windows's. tasks.c gives it.
 static void reactor_ready(void *key, int events);
+
+// ---- Pipes, local streams, shared memory and serial ports ------------------
+
+// What Sable.IO's OsPipe, Sable.IO.Ipc and Sable.IO.Ports are over (ipc.c):
+// platform_ipc_posix.c gives it for macOS and Linux, platform_ipc_win32.c
+// for Windows; on WASI every call fails as unsupported. A call that fails
+// gives false, -1 or IO_FAILED, and says why in net_last_failure.
+
+// A handle given as it is: a descriptor, or a HANDLE; -1 for none.
+typedef intptr_t PlatformHandle;
+
+// A pipe: each end this program's (a PlatformPipe, nonblocking, watched as
+// a child's stream is) or, by its bit in 'children' (1 the reader, 2 the
+// writer), a blocking handle for a child to be given, inherited by none.
+static bool os_pipe(int children, intptr_t ends[2]);
+static void handle_close(PlatformHandle handle);
+
+// A FIFO made at the path, of the permissions (POSIX), and an end of one
+// opened, nonblocking: IO_WOULD_BLOCK for a writer while no reader has it.
+static bool fifo_make(const char *path, int permissions);
+static PlatformPipe fifo_open(const char *path, bool writes);
+
+// The directory a user's local sockets and locks are in: made, of this
+// user's alone and checked to be, or (any) one every user may reach. In
+// memory the caller frees; NULL when there is none.
+static char *local_directory(bool any);
+
+// A named pipe (Windows): 1 for this user alone, 2 messages kept whole.
+enum { LOCAL_CURRENT_USER = 1, LOCAL_MESSAGES = 2 };
+// An instance of the pipe of that name to accept a client by; 'first'
+// fails if there is one already, another program's perhaps.
+static PlatformPipe local_listen(const char *name, int flags, bool first);
+// 0 once a client is connected to the instance, IO_WOULD_BLOCK before.
+static int local_accept(PlatformPipe pipe);
+// The pipe's other direction, to write by: a source of its own.
+static PlatformPipe local_writer(PlatformPipe pipe);
+// A client's end; IO_WOULD_BLOCK while every instance is taken.
+static PlatformPipe local_connect(const char *name, int flags);
+// The process at the other end, or -1.
+static int64_t local_peer_process(PlatformPipe pipe, bool server);
+
+// Shared memory of a name: made (failing NET_ERROR_EXISTS if it is there),
+// or opened, at least 'size' bytes; its handle, mapped by file_map as
+// FILE_MAP_SHARED, and how big it is in 'actual'. Removed, its name is
+// free; what is mapped stays until it is let go.
+enum { FILE_MAP_SHARED = 3 };
+static PlatformHandle shared_open(const char *name, int64_t size, bool create, int64_t *actual);
+static bool shared_remove(const char *name);
+
+// A semaphore of a name, made with the count or opened; one taken without
+// waiting (1, or 0 when there is none to take, -1 failing), and given back.
+static PlatformHandle semaphore_open(const char *name, int64_t count, bool create);
+static int semaphore_try(PlatformHandle semaphore);
+static bool semaphore_release(PlatformHandle semaphore, int64_t count);
+static void semaphore_close(PlatformHandle semaphore);
+static bool semaphore_remove(const char *name);
+
+// The file at the path, made if need be, held by this process alone until
+// it is closed or the process ends: its handle; IO_WOULD_BLOCK while
+// another holds it.
+static PlatformHandle lock_try(const char *path);
+
+// A serial port opened (POSIX ends[1] is PIPE_NONE: one end both ways) and
+// set as the settings say.
+typedef struct SerialSettings {
+    int64_t baud;
+    int data_bits;
+    int parity;    // none, odd, even, mark, space
+    int stop_bits; // 1, 2; 3 for one and a half
+    int flow;      // none, RTS/CTS, XON/XOFF
+} SerialSettings;
+
+enum { SERIAL_DTR = 1, SERIAL_RTS = 2, SERIAL_CTS = 4, SERIAL_DSR = 8, SERIAL_RING = 16, SERIAL_CARRIER = 32 };
+
+static bool serial_open(const char *name, const SerialSettings *settings, PlatformPipe ends[2]);
+static bool serial_configure(PlatformPipe port, const SerialSettings *settings);
+// The control lines (SERIAL_*), or -1.
+static int serial_lines(PlatformPipe port);
+static bool serial_set_line(PlatformPipe port, int line, bool on);
+static bool serial_break(PlatformPipe port, bool on);
+static bool serial_discard(PlatformPipe port, bool input, bool output);
+// Bytes waiting to be read, or (output) to go; -1 failing.
+static int64_t serial_queued(PlatformPipe port, bool output);
+// The ports there are, '\n' after each, in memory the caller frees (Windows;
+// elsewhere the library lists /dev).
+static char *serial_names(void);
+
+// ---- Ping, raw sockets, changes and statistics (net.c) -----------------------
+
+// A socket of datagrams (an unprivileged ICMP one) or raw, of the protocol.
+static PlatformSocket socket_raw(int family, int protocol, bool raw);
+// An ICMP error the system has for the socket, taken (Linux's error queue):
+// its type and code, who sent it, and the bytes of the echo it answers.
+static int64_t socket_icmp_error(PlatformSocket socket, int *type, int *code, PlatformAddress *from, void *bytes, int64_t size);
+
+// An echo sent and its reply waited for (Windows: IcmpSendEcho2); the
+// status, IcmpSendEcho's, in out[0], the round trip in milliseconds in
+// out[1], and who answered in 'from'; false when it could not be sent.
+static bool ping_echo(const PlatformAddress *to, int timeout, int hops, bool dont_fragment, const void *bytes, int64_t size, int64_t out[2], PlatformAddress *from);
+
+// Changes to the interfaces and their addresses, as they come: a socket the
+// reactor watches (POSIX), whose messages are drained and only said to have
+// come; or (Windows) the system's callbacks, which tell the event.
+static PlatformSocket changes_open(void);
+static void changes_drain(PlatformSocket socket);
+static void *changes_watch(int64_t event);
+static void changes_unwatch(void *watch);
+
+// A TCP connection or listener, or a UDP socket, of the system's.
+typedef struct PlatformConnection {
+    PlatformAddress local, remote;
+    int state; // TCP's, as Sable.Net's TcpState numbers them
+    int64_t process; // -1 unknown
+} PlatformConnection;
+
+// Every one of the protocol's (6 TCP, 17 UDP), in memory the caller frees:
+// how many, or -1. macOS lists only this process's.
+static int connections_list(int protocol, PlatformConnection **rows);
+// The protocol's counters (NetworkStatistics): false where there are none.
+static bool protocol_counters(int protocol, int64_t counters[8]);
 
 // ---- Signals ---------------------------------------------------------------
 

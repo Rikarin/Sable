@@ -77,6 +77,15 @@ public final class UnixStream: AsyncReader, AsyncWriter {
         Runtime.shutdownSocket(handle, writing: true)
     }
 
+    /// Who is at the other end: its process and user (Linux's SO_PEERCRED,
+    /// macOS's LOCAL_PEERPID and getpeereid), as they were when it
+    /// connected.
+    public fn peerCredentials() throws(IoError) -> PeerCredentials {
+        let process = try option(handle, 17)
+        let user = try option(handle, 18)
+        return PeerCredentials(processId: process >= 0 ? process : none, userId: user >= 0 ? user : none)
+    }
+
     /// Closed, both ways: tasks waiting on it wake and throw Disconnected.
     /// Dropping the stream closes it too.
     public fn close() {

@@ -1,0 +1,15 @@
+module Sable.IO.Ports
+
+/// The bit that checks each character a serial port sends.
+public enum Parity {
+    /// None.
+    None
+    /// Set so that the character has an odd number of ones.
+    Odd
+    /// Set so that it has an even number.
+    Even
+    /// Always one (Linux and Windows).
+    Mark
+    /// Always zero (Linux and Windows).
+    Space
+}

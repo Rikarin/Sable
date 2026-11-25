@@ -1153,6 +1153,8 @@ static bool socket_option_name(SOCKET handle, int option, int *level, int *name)
         case NET_OPTION_MULTICAST_HOPS: *level = six ? IPPROTO_IPV6 : IPPROTO_IP; *name = six ? IPV6_MULTICAST_HOPS : IP_MULTICAST_TTL; return true;
         case NET_OPTION_MULTICAST_INTERFACE: *level = six ? IPPROTO_IPV6 : IPPROTO_IP; *name = six ? IPV6_MULTICAST_IF : IP_MULTICAST_IF; return true;
         case NET_OPTION_IPV6_ONLY: *level = IPPROTO_IPV6; *name = IPV6_V6ONLY; return true;
+        case NET_OPTION_DONT_FRAGMENT: *level = six ? IPPROTO_IPV6 : IPPROTO_IP; *name = six ? IPV6_DONTFRAG : IP_DONTFRAGMENT; return true;
+        case NET_OPTION_HEADER_INCLUDED: *level = six ? IPPROTO_IPV6 : IPPROTO_IP; *name = six ? IPV6_HDRINCL : IP_HDRINCL; return true;
         default: return false;
     }
 }
@@ -1826,6 +1828,16 @@ static char *file_canonical(const char *name, FileError *error) {
 // ---- Mapped files ----------------------------------------------------------
 
 static void *file_map(PlatformFile file, int64_t length, int mode, FileError *error) {
+    // Shared memory's handle is a mapping already (shared_open), and stays open.
+    if (mode == FILE_MAP_SHARED) {
+        void *shared = MapViewOfFile((HANDLE)(intptr_t)file, FILE_MAP_WRITE, 0, 0, (SIZE_T)length);
+        if (shared == NULL) {
+            file_failed(error);
+        }
+
+        return shared;
+    }
+
     DWORD protection = mode == FILE_MAP_READ_WRITE ? PAGE_READWRITE : mode == FILE_MAP_COPY_ON_WRITE ? PAGE_WRITECOPY : PAGE_READONLY;
     DWORD access = mode == FILE_MAP_READ_WRITE ? FILE_MAP_WRITE : mode == FILE_MAP_COPY_ON_WRITE ? FILE_MAP_COPY : FILE_MAP_READ;
     HANDLE mapping = CreateFileMappingW(handle_of(file), NULL, protection, (DWORD)((uint64_t)length >> 32),
@@ -1981,3 +1993,4 @@ static int64_t physical_memory(void) {
 // ---- Starting programs, and signals ----------------------------------------
 
 #include "platform_process_win32.c"
+#include "platform_ipc_win32.c"

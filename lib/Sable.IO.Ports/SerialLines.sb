@@ -1,0 +1,29 @@
+module Sable.IO.Ports
+
+/// A serial port's control lines, as they were when asked for
+/// (`SerialPort.lines`). DTR and RTS are this end's, which Windows does not
+/// say: there they read as off.
+@derive(Equatable)
+public struct SerialLines {
+    /// Data terminal ready: this end is there.
+    public let dataTerminalReady: Bool
+    /// Request to send: this end may be sent to.
+    public let requestToSend: Bool
+    /// Clear to send: the other end may be sent to.
+    public let clearToSend: Bool
+    /// Data set ready: the other end is there.
+    public let dataSetReady: Bool
+    /// Ring indicator.
+    public let ring: Bool
+    /// Carrier detect.
+    public let carrierDetect: Bool
+
+    init(bits: Int) {
+        dataTerminalReady = (bits & 1) != 0
+        requestToSend = (bits & 2) != 0
+        clearToSend = (bits & 4) != 0
+        dataSetReady = (bits & 8) != 0
+        ring = (bits & 16) != 0
+        carrierDetect = (bits & 32) != 0
+    }
+}

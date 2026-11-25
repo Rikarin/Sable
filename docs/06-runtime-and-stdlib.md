@@ -1663,8 +1663,8 @@ recover at the task boundary.
   the task's cancellation handlers and wakes a sleep it is in; the task stops
   where it asks.
 - Waits on state are wait lists (Sable.Core's `WaitList`): a task parks in
-  one and is woken, all at once, by whatever changes the state, then looks
-  again. Parked inside an actor's method, it lets the actor go only once it
+  one and is woken, with every other or alone (the first), by whatever
+  changes the state, then looks again. Parked inside an actor's method, it lets the actor go only once it
   is in the list, so no wake is missed. A park may be cancellable — the
   task's cancellation takes it out of the list and wakes it, and a task
   cancelled already does not park — which is how a channel's blocked send

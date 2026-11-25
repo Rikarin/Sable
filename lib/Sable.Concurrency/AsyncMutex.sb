@@ -1,10 +1,5 @@
 module Sable.Concurrency
 
-// Waits that suspend a task rather than block its thread: what a task on
-// the shared pool takes instead of Mutex and Semaphore, whose waits block
-// the worker. An actor, so its state is changed by one call at a time; a
-// task that must wait parks in its WaitList and looks again when woken.
-
 /// A lock a task holds across suspensions, and waits for by suspending: for
 /// work between awaits that no other task may interleave with, which an
 /// actor's own reentrancy would let in. `withLock` holds it for an async
@@ -15,50 +10,46 @@ module Sable.Concurrency
 /// let n = await gate.withLock { 42 }
 /// assert(n == 42)
 /// ```
-public actor AsyncMutex {
-    var locked: Bool = false
-    let unlocked: WaitList = WaitList()
+@immutable
+public final class AsyncMutex {
+    let gate: AsyncSemaphore
 
-    public init() { }
+    public init() {
+        gate = AsyncSemaphore(permits: 1)
+    }
 
-    /// Takes the lock, suspending until it is free.
+    /// Takes the lock, suspending until it is free. Those that wait get it
+    /// in the order they came.
     public fn lock() async {
-        while locked {
-            await unlocked.park()
-        }
-        locked = true
+        await gate.acquire()
     }
 
     /// Takes the lock if it is free now: whether it did.
     public fn tryLock() -> Bool {
-        if locked {
-            return false
-        }
-        locked = true
-        return true
+        return gate.tryAcquire()
     }
 
-    /// Lets the lock go, waking the tasks waiting for it.
+    /// Lets the lock go, to the task that has waited longest, if one does.
+    /// One that is free stays so.
     public fn unlock() {
-        locked = false
-        unlocked.wakeAll()
+        gate.giveBack(1, atMost: 1)
     }
 
     /// Whether some task holds the lock now.
-    public var isLocked: Bool => locked
+    public var isLocked: Bool => gate.availablePermits == 0
 }
 
 extension AsyncMutex {
     /// What the closure gives, the lock held while it runs, however many
     /// times it suspends; let go whether it returns or throws.
-    public nonisolated fn withLock<R, E: Error>(_ body: async () throws(E) -> R) async throws(E) -> R {
-        await self.lock()
+    public fn withLock<R, E: Error>(_ body: async () throws(E) -> R) async throws(E) -> R {
+        await lock()
         do {
             let result = try await body()
-            await self.unlock()
+            unlock()
             return result
         } catch {
-            await self.unlock()
+            unlock()
             throw error
         }
     }

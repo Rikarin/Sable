@@ -2869,6 +2869,7 @@ public static class SilBuiltins {
         Add("task_waitlist_new", SilType.Int);
         Add("task_waitlist_free", SilType.Unit, SilType.Int);
         Add("task_waitlist_wake", SilType.Unit, SilType.Int);
+        Add("task_waitlist_wake_one", SilType.Unit, SilType.Int);
         Add("task_park", SilType.Unit, SilType.Int);
 
         // A wait list's ticket — how many times it has been woken — and a

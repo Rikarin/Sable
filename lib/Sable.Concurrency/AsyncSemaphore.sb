@@ -2,8 +2,10 @@ module Sable.Concurrency
 
 // Waits that suspend a task rather than block its thread: what a task on
 // the shared pool takes instead of Mutex and Semaphore, whose waits block
-// the worker. An actor, so its state is changed by one call at a time; a
-// task that must wait parks in its WaitList and looks again when woken.
+// the worker. The state is behind a lock, held for a few instructions, so
+// that only a task that must wait for a permit suspends. A permit released
+// while tasks wait is granted to one of them, and no task that comes by
+// takes it: as many are woken, in the order they came.
 
 /// So many permits, each held by one task at a time: .NET's `SemaphoreSlim`
 /// with `WaitAsync`. A task waiting for a permit is suspended, not blocked.
@@ -11,44 +13,139 @@ module Sable.Concurrency
 /// ```sable
 /// let slots = AsyncSemaphore(permits: 1)
 /// await slots.acquire()
-/// assert(!(await slots.tryAcquire()))
-/// await slots.release()
-/// assert(await slots.availablePermits == 1)
+/// assert(!slots.tryAcquire())
+/// slots.release()
+/// assert(slots.availablePermits == 1)
 /// ```
-public actor AsyncSemaphore {
-    var permits: Int
-    let released: WaitList = WaitList()
+@immutable
+public final class AsyncSemaphore {
+    // The permits free, the tasks that wait, and how many of those have been
+    // granted one, in the room on the lock's cache line. While more wait
+    // than are granted, none is free.
+    let lock: Int
+    let released: WaitList
 
     /// A semaphore with so many permits free.
     public init(permits: Int) {
         precondition(permits >= 0, "a semaphore cannot have \(permits) permits")
-        self.permits = permits
+        lock = Runtime.lockNew()
+        released = WaitList()
+        unsafe {
+            let words = RawPtr<Int>(address: lock - Runtime.lockRoom)
+            words.initialize(to: permits, at: semaphoreFree)
+            words.initialize(to: 0, at: semaphoreWaiting)
+            words.initialize(to: 0, at: semaphoreGranted)
+        }
+    }
+
+    deinit {
+        Runtime.lockFree(lock)
+    }
+
+    fn words() -> RawPtr<Int> {
+        return RawPtr<Int>(address: lock - Runtime.lockRoom)
     }
 
     /// How many permits are free now.
-    public var availablePermits: Int => permits
+    public var availablePermits: Int {
+        get {
+            Runtime.lockAcquire(lock)
+            var free = 0
+            unsafe {
+                free = words().load(at: semaphoreFree)
+            }
+            Runtime.lockRelease(lock)
+            return free
+        }
+    }
 
     /// Takes a permit, suspending until one is released if none is free.
     public fn acquire() async {
-        while permits == 0 {
-            await released.park()
+        var ticket = joinOrTake()
+        while ticket >= 0 {
+            await released.park(since: ticket)
+            ticket = takeGranted()
         }
-        permits -= 1
     }
 
     /// Takes a permit if one is free now: whether it did.
     public fn tryAcquire() -> Bool {
-        if permits == 0 {
-            return false
+        Runtime.lockAcquire(lock)
+        var taken = false
+        unsafe {
+            let free = words().load(at: semaphoreFree)
+            if free > 0 {
+                words().store(free - 1, at: semaphoreFree)
+                taken = true
+            }
         }
-        permits -= 1
-        return true
+        Runtime.lockRelease(lock)
+        return taken
     }
 
-    /// Gives back so many permits, waking the tasks waiting for them.
+    // A permit taken, -1; or the task among those waiting, the ticket to
+    // wait since. Likewise a granted one taken, or not.
+    fn joinOrTake() -> Int {
+        Runtime.lockAcquire(lock)
+        var ticket = -1
+        unsafe {
+            let free = words().load(at: semaphoreFree)
+            if free > 0 {
+                words().store(free - 1, at: semaphoreFree)
+            } else {
+                words().store(words().load(at: semaphoreWaiting) + 1, at: semaphoreWaiting)
+                ticket = released.ticket
+            }
+        }
+        Runtime.lockRelease(lock)
+        return ticket
+    }
+
+    fn takeGranted() -> Int {
+        Runtime.lockAcquire(lock)
+        var ticket = -1
+        unsafe {
+            let granted = words().load(at: semaphoreGranted)
+            if granted > 0 {
+                words().store(granted - 1, at: semaphoreGranted)
+                words().store(words().load(at: semaphoreWaiting) - 1, at: semaphoreWaiting)
+            } else {
+                ticket = released.ticket
+            }
+        }
+        Runtime.lockRelease(lock)
+        return ticket
+    }
+
+    /// Gives back so many permits: to the tasks waiting for them first.
     public fn release(count: Int = 1) {
         precondition(count > 0, "cannot release \(count) permits")
-        permits += count
-        released.wakeAll()
+        giveBack(count, atMost: Int.max)
+    }
+
+    // So many given back, as long as no more than so many are then free.
+    fn giveBack(_ count: Int, atMost most: Int) {
+        Runtime.lockAcquire(lock)
+        var woken = 0
+        unsafe {
+            let words = words()
+            let free = words.load(at: semaphoreFree)
+            if free <= most - count {
+                let granted = words.load(at: semaphoreGranted)
+                let ungranted = words.load(at: semaphoreWaiting) - granted
+                woken = count < ungranted ? count : ungranted
+                words.store(granted + woken, at: semaphoreGranted)
+                words.store(free + count - woken, at: semaphoreFree)
+            }
+        }
+        Runtime.lockRelease(lock)
+        for _ in 0..<woken {
+            released.wakeOne()
+        }
     }
 }
+
+// The words of a semaphore's room.
+const semaphoreFree = 0
+const semaphoreWaiting = 1
+const semaphoreGranted = 2

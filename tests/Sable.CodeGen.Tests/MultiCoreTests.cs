@@ -494,6 +494,48 @@ public sealed class MultiCoreTests {
     }
 
     /// <summary>
+    ///     A task spawned off the workers gets its turn though the one worker
+    ///     is kept busy by tasks that make each other ready.
+    /// </summary>
+    [Theory]
+    [InlineData("1")]
+    [InlineData("2")]
+    public void AnInjectedTaskIsNotStarvedByABusyWorker(string workers) {
+        if (!CanBuild) {
+            return;
+        }
+
+        var run = BuildAndRun(AsyncProgram("""
+                    actor Table {
+                        var ball = 0
+                        let turned = WaitList()
+
+                        fn play(_ player: Int, _ stop: Atomic<Bool>) async {
+                            while !stop.load() {
+                                while ball % 2 != player && !stop.load() {
+                                    await turned.park()
+                                }
+                                ball += 1
+                                turned.wakeAll()
+                            }
+                        }
+                    }
+                    """, """
+                    let stop = Atomic<Bool>(false)
+                    let table = Table()
+                    let a = Task.spawn { await table.play(0, stop) }
+                    let b = Task.spawn { await table.play(1, stop) }
+                    try? await Task.sleep(nanoseconds: 5_000_000)
+                    let end = Task.spawn { stop.store(true) }
+                    await end.value
+                    await a.value
+                    await b.value
+                    print("done")
+                """), environment: new Dictionary<string, string> { ["SABLE_WORKERS"] = workers });
+        Assert.Equal("done\n", run.Stdout);
+    }
+
+    /// <summary>
     ///     A trap in a task, with SABLE_BACKTRACE set, is followed by its
     ///     async backtrace: its own calls, then those of the task that
     ///     spawned it, read from the slabs where they wait.

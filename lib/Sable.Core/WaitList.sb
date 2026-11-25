@@ -85,13 +85,48 @@ public final class WaitList {
         await Task.parkCancellably(handle, ticket)
     }
 
-    /// How many times 'wakeAll()' has been called: what 'parkCancellably(since:)' is given.
+    /// As 'park()', but not parked at all if the list has been woken since
+    /// the ticket was taken; a cancellation does not wake it.
+    ///
+    /// ```sable
+    /// let list = WaitList()
+    /// let ticket = list.ticket
+    /// list.wakeOne()
+    /// await list.park(since: ticket)   // goes on at once
+    /// ```
+    public fn park(since ticket: Int) async {
+        await Task.parkCancellably(handle, -2 - ticket)
+    }
+
+    /// How many times the list has been woken: what 'park(since:)' and
+    /// 'parkCancellably(since:)' are given.
     public var ticket: Int => WaitList.ticketOf(handle)
 
     /// Wakes every task parked, in the order they parked.
     public fn wakeAll() {
         WaitList.wake(handle)
     }
+
+    /// Wakes the task that parked first, if any is parked. For a change that
+    /// is for one task alone, and which any parked could be given: one woken
+    /// that gives up instead, as a task cancelled does, must wake the next.
+    ///
+    /// ```sable
+    /// let list = WaitList()
+    /// let first = Task.spawn { await list.park() }
+    /// let second = Task.spawn { await list.park() }
+    /// await Task.settle()
+    /// list.wakeOne()
+    /// await first.value
+    /// list.wakeOne()
+    /// await second.value
+    /// ```
+    public fn wakeOne() {
+        WaitList.wakeFirst(handle)
+    }
+
+    @builtin("task_waitlist_wake_one")
+    static fn wakeFirst(_ handle: Int)
 
     @builtin("task_waitlist_new")
     static fn make() -> Int

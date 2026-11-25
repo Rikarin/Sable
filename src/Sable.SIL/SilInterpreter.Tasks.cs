@@ -480,13 +480,19 @@ public sealed partial class SilInterpreter {
             case "async_park_cancellable": {
                 var handle = (long)operands[0]!;
                 var ticket = (long)operands[1]!;
-                if (ticket >= 0 && _waitListTickets.GetValueOrDefault(handle) != ticket || Current.Cancelled) {
+                // Under -1: one whose cancellation does not wake it, that much under -2.
+                var cancellable = ticket >= -1;
+                var since = cancellable ? ticket : -2 - ticket;
+                if (since >= 0 && _waitListTickets.GetValueOrDefault(handle) != since || cancellable && Current.Cancelled) {
                     return false;
                 }
 
                 var list = _waitLists[handle];
                 list.Add(Current);
-                Current.ParkedIn = list;
+                if (cancellable) {
+                    Current.ParkedIn = list;
+                }
+
                 return true;
             }
 
@@ -503,6 +509,20 @@ public sealed partial class SilInterpreter {
                 }
 
                 list.Clear();
+                return null;
+            }
+
+            case "task_waitlist_wake_one": {
+                var handle = (long)operands[0]!;
+                var list = _waitLists[handle];
+                _waitListTickets[handle] = _waitListTickets.GetValueOrDefault(handle) + 1;
+                if (list.Count > 0) {
+                    var parked = list[0];
+                    list.RemoveAt(0);
+                    parked.ParkedIn = null;
+                    Enqueue(parked);
+                }
+
                 return null;
             }
 

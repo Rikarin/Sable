@@ -9,10 +9,14 @@ module Sable.Concurrency
 // few values' moving, so neither end waits for the other to run, as it
 // would for an actor. A receiver with nothing to take, or a sender with no
 // room, parks in a wait list, holding no thread, until what it waits for
-// changes: it says so (the waiting flags), and takes the list's ticket,
+// changes: it says so (the waiting counts), and takes the list's ticket,
 // under the lock it looked under, so that a wake between its look and its
 // park is not missed; and it parks cancellably, so that the task's
-// cancellation wakes it, and it gives up.
+// cancellation wakes it, and it gives up — having looked once more, so a
+// change it was woken for is not lost with it. Each value wakes a receiver,
+// and each room made a sender, while any are counted: whoever wakes one
+// counts it out. One that went another way stays counted, which costs a
+// wake of no one.
 
 /// Values passed from task to task in the order sent, that cannot fail:
 /// a ThrowingChannel whose Failure is Never. What is sent crosses from one
@@ -74,8 +78,8 @@ public final class ThrowingChannel<Element: Sendable, Failure: Error>: AsyncSequ
     let receiveLock: Int
     let back: ChannelRing<Element>
     let front: ChannelRing<Element>
-    // Whether it is closed, and whether a receiver, or a sender, may be
-    // parked, or about to be: each flag a word.
+    // Whether it is closed, and how many receivers, and senders, may be
+    // parked, or about to be: each a word.
     let flags: RawPtr<Int>
     let failure: RawPtr<Failure?>
     let receivers: WaitList
@@ -181,7 +185,7 @@ public final class ThrowingChannel<Element: Sendable, Failure: Error>: AsyncSequ
                     match fullMode {
                         case .Wait => {
                             if waiting {
-                                flags.store(1, at: channelSenders)
+                                flags.store(flags.load(at: channelSenders) + 1, at: channelSenders)
                             }
                             let ticket = senders.ticket
                             Runtime.lockRelease(sendLock)
@@ -201,13 +205,13 @@ public final class ThrowingChannel<Element: Sendable, Failure: Error>: AsyncSequ
                 }
             }
             back.append(value)
-            let wake = flags.load(at: channelReceivers) != 0
-            if wake {
-                flags.store(0, at: channelReceivers)
+            let waiting = flags.load(at: channelReceivers)
+            if waiting > 0 {
+                flags.store(waiting - 1, at: channelReceivers)
             }
             Runtime.lockRelease(sendLock)
-            if wake {
-                receivers.wakeAll()
+            if waiting > 0 {
+                receivers.wakeOne()
             }
             dropped = none
         }
@@ -284,13 +288,13 @@ public final class ThrowingChannel<Element: Sendable, Failure: Error>: AsyncSequ
                 return found
             }
             let value = back.removeFirst()
-            let wake = flags.load(at: channelSenders) != 0
-            if wake {
-                flags.store(0, at: channelSenders)
+            let waiting = flags.load(at: channelSenders)
+            if waiting > 0 {
+                flags.store(waiting - 1, at: channelSenders)
             }
             Runtime.lockRelease(sendLock)
-            if wake {
-                senders.wakeAll()
+            if waiting > 0 {
+                senders.wakeOne()
             }
             return .Value(value)
         }
@@ -306,7 +310,7 @@ public final class ThrowingChannel<Element: Sendable, Failure: Error>: AsyncSequ
                 return .Ended
             }
             if waiting {
-                flags.store(1, at: channelReceivers)
+                flags.store(flags.load(at: channelReceivers) + 1, at: channelReceivers)
             }
         }
         return .Empty(receivers.ticket)

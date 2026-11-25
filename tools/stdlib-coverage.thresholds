@@ -53,6 +53,7 @@ lib/Sable.Testing/TestCase.sb                     45  40   # raise me
 
 # Under the default for a reason the tests cannot change.
 lib/Sable.Testing/BenchRunner.sb                    0   0   # run only in 'sable bench's harness, which BenchRunnerTests runs
+lib/Sable.Text/BinaryText.sb                       44  44   # its tables are made while compiling
 lib/Sable.Crypto/Sha1Blocks.sb                     0   0   # run only where the processor has no SHA-1 of its own; CryptoTests runs it everywhere
 lib/Sable.Crypto/Sha256Blocks.sb                   0   0   # run only where the processor has no SHA-256 of its own; CryptoTests runs it everywhere
 lib/Sable.Crypto/Sha512Blocks.sb                   0   0   # run only where the processor has no SHA-512 of its own; CryptoTests runs it everywhere

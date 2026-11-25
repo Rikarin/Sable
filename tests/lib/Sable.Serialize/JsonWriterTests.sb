@@ -1,0 +1,405 @@
+module JsonWriterTests
+
+// JsonWriter (Sable.Serialize): what it writes, where it puts it, and what
+// a debug build refuses.
+
+import Sable.IO
+import Sable.Serialize
+import Sable.Testing
+import Sable.Text
+
+fn written(_ options: PrintOptions = compact(), _ body: (inout JsonWriter) -> Void) -> String {
+    var writer = JsonWriter(options: options)
+    body(&writer)
+    let text = writer.toString()
+    assertEqual(writer.pendingCount, text.utf8Count)
+    assertEqual(writer.takeBytes().toString(), text)
+    return text
+}
+
+fn sample(_ writer: inout JsonWriter) {
+    writer.writeBeginObject()
+    writer.writeKey("a")
+    writer.writeInt(1)
+    writer.writeKey("b")
+    writer.writeBeginArray()
+    writer.writeBool(true)
+    writer.writeBool(false)
+    writer.writeNull()
+    writer.writeBeginArray()
+    writer.writeEndArray()
+    writer.writeBeginObject()
+    writer.writeEndObject()
+    writer.writeEndArray()
+    writer.writeKey("c")
+    writer.writeBeginObject()
+    writer.writeKey("d")
+    writer.writeString("e")
+    writer.writeEndObject()
+    writer.writeEndObject()
+}
+
+@test
+fn compactHasNoSpaces() {
+    assertEqual(written(compact(), sample), #"{"a":1,"b":[true,false,null,[],{}],"c":{"d":"e"}}"#)
+    assertEqual(written(PrintOptions(spaced: true), sample), #"{"a": 1, "b": [true, false, null, [], {}], "c": {"d": "e"}}"#)
+}
+
+@test
+fn prettyHasALineEach() {
+    let lines = """
+        {
+          "a": 1,
+          "b": [
+            true,
+            false,
+            null,
+            [],
+            {}
+          ],
+          "c": {
+            "d": "e"
+          }
+        }
+        """
+    assertEqualText(written(pretty(2), sample), lines)
+    assertEqualText(written(PrintOptions(indent: 1, spaced: true, tabs: true), sample), lines.replacing("  ", with: "\t"))
+    assertEqualText(written(PrintOptions(indent: 11), sample), lines.replacing("  ", with: "           ").replacing(": ", with: ":"))
+}
+
+@test
+fn stringsAreEscapedWhereTheyMustBe() {
+    for (text, json) in [
+        ("", "\"\""), ("a", "\"a\""), ("a\"b\\c/d", "\"a\\\"b\\\\c/d\""), ("\n\r\t\u{8}\u{C}", "\"\\n\\r\\t\\b\\f\""),
+        ("\u{0}\u{1F}\u{7F}", "\"\\u0000\\u001f\u{7F}\""), ("é€😀", "\"é€😀\""), ("01234567\"", "\"01234567\\\"\""),
+        ("0123456\n89abcdef\n", "\"0123456\\n89abcdef\\n\""), ("\"\"\"\"\"\"\"\"\"\"\"", "\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\""),
+        ("a long text that has nothing to escape in it", "\"a long text that has nothing to escape in it\""),
+        ("a long text that has é, and then\nmore: é", "\"a long text that has é, and then\\nmore: é\""),
+    ] {
+        assertEqual(written { w in w.writeString(text) }, json)
+        assertEqual(written { w in w.writeString(utf8: bytes(text)) }, json)
+        assertEqual(quote(text, false), json)
+        var reader = JsonReader(json)
+        _ = try! reader.next()
+        assertEqual(try! reader.string(), text)
+    }
+}
+
+fn bytes(_ text: String) -> U8[>..] {
+    var made: U8[>..] = []
+    made.append(utf8: text)
+    return made
+}
+
+@test
+fn asciiAloneIsWrittenWhenAskedFor() {
+    let options = PrintOptions(asciiOnly: true)
+    for (text, json) in [
+        ("plain", "\"plain\""), ("é", "\"\\u00e9\""), ("€uro", "\"\\u20acuro\""), ("a 😀 of a longer text", "\"a \\ud83d\\ude00 of a longer text\""),
+        ("\u{7F}\u{FFFF}\u{10FFFF}", "\"\\u007f\\uffff\\udbff\\udfff\""), ("\n\"", "\"\\n\\\"\""),
+    ] {
+        assertEqual(written(options) { w in w.writeString(text) }, json)
+        assertEqual(written(options) { w in w.writeString(utf8: bytes(text)) }, json)
+        assertEqual(written(options) { w in
+            w.writeBeginObject()
+            w.writeKey(text)
+            w.writeNull()
+            w.writeEndObject()
+        }, "{\(json):null}")
+    }
+}
+
+@test
+fn numbersAreWrittenInFull() throws {
+    for value in [0, 7, 9, 10, 99, 100, 12345, -1, -10, Int.max, Int.min, 999999999999999999, 1000000000000000000] {
+        assertEqual(written { w in w.writeInt(value) }, "\(value)")
+    }
+    let wide: U64[>..] = [0, 9999999999999999999, 10000000000000000000, U64.max]
+    for value in wide {
+        assertEqual(written { w in w.writeUInt(value) }, "\(value)")
+    }
+    var power: U64 = 1
+    for _ in 0..<19 {
+        assertEqual(written { w in w.writeUInt(power) }, "\(power)")
+        assertEqual(written { w in w.writeUInt(power - 1) }, "\(power - 1)")
+        power *= 10
+    }
+    var writer = JsonWriter()
+    writer.writeBeginArray()
+    for value in [0.1, -2.5, 1e300, 5e-324, 3.0] {
+        try writer.writeFloat(value)
+    }
+    writer.writeEndArray()
+    let back = itemsOf(try parse(writer.toString()))
+    assertEqual(back.map({ asNumber($0)! }), [0.1, -2.5, 1e300, 5e-324, 3.0])
+    for value in [F64.nan, F64.infinity, -F64.infinity] {
+        do {
+            try writer.writeFloat(value)
+            fail("\(value) was written")
+        } catch {
+            assertEqual(error.description(), "$: JSON has no \(value)")
+        }
+    }
+}
+
+@test
+fn bytesAreBase64() {
+    assertEqual(written { w in w.writeBase64([]) }, "\"\"")
+    assertEqual(written { w in w.writeBase64([0x68, 0x69]) }, "\"aGk=\"")
+}
+
+@test
+fn whatIsJsonAlreadyIsWrittenAsItIs() {
+    assertEqual(written { w in
+        w.writeBeginArray()
+        w.writeRaw("1.0000000000000000000000001")
+        w.writeRaw("{ }")
+        w.writeEndArray()
+    }, "[1.0000000000000000000000001,{ }]")
+}
+
+@test
+fn commentsAreForARelaxedParser() throws {
+    let compactText = written { w in
+        w.writeComment("first")
+        w.writeBeginArray()
+        w.writeInt(1)
+        w.writeComment(" é ")
+        w.writeInt(2)
+        w.writeEndArray()
+    }
+    assertEqual(compactText, "/*first*/[1/* é */,2]")
+    assertEqual(render(try parseWith(compactText, relaxed())), "[1,2]")
+    let indented = written(pretty(2)) { w in
+        w.writeBeginObject()
+        w.writeComment("a")
+        w.writeKey("k")
+        w.writeComment("b")
+        w.writeInt(1)
+        w.writeEndObject()
+    }
+    assertEqual(indented, "{\n  /*a*/\n  \"k\": /*b*/1\n}")
+}
+
+@test
+fn nestingIsKeptPastSixtyFour() throws {
+    var writer = JsonWriter()
+    for _ in 0..<150 {
+        writer.writeBeginArray()
+        writer.writeBeginObject()
+        writer.writeKey("k")
+    }
+    assertEqual(writer.depth, 300)
+    writer.writeInt(0)
+    for _ in 0..<150 {
+        writer.writeEndObject()
+        writer.writeEndArray()
+    }
+    let text = writer.toString()
+    assertEqual(writer.depth, 0)
+    assertEqual(render(try parse(text)), text)
+}
+
+@test
+fn whatIsWrittenIsFlushedAsItComes() throws {
+    var sink = MemoryStream()
+    var buffer = ByteBuffer()
+    var stream = JsonWriter()
+    var held = JsonWriter()
+    stream.writeBeginArray()
+    held.writeBeginArray()
+    for i in 0..<1000 {
+        stream.writeInt(i)
+        held.writeString("\(i)\n")
+        if stream.pendingCount > 100 {
+            try stream.flush(to: &sink)
+            held.flush(to: &buffer)
+            assertEqual(stream.pendingCount, 0)
+        }
+    }
+    stream.writeEndArray()
+    held.writeEndArray()
+    try stream.flush(to: &sink)
+    held.flush(to: &buffer)
+    assertEqual(stream.writtenCount, sink.bytes.count)
+    assertEqual(held.writtenCount, buffer.count)
+    let numbers = itemsOf(try parse(bytes: sink.bytes))
+    let texts = itemsOf(try parse(bytes: buffer.bytes))
+    assertEqual(numbers.count, 1000)
+    assertEqual(asNumber(numbers[999])!, 999.0)
+    assertEqual(asText(texts[999])!, "999\n")
+}
+
+final class Collected: AsyncWriter {
+    var all: U8[>..] = []
+
+    fn write(_ bytes: U8[:]) async throws(IoError) {
+        all.append(contentsOf: bytes)
+    }
+}
+
+@test
+fn whatIsWrittenIsFlushedByATask() async throws {
+    let sink = Collected()
+    var writer = JsonWriter(options: pretty(1))
+    writer.writeBeginArray()
+    try await writer.flush(to: sink)
+    writer.writeInt(1)
+    try await writer.flush(to: sink)
+    writer.writeInt(2)
+    writer.writeEndArray()
+    try await writer.flush(to: sink)
+    assertEqual(sink.all.toString(), "[\n 1,\n 2\n]")
+    assertEqual(writer.writtenCount, sink.all.count)
+}
+
+@test
+fn anArraysRoomIsReused() {
+    var writer = JsonWriter(reusing: U8[>..](repeating: 0xFF, count: 100))
+    writer.writeInt(5)
+    let bytes = writer.takeBytes()
+    assertEqual(bytes, [0x35])
+    assertEqual(writer.pendingCount, 0)
+    writer = JsonWriter(reusing: bytes)
+    writer.writeString("a text with no room for it, or not at first")
+    assertEqual(writer.toString(), "\"a text with no room for it, or not at first\"")
+}
+
+@test
+fn aWriterWritesDocumentsOneAfterAnother() {
+    var writer = JsonWriter()
+    writer.writeInt(1)
+    assertEqual(writer.takeBytes().toString(), "1")
+    writer.writeBeginArray()
+    writer.reset()
+    assertEqual(writer.depth, 0)
+    writer.writeInt(2)
+    assertEqual(writer.toString(), "2")
+    assertEqual(writer.writtenCount, 1)
+}
+
+@test
+fn anyTreeComesBackTheSame() throws {
+    var random = Pcg64(seed: 52)
+    for _ in 0..<200 {
+        let value = tree(&random, 0)
+        for options in [compact(), pretty(2), PrintOptions(asciiOnly: true, spaced: true), PrintOptions(indent: 3, tabs: true)] {
+            let text = renderWith(value, options)
+            assertEqualText(render(try parse(text)), render(value))
+        }
+    }
+}
+
+fn tree(_ random: inout Pcg64, _ depth: Int) -> JsonValue {
+    let kind = Int.random(in: 0..<(depth > 4 ? 4 : 6), using: &random)
+    let count = Int.random(in: 0..<5, using: &random)
+    if kind == 0 {
+        return number(F64.random(in: -1e6..<1e6, using: &random))
+    }
+    if kind == 1 {
+        return integer(Int.random(in: -1000..<1000, using: &random))
+    }
+    if kind < 4 {
+        return kind == 2 ? text(someText(&random)) : count == 0 ? null() : boolean(count > 2)
+    }
+    if kind == 4 {
+        var items: JsonValue[>..] = []
+        for _ in 0..<count {
+            items.append(tree(&random, depth + 1))
+        }
+        return array(items)
+    }
+    var members: Member[>..] = []
+    for _ in 0..<count {
+        members.append(member(someText(&random), tree(&random, depth + 1)))
+    }
+    return object(members)
+}
+
+fn someText(_ random: inout Pcg64) -> String {
+    let pieces = ["a", "plain text of sixteen", "\"", "\\", "\n", "\u{1}", "é", "€", "😀", "\u{7F}", " "]
+    var made = ""
+    for _ in 0..<Int.random(in: 0..<8, using: &random) {
+        made += pieces[Int.random(in: 0..<pieces.count, using: &random)]
+    }
+    return made
+}
+
+// ---- What a debug build refuses ----------------------------------------------
+
+#if DEBUG
+@test(traps: "without its key")
+fn aValueInAnObjectHasAKey() {
+    var writer = JsonWriter()
+    writer.writeBeginObject()
+    writer.writeInt(1)
+}
+
+@test(traps: "a key is written outside an object")
+fn aKeyIsInAnObject() {
+    var writer = JsonWriter()
+    writer.writeBeginArray()
+    writer.writeKey("k")
+}
+
+@test(traps: "a key is written outside an object, or after another")
+fn aKeyHasAValue() {
+    var writer = JsonWriter()
+    writer.writeBeginObject()
+    writer.writeKey("k")
+    writer.writeKey("k")
+}
+
+@test(traps: "an object ended")
+fn anEndIsOfWhatIsOpen() {
+    var writer = JsonWriter()
+    writer.writeBeginArray()
+    writer.writeEndObject()
+}
+
+@test(traps: "a key has no value")
+fn anObjectDoesNotEndAfterAKey() {
+    var writer = JsonWriter()
+    writer.writeBeginObject()
+    writer.writeKey("k")
+    writer.writeEndObject()
+}
+
+@test(traps: "an array ended")
+fn anArrayIsOpenWhereItEnds() {
+    var writer = JsonWriter()
+    writer.writeEndArray()
+}
+
+@test(traps: "a second value")
+fn aDocumentIsOneValue() {
+    var writer = JsonWriter()
+    writer.writeInt(1)
+    writer.writeInt(2)
+}
+
+@test(traps: "not ended")
+fn whatIsTakenIsWhole() {
+    var writer = JsonWriter()
+    writer.writeBeginArray()
+    _ = writer.takeBytes()
+}
+
+@test(traps: "is not")
+fn whatIsWrittenAsJsonIsJson() {
+    var writer = JsonWriter()
+    writer.writeRaw("[1,]")
+}
+
+@test(traps: "not UTF-8")
+fn bytesWrittenAsAStringAreUtf8() {
+    var writer = JsonWriter()
+    writer.writeString(utf8: [0xFF])
+}
+#endif
+
+@test(traps: "has its end in its text")
+fn aCommentDoesNotEndItself() {
+    var writer = JsonWriter()
+    writer.writeComment("a */ b")
+}

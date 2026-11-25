@@ -81,7 +81,7 @@ fn keysAreBareQuotedOrDotted() {
 
 @test
 fn basicStringsHaveEscapes() {
-    assertEqual(value(#""\b\t\n\f\r\"\\ \u00e9 \U0001F600 \u0000""#), #"s"\u0008\t\n\u000c\r\"\\ é 😀 \u0000""#)
+    assertEqual(value(#""\b\t\n\f\r\"\\ \u00e9 \U0001F600 \u0000""#), #"s"\b\t\n\f\r\"\\ é 😀 \u0000""#)
     assertEqual(value("\"\""), "s\"\"")
     assertEqual(value("\"tab\there 'x' é\""), "s\"tab\\there 'x' é\"")
     assertEqual(value(#""\uD7FF\uE000\U0010FFFF""#), "s\"\u{D7FF}\u{E000}\u{10FFFF}\"")

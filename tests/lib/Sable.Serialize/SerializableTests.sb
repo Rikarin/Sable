@@ -235,7 +235,7 @@ fn errorsSayWhere() {
     assertEqual(failure(Event.self, "{\"type\":\"Key\"}"), "$.code: missing")
     assertEqual(failure(Event.self, "{\"kind\":\"Key\"}"), "$.type: missing")
     assertEqual(failure(Item.self, "{\"name\":\"a\",\"price\":1e999}"), "$.price: 1e999 is out of range")
-    assertEqual(failure(Item.self, "{\"name\":\"a\" \"price\":1}"), "not JSON: no ',' or end between values at byte 12")
+    assertEqual(failure(Item.self, "{\"name\":\"a\" \"price\":1}"), "not JSON: line 1, column 13: found '\"' where ',' or '}' was expected")
     assertEqual(failure(Item.self, "{\"weird key\":1}"), "$.name: missing")
     do {
         _ = try Json.encode(Item { name: "nan", price: 0.0 / 0.0 })
@@ -249,8 +249,8 @@ fn errorsSayWhere() {
 
 @test
 fn theDecoderAndJsonValuesDirectly() throws {
-    let root = try JsonDecoder.parse("{\"a\":[1,{\"b c\":null}],\"u\":\"\\u00e9\\ud83d\\ude00\\n\",\"lone\":\"\\ud800\",\"n\":-0.5e2,\"t\":true,\"f\":false}")
-    assertEqual(root.count, 6)
+    let root = try JsonDecoder.parse("{\"a\":[1,{\"b c\":null}],\"u\":\"\\u00e9\\ud83d\\ude00\\n\",\"n\":-0.5e2,\"t\":true,\"f\":false}")
+    assertEqual(root.count, 5)
     let a = try root.field("a").decodeSequence()
     assertEqual(a.count, 2)
     assertEqual(a[1].field("b c").path, "$.a[1]['b c']")
@@ -258,7 +258,6 @@ fn theDecoderAndJsonValuesDirectly() throws {
     assertEqual(root.field("a").element(1).path, "$.a[1]")
     assert(root.field("a").element(5).isMissing && root.element(0).isMissing)
     assertEqual(try root.field("u").decodeString(), "é😀\n")
-    assertEqual(try root.field("lone").decodeString(), "\u{FFFD}")
     assertEqual(try root.field("n").decodeFloat(), -50.0)
     assert(try root.field("t").decodeBool() && !(try root.field("f").decodeBool()))
     assertEqual(root.field("t").kindName, "a Bool")
@@ -276,7 +275,7 @@ fn theDecoderAndJsonValuesDirectly() throws {
     for member in try root.decodeMap() {
         keys.append(member.key)
     }
-    assertEqual(keys.joined(separator: ","), "a,u,lone,n,t,f")
+    assertEqual(keys.joined(separator: ","), "a,u,n,t,f")
     assert(root.field("n").field("x").isMissing)
 
     // A document of any shape, as a JsonValue, and back.
@@ -316,16 +315,17 @@ fn theDecoderAndJsonValuesDirectly() throws {
     assertEqual(failure(U64.self, "-1"), "$: -1 is not an unsigned integer")
     assertEqual(failure(U64.self, "18446744073709551616"), "$: 18446744073709551616 does not fit a U64")
     assertEqual(failure(Bool.self, "1"), "$: expected a Bool, found a number")
-    assertEqual(failure(Int.self, " 1 x"), "not JSON: text after the value at byte 3")
-    assertEqual(failure(Int.self, "tru"), "not JSON: not a value at byte 0")
-    assertEqual(failure(Int.self, "[1,"), "not JSON: the end where a value should be at byte 3")
-    assertEqual(failure(Int.self, "-"), "not JSON: a number with no digits at byte 1")
-    assertEqual(failure(Int.self, "1."), "not JSON: no digits after the point at byte 2")
-    assertEqual(failure(Int.self, "1e"), "not JSON: no digits in the exponent at byte 2")
-    assertEqual(failure(Int.self, "\"abc"), "not JSON: a string with no end at byte 4")
-    assertEqual(failure(Int.self, "\"a\u{1}\""), "not JSON: a control character in a string at byte 2")
-    assertEqual(failure(Int.self, "{1:2}"), "not JSON: not a key at byte 1")
-    assertEqual(failure(Int.self, "{\"a\" 2}"), "not JSON: no ':' after a key at byte 5")
+    assertEqual(failure(Int.self, " 1 x"), "not JSON: line 1, column 4: text after the value")
+    assertEqual(failure(Int.self, "tru"), "not JSON: line 1, column 4: the text ends where 'true' was expected")
+    assertEqual(failure(Int.self, "[1,"), "not JSON: line 1, column 4: the text ends where a value was expected")
+    assertEqual(failure(Int.self, "-"), "not JSON: line 1, column 1: invalid number: no digits")
+    assertEqual(failure(Int.self, "1."), "not JSON: line 1, column 1: invalid number: no digits after the point")
+    assertEqual(failure(Int.self, "1e"), "not JSON: line 1, column 1: invalid number: no digits in the exponent")
+    assertEqual(failure(Int.self, "\"abc"), "not JSON: line 1, column 5: the text ends where the end of the string was expected")
+    assertEqual(failure(Int.self, "\"a\u{1}\""), "not JSON: line 1, column 3: control character U+0001 must be escaped")
+    assertEqual(failure(Int.self, "{1:2}"), "not JSON: line 1, column 2: found '1' where a key was expected")
+    assertEqual(failure(String.self, "\"\\ud800\""), "not JSON: line 1, column 2: invalid \\u escape: a high surrogate with no low one after it")
+    assertEqual(failure(Int.self, "{\"a\" 2}"), "not JSON: line 1, column 6: found '2' where ':' was expected")
 }
 
 // ---- Flattened fields ----------------------------------------------------

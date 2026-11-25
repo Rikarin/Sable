@@ -21,16 +21,22 @@ public struct Json {
     public static fn encodeBytes<T: Serializable>(_ value: T) throws(SerializeError) -> U8[>..] {
         let encoder = JsonEncoder()
         try value.encode(to: encoder)
-        return encoder.bytes()
+        return encoder.writer.takeBytes()
     }
 
-    /// The value of the type the JSON text holds.
-    public static fn decode<T: Serializable>(_ type: T.Type, from text: String) throws(SerializeError) -> T {
-        return try T.decode(from: try JsonDecoder.parse(text))
+    /// The value of the type the JSON text holds, RFC 8259's or what else
+    /// the options allow.
+    ///
+    /// ```sable
+    /// let numbers = try! Json.decode(Int[>..].self, from: "[1, /* two */ 2,]", options: relaxed())
+    /// assert(numbers == [1, 2])
+    /// ```
+    public static fn decode<T: Serializable>(_ type: T.Type, from text: String, options: ParseOptions = strict()) throws(SerializeError) -> T {
+        return try T.decode(from: try JsonDecoder.parse(text, options: options))
     }
 
     /// The value of the type the JSON's UTF-8 bytes hold.
-    public static fn decode<T: Serializable>(_ type: T.Type, fromBytes bytes: U8[>..]) throws(SerializeError) -> T {
-        return try T.decode(from: try JsonDecoder.parse(bytes: bytes))
+    public static fn decode<T: Serializable>(_ type: T.Type, fromBytes bytes: U8[:], options: ParseOptions = strict()) throws(SerializeError) -> T {
+        return try T.decode(from: try JsonDecoder.parse(bytes: bytes, options: options))
     }
 }

@@ -1,0 +1,193 @@
+module Sable.Serialize
+
+// What JSON's reader and writer look for in text, sixteen bytes at a time.
+// Each gives where it stopped: the slice's count where nothing stopped it.
+
+// The first byte from 'start' on that ends a run a string's value is made
+// of as it is: a quote, a backslash, a control character, or, as a signed
+// byte is below 32 too, one past ASCII.
+@inline(always)
+fn jsonPlainEnd(_ bytes: U8[:], _ start: Int) -> Int {
+    let count = bytes.count
+    var i = start
+    while i + 16 <= count {
+        let v = SIMD<U8, 16>.load(from: bytes, at: i)
+        let low = SIMD<I8, 16>.reinterpreting(v).lanesLess(than: SIMD<I8, 16>(repeating: 0x20))
+        let stop = low | v.lanesEqual(SIMD<U8, 16>(repeating: 0x22)) | v.lanesEqual(SIMD<U8, 16>(repeating: 0x5C))
+        if stop.anyTrue {
+            return i + stop.firstTrue
+        }
+        i += 16
+    }
+    while i < count {
+        let byte = bytes[i]
+        if byte < 0x20 || byte == 0x22 || byte == 0x5C || byte >= 0x80 {
+            return i
+        }
+        i += 1
+    }
+    return count
+}
+
+// The first quote, backslash or control character from 'start' on.
+fn jsonStringStop(_ bytes: U8[:], _ start: Int) -> Int {
+    let count = bytes.count
+    var i = start
+    while i + 16 <= count {
+        let v = SIMD<U8, 16>.load(from: bytes, at: i)
+        let stop = v.lanesLess(than: SIMD<U8, 16>(repeating: 0x20)) | v.lanesEqual(SIMD<U8, 16>(repeating: 0x22)) | v.lanesEqual(SIMD<U8, 16>(repeating: 0x5C))
+        if stop.anyTrue {
+            return i + stop.firstTrue
+        }
+        i += 16
+    }
+    while i < count {
+        let byte = bytes[i]
+        if byte < 0x20 || byte == 0x22 || byte == 0x5C {
+            return i
+        }
+        i += 1
+    }
+    return count
+}
+
+// The first byte from 'start' on that is not white space.
+fn jsonSpaceEnd(_ bytes: U8[:], _ start: Int) -> Int {
+    let count = bytes.count
+    var i = start
+    while i + 16 <= count {
+        let v = SIMD<U8, 16>.load(from: bytes, at: i)
+        let space = v.lanesEqual(SIMD<U8, 16>(repeating: 0x20)) | v.lanesEqual(SIMD<U8, 16>(repeating: 0x0A))
+        let spaces = space | v.lanesEqual(SIMD<U8, 16>(repeating: 0x0D)) | v.lanesEqual(SIMD<U8, 16>(repeating: 0x09))
+        if !spaces.allTrue {
+            return i + (~spaces).firstTrue
+        }
+        i += 16
+    }
+    while i < count {
+        let byte = bytes[i]
+        if byte != 0x20 && byte != 0x0A && byte != 0x0D && byte != 0x09 {
+            return i
+        }
+        i += 1
+    }
+    return count
+}
+
+// Whether the bytes from 'start' to 'end' are the text's UTF-8.
+fn jsonBytesEqual(_ bytes: U8[:], _ start: Int, _ end: Int, _ text: String) -> Bool {
+    let length = end - start
+    if length != text.utf8Count {
+        return false
+    }
+    let wanted = text.utf8
+    var i = 0
+    while i + 8 <= length {
+        if bytes.readU64(at: start + i, endian: .Little) != wanted.readU64(at: i, endian: .Little) {
+            return false
+        }
+        i += 8
+    }
+    while i < length {
+        if bytes[start + i] != wanted[i] {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+// A hexadecimal digit's value, or -1.
+fn jsonHexValue(_ byte: U8) -> Int {
+    if byte >= 0x30 && byte <= 0x39 {
+        return Int(byte) - 0x30
+    }
+    let lower = byte | 0x20
+    if lower >= 0x61 && lower <= 0x66 {
+        return Int(lower) - 0x57
+    }
+    return -1
+}
+
+// The number four hexadecimal digits from 'start' on write: they are there.
+fn jsonHex4(_ bytes: U8[:], _ start: Int) -> Int {
+    let high = jsonHexValue(bytes[start]) << 12 | jsonHexValue(bytes[start + 1]) << 8
+    return high | jsonHexValue(bytes[start + 2]) << 4 | jsonHexValue(bytes[start + 3])
+}
+
+// What an escape of one letter stands for, or 0 for one that is none.
+fn jsonEscapedByte(_ letter: U8) -> U8 {
+    return match letter {
+        case 0x22 => 0x22
+        case 0x5C => 0x5C
+        case 0x2F => 0x2F
+        case 0x62 => 0x08
+        case 0x66 => 0x0C
+        case 0x6E => 0x0A
+        case 0x72 => 0x0D
+        case 0x74 => 0x09
+        default   => 0
+    }
+}
+
+// The bytes from 'start' to 'end' of a string a reader accepted added to
+// 'written', its escapes as what they stand for.
+fn appendUnescapedJson(_ bytes: U8[:], _ start: Int, _ end: Int, to written: inout U8[>..]) {
+    var i = start
+    while true {
+        let stop = jsonStringStop(bytes, i)
+        let run = stop < end ? stop : end
+        written.append(contentsOf: bytes[i..<run])
+        if run == end {
+            return
+        }
+        let kind = bytes[run + 1]
+        i = run + 2
+        if kind != 0x75 {
+            written.append(jsonEscapedByte(kind))
+            continue
+        }
+        var code = jsonHex4(bytes, i)
+        i += 4
+        if code >= 0xD800 && code <= 0xDBFF {
+            code = 0x10000 + (code - 0xD800) * 1024 + (jsonHex4(bytes, i + 2) - 0xDC00)
+            i += 6
+        }
+        Char.fromCodePoint(value: code)!.encodeUtf8(into: &written)
+    }
+}
+
+// The number the bytes write, as JSON does, rounded to the nearest F64.
+fn jsonFloat(_ bytes: U8[:], _ start: Int, _ end: Int) -> F64 {
+    var i = start
+    let negative = bytes[i] == 0x2D
+    if negative {
+        i += 1
+    }
+    // Fifteen digits or fewer are an F64, as the power of ten the places
+    // are is, and dividing one by the other rounds once.
+    if end - i <= 16 {
+        var value = 0
+        var point = end
+        while i < end {
+            let digit = Int(bytes[i]) - 0x30
+            if digit >= 0 && digit <= 9 {
+                value = value &* 10 &+ digit
+            } else if digit == -2 {
+                point = i + 1
+            } else {
+                break
+            }
+            i += 1
+        }
+        if i == end && value < 1000000000000000 {
+            let magnitude = point == end ? F64(value) : F64(value) / powersOfTen[end - point]
+            return negative ? -magnitude : magnitude
+        }
+    }
+    unsafe {
+        return Runtime.stringFromValidUtf8(bytes[start..<end]).toF64() ?? (negative ? -F64.infinity : F64.infinity)
+    }
+}
+
+const powersOfTen: F64[16] = [1.0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15]

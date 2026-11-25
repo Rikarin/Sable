@@ -84,7 +84,7 @@ extension String {
     /// The eight bytes from the offset, which must be in the encoding, the
     /// first the lowest, and zeros past the encoding's end.
     @inline(always)
-    fn utf8Window(_ offset: Int) -> U64 {
+    package fn utf8Window(_ offset: Int) -> U64 {
         let count = self.utf8Count
         if count - offset >= 8 {
             return self.utf8Word(offset)

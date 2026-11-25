@@ -1,0 +1,28 @@
+module Sable.Serialize
+
+import Sable.IO
+
+/// Why JSON could not be read from a stream: the stream, or the JSON.
+///
+/// ```sable
+/// var source = MemoryStream([0x5B, 0x78])
+/// var reader = JsonReader.streaming()
+/// do {
+///     while try reader.next(from: &source) != none { }
+/// } catch {
+///     assert(error.description() == "line 1, column 2: found 'x' where a value was expected")
+/// }
+/// ```
+public union JsonStreamError: Error {
+    /// The bytes could not be read.
+    Read(error: IoError)
+    /// The bytes are not JSON.
+    Syntax(error: ParseError)
+
+    public fn description() -> String {
+        return match self {
+            case .Read(let error)   => error.description()
+            case .Syntax(let error) => error.description()
+        }
+    }
+}

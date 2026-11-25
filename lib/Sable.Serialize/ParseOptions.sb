@@ -1,16 +1,38 @@
 module Sable.Serialize
 
+/// What JSON a parser or a JsonReader takes besides RFC 8259's.
+///
+/// ```sable
+/// let lines = ParseOptions(allowMultipleValues: true)
+/// var reader = JsonReader("1\n2\n", options: lines)
+/// var sum = 0
+/// while try! reader.next() != none {
+///     sum += try! reader.int()
+/// }
+/// assert(sum == 3)
+/// ```
 public struct ParseOptions {
-    public var maxDepth: Int
-    public var allowComments: Bool
-    public var allowTrailingCommas: Bool
-    public var rejectDuplicateKeys: Bool
+    /// How deep arrays and objects may nest.
+    public var maxDepth: Int = 512
+    /// Whether `// …` and `/* … */` may be wherever white space may.
+    public var allowComments: Bool = false
+    /// Whether a comma may follow an array's or an object's last value.
+    public var allowTrailingCommas: Bool = false
+    /// Whether an object that has a key twice is an error.
+    public var rejectDuplicateKeys: Bool = false
+    /// Whether a JsonReader gives each comment it allows, as a token.
+    public var reportComments: Bool = false
+    /// Whether a JsonReader reads values one after another (JSON Lines)
+    /// rather than one alone.
+    public var allowMultipleValues: Bool = false
 }
 
+/// RFC 8259's JSON, and nothing else.
 public fn strict() -> ParseOptions {
-    return ParseOptions { maxDepth: 512, allowComments: false, allowTrailingCommas: false, rejectDuplicateKeys: false }
+    return ParseOptions()
 }
 
+/// JSON with comments and trailing commas.
 public fn relaxed() -> ParseOptions {
-    return ParseOptions { maxDepth: 512, allowComments: true, allowTrailingCommas: true, rejectDuplicateKeys: false }
+    return ParseOptions(allowComments: true, allowTrailingCommas: true)
 }

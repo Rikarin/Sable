@@ -1,10 +1,9 @@
 module Sable.Serialize
 
-// Makes a JsonDocument in one pass over the bytes: a struct, so its arrays
-// and position are its own and not checked for exclusive access as a
-// class's stored properties are at each use.
+// Makes a JsonDocument of a JsonReader's tokens, in one pass: a struct, so
+// its arrays are its own and not checked for exclusive access as a class's
+// stored properties are at each use.
 struct JsonParser {
-    let bytes: U8[>..]
     var kinds: Int[>..] = []
     var starts: Int[>..] = []
     var ends: Int[>..] = []
@@ -12,23 +11,45 @@ struct JsonParser {
     var nexts: Int[>..] = []
     var counts: Int[>..] = []
     var escaped: Bool[>..] = []
-    var at: Int = 0
+    // The arrays and objects that are open, and the last node in each (a
+    // value, or a key with none yet), the innermost's kept apart: -1 for
+    // the first of either.
+    var parents: Int[>..] = []
+    var parent: Int = -1
+    var last: Int = -1
 
-    init(_ bytes: U8[>..]) {
-        self.bytes = bytes
-    }
+    init() { }
 
     /// The document the bytes are, or why they are not JSON.
-    static fn parse(_ bytes: U8[>..]) throws(SerializeError) -> JsonDocument {
-        if Runtime.validateUtf8(bytes: bytes) >= 0 {
-            throw SerializeError.Syntax(reason: "not JSON: ill-formed UTF-8")
-        }
-        var parser = JsonParser(bytes)
-        parser.skipSpace()
-        _ = try parser.value(0)
-        parser.skipSpace()
-        if parser.at < bytes.count {
-            throw parser.error("text after the value")
+    static fn parse(_ bytes: U8[:], _ options: ParseOptions) throws(SerializeError) -> JsonDocument {
+        return try parse(JsonReader(bytes, options: options), bytes)
+    }
+
+    /// The document the text is, or why it is not JSON.
+    static fn parse(_ text: String, _ options: ParseOptions) throws(SerializeError) -> JsonDocument {
+        let reader = JsonReader(text, options: options)
+        return try parse(reader, reader.bytes)
+    }
+
+    static fn parse(_ reader: JsonReader, _ bytes: U8[:]) throws(SerializeError) -> JsonDocument {
+        var parser = JsonParser()
+        var reader = reader
+        do {
+            while let token = try reader.next() {
+                if token == .Comment {
+                    continue
+                }
+                if parser.last == 0 && parser.parent < 0 {
+                    // A second value, where the options let there be one.
+                    throw ParseError.TrailingText(at: reader.position)
+                }
+                parser.add(token, reader.valueStart, reader.valueEnd, reader.isEscaped)
+            }
+            if parser.last < 0 {
+                throw reader.unexpected(reader.at, "a value")
+            }
+        } catch {
+            throw SerializeError.Syntax(reason: "not JSON: \(describeError(error))")
         }
         return JsonDocument(
             bytes: bytes,
@@ -42,195 +63,53 @@ struct JsonParser {
         )
     }
 
-    fn error(_ what: String) -> SerializeError {
-        return SerializeError.Syntax(reason: "not JSON: \(what) at byte \(at)")
-    }
-
-    mutating fn skipSpace() {
-        while at < bytes.count {
-            let byte = bytes[at]
-            if byte != 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D {
-                return
-            }
-            at += 1
+    mutating fn add(_ token: JsonToken, _ start: Int, _ end: Int, _ isEscaped: Bool) {
+        match token {
+            case .Key         => add(jsonString, start, end, isEscaped, isKey: true)
+            case .String      => add(jsonString, start, end, isEscaped, isKey: false)
+            case .Number      => add(jsonNumber, start, end, false, isKey: false)
+            case .True        => add(jsonTrue, start, end, false, isKey: false)
+            case .False       => add(jsonFalse, start, end, false, isKey: false)
+            case .Null        => add(jsonNull, start, end, false, isKey: false)
+            case .BeginObject => begin(jsonObject, start)
+            case .BeginArray  => begin(jsonArray, start)
+            default           => close(end)
         }
     }
 
-    mutating fn add(_ kind: Int, _ start: Int, _ end: Int) -> Int {
+    // A node after the last one; a member counts once, by its key, so an
+    // object's value counts for nothing.
+    @inline(always)
+    mutating fn add(_ kind: Int, _ start: Int, _ end: Int, _ isEscaped: Bool, isKey: Bool) {
+        let node = kinds.count
+        if last >= 0 {
+            nexts[last] = node
+        } else if parent >= 0 {
+            firsts[parent] = node
+        }
+        if parent >= 0 && (isKey || kinds[parent] == jsonArray) {
+            counts[parent] += 1
+        }
+        last = node
         kinds.append(kind)
         starts.append(start)
         ends.append(end)
         firsts.append(-1)
         nexts.append(-1)
         counts.append(0)
-        escaped.append(false)
-        return kinds.count - 1
+        escaped.append(isEscaped)
     }
 
-    mutating fn literal(_ word: String, _ kind: Int) throws(SerializeError) -> Int {
-        let start = at
-        for byte in word.utf8 {
-            if at >= bytes.count || bytes[at] != byte {
-                at = start
-                throw error("not a value")
-            }
-            at += 1
-        }
-        return add(kind, start, at)
+    mutating fn begin(_ kind: Int, _ start: Int) {
+        add(kind, start, start, false, isKey: false)
+        parents.append(parent)
+        parent = last
+        last = -1
     }
 
-    mutating fn value(_ depth: Int) throws(SerializeError) -> Int {
-        if depth > 512 {
-            throw error("nested too deep")
-        }
-        if at >= bytes.count {
-            throw error("the end where a value should be")
-        }
-        let byte = bytes[at]
-        if byte == 0x7B {
-            return try container(depth, jsonObject, 0x7D)
-        }
-        if byte == 0x5B {
-            return try container(depth, jsonArray, 0x5D)
-        }
-        if byte == 0x22 {
-            return try string()
-        }
-        if byte == 0x74 {
-            return try literal("true", jsonTrue)
-        }
-        if byte == 0x66 {
-            return try literal("false", jsonFalse)
-        }
-        if byte == 0x6E {
-            return try literal("null", jsonNull)
-        }
-        if byte == 0x2D || byte >= 0x30 && byte <= 0x39 {
-            return try number()
-        }
-        throw error("not a value")
-    }
-
-    mutating fn digits() -> Int {
-        let start = at
-        while at < bytes.count && bytes[at] >= 0x30 && bytes[at] <= 0x39 {
-            at += 1
-        }
-        return at - start
-    }
-
-    mutating fn number() throws(SerializeError) -> Int {
-        let start = at
-        if bytes[at] == 0x2D {
-            at += 1
-        }
-        if at < bytes.count && bytes[at] == 0x30 {
-            at += 1
-        } else if digits() == 0 {
-            throw error("a number with no digits")
-        }
-        if at < bytes.count && bytes[at] == 0x2E {
-            at += 1
-            if digits() == 0 {
-                throw error("no digits after the point")
-            }
-        }
-        if at < bytes.count && (bytes[at] == 0x65 || bytes[at] == 0x45) {
-            at += 1
-            if at < bytes.count && (bytes[at] == 0x2B || bytes[at] == 0x2D) {
-                at += 1
-            }
-            if digits() == 0 {
-                throw error("no digits in the exponent")
-            }
-        }
-        return add(jsonNumber, start, at)
-    }
-
-    mutating fn string() throws(SerializeError) -> Int {
-        at += 1
-        let start = at
-        var hasEscape = false
-        while true {
-            if at >= bytes.count {
-                throw error("a string with no end")
-            }
-            let byte = bytes[at]
-            if byte == 0x22 {
-                break
-            }
-            if byte < 0x20 {
-                throw error("a control character in a string")
-            }
-            if byte == 0x5C {
-                hasEscape = true
-                at += 2
-                continue
-            }
-            at += 1
-        }
-        let node = add(jsonString, start, at)
-        escaped[node] = hasEscape
-        at += 1
-        return node
-    }
-
-    mutating fn container(_ depth: Int, _ kind: Int, _ close: U8) throws(SerializeError) -> Int {
-        let node = add(kind, at, at)
-        at += 1
-        skipSpace()
-        var last = -1
-        var count = 0
-        if at < bytes.count && bytes[at] == close {
-            at += 1
-            return node
-        }
-        while true {
-            skipSpace()
-            var child = -1
-            if kind == jsonObject {
-                if at >= bytes.count || bytes[at] != 0x22 {
-                    throw error("not a key")
-                }
-                let key = try string()
-                skipSpace()
-                if at >= bytes.count || bytes[at] != 0x3A {
-                    throw error("no ':' after a key")
-                }
-                at += 1
-                skipSpace()
-                let value = try value(depth + 1)
-                nexts[key] = value
-                child = key
-                if last >= 0 {
-                    nexts[last] = key
-                } else {
-                    firsts[node] = key
-                }
-                last = value
-            } else {
-                child = try value(depth + 1)
-                if last >= 0 {
-                    nexts[last] = child
-                } else {
-                    firsts[node] = child
-                }
-                last = child
-            }
-            count += 1
-            skipSpace()
-            if at < bytes.count && bytes[at] == 0x2C {
-                at += 1
-                continue
-            }
-            if at < bytes.count && bytes[at] == close {
-                at += 1
-                break
-            }
-            throw error("no ',' or end between values")
-        }
-        counts[node] = count
-        ends[node] = at
-        return node
+    mutating fn close(_ end: Int) {
+        ends[parent] = end
+        last = parent
+        parent = parents.removeLast()
     }
 }

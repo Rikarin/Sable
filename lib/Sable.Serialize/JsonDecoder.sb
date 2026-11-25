@@ -56,16 +56,13 @@ public final class JsonDecoder: Decoder {
 
     /// A decoder of the JSON document the text is; SerializeError.Syntax
     /// when it is not one.
-    public static fn parse(_ text: String) throws(SerializeError) -> JsonDecoder {
-        var bytes: U8[>..] = []
-        bytes.append(utf8: text)
-        return try JsonDecoder.parse(bytes: bytes)
+    public static fn parse(_ text: String, options: ParseOptions = strict()) throws(SerializeError) -> JsonDecoder {
+        return JsonDecoder(try JsonParser.parse(text, options), 0, parent: none, key: none, index: -1)
     }
 
     /// A decoder of the JSON document the UTF-8 bytes are.
-    public static fn parse(bytes: U8[>..]) throws(SerializeError) -> JsonDecoder {
-        let document = try JsonDocument.parse(bytes)
-        return JsonDecoder(document, 0, parent: none, key: none, index: -1)
+    public static fn parse(bytes: U8[:], options: ParseOptions = strict()) throws(SerializeError) -> JsonDecoder {
+        return JsonDecoder(try JsonParser.parse(bytes, options), 0, parent: none, key: none, index: -1)
     }
 
     // ---- What it holds -------------------------------------------------------
@@ -204,9 +201,7 @@ public final class JsonDecoder: Decoder {
     /// A number, finite.
     public fn decodeFloat() throws(SerializeError) -> F64 {
         try expect(jsonNumber, "a number")
-        guard let value = try? F64.parse(document.text(node)) else {
-            throw invalid("\(document.text(node)) is not a number")
-        }
+        let value = jsonFloat(document.bytes, document.starts[node], document.ends[node])
         if !value.isFinite {
             throw invalid("\(document.text(node)) is out of range")
         }

@@ -112,9 +112,7 @@ fn floatText(_ value: F64) -> String {
 
 // Text as JSON writes it.
 fn quotedText(_ value: String) -> String {
-    let encoder = JsonEncoder()
-    encoder.appendQuoted(value)
-    return encoder.text()
+    return quote(value, false)
 }
 
 // The node as a value: as deep a recursion as the parser allowed.

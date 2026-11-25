@@ -1,0 +1,120 @@
+module Sable.Serialize
+
+import Sable.IO
+
+// A streaming JsonReader given its bytes by what they come from: it asks
+// for more only when those it has are not a whole token.
+
+extension JsonReader {
+    /// The next token, or none at the end of the document; bytes are read
+    /// from the source as they are needed, that many at most at a time.
+    ///
+    /// ```sable
+    /// var source = MemoryStream([0x5B, 0x31, 0x2C, 0x32, 0x5D])
+    /// var reader = JsonReader.streaming()
+    /// var sum = 0
+    /// while let token = try! reader.next(from: &source, upTo: 2) {
+    ///     if token == .Number {
+    ///         sum += try! reader.int()
+    ///     }
+    /// }
+    /// assert(sum == 3)
+    /// ```
+    public mutating fn next<R: Reader>(from source: inout R, upTo count: Int = 65536) throws(JsonStreamError) -> JsonToken? {
+        while true {
+            if let token = try nextOrMore() {
+                return token
+            }
+            if isFinal {
+                return none
+            }
+            try fill(from: &source, count)
+        }
+    }
+
+    /// Goes past the value the reader is at, as `skipValue()` does, bytes
+    /// read from the source as they are needed.
+    public mutating fn skipValue<R: Reader>(from source: inout R, upTo count: Int = 65536) throws(JsonStreamError) {
+        while try !skipOrMore() {
+            try fill(from: &source, count)
+        }
+    }
+
+    /// The next token, or none at the end of the document; bytes are read
+    /// from the source as they are needed, the task suspended while it
+    /// waits for them.
+    ///
+    /// ```sable
+    /// fn countItems<R: AsyncReader>(_ body: R) async throws(JsonStreamError) -> Int {
+    ///     var reader = JsonReader.streaming()
+    ///     var items = 0
+    ///     while let token = try await reader.next(from: body) {
+    ///         if reader.depth == 1 && token == .Number {
+    ///             items += 1
+    ///         }
+    ///     }
+    ///     return items
+    /// }
+    /// ```
+    public mutating fn next<R: AsyncReader>(from source: R, upTo count: Int = 65536) async throws(JsonStreamError) -> JsonToken? {
+        while true {
+            if let token = try nextOrMore() {
+                return token
+            }
+            if isFinal {
+                return none
+            }
+            try await fill(from: source, count)
+        }
+    }
+
+    /// Goes past the value the reader is at, as `skipValue()` does, the
+    /// task suspended while it waits for bytes.
+    public mutating fn skipValue<R: AsyncReader>(from source: R, upTo count: Int = 65536) async throws(JsonStreamError) {
+        while try !skipOrMore() {
+            try await fill(from: source, count)
+        }
+    }
+
+    mutating fn nextOrMore() throws(JsonStreamError) -> JsonToken? {
+        do {
+            return try next()
+        } catch {
+            throw JsonStreamError.Syntax(error: error)
+        }
+    }
+
+    mutating fn skipOrMore() throws(JsonStreamError) -> Bool {
+        do {
+            return try skipValue()
+        } catch {
+            throw JsonStreamError.Syntax(error: error)
+        }
+    }
+
+    mutating fn fill<R: Reader>(from source: inout R, _ count: Int) throws(JsonStreamError) {
+        do {
+            let chunk = try source.read(upTo: count)
+            take(chunk)
+        } catch {
+            throw JsonStreamError.Read(error: error)
+        }
+    }
+
+    mutating fn fill<R: AsyncReader>(from source: R, _ count: Int) async throws(JsonStreamError) {
+        do {
+            let chunk = try await source.read(upTo: count)
+            take(chunk)
+        } catch {
+            throw JsonStreamError.Read(error: error)
+        }
+    }
+
+    mutating fn take(_ chunk: U8[>..]) {
+        if chunk.isEmpty {
+            finish()
+        } else {
+            append(chunk)
+        }
+    }
+}

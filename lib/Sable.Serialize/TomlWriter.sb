@@ -32,8 +32,8 @@ fn tomlQuoted(_ value: String) -> String {
             written.append(utf8: "\\t")
         } else if byte < 0x20 || byte == 0x7F {
             written.append(utf8: "\\u00")
-            written.append(jsonHex(Int(byte) >> 4))
-            written.append(jsonHex(Int(byte) & 15))
+            written.append(jsonHexDigit(Int(byte) >> 4))
+            written.append(jsonHexDigit(Int(byte) & 15))
         } else {
             written.append(byte)
         }

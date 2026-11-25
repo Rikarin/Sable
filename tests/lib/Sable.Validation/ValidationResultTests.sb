@@ -1,0 +1,27 @@
+module ValidationTests
+
+import Sable.Testing
+import Sable.Validation
+
+@test
+fn failuresAreGroupedByPathInTheirOrder() {
+    var result = ValidationResult([ValidationFailure(path: "b", message: "1"), ValidationFailure(path: "a", message: "2")])
+    result.append(ValidationResult([ValidationFailure(path: "b", message: "3", severity: .Info)]))
+    assertEqual(result.byPath.map { $0.0 }, ["b", "a"])
+    assertEqual(result.byPath["b"]!, ["1", "3"])
+    assertEqual(result.messages(at: "b"), ["1", "3"])
+    assertEqual(result.messages(at: "c"), [])
+    assertEqual(result.failures(at: "a").count, 1)
+    assertEqual(result.toString(separator: "; "), "1; 2; 3")
+    assertEqual("\(result:>8)".count, 8)
+    assert(result.has(errorAt: "a"))
+    assert(result.hasErrors)
+}
+
+@test
+fn aFailureIsEqualToOneThatSaysTheSame() {
+    let failure = ValidationFailure(path: "a", message: "m", attemptedValue: "1")
+    assert(failure == ValidationFailure(path: "a", message: "m", attemptedValue: "1", placeholders: ["x": "y"]))
+    assert(failure != ValidationFailure(path: "b", message: "m", attemptedValue: "1"))
+    assertEqual(failure.debugDescription(), "ValidationFailure(a: m [Custom])")
+}

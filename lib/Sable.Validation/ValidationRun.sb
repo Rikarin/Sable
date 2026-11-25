@@ -1,0 +1,59 @@
+module Sable.Validation
+
+import Sable.Globalization
+
+/// One value being validated: what it was asked, and what was found.
+final class ValidationRun {
+    let options: ValidationOptions
+    /// The rule sets asked for, in lowercase, and those of a nested
+    /// validator that names its own.
+    var sets: String[>..]
+    var failures: ValidationFailure[>..] = []
+    /// The field whose rule waits, where nothing may: nothing more is run.
+    var waits: String? = none
+
+    init(_ options: ValidationOptions) {
+        self.options = options
+        sets = []
+        for name in options.ruleSets {
+            sets.append(name.lowercased())
+        }
+    }
+
+    /// Whether rules in those sets are run.
+    fn selects(_ ruleSets: String[>..]) -> Bool {
+        if sets.isEmpty {
+            return ruleSets.isEmpty || ruleSets.contains("default")
+        }
+        for name in sets {
+            if name == "*" || name == "default" && ruleSets.isEmpty || ruleSets.contains(name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Whether what is at that path, or under it, is asked about.
+    fn selects(path: String) -> Bool {
+        if options.only.isEmpty || path.isEmpty {
+            return true
+        }
+        for wanted in options.only {
+            if ValidationRun.isUnder(path, wanted) || ValidationRun.isUnder(wanted, path) {
+                return true
+            }
+        }
+        return false
+    }
+
+    static fn isUnder(_ path: String, _ other: String) -> Bool {
+        return path == other || path.hasPrefix(other + ".") || path.hasPrefix(other + "[")
+    }
+
+    /// A path from the value validated, of one from a value at `base`.
+    static fn join(_ base: String, _ path: String) -> String {
+        return base.isEmpty ? path : path.isEmpty ? base : "\(base).\(path)"
+    }
+
+    var result: ValidationResult => ValidationResult(failures, ruleSets: options.ruleSets.isEmpty ? ["default"] : options.ruleSets)
+}

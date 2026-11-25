@@ -808,6 +808,27 @@ internal sealed class Parser {
         return text.Contains('.', StringComparison.Ordinal) && !text.EndsWith('.');
     }
 
+    /// <summary>A backslash outside a string starts a key path where a member, or the root's type, comes after it.</summary>
+    bool KeyPathFollows() => Peek(1).Kind is SyntaxKind.DotToken or SyntaxKind.IdentifierToken;
+
+    /// <summary><c>\.address?.city</c>, <c>\Customer.name</c>: member accesses of the root, which is all of a key path.</summary>
+    GreenNode ParseKeyPath() {
+        var backslash = EatToken();
+        GreenNode body = new KeyPathRootExpressionGreen(backslash, At(SyntaxKind.DotToken) ? null : ParseSimpleNameType());
+        if (!At(SyntaxKind.DotToken)) {
+            return new KeyPathExpressionGreen(new MemberAccessExpressionGreen(body, EatToken(SyntaxKind.DotToken), ParseSimpleName(true)));
+        }
+
+        while (Current.Kind is SyntaxKind.DotToken or SyntaxKind.QuestionDotToken && !AtStatementStart) {
+            var op = EatToken();
+            body = IsTupleIndexPath(Current)
+                ? ParseTupleIndexPath(body, op)
+                : new MemberAccessExpressionGreen(body, op, ParseSimpleName(true));
+        }
+
+        return new KeyPathExpressionGreen(body);
+    }
+
     /// <summary>
     ///     Turns <c>.0.1</c> into two member accesses, keeping the text exactly.
     /// </summary>
@@ -1019,6 +1040,9 @@ internal sealed class Parser {
                 var dot = EatToken();
                 return new ImplicitMemberAccessExpressionGreen(dot, ParseSimpleName(true));
             }
+
+            case SyntaxKind.BackslashToken when KeyPathFollows():
+                return ParseKeyPath();
 
             case SyntaxKind.MatchKeyword:
                 return ParseMatchExpression();
@@ -1418,7 +1442,7 @@ internal sealed class Parser {
                 or SyntaxKind.AmpersandToken => true,
             SyntaxKind.AwaitKeyword or SyntaxKind.MoveKeyword or SyntaxKind.TryKeyword => true,
             SyntaxKind.MatchKeyword or SyntaxKind.IfKeyword or SyntaxKind.CapitalSelfKeyword => true,
-            SyntaxKind.OpenBraceToken or SyntaxKind.DollarToken => true,
+            SyntaxKind.OpenBraceToken or SyntaxKind.DollarToken or SyntaxKind.BackslashToken => true,
             _ => false,
         };
 

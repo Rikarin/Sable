@@ -1,0 +1,44 @@
+module ValidationTests
+
+import Sable.Testing
+import Sable.Validation
+
+@test
+fn aSimpleAddressHasOneAtInsideIt() {
+    for text in ["a@b", "firstname lastname@x", "\"a b\"@c", "test@domain com"] {
+        assert(EmailSyntax.Simple.accepts(text))
+    }
+    for text in ["", "@", "a@", "@b", "a@b@c", "a@b\n", "ab"] {
+        assert(!EmailSyntax.Simple.accepts(text))
+    }
+}
+
+@test
+fn anHtmlAddressIsWhatTheStandardsPatternTakes() {
+    for text in ["ada@example.org", "a.b+c@x-y.example", "!#$%&'*+/=?^_`{|}~-@a", "..@a", "a@1.2", "a@localhost", "a@" + "b".repeated(63)] {
+        assert(EmailSyntax.Html.accepts(text))
+    }
+    for text in ["", "a", "@a", "a@", "a@-b", "a@b-", "a@b..c", "a@.b", "a@b.", "a b@c", "\"a\"@b", "a@b_c", "a@b@c", "é@a", "a@é", "a@[1.2.3.4]", "a@" + "b".repeated(64)] {
+        assert(!EmailSyntax.Html.accepts(text))
+    }
+}
+
+@test
+fn aMailboxIsRfc5321s() {
+    for text in ["ada@example.org", "user+mailbox/department=shipping@example.com", "\"Joe.\\\\Blow\"@example.com", "\"ada lovelace\"@example.org",
+        "\" \"@example.org", "\"a@b\"@example.org", "a@[192.0.2.1]", "a@[IPv6:2001:db8::1]", "a@[ipv6:::1]", "δοκιμή@παράδειγμα.δοκιμή", "a@münchen.de", "a@xn--mnchen-3ya.de", "l".repeated(64) + "@x.org"] {
+        assert(EmailSyntax.Smtp.accepts(text))
+    }
+    for text in ["", "a", "@b", "a@", ".a@b", "a.@b", "a..b@c", "a b@c", "\"a@b", "\"a\"b@c", "\"a\\", "\"\u{7}\"@b", "a@[192.0.2.300]", "a@[2001:db8::1]", "a@[IPv6:192.0.2.1]", "a@[1.2.3.4", "a@-b.org", "a@b_c.org",
+        "l".repeated(65) + "@x.org", "a@" + "b".repeated(64) + ".org", "a@" + "abcdefghi.".repeated(26) + "org"] {
+        assert(!EmailSyntax.Smtp.accepts(text))
+    }
+}
+
+@test
+fn theRuleTakesAnySyntax() {
+    assert(!passes("a b@c") { $0.email() })
+    assert(passes("a b@c") { $0.email(.Simple) })
+    assert(passes("a@[192.0.2.1]") { $0.email(.Smtp) })
+    assertEqual(message("x") { $0.email() }, "'It' is not a valid email address.")
+}

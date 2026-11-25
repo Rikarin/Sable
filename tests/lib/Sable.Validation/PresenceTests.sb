@@ -1,0 +1,42 @@
+module ValidationTests
+
+import Sable.Collections
+import Sable.Math
+import Sable.Testing
+import Sable.Validation
+
+@test
+fn notEmptyRefusesWhatSaysNothing() {
+    for text in ["", " ", "\t\n", "\u{2003}"] {
+        assert(!passes(text) { $0.notEmpty() })
+        assert(passes(text) { $0.empty() })
+    }
+    assert(passes(" a ") { $0.notEmpty() })
+    assert(!passes(Substring("  ")) { $0.notEmpty() })
+    let nothing: Int[>..] = []
+    assert(!passes(nothing) { $0.notEmpty() })
+    assert(passes([0]) { $0.notEmpty() })
+    let map: [String: Int] = [:]
+    assert(!passes(map) { $0.notEmpty() })
+    assert(!passes(Set<Int>()) { $0.notEmpty() })
+    assert(!passes(0) { $0.notEmpty() })
+    assert(!passes(0 as I32) { $0.notEmpty() })
+    assert(!passes(0 as I64) { $0.notEmpty() })
+    assert(!passes(0 as U32) { $0.notEmpty() })
+    assert(!passes(0 as U64) { $0.notEmpty() })
+    assert(!passes(0.0) { $0.notEmpty() })
+    assert(passes(0.1) { $0.notEmpty() })
+    assert(!passes(Decimal.zero) { $0.notEmpty() })
+    assert(!passes(UUID.nil) { $0.notEmpty() })
+    assert(passes(UUID.max) { $0.notEmpty() })
+    assertEqual(message("x") { $0.empty() }, "'It' must be empty.")
+}
+
+@test
+fn nullIsTheFieldNotThere() {
+    var customer = ada()
+    customer.nick = "x"
+    assertEqual(found(customer) { $0.field(\.nick).null() }, ["nick Null"])
+    assertEqual(found(customer) { $0.field(\.nick).notNull() }, [])
+    assertEqual(verdictOf(ada()) { $0.field(\.nick).notNull() }.toString(), "'Nick' must be given.")
+}

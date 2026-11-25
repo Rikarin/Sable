@@ -1,0 +1,23 @@
+module Sable.Validation
+
+import Sable.Globalization
+
+/// What of the rules is run, and what the messages are written in.
+public struct ValidationOptions {
+    /// The rule sets to run. None named: the rules in no set. `default` is
+    /// those, `*` every rule; a name is as good in any case.
+    public var ruleSets: String[>..]
+    /// The paths to check, with what is under them; none named, all.
+    public var only: String[>..]
+    /// Where messages are looked up first.
+    public var messages: (any MessageCatalog)?
+    /// The locale they are looked up for; the invariant one if none.
+    public var locale: Locale?
+
+    public init(ruleSets: String[>..] = [], only: String[>..] = [], messages: (any MessageCatalog)? = none, locale: Locale? = none) {
+        self.ruleSets = ruleSets
+        self.only = only
+        self.messages = messages
+        self.locale = locale
+    }
+}

@@ -1027,6 +1027,10 @@ Sable.DependencyInjection
                     it is compiled); ServiceCollection (singleton, scoped,
                     transient; keyed, open generics; checked as it is built),
                     ServiceProvider, ServiceScope
+Sable.Validation    Validator and Rules over key paths, FieldRules' built-in
+                    and custom rules, rule sets, MessageCatalog,
+                    @derive(Validatable), ValidationResult, ProblemDetails
+                    (RFC 9457), validatedOptions
 Sable.Crypto        HashFunction and Digest: SHA-2, SHA-3, BLAKE2b, BLAKE3,
                     Insecure.Md5 and Sha1; SHAKE; Hmac, KMAC; Hkdf, Pbkdf2,
                     Scrypt, Argon2id; PasswordHash (PHC strings); AesGcm,
@@ -1581,6 +1585,40 @@ Over the fifty-service graph of `benchmarks/library/dependency-container`, the
 container takes 0.5 to 0.7 of .NET's time, and `dependency-injection`'s
 collection 2.3 times it: .NET compiles a graph's code as it runs.
 
+### Validation
+
+`Sable.Validation` is FluentValidation over key paths (SYNTAX.md §16), with
+DataAnnotations' attributes as `@derive(Validatable)` (§6.5), which makes the
+same rules.
+
+- **A validator says its rules**, `fn rules(_ r: inout Rules<T>)`, and
+  `Rules<T>` runs them. `validate` on a validator makes them anew; kept in a
+  `Rules` they are made once. A nested validator's are made as the first
+  value is checked by them, so a tree's may use itself.
+- **Optional fields.** `r.field(\.nick)` of a `String?` gives rules of a
+  `String`: where the field is none, only the rules that ask whether it is
+  (`notNull`, `null`, `notEmpty`, `empty`, `equal`, `notEqual`) are run.
+- **Waiting.** A rule, a condition or a group's condition may be an async
+  closure. `validate` waits; `check` does not, and throws `AsyncRuleError`
+  where a rule that applies would have to. Rules that cannot wait are run
+  without suspending either way.
+- **As FluentValidation has it**: `when` after several checks is of all of
+  them (`for: .LastOnly` of one); rule sets are run only where asked for, and
+  a nested validator is asked for the same ones; a warning is a failure
+  (`isValid`), and `hasErrors` says whether there is worse; placeholders have
+  its names. A string's length is its scalars, not UTF-16 units.
+- **The parsers are the library's**: `url` is `Url`, `uuid` `UUID`, `decimal`
+  and `precisionScale` `Decimal`, `matches` `Regex`, an address literal in an
+  email address `IpAddress` and its domain `Idna`. There is no mail module to
+  ask about email addresses (#227), so `EmailSyntax` has the HTML standard's
+  grammar (the default), RFC 5321's with RFC 6531, and FluentValidation's.
+- **Messages.** A `MessageCatalog` is asked first, by code and locale; the
+  English ones are last. No translations come with the library.
+- **What is not here**: binding to a web framework's requests (there is
+  none; `problemDetails()` is what one answers with) and registration in a
+  container (#81), which holds an `any Validator<T>` and asks
+  `Rules(erased:)`.
+
 ### Hosting
 
 `Sable.Hosting` is .NET's generic host over what the library has, with
@@ -1937,6 +1975,28 @@ once, which is what lets an untagged union try its cases. A format conforms
 to both and serves every type. In JSON a struct and a map are objects, bytes a
 base64 string, a `Duration` its whole nanoseconds and a `DateTime` an ISO 8601
 string in UTC.
+
+`Validatable` (Sable.Validation) is made from a struct's attributes: each
+attribute of a field that is none of the language's, nor a source
+generator's, nor the program's own, is a rule, a method of `FieldRules` by
+its name called with its arguments, in order, on the rules of that field.
+
+```sable
+@derive(Validatable)
+struct Signup {
+    @notEmpty @email
+    var email: String           // r.field(\.email).notEmpty().email()
+    @range(18...) @message("You must be an adult.")
+    var age: Int                // r.field(\.age).range(18...).message("…")
+    @equal(\.email)
+    var again: String
+}
+```
+
+The arguments are bound where they are written, so an error in one is
+reported there, and a program's own rule, an extension's method, is an
+attribute as the library's are. A name that is no rule of a field of that
+type is S3092.
 
 Conformances defined outside the standard library are written by source
 generators (docs/08). A package declares a `@generator("name")` function, and

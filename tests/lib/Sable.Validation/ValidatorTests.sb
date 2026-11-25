@@ -1,0 +1,127 @@
+module ValidationTests
+
+import Sable.Testing
+import Sable.Validation
+
+struct OrderValidator: Validator<TestOrder> {
+    fn rules(_ r: inout Rules<TestOrder>) {
+        r.field(\.total).greaterThan(0)
+        r.each(\.lines).notEmpty()
+    }
+}
+
+async fn isUnique(_ email: String) -> Bool {
+    await Task.yield()
+    return email != "taken@example.org"
+}
+
+/// The issue's own.
+struct CustomerValidator: Validator<TestCustomer> {
+    fn rules(_ r: inout Rules<TestCustomer>) {
+        r.field(\.email).notEmpty().email()
+        r.field(\.age).inRange(18...130).when { $0.country == "SK" }
+        r.each(\.orders).use(OrderValidator())
+        r.must { c in await isUnique(c.email) }.message("Email taken")
+    }
+}
+
+@test
+async fn aValueThatBreaksNoRuleIsValid() {
+    let result = await CustomerValidator().validate(ada())
+    assert(result.isValid)
+    assert(!result.hasErrors)
+    assertEqual(result.ruleSets, ["default"])
+}
+
+@test
+async fn failuresComeInTheOrderOfTheRulesWithPathsToWhatIsWrong() {
+    var customer = ada()
+    customer.email = "taken@example.org"
+    customer.age = 12
+    customer.country = "SK"
+    customer.orders = [TestOrder(total: 1, lines: []), TestOrder(total: 1, lines: []), TestOrder(total: 0, lines: ["a", " "])]
+    let result = await CustomerValidator().validate(customer)
+    assertEqual(result.failures.map(\.path), ["age", "orders[2].total", "orders[2].lines[1]", ""])
+    assertEqual(result.failures[3].message, "Email taken")
+    assertEqual(result.failures[1].message, "'Total' must be greater than 0.")
+}
+
+@test
+async fn rulesKeptValidateAgainAndAgain() {
+    let rules = Rules(CustomerValidator())
+    var customer = ada()
+    assert((await rules.validate(customer)).isValid)
+    customer.email = "ada"
+    assertEqual((await rules.validate(customer)).messages(at: "email"), ["'Email' is not a valid email address."])
+    assert((await rules.validate(ada())).isValid)
+}
+
+@test
+async fn validatedGivesTheValueOrThrowsEveryFailure() {
+    assertEqual((try! await CustomerValidator().validated(ada())).age, 36)
+    var customer = ada()
+    customer.email = ""
+    do {
+        _ = try await CustomerValidator().validated(customer)
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "Validation failed:\n -- email: 'Email' must not be empty.\n -- email: 'Email' is not a valid email address.")
+    }
+}
+
+@test
+fn anErrorOfTheValueItselfHasNoPathToSay() {
+    let failure = ValidationFailure(path: "", message: "no")
+    assertEqual(ValidationError(ValidationResult([failure])).description(), "Validation failed:\n -- no")
+}
+
+@test
+fn checkingWithoutWaitingRunsRulesThatDoNotWait() {
+    let order = OrderValidator()
+    assert((try! order.check(TestOrder(total: 1, lines: []))).isValid)
+    assert((try! order.check(TestOrder(total: 0, lines: []))).has(errorAt: "total"))
+}
+
+@test
+fn checkingWithoutWaitingRefusesRulesThatWait() {
+    do {
+        _ = try CustomerValidator().check(ada())
+        assert(false)
+    } catch {
+        assertEqual(error.path, "")
+        assert(error.description().contains("asynchronous"))
+        assert(error == AsyncRuleError(path: ""))
+        assert(error != AsyncRuleError(path: "x"))
+    }
+}
+
+@test
+fn aRuleThatWaitsBehindAConditionThatFailsIsNoReasonToRefuse() {
+    var rules = Rules<TestOrder>()
+    rules.field(\.total).must { (t: Int) in
+        await Task.yield()
+        return t > 0
+    }.when { (value) in false }
+    assert((try! rules.check(TestOrder(total: 0, lines: []))).isValid)
+}
+
+@test
+async fn anyValidatorOfATypeGivesItsRules() {
+    let all: (any Validator<TestOrder>)[>..] = [OrderValidator(), Of<TestOrder>({ $0.field(\.lines).notEmpty() })]
+    var paths: String[>..] = []
+    for validator in all {
+        for failure in (await Rules<TestOrder>(erased: validator).validate(TestOrder(total: 0, lines: []))).failures {
+            paths.append(failure.path)
+        }
+    }
+    assertEqual(paths, ["total", "lines"])
+}
+
+@test
+async fn anotherValidatorsRulesAreIncluded() {
+    var rules = Rules<TestOrder>()
+    rules.field(\.lines).notEmpty()
+    rules.include(OrderValidator())
+    let result = await rules.validate(TestOrder(total: 0, lines: []))
+    assertEqual(result.failures.map(\.path), ["lines", "total"])
+}

@@ -1,0 +1,53 @@
+module Corpus.KeyPaths
+
+// Key paths: how to get from a value to a part of it, as a value.
+
+public struct Address {
+    public var city: String
+    public var postalCode: String?
+}
+
+public struct Person {
+    public var name: String
+    public var home: Address
+    public var work: Address?
+    public var size: (F64, F64)
+}
+
+/// What a table shows of each row.
+public struct Column<Row> {
+    let title: String
+    let text: (Row) -> String
+
+    public init(_ path: KeyPath<Row, String>) {
+        title = path.path
+        text = (row: Row) => path.value(of: row)
+    }
+
+    public init(_ path: KeyPath<Row, String?>, orElse missing: String) {
+        title = path.path
+        text = (row: Row) => path.value(of: row) ?? missing
+    }
+}
+
+public fn columns() -> Column<Person>[] {
+    return [Column<Person>(\.name), Column<Person>(\.home.city), Column<Person>(\.work?.city, orElse: "-")]
+}
+
+/// The people, by what a path leads to.
+public fn sorted<Key: Comparable>(_ people: Person[], by path: KeyPath<Person, Key>) -> Person[>..] {
+    return people.sorted { path.value(of: $0) < path.value(of: $1) }
+}
+
+public fn report(_ people: Person[]) -> String[>..] {
+    let height = \Person.size.1
+    let longest = \Person.name.count
+    var lines: String[>..] = []
+    for person in sorted(people, by: \.home.city) {
+        lines.append("\(person.name) \(height.value(of: person)) \(longest.path)")
+    }
+    for name in people.map(\.name) {
+        lines.append(name)
+    }
+    return lines
+}

@@ -484,6 +484,7 @@ PrimaryExpr       = Literal
                   | Identifier [ GenericArgs ]
                   | "self" | "super" | "Self"
                   | "." Identifier [ "(" [ ArgumentList ] ")" ]   (* inferred member *)
+                  | KeyPathExpr
                   | "(" Expression ")"
                   | TupleExpr
                   | ArrayLiteral
@@ -497,6 +498,9 @@ PrimaryExpr       = Literal
                   | Type "." "self"
                   | CalledType "(" [ ArgumentList ] ")"   (* its initialiser *)
                   | "#" Identifier ;                (* compiler builtins: #file, #line *)
+
+KeyPathExpr       = "\" [ Identifier [ GenericArgs ] ] "." MemberName { ( "." | "?." ) MemberName } ;   (* \.address.city *)
+MemberName        = Identifier | IntegerLiteral ;
 
 CalledType        = "[" Type ":" Type "]"                   (* [String: Int]()   *)
                   | PostfixType "[" ">" ".." [ "<" ] "]" ;  (* Int[>..]()        *)

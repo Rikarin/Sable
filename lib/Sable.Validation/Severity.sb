@@ -1,0 +1,10 @@
+module Sable.Validation
+
+/// How bad a failure is. Whatever it is, the value is not valid; what asks
+/// may let a warning by (`ValidationResult.hasErrors`).
+@derive(Equatable, Hashable, Comparable, Debug)
+public enum Severity {
+    Info
+    Warning
+    Error
+}

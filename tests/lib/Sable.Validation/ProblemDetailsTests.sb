@@ -1,0 +1,39 @@
+module ValidationTests
+
+import Sable.Serialize
+import Sable.Testing
+import Sable.Validation
+
+@test
+fn aProblemWritesWhatItSays() {
+    assertEqual(try! Json.encode(ProblemDetails()), "{}")
+    assertEqual(try! Json.encode(ProblemDetails(status: 404, detail: "gone")), "{\"status\":404,\"detail\":\"gone\"}")
+    assertEqual(ProblemDetails.mediaType, "application/problem+json")
+}
+
+@test
+fn aProblemIsReadAsTheRfcAsks() {
+    // RFC 9457's own example, with an extension it has and a type that is wrong left out.
+    let text = "{\"type\":\"https://example.com/probs/out-of-credit\",\"title\":\"You do not have enough credit.\",\"detail\":\"Your current balance is 30, but that costs 50.\",\"instance\":\"/account/12345/msgs/abc\",\"balance\":30,\"accounts\":[\"/account/12345\",\"/account/67890\"]}"
+    let problem = try! Json.decode(ProblemDetails.self, from: text)
+    assertEqual(problem.type, "https://example.com/probs/out-of-credit")
+    assertEqual(problem.title ?? "", "You do not have enough credit.")
+    assertEqual(problem.detail ?? "", "Your current balance is 30, but that costs 50.")
+    assertEqual(problem.instance ?? "", "/account/12345/msgs/abc")
+    assert(problem.status == none)
+    assertEqual(try! Json.decode(ProblemDetails.self, from: "{}").type, "about:blank")
+}
+
+@test
+fn aResultIsAProblemOfItsFailures() {
+    let result = ValidationResult([
+        ValidationFailure(path: "orders[2].total", message: "a"), ValidationFailure(path: "email", message: "b"), ValidationFailure(path: "orders[2].total", message: "c"),
+    ])
+    let problem = result.problemDetails(instance: "/x")
+    let text = try! Json.encode(problem)
+    assertEqual(text, "{\"type\":\"https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1\",\"title\":\"One or more validation errors occurred.\",\"status\":400,\"instance\":\"/x\",\"errors\":{\"orders[2].total\":[\"a\",\"c\"],\"email\":[\"b\"]}}")
+    let read = try! Json.decode(ProblemDetails.self, from: text)
+    assertEqual(read.errors["orders[2].total"]!, ["a", "c"])
+    assertEqual(read.status ?? 0, 400)
+    assertEqual(result.problemDetails(status: 422).type, "about:blank")
+}

@@ -1,0 +1,42 @@
+module Sable.Validation
+
+extension FieldRules {
+    /// The value passes the test: FluentValidation's `Must`.
+    @discardable
+    public fn must(_ test: @escaping (V) -> Bool) -> FieldRules<T, V> {
+        return check("Must", test)
+    }
+
+    /// The value passes the test, which waits: FluentValidation's `MustAsync`.
+    ///
+    /// ```sable
+    /// var rules = Rules<String>()
+    /// rules.model().must { (name: String) in
+    ///     await Task.yield()
+    ///     return name != "admin"
+    /// }.message("'{PropertyValue}' is taken.")
+    /// assert((await rules.validate("admin")).failures[0].message == "'admin' is taken.")
+    /// ```
+    @discardable
+    public fn must(_ test: @escaping async (V) -> Bool) -> FieldRules<T, V> {
+        return add(Check<T, V>("Must", takesNone: false, .TestWaiting({ (whole: T, value: V?) in await test(value!) }), none))
+    }
+
+    /// The value, beside the one it is of, passes the test.
+    @discardable
+    public fn mustWith(_ test: @escaping (T, V) -> Bool) -> FieldRules<T, V> {
+        return add(Check<T, V>("Must", takesNone: false, .Test((whole: T, value: V?) => test(whole, value!)), none))
+    }
+
+    /// The closure says what is wrong with the value, if anything is.
+    @discardable
+    public fn custom(_ report: @escaping (V, RuleContext) -> ()) -> FieldRules<T, V> {
+        return add(Check<T, V>("Custom", takesNone: false, .Report((whole: T, value: V?, context: RuleContext) => report(value!, context)), none))
+    }
+
+    /// The closure, which waits, says what is wrong with the value, if anything is.
+    @discardable
+    public fn custom(_ report: @escaping async (V, RuleContext) -> ()) -> FieldRules<T, V> {
+        return add(Check<T, V>("Custom", takesNone: false, .ReportWaiting({ (whole: T, value: V?, context: RuleContext) in await report(value!, context) }), none))
+    }
+}

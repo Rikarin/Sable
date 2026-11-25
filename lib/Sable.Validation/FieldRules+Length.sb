@@ -1,0 +1,60 @@
+module Sable.Validation
+
+// A string's length is its characters, Unicode scalars, not the UTF-16
+// units .NET counts; a collection's, its elements.
+
+extension FieldRules where V: Collection {
+    /// As long as the range says: `length(2...50)`.
+    @discardable
+    public fn length(_ range: ClosedRange<Int>) -> FieldRules<T, V> {
+        return check("Length", (value: V) => range.contains(value.count), lengths(range.lowerBound, range.upperBound))
+    }
+
+    /// Exactly that long.
+    @discardable
+    public fn length(_ exactly: Int) -> FieldRules<T, V> {
+        return check("ExactLength", (value: V) => value.count == exactly, lengths(exactly, exactly))
+    }
+
+    /// At least that long.
+    @discardable
+    public fn minLength(_ least: Int) -> FieldRules<T, V> {
+        return check("MinimumLength", (value: V) => value.count >= least, lengths(least, none))
+    }
+
+    /// At most that long.
+    @discardable
+    public fn maxLength(_ most: Int) -> FieldRules<T, V> {
+        return check("MaximumLength", (value: V) => value.count <= most, lengths(none, most))
+    }
+
+    fn lengths(_ least: Int?, _ most: Int?) -> (T, V?) -> [String: String] {
+        return (whole: T, value: V?) => {
+            var values = ["TotalLength": "\(value!.count)"]
+            if let least = least {
+                values["MinLength"] = "\(least)"
+            }
+            if let most = most {
+                values["MaxLength"] = "\(most)"
+            }
+            return values
+        }
+    }
+}
+
+extension FieldRules where V: Collection, V.Element: Hashable {
+    /// No element is there twice.
+    @discardable
+    public fn unique() -> FieldRules<T, V> {
+        return check("Unique", (value: V) => {
+            var seen: [V.Element: Bool] = [:]
+            for element in value {
+                if seen[element] != none {
+                    return false
+                }
+                seen[element] = true
+            }
+            return true
+        })
+    }
+}

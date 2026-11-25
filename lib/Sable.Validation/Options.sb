@@ -1,0 +1,41 @@
+module Sable.Validation
+
+/// A program's options, held to rules as it starts: the options, if they
+/// are valid, and otherwise an error whose failures' paths begin with the
+/// name, so a person sees which of several is wrong. .NET's
+/// `ValidateOnStart`, as a function.
+///
+/// ```sable
+/// struct ServerOptions { var port: Int }
+/// struct ServerOptionsValidator: Validator<ServerOptions> {
+///     fn rules(_ r: inout Rules<ServerOptions>) { r.field(\.port).inRange(1...65535) }
+/// }
+///
+/// do {
+///     _ = try await validatedOptions(ServerOptions(port: 0), named: "server", by: ServerOptionsValidator())
+/// } catch {
+///     assert(error.result.failures[0].path == "server.port")
+/// }
+/// ```
+public async fn validatedOptions<T, V: Validator<T>>(_ options: T, named name: String = "", by validator: V) throws(ValidationError) -> T {
+    return try await checkedOptions(options, name, Rules<T>(validator))
+}
+
+/// Options of a type that knows its own rules, held to them.
+public async fn validatedOptions<T: Validatable>(_ options: T, named name: String = "") throws(ValidationError) -> T {
+    return try await checkedOptions(options, name, T.validationRules())
+}
+
+async fn checkedOptions<T>(_ options: T, _ name: String, _ rules: Rules<T>) throws(ValidationError) -> T {
+    let result = await rules.validate(options)
+    if result.isValid {
+        return options
+    }
+    var failures: ValidationFailure[>..] = []
+    for failure in result.failures {
+        var moved = failure
+        moved.path = ValidationRun.join(name, failure.path)
+        failures.append(moved)
+    }
+    throw ValidationError(ValidationResult(failures, ruleSets: result.ruleSets))
+}

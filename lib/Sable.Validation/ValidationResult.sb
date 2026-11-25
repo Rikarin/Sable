@@ -1,0 +1,89 @@
+module Sable.Validation
+
+/// What validating a value found: every failure, in the order of the rules.
+///
+/// ```sable
+/// let result = ValidationResult([
+///     ValidationFailure(path: "email", message: "'Email' must not be empty."),
+///     ValidationFailure(path: "email", message: "'Email' is not a valid email address."),
+///     ValidationFailure(path: "age", message: "Young.", severity: .Warning),
+/// ])
+/// assert(!result.isValid)
+/// assert(result.byPath["email"]!.count == 2)
+/// assert(result.failures(at: "age")[0].severity == .Warning)
+/// assert("\(result)" == "'Email' must not be empty.\n'Email' is not a valid email address.\nYoung.")
+/// ```
+public struct ValidationResult: Sendable, Formattable {
+    public private(set) var failures: ValidationFailure[>..]
+    /// The rule sets that were run.
+    public let ruleSets: String[>..]
+
+    public init(_ failures: ValidationFailure[>..] = [], ruleSets: String[>..] = []) {
+        self.failures = failures
+        self.ruleSets = ruleSets
+    }
+
+    /// Whether there are no failures, of any severity.
+    public var isValid: Bool => failures.isEmpty
+
+    /// Whether there are failures worse than a warning.
+    public var hasErrors: Bool => failures.contains { $0.severity == .Error }
+
+    /// Whether the field at that path broke a rule.
+    public fn has(errorAt path: String) -> Bool {
+        return failures.contains { $0.path == path }
+    }
+
+    /// The failures of the field at that path.
+    public fn failures(at path: String) -> ValidationFailure[>..] {
+        var found: ValidationFailure[>..] = []
+        for failure in failures {
+            if failure.path == path {
+                found.append(failure)
+            }
+        }
+        return found
+    }
+
+    /// The messages of the field at that path.
+    public fn messages(at path: String) -> String[>..] {
+        var found: String[>..] = []
+        for failure in failures {
+            if failure.path == path {
+                found.append(failure.message)
+            }
+        }
+        return found
+    }
+
+    /// Each path with a failure, in the order they were found, with its messages.
+    public var byPath: [String: String[>..]] {
+        get {
+            var all: [String: String[>..]] = [:]
+            for failure in failures {
+                all[failure.path, default: []].append(failure.message)
+            }
+            return all
+        }
+    }
+
+    /// What else was found, added.
+    public mutating fn append(_ other: ValidationResult) {
+        for failure in other.failures {
+            failures.append(failure)
+        }
+    }
+
+    /// Every message, a line each.
+    public fn toString(separator: String = "\n") -> String {
+        var text = ""
+        for (i, failure) in failures.enumerated() {
+            text = i == 0 ? failure.message : "\(text)\(separator)\(failure.message)"
+        }
+        return text
+    }
+
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(toString())
+    }
+}

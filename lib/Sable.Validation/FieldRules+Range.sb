@@ -1,0 +1,65 @@
+module Sable.Validation
+
+extension FieldRules where V: Comparable {
+    /// Within the range, ends and all: `inRange(18...130)`.
+    @discardable
+    public fn inRange(_ range: ClosedRange<V>) -> FieldRules<T, V> {
+        return between("Between", range.lowerBound, range.upperBound, (value: V) => range.contains(value))
+    }
+
+    /// Within the range, but for its end: `inRange(0..<24)`.
+    @discardable
+    public fn inRange(_ range: Range<V>) -> FieldRules<T, V> {
+        return between("Within", range.lowerBound, range.upperBound, (value: V) => range.contains(value))
+    }
+
+    /// The range's start, or greater: `inRange(18...)`.
+    @discardable
+    public fn inRange(_ range: PartialRangeFrom<V>) -> FieldRules<T, V> {
+        return greaterThanOrEqual(range.lowerBound)
+    }
+
+    /// The range's end, or less: `inRange(...100)`.
+    @discardable
+    public fn inRange(_ range: PartialRangeThrough<V>) -> FieldRules<T, V> {
+        return lessThanOrEqual(range.upperBound)
+    }
+
+    /// Less than the range's end: `inRange(..<100)`.
+    @discardable
+    public fn inRange(_ range: PartialRangeUpTo<V>) -> FieldRules<T, V> {
+        return lessThan(range.upperBound)
+    }
+
+    /// Between the two, and neither of them.
+    @discardable
+    public fn exclusiveBetween(_ from: V, _ to: V) -> FieldRules<T, V> {
+        return between("ExclusiveBetween", from, to, (value: V) => from < value && value < to)
+    }
+
+    // 'inRange' as an attribute, '@range(18...)'.
+
+    /// Within the range: `inRange`, as the attribute `@range(1...9)` names it.
+    @discardable
+    public fn range(_ range: ClosedRange<V>) -> FieldRules<T, V> => inRange(range)
+
+    /// Within the range, but for its end.
+    @discardable
+    public fn range(_ range: Range<V>) -> FieldRules<T, V> => inRange(range)
+
+    /// The range's start, or greater.
+    @discardable
+    public fn range(_ range: PartialRangeFrom<V>) -> FieldRules<T, V> => inRange(range)
+
+    /// The range's end, or less.
+    @discardable
+    public fn range(_ range: PartialRangeThrough<V>) -> FieldRules<T, V> => inRange(range)
+
+    /// Less than the range's end.
+    @discardable
+    public fn range(_ range: PartialRangeUpTo<V>) -> FieldRules<T, V> => inRange(range)
+
+    fn between(_ rule: String, _ from: V, _ to: V, _ test: @escaping (V) -> Bool) -> FieldRules<T, V> {
+        return check(rule, test, (whole: T, value: V?) => ["From": "\(from)", "To": "\(to)"])
+    }
+}

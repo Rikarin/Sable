@@ -1,0 +1,36 @@
+module Sable.Validation
+
+/// One rule a value broke, and where.
+public struct ValidationFailure: Equatable, Sendable, Debug {
+    /// Where the value that broke it is, from the one validated:
+    /// `orders[2].total`. Empty for the value validated itself.
+    public var path: String
+    /// What is wrong, for a person to read.
+    public var message: String
+    /// Which rule it is, for a program to: `NotEmpty`, or what `code` said.
+    public var code: String
+    public var severity: Severity
+    /// What the value was, as text; none for none.
+    public var attemptedValue: String?
+    /// What the message's placeholders stand for, by name.
+    public var placeholders: [String: String]
+
+    /// A failure, as a custom rule reports one.
+    public init(path: String, message: String, code: String = "Custom", severity: Severity = Severity.Error, attemptedValue: String? = none, placeholders: [String: String] = [:]) {
+        self.path = path
+        self.message = message
+        self.code = code
+        self.severity = severity
+        self.attemptedValue = attemptedValue
+        self.placeholders = placeholders
+    }
+
+    public fn debugDescription() -> String {
+        return "ValidationFailure(\(path): \(message) [\(code)])"
+    }
+
+    /// The same failure: all of it but what the message was filled with.
+    public operator == (lhs: ValidationFailure, rhs: ValidationFailure) -> Bool {
+        return lhs.path == rhs.path && lhs.message == rhs.message && lhs.code == rhs.code && lhs.severity == rhs.severity && lhs.attemptedValue == rhs.attemptedValue
+    }
+}

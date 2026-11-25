@@ -1,0 +1,44 @@
+module Sable.Validation
+
+import Sable.Globalization
+
+/// Where a program's own messages are, in the languages it speaks: what
+/// validation asks before its own English.
+///
+/// A template is looked up by a failure's code — a rule's own, or what
+/// `code` gave it — then by the rule's. A message a rule was given with
+/// `message` is not looked up.
+///
+/// ```sable
+/// struct Slovak: MessageCatalog {
+///     fn template(for code: String, in locale: Locale) -> String? {
+///         return locale.language == "sk" && code == "NotEmpty" ? "Pole {PropertyName} nesmie byť prázdne." : none
+///     }
+///     fn name(of path: String, in locale: Locale) -> String? {
+///         return path == "email" ? "E-mail" : none
+///     }
+/// }
+///
+/// struct EmailValidator: Validator<Account> {
+///     fn rules(_ r: inout Rules<Account>) { r.field(\.email).notEmpty() }
+/// }
+/// struct Account { var email: String }
+///
+/// let options = ValidationOptions(messages: Slovak(), locale: Locale.of("sk-SK")!)
+/// let result = await EmailValidator().validate(Account(email: ""), options)
+/// assert(result.failures[0].message == "Pole E-mail nesmie byť prázdne.")
+/// ```
+public protocol MessageCatalog {
+    /// The message of failures of that code, with placeholders, if it has one.
+    fn template(for code: String, in locale: Locale) -> String?
+
+    /// What the field at that path, in the type its rule is of, is called;
+    /// none, unless the catalogue says.
+    fn name(of path: String, in locale: Locale) -> String?
+}
+
+extension MessageCatalog {
+    public fn name(of path: String, in locale: Locale) -> String? {
+        return none
+    }
+}

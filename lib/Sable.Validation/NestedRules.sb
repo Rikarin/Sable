@@ -1,0 +1,23 @@
+module Sable.Validation
+
+/// A nested validator's rules, made as the first value is checked by them:
+/// a tree's validator's are its own.
+final class NestedRules<V> {
+    let make: () -> Rules<V>
+    var made: Rules<V>? = none
+
+    init(_ make: @escaping () -> Rules<V>) {
+        self.make = make
+    }
+
+    var rules: Rules<V> {
+        get {
+            if let rules = made {
+                return rules
+            }
+            let rules = make()
+            made = rules
+            return rules
+        }
+    }
+}

@@ -1,0 +1,11 @@
+module Sable.Validation
+
+/// Whether what comes after a failure is still checked: FluentValidation's
+/// `CascadeMode`.
+@derive(Equatable, Debug)
+public enum CascadeMode {
+    /// It is: every failure is found.
+    Continue
+    /// It is not: the first failure is the only one.
+    Stop
+}

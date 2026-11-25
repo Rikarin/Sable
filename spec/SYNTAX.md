@@ -1228,6 +1228,31 @@ Any keyword may be used as a member name after `.`, because the name is
 resolved against the receiver's members rather than against the grammar:
 `super.init()`, `Type.self`, `File.open(p)`, `x.default`.
 
+### Key paths
+
+`\.address.city` is how to get from a value to a part of it, as a value: a
+`KeyPath<Customer, String>` (Sable.Core) where that is wanted. What it starts
+from is the context's to say, or written before the first dot,
+`\Customer.address.city`; what it leads to is the last member's type. A
+member is a stored or computed property or a tuple's element, and `?.`
+reaches through an optional as it does anywhere, so that the path leads to
+an optional.
+
+```sable
+let city: KeyPath<Customer, String> = \.address.city
+let billing = \Customer.billing?.city        // KeyPath<Customer, String?>
+city.value(of: customer)                     // customer.address.city
+city.path                                    // "address.city"
+names(of: people.map(\.name))                // where a function is wanted, it is one
+```
+
+A key path is read only. As an argument it waits for its parameter, as a
+closure does, and settles type parameters: `fn field<V>(_ path: KeyPath<T,
+V>)` is called `field(\.email)`. Of two overloads that differ in whether what
+it leads to is optional, `KeyPath<T, V>` and `KeyPath<T, V?>`, it is passed to
+the one it fits. There are no key paths through subscripts, nor to the value
+itself.
+
 ### Metatypes
 
 `T.self` is the type `T` as a value. Any type may be written this way, not
@@ -2059,7 +2084,8 @@ initialisers would be, and are constants — literals, cases, and arrays and
 tuples of them (S3511). One may be written on any declaration, and more than
 once; on a `@reflectable` type, `attributes(of:)` gives the values of those
 of one type in the order written. A name that is neither in this table nor
-such a struct, or `@derive`, `@indirect`, `@allow` and `@warn`, is S3092; one
+such a struct, or `@derive`, `@indirect`, `@allow` and `@warn`, nor, on a
+field of a struct that derives `Validatable`, a rule (docs/06 §6.5), is S3092; one
 of the table's written where it does not apply is S3093, with arguments it
 does not take S3094, and twice on one declaration S3513 (`@derive`,
 `@allow`, `@warn` and the program's own may be repeated). A public union

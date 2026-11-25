@@ -1,0 +1,88 @@
+module ValidationTests
+
+import Sable.Testing
+import Sable.Validation
+
+@test
+fn comparisonsHoldAtTheirBounds() {
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.greaterThan(5) }
+    }, [false, false, true])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.greaterThanOrEqual(5) }
+    }, [false, true, true])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.lessThan(5) }
+    }, [true, false, false])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.lessThanOrEqual(5) }
+    }, [true, true, false])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.equal(5) }
+    }, [false, true, false])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.notEqual(5) }
+    }, [true, false, true])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.inRange(5...6) }
+    }, [false, true, true])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.inRange(4..<6) }
+    }, [true, true, false])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.inRange(5...) }
+    }, [false, true, true])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.inRange(...5) }
+    }, [true, true, false])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.inRange(..<5) }
+    }, [true, false, false])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.exclusiveBetween(4, 6) }
+    }, [false, true, false])
+    assertEqual([4, 5, 6].map { n in
+        passes(n) { $0.range(5...6).range(4..<6).range(4...).range(...6).range(..<7) }
+    }, [false, true, false])
+    assert(passes("b") { $0.greaterThan("a") })
+    assert(!passes(1.5) { $0.inRange(0.0...1.0) })
+}
+
+@test
+fn comparisonsSayWhatWithWhat() {
+    assertEqual(message(1) { $0.greaterThan(5) }, "'It' must be greater than 5.")
+    assertEqual(message(1) { $0.greaterThanOrEqual(5) }, "'It' must be greater than or equal to 5.")
+    assertEqual(message(9) { $0.lessThan(5) }, "'It' must be less than 5.")
+    assertEqual(message(9) { $0.lessThanOrEqual(5) }, "'It' must be less than or equal to 5.")
+    assertEqual(message(9) { $0.equal(5) }, "'It' must be equal to 5.")
+    assertEqual(message(5) { $0.notEqual(5) }, "'It' must not be equal to 5.")
+    assertEqual(message(9) { $0.inRange(1...5) }, "'It' must be between 1 and 5. You entered 9.")
+    assertEqual(message(9) { $0.inRange(1..<5) }, "'It' must be at least 1 and less than 5. You entered 9.")
+    assertEqual(message(5) { $0.exclusiveBetween(1, 5) }, "'It' must be between 1 and 5 (exclusive). You entered 5.")
+    assertEqual(message("z") { $0.oneOf(["a", "b"]) }, "'It' must be one of a, b. You entered z.")
+    assertEqual(message("a") { $0.noneOf(["a", "b"]) }, "'It' must not be one of a, b.")
+    assert(passes("a") { $0.oneOf(["a", "b"]) })
+    assert(passes("c") { $0.noneOf(["a", "b"]) })
+}
+
+struct Span {
+    var from: Int
+    var to: Int
+    var most: Int?
+    var again: Int?
+}
+
+@test
+fn aFieldIsComparedWithAnother() {
+    fn run(_ span: Span) -> String[>..] {
+        return found(span) {
+            $0.field(\.to).greaterThan(\.from).greaterThanOrEqual(\.from).lessThan(\.most).lessThanOrEqual(\.most).notEqual(\.from).equal(\.again)
+        }
+    }
+    assertEqual(run(Span(from: 1, to: 2, most: none, again: 2)), [])
+    assertEqual(run(Span(from: 1, to: 2, most: 2, again: none)), ["to LessThan", "to Equal"])
+    assertEqual(run(Span(from: 3, to: 3, most: 2, again: 3)), ["to GreaterThan", "to LessThan", "to LessThanOrEqual", "to NotEqual"])
+    assertEqual(run(Span(from: 4, to: 3, most: 9, again: 3)), ["to GreaterThan", "to GreaterThanOrEqual"])
+    assertEqual(found(Span(from: 1, to: 1, most: none, again: none)) { $0.field(\.most).equal(\.again) }, [])
+    assertEqual(found(Span(from: 1, to: 1, most: none, again: none)) { $0.field(\.most).notEqual(\.again) }, ["most NotEqual"])
+}

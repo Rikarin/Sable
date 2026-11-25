@@ -1,0 +1,56 @@
+module Sable.Validation
+
+/// The rules a value is held to, written once and run as often as wanted:
+/// FluentValidation's `AbstractValidator<T>`. Conforming is saying them, in
+/// `rules`; `validate` runs them.
+///
+/// ```sable
+/// struct Customer { var email: String, var age: Int, var country: String }
+///
+/// struct CustomerValidator: Validator<Customer> {
+///     fn rules(_ r: inout Rules<Customer>) {
+///         r.field(\.email).notEmpty().email()
+///         r.field(\.age).inRange(18...130).when { $0.country == "SK" }
+///     }
+/// }
+///
+/// let result = await CustomerValidator().validate(Customer(email: "", age: 12, country: "SK"))
+/// assert(result.failures.map(\.path) == ["email", "email", "age"])
+/// assert(result.failures[0].message == "'Email' must not be empty.")
+/// ```
+///
+/// `validate` makes the rules anew each time. What validates many values
+/// keeps them, `let rules = Rules(CustomerValidator())`, and asks those.
+///
+/// A container that registers validators by the type they are of holds an
+/// `any Validator<Customer>`, whose rules are `Rules(erased: validator)`.
+public protocol Validator<T> {
+    /// Adds the validator's rules.
+    fn rules(_ r: inout Rules<T>)
+}
+
+extension Validator {
+    /// What the rules say of the value.
+    public async fn validate(_ value: T, _ options: ValidationOptions = ValidationOptions()) -> ValidationResult {
+        return await Rules<T>(self).validate(value, options)
+    }
+
+    /// What the rules say of the value, with nothing waited for: an error
+    /// where a rule that applies waits.
+    ///
+    /// ```sable
+    /// struct PortValidator: Validator<Int> {
+    ///     fn rules(_ r: inout Rules<Int>) { r.model().inRange(1...65535) }
+    /// }
+    /// assert(try! PortValidator().check(80).isValid)
+    /// assert(!(try! PortValidator().check(0)).isValid)
+    /// ```
+    public fn check(_ value: T, _ options: ValidationOptions = ValidationOptions()) throws(AsyncRuleError) -> ValidationResult {
+        return try Rules<T>(self).check(value, options)
+    }
+
+    /// The value, if it is valid.
+    public async fn validated(_ value: T, _ options: ValidationOptions = ValidationOptions()) throws(ValidationError) -> T {
+        return try await Rules<T>(self).validated(value, options)
+    }
+}

@@ -1,0 +1,42 @@
+module ValidateBench
+
+import Sable.Validation
+
+// Validators: 200,000 values held to a dozen rules, one in ten of them
+// breaking two.
+
+@derive(Validatable)
+struct Customer {
+    @notEmpty
+    @length(2...50)
+    var name: String
+    @notEmpty
+    @email(.Simple)
+    var email: String
+    @range(18...130)
+    var age: Int
+    @matches("^[A-Z]{2}[0-9]{4}$")
+    var code: String
+    @notNull
+    @maxLength(20)
+    var city: String?
+}
+
+@main
+fn main() {
+    let rules = Customer.validationRules()
+    var failures = 0
+    var text = 0
+    for i in 0..<200000 {
+        let bad = i % 10 == 0
+        let customer = Customer(
+            name: "Ada Lovelace", email: bad ? "ada.example.org" : "ada@example.org", age: bad ? i % 18 : 18 + i % 100,
+            code: "GB1815", city: "London")
+        let result = try! rules.check(customer)
+        for failure in result.failures {
+            failures += 1
+            text += failure.path.count
+        }
+    }
+    print("\(failures) \(text)")
+}

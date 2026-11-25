@@ -987,6 +987,7 @@ Sable.Time         Instant, Duration, Clock, Calendar
 Sable.Process      spawn, environment, signals
 Sable.Hosting      host, lifetime, services, cron jobs
 Sable.DependencyInjection  services, scopes, open generics
+Sable.Validation   validators, rules, @derive(Validatable)
 Sable.Diagnostics  Logger, tracing, metrics
 Sable.Testing      the test harness `sable test` drives
 ```

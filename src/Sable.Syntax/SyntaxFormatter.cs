@@ -989,7 +989,7 @@ public static class SyntaxFormatter {
                     or SyntaxKind.InterpolationEndToken => true,
 
                 SyntaxKind.DotToken or SyntaxKind.QuestionDotToken => true,
-                SyntaxKind.AtToken or SyntaxKind.HashToken or SyntaxKind.DollarToken => true,
+                SyntaxKind.AtToken or SyntaxKind.HashToken or SyntaxKind.DollarToken or SyntaxKind.BackslashToken => true,
 
                 SyntaxKind.OpenParenToken => parentKind is not SyntaxKind.ConditionalExpression,
                 SyntaxKind.OpenBracketToken => true,

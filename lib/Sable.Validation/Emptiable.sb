@@ -1,0 +1,63 @@
+module Sable.Validation
+
+import Sable.Collections
+import Sable.Math
+
+/// A type with values that say nothing, which `notEmpty` refuses: a string
+/// of nothing but spaces, a collection of no elements, a number that is
+/// zero, the nil UUID.
+public protocol Emptiable {
+    var isEmptyValue: Bool { get }
+}
+
+extension String: Emptiable {
+    public var isEmptyValue: Bool => self.allSatisfy { $0.isWhitespace }
+}
+
+extension Substring: Emptiable {
+    public var isEmptyValue: Bool => self.allSatisfy { $0.isWhitespace }
+}
+
+extension<Element> Element[:]: Emptiable {
+    public var isEmptyValue: Bool => self.isEmpty
+}
+
+extension Dictionary: Emptiable {
+    public var isEmptyValue: Bool => self.count == 0
+}
+
+extension Set: Emptiable {
+    public var isEmptyValue: Bool => self.count == 0
+}
+
+extension Int: Emptiable {
+    public var isEmptyValue: Bool => self == 0
+}
+
+extension I32: Emptiable {
+    public var isEmptyValue: Bool => self == 0
+}
+
+extension I64: Emptiable {
+    public var isEmptyValue: Bool => self == 0
+}
+
+extension U32: Emptiable {
+    public var isEmptyValue: Bool => self == 0
+}
+
+extension U64: Emptiable {
+    public var isEmptyValue: Bool => self == 0
+}
+
+extension F64: Emptiable {
+    public var isEmptyValue: Bool => self == 0.0
+}
+
+extension Decimal: Emptiable {
+    public var isEmptyValue: Bool => self.isZero
+}
+
+extension UUID: Emptiable {
+    public var isEmptyValue: Bool => self == UUID.nil
+}

@@ -1,0 +1,75 @@
+module ValidationTests
+
+import Sable.Validation
+
+// What the tests validate, and how they ask.
+
+struct TestAddress {
+    var street: String
+    var postalCode: String?
+}
+
+struct TestOrder {
+    var total: Int
+    var lines: String[>..]
+}
+
+struct TestCustomer {
+    var email: String
+    var nick: String?
+    var age: Int
+    var limit: Int?
+    var country: String
+    var address: TestAddress
+    var billing: TestAddress?
+    var orders: TestOrder[>..]
+}
+
+fn ada() -> TestCustomer {
+    return TestCustomer(
+        email: "ada@example.org", nick: none, age: 36, limit: none, country: "GB",
+        address: TestAddress(street: "St James's Square", postalCode: "SW1Y"), billing: none,
+        orders: [TestOrder(total: 3, lines: ["a"])])
+}
+
+/// A validator of rules a test writes.
+struct Of<T>: Validator<T> {
+    let add: (inout Rules<T>) -> ()
+
+    init(_ add: @escaping (inout Rules<T>) -> ()) {
+        self.add = add
+    }
+
+    fn rules(_ r: inout Rules<T>) {
+        add(&r)
+    }
+}
+
+fn orderRules(_ add: @escaping (inout Rules<TestOrder>) -> ()) -> Of<TestOrder> {
+    return Of<TestOrder>(add)
+}
+
+/// What one field's rules make of a value.
+fn verdict<V>(_ value: V, _ add: (FieldRules<V, V>) -> ()) -> ValidationResult {
+    var rules = Rules<V>()
+    add(rules.model().named("It"))
+    return try! rules.check(value)
+}
+
+fn passes<V>(_ value: V, _ add: (FieldRules<V, V>) -> ()) -> Bool {
+    return verdict(value, add).isValid
+}
+
+fn message<V>(_ value: V, _ add: (FieldRules<V, V>) -> ()) -> String {
+    return verdict(value, add).toString()
+}
+
+fn found<T>(_ value: T, _ options: ValidationOptions = ValidationOptions(), _ add: (inout Rules<T>) -> ()) -> String[>..] {
+    var rules = Rules<T>()
+    add(&rules)
+    var all: String[>..] = []
+    for failure in (try! rules.check(value, options)).failures {
+        all.append("\(failure.path) \(failure.code)")
+    }
+    return all
+}

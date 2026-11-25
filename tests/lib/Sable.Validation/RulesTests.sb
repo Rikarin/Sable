@@ -1,0 +1,335 @@
+module ValidationTests
+
+import Sable.Testing
+import Sable.Validation
+
+@test
+fn aFieldIsReadByAKeyPathOfAnyLength() {
+    var customer = ada()
+    customer.address.street = ""
+    customer.address.postalCode = ""
+    assertEqual(found(customer) {
+        $0.field(\.address.street).notEmpty()
+        $0.field(\.address.postalCode).notEmpty()
+        $0.field(\.billing?.street).notEmpty()
+    }, ["address.street NotEmpty", "address.postalCode NotEmpty", "billing.street NotEmpty"])
+}
+
+@test
+fn aFieldThatIsNoneIsCheckedOnlyForBeingThere() {
+    assertEqual(found(ada()) {
+        $0.field(\.nick).maxLength(3).matches("x").must { (value) in false }
+        $0.field(\.limit).greaterThan(5).inRange(1...2).oneOf([1])
+    }, [])
+    assertEqual(found(ada()) {
+        $0.field(\.nick).notNull()
+        $0.field(\.limit).notEmpty().equal(3)
+        $0.field(\.nick).null().empty().notEqual("x")
+    }, ["nick NotNull", "limit NotEmpty", "limit Equal"])
+}
+
+@test
+fn eachElementIsCheckedAtItsPosition() {
+    let order = TestOrder(total: 1, lines: ["a", "", "b", ""])
+    assertEqual(found(order) { $0.each(\.lines).notEmpty() }, ["lines[1] NotEmpty", "lines[3] NotEmpty"])
+    let result = verdictOf(order) { $0.each(\.lines).notEmpty().message("{PropertyName} {CollectionIndex} at {PropertyPath}") }
+    assertEqual(result.failures[1].message, "Lines 3 at lines[3]")
+}
+
+fn verdictOf<T>(_ value: T, _ add: (inout Rules<T>) -> ()) -> ValidationResult {
+    var rules = Rules<T>()
+    add(&rules)
+    return try! rules.check(value)
+}
+
+@test
+fn elementsAreLeftOutByAFilterAndKeepTheirPositions() {
+    let order = TestOrder(total: 1, lines: ["", "skip", "", "long enough"])
+    assertEqual(found(order) { $0.each(\.lines).filter { $0 != "" }.minLength(5) }, ["lines[1] MinimumLength"])
+}
+
+struct Optionals {
+    var tags: String[>..]?
+    var scores: [String: Int]
+    var fixed: Int[]
+}
+
+@test
+fn eachTakesAnySequenceAndAnOptionalOne() {
+    let noScores: [String: Int] = [:]
+    assertEqual(found(Optionals(tags: none, scores: noScores, fixed: [1, 0])) {
+        $0.each(\.tags).notEmpty()
+        $0.each(\.fixed).notEmpty()
+    }, ["fixed[1] NotEmpty"])
+    assertEqual(found(Optionals(tags: [""], scores: ["a": 1], fixed: [])) {
+        $0.each(\.tags).notEmpty()
+        $0.each(\.scores).must { $0.1 > 1 }
+        $0.field(\.scores).notEmpty()
+    }, ["tags[0] NotEmpty", "scores[0] Must"])
+}
+
+@test
+fn aComputedRuleIsOfWhatItsClosureReads() {
+    assertEqual(found(ada()) { $0.computed("orderCount") { $0.orders.count }.greaterThan(1) }, ["orderCount GreaterThan"])
+}
+
+@test
+fn aRuleOfTheValueItselfHasNoPath() {
+    let result = verdictOf(ada()) { $0.must({ $0.age > 100 }).message("Old only.") }
+    assertEqual(result.failures[0].path, "")
+    assertEqual(result.failures[0].message, "Old only.")
+}
+
+// ---- Conditions ----------------------------------------------------------
+
+@test
+fn aGroupIsRunWhereItsConditionHoldsAndTheOtherWhereNot() {
+    fn run(_ age: Int) -> String[>..] {
+        var customer = ada()
+        customer.age = age
+        customer.email = ""
+        return found(customer) {
+            $0.when({ $0.age > 18 }) { $0.field(\.email).notEmpty() } otherwise: { $0.field(\.email).maxLength(3).minLength(1) }
+            $0.unless({ $0.age > 18 }) { $0.field(\.country).equal("SK") }
+        }
+    }
+    assertEqual(run(36), ["email NotEmpty"])
+    assertEqual(run(3), ["email MinimumLength", "country Equal"])
+}
+
+@test
+async fn aGroupsConditionMayWait() {
+    var rules = Rules<TestCustomer>()
+    rules.when({ (c: TestCustomer) in await isUnique(c.email) }) { $0.field(\.age).lessThan(18) }
+    rules.unless({ (c: TestCustomer) in await isUnique(c.email) }) { $0.field(\.age).greaterThan(90) }
+    assertEqual((await rules.validate(ada())).failures.map(\.code), ["LessThan"])
+    var taken = ada()
+    taken.email = "taken@example.org"
+    assertEqual((await rules.validate(taken)).failures.map(\.code), ["GreaterThan"])
+}
+
+@test
+fn aGroupWhoseConditionWaitsIsRefusedWithoutWaiting() {
+    var rules = Rules<TestCustomer>()
+    rules.when({ (c: TestCustomer) in await isUnique(c.email) }) { $0.field(\.age).lessThan(18) }
+    do {
+        _ = try rules.check(ada())
+        assert(false)
+    } catch {
+        assertEqual(error.path, "")
+    }
+}
+
+@test
+async fn rulesThatWaitInAGroupAreWaitedFor() {
+    var rules = Rules<TestCustomer>()
+    rules.when({ $0.age > 90 }) {
+        $0.field(\.age).lessThan(18)
+    } otherwise: {
+        $0.field(\.email).must { (e: String) in !(await isUnique(e)) }
+    }
+    assertEqual((await rules.validate(ada())).failures.map(\.path), ["email"])
+    var old = ada()
+    old.age = 91
+    assertEqual((await rules.validate(old)).failures.map(\.path), ["age"])
+}
+
+@test
+fn aConditionIsOfAllTheChecksBeforeItOrOfTheLastAlone() {
+    assertEqual(found(ada()) { $0.field(\.age).lessThan(1).lessThan(2).when { (value) in false } }, [])
+    assertEqual(found(ada()) { $0.field(\.age).lessThan(1).lessThan(2).when({ (value) in false }, for: .LastOnly) }, ["age LessThan"])
+    assertEqual(found(ada()) { $0.field(\.age).lessThan(1).when({ (value) in false }).lessThan(2) }, ["age LessThan"])
+    assertEqual(found(ada()) { $0.field(\.age).lessThan(1).unless { $0.age == 36 } }, [])
+}
+
+@test
+async fn aChecksConditionMayWait() {
+    var rules = Rules<TestCustomer>()
+    rules.field(\.age).lessThan(1).when { (c: TestCustomer) in await isUnique(c.email) }
+    rules.field(\.age).lessThan(2).unless { (c: TestCustomer) in await isUnique(c.email) }
+    assertEqual((await rules.validate(ada())).failures.count, 1)
+    do {
+        _ = try rules.check(ada())
+        assert(false)
+    } catch {
+        assertEqual(error.path, "age")
+    }
+}
+
+// ---- Rule sets -----------------------------------------------------------
+
+fn inSets(_ sets: String[>..]) -> String[>..] {
+    return found(TestOrder(total: 0, lines: []), ValidationOptions(ruleSets: sets)) {
+        $0.field(\.total).notEqual(0).code("plain")
+        $0.ruleSet("Create") { $0.field(\.total).notEqual(0).code("create") }
+        $0.ruleSet("Update, Delete") {
+            $0.when({ (value) in true }) { $0.field(\.total).notEqual(0).code("change") }
+        }
+    }
+}
+
+@test
+fn onlyTheRuleSetsAskedForAreRun() {
+    assertEqual(inSets([]), ["total plain"])
+    assertEqual(inSets(["Create"]), ["total create"])
+    assertEqual(inSets(["DELETE"]), ["total change"])
+    assertEqual(inSets(["default", "Update"]), ["total plain", "total change"])
+    assertEqual(inSets(["*"]), ["total plain", "total create", "total change"])
+    assertEqual(inSets(["none such"]), [])
+}
+
+@test
+fn aNestedValidatorIsAskedForTheSameRuleSetsUnlessOthersAreNamed() {
+    let nested = orderRules {
+        $0.field(\.total).notEqual(3).code("plain")
+        $0.ruleSet("Deep") { $0.field(\.total).notEqual(3).code("deep") }
+    }
+    let deep = ValidationOptions(ruleSets: ["Deep"])
+    assertEqual(found(ada(), deep) { $0.ruleSet("Deep") { $0.each(\.orders).use(nested) } }, ["orders[0].total deep"])
+    assertEqual(found(ada(), deep) { $0.ruleSet("Deep") { $0.each(\.orders).use(nested, ruleSets: ["default"]) } }, ["orders[0].total plain"])
+    assertEqual(found(ada()) { $0.each(\.orders).use(nested, ruleSets: ["*"]) }, ["orders[0].total plain", "orders[0].total deep"])
+}
+
+@test
+fn onlyThePathsAskedAboutAreChecked() {
+    fn run(_ only: String[>..]) -> String[>..] {
+        return found(ada(), ValidationOptions(only: only)) {
+            $0.field(\.age).lessThan(1)
+            $0.field(\.address.street).maxLength(1)
+            $0.each(\.orders).use(orderRules {
+                $0.field(\.total).notEqual(3)
+                $0.each(\.lines).maxLength(0)
+            })
+        }
+    }
+    assertEqual(run(["age"]), ["age LessThan"])
+    assertEqual(run(["address"]), ["address.street MaximumLength"])
+    assertEqual(run(["orders[0].lines"]), ["orders[0].lines[0] MaximumLength"])
+    assertEqual(run(["orders", "age"]).count, 3)
+}
+
+// ---- Cascade -------------------------------------------------------------
+
+@test
+fn aFieldsFirstFailureIsItsLastWhereItSaysSo() {
+    assertEqual(found(ada()) { $0.field(\.age).lessThan(1).lessThan(2) }, ["age LessThan", "age LessThan"])
+    assertEqual(found(ada()) { $0.field(\.age).stopOnFirstFailure().lessThan(1).lessThan(2) }, ["age LessThan"])
+    assertEqual(found(ada()) {
+        $0.ruleCascade = .Stop
+        $0.field(\.age).lessThan(1).lessThan(2)
+        $0.field(\.email).maxLength(1).maxLength(2)
+    }, ["age LessThan", "email MaximumLength"])
+}
+
+@test
+fn aValidatorsFirstRuleToFailIsItsLastWhereItSaysSo() {
+    assertEqual(found(ada()) {
+        $0.cascade = .Stop
+        $0.field(\.country).notEmpty()
+        $0.field(\.age).lessThan(1).lessThan(2)
+        $0.field(\.email).maxLength(1)
+    }, ["age LessThan", "age LessThan"])
+}
+
+@test
+async fn cascadesStopRulesThatWaitToo() {
+    var asked = 0
+    var rules = Rules<TestCustomer>()
+    rules.cascade = .Stop
+    rules.field(\.age).stopOnFirstFailure().lessThan(1).must { (a: Int) in
+        asked += 1
+        await Task.yield()
+        return false
+    }
+    rules.field(\.email).must { (e: String) in
+        asked += 1
+        await Task.yield()
+        return false
+    }
+    assertEqual((await rules.validate(ada())).failures.count, 1)
+    assertEqual(asked, 0)
+}
+
+@test
+fn dependentRulesAreRunOnlyWhereTheRulePasses() {
+    fn run(_ age: Int) -> String[>..] {
+        var customer = ada()
+        customer.age = age
+        return found(customer) {
+            $0.field(\.age).greaterThan(18).dependentRules {
+            $0.field(\.country).equal("SK")
+            $0.field(\.nick).notNull()
+        }
+        }
+    }
+    assertEqual(run(12), ["age GreaterThan"])
+    assertEqual(run(36), ["country Equal", "nick NotNull"])
+}
+
+@test
+async fn dependentRulesMayWait() {
+    var rules = Rules<TestCustomer>()
+    rules.field(\.age).greaterThan(18).dependentRules {
+        $0.field(\.email).must { (e: String) in !(await isUnique(e)) }
+    }
+    assertEqual((await rules.validate(ada())).failures.map(\.path), ["email"])
+}
+
+// ---- Nested ----------------------------------------------------------------
+
+final class Tree {
+    var value: Int
+    var children: Tree[>..]
+
+    init(_ value: Int, _ children: Tree[>..]) {
+        self.value = value
+        self.children = children
+    }
+}
+
+struct TreeValidator: Validator<Tree> {
+    fn rules(_ r: inout Rules<Tree>) {
+        r.field(\.value).greaterThan(0)
+        r.each(\.children).use(TreeValidator())
+    }
+}
+
+@test
+fn aTreesValidatorMayUseItself() {
+    let tree = Tree(1, [Tree(2, []), Tree(3, [Tree(0, []), Tree(-1, [])])])
+    let result = try! TreeValidator().check(tree)
+    assertEqual(result.failures.map(\.path), ["children[1].children[0].value", "children[1].children[1].value"])
+}
+
+@test
+fn aNestedValidatorOfAnOptionalIsRunWhereThereIsOne() {
+    let address = Of<TestAddress>({ $0.field(\.street).notEmpty() })
+    assertEqual(found(ada()) { $0.field(\.billing).use(address) }, [])
+    var customer = ada()
+    customer.billing = TestAddress(street: "", postalCode: none)
+    assertEqual(found(customer) { $0.field(\.billing).use(address) }, ["billing.street NotEmpty"])
+}
+
+@test
+async fn aNestedValidatorThatWaitsIsWaitedFor() {
+    var rules = Rules<TestCustomer>()
+    rules.each(\.orders).use(orderRules {
+        $0.field(\.total).must { (t: Int) in
+            await Task.yield()
+            return t > 3
+        }
+        $0.field(\.lines).custom { (lines: String[>..], context: RuleContext) in
+            await Task.yield()
+            context.fail("waited", under: "deep")
+        }
+    })
+    assertEqual((await rules.validate(ada())).failures.map(\.path), ["orders[0].total", "orders[0].lines.deep"])
+}
+
+@test
+fn rulesMadeBeforehandAreUsedAsAValidatorIs() {
+    var rules = Rules<TestOrder>()
+    rules.field(\.total).lessThan(1)
+    let made = rules
+    assertEqual(found(ada()) { $0.each(\.orders).use(rules: made) }, ["orders[0].total LessThan"])
+}

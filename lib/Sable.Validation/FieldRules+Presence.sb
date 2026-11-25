@@ -1,0 +1,31 @@
+module Sable.Validation
+
+extension FieldRules {
+    /// The field is not none.
+    @discardable
+    public fn notNull() -> FieldRules<T, V> {
+        return add(Check<T, V>("NotNull", takesNone: true, .Test((whole: T, value: V?) => value != none), none))
+    }
+
+    /// The field is none.
+    @discardable
+    public fn null() -> FieldRules<T, V> {
+        return add(Check<T, V>("Null", takesNone: true, .Test((whole: T, value: V?) => value == none), none))
+    }
+}
+
+extension FieldRules where V: Emptiable {
+    /// The field is neither none nor empty, as `Emptiable` says for its
+    /// type: a string of nothing but spaces, an array of no elements, a
+    /// number that is zero.
+    @discardable
+    public fn notEmpty() -> FieldRules<T, V> {
+        return add(Check<T, V>("NotEmpty", takesNone: true, .Test((whole: T, value: V?) => if let value = value { !value.isEmptyValue } else { false }), none))
+    }
+
+    /// The field is none, or empty.
+    @discardable
+    public fn empty() -> FieldRules<T, V> {
+        return add(Check<T, V>("Empty", takesNone: true, .Test((whole: T, value: V?) => if let value = value { value.isEmptyValue } else { true }), none))
+    }
+}

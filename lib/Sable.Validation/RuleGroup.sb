@@ -1,0 +1,31 @@
+module Sable.Validation
+
+/// Rules run where a condition holds, and others where it does not.
+final class RuleGroup<T>: Rule<T> {
+    let condition: Condition<T>
+    let rules: Rules<T>
+    let otherwise: Rules<T>
+
+    init(_ condition: Condition<T>, _ rules: Rules<T>, _ otherwise: Rules<T>) {
+        self.condition = condition
+        self.rules = rules
+        self.otherwise = otherwise
+        super.init(sets: [])
+    }
+
+    override fn mayWait() -> Bool {
+        return condition.waits || rules.mayWait || otherwise.mayWait
+    }
+
+    override fn run(_ value: T, at base: String, in run: ValidationRun) {
+        guard let holds = condition.holds(value) else {
+            run.waits = base
+            return
+        }
+        (holds ? rules : otherwise).run(value, at: base, in: run)
+    }
+
+    override async fn runWaiting(_ value: T, at base: String, in run: ValidationRun) {
+        await (await condition.holdsWaiting(value) ? rules : otherwise).runWaiting(value, at: base, in: run)
+    }
+}

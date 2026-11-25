@@ -1,0 +1,20 @@
+module Sable.Validation
+
+/// What a set of rules holds: a field's, or a group's of them.
+abstract class Rule<T> {
+    /// The rule sets it is in, in lowercase.
+    let sets: String[>..]
+
+    init(sets: String[>..]) {
+        self.sets = sets
+    }
+
+    /// Whether something in it may wait.
+    abstract fn mayWait() -> Bool
+
+    /// Checks the value at that path, waiting for nothing.
+    abstract fn run(_ value: T, at base: String, in run: ValidationRun)
+
+    /// Checks the value at that path.
+    abstract async fn runWaiting(_ value: T, at base: String, in run: ValidationRun)
+}

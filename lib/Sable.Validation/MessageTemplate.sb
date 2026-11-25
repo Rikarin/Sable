@@ -1,0 +1,42 @@
+module Sable.Validation
+
+/// A message with places to fill: `'{PropertyName}' must not be empty.`
+///
+/// ```sable
+/// let template = MessageTemplate("{Who} of {What}; {{braces}} and {Unknown}")
+/// assert(template.fill(["Who": "Ada", "What": "London"]) == "Ada of London; {braces} and {Unknown}")
+/// ```
+public struct MessageTemplate {
+    public let text: String
+
+    public init(_ text: String) {
+        self.text = text
+    }
+
+    /// The text with each `{Name}` replaced by what it stands for. One that
+    /// stands for nothing stays as it is written, and `{{` is a brace.
+    public fn fill(_ values: [String: String]) -> String {
+        if !text.contains("{") && !text.contains("}") {
+            return text
+        }
+        var filled = ""
+        var rest = Substring(text)
+        while let at = rest.firstIndex(where: { $0 == '{' || $0 == '}' }) {
+            let brace = rest[at]
+            filled = filled + rest[..<at].toString()
+            rest = rest[rest.index(after: at)...]
+            if rest.first == brace {
+                filled = filled + "\(brace)"
+                rest = rest[rest.index(after: rest.startIndex)...]
+                continue
+            }
+            guard brace == '{', let close = rest.firstIndex(where: { $0 == '}' }), let value = values[rest[..<close].toString()] else {
+                filled = filled + "\(brace)"
+                continue
+            }
+            filled = filled + value
+            rest = rest[rest.index(after: close)...]
+        }
+        return filled + rest.toString()
+    }
+}

@@ -535,6 +535,17 @@
     <Field Name="NumberToken" Type="Token" />
   </Node>
 
+  <Node Name="KeyPathExpressionSyntax" Base="ExpressionSyntax" Kind="KeyPathExpression"
+        Doc="`\.address.city`: how to get from a value to a part of it; its body's innermost expression is the root.">
+    <Field Name="Body" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="KeyPathRootExpressionSyntax" Base="ExpressionSyntax" Kind="KeyPathRootExpression"
+        Doc="`\` or `\Customer`: the value a key path starts from.">
+    <Field Name="BackslashToken" Type="Token" />
+    <Field Name="Type" Type="TypeSyntax" Optional="true" />
+  </Node>
+
   <!-- ==================================================================== -->
   <!-- match                                                                -->
   <!-- ==================================================================== -->

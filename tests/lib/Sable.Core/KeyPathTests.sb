@@ -1,0 +1,54 @@
+module KeyPathTests
+
+// KeyPath (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+struct KeyPathAddress {
+    var city: String
+    var zip: String?
+}
+
+struct KeyPathCustomer {
+    var name: String
+    var address: KeyPathAddress
+    var billing: KeyPathAddress?
+}
+
+fn keyPathCustomer() -> KeyPathCustomer {
+    return KeyPathCustomer(name: "Ada", address: KeyPathAddress(city: "London", zip: none), billing: none)
+}
+
+@test
+fn aKeyPathReadsWhatItNames() {
+    let path: KeyPath<KeyPathCustomer, String> = \.address.city
+    assertEqual(path.path, "address.city")
+    assertEqual(path.value(of: keyPathCustomer()), "London")
+}
+
+@test
+fn aKeyPathThroughAnOptionalLeadsToOne() {
+    let path = \KeyPathCustomer.billing?.city
+    assertEqual(path.path, "billing.city")
+    assert(path.value(of: keyPathCustomer()) == none)
+}
+
+@test
+fn aKeyPathGoesOnFromAnother() {
+    let path = (\KeyPathCustomer.address).appending(\.city).appending(\.count)
+    assertEqual(path.path, "address.city.count")
+    assertEqual(path.value(of: keyPathCustomer()), 6)
+}
+
+@test
+fn aKeyPathIsMadeOfAClosureToo() {
+    let path = KeyPath<Int, Int>(path: "double", read: (n: Int) => n * 2)
+    assertEqual(path.path, "double")
+    assertEqual(path.value(of: 4), 8)
+}
+
+@test
+fn aKeyPathIsAFunctionWhereOneIsWanted() {
+    assertEqual([keyPathCustomer(), keyPathCustomer()].map(\.name), ["Ada", "Ada"])
+}

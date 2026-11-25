@@ -1,0 +1,58 @@
+module Sable.Validation
+
+/// The library's own messages, FluentValidation's English: what a catalogue
+/// with no template of its own for a rule leaves.
+struct Messages {
+    static fn template(for code: String) -> String? {
+        return match code {
+            case "NotNull"            => "'{PropertyName}' must be given."
+            case "Null"               => "'{PropertyName}' must not be given."
+            case "NotEmpty"           => "'{PropertyName}' must not be empty."
+            case "Empty"              => "'{PropertyName}' must be empty."
+            case "Length"             => "'{PropertyName}' must be between {MinLength} and {MaxLength} long. It is {TotalLength} long."
+            case "ExactLength"        => "'{PropertyName}' must be {MaxLength} long. It is {TotalLength} long."
+            case "MinimumLength"      => "'{PropertyName}' must be at least {MinLength} long. It is {TotalLength} long."
+            case "MaximumLength"      => "'{PropertyName}' must be {MaxLength} long or less. It is {TotalLength} long."
+            case "Matches"            => "'{PropertyName}' is not in the correct format."
+            case "Email"              => "'{PropertyName}' is not a valid email address."
+            case "Url"                => "'{PropertyName}' is not a valid URL."
+            case "Uuid"               => "'{PropertyName}' is not a valid UUID."
+            case "CreditCard"         => "'{PropertyName}' is not a valid credit card number."
+            case "Decimal"            => "'{PropertyName}' is not a number."
+            case "PrecisionScale"     => "'{PropertyName}' must not be more than {ExpectedPrecision} digits in total, with allowance for {ExpectedScale} decimals. {Digits} digits and {ActualScale} decimals were found."
+            case "Between"            => "'{PropertyName}' must be between {From} and {To}. You entered {PropertyValue}."
+            case "Within"             => "'{PropertyName}' must be at least {From} and less than {To}. You entered {PropertyValue}."
+            case "ExclusiveBetween"   => "'{PropertyName}' must be between {From} and {To} (exclusive). You entered {PropertyValue}."
+            case "GreaterThan"        => "'{PropertyName}' must be greater than {ComparisonValue}."
+            case "GreaterThanOrEqual" => "'{PropertyName}' must be greater than or equal to {ComparisonValue}."
+            case "LessThan"           => "'{PropertyName}' must be less than {ComparisonValue}."
+            case "LessThanOrEqual"    => "'{PropertyName}' must be less than or equal to {ComparisonValue}."
+            case "Equal"              => "'{PropertyName}' must be equal to {ComparisonValue}."
+            case "NotEqual"           => "'{PropertyName}' must not be equal to {ComparisonValue}."
+            case "OneOf"              => "'{PropertyName}' must be one of {Values}. You entered {PropertyValue}."
+            case "NoneOf"             => "'{PropertyName}' must not be one of {Values}."
+            case "Unique"             => "'{PropertyName}' must not repeat a value."
+            case "Must"               => "The specified condition was not met for '{PropertyName}'."
+            default                   => none
+        }
+    }
+
+    /// What a field is called by its path: `postalCode` is Postal Code.
+    static fn name(of path: String) -> String {
+        var name = ""
+        var last = '.'
+        for (i, c) in path.enumerated() {
+            if c == '.' || c == '_' {
+                name = name + " "
+            } else if last == '.' || last == '_' {
+                name = name + c.uppercased()
+            } else if c.isUppercase && !last.isUppercase {
+                name = "\(name) \(c)"
+            } else {
+                name = "\(name)\(c)"
+            }
+            last = c
+        }
+        return name
+    }
+}

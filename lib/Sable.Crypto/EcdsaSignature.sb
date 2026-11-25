@@ -34,8 +34,8 @@ public struct EcdsaSignature<Curve: EllipticCurve>: Hashable, Debug, Sendable {
 
     /// The signature encoded as a DER sequence of r and s, read strictly:
     /// any other encoding of the two is refused.
-    public init(der: U8[:]) throws(CryptoError) {
-        guard let made = EcdsaSignature<Curve>.numbers(der) else {
+    public init(der encoded: U8[:]) throws(CryptoError) {
+        guard let made = EcdsaSignature<Curve>.numbers(encoded) else {
             throw CryptoError.InvalidEncoding(reason: "an ECDSA signature that is no DER sequence of two numbers of \(Curve.curve.byteCount) bytes")
         }
         bytes = made

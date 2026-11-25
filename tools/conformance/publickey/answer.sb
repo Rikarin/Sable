@@ -1,0 +1,219 @@
+// Answers what run.py asks of Sable.Crypto's public-key algorithms: a request
+// a line, its words apart by spaces, bytes in hexadecimal and "-" for none of
+// them.
+
+module PublicKeyConformance
+
+import Sable.Crypto
+import Sable.IO
+import Sable.Text
+
+fn bytes(_ word: String) -> U8[>..] {
+    return word == "-" ? [] : try! Hex.decode(word)
+}
+
+fn text(_ word: String) -> String {
+    return String.fromUtf8Lossy(bytes(word))
+}
+
+fn number(_ word: String) -> Int {
+    return try! Int.parse(word)
+}
+
+fn algorithm(_ name: String) -> HashAlgorithm {
+    return match name {
+        case "SHA-1"    => HashAlgorithm.Sha1
+        case "SHA-256"  => .Sha256
+        case "SHA-384"  => .Sha384
+        case "SHA-512"  => .Sha512
+        case "SHA3-256" => .Sha3_256
+        case "SHA3-384" => .Sha3_384
+        case "SHA3-512" => .Sha3_512
+        case _          => fatalError("hash \(name)")
+    }
+}
+
+// SHAKE's digests are what Wycheproof's ECDSA tests have: twice its strength.
+fn digest(_ name: String, _ message: U8[:]) -> U8[>..] {
+    if name == "SHAKE128" {
+        var function = Shake128()
+        function.update(message)
+        return function.finalize(count: 32)
+    }
+    if name == "SHAKE256" {
+        var function = Shake256()
+        function.update(message)
+        return function.finalize(count: 64)
+    }
+    return algorithm(name).digest(of: message).bytes
+}
+
+fn said(_ valid: Bool) -> String {
+    return valid ? "valid" : "invalid"
+}
+
+// ecdsa <der|p1363> <spki> <hash> <message> <signature>
+fn ecdsa<C: EllipticCurve>(_ key: EcdsaPublicKey<C>, _ words: String[>..]) -> String {
+    let read = try? (words[1] == "der" ? EcdsaSignature<C>(der: bytes(words[5])) : EcdsaSignature<C>(bytes(words[5])))
+    guard let signature = read else {
+        return "invalid"
+    }
+    // What is read is written as it was read.
+    let written = words[1] == "der" ? signature.der : signature.bytes
+    if written != bytes(words[5]) {
+        return "written otherwise"
+    }
+    return said(key.isValid(signature, digest: digest(words[3], bytes(words[4]))))
+}
+
+fn padded(_ secret: U8[>..], _ count: Int) -> U8[>..] {
+    var start = 0
+    while start < secret.count && secret[start] == 0 {
+        start += 1
+    }
+    let digits = secret[start...]
+    if digits.count > count {
+        return secret
+    }
+    var made = U8[>..](repeating: 0, count: count - digits.count)
+    made.append(contentsOf: digits)
+    return made
+}
+
+// ecdh <point|spki|pem|jwk> <curve> <public> <private>
+fn ecdh<C: EllipticCurve>(_ curve: C.Type, _ words: String[>..]) -> String {
+    do {
+        match words[1] {
+            case "point", "spki" => {
+                let key = try EcdhPrivateKey<C>(padded(bytes(words[4]), C.curve.byteCount))
+                let other = words[1] == "point" ? try EcdhPublicKey<C>(bytes(words[3])) : try EcdhPublicKey<C>.parse(spki: bytes(words[3]))
+                return Hex.encode(key.sharedSecret(with: other).bytes())
+            }
+            case "pem" => {
+                let key = try EcdhPrivateKey<C>.parse(pem: text(words[4]))
+                return Hex.encode(key.sharedSecret(with: try EcdhPublicKey<C>.parse(pem: text(words[3]))).bytes())
+            }
+            case _ => {
+                let key = try EcdhPrivateKey<C>.parse(jwk: text(words[4]))
+                return Hex.encode(key.sharedSecret(with: try EcdhPublicKey<C>.parse(jwk: text(words[3]))).bytes())
+            }
+        }
+    } catch {
+        return "error"
+    }
+}
+
+// x25519 <raw|spki|pem|jwk> <public> <private>
+fn x25519(_ words: String[>..]) -> String {
+    do {
+        match words[1] {
+            case "raw" => {
+                let key = try X25519PrivateKey(bytes(words[3]))
+                return Hex.encode(try key.sharedSecret(with: try X25519PublicKey(bytes(words[2]))).bytes())
+            }
+            case "spki" => {
+                let key = try X25519PrivateKey.parse(pkcs8: bytes(words[3]))
+                return Hex.encode(try key.sharedSecret(with: try X25519PublicKey.parse(spki: bytes(words[2]))).bytes())
+            }
+            case "pem" => {
+                let key = try X25519PrivateKey.parse(pem: text(words[3]))
+                return Hex.encode(try key.sharedSecret(with: try X25519PublicKey.parse(pem: text(words[2]))).bytes())
+            }
+            case _ => {
+                let key = try X25519PrivateKey.parse(jwk: text(words[3]))
+                return Hex.encode(try key.sharedSecret(with: try X25519PublicKey.parse(jwk: text(words[2]))).bytes())
+            }
+        }
+    } catch {
+        return "error"
+    }
+}
+
+fn padding(_ words: String[>..]) -> RsaSignaturePadding {
+    return match words[1] {
+        case "pkcs1" => .Pkcs1(algorithm(words[2]))
+        case _       => .PssParameters(algorithm(words[2]), maskHash: algorithm(words[3]), saltByteCount: number(words[4]))
+    }
+}
+
+// One key read from each of its formats, and written as it was.
+fn formats(_ words: String[>..]) -> String {
+    do {
+        let key = try PublicKey.parse(spki: bytes(words[1]))
+        if key.spki != bytes(words[1]) {
+            return "written otherwise"
+        }
+        if words[2] != "-" && try PublicKey.parse(pem: text(words[2])) != key {
+            return "another in PEM"
+        }
+        if try PublicKey.parse(pem: key.pem) != key {
+            return "another in its own PEM"
+        }
+        if words[3] != "-" && try PublicKey.parse(jwk: text(words[3])) != key {
+            return "another in JWK"
+        }
+        return try PublicKey.parse(jwk: key.jwk) == key ? "same" : "another in its own JWK"
+    } catch {
+        return "error \(error.description())"
+    }
+}
+
+fn answer(_ words: String[>..]) -> String {
+    do {
+        match words[0] {
+            case "ecdsa" => {
+                match try PublicKey.parse(spki: bytes(words[2])) {
+                    case .P256(let key) => { return ecdsa(key, words) }
+                    case .P384(let key) => { return ecdsa(key, words) }
+                    case .P521(let key) => { return ecdsa(key, words) }
+                    default             => { return "another key" }
+                }
+            }
+            case "ecdh" => {
+                return match words[2] {
+                    case "secp256r1" => ecdh(P256.self, words)
+                    case "secp384r1" => ecdh(P384.self, words)
+                    case _           => ecdh(P521.self, words)
+                }
+            }
+            case "x25519"  => { return x25519(words) }
+            case "ed25519" => {
+                // ed25519 <key> <message> <signature>
+                let key = try Ed25519PublicKey(bytes(words[1]))
+                return said(key.isValid(bytes(words[3]), for: bytes(words[2])))
+            }
+            case "rsa" => {
+                // rsa <padding> <hash> <mask hash> <salt> <modulus> <exponent> <message> <signature>
+                var exponent: U64 = 0
+                for byte in bytes(words[6]) {
+                    exponent = (exponent << 8) | U64(byte)
+                }
+                let key = try RsaPublicKey(modulus: bytes(words[5]), exponent: exponent)
+                return said(key.isValid(bytes(words[8]), for: bytes(words[7]), padding: padding(words)))
+            }
+            case "rsasign" => {
+                // rsasign <hash> <pkcs8> <message> <signature>
+                let key = try RsaPrivateKey.parse(pkcs8: bytes(words[2]))
+                if key.pkcs8() != bytes(words[2]) {
+                    return "written otherwise"
+                }
+                return Hex.encode(key.sign(bytes(words[3]), padding: .Pkcs1(algorithm(words[1]))))
+            }
+            case "formats" => { return formats(words) }
+            case _         => { return "unknown" }
+        }
+    } catch {
+        return "error"
+    }
+}
+
+fn main() {
+    var input = BufferedReader(Console.standardInput)
+    let written = BufferedWriter(Console.standardOutput)
+    while let line = try! input.readLine() {
+        var text: U8[>..] = []
+        text.append(utf8: answer(line.split(separator: ' ')) + "\n")
+        try! written.write(text)
+    }
+    try! written.flush()
+}

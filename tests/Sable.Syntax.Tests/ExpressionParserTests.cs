@@ -268,6 +268,7 @@ public sealed class ExpressionParserTests {
     [InlineData("try f()", "(Try try (Invocation (IdentifierName f) (ArgumentList)))")]
     [InlineData("try? f()", "(Try try ? (Invocation (IdentifierName f) (ArgumentList)))")]
     [InlineData("try! f()", "(Try try ! (Invocation (IdentifierName f) (ArgumentList)))")]
+    [InlineData("try !f()", "(Try try (PrefixUnary ! (Invocation (IdentifierName f) (ArgumentList))))")]
     public void ParsesTryForms(string source, string expected) => Assert.Equal(expected, Parse(source));
 
     [Fact]

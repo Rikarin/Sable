@@ -580,7 +580,9 @@ internal sealed class Parser {
     GreenNode ParseUnaryCore() {
         if (At(SyntaxKind.TryKeyword)) {
             var tryKeyword = EatToken();
-            var marker = Current.Kind is SyntaxKind.QuestionToken or SyntaxKind.BangToken
+            // 'try! f()' stops at an error; 'try !f()' is the negation of what
+            // 'try f()' gives, so a '!' is the keyword's only against it.
+            var marker = Current.Kind is SyntaxKind.QuestionToken || At(SyntaxKind.BangToken) && !HasSpaceBeforeCurrent
                 ? EatToken()
                 : null;
             // 'try' covers the whole expression it is written on, as in

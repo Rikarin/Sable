@@ -10,16 +10,14 @@ import FloatAssertions
 
 // cbrt is the C library's, which need not be correctly rounded: glibc's
 // cbrt(27.0) is 3.0000000000000004.
-@test
-fn cbrtIsWithinAnUlpAtCubesAndNegativeForNegatives() {
-    assertWithin(cbrt(27.0), 3.0, ulps: 1)
-    assertWithin(cbrt(-27.0), -3.0, ulps: 1)
-    assertSame(cbrt(-0.0), -0.0)
-    assertSame(cbrt(-inf), -inf)
-    assertSame(cbrt(nan), nan)
-    assertWithin(cbrt(2.0), 1.2599210498948732, ulps: 1)
-    assertWithin(cbrt(-10.0), -2.154434690031884, ulps: 1)
-    assertWithin(cbrt(1e-300), 1e-100, ulps: 1)
+@test(arguments: [(27.0, 3.0), (-27.0, -3.0), (2.0, 1.2599210498948732), (-10.0, -2.154434690031884), (1e-300, 1e-100)])
+fn cbrtIsWithinAnUlpAtCubesAndNegativeForNegatives(_ x: F64, _ root: F64) {
+    assertWithin(cbrt(x), root, ulps: 1)
+}
+
+@test(arguments: [(-0.0, -0.0), (-inf, -inf), (nan, nan)])
+fn cbrtOfZeroInfinityAndNaNIsItself(_ x: F64, _ root: F64) {
+    assertSame(cbrt(x), root)
 }
 
 @test
@@ -31,20 +29,14 @@ fn hypotNeitherOverflowsNorUnderflows() {
     assertSame(hypot(1.0, 1e-10), 1.0)
 }
 
-@test
-fn hypotOfAnInfinityIsInfiniteEvenWithANaN() {
-    assertSame(hypot(inf, nan), inf)
-    assertSame(hypot(nan, -inf), inf)
-    assertSame(hypot(nan, 1.0), nan)
+@test(arguments: [(inf, nan, inf), (nan, -inf, inf), (nan, 1.0, nan)])
+fn hypotOfAnInfinityIsInfiniteEvenWithANaN(_ x: F64, _ y: F64, _ length: F64) {
+    assertSame(hypot(x, y), length)
 }
 
-@test
-fn rootNTakesExactSquareAndCubeRoots() {
-    assertSame(rootN(16.0, 2), 4.0)
-    assertSame(rootN(-8.0, 3), -2.0)
-    assertSame(rootN(7.0, 1), 7.0)
-    assertSame(rootN(16.0, 4), 2.0)
-    assertSame(rootN(-32.0, 5), -2.0)
+@test(arguments: [(16.0, 2, 4.0), (-8.0, 3, -2.0), (7.0, 1, 7.0), (16.0, 4, 2.0), (-32.0, 5, -2.0)])
+fn rootNTakesExactSquareAndCubeRoots(_ x: F64, _ n: Int, _ root: F64) {
+    assertSame(rootN(x, n), root)
 }
 
 @test
@@ -55,24 +47,22 @@ fn rootNOfOtherDegreesIsWithinAnUlp() {
     assertSame(rootN(4.0, -2), 0.5)
 }
 
-@test
-fn rootNOfANegativeNumberHasOnlyOddRoots() {
-    assertSame(rootN(-16.0, 4), nan)
-    assertSame(rootN(-16.0, -2), nan)
-    assertSame(rootN(-inf, 4), nan)
-    assertSame(rootN(-inf, 5), -inf)
-    assertSame(rootN(16.0, 0), nan)
+@test(arguments: [(-16.0, 4, nan), (-16.0, -2, nan), (-inf, 4, nan), (-inf, 5, -inf), (16.0, 0, nan)])
+fn rootNOfANegativeNumberHasOnlyOddRoots(_ x: F64, _ n: Int, _ root: F64) {
+    assertSame(rootN(x, n), root)
 }
 
-@test
-fn rootNOfZeroKeepsTheSignOfOddRoots() {
-    assertSame(rootN(-0.0, 5), -0.0)
-    assertSame(rootN(-0.0, 4), 0.0)
-    assertSame(rootN(0.0, -4), inf)
-    assertSame(rootN(-0.0, -5), -inf)
-    assertSame(rootN(-0.0, -4), inf)
-    assertSame(rootN(inf, -5), 0.0)
-    assertSame(rootN(nan, 5), nan)
+@test(arguments: [
+    (-0.0, 5, -0.0),
+    (-0.0, 4, 0.0),
+    (0.0, -4, inf),
+    (-0.0, -5, -inf),
+    (-0.0, -4, inf),
+    (inf, -5, 0.0),
+    (nan, 5, nan),
+])
+fn rootNOfZeroKeepsTheSignOfOddRoots(_ x: F64, _ n: Int, _ root: F64) {
+    assertSame(rootN(x, n), root)
 }
 
 @test

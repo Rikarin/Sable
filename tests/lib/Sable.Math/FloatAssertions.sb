@@ -5,6 +5,7 @@ module FloatAssertions
 // units in the last place of a reference value — the distance between two
 // floats counted in the floats between them.
 
+import Sable.Math
 import Sable.Testing
 
 /// +inf, as an F64.
@@ -21,15 +22,15 @@ public let nan32: F32 = F32.fromBits(0x7FC0_0000)
 
 /// Fails unless the two are the same float: both NaN, or the same bits
 /// (so +0.0 and -0.0 differ).
-public fn assertSame(_ actual: F64, _ expected: F64) {
+public fn assertSame(_ actual: F64, _ expected: F64, file: String = #file, line: Int = #line) {
     let same = actual != actual ? expected != expected : actual.bits == expected.bits
-    expect(same, "expected \(expected), got \(actual)")
+    expect(same, "expected \(expected), got \(actual)", file: file, line: line)
 }
 
 /// Fails unless the two are the same float.
-public fn assertSame(_ actual: F32, _ expected: F32) {
+public fn assertSame(_ actual: F32, _ expected: F32, file: String = #file, line: Int = #line) {
     let same = actual != actual ? expected != expected : actual.bits == expected.bits
-    expect(same, "expected \(expected), got \(actual)")
+    expect(same, "expected \(expected), got \(actual)", file: file, line: line)
 }
 
 /// How many floats apart two finite floats are: 0 for the same one, 1 for
@@ -47,13 +48,25 @@ public fn ulpDistance(_ a: F32, _ b: F32) -> I128 {
 
 /// Fails unless the value is within so many units in the last place of the
 /// reference (a correctly rounded value, from a high-precision source).
-public fn assertWithin(_ actual: F64, _ expected: F64, ulps: Int) {
-    expect(ulpDistance(actual, expected) <= I128(ulps), "expected \(expected) within \(ulps) ulp, got \(actual)")
+public fn assertWithin(_ actual: F64, _ expected: F64, ulps: Int, file: String = #file, line: Int = #line) {
+    expect(ulpDistance(actual, expected) <= I128(ulps), "expected \(expected) within \(ulps) ulp, got \(actual)", file: file, line: line)
 }
 
 /// Fails unless the value is within so many units in the last place of the reference.
-public fn assertWithin(_ actual: F32, _ expected: F32, ulps: Int) {
-    expect(ulpDistance(actual, expected) <= I128(ulps), "expected \(expected) within \(ulps) ulp, got \(actual)")
+public fn assertWithin(_ actual: F32, _ expected: F32, ulps: Int, file: String = #file, line: Int = #line) {
+    expect(ulpDistance(actual, expected) <= I128(ulps), "expected \(expected) within \(ulps) ulp, got \(actual)", file: file, line: line)
+}
+
+/// Fails unless both parts are exactly these: a zero's sign, and NaN as NaN.
+public fn assertParts(_ actual: Complex<F64>, _ re: F64, _ im: F64, file: String = #file, line: Int = #line) {
+    assertSame(actual.real, re, file: file, line: line)
+    assertSame(actual.imaginary, im, file: file, line: line)
+}
+
+/// Fails unless both parts are exactly these, as F32s.
+public fn assertParts(_ actual: Complex<F32>, _ re: F32, _ im: F32, file: String = #file, line: Int = #line) {
+    assertSame(actual.real, re, file: file, line: line)
+    assertSame(actual.imaginary, im, file: file, line: line)
 }
 
 // A float's place among all floats: its bits, read so that the order of

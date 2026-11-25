@@ -9,18 +9,6 @@ import Sable.Math
 import Sable.Testing
 import FloatAssertions
 
-/// Fails unless both parts are exactly these: a zero's sign, and NaN as NaN.
-fn assertParts(_ actual: Complex<F64>, _ re: F64, _ im: F64) {
-    assertSame(actual.real, re)
-    assertSame(actual.imaginary, im)
-}
-
-/// Fails unless both parts are exactly these, as F32s.
-fn assertParts(_ actual: Complex<F32>, _ re: F32, _ im: F32) {
-    assertSame(actual.real, re)
-    assertSame(actual.imaginary, im)
-}
-
 /// Written once over Numeric, for any type that is one.
 fn sumOfSquares<T: Numeric>(_ values: T[:]) -> T {
     var total = T.zero
@@ -261,62 +249,56 @@ fn debugWritesTheNumberAsSourceWould() {
     expect(Complex(2.0 as F32, 0.0).debugDescription() == "Complex(2.0, 0.0)")
 }
 
-@test
-fn parsingReadsWhatFormattingWrites() {
-    let points = [Complex(1.5, -2.0), Complex(-0.1, 1e-300), Complex(1e300, -7.25), Complex(0.0, -0.0)]
-    for z in points {
-        assertParts(try! Complex<F64>.parse("\(z)"), z.real, z.imaginary)
-    }
-    let narrow = Complex(0.1 as F32, -3.75)
-    assertParts(try! Complex<F32>.parse("\(narrow)"), 0.1, -3.75)
+@test(arguments: [(1.5, -2.0), (-0.1, 1e-300), (1e300, -7.25), (0.0, -0.0)])
+fn parsingReadsWhatFormattingWrites(_ real: F64, _ imaginary: F64) throws {
+    assertParts(try Complex<F64>.parse("\(Complex(real, imaginary))"), real, imaginary)
 }
 
 @test
-fn parsingTakesEitherPartAloneWithOrWithoutSpaces() {
-    assertParts(try! Complex<F64>.parse("3"), 3.0, 0.0)
-    assertParts(try! Complex<F64>.parse("  -2.5  "), -2.5, 0.0)
-    assertParts(try! Complex<F64>.parse("2i"), 0.0, 2.0)
-    assertParts(try! Complex<F64>.parse("-4.5i"), 0.0, -4.5)
-    assertParts(try! Complex<F64>.parse("i"), 0.0, 1.0)
-    assertParts(try! Complex<F64>.parse("-i"), 0.0, -1.0)
-    assertParts(try! Complex<F64>.parse("+i"), 0.0, 1.0)
-    assertParts(try! Complex<F64>.parse("1+i"), 1.0, 1.0)
-    assertParts(try! Complex<F64>.parse("1 - i"), 1.0, -1.0)
-    assertParts(try! Complex<F64>.parse("1e-3+2.5e2i"), 0.001, 250.0)
-    assertParts(try! Complex<F64>.parse("-1E+2 - 3E-2i"), -100.0, -0.03)
-    assertParts(try! Complex<F64>.parse("2.5e-2i"), 0.0, 0.025)
-    assertParts(try! Complex<F64>.parse("1. - 2.i"), 1.0, -2.0)
+fn parsingReadsWhatFormattingWritesOfF32() throws {
+    let narrow = Complex(0.1 as F32, -3.75)
+    assertParts(try Complex<F32>.parse("\(narrow)"), 0.1, -3.75)
+}
+
+@test(arguments: [
+    ("3", 3.0, 0.0),
+    ("  -2.5  ", -2.5, 0.0),
+    ("2i", 0.0, 2.0),
+    ("-4.5i", 0.0, -4.5),
+    ("i", 0.0, 1.0),
+    ("-i", 0.0, -1.0),
+    ("+i", 0.0, 1.0),
+    ("1+i", 1.0, 1.0),
+    ("1 - i", 1.0, -1.0),
+    ("1e-3+2.5e2i", 0.001, 250.0),
+    ("-1E+2 - 3E-2i", -100.0, -0.03),
+    ("2.5e-2i", 0.0, 0.025),
+    ("1. - 2.i", 1.0, -2.0),
+])
+fn parsingTakesEitherPartAloneWithOrWithoutSpaces(_ text: String, _ real: F64, _ imaginary: F64) throws {
+    assertParts(try Complex<F64>.parse(text), real, imaginary)
+}
+
+@test
+fn parsingReadsInfinitiesAndNaNs() {
     let special = try! Complex<F64>.parse("inf - nani")
     assertSame(special.real, inf)
     expect(special.imaginary.isNaN)
 }
 
+@test(arguments: ["", "   "])
+fn parsingNothingSaysSo(_ blank: String) {
+    expectThrows(ParseError.Empty) { _ = try Complex<F64>.parse(blank) }
+}
+
+@test(arguments: [("1 + 2xi", 5), ("1x + 2i", 1)])
+fn parsingSaysWhatIsWrongAndWhere(_ text: String, _ at: Int) {
+    let error = expectThrows(ParseError.self) { _ = try Complex<F64>.parse(text) }
+    expect(error == .InvalidDigit(at: at) || error == .Invalid(at: at))
+}
+
 @test
-fn parsingSaysWhatIsWrongAndWhere() {
-    for blank in ["", "   "] {
-        do {
-            _ = try Complex<F64>.parse(blank)
-            fail("parsed")
-        } catch {
-            require(error == .Empty)
-        }
-    }
-    do {
-        _ = try Complex<F64>.parse("1 + 2xi")
-        fail("parsed")
-    } catch {
-        expect(error == .InvalidDigit(at: 5) || error == .Invalid(at: 5), "\(error.description())")
-    }
-    do {
-        _ = try Complex<F64>.parse("1x + 2i")
-        fail("parsed")
-    } catch {
-        expect(error == .InvalidDigit(at: 1) || error == .Invalid(at: 1), "\(error.description())")
-    }
-    do {
-        _ = try Complex<F64>.parse("j")
-        fail("parsed")
-    } catch {
-        expect(error != .Empty)
-    }
+fn parsingWhatIsNoNumberThrows() {
+    let error = expectThrows(ParseError.self) { _ = try Complex<F64>.parse("j") }
+    expect(error != .Empty)
 }

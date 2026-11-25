@@ -44,17 +44,19 @@ fn theInverseFunctionsGiveTheExactAnglesAtTheirEnds() {
     assertSame(atan(-inf), -F64.pi / 2.0)
 }
 
-@test
-fn atan2TakesItsQuadrantFromBothSigns() {
-    assertSame(atan2(1.0, -1.0), 2.356194490192345)
-    assertSame(atan2(0.0, -1.0), F64.pi)
-    assertSame(atan2(-0.0, -1.0), -F64.pi)
-    assertSame(atan2(0.0, -0.0), F64.pi)
-    assertSame(atan2(-0.0, 0.0), -0.0)
-    assertSame(atan2(inf, inf), F64.pi / 4.0)
-    assertSame(atan2(-inf, -inf), -2.356194490192345)
-    assertSame(atan2(1.0, -inf), F64.pi)
-    assertSame(atan2(nan, 1.0), nan)
+@test(arguments: [
+    (1.0, -1.0, 2.356194490192345),
+    (0.0, -1.0, F64.pi),
+    (-0.0, -1.0, -F64.pi),
+    (0.0, -0.0, F64.pi),
+    (-0.0, 0.0, -0.0),
+    (inf, inf, F64.pi / 4.0),
+    (-inf, -inf, -2.356194490192345),
+    (1.0, -inf, F64.pi),
+    (nan, 1.0, nan),
+])
+fn atan2TakesItsQuadrantFromBothSigns(_ y: F64, _ x: F64, _ angle: F64) {
+    assertSame(atan2(y, x), angle)
 }
 
 @test
@@ -97,30 +99,34 @@ fn sinCosGivesBoth() {
     assertSame(pair.cos, cos(small))
 }
 
-@test
-fn sinPiIsExactAtIntegersAndHalves() {
-    assertSame(sinPi(0.0), 0.0)
-    assertSame(sinPi(-0.0), -0.0)
-    assertSame(sinPi(1.0), 0.0)
-    assertSame(sinPi(-1.0), -0.0)
-    assertSame(sinPi(2.0), 0.0)
-    assertSame(sinPi(1e17), 0.0)
-    assertSame(sinPi(0.5), 1.0)
-    assertSame(sinPi(1.5), -1.0)
-    assertSame(sinPi(-0.5), -1.0)
-    assertSame(sinPi(2.5), 1.0)
+@test(arguments: [
+    (0.0, 0.0),
+    (-0.0, -0.0),
+    (1.0, 0.0),
+    (-1.0, -0.0),
+    (2.0, 0.0),
+    (1e17, 0.0),
+    (0.5, 1.0),
+    (1.5, -1.0),
+    (-0.5, -1.0),
+    (2.5, 1.0),
+])
+fn sinPiIsExactAtIntegersAndHalves(_ x: F64, _ value: F64) {
+    assertSame(sinPi(x), value)
 }
 
-@test
-fn sinPiIsWithinAnUlpBetween() {
-    assertWithin(sinPi(0.1), 0.30901699437494745, ulps: 1)
-    assertWithin(sinPi(1.0 / 3.0), 0.8660254037844386, ulps: 1)
-    assertWithin(sinPi(0.25), 0.7071067811865476, ulps: 1)
-    assertWithin(sinPi(0.75), 0.7071067811865476, ulps: 1)
-    assertWithin(sinPi(1.25), -0.7071067811865476, ulps: 1)
-    assertWithin(sinPi(1.75), -0.7071067811865476, ulps: 1)
-    assertWithin(sinPi(2.3), 0.8090169943749471, ulps: 2)
-    assertWithin(sinPi(-2.3), -0.8090169943749471, ulps: 2)
+@test(arguments: [
+    (0.1, 0.30901699437494745, 1),
+    (1.0 / 3.0, 0.8660254037844386, 1),
+    (0.25, 0.7071067811865476, 1),
+    (0.75, 0.7071067811865476, 1),
+    (1.25, -0.7071067811865476, 1),
+    (1.75, -0.7071067811865476, 1),
+    (2.3, 0.8090169943749471, 2),
+    (-2.3, -0.8090169943749471, 2),
+])
+fn sinPiIsWithinAnUlpBetween(_ x: F64, _ value: F64, _ ulps: Int) {
+    assertWithin(sinPi(x), value, ulps: ulps)
 }
 
 @test
@@ -132,41 +138,50 @@ fn sinPiOfAnInfinityOrNaNIsNaN() {
     assertSame(tanPi(nan), nan)
 }
 
-@test
-fn cosPiIsExactAtIntegersAndHalves() {
-    assertSame(cosPi(0.0), 1.0)
-    assertSame(cosPi(-0.0), 1.0)
-    assertSame(cosPi(1.0), -1.0)
-    assertSame(cosPi(-3.0), -1.0)
-    assertSame(cosPi(2.0), 1.0)
-    assertSame(cosPi(0.5), 0.0)
-    assertSame(cosPi(-0.5), 0.0)
-    assertSame(cosPi(1.5), 0.0)
+@test(arguments: [
+    (0.0, 1.0),
+    (-0.0, 1.0),
+    (1.0, -1.0),
+    (-3.0, -1.0),
+    (2.0, 1.0),
+    (0.5, 0.0),
+    (-0.5, 0.0),
+    (1.5, 0.0),
+])
+fn cosPiIsExactAtIntegersAndHalves(_ x: F64, _ value: F64) {
+    assertSame(cosPi(x), value)
 }
 
-@test
-fn cosPiIsWithinAnUlpBetween() {
-    assertWithin(cosPi(0.1), 0.9510565162951535, ulps: 1)
-    assertWithin(cosPi(0.25), 0.7071067811865476, ulps: 1)
-    assertWithin(cosPi(0.6), -0.30901699437494734, ulps: 2)
-    assertWithin(cosPi(1.25), -0.7071067811865476, ulps: 1)
-    assertWithin(cosPi(1.75), 0.7071067811865476, ulps: 1)
-    assertWithin(cosPi(-3.7), 0.5877852522924736, ulps: 2)
+@test(arguments: [
+    (0.1, 0.9510565162951535, 1),
+    (0.25, 0.7071067811865476, 1),
+    (0.6, -0.30901699437494734, 2),
+    (1.25, -0.7071067811865476, 1),
+    (1.75, 0.7071067811865476, 1),
+    (-3.7, 0.5877852522924736, 2),
+])
+fn cosPiIsWithinAnUlpBetween(_ x: F64, _ value: F64, _ ulps: Int) {
+    assertWithin(cosPi(x), value, ulps: ulps)
 }
 
-@test
-fn tanPiIsZeroAtIntegersAndInfiniteAtHalves() {
-    assertSame(tanPi(0.0), 0.0)
-    assertSame(tanPi(-0.0), -0.0)
-    assertSame(tanPi(1.0), -0.0)
-    assertSame(tanPi(-1.0), 0.0)
-    assertSame(tanPi(2.0), 0.0)
-    assertSame(tanPi(-2.0), -0.0)
-    assertSame(tanPi(0.5), inf)
-    assertSame(tanPi(1.5), -inf)
-    assertSame(tanPi(-0.5), -inf)
-    assertWithin(tanPi(0.25), 1.0, ulps: 1)
-    assertWithin(tanPi(0.2), 0.7265425280053609, ulps: 2)
+@test(arguments: [
+    (0.0, 0.0),
+    (-0.0, -0.0),
+    (1.0, -0.0),
+    (-1.0, 0.0),
+    (2.0, 0.0),
+    (-2.0, -0.0),
+    (0.5, inf),
+    (1.5, -inf),
+    (-0.5, -inf),
+])
+fn tanPiIsZeroAtIntegersAndInfiniteAtHalves(_ x: F64, _ value: F64) {
+    assertSame(tanPi(x), value)
+}
+
+@test(arguments: [(0.25, 1.0, 1), (0.2, 0.7265425280053609, 2)])
+fn tanPiIsWithinTwoUlpsBetween(_ x: F64, _ value: F64, _ ulps: Int) {
+    assertWithin(tanPi(x), value, ulps: ulps)
 }
 
 @test

@@ -95,21 +95,23 @@ fn powIsWithinAnUlpOfTheTrueValue() {
     assertSame(pow(-2.0, 3.0), -8.0)
 }
 
-@test
-fn powHasCsSpecialCases() {
-    assertSame(pow(nan, 0.0), 1.0)
-    assertSame(pow(nan, -0.0), 1.0)
-    assertSame(pow(1.0, nan), 1.0)
-    assertSame(pow(-1.0, inf), 1.0)
-    assertSame(pow(-2.0, 0.5), nan)
-    assertSame(pow(0.0, -1.0), inf)
-    assertSame(pow(-0.0, -3.0), -inf)
-    assertSame(pow(-0.0, 3.0), -0.0)
-    assertSame(pow(0.5, inf), 0.0)
-    assertSame(pow(2.0, inf), inf)
-    assertSame(pow(-inf, 3.0), -inf)
-    assertSame(pow(-inf, -3.0), -0.0)
-    assertSame(pow(2.0, nan), nan)
+@test(arguments: [
+    (nan, 0.0, 1.0),
+    (nan, -0.0, 1.0),
+    (1.0, nan, 1.0),
+    (-1.0, inf, 1.0),
+    (-2.0, 0.5, nan),
+    (0.0, -1.0, inf),
+    (-0.0, -3.0, -inf),
+    (-0.0, 3.0, -0.0),
+    (0.5, inf, 0.0),
+    (2.0, inf, inf),
+    (-inf, 3.0, -inf),
+    (-inf, -3.0, -0.0),
+    (2.0, nan, nan),
+])
+fn powHasCsSpecialCases(_ base: F64, _ exponent: F64, _ power: F64) {
+    assertSame(pow(base, exponent), power)
 }
 
 @test

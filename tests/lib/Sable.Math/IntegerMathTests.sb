@@ -6,25 +6,29 @@ module IntegerMathTests
 import Sable.Math
 import Sable.Testing
 
-@test
-fn isqrtIsTheFloorOfTheSquareRoot() {
-    assertEqual(isqrt(0), 0)
-    assertEqual(isqrt(1), 1)
-    assertEqual(isqrt(2), 1)
-    assertEqual(isqrt(15), 3)
-    assertEqual(isqrt(16), 4)
-    assertEqual(isqrt(17), 4)
-    assertEqual(isqrt(999_999_999_999), 999_999)
-    assertEqual(isqrt(1_000_000_000_000), 1_000_000)
+@test(arguments: [
+    (0, 0),
+    (1, 1),
+    (2, 1),
+    (15, 3),
+    (16, 4),
+    (17, 4),
+    (999_999_999_999, 999_999),
+    (1_000_000_000_000, 1_000_000),
+])
+fn isqrtIsTheFloorOfTheSquareRoot(_ n: Int, _ root: Int) {
+    assertEqual(isqrt(n), root)
 }
 
-@test
-fn isqrtIsExactWhereF64sSquareRootIsNot() {
+@test(arguments: [
     // 2^53 + 1's root as an F64 rounds: the steps put it right.
-    assertEqual(isqrt(9_007_199_254_740_993), 94_906_265)
-    assertEqual(isqrt(4_611_686_014_132_420_609), 2_147_483_647)
-    assertEqual(isqrt(4_611_686_014_132_420_608), 2_147_483_646)
-    assertEqual(isqrt(9_223_372_036_854_775_807), 3_037_000_499)
+    (9_007_199_254_740_993, 94_906_265),
+    (4_611_686_014_132_420_609, 2_147_483_647),
+    (4_611_686_014_132_420_608, 2_147_483_646),
+    (9_223_372_036_854_775_807, 3_037_000_499),
+])
+fn isqrtIsExactWhereF64sSquareRootIsNot(_ n: Int, _ root: Int) {
+    assertEqual(isqrt(n), root)
 }
 
 @test(traps: "isqrt's argument must not be negative, but is -4")
@@ -32,12 +36,9 @@ fn isqrtOfANegativeNumberTraps() {
     _ = isqrt(-4)
 }
 
-@test
-fn factorialMultipliesOneThroughN() {
-    assertEqual(factorial(0), 1)
-    assertEqual(factorial(1), 1)
-    assertEqual(factorial(5), 120)
-    assertEqual(factorial(20), 2_432_902_008_176_640_000)
+@test(arguments: [(0, 1), (1, 1), (5, 120), (20, 2_432_902_008_176_640_000)])
+fn factorialMultipliesOneThroughN(_ n: Int, _ product: Int) {
+    assertEqual(factorial(n), product)
 }
 
 @test(traps: "integer overflow")
@@ -50,28 +51,19 @@ fn factorialOfANegativeNumberTraps() {
     _ = factorial(-1)
 }
 
-@test
-fn binomialCountsSubsets() {
-    assertEqual(binomial(5, 2), 10)
-    assertEqual(binomial(5, 3), 10)
-    assertEqual(binomial(10, 0), 1)
-    assertEqual(binomial(10, 10), 1)
-    assertEqual(binomial(0, 0), 1)
-    assertEqual(binomial(52, 5), 2_598_960)
+@test(arguments: [(5, 2, 10), (5, 3, 10), (10, 0, 1), (10, 10, 1), (0, 0, 1), (52, 5, 2_598_960)])
+fn binomialCountsSubsets(_ n: Int, _ k: Int, _ count: Int) {
+    assertEqual(binomial(n, k), count)
 }
 
-@test
-fn binomialOutsideZeroThroughNIsZero() {
-    assertEqual(binomial(5, -1), 0)
-    assertEqual(binomial(5, 6), 0)
-    assertEqual(binomial(-3, 2), 0)
+@test(arguments: [(5, -1), (5, 6), (-3, 2)])
+fn binomialOutsideZeroThroughNIsZero(_ n: Int, _ k: Int) {
+    assertEqual(binomial(n, k), 0)
 }
 
-@test
-fn binomialDoesNotOverflowOnTheWayToAResultThatFits() {
-    assertEqual(binomial(62, 31), 465_428_353_255_261_088)
-    assertEqual(binomial(66, 33), 7_219_428_434_016_265_740)
-    assertEqual(binomial(1_000_000, 2), 499_999_500_000)
+@test(arguments: [(62, 31, 465_428_353_255_261_088), (66, 33, 7_219_428_434_016_265_740), (1_000_000, 2, 499_999_500_000)])
+fn binomialDoesNotOverflowOnTheWayToAResultThatFits(_ n: Int, _ k: Int, _ count: Int) {
+    assertEqual(binomial(n, k), count)
 }
 
 @test(traps: "integer overflow")
@@ -79,14 +71,16 @@ fn binomialTrapsWhenTheResultDoesNotFit() {
     _ = binomial(68, 34)
 }
 
-@test
-fn powModReducesEveryProduct() {
-    assertEqual(powMod(4, 13, 497), 445)
-    assertEqual(powMod(2, 0, 7), 1)
-    assertEqual(powMod(2, 0, 1), 0)
-    assertEqual(powMod(-2, 3, 5), 2)
-    assertEqual(powMod(3, 200, 1_000_000_007), 136_318_165)
-    assertEqual(powMod(9_223_372_036_854_775_806, 2, 9_223_372_036_854_775_807), 1)
+@test(arguments: [
+    (4, 13, 497, 445),
+    (2, 0, 7, 1),
+    (2, 0, 1, 0),
+    (-2, 3, 5, 2),
+    (3, 200, 1_000_000_007, 136_318_165),
+    (9_223_372_036_854_775_806, 2, 9_223_372_036_854_775_807, 1),
+])
+fn powModReducesEveryProduct(_ base: Int, _ exponent: Int, _ modulus: Int, _ power: Int) {
+    assertEqual(powMod(base, exponent, modulus), power)
 }
 
 @test(traps: "the modulus must be positive, not 0")
@@ -99,20 +93,20 @@ fn powModToANegativePowerTraps() {
     _ = powMod(2, -1, 7)
 }
 
-@test
-fn modInverseUndoesMultiplication() {
-    assertEqual(modInverse(3, 11) ?? -1, 4)
-    assertEqual(modInverse(10, 17) ?? -1, 12)
-    assertEqual(modInverse(-3, 11) ?? -1, 7)
-    assertEqual(modInverse(14, 1) ?? -1, 0)
-    assertEqual(modInverse(9_223_372_036_854_775_806, 9_223_372_036_854_775_807) ?? -1, 9_223_372_036_854_775_806)
+@test(arguments: [
+    (3, 11, 4),
+    (10, 17, 12),
+    (-3, 11, 7),
+    (14, 1, 0),
+    (9_223_372_036_854_775_806, 9_223_372_036_854_775_807, 9_223_372_036_854_775_806),
+])
+fn modInverseUndoesMultiplication(_ n: Int, _ modulus: Int, _ inverse: Int) {
+    assertEqual(modInverse(n, modulus), inverse)
 }
 
-@test
-fn modInverseIsNoneWithACommonFactor() {
-    expect(modInverse(2, 4) == none, "2 has no inverse modulo 4")
-    expect(modInverse(0, 7) == none, "0 has no inverse")
-    expect(modInverse(21, 14) == none, "7 divides both")
+@test(arguments: [(2, 4, "2 has no inverse modulo 4"), (0, 7, "0 has no inverse"), (21, 14, "7 divides both")])
+fn modInverseIsNoneWithACommonFactor(_ n: Int, _ modulus: Int, _ why: String) {
+    expect(modInverse(n, modulus) == none, why)
 }
 
 @test(traps: "the modulus must be positive, not 0")
@@ -197,7 +191,7 @@ fn modInverseOfA128BitTypeDoesNotOverflow() {
     let m: U128 = 170_141_183_460_469_231_731_687_303_715_884_105_727
     let a: U128 = 123_456_789_123_456_789_123
     let inverse: U128 = 82_984_245_440_425_468_002_353_066_831_922_575_035
-    assertEqual(modInverse(a, m) ?? 0, inverse)
-    assertEqual(modInverse(3 as U8, 250) ?? 0, 167 as U8)
+    assertEqual(modInverse(a, m), inverse)
+    assertEqual(modInverse(3 as U8, 250), 167 as U8)
     expect(modInverse(4 as U8, 250) == none, "2 divides both")
 }

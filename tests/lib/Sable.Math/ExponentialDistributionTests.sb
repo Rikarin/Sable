@@ -35,7 +35,10 @@ fn theTailFollowsTheDistribution() {
     var beyond: F64[>..] = []
     for _ in 0..<1000000 {
         let x = exponential.sample(using: &generator)
-        assert(x >= 0.0)
+        if !(x >= 0.0) {
+            recordFailure("drew \(x)")
+            return
+        }
         if x > edge {
             beyond.append(x - edge)
         }

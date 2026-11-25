@@ -26,14 +26,14 @@ public fn kolmogorovSmirnov(_ draws: F64[:], _ cumulative: (F64) -> F64) -> F64 
 }
 
 /// Fails unless the draws are of the distribution with the function.
-public fn assertFollows(_ draws: F64[:], _ cumulative: (F64) -> F64) {
+public fn assertFollows(_ draws: F64[:], _ cumulative: (F64) -> F64, file: String = #file, line: Int = #line) {
     let statistic = kolmogorovSmirnov(draws, cumulative)
-    expect(statistic < 2.2, "Kolmogorov and Smirnov's statistic is \(statistic)")
+    expect(statistic < 2.2, "Kolmogorov and Smirnov's statistic is \(statistic)", file: file, line: line)
 }
 
 /// Fails unless the counts are in proportion to the shares, by chi-squared;
 /// a share of zero must have a count of zero.
-public fn assertShares(_ counts: Int[:], _ shares: F64[:]) {
+public fn assertShares(_ counts: Int[:], _ shares: F64[:], file: String = #file, line: Int = #line) {
     var total = 0
     var whole = 0.0
     for count in counts {
@@ -48,7 +48,7 @@ public fn assertShares(_ counts: Int[:], _ shares: F64[:]) {
     while i < counts.count {
         let expected = F64(total) * shares[i] / whole
         if shares[i] == 0.0 {
-            assertEqual(counts[i], 0)
+            assertEqual(counts[i], 0, file: file, line: line)
         } else {
             let off = F64(counts[i]) - expected
             statistic += off * off / expected
@@ -57,7 +57,7 @@ public fn assertShares(_ counts: Int[:], _ shares: F64[:]) {
         i += 1
     }
     let deviation = (statistic - degrees) / (2.0 * degrees).squareRoot()
-    expect(deviation < 6.0, "chi-squared is \(deviation) deviations off")
+    expect(deviation < 6.0, "chi-squared is \(deviation) deviations off", file: file, line: line)
 }
 
 /// The normal distribution's function, of mean 0 and deviation 1.

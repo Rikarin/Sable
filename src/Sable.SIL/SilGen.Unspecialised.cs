@@ -2824,7 +2824,12 @@ public sealed partial class SilGen {
             var method = requirement;
             if (kind is BinaryOperatorKind.NotEqual or BinaryOperatorKind.GreaterThan or BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual) {
                 var basis = kind == BinaryOperatorKind.NotEqual ? "==" : "<";
-                if (concrete is NamedTypeSymbol named && Implementation(named, requirement) is { ContainingSymbol: ExtensionSymbol { ExtendedType: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } }
+                var own = concrete switch {
+                    NamedTypeSymbol named => Implementation(named, requirement),
+                    ArrayTypeSymbol array => ArrayImplementation(array, requirement),
+                    _ => null,
+                };
+                if (own is null or { ContainingSymbol: ExtensionSymbol { ExtendedType: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } }
                     && ProtocolClosure([protocol]).SelectMany(static p => p.Members).OfType<FunctionSymbol>().FirstOrDefault(f => f.FunctionKind == FunctionKind.Operator && f.Name == basis && f.ContainingSymbol is NamedTypeSymbol) is { } derivedFrom) {
                     method = derivedFrom;
                 } else {

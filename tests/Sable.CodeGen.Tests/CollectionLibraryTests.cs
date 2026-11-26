@@ -55,7 +55,7 @@ public sealed class CollectionLibraryTests {
     [Fact]
     public void DequeReleasesWhatItRemoves() =>
         Assert.Equal(
-            "got a\ngone b\nend\ngone a\n",
+            "got a\ngone a\ngone b\nend\n",
             AssertAgree("""
                 module P
                 import Sable.Collections

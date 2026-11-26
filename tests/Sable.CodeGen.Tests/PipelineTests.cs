@@ -16,7 +16,7 @@ public sealed class PipelineTests {
 
     [Fact]
     public void SomethingNotLoweredYetSaysWhat() {
-        var result = Compile("module M\n@noncopy struct T { var id: Int }\nstruct P { var x: T[] }\n@main\nfn main() { let p: P? = none }\n");
+        var result = Compile("module M\n@noncopy struct T { var id: Int }\nstruct P { var x: T[4] }\n@main\nfn main() { let p: P? = none }\n");
         Assert.False(result.Succeeded);
         Assert.Contains(result.Errors, static e => e.Contains("S7000", StringComparison.Ordinal));
     }
@@ -30,7 +30,7 @@ public sealed class PipelineTests {
         var library = SyntaxTree.Parse(
             new SourceText(
                 "module Sable.Extra\npublic fn keep<T: ~Copyable>(_ value: consuming T) -> Int { return held(move value) }\n"
-                + "fn held<T: ~Copyable>(_ value: consuming T) -> Int {\n    let held: T[] = []\n    return held.count\n}\n",
+                + "fn held<T: ~Copyable>(_ value: consuming T) -> Int {\n    let held: T[..2] = []\n    return held.count\n}\n",
                 "lib/Sable.Extra/Extra.sb"
             )
         );

@@ -201,6 +201,24 @@ and its allocations, retains and releases. `--sil` and `--asm` print what the
 benchmarks were compiled to, each and its closures as functions of their own
 (what is inlined into them with them), in place of a run.
 
+*Profile-guided builds.* `sable build --profile-generate <file.sb>` builds a program that
+counts, before each call through a vtable, a witness table or a closure, the
+function the call is about to reach: at each such site, the first four and
+how often each, and how often anything else. As it ends it writes them to
+`<output>.sableprof` (`--profile-generate=<path>` names another file; the
+variable `SABLE_PROFILE_FILE`, where set, wins), anew each run. `sable build
+--profile-use <path> <file.sb>` then has each site whose most reached function
+took at least nine calls in ten, and 64 calls, test for that function and call
+it directly — where the inliner can take its body — and leave the call as it
+was for anything else; the test is of the function itself, so a wrong guess
+costs one comparison. A site is known by its function, its place among the
+function's indirect calls and a fingerprint of the function's SIL as it is
+counted: a function changed since the profile was made, or built with other
+options (another level, `-g`, `--exclusivity`), has no sites the profile
+names, and is built as without one, so a stale profile is ignored, never
+wrong. Both need an optimised build of a file; a package's build takes
+neither yet. (SIL's `CallProfile.cs`, and the runtime's `profile.c`.)
+
 `sable fuzz` fuzzes a `@fuzz` function — one that takes the fuzzer's bytes,
 `U8[:]`, or up to four values made of them, and fails by trapping or throwing
 (S3104 says what else it may not be) — of the package (its library, `tests/`

@@ -32,6 +32,7 @@
 #include "exclusivity.c"
 #include "references.c"
 #include "coverage.c"
+#include "profile.c"
 #include "traps.c"
 #include "processor.c"
 #include "numbers.c"

@@ -77,6 +77,21 @@ public static class SilPassManager {
     ///         <item><c>z</c>: without the inliner too, which copies callees into every caller.</item>
     ///     </list>
     /// </remarks>
+    /// <summary>
+    ///     The same, with a profile's pass (<see cref="CallProfile" />) — one that
+    ///     counts the calls, or one that guesses from the counts — where the
+    ///     devirtualising passes end and the inliner has not started.
+    /// </summary>
+    public static IReadOnlyList<ISilPass> ForLevel(string optLevel, ISilPass? profile) {
+        var passes = ForLevel(optLevel);
+        if (profile is null) {
+            return passes;
+        }
+
+        var at = passes.Select(static (p, i) => (p, i)).LastOrDefault(static p => p.p is Specialise or Devirtualise or SpeculativeDevirtualise, (null!, -1)).i + 1;
+        return [..passes.Take(at), profile, ..passes.Skip(at)];
+    }
+
     public static IReadOnlyList<ISilPass> ForLevel(string optLevel) =>
         optLevel switch {
             "0" => Default,

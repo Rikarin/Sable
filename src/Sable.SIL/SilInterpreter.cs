@@ -1416,6 +1416,19 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "no_context":
                 return null;
 
+            // A profile is of native code: interpreted, a call is not counted.
+            case "profile_count":
+                return null;
+
+            case "function_is":
+                return (operands[0] is ClosureValue closure ? closure.Function : operands[0] as string) == (string?)operands[1];
+
+            case "closure_context": {
+                var context = ((ClosureValue)operands[0]!).Context;
+                Retain(SilType.Object, context);
+                return context;
+            }
+
             // A fresh array of the constants, room for them alone, as the
             // native constant has.
             case "array_literal" or "array_literal_stack":

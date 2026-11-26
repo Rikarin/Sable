@@ -1781,6 +1781,17 @@ public sealed class SilModule {
     /// </summary>
     public bool CheckArc { get; set; }
 
+    /// <summary>
+    ///     In a build that profiles its calls (<c>--profile-generate</c>,
+    ///     <see cref="InstrumentProfile" />), each counted call site's key, by
+    ///     its number, and the file the program writes the counts to; null in
+    ///     any other build.
+    /// </summary>
+    public List<string>? ProfileSites { get; set; }
+
+    /// <summary>Where a profiling build writes its counts, unless <c>SABLE_PROFILE_FILE</c> says (<see cref="ProfileSites" />).</summary>
+    public string? ProfileFile { get; set; }
+
     /// <summary>The function a program starts in: the one marked <c>@main</c>, or else <c>main</c>.</summary>
     public string? EntryPoint { get; set; }
 
@@ -2304,6 +2315,18 @@ public static class SilBuiltins {
             // call of its code made directly passes (Simplify's DirectCalls).
             case "no_context" when operands.Count == 0:
                 return new([], SilType.Object);
+            // A call site's callee counted, in a build that profiles its calls
+            // (CallProfile.cs): the site's number, and the function or closure.
+            case "profile_count" when operands is [var site, FunctionType or ThickFunctionType] && site == SilType.Int:
+                return new([..operands], SilType.Unit);
+            // Whether a function value, or a closure's code, is the function:
+            // the test of a guess a profile made (CallProfile.cs).
+            case "function_is" when operands is [FunctionType or ThickFunctionType, FunctionType]:
+                return new([..operands], SilType.Bool);
+            // A closure's context, copied: what its code is called with when it
+            // is called directly.
+            case "closure_context" when operands is [ThickFunctionType]:
+                return new([..operands], SilType.Object);
             // A block ran, for 'sable test --coverage' (Coverage.cs): its counter's number.
             case Coverage.Builtin when operands is [var counter] && counter == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
@@ -2606,7 +2629,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", "thread_start", "thread_loop", "thread_local_set", "task_local_push", "no_context", "object_unmade", Coverage.Builtin]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", "thread_start", "thread_loop", "thread_local_set", "task_local_push", "no_context", "profile_count", "function_is", "closure_context", "object_unmade", Coverage.Builtin]);
 
     /// <summary>
     ///     True of a builtin that runs code of the program's — a loop's work, a

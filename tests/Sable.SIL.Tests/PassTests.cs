@@ -861,6 +861,118 @@ public sealed class PassTests {
         Assert.Equal(-1L, new SilInterpreter(module).Run("M.thrown"));
     }
 
+    const string Shapes = """
+        open class Shape { open fn area() -> Int { return 0 } }
+        final class Square: Shape { override fn area() -> Int { return 4 } }
+        final class Circle: Shape { override fn area() -> Int { return 3 } }
+        final class Dot: Shape { override fn area() -> Int { return 1 } }
+        fn sum(_ shapes: Shape[>..]) -> Int {
+            var total = 0
+            for shape in shapes {
+                total = total + shape.area()
+            }
+            return total
+        }
+        fn each(_ values: Int[>..], _ f: (Int) -> Int) -> Int {
+            var total = 0
+            for value in values {
+                total = total + f(value)
+            }
+            return total
+        }
+        fn squares(_ n: Int) -> Int {
+            var shapes: Shape[>..] = []
+            for _ in 0..<n {
+                shapes.append(Square())
+            }
+            return sum(shapes)
+        }
+        fn mixed(_ n: Int) -> Int {
+            var shapes: Shape[>..] = []
+            for i in 0..<n {
+                if i % 2 == 0 {
+                    shapes.append(Circle())
+                } else {
+                    shapes.append(Square())
+                }
+            }
+            return sum(shapes)
+        }
+        fn scaled(_ k: Int) -> Int { return each([1, 2, 3]) { $0 * k } }
+        """;
+
+    /// <summary>The keys of a module's indirect call sites, as a build that counts them names them.</summary>
+    static List<string> ProfileKeys(string source) {
+        var counted = Lowered(source);
+        SilPassManager.Run(counted, SilPassManager.ForLevel("2", new InstrumentProfile("unused")));
+        return counted.ProfileSites!;
+    }
+
+    /// <summary>
+    ///     A call through a vtable or a closure that a profile says nearly
+    ///     always reached one function tests for it and calls it directly:
+    ///     the guess is what runs when it is right — the call left for
+    ///     anything else is not reached — and the call is made as before
+    ///     when it is wrong. A profile of a function since changed is not
+    ///     used.
+    /// </summary>
+    [Fact]
+    public void AProfileGuessIsTestedForAndCalledDirectly() {
+        var keys = ProfileKeys(Shapes);
+        var sum = Assert.Single(keys, static k => k.StartsWith("M.sum#0@", StringComparison.Ordinal));
+        var each = Assert.Single(keys, static k => k.StartsWith("M.each#0@", StringComparison.Ordinal));
+        var profile = new ProfileData(new Dictionary<string, ProfileSite> {
+            [sum] = new(1000, [("M.Square.area", 990), ("M.Circle.area", 10)]),
+            [each] = new(300, [("M.scaled$closure0", 300)]),
+        });
+
+        var module = Lowered(Shapes);
+        var use = new UseProfile(profile);
+        SilPassManager.Run(module, SilPassManager.ForLevel("2", use));
+        Assert.Equal(2, use.Guessed);
+        Assert.Equal(40L, new SilInterpreter(module).Run("M.squares", 10L));
+        Assert.Equal(35L, new SilInterpreter(module).Run("M.mixed", 10L));
+        Assert.Equal(12L, new SilInterpreter(module).Run("M.scaled", 2L));
+
+        // With the call left for anything else made a trap, the guess alone runs where it is right.
+        var guessed = Lowered(Shapes);
+        SilPassManager.Run(guessed, SilPassManager.ForLevel("2", new UseProfile(profile)));
+        foreach (var name in new[] { "M.sum", "M.each" }) {
+            var test = Assert.Single(Instructions(guessed.Find(name)!).OfType<CondBranchInst>(), static b => b.Condition is BuiltinInst { Name: "function_is" });
+            var fallback = test.WhenFalse;
+            var always = new IntegerLiteralInst(SilType.Bool, 1) { Block = fallback };
+            fallback.Instructions.InsertRange(0, [always, new CondFailInst(always, "the call left for anything else") { Block = fallback }]);
+        }
+
+        Assert.Equal(40L, new SilInterpreter(guessed).Run("M.squares", 10L));
+        Assert.Equal(12L, new SilInterpreter(guessed).Run("M.scaled", 2L));
+        Assert.Throws<SilTrap>(() => new SilInterpreter(guessed).Run("M.mixed", 10L));
+
+        // Too few calls, no function dominant enough, or a fingerprint of other SIL: no guess.
+        var unused = new ProfileData(new Dictionary<string, ProfileSite> {
+            [sum] = new(10, [("M.Square.area", 10)]),
+            [each] = new(300, [("M.scaled$closure0", 200)]),
+            [sum[..sum.IndexOf('@')] + "@0000000000000000"] = new(1000, [("M.Square.area", 1000)]),
+        });
+        var stale = new UseProfile(unused);
+        SilPassManager.Run(Lowered(Shapes), SilPassManager.ForLevel("2", stale));
+        Assert.Equal(0, stale.Guessed);
+    }
+
+    /// <summary>A profile is read from its text, and text that is not one is refused, saying why.</summary>
+    [Fact]
+    public void AProfileIsReadFromItsText() {
+        var profile = ProfileData.Parse("sable-profile 1\nsite\tM.f#0@ab\t12\ntarget\t10\tM.g\ntarget\t2\tM.h\n\nsite\tM.k#1@cd\t3\n", out var problem);
+        Assert.Null(problem);
+        Assert.Equal(12, profile!.Sites["M.f#0@ab"].Total);
+        Assert.Equal([("M.g", 10L), ("M.h", 2L)], profile.Sites["M.f#0@ab"].Targets);
+        Assert.Empty(profile.Sites["M.k#1@cd"].Targets);
+        Assert.Null(ProfileData.Parse("not a profile", out problem));
+        Assert.Contains("sable-profile 1", problem, StringComparison.Ordinal);
+        Assert.Null(ProfileData.Parse("sable-profile 1\ntarget\t1\tM.g\n", out problem));
+        Assert.Contains("line 2", problem, StringComparison.Ordinal);
+    }
+
     /// <summary>Constants fold, and the branches they decide go with what they skip.</summary>
     [Fact]
     public void ConstantsFoldAndDecidedBranchesGo() {

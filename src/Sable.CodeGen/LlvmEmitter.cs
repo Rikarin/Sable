@@ -156,8 +156,14 @@ public sealed partial class LlvmEmitter {
         // the rest reaches, so it builds everything it has.
         _reachable = module.Unit is null ? SilPassManager.Reachable(module) : null;
         var functions = new StringBuilder();
+        var emitted = new List<SilFunction>();
         foreach (var function in module.Functions.Where(f => _reachable?.Contains(f.Name) ?? true)) {
             Function(function, functions);
+            emitted.Add(function);
+        }
+
+        if (module.ProfileSites is { } sites) {
+            functions.Append(ProfileTables(sites, module.ProfileFile ?? "", emitted.Where(static f => f.Blocks.Count > 0).ToList()));
         }
 
         if (module.EntryPoint is { } entry && module.Find(entry) is { } main) {
@@ -879,6 +885,7 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_frame_alloc(i64)
                                 declare void @sable_frame_free(ptr)
                                 declare void @sable_coverage_hit(i64)
+                                declare void @sable_profile_count(ptr, i64, ptr)
                                 declare void @sable_array_make_unique(ptr nocapture, ptr) cold
                                 @sable_empty_array_count = internal constant %SableArrayHeader zeroinitializer
                                 declare void @sable_access_begin(ptr, ptr, i64, i32, ptr)
@@ -2024,6 +2031,26 @@ public sealed partial class LlvmEmitter {
         return after;
     }
 
+    /// <summary>
+    ///     What a build that profiles its calls gives the runtime
+    ///     (runtime/profile.c's SableProfile): where to write, each site's
+    ///     key and its counts, zero to start, and each function's address and
+    ///     name, which the counts are written by.
+    /// </summary>
+    string ProfileTables(IReadOnlyList<string> sites, string file, IReadOnlyList<SilFunction> functions) {
+        static string Array(IEnumerable<string> pointers) =>
+            pointers.Any() ? "[" + string.Join(", ", pointers.Select(static p => "ptr " + p)) + "]" : "zeroinitializer";
+
+        var text = new StringBuilder();
+        text.Append($"@sable_profile_table_counts = internal global [{sites.Count} x {{ [4 x ptr], [4 x i64], i64 }}] zeroinitializer\n");
+        text.Append($"@sable_profile_table_keys = private constant [{sites.Count} x ptr] {Array(sites.Select(TrapMessage).ToList())}\n");
+        text.Append($"@sable_profile_table_code = private constant [{functions.Count} x ptr] {Array(functions.Select(static f => "@" + Global(f.Name)).ToList())}\n");
+        text.Append($"@sable_profile_table_names = private constant [{functions.Count} x ptr] {Array(functions.Select(f => TrapMessage(f.Name)).ToList())}\n");
+        text.Append($"@sable_profile_table = internal global {{ ptr, ptr, i64, ptr, ptr, i64, ptr, ptr, i32 }} {{ ptr null, ptr {TrapMessage(file)}, i64 {sites.Count}, ")
+            .Append($"ptr @sable_profile_table_keys, ptr @sable_profile_table_counts, i64 {functions.Count}, ptr @sable_profile_table_code, ptr @sable_profile_table_names, i32 0 }}\n\n");
+        return text.ToString();
+    }
+
     /// <summary>A NUL-terminated message for <c>sable_trap</c>.</summary>
     string TrapMessage(string message) {
         if (_trapMessages.TryGetValue(message, out var name)) {
@@ -2114,6 +2141,17 @@ public sealed partial class LlvmEmitter {
             }
 
             return _accessState;
+        }
+
+        /// <summary>The code a function value calls: itself, or a closure's first half.</summary>
+        string Code(SilValue value, string name) {
+            if (value.Type is not ThickFunctionType) {
+                return name;
+            }
+
+            var code = Fresh();
+            Line($"{code} = extractvalue {{ ptr, ptr }} {name}, 0");
+            return code;
         }
 
         /// <summary>
@@ -5318,6 +5356,22 @@ public sealed partial class LlvmEmitter {
                 case "thread_local_find":
                     FindThreadLocal(operands[0], Result);
                     return;
+
+                // A call site's callee counted (SIL's CallProfile.cs): a closure by its code.
+                case "profile_count":
+                    Line($"call void @sable_profile_count(ptr @sable_profile_table, i64 {operands[0]}, ptr {Code(builtin.Operands[1], operands[1])})");
+                    return;
+
+                case "function_is":
+                    Line($"{Result()} = icmp eq ptr {Code(builtin.Operands[0], operands[0])}, {operands[1]}");
+                    return;
+
+                case "closure_context": {
+                    var context = Result();
+                    Line($"{context} = extractvalue {{ ptr, ptr }} {operands[0]}, 1");
+                    Own(true, SilType.Object, context);
+                    return;
+                }
 
                 // Freed here: none remembered is found again (FindThreadLocal).
                 case "thread_local_free":

@@ -11,6 +11,7 @@ import Sable.Concurrency
 import Sable.IO
 import Sable.Process
 import Sable.Testing
+import Sable.Time
 
 #if !os(windows)
 
@@ -28,11 +29,12 @@ fn anInterruptRunsTheHandler() async {
     let registration = try! Console.onInterrupt {
         _ = seen.add(1)
     }
-    // The handler's task listens from its start: sent until it has heard one.
+    // The handler's task listens from its start, which may be a while on a
+    // loaded machine: sent until it has heard one, for ten seconds at most.
     var tries = 0
-    while seen.load() == 0 && tries < 500 {
+    while seen.load() == 0 && tries < 10_000 {
         Signals.raise(.Interrupt)
-        await Task.yield()
+        try? await Task.sleep(for: Duration.milliseconds(1))
         tries += 1
     }
     registration.cancel()

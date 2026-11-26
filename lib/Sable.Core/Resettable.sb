@@ -21,4 +21,3 @@ public protocol Resettable {
     /// Back to empty, as made, with the room it has kept.
     mutating fn reset()
 }
-

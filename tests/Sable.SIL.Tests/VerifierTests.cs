@@ -532,6 +532,32 @@ public sealed class VerifierTests {
             "whose payload it would leak"
         );
 
+    /// <summary>An owned upcast consumes the object it is given, which must be owned.</summary>
+    [Theory]
+    [InlineData("@owned M.Dog", "", null)]
+    [InlineData("M.Dog", "", "borrowed")]
+    [InlineData("@owned M.Dog", "destroy_value %0\n  ", "not live")]
+    public void AnOwnedUpcastTakesTheObject(string parameter, string after, string? complaint) {
+        var text = $$"""
+                    sil_class M.Animal {  }
+                    sil_class M.Dog : M.Animal {  }
+
+                    sil @f : $({{parameter}}) -> M.Animal {
+                    bb0(%0 : $M.Dog):
+                      %1 = upcast [owned] %0 : $M.Animal
+                      {{after}}return %1
+                    }
+
+                    """;
+        var module = SilParser.Parse(text);
+        Assert.Contains("upcast [owned] %0 : $M.Animal", SilPrinter.Print(module), StringComparison.Ordinal);
+        if (complaint is null) {
+            Assert.Empty(SilVerifier.Verify(module));
+        } else {
+            AssertRejected(text, complaint);
+        }
+    }
+
     [Fact]
     public void AnEnumsPayloadAddressNeedsACaseWithAPayload() =>
         AssertRejected(

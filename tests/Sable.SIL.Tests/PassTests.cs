@@ -105,6 +105,53 @@ public sealed class PassTests {
         Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
     }
 
+    /// <summary>
+    ///     An object put into an array of its base class just after it is
+    ///     made is taken as the base: an owned upcast, with no copy of it.
+    /// </summary>
+    [Fact]
+    public void AnObjectKeptAsItsBaseIsTakenAsIt() {
+        var module = Lowered(
+            """
+            open class Animal {
+                var legs: Int
+                init(_ legs: Int) { self.legs = legs }
+                open fn weight() -> Int { return legs }
+            }
+
+            class Dog: Animal {
+                init() { super.init(4) }
+                override fn weight() -> Int { return 20 }
+            }
+
+            fn herd(_ n: Int) -> Int {
+                var animals: Animal[>..] = []
+                for _ in 0..<n {
+                    animals.append(Dog())
+                }
+                var total = 0
+                for animal in animals {
+                    total += animal.weight() + animal.legs
+                }
+                return total
+            }
+
+            fn probe() -> Int { return herd(3) }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        var herd = module.Find("M.herd")!.Blocks.SelectMany(static b => b.Instructions).ToList();
+        Assert.Contains(herd, static i => i is OwnedUpcastInst);
+        Assert.DoesNotContain(herd, static i => i is CopyValueInst { Value: UpcastInst });
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(72L, interpreter.Run("M.probe"));
+        Assert.Equal(0, interpreter.LiveObjects);
+
+        var text = SilPrinter.Print(module);
+        Assert.Contains("upcast [owned]", text);
+        Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
+    }
+
     /// <summary>A local passed to a call that can throw is lent to it, not copied for it.</summary>
     [Fact]
     public void ALocalIsBorrowedAcrossACallThatCanThrow() {

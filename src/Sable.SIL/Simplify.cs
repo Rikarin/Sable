@@ -208,7 +208,7 @@ public sealed class Simplify : ISilPass {
                 }
 
                 var known = box;
-                while (known is UpcastInst or CopyValueInst) {
+                while (known is UpcastInst or OwnedUpcastInst or CopyValueInst) {
                     known = ((SilInstruction)known).Operands[0];
                 }
 

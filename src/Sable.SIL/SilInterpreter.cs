@@ -1367,6 +1367,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         values[upcast] = Get(upcast.Value);
                         break;
 
+                    case OwnedUpcastInst owned:
+                        values[owned] = Get(owned.Value);
+                        break;
+
                     // The method for the class the object is, not the one it is seen as.
                     case ClassMethodInst method: {
                         var instance = Alive((HeapObject)Get(method.Reference)!);

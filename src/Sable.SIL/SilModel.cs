@@ -1376,6 +1376,18 @@ public sealed class UpcastInst(SilValue value, ClassType type) : SilInstruction(
 }
 
 /// <summary>
+///     <c>upcast [owned] %0 : $Base</c>: an owned object, taken, as one of its
+///     superclasses — the same reference, owned now as the superclass: what
+///     <c>copy_value</c> of an <c>upcast</c>, then <c>destroy_value %0</c>,
+///     comes to, a retain and a release fewer (<see cref="OwnUpcasts" />).
+/// </summary>
+public sealed class OwnedUpcastInst(SilValue value, ClassType type) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type { get; } = type;
+    public override string Opcode => "upcast";
+}
+
+/// <summary>
 ///     <c>class_method %0, #describe : $(Node) -&gt; String</c>: the code of a
 ///     method for the class the object actually is, from its vtable.
 /// </summary>

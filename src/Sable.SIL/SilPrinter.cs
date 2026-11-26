@@ -579,6 +579,10 @@ public static class SilPrinter {
                         builder.Append(' ').Append(Name(upcast.Value)).Append(" : $").Append(upcast.Type);
                         break;
 
+                    case OwnedUpcastInst owned:
+                        builder.Append(" [owned] ").Append(Name(owned.Value)).Append(" : $").Append(owned.Type);
+                        break;
+
                     case ClassMethodInst method:
                         builder.Append(' ').Append(Name(method.Reference)).Append(", #").Append(method.Method)
                             .Append(" : $").Append(method.Type);

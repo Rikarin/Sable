@@ -1238,10 +1238,11 @@ public sealed class SilParser {
             }
 
             case "upcast": {
+                var owned = AcceptFlag("owned");
                 var value = Operand(0);
                 Expect(":");
-                instruction = new UpcastInst(value, ParseType() as ClassType
-                    ?? throw new SilParseException("upcast gives a class reference", line));
+                var to = ParseType() as ClassType ?? throw new SilParseException("upcast gives a class reference", line);
+                instruction = owned ? new OwnedUpcastInst(value, to) : new UpcastInst(value, to);
                 break;
             }
 

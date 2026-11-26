@@ -417,6 +417,9 @@ public static partial class SilVerifier {
             case UpcastInst upcast when upcast.Value.Type is not ClassType from || !from.IsSubclassOf((ClassType)upcast.Type):
                 return $"upcast of {upcast.Value.Type} to {upcast.Type}, which it does not inherit from";
 
+            case OwnedUpcastInst owned when owned.Value.Type is not ClassType from || !from.IsSubclassOf((ClassType)owned.Type):
+                return $"upcast [owned] of {owned.Value.Type} to {owned.Type}, which it does not inherit from";
+
             case ClassMethodInst method:
                 if (method.Reference.Type is not ClassType owner) {
                     return $"class_method needs an object, not {method.Reference.Type}";
@@ -602,7 +605,7 @@ public static partial class SilVerifier {
             case StructInst or TupleInst or EnumInst or ReturnInst or ThrowInst or DestroyValueInst:
                 return Enumerable.Range(0, instruction.Operands.Count);
 
-            case SwitchEnumInst { Takes: true }:
+            case SwitchEnumInst { Takes: true } or OwnedUpcastInst:
                 return [0];
 
             case PartialApplyInst { Context: not null }:

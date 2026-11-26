@@ -3858,6 +3858,10 @@ public sealed partial class LlvmEmitter {
                     _names[upcast] = Name(upcast.Value);
                     return;
 
+                case OwnedUpcastInst owned:
+                    _names[owned] = Name(owned.Value);
+                    return;
+
                 // The object's metadata is its first word; the method is in its slot there.
                 case ClassMethodInst method: {
                     var owner = (ClassType)method.Reference.Type;

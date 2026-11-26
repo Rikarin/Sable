@@ -445,4 +445,91 @@ public sealed class ArcTests {
             Assert.Contains("retains 204,", stats, StringComparison.Ordinal);
         }
     }
+
+    /// <summary>
+    ///     A named 'let' whose last use is a 'consuming' argument is moved
+    ///     into the call: the callee holds the only reference to its buffer,
+    ///     and changes it in place with nothing copied — as it would a
+    ///     temporary. One used after the call is copied for it, as before.
+    /// </summary>
+    [Fact]
+    public void ALastUseIntoAConsumingParameterIsAMove() {
+        // The callee's copy is the only reference: 'ref_is_unique' (isUniquelyReferenced), declared where a builtin may be.
+        Assert.Equal(
+            "true\nfalse\n8\n",
+            AssertAgree(
+                """
+                module Sable.MoveCheck
+
+                class Cell {
+                    var n: Int
+                    init(_ n: Int) { self.n = n }
+                }
+
+                struct Held {
+                    var cell: Cell
+
+                    @builtin("ref_is_unique")
+                    mutating fn isUniquelyReferenced() -> Bool
+                }
+
+                @inline(never)
+                fn alone(_ held: consuming Held) -> Bool {
+                    var mine = held
+                    return mine.isUniquelyReferenced()
+                }
+
+                fn make(_ n: Int) -> Held {
+                    return Held { cell: Cell(n) }
+                }
+
+                @main
+                fn main() {
+                    let moved = make(8)
+                    print(alone(moved))
+                    let kept = make(8)
+                    print(alone(kept))
+                    print(kept.cell.n)
+                }
+                """
+            ).Stdout
+        );
+
+        AllocatesNothingForAMovedBuffer();
+    }
+
+    static void AllocatesNothingForAMovedBuffer() =>
+        Assert.Equal(
+            "0 5 1000\n1 5 0\n",
+            AssertAgree(
+                Program(
+                    """
+                    @inline(never)
+                    fn bump(_ xs: consuming Int[>..]) -> Int[>..] {
+                        var ys = xs
+                        ys[0] = 5
+                        return ys
+                    }
+
+                    fn make(_ n: Int) -> Int[>..] {
+                        var xs: Int[>..] = []
+                        for i in 0..<n {
+                            xs.append(i)
+                        }
+                        return xs
+                    }
+                    """,
+                    """
+                        let a = make(1000)
+                        var n = Runtime.allocationCount()
+                        let b = bump(a)
+                        print("\(Runtime.allocationCount() - n) \(b[0]) \(b.count)")
+                        let c = make(10)
+                        n = Runtime.allocationCount()
+                        let d = bump(c)
+                        print("\(Runtime.allocationCount() - n) \(d[0]) \(c[0])")
+                    """
+                )
+            ).Stdout
+        );
 }

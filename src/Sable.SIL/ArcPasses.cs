@@ -548,7 +548,8 @@ public sealed class ForwardCopies : ISilPass {
             var uses = new Uses(function);
             foreach (var block in function.Blocks) {
                 for (var i = 0; i < block.Instructions.Count; i++) {
-                    if (block.Instructions[i] is LoadInst { Kind: LoadKind.Copy, Address: AllocStackInst } load && TryTake(function, block, i, load, uses)) {
+                    if (block.Instructions[i] is LoadInst { Kind: LoadKind.Copy, Address: AllocStackInst } load
+                        && (TryTake(function, block, i, load, uses) || TryMoveToConsumer(function, block, i, load, uses))) {
                         changed = true;
                         break;
                     }
@@ -969,6 +970,48 @@ public sealed class ForwardCopies : ISilPass {
 
         return false;
     }
+
+    /// <summary>
+    ///     A local's last use, a call's <c>consuming</c> argument: the value
+    ///     is moved into the call, not copied for it, so that what the callee
+    ///     is given it holds alone — a buffer it changes in place rather than
+    ///     copying it first. Nothing may use the slot between the load and its
+    ///     destroy, in the load's block; and the value must run no deinit,
+    ///     which the move would bring forward from the end of the scope.
+    /// </summary>
+    static bool TryMoveToConsumer(SilFunction function, SilBlock block, int index, LoadInst load, Uses uses) {
+        var slot = (AllocStackInst)load.Address;
+        if (slot.Unmanaged || uses.Of(load) is not [{ } call] || call is not (ApplyInst or TryApplyInst) || !Uses.Consumes(call, load)
+            || function.Module is not { } module || module.MayRunDeinit(load.Type)) {
+            return false;
+        }
+
+        for (var k = index + 1; k < block.Instructions.Count; k++) {
+            var instruction = block.Instructions[k];
+            if (instruction is DestroyAddrInst { Uncounted: false } destroy && ReferenceEquals(destroy.Address, slot)) {
+                var taken = new LoadInst(slot, LoadKind.Take) { Block = block, Location = load.Location };
+                block.Instructions[index] = taken;
+                Uses.Replace(function, load, taken);
+                block.Instructions.Remove(destroy);
+                return true;
+            }
+
+            if (instruction.Operands.Any(o => o.Type is AddressType && SlotUnder(o) == slot)) {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    static AllocStackInst? SlotUnder(SilValue address) =>
+        address switch {
+            AllocStackInst slot => slot,
+            StructElementAddrInst element => SlotUnder(element.Address),
+            TupleElementAddrInst element => SlotUnder(element.Address),
+            EnumPayloadAddrInst element => SlotUnder(element.Address),
+            _ => null,
+        };
 
     /// <summary>
     ///     An instruction that leaves every value it is given alive: one with

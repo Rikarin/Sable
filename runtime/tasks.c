@@ -2553,13 +2553,13 @@ static void step(SableTask *task) {
 
     // The task's accesses in progress are the thread's while it runs; with
     // none on either side, as nearly always, there are none to swap.
-    bool apart = sable_access_count > 0 || task->accesses.count > 0;
+    bool apart = sable_access_state.count > 0 || task->accesses.count > 0;
     if (apart) {
         accesses_swap(&task->accesses);
     }
 
     bool finished = task->resume(task->frame) & 1;
-    if (apart || sable_access_count > 0) {
+    if (apart || sable_access_state.count > 0) {
         accesses_swap(&task->accesses);
     }
 

@@ -620,8 +620,11 @@ the runtime traps on an access that conflicts with one in progress. Every
 plain read or write of shared storage — a load, a store, an array changed
 in place — is checked against the accesses in progress as it happens, so
 `bump(&counter)` that does `counter += 1` traps; inline, the check is one
-load of `sable_access_count`, and the runtime is called only when an
-access is in progress. Storage is a range of bytes (the interpreter: a path
+load of the count of the thread's accesses, and the runtime is called only
+when an access is in progress. A begin where none is in progress, and an
+end of the latest, are inline too; each function finds the thread's
+accesses once, where it starts, and gives the runtime the trap's place, as
+a thread-local reached at every access is a call on macOS (#346). Storage is a range of bytes (the interpreter: a path
 of object, field and elements), so a struct overlaps its fields. An array
 element passes inout through `array_element_addr` — `bump(&values[0])`,
 `bump(&box.items[0])` — and the access is to the whole array, which may not

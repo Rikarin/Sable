@@ -871,10 +871,10 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_coverage_hit(i64)
                                 declare void @sable_array_make_unique(ptr nocapture, ptr) cold
                                 @sable_empty_array_count = internal constant %SableArrayHeader zeroinitializer
-                                declare void @sable_access_begin(ptr, i64, i32)
-                                declare void @sable_access_check(ptr, i64, i32)
-                                @sable_access_count = external thread_local global i64
-                                declare void @sable_access_end(ptr)
+                                declare void @sable_access_begin(ptr, ptr, i64, i32, ptr)
+                                declare void @sable_access_check(ptr, ptr, i64, i32, ptr)
+                                declare ptr @sable_access_state_here() nounwind
+                                declare void @sable_access_end(ptr, ptr)
                                 declare ptr @sable_inline_new_stack(ptr, ptr, i64)
                                 declare ptr @sable_stack_object(ptr, ptr, i64)
                                 declare ptr @sable_stack_array(ptr, ptr, i64)
@@ -2060,6 +2060,25 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>Scratch slots, allocated once in the entry block so that a loop does not grow the stack.</summary>
         readonly StringBuilder _entryAllocas = new();
+
+        string? _accessState;
+
+        /// <summary>
+        ///     The running thread's accesses in progress (runtime/exclusivity.c),
+        ///     found once, where the function starts — a function runs on one
+        ///     thread from its entry to its return, an async one's resume
+        ///     too — rather than at each access: on macOS each is a call (#346).
+        ///     Asked of the runtime, not read as a thread-local here, which
+        ///     LLVM would find again in every block that uses it.
+        /// </summary>
+        string AccessState() {
+            if (_accessState is null) {
+                _accessState = Fresh();
+                _entryAllocas.Append($"  {_accessState} = call ptr @sable_access_state_here()\n");
+            }
+
+            return _accessState;
+        }
 
         /// <summary>Each type parameter's metadata, by name (<c>$metadata.T</c>), in unspecialised code.</summary>
         readonly Dictionary<string, string> _opaqueMetadata = new(StringComparer.Ordinal);
@@ -3253,6 +3272,87 @@ public sealed partial class LlvmEmitter {
         ///     whether any access is in progress at all; the runtime looks
         ///     further only when one is.
         /// </summary>
+        /// <summary>
+        ///     An access begun (runtime/exclusivity.c's list, the running
+        ///     thread's): inline where none is in progress and the list has
+        ///     room, as nearly always — nothing to check it against, and one
+        ///     record to write — else in the runtime, which checks it and grows
+        ///     the list. The trap's place is given, not stored for the runtime
+        ///     in a thread-local, which on macOS is a call (#346).
+        /// </summary>
+        void BeginAccess(SilValue address, string storage, bool modify) {
+            var state = AccessState();
+            var countAt = Fresh();
+            var count = Fresh();
+            var capacityAt = Fresh();
+            var capacity = Fresh();
+            var none = Fresh();
+            var room = Fresh();
+            var alone = Fresh();
+            var inline = NewLabel("access_alone");
+            var call = NewLabel("access_call");
+            var done = NewLabel("access_begun");
+            Line($"{countAt} = getelementptr inbounds {{ ptr, i64, i64 }}, ptr {state}, i32 0, i32 1");
+            Line($"{count} = load i64, ptr {countAt}");
+            Line($"{capacityAt} = getelementptr inbounds {{ ptr, i64, i64 }}, ptr {state}, i32 0, i32 2");
+            Line($"{capacity} = load i64, ptr {capacityAt}");
+            Line($"{none} = icmp eq i64 {count}, 0");
+            Line($"{room} = icmp sgt i64 {capacity}, 0");
+            Line($"{alone} = and i1 {none}, {room}");
+            Line($"br i1 {alone}, label %{inline}, label %{call}, !prof !{{!\"branch_weights\", i32 2000, i32 1}}");
+            Continue(inline);
+            var list = Fresh();
+            Line($"{list} = load ptr, ptr {state}");
+            var sizeAt = Fresh();
+            var modifyAt = Fresh();
+            Line($"store ptr {storage}, ptr {list}");
+            Line($"{sizeAt} = getelementptr inbounds {{ ptr, i64, i32 }}, ptr {list}, i32 0, i32 1");
+            Line($"store i64 {StorageSize(address)}, ptr {sizeAt}");
+            Line($"{modifyAt} = getelementptr inbounds {{ ptr, i64, i32 }}, ptr {list}, i32 0, i32 2");
+            Line($"store i32 {(modify ? 1 : 0)}, ptr {modifyAt}");
+            Line($"store i64 1, ptr {countAt}");
+            Line($"br label %{done}");
+            Continue(call);
+            Line($"call void @sable_access_begin(ptr {state}, ptr {storage}, i64 {StorageSize(address)}, i32 {(modify ? 1 : 0)}, ptr {_site})");
+            Line($"br label %{done}");
+            Continue(done);
+        }
+
+        /// <summary>An access ended: inline where it is the latest, as accesses nest; else in the runtime, which finds it.</summary>
+        void EndAccess(string storage) {
+            var state = AccessState();
+            var countAt = Fresh();
+            var count = Fresh();
+            var any = Fresh();
+            var look = NewLabel("access_last");
+            var call = NewLabel("access_find");
+            var done = NewLabel("access_ended");
+            Line($"{countAt} = getelementptr inbounds {{ ptr, i64, i64 }}, ptr {state}, i32 0, i32 1");
+            Line($"{count} = load i64, ptr {countAt}");
+            Line($"{any} = icmp sgt i64 {count}, 0");
+            Line($"br i1 {any}, label %{look}, label %{call}, !prof !{{!\"branch_weights\", i32 2000, i32 1}}");
+            Continue(look);
+            var list = Fresh();
+            var last = Fresh();
+            var at = Fresh();
+            var latest = Fresh();
+            var same = Fresh();
+            var pop = NewLabel("access_pop");
+            Line($"{list} = load ptr, ptr {state}");
+            Line($"{last} = sub i64 {count}, 1");
+            Line($"{at} = getelementptr inbounds {{ ptr, i64, i32 }}, ptr {list}, i64 {last}, i32 0");
+            Line($"{latest} = load ptr, ptr {at}");
+            Line($"{same} = icmp eq ptr {latest}, {storage}");
+            Line($"br i1 {same}, label %{pop}, label %{call}, !prof !{{!\"branch_weights\", i32 2000, i32 1}}");
+            Continue(pop);
+            Line($"store i64 {last}, ptr {countAt}");
+            Line($"br label %{done}");
+            Continue(call);
+            Line($"call void @sable_access_end(ptr {state}, ptr {storage})");
+            Line($"br label %{done}");
+            Continue(done);
+        }
+
         void CheckAccess(SilValue address, bool modify) {
             // Storage of nothing, a Void a generic type holds: no access
             // can overlap it.
@@ -3260,16 +3360,18 @@ public sealed partial class LlvmEmitter {
                 return;
             }
 
+            var state = AccessState();
+            var at = Fresh();
             var count = Fresh();
             var busy = Fresh();
             var check = NewLabel("access");
             var free = NewLabel("unaccessed");
-            Line($"{count} = load i64, ptr @sable_access_count");
+            Line($"{at} = getelementptr inbounds {{ ptr, i64, i64 }}, ptr {state}, i32 0, i32 1");
+            Line($"{count} = load i64, ptr {at}");
             Line($"{busy} = icmp ne i64 {count}, 0");
             Line($"br i1 {busy}, label %{check}, label %{free}, !prof !{{!\"branch_weights\", i32 1, i32 2000}}");
             Continue(check);
-            SiteForRuntime();
-            Line($"call void @sable_access_check(ptr {Name(address)}, i64 {StorageSize(address)}, i32 {(modify ? 1 : 0)})");
+            Line($"call void @sable_access_check(ptr {state}, ptr {Name(address)}, i64 {StorageSize(address)}, i32 {(modify ? 1 : 0)}, ptr {_site})");
             Line($"br label %{free}");
             Continue(free);
         }
@@ -5197,14 +5299,10 @@ public sealed partial class LlvmEmitter {
             if (builtin.Name.StartsWith("access_", StringComparison.Ordinal)) {
                 if (module._checkExclusivity && builtin.Name.StartsWith("access_check_", StringComparison.Ordinal)) {
                     CheckAccess(builtin.Operands[0], builtin.Name == "access_check_modify");
+                } else if (module._checkExclusivity && builtin.Name == "access_end") {
+                    EndAccess(operands[0]);
                 } else if (module._checkExclusivity) {
-                    var call = builtin.Name == "access_end" ? "sable_access_end" : "sable_access_begin";
-                    var kind = builtin.Name == "access_end" ? "" : $", i64 {StorageSize(builtin.Operands[0])}, i32 {(builtin.Name == "access_begin_modify" ? 1 : 0)}";
-                    if (builtin.Name != "access_end") {
-                        SiteForRuntime();
-                    }
-
-                    Line($"call void @{call}(ptr {operands[0]}{kind})");
+                    BeginAccess(builtin.Operands[0], operands[0], builtin.Name == "access_begin_modify");
                 }
 
                 return;

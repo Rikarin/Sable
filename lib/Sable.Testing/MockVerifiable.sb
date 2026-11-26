@@ -1,0 +1,36 @@
+module Sable.Testing
+
+/// A mock's call as a stub or a verification describes it: what
+/// `verifyInOrder` is given.
+public protocol MockVerifiable {
+    /// The numbers of the calls it matches, in the order of every call of
+    /// its recorder.
+    fn callNumbers() -> Int[>..]
+    /// As source would write it, its matchers in place of values.
+    var callText: String { get }
+}
+
+/// Fails the test unless the calls were made in this order, whatever was
+/// called between them: each, after the one before, of a mock or of
+/// several. The test goes on.
+///
+/// ```sable ignore
+/// verifyInOrder([store.on.open(), gateway.on.charge(), store.on.close()])
+/// ```
+public fn verifyInOrder(_ calls: (any MockVerifiable)[:], file: String = #file, line: Int = #line) {
+    var after = 0
+    for (i, call) in calls.enumerated() {
+        var next = 0
+        for number in call.callNumbers() {
+            if number > after && (next == 0 || number < next) {
+                next = number
+            }
+        }
+        if next == 0 {
+            let place = i == 0 ? "" : " after \(calls[i - 1].callText)"
+            recordFailure("\(call.callText) was not called\(place)", file: file, line: line)
+            return
+        }
+        after = next
+    }
+}

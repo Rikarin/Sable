@@ -1,0 +1,155 @@
+module Sable.IO
+
+/// Files and directories by path, as code that is to be tested without a
+/// disk takes them: `DiskFileSystem` is the machine's, through `File` and
+/// `Directory`; `InMemoryFileSystem` holds its files in memory, for a test.
+/// .NET's `System.IO.Abstractions` `IFileSystem`.
+///
+/// The requirements take a `FilePath`; what is built on them takes a
+/// `String` as well.
+///
+/// ```sable
+/// fn count(_ files: any FileSystem, in directory: String) -> Int {
+///     return (try? files.list(directory))?.count ?? 0
+/// }
+/// let files = InMemoryFileSystem()
+/// try! files.createDirectory("logs")
+/// try! files.write("logs/a.txt", "a")
+/// assert(count(files, in: "logs") == 1)
+/// ```
+public protocol FileSystem: Sendable {
+    /// Every byte of the file.
+    fn readBytes(_ path: FilePath) throws(IoError) -> U8[>..]
+
+    /// The bytes written as the whole file, made if it is not there; its
+    /// directory must be.
+    fn writeBytes(_ path: FilePath, _ bytes: U8[:]) throws(IoError)
+
+    /// The bytes added at the end of the file, made if it is not there.
+    fn appendBytes(_ path: FilePath, _ bytes: U8[:]) throws(IoError)
+
+    /// What is at the path: its kind, its length, when it was written.
+    fn metadata(_ path: FilePath) throws(IoError) -> FileMetadata
+
+    /// Makes the directory; with 'recursive', every one of the path that is
+    /// not there, and none is an error for being there.
+    fn createDirectory(_ path: FilePath, recursive: Bool) throws(IoError)
+
+    /// The names of what the directory holds, sorted by their bytes.
+    fn list(_ path: FilePath) throws(IoError) -> String[>..]
+
+    /// Removes the file.
+    fn removeFile(_ path: FilePath) throws(IoError)
+
+    /// Removes the directory: an empty one, or, with 'recursive', with all
+    /// in it.
+    fn removeDirectory(_ path: FilePath, recursive: Bool) throws(IoError)
+
+    /// The file or directory renamed: what is at the new path is replaced,
+    /// unless 'overwrite' is false, when it is an error.
+    fn rename(from source: FilePath, to target: FilePath, overwrite: Bool) throws(IoError)
+
+    /// The file copied: what is at the new path is replaced, unless
+    /// 'overwrite' is false, when it is an error.
+    fn copy(from source: FilePath, to target: FilePath, overwrite: Bool) throws(IoError)
+}
+
+extension FileSystem {
+    /// The file's contents as UTF-8 text, each ill-formed sequence made U+FFFD.
+    public fn read(_ path: String) throws(IoError) -> String {
+        return String.fromUtf8Lossy(try readBytes(FilePath(path)))
+    }
+
+    /// The file's contents as UTF-8 text.
+    public fn read(_ path: FilePath) throws(IoError) -> String {
+        return String.fromUtf8Lossy(try readBytes(path))
+    }
+
+    /// Every byte of the file.
+    public fn readBytes(_ path: String) throws(IoError) -> U8[>..] {
+        return try readBytes(FilePath(path))
+    }
+
+    /// Replaces the file's contents with the text, making it if it is not there.
+    public fn write(_ path: String, _ text: String) throws(IoError) {
+        try writeBytes(FilePath(path), text.utf8Bytes())
+    }
+
+    /// Replaces the file's contents with the text.
+    public fn write(_ path: FilePath, _ text: String) throws(IoError) {
+        try writeBytes(path, text.utf8Bytes())
+    }
+
+    /// The bytes written as the whole file.
+    public fn writeBytes(_ path: String, _ bytes: U8[:]) throws(IoError) {
+        try writeBytes(FilePath(path), bytes)
+    }
+
+    /// Adds the text to the end of the file, making it if it is not there.
+    public fn append(_ path: String, _ text: String) throws(IoError) {
+        try appendBytes(FilePath(path), text.utf8Bytes())
+    }
+
+    /// Adds the text to the end of the file.
+    public fn append(_ path: FilePath, _ text: String) throws(IoError) {
+        try appendBytes(path, text.utf8Bytes())
+    }
+
+    /// What is at the path.
+    public fn metadata(_ path: String) throws(IoError) -> FileMetadata {
+        return try metadata(FilePath(path))
+    }
+
+    /// Whether something that is not a directory is at the path.
+    public fn exists(_ path: String) -> Bool {
+        return exists(FilePath(path))
+    }
+
+    /// Whether something that is not a directory is at the path.
+    public fn exists(_ path: FilePath) -> Bool {
+        guard let found = try? metadata(path) else {
+            return false
+        }
+        return !found.isDirectory
+    }
+
+    /// Whether a directory is at the path.
+    public fn directoryExists(_ path: String) -> Bool {
+        return directoryExists(FilePath(path))
+    }
+
+    /// Whether a directory is at the path.
+    public fn directoryExists(_ path: FilePath) -> Bool {
+        return (try? metadata(path))?.isDirectory ?? false
+    }
+
+    /// Makes the directory, its parent there already.
+    public fn createDirectory(_ path: String, recursive: Bool = false) throws(IoError) {
+        try createDirectory(FilePath(path), recursive: recursive)
+    }
+
+    /// The names of what the directory holds, sorted.
+    public fn list(_ path: String) throws(IoError) -> String[>..] {
+        return try list(FilePath(path))
+    }
+
+    /// Removes the file.
+    public fn removeFile(_ path: String) throws(IoError) {
+        try removeFile(FilePath(path))
+    }
+
+    /// Removes the directory.
+    public fn removeDirectory(_ path: String, recursive: Bool = false) throws(IoError) {
+        try removeDirectory(FilePath(path), recursive: recursive)
+    }
+
+    /// The file or directory renamed.
+    public fn rename(from source: String, to target: String, overwrite: Bool = true) throws(IoError) {
+        try rename(from: FilePath(source), to: FilePath(target), overwrite: overwrite)
+    }
+
+    /// The file copied.
+    public fn copy(from source: String, to target: String, overwrite: Bool = true) throws(IoError) {
+        try copy(from: FilePath(source), to: FilePath(target), overwrite: overwrite)
+    }
+}

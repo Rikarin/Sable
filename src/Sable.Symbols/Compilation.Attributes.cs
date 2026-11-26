@@ -519,6 +519,7 @@ public sealed partial class Compilation {
     /// </summary>
     public static readonly IReadOnlyList<(string Module, IReadOnlyList<string> Types, IReadOnlyList<string> Members)> LibraryGeneratorAttributes = [
         ("Sable.DependencyInjection", ["injectable", "container"], ["keyed", "inject", "include", "singleton", "scoped", "transient"]),
+        ("Sable.Testing", ["mockable"], []),
     ];
 
     /// <summary>
@@ -532,7 +533,7 @@ public sealed partial class Compilation {
     ///     are seen by the files that import the module.
     /// </summary>
     static bool IsGeneratorAttribute(SyntaxTree tree, AttributeSyntax attribute, string name, out string? problem) {
-        const AttributeTargets types = AttributeTargets.Struct | AttributeTargets.Class | AttributeTargets.Actor | AttributeTargets.Union | AttributeTargets.Enum;
+        const AttributeTargets types = AttributeTargets.Type;
         const AttributeTargets members = AttributeTargets.Field | AttributeTargets.UnionCase | AttributeTargets.EnumCase | AttributeTargets.Parameter | AttributeTargets.Initializer | AttributeTargets.Function;
         var target = AttributeTargetOf(attribute.Parent)?.Target ?? AttributeTargets.None;
         var noun = AttributeTargetOf(attribute.Parent)?.Noun ?? "this";

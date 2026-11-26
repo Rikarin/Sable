@@ -1,0 +1,8 @@
+module Sable.Testing
+
+/// A member of a mock, as its recorder sees it.
+public protocol MockMember: Sendable {
+    /// Its calls, with their numbers, as source would write them: all, or
+    /// those no verification counted.
+    fn calls(verified: Bool) -> (Int, String)[>..]
+}

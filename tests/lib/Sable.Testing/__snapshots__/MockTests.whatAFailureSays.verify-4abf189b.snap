@@ -1,0 +1,6 @@
+expectation failed: charge(amount: 100, to: any) was not to be called, and was called once (<file>:200)
+    its calls:
+        charge(amount: 100, to: "4242")
+        charge(amount: 5, to: "x")
+expectation failed: balance() was to be called at least once, and was never called (<file>:201)
+    it was never called

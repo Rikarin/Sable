@@ -1060,7 +1060,8 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     permissions and times), Directory (create, list, lazy
                     entries, walk, glob, copy, remove, recursively too),
                     Glob, Temp (files and directories removed as they are
-                    let go), FileWatcher (below), PathLike (a String or a
+                    let go), FileSystem (DiskFileSystem, InMemoryFileSystem
+                    for tests), FileWatcher (below), PathLike (a String or a
                     FilePath), FilePath (platform bytes, POSIX and Windows rules:
                     drives, UNC, verbatim; components, lexical
                     normalization, relative paths, canonical) and Path
@@ -1222,7 +1223,10 @@ Sable.Crypto.X509   Certificate, CertificateVerifier (RFC 5280 paths, name
                     (the system's), CertificateBuilder, CertificateRequest
 Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
 Sable.Testing       @test @bench; assert, assertEqual and the like; expect and
-                    require, which show their expression's parts; expectThrows;
+                    require, which show their expression's parts; requireAll;
+                    expectEquivalent (deep, by path), expectAll,
+                    expect(_:containsInOrder:), expectClose,
+                    expect(within:); expectThrows; @mockable and its matchers;
                     expectPanic and expectExit (death tests); assertSnapshot;
                     forAll, Arbitrary and Gen (property tests); Fixture and
                     FixtureLifetime, TestContext, skip; Bencher,
@@ -1285,9 +1289,48 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
 
   That is a parameter's doing whose default is `#expression` (SYNTAX.md §18):
   the argument is worked out once, as it would be, and may throw and await.
+  Where the sides are made of parts, the parts that differ are said by their
+  paths too (`[0].price: left 10, right 12`). A message is an `@autoclosure`,
+  worked out only where the expectation is not met. There is one way to say
+  each thing: the condition is ordinary code (`==`, `<`, `contains`,
+  `isEmpty`, a regex's `isMatch`), so there are no matchers beside it — no
+  `toEqual`, `toBeGreaterThan` — and what follows says more than a
+  condition's parts could:
+  - `expectEquivalent(got, expected) { $0.exclude(\.id); $0.ignoresOrder = true }`
+    compares two `Debug` values part by part, by their debug descriptions read
+    back (a case and its payload, a struct's fields, arrays, dictionaries by
+    key, a set's elements in no order), and says each part that differs by its
+    path: `orders[2].lines[0].price: got 12, expected 10`. A path to leave out
+    is a key path or text, `lines[*].id` or `**.id`; one that names no part is
+    itself a failure. Text that no source would write is compared whole.
+  - `expectAll(values) { predicate }` says which elements it does not hold of;
+    `expect(values, containsInOrder: [...])` which is missing after which;
+    `expectClose(a, b, within:)` how far apart they are.
+  - `expect(within: duration, clock:) { … }` fails when the body takes longer,
+    by the clock given (a `TestClock` makes it no matter of the machine).
+  - `requireAll("name") { … }` is soft assertions: every expectation in the body
+    is looked at, and then the test ends if any was not met.
 - `expectThrows(E.self) { … }` gives the error thrown, `expectThrows(error)`
   wants that very one, `expectThrows(saying: "text")` one that says that,
   `expectThrows { … }` any, `expectNoThrow` none; each has an async form.
+- `@mockable` on a protocol writes `Mock<Name>`, a final class that conforms
+  to it (and to those it refines): Moq's and mockall's, made by a source
+  generator (docs/08) as Sable has no run-time proxies. Its `on` names the
+  calls of a member that `Matcher`s match — `.any` (the default), `.equal(x)`,
+  `.matching { … }`, `.equivalent(to:)`, `.not(m)`; or values alone, where
+  every parameter is Equatable — to stub them, `.returns(v)`, `.throwing(e)`,
+  `.does { arguments in … }` (which may wait), answered in turn, the last
+  again; and to verify them, `.verify(.once)` with `Times`, `.arguments`,
+  `verifyInOrder([...])` across mocks and `verifyNoOtherCalls(mock)`. A
+  property is `on.name` and `on.setName(_:)`. A loose mock (the default)
+  answers what no stub does with the empty value of its type, where it has
+  one; `.Strict` fails the test. A mock is `@immutable`, so Sendable, and may
+  be called from any task. A protocol that needs a mock but not in the code
+  it is declared in can be refined in the tests: `@mockable protocol
+  TestGateway: Gateway { }` makes a `MockTestGateway` that is a `Gateway`.
+  What cannot be mocked — a static or generic member, an `inout` or
+  variadic parameter, a closure that does not escape, an associated type —
+  is an error at the attribute.
 - A `Fixture` is what tests are run with: `setUp` and `tearDown`, which may wait
   and throw, and how long one lives — `.PerTest`, unless it says `.PerSuite`,
   `.PerCollection` or `.PerPackage`. A `@suite`'s initialiser asks for the
@@ -1311,6 +1354,15 @@ A test (`@test`, docs/05 §5.1) is written with `Sable.Testing`:
   `attach`. What a test prints is kept apart from any other's, and shown when it
   fails. (Nothing overrides the locale or the clock for a test: what depends on
   one takes a `Locale` or a `Clock`, and is given `Locale("tr")` or a `TestClock`.)
+- Fakes, for what the code under test is given: `TestClock` (Sable.Concurrency);
+  `InMemoryFileSystem` (Sable.IO), a `FileSystem` in memory where code takes
+  one in place of `DiskFileSystem`, with the disk's errors; `FakeLogger`, a
+  `Logger` that keeps its lines and reads them back as `LogRecord`s (level,
+  name, message, fields; what `logger.with(...)` makes keeps none, and every
+  line is written to standard error as well); `FakeRandom`, a
+  `RandomNumberGenerator` of the run's seed (`--seed` makes it again), another,
+  or a script, that keeps what it drew. There is no fake HTTP handler: the
+  library has no HttpClient yet.
 - `expectPanic("text") { … }` and `expectExit(status) { … }` run their body in
   a process of its own, the test run again as far as there, and give how it
   ended. Where none can be started — `--in-process`, the interpreter, WASI —

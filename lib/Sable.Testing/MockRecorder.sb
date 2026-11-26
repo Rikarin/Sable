@@ -1,0 +1,48 @@
+module Sable.Testing
+
+import Sable.Concurrency
+
+/// What a mock knows of itself: whether it is strict, and every call made
+/// of it, in order, which `verifyNoOtherCalls` and `verifyInOrder` read.
+/// Every mock `@mockable` writes has one, as `recorder`.
+///
+/// A loose mock answers a call no stub answers with the value there is of
+/// its type — none, 0, false, "", an empty array or dictionary — and fails
+/// the test only for a type that has none; a strict one fails it for any
+/// such call.
+///
+/// ```sable
+/// let recorder = MockRecorder(.Strict)
+/// assert(recorder.behavior == .Strict && recorder.calls.isEmpty)
+/// ```
+@immutable
+public final class MockRecorder {
+    public let behavior: MockBehavior
+    // How many calls have been made of every mock: what puts those of
+    // several in order.
+    static let counter: Atomic<Int> = Atomic(0)
+    let members: Mutex<(any MockMember)[>..]>
+
+    public init(_ behavior: MockBehavior = .Loose) {
+        self.behavior = behavior
+        members = Mutex([])
+    }
+
+    /// Every call made, in order, as source would write it.
+    public var calls: String[>..] => sorted(verified: true)
+
+    fn add(_ member: any MockMember) {
+        members.withLock { $0.append(member) }
+    }
+
+    // The calls, in order: all, or those no verification has counted.
+    fn sorted(verified: Bool) -> String[>..] {
+        let all = members.withLock { $0 }
+        var made: (Int, String)[>..] = []
+        for member in all {
+            made.append(contentsOf: member.calls(verified: verified))
+        }
+        made.sort(by: { $0.0 < $1.0 })
+        return made.map({ $0.1 }).toArray()
+    }
+}

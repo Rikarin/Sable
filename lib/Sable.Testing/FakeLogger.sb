@@ -1,0 +1,139 @@
+module Sable.Testing
+
+import Sable.Diagnostics
+
+/// A logger for a test to give the code it tests, and then to ask what was
+/// logged: each line as a record of its level, its logger's name, its
+/// message and its fields. .NET's `FakeLogger`.
+///
+/// It is a `Logger` that keeps its lines (`keepLines`) at every level; it
+/// writes them to standard error too, as any logger does, which a test
+/// shows only when it fails.
+///
+/// ```sable
+/// let log = FakeLogger("orders")
+/// log.logger.warning("low stock", [field("sku", "a-1"), field("left", 2)])
+/// let record = log.records[0]
+/// assert(record.level == "WARN" && record.message == "low stock")
+/// assert(record.field("left") == "2")
+/// assert(log.messages(at: "WARN") == ["low stock"])
+/// ```
+public final class FakeLogger {
+    /// What the code under test is given.
+    public let logger: Logger
+    // How many of its lines 'clear' has left out.
+    var cleared: Int
+
+    public init(_ name: String = "test") {
+        logger = Logger(name)
+        logger.threshold = Level.Trace
+        logger.keepLines()
+        cleared = 0
+    }
+
+    /// What was logged, in order, since it was made or cleared.
+    public var records: LogRecord[>..] {
+        get {
+            var made: LogRecord[>..] = []
+            let lines = logger.lines()
+            for i in cleared..<lines.count {
+                made.append(LogRecord.of(lines[i]))
+            }
+            return made
+        }
+    }
+
+    /// The messages logged at the level: "TRACE", "DEBUG", "INFO", "WARN"
+    /// or "ERROR".
+    public fn messages(at level: String) -> String[>..] {
+        return records.filter({ $0.level == level }).map({ $0.message }).toArray()
+    }
+
+    /// Forgets what was logged so far.
+    public fn clear() {
+        cleared = logger.lines().count
+    }
+}
+
+/// A line a logger wrote, read back.
+public struct LogRecord {
+    /// "TRACE", "DEBUG", "INFO", "WARN" or "ERROR".
+    public let level: String
+    /// The logger's name.
+    public let name: String
+    public let message: String
+    /// Each field, its value unquoted, in order: the logger's own first.
+    public let fields: Field[>..]
+
+    /// A field's value; none where it has none of the key.
+    public fn field(_ key: String) -> String? {
+        for each in fields {
+            if each.key == key {
+                return each.value
+            }
+        }
+        return none
+    }
+
+    /// A line as a logger writes it, "LEVEL name: message key=value ...",
+    /// read: the message ends where what is left is all fields. What is no
+    /// such line is read as well as it can be.
+    public static fn of(_ line: String) -> LogRecord {
+        guard let (level, rest) = line.splitOnce(" ") else {
+            return LogRecord(level: line, name: "", message: "", fields: [])
+        }
+        guard let (name, said) = rest.splitOnce(": ") else {
+            return LogRecord(level: level.toString(), name: "", message: rest.toString(), fields: [])
+        }
+        let text = said.toString()
+        var at = text.count
+        var fields: Field[>..] = []
+        // Fields are read from the end: each is ' key=value', the value
+        // quoted where it has a space.
+        while let (start, key, value) = LogRecord.lastField(text, before: at) {
+            fields.append(Field { key: key, value: value })
+            at = start
+        }
+        fields.reverse()
+        return LogRecord(level: level.toString(), name: name.toString(), message: text.slice(from: 0, to: at), fields: fields)
+    }
+
+    // The field that ends at 'end': where its space is, its key and value.
+    static fn lastField(_ text: String, before end: Int) -> (Int, String, String)? {
+        if end == 0 {
+            return none
+        }
+        var valueStart = end
+        var value = ""
+        if text.at(end - 1) == '"' {
+            // Back to the quote that opens it, past escaped ones.
+            var i = end - 2
+            while i >= 0 && !(text.at(i) == '"' && (i == 0 || text.at(i - 1) != '\\')) {
+                i -= 1
+            }
+            if i < 1 || text.at(i - 1) != '=' {
+                return none
+            }
+            valueStart = i
+            value = text.slice(from: i + 1, to: end - 1).replacing("\\n", with: "\n").replacing("\\\"", with: "\"").replacing("\\\\", with: "\\")
+        } else {
+            var i = end - 1
+            while i >= 0 && text.at(i) != ' ' && text.at(i) != '=' {
+                i -= 1
+            }
+            if i < 0 || text.at(i) != '=' {
+                return none
+            }
+            valueStart = i + 1
+            value = text.slice(from: valueStart, to: end)
+        }
+        var i = valueStart - 2
+        while i >= 0 && text.at(i) != ' ' {
+            i -= 1
+        }
+        if i < 0 || i + 1 >= valueStart - 1 {
+            return none
+        }
+        return (i, text.slice(from: i + 1, to: valueStart - 1), value)
+    }
+}

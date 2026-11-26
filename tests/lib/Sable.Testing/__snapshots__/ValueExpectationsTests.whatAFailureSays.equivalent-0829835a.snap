@@ -1,0 +1,6 @@
+expectation failed: the values are not equivalent (<file>:116)
+    id: got 1, expected 2
+    lines[0].price: got 10, expected 12
+    lines[1].sku: got "c", expected "c("
+    tags["x"]: got 1, expected 2
+    tags["y"]: expected 3, got nothing

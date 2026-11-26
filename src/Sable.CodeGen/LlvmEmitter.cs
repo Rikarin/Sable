@@ -3006,6 +3006,12 @@ public sealed partial class LlvmEmitter {
         ///     further only when one is.
         /// </summary>
         void CheckAccess(SilValue address, bool modify) {
+            // Storage of nothing, a Void a generic type holds: no access
+            // can overlap it.
+            if (Type(((AddressType)address.Type).Pointee) == "void") {
+                return;
+            }
+
             var count = Fresh();
             var busy = Fresh();
             var check = NewLabel("access");

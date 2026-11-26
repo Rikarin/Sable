@@ -1,5 +1,7 @@
 module Sable.Testing
 
+import Sable.Time
+
 // 'expect' and 'require' (docs/06 §6.4): what a test says should hold. A
 // failed expectation is reported with what its expression was and the
 // values its parts had, and fails the test; the test goes on after
@@ -25,9 +27,14 @@ fn say(_ failure: String) {
 }
 
 // 'condition (file:line)', and what its parts were on the lines after it.
-fn recordFailure(_ captured: CapturedExpression, _ message: String, _ file: String, _ line: Int) {
-    let said = message.isEmpty ? "" : ": \(message)"
-    let details = TestState.quiet ? "" : captured.details()
+fn recordFailure(_ captured: CapturedExpression, _ message: () -> String, _ file: String, _ line: Int) {
+    if TestState.quiet {
+        say("")
+        return
+    }
+    let text = message()
+    let said = text.isEmpty ? "" : ": \(text)"
+    let details = captured.details()
     say("\(captured.text)\(said) (\(file):\(line))\(details.isEmpty ? "" : "\n" + details.slice(from: 0, to: details.count - 1))")
 }
 
@@ -39,14 +46,28 @@ fn endFailedTest() -> Never {
 
 /// Fails the test unless the condition holds, saying what the condition is
 /// and what each part of it was. The test goes on: every expectation it
-/// does not meet is reported.
+/// does not meet is reported (`requireAll` ends the test after several).
+///
+/// The condition is ordinary code, so there is one way to say each thing:
+/// `==`, `>`, `contains`, `isEmpty`, a regex's `isMatch`, a predicate of
+/// one's own. Of two values that were to be equal, the report says which
+/// parts differ: `lines[0].price: left 10, right 12`.
 ///
 /// ```sable
 /// let names = ["Ada", "Grace"]
 /// expect(names.count == 2)
 /// expect(names.contains("Ada"), "Ada is always invited")
 /// ```
-public fn expect(_ condition: Bool, _ message: String = "", file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) {
+public fn expect(_ condition: Bool, file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) {
+    if !condition {
+        recordFailure(expression, { "" }, file, line)
+    }
+    expression.forget()
+}
+
+/// The same, and says why. The message is worked out only where the
+/// condition does not hold.
+public fn expect(_ condition: Bool, _ message: @autoclosure () -> String, file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) {
     if !condition {
         recordFailure(expression, message, file, line)
     }
@@ -62,7 +83,17 @@ public fn expect(_ condition: Bool, _ message: String = "", file: String = #file
 /// require(names.count == 2)
 /// expect(names[1] == "Grace")
 /// ```
-public fn require(_ condition: Bool, _ message: String = "", file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) {
+public fn require(_ condition: Bool, file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) {
+    if !condition {
+        recordFailure(expression, { "" }, file, line)
+        endFailedTest()
+    }
+    expression.forget()
+}
+
+/// The same, and says why. The message is worked out only where the
+/// condition does not hold.
+public fn require(_ condition: Bool, _ message: @autoclosure () -> String, file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) {
     if !condition {
         recordFailure(expression, message, file, line)
         endFailedTest()
@@ -70,17 +101,105 @@ public fn require(_ condition: Bool, _ message: String = "", file: String = #fil
     expression.forget()
 }
 
-/// The value, when there is one; with none, the test fails and ends.
+/// The value, when there is one; with none, the test fails and ends. The
+/// message is worked out only then.
 ///
 /// ```sable
 /// let first = require(["Ada", "Grace"].first)
 /// expect(first == "Ada")
 /// ```
-public fn require<T>(_ value: T?, _ message: String = "", file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) -> T {
+public fn require<T>(_ value: T?, _ message: @autoclosure () -> String = "there is no value", file: String = #file, line: Int = #line, expression: CapturedExpression = #expression) -> T {
     if let value = value {
         expression.forget()
         return value
     }
-    recordFailure(expression, message.isEmpty ? "there is no value" : message, file, line)
+    recordFailure(expression, message, file, line)
     endFailedTest()
+}
+
+/// Fails the test and ends it if an expectation in the body is not met, or
+/// it throws, once every expectation in it has been looked at.
+///
+/// ```sable
+/// let order = (total: 12, lines: ["a", "b"])
+/// requireAll("the order") {
+///     expect(order.total == 12)
+///     expect(order.lines.count == 2)
+/// }
+/// ```
+public fn requireAll(_ name: @autoclosure () -> String = "", file: String = #file, line: Int = #line, _ body: () throws -> Void) {
+    let before = TestState.failed.load()
+    do {
+        try body()
+    } catch {
+        recordFailure("an error was thrown: \(error)", file: file, line: line)
+        endFailedTest()
+    }
+    endIfFailed(since: before, name, file, line)
+}
+
+/// The same of a body that waits.
+public async fn requireAll(_ name: @autoclosure () -> String = "", file: String = #file, line: Int = #line, _ body: async () throws -> Void) {
+    let before = TestState.failed.load()
+    do {
+        try await body()
+    } catch {
+        recordFailure("an error was thrown: \(error)", file: file, line: line)
+        endFailedTest()
+    }
+    endIfFailed(since: before, name, file, line)
+}
+
+fn endIfFailed(since before: Int, _ name: () -> String, _ file: String, _ line: Int) {
+    let count = TestState.failed.load() - before
+    if count == 0 {
+        return
+    }
+    let named = name()
+    recordFailure("\(count) expectation\(count == 1 ? "" : "s")\(named.isEmpty ? "" : " of \(named)") \(count == 1 ? "was" : "were") not met", file: file, line: line)
+    endFailedTest()
+}
+
+/// Fails the test unless the body is done within the time, on the
+/// monotonic clock, and gives what it made. The test goes on. A test that
+/// says how long something takes depends on the machine: give a limit far
+/// from what the body takes, or a `TestClock`.
+///
+/// ```sable
+/// let sum = expect(within: Duration.seconds(30)) { (1...1000).reduce(0, { $0 + $1 }) }
+/// expect(sum == 500500)
+/// ```
+@discardable
+public fn expect<T, E: Error>(within limit: Duration, _ message: @autoclosure () -> String = "", file: String = #file, line: Int = #line, _ body: () throws(E) -> T) throws(E) -> T {
+    return try expect(within: limit, message(), clock: MonotonicClock(), file: file, line: line, body)
+}
+
+/// The same of a body that waits, which is waited for however long it takes.
+@discardable
+public async fn expect<T, E: Error>(within limit: Duration, _ message: @autoclosure () -> String = "", file: String = #file, line: Int = #line, _ body: async () throws(E) -> T) throws(E) -> T {
+    return try await expect(within: limit, message(), clock: MonotonicClock(), file: file, line: line, body)
+}
+
+/// The same, on the clock given.
+@discardable
+public fn expect<T, C: Clock, E: Error>(within limit: Duration, _ message: @autoclosure () -> String = "", clock: C, file: String = #file, line: Int = #line, _ body: () throws(E) -> T) throws(E) -> T {
+    let start = clock.now()
+    let value = try body()
+    tooLong(clock.now().durationSince(start), limit, message, file, line)
+    return value
+}
+
+/// The same of a body that waits, on the clock given.
+@discardable
+public async fn expect<T, C: Clock, E: Error>(within limit: Duration, _ message: @autoclosure () -> String = "", clock: C, file: String = #file, line: Int = #line, _ body: async () throws(E) -> T) throws(E) -> T {
+    let start = clock.now()
+    let value = try await body()
+    tooLong(clock.now().durationSince(start), limit, message, file, line)
+    return value
+}
+
+fn tooLong(_ taken: Duration, _ limit: Duration, _ message: () -> String, _ file: String, _ line: Int) {
+    if taken > limit {
+        recordFailure("it took \(taken), and was to take \(limit) at most\(said(message()))", file: file, line: line)
+    }
 }

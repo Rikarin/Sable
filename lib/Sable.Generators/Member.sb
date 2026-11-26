@@ -1,8 +1,11 @@
 module Sable.Generators
 
-/// An initialiser or a method of a type.
+/// An initialiser or a method of a type; or a protocol's requirement: a
+/// method, a property, an initialiser, an operator, a subscript or an
+/// associated type.
 public struct Member {
-    /// "init" or "fn".
+    /// "init" or "fn"; for a protocol's requirement also "var",
+    /// "operator", "subscript" or "associatedtype".
     public var keyword: String
     /// Its name; an initialiser's is "init".
     public var name: String
@@ -12,8 +15,21 @@ public struct Member {
     public var isThrowing: Bool = false
     /// Its parameters, in order.
     public var parameters: Parameter[>..] = []
-    /// What a method returns, resolved; none when it returns nothing.
+    /// What a method returns, resolved; none when it returns nothing. A
+    /// property's type.
     public var returned: TypeRef? = none
+    /// Whether a method is `mutating`.
+    public var isMutating: Bool = false
+    /// What a method throws, when it says (`throws(ParseError)`); none for
+    /// one that does not throw, or throws any error.
+    public var thrown: TypeRef? = none
+    /// Whether a property can be set: `{ get set }`.
+    public var isSettable: Bool = false
+    /// A method's own generic parameters' names, in order.
+    public var typeParameters: String[>..] = []
+    /// For a protocol's requirement, the protocol that declares it: the one
+    /// given, or one it refines.
+    public var declaredIn: String = ""
     public var attributes: Attribute[>..] = []
     public var location: Location = Location { id: "" }
 

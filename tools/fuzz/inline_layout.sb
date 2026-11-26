@@ -97,7 +97,7 @@ fn seedOrder(_ n: Int) -> U8[>..] {
         order.lines.append(OrderLine { sku: "SKU", qty: U16(i + 1), price: U32(n * 13 + i), gift: i % 2 == 0 })
     }
     if n % 2 == 0 {
-        order.parent =&order
+        order.parent = &order
     }
     return Bytes.of(order)
 }
@@ -108,11 +108,11 @@ fn seedTree(_ n: Int) -> U8[>..] {
         tree.nodes.append(Node { value: I32(i * 3 - 4), parent: none, tag: U8(i) })
     }
     for i in 1..<tree.nodes.count {
-        tree.nodes[i].parent =&tree.nodes[(i - 1) / 2]
+        tree.nodes[i].parent = &tree.nodes[(i - 1) / 2]
     }
-    tree.root =&tree.nodes[0]
+    tree.root = &tree.nodes[0]
     if n % 3 == 0 {
-        tree.nodes[0].parent =&tree.nodes[tree.nodes.count - 1]
+        tree.nodes[0].parent = &tree.nodes[tree.nodes.count - 1]
     }
     return Bytes.of(tree)
 }

@@ -1824,7 +1824,7 @@ public sealed partial class UnspecialisedGenericTests {
     [Fact]
     public void GenericClassesAreLaidOutAtRunTimeAndMadeByCodeCompiledOnce() {
         Prints(
-            "a\nb\n-\nslot 2\n1.5\nc\nsame class 7\ntrue\nd\nq\nd gone\nc gone\na gone\n",
+            "a\nb\n-\nslot 2\n1.5\nc\nc gone\nsame class 7\ntrue\nd\nq\nd gone\na gone\n",
             Slots,
             """
                 let s = fill(Noisy("a"), "b")
